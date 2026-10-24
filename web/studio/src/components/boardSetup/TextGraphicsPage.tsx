@@ -61,10 +61,10 @@ export function TextGraphicsPage({ hidden, onDirty }: PageProps) {
                   return (
                     <tr key={row.id}>
                       <th scope="row">{row.label}</th>
-                      {cell(values.line_width_um, (v) => page.edit((d) => withLineWidth(d, row.id, v)), "Line Thickness")}
-                      {text ? cell(text.text_width_um, (v) => setText({ text_width_um: v }), "Text Width") : <td />}
-                      {text ? cell(text.text_height_um, (v) => setText({ text_height_um: v }), "Text Height") : <td />}
-                      {text ? cell(text.text_thickness_um, (v) => setText({ text_thickness_um: v }), "Text Thickness") : <td />}
+                      {cell(values.line_width_nm, (v) => page.edit((d) => withLineWidth(d, row.id, v)), "Line Thickness")}
+                      {text ? cell(text.text_width_nm, (v) => setText({ text_width_nm: v }), "Text Width") : <td />}
+                      {text ? cell(text.text_height_nm, (v) => setText({ text_height_nm: v }), "Text Height") : <td />}
+                      {text ? cell(text.text_thickness_nm, (v) => setText({ text_thickness_nm: v }), "Text Thickness") : <td />}
                       <td>{text && <input type="checkbox" aria-label={`${row.label} Italic`} checked={text.italic} onChange={(e) => setText({ italic: e.target.checked })} />}</td>
                       <td>{text && <input type="checkbox" aria-label={`${row.label} Keep Upright`} checked={text.upright} onChange={(e) => setText({ upright: e.target.checked })} />}</td>
                       <td className="bs-error">{bad ?? ""}</td>

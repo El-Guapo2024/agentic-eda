@@ -21,18 +21,18 @@ test("a cell id names its table, row and column, and only a cell id does", () =>
 
 test("a point is in a cell, or how far it is from it; a turned cell is a quadrilateral", () => {
   const c = table(1, 1).cells[0]!;
-  assert.equal(cellHitDistance(c, 5_000, 2_500), 0);
-  assert.equal(cellHitDistance(c, 12_000, 2_500), 2_000);
-  assert.equal(Math.round(cellHitDistance(c, 13_000, 9_000)), 5_000);
+  assert.equal(cellHitDistance(c, 5_000_000, 2_500_000), 0);
+  assert.equal(cellHitDistance(c, 12_000_000, 2_500_000), 2_000_000);
+  assert.equal(Math.round(cellHitDistance(c, 13_000_000, 9_000_000)), 5_000_000);
   // a diamond: (0,-5) (5,0) (0,5) (-5,0)
   const diamond = [
-    [0, -5_000],
-    [5_000, 0],
-    [0, 5_000],
-    [-5_000, 0],
+    [0, -5_000_000],
+    [5_000_000, 0],
+    [0, 5_000_000],
+    [-5_000_000, 0],
   ] as const;
   assert.equal(polygonDistance(diamond, 0, 0), 0);
-  assert.equal(polygonDistance(diamond, 4_000, 4_000) > 0, true, "the corner of the bounding box is outside the diamond");
+  assert.equal(polygonDistance(diamond, 4_000_000, 4_000_000) > 0, true, "the corner of the bounding box is outside the diamond");
 });
 
 test("Select Row(s), Select Column(s) and Select Table do what the selection tool does", () => {
@@ -113,7 +113,7 @@ test("the Table Properties dialog starts from the table and sends back a patch i
   v.borderWidth = 200.4;
   const patch = tablePatchOf(t, v);
   assert.deepEqual(patch.texts![0], ["r0c0", "r0c1", "changed"]);
-  assert.deepEqual(patch.border, { external: true, header: false, width_um: 200, style: "solid" });
+  assert.deepEqual(patch.border, { external: true, header: false, width_nm: 200, style: "solid" });
   assert.equal(widthAfterToggle(-1, true, 150), 150);
   assert.equal(widthAfterToggle(300, true, 150), 300);
   assert.equal(widthAfterToggle(-1, false, 150), -1);
@@ -122,18 +122,18 @@ test("the Table Properties dialog starts from the table and sends back a patch i
 test("the Table Cell Properties dialog leaves alone what the selected cells disagree on", () => {
   const t = table(1, 3);
   t.cells[1]!.bold = true;
-  t.cells[1]!.size_w = 2_000;
+  t.cells[1]!.size_w = 2_000_000;
   t.cells[2]!.h_align = "right";
-  t.cells[2]!.margins = [1_000, 500, 1_000, 1_000];
+  t.cells[2]!.margins = [1_000_000, 500_000, 1_000_000, 1_000_000];
   const v = cellDialogValues(t.cells);
   assert.equal(v.text, null);
   assert.equal(v.width, null);
-  assert.equal(v.height, 1_270);
+  assert.equal(v.height, 1_270_000);
   assert.equal(v.hAlign, null);
   assert.equal(v.autoThickness, true);
-  assert.deepEqual(v.margins, [1_000, null, 1_000, 1_000]);
+  assert.deepEqual(v.margins, [1_000_000, null, 1_000_000, 1_000_000]);
   const e = cellEditOf(v);
-  assert.deepEqual(e, { bold: false, italic: false, face: "", height_um: 1_270, thickness_um: 0, v_align: "center", margins: [1_000, null, 1_000, 1_000] });
+  assert.deepEqual(e, { bold: false, italic: false, face: "", height_nm: 1_270_000, thickness_nm: 0, v_align: "center", margins: [1_000_000, null, 1_000_000, 1_000_000] });
   // one cell: everything is set
   const one = cellEditOf(cellDialogValues([t.cells[0]!]));
   assert.equal(one.text, "r0c0");
@@ -174,7 +174,7 @@ test("a table is an item of the board (it is picked up by a Paste or a Duplicate
 test("the board's numbers for Place Board Characteristics are kicad-cli's statistics in nanometres, and there are none without them", () => {
   const stats = {
     ok: true,
-    board: { has_outline: true, width_um: 26385, height_um: 25181, area_um2: 0, front_copper_area_um2: 0, back_copper_area_um2: 0, front_courtyard_area_um2: 0, back_courtyard_area_um2: 0, front_density_pct: 0, back_density_pct: 0, min_track_width_um: 200, min_clearance_um: 203.5, min_drill_um: 300, thickness_um: 1600 },
+    board: { has_outline: true, width_nm: 26_385_000, height_nm: 25_181_000, area_nm2: 0, front_copper_area_nm2: 0, back_copper_area_nm2: 0, front_courtyard_area_nm2: 0, back_courtyard_area_nm2: 0, front_density_pct: 0, back_density_pct: 0, min_track_width_nm: 200_000, min_clearance_nm: 203_500, min_drill_nm: 300_000, thickness_nm: 1_600_000 },
     pad_properties: [
       { title: "Castellated:", qty: 0 },
       { title: "Press-fit:", qty: 3 },

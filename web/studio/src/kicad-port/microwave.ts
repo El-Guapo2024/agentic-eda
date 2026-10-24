@@ -3,7 +3,7 @@
 // (`crates/ops/src/microwave.rs`, one verb each). Unit-tested in microwave.test.ts.
 import type { PointXY } from "../api/types";
 import type { LengthUnit } from "../state/units";
-import { umFrom, umTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
 import type { AngleSnapMode } from "./pcbParityState";
 import { snapVector45 } from "./polygonGeom";
 
@@ -67,7 +67,7 @@ export function inductorEnd(start: PointXY, cursor: PointXY, mode: AngleSnapMode
 }
 
 /** `pt.EuclideanNorm()` of the two points: the shortest the coil can be, micrometres. */
-export function inductorMinLengthUm(start: PointXY, end: PointXY): number {
+export function inductorMinLengthNm(start: PointXY, end: PointXY): number {
   return Math.hypot(end.x - start.x, end.y - start.y);
 }
 
@@ -77,14 +77,14 @@ const DECIMALS: Record<LengthUnit, number> = { mm: 4, mil: 2, in: 5 };
  * `StringFromValue( min_len )`, the "Length of track:" box's start, but never below the distance: KiCad rounds the text to the units' digits, so the box it opens would be refused
  * ("Requested length < minimum length") whenever the rounding went down; this one rounds up.
  */
-export function lengthTextAtLeast(valueUm: number, units: LengthUnit): string {
+export function lengthTextAtLeast(valueNm: number, units: LengthUnit): string {
   const scale = 10 ** DECIMALS[units];
-  return String(Math.ceil(umTo(valueUm, units) * scale - 1e-9) / scale);
+  return String(Math.ceil(nmTo(valueNm, units) * scale - 1e-9) / scale);
 }
 
 /** `StringFromValue( value )`: a length in the display units without their name, to the digits the units show. */
-export function lengthText(valueUm: number, units: LengthUnit): string {
-  return String(Number(umTo(valueUm, units).toFixed(DECIMALS[units])));
+export function lengthText(valueNm: number, units: LengthUnit): string {
+  return String(Number(nmTo(valueNm, units).toFixed(DECIMALS[units])));
 }
 
 /** `ValueFromString`: "1.5", "0.2mm", "10mil", `0.01"` as micrometres (a bare number is in the display units); 0 for text that is not a length, as KiCad reads it. */
@@ -92,12 +92,12 @@ export function lengthFromText(text: string, units: LengthUnit): number {
   const m = /^\s*(-?\d*\.?\d+)\s*(mm|mil|in|")?\s*$/i.exec(text);
   if (!m) return 0;
   const unit = m[2] ? (m[2] === '"' ? "in" : (m[2].toLowerCase() as LengthUnit)) : units;
-  return Math.round(umFrom(parseFloat(m[1]!), unit));
+  return Math.round(nmFrom(parseFloat(m[1]!), unit));
 }
 
 /** What the Complex Shape dialog's Size boxes start with once a file is read: `m_sizeX->SetValue( (int) g_ShapeScaleX )`, the file's scale in nanometres shown in the display units. */
 export function shapeSizeText(nanometres: number, units: LengthUnit): string {
-  return lengthText(nanometres / 1000, units);
+  return lengthText(nanometres, units);
 }
 
 /**

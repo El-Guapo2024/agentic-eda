@@ -7,9 +7,9 @@ function pad(number: string, over: Partial<LibraryPad> = {}): LibraryPad {
   return {
     id: `pad_${number}`,
     number,
-    at: { x: 100, y: 200 },
+    at: { x: 100_000, y: 200_000 },
     offset: { x: 0, y: 0 },
-    size: [1000, 600],
+    size: [1_000_000, 600_000],
     shape: "rect",
     kind: "smd",
     drill: null,
@@ -28,46 +28,46 @@ function pad(number: string, over: Partial<LibraryPad> = {}): LibraryPad {
 }
 
 test("the default pad is KiCad's master pad: 2.54 x 1.27 round rectangle, plated through-hole with a 0.8 hole", () => {
-  assert.deepEqual(DEFAULT_PAD_MASTER.size, [2540, 1270]);
+  assert.deepEqual(DEFAULT_PAD_MASTER.size, [2_540_000, 1_270_000]);
   assert.equal(DEFAULT_PAD_MASTER.shape, "round_rect");
   assert.equal(DEFAULT_PAD_MASTER.roundrect_ratio, 0.15);
   assert.equal(DEFAULT_PAD_MASTER.kind, "through_hole");
-  assert.equal(DEFAULT_PAD_MASTER.drill, 800);
+  assert.equal(DEFAULT_PAD_MASTER.drill, 800_000);
   assert.deepEqual(DEFAULT_PAD_MASTER.layers, ["*.Cu", "*.Mask"]);
 });
 
 test("importPadSettings copies the padstack, layers, type, orientation and overrides but never the number or position", () => {
-  const master = settingsOf(pad("M", { shape: "oval", size: [2000, 1000], kind: "through_hole", drill: 700, rot: 90_000, layers: ["*.Cu", "*.Mask"], clearance_override: 250, thermal_gap_override: 300 }));
+  const master = settingsOf(pad("M", { shape: "oval", size: [2_000_000, 1_000_000], kind: "through_hole", drill: 700_000, rot: 90_000, layers: ["*.Cu", "*.Mask"], clearance_override: 250_000, thermal_gap_override: 300_000 }));
   const out = importPadSettings(pad("7"), master);
   assert.equal(out.number, "7");
-  assert.deepEqual(out.at, { x: 100, y: 200 });
+  assert.deepEqual(out.at, { x: 100_000, y: 200_000 });
   assert.equal(out.id, "pad_7");
-  assert.deepEqual([out.shape, out.size, out.kind, out.drill, out.rot], ["oval", [2000, 1000], "through_hole", 700, 90_000]);
+  assert.deepEqual([out.shape, out.size, out.kind, out.drill, out.rot], ["oval", [2_000_000, 1_000_000], "through_hole", 700_000, 90_000]);
   assert.deepEqual(out.layers, ["*.Cu", "*.Mask"]);
-  assert.equal(out.clearance_override, 250);
-  assert.equal(out.thermal_gap_override, 300);
+  assert.equal(out.clearance_override, 250_000);
+  assert.equal(out.thermal_gap_override, 300_000);
 });
 
 test("importPadSettings: a circle master squares the size from x, an SMD master drops the hole, an NPTH master clears the number", () => {
-  const circle = settingsOf(pad("M", { shape: "circle", size: [1600, 900], kind: "through_hole", drill: 700 }));
-  assert.deepEqual(importPadSettings(pad("1"), circle).size, [1600, 1600]);
+  const circle = settingsOf(pad("M", { shape: "circle", size: [1_600_000, 900_000], kind: "through_hole", drill: 700_000 }));
+  assert.deepEqual(importPadSettings(pad("1"), circle).size, [1_600_000, 1_600_000]);
 
-  const smd = settingsOf(pad("M", { kind: "smd", drill: 500 }));
-  const onTht = importPadSettings(pad("2", { kind: "through_hole", drill: 900 }), smd);
+  const smd = settingsOf(pad("M", { kind: "smd", drill: 500_000 }));
+  const onTht = importPadSettings(pad("2", { kind: "through_hole", drill: 900_000 }), smd);
   assert.equal(onTht.drill, null);
   assert.equal(onTht.drill_slot, null);
 
-  const npth = settingsOf(pad("M", { kind: "non_plated_hole", drill: 1200 }));
+  const npth = settingsOf(pad("M", { kind: "non_plated_hole", drill: 1_200_000 }));
   const numbered = importPadSettings(pad("4"), npth);
   assert.equal(numbered.number, "");
-  assert.equal(numbered.drill, 1200);
+  assert.equal(numbered.drill, 1_200_000);
 });
 
 test("newPadFromMaster: the master's settings with the given number and position", () => {
-  const p = newPadFromMaster(DEFAULT_PAD_MASTER, "3", { x: 500, y: -500 });
+  const p = newPadFromMaster(DEFAULT_PAD_MASTER, "3", { x: 500_000, y: -500_000 });
   assert.equal(p.number, "3");
-  assert.deepEqual(p.at, { x: 500, y: -500 });
-  assert.deepEqual(p.size, [2540, 1270]);
+  assert.deepEqual(p.at, { x: 500_000, y: -500_000 });
+  assert.deepEqual(p.size, [2_540_000, 1_270_000]);
   assert.equal(p.kind, "through_hole");
   assert.equal(p.id, undefined, "ids are the backend's to assign");
   const npth = newPadFromMaster({ ...DEFAULT_PAD_MASTER, kind: "non_plated_hole" }, "9", { x: 0, y: 0 });

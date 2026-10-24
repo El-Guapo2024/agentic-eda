@@ -6,9 +6,9 @@
 //   PCB_TUNING_PATTERN::getOutline      the dashed outline of a pattern: the baseline offset by the amplitude (+ half the track), rounded all round
 //   PCB_TUNING_PATTERN::MakeEditPoints  the four handles (the server sends their places; this decides which one a click is on)
 
-import type { TuningPatterns, Um } from "../api/types";
+import type { TuningPatterns, Nm } from "../api/types";
 import type { PatternSide, TargetRange, TuneKind, TunePiece, TuneReadout, TuneSessionReply, TuneSettings, TuningPattern } from "../api/tuneTypes";
-import { ATTOSECONDS_PER_PS, DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_UM } from "../api/tuneTypes";
+import { ATTOSECONDS_PER_PS, DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_NM } from "../api/tuneTypes";
 import { tuningPatternsOf } from "./setupPages";
 
 /** `DrawState`'s `tune` variant: a tuning pattern on its way to the board. */
@@ -18,7 +18,7 @@ export interface TuneDrawState {
   layer: string;
   net: string;
   /** Where the pattern starts, on the track. */
-  origin: [Um, Um];
+  origin: [Nm, Nm];
   /** The new line: the track up to the pattern, the meander, the track after it (and what stays of the tracks it replaces). */
   pieces: TunePiece[];
   /** The tracks the preview takes the place of: not drawn while it is shown. */
@@ -26,7 +26,7 @@ export interface TuneDrawState {
   readout: TuneReadout | null;
   pattern: TuningPattern | null;
   /** The four edit points (`MakeEditPoints`). */
-  handles: [Um, Um][];
+  handles: [Nm, Nm][];
   /** The id of the pattern of the board being edited through its edit points (`genStartEdit`), if it is not a new one. */
   editing?: string;
   /** Whether the cursor has moved the end of the pattern yet. */
@@ -45,7 +45,7 @@ export function modeOfKind(kind: TuneKind): TuningPattern["mode"] {
 /** The draw state a start / move / step / settings / edit reply makes (the pieces and the readout are kept from before when the reply carries none). */
 export function tuneStateFromReply(reply: TuneSessionReply, prev: TuneDrawState | null, base: { mode: TuneKind; layer: string; net?: string }): TuneDrawState {
   const pattern = reply.pattern ?? prev?.pattern ?? null;
-  const origin: [Um, Um] = reply.origin ? [reply.origin.x, reply.origin.y] : pattern ? [pattern.origin.x, pattern.origin.y] : (prev?.origin ?? [0, 0]);
+  const origin: [Nm, Nm] = reply.origin ? [reply.origin.x, reply.origin.y] : pattern ? [pattern.origin.x, pattern.origin.y] : (prev?.origin ?? [0, 0]);
   return {
     kind: "tune",
     mode: base.mode,
@@ -75,7 +75,7 @@ export interface ReadoutBox {
 
 /** `TUNING_STATUS_VIEW_ITEM::ViewDraw`: the length is red when it is outside `[min, max]`, the minimum when the length is below it, the maximum when it is above. `fmt` prints a length in micrometres. */
 export function readoutBox(r: TuneReadout, fmt: (um: number) => string): ReadoutBox {
-  const um = (mm: number) => mm * 1000;
+  const um = (mm: number) => mm * 1e6; // mm to nm
   // a time domain pattern: the box reads the delay and the range of the delay, in picoseconds (`SetIsTimeDomain`)
   if (r.time_domain && r.delay) {
     const d = r.delay;
@@ -103,7 +103,7 @@ export function fmtPs(ps: number): string {
 
 /** One line for the message panel / status bar while a pattern is placed: `current length 21.99 mm, target 22 mm (-0.01 mm), tuned`. */
 export function readoutSummary(r: TuneReadout, fmt: (um: number) => string): string {
-  const um = (mm: number) => mm * 1000;
+  const um = (mm: number) => mm * 1e6;
   if (r.time_domain && r.delay) {
     const d = r.delay;
     const parts = [`${d.label} ${fmtPs(d.current)}`];
@@ -125,7 +125,7 @@ export function readoutSummary(r: TuneReadout, fmt: (um: number) => string): str
 export function pageSettings(patterns: TuningPatterns | undefined | null, kind: TuneKind): Required<Pick<TuneSettings, "min_amplitude" | "max_amplitude" | "spacing" | "corner_radius_percent" | "rounded" | "single_sided">> {
   const p = tuningPatternsOf(patterns);
   const s = kind === "single" ? p.single_track : kind === "diffpair" ? p.diff_pair : p.diff_pair_skew;
-  return { min_amplitude: s.min_amplitude_um, max_amplitude: s.max_amplitude_um, spacing: s.spacing_um, corner_radius_percent: s.corner_radius_percentage, rounded: s.corner_style === "round", single_sided: s.single_sided };
+  return { min_amplitude: s.min_amplitude_nm, max_amplitude: s.max_amplitude_nm, spacing: s.spacing_nm, corner_radius_percent: s.corner_radius_percentage, rounded: s.corner_style === "round", single_sided: s.single_sided };
 }
 
 /** A pattern's settings in the keys the server reads (what the dialog edits and `update` takes). */
@@ -139,7 +139,7 @@ export function settingsOfPattern(p: TuningPattern): Required<TuneSettings> {
     single_sided: p.single_sided,
     initial_side: p.initial_side,
     override_custom_rules: p.override_custom_rules,
-    target_length: p.target_length.opt >= LENGTH_UNCONSTRAINED_UM ? null : p.target_length,
+    target_length: p.target_length.opt >= LENGTH_UNCONSTRAINED_NM ? null : p.target_length,
     target_skew: p.target_skew,
     time_domain: p.is_time_domain ?? false,
     target_delay: !p.target_delay || p.target_delay.opt >= DELAY_UNCONSTRAINED_AS ? null : psRange(p.target_delay),
@@ -288,16 +288,16 @@ export function patternOutline(p: TuningPattern): P[][] {
 
 /** The pattern's baseline, as dashed segments are drawn along it (`ViewDraw`: `m_baseLine`, or the line from the origin to the end). */
 export function patternBaselines(p: TuningPattern): P[][] {
-  const line = (pts: readonly { x: Um; y: Um }[]): P[] => pts.map((q): P => [q.x, q.y]);
+  const line = (pts: readonly { x: Nm; y: Nm }[]): P[] => pts.map((q): P => [q.x, q.y]);
   const out: P[][] = [p.base_line.length >= 2 ? line(p.base_line) : [[p.origin.x, p.origin.y], [p.end.x, p.end.y]]];
   if (p.mode === "diff_pair" && (p.base_line_coupled?.length ?? 0) >= 2) out.push(line(p.base_line_coupled!));
   return out;
 }
 
-/** Which edit point `at` is on (the nearest one within `radiusUm`), or null. */
-export function handleAt(handles: readonly [Um, Um][], at: { x: Um; y: Um }, radiusUm: Um): number | null {
+/** Which edit point `at` is on (the nearest one within `radiusNm`), or null. */
+export function handleAt(handles: readonly [Nm, Nm][], at: { x: Nm; y: Nm }, radiusNm: Nm): number | null {
   let best: number | null = null;
-  let bestD = radiusUm;
+  let bestD = radiusNm;
   handles.forEach((h, i) => {
     const d = Math.hypot(h[0] - at.x, h[1] - at.y);
     if (d <= bestD) {

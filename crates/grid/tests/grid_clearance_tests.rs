@@ -17,11 +17,11 @@ use eda_grid::grid::{Grid, Occ};
 fn hub_grid() -> Grid {
     let outline = vec![
         Point { x: 0, y: 0 },
-        Point { x: 40000, y: 0 },
-        Point { x: 40000, y: 40000 },
-        Point { x: 0, y: 40000 },
+        Point { x: 40_000_000, y: 0 },
+        Point { x: 40_000_000, y: 40_000_000 },
+        Point { x: 0, y: 40_000_000 },
     ];
-    let mut g = Grid::with_widths(outline, 127, 200, 200, 600, 2);
+    let mut g = Grid::with_widths(outline, 127_000, 200_000, 200_000, 600_000, 2);
     // Every net these tests ask about has to exist on the board first.
     // `route_partial` rasterises every pad of every net before it asks the
     // grid a single passability question, so a net the grid has never seen

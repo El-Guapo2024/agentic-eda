@@ -93,8 +93,8 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
     pcbOnly(() => {
       if (!board) return;
       let nets = netsOfSelection(state.selection, board);
-      if (nets.length === 0 && state.cursorUm) {
-        const net = findNetAtCursor(board, state.cursorUm.x, state.cursorUm.y, 10 / (state.view.scale || 1));
+      if (nets.length === 0 && state.cursorNm) {
+        const net = findNetAtCursor(board, state.cursorNm.x, state.cursorNm.y, 10 / (state.view.scale || 1));
         if (net) nets = [net];
       }
       dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets });

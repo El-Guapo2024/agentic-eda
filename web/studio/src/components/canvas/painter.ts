@@ -3,11 +3,11 @@
 // board item this app's model has, in GAL layer order (layers.ts).
 // Coordinates throughout are board µm -- the caller's ctx.scale/translate
 // does the screen mapping, so this file never touches pixels directly
-// except for hairline compensation (view.ts `hairlineUm`) and text size.
+// except for hairline compensation (view.ts `hairlineNm`) and text size.
 
-import type { BoardState, Dimension, DrcViolation, FieldInfo, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
+import type { BoardState, Dimension, DrcViolation, FieldInfo, FillReport, Part, Pad, RatsnestEdge, Shape, Nm, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
-import { hairlineUm } from "./view";
+import { hairlineNm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { constrainByAngleMode } from "./routing";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
@@ -27,7 +27,7 @@ import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "../../kicad-port/lineEnding";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
-import { BEZIER_MAX_ERROR_UM } from "./itemHitTest";
+import { BEZIER_MAX_ERROR_NM } from "./itemHitTest";
 import { isHighlighted } from "../../kicad-port/boardControl";
 import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
@@ -85,18 +85,18 @@ export interface PaintOptions {
   layerOpacity: Record<string, number>;
   activeLayer: string | null;
   highContrast: boolean;
-  gridUm: number;
+  gridNm: number;
   gridVisible: boolean;
   /**
    * The items in the hand. `kind: "pcb"` is any mix of PCB items (kicad-port/pcbCarry.ts): they are drawn through the one transform the drop would apply.
-   * The older kinds carry footprints alone (`perRefOffsetUm` is Pack and Move's own shift for each).
+   * The older kinds carry footprints alone (`perRefOffsetNm` is Pack and Move's own shift for each).
    */
-  movePreview: (CarryPreview & { kind?: string; perRefOffsetUm?: Record<string, [number, number]> }) | null;
+  movePreview: (CarryPreview & { kind?: string; perRefOffsetNm?: Record<string, [number, number]> }) | null;
   /** The route/zone/drawing tool currently in progress (Canvas.tsx), and the cursor to rubber-band its next point toward -- null cursor (pointer left the canvas, or hasn't moved yet) just skips the rubber-band, still showing the fixed points so far. */
   drawState: DrawState | null;
   /** The length tuner armed, no pattern started: the track under the cursor with its status box (`updateHoverStatus`). */
   tuneHover?: { reply: TuneHoverReply; at: [number, number] } | null;
-  cursorUm: { x: number; y: number } | null;
+  cursorNm: { x: number; y: number } | null;
   /** Where the tool in force has put the cursor (the grid helper's last answer: anchor, snap line or grid); the rubber band and the via ghost follow it. Null: the raw cursor is snapped to the grid. */
   snappedCursor?: readonly [number, number] | null;
   activeTool: ToolId;
@@ -140,7 +140,7 @@ export interface PaintOptions {
   /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
   units: LengthUnit;
   /** pcb_point_editor.cpp's zone corner-drag preview (Canvas.tsx's own local state, only set while a drag is live) -- lets drawZoneHandles show the corner actually moving, not the last-committed outline, while the drag is in progress. */
-  zoneCornerPreview: { zoneId: string; outline: [Um, Um][] } | null;
+  zoneCornerPreview: { zoneId: string; outline: [Nm, Nm][] } | null;
   /** The same for a graphic shape's handle drag (kicad-port/pcbPointEdit.ts): the shape as it would be once dropped, drawn instead of the committed one. */
   shapePointPreview: { id: string; shape: Shape } | null;
   /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
@@ -227,7 +227,7 @@ function drawOutline(ctx: CanvasRenderingContext2D, view: ViewTransform, outline
   outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   ctx.closePath();
   ctx.strokeStyle = layerColor("board_edge");
-  ctx.lineWidth = hairlineUm(view, 1.5);
+  ctx.lineWidth = hairlineNm(view, 1.5);
   ctx.stroke();
 }
 
@@ -273,7 +273,7 @@ function drawPadNumber(ctx: CanvasRenderingContext2D, pad: Pad, withNet: boolean
   ctx.translate(pad.x, pad.y);
   if (layout.rotated) ctx.rotate(-Math.PI / 2);
   // (x, y) is the baseline: the cap height is about 0.7 of the size, so half of it puts the digits' middle where KiCad centres them.
-  drawStrokeText(ctx, pad.num, 0, -layout.numberOffset + tsize * 0.35, { sizeUm: tsize, justify: "center", thicknessUm: (tsize * 0.9) / 6, color });
+  drawStrokeText(ctx, pad.num, 0, -layout.numberOffset + tsize * 0.35, { sizeNm: tsize, justify: "center", thicknessNm: (tsize * 0.9) / 6, color });
   ctx.restore();
 }
 
@@ -288,9 +288,9 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
 
   ctx.save();
   if (preview) {
-    // `perRefOffsetUm`: Pack and Move's per-footprint SpreadFootprints shift (absent for every ordinary move).
-    const own = preview.perRefOffsetUm?.[part.ref];
-    ctx.translate(preview.dxUm + (own?.[0] ?? 0), preview.dyUm + (own?.[1] ?? 0));
+    // `perRefOffsetNm`: Pack and Move's per-footprint SpreadFootprints shift (absent for every ordinary move).
+    const own = preview.perRefOffsetNm?.[part.ref];
+    ctx.translate(preview.dxNm + (own?.[0] ?? 0), preview.dyNm + (own?.[1] ?? 0));
     // edit_tool.cpp Rotate()/Flip() during an active Move spin the
     // dragged item in place around its own (already-moving) anchor --
     // see useActionRunner.ts's `tryTransformDuringMove` doc comment for
@@ -313,8 +313,8 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       ctx.beginPath();
       ctx.rect(x0, y0, x1 - x0, y1 - y0);
       ctx.strokeStyle = selected ? layerColor("selection") : isHot ? "#ef5b5b" : layerColor(courtyardKey);
-      ctx.lineWidth = hairlineUm(view, selected || isHot ? 2 : 1);
-      if (!selected && !isHot) ctx.setLineDash([hairlineUm(view, 3), hairlineUm(view, 2)]);
+      ctx.lineWidth = hairlineNm(view, selected || isHot ? 2 : 1);
+      if (!selected && !isHot) ctx.setLineDash([hairlineNm(view, 3), hairlineNm(view, 2)]);
       ctx.stroke();
       ctx.setLineDash([]);
     });
@@ -347,7 +347,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
         pathForPad(ctx, shape);
         if (opts.sketchPads) {
           ctx.strokeStyle = paint;
-          ctx.lineWidth = hairlineUm(view, 1.5);
+          ctx.lineWidth = hairlineNm(view, 1.5);
           ctx.stroke();
         } else {
           ctx.fillStyle = paint;
@@ -359,7 +359,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       pathForPad(ctx, pad);
       if (opts.sketchPads) {
         ctx.strokeStyle = fill;
-        ctx.lineWidth = hairlineUm(view, 1.5);
+        ctx.lineWidth = hairlineNm(view, 1.5);
         ctx.stroke();
       } else {
         ctx.fillStyle = fill;
@@ -372,12 +372,12 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
         ctx.fillStyle = layerColor("background");
         ctx.fill();
         ctx.strokeStyle = layerColor("pad_th");
-        ctx.lineWidth = hairlineUm(view, 1);
+        ctx.lineWidth = hairlineNm(view, 1);
         ctx.stroke();
       } else {
         pathForPad(ctx, pad);
         ctx.strokeStyle = layerColor("pad_th");
-        ctx.lineWidth = hairlineUm(view, 1);
+        ctx.lineWidth = hairlineNm(view, 1);
         ctx.stroke();
       }
     }
@@ -385,8 +385,8 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     const numbered = opts.showPadNumbers && pad.num !== "" && padNumberLegible(pad, view);
     if (pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10) {
       ctx.fillStyle = "rgba(0,0,0,0.75)";
-      const fontUm = Math.min(pad.w, pad.h) * 0.35;
-      ctx.font = `${fontUm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      const fontNm = Math.min(pad.w, pad.h) * 0.35;
+      ctx.font = `${fontNm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       // With the number on too, the two share the pad: the net name drops below the middle (`Y_offset_netname`).
@@ -403,7 +403,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       if (!opts.selection.has(ids[i]!)) return;
       pathForPad(ctx, pad);
       ctx.strokeStyle = layerColor("selection");
-      ctx.lineWidth = hairlineUm(view, 2.5);
+      ctx.lineWidth = hairlineNm(view, 2.5);
       ctx.stroke();
     });
   }
@@ -414,7 +414,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   // The Reference, the Value and the user fields are drawn by `drawFields` once the backend says where they are (`part.fields`); an older backend's footprint has
   // only its reference, drawn beside the courtyard the way it always was.
   if (!part.fields) {
-    const fs = Math.max(500, Math.min(900, Math.min(x1 - x0, y1 - y0) * 0.45));
+    const fs = Math.max(500_000, Math.min(900_000, Math.min(x1 - x0, y1 - y0) * 0.45));
     const cx = (x0 + x1) / 2,
       cy = (y0 + y1) / 2;
     let tx = cx,
@@ -435,7 +435,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     // The reference shows when its layer does and both Footprint Text and References are on (`PCB_TEXT::ViewGetLOD`).
     if (opts.layerVisible[silkKey] !== false && on(opts.layerVisible, "footprint_text") && on(opts.layerVisible, "footprint_references")) {
       withAlpha(ctx, layerAlpha(opts, silkKey), () => {
-        drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : fs / 6, color: layerColor(silkKey) });
+        drawStrokeText(ctx, part.ref, tx, ty, { sizeNm: fs, justify: align, thicknessNm: opts.sketchText ? hairlineNm(view, 1) : fs / 6, color: layerColor(silkKey) });
       });
     }
 
@@ -476,12 +476,12 @@ export function drawFields(ctx: CanvasRenderingContext2D, view: ViewTransform, i
     // millideg, KiCad's counter-clockwise; the canvas turns clockwise.
     const angleRad = (-t.angle / 1000) * (Math.PI / 180);
     // The anchor is where the text box is centred (or its top or bottom edge sits); the font draws from the baseline.
-    const sizeUm = Math.max(f.h, hairlineUm(view, 8));
-    const down = f.valign > 0 ? 0 : f.valign < 0 ? 0.72 * sizeUm : 0.36 * sizeUm;
+    const sizeNm = Math.max(f.h, hairlineNm(view, 8));
+    const down = f.valign > 0 ? 0 : f.valign < 0 ? 0.72 * sizeNm : 0.36 * sizeNm;
     const x = f.x - down * Math.sin(angleRad);
     const y = f.y + down * Math.cos(angleRad);
     withAlpha(ctx, layerAlpha(opts, key) * (f.visible ? 1 : 0.5), () => {
-      drawStrokeText(ctx, t.content, x, y, { sizeUm, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : Math.max(f.thickness, sizeUm / 20), justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic, color });
+      drawStrokeText(ctx, t.content, x, y, { sizeNm, thicknessNm: opts.sketchText ? hairlineNm(view, 1) : Math.max(f.thickness, sizeNm / 20), justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic, color });
     });
   }
 }
@@ -513,7 +513,7 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
       ctx.beginPath();
       t.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.strokeStyle = copperPaint(layerColor(key), t.net, opts);
-      ctx.lineWidth = opts.sketchTracks ? hairlineUm(view, 1.5) : Math.max(t.width, hairlineUm(view, 1));
+      ctx.lineWidth = opts.sketchTracks ? hairlineNm(view, 1.5) : Math.max(t.width, hairlineNm(view, 1));
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.stroke();
@@ -529,7 +529,7 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
       const viaColor = copperPaint(layerColor("via"), v.net, opts);
       if (opts.sketchVias) {
         ctx.strokeStyle = viaColor;
-        ctx.lineWidth = hairlineUm(view, 1.5);
+        ctx.lineWidth = hairlineNm(view, 1.5);
         ctx.stroke();
       } else {
         ctx.fillStyle = viaColor;
@@ -560,7 +560,7 @@ const RULE_AREA_COLOR = "#ff8c00";
 /** World-space hatch spacing, µm (0.8 mm) -- a fixed physical pitch, same
  * convention a real cross-hatch fill pattern uses, so it reads as a
  * consistent density at any zoom rather than a fixed screen-pixel count. */
-const RULE_AREA_HATCH_PITCH_UM = 800;
+const RULE_AREA_HATCH_PITCH_NM = 800_000;
 
 function ruleAreaLabel(z: Zone): string {
   const parts: string[] = [];
@@ -593,8 +593,8 @@ function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zon
   const span = y1 - y0;
   ctx.strokeStyle = color;
   ctx.globalAlpha = 0.35;
-  ctx.lineWidth = hairlineUm(view, 1);
-  for (let d = x0 - span; d < x1; d += RULE_AREA_HATCH_PITCH_UM) {
+  ctx.lineWidth = hairlineNm(view, 1);
+  for (let d = x0 - span; d < x1; d += RULE_AREA_HATCH_PITCH_NM) {
     ctx.beginPath();
     ctx.moveTo(d, y0);
     ctx.lineTo(d + span, y1);
@@ -606,14 +606,14 @@ function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zon
   z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   ctx.closePath();
   ctx.strokeStyle = color;
-  ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
-  ctx.setLineDash([hairlineUm(view, 6), hairlineUm(view, 4)]);
+  ctx.lineWidth = hairlineNm(view, selected ? 2.5 : 1.5);
+  ctx.setLineDash([hairlineNm(view, 6), hairlineNm(view, 4)]);
   ctx.stroke();
   ctx.setLineDash([]);
 
   const cx = (x0 + x1) / 2;
   const cy = (y0 + y1) / 2;
-  drawStrokeText(ctx, ruleAreaLabel(z), cx, cy, { sizeUm: Math.max(hairlineUm(view, 11), 300), justify: "center", color });
+  drawStrokeText(ctx, ruleAreaLabel(z), cx, cy, { sizeNm: Math.max(hairlineNm(view, 11), 300_000), justify: "center", color });
 }
 
 /** A fill's triangles, cached per fill (`CacheTriangulation`): from each island's outline and holes when the backend sent them (`?polys=1`), else from its fractured ring. */
@@ -658,7 +658,7 @@ function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z:
         // SHOW_FRACTURE_BORDERS / SHOW_TRIANGULATION: `SetIsFill( false ); SetIsStroke( true ); SetLineWidth( 0 )` -- no fill, the
         // fractured ring's own edges, or the triangles the fill is cut into.
         ctx.strokeStyle = color;
-        ctx.lineWidth = hairlineUm(view, 1);
+        ctx.lineWidth = hairlineNm(view, 1);
         ctx.beginPath();
         if (opts.zoneDisplayMode === "fractured") {
           for (const frag of fill.fragments) {
@@ -685,7 +685,7 @@ function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z:
         z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
         ctx.closePath();
         ctx.strokeStyle = layerColor("selection");
-        ctx.lineWidth = hairlineUm(view, 2.5);
+        ctx.lineWidth = hairlineNm(view, 2.5);
         ctx.stroke();
       }
       return;
@@ -694,8 +694,8 @@ function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z:
     z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.closePath();
     ctx.strokeStyle = selected ? layerColor("selection") : color;
-    ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
-    ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
+    ctx.lineWidth = hairlineNm(view, selected ? 2.5 : 1.5);
+    ctx.setLineDash([hairlineNm(view, 5), hairlineNm(view, 3)]);
     ctx.stroke();
     ctx.setLineDash([]);
   });
@@ -740,7 +740,7 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
           ctx.fill();
           if (selected) {
             ctx.strokeStyle = layerColor("selection");
-            ctx.lineWidth = hairlineUm(view, 2.5);
+            ctx.lineWidth = hairlineNm(view, 2.5);
             ctx.stroke();
           }
         });
@@ -793,7 +793,7 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
     ctx.globalAlpha *= s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) ? opacityOf(opts.appearance, "shapes") : isCopper(s.layer) ? opacityOf(opts.appearance, "tracks") : 1;
     ctx.strokeStyle = selected ? layerColor("selection") : layerColor(bucketish);
     ctx.fillStyle = ctx.strokeStyle;
-    ctx.lineWidth = Math.max(s.stroke_width, hairlineUm(view, selected ? 2 : 1));
+    ctx.lineWidth = Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     drawShapeGeometry(ctx, s, !!opts.sketchGraphics);
@@ -829,7 +829,7 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
       break;
     case "bezier": {
       // `EDA_SHAPE::RebuildBezierToSegmentsPointsList( m_MaxError )`: the curve as KiCad's own flattened polyline (an open curve is never filled).
-      bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_UM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_NM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.stroke();
       return;
     }
@@ -892,7 +892,7 @@ function drawShapeWithEndings(ctx: CanvasRenderingContext2D, s: Extract<Shape, {
   } else {
     const body = shortenBezier({ start: s.start, c1: s.c1, c2: s.c2, end: s.end }, s.start_ending, s.end_ending, lw);
     if (body) {
-      bezierPolyline(body.start, body.c1, body.c2, body.end, BEZIER_MAX_ERROR_UM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      bezierPolyline(body.start, body.c1, body.c2, body.end, BEZIER_MAX_ERROR_NM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.stroke();
     }
   }
@@ -973,9 +973,9 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
     const angleRad = (-t.angle / 1000) * (Math.PI / 180);
     drawStrokeText(ctx, t.shown ?? t.content, t.x, t.y, {
-      sizeUm: Math.max(t.size, hairlineUm(view, 8)),
+      sizeNm: Math.max(t.size, hairlineNm(view, 8)),
       // "Sketch Text Items" (`m_DisplayTextFill` off): the text in line mode, one pixel wide.
-      thicknessUm: opts.sketchText ? hairlineUm(view, 1) : t.stroke_width,
+      thicknessNm: opts.sketchText ? hairlineNm(view, 1) : t.stroke_width,
       justify: t.justify,
       angleRad,
       mirror: t.mirror,
@@ -1002,7 +1002,7 @@ function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(d.layer));
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(d.stroke_width, hairlineUm(view, selected ? 2 : 1));
+    ctx.lineWidth = Math.max(d.stroke_width, hairlineNm(view, selected ? 2 : 1));
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -1016,8 +1016,8 @@ function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     if (d.text) {
       const angleRad = (d.computed_text_angle / 1000) * (Math.PI / 180);
       drawStrokeText(ctx, d.text, d.text_at[0], d.text_at[1], {
-        sizeUm: Math.max(d.text_size_um, hairlineUm(view, 8)),
-        thicknessUm: d.stroke_width,
+        sizeNm: Math.max(d.text_size_nm, hairlineNm(view, 8)),
+        thicknessNm: d.stroke_width,
         justify: "center",
         angleRad,
         color,
@@ -1037,12 +1037,12 @@ function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
  * is finished, exactly like real KiCad's.
  */
 function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: RatsnestEdge[], curved: boolean, netHighlight: string | readonly string[] | null, colorOf?: (net: string) => string | null) {
-  const hair = hairlineUm(view, 1);
+  const hair = hairlineNm(view, 1);
   for (const e of edges) {
     const lit = isHighlighted(e.net, netHighlight);
     // A net's own colour (or its net class's) replaces the ratsnest colour unless the net colour mode is "None" (`RATSNEST_VIEW_ITEM::ViewDraw`).
     ctx.strokeStyle = lit ? layerColor("LAYER_SELECTION_SHADOWS") : (colorOf?.(e.net) ?? layerColor("ratsnest"));
-    ctx.lineWidth = lit ? hairlineUm(view, 2.5) : hair;
+    ctx.lineWidth = lit ? hairlineNm(view, 2.5) : hair;
     const [ax, ay] = e.from;
     const [bx, by] = e.to;
     ctx.beginPath();
@@ -1084,21 +1084,21 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
  * (computeVisibleGridSize) is the behaviorally important part and IS
  * ported exactly; see PARITY-pcb.md.
  */
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number, origin: readonly [number, number] = [0, 0], covered: readonly GridGeometry[] = []) {
-  const visible = computeVisibleGridSize(gridUm, view.scale, DEFAULT_GRID_STYLE);
+function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number, origin: readonly [number, number] = [0, 0], covered: readonly GridGeometry[] = []) {
+  const visible = computeVisibleGridSize(gridNm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
-  if (!(stepPx > 0)) return; // gridUm <= 0 or a degenerate scale -- nothing sane to draw
+  if (!(stepPx > 0)) return; // gridNm <= 0 or a degenerate scale -- nothing sane to draw
   // The grid is anchored at the grid origin (`GAL::SetGridOrigin`): dots at `origin + i * visible`.
   const x0 = -view.x / view.scale - origin[0];
   const y0 = -view.y / view.scale - origin[1];
-  const wUm = widthPx / view.scale;
-  const hUm = heightPx / view.scale;
+  const wNm = widthPx / view.scale;
+  const hNm = heightPx / view.scale;
   const firstIndexX = Math.floor(x0 / visible) - 1;
   const firstIndexY = Math.floor(y0 / visible) - 1;
-  const lastIndexX = Math.ceil((x0 + wUm) / visible) + 1;
-  const lastIndexY = Math.ceil((y0 + hUm) / visible) + 1;
+  const lastIndexX = Math.ceil((x0 + wNm) / visible) + 1;
+  const lastIndexY = Math.ceil((y0 + hNm) / visible) + 1;
   ctx.fillStyle = layerColor("grid");
-  const minorR = hairlineUm(view, stepPx < 8 ? 0.6 : 1);
+  const minorR = hairlineNm(view, stepPx < 8 ? 0.6 : 1);
   const majorR = minorR * MAJOR_GRID_LINE_WIDTH_RATIO;
   for (let i = firstIndexX; i <= lastIndexX; i++) {
     const x = origin[0] + i * visible;
@@ -1120,10 +1120,10 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
  */
 export function drawGridOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform, at: readonly [number, number] | null | undefined, background: string): void {
   if (!at || (at[0] === 0 && at[1] === 0)) return;
-  const r = hairlineUm(view, 16);
+  const r = hairlineNm(view, 16);
   ctx.save();
   ctx.strokeStyle = originMarkerColor(layerColor("grid"), background);
-  ctx.lineWidth = hairlineUm(view, 1);
+  ctx.lineWidth = hairlineNm(view, 1);
   ctx.beginPath();
   ctx.arc(at[0], at[1], r, 0, Math.PI * 2);
   ctx.moveTo(at[0] - r, at[1] - r);
@@ -1139,8 +1139,8 @@ function strokeDashedPolyline(ctx: CanvasRenderingContext2D, view: ViewTransform
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = Math.max(width, hairlineUm(view, 1));
-  ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+  ctx.lineWidth = Math.max(width, hairlineNm(view, 1));
+  ctx.setLineDash([hairlineNm(view, 4), hairlineNm(view, 3)]);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
@@ -1150,7 +1150,7 @@ function strokeDashedPolyline(ctx: CanvasRenderingContext2D, view: ViewTransform
   ctx.setLineDash([]);
   for (const [x, y] of pts) {
     ctx.beginPath();
-    ctx.arc(x, y, hairlineUm(view, 2.5), 0, Math.PI * 2);
+    ctx.arc(x, y, hairlineNm(view, 2.5), 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -1176,8 +1176,8 @@ function strokeDashedPolyline(ctx: CanvasRenderingContext2D, view: ViewTransform
 function strokeViaGhost(ctx: CanvasRenderingContext2D, view: ViewTransform, x: number, y: number, diameter: number, color: string) {
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = hairlineUm(view, 1.5);
-  ctx.setLineDash([hairlineUm(view, 3), hairlineUm(view, 2)]);
+  ctx.lineWidth = hairlineNm(view, 1.5);
+  ctx.setLineDash([hairlineNm(view, 3), hairlineNm(view, 2)]);
   ctx.beginPath();
   ctx.arc(x, y, diameter / 2, 0, Math.PI * 2);
   ctx.stroke();
@@ -1190,7 +1190,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   if (!draw) return;
 
   if (draw.kind === "tune") {
-    drawTune(ctx, view, draw, opts.cursorUm ? [opts.cursorUm.x, opts.cursorUm.y] : null, opts.units);
+    drawTune(ctx, view, draw, opts.cursorNm ? [opts.cursorNm.x, opts.cursorNm.y] : null, opts.units);
     return;
   }
 
@@ -1213,14 +1213,14 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     if (draw.dragKind === "via") {
       const [x, y] = draw.pts[0] ?? [0, 0];
       // a virtual via (a junction of tracks) is not drawn: `ROUTER_PREVIEW_ITEM` returns for `v->IsVirtual()`
-      if (!draw.virtualVia) strokeViaGhost(ctx, view, x, y, draw.viaDiameter ?? 600, color);
+      if (!draw.virtualVia) strokeViaGhost(ctx, view, x, y, draw.viaDiameter ?? 600_000, color);
       for (const leg of draw.fanout ?? []) strokeDashedPolyline(ctx, view, leg.pts, layerColor(copperColorKey(leg.layer)), leg.width, false);
     } else {
       strokeDashedPolyline(ctx, view, draw.pts, color, draw.width, false);
     }
     for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width || 150, false);
     for (const v of draw.displacedVias ?? []) {
-      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600;
+      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600_000;
       strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
     }
     return;
@@ -1237,7 +1237,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     strokeDashedPolyline(ctx, view, draw.ptsB, color, draw.width, false);
     for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width || 150, false);
     for (const v of draw.displacedVias ?? []) {
-      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600;
+      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600_000;
       strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
     }
     for (const v of draw.fixedVias ?? []) strokeViaGhost(ctx, view, v.x, v.y, v.diameter, layerColor("via"));
@@ -1247,11 +1247,11 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
 
   // `drawArc` / `drawOneBezier`: the construction managers' own geometry, not a polyline through the clicks.
   if (draw.kind === "shape" && draw.shapeKind === "arc" && draw.arc) {
-    drawArcPreview(ctx, draw.arc, { color: layerColor("selection"), hair: (px) => hairlineUm(view, px), units: opts.units });
+    drawArcPreview(ctx, draw.arc, { color: layerColor("selection"), hair: (px) => hairlineNm(view, px), units: opts.units });
     return;
   }
   if (draw.kind === "shape" && draw.shapeKind === "bezier" && draw.bezier) {
-    drawBezierPreview(ctx, draw.bezier, { color: layerColor("selection"), hair: (px) => hairlineUm(view, px), units: opts.units }, BEZIER_MAX_ERROR_UM);
+    drawBezierPreview(ctx, draw.bezier, { color: layerColor("selection"), hair: (px) => hairlineNm(view, px), units: opts.units }, BEZIER_MAX_ERROR_NM);
     return;
   }
 
@@ -1264,7 +1264,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     return;
   }
 
-  const cursor = opts.cursorUm;
+  const cursor = opts.cursorNm;
   const pts = draw.pts.slice();
   // A finished measurement (2 points already fixed) is a static ruler --
   // it stops following the cursor, unlike every other click-to-add-points
@@ -1278,11 +1278,11 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     const target: [number, number] = opts.snappedCursor ? [opts.snappedCursor[0], opts.snappedCursor[1]] : [cursor.x, cursor.y];
     const raw: [number, number] = usePosture ? constrainByAngleMode(opts.angleSnapMode ?? "45", last, target) : target;
     // An anchor or snap line point (the helper's) stays where it is; a point the line mode moved, or a raw cursor, goes to the grid.
-    rubberEnd = opts.snappedCursor && raw[0] === target[0] && raw[1] === target[1] ? raw : snapPoint(raw[0], raw[1], opts.gridUm);
+    rubberEnd = opts.snappedCursor && raw[0] === target[0] && raw[1] === target[1] ? raw : snapPoint(raw[0], raw[1], opts.gridNm);
   }
   const color = layerColor("selection");
   const shown: [number, number][] = rubberEnd ? [...pts, rubberEnd] : pts;
-  strokeDashedPolyline(ctx, view, shown, color, hairlineUm(view, 1.5), draw.kind === "zone" && shown.length >= 2);
+  strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), draw.kind === "zone" && shown.length >= 2);
 
   // pcb_viewer_tools.cpp's measure tool: the straight-line distance (and
   // dx/dy) between the ruler's two ends, labeled at the midpoint, in the
@@ -1294,16 +1294,16 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
       const [x0, y0] = pts[0]!;
       const [x1, y1] = end;
       const label = measureLabel([x0, y0], [x1, y1], opts.units);
-      drawStrokeText(ctx, label, (x0 + x1) / 2, (y0 + y1) / 2 - hairlineUm(view, 8), { sizeUm: hairlineUm(view, 12), justify: "center", color, thicknessUm: hairlineUm(view, 1.4) });
+      drawStrokeText(ctx, label, (x0 + x1) / 2, (y0 + y1) / 2 - hairlineNm(view, 8), { sizeNm: hairlineNm(view, 12), justify: "center", color, thicknessNm: hairlineNm(view, 1.4) });
     }
   }
 }
 
 /** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */
 function drawViaGhost(ctx: CanvasRenderingContext2D, board: BoardState, opts: PaintOptions) {
-  if (!opts.cursorUm) return;
-  const [x, y] = opts.snappedCursor ?? snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
-  const d = opts.currentViaPreset?.diameter ?? board.board_rules?.via_diameter ?? 600;
+  if (!opts.cursorNm) return;
+  const [x, y] = opts.snappedCursor ?? snapPoint(opts.cursorNm.x, opts.cursorNm.y, opts.gridNm);
+  const d = opts.currentViaPreset?.diameter ?? board.board_rules?.via_diameter ?? 600_000;
   ctx.save();
   ctx.globalAlpha = 0.6;
   ctx.fillStyle = layerColor("via");
@@ -1314,7 +1314,7 @@ function drawViaGhost(ctx: CanvasRenderingContext2D, board: BoardState, opts: Pa
 }
 
 /** Radius, um, of a DRC marker's circle -- not a KiCad constant (real KiCad's MARKER_BASE is a small fixed-pixel icon drawn in screen space, independent of zoom; this app has no screen-space-constant-size drawing primitive, so markers scale with the board like everything else here, sized to read clearly at a normal working zoom). */
-const DRC_MARKER_RADIUS_UM = 300;
+const DRC_MARKER_RADIUS_NM = 300_000;
 
 /**
  * DRC violation markers -- one circle per violation, centered on its
@@ -1330,7 +1330,7 @@ const DRC_MARKER_RADIUS_UM = 300;
  * the real shape.
  */
 function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, violations: DrcViolation[], selected: number | null, stale = false, layerVisible: Record<string, boolean> = {}) {
-  const hair = hairlineUm(view, 1.5);
+  const hair = hairlineNm(view, 1.5);
   violations.forEach((v, i) => {
     const item = v.items[0];
     if (!item) return;
@@ -1341,11 +1341,11 @@ function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, viol
     // `PCB_MARKER::ViewGetLayers`: a marker is on the layer of its severity (an exclusion on its own), which the Objects tab switches. The one the DRC dialog has selected stays.
     if (!on && !objectOnPaint(layerVisible, drcMarkerObject(v))) return;
     const color = on ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(waived ? "LAYER_DRC_EXCLUSION" : v.severity === "error" ? "LAYER_DRC_ERROR" : "LAYER_DRC_WARNING");
-    const r = on ? DRC_MARKER_RADIUS_UM * 1.4 : DRC_MARKER_RADIUS_UM;
+    const r = on ? DRC_MARKER_RADIUS_NM * 1.4 : DRC_MARKER_RADIUS_NM;
     ctx.save();
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(100, hair);
+    ctx.lineWidth = Math.max(100_000, hair);
     // Out of date: the same marker, dimmed and dashed -- where the problem was, not necessarily where it is now.
     if (stale) ctx.setLineDash([r * 0.35, r * 0.25]);
     ctx.beginPath();
@@ -1355,7 +1355,7 @@ function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, viol
     ctx.globalAlpha = stale ? 0.55 : 1;
     ctx.stroke();
     ctx.setLineDash([]);
-    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
+    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeNm: r * 1.3, justify: "center", color, thicknessNm: r * 0.22 });
     ctx.restore();
   });
 }
@@ -1364,17 +1364,17 @@ function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, viol
 const LINT_MARKER_COLOR = "#4ea1ff";
 
 function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, findings: DrcViolation[], selected: number | null) {
-  const hair = hairlineUm(view, 1.5);
+  const hair = hairlineNm(view, 1.5);
   findings.forEach((v, i) => {
     const item = v.items[0];
     if (!item) return;
     const [x, y] = item.pos;
     const on = i === selected;
-    const r = on ? DRC_MARKER_RADIUS_UM * 1.5 : DRC_MARKER_RADIUS_UM * 1.1;
+    const r = on ? DRC_MARKER_RADIUS_NM * 1.5 : DRC_MARKER_RADIUS_NM * 1.1;
     ctx.save();
     ctx.strokeStyle = LINT_MARKER_COLOR;
     ctx.fillStyle = LINT_MARKER_COLOR;
-    ctx.lineWidth = Math.max(100, hair);
+    ctx.lineWidth = Math.max(100_000, hair);
     ctx.beginPath();
     ctx.moveTo(x, y - r);
     ctx.lineTo(x + r, y);
@@ -1424,7 +1424,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     // The editor grid and KiCad 10's grid items (`drawGridSources`), the one leaving out what the others cover.
     grid: () => {
       const grids = shownGridItems(board, opts.layerVisible);
-      if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0], grids.map(gridGeometry));
+      if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridNm, opts.gridOrigin ?? [0, 0], grids.map(gridGeometry));
       const box: [number, number, number, number] = [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale];
       drawGridItems(ctx, view, board, opts.layerVisible, opts.selection, DEFAULT_GRID_STYLE, box);
     },
@@ -1527,10 +1527,10 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
  */
 function drawAuxOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform, at: [number, number]) {
   if (at[0] === 0 && at[1] === 0) return;
-  const r = hairlineUm(view, 16);
+  const r = hairlineNm(view, 16);
   ctx.save();
   ctx.strokeStyle = "rgb(204, 0, 0)";
-  ctx.lineWidth = hairlineUm(view, 1);
+  ctx.lineWidth = hairlineNm(view, 1);
   ctx.beginPath();
   ctx.arc(at[0], at[1], r, 0, Math.PI * 2);
   ctx.moveTo(at[0] - r, at[1]);
@@ -1555,20 +1555,20 @@ function drawSelectedGroups(ctx: CanvasRenderingContext2D, view: ViewTransform, 
     if (!entered && !selectedOnItsOwn) continue;
     const box = itemBounds(board, g.id);
     if (!box) continue;
-    const pad = hairlineUm(view, 12);
+    const pad = hairlineNm(view, 12);
     const [x0, y0, w, h] = [box[0] - pad, box[1] - pad, box[2] - box[0] + pad * 2, box[3] - box[1] + pad * 2];
     ctx.save();
     ctx.strokeStyle = entered ? layerColor("anchor") : layerColor("selection");
-    ctx.lineWidth = hairlineUm(view, entered ? 2.5 : 2);
-    if (!entered) ctx.setLineDash([hairlineUm(view, 8), hairlineUm(view, 5)]);
+    ctx.lineWidth = hairlineNm(view, entered ? 2.5 : 2);
+    if (!entered) ctx.setLineDash([hairlineNm(view, 8), hairlineNm(view, 5)]);
     ctx.strokeRect(x0, y0, w, h);
     ctx.setLineDash([]);
     // The name, in KiCad's tab: two lines up and across, the text between them and the box ("Scale by zoom a bit, but not too much").
     const name = (g.name ?? "").trim();
     if (name !== "") {
-      const textUm = (hairlineUm(view, 14) + 2 * 304.8) / 3;
-      if (name.length * textUm * 0.6 < w) {
-        const tab = textUm * 2;
+      const textNm = (hairlineNm(view, 14) + 2 * 304_800) / 3;
+      if (name.length * textNm * 0.6 < w) {
+        const tab = textNm * 2;
         ctx.beginPath();
         ctx.moveTo(x0, y0);
         ctx.lineTo(x0, y0 - tab);
@@ -1576,10 +1576,10 @@ function drawSelectedGroups(ctx: CanvasRenderingContext2D, view: ViewTransform, 
         ctx.lineTo(x0 + w, y0);
         ctx.stroke();
         ctx.fillStyle = ctx.strokeStyle;
-        ctx.font = `italic ${textUm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.font = `italic ${textNm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "alphabetic";
-        ctx.fillText(name, x0 + w / 2, y0 - textUm * 0.5);
+        ctx.fillText(name, x0 + w / 2, y0 - textNm * 0.5);
       }
     }
     ctx.restore();
@@ -1596,11 +1596,11 @@ function drawShapeHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, bo
   if ((board.locked ?? []).includes(id)) return;
   const shape = opts.shapePointPreview?.id === id ? opts.shapePointPreview.shape : board.drawings?.shapes.find((s) => s.id === id);
   if (!shape) return;
-  const r = hairlineUm(view, 4);
+  const r = hairlineNm(view, 4);
   ctx.save();
   ctx.fillStyle = layerColor("selection");
   ctx.strokeStyle = "rgba(0,0,0,0.6)";
-  ctx.lineWidth = hairlineUm(view, 1);
+  ctx.lineWidth = hairlineNm(view, 1);
   for (const p of shapeEditPoints(shape)) {
     const [x, y] = p.pos;
     ctx.beginPath();
@@ -1636,11 +1636,11 @@ function drawZoneHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, boa
   const zone = board.routing?.zones.find((z) => z.id === id);
   if (!zone) return;
   const outline = opts.zoneCornerPreview?.zoneId === id ? opts.zoneCornerPreview.outline : zone.outline;
-  const r = hairlineUm(view, 4);
+  const r = hairlineNm(view, 4);
   ctx.save();
   ctx.fillStyle = layerColor("selection");
   ctx.strokeStyle = "rgba(0,0,0,0.6)";
-  ctx.lineWidth = hairlineUm(view, 1);
+  ctx.lineWidth = hairlineNm(view, 1);
   for (const [x, y] of outline) {
     ctx.beginPath();
     ctx.rect(x - r, y - r, r * 2, r * 2);

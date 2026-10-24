@@ -11,7 +11,7 @@
 // editor and -- after the one Y-flip `resolveLibPoint` does -- the symbol editor).
 import type { BoardState, CmdShape, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, PointXY, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
-import { libPointToInternalUm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
+import { libPointToInternalNm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 import { extraItems } from "./pcbExtraItems";
 import { padIds } from "./pcbItems";
 import { groupLeaves } from "./groupTree";
@@ -168,7 +168,7 @@ export function footprintItemBoxes(fp: LibraryFootprint): ItemBoxes {
   for (const g of fp.graphics) if (g.id) out.set(g.id, shapeBoundingBox(cmdShapeToShape(g)));
   for (const t of fp.texts) {
     if (!t.id) continue;
-    const b = textBoundingBox({ id: t.id, content: t.content, x: t.at.x, y: t.at.y, angle: t.angle, layer: t.layer, size: t.size_um, stroke_width: t.stroke_width, justify: t.justify, mirror: t.mirror });
+    const b = textBoundingBox({ id: t.id, content: t.content, x: t.at.x, y: t.at.y, angle: t.angle, layer: t.layer, size: t.size_nm, stroke_width: t.stroke_width, justify: t.justify, mirror: t.mirror });
     out.set(t.id, [b.x0, b.y0, b.x1, b.y1]);
   }
   return out;
@@ -176,29 +176,29 @@ export function footprintItemBoxes(fp: LibraryFootprint): ItemBoxes {
 
 // ------------------------------------------------------------------------------------------------ symbol editor
 
-const mmToUm = ([x, y]: [number, number]): [number, number] => libPointToInternalUm([x, y]);
+const mmToNm = ([x, y]: [number, number]): [number, number] => libPointToInternalNm([x, y]);
 
 function graphicBox(g: LibrarySymbolGraphic): Box | null {
   switch (g.kind) {
     case "rectangle":
-      return boxOfPoints([mmToUm([g.start.x, g.start.y]), mmToUm([g.end.x, g.end.y])]);
+      return boxOfPoints([mmToNm([g.start.x, g.start.y]), mmToNm([g.end.x, g.end.y])]);
     case "polyline":
-      return boxOfPoints(g.pts.map((p) => mmToUm([p.x, p.y])));
+      return boxOfPoints(g.pts.map((p) => mmToNm([p.x, p.y])));
     case "circle": {
-      const [cx, cy] = mmToUm([g.center.x, g.center.y]);
-      const r = g.radius_mm * 1000;
+      const [cx, cy] = mmToNm([g.center.x, g.center.y]);
+      const r = g.radius_mm * 1e6;
       return [cx - r, cy - r, cx + r, cy + r];
     }
     case "arc":
-      return boxOfPoints([mmToUm([g.start.x, g.start.y]), mmToUm([g.mid.x, g.mid.y]), mmToUm([g.end.x, g.end.y])]);
+      return boxOfPoints([mmToNm([g.start.x, g.start.y]), mmToNm([g.mid.x, g.mid.y]), mmToNm([g.end.x, g.end.y])]);
     case "text": {
-      const [x, y] = mmToUm([g.at.x, g.at.y]);
-      const size = g.size_mm * 1000;
+      const [x, y] = mmToNm([g.at.x, g.at.y]);
+      const size = g.size_mm * 1e6;
       const w = Math.max(g.text.length, 1) * size * 0.6;
       return [x - w / 2, y - size / 2, x + w / 2, y + size / 2];
     }
     case "text_box":
-      return boxOfPoints([mmToUm([g.start.x, g.start.y]), mmToUm([g.end.x, g.end.y])]);
+      return boxOfPoints([mmToNm([g.start.x, g.start.y]), mmToNm([g.end.x, g.end.y])]);
   }
 }
 

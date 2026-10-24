@@ -3,18 +3,18 @@ import assert from "node:assert/strict";
 import type { BoardTextBox } from "../api/pcbItemTypes";
 import type { BoardState } from "../api/types";
 import {
-  autoPenUm,
+  autoPenNm,
   boardTextBoxOf,
-  clampPenUm,
-  columnWidthUm,
+  clampPenNm,
+  columnWidthNm,
   cornersInSequence,
   drawPos,
   escapeQuoted,
   grownToFit,
   layoutBoxText,
-  legacyMarginUm,
+  legacyMarginNm,
   linebreakText,
-  minSizeUm,
+  minSizeNm,
   newTextBox,
   textBoxHitDistance,
   textBoxToCmd,
@@ -32,13 +32,13 @@ function box(partial: Partial<BoardTextBox> = {}): BoardTextBox {
       text: "hello",
       start: { x: 10_000, y: 10_000 },
       end: { x: 30_000, y: 20_000 },
-      margin_left_um: 500,
-      margin_top_um: 600,
-      margin_right_um: 700,
-      margin_bottom_um: 800,
-      stroke_width_um: 100,
-      size_um: 1_000,
-      thickness_um: 150,
+      margin_left_nm: 500,
+      margin_top_nm: 600,
+      margin_right_nm: 700,
+      margin_bottom_nm: 800,
+      stroke_width_nm: 100,
+      size_nm: 1_000,
+      thickness_nm: 150,
       halign: "left",
       valign: "top",
     }),
@@ -47,14 +47,14 @@ function box(partial: Partial<BoardTextBox> = {}): BoardTextBox {
 }
 
 test("the pen of a text with none is an eighth of the glyph and a fifth of it when bold, and a pen is clamped to a sixth of the glyph", () => {
-  assert.equal(autoPenUm(1000, false), 125);
-  assert.equal(autoPenUm(1000, true), 200);
-  assert.equal(clampPenUm(500, 1000), 167);
-  assert.equal(clampPenUm(100, 1000), 100);
+  assert.equal(autoPenNm(1000, false), 125);
+  assert.equal(autoPenNm(1000, true), 200);
+  assert.equal(clampPenNm(500, 1000), 167);
+  assert.equal(clampPenNm(100, 1000), 100);
 });
 
 test("the default margin of a box is half its border and three quarters of its text height", () => {
-  assert.equal(legacyMarginUm(120, 1000), 60 + 750);
+  assert.equal(legacyMarginNm(120, 1000), 60 + 750);
 });
 
 test("cornersInSequence: the rectangle's corners in the order the text's frame has them", () => {
@@ -97,10 +97,10 @@ test("drawPos: the margin is turned with the text", () => {
   assert.deepEqual(p, [10_000 + 600, 20_000 - 500]);
 });
 
-test("columnWidthUm: the side the text runs along less its margins", () => {
-  assert.equal(columnWidthUm(box()), 20_000 - 500 - 700);
+test("columnWidthNm: the side the text runs along less its margins", () => {
+  assert.equal(columnWidthNm(box()), 20_000 - 500 - 700);
   // 90 degrees: the text runs along the box's height, and source takes the top and bottom margins off
-  assert.equal(columnWidthUm(box({ angle: 90_000 })), 10_000 - 600 - 800);
+  assert.equal(columnWidthNm(box({ angle: 90_000 })), 10_000 - 600 - 800);
 });
 
 test("layoutBoxText: lines are an interline apart and each is justified on its own", () => {
@@ -118,9 +118,9 @@ test("layoutBoxText: lines are an interline apart and each is justified on its o
   assert.equal(top.lines[0]!.y - bottom.lines[0]!.y, Math.trunc(1000 * 1.17) + Math.trunc(1000 * 1.68 * 0.9583));
 });
 
-test("minSizeUm and grownToFit: the box is as high as its text and the margins, and not smaller", () => {
+test("minSizeNm and grownToFit: the box is as high as its text and the margins, and not smaller", () => {
   const b = box({ text: "ab\ncd", end: [30_000, 10_100] });
-  const min = minSizeUm(b, measure);
+  const min = minSizeNm(b, measure);
   assert.equal(min.w, 0);
   // two lines: (1000 + 2*round(150*1.5)) = 1450, 17 % more, an interline more, the top and bottom margins
   const ext = 1_000 + 2 * Math.round(150 * 1.5);
@@ -131,9 +131,9 @@ test("minSizeUm and grownToFit: the box is as high as its text and the margins, 
   // a box already big enough is the same box
   assert.equal(grownToFit(box({ end: [30_000, 40_000] }), measure).end[1], 40_000);
   // no text, no minimum
-  assert.deepEqual(minSizeUm(box({ text: "", end: [30_000, 10_100] }), measure), { w: 0, h: 0 });
+  assert.deepEqual(minSizeNm(box({ text: "", end: [30_000, 10_100] }), measure), { w: 0, h: 0 });
   // a box turned a quarter turn needs its width
-  assert.deepEqual(minSizeUm(box({ text: "ab", angle: 90_000 }), measure).h, 0);
+  assert.deepEqual(minSizeNm(box({ text: "ab", angle: 90_000 }), measure).h, 0);
 });
 
 test("withTextAngle: a quarter turn turns the box counter-clockwise about its position, text and all", () => {
@@ -170,23 +170,23 @@ test("textBoxHitDistance: anywhere in the box's bounding box hits, outside it is
 
 test("newTextBox: the layer's text defaults, left and top, the default margins, mirrored on a back layer", () => {
   const board = { board_rules: { text_graphics: undefined } } as unknown as BoardState;
-  const b = newTextBox(board, "F.SilkS", [0, 0], [10_000, 5_000]);
+  const b = newTextBox(board, "F.SilkS", [0, 0], [10_000_000, 5_000_000]);
   assert.equal(b.layer, "F.SilkS");
   assert.deepEqual([b.halign, b.valign, b.mirror, b.border, b.knockout], ["left", "top", false, true, false]);
-  assert.equal(b.size, 1_000);
-  assert.equal(b.stroke_width, 100, "silkscreen's line width");
-  const margin = legacyMarginUm(100, 1_000);
+  assert.equal(b.size, 1_000_000);
+  assert.equal(b.stroke_width, 100_000, "silkscreen's line width");
+  const margin = legacyMarginNm(100_000, 1_000_000);
   assert.deepEqual(b.margins, [margin, margin, margin, margin]);
-  assert.equal(newTextBox(board, "B.SilkS", [0, 0], [1, 1]).mirror, true);
+  assert.equal(newTextBox(board, "B.SilkS", [0, 0], [1000, 1000]).mirror, true);
   // the copper class has its own, larger text
-  assert.equal(newTextBox(board, "F.Cu", [0, 0], [1, 1]).size, 1_500);
+  assert.equal(newTextBox(board, "F.Cu", [0, 0], [1000, 1000]).size, 1_500_000);
 });
 
 test("textBoxToCmd: the state record as the verb takes it, and back", () => {
   const b = box({ text: "x", line_style: "dash", bold: true, thickness_auto: true, thickness: 200, width: 900, size: 1_000 });
   const cmd = textBoxToCmd(b);
-  assert.equal(cmd.thickness_um, 0, "an automatic pen is sent as 0");
-  assert.equal(cmd.width_um, 900, "a glyph width that is not the height is sent");
+  assert.equal(cmd.thickness_nm, 0, "an automatic pen is sent as 0");
+  assert.equal(cmd.width_nm, 900, "a glyph width that is not the height is sent");
   assert.equal(cmd.line_spacing_permille, 0, "KiCad's 1.0 is sent as 0");
   assert.deepEqual(cmd.start, { x: 10_000, y: 10_000 });
   assert.equal(boardTextBoxOf(cmd).line_spacing_permille, 1000);

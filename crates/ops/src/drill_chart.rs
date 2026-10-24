@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use eda_model::drill_chart::{DrillChart, DrillChartColumnId, DrillChartFilter, DrillGroupKey, DrillMarkMode, DrillMarkPolicy, DrillSpan, DrillSymbolAssignment, DrillSymbolProfile, TableAlign, TableUnits, CURATED_SHAPES};
 use eda_model::footprint::{to_board, Pad, PadKind};
 use eda_model::ir::Side;
-use eda_model::ir::{Design, FootprintInstance, Point, TextJustify, Um};
+use eda_model::ir::{Design, FootprintInstance, Point, TextJustify, Nm};
 use eda_model::table::{Table, TableCell};
 use eda_model::{ConstraintModel, Stackup};
 
@@ -41,10 +41,10 @@ pub struct DrillOp {
     pub source: String,
     pub at: Point,
     /// `m_SizeXY`, µm, the source's own axes.
-    pub size: (Um, Um),
+    pub size: (Nm, Nm),
     /// `m_Orientation`, degrees, KiCad's sense.
     pub orientation_deg: f64,
-    pub diameter: Um,
+    pub diameter: Nm,
     pub is_slot: bool,
     pub top: String,
     pub bottom: String,
@@ -245,10 +245,10 @@ fn pad_op(fp: &FootprintInstance, pad: &Pad, tokens: &[String], non_plated: bool
 pub fn group_key(p: &DrillSymbolProfile, op: &DrillOp) -> String {
     let mut key = String::from("v1");
     if p.is_grouped_by(DrillGroupKey::Size) {
-        key += &format!("|d{}", op.diameter * 1000);
+        key += &format!("|d{}", op.diameter);
     }
     if p.is_grouped_by(DrillGroupKey::Slot) {
-        key += &if op.is_slot { format!("|s{}x{}", op.size.0 * 1000, op.size.1 * 1000) } else { "|s-".to_string() };
+        key += &if op.is_slot { format!("|s{}x{}", op.size.0, op.size.1) } else { "|s-".to_string() };
     }
     if p.is_grouped_by(DrillGroupKey::Plating) {
         key += if op.not_plated { "|p0" } else { "|p1" };
@@ -310,7 +310,7 @@ pub fn groups(design: &Design, model: &ConstraintModel, profile: &DrillSymbolPro
                     continue;
                 }
                 let key = group_key(profile, &op);
-                let site = (op.at.x * 1000, op.at.y * 1000);
+                let site = (op.at.x, op.at.y);
                 let g = by_key.entry(key.clone()).or_insert_with(|| DrillGroup { key, first: op.clone(), operations: 0, sites: BTreeSet::new(), symbol: Default::default() });
                 g.operations += 1;
                 g.sites.insert(site);
@@ -409,8 +409,8 @@ pub struct DrillMark {
     pub mode: DrillMarkMode,
     pub shape_index: i32,
     pub letter: String,
-    pub diameter_um: Um,
-    pub size_um: (Um, Um),
+    pub diameter_nm: Nm,
+    pub size_nm: (Nm, Nm),
     pub orientation_deg: f64,
     pub is_slot: bool,
 }
@@ -423,7 +423,7 @@ pub fn marks(design: &Design, model: &ConstraintModel) -> Vec<DrillMark> {
     for span in spans(design, model) {
         for op in operations(design, model, &span, false, true) {
             let Some(a) = resolved.get(&group_key(&profile, &op)) else { continue };
-            out.push(DrillMark { at: op.at, span: span.clone(), mode: a.mode, shape_index: a.shape_index, letter: a.letter.clone(), diameter_um: op.diameter, size_um: op.size, orientation_deg: op.orientation_deg, is_slot: op.is_slot });
+            out.push(DrillMark { at: op.at, span: span.clone(), mode: a.mode, shape_index: a.shape_index, letter: a.letter.clone(), diameter_nm: op.diameter, size_nm: op.size, orientation_deg: op.orientation_deg, is_slot: op.is_slot });
         }
     }
     out
@@ -432,8 +432,8 @@ pub fn marks(design: &Design, model: &ConstraintModel) -> Vec<DrillMark> {
 // ------------------------------------------------------------------------------------------------------------------------------------------------- the content
 
 /// `FormatGeneratedTableLength`.
-pub fn format_length(um: Um, units: TableUnits, precision: i32) -> String {
-    let mm = um as f64 / 1000.0;
+pub fn format_length(nm: Nm, units: TableUnits, precision: i32) -> String {
+    let mm = eda_model::units::to_mm(nm);
     let p = precision.max(0) as usize;
     match units {
         TableUnits::Inch => format!("{:.*}\u{2033}", p + 1, mm / 25.4),
@@ -546,7 +546,7 @@ pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, char
                 DrillChartColumnId::BackdrillStub => NO_VALUE.into(),
                 DrillChartColumnId::AspectRatio => {
                     let depth = layer_distance_nm(stackup, &copper, &f.top, &f.bottom);
-                    let d = f.diameter * 1000;
+                    let d = f.diameter;
                     if depth > 0 && d > 0 {
                         format!("{:.1}:1", depth as f64 / d as f64)
                     } else {
@@ -736,8 +736,8 @@ pub fn rebuild(t: &mut Table, chart: &mut DrillChart, c: &ChartContent) {
     t.row_heights = vec![0; rows];
     crate::pcb_table_builders::autosize(t);
     for (col, def) in chart.columns.iter().enumerate() {
-        if def.width_um > t.col_widths[col] {
-            t.col_widths[col] = def.width_um;
+        if def.width_nm > t.col_widths[col] {
+            t.col_widths[col] = def.width_nm;
         }
     }
     t.at = anchor;
@@ -748,7 +748,7 @@ pub fn rebuild(t: &mut Table, chart: &mut DrillChart, c: &ChartContent) {
 
 /// A new chart's table (`PCB_DRILL_CHART( board )`: no cells yet, lines 0.1 mm wide), on `layer` with its first corner at `at`.
 pub fn new_chart_table(layer: &str, at: Point) -> Table {
-    let mut t = Table::new_grid(layer, at, 1, 1, 0, 0, 100);
+    let mut t = Table::new_grid(layer, at, 1, 1, 0, 0, 100_000);
     t.cells.clear();
     t.col_widths.clear();
     t.row_heights.clear();
@@ -843,21 +843,21 @@ mod tests {
 
     #[test]
     fn lengths_are_written_as_the_generated_tables_write_them() {
-        assert_eq!(format_length(300, TableUnits::Mm, 3), "0.300");
-        assert_eq!(format_length(1_143, TableUnits::Mm, 2), "1.14");
-        assert_eq!(format_length(1_524, TableUnits::Inch, 3), "0.0600\u{2033}");
-        assert_eq!(format_length(1_524, TableUnits::Mils, 3), "60.0 mil");
-        assert_eq!(format_length(1_524, TableUnits::Mils, 1), "60 mil");
+        assert_eq!(format_length(300_000, TableUnits::Mm, 3), "0.300");
+        assert_eq!(format_length(1_143_000, TableUnits::Mm, 2), "1.14");
+        assert_eq!(format_length(1_524_000, TableUnits::Inch, 3), "0.0600\u{2033}");
+        assert_eq!(format_length(1_524_000, TableUnits::Mils, 3), "60.0 mil");
+        assert_eq!(format_length(1_524_000, TableUnits::Mils, 1), "60 mil");
     }
 
     #[test]
     fn marks_are_assigned_from_the_lowest_free_shape_and_then_letters() {
-        let op = |d: Um| DrillOp { source: String::new(), at: Point { x: 0, y: 0 }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
+        let op = |d: Nm| DrillOp { source: String::new(), at: Point { x: 0, y: 0 }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
         let p = DrillSymbolProfile::default();
-        assert_eq!(group_key(&p, &op(300)), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
+        assert_eq!(group_key(&p, &op(300_000)), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
         let mut profile = DrillSymbolProfile::default();
-        profile.assignments.insert(group_key(&p, &op(400)), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
-        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(300 + i * 100)), first: op(300 + i * 100), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
+        profile.assignments.insert(group_key(&p, &op(400_000)), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
+        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(300_000 + i * 100_000)), first: op(300_000 + i * 100_000), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
         assign(&mut gs, &mut profile);
         assert_eq!((gs[0].symbol.mode, gs[0].symbol.shape_index), (DrillMarkMode::Shape, 1), "shape 0 is the frozen 0.4 mm group's");
         assert_eq!(gs[1].symbol.shape_index, 0);

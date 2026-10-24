@@ -162,7 +162,7 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
         const s = api.getState();
         const sch = s.schematic;
         if (!sch) return true;
-        const tol = Math.max(5 / (s.schematicView.scale || 1), 254);
+        const tol = Math.max(5 / (s.schematicView.scale || 1), 254_000);
         const pin = pinItems(sch).find((p) => hitPin(p, [at.x, at.y], tol / 2, measureStrokeText));
         if (pin) {
           const item = getSimUi().frame.circuit?.items.find((i) => i.ref === pin.reference);

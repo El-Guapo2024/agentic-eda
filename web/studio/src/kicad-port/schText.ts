@@ -15,26 +15,26 @@ export type HAlign = "left" | "center" | "right";
 export type VAlign = "top" | "center" | "bottom";
 
 /** `GetPenSizeForNormal`: a text with no thickness of its own is written with a pen an eighth of its size. */
-export function defaultPenUm(sizeUm: number): number {
-  return Math.round(sizeUm / 8);
+export function defaultPenNm(sizeNm: number): number {
+  return Math.round(sizeNm / 8);
 }
 
 /**
  * The offset from a text's anchor to the start of its baseline, in the text's own axes (x along the text, y down), micrometres.
- * `advanceUm` is the width of the line (the sum of its glyphs' advances).
+ * `advanceNm` is the width of the line (the sum of its glyphs' advances).
  *
  * The 1.17 and the `thickness / 1.52` and `thickness * 0.052` terms are `getLinePositions`' compatibility factors with KiCad 6's
  * text; the offsets are truncated to whole internal units as KiCad does.
  */
-export function textOrigin(advanceUm: number, sizeUm: number, thicknessUm: number, h: HAlign, v: VAlign): [number, number] {
-  const height = sizeUm * 1.17;
-  const offX = thicknessUm / 1.52;
-  let offY = sizeUm - thicknessUm * 0.052;
+export function textOrigin(advanceNm: number, sizeNm: number, thicknessNm: number, h: HAlign, v: VAlign): [number, number] {
+  const height = sizeNm * 1.17;
+  const offX = thicknessNm / 1.52;
+  let offY = sizeNm - thicknessNm * 0.052;
   if (v === "center") offY -= Math.trunc(height / 2);
   else if (v === "bottom") offY -= Math.trunc(height);
-  const lineX = h === "left" ? offX : h === "center" ? -advanceUm / 2 : -(advanceUm + offX);
+  const lineX = h === "left" ? offX : h === "center" ? -advanceNm / 2 : -(advanceNm + offX);
   return [Math.trunc(lineX), Math.trunc(offY)];
 }
 
 /** The size every field is set in: 50 mils. */
-export const FIELD_SIZE_UM = 1_270;
+export const FIELD_SIZE_NM = 1_270_000;

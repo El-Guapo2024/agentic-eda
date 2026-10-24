@@ -2,14 +2,14 @@
 // `import_graphics` command it makes of the answers. Pure: no store, no DOM; unit-tested in importGraphics.test.ts. The reader of the file and the items it
 // becomes are the server's (`crates/kicad/src/{dxf_import,svg_import}.rs`, `crates/ops/src/import_graphics.rs`).
 import type { ImportGraphicsCmd, ImportSchGraphicsCmd, ImportSymbolGraphicsCmd, PointXY } from "../api/types";
-import { umFrom, type LengthUnit } from "../state/units";
+import { nmFrom, type LengthUnit } from "../state/units";
 
-/** A length typed in the dialog ("1.5", "0.2mm", "10mil", `0.01"`), in micrometres; a bare number is in the display units. Null when it is not a length. */
+/** A length typed in the dialog ("1.5", "0.2mm", "10mil", `0.01"`), in nanometres; a bare number is in the display units. Null when it is not a length. */
 export function parseLength(text: string, units: LengthUnit): number | null {
   const m = /^\s*(-?\d*\.?\d+)\s*(mm|mil|in|")?\s*$/i.exec(text);
   if (!m) return null;
   const unit: LengthUnit = m[2] ? (m[2] === '"' ? "in" : (m[2].toLowerCase() as LengthUnit)) : units;
-  return Math.round(umFrom(parseFloat(m[1]!), unit));
+  return Math.round(nmFrom(parseFloat(m[1]!), unit));
 }
 
 export type GraphicsFormat = "dxf" | "svg";
@@ -75,8 +75,8 @@ export interface GraphicsInfo {
   items?: number;
   counts?: Record<string, number>;
   messages?: Array<{ text: string; count: number }>;
-  /** The picture's box in micrometres at the scale asked, with no offset: x0, y0, x1, y1. */
-  bbox_um?: [number, number, number, number] | null;
+  /** The picture's box in nanometres at the scale asked, with no offset: x0, y0, x1, y1. */
+  bbox_nm?: [number, number, number, number] | null;
   width_mm?: number;
   height_mm?: number;
   fits?: boolean;
@@ -130,24 +130,24 @@ export function buildImportCmd(args: {
   if (!(Number.isFinite(scale) && scale > 0)) return { ok: false, error: "The import scale must be a number greater than zero." };
   const layer = v.setLayer ? v.layer : (args.activeLayer ?? "");
   if (!layer) return { ok: false, error: "Please select a valid layer." };
-  let lineWidthUm = 200;
-  let fixUm: number | null = null;
+  let lineWidthNm = 200_000;
+  let fixNm: number | null = null;
   if (args.format === "dxf") {
     const w = parseLength(v.lineWidth, args.units);
     if (w == null || w < 0) return { ok: false, error: "The DXF default line width is not a length." };
-    lineWidthUm = w;
+    lineWidthNm = w;
   }
   if (v.fix) {
     const t = parseLength(v.tolerance, args.units);
     if (t == null || t < 0) return { ok: false, error: "The tolerance is not a length." };
-    fixUm = t;
+    fixNm = t;
   }
-  let originUm: PointXY = { x: 0, y: 0 };
+  let originNm: PointXY = { x: 0, y: 0 };
   if (v.placeAt) {
     const x = parseLength(v.x, args.units);
     const y = parseLength(v.y, args.units);
     if (x == null || y == null) return { ok: false, error: "The place-at coordinates are not lengths." };
-    originUm = { x, y };
+    originNm = { x, y };
   }
   const replace = v.replaceOutline && layer === "Edge.Cuts" && args.polygonOutline;
   const base = {
@@ -157,26 +157,26 @@ export function buildImportCmd(args: {
     layer,
     dxf_units: args.format === "dxf" ? v.dxfUnits : "",
     scale: r6(scale),
-    line_width_um: lineWidthUm,
+    line_width_nm: lineWidthNm,
     group: v.group,
-    fix_tolerance_um: fixUm,
+    fix_tolerance_nm: fixNm,
     replace_outline: replace,
   };
   if (v.placeAt) {
-    // The importer's offset, in nanometres: the typed origin over the scale (micrometres to nanometres is a thousand).
-    const cmd: ImportGraphicsCmd = { ...base, offset_x_nm: Math.round((originUm.x * 1000) / scale), offset_y_nm: Math.round((originUm.y * 1000) / scale) };
+    // The importer's offset, in nanometres: the typed origin over the scale.
+    const cmd: ImportGraphicsCmd = { ...base, offset_x_nm: Math.round(originNm.x / scale), offset_y_nm: Math.round(originNm.y / scale) };
     return { ok: true, interactive: false, build: () => cmd };
   }
   return {
     ok: true,
     interactive: true,
     build: (at) => {
-      // The picture's box at offset 0 is the server's `bbox_um`; the offset that takes its upper left corner to the cursor.
-      const box = args.info?.bbox_um;
+      // The picture's box at offset 0 is the server's `bbox_nm`; the offset that takes its upper left corner to the cursor.
+      const box = args.info?.bbox_nm;
       const left = box ? box[0] : 0;
       const top = box ? box[1] : 0;
       const to = at ?? { x: 0, y: 0 };
-      return { ...base, offset_x_nm: (to.x - left) * 1000, offset_y_nm: (to.y - top) * 1000 };
+      return { ...base, offset_x_nm: to.x - left, offset_y_nm: to.y - top };
     },
   };
 }
@@ -225,22 +225,22 @@ export function buildSchImportCmd(args: {
   const v = args.values;
   const scale = Number(v.scale.trim());
   if (!(Number.isFinite(scale) && scale > 0)) return { ok: false, error: "The import scale must be a number greater than zero." };
-  let lineWidthUm = 0;
+  let lineWidthNm = 0;
   if (args.format === "dxf") {
     const w = v.lineWidth.trim() === "" ? 0 : parseLength(v.lineWidth, args.units);
     if (w == null || w < 0) return { ok: false, error: "The DXF default line width is not a length." };
-    lineWidthUm = w;
+    lineWidthNm = w;
   }
   if (args.editor === "symbol" && !args.symbol) return { ok: false, error: "There is no symbol open to import into." };
-  let originUm: PointXY = { x: 0, y: 0 };
+  let originNm: PointXY = { x: 0, y: 0 };
   if (v.placeAt) {
     const x = parseLength(v.x, args.units);
     const y = parseLength(v.y, args.units);
     if (x == null || y == null) return { ok: false, error: "The placement coordinates are not lengths." };
-    originUm = { x, y };
+    originNm = { x, y };
   }
   const make = (offsetXnm: number, offsetYnm: number): ImportSchGraphicsCmd | ImportSymbolGraphicsCmd => {
-    const base = { format: args.format, text: args.text, dxf_units: args.format === "dxf" ? v.dxfUnits : "", scale: r6(scale), offset_x_nm: offsetXnm, offset_y_nm: offsetYnm, line_width_um: lineWidthUm };
+    const base = { format: args.format, text: args.text, dxf_units: args.format === "dxf" ? v.dxfUnits : "", scale: r6(scale), offset_x_nm: offsetXnm, offset_y_nm: offsetYnm, line_width_nm: lineWidthNm };
     if (args.editor === "symbol") {
       const sym = args.symbol!;
       return { op: "import_symbol_graphics", lib_id: sym.libId, unit: sym.unit, body_style: sym.bodyStyle, ...base };
@@ -248,8 +248,8 @@ export function buildSchImportCmd(args: {
     return { op: "import_sch_graphics", ...base };
   };
   if (v.placeAt) {
-    // The importer's offset, in nanometres: the typed origin over the scale (micrometres to nanometres is a thousand).
-    const cmd = make(Math.round((originUm.x * 1000) / scale), Math.round((originUm.y * 1000) / scale));
+    // The importer's offset, in nanometres: the typed origin over the scale.
+    const cmd = make(Math.round(originNm.x / scale), Math.round(originNm.y / scale));
     return { ok: true, interactive: false, build: () => cmd };
   }
   return {
@@ -257,7 +257,7 @@ export function buildSchImportCmd(args: {
     interactive: true,
     build: (at) => {
       const to = at ?? { x: 0, y: 0 };
-      return make(Math.round(to.x * 1000), Math.round(to.y * 1000));
+      return make(Math.round(to.x), Math.round(to.y));
     },
   };
 }

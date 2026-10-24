@@ -129,7 +129,7 @@
     try { await closeDialogs(); } catch { /* ignore */ }
     results.push(entry);
   };
-  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const near = (a, b, tol = 2_000) => Math.abs(a - b) <= tol;
 
   // --------------------------------------------------------------------------------------------------------------------------- run
   const strict = [...document.querySelectorAll("label.toggle")].find((l) => /strict/i.test(l.textContent))?.querySelector("input");
@@ -163,8 +163,8 @@
       buttonText(document, "OK").click();
       await sleep(900);
       const f1 = await fieldOf(refA, "Reference");
-      t(f1.x === f0.x + 2000 && f1.y === f0.y + 1000, `moved by (2, 1) mm: (${f0.x},${f0.y}) -> (${f1.x},${f1.y})`);
-      t(f1.lx === f0.lx + 2000 && f1.ly === f0.ly + 1000, `its place in the footprint's own frame moved with it (${f0.lx},${f0.ly}) -> (${f1.lx},${f1.ly})`);
+      t(f1.x === f0.x + 2_000_000 && f1.y === f0.y + 1_000_000, `moved by (2, 1) mm: (${f0.x},${f0.y}) -> (${f1.x},${f1.y})`);
+      t(f1.lx === f0.lx + 2_000_000 && f1.ly === f0.ly + 1_000_000, `its place in the footprint's own frame moved with it (${f0.lx},${f0.ly}) -> (${f1.lx},${f1.ly})`);
       t((await snapshot()) !== base, "the board differs while it is moved");
       await undo();
       t((await snapshot()) === base, "undo puts the board back");
@@ -177,7 +177,7 @@
       const to = await screenOf();
       t(!!to, "the cursor readout gives the mapping to the board");
       if (!to) return;
-      const [px, py] = to(f0.x / 1000, f0.y / 1000);
+      const [px, py] = to(f0.x / 1e6, f0.y / 1e6);
       fire("pointermove", px, py); await sleep(150);
       await open("pcbnew.InteractiveMove.move");
       fire("pointermove", px + 60, py + 25); await sleep(250);
@@ -196,7 +196,7 @@
       await __eda.run("common.InteractiveSelection.clear");
       const to = await screenOf();
       if (!to) return t(false, "no mapping");
-      const [px, py] = to(f0.x / 1000, f0.y / 1000);
+      const [px, py] = to(f0.x / 1e6, f0.y / 1e6);
       fire("pointermove", px, py, { buttons: 0 }); await sleep(120);
       fire("pointerdown", px, py, { buttons: 1 }); await sleep(100);
       fire("pointermove", px + 40, py + 20, { buttons: 1 }); await sleep(150);
@@ -219,7 +219,7 @@
       const box = (id) => document.querySelector(`.ap-row[data-object="${id}"] .ap-eye`); // the eye of an Objects row
       const to = await screenOf();
       if (!to) return t(false, "no mapping");
-      const at = (f) => to(f.x / 1000, f.y / 1000);
+      const at = (f) => to(f.x / 1e6, f.y / 1e6);
       const pick = async (f) => {
         const [px, py] = at(f);
         await __eda.run("common.InteractiveSelection.clear");
@@ -253,7 +253,7 @@
       let applied = 0;
       for (const [name, v, key, want] of [
         ["Visible", false, "visible", false],
-        ["Thickness", String(Math.round(Number(current("Thickness")) * 1000 + 50) / 1000), "thickness", null],
+        ["Thickness", String(Math.round(Number(current("Thickness")) * 1e6 + 50) / 1e6), "thickness", null],
         ["Horizontal Justification", other("Horizontal Justification"), "halign", null],
         ["Layer", "F.Fab", "layer", "F.Fab"],
       ]) {
@@ -307,7 +307,7 @@
       await sleep(1000);
       const p = await partOf(refA);
       const r = p.fields.find((f) => f.name === "Reference");
-      t(r.w === 1500 && r.h === 1500 && r.thickness === 200, `reference text is ${r.w} x ${r.h}, ${r.thickness} thick`);
+      t(r.w === 1_500_000 && r.h === 1_500_000 && r.thickness === 200_000, `reference text is ${r.w} x ${r.h}, ${r.thickness} thick`);
       const mpn = p.fields.find((f) => f.name === "MPN");
       t(!!mpn && mpn.text === "RC0603FR-07330RL" && mpn.custom, `the user field MPN is there: ${JSON.stringify(mpn && { text: mpn.text, custom: mpn.custom, layer: mpn.layer })}`);
       t(p.attrs.dnp === true, "Do not populate is set");
@@ -399,11 +399,11 @@
       await sleep(1000);
       const pad = await padOf(padId);
       t(pad.shape === "oval", `shape is ${pad.shape}`);
-      t(pad.size?.join() === "2200,700", `size is ${pad.size}`);
-      t(pad.offset?.[0] === 100, `offset is ${JSON.stringify(pad.offset)}`);
+      t(pad.size?.join() === "2200000,700000", `size is ${pad.size}`);
+      t(pad.offset?.[0] === 100_000, `offset is ${JSON.stringify(pad.offset)}`);
       const zonePad = (await partOf(U.ref)).zone?.pads.find((z) => z.num === U.pads[0].num);
-      t(zonePad?.clearance === 150, `clearance is ${zonePad?.clearance} (a pad has one, the zone overlay's)`);
-      t(zonePad?.connection === "Full" && zonePad?.gap === 400, `zone connection ${zonePad?.connection}, relief gap ${zonePad?.gap}`);
+      t(zonePad?.clearance === 150_000, `clearance is ${zonePad?.clearance} (a pad has one, the zone overlay's)`);
+      t(zonePad?.connection === "Full" && zonePad?.gap === 400_000, `zone connection ${zonePad?.connection}, relief gap ${zonePad?.gap}`);
       t(pad.edited === true, "the pad is marked as edited");
       await undo();
       t((await snapshot()) === base, `one undo puts the pad back (was ${was.shape} ${was.size})`);
@@ -445,8 +445,8 @@
       await sleep(1200);
       const p = await partOf(refA);
       const z = p.zone?.pads.find((x) => x.num === num);
-      t(p.zone?.connection === "None" && p.zone?.clearance === 300, `the footprint's zone connection ${p.zone?.connection} and clearance ${p.zone?.clearance}`);
-      t(z?.connection === "Full" && z?.gap === 400 && z?.clearance === 250, `pad ${num}'s zone fields ${JSON.stringify(z)}`);
+      t(p.zone?.connection === "None" && p.zone?.clearance === 300_000, `the footprint's zone connection ${p.zone?.connection} and clearance ${p.zone?.clearance}`);
+      t(z?.connection === "Full" && z?.gap === 400_000 && z?.clearance === 250_000, `pad ${num}'s zone fields ${JSON.stringify(z)}`);
       t(!!p.fields.find((f) => f.name === "Zoned") && p.attrs.dnp === true, "the new field and Do not populate went in the same OK");
       await undo();
       t((await snapshot()) === base, "ONE undo takes the fields, the attribute and the zone fields all back");
@@ -456,8 +456,8 @@
     await scenario("Copy and Paste: a pasted footprint has the pad edit and the zone overrides of the one copied", async (t) => {
       const num = A.pads[0].num;
       const post = (cmd) => fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd, strict: false }) }).then((r) => r.json());
-      const r1 = await post({ op: "edit_board_pad", part: refA, edit: { number: num, nth: 1, offset: { x: 100, y: 0 }, solder_mask_margin: 50 } });
-      const r2 = await post({ op: "set_pad_zone_overrides", part: refA, pad: num, zone_connection: "Full", thermal_gap: 400, thermal_spoke_width: null, thermal_spoke_angle_mdeg: null, clearance: 250 });
+      const r1 = await post({ op: "edit_board_pad", part: refA, edit: { number: num, nth: 1, offset: { x: 100_000, y: 0 }, solder_mask_margin: 50_000 } });
+      const r2 = await post({ op: "set_pad_zone_overrides", part: refA, pad: num, zone_connection: "Full", thermal_gap: 400_000, thermal_spoke_width: null, thermal_spoke_angle_mdeg: null, clearance: 250_000 });
       t(r1.ok && r2.ok, `both overlays are set on ${refA} (${r1.message} / ${r2.message})`);
       await sleep(400);
       await select([refA]);
@@ -475,9 +475,9 @@
       if (added.length === 1) {
         const q = await partOf(added[0]);
         const pad = q.pads.find((x) => x.num === num);
-        t(pad.offset?.[0] === 100 && pad.mask_margin === 50, `the pasted pad has the edit's offset and margin (${JSON.stringify([pad.offset, pad.mask_margin])})`);
+        t(pad.offset?.[0] === 100_000 && pad.mask_margin === 50_000, `the pasted pad has the edit's offset and margin (${JSON.stringify([pad.offset, pad.mask_margin])})`);
         const zone = q.zone?.pads.find((x) => x.num === num);
-        t(zone?.connection === "Full" && zone?.gap === 400 && zone?.clearance === 250, `and the zone overrides (${JSON.stringify(zone)})`);
+        t(zone?.connection === "Full" && zone?.gap === 400_000 && zone?.clearance === 250_000, `and the zone overrides (${JSON.stringify(zone)})`);
       }
       await __eda.run("common.Interactive.cancel"); // Escape takes a carried paste away again
       await sleep(900);
@@ -504,7 +504,7 @@
       const dups = new Set(refs).size !== refs.length;
       t(!dups, "every reference is unique");
       const at = A.at;
-      const wanted = new Set(["4000,0", "8000,0", "0,3000", "4000,3000", "8000,3000"]);
+      const wanted = new Set(["4000000,0", "8000000,0", "0,3000000", "4000000,3000000", "8000000,3000000"]);
       for (const r of added) { const q = (await partOf(r)).at; wanted.delete(`${q[0] - at[0]},${q[1] - at[1]}`); }
       t(wanted.size === 0, `the copies sit on the grid (missing: ${[...wanted].join(" ")})`);
       t((await partOf(refA)).at.join() === at.join(), "the source stayed in place");
@@ -544,7 +544,7 @@
       await select([refD]);
       await open("pcbnew.Array.createArray");
       await click("array-tab-circular");
-      await type("array-center-x", c[0] / 1000); await type("array-center-y", c[1] / 1000);
+      await type("array-center-x", c[0] / 1e6); await type("array-center-y", c[1] / 1e6);
       await type("array-count", 4);
       if (!tid("array-full-circle").checked) await click("array-full-circle");
       if (!tid("array-clockwise").checked) await click("array-clockwise");
@@ -557,7 +557,7 @@
       const want = [[-ry, rx], [-rx, -ry], [ry, -rx]].map(([x, y]) => `${c[0] + x},${c[1] + y}`);
       const got = [];
       for (const r of added) got.push((await partOf(r)).at.join());
-      t(want.every((w) => got.some((g) => { const [gx, gy] = g.split(",").map(Number); const [wx, wy] = w.split(",").map(Number); return near(gx, wx, 50) && near(gy, wy, 50); })), `the copies are a quarter turn apart about the centre: ${got.join(" ")} (wanted ${want.join(" ")}, to the grid)`);
+      t(want.every((w) => got.some((g) => { const [gx, gy] = g.split(",").map(Number); const [wx, wy] = w.split(",").map(Number); return near(gx, wx, 50_000) && near(gy, wy, 50_000); })), `the copies are a quarter turn apart about the centre: ${got.join(" ")} (wanted ${want.join(" ")}, to the grid)`);
       await undo();
       t((await snapshot()) === base, "ONE undo takes them away");
     });
@@ -575,7 +575,7 @@
       await sleep(1500);
       const a = (await partOf(refA)).at;
       const d = (await partOf(refD)).at;
-      t(d[0] - a[0] === 10000 && d[1] === a[1], `the second sits 10 mm to the right of the first: ${a} and ${d}`);
+      t(d[0] - a[0] === 10_000_000 && d[1] === a[1], `the second sits 10 mm to the right of the first: ${a} and ${d}`);
       t((await placedRefs()).join() === baseRefs.join(), "no footprint was made");
       await undo();
       t((await snapshot()) === base, "undo puts them back");

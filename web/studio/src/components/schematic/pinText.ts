@@ -15,18 +15,18 @@ export interface PinTexts {
   namesHidden: boolean;
   numbersHidden: boolean;
   /** Micrometres; names are written inside the body when it is above zero. */
-  nameOffsetUm: number;
+  nameOffsetNm: number;
 }
 
 /** What a symbol that does not say gets: both shown, names inside at 20 mils (`DEFAULT_PIN_NAME_OFFSET`). */
-export const DEFAULT_PIN_TEXTS: PinTexts = { namesHidden: false, numbersHidden: false, nameOffsetUm: 508 };
+export const DEFAULT_PIN_TEXTS: PinTexts = { namesHidden: false, numbersHidden: false, nameOffsetNm: 508_000 };
 
 /** The size every pin name and number is set in: 50 mils. */
-export const PIN_TEXT_SIZE_UM = 1270;
+export const PIN_TEXT_SIZE_NM = 1_270_000;
 /** `getPinTextOffset() + PIN_TEXT_MARGIN`: the gap between a pin line and its text, 8 mils. */
-export const PIN_TEXT_CLEARANCE_UM = 203.2;
+export const PIN_TEXT_CLEARANCE_NM = 203_200;
 /** The thickness of a pin's text, 6 mils. */
-export const PIN_TEXT_PEN_UM = 152.4;
+export const PIN_TEXT_PEN_NM = 152_400;
 
 /** One text of a pin, where KiCad writes it: the anchor on the sheet (micrometres), whether it runs up (a quarter turn counter-clockwise), and its justification. */
 export interface PinTextPlacement {
@@ -51,7 +51,7 @@ export function shownPinName(name: string | null | undefined): string {
  * The name and the number of a pin. `tip` is its connection point and `root` the end that meets the body (micrometres on the sheet, y
  * down); the way the pin runs, from the tip toward the body, is read off the two (a pin of no length runs right).
  */
-export function pinTextPlacements(pin: { name: string | null; number: string }, tip: [number, number], root: [number, number], texts: PinTexts = DEFAULT_PIN_TEXTS, sizeUm: number = PIN_TEXT_SIZE_UM): PinTextPlacements {
+export function pinTextPlacements(pin: { name: string | null; number: string }, tip: [number, number], root: [number, number], texts: PinTexts = DEFAULT_PIN_TEXTS, sizeNm: number = PIN_TEXT_SIZE_NM): PinTextPlacements {
   const length = Math.hypot(root[0] - tip[0], root[1] - tip[1]);
   const dir: [number, number] = length === 0 ? [1, 0] : [(root[0] - tip[0]) / length, (root[1] - tip[1]) / length];
   const horizontal = Math.abs(dir[0]) >= Math.abs(dir[1]);
@@ -59,15 +59,15 @@ export function pinTextPlacements(pin: { name: string | null; number: string }, 
   const name = shownPinName(pin.name);
   const showName = name !== "" && !texts.namesHidden;
   const showNumber = pin.number !== "" && !texts.numbersHidden;
-  const nameInside = texts.nameOffsetUm > 0;
+  const nameInside = texts.nameOffsetNm > 0;
   // the number goes under the line (right of a vertical pin) when the name is over it
   const both = showName && !nameInside;
-  const off = PIN_TEXT_CLEARANCE_UM + sizeUm / 2 + PIN_TEXT_PEN_UM;
+  const off = PIN_TEXT_CLEARANCE_NM + sizeNm / 2 + PIN_TEXT_PEN_NM;
 
   let nameAt: PinTextPlacement | null = null;
   if (showName) {
     if (nameInside) {
-      const anchor: [number, number] = [root[0] + dir[0] * texts.nameOffsetUm, root[1] + dir[1] * texts.nameOffsetUm];
+      const anchor: [number, number] = [root[0] + dir[0] * texts.nameOffsetNm, root[1] + dir[1] * texts.nameOffsetNm];
       // `transformTextForPin`: a pin running right writes left-justified, running left right-justified; a vertical one turns the text a quarter
       // counter-clockwise, left-justified for a pin running up, right-justified for one running down
       nameAt = horizontal ? { text: name, at: anchor, vertical: false, h: dir[0] > 0 ? "left" : "right", v: "center" } : { text: name, at: anchor, vertical: true, h: dir[1] < 0 ? "left" : "right", v: "center" };

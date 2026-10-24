@@ -86,7 +86,7 @@ pub(crate) mod tests_support {
     /// Two pads on one net, no track between them: exactly one ratsnest
     /// edge, no dangling anything (there is no copper yet to dangle).
     pub(crate) fn two_pad_model() -> (Design, ConstraintModel) {
-        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), symbol: None, datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None };
+        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), symbol: None, datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, edge: None };
         let model = ConstraintModel {
             parts: vec![part("R1"), part("R2")],
             nets: vec![Net { name: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()] }],
@@ -95,14 +95,14 @@ pub(crate) mod tests_support {
         };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
+                outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }],
                 footprints: vec![
-                    FootprintInstance { id: "R1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "R2".into(), at: Point { x: 15_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: 5_000_000, y: 5_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R2".into(), at: Point { x: 15_000_000, y: 5_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: vec![],
             }),
@@ -154,7 +154,7 @@ mod tests {
     fn a_routed_track_between_the_same_two_pads_clears_the_ratsnest() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()], layer: "F.Cu".into(), width: 200_000, pts: vec![a, b], arc_mid_offset: None });
         let report = analyze(&design, &model, &ZoneCopper::default());
         assert!(report.ratsnest.is_empty(), "{:?}", report.ratsnest.iter().map(|e| &e.net).collect::<Vec<_>>());
         assert!(report.dangling.is_empty());

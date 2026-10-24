@@ -55,7 +55,7 @@ pub struct KicadFills {
 }
 
 impl KicadFills {
-    pub const SCHEMA: u32 = 2;
+    pub const SCHEMA: u32 = 3;
 
     pub fn new(engine: String, revision: String, millis: u64, zones: BTreeMap<String, ZoneEntry>) -> Self {
         KicadFills { schema: Self::SCHEMA, engine, revision, millis, zones }
@@ -68,7 +68,7 @@ impl KicadFills {
 
     /// The fill of `zone`, if it has one that is current: the zone has not been edited since it was filled.
     pub fn current(&self, zone: &Zone) -> Option<&ZoneEntry> {
-        self.zones.get(&zone.id).filter(|e| e.sig == zone_signature(zone))
+        self.zones.get(&zone.id).filter(|e| fill_is_of(e, zone))
     }
 
     /// The rings of `zone` on `layer`: none for a zone with no current fill, and none for a layer KiCad left empty.
@@ -83,7 +83,7 @@ impl KicadFills {
         let (mut current, mut stale) = (0, 0);
         for z in fillable {
             match self.zones.get(&z.id) {
-                Some(e) if e.sig == zone_signature(z) => current += 1,
+                Some(e) if fill_is_of(e, z) => current += 1,
                 Some(_) => stale += 1,
                 None => {}
             }
@@ -91,7 +91,7 @@ impl KicadFills {
         (current, stale)
     }
 
-    /// The copper of the zones of `design` as their current fills hold it, in micrometres: what live connectivity, the canvas and the 3D view read. A zone with no
+    /// The copper of the zones of `design` as their current fills hold it, in nanometres: what live connectivity, the canvas and the 3D view read. A zone with no
     /// current fill is not in it.
     pub fn copper(&self, design: &Design) -> ZoneCopper {
         let mut out = ZoneCopper::default();
@@ -100,7 +100,7 @@ impl KicadFills {
             for (layer, rings) in &entry.layers {
                 let mut fill = ShapePolySet::default();
                 for ring in rings {
-                    fill.add_outline(ring.pts.iter().map(|p| Point64::new(nm_to_um(p[0]), nm_to_um(p[1]))).collect());
+                    fill.add_outline(ring.pts.iter().map(|p| Point64::new(p[0], p[1])).collect());
                 }
                 out.zones.insert((z.id.clone(), layer.clone()), fill);
             }
@@ -167,9 +167,23 @@ pub fn fillable(zone: &Zone) -> bool {
     !zone.is_rule_area && zone.outline.len() >= 3 && zone.parent_footprint.is_none()
 }
 
-/// Nanometres to the micrometres the IR works in, rounded to the nearest.
-pub fn nm_to_um(nm: i64) -> i64 {
-    (nm + 500).div_euclid(1000)
+/// Whether `entry` is the fill of `zone` as it is now: its fingerprint is the zone's. A fill kept by a cache of version 2 (written when the IR was micrometres,
+/// `docs/NANOMETRES.md`) has the fingerprint of the zone in micrometres: a zone read from a design of that time, whose every length is a whole micrometre, is
+/// matched against it with its lengths taken back to micrometres, so a board brought over keeps its fills (and its DRC) until it is edited or refilled.
+fn fill_is_of(entry: &ZoneEntry, zone: &Zone) -> bool {
+    entry.sig == zone_signature(zone) || micrometre_zone(zone).is_some_and(|z| entry.sig == zone_signature(&z))
+}
+
+/// `zone` with its lengths in micrometres (its area in square micrometres), as a design of version 1 held it; `None` when a length is not a whole micrometre.
+fn micrometre_zone(zone: &Zone) -> Option<Zone> {
+    let um = |v: i64| (v % 1000 == 0).then_some(v / 1000);
+    let mut z = zone.clone();
+    z.outline = zone.outline.iter().map(|p| Some(eda_model::ir::Point { x: um(p.x)?, y: um(p.y)? })).collect::<Option<_>>()?;
+    for v in [&mut z.clearance, &mut z.min_thickness, &mut z.thermal_gap, &mut z.thermal_spoke_width, &mut z.hatch_thickness, &mut z.hatch_gap, &mut z.corner_radius] {
+        *v = um(*v)?;
+    }
+    z.min_island_area = (zone.min_island_area % 1_000_000 == 0).then_some(zone.min_island_area / 1_000_000)?;
+    Some(z)
 }
 
 // ----------------------------------------------------------------------------------------------------- the zone's fingerprint
@@ -215,7 +229,8 @@ pub fn cache_path(board_dir: &Path) -> PathBuf {
 /// The fills of the board in `board_dir`; `None` when it has none (or the file is not ours).
 pub fn load(board_dir: &Path) -> Option<KicadFills> {
     let text = std::fs::read_to_string(cache_path(board_dir)).ok()?;
-    serde_json::from_str::<KicadFills>(&text).ok().filter(|k| k.schema == KicadFills::SCHEMA)
+    // version 2 is the same file, its fingerprints taken over micrometres (`fill_is_of`)
+    serde_json::from_str::<KicadFills>(&text).ok().filter(|k| k.schema == KicadFills::SCHEMA || k.schema == 2)
 }
 
 /// Keeps `fills` as the board's: written beside the final file and renamed over it, so a reader never sees half a file.
@@ -647,9 +662,6 @@ mod tests {
         assert_eq!(fmt_nm(12_345_000), "12.345");
         assert_eq!(fmt_nm(-500_000), "-0.5");
         assert_eq!(fmt_nm(0), "0");
-        assert_eq!(nm_to_um(12_345_678), 12_346);
-        assert_eq!(nm_to_um(-12_345_678), -12_346);
-        assert_eq!(nm_to_um(-500), 0);
     }
 
     const BOARD: &str = r#"(kicad_pcb (version 20241229)
@@ -670,12 +682,12 @@ mod tests {
 )"#;
 
     fn zone(id: &str, uuid: &str) -> Zone {
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }], ..Default::default() }
     }
 
     fn design(zones: Vec<Zone>) -> Design {
         Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -740,15 +752,15 @@ mod tests {
         assert!(fills.rings(z, "In1.Cu").is_empty());
         assert_eq!(fills.tally(&d), (1, 0));
 
-        // The copper in micrometres, a polygon per ring.
+        // The copper in nanometres, a polygon per ring.
         let copper = fills.copper(&d);
         let f = copper.get("zone-a", "F.Cu").expect("a fill");
         assert_eq!(f.polys.len(), 1);
-        assert_eq!(f.polys[0][0][1], Point64::new(9_250, 500));
+        assert_eq!(f.polys[0][0][1], Point64::new(9_250_000, 500_000));
 
         // An edit elsewhere on the board changes nothing about the zone; an edit to the zone itself empties it.
         let mut moved = z.clone();
-        moved.outline[2] = Point { x: 11_000, y: 10_000 };
+        moved.outline[2] = Point { x: 11_000_000, y: 10_000_000 };
         assert!(fills.current(&moved).is_none() && fills.rings(&moved, "F.Cu").is_empty());
         let d2 = design(vec![moved.clone()]);
         assert_eq!(fills.tally(&d2), (0, 1), "one zone out of date");

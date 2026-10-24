@@ -1,4 +1,4 @@
-//! The copper of the board's zones, as the zones' fills hold it: one set of polygons per zone and layer, in micrometres.
+//! The copper of the board's zones, as the zones' fills hold it: one set of polygons per zone and layer, in nanometres.
 //!
 //! The fill is KiCad's (`kicad-cli pcb drc --refill-zones --save-board`, kept beside `design.json` by `eda_kicad::zone_fills`): this crate does not make one. What
 //! reads zone copper (live connectivity through the pours, the studio's canvas and 3D view) is handed the fills as they were last made. A zone with no fill yet, or

@@ -40,7 +40,7 @@ struct RunOutcome {
     stage: Stage,
     fail_checks: Vec<String>,
     crossing_hint: Option<String>,
-    hpwl_um: Option<i64>,
+    hpwl_nm: Option<i64>,
     tracks: Option<usize>,
     vias: Option<usize>,
     design_bytes: Option<Vec<u8>>,
@@ -95,7 +95,7 @@ enum Expect {
 fn default_expect(stem: &str) -> Expect {
     match stem {
         "unroutable_tiny_outline" => Expect::ExpectedFail(Stage::Placement),
-        "dense_small_outline" | "ldo" | "ldo_proximity_heavy" | "mcu_board_30plus" | "mixed_track_widths" | "opamp_filter" | "passive_divider_ladder"
+        "dense_small_outline" | "ldo" | "ldo_proximity_heavy" | "mcu_board_30plus" | "mixed_track_widths" | "passive_divider_ladder"
         | "star_net" | "through_hole_headers" | "two_pin_nets" => Expect::KnownFail(Stage::Schematic),
         _ => Expect::Clean,
     }
@@ -127,7 +127,7 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
             stage: Stage::Lint,
             fail_checks: fails(&lint_checks),
             crossing_hint: None,
-            hpwl_um: None,
+            hpwl_nm: None,
             tracks: None,
             vias: None,
             design_bytes: None,
@@ -143,7 +143,7 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
                 stage: Stage::Schematic,
                 fail_checks: fails(&checks),
                 crossing_hint: None,
-                hpwl_um: None,
+                hpwl_nm: None,
                 tracks: None,
                 vias: None,
                 design_bytes: None,
@@ -163,7 +163,7 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
             stage: Stage::Schematic,
             fail_checks: fails(&sch_checks),
             crossing_hint,
-            hpwl_um: None,
+            hpwl_nm: None,
             tracks: None,
             vias: None,
             design_bytes: None,
@@ -186,7 +186,7 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
                 stage: Stage::Placement,
                 fail_checks: fails(&checks),
                 crossing_hint,
-                hpwl_um: None,
+                hpwl_nm: None,
                 tracks: None,
                 vias: None,
                 design_bytes: None,
@@ -195,13 +195,13 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
         }
     };
     let place_checks = check_placement(&placed, &model);
-    let hpwl_um = hpwl(&placed, &model);
+    let hpwl_nm = hpwl(&placed, &model);
     if place_checks.iter().any(|c| c.status == CheckStatus::Fail) {
         return RunOutcome {
             stage: Stage::Placement,
             fail_checks: fails(&place_checks),
             crossing_hint,
-            hpwl_um,
+            hpwl_nm,
             tracks: None,
             vias: None,
             design_bytes: None,
@@ -216,7 +216,7 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
                 stage: Stage::Routing,
                 fail_checks: fails(&checks),
                 crossing_hint,
-                hpwl_um,
+                hpwl_nm,
                 tracks: None,
                 vias: None,
                 design_bytes: None,
@@ -236,7 +236,7 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
             stage: Stage::Routing,
             fail_checks: fails(&route_checks),
             crossing_hint,
-            hpwl_um,
+            hpwl_nm,
             tracks: Some(tracks),
             vias: Some(vias),
             design_bytes,
@@ -248,7 +248,7 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
         stage: Stage::Done,
         fail_checks: Vec::new(),
         crossing_hint,
-        hpwl_um,
+        hpwl_nm,
         tracks: Some(tracks),
         vias: Some(vias),
         design_bytes,
@@ -289,7 +289,7 @@ fn corpus_runs_every_seed() {
 
     let seeds = [0u64, 1, 2];
     let mut rows: Vec<String> = Vec::new();
-    rows.push("| case | seed | stage | fail checks | crossing hint | hpwl (um) | tracks | vias | wall (ms) |".into());
+    rows.push("| case | seed | stage | fail checks | crossing hint | hpwl (nm) | tracks | vias | wall (ms) |".into());
     rows.push("|---|---|---|---|---|---|---|---|---|".into());
 
     let mut unexpected: Vec<String> = Vec::new();
@@ -309,7 +309,7 @@ fn corpus_runs_every_seed() {
                 outcome.stage.name(),
                 if outcome.fail_checks.is_empty() { "-".to_string() } else { outcome.fail_checks.join(", ") },
                 outcome.crossing_hint.clone().unwrap_or_else(|| "-".into()),
-                outcome.hpwl_um.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                outcome.hpwl_nm.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
                 outcome.tracks.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
                 outcome.vias.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
                 outcome.elapsed_ms,

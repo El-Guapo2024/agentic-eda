@@ -31,7 +31,7 @@ function manager(): PropertyManager<Item, Ctx, string> {
   pm.addProperty(def("BOARD_ITEM", "Layer", { kind: "enum", choices: (_i, c) => c.layers, get: (i) => i.layer ?? "", set: (i, v) => [`layer ${i.id} ${v}`] }));
   pm.addProperty(def("BOARD_ITEM", "Locked", { kind: "bool", get: (i) => !!i.locked, set: (i, v) => [`lock ${i.id} ${v}`] }));
   pm.inheritsAfter("TRACK", "BOARD_ITEM");
-  pm.addProperty(def("TRACK", "Width", { display: "size", get: () => 200, set: (i, v) => [`width ${i.id} ${v}`], validate: (v) => positiveInt(v) }));
+  pm.addProperty(def("TRACK", "Width", { display: "size", get: () => 200_000, set: (i, v) => [`width ${i.id} ${v}`], validate: (v) => positiveInt(v) }));
   pm.addProperty(def("TRACK", "Net", { kind: "net", get: (i) => i.net ?? "", set: (i, v) => [`net ${i.id} ${v}`] }), "Electrical");
   pm.inheritsAfter("TEXT", "BOARD_ITEM");
   pm.addProperty(def("TEXT", "Text", { kind: "string", get: () => "hello", set: (i, v) => [`text ${i.id} ${v}`] }), "Text Properties");
@@ -41,8 +41,8 @@ function manager(): PropertyManager<Item, Ctx, string> {
 }
 
 const ctx: Ctx = { layers: all };
-const track = (id: string, over: Partial<Item> = {}): Item => ({ type: "TRACK", id, x: 1, y: 2, layer: "F.Cu", ...over });
-const text = (id: string, over: Partial<Item> = {}): Item => ({ type: "TEXT", id, x: 1, y: 2, layer: "F.SilkS", ...over });
+const track = (id: string, over: Partial<Item> = {}): Item => ({ type: "TRACK", id, x: 1, y: 2000, layer: "F.Cu", ...over });
+const text = (id: string, over: Partial<Item> = {}): Item => ({ type: "TEXT", id, x: 1, y: 2000, layer: "F.SilkS", ...over });
 const friendly = (i: Item): string => (i.type === "TRACK" ? "Track" : "Text");
 
 const rowNames = (g: ReturnType<typeof buildGrid>): string[] => g.groups.flatMap((x) => x.rows.map((r) => r.name));
@@ -65,16 +65,16 @@ test("one item: its friendly name, its groups in order, the first group is Basic
 });
 
 test("several items: the caption counts them, a value they share is shown and a value they differ in is unspecified", () => {
-  const g = buildGrid(manager(), [track("a", { x: 5 }), track("b", { x: 5, y: 9 })], ctx, friendly);
+  const g = buildGrid(manager(), [track("a", { x: 5000 }), track("b", { x: 5000, y: 9000 })], ctx, friendly);
   assert.equal(g.caption, "2 objects selected");
   const rows = new Map(g.groups.flatMap((x) => x.rows).map((r) => [r.name, r]));
-  assert.equal(rows.get("Position X")!.value, 5, "the same X");
+  assert.equal(rows.get("Position X")!.value, 5000, "the same X");
   assert.equal(rows.get("Position Y")!.value, null, "different Y: <...>");
   assert.equal(rows.get("Layer")!.value, "F.Cu");
 });
 
 test("the third item can still make the value unspecified, and the first two differing stays so", () => {
-  const g = buildGrid(manager(), [track("a", { x: 1 }), track("b", { x: 2 }), track("c", { x: 1 })], ctx, friendly);
+  const g = buildGrid(manager(), [track("a", { x: 1 }), track("b", { x: 2000 }), track("c", { x: 1 })], ctx, friendly);
   assert.equal(g.groups[0]!.rows.find((r) => r.name === "Position X")!.value, null);
 });
 
@@ -128,7 +128,7 @@ test("planEdit sets the property on every item, in selection order, and skips wh
 });
 
 test("planEdit refuses with the property name and the message when a validator does, and sends nothing", () => {
-  const plan = planEdit(manager(), [track("a"), track("b")], "Width", -5, ctx);
+  const plan = planEdit(manager(), [track("a"), track("b")], "Width", -5000, ctx);
   assert.equal(plan.ok, false);
   assert.match(!plan.ok ? plan.error : "", /^Width: Value must be greater than or equal to 0 mm$/);
 });
@@ -152,30 +152,30 @@ test("a one-item edit and a three-item edit differ only in how many commands the
 const size = { kind: "int", display: "size", choices: null } as const;
 
 test("lengths show the number and the display unit; angles the degree sign; choices their label", () => {
-  assert.equal(formatValue(size, 1500, "mm"), "1.5 mm");
-  assert.equal(formatValue(size, 25400, "mil"), "1000 mil");
-  assert.equal(formatValue(size, 25400, "in"), "1 in");
+  assert.equal(formatValue(size, 1_500_000, "mm"), "1.5 mm");
+  assert.equal(formatValue(size, 25_400_000, "mil"), "1000 mil");
+  assert.equal(formatValue(size, 25_400_000, "in"), "1 in");
   assert.equal(formatValue({ kind: "double", display: "degree", choices: null }, 90, "mm"), "90°");
   assert.equal(formatValue({ kind: "double", display: "degree", choices: null }, 12.34567, "mm"), "12.3457°");
   assert.equal(formatValue({ kind: "enum", display: "default", choices: copper }, "B.Cu", "mm"), "B.Cu");
   assert.equal(formatValue({ kind: "enum", display: "default", choices: [{ label: "Solid fill", value: 0 }, { label: "Hatch pattern", value: 1 }] }, 1, "mm"), "Hatch pattern");
-  assert.equal(formatValue({ kind: "int", display: "area", choices: null }, 10_000_000, "mm"), "10 mm²");
+  assert.equal(formatValue({ kind: "int", display: "area", choices: null }, 10_000_000_000_000, "mm"), "10 mm²");
   assert.equal(formatValue({ kind: "bool", display: "default", choices: null }, true, "mm"), "true");
 });
 
 test("editing starts from the number without its unit", () => {
-  assert.equal(editText(size, 1500, "mm"), "1.5");
+  assert.equal(editText(size, 1_500_000, "mm"), "1.5");
   assert.equal(editText({ kind: "double", display: "degree", choices: null }, 90, "mm"), "90");
   assert.equal(editText({ kind: "string", display: "default", choices: null }, "R1", "mm"), "R1");
 });
 
 test("a length typed without a unit is in the display unit; a unit suffix wins", () => {
-  assert.deepEqual(parseValue(size, "1.5", "mm"), { ok: true, value: 1500 });
-  assert.deepEqual(parseValue(size, "10", "mil"), { ok: true, value: 254 });
-  assert.deepEqual(parseValue(size, "0.5 in", "mm"), { ok: true, value: 12700 });
-  assert.deepEqual(parseValue(size, "2mm", "mil"), { ok: true, value: 2000 });
-  assert.deepEqual(parseValue(size, "1,25", "mm"), { ok: true, value: 1250 }, "a comma is a decimal point");
-  assert.deepEqual(parseValue(size, "-3", "mm"), { ok: true, value: -3000 });
+  assert.deepEqual(parseValue(size, "1.5", "mm"), { ok: true, value: 1_500_000 });
+  assert.deepEqual(parseValue(size, "10", "mil"), { ok: true, value: 254_000 });
+  assert.deepEqual(parseValue(size, "0.5 in", "mm"), { ok: true, value: 12_700_000 });
+  assert.deepEqual(parseValue(size, "2mm", "mil"), { ok: true, value: 2_000_000 });
+  assert.deepEqual(parseValue(size, "1,25", "mm"), { ok: true, value: 1_250_000 }, "a comma is a decimal point");
+  assert.deepEqual(parseValue(size, "-3", "mm"), { ok: true, value: -3_000_000 });
   const bad = parseValue(size, "abc", "mm");
   assert.equal(bad.ok, false);
   assert.match(!bad.ok ? bad.error : "", /is not a length/);
@@ -194,9 +194,9 @@ test("angles take a degree sign, whole numbers must be whole, a string is taken 
 test("the validators use KiCad's wording", () => {
   assert.equal(positiveInt(-1, "size", "mm"), "Value must be greater than or equal to 0 mm");
   assert.equal(positiveInt(0), null);
-  assert.equal(rangeInt(250, 5000)(100), "Value must be greater than or equal to 0.25 mm");
-  assert.equal(rangeInt(250, 5000)(9000), "Value must be less than or equal to 5 mm");
-  assert.equal(rangeInt(250, 5000)(300), null);
+  assert.equal(rangeInt(250_000, 5_000_000)(100_000), "Value must be greater than or equal to 0.25 mm");
+  assert.equal(rangeInt(250_000, 5_000_000)(9_000_000), "Value must be less than or equal to 5 mm");
+  assert.equal(rangeInt(250_000, 5_000_000)(300_000), null);
   assert.equal(positiveRatio(1.5), "Value must be less than or equal to 1");
   assert.equal(positiveRatio(-0.1), "Value must be greater than or equal to 0");
   assert.equal(positiveRatio(0.5), null);

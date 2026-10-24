@@ -76,7 +76,7 @@ export function footprintScene(fp: LibraryFootprint | null): SnapScene {
   fp.texts.forEach((t, i) => {
     const id = t.id ?? `text#${i}`;
     // the anchor is all a snap uses of a text; the box only has to catch the cursor near it
-    const r = Math.max(t.size_um, (t.size_um * t.content.length) / 2);
+    const r = Math.max(t.size_nm, (t.size_nm * t.content.length) / 2);
     const item: TextItem = { id, owner: id, type: "text", layers: [t.layer], bbox: box(t.at.x - r, t.at.y - r, t.at.x + r, t.at.y + r), hit: (p) => Math.abs(p[0] - t.at.x) <= r && Math.abs(p[1] - t.at.y) <= r, at: [t.at.x, t.at.y] };
     items.push(item);
   });

@@ -1,0 +1,421 @@
+{
+  "counts": {
+    "silk_over_copper": 6,
+    "silk_overlap": 3
+  },
+  "engine": "kicad-cli 10.99.0",
+  "ignored_checks": [
+    {
+      "description": "Footprint has no courtyard defined",
+      "key": "missing_courtyard"
+    },
+    {
+      "description": "Track endpoint not centered on via",
+      "key": "track_not_centered_on_via"
+    },
+    {
+      "description": "Tuning profile track geometries",
+      "key": "tuning_profile_track_geometries"
+    },
+    {
+      "description": "Footprint doesn't match symbol's footprint filters",
+      "key": "footprint_filters_mismatch"
+    },
+    {
+      "description": "Footprint component type doesn't match footprint pads",
+      "key": "footprint_type_mismatch"
+    },
+    {
+      "description": "Footprint not found in libraries",
+      "key": "lib_footprint_issues"
+    },
+    {
+      "description": "Footprint doesn't match copy in library",
+      "key": "lib_footprint_mismatch"
+    }
+  ],
+  "schematic_parity": [],
+  "schematic_parity_run": false,
+  "unconnected_items": [],
+  "violations": [
+    {
+      "comment": "",
+      "description": "Silkscreen clearance",
+      "excluded": false,
+      "items": [
+        {
+          "description": "Reference field of R2",
+          "id": "R2",
+          "pos": [
+            6000,
+            3075
+          ],
+          "uuid": "0307ad73-922e-4c4c-b2c0-564e6eb67117"
+        },
+        {
+          "description": "PCB text 'REV A' on F.Silkscreen",
+          "id": "txt_90f911926e43",
+          "pos": [
+            5000,
+            3000
+          ],
+          "uuid": "73a4b9a1-5112-42b7-b7e8-8bc26dede3a2"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          5000000,
+          3000000
+        ],
+        [
+          5500000,
+          3037500
+        ],
+        [
+          6000000,
+          3075000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_overlap"
+    },
+    {
+      "comment": "",
+      "description": "Silkscreen clearance",
+      "excluded": false,
+      "items": [
+        {
+          "description": "Reference field of R2",
+          "id": "R2",
+          "pos": [
+            6000,
+            3075
+          ],
+          "uuid": "0307ad73-922e-4c4c-b2c0-564e6eb67117"
+        },
+        {
+          "description": "Segment of R1 on F.Silkscreen",
+          "id": "R1",
+          "pos": [
+            5763,
+            2923
+          ],
+          "uuid": "760aabcc-f970-4a49-9a04-01cb1f7b55b9"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          5763000,
+          2923000
+        ],
+        [
+          5881500,
+          2999000
+        ],
+        [
+          6000000,
+          3075000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_overlap"
+    },
+    {
+      "comment": "",
+      "description": "Silkscreen clearance",
+      "excluded": false,
+      "items": [
+        {
+          "description": "Reference field of R3",
+          "id": "R3",
+          "pos": [
+            3700,
+            9775
+          ],
+          "uuid": "4edfeecc-3933-4333-abe2-3ffedcf43d12"
+        },
+        {
+          "description": "Segment of C1 on F.Silkscreen",
+          "id": "C1",
+          "pos": [
+            4092,
+            9560
+          ],
+          "uuid": "f529dc7f-62c0-4d2b-b0f2-afdbb468af30"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          3700000,
+          9775000
+        ],
+        [
+          3896000,
+          9667500
+        ],
+        [
+          4092000,
+          9560000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_overlap"
+    },
+    {
+      "comment": "",
+      "description": "Silkscreen clipped by solder mask",
+      "excluded": false,
+      "items": [
+        {
+          "description": "PCB text 'REV A' on F.Silkscreen",
+          "id": "txt_90f911926e43",
+          "pos": [
+            5000,
+            3000
+          ],
+          "uuid": "73a4b9a1-5112-42b7-b7e8-8bc26dede3a2"
+        },
+        {
+          "description": "Pad 1 [IN] of R1 on F.Cu",
+          "id": "R1.1",
+          "pos": [
+            5175,
+            2400
+          ],
+          "uuid": "cc2dfb3b-64cc-451e-bc87-55ef6cafe9cf"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          5000000,
+          3000000
+        ],
+        [
+          5087500,
+          2700000
+        ],
+        [
+          5175000,
+          2400000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_over_copper"
+    },
+    {
+      "comment": "",
+      "description": "Silkscreen clipped by solder mask",
+      "excluded": false,
+      "items": [
+        {
+          "description": "Reference field of R2",
+          "id": "R2",
+          "pos": [
+            6000,
+            3075
+          ],
+          "uuid": "0307ad73-922e-4c4c-b2c0-564e6eb67117"
+        },
+        {
+          "description": "Pad 2 [N1] of R1 on F.Cu",
+          "id": "R1.2",
+          "pos": [
+            6825,
+            2400
+          ],
+          "uuid": "67dda668-ebd2-4325-b694-2aac3b240e37"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          6000000,
+          3075000
+        ],
+        [
+          6412500,
+          2737500
+        ],
+        [
+          6825000,
+          2400000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_over_copper"
+    },
+    {
+      "comment": "",
+      "description": "Silkscreen clipped by solder mask",
+      "excluded": false,
+      "items": [
+        {
+          "description": "PCB text 'REV A' on F.Silkscreen",
+          "id": "txt_90f911926e43",
+          "pos": [
+            5000,
+            3000
+          ],
+          "uuid": "73a4b9a1-5112-42b7-b7e8-8bc26dede3a2"
+        },
+        {
+          "description": "Pad 2 [N1] of R1 on F.Cu",
+          "id": "R1.2",
+          "pos": [
+            6825,
+            2400
+          ],
+          "uuid": "67dda668-ebd2-4325-b694-2aac3b240e37"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          5000000,
+          3000000
+        ],
+        [
+          5912500,
+          2700000
+        ],
+        [
+          6825000,
+          2400000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_over_copper"
+    },
+    {
+      "comment": "",
+      "description": "Silkscreen clipped by solder mask",
+      "excluded": false,
+      "items": [
+        {
+          "description": "Reference field of R2",
+          "id": "R2",
+          "pos": [
+            6000,
+            3075
+          ],
+          "uuid": "0307ad73-922e-4c4c-b2c0-564e6eb67117"
+        },
+        {
+          "description": "Pad 1 [IN] of R1 on F.Cu",
+          "id": "R1.1",
+          "pos": [
+            5175,
+            2400
+          ],
+          "uuid": "cc2dfb3b-64cc-451e-bc87-55ef6cafe9cf"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          5175000,
+          2400000
+        ],
+        [
+          5587500,
+          2737500
+        ],
+        [
+          6000000,
+          3075000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_over_copper"
+    },
+    {
+      "comment": "",
+      "description": "Silkscreen clipped by solder mask",
+      "excluded": false,
+      "items": [
+        {
+          "description": "Reference field of R3",
+          "id": "R3",
+          "pos": [
+            3700,
+            9775
+          ],
+          "uuid": "4edfeecc-3933-4333-abe2-3ffedcf43d12"
+        },
+        {
+          "description": "Pad 1 [N1] of C1 on F.Cu",
+          "id": "C1.1",
+          "pos": [
+            3690,
+            9200
+          ],
+          "uuid": "e6a19f8d-1365-4648-9c5e-081c86d3231d"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          3690000,
+          9200000
+        ],
+        [
+          3695000,
+          9487500
+        ],
+        [
+          3700000,
+          9775000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_over_copper"
+    },
+    {
+      "comment": "",
+      "description": "Silkscreen clipped by solder mask",
+      "excluded": false,
+      "items": [
+        {
+          "description": "Reference field of R3",
+          "id": "R3",
+          "pos": [
+            3700,
+            9775
+          ],
+          "uuid": "4edfeecc-3933-4333-abe2-3ffedcf43d12"
+        },
+        {
+          "description": "Pad 2 [FB] of C1 on F.Cu",
+          "id": "C1.2",
+          "pos": [
+            4710,
+            9200
+          ],
+          "uuid": "af4901fd-82c5-4ec3-b3b4-3b58b8a595d6"
+        }
+      ],
+      "kicad_matched": false,
+      "marker_nm": [
+        [
+          3700000,
+          9775000
+        ],
+        [
+          4205000,
+          9487500
+        ],
+        [
+          4710000,
+          9200000
+        ]
+      ],
+      "severity": "warning",
+      "type": "silk_over_copper"
+    }
+  ],
+  "zones_refilled_by_kicad": false
+}

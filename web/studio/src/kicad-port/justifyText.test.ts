@@ -24,8 +24,8 @@ test("board justify edits only the selected texts and keeps everything else abou
   const { cmds, skippedLocked } = boardJustifyCmds(b, ["a", "c", "not-a-text"], "right");
   assert.equal(skippedLocked, 0);
   assert.deepEqual(cmds, [
-    { op: "edit_text", id: "a", content: "ca", angle: 90000, layer: "F.SilkS", size_um: 1000, stroke_width: 150, justify: "right", mirror: false },
-    { op: "edit_text", id: "c", content: "cc", angle: 90000, layer: "F.SilkS", size_um: 1000, stroke_width: 150, justify: "right", mirror: false },
+    { op: "edit_text", id: "a", content: "ca", angle: 90000, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "right", mirror: false },
+    { op: "edit_text", id: "c", content: "cc", angle: 90000, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "right", mirror: false },
   ]);
 });
 
@@ -44,10 +44,10 @@ test("a text that already has the justification needs no edit, a locked one is s
 
 test("footprint justify edits the footprint's own texts by id", () => {
   const texts: CmdText[] = [
-    { id: "t1", content: "REF**", at: { x: 0, y: 0 }, angle: 0, layer: "F.SilkS", size_um: 1000, stroke_width: 150, justify: "center", mirror: false },
-    { id: "t2", content: "VAL", at: { x: 0, y: 0 }, angle: 0, layer: "F.Fab", size_um: 1000, stroke_width: 150, justify: "left", mirror: false },
-    { content: "no id", at: { x: 0, y: 0 }, angle: 0, layer: "F.Fab", size_um: 1000, stroke_width: 150, justify: "center", mirror: false },
+    { id: "t1", content: "REF**", at: { x: 0, y: 0 }, angle: 0, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "center", mirror: false },
+    { id: "t2", content: "VAL", at: { x: 0, y: 0 }, angle: 0, layer: "F.Fab", size_nm: 1000, stroke_width: 150, justify: "left", mirror: false },
+    { content: "no id", at: { x: 0, y: 0 }, angle: 0, layer: "F.Fab", size_nm: 1000, stroke_width: 150, justify: "center", mirror: false },
   ];
   const cmds = footprintJustifyCmds("R_0603", texts, ["t1", "t2"], "left");
-  assert.deepEqual(cmds, [{ op: "edit_footprint_text", footprint: "R_0603", id: "t1", content: "REF**", angle: 0, layer: "F.SilkS", size_um: 1000, stroke_width: 150, justify: "left", mirror: false }]);
+  assert.deepEqual(cmds, [{ op: "edit_footprint_text", footprint: "R_0603", id: "t1", content: "REF**", angle: 0, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "left", mirror: false }]);
 });

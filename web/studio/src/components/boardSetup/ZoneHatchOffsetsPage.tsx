@@ -57,10 +57,10 @@ export function ZoneHatchOffsetsPage({ hidden, onDirty }: PageProps) {
                   <tr key={r.layer} data-layer={r.layer}>
                     <td>{r.layer}</td>
                     <td>
-                      <LengthField ariaLabel={`${r.layer} hatch offset X`} units={units} value={r.x_um} invalid={!!problems[r.layer]} width={84} onChange={(v) => setRow(r.layer, { x_um: v ?? Number.NaN })} />
+                      <LengthField ariaLabel={`${r.layer} hatch offset X`} units={units} value={r.x_nm} invalid={!!problems[r.layer]} width={84} onChange={(v) => setRow(r.layer, { x_nm: v ?? Number.NaN })} />
                     </td>
                     <td>
-                      <LengthField ariaLabel={`${r.layer} hatch offset Y`} units={units} value={r.y_um} invalid={!!problems[r.layer]} width={84} onChange={(v) => setRow(r.layer, { y_um: v ?? Number.NaN })} />
+                      <LengthField ariaLabel={`${r.layer} hatch offset Y`} units={units} value={r.y_nm} invalid={!!problems[r.layer]} width={84} onChange={(v) => setRow(r.layer, { y_nm: v ?? Number.NaN })} />
                     </td>
                     <td className="bs-error">{problems[r.layer] ?? ""}</td>
                   </tr>

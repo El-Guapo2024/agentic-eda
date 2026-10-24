@@ -26,7 +26,7 @@ fn random_graph(n: usize, seed: u64) -> LayoutGraph {
     let mut rng = Lcg(seed);
     let mut g = LayoutGraph::new();
     for i in 0..n {
-        g.add_node(Node::with_default_ports(i, 2540 + (i as i64 % 4) * 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000 + (i as i64 % 4) * 2_540_000, 1_270_000));
     }
     let edge_count = (n as f64 * 1.5) as usize;
     for _ in 0..edge_count {
@@ -43,7 +43,7 @@ fn random_graph(n: usize, seed: u64) -> LayoutGraph {
 fn chain(n: usize) -> LayoutGraph {
     let mut g = LayoutGraph::new();
     for i in 0..n {
-        g.add_node(Node::with_default_ports(i, 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000, 1_270_000));
     }
     for i in 0..n - 1 {
         g.add_edge(EdgeEndpoint { node: i, port: 1 }, EdgeEndpoint { node: i + 1, port: 0 });
@@ -53,9 +53,9 @@ fn chain(n: usize) -> LayoutGraph {
 
 fn fanout_star(n_leaves: usize) -> LayoutGraph {
     let mut g = LayoutGraph::new();
-    g.add_node(Node::with_default_ports(0, 5080, 2540));
+    g.add_node(Node::with_default_ports(0, 5_080_000, 2_540_000));
     for i in 1..=n_leaves {
-        g.add_node(Node::with_default_ports(i, 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000, 1_270_000));
         g.add_edge(EdgeEndpoint { node: 0, port: 1 }, EdgeEndpoint { node: i, port: 0 });
     }
     g
@@ -64,10 +64,10 @@ fn fanout_star(n_leaves: usize) -> LayoutGraph {
 fn dense_bipartite(left_n: usize, right_n: usize) -> LayoutGraph {
     let mut g = LayoutGraph::new();
     for i in 0..left_n {
-        g.add_node(Node::with_default_ports(i, 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000, 1_270_000));
     }
     for i in 0..right_n {
-        g.add_node(Node::with_default_ports(left_n + i, 2540, 1270));
+        g.add_node(Node::with_default_ports(left_n + i, 2_540_000, 1_270_000));
     }
     for l in 0..left_n {
         for r in 0..right_n {
@@ -80,7 +80,7 @@ fn dense_bipartite(left_n: usize, right_n: usize) -> LayoutGraph {
 fn with_cycles(n: usize) -> LayoutGraph {
     let mut g = LayoutGraph::new();
     for i in 0..n {
-        g.add_node(Node::with_default_ports(i, 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000, 1_270_000));
     }
     for i in 0..n {
         g.add_edge(EdgeEndpoint { node: i, port: 1 }, EdgeEndpoint { node: (i + 1) % n, port: 0 });
@@ -98,14 +98,14 @@ fn with_cycles(n: usize) -> LayoutGraph {
 fn two_ports_same_side() -> LayoutGraph {
     use eda_layout::graph::Port;
     let mut g = LayoutGraph::new();
-    let mut hub = Node::new(0, 5080, 2540);
-    hub.ports.push(Port { side: Side::Right, offset: 1270 });
-    hub.ports.push(Port { side: Side::Right, offset: 3810 });
-    hub.ports.push(Port { side: Side::Left, offset: 1270 });
+    let mut hub = Node::new(0, 5_080_000, 2_540_000);
+    hub.ports.push(Port { side: Side::Right, offset: 1_270_000 });
+    hub.ports.push(Port { side: Side::Right, offset: 3_810_000 });
+    hub.ports.push(Port { side: Side::Left, offset: 1_270_000 });
     g.add_node(hub);
-    g.add_node(Node::with_default_ports(1, 2540, 1270));
-    g.add_node(Node::with_default_ports(2, 2540, 1270));
-    g.add_node(Node::with_default_ports(3, 2540, 1270));
+    g.add_node(Node::with_default_ports(1, 2_540_000, 1_270_000));
+    g.add_node(Node::with_default_ports(2, 2_540_000, 1_270_000));
+    g.add_node(Node::with_default_ports(3, 2_540_000, 1_270_000));
     g.add_edge(EdgeEndpoint { node: 0, port: 0 }, EdgeEndpoint { node: 1, port: 0 });
     g.add_edge(EdgeEndpoint { node: 0, port: 1 }, EdgeEndpoint { node: 2, port: 0 });
     g.add_edge(EdgeEndpoint { node: 3, port: 1 }, EdgeEndpoint { node: 0, port: 2 });

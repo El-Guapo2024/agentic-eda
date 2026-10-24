@@ -10,7 +10,7 @@ import { extraDeleteCmd, extraHitDistance, extraItemById, extraItemIds, extraIte
 import { boardTextBoxOf } from "./pcbTextBox";
 
 const image: BoardRefImage = { id: "img_a", layer: "Cmts.User", x: 50_000, y: 40_000, w: 12_000, h: 8_000, scale_ppm: 1_000_000, px: [120, 80], ppi: 254, hash: "h" };
-const box = boardTextBoxOf({ id: "tbx_a", layer: "F.SilkS", text: "hello", start: { x: 0, y: 0 }, end: { x: 10_000, y: 5_000 }, margin_left_um: 500, margin_top_um: 500, margin_right_um: 500, margin_bottom_um: 500, stroke_width_um: 100, size_um: 1_000, thickness_um: 150, halign: "left", valign: "top" });
+const box = boardTextBoxOf({ id: "tbx_a", layer: "F.SilkS", text: "hello", start: { x: 0, y: 0 }, end: { x: 10_000, y: 5_000 }, margin_left_nm: 500, margin_top_nm: 500, margin_right_nm: 500, margin_bottom_nm: 500, stroke_width_nm: 100, size_nm: 1_000, thickness_nm: 150, halign: "left", valign: "top" });
 
 const board = (): BoardState =>
   ({

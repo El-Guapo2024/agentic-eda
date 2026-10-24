@@ -228,7 +228,7 @@ pub struct HeadSet<'a> {
     pub pts: &'a [Point],
     pub net: &'a Net,
     pub layer: i32,
-    pub width: eda_model::ir::Um,
+    pub width: eda_model::ir::Nm,
     pub via: Option<&'a Via>,
 }
 
@@ -329,27 +329,27 @@ impl Springback {
 mod tests {
     use super::*;
     use crate::item::{net_of, Segment};
-    use eda_model::ir::Um;
+    use eda_model::ir::Nm;
 
     fn rules() -> BoardRules {
-        serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap()
+        serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap()
     }
 
     fn base() -> Node {
         let mut n = Node::new();
-        n.add(Item::Segment(Segment { net: net_of("B"), layer: 0, a: Point { x: 0, y: 1000 }, b: Point { x: 10_000, y: 1000 }, width: 250, source_track: Some(("t1".into(), 0)), locked: false }));
+        n.add(Item::Segment(Segment { net: net_of("B"), layer: 0, a: Point { x: 0, y: 1_000_000 }, b: Point { x: 10_000_000, y: 1_000_000 }, width: 250_000, source_track: Some(("t1".into(), 0)), locked: false }));
         n
     }
 
-    fn line(y: Um) -> Line {
-        Line::from_points(net_of("B"), 0, 250, vec![Point { x: 0, y }, Point { x: 10_000, y }])
+    fn line(y: Nm) -> Line {
+        Line::from_points(net_of("B"), 0, 250_000, vec![Point { x: 0, y }, Point { x: 10_000_000, y }])
     }
 
     fn head<'a>(pts: &'a [Point], net: &'a Net) -> HeadSet<'a> {
-        HeadSet { pts, net, layer: 0, width: 250, via: None }
+        HeadSet { pts, net, layer: 0, width: 250_000, via: None }
     }
 
-    fn moved(y: Um) -> World {
+    fn moved(y: Nm) -> World {
         let mut w = World::default();
         w.merge_shove(&[DisplacedLine { source_track: Some("t1".into()), line: line(y) }], &[]);
         w
@@ -360,14 +360,14 @@ mod tests {
         let (b, r, a) = (base(), rules(), net_of("A"));
         let mut sb = Springback::new();
         sb.push(&b, World::default(), None);
-        sb.push(&b, moved(2000), None);
+        sb.push(&b, moved(2_000_000), None);
         // the head at y = 1800 touches the track where the newest frame left it (y = 2000): the frame stays
-        let near = [Point { x: 2000, y: 1800 }, Point { x: 8000, y: 1800 }];
+        let near = [Point { x: 2_000_000, y: 1_800_000 }, Point { x: 8_000_000, y: 1_800_000 }];
         let (w, _) = sb.reduce(&b, &head(&near, &a), &r);
         assert_eq!(sb.len(), 2);
-        assert_eq!(w.tracks["t1"][0].pts[0].y, 2000);
+        assert_eq!(w.tracks["t1"][0].pts[0].y, 2_000_000);
         // drawn back to y = -1000 it touches nothing of that world: the track springs back to the frame below
-        let far = [Point { x: 2000, y: -1000 }, Point { x: 8000, y: -1000 }];
+        let far = [Point { x: 2_000_000, y: -1_000_000 }, Point { x: 8_000_000, y: -1_000_000 }];
         let (w, _) = sb.reduce(&b, &head(&far, &a), &r);
         assert_eq!(sb.len(), 1);
         assert!(w.tracks.is_empty());
@@ -376,13 +376,13 @@ mod tests {
     #[test]
     fn a_locked_frame_and_the_last_frame_are_never_popped() {
         let (b, r, a) = (base(), rules(), net_of("A"));
-        let far = [Point { x: 2000, y: -5000 }, Point { x: 8000, y: -5000 }];
+        let far = [Point { x: 2_000_000, y: -5_000_000 }, Point { x: 8_000_000, y: -5_000_000 }];
         let mut sb = Springback::new();
-        sb.push(&b, moved(2000), None);
+        sb.push(&b, moved(2_000_000), None);
         sb.reduce(&b, &head(&far, &a), &r);
         assert_eq!(sb.len(), 1, "the bottom frame stays");
-        sb.add_locked(&b, moved(2000));
-        sb.push(&b, moved(3000), None);
+        sb.add_locked(&b, moved(2_000_000));
+        sb.push(&b, moved(3_000_000), None);
         sb.reduce(&b, &head(&far, &a), &r);
         assert_eq!(sb.len(), 2, "popped down to the locked frame");
         // the stage of the fix was the frame the shove pushed before it (the stack's length then: 1)
@@ -390,7 +390,7 @@ mod tests {
         undo.rewind_to(1);
         assert_eq!(undo.len(), 0, "Backspace erases the frame the fix was made in and what came after");
         // a stage fixed in a locked frame (the click before's) keeps that frame
-        sb.add_locked(&b, moved(3000));
+        sb.add_locked(&b, moved(3_000_000));
         sb.rewind_to(2);
         assert_eq!(sb.len(), 2, "the locked frame of the click before stays");
     }
@@ -398,12 +398,12 @@ mod tests {
     #[test]
     fn the_world_of_a_frame_is_the_session_world_with_what_it_moved() {
         let b = base();
-        let n = moved(2000).with_fixed(Some(&Line::from_points(net_of("A"), 0, 250, vec![Point { x: 0, y: -3000 }, Point { x: 5000, y: -3000 }])), None).apply(&b);
+        let n = moved(2_000_000).with_fixed(Some(&Line::from_points(net_of("A"), 0, 250_000, vec![Point { x: 0, y: -3_000_000 }, Point { x: 5_000_000, y: -3_000_000 }])), None).apply(&b);
         let segs: Vec<_> = n.iter().filter_map(|(_, it)| match it { Item::Segment(s) => Some((s.a.y, s.locked, s.source_track.as_ref().map(|t| t.0.clone()))), _ => None }).collect();
         assert_eq!(segs.len(), 2);
-        assert!(segs.contains(&(2000, false, Some("t1".into()))), "{segs:?}");
-        assert!(segs.contains(&(-3000, false, Some(run_tag(0)))), "the fixed run is in it, a track a shove may push: {segs:?}");
-        let ends = [Point { x: 0, y: -3000 }, Point { x: 5000, y: -3000 }];
+        assert!(segs.contains(&(2_000_000, false, Some("t1".into()))), "{segs:?}");
+        assert!(segs.contains(&(-3_000_000, false, Some(run_tag(0)))), "the fixed run is in it, a track a shove may push: {segs:?}");
+        let ends = [Point { x: 0, y: -3_000_000 }, Point { x: 5_000_000, y: -3_000_000 }];
         assert!(ends.iter().all(|&e| n.joint_at(e, &net_of("A")).is_some_and(|j| j.locked)), "its ends are locked joints (`LockJoint`)");
     }
 
@@ -411,10 +411,10 @@ mod tests {
     fn areas_merge_up_the_stack() {
         let b = base();
         let mut sb = Springback::new();
-        sb.push(&b, World::default(), Some((0, 0, 10, 10)));
-        sb.push(&b, World::default(), Some((5, -5, 20, 5)));
-        assert_eq!(sb.top().1, Some((0, -5, 20, 10)));
+        sb.push(&b, World::default(), Some((0, 0, 10_000, 10_000)));
+        sb.push(&b, World::default(), Some((5000, -5000, 20_000, 5000)));
+        assert_eq!(sb.top().1, Some((0, -5000, 20_000, 10_000)));
         sb.push(&b, World::default(), None);
-        assert_eq!(sb.top().1, Some((0, -5, 20, 10)));
+        assert_eq!(sb.top().1, Some((0, -5000, 20_000, 10_000)));
     }
 }

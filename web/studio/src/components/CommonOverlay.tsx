@@ -30,7 +30,7 @@ const PCB_BOX_COLOR = "rgba(102,102,102,1)"; // COLOR4D( 0.4, 0.4, 0.4, 1 )
 const PCB_FOOTPRINT_BOX_COLOR = "#ff00ff"; // COLOR4D( MAGENTA )
 const SCH_BOX_COLOR = "rgba(51,51,51,1)"; // COLOR4D( 0.2, 0.2, 0.2, 1 )
 /** `SCH_PAINTER::drawItemBoundingBox`: `SetLineWidth( schIUScale.MilsToIU( 3 ) )`. */
-const SCH_BOX_WIDTH_UM = 76.2;
+const SCH_BOX_WIDTH_NM = 76_200;
 /** The brightened item of a picker (the interactive delete tool's candidate): a heavy cyan outline. */
 const HOVER_BOX_COLOR = "#33ddff";
 /** A match of the open Find dialog: the brightened item. */
@@ -105,7 +105,7 @@ export function CommonOverlay() {
     if (opts.drawBoundingBoxes) {
       const boardSide = tab === "pcb" || tab === "footprint";
       const parts = new Set(studio.board?.parts.map((p) => p.ref) ?? []);
-      ctx.lineWidth = boardSide ? 1 : Math.max(1, SCH_BOX_WIDTH_UM * view.scale);
+      ctx.lineWidth = boardSide ? 1 : Math.max(1, SCH_BOX_WIDTH_NM * view.scale);
       for (const [id, box] of adapter.itemBoxes()) {
         const selected = adapter.selection.has(id);
         ctx.strokeStyle = selected ? SELECTED_BOX_COLOR : !boardSide ? SCH_BOX_COLOR : tab === "pcb" && parts.has(id) ? PCB_FOOTPRINT_BOX_COLOR : PCB_BOX_COLOR;
@@ -154,7 +154,7 @@ export function CommonOverlay() {
     // second is still to come, with the distance and its extent at the middle.
     if (tool.measure && tool.measure.pts.length > 0) {
       const start = tool.measure.pts[0]!;
-      const snapped = adapter.cursor ? alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, adapter.gridUm, getSnapOrigin(), { ctrlOrCmd: false }) : null;
+      const snapped = adapter.cursor ? alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, adapter.gridNm, getSnapOrigin(), { ctrlOrCmd: false }) : null;
       const end = tool.measure.pts.length >= 2 ? tool.measure.pts[1]! : snapped ? ([snapped.x, snapped.y] as const) : null;
       if (end) {
         ctx.strokeStyle = layerColor("selection");

@@ -9,15 +9,15 @@
 // selected, moved, turned and flipped by the same verbs as any other item.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Um, UserFieldCmd } from "../api/types";
+import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, UserFieldCmd } from "../api/types";
 import { objectOn } from "./appearance";
 
 export const REFERENCE = "Reference";
 export const VALUE = "Value";
 
 /** `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`), in um. */
-export const TEXT_MIN_UM = 1;
-export const TEXT_MAX_UM = 250_000;
+export const TEXT_MIN_NM = 1000;
+export const TEXT_MAX_NM = 250_000_000;
 
 // ------------------------------------------------------------------------------------------------------------------------------- ids
 
@@ -159,13 +159,13 @@ export const editPadCmd = (part: Part, pad: Pad, patch: Partial<PadEditCmd>): Cm
 // ------------------------------------------------------------------------------------------------------------------------- checks
 
 /** The messages `DIALOG_FOOTPRINT_PROPERTIES::Validate` shows for one row of the field grid, or null when the row is fine. */
-export function checkFieldRow(name: string, layout: Pick<FieldLayoutCmd, "size" | "thickness">, fmt: (um: Um) => string): string | null {
+export function checkFieldRow(name: string, layout: Pick<FieldLayoutCmd, "size" | "thickness">, fmt: (um: Nm) => string): string | null {
   if (!name.trim()) return "Fields must have a name.";
   const [w, h] = layout.size;
-  if (w < TEXT_MIN_UM) return `Text width must be at least ${fmt(TEXT_MIN_UM)}.`;
-  if (w > TEXT_MAX_UM) return `Text width must be at most ${fmt(TEXT_MAX_UM)}.`;
-  if (h < TEXT_MIN_UM) return `Text height must be at least ${fmt(TEXT_MIN_UM)}.`;
-  if (h > TEXT_MAX_UM) return `Text height must be at most ${fmt(TEXT_MAX_UM)}.`;
+  if (w < TEXT_MIN_NM) return `Text width must be at least ${fmt(TEXT_MIN_NM)}.`;
+  if (w > TEXT_MAX_NM) return `Text width must be at most ${fmt(TEXT_MAX_NM)}.`;
+  if (h < TEXT_MIN_NM) return `Text height must be at least ${fmt(TEXT_MIN_NM)}.`;
+  if (h > TEXT_MAX_NM) return `Text height must be at most ${fmt(TEXT_MAX_NM)}.`;
   // `ClampTextPenSize`: no pen thicker than a quarter of the smaller side.
   const max = Math.round(Math.min(Math.abs(w), Math.abs(h)) * 0.25);
   if ((layout.thickness ?? 0) > max) return `Text thickness is too large for the text size.\nIt will be clamped at ${fmt(max)}.`;
@@ -185,14 +185,14 @@ export function newFieldName(existing: readonly string[], ordinal: number): stri
 /** The layout `OnAddField` gives a new field: hidden, at the footprint's origin, on the fabrication layer of its side. */
 export function newFieldLayout(part: Part): FieldLayoutCmd {
   const bottom = part.side === "bottom";
-  return { at: { x: 0, y: 0 }, angle: localAngleOf(part, 0), size: [1000, 1000], thickness: 150, layer: bottom ? "B.Fab" : "F.Fab", visible: false, halign: 0, valign: 0, mirror: bottom, bold: false, italic: false, keep_upright: true, knockout: false };
+  return { at: { x: 0, y: 0 }, angle: localAngleOf(part, 0), size: [1_000_000, 1_000_000], thickness: 150_000, layer: bottom ? "B.Fab" : "F.Fab", visible: false, halign: 0, valign: 0, mirror: bottom, bold: false, italic: false, keep_upright: true, knockout: false };
 }
 
 /**
  * `DIALOG_PAD_PROPERTIES::padValuesOK` for the values the board's pad dialog edits: messages in the dialog's words, in its order, or null when the pad can be
  * made. `pad` is what the dialog holds.
  */
-export function checkPadValues(pad: { kind: string; shape: string; size: [Um, Um]; drill?: Um | null; slot?: [Um, Um] | null; ratio?: number | null; pasteRatio?: number | null }, fmt: (um: Um) => string): string | null {
+export function checkPadValues(pad: { kind: string; shape: string; size: [Nm, Nm]; drill?: Nm | null; slot?: [Nm, Nm] | null; ratio?: number | null; pasteRatio?: number | null }, fmt: (um: Nm) => string): string | null {
   // `PAD::doCheckPad`: "(Pad must have a positive size)"; `CheckPad`: a through-hole pad with no hole, "(PTH pad hole leaves no copper)".
   if (pad.size[0] <= 0 || (pad.shape !== "circle" && pad.size[1] <= 0)) return "Error: (Pad must have a positive size)";
   const hole = pad.kind !== "smd";
@@ -200,7 +200,7 @@ export function checkPadValues(pad: { kind: string; shape: string; size: [Um, Um
     const round = pad.slot == null;
     if (round && (pad.drill ?? 0) <= 0) return "Error: Through hole pad has no hole.";
     if (!round && ((pad.slot?.[0] ?? 0) <= 0 || (pad.slot?.[1] ?? 0) <= 0)) return "Error: Through hole pad has no hole.";
-    const [hw, hh] = round ? [pad.drill ?? 0, pad.drill ?? 0] : (pad.slot as [Um, Um]);
+    const [hw, hh] = round ? [pad.drill ?? 0, pad.drill ?? 0] : (pad.slot as [Nm, Nm]);
     const [pw, ph] = pad.shape === "circle" ? [pad.size[0], pad.size[0]] : pad.size;
     // A plated hole needs copper around it; a non-plated one may be as big as its pad.
     if (pad.kind === "through_hole" && (hw >= pw || hh >= ph)) return `Error: (PTH pad hole leaves no copper): the ${fmt(Math.max(hw, hh))} hole is as big as the pad.`;

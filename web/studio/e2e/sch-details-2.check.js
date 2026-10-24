@@ -112,7 +112,7 @@
   await fit();
   const root0 = await sch("");
   const view0 = __eda.state().view;
-  if (!view0 || !Number.isFinite(view0.scale) || view0.scale < 1e-4) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)})`] }); check.done = true; return "no canvas size"; }
+  if (!view0 || !Number.isFinite(view0.scale) || view0.scale < 1e-7) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)})`] }); check.done = true; return "no canvas size"; }
   if (root0.sheets.length < 2) { results.push({ name: "setup", ok: false, notes: ["FAIL: the board needs the module sheets of examples/mcu_board_30plus.yaml"] }); check.done = true; return "no sheets"; }
 
   (async () => {
@@ -123,7 +123,7 @@
       await select([orig.id]);
       await __eda.run("common.Interactive.duplicate");
       await sleep(1500);
-      await clickAt(right + 40000, orig.at[1] + orig.size[1] / 2);
+      await clickAt(right + 40_000_000, orig.at[1] + orig.size[1] / 2);
       const root1 = await sch("");
       const made = root1.sheets.filter((s) => !root0.sheets.some((o) => o.id === s.id));
       t(made.length === 1, `one new sheet (${made.map((s) => s.name)})`);
@@ -185,12 +185,12 @@
           const r = await post({ op: "add_label", net: pb, at: { x: hl.at[0], y: hl.at[1] }, kind: { scope: "local" } }, sh.id);
           t(r.ok !== false, `${pb} beside ${pa} in ${sh.name}`);
         }
-        await post({ op: "add_wire", pts: [{ x: 12700, y: 12700 }, { x: 38100, y: 12700 }], bus: true }, sh.id);
-        await post({ op: "add_label", net: "PB[0..1]", at: { x: 12700, y: 12700 }, kind: { scope: "hierarchical", shape: "bidirectional" } }, sh.id);
-        await post({ op: "sch_edit", verb: "add_sheet_pin", sheet: sh.id, name: "PB[0..1]", shape: "bidirectional", at: { x: sh.at[0] + 2540, y: sh.at[1] } });
+        await post({ op: "add_wire", pts: [{ x: 12_700_000, y: 12_700_000 }, { x: 38_100_000, y: 12_700_000 }], bus: true }, sh.id);
+        await post({ op: "add_label", net: "PB[0..1]", at: { x: 12_700_000, y: 12_700_000 }, kind: { scope: "hierarchical", shape: "bidirectional" } }, sh.id);
+        await post({ op: "sch_edit", verb: "add_sheet_pin", sheet: sh.id, name: "PB[0..1]", shape: "bidirectional", at: { x: sh.at[0] + 2_540_000, y: sh.at[1] } });
       }
-      const top = Math.min(mcu.at[1], led.at[1]) - 5080;
-      const [m, l] = [[mcu.at[0] + 2540, mcu.at[1]], [led.at[0] + 2540, led.at[1]]];
+      const top = Math.min(mcu.at[1], led.at[1]) - 5_080_000;
+      const [m, l] = [[mcu.at[0] + 2_540_000, mcu.at[1]], [led.at[0] + 2_540_000, led.at[1]]];
       const added = await post({ op: "add_wire", pts: [{ x: m[0], y: m[1] }, { x: m[0], y: top }, { x: l[0], y: top }, { x: l[0], y: l[1] }], bus: true });
       t(added.ok !== false, "the root's bus between the two pins");
       await sleep(400);
@@ -249,7 +249,7 @@
       const root = await sch("");
       const mcu = root.sheets.find((s) => s.name.startsWith("MCU"));
       const led = root.sheets.find((s) => s.name.startsWith("LED"));
-      for (const sh of [mcu, led]) await post({ op: "add_label", net: "GLOBX", at: { x: 12700, y: 25400 }, kind: { scope: "global", shape: "input" } }, sh.id);
+      for (const sh of [mcu, led]) await post({ op: "add_label", net: "GLOBX", at: { x: 12_700_000, y: 25_400_000 }, kind: { scope: "global", shape: "input" } }, sh.id);
       await sleep(400);
       const isrOf = async (id) => ((await sch(id)).labels.find((l) => l.net === "GLOBX")?.fields ?? []).find((f) => f.intersheet_refs);
       const hidden = await isrOf(mcu.id);

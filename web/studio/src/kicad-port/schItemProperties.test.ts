@@ -19,7 +19,7 @@ const sheet = (): Schematic =>
     ],
     power_symbols: [{ id: "#PWR01", lib_id: "power:GND", at: [5_000, 5_000], rot: 180, net: "GND", pin: "1" }],
     wires: [
-      { id: "wire_a", net: "N", pins: [], pts: [[0, 0], [10_000, 0], [10_000, 5_000]], bus: false, stroke: { width_um: 300, style: "dash", color: { r: 255, g: 0, b: 0, a: 255 } } },
+      { id: "wire_a", net: "N", pins: [], pts: [[0, 0], [10_000, 0], [10_000, 5_000]], bus: false, stroke: { width_nm: 300, style: "dash", color: { r: 255, g: 0, b: 0, a: 255 } } },
       { id: "wire_bus", net: "D[0..3]", pins: [], pts: [[0, 5_000], [10_000, 5_000]], bus: true },
     ],
     no_connects: [{ id: "nc_a", at: [1, 1], pin: "" }],
@@ -28,23 +28,23 @@ const sheet = (): Schematic =>
       { id: "lbl_g", net: "B", at: [6, 6], scope: "global", shape: "input" },
       { id: "lbl_h", net: "C", at: [7, 7], scope: "hierarchical", shape: "output" },
     ],
-    texts: [{ id: "txt_a", content: "hello", at: [0, 0], angle: 0, size_um: 1270 }],
+    texts: [{ id: "txt_a", content: "hello", at: [0, 0], angle: 0, size_nm: 1270 }],
     title_block: null,
-    bus_entries: [{ id: "bent_a", at: [2, 5], size: [2, 2], stroke: { width_um: 250 } }],
+    bus_entries: [{ id: "bent_a", at: [2, 5], size: [2, 2], stroke: { width_nm: 250 } }],
     junctions: [
       { id: "jct_a", at: [5, 0] },
-      { id: "jct_b", at: [7, 0], look: { diameter_um: 900, color: { r: 0, g: 0, b: 255, a: 255 } } },
+      { id: "jct_b", at: [7, 0], look: { diameter_nm: 900, color: { r: 0, g: 0, b: 255, a: 255 } } },
     ],
-    lines: [{ id: "sln_a", pts: [[0, 9_000], [9_000, 9_000]], width_um: 250, stroke: { style: "dot" } }],
+    lines: [{ id: "sln_a", pts: [[0, 9_000], [9_000, 9_000]], width_nm: 250, stroke: { style: "dot" } }],
     graphics: [
-      graphic("shp_rect", { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10_000, y: 5_000 }, corner_radius_um: 100 }, { width_um: 200, fill: "color", fill_color: { r: 0, g: 255, b: 0, a: 255 } }),
-      graphic("shp_circle", { type: "circle", center: { x: 20_000, y: 20_000 }, radius_um: 3_000 }),
+      graphic("shp_rect", { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10_000, y: 5_000 }, corner_radius_nm: 100 }, { width_nm: 200, fill: "color", fill_color: { r: 0, g: 255, b: 0, a: 255 } }),
+      graphic("shp_circle", { type: "circle", center: { x: 20_000, y: 20_000 }, radius_nm: 3_000 }),
       graphic("shp_arc", { type: "arc", start: { x: 0, y: 0 }, mid: { x: 5_000, y: -3_000 }, end: { x: 10_000, y: 0 } }),
       graphic("shp_bez", { type: "bezier", start: { x: 0, y: 0 }, c1: { x: 1, y: 1 }, c2: { x: 2, y: 1 }, end: { x: 3, y: 0 } }),
       graphic("shp_poly", { type: "polygon", pts: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }] }),
-      graphic("shp_box", { type: "text_box", start: { x: 0, y: 0 }, end: { x: 20_000, y: 10_000 }, text: "note", size_um: 1270, bold: false, italic: true, h_align: "center", v_align: "top" }),
+      graphic("shp_box", { type: "text_box", start: { x: 0, y: 0 }, end: { x: 20_000, y: 10_000 }, text: "note", size_nm: 1270, bold: false, italic: true, h_align: "center", v_align: "top" }),
       graphic("shp_rule", { type: "rule_area", pts: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }], dnp: true }),
-      graphic("shp_dir", { type: "directive", at: { x: 1, y: 1 }, shape: "diamond", pin_length_um: 2_540, netclass: "Fast" }),
+      graphic("shp_dir", { type: "directive", at: { x: 1, y: 1 }, shape: "diamond", pin_length_nm: 2_540, netclass: "Fast" }),
     ],
     locked: ["R1", "wire_bus"],
     sheets: [{ id: "sheet_a", name: "Power", file: "power.kicad_sch", at: [0, 0], size: [10, 10], pins: [] }],
@@ -316,13 +316,13 @@ test("wires, lines, bus entries and junctions are restyled with set_stroke", () 
   const s = sheet();
   assert.deepEqual(edit(s, ["wire_a"], "Wire Style", "dot"), [{ op: "sch_edit", verb: "set_stroke", ids: ["wire_a"], style: "dot" }]);
   assert.deepEqual(edit(s, ["wire_a"], "Wire Style", "dash"), []);
-  assert.deepEqual(edit(s, ["wire_a"], "Line Width", 400), [{ op: "sch_edit", verb: "set_stroke", ids: ["wire_a"], width_um: 400 }]);
+  assert.deepEqual(edit(s, ["wire_a"], "Line Width", 400), [{ op: "sch_edit", verb: "set_stroke", ids: ["wire_a"], width_nm: 400 }]);
   assert.deepEqual(edit(s, ["wire_a"], "Color", "#0000ff"), [{ op: "sch_edit", verb: "set_stroke", ids: ["wire_a"], color: { r: 0, g: 0, b: 255, a: 255 } }]);
   assert.deepEqual(edit(s, ["wire_a"], "Color", ""), [{ op: "sch_edit", verb: "set_stroke", ids: ["wire_a"], color: { r: 0, g: 0, b: 0, a: 0 } }], "no colour is the layer's");
   assert.deepEqual(edit(s, ["sln_a"], "Line Style", "dash_dot"), [{ op: "sch_edit", verb: "set_stroke", ids: ["sln_a"], style: "dash_dot" }]);
   assert.deepEqual(edit(s, ["sln_a"], "Line Width", 250), []);
   assert.deepEqual(edit(s, ["bent_a"], "Wire Style", "solid"), [{ op: "sch_edit", verb: "set_stroke", ids: ["bent_a"], style: "solid" }]);
-  assert.deepEqual(edit(s, ["jct_a"], "Diameter", 800), [{ op: "sch_edit", verb: "set_stroke", ids: ["jct_a"], diameter_um: 800 }]);
+  assert.deepEqual(edit(s, ["jct_a"], "Diameter", 800), [{ op: "sch_edit", verb: "set_stroke", ids: ["jct_a"], diameter_nm: 800 }]);
   assert.deepEqual(edit(s, ["jct_b"], "Color", "#000000"), [{ op: "sch_edit", verb: "set_stroke", ids: ["jct_b"], color: { r: 0, g: 0, b: 0, a: 255 } }]);
   // The three wires, one verb each: the grid sends one command per item, the caller makes them one undo step.
   assert.deepEqual(edit(s, ["wire_a", "wire_bus"], "Wire Style", "solid"), [
@@ -337,8 +337,8 @@ test("a label, a text and a sheet", () => {
   assert.deepEqual(edit(s, ["lbl_g"], "Shape", "output"), [{ op: "sch_edit", verb: "edit_label", id: "lbl_g", shape: "output" }]);
   assert.equal(schEdit(s, ["lbl_a"], "Text", "", "mm").ok, false, "Label can not be empty.");
   assert.deepEqual(edit(s, ["txt_a"], "Text", "bye"), [{ op: "sch_edit", verb: "edit_text", id: "txt_a", text: "bye" }]);
-  assert.deepEqual(edit(s, ["txt_a"], "Text Size", 2000), [{ op: "sch_edit", verb: "edit_text", id: "txt_a", size_um: 2000 }]);
-  assert.equal(schEdit(s, ["txt_a"], "Text Size", 5, "mm").ok, false, "text must not disappear: 0.01 mm at least");
+  assert.deepEqual(edit(s, ["txt_a"], "Text Size", 2_000_000), [{ op: "sch_edit", verb: "edit_text", id: "txt_a", size_nm: 2_000_000 }]);
+  assert.equal(schEdit(s, ["txt_a"], "Text Size", 5_000, "mm").ok, false, "text must not disappear: 0.01 mm at least");
   assert.deepEqual(edit(s, ["lbl_a", "txt_a"], "Text", "same"), [
     { op: "sch_edit", verb: "edit_label", id: "lbl_a", text: "same" },
     { op: "sch_edit", verb: "edit_text", id: "txt_a", text: "same" },
@@ -355,18 +355,18 @@ test("a drawn graphic is replaced with the edit laid over it", () => {
     op: "sch_edit",
     verb: "edit_graphic",
     id: "shp_rect",
-    graphic: { shape: { type: "rectangle", start: { x: 1_000, y: 0 }, end: { x: 10_000, y: 5_000 }, corner_radius_um: 100 }, width_um: 200, fill: "color", fill_color: { r: 0, g: 255, b: 0, a: 255 } },
+    graphic: { shape: { type: "rectangle", start: { x: 1_000, y: 0 }, end: { x: 10_000, y: 5_000 }, corner_radius_nm: 100 }, width_nm: 200, fill: "color", fill_color: { r: 0, g: 255, b: 0, a: 255 } },
   });
   const shapeOf = (cmd: Cmd | undefined) => ((cmd as unknown as { graphic: { shape: unknown } }).graphic.shape);
-  assert.deepEqual(shapeOf(edit(s, ["shp_rect"], "Width", 12_000)[0]), { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 12_000, y: 5_000 }, corner_radius_um: 100 });
-  assert.deepEqual(shapeOf(edit(s, ["shp_rect"], "Corner Radius", 200)[0]), { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10_000, y: 5_000 }, corner_radius_um: 200 });
-  assert.deepEqual(shapeOf(edit(s, ["shp_circle"], "Radius", 4_000)[0]), { type: "circle", center: { x: 20_000, y: 20_000 }, radius_um: 4_000 });
-  assert.deepEqual(shapeOf(edit(s, ["shp_circle"], "Center X", 21_000)[0]), { type: "circle", center: { x: 21_000, y: 20_000 }, radius_um: 3_000 });
+  assert.deepEqual(shapeOf(edit(s, ["shp_rect"], "Width", 12_000)[0]), { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 12_000, y: 5_000 }, corner_radius_nm: 100 });
+  assert.deepEqual(shapeOf(edit(s, ["shp_rect"], "Corner Radius", 200)[0]), { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10_000, y: 5_000 }, corner_radius_nm: 200 });
+  assert.deepEqual(shapeOf(edit(s, ["shp_circle"], "Radius", 4_000)[0]), { type: "circle", center: { x: 20_000, y: 20_000 }, radius_nm: 4_000 });
+  assert.deepEqual(shapeOf(edit(s, ["shp_circle"], "Center X", 21_000)[0]), { type: "circle", center: { x: 21_000, y: 20_000 }, radius_nm: 3_000 });
   assert.deepEqual(shapeOf(edit(s, ["shp_arc"], "End Y", 1_000)[0]), { type: "arc", start: { x: 0, y: 0 }, mid: { x: 5_000, y: -3_000 }, end: { x: 10_000, y: 1_000 } });
   assert.equal(edit(s, ["shp_rect"], "Width", 10_000).length, 0);
   const style = edit(s, ["shp_rect"], "Line Style", "dash")[0] as unknown as { graphic: Record<string, unknown> };
   assert.equal(style.graphic.line_style, "dash");
-  assert.deepEqual(style.graphic.shape, { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10_000, y: 5_000 }, corner_radius_um: 100 });
+  assert.deepEqual(style.graphic.shape, { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10_000, y: 5_000 }, corner_radius_nm: 100 });
   const fill = edit(s, ["shp_circle"], "Fill", "background")[0] as unknown as { graphic: Record<string, unknown> };
   assert.equal(fill.graphic.fill, "background");
   const color = edit(s, ["shp_rect"], "Fill Color", "#ff0000")[0] as unknown as { graphic: Record<string, unknown> };
@@ -380,12 +380,12 @@ test("a text box, a rule area and a directive label are edited through their own
   assert.equal(g(edit(s, ["shp_box"], "Bold", true)[0])!.bold, true);
   assert.equal(g(edit(s, ["shp_box"], "Horizontal Justification", "right")[0])!.h_align, "right");
   assert.equal(g(edit(s, ["shp_box"], "Vertical Justification", "bottom")[0])!.v_align, "bottom");
-  assert.equal(g(edit(s, ["shp_box"], "Text Size", 2000)[0])!.size_um, 2000);
+  assert.equal(g(edit(s, ["shp_box"], "Text Size", 2_000_000)[0])!.size_nm, 2_000_000);
   assert.deepEqual(g(edit(s, ["shp_box"], "Width", 15_000)[0])!.end, { x: 15_000, y: 10_000 });
   assert.equal(g(edit(s, ["shp_rule"], "Exclude From Board", true)[0])!.exclude_from_board, true);
   assert.deepEqual(edit(s, ["shp_rule"], "Do not Populate", true), [], "already set");
   assert.equal(g(edit(s, ["shp_dir"], "Shape", "dot")[0])!.shape, "dot");
-  assert.equal(g(edit(s, ["shp_dir"], "Pin length", 5_080)[0])!.pin_length_um, 5_080);
+  assert.equal(g(edit(s, ["shp_dir"], "Pin length", 5_080)[0])!.pin_length_nm, 5_080);
   assert.equal(g(edit(s, ["shp_dir"], "Pin length", 5_080)[0])!.netclass, "Fast", "the rest of the directive is as it was");
 });
 
@@ -398,7 +398,7 @@ test("graphicShapeWith follows the EDA_SHAPE setters and refuses a property the 
 
 test("an image is a SCH_BITMAP with the rows of SCH_BITMAP_DESC; its scale and size are one edit_graphic that keeps the pixels", () => {
   const s = sheet();
-  s.graphics = [...(s.graphics ?? []), graphic("img_a", { type: "image", at: { x: 50_000, y: 40_000 }, scale_ppm: 1_000_000, px: [120, 80], ppi: 254, hash: "h" })];
+  s.graphics = [...(s.graphics ?? []), graphic("img_a", { type: "image", at: { x: 50_000_000, y: 40_000_000 }, scale_ppm: 1_000_000, px: [120, 80], ppi: 254, hash: "h" })];
   const item = schItemOf(s, "img_a")!;
   assert.equal(item.type, "SCH_BITMAP");
   assert.equal(schFriendlyName(item), "Image");
@@ -413,10 +413,10 @@ test("an image is a SCH_BITMAP with the rows of SCH_BITMAP_DESC; its scale and s
     return (cmds[0] as unknown as { verb: string; id: string; graphic: { shape: Record<string, unknown> } });
   };
   const half = sent("Scale", 0.5);
-  assert.deepEqual([half.verb, half.id, half.graphic.shape], ["edit_graphic", "img_a", { type: "image", at: { x: 50_000, y: 40_000 }, scale_ppm: 500_000 }]);
-  assert.equal(sent("Width", 6_000).graphic.shape.scale_ppm, 500_000);
-  assert.equal(sent("Height", 16_000).graphic.shape.scale_ppm, 2_000_000);
+  assert.deepEqual([half.verb, half.id, half.graphic.shape], ["edit_graphic", "img_a", { type: "image", at: { x: 50_000_000, y: 40_000_000 }, scale_ppm: 500_000 }]);
+  assert.equal(sent("Width", 6_000_000).graphic.shape.scale_ppm, 500_000);
+  assert.equal(sent("Height", 16_000_000).graphic.shape.scale_ppm, 2_000_000);
   assert.ok(!("data" in half.graphic.shape) && !("px" in half.graphic.shape) && !("hash" in half.graphic.shape), "no pixels and none of the state's description go back");
   assert.deepEqual(edit(s, ["img_a"], "Scale", 1), []);
-  assert.deepEqual(edit(s, ["img_a"], "Position X", 51_000), [{ op: "sch_move", verb: "move", ids: ["img_a"], dx: 1_000, dy: 0 }]);
+  assert.deepEqual(edit(s, ["img_a"], "Position X", 51_000_000), [{ op: "sch_move", verb: "move", ids: ["img_a"], dx: 1_000_000, dy: 0 }]);
 });

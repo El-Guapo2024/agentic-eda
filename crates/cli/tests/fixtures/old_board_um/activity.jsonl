@@ -1,0 +1,3 @@
+{"by":"file","cmd":"edit design.json","message":"design.json changed outside a command","ok":true,"t":1792797035857}
+{"by":"cli","cmd":"zone add --net GND --layer B.Cu --pts \"0.00,0.00 40.00,0.00 40.00,30.00 0.00,30.00\"","message":"zone: 7/7 placed (100%), 0 failure(s)","ok":true,"t":1792797036064}
+{"by":"cli","cmd":"text add --content \"REV A\" --at 5.00,3.00 --layer F.SilkS","message":"text: 7/7 placed (100%), 0 failure(s)","ok":true,"t":1792797036263}

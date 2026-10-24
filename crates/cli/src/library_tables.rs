@@ -1567,7 +1567,7 @@ pub(crate) mod tests {
         assert_eq!(def.pads.len(), 2);
         // and an intent part naming the footprint finds its pads
         let mut model = eda_model::ConstraintModel::default();
-        model.parts.push(eda_model::Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some("Mine:Pad2".into()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None });
+        model.parts.push(eda_model::Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some("Mine:Pad2".into()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None });
         let warnings = eda_kicad::resolve_library_footprints_with(&mut model, |id| {
             let (lib, item) = id.split_once(':')?;
             fps.lib_path(Kind::Footprint, lib).ok().map(|d| d.join(format!("{item}.kicad_mod")))

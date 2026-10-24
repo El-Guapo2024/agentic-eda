@@ -8,11 +8,11 @@ use eda_model::ir::{PlacementSection, Provenance};
 /// A board with the model of [`design`] but nothing placed or drawn yet: U1 and U2 are parts of the intent that are not on the board.
 fn blank(m: &ConstraintModel) -> Board<'_> {
     let mut d = design();
-    d.placement = Some(PlacementSection { outline: vec![p(0, 0), p(100_000, 0), p(100_000, 100_000), p(0, 100_000)], footprints: vec![], modules: vec![] });
+    d.placement = Some(PlacementSection { outline: vec![p(0, 0), p(100_000_000, 0), p(100_000_000, 100_000_000), p(0, 100_000_000)], footprints: vec![], modules: vec![] });
     d.routing = None;
     d.drawings = None;
     d.provenance = Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] };
-    Board::new(d, m, 100, 300)
+    Board::new(d, m, 100_000, 300_000)
 }
 
 /// KiCad's clipboard text of a Copy of `names` on the fixture board, measured from `reference`.
@@ -40,7 +40,7 @@ fn a_plain_paste_keeps_the_reference_it_brought_even_when_another_footprint_has_
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     // U1 and U2 are on this board already. KiCad's default (`PASTE_MODE::KEEP_ANNOTATIONS`) leaves their references as the clipboard has them.
-    b.apply(&Cmd::PasteClipboard { text: copy(&["U1", "U2"], p(30_000, 20_000)), at: p(10_000, 80_000) }).unwrap();
+    b.apply(&Cmd::PasteClipboard { text: copy(&["U1", "U2"], p(30_000_000, 20_000_000)), at: p(10_000_000, 80_000_000) }).unwrap();
 
     assert_eq!(board_parts(&b), vec!["U3", "U4"], "a part is named once, so the copies are filed under free names");
     assert_eq!(shown_reference(&b, "U3").as_deref(), Some("U1"), "but they read U1 and U2, as they do after a paste in KiCad");
@@ -52,7 +52,7 @@ fn a_plain_paste_keeps_the_reference_it_brought_even_when_another_footprint_has_
 fn paste_special_unique_gives_a_taken_reference_the_next_number() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&special(copy(&["U1", "U2"], p(30_000, 20_000)), p(10_000, 80_000), PasteMode::Unique, false)).unwrap();
+    b.apply(&special(copy(&["U1", "U2"], p(30_000_000, 20_000_000)), p(10_000_000, 80_000_000), PasteMode::Unique, false)).unwrap();
 
     assert_eq!(board_parts(&b), vec!["U3", "U4"], "`ReannotateDuplicates`: U1 -> U3 (U2 is taken), U2 -> U4");
     assert_eq!(shown_reference(&b, "U3"), None, "they read what they are called");
@@ -63,7 +63,7 @@ fn paste_special_unique_gives_a_taken_reference_the_next_number() {
 fn paste_special_remove_sets_every_pasted_reference_to_ref_stars() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&special(copy(&["U1", "U2"], p(30_000, 20_000)), p(10_000, 80_000), PasteMode::Remove, false)).unwrap();
+    b.apply(&special(copy(&["U1", "U2"], p(30_000_000, 20_000_000)), p(10_000_000, 80_000_000), PasteMode::Remove, false)).unwrap();
 
     assert_eq!(board_parts(&b), vec!["U3", "U4"]);
     assert_eq!(shown_reference(&b, "U3").as_deref(), Some("REF**"));
@@ -73,8 +73,8 @@ fn paste_special_remove_sets_every_pasted_reference_to_ref_stars() {
 
 #[test]
 fn paste_special_keep_is_the_default_of_a_command_that_leaves_the_mode_out() {
-    let c: Cmd = serde_json::from_str(r#"{"op":"paste_special","text":"(kicad_pcb)","at":{"x":1,"y":2}}"#).unwrap();
-    assert_eq!(c, special("(kicad_pcb)".into(), p(1, 2), PasteMode::Keep, false));
+    let c: Cmd = serde_json::from_str(r#"{"op":"paste_special","text":"(kicad_pcb)","at":{"x":1000,"y":2000}}"#).unwrap();
+    assert_eq!(c, special("(kicad_pcb)".into(), p(1000, 2000), PasteMode::Keep, false));
     let c: Cmd = serde_json::from_str(r#"{"op":"paste_special","text":"x","at":{"x":0,"y":0},"mode":"remove","clear_nets":true}"#).unwrap();
     assert_eq!(c, special("x".into(), p(0, 0), PasteMode::Remove, true));
     assert_eq!(serde_json::to_value(PasteMode::Unique).unwrap(), "unique");
@@ -85,12 +85,12 @@ fn paste_special_keep_is_the_default_of_a_command_that_leaves_the_mode_out() {
 #[test]
 fn a_reference_nobody_has_is_the_reference_in_every_mode_and_remove_still_clears_the_text() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let text = copy(&["U1"], p(30_000, 20_000));
+    let text = copy(&["U1"], p(30_000_000, 20_000_000));
     for (mode, shown) in [(PasteMode::Keep, None), (PasteMode::Unique, None), (PasteMode::Remove, Some("REF**"))] {
         // U1 is a part of the intent that is not on this board: it is placed again under its own name.
         let mut b = blank(&m);
-        b.apply(&special(text.clone(), p(40_000, 50_000), mode, false)).unwrap();
-        assert_eq!(pose(&b, "U1").at, p(40_000, 50_000), "{mode:?}");
+        b.apply(&special(text.clone(), p(40_000_000, 50_000_000), mode, false)).unwrap();
+        assert_eq!(pose(&b, "U1").at, p(40_000_000, 50_000_000), "{mode:?}");
         assert!(board_parts(&b).is_empty(), "{mode:?}: no second part");
         assert_eq!(shown_reference(&b, "U1").as_deref(), shown, "{mode:?}");
     }
@@ -123,11 +123,11 @@ fn clear_nets_puts_pasted_copper_zones_and_pads_on_no_net() {
 #[test]
 fn clear_nets_changes_nothing_for_a_footprint_copied_alone() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let text = copy(&["U1"], p(30_000, 20_000));
+    let text = copy(&["U1"], p(30_000_000, 20_000_000));
     assert!(text.trim_start().starts_with("(footprint"), "a lone footprint is a bare footprint on the clipboard");
     let (mut with, mut without) = (board(&m), board(&m));
-    with.apply(&special(text.clone(), p(10_000, 80_000), PasteMode::Keep, true)).unwrap();
-    without.apply(&special(text, p(10_000, 80_000), PasteMode::Keep, false)).unwrap();
+    with.apply(&special(text.clone(), p(10_000_000, 80_000_000), PasteMode::Keep, true)).unwrap();
+    without.apply(&special(text, p(10_000_000, 80_000_000), PasteMode::Keep, false)).unwrap();
     assert_eq!(drawings(&with).board_parts, drawings(&without).board_parts);
     assert!(drawings(&with).board_parts[0].pad_nets.is_empty());
 }
@@ -147,13 +147,13 @@ fn members(b: &Board<'_>, group: &str) -> Vec<String> {
 #[test]
 fn what_a_command_adds_while_a_group_is_entered_joins_it() {
     let (m, d) = grouped();
-    let mut b = Board::new(d, &m, 100, 300);
+    let mut b = Board::new(d, &m, 100_000, 300_000);
     let in_group = |cmd: Cmd| Cmd::InGroup { group: id("grp_a"), cmd: Box::new(cmd) };
 
-    b.apply(&in_group(Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: p(1_000, 1_000), end: p(5_000, 1_000) } })).unwrap();
-    b.apply(&in_group(Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![p(70_000, 70_000), p(75_000, 70_000)] })).unwrap();
-    b.apply(&in_group(Cmd::AddVia { net: "GND".into(), x: 75_000, y: 70_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() })).unwrap();
-    b.apply(&in_group(Cmd::AddText { text: text("", "F.SilkS", (5_000, 5_000), 0) })).unwrap();
+    b.apply(&in_group(Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: p(1_000_000, 1_000_000), end: p(5_000_000, 1_000_000) } })).unwrap();
+    b.apply(&in_group(Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![p(70_000_000, 70_000_000), p(75_000_000, 70_000_000)] })).unwrap();
+    b.apply(&in_group(Cmd::AddVia { net: "GND".into(), x: 75_000_000, y: 70_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() })).unwrap();
+    b.apply(&in_group(Cmd::AddText { text: text("", "F.SilkS", (5_000_000, 5_000_000), 0) })).unwrap();
 
     let held = members(&b, "grp_a");
     assert_eq!(held.len(), 6, "{held:?}");
@@ -165,8 +165,8 @@ fn what_a_command_adds_while_a_group_is_entered_joins_it() {
     }
     assert!(held.contains(&"shp_seg".to_string()) && held.contains(&"txt_a".to_string()), "and the old members stay");
     // The same command with no group entered leaves the new item outside every group.
-    let mut free = Board::new(grouped().1, &m, 100, 300);
-    free.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: p(1_000, 1_000), end: p(5_000, 1_000) } }).unwrap();
+    let mut free = Board::new(grouped().1, &m, 100_000, 300_000);
+    free.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: p(1_000_000, 1_000_000), end: p(5_000_000, 1_000_000) } }).unwrap();
     assert_eq!(members(&free, "grp_a").len(), 2);
 }
 
@@ -177,8 +177,8 @@ fn a_paste_made_while_a_group_is_entered_joins_it_with_a_pasted_group_as_one_mem
     source.drawings.as_mut().unwrap().groups.push(Group { id: "grp_src".into(), name: "src".into(), member_ids: ids(&["dim_a", "shp_rect"]), design_block: String::new() });
     let text = eda_kicad::export_pcb_clipboard(&source, &m, &ids(&["grp_src", "trk_a"]), p(0, 0)).unwrap();
     d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_b".into(), name: "other".into(), member_ids: ids(&["shp_arc", "dim_a"]), design_block: String::new() });
-    let mut b = Board::new(d, &m, 100, 300);
-    b.apply(&Cmd::InGroup { group: id("grp_a"), cmd: Box::new(Cmd::PasteClipboard { text, at: p(2_000, 2_000) }) }).unwrap();
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    b.apply(&Cmd::InGroup { group: id("grp_a"), cmd: Box::new(Cmd::PasteClipboard { text, at: p(2_000_000, 2_000_000) }) }).unwrap();
 
     let held = members(&b, "grp_a");
     let groups = &drawings(&b).groups;
@@ -195,7 +195,7 @@ fn a_duplicate_of_a_member_of_an_inner_group_joins_that_group_not_the_entered_on
     let (m, mut d) = grouped();
     d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_in".into(), name: String::new(), member_ids: ids(&["shp_arc", "dim_a"]), design_block: String::new() });
     d.drawings.as_mut().unwrap().groups[0].member_ids.push(id("grp_in"));
-    let mut b = Board::new(d, &m, 100, 300);
+    let mut b = Board::new(d, &m, 100_000, 300_000);
     b.apply(&Cmd::InGroup { group: id("grp_a"), cmd: Box::new(Cmd::Duplicate { ids: ids(&["shp_arc"]) }) }).unwrap();
 
     assert_eq!(members(&b, "grp_in").len(), 3, "a duplicate joins its original's group (`BOARD_ITEM::Duplicate( addToParentGroup )`)");
@@ -205,8 +205,8 @@ fn a_duplicate_of_a_member_of_an_inner_group_joins_that_group_not_the_entered_on
 #[test]
 fn a_group_that_is_gone_is_not_joined_and_a_refused_command_changes_nothing() {
     let (m, d) = grouped();
-    let mut b = Board::new(d, &m, 100, 300);
-    b.apply(&Cmd::InGroup { group: id("grp_gone"), cmd: Box::new(Cmd::AddText { text: text("", "F.SilkS", (5_000, 5_000), 0) }) }).unwrap();
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    b.apply(&Cmd::InGroup { group: id("grp_gone"), cmd: Box::new(Cmd::AddText { text: text("", "F.SilkS", (5_000_000, 5_000_000), 0) }) }).unwrap();
     assert_eq!(drawings(&b).texts.len(), 2, "the command itself ran");
     assert_eq!(members(&b, "grp_a").len(), 2);
 
@@ -218,7 +218,7 @@ fn a_group_that_is_gone_is_not_joined_and_a_refused_command_changes_nothing() {
 
 #[test]
 fn in_group_wraps_a_command_without_changing_what_it_is() {
-    let inner = Cmd::MoveItems { ids: ids(&["U1"]), dx: 1, dy: 2 };
+    let inner = Cmd::MoveItems { ids: ids(&["U1"]), dx: 1, dy: 2000 };
     let wrapped = Cmd::InGroup { group: id("g"), cmd: Box::new(inner.clone()) };
     assert_eq!((wrapped.domain(), wrapped.subjects(), wrapped.edits_connectivity()), (inner.domain(), inner.subjects(), inner.edits_connectivity()));
     let back: Cmd = serde_json::from_str(&serde_json::to_string(&wrapped).unwrap()).unwrap();
@@ -242,7 +242,7 @@ fn points(b: &Board<'_>) -> Vec<Point> {
 #[test]
 fn a_rotation_step_that_is_not_a_quarter_turn_turns_every_kind_by_exactly_that_angle() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let pivot = p(50_000, 50_000);
+    let pivot = p(50_000_000, 50_000_000);
     // R presses at a 15 degree step: counter-clockwise on the screen, so the verb (clockwise positive) gets minus the step.
     let turn = |b: &mut Board<'_>, millideg: i64| b.apply(&Cmd::RotateItems { ids: everything_but_the_rect(), pivot, angle_millideg: millideg }).unwrap();
     let mut once = board(&m);
@@ -251,7 +251,7 @@ fn a_rotation_step_that_is_not_a_quarter_turn_turns_every_kind_by_exactly_that_a
     assert_eq!(pose(&once, "U1").rot, 345_000, "a footprint at 0 turned 15 degrees counter-clockwise reads 345 clockwise");
     assert_eq!(pose(&once, "U2").rot, 75_000);
     assert_eq!(drawings(&once).texts[0].angle, 15_000, "text runs the way KiCad's angles run");
-    // 24 presses at 15 degrees are a full turn: every point is where it was (a micrometre of rounding per press at most), a footprint's
+    // 24 presses at 15 degrees are a full turn: every point is where it was (a nanometre of rounding per press at most), a footprint's
     // angle is exactly what it was and its position is within a grid step of it (`Board::set_pose` snaps every pose to the placement grid).
     let mut full = board(&m);
     for _ in 0..24 {
@@ -263,7 +263,7 @@ fn a_rotation_step_that_is_not_a_quarter_turn_turns_every_kind_by_exactly_that_a
     for r in ["U1", "U2"] {
         let (was, now) = (pose(&board(&m), r), pose(&full, r));
         assert_eq!(now.rot, was.rot, "{r}");
-        assert!((now.at.x - was.at.x).abs() <= 300 && (now.at.y - was.at.y).abs() <= 300, "{r}: {:?} vs {:?}", now.at, was.at);
+        assert!((now.at.x - was.at.x).abs() <= 300_000 && (now.at.y - was.at.y).abs() <= 300_000, "{r}: {:?} vs {:?}", now.at, was.at);
     }
     // Two presses at 15 are one at 30 (within rounding).
     let (mut two, mut one) = (board(&m), board(&m));
@@ -283,10 +283,10 @@ fn everything_but_the_rect() -> Vec<String> {
 fn a_rectangle_turned_by_a_step_that_is_not_a_quarter_turn_becomes_a_polygon_and_stays_a_rectangle_on_a_quarter() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(5_000, 92_500), angle_millideg: -45_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(5_000_000, 92_500_000), angle_millideg: -45_000 }).unwrap();
     assert!(matches!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_rect"), Some(Shape::Polygon { pts, .. }) if pts.len() == 4));
     let mut q = board(&m);
-    q.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(5_000, 92_500), angle_millideg: -90_000 }).unwrap();
+    q.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(5_000_000, 92_500_000), angle_millideg: -90_000 }).unwrap();
     assert!(matches!(drawings(&q).shapes.iter().find(|s| s.id() == "shp_rect"), Some(Shape::Rect { .. })));
 }
 
@@ -296,20 +296,20 @@ fn the_flip_direction_decides_which_axis_an_item_is_mirrored_across() {
     let items = ids(&["trk_a", "via_a", "zone_a", "shp_seg", "txt_a", "U1"]);
     let mut lr = board(&m);
     let mut tb = board(&m);
-    lr.apply(&Cmd::FlipItems { ids: items.clone(), pivot: p(50_000, 50_000), direction: FlipDirection::LeftRight }).unwrap();
-    tb.apply(&Cmd::FlipItems { ids: items, pivot: p(50_000, 50_000), direction: FlipDirection::TopBottom }).unwrap();
+    lr.apply(&Cmd::FlipItems { ids: items.clone(), pivot: p(50_000_000, 50_000_000), direction: FlipDirection::LeftRight }).unwrap();
+    tb.apply(&Cmd::FlipItems { ids: items, pivot: p(50_000_000, 50_000_000), direction: FlipDirection::TopBottom }).unwrap();
 
     // trk_a ran from (10 000, 40 000): left/right keeps y and mirrors x, top/bottom the other way round.
-    assert_eq!(routing(&lr).tracks[0].pts[0], p(90_000, 40_000));
-    assert_eq!(routing(&tb).tracks[0].pts[0], p(10_000, 60_000));
-    assert_eq!((routing(&lr).vias[0].at, routing(&tb).vias[0].at), (p(80_000, 50_000), p(20_000, 50_000)));
+    assert_eq!(routing(&lr).tracks[0].pts[0], p(90_000_000, 40_000_000));
+    assert_eq!(routing(&tb).tracks[0].pts[0], p(10_000_000, 60_000_000));
+    assert_eq!((routing(&lr).vias[0].at, routing(&tb).vias[0].at), (p(80_000_000, 50_000_000), p(20_000_000, 50_000_000)));
     // Either way the layer goes to the other side, and so does the footprint.
     assert_eq!((routing(&lr).tracks[0].layer.as_str(), routing(&tb).tracks[0].layer.as_str()), ("B.Cu", "B.Cu"));
     assert_eq!((pose(&lr, "U1").side, pose(&tb, "U1").side), (Side::Bottom, Side::Bottom));
     // Text: -angle for left/right, 180 - angle for top/bottom (an angle of 30 degrees shows it).
     let mut turned = design();
     turned.drawings.as_mut().unwrap().texts[0].angle = 30_000;
-    let (mut a, mut c) = (Board::new(turned.clone(), &m, 100, 300), Board::new(turned, &m, 100, 300));
+    let (mut a, mut c) = (Board::new(turned.clone(), &m, 100_000, 300_000), Board::new(turned, &m, 100_000, 300_000));
     a.apply(&Cmd::FlipItems { ids: ids(&["txt_a"]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
     c.apply(&Cmd::FlipItems { ids: ids(&["txt_a"]), pivot: p(0, 0), direction: FlipDirection::TopBottom }).unwrap();
     assert_eq!((drawings(&a).texts[0].angle, drawings(&c).texts[0].angle), (330_000, 150_000));
@@ -321,15 +321,15 @@ fn the_flip_direction_decides_which_axis_an_item_is_mirrored_across() {
 fn a_routed_footprint_moved_turned_flipped_or_deleted_leaves_the_routing_in_the_design() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    d.routing.as_mut().unwrap().tracks.push(track("trk_u1", "F.Cu", &[(31_500, 20_000), (40_000, 20_000)]));
-    d.routing.as_mut().unwrap().vias.push(via("via_u1", (31_500, 20_000), "F.Cu", "B.Cu"));
-    let b = Board::new(d, &m, 100, 300);
+    d.routing.as_mut().unwrap().tracks.push(track("trk_u1", "F.Cu", &[(31_500_000, 20_000_000), (40_000_000, 20_000_000)]));
+    d.routing.as_mut().unwrap().vias.push(via("via_u1", (31_500_000, 20_000_000), "F.Cu", "B.Cu"));
+    let b = Board::new(d, &m, 100_000, 300_000);
     for cmd in [
-        Cmd::MoveItems { ids: ids(&["U1"]), dx: 5_000, dy: 0 },
-        Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(30_000, 20_000), angle_millideg: -15_000 },
-        Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(30_000, 20_000), direction: FlipDirection::LeftRight },
+        Cmd::MoveItems { ids: ids(&["U1"]), dx: 5_000_000, dy: 0 },
+        Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(30_000_000, 20_000_000), angle_millideg: -15_000 },
+        Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(30_000_000, 20_000_000), direction: FlipDirection::LeftRight },
         Cmd::Rip { part: id("U1") },
-        Cmd::CreateArray { ids: ids(&["U1"]), geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: 5_000, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: false, reannotate: true },
+        Cmd::CreateArray { ids: ids(&["U1"]), geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: 5_000_000, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: false, reannotate: true },
     ] {
         assert!(!cmd.clears_routing_in(&b), "{cmd:?}");
     }

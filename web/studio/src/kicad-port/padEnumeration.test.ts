@@ -70,24 +70,24 @@ test("a pad remembers what it was called before the tool touched it", () => {
 });
 
 test("sweepPoints: one point for a still mouse, a point every 0.1 mm along a move, from the cursor back to where it was", () => {
-  assert.deepEqual(sweepPoints(null, { x: 500, y: 500 }), [{ x: 500, y: 500 }]);
-  assert.deepEqual(sweepPoints({ x: 500, y: 500 }, { x: 500, y: 500 }), [{ x: 500, y: 500 }]);
-  const pts = sweepPoints({ x: 0, y: 0 }, { x: 1000, y: 0 });
+  assert.deepEqual(sweepPoints(null, { x: 500_000, y: 500_000 }), [{ x: 500_000, y: 500_000 }]);
+  assert.deepEqual(sweepPoints({ x: 500_000, y: 500_000 }, { x: 500_000, y: 500_000 }), [{ x: 500_000, y: 500_000 }]);
+  const pts = sweepPoints({ x: 0, y: 0 }, { x: 1_000_000, y: 0 });
   assert.equal(pts.length, 11, "1 mm / 0.1 mm + 1");
-  assert.deepEqual(pts[0], { x: 1000, y: 0 });
-  // `line_step = ( mouse - old ) / segments` is an integer division (1000 / 11 = 90), so the last point stops short of where the mouse was
-  assert.deepEqual(pts[1], { x: 910, y: 0 });
-  assert.deepEqual(pts[10], { x: 100, y: 0 });
+  assert.deepEqual(pts[0], { x: 1_000_000, y: 0 });
+  // `line_step = ( mouse - old ) / segments` is an integer division (1000000 / 11 = 90909), so the last point stops short of where the mouse was
+  assert.deepEqual(pts[1], { x: 909_091, y: 0 });
+  assert.deepEqual(pts[10], { x: 90_910, y: 0 });
 });
 
 test("padsUnderSweep lists a pad once per consecutive run and keeps sweep order", () => {
   const pads = [
     { id: "a", x: 0 },
-    { id: "b", x: 500 },
-    { id: "c", x: 1000 },
+    { id: "b", x: 500_000 },
+    { id: "c", x: 1_000_000 },
   ];
-  const contains = (p: { x: number }, x: number) => Math.abs(p.x - x) <= 120;
-  const pts = sweepPoints({ x: 0, y: 0 }, { x: 1000, y: 0 }); // from x=1000 back to 0
+  const contains = (p: { x: number }, x: number) => Math.abs(p.x - x) <= 120_000;
+  const pts = sweepPoints({ x: 0, y: 0 }, { x: 1_000_000, y: 0 }); // from x=1000 back to 0
   const hits = padsUnderSweep(pads, pts, contains);
   assert.deepEqual(
     hits.map((p) => p.id),

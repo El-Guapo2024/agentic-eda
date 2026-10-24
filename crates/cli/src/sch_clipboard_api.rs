@@ -13,7 +13,7 @@
 use crate::board;
 use eda_model::ir::{Design, Point, SchematicSection, SchematicText};
 use std::collections::BTreeMap;
-use eda_model::sch_clipboard::{closest_anchor, place_offset_um, top_left_anchor, PasteMode, SchFragment};
+use eda_model::sch_clipboard::{closest_anchor, place_offset_nm, top_left_anchor, PasteMode, SchFragment};
 use eda_model::ConstraintModel;
 use eda_ops::{Board, Cmd};
 use serde_json::{json, Value};
@@ -103,7 +103,7 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
 fn text_fragment(text: &str) -> SchFragment {
     let content = text.lines().map(str::trim_end).collect::<Vec<_>>().join(" ");
     let mut f = SchFragment::default();
-    f.section.texts.push(SchematicText { id: String::new(), content, at: Point { x: 0, y: 0 }, angle: 0, size_um: 1_270 });
+    f.section.texts.push(SchematicText { id: String::new(), content, at: Point { x: 0, y: 0 }, angle: 0, size_nm: 1_270_000 });
     f
 }
 
@@ -119,7 +119,7 @@ fn pin_points(f: &SchFragment) -> Vec<Point> {
     for s in &f.section.symbols {
         let Some(lib) = f.lib_symbol(&s.lib_id) else { continue };
         for pin in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == s.unit) {
-            let (dx, dy) = place_offset_um(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (pin.at.x, pin.at.y));
+            let (dx, dy) = place_offset_nm(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (pin.at.x, pin.at.y));
             out.push(Point { x: s.at.x + dx, y: s.at.y + dy });
         }
     }
@@ -156,7 +156,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
     let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: 0, dy: 0, mode };
     let cmd = if sheet.is_empty() { paste } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(paste) } };
     let drawn_before = design.clone();
-    let mut tried = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+    let mut tried = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     if let Err(e) = tried.apply(&cmd) {
         return err(board::reasons(&e));
     }
@@ -229,7 +229,7 @@ mod tests {
             package: None,
             footprint: Some("Foo:Bar".into()),
             pins,
-            body_um: None,
+            body_nm: None,
             symbol: symbol.map(String::from),
             datasheet: None,
             edge: None,
@@ -247,9 +247,9 @@ mod tests {
         std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
         let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "hash")).unwrap();
         // A board always has a placement section; this one has no part on the PCB yet.
-        design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints: vec![], modules: vec![] });
+        design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }], footprints: vec![], modules: vec![] });
         board::save(dir, &design).unwrap();
-        let meta = board::Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+        let meta = board::Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(anchor.len(), 2);
 
         // Paste it, 40 mm to the right and 30 below: one command, one undo step.
-        let (dx, dy) = (40_640, 30_480);
+        let (dx, dy) = (40_640_000, 30_480_000);
         // The command as the studio posts it (`/api/cmd` reads a parsed body with `from_value`): the fragment travels inside it, library symbols and all.
         let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"].clone(), "dx": dx, "dy": dy, "mode": "unique" })).expect("the studio's paste_sch command reads");
         board::step(&dir, cmd, false, "test").unwrap();
@@ -360,11 +360,11 @@ mod tests {
         assert_eq!((t["ok"].as_bool(), t["kind"].as_str()), (Some(true), Some("text")), "{t}");
         assert_eq!(t["fragment"]["section"]["texts"][0]["content"], "hello world");
         assert_eq!(t["long_text"], false);
-        assert_eq!(post(parse, &dir, json!({ "text": "x".repeat(101) }))["long_text"], true);
+        assert_eq!(post(parse, &dir, json!({ "text": "x".repeat(101_000) }))["long_text"], true);
         assert_eq!(post(parse, &dir, json!({ "text": "  " }))["ok"], false);
 
         // A paste onto a second sheet numbers against the first one too.
-        board::step(&dir, Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: Point { x: 200_000, y: 20_000 }, size: (30_000, 20_000) }, false, "test").unwrap();
+        board::step(&dir, Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: Point { x: 200_000_000, y: 20_000_000 }, size: (30_000_000, 20_000_000) }, false, "test").unwrap();
         let (_, d, _) = board::load(&dir).unwrap();
         let sheet = d.schematic.as_ref().unwrap().sheets[0].id.clone();
         let copy = post(copy, &dir, json!({ "ids": ["R1", "C1"] }));

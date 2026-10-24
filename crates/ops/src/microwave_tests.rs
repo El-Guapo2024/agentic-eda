@@ -19,11 +19,11 @@ fn board(model: &ConstraintModel) -> Board<'_> {
             "placement":{"outline":[{"x":0,"y":0},{"x":100000,"y":0},{"x":100000,"y":100000},{"x":0,"y":100000}],"footprints":[],"modules":[]}}"#,
     )
     .unwrap();
-    Board::new(design, model, 100, 300)
+    Board::new(design, model, 100_000, 300_000)
 }
 
-fn gap(b: &mut Board, at: Point, size_um: i64) {
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Gap { at, size_um, track_width_um: 250, hand: Hand::default() })).unwrap();
+fn gap(b: &mut Board, at: Point, size_nm: i64) {
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Gap { at, size_nm, track_width_nm: 250_000, hand: Hand::default() })).unwrap();
 }
 
 fn part<'a>(b: &'a Board, reference: &str) -> &'a eda_model::ir::BoardPart {
@@ -45,7 +45,7 @@ fn pose<'a>(b: &'a Board, reference: &str) -> &'a eda_model::ir::FootprintInstan
 fn a_gap_is_two_square_pads_the_gap_apart_on_a_footprint_of_its_own() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    gap(&mut b, p(10_000, 20_000), 500);
+    gap(&mut b, p(10_000_000, 20_000_000), 500_000);
 
     let bp = part(&b, "REF1");
     assert_eq!((bp.footprint.as_str(), bp.value.as_deref()), ("muwave_gap", Some("muwave_gap")), "the name is the footprint's and its value");
@@ -53,14 +53,14 @@ fn a_gap_is_two_square_pads_the_gap_apart_on_a_footprint_of_its_own() {
     let fp = def(&b, "REF1");
     assert_eq!(fp.pads.len(), 2);
     let (a, c) = (&fp.pads[0], &fp.pads[1]);
-    assert_eq!((a.number.as_str(), a.at, a.size, a.shape, a.kind), ("1", p(-375, 0), (250, 250), LibraryPadShape::Rect, PadKind::Smd));
-    assert_eq!((c.number.as_str(), c.at, c.size, c.shape, c.kind), ("2", p(375, 0), (250, 250), LibraryPadShape::Rect, PadKind::Smd));
+    assert_eq!((a.number.as_str(), a.at, a.size, a.shape, a.kind), ("1", p(-375_000, 0), (250_000, 250_000), LibraryPadShape::Rect, PadKind::Smd));
+    assert_eq!((c.number.as_str(), c.at, c.size, c.shape, c.kind), ("2", p(375_000, 0), (250_000, 250_000), LibraryPadShape::Rect, PadKind::Smd));
     assert_eq!(a.layers, vec!["F.Cu".to_string()], "`pad->SetLayerSet( {{ F_Cu }} )`: copper and nothing else");
     // the pose is the click
     let f = pose(&b, "REF1");
-    assert_eq!((f.at, f.rot, f.side), (p(10_000, 20_000), 0, Side::Top));
+    assert_eq!((f.at, f.rot, f.side), (p(10_000_000, 20_000_000), 0, Side::Top));
     // the gap between the pads' edges is the gap asked for
-    assert_eq!((c.at.x - c.size.0 / 2) - (a.at.x + a.size.0 / 2), 500);
+    assert_eq!((c.at.x - c.size.0 / 2) - (a.at.x + a.size.0 / 2), 500_000);
 }
 
 /// `createBaseFootprint` + `CreateNewFootprint`: Reference `REF**` on the silkscreen half a text height above the origin and Value on the fabrication layer below it, both as big as the
@@ -69,16 +69,16 @@ fn a_gap_is_two_square_pads_the_gap_apart_on_a_footprint_of_its_own() {
 fn a_gaps_fields_texts_and_attributes_are_createnewfootprints() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    gap(&mut b, p(0, 0), 500);
+    gap(&mut b, p(0, 0), 500_000);
     let dr = b.design().drawings.as_ref().unwrap();
     let edit = dr.footprint_edits.iter().find(|e| e.id == "REF1").expect("the fields are laid out");
     let (r, v) = (edit.reference.as_ref().unwrap(), edit.value.as_ref().unwrap());
-    assert_eq!((r.layer.as_str(), r.at, r.size, r.thickness, r.visible), ("F.SilkS", p(0, -500), (250, 250), 50, true));
-    assert_eq!((v.layer.as_str(), v.at, v.size, v.thickness, v.visible), ("F.Fab", p(0, 1000), (250, 250), 50, true));
+    assert_eq!((r.layer.as_str(), r.at, r.size, r.thickness, r.visible), ("F.SilkS", p(0, -500_000), (250_000, 250_000), 50_000, true));
+    assert_eq!((v.layer.as_str(), v.at, v.size, v.thickness, v.visible), ("F.Fab", p(0, 1_000_000), (250_000, 250_000), 50_000, true));
     let fp = def(&b, "REF1");
     assert_eq!(fp.texts.len(), 1);
     let t = &fp.texts[0];
-    assert_eq!((t.content.as_str(), t.layer.as_str(), t.at, t.size_um, t.stroke_width), ("${REFERENCE}", "F.Fab", p(0, 2500), 1000, 150), "the third default text item of the board, at the board's size");
+    assert_eq!((t.content.as_str(), t.layer.as_str(), t.at, t.size_nm, t.stroke_width), ("${REFERENCE}", "F.Fab", p(0, 2_500_000), 1_000_000, 150_000), "the third default text item of the board, at the board's size");
     // `SetAttributes( FP_EXCLUDE_FROM_POS_FILES | FP_EXCLUDE_FROM_BOM )`: neither SMD nor through hole
     let a = edit.attrs.expect("the attributes are set");
     assert_eq!((a.kind, a.exclude_from_pos_files, a.exclude_from_bom, a.board_only, a.dnp), (eda_model::fp_edit::FootprintKind::Unspecified, true, true, false, false));
@@ -96,39 +96,39 @@ fn a_gaps_fields_texts_and_attributes_are_createnewfootprints() {
 #[test]
 fn the_boards_text_defaults_place_and_size_the_fields() {
     let mut model = ConstraintModel::default();
-    model.board.text_graphics.silk.text_height_um = 1_200;
-    model.board.text_graphics.silk.text_width_um = 1_200;
-    model.board.text_graphics.fab.text_height_um = 800;
-    model.board.text_graphics.fab.text_width_um = 800;
-    model.board.text_graphics.fab.text_thickness_um = 120;
+    model.board.text_graphics.silk.text_height_nm = 1_200_000;
+    model.board.text_graphics.silk.text_width_nm = 1_200_000;
+    model.board.text_graphics.fab.text_height_nm = 800_000;
+    model.board.text_graphics.fab.text_width_nm = 800_000;
+    model.board.text_graphics.fab.text_thickness_nm = 120_000;
     let mut b = board(&model);
     // A stub of the arc kind keeps the board's sizes (`text_size` 0).
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 1_000, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 1_000_000, angle_millideg: 90_000, track_width_nm: 250_000, hand: Hand::default() })).unwrap();
     let edit = &b.design().drawings.as_ref().unwrap().footprint_edits[0];
     let (r, v) = (edit.reference.as_ref().unwrap(), edit.value.as_ref().unwrap());
     // y = -silk/2 = -600; then + silk = 600; + fab/2 = 1000 (the Value); + fab = 1800; + fab/2 = 2200 (the user text)
-    assert_eq!((r.at, r.size), (p(0, -600), (1_200, 1_200)));
-    assert_eq!((v.at, v.size, v.thickness), (p(0, 1_000), (800, 800), 120));
-    assert_eq!(def(&b, "REF1").texts[0].at, p(0, 2_200));
+    assert_eq!((r.at, r.size), (p(0, -600_000), (1_200_000, 1_200_000)));
+    assert_eq!((v.at, v.size, v.thickness), (p(0, 1_000_000), (800_000, 800_000), 120_000));
+    assert_eq!(def(&b, "REF1").texts[0].at, p(0, 2_200_000));
 }
 
-/// KiCad's integers are nanometres, and `/ 2` truncates there: an odd sum of micrometres leaves half a micrometre, which the IR rounds away from zero.
+/// KiCad's integers are nanometres, and `/ 2` truncates there: an odd sum of micrometres leaves half a micrometre, which the IR keeps.
 #[test]
-fn an_odd_gap_is_divided_in_nanometres_and_rounded_to_the_micrometre() {
+fn an_odd_gap_is_divided_in_nanometres() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    gap(&mut b, p(0, 0), 333);
+    gap(&mut b, p(0, 0), 333_000);
     let fp = def(&b, "REF1");
     // offsetX = -(333000 + 250000) / 2 = -291500 nm; the second pad at -291500 + 333000 + 250000 = 291500 nm
-    assert_eq!((fp.pads[0].at.x, fp.pads[1].at.x), (-292, 292));
+    assert_eq!((fp.pads[0].at.x, fp.pads[1].at.x), (-291_500, 291_500));
 }
 
 #[test]
 fn a_gap_needs_a_size_and_a_track() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    for (size, track) in [(0, 250), (-5, 250), (500, 0)] {
-        let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Gap { at: p(0, 0), size_um: size, track_width_um: track, hand: Hand::default() })).unwrap_err();
+    for (size, track) in [(0, 250_000), (-5000, 250_000), (500_000, 0)] {
+        let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Gap { at: p(0, 0), size_nm: size, track_width_nm: track, hand: Hand::default() })).unwrap_err();
         assert_eq!(e[0].check, "ops_bad_microwave", "{size} {track}");
     }
     assert!(b.design().drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "a refused command changes nothing");
@@ -141,17 +141,17 @@ fn a_gap_needs_a_size_and_a_track() {
 fn a_stub_is_a_square_pad_and_the_stub_above_it() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(5_000, 5_000), size_um: 1_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(5_000_000, 5_000_000), size_nm: 1_000_000, track_width_nm: 250_000, hand: Hand::default() })).unwrap();
     let bp = part(&b, "REF1");
     assert_eq!(bp.footprint, "muwave_stub");
     let fp = def(&b, "REF1");
     let (a, s) = (&fp.pads[0], &fp.pads[1]);
-    assert_eq!((a.number.as_str(), a.at, a.size), ("1", p(0, 0), (250, 250)));
-    assert_eq!((s.number.as_str(), s.at, s.size), ("2", p(0, -625), (250, 1_000)));
+    assert_eq!((a.number.as_str(), a.at, a.size), ("1", p(0, 0), (250_000, 250_000)));
+    assert_eq!((s.number.as_str(), s.at, s.size), ("2", p(0, -625_000), (250_000, 1_000_000)));
     // the stub's far end is `stub + h / 2` above the origin and its near end touches the square pad
-    assert_eq!((s.at.y - s.size.1 / 2, s.at.y + s.size.1 / 2), (-1_125, -125));
+    assert_eq!((s.at.y - s.size.1 / 2, s.at.y + s.size.1 / 2), (-1_125_000, -125_000));
     let edit = &b.design().drawings.as_ref().unwrap().footprint_edits[0];
-    assert_eq!(edit.reference.as_ref().unwrap().size, (250, 250), "the stub's texts take the track width too");
+    assert_eq!(edit.reference.as_ref().unwrap().size, (250_000, 250_000), "the stub's texts take the track width too");
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------ the arc stub
@@ -171,25 +171,25 @@ fn arc_points(b: &Board) -> Vec<Point> {
 fn an_arc_stub_is_one_custom_pad_with_a_pie_slice() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 1_000, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 1_000_000, angle_millideg: 90_000, track_width_nm: 250_000, hand: Hand::default() })).unwrap();
     assert_eq!(part(&b, "REF1").footprint, "muwave_arcstub");
     let fp = def(&b, "REF1");
     assert_eq!(fp.pads.len(), 1, "`pad_count = 1`");
     let pad = &fp.pads[0];
-    assert_eq!((pad.number.as_str(), pad.shape, pad.size, pad.at), ("1", LibraryPadShape::Custom, (250, 250), p(0, 0)));
+    assert_eq!((pad.number.as_str(), pad.shape, pad.size, pad.at), ("1", LibraryPadShape::Custom, (250_000, 250_000), p(0, 0)));
     let custom = pad.custom.as_ref().unwrap();
     assert_eq!(custom.anchor, eda_model::footprint::PadAnchor::Rect, "`SetAnchorPadShape( .., RECTANGLE )`");
     let pts = arc_points(&b);
     // numPoints = 90 / 5 + 3 = 21: the origin, 19 points from -45 to +45 degrees, and the origin again
     assert_eq!(pts.len(), 21);
     assert_eq!((pts[0], pts[20]), (p(0, 0), p(0, 0)));
-    assert_eq!(pts[1], p(707, -707), "theta = -45: RotatePoint turns (0, -r) toward +x");
-    assert_eq!(pts[10], p(0, -1_000), "the middle of the slice points up");
-    assert_eq!(pts[19], p(-707, -707));
-    // every point of the arc is a radius from the origin, to the micrometre
+    assert_eq!(pts[1], p(707_107, -707_107), "theta = -45: RotatePoint turns (0, -r) toward +x");
+    assert_eq!(pts[10], p(0, -1_000_000), "the middle of the slice points up");
+    assert_eq!(pts[19], p(-707_107, -707_107));
+    // every point of the arc is a radius from the origin, to the nanometre
     for q in &pts[1..20] {
         let r = ((q.x * q.x + q.y * q.y) as f64).sqrt();
-        assert!((r - 1_000.0).abs() <= 1.0, "{q:?} is {r} from the origin");
+        assert!((r - 1_000_000.0).abs() <= 1.0, "{q:?} is {r} from the origin");
     }
 }
 
@@ -198,32 +198,32 @@ fn the_arc_stubs_angle_is_taken_as_an_absolute_value_and_clamped_to_a_half_turn(
     let model = ConstraintModel::default();
     // 270 degrees is 180: 180 / 5 + 3 = 39 points in all, -90 .. +90 degrees
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 2_000, angle_millideg: 270_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 2_000_000, angle_millideg: 270_000, track_width_nm: 250_000, hand: Hand::default() })).unwrap();
     let pts = arc_points(&b);
     assert_eq!(pts.len(), 39);
-    assert_eq!((pts[1], pts[37]), (p(2_000, 0), p(-2_000, 0)));
+    assert_eq!((pts[1], pts[37]), (p(2_000_000, 0), p(-2_000_000, 0)));
     // a negative angle is its absolute value
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 1_000, angle_millideg: -90_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 1_000_000, angle_millideg: -90_000, track_width_nm: 250_000, hand: Hand::default() })).unwrap();
     assert_eq!(arc_points(&b).len(), 21);
     // an angle of nothing is the one point the loop makes: origin, (0, -r), origin
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 1_000, angle_millideg: 0, track_width_um: 250, hand: Hand::default() })).unwrap();
-    assert_eq!(arc_points(&b), vec![p(0, 0), p(0, -1_000), p(0, 0)]);
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 1_000_000, angle_millideg: 0, track_width_nm: 250_000, hand: Hand::default() })).unwrap();
+    assert_eq!(arc_points(&b), vec![p(0, 0), p(0, -1_000_000), p(0, 0)]);
     // an angle that does not divide by 5: the last step is clamped to angle / 2 (12 degrees: -6, -1, 4, 6 -> numPoints = 12 / 5 + 3 = 5, three points)
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 10_000, angle_millideg: 12_000, track_width_um: 250, hand: Hand::default() })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 10_000_000, angle_millideg: 12_000, track_width_nm: 250_000, hand: Hand::default() })).unwrap();
     let pts = arc_points(&b);
     assert_eq!(pts.len(), 5);
-    // thetas -6, -1, 4: x = round(r * sin(6)) = 1045, round(r * sin(1)) = 175, round(-r * sin(4)) = -698
-    assert_eq!(&pts[1..4], &[p(1_045, -9_945), p(175, -9_998), p(-698, -9_976)]);
+    // thetas -6, -1, 4: x = round(r * sin(6)) = 1_045_285, round(r * sin(1)) = 174_524, round(-r * sin(4)) = -697_565 (nm)
+    assert_eq!(&pts[1..4], &[p(1_045_285, -9_945_219), p(174_524, -9_998_477), p(-697_565, -9_975_641)]);
 }
 
 #[test]
 fn an_arc_stub_needs_a_radius() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_um: 0, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() })).unwrap_err();
+    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(0, 0), radius_nm: 0, angle_millideg: 90_000, track_width_nm: 250_000, hand: Hand::default() })).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_microwave");
 }
 
@@ -234,28 +234,28 @@ fn an_arc_stub_needs_a_radius() {
 fn footprints_that_differ_get_a_name_of_their_own_and_those_that_do_not_share_one() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    gap(&mut b, p(10_000, 10_000), 500);
-    gap(&mut b, p(20_000, 10_000), 500);
-    gap(&mut b, p(30_000, 10_000), 800);
-    gap(&mut b, p(40_000, 10_000), 800);
-    gap(&mut b, p(50_000, 10_000), 1_100);
+    gap(&mut b, p(10_000_000, 10_000_000), 500_000);
+    gap(&mut b, p(20_000_000, 10_000_000), 500_000);
+    gap(&mut b, p(30_000_000, 10_000_000), 800_000);
+    gap(&mut b, p(40_000_000, 10_000_000), 800_000);
+    gap(&mut b, p(50_000_000, 10_000_000), 1_100_000);
     let names: Vec<(&str, &str)> = b.design().drawings.as_ref().unwrap().board_parts.iter().map(|p| (p.reference.as_str(), p.footprint.as_str())).collect();
     assert_eq!(names, [("REF1", "muwave_gap"), ("REF2", "muwave_gap"), ("REF3", "muwave_gap_1"), ("REF4", "muwave_gap_1"), ("REF5", "muwave_gap_2")]);
     assert_eq!(def(&b, "REF3").name, "muwave_gap_1", "the definition is named as the part is");
     // each keeps its own pads
-    assert_eq!(def(&b, "REF1").pads[1].at.x, 375);
-    assert_eq!(def(&b, "REF3").pads[1].at.x, 525);
+    assert_eq!(def(&b, "REF1").pads[1].at.x, 375_000);
+    assert_eq!(def(&b, "REF3").pads[1].at.x, 525_000);
 }
 
 #[test]
 fn a_reference_taken_is_skipped() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    gap(&mut b, p(10_000, 10_000), 500);
-    gap(&mut b, p(20_000, 10_000), 500);
+    gap(&mut b, p(10_000_000, 10_000_000), 500_000);
+    gap(&mut b, p(20_000_000, 10_000_000), 500_000);
     // delete the first: the next one takes REF1 back
     b.apply(&Cmd::Rip { part: "REF1".into() }).unwrap();
-    gap(&mut b, p(30_000, 10_000), 500);
+    gap(&mut b, p(30_000_000, 10_000_000), 500_000);
     let refs: Vec<&str> = b.design().drawings.as_ref().unwrap().board_parts.iter().map(|p| p.reference.as_str()).collect();
     assert_eq!(refs, ["REF1", "REF2"]);
 }
@@ -265,7 +265,7 @@ fn a_reference_taken_is_skipped() {
 fn deleting_a_microwave_footprint_takes_its_edit_and_facts_with_it() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    gap(&mut b, p(10_000, 10_000), 500);
+    gap(&mut b, p(10_000_000, 10_000_000), 500_000);
     b.apply(&Cmd::Rip { part: "REF1".into() }).unwrap();
     let dr = b.design().drawings.as_ref().unwrap();
     assert!(dr.board_parts.is_empty() && dr.footprint_edits.is_empty() && dr.footprint_extras.is_empty() && b.design().placement.as_ref().unwrap().footprints.is_empty());
@@ -278,12 +278,12 @@ fn deleting_a_microwave_footprint_takes_its_edit_and_facts_with_it() {
 fn what_was_done_in_the_hand_is_the_footprints_pose() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_000, 10_000), size_um: 1_000, track_width_um: 250, hand: Hand { rotate_millideg: 90_000, flip: None } })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_000_000, 10_000_000), size_nm: 1_000_000, track_width_nm: 250_000, hand: Hand { rotate_millideg: 90_000, flip: None } })).unwrap();
     let f = pose(&b, "REF1");
-    assert_eq!((f.at, f.rot, f.side), (p(10_000, 10_000), 90_000, Side::Top));
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(30_000, 10_000), size_um: 1_000, track_width_um: 250, hand: Hand { rotate_millideg: 0, flip: Some(FlipDirection::LeftRight) } })).unwrap();
+    assert_eq!((f.at, f.rot, f.side), (p(10_000_000, 10_000_000), 90_000, Side::Top));
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Stub { at: p(30_000_000, 10_000_000), size_nm: 1_000_000, track_width_nm: 250_000, hand: Hand { rotate_millideg: 0, flip: Some(FlipDirection::LeftRight) } })).unwrap();
     let f = pose(&b, "REF2");
-    assert_eq!((f.at, f.side), (p(30_000, 10_000), Side::Bottom), "turned over about its own anchor");
+    assert_eq!((f.at, f.side), (p(30_000_000, 10_000_000), Side::Bottom), "turned over about its own anchor");
     // its fields went to the back with it (`FOOTPRINT::Flip`)
     let edit = b.design().drawings.as_ref().unwrap().footprint_edits.iter().find(|e| e.id == "REF2").unwrap();
     assert_eq!(edit.reference.as_ref().unwrap().layer, "B.SilkS");
@@ -294,19 +294,19 @@ fn what_was_done_in_the_hand_is_the_footprints_pose() {
 
 #[test]
 fn the_verbs_read_from_and_write_to_the_json_the_studio_sends() {
-    let gap = Cmd::Microwave(MicrowaveCmd::Gap { at: p(1_000, 2_000), size_um: 500, track_width_um: 250, hand: Hand::default() });
+    let gap = Cmd::Microwave(MicrowaveCmd::Gap { at: p(1_000_000, 2_000_000), size_nm: 500_000, track_width_nm: 250_000, hand: Hand::default() });
     let text = serde_json::to_string(&gap).unwrap();
-    assert_eq!(text, r#"{"op":"microwave","verb":"gap","at":{"x":1000,"y":2000},"size_um":500,"track_width_um":250}"#);
+    assert_eq!(text, r#"{"op":"microwave","verb":"gap","at":{"x":1000000,"y":2000000},"size_nm":500000,"track_width_nm":250000}"#);
     // (a body the studio parsed, as `/api/cmd` reads it)
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(serde_json::from_value::<Cmd>(value).unwrap(), gap);
 
-    let shape = serde_json::json!({ "op": "microwave", "verb": "function_shape", "at": { "x": 0, "y": 0 }, "file": "XScale=1", "kind": "symmetrical", "size_x_um": 4000, "track_width_um": 250, "hand": { "rotate_millideg": 90000, "flip": "left_right" } });
-    let Cmd::Microwave(MicrowaveCmd::FunctionShape { kind, size_x_um, size_y_um, hand, .. }) = serde_json::from_value(shape).unwrap() else { panic!("not a function shape") };
-    assert_eq!((kind, size_x_um, size_y_um, hand), (ShapeKind::Symmetrical, Some(4_000), None, Hand { rotate_millideg: 90_000, flip: Some(FlipDirection::LeftRight) }));
+    let shape = serde_json::json!({ "op": "microwave", "verb": "function_shape", "at": { "x": 0, "y": 0 }, "file": "XScale=1", "kind": "symmetrical", "size_x_nm": 4_000_000, "track_width_nm": 250_000, "hand": { "rotate_millideg": 90000, "flip": "left_right" } });
+    let Cmd::Microwave(MicrowaveCmd::FunctionShape { kind, size_x_nm, size_y_nm, hand, .. }) = serde_json::from_value(shape).unwrap() else { panic!("not a function shape") };
+    assert_eq!((kind, size_x_nm, size_y_nm, hand), (ShapeKind::Symmetrical, Some(4_000_000), None, Hand { rotate_millideg: 90_000, flip: Some(FlipDirection::LeftRight) }));
 
     // the inductor's name defaults to the dialog's "L"
-    let ind = serde_json::json!({ "op": "microwave", "verb": "inductor", "start": { "x": 0, "y": 0 }, "end": { "x": 0, "y": 10000 }, "length_um": 12000, "track_width_um": 250 });
+    let ind = serde_json::json!({ "op": "microwave", "verb": "inductor", "start": { "x": 0, "y": 0 }, "end": { "x": 0, "y": 10_000_000 }, "length_nm": 12_000_000, "track_width_nm": 250_000 });
     let Cmd::Microwave(MicrowaveCmd::Inductor { name, .. }) = serde_json::from_value(ind).unwrap() else { panic!("not an inductor") };
     assert_eq!(name, "L");
 }
@@ -337,7 +337,7 @@ fn a_shape_description_file_is_read_as_readdatashapedescr_reads_it() {
 }
 
 fn shape(kind: ShapeKind, file: &str) -> Cmd {
-    Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(10_000, 10_000), file: file.into(), kind, size_x_um: None, size_y_um: None, track_width_um: 250, hand: Hand::default() })
+    Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(10_000_000, 10_000_000), file: file.into(), kind, size_x_nm: None, size_y_nm: None, track_width_nm: 250_000, hand: Hand::default() })
 }
 
 fn polygon(b: &Board) -> Vec<Point> {
@@ -358,11 +358,11 @@ fn a_function_shape_is_a_polygon_between_two_pads() {
     b.apply(&shape(ShapeKind::Normal, SHAPE)).unwrap();
     assert_eq!(part(&b, "REF1").footprint, "muwave_polygon");
     let fp = def(&b, "REF1");
-    assert_eq!((fp.pads.len(), fp.pads[0].at, fp.pads[1].at, fp.pads[0].size), (2, p(-5_000, 0), p(5_000, 0), (250, 250)));
-    assert_eq!(polygon(&b), vec![p(-5_000, 0), p(-5_000, -1_000), p(0, -2_000), p(5_000, -1_000), p(5_000, 0)]);
+    assert_eq!((fp.pads.len(), fp.pads[0].at, fp.pads[1].at, fp.pads[0].size), (2, p(-5_000_000, 0), p(5_000_000, 0), (250_000, 250_000)));
+    assert_eq!(polygon(&b), vec![p(-5_000_000, 0), p(-5_000_000, -1_000_000), p(0, -2_000_000), p(5_000_000, -1_000_000), p(5_000_000, 0)]);
     // the texts keep the board's sizes (`createBaseFootprint( .., 0, .. )`)
     let edit = &b.design().drawings.as_ref().unwrap().footprint_edits[0];
-    assert_eq!(edit.reference.as_ref().unwrap().size, (1_000, 1_000));
+    assert_eq!(edit.reference.as_ref().unwrap().size, (1_000_000, 1_000_000));
 }
 
 #[test]
@@ -373,11 +373,11 @@ fn a_symmetrical_shape_has_its_mirror_image_and_a_mirrored_one_is_below_the_line
     // the five points, then the same five from the last to the first with y negated
     assert_eq!(
         polygon(&b),
-        vec![p(-5_000, 0), p(-5_000, -1_000), p(0, -2_000), p(5_000, -1_000), p(5_000, 0), p(5_000, 0), p(5_000, 1_000), p(0, 2_000), p(-5_000, 1_000), p(-5_000, 0)]
+        vec![p(-5_000_000, 0), p(-5_000_000, -1_000_000), p(0, -2_000_000), p(5_000_000, -1_000_000), p(5_000_000, 0), p(5_000_000, 0), p(5_000_000, 1_000_000), p(0, 2_000_000), p(-5_000_000, 1_000_000), p(-5_000_000, 0)]
     );
     let mut b = board(&model);
     b.apply(&shape(ShapeKind::Mirrored, SHAPE)).unwrap();
-    assert_eq!(polygon(&b), vec![p(-5_000, 0), p(-5_000, 1_000), p(0, 2_000), p(5_000, 1_000), p(5_000, 0)]);
+    assert_eq!(polygon(&b), vec![p(-5_000_000, 0), p(-5_000_000, 1_000_000), p(0, 2_000_000), p(5_000_000, 1_000_000), p(5_000_000, 0)]);
 }
 
 #[test]
@@ -386,16 +386,16 @@ fn a_shape_that_ends_on_the_line_is_not_closed_down_to_it() {
     let mut b = board(&model);
     // the last point has y = 0: `if( last_coordinate.y != 0 )` adds nothing
     b.apply(&shape(ShapeKind::Normal, "XScale=4\nYScale=1\n$COORD\n0 0\n0.5 1\n1 0\n$ENDCOORD\n")).unwrap();
-    assert_eq!(polygon(&b), vec![p(-2_000, 0), p(-2_000, 0), p(0, -1_000), p(2_000, 0)]);
+    assert_eq!(polygon(&b), vec![p(-2_000_000, 0), p(-2_000_000, 0), p(0, -1_000_000), p(2_000_000, 0)]);
 }
 
 #[test]
 fn the_size_boxes_of_the_dialog_scale_the_shape() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    b.apply(&Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(0, 0), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_um: Some(20_000), size_y_um: Some(1_000), track_width_um: 250, hand: Hand::default() })).unwrap();
-    assert_eq!(def(&b, "REF1").pads[1].at.x, 10_000);
-    assert_eq!(polygon(&b), vec![p(-10_000, 0), p(-10_000, -500), p(0, -1_000), p(10_000, -500), p(10_000, 0)]);
+    b.apply(&Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(0, 0), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_nm: Some(20_000_000), size_y_nm: Some(1_000_000), track_width_nm: 250_000, hand: Hand::default() })).unwrap();
+    assert_eq!(def(&b, "REF1").pads[1].at.x, 10_000_000);
+    assert_eq!(polygon(&b), vec![p(-10_000_000, 0), p(-10_000_000, -500_000), p(0, -1_000_000), p(10_000_000, -500_000), p(10_000_000, 0)]);
 }
 
 #[test]
@@ -414,8 +414,8 @@ fn a_shape_with_no_points_or_no_size_is_refused_with_kicads_words() {
 
 // ----------------------------------------------------------------------------------------------------------------------------- the inductor
 
-fn inductor(start: Point, end: Point, length_um: i64) -> Cmd {
-    Cmd::Microwave(MicrowaveCmd::Inductor { start, end, length_um, name: "L".into(), track_width_um: 250 })
+fn inductor(start: Point, end: Point, length_nm: i64) -> Cmd {
+    Cmd::Microwave(MicrowaveCmd::Inductor { start, end, length_nm, name: "L".into(), track_width_nm: 250_000 })
 }
 
 /// The segments of the coil as `(start, end)` pairs, in the footprint's frame.
@@ -425,7 +425,7 @@ fn coil(b: &Board, reference: &str) -> Vec<(Point, Point)> {
         .iter()
         .map(|g| match g {
             Shape::Segment { layer, stroke_width, start, end, .. } => {
-                assert_eq!((layer.as_str(), *stroke_width), ("F.Cu", 250), "a segment of the track's width on the footprint's layer");
+                assert_eq!((layer.as_str(), *stroke_width), ("F.Cu", 250_000), "a segment of the track's width on the footprint's layer");
                 (*start, *end)
             }
             other => panic!("a segment, not {other:?}"),
@@ -443,8 +443,8 @@ fn path_length(segments: &[(Point, Point)]) -> f64 {
 fn an_inductor_is_an_s_shaped_coil_between_the_two_points() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    let (start, end) = (p(20_000, 20_000), p(20_000, 30_000));
-    b.apply(&inductor(start, end, 30_000)).unwrap();
+    let (start, end) = (p(20_000_000, 20_000_000), p(20_000_000, 30_000_000));
+    b.apply(&inductor(start, end, 30_000_000)).unwrap();
     let bp = part(&b, "REF1");
     assert_eq!((bp.footprint.as_str(), bp.value.as_deref()), ("mw_inductor", Some("L")), "`LIB_ID( wxEmptyString, \"mw_inductor\" )` and the value the dialog asked for");
     let f = pose(&b, "REF1");
@@ -452,24 +452,24 @@ fn an_inductor_is_an_s_shaped_coil_between_the_two_points() {
     let fp = def(&b, "REF1");
     // two round pads of the track width: 1 at the end, 2 at the start
     assert_eq!(fp.pads.len(), 2);
-    assert_eq!((fp.pads[0].number.as_str(), fp.pads[0].at, fp.pads[0].shape, fp.pads[0].size), ("1", p(0, 0), LibraryPadShape::Circle, (250, 250)));
-    assert_eq!((fp.pads[1].number.as_str(), fp.pads[1].at), ("2", p(0, -10_000)));
+    assert_eq!((fp.pads[0].number.as_str(), fp.pads[0].at, fp.pads[0].shape, fp.pads[0].size), ("1", p(0, 0), LibraryPadShape::Circle, (250_000, 250_000)));
+    assert_eq!((fp.pads[1].number.as_str(), fp.pads[1].at), ("2", p(0, -10_000_000)));
     assert!(fp.pads.iter().all(|p| p.layers == ["F.Cu"] && p.kind == PadKind::Smd));
     // the coil
     let segs = coil(&b, "REF1");
     assert!(segs.len() > 50, "arcs are many chords");
-    assert_eq!(segs[0].0, p(0, -10_000), "it starts at pad 2");
+    assert_eq!(segs[0].0, p(0, -10_000_000), "it starts at pad 2");
     assert_eq!(segs.last().unwrap().1, p(0, 0), "and ends at pad 1");
     assert!(segs.windows(2).all(|w| w[0].1 == w[1].0), "one connected path");
     let length = path_length(&segs);
-    assert!((length - 30_000.0).abs() < 0.01 * 30_000.0, "the coil is {length} um long for 30000");
-    assert!(segs.iter().all(|(a, b)| (-10_000..=0).contains(&a.y) && (-10_000..=0).contains(&b.y)), "between the two points");
-    assert!(segs.iter().all(|(a, _)| a.x.abs() < 4_000), "within the room of half the span");
+    assert!((length - 30_000_000.0).abs() < 0.01 * 30_000_000.0, "the coil is {length} nm long for 30 mm");
+    assert!(segs.iter().all(|(a, b)| (-10_000_000..=0).contains(&a.y) && (-10_000_000..=0).contains(&b.y)), "between the two points");
+    assert!(segs.iter().all(|(a, _)| a.x.abs() < 4_000_000), "within the room of half the span");
     // the texts: a text height above and below the middle of the coil
     let edit = &b.design().drawings.as_ref().unwrap().footprint_edits[0];
-    assert_eq!(edit.reference.as_ref().unwrap().at, p(0, -5_000 - 1_000), "the Reference above the middle");
-    assert_eq!(edit.value.as_ref().unwrap().at, p(0, -5_000 + 1_000), "the Value below it");
-    assert_eq!(fp.texts[0].at, p(0, 2_500), "the `${{REFERENCE}}` text keeps its place at the anchor");
+    assert_eq!(edit.reference.as_ref().unwrap().at, p(0, -5_000_000 - 1_000_000), "the Reference above the middle");
+    assert_eq!(edit.value.as_ref().unwrap().at, p(0, -5_000_000 + 1_000_000), "the Value below it");
+    assert_eq!(fp.texts[0].at, p(0, 2_500_000), "the `${{REFERENCE}}` text keeps its place at the anchor");
 }
 
 /// The coil is worked out for a vertical one and turned to where the two points are: a horizontal span and a slanted one give a coil of the same length that starts and ends where they do.
@@ -477,7 +477,7 @@ fn an_inductor_is_an_s_shaped_coil_between_the_two_points() {
 fn an_inductor_turns_to_where_its_two_points_are() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    let cases = [(p(10_000, 10_000), p(20_000, 10_000)), (p(30_000, 30_000), p(20_000, 30_000)), (p(10_000, 40_000), p(16_000, 48_000))];
+    let cases = [(p(10_000_000, 10_000_000), p(20_000_000, 10_000_000)), (p(30_000_000, 30_000_000), p(20_000_000, 30_000_000)), (p(10_000_000, 40_000_000), p(16_000_000, 48_000_000))];
     for (i, (s, e)) in cases.iter().enumerate() {
         let min = (((e.x - s.x) as f64).powi(2) + ((e.y - s.y) as f64).powi(2)).sqrt();
         let want = (min * 3.0).round() as i64;
@@ -494,18 +494,18 @@ fn an_inductor_turns_to_where_its_two_points_are() {
 fn a_length_the_coil_cannot_have_is_refused_with_kicads_message() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    let (start, end) = (p(20_000, 20_000), p(20_000, 30_000));
+    let (start, end) = (p(20_000_000, 20_000_000), p(20_000_000, 30_000_000));
     for (length, message) in [
-        (9_000, "Requested length < minimum length"),
-        (11_000, "Requested length too small"),
-        (15_000, "Requested length can't be represented"),
-        (100_000, "Requested length too large"),
+        (9_000_000, "Requested length < minimum length"),
+        (11_000_000, "Requested length too small"),
+        (15_000_000, "Requested length can't be represented"),
+        (100_000_000, "Requested length too large"),
     ] {
         let e = b.apply(&inductor(start, end, length)).unwrap_err();
         assert_eq!(e[0].hint.as_deref(), Some(message), "length {length}");
     }
     // the shortest that works is the same as the longest that does not
-    assert!(b.apply(&inductor(start, end, 20_000)).is_ok());
+    assert!(b.apply(&inductor(start, end, 20_000_000)).is_ok());
     assert_eq!(b.design().drawings.as_ref().unwrap().board_parts.len(), 1, "only the one that worked");
 }
 
@@ -513,28 +513,28 @@ fn a_length_the_coil_cannot_have_is_refused_with_kicads_message() {
 fn an_inductor_needs_two_points_a_name_and_a_track() {
     let model = ConstraintModel::default();
     let mut b = board(&model);
-    let e = b.apply(&inductor(p(1_000, 1_000), p(1_000, 1_000), 5_000)).unwrap_err();
+    let e = b.apply(&inductor(p(1_000_000, 1_000_000), p(1_000_000, 1_000_000), 5_000_000)).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_microwave");
-    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_um: 20_000, name: "  ".into(), track_width_um: 250 })).unwrap_err();
+    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000_000), length_nm: 20_000_000, name: "  ".into(), track_width_nm: 250_000 })).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_microwave");
-    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_um: 20_000, name: "L".into(), track_width_um: 0 })).unwrap_err();
+    let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000_000), length_nm: 20_000_000, name: "L".into(), track_width_nm: 0 })).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_microwave");
     // a value with a character `FOOTPRINT_NAME_VALIDATOR` does not take
     for bad in ["L/1", "L:2", "L%", "a\"b"] {
-        let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_um: 20_000, name: bad.into(), track_width_um: 250 })).unwrap_err();
+        let e = b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000_000), length_nm: 20_000_000, name: bad.into(), track_width_nm: 250_000 })).unwrap_err();
         assert_eq!(e[0].check, "ops_bad_microwave", "{bad}");
     }
     // the value is what the dialog's "Component value:" holds
-    b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000), length_um: 20_000, name: "L22".into(), track_width_um: 250 })).unwrap();
+    b.apply(&Cmd::Microwave(MicrowaveCmd::Inductor { start: p(0, 0), end: p(0, 10_000_000), length_nm: 20_000_000, name: "L22".into(), track_width_nm: 250_000 })).unwrap();
     assert_eq!(part(&b, "REF1").value.as_deref(), Some("L22"));
 }
 
 /// The S shape itself, in KiCad's nanometres: the corners start at the start point and end at the end point, and there are no more strands than the room allows.
 #[test]
 fn the_s_shape_runs_from_the_start_to_the_end() {
-    let SShape::Corners(c) = build_corners_s_shape((0, 0), (0, 10_000_000), 30_000_000, 250_000) else { panic!("a coil") };
-    assert_eq!((c[0], *c.last().unwrap()), ((0, 0), (0, 10_000_000)));
+    let SShape::Corners(c) = build_corners_s_shape((0, 0), (0, 10_000_000_000), 30_000_000_000, 250_000_000) else { panic!("a coil") };
+    assert_eq!((c[0], *c.last().unwrap()), ((0, 0), (0, 10_000_000_000)));
     // the first stub is straight down from the start by `stubs_len` (a tenth of the span), before the first arc
     assert_eq!((c[1].0, c[1].1 > 0), (0, true));
-    assert_eq!(build_corners_s_shape((0, 0), (0, 10_000_000), 9_000_000, 250_000), SShape::TooShort, "length is checked against the stubs and four quarter circles");
+    assert_eq!(build_corners_s_shape((0, 0), (0, 10_000_000_000), 9_000_000_000, 250_000_000), SShape::TooShort, "length is checked against the stubs and four quarter circles");
 }

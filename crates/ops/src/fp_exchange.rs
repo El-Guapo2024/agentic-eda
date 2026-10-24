@@ -210,7 +210,7 @@ impl Board<'_> {
     fn footprint_to_put(&self, name: &str, part: &Part, library: &BTreeMap<String, Footprint>, update: bool) -> Option<Footprint> {
         let mut found = self.design.footprint_library.as_ref().and_then(|l| l.by_name(name)).map(LibraryFootprint::to_engine_footprint).or_else(|| library.get(name).cloned());
         if found.is_none() && !update {
-            let probe = Part { reference: part.reference.clone(), mpn: None, lcsc: None, value: part.value.clone(), package: None, footprint: Some(name.to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+            let probe = Part { reference: part.reference.clone(), mpn: None, lcsc: None, value: part.value.clone(), package: None, footprint: Some(name.to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
             found = self.model.footprint_of(&probe);
         }
         found.map(|mut f| {

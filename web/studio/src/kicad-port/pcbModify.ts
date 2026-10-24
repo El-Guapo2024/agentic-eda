@@ -93,13 +93,13 @@ interface WorkLine {
 }
 
 export type LineRoutine =
-  | { kind: "fillet"; radiusUm: number }
-  | { kind: "chamfer"; setbackUm: number }
-  | { kind: "dogbone"; radiusUm: number; addSlots: boolean; boardOutline: readonly (readonly Pt[])[] }
+  | { kind: "fillet"; radiusNm: number }
+  | { kind: "chamfer"; setbackNm: number }
+  | { kind: "dogbone"; radiusNm: number; addSlots: boolean; boardOutline: readonly (readonly Pt[])[] }
   | { kind: "extend" };
 
 /** The unit KiCad's dialogs default to (`pcbIUScale.mmToIU( 1 )`), in micrometres. */
-export const DEFAULT_LINE_OP_SIZE_UM = 1000;
+export const DEFAULT_LINE_OP_SIZE_NM = 1_000_000;
 
 /**
  * The refusal `EDIT_TOOL::ModifyLines` gives before it even asks for parameters: its segment count
@@ -196,7 +196,7 @@ export function modifyLines(shapes: readonly Shape[], routine: LineRoutine): Mod
         const shared = sharedEndpointRefs(segA, segB);
         if (!shared) return;
         if (segsParallel(segA, segB)) return;
-        const arc = arcFromFillet(segA, segB, routine.radiusUm * 1000);
+        const arc = arcFromFillet(segA, segB, routine.radiusNm);
         if (!arc) {
           failures++;
           return;
@@ -235,7 +235,7 @@ export function modifyLines(shapes: readonly Shape[], routine: LineRoutine): Mod
       case "chamfer": {
         // "If the segments share an endpoint, we won't try to chamfer them" -- otherwise not an error.
         if (!sharedEndpoint(segA, segB)) return;
-        const setback = routine.setbackUm * 1000;
+        const setback = routine.setbackNm;
         const res = computeChamferPoints(segA, segB, setback, setback);
         if (!res) {
           failures++;
@@ -263,10 +263,10 @@ export function modifyLines(shapes: readonly Shape[], routine: LineRoutine): Mod
         if (maxLen === 0) return;
         const bisector = vadd(resize(vecA, maxLen), resize(vecB, maxLen));
         if (norm(bisector) === 0) return;
-        const sampleDir = resize([-bisector[0], -bisector[1]], Math.min(1000, routine.radiusUm * 1000));
+        const sampleDir = resize([-bisector[0], -bisector[1]], Math.min(1000, routine.radiusNm));
         const sample = vadd(corner, sampleDir);
         if (!pointInRings(boardOutline, sample)) return; // "corner not inward"
-        const res = computeDogbone(segA, segB, routine.radiusUm * 1000, routine.addSlots);
+        const res = computeDogbone(segA, segB, routine.radiusNm, routine.addSlots);
         if (!res) {
           failures++;
           return;
@@ -456,11 +456,11 @@ export function simplifyChain(points: readonly V[], closed: boolean, tolerance: 
 }
 
 /** `EDIT_TOOL::SimplifyPolygons` on one polygon ring in micrometres: the simplified ring, or null if it did not change. */
-export function simplifyPolygonRing(pts: readonly Pt[], toleranceUm: number): [number, number][] | null {
+export function simplifyPolygonRing(pts: readonly Pt[], toleranceNm: number): [number, number][] | null {
   const simplified = simplifyChain(
     pts.map((p) => toIU(p)),
     true,
-    toleranceUm * 1000
+    toleranceNm
   ).map((p) => fromIU(p));
   if (simplified.length === pts.length && simplified.every((p, i) => p[0] === pts[i]![0] && p[1] === pts[i]![1])) return null;
   return simplified;
@@ -591,14 +591,14 @@ function connectPair(p0: HealShape, p1: HealShape): boolean {
 /**
  * `ConnectBoardShapes( shapeList, epsilon )` (fix_board_shape.cpp), the body of
  * `EDIT_TOOL::HealShapes`: walk the selected segments/arcs/curves end to end
- * and snap each pair of neighbouring end points (closer than `toleranceUm`)
+ * and snap each pair of neighbouring end points (closer than `toleranceNm`)
  * together. The k-d tree search is a brute-force scan returning the same two
  * nearest end points.
  */
-export function healShapes(shapes: readonly Shape[], toleranceUm: number): ModifyResult {
+export function healShapes(shapes: readonly Shape[], toleranceNm: number): ModifyResult {
   const work = shapes.map(toHeal).filter((s): s is HealShape => s !== null);
   const before = work.map((w) => JSON.stringify(w));
-  const eps = toleranceUm * 1000;
+  const eps = toleranceNm;
 
   // Every end point of every shape (two per shape), in the adaptor's order.
   const endpoints = (): { p: V; shape: HealShape }[] => work.flatMap((s) => [{ p: s.start, shape: s }, { p: s.end, shape: s }]);

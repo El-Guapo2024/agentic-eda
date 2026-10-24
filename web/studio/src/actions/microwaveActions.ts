@@ -23,7 +23,7 @@ import {
   VALUE_LABEL,
   arcStubAngleMillideg,
   inductorEnd,
-  inductorMinLengthUm,
+  inductorMinLengthNm,
   isValidValueName,
   lengthFromText,
   lengthText,
@@ -57,7 +57,7 @@ let shapeScalesRead = false;
 
 /** `GetCurrentTrackWidth()`: the track width the router would draw with now. */
 function currentTrackWidth(st: StudioState): number {
-  return st.currentTrackWidthUm ?? st.board?.board_rules?.track_width ?? 250;
+  return st.currentTrackWidthNm ?? st.board?.board_rules?.track_width ?? 250_000;
 }
 
 export function registerMicrowaveActions(m: Map<string, (param?: unknown) => void>, ctx: SweepCtx): void {
@@ -100,14 +100,14 @@ async function askFootprint(ctx: SweepCtx, tool: FootprintTool, at: PointXY): Pr
       return null;
     }
     shapeScalesRead = true;
-    return { verb: "function_shape", at, file: a.file, kind: a.kind, size_x_um: shapeSizeOverride(a.sizeX, a.shownX, units), size_y_um: shapeSizeOverride(a.sizeY, a.shownY, units), track_width_um: track };
+    return { verb: "function_shape", at, file: a.file, kind: a.kind, size_x_nm: shapeSizeOverride(a.sizeX, a.shownX, units), size_y_nm: shapeSizeOverride(a.sizeY, a.shownY, units), track_width_nm: track };
   }
 
   // `WX_TEXT_ENTRY_DIALOG dlg( editFrame, msg, _( "Create Microwave Footprint" ), editFrame->StringFromValue( gap_size ) )`: it starts at the track width
   const text = await askText({ title: MICROWAVE_TITLE, label: SIZE_LABEL[tool], initial: lengthText(track, units) });
   if (text === null) return null;
   const size = lengthFromText(text, units);
-  if (tool !== "arc_stub") return { verb: tool, at, size_um: size, track_width_um: track };
+  if (tool !== "arc_stub") return { verb: tool, at, size_nm: size, track_width_nm: track };
 
   const angleText = await askText({ title: MICROWAVE_TITLE, label: ANGLE_LABEL, initial: ANGLE_DEFAULT });
   if (angleText === null) return null;
@@ -116,7 +116,7 @@ async function askFootprint(ctx: SweepCtx, tool: FootprintTool, at: PointXY): Pr
     toast(INCORRECT_NUMBER);
     return null;
   }
-  return { verb: "arc_stub", at, radius_um: size, angle_millideg: arcStubAngleMillideg(degrees), track_width_um: track };
+  return { verb: "arc_stub", at, radius_nm: size, angle_millideg: arcStubAngleMillideg(degrees), track_width_nm: track };
 }
 
 /**
@@ -183,18 +183,18 @@ function startInductorTool(ctx: SweepCtx): void {
     const st = api.getState();
     const units = st.units;
     const track = currentTrackWidth(st);
-    const lengthAnswer = await askText({ title: MICROWAVE_TITLE, label: LENGTH_LABEL, initial: lengthTextAtLeast(inductorMinLengthUm(start, end), units) });
+    const lengthAnswer = await askText({ title: MICROWAVE_TITLE, label: LENGTH_LABEL, initial: lengthTextAtLeast(inductorMinLengthNm(start, end), units) });
     if (lengthAnswer === null) return;
     const length = lengthFromText(lengthAnswer, units);
     // the length is judged before the value is asked: `aErrorMessage` and `ShowInfoBarError`
-    const verdict = await checkInductor({ start, end, length_um: length, track_width_um: track }).catch(() => null);
+    const verdict = await checkInductor({ start, end, length_nm: length, track_width_nm: track }).catch(() => null);
     if (verdict && !verdict.ok) {
       toast(verdict.message ?? "The inductor cannot be made.");
       return;
     }
     const name = await askText({ title: MICROWAVE_TITLE, label: VALUE_LABEL, initial: VALUE_DEFAULT, accept: isValidValueName, hint: 'A footprint name cannot have any of  % $ < > " \\ / :  or a tab or a line break in it.' });
     if (name === null) return;
-    await put(ctx, { verb: "inductor", start, end, length_um: length, name, track_width_um: track });
+    await put(ctx, { verb: "inductor", start, end, length_nm: length, name, track_width_nm: track });
   };
 
   first();

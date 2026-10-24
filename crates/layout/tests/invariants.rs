@@ -181,7 +181,7 @@ fn assert_no_cross_net_collinear_overlap(g: &LayoutGraph, result: &LayoutResult)
 fn diamond() -> LayoutGraph {
     let mut g = LayoutGraph::new();
     for i in 0..4 {
-        g.add_node(Node::with_default_ports(i, 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000, 1_270_000));
     }
     g.add_edge(EdgeEndpoint { node: 0, port: 1 }, EdgeEndpoint { node: 1, port: 0 });
     g.add_edge(EdgeEndpoint { node: 0, port: 1 }, EdgeEndpoint { node: 2, port: 0 });
@@ -193,7 +193,7 @@ fn diamond() -> LayoutGraph {
 fn cycle_graph() -> LayoutGraph {
     let mut g = LayoutGraph::new();
     for i in 0..5 {
-        g.add_node(Node::with_default_ports(i, 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000, 1_270_000));
     }
     for i in 0..5 {
         g.add_edge(EdgeEndpoint { node: i, port: 1 }, EdgeEndpoint { node: (i + 1) % 5, port: 0 });
@@ -206,9 +206,9 @@ fn fanout8() -> LayoutGraph {
     // multiples of 2*grid so the default (width/2-offset) ports land
     // exactly on a grid point once the node's left edge is grid-snapped.
     let mut g = LayoutGraph::new();
-    g.add_node(Node::with_default_ports(0, 5080, 2540));
+    g.add_node(Node::with_default_ports(0, 5_080_000, 2_540_000));
     for i in 1..9 {
-        g.add_node(Node::with_default_ports(i, 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000, 1_270_000));
         g.add_edge(EdgeEndpoint { node: 0, port: 1 }, EdgeEndpoint { node: i, port: 0 });
     }
     g
@@ -233,7 +233,7 @@ fn random30(seed: u64) -> LayoutGraph {
     for i in 0..30 {
         // Widths are multiples of 2*grid so default (width/2) port offsets
         // land on a grid point once the node's left edge is grid-snapped.
-        g.add_node(Node::with_default_ports(i, 2540 + (i as i64 % 4) * 2540, 1270));
+        g.add_node(Node::with_default_ports(i, 2_540_000 + (i as i64 % 4) * 2_540_000, 1_270_000));
     }
     // Edges biased forward (mostly-increasing id) with occasional back edges
     // to exercise cycle breaking, ~1.5 edges/node.
@@ -354,7 +354,7 @@ fn crossings_bounded_on_known_graph() {
     // with a modest number of crossings, not the naive-order worst case.
     let mut g = LayoutGraph::new();
     for i in 0..8 {
-        g.add_node(Node::with_default_ports(i, 1270, 1270));
+        g.add_node(Node::with_default_ports(i, 1_270_000, 1_270_000));
     }
     // layer 0: 0,1,2,3  layer 1: 4,5,6,7, each layer-0 node connects to two
     // layer-1 nodes in a pattern designed to have crossings under identity

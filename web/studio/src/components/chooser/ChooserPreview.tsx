@@ -44,12 +44,12 @@ export function SymbolPreview({ symbol, unit, bodyStyle, status, height = 230 }:
       ctx.scale(view.scale, view.scale);
       paintSymbol(ctx, view, w, h, symbol, {
         selection: new Set(),
-        gridUm: 1270,
+        gridNm: 1_270_000,
         gridVisible: false,
         activeUnit: unit,
         activeBodyStyle: bodyStyle,
         drawState: null,
-        cursorUm: null,
+        cursorNm: null,
         movePreview: null,
         showElectricalTypes: false,
         showHiddenPins: false,
@@ -88,7 +88,7 @@ export function FootprintPreview({ footprint: raw, status, height = 200 }: { foo
       ctx.save();
       ctx.translate(view.x, view.y);
       ctx.scale(view.scale, view.scale);
-      paintFootprint(ctx, view, w, h, footprint, { selection: new Set(), gridUm: 0, gridVisible: false, drawState: null, cursorUm: null, movePreview: null });
+      paintFootprint(ctx, view, w, h, footprint, { selection: new Set(), gridNm: 0, gridVisible: false, drawState: null, cursorNm: null, movePreview: null });
       ctx.restore();
     },
     [footprint, height]

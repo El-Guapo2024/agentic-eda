@@ -1,0 +1,4 @@
+Design files written by the micrometre IR (schema 1): `eda import-kicad` of KiCad QA boards and schematics (qa/data of KiCad 8303b2ad and 25ec2335,
+named after their path), and two boards made with `eda board new examples/*.yaml` (mcu30: placed, routed, two GND zones filled, a text and a track), all
+by the binary of be562f2 (main before nanometres). `tests/nanometre_migration.rs` reads each with the current code and checks every length came out x1000.
+Never regenerate them with a newer binary: they are what an old board on disk looks like.

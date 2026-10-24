@@ -25,7 +25,7 @@ export function registerSchPinHelperActions(registry: ActionMap, ctx: SchEditCon
     const targets = pinHelperTargets(sch, [...state.selection]);
     if (targets.length === 0) return;
     // `grid.GetGridSize( GRID_HELPER_GRIDS::GRID_WIRES )`: a stub is one step of the wire grid
-    const grid = gridSizeFor("wires", state.schGridUm, getGridSettings("schematic").grids, getGridOverrides("schematic"));
+    const grid = gridSizeFor("wires", state.schGridNm, getGridSettings("schematic").grids, getGridOverrides("schematic"));
     const cmd = pinHelperCmd(kind, targets, grid);
     // where the pins are, to tell a stub's far end from the end at its pin
     const wanted = new Set(targets);

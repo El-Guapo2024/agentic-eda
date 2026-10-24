@@ -4,7 +4,7 @@
 
 use crate::kimath::Shape;
 use eda_model::footprint::placed_courtyard;
-use eda_model::ir::{Design, LabelSide, PadZoneFacts, Point, Shape as IrShape, Side, Text, Um};
+use eda_model::ir::{Design, LabelSide, PadZoneFacts, Point, Shape as IrShape, Side, Text, Nm};
 use eda_model::{ConstraintModel, Pad, PadKind, PadShape};
 use std::collections::HashMap;
 
@@ -55,7 +55,7 @@ pub fn from_ir_shape(s: &IrShape) -> Shape {
 /// `PCB_SHAPE::GetEffectiveShape` returns (a filled outline as a solid
 /// polygon plus its stroked edge, or the stroked edge alone).
 pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
-    let stroke = |segs: Vec<crate::kimath::Seg>, w: Um| -> Option<Shape> {
+    let stroke = |segs: Vec<crate::kimath::Seg>, w: Nm| -> Option<Shape> {
         if segs.is_empty() {
             None
         } else {
@@ -94,7 +94,7 @@ pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
                 let pts: Vec<Point> = (0..n)
                     .map(|i| {
                         let a = std::f64::consts::TAU * i as f64 / n as f64;
-                        Point { x: center.x + (r as f64 * a.cos()).round() as Um, y: center.y + (r as f64 * a.sin()).round() as Um }
+                        Point { x: center.x + (r as f64 * a.cos()).round() as Nm, y: center.y + (r as f64 * a.sin()).round() as Nm }
                     })
                     .collect();
                 out.extend(stroke(ring(&pts), *stroke_width));
@@ -146,13 +146,13 @@ pub struct DrcPad {
     pub unconnected: eda_model::padstack::UnconnectedLayers,
     /// Hole shape (round or slot), board space; `None` for a pure SMD pad.
     pub hole: Option<Shape>,
-    pub drill_round: Option<Um>,
+    pub drill_round: Option<Nm>,
     /// Board-space axis-aligned slot drill extent (see `rotated_extent_by`),
     /// `None` for a round-drilled or SMD pad.
-    pub drill_slot: Option<(Um, Um)>,
+    pub drill_slot: Option<(Nm, Nm)>,
     /// The pad's own (un-rotated) size and shape and its `PAD::GetOrientation()` (millidegrees, KiCad's sign convention, as
     /// the `.kicad_pcb` stores it).
-    pub size: (Um, Um),
+    pub size: (Nm, Nm),
     pub shape: PadShape,
     pub orientation_mdeg: i64,
     /// The pad's and footprint's zone-connection overrides, thermal gap / spoke width / spoke angle.
@@ -200,7 +200,7 @@ pub struct DrcTrackSeg {
     pub id: String,
     pub net: Option<String>,
     pub layer: String,
-    pub width: Um,
+    pub width: Nm,
     pub a: Point,
     pub b: Point,
     /// `Some(mid)` for a `PCB_ARC` (`a`/`b` are its start/end): one DRC
@@ -213,8 +213,8 @@ pub struct DrcVia {
     pub id: String,
     pub net: Option<String>,
     pub at: Point,
-    pub drill: Um,
-    pub diameter: Um,
+    pub drill: Nm,
+    pub diameter: Nm,
     pub from_layer: String,
     pub to_layer: String,
 }
@@ -223,7 +223,7 @@ pub struct DrcFootprint {
     pub id: String,
     pub side: Side,
     /// `(x0, y0, x1, y1)`.
-    pub courtyard: (Um, Um, Um, Um),
+    pub courtyard: (Nm, Nm, Nm, Nm),
     /// The real courtyard outlines in board space (`FOOTPRINT::GetCourtyard`),
     /// when the footprint has them (`Footprint::courtyard_outlines`); empty
     /// means only the `courtyard` box is known.
@@ -276,13 +276,13 @@ pub struct DrcPadMask {
     /// The pad's full layer set (`PAD::GetLayerSet`); empty = derive from kind.
     pub layers: Vec<String>,
     /// `PADSTACK::SolderMaskMargin` -- `None` inherits.
-    pub margin: Option<Um>,
+    pub margin: Option<Nm>,
     pub tent_front: Option<bool>,
     pub tent_back: Option<bool>,
     pub pin_type: String,
     pub shape: PadShape,
     /// The pad's local (unrotated) size.
-    pub size: (Um, Um),
+    pub size: (Nm, Nm),
 }
 
 #[derive(Clone, Default)]
@@ -295,7 +295,7 @@ pub struct DrcViaMask {
 pub struct DrcFpMask {
     pub id: String,
     /// `FOOTPRINT::GetLocalSolderMaskMargin`.
-    pub margin: Option<Um>,
+    pub margin: Option<Nm>,
     /// `FOOTPRINT::AllowSolderMaskBridges`.
     pub allow_bridges: bool,
     /// `FOOTPRINT::m_netTiePadGroups`, verbatim.
@@ -313,9 +313,9 @@ pub struct DrcGraphic {
     /// `GetEffectiveShape` -- a `SHAPE_COMPOUND`'s children.
     pub shapes: Vec<Shape>,
     /// `m_solderMaskMargin`.
-    pub margin: Option<Um>,
+    pub margin: Option<Nm>,
     pub filled: bool,
-    pub width: Um,
+    pub width: Nm,
     /// `Some` for a mask-only pad (`PCB_PAD_T`).
     pub pad: Option<DrcGraphicPad>,
 }
@@ -353,11 +353,11 @@ pub struct DrcBoard {
 /// `eda_model::footprint`'s private `rotated_extent_by`, duplicated here
 /// rather than exposed from `eda_model` to avoid widening that crate's
 /// public surface for a five-line rotation helper.
-fn rotated_extent_by(rot_millideg: i64, size: (Um, Um)) -> (Um, Um) {
+fn rotated_extent_by(rot_millideg: i64, size: (Nm, Nm)) -> (Nm, Nm) {
     let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
     let (w, h) = (size.0 as f64, size.1 as f64);
-    ((w * cos.abs() + h * sin.abs()).round() as Um, (w * sin.abs() + h * cos.abs()).round() as Um)
+    ((w * cos.abs() + h * sin.abs()).round() as Nm, (w * sin.abs() + h * cos.abs()).round() as Nm)
 }
 
 /// The copper shape of a `size`-sized pad of `shape` centred at `center` --
@@ -365,14 +365,14 @@ fn rotated_extent_by(rot_millideg: i64, size: (Um, Um)) -> (Um, Um) {
 /// stadium: KiCad's `SHAPE_SEGMENT` oval construction) since `size` is
 /// already axis-aligned (see the module doc and the crate-level fidelity
 /// notes on non-90-degree rotation).
-fn shape_of(center: Point, size: (Um, Um), shape: PadShape, roundrect_ratio: Option<f64>) -> Shape {
+fn shape_of(center: Point, size: (Nm, Nm), shape: PadShape, roundrect_ratio: Option<f64>) -> Shape {
     let (w, h) = size;
     match shape {
         PadShape::Circle => Shape::Circle { c: center, r: w.max(h) / 2 },
         // A trapezoid, a chamfered rectangle and a custom pad are built from their pieces (`pad_shape::pad_copper`); the box is the stand-in.
         PadShape::Rect | PadShape::Trapezoid | PadShape::ChamferedRect | PadShape::Custom => Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 },
         PadShape::RoundRect => {
-            let r = (roundrect_ratio.unwrap_or(0.25) * w.min(h) as f64).round() as Um;
+            let r = (roundrect_ratio.unwrap_or(0.25) * w.min(h) as f64).round() as Nm;
             Shape::RoundRect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2, r }
         }
         PadShape::Oval => {
@@ -391,7 +391,7 @@ fn shape_of(center: Point, size: (Um, Um), shape: PadShape, roundrect_ratio: Opt
 /// Board-space centre of a pad's local-frame `at`, mirroring
 /// `eda_model::footprint::to_board` (duplicated for the same reason as
 /// `rotated_extent_by`: it is `pub` already, so this one just forwards).
-fn pad_center(fp: &eda_model::ir::FootprintInstance, local: (Um, Um)) -> Point {
+fn pad_center(fp: &eda_model::ir::FootprintInstance, local: (Nm, Nm)) -> Point {
     eda_model::footprint::to_board(fp, local)
 }
 
@@ -411,15 +411,15 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     let footprint = model.footprint_of(part)?;
     let (hw, hh) = footprint.courtyard_half();
     // `eda_kicad::pcb`'s own constants, kept exactly for the *anchor
-    // position* (so this item sits where the real label really is): 300 µm
-    // per character of half-width for the Left/Right offset, a 700 µm gap
-    // above/below the courtyard (200 µm beside it).
-    let half_w_offset = 300 * fp.id.chars().count() as Um;
+    // position* (so this item sits where the real label really is): 0.3 mm
+    // per character of half-width for the Left/Right offset, a 0.7 mm gap
+    // above/below the courtyard (0.2 mm beside it).
+    let half_w_offset = 300_000 * fp.id.chars().count() as Nm;
     let local = match fp.label {
-        LabelSide::Above => (0, -(hh + 700)),
-        LabelSide::Below => (0, hh + 700),
-        LabelSide::Left => (-(hw + 200 + half_w_offset), 0),
-        LabelSide::Right => (hw + 200 + half_w_offset, 0),
+        LabelSide::Above => (0, -(hh + 700_000)),
+        LabelSide::Below => (0, hh + 700_000),
+        LabelSide::Left => (-(hw + 200_000 + half_w_offset), 0),
+        LabelSide::Right => (hw + 200_000 + half_w_offset, 0),
     };
     let center = pad_center(fp, local);
     // The label's own *rendered* extent, for collision purposes, is a
@@ -430,7 +430,7 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     // against the oracle across the example boards (see the task report);
     // still an approximation, so a residual mismatch against kicad-cli
     // remains on some boards.
-    let half_w_box = 220 * fp.id.chars().count() as Um;
+    let half_w_box = 220 * fp.id.chars().count() as Nm;
     let (w, h) = rotated_extent_by(fp.rot as i64, (half_w_box * 2, 500));
     Some(Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 })
 }
@@ -457,12 +457,12 @@ fn rotated_pad_shape(fp: &eda_model::ir::FootprintInstance, pad: &Pad, center: P
     let (w, h) = (pad.size.0 as f64, pad.size.1 as f64);
     let to_pt = |v: (f64, f64)| {
         let (dx, dy) = pad_frame_to_board(fp, pad.rot as i64, v);
-        Point { x: center.x + dx.round() as Um, y: center.y + dy.round() as Um }
+        Point { x: center.x + dx.round() as Nm, y: center.y + dy.round() as Nm }
     };
     match pad.shape {
         PadShape::Circle => Shape::Circle { c: center, r: pad.size.0.max(pad.size.1) / 2 },
         PadShape::Oval => {
-            let r = (w.min(h) / 2.0).round() as Um;
+            let r = (w.min(h) / 2.0).round() as Nm;
             let f = (w.max(h) - w.min(h)) / 2.0;
             let axis = if w >= h { (f, 0.0) } else { (0.0, f) };
             Shape::Stadium { a: to_pt((-axis.0, -axis.1)), b: to_pt(axis), r }
@@ -700,7 +700,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         if t.layer == "F.SilkS" || t.layer == "B.SilkS" {
             // A free `PCB_TEXT`: vertically centred unless a justify said otherwise (not
             // imported), never kept upright (`GetParentFootprint()` is null).
-            let size = (t.size_um, t.size_um);
+            let size = (t.size_nm, t.size_nm);
             let pen = crate::stroke_font::effective_pen_width(t.stroke_width, size, false);
             let halign = match t.justify {
                 eda_model::ir::TextJustify::Left => -1,
@@ -725,7 +725,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             // A text's true extent is a horizontal (or rotated) box; approximated
             // here as a circle sized to the font height, centred on its anchor --
             // adequate for a clearance check, not for exact overlap geometry.
-            silk_items.push(SilkItem { id: t.id.clone(), desc: format!("Text on {}", t.layer), layer: t.layer.clone(), shape: Shape::Circle { c: t.at, r: t.size_um / 2 } });
+            silk_items.push(SilkItem { id: t.id.clone(), desc: format!("Text on {}", t.layer), layer: t.layer.clone(), shape: Shape::Circle { c: t.at, r: t.size_nm / 2 } });
         }
     }
     if let Some(pl) = &design.placement {
@@ -755,11 +755,11 @@ impl DrcVia {
     }
 }
 
-/// `ARC_HIGH_DEF` (0.005 mm), in µm -- the chord error a DRC arc's
+/// `ARC_HIGH_DEF` (0.005 mm), in nm -- the chord error a DRC arc's
 /// polyline is held to (`SHAPE_ARC::ConvertToPolyline`'s default).
-pub const ARC_HIGH_DEF: f64 = 5.0;
+pub const ARC_HIGH_DEF: f64 = 5_000.0;
 
-/// An arc's polyline at most `max_error` µm from the true curve:
+/// An arc's polyline at most `max_error` nm from the true curve:
 /// `GetArcToSegmentCount` (360 / (2 * acos(1 - err/r)) segments per turn),
 /// over the arc's own sweep. A near-straight or degenerate arc gives its
 /// chord.

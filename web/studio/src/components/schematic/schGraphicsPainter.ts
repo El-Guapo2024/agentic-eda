@@ -13,7 +13,7 @@ import { layerColor } from "../canvas/layers";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 
 /** `DEFAULT_LINE_WIDTH_MILS` (6 mil), um: the width of a stroke with none of its own. */
-const DEFAULT_WIDTH_UM = 152.4;
+const DEFAULT_WIDTH_NM = 152_400;
 
 export function rgba(c: SchColor): string {
   return `rgba(${c.r},${c.g},${c.b},${(c.a / 255).toFixed(3)})`;
@@ -58,7 +58,7 @@ function tracePath(ctx: CanvasRenderingContext2D, g: SchGraphic): void {
       break;
     }
     case "circle":
-      ctx.arc(s.center.x, s.center.y, s.radius_um, 0, Math.PI * 2);
+      ctx.arc(s.center.x, s.center.y, s.radius_nm, 0, Math.PI * 2);
       break;
     case "arc": {
       const arc = arcFromThreePoints(pt(s.start), pt(s.mid), pt(s.end));
@@ -88,11 +88,11 @@ function tracePath(ctx: CanvasRenderingContext2D, g: SchGraphic): void {
 function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: SchGraphic, color: string): void {
   const s = g.shape;
   if (s.type !== "directive") return;
-  const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_um);
+  const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_nm);
   const hair = 1 / view.scale;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = Math.max(DEFAULT_WIDTH_UM, hair);
+  ctx.lineWidth = Math.max(DEFAULT_WIDTH_NM, hair);
   const shape = s.shape ?? "round";
   ctx.beginPath();
   if (shape === "dot" || shape === "round") {
@@ -109,37 +109,37 @@ function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: Sc
   }
   // The fields (`Netclass`, `Component Class`) stack along the pole, drawn small beside the flag.
   const lines = [s.netclass, s.component_class].filter((t): t is string => Boolean(t));
-  const size = 1270;
+  const size = 1_270_000;
   const spin = (((Math.round((s.orientation ?? 0) / 1000) % 360) + 360) % 360) as number;
   lines.forEach((text, i) => {
-    const off = 1000 + i * size * 1.4;
+    const off = 1_000_000 + i * size * 1.4;
     const [x, y] = d.flagCenter;
-    if (spin === 0 || spin === 180) drawStrokeText(ctx, text, x + off, y + size * 0.35, { sizeUm: size, justify: "left", color });
-    else drawStrokeText(ctx, text, x + size * 0.35, y - off, { sizeUm: size, angleRad: -Math.PI / 2, justify: "left", color });
+    if (spin === 0 || spin === 180) drawStrokeText(ctx, text, x + off, y + size * 0.35, { sizeNm: size, justify: "left", color });
+    else drawStrokeText(ctx, text, x + size * 0.35, y - off, { sizeNm: size, angleRad: -Math.PI / 2, justify: "left", color });
   });
 }
 
 function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string): void {
   const s = g.shape;
   if (s.type !== "text_box") return;
-  const widthUm = g.width_um && g.width_um > 0 ? g.width_um : DEFAULT_WIDTH_UM;
+  const widthNm = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
   const layout = layoutTextBox(
     {
       start: [s.start.x, s.start.y],
       end: [s.end.x, s.end.y],
       text: s.text,
       angle: s.angle ?? 0,
-      sizeUm: s.size_um,
+      sizeNm: s.size_nm,
       hAlign: s.h_align ?? "left",
       vAlign: s.v_align ?? "top",
-      marginUm: s.margin_um && s.margin_um > 0 ? s.margin_um : defaultTextBoxMargin(s.size_um, widthUm),
+      marginNm: s.margin_nm && s.margin_nm > 0 ? s.margin_nm : defaultTextBoxMargin(s.size_nm, widthNm),
     },
     measureStrokeText
   );
   ctx.save();
   ctx.translate(layout.origin[0], layout.origin[1]);
   if (layout.vertical) ctx.rotate(-Math.PI / 2);
-  for (const l of layout.lines) drawStrokeText(ctx, l.text, l.u, l.v, { sizeUm: s.size_um, justify: l.justify, italic: s.italic ?? false, thicknessUm: s.bold ? s.size_um / 5 : undefined, color });
+  for (const l of layout.lines) drawStrokeText(ctx, l.text, l.u, l.v, { sizeNm: s.size_nm, justify: l.justify, italic: s.italic ?? false, thicknessNm: s.bold ? s.size_nm / 5 : undefined, color });
   ctx.restore();
 }
 
@@ -160,7 +160,7 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
       ctx.restore();
       continue;
     }
-    const widthUm = g.width_um && g.width_um > 0 ? g.width_um : DEFAULT_WIDTH_UM;
+    const widthNm = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
     const fill = g.fill ?? "none";
     if (fill !== "none" && g.shape.type !== "arc" && g.shape.type !== "bezier") {
       tracePath(ctx, g);
@@ -176,8 +176,8 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
       ctx.globalAlpha = 1;
     }
     ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(selected ? widthUm * 1.6 : widthUm, hair * (selected ? 2.5 : 1));
-    const dash = g.shape.type === "rule_area" && !g.line_style ? dashPattern("dash", widthUm) : dashPattern(g.line_style, widthUm);
+    ctx.lineWidth = Math.max(selected ? widthNm * 1.6 : widthNm, hair * (selected ? 2.5 : 1));
+    const dash = g.shape.type === "rule_area" && !g.line_style ? dashPattern("dash", widthNm) : dashPattern(g.line_style, widthNm);
     ctx.setLineDash(dash);
     tracePath(ctx, g);
     ctx.stroke();
@@ -203,14 +203,14 @@ export function paintImages(ctx: CanvasRenderingContext2D, view: ViewTransform, 
       ctx.drawImage(el, x0, y0, x1 - x0, y1 - y0);
     } else {
       ctx.strokeStyle = layerColor("LAYER_NOTES");
-      ctx.lineWidth = Math.max(hair, 100);
+      ctx.lineWidth = Math.max(hair, 100_000);
       ctx.setLineDash([4 / view.scale, 3 / view.scale]);
       ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
     }
     if (selection.has(g.id)) {
       ctx.setLineDash([]);
       ctx.strokeStyle = layerColor("LAYER_SELECTION_SHADOWS");
-      ctx.lineWidth = Math.max(hair * 2.5, 300);
+      ctx.lineWidth = Math.max(hair * 2.5, 300_000);
       ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
     }
     ctx.restore();
@@ -222,9 +222,9 @@ export function drawSelectionBox(ctx: CanvasRenderingContext2D, view: ViewTransf
   const hair = 1 / view.scale;
   ctx.save();
   ctx.strokeStyle = layerColor("LAYER_SELECTION_SHADOWS");
-  ctx.lineWidth = Math.max(hair * 1.5, 100);
+  ctx.lineWidth = Math.max(hair * 1.5, 100_000);
   ctx.setLineDash([6 / view.scale, 4 / view.scale]);
-  ctx.strokeRect(box.minX - 200, box.minY - 200, box.maxX - box.minX + 400, box.maxY - box.minY + 400);
+  ctx.strokeRect(box.minX - 200_000, box.minY - 200_000, box.maxX - box.minX + 400_000, box.maxY - box.minY + 400_000);
   ctx.restore();
 }
 

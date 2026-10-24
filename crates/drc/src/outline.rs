@@ -2,8 +2,8 @@
 //! and `BOARD::GetBoardPolygonOutlines`, with the checks `DRC_TEST_PROVIDER_MISC::testOutline` makes of it.
 //!
 //! The items are the board's Edge.Cuts ([`eda_model::outline::edge_cuts_shapes`]): lines, arcs, circles, rectangles, polygons and
-//! Bezier curves. They are chained end to end, within [`CHAINING_EPSILON_UM`] (0.01 mm) of each other, into closed contours whose
-//! curves are flattened at [`MAX_ERROR_UM`] (0.005 mm); a contour inside an even number of others is an outline, inside an odd number a
+//! Bezier curves. They are chained end to end, within [`CHAINING_EPSILON_NM`] (0.01 mm) of each other, into closed contours whose
+//! curves are flattened at [`MAX_ERROR_NM`] (0.005 mm); a contour inside an even number of others is an outline, inside an odd number a
 //! hole of the one around it. Several outlines are allowed, as KiCad allows them; a closed shape on its own (a circle, a rectangle) is a
 //! contour; an open chain, a self-intersecting one and a contour crossing another are reported, not silently closed.
 //!
@@ -20,13 +20,13 @@
 //! - a closed shape's own start and end (a circle's centre and rim, a rectangle's corners) are not end points a chain can attach to;
 //! - arcs are always flattened (`aAllowUseArcsInPolygons` is false), the setting every consumer except the STEP export uses.
 //!
-//! Units are micrometres, like the rest of this workspace; KiCad's are nanometres.
+//! Units are nanometres, like the rest of this workspace and KiCad's.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use eda_clipper2::Point64;
-use eda_model::ir::{Design, Point, Shape, Um};
-use eda_model::outline::{self as edge, Arc, CHAINING_EPSILON_UM, MAX_ERROR_UM};
+use eda_model::ir::{Design, Point, Shape, Nm};
+use eda_model::outline::{self as edge, Arc, CHAINING_EPSILON_NM, MAX_ERROR_NM};
 use eda_shape_poly_set::{LineChain, ShapePolySet};
 
 /// One call of KiCad's `OUTLINE_ERROR_HANDLER` (`void( msg, itemA, itemB, pt )`): what is wrong, the Edge.Cuts items it concerns (their ids;
@@ -118,7 +118,7 @@ fn norm(a: Point, b: Point) -> f64 {
 }
 
 /// `close_enough`: the squared distance is at most the squared limit.
-fn close_enough(a: Point, b: Point, limit: Um) -> bool {
+fn close_enough(a: Point, b: Point, limit: Nm) -> bool {
     sq_dist(a, b) <= (limit as i128) * (limit as i128)
 }
 
@@ -144,7 +144,7 @@ struct Seg {
 }
 
 impl Seg {
-    fn bbox(&self) -> (Um, Um, Um, Um) {
+    fn bbox(&self) -> (Nm, Nm, Nm, Nm) {
         (self.a.x.min(self.b.x), self.a.y.min(self.b.y), self.a.x.max(self.b.x), self.a.y.max(self.b.y))
     }
 }
@@ -167,7 +167,7 @@ fn collinear_overlap(s: Seg, o: Seg, use_x_axis: bool, ignore_endpoints: bool) -
         }
     }
     let proj = (overlap_start + overlap_end) / 2;
-    let other = if seg1_end != seg1_start { coord1_start + rescale((proj - seg1_start) as i128, (coord1_end - coord1_start) as i128, (seg1_end - seg1_start) as i128) as Um } else { coord1_start };
+    let other = if seg1_end != seg1_start { coord1_start + rescale((proj - seg1_start) as i128, (coord1_end - coord1_start) as i128, (seg1_end - seg1_start) as i128) as Nm } else { coord1_start };
     Some(if use_x_axis { Point { x: proj, y: other } } else { Point { x: other, y: proj } })
 }
 
@@ -202,11 +202,11 @@ fn seg_intersect(s: Seg, o: Seg, ignore_endpoints: bool) -> Option<Point> {
     if ignore_endpoints && (param1_num == 0 || param1_num == determinant) && (param2_num == 0 || param2_num == determinant) {
         return None;
     }
-    Some(Point { x: o.a.x + rescale(param1_num, d2x, determinant) as Um, y: o.a.y + rescale(param1_num, d2y, determinant) as Um })
+    Some(Point { x: o.a.x + rescale(param1_num, d2x, determinant) as Nm, y: o.a.y + rescale(param1_num, d2y, determinant) as Nm })
 }
 
-fn ring_bbox(ring: &[Point]) -> (Um, Um, Um, Um) {
-    let mut bb = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+fn ring_bbox(ring: &[Point]) -> (Nm, Nm, Nm, Nm) {
+    let mut bb = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
     for p in ring {
         bb = (bb.0.min(p.x), bb.1.min(p.y), bb.2.max(p.x), bb.3.max(p.y));
     }
@@ -242,7 +242,7 @@ fn point_inside(chain: &LineChain, p: Point) -> bool {
     point_inside_ring(&to_ring(chain), p)
 }
 
-/// Is `p` on the boundary of the closed `chain` (`SHAPE_LINE_CHAIN::PointOnEdge`, to the micrometre)?
+/// Is `p` on the boundary of the closed `chain` (`SHAPE_LINE_CHAIN::PointOnEdge`, to the nanometre)?
 fn point_on_ring(chain: &LineChain, p: Point) -> bool {
     let n = chain.len();
     (0..n).any(|i| {
@@ -360,12 +360,12 @@ fn ends(s: &Shape) -> Option<(Point, Point)> {
 /// `PCB_SHAPE_ENDPOINTS_ADAPTOR` and its KD-tree, for `findNext` and the gap report.
 struct Endpoints {
     pts: Vec<(Point, usize)>,
-    grid: HashMap<(Um, Um), Vec<usize>>,
-    cell: Um,
+    grid: HashMap<(Nm, Nm), Vec<usize>>,
+    cell: Nm,
 }
 
 impl Endpoints {
-    fn new(shapes: &[Shape], epsilon: Um) -> Endpoints {
+    fn new(shapes: &[Shape], epsilon: Nm) -> Endpoints {
         let cell = epsilon.max(1);
         let mut pts = Vec::new();
         for (i, s) in shapes.iter().enumerate() {
@@ -374,7 +374,7 @@ impl Endpoints {
                 pts.push((b, i));
             }
         }
-        let mut grid: HashMap<(Um, Um), Vec<usize>> = HashMap::new();
+        let mut grid: HashMap<(Nm, Nm), Vec<usize>> = HashMap::new();
         for (k, (p, _)) in pts.iter().enumerate() {
             grid.entry((p.x.div_euclid(cell), p.y.div_euclid(cell))).or_default().push(k);
         }
@@ -382,7 +382,7 @@ impl Endpoints {
     }
 
     /// `knnSearch( 2 )` restricted to what `findNext` can accept: the end points within `epsilon` of `p`, nearest first, at most two.
-    fn two_within(&self, p: Point, epsilon: Um) -> Vec<(i128, usize)> {
+    fn two_within(&self, p: Point, epsilon: Nm) -> Vec<(i128, usize)> {
         let (cx, cy) = (p.x.div_euclid(self.cell), p.y.div_euclid(self.cell));
         let span = (epsilon + self.cell - 1) / self.cell;
         let mut found: Vec<(i128, usize, usize)> = Vec::new();
@@ -420,7 +420,7 @@ struct Converted {
 struct Chainer<'a> {
     shapes: &'a [Shape],
     max_error: f64,
-    epsilon: Um,
+    epsilon: Nm,
     index: Endpoints,
     /// `shapeOwners`: which shape a directed piece of a contour came from.
     owners: BTreeMap<(Point, Point), usize>,
@@ -516,7 +516,7 @@ impl<'a> Chainer<'a> {
             }
             Shape::Bezier { start, c1, c2, end, .. } => {
                 let (next, reverse) = if closer_to_first(*prev, start, end) { (end, false) } else { (start, true) };
-                let poly = eda_model::bezier::bezier_polyline(start, c1, c2, end, self.max_error.round() as Um);
+                let poly = eda_model::bezier::bezier_polyline(start, c1, c2, end, self.max_error.round() as Nm);
                 let walk: Vec<Point> = if reverse { poly.into_iter().rev().collect() } else { poly };
                 for pt in walk {
                     if *prev == pt {
@@ -579,7 +579,7 @@ fn nearest_on(s: Seg, p: Point) -> Point {
         return s.a;
     }
     let t = ((((p.x - s.a.x) as f64) * dx + ((p.y - s.a.y) as f64) * dy) / len2).clamp(0.0, 1.0);
-    Point { x: s.a.x + (t * dx).round() as Um, y: s.a.y + (t * dy).round() as Um }
+    Point { x: s.a.x + (t * dx).round() as Nm, y: s.a.y + (t * dy).round() as Nm }
 }
 
 /// `SEG::NearestPoints`.
@@ -593,7 +593,7 @@ fn nearest_points(a: Seg, b: Seg) -> (Point, Point) {
 
 /// `buildContourHierarchy`: for each contour, the contours that contain its first point.
 fn contour_hierarchy(contours: &[Contour]) -> BTreeMap<usize, Vec<usize>> {
-    let boxes: Vec<(Um, Um, Um, Um)> = contours.iter().map(|c| ring_bbox(&c.pts)).collect();
+    let boxes: Vec<(Nm, Nm, Nm, Nm)> = contours.iter().map(|c| ring_bbox(&c.pts)).collect();
     let mut map = BTreeMap::new();
     for (ii, c) in contours.iter().enumerate() {
         if c.pts.is_empty() {
@@ -626,7 +626,7 @@ fn has_overlapping_contours(contours: &[Contour]) -> bool {
 }
 
 /// `doConvertOutlineToPolygon`.
-fn convert(shapes: &[Shape], max_error: f64, epsilon: Um, allow_disjoint: bool) -> Converted {
+fn convert(shapes: &[Shape], max_error: f64, epsilon: Nm, allow_disjoint: bool) -> Converted {
     let mut c = Chainer { shapes, max_error, epsilon, index: Endpoints::new(shapes, epsilon), owners: BTreeMap::new(), errors: Vec::new() };
     let mut polys = ShapePolySet::new();
     if shapes.is_empty() {
@@ -863,7 +863,7 @@ fn check_self_intersections(polys: &ShapePolySet, c: &mut Chainer) -> bool {
 
 /// `ConvertOutlineToPolygon( aShapeList, aPolygons, aErrorMax, aChainingEpsilon, aAllowDisjoint, aErrorHandler )`: the contours the shapes
 /// chain into as outlines with holes, `true` when every contour closed and none crosses itself, and every error the chaining found.
-pub fn convert_outline_to_polygon(shapes: &[Shape], max_error: f64, chaining_epsilon: Um, allow_disjoint: bool) -> (ShapePolySet, bool, Vec<OutlineError>) {
+pub fn convert_outline_to_polygon(shapes: &[Shape], max_error: f64, chaining_epsilon: Nm, allow_disjoint: bool) -> (ShapePolySet, bool, Vec<OutlineError>) {
     let r = convert(shapes, max_error, chaining_epsilon, allow_disjoint);
     (r.polys, r.success, r.errors)
 }
@@ -871,7 +871,7 @@ pub fn convert_outline_to_polygon(shapes: &[Shape], max_error: f64, chaining_eps
 /// `BuildBoardPolygonOutlines( aBoard, aOutlines, aErrorMax, aChainingEpsilon, aInferOutlineIfNecessary )` over the board's Edge.Cuts
 /// items: [`convert_outline_to_polygon`] with disjoint outlines allowed, and, when `infer` and the edges do not make a closed outline,
 /// the rectangle round them. (The footprint pass is the importer's: see the module doc.)
-pub fn build_board_polygon_outlines(shapes: &[Shape], max_error: f64, chaining_epsilon: Um, infer: bool) -> BoardOutline {
+pub fn build_board_polygon_outlines(shapes: &[Shape], max_error: f64, chaining_epsilon: Nm, infer: bool) -> BoardOutline {
     let mut out = BoardOutline::default();
     if !shapes.is_empty() {
         let r = convert(shapes, max_error, chaining_epsilon, true);
@@ -882,7 +882,7 @@ pub fn build_board_polygon_outlines(shapes: &[Shape], max_error: f64, chaining_e
     if (!out.valid || out.polys.outline_count() == 0) && infer {
         if let Some((lo, hi)) = edge::bounding_box(shapes, max_error) {
             // A rectangle of no area is given a minimal size: one millimetre.
-            let (lo, hi) = if hi.x == lo.x || hi.y == lo.y { (Point { x: lo.x - 1_000, y: lo.y - 1_000 }, Point { x: hi.x + 1_000, y: hi.y + 1_000 }) } else { (lo, hi) };
+            let (lo, hi) = if hi.x == lo.x || hi.y == lo.y { (Point { x: lo.x - 1_000_000, y: lo.y - 1_000_000 }, Point { x: hi.x + 1_000_000, y: hi.y + 1_000_000 }) } else { (lo, hi) };
             out.polys.remove_all_contours();
             out.polys.add_outline(to_line_chain(&[lo, Point { x: lo.x, y: hi.y }, hi, Point { x: hi.x, y: lo.y }]));
             out.inferred = true;
@@ -907,7 +907,7 @@ pub fn board_outline(design: &Design, infer: bool) -> BoardOutline {
 
 /// [`board_outline`] of a list of Edge.Cuts items.
 pub fn board_outline_of(shapes: &[Shape], infer: bool) -> BoardOutline {
-    let mut out = build_board_polygon_outlines(shapes, MAX_ERROR_UM as f64, CHAINING_EPSILON_UM, infer);
+    let mut out = build_board_polygon_outlines(shapes, MAX_ERROR_NM as f64, CHAINING_EPSILON_NM, infer);
     // `aOutlines.Simplify()`: "make polygon strictly simple to avoid issues (especially in 3D viewer)".
     out.polys.simplify();
     out
@@ -934,18 +934,17 @@ pub fn refresh_outline_summary(design: &mut Design) {
 // ----------------------------------------------------------------------------------------------------------------------
 
 /// `TestBoardOutlinesGraphicItems`: shapes too small to chain (a few nanometres of line), and closed contours that touch or cross each
-/// other. `min_dist` is the smallest size a shape may have, micrometres.
-pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_error: f64, chaining_epsilon: Um) -> Vec<OutlineError> {
+/// other. `min_dist` is the smallest size a shape may have, nanometres.
+pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_error: f64, chaining_epsilon: Nm) -> Vec<OutlineError> {
     let mut errors = Vec::new();
     let min_dist = min_dist.max(0.0);
-    let nm = |um: f64| (um * 1000.0) as i64;
     for s in shapes {
         let id = Some(s.id().to_string());
         let (message, at) = match s {
             Shape::Rect { start, end, .. } => {
                 let dim = norm(*start, *end);
                 if dim <= min_dist {
-                    (format!("(rectangle has null or very small size: {} nm)", nm(dim)), *start)
+                    (format!("(rectangle has null or very small size: {} nm)", dim), *start)
                 } else {
                     continue;
                 }
@@ -953,7 +952,7 @@ pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_er
             Shape::Circle { center, end, .. } => {
                 let r = edge::circle_radius(*center, *end) as f64;
                 if r <= min_dist {
-                    (format!("(circle has null or very small radius: {} nm)", nm(r)), *center)
+                    (format!("(circle has null or very small radius: {} nm)", r), *center)
                 } else {
                     continue;
                 }
@@ -961,7 +960,7 @@ pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_er
             Shape::Segment { start, end, .. } => {
                 let dim = norm(*start, *end);
                 if dim <= min_dist {
-                    (format!("(segment has null or very small length: {} nm)", nm(dim)), *start)
+                    (format!("(segment has null or very small length: {} nm)", dim), *start)
                 } else {
                     continue;
                 }
@@ -970,7 +969,7 @@ pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_er
                 // The size of an arc is the length of its two halves' chords: no need for more.
                 let dim = norm(*start, *mid) + norm(*mid, *end);
                 if dim <= min_dist {
-                    (format!("(arc has null or very small size: {} nm)", nm(dim)), *start)
+                    (format!("(arc has null or very small size: {} nm)", dim), *start)
                 } else {
                     continue;
                 }
@@ -1020,7 +1019,7 @@ fn box_overlap_centre(a: &Shape, b: &Shape, max_error: f64) -> Option<Point> {
 
 /// `buildChainedClosedContour`, over all of `open`: the closed loops that segments, arcs and curves chain into, each with the first shape
 /// of its chain (the owner an error is reported against). Chains that do not close are not loops and are left out.
-fn chained_loops(shapes: &[Shape], open: &[usize], max_error: f64, epsilon: Um) -> Vec<(usize, Vec<Point>)> {
+fn chained_loops(shapes: &[Shape], open: &[usize], max_error: f64, epsilon: Nm) -> Vec<(usize, Vec<Point>)> {
     let subset: Vec<Shape> = open.iter().map(|&i| shapes[i].clone()).collect();
     let mut c = Chainer { shapes: &subset, max_error, epsilon, index: Endpoints::new(&subset, epsilon), owners: BTreeMap::new(), errors: Vec::new() };
     let mut remaining: Vec<bool> = vec![true; subset.len()];
@@ -1124,9 +1123,9 @@ pub fn check_edge_cuts(shapes: &[Shape]) -> Vec<OutlineError> {
         return Vec::new();
     }
     // `minSizeForValideGraphics`: 0.001 mm.
-    let mut errors = test_board_outlines_graphic_items(shapes, 1.0, MAX_ERROR_UM as f64, CHAINING_EPSILON_UM);
+    let mut errors = test_board_outlines_graphic_items(shapes, 1.0, MAX_ERROR_NM as f64, CHAINING_EPSILON_NM);
     // `maxError`: "not critical here: we do not use the outline shape" -- 0.05 mm.
-    let built = build_board_polygon_outlines(shapes, 50.0, CHAINING_EPSILON_UM, true);
+    let built = build_board_polygon_outlines(shapes, 50.0, CHAINING_EPSILON_NM, true);
     errors.extend(built.errors);
     if !built.valid && errors.is_empty() {
         // Not a single call of the handler, yet the outline is not valid: `testOutline`'s own wording.
@@ -1145,25 +1144,25 @@ mod tests {
     }
 
     fn line(id: &str, a: Point, b: Point) -> Shape {
-        Shape::Segment { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: 50, filled: false, start: a, end: b }
+        Shape::Segment { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: 50_000, filled: false, start: a, end: b }
     }
 
     fn arc(id: &str, a: Point, m: Point, b: Point) -> Shape {
-        Shape::Arc { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: 50, filled: false, start: a, mid: m, end: b }
+        Shape::Arc { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: 50_000, filled: false, start: a, mid: m, end: b }
     }
 
     fn circle(id: &str, c: Point, rim: Point) -> Shape {
-        Shape::Circle { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: 50, filled: false, center: c, end: rim }
+        Shape::Circle { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: 50_000, filled: false, center: c, end: rim }
     }
 
     fn rect(id: &str, a: Point, b: Point) -> Shape {
-        Shape::Rect { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: 50, filled: false, start: a, end: b }
+        Shape::Rect { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: 50_000, filled: false, start: a, end: b }
     }
 
     /// 40 x 30 mm with 5 mm rounded corners: four lines and four quarter arcs, in file order, not chained order.
     fn rounded_rectangle() -> Vec<Shape> {
-        let r = 5_000;
-        let (w, h) = (40_000, 30_000);
+        let r = 5_000_000;
+        let (w, h) = (40_000_000, 30_000_000);
         let k = (r as f64 * (1.0 - std::f64::consts::FRAC_1_SQRT_2)).round() as i64;
         vec![
             line("top", p(r, 0), p(w - r, 0)),
@@ -1184,7 +1183,7 @@ mod tests {
         assert_eq!(out.polys.outline_count(), 1);
         assert!(!out.polys.has_holes());
         // 40 x 30 minus the four corners' (1 - pi/4) r^2 is 1200 - 21.46 mm^2, to the polygon's 5 um.
-        let want = 40_000.0 * 30_000.0 - 4.0 * (1.0 - std::f64::consts::FRAC_PI_4) * 5_000.0 * 5_000.0;
+        let want = 40_000_000.0 * 30_000_000.0 - 4.0 * (1.0 - std::f64::consts::FRAC_PI_4) * 5_000_000.0 * 5_000_000.0;
         let got = out.polys.area();
         assert!((got - want).abs() / want < 5e-4, "area {got} against {want}");
         // And the corners really are curved: far more points than the eight a chord outline has.
@@ -1194,13 +1193,13 @@ mod tests {
     #[test]
     fn an_outline_of_arcs_only_is_one_contour() {
         // A 20 mm circle drawn as two half arcs: nothing but arcs, closing on their own ends.
-        let circle = vec![arc("upper", p(-10_000, 0), p(0, -10_000), p(10_000, 0)), arc("lower", p(10_000, 0), p(0, 10_000), p(-10_000, 0))];
+        let circle = vec![arc("upper", p(-10_000_000, 0), p(0, -10_000_000), p(10_000_000, 0)), arc("lower", p(10_000_000, 0), p(0, 10_000_000), p(-10_000_000, 0))];
         let out = board_outline_of(&circle, false);
         assert!(out.valid && out.errors.is_empty(), "{:?}", out.errors);
         assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 0));
-        let want = std::f64::consts::PI * 10_000.0 * 10_000.0;
+        let want = std::f64::consts::PI * 10_000_000.0 * 10_000_000.0;
         assert!((out.polys.area() - want).abs() / want < 1e-3, "area {} against {want}", out.polys.area());
-        assert!(out.contains(p(0, 0)) && !out.contains(p(10_500, 0)));
+        assert!(out.contains(p(0, 0)) && !out.contains(p(10_500_000, 0)));
 
         // Given the other way round, one of them reversed, it is the same outline.
         let mut turned = circle.clone();
@@ -1216,8 +1215,8 @@ mod tests {
         let lens = |tag: &str, half: i64, bulge: i64| {
             vec![arc(&format!("{tag}_up"), p(-half, 0), p(0, -bulge), p(half, 0)), arc(&format!("{tag}_down"), p(half, 0), p(0, bulge), p(-half, 0))]
         };
-        let mut both = lens("outer", 12_000, 6_000);
-        both.extend(lens("inner", 5_000, 2_000));
+        let mut both = lens("outer", 12_000_000, 6_000_000);
+        both.extend(lens("inner", 5_000_000, 2_000_000));
         let out = board_outline_of(&both, false);
         assert!(out.valid && out.errors.is_empty(), "{:?}", out.errors);
         assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 1), "the inner lens is a cutout of the outer one");
@@ -1242,23 +1241,23 @@ mod tests {
 
     #[test]
     fn a_circle_inside_the_outline_is_a_cutout() {
-        let mut items = vec![rect("board", p(0, 0), p(40_000, 30_000))];
-        items.push(circle("hole", p(20_000, 15_000), p(23_200, 15_000)));
+        let mut items = vec![rect("board", p(0, 0), p(40_000_000, 30_000_000))];
+        items.push(circle("hole", p(20_000_000, 15_000_000), p(23_200_000, 15_000_000)));
         let out = board_outline_of(&items, false);
         assert!(out.valid && out.errors.is_empty(), "{:?}", out.errors);
         assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 1));
-        let want = 40_000.0 * 30_000.0 - std::f64::consts::PI * 3_200.0 * 3_200.0;
+        let want = 40_000_000.0 * 30_000_000.0 - std::f64::consts::PI * 3_200_000.0 * 3_200_000.0;
         assert!((out.polys.area() - want).abs() / want < 1e-3, "{}", out.polys.area());
-        assert!(!out.contains(p(20_000, 15_000)), "the middle of the cutout is off the board");
-        assert!(out.contains(p(10_000, 10_000)));
+        assert!(!out.contains(p(20_000_000, 15_000_000)), "the middle of the cutout is off the board");
+        assert!(out.contains(p(10_000_000, 10_000_000)));
         assert!(out.contains(p(0, 0)), "an edge point is on the board");
     }
 
     #[test]
     fn a_slot_made_of_two_arcs_and_two_lines_is_a_cutout_too() {
         // A 10 x 3 mm stadium slot inside a 40 x 30 mm board.
-        let (cx, cy, r, half) = (20_000, 15_000, 1_500, 3_500);
-        let mut items = vec![rect("board", p(0, 0), p(40_000, 30_000))];
+        let (cx, cy, r, half) = (20_000_000, 15_000_000, 1_500_000, 3_500_000);
+        let mut items = vec![rect("board", p(0, 0), p(40_000_000, 30_000_000))];
         items.extend([
             line("slot_t", p(cx - half, cy - r), p(cx + half, cy - r)),
             arc("slot_r", p(cx + half, cy - r), p(cx + half + r, cy), p(cx + half, cy + r)),
@@ -1273,11 +1272,11 @@ mod tests {
 
     #[test]
     fn two_separate_outlines_are_allowed() {
-        let items = vec![rect("left", p(0, 0), p(10_000, 10_000)), rect("right", p(20_000, 0), p(30_000, 10_000))];
+        let items = vec![rect("left", p(0, 0), p(10_000_000, 10_000_000)), rect("right", p(20_000_000, 0), p(30_000_000, 10_000_000))];
         let out = board_outline_of(&items, false);
         assert!(out.valid && out.errors.is_empty(), "{:?}", out.errors);
         assert_eq!(out.polys.outline_count(), 2);
-        assert!(out.contains(p(5_000, 5_000)) && out.contains(p(25_000, 5_000)) && !out.contains(p(15_000, 5_000)));
+        assert!(out.contains(p(5_000_000, 5_000_000)) && out.contains(p(25_000_000, 5_000_000)) && !out.contains(p(15_000_000, 5_000_000)));
         // The main ring is the larger one; here they are equal, so either.
         assert_eq!(out.main_ring().len(), 4);
     }
@@ -1285,8 +1284,8 @@ mod tests {
     #[test]
     fn two_outlines_are_refused_where_disjoint_ones_are_not_allowed() {
         // The footprint pass of `BuildBoardPolygonOutlines` and any caller of `ConvertOutlineToPolygon` that wants one board.
-        let items = vec![rect("left", p(0, 0), p(10_000, 10_000)), rect("right", p(20_000, 0), p(30_000, 10_000))];
-        let (_, ok, errors) = convert_outline_to_polygon(&items, 5.0, 10, false);
+        let items = vec![rect("left", p(0, 0), p(10_000_000, 10_000_000)), rect("right", p(20_000_000, 0), p(30_000_000, 10_000_000))];
+        let (_, ok, errors) = convert_outline_to_polygon(&items, 5000.0, 10_000, false);
         assert!(!ok);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].message, "(multiple board outlines not supported)");
@@ -1295,22 +1294,22 @@ mod tests {
     #[test]
     fn an_island_inside_a_cutout_is_an_outline_again() {
         // A board, a hole in it, and a post in the hole.
-        let items = vec![rect("board", p(0, 0), p(40_000, 40_000)), rect("hole", p(10_000, 10_000), p(30_000, 30_000)), rect("post", p(15_000, 15_000), p(25_000, 25_000))];
+        let items = vec![rect("board", p(0, 0), p(40_000_000, 40_000_000)), rect("hole", p(10_000_000, 10_000_000), p(30_000_000, 30_000_000)), rect("post", p(15_000_000, 15_000_000), p(25_000_000, 25_000_000))];
         let out = board_outline_of(&items, false);
         assert!(out.valid, "{:?}", out.errors);
         assert_eq!(out.polys.outline_count(), 2);
-        assert!(out.contains(p(20_000, 20_000)) && !out.contains(p(12_000, 12_000)) && out.contains(p(5_000, 5_000)));
+        assert!(out.contains(p(20_000_000, 20_000_000)) && !out.contains(p(12_000_000, 12_000_000)) && out.contains(p(5_000_000, 5_000_000)));
     }
 
     #[test]
     fn an_open_outline_is_reported_where_it_is_open_and_not_closed_for_the_caller() {
         // A square whose bottom side has a 2 mm piece missing.
         let items = vec![
-            line("bottom_left", p(0, 0), p(4_000, 0)),
-            line("bottom_right", p(6_000, 0), p(10_000, 0)),
-            line("right", p(10_000, 0), p(10_000, 10_000)),
-            line("top", p(10_000, 10_000), p(0, 10_000)),
-            line("left", p(0, 10_000), p(0, 0)),
+            line("bottom_left", p(0, 0), p(4_000_000, 0)),
+            line("bottom_right", p(6_000_000, 0), p(10_000_000, 0)),
+            line("right", p(10_000_000, 0), p(10_000_000, 10_000_000)),
+            line("top", p(10_000_000, 10_000_000), p(0, 10_000_000)),
+            line("left", p(0, 10_000_000), p(0, 0)),
         ];
         let out = board_outline_of(&items, false);
         assert!(!out.valid);
@@ -1321,18 +1320,18 @@ mod tests {
         let mut named = [g.item_a.clone().unwrap_or_default(), g.item_b.clone().unwrap_or_default()];
         named.sort();
         assert_eq!(named, ["bottom_left".to_string(), "bottom_right".to_string()], "the two pieces either side of the gap");
-        assert_eq!(g.at, p(5_000, 0), "the middle of the gap");
+        assert_eq!(g.at, p(5_000_000, 0), "the middle of the gap");
         // `aInferOutlineIfNecessary`: KiCad then uses the rectangle round the edges.
         let inferred = board_outline_of(&items, true);
         assert!(!inferred.valid && inferred.inferred);
         assert_eq!(inferred.polys.outline_count(), 1);
         // 10 x 10 mm and half a line width (25 um) round it.
-        assert_eq!(inferred.polys.area(), 10_050.0 * 10_050.0);
+        assert_eq!(inferred.polys.area(), 10_050_000.0 * 10_050_000.0);
     }
 
     #[test]
     fn a_u_with_its_top_missing_is_open() {
-        let items = vec![line("a", p(0, 0), p(0, 12_000)), line("b", p(0, 12_000), p(10_000, 12_000)), line("c", p(10_000, 12_000), p(10_000, 0))];
+        let items = vec![line("a", p(0, 0), p(0, 12_000_000)), line("b", p(0, 12_000_000), p(10_000_000, 12_000_000)), line("c", p(10_000_000, 12_000_000), p(10_000_000, 0))];
         let out = board_outline_of(&items, false);
         assert!(!out.valid && out.polys.outline_count() == 0);
         assert!(out.errors.iter().any(|e| e.message == "(not a closed shape)"), "{:?}", out.errors);
@@ -1340,19 +1339,19 @@ mod tests {
 
     #[test]
     fn a_gap_wider_than_the_chaining_epsilon_is_open_and_a_narrower_one_is_not() {
-        let board = |gap: i64| vec![line("a", p(0, 0), p(10_000, 0)), line("b", p(10_000, gap), p(10_000, 10_000)), line("c", p(10_000, 10_000), p(0, 10_000)), line("d", p(0, 10_000), p(0, 0))];
-        assert!(board_outline_of(&board(9), false).valid, "9 um is under the 10 um epsilon");
-        assert!(!board_outline_of(&board(11), false).valid, "11 um is not");
+        let board = |gap: i64| vec![line("a", p(0, 0), p(10_000_000, 0)), line("b", p(10_000_000, gap), p(10_000_000, 10_000_000)), line("c", p(10_000_000, 10_000_000), p(0, 10_000_000)), line("d", p(0, 10_000_000), p(0, 0))];
+        assert!(board_outline_of(&board(9000), false).valid, "9 um is under the 10 um epsilon");
+        assert!(!board_outline_of(&board(11_000), false).valid, "11 um is not");
     }
 
     #[test]
     fn a_bow_tie_is_self_intersecting() {
         // Chains (0,0) -> (10,10) -> (10,0) -> (0,10) -> (0,0): the 1st and 3rd sides cross.
         let items = vec![
-            line("a", p(0, 0), p(10_000, 10_000)),
-            line("b", p(10_000, 10_000), p(10_000, 0)),
-            line("c", p(10_000, 0), p(0, 10_000)),
-            line("d", p(0, 10_000), p(0, 0)),
+            line("a", p(0, 0), p(10_000_000, 10_000_000)),
+            line("b", p(10_000_000, 10_000_000), p(10_000_000, 0)),
+            line("c", p(10_000_000, 0), p(0, 10_000_000)),
+            line("d", p(0, 10_000_000), p(0, 0)),
         ];
         let out = board_outline_of(&items, false);
         assert!(out.errors.iter().any(|e| e.message == "(self-intersecting)"), "{:?}", out.errors);
@@ -1362,11 +1361,11 @@ mod tests {
     fn a_tee_of_three_lines_is_reported_where_the_chain_runs_into_a_used_item() {
         // A square with a stub off one corner: the chain reaches a used shape that is not the one it started from.
         let items = vec![
-            line("a", p(0, 0), p(10_000, 0)),
-            line("b", p(10_000, 0), p(10_000, 10_000)),
-            line("c", p(10_000, 10_000), p(0, 10_000)),
-            line("d", p(0, 10_000), p(0, 0)),
-            line("stub", p(0, 0), p(-3_000, -3_000)),
+            line("a", p(0, 0), p(10_000_000, 0)),
+            line("b", p(10_000_000, 0), p(10_000_000, 10_000_000)),
+            line("c", p(10_000_000, 10_000_000), p(0, 10_000_000)),
+            line("d", p(0, 10_000_000), p(0, 0)),
+            line("stub", p(0, 0), p(-3_000_000, -3_000_000)),
         ];
         let out = board_outline_of(&items, false);
         assert!(!out.errors.is_empty(), "a stub off a corner is not a clean outline");
@@ -1375,48 +1374,48 @@ mod tests {
     #[test]
     fn a_circle_that_touches_the_outline_is_a_malformed_overlap_that_still_cuts_a_hole() {
         // The hole's rim is a polygon vertex on the board edge: contours that touch take the boolean route.
-        let items = vec![rect("board", p(0, 0), p(40_000, 30_000)), circle("notch", p(0, 15_000), p(3_000, 15_000))];
+        let items = vec![rect("board", p(0, 0), p(40_000_000, 30_000_000)), circle("notch", p(0, 15_000_000), p(3_000_000, 15_000_000))];
         let out = board_outline_of(&items, false);
         assert!(out.valid, "{:?}", out.errors);
         // Half the circle lies outside the board, so only the half inside is cut.
-        let cut = 40_000.0 * 30_000.0 - out.polys.area();
+        let cut = 40_000_000.0 * 30_000_000.0 - out.polys.area();
         assert!(cut > 0.0, "the circle's inside is taken out");
-        assert!(!out.contains(p(1_000, 15_000)) && out.contains(p(10_000, 15_000)));
+        assert!(!out.contains(p(1_000_000, 15_000_000)) && out.contains(p(10_000_000, 15_000_000)));
     }
 
     #[test]
     fn the_checks_of_the_drc_provider_find_what_chaining_does_not() {
         // A circle crossing the board edge: both are closed, valid contours and they overlap.
-        let items = vec![rect("board", p(0, 0), p(40_000, 30_000)), circle("hole", p(0, 15_000), p(5_000, 15_000))];
+        let items = vec![rect("board", p(0, 0), p(40_000_000, 30_000_000)), circle("hole", p(0, 15_000_000), p(5_000_000, 15_000_000))];
         let errors = check_edge_cuts(&items);
         assert!(errors.iter().any(|e| e.message == "(self-intersecting)" && e.item_a.as_deref() == Some("board") && e.item_b.as_deref() == Some("hole")), "{errors:?}");
         // A clean outline reports nothing, and a 1 nm line is a suspicious item.
         assert!(check_edge_cuts(&rounded_rectangle()).is_empty());
         let mut tiny = rounded_rectangle();
-        tiny.push(line("dot", p(5, 5), p(5, 5)));
+        tiny.push(line("dot", p(5000, 5000), p(5000, 5000)));
         let errors = check_edge_cuts(&tiny);
         assert!(errors.iter().any(|e| e.message.starts_with("(segment has null or very small length") && e.item_a.as_deref() == Some("dot")), "{errors:?}");
     }
 
     #[test]
     fn a_polygon_is_a_contour_by_itself_and_so_is_a_curve_chain() {
-        let poly = Shape::Polygon { id: "poly".into(), layer: EDGE_CUTS.into(), stroke_width: 50, filled: false, pts: vec![p(0, 0), p(20_000, 0), p(20_000, 20_000), p(0, 20_000)] };
+        let poly = Shape::Polygon { id: "poly".into(), layer: EDGE_CUTS.into(), stroke_width: 50_000, filled: false, pts: vec![p(0, 0), p(20_000_000, 0), p(20_000_000, 20_000_000), p(0, 20_000_000)] };
         let out = board_outline_of(&[poly], false);
         assert!(out.valid);
-        assert_eq!(out.polys.area(), 400_000_000.0);
+        assert_eq!(out.polys.area(), 400_000_000_000_000.0);
         // Two Bezier halves of a lens, end to end.
         let lens = vec![
-            Shape::Bezier { id: "up".into(), layer: EDGE_CUTS.into(), stroke_width: 50, filled: false, start: p(0, 0), c1: p(0, -8_000), c2: p(20_000, -8_000), end: p(20_000, 0) },
-            Shape::Bezier { id: "dn".into(), layer: EDGE_CUTS.into(), stroke_width: 50, filled: false, start: p(20_000, 0), c1: p(20_000, 8_000), c2: p(0, 8_000), end: p(0, 0) },
+            Shape::Bezier { id: "up".into(), layer: EDGE_CUTS.into(), stroke_width: 50_000, filled: false, start: p(0, 0), c1: p(0, -8_000_000), c2: p(20_000_000, -8_000_000), end: p(20_000_000, 0) },
+            Shape::Bezier { id: "dn".into(), layer: EDGE_CUTS.into(), stroke_width: 50_000, filled: false, start: p(20_000_000, 0), c1: p(20_000_000, 8_000_000), c2: p(0, 8_000_000), end: p(0, 0) },
         ];
         let out = board_outline_of(&lens, false);
         assert!(out.valid && out.errors.is_empty(), "{:?}", out.errors);
-        assert!(out.polys.area() > 100_000_000.0, "{}", out.polys.area());
+        assert!(out.polys.area() > 100_000_000_000_000.0, "{}", out.polys.area());
     }
 
     #[test]
     fn a_design_with_a_plain_polygon_outline_is_that_polygon() {
-        let ring = vec![p(0, 0), p(10_000, 0), p(10_000, 5_000), p(0, 5_000)];
+        let ring = vec![p(0, 0), p(10_000_000, 0), p(10_000_000, 5_000_000), p(0, 5_000_000)];
         let d = design_with(ring.clone(), vec![], false);
         let out = board_outline(&d, true);
         assert!(out.valid);
@@ -1425,7 +1424,7 @@ mod tests {
 
     fn design_with(outline: Vec<Point>, shapes: Vec<Shape>, is_shapes: bool) -> Design {
         Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: eda_model::ir::Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
@@ -1441,8 +1440,8 @@ mod tests {
 
     #[test]
     fn a_circle_drawn_on_a_polygon_board_is_a_cutout_and_a_shapes_outline_replaces_the_polygon() {
-        let ring = vec![p(0, 0), p(40_000, 0), p(40_000, 30_000), p(0, 30_000)];
-        let hole = circle("hole", p(20_000, 15_000), p(22_000, 15_000));
+        let ring = vec![p(0, 0), p(40_000_000, 0), p(40_000_000, 30_000_000), p(0, 30_000_000)];
+        let hole = circle("hole", p(20_000_000, 15_000_000), p(22_000_000, 15_000_000));
         // The polygon stays an item: the circle is a hole in it.
         let d = design_with(ring.clone(), vec![hole.clone()], false);
         let out = board_outline(&d, true);
@@ -1456,7 +1455,7 @@ mod tests {
         assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 1));
         refresh_outline_summary(&mut d);
         let summary = &d.placement.as_ref().expect("placement").outline;
-        assert!(summary.len() > 60 && summary.iter().all(|q| (0..=40_000).contains(&q.x) && (0..=30_000).contains(&q.y)), "{} points", summary.len());
+        assert!(summary.len() > 60 && summary.iter().all(|q| (0..=40_000_000).contains(&q.x) && (0..=30_000_000).contains(&q.y)), "{} points", summary.len());
     }
 
     /// The same cases on every run.
@@ -1464,7 +1463,7 @@ mod tests {
 
     impl Lcg {
         fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
             self.0 >> 33
         }
 
@@ -1484,19 +1483,19 @@ mod tests {
         // clean when the port was finished; this keeps a tenth of them in the fast tier.
         let mut r = Lcg(12345);
         for case in 0..300 {
-            let span = [200i64, 5_000, 50_000][case % 3];
-            let grid = [1i64, 10, 100][(case / 3) % 3];
+            let span = [200_000i64, 5_000_000, 50_000_000][case % 3];
+            let grid = [1_000i64, 10_000, 100_000][(case / 3) % 3];
             let mut shapes = Vec::new();
             for i in 0..r.range(1, 14) as usize {
                 let (id, layer) = (format!("s{i}"), EDGE_CUTS.to_string());
                 let (a, b, c) = (r.point(span, grid), r.point(span, grid), r.point(span, grid));
                 shapes.push(match r.range(0, 6) {
-                    0 | 1 => Shape::Segment { id, layer, stroke_width: 50, filled: false, start: a, end: b },
-                    2 => Shape::Arc { id, layer, stroke_width: 50, filled: false, start: a, mid: b, end: c },
-                    3 => Shape::Circle { id, layer, stroke_width: 50, filled: r.range(0, 1) == 1, center: a, end: b },
-                    4 => Shape::Rect { id, layer, stroke_width: 50, filled: false, start: a, end: b },
-                    5 => Shape::Polygon { id, layer, stroke_width: 50, filled: false, pts: vec![a, b, c] },
-                    _ => Shape::Bezier { id, layer, stroke_width: 50, filled: false, start: a, c1: b, c2: c, end: r.point(span, grid) },
+                    0 | 1 => Shape::Segment { id, layer, stroke_width: 50_000, filled: false, start: a, end: b },
+                    2 => Shape::Arc { id, layer, stroke_width: 50_000, filled: false, start: a, mid: b, end: c },
+                    3 => Shape::Circle { id, layer, stroke_width: 50_000, filled: r.range(0, 1) == 1, center: a, end: b },
+                    4 => Shape::Rect { id, layer, stroke_width: 50_000, filled: false, start: a, end: b },
+                    5 => Shape::Polygon { id, layer, stroke_width: 50_000, filled: false, pts: vec![a, b, c] },
+                    _ => Shape::Bezier { id, layer, stroke_width: 50_000, filled: false, start: a, c1: b, c2: c, end: r.point(span, grid) },
                 });
             }
             if case % 5 == 0 {

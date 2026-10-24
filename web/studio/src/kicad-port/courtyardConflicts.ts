@@ -11,7 +11,7 @@ import { carryPoint, splitCarried, type CarryPreview } from "./pcbCarry";
 export type Box = readonly [number, number, number, number];
 
 /** The move in progress (`StudioState.movePreview`): a carry, plus Pack and Move's per-footprint shift and which kind of move it is. */
-export type MovePreview = CarryPreview & { kind?: string; perRefOffsetUm?: Record<string, [number, number]> };
+export type MovePreview = CarryPreview & { kind?: string; perRefOffsetNm?: Record<string, [number, number]> };
 
 /** `SHAPE_POLY_SET::Collide` for two boxes: they overlap by more than touching. */
 export function boxesOverlap(a: Box, b: Box): boolean {
@@ -33,8 +33,8 @@ export function movedBox(p: Pick<Part, "ref" | "courtyard" | "at">, preview: Mov
     pts = corners.map((c) => carryPoint(preview, c));
   } else {
     // `drawFootprint`'s own transform: turn / flip about the anchor, then move (Pack and Move adds its per-footprint shift).
-    const own = preview.perRefOffsetUm?.[p.ref];
-    const [dx, dy] = [preview.dxUm + (own?.[0] ?? 0), preview.dyUm + (own?.[1] ?? 0)];
+    const own = preview.perRefOffsetNm?.[p.ref];
+    const [dx, dy] = [preview.dxNm + (own?.[0] ?? 0), preview.dyNm + (own?.[1] ?? 0)];
     const [ax, ay] = p.at ?? [(x0 + x1) / 2, (y0 + y1) / 2];
     const theta = (-(preview.rotateQuarterTurns ?? 0) * Math.PI) / 2;
     const [cos, sin] = [Math.round(Math.cos(theta)), Math.round(Math.sin(theta))];

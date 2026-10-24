@@ -1,7 +1,7 @@
 {
   "defaults": [
     {
-      "board_thickness_um": 1600,
+      "board_thickness_nm": 1600000,
       "copper_layers": 2,
       "stackup": {
         "layers": [
@@ -65,7 +65,7 @@
       }
     },
     {
-      "board_thickness_um": 1600,
+      "board_thickness_nm": 1600000,
       "copper_layers": 4,
       "stackup": {
         "layers": [
@@ -157,7 +157,7 @@
       }
     },
     {
-      "board_thickness_um": 1000,
+      "board_thickness_nm": 1000000,
       "copper_layers": 4,
       "stackup": {
         "layers": [
@@ -249,7 +249,7 @@
       }
     },
     {
-      "board_thickness_um": 1600,
+      "board_thickness_nm": 1600000,
       "copper_layers": 6,
       "stackup": {
         "layers": [
@@ -369,7 +369,7 @@
       }
     },
     {
-      "board_thickness_um": 2400,
+      "board_thickness_nm": 2400000,
       "copper_layers": 8,
       "stackup": {
         "layers": [

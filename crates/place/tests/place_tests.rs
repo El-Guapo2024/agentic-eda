@@ -11,7 +11,7 @@ fn part(reference: &str, package: &str, npins: usize) -> Part {
         package: Some(package.into()),
         footprint: None,
         pins: (1..=npins).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
-        body_um: None, symbol: None, datasheet: None,
+        body_nm: None, symbol: None, datasheet: None,
         edge: None,
     }
 }
@@ -19,7 +19,7 @@ fn part(reference: &str, package: &str, npins: usize) -> Part {
 fn design() -> Design {
     Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: None,
@@ -71,7 +71,7 @@ fn ldo_board_places_gate_clean() {
 #[test]
 fn respects_explicit_outline() {
     let m = ldo_model();
-    let outline = vec![Point { x: 0, y: 0 }, Point { x: 32_000, y: 0 }, Point { x: 32_000, y: 20_000 }, Point { x: 0, y: 20_000 }];
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 32_000_000, y: 0 }, Point { x: 32_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }];
     let opts = PlaceOptions { outline: Some(outline.clone()), ..Default::default() };
     let out = place(&design(), &m, &opts).expect("places");
     assert_eq!(out.placement.as_ref().unwrap().outline, outline);
@@ -106,7 +106,7 @@ fn missing_footprint_fails_loudly() {
 #[test]
 fn too_small_board_fails_not_panics() {
     let m = ldo_model();
-    let outline = vec![Point { x: 0, y: 0 }, Point { x: 4_000, y: 0 }, Point { x: 4_000, y: 4_000 }, Point { x: 0, y: 4_000 }];
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 4_000_000, y: 0 }, Point { x: 4_000_000, y: 4_000_000 }, Point { x: 0, y: 4_000_000 }];
     let err = place(&design(), &m, &PlaceOptions { outline: Some(outline), moves_per_part: 200, ..Default::default() }).unwrap_err();
     assert!(err.iter().any(|c| c.check == "place_legalize"));
 }

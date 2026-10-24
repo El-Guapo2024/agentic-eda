@@ -11,14 +11,14 @@
 // (`FilterCollectorForLockedItems`). Without a locked item the alignment target is the extreme item of the selection unless the cursor sits
 // inside one item's box, in which case that item is the target ("secondly, prefer items under the cursor"). Source's mirrored-view swap of Align
 // Left/Right is not ported: this app's view never mirrors a PCB.
-import type { BoardState, Cmd, Um } from "../api/types";
+import type { BoardState, Cmd, Nm } from "../api/types";
 import { itemBounds, itemKind, padParent } from "./pcbItems";
 import { editableSelection, groupOf, isLocked } from "./pcbTransform";
 
 export type AlignEdge = "top" | "bottom" | "left" | "right" | "centerX" | "centerY";
 
 /** `[minX, minY, maxX, maxY]`, board µm -- same shape as `Part.courtyard`/`CourtyardBox`. */
-export type Box = readonly [Um, Um, Um, Um];
+export type Box = readonly [Nm, Nm, Nm, Nm];
 
 function edgeValue(box: Box, edge: AlignEdge): number {
   const [x0, y0, x1, y1] = box;

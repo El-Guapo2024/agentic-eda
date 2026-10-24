@@ -5,24 +5,10 @@
 //! **Every coordinate in this module (and in [`crate::chain`], [`crate::meander`], [`crate::meander_placer`]) is a nanometre**, the
 //! unit KiCad computes in: the meander's thresholds are nanometre constants (`forward()` skips a run shorter than 5, the length
 //! tolerance is 20, the arc polygonisation error is 1000), and its integer truncations and roundings only come out the same at
-//! that grid. The rest of this crate (and the IR) is micrometres; [`to_nm`] and [`to_um`] cross the border, once in each direction.
+//! that grid. The IR is in nanometres too, so a point of a track is the point KiCad holds.
 
 use crate::seg_ops::{self, rescale};
 use eda_model::ir::Point;
-
-/// Micrometres to nanometres.
-pub const NM_PER_UM: i64 = 1000;
-
-/// A micrometre point as the nanometre point KiCad would hold.
-pub fn to_nm(p: Point) -> Point {
-    Point { x: p.x * NM_PER_UM, y: p.y * NM_PER_UM }
-}
-
-/// A nanometre point on the micrometre grid the IR lives on (halves away from zero).
-pub fn to_um(p: Point) -> Point {
-    let r = |v: i64| if v >= 0 { (v + NM_PER_UM / 2) / NM_PER_UM } else { -((-v + NM_PER_UM / 2) / NM_PER_UM) };
-    Point { x: r(p.x), y: r(p.y) }
-}
 
 /// `KiROUND( v )`: halves away from zero.
 pub fn ki_round(v: f64) -> i64 {
@@ -762,13 +748,6 @@ mod tests {
 
     fn p(x: i64, y: i64) -> Point {
         Point { x, y }
-    }
-
-    #[test]
-    fn micrometres_cross_the_border_and_back() {
-        assert_eq!(to_nm(p(3, -4)), p(3_000, -4_000));
-        assert_eq!(to_um(p(3_499, -3_500)), p(3, -4), "halves go away from zero");
-        assert_eq!(to_um(to_nm(p(-17, 25))), p(-17, 25));
     }
 
     #[test]

@@ -155,26 +155,26 @@ export function barcodeToCmd(b: BoardBarcode): CmdBarcode {
     layer: b.layer,
     at: { x: b.x, y: b.y },
     angle: b.angle,
-    width_um: b.w,
-    height_um: b.h,
+    width_nm: b.w,
+    height_nm: b.h,
     text: b.text,
-    text_height_um: b.text_height,
+    text_height_nm: b.text_height,
     kind: b.kind,
     ecc: b.ecc,
     show_text: b.show_text,
     knockout: b.knockout,
-    margin_x_um: b.margin_x,
-    margin_y_um: b.margin_y,
+    margin_x_nm: b.margin_x,
+    margin_y_nm: b.margin_y,
   };
 }
 
 /** A barcode as the Add Barcode tool starts one (`PCB_BARCODE( parent )`: 40 mm square, a QR code of level L, the text shown, no knockout; `DRAWING_TOOL::DrawBarcode` sets the layer, the place and the layer's text size). */
-export function newBarcode(layer: string, at: { x: number; y: number }, textHeightUm: number): CmdBarcode {
-  return { layer, at: { x: at.x, y: at.y }, angle: 0, width_um: 40_000, height_um: 40_000, text: "", text_height_um: textHeightUm, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_um: 0, margin_y_um: 0 };
+export function newBarcode(layer: string, at: { x: number; y: number }, textHeightNm: number): CmdBarcode {
+  return { layer, at: { x: at.x, y: at.y }, angle: 0, width_nm: 40_000_000, height_nm: 40_000_000, text: "", text_height_nm: textHeightNm, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_nm: 0, margin_y_nm: 0 };
 }
 
 /** `transferDataToBarcode`'s `SetMargin` and the knockout's minimum (`AssembleBarcode`: at least a tenth of the smaller side, rounded up to 0.1 mm). */
-export function knockoutMinMarginUm(w: number, h: number): number {
+export function knockoutMinMarginNm(w: number, h: number): number {
   const tenth = Math.ceil(Math.min(w, h) / 10);
   return Math.ceil(tenth / 100) * 100;
 }

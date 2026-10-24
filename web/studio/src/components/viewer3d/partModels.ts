@@ -132,7 +132,7 @@ export class PartModels {
         });
       }
     } else {
-      const placement = { xMm: part.at![0] / 1000, yMm: part.at![1] / 1000, rotDeg: part.rot ?? 0, bottom: part.side === "bottom" };
+      const placement = { xMm: part.at![0] / 1e6, yMm: part.at![1] / 1e6, rotDeg: part.rot ?? 0, bottom: part.side === "bottom" };
       for (const { model, record } of ready) {
         const instance = new THREE.Group();
         instance.name = "part-model";

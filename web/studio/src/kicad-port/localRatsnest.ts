@@ -28,10 +28,10 @@ export interface RatsnestBoardLike {
 export interface MovePreviewLike {
   refs: readonly string[];
   kind?: string;
-  dxUm: number;
-  dyUm: number;
-  /** Pack and Move (`P`): each ref's own extra shift, on top of the shared `dxUm`/`dyUm`. */
-  perRefOffsetUm?: Readonly<Record<string, readonly [number, number]>>;
+  dxNm: number;
+  dyNm: number;
+  /** Pack and Move (`P`): each ref's own extra shift, on top of the shared `dxNm`/`dyNm`. */
+  perRefOffsetNm?: Readonly<Record<string, readonly [number, number]>>;
 }
 
 /**
@@ -42,15 +42,15 @@ export interface MovePreviewLike {
  * (new array, same edge objects) when there's no part move in progress.
  */
 export function offsetRatsnestForPreview<E extends RatsnestEdgeLike>(edges: readonly E[], board: RatsnestBoardLike, preview: MovePreviewLike | null): E[] {
-  if (!preview || (preview.kind ?? "part") !== "part" || (preview.dxUm === 0 && preview.dyUm === 0 && !preview.perRefOffsetUm)) return [...edges];
+  if (!preview || (preview.kind ?? "part") !== "part" || (preview.dxNm === 0 && preview.dyNm === 0 && !preview.perRefOffsetNm)) return [...edges];
 
-  // Point -> the live delta of the part that owns it (every part shares dxUm/dyUm; a Pack and Move adds its own per-part shift).
+  // Point -> the live delta of the part that owns it (every part shares dxNm/dyNm; a Pack and Move adds its own per-part shift).
   const movingPoints = new Map<string, [number, number]>();
   for (const ref of preview.refs) {
     const part = board.parts.find((p) => p.ref === ref);
     if (!part) continue;
-    const own = preview.perRefOffsetUm?.[ref];
-    const delta: [number, number] = [preview.dxUm + (own?.[0] ?? 0), preview.dyUm + (own?.[1] ?? 0)];
+    const own = preview.perRefOffsetNm?.[ref];
+    const delta: [number, number] = [preview.dxNm + (own?.[0] ?? 0), preview.dyNm + (own?.[1] ?? 0)];
     for (const pad of part.pads ?? []) movingPoints.set(`${pad.x},${pad.y}`, delta);
     if (part.at) movingPoints.set(`${part.at[0]},${part.at[1]}`, delta);
   }

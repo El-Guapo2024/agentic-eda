@@ -23,7 +23,7 @@ export type FootprintBox = readonly [number, number, number, number];
 export type FootprintBoxPart = Pick<Part, "placed"> & Partial<Pick<Part, "at" | "pads" | "courtyard" | "body" | "fields" | "graphics" | "texts">>;
 
 /** `bbox.Inflate( pcbIUScale.mmToIU( 0.25 ) )`: "Give a min size to the bbox". */
-export const MIN_HALF_SIZE_UM = 250;
+export const MIN_HALF_SIZE_NM = 250_000;
 
 /** The layers whose drawings `GetBoundingBox( false )` drops as annotations on a sided footprint. */
 const ANNOTATION_LAYERS: ReadonlySet<string> = new Set(["Cmts.User", "Dwgs.User", "Eco1.User", "Eco2.User"]);
@@ -39,7 +39,7 @@ function merge(a: FootprintBox, b: FootprintBox): FootprintBox {
 export function footprintBox(part: FootprintBoxPart, includeText: boolean, textBox?: (field: FieldInfo) => FootprintBox | null): FootprintBox | null {
   if (!part.placed || !part.at) return null;
   const [x, y] = part.at;
-  let box: FootprintBox = [x - MIN_HALF_SIZE_UM, y - MIN_HALF_SIZE_UM, x + MIN_HALF_SIZE_UM, y + MIN_HALF_SIZE_UM];
+  let box: FootprintBox = [x - MIN_HALF_SIZE_NM, y - MIN_HALF_SIZE_NM, x + MIN_HALF_SIZE_NM, y + MIN_HALF_SIZE_NM];
   if (part.courtyard) box = merge(box, [part.courtyard[0], part.courtyard[1], part.courtyard[2], part.courtyard[3]]);
   if (part.body) box = merge(box, [part.body[0], part.body[1], part.body[2], part.body[3]]);
   const graphics =

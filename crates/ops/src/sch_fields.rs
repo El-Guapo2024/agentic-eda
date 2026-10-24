@@ -16,7 +16,7 @@
 use crate::sch_scene::{rotate_point, Scene};
 use crate::Board;
 use eda_engine::fields_edit::{parse_field_id, OwnerCtx, OwnerKind};
-use eda_model::ir::{field_key, FieldPlacement, Point, SchematicSection, TextJustify, TextVAlign, Um};
+use eda_model::ir::{field_key, FieldPlacement, Point, SchematicSection, TextJustify, TextVAlign, Nm};
 use eda_model::kicad_font::{HJustify, VJustify};
 use eda_model::sch_extras::AutoplaceAlgo;
 use eda_model::{CheckResult, ConstraintModel};
@@ -214,7 +214,7 @@ pub(crate) struct FieldEdit {
     /// How the text is justified as it reads on the sheet (`GetEffectiveHorizJustify`).
     pub h: Option<TextJustify>,
     pub v: Option<TextVAlign>,
-    pub size_um: Option<Um>,
+    pub size_nm: Option<Nm>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub visible: Option<bool>,
@@ -223,8 +223,8 @@ pub(crate) struct FieldEdit {
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear; it can be difficult to correct if you can't select it".
-const TEXT_SIZE_MIN_UM: Um = 10;
-const TEXT_SIZE_MAX_UM: Um = 1_000_000;
+const TEXT_SIZE_MIN_NM: Nm = 10_000;
+const TEXT_SIZE_MAX_NM: Nm = 1_000_000_000;
 
 impl<'a> Board<'a> {
     /// Field Properties: see [`SchCmd::EditField`](crate::sch_edit::SchCmd::EditField).
@@ -233,8 +233,8 @@ impl<'a> Board<'a> {
             return Err(fail("ops_unknown_item", id, "not the id of a field"));
         };
         let (key, name) = (key.to_string(), name.to_string());
-        if let Some(size) = edit.size_um {
-            if !(TEXT_SIZE_MIN_UM..=TEXT_SIZE_MAX_UM).contains(&size) {
+        if let Some(size) = edit.size_nm {
+            if !(TEXT_SIZE_MIN_NM..=TEXT_SIZE_MAX_NM).contains(&size) {
                 return Err(fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm."));
             }
         }
@@ -269,8 +269,8 @@ impl<'a> Board<'a> {
         let h = edit.h.map(hjustify).unwrap_or(now.h);
         let v = edit.v.map(vjustify).unwrap_or(now.v);
         let mut p = ctx.placed_at(&old, anchor, vertical, h, v);
-        if let Some(s) = edit.size_um {
-            p.size_um = if s == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { s };
+        if let Some(s) = edit.size_nm {
+            p.size_nm = if s == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { s };
         }
         p.bold = edit.bold.unwrap_or(old.bold);
         p.italic = edit.italic.unwrap_or(old.italic);
@@ -278,7 +278,7 @@ impl<'a> Board<'a> {
         p.name_shown = edit.name_shown.unwrap_or(old.name_shown);
         p.no_autoplace = edit.allow_autoplace.map(|a| !a).unwrap_or(old.no_autoplace);
         // `positioningModified`: the position, the orientation or the justification as they read on the sheet
-        let moved = (anchor.0 - now.at.0).abs() > 0.5 || (anchor.1 - now.at.1).abs() > 0.5 || vertical != now.vertical || h != now.h || v != now.v;
+        let moved = (anchor.0 - now.at.0).abs() > 50.0 || (anchor.1 - now.at.1).abs() > 50.0 || vertical != now.vertical || h != now.h || v != now.v;
         let changed = p != old || edit.text.as_ref().is_some_and(|t| *t != before_text(&before, &key, &name, model));
         if !changed {
             return Err(fail("ops_field_unchanged", id, "the field already has these properties"));

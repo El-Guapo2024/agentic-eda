@@ -69,7 +69,7 @@ fn fp(id: &str, x: i64, y: i64, rot_deg: u32) -> FootprintInstance {
 fn design(outline: Vec<Point>, fps: Vec<FootprintInstance>) -> Design {
     Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection { outline, footprints: fps, modules: Vec::new() }),
@@ -90,19 +90,19 @@ fn model() -> ConstraintModel {
     serde_yaml::from_str(INTENT).unwrap()
 }
 
-const SIDE: i64 = 24000;
+const SIDE: i64 = 24_000_000;
 
 /// A tidy reference layout on a 24 mm board: J1 along the top edge with
 /// R1/R2 just below their header pins, U1 lower-centre with C1 beside it.
 fn good() -> Vec<FootprintInstance> {
     vec![
-        fp("J1", 12000, 1400, 0),
-        fp("U1", 12000, 18000, 0),
-        fp("C1", 18500, 18000, 0),
-        fp("R1", 10000, 5000, 90),
-        fp("R2", 14000, 5000, 90),
-        fp("R3", 4000, 11000, 0),
-        fp("R4", 4000, 13000, 0),
+        fp("J1", 12_000_000, 1_400_000, 0),
+        fp("U1", 12_000_000, 18_000_000, 0),
+        fp("C1", 18_500_000, 18_000_000, 0),
+        fp("R1", 10_000_000, 5_000_000, 90),
+        fp("R2", 14_000_000, 5_000_000, 90),
+        fp("R3", 4_000_000, 11_000_000, 0),
+        fp("R4", 4_000_000, 13_000_000, 0),
     ]
 }
 
@@ -118,7 +118,7 @@ fn reference_layout_is_clean() {
 fn edge_connector_in_the_interior_fails() {
     let m = model();
     let mut fps = good();
-    fps[0] = fp("J1", 12000, 8000, 0); // 6.6 mm from the top edge
+    fps[0] = fp("J1", 12_000_000, 8_000_000, 0); // 6.6 mm from the top edge
     let d = design(square(SIDE), fps);
     let f = fails(&d, &m, "placement_edge_connector");
     assert_eq!(f.len(), 1, "{f:?}");
@@ -131,11 +131,11 @@ fn edge_connector_touching_with_its_short_end_still_fails() {
     let mut fps = good();
     // Horizontal header whose left end touches the left edge: pins point
     // into the board, not off it.
-    fps[0] = fp("J1", 5400, 9000, 0);
+    fps[0] = fp("J1", 5_400_000, 9_000_000, 0);
     let d = design(square(SIDE), fps.clone());
     assert_eq!(fails(&d, &m, "placement_edge_connector").len(), 1);
     // Rotated so its long side runs along that edge: fine.
-    fps[0] = fp("J1", 1400, 9000, 90);
+    fps[0] = fp("J1", 1_400_000, 9_000_000, 90);
     let d = design(square(SIDE), fps);
     assert!(fails(&d, &m, "placement_edge_connector").is_empty());
 }
@@ -144,7 +144,7 @@ fn edge_connector_touching_with_its_short_end_still_fails() {
 fn off_centre_cluster_fails_board_use() {
     let m = model();
     // The same layout on a 60 mm board: everything in the top-left.
-    let d = design(square(60000), good());
+    let d = design(square(60_000_000), good());
     let f = fails(&d, &m, "placement_board_use");
     assert!(!f.is_empty(), "{f:?}");
     assert!(f.iter().any(|s| s.contains("off-centre")) && f.iter().any(|s| s.contains("span only")), "{f:?}");
@@ -154,7 +154,7 @@ fn off_centre_cluster_fails_board_use() {
 fn far_decoupling_cap_fails() {
     let m = model();
     let mut fps = good();
-    fps[2] = fp("C1", 22000, 4000, 0); // C1 shares VIN and GND with U1, now ~6 mm away
+    fps[2] = fp("C1", 22_000_000, 4_000_000, 0); // C1 shares VIN and GND with U1, now ~6 mm away
     let d = design(square(SIDE), fps);
     let f = fails(&d, &m, "placement_decoupling");
     assert_eq!(f.len(), 1, "{f:?}");
@@ -166,8 +166,8 @@ fn crossing_stubs_fail() {
     let m = model();
     let mut fps = good();
     // Swap R1 and R2 under the header: A and B stubs now cross.
-    fps[3] = fp("R1", 14000, 5000, 90);
-    fps[4] = fp("R2", 10000, 5000, 90);
+    fps[3] = fp("R1", 14_000_000, 5_000_000, 90);
+    fps[4] = fp("R2", 10_000_000, 5_000_000, 90);
     let d = design(square(SIDE), fps);
     let f = fails(&d, &m, "placement_stub_crossings");
     assert_eq!(f.len(), 1, "{f:?}");
@@ -181,7 +181,7 @@ fn spread_small_net_fails_compactness() {
     // R3 dragged across the board: net Y (R3-R4) is stretched. Nets A, B
     // and X are not judged — every one of them has a member sitting on a
     // net that reaches the edge connector J1.
-    fps[5] = fp("R3", 20000, 11000, 0);
+    fps[5] = fp("R3", 20_000_000, 11_000_000, 0);
     let d = design(square(SIDE), fps);
     let f = fails(&d, &m, "placement_net_compactness");
     assert_eq!(f.len(), 1, "{f:?}");
@@ -224,7 +224,7 @@ fn separation_rule_fails_when_parts_sit_together() {
 
     // Move C1 to the far side: the rule is satisfied and the gate passes.
     let mut fps = good();
-    fps[2] = fp("C1", 2000, 2000, 0);
+    fps[2] = fp("C1", 2_000_000, 2_000_000, 0);
     let d = design(square(SIDE), fps);
     assert!(sep(&d, &m).is_empty());
 }

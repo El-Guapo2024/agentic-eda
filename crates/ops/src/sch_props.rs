@@ -12,7 +12,7 @@
 //! flags. A label's own fields (its net class, ...) are Label Properties' grid ([`label_fields_after`]).
 
 use crate::{empty_schematic_section, Board};
-use eda_model::ir::{LabelKind, LabelShape, Millideg, SchematicSection, TextJustify, TextVAlign, Um};
+use eda_model::ir::{LabelKind, LabelShape, Millideg, SchematicSection, TextJustify, TextVAlign, Nm};
 use eda_model::sch_extras::{JunctionLook, LabelLook, LabelSpin, SchColor, SchLineStyle, SchStroke};
 use eda_model::CheckResult;
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,8 +23,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM` in `DIALOG_LABEL_PROPERTIES` and `DIALOG_TEXT_PROPERTIES`: "Don't allow text to disappear; it can be difficult to
 /// correct if you can't select it" (`m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`).
-const TEXT_SIZE_MIN_UM: Um = 10;
-const TEXT_SIZE_MAX_UM: Um = 1_000_000;
+const TEXT_SIZE_MIN_NM: Nm = 10_000;
+const TEXT_SIZE_MAX_NM: Nm = 1_000_000_000;
 
 /// `COLOR4D::UNSPECIFIED` is all four channels zero: the colour of the item's layer.
 fn specified(c: SchColor) -> Option<SchColor> {
@@ -56,7 +56,7 @@ fn holds(contents: &BTreeMap<String, SchematicSection>, from: &str, target: &str
 /// What Label Properties sets of a label's text beyond what it says and which way it runs: the size, bold and italic (`SetTextSize`, `SetBold`, `SetItalic`).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LabelLookEdit {
-    pub size_um: Option<Um>,
+    pub size_nm: Option<Nm>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     /// The "Auto" check of a global or hierarchical label (`SetAutoRotateOnPlacement`).
@@ -109,9 +109,9 @@ impl<'a> Board<'a> {
             // DIALOG_LABEL_PROPERTIES::TransferDataFromWindow: `if( text.IsEmpty() && !m_currentLabel->IsNew() )`
             return Err(fail("ops_bad_label", id, "Label can not be empty."));
         }
-        if let Some(size) = look.size_um {
+        if let Some(size) = look.size_nm {
             // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
-            if !(TEXT_SIZE_MIN_UM..=TEXT_SIZE_MAX_UM).contains(&size) {
+            if !(TEXT_SIZE_MIN_NM..=TEXT_SIZE_MAX_NM).contains(&size) {
                 return Err(fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm."));
             }
         }
@@ -157,8 +157,8 @@ impl<'a> Board<'a> {
         // `SetTextSize`, then `SetBold` and `SetItalic` ("Must come after SetTextSize()") and `SetAutoRotateOnPlacement`; a look equal to the default keeps no entry
         let before: LabelLook = sch.extras.label_looks.get(id).copied().unwrap_or_default();
         let mut now = before;
-        if let Some(size) = look.size_um {
-            now.size_um = if size == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { size };
+        if let Some(size) = look.size_nm {
+            now.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { size };
         }
         if let Some(b) = look.bold {
             now.bold = b;
@@ -200,12 +200,12 @@ impl<'a> Board<'a> {
     }
 
     /// Text Properties: see [`SchCmd::EditText`](crate::sch_edit::SchCmd::EditText).
-    pub(crate) fn edit_sch_text(&mut self, id: &str, text: Option<&str>, size_um: Option<Um>, angle: Option<Millideg>, h: Option<TextJustify>, v: Option<TextVAlign>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn edit_sch_text(&mut self, id: &str, text: Option<&str>, size_nm: Option<Nm>, angle: Option<Millideg>, h: Option<TextJustify>, v: Option<TextVAlign>) -> Result<(), Vec<CheckResult>> {
         if text == Some("") {
             return Err(fail("ops_bad_text", id, "Text can not be empty."));
         }
-        if let Some(size) = size_um {
-            if !(TEXT_SIZE_MIN_UM..=TEXT_SIZE_MAX_UM).contains(&size) {
+        if let Some(size) = size_nm {
+            if !(TEXT_SIZE_MIN_NM..=TEXT_SIZE_MAX_NM).contains(&size) {
                 return Err(fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm."));
             }
         }
@@ -218,12 +218,12 @@ impl<'a> Board<'a> {
         };
         // a text is only ever along the sheet or up it (`m_vertical->IsChecked() ? ANGLE_VERTICAL : ANGLE_HORIZONTAL`); a legacy angle in between reads as the nearer
         let upright = |a: Millideg| if eda_model::kicad_geom::keep_upright_is_vertical(a as f64 / 1000.0) { 90_000 } else { 0 };
-        let before = (t.content.clone(), t.size_um, upright(t.angle), sch.extras.text_justify_of(id));
+        let before = (t.content.clone(), t.size_nm, upright(t.angle), sch.extras.text_justify_of(id));
         if let Some(text) = text {
             t.content = text.to_string();
         }
-        if let Some(size) = size_um {
-            t.size_um = size;
+        if let Some(size) = size_nm {
+            t.size_nm = size;
         }
         t.angle = upright(angle.unwrap_or(t.angle));
         let mut justify = before.3;
@@ -233,7 +233,7 @@ impl<'a> Board<'a> {
         if let Some(v) = v {
             justify.v = v;
         }
-        let after = (t.content.clone(), t.size_um, t.angle, justify);
+        let after = (t.content.clone(), t.size_nm, t.angle, justify);
         if before == after {
             // a legacy angle that was not upright is still made so, but that alone is no edit
             return Err(fail("ops_text_unchanged", id, "the text already has these properties"));
@@ -311,7 +311,7 @@ impl<'a> Board<'a> {
     }
 
     /// Wire/Bus, Line and Junction Properties: see [`SchCmd::SetStroke`](crate::sch_edit::SchCmd::SetStroke).
-    pub(crate) fn set_sch_stroke(&mut self, ids: &[String], width_um: Option<Um>, style: Option<SchLineStyle>, color: Option<SchColor>, diameter_um: Option<Um>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn set_sch_stroke(&mut self, ids: &[String], width_nm: Option<Nm>, style: Option<SchLineStyle>, color: Option<SchColor>, diameter_nm: Option<Nm>) -> Result<(), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(fail("ops_nothing_selected", "stroke", "no items given"));
         }
@@ -320,7 +320,7 @@ impl<'a> Board<'a> {
         enum Kind {
             /// A wire, a bus or a bus entry (`SCH_LINE`, `SCH_BUS_WIRE_ENTRY`): all of the stroke is in `extras.strokes`.
             Stroked,
-            /// A graphic line on the notes layer: its width is `SchLine::width_um`, the rest is in `extras.strokes`.
+            /// A graphic line on the notes layer: its width is `SchLine::width_nm`, the rest is in `extras.strokes`.
             Notes(usize),
             Junction,
         }
@@ -343,9 +343,9 @@ impl<'a> Board<'a> {
                 Kind::Stroked | Kind::Notes(_) => {
                     let mut stroke: SchStroke = sch.extras.strokes.get(id).copied().unwrap_or_default();
                     let before = stroke;
-                    if let (Some(w), Kind::Stroked) = (width_um, kind) {
+                    if let (Some(w), Kind::Stroked) = (width_nm, kind) {
                         // `int width = std::max( 0, m_wireWidth.GetIntValue() )`
-                        stroke.width_um = w.max(0);
+                        stroke.width_nm = w.max(0);
                     }
                     if let Some(s) = style {
                         stroke.style = s;
@@ -353,10 +353,10 @@ impl<'a> Board<'a> {
                     if let Some(c) = color {
                         stroke.color = c;
                     }
-                    if let (Some(w), Kind::Notes(i)) = (width_um, kind) {
+                    if let (Some(w), Kind::Notes(i)) = (width_nm, kind) {
                         let w = w.max(0);
-                        changed |= sch.lines[*i].width_um != w;
-                        sch.lines[*i].width_um = w;
+                        changed |= sch.lines[*i].width_nm != w;
+                        sch.lines[*i].width_nm = w;
                     }
                     changed |= stroke != before;
                     if stroke.is_default() {
@@ -368,8 +368,8 @@ impl<'a> Board<'a> {
                 Kind::Junction => {
                     let mut look: JunctionLook = sch.extras.junction_looks.get(id).copied().unwrap_or_default();
                     let before = look;
-                    if let Some(d) = diameter_um {
-                        look.diameter_um = d.max(0);
+                    if let Some(d) = diameter_nm {
+                        look.diameter_nm = d.max(0);
                     }
                     if let Some(c) = color {
                         look.color = c;

@@ -57,7 +57,7 @@
     fire("pointerup", b[0], b[1]); await sleep(800);
   };
   /** A view where 1 mm is a fair number of pixels round the editor's origin: fit, then zoom in until the scale is good for clicking. */
-  const frame = async () => { await run("common.Control.zoomFitScreen"); await sleep(400); for (let i = 0; i < 6 && !(__eda.state().view?.scale > 0.02); i++) { await run("common.Control.zoomInCenter"); await sleep(200); } };
+  const frame = async () => { await run("common.Control.zoomFitScreen"); await sleep(400); for (let i = 0; i < 6 && !(__eda.state().view?.scale > 0.00002); i++) { await run("common.Control.zoomInCenter"); await sleep(200); } };
 
   const scenario = async (name, fn) => {
     const entry = { name, ok: true, notes: [] };
@@ -92,13 +92,13 @@
       if (!FP) return t(false, "no footprint");
       t(await arm("pcbnew.PadTool.placePad", "pad"), `the pad tool is armed (${__eda.state().tool})`);
       await clickAt(0, 0);
-      await clickAt(2500, 0);
+      await clickAt(2_500_000, 0);
       await toSelect();
       const pads = (await footprint(FP)).pads ?? [];
       t(pads.length === 2, `two pads (${pads.length})`);
       const byNum = Object.fromEntries(pads.map((p) => [p.number, p]));
       t(!!byNum["1"] && !!byNum["2"], `numbered 1 and 2 (${pads.map((p) => p.number)})`);
-      t(byNum["1"]?.at.x === 0 && byNum["1"]?.at.y === 0 && byNum["2"]?.at.x === 2500 && byNum["2"]?.at.y === 0, `where they were clicked (${pads.map((p) => [p.number, p.at.x, p.at.y].join(":"))})`);
+      t(byNum["1"]?.at.x === 0 && byNum["1"]?.at.y === 0 && byNum["2"]?.at.x === 2_500_000 && byNum["2"]?.at.y === 0, `where they were clicked (${pads.map((p) => [p.number, p.at.x, p.at.y].join(":"))})`);
       await undo();
       t(((await footprint(FP)).pads ?? []).length === 1, "one undo takes the second pad away");
       await redo();
@@ -123,7 +123,7 @@
       await sleep(900);
       const p = ((await footprint(FP)).pads ?? []).find((q) => q.id === p2.id) ?? ((await footprint(FP)).pads ?? []).find((q) => q.number === "5");
       t(p?.number === "5", `the pad is numbered 5 (${p?.number})`);
-      t(pos.length < 2 || (p?.at.x === 2500 && p?.at.y === 1500), `and moved to (2.5, 1.5) mm (${p?.at.x}, ${p?.at.y})`);
+      t(pos.length < 2 || (p?.at.x === 2_500_000 && p?.at.y === 1_500_000), `and moved to (2.5, 1.5) mm (${p?.at.x}, ${p?.at.y})`);
       await undo();
       const back = ((await footprint(FP)).pads ?? []).find((q) => q.number === "2");
       t(!!back && back.at.y === 0, "one undo gives it its number and place back");
@@ -133,9 +133,9 @@
       const p2 = ((await footprint(FP)).pads ?? []).find((p) => p.number === "2");
       if (!t(!!p2, "pad 2 is there")) return;
       await select([]);
-      await dragFromTo([p2.at.x, p2.at.y], [p2.at.x + 1500, p2.at.y + 2500]);
+      await dragFromTo([p2.at.x, p2.at.y], [p2.at.x + 1_500_000, p2.at.y + 2_500_000]);
       let p = ((await footprint(FP)).pads ?? []).find((q) => q.number === "2");
-      t(p.at.x === p2.at.x + 1500 && p.at.y === p2.at.y + 2500, `the drag moved it by (1.5, 2.5) mm: (${p2.at.x}, ${p2.at.y}) -> (${p.at.x}, ${p.at.y})`);
+      t(p.at.x === p2.at.x + 1_500_000 && p.at.y === p2.at.y + 2_500_000, `the drag moved it by (1.5, 2.5) mm: (${p2.at.x}, ${p2.at.y}) -> (${p.at.x}, ${p.at.y})`);
       await undo();
       p = ((await footprint(FP)).pads ?? []).find((q) => q.number === "2");
       t(p.at.x === p2.at.x && p.at.y === p2.at.y, "undo puts it back");
@@ -143,7 +143,7 @@
       await run("pcbnew.InteractiveEdit.rotateCcw");
       await sleep(700);
       p = ((await footprint(FP)).pads ?? []).find((q) => q.number === "2");
-      t(Math.abs(((p.rot ?? 0) - (p2.rot ?? 0) + 360000) % 180000) === 90000 || Math.abs(((p.rot ?? 0) - (p2.rot ?? 0) + 360) % 180) === 90, `R turns it a quarter (${p2.rot} -> ${p.rot})`);
+      t(Math.abs(((p.rot ?? 0) - (p2.rot ?? 0) + 360_000) % 180_000) === 90_000 || Math.abs(((p.rot ?? 0) - (p2.rot ?? 0) + 360_000) % 180) === 90, `R turns it a quarter (${p2.rot} -> ${p.rot})`);
       await undo();
       await select([p2.id]);
       await run("common.Interactive.delete");
@@ -156,15 +156,15 @@
     await scenario("the line tool draws a silkscreen line: two clicks and a double click; one undo step", async (t) => {
       const g0 = ((await footprint(FP)).graphics ?? []).length;
       t(await arm("pcbnew.InteractiveDrawing.line", "draw_segment"), `the line tool is armed (${__eda.state().tool})`);
-      await clickAt(-2500, -2500);
-      await clickAt(5000, -2500);
-      await dblAt(5000, -2500);
+      await clickAt(-2_500_000, -2_500_000);
+      await clickAt(5_000_000, -2_500_000);
+      await dblAt(5_000_000, -2_500_000);
       await toSelect();
       const g = (await footprint(FP)).graphics ?? [];
       const mine = g.slice(g0);
       t(mine.length === 1, `one line (${mine.length})`);
       const s = mine[0];
-      t(!!s && s.start?.x === -2500 && s.start?.y === -2500 && s.end?.x === 5000 && s.end?.y === -2500, `from the first click to the second (${JSON.stringify(s && [s.start, s.end])})`);
+      t(!!s && s.start?.x === -2_500_000 && s.start?.y === -2_500_000 && s.end?.x === 5_000_000 && s.end?.y === -2_500_000, `from the first click to the second (${JSON.stringify(s && [s.start, s.end])})`);
       t(!!s && /SilkS/.test(s.layer ?? ""), `on the silkscreen, the editor's first active layer (${s?.layer})`);
       await undo();
       t(((await footprint(FP)).graphics ?? []).length === g0, "one undo takes it away");
@@ -200,10 +200,10 @@
     await scenario("the pin tool puts a pin where it is clicked, the next one numbered after it; one undo step each", async (t) => {
       if (!SYM) return t(false, "no symbol");
       t(await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin"), `the pin tool is armed (${__eda.state().tool})`);
-      await clickAt(-5080, 0);
+      await clickAt(-5_080_000, 0);
       await closeDialogs(); // (KiCad asks for the pin's properties first, SYMBOL_EDITOR_PIN_TOOL::CreatePin; the studio places it at once: GAPS.md item 33)
       await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
-      await clickAt(-5080, 2540);
+      await clickAt(-5_080_000, 2_540_000);
       await closeDialogs();
       await toSelect();
       const pins = (await symbol(SYM)).pins ?? [];
@@ -223,7 +223,7 @@
       if (!t(!!pin, "a pin is there")) return;
       await select([pin.id ?? `pin:${pin.number}`]);
       await sleep(200);
-      if (__eda.state().selection.length === 0) { await clickAt(pin.at.x * 1000, -pin.at.y * 1000); }
+      if (__eda.state().selection.length === 0) { await clickAt(pin.at.x * 1e6, -pin.at.y * 1e6); }
       await run("eeschema.InteractiveEdit.properties");
       const open = await until(() => /Pin Properties/.test(dialog()?.querySelector(".dialog-header")?.textContent ?? ""), 4000);
       t(!!open, `E opens Pin Properties (${dialog()?.querySelector(".dialog-header")?.textContent})`);
@@ -242,8 +242,8 @@
     await scenario("a rectangle drawn with two clicks; a pin dragged, turned (R) and deleted (Del); one undo step each", async (t) => {
       const g0 = ((await symbol(SYM)).graphics ?? []).length;
       t(await arm("eeschema.SymbolDrawing.drawSymbolRectangle", "draw_rect") || await arm("eeschema.InteractiveDrawing.drawRectangle", "draw_rect") || __eda.state().tool !== "select", `the rectangle tool is armed (${__eda.state().tool})`);
-      await clickAt(-2540, -2540);
-      await clickAt(2540, 5080);
+      await clickAt(-2_540_000, -2_540_000);
+      await clickAt(2_540_000, 5_080_000);
       await toSelect();
       const g = (await symbol(SYM)).graphics ?? [];
       t(g.length === g0 + 1 && g[g.length - 1]?.kind === "rectangle", `a rectangle (${JSON.stringify(g.slice(g0).map((x) => [x.kind, x.start, x.end]))})`);
@@ -252,18 +252,18 @@
       const pin = ((await symbol(SYM)).pins ?? []).slice().sort((a, b) => a.at.y - b.at.y)[0];
       const n = pin.number;
       await select([]);
-      await dragFromTo([pin.at.x * 1000, -pin.at.y * 1000], [pin.at.x * 1000 - 2540, -pin.at.y * 1000]);
+      await dragFromTo([pin.at.x * 1e6, -pin.at.y * 1e6], [pin.at.x * 1e6 - 2_540_000, -pin.at.y * 1e6]);
       let p = ((await symbol(SYM)).pins ?? []).find((q) => q.number === n);
       t(Math.abs(p.at.x - (pin.at.x - 2.54)) < 1e-6 && Math.abs(p.at.y - pin.at.y) < 1e-6, `the drag moved it 2.54 mm left (${pin.at.x} -> ${p.at.x})`);
       await undo();
       await select([p.id ?? `pin:${n}`]);
-      if (__eda.state().selection.length === 0) await clickAt(pin.at.x * 1000, -pin.at.y * 1000);
+      if (__eda.state().selection.length === 0) await clickAt(pin.at.x * 1e6, -pin.at.y * 1e6);
       await run("eeschema.InteractiveEdit.rotateCCW");
       await sleep(700);
       p = ((await symbol(SYM)).pins ?? []).find((q) => q.number === n);
       t(Math.abs(((p.angle_deg - pin.angle_deg) + 360) % 180) === 90, `R turns it a quarter (${pin.angle_deg} -> ${p.angle_deg})`);
       await undo();
-      if (__eda.state().selection.length === 0) await clickAt(pin.at.x * 1000, -pin.at.y * 1000);
+      if (__eda.state().selection.length === 0) await clickAt(pin.at.x * 1e6, -pin.at.y * 1e6);
       await run("common.Interactive.delete");
       await sleep(700);
       t(!((await symbol(SYM)).pins ?? []).some((q) => q.number === n), "Del deletes it");

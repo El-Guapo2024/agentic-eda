@@ -30,8 +30,8 @@ export function pinHelperTargets(sch: Pick<Schematic, "sheets">, selection: read
   return [...new Set(selection)].filter((id) => isPinItemId(id) || sheetPins.has(id));
 }
 
-/** The command: `kind` on `pins`, a stub being one step of `gridUm`, the wire grid (`GRID_HELPER_GRIDS::GRID_WIRES`). */
-export const pinHelperCmd = (kind: PinHelperKind, pins: readonly string[], gridUm: number): Cmd => ({ op: "sch_edit", verb: "pin_helper", what: kind, pins: [...pins], grid: Math.max(0, Math.round(gridUm)) }) as unknown as Cmd;
+/** The command: `kind` on `pins`, a stub being one step of `gridNm`, the wire grid (`GRID_HELPER_GRIDS::GRID_WIRES`). */
+export const pinHelperCmd = (kind: PinHelperKind, pins: readonly string[], gridNm: number): Cmd => ({ op: "sch_edit", verb: "pin_helper", what: kind, pins: [...pins], grid: Math.max(0, Math.round(gridNm)) }) as unknown as Cmd;
 
 /** What the helper made, from the sheet before and after it: the ids to select, and for a wire stub the end of it that is not at the pin (to be dragged) as `vertices` of the wire, and where that end is. */
 export interface MadeByPinHelper {

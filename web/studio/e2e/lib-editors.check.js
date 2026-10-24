@@ -60,7 +60,7 @@
     results.push(entry);
   };
   const select = async (ids) => { await __eda.run("common.InteractiveSelection.clear"); if (ids.length) await __eda.run("common.InteractiveSelection.selectItems", ids); await sleep(300); };
-  const padOf = (n) => ({ number: n, at: { x: 0, y: 0 }, size: [900, 600], shape: "round_rect", kind: "smd", drill: null, rot: 0, layers: ["F.Cu", "F.Paste", "F.Mask"], roundrect_ratio: 0.25 });
+  const padOf = (n) => ({ number: n, at: { x: 0, y: 0 }, size: [900_000, 600_000], shape: "round_rect", kind: "smd", drill: null, rot: 0, layers: ["F.Cu", "F.Paste", "F.Mask"], roundrect_ratio: 0.25 });
 
   // --------------------------------------------------------------------------------------------------------------------------- run
   const libraryBefore = { fp: await fpNames(), sym: await symNames() };
@@ -142,7 +142,7 @@
     const fp = await footprint(name);
     const got = pairs(fp).map((p) => p[0]).sort().join();
     t(got === "A1,A2,A3,A4,B1,B2,B3,B4,C1,C2,C3,C4", `twelve pads: ${got}`);
-    t(same(pairs(fp)[0], ["A1", -800, -1200]) && same(pairs(fp)[11], ["C4", 800, 1200]), `centred: ${JSON.stringify(pairs(fp)[0])} .. ${JSON.stringify(pairs(fp)[11])}`);
+    t(same(pairs(fp)[0], ["A1", -800_000, -1_200_000]) && same(pairs(fp)[11], ["C4", 800_000, 1_200_000]), `centred: ${JSON.stringify(pairs(fp)[0])} .. ${JSON.stringify(pairs(fp)[11])}`);
     // the derived file says the same
     const mod = await (await fetch(`/api/footprint/export?name=${encodeURIComponent(name)}`)).text();
     t((mod.match(/\(pad "/g) ?? []).length === 12 && /\(pad "B3" smd roundrect/.test(mod), "the exported .kicad_mod has the twelve pads");
@@ -151,7 +151,7 @@
   });
 
   await scenario("Use first free number skips the pads that stay; Renumber pads off keeps the number of the source", async (t) => {
-    const { name, ids } = await arrayDialogOn(t, [padOf("1"), padOf("3"), { ...padOf("9"), at: { x: 0, y: 3000 } }]);
+    const { name, ids } = await arrayDialogOn(t, [padOf("1"), padOf("3"), { ...padOf("9"), at: { x: 0, y: 3_000_000 } }]);
     const nine = (await footprint(name)).pads.find((p) => p.number === "9").id;
     await openArray([nine]);
     await baseGrid();
@@ -176,7 +176,7 @@
   });
 
   await scenario("a circular array turns the pads with their points and numbers them around the circle", async (t) => {
-    const { name, ids } = await arrayDialogOn(t, [{ ...padOf("X"), at: { x: 5000, y: 0 } }]);
+    const { name, ids } = await arrayDialogOn(t, [{ ...padOf("X"), at: { x: 5_000_000, y: 0 } }]);
     await openArray(ids, "circular");
     t(!!tid("array-pad-numbering-circular"), "the circular tab has its Numbering Options");
     await baseCircle();
@@ -186,12 +186,12 @@
     await click(tid("array-ok"), 1000);
     const fp = await footprint(name);
     const got = fp.pads.map((p) => [p.number, p.at.x, p.at.y, p.rot ?? 0]).sort();
-    t(same(got, [["A", 5000, 0, 0], ["B", 0, 5000, 270000], ["C", -5000, 0, 180000], ["D", 0, -5000, 90000]]), `around the circle: ${JSON.stringify(got)}`);
+    t(same(got, [["A", 5_000_000, 0, 0], ["B", 0, 5_000_000, 270000], ["C", -5_000_000, 0, 180000], ["D", 0, -5_000_000, 90000]]), `around the circle: ${JSON.stringify(got)}`);
     await undoFp();
   });
 
   await scenario("the dialog names a start the alphabet lacks and keeps the dialog open; Arrange selection numbers nothing", async (t) => {
-    const { name, ids } = await arrayDialogOn(t, [padOf("1"), { ...padOf("2"), at: { x: 0, y: 4000 } }]);
+    const { name, ids } = await arrayDialogOn(t, [padOf("1"), { ...padOf("2"), at: { x: 0, y: 4_000_000 } }]);
     await openArray(ids);
     await baseGrid();
     await setGrid(2, 1, "1", "1");
@@ -205,7 +205,7 @@
     tid("array-arrange").click(); tid("array-in-place").click(); await sleep(100);
     await click(tid("array-ok"), 1000);
     const fp = await footprint(name);
-    t(fp.pads.length === 2 && same(pairs(fp), [["1", 0, 0], ["2", 1000, 0]]), `the second pad is on the second point, numbers kept: ${JSON.stringify(pairs(fp))}`);
+    t(fp.pads.length === 2 && same(pairs(fp), [["1", 0, 0], ["2", 1_000_000, 0]]), `the second pad is on the second point, numbers kept: ${JSON.stringify(pairs(fp))}`);
     await undoFp();
   });
 
@@ -376,7 +376,7 @@
 
   await scenario("Update Symbol Fields: a parent's change reaches the derived symbol per the chosen options; a symbol that is not derived is told so", async (t) => {
     // change the parent: description, MPN text and Value place
-    const baseFields = (await symbol(BASE)).fields.map((f) => (f.name === "MPN" ? { ...f, text: "B-2", at: { x: 3, y: -9 } } : f));
+    const baseFields = (await symbol(BASE)).fields.map((f) => (f.name === "MPN" ? { ...f, text: "B-2", at: { x: 3000, y: -9000 } } : f));
     let r = await cmd({ op: "edit_library_symbol_fields", lib_id: BASE, fields: baseFields });
     t(r.ok, "the parent's MPN is B-2 now");
     const baseNow = await symbol(BASE);
@@ -400,7 +400,7 @@
     await click(tid("update-fields-ok"), 1200);
     t(!tid("update-symbol-fields"), "OK closes the dialog");
     const own = await symbol(LEAF);
-    t(fieldOf(own, "MPN")?.text === "B-2" && same(fieldOf(own, "MPN")?.at, { x: 3, y: -9 }), `MPN follows the parent: ${JSON.stringify(fieldOf(own, "MPN"))}`);
+    t(fieldOf(own, "MPN")?.text === "B-2" && same(fieldOf(own, "MPN")?.at, { x: 3000, y: -9000 }), `MPN follows the parent: ${JSON.stringify(fieldOf(own, "MPN"))}`);
     t(own.description === before.description, "a field that was not ticked is left alone");
     // the same with the description ticked, text off: nothing changes
     await __eda.run("eeschema.SymbolLibraryControl.updateSymbolFields");
@@ -573,7 +573,7 @@
     fire("pointermove", to[0], to[1], mods, 1); await sleep(80);
     fire("pointerup", to[0], to[1], mods); await sleep(700);
   };
-  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const near = (a, b, tol = 2_000) => Math.abs(a - b) <= tol;
   /** A double click on the canvas at the editor's point. */
   const dbl = async (wx, wy) => { const [sx, sy] = toScreen(wx, wy); canvasEl().dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: sx, clientY: sy, detail: 2 })); await sleep(600); };
   const onGrid = (v, g) => Math.abs(v - Math.round(v / g) * g) < 1e-6 * Math.max(1, Math.abs(v)) + 1e-6;
@@ -584,41 +584,41 @@
     await sleep(800);
     const name = (await fpNames()).find((n) => !libraryBefore.fp.includes(n) && !made.includes(n));
     made.push(name);
-    const r = await cmd({ op: "add_pad", footprint: name, pad: { ...padOf("1"), at: { x: 5400, y: 2300 } } });
+    const r = await cmd({ op: "add_pad", footprint: name, pad: { ...padOf("1"), at: { x: 5_400_000, y: 2_300_000 } } });
     t(r.ok, `a pad at (5400, 2300), off the 250 um grid: ${r.message ?? "ok"}`);
     await sleep(600);
     await __eda.run("common.Control.zoomFitScreen");
     await sleep(500);
     const scale = __eda.state().view.scale;
-    const d = Math.min(60, 10 / scale);
+    const d = Math.min(60_000, 10 / scale);
     t(scale > 0, `the view: ${scale} px/um; the cursor goes ${Math.round(d)} um from the pad's centre`);
     await arm("pcbnew.PadTool.placePad", "pad");
     t(__eda.state().tool === "pad", "the pad tool is armed");
-    await clickAt(5400 + d, 2300 + d);
+    await clickAt(5_400_000 + d, 2_300_000 + d);
     let pads = (await footprint(name)).pads;
-    t(pads.length === 2 && pads.filter((p) => p.at.x === 5400 && p.at.y === 2300).length === 2, `the new pad is at the centre of the first: ${JSON.stringify(pads.map((p) => [p.number, p.at.x, p.at.y]))}`);
+    t(pads.length === 2 && pads.filter((p) => p.at.x === 5_400_000 && p.at.y === 2_300_000).length === 2, `the new pad is at the centre of the first: ${JSON.stringify(pads.map((p) => [p.number, p.at.x, p.at.y]))}`);
     t(__eda.state().snap?.anchored === true, `the snap report says an anchor: ${JSON.stringify(__eda.state().snap)}`);
     await undoFp();
     t((await footprint(name)).pads.length === 1, "one undo takes the pad away");
     // Shift turns the anchors off: the grid
     await arm("pcbnew.PadTool.placePad", "pad");
-    await clickAt(5400 + d, 2300 + d, { shift: true }, false);
+    await clickAt(5_400_000 + d, 2_300_000 + d, { shift: true }, false);
     pads = (await footprint(name)).pads;
     const shifted = pads.find((p) => p.number !== "1");
-    t(!!shifted && onGrid(shifted.at.x, 250) && onGrid(shifted.at.y, 250) && !(shifted.at.x === 5400 && shifted.at.y === 2300), `with Shift the pad is on the grid: ${JSON.stringify(shifted?.at)}`);
+    t(!!shifted && onGrid(shifted.at.x, 250) && onGrid(shifted.at.y, 250) && !(shifted.at.x === 5_400_000 && shifted.at.y === 2_300_000), `with Shift the pad is on the grid: ${JSON.stringify(shifted?.at)}`);
     await undoFp();
     // Ctrl+Shift turns both off: where the pointer is
     await arm("pcbnew.PadTool.placePad", "pad");
-    await clickAt(5400 + d, 2300 + d, { shift: true, ctrl: true }, false);
+    await clickAt(5_400_000 + d, 2_300_000 + d, { shift: true, ctrl: true }, false);
     pads = (await footprint(name)).pads;
     const free = pads.find((p) => p.number !== "1");
-    t(!!free && near(free.at.x, 5400 + d, 3) && near(free.at.y, 2300 + d, 3), `with both off the pad is where the pointer was: ${JSON.stringify(free?.at)} for (${Math.round(5400 + d)}, ${Math.round(2300 + d)})`);
+    t(!!free && near(free.at.x, 5_400_000 + d, 3000) && near(free.at.y, 2_300_000 + d, 3000), `with both off the pad is where the pointer was: ${JSON.stringify(free?.at)} for (${Math.round(5400 + d)}, ${Math.round(2300 + d)})`);
     await undoFp();
     // Ctrl alone: the grid is off, the anchor stays
     await arm("pcbnew.PadTool.placePad", "pad");
-    await clickAt(5400 + d, 2300 + d, { ctrl: true }, false);
+    await clickAt(5_400_000 + d, 2_300_000 + d, { ctrl: true }, false);
     pads = (await footprint(name)).pads;
-    t(pads.filter((p) => p.at.x === 5400 && p.at.y === 2300).length === 2, "with only the grid off the anchor still takes it");
+    t(pads.filter((p) => p.at.x === 5_400_000 && p.at.y === 2_300_000).length === 2, "with only the grid off the anchor still takes it");
     await undoFp();
   });
 
@@ -628,8 +628,8 @@
     await sleep(800);
     const name = (await fpNames()).find((n) => !libraryBefore.fp.includes(n) && !made.includes(n));
     made.push(name);
-    const seg = (x0, y0, x1, y1) => ({ kind: "segment", layer: "F.SilkS", stroke_width: 150, filled: false, start: { x: x0, y: y0 }, end: { x: x1, y: y1 } });
-    for (const c of [{ op: "add_pad", footprint: name, pad: { ...padOf("1"), at: { x: 5430, y: 2330 } } }, { op: "add_footprint_graphic", footprint: name, shape: seg(4310, 710, 7310, 710) }, { op: "add_footprint_graphic", footprint: name, shape: seg(1130, 3330, 2130, 3330) }]) {
+    const seg = (x0, y0, x1, y1) => ({ kind: "segment", layer: "F.SilkS", stroke_width: 150_000, filled: false, start: { x: x0, y: y0 }, end: { x: x1, y: y1 } });
+    for (const c of [{ op: "add_pad", footprint: name, pad: { ...padOf("1"), at: { x: 5_430_000, y: 2_330_000 } } }, { op: "add_footprint_graphic", footprint: name, shape: seg(4_310_000, 710_000, 7_310_000, 710_000) }, { op: "add_footprint_graphic", footprint: name, shape: seg(1_130_000, 3_330_000, 2_130_000, 3_330_000) }]) {
       const r = await cmd(c);
       if (!r.ok) t(false, `${c.op}: ${r.message}`);
     }
@@ -637,34 +637,34 @@
     await __eda.run("common.Control.zoomFitScreen");
     await sleep(500);
     const scale = __eda.state().view.scale;
-    const d = Math.min(60, 10 / scale);
+    const d = Math.min(60_000, 10 / scale);
     // the line tool: the first click near the end of the silk line (on the active layer F.SilkS), the second away from everything
     await arm("pcbnew.InteractiveDrawing.line", "draw_segment");
     t(__eda.state().tool === "draw_segment", "the line tool is armed");
-    await clickAt(4310 + d, 710 + d, {}, false);
-    await clickAt(3000, 5000, { shift: true, ctrl: true }, false);
+    await clickAt(4_310_000 + d, 710_000 + d, {}, false);
+    await clickAt(3_000_000, 5_000_000, { shift: true, ctrl: true }, false);
     let graphics = (await footprint(name)).graphics;
-    const made1 = graphics.find((g) => g.start.x === 4310 && g.start.y === 710 && g.end.x !== 7310);
+    const made1 = graphics.find((g) => g.start.x === 4_310_000 && g.start.y === 710_000 && g.end.x !== 7_310_000);
     t(graphics.length === 3 && !!made1, `the new line starts at the end of the silk line: ${JSON.stringify(graphics.map((g) => [g.start, g.end]))}`);
     await undoFp();
     t((await footprint(name)).graphics.length === 2, "one undo takes the line away");
     // a click near the pad (on F.Cu, not the active layer): no snap to it
     await arm("pcbnew.InteractiveDrawing.line", "draw_segment");
-    await clickAt(5430 + d, 2330 + d, { ctrl: true }, false);
-    await clickAt(3000, 5000, { shift: true, ctrl: true }, false);
+    await clickAt(5_430_000 + d, 2_330_000 + d, { ctrl: true }, false);
+    await clickAt(3_000_000, 5_000_000, { shift: true, ctrl: true }, false);
     graphics = (await footprint(name)).graphics;
-    const toPad = graphics.find((g) => g.start.x === 5430 && g.start.y === 2330);
+    const toPad = graphics.find((g) => g.start.x === 5_430_000 && g.start.y === 2_330_000);
     t(graphics.length === 3 && !toPad, `a line on the silk layer does not snap to a pad on the copper one: ${JSON.stringify(graphics.map((g) => g.start))}`);
     await undoFp();
     // a drag: the second silk line, picked up at its start, dropped near the end of the first
     await select([]);
-    const second = graphics.find((g) => g.start.x === 1130);
-    await dragFromTo([1130, 3330], [4310 + d, 710 + d]);
+    const second = graphics.find((g) => g.start.x === 1_130_000);
+    await dragFromTo([1_130_000, 3_330_000], [4_310_000 + d, 710_000 + d]);
     const moved = (await footprint(name)).graphics.find((g) => g.id === second.id);
-    t(!!moved && moved.start.x === 4310 && moved.start.y === 710, `the dropped line has its start on the other's end: ${JSON.stringify(moved?.start)} (it was (1130, 3330))`);
-    t(!!moved && moved.end.x - moved.start.x === 1000 && moved.end.y === moved.start.y, "and the same length");
+    t(!!moved && moved.start.x === 4_310_000 && moved.start.y === 710_000, `the dropped line has its start on the other's end: ${JSON.stringify(moved?.start)} (it was (1130, 3330))`);
+    t(!!moved && moved.end.x - moved.start.x === 1_000_000 && moved.end.y === moved.start.y, "and the same length");
     await undoFp();
-    t((await footprint(name)).graphics.find((g) => g.id === second.id)?.start.x === 1130, "one undo puts it back");
+    t((await footprint(name)).graphics.find((g) => g.id === second.id)?.start.x === 1_130_000, "one undo puts it back");
   });
 
   await scenario("Symbol Editor snapping: the pin tool goes to the end of another pin when the grid is off, to the grid otherwise", async (t) => {
@@ -682,11 +682,11 @@
     await __eda.run("common.Control.zoomFitScreen");
     await sleep(500);
     const scale = __eda.state().view.scale;
-    const d = Math.min(300, 10 / scale);
+    const d = Math.min(300_000, 10 / scale);
     t(scale > 0, `the view: ${scale} px/um; the cursor goes ${Math.round(d)} um from the pin's end`);
     await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
     t(__eda.state().tool === "pin", `the pin tool is armed: ${__eda.state().tool}`);
-    const tip = [3100, -700];
+    const tip = [3_100_000, -700_000];
     // grid off (Ctrl): the end of the other pin
     await clickAt(tip[0] + d, tip[1] + d, { ctrl: true }, false);
     let pins = (await symbol(id)).pins;
@@ -712,7 +712,7 @@
     await clickAt(tip[0] + d, tip[1] + d, { ctrl: true, shift: true }, false);
     pins = (await symbol(id)).pins;
     const freePin = pins.find((p) => p.number !== "9");
-    t(!!freePin && near(freePin.at.x * 1000, tip[0] + d, 3) && near(-freePin.at.y * 1000, tip[1] + d, 3), `with both off the pin is where the pointer was: ${JSON.stringify(freePin?.at)}`);
+    t(!!freePin && near(freePin.at.x * 1e6, tip[0] + d, 3000) && near(-freePin.at.y * 1e6, tip[1] + d, 3000), `with both off the pin is where the pointer was: ${JSON.stringify(freePin?.at)}`);
     await undoFp();
   });
 
@@ -765,7 +765,7 @@
     const fp = await footprint(name);
     const mpn = (fp.fields ?? []).find((f) => f.name === "MPN");
     t(!!mpn && mpn.value === "ABC-1" && mpn.visible === true, `the user field is stored: ${JSON.stringify(mpn)}`);
-    t(!!mpn?.layout && mpn.layout.layer === "F.SilkS" && mpn.layout.at.x === 1500 && mpn.layout.at.y === 3000 && mpn.layout.bold === true, `with its layout: ${JSON.stringify(mpn?.layout)}`);
+    t(!!mpn?.layout && mpn.layout.layer === "F.SilkS" && mpn.layout.at.x === 1_500_000 && mpn.layout.at.y === 3_000_000 && mpn.layout.bold === true, `with its layout: ${JSON.stringify(mpn?.layout)}`);
     t(fp.reference?.text === "J**" && fp.value_visible === false, `the Reference reads J** and the Value is hidden: ${JSON.stringify([fp.reference?.text, fp.value_visible])}`);
     t(fp.datasheet?.text === "https://example.com/p17.pdf" && fp.datasheet?.visible === false, `the Datasheet field is stored: ${JSON.stringify(fp.datasheet)}`);
     const mod = await (await fetch(`/api/footprint/export?name=${encodeURIComponent(name)}`)).text();
@@ -809,7 +809,7 @@
       let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - 26) + Math.abs(d[i + 1] - 26) + Math.abs(d[i + 2] - 26) > 90) n++;
       return n;
     };
-    const REF = [0, -5080], MPN = [10160, 0], VAL = [0, 5080];
+    const REF = [0, -5_080_000], MPN = [10_160_000, 0], VAL = [0, 5_080_000];
     const withHidden = ink(...MPN);
     t(ink(...REF) > 20 && ink(...VAL) > 20, `the Reference and the Value are drawn: ${ink(...REF)}, ${ink(...VAL)} px of ink`);
     t(withHidden > 20, `the hidden MPN is drawn while Show Hidden Fields is on (it starts on): ${withHidden} px`);
@@ -828,7 +828,7 @@
     await clickAt(REF[0], REF[1], {}, false);
     t(same(__eda.state().selection.map((s) => s.id), ["fld:lib:Reference"]), `a click on the Reference picks it: ${JSON.stringify(__eda.state().selection.map((s) => s.id))}`);
     // a drag moves it, one undo step
-    await dragFromTo(REF, [REF[0], REF[1] - 2540]);
+    await dragFromTo(REF, [REF[0], REF[1] - 2_540_000]);
     let sym = await symbol(id);
     const refNow = fieldOf(sym, "Reference");
     t(refNow && near(refNow.at.y, 7.62, 0.01) && near(refNow.at.x, 0, 0.01), `the dragged Reference is 2.54 mm higher: ${JSON.stringify(refNow?.at)}`);
@@ -934,7 +934,7 @@
     await sleep(300);
 
     // double click on the pin: Pin Properties, the pane for alternates starts closed
-    const PIN1 = [-4000, 0];
+    const PIN1 = [-4_000_000, 0];
     await dbl(...PIN1);
     t(!!tid("pin-alternates") && !tid("pin-alternates-add"), "Pin Properties has the alternates pane, closed while the pin has none");
     tid("pin-alternates-toggle").click(); await sleep(150);
@@ -973,7 +973,7 @@
     const d = diffBox(withIcon, without);
     t(d.n >= 20, `Show Pin Alternate Icons draws an icon (${d.n} px)`);
     // pin 1 runs right from (-5.08, 0) to the body at (-2.54, 0); the name is inside from 0.508 mm on, the icon after it, level with the line
-    t(!!d.from && d.from[0] > -2540 && d.to[0] < 9000 && d.from[1] > -1500 && d.to[1] < 1500, `the icon is beside the first pin's name, level with its line: ${JSON.stringify([d.from, d.to])}`);
+    t(!!d.from && d.from[0] > -2_540_000 && d.to[0] < 9_000_000 && d.from[1] > -1_500_000 && d.to[1] < 1_500_000, `the icon is beside the first pin's name, level with its line: ${JSON.stringify([d.from, d.to])}`);
     await __eda.run("eeschema.EditorControl.togglePinAltIcons");
     await sleep(300);
     t(diffBox(withIcon, shot()).n === 0, "and back on, it is drawn again");
@@ -1023,7 +1023,7 @@
     await sleep(1000);
     await __eda.run("common.Control.zoomFitScreen");
     await sleep(500);
-    const EDGE = [-5080, 0]; // the middle of the rectangle's left edge, the editor's um (Y down): the top and bottom edges are where a new symbol puts its Reference and Value
+    const EDGE = [-5_080_000, 0]; // the middle of the rectangle's left edge, the editor's nm (Y down): the top and bottom edges are where a new symbol puts its Reference and Value
     await dbl(...EDGE);
     t(!!tid("shape-properties"), "a double click on the rectangle's edge opens the dialog");
     t(/Rectangle Properties/.test(tid("shape-properties")?.textContent ?? ""), `titled by the shape: ${tid("shape-properties")?.getAttribute("aria-label")}`);
@@ -1090,7 +1090,7 @@
       return n;
     };
     const boxes = async () => (await symbol(id)).graphics.filter((g) => g.kind === "text_box");
-    const A = [-7620, -5080], B = [7620, 5080]; // the corners, the editor's um (Y down): 15.24 by 10.16 mm
+    const A = [-7_620_000, -5_080_000], B = [7_620_000, 5_080_000]; // the corners, the editor's nm (Y down): 15.24 by 10.16 mm
     t(__eda.actions().some((a) => a.id === "eeschema.SymbolDrawing.drawSymbolTextBox" && a.enabled), "Draw Text Box is an enabled action of the Symbol tab");
     await arm("eeschema.SymbolDrawing.drawSymbolTextBox", "draw_textbox");
     t(__eda.state().tool === "draw_textbox", `the tool is armed: ${__eda.state().tool}`);
@@ -1120,17 +1120,17 @@
     t(b0?.unit === 1 && b0.margin_mm === 1.016 && b0.stroke_mm === 0, `on the unit being edited, with the margin of four fifths of the text and the default width: ${JSON.stringify([b0?.unit, b0?.margin_mm, b0?.stroke_mm])}`);
     const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
     t(text.includes('(text_box "10V\\nREF" (at -7.62 5.08 0) (size 15.24 -10.16) (margins 1.016 1.016 1.016 1.016)'), "the exported .kicad_sym has the box as KiCad writes it, the line break as \\n");
-    t(inkIn(-7000, -4500, 7000, -3000) > 40, `the text is drawn in the box (${inkIn(-7000, -4500, 7000, -3000)} px)`);
-    t(inkIn(-8200, -5800, 8200, -5600) > 40, "and the border is drawn");
+    t(inkIn(-7_000_000, -4_500_000, 7_000_000, -3_000_000) > 40, `the text is drawn in the box (${inkIn(-7_000_000, -4_500_000, 7_000_000, -3_000_000)} px)`);
+    t(inkIn(-8_200_000, -5_800_000, 8_200_000, -5_600_000) > 40, "and the border is drawn");
     // a click in the box picks it, anywhere in it (not on the border alone)
     await __eda.run("common.InteractiveSelection.selectionTool");
     await sleep(200);
-    await clickAt(0, 2500, {}, false);
+    await clickAt(0, 2_500_000, {}, false);
     t(same(__eda.state().selection.map((s) => s.id), [b0.id]), `a click inside the box picks it: ${JSON.stringify(__eda.state().selection.map((s) => s.id))}`);
     // the next box starts as the last one was: bold
     await arm("eeschema.SymbolDrawing.drawSymbolTextBox", "draw_textbox");
-    await clickAt(-12700, 7620, {}, false);
-    await clickAt(-10160, 10160, {}, true);
+    await clickAt(-12_700_000, 7_620_000, {}, false);
+    await clickAt(-10_160_000, 10_160_000, {}, true);
     t(tid("tb-bold")?.checked === true, "the tool remembers bold for the next box (m_lastTextBold)");
     await click(tid("tb-cancel"), 500);
     await __eda.run("common.InteractiveSelection.selectionTool");
@@ -1156,7 +1156,7 @@
     await click(tid("tb-cancel"), 400);
     // moved by a drag: both corners
     const before = (await boxes())[0];
-    await dragFromTo([0, 0], [2540, 1270]);
+    await dragFromTo([0, 0], [2_540_000, 1_270_000]);
     const after = (await boxes())[0];
     t(near(after.start.x - before.start.x, 2.54, 0.001) && near(after.end.x - before.end.x, 2.54, 0.001) && near(after.start.y - before.start.y, -1.27, 0.001), `a drag moves both corners: ${JSON.stringify([before.start, after.start])}`);
     await undoFp();

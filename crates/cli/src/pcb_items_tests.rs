@@ -26,17 +26,17 @@ fn boxes(dir: &Path) -> Vec<TextBox> {
 
 /// A text box as the Draw Text Box tool and its dialog make one on the silkscreen: three lines of text in a box 20 mm by 8 mm, a dashed border, margins of its own.
 fn notes_box() -> TextBox {
-    let mut t = TextBox::new("F.SilkS", Point { x: 2_000, y: 2_000 }, Point { x: 22_000, y: 10_000 }, 1_000, 120);
+    let mut t = TextBox::new("F.SilkS", Point { x: 2_000_000, y: 2_000_000 }, Point { x: 22_000_000, y: 10_000_000 }, 1_000_000, 120_000);
     t.text = "REV A\nBuilt by the studio, wrapped to the width of its box when the line is long".into();
     t.line_style = eda_model::pcb_items::LineStyle::Dash;
-    t.margin_left_um = 900;
-    t.margin_right_um = 1_100;
+    t.margin_left_nm = 900_000;
+    t.margin_right_nm = 1_100_000;
     t
 }
 
 /// A knockout box: the box is copper-free silkscreen ink with the text cut out of it, turned a quarter, mirrored on the back.
 fn knockout_box() -> TextBox {
-    let mut t = TextBox::new("B.SilkS", Point { x: 2_000, y: 14_000 }, Point { x: 18_000, y: 20_000 }, 1_200, 150);
+    let mut t = TextBox::new("B.SilkS", Point { x: 2_000_000, y: 14_000_000 }, Point { x: 18_000_000, y: 20_000_000 }, 1_200_000, 150_000);
     t.text = "TOP SECRET".into();
     t.knockout = true;
     t.border = false;
@@ -58,14 +58,14 @@ fn a_text_box_is_one_undo_step_of_the_board_and_survives_the_project_file() {
     // The project file is design.json: a fresh load has the box with everything the dialog set.
     let design: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("design.json")).unwrap()).unwrap();
     assert_eq!(design["drawings"]["board_items"]["text_boxes"][0]["line_style"], "dash", "{design}");
-    assert_eq!((shown[0].margin_left_um, shown[0].margin_right_um), (900, 1_100));
+    assert_eq!((shown[0].margin_left_nm, shown[0].margin_right_nm), (900_000, 1_100_000));
 
     // Move, edit and delete are verbs of the same history.
     let id = shown[0].id.clone();
-    step(&dir, Cmd::MoveItems { ids: vec![id.clone()], dx: 1_000, dy: 500 }, false, "test").unwrap();
-    assert_eq!(boxes(&dir)[0].start, Point { x: 3_000, y: 2_500 });
+    step(&dir, Cmd::MoveItems { ids: vec![id.clone()], dx: 1_000_000, dy: 500_000 }, false, "test").unwrap();
+    assert_eq!(boxes(&dir)[0].start, Point { x: 3_000_000, y: 2_500_000 });
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    assert_eq!(boxes(&dir)[0].start, Point { x: 2_000, y: 2_000 }, "one undo takes the move back");
+    assert_eq!(boxes(&dir)[0].start, Point { x: 2_000_000, y: 2_000_000 }, "one undo takes the move back");
     let mut edited = boxes(&dir)[0].clone();
     edited.text = "REV B".into();
     step(&dir, Cmd::PcbItem(PcbItemCmd::EditTextBox { id: id.clone(), text_box: edited }), false, "test").unwrap();
@@ -177,14 +177,14 @@ fn a_reference_image_is_one_undo_step_described_by_the_state_served_by_the_route
     let dir = scratch("p16_ref_image");
     setup(&dir);
     assert!(ref_images(&dir).is_empty());
-    let id = add_image(&dir, "Cmts.User", Point { x: 30_000, y: 20_000 }, 500_000);
+    let id = add_image(&dir, "Cmts.User", Point { x: 30_000_000, y: 20_000_000 }, 500_000);
     assert!(id.starts_with("img_"));
 
     let s = state(&dir);
     let shown = &s["drawings"]["images"][0];
-    assert_eq!((shown["id"].as_str(), shown["layer"].as_str(), shown["x"].as_i64(), shown["y"].as_i64()), (Some(id.as_str()), Some("Cmts.User"), Some(30_000), Some(20_000)));
+    assert_eq!((shown["id"].as_str(), shown["layer"].as_str(), shown["x"].as_i64(), shown["y"].as_i64()), (Some(id.as_str()), Some("Cmts.User"), Some(30_000_000), Some(20_000_000)));
     // 120 x 80 px at 254 ppi are 12 x 8 mm; at half scale 6 x 4
-    assert_eq!((shown["w"].as_i64(), shown["h"].as_i64(), shown["scale_ppm"].as_i64(), shown["ppi"].as_u64()), (Some(6_000), Some(4_000), Some(500_000), Some(254)));
+    assert_eq!((shown["w"].as_i64(), shown["h"].as_i64(), shown["scale_ppm"].as_i64(), shown["ppi"].as_u64()), (Some(6_000_000), Some(4_000_000), Some(500_000), Some(254)));
     assert_eq!(shown["px"], serde_json::json!([120, 80]));
     assert!(shown.get("data").is_none() && !s.to_string().contains(&base64_encode(&red_png())[..64]), "the pixels are not in the state");
     let hash = shown["hash"].as_str().unwrap().to_string();
@@ -227,8 +227,8 @@ fn kicad_cli_loads_the_reference_image_this_studio_writes_keeps_its_pixels_and_d
     };
     let dir = scratch("p16_ref_image_cli");
     setup(&dir);
-    add_image(&dir, "Cmts.User", Point { x: 30_000, y: 20_000 }, 500_000);
-    add_image(&dir, "F.SilkS", Point { x: 60_000, y: 40_000 }, 1_000_000);
+    add_image(&dir, "Cmts.User", Point { x: 30_000_000, y: 20_000_000 }, 500_000);
+    add_image(&dir, "F.SilkS", Point { x: 60_000_000, y: 40_000_000 }, 1_000_000);
     let args: Vec<String> = ["--layers", "Cmts.User"].iter().map(|s| s.to_string()).collect();
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let derived = std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board file");
@@ -247,8 +247,8 @@ fn kicad_cli_loads_the_reference_image_this_studio_writes_keeps_its_pixels_and_d
     images.sort_by_key(|i| i.at.x);
     assert_eq!(images.len(), 2);
     let (first, second) = (&images[0], &images[1]);
-    assert_eq!((first.layer.as_str(), first.at, first.scale_ppm), ("Cmts.User", Point { x: 30_000, y: 20_000 }, 500_000), "kicad-cli read the place, the layer and the scale as written");
-    assert_eq!((second.layer.as_str(), second.at, second.scale_ppm), ("F.SilkS", Point { x: 60_000, y: 40_000 }, 1_000_000));
+    assert_eq!((first.layer.as_str(), first.at, first.scale_ppm), ("Cmts.User", Point { x: 30_000_000, y: 20_000_000 }, 500_000), "kicad-cli read the place, the layer and the scale as written");
+    assert_eq!((second.layer.as_str(), second.at, second.scale_ppm), ("F.SilkS", Point { x: 60_000_000, y: 40_000_000 }, 1_000_000));
     assert_eq!(first.data, base64_encode(&red_png()), "the pixels are the file this studio embedded, byte for byte");
     assert_eq!(second.data, first.data);
 
@@ -291,7 +291,7 @@ fn a_schematic_image_is_one_undo_step_described_by_the_state_served_by_the_route
     let dir = scratch("p16_sch_image");
     super::tests::setup_schematic(&dir);
     assert!(sch_images(&dir).is_empty());
-    add_sch_image(&dir, Point { x: 50_800, y: 38_100 }, 1_000_000);
+    add_sch_image(&dir, Point { x: 50_800_000, y: 38_100_000 }, 1_000_000);
     let images = sch_images(&dir);
     assert_eq!(images.len(), 1);
     let id = images[0].0.clone();
@@ -311,14 +311,14 @@ fn a_schematic_image_is_one_undo_step_described_by_the_state_served_by_the_route
     assert!(text.contains("(image\n\t\t(at 50.8 38.1)\n\t\t(uuid"), "{text}");
     let (back, _, _) = eda_kicad::import_kicad_sch(&text).unwrap();
     let read = back.schematic.unwrap().extras.graphics.into_iter().find_map(|g| if let SchGraphicKind::Image { at, scale_ppm, data } = g.shape { Some((at, scale_ppm, data)) } else { None }).expect("the image reads back");
-    assert_eq!(read, (Point { x: 50_800, y: 38_100 }, 1_000_000, base64_encode(&red_png())));
+    assert_eq!(read, (Point { x: 50_800_000, y: 38_100_000 }, 1_000_000, base64_encode(&red_png())));
 
     // an edit that sends no pixels keeps them; one undo takes the edit back
     let edit = eda_model::sch_extras::SchGraphic::new(SchGraphicKind::Image { at: Point { x: 0, y: 0 }, scale_ppm: 2_000_000, data: String::new() });
     step(&dir, Cmd::sch(SchCmd::EditGraphic { id: id.clone(), graphic: edit }), false, "test").unwrap();
     assert_eq!((sch_images(&dir)[0].1, sch_images(&dir)[0].2, sch_images(&dir)[0].3.clone()), (Point { x: 0, y: 0 }, 2_000_000, base64_encode(&red_png())));
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
-    assert_eq!((sch_images(&dir)[0].1, sch_images(&dir)[0].2), (Point { x: 50_800, y: 38_100 }, 1_000_000));
+    assert_eq!((sch_images(&dir)[0].1, sch_images(&dir)[0].2), (Point { x: 50_800_000, y: 38_100_000 }, 1_000_000));
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
     assert!(sch_images(&dir).is_empty());
 }
@@ -336,7 +336,7 @@ fn kicad_cli_plots_the_schematic_image_this_studio_writes() {
     }
     let dir = scratch("p16_sch_image_cli");
     super::tests::setup_schematic(&dir);
-    add_sch_image(&dir, Point { x: 100_000, y: 80_000 }, 500_000);
+    add_sch_image(&dir, Point { x: 100_000_000, y: 80_000_000 }, 500_000);
     let out = crate::kicad_engine::export_sch(&dir, "svg", &[]).expect("kicad-cli plots the schematic");
     let file = out["files"].as_array().and_then(|f| f.first()).and_then(|f| f.as_str()).unwrap_or_else(|| panic!("{out}")).to_string();
     let svg = std::fs::read_to_string(dir.join(&file)).unwrap();
@@ -361,9 +361,9 @@ fn points(dir: &Path) -> Vec<PcbPoint> {
     load(dir).unwrap().1.drawings.map(|d| d.board_items.points).unwrap_or_default()
 }
 
-fn add_point(dir: &Path, layer: &str, at: Point, size_um: i64) {
+fn add_point(dir: &Path, layer: &str, at: Point, size_nm: i64) {
     let mut point = PcbPoint::new(layer, at);
-    point.size_um = size_um;
+    point.size_nm = size_nm;
     step(dir, Cmd::PcbItem(PcbItemCmd::AddPoint { point }), false, "test").unwrap();
 }
 
@@ -373,12 +373,12 @@ fn a_point_is_one_undo_step_described_by_the_state_and_written_to_the_board() {
     let dir = scratch("p16_point");
     setup(&dir);
     assert!(points(&dir).is_empty());
-    add_point(&dir, "F.SilkS", Point { x: 30_000, y: 20_000 }, 2_000);
+    add_point(&dir, "F.SilkS", Point { x: 30_000_000, y: 20_000_000 }, 2_000_000);
     let id = points(&dir)[0].id.clone();
     assert!(id.starts_with("pnt_"));
     let s = state(&dir);
     let shown = &s["drawings"]["points"][0];
-    assert_eq!((shown["id"].as_str(), shown["layer"].as_str(), shown["x"].as_i64(), shown["y"].as_i64(), shown["size"].as_i64()), (Some(id.as_str()), Some("F.SilkS"), Some(30_000), Some(20_000), Some(2_000)));
+    assert_eq!((shown["id"].as_str(), shown["layer"].as_str(), shown["x"].as_i64(), shown["y"].as_i64(), shown["size"].as_i64()), (Some(id.as_str()), Some("F.SilkS"), Some(30_000_000), Some(20_000_000), Some(2_000_000)));
 
     let (_, design, model) = load(&dir).unwrap();
     let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-21", title: "t" }).unwrap();
@@ -386,13 +386,13 @@ fn a_point_is_one_undo_step_described_by_the_state_and_written_to_the_board() {
     assert!(!text.contains("(point (at 30 20) (size 2) (layer \"F.SilkS\") (locked"), "no lock in the file form");
     let (back, _, notes) = eda_kicad::import_kicad_pcb(&text).unwrap();
     assert!(!notes.unread_items.contains_key("point"), "the importer reads it");
-    let read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_um)).collect();
-    assert_eq!(read, vec![("F.SilkS".to_string(), Point { x: 30_000, y: 20_000 }, 2_000)]);
+    let read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_nm)).collect();
+    assert_eq!(read, vec![("F.SilkS".to_string(), Point { x: 30_000_000, y: 20_000_000 }, 2_000_000)]);
 
-    step(&dir, Cmd::PcbItem(PcbItemCmd::EditPoint { id: id.clone(), layer: "B.SilkS".into(), at: Point { x: 0, y: 0 }, size_um: 3_000 }), false, "test").unwrap();
-    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_um), ("B.SilkS", 3_000));
+    step(&dir, Cmd::PcbItem(PcbItemCmd::EditPoint { id: id.clone(), layer: "B.SilkS".into(), at: Point { x: 0, y: 0 }, size_nm: 3_000_000 }), false, "test").unwrap();
+    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_nm), ("B.SilkS", 3_000_000));
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_um), ("F.SilkS", 2_000), "one undo takes the edit back");
+    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_nm), ("F.SilkS", 2_000_000), "one undo takes the edit back");
     step(&dir, Cmd::PcbItem(PcbItemCmd::DeletePoint { id }), false, "test").unwrap();
     assert!(points(&dir).is_empty());
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -419,8 +419,8 @@ fn kicad_cli_loads_the_points_this_studio_writes_keeps_them_and_does_not_plot_th
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let without = body(&plot(&cli, &derived_of(&dir), "F.SilkS", &dir.join("without.svg")));
     // inside the board's own extent: the plot's page is the board's extent, points included
-    add_point(&dir, "F.SilkS", Point { x: 10_000, y: 12_000 }, 2_000);
-    add_point(&dir, "B.Cu", Point { x: 5_000, y: 6_000 }, 1_000);
+    add_point(&dir, "F.SilkS", Point { x: 10_000_000, y: 12_000_000 }, 2_000_000);
+    add_point(&dir, "B.Cu", Point { x: 5_000_000, y: 6_000_000 }, 1_000_000);
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let derived = derived_of(&dir);
     let text = std::fs::read_to_string(&derived).unwrap();
@@ -433,9 +433,9 @@ fn kicad_cli_loads_the_points_this_studio_writes_keeps_them_and_does_not_plot_th
     let upgraded = std::fs::read_to_string(&copy).unwrap();
     assert_eq!(upgraded.matches("(point").count(), 2, "kicad-cli kept both points: {upgraded}");
     let (back, _, _) = eda_kicad::import_kicad_pcb(&upgraded).unwrap();
-    let mut read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_um)).collect();
+    let mut read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_nm)).collect();
     read.sort_by_key(|p| p.1.x);
-    assert_eq!(read, vec![("B.Cu".to_string(), Point { x: 5_000, y: 6_000 }, 1_000), ("F.SilkS".to_string(), Point { x: 10_000, y: 12_000 }, 2_000)], "kicad-cli read the place, size and layer as written");
+    assert_eq!(read, vec![("B.Cu".to_string(), Point { x: 5_000_000, y: 6_000_000 }, 1_000_000), ("F.SilkS".to_string(), Point { x: 10_000_000, y: 12_000_000 }, 2_000_000)], "kicad-cli read the place, size and layer as written");
     let with = body(&plot(&cli, &derived, "F.SilkS", &dir.join("with.svg")));
     assert_eq!(with, without, "a point is in no plot");
 }
@@ -459,12 +459,12 @@ fn set_fill(dir: &Path, id: &str, fill: ShapeFill) {
 }
 
 fn rect_shape(layer: &str, (x0, y0): (i64, i64), (x1, y1): (i64, i64)) -> Shape {
-    Shape::Rect { id: String::new(), layer: layer.into(), stroke_width: 200, filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
+    Shape::Rect { id: String::new(), layer: layer.into(), stroke_width: 200_000, filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
 }
 
 /// A vertical line 0.6 mm wide at `x` from `y0` to `y1`.
 fn bar(layer: &str, x: i64, y0: i64, y1: i64) -> Shape {
-    Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 600, filled: false, start: Point { x, y: y0 }, end: Point { x, y: y1 } }
+    Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 600_000, filled: false, start: Point { x, y: y0 }, end: Point { x, y: y1 } }
 }
 
 /// The state's description of the shape `id`.
@@ -479,26 +479,26 @@ fn a_hatch_is_one_undo_step_described_by_the_state_with_its_lines_and_written_to
     let dir = scratch("p16_hatch");
     setup(&dir);
     // Away from the two footprints: their Value fields are on F.Fab and cut a hatching they are over (the slow test below has the square over one).
-    let id = add_shape(&dir, rect_shape("F.Fab", (1_000, 11_000), (9_000, 19_000)));
+    let id = add_shape(&dir, rect_shape("F.Fab", (1_000_000, 11_000_000), (9_000_000, 19_000_000)));
     assert!(shape_json(&dir, &id).get("fill").is_none() && shape_json(&dir, &id).get("hatch_lines").is_none(), "an unfilled shape says nothing of hatching");
 
     set_fill(&dir, &id, ShapeFill::Hatch);
     let s = shape_json(&dir, &id);
-    assert_eq!((s["fill"].as_str(), s["filled"].as_bool(), s["hatch_width"].as_i64()), (Some("hatch"), Some(false), Some(200)));
+    assert_eq!((s["fill"].as_str(), s["filled"].as_bool(), s["hatch_width"].as_i64()), (Some("hatch"), Some(false), Some(200_000)));
     let lines: Vec<[i64; 4]> = s["hatch_lines"].as_array().unwrap().iter().map(|l| [l[0].as_i64().unwrap(), l[1].as_i64().unwrap(), l[2].as_i64().unwrap(), l[3].as_i64().unwrap()]).collect();
     // 8 mm square, 0.2 mm line: a line every 2 mm along x + y, three of them 2 mm apart in x (the corners meet at x + y = 2 and 18 mm): x + y = 4, 6, ..., 16 mm.
     assert_eq!(lines.len(), 7, "{lines:?}");
-    assert!(lines.iter().all(|l| l[0] + l[1] == l[2] + l[3] && (l[0] + l[1]) % 2_000 == 0));
+    assert!(lines.iter().all(|l| l[0] + l[1] == l[2] + l[3] && (l[0] + l[1]) % 2_000_000 == 0));
     let alone = lines.len();
 
     // A line across the shape on its layer: the lines it crosses are cut in two, with no step of ours between.
-    let cutter = add_shape(&dir, bar("F.Fab", 5_000, 10_000, 20_000));
+    let cutter = add_shape(&dir, bar("F.Fab", 5_000_000, 10_000_000, 20_000_000));
     let cut = shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len();
     assert!(cut > alone, "{cut} against {alone}");
     step(&dir, Cmd::DeleteShape { id: cutter }, false, "test").unwrap();
     assert_eq!(shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len(), alone, "and taking the bar away gives the lines back");
     // One on another layer cuts nothing.
-    add_shape(&dir, bar("F.SilkS", 5_000, 10_000, 20_000));
+    add_shape(&dir, bar("F.SilkS", 5_000_000, 10_000_000, 20_000_000));
     assert_eq!(shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len(), alone);
 
     // The three hatches: a reverse hatch has the lines the other way, a cross-hatch both.
@@ -588,12 +588,12 @@ fn kicad_cli_plots_the_hatching_this_studio_works_out() {
     };
     let dir = scratch("p16_hatch_cli");
     setup(&dir);
-    let rect = add_shape(&dir, rect_shape("F.Fab", (1_000, 1_000), (9_000, 9_000)));
+    let rect = add_shape(&dir, rect_shape("F.Fab", (1_000_000, 1_000_000), (9_000_000, 9_000_000)));
     set_fill(&dir, &rect, ShapeFill::Hatch);
-    add_shape(&dir, bar("F.Fab", 5_000, 0, 12_000));
-    let circle = add_shape(&dir, Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 200, filled: false, center: Point { x: 15_000, y: 5_000 }, end: Point { x: 18_500, y: 5_000 } });
+    add_shape(&dir, bar("F.Fab", 5_000_000, 0, 12_000_000));
+    let circle = add_shape(&dir, Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 200_000, filled: false, center: Point { x: 15_000_000, y: 5_000_000 }, end: Point { x: 18_500_000, y: 5_000_000 } });
     set_fill(&dir, &circle, ShapeFill::ReverseHatch);
-    let tri = add_shape(&dir, Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 200, filled: false, pts: vec![Point { x: 11_000, y: 11_000 }, Point { x: 19_000, y: 11_000 }, Point { x: 15_000, y: 19_000 }] });
+    let tri = add_shape(&dir, Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 200_000, filled: false, pts: vec![Point { x: 11_000_000, y: 11_000_000 }, Point { x: 19_000_000, y: 11_000_000 }, Point { x: 15_000_000, y: 19_000_000 }] });
     set_fill(&dir, &tri, ShapeFill::CrossHatch);
 
     let args: Vec<String> = ["--layers", "F.Fab"].iter().map(|s| s.to_string()).collect();
@@ -608,7 +608,7 @@ fn kicad_cli_plots_the_hatching_this_studio_works_out() {
     let hatched = |id: &str| (all.shapes.iter().find(|s| s.id() == id).unwrap(), all.board_items.hatch_of(id).unwrap());
 
     // The three hatchings, each polygon of ours against one of kicad-cli's: a stadium per line for the hatch and the reverse hatch.
-    let to_mm = |poly: &eda_shape_poly_set::LineChain| -> Vec<(f64, f64)> { poly.iter().map(|p| (p.x as f64 / 1000.0, p.y as f64 / 1000.0)).collect() };
+    let to_mm = |poly: &eda_shape_poly_set::LineChain| -> Vec<(f64, f64)> { poly.iter().map(|p| (p.x as f64 / 1e6, p.y as f64 / 1e6)).collect() };
     let stadiums: Vec<Vec<(f64, f64)>> = [&rect, &circle].iter().flat_map(|id| { let (s, h) = hatched(id); eda_drc::hatch::hatch_polygons(&design, Some(&model), s, h).iter().map(to_mm).collect::<Vec<_>>() }).collect();
     assert!(stadiums.len() > 10, "{} lines", stadiums.len());
     let (tri_shape, tri_kind) = hatched(&tri);
@@ -659,16 +659,16 @@ fn qr(layer: &str, at: Point, text: &str) -> Barcode {
         at,
         angle: 0,
         layer: layer.into(),
-        width_um: 8_000,
-        height_um: 8_000,
+        width_nm: 8_000_000,
+        height_nm: 8_000_000,
         text: text.into(),
-        text_height_um: 1_000,
+        text_height_nm: 1_000_000,
         kind: BarcodeKind::Qr,
         ecc: EccLevel::L,
         show_text: true,
         knockout: false,
-        margin_x_um: 0,
-        margin_y_um: 0,
+        margin_x_nm: 0,
+        margin_y_nm: 0,
     }
 }
 
@@ -683,14 +683,14 @@ fn a_barcode_is_one_undo_step_described_by_the_state_and_written_to_the_board() 
     let dir = scratch("p16_barcode");
     setup(&dir);
     assert!(barcodes(&dir).is_empty());
-    add_barcode(&dir, qr("F.SilkS", Point { x: 10_000, y: 12_000 }, "HELLO"));
+    add_barcode(&dir, qr("F.SilkS", Point { x: 10_000_000, y: 12_000_000 }, "HELLO"));
     let id = barcodes(&dir)[0].id.clone();
     assert!(id.starts_with("bar_"));
     let s = state(&dir);
     let shown = &s["drawings"]["barcodes"][0];
     assert_eq!(
         (shown["id"].as_str(), shown["layer"].as_str(), shown["x"].as_i64(), shown["y"].as_i64(), shown["w"].as_i64(), shown["h"].as_i64(), shown["text"].as_str(), shown["kind"].as_str(), shown["ecc"].as_str(), shown["show_text"].as_bool()),
-        (Some(id.as_str()), Some("F.SilkS"), Some(10_000), Some(12_000), Some(8_000), Some(8_000), Some("HELLO"), Some("qr"), Some("L"), Some(true))
+        (Some(id.as_str()), Some("F.SilkS"), Some(10_000_000), Some(12_000_000), Some(8_000_000), Some(8_000_000), Some("HELLO"), Some("qr"), Some("L"), Some(true))
     );
 
     let (_, design, model) = load(&dir).unwrap();
@@ -723,14 +723,14 @@ fn the_barcode_shape_routes_answer_without_a_plot_for_what_has_nothing_to_plot()
     let unknown = crate::barcode_api::shape_route(&dir, "/api/barcode_shape?id=bar_nope");
     assert_eq!(unknown.status, "404 Not Found");
     assert_eq!(serde_json::from_str::<serde_json::Value>(&unknown.body).unwrap()["status"], "failed");
-    add_barcode(&dir, qr("F.SilkS", Point { x: 5_000, y: 5_000 }, ""));
+    add_barcode(&dir, qr("F.SilkS", Point { x: 5_000_000, y: 5_000_000 }, ""));
     let id = barcodes(&dir)[0].id.clone();
     let empty = crate::barcode_api::shape_route(&dir, &format!("/api/barcode_shape?id={id}"));
     assert_eq!(empty.status, "200 OK");
     assert_eq!(serde_json::from_str::<serde_json::Value>(&empty.body).unwrap(), serde_json::json!({ "status": "ready", "paths": [] }));
     assert_eq!(crate::barcode_api::preview_route(&dir, b"not json").status, "400 Bad Request");
     assert_eq!(crate::barcode_api::preview_route(&dir, br#"{"barcode": {"layer": "F.SilkS"}}"#).status, "400 Bad Request");
-    let preview = crate::barcode_api::preview_route(&dir, br#"{"barcode": {"layer": "F.SilkS", "at": {"x": 0, "y": 0}, "width_um": 5000, "height_um": 5000, "text": "", "text_height_um": 1000}}"#);
+    let preview = crate::barcode_api::preview_route(&dir, br#"{"barcode": {"layer": "F.SilkS", "at": {"x": 0, "y": 0}, "width_nm": 5000, "height_nm": 5000, "text": "", "text_height_nm": 1000}}"#);
     assert_eq!(serde_json::from_str::<serde_json::Value>(&preview.body).unwrap(), serde_json::json!({ "status": "ready", "paths": [] }));
 }
 
@@ -748,31 +748,31 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     };
     let dir = scratch("p16_barcode_cli");
     setup(&dir);
-    let at = Point { x: 10_000, y: 12_000 };
+    let at = Point { x: 10_000_000, y: 12_000_000 };
     let case = |layer: &str, kind: BarcodeKind, text: &str, w: i64, h: i64, mutate: &dyn Fn(&mut Barcode)| {
         let mut b = qr(layer, at, text);
         b.kind = kind;
-        b.width_um = w;
-        b.height_um = h;
+        b.width_nm = w;
+        b.height_nm = h;
         mutate(&mut b);
         b
     };
     let cases = vec![
-        ("qr", case("F.SilkS", BarcodeKind::Qr, "HELLO", 8_000, 8_000, &|_| {})),
-        ("qr turned, level H", case("F.SilkS", BarcodeKind::Qr, "TURNED 90", 8_000, 8_000, &|b| {
+        ("qr", case("F.SilkS", BarcodeKind::Qr, "HELLO", 8_000_000, 8_000_000, &|_| {})),
+        ("qr turned, level H", case("F.SilkS", BarcodeKind::Qr, "TURNED 90", 8_000_000, 8_000_000, &|b| {
             b.angle = 90_000;
             b.ecc = EccLevel::H;
         })),
-        ("micro qr", case("F.SilkS", BarcodeKind::MicroQr, "MQ1", 6_000, 6_000, &|b| b.ecc = EccLevel::M)),
-        ("data matrix", case("F.SilkS", BarcodeKind::DataMatrix, "DM-2026", 7_000, 7_000, &|_| {})),
-        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", 14_000, 5_000, &|b| b.text_height_um = 1_200)),
-        ("qr on the back (mirrored)", case("B.SilkS", BarcodeKind::Qr, "BACK", 8_000, 8_000, &|_| {})),
-        ("qr knocked out of the silkscreen", case("F.SilkS", BarcodeKind::Qr, "KO", 8_000, 8_000, &|b| {
+        ("micro qr", case("F.SilkS", BarcodeKind::MicroQr, "MQ1", 6_000_000, 6_000_000, &|b| b.ecc = EccLevel::M)),
+        ("data matrix", case("F.SilkS", BarcodeKind::DataMatrix, "DM-2026", 7_000_000, 7_000_000, &|_| {})),
+        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", 14_000_000, 5_000_000, &|b| b.text_height_nm = 1_200_000)),
+        ("qr on the back (mirrored)", case("B.SilkS", BarcodeKind::Qr, "BACK", 8_000_000, 8_000_000, &|_| {})),
+        ("qr knocked out of the silkscreen", case("F.SilkS", BarcodeKind::Qr, "KO", 8_000_000, 8_000_000, &|b| {
             b.knockout = true;
-            b.margin_x_um = 1_000;
-            b.margin_y_um = 600;
+            b.margin_x_nm = 1_000_000;
+            b.margin_y_nm = 600_000;
         })),
-        ("code 39 with a text it cannot take", case("F.SilkS", BarcodeKind::Code39, "h\u{e9}llo", 14_000, 5_000, &|_| {})),
+        ("code 39 with a text it cannot take", case("F.SilkS", BarcodeKind::Code39, "h\u{e9}llo", 14_000_000, 5_000_000, &|_| {})),
     ];
     let derived_of = |dir: &Path| std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board file");
     for (name, barcode) in cases {
@@ -789,7 +789,7 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
             assert_eq!(a.len(), b.len(), "{name}: polygon {i} has the same contours");
             for (ra, rb) in a.iter().zip(b) {
                 assert_eq!(ra.len(), rb.len(), "{name}: polygon {i}");
-                assert!(ra.iter().zip(rb).all(|(p, q)| (p[0] - q[0]).abs() <= 2 && (p[1] - q[1]).abs() <= 2), "{name}: polygon {i} differs: {ra:?} against {rb:?}");
+                assert!(ra.iter().zip(rb).all(|(p, q)| (p[0] - q[0]).abs() <= 2000 && (p[1] - q[1]).abs() <= 2000), "{name}: polygon {i} differs: {ra:?} against {rb:?}");
             }
         }
         if name == "code 39 with a text it cannot take" {
@@ -800,16 +800,16 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
         // the extent: the barcode's own size, centred where it is (the text under it, and a knockout's margin, are outside it)
         if name == "qr" {
             let (xs, ys): (Vec<i64>, Vec<i64>) = (theirs.iter().flatten().flatten().map(|p| p[0]).collect(), theirs.iter().flatten().flatten().map(|p| p[1]).collect());
-            assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(at.x - 4_000), Some(at.x + 4_000)), "8 mm wide, centred on x");
-            assert!(ys.iter().min().copied() == Some(at.y - 4_000) && ys.iter().max().unwrap() > &(at.y + 4_000), "8 mm tall from the top, with its text under it");
+            assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(at.x - 4_000_000), Some(at.x + 4_000_000)), "8 mm wide, centred on x");
+            assert!(ys.iter().min().copied() == Some(at.y - 4_000_000) && ys.iter().max().unwrap() > &(at.y + 4_000_000), "8 mm tall from the top, with its text under it");
         }
         let id = barcodes(&dir)[0].id.clone();
         step(&dir, Cmd::PcbItem(PcbItemCmd::DeleteBarcode { id }), false, "test").unwrap();
     }
 
     // kicad-cli reads the barcodes and writes them back with what they were given
-    add_barcode(&dir, case("F.SilkS", BarcodeKind::Qr, "KEPT", 8_000, 8_000, &|b| b.ecc = EccLevel::Q));
-    add_barcode(&dir, case("F.SilkS", BarcodeKind::Code128, "KEPT-TOO", 14_000, 5_000, &|b| b.at = Point { x: 4_000, y: 3_000 }));
+    add_barcode(&dir, case("F.SilkS", BarcodeKind::Qr, "KEPT", 8_000_000, 8_000_000, &|b| b.ecc = EccLevel::Q));
+    add_barcode(&dir, case("F.SilkS", BarcodeKind::Code128, "KEPT-TOO", 14_000_000, 5_000_000, &|b| b.at = Point { x: 4_000_000, y: 3_000_000 }));
     let args: Vec<String> = ["--layers", "F.SilkS"].iter().map(|s| s.to_string()).collect();
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let derived = derived_of(&dir);
@@ -820,10 +820,10 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     let upgraded = std::fs::read_to_string(&copy).unwrap();
     assert_eq!(upgraded.matches("(barcode").count(), 2, "kicad-cli kept both barcodes: {upgraded}");
     let (back, _, _) = eda_kicad::import_kicad_pcb(&upgraded).unwrap();
-    let mut read: Vec<_> = back.drawings.unwrap().barcodes.into_iter().map(|b| (b.text, b.kind, b.ecc, b.at, b.width_um)).collect();
+    let mut read: Vec<_> = back.drawings.unwrap().barcodes.into_iter().map(|b| (b.text, b.kind, b.ecc, b.at, b.width_nm)).collect();
     read.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(read[0].0, "KEPT");
-    assert_eq!((read[0].1, read[0].2, read[0].3, read[0].4), (BarcodeKind::Qr, EccLevel::Q, at, 8_000));
+    assert_eq!((read[0].1, read[0].2, read[0].3, read[0].4), (BarcodeKind::Qr, EccLevel::Q, at, 8_000_000));
     assert_eq!((read[1].0.as_str(), read[1].1), ("KEPT-TOO", BarcodeKind::Code128));
 }
 
@@ -835,11 +835,11 @@ fn a_lines_endings_are_one_undo_step_described_by_the_state_and_written_to_the_b
     use eda_model::line_ending::{LineEnding, LineEndingStyle};
     let dir = scratch("k10_endings");
     setup(&dir);
-    let id = add_shape(&dir, bar("F.SilkS", 5_000, 10_000, 20_000));
-    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_um: 2_000, ..Default::default() };
+    let id = add_shape(&dir, bar("F.SilkS", 5_000_000, 10_000_000, 20_000_000));
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: 2_000_000, ..Default::default() };
     step(&dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.clone()], fill: None, start_ending: Some(arrow), end_ending: Some(LineEnding::new(LineEndingStyle::ArrowOpen)) }), false, "test").unwrap();
     let s = shape_json(&dir, &id);
-    assert_eq!(s["start_ending"], serde_json::json!({ "style": "arrow", "length": 2000, "width": 0, "stroke_width": 0 }));
+    assert_eq!(s["start_ending"], serde_json::json!({ "style": "arrow", "length": 2_000_000, "width": 0, "stroke_width": 0 }));
     assert_eq!(s["end_ending"]["style"], "arrow_open");
     let pcb = std::fs::read_to_string(dir.join(".kicad").join(format!("{}.kicad_pcb", dir.file_name().unwrap().to_str().unwrap()))).unwrap_or_default();
     if !pcb.is_empty() {
@@ -855,12 +855,12 @@ fn a_grid_item_is_one_undo_step_and_the_state_lists_it() {
     use eda_model::grid_item::GridItem;
     let dir = scratch("k10_grid");
     setup(&dir);
-    let g = GridItem { angle: 30.0, tick_interval: 5, ..GridItem::new(Point { x: 20_000, y: 15_000 }) };
+    let g = GridItem { angle: 30.0, tick_interval: 5000, ..GridItem::new(Point { x: 20_000_000, y: 15_000_000 }) };
     step(&dir, Cmd::PcbItem(PcbItemCmd::AddGridItem { grid_item: g }), false, "test").unwrap();
     let grids = state(&dir)["drawings"]["grid_items"].clone();
     assert_eq!(grids.as_array().unwrap().len(), 1);
     let j = &grids[0];
-    assert_eq!((j["kind"].as_str(), j["x"].as_i64(), j["extent"][0].as_i64(), j["angle"].as_f64(), j["tick_interval"].as_i64(), j["affects"]["cursor"].as_bool()), (Some("cartesian"), Some(20_000), Some(5_000), Some(30.0), Some(5), Some(true)));
+    assert_eq!((j["kind"].as_str(), j["x"].as_i64(), j["extent"][0].as_i64(), j["angle"].as_f64(), j["tick_interval"].as_i64(), j["affects"]["cursor"].as_bool()), (Some("cartesian"), Some(20_000_000), Some(5_000_000), Some(30.0), Some(5000), Some(true)));
     assert!(j["id"].as_str().unwrap().starts_with("grd_"));
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!(state(&dir)["drawings"]["grid_items"].as_array().map_or(0, |a| a.len()), 0);

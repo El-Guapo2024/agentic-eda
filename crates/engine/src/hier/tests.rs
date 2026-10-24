@@ -219,7 +219,7 @@ fn pins_side_by_side_on_one_rail_share_a_power_symbol_beyond_the_parts_texts() {
     let vdd = on_u1("VDD")[0];
     let tips: Vec<i64> = mcu.wires.iter().filter(|w| w.pins.iter().any(|p| p == "U1.1" || p == "U1.14")).map(|w| w.pts[0].y).collect();
     assert_eq!(tips.len(), 2, "each of the two pins has its own stub");
-    assert_eq!(vdd.at.y, tips[0] - 3 * 1_270, "the symbol is three cells above the tips (the supply pair is on top of the part)");
+    assert_eq!(vdd.at.y, tips[0] - 3 * 1_270_000, "the symbol is three cells above the tips (the supply pair is on top of the part)");
     // The two stubs are joined across their ends, and both pins are on the supply net through that join.
     let join = mcu.wires.iter().find(|w| w.pins.is_empty() && w.net == "VDD" && w.pts.iter().any(|p| *p == vdd.at)).expect("a wire joins the two stubs at the symbol");
     assert_eq!(join.pts.len(), 2);

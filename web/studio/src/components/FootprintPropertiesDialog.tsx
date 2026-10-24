@@ -29,7 +29,7 @@ import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { useActionRunner } from "../actions/useActionRunner";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { formatLength, umFrom, umTo } from "../state/units";
+import { formatLength, nmFrom, nmTo } from "../state/units";
 import { boardModelsCmds, rowsOf, type ModelRow } from "../kicad-port/fpModels";
 import { FootprintModelsPanel } from "./footprint/FootprintModelsPanel";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
@@ -127,7 +127,7 @@ export function FootprintPropertiesDialog() {
 
   /** A length cell: the value in the current unit, written back in um. */
   const lengthCell = (um: number, onChange: (um: number) => void, width = 62) => (
-    <input type="number" step="any" value={Number(umTo(um, units).toFixed(4))} onChange={(e) => onChange(Math.round(umFrom(num(e.target.value, umTo(um, units)), units)))} style={{ width }} />
+    <input type="number" step="any" value={Number(nmTo(um, units).toFixed(4))} onChange={(e) => onChange(Math.round(nmFrom(num(e.target.value, nmTo(um, units)), units)))} style={{ width }} />
   );
 
   // A bottom-side footprint's frame is the top-side one mirrored: the dialog shows the offset as the file stores it, x un-mirrored (`GetFPRelativePosition`).
@@ -427,7 +427,7 @@ export function FootprintPropertiesDialog() {
                     ))}
                   </select>
                   <span>Clearance</span>
-                  <OverrideInput testid="fp-zone-clearance" valueUm={fpZone.clearance} units={units} onChange={(v) => setFpZone((f) => ({ ...f, clearance: v }))} />
+                  <OverrideInput testid="fp-zone-clearance" valueNm={fpZone.clearance} units={units} onChange={(v) => setFpZone((f) => ({ ...f, clearance: v }))} />
                 </div>
               </div>
               {padNumbers(part).length > 0 && (
@@ -456,13 +456,13 @@ export function FootprintPropertiesDialog() {
                       ))}
                     </select>
                     <span>Relief gap</span>
-                    <OverrideInput testid="fp-zone-pad-gap" valueUm={padZone.gap} units={units} onChange={(v) => setPadZone({ gap: v })} />
+                    <OverrideInput testid="fp-zone-pad-gap" valueNm={padZone.gap} units={units} onChange={(v) => setPadZone({ gap: v })} />
                     <span>Spoke width</span>
-                    <OverrideInput testid="fp-zone-pad-spoke-width" valueUm={padZone.spokeWidth} units={units} onChange={(v) => setPadZone({ spokeWidth: v })} />
+                    <OverrideInput testid="fp-zone-pad-spoke-width" valueNm={padZone.spokeWidth} units={units} onChange={(v) => setPadZone({ spokeWidth: v })} />
                     <span>Spoke angle</span>
                     <AngleOverrideInput testid="fp-zone-pad-spoke-angle" valueMdeg={padZone.spokeAngleMdeg} defaultDeg={padIsCircle ? 45 : 90} onChange={(v) => setPadZone({ spokeAngleMdeg: v })} />
                     <span>Clearance</span>
-                    <OverrideInput testid="fp-zone-pad-clearance" valueUm={padZone.clearance} units={units} onChange={(v) => setPadZone({ clearance: v })} />
+                    <OverrideInput testid="fp-zone-pad-clearance" valueNm={padZone.clearance} units={units} onChange={(v) => setPadZone({ clearance: v })} />
                   </div>
                 </div>
               )}

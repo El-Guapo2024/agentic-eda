@@ -134,7 +134,7 @@ fn a_footprints_edge_connector_pad_fabrication_property_and_pad_margins_are_writ
     // a `connect` pad was read as an SMD pad and written `smd`
     assert!(p1.kicad.connector);
     assert_eq!(p1.kicad.property.as_deref(), Some("pad_prop_testpoint"));
-    assert_eq!(p1.kicad.solder_mask_margin, Some(50));
+    assert_eq!(p1.kicad.solder_mask_margin, Some(50_000));
     let text = export_kicad_mod(&fp);
     assert!(text.contains("(pad \"1\" connect rect"), "{text}");
     assert!(text.contains("(property pad_prop_testpoint) (solder_mask_margin 0.05)"), "{text}");

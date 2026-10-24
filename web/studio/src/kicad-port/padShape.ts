@@ -4,7 +4,7 @@
 // shapes of a custom pad (the list the older dialogs kept: add, edit and delete a line, an arc, a circle, a rectangle, a polygon or a
 // curve, as `dialog_shape_properties.cpp` words their fields). Pure -- no React -- so the dialogs stay thin views of it and the rules
 // are tested.
-import type { ChamferCorners, CmdShape, LibraryPad, LibraryPadShape, PadCustom, PadEditCmd, PadPrimitive, PadShapeName, PointXY, Um } from "../api/types";
+import type { ChamferCorners, CmdShape, LibraryPad, LibraryPadShape, PadCustom, PadEditCmd, PadPrimitive, PadShapeName, PointXY, Nm } from "../api/types";
 
 /** The shape selector's nine choices, in the dialog's order: `m_PadShapeSelectorChoices`. */
 export type PadShapeChoice = "circle" | "oval" | "rect" | "trapezoid" | "round_rect" | "chamfered_rect" | "chamfered_round_rect" | "custom_circle" | "custom_rect";
@@ -46,18 +46,18 @@ export function shapeNameOf(choice: PadShapeChoice): PadShapeName {
 export const NO_CORNERS: ChamferCorners = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
 
 /** The default corner ratio of KiCad's `PAD_UTILS::GetDefaultIpcRoundingRatio`: 25%, the radius capped at 0.25 mm (the IPC norm). */
-export function defaultIpcRoundingRatio(size: [Um, Um]): number {
+export function defaultIpcRoundingRatio(size: [Nm, Nm]): number {
   const shorter = Math.min(size[0], size[1]);
   if (shorter <= 0) return 0.25;
-  return Math.min(0.25, 250 / shorter);
+  return Math.min(0.25, 250_000 / shorter);
 }
 
 /** What the dialog keeps of a pad's shape while it is open. */
 export interface PadShapeForm {
   choice: PadShapeChoice;
   /** The size's x, which is the diameter of a circle and of a circular base. */
-  w: Um;
-  h: Um;
+  w: Nm;
+  h: Nm;
   /** "Corner size" of a rounded rectangle and of the chamfered one with rounded corners, `0..0.5`. */
   ratio: number;
   /** "Chamfer size", `0..1` of the shorter side. */
@@ -65,7 +65,7 @@ export interface PadShapeForm {
   corners: ChamferCorners;
   /** "Trapezoid axis": Horizontal is `delta.x`, Vertical `delta.y`. */
   trapAxis: "horizontal" | "vertical";
-  trapDelta: Um;
+  trapDelta: Nm;
   /** "Zone knockout" of a custom pad: its shape or its convex hull. */
   knockout: PadCustom["zone"];
   primitives: PadPrimitive[];
@@ -74,12 +74,12 @@ export interface PadShapeForm {
 /** The part of a pad the shape form reads (`Pad` of the studio state). */
 export interface PadShapeSource {
   shape?: PadShapeName;
-  size?: [Um, Um];
-  w: Um;
-  h: Um;
+  size?: [Nm, Nm];
+  w: Nm;
+  h: Nm;
   round?: boolean;
   ratio?: number | null;
-  delta?: [Um, Um] | null;
+  delta?: [Nm, Nm] | null;
   chamfer_ratio?: number | null;
   chamfer_corners?: ChamferCorners | null;
   custom?: PadCustom | null;
@@ -143,7 +143,7 @@ export function isCustom(choice: PadShapeChoice): boolean {
 }
 
 /** The size the pad is given (`SetSize`): the diameter twice for a circle and a circular base. */
-export function sizeOf(form: PadShapeForm): [Um, Um] {
+export function sizeOf(form: PadShapeForm): [Nm, Nm] {
   return hasSizeY(form.choice) ? [form.w, form.h] : [form.w, form.w];
 }
 
@@ -236,7 +236,7 @@ export function setCornerRatio(form: PadShapeForm, ratio: number): PadShapeForm 
 }
 
 /** The deltas of the trapezoid (`transferDataToPad`): one axis only, and never past the pad's own size -- a delta that is too large is cut to the size less 2 um (and `clamped`). */
-export function trapezoidDelta(form: PadShapeForm): { delta: [Um, Um]; clamped: boolean } {
+export function trapezoidDelta(form: PadShapeForm): { delta: [Nm, Nm]; clamped: boolean } {
   const [w, h] = sizeOf(form);
   let [dx, dy] = form.trapAxis === "horizontal" ? [form.trapDelta, 0] : [0, form.trapDelta];
   let clamped = false;
@@ -316,13 +316,13 @@ export const PRIMITIVE_KINDS: { value: PrimitiveKind; label: string }[] = [
 ];
 
 /** The width a new basic shape starts with, 0.2 mm. */
-export const DEFAULT_PRIMITIVE_WIDTH: Um = 200;
+export const DEFAULT_PRIMITIVE_WIDTH: Nm = 200_000;
 
-const pt = (x: Um, y: Um): PointXY => ({ x, y });
+const pt = (x: Nm, y: Nm): PointXY => ({ x, y });
 
 /** A new basic shape, drawn over the pad (`w` and `h` its size) so that it can be seen and edited: a line across it, an arc over its right half, a circle in it, a rectangle, a triangle, a curve. */
-export function newPrimitive(kind: PrimitiveKind, w: Um, h: Um): PadPrimitive {
-  const a = Math.max(Math.round(Math.min(w, h) / 2), 200);
+export function newPrimitive(kind: PrimitiveKind, w: Nm, h: Nm): PadPrimitive {
+  const a = Math.max(Math.round(Math.min(w, h) / 2), 200_000);
   const common = { layer: "", stroke_width: DEFAULT_PRIMITIVE_WIDTH, filled: false };
   let shape: CmdShape;
   switch (kind) {
@@ -385,7 +385,7 @@ export function primitiveFields(shape: CmdShape): PrimitiveField[] {
 }
 
 /** A circle's radius: the distance from its center to the point its `end` names (`EDA_SHAPE::GetRadius`). */
-export function radiusOf(shape: Extract<CmdShape, { kind: "circle" }>): Um {
+export function radiusOf(shape: Extract<CmdShape, { kind: "circle" }>): Nm {
   return Math.round(Math.hypot(shape.end.x - shape.center.x, shape.end.y - shape.center.y));
 }
 
@@ -441,7 +441,7 @@ export function checkPrimitive(prim: PadPrimitive): string | null {
 }
 
 /** One row of the list of basic shapes: what it is and where, in `fmt`'s length. */
-export function describePrimitive(prim: PadPrimitive, fmt: (um: Um) => string): string {
+export function describePrimitive(prim: PadPrimitive, fmt: (um: Nm) => string): string {
   const s = prim.shape;
   const p = (q: PointXY) => `(${fmt(q.x)}, ${fmt(q.y)})`;
   const label = PRIMITIVE_KINDS.find((k) => k.value === s.kind)?.label ?? s.kind;
@@ -493,7 +493,7 @@ export function libraryFieldsOf(form: PadShapeForm): Pick<LibraryPad, "shape" | 
   const e = shapeEdit(form);
   return {
     shape: e.shape as LibraryPadShape,
-    size: e.size as [Um, Um],
+    size: e.size as [Nm, Nm],
     roundrect_ratio: e.roundrect_ratio ?? null,
     trapezoid_delta: e.trapezoid_delta ?? null,
     chamfer_ratio: e.chamfer_ratio ?? null,
@@ -507,7 +507,7 @@ export function libraryFieldsOf(form: PadShapeForm): Pick<LibraryPad, "shape" | 
  * whose `delta` is `(dx, dy)`. `dx` lengthens the left side and shortens the right one by `dx` in all, `dy` the bottom side and the top one (the x of a corner
  * moves by `dy` and its y by `dx`, as KiCad has it; the halves are integers there).
  */
-export function trapezoidCorners(w: Um, h: Um, delta: readonly [Um, Um]): [number, number][] {
+export function trapezoidCorners(w: Nm, h: Nm, delta: readonly [Nm, Nm]): [number, number][] {
   const hx = Math.trunc(w / 2);
   const hy = Math.trunc(h / 2);
   const dx = Math.trunc(delta[0] / 2);
@@ -575,7 +575,7 @@ function shapeExtentPoints(s: CmdShape): [number, number][] {
  * The box `[x0, y0, x1, y1]` of a custom pad's copper in the pad's own frame, shape offset not applied: the anchor and every basic shape that is
  * copper, each as far out as its stroke reaches (`SHAPE_COMPOUND::BBox` of `PAD::GetEffectiveShape`; a proxy item is not copper).
  */
-export function customPadExtent(pad: Pick<LibraryPad, "size" | "custom">): [Um, Um, Um, Um] {
+export function customPadExtent(pad: Pick<LibraryPad, "size" | "custom">): [Nm, Nm, Nm, Nm] {
   const [w, h] = pad.size;
   const hx = w / 2;
   const hy = pad.custom?.anchor === "rect" ? h / 2 : w / 2;
@@ -591,7 +591,7 @@ export function customPadExtent(pad: Pick<LibraryPad, "size" | "custom">): [Um, 
 }
 
 /** [`customPadExtent`] where the pad is on the footprint: moved to `at + offset` and turned with the pad (the box of the turned box). */
-export function customPadBox(pad: Pick<LibraryPad, "size" | "custom" | "at" | "offset" | "rot">): [Um, Um, Um, Um] {
+export function customPadBox(pad: Pick<LibraryPad, "size" | "custom" | "at" | "offset" | "rot">): [Nm, Nm, Nm, Nm] {
   const [x0, y0, x1, y1] = customPadExtent(pad);
   const rad = (pad.rot / 1000) * (Math.PI / 180);
   const cos = Math.cos(rad);

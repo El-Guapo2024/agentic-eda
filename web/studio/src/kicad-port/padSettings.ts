@@ -18,10 +18,10 @@ export type PadSettings = Omit<LibraryPad, "id" | "number" | "at">;
  */
 export const DEFAULT_PAD_MASTER: PadSettings = {
   offset: { x: 0, y: 0 },
-  size: [2540, 1270],
+  size: [2_540_000, 1_270_000],
   shape: "round_rect",
   kind: "through_hole",
-  drill: 800,
+  drill: 800_000,
   drill_slot: null,
   rot: 0,
   roundrect_ratio: 0.15,

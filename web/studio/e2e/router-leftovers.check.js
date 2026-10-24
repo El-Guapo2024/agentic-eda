@@ -159,8 +159,8 @@
     return pts;
   };
   const xy = (p) => ({ x: p[0], y: p[1] });
-  const line = (net, layer, pts) => ({ net, layer, width: 200, pts: pts.map(xy) });
-  const arcTrack = (net, layer, s, m, e) => ({ net, layer, width: 200, pts: tessellate(s, m, e).map(xy), arc_mid_offset: { x: m[0] - s[0], y: m[1] - s[1] } });
+  const line = (net, layer, pts) => ({ net, layer, width: 200_000, pts: pts.map(xy) });
+  const arcTrack = (net, layer, s, m, e) => ({ net, layer, width: 200_000, pts: tessellate(s, m, e).map(xy), arc_mid_offset: { x: m[0] - s[0], y: m[1] - s[1] } });
   /** The studio's own board follows the server's by polling its version: wait for it before the pointer is put on what was just made (a tool that looks for an item asks the studio's board). */
   const settle = async () => {
     const st = await state();
@@ -169,11 +169,11 @@
   };
   const commit = async (tracks, vias = []) => { const r = await cmd({ op: "commit_route", remove_track_ids: [], remove_via_ids: [], tracks, vias }); await settle(); return r; };
   /** The fillet of PA0: a run along y = 10 mm to (12, 10), the quarter arc about (12, 15) of radius 5 mm to (17, 15), a run down x = 17 mm. */
-  const C = [12000, 15000], R = 5000;
-  const S = [12000, 10000], M = [Math.round(C[0] + R * Math.SQRT1_2), Math.round(C[1] - R * Math.SQRT1_2)], En = [17000, 15000];
-  const fillet = () => [line("PA0", "F.Cu", [[6000, 10000], S]), arcTrack("PA0", "F.Cu", S, M, En), line("PA0", "F.Cu", [En, [17000, 21000]])];
-  const ON_ARC = [15000, 11000], ON_ARC2 = [16000, 12000]; // grid points on the arc: (3, -4) and (4, -3) mm from its centre
-  const near = (a, b, tol = 1) => Math.abs(a - b) <= tol;
+  const C = [12_000_000, 15_000_000], R = 5_000_000;
+  const S = [12_000_000, 10_000_000], M = [Math.round(C[0] + R * Math.SQRT1_2), Math.round(C[1] - R * Math.SQRT1_2)], En = [17_000_000, 15_000_000];
+  const fillet = () => [line("PA0", "F.Cu", [[6_000_000, 10_000_000], S]), arcTrack("PA0", "F.Cu", S, M, En), line("PA0", "F.Cu", [En, [17_000_000, 21_000_000]])];
+  const ON_ARC = [15_000_000, 11_000_000], ON_ARC2 = [16_000_000, 12_000_000]; // grid points on the arc: (3, -4) and (4, -3) mm from its centre
+  const near = (a, b, tol = 1_000) => Math.abs(a - b) <= tol;
   const nearPt = (p, q, tol = 2) => Math.hypot(p[0] - q[0], p[1] - q[1]) <= tol;
   const centreDist = (p) => Math.hypot(p[0] - C[0], p[1] - C[1]);
   const distToPoly = (pts, p) => {
@@ -221,11 +221,11 @@
     t(await press("OK"), "OK");
     t(!dialog(), "closes the dialog");
     // the next route carries them
-    await commit([line("PA2", "F.Cu", [[8000, 15000], [8000, 14000]])]);
+    await commit([line("PA2", "F.Cu", [[8_000_000, 15_000_000], [8_000_000, 14_000_000]])]);
     await E.run("pcbnew.InteractiveRouter.SingleTrack");
     await sleep(300);
     const n = replies.length;
-    await clickAt(8000, 14000);
+    await clickAt(8_000_000, 14_000_000);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.req.settings.auto_posture === false && s.req.settings.optimize_entire_dragged_track === true, `the route starts with the new settings: ${s && JSON.stringify([s.body.ok, s.req.settings.auto_posture, s.req.settings.optimize_entire_dragged_track])}`);
     await leaveTool();
@@ -245,7 +245,7 @@
   });
 
   await scenario("the mouse path sets the posture of the head, and with \"Use mouse path to set track posture\" off it does not", async (t) => {
-    await commit([line("PA2", "F.Cu", [[8000, 15000], [8000, 14000]])]);
+    await commit([line("PA2", "F.Cu", [[8_000_000, 15_000_000], [8_000_000, 14_000_000]])]);
     await E.run("pcbnew.InteractiveRouter.SingleTrack");
     await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
     await sleep(300);
@@ -253,7 +253,7 @@
     const session = async (trail) => {
       if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); } // Escape leaves the tool
       const n = replies.length;
-      await clickAt(8000, 14000);
+      await clickAt(8_000_000, 14_000_000);
       const s = await waitReply("start", n);
       if (!(s && s.body.ok === true)) return null;
       let last = null;
@@ -262,9 +262,9 @@
       await sleep(400);
       return last && last.body.head;
     };
-    const diagonalFirst = [[9000, 13000], [10000, 12000], [11000, 11000], [13000, 11000]];
-    const straightFirst = [[10000, 14000], [12000, 14000], [13000, 13000], [13000, 11000]];
-    const [diag, straight] = [JSON.stringify([[8000, 14000], [11000, 11000], [13000, 11000]]), JSON.stringify([[8000, 14000], [10000, 14000], [13000, 11000]])];
+    const diagonalFirst = [[9_000_000, 13_000_000], [10_000_000, 12_000_000], [11_000_000, 11_000_000], [13_000_000, 11_000_000]];
+    const straightFirst = [[10_000_000, 14_000_000], [12_000_000, 14_000_000], [13_000_000, 13_000_000], [13_000_000, 11_000_000]];
+    const [diag, straight] = [JSON.stringify([[8_000_000, 14_000_000], [11_000_000, 11_000_000], [13_000_000, 11_000_000]]), JSON.stringify([[8_000_000, 14_000_000], [10_000_000, 14_000_000], [13_000_000, 11_000_000]])];
     const a = await session(diagonalFirst);
     t(JSON.stringify(a) === diag, `a cursor that went up the diagonal first leaves the pad diagonally: ${JSON.stringify(a)}`);
     const b = await session(straightFirst);
@@ -289,7 +289,7 @@
     // `/` flips the posture from the head's first direction, and back (the key goes to the PCB canvas's container, the element that has the handler)
     if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); }
     let n = replies.length;
-    await clickAt(8000, 14000);
+    await clickAt(8_000_000, 14_000_000);
     await waitReply("start", n);
     for (const [x, y] of straightFirst) await moveTo(x, y);
     const flip = async () => {
@@ -318,11 +318,11 @@
     t(s && s.body.ok === true && s.body.drag === "arc", `D takes hold of the arc as an arc: ${s && JSON.stringify([s.body.ok, s.body.drag, s.body.message])}`);
     t(s && s.body.line_tracks.length === 3, `with the two runs it is a fillet of: ${s && s.body.line_tracks.length} tracks`);
     t(E.state().tool === "drag", `the drag tool is armed: ${E.state().tool}`);
-    const cursor = [16000, 11000]; // outside the arc, in the corner (17, 10) the two runs make
+    const cursor = [16_000_000, 11_000_000]; // outside the arc, in the corner (17, 10) the two runs make
     const m = await moveTo(...cursor, "drag_move");
     t(m && m.body.ok === true && m.body.drag === "arc" && m.body.colliding === false, `the cursor drags it: ${m && JSON.stringify([m.body.ok, m.body.drag, m.body.colliding])}`);
-    t(!!m && distToPoly(m.body.pts, cursor) <= 5, `the preview passes through the cursor: ${m && distToPoly(m.body.pts, cursor).toFixed(1)} um off`);
-    t(m && nearPt(m.body.pts[0], [6000, 10000], 1) && nearPt(m.body.pts[m.body.pts.length - 1], [17000, 21000], 1), "and the far ends of the runs stay where they were");
+    t(!!m && distToPoly(m.body.pts, cursor) <= 5_000, `the preview passes through the cursor: ${m && distToPoly(m.body.pts, cursor).toFixed(1)} nm off`);
+    t(m && nearPt(m.body.pts[0], [6_000_000, 10_000_000], 1_000) && nearPt(m.body.pts[m.body.pts.length - 1], [17_000_000, 21_000_000], 1_000), "and the far ends of the runs stay where they were");
     const f0 = replies.length;
     await clickAt(...cursor);
     await waitReply("drag_finish", f0);
@@ -332,11 +332,11 @@
     t(arcs.length === 1, `it is still one arc track: ${arcs.length}`);
     const arc = arcs[0];
     t(!!arc && !nearPt(arc.arc_mid, arcBefore.arc_mid, 50), `its middle moved: ${arcBefore.arc_mid} -> ${arc && arc.arc_mid}`);
-    t(!!arc && distToPoly(arc.pts, cursor) <= 5, "and it goes through the cursor");
-    const a = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts[0][0] === 6000), b = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts[q.pts.length - 1][1] === 21000);
-    t(!!a && !!b && a.pts.every((p) => p[1] === 10000) && b.pts.every((p) => p[0] === 17000), `the runs are still along y = 10 mm and x = 17 mm: ${a && JSON.stringify(a.pts)} ${b && JSON.stringify(b.pts)}`);
-    t(!!a && !!arc && nearPt(a.pts[a.pts.length - 1], arc.pts[0], 1) && !!b && nearPt(b.pts[0], arc.pts[arc.pts.length - 1], 1), "and meet the arc's ends: it was not cut loose");
-    t(!!a && a.pts[a.pts.length - 1][0] > 12000 && !!b && b.pts[0][1] < 15000, `its ends slid along them, towards the corner they make at (17, 10) mm: ${a && a.pts[a.pts.length - 1]} ${b && b.pts[0]}`);
+    t(!!arc && distToPoly(arc.pts, cursor) <= 5_000, "and it goes through the cursor");
+    const a = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts[0][0] === 6_000_000), b = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts[q.pts.length - 1][1] === 21_000_000);
+    t(!!a && !!b && a.pts.every((p) => p[1] === 10_000_000) && b.pts.every((p) => p[0] === 17_000_000), `the runs are still along y = 10 mm and x = 17 mm: ${a && JSON.stringify(a.pts)} ${b && JSON.stringify(b.pts)}`);
+    t(!!a && !!arc && nearPt(a.pts[a.pts.length - 1], arc.pts[0], 1_000) && !!b && nearPt(b.pts[0], arc.pts[arc.pts.length - 1], 1_000), "and meet the arc's ends: it was not cut loose");
+    t(!!a && a.pts[a.pts.length - 1][0] > 12_000_000 && !!b && b.pts[0][1] < 15_000_000, `its ends slid along them, towards the corner they make at (17, 10) mm: ${a && a.pts[a.pts.length - 1]} ${b && b.pts[0]}`);
     await E.run("common.Interactive.undo");
     await sleep(500);
     t(snapshot(await state()) !== original, "one Undo leaves the fillet (the arc as it was)");
@@ -345,20 +345,20 @@
   });
 
   await scenario("a route that pushes a run of the line an arc is on leaves the arc an arc", async (t) => {
-    await commit(fillet().concat([line("PA2", "F.Cu", [[8000, 15000], [8000, 14000]])]));
+    await commit(fillet().concat([line("PA2", "F.Cu", [[8_000_000, 15_000_000], [8_000_000, 14_000_000]])]));
     const arcBefore = arcsOf(await state())[0];
     await E.run("pcbnew.InteractiveRouter.SingleTrack");
     await E.run("pcbnew.InteractiveRouter.ShoveMode");
     await sleep(300);
     let n = replies.length;
-    await clickAt(8000, 14000);
+    await clickAt(8_000_000, 14_000_000);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.body.net === "PA2", `the route starts on the PA2 stub: ${s && JSON.stringify([s.body.ok, s.body.net, s.body.message])}`);
-    const m = await moveTo(8000, 10000);
+    const m = await moveTo(8_000_000, 10_000_000);
     t(m && m.body.colliding === false, `the head ends on the PA0 run and Shove resolves it: ${m && m.body.colliding}`);
     const pushed = m && m.body.displaced.filter((d) => d.pts.length > 0);
     t(!!pushed && pushed.length === 1 && pushed[0].pts.length > 4, `the line of the fillet is what moves, as one polyline: ${pushed && JSON.stringify(pushed.map((d) => d.pts.length))}`);
-    await clickAt(8000, 10000);
+    await clickAt(8_000_000, 10_000_000);
     await waitReply("fix", n);
     await quiet();
     await E.run("pcbnew.InteractiveRouter.AttemptFinish");
@@ -367,22 +367,22 @@
     const st = await state();
     const arcs = arcsOf(st);
     t(arcs.length === 1 && !!arcBefore && JSON.stringify(arcs[0].pts) === JSON.stringify(arcBefore.pts) && nearPt(arcs[0].arc_mid, arcBefore.arc_mid, 0), `the arc is the arc it was: ${arcs.length} arc(s), ${arcs[0] && arcs[0].arc_mid}`);
-    const run = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts[0][0] === 6000);
-    t(!!run && run.pts.length > 3 && near(run.pts[run.pts.length - 1][1], 10000, 0), `the run was pushed aside, a polyline of ${run && run.pts.length} points joined to the arc: ${run && JSON.stringify(run.pts)}`);
-    const route = trackAt(st, [8000, 10000], "PA2");
+    const run = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts[0][0] === 6_000_000);
+    t(!!run && run.pts.length > 3 && near(run.pts[run.pts.length - 1][1], 10_000_000, 0), `the run was pushed aside, a polyline of ${run && run.pts.length} points joined to the arc: ${run && JSON.stringify(run.pts)}`);
+    const route = trackAt(st, [8_000_000, 10_000_000], "PA2");
     t(!!route, "the PA2 route ends where the cursor was");
     t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), "the gates find no clearance failure");
   });
 
   await scenario("a route that ends in the middle of an arc of its net cuts it in two there, and one that starts in the middle of one does too", async (t) => {
-    await commit(fillet().concat([line("PA0", "F.Cu", [[22000, 9000], [20000, 9000]])]));
+    await commit(fillet().concat([line("PA0", "F.Cu", [[22_000_000, 9_000_000], [20_000_000, 9_000_000]])]));
     let st = await state();
     const arcBefore = arcsOf(st)[0];
     await E.run("pcbnew.InteractiveRouter.SingleTrack");
     await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
     await sleep(300);
     let n = replies.length;
-    await clickAt(20000, 9000);
+    await clickAt(20_000_000, 9_000_000);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.body.net === "PA0", `the route starts on the PA0 stub: ${s && JSON.stringify([s.body.ok, s.body.net])}`);
     const m = await moveTo(...ON_ARC);
@@ -396,10 +396,10 @@
     st = await state();
     let arcs = arcsOf(st);
     t(arcs.length === 2 && arcs.every((q) => q.net === "PA0"), `the arc is two arc tracks now: ${arcs.length}`);
-    t(arcs.length === 2 && ((nearPt(arcs[0].pts[arcs[0].pts.length - 1], ON_ARC, 1) && nearPt(arcs[1].pts[0], ON_ARC, 1)) || (nearPt(arcs[1].pts[arcs[1].pts.length - 1], ON_ARC, 1) && nearPt(arcs[0].pts[0], ON_ARC, 1))), "they meet where the route ends");
+    t(arcs.length === 2 && ((nearPt(arcs[0].pts[arcs[0].pts.length - 1], ON_ARC, 1_000) && nearPt(arcs[1].pts[0], ON_ARC, 1_000)) || (nearPt(arcs[1].pts[arcs[1].pts.length - 1], ON_ARC, 1_000) && nearPt(arcs[0].pts[0], ON_ARC, 1_000))), "they meet where the route ends");
     t(arcs.every((q) => q.arc_mid && near(centreDist(q.arc_mid), R, 3) && q.pts.every((p) => near(centreDist(p), R, 4))), "on the circle the arc was on");
     t(!arcs.some((q) => q.id === arcBefore.id), "the arc track it replaced is gone");
-    t(!!trackAt(st, ON_ARC, "PA0") && tracksOf(st).some((q) => q.net === "PA0" && !q.arc_mid && nearPt(q.pts[0], [20000, 9000], 1) && nearPt(q.pts[q.pts.length - 1], ON_ARC, 1)), "and the route is a track from the stub to that point");
+    t(!!trackAt(st, ON_ARC, "PA0") && tracksOf(st).some((q) => q.net === "PA0" && !q.arc_mid && nearPt(q.pts[0], [20_000_000, 9_000_000], 1_000) && nearPt(q.pts[q.pts.length - 1], ON_ARC, 1_000)), "and the route is a track from the stub to that point");
     await E.run("common.Interactive.undo");
     await sleep(600);
     st = await state();
@@ -412,8 +412,8 @@
     await clickAt(...ON_ARC2);
     const s2 = await waitReply("start", n);
     t(s2 && s2.body.ok === true && s2.body.net === "PA0", `a click in the middle of the arc starts a route of its net: ${s2 && JSON.stringify([s2.body.ok, s2.body.net, s2.body.message])}`);
-    await moveTo(20000, 12000);
-    await clickAt(20000, 12000);
+    await moveTo(20_000_000, 12_000_000);
+    await clickAt(20_000_000, 12_000_000);
     await waitReply("fix", n);
     await quiet();
     await E.run("pcbnew.InteractiveRouter.AttemptFinish");
@@ -421,14 +421,14 @@
     await sleep(600);
     st = await state();
     arcs = arcsOf(st);
-    t(arcs.length === 2 && arcs.some((q) => nearPt(q.pts[q.pts.length - 1], ON_ARC2, 1)) && arcs.some((q) => nearPt(q.pts[0], ON_ARC2, 1)), `the arc is cut where the route starts: ${arcs.length} arc tracks`);
-    t(tracksOf(st).some((q) => q.net === "PA0" && !q.arc_mid && nearPt(q.pts[0], ON_ARC2, 1) && nearPt(q.pts[q.pts.length - 1], [20000, 12000], 1)), "and the route leaves from there");
+    t(arcs.length === 2 && arcs.some((q) => nearPt(q.pts[q.pts.length - 1], ON_ARC2, 1_000)) && arcs.some((q) => nearPt(q.pts[0], ON_ARC2, 1_000)), `the arc is cut where the route starts: ${arcs.length} arc tracks`);
+    t(tracksOf(st).some((q) => q.net === "PA0" && !q.arc_mid && nearPt(q.pts[0], ON_ARC2, 1_000) && nearPt(q.pts[q.pts.length - 1], [20_000_000, 12_000_000], 1_000)), "and the route leaves from there");
   });
 
   await scenario("a locked track: D asks, Drag Anyway drags it, and a route in Shove mode is walked round it and pushes nothing", async (t) => {
-    await commit(fillet().concat([line("PA1", "F.Cu", [[24000, 17000], [22000, 17000]])]));
+    await commit(fillet().concat([line("PA1", "F.Cu", [[24_000_000, 17_000_000], [22_000_000, 17_000_000]])]));
     let st = await state();
-    const bTrack = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts[q.pts.length - 1][1] === 21000);
+    const bTrack = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts[q.pts.length - 1][1] === 21_000_000);
     const lock = await cmd({ op: "set_locked", ids: [bTrack.id], locked: true });
     await settle();
     st = await state();
@@ -438,17 +438,17 @@
     await E.run("pcbnew.InteractiveRouter.SingleTrack");
     await sleep(300);
     let n = replies.length;
-    await clickAt(22000, 17000);
+    await clickAt(22_000_000, 17_000_000);
     await waitReply("start", n);
-    const m = await moveTo(15000, 18000);
+    const m = await moveTo(15_000_000, 18_000_000);
     t(m && m.body.colliding === false, `the head across the locked run fits: ${m && m.body.colliding}`);
     t(m && m.body.displaced.length === 0, `and nothing is pushed: ${m && JSON.stringify(m.body.displaced.map((d) => d.source_track))}`);
-    t(m && Math.max(...m.body.head.map((p) => p[1])) >= 21000, `it goes round the end of the run: ${m && JSON.stringify(m.body.head)}`);
+    t(m && Math.max(...m.body.head.map((p) => p[1])) >= 21_000_000, `it goes round the end of the run: ${m && JSON.stringify(m.body.head)}`);
     await leaveTool();
     // D asks -- once the selection filter allows a locked item to be taken hold of (KiCad's own default does not: `m_filter.lockedItems = false`)
     t((await lockedFilter(false)) === false, "the selection filter's Locked items is off, as KiCad's default is");
     await lockedFilter(true);
-    await pointerTo(17000, 18000);
+    await pointerTo(17_000_000, 18_000_000);
     n = replies.length;
     await E.run("pcbnew.InteractiveRouter.Drag45Degree");
     const s = await waitReply("drag_start", n);
@@ -463,7 +463,7 @@
     t(!dialog() && E.state().tool === "select", `declining drags nothing: tool ${E.state().tool}`);
     // Drag Anyway
     n = replies.length;
-    await pointerTo(17000, 18000);
+    await pointerTo(17_000_000, 18_000_000);
     await E.run("pcbnew.InteractiveRouter.Drag45Degree");
     await waitReply("drag_start", n);
     await sleep(500);
@@ -472,48 +472,48 @@
     t(s2 && s2.req.drag_locked === true && s2.body.ok === true && s2.body.drag === "segment", `Drag Anyway starts the drag with drag_locked: ${s2 && JSON.stringify([s2.req.drag_locked, s2.body.ok, s2.body.drag])}`);
     t(E.state().tool === "drag", `the drag tool is armed: ${E.state().tool}`);
     const f0 = replies.length;
-    await moveTo(19000, 18000, "drag_move");
-    await clickAt(19000, 18000);
+    await moveTo(19_000_000, 18_000_000, "drag_move");
+    await clickAt(19_000_000, 18_000_000);
     await waitReply("drag_finish", f0);
     await quiet();
     st = await state();
-    const moved = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts.some((p) => p[0] === 19000));
+    const moved = tracksOf(st).find((q) => q.net === "PA0" && !q.arc_mid && q.pts.some((p) => p[0] === 19_000_000));
     t(!!moved, `the locked run moved with the cursor: ${JSON.stringify(tracksOf(st).filter((q) => q.net === "PA0" && !q.arc_mid).map((q) => q.pts))}`);
   });
 
   await scenario("V in Shove mode: the track under the head's via, on the other layer, is pushed aside with the via, and the route commits clean as one undo step", async (t) => {
     const clear = rules.clearance, via = { d: rules.via_diameter, drill: rules.via_drill };
     // GND runs on B.Cu 50 um inside the via's clearance ring (the via at (28, 21) mm: its radius, the clearance and half the track's width, less 50)
-    const gx = 28000 + via.d / 2 + clear + 100 - 50;
-    await commit([line("PA3", "F.Cu", [[28000, 24000], [28000, 22000]]), line("GND", "B.Cu", [[gx, 18000], [gx, 22000]])]);
+    const gx = 28_000_000 + via.d / 2 + clear + 100_000 - 50_000;
+    await commit([line("PA3", "F.Cu", [[28_000_000, 24_000_000], [28_000_000, 22_000_000]]), line("GND", "B.Cu", [[gx, 18_000_000], [gx, 22_000_000]])]);
     await E.run("pcbnew.InteractiveRouter.SingleTrack");
     await E.run("pcbnew.InteractiveRouter.ShoveMode");
     await sleep(300);
     let n = replies.length;
-    await clickAt(28000, 22000);
+    await clickAt(28_000_000, 22_000_000);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.body.net === "PA3", `the route starts on the PA3 stub: ${s && JSON.stringify([s.body.ok, s.body.net])}`);
     n = replies.length;
     await E.run("pcbnew.Control.layerToggle");
     const v = await waitReply("via", n);
     t(v && v.body.ok === true && v.req.enabled === true, `V arms a via: ${v && JSON.stringify(v.req)}`);
-    const m = await moveTo(28000, 21000);
-    t(m && m.body.via && m.body.via.x === 28000 && m.body.via.y === 21000, `the head ends in the via: ${m && JSON.stringify(m.body.via)}`);
+    const m = await moveTo(28_000_000, 21_000_000);
+    t(m && m.body.via && m.body.via.x === 28_000_000 && m.body.via.y === 21_000_000, `the head ends in the via: ${m && JSON.stringify(m.body.via)}`);
     t(m && m.body.colliding === false, `it fits: ${m && m.body.colliding}`);
     const pushed = m && m.body.displaced.filter((d) => d.pts.length > 0);
     t(!!pushed && pushed.length === 1 && pushed[0].layer === "B.Cu" && pushed[0].pts.some((p) => p[0] > gx), `the GND track on B.Cu is pushed aside, under the via: ${pushed && JSON.stringify(pushed.map((d) => [d.layer, d.pts.length]))}`);
     n = replies.length;
-    await clickAt(28000, 21000);
+    await clickAt(28_000_000, 21_000_000);
     const fx = await waitReply("fix", n);
     t(fx && fx.body.ok === true && fx.body.blocked === false && fx.body.preview.layer === "B.Cu", `a click places it and the route goes on on B.Cu: ${fx && JSON.stringify([fx.body.ok, fx.body.blocked, fx.body.preview && fx.body.preview.layer])}`);
-    await moveTo(28000, 19000);
+    await moveTo(28_000_000, 19_000_000);
     n = replies.length;
     await E.run("pcbnew.InteractiveRouter.AttemptFinish");
     await waitReply("finish", n);
     await sleep(700);
     const st = await state();
-    t(viasOf(st).length === 1 && viasOf(st)[0].x === 28000 && viasOf(st)[0].y === 21000 && viasOf(st)[0].net === "PA3", `the via is on the board: ${JSON.stringify(viasOf(st).map((q) => [q.net, q.x, q.y]))}`);
-    t(tracksOf(st).some((q) => q.net === "PA3" && q.layer === "F.Cu" && q.pts.some((p) => p[0] === 28000 && p[1] === 21000)) && tracksOf(st).some((q) => q.net === "PA3" && q.layer === "B.Cu"), "the route has copper on both layers, at the via");
+    t(viasOf(st).length === 1 && viasOf(st)[0].x === 28_000_000 && viasOf(st)[0].y === 21_000_000 && viasOf(st)[0].net === "PA3", `the via is on the board: ${JSON.stringify(viasOf(st).map((q) => [q.net, q.x, q.y]))}`);
+    t(tracksOf(st).some((q) => q.net === "PA3" && q.layer === "F.Cu" && q.pts.some((p) => p[0] === 28_000_000 && p[1] === 21_000_000)) && tracksOf(st).some((q) => q.net === "PA3" && q.layer === "B.Cu"), "the route has copper on both layers, at the via");
     const gnd = tracksOf(st).filter((q) => q.net === "GND");
     t(gnd.length >= 1 && gnd.some((q) => q.pts.length > 2 && q.pts.some((p) => p[0] > gx)), `the GND track is a polyline that goes round the via: ${JSON.stringify(gnd.map((q) => q.pts.length))}`);
     t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), `the gates find no clearance failure: ${JSON.stringify((st.checks ?? []).filter((c) => c.fail).map((c) => c.check))}`);
@@ -523,14 +523,14 @@
   });
 
   await scenario("a net whose class names a tuning profile with the time domain is tuned in picoseconds", async (t) => {
-    const profile = { name: "FR4", profile_type: "single", target_impedance: 50, enable_time_domain_tuning: true, layer_entries: [{ signal_layer: "F.Cu", top_reference_layer: null, bottom_reference_layer: null, width_um: 200, diff_pair_gap_um: 0, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 0, via_overrides: [] };
+    const profile = { name: "FR4", profile_type: "single", target_impedance: 50, enable_time_domain_tuning: true, layer_entries: [{ signal_layer: "F.Cu", top_reference_layer: null, bottom_reference_layer: null, width_nm: 200_000, diff_pair_gap_nm: 0, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 0, via_overrides: [] };
     const set = await cmd({ op: "set_tuning_profiles", settings: { profiles: [profile], class_profiles: { Default: "FR4" } } });
     t(set.ok === true, `Board Setup's Tuning Profiles take a profile of 6.1 ps/mm and the Default class names it: ${JSON.stringify(set)}`);
-    await commit([line("PA1", "F.Cu", [[6000, 28000], [26000, 28000]])]);
+    await commit([line("PA1", "F.Cu", [[6_000_000, 28_000_000], [26_000_000, 28_000_000]])]);
     key("7");
     await sleep(300);
     let n = replies.length;
-    await pointerTo(16000, 28040);
+    await pointerTo(16_000_000, 28_040_000);
     await waitReply("hover", n, 8000);
     await quiet();
     const hv = lastReply("hover", n);
@@ -551,15 +551,15 @@
     await sleep(100);
     await press("OK");
     n = replies.length;
-    await clickAt(8000, 28000);
+    await clickAt(8_000_000, 28_000_000);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.req.settings.time_domain === true && s.req.settings.target_delay === 150, `the first click starts a pattern with a target of 150 ps: ${s && JSON.stringify([s.body.ok, s.req.settings.time_domain, s.req.settings.target_delay])}`);
-    const m = await moveTo(24000, 27600);
+    const m = await moveTo(24_000_000, 27_600_000);
     const ro = m && m.body.readout;
     t(!!ro && ro.time_domain === true && ro.status === "tuned" && ro.delay && near(ro.delay.current, 150, 0.2), `the cursor makes a meander of 150 ps: ${ro && JSON.stringify([ro.status, ro.delay && ro.delay.current])}`);
     t(!!ro && ro.delay && near(ro.delay.min, 149.9, 0.001) && near(ro.delay.max, 150.1, 0.001), `within 0.1 ps either side: ${ro && ro.delay && JSON.stringify([ro.delay.min, ro.delay.max])}`);
     n = replies.length;
-    await clickAt(24000, 27600);
+    await clickAt(24_000_000, 27_600_000);
     const f = await waitReply("fix", n, 20000);
     await quiet();
     t(f && f.body.ok === true && !!f.body.pattern_id, `the second click puts it on the board: ${f && JSON.stringify(f.body.ok)}`);
@@ -571,7 +571,7 @@
 
   await scenario("a track that is an arc is picked by the length tuner, and a pattern is tuned along the arc", async (t) => {
     await commit(fillet());
-    const lineMm = (6000 + (Math.PI / 2) * R + 6000) / 1000; // the run, the quarter arc, the run
+    const lineMm = (6_000_000 + (Math.PI / 2) * R + 6_000_000) / 1e6; // the run, the quarter arc, the run
     key("7");
     await sleep(300);
     // the tool carries what the last pattern had (the time domain scenario before this one): the dialog says Length and a target of 24 mm
@@ -596,19 +596,19 @@
     await clickAt(...ON_ARC2);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true, `a click on the arc starts a pattern: ${s && JSON.stringify([s.body.ok, s.body.message])}`);
-    const m = await moveTo(17000, 19000);
+    const m = await moveTo(17_000_000, 19_000_000);
     const ro = m && m.body.readout;
     t(!!ro && ro.status === "tuned" && near(ro.current, 24, 0.1), `the cursor fits a meander through the arc: ${ro && JSON.stringify([ro.status, ro.current])}`);
     t(!!m && m.body.preview && m.body.preview.pieces.length > 8, `of ${m && m.body.preview && m.body.preview.pieces.length} pieces`);
     n = replies.length;
-    await clickAt(17000, 19000);
+    await clickAt(17_000_000, 19_000_000);
     const f = await waitReply("fix", n, 20000);
     await quiet();
     t(f && f.body.ok === true && !!f.body.pattern_id, `the second click puts it on the board: ${f && JSON.stringify(f.body.ok)}`);
     const st = await state();
-    const len = tracksOf(st).filter((q) => q.net === "PA0").reduce((sum, q) => sum + q.pts.reduce((a, p, i) => (i ? a + Math.hypot(p[0] - q.pts[i - 1][0], p[1] - q.pts[i - 1][1]) : 0), 0), 0) / 1000;
+    const len = tracksOf(st).filter((q) => q.net === "PA0").reduce((sum, q) => sum + q.pts.reduce((a, p, i) => (i ? a + Math.hypot(p[0] - q.pts[i - 1][0], p[1] - q.pts[i - 1][1]) : 0), 0), 0) / 1e6;
     t(near(len, 24, 0.15), `PA0 is ${len.toFixed(3)} mm long on the board`);
-    t(arcsOf(st).some((q) => nearPt(q.pts[0], S, 1) && distToPoly(q.pts, ON_ARC2) <= 150), `and the arc the pattern was started on is still the arc (a meander is made on the straight parts of a line, the arc goes through as it is): ${JSON.stringify(arcsOf(st).slice(0, 1).map((q) => [q.pts[0], q.pts[q.pts.length - 1]]))}`);
+    t(arcsOf(st).some((q) => nearPt(q.pts[0], S, 1_000) && distToPoly(q.pts, ON_ARC2) <= 150_000), `and the arc the pattern was started on is still the arc (a meander is made on the straight parts of a line, the arc goes through as it is): ${JSON.stringify(arcsOf(st).slice(0, 1).map((q) => [q.pts[0], q.pts[q.pts.length - 1]]))}`);
     await E.run("common.Interactive.undo");
     await sleep(600);
     t(arcsOf(await state()).length === 1 && tracksOf(await state()).length === 3, "one Undo takes the pattern away and the fillet is as it was");
@@ -616,55 +616,55 @@
 
   await scenario("springback: a pushed track stays pushed, is pushed on, springs back as the head draws back; a click keeps the push, Backspace takes it back", async (t) => {
     // a PA4 stub ending at (21, 30) mm and a GND track across its way down x = 24 mm
-    await commit([line("PA4", "F.Cu", [[20000, 30000], [21000, 30000]]), line("GND", "F.Cu", [[24000, 27000], [24000, 33000]])]);
+    await commit([line("PA4", "F.Cu", [[20_000_000, 30_000_000], [21_000_000, 30_000_000]]), line("GND", "F.Cu", [[24_000_000, 27_000_000], [24_000_000, 33_000_000]])]);
     await E.run("pcbnew.InteractiveRouter.SingleTrack");
     await E.run("pcbnew.InteractiveRouter.ShoveMode");
     await sleep(300);
     let n = replies.length;
-    await clickAt(21000, 30000);
+    await clickAt(21_000_000, 30_000_000);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.body.net === "PA4", `the route starts on the PA4 stub: ${s && JSON.stringify([s.body.ok, s.body.net])}`);
     const pushedOf = (m) => (m ? m.body.displaced.filter((d) => d.pts.length > 0) : []);
-    const reach = (m) => Math.max(24000, ...pushedOf(m).flatMap((d) => d.pts.map((p) => p[0])));
-    const first = await moveTo(22000, 30000);
+    const reach = (m) => Math.max(24_000_000, ...pushedOf(m).flatMap((d) => d.pts.map((p) => p[0])));
+    const first = await moveTo(22_000_000, 30_000_000);
     t(first && pushedOf(first).length === 0, `a short head touches nothing: ${first && JSON.stringify(first.body.displaced)}`);
-    const pushed = await moveTo(25000, 30000);
+    const pushed = await moveTo(25_000_000, 30_000_000);
     t(pushed && pushed.body.colliding === false && pushedOf(pushed).length === 1 && pushedOf(pushed)[0].layer === "F.Cu", `the head pushes the GND track: ${pushed && JSON.stringify(pushedOf(pushed).map((d) => d.pts.length))}`);
-    const gap = 100 + rules.clearance + 100;
-    t(reach(pushed) >= 25000 + gap - 2, `round the head's end, a clearance off it: ${reach(pushed)}`);
-    const further = await moveTo(26000, 30000);
-    t(further && reach(further) >= 26000 + gap - 2 && pushedOf(further).length === 1, `the head goes on and pushes it on from where it was: ${further && reach(further)}`);
-    const back = await moveTo(22000, 30000);
+    const gap = 100_000 + rules.clearance + 100_000;
+    t(reach(pushed) >= 25_000_000 + gap - 2, `round the head's end, a clearance off it: ${reach(pushed)}`);
+    const further = await moveTo(26_000_000, 30_000_000);
+    t(further && reach(further) >= 26_000_000 + gap - 2 && pushedOf(further).length === 1, `the head goes on and pushes it on from where it was: ${further && reach(further)}`);
+    const back = await moveTo(22_000_000, 30_000_000);
     t(back && back.body.colliding === false && pushedOf(back).length === 0, `drawn back off it, the track springs back to where it was: ${back && JSON.stringify(back.body.displaced)}`);
-    const again = await moveTo(25000, 30000);
+    const again = await moveTo(25_000_000, 30_000_000);
     t(again && pushedOf(again).length === 1, "pushed again");
     n = replies.length;
-    await clickAt(25000, 30000);
+    await clickAt(25_000_000, 30_000_000);
     const fx = await waitReply("fix", n);
     t(fx && fx.body.ok === true && fx.body.blocked === false, `a click fixes the leg: ${fx && JSON.stringify([fx.body.ok, fx.body.blocked])}`);
     // the next leg down x = 25 mm runs into the track where the first leg left it: it is pushed on from there, and what the click kept is still pushed
     let leg = null;
-    for (const y of [31000, 32000]) leg = await moveTo(25000, y);
-    t(leg && leg.body.colliding === false && pushedOf(leg).length === 1 && reach(leg) >= 25000 + gap - 2, `the second leg pushes the track on from the world the click left: ${leg && reach(leg)}`);
+    for (const y of [31_000_000, 32_000_000]) leg = await moveTo(25_000_000, y);
+    t(leg && leg.body.colliding === false && pushedOf(leg).length === 1 && reach(leg) >= 25_000_000 + gap - 2, `the second leg pushes the track on from the world the click left: ${leg && reach(leg)}`);
     n = replies.length;
     await E.run("pcbnew.InteractiveRouter.UndoLastSegment");
     const un = await waitReply("undo_segment", n);
     t(un && un.body.ok === true && un.body.popped === true, `Backspace takes the first leg back: ${un && JSON.stringify(un.body)}`);
-    const after = await moveTo(22000, 30000);
+    const after = await moveTo(22_000_000, 30_000_000);
     t(after && pushedOf(after).length === 0, `and its push with it: ${after && JSON.stringify(after.body.displaced)}`);
-    await moveTo(25000, 30000);
+    await moveTo(25_000_000, 30_000_000);
     n = replies.length;
-    await clickAt(25000, 30000);
+    await clickAt(25_000_000, 30_000_000);
     await waitReply("fix", n);
-    for (const y of [31000, 32000]) await moveTo(25000, y);
+    for (const y of [31_000_000, 32_000_000]) await moveTo(25_000_000, y);
     n = replies.length;
     await E.run("pcbnew.InteractiveRouter.AttemptFinish");
     await waitReply("finish", n);
     await sleep(700);
     const st = await state();
     const gnd = tracksOf(st).filter((q) => q.net === "GND");
-    t(gnd.length >= 1 && gnd.some((q) => q.pts.some((p) => p[0] >= 25000 + gap - 2)), `the GND track is committed where the session left it: ${JSON.stringify(gnd.map((q) => q.pts))}`);
-    t(tracksOf(st).some((q) => q.net === "PA4" && q.pts.some((p) => p[0] === 25000 && p[1] === 32000)), "the route ends where the cursor was");
+    t(gnd.length >= 1 && gnd.some((q) => q.pts.some((p) => p[0] >= 25_000_000 + gap - 2)), `the GND track is committed where the session left it: ${JSON.stringify(gnd.map((q) => q.pts))}`);
+    t(tracksOf(st).some((q) => q.net === "PA4" && q.pts.some((p) => p[0] === 25_000_000 && p[1] === 32_000_000)), "the route ends where the cursor was");
     t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), `the gates find no clearance failure: ${JSON.stringify((st.checks ?? []).filter((c) => c.fail).map((c) => c.check))}`);
     await E.run("common.Interactive.undo");
     await sleep(600);
@@ -672,7 +672,7 @@
   });
 
   await scenario("Track Corner Mode: arc 45 rounds the head's corner and commits it as an arc track, 90 routes axis legs, Ctrl+/ steps through the four", async (t) => {
-    await commit([line("PA5", "F.Cu", [[5000, 30000], [6000, 30000]])]);
+    await commit([line("PA5", "F.Cu", [[5_000_000, 30_000_000], [6_000_000, 30_000_000]])]);
     await E.run("pcbnew.InteractiveRouter.SingleTrack");
     await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
     await sleep(300);
@@ -682,18 +682,18 @@
       await E.run(corner);
       await sleep(300);
       const n = replies.length;
-      await clickAt(6000, 30000);
+      await clickAt(6_000_000, 30_000_000);
       const s = await waitReply("start", n);
       // along the row first, so the posture is straight-first
-      for (const [x, y] of [[7000, 30000], [8000, 30000], [9000, 29000], to]) await moveTo(x, y);
+      for (const [x, y] of [[7_000_000, 30_000_000], [8_000_000, 30_000_000], [9_000_000, 29_000_000], to]) await moveTo(x, y);
       return { start: s, head: lastReply("move", n) };
     };
-    const arc45 = await route("pcbnew.InteractiveRouter.SwitchRoundingArc45", [11000, 28000]);
+    const arc45 = await route("pcbnew.InteractiveRouter.SwitchRoundingArc45", [11_000_000, 28_000_000]);
     t(arc45.start && arc45.start.req.settings && arc45.start.req.settings.corner_mode === "rounded_45", `the route starts with the corner mode: ${arc45.start && JSON.stringify(arc45.start.req.settings && arc45.start.req.settings.corner_mode)}`);
     const pts = arc45.head && arc45.head.body.head;
-    t(!!pts && pts.length > 4 && nearPt(pts[0], [6000, 30000], 0) && nearPt(pts[pts.length - 1], [11000, 28000], 0), `the head's corner is an arc (the points of its polyline): ${pts && pts.length} points`);
+    t(!!pts && pts.length > 4 && nearPt(pts[0], [6_000_000, 30_000_000], 0) && nearPt(pts[pts.length - 1], [11_000_000, 28_000_000], 0), `the head's corner is an arc (the points of its polyline): ${pts && pts.length} points`);
     let n = replies.length;
-    await clickAt(11000, 28000);
+    await clickAt(11_000_000, 28_000_000);
     await waitReply("fix", n);
     n = replies.length;
     await E.run("pcbnew.InteractiveRouter.AttemptFinish");
@@ -701,14 +701,14 @@
     await sleep(700);
     let st = await state();
     const arcs = arcsOf(st).filter((q) => q.net === "PA5");
-    t(arcs.length === 1 && nearPt(arcs[0].pts[arcs[0].pts.length - 1], [11000, 28000], 1), `the corner is committed as an arc track: ${JSON.stringify(arcs.map((q) => [q.pts[0], q.arc_mid, q.pts[q.pts.length - 1]]))}`);
-    t(tracksOf(st).some((q) => q.net === "PA5" && !q.arc_mid && nearPt(q.pts[0], [6000, 30000], 0)), "and the straight leg before it as a track");
+    t(arcs.length === 1 && nearPt(arcs[0].pts[arcs[0].pts.length - 1], [11_000_000, 28_000_000], 1_000), `the corner is committed as an arc track: ${JSON.stringify(arcs.map((q) => [q.pts[0], q.arc_mid, q.pts[q.pts.length - 1]]))}`);
+    t(tracksOf(st).some((q) => q.net === "PA5" && !q.arc_mid && nearPt(q.pts[0], [6_000_000, 30_000_000], 0)), "and the straight leg before it as a track");
     t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), "the gates find no clearance failure");
     await E.run("common.Interactive.undo");
     await sleep(600);
     t(tracksOf(await state()).length === 1, "one Undo takes the route away");
     await leaveTool();
-    const ninety = await route("pcbnew.InteractiveRouter.SwitchRounding90", [11000, 28000]);
+    const ninety = await route("pcbnew.InteractiveRouter.SwitchRounding90", [11_000_000, 28_000_000]);
     const p90 = ninety.head && ninety.head.body.head;
     t(!!p90 && p90.length === 3 && p90.every((q, i) => i === 0 || q[0] === p90[i - 1][0] || q[1] === p90[i - 1][1]), `90 routes two axis legs: ${JSON.stringify(p90)}`);
     // Ctrl+/ (SwitchRoundingToNext) from 90 is arc 90, then 45, the default again
@@ -733,17 +733,17 @@
   await scenario("virtual vias: D at the end of a segment where tracks of two widths meet drags the junction, every track follows, no via is drawn or committed", async (t) => {
     // a T of PA6 at (30, 10) mm whose stem is wider: no pad or via there and the width changes, so the router's world has a virtual via at it
     // (`NODE::FixupVirtualVias`; a T of one width has none -- KiCad never counts `n_seg`)
-    await commit([line("PA6", "F.Cu", [[27000, 10000], [30000, 10000]]), line("PA6", "F.Cu", [[30000, 10000], [33000, 10000]]), { ...line("PA6", "F.Cu", [[30000, 10000], [30000, 13000]]), width: 300 }]);
+    await commit([line("PA6", "F.Cu", [[27_000_000, 10_000_000], [30_000_000, 10_000_000]]), line("PA6", "F.Cu", [[30_000_000, 10_000_000], [33_000_000, 10_000_000]]), { ...line("PA6", "F.Cu", [[30_000_000, 10_000_000], [30_000_000, 13_000_000]]), width: 300_000 }]);
     for (const mode of ["pcbnew.InteractiveRouter.WalkaroundMode", "pcbnew.InteractiveRouter.ShoveMode"]) {
       await E.run(mode);
-      await pointerTo(30000, 10000);
+      await pointerTo(30_000_000, 10_000_000);
       let n = replies.length;
       await E.run("pcbnew.InteractiveRouter.Drag45Degree");
       const s = await waitReply("drag_start", n);
       t(s && s.body.ok === true && s.body.drag === "via" && s.body.virtual_via === true, `${mode}: D at the junction takes hold of its virtual via: ${s && JSON.stringify([s.body.ok, s.body.drag, s.body.virtual_via, s.body.message])}`);
-      const m = await moveTo(32000, 12000, "drag_move");
+      const m = await moveTo(32_000_000, 12_000_000, "drag_move");
       // the cursor as the studio's snapping put it
-      const to = m ? [Math.round(m.req.x), Math.round(m.req.y)] : [32000, 12000];
+      const to = m ? [Math.round(m.req.x), Math.round(m.req.y)] : [32_000_000, 12_000_000];
       const legs = m && m.body.fanout;
       t(!!legs && legs.length === 3 && legs.every((l) => nearPt(l.pts[0], to, 0) || nearPt(l.pts[l.pts.length - 1], to, 0)), `${mode}: the three tracks follow the cursor: ${legs && JSON.stringify(legs.map((l) => [l.pts[0], l.pts[l.pts.length - 1]]))}`);
       t(m && m.body.colliding === false, `${mode}: and fit`);
@@ -755,7 +755,7 @@
       const st = await state();
       const pa6 = tracksOf(st).filter((q) => q.net === "PA6");
       const ends = pa6.flatMap((q) => [q.pts[0], q.pts[q.pts.length - 1]]);
-      t(ends.filter((p) => nearPt(p, to, 0)).length === 3 && [[27000, 10000], [33000, 10000], [30000, 13000]].every((p) => ends.some((e) => nearPt(e, p, 0))), `${mode}: the junction is at the cursor and the far ends where they were: ${JSON.stringify(pa6.map((q) => q.pts))}`);
+      t(ends.filter((p) => nearPt(p, to, 0)).length === 3 && [[27_000_000, 10_000_000], [33_000_000, 10_000_000], [30_000_000, 13_000_000]].every((p) => ends.some((e) => nearPt(e, p, 0))), `${mode}: the junction is at the cursor and the far ends where they were: ${JSON.stringify(pa6.map((q) => q.pts))}`);
       t(viasOf(st).length === 0, `${mode}: no via is committed: ${viasOf(st).length}`);
       t(!(st.checks ?? []).some((c) => c.check === "routing_clearance" && c.fail), `${mode}: the gates find no clearance failure`);
       await E.run("common.Interactive.undo");
@@ -764,7 +764,7 @@
       await settle();
     }
     // taken hold of in the middle, a segment of the T slides as a segment
-    await pointerTo(28500, 10000);
+    await pointerTo(28_500_000, 10_000_000);
     const n = replies.length;
     await E.run("pcbnew.InteractiveRouter.Drag45Degree");
     const s = await waitReply("drag_start", n);
@@ -783,18 +783,18 @@
     t((await layersNow()).length === 4, `the board has the four layers: ${JSON.stringify(await layersNow())}`);
     await sleep(1500); // the studio's board follows by polling (the layer picker below shows what it has)
     try {
-      await commit([line("PA7", "F.Cu", [[5000, 5000], [6000, 5000]])]);
+      await commit([line("PA7", "F.Cu", [[5_000_000, 5_000_000], [6_000_000, 5_000_000]])]);
       await E.run("pcbnew.InteractiveRouter.SingleTrack");
       await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
       await sleep(300);
       const host = () => document.querySelector(".pcb-canvas-container");
       const canvasKey = async (k, code, mods = {}) => { host().focus(); host().dispatchEvent(new KeyboardEvent("keydown", { key: k, code, bubbles: true, cancelable: true, ctrlKey: !!mods.ctrl, altKey: !!mods.alt, shiftKey: !!mods.shift })); await sleep(300); await quiet(); };
       let n = replies.length;
-      await clickAt(6000, 5000);
+      await clickAt(6_000_000, 5_000_000);
       const s = await waitReply("start", n);
       t(s && s.body.ok === true && s.body.net === "PA7", `the route starts on the PA7 stub: ${s && JSON.stringify([s.body.ok, s.body.net])}`);
-      await moveTo(7000, 5000);
-      await moveTo(8000, 6000);
+      await moveTo(7_000_000, 5_000_000);
+      await moveTo(8_000_000, 6_000_000);
       // `/`: ACT_SwitchPosture -- `FlipPosture()` and a refreshing Move
       n = replies.length;
       await canvasKey("/", "Slash");
@@ -803,7 +803,7 @@
       const via = async (fn) => { const k = replies.length; await fn(); return replies.slice(k).filter((r) => r.name === "via").pop() ?? null; };
       // Ctrl+V: Place Microvia, implicit target on the F.Cu / B.Cu pair -- and Ctrl+V again takes it back (`onViaCommand`: `ToggleViaPlacement()`)
       let v = await via(() => canvasKey("v", "KeyV", { ctrl: true }));
-      t(v && v.req.enabled === true && v.req.via_type === "micro" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "B.Cu"]) && v.req.diameter === 300 && v.req.drill === 100, `Ctrl+V arms a microvia of the net class's microvia size on the pair: ${v && JSON.stringify(v.req)}`);
+      t(v && v.req.enabled === true && v.req.via_type === "micro" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "B.Cu"]) && v.req.diameter === 300_000 && v.req.drill === 100_000, `Ctrl+V arms a microvia of the net class's microvia size on the pair: ${v && JSON.stringify(v.req)}`);
       v = await via(() => canvasKey("v", "KeyV", { ctrl: true }));
       t(v && v.req.enabled === false, `Ctrl+V again takes it back: ${v && JSON.stringify(v.req)}`);
       t(tracksOf(await state()).length === 1 && E.state().tool === "route", `Ctrl+V did not paste: ${tracksOf(await state()).length} track(s), tool ${E.state().tool}`);
@@ -823,9 +823,9 @@
       t(JSON.stringify(rows()) === JSON.stringify(["In1.Cu", "In2.Cu", "B.Cu"]), `the micro via's picker leaves out F.Cu: ${JSON.stringify(rows())}`);
       v = await via(async () => { document.querySelector("[data-testid=select-layer-grid] tr[data-layer='In1.Cu']").click(); await sleep(300); await quiet(); });
       t(v && v.req.via_type === "micro" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "In1.Cu"]) && v.req.to_layer === "In1.Cu", `a microvia F.Cu .. In1.Cu: ${v && JSON.stringify(v.req)}`);
-      await moveTo(9000, 5000);
+      await moveTo(9_000_000, 5_000_000);
       n = replies.length;
-      await clickAt(9000, 5000);
+      await clickAt(9_000_000, 5_000_000);
       let fx = await waitReply("fix", n);
       t(fx && fx.body.blocked === false && fx.body.preview.layer === "In1.Cu", `a click places it and the route goes on on In1.Cu: ${fx && JSON.stringify([fx.body.blocked, fx.body.preview && fx.body.preview.layer])}`);
       // Q: Custom Track/Via Size -- KiCad's refusal of a hole as big as the via, then 0.3 mm tracks and 0.7 / 0.35 mm vias
@@ -841,34 +841,34 @@
       n = replies.length;
       await press("OK");
       t(!dialog(), "OK with a good via closes it");
-      const w = replies.slice(n).find((r) => r.name === "move" && r.req && r.req.width === 300);
+      const w = replies.slice(n).find((r) => r.name === "move" && r.req && r.req.width === 300_000);
       t(!!w, `the head takes the custom width at once: ${JSON.stringify(replies.slice(n).map((r) => [r.name, r.req && r.req.width]))}`);
       // Alt+<: Select Layer and Place Blind/Buried Via, from In1.Cu: In1.Cu is not offered
       await canvasKey("<", "Comma", { alt: true, shift: true });
       t(JSON.stringify(rows()) === JSON.stringify(["F.Cu", "In2.Cu", "B.Cu"]), `Alt+< offers every layer but In1.Cu: ${JSON.stringify(rows())}`);
       v = await via(async () => { document.querySelector("[data-testid=select-layer-grid] tr[data-layer='In2.Cu']").click(); await sleep(300); await quiet(); });
-      t(v && v.req.via_type === "blind" && JSON.stringify(v.req.span) === JSON.stringify(["In1.Cu", "In2.Cu"]) && v.req.diameter === 700 && v.req.drill === 350, `a blind via In1.Cu .. In2.Cu of the custom size: ${v && JSON.stringify(v.req)}`);
-      await moveTo(12000, 5000);
+      t(v && v.req.via_type === "blind" && JSON.stringify(v.req.span) === JSON.stringify(["In1.Cu", "In2.Cu"]) && v.req.diameter === 700_000 && v.req.drill === 350_000, `a blind via In1.Cu .. In2.Cu of the custom size: ${v && JSON.stringify(v.req)}`);
+      await moveTo(12_000_000, 5_000_000);
       n = replies.length;
-      await clickAt(12000, 5000);
+      await clickAt(12_000_000, 5_000_000);
       fx = await waitReply("fix", n);
       t(fx && fx.body.blocked === false && fx.body.preview.layer === "In2.Cu", `the route goes on on In2.Cu: ${fx && fx.body.preview && fx.body.preview.layer}`);
       // Alt+Shift+V: Place Blind/Buried Via -- In2.Cu is off the F.Cu / B.Cu pair, so the via goes to the pair's top, F.Cu
       v = await via(() => canvasKey("V", "KeyV", { alt: true, shift: true }));
       t(v && v.req.via_type === "blind" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "In2.Cu"]) && v.req.to_layer === "F.Cu", `Alt+Shift+V arms a blind via In2.Cu .. F.Cu: ${v && JSON.stringify(v.req)}`);
-      await moveTo(15000, 5000);
+      await moveTo(15_000_000, 5_000_000);
       n = replies.length;
-      await clickAt(15000, 5000);
+      await clickAt(15_000_000, 5_000_000);
       fx = await waitReply("fix", n);
       t(fx && fx.body.blocked === false && fx.body.preview.layer === "F.Cu", `the route goes on on F.Cu: ${fx && fx.body.preview && fx.body.preview.layer}`);
-      await moveTo(18000, 5000);
+      await moveTo(18_000_000, 5_000_000);
       n = replies.length;
       await E.run("pcbnew.InteractiveRouter.AttemptFinish");
       await waitReply("finish", n);
       await sleep(700);
       const st = await state();
       const got = viasOf(st).filter((q) => q.net === "PA7").sort((a, b) => a.x - b.x).map((q) => [q.x, q.from, q.to, q.d, q.drill, q.type ?? "through"]);
-      t(JSON.stringify(got) === JSON.stringify([[9000, "F.Cu", "In1.Cu", 300, 100, "micro"], [12000, "In1.Cu", "In2.Cu", 700, 350, "blind"], [15000, "F.Cu", "In2.Cu", 700, 350, "blind"]]), `the route commits the three vias with their types, layers and sizes: ${JSON.stringify(got)}`);
+      t(JSON.stringify(got) === JSON.stringify([[9_000_000, "F.Cu", "In1.Cu", 300_000, 100_000, "micro"], [12_000_000, "In1.Cu", "In2.Cu", 700_000, 350_000, "blind"], [15_000_000, "F.Cu", "In2.Cu", 700_000, 350_000, "blind"]]), `the route commits the three vias with their types, layers and sizes: ${JSON.stringify(got)}`);
       t(["In1.Cu", "In2.Cu"].every((l) => tracksOf(st).some((q) => q.net === "PA7" && q.layer === l)), "and copper on the inner layers between them");
       await E.run("common.Interactive.undo");
       await sleep(600);

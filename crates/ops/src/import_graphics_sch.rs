@@ -27,7 +27,7 @@
 use super::Board;
 use crate::import_graphics::{GraphicsFormat, ImportGraphics};
 use eda_kicad::graphics_import::{arc_points, prepare, spline_or_line, HJustify, Imported, ImportedShape, LineStyle, Mapper, Rgba, SplineOrLine, Stroke, VJustify, V2};
-use eda_model::ir::{LibraryFill, LibrarySymbolGraphic, Millideg, Point, SchLine, SchematicText, Um};
+use eda_model::ir::{LibraryFill, LibrarySymbolGraphic, Millideg, Point, SchLine, SchematicText, Nm};
 use eda_model::kicad_font;
 use eda_model::sch_extras::{SchColor, SchFill, SchGraphic, SchGraphicKind, SchLineStyle, SchStroke};
 use eda_model::symbol::SPoint;
@@ -62,9 +62,9 @@ pub struct ImportSchGraphics {
     pub offset_x_nm: i64,
     #[serde(default)]
     pub offset_y_nm: i64,
-    /// "Default line width", micrometres; 0 is the sheet's default width.
+    /// "Default line width", nanometres; 0 is the sheet's default width.
     #[serde(default)]
-    pub line_width_um: Um,
+    pub line_width_nm: Nm,
 }
 
 /// `Cmd::ImportSymbolGraphics`: the same for the symbol `lib_id` of the Symbol Editor (`GRAPHICS_IMPORTER_LIB_SYMBOL`), the items on `unit` (0 for every unit).
@@ -86,7 +86,7 @@ pub struct ImportSymbolGraphics {
     #[serde(default)]
     pub offset_y_nm: i64,
     #[serde(default)]
-    pub line_width_um: Um,
+    pub line_width_nm: Nm,
 }
 
 fn fail(check: &str, msg: impl Into<String>) -> Vec<CheckResult> {
@@ -95,12 +95,12 @@ fn fail(check: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 
 /// The file read and the mapping set up with the request's scale, offset and default width, in `iu_per_mm` units of the editor's own; the size check of
 /// `GRAPHICS_IMPORTER_BUFFER::ImportTo` has run.
-fn read_and_map(format: GraphicsFormat, text: &str, dxf_units: &str, scale: f64, offset_nm: (i64, i64), line_width_um: Um, iu_per_mm: f64) -> Result<(Imported, Mapper), Vec<CheckResult>> {
+fn read_and_map(format: GraphicsFormat, text: &str, dxf_units: &str, scale: f64, offset_nm: (i64, i64), line_width_nm: Nm, iu_per_mm: f64) -> Result<(Imported, Mapper), Vec<CheckResult>> {
     if !(scale.is_finite() && scale != 0.0) {
         return Err(fail("ops_bad_import", "the import scale must be a number other than zero"));
     }
     // The board's request holds the reading and the mapping the dialogs have in common.
-    let r = ImportGraphics { format, text: text.to_string(), layer: String::new(), dxf_units: dxf_units.to_string(), scale, offset_x_nm: offset_nm.0, offset_y_nm: offset_nm.1, line_width_um, group: false, fix_tolerance_um: None, replace_outline: false };
+    let r = ImportGraphics { format, text: text.to_string(), layer: String::new(), dxf_units: dxf_units.to_string(), scale, offset_x_nm: offset_nm.0, offset_y_nm: offset_nm.1, line_width_nm, group: false, fix_tolerance_nm: None, replace_outline: false };
     let imported = r.read().map_err(|e| fail("ops_bad_import", e))?;
     let mut mapper = r.mapper();
     mapper.iu_per_mm = iu_per_mm;
@@ -185,14 +185,14 @@ pub struct SchItems {
     pub texts: Vec<SchematicText>,
 }
 
-/// `GRAPHICS_IMPORTER_SCH`'s items for `imported`, in micrometres (`mapper.iu_per_mm` is 1000).
+/// `GRAPHICS_IMPORTER_SCH`'s items for `imported`, in nanometres (`mapper.iu_per_mm` is 1e6; the sheet's writer rounds to its 100 nm unit).
 pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
     let m = *mapper;
     let mut out = SchItems::default();
     // `MapStrokeParams` for a shape: -1 is "no stroke", which this IR draws as a hairline; any other width is mapped.
-    let shape_stroke = |s: &Stroke| -> (Um, SchLineStyle, Option<SchColor>) { (if s.width == -1.0 { 1 } else { m.line_width(s.width) }, line_style(s.style), s.color.map(sch_color)) };
-    // "Arcs with a too big radius cannot" be handled: radius >= INT_MAX / 2 in KiCad's tenth-of-a-micrometre unit, a tenth of that in this one.
-    let max_radius_um = i32::MAX as f64 / 2.0 / 10.0;
+    let shape_stroke = |s: &Stroke| -> (Nm, SchLineStyle, Option<SchColor>) { (if s.width == -1.0 { 1_000 } else { m.line_width(s.width) }, line_style(s.style), s.color.map(sch_color)) };
+    // "Arcs with a too big radius cannot" be handled: radius >= INT_MAX / 2 in KiCad's tenth-of-a-micrometre unit, a hundred times that in nanometres.
+    let max_radius_nm = i32::MAX as f64 / 2.0 * 100.0;
     let add_line = |out: &mut SchItems, a: V2, b: V2, stroke: &Stroke| {
         let (pa, pb) = (m.coord(a), m.coord(b));
         // "Skip 0 len lines:"
@@ -201,8 +201,8 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
         }
         // A width of -1 is not a pen width (`SCH_LINE::GetPenWidth` takes the default for it).
         let width = if stroke.width == -1.0 { 0 } else { m.line_width(stroke.width) };
-        let st = SchStroke { width_um: 0, style: line_style(stroke.style), color: stroke.color.map(sch_color) };
-        out.lines.push((SchLine { id: String::new(), pts: vec![point(pa), point(pb)], width_um: width }, (!st.is_default()).then_some(st)));
+        let st = SchStroke { width_nm: 0, style: line_style(stroke.style), color: stroke.color.map(sch_color) };
+        out.lines.push((SchLine { id: String::new(), pts: vec![point(pa), point(pb)], width_nm: width }, (!st.is_default()).then_some(st)));
     };
     for shape in &imported.shapes {
         match shape {
@@ -210,13 +210,13 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
             ImportedShape::Circle { center, radius, stroke, filled, .. } => {
                 let c = m.coord(*center);
                 let e = m.coord(V2::new(center.x + radius, center.y));
-                let r = (((e.0 - c.0) as f64).hypot((e.1 - c.1) as f64)).round() as Um;
+                let r = (((e.0 - c.0) as f64).hypot((e.1 - c.1) as f64)).round() as Nm;
                 if r == 0 {
                     continue;
                 }
                 let (w, style, color) = shape_stroke(stroke);
-                let mut g = SchGraphic::new(SchGraphicKind::Circle { center: point(c), radius_um: r });
-                (g.width_um, g.line_style, g.color) = (w, style, color);
+                let mut g = SchGraphic::new(SchGraphicKind::Circle { center: point(c), radius_nm: r });
+                (g.width_nm, g.line_style, g.color) = (w, style, color);
                 if *filled {
                     // `SetFilled( true )` is "filled shape": the outline's colour.
                     g.fill = SchFill::Outline;
@@ -226,7 +226,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
             ImportedShape::Arc { center, start, angle_deg, stroke } => {
                 let (s, mid, e) = arc_points(*center, *start, *angle_deg);
                 let (cs, cc) = (m.coord(*start), m.coord(*center));
-                if ((cs.0 - cc.0) as f64).hypot((cs.1 - cc.1) as f64) >= max_radius_um {
+                if ((cs.0 - cc.0) as f64).hypot((cs.1 - cc.1) as f64) >= max_radius_nm {
                     // "Arc cannot be handled: convert it to a segment"
                     add_line(&mut out, *start, e, stroke);
                     continue;
@@ -240,7 +240,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                 }
                 let (w, style, color) = shape_stroke(stroke);
                 let mut g = SchGraphic::new(SchGraphicKind::Arc { start: point(ps), mid: point(pm), end: point(pe) });
-                (g.width_um, g.line_style, g.color) = (w, style, color);
+                (g.width_nm, g.line_style, g.color) = (w, style, color);
                 out.graphics.push(g);
             }
             ImportedShape::Polygon { pts, stroke, filled, fill_color, .. } => {
@@ -255,7 +255,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                 }
                 let (w, style, color) = shape_stroke(stroke);
                 let mut g = SchGraphic::new(SchGraphicKind::Polygon { pts: mapped });
-                (g.width_um, g.line_style, g.color) = (w, style, color);
+                (g.width_nm, g.line_style, g.color) = (w, style, color);
                 if *filled {
                     // `aFillColor != COLOR4D::UNSPECIFIED ? FILLED_WITH_COLOR : FILLED_SHAPE`
                     match fill_color {
@@ -269,8 +269,8 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                 out.graphics.push(g);
             }
             ImportedShape::Text { origin, text, height, orientation_deg, h, v, .. } => {
-                let size_um = (height * m.scaling_factor()).round() as Um;
-                if size_um <= 0 || text.is_empty() {
+                let size_nm = (height * m.scaling_factor()).round() as Nm;
+                if size_nm <= 0 || text.is_empty() {
                     continue;
                 }
                 // A schematic text runs along a row or up a column: the nearer of the two.
@@ -278,7 +278,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                 let (angle, angle_deg): (Millideg, f64) = if (45.0..135.0).contains(&turn) { (90_000, 90.0) } else { (0, 0.0) };
                 // The file's alignment, in its own millimetres before the scale, to the left end of the baseline.
                 let at = justified_anchor_mm(*origin, text, *height, angle_deg, *h, *v, false);
-                out.texts.push(SchematicText { id: String::new(), content: text.clone(), at: point(m.coord(at)), angle, size_um });
+                out.texts.push(SchematicText { id: String::new(), content: text.clone(), at: point(m.coord(at)), angle, size_nm });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
                 let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));
@@ -286,7 +286,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                     SplineOrLine::Curve => {
                         let (w, style, color) = shape_stroke(stroke);
                         let mut g = SchGraphic::new(SchGraphicKind::Bezier { start: point(ps), c1: point(p1), c2: point(p2), end: point(pe) });
-                        (g.width_um, g.line_style, g.color) = (w, style, color);
+                        (g.width_nm, g.line_style, g.color) = (w, style, color);
                         out.graphics.push(g);
                     }
                     // "SCH_LINES aren't SCH_SHAPES"
@@ -381,7 +381,7 @@ pub fn symbol_items(imported: &Imported, mapper: &Mapper, unit: u32, body_style:
                 let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));
                 // `RebuildBezierToSegmentsPointsList( ARC_LOW_DEF_MM )` in the importer's own unit; "if the spline is degenerated (i.e. a segment) add it as
                 // segment or discard it if null".
-                let tolerance = (ARC_LOW_DEF_MM * m.iu_per_mm).round() as Um;
+                let tolerance = (ARC_LOW_DEF_MM * m.iu_per_mm).round() as Nm;
                 let poly = eda_model::bezier::bezier_polyline(point(ps), point(p1), point(p2), point(pe), tolerance);
                 if poly.len() <= 2 {
                     line(&mut out, *start, *end, stroke);
@@ -398,7 +398,7 @@ pub fn symbol_items(imported: &Imported, mapper: &Mapper, unit: u32, body_style:
 impl Board<'_> {
     /// `Cmd::ImportSchGraphics`: the file's items on the sheet in view.
     pub(crate) fn import_sch_graphics(&mut self, req: &ImportSchGraphics) -> Result<(), Vec<CheckResult>> {
-        let (imported, mapper) = read_and_map(req.format, &req.text, &req.dxf_units, req.scale, (req.offset_x_nm, req.offset_y_nm), req.line_width_um, 1000.0)?;
+        let (imported, mapper) = read_and_map(req.format, &req.text, &req.dxf_units, req.scale, (req.offset_x_nm, req.offset_y_nm), req.line_width_nm, eda_model::units::PCB_IU_PER_MM)?;
         let items = sch_items(&imported, &mapper);
         if items.lines.is_empty() && items.graphics.is_empty() && items.texts.is_empty() {
             return Err(fail("ops_empty_import", "No graphic items found in file."));
@@ -423,7 +423,7 @@ impl Board<'_> {
     /// `Cmd::ImportSymbolGraphics`: the file's items in the symbol `lib_id`.
     pub(crate) fn import_symbol_graphics(&mut self, req: &ImportSymbolGraphics) -> Result<(), Vec<CheckResult>> {
         // The importer works in the schematic's own unit, a tenth of a micrometre, so its rounding and its radius test are KiCad's.
-        let (imported, mapper) = read_and_map(req.format, &req.text, &req.dxf_units, req.scale, (req.offset_x_nm, req.offset_y_nm), req.line_width_um, 10_000.0)?;
+        let (imported, mapper) = read_and_map(req.format, &req.text, &req.dxf_units, req.scale, (req.offset_x_nm, req.offset_y_nm), req.line_width_nm, 10_000.0)?;
         let items = symbol_items(&imported, &mapper, req.unit, req.body_style);
         if items.is_empty() {
             return Err(fail("ops_empty_import", "No graphic items found in file."));

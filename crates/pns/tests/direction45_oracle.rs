@@ -1,10 +1,9 @@
 //! `DIRECTION_45::BuildInitialTrace` in every corner mode against KiCad's own (`libs/kimath/src/geometry/direction_45.cpp`, compiled verbatim over
 //! the real kimath by `crates/pns/oracle/build_direction.sh`; the driver is `oracle_direction_main.cpp`).
 //!
-//! A case is `dir p0x p0y p1x p1y start_diagonal mode` in nanometres (the points on the micrometre grid, as the router's are); the answer is the chain's
-//! pieces in order: `P x y` for a point that is not on an arc, `A sx sy mx my ex ey` once per arc. The port works on the nanometre grid and rounds to
-//! micrometres where a point is made, so KiCad's answer is rounded the same way and compared: the points exactly, the ends of an arc exactly and its
-//! middle to 1 um (the port takes the middle of the arc between the rounded ends).
+//! A case is `dir p0x p0y p1x p1y start_diagonal mode` in nanometres (the points on the micrometre grid, as a studio cursor's often are); the
+//! answer is the chain's pieces in order: `P x y` for a point that is not on an arc, `A sx sy mx my ex ey` once per arc. The port and KiCad both
+//! work in nanometres, and the answers are compared exactly.
 //!
 //! * `kicad_answers_baked_in`: cases with the answers the oracle gave (`tests/data/direction45_kicad_cases.txt`), always run.
 //! * `random_traces_agree_with_kicad`: random cases, port against oracle. Needs `EDA_PNS_ORACLE_DIR=<path to oracle_direction>` (skipped without it);
@@ -38,12 +37,7 @@ enum Piece {
     A(Point, Point, Point),
 }
 
-fn um(nm: i64) -> i64 {
-    eda_pns::kigeom::to_um(Point { x: nm, y: 0 }).x
-}
-
-/// An arc of KiCad's whose middle, on the micrometre grid, is in line with its ends (a quarter arc of 2 um, say): the IR cannot hold its curve,
-/// and the port makes it its chord. Compared as the chord.
+/// An arc of KiCad's whose middle is in line with its ends: the IR cannot hold its curve, and the port makes it its chord. Compared as the chord.
 fn flat_on_the_grid(s: Point, m: Point, e: Point) -> bool {
     (m.x - s.x) as i128 * (e.y - s.y) as i128 - (m.y - s.y) as i128 * (e.x - s.x) as i128 == 0
 }
@@ -52,7 +46,7 @@ fn parse(answer: &str) -> Vec<Piece> {
     let t: Vec<&str> = answer.split_whitespace().collect();
     let mut out = Vec::new();
     let mut i = 0;
-    let n = |s: &str| um(s.parse::<i64>().unwrap());
+    let n = |s: &str| s.parse::<i64>().unwrap();
     while i < t.len() {
         match t[i] {
             "P" => {
@@ -98,7 +92,7 @@ fn parse(answer: &str) -> Vec<Piece> {
 fn port(case: &str) -> Vec<Piece> {
     let v: Vec<i64> = case.split_whitespace().map(|s| s.parse().unwrap()).collect();
     let dir = if v[0] < 0 { Direction45::Undefined } else { DIRS[v[0] as usize] };
-    let p = |x: i64, y: i64| Point { x: x / 1000, y: y / 1000 };
+    let p = |x: i64, y: i64| Point { x, y };
     let trace = dir.build_initial_line(p(v[1], v[2]), p(v[3], v[4]), v[5] != 0, MODES[v[6] as usize]);
     let line = eda_pns::line::Line { arcs: trace.arcs.clone(), ..eda_pns::line::Line::from_points(None, 0, 0, trace.pts.clone()) };
     let runs = line.arc_runs();
@@ -117,13 +111,12 @@ fn port(case: &str) -> Vec<Piece> {
     out
 }
 
-/// The two answers agree: the same pieces, an arc's ends exactly and its middle to 1 um.
+/// The two answers agree: the same pieces, exactly.
 fn agree(port: &[Piece], kicad: &[Piece]) -> bool {
-    let close = |a: Point, b: Point, tol: i64| (a.x - b.x).abs() <= tol && (a.y - b.y).abs() <= tol;
     port.len() == kicad.len()
         && port.iter().zip(kicad).all(|(a, b)| match (a, b) {
             (Piece::P(p), Piece::P(q)) => p == q,
-            (Piece::A(s, m, e), Piece::A(s2, m2, e2)) => s == s2 && e == e2 && close(*m, *m2, 1),
+            (Piece::A(s, m, e), Piece::A(s2, m2, e2)) => s == s2 && e == e2 && m == m2,
             _ => false,
         })
 }

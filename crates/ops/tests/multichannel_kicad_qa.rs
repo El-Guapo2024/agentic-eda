@@ -51,7 +51,7 @@ fn the_rule_areas_of_kicads_multichannel_board_are_read_made_again_and_written_b
     assert_eq!(ch0.layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"], "the four copper layers of the board, in stack order");
 
     // the Generate dialog's rows: the two channel sheets, each holding its own footprints (KiCad's file also has a footprint on the root sheet, which makes it a row too)
-    let mut board = Board::new(design.clone(), &model, 100, 300);
+    let mut board = Board::new(design.clone(), &model, 100_000, 300_000);
     let rows = board.mc_potential_areas();
     let row = |key: &str| rows.iter().find(|r| r.kind == AreaKind::Sheet && r.key == key).unwrap_or_else(|| panic!("no row for {key}: {rows:?}"));
     assert_eq!(row("/i2c_thingy_ch0/").components.len(), 2, "{rows:?}");
@@ -75,7 +75,7 @@ fn the_rule_areas_of_kicads_multichannel_board_are_read_made_again_and_written_b
     assert_eq!(ours.layer_set(), ch0.layer_set(), "on the copper layers of the board");
     // The file's other area is not the hull of its sheet's footprints: its polygon is the first one's, moved (what a Repeat Layout leaves of the area it copies to), and the footprints
     // of its sheet are elsewhere. Made from them, the area is a staircase round both footprints.
-    let moved: Vec<Point> = ch0.outline.iter().map(|p| Point { x: p.x + 12_155, y: p.y + 30 }).collect();
+    let moved: Vec<Point> = ch0.outline.iter().map(|p| Point { x: p.x + 12_155_000, y: p.y + 30_000 }).collect();
     assert!(same_cycle(&moved, &ch1.outline), "KiCad's second area is the first one moved by 12.155 mm and 0.03 mm");
     let theirs = area_of(&made, "/i2c_thingy_ch1/");
     assert_eq!(theirs.name, "auto-placement-area-/i2c_thingy_ch1/");

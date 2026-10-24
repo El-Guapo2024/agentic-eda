@@ -2,9 +2,9 @@
 // part's BODY. KiCad draws a part's body on `F.Fab`; the courtyard around it is the body plus a clearance margin plus the pads' reach (a 0603 resistor's
 // courtyard is three times as wide as the part), so a box on the courtyard reads as an oversized block. The server sends the body as `part.body`
 // (crates/cli/src/body_api.rs: the box of the footprint's `F.Fab` graphics, board-space µm); a footprint with no `F.Fab` has none, and its courtyard stands in.
-import type { Um } from "../api/types";
+import type { Nm } from "../api/types";
 
-export type BoxUm = readonly [Um, Um, Um, Um];
+export type BoxNm = readonly [Nm, Nm, Nm, Nm];
 
 /** The tallest a fallback box gets: the same stand-in height the 3D tab has always used for a part it knows nothing about. */
 export const FALLBACK_MAX_HEIGHT_MM = 2;
@@ -12,7 +12,7 @@ export const FALLBACK_MAX_HEIGHT_MM = 2;
 export const FALLBACK_MIN_HEIGHT_MM = 0.4;
 
 /** `(x0, y0, x1, y1)` the fallback box covers: the part's `F.Fab` body, else its courtyard, else `null` (an unplaced part). */
-export function partBodyBoxUm(part: { body?: BoxUm | null; courtyard?: BoxUm | null }): BoxUm | null {
+export function partBodyBoxNm(part: { body?: BoxNm | null; courtyard?: BoxNm | null }): BoxNm | null {
   return part.body ?? part.courtyard ?? null;
 }
 

@@ -43,11 +43,11 @@ function sheet(): Schematic {
     wires: [],
     no_connects: [],
     labels: [{ id: "lbl_a", net: "  CLK  ", at: [0, 0], scope: "local", shape: null }],
-    texts: [{ id: "txt_a", content: "note\nover two lines", at: [0, 0], angle: 0, size_um: 1270 }],
+    texts: [{ id: "txt_a", content: "note\nover two lines", at: [0, 0], angle: 0, size_nm: 1270 }],
     title_block: null,
     bus_entries: [],
     sheets: [{ id: "sheet_a", name: "Sub", file: "sub.kicad_sch", at: [100_000, 100_000], size: [20_000, 10_000], pins: [{ id: "shpin_a", name: "IN", shape: "input", at: [100_000, 105_000] }] }],
-    graphics: [{ id: "tb_a", shape: { type: "text_box", start: [0, 0], end: [10, 10], text: " boxed ", size_um: 1270 } }, { id: "shp_a", shape: { type: "rectangle", start: [0, 0], end: [1, 1] } }],
+    graphics: [{ id: "tb_a", shape: { type: "text_box", start: [0, 0], end: [10, 10], text: " boxed ", size_nm: 1270 } }, { id: "shp_a", shape: { type: "rectangle", start: [0, 0], end: [1, 1] } }],
     sheet_path: [],
   } as unknown as Schematic;
 }

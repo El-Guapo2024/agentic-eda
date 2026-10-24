@@ -7,7 +7,7 @@
 import type { Schematic, SchematicLabel, SchematicText } from "../../api/types";
 import { boxEncloses, boxesOverlap, boxOfPoints, distPointSegment, distToPolyline, graphicBounds, graphicHit, inflateBox, pointInBox, type Box, type P } from "../../kicad-port/schItemGeom";
 import { measureStrokeText } from "../text/strokeFont";
-import { globalLabelOutline, hierLabelOutline, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement } from "./labelShape";
+import { globalLabelOutline, hierLabelOutline, inferSpin, LABEL_TEXT_SIZE_NM, localLabelTextPlacement } from "./labelShape";
 import { resolveLibSymbol, symbolBounds } from "./libSymbol";
 import { fieldBox, fieldItems, isShownField, type FieldItem } from "../../kicad-port/schFieldEdit";
 import { hitPin, pinBox, pinById, pinItems } from "../../kicad-port/schPins";
@@ -23,21 +23,21 @@ export interface SchItemRef {
 }
 
 /** eeschema/default_values.h DEFAULT_NOCONNECT_SIZE half-width -- keep in step with painter.ts. */
-const NOCONNECT_HALF_UM = 609.6;
-const JUNCTION_RADIUS_UM = 457.2;
+const NOCONNECT_HALF_NM = 609_600;
+const JUNCTION_RADIUS_NM = 457_200;
 
 /** The text's rectangle for a string drawn from `at` in `justify`, rotated `angleDeg` about `at`. */
-function textBox(text: string, at: P, sizeUm: number, justify: "left" | "center" | "right", angleDeg: number, baselineShift = 0): Box {
+function textBox(text: string, at: P, sizeNm: number, justify: "left" | "center" | "right", angleDeg: number, baselineShift = 0): Box {
   const lines = text.split("\n");
-  const w = Math.max(...lines.map((l) => measureStrokeText(l, sizeUm)), sizeUm * 0.5);
-  const h = sizeUm * Math.max(1, lines.length) * 1.1;
+  const w = Math.max(...lines.map((l) => measureStrokeText(l, sizeNm)), sizeNm * 0.5);
+  const h = sizeNm * Math.max(1, lines.length) * 1.1;
   const x0 = justify === "left" ? 0 : justify === "center" ? -w / 2 : -w;
   // The glyphs sit above the baseline: a cap height of about 0.95 of the size.
   const corners: P[] = [
-    [x0, baselineShift - sizeUm],
-    [x0 + w, baselineShift - sizeUm],
-    [x0 + w, baselineShift - sizeUm + h],
-    [x0, baselineShift - sizeUm + h],
+    [x0, baselineShift - sizeNm],
+    [x0 + w, baselineShift - sizeNm],
+    [x0 + w, baselineShift - sizeNm + h],
+    [x0, baselineShift - sizeNm + h],
   ];
   const a = (angleDeg * Math.PI) / 180;
   const c = Math.cos(a);
@@ -52,7 +52,7 @@ export function textItemBounds(t: SchematicText): Box {
 
 export function labelBounds(sch: Schematic, l: SchematicLabel): Box {
   const spin = l.spin ?? inferSpin(sch.wires, l.at);
-  const size = l.size_um && l.size_um > 0 ? l.size_um : LABEL_TEXT_SIZE_UM;
+  const size = l.size_nm && l.size_nm > 0 ? l.size_nm : LABEL_TEXT_SIZE_NM;
   if (l.scope !== "local" && l.shape) {
     const outline = l.scope === "global" ? globalLabelOutline(l.net, l.shape, spin, l.at, size) : hierLabelOutline(l.shape, spin, l.at, size);
     return boxOfPoints(outline as P[]) ?? { minX: l.at[0], minY: l.at[1], maxX: l.at[0], maxY: l.at[1] };
@@ -65,7 +65,7 @@ export function labelBounds(sch: Schematic, l: SchematicLabel): Box {
 function powerSymbolBounds(sch: Schematic, ps: Schematic["power_symbols"][number]): Box {
   const resolved = resolveLibSymbol({ id: ps.id, lib_id: ps.lib_id, at: ps.at, rot: ps.rot, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [ps.pin] }, sch.lib_symbols);
   if (resolved) return resolved.bbox;
-  return { minX: ps.at[0] - 600, minY: ps.at[1] - 600, maxX: ps.at[0] + 600, maxY: ps.at[1] + 600 };
+  return { minX: ps.at[0] - 600_000, minY: ps.at[1] - 600_000, maxX: ps.at[0] + 600_000, maxY: ps.at[1] + 600_000 };
 }
 
 /** The sheet's fields by id, built once per sheet object (a marquee asks for every one of them). */
@@ -147,7 +147,7 @@ export function itemBounds(sch: Schematic, ref: SchItemRef): Box | null {
     }
     case "no_connect": {
       const n = sch.no_connects.find((x) => x.id === ref.id);
-      return n ? { minX: n.at[0] - NOCONNECT_HALF_UM, minY: n.at[1] - NOCONNECT_HALF_UM, maxX: n.at[0] + NOCONNECT_HALF_UM, maxY: n.at[1] + NOCONNECT_HALF_UM } : null;
+      return n ? { minX: n.at[0] - NOCONNECT_HALF_NM, minY: n.at[1] - NOCONNECT_HALF_NM, maxX: n.at[0] + NOCONNECT_HALF_NM, maxY: n.at[1] + NOCONNECT_HALF_NM } : null;
     }
     case "bus_entry": {
       const b = sch.bus_entries.find((x) => x.id === ref.id);
@@ -155,7 +155,7 @@ export function itemBounds(sch: Schematic, ref: SchItemRef): Box | null {
     }
     case "junction": {
       const j = (sch.junctions ?? []).find((x) => x.id === ref.id);
-      return j ? { minX: j.at[0] - JUNCTION_RADIUS_UM, minY: j.at[1] - JUNCTION_RADIUS_UM, maxX: j.at[0] + JUNCTION_RADIUS_UM, maxY: j.at[1] + JUNCTION_RADIUS_UM } : null;
+      return j ? { minX: j.at[0] - JUNCTION_RADIUS_NM, minY: j.at[1] - JUNCTION_RADIUS_NM, maxX: j.at[0] + JUNCTION_RADIUS_NM, maxY: j.at[1] + JUNCTION_RADIUS_NM } : null;
     }
     case "line": {
       const l = (sch.lines ?? []).find((x) => x.id === ref.id);

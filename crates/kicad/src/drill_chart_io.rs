@@ -15,7 +15,7 @@ use eda_model::table::Table;
 
 use crate::import_items::ItemRef;
 use crate::sexpr::{self, Sexpr};
-use crate::{mm, mm_to_um, sexpr_str};
+use crate::{mm, mm_to_nm, sexpr_str};
 
 fn yes(b: bool) -> &'static str {
     if b {
@@ -49,8 +49,8 @@ pub(crate) fn read_profile(root: &[Sexpr]) -> Option<DrillSymbolProfile> {
                     p.mark_policy = policy;
                 }
             }
-            Some("size") => p.size_um = sexpr::num(l, 1).map(mm_to_um).unwrap_or(p.size_um),
-            Some("width") => p.width_um = sexpr::num(l, 1).map(mm_to_um).unwrap_or(p.width_um),
+            Some("size") => p.size_nm = sexpr::num(l, 1).map(mm_to_nm).unwrap_or(p.size_nm),
+            Some("width") => p.width_nm = sexpr::num(l, 1).map(mm_to_nm).unwrap_or(p.width_nm),
             Some("freeze_assignments") => p.freeze_assignments = bool_of(l),
             Some("assignment") => {
                 let mut key = String::new();
@@ -96,7 +96,7 @@ pub(crate) fn write_profile(out: &mut String, p: &DrillSymbolProfile) {
         let _ = write!(out, " {}", k.token());
     }
     out.push(')');
-    let _ = write!(out, " (default_marks {}) (size {}) (width {}) (freeze_assignments {})", p.mark_policy.token(), mm(p.size_um), mm(p.width_um), yes(p.freeze_assignments));
+    let _ = write!(out, " (default_marks {}) (size {}) (width {}) (freeze_assignments {})", p.mark_policy.token(), mm(p.size_nm), mm(p.width_nm), yes(p.freeze_assignments));
     for (key, a) in &p.assignments {
         let _ = write!(out, " (assignment (key {}) (mark {}", sexpr_str(key), a.mode.token());
         match a.mode {
@@ -145,7 +145,7 @@ pub(crate) fn read_chart(item: &[Sexpr]) -> Option<(Table, DrillChart)> {
                         Some("id") => col = sexpr::txt(f, 1).and_then(DrillChartColumnId::from_token).map(DrillChartColumn::default_of),
                         Some("name") => name = sexpr::txt(f, 1).map(str::to_string),
                         Some("justify") => align = sexpr::txt(f, 1).and_then(TableAlign::from_token),
-                        Some("width") => width = sexpr::num(f, 1).map(mm_to_um).unwrap_or(0),
+                        Some("width") => width = sexpr::num(f, 1).map(mm_to_nm).unwrap_or(0),
                         _ => {}
                     }
                 }
@@ -156,7 +156,7 @@ pub(crate) fn read_chart(item: &[Sexpr]) -> Option<(Table, DrillChart)> {
                     if let Some(a) = align {
                         col.align = a;
                     }
-                    col.width_um = width.clamp(0, 1_000_000);
+                    col.width_nm = width.clamp(0, 1_000_000_000); // `GENERATED_TABLE_MAX_COLUMN_WIDTH`: 1000 mm
                     if !c.columns.iter().any(|x| x.id == col.id) {
                         c.columns.push(col);
                     }
@@ -250,8 +250,8 @@ pub(crate) fn write_chart(out: &mut String, t: &Table, c: &DrillChart, locked: b
         if col.align != align {
             let _ = write!(out, " (justify {})", col.align.token());
         }
-        if col.width_um > 0 {
-            let _ = write!(out, " (width {})", mm(col.width_um));
+        if col.width_nm > 0 {
+            let _ = write!(out, " (width {})", mm(col.width_nm));
         }
         out.push(')');
     }
@@ -294,14 +294,14 @@ pub(crate) fn write_chart(out: &mut String, t: &Table, c: &DrillChart, locked: b
 
 /// `parsePCB_DRILL_MAP`: what the file leaves out keeps what `PCB_DRILL_MAP( board )` starts with (the mark size of the board's profile); `None` for a map KiCad refuses ("not on
 /// a documentation layer").
-pub(crate) fn read_map(item: &[Sexpr], profile_size_um: i64) -> Option<(DrillMap, ItemRef)> {
-    let mut m = DrillMap::new("", profile_size_um);
+pub(crate) fn read_map(item: &[Sexpr], profile_size_nm: i64) -> Option<(DrillMap, ItemRef)> {
+    let mut m = DrillMap::new("", profile_size_nm);
     for l in item.iter().skip(1).filter_map(Sexpr::as_list) {
         match sexpr::tag(l) {
             Some("layer") => m.layer = sexpr::txt(l, 1).unwrap_or_default().to_string(),
-            Some("offset") => m.offset = Point { x: sexpr::num(l, 1).map(mm_to_um).unwrap_or(0), y: sexpr::num(l, 2).map(mm_to_um).unwrap_or(0) },
+            Some("offset") => m.offset = Point { x: sexpr::num(l, 1).map(mm_to_nm).unwrap_or(0), y: sexpr::num(l, 2).map(mm_to_nm).unwrap_or(0) },
             // `SetSymbolSize`: at least one.
-            Some("size") => m.size_um = sexpr::num(l, 1).map(mm_to_um).unwrap_or(m.size_um).max(1),
+            Some("size") => m.size_nm = sexpr::num(l, 1).map(mm_to_nm).unwrap_or(m.size_nm).max(1),
             Some("span") => {
                 m.span = match sexpr::txt(l, 1) {
                     Some("all") | None => None,
@@ -327,7 +327,7 @@ pub(crate) fn read_map(item: &[Sexpr], profile_size_um: i64) -> Option<(DrillMap
 
 /// Every `(drill_map ..)` of the board, in file order.
 pub(crate) fn read_maps(root: &[Sexpr], refs: &mut Vec<ItemRef>) -> Vec<DrillMap> {
-    let size = read_profile(root).unwrap_or_default().size_um;
+    let size = read_profile(root).unwrap_or_default().size_nm;
     let mut out = Vec::new();
     for item in sexpr::find_all(root, "drill_map") {
         if let Some((m, r)) = read_map(item, size) {
@@ -345,7 +345,7 @@ pub(crate) fn write_map(out: &mut String, m: &DrillMap, locked: bool) -> String 
     if locked {
         out.push_str(" (locked yes)");
     }
-    let _ = write!(out, " (layer {}) (offset {} {}) (size {})", sexpr_str(&m.layer), mm(m.offset.x), mm(m.offset.y), mm(m.size_um));
+    let _ = write!(out, " (layer {}) (offset {} {}) (size {})", sexpr_str(&m.layer), mm(m.offset.x), mm(m.offset.y), mm(m.size_nm));
     match &m.span {
         None => out.push_str(" (span all)"),
         Some(s) => {
@@ -388,7 +388,7 @@ mod tests {
         let (t, c) = read_chart(tree.as_list().unwrap()).unwrap();
         assert_eq!((t.col_count(), t.row_count(), t.layer.as_str()), (2, 2, "Dwgs.User"));
         assert_eq!(c.precision, 2);
-        assert_eq!(c.columns.iter().map(|x| (x.id, x.heading.as_str(), x.width_um)).collect::<Vec<_>>(), vec![(DrillChartColumnId::Symbol, "SYM", 16_000), (DrillChartColumnId::DrillDiameter, "Drill (mm)", 16_000)]);
+        assert_eq!(c.columns.iter().map(|x| (x.id, x.heading.as_str(), x.width_nm)).collect::<Vec<_>>(), vec![(DrillChartColumnId::Symbol, "SYM", 16_000_000), (DrillChartColumnId::DrillDiameter, "Drill (mm)", 16_000_000)]);
         assert_eq!((c.filter.non_plated, c.filter.slots, c.show_totals, c.symbol_column), (false, false, false, 0));
         assert_eq!(c.row_shapes.get(&1), Some(&0));
         let mut out = String::new();
@@ -403,13 +403,13 @@ mod tests {
     #[test]
     fn a_map_and_a_profile_read_and_write_back() {
         let tree = sexpr::parse(r#"(drill_map (uuid "b8c07edd-23fd-4bb5-b51d-dcd8f5d85461") (layer "Dwgs.User") (offset 50 0) (size 1.5) (span "F.Cu" "B.Cu") (outline_slots yes) (guide_cross no))"#).unwrap();
-        let (m, _) = read_map(tree.as_list().unwrap(), 1_500).unwrap();
-        assert_eq!((m.offset, m.span.as_ref().map(|s| s.end.as_str())), (Point { x: 50_000, y: 0 }, Some("B.Cu")));
+        let (m, _) = read_map(tree.as_list().unwrap(), 1_500_000).unwrap();
+        assert_eq!((m.offset, m.span.as_ref().map(|s| s.end.as_str())), (Point { x: 50_000_000, y: 0 }, Some("B.Cu")));
         let mut out = String::new();
         write_map(&mut out, &DrillMap { id: "dmap_1".into(), ..m.clone() }, false);
         assert!(out.contains("(layer \"Dwgs.User\") (offset 50 0) (size 1.5) (span \"F.Cu\" \"B.Cu\") (outline_slots yes) (guide_cross no))"), "{out}");
         let bad = sexpr::parse(r#"(drill_map (layer "F.Cu"))"#).unwrap();
-        assert!(read_map(bad.as_list().unwrap(), 1_500).is_none(), "copper is no documentation layer");
+        assert!(read_map(bad.as_list().unwrap(), 1_500_000).is_none(), "copper is no documentation layer");
 
         let board = sexpr::parse(
             r#"(kicad_pcb (setup (drill_symbol_profile (group_by size slot plating span operation post_machining) (default_marks shapes_then_letters) (size 1.5) (width 0.15) (freeze_assignments yes)

@@ -8,7 +8,7 @@
 // action) and DimensionPropertiesDialog.tsx without either importing the
 // other.
 import type { CmdDimension, CmdDimensionKind, Dimension, DimensionSettings, TextGraphicsDefaults } from "../api/types";
-import { lineThicknessUm, textStyleOf } from "./layerDefaults";
+import { lineThicknessNm, textStyleOf } from "./layerDefaults";
 
 export function cmdDimensionKindOf(dim: Pick<Dimension, "kind" | "height" | "horizontal" | "leader_length">): CmdDimensionKind {
   switch (dim.kind) {
@@ -34,15 +34,15 @@ export function cmdDimensionKindOf(dim: Pick<Dimension, "kind" | "height" | "hor
  * `horizontal` defaults to whichever axis the two clicks actually spanned
  * more of -- a reasonable guess from the gesture itself, not a fixed default. */
 export function defaultDimensionPayload(kind: CmdDimensionKind["kind"], start: [number, number], end: [number, number], layer: string, settings: DimensionSettings, defaults?: TextGraphicsDefaults): CmdDimension {
-  const DEFAULT_HEIGHT_UM = 5000;
-  const DEFAULT_LEADER_LENGTH_UM = 3000;
+  const DEFAULT_HEIGHT_NM = 5_000_000;
+  const DEFAULT_LEADER_LENGTH_NM = 3_000_000;
   const kindObj: CmdDimensionKind =
     kind === "aligned"
-      ? { kind: "aligned", height: DEFAULT_HEIGHT_UM }
+      ? { kind: "aligned", height: DEFAULT_HEIGHT_NM }
       : kind === "orthogonal"
-        ? { kind: "orthogonal", height: DEFAULT_HEIGHT_UM, horizontal: Math.abs(end[0] - start[0]) >= Math.abs(end[1] - start[1]) }
+        ? { kind: "orthogonal", height: DEFAULT_HEIGHT_NM, horizontal: Math.abs(end[0] - start[0]) >= Math.abs(end[1] - start[1]) }
         : kind === "radial"
-          ? { kind: "radial", leader_length: DEFAULT_LEADER_LENGTH_UM }
+          ? { kind: "radial", leader_length: DEFAULT_LEADER_LENGTH_NM }
           : kind === "leader"
             ? { kind: "leader" }
             : { kind: "center" };
@@ -63,9 +63,9 @@ export function defaultDimensionPayload(kind: CmdDimensionKind["kind"], start: [
     keep_text_aligned: settings.keep_text_aligned,
     text_angle: 0,
     // `PCB_DIMENSION_BASE::StyleFromSettings`: the text size and the line thickness are the layer class's (Text & Graphics > Defaults), not the Dimensions page's;
-    // `settings.text_size_um` and `stroke_width` stand in for a backend that sends no table.
-    text_size_um: defaults ? textStyleOf(defaults, layer).heightUm : settings.text_size_um,
-    stroke_width: defaults ? lineThicknessUm(defaults, layer) : settings.stroke_width,
+    // `settings.text_size_nm` and `stroke_width` stand in for a backend that sends no table.
+    text_size_nm: defaults ? textStyleOf(defaults, layer).heightNm : settings.text_size_nm,
+    stroke_width: defaults ? lineThicknessNm(defaults, layer) : settings.stroke_width,
     arrow_length: settings.arrow_length,
     extension_offset: settings.extension_offset,
     extension_height: settings.extension_height,
@@ -90,9 +90,9 @@ export function toCmdDimension(dim: Dimension): CmdDimension {
     text_position: dim.text_position,
     keep_text_aligned: dim.keep_text_aligned,
     text_angle: dim.text_angle,
-    text_size_um: dim.text_size_um,
+    text_size_nm: dim.text_size_nm,
     // The label's pen survives an edit that does not mention it (`edit_dimension` replaces the whole dimension).
-    ...(dim.text_thickness_um != null ? { text_thickness_um: dim.text_thickness_um } : {}),
+    ...(dim.text_thickness_nm != null ? { text_thickness_nm: dim.text_thickness_nm } : {}),
     stroke_width: dim.stroke_width,
     arrow_length: dim.arrow_length,
     extension_offset: dim.extension_offset,

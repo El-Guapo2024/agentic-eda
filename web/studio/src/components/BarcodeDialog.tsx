@@ -13,8 +13,8 @@ import { closeBarcodeDialog, usePcbItemDialogs } from "../state/pcbItemDialogs";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { previewBarcode, type BarcodeReply } from "./canvas/barcodeCache";
 
-const mm = (um: number): string => String(Math.round(um) / 1000);
-const um = (s: string): number => Math.round(Number(s) * 1000);
+const mm = (um: number): string => String(Math.round(um) / 1e6);
+const um = (s: string): number => Math.round(Number(s) * 1e6);
 
 interface Form {
   text: string;
@@ -45,14 +45,14 @@ function formOf(b: CmdBarcode, locked: boolean): Form {
     layer: b.layer,
     x: mm(b.at.x),
     y: mm(b.at.y),
-    width: mm(b.width_um),
-    height: mm(b.height_um),
-    textSize: mm(b.text_height_um),
+    width: mm(b.width_nm),
+    height: mm(b.height_nm),
+    textSize: mm(b.text_height_nm),
     angle: String(angle / 1000),
     showText: b.show_text ?? true,
     knockout: b.knockout ?? false,
-    marginX: mm(b.margin_x_um ?? 0),
-    marginY: mm(b.margin_y_um ?? 0),
+    marginX: mm(b.margin_x_nm ?? 0),
+    marginY: mm(b.margin_y_nm ?? 0),
     locked,
   };
 }
@@ -71,16 +71,16 @@ function barcodeOf(f: Form, id: string | null): CmdBarcode | string {
     layer: f.layer,
     at: { x: nums.x, y: nums.y },
     angle,
-    width_um: nums.w,
-    height_um: nums.h,
+    width_nm: nums.w,
+    height_nm: nums.h,
     text: f.text,
-    text_height_um: nums.th,
+    text_height_nm: nums.th,
     kind: f.kind,
     ecc: clampEcc(f.kind, f.ecc),
     show_text: f.showText,
     knockout: f.knockout,
-    margin_x_um: nums.mx,
-    margin_y_um: nums.my,
+    margin_x_nm: nums.mx,
+    margin_y_nm: nums.my,
   };
   return id ? { ...barcode, id } : barcode;
 }

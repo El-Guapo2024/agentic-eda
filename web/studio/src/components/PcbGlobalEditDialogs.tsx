@@ -77,11 +77,11 @@ export function GlobalDeletionDialog({ options, currentLayer, onOk }: { options:
 
 export function CleanupGraphicsDialog({ shapes, options, onOk }: { shapes: readonly Shape[]; options: CleanupGraphicsOptions; onOk: (o: CleanupGraphicsOptions) => void }) {
   const [o, setO] = useState<CleanupGraphicsOptions>({ ...DEFAULT_CLEANUP_GRAPHICS, ...options });
-  const tol = useLengthField(options.toleranceUm);
+  const tol = useLengthField(options.toleranceNm);
   const tolerance = tol.parse();
-  const opts: CleanupGraphicsOptions = { ...o, toleranceUm: tolerance ?? o.toleranceUm };
+  const opts: CleanupGraphicsOptions = { ...o, toleranceNm: tolerance ?? o.toleranceNm };
   // `doCleanup( true )` after every change: the dry run that lists what Update PCB will do.
-  const plan: CleanupGraphicsPlan = useMemo(() => planCleanupGraphics(shapes, { ...o, toleranceUm: tolerance ?? o.toleranceUm }, true), [shapes, o, tolerance]);
+  const plan: CleanupGraphicsPlan = useMemo(() => planCleanupGraphics(shapes, { ...o, toleranceNm: tolerance ?? o.toleranceNm }, true), [shapes, o, tolerance]);
   const any = o.mergeRects || o.deleteRedundant || o.fixBoardOutlines;
   return (
     <DialogShell

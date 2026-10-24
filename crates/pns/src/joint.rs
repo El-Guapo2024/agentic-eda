@@ -19,7 +19,7 @@ use eda_model::ir::Point;
 pub struct JointKey {
     /// `eda_model::ir::Point` doesn't derive `Hash`, so the coordinates are
     /// stored as a plain tuple here instead of widening that shared type.
-    pos: (eda_model::ir::Um, eda_model::ir::Um),
+    pos: (eda_model::ir::Nm, eda_model::ir::Nm),
     /// `None` for an unconnected (no-net) point; a net name otherwise.
     /// Stored as the owned string (not `Rc<str>`) so the key type needs no
     /// lifetime and is cheap enough to build per-query at this project's

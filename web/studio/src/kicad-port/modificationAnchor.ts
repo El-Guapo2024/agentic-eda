@@ -25,7 +25,7 @@ export interface ModificationView {
   /** Screen pixels per um. */
   scale: number;
   /** The grid on screen, um. */
-  gridUm: number;
+  gridNm: number;
   /** The editor's grid list and the overrides over it. */
   grids: readonly number[];
   overrides: GridOverrides | null;
@@ -43,10 +43,10 @@ export function modificationAnchor(view: ModificationView, refPt: readonly [numb
   const scale = view.scale > 0 ? view.scale : 1;
   const env: GridEnv = {
     scale,
-    gridUm: view.gridUm,
-    visibleGridUm: computeVisibleGridSize(view.gridUm, scale),
+    gridNm: view.gridNm,
+    visibleGridNm: computeVisibleGridSize(view.gridNm, scale),
     origin: [view.origin[0], view.origin[1]],
-    gridSizeOf: (c) => gridSizeFor(c, view.gridUm, view.grids, view.overrides),
+    gridSizeOf: (c) => gridSizeFor(c, view.gridNm, view.grids, view.overrides),
   };
   const highContrastLayers = view.highContrast && view.activeLayer ? new Set([view.activeLayer]) : null;
   const helper = new PcbGridHelper(env, sceneOf(view.board), view.magnetic, { layerVisible: (layer) => view.layerVisible[layer] !== false, highContrastLayers });

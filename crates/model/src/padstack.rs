@@ -14,7 +14,7 @@
 //! [`Pad::shape_groups`] takes the side and gives the shapes the board's layers have.
 
 use crate::footprint::{Pad, PadCustom, PadKind, PadShape, PadShapeExt};
-use crate::ir::{ChamferCorners, Side, Um};
+use crate::ir::{ChamferCorners, Side, Nm};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -114,15 +114,18 @@ pub enum Flash {
 pub struct PadLayerShape {
     pub shape: PadShape,
     /// The shape's size before the pad's rotation; a custom pad's anchor's.
-    pub size: (Um, Um),
+    #[serde(deserialize_with = "crate::units::de")]
+    pub size: (Nm, Nm),
     /// `roundrect_rratio`, as [`Pad::roundrect_ratio`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roundrect_ratio: Option<f64>,
     /// `PAD::GetOffset( layer )`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub offset: Option<(Um, Um)>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub offset: Option<(Nm, Nm)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trapezoid_delta: Option<(Um, Um)>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub trapezoid_delta: Option<(Nm, Nm)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chamfer_ratio: Option<f64>,
     #[serde(default, skip_serializing_if = "crate::ir::ChamferCorners::is_none")]
@@ -152,7 +155,7 @@ impl PadLayerShape {
     }
 
     /// A shape of nothing but `shape` and `size`, which is what a layer node that says no more than that reads as (`SHAPE_PROPS()`: no ratio, no offset).
-    pub fn plain(shape: PadShape, size: (Um, Um)) -> PadLayerShape {
+    pub fn plain(shape: PadShape, size: (Nm, Nm)) -> PadLayerShape {
         PadLayerShape { shape, size, roundrect_ratio: None, offset: None, trapezoid_delta: None, chamfer_ratio: None, chamfer_corners: ChamferCorners::default(), custom: None, tokens: Vec::new() }
     }
 
@@ -437,15 +440,15 @@ mod tests {
     }
 
     fn pad(kind: PadKind) -> Pad {
-        Pad { number: "1".into(), at: (0, 0), size: (1600, 1600), shape: PadShape::Circle, kind, drill: Some(800), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
+        Pad { number: "1".into(), at: (0, 0), size: (1_600_000, 1_600_000), shape: PadShape::Circle, kind, drill: Some(800_000), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
     }
 
     fn oval() -> PadLayerShape {
-        PadLayerShape::plain(PadShape::Oval, (2000, 1000))
+        PadLayerShape::plain(PadShape::Oval, (2_000_000, 1_000_000))
     }
 
     fn rect() -> PadLayerShape {
-        PadLayerShape::plain(PadShape::Rect, (1200, 1200))
+        PadLayerShape::plain(PadShape::Rect, (1_200_000, 1_200_000))
     }
 
     fn groups(p: &Pad, side: Side, n: usize) -> Vec<(Vec<String>, PadShape)> {
@@ -550,16 +553,16 @@ mod tests {
     #[test]
     fn a_layer_shape_lays_on_a_pad_and_normalizes_as_a_pad_edit_does() {
         let p = pad(PadKind::ThroughHole);
-        let mut s = PadLayerShape::plain(PadShape::RoundRect, (2000, 1000));
+        let mut s = PadLayerShape::plain(PadShape::RoundRect, (2_000_000, 1_000_000));
         s.normalize();
         assert_eq!(s.roundrect_ratio, Some(0.25));
         let laid = s.lay_on(&p);
-        assert_eq!((laid.shape, laid.size, laid.has_stack()), (PadShape::RoundRect, (2000, 1000), false));
-        let mut c = PadLayerShape::plain(PadShape::Circle, (1000, 600));
+        assert_eq!((laid.shape, laid.size, laid.has_stack()), (PadShape::RoundRect, (2_000_000, 1_000_000), false));
+        let mut c = PadLayerShape::plain(PadShape::Circle, (1_000_000, 600_000));
         c.normalize();
-        assert_eq!(c.size, (1000, 1000), "a circle is square");
-        let mut t = PadLayerShape::plain(PadShape::Rect, (1000, 600));
-        t.trapezoid_delta = Some((0, 100));
+        assert_eq!(c.size, (1_000_000, 1_000_000), "a circle is square");
+        let mut t = PadLayerShape::plain(PadShape::Rect, (1_000_000, 600_000));
+        t.trapezoid_delta = Some((0, 100_000));
         t.chamfer_ratio = Some(0.3);
         t.normalize();
         assert_eq!((t.trapezoid_delta, t.chamfer_ratio), (None, None));

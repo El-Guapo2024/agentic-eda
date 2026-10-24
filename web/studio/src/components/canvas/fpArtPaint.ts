@@ -16,7 +16,7 @@ import { fieldAsText } from "../../kicad-port/fpFields";
 import { opacityOf } from "./appearancePaint";
 import { layerColor } from "./layers";
 import { drawShapeGeometry, layerAlpha, realLayerKey, withAlpha, type PaintOptions } from "./painter";
-import { hairlineUm } from "./view";
+import { hairlineNm } from "./view";
 
 /** `STROKE_FONT::GetInterline`: `FONT_METRICS`' 1.62 glyph heights, times the legacy factor 0.9583 that keeps the old spacing. */
 const INTERLINE = 1.62 * 0.9583;
@@ -43,7 +43,7 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
       ctx.globalAlpha *= s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled ? opacityOf(opts.appearance, "shapes") : isCopper(layer) ? opacityOf(opts.appearance, "tracks") : 1;
       ctx.strokeStyle = selected ? layerColor("selection") : layerColor(realLayerKey(layer));
       ctx.fillStyle = ctx.strokeStyle;
-      ctx.lineWidth = Math.max(s.stroke_width, hairlineUm(view, selected ? 2 : 1));
+      ctx.lineWidth = Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       if (s.dash) ctx.setLineDash(dashPattern(s.dash, s.stroke_width));
@@ -63,21 +63,21 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
 function drawArtText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: NonNullable<Part["texts"]>[number], color: string, sketch: boolean): void {
   const text = fieldAsText(artTextAsField(t));
   const lines = t.text.split("\n");
-  const sizeUm = Math.max(t.h, hairlineUm(view, 8));
+  const sizeNm = Math.max(t.h, hairlineNm(view, 8));
   // KiCad's counter-clockwise millidegrees; the canvas turns clockwise.
   const angleRad = (-text.angle / 1000) * (Math.PI / 180);
-  const interline = INTERLINE * sizeUm;
+  const interline = INTERLINE * sizeNm;
   // The first baseline below the anchor: the glyphs' bottom is on it, 0.72 of the size below the top and 0.36 below the middle of a line; a block of several lines
   // hangs from the top, is centred on the anchor or ends on it.
   const block = (lines.length - 1) * interline;
-  const first = t.valign > 0 ? -block : t.valign < 0 ? 0.72 * sizeUm : 0.36 * sizeUm - block / 2;
-  const pen = t.thickness > 0 ? t.thickness : t.bold ? sizeUm / 5 : sizeUm / 8;
+  const first = t.valign > 0 ? -block : t.valign < 0 ? 0.72 * sizeNm : 0.36 * sizeNm - block / 2;
+  const pen = t.thickness > 0 ? t.thickness : t.bold ? sizeNm / 5 : sizeNm / 8;
   lines.forEach((line, i) => {
     if (!line) return;
     const down = first + i * interline;
     drawStrokeText(ctx, line, t.x - down * Math.sin(angleRad), t.y + down * Math.cos(angleRad), {
-      sizeUm,
-      thicknessUm: sketch ? hairlineUm(view, 1) : Math.min(Math.max(pen, hairlineUm(view, 0.5)), sizeUm / 4),
+      sizeNm,
+      thicknessNm: sketch ? hairlineNm(view, 1) : Math.min(Math.max(pen, hairlineNm(view, 0.5)), sizeNm / 4),
       justify: text.justify,
       angleRad,
       mirror: t.mirror,

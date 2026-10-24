@@ -9,7 +9,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { BoardStatsReply, BoardTable, BoardTableCell } from "../api/types";
-import { isBackLayer, lineThicknessUm, textStyleOf } from "./layerDefaults";
+import { isBackLayer, lineThicknessNm, textStyleOf } from "./layerDefaults";
 import { activeLayerName } from "./layerPresets";
 import type { TableBoardNumbers, TableBorderEdit, TableCellEdit, TableHAlign, TableLineStyleName, TablePatch, TableSeparatorsEdit, TableVAlign } from "../api/tableTypes";
 
@@ -282,15 +282,15 @@ export function drawTableGrid(origin: readonly [number, number], cursor: readonl
 
 /**
  * `SCH_DRAWING_TOOLS::DrawTable`'s motion handler: from the first click `origin` to the `cursor`, as many columns as hold 15 glyph widths of the sheet's default text and as many rows as
- * hold 2 glyph heights (at least one of each), cells at least 5 grid cells wide and 2 high, each cell's size rounded to the grid (`GRID_GRAPHICS`). `fontUm` is the sheet's default text
+ * hold 2 glyph heights (at least one of each), cells at least 5 grid cells wide and 2 high, each cell's size rounded to the grid (`GRID_GRAPHICS`). `fontNm` is the sheet's default text
  * size (50 mil).
  */
-export function schDrawTableGrid(origin: readonly [number, number], cursor: readonly [number, number], fontUm: number, gridUm: number): DrawTableGrid {
+export function schDrawTableGrid(origin: readonly [number, number], cursor: readonly [number, number], fontNm: number, gridNm: number): DrawTableGrid {
   const requestedX = cursor[0] - origin[0];
   const requestedY = cursor[1] - origin[1];
-  const cols = Math.max(1, idiv(requestedX, fontUm * 15));
-  const rows = Math.max(1, idiv(requestedY, fontUm * 2));
-  const g = Math.max(gridUm, 1);
+  const cols = Math.max(1, idiv(requestedX, fontNm * 15));
+  const rows = Math.max(1, idiv(requestedY, fontNm * 2));
+  const g = Math.max(gridNm, 1);
   const cellW = kiround(Math.max(g * 5, idiv(requestedX, cols)) / g) * g;
   const cellH = kiround(Math.max(g * 2, idiv(requestedY, rows)) / g) * g;
   return { cols, rows, cellW, cellH };
@@ -305,13 +305,13 @@ export interface DrawTableSession {
 }
 
 /**
- * `DrawTable`'s numbers for the first corner `origin`, the `cursor` and the editing `gridUm`: the active layer (silkscreen when none is), the layer's text size
+ * `DrawTable`'s numbers for the first corner `origin`, the `cursor` and the editing `gridNm`: the active layer (silkscreen when none is), the layer's text size
  * (`bds.GetTextSize( layer )`, which sizes the cells) and its line width. `textGraphics` is Board Setup's Text & Graphics defaults.
  */
-export function drawTableSession(textGraphics: Parameters<typeof textStyleOf>[0], activeLayer: string | null | undefined, origin: readonly [number, number], cursor: readonly [number, number], gridUm: number): DrawTableSession {
+export function drawTableSession(textGraphics: Parameters<typeof textStyleOf>[0], activeLayer: string | null | undefined, origin: readonly [number, number], cursor: readonly [number, number], gridNm: number): DrawTableSession {
   const layer = activeLayerName(activeLayer, "F.SilkS");
   const st = textStyleOf(textGraphics, layer);
-  return { layer, grid: drawTableGrid(origin, cursor, [st.widthUm, st.heightUm], [gridUm, gridUm]), lineWidth: lineThicknessUm(textGraphics, layer) };
+  return { layer, grid: drawTableGrid(origin, cursor, [st.widthNm, st.heightNm], [gridNm, gridNm]), lineWidth: lineThicknessNm(textGraphics, layer) };
 }
 
 /** The box of the grid a Draw Table preview shows. */
@@ -351,8 +351,8 @@ export interface TableDialogValues {
   grid: string[][];
 }
 
-/** `TransferDataToWindow`: the dialog's values for `t`. `defaultLineUm` is what a width field starts at when the table has no such stroke (`bds.GetLineThickness( layer )`). */
-export function tableDialogValues(t: BoardTable, locked: boolean, defaultLineUm: number): TableDialogValues {
+/** `TransferDataToWindow`: the dialog's values for `t`. `defaultLineNm` is what a width field starts at when the table has no such stroke (`bds.GetLineThickness( layer )`). */
+export function tableDialogValues(t: BoardTable, locked: boolean, defaultLineNm: number): TableDialogValues {
   const grid: string[][] = [];
   for (let row = 0; row < t.rows; row++) {
     const line: string[] = [];
@@ -369,25 +369,25 @@ export function tableDialogValues(t: BoardTable, locked: boolean, defaultLineUm:
     locked,
     borderExternal: t.border.external,
     borderHeader: t.border.header,
-    borderWidth: t.border.stroke.width >= 0 ? t.border.stroke.width : defaultLineUm,
+    borderWidth: t.border.stroke.width >= 0 ? t.border.stroke.width : defaultLineNm,
     borderStyle: dialogLineStyle(t.border.stroke.style),
     rowSeparators: rows,
     colSeparators: cols,
-    separatorsWidth: t.separators.stroke.width >= 0 ? t.separators.stroke.width : defaultLineUm,
+    separatorsWidth: t.separators.stroke.width >= 0 ? t.separators.stroke.width : defaultLineNm,
     separatorsStyle: dialogLineStyle(t.separators.stroke.style),
     grid,
   };
 }
 
 /** `onBorderChecked` / `onHeaderChecked`: switching a border or its header on gives a width that was not set the layer's line width (`m_borderWidth.SetValue( defaultLineThickness )`). */
-export function widthAfterToggle(current: number, on: boolean, defaultLineUm: number): number {
-  return on && current < 0 ? defaultLineUm : current;
+export function widthAfterToggle(current: number, on: boolean, defaultLineNm: number): number {
+  return on && current < 0 ? defaultLineNm : current;
 }
 
 /** `TransferDataFromWindow`: the patch the values make (the layer and the lock are sent beside it). The grid goes back to the table's own column order. */
 export function tablePatchOf(t: Pick<BoardTable, "cols" | "layer">, v: TableDialogValues): TablePatch {
-  const border: TableBorderEdit = { external: v.borderExternal, header: v.borderHeader, width_um: Math.round(v.borderWidth), style: v.borderStyle };
-  const separators: TableSeparatorsEdit = { rows: v.rowSeparators, cols: v.colSeparators, width_um: Math.round(v.separatorsWidth), style: v.separatorsStyle };
+  const border: TableBorderEdit = { external: v.borderExternal, header: v.borderHeader, width_nm: Math.round(v.borderWidth), style: v.borderStyle };
+  const separators: TableSeparatorsEdit = { rows: v.rowSeparators, cols: v.colSeparators, width_nm: Math.round(v.separatorsWidth), style: v.separatorsStyle };
   const texts = v.grid.map((line) => {
     // The grid was laid out for the table's own layer; a layer change in the dialog does not turn the cells round (KiCad reads each cell from the same place it wrote it).
     const out = new Array<string>(t.cols).fill("");
@@ -466,10 +466,10 @@ export function cellEditOf(v: CellDialogValues): TableCellEdit {
   const e: TableCellEdit = { bold: v.bold, italic: v.italic };
   if (v.text !== null) e.text = v.text;
   if (v.face !== null) e.face = v.face;
-  if (v.width !== null) e.width_um = Math.round(v.width);
-  if (v.height !== null) e.height_um = Math.round(v.height);
-  if (v.autoThickness) e.thickness_um = 0;
-  else if (v.thickness !== null) e.thickness_um = Math.round(v.thickness);
+  if (v.width !== null) e.width_nm = Math.round(v.width);
+  if (v.height !== null) e.height_nm = Math.round(v.height);
+  if (v.autoThickness) e.thickness_nm = 0;
+  else if (v.thickness !== null) e.thickness_nm = Math.round(v.thickness);
   if (v.hAlign !== null) e.h_align = v.hAlign;
   if (v.vAlign !== null) e.v_align = v.vAlign;
   if (v.margins.some((m) => m !== null)) e.margins = v.margins.map((m) => (m === null ? null : Math.round(m))) as [number | null, number | null, number | null, number | null];
@@ -529,15 +529,15 @@ export function colsOf(cells: readonly BoardTableCell[]): number[] {
 export function boardNumbersOf(stats: BoardStatsReply): TableBoardNumbers | null {
   const b = stats.board;
   if (!stats.ok || !b) return null;
-  const nm = (um: number): number => Math.round(um * 1000);
+  const nm = (v: number): number => Math.round(v);
   const count = (title: string): number => (stats.pad_properties ?? []).find((e) => e.title === title)?.qty ?? 0;
   return {
-    thickness_nm: nm(b.thickness_um),
-    width_nm: nm(b.width_um),
-    height_nm: nm(b.height_um),
-    min_track_nm: nm(b.min_track_width_um),
-    min_clearance_nm: nm(b.min_clearance_um),
-    min_drill_nm: nm(b.min_drill_um),
+    thickness_nm: nm(b.thickness_nm),
+    width_nm: nm(b.width_nm),
+    height_nm: nm(b.height_nm),
+    min_track_nm: nm(b.min_track_width_nm),
+    min_clearance_nm: nm(b.min_clearance_nm),
+    min_drill_nm: nm(b.min_drill_nm),
     castellated_pads: count("Castellated:"),
     press_fit_pads: count("Press-fit:"),
   };

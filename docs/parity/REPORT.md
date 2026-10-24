@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-23T08:54:45.064824+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-24T04:08:11.165009+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -17,7 +17,7 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 | metric | current | floor |
 |---|---:|---:|
 | `connectivity_boards_evaluated` | 186 | 186 |
-| `connectivity_exact_match_rate` | 97.8% | 97.8% |
+| `connectivity_exact_match_rate` | 98.9% | 98.9% |
 | `roundtrip_own_footprint_pose_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_own_segment_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_own_via_survival_rate` | 100.0% | 100.0% |
@@ -27,13 +27,13 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 
 ## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
 
-_Measured 2026-10-23._
+_Measured 2026-10-24._
 
 Boards evaluated: 186 (of 188 attempted).
 
-Totals -- ours: {'unconnected': 288, 'track_dangling': 468, 'via_dangling': 529}, oracle: {'unconnected': 289, 'track_dangling': 254, 'via_dangling': 528}.
+Totals -- ours: {'unconnected': 287, 'track_dangling': 256, 'via_dangling': 529}, oracle: {'unconnected': 289, 'track_dangling': 254, 'via_dangling': 528}.
 
-**Exact per-board-per-field match rate: 546/558 (97.8%).**
+**Exact per-board-per-field match rate: 552/558 (98.9%).**
 
 
 The boards are a fixed set: every `examples/*.yaml` and `examples/ladder/*.yaml` board (placed and routed best-effort, then exported), and every
@@ -53,7 +53,7 @@ boards); the floor was reset to that, then raised with the fixes of `task-connec
 
 ### Boards that errored (2)
 
-- unroutable_tiny_outline [example]: place: [CheckResult { check: "place_legalize", status: Fail, location: Some("design"), hint: Some("could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C1"), hint: Some("14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C2"), hint: Some("14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("U1"), hint: Some("78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }]
+- unroutable_tiny_outline [example]: place: [CheckResult { check: "place_legalize", status: Fail, location: Some("design"), hint: Some("could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C1"), hint: Some("14235675000000 nm² outside its bound (keepout (-3050000, 75500, 50000, 4674500), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C2"), hint: Some("14836840000000 nm² outside its bound (keepout (325500, -3050000, 4874500, 220000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("U1"), hint: Some("78455000000000 nm² outside its bound (keepout (200000, 350000, 10200000, 8200000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }]
 - plugins/fakeboard.kicad_pcb [qa]: import_kicad_pcb failed: [CheckResult { check: "kicad_import.parse", status: Fail, location: Some("file"), hint: Some("not a valid s-expression file: expected '(' at byte 0"), detail: None }]
 
 ### The boards (188)
@@ -150,7 +150,7 @@ Each cell is ours / kicad-cli's; a **bold** cell differs. `unignored` names a ch
 | `pcbnew/issue5990.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `pcbnew/issue6039.kicad_pcb` | qa | 3 / 3 | 0 / 0 | 0 / 0 |  |
 | `pcbnew/issue6260.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
-| `pcbnew/issue6284.kicad_pcb` | qa | 0 / 0 | **2 / 1** | 7 / 7 |  |
+| `pcbnew/issue6284.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 7 / 7 |  |
 | `pcbnew/issue6443.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `pcbnew/issue6879.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `pcbnew/issue6945.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
@@ -167,7 +167,7 @@ Each cell is ours / kicad-cli's; a **bold** cell differs. `unignored` names a ch
 | `pcbnew/issue8883.kicad_pcb` | qa | 7 / 7 | 9 / 9 | 0 / 0 |  |
 | `pcbnew/issue8909.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 1 / 1 |  |
 | `pcbnew/issue9081.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
-| `pcbnew/issue9870.kicad_pcb` | qa | **4 / 3** | 5 / 5 | 2 / 2 |  |
+| `pcbnew/issue9870.kicad_pcb` | qa | 3 / 3 | 5 / 5 | 2 / 2 |  |
 | `pcbnew/large_circle_teardrop.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
 | `pcbnew/length_calculations.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 1 / 1 |  |
 | `pcbnew/multinetclasses_drc.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
@@ -202,7 +202,7 @@ Each cell is ours / kicad-cli's; a **bold** cell differs. `unignored` names a ch
 | `pcbnew/two_segment_teardrop.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 1 / 1 |  |
 | `pcbnew/via_dangling.kicad_pcb` | qa | 0 / 0 | 0 / 0 | **2 / 1** |  |
 | `pcbnew/via_off_center.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
-| `pcbnew/vme-wren.kicad_pcb` | qa | 57 / 57 | **199 / 1** | 92 / 92 |  |
+| `pcbnew/vme-wren.kicad_pcb` | qa | 57 / 57 | 1 / 1 | 92 / 92 |  |
 | `pcbnew/zone_filler.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
 | `connect/connect.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `creepage/creepage.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
@@ -210,8 +210,8 @@ Each cell is ours / kicad-cli's; a **bold** cell differs. `unignored` names a ch
 | `hatch_thermal_connectivity/hatch_thermal_connectivity.kicad_pcb` | qa | 0 / 0 | 1 / 1 | 0 / 0 |  |
 | `issue12964/issue12964.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 30 / 30 |  |
 | `issue16658/issue16658.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
-| `issue17967/issue17967.kicad_pcb` | qa | 0 / 0 | **8 / 0** | 0 / 0 |  |
-| `issue18045/test_proj.kicad_pcb` | qa | 0 / 0 | **3 / 0** | 0 / 0 |  |
+| `issue17967/issue17967.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
+| `issue18045/test_proj.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `issue19090/issue19090.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `issue19325/issue19325.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `issue19956/issue19956.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
@@ -227,7 +227,7 @@ Each cell is ours / kicad-cli's; a **bold** cell differs. `unignored` names a ch
 | `issue22597/issue22597.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `issue22751/issue22751.kicad_pcb` | qa | 2 / 2 | 0 / 0 | 0 / 0 |  |
 | `issue22809/issue22809.kicad_pcb` | qa | 0 / 0 | 2 / 2 | 0 / 0 |  |
-| `issue22826/issue22826.kicad_pcb` | qa | 0 / 0 | **2 / 0** | 0 / 0 |  |
+| `issue22826/issue22826.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `issue22983/issue22983.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
 | `issue23053/issue23053.kicad_pcb` | qa | 2 / 2 | 10 / 10 | 0 / 0 |  |
 | `issue23332_min_width/issue23332_min_width.kicad_pcb` | qa | 0 / 0 | 0 / 0 | 0 / 0 |  |
@@ -255,39 +255,39 @@ Each cell is ours / kicad-cli's; a **bold** cell differs. `unignored` names a ch
 
 ### Our own pipeline (`design.json` -> `.kicad_pcb` -> `import_kicad_pcb` -> `design.json`)
 
-_Measured 2026-10-04._
+_Measured 2026-10-24._
 
 | board | footprints (pose-exact) | track segments (exact) | vias (exact) | zones before/after |
 |---|---:|---:|---:|---:|
-| all_power_ground_net | 3/3 | 16/16 | 0/0 | 0/0 |
-| dense_small_outline | 5/5 | 21/21 | 0/0 | 0/0 |
-| l1_usb_mcu | 17/17 | 158/158 | 3/3 | 0/0 |
-| l2_sensor_hub | 35/35 | 354/354 | 16/16 | 0/0 |
-| l3_motor_hub | 58/58 | 618/618 | 36/36 | 0/0 |
-| l4_control_hub | 100/100 | 1273/1273 | 87/87 | 1/0 |
-| ldo | 6/6 | 33/33 | 0/0 | 0/0 |
-| ldo_proximity_heavy | 8/8 | 52/52 | 0/0 | 0/0 |
-| mcu_board_30plus | 30/30 | 221/221 | 7/7 | 0/0 |
-| mixed_track_widths | 6/6 | 35/35 | 0/0 | 0/0 |
-| nc_pins | 3/3 | 20/20 | 0/0 | 0/0 |
-| opamp_filter | 7/7 | 43/43 | 0/0 | 0/0 |
-| passive_divider_ladder | 6/6 | 22/22 | 0/0 | 0/0 |
-| star_net | 6/6 | 14/14 | 0/0 | 0/0 |
-| through_hole_headers | 5/5 | 39/39 | 0/0 | 0/0 |
+| all_power_ground_net | 3/3 | 18/18 | 0/0 | 0/0 |
+| dense_small_outline | 5/5 | 18/18 | 0/0 | 0/0 |
+| l1_usb_mcu | 17/17 | 157/157 | 3/3 | 0/0 |
+| l2_sensor_hub | 35/35 | 408/408 | 19/19 | 0/0 |
+| l3_motor_hub | 58/58 | 636/636 | 30/30 | 0/0 |
+| l4_control_hub | 100/100 | 1258/1258 | 100/100 | 1/1 |
+| ldo | 6/6 | 46/46 | 0/0 | 0/0 |
+| ldo_proximity_heavy | 8/8 | 51/51 | 0/0 | 0/0 |
+| mcu_board_30plus | 30/30 | 210/210 | 7/7 | 0/0 |
+| mixed_track_widths | 6/6 | 48/48 | 0/0 | 0/0 |
+| nc_pins | 3/3 | 23/23 | 0/0 | 0/0 |
+| opamp_filter | 7/7 | 46/46 | 2/2 | 0/0 |
+| passive_divider_ladder | 6/6 | 20/20 | 0/0 | 0/0 |
+| star_net | 6/6 | 12/12 | 0/0 | 0/0 |
+| through_hole_headers | 5/5 | 41/41 | 0/0 | 0/0 |
 | two_pin_nets | 3/3 | 9/9 | 0/0 | 0/0 |
-| unroutable_tiny_outline | ERROR: place: [CheckResult { check: "place_legalize", status: Fail, location: Some("design"), hint: Some("could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C1"), hint: Some("14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C2"), hint: Some("14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("U1"), hint: Some("78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }] | | | |
+| unroutable_tiny_outline | ERROR: place: [CheckResult { check: "place_legalize", status: Fail, location: Some("design"), hint: Some("could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C1"), hint: Some("14235675000000 nm² outside its bound (keepout (-3050000, 75500, 50000, 4674500), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C2"), hint: Some("14836840000000 nm² outside its bound (keepout (325500, -3050000, 4874500, 220000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("U1"), hint: Some("78455000000000 nm² outside its bound (keepout (200000, 350000, 10200000, 8200000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }] | | | |
 
 ### KiCad QA corpus: `import_kicad_pcb` on all 185 real boards
 
-_Measured 2026-10-12._
+_Measured 2026-10-24._
 
 - imported ok: 184/185
-- zones skipped (no polygon, or no copper layer): 12
+- zones skipped (no polygon, or no copper layer): 2
 - track arcs kept as arcs: 10946
-- Edge.Cuts items kept as shapes (arcs, circles, rectangles, curves, cutouts; none turned into chords): 513
+- Edge.Cuts items kept as shapes (arcs, circles, rectangles, curves, cutouts; none turned into chords): 511
 - non-rect pad shapes approximated as rect: 0
-- boards whose outline didn't close into a loop: 1
-- boards whose Edge.Cuts are malformed by KiCad's own test (`invalid_outline`): 2 ['pcbnew/issue18839.kicad_pcb', 'pcbnew/issue24078/issue24078.kicad_pcb']
+- boards whose outline didn't close into a loop: 3
+- boards whose Edge.Cuts are malformed by KiCad's own test (`invalid_outline`): 3 ['pcbnew/issue18839.kicad_pcb', 'pcbnew/issue23658/issue23658.kicad_pcb', 'pcbnew/issue24078/issue24078.kicad_pcb']
 - outline source breakdown: {'lines': 36, 'none': 37, 'shapes': 111}
 
 Import failures (1):
@@ -302,7 +302,7 @@ Import failures (1):
 
 ### Re-export fidelity on 12 real QA boards (import -> our export -> kicad-cli DRC, vs kicad-cli DRC on the original)
 
-_Measured 2026-10-20._
+_Measured 2026-10-24._
 
 | board | original parses | re-export parses | identical violation-type counts | findings that differ (type, items, place) | where kicad-cli's counts differ (type: original -> re-export) |
 |---|---|---|---|---:|---|
@@ -366,7 +366,7 @@ Every KiCad action in `web/studio/src/kicad/actions.json` is classified against 
 
 | editor | actions | handled | referenced | missing | missing with a reason | hotkeyed & not handled |
 |---|---:|---:|---:|---:|---:|---:|
-| pcbnew | 363 | 340 | 0 | 0 | 23 | 0 |
+| pcbnew | 369 | 346 | 0 | 0 | 23 | 0 |
 | eeschema | 233 | 220 | 0 | 0 | 13 | 0 |
 | common | 183 | 172 | 0 | 0 | 11 | 2 |
 

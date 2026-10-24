@@ -10,13 +10,13 @@ const mark = (x: number, y: number, extra: Partial<BoardDrillMark> = {}): BoardD
   mode: "shape",
   shape_index: 0,
   letter: "",
-  diameter_um: 300,
-  size_um: [300, 300],
+  diameter_nm: 300_000,
+  size_nm: [300_000, 300_000],
   orientation_deg: 0,
   is_slot: false,
   ...extra,
 });
-const map = (extra: Partial<BoardDrillMap> = {}): BoardDrillMap => ({ id: "dmap_1", layer: "Dwgs.User", offset: { x: 50_000, y: 0 }, size_um: 1_500, ...extra });
+const map = (extra: Partial<BoardDrillMap> = {}): BoardDrillMap => ({ id: "dmap_1", layer: "Dwgs.User", offset: { x: 50_000_000, y: 0 }, size_nm: 1_500_000, ...extra });
 
 test("the marks are DRILL_MARKERS' strokes: an X, an O, a +, the inscribed square, the lozenge; out of range a circle", () => {
   assert.deepEqual(buildMarker(0, 0, 10, curatedShape(0)), [
@@ -41,16 +41,16 @@ test("a chart's shape sits in its symbol cell, fitted to it", () => {
 });
 
 test("a map slides its marks by its offset, shows one span or all, and is hit on a mark or its outline", () => {
-  const marks = [mark(1_000, 1_000), mark(5_000, 1_000, { span: { start: "F.Cu", end: "In1.Cu" }, mode: "letter", letter: "A" })];
-  assert.deepEqual(mapMarks(map(), marks).map((m) => [m.x, m.y]), [[51_000, 1_000], [55_000, 1_000]]);
+  const marks = [mark(1_000_000, 1_000_000), mark(5_000_000, 1_000_000, { span: { start: "F.Cu", end: "In1.Cu" }, mode: "letter", letter: "A" })];
+  assert.deepEqual(mapMarks(map(), marks).map((m) => [m.x, m.y]), [[51_000_000, 1_000_000], [55_000_000, 1_000_000]]);
   assert.equal(mapMarks(map({ span: { start: "F.Cu", end: "B.Cu" } }), marks).length, 1);
   assert.equal(markText(marks[1]!), "A");
-  assert.equal(markText(mark(0, 0, { mode: "size_text", diameter_um: 1_143 })), "1.14");
+  assert.equal(markText(mark(0, 0, { mode: "size_text", diameter_nm: 1_143_000 })), "1.14");
   // Reach: half of 3 x 1.5 mm + 2 x 0.15 mm.
-  assert.equal(mapHitDistance(map(), marks, DEFAULT_PROFILE, [], 51_000, 1_000 + 2_400, 0), 2_400);
-  assert.equal(mapHitDistance(map(), marks, DEFAULT_PROFILE, [], 51_000, 1_000 + 2_500, 0), Infinity);
-  assert.equal(mapHitDistance(map(), [], DEFAULT_PROFILE, [[[0, 0], [10_000, 0], [10_000, 10_000]]], 55_000, 0, 10), 0, "on the outline, slid");
-  assert.deepEqual(mapBounds(map(), marks, DEFAULT_PROFILE, [0, 0, 20_000, 10_000]), [46_200, -3_800, 70_000, 10_000], "the holes grown by the marks' extent, with the outline's box");
+  assert.equal(mapHitDistance(map(), marks, DEFAULT_PROFILE, [], 51_000_000, 1_000_000 + 2_400_000, 0), 2_400_000);
+  assert.equal(mapHitDistance(map(), marks, DEFAULT_PROFILE, [], 51_000_000, 1_000_000 + 2_500_000, 0), Infinity);
+  assert.equal(mapHitDistance(map(), [], DEFAULT_PROFILE, [[[0, 0], [10_000_000, 0], [10_000_000, 10_000_000]]], 55_000_000, 0, 10_000), 0, "on the outline, slid");
+  assert.deepEqual(mapBounds(map(), marks, DEFAULT_PROFILE, [0, 0, 20_000_000, 10_000_000]), [46_200_000, -3_800_000, 70_000_000, 10_000_000], "the holes grown by the marks' extent, with the outline's box");
 });
 
 test("Hole Span lists every span after All spans, and a span the board lost reads as all", () => {

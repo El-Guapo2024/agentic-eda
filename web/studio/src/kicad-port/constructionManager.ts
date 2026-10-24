@@ -420,7 +420,7 @@ export class SnapManager {
     if (origin) {
       const item: ConstructionItem = { source: "snapLine", item: null, constructions: [] };
       this.snapLines.directions.forEach((d, i) => {
-        const far: Pt = [origin[0] + d[0] * 100000, origin[1] + d[1] * 100000];
+        const far: Pt = [origin[0] + d[0] * 100_000_000, origin[1] + d[1] * 100_000_000];
         item.constructions.push({ drawable: { t: "line", a: origin, b: far }, lineWidth: this.snapLines.activeDirection === i ? 2 : 1 });
       });
       if (item.constructions.length > 0) batches.push([item]);

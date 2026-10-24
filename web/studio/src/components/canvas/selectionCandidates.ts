@@ -191,8 +191,8 @@ function objectSelectable(kind: SelectableKind, layerVisible: Record<string, boo
 const sideShown = (layerVisible: Record<string, boolean>, p: Pick<Part, "side">): boolean => objectOn(layerVisible, p.side === "bottom" ? "footprints_back" : "footprints_front");
 
 /**
- * Every selectable item whose hit-test is within `toleranceUm` of
- * (xUm, yUm), with the slop/area/layer GuessSelectionCandidates needs.
+ * Every selectable item whose hit-test is within `toleranceNm` of
+ * (xNm, yNm), with the slop/area/layer GuessSelectionCandidates needs.
  * `subtractiveOnly`, when set, is selectPoint's own pre-filter for the
  * subtractive (Ctrl/Cmd+Shift) modifier: "we only want items that are
  * selected" -- applied here rather than by the caller so every caller
@@ -200,9 +200,9 @@ const sideShown = (layerVisible: Record<string, boolean>, p: Pick<Part, "side">)
  */
 export function collectSelectionCandidates(
   board: BoardState,
-  xUm: number,
-  yUm: number,
-  toleranceUm: number,
+  xNm: number,
+  yNm: number,
+  toleranceNm: number,
   filter: SelectionFilter,
   layerVisible: Record<string, boolean>,
   activeLayer: string | null,
@@ -212,14 +212,14 @@ export function collectSelectionCandidates(
 ): SelectionCandidate[] {
   const out: SelectionCandidate[] = [];
   const locked = new Set(board.locked ?? []);
-  const consider = (kind: SelectableKind, id: string, slopUm: number, areaUm2: number, layer: string | null, lockedId: string = id) => {
-    if (slopUm > toleranceUm) return;
+  const consider = (kind: SelectableKind, id: string, slopNm: number, areaNm2: number, layer: string | null, lockedId: string = id) => {
+    if (slopNm > toleranceNm) return;
     if (!filterAllows(filter, kind) || !objectSelectable(kind, layerVisible)) return;
     // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected.
     if (!filter.lockedItems && locked.has(lockedId)) return;
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
     if (subtractiveOnly && !selection.has(id)) return;
-    out.push({ kind, id, slopUm: Math.max(slopUm, 0), areaUm2: Math.max(areaUm2, 1), layer });
+    out.push({ kind, id, slopNm: Math.max(slopNm, 0), areaNm2: Math.max(areaNm2, 1), layer });
   };
 
   // Footprints: containment-only (courtyard rect), same as this app's
@@ -232,9 +232,9 @@ export function collectSelectionCandidates(
     if (!p.placed || !p.courtyard || !sideShown(layerVisible, p)) continue;
     const [x0, y0, x1, y1] = p.courtyard;
     // A click on a stroke of the footprint's own silkscreen or fab drawing picks the footprint too, wherever the stroke is (`FOOTPRINT::HitTest` counts its graphics).
-    const inside = xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1;
-    const slop = inside ? 0 : artHitDistance(p, xUm, yUm, layerVisible);
-    if (slop > toleranceUm) continue;
+    const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
+    const slop = inside ? 0 : artHitDistance(p, xNm, yNm, layerVisible);
+    if (slop > toleranceNm) continue;
     consider("part", p.ref, slop, Math.max((x1 - x0) * (y1 - y0), 1), null);
   }
 
@@ -244,7 +244,7 @@ export function collectSelectionCandidates(
     if (!p.placed || !p.pads?.length || !sideShown(layerVisible, p)) continue;
     const ids = padIds(p);
     p.pads.forEach((pad, i) => {
-      consider("pad", ids[i]!, padHitDistance(pad, xUm, yUm), Math.max(pad.w * pad.h, 1), pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref);
+      consider("pad", ids[i]!, padHitDistance(pad, xNm, yNm), Math.max(pad.w * pad.h, 1), pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref);
     });
   }
 
@@ -254,18 +254,18 @@ export function collectSelectionCandidates(
     for (const f of p.fields) {
       if (!f.visible || !f.text || !fieldShownByObjects(layerVisible, p, f)) continue;
       const { x0, y0, x1, y1 } = textBoundingBoxRotated(f);
-      const inside = xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1;
-      const d = inside ? 0 : Math.hypot(xUm - (x0 + x1) / 2, yUm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
+      const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
+      const d = inside ? 0 : Math.hypot(xNm - (x0 + x1) / 2, yNm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
       consider("field", f.id, d, Math.max((x1 - x0) * (y1 - y0), 1), f.layer, p.ref);
     }
   }
   for (const t of board.routing?.tracks ?? []) {
-    const d = distToPolyline(xUm, yUm, t.pts) - t.width / 2;
+    const d = distToPolyline(xNm, yNm, t.pts) - t.width / 2;
     const len = t.pts.reduce((acc, p, i) => (i === 0 ? 0 : acc + Math.hypot(p[0] - t.pts[i - 1]![0], p[1] - t.pts[i - 1]![1])), 0);
     consider("track", t.id, d, len * Math.max(t.width, 1), t.layer);
   }
   for (const v of board.routing?.vias ?? []) {
-    const d = Math.hypot(xUm - v.x, yUm - v.y) - v.d / 2;
+    const d = Math.hypot(xNm - v.x, yNm - v.y) - v.d / 2;
     // pcb_selection_tool.cpp: vias are artificially shrunk to their
     // drill radius squared (not pi*r^2) so they never out-rank a short
     // track segment passing under them.
@@ -273,13 +273,13 @@ export function collectSelectionCandidates(
   }
   for (const z of board.routing?.zones ?? []) {
     if (z.outline.length < 3) continue;
-    const inside = pointInPolygon(xUm, yUm, z.outline);
-    const edgeDist = distToPolyline(xUm, yUm, [...z.outline, z.outline[0]!]);
+    const inside = pointInPolygon(xNm, yNm, z.outline);
+    const edgeDist = distToPolyline(xNm, yNm, [...z.outline, z.outline[0]!]);
     // Zone borders are deliberately treated as "small" (source: "Zone
     // borders are very specific, so make them small") so clicking right
     // on the outline of a zone picks the outline, not the (usually much
     // bigger) fill.
-    const nearEdge = edgeDist <= toleranceUm / 2;
+    const nearEdge = edgeDist <= toleranceNm / 2;
     const d = inside ? 0 : edgeDist;
     const area = nearEdge ? 1 : polygonArea(z.outline);
     consider("zone", z.id, d, area, zonePickLayer(z, layerVisible, activeLayer));
@@ -287,40 +287,40 @@ export function collectSelectionCandidates(
   for (const s of board.drawings?.shapes ?? []) {
     // A filled or hatched shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
     if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) && !objectOn(layerVisible, "shapes")) continue;
-    consider("shape", s.id, shapeHitDistance(s, xUm, yUm), shapeArea(s), s.layer);
+    consider("shape", s.id, shapeHitDistance(s, xNm, yNm), shapeArea(s), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {
     const { x0, y0, x1, y1 } = textBoundingBox(t);
-    const inside = xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1;
-    const d = inside ? 0 : Math.hypot(xUm - t.x, yUm - t.y) - (x1 - x0) / 2;
+    const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
+    const d = inside ? 0 : Math.hypot(xNm - t.x, yNm - t.y) - (x1 - x0) / 2;
     consider("text", t.id, d, Math.max((x1 - x0) * (y1 - y0), 1), t.layer);
   }
   // The text boxes, images, points and barcodes (GAPS.md item 24): a text box is hit anywhere in its bounding box (`PCB_TEXTBOX::HitTest`).
   for (const item of extraItems(board)) {
     const [x0, y0, x1, y1] = item.bounds;
     // A grid item is on no layer, and its area is the one it covers (`GetCoverageArea`).
-    if (item.grid) consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max(gridArea(item.grid), 1), null);
-    else if (item.stitch) consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max(stitchArea(item.stitch), 1), null);
-    else consider(item.kind, item.id, extraHitDistance(item, xUm, yUm), Math.max((x1 - x0) * (y1 - y0), 1), item.layer);
+    if (item.grid) consider(item.kind, item.id, extraHitDistance(item, xNm, yNm), Math.max(gridArea(item.grid), 1), null);
+    else if (item.stitch) consider(item.kind, item.id, extraHitDistance(item, xNm, yNm), Math.max(stitchArea(item.stitch), 1), null);
+    else consider(item.kind, item.id, extraHitDistance(item, xNm, yNm), Math.max((x1 - x0) * (y1 - y0), 1), item.layer);
   }
   // `PCB_TABLE`: a click finds a cell, not the table ("Tables should defer to their table cells"); a cell another one covers is not an item. The table is locked as a whole.
   for (const tb of board.drawings?.tables ?? []) {
     // KiCad 10: "A generated table says what the board says, so a click on it is a click on the table" -- a drill chart is picked whole.
     if (board.drawings?.drill_charts?.some((c) => c.table_id === tb.id)) {
       const cells = tb.cells.filter(isSelectableCell);
-      if (cells.length > 0) consider("table", tb.id, Math.min(...cells.map((c) => cellHitDistance(c, xUm, yUm))), cells.reduce((a, c) => a + cellArea(c), 0), tb.layer);
+      if (cells.length > 0) consider("table", tb.id, Math.min(...cells.map((c) => cellHitDistance(c, xNm, yNm))), cells.reduce((a, c) => a + cellArea(c), 0), tb.layer);
       continue;
     }
     for (const c of tb.cells) {
       if (!isSelectableCell(c)) continue;
-      consider("tablecell", c.id, cellHitDistance(c, xUm, yUm), cellArea(c), tb.layer, tb.id);
+      consider("tablecell", c.id, cellHitDistance(c, xNm, yNm), cellArea(c), tb.layer, tb.id);
     }
   }
   // Task item 7: `lines` is a set of disconnected segments (extension
   // lines, crossbar/leader pieces, arrow barbs), not one polyline -- the
   // hit distance is the closest approach to any one of them.
   for (const dim of board.drawings?.dimensions ?? []) {
-    const { d, box } = dimensionHit(dim, xUm, yUm);
+    const { d, box } = dimensionHit(dim, xNm, yNm);
     consider("dimension", dim.id, d, Math.max((box[2] - box[0]) * (box[3] - box[1]), 1), dim.layer);
   }
 
@@ -330,14 +330,14 @@ export function collectSelectionCandidates(
 /** Closest approach to any of a dimension's own line segments (or its
  * text anchor, treated as a point) and its overall bounding box -- shared
  * by the point hit-test above and `collectBoxSelection` below. */
-function dimensionHit(dim: Dimension, xUm: number, yUm: number): { d: number; box: Box } {
-  let d = Math.hypot(xUm - dim.text_at[0], yUm - dim.text_at[1]);
+function dimensionHit(dim: Dimension, xNm: number, yNm: number): { d: number; box: Box } {
+  let d = Math.hypot(xNm - dim.text_at[0], yNm - dim.text_at[1]);
   let x0 = dim.text_at[0],
     y0 = dim.text_at[1],
     x1 = dim.text_at[0],
     y1 = dim.text_at[1];
   for (const [a, b] of dim.lines) {
-    d = Math.min(d, distToSegment(xUm, yUm, a[0], a[1], b[0], b[1]));
+    d = Math.min(d, distToSegment(xNm, yNm, a[0], a[1], b[0], b[1]));
     x0 = Math.min(x0, a[0], b[0]);
     y0 = Math.min(y0, a[1], b[1]);
     x1 = Math.max(x1, a[0], b[0]);
@@ -461,10 +461,10 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
 
 export function pickSelectionCandidates(
   board: BoardState,
-  xUm: number,
-  yUm: number,
-  toleranceUm: number,
-  onePixelUm: number,
+  xNm: number,
+  yNm: number,
+  toleranceNm: number,
+  onePixelNm: number,
   filter: SelectionFilter,
   layerVisible: Record<string, boolean>,
   activeLayer: string | null,
@@ -473,7 +473,7 @@ export function pickSelectionCandidates(
   subtractiveOnly: boolean,
   skipHeuristics: boolean
 ): SelectionCandidate[] {
-  const all = collectSelectionCandidates(board, xUm, yUm, toleranceUm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly);
+  const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly);
   if (skipHeuristics) return all;
-  return guessSelectionCandidates(all, onePixelUm, activeLayer);
+  return guessSelectionCandidates(all, onePixelNm, activeLayer);
 }

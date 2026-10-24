@@ -12,17 +12,17 @@ test("a symbol's box is its graphics and its pins from tip to root, Y flipped to
   const pins = [pin("1", 0, 3.81, 270, 1.27), pin("2", 0, -3.81, 90, 1.27)];
   const b = symbolPreviewBounds({ graphics, pins }, 1, 1)!;
   // the pins reach (0, 3.81) down to the body at 2.54 (angle 270: toward -y in the file, i.e. toward the body)... and the tips are the extremes
-  assert.deepEqual([b.minX, b.maxX], [-1016, 1016]);
-  assert.deepEqual([b.minY, b.maxY], [-3810, 3810]);
+  assert.deepEqual([b.minX, b.maxX], [-1_016_000, 1_016_000]);
+  assert.deepEqual([b.minY, b.maxY], [-3_810_000, 3_810_000]);
   assert.equal(symbolPreviewBounds({ graphics: [], pins: [] }, 1, 1), null);
 });
 
 test("only the unit and body style shown are framed; a shared item (0) is in every one", () => {
   const rect = (unit: number, style: number, x: number): LibrarySymbolGraphic => ({ kind: "rectangle", unit, body_style: style, start: { x: x, y: 1 }, end: { x: x + 1, y: -1 }, stroke_mm: 0.1, fill: "none" });
   const graphics = [rect(1, 1, 0), rect(2, 1, 10), rect(0, 1, -5), rect(1, 2, 20)];
-  assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 1, 1), { minX: -5000, minY: -1000, maxX: 1000, maxY: 1000 });
-  assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 2, 1), { minX: -5000, minY: -1000, maxX: 11000, maxY: 1000 });
-  assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 1, 2), { minX: 20000, minY: -1000, maxX: 21000, maxY: 1000 }, "the alternate style's own graphics");
+  assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 1, 1), { minX: -5_000_000, minY: -1_000_000, maxX: 1_000_000, maxY: 1_000_000 });
+  assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 2, 1), { minX: -5_000_000, minY: -1_000_000, maxX: 11_000_000, maxY: 1_000_000 });
+  assert.deepEqual(symbolPreviewBounds({ graphics, pins: [] }, 1, 2), { minX: 20_000_000, minY: -1_000_000, maxX: 21_000_000, maxY: 1_000_000 }, "the alternate style's own graphics");
   // a hidden pin draws nothing
   const hidden = symbolPreviewBounds({ graphics: [], pins: [pin("1", 100, 100, 0, 1, 1, 1, true)] }, 1, 1);
   assert.equal(hidden, null);
@@ -30,10 +30,10 @@ test("only the unit and body style shown are framed; a shared item (0) is in eve
 
 test("a footprint's box holds its pads at their full size, its graphics and its courtyard", () => {
   const pad = (x: number, y: number, w: number, h: number): LibraryPad => ({ id: "", number: "1", at: { x, y }, size: [w, h], offset: { x: 0, y: 0 }, shape: "rect", kind: "smd", drill: null, rot: 0, layers: [], chamfer_corners: { top_left: false, top_right: false, bottom_left: false, bottom_right: false } } as unknown as LibraryPad);
-  const pads = [pad(-1000, 0, 800, 600), pad(1000, 0, 800, 600)];
-  assert.deepEqual(footprintPreviewBounds({ pads, graphics: [] }), { minX: -1400, minY: -400, maxX: 1400, maxY: 400 });
-  const graphics = [{ kind: "segment", start: { x: -2000, y: -1500 }, end: { x: 2000, y: -1500 } }, { kind: "circle", center: { x: 0, y: 0 }, end: { x: 3000, y: 0 } }];
-  assert.deepEqual(footprintPreviewBounds({ pads, graphics }), { minX: -3000, minY: -3000, maxX: 3000, maxY: 3000 });
-  assert.deepEqual(footprintPreviewBounds({ pads, graphics: [], courtyard: [2500, 1500] }), { minX: -2500, minY: -1500, maxX: 2500, maxY: 1500 });
+  const pads = [pad(-1_000_000, 0, 800_000, 600_000), pad(1_000_000, 0, 800_000, 600_000)];
+  assert.deepEqual(footprintPreviewBounds({ pads, graphics: [] }), { minX: -1_400_000, minY: -400_000, maxX: 1_400_000, maxY: 400_000 });
+  const graphics = [{ kind: "segment", start: { x: -2_000_000, y: -1_500_000 }, end: { x: 2_000_000, y: -1_500_000 } }, { kind: "circle", center: { x: 0, y: 0 }, end: { x: 3_000_000, y: 0 } }];
+  assert.deepEqual(footprintPreviewBounds({ pads, graphics }), { minX: -3_000_000, minY: -3_000_000, maxX: 3_000_000, maxY: 3_000_000 });
+  assert.deepEqual(footprintPreviewBounds({ pads, graphics: [], courtyard: [2_500_000, 1_500_000] }), { minX: -2_500_000, minY: -1_500_000, maxX: 2_500_000, maxY: 1_500_000 });
   assert.equal(footprintPreviewBounds({ pads: [], graphics: [] }), null);
 });

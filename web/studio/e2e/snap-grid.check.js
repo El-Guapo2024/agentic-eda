@@ -72,7 +72,11 @@
     await toSelect();
     await run("common.Interactive.unselectAll");
     const st0 = await board();
-    const target = [...st0.parts].sort((a, b) => b.size[0] * b.size[1] - a.size[0] * a.size[1])[0]; // the biggest footprint: its centre is a sure hit
+    // the biggest footprint whose centre no track crosses: a press there is on the footprint alone
+    const segDist = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy || 1; const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l)); return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy)); };
+    const clearOfTracks = (p) => (st0.routing?.tracks ?? []).every((t) => t.pts.every((q, i) => i === 0 || segDist(p.at, t.pts[i - 1], q) > t.width / 2 + 500_000));
+    const bySize = [...st0.parts].filter((p) => p.placed && p.size).sort((a, b) => b.size[0] * b.size[1] - a.size[0] * a.size[1]);
+    const target = bySize.find(clearOfTracks) ?? bySize[0];
     const px0 = target.at;
     /** Press on the part, wait `dwell` ms, move by (dx, dy) px in one event, report whether the move tool started; Escape, then release: nothing may be committed. */
     const trial = async (dx, dy, dwell = 0, back = false) => {
@@ -119,18 +123,18 @@
       const { x0, y0, x1, y1 } = reach(40);
       const [bx0, by0] = st.outline[0], [bx1, by1] = st.outline[2];
       let best = null;
-      for (let x = Math.max(x0, bx0 + 500); x < Math.min(x1, bx1 - 500) - 800; x += 300) for (let y = Math.max(y0, by0 + 500); y < Math.min(y1, by1 - 500) - 600; y += 300) {
+      for (let x = Math.max(x0, bx0 + 500_000); x < Math.min(x1, bx1 - 500_000) - 800_000; x += 300_000) for (let y = Math.max(y0, by0 + 500_000); y < Math.min(y1, by1 - 500_000) - 600_000; y += 300_000) {
         let d = Infinity;
         for (const q of pts) d = Math.min(d, Math.hypot(q[0] - x, q[1] - y));
         for (const sg of segs) d = Math.min(d, dSeg([x, y], sg));
-        for (const part of st0.parts) d = Math.min(d, Math.hypot(part.at[0] - x, part.at[1] - y) - 1500);
+        for (const part of st0.parts) d = Math.min(d, Math.hypot(part.at[0] - x, part.at[1] - y) - 1_500_000);
         if (!best || d > best.d) best = { x, y, d };
       }
       return best;
     };
     const empty = emptySpot(await board());
     check("the board has an empty spot on screen to probe", !!empty && empty.d > 1500, JSON.stringify(empty));
-    const probe = [empty.x + 345, empty.y + 189];
+    const probe = [empty.x + 345_000, empty.y + 189_000];
     check("the measure tool is armed", await setTool("common.Interactive.measureTool", "measure"), state().tool);
     const g0 = state().grid;
     let s = await hover(...probe);
@@ -167,7 +171,7 @@
       s = await hover(...probe);
       check("board: the line tool snaps to the current grid while the graphics override is off", s && near(s.output, [roundTo(probe[0], g0), roundTo(probe[1], g0)], 0.5), JSON.stringify(s?.output));
       const second = await setGraphicsOverride(true);
-      const overrideGrid = parseFloat(second.label) * (/^[\d.]+ mil/.test(second.label) ? 25.4 : 1000); // "0.500 mm (19.7 mil)" -> 500 um
+      const overrideGrid = parseFloat(second.label) * (/^[\d.]+ mil/.test(second.label) ? 25_400 : 1e6); // "0.500 mm (19.7 mil)" -> 500 000 nm
       s = await hover(...probe);
       check("board: the graphics override is the grid of the line tool", overrideGrid > 0 && overrideGrid !== g0 && s && near(s.output, [roundTo(probe[0], overrideGrid), roundTo(probe[1], overrideGrid)], 0.5), `override ${second.label}: ${JSON.stringify(s?.output)}`);
       await run("common.Control.toggleGridOverrides");
@@ -187,7 +191,7 @@
       const g = state().grid;
       const all = st.parts.flatMap((p) => p.pads.map((q) => ({ ref: p.ref, num: q.num, at: [q.x, q.y] })));
       const clear = (q) => Math.min(...all.filter((o) => o !== q).map((o) => Math.hypot(o.at[0] - q.at[0], o.at[1] - q.at[1])));
-      const pad = all.filter((q) => q.at[0] >= x0 && q.at[0] <= x1 && q.at[1] >= y0 && q.at[1] <= y1 && Math.abs(q.at[0] - roundTo(q.at[0], g)) > 200 && Math.abs(q.at[1] - roundTo(q.at[1], g)) > 200).sort((a, b) => clear(b) - clear(a))[0];
+      const pad = all.filter((q) => q.at[0] >= x0 && q.at[0] <= x1 && q.at[1] >= y0 && q.at[1] <= y1 && Math.abs(q.at[0] - roundTo(q.at[0], g)) > 200_000 && Math.abs(q.at[1] - roundTo(q.at[1], g)) > 200_000).sort((a, b) => clear(b) - clear(a))[0];
       await run("common.SuiteControl.openPreferences");
       const padsSel = document.querySelector('select[aria-label="Snap to Pads:"]');
       check("Preferences has Snap to Pads (Magnetic Points)", !!padsSel);
@@ -201,16 +205,16 @@
         await toSelect();
         await setTool("common.Interactive.measureTool", "measure");
         const perPx = 1 / state().view.scale; // um per px
-        const nearCentre = [pad.at[0] + 60, pad.at[1] - 40]; // closer to the centre than to any corner (a pad's corners are anchors too)
-        await hover(pad.at[0] - 60 * perPx, pad.at[1]); // far: no anchor held
+        const nearCentre = [pad.at[0] + 60_000, pad.at[1] - 40_000]; // closer to the centre than to any corner (a pad's corners are anchors too)
+        await hover(empty.x, empty.y); // far, on the empty spot: no anchor held
         s = await hover(...nearCentre);
         check(`anchor: near ${pad.ref}.${pad.num} the point goes to the pad's centre`, s && near(s.output, pad.at, 0.5) && s.anchored, `${JSON.stringify(s)} pad ${pad.at}`);
-        await hover(pad.at[0] - 60 * perPx, pad.at[1]);
+        await hover(empty.x, empty.y);
         s = await hover(...nearCentre, { shift: true });
         check("anchor: Shift turns anchor snapping off (the grid point instead)", s && !near(s.output, pad.at, 0.5) && near(s.output, [roundTo(nearCentre[0], g), roundTo(nearCentre[1], g)], 0.5), JSON.stringify(s?.output));
         // the snap line through the pad: out along its row the point keeps the pad's y (off the grid), the x goes to the grid
-        const dx = [-3, 3, -4, 4, -2, 2, -5, 5].map((k) => k * g).find((d) => { const x = pad.at[0] + d; return x > x0 && x < x1 && all.every((o) => Math.hypot(o.at[0] - x, o.at[1] - pad.at[1]) > 2000); });
-        await hover(pad.at[0] - 60 * perPx, pad.at[1]);
+        const dx = [-3, 3, -4, 4, -2, 2, -5, 5].map((k) => k * g).find((d) => { const x = pad.at[0] + d; return x > x0 && x < x1 && all.every((o) => Math.hypot(o.at[0] - x, o.at[1] - pad.at[1]) > 2_000_000); });
+        await hover(empty.x, empty.y);
         await hover(...nearCentre);
         s = dx === undefined ? null : await hover(pad.at[0] + dx, pad.at[1] + 7 * perPx);
         check("snap line: along the pad's row the point keeps the pad's y and goes to the grid in x", s && s.output[1] === pad.at[1] && s.output[0] === roundTo(pad.at[0] + dx, g), `${JSON.stringify(s?.output)} pad ${pad.at}`);
@@ -241,17 +245,17 @@
       sc = await sch();
     }
     check("the schematic has symbols to work on", sc.symbols.length > 0, `${sc.symbols.length} symbols, sheet path "${state().sheetPath.join("/")}"`);
-    for (let i = 0; i < 6 && state().view.scale < 0.012; i++) { // zoom in until 1 mm is at least 12 px
+    for (let i = 0; i < 6 && state().view.scale < 0.000012; i++) { // zoom in until 1 mm is at least 12 px
       const { x0, y0, x1, y1 } = reach(0);
       await wheel((x0 + x1) / 2, (y0 + y1) / 2, -100, 1);
     }
-    check("the schematic is zoomed in", state().view.scale >= 0.012, `scale ${state().view.scale}`);
+    check("the schematic is zoomed in", state().view.scale >= 0.000012, `scale ${state().view.scale}`);
 
     // The grid list.
     const list = [];
     const gs = state().grid;
     for (let i = 0; i < 5; i++) { list.push(state().grid); await run("common.Control.gridNext"); }
-    check("schematic: Next Grid cycles the four eeschema grids and wraps", new Set(list.slice(0, 4)).size === 4 && list[4] === list[0] && list.slice(0, 4).every((g) => [2540, 1270, 635, 254].includes(g)), list.join(" "));
+    check("schematic: Next Grid cycles the four eeschema grids and wraps", new Set(list.slice(0, 4)).size === 4 && list[4] === list[0] && list.slice(0, 4).every((g) => [2_540_000, 1_270_000, 635_000, 254_000].includes(g)), list.join(" "));
     const gridTo = async (target) => { for (let i = 0; i < 4 && state().grid !== target; i++) await run("common.Control.gridNext"); return state().grid === target; };
     await gridTo(gs);
     await run("common.Control.gridPrev");
@@ -272,38 +276,38 @@
       for (let i = 0; i < d.length; i += 4) max = Math.max(max, Math.abs(d[i] - paper[0]), Math.abs(d[i + 1] - paper[1]), Math.abs(d[i + 2] - paper[2]));
       return max > 30;
     };
-    await gridTo(1270);
+    await gridTo(1_270_000);
     await sleep(200);
     {
       const paper = paperOf();
       const { x0, y0, x1, y1 } = reach(60);
       let base = null;
-      for (let x = Math.ceil(x0 / 2540) * 2540; x < x1 - 2540 && !base; x += 2540) for (let y = Math.ceil(y0 / 2540) * 2540; y < y1 - 2540; y += 2540)
-        if (ink(x, y, paper) && ink(x + 1270, y, paper) && ink(x, y + 1270, paper) && !ink(x + 635, y, paper) && !ink(x, y + 635, paper) && !ink(x + 635, y + 635, paper) && !ink(x + 1905, y + 635, paper)) { base = [x, y]; break; }
+      for (let x = Math.ceil(x0 / 2_540_000) * 2_540_000; x < x1 - 2_540_000 && !base; x += 2_540_000) for (let y = Math.ceil(y0 / 2_540_000) * 2_540_000; y < y1 - 2_540_000; y += 2_540_000)
+        if (ink(x, y, paper) && ink(x + 1_270_000, y, paper) && ink(x, y + 1_270_000, paper) && !ink(x + 635_000, y, paper) && !ink(x, y + 635_000, paper) && !ink(x + 635_000, y + 635_000, paper) && !ink(x + 1_905_000, y + 635_000, paper)) { base = [x, y]; break; }
       check("schematic: the dots of the 50 mil grid are drawn at its points and none between", !!base, JSON.stringify(base));
       if (base) {
-        await gridTo(635);
+        await gridTo(635_000);
         await sleep(300);
         const paper2 = paperOf();
-        const got = [ink(base[0] + 635, base[1], paper2), ink(base[0], base[1] + 635, paper2), ink(base[0] + 635, base[1] + 635, paper2)];
+        const got = [ink(base[0] + 635_000, base[1], paper2), ink(base[0], base[1] + 635_000, paper2), ink(base[0] + 635_000, base[1] + 635_000, paper2)];
         check("schematic: the painter's dots follow the grid (25 mil: a dot between the 50 mil ones)", got.every((g) => g === true), got.join(","));
       }
     }
-    await gridTo(1270);
+    await gridTo(1_270_000);
 
-    // The text tool: the text grid (10 mil = 254 um) while overrides are on, the current grid when off.
+    // The text tool: the text grid (10 mil = 254_000 um) while overrides are on, the current grid when off.
     await toSelect();
     const area = reach(80);
-    const ix = Math.floor((area.x0 + (area.x1 - area.x0) * 0.35) / 1270) * 1270 + 600; // 600 past a 50 mil grid line: the 10 mil grid and the 50 mil one disagree here
-    const iy = Math.floor((area.y0 + (area.y1 - area.y0) * 0.35) / 1270) * 1270 + 600;
+    const ix = Math.floor((area.x0 + (area.x1 - area.x0) * 0.35) / 1_270_000) * 1_270_000 + 600_000; // 600_000 past a 50 mil grid line: the 10 mil grid and the 50 mil one disagree here
+    const iy = Math.floor((area.y0 + (area.y1 - area.y0) * 0.35) / 1_270_000) * 1_270_000 + 600_000;
     check("schematic: the text tool is armed", await setTool("eeschema.InteractiveDrawing.placeSchematicText", "sch_text"), state().tool);
     const schOverridesWere = state().gridOverrides;
     if (!schOverridesWere) await run("common.Control.toggleGridOverrides");
     s = await hover(ix, iy);
-    check("schematic: the text tool is on the text grid (10 mil) with overrides on", s && near(s.output, [roundTo(ix, 254), roundTo(iy, 254)], 0.5) && !near(s.output, [roundTo(ix, 1270), roundTo(iy, 1270)], 0.5), JSON.stringify(s?.output));
+    check("schematic: the text tool is on the text grid (10 mil) with overrides on", s && near(s.output, [roundTo(ix, 254_000), roundTo(iy, 254_000)], 0.5) && !near(s.output, [roundTo(ix, 1_270_000), roundTo(iy, 1_270_000)], 0.5), JSON.stringify(s?.output));
     await run("common.Control.toggleGridOverrides");
     s = await hover(ix, iy);
-    check("schematic: with overrides off it is on the current grid", state().gridOverrides === false && s && near(s.output, [roundTo(ix, 1270), roundTo(iy, 1270)], 0.5), JSON.stringify(s?.output));
+    check("schematic: with overrides off it is on the current grid", state().gridOverrides === false && s && near(s.output, [roundTo(ix, 1_270_000), roundTo(iy, 1_270_000)], 0.5), JSON.stringify(s?.output));
     if (schOverridesWere) await run("common.Control.toggleGridOverrides");
     await toSelect();
 
@@ -321,17 +325,17 @@
     sc = await sch();
     const wiresBefore = new Set(sc.wires.map((w) => w.id));
     check("schematic: the wire tool is armed", await setTool("eeschema.InteractiveDrawingLineWireBus.drawWires", "wire"), state().tool);
-    const wx = Math.floor((area.x0 + (area.x1 - area.x0) * 0.5) / 1270) * 1270 + 600;
-    const wy = Math.floor((area.y0 + (area.y1 - area.y0) * 0.8) / 1270) * 1270 + 600;
+    const wx = Math.floor((area.x0 + (area.x1 - area.x0) * 0.5) / 1_270_000) * 1_270_000 + 600_000;
+    const wy = Math.floor((area.y0 + (area.y1 - area.y0) * 0.8) / 1_270_000) * 1_270_000 + 600_000;
     await click(wx, wy);
-    await click(wx + 5 * 1270, wy);
-    const [ex, ey] = w2c(wx + 5 * 1270, wy);
+    await click(wx + 5 * 1_270_000, wy);
+    const [ex, ey] = w2c(wx + 5 * 1_270_000, wy);
     document.elementFromPoint(ex, ey).dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: ex, clientY: ey, detail: 2 }));
     await sleep(1200);
     const added = (await sch()).wires.filter((w) => !wiresBefore.has(w.id));
     if (added.length > 0) {
       const pts = added[0].pts;
-      check("schematic: a wire's first point is the grid point, whatever pins are about", pts.every((p) => p[0] % 1270 === 0 && p[1] % 1270 === 0) && pts[0][0] === roundTo(wx, 1270) && pts[0][1] === roundTo(wy, 1270), JSON.stringify(pts));
+      check("schematic: a wire's first point is the grid point, whatever pins are about", pts.every((p) => p[0] % 1_270_000 === 0 && p[1] % 1_270_000 === 0) && pts[0][0] === roundTo(wx, 1_270_000) && pts[0][1] === roundTo(wy, 1_270_000), JSON.stringify(pts));
       await run("common.Interactive.undo");
       await sleep(600);
       check("the wire's undo leaves the sheet as it was", (await sch()).wires.length === wiresBefore.size);
@@ -343,7 +347,7 @@
     // A move with the grid off lands on whole um. A symbol's origin is not always inside its drawing, so find a point that picks it.
     const onScreen = (q) => { const [cx, cy] = w2c(q.at[0], q.at[1]); const r = canvas().getBoundingClientRect(); return cx > r.left + 60 && cx < Math.min(r.right, innerWidth) - 100 && cy > r.top + 60 && cy < r.bottom - 100; };
     const pickPoint = async (q) => {
-      for (const [dx, dy] of [[0, 0], [2540, 0], [-2540, 0], [0, 2540], [0, -2540], [1270, 0], [-1270, 0], [0, 1270], [0, -1270], [3810, 0], [-3810, 0], [0, 3810], [0, -3810]]) {
+      for (const [dx, dy] of [[0, 0], [2_540_000, 0], [-2_540_000, 0], [0, 2_540_000], [0, -2_540_000], [1_270_000, 0], [-1_270_000, 0], [0, 1_270_000], [0, -1_270_000], [3_810_000, 0], [-3_810_000, 0], [0, 3_810_000], [0, -3_810_000]]) {
         await click(q.at[0] + dx, q.at[1] + dy);
         if (state().selection.some((e) => e.id === q.id)) { await run("common.Interactive.unselectAll"); return [q.at[0] + dx, q.at[1] + dy]; }
       }

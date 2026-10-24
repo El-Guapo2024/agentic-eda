@@ -51,8 +51,8 @@ mod tests {
 
     #[test]
     fn the_paper_element_is_read() {
-        assert_eq!(page_of("(kicad_pcb (paper \"A3\" portrait))"), Some(PageSettings { paper: "A3".into(), portrait: true, user_size_um: None }));
-        assert_eq!(page_of("(kicad_pcb (paper \"User\" 300 200.5))"), Some(PageSettings { paper: "User".into(), portrait: false, user_size_um: Some((300_000, 200_500)) }));
+        assert_eq!(page_of("(kicad_pcb (paper \"A3\" portrait))"), Some(PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None }));
+        assert_eq!(page_of("(kicad_pcb (paper \"User\" 300 200.5))"), Some(PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((300_000_000, 200_500_000)) }));
         assert_eq!(page_of("(kicad_pcb (paper \"A4\"))"), Some(PageSettings::default()));
         assert_eq!(page_of("(kicad_pcb (version 1))"), None);
     }

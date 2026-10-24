@@ -112,7 +112,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // read first) and per-pin world position can be resolved.
     struct RawInstance {
         lib_id: String,
-        at_um: Point,
+        at_nm: Point,
         rot: Millideg,
         angle_deg: f64,
         mirrored: bool,
@@ -172,7 +172,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
         // `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`: `case T_convert` (legacy) and `case T_body_style` both read `SetBodyStyle`
         let body_style = sexpr::find(item, "body_style").or_else(|| sexpr::find(item, "convert")).and_then(|b| sexpr::num(b, 1)).unwrap_or(1.0).max(1.0) as u32;
-        let at_um = Point { x: crate::import::mm_to_um(x_mm), y: crate::import::mm_to_um(y_mm) };
+        let at_nm = Point { x: crate::import::sch_mm_to_nm(x_mm), y: crate::import::sch_mm_to_nm(y_mm) };
         let rot = import_rot_millideg_sch(angle_deg);
         // `(lib_name "<cache>")`: the symbol's own copy of its library symbol in the sheet's cache, which Swap Pins gave other places for some of its pins
         let swaps = sexpr::find(item, "lib_name").and_then(|l| sexpr::txt(l, 1)).filter(|name| *name != lib_id).and_then(|name| lib_table.get(name)).map(|cached| pin_swaps_between(resolved, cached, unit, body_style)).unwrap_or_default();
@@ -192,14 +192,14 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         if resolved.power {
             let pin_local = resolved.pins.first().map(|p| p.at).unwrap_or(SPoint::new(0.0, 0.0));
             let world = transform_local_point(pin_local, angle_deg, mirrored, mirror_y);
-            let at_pin = Point { x: at_um.x + crate::import::mm_to_um(world.x), y: at_um.y + crate::import::mm_to_um(world.y) };
+            let at_pin = Point { x: at_nm.x + crate::import::sch_mm_to_nm(world.x), y: at_nm.y + crate::import::sch_mm_to_nm(world.y) };
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
             power_uuid.push(uuid_of(item));
             continue;
         }
 
-        overrides.extend(parse_instance_overrides(item, at_um));
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps });
+        overrides.extend(parse_instance_overrides(item, at_nm));
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps });
     }
 
     if opts.unique_references {
@@ -295,7 +295,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                             place_pins.iter().find(|q| q.number == source && (q.unit == 0 || q.unit == owner.unit)).map_or(p.at, |q| q.at)
                         };
                         let world = transform_local_point(local, owner.angle_deg, owner.mirrored, owner.mirror_y);
-                        let at_pin = Point { x: owner.at_um.x + crate::import::mm_to_um(world.x), y: owner.at_um.y + crate::import::mm_to_um(world.y) };
+                        let at_pin = Point { x: owner.at_nm.x + crate::import::sch_mm_to_nm(world.x), y: owner.at_nm.y + crate::import::sch_mm_to_nm(world.y) };
                         pin_world.insert(format!("{reference}.{}", p.number), at_pin);
                         if nc_points.contains(&at_pin) {
                             eda_model::PinKind::Nc
@@ -318,7 +318,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             symbol: Some(lib_id.clone()),
             datasheet: (!primary.datasheet.is_empty()).then(|| primary.datasheet.clone()),
             pins,
-            body_um: None,
+            body_nm: None,
             edge: None,
         });
         for &i in idxs {
@@ -331,7 +331,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             }
             symbols.push(SymbolInstance {
                 id: reference.clone(),
-                at: r.at_um,
+                at: r.at_nm,
                 rot: r.rot,
                 mirrored: r.mirrored,
                 mirror_y: r.mirror_y,
@@ -392,7 +392,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let Some(at) = sexpr::find(be, "at").and_then(point_mm) else { continue };
         let Some(size) = sexpr::find(be, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))) else { continue };
         let id = sexpr::find(be, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
-        bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::mm_to_um(size.0), y: crate::import::mm_to_um(size.1) } });
+        bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::sch_mm_to_nm(size.0), y: crate::import::sch_mm_to_nm(size.1) } });
         be_locked.push(is_locked(be));
         be_stroke.push(stroke_of(be));
     }
@@ -429,12 +429,12 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             continue;
         }
         if let Some(pts) = import_pts(pl).filter(|p| p.len() >= 2) {
-            let width_um = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
-            lines.push(eda_model::ir::SchLine { id: String::new(), pts, width_um });
+            let width_nm = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(0);
+            lines.push(eda_model::ir::SchLine { id: String::new(), pts, width_nm });
             line_locked.push(is_locked(pl));
             line_uuid.push(uuid_of(pl));
-            // the width is the line's own (`SchLine::width_um`); the entry carries the style and the colour
-            line_stroke.push(SchStroke { width_um: 0, ..stroke_of(pl) });
+            // the width is the line's own (`SchLine::width_nm`); the entry carries the style and the colour
+            line_stroke.push(SchStroke { width_nm: 0, ..stroke_of(pl) });
         }
     }
 
@@ -511,7 +511,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let size_mm = sexpr::find(t, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).unwrap_or(1.27);
         // `parseSchText`: the angle is kept upright (`KeepUpright`); `parseEDA_TEXT`: the justification is centre, centre unless the file says otherwise
         let (angle, justify) = crate::sch_extras_io::read_text_lie(t, &crate::sch_extras_io::read_effects(t));
-        texts.push(SchematicText { id: String::new(), content, at: mm_point_to_um(SPoint::new(x_mm, y_mm)), angle, size_um: crate::import::mm_to_um(size_mm) });
+        texts.push(SchematicText { id: String::new(), content, at: mm_point_to_um(SPoint::new(x_mm, y_mm)), angle, size_nm: crate::import::sch_mm_to_nm(size_mm) });
         text_locked.push(is_locked(t));
         text_uuid.push(uuid_of(t));
         text_lie.push(justify);
@@ -535,7 +535,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                 let id = sexpr::find(p, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
                 // `(effects (font (size h w) bold italic) ..)`: how the pin's text is set (`SCH_SHEET_PIN` is an `EDA_TEXT`); the default one is no entry
                 let effects = read_effects(p);
-                let look = eda_model::sch_extras::LabelLook { size_um: if effects.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { effects.size_um }, bold: effects.bold, italic: effects.italic, auto_rotate: false };
+                let look = eda_model::sch_extras::LabelLook { size_nm: if effects.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { effects.size_nm }, bold: effects.bold, italic: effects.italic, auto_rotate: false };
                 if !id.is_empty() && !look.is_default() {
                     sheet_pin_looks.push((id.clone(), look));
                 }
@@ -552,7 +552,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             .filter(|pg| !pg.is_empty() && *pg != "1")
             .unwrap_or_default()
             .to_string();
-        sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)), pins, page });
+        sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::sch_mm_to_nm(size.0), crate::import::sch_mm_to_nm(size.1)), pins, page });
         sheet_locked.push(is_locked(s));
         notes.sheets_not_descended += 1;
     }
@@ -577,7 +577,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: user_fields_read, imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), embedded: crate::embedded::read_owner(root, &mut Vec::new()), ..Default::default() }, field_layout: field_layout_read };
     let mut design = Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
         schematic: Some(sch),
         nets: None,
@@ -624,8 +624,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                 continue;
             }
             sch.extras.label_spins.insert(id.clone(), spin);
-            let size_um = if look.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { look.size_um };
-            let label_look = eda_model::sch_extras::LabelLook { size_um, bold: look.bold, italic: look.italic, auto_rotate: false };
+            let size_nm = if look.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { look.size_nm };
+            let label_look = eda_model::sch_extras::LabelLook { size_nm, bold: look.bold, italic: look.italic, auto_rotate: false };
             if !label_look.is_default() {
                 sch.extras.label_looks.insert(id, label_look);
             }
@@ -811,7 +811,7 @@ fn symbol_places_of(text: &str) -> BTreeMap<String, (Point, Option<u32>)> {
         let (Some(uuid), Some(at)) = (uuid_of(item), sexpr::find(item, "at")) else { continue };
         let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
         let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).map(|u| u.max(1.0) as u32);
-        out.insert(uuid, (Point { x: crate::import::mm_to_um(x), y: crate::import::mm_to_um(y) }, unit));
+        out.insert(uuid, (Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, unit));
     }
     out
 }
@@ -887,7 +887,7 @@ fn pin_swaps_between(lib: &LibSymbol, cached: &LibSymbol, unit: u32, body_style:
     let styled = |s: &LibSymbol| if body_style > 1 && s.has_alternate_body() { s.in_style(body_style).into_owned() } else { s.clone() };
     let (lib, cached) = (styled(lib), styled(cached));
     let on_unit = |p: &&LibPin| p.unit == 0 || p.unit == unit;
-    let place = |p: &LibPin| ((p.at.x * 1000.0).round() as i64, (p.at.y * 1000.0).round() as i64, p.angle_deg.rem_euclid(360.0).round() as i64, (p.length_mm * 1000.0).round() as i64);
+    let place = |p: &LibPin| (crate::import::sch_mm_to_nm(p.at.x), crate::import::sch_mm_to_nm(p.at.y), p.angle_deg.rem_euclid(360.0).round() as i64, crate::import::sch_mm_to_nm(p.length_mm));
     let (lib_pins, cached_pins): (Vec<&LibPin>, Vec<&LibPin>) = (lib.pins.iter().filter(on_unit).collect(), cached.pins.iter().filter(on_unit).collect());
     let mut swaps: BTreeMap<String, String> = BTreeMap::new();
     for cp in &cached_pins {
@@ -914,7 +914,7 @@ fn pin_swaps_between(lib: &LibSymbol, cached: &LibSymbol, unit: u32, body_style:
 struct RawUserField {
     name: String,
     text: String,
-    at_um: Point,
+    at_nm: Point,
     angle_deg: f64,
     look: EffectsLook,
     hidden: bool,
@@ -944,8 +944,8 @@ impl RawUserField {
         };
         // a field is along the sheet or up it (`keepUpright`)
         let vertical = eda_model::kicad_geom::keep_upright_is_vertical(self.angle_deg);
-        let mut p = eda_engine::fields::local_placement_on_page(sym.at, sym.rot, sym.mirrored, width, &self.name, (self.at_um.x as f64, self.at_um.y as f64), vertical, h, v, !self.hidden);
-        p.size_um = if self.look.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { self.look.size_um };
+        let mut p = eda_engine::fields::local_placement_on_page(sym.at, sym.rot, sym.mirrored, width, &self.name, (self.at_nm.x as f64, self.at_nm.y as f64), vertical, h, v, !self.hidden);
+        p.size_nm = if self.look.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { self.look.size_nm };
         p.bold = self.look.bold;
         p.italic = self.look.italic;
         p.name_shown = self.show_name;
@@ -967,14 +967,14 @@ fn user_fields_of(item: &[Sexpr]) -> Vec<RawUserField> {
             continue;
         }
         let at = sexpr::find(p, "at");
-        let at_um = at.and_then(|a| Some(Point { x: crate::import::mm_to_um(sexpr::num(a, 1)?), y: crate::import::mm_to_um(sexpr::num(a, 2)?) })).unwrap_or(Point { x: 0, y: 0 });
+        let at_nm = at.and_then(|a| Some(Point { x: crate::import::sch_mm_to_nm(sexpr::num(a, 1)?), y: crate::import::sch_mm_to_nm(sexpr::num(a, 2)?) })).unwrap_or(Point { x: 0, y: 0 });
         let effects = sexpr::find(p, "effects");
         // `(hide yes)`: KiCad 9 writes it in the property, before `(effects ...)`, and in it for a file we wrote; a bare `hide` is older still
         let hidden = parse_bool(p, "hide").unwrap_or(false) || effects.is_some_and(|e| parse_bool(e, "hide").unwrap_or(false) || e.iter().skip(1).any(|c| c.text() == Some("hide")));
         out.push(RawUserField {
             name: name.to_string(),
             text: text.to_string(),
-            at_um,
+            at_nm,
             angle_deg: at.and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0),
             look: read_effects(p),
             hidden,
@@ -1034,15 +1034,15 @@ pub(crate) fn is_sheet_field(n: &str, canonical: &str) -> bool {
 
 /// A wire's, bus's, bus entry's or polyline's `(stroke (width w) (type t) (color ...))` (`SCH_IO_KICAD_SEXPR_PARSER::parseStroke`).
 fn stroke_of(node: &[Sexpr]) -> SchStroke {
-    let (width_um, style, color) = crate::sch_extras_io::parse_stroke(node);
-    SchStroke { width_um, style, color }
+    let (width_nm, style, color) = crate::sch_extras_io::parse_stroke(node);
+    SchStroke { width_nm, style, color }
 }
 
 /// A junction's `(diameter d) (color r g b a)`; a colour of all zeroes is KiCad's "unspecified".
 fn look_of(node: &[Sexpr]) -> JunctionLook {
-    let diameter_um = sexpr::find(node, "diameter").and_then(|d| sexpr::num(d, 1)).map(crate::import::mm_to_um).unwrap_or(0);
+    let diameter_nm = sexpr::find(node, "diameter").and_then(|d| sexpr::num(d, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(0);
     let color = sexpr::find(node, "color").and_then(crate::sch_extras_io::parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0));
-    JunctionLook { diameter_um, color }
+    JunctionLook { diameter_nm, color }
 }
 
 fn point_mm(at: &[Sexpr]) -> Option<SPoint> {
@@ -1050,7 +1050,7 @@ fn point_mm(at: &[Sexpr]) -> Option<SPoint> {
 }
 
 fn mm_point_to_um(p: SPoint) -> Point {
-    Point { x: crate::import::mm_to_um(p.x), y: crate::import::mm_to_um(p.y) }
+    Point { x: crate::import::sch_mm_to_nm(p.x), y: crate::import::sch_mm_to_nm(p.y) }
 }
 
 fn import_pts(item: &[Sexpr]) -> Option<Vec<Point>> {
@@ -1363,7 +1363,7 @@ mod tests {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), symbol: None, datasheet: None, pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), symbol: None, datasheet: None, pins, body_nm: None, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }
@@ -1598,7 +1598,7 @@ mod tests {
 
         let sym = |unit: u32, x: i64| SymbolInstance { id: "U1".into(), at: Point { x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let sch = SchematicSection {
-            symbols: vec![sym(1, 0), sym(2, 50_000)],
+            symbols: vec![sym(1, 0), sym(2, 50_000_000)],
             wires: vec![],
             labels: vec![],
             texts: vec![],
@@ -1609,7 +1609,7 @@ mod tests {
             sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
             imported_from_kicad: false,
         };
-        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None };
+        let design = Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None };
 
         let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "multi_unit" }).unwrap();
         assert!(text.contains("(unit 1)"), "{text}");
@@ -1636,7 +1636,7 @@ mod tests {
         let unit1 = back_sch.symbols.iter().find(|s| s.unit == 1).unwrap();
         let unit2 = back_sch.symbols.iter().find(|s| s.unit == 2).unwrap();
         assert_eq!(unit1.at.x, 0);
-        assert_eq!(unit2.at.x, 50_000);
+        assert_eq!(unit2.at.x, 50_000_000);
     }
 
     /// A symbol placed in the alternate ("De Morgan") body style of its library symbol: the file carries both bodies (`Name_<unit>_1`, `Name_<unit>_2`) and
@@ -1677,9 +1677,9 @@ mod tests {
         };
         let u1 = part("U1", vec![pin("1", "A", PinKind::Signal), pin("2", "B", PinKind::Signal), pin("3", "Y", PinKind::Signal)]);
         let model = ConstraintModel { parts: vec![u1], symbols: vec![lib], ..Default::default() };
-        let instance = SymbolInstance { id: "U1".into(), at: Point { x: 25_400, y: 25_400 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let instance = SymbolInstance { id: "U1".into(), at: Point { x: 25_400_000, y: 25_400_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let mut sch = SchematicSection { symbols: vec![instance], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false };
-        let design_with = |sch: SchematicSection| Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None };
+        let design_with = |sch: SchematicSection| Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None };
         let meta = ExportMeta { date: "2026-01-01", title: "alt" };
 
         // in the normal body style: both bodies are in the file, the instance says nothing
@@ -1691,7 +1691,7 @@ mod tests {
         assert!(back_model.symbols[0].alternate.is_some(), "the alternate body comes back");
 
         // in the alternate one
-        sch.extras.body_styles.insert("U1".into(), 2);
+        sch.extras.body_styles.insert("U1".into(), 2000);
         let alt = export_kicad_sch(&design_with(sch), &model, &meta).unwrap();
         assert!(alt.contains("(unit 1) (convert 2)"), "{alt}");
         let (back, back_model, notes) = import_kicad_sch(&alt).expect("round trips");
@@ -1857,16 +1857,16 @@ mod tests {
     /// ...)`/`(bus_alias ...)` readers above) agreeing with each other.
     #[test]
     fn bus_wire_entry_and_alias_round_trip_through_export_and_import() {
-        let bus_pt = Point { x: 10_000, y: 10_000 };
-        let net_pt = Point { x: 12_540, y: 12_540 };
+        let bus_pt = Point { x: 10_000_000, y: 10_000_000 };
+        let net_pt = Point { x: 12_540_000, y: 12_540_000 };
         let sch = SchematicSection {
-            wires: vec![Wire { id: String::new(), net: "DATA[0..3]".into(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, bus_pt], bus: true }],
-            bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540, y: 2_540 } }],
+            wires: vec![Wire { id: String::new(), net: "DATA[0..3]".into(), pins: vec![], pts: vec![Point { x: 0, y: 10_000_000 }, bus_pt], bus: true }],
+            bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540_000, y: 2_540_000 } }],
             labels: vec![eda_model::ir::NetLabel { id: String::new(), net: "DATA2".into(), at: net_pt, kind: LabelKind::Local }],
             ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
         };
         let design = Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(sch),
             nets: None,
@@ -1885,10 +1885,10 @@ mod tests {
         let sch = reimported.schematic.expect("schematic present");
         assert_eq!(sch.wires.len(), 1);
         assert!(sch.wires[0].bus, "the bus wire's own layer flag must survive the round trip");
-        assert_eq!(sch.wires[0].pts, vec![Point { x: 0, y: 10_000 }, bus_pt]);
+        assert_eq!(sch.wires[0].pts, vec![Point { x: 0, y: 10_000_000 }, bus_pt]);
         assert_eq!(sch.bus_entries.len(), 1);
         assert_eq!(sch.bus_entries[0].at, bus_pt);
-        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540, y: 2_540 });
+        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540_000, y: 2_540_000 });
         assert_eq!(reimported.bus_aliases.len(), 1);
         assert_eq!(reimported.bus_aliases[0].name, "USB");
         assert_eq!(reimported.bus_aliases[0].members, vec!["D+".to_string(), "D-".to_string()]);
@@ -1898,23 +1898,23 @@ mod tests {
     /// `SCH_JUNCTION`) sits at the crossing. The junction and a notes-layer line survive the file round trip.
     #[test]
     fn an_explicit_junction_joins_crossing_wires_and_junctions_and_graphic_lines_round_trip() {
-        let cross = Point { x: 10_000, y: 10_000 };
+        let cross = Point { x: 10_000_000, y: 10_000_000 };
         let build = |junctions: Vec<eda_model::ir::Junction>| {
             let sch = SchematicSection {
                 wires: vec![
-                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, Point { x: 20_000, y: 10_000 }], bus: false },
-                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 20_000 }], bus: false },
+                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 0, y: 10_000_000 }, Point { x: 20_000_000, y: 10_000_000 }], bus: false },
+                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 10_000_000, y: 0 }, Point { x: 10_000_000, y: 20_000_000 }], bus: false },
                 ],
                 labels: vec![
-                    eda_model::ir::NetLabel { id: String::new(), net: "H".into(), at: Point { x: 0, y: 10_000 }, kind: LabelKind::Local },
-                    eda_model::ir::NetLabel { id: String::new(), net: "V".into(), at: Point { x: 10_000, y: 0 }, kind: LabelKind::Local },
+                    eda_model::ir::NetLabel { id: String::new(), net: "H".into(), at: Point { x: 0, y: 10_000_000 }, kind: LabelKind::Local },
+                    eda_model::ir::NetLabel { id: String::new(), net: "V".into(), at: Point { x: 10_000_000, y: 0 }, kind: LabelKind::Local },
                 ],
                 junctions,
-                lines: vec![eda_model::ir::SchLine { id: String::new(), pts: vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }], width_um: 254 }],
+                lines: vec![eda_model::ir::SchLine { id: String::new(), pts: vec![Point { x: 0, y: 30_000_000 }, Point { x: 5_000_000, y: 30_000_000 }, Point { x: 5_000_000, y: 35_000_000 }], width_nm: 254_000 }],
                 ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
             };
             let design = Design {
-                schema: 1,
+                schema: eda_model::ir::SCHEMA_VERSION,
                 provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
                 schematic: Some(sch),
                 nets: None,
@@ -1933,11 +1933,11 @@ mod tests {
 
         let (_, apart) = build(vec![]);
         let net_of = |sch: &SchematicSection, first: Point| sch.wires.iter().find(|w| w.pts[0] == first).unwrap().net.clone();
-        assert_ne!(net_of(&apart, Point { x: 0, y: 10_000 }), net_of(&apart, Point { x: 10_000, y: 0 }), "crossing wires with no junction stay two nets");
+        assert_ne!(net_of(&apart, Point { x: 0, y: 10_000_000 }), net_of(&apart, Point { x: 10_000_000, y: 0 }), "crossing wires with no junction stay two nets");
         assert!(apart.junctions.is_empty(), "no junction written or read back");
 
         let (text, joined) = build(vec![eda_model::ir::Junction { id: String::new(), at: cross }]);
-        assert_eq!(net_of(&joined, Point { x: 0, y: 10_000 }), net_of(&joined, Point { x: 10_000, y: 0 }), "the junction joins them");
+        assert_eq!(net_of(&joined, Point { x: 0, y: 10_000_000 }), net_of(&joined, Point { x: 10_000_000, y: 0 }), "the junction joins them");
         assert!(text.contains("(junction (at 10 10)"), "{text}");
         assert_eq!(joined.junctions.len(), 1);
         assert_eq!(joined.junctions[0].at, cross);
@@ -1948,8 +1948,8 @@ mod tests {
         assert_eq!(joined.lines.len(), 2);
         let mut segs: Vec<Vec<Point>> = joined.lines.iter().map(|l| l.pts.clone()).collect();
         segs.sort();
-        assert_eq!(segs, vec![vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }], vec![Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }]]);
-        assert!(joined.lines.iter().all(|l| l.width_um == 254));
+        assert_eq!(segs, vec![vec![Point { x: 0, y: 30_000_000 }, Point { x: 5_000_000, y: 30_000_000 }], vec![Point { x: 5_000_000, y: 30_000_000 }, Point { x: 5_000_000, y: 35_000_000 }]]);
+        assert!(joined.lines.iter().all(|l| l.width_nm == 254_000));
         assert_eq!(joined.wires.len(), 2, "a graphic line is never read back as a wire");
     }
 
@@ -1961,26 +1961,26 @@ mod tests {
         let p = |x: i64, y: i64| Point { x, y };
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let mut sch = SchematicSection::default();
-        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000, 0)], bus: false });
-        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 10_000), p(20_000, 10_000)], bus: true });
-        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 20_000), p(20_000, 20_000)], bus: false });
-        sch.bus_entries.push(eda_model::ir::BusEntry { id: String::new(), at: p(5_000, 10_000), size: p(2_540, 2_540) });
-        sch.lines.push(eda_model::ir::SchLine { id: String::new(), pts: vec![p(0, 30_000), p(5_000, 30_000)], width_um: 254 });
-        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000, 0) });
-        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000, 20_000) });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000_000, 0)], bus: false });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 10_000_000), p(20_000_000, 10_000_000)], bus: true });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 20_000_000), p(20_000_000, 20_000_000)], bus: false });
+        sch.bus_entries.push(eda_model::ir::BusEntry { id: String::new(), at: p(5_000_000, 10_000_000), size: p(2_540_000, 2_540_000) });
+        sch.lines.push(eda_model::ir::SchLine { id: String::new(), pts: vec![p(0, 30_000_000), p(5_000_000, 30_000_000)], width_nm: 254_000 });
+        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000_000, 0) });
+        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000_000, 20_000_000) });
         sch.assign_missing_ids();
         let id_at = |sch: &SchematicSection, first: Point| sch.wires.iter().find(|w| w.pts[0] == first).unwrap().id.clone();
-        let (plain_id, bus_id) = (id_at(&sch, p(0, 0)), id_at(&sch, p(0, 10_000)));
+        let (plain_id, bus_id) = (id_at(&sch, p(0, 0)), id_at(&sch, p(0, 10_000_000)));
         let (bent_id, line_id) = (sch.bus_entries[0].id.clone(), sch.lines[0].id.clone());
         let jct_id = sch.junctions[0].id.clone();
-        let plain = SchStroke { width_um: 300, style: SchLineStyle::Dash, color: Some(red) };
-        let bus = SchStroke { width_um: 0, style: SchLineStyle::Dot, color: None };
-        let bent = SchStroke { width_um: 200, style: SchLineStyle::Default, color: Some(SchColor { r: 0, g: 0, b: 255, a: 255 }) };
-        let line = SchStroke { width_um: 0, style: SchLineStyle::DashDot, color: Some(SchColor { r: 0, g: 128, b: 0, a: 255 }) };
+        let plain = SchStroke { width_nm: 300_000, style: SchLineStyle::Dash, color: Some(red) };
+        let bus = SchStroke { width_nm: 0, style: SchLineStyle::Dot, color: None };
+        let bent = SchStroke { width_nm: 200_000, style: SchLineStyle::Default, color: Some(SchColor { r: 0, g: 0, b: 255, a: 255 }) };
+        let line = SchStroke { width_nm: 0, style: SchLineStyle::DashDot, color: Some(SchColor { r: 0, g: 128, b: 0, a: 255 }) };
         sch.extras.strokes.extend([(plain_id, plain), (bus_id, bus), (bent_id, bent), (line_id, line)]);
-        sch.extras.junction_looks.insert(jct_id, JunctionLook { diameter_um: 900, color: Some(red) });
+        sch.extras.junction_looks.insert(jct_id, JunctionLook { diameter_nm: 900_000, color: Some(red) });
         let design = Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(sch),
             nets: None,
@@ -2000,15 +2000,15 @@ mod tests {
         let back = back.schematic.expect("schematic");
         let stroke_of_wire = |first: Point| back.extras.strokes.get(&id_at(&back, first)).copied();
         assert_eq!(stroke_of_wire(p(0, 0)), Some(plain));
-        assert_eq!(stroke_of_wire(p(0, 10_000)), Some(bus));
-        assert_eq!(stroke_of_wire(p(0, 20_000)), None, "the default stroke is not an annotation");
+        assert_eq!(stroke_of_wire(p(0, 10_000_000)), Some(bus));
+        assert_eq!(stroke_of_wire(p(0, 20_000_000)), None, "the default stroke is not an annotation");
         assert_eq!(back.extras.strokes.get(&back.bus_entries[0].id), Some(&bent));
         assert_eq!(back.extras.strokes.get(&back.lines[0].id), Some(&line));
-        assert_eq!(back.lines[0].width_um, 254, "a graphic line's width stays its own");
+        assert_eq!(back.lines[0].width_nm, 254_000, "a graphic line's width stays its own");
         assert_eq!(back.extras.strokes.len(), 4);
         let look_at = |at: Point| back.junctions.iter().find(|j| j.at == at).and_then(|j| back.extras.junction_looks.get(&j.id)).copied();
-        assert_eq!(look_at(p(10_000, 0)), Some(JunctionLook { diameter_um: 900, color: Some(red) }));
-        assert_eq!(look_at(p(10_000, 20_000)), None);
+        assert_eq!(look_at(p(10_000_000, 0)), Some(JunctionLook { diameter_nm: 900_000, color: Some(red) }));
+        assert_eq!(look_at(p(10_000_000, 20_000_000)), None);
     }
 
     /// Shapes, text boxes, rule areas, directive labels and every item's lock survive the `.kicad_sch` round trip.
@@ -2017,15 +2017,15 @@ mod tests {
         use eda_model::sch_extras::{DirectiveShape, SchFill, SchGraphic, SchGraphicKind, SchHAlign, SchVAlign};
         let p = |x: i64, y: i64| Point { x, y };
         let mut sch = SchematicSection::default();
-        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000, 0)], bus: false });
-        sch.texts.push(SchematicText { id: String::new(), content: "note".into(), at: p(5_000, 5_000), angle: 0, size_um: 1_270 });
-        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(0, 10_000), end: p(20_000, 30_000), corner_radius_um: 0 });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000_000, 0)], bus: false });
+        sch.texts.push(SchematicText { id: String::new(), content: "note".into(), at: p(5_000_000, 5_000_000), angle: 0, size_nm: 1_270_000 });
+        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(0, 10_000_000), end: p(20_000_000, 30_000_000), corner_radius_nm: 0 });
         rect.fill = SchFill::Background;
         sch.extras.graphics = vec![
             rect,
-            SchGraphic::new(SchGraphicKind::TextBox { start: p(0, 40_000), end: p(30_000, 50_000), text: "boxed".into(), angle: 0, size_um: 1_270, bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_um: 0 }),
-            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 60_000), p(10_000, 60_000), p(10_000, 70_000)], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: true }),
-            SchGraphic::new(SchGraphicKind::Directive { at: p(20_000, 0), orientation: 0, shape: DirectiveShape::Round, pin_length_um: 2_540, netclass: "Power".into(), component_class: String::new() }),
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(0, 40_000_000), end: p(30_000_000, 50_000_000), text: "boxed".into(), angle: 0, size_nm: 1_270_000, bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: 0 }),
+            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 60_000_000), p(10_000_000, 60_000_000), p(10_000_000, 70_000_000)], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: true }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(20_000_000, 0), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: 2_540_000, netclass: "Power".into(), component_class: String::new() }),
         ];
         sch.assign_missing_ids();
         let wire_id = sch.wires[0].id.clone();
@@ -2035,7 +2035,7 @@ mod tests {
             sch.extras.set_locked(id, true);
         }
         let design = Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(sch.clone()),
             nets: None,

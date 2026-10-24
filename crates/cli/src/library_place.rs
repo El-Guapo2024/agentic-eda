@@ -132,7 +132,7 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
         }
         Cmd::PlaceFootprint { footprint, at, reference, value, definition: None } => {
             // The model knows it already (the intent's, a library's it resolved, the built-in table): nothing to bring.
-            let probe = eda_model::Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.trim().to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+            let probe = eda_model::Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.trim().to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
             if model.footprint_of(&probe).is_some() {
                 return None;
             }
@@ -150,7 +150,7 @@ fn find_footprint<F: LibSource + ?Sized>(wanted: &str, id: &str, design: &Design
         return Some(Some(copy));
     }
     let value = model.part(id).and_then(|p| p.value.clone());
-    let probe = eda_model::Part { reference: id.to_string(), mpn: None, lcsc: None, value, package: None, footprint: Some(wanted.to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+    let probe = eda_model::Part { reference: id.to_string(), mpn: None, lcsc: None, value, package: None, footprint: Some(wanted.to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
     let in_editor = design.footprint_library.as_ref().is_some_and(|l| l.by_name(wanted).is_some());
     (model.footprint_of(&probe).is_some() || in_editor).then_some(None)
 }
@@ -220,7 +220,7 @@ mod tests {
         (symbol "Plain" (property "Reference" "U") (property "Value" "Plain") (property "Datasheet" "~") (symbol "Plain_1_1" (pin input line (at 0 0 0) (length 1) (name "A") (number "1")))))"##;
 
     fn add(lib_id: &str, value: &str, footprint: &str) -> Cmd {
-        Cmd::AddSymbol { id: "U1".into(), lib_id: lib_id.into(), at: Point { x: 10_000, y: 10_000 }, rot_millideg: 0, value: value.into(), footprint: footprint.into(), unit: 1 }
+        Cmd::AddSymbol { id: "U1".into(), lib_id: lib_id.into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot_millideg: 0, value: value.into(), footprint: footprint.into(), unit: 1 }
     }
 
     fn root_with_lm358(tag: &str) -> std::path::PathBuf {
@@ -321,9 +321,9 @@ mod tests {
         std::fs::create_dir_all(root.join("MountingHole.pretty")).unwrap();
         std::fs::write(root.join("MountingHole.pretty").join("MH.kicad_mod"), r#"(footprint "MH" (pad "" np_thru_hole circle (at 0 0) (size 3.2 3.2) (drill 3.2) (layers "*.Cu" "*.Mask")))"#).unwrap();
         let model = ConstraintModel::default();
-        let place = Cmd::PlaceFootprint { footprint: "MountingHole:MH".into(), at: Point { x: 1000, y: 2000 }, reference: String::new(), value: String::new(), definition: None };
+        let place = Cmd::PlaceFootprint { footprint: "MountingHole:MH".into(), at: Point { x: 1_000_000, y: 2_000_000 }, reference: String::new(), value: String::new(), definition: None };
         let Some(Cmd::PlaceFootprint { definition: Some(def), at, .. }) = rewrite(&place, &design(), &model, &root, &root) else { panic!("not rewritten") };
-        assert_eq!((def.name.as_str(), def.pads.len(), at), ("MountingHole:MH", 1, Point { x: 1000, y: 2000 }));
+        assert_eq!((def.name.as_str(), def.pads.len(), at), ("MountingHole:MH", 1, Point { x: 1_000_000, y: 2_000_000 }));
         // already carrying one, or not installed: left as it is
         let carrying = Cmd::PlaceFootprint { footprint: "MountingHole:MH".into(), at: Point { x: 0, y: 0 }, reference: String::new(), value: String::new(), definition: Some(def) };
         assert!(rewrite(&carrying, &design(), &model, &root, &root).is_none());

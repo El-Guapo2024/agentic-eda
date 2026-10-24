@@ -28,7 +28,7 @@ fn duplicate_u1() -> Cmd {
 }
 
 fn add_text(dir: &Path) {
-    let text = eda_model::ir::Text { id: String::new(), content: "T".into(), at: Point { x: 1_000, y: 1_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: eda_model::ir::TextJustify::Center, mirror: false };
+    let text = eda_model::ir::Text { id: String::new(), content: "T".into(), at: Point { x: 1_000_000, y: 1_000_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: eda_model::ir::TextJustify::Center, mirror: false };
     step(dir, Cmd::AddText { text }, false, "test").unwrap();
 }
 
@@ -44,16 +44,16 @@ fn a_duplicate_and_the_drop_that_ends_it_are_one_undo_step() {
     assert!(is_carrying(&dir));
     assert_eq!(footprints(&dir).len(), 3, "the copy is on the board while it is carried");
 
-    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 3_000, dy: 4_000 }).unwrap();
+    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 3_000_000, dy: 4_000_000 }).unwrap();
     assert!(!is_carrying(&dir), "the drop ends the carry");
-    assert_eq!(footprints(&dir).iter().find(|(id, _)| id == "U3").unwrap().1, Point { x: 8_000, y: 9_000 }, "the copy is where it was dropped");
+    assert_eq!(footprints(&dir).iter().find(|(id, _)| id == "U3").unwrap().1, Point { x: 8_000_000, y: 9_000_000 }, "the copy is where it was dropped");
 
     undo_pcb(&dir).unwrap();
     assert_eq!(footprints(&dir).len(), 2, "one undo takes the copy and its move away together");
     assert!(undo_pcb(&dir).is_err(), "and that was the only step: nothing is left to undo");
 
     redo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    assert_eq!(footprints(&dir).iter().find(|(id, _)| id == "U3").unwrap().1, Point { x: 8_000, y: 9_000 }, "one redo brings both back");
+    assert_eq!(footprints(&dir).iter().find(|(id, _)| id == "U3").unwrap().1, Point { x: 8_000_000, y: 9_000_000 }, "one redo brings both back");
     assert!(redo(&dir, "test", Some(Domain::Pcb)).is_err());
 }
 
@@ -126,10 +126,10 @@ fn a_drop_that_changes_nothing_ends_the_carry_and_the_duplicate_stands_as_one_st
 fn a_drop_with_nothing_carried_is_an_ordinary_step() {
     let dir = scratch("carry_drop_alone");
     setup(&dir);
-    drop_with(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: 1_000, dy: 0 }).unwrap();
-    assert_eq!(footprints(&dir)[0].1, Point { x: 6_000, y: 5_000 });
+    drop_with(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: 1_000_000, dy: 0 }).unwrap();
+    assert_eq!(footprints(&dir)[0].1, Point { x: 6_000_000, y: 5_000_000 });
     undo_pcb(&dir).unwrap();
-    assert_eq!(footprints(&dir)[0].1, Point { x: 5_000, y: 5_000 });
+    assert_eq!(footprints(&dir)[0].1, Point { x: 5_000_000, y: 5_000_000 });
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn a_refused_drop_leaves_the_carry_open_to_be_dropped_again_or_cancelled() {
     begin(&dir, duplicate_u1());
     assert!(drop_with(&dir, Cmd::MoveItems { ids: vec!["nope".into()], dx: 1, dy: 1 }).is_err());
     assert!(is_carrying(&dir), "the carry is still open");
-    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 2_000, dy: 0 }).unwrap();
+    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 2_000_000, dy: 0 }).unwrap();
     undo_pcb(&dir).unwrap();
     assert_eq!(footprints(&dir).len(), 2, "and the retried drop is still one step with the duplicate");
 }
@@ -151,13 +151,13 @@ fn a_paste_and_its_drop_are_one_step_too_and_cancelling_removes_what_the_paste_b
     let reply = crate::clipboard_api::copy(&dir, serde_json::json!({ "ids": ["U1", "U2"], "reference": { "x": 0, "y": 0 } }).to_string().as_bytes());
     let text = reply["text"].as_str().unwrap().to_string();
 
-    begin(&dir, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 10_000, y: 12_000 } });
+    begin(&dir, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 10_000_000, y: 12_000_000 } });
     assert_eq!(footprints(&dir).len(), 4);
     cancel(&dir, "test").unwrap();
     assert_eq!(footprints(&dir).len(), 2, "Escape takes the pasted footprints away");
 
-    begin(&dir, Cmd::PasteClipboard { text, at: Point { x: 10_000, y: 12_000 } });
-    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into(), "U4".into()], dx: 500, dy: 0 }).unwrap();
+    begin(&dir, Cmd::PasteClipboard { text, at: Point { x: 10_000_000, y: 12_000_000 } });
+    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into(), "U4".into()], dx: 500_000, dy: 0 }).unwrap();
     assert_eq!(footprints(&dir).len(), 4);
     undo_pcb(&dir).unwrap();
     assert_eq!(footprints(&dir).len(), 2, "the paste and the drop are undone together");

@@ -5,7 +5,7 @@
 //! The image is held as the base64 text a `(data ..)` token carries, so a file written back has the bytes it was read with (`BITMAP_BASE::SaveImageData` writes `m_imageData`
 //! as it was). Also here: the base64 codec that needs, a content hash for the URL the browser fetches the pixels at, and a plain PNG writer for tests and placeholders.
 
-use crate::ir::Um;
+use crate::ir::Nm;
 
 /// The definition of an image whose file says none (`BITMAP_BASE`'s `m_ppi`).
 pub const DEFAULT_PPI: u32 = 300;
@@ -189,10 +189,10 @@ pub fn header_of_base64(data: &str) -> Option<ImageHeader> {
     header_of_bytes(&base64_decode(data)?)
 }
 
-/// `BITMAP_BASE::GetSize`: the pixels at their definition (an inch over `ppi` each) times the scale, in micrometres.
-pub fn size_um(h: &ImageHeader, scale_ppm: i64) -> (Um, Um) {
-    let k = 25_400.0 / h.ppi.max(1) as f64 * scale_ppm as f64 / SCALE_PPM as f64;
-    ((h.width as f64 * k).round() as Um, (h.height as f64 * k).round() as Um)
+/// `BITMAP_BASE::GetSize`: the pixels at their definition (an inch over `ppi` each) times the scale, in nanometres.
+pub fn size_nm(h: &ImageHeader, scale_ppm: i64) -> (Nm, Nm) {
+    let k = crate::units::NM_PER_INCH as f64 / h.ppi.max(1) as f64 * scale_ppm as f64 / SCALE_PPM as f64;
+    ((h.width as f64 * k).round() as Nm, (h.height as f64 * k).round() as Nm)
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------ base64
@@ -368,8 +368,8 @@ mod tests {
         let h = header_of_bytes(&png).unwrap();
         assert_eq!((h.format, h.width, h.height, h.ppi), (ImageFormat::Png, 60, 40, 254));
         // 60 px at 254 ppi are 6 mm; at scale 2 they are 12.
-        assert_eq!(size_um(&h, SCALE_PPM), (6_000, 4_000));
-        assert_eq!(size_um(&h, 2 * SCALE_PPM), (12_000, 8_000));
+        assert_eq!(size_nm(&h, SCALE_PPM), (6_000_000, 4_000_000));
+        assert_eq!(size_nm(&h, 2 * SCALE_PPM), (12_000_000, 8_000_000));
         // the same file without its pHYs chunk is a 300 ppi image
         let mut no_phys = png[..33].to_vec();
         let mut at = 33;

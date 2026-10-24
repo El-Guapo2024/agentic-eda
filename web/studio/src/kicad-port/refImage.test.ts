@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { base64Of, checkImageScale, DEFAULT_PPI, greyscaleRgba, imageBoxHitDistance, imageBoxUm, imageHeader, imageSizeUm, SCALE_PPM, scaleForHeightUm, scaleForWidthUm, scalePpmOf, scaleText, sniffImage, withPngPpi } from "./refImage";
+import { base64Of, checkImageScale, DEFAULT_PPI, greyscaleRgba, imageBoxHitDistance, imageBoxNm, imageHeader, imageSizeNm, SCALE_PPM, scaleForHeightNm, scaleForWidthNm, scalePpmOf, scaleText, sniffImage, withPngPpi } from "./refImage";
 
 /** A PNG of `w` by `h` pixels with a `pHYs` chunk of `perMetre` pixels per metre (0: none); the pixel data is not there (a header is all that is read). */
 function png(w: number, h: number, perMetre = 0): Uint8Array {
@@ -11,16 +11,16 @@ function png(w: number, h: number, perMetre = 0): Uint8Array {
 
 test("the size of an image is its pixels at their definition times the scale", () => {
   // 300 pixels at 300 ppi are an inch, at 96 ppi 3.125 inches
-  assert.deepEqual(imageSizeUm([300, 150], 300, 1_000_000), [25_400, 12_700]);
-  assert.deepEqual(imageSizeUm([96, 48], 96, 1_000_000), [25_400, 12_700]);
-  assert.deepEqual(imageSizeUm([300, 150], 300, 500_000), [12_700, 6_350]);
-  assert.deepEqual(imageSizeUm([300, 150], 300, 2_540_000), [64_516, 32_258]);
+  assert.deepEqual(imageSizeNm([300, 150], 300, 1_000_000), [25_400_000, 12_700_000]);
+  assert.deepEqual(imageSizeNm([96, 48], 96, 1_000_000), [25_400_000, 12_700_000]);
+  assert.deepEqual(imageSizeNm([300, 150], 300, 500_000), [12_700_000, 6_350_000]);
+  assert.deepEqual(imageSizeNm([300, 150], 300, 2_540_000), [64_516_000, 32_258_000]);
 });
 
 test("the scale a width or a height asks for", () => {
-  assert.equal(scaleForWidthUm([300, 150], 300, 12_700), 500_000);
-  assert.equal(scaleForHeightUm([300, 150], 300, 12_700), 1_000_000);
-  assert.equal(scaleForHeightUm([300, 150], 300, 25_400), 2_000_000);
+  assert.equal(scaleForWidthNm([300, 150], 300, 12_700_000), 500_000);
+  assert.equal(scaleForHeightNm([300, 150], 300, 12_700_000), 1_000_000);
+  assert.equal(scaleForHeightNm([300, 150], 300, 25_400_000), 2_000_000);
   assert.equal(scalePpmOf("0.254"), 254_000);
   assert.equal(scaleText(254_000), "0.254");
   assert.equal(scaleText(1_000_000), "1");
@@ -69,13 +69,13 @@ test("base64 of bytes, as wxBase64Encode makes it", () => {
 
 test("an image's box is centred on its position, and a click is inside it or its distance away", () => {
   // 60 x 40 px at 254 ppi are 6 x 4 mm; at scale 2 they are 12 x 8
-  assert.deepEqual(imageBoxUm([10_000, 20_000], [60, 40], 254, SCALE_PPM), [7_000, 18_000, 13_000, 22_000]);
-  assert.deepEqual(imageBoxUm([10_000, 20_000], [60, 40], 254, 2 * SCALE_PPM), [4_000, 16_000, 16_000, 24_000]);
-  const box = imageBoxUm([0, 0], [60, 40], 254, SCALE_PPM);
+  assert.deepEqual(imageBoxNm([10_000_000, 20_000_000], [60, 40], 254, SCALE_PPM), [7_000_000, 18_000_000, 13_000_000, 22_000_000]);
+  assert.deepEqual(imageBoxNm([10_000_000, 20_000_000], [60, 40], 254, 2 * SCALE_PPM), [4_000_000, 16_000_000, 16_000_000, 24_000_000]);
+  const box = imageBoxNm([0, 0], [60, 40], 254, SCALE_PPM);
   assert.equal(imageBoxHitDistance(box, 0, 0), 0);
-  assert.equal(imageBoxHitDistance(box, 3_000, 2_000), 0, "on the edge is a hit");
-  assert.equal(imageBoxHitDistance(box, 3_500, 2_000), 500);
-  assert.equal(imageBoxHitDistance(box, 6_000, 6_000), Math.hypot(3_000, 4_000));
+  assert.equal(imageBoxHitDistance(box, 3_000_000, 2_000_000), 0, "on the edge is a hit");
+  assert.equal(imageBoxHitDistance(box, 3_500_000, 2_000_000), 500_000);
+  assert.equal(imageBoxHitDistance(box, 6_000_000, 6_000_000), Math.hypot(3_000_000, 4_000_000));
 });
 
 test("greyscale is the weighted sum wxImage uses, rounded, and leaves the alpha alone", () => {

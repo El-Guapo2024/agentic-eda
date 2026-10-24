@@ -24,10 +24,10 @@ const sheet = (over: Partial<Schematic> = {}): Schematic =>
 const emptyPatch = (): SchMovePatch => ({ symbols: [], power_symbols: [], wires: [], labels: [], texts: [], no_connects: [], bus_entries: [], junctions: [], lines: [], graphics: [], sheets: [] });
 
 test("a held selection commits as one move or drag, with the turns made on the way", () => {
-  assert.equal(heldCmd({ mode: "move", ids: ["R1"], dxUm: 0, dyUm: 0 }), null, "nothing moved, nothing turned: nothing to send");
-  assert.deepEqual(heldCmd({ mode: "move", ids: ["R1", "wire_a"], dxUm: 2540, dyUm: -1270 }), { op: "sch_move", verb: "move", ids: ["R1", "wire_a"], dx: 2540, dy: -1270 });
-  assert.deepEqual(heldCmd({ mode: "drag", ids: ["R1"], dxUm: 1270, dyUm: 0, vertices: { wire_a: [1] } }), { op: "sch_move", verb: "drag", ids: ["R1"], vertices: { wire_a: [1] }, dx: 1270, dy: 0, ortho: true });
-  assert.deepEqual(heldCmd({ mode: "drag", ids: ["R1"], dxUm: 0, dyUm: 0, turns: ["rot_ccw", "mirror_h"], holdUm: [3810, 1270] }, { ortho: false }), {
+  assert.equal(heldCmd({ mode: "move", ids: ["R1"], dxNm: 0, dyNm: 0 }), null, "nothing moved, nothing turned: nothing to send");
+  assert.deepEqual(heldCmd({ mode: "move", ids: ["R1", "wire_a"], dxNm: 2540, dyNm: -1270 }), { op: "sch_move", verb: "move", ids: ["R1", "wire_a"], dx: 2540, dy: -1270 });
+  assert.deepEqual(heldCmd({ mode: "drag", ids: ["R1"], dxNm: 1270, dyNm: 0, vertices: { wire_a: [1] } }), { op: "sch_move", verb: "drag", ids: ["R1"], vertices: { wire_a: [1] }, dx: 1270, dy: 0, ortho: true });
+  assert.deepEqual(heldCmd({ mode: "drag", ids: ["R1"], dxNm: 0, dyNm: 0, turns: ["rot_ccw", "mirror_h"], holdNm: [3810, 1270] }, { ortho: false }), {
     op: "sch_move",
     verb: "drag",
     ids: ["R1"],
@@ -90,9 +90,9 @@ test("a sheet's pins move with it", () => {
 
 test("a preview keeps the net name a wire shows and the stroke and look items already have", () => {
   const sch = sheet({
-    wires: [{ id: "wire_a", net: "VCC", pins: ["R1.1"], pts: [[0, 0], [10, 0]], bus: false, stroke: { width_um: 300, style: "dash" } }],
+    wires: [{ id: "wire_a", net: "VCC", pins: ["R1.1"], pts: [[0, 0], [10, 0]], bus: false, stroke: { width_nm: 300, style: "dash" } }],
     bus_entries: [{ id: "bent_a", at: [0, 0], size: [2, 2], stroke: { style: "dot" } }],
-    junctions: [{ id: "jct_a", at: [5, 0], look: { diameter_um: 900 } }],
+    junctions: [{ id: "jct_a", at: [5, 0], look: { diameter_nm: 900 } }],
   });
   const out = applyPatch(sch, {
     ...emptyPatch(),
@@ -101,9 +101,9 @@ test("a preview keeps the net name a wire shows and the stroke and look items al
     junctions: [{ id: "jct_a", at: [5, 5] }],
   });
   assert.equal(out.wires[0]!.net, "VCC", "the displayed name, not the stored one");
-  assert.deepEqual(out.wires[0]!.stroke, { width_um: 300, style: "dash" });
+  assert.deepEqual(out.wires[0]!.stroke, { width_nm: 300, style: "dash" });
   assert.deepEqual(out.wires[0]!.pts, [[0, 5], [10, 5]]);
   assert.deepEqual(out.bus_entries[0]!.stroke, { style: "dot" });
-  assert.deepEqual(out.junctions![0]!.look, { diameter_um: 900 });
+  assert.deepEqual(out.junctions![0]!.look, { diameter_nm: 900 });
   assert.deepEqual(out.junctions![0]!.at, [5, 5]);
 });

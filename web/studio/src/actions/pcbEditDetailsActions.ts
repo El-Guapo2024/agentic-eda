@@ -45,11 +45,11 @@ export function registerPcbEditDetailsActions(m: Map<string, Handler>, ctx: Swee
   // PCB_POINT_EDITOR::addCorner (Insert; "Create Corner" in the context menu): on the one selected zone, polygon, segment or arc, a corner at the point of its outline
   // nearest the cursor -- the cursor on the grid (`GetCursorPosition()`), where the context menu was opened when it was the menu that asked.
   const target = cornerTarget(state.board, state.selection);
-  const cursor = state.pcbx.menuCursorUm ?? state.cursorUm;
+  const cursor = state.pcbx.menuCursorNm ?? state.cursorNm;
   if (target && cursor) {
     m.set("pcbnew.PointEditor.addCorner", () => {
       if (state.tab !== "pcb") return;
-      const [gx, gy] = snapPoint(cursor.x, cursor.y, state.gridUm);
+      const [gx, gy] = snapPoint(cursor.x, cursor.y, state.gridNm);
       const cmds = addCornerCmds(target, [gx, gy]);
       if (cmds) void api.cmdBatch(cmds);
     });

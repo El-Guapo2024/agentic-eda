@@ -358,7 +358,7 @@ mod tests {
             title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false, extras: Default::default(),
         };
         let mut d = Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(sch(&["R1", "C?"])),
             nets: None,

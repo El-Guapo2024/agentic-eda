@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ir::Um;
+use crate::ir::Nm;
 use crate::{BoardRules, CheckResult, ConstraintModel, NetClass, SolderMaskRules, Stackup, StackupLayer};
 
 /// What Board Setup changed, page by page. Absent in a `design.json` nobody edited rules in.
@@ -85,37 +85,53 @@ pub struct NetClassSettings {
 #[serde(deny_unknown_fields)]
 pub struct Constraints {
     /// `rules.min_clearance`: the smallest gap between copper of different nets, on top of every net class's own.
-    pub min_clearance_um: Um,
+    #[serde(alias = "min_clearance_um", deserialize_with = "crate::units::de")]
+    pub min_clearance_nm: Nm,
     /// `rules.min_connection`: the narrowest copper neck a connection may have.
-    pub min_connection_um: Um,
+    #[serde(alias = "min_connection_um", deserialize_with = "crate::units::de")]
+    pub min_connection_nm: Nm,
     /// `rules.min_track_width`.
-    pub min_track_width_um: Um,
+    #[serde(alias = "min_track_width_um", deserialize_with = "crate::units::de")]
+    pub min_track_width_nm: Nm,
     /// `rules.min_via_annular_width`.
-    pub min_annular_width_um: Um,
+    #[serde(alias = "min_annular_width_um", deserialize_with = "crate::units::de")]
+    pub min_annular_width_nm: Nm,
     /// `rules.min_via_diameter`.
-    pub min_via_diameter_um: Um,
+    #[serde(alias = "min_via_diameter_um", deserialize_with = "crate::units::de")]
+    pub min_via_diameter_nm: Nm,
     /// `rules.min_through_hole_diameter`.
-    pub min_through_hole_um: Um,
+    #[serde(alias = "min_through_hole_um", deserialize_with = "crate::units::de")]
+    pub min_through_hole_nm: Nm,
     /// `rules.min_microvia_diameter`.
-    pub min_microvia_diameter_um: Um,
+    #[serde(alias = "min_microvia_diameter_um", deserialize_with = "crate::units::de")]
+    pub min_microvia_diameter_nm: Nm,
     /// `rules.min_microvia_drill`.
-    pub min_microvia_drill_um: Um,
+    #[serde(alias = "min_microvia_drill_um", deserialize_with = "crate::units::de")]
+    pub min_microvia_drill_nm: Nm,
     /// `rules.min_hole_to_hole`.
-    pub min_hole_to_hole_um: Um,
+    #[serde(alias = "min_hole_to_hole_um", deserialize_with = "crate::units::de")]
+    pub min_hole_to_hole_nm: Nm,
     /// `rules.min_hole_clearance`: copper to a drilled hole.
-    pub min_hole_clearance_um: Um,
+    #[serde(alias = "min_hole_clearance_um", deserialize_with = "crate::units::de")]
+    pub min_hole_clearance_nm: Nm,
     /// `rules.min_copper_edge_clearance`: copper to the board edge.
-    pub min_copper_edge_clearance_um: Um,
+    #[serde(alias = "min_copper_edge_clearance_um", deserialize_with = "crate::units::de")]
+    pub min_copper_edge_clearance_nm: Nm,
     /// `rules.min_silk_clearance`.
-    pub min_silk_clearance_um: Um,
+    #[serde(alias = "min_silk_clearance_um", deserialize_with = "crate::units::de")]
+    pub min_silk_clearance_nm: Nm,
     /// `rules.min_groove_width`.
-    pub min_groove_width_um: Um,
+    #[serde(alias = "min_groove_width_um", deserialize_with = "crate::units::de")]
+    pub min_groove_width_nm: Nm,
     /// `rules.min_text_height`: the smallest silkscreen text.
-    pub min_silk_text_height_um: Um,
+    #[serde(alias = "min_silk_text_height_um", deserialize_with = "crate::units::de")]
+    pub min_silk_text_height_nm: Nm,
     /// `rules.min_text_thickness`.
-    pub min_silk_text_thickness_um: Um,
+    #[serde(alias = "min_silk_text_thickness_um", deserialize_with = "crate::units::de")]
+    pub min_silk_text_thickness_nm: Nm,
     /// `rules.max_error`: how closely arcs are approximated by line segments.
-    pub max_error_um: Um,
+    #[serde(alias = "max_error_um", deserialize_with = "crate::units::de")]
+    pub max_error_nm: Nm,
     /// `rules.min_resolved_spokes`: fewer connected thermal spokes than this is a starved thermal.
     pub min_resolved_spokes: u32,
     /// `rules.use_height_for_length_calcs`.
@@ -128,22 +144,22 @@ impl Constraints {
     /// The constraints a board currently has.
     pub fn of(b: &BoardRules) -> Constraints {
         Constraints {
-            min_clearance_um: b.min_clearance_um,
-            min_connection_um: b.min_connection_um,
-            min_track_width_um: b.track_width_min_um,
-            min_annular_width_um: b.annular_width_min_um,
-            min_via_diameter_um: b.via_diameter_min_um,
-            min_through_hole_um: b.via_drill_min_um,
-            min_microvia_diameter_um: b.microvia_diameter_min_um,
-            min_microvia_drill_um: b.microvia_drill_min_um,
-            min_hole_to_hole_um: b.hole_to_hole_min_um,
-            min_hole_clearance_um: b.hole_clearance_um,
-            min_copper_edge_clearance_um: b.copper_edge_clearance_um.unwrap_or(crate::KICAD_EDGE_CLEARANCE_UM),
-            min_silk_clearance_um: b.silk_clearance_um,
-            min_groove_width_um: b.min_groove_width_um,
-            min_silk_text_height_um: b.min_silk_text_height_um,
-            min_silk_text_thickness_um: b.min_silk_text_thickness_um,
-            max_error_um: b.max_error_um,
+            min_clearance_nm: b.min_clearance_nm,
+            min_connection_nm: b.min_connection_nm,
+            min_track_width_nm: b.track_width_min_nm,
+            min_annular_width_nm: b.annular_width_min_nm,
+            min_via_diameter_nm: b.via_diameter_min_nm,
+            min_through_hole_nm: b.via_drill_min_nm,
+            min_microvia_diameter_nm: b.microvia_diameter_min_nm,
+            min_microvia_drill_nm: b.microvia_drill_min_nm,
+            min_hole_to_hole_nm: b.hole_to_hole_min_nm,
+            min_hole_clearance_nm: b.hole_clearance_nm,
+            min_copper_edge_clearance_nm: b.copper_edge_clearance_nm.unwrap_or(crate::KICAD_EDGE_CLEARANCE_NM),
+            min_silk_clearance_nm: b.silk_clearance_nm,
+            min_groove_width_nm: b.min_groove_width_nm,
+            min_silk_text_height_nm: b.min_silk_text_height_nm,
+            min_silk_text_thickness_nm: b.min_silk_text_thickness_nm,
+            max_error_nm: b.max_error_nm,
             min_resolved_spokes: b.min_resolved_spokes,
             use_height_for_length_calcs: b.use_height_for_length_calcs,
             zones_allow_external_fillets: b.zones_allow_external_fillets,
@@ -151,22 +167,22 @@ impl Constraints {
     }
 
     fn write_to(&self, b: &mut BoardRules) {
-        b.min_clearance_um = self.min_clearance_um;
-        b.min_connection_um = self.min_connection_um;
-        b.track_width_min_um = self.min_track_width_um;
-        b.annular_width_min_um = self.min_annular_width_um;
-        b.via_diameter_min_um = self.min_via_diameter_um;
-        b.via_drill_min_um = self.min_through_hole_um;
-        b.microvia_diameter_min_um = self.min_microvia_diameter_um;
-        b.microvia_drill_min_um = self.min_microvia_drill_um;
-        b.hole_to_hole_min_um = self.min_hole_to_hole_um;
-        b.hole_clearance_um = self.min_hole_clearance_um;
-        b.copper_edge_clearance_um = Some(self.min_copper_edge_clearance_um);
-        b.silk_clearance_um = self.min_silk_clearance_um;
-        b.min_groove_width_um = self.min_groove_width_um;
-        b.min_silk_text_height_um = self.min_silk_text_height_um;
-        b.min_silk_text_thickness_um = self.min_silk_text_thickness_um;
-        b.max_error_um = self.max_error_um;
+        b.min_clearance_nm = self.min_clearance_nm;
+        b.min_connection_nm = self.min_connection_nm;
+        b.track_width_min_nm = self.min_track_width_nm;
+        b.annular_width_min_nm = self.min_annular_width_nm;
+        b.via_diameter_min_nm = self.min_via_diameter_nm;
+        b.via_drill_min_nm = self.min_through_hole_nm;
+        b.microvia_diameter_min_nm = self.min_microvia_diameter_nm;
+        b.microvia_drill_min_nm = self.min_microvia_drill_nm;
+        b.hole_to_hole_min_nm = self.min_hole_to_hole_nm;
+        b.hole_clearance_nm = self.min_hole_clearance_nm;
+        b.copper_edge_clearance_nm = Some(self.min_copper_edge_clearance_nm);
+        b.silk_clearance_nm = self.min_silk_clearance_nm;
+        b.min_groove_width_nm = self.min_groove_width_nm;
+        b.min_silk_text_height_nm = self.min_silk_text_height_nm;
+        b.min_silk_text_thickness_nm = self.min_silk_text_thickness_nm;
+        b.max_error_nm = self.max_error_nm;
         b.min_resolved_spokes = self.min_resolved_spokes;
         b.use_height_for_length_calcs = self.use_height_for_length_calcs;
         b.zones_allow_external_fillets = self.zones_allow_external_fillets;
@@ -180,28 +196,28 @@ impl Constraints {
     /// runs: the first value out of range, as `(setting name, message)`. The names are the `.kicad_pro` keys.
     pub fn validate(&self) -> Vec<(&'static str, String)> {
         let mut out = Vec::new();
-        let mut range = |name: &'static str, v: Um, min_um: Um, max_um: Um| {
-            if v < min_um || v > max_um {
-                out.push((name, format!("Value must be between {} and {} mm.", fmt_mm(min_um), fmt_mm(max_um))));
+        let mut range = |name: &'static str, v: Nm, min_nm: Nm, max_nm: Nm| {
+            if v < min_nm || v > max_nm {
+                out.push((name, format!("Value must be between {} and {} mm.", fmt_mm(min_nm), fmt_mm(max_nm))));
             }
         };
-        range("min_clearance", self.min_clearance_um, 0, 25_000);
-        range("min_connection", self.min_connection_um, 0, 100_000);
-        range("min_track_width", self.min_track_width_um, 0, 25_000);
-        range("min_via_annular_width", self.min_annular_width_um, 0, 25_000);
-        range("min_via_diameter", self.min_via_diameter_um, 0, 25_000);
-        range("min_through_hole_diameter", self.min_through_hole_um, 0, 25_000);
-        range("min_microvia_diameter", self.min_microvia_diameter_um, 0, 10_000);
-        range("min_microvia_drill", self.min_microvia_drill_um, 0, 10_000);
-        range("min_hole_to_hole", self.min_hole_to_hole_um, 0, 10_000);
-        range("min_hole_clearance", self.min_hole_clearance_um, 0, 100_000);
-        range("min_silk_clearance", self.min_silk_clearance_um, -10_000, 100_000);
-        range("min_groove_width", self.min_groove_width_um, 0, 25_000);
-        range("min_text_height", self.min_silk_text_height_um, 0, 100_000);
-        range("min_text_thickness", self.min_silk_text_thickness_um, 0, 25_000);
-        // `-0.01` is the flag for the pre-6.0 way of measuring the edge; a µm integer cannot hold -0.01 mm.
-        range("min_copper_edge_clearance", self.min_copper_edge_clearance_um, -10, 25_000);
-        range("max_error", self.max_error_um, 1, 1_000);
+        range("min_clearance", self.min_clearance_nm, 0, 25_000_000);
+        range("min_connection", self.min_connection_nm, 0, 100_000_000);
+        range("min_track_width", self.min_track_width_nm, 0, 25_000_000);
+        range("min_via_annular_width", self.min_annular_width_nm, 0, 25_000_000);
+        range("min_via_diameter", self.min_via_diameter_nm, 0, 25_000_000);
+        range("min_through_hole_diameter", self.min_through_hole_nm, 0, 25_000_000);
+        range("min_microvia_diameter", self.min_microvia_diameter_nm, 0, 10_000_000);
+        range("min_microvia_drill", self.min_microvia_drill_nm, 0, 10_000_000);
+        range("min_hole_to_hole", self.min_hole_to_hole_nm, 0, 10_000_000);
+        range("min_hole_clearance", self.min_hole_clearance_nm, 0, 100_000_000);
+        range("min_silk_clearance", self.min_silk_clearance_nm, -10_000_000, 100_000_000);
+        range("min_groove_width", self.min_groove_width_nm, 0, 25_000_000);
+        range("min_text_height", self.min_silk_text_height_nm, 0, 100_000_000);
+        range("min_text_thickness", self.min_silk_text_thickness_nm, 0, 25_000_000);
+        // `-0.01` mm is the flag for the pre-6.0 way of measuring the edge.
+        range("min_copper_edge_clearance", self.min_copper_edge_clearance_nm, -10_000, 25_000_000);
+        range("max_error", self.max_error_nm, 1000, 1_000_000);
         if self.min_resolved_spokes > 99 {
             out.push(("min_resolved_spokes", "Value must be between 0 and 99.".into()));
         }
@@ -209,9 +225,9 @@ impl Constraints {
     }
 }
 
-/// A length in µm as the millimetres a message shows.
-fn fmt_mm(um: Um) -> String {
-    let s = format!("{:.4}", um as f64 / 1000.0);
+/// A length as the millimetres a message shows.
+fn fmt_mm(nm: Nm) -> String {
+    let s = format!("{:.4}", crate::units::to_mm(nm));
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() || s == "-0" { "0".into() } else { s.to_string() }
 }
@@ -223,15 +239,15 @@ pub type MaskPaste = SolderMaskRules;
 /// `ValidateDesignRules`' solder mask and paste ranges: `(setting name, message)` for each value out of range.
 pub fn validate_mask_paste(m: &MaskPaste) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
-    let mut range = |name: &'static str, v: Um, min_um: Um, max_um: Um| {
-        if v < min_um || v > max_um {
-            out.push((name, format!("Value must be between {} and {} mm.", fmt_mm(min_um), fmt_mm(max_um))));
+    let mut range = |name: &'static str, v: Nm, min_nm: Nm, max_nm: Nm| {
+        if v < min_nm || v > max_nm {
+            out.push((name, format!("Value must be between {} and {} mm.", fmt_mm(min_nm), fmt_mm(max_nm))));
         }
     };
-    range("solder_mask_expansion", m.expansion_um, -25_000, 25_000);
-    range("solder_mask_min_width", m.min_width_um, 0, 25_000);
-    range("solder_mask_to_copper_clearance", m.to_copper_clearance_um, 0, 25_000);
-    range("solder_paste_margin", m.paste_margin_um, -25_000, 25_000);
+    range("solder_mask_expansion", m.expansion_nm, -25_000_000, 25_000_000);
+    range("solder_mask_min_width", m.min_width_nm, 0, 25_000_000);
+    range("solder_mask_to_copper_clearance", m.to_copper_clearance_nm, 0, 25_000_000);
+    range("solder_paste_margin", m.paste_margin_nm, -25_000_000, 25_000_000);
     if !m.paste_margin_ratio.is_finite() || !(-1.0..=1.0).contains(&m.paste_margin_ratio) {
         out.push(("solder_paste_margin_ratio", "Value must be between -1.000 and 1.000.".into()));
     }
@@ -301,13 +317,17 @@ pub fn effective_text_variables(overlay: Option<&RulesOverlay>, seed: &BTreeMap<
 #[serde(deny_unknown_fields)]
 pub struct LayerClassDefaults {
     /// `defaults.<class>_line_width`.
-    pub line_width_um: Um,
+    #[serde(alias = "line_width_um", deserialize_with = "crate::units::de")]
+    pub line_width_nm: Nm,
     /// `defaults.<class>_text_size_h`.
-    pub text_width_um: Um,
+    #[serde(alias = "text_width_um", deserialize_with = "crate::units::de")]
+    pub text_width_nm: Nm,
     /// `defaults.<class>_text_size_v`.
-    pub text_height_um: Um,
+    #[serde(alias = "text_height_um", deserialize_with = "crate::units::de")]
+    pub text_height_nm: Nm,
     /// `defaults.<class>_text_thickness`.
-    pub text_thickness_um: Um,
+    #[serde(alias = "text_thickness_um", deserialize_with = "crate::units::de")]
+    pub text_thickness_nm: Nm,
     /// `defaults.<class>_text_italic`.
     pub italic: bool,
     /// `defaults.<class>_text_upright` (keep upright).
@@ -323,9 +343,11 @@ pub struct TextGraphicsDefaults {
     pub silk: LayerClassDefaults,
     pub copper: LayerClassDefaults,
     /// `defaults.board_outline_line_width`.
-    pub edge_cuts_line_width_um: Um,
+    #[serde(alias = "edge_cuts_line_width_um", deserialize_with = "crate::units::de")]
+    pub edge_cuts_line_width_nm: Nm,
     /// `defaults.courtyard_line_width`.
-    pub courtyard_line_width_um: Um,
+    #[serde(alias = "courtyard_line_width_um", deserialize_with = "crate::units::de")]
+    pub courtyard_line_width_nm: Nm,
     pub fab: LayerClassDefaults,
     pub others: LayerClassDefaults,
 }
@@ -334,14 +356,14 @@ impl Default for TextGraphicsDefaults {
     /// `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS()`: silk 0.1 / 1x1 / 0.1, copper 0.2 / 1.5x1.5 / 0.3,
     /// outline 0.05, courtyard 0.05, fab and others 0.1 / 1x1 / 0.15.
     fn default() -> Self {
-        let class = |line, size, thickness| LayerClassDefaults { line_width_um: line, text_width_um: size, text_height_um: size, text_thickness_um: thickness, italic: false, upright: true };
+        let class = |line, size, thickness| LayerClassDefaults { line_width_nm: line, text_width_nm: size, text_height_nm: size, text_thickness_nm: thickness, italic: false, upright: true };
         TextGraphicsDefaults {
-            silk: class(100, 1000, 100),
-            copper: class(200, 1500, 300),
-            edge_cuts_line_width_um: 50,
-            courtyard_line_width_um: 50,
-            fab: class(100, 1000, 150),
-            others: class(100, 1000, 150),
+            silk: class(100_000, 1_000_000, 100_000),
+            copper: class(200_000, 1_500_000, 300_000),
+            edge_cuts_line_width_nm: 50_000,
+            courtyard_line_width_nm: 50_000,
+            fab: class(100_000, 1_000_000, 150_000),
+            others: class(100_000, 1_000_000, 150_000),
         }
     }
 }
@@ -369,10 +391,10 @@ pub fn layer_class(layer: &str) -> LayerClass {
     }
 }
 
-/// `DEFAULT_TEXT_SIZE` and `DEFAULT_TEXT_WIDTH` (`include/board_design_settings.h`), in µm: the text of the edges and courtyard classes, which have a line
+/// `DEFAULT_TEXT_SIZE` and `DEFAULT_TEXT_WIDTH` (`include/board_design_settings.h`), in nm: the text of the edges and courtyard classes, which have a line
 /// thickness in Board Setup but no text cells.
-pub const DEFAULT_TEXT_SIZE_UM: Um = 1_000;
-pub const DEFAULT_TEXT_WIDTH_UM: Um = 150;
+pub const DEFAULT_TEXT_SIZE_NM: Nm = 1_000_000;
+pub const DEFAULT_TEXT_WIDTH_NM: Nm = 150_000;
 
 impl TextGraphicsDefaults {
     /// The text row of a class, `None` for the two classes that have only a line thickness.
@@ -387,25 +409,25 @@ impl TextGraphicsDefaults {
     }
 
     /// `BOARD_DESIGN_SETTINGS::GetLineThickness( aLayer )`: what a new line, rectangle, circle, arc, polygon or dimension on `layer` starts with.
-    pub fn line_thickness_um(&self, layer: &str) -> Um {
+    pub fn line_thickness_nm(&self, layer: &str) -> Nm {
         match layer_class(layer) {
-            LayerClass::Silk => self.silk.line_width_um,
-            LayerClass::Copper => self.copper.line_width_um,
-            LayerClass::Edges => self.edge_cuts_line_width_um,
-            LayerClass::Courtyard => self.courtyard_line_width_um,
-            LayerClass::Fab => self.fab.line_width_um,
-            LayerClass::Others => self.others.line_width_um,
+            LayerClass::Silk => self.silk.line_width_nm,
+            LayerClass::Copper => self.copper.line_width_nm,
+            LayerClass::Edges => self.edge_cuts_line_width_nm,
+            LayerClass::Courtyard => self.courtyard_line_width_nm,
+            LayerClass::Fab => self.fab.line_width_nm,
+            LayerClass::Others => self.others.line_width_nm,
         }
     }
 
     /// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )` as `(width, height)`.
-    pub fn text_size_um(&self, layer: &str) -> (Um, Um) {
-        self.text_row(layer_class(layer)).map_or((DEFAULT_TEXT_SIZE_UM, DEFAULT_TEXT_SIZE_UM), |c| (c.text_width_um, c.text_height_um))
+    pub fn text_size_nm(&self, layer: &str) -> (Nm, Nm) {
+        self.text_row(layer_class(layer)).map_or((DEFAULT_TEXT_SIZE_NM, DEFAULT_TEXT_SIZE_NM), |c| (c.text_width_nm, c.text_height_nm))
     }
 
     /// `BOARD_DESIGN_SETTINGS::GetTextThickness( aLayer )`.
-    pub fn text_thickness_um(&self, layer: &str) -> Um {
-        self.text_row(layer_class(layer)).map_or(DEFAULT_TEXT_WIDTH_UM, |c| c.text_thickness_um)
+    pub fn text_thickness_nm(&self, layer: &str) -> Nm {
+        self.text_row(layer_class(layer)).map_or(DEFAULT_TEXT_WIDTH_NM, |c| c.text_thickness_nm)
     }
 
     /// `BOARD_DESIGN_SETTINGS::GetTextItalic( aLayer )` and `GetTextUpright( aLayer )`.
@@ -423,28 +445,28 @@ impl TextGraphicsDefaults {
     /// readable, at most a quarter of the text size.
     pub fn validate(&self) -> Vec<(&'static str, String)> {
         let mut out = Vec::new();
-        let line = |label: &'static str, w: Um, out: &mut Vec<(&'static str, String)>| {
-            if !(5..=100_000).contains(&w) {
+        let line = |label: &'static str, w: Nm, out: &mut Vec<(&'static str, String)>| {
+            if !(5000..=100_000_000).contains(&w) {
                 out.push((label, "Incorrect line width. It must be between 0.005 and 100 mm.".into()));
             }
         };
         let text = |label: &'static str, c: &LayerClassDefaults, out: &mut Vec<(&'static str, String)>| {
-            line(label, c.line_width_um, out);
-            if !(1..=250_000).contains(&c.text_width_um) || !(1..=250_000).contains(&c.text_height_um) {
+            line(label, c.line_width_nm, out);
+            if !(1000..=250_000_000).contains(&c.text_width_nm) || !(1000..=250_000_000).contains(&c.text_height_nm) {
                 out.push((label, "Text size is incorrect. Size must be between 0.001 and 250 mm.".into()));
             } else {
-                let max_thickness = (c.text_width_um.min(c.text_height_um) / 4).min(100_000);
-                if c.text_thickness_um > max_thickness {
+                let max_thickness = (c.text_width_nm.min(c.text_height_nm) / 4).min(100_000_000);
+                if c.text_thickness_nm > max_thickness {
                     out.push((label, format!("Text thickness is too large. It must be at most {} mm.", fmt_mm(max_thickness))));
-                } else if c.text_thickness_um < 5 {
+                } else if c.text_thickness_nm < 5_000 {
                     out.push((label, "Text thickness is too small. It must be at least 0.005 mm.".into()));
                 }
             }
         };
         text("Silk Layers", &self.silk, &mut out);
         text("Copper Layers", &self.copper, &mut out);
-        line("Edge Cuts", self.edge_cuts_line_width_um, &mut out);
-        line("Courtyards", self.courtyard_line_width_um, &mut out);
+        line("Edge Cuts", self.edge_cuts_line_width_nm, &mut out);
+        line("Courtyards", self.courtyard_line_width_nm, &mut out);
         text("Fab Layers", &self.fab, &mut out);
         text("Other Layers", &self.others, &mut out);
         out
@@ -471,14 +493,14 @@ pub fn copper_layer_names(n: usize) -> Vec<String> {
 }
 
 /// `BOARD_STACKUP::BuildDefaultStackupList` (`pcbnew/board_stackup_manager/board_stackup.cpp`) for a board of
-/// `copper_layers` and `board_thickness_um`: silkscreen, paste and mask on each face, the copper layers with a
+/// `copper_layers` and `board_thickness_nm`: silkscreen, paste and mask on each face, the copper layers with a
 /// dielectric (alternating core and prepreg, FR4) between each pair, the dielectrics sharing what is left of the
 /// thickness after the copper (0.035 mm a layer) and the two masks (0.01 mm each).
-pub fn default_stackup(copper_layers: usize, board_thickness_um: Um) -> Stackup {
+pub fn default_stackup(copper_layers: usize, board_thickness_nm: Nm) -> Stackup {
     const COPPER_MM: f64 = 0.035;
     const MASK_MM: f64 = 0.01;
     let n = copper_layers.max(2);
-    let board_mm = board_thickness_um as f64 / 1000.0;
+    let board_mm = crate::units::to_mm(board_thickness_nm);
     let dielectric_mm = ((board_mm - COPPER_MM * n as f64 - MASK_MM * 2.0) / (n as f64 - 1.0).max(1.0)).max(0.0);
     let layer = |name: &str, kind: &str, material: Option<&str>, thickness: Option<f64>, epsilon: Option<f64>, tangent: Option<f64>| StackupLayer {
         name: name.into(),
@@ -510,22 +532,22 @@ pub fn default_stackup(copper_layers: usize, board_thickness_um: Um) -> Stackup 
 }
 
 /// The board thickness a stackup adds up to (`BOARD_STACKUP::BuildBoardThicknessFromStackup`): every layer's
-/// thickness, in µm.
-pub fn stackup_thickness_um(s: &Stackup) -> Um {
-    (s.layers.iter().filter_map(|l| l.thickness_mm).sum::<f64>() * 1000.0).round() as Um
+/// thickness, in nm.
+pub fn stackup_thickness_nm(s: &Stackup) -> Nm {
+    crate::units::mm(s.layers.iter().filter_map(|l| l.thickness_mm).sum::<f64>())
 }
 
 impl StackupSettings {
-    /// The default stackup for `copper_layers` and `board_thickness_um`.
-    pub fn new(copper_layers: usize, board_thickness_um: Um) -> StackupSettings {
-        StackupSettings { copper_layers: copper_layers.clamp(2, 32) as u8, stackup: default_stackup(copper_layers, board_thickness_um) }
+    /// The default stackup for `copper_layers` and `board_thickness_nm`.
+    pub fn new(copper_layers: usize, board_thickness_nm: Nm) -> StackupSettings {
+        StackupSettings { copper_layers: copper_layers.clamp(2, 32) as u8, stackup: default_stackup(copper_layers, board_thickness_nm) }
     }
 
     /// A stackup for a different copper layer count, keeping what this one says about every layer the new one
     /// still has (`BOARD_STACKUP::SynchronizeWithBoard`): a copper or dielectric layer that exists in both keeps its
     /// thickness and material, a new one gets the default. The board thickness is kept.
     pub fn with_copper_layers(&self, copper_layers: usize) -> StackupSettings {
-        let mut next = StackupSettings::new(copper_layers, stackup_thickness_um(&self.stackup).max(1));
+        let mut next = StackupSettings::new(copper_layers, stackup_thickness_nm(&self.stackup).max(1));
         for l in next.stackup.layers.iter_mut() {
             if let Some(old) = self.stackup.layers.iter().find(|o| o.name == l.name && o.kind == l.kind) {
                 *l = old.clone();
@@ -598,7 +620,7 @@ impl RulesOverlay {
         }
         if let Some(s) = &self.stackup {
             model.board.layers = copper_layer_names(s.copper_layers as usize);
-            model.board.board_thickness_um = stackup_thickness_um(&s.stackup);
+            model.board.board_thickness_nm = stackup_thickness_nm(&s.stackup);
             model.stackup = Some(s.stackup.clone());
         }
         if let Some(l) = &self.board_layers {
@@ -632,7 +654,7 @@ impl RulesOverlay {
 }
 
 /// `MAXIMUM_CLEARANCE`: 500 mm.
-pub const MAXIMUM_CLEARANCE_UM: Um = 500_000;
+pub const MAXIMUM_CLEARANCE_NM: Nm = 500_000_000;
 
 /// Validate a Net Classes page: the names and the sizes.
 ///
@@ -658,17 +680,17 @@ pub fn validate_net_classes(s: &NetClassSettings) -> Result<(), CheckResult> {
         for (what, v) in [("track width", c.track_width), ("clearance", c.clearance), ("via diameter", c.via_diameter), ("via drill", c.via_drill), ("microvia diameter", c.microvia_diameter), ("microvia drill", c.microvia_drill), ("differential pair width", c.diff_pair_width), ("differential pair gap", c.diff_pair_gap), ("differential pair via gap", c.diff_pair_via_gap)] {
             if let Some(v) = v {
                 if v < 0 || (v == 0 && what != "clearance" && what != "differential pair gap" && what != "differential pair via gap") {
-                    return bad(&c.name, format!("{what} is {v} um; sizes cannot be negative, and only a clearance can be zero"));
+                    return bad(&c.name, format!("{what} is {v} nm; sizes cannot be negative, and only a clearance can be zero"));
                 }
             }
         }
         // `MAXIMUM_CLEARANCE` (board_design_settings.h): a larger clearance overflows the integer maths in KiCad's engines.
-        if c.clearance.is_some_and(|v| v > MAXIMUM_CLEARANCE_UM) {
-            return bad(&c.name, format!("clearance is larger than {} mm", MAXIMUM_CLEARANCE_UM / 1000));
+        if c.clearance.is_some_and(|v| v > MAXIMUM_CLEARANCE_NM) {
+            return bad(&c.name, format!("clearance is larger than {} mm", MAXIMUM_CLEARANCE_NM / crate::units::NM_PER_MM));
         }
         if let (Some(d), Some(drill)) = (c.via_diameter, c.via_drill) {
             if drill >= d {
-                return bad(&c.name, format!("via drill {drill} um is not smaller than the {d} um via, which leaves no annular ring"));
+                return bad(&c.name, format!("via drill {drill} nm is not smaller than the {d} nm via, which leaves no annular ring"));
             }
         }
     }
@@ -703,26 +725,26 @@ mod tests {
     use super::*;
 
     fn class(name: &str, nets: &[&str]) -> NetClass {
-        NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(300), clearance: Some(250), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
+        NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(300_000), clearance: Some(250_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
     }
 
     #[test]
     fn a_default_stackup_adds_up_to_the_board_thickness_with_copper_and_dielectrics_in_order() {
         for n in [2usize, 4, 6] {
-            let s = default_stackup(n, 1_600);
+            let s = default_stackup(n, 1_600_000);
             let copper: Vec<&str> = s.layers.iter().filter(|l| l.kind.as_deref() == Some("copper")).map(|l| l.name.as_str()).collect();
             assert_eq!(copper, copper_layer_names(n).iter().map(String::as_str).collect::<Vec<_>>());
             assert_eq!(s.layers.iter().filter(|l| matches!(l.kind.as_deref(), Some("core" | "prepreg"))).count(), n - 1, "one dielectric between each pair of copper layers");
-            assert!((stackup_thickness_um(&s) - 1_600).abs() <= 2, "{n} layers add up to {}", stackup_thickness_um(&s));
+            assert_eq!(stackup_thickness_nm(&s), 1_600_000, "{n} layers add up to {}", stackup_thickness_nm(&s));
         }
-        let four = default_stackup(4, 1_600);
+        let four = default_stackup(4, 1_600_000);
         let kinds: Vec<&str> = four.layers.iter().filter_map(|l| l.kind.as_deref()).filter(|k| matches!(*k, "core" | "prepreg")).collect();
         assert_eq!(kinds, vec!["core", "prepreg", "core"], "KiCad alternates core and prepreg, starting with core");
     }
 
     #[test]
     fn changing_the_copper_layer_count_keeps_the_thickness_of_the_layers_that_remain() {
-        let mut two = StackupSettings::new(2, 1_600);
+        let mut two = StackupSettings::new(2, 1_600_000);
         two.stackup.layers.iter_mut().find(|l| l.name == "F.Cu").unwrap().thickness_mm = Some(0.07);
         let four = two.with_copper_layers(4);
         assert_eq!(four.copper_layers, 4);
@@ -739,11 +761,11 @@ mod tests {
     /// `boardSetupRules.test.ts` fails when the TypeScript does not produce what the file says.
     #[test]
     fn the_web_pages_default_stackups_are_the_ones_computed_here() {
-        let defaults: Vec<serde_json::Value> = [(2usize, 1_600), (4, 1_600), (4, 1_000), (6, 1_600), (8, 2_400)]
+        let defaults: Vec<serde_json::Value> = [(2usize, 1_600_000), (4, 1_600_000), (4, 1_000_000), (6, 1_600_000), (8, 2_400_000)]
             .iter()
-            .map(|&(n, t)| serde_json::json!({ "copper_layers": n, "board_thickness_um": t, "stackup": default_stackup(n, t) }))
+            .map(|&(n, t)| serde_json::json!({ "copper_layers": n, "board_thickness_nm": t, "stackup": default_stackup(n, t) }))
             .collect();
-        let mut edited = StackupSettings::new(4, 1_600);
+        let mut edited = StackupSettings::new(4, 1_600_000);
         for (name, t) in [("F.Cu", 0.07), ("dielectric 1", 0.2), ("B.Mask", 0.02)] {
             edited.stackup.layers.iter_mut().find(|l| l.name == name).unwrap().thickness_mm = Some(t);
         }
@@ -773,16 +795,16 @@ mod tests {
         assert_eq!(model.board, before, "an empty overlay changes nothing");
 
         let overlay = RulesOverlay {
-            constraints: Some(Constraints { min_clearance_um: 300, ..Constraints::of(&before) }),
-            net_classes: Some(NetClassSettings { default: NetClass { track_width: Some(250), clearance: Some(180), ..net_class_settings_of(&before).default }, classes: vec![class("signal", &["SPI_*", "I2C_?"])] }),
+            constraints: Some(Constraints { min_clearance_nm: 300_000, ..Constraints::of(&before) }),
+            net_classes: Some(NetClassSettings { default: NetClass { track_width: Some(250_000), clearance: Some(180_000), ..net_class_settings_of(&before).default }, classes: vec![class("signal", &["SPI_*", "I2C_?"])] }),
             ..Default::default()
         };
         overlay.apply(&mut model);
-        assert_eq!(model.board.min_clearance_um, 300);
+        assert_eq!(model.board.min_clearance_nm, 300_000);
         assert!(model.board.constraints_explicit, "the floors are exact once they are set");
-        assert_eq!((model.board.track_width, model.board.clearance), (250, 180), "the Default class's sizes are the board's defaults");
+        assert_eq!((model.board.track_width, model.board.clearance), (250_000, 180_000), "the Default class's sizes are the board's defaults");
         assert_eq!(model.board.net_classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["signal"], "the classes are replaced wholesale");
-        assert_eq!(model.board.annular_width_min_um, before.annular_width_min_um, "a constraint the page does not change keeps its value");
+        assert_eq!(model.board.annular_width_min_nm, before.annular_width_min_nm, "a constraint the page does not change keeps its value");
         assert_eq!(model.board.via_drill, before.via_drill, "a Default size the page leaves unset keeps the board's");
     }
 
@@ -790,36 +812,36 @@ mod tests {
     fn constraints_are_range_checked_like_validate_design_rules() {
         let ok = Constraints::of(&BoardRules::default());
         assert!(ok.validate().is_empty(), "{:?}", ok.validate());
-        let bad = Constraints { min_clearance_um: 30_000, min_resolved_spokes: 100, max_error_um: 0, ..ok.clone() };
+        let bad = Constraints { min_clearance_nm: 30_000_000, min_resolved_spokes: 100, max_error_nm: 0, ..ok.clone() };
         let names: Vec<&str> = bad.validate().iter().map(|(n, _)| *n).collect();
         assert_eq!(names, vec!["min_clearance", "max_error", "min_resolved_spokes"]);
         assert!(bad.validate()[0].1.contains("between 0 and 25"), "{:?}", bad.validate()[0]);
-        assert!(Constraints { min_silk_clearance_um: -5_000, ..ok }.validate().is_empty(), "the silk clearance may be negative, down to -10 mm");
+        assert!(Constraints { min_silk_clearance_nm: -5_000_000, ..ok }.validate().is_empty(), "the silk clearance may be negative, down to -10 mm");
     }
 
     #[test]
     fn a_new_item_takes_the_default_of_its_layer_class() {
         let mut t = TextGraphicsDefaults::default();
-        t.silk = LayerClassDefaults { line_width_um: 120, text_width_um: 1_200, text_height_um: 1_300, text_thickness_um: 180, italic: true, upright: false };
-        t.edge_cuts_line_width_um = 70;
-        t.courtyard_line_width_um = 60;
+        t.silk = LayerClassDefaults { line_width_nm: 120_000, text_width_nm: 1_200_000, text_height_nm: 1_300_000, text_thickness_nm: 180_000, italic: true, upright: false };
+        t.edge_cuts_line_width_nm = 70_000;
+        t.courtyard_line_width_nm = 60_000;
         for (layer, class) in [("F.SilkS", LayerClass::Silk), ("B.SilkS", LayerClass::Silk), ("F.Cu", LayerClass::Copper), ("In3.Cu", LayerClass::Copper), ("Edge.Cuts", LayerClass::Edges), ("B.CrtYd", LayerClass::Courtyard), ("F.Fab", LayerClass::Fab), ("Dwgs.User", LayerClass::Others), ("User.7", LayerClass::Others), ("F.Mask", LayerClass::Others)] {
             assert_eq!(layer_class(layer), class, "{layer}");
         }
-        assert_eq!((t.line_thickness_um("F.SilkS"), t.line_thickness_um("B.SilkS")), (120, 120));
-        assert_eq!((t.line_thickness_um("Edge.Cuts"), t.line_thickness_um("F.CrtYd"), t.line_thickness_um("F.Cu"), t.line_thickness_um("Dwgs.User")), (70, 60, 200, 100));
-        assert_eq!((t.text_size_um("F.SilkS"), t.text_thickness_um("F.SilkS"), t.text_italic_upright("F.SilkS")), ((1_200, 1_300), 180, (true, false)));
-        assert_eq!((t.text_size_um("B.Cu"), t.text_thickness_um("In1.Cu")), ((1_500, 1_500), 300));
-        assert_eq!((t.text_size_um("Edge.Cuts"), t.text_thickness_um("F.CrtYd")), ((DEFAULT_TEXT_SIZE_UM, DEFAULT_TEXT_SIZE_UM), DEFAULT_TEXT_WIDTH_UM), "the classes that have no text cells keep KiCad's own constants");
+        assert_eq!((t.line_thickness_nm("F.SilkS"), t.line_thickness_nm("B.SilkS")), (120_000, 120_000));
+        assert_eq!((t.line_thickness_nm("Edge.Cuts"), t.line_thickness_nm("F.CrtYd"), t.line_thickness_nm("F.Cu"), t.line_thickness_nm("Dwgs.User")), (70_000, 60_000, 200_000, 100_000));
+        assert_eq!((t.text_size_nm("F.SilkS"), t.text_thickness_nm("F.SilkS"), t.text_italic_upright("F.SilkS")), ((1_200_000, 1_300_000), 180_000, (true, false)));
+        assert_eq!((t.text_size_nm("B.Cu"), t.text_thickness_nm("In1.Cu")), ((1_500_000, 1_500_000), 300_000));
+        assert_eq!((t.text_size_nm("Edge.Cuts"), t.text_thickness_nm("F.CrtYd")), ((DEFAULT_TEXT_SIZE_NM, DEFAULT_TEXT_SIZE_NM), DEFAULT_TEXT_WIDTH_NM), "the classes that have no text cells keep KiCad's own constants");
     }
 
     #[test]
     fn text_defaults_follow_the_grids_own_limits() {
         assert!(TextGraphicsDefaults::default().validate().is_empty());
         let mut t = TextGraphicsDefaults::default();
-        t.silk.text_thickness_um = 400; // a quarter of the 1 mm text is 0.25
-        t.copper.line_width_um = 2;
-        t.fab.text_width_um = 300_000;
+        t.silk.text_thickness_nm = 400_000; // a quarter of the 1 mm text is 0.25
+        t.copper.line_width_nm = 2_000;
+        t.fab.text_width_nm = 300_000_000;
         let rows: Vec<&str> = t.validate().iter().map(|(r, _)| *r).collect();
         assert_eq!(rows, vec!["Silk Layers", "Copper Layers", "Fab Layers"], "{:?}", t.validate());
     }
@@ -831,7 +853,7 @@ mod tests {
         for (bad, why) in [
             (vec![class("a", &["X"]), class("a", &["Y"])], "duplicate"),
             (vec![class("Power", &["X"]), class("power", &["Y"])], "duplicate without regard to case"),
-            (vec![NetClass { clearance: Some(500_001), ..class("huge", &["X"]) }], "a clearance over 500 mm"),
+            (vec![NetClass { clearance: Some(500_001_000), ..class("huge", &["X"]) }], "a clearance over 500 mm"),
             (vec![class("", &["X"])], "unnamed"),
             (vec![class("Default", &["X"])], "named like the Default class"),
             (vec![class("a", &[""])], "empty pattern"),
@@ -839,8 +861,8 @@ mod tests {
             assert!(validate_net_classes(&settings(bad)).is_err(), "{why}");
         }
         let mut wide_drill = class("vias", &["V*"]);
-        wide_drill.via_diameter = Some(400);
-        wide_drill.via_drill = Some(400);
+        wide_drill.via_diameter = Some(400_000);
+        wide_drill.via_drill = Some(400_000);
         assert!(validate_net_classes(&settings(vec![wide_drill])).is_err(), "a drill as wide as its via leaves no annular ring");
     }
 

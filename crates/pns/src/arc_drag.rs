@@ -11,12 +11,12 @@
 
 use crate::arcs::{calc_arc_mid, ArcPts};
 use crate::line::{ArcRun, Line};
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 
 /// `ADVANCED_CFG::m_MaxTangentAngleDeviation`: how far (degrees) a track may be off the arc's tangent and still be the one it is a fillet of.
 pub const MAX_TANGENT_ANGLE_DEVIATION: f64 = 1.0;
 /// `ADVANCED_CFG::m_MaxTrackLengthToKeep` (0.0005 mm): a track the drag leaves shorter than this is removed.
-pub const MAX_TRACK_LENGTH_TO_KEEP_UM: f64 = 0.5;
+pub const MAX_TRACK_LENGTH_TO_KEEP_NM: f64 = 500.0;
 
 type V = (f64, f64);
 
@@ -49,7 +49,7 @@ fn norm(a: V) -> f64 {
 }
 
 fn round(a: V) -> Point {
-    Point { x: a.0.round() as Um, y: a.1.round() as Um }
+    Point { x: a.0.round() as Nm, y: a.1.round() as Nm }
 }
 
 /// A segment of two real points (`SEG`), used as the line through them.
@@ -259,7 +259,7 @@ impl ArcDrag {
     }
 
     /// One turn of `DragArcTrack`'s loop: the arc for a cursor at `cursor`, and the line with it -- the tracks next to the arc moved to its new ends, a new
-    /// track made where there was none to move, a track the drag leaves shorter than [`MAX_TRACK_LENGTH_TO_KEEP_UM`] removed (the arc then goes on to the far
+    /// track made where there was none to move, a track the drag leaves shorter than [`MAX_TRACK_LENGTH_TO_KEEP_NM`] removed (the arc then goes on to the far
     /// end of it: "Amend the end points of the arc if we delete the joining tracks").
     pub fn at(&self, line: &Line, cursor: Point) -> Option<(ArcPts, Line)> {
         let cursor = self.constrained(cursor);
@@ -269,7 +269,7 @@ impl ArcDrag {
             return None;
         }
         let mid = calc_arc_mid(ns, ne, nc);
-        let short = |a: Point, b: Point| norm(sub(v(a), v(b))) <= MAX_TRACK_LENGTH_TO_KEEP_UM;
+        let short = |a: Point, b: Point| norm(sub(v(a), v(b))) <= MAX_TRACK_LENGTH_TO_KEEP_NM;
 
         // what comes before the arc's start, and where the arc starts
         let (mut pts, arc_start): (Vec<Point>, Point) = match self.start_track_far {

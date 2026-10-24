@@ -21,7 +21,7 @@ use super::multichannel_geom::{polygon_meets_box, Enclosure};
 use super::pcb_transform::Xform;
 use super::Board;
 use eda_model::fp_edit::{self, FieldLayout, FootprintEdit};
-use eda_model::ir::{next_item_id, Design, Dimension, FootprintInstance, Group, Point, Shape, Side, Text, Track, Um, Via, Zone};
+use eda_model::ir::{next_item_id, Design, Dimension, FootprintInstance, Group, Point, Shape, Side, Text, Track, Nm, Via, Zone};
 use eda_model::pcb_items::{PcbPoint, TextBox};
 use eda_model::CheckResult;
 use std::collections::{BTreeMap, BTreeSet};
@@ -146,7 +146,7 @@ impl Item {
                         e.contains_ring(&[Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }], half)
                     }
                     Shape::Circle { center, end, .. } => {
-                        let r = (((end.x - center.x) as f64).hypot((end.y - center.y) as f64)).round() as Um;
+                        let r = (((end.x - center.x) as f64).hypot((end.y - center.y) as f64)).round() as Nm;
                         e.contains_disc(*center, r + half)
                     }
                     Shape::Polygon { pts, .. } => e.contains_ring(pts, half),
@@ -154,8 +154,8 @@ impl Item {
                 }
             }
             Item::Text(t, _) => {
-                let half_w = (t.content.chars().count().max(1) as i64 * t.size_um * 6 / 10) / 2;
-                e.contains_box((t.at.x - half_w, t.at.y - t.size_um / 2, t.at.x + half_w, t.at.y + t.size_um / 2))
+                let half_w = (t.content.chars().count().max(1) as i64 * t.size_nm * 6 / 10) / 2;
+                e.contains_box((t.at.x - half_w, t.at.y - t.size_nm / 2, t.at.x + half_w, t.at.y + t.size_nm / 2))
             }
             Item::Dimension(d) => e.contains_stroke(&[d.start, d.end], d.stroke_width / 2),
             Item::TextBox(t) => {

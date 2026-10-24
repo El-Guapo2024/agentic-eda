@@ -50,7 +50,7 @@ export function TuningPatternsPage({ hidden, onDirty }: PageProps) {
             const s = draft[group];
             const err = (field: string) => problems[`${group}.${field}`];
             const length = (field: "min_amplitude" | "max_amplitude" | "spacing", label: string) => {
-              const key = `${field}_um` as "min_amplitude_um" | "max_amplitude_um" | "spacing_um";
+              const key = `${field}_nm` as "min_amplitude_nm" | "max_amplitude_nm" | "spacing_nm";
               return (
                 <FieldRow label={label} error={err(field)} unit={units}>
                   <LengthField ariaLabel={`${GROUP_TITLE[group]} ${label.replace(/:$/, "")}`} units={units} value={s[key]} invalid={!!err(field)} onChange={(v) => set(group, { [key]: v ?? Number.NaN })} />

@@ -124,7 +124,7 @@ impl OwnerCtx {
         fields::page_field(self.at, self.rot, self.mirrored, self.width, p, text)
     }
 
-    /// `SCH_FIELD::SetPosition`: where on the sheet `page` is, as a stored position (micrometres from the item's origin, in its unturned frame).
+    /// `SCH_FIELD::SetPosition`: where on the sheet `page` is, as a stored position (nanometres from the item's origin, in its unturned frame).
     pub fn local_pos(&self, page: (f64, f64)) -> (i64, i64) {
         let (x, y) = unbake(self.rot, self.mirrored, self.width, page.0 - self.at.x as f64, page.1 - self.at.y as f64);
         (x.round() as i64, y.round() as i64)
@@ -152,7 +152,7 @@ impl OwnerCtx {
             VJustify::Bottom => TextVAlign::Bottom,
         };
         let mut p = fields::local_placement_on_page(self.at, self.rot, self.mirrored, self.width, &old.name, anchor, vertical, hj, vj, old.visible);
-        p.size_um = old.size_um;
+        p.size_nm = old.size_nm;
         p.bold = old.bold;
         p.italic = old.italic;
         p.name_shown = old.name_shown;
@@ -183,7 +183,7 @@ impl OwnerCtx {
                     .map(|(sp, now)| {
                         let mut p = if sp.name == "Value" { home.clone() } else { FieldPlacement { visible: false, ..FieldPlacement::at_origin(&sp.name) } };
                         p.visible = now.visible;
-                        p.size_um = now.size_um;
+                        p.size_nm = now.size_nm;
                         p.bold = now.bold;
                         p.italic = now.italic;
                         p.name_shown = now.name_shown;
@@ -207,7 +207,7 @@ impl OwnerCtx {
                         }
                         let mut p = home.iter().find(|p| p.name == sp.name).cloned().expect("a home for each sheet field");
                         p.visible = now.visible;
-                        p.size_um = now.size_um;
+                        p.size_nm = now.size_nm;
                         p.bold = now.bold;
                         p.italic = now.italic;
                         p.name_shown = now.name_shown;
@@ -222,7 +222,7 @@ impl OwnerCtx {
 /// `AUTOPLACER::getDrawableArea`: the paper inside the drawing sheet's 10 mm margins.
 fn drawable_area(sch: &SchematicSection) -> Option<Rect> {
     let paper = sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or("");
-    let (w, h) = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), paper).size_um().ok()?;
+    let (w, h) = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), paper).size_nm().ok()?;
     Some(Rect { x0: kit::FRAME_OUTER, y0: kit::FRAME_OUTER, x1: w - kit::FRAME_OUTER, y1: h - kit::FRAME_OUTER })
 }
 
@@ -251,7 +251,7 @@ pub fn surroundings(sch: &SchematicSection, model: &ConstraintModel, exclude_key
         }
     }
     for t in &sch.texts {
-        let size_iu = t.size_um * 10;
+        let size_iu = t.size_nm / eda_model::units::SCH_IU_NM;
         let style = eda_model::kicad_geom::TextStyle { size_iu, thickness_iu: 0, h: HJustify::Left, v: VJustify::Center };
         let vertical = (t.angle / 90_000) % 2 == 1;
         colliders.push(Collider { rect: kit::text_rect_styled(&t.content, (t.at.x as f64, t.at.y as f64), &style, vertical), wire: None });

@@ -130,8 +130,8 @@ mod tests {
             target_impedance: 50.0,
             enable_time_domain_tuning: enabled,
             layer_entries: vec![
-                ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_um: 200, diff_pair_gap_um: 0, delay_as_per_mm: 6_100_000 },
-                ProfileLayerEntry { signal_layer: "B.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_um: 200, diff_pair_gap_um: 0, delay_as_per_mm: 6_500_000 },
+                ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200, diff_pair_gap_nm: 0, delay_as_per_mm: 6_100_000 },
+                ProfileLayerEntry { signal_layer: "B.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200, diff_pair_gap_nm: 0, delay_as_per_mm: 6_500_000 },
             ],
             via_propagation_delay_as: 5_000_000,
             via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 12_000_000 }],

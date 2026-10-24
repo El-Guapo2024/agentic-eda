@@ -191,7 +191,7 @@ export function dragZoomView(view: ViewTransform, anchorPx: { x: number; y: numb
 
 export interface AutoPanState {
   /** World-space pan delta to apply *per tick* while the cursor stays here -- null when the cursor isn't in the autopan border at all (handleAutoPanning returning false with panDirection (0,0)). */
-  panUm: { x: number; y: number } | null;
+  panNm: { x: number; y: number } | null;
 }
 
 /**
@@ -247,7 +247,7 @@ function resize(v: { x: number; y: number }, length: number): { x: number; y: nu
  * all) -- same as source's `handleAutoPanning` returning false and the
  * timer doing nothing that tick.
  */
-export function computeAutoPanStep(dir: { x: number; y: number }, screenSize: ScreenSize, scalePxPerUm: number, margin = DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin, acceleration = DEFAULT_VIEW_CONTROL_SETTINGS.autoPanAcceleration): { x: number; y: number } | null {
+export function computeAutoPanStep(dir: { x: number; y: number }, screenSize: ScreenSize, scalePxPerNm: number, margin = DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin, acceleration = DEFAULT_VIEW_CONTROL_SETTINGS.autoPanAcceleration): { x: number; y: number } | null {
   if (dir.x === 0 && dir.y === 0) return null;
 
   const borderSize = Math.min(margin * screenSize.width, margin * screenSize.height);
@@ -263,7 +263,7 @@ export function computeAutoPanStep(dir: { x: number; y: number }, screenSize: Sc
   // ToWorld(vec, false) divides a screen-space vector by scale; SetCenter
   // adds it directly (not negated -- panning *toward* the cursor's side,
   // same sense as a middle-drag dragging the board under the cursor).
-  const worldPerPx = 1 / scalePxPerUm;
+  const worldPerPx = 1 / scalePxPerNm;
   return { x: resized.x * worldPerPx, y: resized.y * worldPerPx };
 }
 

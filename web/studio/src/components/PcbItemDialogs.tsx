@@ -9,8 +9,8 @@ import type { BoardRefImage, BoardTextBox, TextBoxHAlign, TextBoxVAlign } from "
 import type { SchLineStyle } from "../api/schEditTypes";
 import type { Cmd } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
-import { autoPenUm, clampPenUm, escapeQuoted, grownToFit, textBoxToCmd, TEXT_MAX_SIZE_UM, TEXT_MIN_SIZE_UM, unescapeQuoted, withTextAngle } from "../kicad-port/pcbTextBox";
-import { checkImageScale, imageSizeUm, pcbImageUrl, scaleForHeightUm, scaleForWidthUm, scalePpmOf, scaleText } from "../kicad-port/refImage";
+import { autoPenNm, clampPenNm, escapeQuoted, grownToFit, textBoxToCmd, TEXT_MAX_SIZE_NM, TEXT_MIN_SIZE_NM, unescapeQuoted, withTextAngle } from "../kicad-port/pcbTextBox";
+import { checkImageScale, imageSizeNm, pcbImageUrl, scaleForHeightNm, scaleForWidthNm, scalePpmOf, scaleText } from "../kicad-port/refImage";
 import { closeRefImageDialog, closeTextBoxDialog, usePcbItemDialogs } from "../state/pcbItemDialogs";
 import { ImageEditorPanel } from "./ImageEditorPanel";
 import { PcbBarcodeDialog } from "./BarcodeDialog";
@@ -29,8 +29,8 @@ const BORDER_STYLES: Array<{ value: SchLineStyle; label: string }> = [
   { value: "dash_dot_dot", label: "Dash-Dot-Dot" },
 ];
 
-const mm = (um: number): string => String(Math.round(um) / 1000);
-const um = (s: string): number => Math.round(Number(s) * 1000);
+const mm = (um: number): string => String(Math.round(um) / 1e6);
+const um = (s: string): number => Math.round(Number(s) * 1e6);
 
 interface Form {
   text: string;
@@ -122,13 +122,13 @@ export function PcbTextBoxDialog() {
     // `m_textWidth.Validate( minSize, maxSize )`
     const [w, h] = [um(form.width), um(form.height)];
     for (const [label, v] of [["width", w], ["height", h]] as const) {
-      if (!Number.isFinite(v) || v < TEXT_MIN_SIZE_UM || v > TEXT_MAX_SIZE_UM) return setError(`The text ${label} must be between 0.001 mm and 250 mm.`);
+      if (!Number.isFinite(v) || v < TEXT_MIN_SIZE_NM || v > TEXT_MAX_SIZE_NM) return setError(`The text ${label} must be between 0.001 mm and 250 mm.`);
     }
     const prev = req.box;
     let pen = form.autoThickness ? 0 : um(form.thickness);
     if (!Number.isFinite(pen) || pen < 0) return setError("The text thickness must not be negative.");
     if (pen > 0) {
-      const max = clampPenUm(pen, Math.min(w, h));
+      const max = clampPenNm(pen, Math.min(w, h));
       if (pen > max) {
         dispatch({ type: "TOAST", message: "The text thickness is too large for the text size. It will be clamped.", kind: "info" });
         pen = max;
@@ -146,7 +146,7 @@ export function PcbTextBoxDialog() {
       layer: form.layer,
       size: h,
       width: w,
-      thickness: pen > 0 ? pen : autoPenUm(Math.min(w, h), form.bold),
+      thickness: pen > 0 ? pen : autoPenNm(Math.min(w, h), form.bold),
       thickness_auto: pen === 0,
       bold: form.bold,
       italic: form.italic,
@@ -352,7 +352,7 @@ export function PcbRefImageDialog() {
     setError(null);
   };
   const close = () => closeRefImageDialog();
-  const sizeAt = (scalePpm: number): [number, number] => imageSizeUm(image.px, image.ppi, scalePpm);
+  const sizeAt = (scalePpm: number): [number, number] => imageSizeNm(image.px, image.ppi, scalePpm);
   /** The scale was typed: the size follows (`onScaleChanged`). */
   const onScale = (text: string) => {
     const ppm = scalePpmOf(text);
@@ -370,7 +370,7 @@ export function PcbRefImageDialog() {
     setForm((f) => {
       if (!f) return f;
       if (!(want > 0)) return { ...f, [side]: text };
-      const ppm = side === "width" ? scaleForWidthUm(image.px, image.ppi, want) : scaleForHeightUm(image.px, image.ppi, want);
+      const ppm = side === "width" ? scaleForWidthNm(image.px, image.ppi, want) : scaleForHeightNm(image.px, image.ppi, want);
       const [w, h] = sizeAt(ppm);
       return { ...f, scale: scaleText(ppm), width: side === "width" ? text : mm(w), height: side === "height" ? text : mm(h) };
     });

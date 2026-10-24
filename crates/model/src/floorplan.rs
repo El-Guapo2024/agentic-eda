@@ -15,7 +15,7 @@
 //! where this belongs" beats inventing a block for it.
 
 use crate::footprint::{is_edge_connector, placed_courtyard};
-use crate::ir::{FootprintInstance, Point, Side, Um};
+use crate::ir::{FootprintInstance, Point, Side, Nm};
 use crate::{ConstraintModel, PlacementRule};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,12 +40,12 @@ pub struct Module {
     /// the edge harder than it holds them in their block -- drags the part
     /// straight out of its own module.
     pub edge: bool,
-    /// Largest single-part courtyard extent in the module, µm: (widest,
+    /// Largest single-part courtyard extent in the module, nm: (widest,
     /// tallest) at rotation 0. A block sized only from summed area can be
     /// too small to hold its own biggest part -- an edge connector 41 mm
     /// long has the area of a 6 mm square -- and the placer then drags
     /// that part straight out of the region it was given.
-    pub largest: (Um, Um),
+    pub largest: (Nm, Nm),
 }
 
 /// A module with the patch of board it owns.
@@ -53,8 +53,8 @@ pub struct Module {
 pub struct PlacedModule {
     pub name: String,
     pub refs: Vec<String>,
-    /// (x0, y0, x1, y1) µm.
-    pub rect: (Um, Um, Um, Um),
+    /// (x0, y0, x1, y1) nm.
+    pub rect: (Nm, Nm, Nm, Nm),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -66,7 +66,7 @@ pub struct Floorplan {
 
 impl Floorplan {
     /// The rectangle part `id` must stay inside, if it has one.
-    pub fn region_of(&self, id: &str) -> Option<(Um, Um, Um, Um)> {
+    pub fn region_of(&self, id: &str) -> Option<(Nm, Nm, Nm, Nm)> {
         self.modules.iter().find(|m| m.refs.iter().any(|r| r == id)).map(|m| m.rect)
     }
 }
@@ -82,12 +82,12 @@ fn part_area(model: &ConstraintModel, id: &str) -> Option<f64> {
     // band above it. For an 0402 resistor those margins are an order of
     // magnitude more area than the part itself, so a block sized from bare
     // courtyards is nowhere near big enough to hold what goes in it.
-    let s = model.solver.place_spacing_um;
-    Some(((w + 2 * s) as f64) * ((h + 2 * s + MODULE_LABEL_BAND_UM) as f64))
+    let s = model.solver.place_spacing_nm;
+    Some(((w + 2 * s) as f64) * ((h + 2 * s + MODULE_LABEL_BAND_NM) as f64))
 }
 
-/// Courtyard extent of one part at rotation 0, µm.
-fn part_extent(model: &ConstraintModel, id: &str) -> Option<(Um, Um)> {
+/// Courtyard extent of one part at rotation 0, nm.
+fn part_extent(model: &ConstraintModel, id: &str) -> Option<(Nm, Nm)> {
     let part = model.part(id)?;
     let fp = FootprintInstance { id: id.to_string(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: Default::default() };
     let c = placed_courtyard(model, part, &fp)?;
@@ -233,13 +233,13 @@ fn cut_weights(model: &ConstraintModel, modules: &[Module]) -> BTreeMap<(usize, 
 /// Aspect-ratio-capped rectangle for a module: enough area for its parts
 /// at [`MODULE_FILL`], shaped toward the board's own proportions so the
 /// blocks tile rather than fight.
-fn size_for(area: f64, largest: (Um, Um), board_aspect: f64, snap: Um, margin: Um) -> (Um, Um) {
+fn size_for(area: f64, largest: (Nm, Nm), board_aspect: f64, snap: Nm, margin: Nm) -> (Nm, Nm) {
     let need = area / MODULE_FILL;
-    let h = (need / board_aspect).sqrt().max(1000.0);
-    let w = (need / h).max(1000.0);
-    let up = |v: f64| -> Um {
+    let h = (need / board_aspect).sqrt().max(1e6);
+    let w = (need / h).max(1e6);
+    let up = |v: f64| -> Nm {
         let s = snap.max(1);
-        ((v as Um + s - 1) / s) * s
+        ((v as Nm + s - 1) / s) * s
     };
     // The block must hold its biggest part, plus a margin for the
     // courtyard spacing and its refdes label. Per axis, not squared off: a
@@ -248,10 +248,10 @@ fn size_for(area: f64, largest: (Um, Um), board_aspect: f64, snap: Um, margin: U
     (up(w).max(largest.0 + margin), up(h).max(largest.1 + margin))
 }
 
-/// Refdes label band, µm, above a courtyard. The placer keeps parts apart
+/// Refdes label band, nm, above a courtyard. The placer keeps parts apart
 /// by courtyard *plus* this band, so a block sized to bare courtyards is
 /// always a little too small for what the placer actually packs.
-pub const MODULE_LABEL_BAND_UM: Um = 1200;
+pub const MODULE_LABEL_BAND_NM: Nm = 1_200_000;
 
 /// A tiny xorshift, kept local so the floorplan reproduces from its seed
 /// without pulling the placer's RNG into the model crate.
@@ -268,22 +268,22 @@ impl Rng {
     }
 }
 
-fn rect_overlap(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> f64 {
+fn rect_overlap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> f64 {
     let dx = (a.2.min(b.2) - a.0.max(b.0)).max(0) as f64;
     let dy = (a.3.min(b.3) - a.1.max(b.1)).max(0) as f64;
     dx * dy
 }
 
-fn centre(r: (Um, Um, Um, Um)) -> (f64, f64) {
+fn centre(r: (Nm, Nm, Nm, Nm)) -> (f64, f64) {
     (((r.0 + r.2) as f64) / 2.0, ((r.1 + r.3) as f64) / 2.0)
 }
 
 /// Cost of a module arrangement: cut nets pulled short, blocks kept from
-/// overlapping, everything kept on the board. The units are µm of
+/// overlapping, everything kept on the board. The units are nm of
 /// centre-to-centre distance; the two penalties are scaled to dominate it,
 /// because an overlapping or off-board floorplan is not a worse answer,
 /// it is not an answer.
-fn arrangement_cost(rects: &[(Um, Um, Um, Um)], w: &BTreeMap<(usize, usize), f64>, bb: (Um, Um, Um, Um), edge: &[bool]) -> f64 {
+fn arrangement_cost(rects: &[(Nm, Nm, Nm, Nm)], w: &BTreeMap<(usize, usize), f64>, bb: (Nm, Nm, Nm, Nm), edge: &[bool]) -> f64 {
     let mut c = 0.0;
     for (&(i, j), &weight) in w {
         let (ax, ay) = centre(rects[i]);
@@ -311,7 +311,7 @@ fn arrangement_cost(rects: &[(Um, Um, Um, Um)], w: &BTreeMap<(usize, usize), f64
 /// 2 top, 3 bottom. Which pair is available is decided by the shape of the
 /// block, because that is what decides which way its connector lies: a
 /// 41 mm header lying flat can only reach a top or bottom edge.
-fn edge_side(r: (Um, Um, Um, Um), bb: (Um, Um, Um, Um)) -> u8 {
+fn edge_side(r: (Nm, Nm, Nm, Nm), bb: (Nm, Nm, Nm, Nm)) -> u8 {
     let (w, h) = (r.2 - r.0, r.3 - r.1);
     let gaps = if w >= h { [(r.1 - bb.1, 2u8), (bb.3 - r.3, 3)] } else { [(r.0 - bb.0, 0u8), (bb.2 - r.2, 1)] };
     gaps.iter().copied().min().map(|(_, s)| s).unwrap_or(2)
@@ -324,7 +324,7 @@ fn edge_side(r: (Um, Um, Um, Um), bb: (Um, Um, Um, Um)) -> u8 {
 /// connector outside itself. Enforcing it during the search lets the
 /// blocks resolve overlaps by sliding along their edge; enforcing it
 /// afterwards just pushes them into each other.
-fn snap_to_edge(r: (Um, Um, Um, Um), bb: (Um, Um, Um, Um), side: u8) -> (Um, Um, Um, Um) {
+fn snap_to_edge(r: (Nm, Nm, Nm, Nm), bb: (Nm, Nm, Nm, Nm), side: u8) -> (Nm, Nm, Nm, Nm) {
     let (w, h) = (r.2 - r.0, r.3 - r.1);
     match side {
         0 => (bb.0, r.1, bb.0 + w, r.3),
@@ -344,32 +344,32 @@ fn snap_to_edge(r: (Um, Um, Um, Um), bb: (Um, Um, Um, Um), side: u8) -> (Um, Um,
 ///
 /// Fails rather than returning an overlapping plan: a floorplan whose
 /// blocks share board area is not a floorplan.
-pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Um, Um, Um, Um), snap: Um, seed: u64) -> Result<Floorplan, String> {
+pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Nm, Nm, Nm, Nm), snap: Nm, seed: u64) -> Result<Floorplan, String> {
     if modules.is_empty() {
         return Ok(Floorplan::default());
     }
     let bw = (bb.2 - bb.0) as f64;
     let bh = (bb.3 - bb.1) as f64;
     let aspect = if bh > 0.0 { bw / bh } else { 1.0 };
-    let sizes: Vec<(Um, Um)> =     {
+    let sizes: Vec<(Nm, Nm)> =     {
         // The placer separates parts by courtyard plus its own spacing and
         // the refdes band, so that is what a block has to hold.
-        let margin = 2 * model.solver.place_spacing_um + MODULE_LABEL_BAND_UM;
+        let margin = 2 * model.solver.place_spacing_nm + MODULE_LABEL_BAND_NM;
         modules.iter().map(|m| size_for(m.area, m.largest, aspect, snap, margin)).collect()
     };
     let need: f64 = sizes.iter().map(|s| (s.0 as f64) * (s.1 as f64)).sum();
     if need > bw * bh {
         return Err(format!(
             "modules need {:.0} mm\u{b2} of board at {:.0}% fill but the board is {:.0} mm\u{b2}: give the parts more board, or fewer modules",
-            need / 1e6,
+            need / 1e12,
             MODULE_FILL * 100.0,
-            bw * bh / 1e6
+            bw * bh / 1e12
         ));
     }
     // Seed with a shelf pack: rows of blocks in the order `partition`
     // returned them (largest first). Annealing from a legal arrangement
     // beats annealing from a random one.
-    let mut rects: Vec<(Um, Um, Um, Um)> = Vec::with_capacity(modules.len());
+    let mut rects: Vec<(Nm, Nm, Nm, Nm)> = Vec::with_capacity(modules.len());
     let (mut cx, mut cy, mut row_h) = (bb.0, bb.1, 0);
     for &(w, h) in &sizes {
         if cx + w > bb.2 && cx > bb.0 {
@@ -398,7 +398,7 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Um, Um, Um, Um)
     let mut cost = arrangement_cost(&rects, &weights, bb, &edge);
     let n = modules.len();
     let steps = 6000 * n;
-    let span = ((bw.max(bh)) / 3.0) as Um;
+    let span = ((bw.max(bh)) / 3.0) as Nm;
     for step in 0..steps {
         let t = 1.0 - (step as f64) / (steps as f64);
         let temp = 0.25 * t * t * cost.max(1.0) / (n as f64);
@@ -425,9 +425,9 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Um, Um, Um, Um)
             rects[i] = (aj.0, aj.1, aj.0 + (ai.2 - ai.0), aj.1 + (ai.3 - ai.1));
             rects[j] = (ai.0, ai.1, ai.0 + (aj.2 - aj.0), ai.1 + (aj.3 - aj.1));
         } else {
-            let reach = (span as f64 * (0.15 + 0.85 * t)) as Um;
-            let dx = (rng.below((2 * reach.max(snap)) as usize + 1) as Um - reach.max(snap)) / snap.max(1) * snap.max(1);
-            let dy = (rng.below((2 * reach.max(snap)) as usize + 1) as Um - reach.max(snap)) / snap.max(1) * snap.max(1);
+            let reach = (span as f64 * (0.15 + 0.85 * t)) as Nm;
+            let dx = (rng.below((2 * reach.max(snap)) as usize + 1) as Nm - reach.max(snap)) / snap.max(1) * snap.max(1);
+            let dy = (rng.below((2 * reach.max(snap)) as usize + 1) as Nm - reach.max(snap)) / snap.max(1) * snap.max(1);
             let r = rects[i];
             rects[i] = (r.0 + dx, r.1 + dy, r.2 + dx, r.3 + dy);
         }
@@ -462,7 +462,7 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Um, Um, Um, Um)
         for j in i + 1..n {
             let ov = rect_overlap(r, rects[j]);
             if ov > 0.0 {
-                return Err(format!("modules {} and {} overlap by {:.1} mm\u{b2}", modules[i].name, modules[j].name, ov / 1e6));
+                return Err(format!("modules {} and {} overlap by {:.1} mm\u{b2}", modules[i].name, modules[j].name, ov / 1e12));
             }
         }
     }
@@ -473,7 +473,7 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Um, Um, Um, Um)
 }
 
 /// Partition and arrange in one call: the whole floorplan stage.
-pub fn plan(model: &ConstraintModel, bb: (Um, Um, Um, Um), snap: Um, seed: u64) -> Result<Floorplan, String> {
+pub fn plan(model: &ConstraintModel, bb: (Nm, Nm, Nm, Nm), snap: Nm, seed: u64) -> Result<Floorplan, String> {
     let (modules, free) = partition(model);
     let mut fp = arrange(model, &modules, bb, snap, seed)?;
     fp.free = free;

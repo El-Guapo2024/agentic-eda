@@ -40,12 +40,12 @@ import { breakTrack, filletTracks, type EditBoard, type EditTrack } from "../kic
 
 /** Values the dialogs start from, remembered between invocations like the C++ `static`s. */
 const last = {
-  filletRadiusUm: 1000,
-  chamferSetbackUm: 1000,
-  dogbone: { radiusUm: 1000, addSlots: true },
-  simplifyToleranceUm: 3000,
-  healToleranceUm: 3000,
-  filletTracksRadiusUm: 0,
+  filletRadiusNm: 1_000_000,
+  chamferSetbackNm: 1_000_000,
+  dogbone: { radiusNm: 1_000_000, addSlots: true },
+  simplifyToleranceNm: 3_000_000,
+  healToleranceNm: 3_000_000,
+  filletTracksRadiusNm: 0,
   filterOptions: { ...DEFAULT_FILTER_OPTIONS } as FilterOptions,
 };
 
@@ -88,7 +88,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
     dispatch({ type: "SET_ROUTER_SETTINGS", settings: { ...state.routerSettings, mode } });
     toast(`Router mode: ${ROUTER_MODE_LABEL[mode]}`);
     const draw = state.drawState;
-    const cur = state.cursorUm;
+    const cur = state.cursorNm;
     if (draw?.kind === "route" && cur) {
       void routeSetMode(mode).then(() => routeMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) })));
     } else if (draw?.kind === "diffpair" && cur) {
@@ -110,7 +110,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
     dispatch({ type: "SET_ROUTER_SETTINGS", settings });
     toast(`Track corner mode: ${CORNER_MODE_LABEL[cornerMode]}`);
     const draw = state.drawState;
-    const cur = state.cursorUm;
+    const cur = state.cursorNm;
     if (draw?.kind === "route" || draw?.kind === "drag") {
       void routeSetSettings(settings).then(() => draw.kind === "route" && cur && routeMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) })));
     }
@@ -223,9 +223,9 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       });
       if (ids.length === 0) return;
       const rules = board.board_rules;
-      const width = state.currentTrackWidthUm ?? rules?.track_width ?? 250;
-      const via = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600, drill: rules?.via_drill ?? 300 };
-      void api.cmd({ op: "edit_tracks_and_vias", ids, track_width: { kind: "value", um: width }, via_size: { kind: "value", diameter: via.diameter, drill: via.drill } });
+      const width = state.currentTrackWidthNm ?? rules?.track_width ?? 250_000;
+      const via = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600_000, drill: rules?.via_drill ?? 300_000 };
+      void api.cmd({ op: "edit_tracks_and_vias", ids, track_width: { kind: "value", nm: width }, via_size: { kind: "value", diameter: via.diameter, drill: via.drill } });
     })
   );
 
@@ -261,10 +261,10 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
           kind: "unit_entry",
           title: "Fillet Lines",
           label: "Radius:",
-          valueUm: last.filletRadiusUm,
-          onOk: (radiusUm) => {
-            last.filletRadiusUm = radiusUm;
-            applyLines(modifyLines(shapes, { kind: "fillet", radiusUm }));
+          valueNm: last.filletRadiusNm,
+          onOk: (radiusNm) => {
+            last.filletRadiusNm = radiusNm;
+            applyLines(modifyLines(shapes, { kind: "fillet", radiusNm }));
           },
         });
       } else if (kind === "chamfer") {
@@ -272,20 +272,20 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
           kind: "unit_entry",
           title: "Chamfer Lines",
           label: "Chamfer setback:",
-          valueUm: last.chamferSetbackUm,
-          onOk: (setbackUm) => {
-            last.chamferSetbackUm = setbackUm;
-            applyLines(modifyLines(shapes, { kind: "chamfer", setbackUm }));
+          valueNm: last.chamferSetbackNm,
+          onOk: (setbackNm) => {
+            last.chamferSetbackNm = setbackNm;
+            applyLines(modifyLines(shapes, { kind: "chamfer", setbackNm }));
           },
         });
       } else if (kind === "dogbone") {
         openSweepDialog({
           kind: "dogbone",
-          radiusUm: last.dogbone.radiusUm,
+          radiusNm: last.dogbone.radiusNm,
           addSlots: last.dogbone.addSlots,
           onOk: (v) => {
             last.dogbone = v;
-            applyLines(modifyLines(shapes, { kind: "dogbone", radiusUm: v.radiusUm, addSlots: v.addSlots, boardOutline: board ? boardOutlineRings(board) : [] }));
+            applyLines(modifyLines(shapes, { kind: "dogbone", radiusNm: v.radiusNm, addSlots: v.addSlots, boardOutline: board ? boardOutlineRings(board) : [] }));
           },
         });
       } else {
@@ -313,22 +313,22 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
         kind: "unit_entry",
         title: "Simplify Shapes",
         label: "Tolerance value:",
-        valueUm: last.simplifyToleranceUm,
-        onOk: (toleranceUm) => {
-          last.simplifyToleranceUm = toleranceUm;
-          if (toleranceUm <= 0) return;
+        valueNm: last.simplifyToleranceNm,
+        onOk: (toleranceNm) => {
+          last.simplifyToleranceNm = toleranceNm;
+          if (toleranceNm <= 0) return;
           const cmds: Cmd[] = [];
           const removed: string[] = [];
           for (const id of ids) {
             const s = api.shapeById(id);
             const z = api.zoneById(id);
             if (s?.kind === "polygon") {
-              const ring = simplifyPolygonRing(s.pts, toleranceUm);
+              const ring = simplifyPolygonRing(s.pts, toleranceNm);
               if (!ring || ring.length < 3) continue;
               cmds.push({ op: "delete_shape", id }, { op: "add_shape", shape: { kind: "polygon", layer: s.layer, stroke_width: s.stroke_width, filled: s.filled, pts: ring.map(([x, y]) => ({ x, y })) } });
               removed.push(id);
             } else if (z) {
-              const ring = simplifyPolygonRing(z.outline, toleranceUm);
+              const ring = simplifyPolygonRing(z.outline, toleranceNm);
               if (ring && ring.length >= 3) cmds.push({ op: "set_zone_outline", id, outline: ring.map(([x, y]) => ({ x, y })) });
             }
           }
@@ -353,11 +353,11 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
         kind: "unit_entry",
         title: "Heal Shapes",
         label: "Tolerance value:",
-        valueUm: last.healToleranceUm,
-        onOk: (toleranceUm) => {
-          last.healToleranceUm = toleranceUm;
-          if (toleranceUm <= 0) return;
-          const res = healShapes(shapes, toleranceUm);
+        valueNm: last.healToleranceNm,
+        onOk: (toleranceNm) => {
+          last.healToleranceNm = toleranceNm;
+          if (toleranceNm <= 0) return;
+          const res = healShapes(shapes, toleranceNm);
           const { cmds, removed } = modifyResultCmds(board, res);
           void applyEdit(cmds, removed, cmds.length === 0 ? "No shape ends were close enough to heal." : null);
         },
@@ -409,11 +409,11 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
         kind: "unit_entry",
         title: "Fillet Tracks",
         label: "Radius:",
-        valueUm: last.filletTracksRadiusUm,
+        valueNm: last.filletTracksRadiusNm,
         allowZero: false,
-        onOk: (radiusUm) => {
-          last.filletTracksRadiusUm = radiusUm;
-          const res = filletTracks(eb, tracks, radiusUm);
+        onOk: (radiusNm) => {
+          last.filletTracksRadiusNm = radiusNm;
+          const res = filletTracks(eb, tracks, radiusNm);
           if (!res.ok || !res.cmd) {
             if (res.message) toast(res.message);
             return;
@@ -430,7 +430,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
     "pcbnew.InteractiveRouter.BreakTrack",
     pcbOnly(() => {
       // "If we're here from a context menu then we need to get the position of the cursor when the context menu was invoked."
-      const cursor = state.pcbx.menuCursorUm ?? state.cursorUm;
+      const cursor = state.pcbx.menuCursorNm ?? state.cursorNm;
       if (!board || state.selection.size !== 1 || !cursor) return;
       const id = [...state.selection][0]!;
       const track = board.routing?.tracks.find((t) => t.id === id);
@@ -439,7 +439,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
         toast("The selected item is locked. Unlock it to break the track.", "error");
         return;
       }
-      const res = breakTrack(editBoardOf(board), { id: track.id, net: track.net, layer: track.layer, width: track.width, pts: track.pts, arc_mid: track.arc_mid }, [cursor.x, cursor.y], board.snap ?? state.gridUm);
+      const res = breakTrack(editBoardOf(board), { id: track.id, net: track.net, layer: track.layer, width: track.width, pts: track.pts, arc_mid: track.arc_mid }, [cursor.x, cursor.y], board.snap ?? state.gridNm);
       if (!res.ok || !res.cmd) {
         toast(res.message ?? "Break Track: put the cursor on the track, away from its ends and joints.");
         return;

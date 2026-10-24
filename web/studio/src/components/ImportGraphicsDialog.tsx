@@ -308,8 +308,8 @@ function SchImportGraphics({ editor, file }: { editor: "schematic" | "symbol"; f
     } else {
       // The Symbol Editor: the items go to the grid point under the cursor, and are selected once they are there.
       const st = symApi.getState();
-      const grid = st.gridUm > 0 ? st.gridUm : 1270;
-      const cursor = st.cursorUm && Number.isFinite(st.cursorUm.x) && Number.isFinite(st.cursorUm.y) ? st.cursorUm : null;
+      const grid = st.gridNm > 0 ? st.gridNm : 1_270_000;
+      const cursor = st.cursorNm && Number.isFinite(st.cursorNm.x) && Number.isFinite(st.cursorNm.y) ? st.cursorNm : null;
       const at = cursor ? { x: Math.round(cursor.x / grid) * grid, y: Math.round(cursor.y / grid) * grid } : { x: 0, y: 0 };
       const known = new Set((st.symbol?.graphics ?? []).map((g) => g.id));
       placed = await symApi.cmd(built.build(built.interactive ? at : null));

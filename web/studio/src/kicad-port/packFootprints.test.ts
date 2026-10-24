@@ -57,39 +57,39 @@ function overlap(a: [number, number, number, number], b: [number, number, number
 test("packFootprints: identical parts become one ordered column/row starting at the selection's top-left", () => {
   // four 2 x 1 mm parts scattered, given out of order
   const items: PackItem[] = [
-    { ref: "R3", bbox: box(10000, 8000, 2000, 1000) },
-    { ref: "R1", bbox: box(2000, 3000, 2000, 1000) },
-    { ref: "R4", bbox: box(6000, 12000, 2000, 1000) },
-    { ref: "R2", bbox: box(9000, 2000, 2000, 1000) },
+    { ref: "R3", bbox: box(10_000_000, 8_000_000, 2_000_000, 1_000_000) },
+    { ref: "R1", bbox: box(2_000_000, 3_000_000, 2_000_000, 1_000_000) },
+    { ref: "R4", bbox: box(6_000_000, 12_000_000, 2_000_000, 1_000_000) },
+    { ref: "R2", bbox: box(9_000_000, 2_000_000, 2_000_000, 1_000_000) },
   ];
   const { offsets, origin } = packFootprints(items);
-  assert.deepEqual(origin, [2000, 2000], "the union box's top-left");
+  assert.deepEqual(origin, [2_000_000, 2_000_000], "the union box's top-left");
   const m = moved(items, offsets);
   const byRef = Object.fromEntries(m.map((x) => [x.ref, x.b]));
   // wide parts (x >= y) are stacked in a column ("vertical"), ordered R1..R4, one cell (size + 1 mm gap) apart
   for (const [i, ref] of ["R1", "R2", "R3", "R4"].entries()) {
-    assert.deepEqual(byRef[ref]!.slice(0, 2), [2000, 2000 + 2000 * i], ref);
-    assert.equal(byRef[ref]![2] - byRef[ref]![0], 2000, "a footprint keeps its size");
+    assert.deepEqual(byRef[ref]!.slice(0, 2), [2_000_000, 2_000_000 + 2_000_000 * i], ref);
+    assert.equal(byRef[ref]![2] - byRef[ref]![0], 2_000_000, "a footprint keeps its size");
   }
 });
 
 test("packFootprints: a single footprint stays put (its own box is the target box)", () => {
-  const { offsets } = packFootprints([{ ref: "U1", bbox: box(5000, 6000, 4000, 3000) }]);
+  const { offsets } = packFootprints([{ ref: "U1", bbox: box(5_000_000, 6_000_000, 4_000_000, 3_000_000) }]);
   assert.deepEqual(offsets["U1"], [0, 0]);
 });
 
 test("packFootprints: mixed sizes never overlap, keep the selection's top-left, and each keep their size", () => {
   const sizes: [number, number][] = [
-    [2000, 1000],
-    [2000, 1000],
-    [3000, 3000],
-    [1000, 500],
-    [1000, 500],
-    [1000, 500],
-    [8000, 5000],
-    [2000, 1000],
+    [2_000_000, 1_000_000],
+    [2_000_000, 1_000_000],
+    [3_000_000, 3_000_000],
+    [1_000_000, 500_000],
+    [1_000_000, 500_000],
+    [1_000_000, 500_000],
+    [8_000_000, 5_000_000],
+    [2_000_000, 1_000_000],
   ];
-  const items: PackItem[] = sizes.map(([w, h], i) => ({ ref: `X${i + 1}`, bbox: box(1000 * i, 700 * (i % 3), w, h) }));
+  const items: PackItem[] = sizes.map(([w, h], i) => ({ ref: `X${i + 1}`, bbox: box(1_000_000 * i, 700_000 * (i % 3), w, h) }));
   const { offsets, origin } = packFootprints(items);
   const m = moved(items, offsets);
   const minX = Math.min(...m.map((x) => x.b[0]));
@@ -108,8 +108,8 @@ test("packFootprints: mixed sizes never overlap, keep the selection's top-left, 
 test("packFootprints: a part and its 90-degree twin share one group (VECTOR2 orders by squared length), first-seen size wins", () => {
   // 1.6 x 0.8 and 0.8 x 1.6 -> cells (2600,1800) and (1800,2600): equal length, one std::map key
   const items: PackItem[] = [
-    { ref: "R1", bbox: box(0, 0, 1600, 800) },
-    { ref: "R2", bbox: box(5000, 5000, 800, 1600) },
+    { ref: "R1", bbox: box(0, 0, 1_600_000, 800_000) },
+    { ref: "R2", bbox: box(5_000_000, 5_000_000, 800_000, 1_600_000) },
   ];
   const { offsets } = packFootprints(items);
   const m = moved(items, offsets);
@@ -117,7 +117,7 @@ test("packFootprints: a part and its 90-degree twin share one group (VECTOR2 ord
   const r2 = m[1]!.b;
   // R1's size (2600 >= 1800) is the group key -> a column ("vertical"), ordered R1 then R2, one 1800 um cell apart
   assert.deepEqual([r1[0], r1[1]], [0, 0]);
-  assert.deepEqual([r2[0], r2[1]], [0, 1800]);
+  assert.deepEqual([r2[0], r2[1]], [0, 1_800_000]);
   assert.ok(!overlap(r1, r2));
 });
 
@@ -165,13 +165,13 @@ test("packRects: nothing to pack", () => {
 test("footprintBBox: anchor +- 0.25 mm merged with the courtyard and the pads; null when unplaced", () => {
   assert.equal(footprintBBox({ ref: "U1", placed: false }), null);
   // no courtyard, no pads: the minimum box around the anchor
-  assert.deepEqual(footprintBBox({ ref: "TP1", placed: true, at: [1000, 2000] }), [750, 1750, 1250, 2250]);
+  assert.deepEqual(footprintBBox({ ref: "TP1", placed: true, at: [1_000_000, 2_000_000] }), [750_000, 1_750_000, 1_250_000, 2_250_000]);
   // a courtyard bigger than the anchor box wins
-  assert.deepEqual(footprintBBox({ ref: "R1", placed: true, at: [1000, 2000], courtyard: [200, 1500, 1800, 2500] }), [200, 1500, 1800, 2500]);
+  assert.deepEqual(footprintBBox({ ref: "R1", placed: true, at: [1_000_000, 2_000_000], courtyard: [200_000, 1_500_000, 1_800_000, 2_500_000] }), [200_000, 1_500_000, 1_800_000, 2_500_000]);
   // a pad poking out of the courtyard grows the box
   assert.deepEqual(
-    footprintBBox({ ref: "J1", placed: true, at: [1000, 2000], courtyard: [500, 1500, 1500, 2500], pads: [{ x: 1700, y: 2000, w: 800, h: 400 }] }),
-    [500, 1500, 2100, 2500],
+    footprintBBox({ ref: "J1", placed: true, at: [1_000_000, 2_000_000], courtyard: [500_000, 1_500_000, 1_500_000, 2_500_000], pads: [{ x: 1_700_000, y: 2_000_000, w: 800_000, h: 400_000 }] }),
+    [500_000, 1_500_000, 2_100_000, 2_500_000],
   );
 });
 

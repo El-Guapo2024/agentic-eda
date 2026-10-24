@@ -20,40 +20,40 @@ const SECTIONS: ReadonlyArray<{ title: string; items: Item[] }> = [
   {
     title: "Copper",
     items: [
-      { key: "min_clearance_um", label: "Minimum clearance:", title: `The minimum clearance between copper items which do not belong to the same net. ${ONLY_REDUCED_BY_RULES}` },
-      { key: "min_track_width_um", label: "Minimum track width:", title: `The minimum track width. ${ONLY_REDUCED_BY_RULES}` },
-      { key: "min_connection_um", label: "Minimum connection width:", title: "The minimum copper width of connected copper items." },
-      { key: "min_annular_width_um", label: "Minimum annular width:", title: `The minimum annular ring width. ${ONLY_REDUCED_BY_RULES}` },
-      { key: "min_via_diameter_um", label: "Minimum via diameter:", title: `The minimum via diameter. ${ONLY_REDUCED_BY_RULES}` },
-      { key: "min_hole_clearance_um", label: "Copper to hole clearance:", title: `The minimum clearance between a hole and an unassociated copper item. ${ONLY_REDUCED_BY_RULES}` },
-      { key: "min_copper_edge_clearance_um", label: "Copper to edge clearance:", title: `The minimum clearance between the board edge and any copper item. ${ONLY_REDUCED_BY_RULES}` },
-      // "Minimum groove for creepage" (min_groove_width_um) is hidden unless KiCad's advanced setting m_EnableCreepageSlot is on; the value is kept as it is.
+      { key: "min_clearance_nm", label: "Minimum clearance:", title: `The minimum clearance between copper items which do not belong to the same net. ${ONLY_REDUCED_BY_RULES}` },
+      { key: "min_track_width_nm", label: "Minimum track width:", title: `The minimum track width. ${ONLY_REDUCED_BY_RULES}` },
+      { key: "min_connection_nm", label: "Minimum connection width:", title: "The minimum copper width of connected copper items." },
+      { key: "min_annular_width_nm", label: "Minimum annular width:", title: `The minimum annular ring width. ${ONLY_REDUCED_BY_RULES}` },
+      { key: "min_via_diameter_nm", label: "Minimum via diameter:", title: `The minimum via diameter. ${ONLY_REDUCED_BY_RULES}` },
+      { key: "min_hole_clearance_nm", label: "Copper to hole clearance:", title: `The minimum clearance between a hole and an unassociated copper item. ${ONLY_REDUCED_BY_RULES}` },
+      { key: "min_copper_edge_clearance_nm", label: "Copper to edge clearance:", title: `The minimum clearance between the board edge and any copper item. ${ONLY_REDUCED_BY_RULES}` },
+      // "Minimum groove for creepage" (min_groove_width_nm) is hidden unless KiCad's advanced setting m_EnableCreepageSlot is on; the value is kept as it is.
     ],
   },
   {
     title: "Holes",
     items: [
-      { key: "min_through_hole_um", label: "Minimum drill size:", title: `The minimum drill size. ${ONLY_REDUCED_BY_RULES}` },
-      { key: "min_hole_to_hole_um", label: "Hole to hole clearance:", title: `The minimum clearance between two drilled holes. ${ONLY_REDUCED_BY_RULES} (Note: does not apply to milled holes.)` },
+      { key: "min_through_hole_nm", label: "Minimum drill size:", title: `The minimum drill size. ${ONLY_REDUCED_BY_RULES}` },
+      { key: "min_hole_to_hole_nm", label: "Hole to hole clearance:", title: `The minimum clearance between two drilled holes. ${ONLY_REDUCED_BY_RULES} (Note: does not apply to milled holes.)` },
     ],
   },
   {
     title: "uVias",
     items: [
-      { key: "min_microvia_diameter_um", label: "Minimum uVia diameter:", title: `The minimum diameter for micro-vias. ${ONLY_REDUCED_BY_RULES}` },
-      { key: "min_microvia_drill_um", label: "Minimum uVia hole:", title: `The minimum micro-via hole size. ${ONLY_REDUCED_BY_RULES}` },
+      { key: "min_microvia_diameter_nm", label: "Minimum uVia diameter:", title: `The minimum diameter for micro-vias. ${ONLY_REDUCED_BY_RULES}` },
+      { key: "min_microvia_drill_nm", label: "Minimum uVia hole:", title: `The minimum micro-via hole size. ${ONLY_REDUCED_BY_RULES}` },
     ],
   },
   {
     title: "Silk",
     items: [
       {
-        key: "min_silk_clearance_um",
+        key: "min_silk_clearance_nm",
         label: "Minimum item clearance:",
         title: "Minimum clearance between two items on the same silkscreen layer. If set this can improve legibility.  (Note: does not apply to multiple shapes within a single footprint.)",
       },
-      { key: "min_silk_text_height_um", label: "Minimum text height:", title: "" },
-      { key: "min_silk_text_thickness_um", label: "Minimum text thickness:", title: "" },
+      { key: "min_silk_text_height_nm", label: "Minimum text height:", title: "" },
+      { key: "min_silk_text_thickness_nm", label: "Minimum text thickness:", title: "" },
     ],
   },
 ];
@@ -105,10 +105,10 @@ export function ConstraintsPage({ hidden, onDirty }: PageProps) {
           <FieldRow
             label="Maximum allowed deviation:"
             title="The maximum allowed deviation between a true arc or circle and segments used to approximate it.  Smaller values produce smoother graphics at the expense of performance."
-            error={errors.max_error_um}
+            error={errors.max_error_nm}
             unit={units}
           >
-            <LengthField ariaLabel="Maximum allowed deviation" units={units} value={draft.max_error_um} invalid={!!errors.max_error_um} onChange={(v) => set("max_error_um", v ?? Number.NaN)} />
+            <LengthField ariaLabel="Maximum allowed deviation" units={units} value={draft.max_error_nm} invalid={!!errors.max_error_nm} onChange={(v) => set("max_error_nm", v ?? Number.NaN)} />
           </FieldRow>
           <p className="bs-note">Note: zone filling can be slow when &lt; 0.005 mm.</p>
 

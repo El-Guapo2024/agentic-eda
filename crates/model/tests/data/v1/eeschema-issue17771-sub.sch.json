@@ -1,0 +1,818 @@
+{
+  "schema": 1,
+  "provenance": {
+    "engine_version": "0.1.0",
+    "intent_hash": "",
+    "seed": 0
+  },
+  "schematic": {
+    "symbols": [],
+    "wires": [
+      {
+        "id": "wire_21d6b2d0abfa",
+        "net": "W.X.Y.Z1",
+        "pts": [
+          {
+            "x": 40640,
+            "y": 45720
+          },
+          {
+            "x": 59690,
+            "y": 45720
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_983f272c834c",
+        "net": "W.X{B}",
+        "pts": [
+          {
+            "x": 66040,
+            "y": 38100
+          },
+          {
+            "x": 83820,
+            "y": 38100
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_5f8d36b41ace",
+        "net": "W{A}",
+        "pts": [
+          {
+            "x": 29210,
+            "y": 30480
+          },
+          {
+            "x": 55880,
+            "y": 30480
+          }
+        ],
+        "bus": true
+      }
+    ],
+    "labels": [
+      {
+        "id": "lbl_ef19e5ed39a2",
+        "net": "W.X.Y.Z1",
+        "at": {
+          "x": 40640,
+          "y": 45720
+        }
+      },
+      {
+        "id": "lbl_2b1e29eafaf6",
+        "net": "W.X{B}",
+        "at": {
+          "x": 66040,
+          "y": 38100
+        }
+      },
+      {
+        "id": "lbl_929d88cb5fde",
+        "net": "W{A}",
+        "at": {
+          "x": 29210,
+          "y": 30480
+        },
+        "kind": {
+          "scope": "hierarchical",
+          "shape": "input"
+        }
+      }
+    ],
+    "extras": {
+      "label_spins": {
+        "lbl_2b1e29eafaf6": "right",
+        "lbl_929d88cb5fde": "left",
+        "lbl_ef19e5ed39a2": "right"
+      }
+    },
+    "title_block": {
+      "paper": "A5"
+    },
+    "sheets": [
+      {
+        "id": "4fea18b4-6b3d-4acc-a71b-7ee31c8961ac",
+        "name": "sub2",
+        "file": "sub2.kicad_sch",
+        "at": {
+          "x": 83820,
+          "y": 27940
+        },
+        "size": [
+          30480,
+          19050
+        ],
+        "pins": [
+          {
+            "id": "7a6b7b66-5fae-487b-af2f-8095095aba85",
+            "name": "{B}",
+            "shape": "input",
+            "at": {
+              "x": 83820,
+              "y": 38100
+            }
+          }
+        ],
+        "page": "3"
+      }
+    ],
+    "imported_from_kicad": true
+  },
+  "nets": [
+    {
+      "name": "V.Z1",
+      "pins": [
+        "TP401.1"
+      ]
+    },
+    {
+      "name": "V.Z2",
+      "pins": [
+        "TP402.1"
+      ]
+    },
+    {
+      "name": "Y.Z1",
+      "pins": [
+        "TP301.1"
+      ]
+    },
+    {
+      "name": "Y.Z2",
+      "pins": [
+        "TP302.1"
+      ]
+    }
+  ],
+  "placement": {
+    "outline": [
+      {
+        "x": 0,
+        "y": 0
+      },
+      {
+        "x": 100000,
+        "y": 0
+      },
+      {
+        "x": 100000,
+        "y": 80000
+      },
+      {
+        "x": 0,
+        "y": 80000
+      }
+    ],
+    "footprints": []
+  },
+  "symbol_library": {
+    "symbols": [
+      {
+        "lib_id": "Mechanical:TST-01025",
+        "reference_prefix": "TP",
+        "description": "Test point, 25mils",
+        "keywords": "tp",
+        "datasheet": "~",
+        "power": false,
+        "in_bom": false,
+        "on_board": true,
+        "pin_numbers_hidden": true,
+        "pin_names_hidden": true,
+        "pin_name_offset_mm": 1.016,
+        "has_alternate_body_style": false,
+        "footprint_filters": [
+          "TP_25"
+        ],
+        "graphics": [
+          {
+            "kind": "circle",
+            "id": "sym_10106aa7f3b9",
+            "unit": 0,
+            "center": {
+              "x": 2.54,
+              "y": 0.0
+            },
+            "radius_mm": 0.762,
+            "stroke_mm": 0.0,
+            "fill": "outline"
+          }
+        ],
+        "pins": [
+          {
+            "id": "pin_5ce82493d55c",
+            "number": "1",
+            "name": "~",
+            "electrical_type": "passive",
+            "shape": "line",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "angle_deg": 0.0,
+            "length_mm": 2.54,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27
+          }
+        ],
+        "published": true,
+        "fields": [
+          {
+            "name": "Reference",
+            "text": "TP",
+            "at": {
+              "x": 3.81,
+              "y": 0.0
+            },
+            "h_align": "left"
+          },
+          {
+            "name": "Value",
+            "text": "TST-01025",
+            "at": {
+              "x": 2.54,
+              "y": -2.54
+            },
+            "hidden": true
+          },
+          {
+            "name": "Footprint",
+            "text": "",
+            "at": {
+              "x": -1.27,
+              "y": 2.54
+            },
+            "hidden": true
+          },
+          {
+            "name": "Datasheet",
+            "text": "~",
+            "at": {
+              "x": 2.54,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "Description",
+            "text": "Test point, 25mils",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          }
+        ]
+      }
+    ]
+  },
+  "sheet_contents": {
+    "sub2.kicad_sch": {
+      "symbols": [
+        {
+          "id": "TP302",
+          "at": {
+            "x": 102870,
+            "y": 55880
+          },
+          "rot": 0,
+          "mirrored": false,
+          "mirror_y": false,
+          "lib_id": "Mechanical:TST-01025",
+          "value": "TST-01025",
+          "datasheet": "~",
+          "exclude_from_bom": true
+        },
+        {
+          "id": "TP301",
+          "at": {
+            "x": 102870,
+            "y": 52070
+          },
+          "rot": 0,
+          "mirrored": false,
+          "mirror_y": false,
+          "lib_id": "Mechanical:TST-01025",
+          "value": "TST-01025",
+          "datasheet": "~",
+          "exclude_from_bom": true
+        }
+      ],
+      "wires": [
+        {
+          "id": "wire_c068e8c99af7",
+          "net": "Y.Z2",
+          "pts": [
+            {
+              "x": 91440,
+              "y": 55880
+            },
+            {
+              "x": 96520,
+              "y": 55880
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_0f46bfca25da",
+          "net": "Y.Z1",
+          "pins": [
+            "TP301.1"
+          ],
+          "pts": [
+            {
+              "x": 96520,
+              "y": 52070
+            },
+            {
+              "x": 102870,
+              "y": 52070
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_caa50b0dfd77",
+          "net": "Y.Z1",
+          "pts": [
+            {
+              "x": 91440,
+              "y": 52070
+            },
+            {
+              "x": 96520,
+              "y": 52070
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_67762101ab68",
+          "net": "Y.Z2",
+          "pins": [
+            "TP302.1"
+          ],
+          "pts": [
+            {
+              "x": 96520,
+              "y": 55880
+            },
+            {
+              "x": 102870,
+              "y": 55880
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_1b970ae7f993",
+          "net": "W.X{B}",
+          "pts": [
+            {
+              "x": 68580,
+              "y": 49530
+            },
+            {
+              "x": 88900,
+              "y": 49530
+            }
+          ],
+          "bus": true
+        },
+        {
+          "id": "wire_15d0183902d6",
+          "net": "Y{C}",
+          "pts": [
+            {
+              "x": 99060,
+              "y": 54610
+            },
+            {
+              "x": 99060,
+              "y": 58420
+            }
+          ],
+          "bus": true
+        },
+        {
+          "id": "wire_79eddf00cff5",
+          "net": "Y{C}",
+          "pts": [
+            {
+              "x": 99060,
+              "y": 63500
+            },
+            {
+              "x": 104140,
+              "y": 63500
+            }
+          ],
+          "bus": true
+        },
+        {
+          "id": "wire_6f6e88cc3763",
+          "net": "Y{C}",
+          "pts": [
+            {
+              "x": 99060,
+              "y": 58420
+            },
+            {
+              "x": 99060,
+              "y": 63500
+            }
+          ],
+          "bus": true
+        },
+        {
+          "id": "wire_5da7a5798f4e",
+          "net": "W.X{B}",
+          "pts": [
+            {
+              "x": 88900,
+              "y": 49530
+            },
+            {
+              "x": 88900,
+              "y": 53340
+            }
+          ],
+          "bus": true
+        },
+        {
+          "id": "wire_443ce7e30b81",
+          "net": "Y{C}",
+          "pts": [
+            {
+              "x": 88900,
+              "y": 63500
+            },
+            {
+              "x": 99060,
+              "y": 63500
+            }
+          ],
+          "bus": true
+        }
+      ],
+      "labels": [
+        {
+          "id": "lbl_f4c6bdb10846",
+          "net": "Y.Z1",
+          "at": {
+            "x": 96520,
+            "y": 52070
+          }
+        },
+        {
+          "id": "lbl_af6bfdca89ef",
+          "net": "Y{C}",
+          "at": {
+            "x": 93980,
+            "y": 63500
+          }
+        },
+        {
+          "id": "lbl_37edf3f6ebed",
+          "net": "Y.Z2",
+          "at": {
+            "x": 96520,
+            "y": 55880
+          }
+        },
+        {
+          "id": "lbl_825a7e82096a",
+          "net": "{B}",
+          "at": {
+            "x": 68580,
+            "y": 49530
+          },
+          "kind": {
+            "scope": "hierarchical",
+            "shape": "input"
+          }
+        }
+      ],
+      "bus_entries": [
+        {
+          "id": "098c4c6b-b7e8-40d7-b0e3-9b273cb99800",
+          "at": {
+            "x": 88900,
+            "y": 49530
+          },
+          "size": {
+            "x": 2540,
+            "y": 2540
+          }
+        },
+        {
+          "id": "13f36f65-005a-437d-ae91-1bce083a43d3",
+          "at": {
+            "x": 99060,
+            "y": 54610
+          },
+          "size": {
+            "x": -2540,
+            "y": -2540
+          }
+        },
+        {
+          "id": "5236c7da-1da6-4a63-b271-58a8f7858284",
+          "at": {
+            "x": 91440,
+            "y": 55880
+          },
+          "size": {
+            "x": -2540,
+            "y": -2540
+          }
+        },
+        {
+          "id": "8be9d15d-370f-41b0-93e6-b89d5357d5db",
+          "at": {
+            "x": 99060,
+            "y": 58420
+          },
+          "size": {
+            "x": -2540,
+            "y": -2540
+          }
+        }
+      ],
+      "junctions": [
+        {
+          "id": "jct_5ec8710ee83c",
+          "at": {
+            "x": 99060,
+            "y": 63500
+          }
+        }
+      ],
+      "extras": {
+        "label_spins": {
+          "lbl_37edf3f6ebed": "left",
+          "lbl_825a7e82096a": "left",
+          "lbl_af6bfdca89ef": "right",
+          "lbl_f4c6bdb10846": "left"
+        }
+      },
+      "title_block": {
+        "paper": "A5"
+      },
+      "sheets": [
+        {
+          "id": "38a5c293-46d2-4c74-939b-43575208aa56",
+          "name": "sub3",
+          "file": "sub3.kicad_sch",
+          "at": {
+            "x": 104140,
+            "y": 59690
+          },
+          "size": [
+            21590,
+            7620
+          ],
+          "pins": [
+            {
+              "id": "26062b64-82da-4dd7-aec1-914a8f72b622",
+              "name": "V{C}",
+              "shape": "input",
+              "at": {
+                "x": 104140,
+                "y": 63500
+              }
+            }
+          ],
+          "page": "4"
+        }
+      ],
+      "instance_overrides": [
+        {
+          "at": {
+            "x": 102870,
+            "y": 55880
+          },
+          "parent_sheet_instance_id": "4fea18b4-6b3d-4acc-a71b-7ee31c8961ac",
+          "reference": "TP302",
+          "unit": 1
+        },
+        {
+          "at": {
+            "x": 102870,
+            "y": 52070
+          },
+          "parent_sheet_instance_id": "4fea18b4-6b3d-4acc-a71b-7ee31c8961ac",
+          "reference": "TP301",
+          "unit": 1
+        }
+      ],
+      "imported_from_kicad": true
+    },
+    "sub3.kicad_sch": {
+      "symbols": [
+        {
+          "id": "TP402",
+          "at": {
+            "x": 81280,
+            "y": 59690
+          },
+          "rot": 0,
+          "mirrored": false,
+          "mirror_y": false,
+          "lib_id": "Mechanical:TST-01025",
+          "value": "TST-01025",
+          "datasheet": "~",
+          "exclude_from_bom": true
+        },
+        {
+          "id": "TP401",
+          "at": {
+            "x": 81280,
+            "y": 57150
+          },
+          "rot": 0,
+          "mirrored": false,
+          "mirror_y": false,
+          "lib_id": "Mechanical:TST-01025",
+          "value": "TST-01025",
+          "datasheet": "~",
+          "exclude_from_bom": true
+        }
+      ],
+      "wires": [
+        {
+          "id": "wire_5fb4c0ec4a55",
+          "net": "V.Z1",
+          "pins": [
+            "TP401.1"
+          ],
+          "pts": [
+            {
+              "x": 62230,
+              "y": 57150
+            },
+            {
+              "x": 81280,
+              "y": 57150
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_3f64db4b8d13",
+          "net": "V.Z2",
+          "pins": [
+            "TP402.1"
+          ],
+          "pts": [
+            {
+              "x": 62230,
+              "y": 59690
+            },
+            {
+              "x": 81280,
+              "y": 59690
+            }
+          ],
+          "bus": false
+        },
+        {
+          "id": "wire_010963d929f7",
+          "net": "Y{C}",
+          "pts": [
+            {
+              "x": 59690,
+              "y": 54610
+            },
+            {
+              "x": 66040,
+              "y": 54610
+            }
+          ],
+          "bus": true
+        },
+        {
+          "id": "wire_fc3b6f9b5d27",
+          "net": "Y{C}",
+          "pts": [
+            {
+              "x": 57150,
+              "y": 54610
+            },
+            {
+              "x": 59690,
+              "y": 54610
+            }
+          ],
+          "bus": true
+        },
+        {
+          "id": "wire_1fe8208d6c05",
+          "net": "Y{C}",
+          "pts": [
+            {
+              "x": 59690,
+              "y": 54610
+            },
+            {
+              "x": 59690,
+              "y": 57150
+            }
+          ],
+          "bus": true
+        }
+      ],
+      "labels": [
+        {
+          "id": "lbl_a15451c0189d",
+          "net": "V.Z1",
+          "at": {
+            "x": 81280,
+            "y": 57150
+          }
+        },
+        {
+          "id": "lbl_4b29f7f82269",
+          "net": "V.Z2",
+          "at": {
+            "x": 81280,
+            "y": 59690
+          }
+        },
+        {
+          "id": "lbl_2aa830f25ceb",
+          "net": "V{C}",
+          "at": {
+            "x": 57150,
+            "y": 54610
+          },
+          "kind": {
+            "scope": "hierarchical",
+            "shape": "input"
+          }
+        }
+      ],
+      "bus_entries": [
+        {
+          "id": "1dfb8da1-060b-4c92-af16-0493a85febb4",
+          "at": {
+            "x": 59690,
+            "y": 57150
+          },
+          "size": {
+            "x": 2540,
+            "y": 2540
+          }
+        },
+        {
+          "id": "f8eaeec4-6315-4529-a69f-9f622fa7fd7b",
+          "at": {
+            "x": 59690,
+            "y": 54610
+          },
+          "size": {
+            "x": 2540,
+            "y": 2540
+          }
+        }
+      ],
+      "extras": {
+        "label_spins": {
+          "lbl_2aa830f25ceb": "left",
+          "lbl_4b29f7f82269": "left",
+          "lbl_a15451c0189d": "left"
+        }
+      },
+      "title_block": {
+        "paper": "A5"
+      },
+      "instance_overrides": [
+        {
+          "at": {
+            "x": 81280,
+            "y": 59690
+          },
+          "parent_sheet_instance_id": "38a5c293-46d2-4c74-939b-43575208aa56",
+          "reference": "TP402",
+          "unit": 1
+        },
+        {
+          "at": {
+            "x": 81280,
+            "y": 57150
+          },
+          "parent_sheet_instance_id": "38a5c293-46d2-4c74-939b-43575208aa56",
+          "reference": "TP401",
+          "unit": 1
+        }
+      ],
+      "imported_from_kicad": true
+    }
+  }
+}

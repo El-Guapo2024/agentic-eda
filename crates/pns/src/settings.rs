@@ -10,7 +10,7 @@
 //! resolution (`width_of`/`clearance_of`/`via_diameter_of`/`via_drill_of`)
 //! -- see [`SizesSettings::for_net`].
 
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 use eda_model::BoardRules;
 
 /// `PNS_MODE` (`RM_MarkObstacles`/`RM_Shove`/`RM_Walkaround`).
@@ -160,10 +160,10 @@ impl Default for RoutingSettings {
 /// `PNS::SIZES_SETTINGS`, resolved for one net.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SizesSettings {
-    pub clearance: Um,
-    pub track_width: Um,
-    pub via_diameter: Um,
-    pub via_drill: Um,
+    pub clearance: Nm,
+    pub track_width: Nm,
+    pub via_diameter: Nm,
+    pub via_drill: Nm,
 }
 
 impl SizesSettings {

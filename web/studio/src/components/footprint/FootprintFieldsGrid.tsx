@@ -8,7 +8,7 @@ import type { FieldLayoutCmd } from "../../api/types";
 import { MANDATORY_ROWS, moveRow, newFieldLayout, newRowName, type LibFieldRow } from "../../kicad-port/fpLibFields";
 import { layerDisplayName } from "../../kicad-port/boardLayers";
 import type { LayerSetup } from "../../api/types";
-import { umFrom, umTo, type LengthUnit } from "../../state/units";
+import { nmFrom, nmTo, type LengthUnit } from "../../state/units";
 
 export interface FootprintFieldsGridProps {
   rows: readonly LibFieldRow[];
@@ -31,7 +31,7 @@ export function FootprintFieldsGrid({ rows, onChange, units, layers, layerSetup,
   const num = (v: string, fallback: number): number => (Number.isFinite(Number(v)) && v.trim() !== "" ? Number(v) : fallback);
   /** A length cell: the value in the unit on show, written back in um. */
   const lengthCell = (um: number, onValue: (um: number) => void, label: string, width = 62) => (
-    <input type="number" step="any" aria-label={label} value={Number(umTo(um, units).toFixed(4))} onChange={(e) => onValue(Math.round(umFrom(num(e.target.value, umTo(um, units)), units)))} style={{ width }} />
+    <input type="number" step="any" aria-label={label} value={Number(nmTo(um, units).toFixed(4))} onChange={(e) => onValue(Math.round(nmFrom(num(e.target.value, nmTo(um, units)), units)))} style={{ width }} />
   );
 
   const add = () => {

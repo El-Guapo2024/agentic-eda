@@ -24,7 +24,7 @@ export interface EditPoint {
   pos: P;
 }
 
-const MIN_RECT_SIDE_UM = 26; // `Mils2IU( 1 )` (25.4 um) as whole micrometres
+const MIN_RECT_SIDE_NM = 25_400; // `Mils2IU( 1 )`
 
 /** The edit points of a polygon ring: its vertices, then the midpoint of each edge (`POLYGON_POINT_EDIT_BEHAVIOR::BuildForPolyOutline`). */
 export function ringEditPoints(ring: readonly P[]): EditPoint[] {
@@ -80,12 +80,12 @@ function arcCenterOf(s: Extract<Shape, { kind: "arc" }>): V {
 }
 
 /**
- * The handle under `at` (`EDIT_POINTS::FindPoint`: the points first, then the lines), within `tolUm`; the nearest one when several are.
+ * The handle under `at` (`EDIT_POINTS::FindPoint`: the points first, then the lines), within `tolNm`; the nearest one when several are.
  */
-export function activeEditPoint(points: readonly EditPoint[], at: readonly [number, number], tolUm: number): EditPoint | null {
+export function activeEditPoint(points: readonly EditPoint[], at: readonly [number, number], tolNm: number): EditPoint | null {
   const nearest = (kind: EditPoint["kind"]): EditPoint | null => {
     let best: EditPoint | null = null;
-    let bestD = tolUm * tolUm;
+    let bestD = tolNm * tolNm;
     for (const p of points) {
       if (p.kind !== kind) continue;
       const d = (p.pos[0] - at[0]) ** 2 + (p.pos[1] - at[1]) ** 2;
@@ -470,7 +470,7 @@ function moveRectPoint(shape: Extract<Shape, { kind: "rect" }>, point: EditPoint
   let x1 = Math.max(shape.start[0], shape.end[0]);
   let y0 = Math.min(shape.start[1], shape.end[1]);
   let y1 = Math.max(shape.start[1], shape.end[1]);
-  const min = MIN_RECT_SIDE_UM;
+  const min = MIN_RECT_SIDE_NM;
   switch (point.id) {
     case "tl":
       x0 = Math.min(to[0], x1 - min);

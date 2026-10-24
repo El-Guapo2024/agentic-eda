@@ -1,6 +1,12 @@
 //! The board built from a design against the one FreeRouting reads from the
 //! DSN written for it: `tests/design/<name>/` holds the design, its intent
 //! and FreeRouting's dump of that DSN (see `parity/design_dump.sh`).
+//!
+//! `dsn_board.txt` is the board alone, dumped (2026-10-23) from the DSN the
+//! nanometre design writes: a pad's or a keep-out's edge now sits on the
+//! 0.1 um the DSN can say where the micrometre design rounded it. The
+//! `board.txt` beside it is the older dump, with FreeRouting's routing
+//! passes, which `tests/maze.rs` replays on the board it holds.
 
 use std::path::Path;
 
@@ -65,7 +71,7 @@ fn boards_from_designs_match_freerouting() {
         let name = case.file_name().unwrap().to_string_lossy().to_string();
         let design = serde_json::from_str(&std::fs::read_to_string(case.join("design.json")).unwrap()).unwrap();
         let model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(case.join("intent.yaml")).unwrap()).unwrap();
-        let java = read_board(&std::fs::read_to_string(case.join("board.txt")).unwrap()).unwrap();
+        let java = read_board(&std::fs::read_to_string(case.join("dsn_board.txt")).unwrap()).unwrap();
         let port = board_from_design(&design, &model, &model.board).unwrap();
         match first_difference(&port, &java) {
             None => println!("{name}: {} items match", java.items.len()),

@@ -21,7 +21,7 @@
 use super::Board;
 use eda_kicad::dxf_import::{read_dxf, DxfOptions, DxfUnits};
 use eda_kicad::graphics_import::{arc_points, prepare, spline_or_line, HJustify, Imported, ImportedShape, Mapper, SplineOrLine, Stroke, VJustify, V2};
-use eda_model::ir::{Point, Shape, Text, TextJustify, Um};
+use eda_model::ir::{Point, Shape, Text, TextJustify, Nm};
 use eda_model::outline::EDGE_CUTS;
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -49,8 +49,8 @@ fn d_one() -> f64 {
     1.0
 }
 
-fn d_dxf_width() -> Um {
-    200
+fn d_dxf_width() -> Nm {
+    200_000
 }
 
 /// `Cmd::ImportGraphics`: what the Import Graphics dialog (`DIALOG_IMPORT_GRAPHICS`) hands `PlaceImportedGraphics`.
@@ -73,15 +73,15 @@ pub struct ImportGraphics {
     pub offset_x_nm: i64,
     #[serde(default)]
     pub offset_y_nm: i64,
-    /// "DXF default line width", micrometres. Not used for an SVG (its strokes carry their own widths).
+    /// "DXF default line width", nanometres. Not used for an SVG (its strokes carry their own widths).
     #[serde(default = "d_dxf_width")]
-    pub line_width_um: Um,
+    pub line_width_nm: Nm,
     /// "Group imported items".
     #[serde(default)]
     pub group: bool,
-    /// "Fix discontinuities" with its tolerance, micrometres; `None` leaves the shapes as they are.
+    /// "Fix discontinuities" with its tolerance, nanometres; `None` leaves the shapes as they are.
     #[serde(default)]
-    pub fix_tolerance_um: Option<Um>,
+    pub fix_tolerance_nm: Option<Nm>,
     /// Make the imported Edge.Cuts shapes the board's outline (see the module doc).
     #[serde(default)]
     pub replace_outline: bool,
@@ -96,7 +96,7 @@ impl ImportGraphics {
     /// The plugin's reading of the file: `Err` when it cannot be read at all.
     pub fn read(&self) -> Result<Imported, String> {
         match self.format {
-            GraphicsFormat::Dxf => read_dxf(&self.text, &DxfOptions { units: self.units()?, line_width_mm: self.line_width_um as f64 / 1000.0 }),
+            GraphicsFormat::Dxf => read_dxf(&self.text, &DxfOptions { units: self.units()?, line_width_mm: eda_model::units::to_mm(self.line_width_nm) }),
             GraphicsFormat::Svg => eda_kicad::svg_import::read_svg(&self.text),
         }
     }
@@ -106,8 +106,8 @@ impl ImportGraphics {
         Mapper {
             scale: self.scale,
             offset_mm: V2::new(self.offset_x_nm as f64 / 1.0e6, self.offset_y_nm as f64 / 1.0e6),
-            line_width_mm: if self.format == GraphicsFormat::Dxf { self.line_width_um as f64 / 1000.0 } else { 0.0 },
-            iu_per_mm: 1000.0,
+            line_width_mm: if self.format == GraphicsFormat::Dxf { eda_model::units::to_mm(self.line_width_nm) } else { 0.0 },
+            iu_per_mm: eda_model::units::PCB_IU_PER_MM,
         }
     }
 }
@@ -125,7 +125,7 @@ fn point(p: (i64, i64)) -> Point {
 }
 
 /// `MapStrokeParams`: a stroke of -1 is none (a width of nothing on the board), any other is mapped.
-fn stroke_width(mapper: &Mapper, s: &Stroke) -> Um {
+fn stroke_width(mapper: &Mapper, s: &Stroke) -> Nm {
     if s.width == -1.0 {
         0
     } else {
@@ -145,7 +145,7 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
     let m = *mapper;
     let layer = layer.to_string();
     // Arcs with a radius KiCad cannot hold become segments: "radius < MAX_INT / 2" in its nanometres.
-    let max_radius_um = i32::MAX as f64 / 2.0 / 1000.0;
+    let max_radius_nm = i32::MAX as f64 / 2.0;
     for shape in shapes {
         match shape {
             ImportedShape::Line { start, end, stroke } => add_line(&mut out, &m, &layer, *start, *end, stroke),
@@ -158,7 +158,7 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                 let (s, mid, e) = arc_points(*center, *start, *angle_deg);
                 let (cs, cc) = (m.coord(*start), m.coord(*center));
                 let radius = ((cs.0 - cc.0) as f64).hypot((cs.1 - cc.1) as f64);
-                if radius >= max_radius_um {
+                if radius >= max_radius_nm {
                     // "Arc cannot be handled: convert it to a segment"
                     add_line(&mut out, &m, &layer, *start, e, stroke);
                     continue;
@@ -186,7 +186,7 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                 }
             }
             ImportedShape::Text { origin, text, height, thickness, orientation_deg, h, v, .. } => {
-                let size = (height * m.scaling_factor()).round() as Um;
+                let size = (height * m.scaling_factor()).round() as Nm;
                 if size <= 0 || text.is_empty() {
                     continue;
                 }
@@ -210,7 +210,7 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                     HJustify::Center => TextJustify::Center,
                     HJustify::Right => TextJustify::Right,
                 };
-                out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_um: size, stroke_width: m.line_width(*thickness).max(1), justify, mirror: false });
+                out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_nm: size, stroke_width: m.line_width(*thickness).max(1), justify, mirror: false });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
                 let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));
@@ -259,7 +259,7 @@ impl Board<'_> {
             }
             return fail("ops_empty_import", why);
         }
-        if let Some(tol) = req.fix_tolerance_um {
+        if let Some(tol) = req.fix_tolerance_nm {
             crate::fix_shapes::connect_board_shapes(&mut items.shapes, tol.max(0));
         }
         let on_edge = req.layer == EDGE_CUTS;

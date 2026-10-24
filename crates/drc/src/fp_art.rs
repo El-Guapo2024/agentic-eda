@@ -175,10 +175,10 @@ mod tests {
         art.texts.push(FpText::new("${REFERENCE}", p(0, 0), "F.SilkS"));
         art.texts.push(FpText::new("fab note", p(0, 500), "F.Fab"));
         let footprint = Footprint { name: "T".into(), art, ..Default::default() };
-        let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("MCU".into()), package: None, footprint: Some("T".into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("MCU".into()), package: None, footprint: Some("T".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel { parts: vec![part], footprints: vec![footprint], ..Default::default() };
         let design = Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,

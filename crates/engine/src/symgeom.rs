@@ -23,7 +23,7 @@ pub fn kicad_turn(rot_millideg: u32, mirrored: bool, mirror_y: bool) -> (u32, bo
     }
 }
 
-/// Where a point of the symbol's unturned frame (micrometres from the corner the symbol is placed by, y down) lands on the sheet, as an offset from
+/// Where a point of the symbol's unturned frame (nanometres from the corner the symbol is placed by, y down) lands on the sheet, as an offset from
 /// `SymbolInstance::at`: KiCad's `TRANSFORM` of the orientation (`SCH_SYMBOL::SetOrientation`), the turn first and then the mirror, each about `at` --
 /// what the editor (`sch_scene::Matrix`) and the studio's painter (`transform.ts`) draw, so a pin is where the user wires it. A turn of 90 degrees is
 /// counter-clockwise on the sheet (`(x, y)` goes to `(y, -x)`, y down); `mirrored` negates x. `width` is not used: KiCad mirrors about the symbol's
@@ -69,10 +69,10 @@ pub struct PinGeom {
     pub number: String,
     /// The name KiCad shows: empty for none.
     pub name: String,
-    /// The pin's connection point, micrometres.
+    /// The pin's connection point, nanometres.
     pub tip: (f64, f64),
     pub orient: PinOrient,
-    /// The pin line's length, micrometres.
+    /// The pin line's length, nanometres.
     pub length: f64,
 }
 
@@ -83,7 +83,7 @@ pub struct SymbolGeom {
     pub pins: Vec<PinGeom>,
     pub texts: PinTexts,
     pub power: bool,
-    /// The box's width in the unturned frame, micrometres: what a mirror is about.
+    /// The box's width in the unturned frame, nanometres: what a mirror is about.
     pub width: f64,
 }
 
@@ -123,7 +123,7 @@ impl SymbolGeom {
     fn of_corner_symbol(at: Point, rot: u32, mirrored: bool, width: f64, cs: &LibSymbol, unit: u32, part: Option<&Part>) -> SymbolGeom {
         let on_unit = |u: u32| u == 0 || u == unit;
         let page = |x_mm: f64, y_mm_up: f64| -> (f64, f64) {
-            let (dx, dy) = bake(rot, mirrored, width, x_mm * 1000.0, -y_mm_up * 1000.0);
+            let (dx, dy) = bake(rot, mirrored, width, x_mm * 1e6, -y_mm_up * 1e6);
             (at.x as f64 + dx, at.y as f64 + dy)
         };
         let mut body: Option<Rect> = None;
@@ -144,7 +144,7 @@ impl SymbolGeom {
             };
             let d = bake_dir(rot, mirrored, local);
             let name = part.and_then(|pt| pt.pins.iter().find(|x| x.number == p.number)).map(|x| x.name.clone().unwrap_or_default()).unwrap_or_else(|| p.name.clone());
-            pins.push(PinGeom { number: p.number.clone(), name: eda_model::kicad_geom::shown_name(&name).to_string(), tip, orient: PinOrient::of_dir(d), length: p.length_mm * 1000.0 });
+            pins.push(PinGeom { number: p.number.clone(), name: eda_model::kicad_geom::shown_name(&name).to_string(), tip, orient: PinOrient::of_dir(d), length: p.length_mm * 1e6 });
         }
         let texts = PinTexts { names_hidden: cs.pin_names_hidden, numbers_hidden: cs.pin_numbers_hidden, name_offset_mm: cs.pin_name_offset_mm };
         SymbolGeom { body, pins, texts, power: cs.power, width }
@@ -163,7 +163,7 @@ impl SymbolGeom {
         for p in &self.pins {
             if p.length > 0.0 {
                 let end = (p.tip.0 + p.orient.dir().0 * p.length, p.tip.1 + p.orient.dir().1 * p.length);
-                out.push((Rect::new(p.tip, end).inflate(0.1), p));
+                out.push((Rect::new(p.tip, end).inflate(100.0), p));
             }
             let name_visible = !self.texts.names_hidden && !p.name.is_empty();
             if !self.texts.numbers_hidden && !p.number.is_empty() {
@@ -194,7 +194,7 @@ mod tests {
             symbol: None,
             datasheet: None,
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_nm: None,
             edge: None,
         }
     }
@@ -207,9 +207,9 @@ mod tests {
     fn bake_and_unbake_are_inverses() {
         for rot in [0, 90_000, 180_000, 270_000] {
             for mirrored in [false, true] {
-                let (px, py) = bake(rot, mirrored, 5_080.0, 1_234.0, 2_345.0);
-                let (lx, ly) = unbake(rot, mirrored, 5_080.0, px, py);
-                assert!((lx - 1_234.0).abs() < 1e-6 && (ly - 2_345.0).abs() < 1e-6, "{rot} {mirrored}: {lx} {ly}");
+                let (px, py) = bake(rot, mirrored, 5_080_000.0, 1_234_000.0, 2_345_000.0);
+                let (lx, ly) = unbake(rot, mirrored, 5_080_000.0, px, py);
+                assert!((lx - 1_234_000.0).abs() < 1e-6 && (ly - 2_345_000.0).abs() < 1e-6, "{rot} {mirrored}: {lx} {ly}");
             }
         }
     }
@@ -217,19 +217,19 @@ mod tests {
     #[test]
     fn a_standing_resistor_has_its_pins_above_and_below_a_box_between_them() {
         let r = eda_model::symbol::builtin("Device:R");
-        let at = Point { x: 50_800, y: 50_800 };
+        let at = Point { x: 50_800_000, y: 50_800_000 };
         let g = SymbolGeom::of(&instance(at, 0, false), &two_pin("R1"), r.as_ref());
         assert_eq!(g.pins.len(), 2);
         let (top, bottom) = (&g.pins[0], &g.pins[1]);
         // the box is the pins' tips less one stub (1.27 mm): 7.62 tall, its corner at `at`
-        assert_eq!(top.tip.1, 50_800.0 - 1_270.0);
-        assert_eq!(bottom.tip.1, 50_800.0 + part_box(&two_pin("R1"), r.as_ref(), 1).height() as f64 + 1_270.0);
+        assert_eq!(top.tip.1, 50_800_000.0 - 1_270_000.0);
+        assert_eq!(bottom.tip.1, 50_800_000.0 + part_box(&two_pin("R1"), r.as_ref(), 1).height() as f64 + 1_270_000.0);
         assert_eq!(top.orient, PinOrient::Down);
         assert_eq!(bottom.orient, PinOrient::Up);
         let body = g.body.expect("the body");
-        assert!((body.w() - 2_286.0).abs() < 0.5 && (body.h() - 5_334.0).abs() < 0.5, "{body:?}");
+        assert!((body.w() - 2_286_000.0).abs() < 1.0 && (body.h() - 5_334_000.0).abs() < 1.0, "{body:?}");
         // turned half a turn, pin 1 is at the bottom
-        let g2 = SymbolGeom::of(&instance(Point { x: 50_800, y: 50_800 + 7_620 }, 180_000, false), &two_pin("R1"), r.as_ref());
+        let g2 = SymbolGeom::of(&instance(Point { x: 50_800_000, y: 50_800_000 + 7_620_000 }, 180_000, false), &two_pin("R1"), r.as_ref());
         assert!(g2.pins[0].tip.1 > g2.pins[1].tip.1);
         assert_eq!(g2.pins[0].orient, PinOrient::Up);
     }

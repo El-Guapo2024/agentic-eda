@@ -7,7 +7,7 @@
 // `checkFieldRow`) and `Validate`'s for the names: every user field has one, none is a mandatory field's, none repeats another's (compared without case here, as KiCad's grid does).
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { FieldLayoutCmd, FootprintField, LibraryFootprint, Um } from "../api/types";
+import type { FieldLayoutCmd, FootprintField, LibraryFootprint, Nm } from "../api/types";
 import { checkFieldRow } from "./fpFields";
 
 export const LIBRARY_REFERENCE_TEXT = "REF**";
@@ -24,13 +24,13 @@ export interface LibFieldRow {
   layout: FieldLayoutCmd;
 }
 
-export const defaultReferenceLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: -2000 }, size: [1000, 1000], thickness: 150, layer: "F.SilkS", visible: true });
-export const defaultValueLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 2000 }, size: [1000, 1000], thickness: 150, layer: "F.Fab", visible: true });
+export const defaultReferenceLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: -2_000_000 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.SilkS", visible: true });
+export const defaultValueLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 2_000_000 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.Fab", visible: true });
 /** `OnAddField`: hidden, at the origin, on the fabrication layer. */
-export const newFieldLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 0 }, size: [1000, 1000], thickness: 150, layer: "F.Fab", visible: false });
+export const newFieldLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 0 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.Fab", visible: false });
 /** The Datasheet and Description fields of a footprint that has none of its own (`FOOTPRINT::FOOTPRINT`'s `addField( FIELD_T::DATASHEET, F_Fab, false )`): hidden, at the origin,
  * on the fabrication layer, in `EDA_TEXT`'s default 1.27 mm with the automatic pen (`fp_edit::default_library_datasheet_layout`). */
-export const defaultInfoFieldLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 0 }, size: [1270, 1270], thickness: 0, layer: "F.Fab", visible: false });
+export const defaultInfoFieldLayout = (): FieldLayoutCmd => ({ at: { x: 0, y: 0 }, size: [1_270_000, 1_270_000], thickness: 0, layer: "F.Fab", visible: false });
 
 /** The four mandatory rows come first -- Reference, Value, Datasheet, Description (`PCB_FIELDS_GRID_TABLE::GetMandatoryRowCount`, a footprint's mandatory fields): they are never
  * moved, renamed or deleted. */
@@ -58,7 +58,7 @@ export function newRowName(rows: readonly LibFieldRow[]): string {
 }
 
 /** The first problem of the grid in the dialog's words, or null: each row's size and pen, then the names. `fmt` writes a length in the units on show. */
-export function gridProblem(rows: readonly LibFieldRow[], fmt: (um: Um) => string): string | null {
+export function gridProblem(rows: readonly LibFieldRow[], fmt: (um: Nm) => string): string | null {
   const seen = new Set<string>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]!;

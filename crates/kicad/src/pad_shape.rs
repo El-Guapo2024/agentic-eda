@@ -7,11 +7,11 @@
 //! chamfered corners swap sides and every primitive's x is negated. The engine keeps the footprint as seen from the top, so reading
 //! and writing both apply the same mirror.
 
-use crate::import::{graphic_shape, mm_to_um};
+use crate::import::{graphic_shape, mm_to_nm};
 use crate::sexpr::{self, Sexpr};
 use crate::mm;
 use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive, PadShape, PadShapeExt};
-use eda_model::ir::{ChamferCorners, Point, Shape, Side, Um};
+use eda_model::ir::{ChamferCorners, Point, Shape, Side, Nm};
 use std::fmt::Write as _;
 
 /// What the shape of a `(pad ..)` is: the shape itself, the ratio of its rounded corners and the rest of its padstack layer.
@@ -31,9 +31,9 @@ fn mirror_x(p: Point, side: Side) -> Point {
 }
 
 /// The `(offset x y)` inside a pad's `(drill ..)`, in the engine's frame (`PAD::SetOffset`).
-pub(crate) fn read_offset(pad: &[Sexpr], side: Side) -> Option<(Um, Um)> {
+pub(crate) fn read_offset(pad: &[Sexpr], side: Side) -> Option<(Nm, Nm)> {
     let o = sexpr::find(pad, "drill").and_then(|d| sexpr::find(d, "offset"))?;
-    let p = mirror_x(Point { x: mm_to_um(sexpr::num(o, 1)?), y: mm_to_um(sexpr::num(o, 2)?) }, side);
+    let p = mirror_x(Point { x: mm_to_nm(sexpr::num(o, 1)?), y: mm_to_nm(sexpr::num(o, 2)?) }, side);
     (p.x != 0 || p.y != 0).then_some((p.x, p.y))
 }
 
@@ -45,7 +45,7 @@ pub(crate) fn read_pad_shape(pad: &[Sexpr], side: Side) -> PadShapeRead {
 
 /// The shape a node holds: `shape_token` (`rect`, `circle`, ..), the copper's `offset` and the tokens `rect_delta`, `roundrect_rratio`, `chamfer_ratio`,
 /// `chamfer`, `options` and `primitives` among its children. A pad is such a node (`parsePAD`), and so is each `(layer ..)` of its padstack (`parsePadstack`).
-pub(crate) fn read_shape_node(pad: &[Sexpr], shape_token: &str, offset: Option<(Um, Um)>, side: Side) -> PadShapeRead {
+pub(crate) fn read_shape_node(pad: &[Sexpr], shape_token: &str, offset: Option<(Nm, Nm)>, side: Side) -> PadShapeRead {
     let mut shape = match shape_token {
         "circle" => PadShape::Circle,
         "oval" => PadShape::Oval,
@@ -58,8 +58,8 @@ pub(crate) fn read_shape_node(pad: &[Sexpr], shape_token: &str, offset: Option<(
 
     // `(rect_delta dx dy)`, `PAD::SetDelta`; the delta's x is mirrored with the pad.
     if let Some(d) = sexpr::find(pad, "rect_delta") {
-        let dx = mm_to_um(sexpr::num(d, 1).unwrap_or(0.0));
-        let dy = mm_to_um(sexpr::num(d, 2).unwrap_or(0.0));
+        let dx = mm_to_nm(sexpr::num(d, 1).unwrap_or(0.0));
+        let dy = mm_to_nm(sexpr::num(d, 2).unwrap_or(0.0));
         let dx = if side == Side::Bottom { -dx } else { dx };
         if dx != 0 || dy != 0 {
             ext.trapezoid_delta = Some((dx, dy));
@@ -131,7 +131,7 @@ fn read_primitives(prims: &[Sexpr], side: Side) -> Vec<PadPrimitive> {
                 shape.set_filled(true);
             }
             if shape.stroke_width() <= 0 && !shape.is_filled() {
-                shape.set_stroke_width(100);
+                shape.set_stroke_width(100_000);
             }
         }
         out.push(PadPrimitive { shape, proxy });
@@ -157,7 +157,7 @@ pub(crate) struct PadShapeText {
     /// ` (rect_delta dx dy)`, right after `(size ..)`.
     pub delta: String,
     /// The copper's offset in the file's frame, written inside `(drill ..)`.
-    pub offset: Option<(Um, Um)>,
+    pub offset: Option<(Nm, Nm)>,
     /// ` (roundrect_rratio r)` and, for a chamfered rectangle, ` (chamfer_ratio r) (chamfer ..)`.
     pub corners: String,
     /// A custom pad's ` (options ..) (primitives ..)`, after the thermal relief and before the uuid.
@@ -221,7 +221,7 @@ fn write_primitive(out: &mut String, prim: &PadPrimitive, side: Side) {
         format!("{} {}", mm(q.x), mm(q.y))
     };
     let fill = |f: bool| format!(" (fill {})", if f { "yes" } else { "no" });
-    let width = |w: Um| format!(" (width {})", mm(w.max(0)));
+    let width = |w: Nm| format!(" (width {})", mm(w.max(0)));
     match (&prim.shape, prim.proxy) {
         (Shape::Segment { start, end, .. }, true) => write!(out, " (gr_vector (start {}) (end {}))", p(*start), p(*end)),
         (Shape::Segment { start, end, stroke_width, .. }, false) => write!(out, " (gr_line (start {}) (end {}){})", p(*start), p(*end), width(*stroke_width)),
@@ -258,11 +258,11 @@ mod tests {
     fn a_trapezoid_reads_its_delta_and_writes_it_back() {
         let node = pad_node("(pad \"1\" smd trapezoid (at 0 0) (size 2 1) (rect_delta 0.4 0) (layers \"F.Cu\"))");
         let r = read_pad_shape(&node, Side::Top);
-        assert_eq!((r.shape, r.ext.trapezoid_delta), (PadShape::Trapezoid, Some((400, 0))));
+        assert_eq!((r.shape, r.ext.trapezoid_delta), (PadShape::Trapezoid, Some((400_000, 0))));
         assert_eq!(write_pad_shape(r.shape, r.roundrect_ratio, &r.ext, Side::Top).delta, " (rect_delta 0.4 0)");
         // Seen from the bottom the file's frame is mirrored: the x delta changes sign each way.
         let b = read_pad_shape(&node, Side::Bottom);
-        assert_eq!(b.ext.trapezoid_delta, Some((-400, 0)));
+        assert_eq!(b.ext.trapezoid_delta, Some((-400_000, 0)));
         assert_eq!(write_pad_shape(b.shape, b.roundrect_ratio, &b.ext, Side::Bottom).delta, " (rect_delta 0.4 0)");
     }
 
@@ -293,7 +293,7 @@ mod tests {
         let custom = r.ext.custom.clone().unwrap();
         assert_eq!((custom.anchor, custom.zone, custom.primitives.len()), (PadAnchor::Rect, CustomZoneMode::ConvexHull, 6));
         assert_eq!(custom.primitives.iter().filter(|p| p.proxy).count(), 2, "gr_bbox and gr_vector are proxy items");
-        assert!(matches!(custom.primitives[0].shape, Shape::Circle { stroke_width: 2200, filled: false, center: Point { x: -2975, y: 0 }, .. }));
+        assert!(matches!(custom.primitives[0].shape, Shape::Circle { stroke_width: 2_200_000, filled: false, center: Point { x: -2_975_000, y: 0 }, .. }));
         // The text it writes reads back to the same shape, on either side.
         for side in [Side::Top, Side::Bottom] {
             let r = read_pad_shape(&node, side);
@@ -309,9 +309,9 @@ mod tests {
     #[test]
     fn the_shape_offset_is_read_from_inside_the_drill_and_mirrored_on_the_bottom() {
         let node = pad_node("(pad \"1\" thru_hole rect (at 0 0) (size 2 1) (drill 0.8 (offset 0.5 -0.25)) (layers \"*.Cu\"))");
-        assert_eq!(read_offset(&node, Side::Top), Some((500, -250)));
-        assert_eq!(read_offset(&node, Side::Bottom), Some((-500, -250)));
+        assert_eq!(read_offset(&node, Side::Top), Some((500_000, -250_000)));
+        assert_eq!(read_offset(&node, Side::Bottom), Some((-500_000, -250_000)));
         assert_eq!(read_offset(&pad_node("(pad \"1\" smd rect (at 0 0) (size 2 1))"), Side::Top), None);
-        assert_eq!(first_xy(&pad_node("(pts (xy 1 2))")), Some(Point { x: 1000, y: 2000 }));
+        assert_eq!(first_xy(&pad_node("(pts (xy 1 2))")), Some(Point { x: 1_000_000, y: 2_000_000 }));
     }
 }

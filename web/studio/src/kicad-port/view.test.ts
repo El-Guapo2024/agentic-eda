@@ -11,27 +11,27 @@ test("worldToScreen / screenToWorld are inverses", () => {
 });
 
 test("zoomAbout keeps the anchor screen point fixed (view.cpp SetScale(scale, anchor) contract)", () => {
-  const v: ViewTransform = { scale: 1, x: 50, y: 50 };
+  const v: ViewTransform = { scale: 0.001, x: 50, y: 50 };
   const anchorScreen: [number, number] = [200, 150];
   const [wxBefore, wyBefore] = screenToWorld(v, ...anchorScreen);
   const zoomed = zoomAbout(v, anchorScreen[0], anchorScreen[1], 3);
   const [sxAfter, syAfter] = worldToScreen(zoomed, wxBefore, wyBefore);
   assert.ok(Math.abs(sxAfter - anchorScreen[0]) < 1e-9, "anchor x should stay under the cursor");
   assert.ok(Math.abs(syAfter - anchorScreen[1]) < 1e-9, "anchor y should stay under the cursor");
-  assert.equal(zoomed.scale, 3);
+  assert.ok(Math.abs(zoomed.scale - 0.003) < 1e-15);
 });
 
 test("zoomAbout clamps to [MIN_SCALE, MAX_SCALE]", () => {
-  const v: ViewTransform = { scale: 1, x: 0, y: 0 };
+  const v: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   assert.equal(zoomAbout(v, 0, 0, 1e9).scale, MAX_SCALE);
   assert.equal(zoomAbout(v, 0, 0, 1e-9).scale, MIN_SCALE);
 });
 
 test("zoomAbout: two inverse factors in a row return to the original scale", () => {
-  const v: ViewTransform = { scale: 4, x: 10, y: 10 };
+  const v: ViewTransform = { scale: 0.004, x: 10, y: 10 };
   const zoomedIn = zoomAbout(v, 100, 100, 1.5);
   const back = zoomAbout(zoomedIn, 100, 100, 1 / 1.5);
-  assert.ok(Math.abs(back.scale - v.scale) < 1e-9);
+  assert.ok(Math.abs(back.scale - v.scale) < 1e-15);
   assert.ok(Math.abs(back.x - v.x) < 1e-9);
   assert.ok(Math.abs(back.y - v.y) < 1e-9);
 });

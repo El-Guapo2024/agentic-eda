@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ir::{Point, Um};
+use crate::ir::{Point, Nm};
 
 /// `PCB_VIA_STITCH_LAYOUT`: the file's `(layout 0|1|2)`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +67,7 @@ impl StitchMode {
     }
 }
 
-fn is_zero_um(v: &Um) -> bool {
+fn is_zero_nm(v: &Nm) -> bool {
     *v == 0
 }
 fn is_zero_point(p: &Point) -> bool {
@@ -83,8 +83,10 @@ fn is_zero_u32(v: &u32) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViaTemplate {
-    pub size_um: Um,
-    pub drill_um: Um,
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
+    #[serde(alias = "drill_um", deserialize_with = "crate::units::de")]
+    pub drill_nm: Nm,
     pub from_layer: String,
     pub to_layer: String,
     /// The `(via ..)` form as the file wrote it, on one line; empty for one made here.
@@ -94,7 +96,7 @@ pub struct ViaTemplate {
 
 impl Default for ViaTemplate {
     fn default() -> Self {
-        ViaTemplate { size_um: 0, drill_um: 0, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() }
+        ViaTemplate { size_nm: 0, drill_nm: 0, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() }
     }
 }
 
@@ -114,8 +116,9 @@ pub struct ViaStitch {
     /// The area the vias are placed in (`m_outline`'s one outline, a closed ring).
     pub outline: Vec<Point>,
     /// `m_pitch`: the centre-to-centre spacing; 0 is the default (`defaultPitch`: twice the via, and at least 2 mm).
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub pitch_um: Um,
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "pitch_um", deserialize_with = "crate::units::de")]
+    pub pitch_nm: Nm,
     #[serde(default)]
     pub layout: StitchLayout,
     #[serde(default)]
@@ -166,7 +169,7 @@ impl ViaStitch {
             layer: d_layer(),
             name: d_name(),
             outline,
-            pitch_um: 0,
+            pitch_nm: 0,
             layout: StitchLayout::Plain,
             mode: StitchMode::Stitch,
             seed: 0,
@@ -192,7 +195,7 @@ impl ViaStitch {
     }
 
     /// The outline's box `[x0, y0, x1, y1]` (`GetBoundingBox`: `m_outline.BBox()`).
-    pub fn bounds(&self) -> [Um; 4] {
+    pub fn bounds(&self) -> [Nm; 4] {
         let mut b = [i64::MAX, i64::MAX, i64::MIN, i64::MIN];
         for p in &self.outline {
             b = [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)];
@@ -202,24 +205,24 @@ impl ViaStitch {
 }
 
 /// `defaultViaSize`: the board's current via size, 0.6 mm when it has none.
-pub fn default_via_size(current: Um) -> Um {
+pub fn default_via_size(current: Nm) -> Nm {
     if current > 0 {
         current
     } else {
-        600
+        600_000
     }
 }
 
 /// `defaultViaDrill`: the board's current via drill, 0.3 mm when it has none.
-pub fn default_via_drill(current: Um) -> Um {
+pub fn default_via_drill(current: Nm) -> Nm {
     if current > 0 {
         current
     } else {
-        300
+        300_000
     }
 }
 
 /// `defaultPitch`: twice the via, and at least 2 mm.
-pub fn default_pitch(via_size: Um) -> Um {
-    (via_size * 2).max(2_000)
+pub fn default_pitch(via_size: Nm) -> Nm {
+    (via_size * 2).max(2_000_000)
 }

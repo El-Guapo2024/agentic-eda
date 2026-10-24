@@ -54,7 +54,7 @@ mod tests {
     fn design() -> Design {
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             routing: None,
@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn the_simulators_settings_and_workbook_are_one_undoable_step() {
         let m = ConstraintModel::default();
-        let mut b = Board::new(design(), &m, 100, 300);
+        let mut b = Board::new(design(), &m, 100_000, 300_000);
         let settings = NgspiceSettings { workbook_filename: "board.wbk".into(), fix_include_paths: true, model_mode: NgspiceSettings::NGSPICE };
         let wbk = "{\n  \"version\": 7\n}\n".to_string();
         let cmd = Cmd::SetSimulator { ngspice: Some(settings.clone()), workbook: Some(wbk.clone()) };

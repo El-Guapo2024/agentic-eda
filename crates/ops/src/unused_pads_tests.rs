@@ -14,7 +14,7 @@ fn through_hole_model(layers: &[&str]) -> ConstraintModel {
     let mut m = model(layers);
     for pad in m.footprints[0].pads.iter_mut().filter(|p| p.number != "2") {
         pad.kind = PadKind::ThroughHole;
-        pad.drill = Some(300);
+        pad.drill = Some(300_000);
     }
     m.parts = vec![part("U1"), part("U2")];
     m
@@ -141,14 +141,14 @@ fn a_blind_or_buried_via_is_taken_by_the_layer_depth_between_its_ends() {
     {
         let rt = d.routing.as_mut().unwrap();
         rt.vias[0].to_layer = "In1.Cu".into();
-        rt.vias.push(super::pcb_transform_tests::via("via_b", (30_000, 50_000), "In1.Cu", "In2.Cu"));
-        rt.vias.push(super::pcb_transform_tests::via("via_c", (40_000, 50_000), "In1.Cu", "B.Cu"));
-        rt.vias.push(super::pcb_transform_tests::via("via_d", (50_000, 50_000), "F.Cu", "B.Cu"));
+        rt.vias.push(super::pcb_transform_tests::via("via_b", (30_000_000, 50_000_000), "In1.Cu", "In2.Cu"));
+        rt.vias.push(super::pcb_transform_tests::via("via_c", (40_000_000, 50_000_000), "In1.Cu", "B.Cu"));
+        rt.vias.push(super::pcb_transform_tests::via("via_d", (50_000_000, 50_000_000), "F.Cu", "B.Cu"));
         let mut dr = dr.clone();
         dr.via_extras = ["via_a", "via_b", "via_c", "via_d"].iter().map(|id| ViaExtra { id: (*id).into(), kind: ViaKind::Blind, tokens: vec![] }).collect();
         d.drawings = Some(dr);
     }
-    let mut b = Board::new(d, &m, 100, 300);
+    let mut b = Board::new(d, &m, 100_000, 300_000);
     b.apply(&remove(None, true, false, true, true)).unwrap();
     // The dialog takes every via that spans more than a depth of 1, and with KiCad's layer ids that is every pair of layers but the front and the back of a board of
     // two copper layers.
@@ -169,7 +169,7 @@ fn a_blind_or_buried_via_is_taken_by_the_layer_depth_between_its_ends() {
         dr.via_extras = vec![ViaExtra { id: "via_a".into(), kind: ViaKind::Blind, tokens: vec![] }];
         d.drawings = Some(dr);
     }
-    let mut b = Board::new(d, &m, 100, 300);
+    let mut b = Board::new(d, &m, 100_000, 300_000);
     assert!(refusal(&mut b, remove(None, true, false, true, true)).starts_with("ops_nothing_to_change"));
     assert_eq!(via_mode(&b, "via_a"), UnconnectedLayers::KeepAll);
 }
@@ -180,7 +180,7 @@ fn a_pad_that_already_has_a_padstack_keeps_it_and_the_setting_goes_with_it() {
     let m = through_hole_model(&FOUR);
     let mut b = board(&m);
     // A front/inner/back stack the board already had on U1.1.
-    let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(eda_model::PadShape::Circle, (900, 900))), back: Some(PadLayerShape::plain(eda_model::PadShape::Rect, (1_400, 1_400))), ..Default::default() };
+    let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(eda_model::PadShape::Circle, (900_000, 900_000))), back: Some(PadLayerShape::plain(eda_model::PadShape::Rect, (1_400_000, 1_400_000))), ..Default::default() };
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: PadEdit { number: "1".into(), nth: 1, stack: Some(stack.clone()), ..Default::default() } }).unwrap();
     b.apply(&remove(Some(&["U1"]), false, true, false, true)).unwrap();
     let e = edit_of(&b, "U1").unwrap().pad("1", 1).unwrap().stack.clone().unwrap();

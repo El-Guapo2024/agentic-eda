@@ -26,7 +26,7 @@
 //! - `label_fields`: a label's own fields (`SCH_LABEL_BASE::m_fields`): its net class (`Netclass`) and any other, as Label Properties' grid edits them.
 //! - `intersheet_refs`: Schematic Setup > Formatting > Inter-sheet References, how a global label's Sheet References field reads (`SCHEMATIC_SETTINGS`).
 
-use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Um};
+use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Nm};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -79,7 +79,7 @@ pub struct SchExtras {
     /// A wire's, bus's, bus entry's or graphic line's stroke (`SCH_LINE::GetStroke`, `SCH_BUS_ENTRY_BASE::GetStroke`), by item id, once
     /// Wire/Bus Properties (`DIALOG_WIRE_BUS_PROPERTIES`) or Line Properties set one. An item with no entry has the default stroke (the
     /// sheet's default width, a solid line, the layer's colour); an entry equal to the default is never stored. A graphic line's width
-    /// lives in `SchLine::width_um`, as it always has: its entry here carries only the style and the colour.
+    /// lives in `SchLine::width_nm`, as it always has: its entry here carries only the style and the colour.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub strokes: BTreeMap<String, SchStroke>,
     /// An explicit junction's dot (`SCH_JUNCTION::GetDiameter` / `GetColor`), by junction id, once Junction Properties set one.
@@ -276,9 +276,10 @@ pub enum AutoplaceAlgo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LabelLook {
-    /// The text's size (height and width), micrometres; 0 is the default, 50 mil.
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub size_um: Um,
+    /// The text's size (height and width), nanometres; 0 is the default, 50 mil.
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
     #[serde(default, skip_serializing_if = "is_false")]
     pub bold: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -294,12 +295,12 @@ impl LabelLook {
         *self == LabelLook::default()
     }
 
-    /// The size the text is set in, micrometres.
-    pub fn text_size_um(&self) -> Um {
-        if self.size_um > 0 {
-            self.size_um
+    /// The size the text is set in, nanometres.
+    pub fn text_size_nm(&self) -> Nm {
+        if self.size_nm > 0 {
+            self.size_nm
         } else {
-            crate::ir::DEFAULT_FIELD_SIZE_UM
+            crate::ir::DEFAULT_FIELD_SIZE_NM
         }
     }
 }
@@ -387,8 +388,9 @@ impl IntersheetRefs {
 #[serde(deny_unknown_fields)]
 pub struct SchStroke {
     /// The line width; 0 is the default (`default_line_thickness`, 6 mil for a wire).
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub width_um: Um,
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
     #[serde(default, skip_serializing_if = "SchLineStyle::is_default")]
     pub style: SchLineStyle,
     /// `None` is `COLOR4D::UNSPECIFIED`: the colour of the item's layer.
@@ -408,8 +410,9 @@ impl SchStroke {
 #[serde(deny_unknown_fields)]
 pub struct JunctionLook {
     /// The dot's diameter; 0 is the default (`DEFAULT_JUNCTION_DIAM`, 36 mil).
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub diameter_um: Um,
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "diameter_um", deserialize_with = "crate::units::de")]
+    pub diameter_nm: Nm,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<SchColor>,
 }
@@ -769,11 +772,16 @@ pub enum SchGraphicKind {
     Rectangle {
         start: Point,
         end: Point,
-        #[serde(default, skip_serializing_if = "is_zero_um")]
-        corner_radius_um: Um,
+        #[serde(default, skip_serializing_if = "is_zero_nm")]
+        #[serde(alias = "corner_radius_um", deserialize_with = "crate::units::de")]
+        corner_radius_nm: Nm,
     },
     /// `SCH_SHAPE` circle: centre and radius.
-    Circle { center: Point, radius_um: Um },
+    Circle {
+        center: Point,
+        #[serde(alias = "radius_um", deserialize_with = "crate::units::de")]
+        radius_nm: Nm,
+    },
     /// `SCH_SHAPE` arc: start, a point on the arc between them, and end (KiCad's own three-point form).
     Arc { start: Point, mid: Point, end: Point },
     /// `SCH_SHAPE` bezier: start, control 1, control 2, end.
@@ -781,14 +789,15 @@ pub enum SchGraphicKind {
     /// `SCH_SHAPE` polygon: a closed outline of three or more points.
     Polygon { pts: Vec<Point> },
     /// `SCH_TEXTBOX`: a rectangle with text inside. `angle` is 0 or 90000 (KiCad keeps a text box's
-    /// text horizontal or vertical only); `margin_um` is the gap between the border and the text.
+    /// text horizontal or vertical only); `margin_nm` is the gap between the border and the text.
     TextBox {
         start: Point,
         end: Point,
         text: String,
         #[serde(default, skip_serializing_if = "is_zero_angle")]
         angle: Millideg,
-        size_um: Um,
+        #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+        size_nm: Nm,
         #[serde(default, skip_serializing_if = "is_false")]
         bold: bool,
         #[serde(default, skip_serializing_if = "is_false")]
@@ -797,8 +806,9 @@ pub enum SchGraphicKind {
         h_align: SchHAlign,
         #[serde(default)]
         v_align: SchVAlign,
-        #[serde(default, skip_serializing_if = "is_zero_um")]
-        margin_um: Um,
+        #[serde(default, skip_serializing_if = "is_zero_nm")]
+        #[serde(alias = "margin_um", deserialize_with = "crate::units::de")]
+        margin_nm: Nm,
     },
     /// `SCH_RULE_AREA`: a polygon that applies its attributes to everything inside it and to the
     /// nets crossing it (a netclass directive label on its border names the class).
@@ -822,14 +832,15 @@ pub enum SchGraphicKind {
         orientation: Millideg,
         #[serde(default)]
         shape: DirectiveShape,
-        pin_length_um: Um,
+        #[serde(alias = "pin_length_um", deserialize_with = "crate::units::de")]
+        pin_length_nm: Nm,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         netclass: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         component_class: String,
     },
     /// `SCH_BITMAP`: an image on the sheet, drawn under everything else and plotted. `at` is its centre (`REFERENCE_IMAGE::GetPosition`); its size is the pixels of the file at
-    /// their definition times `scale_ppm` ([`crate::image_info::size_um`]). The file is held as the base64 text a `(data ..)` token carries, no white space, so a sheet written
+    /// their definition times `scale_ppm` ([`crate::image_info::size_nm`]). The file is held as the base64 text a `(data ..)` token carries, no white space, so a sheet written
     /// back has the bytes it was read with. The stroke and fill of the graphic do not apply to it.
     Image {
         at: Point,
@@ -877,9 +888,10 @@ pub struct SchGraphic {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
     pub shape: SchGraphicKind,
-    /// Stroke width, um; 0 means the default line width.
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub width_um: Um,
+    /// Stroke width, nm; 0 means the default line width.
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
     #[serde(default, skip_serializing_if = "SchLineStyle::is_default")]
     pub line_style: SchLineStyle,
     /// Stroke colour; absent means the layer's own colour.
@@ -895,7 +907,7 @@ pub struct SchGraphic {
 impl SchGraphic {
     /// A graphic of `shape` with every style at its default.
     pub fn new(shape: SchGraphicKind) -> SchGraphic {
-        SchGraphic { id: String::new(), shape, width_um: 0, line_style: SchLineStyle::Default, color: None, fill: SchFill::None, fill_color: None }
+        SchGraphic { id: String::new(), shape, width_nm: 0, line_style: SchLineStyle::Default, color: None, fill: SchFill::None, fill_color: None }
     }
 
     /// The seed `assign_missing_ids` hashes: the kind's own geometry, so the same drawing always gets the same id.
@@ -903,7 +915,7 @@ impl SchGraphic {
         let p = |a: &Point| format!("{},{}", a.x, a.y);
         match &self.shape {
             SchGraphicKind::Rectangle { start, end, .. } => format!("rect|{}|{}", p(start), p(end)),
-            SchGraphicKind::Circle { center, radius_um } => format!("circle|{}|{radius_um}", p(center)),
+            SchGraphicKind::Circle { center, radius_nm } => format!("circle|{}|{radius_nm}", p(center)),
             SchGraphicKind::Arc { start, mid, end } => format!("arc|{}|{}|{}", p(start), p(mid), p(end)),
             SchGraphicKind::Bezier { start, c1, c2, end } => format!("bezier|{}|{}|{}|{}", p(start), p(c1), p(c2), p(end)),
             SchGraphicKind::Polygon { pts } => format!("poly|{}", pts.iter().map(p).collect::<Vec<_>>().join(";")),
@@ -915,7 +927,7 @@ impl SchGraphic {
     }
 }
 
-fn is_zero_um(v: &Um) -> bool {
+fn is_zero_nm(v: &Nm) -> bool {
     *v == 0
 }
 
@@ -931,7 +943,7 @@ fn is_false(v: &bool) -> bool {
 mod tests {
     use super::*;
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 
@@ -970,12 +982,12 @@ mod tests {
     #[test]
     fn graphics_round_trip_through_json_and_get_distinct_ids() {
         let mut e = SchExtras::default();
-        let mut r = SchGraphic::new(SchGraphicKind::Rectangle { start: p(0, 0), end: p(10_000, 5_000), corner_radius_um: 0 });
+        let mut r = SchGraphic::new(SchGraphicKind::Rectangle { start: p(0, 0), end: p(10_000, 5_000), corner_radius_nm: 0 });
         r.fill = SchFill::Background;
         e.graphics.push(r);
-        e.graphics.push(SchGraphic::new(SchGraphicKind::Circle { center: p(1, 2), radius_um: 3_000 }));
+        e.graphics.push(SchGraphic::new(SchGraphicKind::Circle { center: p(1, 2), radius_nm: 3_000 }));
         e.graphics.push(SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 0), p(10, 0), p(10, 10)], exclude_from_sim: false, exclude_from_bom: true, exclude_from_board: false, dnp: false }));
-        e.graphics.push(SchGraphic::new(SchGraphicKind::Directive { at: p(5, 5), orientation: 90_000, shape: DirectiveShape::Round, pin_length_um: 2_540, netclass: "HV".into(), component_class: String::new() }));
+        e.graphics.push(SchGraphic::new(SchGraphicKind::Directive { at: p(5, 5), orientation: 90_000, shape: DirectiveShape::Round, pin_length_nm: 2_540, netclass: "HV".into(), component_class: String::new() }));
         let mut taken = BTreeSet::new();
         e.assign_missing_ids(&mut taken);
         let ids: Vec<&str> = e.graphics.iter().map(|g| g.id.as_str()).collect();

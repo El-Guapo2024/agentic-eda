@@ -14,7 +14,7 @@ import { dashPattern } from "../../kicad-port/fpArt";
 import { layerColor } from "./layers";
 import { layerAlpha, realLayerKey, withAlpha, type PaintOptions } from "./painter";
 import { drawTableSession } from "../../kicad-port/tables";
-import { hairlineUm } from "./view";
+import { hairlineNm } from "./view";
 
 /** The tables of `board` that are drawn: those whose layer is on. */
 export function drawTables(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Pick<BoardState, "drawings">, opts: PaintOptions): void {
@@ -36,18 +36,18 @@ function drawTable(ctx: CanvasRenderingContext2D, view: ViewTransform, t: BoardT
     const color = selected ? selectedColor : base;
     for (const line of c.lines) {
       if (!line.text) continue;
-      const sizeUm = Math.max(c.size_h, hairlineUm(view, 8));
-      const thicknessUm = opts.sketchText ? hairlineUm(view, 1) : c.pen;
+      const sizeNm = Math.max(c.size_h, hairlineNm(view, 8));
+      const thicknessNm = opts.sketchText ? hairlineNm(view, 1) : c.pen;
       if (c.size_w !== c.size_h && c.size_h > 0) {
         // A glyph wider or narrower than it is tall: the stroke font is drawn square, so scale it across the text's own axis.
         ctx.save();
         ctx.translate(line.x, line.y);
         ctx.rotate(angleRad);
         ctx.scale(c.size_w / c.size_h, 1);
-        drawStrokeText(ctx, line.text, 0, 0, { sizeUm, thicknessUm, justify: "left", mirror: c.mirror, italic: c.italic, color });
+        drawStrokeText(ctx, line.text, 0, 0, { sizeNm, thicknessNm, justify: "left", mirror: c.mirror, italic: c.italic, color });
         ctx.restore();
       } else {
-        drawStrokeText(ctx, line.text, line.x, line.y, { sizeUm, thicknessUm, justify: "left", angleRad, mirror: c.mirror, italic: c.italic, color });
+        drawStrokeText(ctx, line.text, line.x, line.y, { sizeNm, thicknessNm, justify: "left", angleRad, mirror: c.mirror, italic: c.italic, color });
       }
     }
   }
@@ -58,7 +58,7 @@ function drawTable(ctx: CanvasRenderingContext2D, view: ViewTransform, t: BoardT
   ctx.strokeStyle = tableSelected ? selectedColor : base;
   for (const b of t.borders) {
     if (b.width < 0) continue;
-    const w = Math.max(b.width, hairlineUm(view, tableSelected ? 2 : 1));
+    const w = Math.max(b.width, hairlineNm(view, tableSelected ? 2 : 1));
     ctx.lineWidth = w;
     const dash = b.style === "solid" || b.style === "default" ? undefined : b.style;
     ctx.setLineDash(dash ? dashPattern(dash, b.width) : []);
@@ -89,13 +89,13 @@ function drawTable(ctx: CanvasRenderingContext2D, view: ViewTransform, t: BoardT
  * there yet.
  */
 export function drawTablePreview(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Pick<BoardState, "board_rules">, origin: readonly [number, number], opts: PaintOptions): void {
-  const cursor = opts.cursorUm;
+  const cursor = opts.cursorNm;
   if (!cursor) return;
   const at: [number, number] = opts.snappedCursor ? [opts.snappedCursor[0], opts.snappedCursor[1]] : [cursor.x, cursor.y];
-  const { layer, grid, lineWidth } = drawTableSession(board.board_rules?.text_graphics, opts.activeLayer, origin, at, opts.gridUm);
+  const { layer, grid, lineWidth } = drawTableSession(board.board_rules?.text_graphics, opts.activeLayer, origin, at, opts.gridNm);
   const color = layerColor(realLayerKey(layer));
   const [x0, y0] = origin;
-  const w = Math.max(lineWidth, hairlineUm(view, 1));
+  const w = Math.max(lineWidth, hairlineNm(view, 1));
   ctx.save();
   ctx.strokeStyle = color;
   ctx.lineWidth = w;

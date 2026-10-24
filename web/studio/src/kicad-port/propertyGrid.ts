@@ -10,7 +10,7 @@
 //                  (common/properties/pg_properties.cpp): what a cell shows and what typing into it means.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import { umFrom, umTo, type LengthUnit } from "../state/units";
+import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import type { Choice, PropDisplay, PropItem, PropKind, PropValue, PropertyManager } from "./propertyManager";
 
 /** One row. `value` is null when the items of the selection differ (`SetUnspecifiedValueAppearance( "<...>" )`). */
@@ -173,7 +173,7 @@ export function trimmed(v: number, decimals: number): string {
 
 /** A length in the display units, no suffix (`lengthText` of the edit dialogs). */
 export function lengthNumber(um: number, units: LengthUnit): string {
-  return trimmed(umTo(um, units), DECIMALS[units]);
+  return trimmed(nmTo(um, units), DECIMALS[units]);
 }
 
 /** The text of a cell for a value: lengths and areas with their unit (`StringFromValue( v, true )`), angles with the degree sign, a choice by its label. */
@@ -190,7 +190,7 @@ export function formatValue(row: Pick<GridRow, "kind" | "display" | "choices">, 
       return `${lengthNumber(value, units)} ${units}`;
     case "area": {
       // um^2 as mm^2 (`EDA_UNIT_UTILS::UI::StringFromValue` with `EDA_DATA_TYPE::AREA`), whatever the display unit.
-      return `${trimmed(value / 1e6, 4)} mm²`;
+      return `${trimmed(value / 1e12, 4)} mm²`;
     }
     case "degree":
       return `${trimmed(value, 4)}°`;
@@ -209,7 +209,7 @@ export function editText(row: Pick<GridRow, "kind" | "display" | "choices">, val
     case "coord":
       return lengthNumber(value, units);
     case "area":
-      return trimmed(value / 1e6, 4);
+      return trimmed(value / 1e12, 4);
     case "degree":
       return trimmed(value, 4);
     default:
@@ -237,11 +237,11 @@ export function parseValue(row: Pick<GridRow, "kind" | "display">, text: string,
       const m = new RegExp(`^(${NUMBER})\\s*(mm|mil|in|")?$`, "i").exec(t);
       if (!m) return bad("a length");
       const unit: LengthUnit = m[2] ? (m[2] === '"' ? "in" : (m[2].toLowerCase() as LengthUnit)) : units;
-      return { ok: true, value: Math.round(umFrom(parseFloat(m[1]!), unit)) };
+      return { ok: true, value: Math.round(nmFrom(parseFloat(m[1]!), unit)) };
     }
     case "area": {
       const m = new RegExp(`^(${NUMBER})\\s*(?:mm²|mm2)?$`, "i").exec(t);
-      return m ? { ok: true, value: Math.round(parseFloat(m[1]!) * 1e6) } : bad("an area");
+      return m ? { ok: true, value: Math.round(parseFloat(m[1]!) * 1e12) } : bad("an area");
     }
     case "degree": {
       const m = new RegExp(`^(${NUMBER})\\s*(?:°|deg)?$`, "i").exec(t);

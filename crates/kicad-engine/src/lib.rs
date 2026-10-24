@@ -566,7 +566,7 @@ fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem:
 /// The board's net classes in the project file's form (`NETCLASS` in `net_settings.classes`, mm): each class with its name, its precedence (`priority`, the
 /// board's order; Default last) and the numbers it sets, and each of its net patterns as a `netclass_patterns` entry.
 fn project_net_classes(model: &ConstraintModel) -> eda_kicad::appearance::SplitClasses {
-    let mm = |um: i64| um as f64 / 1000.0;
+    let mm = eda_model::units::to_mm;
     let mut classes = vec![json!({ "name": "Default", "priority": i64::from(i32::MAX) })];
     let mut patterns = Vec::new();
     for (i, c) in model.board.net_classes.iter().filter(|c| c.name != "Default").enumerate() {
@@ -658,7 +658,7 @@ pub fn convert_models_to_vrml(work: &Path, models: &[PathBuf]) -> Result<Vec<Opt
 // --------------------------------------------------------------------- reports
 
 /// One item a violation names: kicad-cli's own description and position
-/// (µm), plus our id for it (`None` when it is not one of ours, e.g. a zone
+/// (nm), plus our id for it (`None` when it is not one of ours, e.g. a zone
 /// fill KiCad computed).
 #[derive(Debug, Clone)]
 pub struct Item {
@@ -695,7 +695,7 @@ pub struct Violation {
 
 impl Violation {
     fn from_json(v: &Value, map: &HashMap<String, String>, units_mm: bool) -> Violation {
-        let to_um = |x: f64| if units_mm { (x * 1000.0).round() as i64 } else { (x * 25_400.0).round() as i64 };
+        let to_nm = |x: f64| if units_mm { (x * 1_000_000.0).round() as i64 } else { (x * 25_400_000.0).round() as i64 };
         let items = v["items"]
             .as_array()
             .map(|is| {
@@ -704,7 +704,7 @@ impl Violation {
                         let uuid = it["uuid"].as_str().unwrap_or("").to_string();
                         Item {
                             description: it["description"].as_str().unwrap_or("").to_string(),
-                            pos: (to_um(it["pos"]["x"].as_f64().unwrap_or(0.0)), to_um(it["pos"]["y"].as_f64().unwrap_or(0.0))),
+                            pos: (to_nm(it["pos"]["x"].as_f64().unwrap_or(0.0)), to_nm(it["pos"]["y"].as_f64().unwrap_or(0.0))),
                             id: map.get(&uuid).cloned(),
                             uuid,
                         }
@@ -712,7 +712,6 @@ impl Violation {
                     .collect()
             })
             .unwrap_or_default();
-        let to_nm = |x: f64| if units_mm { (x * 1_000_000.0).round() as i64 } else { (x * 25_400_000.0).round() as i64 };
         let at_nm: Vec<(i64, i64)> = v["items"].as_array().map(|is| is.iter().map(|it| (to_nm(it["pos"]["x"].as_f64().unwrap_or(0.0)), to_nm(it["pos"]["y"].as_f64().unwrap_or(0.0)))).collect()).unwrap_or_default();
         Violation {
             kind: v["type"].as_str().unwrap_or("?").to_string(),
@@ -752,7 +751,7 @@ impl Violation {
     }
 
     /// The studio's DRC shape: `type`, `description`, `severity`, `items`
-    /// (each with a `[x, y]` µm `pos`, our `id` or `null`, the KiCad `uuid`), `excluded` and its `comment`, and `marker_nm`: where the
+    /// (each with a `[x, y]` nm `pos`, our `id` or `null`, the KiCad `uuid`), `excluded` and its `comment`, and `marker_nm`: where the
     /// violation's marker may sit, in nanometres, which an exclusion keeps (see [`marker_candidates`]).
     pub fn to_json(&self) -> Value {
         json!({
@@ -823,7 +822,7 @@ fn track_anchors(design: &Design, id: &str) -> Vec<(i64, i64)> {
     let Some(track) = design.routing.as_ref().and_then(|r| r.tracks.iter().find(|t| t.id == base)) else {
         return Vec::new();
     };
-    let nm = |p: &eda_model::ir::Point| (p.x * 1000, p.y * 1000);
+    let nm = |p: &eda_model::ir::Point| (p.x, p.y);
     let (Some(a), Some(b)) = (track.pts.get(n), track.pts.get(n + 1)) else {
         return Vec::new();
     };
@@ -1900,7 +1899,7 @@ mod tests {
                       { "description": "Zone", "pos": { "x": 0.0, "y": 0.0 }, "uuid": "u-9" }] });
         let m = Violation::from_json(&v, &map, true).to_json();
         assert_eq!(m["items"][0]["id"], "trk_1#2");
-        assert_eq!(m["items"][0]["pos"], json!([1500, -2000]));
+        assert_eq!(m["items"][0]["pos"], json!([1_500_000, -2_000_000]));
         assert!(m["items"][1]["id"].is_null());
     }
 
@@ -1927,7 +1926,7 @@ mod tests {
     fn a_track_segment_offers_its_ends_and_its_middle_as_the_markers_position() {
         let mut design = empty_design().0;
         design.routing = Some(eda_model::ir::RoutingSection {
-            tracks: vec![eda_model::ir::Track { id: "t7".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 100, pts: vec![eda_model::ir::Point { x: 1_000, y: 2_000 }, eda_model::ir::Point { x: 3_001, y: 2_000 }, eda_model::ir::Point { x: 3_001, y: 9_000 }], arc_mid_offset: None }],
+            tracks: vec![eda_model::ir::Track { id: "t7".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 100_000, pts: vec![eda_model::ir::Point { x: 1_000_000, y: 2_000_000 }, eda_model::ir::Point { x: 3_001_000, y: 2_000_000 }, eda_model::ir::Point { x: 3_001_000, y: 9_000_000 }], arc_mid_offset: None }],
             vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default(),
         });
         // The first segment is the track's own id, the next ones `<id>#n`: `DRC_TEST_PROVIDER_TRACK_WIDTH` puts a trace's marker at (start + end) / 2.
@@ -1936,7 +1935,7 @@ mod tests {
         assert!(track_anchors(&design, "t7#2").is_empty(), "there is no third segment");
         assert!(track_anchors(&design, "R1.1").is_empty() && track_anchors(&design, "t8").is_empty());
 
-        let mut v = Violation { kind: "track_width".into(), items: vec![Item { description: "Track".into(), pos: (1_000, 2_000), id: Some("t7".into()), uuid: "u".into() }], markers_nm: vec![(1_000_000, 2_000_000)], ..Default::default() };
+        let mut v = Violation { kind: "track_width".into(), items: vec![Item { description: "Track".into(), pos: (1_000_000, 2_000_000), id: Some("t7".into()), uuid: "u".into() }], markers_nm: vec![(1_000_000, 2_000_000)], ..Default::default() };
         v.add_design_anchors(&design);
         assert_eq!(v.markers_nm, vec![(1_000_000, 2_000_000), (2_000_500, 2_000_000), (3_001_000, 2_000_000)], "the start (the report's) is listed once");
     }
@@ -2029,7 +2028,7 @@ mod tests {
         design.routing = Some(
             serde_json::from_value(json!({
                 "tracks": [], "vias": [],
-                "zones": [{ "id": "pour", "net": "", "layer": "F.Cu", "outline": [{ "x": 1000, "y": 1000 }, { "x": 9000, "y": 1000 }, { "x": 9000, "y": 9000 }, { "x": 1000, "y": 9000 }] }],
+                "zones": [{ "id": "pour", "net": "", "layer": "F.Cu", "outline": [{ "x": 1000000, "y": 1000000 }, { "x": 9000000, "y": 1000000 }, { "x": 9000000, "y": 9000000 }, { "x": 1000000, "y": 9000000 }] }],
             }))
             .unwrap(),
         );
@@ -2328,7 +2327,7 @@ fi"#;
                 "project": {
                     "net_colors": { "GND": "rgb(1, 2, 3)" },
                     "layer_presets": [{ "name": "Mine", "activeLayer": null, "flipBoard": true, "layers": ["B.Cu"], "renderLayers": ["tracks"] }],
-                    "viewports": [{ "name": "Home", "x": 1, "y": 2, "w": 3, "h": 4 }]
+                    "viewports": [{ "name": "Home", "x": 1000, "y": 2000, "w": 3000, "h": 4000 }]
                 }
             })
             .to_string(),
@@ -2340,7 +2339,7 @@ fi"#;
         assert_eq!(pro["net_settings"]["net_colors"]["GND"], "rgb(1, 2, 3)");
         assert_eq!(pro["board"]["layer_presets"][0]["name"], "Mine");
         assert_eq!(pro["board"]["layer_presets"][0]["layers"], json!([2]));
-        assert_eq!(pro["board"]["viewports"][0]["w"], 3000.0, "micrometres become nanometres");
+        assert_eq!(pro["board"]["viewports"][0]["w"], 3000.0, "the studio's nanometres are the project file's");
         assert!(pro["board"]["design_settings"]["rules"].is_object(), "the design rules are still there");
         let prl: Value = serde_json::from_str(&std::fs::read_to_string(work.join("b.kicad_prl")).unwrap()).unwrap();
         assert_eq!(prl["board"]["visible_items"], json!(["tracks"]));

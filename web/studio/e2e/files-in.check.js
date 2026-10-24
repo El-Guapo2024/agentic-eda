@@ -56,8 +56,8 @@
   const hover = async (wx, wy) => { const [x, y] = w2c(wx, wy); fire("pointermove", x, y); await sleep(150); };
   const key = (k) => document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
   /** Two places for the cursor, in the part of the board the fitted view shows (x 0 to 35 mm, y 0 to 35 mm and a little past): the first is where things are carried to, the second where a click drops them. */
-  const C = [30000, 20000];
-  const D = [20000, 10000];
+  const C = [30_000_000, 20_000_000];
+  const D = [20_000_000, 10_000_000];
 
   // ---- the DXFs: an ASCII DXF is pairs of lines
   const pair = (c, v) => `${c}\n${v}\n`;
@@ -189,10 +189,10 @@
     check("OK puts the 4 lines and 4 arcs on the layer asked for", sh.length === base.shapes + 8 && sh.filter((s) => s.layer === "Edge.Cuts").length === 8 && sh.filter((s) => s.kind === "segment").length === 4 && sh.filter((s) => s.kind === "arc").length === 4, JSON.stringify(sh.map((s) => s.kind + ":" + s.layer)));
     check("the dialog closed and the items are selected as the group they are in", dialogs().length === 0 && E.state().selection.length === 1 && E.state().selection[0].kind === "group", JSON.stringify(E.state().selection));
     const [x0, y0, x1, y1] = extent(sh);
-    check("at the origin: x 0 to 40 mm, y -30 to 0 (a DXF's Y axis points up, the board's down)", x0 === 0 && x1 === 40000 && y0 === -30000 && y1 === 0, [x0, y0, x1, y1]);
-    check("each item has the default line width of 0.2 mm", sh.every((s) => s.stroke_width === 200), sh.map((s) => s.stroke_width).join(","));
+    check("at the origin: x 0 to 40 mm, y -30 to 0 (a DXF's Y axis points up, the board's down)", x0 === 0 && x1 === 40_000_000 && y0 === -30_000_000 && y1 === 0, [x0, y0, x1, y1]);
+    check("each item has the default line width of 0.2 mm", sh.every((s) => s.stroke_width === 200_000), sh.map((s) => s.stroke_width).join(","));
     check("the items are one group of 8", (r.st.drawings.groups ?? []).length === base.groups + 1 && r.st.drawings.groups.at(-1).member_ids.length === 8);
-    check("an outline imported on Edge.Cuts replaced the polygon of the board's intent: the shapes are the outline", r.st.outline_is_shapes === true && Math.min(...r.st.outline.map((p) => p[0])) === 0 && Math.max(...r.st.outline.map((p) => p[0])) === 40000 && Math.min(...r.st.outline.map((p) => p[1])) === -30000, JSON.stringify(r.st.outline.slice(0, 3)));
+    check("an outline imported on Edge.Cuts replaced the polygon of the board's intent: the shapes are the outline", r.st.outline_is_shapes === true && Math.min(...r.st.outline.map((p) => p[0])) === 0 && Math.max(...r.st.outline.map((p) => p[0])) === 40_000_000 && Math.min(...r.st.outline.map((p) => p[1])) === -30_000_000, JSON.stringify(r.st.outline.slice(0, 3)));
     await undo();
     applied--;
     const back = await board();
@@ -204,8 +204,8 @@
     sh = added(r.st);
     const [sx0, sy0, sx1, sy1] = extent(sh);
     // x: 0..40 doubled is 0..80, then the offset 10 mm / 2 = 5 mm; y: -30..0 doubled is -60..0, then 5 mm / 2 = 2.5 mm: KiCad divides the origin it is given by the scale.
-    check("scale 2 doubles the picture; the origin typed is divided by the scale, as KiCad does", sx0 === 5000 && sx1 === 85000 && sy0 === -57500 && sy1 === 2500, [sx0, sy0, sx1, sy1]);
-    check("the default line width scales too (0.2 mm becomes 0.4 mm)", sh.every((s) => s.stroke_width === 400), sh.map((s) => s.stroke_width).join(","));
+    check("scale 2 doubles the picture; the origin typed is divided by the scale, as KiCad does", sx0 === 5_000_000 && sx1 === 85_000_000 && sy0 === -57_500_000 && sy1 === 2_500_000, [sx0, sy0, sx1, sy1]);
+    check("the default line width scales too (0.2 mm becomes 0.4 mm)", sh.every((s) => s.stroke_width === 400_000), sh.map((s) => s.stroke_width).join(","));
     await undo();
     applied--;
 
@@ -239,13 +239,13 @@
     r = await importFile({ name: "box.dxf", text: rect2x1(null) }, { "DXF default units": "inch", "Place at": true });
     applied++;
     let [ux0, , ux1] = extent(added(r.st));
-    check("a DXF with no unit takes the dialog's (inches: 2 x 1 in is 50.8 x 25.4 mm)", ux1 - ux0 === 50800, [ux0, ux1]);
+    check("a DXF with no unit takes the dialog's (inches: 2 x 1 in is 50.8 x 25.4 mm)", ux1 - ux0 === 50_800_000, [ux0, ux1]);
     await undo();
     applied--;
     r = await importFile({ name: "box.dxf", text: rect2x1(4) }, { "DXF default units": "inch", "Place at": true });
     applied++;
     [ux0, , ux1] = extent(added(r.st));
-    check("a DXF that names its unit ($INSUNITS 4, millimetres) keeps it whatever the dialog says", ux1 - ux0 === 2000, [ux0, ux1]);
+    check("a DXF that names its unit ($INSUNITS 4, millimetres) keeps it whatever the dialog says", ux1 - ux0 === 2_000_000, [ux0, ux1]);
     await undo();
     applied--;
 
@@ -273,9 +273,9 @@
     applied++;
     sh = added(await board());
     const poly = sh.find((s) => s.kind === "polygon");
-    check("a stroked rounded rect is one unfilled polygon with the stroke's own width (0.1 mm), not the DXF default", !!poly && !poly.filled && poly.stroke_width === 100, JSON.stringify(poly && { kind: poly.kind, w: poly.stroke_width, filled: poly.filled }));
+    check("a stroked rounded rect is one unfilled polygon with the stroke's own width (0.1 mm), not the DXF default", !!poly && !poly.filled && poly.stroke_width === 100_000, JSON.stringify(poly && { kind: poly.kind, w: poly.stroke_width, filled: poly.filled }));
     const [vx0, vy0, vx1, vy1] = extent([poly]);
-    check("at the origin, 40 x 30 mm, y down as the SVG has it", vx0 === 0 && vy0 === 0 && vx1 === 40000 && vy1 === 30000, [vx0, vy0, vx1, vy1]);
+    check("at the origin, 40 x 30 mm, y down as the SVG has it", vx0 === 0 && vy0 === 0 && vx1 === 40_000_000 && vy1 === 30_000_000, [vx0, vy0, vx1, vy1]);
     await undo();
     applied--;
     r = await importFile({ name: "logo.svg", text: svgLogo }, { Layer: "F.SilkS", "Place at": true, "Group imported items": false });
@@ -333,9 +333,9 @@
     const zz = after.parts.find((p) => p.ref === "ZZ1");
     check("the file's part is a part of this board, placed", !!zz && zz.placed && after.parts.length === partsBefore + 1, JSON.stringify(zz && { ref: zz.ref, at: zz.at }));
     const newLine = added(after).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.start[0] === C[0] && x.start[1] === C[1]);
-    check("the line that was the file's top left item is at the cursor's grid point, 30 mm long as it was", !!newLine && newLine.end[0] === C[0] + 30000 && newLine.end[1] === C[1], JSON.stringify(newLine && [newLine.start, newLine.end]));
-    check("the part keeps its place relative to the line: the file's (30, 20) against (15, 5) is 15, 15 mm on", !!zz && zz.at[0] === C[0] + 15000 && zz.at[1] === C[1] + 15000, JSON.stringify(zz?.at));
-    const trk = (after.routing?.tracks ?? []).find((t) => t.pts?.[0]?.[0] === C[0] + 5000 && t.pts?.[0]?.[1] === C[1] + 5000);
+    check("the line that was the file's top left item is at the cursor's grid point, 30 mm long as it was", !!newLine && newLine.end[0] === C[0] + 30_000_000 && newLine.end[1] === C[1], JSON.stringify(newLine && [newLine.start, newLine.end]));
+    check("the part keeps its place relative to the line: the file's (30, 20) against (15, 5) is 15, 15 mm on", !!zz && zz.at[0] === C[0] + 15_000_000 && zz.at[1] === C[1] + 15_000_000, JSON.stringify(zz?.at));
+    const trk = (after.routing?.tracks ?? []).find((t) => t.pts?.[0]?.[0] === C[0] + 5_000_000 && t.pts?.[0]?.[1] === C[1] + 5_000_000);
     check("and the track starts 5, 5 mm from the cursor: the file's (20, 10) less (15, 5)", !!trk && trk.net === "GND", JSON.stringify(trk && { net: trk.net, pts: trk.pts }));
     check("the Move tool carries what came in, and it is what is selected", E.state().tool === "move" && E.state().selection.length >= 4, JSON.stringify([E.state().tool, E.state().selection.map((x) => x.kind)]));
     check("the toast says what was appended", /Appended 1 footprint, 1 track, 1 graphic, 1 text\./.test(appended.toast ?? ""), JSON.stringify(appended.toast));
@@ -355,7 +355,7 @@
     fire("pointerup", dx, dy);
     await sleep(1200);
     const dropped2 = await board();
-    const line2 = added(dropped2).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.end[0] === D[0] + 30000);
+    const line2 = added(dropped2).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.end[0] === D[0] + 30_000_000);
     check("a click drops the carried board where the pointer went: the line's start is at the second place", !!line2 && line2.start[0] === D[0] && line2.start[1] === D[1] && E.state().tool === "select", JSON.stringify(line2 && [line2.start, line2.end]) + " tool " + E.state().tool);
     await undo();
     applied--;
@@ -511,8 +511,8 @@
     let nl = newLines(q.sch), ng = newGraphics(q.sch);
     check("OK adds the 4 outline lines as graphic lines and the 4 corners as arc shapes", nl.length === 4 && ng.length === 4 && ng.every((g) => g.shape.type === "arc"), `${nl.length} lines, ${ng.map((g) => g.shape.type)}`);
     const [lx0, ly0, lx1, ly1] = span(nl.flatMap((l) => l.pts));
-    check("At 10, 5 mm: the outline spans x 10 to 50 mm and y -25 to 5 mm (the DXF's Y axis points up, the sheet's down)", lx0 === 10000 && lx1 === 50000 && ly0 === -25000 && ly1 === 5000, [lx0, ly0, lx1, ly1]);
-    check("no line width in the file or the dialog is the sheet's default width (0)", nl.every((l) => l.width_um === 0) && ng.every((g) => !g.width_um));
+    check("At 10, 5 mm: the outline spans x 10 to 50 mm and y -25 to 5 mm (the DXF's Y axis points up, the sheet's down)", lx0 === 10_000_000 && lx1 === 50_000_000 && ly0 === -25_000_000 && ly1 === 5_000_000, [lx0, ly0, lx1, ly1]);
+    check("no line width in the file or the dialog is the sheet's default width (0)", nl.every((l) => l.width_nm === 0) && ng.every((g) => !g.width_nm));
     check("the dialog closed and the 8 new items are selected", dialogs().length === 0 && E.state().selection.length === 8, `${E.state().selection.length} selected, ${JSON.stringify(dialogs())}`);
     await undoDomain("schematic");
     appliedSch--;
@@ -524,7 +524,7 @@
     appliedSch++;
     nl = newLines(q.sch);
     const [bx0, , bx1] = span(nl.flatMap((l) => l.pts));
-    check("scale 2 doubles the 2 x 1 mm box and its default line width (0.15 becomes 0.3 mm)", nl.length === 4 && bx1 - bx0 === 4000 && nl.every((l) => l.width_um === 300), `${nl.length} lines, width ${bx1 - bx0}, widths ${nl.map((l) => l.width_um)}`);
+    check("scale 2 doubles the 2 x 1 mm box and its default line width (0.15 becomes 0.3 mm)", nl.length === 4 && bx1 - bx0 === 4_000_000 && nl.every((l) => l.width_nm === 300_000), `${nl.length} lines, width ${bx1 - bx0}, widths ${nl.map((l) => l.width_nm)}`);
     await undoDomain("schematic");
     appliedSch--;
 
@@ -534,7 +534,7 @@
     ng = newGraphics(q.sch);
     const poly2 = ng.find((g) => g.shape.type === "polygon");
     const [px0, py0, px1, py1] = poly2 ? span(poly2.shape.pts.map((p) => [p.x, p.y])) : [0, 0, 0, 0];
-    check("an SVG's rounded rect is one polygon of its own stroke width (0.1 mm), 40 x 30 mm, y down as it has it", ng.length === 1 && !!poly2 && poly2.width_um === 100 && px0 === 0 && py0 === 0 && px1 === 40000 && py1 === 30000, JSON.stringify(ng.map((g) => [g.shape.type, g.width_um])));
+    check("an SVG's rounded rect is one polygon of its own stroke width (0.1 mm), 40 x 30 mm, y down as it has it", ng.length === 1 && !!poly2 && poly2.width_nm === 100_000 && px0 === 0 && py0 === 0 && px1 === 40_000_000 && py1 === 30_000_000, JSON.stringify(ng.map((g) => [g.shape.type, g.width_nm])));
     await undoDomain("schematic");
     appliedSch--;
 
@@ -543,12 +543,12 @@
     const v0 = E.state().view;
     let cx = rect.left + rect.width * 0.4, cy = rect.top + rect.height * 0.4;
     const worldOf = (x, y) => [(x - rect.left - v0.x) / v0.scale, (y - rect.top - v0.y) / v0.scale];
-    const nearHalf = (u) => Math.abs(((u / 1270) % 1 + 1) % 1 - 0.5) < 0.05;
+    const nearHalf = (u) => Math.abs(((u / 1_270_000) % 1 + 1) % 1 - 0.5) < 0.05;
     while (nearHalf(worldOf(cx, cy)[0]) || nearHalf(worldOf(cx, cy)[1])) { cx += 7; cy += 5; }
     fire("pointermove", cx, cy);
     await sleep(200);
     const [cwx, cwy] = worldOf(cx, cy);
-    const gx = Math.round(cwx / 1270) * 1270, gy = Math.round(cwy / 1270) * 1270;
+    const gx = Math.round(cwx / 1_270_000) * 1_270_000, gy = Math.round(cwy / 1_270_000) * 1_270_000;
     q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: false });
     appliedSch++;
     nl = newLines(q.sch);
@@ -565,7 +565,7 @@
     await sleep(200);
     q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: false });
     appliedSch++;
-    const dropAt = [cx + 120, cy + 90];
+    const dropAt = [cx + 120_000, cy + 90];
     fire("pointermove", ...dropAt);
     await sleep(300);
     fire("pointerdown", ...dropAt, 1);

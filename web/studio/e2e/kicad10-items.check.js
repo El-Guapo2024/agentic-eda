@@ -113,8 +113,8 @@
   if (!toScreen) { results.push({ name: "setup", ok: false, notes: ["FAIL: the canvas gave no cursor readout"] }); check.done = true; return; }
   const st0 = await board();
   const outline = st0.outline ?? [[0, 0], [35000, 0], [35000, 35000], [0, 35000]];
-  const [bx0, by0] = [Math.min(...outline.map((p) => p[0])) / 1000, Math.min(...outline.map((p) => p[1])) / 1000];
-  const [bx1, by1] = [Math.max(...outline.map((p) => p[0])) / 1000, Math.max(...outline.map((p) => p[1])) / 1000];
+  const [bx0, by0] = [Math.min(...outline.map((p) => p[0])) / 1e6, Math.min(...outline.map((p) => p[1])) / 1e6];
+  const [bx1, by1] = [Math.max(...outline.map((p) => p[0])) / 1e6, Math.max(...outline.map((p) => p[1])) / 1e6];
   const at = (dx, dy) => [bx0 + dx, by0 + dy];
 
   (async () => {
@@ -137,7 +137,7 @@
     await scenario("line endings: Graphic Properties gives a line an arrow at its start, one undo step; the Properties panel shows it", async (t) => {
       const [a, b] = [at(-12, 4), at(-4, 4)];
       const shapesBefore = new Set(((await board()).drawings?.shapes ?? []).map((s) => s.id));
-      await cmd({ op: "add_shape", shape: { kind: "segment", layer: "F.Fab", stroke_width: 200, filled: false, start: { x: Math.round(a[0] * 1000), y: Math.round(a[1] * 1000) }, end: { x: Math.round(b[0] * 1000), y: Math.round(b[1] * 1000) } } });
+      await cmd({ op: "add_shape", shape: { kind: "segment", layer: "F.Fab", stroke_width: 200_000, filled: false, start: { x: Math.round(a[0] * 1e6), y: Math.round(a[1] * 1e6) }, end: { x: Math.round(b[0] * 1e6), y: Math.round(b[1] * 1e6) } } });
       await sleep(900);
       const line = ((await board()).drawings?.shapes ?? []).find((s) => !shapesBefore.has(s.id));
       t(!!line && !line.start_ending, "a new line has no ending");
@@ -177,7 +177,7 @@
       const g = (await grids()).at(-1);
       t((await grids()).length === n0 + 1, "two clicks place a sub-grid");
       if (!g) return;
-      t(Math.abs(g.x / 1000 - c[0]) < 1.1 && Math.abs(g.y / 1000 - c[1]) < 1.1, `centred on the first click (${g.x}, ${g.y})`);
+      t(Math.abs(g.x / 1e6 - c[0]) < 1.1 && Math.abs(g.y / 1e6 - c[1]) < 1.1, `centred on the first click (${g.x}, ${g.y})`);
       await escape();
       await select([g.id]);
       await E.run("pcbnew.InteractiveEdit.properties");
@@ -188,7 +188,7 @@
         await sleep(150);
         tid("grid-ok").click();
         await waitFor(async () => (await grids()).find((x) => x.id === g.id)?.spacing?.[0] === 500);
-        t((await grids()).find((x) => x.id === g.id)?.spacing?.[0] === 500, "OK sets the spacing");
+        t((await grids()).find((x) => x.id === g.id)?.spacing?.[0] === 500_000, "OK sets the spacing");
         await undo();
         t((await grids()).find((x) => x.id === g.id)?.spacing?.[0] === g.spacing[0], "one undo puts it back");
       }
@@ -228,7 +228,7 @@
       tid("vst-ok").click();
       await waitFor(async () => (await stitches()).length === n0 + 1, 10000);
       const s = (await stitches()).at(-1);
-      t(!!s && s.net === gnd && s.pitch_um === 2000, `OK makes the stitching on ${gnd} at a 2 mm pitch`);
+      t(!!s && s.net === gnd && s.pitch_nm === 2_000_000, `OK makes the stitching on ${gnd} at a 2 mm pitch`);
       if (!s) return;
       await sleep(600);
       t(E.state().selection.some((x) => x.id === s.id || x === s.id), "the new stitching is selected, not its vias");
@@ -237,7 +237,7 @@
       if (members.length > 0) {
         const via = (await board()).routing.vias.find((v) => v.id === members[0]);
         await select([via.id]);
-        const [sx, sy] = toScreen(via.x / 1000, via.y / 1000);
+        const [sx, sy] = toScreen(via.x / 1e6, via.y / 1e6);
         mouse("contextmenu", sx, sy);
         await sleep(600);
         const labels = menuLabels();
@@ -263,8 +263,8 @@
         setValue(pitch, "3");
         pitch.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
         pitch.blur?.();
-        await waitFor(async () => (await stitches()).find((x) => x.id === s.id)?.pitch_um === 3000, 10000);
-        t((await stitches()).find((x) => x.id === s.id)?.pitch_um === 3000, "Pitch 3 mm makes the stitching again at 3 mm");
+        await waitFor(async () => (await stitches()).find((x) => x.id === s.id)?.pitch_nm === 3_000_000, 10000);
+        t((await stitches()).find((x) => x.id === s.id)?.pitch_nm === 3_000_000, "Pitch 3 mm makes the stitching again at 3 mm");
       }
       const viaIds = new Set(((await stitches()).find((x) => x.id === s.id)?.member_ids) ?? []);
       await select([s.id]);
@@ -279,7 +279,7 @@
     const aNet = st0.parts.flatMap((p) => p.pads ?? []).map((pd) => pd.net).find((n) => n) ?? "";
     const viasBefore = new Set((st0.routing?.vias ?? []).map((v) => v.id));
     const myVias = async () => ((await board()).routing?.vias ?? []).filter((v) => !viasBefore.has(v.id));
-    for (const dx of [3, 6]) await cmd({ op: "add_via", net: aNet, x: Math.round((bx0 + dx) * 1000), y: Math.round((by0 + 3) * 1000), drill: 300, diameter: 600, from_layer: "F.Cu", to_layer: "B.Cu" });
+    for (const dx of [3, 6]) await cmd({ op: "add_via", net: aNet, x: Math.round((bx0 + dx) * 1e6), y: Math.round((by0 + 3) * 1e6), drill: 300_000, diameter: 600_000, from_layer: "F.Cu", to_layer: "B.Cu" });
     await sleep(800);
     await scenario("drill charts: Add Drill Chart drops a chart of the board's holes, Decimal Places rebuilds it, a new hole size gets a row, Delete", async (t) => {
       const charts = async () => (await board()).drawings?.drill_charts ?? [];
@@ -297,7 +297,7 @@
       const table = st.drawings.tables.find((x) => x.id === chart.table_id);
       t(!!table && table.cols === 6 && table.cells.slice(0, 6).map((c) => c.text).join("|") === "SYM|DRILL DIA|SLOT W x L|PLATED|OPS|FROM / TO", `the default columns (${table?.cells.slice(0, 6).map((c) => c.text).join("|")})`);
       t(!!table && /OPS \/ \d+ SITES/.test(table.cells[table.cells.length - 6].text), `the totals row (${table?.cells[table.cells.length - 6]?.text})`);
-      t(Math.abs(table.x / 1000 - p[0]) < 1.1 && Math.abs(table.y / 1000 - p[1]) < 1.1, "its first corner where the click was");
+      t(Math.abs(table.x / 1e6 - p[0]) < 1.1 && Math.abs(table.y / 1e6 - p[1]) < 1.1, "its first corner where the click was");
       t(Object.keys(chart.row_shapes ?? {}).length > 0 && chart.symbol_column === 0, "the rows' shapes are in the symbol column");
       t(table.layer === "Dwgs.User" || /User|Fab/.test(table.layer), `on a documentation layer (${table.layer})`);
       // Decimal Places, in the Properties panel.
@@ -318,7 +318,7 @@
       }
       // A via of a size the board has not: the same step rebuilds the chart.
       const rows0 = table.rows;
-      const r = await cmd({ op: "add_via", net: aNet, x: Math.round((bx0 + 9) * 1000), y: Math.round((by0 + 3) * 1000), drill: 777, diameter: 1400, from_layer: "F.Cu", to_layer: "B.Cu" });
+      const r = await cmd({ op: "add_via", net: aNet, x: Math.round((bx0 + 9) * 1e6), y: Math.round((by0 + 3) * 1e6), drill: 777_000, diameter: 1_400_000, from_layer: "F.Cu", to_layer: "B.Cu" });
       await sleep(900);
       const t3 = (await board()).drawings.tables.find((x) => x.id === table.id);
       t(t3.rows === rows0 + 1 && t3.cells.some((c) => c.text === "0.777"), `a hole of a new size has a row (${rows0} -> ${t3.rows}; ${JSON.stringify(r).slice(0, 80)})`);
@@ -337,7 +337,7 @@
       await waitFor(async () => (await maps()).length === n0 + 1, 8000);
       const st = await board();
       const m = (st.drawings?.drill_maps ?? []).at(-1);
-      t(!!m && /User|Fab/.test(m.layer) && m.offset.x === 0 && m.size_um === 1500, `a map on ${m?.layer}, at no offset, with 1.5 mm marks`);
+      t(!!m && /User|Fab/.test(m.layer) && m.offset.x === 0 && m.size_nm === 1_500_000, `a map on ${m?.layer}, at no offset, with 1.5 mm marks`);
       if (!m) return;
       await sleep(500);
       t(E.state().selection.some((x) => x.id === m.id || x === m.id), "the new map is selected");
@@ -351,9 +351,9 @@
         await waitFor(async () => (await maps()).find((x) => x.id === m.id)?.guide_cross === true);
         t((await maps()).find((x) => x.id === m.id)?.guide_cross === true, "Guide Cross turns on");
       }
-      await cmd({ op: "move_items", ids: [m.id], dx: 40000, dy: 0 });
+      await cmd({ op: "move_items", ids: [m.id], dx: 40_000_000, dy: 0 });
       await sleep(700);
-      t((await maps()).find((x) => x.id === m.id)?.offset.x === 40000, "a move slides the marks (the offset)");
+      t((await maps()).find((x) => x.id === m.id)?.offset.x === 40_000_000, "a move slides the marks (the offset)");
       await select([m.id]);
       await E.run("common.Interactive.delete");
       await waitFor(async () => (await maps()).length === n0);

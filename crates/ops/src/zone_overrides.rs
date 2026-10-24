@@ -22,7 +22,7 @@ impl Board<'_> {
     }
 
     /// `Cmd::SetFootprintZoneConnection`.
-    pub(crate) fn set_footprint_zone_connection(&mut self, part: &str, zone_connection: Option<PadConnection>, clearance: Option<Um>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn set_footprint_zone_connection(&mut self, part: &str, zone_connection: Option<PadConnection>, clearance: Option<Nm>) -> Result<(), Vec<CheckResult>> {
         self.require_placed(part)?;
         if clearance.is_some_and(|c| c < 0) {
             return Err(vec![CheckResult::fail("ops_bad_clearance", part, "a clearance override cannot be negative")]);
@@ -72,7 +72,7 @@ mod tests {
             package: Some(pkg.into()),
             footprint: None,
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_nm: None,
             symbol: None,
             datasheet: None,
             edge: None,
@@ -85,13 +85,13 @@ mod tests {
             sheet_contents: None,
             bus_aliases: vec![],
             symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
             routing: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: 0, y: 0 }, Point { x: 50_000, y: 0 }, Point { x: 50_000, y: 50_000 }, Point { x: 0, y: 50_000 }],
+                outline: vec![Point { x: 0, y: 0 }, Point { x: 50_000_000, y: 0 }, Point { x: 50_000_000, y: 50_000_000 }, Point { x: 0, y: 50_000_000 }],
                 footprints: Vec::new(),
                 modules: Vec::new(),
             }),
@@ -102,7 +102,7 @@ mod tests {
     fn placed() -> (ConstraintModel, Design) {
         let m = ConstraintModel { parts: vec![part("C1", "0402")], ..Default::default() };
         let mut d = design();
-        d.placement.as_mut().unwrap().footprints.push(FootprintInstance { id: "C1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 0, side: Side::Top, label: Default::default() });
+        d.placement.as_mut().unwrap().footprints.push(FootprintInstance { id: "C1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot: 0, side: Side::Top, label: Default::default() });
         (m, d)
     }
 
@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn a_pad_override_is_stored_and_resolved_for_the_filler() {
         let (m, d) = placed();
-        let mut b = Board::new(d, &m, 100, 300);
+        let mut b = Board::new(d, &m, 100_000, 300_000);
         b.apply(&Cmd::SetPadZoneOverrides {
             part: "C1".into(),
             pad: "1".into(),
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn the_footprints_own_connection_is_inherited_by_pads_that_do_not_set_one() {
         let (m, d) = placed();
-        let mut b = Board::new(d, &m, 100, 300);
+        let mut b = Board::new(d, &m, 100_000, 300_000);
         b.apply(&Cmd::SetFootprintZoneConnection { part: "C1".into(), zone_connection: Some(PadConnection::None), clearance: Some(900) }).unwrap();
         let facts = b.design().pad_zone_facts("C1", "0402", 0, 2, "1");
         assert_eq!((facts.footprint_connection, facts.clearance()), (Some(PadConnection::None), Some(900)), "the footprint's facts reach its pads");
@@ -159,7 +159,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let mut b = Board::new(d, &m, 100, 300);
+        let mut b = Board::new(d, &m, 100_000, 300_000);
         assert_eq!(b.design().pad_zone_facts("C1", "0402", 0, 2, "1").connection, Some(PadConnection::Full));
         let set = |c: Option<PadConnection>| Cmd::SetPadZoneOverrides { part: "C1".into(), pad: "1".into(), zone_connection: c, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
         b.apply(&set(Some(PadConnection::Thermal))).unwrap();
@@ -172,8 +172,8 @@ mod tests {
     #[test]
     fn a_pad_that_does_not_exist_or_a_negative_value_is_refused() {
         let (m, d) = placed();
-        let mut b = Board::new(d, &m, 100, 300);
-        let cmd = |pad: &str, gap: Option<Um>| Cmd::SetPadZoneOverrides { part: "C1".into(), pad: pad.into(), zone_connection: None, thermal_gap: gap, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
+        let mut b = Board::new(d, &m, 100_000, 300_000);
+        let cmd = |pad: &str, gap: Option<Nm>| Cmd::SetPadZoneOverrides { part: "C1".into(), pad: pad.into(), zone_connection: None, thermal_gap: gap, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
         assert_eq!(b.apply(&cmd("9", None)).unwrap_err()[0].check, "ops_unknown_pad");
         assert_eq!(b.apply(&cmd("1", Some(-5))).unwrap_err()[0].check, "ops_bad_pad_override");
         assert!(b.design().drawings.is_none() || pad_edit(&b).is_empty(), "a refused edit changes nothing");

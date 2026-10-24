@@ -1,0 +1,307 @@
+fixture through_hole_headers_anneal1.dsn
+board -1000 -1000 131000 246000
+layer 0 1 F.Cu
+layer 1 1 B.Cu
+host_cad 1
+user_unit 0.1 1.0
+area_section 50000.0
+min_trace_half_width 10000
+trace_half_widths 10000 1000 1000 1000
+pull_tight_accuracy 500
+id_generator 26
+default_via_diameter 6000.0
+pin_edge_to_turn_dist 1000.0
+classes 4
+cm 1 1 0 2020
+cm 1 1 1 2020
+cm 1 2 0 4920
+cm 1 2 1 4920
+cm 1 3 0 20
+cm 1 3 1 20
+cmax 1 0 4920
+cmax 1 1 4920
+cm 2 1 0 4920
+cm 2 1 1 4920
+cm 2 2 0 2020
+cm 2 2 1 2020
+cm 2 3 0 4920
+cm 2 3 1 4920
+cmax 2 0 4920
+cmax 2 1 4920
+cm 3 1 0 20
+cm 3 1 1 20
+cm 3 2 0 4920
+cm 3 2 1 4920
+cm 3 3 0 2020
+cm 3 3 1 2020
+cmax 3 0 4920
+cmax 3 1 4920
+padstack 1 0 1 17000.0 17000.0
+padstack_shape 1 0 box -8500 -8500 8500 8500
+padstack_shape 1 1 box -8500 -8500 8500 8500
+padstack 2 0 0 9500.0 -1
+padstack_shape 2 0 box -4750 -4000 4750 4000
+padstack 3 0 1 6000.0 6000.0
+padstack_shape 3 0 circle 0 0 3000
+padstack_shape 3 1 circle 0 0 3000
+viainfo 0 3 1 0
+viarule 0 0
+viarule 1 0
+netclass 0 1 0 1 1 1000 1000 0 1 0 0
+netclass 1 1 1 1 1 1000 1000 0 1 0 0
+net 1 1 0
+net 2 1 0
+net 3 1 0
+net 4 1 0
+net 5 1 0
+net 6 1 0
+net 7 1 0
+net 8 1 0
+settings 1 50 5 100 0 0
+layer_costs 0 1 2.9000000000000004 1.0 1.0
+layer_costs 1 1 1.0 1.5 1.0
+it 26 pin 0 0 1 0 5 8
+center 26 32000 161250
+pad 26 0 0 1 box 27250 157250 36750 165250
+pin_neckdown 26 0 3999 9500.0
+pin_exit 26 0 1 0 4750.0
+pin_exit 26 0 -1 0 4750.0
+pin_exit 26 0 0 1 4000.0
+pin_exit 26 0 0 -1 4000.0
+it 25 pin 0 0 1 0 5 7
+center 25 32000 144750
+pad 25 0 0 1 box 27250 140750 36750 148750
+pin_neckdown 25 0 3999 9500.0
+pin_exit 25 0 1 0 4750.0
+pin_exit 25 0 -1 0 4750.0
+pin_exit 25 0 0 1 4000.0
+pin_exit 25 0 0 -1 4000.0
+it 24 pin 0 0 1 0 4 6
+center 24 32000 105250
+pad 24 0 0 1 box 27250 101250 36750 109250
+pin_neckdown 24 0 3999 9500.0
+pin_exit 24 0 1 0 4750.0
+pin_exit 24 0 -1 0 4750.0
+pin_exit 24 0 0 1 4000.0
+pin_exit 24 0 0 -1 4000.0
+it 23 pin 0 0 1 0 4 5
+center 23 32000 88750
+pad 23 0 0 1 box 27250 84750 36750 92750
+pin_neckdown 23 0 3999 9500.0
+pin_exit 23 0 1 0 4750.0
+pin_exit 23 0 -1 0 4750.0
+pin_exit 23 0 0 1 4000.0
+pin_exit 23 0 0 -1 4000.0
+it 22 pin 0 1 1 0 3 2
+center 22 63000 209900
+pad 22 0 0 1 box 54500 201400 71500 218400
+pad 22 1 1 1 box 54500 201400 71500 218400
+pin_neckdown 22 0 8499 17000.0
+pin_exit 22 0 1 0 8500.0
+pin_exit 22 0 -1 0 8500.0
+pin_exit 22 0 0 1 8500.0
+pin_exit 22 0 0 -1 8500.0
+pin_neckdown 22 1 8499 17000.0
+pin_exit 22 1 1 0 8500.0
+pin_exit 22 1 -1 0 8500.0
+pin_exit 22 1 0 1 8500.0
+pin_exit 22 1 0 -1 8500.0
+it 21 pin 0 1 1 0 3 1
+center 21 63000 184500
+pad 21 0 0 1 box 54500 176000 71500 193000
+pad 21 1 1 1 box 54500 176000 71500 193000
+pin_neckdown 21 0 8499 17000.0
+pin_exit 21 0 1 0 8500.0
+pin_exit 21 0 -1 0 8500.0
+pin_exit 21 0 0 1 8500.0
+pin_exit 21 0 0 -1 8500.0
+pin_neckdown 21 1 8499 17000.0
+pin_exit 21 1 1 0 8500.0
+pin_exit 21 1 -1 0 8500.0
+pin_exit 21 1 0 1 8500.0
+pin_exit 21 1 0 -1 8500.0
+it 20 pin 0 1 1 0 3 8
+center 20 63000 159100
+pad 20 0 0 1 box 54500 150600 71500 167600
+pad 20 1 1 1 box 54500 150600 71500 167600
+pin_neckdown 20 0 8499 17000.0
+pin_exit 20 0 1 0 8500.0
+pin_exit 20 0 -1 0 8500.0
+pin_exit 20 0 0 1 8500.0
+pin_exit 20 0 0 -1 8500.0
+pin_neckdown 20 1 8499 17000.0
+pin_exit 20 1 1 0 8500.0
+pin_exit 20 1 -1 0 8500.0
+pin_exit 20 1 0 1 8500.0
+pin_exit 20 1 0 -1 8500.0
+it 19 pin 0 1 1 0 3 7
+center 19 63000 133700
+pad 19 0 0 1 box 54500 125200 71500 142200
+pad 19 1 1 1 box 54500 125200 71500 142200
+pin_neckdown 19 0 8499 17000.0
+pin_exit 19 0 1 0 8500.0
+pin_exit 19 0 -1 0 8500.0
+pin_exit 19 0 0 1 8500.0
+pin_exit 19 0 0 -1 8500.0
+pin_neckdown 19 1 8499 17000.0
+pin_exit 19 1 1 0 8500.0
+pin_exit 19 1 -1 0 8500.0
+pin_exit 19 1 0 1 8500.0
+pin_exit 19 1 0 -1 8500.0
+it 18 pin 0 1 1 0 3 6
+center 18 63000 108300
+pad 18 0 0 1 box 54500 99800 71500 116800
+pad 18 1 1 1 box 54500 99800 71500 116800
+pin_neckdown 18 0 8499 17000.0
+pin_exit 18 0 1 0 8500.0
+pin_exit 18 0 -1 0 8500.0
+pin_exit 18 0 0 1 8500.0
+pin_exit 18 0 0 -1 8500.0
+pin_neckdown 18 1 8499 17000.0
+pin_exit 18 1 1 0 8500.0
+pin_exit 18 1 -1 0 8500.0
+pin_exit 18 1 0 1 8500.0
+pin_exit 18 1 0 -1 8500.0
+it 17 pin 0 1 1 0 3 5
+center 17 63000 82900
+pad 17 0 0 1 box 54500 74400 71500 91400
+pad 17 1 1 1 box 54500 74400 71500 91400
+pin_neckdown 17 0 8499 17000.0
+pin_exit 17 0 1 0 8500.0
+pin_exit 17 0 -1 0 8500.0
+pin_exit 17 0 0 1 8500.0
+pin_exit 17 0 0 -1 8500.0
+pin_neckdown 17 1 8499 17000.0
+pin_exit 17 1 1 0 8500.0
+pin_exit 17 1 -1 0 8500.0
+pin_exit 17 1 0 1 8500.0
+pin_exit 17 1 0 -1 8500.0
+it 16 pin 0 1 1 0 3 4
+center 16 63000 57500
+pad 16 0 0 1 box 54500 49000 71500 66000
+pad 16 1 1 1 box 54500 49000 71500 66000
+pin_neckdown 16 0 8499 17000.0
+pin_exit 16 0 1 0 8500.0
+pin_exit 16 0 -1 0 8500.0
+pin_exit 16 0 0 1 8500.0
+pin_exit 16 0 0 -1 8500.0
+pin_neckdown 16 1 8499 17000.0
+pin_exit 16 1 1 0 8500.0
+pin_exit 16 1 -1 0 8500.0
+pin_exit 16 1 0 1 8500.0
+pin_exit 16 1 0 -1 8500.0
+it 15 pin 0 1 1 0 3 3
+center 15 63000 32100
+pad 15 0 0 1 box 54500 23600 71500 40600
+pad 15 1 1 1 box 54500 23600 71500 40600
+pin_neckdown 15 0 8499 17000.0
+pin_exit 15 0 1 0 8500.0
+pin_exit 15 0 -1 0 8500.0
+pin_exit 15 0 0 1 8500.0
+pin_exit 15 0 0 -1 8500.0
+pin_neckdown 15 1 8499 17000.0
+pin_exit 15 1 1 0 8500.0
+pin_exit 15 1 -1 0 8500.0
+pin_exit 15 1 0 1 8500.0
+pin_exit 15 1 0 -1 8500.0
+it 14 pin 0 1 1 0 2 4
+center 14 97000 62900
+pad 14 0 0 1 box 88500 54400 105500 71400
+pad 14 1 1 1 box 88500 54400 105500 71400
+pin_neckdown 14 0 8499 17000.0
+pin_exit 14 0 1 0 8500.0
+pin_exit 14 0 -1 0 8500.0
+pin_exit 14 0 0 1 8500.0
+pin_exit 14 0 0 -1 8500.0
+pin_neckdown 14 1 8499 17000.0
+pin_exit 14 1 1 0 8500.0
+pin_exit 14 1 -1 0 8500.0
+pin_exit 14 1 0 1 8500.0
+pin_exit 14 1 0 -1 8500.0
+it 13 pin 0 1 1 0 2 3
+center 13 97000 88300
+pad 13 0 0 1 box 88500 79800 105500 96800
+pad 13 1 1 1 box 88500 79800 105500 96800
+pin_neckdown 13 0 8499 17000.0
+pin_exit 13 0 1 0 8500.0
+pin_exit 13 0 -1 0 8500.0
+pin_exit 13 0 0 1 8500.0
+pin_exit 13 0 0 -1 8500.0
+pin_neckdown 13 1 8499 17000.0
+pin_exit 13 1 1 0 8500.0
+pin_exit 13 1 -1 0 8500.0
+pin_exit 13 1 0 1 8500.0
+pin_exit 13 1 0 -1 8500.0
+it 12 pin 0 1 1 0 2 2
+center 12 97000 113700
+pad 12 0 0 1 box 88500 105200 105500 122200
+pad 12 1 1 1 box 88500 105200 105500 122200
+pin_neckdown 12 0 8499 17000.0
+pin_exit 12 0 1 0 8500.0
+pin_exit 12 0 -1 0 8500.0
+pin_exit 12 0 0 1 8500.0
+pin_exit 12 0 0 -1 8500.0
+pin_neckdown 12 1 8499 17000.0
+pin_exit 12 1 1 0 8500.0
+pin_exit 12 1 -1 0 8500.0
+pin_exit 12 1 0 1 8500.0
+pin_exit 12 1 0 -1 8500.0
+it 11 pin 0 1 1 0 2 1
+center 11 97000 139100
+pad 11 0 0 1 box 88500 130600 105500 147600
+pad 11 1 1 1 box 88500 130600 105500 147600
+pin_neckdown 11 0 8499 17000.0
+pin_exit 11 0 1 0 8500.0
+pin_exit 11 0 -1 0 8500.0
+pin_exit 11 0 0 1 8500.0
+pin_exit 11 0 0 -1 8500.0
+pin_neckdown 11 1 8499 17000.0
+pin_exit 11 1 1 0 8500.0
+pin_exit 11 1 -1 0 8500.0
+pin_exit 11 1 0 1 8500.0
+pin_exit 11 1 0 -1 8500.0
+it 10 pin 0 1 1 0 1 2
+center 10 97000 205700
+pad 10 0 0 1 box 88500 197200 105500 214200
+pad 10 1 1 1 box 88500 197200 105500 214200
+pin_neckdown 10 0 8499 17000.0
+pin_exit 10 0 1 0 8500.0
+pin_exit 10 0 -1 0 8500.0
+pin_exit 10 0 0 1 8500.0
+pin_exit 10 0 0 -1 8500.0
+pin_neckdown 10 1 8499 17000.0
+pin_exit 10 1 1 0 8500.0
+pin_exit 10 1 -1 0 8500.0
+pin_exit 10 1 0 1 8500.0
+pin_exit 10 1 0 -1 8500.0
+it 9 pin 0 1 1 0 1 1
+center 9 97000 180300
+pad 9 0 0 1 box 88500 171800 105500 188800
+pad 9 1 1 1 box 88500 171800 105500 188800
+pin_neckdown 9 0 8499 17000.0
+pin_exit 9 0 1 0 8500.0
+pin_exit 9 0 -1 0 8500.0
+pin_exit 9 0 0 1 8500.0
+pin_exit 9 0 0 -1 8500.0
+pin_neckdown 9 1 8499 17000.0
+pin_exit 9 1 1 0 8500.0
+pin_exit 9 1 -1 0 8500.0
+pin_exit 9 1 0 1 8500.0
+pin_exit 9 1 0 -1 8500.0
+it 8 keepout 0 0 3 3 0
+area 8 0 3 box 28400 131750 35600 137450
+it 7 keepout 0 0 3 3 0
+area 7 0 3 box 27250 148800 36750 157200
+it 6 keepout 0 0 3 3 0
+area 6 0 3 box 28400 75750 35600 81450
+it 5 keepout 0 0 3 3 0
+area 5 0 3 box 27250 92800 36750 101200
+it 4 keepout 0 0 3 3 0
+area 4 0 3 box 59400 14600 66600 20300
+it 3 keepout 0 0 3 3 0
+area 3 0 3 box 93400 45400 100600 51100
+it 2 keepout 0 0 3 3 0
+area 2 0 3 box 93400 162800 100600 168500
+it 1 outline 0 1 2 3 0
+outline 1 100 2 2 0
+outline_shape 4 0 0 130000 0 130000 0 130000 245000 130000 245000 0 245000 0 245000 0 0

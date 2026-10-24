@@ -2,7 +2,7 @@
 // `{ op: "pcb_item", verb: ..., ... }`). `Board*` types are the display shape `GET /api/state` sends in `drawings` (crates/cli/src/pcb_items_json.rs: points are `[x, y]`
 // pairs); `Cmd*` types are the IR's own shape, which a verb takes.
 import type { SchLineStyle } from "./schEditTypes";
-import type { PointXY, Um } from "./types";
+import type { PointXY, Nm } from "./types";
 
 export type TextBoxHAlign = "left" | "center" | "right";
 export type TextBoxVAlign = "top" | "center" | "bottom";
@@ -15,24 +15,24 @@ export interface BoardTextBox {
   text: string;
   /** What `${NAME}` stands for, when that differs from `text`. */
   shown?: string;
-  start: [Um, Um];
-  end: [Um, Um];
+  start: [Nm, Nm];
+  end: [Nm, Nm];
   /** The four corners of a box turned by an angle that is not a multiple of 90 degrees; empty for a rectangle. */
-  pts: [Um, Um][];
+  pts: [Nm, Nm][];
   /** The text angle in the file's sense (counter-clockwise on the screen), millidegrees, 0 to 360000. */
   angle: number;
   /** The margins, left, top, right, bottom. */
-  margins: [Um, Um, Um, Um];
+  margins: [Nm, Nm, Nm, Nm];
   border: boolean;
-  stroke_width: Um;
+  stroke_width: Nm;
   line_style: SchLineStyle;
   stroke_color: string | null;
   knockout: boolean;
-  /** The glyph height and width, µm. */
-  size: Um;
-  width: Um;
-  /** The pen the text is drawn with, µm (the automatic one when `thickness_auto`). */
-  thickness: Um;
+  /** The glyph height and width, nm. */
+  size: Nm;
+  width: Nm;
+  /** The pen the text is drawn with, nm (the automatic one when `thickness_auto`). */
+  thickness: Nm;
   thickness_auto: boolean;
   halign: TextBoxHAlign;
   valign: TextBoxVAlign;
@@ -53,19 +53,19 @@ export interface CmdTextBox {
   end: PointXY;
   pts?: PointXY[];
   angle?: number;
-  margin_left_um: Um;
-  margin_top_um: Um;
-  margin_right_um: Um;
-  margin_bottom_um: Um;
+  margin_left_nm: Nm;
+  margin_top_nm: Nm;
+  margin_right_nm: Nm;
+  margin_bottom_nm: Nm;
   border?: boolean;
-  stroke_width_um: Um;
+  stroke_width_nm: Nm;
   line_style?: SchLineStyle;
   stroke_color?: string | null;
   knockout?: boolean;
-  size_um: Um;
-  width_um?: Um | null;
+  size_nm: Nm;
+  width_nm?: Nm | null;
   /** 0 is KiCad's automatic pen. */
-  thickness_um?: Um;
+  thickness_nm?: Nm;
   halign?: TextBoxHAlign;
   valign?: TextBoxVAlign;
   mirror?: boolean;
@@ -76,16 +76,16 @@ export interface CmdTextBox {
 }
 
 /**
- * `PCB_REFERENCE_IMAGE`: a bitmap on a graphic layer, kept out of every plot. `x`, `y` are the image's centre, `w`, `h` its size in µm (the pixels at their definition, `ppi`, and the
+ * `PCB_REFERENCE_IMAGE`: a bitmap on a graphic layer, kept out of every plot. `x`, `y` are the image's centre, `w`, `h` its size in nm (the pixels at their definition, `ppi`, and the
  * `scale`). The pixels are not in the state: `GET /api/pcb_image?id=..&h=<hash>` serves them (the PNG or JPEG file the board embeds), and `hash` changes when they do.
  */
 export interface BoardRefImage {
   id: string;
   layer: string;
-  x: Um;
-  y: Um;
-  w: Um;
-  h: Um;
+  x: Nm;
+  y: Nm;
+  w: Nm;
+  h: Nm;
   /** `(scale s)` of the file in millionths (1.0 is 1000000). */
   scale_ppm: number;
   /** The size in pixels, and the definition in pixels per inch (`BITMAP_BASE::GetPPI`, 300 when the file says none). */
@@ -94,19 +94,19 @@ export interface BoardRefImage {
   hash: string;
 }
 
-/** `PCB_POINT`: a marker on the board (a cross with a ring), a snap anchor for the grid helper. `x`, `y` are its centre, `size` its extent in µm. */
+/** `PCB_POINT`: a marker on the board (a cross with a ring), a snap anchor for the grid helper. `x`, `y` are its centre, `size` its extent in nm. */
 /**
  * KiCad 10's grid item (`PCB_GRID_ITEM`, crates/model/src/grid_item.rs) as the state lists it: a sub-grid the cursor, the router and the placement tools snap to where it covers the
- * board. `extent` is the half-extent (centre to edge) and `spacing` the pitch, µm; on a polar grid `[0]` of each is the radius and the radial pitch and `phi_extent` / `phi_spacing`
+ * board. `extent` is the half-extent (centre to edge) and `spacing` the pitch, nm; on a polar grid `[0]` of each is the radius and the radial pitch and `phi_extent` / `phi_spacing`
  * the sweep and the angular pitch, degrees. `angle` is the orientation, degrees counter-clockwise on the screen.
  */
 export interface BoardGridItem {
   id: string;
   kind: "cartesian" | "polar";
-  x: Um;
-  y: Um;
-  extent: [Um, Um];
-  spacing: [Um, Um];
+  x: Nm;
+  y: Nm;
+  extent: [Nm, Nm];
+  spacing: [Nm, Nm];
   angle: number;
   phi_extent: number;
   phi_spacing: number;
@@ -132,7 +132,7 @@ export interface CmdGridItem {
 }
 
 /**
- * KiCad 10's via stitching (`PCB_VIA_STITCH`, crates/model/src/via_stitch.rs) as the state lists it -- the model's own form, which `set_via_stitch` takes back. µm; an absent number
+ * KiCad 10's via stitching (`PCB_VIA_STITCH`, crates/model/src/via_stitch.rs) as the state lists it -- the model's own form, which `set_via_stitch` takes back. nm; an absent number
  * is 0 (the pitch 0 is the default, twice the via and at least 2 mm), an absent layout or mode the first.
  */
 export interface BoardViaStitch {
@@ -140,7 +140,7 @@ export interface BoardViaStitch {
   layer?: string;
   name?: string;
   outline: PointXY[];
-  pitch_um?: number;
+  pitch_nm?: number;
   layout?: "plain" | "staggered" | "poisson";
   mode?: "stitch" | "guard";
   seed?: number;
@@ -150,7 +150,7 @@ export interface BoardViaStitch {
   guarded_net?: string;
   excluded_cells?: [number, number][];
   excluded_positions?: PointXY[];
-  via?: { size_um: number; drill_um: number; from_layer: string; to_layer: string; text?: string };
+  via?: { size_nm: number; drill_nm: number; from_layer: string; to_layer: string; text?: string };
   member_ids?: string[];
   custom_properties?: [string, string][];
 }
@@ -158,9 +158,9 @@ export interface BoardViaStitch {
 export interface BoardPoint {
   id: string;
   layer: string;
-  x: Um;
-  y: Um;
-  size: Um;
+  x: Nm;
+  y: Nm;
+  size: Nm;
 }
 
 /** `crates/model/src/pcb_items.rs` `PcbPoint`, IR field names. `id` is ignored by `add_point`. */
@@ -168,7 +168,7 @@ export interface CmdPoint {
   id?: string;
   layer: string;
   at: PointXY;
-  size_um: Um;
+  size_nm: Nm;
 }
 
 export type BarcodeKind = "code39" | "code128" | "datamatrix" | "qr" | "microqr";
@@ -181,21 +181,21 @@ export type BarcodeEcc = "L" | "M" | "Q" | "H";
 export interface BoardBarcode {
   id: string;
   layer: string;
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
   angle: number;
-  w: Um;
-  h: Um;
+  w: Nm;
+  h: Nm;
   text: string;
   /** What `${NAME}` in `text` stands for, when that differs from it. */
   shown?: string;
-  text_height: Um;
+  text_height: Nm;
   kind: BarcodeKind;
   ecc: BarcodeEcc;
   show_text: boolean;
   knockout: boolean;
-  margin_x: Um;
-  margin_y: Um;
+  margin_x: Nm;
+  margin_y: Nm;
 }
 
 /** `crates/model/src/barcode.rs` `Barcode`, IR field names. `id` is ignored by `add_barcode`. */
@@ -204,16 +204,16 @@ export interface CmdBarcode {
   layer: string;
   at: PointXY;
   angle?: number;
-  width_um: Um;
-  height_um: Um;
+  width_nm: Nm;
+  height_nm: Nm;
   text: string;
-  text_height_um: Um;
+  text_height_nm: Nm;
   kind?: BarcodeKind;
   ecc?: BarcodeEcc;
   show_text?: boolean;
   knockout?: boolean;
-  margin_x_um?: Um;
-  margin_y_um?: Um;
+  margin_x_nm?: Nm;
+  margin_y_nm?: Nm;
 }
 
 /** `crates/model/src/ref_image.rs` `RefImage`, IR field names. `data` is the image file in base64 (no line breaks). `id` is ignored by `add_ref_image`. */
@@ -241,7 +241,7 @@ export type PcbItemCmd =
   | { verb: "delete_ref_image"; id: string }
   /** Place Point's click (`DRAWING_TOOL::PlacePoint`) and Point Properties' OK. */
   | { verb: "add_point"; point: CmdPoint }
-  | { verb: "edit_point"; id: string; layer: string; at: PointXY; size_um: Um }
+  | { verb: "edit_point"; id: string; layer: string; at: PointXY; size_nm: Nm }
   | { verb: "delete_point"; id: string }
   /** Add Barcode's click and Barcode Properties' OK (`DIALOG_BARCODE_PROPERTIES`). */
   | { verb: "add_barcode"; barcode: CmdBarcode }
@@ -290,7 +290,7 @@ export interface BoardDrillChart {
   table_id: string;
   units?: TableUnits;
   precision?: number;
-  columns: { id: string; heading: string; align: "left" | "center" | "right"; width_um?: number }[];
+  columns: { id: string; heading: string; align: "left" | "center" | "right"; width_nm?: number }[];
   /** Table row -> the key of the hole group it reports. */
   row_keys?: Record<string, string>;
   filter?: DrillChartFilter;
@@ -314,7 +314,7 @@ export interface BoardDrillMap {
   id: string;
   layer: string;
   offset: PointXY;
-  size_um: number;
+  size_nm: number;
   /** One span only; absent shows every span. */
   span?: BoardDrillSpan | null;
   outline_slots?: boolean;
@@ -324,8 +324,8 @@ export interface BoardDrillMap {
 
 /** The board's drill symbol profile (`DRILL_SYMBOL_PROFILE`): the size and width of the marks are what the canvas reads. */
 export interface BoardDrillProfile {
-  size_um: number;
-  width_um: number;
+  size_nm: number;
+  width_nm: number;
   mark_policy: string;
   group_by: string[];
   freeze_assignments: boolean;
@@ -338,8 +338,8 @@ export interface BoardDrillMark {
   mode: "shape" | "letter" | "size_text";
   shape_index: number;
   letter: string;
-  diameter_um: number;
-  size_um: [number, number];
+  diameter_nm: number;
+  size_nm: [number, number];
   orientation_deg: number;
   is_slot: boolean;
 }
@@ -350,9 +350,9 @@ export interface BoardDrillMark {
  */
 export interface CmdLineEnding {
   style: "none" | "arrow" | "circle" | "square" | "arrow_open";
-  length_um?: number;
-  width_um?: number;
-  stroke_width_um?: number;
+  length_nm?: number;
+  width_nm?: number;
+  stroke_width_nm?: number;
 }
 
 /** `FILL_T`: how a closed shape is filled (`UI_FILL_MODE`). */

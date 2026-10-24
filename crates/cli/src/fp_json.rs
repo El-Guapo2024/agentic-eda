@@ -7,7 +7,7 @@
 
 use eda_model::footprint::{to_board, PlacedPad};
 use eda_model::fp_edit::{default_reference_layout, default_value_layout, field_id, pad_id, FieldLayout, FootprintAttrs, FootprintKind, PadEdit, REFERENCE, VALUE};
-use eda_model::ir::{Design, FootprintInstance, Point, Um};
+use eda_model::ir::{Design, FootprintInstance, Point, Nm};
 use eda_model::{ConstraintModel, Footprint, Pad, PadKind, PadShape, Part};
 use serde_json::{json, Value};
 
@@ -92,11 +92,11 @@ fn kind_name(k: PadKind) -> &'static str {
 }
 
 /// The copper's centre in the footprint's frame: the pad's position moved by its shape offset, which is in the pad's own (turned) frame.
-fn copper_centre(pad: &Pad, offset: Option<Point>) -> (Um, Um) {
+fn copper_centre(pad: &Pad, offset: Option<Point>) -> (Nm, Nm) {
     let Some(o) = offset else { return pad.at };
     let rad = (pad.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    (pad.at.0 + (o.x as f64 * cos - o.y as f64 * sin).round() as Um, pad.at.1 + (o.x as f64 * sin + o.y as f64 * cos).round() as Um)
+    (pad.at.0 + (o.x as f64 * cos - o.y as f64 * sin).round() as Nm, pad.at.1 + (o.x as f64 * sin + o.y as f64 * cos).round() as Nm)
 }
 
 /// One pad of `fp` for the studio: where it is and how big (the keys the canvas has always drawn from), plus its own shape, type,

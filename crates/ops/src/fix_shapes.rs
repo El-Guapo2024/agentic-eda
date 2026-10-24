@@ -10,7 +10,7 @@
 //! two points. Only lines, arcs and curves have end points to join; a circle, a rectangle or a polygon is not part of a chain (KiCad adds
 //! their start and end points to the tree as well, so a circle's centre near a line's end stops a walk there).
 
-use eda_model::ir::{Point, Shape, Um};
+use eda_model::ir::{Point, Shape, Nm};
 
 type P = (i64, i64);
 
@@ -152,7 +152,7 @@ struct Piece {
 
 /// `ConnectBoardShapes( aShapeList, aChainingEpsilon )` over the shapes of `shapes` that are lines, arcs or curves. Moves their end
 /// points in place; nothing is added or removed. `epsilon` is in micrometres (the design's unit).
-pub(crate) fn connect_board_shapes(shapes: &mut [Shape], epsilon: Um) {
+pub(crate) fn connect_board_shapes(shapes: &mut [Shape], epsilon: Nm) {
     // The pieces and every end point of them as they were before anything moved (the k-d tree is built once).
     let pieces: Vec<Piece> = shapes.iter().enumerate().filter(|(_, s)| matches!(s, Shape::Segment { .. } | Shape::Arc { .. } | Shape::Bezier { .. })).map(|(at, _)| Piece { at }).collect();
     if pieces.is_empty() {
@@ -356,7 +356,7 @@ mod tests {
     use super::*;
 
     fn seg(a: (i64, i64), b: (i64, i64)) -> Shape {
-        Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 100, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
+        Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 100_000, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
     }
 
     fn ends_of(s: &Shape) -> ((i64, i64), (i64, i64)) {
@@ -369,49 +369,49 @@ mod tests {
     #[test]
     fn two_lines_with_a_small_gap_meet_where_their_lines_cross() {
         // A horizontal line stopping 0.3 mm short of a vertical one's line.
-        let mut v = vec![seg((0, 0), (9_700, 0)), seg((10_000, 100), (10_000, 5_000))];
+        let mut v = vec![seg((0, 0), (9_700_000, 0)), seg((10_000_000, 100_000), (10_000_000, 5_000_000))];
         connect_pair(&mut v, 0, 1);
-        assert_eq!(ends_of(&v[0]).1, (10_000, 0));
-        assert_eq!(ends_of(&v[1]).0, (10_000, 0));
+        assert_eq!(ends_of(&v[0]).1, (10_000_000, 0));
+        assert_eq!(ends_of(&v[1]).0, (10_000_000, 0));
     }
 
     #[test]
     fn a_walk_closes_every_small_gap_of_a_square_and_leaves_big_ones() {
         // A square of 10 mm with 0.2 mm gaps at three corners and a 5 mm one at the fourth.
-        let mut v = vec![seg((0, 0), (9_800, 0)), seg((10_000, 200), (10_000, 9_800)), seg((9_800, 10_000), (200, 10_000)), seg((0, 5_000), (0, 0))];
+        let mut v = vec![seg((0, 0), (9_800_000, 0)), seg((10_000_000, 200_000), (10_000_000, 9_800_000)), seg((9_800_000, 10_000_000), (200_000, 10_000_000)), seg((0, 5_000_000), (0, 0))];
         // (the last side starts at its middle: its end at the origin is the first line's start)
-        connect_board_shapes(&mut v, 1_000);
+        connect_board_shapes(&mut v, 1_000_000);
         let corners: Vec<_> = v.iter().map(ends_of).collect();
-        assert_eq!(corners[0].1, (10_000, 0), "{corners:?}");
-        assert_eq!(corners[1].0, (10_000, 0));
-        assert_eq!(corners[1].1, (10_000, 10_000));
-        assert_eq!(corners[2].0, (10_000, 10_000));
+        assert_eq!(corners[0].1, (10_000_000, 0), "{corners:?}");
+        assert_eq!(corners[1].0, (10_000_000, 0));
+        assert_eq!(corners[1].1, (10_000_000, 10_000_000));
+        assert_eq!(corners[2].0, (10_000_000, 10_000_000));
         // The fourth corner (0, 10 mm) is 5 mm from the last line's start: not joined.
         assert_ne!(corners[2].1, corners[3].0);
     }
 
     #[test]
     fn a_gap_wider_than_the_tolerance_is_left_alone() {
-        let mut v = vec![seg((0, 0), (9_000, 0)), seg((10_000, 100), (10_000, 5_000))];
+        let mut v = vec![seg((0, 0), (9_000_000, 0)), seg((10_000_000, 100_000), (10_000_000, 5_000_000))];
         let before = v.clone();
-        connect_board_shapes(&mut v, 500);
+        connect_board_shapes(&mut v, 500_000);
         assert_eq!(v, before);
     }
 
     #[test]
     fn a_line_takes_the_end_of_the_arc_it_nearly_touches() {
-        let arc = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 100, filled: false, start: Point { x: 10_000, y: 0 }, mid: Point { x: 12_000, y: 2_000 }, end: Point { x: 10_000, y: 4_000 } };
-        let mut v = vec![seg((0, 0), (9_900, 100)), arc];
-        connect_board_shapes(&mut v, 1_000);
-        assert_eq!(ends_of(&v[0]).1, (10_000, 0));
+        let arc = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 100_000, filled: false, start: Point { x: 10_000_000, y: 0 }, mid: Point { x: 12_000_000, y: 2_000_000 }, end: Point { x: 10_000_000, y: 4_000_000 } };
+        let mut v = vec![seg((0, 0), (9_900_000, 100_000)), arc];
+        connect_board_shapes(&mut v, 1_000_000);
+        assert_eq!(ends_of(&v[0]).1, (10_000_000, 0));
     }
 
     #[test]
     fn the_line_crossing_helpers_follow_seg_intersect() {
-        assert_eq!(seg_intersect(((0, 0), (10, 10)), ((0, 10), (10, 0)), false), Some((5, 5)));
-        assert_eq!(seg_intersect(((0, 0), (10, 0)), ((0, 5), (10, 5)), true), None);
-        assert!((seg_angle(((0, 0), (10, 0)), ((0, 0), (0, 10))) - 90.0).abs() < 1e-9);
-        assert_eq!(seg_intersect(((0, 0), (4, 0)), ((6, 3), (6, 9)), true), Some((6, 0)));
-        assert_eq!(seg_intersect(((0, 0), (4, 0)), ((6, 3), (6, 9)), false), None);
+        assert_eq!(seg_intersect(((0, 0), (10_000, 10_000)), ((0, 10_000), (10_000, 0)), false), Some((5000, 5000)));
+        assert_eq!(seg_intersect(((0, 0), (10_000, 0)), ((0, 5000), (10_000, 5000)), true), None);
+        assert!((seg_angle(((0, 0), (10_000, 0)), ((0, 0), (0, 10_000))) - 90.0).abs() < 1e-9);
+        assert_eq!(seg_intersect(((0, 0), (4000, 0)), ((6000, 3000), (6000, 9000)), true), Some((6000, 0)));
+        assert_eq!(seg_intersect(((0, 0), (4000, 0)), ((6000, 3000), (6000, 9000)), false), None);
     }
 }

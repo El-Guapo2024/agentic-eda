@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
 
@@ -28,9 +28,9 @@ export type SharedView = {
   by: string | null;
   tab: string;
   selection: string[];
-  /** World point (µm) at the canvas centre. */
+  /** World point (nm) at the canvas centre. */
   center: [number, number] | null;
-  /** Screen px per µm. */
+  /** Screen px per nm. */
   scale: number | null;
   /** One-shot "fit these items" request. */
   zoom_to: string[] | null;
@@ -546,7 +546,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 /** `settings`: the Interactive Router Settings (`components/RouterSettingsDialog.tsx`, `kicad-port/routerSettings.ts`) --
  * the mode, shove vias, jump over obstacles, remove redundant tracks, optimize pad connections, allow DRC violations,
  * free angle mode, fix all segments and the optimizer effort, sent as the backend's `ROUTING_SETTINGS` for this session. */
-export function routeStart(x: Um, y: Um, layer: string, width: Um, settings: RouterSettings): Promise<RoutePreview> {
+export function routeStart(x: Nm, y: Nm, layer: string, width: Nm, settings: RouterSettings): Promise<RoutePreview> {
   return postJson("/api/route/start", { x, y, layer, width, settings: routerSettingsToWire(settings) });
 }
 
@@ -558,11 +558,11 @@ export function routeSetSettings(settings: RouterSettings): Promise<{ ok: boolea
 /** `flipPosture`/`width` fold in the `/` and `W` hotkeys -- see
  * `Router::flip_posture`'s own doc comment on why they ride along with the
  * next cursor move instead of being their own round trip. */
-export function routeMove(x: Um, y: Um, flipPosture?: boolean, width?: Um): Promise<RoutePreview> {
+export function routeMove(x: Nm, y: Nm, flipPosture?: boolean, width?: Nm): Promise<RoutePreview> {
   return postJson("/api/route/move", { x, y, flip_posture: flipPosture, width });
 }
 
-export function routeFix(x: Um, y: Um): Promise<RouteFixReply> {
+export function routeFix(x: Nm, y: Nm): Promise<RouteFixReply> {
   return postJson("/api/route/fix", { x, y });
 }
 
@@ -571,11 +571,11 @@ export function routeUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
 }
 
 /** `typed`: the via's type and the layers it spans (`ROUTER_TOOL::handleLayerSwitch`'s `sizes.SetViaType` / `AddLayerPair`, kicad-port/routerVia.ts); without it, a via from the layer being routed to `toLayer`. */
-export function routeToggleVia(enabled: boolean, diameter?: Um, drill?: Um, toLayer?: string, typed?: { viaType: string; span: [string, string] }): Promise<{ ok: boolean; message?: string }> {
+export function routeToggleVia(enabled: boolean, diameter?: Nm, drill?: Nm, toLayer?: string, typed?: { viaType: string; span: [string, string] }): Promise<{ ok: boolean; message?: string }> {
   return postJson("/api/route/via", { enabled, diameter, drill, to_layer: toLayer, ...(typed ? { via_type: typed.viaType, span: typed.span } : {}) });
 }
 
-export function routeFinish(x: Um, y: Um): Promise<CmdReply> {
+export function routeFinish(x: Nm, y: Nm): Promise<CmdReply> {
   return postJson("/api/route/finish", { x, y });
 }
 
@@ -584,7 +584,7 @@ export function routeCancel(): Promise<{ ok: boolean }> {
 }
 
 /** Route From Other End (`ROUTER::ContinueFromEnd`, Ctrl+E): what the route has fixed is committed and a new route starts at the far end of the connection, heading for where this one's head ended. The reply is the new route's preview, with `committed` and `from`. */
-export function routeContinueFromEnd(x: Um, y: Um): Promise<RoutePreview> {
+export function routeContinueFromEnd(x: Nm, y: Nm): Promise<RoutePreview> {
   return postJson("/api/route/continue_from_end", { x: Math.round(x), y: Math.round(y) });
 }
 
@@ -592,11 +592,11 @@ export function routeContinueFromEnd(x: Um, y: Um): Promise<RoutePreview> {
 export interface ConvertPolysReply {
   ok: boolean;
   message?: string;
-  rings: [Um, Um][][];
+  rings: [Nm, Nm][][];
   consumed: string[];
 }
 
-export function convertPolys(ids: readonly string[], strategy: "copy_linewidth" | "centerline" | "bounding_hull", gap: Um): Promise<ConvertPolysReply> {
+export function convertPolys(ids: readonly string[], strategy: "copy_linewidth" | "centerline" | "bounding_hull", gap: Nm): Promise<ConvertPolysReply> {
   return postJson("/api/convert/polys", { ids, strategy, gap: Math.round(gap) });
 }
 
@@ -616,17 +616,17 @@ export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
  * backend's own defaults. `freeAngle` is `PNS::DM_FREE_ANGLE` (`G`, `pcbnew.InteractiveRouter.DragFreeAngle`):
  * the drag then only marks obstacles whatever the mode is (`DRAGGER::Drag`). `dragLocked` is "Drag Anyway" to a locked item
  * (`ROUTER_TOOL::performDragging`'s dialog): without it the backend refuses one, with `locked: true` in the reply. */
-export function routeDragStart(x: Um, y: Um, layer: string, settings?: RouterSettings, freeAngle?: boolean, dragLocked?: boolean): Promise<DragPreview> {
-  // The backend reads whole micrometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
+export function routeDragStart(x: Nm, y: Nm, layer: string, settings?: RouterSettings, freeAngle?: boolean, dragLocked?: boolean): Promise<DragPreview> {
+  // The backend reads whole nanometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
   return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined });
 }
 
-export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
+export function routeDragMove(x: Nm, y: Nm): Promise<DragPreview> {
   return postJson("/api/route/drag_move", { x: Math.round(x), y: Math.round(y) });
 }
 
 /** `forceCommit` is Ctrl+click (`DRAGGER::FixRoute( aForceCommit )`): a drag that only marks obstacles commits its violation. A position the drag cannot resolve commits the last one it could. */
-export function routeDragFinish(x: Um, y: Um, forceCommit?: boolean): Promise<CmdReply> {
+export function routeDragFinish(x: Nm, y: Nm, forceCommit?: boolean): Promise<CmdReply> {
   return postJson("/api/route/drag_finish", { x: Math.round(x), y: Math.round(y), force_commit: forceCommit ? true : undefined });
 }
 
@@ -635,7 +635,7 @@ export function routeDragFinish(x: Um, y: Um, forceCommit?: boolean): Promise<Cm
 // `routeCancel` above already ends a dp session too (same backend session).
 
 /** `dims` are the "Differential Pair Dimensions..." dialog's custom values; `settings` the router's (`mode` decides whether the pair is walked, shoved or only marked). */
-export function dpStart(x: Um, y: Um, layer: string, dims?: { width: Um; gap: Um; viaGap?: Um }, settings?: RouterSettings): Promise<DiffPairPreview> {
+export function dpStart(x: Nm, y: Nm, layer: string, dims?: { width: Nm; gap: Nm; viaGap?: Nm }, settings?: RouterSettings): Promise<DiffPairPreview> {
   return postJson("/api/route/dp_start", {
     x: Math.round(x),
     y: Math.round(y),
@@ -648,25 +648,25 @@ export function dpStart(x: Um, y: Um, layer: string, dims?: { width: Um; gap: Um
 }
 
 /** `ROUTER_TOOL::DpDimensionsDialog` while a pair is being routed: the new width, gap and via gap apply from the next move (`ok: false` when no pair is running). */
-export function dpSetDims(width: Um, gap: Um, viaGap?: Um): Promise<{ ok: boolean }> {
+export function dpSetDims(width: Nm, gap: Nm, viaGap?: Nm): Promise<{ ok: boolean }> {
   return postJson("/api/route/dp_dims", { width: Math.round(width), gap: Math.round(gap), via_gap: viaGap !== undefined ? Math.round(viaGap) : undefined });
 }
 
-export function dpMove(x: Um, y: Um, flipPosture?: boolean): Promise<DiffPairPreview> {
+export function dpMove(x: Nm, y: Nm, flipPosture?: boolean): Promise<DiffPairPreview> {
   return postJson("/api/route/dp_move", { x: Math.round(x), y: Math.round(y), flip_posture: flipPosture });
 }
 
-export function dpFix(x: Um, y: Um): Promise<DpFixReply> {
+export function dpFix(x: Nm, y: Nm): Promise<DpFixReply> {
   return postJson("/api/route/dp_fix", { x: Math.round(x), y: Math.round(y) });
 }
 
 /** `V` for a pair (`ROUTER::ToggleViaPlacement`): the head ends in a pair of vias, and the next fix places them and goes on from them on `toLayer`. */
-export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Um, drill?: Um): Promise<{ ok: boolean }> {
+export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Nm, drill?: Nm): Promise<{ ok: boolean }> {
   return postJson("/api/route/dp_via", { enabled, to_layer: toLayer, diameter, drill });
 }
 
 /** Route From Other End for a pair (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, Ctrl+E): what the pair has fixed is committed and a new pair starts at the far end of the connection, heading for where this one's head ended. The reply is the new pair's preview, with `committed` and `from`. */
-export function dpContinueFromEnd(x: Um, y: Um): Promise<DiffPairPreview> {
+export function dpContinueFromEnd(x: Nm, y: Nm): Promise<DiffPairPreview> {
   return postJson("/api/route/dp_continue_from_end", { x: Math.round(x), y: Math.round(y) });
 }
 
@@ -674,7 +674,7 @@ export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
   return postJson("/api/route/dp_undo_segment", {});
 }
 
-export function dpFinish(x: Um, y: Um): Promise<CmdReply> {
+export function dpFinish(x: Nm, y: Nm): Promise<CmdReply> {
   return postJson("/api/route/dp_finish", { x: Math.round(x), y: Math.round(y) });
 }
 
@@ -745,15 +745,15 @@ export async function fetchSchFormatting(): Promise<SchFormattingReply> {
   return getJson<SchFormattingReply>("/api/sch/formatting");
 }
 
-/** `POST /api/inspect/clearance`: `reportClearance` for two items (`aAt`/`bAt`, in micrometres, say which segment of a track was meant). */
-export function inspectClearance(req: { a: string; b: string; aAt?: [Um, Um]; bAt?: [Um, Um]; activeLayer?: string; units: LengthUnit }): Promise<InspectReply> {
-  const mm = (p?: [Um, Um]) => (p ? [p[0] / 1000, p[1] / 1000] : undefined);
+/** `POST /api/inspect/clearance`: `reportClearance` for two items (`aAt`/`bAt`, in nanometres, say which segment of a track was meant). */
+export function inspectClearance(req: { a: string; b: string; aAt?: [Nm, Nm]; bAt?: [Nm, Nm]; activeLayer?: string; units: LengthUnit }): Promise<InspectReply> {
+  const mm = (p?: [Nm, Nm]) => (p ? [p[0] / 1e6, p[1] / 1e6] : undefined);
   return postJson("/api/inspect/clearance", { a: req.a, b: req.b, a_at: mm(req.aAt), b_at: mm(req.bAt), active_layer: req.activeLayer, units: req.units });
 }
 
 /** `POST /api/inspect/constraints`: `InspectConstraints` for one item. */
-export function inspectConstraints(req: { item: string; at?: [Um, Um]; units: LengthUnit }): Promise<InspectReply> {
-  return postJson("/api/inspect/constraints", { item: req.item, at: req.at ? [req.at[0] / 1000, req.at[1] / 1000] : undefined, units: req.units });
+export function inspectConstraints(req: { item: string; at?: [Nm, Nm]; units: LengthUnit }): Promise<InspectReply> {
+  return postJson("/api/inspect/constraints", { item: req.item, at: req.at ? [req.at[0] / 1e6, req.at[1] / 1e6] : undefined, units: req.units });
 }
 
 /** `POST /api/footprint/check`: the Footprint Checker on the footprint `name` open in the Footprint Editor (kicad-cli's DRC on a scratch board that holds it). */

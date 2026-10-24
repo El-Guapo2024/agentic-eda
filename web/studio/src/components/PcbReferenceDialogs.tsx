@@ -9,13 +9,13 @@ import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 import { polarTranslation, toPolarDeg } from "../kicad-port/pcbEditActions";
 import type { Vec } from "../kicad-port/pcbReference";
 import { useStudioState } from "../state/store";
-import { umFrom, umTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
 import { DialogShell } from "./pcbDialogKit";
 
 export function OffsetItemDialog({ offset, onResult }: { offset: Vec; onResult: (offset: Vec | null) => void }) {
   const units = useStudioState().units;
   // A length as the field shows it: the display units, to the resolution that still names one micrometre.
-  const disp = (um: number) => Number(umTo(um, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5));
+  const disp = (um: number) => Number(nmTo(um, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5));
   const [polar, setPolar] = useState(false);
   const [a, setA] = useState(disp(offset.x)); // Offset X, or the distance (display units)
   const [b, setB] = useState(disp(offset.y)); // Offset Y, or the angle (degrees)
@@ -25,11 +25,11 @@ export function OffsetItemDialog({ offset, onResult }: { offset: Vec; onResult: 
   // OnPolarChanged: carry the entered values over to the other coordinate system.
   const switchPolar = (next: boolean) => {
     if (next) {
-      const p = toPolarDeg(umFrom(a, units), umFrom(b, units));
+      const p = toPolarDeg(nmFrom(a, units), nmFrom(b, units));
       setA(disp(p.r));
       setB(Number(p.deg.toFixed(4)));
     } else {
-      const t = polarTranslation(umFrom(a, units), b);
+      const t = polarTranslation(nmFrom(a, units), b);
       setA(disp(t.x));
       setB(disp(t.y));
     }
@@ -46,7 +46,7 @@ export function OffsetItemDialog({ offset, onResult }: { offset: Vec; onResult: 
   };
   // TransferDataFromWindow
   const submit = () => {
-    const entered = polar ? polarTranslation(umFrom(a, units), b) : { x: Math.round(umFrom(a, units)), y: Math.round(umFrom(b, units)) };
+    const entered = polar ? polarTranslation(nmFrom(a, units), b) : { x: Math.round(nmFrom(a, units)), y: Math.round(nmFrom(b, units)) };
     close(entered);
   };
 

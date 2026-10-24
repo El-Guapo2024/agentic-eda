@@ -12,14 +12,14 @@
 // site for no real sharing of logic, only of a few primitives. Those few
 // (the grid, hairline width compensation, circumcircle-through-3-points
 // for an arc, KiCad's own stroke font) *are* reused, imported directly.
-import type { ChamferCorners, CmdShape, CmdText, LibraryPad, Um } from "../../api/types";
+import type { ChamferCorners, CmdShape, CmdText, LibraryPad, Nm } from "../../api/types";
 import type { ViewTransform } from "../../kicad-port/view";
-import { hairlineUm } from "../../kicad-port/view";
+import { hairlineNm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
 import { circleThrough, drawGridOrigin, normalizeSweep } from "../canvas/painter";
 import { drawArcPreview } from "../canvas/arcPreview";
 import { drawBezierPreview } from "../canvas/bezierPreview";
-import { BEZIER_MAX_ERROR_UM } from "../canvas/itemHitTest";
+import { BEZIER_MAX_ERROR_NM } from "../canvas/itemHitTest";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { trapezoidCorners } from "../../kicad-port/padShape";
 import type { ArcGeom } from "../../kicad-port/arcGeom";
@@ -32,21 +32,21 @@ function realLayerKey(layer: string): string {
   return layer.replace(/\./g, "_");
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number, origin: readonly [number, number] = [0, 0]) {
-  const visible = computeVisibleGridSize(gridUm, view.scale, DEFAULT_GRID_STYLE);
+function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number, origin: readonly [number, number] = [0, 0]) {
+  const visible = computeVisibleGridSize(gridNm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return;
   // The grid is anchored at the grid origin (`GAL::SetGridOrigin`): dots at `origin + i * visible`.
   const x0 = -view.x / view.scale - origin[0];
   const y0 = -view.y / view.scale - origin[1];
-  const wUm = widthPx / view.scale;
-  const hUm = heightPx / view.scale;
+  const wNm = widthPx / view.scale;
+  const hNm = heightPx / view.scale;
   const firstIndexX = Math.floor(x0 / visible) - 1;
   const firstIndexY = Math.floor(y0 / visible) - 1;
-  const lastIndexX = Math.ceil((x0 + wUm) / visible) + 1;
-  const lastIndexY = Math.ceil((y0 + hUm) / visible) + 1;
+  const lastIndexX = Math.ceil((x0 + wNm) / visible) + 1;
+  const lastIndexY = Math.ceil((y0 + hNm) / visible) + 1;
   ctx.fillStyle = layerColor("grid");
-  const minorR = hairlineUm(view, stepPx < 8 ? 0.6 : 1);
+  const minorR = hairlineNm(view, stepPx < 8 ? 0.6 : 1);
   const majorR = minorR * MAJOR_GRID_LINE_WIDTH_RATIO;
   for (let i = firstIndexX; i <= lastIndexX; i++) {
     const x = origin[0] + i * visible;
@@ -62,10 +62,10 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
 
 /** The anchor marker at (0,0) -- `footprint_edit_frame.cpp`'s own small crosshair at the footprint's local origin (distinct from the grid origin, which is this same point here -- the footprint editor has no separate "move the grid" concept). */
 function drawAnchor(ctx: CanvasRenderingContext2D, view: ViewTransform) {
-  const r = hairlineUm(view, 10);
+  const r = hairlineNm(view, 10);
   ctx.save();
   ctx.strokeStyle = layerColor("anchor");
-  ctx.lineWidth = hairlineUm(view, 1.5);
+  ctx.lineWidth = hairlineNm(view, 1.5);
   ctx.beginPath();
   ctx.moveTo(-r, 0);
   ctx.lineTo(r, 0);
@@ -79,7 +79,7 @@ function drawAnchor(ctx: CanvasRenderingContext2D, view: ViewTransform) {
  * A rectangle centered at the origin with some corners cut and the others rounded (`TransformRoundChamferedRectToPolygon`; the caller translates and rotates first).
  * `chamfer` is the cut along each edge from a flagged corner, `radius` the radius of the corners that are not.
  */
-function chamferedRectPath(ctx: CanvasRenderingContext2D, w: Um, h: Um, chamfer: number, corners: ChamferCorners, radius = 0) {
+function chamferedRectPath(ctx: CanvasRenderingContext2D, w: Nm, h: Nm, chamfer: number, corners: ChamferCorners, radius = 0) {
   const hw = w / 2;
   const hh = h / 2;
   const c = Math.max(0, Math.min(chamfer, Math.min(w, h) / 2));
@@ -113,7 +113,7 @@ function chamferedRectPath(ctx: CanvasRenderingContext2D, w: Um, h: Um, chamfer:
 }
 
 /** A trapezoid centered at the origin: `PAD::buildEffectiveShape`'s four corners (`trapezoidCorners`). */
-function trapezoidPath(ctx: CanvasRenderingContext2D, w: Um, h: Um, delta: [Um, Um]) {
+function trapezoidPath(ctx: CanvasRenderingContext2D, w: Nm, h: Nm, delta: [Nm, Nm]) {
   ctx.beginPath();
   trapezoidCorners(w, h, delta).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   ctx.closePath();
@@ -193,7 +193,7 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
     // A custom pad is the anchor and its basic shapes. The selection is a halo of every part grown a little, under the copper, so the outline
     // that shows is the union's and not each part's own.
     if (opts.selected) {
-      const halo = hairlineUm(view, 1.25);
+      const halo = hairlineNm(view, 1.25);
       const selection = layerColor("selection");
       tracePadPath(ctx, pad);
       ctx.fillStyle = selection;
@@ -213,7 +213,7 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
     ctx.fill();
     if (opts.selected) {
       ctx.strokeStyle = layerColor("selection");
-      ctx.lineWidth = hairlineUm(view, 2.5);
+      ctx.lineWidth = hairlineNm(view, 2.5);
       ctx.stroke();
     }
   }
@@ -233,7 +233,7 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
       ctx.fillStyle = layerColor("background");
       ctx.fill();
       ctx.strokeStyle = layerColor("pad_th");
-      ctx.lineWidth = hairlineUm(view, 1);
+      ctx.lineWidth = hairlineNm(view, 1);
       ctx.stroke();
     }
   }
@@ -241,8 +241,8 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
 
   // Pad number, centered, once legible.
   if (pad.size[0] * view.scale > 22 && pad.size[1] * view.scale > 10) {
-    const fontUm = Math.min(pad.size[0], pad.size[1]) * 0.35;
-    drawStrokeText(ctx, pad.number, pad.at.x, pad.at.y + fontUm * 0.35, { sizeUm: fontUm, justify: "center", thicknessUm: fontUm / 6, color: "rgba(0,0,0,0.75)" });
+    const fontNm = Math.min(pad.size[0], pad.size[1]) * 0.35;
+    drawStrokeText(ctx, pad.number, pad.at.x, pad.at.y + fontNm * 0.35, { sizeNm: fontNm, justify: "center", thicknessNm: fontNm / 6, color: "rgba(0,0,0,0.75)" });
   }
 }
 
@@ -268,7 +268,7 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: CmdShape) {
       break;
     case "bezier":
       // `BEZIER_POLY::GetPoly` at the board's max error (an open curve is never filled).
-      bezierPolyline([s.start.x, s.start.y], [s.c1.x, s.c1.y], [s.c2.x, s.c2.y], [s.end.x, s.end.y], BEZIER_MAX_ERROR_UM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      bezierPolyline([s.start.x, s.start.y], [s.c1.x, s.c1.y], [s.c2.x, s.c2.y], [s.end.x, s.end.y], BEZIER_MAX_ERROR_NM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.stroke();
       return;
     case "arc": {
@@ -297,7 +297,7 @@ function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdS
   const color = selected ? layerColor("selection") : layerColor(realLayerKey(s.layer));
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = Math.max(s.stroke_width, hairlineUm(view, selected ? 2 : 1));
+  ctx.lineWidth = Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   drawShapeGeometry(ctx, s);
@@ -307,29 +307,29 @@ function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdS
 function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText, selected: boolean) {
   const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
   const angleRad = (-t.angle / 1000) * (Math.PI / 180);
-  drawStrokeText(ctx, t.content, t.at.x, t.at.y, { sizeUm: Math.max(t.size_um, hairlineUm(view, 8)), thicknessUm: t.stroke_width, justify: t.justify, angleRad, mirror: t.mirror, color });
+  drawStrokeText(ctx, t.content, t.at.x, t.at.y, { sizeNm: Math.max(t.size_nm, hairlineNm(view, 8)), thicknessNm: t.stroke_width, justify: t.justify, angleRad, mirror: t.mirror, color });
 }
 
 /** Rubber-band preview for the graphics tool currently in progress (click-to-add-points, same convention the PCB tab's own `drawInProgress` uses -- including drawing it in the selection color regardless of target layer). */
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: FpPaintDrawState | null, cursorUm: { x: number; y: number } | null) {
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: FpPaintDrawState | null, cursorNm: { x: number; y: number } | null) {
   if (!draw) return;
   // `drawArc` / `drawOneBezier`: the construction managers' own geometry, not a polyline through the clicks.
-  const style = { color: layerColor("selection"), hair: (px: number) => hairlineUm(view, px), units: "mm" as const };
+  const style = { color: layerColor("selection"), hair: (px: number) => hairlineNm(view, px), units: "mm" as const };
   if (draw.shapeKind === "arc" && draw.arc) {
     drawArcPreview(ctx, draw.arc, style);
     return;
   }
   if (draw.shapeKind === "bezier" && draw.bezier) {
-    drawBezierPreview(ctx, draw.bezier, style, BEZIER_MAX_ERROR_UM);
+    drawBezierPreview(ctx, draw.bezier, style, BEZIER_MAX_ERROR_NM);
     return;
   }
   const pts = draw.pts.slice();
-  if (cursorUm) pts.push([cursorUm.x, cursorUm.y]);
+  if (cursorNm) pts.push([cursorNm.x, cursorNm.y]);
   if (pts.length < 2) return;
   ctx.save();
   ctx.strokeStyle = layerColor("selection");
-  ctx.lineWidth = hairlineUm(view, 1.5);
-  ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+  ctx.lineWidth = hairlineNm(view, 1.5);
+  ctx.setLineDash([hairlineNm(view, 4), hairlineNm(view, 3)]);
   if (draw.shapeKind === "circle") {
     const [cx, cy] = pts[0]!;
     const [ex, ey] = pts[pts.length - 1]!;
@@ -351,13 +351,13 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw
 
 export interface FpPaintOptions {
   selection: Set<string>;
-  gridUm: number;
+  gridNm: number;
   gridVisible: boolean;
   /** The point the grid is anchored at (`common.Control.gridSetOrigin` in this editor): the dots follow it and its marker is drawn when it is not at (0, 0). */
   gridOrigin?: [number, number] | null;
   drawState: FpPaintDrawState | null;
-  cursorUm: { x: number; y: number } | null;
-  movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+  cursorNm: { x: number; y: number } | null;
+  movePreview: { refs: string[]; dxNm: number; dyNm: number } | null;
   /** High Contrast Mode (`common.Control.highContrastMode`): what is not on `activeLayer` is drawn dimmed. */
   highContrast?: boolean;
   activeLayer?: string;
@@ -380,7 +380,7 @@ function contrastAlpha(opts: FpPaintOptions, layer: string | null): number {
 /** The slice of `FpDrawState` the painter reads. */
 export interface FpPaintDrawState {
   shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
-  pts: [Um, Um][];
+  pts: [Nm, Nm][];
   arc?: ArcGeom;
   bezier?: BezierGeom;
 }
@@ -393,7 +393,7 @@ export function paintFootprint(
   footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[] } | null,
   opts: FpPaintOptions
 ) {
-  if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]);
+  if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridNm, opts.gridOrigin ?? [0, 0]);
   drawGridOrigin(ctx, view, opts.gridOrigin, "#1a1a1a"); // the canvas is filled with this colour (FootprintCanvas.tsx)
   if (!footprint) {
     drawAnchor(ctx, view);
@@ -408,7 +408,7 @@ export function paintFootprint(
     const mv = moved(g.id);
     ctx.save();
     ctx.globalAlpha *= contrastAlpha(opts, g.layer);
-    if (mv) ctx.translate(mv.dxUm, mv.dyUm);
+    if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""));
     ctx.restore();
   }
@@ -416,7 +416,7 @@ export function paintFootprint(
     const mv = moved(t.id);
     ctx.save();
     ctx.globalAlpha *= contrastAlpha(opts, t.layer);
-    if (mv) ctx.translate(mv.dxUm, mv.dyUm);
+    if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     drawText(ctx, view, t, opts.selection.has(t.id ?? ""));
     ctx.restore();
   }
@@ -424,36 +424,36 @@ export function paintFootprint(
     const mv = moved(p.id);
     ctx.save();
     ctx.globalAlpha *= contrastAlpha(opts, null);
-    if (mv) ctx.translate(mv.dxUm, mv.dyUm);
+    if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? "") });
     ctx.restore();
   }
 
   drawAnchor(ctx, view);
-  drawInProgress(ctx, view, opts.drawState, opts.cursorUm);
+  drawInProgress(ctx, view, opts.drawState, opts.cursorNm);
   if (opts.markers && opts.markers.length > 0) drawCheckMarkers(ctx, view, opts.markers);
 }
 
-const CHECK_MARKER_RADIUS_UM = 300;
+const CHECK_MARKER_RADIUS_NM = 300_000;
 
 /** The Footprint Checker's markers: a ring and a "!" in the colour of the severity (`LAYER_DRC_ERROR` / `LAYER_DRC_WARNING`), the selected one larger and highlighted (`LAYER_DRC_HIGHLIGHTED`) -- the board painter's stand-in for `MARKER_BASE`'s icon. */
 function drawCheckMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, markers: readonly { at: [number, number]; severity: string; selected: boolean }[]) {
-  const hair = hairlineUm(view, 1.5);
+  const hair = hairlineNm(view, 1.5);
   for (const m of markers) {
     const [x, y] = m.at;
     const color = m.selected ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(m.severity === "exclusion" ? "LAYER_DRC_EXCLUSION" : m.severity === "error" ? "LAYER_DRC_ERROR" : "LAYER_DRC_WARNING");
-    const r = m.selected ? CHECK_MARKER_RADIUS_UM * 1.4 : CHECK_MARKER_RADIUS_UM;
+    const r = m.selected ? CHECK_MARKER_RADIUS_NM * 1.4 : CHECK_MARKER_RADIUS_NM;
     ctx.save();
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(100, hair);
+    ctx.lineWidth = Math.max(100_000, hair);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.globalAlpha = 0.35;
     ctx.fill();
     ctx.globalAlpha = 1;
     ctx.stroke();
-    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
+    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeNm: r * 1.3, justify: "center", color, thicknessNm: r * 0.22 });
     ctx.restore();
   }
 }

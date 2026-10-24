@@ -24,8 +24,8 @@ pub struct FieldSpec {
     pub name: String,
     pub text: String,
     pub visible: bool,
-    /// The text's size, micrometres; 0 is the default, 50 mil.
-    pub size_um: i64,
+    /// The text's size, nanometres; 0 is the default, 50 mil.
+    pub size_nm: i64,
     pub bold: bool,
     pub italic: bool,
     pub name_shown: bool,
@@ -35,13 +35,13 @@ pub struct FieldSpec {
 
 impl FieldSpec {
     pub fn new(name: &str, text: String, visible: bool) -> FieldSpec {
-        FieldSpec { name: name.to_string(), text, visible, size_um: 0, bold: false, italic: false, name_shown: false, can_autoplace: true }
+        FieldSpec { name: name.to_string(), text, visible, size_nm: 0, bold: false, italic: false, name_shown: false, can_autoplace: true }
     }
 
     /// The same field as a stored placement sets it: visibility, size, bold, italic, shown name and whether it may be autoplaced.
     pub fn styled_by(mut self, p: &FieldPlacement) -> FieldSpec {
         self.visible = p.visible;
-        self.size_um = p.size_um;
+        self.size_nm = p.size_nm;
         self.bold = p.bold;
         self.italic = p.italic;
         self.name_shown = p.name_shown;
@@ -59,7 +59,7 @@ impl FieldSpec {
     }
 }
 
-/// A field on the sheet: what the `.kicad_sch` writer emits and the painter draws. The anchor is in micrometres; `vertical` is the
+/// A field on the sheet: what the `.kicad_sch` writer emits and the painter draws. The anchor is in nanometres; `vertical` is the
 /// text's angle on the sheet (90 degrees); `h` and `v` justify the text against the anchor in the text's own axes, as the file does.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageField {
@@ -70,8 +70,8 @@ pub struct PageField {
     pub h: HJustify,
     pub v: VJustify,
     pub visible: bool,
-    /// The text's size (height and width), micrometres.
-    pub size_um: f64,
+    /// The text's size (height and width), nanometres.
+    pub size_nm: f64,
     pub bold: bool,
     pub italic: bool,
     /// `SCH_FIELD::IsNameShown`: [`shown_text`](Self::shown_text) leads with the field's name.
@@ -92,13 +92,13 @@ impl PageField {
 
     /// How the text is set: its size, the pen (a fifth of the size when bold, `GetPenSizeForBold`) and its justification.
     pub fn style(&self) -> TextStyle {
-        field_style(self.size_um, self.bold, self.h, self.v)
+        field_style(self.size_nm, self.bold, self.h, self.v)
     }
 }
 
-/// The style a text of `size_um` (bold or not) is measured in.
-pub fn field_style(size_um: f64, bold: bool, h: HJustify, v: VJustify) -> TextStyle {
-    let size_iu = kiround(size_um * 10.0);
+/// The style a text of `size_nm` (bold or not) is measured in.
+pub fn field_style(size_nm: f64, bold: bool, h: HJustify, v: VJustify) -> TextStyle {
+    let size_iu = kiround(size_nm / eda_model::units::SCH_IU_NM as f64);
     TextStyle { size_iu, thickness_iu: if bold { kiround(size_iu as f64 / 5.0) } else { 0 }, h, v }
 }
 
@@ -211,7 +211,7 @@ pub fn page_field(at: Point, rot: u32, mirrored: bool, width: f64, p: &FieldPlac
         h: to_hj(h),
         v: to_vj(v),
         visible: p.visible,
-        size_um: p.text_size_um() as f64,
+        size_nm: p.text_size_nm() as f64,
         bold: p.bold,
         italic: p.italic,
         name_shown: p.name_shown,
@@ -306,8 +306,8 @@ fn round_n(value: i64, n: i64, up: bool) -> i64 {
     }
 }
 
-fn iu(um: f64) -> i64 {
-    (um * 10.0).round() as i64
+fn iu(nm: f64) -> i64 {
+    (nm / eda_model::units::SCH_IU_NM as f64).round() as i64
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -342,10 +342,10 @@ fn pin_side(o: PinOrient) -> Side {
 /// What an Autoplace Fields run in manual mode knows of the sheet around the symbol (`AUTOPLACER::m_colliders`, `getDrawableArea`).
 #[derive(Debug, Clone, Default)]
 pub struct Surroundings {
-    /// Boxes of what is drawn around the symbol, micrometres: every item but the symbol itself (a symbol by its body and pins, wires, labels,
+    /// Boxes of what is drawn around the symbol, nanometres: every item but the symbol itself (a symbol by its body and pins, wires, labels,
     /// text, sheets, shapes) and the shown fields of the other symbols.
     pub colliders: Vec<Collider>,
-    /// The sheet inside its border, micrometres; `None` for no limit.
+    /// The sheet inside its border, nanometres; `None` for no limit.
     pub drawable: Option<crate::hier::kit::Rect>,
 }
 
@@ -353,7 +353,7 @@ pub struct Surroundings {
 #[derive(Debug, Clone)]
 pub struct Collider {
     pub rect: crate::hier::kit::Rect,
-    /// Set for a wire or a bus: the y of its two ends, micrometres (`SCH_LINE::GetStartPoint().y`, `GetEndPoint().y`).
+    /// Set for a wire or a bus: the y of its two ends, nanometres (`SCH_LINE::GetStartPoint().y`, `GetEndPoint().y`).
     pub wire: Option<(i64, i64)>,
 }
 
@@ -370,7 +370,8 @@ const WIRE_V_SPACING: i64 = 100 * MIL_IU;
 type IuBox = [i64; 4];
 
 fn iu_box(r: crate::hier::kit::Rect) -> IuBox {
-    [r.x0 * 10, r.y0 * 10, r.x1 * 10, r.y1 * 10]
+    let iu = eda_model::units::SCH_IU_NM;
+    [r.x0 / iu, r.y0 / iu, r.x1 / iu, r.y1 / iu]
 }
 
 /// `BOX2I::Intersects`: the boxes share some area.
@@ -405,7 +406,7 @@ struct Measured {
 }
 
 fn measure(f: &FieldSpec) -> Measured {
-    let size_iu = if f.size_um > 0 { f.size_um * 10 } else { DEFAULT_TEXT_SIZE_IU };
+    let size_iu = if f.size_nm > 0 { f.size_nm / eda_model::units::SCH_IU_NM } else { DEFAULT_TEXT_SIZE_IU };
     let pen_iu = if f.bold { kiround(size_iu as f64 / 5.0) } else { default_pen_iu(size_iu) };
     Measured { text: f.shown_text(), size_iu, pen_iu }
 }
@@ -551,7 +552,7 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
                         fits = false;
                         break;
                     }
-                    let this = (3 * WIRE_V_SPACING / 2) - ((y0 * 10) % WIRE_V_SPACING);
+                    let this = (3 * WIRE_V_SPACING / 2) - ((y0 / eda_model::units::SCH_IU_NM) % WIRE_V_SPACING);
                     if offset == 0 {
                         offset = this;
                     } else if offset != this {
@@ -598,7 +599,7 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
         if sv.1 != 0 {
             y = round_n(y, GRID_IU, sv.1 >= 0);
         }
-        out.push(((x as f64 / 10.0, y as f64 / 10.0), h_just, TextVAlign::Center));
+        out.push((((x * eda_model::units::SCH_IU_NM) as f64, (y * eda_model::units::SCH_IU_NM) as f64), h_just, TextVAlign::Center));
     }
     out
 }
@@ -627,7 +628,7 @@ fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], ke
     let h_mirrored = (rot, mirrored) == (180_000, true);
     let placed = autoplace_page(geom, sym.at, h_mirrored, &movable, force, manual);
     let style = |mut p: FieldPlacement, spec: &FieldSpec| {
-        p.size_um = spec.size_um;
+        p.size_nm = spec.size_nm;
         p.bold = spec.bold;
         p.italic = spec.italic;
         p.name_shown = spec.name_shown;
@@ -714,10 +715,10 @@ pub fn stored_visible_fields(sch: &SchematicSection, sym: &SymbolInstance, part:
 /// The box a shown field's text takes on the sheet, in millimetres.
 pub fn field_box_mm(f: &PageField) -> crate::geometry::TextBox {
     let r = field_rect(f);
-    crate::geometry::TextBox { x0: r.x0 as f64 / 1000.0, y0: r.y0 as f64 / 1000.0, x1: r.x1 as f64 / 1000.0, y1: r.y1 as f64 / 1000.0 }
+    crate::geometry::TextBox { x0: r.x0 as f64 / 1e6, y0: r.y0 as f64 / 1e6, x1: r.x1 as f64 / 1e6, y1: r.y1 as f64 / 1e6 }
 }
 
-/// The box a field's text takes on the sheet as eeschema measures it (`SCH_FIELD::GetBoundingBox`), whole micrometres: the text as it is shown, in its own
+/// The box a field's text takes on the sheet as eeschema measures it (`SCH_FIELD::GetBoundingBox`), whole nanometres: the text as it is shown, in its own
 /// size and pen, justified against its anchor, turned a quarter when it runs up the sheet.
 pub fn field_rect(f: &PageField) -> crate::hier::kit::Rect {
     crate::hier::kit::text_rect_styled(&f.shown_text(), f.at, &f.style(), f.vertical)
@@ -725,10 +726,10 @@ pub fn field_rect(f: &PageField) -> crate::hier::kit::Rect {
 
 // -------------------------------------------------------------------------------------------------- power symbols
 
-/// How far a power symbol's glyph reaches from its pin along its axis, pen included (micrometres).
+/// How far a power symbol's glyph reaches from its pin along its axis, pen included (nanometres).
 fn glyph_reach(lib_id: &str) -> f64 {
-    let Some(lib) = eda_model::symbol::builtin(lib_id) else { return 2_540.0 };
-    SymbolGeom::of_origin_symbol(Point { x: 0, y: 0 }, 0, &lib).body.map(|b| b.y0.abs().max(b.y1.abs())).unwrap_or(2_540.0)
+    let Some(lib) = eda_model::symbol::builtin(lib_id) else { return 2_540_000.0 };
+    SymbolGeom::of_origin_symbol(Point { x: 0, y: 0 }, 0, &lib).body.map(|b| b.y0.abs().max(b.y1.abs())).unwrap_or(2_540_000.0)
 }
 
 /// Where a power symbol's Value is. KiCad's power library puts it 3.81 mm below a ground symbol and 3.556 mm above a supply one, centred. A
@@ -740,17 +741,17 @@ pub fn power_value_placement(ps: &PowerSymbol, lib_id: &str) -> FieldPlacement {
     // the way the glyph points on the sheet
     let glyph = Lin::of_symbol(ps.rot, false).apply((0, if ground_like { 1 } else { -1 }));
     if glyph.0 != 0 && !flag {
-        let reach = glyph_reach(lib_id) + 640.0;
+        let reach = glyph_reach(lib_id) + 640_000.0;
         let anchor = (ps.at.x as f64 + glyph.0 as f64 * reach, ps.at.y as f64);
         let h = if glyph.0 > 0 { TextJustify::Left } else { TextJustify::Right };
         return local_placement(ps.at, ps.rot, false, 0.0, "Value", anchor, h, TextVAlign::Center, true);
     }
     let dy = if ground_like {
-        3_810
+        3_810_000
     } else if flag {
-        -3_810
+        -3_810_000
     } else {
-        -3_556
+        -3_556_000
     };
     // a flag's own name says nothing about the net, and it is wider than the room beside the symbol it stands on
     FieldPlacement { dy, visible: !flag, ..FieldPlacement::at_origin("Value") }
@@ -776,8 +777,8 @@ pub fn power_fields(sch: &SchematicSection, ps: &PowerSymbol) -> Vec<PageField> 
 /// margin of half the text from the border (the name) or two fifths (the file).
 pub fn sheet_placements(sheet: &SheetInstance) -> Vec<FieldPlacement> {
     let border = 762 + 4; // half the 6 mil pen, plus 4 internal units
-    let name_margin = (border + (DEFAULT_TEXT_SIZE_IU as f64 * 0.5).round() as i64) as f64 / 10.0;
-    let file_margin = (border + (DEFAULT_TEXT_SIZE_IU as f64 * 0.4).round() as i64) as f64 / 10.0;
+    let name_margin = ((border + (DEFAULT_TEXT_SIZE_IU as f64 * 0.5).round() as i64) * eda_model::units::SCH_IU_NM) as f64;
+    let file_margin = ((border + (DEFAULT_TEXT_SIZE_IU as f64 * 0.4).round() as i64) * eda_model::units::SCH_IU_NM) as f64;
     vec![
         FieldPlacement { dy: -(name_margin.round() as i64), h: TextJustify::Left, v: TextVAlign::Bottom, ..FieldPlacement::at_origin("Sheetname") },
         FieldPlacement { dy: sheet.size.1 + file_margin.round() as i64, h: TextJustify::Left, v: TextVAlign::Top, ..FieldPlacement::at_origin("Sheetfile") },
@@ -796,13 +797,13 @@ pub fn sheet_fields(sch: &SchematicSection, sheet: &SheetInstance) -> Vec<PageFi
         .collect()
 }
 
-/// How much of `a` lies inside `b` (square micrometres), the edges trimmed by a hair so boxes that only touch are not counted.
-fn overlap_area(a: crate::hier::kit::Rect, b: crate::hier::kit::Rect) -> i64 {
-    const HAIR: i64 = 30;
+/// How much of `a` lies inside `b` (square nanometres), the edges trimmed by a hair so boxes that only touch are not counted.
+fn overlap_area(a: crate::hier::kit::Rect, b: crate::hier::kit::Rect) -> i128 {
+    const HAIR: i64 = 30_000;
     let w = (a.x1 - HAIR).min(b.x1 - HAIR) - (a.x0 + HAIR).max(b.x0 + HAIR);
     let h = (a.y1 - HAIR).min(b.y1 - HAIR) - (a.y0 + HAIR).max(b.y0 + HAIR);
     if w > 0 && h > 0 {
-        w * h
+        w as i128 * h as i128
     } else {
         0
     }
@@ -865,8 +866,8 @@ pub fn fill_layout(sch: &mut SchematicSection, model: &eda_model::ConstraintMode
     }
     if !pending.is_empty() {
         let obstacles = crate::obstacles::of_section(sch, model);
-        let cost = |boxes: &[crate::hier::kit::Rect], others: &[crate::hier::kit::Rect]| -> i64 {
-            boxes.iter().map(|b| obstacles.iter().map(|o| overlap_area(*b, o.rect)).sum::<i64>() + others.iter().map(|o| overlap_area(*b, *o)).sum::<i64>()).sum()
+        let cost = |boxes: &[crate::hier::kit::Rect], others: &[crate::hier::kit::Rect]| -> i128 {
+            boxes.iter().map(|b| obstacles.iter().map(|o| overlap_area(*b, o.rect)).sum::<i128>() + others.iter().map(|o| overlap_area(*b, *o)).sum::<i128>()).sum()
         };
         for i in 0..pending.len() {
             // the boxes of every other symbol's fields, where they are for now

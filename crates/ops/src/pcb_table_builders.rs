@@ -12,7 +12,7 @@
 
 use eda_drc::constraints::{string_from_value, Units};
 use eda_drc::stroke_font::{effective_pen_width, kicad_text_segments, TextLayout};
-use eda_model::ir::{Point, TextJustify, Um};
+use eda_model::ir::{Point, TextJustify, Nm};
 use eda_model::rules::default_stackup;
 use eda_model::{Stackup, StackupLayer};
 use eda_model::table::{Table, TableCell};
@@ -102,14 +102,14 @@ pub fn initial_caps(s: &str) -> String {
 // ------------------------------------------------------------------------------------------------------------------------------------------------ Autosize
 
 /// `ARC_LOW_DEF` (0.02 mm), the error `PCB_TABLE::Autosize` allows the polygon of a stroke.
-const ARC_LOW_DEF_UM: f64 = 20.0;
+const ARC_LOW_DEF_NM: f64 = 20_000.0;
 
 /// The bounding box of `TransformOvalToPolygon( a, b, pen, ARC_LOW_DEF, ERROR_INSIDE )`: the stroke from `a` to `b` as the capsule KiCad polygonises, whose rounded ends
 /// are cut into a multiple of eight sides (so a flat lies across the axis of the stroke, half a side from it) and lie inside the true outline.
-fn oval_extents(a: (f64, f64), b: (f64, f64), pen_um: f64) -> (f64, f64, f64, f64) {
-    let radius = (pen_um * 1000.0 / 2.0).floor() / 1000.0;
+fn oval_extents(a: (f64, f64), b: (f64, f64), pen_nm: f64) -> (f64, f64, f64, f64) {
+    let radius = (pen_nm / 2.0).floor();
     // `GetArcToSegmentCount( radius, aError, FULL_CIRCLE )`, with its floor of eight sides to the circle, then "round up to 8".
-    let rel_error = ARC_LOW_DEF_UM / radius.max(0.001);
+    let rel_error = ARC_LOW_DEF_NM / radius.max(1.0);
     let increment = (180.0 / std::f64::consts::PI * (1.0 - rel_error).acos() * 2.0).min(45.0);
     let increment = if increment.is_finite() { increment } else { 45.0 };
     let count = ((360.0 / increment).round() as i64).max(2);
@@ -151,19 +151,18 @@ fn oval_extents(a: (f64, f64), b: (f64, f64), pen_um: f64) -> (f64, f64, f64, f6
     (x0, y0, x1, y1)
 }
 
-/// The width and height, µm, of the box round the ink of a cell's text: `TransformTextToPolySet( .., 0, ARC_LOW_DEF, ERROR_INSIDE )` of the stroke font and its
+/// The width and height, nm, of the box round the ink of a cell's text: `TransformTextToPolySet( .., 0, ARC_LOW_DEF, ERROR_INSIDE )` of the stroke font and its
 /// `BBox()`. Text with no ink (nothing, or spaces) has none.
 ///
 /// The glyphs are laid out in nanometres, as KiCad lays them out (each glyph's advance is rounded to the nanometre, not to the micrometre the IR holds a size in): a line
 /// of fifteen glyphs laid out in micrometres comes out a few micrometres wider than KiCad's.
-fn ink_size(text: &str, size: (Um, Um), thickness: Um, bold: bool) -> (f64, f64) {
-    let size_nm = (size.0 * 1000, size.1 * 1000);
-    let thickness_nm = thickness * 1000;
-    let pen = effective_pen_width(thickness_nm, size_nm, bold) as f64 / 1000.0;
+fn ink_size(text: &str, size: (Nm, Nm), thickness: Nm, bold: bool) -> (f64, f64) {
+    let (size_nm, thickness_nm) = (size, thickness);
+    let pen = effective_pen_width(thickness_nm, size_nm, bold) as f64;
     let segments = kicad_text_segments(&TextLayout { text, pos: Point { x: 0, y: 0 }, size: size_nm, thickness: thickness_nm, angle_deg: 0.0, mirror: false, halign: -1, valign: 0 });
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for seg in &segments {
-        let (ax0, ay0, ax1, ay1) = oval_extents((seg.a.x as f64 / 1000.0, seg.a.y as f64 / 1000.0), (seg.b.x as f64 / 1000.0, seg.b.y as f64 / 1000.0), pen);
+        let (ax0, ay0, ax1, ay1) = oval_extents((seg.a.x as f64, seg.a.y as f64), (seg.b.x as f64, seg.b.y as f64), pen);
         x0 = x0.min(ax0);
         y0 = y0.min(ay0);
         x1 = x1.max(ax1);
@@ -186,7 +185,7 @@ pub fn autosize(t: &mut Table) {
         for col in 0..cols {
             let cell = &t.cells[row * cols + col];
             let st = &cell.style;
-            line.push(ink_size(&cell.text, (st.width_um, st.height_um), st.thickness_um, st.bold));
+            line.push(ink_size(&cell.text, (st.width_nm, st.height_nm), st.thickness_nm, st.bold));
         }
         extents.push(line);
     }
@@ -197,18 +196,18 @@ pub fn autosize(t: &mut Table) {
             // `GetMarginLeft() + GetMarginRight()`, nanometres (a new cell's 1.0025 mm, not the IR's 1.003).
             let margins_nm = (cell.margin_nm(0) + cell.margin_nm(2)) as f64;
             // `std::max<int>( colWidth, width + margins * 1.5 )`: the sum is cut to an integer, in nanometres.
-            width = width.max((extents[row][col].0 * 1000.0 + margins_nm * 1.5).trunc() as i64);
+            width = width.max((extents[row][col].0 + margins_nm * 1.5).trunc() as i64);
         }
-        t.col_widths[col] = ((width as f64) / 1000.0).round() as Um;
+        t.col_widths[col] = width;
     }
     for row in 0..rows {
         let mut height: i64 = 0;
         for col in 0..cols {
             let cell = &t.cells[row * cols + col];
             let margins_nm = cell.margin_nm(0) + cell.margin_nm(2);
-            height = height.max(((extents[row][col].1) * 1000.0).trunc() as i64 + margins_nm);
+            height = height.max(extents[row][col].1.trunc() as i64 + margins_nm);
         }
-        t.row_heights[row] = ((height as f64) / 1000.0).round() as Um;
+        t.row_heights[row] = height;
     }
 }
 
@@ -218,10 +217,10 @@ pub fn autosize(t: &mut Table) {
 /// `SetLayer` does not turn the text over), then `SetTextSize`, `SetTextThickness` and the justification.
 fn cell(text: &str, size_mm: f64, thickness_mm: f64, right: bool) -> TableCell {
     let mut c = TableCell::pcb_new(false);
-    let size = (size_mm * 1000.0).round() as Um;
-    c.style.width_um = size;
-    c.style.height_um = size;
-    c.style.thickness_um = (thickness_mm * 1000.0).round() as Um;
+    let size = eda_model::units::from_mm(size_mm);
+    c.style.width_nm = size;
+    c.style.height_nm = size;
+    c.style.thickness_nm = eda_model::units::from_mm(thickness_mm);
     if right {
         c.style.h_align = TextJustify::Right;
     }
@@ -232,7 +231,7 @@ fn cell(text: &str, size_mm: f64, thickness_mm: f64, right: bool) -> TableCell {
 /// `new PCB_TABLE( aBoard, DEFAULT_LINE_WIDTH )` with the cells given, row by row, on `layer`: the border and the separators are 0.1 mm wide and drawn.
 fn table_of(layer: &str, cols: usize, cells: Vec<TableCell>) -> Table {
     let rows = cells.len() / cols.max(1);
-    let mut t = Table::new_grid("F.Cu", Point { x: 0, y: 0 }, cols, rows, 0, 0, 100);
+    let mut t = Table::new_grid("F.Cu", Point { x: 0, y: 0 }, cols, rows, 0, 0, 100_000);
     t.cells = cells;
     t.layer = layer.to_string();
     t
@@ -404,8 +403,8 @@ pub fn characteristics_table(layer: &str, copper_layers: usize, stackup: &Stacku
 
 /// The stackup the board has: the one Board Setup holds (`stackup`, with its copper layer count) or, for a board that has none, KiCad's default for its copper layers
 /// and thickness (`BOARD_STACKUP::SynchronizeWithBoard` builds it).
-pub fn effective_stackup(settings: Option<(usize, Stackup)>, copper_layers: usize, thickness_um: Um) -> (usize, Stackup) {
-    settings.unwrap_or_else(|| (copper_layers, default_stackup(copper_layers, thickness_um)))
+pub fn effective_stackup(settings: Option<(usize, Stackup)>, copper_layers: usize, thickness_nm: Nm) -> (usize, Stackup) {
+    settings.unwrap_or_else(|| (copper_layers, default_stackup(copper_layers, thickness_nm)))
 }
 
 #[cfg(test)]
@@ -434,32 +433,32 @@ mod tests {
 
     #[test]
     fn the_polygon_of_a_stroke_is_a_capsule_with_flats_across_its_axis() {
-        // A horizontal stroke of 0.2 mm from (0,0) to (1000,0): eight sides to a circle, so its ends reach r * cos(22.5 deg) = 92.4 um along the axis and r across it.
-        let (x0, y0, x1, y1) = oval_extents((0.0, 0.0), (1000.0, 0.0), 200.0);
-        assert!((x0 + 92.388).abs() < 0.01 && (x1 - 1092.388).abs() < 0.01, "{x0} {x1}");
-        assert!((y0 + 100.0).abs() < 1e-9 && (y1 - 100.0).abs() < 1e-9, "{y0} {y1}");
+        // A horizontal stroke of 0.2 mm from (0,0) to (1 mm,0): eight sides to a circle, so its ends reach r * cos(22.5 deg) = 92.4 um along the axis and r across it.
+        let (x0, y0, x1, y1) = oval_extents((0.0, 0.0), (1_000_000.0, 0.0), 200_000.0);
+        assert!((x0 + 92_388.0).abs() < 1.0 && (x1 - 1_092_388.0).abs() < 1.0, "{x0} {x1}");
+        assert!((y0 + 100_000.0).abs() < 1e-9 && (y1 - 100_000.0).abs() < 1e-9, "{y0} {y1}");
         // The same stroke drawn the other way round is the same capsule.
-        assert_eq!(oval_extents((1000.0, 0.0), (0.0, 0.0), 200.0), (x0, y0, x1, y1));
+        assert_eq!(oval_extents((1_000_000.0, 0.0), (0.0, 0.0), 200_000.0), (x0, y0, x1, y1));
         // A vertical one: its length lies along y.
-        let (vx0, vy0, vx1, vy1) = oval_extents((0.0, 0.0), (0.0, 1000.0), 200.0);
-        assert!((vy0 + 92.388).abs() < 0.01 && (vy1 - 1092.388).abs() < 0.01 && (vx0 + 100.0).abs() < 0.01 && (vx1 - 100.0).abs() < 0.01, "{vx0} {vy0} {vx1} {vy1}");
+        let (vx0, vy0, vx1, vy1) = oval_extents((0.0, 0.0), (0.0, 1_000_000.0), 200_000.0);
+        assert!((vy0 + 92_388.0).abs() < 1.0 && (vy1 - 1_092_388.0).abs() < 1.0 && (vx0 + 100_000.0).abs() < 1.0 && (vx1 - 100_000.0).abs() < 1.0, "{vx0} {vy0} {vx1} {vy1}");
     }
 
     #[test]
     fn the_ink_of_a_text_is_wider_for_more_text_and_has_none_for_a_space() {
-        let one = ink_size("H", (1500, 1500), 200, false);
-        let two = ink_size("HH", (1500, 1500), 200, false);
-        assert!(one.0 > 800.0 && one.0 < 1500.0, "{one:?}");
+        let one = ink_size("H", (1500_000, 1500_000), 200_000, false);
+        let two = ink_size("HH", (1500_000, 1500_000), 200_000, false);
+        assert!(one.0 > 800_000.0 && one.0 < 1_500_000.0, "{one:?}");
         assert!(two.0 > one.0 * 1.8 && two.1 == one.1, "{two:?} {one:?}");
-        assert_eq!(ink_size("  ", (1500, 1500), 200, false), (0.0, 0.0));
-        assert_eq!(ink_size("", (1500, 1500), 200, false), (0.0, 0.0));
+        assert_eq!(ink_size("  ", (1500_000, 1500_000), 200_000, false), (0.0, 0.0));
+        assert_eq!(ink_size("", (1500_000, 1500_000), 200_000, false), (0.0, 0.0));
         // A thicker pen makes the ink bigger.
-        assert!(ink_size("H", (1500, 1500), 300, false).0 > one.0);
+        assert!(ink_size("H", (1500_000, 1500_000), 300_000, false).0 > one.0);
     }
 
     #[test]
     fn a_four_layer_stackup_table_has_a_row_for_every_layer_and_sizes_itself_from_its_text() {
-        let stackup = default_stackup(4, 1_600);
+        let stackup = default_stackup(4, 1_600_000);
         let t = stackup_table("F.SilkS", &stackup, Units::Mm);
         assert_eq!((t.col_count(), t.row_count()), (7, 1 + stackup.layers.len()));
         let text = |row: usize, col: usize| t.cell(row, col).unwrap().text.clone();
@@ -472,24 +471,24 @@ mod tests {
         assert_eq!(text(5, 0), "Dielectric 1");
         assert_eq!((1..7).map(|c| text(5, c)).collect::<Vec<_>>(), ["Core", "FR4", "0.48 mm", "Not specified", "4.5", "0.02"].map(String::from).to_vec());
         // The sizes of the text and its justification.
-        assert_eq!(t.cell(0, 0).unwrap().style.thickness_um, 300);
-        assert_eq!(t.cell(1, 0).unwrap().style.thickness_um, 200);
+        assert_eq!(t.cell(0, 0).unwrap().style.thickness_nm, 300_000);
+        assert_eq!(t.cell(1, 0).unwrap().style.thickness_nm, 200_000);
         assert_eq!(t.cell(1, 3).unwrap().style.h_align, TextJustify::Right);
         assert_eq!(t.cell(1, 0).unwrap().style.h_align, TextJustify::Left);
         // Autosize: every column is as wide as its widest text and the margins ask, every row as high; the corner is the origin.
         assert_eq!(t.at, Point { x: 0, y: 0 });
-        assert!(t.col_widths.iter().all(|w| *w > 3_009), "{:?}", t.col_widths);
+        assert!(t.col_widths.iter().all(|w| *w > 3_009_000), "{:?}", t.col_widths);
         let widest_name = t.col_widths[0];
-        assert!(widest_name > ink_size("Dielectric 1", (1500, 1500), 200, false).0 as i64, "{widest_name}");
-        assert!(t.row_heights.iter().all(|h| *h > 2_006), "{:?}", t.row_heights);
+        assert!(widest_name > ink_size("Dielectric 1", (1500_000, 1500_000), 200_000, false).0 as i64, "{widest_name}");
+        assert!(t.row_heights.iter().all(|h| *h > 2_006_000), "{:?}", t.row_heights);
         assert_eq!(t.layer, "F.SilkS");
         assert!(t.border.external && t.border.header && t.separators.rows && t.separators.cols);
-        assert_eq!(t.border.stroke.width_um, 100);
+        assert_eq!(t.border.stroke.width_nm, 100_000);
     }
 
     #[test]
     fn the_stackup_table_follows_the_units() {
-        let stackup = default_stackup(2, 1_600);
+        let stackup = default_stackup(2, 1_600_000);
         let mils = stackup_table("F.SilkS", &stackup, Units::Mils);
         // Row 4 is F.Cu: 0.035 mm = 1.37795 mils.
         assert_eq!(mils.cell(4, 3).unwrap().text, "1.37795 mils");
@@ -499,7 +498,7 @@ mod tests {
 
     #[test]
     fn a_layer_with_no_type_is_what_its_name_says() {
-        let mut stackup = default_stackup(2, 1_600);
+        let mut stackup = default_stackup(2, 1_600_000);
         for l in stackup.layers.iter_mut() {
             l.kind = None;
         }
@@ -514,7 +513,7 @@ mod tests {
 
     #[test]
     fn the_characteristics_table_is_a_title_and_label_value_pairs_two_to_a_row() {
-        let mut stackup = default_stackup(4, 1_600);
+        let mut stackup = default_stackup(4, 1_600_000);
         stackup.copper_finish = Some("ENIG".into());
         stackup.dielectric_constraints = true;
         stackup.edge_connector = 2;
@@ -531,10 +530,10 @@ mod tests {
         assert_eq!(row(6), ["Plated board edge: ", "No", "Edge card connectors: ", "Yes, Bevelled"]);
         // No lines at all, 2 mm / 0.4 mm title, 1.5 mm / 0.2 mm data.
         assert!(!t.border.external && !t.border.header && !t.separators.rows && !t.separators.cols);
-        assert_eq!((t.cell(0, 0).unwrap().style.height_um, t.cell(0, 0).unwrap().style.thickness_um), (2_000, 400));
-        assert_eq!((t.cell(1, 0).unwrap().style.height_um, t.cell(1, 0).unwrap().style.thickness_um), (1_500, 200));
+        assert_eq!((t.cell(0, 0).unwrap().style.height_nm, t.cell(0, 0).unwrap().style.thickness_nm), (2_000_000, 400_000));
+        assert_eq!((t.cell(1, 0).unwrap().style.height_nm, t.cell(1, 0).unwrap().style.thickness_nm), (1_500_000, 200_000));
         // Autosize looks at the title's ink for the first column, as KiCad does (it does not know the title spans four).
-        assert!(t.col_widths[0] > ink_size("BOARD CHARACTERISTICS", (2000, 2000), 400, false).0 as i64);
+        assert!(t.col_widths[0] > ink_size("BOARD CHARACTERISTICS", (2000_000, 2000_000), 400_000, false).0 as i64);
     }
 
     /// The point of sizing a table from its ink: KiCad's own line breaking (`GetShownText` breaks to the column less the margins) does not break any cell of it.
@@ -558,13 +557,13 @@ mod tests {
 
     #[test]
     fn no_cell_of_a_built_table_is_broken_into_lines_whatever_the_units() {
-        let mut stackup = default_stackup(6, 1_600);
+        let mut stackup = default_stackup(6, 1_600_000);
         stackup.copper_finish = Some("ENIG".into());
         for units in [Units::Mm, Units::Mils, Units::Inch] {
             assert_no_cell_wraps(&stackup_table("F.SilkS", &stackup, units));
             assert_no_cell_wraps(&characteristics_table("Dwgs.User", 6, &stackup, &numbers(), units));
         }
-        let mut odd = default_stackup(2, 1_600);
+        let mut odd = default_stackup(2, 1_600_000);
         odd.layers[3].material = Some("a long material name for the Material column".into());
         odd.layers[3].color = Some("#336699FF".into());
         assert_no_cell_wraps(&stackup_table("B.SilkS", &odd, Units::Mm));
@@ -572,9 +571,9 @@ mod tests {
 
     #[test]
     fn a_board_without_a_stackup_gets_the_default_one_for_its_layers() {
-        let (n, s) = effective_stackup(None, 4, 1_600);
-        assert_eq!((n, s.layers.len()), (4, default_stackup(4, 1_600).layers.len()));
-        let own = default_stackup(2, 1_000);
-        assert_eq!(effective_stackup(Some((2, own.clone())), 4, 1_600), (2, own));
+        let (n, s) = effective_stackup(None, 4, 1_600_000);
+        assert_eq!((n, s.layers.len()), (4, default_stackup(4, 1_600_000).layers.len()));
+        let own = default_stackup(2, 1_000_000);
+        assert_eq!(effective_stackup(Some((2, own.clone())), 4, 1_600_000), (2, own));
     }
 }

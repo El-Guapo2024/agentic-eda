@@ -6,8 +6,8 @@ test("the overlay has something to show when a net would join or a connection co
   assert.equal(hasNetCollision(undefined), false);
   assert.equal(hasNetCollision(null), false);
   assert.equal(hasNetCollision({ collisions: [], disconnections: [] }), false);
-  assert.equal(hasNetCollision({ collisions: [{ at: [0, 0], radius_um: 1372 }], disconnections: [] }), true);
-  assert.equal(hasNetCollision({ collisions: [], disconnections: [{ a: [0, 0], b: [10, 0], radius_um: 152.4 }] }), true);
+  assert.equal(hasNetCollision({ collisions: [{ at: [0, 0], radius_nm: 1372 }], disconnections: [] }), true);
+  assert.equal(hasNetCollision({ collisions: [], disconnections: [{ a: [0, 0], b: [10, 0], radius_nm: 152.4 }] }), true);
 });
 
 test("the theme's drag-collision colour, #e6090dcc, is red at 0.8: the fill keeps 0.35 of that and the stroke all of it", () => {

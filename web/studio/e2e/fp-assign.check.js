@@ -176,7 +176,7 @@
     const lib = "Resistor_SMD:R_0805_2012Metric";
     await cmd({ op: "exchange_footprints", references: [r4], footprint: lib });
     const pad = (await part(r4)).pads[0];
-    const res = await cmd({ op: "edit_board_pad", part: r4, edit: { number: pad.num ?? "1", size: [pad.w + 200, pad.h] } });
+    const res = await cmd({ op: "edit_board_pad", part: r4, edit: { number: pad.num ?? "1", size: [pad.w + 200_000, pad.h] } });
     t(res.ok, `pad 1 of ${r4} is 0.2 mm wider than the library's: ${res.message}`);
     const plan = await (await fetch("/api/exchange_plan", { method: "POST", body: JSON.stringify({ references: [r4, r5], footprint: null }) })).json();
     const e4 = plan.entries.find((e) => e.reference === r4);
@@ -201,7 +201,7 @@
     const lib = "Resistor_SMD:R_0805_2012Metric";
     await cmd({ op: "exchange_footprints", references: [r4], footprint: lib });
     const pad = (await part(r4)).pads[0];
-    await cmd({ op: "edit_board_pad", part: r4, edit: { number: pad.num ?? "1", size: [pad.w + 200, pad.h] } });
+    await cmd({ op: "edit_board_pad", part: r4, edit: { number: pad.num ?? "1", size: [pad.w + 200_000, pad.h] } });
     await select([r4, r5]);
     let run = await __eda.run("pcbnew.InspectionTool.DiffFootprint");
     t(!dialog("footprint-diff-dialog") && /Select a footprint to diff/.test(run.toast ?? ""), "two footprints selected: the message KiCad gives");
@@ -249,7 +249,7 @@
     const byPrefix = {};
     for (const p of after) (byPrefix[p.ref.replace(/\d+$/, "")] ??= []).push(p);
     // `RoundToGrid` of the dialog: the remainder takes the sign of the coordinate, exactly half goes down
-    const rtg = (v) => { const r = v % 1000; let c = v - r; if (Math.abs(r) > 500) c += c < 0 ? -1000 : 1000; return c; };
+    const rtg = (v) => { const r = v % 1_000_000; let c = v - r; if (Math.abs(r) > 500_000) c += c < 0 ? -1_000_000 : 1_000_000; return c; };
     const ordered = Object.values(byPrefix).every((list) => {
       const rows = [...list].sort((a, b) => parseInt(a.ref.replace(/\D+/g, "")) - parseInt(b.ref.replace(/\D+/g, "")));
       return rows.every((p, i) => i === 0 || rtg(rows[i - 1].at[1]) < rtg(p.at[1]) || (rtg(rows[i - 1].at[1]) === rtg(p.at[1]) && rtg(rows[i - 1].at[0]) <= rtg(p.at[0])));

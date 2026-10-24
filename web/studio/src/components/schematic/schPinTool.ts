@@ -15,7 +15,7 @@ export interface PinPlacement {
 }
 
 /** `m_DefaultTextSize`, um. */
-const PIN_TEXT_SIZE_UM = 1270;
+const PIN_TEXT_SIZE_NM = 1_270_000;
 
 /** The hierarchical labels of the sheet's own file, read from the sheet's page (the studio serves each sheet's content under `<path>/<sheet id>`). */
 export async function loadHierLabels(currentPath: readonly string[], sheetId: string): Promise<HierLabel[]> {
@@ -24,7 +24,7 @@ export async function loadHierLabels(currentPath: readonly string[], sheetId: st
 }
 
 /** A pin's bounding box, estimated from `SCH_HIERLABEL::GetBodyBoundingBox`: text width plus a flag as tall as the text, its pen and its offset (1.5 text heights). */
-export const pinExtentOf = (name: string): PinExtent => ({ width: measureStrokeText(name, PIN_TEXT_SIZE_UM) + 1.5 * PIN_TEXT_SIZE_UM, height: 1.5 * PIN_TEXT_SIZE_UM });
+export const pinExtentOf = (name: string): PinExtent => ({ width: measureStrokeText(name, PIN_TEXT_SIZE_NM) + 1.5 * PIN_TEXT_SIZE_NM, height: 1.5 * PIN_TEXT_SIZE_NM });
 
 /** The sheet a click lands on (`SelectPoint( cursorPos, { SCH_SHEET_T } )`): its border, or anywhere inside it. */
 export function sheetAt(sch: Schematic, p: P, tol: number): Sheet | undefined {
@@ -80,10 +80,10 @@ export function paintPinPreview(ctx: CanvasRenderingContext2D, view: ViewTransfo
   const [x, y] = next.at;
   ctx.save();
   ctx.strokeStyle = layerColor("LAYER_SHEETLABEL");
-  ctx.lineWidth = Math.max(150, 1.5 / view.scale);
+  ctx.lineWidth = Math.max(150_000, 1.5 / view.scale);
   ctx.beginPath();
   ctx.arc(x, y, 500, 0, Math.PI * 2);
   ctx.stroke();
-  drawStrokeText(ctx, next.label.name, x + 800, y, { sizeUm: PIN_TEXT_SIZE_UM * 0.8, justify: "left", color: layerColor("LAYER_SHEETLABEL") });
+  drawStrokeText(ctx, next.label.name, x + 800_000, y, { sizeNm: PIN_TEXT_SIZE_NM * 0.8, justify: "left", color: layerColor("LAYER_SHEETLABEL") });
   ctx.restore();
 }

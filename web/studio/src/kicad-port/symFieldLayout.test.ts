@@ -17,7 +17,7 @@ test("a field is named for the canvas by fld:lib:<name>", () => {
 test("a library field is drawn in the editor's space: mm, +y up, becomes um, +y down, at its size and justification", () => {
   const f = allFields(sym({ fields: [{ name: "Reference", text: "R", at: { x: 1.5, y: 2.54 }, size_mm: 1.0, h_align: "left", v_align: "bottom", bold: true, angle_deg: 90 }] }))[0]!;
   const s = schFieldOf(f);
-  assert.deepEqual([s.at, s.size_um, s.h, s.v, s.vertical, s.bold, s.visible, s.id], [[1500, -2540], 1000, "left", "bottom", true, true, true, "fld:lib:Reference"]);
+  assert.deepEqual([s.at, s.size_nm, s.h, s.v, s.vertical, s.bold, s.visible, s.id], [[1_500_000, -2_540_000], 1_000_000, "left", "bottom", true, true, true, "fld:lib:Reference"]);
 });
 
 test("the Reference of a multi-unit symbol has the unit's letter", () => {
@@ -37,9 +37,9 @@ test("a hidden field is on show only with Show Hidden Fields, and a field with n
 test("a click picks the field under it, the smallest box of several, and nothing elsewhere", () => {
   const rows = allFields(sym({ fields: [{ name: "Reference", text: "R", at: { x: 0, y: 5.08 } }, { name: "Value", text: "10k", at: { x: 0, y: -5.08 } }] }));
   const shown = fieldsOnShow(rows, false);
-  assert.equal(hitLibField(shown, 0, -5080, 100, measure), "fld:lib:Reference");
-  assert.equal(hitLibField(shown, 0, 5080, 100, measure), "fld:lib:Value");
-  assert.equal(hitLibField(shown, 20000, 0, 100, measure), null);
+  assert.equal(hitLibField(shown, 0, -5_080_000, 100_000, measure), "fld:lib:Reference");
+  assert.equal(hitLibField(shown, 0, 5_080_000, 100_000, measure), "fld:lib:Value");
+  assert.equal(hitLibField(shown, 20_000_000, 0, 100_000, measure), null);
 });
 
 test("a drag moves the named fields by the offset, in the symbol's frame", () => {

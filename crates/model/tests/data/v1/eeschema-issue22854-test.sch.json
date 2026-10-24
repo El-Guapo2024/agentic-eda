@@ -1,0 +1,288 @@
+{
+  "schema": 1,
+  "provenance": {
+    "engine_version": "0.1.0",
+    "intent_hash": "",
+    "seed": 0
+  },
+  "schematic": {
+    "symbols": [
+      {
+        "id": "J1",
+        "at": {
+          "x": 45720,
+          "y": 53340
+        },
+        "rot": 0,
+        "mirrored": true,
+        "mirror_y": false,
+        "lib_id": "Connector_Generic:Conn_01x03",
+        "value": "Conn_01x03",
+        "datasheet": "~"
+      },
+      {
+        "id": "R1",
+        "at": {
+          "x": 64770,
+          "y": 50800
+        },
+        "rot": 90000,
+        "mirrored": false,
+        "mirror_y": false,
+        "lib_id": "Device:R",
+        "value": "R",
+        "datasheet": "~"
+      }
+    ],
+    "wires": [
+      {
+        "id": "wire_f32419c82ab0",
+        "net": "GND",
+        "pins": [
+          "J1.3"
+        ],
+        "pts": [
+          {
+            "x": 50800,
+            "y": 55880
+          },
+          {
+            "x": 53340,
+            "y": 55880
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_9d584f1d4fa6",
+        "net": "+5V",
+        "pts": [
+          {
+            "x": 101600,
+            "y": 50800
+          },
+          {
+            "x": 101600,
+            "y": 27940
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_7d5f108541ff",
+        "net": "Net-(J1-Pad1)",
+        "pins": [
+          "J1.1",
+          "R1.1"
+        ],
+        "pts": [
+          {
+            "x": 50800,
+            "y": 50800
+          },
+          {
+            "x": 60960,
+            "y": 50800
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_9283141496e7",
+        "net": "+5V",
+        "pins": [
+          "R1.2"
+        ],
+        "pts": [
+          {
+            "x": 68580,
+            "y": 50800
+          },
+          {
+            "x": 101600,
+            "y": 50800
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_f0df82417b8a",
+        "net": "GND",
+        "pts": [
+          {
+            "x": 53340,
+            "y": 55880
+          },
+          {
+            "x": 53340,
+            "y": 58420
+          }
+        ],
+        "bus": false
+      }
+    ],
+    "labels": [],
+    "power_symbols": [
+      {
+        "id": "#PWR01",
+        "lib_id": "power:+5V",
+        "at": {
+          "x": 101600,
+          "y": 27940
+        },
+        "rot": 0,
+        "net": "+5V",
+        "pin": ""
+      },
+      {
+        "id": "#PWR02",
+        "lib_id": "power:GND",
+        "at": {
+          "x": 53340,
+          "y": 58420
+        },
+        "rot": 0,
+        "net": "GND",
+        "pin": ""
+      }
+    ],
+    "extras": {
+      "graphics": [
+        {
+          "id": "tbox_73fd591ecc83",
+          "shape": {
+            "type": "text_box",
+            "start": {
+              "x": 25400,
+              "y": 81280
+            },
+            "end": {
+              "x": 76200,
+              "y": 93980
+            },
+            "text": "How to reproduce\n\n1. Run ERC\n2. Move the +5V power symbol\n3. Run ERC again (this will make it crash)",
+            "size_um": 1270,
+            "h_align": "left",
+            "v_align": "top",
+            "margin_um": 953
+          },
+          "line_style": "solid",
+          "fill": "color",
+          "fill_color": {
+            "r": 255,
+            "g": 229,
+            "b": 191,
+            "a": 255
+          }
+        },
+        {
+          "id": "rarea_4603e6ad953b",
+          "shape": {
+            "type": "rule_area",
+            "pts": [
+              {
+                "x": 25400,
+                "y": 25400
+              },
+              {
+                "x": 76200,
+                "y": 25400
+              },
+              {
+                "x": 76200,
+                "y": 76200
+              },
+              {
+                "x": 25400,
+                "y": 76200
+              }
+            ]
+          },
+          "line_style": "dash"
+        },
+        {
+          "id": "dirl_c8db1b1a8f48",
+          "shape": {
+            "type": "directive",
+            "at": {
+              "x": 27940,
+              "y": 25400
+            },
+            "shape": "round",
+            "pin_length_um": 2540,
+            "netclass": "Test"
+          }
+        }
+      ]
+    },
+    "instance_overrides": [
+      {
+        "at": {
+          "x": 45720,
+          "y": 53340
+        },
+        "parent_sheet_instance_id": "56911776-5665-445b-84ec-e9743211e9fd",
+        "reference": "J1",
+        "unit": 1
+      },
+      {
+        "at": {
+          "x": 64770,
+          "y": 50800
+        },
+        "parent_sheet_instance_id": "56911776-5665-445b-84ec-e9743211e9fd",
+        "reference": "R1",
+        "unit": 1
+      }
+    ],
+    "imported_from_kicad": true
+  },
+  "nets": [
+    {
+      "name": "+5V",
+      "pins": [
+        "R1.2"
+      ]
+    },
+    {
+      "name": "GND",
+      "pins": [
+        "J1.3"
+      ]
+    },
+    {
+      "name": "Net-(J1-Pad1)",
+      "pins": [
+        "J1.1",
+        "R1.1"
+      ]
+    },
+    {
+      "name": "unconnected-(J1-Pad2)",
+      "pins": [
+        "J1.2"
+      ]
+    }
+  ],
+  "placement": {
+    "outline": [
+      {
+        "x": 0,
+        "y": 0
+      },
+      {
+        "x": 100000,
+        "y": 0
+      },
+      {
+        "x": 100000,
+        "y": 80000
+      },
+      {
+        "x": 0,
+        "y": 80000
+      }
+    ],
+    "footprints": []
+  }
+}

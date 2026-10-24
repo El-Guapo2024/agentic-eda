@@ -14,7 +14,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -63,7 +63,7 @@ fn part(reference: &str, pins: &[&str]) -> Part {
         symbol: None,
         datasheet: None,
         pins: pins.iter().map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }
@@ -80,7 +80,7 @@ fn instance(id: &str, lib_id: &str, at: Point) -> SymbolInstance {
 
 fn sheet() -> SchematicSection {
     SchematicSection {
-        symbols: vec![instance("U1", "test:GATE", Point { x: 50_800, y: 50_800 }), instance("U2", "test:GATE", Point { x: 101_600, y: 50_800 }), instance("R1", "Device:R", Point { x: 152_400, y: 50_800 })],
+        symbols: vec![instance("U1", "test:GATE", Point { x: 50_800_000, y: 50_800_000 }), instance("U2", "test:GATE", Point { x: 101_600_000, y: 50_800_000 }), instance("R1", "Device:R", Point { x: 152_400_000, y: 50_800_000 })],
         ..Default::default()
     }
 }
@@ -88,7 +88,7 @@ fn sheet() -> SchematicSection {
 fn board<'a>(m: &'a ConstraintModel) -> Board<'a> {
     let mut design = empty_design();
     design.schematic = Some(sheet());
-    Board::new(design, m, 100, 300)
+    Board::new(design, m, 100_000, 300_000)
 }
 
 fn set(ids: &[&str], style: Option<u32>) -> Cmd {
@@ -165,7 +165,7 @@ fn a_symbol_in_the_alternate_body_style_has_its_pins_where_that_body_puts_them()
     b.apply(&set(&["U1"], None)).unwrap();
     let alternate = pins_of(&b, &m, "U1");
     assert_eq!(pin1(&normal), pin1(&alternate), "a pin both bodies share is where it was");
-    assert_eq!(pin2(&alternate).y - pin2(&normal).y, 1_270, "pin 2 is one grid cell further down in the alternate body");
+    assert_eq!(pin2(&alternate).y - pin2(&normal).y, 1_270_000, "pin 2 is one grid cell further down in the alternate body");
     // the other gate, still in the normal style, is where it was
     assert_eq!(pins_of(&b, &m, "U2").iter().find(|(n, _)| n == "2").unwrap().1.y, pin2(&normal).y);
 }
@@ -175,7 +175,7 @@ fn moving_a_symbol_keeps_its_body_style_and_renaming_it_takes_the_style_along() 
     let m = model();
     let mut b = board(&m);
     b.apply(&set(&["U1"], None)).unwrap();
-    b.apply(&Cmd::SchMove(crate::sch_move::SchMoveCmd::Move { ids: vec!["U1".into()], dx: 2_540, dy: 0, turns: Vec::new(), about: None })).unwrap();
+    b.apply(&Cmd::SchMove(crate::sch_move::SchMoveCmd::Move { ids: vec!["U1".into()], dx: 2_540_000, dy: 0, turns: Vec::new(), about: None })).unwrap();
     assert_eq!(style_of(&b, "U1"), 2, "a move does not change the body style");
     // the style is kept by the symbol's key: the key follows a rename
     b.apply(&Cmd::RenameSymbol { id: "U1".into(), new_id: "U7".into() }).unwrap();

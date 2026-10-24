@@ -174,7 +174,8 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     write!(out, " (island_removal_mode {island_code})").unwrap();
     if island_mode == IslandRemovalMode::Area {
         // `GetMinIslandArea() / IU_PER_MM`: nm^2 over nm per mm, which is the number of mm^2 once printed as a length.
-        write!(out, " (island_area_min {})", fmt_mm_f(z.min_island_area as f64 / 1_000_000.0)).unwrap();
+        // `formatInternalUnits( GetMinIslandArea() / pcbIUScale.IU_PER_MM )`: the nm^2 over 1e6, cut to an integer, written as millimetres (mm^2)
+        write!(out, " (island_area_min {})", mm((z.min_island_area as f64 / 1e6) as i64)).unwrap();
     }
     if hatch_fill {
         write!(out, " (hatch_thickness {}) (hatch_gap {}) (hatch_orientation {})", mm(z.hatch_thickness), mm(z.hatch_gap), fmt_mm_f(z.hatch_orientation_mdeg as f64 / 1000.0)).unwrap();
@@ -324,8 +325,8 @@ pub(crate) fn write_dimension(out: &mut String, d: &Dimension, a: &DimensionArgs
         // The dimension's text goes last "to be sure the text options are known when reading the file"; always `gr_text`.
         // Text on a back layer is read from below, so it is written mirrored.
         let mirror = if d.layer.starts_with("B.") { " (justify mirror)" } else { "" };
-        let size = mm(d.text_size_um);
-        let thickness = mm(d.text_thickness_um.unwrap_or_else(|| (d.text_size_um as f64 * 0.15).round() as i64));
+        let size = mm(d.text_size_nm);
+        let thickness = mm(d.text_thickness_nm.unwrap_or_else(|| (d.text_size_nm as f64 * 0.15).round() as i64));
         writeln!(
             out,
             "\t\t(gr_text {} (at {} {} {}) (layer {}) (uuid \"{}\")\n\t\t\t(effects (font (size {size} {size}) (thickness {thickness})){mirror})\n\t\t)",

@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import type { LibraryPad, PadConnection, PadKind } from "../../api/types";
 import { useFpApi, useFpState, useFpDispatch } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
-import { umFrom, umTo } from "../../state/units";
+import { nmFrom, nmTo } from "../../state/units";
 import { PAD_CONNECTION_OPTIONS, defaultSpokeAngleDeg, importPadSettings, settingsOf } from "../../kicad-port/padSettings";
 import { chooseShape, libraryFieldsOf, shapeFormOfLibraryPad, type PadShapeChoice, type PadShapeForm } from "../../kicad-port/padShape";
 import { FRONT, changeMode, checkStack, layerFormOf, padstackControlsShown, stackOf, stackStateOf, withLayerForm, type LayerForm, type PadStackState } from "../../kicad-port/padStack";
@@ -66,9 +66,9 @@ export function PadPropertiesDialog() {
   if ((!defaultMode && !id) || !pad || !form || !shapeForm || !stack) return null;
 
   const set = <K extends keyof LibraryPad>(key: K, value: LibraryPad[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
-  const len = (valueUm: number, onChange: (um: number) => void, width = 80) => (
+  const len = (valueNm: number, onChange: (um: number) => void, width = 80) => (
     <span>
-      <input type="number" step="any" value={umTo(valueUm, units)} onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange(Math.round(umFrom(Number(e.target.value), units)))} style={{ width }} /> {units}
+      <input type="number" step="any" value={nmTo(valueNm, units)} onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange(Math.round(nmFrom(Number(e.target.value), units)))} style={{ width }} /> {units}
     </span>
   );
 
@@ -189,23 +189,23 @@ export function PadPropertiesDialog() {
                 <span>Drill</span>
                 <span>
                   <label style={{ marginRight: 10 }}>
-                    <input type="radio" checked={!isSlot} onChange={() => setForm((f) => (f ? { ...f, drill: f.drill ?? 800, drill_slot: null } : f))} /> Round
+                    <input type="radio" checked={!isSlot} onChange={() => setForm((f) => (f ? { ...f, drill: f.drill ?? 800_000, drill_slot: null } : f))} /> Round
                   </label>
                   <label>
-                    <input type="radio" checked={isSlot} onChange={() => setForm((f) => (f ? { ...f, drill_slot: f.drill_slot ?? [600, 1000], drill: null } : f))} /> Slot
+                    <input type="radio" checked={isSlot} onChange={() => setForm((f) => (f ? { ...f, drill_slot: f.drill_slot ?? [600_000, 1_000_000], drill: null } : f))} /> Slot
                   </label>
                 </span>
                 {!isSlot && (
                   <>
                     <span />
-                    <span>{len(form.drill ?? 800, (d) => set("drill", d))}</span>
+                    <span>{len(form.drill ?? 800_000, (d) => set("drill", d))}</span>
                   </>
                 )}
                 {isSlot && (
                   <>
                     <span />
                     <span>
-                      {len(form.drill_slot?.[0] ?? 600, (w) => set("drill_slot", [w, form.drill_slot?.[1] ?? 1000]))} × {len(form.drill_slot?.[1] ?? 1000, (h) => set("drill_slot", [form.drill_slot?.[0] ?? 600, h]))}
+                      {len(form.drill_slot?.[0] ?? 600_000, (w) => set("drill_slot", [w, form.drill_slot?.[1] ?? 1000]))} × {len(form.drill_slot?.[1] ?? 1_000_000, (h) => set("drill_slot", [form.drill_slot?.[0] ?? 600_000, h]))}
                     </span>
                   </>
                 )}
@@ -218,7 +218,7 @@ export function PadPropertiesDialog() {
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides and zone connection (blank = inherit)</p>
           <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
             <span>Clearance</span>
-            <OverrideInput valueUm={form.clearance_override} units={units} onChange={(v) => set("clearance_override", v)} />
+            <OverrideInput valueNm={form.clearance_override} units={units} onChange={(v) => set("clearance_override", v)} />
             <span>Pad connection</span>
             <select value={form.zone_connection ?? ""} onChange={(e) => set("zone_connection", e.target.value === "" ? null : (e.target.value as PadConnection))} title="PAD::GetLocalZoneConnection: how a copper zone connects to this pad, over its footprint's and the zone's own setting">
               {PAD_CONNECTION_OPTIONS.map((o) => (
@@ -228,9 +228,9 @@ export function PadPropertiesDialog() {
               ))}
             </select>
             <span>Thermal relief gap</span>
-            <OverrideInput valueUm={form.thermal_gap_override} units={units} onChange={(v) => set("thermal_gap_override", v)} />
+            <OverrideInput valueNm={form.thermal_gap_override} units={units} onChange={(v) => set("thermal_gap_override", v)} />
             <span>Thermal spoke width</span>
-            <OverrideInput valueUm={form.thermal_spoke_width_override} units={units} onChange={(v) => set("thermal_spoke_width_override", v)} />
+            <OverrideInput valueNm={form.thermal_spoke_width_override} units={units} onChange={(v) => set("thermal_spoke_width_override", v)} />
             <span>Thermal spoke angle</span>
             <AngleOverrideInput valueMdeg={form.thermal_spoke_angle_mdeg ?? null} defaultDeg={defaultSpokeAngleDeg(libraryFieldsOf(shapeForm).shape, libraryFieldsOf(shapeForm).custom?.anchor)} onChange={(v) => set("thermal_spoke_angle_mdeg", v)} />
           </div>
@@ -276,8 +276,8 @@ export function AngleOverrideInput({ valueMdeg, defaultDeg, onChange, testid }: 
 }
 
 /** A length field that can also be "unset" (board default) -- the Pad Properties dialog's own clearance/thermal override convention (`None` = inherit). */
-export function OverrideInput({ valueUm, units, onChange, testid }: { valueUm: number | null; units: Parameters<typeof umTo>[1]; onChange: (v: number | null) => void; testid?: string }) {
-  const on = valueUm != null;
+export function OverrideInput({ valueNm, units, onChange, testid }: { valueNm: number | null; units: Parameters<typeof nmTo>[1]; onChange: (v: number | null) => void; testid?: string }) {
+  const on = valueNm != null;
   return (
     <span>
       <label style={{ marginRight: 8 }}>
@@ -287,8 +287,8 @@ export function OverrideInput({ valueUm, units, onChange, testid }: { valueUm: n
         <input
           type="number"
           step="any"
-          value={umTo(valueUm, units)}
-          onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange(Math.round(umFrom(Number(e.target.value), units)))}
+          value={nmTo(valueNm, units)}
+          onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange(Math.round(nmFrom(Number(e.target.value), units)))}
           style={{ width: 80 }}
           data-testid={testid}
         />

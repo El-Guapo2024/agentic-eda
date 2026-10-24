@@ -16,8 +16,8 @@ import {
   type GridCategory,
   type GridOverrides,
 } from "./gridOverrides";
-import { DEFAULT_PCB_GRIDS_UM } from "./grid";
-import { EESCHEMA_GRIDS_UM } from "./gridSettings";
+import { DEFAULT_PCB_GRIDS_NM } from "./grid";
+import { EESCHEMA_GRIDS_NM } from "./gridSettings";
 
 const same = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 
@@ -30,34 +30,34 @@ test("the schematic's defaults: connected items and wires on 50 mil, text on 10 
   assert.deepEqual(d.graphics, { on: false, index: 2 });
   assert.deepEqual(d.vias, { on: false, index: 0 });
   // Indexes into the eeschema list 100, 50, 25, 10 mil.
-  assert.equal(EESCHEMA_GRIDS_UM[d.connectable.index], 1270);
-  assert.equal(EESCHEMA_GRIDS_UM[d.text.index], 254);
-  assert.equal(EESCHEMA_GRIDS_UM[d.graphics.index], 635);
+  assert.equal(EESCHEMA_GRIDS_NM[d.connectable.index], 1_270_000);
+  assert.equal(EESCHEMA_GRIDS_NM[d.text.index], 254_000);
+  assert.equal(EESCHEMA_GRIDS_NM[d.graphics.index], 635_000);
 });
 
 test("the board editors start with every override off, pointing at KiCad's default entries", () => {
   const d = defaultGridOverrides("pcb");
   assert.equal(d.enabled, true);
   assert.ok(OVERRIDE_CATEGORIES.every((c) => d[c].on === false));
-  assert.equal(DEFAULT_PCB_GRIDS_UM[d.connectable.index], 250, "0.25 mm");
-  assert.equal(DEFAULT_PCB_GRIDS_UM[d.wires.index], 50, "0.05 mm");
-  assert.equal(DEFAULT_PCB_GRIDS_UM[d.vias.index], 100, "0.1 mm");
-  assert.equal(DEFAULT_PCB_GRIDS_UM[d.text.index], 100, "0.1 mm");
-  assert.equal(DEFAULT_PCB_GRIDS_UM[d.graphics.index], 500, "0.5 mm");
+  assert.equal(DEFAULT_PCB_GRIDS_NM[d.connectable.index], 250_000, "0.25 mm");
+  assert.equal(DEFAULT_PCB_GRIDS_NM[d.wires.index], 50_000, "0.05 mm");
+  assert.equal(DEFAULT_PCB_GRIDS_NM[d.vias.index], 100_000, "0.1 mm");
+  assert.equal(DEFAULT_PCB_GRIDS_NM[d.text.index], 100_000, "0.1 mm");
+  assert.equal(DEFAULT_PCB_GRIDS_NM[d.graphics.index], 500_000, "0.5 mm");
 });
 
 test("GetGridSize: the category's grid when overrides are on and the category's is, else the current grid", () => {
-  const grids = EESCHEMA_GRIDS_UM;
+  const grids = EESCHEMA_GRIDS_NM;
   const o = defaultGridOverrides("schematic");
-  assert.equal(gridSizeFor("connectable", 635, grids, o), 1270);
-  assert.equal(gridSizeFor("wires", 635, grids, o), 1270);
-  assert.equal(gridSizeFor("text", 635, grids, o), 254);
-  assert.equal(gridSizeFor("graphics", 635, grids, o), 635, "off: the current grid");
-  assert.equal(gridSizeFor("vias", 635, grids, o), 635);
-  assert.equal(gridSizeFor("current", 635, grids, o), 635);
+  assert.equal(gridSizeFor("connectable", 635_000, grids, o), 1_270_000);
+  assert.equal(gridSizeFor("wires", 635_000, grids, o), 1_270_000);
+  assert.equal(gridSizeFor("text", 635_000, grids, o), 254_000);
+  assert.equal(gridSizeFor("graphics", 635_000, grids, o), 635_000, "off: the current grid");
+  assert.equal(gridSizeFor("vias", 635_000, grids, o), 635_000);
+  assert.equal(gridSizeFor("current", 635_000, grids, o), 635_000);
   // The master switch (the toolbar button, Ctrl+Shift+G).
-  assert.equal(gridSizeFor("connectable", 635, grids, { ...o, enabled: false }), 635);
-  assert.equal(gridSizeFor("connectable", 635, grids, null), 635);
+  assert.equal(gridSizeFor("connectable", 635_000, grids, { ...o, enabled: false }), 635_000);
+  assert.equal(gridSizeFor("connectable", 635_000, grids, null), 635_000);
   assert.equal(isOverridden("connectable", grids, o), true);
   assert.equal(isOverridden("graphics", grids, o), false);
   assert.equal(isOverridden("connectable", grids, { ...o, enabled: false }), false);
@@ -65,9 +65,9 @@ test("GetGridSize: the category's grid when overrides are on and the category's 
 
 test("an override whose index is not in the list means the current grid", () => {
   const o: GridOverrides = { ...defaultGridOverrides("schematic"), text: { on: true, index: 9 } };
-  assert.equal(gridSizeFor("text", 635, EESCHEMA_GRIDS_UM, o), 635);
-  assert.equal(gridSizeFor("text", 635, EESCHEMA_GRIDS_UM, { ...o, text: { on: true, index: -1 } }), 635);
-  assert.equal(isOverridden("text", EESCHEMA_GRIDS_UM, o), false);
+  assert.equal(gridSizeFor("text", 635_000, EESCHEMA_GRIDS_NM, o), 635_000);
+  assert.equal(gridSizeFor("text", 635_000, EESCHEMA_GRIDS_NM, { ...o, text: { on: true, index: -1 } }), 635_000);
+  assert.equal(isOverridden("text", EESCHEMA_GRIDS_NM, o), false);
 });
 
 test("GetSelectionGrid: the coarsest grid of the selection's items, the first on a tie", () => {

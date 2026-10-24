@@ -186,7 +186,7 @@
     await setText("fbp-query", "A.Type == 'Footprint' && A.Reference == 'C*'");
     await pressFbp("Select Matching");
     t(JSON.stringify(selection().sort()) === JSON.stringify([...capacitors].sort()), `the capacitors by reference: ${selection().length} of ${capacitors.length}`);
-    const west = parts.filter((p) => p.at && p.at[0] < 12000).map((p) => p.ref);
+    const west = parts.filter((p) => p.at && p.at[0] < 12_000_000).map((p) => p.ref);
     await setText("fbp-query", "A.Type == 'Footprint' && A.Position_X < 12mm");
     await pressFbp("Select Matching");
     t(JSON.stringify(selection().sort()) === JSON.stringify([...west].sort()), `a length with its unit: ${selection().length} footprints left of 12 mm (${west.length})`);
@@ -236,7 +236,7 @@
 
   await scenario("Find follows the IR: a user field, a hidden field only with Include hidden fields, a zone by its name", async (t) => {
     const cmd = async (c) => (await fetch("/api/cmd", { method: "POST", body: JSON.stringify({ strict: false, cmd: c }) })).json();
-    const layout = (visible) => ({ at: { x: 0, y: 1500 }, size: [1000, 1000], thickness: 150, layer: "F.Fab", visible });
+    const layout = (visible) => ({ at: { x: 0, y: 1_500_000 }, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.Fab", visible });
     let steps = 0;
     const findBox = (label) => [...document.querySelectorAll('[data-testid="pcb-find-dialog"] label.toggle')].find((l) => l.textContent.includes(label))?.querySelector("input");
     const setBox = async (label, on) => { const el = findBox(label); if (el && el.checked !== on) { el.click(); await sleep(120); } };
@@ -253,7 +253,7 @@
       let res = await cmd({ op: "edit_board_footprint", part: c1.ref, fields: [{ name: "Supplier", text: "ACME-4711", layout: layout(true) }, { name: "Batch", text: "LOT-77", layout: layout(false) }] });
       t(res.ok, `${c1.ref} has two user fields, one hidden: ${res.message ?? ""}`);
       if (res.ok) steps++;
-      const outline = [{ x: 1000, y: 1000 }, { x: 5000, y: 1000 }, { x: 5000, y: 5000 }];
+      const outline = [{ x: 1_000_000, y: 1_000_000 }, { x: 5_000_000, y: 1_000_000 }, { x: 5_000_000, y: 5_000_000 }];
       res = await cmd({ op: "add_zone", net: "GND", layer: "F.Cu", outline });
       t(res.ok, `a zone: ${res.message ?? ""}`);
       if (res.ok) steps++;
@@ -471,8 +471,8 @@
       await sleep(900);
       const name = (await library()).find((n) => !before.includes(n));
       t(!!name, `a new footprint to check: ${name}`);
-      const pad = (num, x) => ({ number: num, at: { x, y: 0 }, size: [1000, 1000], shape: "rect", kind: "smd", drill: null, rot: 0, layers: [] });
-      for (const [num, x] of [["1", -400], ["2", 400]]) { const r = await cmd({ op: "add_pad", footprint: name, pad: pad(num, x) }); t(r.ok, `pad ${num}: ${r.message ?? ""}`); if (r.ok) steps++; }
+      const pad = (num, x) => ({ number: num, at: { x, y: 0 }, size: [1_000_000, 1_000_000], shape: "rect", kind: "smd", drill: null, rot: 0, layers: [] });
+      for (const [num, x] of [["1", -400_000], ["2", 400_000]]) { const r = await cmd({ op: "add_pad", footprint: name, pad: pad(num, x) }); t(r.ok, `pad ${num}: ${r.message ?? ""}`); if (r.ok) steps++; }
       await sleep(500);
 
       // opening the dialog runs nothing: the badges say "-"
@@ -511,12 +511,12 @@
       t(rows().length === 1, "Delete Marker removes the selected one");
 
       // the same footprint, mended: a closed courtyard, the pads apart
-      const line = (a, b) => ({ kind: "segment", layer: "F.CrtYd", stroke_width: 50, filled: false, start: a, end: b });
+      const line = (a, b) => ({ kind: "segment", layer: "F.CrtYd", stroke_width: 50_000, filled: false, start: a, end: b });
       const P = (x, y) => ({ x, y });
-      for (const g of [line(P(-3000, -2000), P(3000, -2000)), line(P(3000, -2000), P(3000, 2000)), line(P(3000, 2000), P(-3000, 2000)), line(P(-3000, 2000), P(-3000, -2000))]) { const r = await cmd({ op: "add_footprint_graphic", footprint: name, shape: g }); t(r.ok, `courtyard line: ${r.message ?? ""}`); if (r.ok) steps++; }
+      for (const g of [line(P(-3_000_000, -2_000_000), P(3_000_000, -2_000_000)), line(P(3_000_000, -2_000_000), P(3_000_000, 2_000_000)), line(P(3_000_000, 2_000_000), P(-3_000_000, 2_000_000)), line(P(-3_000_000, 2_000_000), P(-3_000_000, -2_000_000))]) { const r = await cmd({ op: "add_footprint_graphic", footprint: name, shape: g }); t(r.ok, `courtyard line: ${r.message ?? ""}`); if (r.ok) steps++; }
       const fp = await json(`/api/footprint?name=${encodeURIComponent(name)}`);
       const second = fp.pads.find((p) => p.number === "2");
-      const moved = await cmd({ op: "move_pad", footprint: name, id: second.id, x: 1500, y: 0 });
+      const moved = await cmd({ op: "move_pad", footprint: name, id: second.id, x: 1_500_000, y: 0 });
       t(moved.ok, `pad 2 moved apart: ${moved.message ?? ""}`);
       if (moved.ok) steps++;
       await sleep(500);
@@ -532,7 +532,7 @@
       await sleep(300);
       t(badge("errors") === "0" && badge("warnings") === "0", "reopened: the badges still count the last run");
       // (nothing is left to delete after the clean run: put a marker back first)
-      const edit = await cmd({ op: "move_pad", footprint: name, id: (await json(`/api/footprint?name=${encodeURIComponent(name)}`)).pads.find((p) => p.number === "2").id, x: 400, y: 0 });
+      const edit = await cmd({ op: "move_pad", footprint: name, id: (await json(`/api/footprint?name=${encodeURIComponent(name)}`)).pads.find((p) => p.number === "2").id, x: 400_000, y: 0 });
       if (edit.ok) steps++;
       await sleep(400);
       t(await runChecks(), "a third run finishes");

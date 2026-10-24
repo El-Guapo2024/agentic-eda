@@ -39,7 +39,7 @@ fn a_file_added_to_the_board_is_listed_extracted_byte_for_byte_and_one_undo_take
     setup(&dir);
     assert!(names_listed(&dir, "/api/embedded?owner=board").is_empty());
 
-    let content: Vec<u8> = (0..50_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let content: Vec<u8> = (0..50_000u32).map(|i| (i * 7 % 251_000) as u8).collect();
     step(&dir, add(EmbeddedOwner::Board, "datasheet.pdf", &content), false, "test").unwrap();
     let r = crate::embedded_api::list(&dir, "/api/embedded?owner=board");
     let j = json_of(&r);

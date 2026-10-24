@@ -243,7 +243,7 @@
     {
       "board": "unroutable_tiny_outline",
       "source": "example",
-      "error": "place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }]",
+      "error": "place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14235675000000 nm² outside its bound (keepout (-3050000, 75500, 50000, 4674500), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14836840000000 nm² outside its bound (keepout (325500, -3050000, 4874500, 220000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000000000 nm² outside its bound (keepout (200000, 350000, 10200000, 8200000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)\"), detail: None }]",
       "ours": {
         "unconnected": 0,
         "track_dangling": 0,
@@ -1349,7 +1349,7 @@
       "error": null,
       "ours": {
         "unconnected": 0,
-        "track_dangling": 2,
+        "track_dangling": 1,
         "via_dangling": 7
       },
       "oracle": {
@@ -1614,7 +1614,7 @@
       "source": "qa",
       "error": null,
       "ours": {
-        "unconnected": 4,
+        "unconnected": 3,
         "track_dangling": 5,
         "via_dangling": 2
       },
@@ -2143,7 +2143,7 @@
       "error": null,
       "ours": {
         "unconnected": 57,
-        "track_dangling": 199,
+        "track_dangling": 1,
         "via_dangling": 92
       },
       "oracle": {
@@ -2263,7 +2263,7 @@
       "error": null,
       "ours": {
         "unconnected": 0,
-        "track_dangling": 8,
+        "track_dangling": 0,
         "via_dangling": 0
       },
       "oracle": {
@@ -2278,7 +2278,7 @@
       "error": null,
       "ours": {
         "unconnected": 0,
-        "track_dangling": 3,
+        "track_dangling": 0,
         "via_dangling": 0
       },
       "oracle": {
@@ -2518,7 +2518,7 @@
       "error": null,
       "ours": {
         "unconnected": 0,
-        "track_dangling": 2,
+        "track_dangling": 0,
         "via_dangling": 0
       },
       "oracle": {
@@ -2859,8 +2859,8 @@
     }
   ],
   "totals_ours": {
-    "unconnected": 288,
-    "track_dangling": 468,
+    "unconnected": 287,
+    "track_dangling": 256,
     "via_dangling": 529
   },
   "totals_oracle": {
@@ -2868,12 +2868,12 @@
     "track_dangling": 254,
     "via_dangling": 528
   },
-  "exact_match_rate": 0.978494623655914,
-  "exact_matches": 546,
+  "exact_match_rate": 0.989247311827957,
+  "exact_matches": 552,
   "total_checks": 558,
   "import_failures": [
-    "unroutable_tiny_outline [example]: place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }]",
+    "unroutable_tiny_outline [example]: place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14235675000000 nm² outside its bound (keepout (-3050000, 75500, 50000, 4674500), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14836840000000 nm² outside its bound (keepout (325500, -3050000, 4874500, 220000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000000000 nm² outside its bound (keepout (200000, 350000, 10200000, 8200000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)\"), detail: None }]",
     "plugins/fakeboard.kicad_pcb [qa]: import_kicad_pcb failed: [CheckResult { check: \"kicad_import.parse\", status: Fail, location: Some(\"file\"), hint: Some(\"not a valid s-expression file: expected '(' at byte 0\"), detail: None }]"
   ],
-  "measured_at": "2026-10-23"
+  "measured_at": "2026-10-24"
 }

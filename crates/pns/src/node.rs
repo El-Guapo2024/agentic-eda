@@ -31,11 +31,11 @@
 //! `AssembleLine` bidirectional joint walk, the obstacle search -- follows
 //! `pns_node.cpp` directly.
 
-/// See `all_colliding`.
-pub const CLEARANCE_EPSILON: Um = 1;
+/// See `all_colliding`: `m_clearanceEpsilon`, the board's `GetDRCEpsilon()` (0.0005 mm) (`pns_kicad_iface.cpp`).
+pub const CLEARANCE_EPSILON: Nm = 500;
 
 /// How far from a point [`Node::segment_at`] looks for a segment: half the widest track it can find (5 mm of copper).
-const SEGMENT_AT_REACH: Um = 2_500;
+const SEGMENT_AT_REACH: Nm = 2_500_000;
 
 /// `NODE::AssembleLine`'s `MaxVerts` (1024 * 16): hard cap on a followed line.
 const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
@@ -46,7 +46,7 @@ use crate::joint::{Joint, JointKey};
 use crate::layer::LayerRange;
 use crate::line::Line;
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 use std::collections::HashMap;
 
@@ -132,8 +132,8 @@ pub struct Obstacle {
     pub id: ItemId,
     pub kind: Kind,
     /// Edge-to-edge gap actually measured, vs. `clearance_needed` required.
-    pub actual: Um,
-    pub clearance_needed: Um,
+    pub actual: Nm,
+    pub clearance_needed: Nm,
     pub pos: Point,
 }
 
@@ -154,11 +154,11 @@ impl Clone for Node {
 /// Cell size for the broad-phase grid: a few mm, coarse enough that a
 /// typical query touches a handful of cells regardless of board size (the
 /// same reasoning as `eda_drc::rtree::DrcRTree::new`'s doc comment).
-const INDEX_CELL_UM: Um = 5_000_000 / 1000; // 5mm in um (board coords are um)
+const INDEX_CELL_NM: Nm = 5_000_000; // 5 mm
 
 impl Node {
     pub fn new() -> Self {
-        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_UM) }
+        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_NM) }
     }
 
     /// `NODE::Branch()`, simplified to a full clone -- see this module's
@@ -261,8 +261,8 @@ impl Node {
         }
     }
 
-    fn bbox_of(item: &Item) -> (Um, Um, Um, Um) {
-        let mut bbox: Option<(Um, Um, Um, Um)> = None;
+    fn bbox_of(item: &Item) -> (Nm, Nm, Nm, Nm) {
+        let mut bbox: Option<(Nm, Nm, Nm, Nm)> = None;
         for layer in item.layers().iter() {
             let b = item.shape(layer).bbox(0);
             bbox = Some(match bbox {
@@ -346,7 +346,7 @@ impl Node {
 
     /// `NODE::QueryJoints( bbox, joints, layers, ITEM::SOLID_T )` for what the optimizer's `KEEP_TOPOLOGY_CONSTRAINT` asks: the position and net of the joint of
     /// every pad (`Solid`) that is inside `bbox` (`x0, y0, x1, y1`) and on one of `layers`.
-    pub fn solid_joints_in(&self, bbox: (Um, Um, Um, Um), layers: LayerRange) -> Vec<(Point, Net)> {
+    pub fn solid_joints_in(&self, bbox: (Nm, Nm, Nm, Nm), layers: LayerRange) -> Vec<(Point, Net)> {
         let mut out: Vec<(Point, Net)> = Vec::new();
         for id in self.index.query(bbox) {
             let Some(Item::Solid(s)) = self.items.get(&id) else { continue };
@@ -770,7 +770,7 @@ impl Node {
 
     /// The segment or arc whose copper `pos` is on, on `layer` (of `net`, when given): the one whose centre line passes nearest. `within` is how
     /// far off the centre line `pos` may be -- the half width when `None`. The items in `exclude` are not looked at.
-    pub fn segment_at(&self, pos: Point, layer: i32, net: Option<&Net>, within: Option<Um>, exclude: &[ItemId]) -> Option<ItemId> {
+    pub fn segment_at(&self, pos: Point, layer: i32, net: Option<&Net>, within: Option<Nm>, exclude: &[ItemId]) -> Option<ItemId> {
         let bbox = Shape::Circle { c: pos, r: 0 }.bbox(SEGMENT_AT_REACH);
         let mut best: Option<(ItemId, i128)> = None;
         for id in self.index.query(bbox) {
@@ -826,8 +826,8 @@ impl Node {
 
     /// `TOPOLOGY::ConnectedJoints( aStart )`: the joints reachable from the joint at `start` by walking along segments -- track to
     /// track, through junctions, pads and vias alike -- as the set of positions.
-    fn connected_joints(&self, start: Point, net: &Net) -> std::collections::HashSet<(Um, Um)> {
-        let mut seen: std::collections::HashSet<(Um, Um)> = std::collections::HashSet::new();
+    fn connected_joints(&self, start: Point, net: &Net) -> std::collections::HashSet<(Nm, Nm)> {
+        let mut seen: std::collections::HashSet<(Nm, Nm)> = std::collections::HashSet::new();
         let mut queue: std::collections::VecDeque<Point> = std::collections::VecDeque::new();
         seen.insert((start.x, start.y));
         queue.push_back(start);
@@ -881,7 +881,7 @@ impl Node {
     /// `ITEM::Collide` in real KiCad (board-specific, injected via
     /// `RULE_RESOLVER`), not in `NODE` itself. Same-net items never collide
     /// at all (checked by the caller before this is reached).
-    pub fn clearance(rules: &BoardRules, a: &Net, b: &Net) -> Um {
+    pub fn clearance(rules: &BoardRules, a: &Net, b: &Net) -> Nm {
         eda_drc::constraints::clearance(rules, Self::net_str(a), Self::net_str(b))
     }
 
@@ -890,7 +890,7 @@ impl Node {
     /// (`isCopper` is false for it), so `CT_CLEARANCE` is never asked; `isEdge( aB )` asks `CT_EDGE_CLEARANCE`, which is
     /// the board's copper-to-edge clearance (`bds.m_CopperEdgeClearance`, [`eda_drc::constraints::edge_clearance_min`]) --
     /// whatever net class the copper is in.
-    pub fn clearance_to(rules: &BoardRules, net: &Net, item: &Item) -> Um {
+    pub fn clearance_to(rules: &BoardRules, net: &Net, item: &Item) -> Nm {
         match item {
             Item::Solid(s) if s.edge => eda_drc::constraints::edge_clearance_min(rules),
             _ => Self::clearance(rules, net, item.net()),
@@ -899,7 +899,7 @@ impl Node {
 
     /// How far from an item the search for what it could collide with has to look: the largest clearance anything can ask for
     /// (the net classes', the holes', and the board edge's).
-    fn search_margin(rules: &BoardRules) -> Um {
+    fn search_margin(rules: &BoardRules) -> Nm {
         eda_drc::constraints::worst_case_clearance(rules).max(eda_drc::constraints::edge_clearance_min(rules))
     }
 
@@ -981,7 +981,7 @@ impl Node {
         if found.is_empty() {
             return None;
         }
-        let eps = |c: Um| if opts.use_epsilon && c > 0 { (c - CLEARANCE_EPSILON).max(0) } else { c };
+        let eps = |c: Nm| if opts.use_epsilon && c > 0 { (c - CLEARANCE_EPSILON).max(0) } else { c };
         let first_entry = |hull: &[Point]| -> Option<(i64, Point)> {
             crate::line_walk::hull_intersection(hull, &line.pts).into_iter().map(|(p, idx)| (path_length(&line.pts, p, idx), p)).min_by_key(|&(d, _)| d)
         };
@@ -1048,8 +1048,8 @@ impl Node {
         let mut pending: std::collections::VecDeque<ItemId> = std::collections::VecDeque::new();
         pending.push_back(start);
         let bbox_of_shape = |it: &Item| it.shape(layer).bbox(0);
-        let merge = |a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
-        let area = |b: (Um, Um, Um, Um)| (b.2 - b.0) as i128 * (b.3 - b.1) as i128;
+        let merge = |a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
+        let area = |b: (Nm, Nm, Nm, Nm)| (b.2 - b.0) as i128 * (b.3 - b.1) as i128;
         let mut cluster_bbox = bbox_of_shape(start_item);
         let initial_area = area(cluster_bbox);
         let mut processed: std::collections::HashSet<ItemId> = std::collections::HashSet::new();
@@ -1126,7 +1126,7 @@ impl Node {
     /// literal KiCad `NODE` method (KiCad's equivalent snapping lives in
     /// the UI tool layer, `router_tool.cpp`), but the natural place for it
     /// here since it only needs `items`.
-    pub fn nearest_anchor(&self, pos: Point, layers: LayerRange, max_dist: Um, net_filter: Option<&Net>) -> Option<(ItemId, Point)> {
+    pub fn nearest_anchor(&self, pos: Point, layers: LayerRange, max_dist: Nm, net_filter: Option<&Net>) -> Option<(ItemId, Point)> {
         let mut best: Option<(ItemId, Point, i128)> = None;
         for (&id, item) in &self.items {
             if !item.layers().overlaps(&layers) || item.is_virtual() {
@@ -1157,10 +1157,10 @@ impl Node {
     /// (route start/end snapping); this one is "what's physically under
     /// the cursor," the same distinction `pcb_selection_tool.cpp` draws
     /// between a point hit-test and anchor snapping.
-    pub fn item_at(&self, pos: Point, layers: LayerRange, max_dist: Um) -> Option<ItemId> {
+    pub fn item_at(&self, pos: Point, layers: LayerRange, max_dist: Nm) -> Option<ItemId> {
         let probe = Shape::Circle { c: pos, r: 0 };
         let bbox = probe.bbox(max_dist);
-        let mut best: Option<(ItemId, Um)> = None;
+        let mut best: Option<(ItemId, Nm)> = None;
         for id in self.index.query(bbox) {
             let Some(item) = self.items.get(&id) else { continue };
             if !item.layers().overlaps(&layers) || matches!(item, Item::Solid(s) if !s.routable()) {
@@ -1182,7 +1182,7 @@ fn same_net_exact(a: &Net, b: &Net) -> bool {
 }
 
 /// Bounding box of a line's points, inflated by half its width.
-fn line_bbox(l: &Line) -> Option<(Um, Um, Um, Um)> {
+fn line_bbox(l: &Line) -> Option<(Nm, Nm, Nm, Nm)> {
     let first = l.pts.first()?;
     let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
     for p in &l.pts {
@@ -1224,18 +1224,18 @@ mod tests {
     use crate::item::{net_of, Segment, Solid, Via};
     use eda_model::ir::Point;
 
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 
     fn rules() -> BoardRules {
-        serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap()
+        serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap()
     }
 
     #[test]
     fn add_remove_round_trip() {
         let mut n = Node::new();
-        let id = n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(0, 0), b: p(1000, 0), width: 200, source_track: None, locked: false }));
+        let id = n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(0, 0), b: p(1_000_000, 0), width: 200_000, source_track: None, locked: false }));
         assert_eq!(n.len(), 1);
         assert!(n.joint_at(p(0, 0), &net_of("GND")).is_some());
         let removed = n.remove(id).unwrap();
@@ -1249,10 +1249,10 @@ mod tests {
     fn assemble_line_terminates_on_closed_loop() {
         let mut n = Node::new();
         let net = net_of("GND");
-        let corners = [p(0, 0), p(1000, 0), p(1000, 1000), p(0, 1000)];
+        let corners = [p(0, 0), p(1_000_000, 0), p(1_000_000, 1_000_000), p(0, 1_000_000)];
         let mut ids = vec![];
         for i in 0..4 {
-            ids.push(n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: corners[i], b: corners[(i + 1) % 4], width: 200, source_track: None, locked: false })));
+            ids.push(n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: corners[i], b: corners[(i + 1) % 4], width: 200_000, source_track: None, locked: false })));
         }
         let line = n.assemble_line(ids[0]).unwrap();
         assert_eq!(line.segment_ids.len(), 4);
@@ -1268,11 +1268,11 @@ mod tests {
     fn assemble_line_walks_through_trivial_joints_and_stops_at_via() {
         let mut n = Node::new();
         let net = net_of("SIG");
-        let s1 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(0, 0), b: p(1000, 0), width: 200, source_track: None, locked: false }));
-        let _s2 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(1000, 0), b: p(2000, 0), width: 200, source_track: None, locked: false }));
-        let _via = n.add(Item::Via(Via { net: net.clone(), layers: LayerRange::new(0, 1), pos: p(2000, 0), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false }));
+        let s1 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(0, 0), b: p(1_000_000, 0), width: 200_000, source_track: None, locked: false }));
+        let _s2 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(1_000_000, 0), b: p(2_000_000, 0), width: 200_000, source_track: None, locked: false }));
+        let _via = n.add(Item::Via(Via { net: net.clone(), layers: LayerRange::new(0, 1), pos: p(2_000_000, 0), diameter: 600_000, drill: 300_000, source_via: None, locked: false, is_virtual: false }));
         let line = n.assemble_line(s1).expect("line");
-        assert_eq!(line.pts, vec![p(0, 0), p(1000, 0), p(2000, 0)]);
+        assert_eq!(line.pts, vec![p(0, 0), p(1_000_000, 0), p(2_000_000, 0)]);
         assert_eq!(line.segment_ids.len(), 2);
         assert!(line.via_at_end.is_some());
     }
@@ -1281,21 +1281,21 @@ mod tests {
     fn assemble_line_stops_at_branch_point() {
         let mut n = Node::new();
         let net = net_of("SIG");
-        let s1 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(0, 0), b: p(1000, 0), width: 200, source_track: None, locked: false }));
+        let s1 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(0, 0), b: p(1_000_000, 0), width: 200_000, source_track: None, locked: false }));
         // Two different segments continuing from (1000,0): a branch, not a
         // trivial pass-through, so the walk must stop at s1 alone.
-        n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(1000, 0), b: p(2000, 0), width: 200, source_track: None, locked: false }));
-        n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(1000, 0), b: p(1000, 1000), width: 200, source_track: None, locked: false }));
+        n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(1_000_000, 0), b: p(2_000_000, 0), width: 200_000, source_track: None, locked: false }));
+        n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(1_000_000, 0), b: p(1_000_000, 1_000_000), width: 200_000, source_track: None, locked: false }));
         let line = n.assemble_line(s1).unwrap();
-        assert_eq!(line.pts, vec![p(0, 0), p(1000, 0)]);
+        assert_eq!(line.pts, vec![p(0, 0), p(1_000_000, 0)]);
     }
 
     #[test]
     fn collision_ignores_same_net_and_excluded() {
         let mut n = Node::new();
         let rules = rules();
-        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), shape: Shape::Circle { c: p(0, 0), r: 500 }, source: "U1.1".into(), edge: false }));
-        let shape = Shape::Stadium { a: p(0, 0), b: p(1000, 0), r: 100 };
+        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), shape: Shape::Circle { c: p(0, 0), r: 500_000 }, source: "U1.1".into(), edge: false }));
+        let shape = Shape::Stadium { a: p(0, 0), b: p(1_000_000, 0), r: 100_000 };
         // Same net as the pad: must not collide.
         assert!(n.first_colliding(&shape, &net_of("GND"), LayerRange::single(0), &rules, &[]).is_none());
         // Different net: must collide (pad radius 500 + clearance 200 > 0 distance).
@@ -1308,10 +1308,10 @@ mod tests {
     #[test]
     fn nearest_anchor_finds_pad_within_threshold() {
         let mut n = Node::new();
-        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1000, 1000), shape: Shape::Circle { c: p(1000, 1000), r: 400 }, source: "U1.1".into(), edge: false }));
-        let hit = n.nearest_anchor(p(1050, 1000), LayerRange::single(0), 200, None);
-        assert_eq!(hit.map(|(_, p)| p), Some(p(1000, 1000)));
-        assert!(n.nearest_anchor(p(5000, 5000), LayerRange::single(0), 200, None).is_none());
+        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1_000_000, 1_000_000), shape: Shape::Circle { c: p(1_000_000, 1_000_000), r: 400_000 }, source: "U1.1".into(), edge: false }));
+        let hit = n.nearest_anchor(p(1_050_000, 1_000_000), LayerRange::single(0), 200_000, None);
+        assert_eq!(hit.map(|(_, p)| p), Some(p(1_000_000, 1_000_000)));
+        assert!(n.nearest_anchor(p(5_000_000, 5_000_000), LayerRange::single(0), 200_000, None).is_none());
     }
 
     /// A track ending exactly on a pad's centre: which of the two a route starts from decides its starting
@@ -1322,27 +1322,27 @@ mod tests {
         // followed the table's iteration order would differ from round to round
         for _ in 0..40 {
             let mut n = Node::new();
-            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1000, 1000), shape: Shape::Circle { c: p(1000, 1000), r: 400 }, source: "U1.1".into(), edge: false }));
-            n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(1000, 1000), b: p(3000, 1000), width: 200, source_track: None, locked: false }));
-            assert_eq!(n.nearest_anchor(p(1100, 1000), LayerRange::single(0), 500, None).map(|(id, _)| id), Some(pad));
+            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1_000_000, 1_000_000), shape: Shape::Circle { c: p(1_000_000, 1_000_000), r: 400_000 }, source: "U1.1".into(), edge: false }));
+            n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(1_000_000, 1_000_000), b: p(3_000_000, 1_000_000), width: 200_000, source_track: None, locked: false }));
+            assert_eq!(n.nearest_anchor(p(1_100_000, 1_000_000), LayerRange::single(0), 500_000, None).map(|(id, _)| id), Some(pad));
         }
     }
 
     #[test]
     fn branch_is_independent_clone() {
         let mut n = Node::new();
-        let id = n.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false }));
+        let id = n.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), diameter: 600_000, drill: 300_000, source_via: None, locked: false, is_virtual: false }));
         let mut child = n.branch();
         child.remove(id);
         assert!(n.contains(id), "removing from a branch must not affect the parent");
         assert!(!child.contains(id));
     }
 
-    fn seg_item(net: &str, a: Point, b: Point, width: Um) -> Item {
+    fn seg_item(net: &str, a: Point, b: Point, width: Nm) -> Item {
         Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width, source_track: None, locked: false })
     }
 
-    fn pad_item(net: &str, c: Point, r: Um) -> Item {
+    fn pad_item(net: &str, c: Point, r: Nm) -> Item {
         Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false })
     }
 
@@ -1352,15 +1352,15 @@ mod tests {
         let mut n = Node::new();
         let rules = rules();
         // a pad dead on the line far along it (gap 0) ...
-        n.add(pad_item("A", p(6000, 0), 400));
+        n.add(pad_item("A", p(6_000_000, 0), 400_000));
         // ... and a track whose end only grazes the line much earlier (gap 50 < 200)
-        let early = n.add(seg_item("B", p(2000, 250), p(2000, 3000), 200));
-        let line = Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 0), p(10_000, 0)]);
+        let early = n.add(seg_item("B", p(2_000_000, 250_000), p(2_000_000, 3_000_000), 200_000));
+        let line = Line::from_points(net_of("SIG"), 0, 200_000, vec![p(0, 0), p(10_000_000, 0)]);
         let hit = n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).expect("obstacles");
         assert_eq!(hit.id, early);
         assert_eq!(hit.kind, Kind::Segment);
         // the line enters the track's hull (200 + 100 + 100 from its centre line) at x = 2000 - 400 + a bit
-        assert!(hit.dist_first > 1500 && hit.dist_first < 2000, "{}", hit.dist_first);
+        assert!(hit.dist_first > 1_500_000 && hit.dist_first < 2_000_000, "{}", hit.dist_first);
         // searching only pads skips the track, as `shoveIteration`'s per-kind search does
         let only_pads = n.nearest_obstacle(&line, None, &rules, &[], QueryOpts { kind_mask: kind_mask::SOLID, ..QueryOpts::default() }).unwrap();
         assert_eq!(only_pads.kind, Kind::Solid);
@@ -1370,14 +1370,14 @@ mod tests {
     fn nearest_obstacle_filter_and_exclude() {
         let mut n = Node::new();
         let rules = rules();
-        let a = n.add(pad_item("A", p(2000, 0), 300));
-        let b = n.add(pad_item("B", p(5000, 0), 300));
-        let line = Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 0), p(8000, 0)]);
+        let a = n.add(pad_item("A", p(2_000_000, 0), 300_000));
+        let b = n.add(pad_item("B", p(5_000_000, 0), 300_000));
+        let line = Line::from_points(net_of("SIG"), 0, 200_000, vec![p(0, 0), p(8_000_000, 0)]);
         assert_eq!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).unwrap().id, a);
         assert_eq!(n.nearest_obstacle(&line, None, &rules, &[a], QueryOpts::default()).unwrap().id, b);
         let only_b = |id: ItemId| id == b;
         assert_eq!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts { filter: Some(&only_b), ..QueryOpts::default() }).unwrap().id, b);
-        assert!(n.nearest_obstacle(&Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 3000), p(8000, 3000)]), None, &rules, &[], QueryOpts::default()).is_none());
+        assert!(n.nearest_obstacle(&Line::from_points(net_of("SIG"), 0, 200_000, vec![p(0, 3_000_000), p(8_000_000, 3_000_000)]), None, &rules, &[], QueryOpts::default()).is_none());
     }
 
     /// A line ending in a via is searched for that via as well.
@@ -1385,37 +1385,37 @@ mod tests {
     fn nearest_obstacle_includes_the_vias_own_collisions() {
         let mut n = Node::new();
         let rules = rules();
-        let pad = n.add(pad_item("A", p(1000, 3000), 300));
-        let line = Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 0), p(1000, 0)]);
+        let pad = n.add(pad_item("A", p(1_000_000, 3_000_000), 300_000));
+        let line = Line::from_points(net_of("SIG"), 0, 200_000, vec![p(0, 0), p(1_000_000, 0)]);
         assert!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).is_none(), "the track alone is clear of the pad");
-        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(1000, 2500), diameter: 600, drill: 300, source_via: None, locked: false, is_virtual: false };
+        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(1_000_000, 2_500_000), diameter: 600_000, drill: 300_000, source_via: None, locked: false, is_virtual: false };
         assert_eq!(n.nearest_obstacle(&line, Some(&via), &rules, &[], QueryOpts::default()).unwrap().id, pad);
     }
 
     #[test]
     fn path_length_counts_whole_legs_before_the_hit_leg() {
-        let pts = [p(0, 0), p(1000, 0), p(1000, 500)];
-        assert_eq!(path_length(&pts, p(400, 0), 0), 400);
-        assert_eq!(path_length(&pts, p(1000, 200), 1), 1200);
-        assert_eq!(path_length(&pts, p(1000, 500), 2), 1500, "an index one past the last leg means the last leg");
+        let pts = [p(0, 0), p(1_000_000, 0), p(1_000_000, 500_000)];
+        assert_eq!(path_length(&pts, p(400_000, 0), 0), 400_000);
+        assert_eq!(path_length(&pts, p(1_000_000, 200_000), 1), 1_200_000);
+        assert_eq!(path_length(&pts, p(1_000_000, 500_000), 2), 1_500_000, "an index one past the last leg means the last leg");
     }
 
     /// D10: a shove assembles a line of one width, and never through a locked segment.
     #[test]
     fn strict_assembly_stops_at_a_width_change_and_in_front_of_a_locked_segment() {
         let mut n = Node::new();
-        let a = n.add(seg_item("N", p(0, 0), p(1000, 0), 200));
-        let b = n.add(seg_item("N", p(1000, 0), p(2000, 0), 200));
-        let wide = n.add(seg_item("N", p(2000, 0), p(3000, 0), 500));
-        let locked = n.add(Item::Segment(Segment { net: net_of("N"), layer: 0, a: p(0, 0), b: p(-1000, 0), width: 200, source_track: None, locked: true }));
+        let a = n.add(seg_item("N", p(0, 0), p(1_000_000, 0), 200_000));
+        let b = n.add(seg_item("N", p(1_000_000, 0), p(2_000_000, 0), 200_000));
+        let wide = n.add(seg_item("N", p(2_000_000, 0), p(3_000_000, 0), 500_000));
+        let locked = n.add(Item::Segment(Segment { net: net_of("N"), layer: 0, a: p(0, 0), b: p(-1_000_000, 0), width: 200_000, source_track: None, locked: true }));
         let loose = n.assemble_line(a).unwrap();
-        assert_eq!(loose.pts, vec![p(-1000, 0), p(0, 0), p(1000, 0), p(2000, 0), p(3000, 0)], "the plain assembly goes through everything");
+        assert_eq!(loose.pts, vec![p(-1_000_000, 0), p(0, 0), p(1_000_000, 0), p(2_000_000, 0), p(3_000_000, 0)], "the plain assembly goes through everything");
         let strict = n.assemble_line_with(a, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
-        assert_eq!(strict.pts, vec![p(0, 0), p(1000, 0), p(2000, 0)]);
+        assert_eq!(strict.pts, vec![p(0, 0), p(1_000_000, 0), p(2_000_000, 0)]);
         assert_eq!(strict.segment_ids, vec![a, b]);
-        assert_eq!(strict.width, 200);
+        assert_eq!(strict.width, 200_000);
         let from_wide = n.assemble_line_with(wide, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
-        assert_eq!(from_wide.pts, vec![p(2000, 0), p(3000, 0)], "the wide part is a line of its own");
+        assert_eq!(from_wide.pts, vec![p(2_000_000, 0), p(3_000_000, 0)], "the wide part is a line of its own");
         // a line seeded on the locked segment itself still contains it (so `HasLockedSegments` can say so)
         let from_locked = n.assemble_line_with(locked, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false }).unwrap();
         assert!(from_locked.segment_ids.contains(&locked));
@@ -1425,11 +1425,11 @@ mod tests {
     #[test]
     fn a_cluster_is_the_blob_of_touching_items() {
         let mut n = Node::new();
-        let pad_a = n.add(pad_item("N1", p(0, 0), 500));
-        let attached = n.add(seg_item("N1", p(0, 0), p(3000, 0), 200));
-        let pad_b = n.add(pad_item("N2", p(3000, 350), 300)); // touches the track's end, other net
-        let crossing = n.add(seg_item("N3", p(1500, -1000), p(1500, 1000), 200)); // different-net track on the track: never joins
-        let far = n.add(pad_item("N4", p(0, 5000), 500));
+        let pad_a = n.add(pad_item("N1", p(0, 0), 500_000));
+        let attached = n.add(seg_item("N1", p(0, 0), p(3_000_000, 0), 200_000));
+        let pad_b = n.add(pad_item("N2", p(3_000_000, 350_000), 300_000)); // touches the track's end, other net
+        let crossing = n.add(seg_item("N3", p(1_500_000, -1_000_000), p(1_500_000, 1_000_000), 200_000)); // different-net track on the track: never joins
+        let far = n.add(pad_item("N4", p(0, 5_000_000), 500_000));
         let c = n.assemble_cluster(pad_a, 0, 0.0, None, &|_| false);
         assert_eq!(c[0], pad_a);
         let set: std::collections::HashSet<_> = c.iter().copied().collect();
@@ -1448,11 +1448,11 @@ mod tests {
     #[test]
     fn item_at_finds_a_track_by_its_middle_not_just_its_ends() {
         let mut n = Node::new();
-        let id = n.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(10_000, 0), width: 200, source_track: None, locked: false }));
+        let id = n.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(10_000_000, 0), width: 200_000, source_track: None, locked: false }));
         // Dead centre of a long track: `nearest_anchor` (endpoints only)
         // would miss this entirely.
-        assert_eq!(n.item_at(p(5000, 50), LayerRange::single(0), 200), Some(id));
-        assert!(n.nearest_anchor(p(5000, 50), LayerRange::single(0), 200, None).is_none(), "sanity: nearest_anchor really doesn't see the middle");
-        assert!(n.item_at(p(5000, 5000), LayerRange::single(0), 200).is_none());
+        assert_eq!(n.item_at(p(5_000_000, 50_000), LayerRange::single(0), 200_000), Some(id));
+        assert!(n.nearest_anchor(p(5_000_000, 50_000), LayerRange::single(0), 200_000, None).is_none(), "sanity: nearest_anchor really doesn't see the middle");
+        assert!(n.item_at(p(5_000_000, 5_000_000), LayerRange::single(0), 200_000).is_none());
     }
 }

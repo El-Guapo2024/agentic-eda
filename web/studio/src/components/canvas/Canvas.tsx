@@ -20,7 +20,7 @@ import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
-import { drawStrokeWidthUm } from "../../kicad-port/layerDefaults";
+import { drawStrokeWidthNm } from "../../kicad-port/layerDefaults";
 import { activeLayerName } from "../../kicad-port/layerPresets";
 import { carryStart } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
@@ -110,7 +110,7 @@ const PAN_BUTTONS = new Set([1, 2]);
 
 const LONG_PRESS_MS = 500;
 /** A click within this many board um of a pad/via/track-end counts as landing on it (which net a route click joins) -- generous enough to be usable at a typical zoom without needing pixel-perfect precision. Where the click goes is the snapping's (`PcbSnap.routePoint`, components/canvas/pcbSnap.ts). */
-const ANCHOR_SNAP_UM = 500;
+const ANCHOR_SNAP_NM = 500_000;
 // A new graphic starts at the line thickness of its layer's class (Board Setup > Text & Graphics > Defaults, kicad-port/layerDefaults.ts); incWidth / decWidth step it (state.pcbx.drawStrokeStep).
 /** How many points finish a given drawing-tool shape by itself, once reached, without waiting for an explicit Enter/double-click -- a plain 2-point line/rect/circle doesn't need a third confirmation the way a polygon does. Arc is start/mid/end (3); zone/polygon/route have no auto-finish (arbitrary length). */
 type ShapeToolKind = "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
@@ -129,21 +129,21 @@ function shapeAutoFinishCount(kind: ShapeToolKind): number | null {
 }
 
 /** `pts` -> the matching `CmdShape` variant for `add_shape`, or null if there aren't enough points yet -- the IR's own point-count floor per kind (a polygon needs 3+, everything else exactly the fixed count `shapeAutoFinishCount` already enforces before this is ever called with too few). */
-function shapeFromPoints(kind: ShapeToolKind, pts: [number, number][], layer: string, widthUm: number): CmdShape | null {
+function shapeFromPoints(kind: ShapeToolKind, pts: [number, number][], layer: string, widthNm: number): CmdShape | null {
   const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
   switch (kind) {
     case "bezier":
       return null; // built from the construction manager's `BezierCurve`, never from a bare point list
     case "segment":
-      return pts.length >= 2 ? { kind: "segment", layer, stroke_width: widthUm, filled: false, start: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "segment", layer, stroke_width: widthNm, filled: false, start: p(0), end: p(1) } : null;
     case "rect":
-      return pts.length >= 2 ? { kind: "rect", layer, stroke_width: widthUm, filled: false, start: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "rect", layer, stroke_width: widthNm, filled: false, start: p(0), end: p(1) } : null;
     case "circle":
-      return pts.length >= 2 ? { kind: "circle", layer, stroke_width: widthUm, filled: false, center: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "circle", layer, stroke_width: widthNm, filled: false, center: p(0), end: p(1) } : null;
     case "arc":
-      return pts.length >= 3 ? { kind: "arc", layer, stroke_width: widthUm, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
+      return pts.length >= 3 ? { kind: "arc", layer, stroke_width: widthNm, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
     case "polygon":
-      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: widthUm, filled: true, pts: pts.map((_, i) => p(i)) } : null;
+      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: widthNm, filled: true, pts: pts.map((_, i) => p(i)) } : null;
   }
 }
 
@@ -158,7 +158,7 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, ShapeToolKind>> = {
 
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
-  | { kind: "move"; refs: string[]; pivotUm?: [number, number]; flipPivotUm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
+  | { kind: "move"; refs: string[]; pivotNm?: [number, number]; flipPivotNm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
   | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] }
@@ -167,25 +167,25 @@ type DragState =
   /** A selected tuning pattern's edit point (`PCB_TUNING_PATTERN::MakeEditPoints`) being dragged: the pattern is tuned again through an edit session (`genStartEdit` .. `genFinishEdit`). */
   | { kind: "tuneHandle"; drag: TuneHandleDrag };
 
-/** A click/double-click/right-click within this many board µm of a zone corner counts as landing on it -- same generous, zoom-aware tolerance `ANCHOR_SNAP_UM`-adjacent code elsewhere in this file already uses. */
-function zoneCornerToleranceUm(viewScale: number): number {
-  return Math.max(300, 10 / viewScale);
+/** A click/double-click/right-click within this many board µm of a zone corner counts as landing on it -- same generous, zoom-aware tolerance `ANCHOR_SNAP_NM`-adjacent code elsewhere in this file already uses. */
+function zoneCornerToleranceNm(viewScale: number): number {
+  return Math.max(300_000, 10 / viewScale);
 }
 
 /** Every part whose courtyard contains the point, topmost (last drawn) first. */
-function partsAt(parts: Part[], xUm: number, yUm: number): Part[] {
+function partsAt(parts: Part[], xNm: number, yNm: number): Part[] {
   const hits: Part[] = [];
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i]!;
     if (!p.placed || !p.courtyard) continue;
     const [x0, y0, x1, y1] = p.courtyard;
-    if (xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1) hits.push(p);
+    if (xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1) hits.push(p);
   }
   return hits;
 }
 
-function partHit(parts: Part[], xUm: number, yUm: number): Part | null {
-  return partsAt(parts, xUm, yUm)[0] ?? null;
+function partHit(parts: Part[], xNm: number, yNm: number): Part | null {
+  return partsAt(parts, xNm, yNm)[0] ?? null;
 }
 
 export function Canvas() {
@@ -265,7 +265,7 @@ export function Canvas() {
   const gridList = useGridSettings("pcb").grids;
   const gridOverrides = useGridOverrides("pcb");
   const [, bumpSnap] = useState(0);
-  snap.update({ board, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer, selection: state.selection });
+  snap.update({ board, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer, selection: state.selection });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {
@@ -400,7 +400,7 @@ export function Canvas() {
       layerOpacity: state.layerOpacity,
       activeLayer: state.activeLayer,
       highContrast: state.highContrast,
-      gridUm: state.gridUm,
+      gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       movePreview: state.movePreview,
       sketchPads: state.sketchPads,
@@ -412,7 +412,7 @@ export function Canvas() {
       auxOrigin: board.aux_origin ?? null,
       gridOrigin: board.grid_origin ?? null,
       drawState: state.drawState,
-      cursorUm: state.cursorUm,
+      cursorNm: state.cursorNm,
       snappedCursor: PLACING_TOOLS.has(state.activeTool) ? snap.lastPoint() : null,
       activeTool: state.activeTool,
       angleSnapMode: state.pcbx.angleSnapMode,
@@ -443,7 +443,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize, imageVersion]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize, imageVersion]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -606,7 +606,7 @@ export function Canvas() {
       void finishInteractiveRoute(x, y, dispatch, api);
     } else if (draw.kind === "diffpair") {
       // a pair that cannot be walked has no head (`tryWalkDp` empties it): finish where the cursor is
-      const cursor = state.cursorUm;
+      const cursor = state.cursorNm;
       const [x, y] = draw.ptsA[draw.ptsA.length - 1] ?? (cursor ? [cursor.x, cursor.y] : [0, 0]);
       void finishDiffPairRoute(x, y, dispatch, api);
     } else if (draw.kind === "zone") {
@@ -635,17 +635,17 @@ export function Canvas() {
       if (draw.shapeKind === "arc") return;
       if (draw.shapeKind === "bezier") {
         // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
-        const at = snap.lastPoint() ?? (state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, state.gridUm) : draw.bezier?.lastPoint);
+        const at = snap.lastPoint() ?? (state.cursorNm ? snapPoint(state.cursorNm.x, state.cursorNm.y, state.gridNm) : draw.bezier?.lastPoint);
         const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
-        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep)) });
+        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep)) });
         dispatch({ type: "SET_DRAW_STATE", draw: null });
         return;
       }
-      const shape = shapeFromPoints(draw.shapeKind, draw.pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
+      const shape = shapeFromPoints(draw.shapeKind, draw.pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
       if (shape) api.cmd({ op: "add_shape", shape });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
     }
-  }, [state.drawState, state.activeLayer, state.cursorUm, state.gridUm, state.pcbx, board, api, dispatch]);
+  }, [state.drawState, state.activeLayer, state.cursorNm, state.gridNm, state.pcbx, board, api, dispatch]);
 
   // pcbnew.InteractiveDrawing.closeOutline (drawing_tool.cpp: `polyGeomMgr.SetFinished()`) asks for what Enter does: finish the zone/polygon.
   const finishRequestSeen = useRef(state.pcbx.drawFinishRequest);
@@ -670,7 +670,7 @@ export function Canvas() {
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
     setPcbMenu(null);
-    if (state.pcbx.menuCursorUm) dispatch({ type: "PCBX", patch: { menuCursorUm: null } });
+    if (state.pcbx.menuCursorNm) dispatch({ type: "PCBX", patch: { menuCursorNm: null } });
 
     // PICKER_TOOL::Main: while a pick session runs (actions/pcbPicker.ts) a left click answers it -- snapped like
     // PCB_GRID_HELPER::BestSnapAnchor, or the item under it for an item session -- and does nothing else.
@@ -680,8 +680,8 @@ export function Canvas() {
         point: { x: px, y: py },
         item: () => {
           if (!board) return null;
-          const toleranceUm = Math.max(150, 6 / state.view.scale);
-          return pickSelectionCandidates(board, wx, wy, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)[0]?.id ?? null;
+          const toleranceNm = Math.max(150_000, 6 / state.view.scale);
+          return pickSelectionCandidates(board, wx, wy, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)[0]?.id ?? null;
         },
       });
       return;
@@ -714,14 +714,14 @@ export function Canvas() {
       }
 
       if (state.activeTool === "via") {
-        const anchor = findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM);
+        const anchor = findRouteAnchor(board, sx, sy, ANCHOR_SNAP_NM);
         if (!anchor) {
           dispatch({ type: "TOAST", message: "Click a pad, via, or track end -- a via needs a net.", kind: "error" });
           return;
         }
         const rules = board.board_rules;
         // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
-        const viaPreset = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600, drill: rules?.via_drill ?? 300 };
+        const viaPreset = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600_000, drill: rules?.via_drill ?? 300_000 };
         api.cmd({ op: "add_via", net: anchor.net, x: sx, y: sy, drill: viaPreset.drill, diameter: viaPreset.diameter, from_layer: "F.Cu", to_layer: "B.Cu" });
         return;
       }
@@ -739,8 +739,8 @@ export function Canvas() {
           // `autoTrackWidth`: starting from an existing track's end, that track's width wins over the current one.
           // (a route can start in the middle of a track too: that track's width then)
           const under = state.bcx.autoTrackWidth ? trackUnder(board.routing?.tracks ?? [], sx, sy, layer) : null;
-          const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM)?.from ?? (under ? `track ${under.id}` : undefined), board.routing?.tracks ?? []) : null;
-          const width = connected ?? state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
+          const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_NM)?.from ?? (under ? `track ${under.id}` : undefined), board.routing?.tracks ?? []) : null;
+          const width = connected ?? state.currentTrackWidthNm ?? board.board_rules?.track_width ?? 250_000;
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked());
           return;
@@ -757,7 +757,7 @@ export function Canvas() {
         if (!draw || draw.kind !== "diffpair") {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           const custom = state.pcbx.customDiffPair;
-          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthUm, gap: custom.gapUm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapUm : custom.viaGapUm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks));
+          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks));
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);
@@ -824,7 +824,7 @@ export function Canvas() {
       if (state.activeTool === "table") {
         const draw = state.drawState;
         if (draw?.kind === "table") {
-          const s = drawTableSession(board.board_rules?.text_graphics, state.activeLayer, draw.origin, [sx, sy], state.gridUm);
+          const s = drawTableSession(board.board_rules?.text_graphics, state.activeLayer, draw.origin, [sx, sy], state.gridNm);
           dispatch({ type: "SET_DRAW_STATE", draw: null });
           openDrawnTableDialog({ layer: s.layer, at: draw.origin, cols: s.grid.cols, rows: s.grid.rows, cellW: s.grid.cellW, cellH: s.grid.cellH, lineWidth: s.lineWidth });
         } else {
@@ -856,7 +856,7 @@ export function Canvas() {
         const prev = draw?.kind === "shape" && draw.shapeKind === "arc" ? draw.arc : undefined;
         const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap(state.pcbx.angleSnapMode, e));
         if (arc) {
-          const shape: CmdShape = { kind: "arc", layer: activeLayerName(state.activeLayer, "F.SilkS"), stroke_width: drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) };
+          const shape: CmdShape = { kind: "arc", layer: activeLayerName(state.activeLayer, "F.SilkS"), stroke_width: drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) };
           void api.cmd({ op: "add_shape", shape });
         }
         dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
@@ -867,7 +867,7 @@ export function Canvas() {
         const draw = state.drawState;
         const prev = draw?.kind === "shape" && draw.shapeKind === "bezier" ? draw.bezier : undefined;
         const { geom, curve } = bezierClick(prev, [sx, sy]);
-        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep)) });
+        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep)) });
         dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
         return;
       }
@@ -884,7 +884,7 @@ export function Canvas() {
         const pts = [...already, point];
         const finishAt = shapeAutoFinishCount(shapeKind);
         if (finishAt !== null && pts.length >= finishAt) {
-          const shape = shapeFromPoints(shapeKind, pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
+          const shape = shapeFromPoints(shapeKind, pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
           if (shape) api.cmd({ op: "add_shape", shape });
           dispatch({ type: "SET_DRAW_STATE", draw: null });
         } else {
@@ -911,7 +911,7 @@ export function Canvas() {
       const soleId = [...state.selection][0]!;
       const zone = api.zoneById(soleId);
       if (zone) {
-        const idx = findNearestCorner(zone.outline, wx, wy, zoneCornerToleranceUm(state.view.scale));
+        const idx = findNearestCorner(zone.outline, wx, wy, zoneCornerToleranceNm(state.view.scale));
         if (idx != null) {
           dragRef.current = { kind: "zoneCorner", zoneId: zone.id, cornerIndex: idx, baseOutline: zone.outline };
           setZoneCornerPreview({ zoneId: zone.id, outline: zone.outline });
@@ -921,7 +921,7 @@ export function Canvas() {
       // A selected tuning pattern's four edit points: the start, the end, the width of the meanders and their spacing -- dragging one tunes the pattern again.
       const pattern = board.drawings?.tuning_patterns?.find((p) => p.id === soleId);
       if (pattern?.handles) {
-        const h = handleAt(pattern.handles, { x: wx, y: wy }, zoneCornerToleranceUm(state.view.scale));
+        const h = handleAt(pattern.handles, { x: wx, y: wy }, zoneCornerToleranceNm(state.view.scale));
         if (h != null) {
           dragRef.current = { kind: "tuneHandle", drag: new TuneHandleDrag(dispatch, pattern, h) };
           return;
@@ -930,7 +930,7 @@ export function Canvas() {
       // The same for a single selected graphic shape's handles (kicad-port/pcbPointEdit.ts), unless it is locked.
       const shape = api.shapeById(soleId);
       if (shape && !(board.locked ?? []).includes(soleId)) {
-        const hit = activeEditPoint(shapeEditPoints(shape), [wx, wy], zoneCornerToleranceUm(state.view.scale));
+        const hit = activeEditPoint(shapeEditPoints(shape), [wx, wy], zoneCornerToleranceNm(state.view.scale));
         if (hit) {
           dragRef.current = { kind: "shapePoint", shapeId: shape.id, base: shape, point: hit };
           setShapePointPreview(null);
@@ -941,7 +941,7 @@ export function Canvas() {
 
     if (moveMode) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped, state.movePreview.perRefOffsetUm);
+      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxNm, state.movePreview.dyNm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped, state.movePreview.perRefOffsetNm);
       return;
     }
     if (state.armed) {
@@ -978,8 +978,8 @@ export function Canvas() {
         return;
       }
     }
-    const toleranceUm = Math.max(150, 6 / state.view.scale);
-    const onePixelUm = 1 / state.view.scale;
+    const toleranceNm = Math.max(150_000, 6 / state.view.scale);
+    const onePixelNm = 1 / state.view.scale;
     // pcb_selection_tool.cpp selectPoint: "if( m_enteredGroup && !m_enteredGroup->GetBoundingBox().Contains( aWhere ) ) ExitGroup();" -- a click
     // outside the box of the entered group leaves it, then picks as with no group entered. Inside it, only the group's own members and the groups
     // directly in it can be picked (`FilterCollectorForHierarchy`: "If a group is entered, disallow selections of objects outside the group").
@@ -994,7 +994,7 @@ export function Canvas() {
     const groupsNow = board?.drawings?.groups ?? [];
     const pickable = (id: string): boolean => scope === null || (board != null && withinScope(groupsNow, padParent(board, id) ?? id, scope));
     const runPick = (skipHeuristics: boolean): SelectionCandidate[] =>
-      board ? pickSelectionCandidates(board, wx, wy, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics).filter((c) => pickable(c.id)) : [];
+      board ? pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics).filter((c) => pickable(c.id)) : [];
 
     // pcb_selection_tool.cpp SELECTION_TOOL::hasModifier's `m_skip_heuristics`
     // (Alt): go straight to the full candidate list/clarification menu,
@@ -1070,7 +1070,7 @@ export function Canvas() {
         // (`FilterCollectorForLockedItems`), and the points an R / F pressed on the way acts about.
         const start = carryStart(board, withGroupSubstitution(refs, board.drawings?.groups, state.enteredGroupId), modificationSnapFor(state));
         if (start.refs.length > 0) {
-          dragRef.current = { kind: "move", refs: start.refs, pivotUm: start.pivotUm, flipPivotUm: start.flipPivotUm, startWorld: [wx, wy], snapOrigin: moveOrigin(wx, wy, start.refs), moved: false };
+          dragRef.current = { kind: "move", refs: start.refs, pivotNm: start.pivotNm, flipPivotNm: start.flipPivotNm, startWorld: [wx, wy], snapOrigin: moveOrigin(wx, wy, start.refs), moved: false };
         } else if (start.lockedOut) {
           dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
         }
@@ -1164,10 +1164,10 @@ export function Canvas() {
     }
 
     if (moveMode && state.selection.size > 0 && board) {
-      const origin = state.moveOriginUm ?? { x: wx, y: wy };
+      const origin = state.moveOriginNm ?? { x: wx, y: wy };
       // Pack and Move (`P`) carries footprints, each with its own packed shift; every other move is the one `pcb` kind -- any mix of items, taken in the hand
       // once (the first pointer move) so the points an R / F acts about stay where the selection was picked up.
-      const packing = state.movePreview?.perRefOffsetUm != null;
+      const packing = state.movePreview?.perRefOffsetNm != null;
       const held = state.movePreview?.kind === "pcb" ? state.movePreview : null;
       const start = packing || held ? null : carryStart(board, [...state.selection], modificationSnapFor(state));
       if (!packing && !held && start && start.refs.length === 0) {
@@ -1191,9 +1191,9 @@ export function Canvas() {
       // Preserve whatever R/Shift+R/F have already accumulated on this
       // same preview (useActionRunner.ts) -- a fresh preview object every
       // pointer-move must not reset the live rotate/flip state.
-      // (`perRefOffsetUm` is Pack and Move's per-footprint packed shift -- it rides along until the drop.)
-      const { rotateQuarterTurns, flipped, perRefOffsetUm } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetUm, pivotUm: held?.pivotUm ?? start?.pivotUm, flipPivotUm: held?.flipPivotUm ?? start?.flipPivotUm } });
+      // (`perRefOffsetNm` is Pack and Move's per-footprint packed shift -- it rides along until the drop.)
+      const { rotateQuarterTurns, flipped, perRefOffsetNm } = state.movePreview ?? {};
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxNm: sx - ox, dyNm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetNm, pivotNm: held?.pivotNm ?? start?.pivotNm, flipPivotNm: held?.flipPivotNm ?? start?.flipPivotNm } });
       return;
     }
 
@@ -1211,7 +1211,7 @@ export function Canvas() {
       const dx = sx - drag.snapOrigin[0];
       const dy = sy - drag.snapOrigin[1];
       const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped, pivotUm: drag.pivotUm, flipPivotUm: drag.flipPivotUm } });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxNm: dx, dyNm: dy, rotateQuarterTurns, flipped, pivotNm: drag.pivotNm, flipPivotNm: drag.flipPivotNm } });
     } else if (drag.kind === "zoneCorner") {
       if (!motion?.dragging) return; // PCB_POINT_EDITOR::Main starts editing at the drag (`evt->IsDrag`), not at the press
       // `grid.BestSnapAnchor( pos, snapLayers, grid.GetItemGrid( item ), { item } )`: on the zone's layer, not onto the zone itself.
@@ -1250,8 +1250,8 @@ export function Canvas() {
       const held = state.movePreview;
       if (drag.moved && held) {
         // A drag that ended where it began (and turned and flipped nothing) leaves the board as it was: no undo step.
-        if (held.dxUm === 0 && held.dyUm === 0 && !held.rotateQuarterTurns && !held.flipped) dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-        else api.commitMove(held.refs, held.dxUm, held.dyUm, held.kind, held.rotateQuarterTurns, held.flipped);
+        if (held.dxNm === 0 && held.dyNm === 0 && !held.rotateQuarterTurns && !held.flipped) dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        else api.commitMove(held.refs, held.dxNm, held.dyNm, held.kind, held.rotateQuarterTurns, held.flipped);
       } else if (drag.moved) {
         dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       } else {
@@ -1356,14 +1356,14 @@ export function Canvas() {
       setContextMenu({ x: e.clientX, y: e.clientY, entries });
       return;
     }
-    dispatch({ type: "PCBX", patch: { menuCursorUm: { x: wx, y: wy } } }); // `GetMenuCursorPos()`
+    dispatch({ type: "PCBX", patch: { menuCursorNm: { x: wx, y: wy } } }); // `GetMenuCursorPos()`
     // pcb_selection_tool.cpp Main(): "Right click? if there is any object - show the context menu" -- with an empty selection the item under the pointer is
     // selected first (`selectPoint`, a hover selection); a selection that exists is the one the menu is for, wherever the click is.
     let refs = [...state.selection];
     if (refs.length === 0 && (state.activeTool === "select" || state.activeTool === "move")) {
-      const toleranceUm = Math.max(150, 6 / state.view.scale);
+      const toleranceNm = Math.max(150_000, 6 / state.view.scale);
       const groupsNow = board.drawings?.groups ?? [];
-      const top = pickSelectionCandidates(board, wx, wy, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false).find(
+      const top = pickSelectionCandidates(board, wx, wy, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false).find(
         (c) => state.enteredGroupId === null || withinScope(groupsNow, padParent(board, c.id) ?? c.id, state.enteredGroupId)
       );
       const id = top?.id ?? partHit(board.parts, wx, wy)?.ref ?? null;
@@ -1381,7 +1381,7 @@ export function Canvas() {
   // handled globally now (actions/useGlobalHotkeys.ts), driven by
   // src/kicad/actions.json's real hotkeys through the same registry the
   // menu bar and toolbars use, reading/writing the store's activeTool
-  // and cursorUm. Enter-finishes-the-current-route/zone/shape is the one
+  // and cursorNm. Enter-finishes-the-current-route/zone/shape is the one
   // interaction left here: it's a plain UI convention this app is
   // choosing for its own click-to-add-points tools, not a KiCad dotted
   // action with a real extracted hotkey, so it doesn't belong in that
@@ -1456,9 +1456,9 @@ export function Canvas() {
       const zone = api.zoneById([...state.selection][0]!);
       if (zone) {
         const [wx, wy] = worldAt(e);
-        const toleranceUm = zoneCornerToleranceUm(state.view.scale);
-        if (findNearestCorner(zone.outline, wx, wy, toleranceUm) == null) {
-          const insertAt = findNearestEdgeInsertionIndex(zone.outline, wx, wy, toleranceUm);
+        const toleranceNm = zoneCornerToleranceNm(state.view.scale);
+        if (findNearestCorner(zone.outline, wx, wy, toleranceNm) == null) {
+          const insertAt = findNearestEdgeInsertionIndex(zone.outline, wx, wy, toleranceNm);
           if (insertAt != null) {
             const [sx, sy] = snap.align("insert", [wx, wy], snapMods(e), "current");
             const next = insertCorner(zone.outline, insertAt, sx, sy);
@@ -1471,9 +1471,9 @@ export function Canvas() {
     let refs = [...state.selection];
     if (refs.length === 0) {
       const [wx, wy] = worldAt(e);
-      const toleranceUm = Math.max(150, 6 / state.view.scale);
-      const onePixelUm = 1 / state.view.scale;
-      const candidates = pickSelectionCandidates(board, wx, wy, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
+      const toleranceNm = Math.max(150_000, 6 / state.view.scale);
+      const onePixelNm = 1 / state.view.scale;
+      const candidates = pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
       if (candidates.length === 0) return;
       refs = [candidates[0]!.id];
       dispatch({ type: "SET_SELECTION", refs });

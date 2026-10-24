@@ -173,8 +173,8 @@ mod tests {
         // Track from R1's pad out into empty space: one end lands on the
         // pad, the other dangles.
         let a = pad_center(&design, &model, "R1", "1");
-        let free_end = Point { x: a.x, y: a.y + 10_000 };
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, free_end], arc_mid_offset: None });
+        let free_end = Point { x: a.x, y: a.y + 10_000_000 };
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, free_end], arc_mid_offset: None });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let out = dangling_tracks_and_vias(&graph);
         assert_eq!(out.len(), 1);
@@ -183,21 +183,21 @@ mod tests {
     }
 
     /// An arc is one `PCB_ARC`, one `CN_ITEM` with an anchor at each end (`CN_LIST::Add( PCB_ARC* )`), not the pieces of its tessellation: a
-    /// tessellation whose rounding to micrometres puts two points on one (as the importer's of `issue22475` does) has no piece of nothing to dangle.
+    /// tessellation whose rounding to nanometres puts two points on one (as the importer's of `issue22475` does) has no piece of nothing to dangle.
     #[test]
     fn an_arc_is_one_item_and_a_point_its_tessellation_repeats_dangles_nothing() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        // A 20 um arc half way: 32 pieces of under a micrometre each, so its tessellation has repeated points.
+        // A 20 nm arc half way: 32 pieces of under a nanometre each, so its tessellation has repeated points.
         let p = Point { x: (a.x + b.x) / 2 - 10, y: a.y };
         let q = Point { x: p.x + 20, y: p.y };
-        let mut arc = Track::new_arc("N1".into(), "F.Cu".into(), 50, p, Point { x: p.x + 10, y: p.y - 10 }, q);
+        let mut arc = Track::new_arc("N1".into(), "F.Cu".into(), 50_000, p, Point { x: p.x + 10, y: p.y - 10 }, q);
         arc.id = "a1".into();
         assert!(arc.pts.windows(2).any(|w| w[0] == w[1]), "the tessellation repeats a point");
         let rt = design.routing.as_mut().unwrap();
         rt.tracks.push(arc);
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 50, pts: vec![a, p], arc_mid_offset: None });
-        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 50, pts: vec![q, b], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 50_000, pts: vec![a, p], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 50_000, pts: vec![q, b], arc_mid_offset: None });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let arc_items = graph.items.iter().filter(|i| matches!(&i.item, ItemRef::TrackSeg { track_id, .. } if track_id == "a1")).count();
         assert_eq!(arc_items, 1, "one item for the arc");
@@ -209,7 +209,7 @@ mod tests {
     fn a_fully_routed_track_has_no_dangling_ends() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, b], arc_mid_offset: None });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         assert!(dangling_tracks_and_vias(&graph).is_empty());
     }
@@ -218,10 +218,10 @@ mod tests {
     fn a_via_touching_only_one_layer_of_copper_is_dangling() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let via_at = Point { x: a.x, y: a.y + 3_000 };
+        let via_at = Point { x: a.x, y: a.y + 3_000_000 };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, via_at], arc_mid_offset: None });
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, via_at], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let out = dangling_tracks_and_vias(&graph);
         let via_dangle = out.iter().find(|d| d.kind == DanglingKind::Via);
@@ -232,11 +232,11 @@ mod tests {
     fn a_via_bridging_two_layers_is_not_dangling() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        let via_at = Point { x: a.x, y: a.y + 3_000 };
+        let via_at = Point { x: a.x, y: a.y + 3_000_000 };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, via_at], arc_mid_offset: None });
-        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: 200, pts: vec![via_at, b], arc_mid_offset: None });
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, via_at], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: 200_000, pts: vec![via_at, b], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let out = dangling_tracks_and_vias(&graph);
         assert!(out.iter().all(|d| d.kind != DanglingKind::Via), "{:?}", out.iter().map(|d| &d.id).collect::<Vec<_>>());

@@ -15,7 +15,7 @@ use std::process::Command;
 
 fn model() -> ConstraintModel {
     let pin = |number: &str| Pin { number: number.into(), name: None, kind: PinKind::Passive };
-    let r1 = Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: None, footprint: Some("Foo:Bar".into()), pins: vec![pin("1"), pin("2")], body_um: None, symbol: Some("Device:R".into()), datasheet: None, edge: None };
+    let r1 = Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: None, footprint: Some("Foo:Bar".into()), pins: vec![pin("1"), pin("2")], body_nm: None, symbol: Some("Device:R".into()), datasheet: None, edge: None };
     ConstraintModel { parts: vec![r1], nets: vec![Net { name: "SIG".into(), pins: vec!["R1.1".into(), "R1.2".into()] }], ..Default::default() }
 }
 
@@ -40,7 +40,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     let sch = design.schematic.as_mut().unwrap();
     for (i, (kind, spin, fields)) in cases().into_iter().enumerate() {
         let id = format!("lbl_fields_{i}");
-        sch.labels.push(NetLabel { id: id.clone(), net: format!("FLD{i}"), at: Point { x: 200_000, y: 20_000 + 20_320 * i as i64 }, kind });
+        sch.labels.push(NetLabel { id: id.clone(), net: format!("FLD{i}"), at: Point { x: 200_000_000, y: 20_000_000 + 20_320_000 * i as i64 }, kind });
         sch.extras.label_spins.insert(id.clone(), spin);
         if !fields.is_empty() {
             sch.extras.label_fields.insert(id, fields);

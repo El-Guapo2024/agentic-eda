@@ -1,32 +1,32 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { colorToHex, graphicsEqual, hexToColor, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToUm, powerEditCmd, propertiesTarget, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm } from "./schProperties";
+import { colorToHex, graphicsEqual, hexToColor, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToNm, powerEditCmd, propertiesTarget, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm } from "./schProperties";
 import type { Schematic } from "../api/types";
 
 const sheet = (over: Partial<Schematic> = {}): Schematic =>
   ({
     lib_symbols: {},
-    symbols: [{ id: "R1", lib_id: null, at: [100, 200], rot: 0, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [] }],
+    symbols: [{ id: "R1", lib_id: null, at: [100_000, 200_000], rot: 0, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [] }],
     power_symbols: [{ id: "#PWR01", lib_id: "power:GND", at: [0, 0], rot: 0, net: "GND", pin: "" }],
     wires: [
-      { id: "wire_a", net: "N", pins: [], pts: [[0, 0], [10, 0]], bus: false },
-      { id: "wire_bus", net: "D[0..3]", pins: [], pts: [[0, 5], [10, 5]], bus: true, stroke: { width_um: 300, style: "dash", color: { r: 255, g: 0, b: 0, a: 255 } } },
+      { id: "wire_a", net: "N", pins: [], pts: [[0, 0], [10_000, 0]], bus: false },
+      { id: "wire_bus", net: "D[0..3]", pins: [], pts: [[0, 5000], [10_000, 5000]], bus: true, stroke: { width_nm: 300_000, style: "dash", color: { r: 255, g: 0, b: 0, a: 255 } } },
     ],
     no_connects: [{ id: "nc_a", at: [1, 1], pin: "" }],
     labels: [
-      { id: "lbl_a", net: "A", at: [5, 5], scope: "local", shape: null },
-      { id: "lbl_g", net: "B", at: [6, 6], scope: "global", shape: "input" },
+      { id: "lbl_a", net: "A", at: [5000, 5000], scope: "local", shape: null },
+      { id: "lbl_g", net: "B", at: [6000, 6000], scope: "global", shape: "input" },
     ],
-    texts: [{ id: "txt_a", content: "hello", at: [0, 0], angle: 0, size_um: 1270 }],
+    texts: [{ id: "txt_a", content: "hello", at: [0, 0], angle: 0, size_nm: 1_270_000 }],
     title_block: null,
-    bus_entries: [{ id: "bent_a", at: [2, 5], size: [2, 2] }],
+    bus_entries: [{ id: "bent_a", at: [2000, 5000], size: [2000, 2000] }],
     junctions: [
-      { id: "jct_a", at: [5, 0] },
-      { id: "jct_b", at: [7, 0], look: { diameter_um: 900, color: { r: 0, g: 0, b: 255, a: 255 } } },
+      { id: "jct_a", at: [5000, 0] },
+      { id: "jct_b", at: [7000, 0], look: { diameter_nm: 900, color: { r: 0, g: 0, b: 255, a: 255 } } },
     ],
-    lines: [{ id: "sln_a", pts: [[0, 9], [9, 9]], width_um: 250, stroke: { style: "dot" } }],
-    graphics: [{ id: "shp_a", shape: { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10, y: 10 } } }],
-    sheets: [{ id: "sheet_a", name: "Power", file: "power.kicad_sch", at: [0, 0], size: [10, 10], pins: [] }],
+    lines: [{ id: "sln_a", pts: [[0, 9000], [9000, 9000]], width_nm: 250_000, stroke: { style: "dot" } }],
+    graphics: [{ id: "shp_a", shape: { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 10_000, y: 10_000 } } }],
+    sheets: [{ id: "sheet_a", name: "Power", file: "power.kicad_sch", at: [0, 0], size: [10_000, 10_000], pins: [] }],
     sheet_path: [],
     ...over,
   }) as unknown as Schematic;
@@ -70,26 +70,26 @@ test("a label dialog sends only what changed", () => {
 });
 
 test("a text dialog sends only what changed, and keeps an angle the dialog cannot show", () => {
-  const t = { id: "txt_a", content: "hello", size_um: 1270, angle: 0 };
-  assert.equal(textEditCmd(t, { content: "hello", sizeUm: 1270, vertical: false }), null);
-  assert.deepEqual(textEditCmd(t, { content: "bye\nnow", sizeUm: 2540, vertical: true }), { op: "sch_edit", verb: "edit_text", id: "txt_a", text: "bye\nnow", size_um: 2540, angle: 90_000 });
-  assert.deepEqual(textEditCmd({ ...t, angle: 90 }, { content: "hello", sizeUm: 1270, vertical: false }), { op: "sch_edit", verb: "edit_text", id: "txt_a", angle: 0 });
-  assert.equal(textEditCmd({ ...t, angle: 180 }, { content: "hello", sizeUm: 1270, vertical: false }), null, "a text at 180 degrees that is still 'horizontal' is left at 180");
-  assert.equal(textEditCmd(t, { content: "hello", sizeUm: null, vertical: false }), null, "a size that is not a number is not sent");
+  const t = { id: "txt_a", content: "hello", size_nm: 1_270_000, angle: 0 };
+  assert.equal(textEditCmd(t, { content: "hello", sizeNm: 1_270_000, vertical: false }), null);
+  assert.deepEqual(textEditCmd(t, { content: "bye\nnow", sizeNm: 2_540_000, vertical: true }), { op: "sch_edit", verb: "edit_text", id: "txt_a", text: "bye\nnow", size_nm: 2_540_000, angle: 90_000 });
+  assert.deepEqual(textEditCmd({ ...t, angle: 90 }, { content: "hello", sizeNm: 1_270_000, vertical: false }), { op: "sch_edit", verb: "edit_text", id: "txt_a", angle: 0 });
+  assert.equal(textEditCmd({ ...t, angle: 180 }, { content: "hello", sizeNm: 1_270_000, vertical: false }), null, "a text at 180 degrees that is still 'horizontal' is left at 180");
+  assert.equal(textEditCmd(t, { content: "hello", sizeNm: null, vertical: false }), null, "a size that is not a number is not sent");
 });
 
 test("a text dialog sends the justification when it differs from how the text lies (left and bottom for a text that was never justified)", () => {
-  const t = { id: "txt_a", content: "hello", size_um: 1270, angle: 0 };
+  const t = { id: "txt_a", content: "hello", size_nm: 1_270_000, angle: 0 };
   // nothing picked differently
-  assert.equal(textEditCmd(t, { content: "hello", sizeUm: 1270, vertical: false, h: "left", v: "bottom" }), null);
-  assert.deepEqual(textEditCmd(t, { content: "hello", sizeUm: 1270, vertical: false, h: "center", v: "bottom" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", h: "center" });
-  assert.deepEqual(textEditCmd(t, { content: "hello", sizeUm: 1270, vertical: false, h: "right", v: "top" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", h: "right", v: "top" });
+  assert.equal(textEditCmd(t, { content: "hello", sizeNm: 1_270_000, vertical: false, h: "left", v: "bottom" }), null);
+  assert.deepEqual(textEditCmd(t, { content: "hello", sizeNm: 1_270_000, vertical: false, h: "center", v: "bottom" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", h: "center" });
+  assert.deepEqual(textEditCmd(t, { content: "hello", sizeNm: 1_270_000, vertical: false, h: "right", v: "top" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", h: "right", v: "top" });
   // a text the backend says is centred and vertical
   const centred = { ...t, angle: 90, vertical: true, h: "center" as const, v: "center" as const };
-  assert.equal(textEditCmd(centred, { content: "hello", sizeUm: 1270, vertical: true, h: "center", v: "center" }), null);
-  assert.deepEqual(textEditCmd(centred, { content: "hello", sizeUm: 1270, vertical: false, h: "center", v: "center" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", angle: 0 });
+  assert.equal(textEditCmd(centred, { content: "hello", sizeNm: 1_270_000, vertical: true, h: "center", v: "center" }), null);
+  assert.deepEqual(textEditCmd(centred, { content: "hello", sizeNm: 1_270_000, vertical: false, h: "center", v: "center" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", angle: 0 });
   // a legacy angle of 270 is a vertical text (KeepUpright)
-  assert.equal(textEditCmd({ ...t, angle: 270 }, { content: "hello", sizeUm: 1270, vertical: true }), null);
+  assert.equal(textEditCmd({ ...t, angle: 270 }, { content: "hello", sizeNm: 1_270_000, vertical: true }), null);
 });
 
 test("a label dialog sends the Auto check when it changed, and the spin only while Auto is off", () => {
@@ -126,30 +126,30 @@ test("the stroke dialog shows what the items share, and mixed where they differ"
   const s = sheet();
   const one = strokeView(s, ["wire_bus"]);
   assert.deepEqual([one.hasStroke, one.hasJunction], [true, false]);
-  assert.deepEqual(one.widthUm, { mixed: false, value: 300 });
+  assert.deepEqual(one.widthNm, { mixed: false, value: 300_000 });
   assert.deepEqual(one.style, { mixed: false, value: "dash" });
   assert.deepEqual(one.color, { mixed: false, value: { r: 255, g: 0, b: 0, a: 255 } });
   const two = strokeView(s, ["wire_a", "wire_bus", "bent_a"]);
-  assert.deepEqual(two.widthUm, { mixed: true });
+  assert.deepEqual(two.widthNm, { mixed: true });
   assert.deepEqual(two.style, { mixed: true });
   // a graphic line's width is its own field
-  assert.deepEqual(strokeView(s, ["sln_a"]).widthUm, { mixed: false, value: 250 });
+  assert.deepEqual(strokeView(s, ["sln_a"]).widthNm, { mixed: false, value: 250_000 });
   assert.deepEqual(strokeView(s, ["sln_a"]).style, { mixed: false, value: "dot" });
   const junctions = strokeView(s, ["jct_a", "jct_b"]);
   assert.deepEqual([junctions.hasStroke, junctions.hasJunction], [false, true]);
-  assert.deepEqual(junctions.diameterUm, { mixed: true });
-  assert.deepEqual(strokeView(s, ["jct_b"]).diameterUm, { mixed: false, value: 900 });
+  assert.deepEqual(junctions.diameterNm, { mixed: true });
+  assert.deepEqual(strokeView(s, ["jct_b"]).diameterNm, { mixed: false, value: 900 });
   // a selection of both: the width is the lines', the diameter the junctions'
   const both = strokeView(s, ["wire_bus", "jct_b"]);
   assert.deepEqual([both.hasStroke, both.hasJunction], [true, true]);
-  assert.deepEqual(both.widthUm, { mixed: false, value: 300 });
-  assert.deepEqual(both.diameterUm, { mixed: false, value: 900 });
+  assert.deepEqual(both.widthNm, { mixed: false, value: 300_000 });
+  assert.deepEqual(both.diameterNm, { mixed: false, value: 900 });
 });
 
 test("the stroke dialog sends only the fields the user touched", () => {
   assert.equal(strokeEditCmd(["wire_a"], {}), null);
-  assert.deepEqual(strokeEditCmd(["wire_a", "jct_a"], { widthUm: 300, diameterUm: 900 }), { op: "sch_edit", verb: "set_stroke", ids: ["wire_a", "jct_a"], width_um: 300, diameter_um: 900 });
-  assert.deepEqual(strokeEditCmd(["wire_a"], { widthUm: -5, style: "dash_dot" }), { op: "sch_edit", verb: "set_stroke", ids: ["wire_a"], width_um: 0, style: "dash_dot" });
+  assert.deepEqual(strokeEditCmd(["wire_a", "jct_a"], { widthNm: 300_000, diameterNm: 900 }), { op: "sch_edit", verb: "set_stroke", ids: ["wire_a", "jct_a"], width_nm: 300_000, diameter_nm: 900 });
+  assert.deepEqual(strokeEditCmd(["wire_a"], { widthNm: -5000, style: "dash_dot" }), { op: "sch_edit", verb: "set_stroke", ids: ["wire_a"], width_nm: 0, style: "dash_dot" });
   assert.deepEqual(strokeEditCmd(["wire_a"], { color: { r: 0, g: 0, b: 0, a: 0 } }), { op: "sch_edit", verb: "set_stroke", ids: ["wire_a"], color: UNSPECIFIED_COLOR });
 });
 
@@ -157,23 +157,23 @@ test("colours and millimetres convert both ways", () => {
   assert.equal(colorToHex({ r: 255, g: 128, b: 0, a: 255 }), "#ff8000");
   assert.deepEqual(hexToColor("#0080FF"), { r: 0, g: 128, b: 255, a: 255 });
   assert.equal(hexToColor("red"), null);
-  assert.equal(mmToUm("0.25"), 250);
-  assert.equal(mmToUm(" 1,27 "), 1270);
-  assert.equal(mmToUm(""), null);
-  assert.equal(mmToUm("abc"), null);
-  assert.equal(umToMm(1270), "1.27");
-  assert.equal(umToMm(0), "0");
+  assert.equal(mmToNm("0.25"), 250_000);
+  assert.equal(mmToNm(" 1,27 "), 1_270_000);
+  assert.equal(mmToNm(""), null);
+  assert.equal(mmToNm("abc"), null);
+  assert.equal(nmToMm(1_270_000), "1.27");
+  assert.equal(nmToMm(0), "0");
 });
 
 test("a graphic that spells out its defaults is the same graphic as one that leaves them out", () => {
-  const rect = { id: "shp_a", shape: { type: "rectangle" as const, start: { x: 0, y: 0 }, end: { x: 10, y: 10 } } };
-  assert.ok(graphicsEqual(rect, { ...rect, shape: { ...rect.shape, corner_radius_um: 0 }, width_um: 0, line_style: "default", fill: "none" }));
-  assert.ok(!graphicsEqual(rect, { ...rect, width_um: 250 }));
+  const rect = { id: "shp_a", shape: { type: "rectangle" as const, start: { x: 0, y: 0 }, end: { x: 10_000, y: 10_000 } } };
+  assert.ok(graphicsEqual(rect, { ...rect, shape: { ...rect.shape, corner_radius_nm: 0 }, width_nm: 0, line_style: "default", fill: "none" }));
+  assert.ok(!graphicsEqual(rect, { ...rect, width_nm: 250_000 }));
   assert.ok(!graphicsEqual(rect, { ...rect, fill: "background" }));
   const area = { id: "rarea_a", shape: { type: "rule_area" as const, pts: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] } };
   assert.ok(graphicsEqual(area, { ...area, shape: { ...area.shape, exclude_from_sim: false, dnp: false } }));
   assert.ok(!graphicsEqual(area, { ...area, shape: { ...area.shape, dnp: true } }));
-  const box = { id: "tbox_a", shape: { type: "text_box" as const, start: { x: 0, y: 0 }, end: { x: 10, y: 10 }, text: "hi", size_um: 1270 } };
+  const box = { id: "tbox_a", shape: { type: "text_box" as const, start: { x: 0, y: 0 }, end: { x: 10_000, y: 10_000 }, text: "hi", size_nm: 1_270_000 } };
   assert.ok(graphicsEqual(box, { ...box, shape: { ...box.shape, bold: false, h_align: "left", v_align: "top", angle: 0 } }));
   assert.ok(!graphicsEqual(box, { ...box, shape: { ...box.shape, text: "ho" } }));
   // a colour of every channel zero is "no colour"
@@ -208,7 +208,7 @@ test("Label Properties' grid of a label's own fields: OnAddField's name and look
   assert.deepEqual(newLabelField([{ name: "Note", text: "x", visible: false, italic: false }], null), { name: "Field", text: "", visible: false, italic: false });
   assert.equal(labelFieldDisplayName("Netclass"), "Net Class");
   assert.equal(labelFieldDisplayName("Intersheetrefs"), "Sheet References");
-  const isr = { name: "Intersheetrefs", text: "${INTERSHEET_REFS}", shown: "[2]", visible: true, italic: false, intersheet_refs: true, at: [0, 0] as [number, number], vertical: false, h: "left" as const, size_um: 1270 };
+  const isr = { name: "Intersheetrefs", text: "${INTERSHEET_REFS}", shown: "[2]", visible: true, italic: false, intersheet_refs: true, at: [0, 0] as [number, number], vertical: false, h: "left" as const, size_nm: 1_270_000 };
   const nc = { ...isr, name: "Netclass", text: "Power", shown: "Power", italic: true, intersheet_refs: false };
   const global = { id: "lbl_g", net: "G", scope: "global" as const, shape: "input" as const, fields: [isr, nc] };
   assert.deepEqual(ownLabelFields(global), [{ name: "Netclass", text: "Power", visible: true, italic: true }], "the Sheet References are not the label's own");

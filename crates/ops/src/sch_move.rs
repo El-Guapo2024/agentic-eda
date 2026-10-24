@@ -20,14 +20,14 @@ use crate::sch_drag::{constrain_on_edge, Drag};
 use crate::sch_fields::FieldSel;
 use crate::sch_scene::{inferred_spin, mirror_coord, rotate_point, rotate_vec, Item, Matrix, Scene, F_END, F_SELECTED, F_START};
 use crate::{Board, Cmd};
-use eda_model::ir::{Point, SchematicSection, SheetInstance, Um};
+use eda_model::ir::{Point, SchematicSection, SheetInstance, Nm};
 use eda_model::sch_extras::{LabelSpin, SchGraphic, SchGraphicKind, SchHAlign};
 use eda_model::{CheckResult, ConstraintModel};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The schematic's connection grid, 50 mil (`GRID_CONNECTABLE`).
-pub const GRID_UM: Um = 1_270;
+pub const GRID_NM: Nm = 1_270_000;
 
 fn d_true() -> bool {
     true
@@ -37,8 +37,8 @@ fn d_true() -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AlignMove {
     pub id: String,
-    pub dx: Um,
-    pub dy: Um,
+    pub dx: Nm,
+    pub dy: Nm,
 }
 
 /// Move, drag, turn or mirror schematic items. `ids` are the items' ids: a reference for a symbol (every placed unit; `U1#2` names one),
@@ -51,8 +51,8 @@ pub enum SchMoveCmd {
     /// stays where it is (`moveItem` moves both ends of a line in this mode).
     Move {
         ids: Vec<String>,
-        dx: Um,
-        dy: Um,
+        dx: Nm,
+        dy: Nm,
         /// R, Shift+R, X and Y pressed while the items were held, in order (`SCH_EDIT_TOOL::Rotate` / `Mirror` during a move): done
         /// to the held items after the move, about `about` (the point they are held at) for a turn, as one step with it.
         #[serde(default)]
@@ -69,12 +69,12 @@ pub enum SchMoveCmd {
         ids: Vec<String>,
         #[serde(default)]
         vertices: BTreeMap<String, Vec<usize>>,
-        dx: Um,
-        dy: Um,
+        dx: Nm,
+        dy: Nm,
         #[serde(default = "d_true")]
         ortho: bool,
         #[serde(default)]
-        grid: Um,
+        grid: Nm,
         /// As for `Move`: turns made while the items were held; they turn the wires dragged along too.
         #[serde(default)]
         turns: Vec<Turn>,
@@ -93,7 +93,7 @@ pub enum SchMoveCmd {
         #[serde(default)]
         about: Option<Point>,
         #[serde(default)]
-        grid: Um,
+        grid: Nm,
     },
     /// `X` (`vertical` false, mirror left-right) and `Y` (top-bottom): one item about its own anchor (a symbol in place), several about the
     /// half-grid point nearest the centre of the selection.
@@ -106,21 +106,21 @@ pub enum SchMoveCmd {
         #[serde(default)]
         about: Option<Point>,
         #[serde(default)]
-        grid: Um,
+        grid: Nm,
     },
     /// Align to Grid (`SCH_MOVE_TOOL::AlignToGrid`): each item moves to the nearest grid point (a symbol by where most of its pins are),
     /// taking the wires attached to it along.
     AlignToGrid {
         ids: Vec<String>,
         #[serde(default)]
-        grid: Um,
+        grid: Nm,
     },
     /// Align Left / Right / Top / Bottom / Center (`SCH_ALIGN_TOOL`): each item moves by its own offset (the caller measured the boxes), snapped
     /// so an item on the connection grid stays on it (`adjustDeltaForGrid`), the wires attached to it stretching.
     Align {
         moves: Vec<AlignMove>,
         #[serde(default)]
-        grid: Um,
+        grid: Nm,
     },
 }
 
@@ -134,7 +134,7 @@ impl SchMoveCmd {
 
     /// The one-line description the CLI journal and the activity feed show.
     pub fn describe(&self) -> String {
-        let mm = |v: Um| format!("{:.2}", v as f64 / 1000.0);
+        let mm = |v: Nm| format!("{:.2}", eda_model::units::to_mm(v));
         let list = |ids: &[String]| ids.join(" ");
         match self {
             SchMoveCmd::Move { ids, dx, dy, .. } => format!("schematic move {} --by {},{}", list(ids), mm(*dx), mm(*dy)),
@@ -215,11 +215,11 @@ pub(crate) fn run_with_overlay(sch: &SchematicSection, model: &ConstraintModel, 
     Ok((scene.finish(), overlay))
 }
 
-fn grid_of(g: Um) -> Um {
+fn grid_of(g: Nm) -> Nm {
     if g > 0 {
         g
     } else {
-        GRID_UM
+        GRID_NM
     }
 }
 
@@ -418,7 +418,7 @@ fn move_selection(scene: &mut Scene, delta: Point, turns: &[Turn], about: Option
         scene.move_field(&f, delta);
     }
     for &t in turns {
-        turn_selection(scene, t, about, GRID_UM, true);
+        turn_selection(scene, t, about, GRID_NM, true);
     }
     // `netCollisionMonitor->Update( previewJunctions, selection )`, after `performItemMove`
     let overlay = monitor.update(scene, None);
@@ -426,7 +426,7 @@ fn move_selection(scene: &mut Scene, delta: Point, turns: &[Turn], about: Option
     overlay
 }
 
-fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Um, turns: &[Turn], about: Option<Point>) -> crate::sch_net_collision::NetCollision {
+fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Nm, turns: &[Turn], about: Option<Point>) -> crate::sch_net_collision::NetCollision {
     let monitor = crate::sch_net_collision::Monitor::initialize(scene);
     let mut st = Drag { ortho, grid, ..Default::default() };
     scene.setup_items_for_drag(&mut st);
@@ -437,7 +437,7 @@ fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Um, turns:
         scene.move_field(&f, delta);
     }
     for &t in turns {
-        turn_selection(scene, t, about, GRID_UM, true);
+        turn_selection(scene, t, about, GRID_NM, true);
     }
     let overlay = monitor.update(scene, Some(&st));
     scene.finalize(Some(&st), &internal);
@@ -462,9 +462,9 @@ pub enum Turn {
 }
 
 /// `GetNearestHalfGridPosition`.
-fn half_grid(p: Point, grid: Um) -> Point {
+fn half_grid(p: Point, grid: Nm) -> Point {
     let half = (grid as f64) / 2.0;
-    let snap = |v: Um| ((v as f64 / half).round() * half).round() as Um;
+    let snap = |v: Nm| ((v as f64 / half).round() * half).round() as Nm;
     Point { x: snap(p.x), y: snap(p.y) }
 }
 
@@ -544,7 +544,7 @@ fn principal_count(scene: &Scene, items: &[Item]) -> usize {
 
 /// `SCH_EDIT_TOOL::Rotate` and `Mirror` for the selection as it stands (the user's items, and what a drag added). `moving` is true while
 /// the items are held (`moving && selection.HasReferencePoint()`), when `about` is where they are held.
-fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um, moving: bool) {
+fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Nm, moving: bool) {
     let all = scene.in_selection();
     // the fields picked on their own, whose item does not turn them
     let loose = scene.loose_fields();
@@ -676,7 +676,7 @@ fn finish_turn(scene: &mut Scene) {
 
 /// `SCH_EDIT_TOOL::Rotate`'s single-item switch. Returns the point the item was turned about, which the lines a drag brought along turn
 /// about too.
-fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: bool, grid: Um) -> Point {
+fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: bool, grid: Nm) -> Point {
     // "if( moving && selection.HasReferencePoint() ) rotPoint = selection.GetReferencePoint(); else if( head->IsConnectable() ) rotPoint =
     // head->GetPosition(); else rotPoint = GetNearestHalfGridPosition( head->GetBoundingBox().GetCenter() )"
     let default_pivot = |scene: &Scene| {
@@ -759,7 +759,7 @@ fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: b
 }
 
 /// `item->Rotate( center, ccw )` for every kind.
-fn rotate_item(scene: &mut Scene, it: Item, c: Point, ccw: bool, grid: Um) {
+fn rotate_item(scene: &mut Scene, it: Item, c: Point, ccw: bool, grid: Nm) {
     let _ = grid;
     match it {
         Item::Seg(i) => {
@@ -859,7 +859,7 @@ pub(crate) fn effective_spin(scene: &Scene, label: usize) -> LabelSpin {
 }
 
 /// `SCH_EDIT_TOOL::Mirror`'s single-item switch: each kind about its own anchor or centre, never the held selection's reference point.
-fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, grid: Um) {
+fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, grid: Nm) {
     match head {
         Item::Symbol(i) => {
             // `SetOrientation( SYM_MIRROR_x )`, then `SetFieldsAutoplaced( AUTOPLACE_NONE )`
@@ -923,7 +923,7 @@ fn mirror_orientation(o: u32, left_right: bool) -> u32 {
 }
 
 /// `item->MirrorHorizontally( centre.x )` / `MirrorVertically( centre.y )` for every kind.
-fn mirror_item(scene: &mut Scene, it: Item, c: Point, vertical: bool, grid: Um) {
+fn mirror_item(scene: &mut Scene, it: Item, c: Point, vertical: bool, grid: Nm) {
     let _ = grid;
     let flip = |p: Point| if vertical { Point { x: p.x, y: mirror_coord(p.y, c.y) } } else { Point { x: mirror_coord(p.x, c.x), y: p.y } };
     match it {
@@ -1030,7 +1030,7 @@ fn rotate_sheet(sheet: &mut SheetInstance, old: &SheetInstance, c: Point, ccw: b
     }
 }
 
-fn sheet_geometry(at: Point, size: (Um, Um)) -> SheetInstance {
+fn sheet_geometry(at: Point, size: (Nm, Nm)) -> SheetInstance {
     SheetInstance { id: String::new(), name: String::new(), file: String::new(), at, size, pins: Vec::new(), page: String::new() }
 }
 
@@ -1156,14 +1156,14 @@ fn mirror_graphic(g: &mut SchGraphic, c: Point, vertical: bool) {
 // Align to Grid and Align
 
 /// `GRID_HELPER::AlignGrid`.
-fn align_grid(p: Point, grid: Um) -> Point {
-    let snap = |v: Um| ((v as f64 / grid as f64).round() as Um) * grid;
+fn align_grid(p: Point, grid: Nm) -> Point {
+    let snap = |v: Nm| ((v as f64 / grid as f64).round() as Nm) * grid;
     Point { x: snap(p.x), y: snap(p.y) }
 }
 
 /// `AlignSchematicItemsToGrid`: a line's two ends are aligned one after the other with what is attached to each; a text by its anchor; a
 /// sheet by its two corners with its pins; anything else by the shift most of its connection points need, with what is attached to it.
-fn align_to_grid(scene: &mut Scene, grid: Um) {
+fn align_to_grid(scene: &mut Scene, grid: Nm) {
     let items = scene.in_selection();
     let mut st = Drag { ortho: false, grid, ..Default::default() };
     let internal = internal_points(scene);
@@ -1230,7 +1230,7 @@ fn align_to_grid(scene: &mut Scene, grid: Um) {
                 for &p in &conns {
                     scene.get_connected_drag_items(&mut st, other, p, &mut drag_items);
                 }
-                let mut shifts: BTreeMap<(Um, Um), usize> = BTreeMap::new();
+                let mut shifts: BTreeMap<(Nm, Nm), usize> = BTreeMap::new();
                 let mut most_common = Point { x: 0, y: 0 };
                 let mut max = 0usize;
                 for &p in &conns {
@@ -1265,7 +1265,7 @@ fn diff(a: Point, b: Point) -> Point {
 
 /// Align Left / Right / Top / Bottom / Center (`SCH_ALIGN_TOOL::moveItem`): each item's offset, snapped so an item on the connection grid
 /// stays on it (`adjustDeltaForGrid`), and the wires attached stretch (a drag of one item at a time).
-fn align(scene: &mut Scene, moves: &[AlignMove], grid: Um) -> Result<(), Vec<CheckResult>> {
+fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<CheckResult>> {
     if moves.is_empty() {
         return Err(fail("ops_nothing_selected", "selection", "nothing to align"));
     }

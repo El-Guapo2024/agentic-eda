@@ -6,7 +6,7 @@
 // zone's outline (a graphic shape's points have no point editor here
 // either, same gap PARITY-pcb.md's Property dialogs section already
 // names for Shape Properties).
-import type { Um } from "../api/types";
+import type { Nm } from "../api/types";
 
 /** Squared distance, point to point -- avoids a sqrt where only comparison against a squared tolerance is needed. */
 function dist2(ax: number, ay: number, bx: number, by: number): number {
@@ -15,10 +15,10 @@ function dist2(ax: number, ay: number, bx: number, by: number): number {
   return dx * dx + dy * dy;
 }
 
-/** The outline corner nearest `(x, y)`, if within `toleranceUm`; null otherwise. Ties (shouldn't happen in practice) go to the lowest index. */
-export function findNearestCorner(outline: ReadonlyArray<readonly [Um, Um]>, x: Um, y: Um, toleranceUm: number): number | null {
+/** The outline corner nearest `(x, y)`, if within `toleranceNm`; null otherwise. Ties (shouldn't happen in practice) go to the lowest index. */
+export function findNearestCorner(outline: ReadonlyArray<readonly [Nm, Nm]>, x: Nm, y: Nm, toleranceNm: number): number | null {
   let best: number | null = null;
-  let bestD2 = toleranceUm * toleranceUm;
+  let bestD2 = toleranceNm * toleranceNm;
   for (let i = 0; i < outline.length; i++) {
     const [cx, cy] = outline[i]!;
     const d2 = dist2(x, y, cx, cy);
@@ -43,17 +43,17 @@ function segDist2(x: number, y: number, ax: number, ay: number, bx: number, by: 
 
 /**
  * Which edge of a closed outline (vertex `i` to vertex `i+1`, wrapping)
- * `(x, y)` is nearest to, if within `toleranceUm` -- the insertion index a
+ * `(x, y)` is nearest to, if within `toleranceNm` -- the insertion index a
  * new corner there would get (so the new point lands *between* that
  * edge's two existing corners). Null if nothing is close enough, or the
  * point is actually closer to a corner (`findNearestCorner` should be
  * tried first -- a double-click meant to grab a corner should never
  * insert a new one next to it instead).
  */
-export function findNearestEdgeInsertionIndex(outline: ReadonlyArray<readonly [Um, Um]>, x: Um, y: Um, toleranceUm: number): number | null {
+export function findNearestEdgeInsertionIndex(outline: ReadonlyArray<readonly [Nm, Nm]>, x: Nm, y: Nm, toleranceNm: number): number | null {
   if (outline.length < 2) return null;
   let best: number | null = null;
-  let bestD2 = toleranceUm * toleranceUm;
+  let bestD2 = toleranceNm * toleranceNm;
   for (let i = 0; i < outline.length; i++) {
     const [ax, ay] = outline[i]!;
     const [bx, by] = outline[(i + 1) % outline.length]!;
@@ -67,23 +67,23 @@ export function findNearestEdgeInsertionIndex(outline: ReadonlyArray<readonly [U
 }
 
 /** `outline` with a new corner `(x, y)` inserted at `index` (0..=length). */
-export function insertCorner(outline: ReadonlyArray<readonly [Um, Um]>, index: number, x: Um, y: Um): [Um, Um][] {
-  const next = outline.slice() as [Um, Um][];
+export function insertCorner(outline: ReadonlyArray<readonly [Nm, Nm]>, index: number, x: Nm, y: Nm): [Nm, Nm][] {
+  const next = outline.slice() as [Nm, Nm][];
   next.splice(index, 0, [x, y]);
   return next;
 }
 
 /** `outline` with corner `index` moved to `(x, y)`. */
-export function moveCorner(outline: ReadonlyArray<readonly [Um, Um]>, index: number, x: Um, y: Um): [Um, Um][] {
-  const next = outline.slice() as [Um, Um][];
+export function moveCorner(outline: ReadonlyArray<readonly [Nm, Nm]>, index: number, x: Nm, y: Nm): [Nm, Nm][] {
+  const next = outline.slice() as [Nm, Nm][];
   next[index] = [x, y];
   return next;
 }
 
 /** `outline` with corner `index` removed, or null if that would leave fewer than 3 points (a zone's own floor, `Cmd::SetZoneOutline`'s validation). */
-export function removeCorner(outline: ReadonlyArray<readonly [Um, Um]>, index: number): [Um, Um][] | null {
+export function removeCorner(outline: ReadonlyArray<readonly [Nm, Nm]>, index: number): [Nm, Nm][] | null {
   if (outline.length <= 3) return null;
-  const next = outline.slice() as [Um, Um][];
+  const next = outline.slice() as [Nm, Nm][];
   next.splice(index, 1);
   return next;
 }

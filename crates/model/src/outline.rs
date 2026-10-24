@@ -15,18 +15,18 @@
 //! The chaining itself, `ConvertOutlineToPolygon`, is `eda_drc::outline`.
 
 use crate::bezier;
-use crate::ir::{Design, DrawingsSection, Point, Shape, Um};
+use crate::ir::{Design, DrawingsSection, Point, Shape, Nm};
 
 /// KiCad's `Edge_Cuts` layer.
 pub const EDGE_CUTS: &str = "Edge.Cuts";
 
 /// `DEFAULT_CHAINING_EPSILON_MM` (`pcbnew/board.h`): 0.01 mm, the largest gap between one item's end and the next one's start
 /// that `ConvertOutlineToPolygon` still chains (`BOARD::GetOutlinesChainingEpsilon`).
-pub const CHAINING_EPSILON_UM: Um = 10;
+pub const CHAINING_EPSILON_NM: Nm = 10_000;
 
 /// `BOARD_DESIGN_SETTINGS::m_MaxError`, which is `ARC_HIGH_DEF` (0.005 mm) for a board that does not set it: the largest
 /// distance between a curve and the polygon that stands for it.
-pub const MAX_ERROR_UM: Um = 5;
+pub const MAX_ERROR_NM: Nm = 5_000;
 
 /// The id the segments of the polygon `placement.outline` carry as Edge.Cuts items: the one the writer maps their uuids to, so a
 /// kicad-cli report that names an outline segment is pointed back at the board outline.
@@ -99,8 +99,8 @@ fn point_segment_distance(p: Point, a: Point, b: Point) -> f64 {
 /// `error_max`, never fewer than two and never coarser than eight to a full circle.
 pub fn arc_to_segment_count(radius: f64, error_max: f64, angle: f64) -> i64 {
     // KiCad clamps both to one internal unit (a nanometre) before dividing.
-    let radius = radius.max(0.001);
-    let error_max = error_max.max(0.001);
+    let radius = radius.max(1.0);
+    let error_max = error_max.max(1.0);
     let rel_error = error_max / radius;
     let mut arc_increment = (1.0 - rel_error).acos().to_degrees() * 2.0;
     // `MIN_SEGCOUNT_FOR_CIRCLE`: at least eight segments round a whole circle, however small.
@@ -139,7 +139,7 @@ impl Arc {
 
     /// `SHAPE_ARC( aCenter, aStart, ANGLE_360, 0 )` for the circle `ConvertOutlineToPolygon` builds from a `CIRCLE`: it starts at
     /// the centre's right (`start.x += radius`), goes round through the left and ends where it started.
-    pub fn full_circle(center: Point, radius: Um) -> Arc {
+    pub fn full_circle(center: Point, radius: Nm) -> Arc {
         let start = Point { x: center.x + radius, y: center.y };
         let mid = Point { x: center.x - radius, y: center.y };
         Arc::through(start, mid, start)
@@ -193,7 +193,7 @@ impl Arc {
     pub fn polyline(&self, max_error: f64) -> Vec<Point> {
         let Some(c) = self.center else { return vec![self.start, self.end] };
         let r = self.radius;
-        let half_max_error = (max_error / 2.0).max(0.001);
+        let half_max_error = (max_error / 2.0).max(1.0);
         let ca = self.central_angle();
         let n;
         let effective_error;
@@ -216,7 +216,7 @@ impl Arc {
         let mut i = 1;
         while i < n2 {
             let a = sa + ca * i as f64 / n2 as f64;
-            pts.push(Point { x: (c.0 + r * a.cos()).round() as Um, y: (c.1 + r * a.sin()).round() as Um });
+            pts.push(Point { x: (c.0 + r * a.cos()).round() as Nm, y: (c.1 + r * a.sin()).round() as Nm });
             i += 2;
         }
         pts.push(self.end);
@@ -252,8 +252,8 @@ pub struct Chain {
 }
 
 /// The radius `PCB_SHAPE::GetRadius` gives a circle: the distance from its centre to the point on its circumference, rounded.
-pub fn circle_radius(center: Point, rim: Point) -> Um {
-    ((rim.x - center.x) as f64).hypot((rim.y - center.y) as f64).round() as Um
+pub fn circle_radius(center: Point, rim: Point) -> Nm {
+    ((rim.x - center.x) as f64).hypot((rim.y - center.y) as f64).round() as Nm
 }
 
 /// The closed contour `processClosedShape` makes of a circle: `SHAPE_ARC( center, start, ANGLE_360 )` polygonized at `max_error`,
@@ -281,7 +281,7 @@ pub fn shape_chains(shape: &Shape, max_error: f64) -> Vec<Chain> {
         Shape::Rect { start, end, .. } => vec![Chain { pts: rect_corners(*start, *end).to_vec(), closed: true }],
         Shape::Circle { center, end, .. } => vec![Chain { pts: circle_contour(*center, *end, max_error), closed: true }],
         Shape::Polygon { pts, .. } => vec![Chain { pts: pts.clone(), closed: true }],
-        Shape::Bezier { start, c1, c2, end, .. } => vec![Chain { pts: bezier::bezier_polyline(*start, *c1, *c2, *end, max_error.round() as Um), closed: false }],
+        Shape::Bezier { start, c1, c2, end, .. } => vec![Chain { pts: bezier::bezier_polyline(*start, *c1, *c2, *end, max_error.round() as Nm), closed: false }],
     }
 }
 
@@ -314,19 +314,19 @@ mod tests {
 
     fn quarter() -> Arc {
         // A quarter circle of radius 10 mm round the origin, counter-clockwise from (10 mm, 0) to (0, 10 mm).
-        Arc::through(p(10_000, 0), p(7_071, 7_071), p(0, 10_000))
+        Arc::through(p(10_000_000, 0), p(7_071_068, 7_071_068), p(0, 10_000_000))
     }
 
     #[test]
     fn the_centre_and_sweep_of_an_arc_come_from_its_three_points() {
         let a = quarter();
         let c = a.center().expect("a centre");
-        assert!((c.0).abs() < 0.5 && (c.1).abs() < 0.5, "centre {c:?}");
-        assert!((a.radius() - 10_000.0).abs() < 1.0);
+        assert!((c.0).abs() < 1.0 && (c.1).abs() < 1.0, "centre {c:?}");
+        assert!((a.radius() - 10_000_000.0).abs() < 1.0);
         assert!(a.is_ccw());
         assert!((a.central_angle() - std::f64::consts::FRAC_PI_2).abs() < 1e-3);
         // The same ends with the middle on the other side go the long way round, clockwise.
-        let long = Arc::through(p(10_000, 0), p(-7_071, -7_071), p(0, 10_000));
+        let long = Arc::through(p(10_000_000, 0), p(-7_071_068, -7_071_068), p(0, 10_000_000));
         assert!(!long.is_ccw());
         assert!((long.central_angle() + 1.5 * std::f64::consts::PI).abs() < 1e-3, "{}", long.central_angle());
     }
@@ -334,55 +334,59 @@ mod tests {
     #[test]
     fn a_quarter_arc_polygonizes_at_kicads_segment_count_and_error() {
         // GetArcToSegmentCount( 10 mm, 5 um, 90 deg ) is 25 (acos( 1 - 5e-4 ) * 2 = 3.62 deg), so 25 mid-slice points and both ends.
-        let pts = quarter().polyline(5.0);
+        let pts = quarter().polyline(5_000.0);
         assert_eq!(pts.len(), 27, "{pts:?}");
-        assert_eq!((pts[0], *pts.last().expect("a last point")), (p(10_000, 0), p(0, 10_000)), "the ends are the arc's own");
-        // Every vertex is within the error band of the true circle: the effective error of 25 slices is about 4.9 um, split either side.
+        assert_eq!((pts[0], *pts.last().expect("a last point")), (p(10_000_000, 0), p(0, 10_000_000)), "the ends are the arc's own");
+        // Every vertex is out by half the effective error of the 25 slices (`CircleToEndSegmentDeltaRadius( r, seg360 )`, about 5 um: `seg360` is 99 or
+        // 100 as the arc's angle, from its three nanometre points, comes out a hair over or under 90 degrees), to the nanometre it is rounded to.
+        let seg360 = (25.0 * 360.0 / quarter().central_angle().to_degrees().abs()) as i64;
+        let half = circle_to_end_segment_delta_radius(quarter().radius(), seg360) / 2.0;
         for q in &pts[1..pts.len() - 1] {
-            let r = (q.x as f64).hypot(q.y as f64);
-            assert!((r - 10_000.0 - 2.46).abs() < 0.8, "{q:?} is at {r}");
+            let c = quarter().center().expect("a centre");
+            let r = (q.x as f64 - c.0).hypot(q.y as f64 - c.1);
+            assert!((r - quarter().radius() - half).abs() < 1.0, "{q:?} is at {r}");
         }
         // And every chord stays within `max_error` of it.
         for w in pts.windows(2) {
             let mid = ((w[0].x + w[1].x) as f64 / 2.0, (w[0].y + w[1].y) as f64 / 2.0);
-            let off = (mid.0.hypot(mid.1) - 10_000.0).abs();
-            assert!(off <= 5.0 + 0.8, "chord {w:?} is {off} off");
+            let off = (mid.0.hypot(mid.1) - 10_000_000.0).abs();
+            assert!(off <= 5_000.0 + 1.0, "chord {w:?} is {off} off");
         }
     }
 
     #[test]
     fn a_circle_is_a_ring_that_starts_at_its_right() {
         // 2 mm radius: 36 slices at 5 um; the contour is the start point plus one per slice, the repeated end dropped.
-        let ring = circle_contour(p(1_000, 2_000), p(1_000, 4_000), 5.0);
-        assert_eq!(ring[0], p(3_000, 2_000));
-        assert_eq!(ring.len(), arc_to_segment_count(2_000.0, 5.0, std::f64::consts::TAU) as usize + 1);
+        let ring = circle_contour(p(1_000_000, 2_000_000), p(1_000_000, 4_000_000), 5_000.0);
+        assert_eq!(ring[0], p(3_000_000, 2_000_000));
+        assert_eq!(ring.len(), arc_to_segment_count(2_000_000.0, 5_000.0, std::f64::consts::TAU) as usize + 1);
         assert!(ring.windows(2).all(|w| w[0] != w[1]));
         let area: f64 = (0..ring.len()).map(|i| (ring[i].x as f64) * (ring[(i + 1) % ring.len()].y as f64) - (ring[(i + 1) % ring.len()].x as f64) * (ring[i].y as f64)).sum::<f64>() / 2.0;
-        let circle = std::f64::consts::PI * 2_000.0 * 2_000.0;
+        let circle = std::f64::consts::PI * 2_000_000.0 * 2_000_000.0;
         assert!((area.abs() - circle).abs() / circle < 0.005, "area {area} against {circle}");
     }
 
     #[test]
     fn collinear_points_and_tiny_arcs_are_one_segment() {
-        assert_eq!(Arc::through(p(0, 0), p(500, 0), p(1_000, 0)).polyline(5.0), vec![p(0, 0), p(1_000, 0)]);
+        assert_eq!(Arc::through(p(0, 0), p(500_000, 0), p(1_000_000, 0)).polyline(5_000.0), vec![p(0, 0), p(1_000_000, 0)]);
         // A 1 um sagitta is under half the 5 um error.
-        assert_eq!(Arc::through(p(0, 0), p(5_000, 1), p(10_000, 0)).polyline(5.0), vec![p(0, 0), p(10_000, 0)]);
+        assert_eq!(Arc::through(p(0, 0), p(5_000_000, 1_000), p(10_000_000, 0)).polyline(5_000.0), vec![p(0, 0), p(10_000_000, 0)]);
     }
 
     #[test]
     fn the_segment_count_never_goes_below_two_nor_above_eight_per_turn() {
-        assert_eq!(arc_to_segment_count(1.0, 5.0, std::f64::consts::TAU), 8, "a tiny circle is still an octagon");
-        assert_eq!(arc_to_segment_count(100_000.0, 5.0, 0.001), 2);
+        assert_eq!(arc_to_segment_count(1_000.0, 5_000.0, std::f64::consts::TAU), 8, "a tiny circle is still an octagon");
+        assert_eq!(arc_to_segment_count(100_000_000.0, 5_000.0, 0.001), 2);
     }
 
     #[test]
     fn the_items_of_a_plain_polygon_outline_are_its_sides() {
         let d = Design {
-            schema: 1,
+            schema: crate::ir::SCHEMA_VERSION,
             provenance: crate::ir::Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
-            placement: Some(crate::ir::PlacementSection { outline: vec![p(0, 0), p(10_000, 0), p(10_000, 5_000)], footprints: vec![], modules: vec![] }),
+            placement: Some(crate::ir::PlacementSection { outline: vec![p(0, 0), p(10_000_000, 0), p(10_000_000, 5_000_000)], footprints: vec![], modules: vec![] }),
             routing: None,
             drawings: None,
             footprint_library: None,
@@ -392,7 +396,7 @@ mod tests {
         };
         let items = edge_cuts_shapes(&d);
         assert_eq!(items.len(), 3);
-        assert_eq!(items[2].points(), vec![p(10_000, 5_000), p(0, 0)], "the last side closes the polygon");
+        assert_eq!(items[2].points(), vec![p(10_000_000, 5_000_000), p(0, 0)], "the last side closes the polygon");
         assert!(items.iter().all(|s| s.id() == POLYGON_OUTLINE_ID && s.layer() == EDGE_CUTS));
     }
 }

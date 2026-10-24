@@ -16,7 +16,7 @@ import type { ViewTransform } from "../../state/store";
 import { geometryContains, gridGeometry, gridLattice, gridOutline, gridsInPrecedence, isMajor, selectedLayerColor, GRID_EDGE_DARKEN, GRID_SELECTED_BRIGHTEN, type GridGeometry } from "../../kicad-port/gridItem";
 import { DEFAULT_GRID_MIN_SPACING_PX, DEFAULT_GRID_TICK, type GridStyle } from "../../kicad-port/grid";
 import { brighten as brightenRgb, darken, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
-import { hairlineUm } from "./view";
+import { hairlineNm } from "./view";
 import { layerColor } from "./layers";
 
 /** The grid items that are drawn: all of them, while Grids is shown. */
@@ -86,7 +86,7 @@ function drawGridSource(
   const color = highlighted ? brighten(base, GRID_SELECTED_BRIGHTEN) : base;
   const lattice = gridLattice(g, item.tick_interval, view.scale, DEFAULT_GRID_MIN_SPACING_PX, DEFAULT_GRID_TICK, style === "small-cross");
   // `max( 1.0f, m_gridLineWidth ) / m_worldScale`: one pixel, two for a major line.
-  const marker = hairlineUm(view, 1);
+  const marker = hairlineNm(view, 1);
   const double = 2 * marker;
   ctx.save();
   // `drawGridSource` first fills a bounded grid's coverage with the clear colour, hiding the grids drawn before it; the canvas has the board's items under the grids, so the grids
@@ -212,7 +212,7 @@ function drawGridSource(
   }
   // "Outline the coverage, so a grid too sparse to render still reads as an area."
   ctx.strokeStyle = darkened(color, GRID_EDGE_DARKEN);
-  ctx.lineWidth = hairlineUm(view, 1);
+  ctx.lineWidth = hairlineNm(view, 1);
   coveragePath(ctx, g);
   ctx.stroke();
   ctx.restore();
@@ -224,12 +224,12 @@ function drawSelectedGridItem(ctx: CanvasRenderingContext2D, view: ViewTransform
   ctx.save();
   // `m_pcbSettings.GetColor( aGridItem, LAYER_SUBGRIDS )` of a selected item: the Grids colour as `RENDER_SETTINGS::update` brightens it for a selection.
   ctx.strokeStyle = selectedLayerColor(layerColor("LAYER_SUBGRIDS"));
-  ctx.lineWidth = hairlineUm(view, 1);
+  ctx.lineWidth = hairlineNm(view, 1);
   ctx.beginPath();
   pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   ctx.closePath();
   ctx.stroke();
-  const a = hairlineUm(view, 5);
+  const a = hairlineNm(view, 5);
   ctx.strokeStyle = layerColor("anchor");
   ctx.beginPath();
   ctx.moveTo(item.x - a, item.y);

@@ -14,7 +14,7 @@
 //! flattening via `eda_pns::from_ir::build_node`.
 
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Design, FootprintInstance, LabelSide, Millideg, PlacementSection, Point, Provenance, RoutingSection, Side, Um};
+use eda_model::ir::{Design, FootprintInstance, LabelSide, Millideg, PlacementSection, Point, Provenance, RoutingSection, Side, Nm};
 use eda_model::{ConstraintModel, Net as IrNet, Part, Pin, PinKind};
 use eda_pns::item::net_of;
 use eda_pns::line_placer::LinePlacer;
@@ -29,7 +29,7 @@ fn soic8_part(reference: &str) -> Part {
         package: Some("SOIC-8".into()),
         footprint: Some("SOIC-8".into()),
         pins: (1..=8).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         symbol: None,
         datasheet: None,
         edge: None,
@@ -45,14 +45,14 @@ fn r0603_part(reference: &str) -> Part {
         package: Some("0603".into()),
         footprint: Some("0603".into()),
         pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-        body_um: None,
+        body_nm: None,
         symbol: None,
         datasheet: None,
         edge: None,
     }
 }
 
-fn fp(id: &str, x: Um, y: Um, rot: Millideg) -> FootprintInstance {
+fn fp(id: &str, x: Nm, y: Nm, rot: Millideg) -> FootprintInstance {
     FootprintInstance { id: id.into(), at: Point { x, y }, rot, side: Side::Top, label: LabelSide::Above }
 }
 
@@ -67,13 +67,13 @@ fn obstacle_course() -> (Design, ConstraintModel) {
     };
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
         placement: Some(PlacementSection {
             outline: vec![],
-            footprints: vec![fp("U1", 0, 0, 0), fp("U2", 10_000, 0, 180_000), fp("R1", 3_000, 0, 90_000), fp("R2", 5_000, 0, 90_000), fp("R3", 7_000, 0, 90_000)],
+            footprints: vec![fp("U1", 0, 0, 0), fp("U2", 10_000_000, 0, 180_000_000), fp("R1", 3_000_000, 0, 90_000_000), fp("R2", 5_000_000, 0, 90_000_000), fp("R3", 7_000_000, 0, 90_000_000)],
             modules: vec![],
         }),
         routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),

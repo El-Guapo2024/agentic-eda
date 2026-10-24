@@ -13,7 +13,7 @@ function sheet(extra: Record<string, unknown> = {}): Schematic {
   const r = {
     id: "R1",
     lib_id: "Dev:R",
-    at: [50_000, 50_000],
+    at: [50_000_000, 50_000_000],
     rot: 0,
     mirror: null,
     unit: 1,
@@ -64,8 +64,8 @@ test("every visible pin of a placed symbol is an item, where the symbol puts it,
   assert.deepEqual(items.map((p) => p.id), ["pin:R1:1", "pin:R1:2"], "pin 3 is hidden");
   const p1 = pinById(sheet(), "pin:R1:1")!;
   // the library's y runs up: pin 1 is 3.81 mm above the origin
-  assert.deepEqual(p1.tip, [50_000, 46_190]);
-  assert.deepEqual(p1.root, [50_000, 48_730]);
+  assert.deepEqual(p1.tip, [50_000_000, 46_190_000]);
+  assert.deepEqual(p1.root, [50_000_000, 48_730_000]);
   assert.equal(p1.net, "A");
   assert.equal(pinById(sheet(), "pin:R1:9"), null);
   assert.equal(pinsOf(sheet(), "R1").length, 2);
@@ -76,45 +76,45 @@ test("the places Swap Pins traded move the pins and keep their numbers and nets"
   const swapped = sheet({ pin_swaps: { "1": "2", "2": "1" } });
   const p1 = pinById(swapped, "pin:R1:1")!;
   const p2 = pinById(swapped, "pin:R1:2")!;
-  assert.deepEqual(p1.tip, [50_000, 53_810], "pin 1 is where pin 2 was");
-  assert.deepEqual(p2.tip, [50_000, 46_190]);
+  assert.deepEqual(p1.tip, [50_000_000, 53_810_000], "pin 1 is where pin 2 was");
+  assert.deepEqual(p2.tip, [50_000_000, 46_190_000]);
   assert.equal(p1.net, "A", "the net is the sheet's to say");
   // the direction came along: pin 1 now points up from below the body
-  assert.deepEqual(p1.root, [50_000, 51_270]);
+  assert.deepEqual(p1.root, [50_000_000, 51_270_000]);
 });
 
 test("a hit is the pin's line, its name or its number, with at least a quarter of the pin symbol size to spare", () => {
   const p1 = pinById(sheet(), "pin:R1:1")!;
   const box = pinBox(p1, measure);
-  assert.ok(box.minY <= 46_190 && box.maxY >= 48_730, "the box holds the line");
+  assert.ok(box.minY <= 46_190_000 && box.maxY >= 48_730_000, "the box holds the line");
   // on the line, in the middle
-  assert.ok(hitPin(p1, [50_000, 47_460], 0, measure));
+  assert.ok(hitPin(p1, [50_000_000, 47_460_000], 0, measure));
   // a little beside it: 100 um is inside the floor (158.75 um), 400 um is not
-  assert.ok(hitPin(p1, [50_100, 47_460], 0, measure));
-  assert.ok(!hitPin(p1, [50_000 + 3_000, 47_460], 0, measure));
-  assert.ok(hitPin(p1, [50_000 + 3_000, 47_460], 2_000, measure), "a larger accuracy reaches it");
+  assert.ok(hitPin(p1, [50_100_000, 47_460_000], 0, measure));
+  assert.ok(!hitPin(p1, [50_000_000 + 3_000_000, 47_460_000], 0, measure));
+  assert.ok(hitPin(p1, [50_000_000 + 3_000_000, 47_460_000], 2_000_000, measure), "a larger accuracy reaches it");
   // the number is written beside the line (the name is over it, the symbol's names are not inside the body): a point on it is a hit too
-  assert.ok(hitPin(p1, [50_990, 47_460], 0, measure));
-  assert.equal(pinDistance(p1, [50_000, 47_460], measure), 0);
-  assert.ok(pinDistance(p1, [60_000, 47_460], measure) > 8_000);
+  assert.ok(hitPin(p1, [50_990_000, 47_460_000], 0, measure));
+  assert.equal(pinDistance(p1, [50_000_000, 47_460_000], measure), 0);
+  assert.ok(pinDistance(p1, [60_000_000, 47_460_000], measure) > 8_000_000);
 });
 
 test("an exact hit on a pin wins; a near one is picked only when asked", () => {
   const sch = sheet();
-  assert.equal(pickPin(sch, [50_000, 47_460], 300, measure, true)?.id, "pin:R1:1");
+  assert.equal(pickPin(sch, [50_000_000, 47_460_000], 300_000, measure, true)?.id, "pin:R1:1");
   // 3 mm from the line, no text there: not exact
-  assert.equal(pickPin(sch, [50_000 + 3_000, 47_460], 300, measure, true), null);
-  assert.equal(pickPin(sch, [50_000, 49_300], 1_200, measure, false)?.id, "pin:R1:1", "within a 1.2 mm pick radius of the end of the line");
-  assert.equal(pickPin(sch, [90_000, 90_000], 1_200, measure, false), null);
+  assert.equal(pickPin(sch, [50_000_000 + 3_000_000, 47_460_000], 300_000, measure, true), null);
+  assert.equal(pickPin(sch, [50_000_000, 49_300_000], 1_200_000, measure, false)?.id, "pin:R1:1", "within a 1.2 mm pick radius of the end of the line");
+  assert.equal(pickPin(sch, [90_000, 90_000], 1_200_000, measure, false), null);
   // the selection filter keeps a pin out
-  assert.equal(pickPin(sch, [50_000, 47_460], 300, measure, true, (id) => id !== "pin:R1:1"), null);
+  assert.equal(pickPin(sch, [50_000_000, 47_460_000], 300_000, measure, true, (id) => id !== "pin:R1:1"), null);
 });
 
 test("a box takes the pins whose boxes it touches (crossing) or holds (window)", () => {
   const sch = sheet();
-  assert.deepEqual(boxPins(sch, { minX: 49_000, minY: 46_000, maxX: 51_000, maxY: 49_000 }, true, measure), ["pin:R1:1"]);
-  assert.deepEqual(boxPins(sch, { minX: 49_900, minY: 47_000, maxX: 50_100, maxY: 47_500 }, false, measure), [], "a window that holds none of the pin's box");
-  assert.deepEqual(boxPins(sch, { minX: 40_000, minY: 40_000, maxX: 60_000, maxY: 60_000 }, false, measure).sort(), ["pin:R1:1", "pin:R1:2"]);
+  assert.deepEqual(boxPins(sch, { minX: 49_000_000, minY: 46_000_000, maxX: 51_000_000, maxY: 49_000_000 }, true, measure), ["pin:R1:1"]);
+  assert.deepEqual(boxPins(sch, { minX: 49_900_000, minY: 47_000_000, maxX: 50_100_000, maxY: 47_500_000 }, false, measure), [], "a window that holds none of the pin's box");
+  assert.deepEqual(boxPins(sch, { minX: 40_000_000, minY: 40_000_000, maxX: 60_000_000, maxY: 60_000_000 }, false, measure).sort(), ["pin:R1:1", "pin:R1:2"]);
 });
 
 test("a pin is described the way KiCad describes it", () => {

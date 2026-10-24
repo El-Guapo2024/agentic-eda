@@ -33,10 +33,10 @@ export interface PackItem {
 }
 
 /** `SpreadFootprints`' defaults: `aComponentGap = mmToIU( 1 )`, `aGroupGap = mmToIU( 1.5 )` (micrometres here). */
-export const COMPONENT_GAP_UM = 1000;
-export const GROUP_GAP_UM = 1500;
+export const COMPONENT_GAP_NM = 1_000_000;
+export const GROUP_GAP_NM = 1_500_000;
 /** `const int scale = (int) ( 0.01 * pcbIUScale.IU_PER_MM )`: blocks are packed on a 0.01 mm grid. */
-export const PACK_SCALE_UM = 10;
+export const PACK_SCALE_NM = 10_000;
 
 /** `UTIL::GetRefDesPrefix`: everything up to the last character that is neither a digit nor `?`. */
 export function refDesPrefix(ref: string): string {
@@ -189,7 +189,7 @@ export function packRects(rects: readonly { w: number; h: number }[], areaSide: 
 }
 
 /** `FOOTPRINT::GetBoundingBox`: "bbox.Inflate( mmToIU( 0.25 ) ); // Give a min size to the bbox" around the anchor. */
-export const MIN_BBOX_HALF_UM = 250;
+export const MIN_BBOX_HALF_NM = 250_000;
 
 export interface PackPart {
   ref: string;
@@ -208,10 +208,10 @@ export interface PackPart {
  */
 export function footprintBBox(part: PackPart): Box | null {
   if (!part.placed || !part.at) return null;
-  let x0 = part.at[0] - MIN_BBOX_HALF_UM;
-  let y0 = part.at[1] - MIN_BBOX_HALF_UM;
-  let x1 = part.at[0] + MIN_BBOX_HALF_UM;
-  let y1 = part.at[1] + MIN_BBOX_HALF_UM;
+  let x0 = part.at[0] - MIN_BBOX_HALF_NM;
+  let y0 = part.at[1] - MIN_BBOX_HALF_NM;
+  let x1 = part.at[0] + MIN_BBOX_HALF_NM;
+  let y1 = part.at[1] + MIN_BBOX_HALF_NM;
   if (part.courtyard) {
     x0 = Math.min(x0, part.courtyard[0]);
     y0 = Math.min(y0, part.courtyard[1]);
@@ -260,7 +260,7 @@ export interface PackResult {
  * `SpreadFootprints( &footprints, footprintsBbox.Normalize().GetOrigin(), false )`
  * over `items` (placed footprints only -- the caller applies the selection filter).
  */
-export function packFootprints(items: readonly PackItem[], componentGap = COMPONENT_GAP_UM, groupGap = GROUP_GAP_UM): PackResult {
+export function packFootprints(items: readonly PackItem[], componentGap = COMPONENT_GAP_NM, groupGap = GROUP_GAP_NM): PackResult {
   void groupGap; // only the sheet-level packing reads it, and with a single group that packing is the identity
   if (items.length === 0) return { offsets: {}, origin: [0, 0] };
   // `footprintsBbox.Normalize().GetOrigin()`
@@ -283,16 +283,16 @@ export function packFootprints(items: readonly PackItem[], componentGap = COMPON
   const blocks = ordered.map((g) => arrangeBlock(g.items, g.size, componentGap));
 
   // Pack the blocks (0.01 mm grid): `areaSide = sqrt( blocksArea )`.
-  const rects = blocks.map((b) => ({ w: trunc((b.box[2] - b.box[0]) / PACK_SCALE_UM), h: trunc((b.box[3] - b.box[1]) / PACK_SCALE_UM) }));
+  const rects = blocks.map((b) => ({ w: trunc((b.box[2] - b.box[0]) / PACK_SCALE_NM), h: trunc((b.box[3] - b.box[1]) / PACK_SCALE_NM) }));
   const blocksArea = blocks.reduce((s, b) => s + (b.box[2] - b.box[0]) * (b.box[3] - b.box[1]), 0);
-  const areaSide = trunc(Math.sqrt(blocksArea) / PACK_SCALE_UM);
+  const areaSide = trunc(Math.sqrt(blocksArea) / PACK_SCALE_NM);
   const spots = packRects(rects, areaSide);
 
   // Each footprint moves by `target_pos - block_bbox.GetPosition()`; the sheet box is the union of the moved footprint boxes.
   const finalBoxes: { ref: string; box: [number, number, number, number] }[] = [];
   blocks.forEach((b, bi) => {
-    const dx = spots[bi]!.x * PACK_SCALE_UM - b.box[0];
-    const dy = spots[bi]!.y * PACK_SCALE_UM - b.box[1];
+    const dx = spots[bi]!.x * PACK_SCALE_NM - b.box[0];
+    const dy = spots[bi]!.y * PACK_SCALE_NM - b.box[1];
     for (const p of b.items) finalBoxes.push({ ref: p.ref, box: [p.box[0] + dx, p.box[1] + dy, p.box[2] + dx, p.box[3] + dy] });
   });
   const sheetX0 = Math.min(...finalBoxes.map((f) => f.box[0]));

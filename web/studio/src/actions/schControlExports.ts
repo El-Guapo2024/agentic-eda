@@ -44,11 +44,11 @@ const SHEET_PX_PER_MM = 8;
 export function renderSheetImage(ctx: SchControlContext): HTMLCanvasElement | null {
   const sch = ctx.state.schematic;
   if (!sch) return null;
-  const scale = SHEET_PX_PER_MM / 1000;
+  const scale = SHEET_PX_PER_MM / 1e6;
   const page = pageOf(sch.paper);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(page.widthUm * scale);
-  canvas.height = Math.round(page.heightUm * scale);
+  canvas.width = Math.round(page.widthNm * scale);
+  canvas.height = Math.round(page.heightNm * scale);
   const g = canvas.getContext("2d");
   if (!g) return null;
   const view = { x: 0, y: 0, scale };

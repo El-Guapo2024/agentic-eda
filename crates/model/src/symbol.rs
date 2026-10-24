@@ -4,7 +4,7 @@
 //!
 //! Local frame: millimetres, +x right, +y **up**, origin at the symbol's
 //! own electrical origin -- KiCad's own convention for a `.kicad_sym`/
-//! `lib_symbols` entry, not `ir`'s integer-micrometer/+y-down screen
+//! `lib_symbols` entry, not `ir`'s integer-nanometre/+y-down screen
 //! convention. Keeping this module in KiCad's own frame means a symbol
 //! read from a real library, or from our own exported `.kicad_sch`, round
 //! trips without a coordinate transform; only the *placement* of an
@@ -21,7 +21,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Millimetres, floating point -- KiCad's own library-file unit. Distinct
-/// from `ir::Um` (integer micrometers, the sheet/board frame) so the two
+/// from `ir::Nm` (integer nanometres, the sheet/board frame) so the two
 /// are never accidentally mixed without an explicit conversion.
 pub type Mm = f64;
 
@@ -677,7 +677,7 @@ mod tests {
             symbol: symbol.map(String::from),
             datasheet: None,
             pins: (1..=pins).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-            body_um: None,
+            body_nm: None,
             edge: None,
         }
     }

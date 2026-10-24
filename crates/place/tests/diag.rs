@@ -35,7 +35,7 @@ fn place_one() {
     let model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: eda_model::ir::Provenance { engine_version: "diag".into(), intent_hash: "x".into(), seed, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: None,

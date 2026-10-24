@@ -231,7 +231,7 @@ mod tests {
         let part = |r: &str| Part {
             reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0805".into()), footprint: None,
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None, symbol: None, datasheet: None, edge: None,
+            body_nm: None, symbol: None, datasheet: None, edge: None,
         };
         let model = ConstraintModel {
             parts: vec![part("R1"), part("R2")],
@@ -241,14 +241,14 @@ mod tests {
         };
         let design = |second_x: i64| Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: 0, y: 0 }, Point { x: 40_000, y: 0 }, Point { x: 40_000, y: 40_000 }, Point { x: 0, y: 40_000 }],
+                outline: vec![Point { x: 0, y: 0 }, Point { x: 40_000_000, y: 0 }, Point { x: 40_000_000, y: 40_000_000 }, Point { x: 0, y: 40_000_000 }],
                 footprints: vec![
-                    FootprintInstance { id: "R1".into(), at: Point { x: 10_000, y: 20_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "R2".into(), at: Point { x: second_x, y: 20_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: 10_000_000, y: 20_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R2".into(), at: Point { x: second_x, y: 20_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: vec![],
             }),
@@ -256,10 +256,10 @@ mod tests {
             drawings: None,
         };
         let overlap = |checks: &[CheckResult]| checks.iter().filter(|c| c.check == "placement_courtyard_overlap" && c.status == CheckStatus::Fail).count();
-        let stacked = check_placement(&design(10_000), &model);
+        let stacked = check_placement(&design(10_000_000), &model);
         assert_eq!(overlap(&stacked), 1, "{stacked:?}");
         assert_eq!(stacked.iter().find(|c| c.check == "placement_courtyard_overlap").and_then(|c| c.location.as_deref()), Some("R1/R2"), "the report maps back to our own part ids: {stacked:?}");
-        let apart = check_placement(&design(25_000), &model);
+        let apart = check_placement(&design(25_000_000), &model);
         assert_eq!(overlap(&apart), 0, "{apart:?}");
         assert!(apart.iter().any(|c| c.check == "placement_courtyard_overlap" && c.status == CheckStatus::Pass), "{apart:?}");
     }

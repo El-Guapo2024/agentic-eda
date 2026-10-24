@@ -23,7 +23,7 @@ test("every kind of item is counted under its KiCad type, an arc track apart fro
     drawings: drawings({
       shapes: [shape("s1", "segment"), shape("s2", "rect", "F.Cu"), shape("s3", "arc"), shape("s4", "polygon"), shape("s5", "circle"), shape("s6", "bezier")],
       texts: [{ id: "x1", content: "T", x: 0, y: 0, angle: 0, layer: "F.SilkS", size: 1000, stroke_width: 150, justify: "center", mirror: false }],
-      dimensions: [{ id: "d1", layer: "Dwgs.User", start: [0, 0], end: [1000, 0], lines: [], text: "1", text_at: [0, 0], computed_text_angle: 0, text_size_um: 1000, stroke_width: 150, kind: "aligned" }],
+      dimensions: [{ id: "d1", layer: "Dwgs.User", start: [0, 0], end: [1000, 0], lines: [], text: "1", text_at: [0, 0], computed_text_angle: 0, text_size_nm: 1000, stroke_width: 150, kind: "aligned" }],
       groups: [{ id: "g1", name: "", member_ids: ["t1", "t2"] }],
     }),
   });

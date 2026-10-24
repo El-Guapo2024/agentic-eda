@@ -6,7 +6,7 @@
 //! copper against the nets round it are DRC findings that vanished from a re-export that dropped them. There is no editor for them yet: the canvas does not draw them and
 //! no verb places or edits one (GAPS.md, item 24).
 
-use crate::ir::{Millideg, Point, Um};
+use crate::ir::{Millideg, Point, Nm};
 use serde::{Deserialize, Serialize};
 
 /// `BARCODE_T`: the `(type ..)` of a barcode.
@@ -96,7 +96,7 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-fn is_zero(n: &Um) -> bool {
+fn is_zero(n: &Nm) -> bool {
     *n == 0
 }
 
@@ -113,13 +113,16 @@ pub struct Barcode {
     #[serde(default)]
     pub angle: Millideg,
     pub layer: String,
-    /// The size of the symbol, µm (`(size W H)`).
-    pub width_um: Um,
-    pub height_um: Um,
+    /// The size of the symbol, nm (`(size W H)`).
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
+    #[serde(alias = "height_um", deserialize_with = "crate::units::de")]
+    pub height_nm: Nm,
     /// What the barcode encodes.
     pub text: String,
-    /// The height of the text printed with a one-dimensional code, µm (`(text_height H)`).
-    pub text_height_um: Um,
+    /// The height of the text printed with a one-dimensional code, nm (`(text_height H)`).
+    #[serde(alias = "text_height_um", deserialize_with = "crate::units::de")]
+    pub text_height_nm: Nm,
     #[serde(default)]
     pub kind: BarcodeKind,
     /// A QR code's error correction level (`(ecc_level ..)`; the file has none for the other kinds).
@@ -131,11 +134,13 @@ pub struct Barcode {
     /// The barcode is cut out of the copper or silkscreen round it (`(knockout yes)`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub knockout: bool,
-    /// `(margins X Y)`: the quiet zone round the symbol, µm.
+    /// `(margins X Y)`: the quiet zone round the symbol, nm.
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub margin_x_um: Um,
+    #[serde(alias = "margin_x_um", deserialize_with = "crate::units::de")]
+    pub margin_x_nm: Nm,
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub margin_y_um: Um,
+    #[serde(alias = "margin_y_um", deserialize_with = "crate::units::de")]
+    pub margin_y_nm: Nm,
 }
 
 impl Barcode {

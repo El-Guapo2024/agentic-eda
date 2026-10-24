@@ -20,7 +20,7 @@ import { revisionAfterOwnEdit } from "../kicad-port/checkRevision";
 import { canExclude, drcExclusionSpec, drcFixEntry, drcInspectEntry, drcKey, ercFixEntry, ercInspectEntry, ercKey, listedIndexes, menuSeverity, ofCheck, ofRule, selectionAfterRowGone, severitiesAfter, stepListed, violatingRule, type MarkerEntry, type RcMenuContext, type RcMenuEntry, type RcMenuId } from "../kicad-port/rcItems";
 import { fitTransform } from "../kicad-port/view";
 import { drcMarkerObject, objectOn } from "../kicad-port/appearance";
-import { DRC_MARKER_HIT_UM, nearestMarker } from "../kicad-port/markerHit";
+import { DRC_MARKER_HIT_NM, nearestMarker } from "../kicad-port/markerHit";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { getCheckerView, setDrcView, setErcView, type DrcTab } from "../state/checkerView";
 import type { Action as StudioAction, StudioApi, StudioState } from "../state/store";
@@ -119,7 +119,7 @@ const SELECT_THEN_RUN_MS = 80;
 const baseRef = (id: string) => id.split("#")[0]!.split(".")[0]!;
 
 /** A close-up needs some room around a single point: 2 mm either side. */
-const FRAME_PAD_UM = 2_000;
+const FRAME_PAD_NM = 2_000_000;
 
 /** The list of the DRC report a notebook page shows (the Lint and Ignored Tests pages are not lists of markers). */
 export function drcListOf(report: DrcReport | null, tab: DrcTab): DrcViolation[] {
@@ -151,7 +151,7 @@ export function frameDrc(ctx: CheckerCtx, v: Pick<DrcViolation, "items"> | undef
     if (rect && rect.width >= 50 && rect.height >= 50 && v.items.length > 0) {
       const xs = v.items.map((it) => it.pos[0]);
       const ys = v.items.map((it) => it.pos[1]);
-      const bounds = { minX: Math.min(...xs) - FRAME_PAD_UM, minY: Math.min(...ys) - FRAME_PAD_UM, maxX: Math.max(...xs) + FRAME_PAD_UM, maxY: Math.max(...ys) + FRAME_PAD_UM };
+      const bounds = { minX: Math.min(...xs) - FRAME_PAD_NM, minY: Math.min(...ys) - FRAME_PAD_NM, maxX: Math.max(...xs) + FRAME_PAD_NM, maxY: Math.max(...ys) + FRAME_PAD_NM };
       dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height, 60) });
     }
   }
@@ -184,7 +184,7 @@ export function frameErc(ctx: CheckerCtx, v: Pick<ErcViolation, "location"> | un
     const rect = canvasRect();
     if (rect && rect.width >= 50 && rect.height >= 50) {
       const [x, y] = resolved.at;
-      dispatch({ type: "SET_SCHEMATIC_VIEW", view: fitTransform({ minX: x - FRAME_PAD_UM, minY: y - FRAME_PAD_UM, maxX: x + FRAME_PAD_UM, maxY: y + FRAME_PAD_UM }, rect.width, rect.height, 60) });
+      dispatch({ type: "SET_SCHEMATIC_VIEW", view: fitTransform({ minX: x - FRAME_PAD_NM, minY: y - FRAME_PAD_NM, maxX: x + FRAME_PAD_NM, maxY: y + FRAME_PAD_NM }, rect.width, rect.height, 60) });
     }
   }
   if (showSchematic) dispatch({ type: "SET_TAB", tab: "schematic" });
@@ -496,7 +496,7 @@ export function drcMarkerAt(state: Pick<StudioState, "drc" | "layerVisible" | "d
     list.map((v, i) => (i === state.drcSelected || objectOn(state.layerVisible, drcMarkerObject(v)) ? (v.items[0]?.pos ?? null) : null)),
     x,
     y,
-    DRC_MARKER_HIT_UM
+    DRC_MARKER_HIT_NM
   );
 }
 

@@ -270,8 +270,8 @@ pub struct Report {
 pub fn build(
     design: Design,
     model: &ConstraintModel,
-    snap: eda_model::ir::Um,
-    spacing: eda_model::ir::Um,
+    snap: eda_model::ir::Nm,
+    spacing: eda_model::ir::Nm,
     chooser: &mut dyn Chooser,
 ) -> Result<(Design, Report), Vec<CheckResult>> {
     let mut b = Board::new(design, model, snap, spacing);
@@ -491,7 +491,7 @@ fn shrink_to_parts(design: &mut Design, model: &ConstraintModel) {
             Some(u) => (u.0.min(k.0), u.1.min(k.1), u.2.max(k.2), u.3.max(k.3)),
         });
         if eda_model::footprint::is_edge_connector(part) {
-            const FLUSH: i64 = 1_500;
+            const FLUSH: i64 = 1_500_000;
             if k.0 - bb.0 <= FLUSH { edge_held[0] = true }
             if k.1 - bb.1 <= FLUSH { edge_held[1] = true }
             if bb.2 - k.2 <= FLUSH { edge_held[2] = true }
@@ -501,7 +501,7 @@ fn shrink_to_parts(design: &mut Design, model: &ConstraintModel) {
     let Some(u) = used else { return };
 
     // Leave a rim so nothing sits hard against the cut edge.
-    const MARGIN: i64 = 1_000;
+    const MARGIN: i64 = 1_000_000;
     let x0 = if edge_held[0] { bb.0 } else { (u.0 - MARGIN).max(bb.0) };
     let y0 = if edge_held[1] { bb.1 } else { (u.1 - MARGIN).max(bb.1) };
     let x1 = if edge_held[2] { bb.2 } else { (u.2 + MARGIN).min(bb.2) };

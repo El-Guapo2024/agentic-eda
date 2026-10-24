@@ -955,7 +955,7 @@ mod tests {
 
     #[test]
     fn the_parts_models_go_out_with_their_placement_and_kind() {
-        let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None };
+        let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel { parts: vec![part.clone()], ..Default::default() };
         let fp = model.footprint_of(&part).unwrap();
         let v = part_json(&model, &part, &fp).expect("a 0603 has a model");

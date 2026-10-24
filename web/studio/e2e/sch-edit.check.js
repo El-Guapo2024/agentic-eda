@@ -136,7 +136,7 @@
   if (s0.sheets.length < 3) { results.push({ name: "setup", ok: false, notes: ["FAIL: the board needs the three module sheets of examples/mcu_board_30plus.yaml on its root sheet"] }); check.done = true; return "no board"; }
   base = await snapshot();
   // The empty band under the module sheets, on the 50 mil grid.
-  const G = 1270;
+  const G = 1_270_000;
   const X0 = 80 * G, Y0 = 110 * G; // 101.6, 139.7 mm
 
   (async () => {
@@ -292,7 +292,7 @@
       t(mine.length === 2, `two pin_not_connected findings name ${sym.id}: ${JSON.stringify(mine.map((v) => v.hint))}`);
       // Where the definition the sheet holds puts the pins (a library symbol's y points up; the design's own Device:R wins over the library's, library_place.rs).
       const def = (await sch()).lib_symbols?.["Device:R"];
-      const want = (def?.pins ?? []).map((q) => [X0 + Math.round(q.at[0] * 1000), Y0 - Math.round(q.at[1] * 1000)]).sort((a, b) => a[1] - b[1]);
+      const want = (def?.pins ?? []).map((q) => [X0 + Math.round(q.at[0] * 1e6), Y0 - Math.round(q.at[1] * 1e6)]).sort((a, b) => a[1] - b[1]);
       const pos = mine.map((v) => v.items[0].pos).sort((a, b) => a[1] - b[1]);
       t(want.length === 2 && JSON.stringify(pos) === JSON.stringify(want), `at the symbol's pins (${JSON.stringify(pos)}; its definition puts them at ${JSON.stringify(want)})`);
       t(/Pin not connected: Symbol R\d+ Pin [12]/.test(mine[0]?.hint ?? ""), `in KiCad's words (${mine[0]?.hint})`);

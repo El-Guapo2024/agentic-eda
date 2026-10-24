@@ -30,7 +30,7 @@ export function PcbSweepDialogs() {
 
 function UnitEntry({ dlg }: { dlg: UnitEntryDialog }) {
   useEscape();
-  const f = useLengthField(dlg.valueUm);
+  const f = useLengthField(dlg.valueNm);
   const value = f.parse();
   const ok = value !== null && (dlg.allowZero || value !== 0);
   const submit = () => {
@@ -74,14 +74,14 @@ function UnitEntry({ dlg }: { dlg: UnitEntryDialog }) {
 
 function Dogbone({ dlg }: { dlg: DogboneDialog }) {
   useEscape();
-  const f = useLengthField(dlg.radiusUm);
+  const f = useLengthField(dlg.radiusNm);
   const [addSlots, setAddSlots] = useState(dlg.addSlots);
   const radius = f.parse();
   const ok = radius !== null && radius > 0;
   const submit = () => {
     if (!ok || radius === null) return;
     closeSweepDialog();
-    dlg.onOk({ radiusUm: radius, addSlots });
+    dlg.onOk({ radiusNm: radius, addSlots });
   };
   return (
     <div className="dialog-backdrop" onClick={closeSweepDialog}>

@@ -30,15 +30,15 @@ export function StatusBar() {
   // wrong the longer you stay away from it. "–" is honest; a stale
   // number that used to be true isn't.
   const onPcb = state.tab === "pcb";
-  const cursor = onPcb ? state.cursorUm : lib ? lib.cursorUm : null;
+  const cursor = onPcb ? state.cursorNm : lib ? lib.cursorNm : null;
   // Polar coordinates are the board editor's and the Footprint Editor's (`PCB_BASE_FRAME::m_polarCoords`); eeschema has none.
   const polar = state.polar && state.tab !== "symbol" && state.tab !== "schematic";
   // pcb_base_frame.cpp UpdateStatusBar: dx/dy/dist is always relative to
   // m_LocalOrigin (Space to reset it; default (0,0)), NOT the move tool's
-  // own drag anchor (state.moveOriginUm) -- KiCad's move tool never
+  // own drag anchor (state.moveOriginNm) -- KiCad's move tool never
   // touches the local origin, so this is a different number even while a
   // move preview happens to also be active.
-  const origin = onPcb ? state.localOriginUm : null;
+  const origin = onPcb ? state.localOriginNm : null;
   const dx = cursor && origin ? cursor.x - origin.x : null;
   const dy = cursor && origin ? cursor.y - origin.y : null;
   // Schematic has its own independent pan/zoom (SchematicView.tsx's
@@ -67,7 +67,7 @@ export function StatusBar() {
 
   return (
     <div className="status-bar">
-      <span className="field">Z {zoomScale > 0 ? (zoomScale * 25.4).toFixed(2) : "–"}</span>
+      <span className="field">Z {zoomScale > 0 ? (zoomScale * 25_400).toFixed(2) : "–"}</span>
       <span className="field">{cursor ? (polar ? `r ${toPolar(cursor.x, cursor.y, state.units).r}  θ ${toPolar(cursor.x, cursor.y, state.units).theta}` : formatXY(cursor.x, cursor.y, state.units)) : "–"}</span>
       <span className="field">
         {dx !== null && dy !== null
@@ -76,7 +76,7 @@ export function StatusBar() {
             : `dx ${formatLength(dx, state.units)}  dy ${formatLength(dy, state.units)}  dist ${formatLength(Math.hypot(dx, dy), state.units)}`
           : "dx –  dy –  dist –"}
       </span>
-      {(onPcb || lib || state.tab === "schematic") && <span className="field">grid {formatLength(lib ? lib.gridUm : state.tab === "schematic" ? state.schGridUm : state.gridUm, state.units)}</span>}
+      {(onPcb || lib || state.tab === "schematic") && <span className="field">grid {formatLength(lib ? lib.gridNm : state.tab === "schematic" ? state.schGridNm : state.gridNm, state.units)}</span>}
       <label className="toggle" title="Polar coordinates">
         <input type="checkbox" checked={state.polar} onChange={() => dispatch({ type: "TOGGLE_POLAR" })} />
         polar

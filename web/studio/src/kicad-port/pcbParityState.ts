@@ -62,7 +62,7 @@ export interface PcbParityState {
   /** Bumped by `closeOutline` to ask the canvas to finish the zone/polygon being drawn with the points placed so far (the canvas owns the draw). */
   drawFinishRequest: number;
   /** `TOOL_MANAGER::GetMenuCursorPos()`: where the context menu was opened. The pointer is over the menu by the time an entry runs, so a cursor-driven action (Break Track) reads this instead of the live cursor; the next canvas press clears it. */
-  menuCursorUm: { x: number; y: number } | null;
+  menuCursorNm: { x: number; y: number } | null;
   /** `PCB_EDIT_FRAME::m_layerPairSettings` (layer_pairs.cpp): the copper layer pair `V` switches between and its presets. Null = the default (the board's outer copper layers, no presets) until "Set Layer Pair..." changes it. */
   layerPairs: LayerPairSettings | null;
   /** `BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions`: the "Differential Pair Dimensions..." dialog's width and gap for the pairs routed from now on (null = the net class's own). `viaGap*` are kept as the dialog entered them: this port's pair has no via. */
@@ -85,9 +85,9 @@ export interface ZoneConvertPending {
 }
 
 export interface CustomDiffPair {
-  widthUm: number;
-  gapUm: number;
-  viaGapUm: number;
+  widthNm: number;
+  gapNm: number;
+  viaGapNm: number;
   viaGapSameAsTrackGap: boolean;
 }
 
@@ -104,7 +104,7 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   tuneHover: null,
   generatorsManagerOpen: false,
   drawFinishRequest: 0,
-  menuCursorUm: null,
+  menuCursorNm: null,
   layerPairs: null,
   customDiffPair: null,
   customTrackVia: DEFAULT_CUSTOM_TRACK_VIA,
@@ -115,12 +115,12 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
 };
 
 /** `drawing_tool.cpp`: `#define WIDTH_STEP pcbIUScale.mmToIU( 0.1 )`. */
-export const WIDTH_STEP_UM = 100;
+export const WIDTH_STEP_NM = 100_000;
 
 /** `DRAWING_TOOL::DrawSegment`'s `incWidth`/`decWidth`: +/- one step, and the decrement is refused unless "(unsigned) m_stroke.GetWidth() > WIDTH_STEP" (never reaches 0). */
-export function stepStrokeWidth(widthUm: number, dir: 1 | -1): number {
-  if (dir === 1) return widthUm + WIDTH_STEP_UM;
-  return widthUm > WIDTH_STEP_UM ? widthUm - WIDTH_STEP_UM : widthUm;
+export function stepStrokeWidth(widthNm: number, dir: 1 | -1): number {
+  if (dir === 1) return widthNm + WIDTH_STEP_NM;
+  return widthNm > WIDTH_STEP_NM ? widthNm - WIDTH_STEP_NM : widthNm;
 }
 
 /** `PCB_VIEWER_TOOLS::NextLineMode`: DIRECT -> DEG45 -> DEG90 -> DIRECT. */

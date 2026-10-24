@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::board_text::TextExtra;
-use crate::ir::Um;
+use crate::ir::Nm;
 
 fn is_false(b: &bool) -> bool {
     !*b
@@ -132,12 +132,14 @@ pub struct LibraryPadKeep {
     /// `(property pad_prop_bga)` and the others (`PAD::GetProperty`, the Pad Properties' "Fabrication property"): the token after `property`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub property: Option<String>,
-    /// `(solder_mask_margin ..)`, µm (`PAD::GetLocalSolderMaskMargin`).
+    /// `(solder_mask_margin ..)`, nm (`PAD::GetLocalSolderMaskMargin`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub solder_mask_margin: Option<Um>,
-    /// `(solder_paste_margin ..)`, µm.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_mask_margin: Option<Nm>,
+    /// `(solder_paste_margin ..)`, nm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub solder_paste_margin: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_paste_margin: Option<Nm>,
     /// `(solder_paste_margin_ratio ..)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solder_paste_margin_ratio: Option<f64>,

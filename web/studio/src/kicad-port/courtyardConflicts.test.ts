@@ -9,7 +9,7 @@ function board(parts: ReturnType<typeof part>[], zones: unknown[] = []): BoardSt
   return { parts, routing: { tracks: [], vias: [], zones }, drawings: null, groups: [] } as unknown as BoardState;
 }
 
-const move = (refs: string[], dxUm: number, dyUm: number, over: Partial<MovePreview> = {}): MovePreview => ({ refs, dxUm, dyUm, kind: "pcb", ...over });
+const move = (refs: string[], dxNm: number, dyNm: number, over: Partial<MovePreview> = {}): MovePreview => ({ refs, dxNm, dyNm, kind: "pcb", ...over });
 
 test("two courtyards conflict when they overlap, not when they only touch", () => {
   assert.equal(boxesOverlap([0, 0, 10, 10], [5, 5, 15, 15]), true);
@@ -43,9 +43,9 @@ test("a turned footprint conflicts by the box it turns into, about its own ancho
   const wide = part("W", [0, 0, 2000, 400]);
   const neighbour = part("N", [800, 900, 1200, 1100]);
   const b = board([wide, neighbour]);
-  assert.equal(courtyardConflicts(b, { refs: ["W"], dxUm: 0, dyUm: 0, rotateQuarterTurns: 0 }).parts.size, 0);
-  assert.deepEqual([...courtyardConflicts(b, { refs: ["W"], dxUm: 0, dyUm: 0, rotateQuarterTurns: 1 }).parts].sort(), ["N", "W"]);
-  const turned = movedBox(wide, { refs: ["W"], dxUm: 0, dyUm: 0, rotateQuarterTurns: 1 })!;
+  assert.equal(courtyardConflicts(b, { refs: ["W"], dxNm: 0, dyNm: 0, rotateQuarterTurns: 0 }).parts.size, 0);
+  assert.deepEqual([...courtyardConflicts(b, { refs: ["W"], dxNm: 0, dyNm: 0, rotateQuarterTurns: 1 }).parts].sort(), ["N", "W"]);
+  const turned = movedBox(wide, { refs: ["W"], dxNm: 0, dyNm: 0, rotateQuarterTurns: 1 })!;
   assert.deepEqual(turned.map(Math.round), [800, -800, 1200, 1200]);
 });
 
@@ -53,12 +53,12 @@ test("a carry (kind pcb) moves the box through the carry matrix, turn, flip and 
   const p = part("C", [0, 0, 1000, 500]);
   assert.deepEqual(movedBox(p, move(["C"], 300, -200))!.map(Math.round), [300, -200, 1300, 300]);
   // Flipped about x = 0 (the flip pivot), then moved by 100.
-  assert.deepEqual(movedBox(p, move(["C"], 100, 0, { flipped: true, flipPivotUm: [0, 0] }))!.map(Math.round), [-900, 0, 100, 500]);
+  assert.deepEqual(movedBox(p, move(["C"], 100, 0, { flipped: true, flipPivotNm: [0, 0] }))!.map(Math.round), [-900, 0, 100, 500]);
 });
 
 test("Pack and Move's per-footprint shift is added for the footprint-only moves", () => {
   const p = part("P", [0, 0, 1000, 1000]);
-  assert.deepEqual(movedBox(p, { refs: ["P"], dxUm: 10, dyUm: 20, perRefOffsetUm: { P: [5, 5] } })!.map(Math.round), [15, 25, 1015, 1025]);
+  assert.deepEqual(movedBox(p, { refs: ["P"], dxNm: 10, dyNm: 20, perRefOffsetNm: { P: [5, 5] } })!.map(Math.round), [15, 25, 1015, 1025]);
 });
 
 test("a rule area that keeps footprints out conflicts with a footprint carried into it, and only then", () => {

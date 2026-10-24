@@ -10,8 +10,8 @@
 // kicad-port/arrayAxis.ts (`ARRAY_AXIS`) and crates/ops/src/array_numbering.rs, `fp_array.rs`.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { ArrayGeometry, Cmd, LibraryPad, PadNumbering, Um } from "../api/types";
-import { umTo, type LengthUnit } from "../state/units";
+import type { ArrayGeometry, Cmd, LibraryPad, PadNumbering, Nm } from "../api/types";
+import { nmTo, type LengthUnit } from "../state/units";
 import { axisOf, providedNumbers, resolveNumbering, type AxisSpec, type NumberedArray, type NumberingType } from "./arrayAxis";
 import { parseValue } from "./propertyGrid";
 
@@ -59,10 +59,10 @@ export interface ArrayOptions {
   tab: ArrayTab;
   nx: number;
   ny: number;
-  dx: Um;
-  dy: Um;
-  offsetX: Um;
-  offsetY: Um;
+  dx: Nm;
+  dy: Nm;
+  offsetX: Nm;
+  offsetY: Nm;
   stagger: number;
   /** `m_staggerRows`; false is "Columns". */
   staggerRows: boolean;
@@ -72,8 +72,8 @@ export interface ArrayOptions {
   verticalFirst: boolean;
   /** `m_checkBoxGridReverseNumbering`: every other row runs the other way. Footprint editor only, like the axis above. */
   reverseAlternate: boolean;
-  centerX: Um;
-  centerY: Um;
+  centerX: Nm;
+  centerY: Nm;
   count: number;
   angleDeg: number;
   /** `m_checkBoxFullCircle`: the angle is 360 / count. */
@@ -97,8 +97,8 @@ export const DEFAULT_ARRAY_OPTIONS: ArrayOptions = {
   tab: "grid",
   nx: 5,
   ny: 5,
-  dx: 2540,
-  dy: 2540,
+  dx: 2_540_000,
+  dy: 2_540_000,
   offsetX: 0,
   offsetY: 0,
   stagger: 1,
@@ -175,7 +175,7 @@ const trimmed = (value: number, decimals: number): string => String(Number(value
 
 /** A length as an entry shows it: the number in the display units, without trailing noise. */
 export function lengthEntry(um: number, units: LengthUnit): string {
-  return trimmed(umTo(um, units), units === "mm" ? 4 : units === "mil" ? 2 : 5);
+  return trimmed(nmTo(um, units), units === "mm" ? 4 : units === "mil" ? 2 : 5);
 }
 
 /** `RestoreConfigToControls`: the options as the entries show them. With "Full circle" on the angle entry shows the division (`calculateCircularArrayProperties`). */

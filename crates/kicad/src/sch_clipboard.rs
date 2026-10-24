@@ -14,9 +14,9 @@
 //! fields of a copied symbol are put beside it and marked `(fields_autoplaced yes)`, so KiCad lays them out when the pasted symbol is moved.
 
 use crate::sexpr;
-use crate::{duid_plain, fmt_mm_f, mm, note_item_uuid, sexpr_str};
+use crate::{duid_plain, fmt_mm_f, sch_mm, note_item_uuid, sexpr_str};
 use eda_model::ir::{Design, LabelKind, LibrarySymbol, Point, SchematicSection, SymbolInstance};
-use eda_model::sch_clipboard::{place_offset_mm, place_offset_um, SchFragment};
+use eda_model::sch_clipboard::{place_offset_mm, place_offset_nm, SchFragment};
 use eda_model::symbol::LibSymbol;
 use eda_model::{is_synthetic_lib_id, CheckResult, ConstraintModel};
 use std::collections::BTreeMap;
@@ -303,7 +303,7 @@ fn copied_symbol<'a>(input: &CopyInput<'_>, sym: &'a SymbolInstance) -> Option<C
             } else {
                 let drawn = if style > 1 { engine.in_style(style).into_owned() } else { engine.clone() };
                 let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, sym.unit);
-                let (dx, dy) = place_offset_um(sym.rot as f64 / 1000.0, sym.mirrored, sym.mirror_y, (-x0, -y1));
+                let (dx, dy) = place_offset_nm(sym.rot as f64 / 1000.0, sym.mirrored, sym.mirror_y, (-x0, -y1));
                 Point { x: sym.at.x + dx, y: sym.at.y + dy }
             };
             Some(CopiedSymbol { sym, lib_id, origin, engine, style })
@@ -330,7 +330,7 @@ fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
 fn sheet_box_mm(c: &CopiedSymbol<'_>) -> (f64, f64, f64, f64) {
     let (x0, y0, x1, y1) = eda_engine::geometry::real_symbol_bbox(&c.drawn(), c.sym.unit);
     let angle = c.sym.rot as f64 / 1000.0;
-    let (ox, oy) = (c.origin.x as f64 / 1000.0, c.origin.y as f64 / 1000.0);
+    let (ox, oy) = (c.origin.x as f64 / 1e6, c.origin.y as f64 / 1e6);
     let pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|p| {
         let (dx, dy) = place_offset_mm(angle, c.sym.mirrored, c.sym.mirror_y, p);
         (ox + dx, oy + dy)
@@ -345,7 +345,7 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, l
     let sym = c.sym;
     let part = input.model.part(&sym.id);
     let yes = |b: bool| if b { "yes" } else { "no" };
-    let (ox, oy) = (c.origin.x as f64 / 1000.0, c.origin.y as f64 / 1000.0);
+    let (ox, oy) = (c.origin.x as f64 / 1e6, c.origin.y as f64 / 1e6);
     let _ = writeln!(out, "\t(symbol");
     // a symbol whose pins Swap Pins moved names its own copy of the library symbol (`SCH_SCREEN::Append`)
     if let Some(name) = lib_name {
@@ -411,7 +411,7 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let angle = p.rot as f64 / 1000.0;
     let pin_local = engine.pins.first().map(|pin| (pin.at.x, pin.at.y)).unwrap_or((0.0, 0.0));
     let (dx, dy) = place_offset_mm(angle, false, false, pin_local);
-    let (ox, oy) = (p.at.x as f64 / 1000.0 - dx, p.at.y as f64 / 1000.0 - dy);
+    let (ox, oy) = (p.at.x as f64 / 1e6 - dx, p.at.y as f64 / 1e6 - dy);
     let _ = writeln!(out, "\t(symbol");
     let _ = writeln!(out, "\t\t(lib_id {})", sexpr_str(&p.lib_id));
     let _ = writeln!(out, "\t\t(at {} {} {})", fmt_mm_f(ox), fmt_mm_f(oy), fmt_mm_f(angle));
@@ -574,13 +574,13 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         for (j, pair) in w.pts.windows(2).enumerate() {
             let uuid = duid_plain(&format!("clipboard:{tag}:{}:{j}:{},{}:{},{}", w.id, pair[0].x, pair[0].y, pair[1].x, pair[1].y));
             note_item_uuid(&w.id, &uuid);
-            let _ = writeln!(out, "\t({tag}\n\t\t(pts (xy {} {}) (xy {} {}))\n\t\t(stroke (width 0) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", mm(pair[0].x), mm(pair[0].y), mm(pair[1].x), mm(pair[1].y));
+            let _ = writeln!(out, "\t({tag}\n\t\t(pts (xy {} {}) (xy {} {}))\n\t\t(stroke (width 0) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", sch_mm(pair[0].x), sch_mm(pair[0].y), sch_mm(pair[1].x), sch_mm(pair[1].y));
         }
     }
     for b in &bus_entries {
         let uuid = duid_plain(&format!("clipboard:bus_entry:{}:{}", b.at.x, b.at.y));
         note_item_uuid(&b.id, &uuid);
-        let _ = writeln!(out, "\t(bus_entry\n\t\t(at {} {})\n\t\t(size {} {})\n\t\t(stroke (width 0) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", mm(b.at.x), mm(b.at.y), mm(b.size.x), mm(b.size.y));
+        let _ = writeln!(out, "\t(bus_entry\n\t\t(at {} {})\n\t\t(size {} {})\n\t\t(stroke (width 0) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", sch_mm(b.at.x), sch_mm(b.at.y), sch_mm(b.size.x), sch_mm(b.size.y));
     }
 
     // Junctions: the selected ones, and the dots the selected wires imply (KiCad has them as items of their own).
@@ -594,21 +594,21 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         for j in junctions.iter().filter(|j| j.at == *at) {
             note_item_uuid(&j.id, &uuid);
         }
-        let _ = writeln!(out, "\t(junction\n\t\t(at {} {})\n\t\t(diameter 0)\n\t\t(color 0 0 0 0)\n\t\t(uuid \"{uuid}\")\n\t)", mm(at.x), mm(at.y));
+        let _ = writeln!(out, "\t(junction\n\t\t(at {} {})\n\t\t(diameter 0)\n\t\t(color 0 0 0 0)\n\t\t(uuid \"{uuid}\")\n\t)", sch_mm(at.x), sch_mm(at.y));
     }
 
     for n in &no_connects {
         let uuid = duid_plain(&format!("clipboard:no_connect:{}:{}", n.at.x, n.at.y));
         note_item_uuid(&n.id, &uuid);
-        let _ = writeln!(out, "\t(no_connect\n\t\t(at {} {})\n\t\t(uuid \"{uuid}\")\n\t)", mm(n.at.x), mm(n.at.y));
+        let _ = writeln!(out, "\t(no_connect\n\t\t(at {} {})\n\t\t(uuid \"{uuid}\")\n\t)", sch_mm(n.at.x), sch_mm(n.at.y));
     }
 
     // Graphic lines on the notes layer.
     for l in &lines {
-        let pts: String = l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
+        let pts: String = l.pts.iter().map(|p| format!(" (xy {} {})", sch_mm(p.x), sch_mm(p.y))).collect();
         let uuid = duid_plain(&format!("clipboard:line:{pts}"));
         note_item_uuid(&l.id, &uuid);
-        let _ = writeln!(out, "\t(polyline\n\t\t(pts{pts})\n\t\t(stroke (width {}) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", mm(l.width_um));
+        let _ = writeln!(out, "\t(polyline\n\t\t(pts{pts})\n\t\t(stroke (width {}) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", sch_mm(l.width_nm));
     }
 
     // Shapes, text boxes, rule areas, directive labels: written by the same code that writes a file's.
@@ -624,7 +624,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
             LabelKind::Global { shape } => ("global_label", Some(*shape)),
             LabelKind::Hierarchical { shape } => ("hierarchical_label", Some(*shape)),
         };
-        let (x, y) = (mm(l.at.x), mm(l.at.y));
+        let (x, y) = (sch_mm(l.at.x), sch_mm(l.at.y));
         let uuid = duid_plain(&format!("clipboard:label:{}:{}:{}", l.net, l.at.x, l.at.y));
         note_item_uuid(&l.id, &uuid);
         let _ = write!(out, "\t({tag} {}", sexpr_str(&l.net));
@@ -644,12 +644,12 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         let _ = writeln!(out, "\t)");
     }
     for t in &texts {
-        let (x, y) = (mm(t.at.x), mm(t.at.y));
+        let (x, y) = (sch_mm(t.at.x), sch_mm(t.at.y));
         let uuid = duid_plain(&format!("clipboard:text:{}:{}:{}", t.content, t.at.x, t.at.y));
         note_item_uuid(&t.id, &uuid);
         // upright angle and the justification, as the file writes them (`KeepUpright`, `EDA_TEXT::Format`)
         let angle = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90.0 } else { 0.0 };
-        let effects = crate::sch_extras_io::text_effects_str(t.size_um, sch.extras.text_justify_of(&t.id));
+        let effects = crate::sch_extras_io::text_effects_str(t.size_nm, sch.extras.text_justify_of(&t.id));
         let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim no)\n\t\t(at {x} {y} {})\n\t\t{effects}\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), fmt_mm_f(angle));
     }
 
@@ -872,9 +872,9 @@ mod tests {
         let r = &f.section.symbols[0];
         assert_eq!((r.id.as_str(), r.lib_id.as_str(), r.value.as_str(), r.unit), ("R1", "Device:R", "10k", 1));
         assert_eq!(r.footprint, "Resistor_SMD:R_0603_1608Metric");
-        assert_eq!((r.at.x, r.at.y, r.rot), (100_330, 50_800, 90_000), "KiCad's own origin and angle");
+        assert_eq!((r.at.x, r.at.y, r.rot), (100_330_000, 50_800_000, 90_000), "KiCad's own origin and angle");
         assert_eq!(f.section.wires.len(), 1);
-        assert_eq!((f.section.wires[0].pts[0].x, f.section.wires[0].pts[1].x), (100_330, 120_650));
+        assert_eq!((f.section.wires[0].pts[0].x, f.section.wires[0].pts[1].x), (100_330_000, 120_650_000));
         assert_eq!(f.section.junctions.len(), 1);
         assert_eq!(f.section.labels.len(), 1);
         assert_eq!(f.section.labels[0].net, "SDA");
@@ -894,12 +894,12 @@ mod tests {
         let f = parse_clipboard(&text).unwrap();
         let mut polylines: Vec<Vec<(i64, i64)>> = f.section.wires.iter().map(|w| w.pts.iter().map(|p| (p.x, p.y)).collect()).collect();
         polylines.sort();
-        assert_eq!(polylines, vec![vec![(0, 0), (10_000, 0), (10_000, 5_000)], vec![(30_000, 0), (40_000, 0)], vec![(40_000, 0), (40_000, 9_000)]]);
+        assert_eq!(polylines, vec![vec![(0, 0), (10_000_000, 0), (10_000_000, 5_000_000)], vec![(30_000_000, 0), (40_000_000, 0)], vec![(40_000_000, 0), (40_000_000, 9_000_000)]]);
         // Written in the other order the polyline is the same, from whichever end its first written segment starts.
         let backwards = [wire((10.0, 0.0), (10.0, 5.0)), wire((0.0, 0.0), (10.0, 0.0))].concat();
         let f = parse_clipboard(&backwards).unwrap();
         assert_eq!(f.section.wires.len(), 1);
-        assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(0, 0), (10_000, 0), (10_000, 5_000)]);
+        assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(0, 0), (10_000_000, 0), (10_000_000, 5_000_000)]);
     }
 
     /// An image copied in KiCad is `(image ..)` in the fragment, and pastes as an image (it used to be left out with "images are not pasted").
@@ -910,7 +910,7 @@ mod tests {
         let f = parse_clipboard(&text).expect("a fragment with an image parses");
         assert!(f.notes.iter().all(|n| !n.contains("images")), "{:?}", f.notes);
         let images: Vec<_> = f.section.extras.graphics.iter().filter_map(|g| if let eda_model::sch_extras::SchGraphicKind::Image { at, scale_ppm, data } = &g.shape { Some((*at, *scale_ppm, data.clone())) } else { None }).collect();
-        assert_eq!(images, vec![(Point { x: 50_800, y: 38_100 }, 2_000_000, data)]);
+        assert_eq!(images, vec![(Point { x: 50_800_000, y: 38_100_000 }, 2_000_000, data)]);
     }
 
     #[test]

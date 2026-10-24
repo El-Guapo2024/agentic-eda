@@ -14,8 +14,8 @@ import { BARCODE_KINDS, barcodeToCmd, clampEcc, eccChoices, hasErrorCorrection }
 import type { PcbCtx, PcbItem } from "./pcbProperties";
 import { tooSmall } from "./propertyGrid";
 import type { Choice, PropValue, PropertyDef, PropertyManager } from "./propertyManager";
-import { autoPenUm, clampPenUm, textBoxToCmd, TEXT_MAX_SIZE_UM, TEXT_MIN_SIZE_UM, withTextAngle } from "./pcbTextBox";
-import { SCALE_PPM, scaleForHeightUm, scaleForWidthUm } from "./refImage";
+import { autoPenNm, clampPenNm, textBoxToCmd, TEXT_MAX_SIZE_NM, TEXT_MIN_SIZE_NM, withTextAngle } from "./pcbTextBox";
+import { SCALE_PPM, scaleForHeightNm, scaleForWidthNm } from "./refImage";
 
 type PM = PropertyManager<PcbItem, PcbCtx, Cmd>;
 type Add = (def: PropertyDef<PcbItem, PcbCtx, Cmd>, group?: string) => void;
@@ -68,12 +68,12 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
       kind: "int",
       display: "size",
       get: (i) => (name === "Width" ? own(i).w : own(i).h),
-      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
       set: (i, v) => {
         const image = own(i);
         const want = Math.round(num(v));
         if (want <= 0 || want === (name === "Width" ? image.w : image.h)) return [];
-        const ppm = name === "Width" ? scaleForWidthUm(image.px, image.ppi, want) : scaleForHeightUm(image.px, image.ppi, want);
+        const ppm = name === "Width" ? scaleForWidthNm(image.px, image.ppi, want) : scaleForHeightNm(image.px, image.ppi, want);
         return ppm <= 0 || ppm === image.scale_ppm ? [] : imageCmd(image, { scale_ppm: ppm });
       },
     });
@@ -83,7 +83,7 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
 
 /** The cmd that puts point `p` on `layer`, at `at`, at `size`. */
 function pointCmd(p: BoardPoint, patch: { layer?: string; size?: number }): Cmd[] {
-  return [{ op: "pcb_item", verb: "edit_point", id: p.id, layer: patch.layer ?? p.layer, at: { x: p.x, y: p.y }, size_um: patch.size ?? p.size }];
+  return [{ op: "pcb_item", verb: "edit_point", id: p.id, layer: patch.layer ?? p.layer, at: { x: p.x, y: p.y }, size_nm: patch.size ?? p.size }];
 }
 
 /** Register `PCB_POINT` and its properties (`PCB_POINT_DESC`, pcbnew/pcb_point.cpp): the ones of a board item and a Size. The lock is not the point's: the file form has none. */
@@ -106,7 +106,7 @@ function registerPoint(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]):
     kind: "int",
     display: "size",
     get: (i) => own(i).size,
-    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
     set: (i, v) => {
       const size = Math.round(num(v));
       return size <= 0 || size === own(i).size ? [] : pointCmd(own(i), { size });
@@ -144,7 +144,7 @@ function registerBarcode(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]
       kind: "int",
       display: "size",
       get: (i) => get(own(i)),
-      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
       set: (i, v) => {
         const want = Math.round(num(v));
         return want <= 0 || want === get(own(i)) ? [] : barcodeCmd(own(i), { [key]: want } as Partial<BoardBarcode>);
@@ -254,10 +254,10 @@ function registerViaStitch(pm: PM, add: Add): void {
   pm.mask("PCB_VIA_STITCH", "BOARD_ITEM", "Layer");
   const own = (i: PcbItem): BoardViaStitch => i.stitch!;
   const edit = (i: PcbItem, next: BoardViaStitch): Cmd[] => (JSON.stringify(next) === JSON.stringify(own(i)) ? [] : [viaStitchCmd(own(i).id, next)]);
-  const via = (i: PcbItem) => own(i).via ?? { size_um: 0, drill_um: 0, from_layer: "F.Cu", to_layer: "B.Cu" };
-  add({ owner: "PCB_VIA_STITCH", name: "Size", kind: "int", display: "size", get: (i) => via(i).size_um, set: (i, v) => edit(i, { ...own(i), via: { ...via(i), size_um: Math.round(num(v)) } }) });
-  add({ owner: "PCB_VIA_STITCH", name: "Drill", kind: "int", display: "size", get: (i) => via(i).drill_um, set: (i, v) => edit(i, { ...own(i), via: { ...via(i), drill_um: Math.round(num(v)) } }) });
-  add({ owner: "PCB_VIA_STITCH", name: "Pitch", kind: "int", display: "size", get: (i) => own(i).pitch_um ?? 0, set: (i, v) => edit(i, { ...own(i), pitch_um: Math.round(num(v)) }) });
+  const via = (i: PcbItem) => own(i).via ?? { size_nm: 0, drill_nm: 0, from_layer: "F.Cu", to_layer: "B.Cu" };
+  add({ owner: "PCB_VIA_STITCH", name: "Size", kind: "int", display: "size", get: (i) => via(i).size_nm, set: (i, v) => edit(i, { ...own(i), via: { ...via(i), size_nm: Math.round(num(v)) } }) });
+  add({ owner: "PCB_VIA_STITCH", name: "Drill", kind: "int", display: "size", get: (i) => via(i).drill_nm, set: (i, v) => edit(i, { ...own(i), via: { ...via(i), drill_nm: Math.round(num(v)) } }) });
+  add({ owner: "PCB_VIA_STITCH", name: "Pitch", kind: "int", display: "size", get: (i) => own(i).pitch_nm ?? 0, set: (i, v) => edit(i, { ...own(i), pitch_nm: Math.round(num(v)) }) });
   add({
     owner: "PCB_VIA_STITCH",
     name: "Layout",
@@ -310,7 +310,7 @@ function registerDrillMap(pm: PM, add: Add): void {
   const edit = (i: PcbItem, next: BoardDrillMap): Cmd[] => (JSON.stringify(next) === JSON.stringify(own(i)) ? [] : [{ op: "pcb_item", verb: "edit_drill_map", id: own(i).id, map: next }]);
   add({ owner: "PCB_DRILL_MAP", name: "Offset X", kind: "int", display: "size", get: (i) => own(i).offset.x, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, x: Math.round(num(v)) } }) }, GROUP);
   add({ owner: "PCB_DRILL_MAP", name: "Offset Y", kind: "int", display: "size", get: (i) => own(i).offset.y, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, y: Math.round(num(v)) } }) }, GROUP);
-  add({ owner: "PCB_DRILL_MAP", name: "Symbol Size", kind: "int", display: "size", get: (i) => own(i).size_um, set: (i, v) => edit(i, { ...own(i), size_um: Math.max(1, Math.round(num(v))) }) }, GROUP);
+  add({ owner: "PCB_DRILL_MAP", name: "Symbol Size", kind: "int", display: "size", get: (i) => own(i).size_nm, set: (i, v) => edit(i, { ...own(i), size_nm: Math.max(1, Math.round(num(v))) }) }, GROUP);
   const spans = (c: PcbCtx) => c.board.drawings?.drill_spans ?? [];
   add(
     {
@@ -411,8 +411,8 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
         const w = Math.round(num(v));
         if (b.thickness === w && !b.thickness_auto) return [];
         // `ClampTextPenSize`: a pen wider than a sixth of the glyph is clamped
-        const pen = w > 0 ? clampPenUm(w, Math.min(b.size, b.width)) : 0;
-        return boxCmd(b, pen > 0 ? { thickness: pen, thickness_auto: false } : { thickness: autoPenUm(Math.min(b.size, b.width), b.bold), thickness_auto: true });
+        const pen = w > 0 ? clampPenNm(w, Math.min(b.size, b.width)) : 0;
+        return boxCmd(b, pen > 0 ? { thickness: pen, thickness_auto: false } : { thickness: autoPenNm(Math.min(b.size, b.width), b.bold), thickness_auto: true });
       },
     },
     TEXT
@@ -427,7 +427,7 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
           const b = own(i);
           if (b[key] === Boolean(v)) return [];
           // The automatic pen follows the weight (`GetPenSizeForBold`)
-          const pen = key === "bold" && b.thickness_auto ? { thickness: autoPenUm(Math.min(b.size, b.width), Boolean(v)) } : {};
+          const pen = key === "bold" && b.thickness_auto ? { thickness: autoPenNm(Math.min(b.size, b.width), Boolean(v)) } : {};
           return boxCmd(b, { [key]: Boolean(v), ...pen });
         },
       },
@@ -444,14 +444,14 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
         kind: "int",
         display: "size",
         get: (i) => (name === "Width" ? own(i).width : own(i).size),
-        validate: (v, _i, c) => (num(v) < TEXT_MIN_SIZE_UM ? tooSmall(TEXT_MIN_SIZE_UM, "size", c.units) : num(v) > TEXT_MAX_SIZE_UM ? tooSmall(TEXT_MAX_SIZE_UM, "size", c.units) : null),
+        validate: (v, _i, c) => (num(v) < TEXT_MIN_SIZE_NM ? tooSmall(TEXT_MIN_SIZE_NM, "size", c.units) : num(v) > TEXT_MAX_SIZE_NM ? tooSmall(TEXT_MAX_SIZE_NM, "size", c.units) : null),
         set: (i, v) => {
           const b = own(i);
           const s = Math.round(num(v));
           if ((name === "Width" ? b.width : b.size) === s) return [];
           const patch = name === "Width" ? { width: s } : { size: s };
           const size = Math.min(patch.width ?? b.width, patch.size ?? b.size);
-          return boxCmd(b, { ...patch, ...(b.thickness_auto ? { thickness: autoPenUm(size, b.bold) } : {}) });
+          return boxCmd(b, { ...patch, ...(b.thickness_auto ? { thickness: autoPenNm(size, b.bold) } : {}) });
         },
       },
       TEXT

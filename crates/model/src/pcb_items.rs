@@ -6,7 +6,7 @@
 //! One field of `DrawingsSection` holds all of them, `board_items`, for the reason `rules` does: `DrawingsSection` is written out field by field in a good many places
 //! and a new field there is a change at every one. Every collection is additive: an older `design.json` has none and reads as "no such items".
 
-use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Um};
+use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Nm};
 use crate::sch_extras::SchLineStyle;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ fn is_true(b: &bool) -> bool {
 fn is_false(b: &bool) -> bool {
     !*b
 }
-fn is_zero_um(n: &Um) -> bool {
+fn is_zero_nm(n: &Nm) -> bool {
     *n == 0
 }
 fn is_zero_angle(a: &Millideg) -> bool {
@@ -32,14 +32,14 @@ fn is_zero_i64(n: &i64) -> bool {
     *n == 0
 }
 
-/// `EDA_TEXT::GetPenSizeForNormal` / `GetPenSizeForBold` (`common/eda_text.cpp`) for a glyph `width_um` wide: an eighth and a fifth of it.
-pub fn auto_pen_um(width_um: Um, bold: bool) -> Um {
-    (width_um as f64 / if bold { 5.0 } else { 8.0 }).round() as Um
+/// `EDA_TEXT::GetPenSizeForNormal` / `GetPenSizeForBold` (`common/eda_text.cpp`) for a glyph `width_nm` wide: an eighth and a fifth of it.
+pub fn auto_pen_nm(width_nm: Nm, bold: bool) -> Nm {
+    (width_nm as f64 / if bold { 5.0 } else { 8.0 }).round() as Nm
 }
 
 /// `PCB_TEXTBOX::GetLegacyTextMargin`: the margin of a box the file gave none (and a new box starts with), half the border width and three quarters of the text height.
-pub fn legacy_text_margin_um(stroke_width_um: Um, text_height_um: Um) -> Um {
-    (stroke_width_um as f64 / 2.0).round() as Um + (text_height_um as f64 * 0.75).round() as Um
+pub fn legacy_text_margin_nm(stroke_width_nm: Nm, text_height_nm: Nm) -> Nm {
+    (stroke_width_nm as f64 / 2.0).round() as Nm + (text_height_nm as f64 * 0.75).round() as Nm
 }
 
 /// A text box: wrapped text in a rectangle, with a border (`PCB_TEXTBOX`, `(gr_text_box ..)`).
@@ -65,16 +65,21 @@ pub struct TextBox {
     /// The text angle in the file's sense (counter-clockwise on the screen), millidegrees, 0 to 360000.
     #[serde(default, skip_serializing_if = "is_zero_angle")]
     pub angle: Millideg,
-    /// `(margins L T R B)`: the gap between the border and the text, µm.
-    pub margin_left_um: Um,
-    pub margin_top_um: Um,
-    pub margin_right_um: Um,
-    pub margin_bottom_um: Um,
+    /// `(margins L T R B)`: the gap between the border and the text, nm.
+    #[serde(alias = "margin_left_um", deserialize_with = "crate::units::de")]
+    pub margin_left_nm: Nm,
+    #[serde(alias = "margin_top_um", deserialize_with = "crate::units::de")]
+    pub margin_top_nm: Nm,
+    #[serde(alias = "margin_right_um", deserialize_with = "crate::units::de")]
+    pub margin_right_nm: Nm,
+    #[serde(alias = "margin_bottom_um", deserialize_with = "crate::units::de")]
+    pub margin_bottom_nm: Nm,
     /// `(border yes|no)`: the border is drawn.
     #[serde(default = "d_true", skip_serializing_if = "is_true")]
     pub border: bool,
-    /// The border's width, µm (`(stroke (width ..))`).
-    pub stroke_width_um: Um,
+    /// The border's width, nm (`(stroke (width ..))`).
+    #[serde(alias = "stroke_width_um", deserialize_with = "crate::units::de")]
+    pub stroke_width_nm: Nm,
     #[serde(default)]
     pub line_style: LineStyle,
     /// The `r g b a` of a `(stroke .. (color r g b a))`, as the file wrote it; the canvas draws a layer in its own colour.
@@ -83,14 +88,17 @@ pub struct TextBox {
     /// `(knockout yes)`: the box is filled and the text is cut out of it (`PCB_TEXTBOX::TransformTextToPolySet`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub knockout: bool,
-    /// The glyph height, µm (`(size HEIGHT WIDTH)`).
-    pub size_um: Um,
-    /// The glyph width, µm, when it is not the height.
+    /// The glyph height, nm (`(size HEIGHT WIDTH)`).
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
+    /// The glyph width, nm, when it is not the height.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width_um: Option<Um>,
-    /// The pen width, µm; 0 is KiCad's automatic width (`GetPenSizeForNormal`, `GetPenSizeForBold`) and the file has no `(thickness ..)`.
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub thickness_um: Um,
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Option<Nm>,
+    /// The pen width, nm; 0 is KiCad's automatic width (`GetPenSizeForNormal`, `GetPenSizeForBold`) and the file has no `(thickness ..)`.
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "thickness_um", deserialize_with = "crate::units::de")]
+    pub thickness_nm: Nm,
     /// Horizontal and vertical justification of the text in the box (`(justify ..)`): a new box is left and top, one the file says nothing of centred.
     #[serde(default)]
     pub halign: TextJustify,
@@ -114,8 +122,8 @@ pub struct TextBox {
 impl TextBox {
     /// A box on `layer` between two corners, with the looks a text box the Draw Text Box tool makes starts with: the layer's text size and pen
     /// (`DRAWING_TOOL::m_textAttrs`), left and top, the default margins and a border of the layer's line width.
-    pub fn new(layer: &str, start: Point, end: Point, size_um: Um, stroke_width_um: Um) -> TextBox {
-        let margin = legacy_text_margin_um(stroke_width_um, size_um);
+    pub fn new(layer: &str, start: Point, end: Point, size_nm: Nm, stroke_width_nm: Nm) -> TextBox {
+        let margin = legacy_text_margin_nm(stroke_width_nm, size_nm);
         TextBox {
             id: String::new(),
             layer: layer.to_string(),
@@ -124,18 +132,18 @@ impl TextBox {
             end,
             pts: Vec::new(),
             angle: 0,
-            margin_left_um: margin,
-            margin_top_um: margin,
-            margin_right_um: margin,
-            margin_bottom_um: margin,
+            margin_left_nm: margin,
+            margin_top_nm: margin,
+            margin_right_nm: margin,
+            margin_bottom_nm: margin,
             border: true,
-            stroke_width_um,
+            stroke_width_nm,
             line_style: LineStyle::Default,
             stroke_color: None,
             knockout: false,
-            size_um,
-            width_um: None,
-            thickness_um: 0,
+            size_nm,
+            width_nm: None,
+            thickness_nm: 0,
             halign: TextJustify::Left,
             valign: TextVAlign::Top,
             mirror: layer.starts_with("B."),
@@ -151,17 +159,17 @@ impl TextBox {
         format!("{}|{},{}|{},{}|{}|{}", self.text, self.start.x, self.start.y, self.end.x, self.end.y, self.angle, self.layer)
     }
 
-    /// The glyph width, µm (`EDA_TEXT::GetTextWidth`).
-    pub fn text_width_um(&self) -> Um {
-        self.width_um.unwrap_or(self.size_um)
+    /// The glyph width, nm (`EDA_TEXT::GetTextWidth`).
+    pub fn text_width_nm(&self) -> Nm {
+        self.width_nm.unwrap_or(self.size_nm)
     }
 
     /// The pen width the text is drawn with (`EDA_TEXT::GetEffectiveTextPenWidth`): the file's, else the automatic one for the smaller glyph side.
-    pub fn effective_pen_um(&self) -> Um {
-        if self.thickness_um > 0 {
-            self.thickness_um
+    pub fn effective_pen_nm(&self) -> Nm {
+        if self.thickness_nm > 0 {
+            self.thickness_nm
         } else {
-            auto_pen_um(self.text_width_um().min(self.size_um), self.bold)
+            auto_pen_nm(self.text_width_nm().min(self.size_nm), self.bold)
         }
     }
 
@@ -179,10 +187,10 @@ impl TextBox {
         }
     }
 
-    /// The box's extent `[x0, y0, x1, y1]`, µm, border width not included.
-    pub fn bounds(&self) -> [Um; 4] {
+    /// The box's extent `[x0, y0, x1, y1]`, nm, border width not included.
+    pub fn bounds(&self) -> [Nm; 4] {
         let pts = self.points();
-        let (mut x0, mut y0, mut x1, mut y1) = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+        let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
         for p in &pts {
             x0 = x0.min(p.x);
             y0 = y0.min(p.y);
@@ -206,7 +214,7 @@ pub struct RefImage {
     pub id: String,
     /// The layer the image is on; its visibility is the layer's, and the Images object's (`LAYER_DRAW_BITMAPS`).
     pub layer: String,
-    /// The image's centre, µm.
+    /// The image's centre, nm.
     pub at: Point,
     /// `(scale s)` in millionths (1.0 is 1000000); KiCad's `SetImageScale` refuses a scale that is not a positive number.
     #[serde(default = "d_scale", skip_serializing_if = "is_unit_scale")]
@@ -238,23 +246,23 @@ impl RefImage {
         crate::image_info::header_of_base64(&self.data)
     }
 
-    /// The size the image has on the board, µm (`BITMAP_BASE::GetSize`); zero for data that is not an image.
-    pub fn size_um(&self) -> (Um, Um) {
-        self.header().map_or((0, 0), |h| crate::image_info::size_um(&h, self.scale_ppm))
+    /// The size the image has on the board, nm (`BITMAP_BASE::GetSize`); zero for data that is not an image.
+    pub fn size_nm(&self) -> (Nm, Nm) {
+        self.header().map_or((0, 0), |h| crate::image_info::size_nm(&h, self.scale_ppm))
     }
 
     /// The box the image covers, `[x0, y0, x1, y1]` (`REFERENCE_IMAGE::GetBoundingBox`: `BOX2I::ByCenter( m_pos, size )`).
-    pub fn bounds(&self) -> [Um; 4] {
-        let (w, h) = self.size_um();
+    pub fn bounds(&self) -> [Nm; 4] {
+        let (w, h) = self.size_nm();
         [self.at.x - w / 2, self.at.y - h / 2, self.at.x - w / 2 + w, self.at.y - h / 2 + h]
     }
 }
 
 /// `DEFAULT_PT_SIZE_MM` of `pcbnew/pcb_point.cpp`: the size of a point the Place Point tool makes.
-pub const DEFAULT_POINT_SIZE_UM: Um = 1_000;
+pub const DEFAULT_POINT_SIZE_NM: Nm = 1_000_000;
 
-fn d_point_size() -> Um {
-    DEFAULT_POINT_SIZE_UM
+fn d_point_size() -> Nm {
+    DEFAULT_POINT_SIZE_NM
 }
 
 /// A point: a mark on a layer that the grid helper snaps to (`PCB_POINT`, `(point (at x y) (size s) (layer ..) (uuid ..))`). Its only geometry is its position and the size of the mark
@@ -269,26 +277,27 @@ pub struct PcbPoint {
     /// The layer the point is on: its ring is drawn in the layer's colour, and it is shown while the layer is.
     pub layer: String,
     pub at: Point,
-    /// The size of the mark, µm.
+    /// The size of the mark, nm.
     #[serde(default = "d_point_size")]
-    pub size_um: Um,
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
 }
 
 impl PcbPoint {
     /// A point of the default size on `layer`.
     pub fn new(layer: &str, at: Point) -> PcbPoint {
-        PcbPoint { id: String::new(), layer: layer.to_string(), at, size_um: DEFAULT_POINT_SIZE_UM }
+        PcbPoint { id: String::new(), layer: layer.to_string(), at, size_nm: DEFAULT_POINT_SIZE_NM }
     }
 
     /// The seed `assign_missing_ids` hashes.
     pub fn id_seed(&self) -> String {
-        format!("pnt|{},{}|{}|{}", self.at.x, self.at.y, self.layer, self.size_um)
+        format!("pnt|{},{}|{}|{}", self.at.x, self.at.y, self.layer, self.size_nm)
     }
 
     /// `PCB_POINT::GetBoundingBox`: `BOX2I::ByCenter( m_pos, { m_size, m_size } )`, `[x0, y0, x1, y1]`.
-    pub fn bounds(&self) -> [Um; 4] {
-        let (x0, y0) = (self.at.x - self.size_um / 2, self.at.y - self.size_um / 2);
-        [x0, y0, x0 + self.size_um, y0 + self.size_um]
+    pub fn bounds(&self) -> [Nm; 4] {
+        let (x0, y0) = (self.at.x - self.size_nm / 2, self.at.y - self.size_nm / 2);
+        [x0, y0, x0 + self.size_nm, y0 + self.size_nm]
     }
 }
 
@@ -406,7 +415,7 @@ impl BoardItems {
     pub fn assign_missing_ids(&mut self, existing: &mut std::collections::BTreeSet<String>) {
         assign_ids(&mut self.text_boxes, "tbx", existing, |t| &mut t.id, TextBox::id_seed, |t| (t.text.clone(), t.start, t.end));
         assign_ids(&mut self.images, "img", existing, |i| &mut i.id, RefImage::id_seed, |i| (i.layer.clone(), i.at, i.data.len() as i64));
-        assign_ids(&mut self.points, "pnt", existing, |p| &mut p.id, PcbPoint::id_seed, |p| (p.layer.clone(), p.at, p.size_um));
+        assign_ids(&mut self.points, "pnt", existing, |p| &mut p.id, PcbPoint::id_seed, |p| (p.layer.clone(), p.at, p.size_nm));
         assign_ids(&mut self.grid_items, "grd", existing, |g| &mut g.id, crate::grid_item::GridItem::id_seed, |g| (g.at, g.extent, g.spacing));
         assign_ids(&mut self.via_stitches, "vst", existing, |v| &mut v.id, crate::via_stitch::ViaStitch::id_seed, |v| (v.outline.clone(), v.net.clone()));
         assign_ids(&mut self.drill_maps, "dmap", existing, |m| &mut m.id, crate::drill_chart::DrillMap::id_seed, |m| (m.layer.clone(), m.offset));
@@ -532,36 +541,36 @@ mod tests {
     #[test]
     fn a_new_text_box_has_the_margin_of_its_layer_defaults() {
         // 0.12 mm border, 1 mm text: 60 + 750.
-        let b = TextBox::new("F.SilkS", Point { x: 0, y: 0 }, Point { x: 10_000, y: 5_000 }, 1_000, 120);
-        assert_eq!((b.margin_left_um, b.margin_top_um, b.margin_right_um, b.margin_bottom_um), (810, 810, 810, 810));
+        let b = TextBox::new("F.SilkS", Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 5_000_000 }, 1_000_000, 120_000);
+        assert_eq!((b.margin_left_nm, b.margin_top_nm, b.margin_right_nm, b.margin_bottom_nm), (810_000, 810_000, 810_000, 810_000));
         assert_eq!((b.halign, b.valign, b.mirror, b.border), (TextJustify::Left, TextVAlign::Top, false, true));
-        assert!(TextBox::new("B.SilkS", Point::default(), Point::default(), 1_000, 120).mirror, "text on a back layer is mirrored");
+        assert!(TextBox::new("B.SilkS", Point::default(), Point::default(), 1_000_000, 120_000).mirror, "text on a back layer is mirrored");
     }
 
     #[test]
     fn the_pen_is_the_files_or_an_eighth_of_the_smaller_glyph_side() {
-        let mut b = TextBox::new("F.SilkS", Point::default(), Point::default(), 1_000, 120);
-        assert_eq!(b.effective_pen_um(), 125);
+        let mut b = TextBox::new("F.SilkS", Point::default(), Point::default(), 1_000_000, 120_000);
+        assert_eq!(b.effective_pen_nm(), 125_000);
         b.bold = true;
-        assert_eq!(b.effective_pen_um(), 200);
-        b.width_um = Some(800);
-        assert_eq!(b.effective_pen_um(), 160);
-        b.thickness_um = 150;
-        assert_eq!(b.effective_pen_um(), 150);
+        assert_eq!(b.effective_pen_nm(), 200_000);
+        b.width_nm = Some(800_000);
+        assert_eq!(b.effective_pen_nm(), 160_000);
+        b.thickness_nm = 150_000;
+        assert_eq!(b.effective_pen_nm(), 150_000);
     }
 
     #[test]
     fn a_reference_image_covers_its_pixels_at_their_definition_times_the_scale_around_its_centre() {
         let png = crate::image_info::base64_encode(&crate::image_info::solid_png(60, 40, [9, 9, 9], 254));
-        let mut img = RefImage::new("Cmts.User", Point { x: 10_000, y: 20_000 }, &png);
+        let mut img = RefImage::new("Cmts.User", Point { x: 10_000_000, y: 20_000_000 }, &png);
         // 60 x 40 px at 254 ppi: 6 mm x 4 mm
-        assert_eq!(img.size_um(), (6_000, 4_000));
-        assert_eq!(img.bounds(), [7_000, 18_000, 13_000, 22_000]);
+        assert_eq!(img.size_nm(), (6_000_000, 4_000_000));
+        assert_eq!(img.bounds(), [7_000_000, 18_000_000, 13_000_000, 22_000_000]);
         img.scale_ppm = 2_500_000;
-        assert_eq!(img.bounds(), [2_500, 15_000, 17_500, 25_000]);
+        assert_eq!(img.bounds(), [2_500_000, 15_000_000, 17_500_000, 25_000_000]);
         // data that is no image has no size
         img.data = "AAAA".into();
-        assert_eq!(img.size_um(), (0, 0));
+        assert_eq!(img.size_nm(), (0, 0));
         assert!(RefImage::new("F.Cu", Point::default(), "AB\nCD ").data == "ABCD", "white space is taken out of the data");
     }
 
@@ -592,8 +601,8 @@ mod tests {
 
     #[test]
     fn a_point_is_a_mark_of_a_size_on_a_layer_with_no_lock_of_its_own() {
-        let p = PcbPoint::new("F.SilkS", Point { x: 10_000, y: 20_000 });
-        assert_eq!((p.size_um, p.bounds()), (1_000, [9_500, 19_500, 10_500, 20_500]), "the default is 1 mm and the box is centred on the point");
+        let p = PcbPoint::new("F.SilkS", Point { x: 10_000_000, y: 20_000_000 });
+        assert_eq!((p.size_nm, p.bounds()), (1_000_000, [9_500_000, 19_500_000, 10_500_000, 20_500_000]), "the default is 1 mm and the box is centred on the point");
         let mut items = BoardItems::default();
         items.points.push(p.clone());
         items.points.push(p);
@@ -608,14 +617,14 @@ mod tests {
         assert_eq!(back, items);
         // a size left out is the default
         let p: PcbPoint = serde_json::from_str(r#"{"layer": "F.Cu", "at": {"x": 1, "y": 2}}"#).unwrap();
-        assert_eq!(p.size_um, 1_000);
+        assert_eq!(p.size_nm, 1_000_000);
     }
 
     #[test]
     fn items_serialize_to_nothing_when_there_are_none_and_ids_are_deterministic() {
         let mut items = BoardItems::default();
         assert_eq!(serde_json::to_string(&items).unwrap(), "{}");
-        let mut t = TextBox::new("F.SilkS", Point { x: 1, y: 2 }, Point { x: 3, y: 4 }, 1_000, 120);
+        let mut t = TextBox::new("F.SilkS", Point { x: 1000, y: 2000 }, Point { x: 3000, y: 4000 }, 1_000_000, 120_000);
         t.text = "hello".into();
         items.text_boxes.push(t.clone());
         items.text_boxes.push(t);

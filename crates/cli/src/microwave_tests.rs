@@ -22,8 +22,8 @@ fn p(x: i64, y: i64) -> Point {
     Point { x, y }
 }
 
-fn gap(at: Point, size_um: i64) -> Cmd {
-    Cmd::Microwave(MicrowaveCmd::Gap { at, size_um, track_width_um: 250, hand: Hand::default() })
+fn gap(at: Point, size_nm: i64) -> Cmd {
+    Cmd::Microwave(MicrowaveCmd::Gap { at, size_nm, track_width_nm: 250_000, hand: Hand::default() })
 }
 
 fn derived_board(dir: &Path) -> String {
@@ -46,16 +46,16 @@ fn a_gap_is_a_part_of_the_board_with_its_own_pads_and_one_undo_step() {
     let dir = scratch("mw_gap_part");
     setup(&dir);
     let before = serde_json::to_value(load(&dir).unwrap().1).unwrap();
-    step(&dir, gap(p(10_000, 12_000), 500), false, "test").unwrap();
+    step(&dir, gap(p(10_000_000, 12_000_000), 500_000), false, "test").unwrap();
 
     let (_, design, model) = load(&dir).unwrap();
     let part = model.part("REF1").expect("the gap is a part of the model now");
     assert_eq!((part.footprint.as_deref(), part.value.as_deref()), (Some("muwave_gap"), Some("muwave_gap")));
     let fp = model.footprint_of(part).expect("its pads come from its own definition");
-    assert_eq!(fp.pads.iter().map(|p| (p.number.as_str(), p.at, p.size)).collect::<Vec<_>>(), [("1", (-375, 0), (250, 250)), ("2", (375, 0), (250, 250))]);
+    assert_eq!(fp.pads.iter().map(|p| (p.number.as_str(), p.at, p.size)).collect::<Vec<_>>(), [("1", (-375_000, 0), (250_000, 250_000)), ("2", (375_000, 0), (250_000, 250_000))]);
     assert_eq!(part.pins.iter().map(|p| p.number.as_str()).collect::<Vec<_>>(), ["1", "2"], "a pin for each pad");
     let pose = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "REF1").unwrap();
-    assert_eq!((pose.at, pose.rot), (p(10_000, 12_000), 0));
+    assert_eq!((pose.at, pose.rot), (p(10_000_000, 12_000_000), 0));
 
     // one undo step takes the whole tool back, the part, its fields' edit and its facts; redo brings it back
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -70,11 +70,11 @@ fn a_gap_is_a_part_of_the_board_with_its_own_pads_and_one_undo_step() {
 fn gaps_of_different_sizes_keep_their_own_pads_in_the_model() {
     let dir = scratch("mw_two_gaps");
     setup(&dir);
-    step(&dir, gap(p(10_000, 12_000), 500), false, "test").unwrap();
-    step(&dir, gap(p(14_000, 12_000), 900), false, "test").unwrap();
+    step(&dir, gap(p(10_000_000, 12_000_000), 500_000), false, "test").unwrap();
+    step(&dir, gap(p(14_000_000, 12_000_000), 900_000), false, "test").unwrap();
     let (_, _, model) = load(&dir).unwrap();
     let x2 = |r: &str| model.footprint_of(model.part(r).unwrap()).unwrap().pads[1].at.0;
-    assert_eq!((x2("REF1"), x2("REF2")), (375, 575));
+    assert_eq!((x2("REF1"), x2("REF2")), (375_000, 575_000));
     assert_eq!((model.part("REF1").unwrap().footprint.as_deref(), model.part("REF2").unwrap().footprint.as_deref()), (Some("muwave_gap"), Some("muwave_gap_1")));
 }
 
@@ -85,12 +85,12 @@ fn gaps_of_different_sizes_keep_their_own_pads_in_the_model() {
 fn microwave_footprints_are_not_held_to_a_courtyard_of_their_pads_with_strict_on() {
     let dir = scratch("mw_strict");
     setup(&dir);
-    step(&dir, gap(p(10_000, 12_000), 500), true, "test").unwrap();
-    step(&dir, Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_000, 14_500), size_um: 1_000, track_width_um: 250, hand: Hand::default() }), true, "test").expect("a stub 2.5 mm under the gap, its pad reaching up to the gap's");
-    step(&dir, gap(p(13_000, 12_000), 500), true, "test").expect("a gap 3 mm to its side");
-    step(&dir, gap(p(500, 500), 500), true, "test").expect("a gap at the corner of the board");
+    step(&dir, gap(p(10_000_000, 12_000_000), 500_000), true, "test").unwrap();
+    step(&dir, Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_000_000, 14_500_000), size_nm: 1_000_000, track_width_nm: 250_000, hand: Hand::default() }), true, "test").expect("a stub 2.5 mm under the gap, its pad reaching up to the gap's");
+    step(&dir, gap(p(13_000_000, 12_000_000), 500_000), true, "test").expect("a gap 3 mm to its side");
+    step(&dir, gap(p(500_000, 500_000), 500_000), true, "test").expect("a gap at the corner of the board");
     // a pad of the stub overlapping the gap's is not a placement matter: the copper is judged by the routing checks
-    step(&dir, Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_375, 13_000), size_um: 1_000, track_width_um: 250, hand: Hand { rotate_millideg: 0, flip: None } }), true, "test").expect("a stub whose pad lies over the gap's");
+    step(&dir, Cmd::Microwave(MicrowaveCmd::Stub { at: p(10_375_000, 13_000_000), size_nm: 1_000_000, track_width_nm: 250_000, hand: Hand { rotate_millideg: 0, flip: None } }), true, "test").expect("a stub whose pad lies over the gap's");
 }
 
 /// What `createBaseFootprint` leaves in the file: the footprint has no library (`LIB_ID( wxEmptyString, name )`), the attributes, the fields at the size of the track, the
@@ -99,7 +99,7 @@ fn microwave_footprints_are_not_held_to_a_courtyard_of_their_pads_with_strict_on
 fn the_derived_board_writes_a_gap_as_kicads_tool_leaves_it() {
     let dir = scratch("mw_gap_file");
     setup(&dir);
-    step(&dir, gap(p(10_000, 12_000), 500), false, "test").unwrap();
+    step(&dir, gap(p(10_000_000, 12_000_000), 500_000), false, "test").unwrap();
     let pcb = derived_board(&dir);
     let block = footprint_block(&pcb, "REF1");
     assert!(block.starts_with("\t(footprint \"muwave_gap\"\n"), "no library: {}", block.lines().next().unwrap());
@@ -118,7 +118,7 @@ fn the_derived_board_writes_a_gap_as_kicads_tool_leaves_it() {
 fn a_duplicate_of_a_microwave_footprint_is_copper_only_with_no_courtyard_too() {
     let dir = scratch("mw_duplicate");
     setup(&dir);
-    step(&dir, gap(p(10_000, 12_000), 500), false, "test").unwrap();
+    step(&dir, gap(p(10_000_000, 12_000_000), 500_000), false, "test").unwrap();
     step(&dir, Cmd::Duplicate { ids: vec!["REF1".into()] }, false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     assert_eq!(model.part("REF2").unwrap().footprint.as_deref(), Some("muwave_gap"), "the same footprint, by its name");
@@ -135,12 +135,12 @@ fn a_duplicate_of_a_microwave_footprint_is_copper_only_with_no_courtyard_too() {
 fn the_derived_board_writes_the_arc_stub_the_polygon_and_the_inductor() {
     let dir = scratch("mw_file_others");
     setup(&dir);
-    step(&dir, Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(10_000, 12_000), radius_um: 1_500, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() }), false, "test").unwrap();
-    step(&dir, Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(6_000, 16_000), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_um: None, size_y_um: None, track_width_um: 250, hand: Hand::default() }), false, "test").unwrap();
-    step(&dir, Cmd::Microwave(MicrowaveCmd::Inductor { start: p(12_000, 16_000), end: p(17_000, 16_000), length_um: 12_000, name: "L7".into(), track_width_um: 250 }), false, "test").unwrap();
+    step(&dir, Cmd::Microwave(MicrowaveCmd::ArcStub { at: p(10_000_000, 12_000_000), radius_nm: 1_500_000, angle_millideg: 90_000, track_width_nm: 250_000, hand: Hand::default() }), false, "test").unwrap();
+    step(&dir, Cmd::Microwave(MicrowaveCmd::FunctionShape { at: p(6_000_000, 16_000_000), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_nm: None, size_y_nm: None, track_width_nm: 250_000, hand: Hand::default() }), false, "test").unwrap();
+    step(&dir, Cmd::Microwave(MicrowaveCmd::Inductor { start: p(12_000_000, 16_000_000), end: p(17_000_000, 16_000_000), length_nm: 12_000_000, name: "L7".into(), track_width_nm: 250_000 }), false, "test").unwrap();
     let pcb = derived_board(&dir);
     let arc = footprint_block(&pcb, "REF1");
-    assert!(arc.contains("(pad \"1\" smd custom (at 0 0 0) (size 0.25 0.25) (layers \"F.Cu\") (options (clearance outline) (anchor rect)) (primitives (gr_poly (pts (xy 0 0) (xy 1.061 -1.061)"), "{arc}");
+    assert!(arc.contains("(pad \"1\" smd custom (at 0 0 0) (size 0.25 0.25) (layers \"F.Cu\") (options (clearance outline) (anchor rect)) (primitives (gr_poly (pts (xy 0 0) (xy 1.06066 -1.06066)"), "{arc}");
     assert!(arc.contains("(width 0) (fill yes)"), "{arc}");
     let poly = footprint_block(&pcb, "REF2");
     assert!(poly.starts_with("\t(footprint \"muwave_polygon\"\n"), "{poly}");
@@ -158,7 +158,7 @@ fn an_inductor_that_cannot_be_made_says_why_in_kicads_words_and_changes_nothing(
     let dir = scratch("mw_refused");
     setup(&dir);
     let before = serde_json::to_value(load(&dir).unwrap().1).unwrap();
-    let e = step(&dir, Cmd::Microwave(MicrowaveCmd::Inductor { start: p(5_000, 10_000), end: p(5_000, 20_000), length_um: 100_000, name: "L".into(), track_width_um: 250 }), false, "test").unwrap_err();
+    let e = step(&dir, Cmd::Microwave(MicrowaveCmd::Inductor { start: p(5_000_000, 10_000_000), end: p(5_000_000, 20_000_000), length_nm: 100_000_000, name: "L".into(), track_width_nm: 250_000 }), false, "test").unwrap_err();
     assert_eq!(super::reasons(&e), "Requested length too large");
     assert_eq!(serde_json::to_value(load(&dir).unwrap().1).unwrap(), before);
 }
@@ -389,12 +389,12 @@ fn kicad_cli_loads_and_plots_each_microwave_footprint_as_its_tool_makes_it() {
     let dir = scratch("mw_kicad_cli_proof");
     setup(&dir);
     let mw = |c: MicrowaveCmd| step(&dir, Cmd::Microwave(c), false, "test").unwrap();
-    mw(MicrowaveCmd::Gap { at: p(3_000, 11_000), size_um: 500, track_width_um: 250, hand: Hand::default() }); // REF1
-    mw(MicrowaveCmd::Stub { at: p(17_000, 11_000), size_um: 800, track_width_um: 250, hand: Hand { rotate_millideg: 90_000, flip: None } }); // REF2
-    mw(MicrowaveCmd::ArcStub { at: p(10_000, 11_000), radius_um: 1_500, angle_millideg: 90_000, track_width_um: 250, hand: Hand::default() }); // REF3
-    mw(MicrowaveCmd::FunctionShape { at: p(6_000, 15_000), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_um: None, size_y_um: None, track_width_um: 250, hand: Hand::default() }); // REF4
-    mw(MicrowaveCmd::Inductor { start: p(12_000, 17_000), end: p(17_000, 17_000), length_um: 12_000, name: "L".into(), track_width_um: 250 }); // REF5
-    mw(MicrowaveCmd::FunctionShape { at: p(5_000, 18_500), file: LEAN.into(), kind: ShapeKind::Normal, size_x_um: None, size_y_um: None, track_width_um: 250, hand: Hand { rotate_millideg: 0, flip: Some(FlipDirection::LeftRight) } }); // REF6, on the back
+    mw(MicrowaveCmd::Gap { at: p(3_000_000, 11_000_000), size_nm: 500_000, track_width_nm: 250_000, hand: Hand::default() }); // REF1
+    mw(MicrowaveCmd::Stub { at: p(17_000_000, 11_000_000), size_nm: 800_000, track_width_nm: 250_000, hand: Hand { rotate_millideg: 90_000, flip: None } }); // REF2
+    mw(MicrowaveCmd::ArcStub { at: p(10_000_000, 11_000_000), radius_nm: 1_500_000, angle_millideg: 90_000, track_width_nm: 250_000, hand: Hand::default() }); // REF3
+    mw(MicrowaveCmd::FunctionShape { at: p(6_000_000, 15_000_000), file: SHAPE.into(), kind: ShapeKind::Normal, size_x_nm: None, size_y_nm: None, track_width_nm: 250_000, hand: Hand::default() }); // REF4
+    mw(MicrowaveCmd::Inductor { start: p(12_000_000, 17_000_000), end: p(17_000_000, 17_000_000), length_nm: 12_000_000, name: "L".into(), track_width_nm: 250_000 }); // REF5
+    mw(MicrowaveCmd::FunctionShape { at: p(5_000_000, 18_500_000), file: LEAN.into(), kind: ShapeKind::Normal, size_x_nm: None, size_y_nm: None, track_width_nm: 250_000, hand: Hand { rotate_millideg: 0, flip: Some(FlipDirection::LeftRight) } }); // REF6, on the back
 
     let ours = derived_board(&dir);
     let work = dir.join("kicad");
@@ -457,11 +457,11 @@ fn kicad_cli_loads_and_plots_each_microwave_footprint_as_its_tool_makes_it() {
 fn a_pasted_microwave_footprint_is_copper_only_with_no_library_too() {
     let dir = scratch("mw_copy_paste");
     setup(&dir);
-    step(&dir, gap(p(10_000, 12_000), 500), false, "test").unwrap();
+    step(&dir, gap(p(10_000_000, 12_000_000), 500_000), false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
-    let text = eda_kicad::export_pcb_clipboard(&design, &model, &["REF1".to_string()], p(10_000, 12_000)).unwrap();
+    let text = eda_kicad::export_pcb_clipboard(&design, &model, &["REF1".to_string()], p(10_000_000, 12_000_000)).unwrap();
     assert!(text.contains("(footprint \"muwave_gap\"") && text.contains("(layers \"F.Cu\")"), "{text}");
-    step(&dir, Cmd::PasteClipboard { text, at: p(14_000, 12_000) }, false, "test").unwrap();
+    step(&dir, Cmd::PasteClipboard { text, at: p(14_000_000, 12_000_000) }, false, "test").unwrap();
     let (_, design, _) = load(&dir).unwrap();
     let extras = &design.drawings.as_ref().unwrap().footprint_extras;
     assert_eq!(extras.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["REF1", "REF2"], "the paste carries the facts under the copy's reference");

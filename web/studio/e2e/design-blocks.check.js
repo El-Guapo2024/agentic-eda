@@ -161,10 +161,10 @@
   const MCU = root.sheets.find((s) => s.name.startsWith("MCU"))?.id;
   if (!MCU) { results.push({ name: "setup", ok: false, notes: ["FAIL: the board needs the MCU sheet of examples/mcu_board_30plus.yaml"] }); check.done = true; return "no board"; }
   const view0 = E.state().view;
-  if (!view0 || !Number.isFinite(view0.x) || !Number.isFinite(view0.scale) || view0.scale < 1e-4) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)}): in a hidden pane take a screenshot after loading the page`] }); check.done = true; return "no canvas size"; }
+  if (!view0 || !Number.isFinite(view0.x) || !Number.isFinite(view0.scale) || view0.scale < 1e-7) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)}): in a hidden pane take a screenshot after loading the page`] }); check.done = true; return "no canvas size"; }
   const base0 = await snapshotSch();
   // the board's parts the scenarios place (the example board comes with none placed)
-  const PLACE = [["U1", 30000, 30000], ["C1", 22000, 24000], ["C2", 24500, 24000]];
+  const PLACE = [["U1", 30_000_000, 30_000_000], ["C1", 22_000_000, 24_000_000], ["C2", 24_500_000, 24_000_000]];
 
   (async () => {
     // ======================================================================================================================== the actions
@@ -316,7 +316,7 @@
       await E.run("eeschema.InteractiveDrawing.placeDesignBlock");
       await sleep(500);
       t(E.state().tool === "sch_import_sheet", "Place Design Block arms Import Sheet's tool");
-      await clickAt(40000, 40000, 2500);
+      await clickAt(40_000_000, 40_000_000, 2500);
       s = await sch("");
       const placed = (s.groups ?? []).find((x) => x.design_block === `${LIB}:Pair`);
       t(s.symbols.length === symsBefore + 2 && !!placed && placed.name === "Pair" && placed.member_ids.length >= 2, `a click places its two symbols in a group linked to the block (${s.symbols.length - symsBefore} symbols)`);
@@ -330,8 +330,8 @@
       await chooseBlock("Pair");
       await E.run("eeschema.InteractiveDrawing.placeDesignBlock");
       await sleep(500);
-      await clickAt(40000, 40000, 2200);
-      await clickAt(80000, 40000, 2200);
+      await clickAt(40_000_000, 40_000_000, 2200);
+      await clickAt(80_000_000, 40_000_000, 2200);
       t(E.state().tool === "sch_import_sheet", "with Place repeated copies the tool stays armed");
       await escape();
       s = await sch("");
@@ -351,8 +351,8 @@
       await chooseBlock("Pair");
       await E.run("eeschema.InteractiveDrawing.placeDesignBlock");
       await sleep(400);
-      await clickAt(60000, 120000, 400);
-      await clickAt(140000, 170000, 1200);
+      await clickAt(60_000_000, 120_000_000, 400);
+      await clickAt(140_000_000, 170_000_000, 1200);
       const dlgName = await waitFor(() => (titles().includes("Hierarchical Sheet Properties") ? dialog() : null));
       t(!!dlgName && dialog().querySelectorAll("input")[0].value === "Pair", `the sheet is named after the block (${dlgName && dialog().querySelectorAll("input")[0].value})`);
       await press("Import", 3000);
@@ -368,7 +368,7 @@
       await sleep(600);
       t(E.state().tool === "sch_import_sheet", "Place Linked Design Block arms the tool for the block the group is linked to");
       t(rowOf(`${LIB}:Pair`)?.getAttribute("aria-selected") === "true", "... and selects that block in the pane");
-      await clickAt(40000, 60000, 2500);
+      await clickAt(40_000_000, 60_000_000, 2500);
       s = await sch("");
       t((s.groups ?? []).filter((x) => x.design_block === `${LIB}:Pair`).length === 2, "the linked block is placed again in a group of its own");
       // a group with no link: nothing happens
@@ -552,7 +552,7 @@
       await E.run("pcbnew.InteractiveDrawing.placeDesignBlock");
       await sleep(1500);
       t(E.state().tool === "move" && E.state().selection.length === 1 && E.state().selection[0].kind === "group", "Place Design Block puts the block on the board, grouped, carried by the Move tool");
-      await clickAt(70000, 40000, 2200);
+      await clickAt(70_000_000, 40_000_000, 2200);
       let bnow = await board();
       const placed = (bnow.drawings?.groups ?? []).find((g) => g.design_block === `${LIB}:BoardAll`);
       t(!!placed && placed.name === "BoardAll" && placed.member_ids.length === 3 && bnow.parts.length === b0.parts.length + 3, `the click drops three footprints in a group linked to the block (${placed && placed.member_ids})`);
@@ -565,9 +565,9 @@
       await chooseBlock("BoardAll");
       await E.run("pcbnew.InteractiveDrawing.placeDesignBlock");
       await sleep(1500);
-      await clickAt(70000, 40000, 2500);
+      await clickAt(70_000_000, 40_000_000, 2500);
       t(E.state().tool === "move", "with Place repeated copies the next copy is carried when one is dropped");
-      await clickAt(100000, 40000, 2500);
+      await clickAt(100_000_000, 40_000_000, 2500);
       t(E.state().tool === "move", "... and again");
       await escape();
       await sleep(1200);

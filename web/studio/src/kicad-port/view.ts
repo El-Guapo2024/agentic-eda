@@ -7,20 +7,20 @@
 //
 // Our ViewTransform is algebraically the same idea as VIEW's own state
 // (m_center/m_scale) but expressed as a direct screen-affine transform
-// (scale, x, y) instead of (center, scale) -- screenPx = worldUm * scale +
+// (scale, x, y) instead of (center, scale) -- screenPx = worldNm * scale +
 // (x, y). The two are interchangeable; this shape is what painter.ts's
 // Canvas2D calls (ctx.translate/ctx.scale) want directly.
 
 export interface ViewTransform {
   /** Screen pixels per board µm. KiCad's VIEW::m_scale (world-to-screen), just expressed in our board unit instead of KiCad's internal nm. */
   scale: number;
-  /** Screen-space translation: screenPx = worldUm * scale + (x, y). */
+  /** Screen-space translation: screenPx = worldNm * scale + (x, y). */
   x: number;
   y: number;
 }
 
-export function worldToScreen(v: ViewTransform, xUm: number, yUm: number): [number, number] {
-  return [xUm * v.scale + v.x, yUm * v.scale + v.y];
+export function worldToScreen(v: ViewTransform, xNm: number, yNm: number): [number, number] {
+  return [xNm * v.scale + v.x, yNm * v.scale + v.y];
 }
 
 export function screenToWorld(v: ViewTransform, sx: number, sy: number): [number, number] {
@@ -28,7 +28,7 @@ export function screenToWorld(v: ViewTransform, sx: number, sy: number): [number
 }
 
 /** A hairline width in µm that renders as `px` screen pixels at the current zoom -- Canvas2D's stand-in for SVG's `vector-effect: non-scaling-stroke`. */
-export function hairlineUm(v: ViewTransform, px = 1): number {
+export function hairlineNm(v: ViewTransform, px = 1): number {
   return v.scale > 0 ? px / v.scale : px;
 }
 
@@ -76,12 +76,12 @@ export function fitTransform(bounds: Bounds, width: number, height: number, padP
 // mean "the same zoom range" if copied verbatim -- there is no unit-free
 // way to port this pair of literal numbers, only the *purpose* (clamp to
 // a sane range so scale can never reach 0 or run away to infinity). These
-// bounds serve that same purpose, sized for a µm world: 1e-5 shows roughly
-// a 100-metre span across a 1000px window at the low end, 50 lets a 0.1mm
+// bounds serve that same purpose, sized for a nanometre world: 1e-8 shows roughly
+// a 100-metre span across a 1000px window at the low end, 0.05 lets a 0.1mm
 // pad fill ~5000px at the high end -- comparable headroom to KiCad's own
 // range, not the same numbers.
-export const MIN_SCALE = 1e-5;
-export const MAX_SCALE = 50;
+export const MIN_SCALE = 1e-8;
+export const MAX_SCALE = 0.05;
 
 /**
  * view.cpp VIEW::SetScale(aScale, aAnchor): change scale while keeping
@@ -114,6 +114,6 @@ export function panByScreenDelta(v: ViewTransform, dxPx: number, dyPx: number): 
 }
 
 /** Pan by a world-space (board µm) delta -- wx_view_controls.cpp's onWheel/onScroll/handleAutoPanning all compute a world-space delta (via ToWorld) and call `m_view->SetCenter(m_view->GetCenter() + delta)`; moving the center by +worldDelta is the same as moving the screen origin by -worldDelta*scale. */
-export function panByWorldDelta(v: ViewTransform, dxUm: number, dyUm: number): ViewTransform {
-  return panByScreenDelta(v, -dxUm * v.scale, -dyUm * v.scale);
+export function panByWorldDelta(v: ViewTransform, dxNm: number, dyNm: number): ViewTransform {
+  return panByScreenDelta(v, -dxNm * v.scale, -dyNm * v.scale);
 }

@@ -4,7 +4,7 @@
 // and the functions that need no geometry. Find by Properties' Query tab (`findByProperties.ts`) compiles with it; the properties are the Properties panel's own, read
 // from `PCB_PROPERTIES` by the class of the item as `m_matchingTypes` does.
 //
-//   - A length is in nanometres, as KiCad's internal units are, so `0.25mm` is 250000 and a property shown in micrometres here is read x 1000; an area in nm^2.
+//   - A length is in nanometres, as KiCad's internal units are, so `0.25mm` is 250000, as the design holds it; an area in nm^2.
 //   - A property an item of the class has but cannot show (the panel's `available` says no) reads as undefined, which compares false whatever it is compared with;
 //     KiCad's getter would answer with a number that means nothing.
 //   - `true` and `false` are the numbers 1 and 0 (Find by Properties writes `A.Locked == false` for a flag; KiCad's compiler has no such names and calls them unrecognized items).
@@ -351,7 +351,7 @@ export function propertyValue(prop: PropertyDef<PcbItem, PcbCtx, Cmd>, item: Pcb
   switch (prop.kind) {
     case "int": {
       const n = typeof raw === "number" ? raw : Number(raw);
-      const scale = prop.display === "size" || prop.display === "coord" ? 1_000 : prop.display === "area" ? 1_000_000 : 1;
+      const scale = 1;
       return Value.number(n * scale);
     }
     case "double":

@@ -23,7 +23,7 @@ fn model() -> ConstraintModel {
         package: None,
         footprint: Some("Foo:Bar".into()),
         pins,
-        body_um: None,
+        body_nm: None,
         symbol: symbol.map(String::from),
         datasheet: None,
         edge: None,

@@ -4,7 +4,7 @@
 // pair it is placed on, the layer the route goes on on (`switchLayerOnViaPlacement`), the via's size, and the refusals -- as plain functions
 // the action handlers (actions/routerViaActions.ts) call and the unit tests check. The router itself (crates/pns) only places the via it is told.
 
-import type { BoardState, NetClass, Um, ViaPreset } from "../api/types";
+import type { BoardState, NetClass, Nm, ViaPreset } from "../api/types";
 import { classesOfNet } from "./boardSetupRules";
 import type { LayerPair } from "./layerPairs";
 
@@ -125,7 +125,7 @@ export function planViaCommand(input: ViaPlanInput): ViaPlan | ViaRefusal {
 }
 
 /** The effective net class's value of a setting for `net` (`NET_SETTINGS::GetEffectiveNetClass`: the classes it is in, highest priority first, then Default). */
-function classValue(board: BoardState, net: string, f: (c: NetClass) => Um | undefined): Um | undefined {
+function classValue(board: BoardState, net: string, f: (c: NetClass) => Nm | undefined): Nm | undefined {
   const rules = board.board_rules;
   for (const c of classesOfNet(rules?.net_classes ?? [], net)) {
     const v = f(c);
@@ -135,39 +135,39 @@ function classValue(board: BoardState, net: string, f: (c: NetClass) => Um | und
 }
 
 /** `NETCLASS`'s defaults when a class says nothing (`DEFAULT_UVIASIZE` 0.3 mm, `DEFAULT_UVIADRILL` 0.1 mm; the writer's `(uvia_dia 0.3) (uvia_drill 0.1)`). */
-export const DEFAULT_MICROVIA = { diameter: 300, drill: 100 } as const;
+export const DEFAULT_MICROVIA = { diameter: 300_000, drill: 100_000 } as const;
 
 /**
  * The via's size, as `handleLayerSwitch` sets it: with the net class's via sizes in use (`bds.UseNetClassVia()`: no via size of the list or
  * custom one chosen) or for a microvia, the net's class's (`VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy via of that type: a
  * microvia's are the class's `uvia_dia` / `uvia_drill`); otherwise the chosen size (`bds.GetCurrentViaSize()` / `GetCurrentViaDrill()`).
  */
-export function viaSizeFor(board: BoardState, net: string, viaType: ViaType, chosen: ViaPreset | null): { diameter: Um; drill: Um } {
+export function viaSizeFor(board: BoardState, net: string, viaType: ViaType, chosen: ViaPreset | null): { diameter: Nm; drill: Nm } {
   const rules = board.board_rules;
   if (viaType === "micro") {
     return { diameter: classValue(board, net, (c) => c.microvia_diameter) ?? DEFAULT_MICROVIA.diameter, drill: classValue(board, net, (c) => c.microvia_drill) ?? DEFAULT_MICROVIA.drill };
   }
   if (chosen) return { diameter: chosen.diameter, drill: chosen.drill };
-  return { diameter: classValue(board, net, (c) => c.via_diameter) ?? rules?.via_diameter ?? 600, drill: classValue(board, net, (c) => c.via_drill) ?? rules?.via_drill ?? 300 };
+  return { diameter: classValue(board, net, (c) => c.via_diameter) ?? rules?.via_diameter ?? 600_000, drill: classValue(board, net, (c) => c.via_drill) ?? rules?.via_drill ?? 300_000 };
 }
 
 /** `BOARD_DESIGN_SETTINGS`' custom track and via size (`m_customTrackWidth`, `m_customViaSize`): what `DIALOG_TRACK_VIA_SIZE` edits. */
 export interface CustomTrackVia {
-  trackUm: Um;
-  viaDiameterUm: Um;
-  viaDrillUm: Um;
+  trackNm: Nm;
+  viaDiameterNm: Nm;
+  viaDrillNm: Nm;
 }
 
 /** `BOARD_DESIGN_SETTINGS()`: `DEFAULT_CUSTOMTRACKWIDTH` 0.2 mm, `DEFAULT_VIASMINSIZE` 0.5 mm, `DEFAULT_MINTHROUGHDRILL` 0.3 mm. */
-export const DEFAULT_CUSTOM_TRACK_VIA: CustomTrackVia = { trackUm: 200, viaDiameterUm: 500, viaDrillUm: 300 };
+export const DEFAULT_CUSTOM_TRACK_VIA: CustomTrackVia = { trackNm: 200_000, viaDiameterNm: 500_000, viaDrillNm: 300_000 };
 
 /** `GEOMETRY_MIN_SIZE` (pcb_track.h): 0.001 mm. */
-const GEOMETRY_MIN_SIZE_UM = 1;
+const GEOMETRY_MIN_SIZE_NM = 1000;
 
 /** `PCB_VIA::ValidateViaParameters( diameter, drill, .. )` for a via with no layers given: its message, word for word, or null when the via is good. Null stands for a field that is not a length (`std::nullopt`). */
-export function validateViaParameters(diameter: Um | null, drill: Um | null): string | null {
-  if (diameter != null && diameter < GEOMETRY_MIN_SIZE_UM) return "Via diameter is too small.";
-  if (drill != null && drill < GEOMETRY_MIN_SIZE_UM) return "Via drill is too small.";
+export function validateViaParameters(diameter: Nm | null, drill: Nm | null): string | null {
+  if (diameter != null && diameter < GEOMETRY_MIN_SIZE_NM) return "Via diameter is too small.";
+  if (drill != null && drill < GEOMETRY_MIN_SIZE_NM) return "Via drill is too small.";
   if (diameter != null && drill == null) return "No via hole size defined.";
   if (drill != null && diameter == null) return "No via diameter defined.";
   if (diameter != null && drill != null && diameter <= drill) return "Via hole size must be smaller than via diameter";

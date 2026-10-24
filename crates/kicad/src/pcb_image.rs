@@ -12,12 +12,12 @@ use eda_model::ir::Point;
 use eda_model::pcb_items::RefImage;
 
 use crate::sexpr::{self, Sexpr};
-use crate::{mm, mm_to_um, sexpr_str};
+use crate::{mm, mm_to_nm, sexpr_str};
 
 /// One `(image ..)` of a board; `None` when it has no position or its data is not an image of a kind known (KiCad stops reading the board at "Failed to read image data").
 pub(crate) fn read(item: &[Sexpr]) -> Option<RefImage> {
     let at = sexpr::find(item, "at")?;
-    let at = Point { x: mm_to_um(sexpr::num(at, 1)?), y: mm_to_um(sexpr::num(at, 2)?) };
+    let at = Point { x: mm_to_nm(sexpr::num(at, 1)?), y: mm_to_nm(sexpr::num(at, 2)?) };
     let data: String = sexpr::find(item, "data").map(|d| d.iter().skip(1).filter_map(Sexpr::text).collect()).unwrap_or_default();
     let data = image_info::compact(&data);
     image_info::header_of_base64(&data)?;
@@ -71,10 +71,10 @@ mod tests {
         let images = read_all(tree.as_list().unwrap(), &mut refs);
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].layer, "Cmts.User");
-        assert_eq!(images[0].at, Point { x: 100_000, y: 50_000 });
+        assert_eq!(images[0].at, Point { x: 100_000_000, y: 50_000_000 });
         assert_eq!(images[0].scale_ppm, 500_000);
         assert_eq!(images[0].data, data, "the data comes back as one text");
-        assert_eq!(images[0].size_um(), (3_000, 2_000), "60 x 40 px at 254 ppi at half scale");
+        assert_eq!(images[0].size_nm(), (3_000_000, 2_000_000), "60 x 40 px at 254 ppi at half scale");
         assert!(refs[0].locked);
         assert_eq!(refs[0].uuid.as_deref(), Some("11111111-1111-1111-1111-111111111111"));
     }

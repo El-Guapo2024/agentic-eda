@@ -88,7 +88,7 @@ mod tests {
             package: Some("0402".into()),
             footprint: None,
             pins: vec![],
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -96,17 +96,17 @@ mod tests {
     fn fixture() -> (Design, ConstraintModel) {
         let model = ConstraintModel { parts: vec![part("R1", Some("RC0402")), part("R10", Some("RC0402")), part("R2", Some("RC0402"))], ..Default::default() };
         let placement = PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }],
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }],
             footprints: vec![
-                FootprintInstance { id: "R1".into(), at: Point { x: 1_000, y: 2_000 }, rot: 90_000, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "R10".into(), at: Point { x: 3_000, y: 4_000 }, rot: 0, side: Side::Bottom, label: Default::default() },
-                FootprintInstance { id: "R2".into(), at: Point { x: 5_000, y: 6_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "R1".into(), at: Point { x: 1_000_000, y: 2_000_000 }, rot: 90_000, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "R10".into(), at: Point { x: 3_000_000, y: 4_000_000 }, rot: 0, side: Side::Bottom, label: Default::default() },
+                FootprintInstance { id: "R2".into(), at: Point { x: 5_000_000, y: 6_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
             ],
             modules: Vec::new(),
         };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(placement),

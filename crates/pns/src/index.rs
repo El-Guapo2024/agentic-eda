@@ -12,25 +12,25 @@
 //! real R-tree.
 
 use crate::item::ItemId;
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 use std::collections::{HashMap, HashSet};
 
 type CellKey = (i64, i64);
-pub type BBox = (Um, Um, Um, Um);
+pub type BBox = (Nm, Nm, Nm, Nm);
 
 #[derive(Default)]
 pub struct Index {
-    cell_size: Um,
+    cell_size: Nm,
     cells: HashMap<CellKey, Vec<ItemId>>,
     boxes: HashMap<ItemId, BBox>,
 }
 
 impl Index {
-    pub fn new(cell_size: Um) -> Self {
+    pub fn new(cell_size: Nm) -> Self {
         Index { cell_size: cell_size.max(1), cells: HashMap::new(), boxes: HashMap::new() }
     }
 
-    fn cell_of(&self, x: Um, y: Um) -> CellKey {
+    fn cell_of(&self, x: Nm, y: Nm) -> CellKey {
         (x.div_euclid(self.cell_size), y.div_euclid(self.cell_size))
     }
 

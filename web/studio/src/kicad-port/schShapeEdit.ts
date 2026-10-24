@@ -104,7 +104,7 @@ export function toShape(e: ShapeEdit): SchGraphicShape | null {
       return e.start[0] === e.end[0] && e.start[1] === e.end[1] ? null : { type: "rectangle", start: xy(e.start), end: xy(e.end) };
     case "circle": {
       const radius = Math.max(1, kiRound(Math.hypot(e.start[0] - e.end[0], e.start[1] - e.end[1])));
-      return e.start[0] === e.end[0] && e.start[1] === e.end[1] ? null : { type: "circle", center: xy(e.start), radius_um: radius };
+      return e.start[0] === e.end[0] && e.start[1] === e.end[1] ? null : { type: "circle", center: xy(e.start), radius_nm: radius };
     }
     case "arc":
       return e.start[0] === e.end[0] && e.start[1] === e.end[1] ? null : { type: "arc", start: xy(e.start), mid: xy(arcMid(e.start, e.end, e.center)), end: xy(e.end) };

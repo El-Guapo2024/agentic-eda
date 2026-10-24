@@ -27,10 +27,10 @@
 //! wrong would silently *activate* a rule the file's author deliberately
 //! disabled, which is worse than not parsing the file at all.
 
-use eda_model::ir::Um;
+use eda_model::ir::Nm;
 use eda_model::CustomRule;
 
-use crate::import::mm_to_um;
+use crate::import::mm_to_nm;
 use crate::sexpr::{self, Sexpr};
 
 /// Strip `#`-to-end-of-line comments, respecting `"..."` quoting (a `#`
@@ -83,7 +83,7 @@ fn strip_comments(text: &str) -> String {
 /// unrecognized suffix (angles like `"90 deg"` tokenize as a *separate*
 /// atom, not part of this one, so they never reach this function; a
 /// genuinely unknown unit does) returns `None` rather than guessing.
-fn parse_length(s: &str) -> Option<Um> {
+fn parse_length(s: &str) -> Option<Nm> {
     let s = s.trim();
     let split_at = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
     let (num, unit) = s.split_at(split_at);
@@ -94,7 +94,7 @@ fn parse_length(s: &str) -> Option<Um> {
         "in" => n * 25.4,
         _ => return None,
     };
-    Some(mm_to_um(mm))
+    Some(mm_to_nm(mm))
 }
 
 /// `(constraint TYPE (min V) (max V) (opt V))` -- `TYPE` is always present
@@ -103,7 +103,7 @@ fn parse_length(s: &str) -> Option<Um> {
 /// valid KiCad rule for a handful of constraint types this crate does not
 /// evaluate (`disallow`, `assertion`), parsed here without error same as
 /// anything else not acted on.
-fn parse_constraint(c: &[Sexpr]) -> (String, Option<Um>, Option<Um>, Option<Um>) {
+fn parse_constraint(c: &[Sexpr]) -> (String, Option<Nm>, Option<Nm>, Option<Nm>) {
     let ty = sexpr::txt(c, 1).unwrap_or("").to_string();
     let bound = |key: &str| sexpr::find(c, key).and_then(|b| sexpr::txt(b, 1)).and_then(parse_length);
     (ty, bound("min"), bound("max"), bound("opt"))
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].name, "ReduceClearanceSameClass");
         assert_eq!(rules[0].constraint_type, "clearance");
-        assert_eq!(rules[0].min, Some(200));
+        assert_eq!(rules[0].min, Some(200_000));
         assert_eq!(rules[0].condition.as_deref(), Some("A.NetClass == B.NetClass"));
     }
 
@@ -210,11 +210,11 @@ mod tests {
 
     #[test]
     fn length_units() {
-        assert_eq!(parse_length("0.2mm"), Some(200));
-        assert_eq!(parse_length("1mm"), Some(1000));
-        assert_eq!(parse_length("20"), Some(20_000), "bare number defaults to mm");
-        assert_eq!(parse_length("1in"), Some(25_400));
-        assert_eq!(parse_length("4mil"), Some(102));
+        assert_eq!(parse_length("0.2mm"), Some(200_000));
+        assert_eq!(parse_length("1mm"), Some(1_000_000));
+        assert_eq!(parse_length("20"), Some(20_000_000), "bare number defaults to mm");
+        assert_eq!(parse_length("1in"), Some(25_400_000));
+        assert_eq!(parse_length("4mil"), Some(101_600));
         assert_eq!(parse_length("1furlong"), None, "unrecognized unit must not be guessed at");
     }
 }

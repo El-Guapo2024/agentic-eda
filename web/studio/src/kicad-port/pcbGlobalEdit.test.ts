@@ -152,9 +152,9 @@ test("cleanup: three lines are not a rectangle, and lines already deleted as dup
 
 test("cleanup: the board-outline fix runs on a real cleanup, not on the preview", () => {
   const edge: Shape[] = [seg("e1", "Edge.Cuts", [0, 0], [10000, 0], 50), seg("e2", "Edge.Cuts", [10100, 0], [10100, 5000], 50)];
-  const dry = planCleanupGraphics(edge, cleanup({ fixBoardOutlines: true, toleranceUm: 2000 }), true);
+  const dry = planCleanupGraphics(edge, cleanup({ fixBoardOutlines: true, toleranceNm: 2000 }), true);
   assert.deepEqual(dry, { items: [], remove: [], add: [] });
-  const real = planCleanupGraphics(edge, cleanup({ fixBoardOutlines: true, toleranceUm: 2000 }), false);
+  const real = planCleanupGraphics(edge, cleanup({ fixBoardOutlines: true, toleranceNm: 2000 }), false);
   assert.ok(real.remove.length + real.add.length > 0, "the 100 um gap is closed");
 });
 

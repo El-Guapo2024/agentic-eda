@@ -40,30 +40,30 @@ fn gate() -> LibSymbol {
 
 fn model() -> ConstraintModel {
     let pins = ["1", "2", "3"].map(|n| Pin { number: n.into(), name: None, kind: PinKind::Signal }).to_vec();
-    let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_um: None, edge: None };
+    let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_nm: None, edge: None };
     ConstraintModel { parts: vec![part], symbols: vec![gate()], ..Default::default() }
 }
 
 fn design_with(sch: SchematicSection) -> Design {
-    Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
+    Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
 }
 
 /// The gate with a wire from each pin out to a label (`NET_A`, `NET_B`, `NET_Y`), a text, and these groups: `inner = {w_NET_A, l_NET_A}` named "net A",
 /// `outer = {inner, U1}` named "gate" and `other = {l_NET_B, l_NET_Y, txt_note}` named "the rest".
 fn grouped(m: &ConstraintModel) -> SchematicSection {
-    let sym = SymbolInstance { id: "U1".into(), at: Point { x: 76_200, y: 76_200 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sym = SymbolInstance { id: "U1".into(), at: Point { x: 76_200_000, y: 76_200_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
     let mut sch = SchematicSection { symbols: vec![sym.clone()], ..Default::default() };
     let part = m.part("U1").unwrap();
     for (number, tip) in eda_engine::placed::pin_points(&sym, part, m.real_symbol_of(&sym.lib_id, part).as_ref()) {
         let left = number != "3";
-        let end = Point { x: tip.x + if left { -12_700 } else { 12_700 }, y: tip.y };
+        let end = Point { x: tip.x + if left { -12_700_000 } else { 12_700_000 }, y: tip.y };
         let net = format!("NET_{}", ["A", "B", "Y"][number.parse::<usize>().unwrap() - 1]);
         // the wire of net A bends once: two segments in the file, one wire here
-        let pts = if net == "NET_A" { vec![tip, Point { x: end.x + 5_080, y: tip.y }, end] } else { vec![tip, end] };
+        let pts = if net == "NET_A" { vec![tip, Point { x: end.x + 5_080_000, y: tip.y }, end] } else { vec![tip, end] };
         sch.wires.push(Wire { id: format!("w_{net}"), net: net.clone(), pins: vec![], pts, bus: false });
         sch.labels.push(NetLabel { id: format!("l_{net}"), net, at: end, kind: LabelKind::Local });
     }
-    sch.texts.push(SchematicText { id: "txt_note".into(), content: "a note".into(), at: Point { x: 30_000, y: 40_000 }, angle: 0, size_um: 1_270 });
+    sch.texts.push(SchematicText { id: "txt_note".into(), content: "a note".into(), at: Point { x: 30_000_000, y: 40_000_000 }, angle: 0, size_nm: 1_270_000 });
     let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|s| s.to_string()).collect(), design_block: String::new() };
     sch.extras.groups = vec![group("grp_inner", "net A", &["w_NET_A", "l_NET_A"]), group("grp_outer", "gate", &["grp_inner", "U1"]), group("grp_other", "the rest", &["l_NET_B", "l_NET_Y", "txt_note"])];
     sch
@@ -413,7 +413,7 @@ fn kicad_draws_a_placed_user_field_where_we_put_it_in_a_sheet_with_nested_groups
     let user = sch.user_fields.entry("U1".into()).or_default();
     user.insert("MPN".into(), "74LVC1G08".into());
     user.insert("Manufacturer".into(), "TexasInstruments".into());
-    sch.field_layout.insert("U1".into(), vec![eda_model::ir::FieldPlacement { dx: 12_700, dy: -20_320, visible: true, h: eda_model::ir::TextJustify::Left, ..eda_model::ir::FieldPlacement::at_origin("MPN") }]);
+    sch.field_layout.insert("U1".into(), vec![eda_model::ir::FieldPlacement { dx: 12_700_000, dy: -20_320_000, visible: true, h: eda_model::ir::TextJustify::Left, ..eda_model::ir::FieldPlacement::at_origin("MPN") }]);
     let file_text = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
     let (ax, ay) = (76.2 + 12.7, 76.2 - 20.32);
     assert!(file_text.contains(&format!("(property \"MPN\" \"74LVC1G08\" (at {ax} {ay} 0)")), "our file puts the field at {ax} {ay}:\n{}", file_text.lines().filter(|l| l.contains("MPN")).collect::<Vec<_>>().join("\n"));

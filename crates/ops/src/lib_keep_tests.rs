@@ -11,7 +11,7 @@ fn design() -> Design {
 }
 
 fn board(m: &ConstraintModel) -> Board<'_> {
-    Board::new(design(), m, 100, 300)
+    Board::new(design(), m, 100_000, 300_000)
 }
 
 fn props(lib_id: &str, power: bool, unit_count: u32, units_locked: Option<bool>, power_local: Option<bool>) -> Cmd {
@@ -37,8 +37,8 @@ fn props(lib_id: &str, power: bool, unit_count: u32, units_locked: Option<bool>,
     }
 }
 
-fn smd_pad(number: &str, x: Um) -> LibraryPad {
-    let mut p: LibraryPad = serde_json::from_value(serde_json::json!({ "number": number, "at": { "x": x, "y": 0 }, "size": [1000, 600], "shape": "rect", "kind": "smd" })).expect("a pad");
+fn smd_pad(number: &str, x: Nm) -> LibraryPad {
+    let mut p: LibraryPad = serde_json::from_value(serde_json::json!({ "number": number, "at": { "x": x, "y": 0 }, "size": [1_000_000, 600_000], "shape": "rect", "kind": "smd" })).expect("a pad");
     p.layers = vec!["F.Cu".into(), "F.Mask".into()];
     p
 }
@@ -91,11 +91,11 @@ fn paste_pad_properties_takes_the_masters_attribute_property_and_margins_but_not
         master.kicad = LibraryPadKeep {
             connector: true,
             property: Some("pad_prop_testpoint".into()),
-            solder_mask_margin: Some(50),
+            solder_mask_margin: Some(50_000),
             tokens: vec!["(die_length 1.2)".into(), "(tenting front)".into()],
             ..Default::default()
         };
-        let mut other = smd_pad("2", 2000);
+        let mut other = smd_pad("2", 2_000_000);
         other.kicad.tokens = vec!["(die_length 3)".into()];
         fp.pads = vec![master, other];
         fp.assign_missing_ids();
@@ -105,7 +105,7 @@ fn paste_pad_properties_takes_the_masters_attribute_property_and_margins_but_not
     library_editors::import_pad_settings(&mut dst, &fp.pads[0]);
     assert!(dst.kicad.connector);
     assert_eq!(dst.kicad.property.as_deref(), Some("pad_prop_testpoint"));
-    assert_eq!(dst.kicad.solder_mask_margin, Some(50));
+    assert_eq!(dst.kicad.solder_mask_margin, Some(50_000));
     assert_eq!(dst.kicad.tokens, vec!["(die_length 3)".to_string(), "(tenting front)".to_string()], "its own pin-to-die length, the master's tenting");
 }
 

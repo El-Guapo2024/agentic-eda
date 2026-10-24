@@ -12,12 +12,12 @@ use eda_model::ConstraintModel;
 const META: ExportMeta<'static> = ExportMeta { date: "2026-10-21", title: "tables" };
 
 fn design_with(sch: SchematicSection) -> Design {
-    Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
+    Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
 }
 
 /// A 3 x 2 table at (100, 50) mm of 30 x 6 mm cells: a header over two rows, one of the cells merged across, one right-aligned and bold, one with a fill.
 fn table() -> Table {
-    let mut t = Table::new_sch_grid(Point { x: 100_000, y: 50_000 }, 2, 3, 30_000, 6_000, 1_270);
+    let mut t = Table::new_sch_grid(Point { x: 100_000_000, y: 50_000_000 }, 2, 3, 30_000_000, 6_000_000, 1_270_000);
     t.id = "tbl_given".into();
     for (i, text) in ["Name", "Value", "R1", "10k \"tol\"", "Notes\nsecond line", ""].iter().enumerate() {
         t.cells[i].text = text.to_string();
@@ -31,14 +31,14 @@ fn table() -> Table {
     t.cells[1].fill = eda_model::sch_extras::SchFill::Color;
     t.cells[1].fill_color = Some(eda_model::sch_extras::SchColor { r: 255, g: 240, b: 200, a: 255 });
     t.cells[2].exclude_from_sim = true;
-    t.border.stroke.width_um = 254;
+    t.border.stroke.width_nm = 254_000;
     t.separators.cols = false;
     t
 }
 
 fn sheet() -> SchematicSection {
     let mut sch = SchematicSection::default();
-    sch.texts.push(SchematicText { id: "txt_note".into(), content: "note".into(), at: Point { x: 10_000, y: 10_000 }, angle: 0, size_um: 1_270 });
+    sch.texts.push(SchematicText { id: "txt_note".into(), content: "note".into(), at: Point { x: 10_000_000, y: 10_000_000 }, angle: 0, size_nm: 1_270_000 });
     sch.extras.tables.push(table());
     sch.extras.groups.push(Group { id: "grp_t".into(), name: "tab".into(), member_ids: vec!["tbl_given".into(), "txt_note".into()], design_block: String::new() });
     sch.extras.set_locked("tbl_given", true);
@@ -69,7 +69,7 @@ fn a_table_is_written_into_the_sheet_and_read_back_with_its_cells_its_lock_and_i
     assert_eq!((t.cells[3].style.h_align, t.cells[3].style.bold, t.cells[1].style.v_align), (TextJustify::Right, true, TextVAlign::Center));
     assert_eq!((t.cells[1].fill, t.cells[1].fill_color), (want.cells[1].fill, want.cells[1].fill_color));
     assert!(t.cells[2].exclude_from_sim && !t.cells[0].exclude_from_sim);
-    assert_eq!((t.border.stroke.width_um, t.separators.cols, t.separators.rows), (254, false, true));
+    assert_eq!((t.border.stroke.width_nm, t.separators.cols, t.separators.rows), (254_000, false, true));
     assert!(!t.id.is_empty(), "an id is given to the table it read");
     assert!(back.extras.is_locked(&t.id), "its lock");
     let group = back.extras.groups.iter().find(|g| g.name == "tab").expect("its group");

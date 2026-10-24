@@ -155,8 +155,8 @@
     const xs = state.outline.map((p) => p[0]);
     const ys = state.outline.map((p) => p[1]);
     let spot = null;
-    for (let y = Math.min(...ys) + 3000; y < Math.max(...ys) - 3000 && !spot; y += 1000) {
-      for (let x = Math.min(...xs) + 3000; x < Math.max(...xs) - 8000 && !spot; x += 1000) {
+    for (let y = Math.min(...ys) + 3_000_000; y < Math.max(...ys) - 3_000_000 && !spot; y += 1_000_000) {
+      for (let x = Math.min(...xs) + 3_000_000; x < Math.max(...xs) - 8_000_000 && !spot; x += 1_000_000) {
         const free = boxes.every(([x0, y0, x1, y1]) => x + 4000 < x0 - 1000 || x - 1000 > x1 || y + 1500 < y0 - 1000 || y - 1500 > y1);
         if (free) spot = [x, y];
       }
@@ -164,8 +164,8 @@
     check("the board has room for two tracks to get too close", !!spot && padNets.length >= 2, JSON.stringify(spot));
     if (!spot) return;
     const before = eda.state().revision;
-    const t1 = await post({ op: "add_track", net: padNets[0], layer: "F.Cu", width: 250, pts: [{ x: spot[0], y: spot[1] }, { x: spot[0] + 3000, y: spot[1] }] });
-    const t2 = await post({ op: "add_track", net: padNets[1], layer: "F.Cu", width: 250, pts: [{ x: spot[0], y: spot[1] + 300 }, { x: spot[0] + 3000, y: spot[1] + 300 }] });
+    const t1 = await post({ op: "add_track", net: padNets[0], layer: "F.Cu", width: 250_000, pts: [{ x: spot[0], y: spot[1] }, { x: spot[0] + 3_000_000, y: spot[1] }] });
+    const t2 = await post({ op: "add_track", net: padNets[1], layer: "F.Cu", width: 250_000, pts: [{ x: spot[0], y: spot[1] + 300_000 }, { x: spot[0] + 3_000_000, y: spot[1] + 300_000 }] });
     check("two tracks 50 um apart are added", t1.ok && t2.ok, JSON.stringify([t1.message, t2.message]));
     await until(() => eda.state().revision !== before);
 
@@ -202,7 +202,7 @@
 
     // ------------------------------------------------------------------------------------------------------------- a left click on a marker
     // A marker nothing else is near, so that the circle under the pointer is the one the click means.
-    const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 3000;
+    const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 3_000_000;
     const alone = first.violations.findIndex((v, i) => v.items[0]?.pos && first.violations.every((w, j) => j === i || !w.items[0]?.pos || !near(v.items[0].pos, w.items[0].pos)));
     check("there is a marker to click on the board", alone >= 0, alone);
     if (alone >= 0) {
@@ -384,7 +384,7 @@
     }
     await closeDialog(TITLE);
     // Put the board back as it was found: the two tracks go (every other step of this check undid itself).
-    const mine = ((await json("/api/state")).routing?.tracks ?? []).filter((t) => t.width === 250 && t.pts[0][0] === spot[0] && (t.pts[0][1] === spot[1] || t.pts[0][1] === spot[1] + 300));
+    const mine = ((await json("/api/state")).routing?.tracks ?? []).filter((t) => t.width === 250_000 && t.pts[0][0] === spot[0] && (t.pts[0][1] === spot[1] || t.pts[0][1] === spot[1] + 300_000));
     for (const t of mine) await post({ op: "delete_track", id: t.id });
     await sleep(500);
     const left = (await json("/api/state")).routing?.tracks ?? [];
@@ -408,10 +408,10 @@
     // grid they are off the grid too.
     const sheet = await json("/api/schematic");
     const points = [...sheet.sheets.flatMap((x) => [x.at, [x.at[0] + x.size[0], x.at[1] + x.size[1]]]), ...sheet.symbols.map((x) => x.at), ...sheet.wires.flatMap((x) => x.pts), ...sheet.labels.map((x) => x.at), ...(sheet.power_symbols ?? []).map((x) => x.at), ...(sheet.no_connects ?? []).map((x) => x.at)];
-    const odd = (v) => (Math.ceil(v / 1270) % 2 === 0 ? Math.ceil(v / 1270) + 1 : Math.ceil(v / 1270)) * 1270;
-    const wireAt = [odd(Math.min(...points.map((p) => p[0]))), odd(Math.max(...points.map((p) => p[1])) + 10000)];
+    const odd = (v) => (Math.ceil(v / 1_270_000) % 2 === 0 ? Math.ceil(v / 1_270_000) + 1 : Math.ceil(v / 1_270_000)) * 1_270_000;
+    const wireAt = [odd(Math.min(...points.map((p) => p[0]))), odd(Math.max(...points.map((p) => p[1])) + 10_000_000)];
     const before = eda.state().revision;
-    const w = await post({ op: "add_wire", pts: [{ x: wireAt[0], y: wireAt[1] }, { x: wireAt[0] + 5080, y: wireAt[1] }] });
+    const w = await post({ op: "add_wire", pts: [{ x: wireAt[0], y: wireAt[1] }, { x: wireAt[0] + 5_080_000, y: wireAt[1] }] });
     check("a wire is added", w.ok, w.message);
     // Symbol pins that join nothing: two wires that land on them are deleted from a module sheet (the board's own schematic is wired whole).
     let deleted = 0;

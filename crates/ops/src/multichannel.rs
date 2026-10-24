@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// `MULTICHANNEL_TOOL::GeneratePotentialRuleAreas`'s margin round the boxes of the footprints: 0.1 mm.
-const AREA_MARGIN_UM: i64 = 100;
+const AREA_MARGIN_NM: i64 = 100_000;
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, what, msg.into())]
@@ -436,7 +436,7 @@ impl Board<'_> {
             } else {
                 row.members.iter().map(|&i| mc.fps[i].bbox).collect()
             };
-            let outline = rule_area_outline(&boxes, AREA_MARGIN_UM);
+            let outline = rule_area_outline(&boxes, AREA_MARGIN_NM);
             if outline.len() < 3 {
                 continue;
             }
@@ -536,8 +536,8 @@ impl Board<'_> {
             return around(&pts, s.stroke_width() / 2);
         }
         if let Some(t) = dr.texts.iter().find(|t| t.id == id) {
-            let half = (t.content.chars().count().max(1) as i64 * t.size_um * 6 / 10) / 2;
-            return Some((t.at.x - half, t.at.y - t.size_um / 2, t.at.x + half, t.at.y + t.size_um / 2));
+            let half = (t.content.chars().count().max(1) as i64 * t.size_nm * 6 / 10) / 2;
+            return Some((t.at.x - half, t.at.y - t.size_nm / 2, t.at.x + half, t.at.y + t.size_nm / 2));
         }
         if let Some(d) = dr.dimensions.iter().find(|d| d.id == id) {
             return around(&[d.start, d.end], d.stroke_width / 2);

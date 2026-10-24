@@ -15,7 +15,7 @@ fn pad(v: serde_json::Value) -> LibraryPad {
     serde_json::from_value(v).unwrap()
 }
 
-fn line(layer: &str, a: (Um, Um), b: (Um, Um), width: Um) -> Shape {
+fn line(layer: &str, a: (Nm, Nm), b: (Nm, Nm), width: Nm) -> Shape {
     Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: width, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
 }
 
@@ -24,7 +24,7 @@ fn prim(shape: Shape, proxy: bool) -> eda_model::footprint::PadPrimitive {
 }
 
 fn with_footprint<'a>(m: &'a ConstraintModel, pads: Vec<LibraryPad>, graphics: Vec<Shape>) -> Board<'a> {
-    let mut b = Board::new(design(), m, 100, 300);
+    let mut b = Board::new(design(), m, 100_000, 300_000);
     let mut fp = LibraryFootprint::new_empty("Lib:Row");
     fp.pads = pads;
     fp.graphics = graphics;
@@ -38,11 +38,11 @@ fn fp<'b>(b: &'b Board<'_>) -> &'b LibraryFootprint {
 }
 
 fn custom_pad() -> LibraryPad {
-    let mut p = pad(json!({ "number": "1", "at": {"x": 1000, "y": 2000}, "size": [800, 800], "shape": "custom", "kind": "smd", "rot": 90000 }));
+    let mut p = pad(json!({ "number": "1", "at": {"x": 1_000_000, "y": 2_000_000}, "size": [800_000, 800_000], "shape": "custom", "kind": "smd", "rot": 90000 }));
     p.custom = Some(PadCustom {
         anchor: PadAnchor::Circle,
         zone: CustomZoneMode::ConvexHull,
-        primitives: vec![prim(line("", (0, 0), (1000, 0), 200), false), prim(line("", (0, 0), (3000, 0), 500), true)],
+        primitives: vec![prim(line("", (0, 0), (1_000_000, 0), 200_000), false), prim(line("", (0, 0), (3_000_000, 0), 500_000), true)],
     });
     p
 }
@@ -69,13 +69,13 @@ fn exploding_a_custom_pad_frees_its_shapes_on_the_pads_layer_turned_and_moved_wi
     assert_eq!(f.pad_edit.as_ref().map(|m| m.pad.as_str()), Some(f.pads[0].id.as_str()));
     // The line (0,0)-(1000,0) of a pad turned 90 degrees clockwise at (1000,2000) runs from (1000,2000) down to (1000,3000), on F.Cu.
     assert_eq!(f.graphics.len(), 1, "{:?}", f.graphics);
-    assert!(matches!(&f.graphics[0], Shape::Segment { layer, stroke_width: 200, start: Point { x: 1000, y: 2000 }, end: Point { x: 1000, y: 3000 }, .. } if layer == "F.Cu"), "{:?}", f.graphics[0]);
+    assert!(matches!(&f.graphics[0], Shape::Segment { layer, stroke_width: 200_000, start: Point { x: 1_000_000, y: 2_000_000 }, end: Point { x: 1_000_000, y: 3_000_000 }, .. } if layer == "F.Cu"), "{:?}", f.graphics[0]);
     assert!(!f.graphics[0].id().is_empty(), "the graphic has an id");
     // The spoke template is not copper: set aside, as wide as a thermal spoke, in the footprint's frame; the zone option is kept.
     let mode = f.pad_edit.as_ref().unwrap();
     assert_eq!(mode.zone, CustomZoneMode::ConvexHull);
     assert_eq!(mode.proxies.len(), 1);
-    assert!(matches!(&mode.proxies[0].shape, Shape::Segment { layer, stroke_width: 500, start: Point { x: 1000, y: 2000 }, end: Point { x: 1000, y: 5000 }, .. } if layer == "F.Cu"), "{:?}", mode.proxies[0].shape);
+    assert!(matches!(&mode.proxies[0].shape, Shape::Segment { layer, stroke_width: 500_000, start: Point { x: 1_000_000, y: 2_000_000 }, end: Point { x: 1_000_000, y: 5_000_000 }, .. } if layer == "F.Cu"), "{:?}", mode.proxies[0].shape);
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn a_rectangle_anchor_leaves_a_rectangle_and_a_pad_on_the_back_explodes_to_the_b
 #[test]
 fn a_pad_that_is_not_custom_is_only_flagged() {
     let m = ConstraintModel::default();
-    let mut b = with_footprint(&m, vec![pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1000, 600], "shape": "rect", "kind": "smd" }))], vec![]);
+    let mut b = with_footprint(&m, vec![pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 600_000], "shape": "rect", "kind": "smd" }))], vec![]);
     explode(&mut b).unwrap();
     assert!(fp(&b).graphics.is_empty());
     assert!(fp(&b).pad_edit.is_some());
@@ -116,11 +116,11 @@ fn exploding_and_recombining_a_custom_pad_gives_the_pad_back_as_it_was() {
 #[test]
 fn recombining_takes_in_the_graphics_that_touch_the_pad_and_leaves_the_others() {
     let m = ConstraintModel::default();
-    let circle = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1000, 1000], "shape": "circle", "kind": "smd" }));
+    let circle = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 1_000_000], "shape": "circle", "kind": "smd" }));
     let graphics = vec![
-        line("F.Cu", (0, 0), (2000, 0), 300),          // starts in the pad
-        line("F.Cu", (5000, 5000), (6000, 5000), 300), // far away
-        line("F.SilkS", (0, 0), (2000, 0), 300),       // touches, but on another layer
+        line("F.Cu", (0, 0), (2_000_000, 0), 300_000),          // starts in the pad
+        line("F.Cu", (5_000_000, 5_000_000), (6_000_000, 5_000_000), 300_000), // far away
+        line("F.SilkS", (0, 0), (2_000_000, 0), 300_000),       // touches, but on another layer
     ];
     let mut b = with_footprint(&m, vec![circle], graphics);
     explode(&mut b).unwrap();
@@ -130,7 +130,7 @@ fn recombining_takes_in_the_graphics_that_touch_the_pad_and_leaves_the_others() 
     let custom = f.pads[0].custom.as_ref().unwrap();
     assert_eq!(custom.anchor, PadAnchor::Circle);
     assert_eq!(custom.primitives.len(), 1);
-    assert!(matches!(&custom.primitives[0].shape, Shape::Segment { layer, stroke_width: 300, start: Point { x: 0, y: 0 }, end: Point { x: 2000, y: 0 }, .. } if layer.is_empty()));
+    assert!(matches!(&custom.primitives[0].shape, Shape::Segment { layer, stroke_width: 300_000, start: Point { x: 0, y: 0 }, end: Point { x: 2_000_000, y: 0 }, .. } if layer.is_empty()));
     // The far line and the silkscreen line stay graphics of the footprint.
     assert_eq!(f.graphics.len(), 2);
     assert!(f.graphics.iter().any(|g| g.layer() == "F.SilkS") && f.graphics.iter().any(|g| g.layer() == "F.Cu"));
@@ -139,22 +139,22 @@ fn recombining_takes_in_the_graphics_that_touch_the_pad_and_leaves_the_others() 
 #[test]
 fn a_rectangle_pad_is_its_own_anchor_and_a_rounded_one_becomes_a_polygon_round_a_circular_anchor() {
     let m = ConstraintModel::default();
-    let touching = vec![line("F.Cu", (0, 0), (2000, 0), 100)];
+    let touching = vec![line("F.Cu", (0, 0), (2_000_000, 0), 100_000)];
 
-    let rect = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1000, 600], "shape": "rect", "kind": "smd" }));
+    let rect = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 600_000], "shape": "rect", "kind": "smd" }));
     let mut b = with_footprint(&m, vec![rect], touching.clone());
     explode(&mut b).unwrap();
     recombine(&mut b).unwrap();
     let c = fp(&b).pads[0].custom.clone().unwrap();
-    assert_eq!((fp(&b).pads[0].shape, c.anchor, c.primitives.len(), fp(&b).pads[0].size), (LibraryPadShape::Custom, PadAnchor::Rect, 1, (1000, 600)));
+    assert_eq!((fp(&b).pads[0].shape, c.anchor, c.primitives.len(), fp(&b).pads[0].size), (LibraryPadShape::Custom, PadAnchor::Rect, 1, (1_000_000, 600_000)));
 
-    let rounded = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1000, 600], "shape": "round_rect", "roundrect_ratio": 0.25, "kind": "smd" }));
+    let rounded = pad(json!({ "number": "1", "at": {"x": 0, "y": 0}, "size": [1_000_000, 600_000], "shape": "round_rect", "roundrect_ratio": 0.25, "kind": "smd" }));
     let mut b = with_footprint(&m, vec![rounded], touching);
     explode(&mut b).unwrap();
     recombine(&mut b).unwrap();
     let p = &fp(&b).pads[0];
     let c = p.custom.clone().unwrap();
-    assert_eq!((p.shape, c.anchor, p.size, p.roundrect_ratio), (LibraryPadShape::Custom, PadAnchor::Circle, (600, 600), None));
+    assert_eq!((p.shape, c.anchor, p.size, p.roundrect_ratio), (LibraryPadShape::Custom, PadAnchor::Circle, (600_000, 600_000), None));
     // The old outline first, as a filled polygon of no width, then the line.
     assert_eq!(c.primitives.len(), 2);
     assert!(matches!(&c.primitives[0].shape, Shape::Polygon { filled: true, stroke_width: 0, pts, .. } if pts.len() >= 8));
@@ -170,11 +170,11 @@ fn a_shape_edited_while_the_pad_was_exploded_comes_back_where_it_was_drawn() {
     explode(&mut b).unwrap();
     // Move the freed line 400 um to the right: it is the pad's primitive moved by 400 when the pad is recombined.
     let gid = fp(&b).graphics[0].id().to_string();
-    b.apply(&Cmd::MoveFootprintGraphic { footprint: "Lib:Row".into(), id: gid, dx: 400, dy: 0 }).unwrap();
+    b.apply(&Cmd::MoveFootprintGraphic { footprint: "Lib:Row".into(), id: gid, dx: 400_000, dy: 0 }).unwrap();
     recombine(&mut b).unwrap();
     let custom = fp(&b).pads[0].custom.clone().unwrap();
     let real: Vec<_> = custom.primitives.iter().filter(|p| !p.proxy).collect();
-    assert!(matches!(&real[0].shape, Shape::Segment { start: Point { x: 400, y: 0 }, end: Point { x: 1400, y: 0 }, .. }));
+    assert!(matches!(&real[0].shape, Shape::Segment { start: Point { x: 400_000, y: 0 }, end: Point { x: 1_400_000, y: 0 }, .. }));
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn a_rectangle_turned_by_a_pad_that_is_not_square_to_the_footprint_becomes_a_pol
     let m = ConstraintModel::default();
     let mut p = custom_pad();
     p.rot = 45_000;
-    p.custom.as_mut().unwrap().primitives = vec![prim(Shape::Rect { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 500 } }, false)];
+    p.custom.as_mut().unwrap().primitives = vec![prim(Shape::Rect { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 500_000 } }, false)];
     let mut b = with_footprint(&m, vec![p], vec![]);
     explode(&mut b).unwrap();
     assert!(matches!(&fp(&b).graphics[0], Shape::Polygon { pts, filled: true, .. } if pts.len() == 4), "{:?}", fp(&b).graphics[0]);

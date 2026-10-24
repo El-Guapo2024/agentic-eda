@@ -73,7 +73,7 @@
     const sx = (b[0] - a[0]) / 400;
     const sy = (b[1] - a[1]) / 300;
     mmPerPx = Math.abs(sx);
-    return (xum, yum) => [100 + (xum / 1000 - a[0]) / sx, 100 + (yum / 1000 - a[1]) / sy];
+    return (xum, yum) => [100 + (xum / 1e6 - a[0]) / sx, 100 + (yum / 1e6 - a[1]) / sy];
   };
   const click = async (px, py, extra = {}) => { fire("pointermove", px, py, extra); await sleep(150); fire("pointerdown", px, py, { buttons: 1, ...extra }); await sleep(60); fire("pointerup", px, py, extra); await sleep(700); };
   /** A press, a motion in steps with the button held, a release: a drag. */
@@ -149,7 +149,7 @@
       const extent = (p) => { const xs = p.pads.map((q) => q.x), ys = p.pads.map((q) => q.y); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
       const corner = parts.slice().sort((p, q) => (extent(p)[2] + extent(p)[3]) - (extent(q)[2] + extent(q)[3]))[0];
       const [, , ex, ey] = extent(corner);
-      const w = [st.outline[0][0] - 2000, st.outline[0][1] - 2000, ex + 1200, ey + 1200];
+      const w = [st.outline[0][0] - 2_000_000, st.outline[0][1] - 2_000_000, ex + 1_200_000, ey + 1_200_000];
       const [wx0, wy0] = to(w[0], w[1]), [wx1, wy1] = to(w[2], w[3]);
       await drag(wx0, wy0, wx1, wy1);
       t(selected().includes(corner.ref), `a window round ${corner.ref} selects it: ${selected()}`);
@@ -166,9 +166,9 @@
       const [px, py] = to(p0.at[0], p0.at[1]);
       await drag(px, py, px + 60, py + 30);
       const p1 = await partOf(B);
-      const want = [60 * mmPerPx * 1000, 30 * mmPerPx * 1000];
+      const want = [60 * mmPerPx * 1e6, 30 * mmPerPx * 1e6];
       const dx = p1.at[0] - p0.at[0], dy = p1.at[1] - p0.at[1];
-      t(Math.abs(dx - want[0]) < 1000 && Math.abs(dy - want[1]) < 1000, `moved by (${dx}, ${dy}) um for a drag of (${Math.round(want[0])}, ${Math.round(want[1])}) um`);
+      t(Math.abs(dx - want[0]) < 1_000_000 && Math.abs(dy - want[1]) < 1_000_000, `moved by (${dx}, ${dy}) nm for a drag of (${Math.round(want[0])}, ${Math.round(want[1])}) nm`);
       t(p1.pads.every((q, i) => q.x - p0.pads[i].x === dx && q.y - p0.pads[i].y === dy), "its pads moved with it");
       t(p1.rot === p0.rot && p1.side === p0.side, "it kept its orientation and side");
       await undo();
@@ -217,7 +217,7 @@
       buttonText(document, "OK")?.click();
       await sleep(900);
       const p1 = await partOf(C);
-      t(p1.at[0] === p0.at[0] + 2000 && p1.at[1] === p0.at[1] - 1500, `moved by (2, -1.5) mm: ${p0.at} -> ${p1.at}`);
+      t(p1.at[0] === p0.at[0] + 2_000_000 && p1.at[1] === p0.at[1] - 1_500_000, `moved by (2, -1.5) mm: ${p0.at} -> ${p1.at}`);
       await undo();
       t((await snapshot()) === base, "one undo puts it back");
     });
@@ -315,13 +315,13 @@
       await sleep(400);
       t(!!row("Position X") && !!row("Orientation"), `the panel shows the footprint's rows (${[...document.querySelectorAll(".prop-row")].slice(0, 8).map((r) => r.dataset.prop)})`);
       const x0 = Number(input("Position X")?.value);
-      t(Math.abs(x0 - p0.at[0] / 1000) < 1e-6, `Position X reads the footprint's x in mm (${x0} for ${p0.at[0]} um)`);
+      t(Math.abs(x0 - p0.at[0] / 1e6) < 1e-6, `Position X reads the footprint's x in mm (${x0} for ${p0.at[0]} um)`);
       let r = await editRow("Position X", String(x0 + 1.25));
       t(r.startsWith("ok"), `Position X takes a new value: ${r}`);
-      t((await partOf(B)).at[0] === p0.at[0] + 1250, `the footprint moved 1.25 mm right (${(await partOf(B)).at})`);
+      t((await partOf(B)).at[0] === p0.at[0] + 1_250_000, `the footprint moved 1.25 mm right (${(await partOf(B)).at})`);
       const y0 = Number(input("Position Y")?.value);
       r = await editRow("Position Y", String(y0 - 0.5));
-      t(r.startsWith("ok") && (await partOf(B)).at[1] === p0.at[1] - 500, `Position Y moves it 0.5 mm up: ${r} (${(await partOf(B)).at})`);
+      t(r.startsWith("ok") && (await partOf(B)).at[1] === p0.at[1] - 500_000, `Position Y moves it 0.5 mm up: ${r} (${(await partOf(B)).at})`);
       r = await editRow("Orientation", "90");
       const p1 = await partOf(B);
       t(r.startsWith("ok") && Math.abs(turn(p0.rot, p1.rot)) === 90, `Orientation 90 turns it a quarter: ${r} (rot ${p0.rot} -> ${p1.rot})`);

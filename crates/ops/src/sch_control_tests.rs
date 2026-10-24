@@ -2,7 +2,7 @@
 use super::*;
 use eda_model::ir::Provenance;
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -12,7 +12,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -22,8 +22,8 @@ fn empty_design() -> Design {
     }
 }
 
-fn place(b: &mut Board<'_>, id: &str, lib_id: &str, unit: u32, x: Um) {
-    b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: lib_id.into(), at: p(x, 10_000), rot_millideg: 0, value: String::new(), footprint: String::new(), unit }).unwrap();
+fn place(b: &mut Board<'_>, id: &str, lib_id: &str, unit: u32, x: Nm) {
+    b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: lib_id.into(), at: p(x, 10_000_000), rot_millideg: 0, value: String::new(), footprint: String::new(), unit }).unwrap();
 }
 
 fn symbols(b: &Board<'_>) -> Vec<SymbolInstance> {
@@ -33,10 +33,10 @@ fn symbols(b: &Board<'_>) -> Vec<SymbolInstance> {
 #[test]
 fn the_attribute_verb_sets_every_unit_of_a_reference_and_leaves_the_unnamed_flags_alone() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
     place(&mut b, "U1", "Device:R", 1, 0);
-    place(&mut b, "U1", "Device:R", 2, 20_000);
-    place(&mut b, "R2", "Device:R", 1, 40_000);
+    place(&mut b, "U1", "Device:R", 2000, 20_000_000);
+    place(&mut b, "R2", "Device:R", 1, 40_000_000);
     b.apply(&Cmd::SetSymbolAttrs { ids: vec!["U1".into()], dnp: Some(true), exclude_from_bom: Some(true), exclude_from_board: None, exclude_from_sim: None }).unwrap();
     let s = symbols(&b);
     let u1: Vec<_> = s.iter().filter(|x| x.id == "U1").collect();
@@ -52,7 +52,7 @@ fn the_attribute_verb_sets_every_unit_of_a_reference_and_leaves_the_unnamed_flag
 #[test]
 fn the_attribute_verb_refuses_nothing_selected_and_an_unknown_reference() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
     place(&mut b, "R1", "Device:R", 1, 0);
     let none = Cmd::SetSymbolAttrs { ids: vec![], dnp: Some(true), exclude_from_bom: None, exclude_from_board: None, exclude_from_sim: None };
     assert_eq!(b.apply(&none).unwrap_err()[0].check, "ops_nothing_selected");
@@ -64,8 +64,8 @@ fn the_attribute_verb_refuses_nothing_selected_and_an_unknown_reference() {
 #[test]
 fn a_sheet_page_is_set_on_the_placement_wherever_it_is_and_validated() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
-    b.apply(&Cmd::AddSheet { name: "Power".into(), file: "power".into(), at: p(10_000, 10_000), size: (30_000, 20_000) }).unwrap();
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
+    b.apply(&Cmd::AddSheet { name: "Power".into(), file: "power".into(), at: p(10_000_000, 10_000_000), size: (30_000_000, 20_000_000) }).unwrap();
     let id = b.design().schematic.as_ref().unwrap().sheets[0].id.clone();
     b.apply(&Cmd::SetSheetPage { sheet: id.clone(), page: " A3 ".into() }).unwrap();
     assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].page, "A3", "trimmed");
@@ -78,13 +78,13 @@ fn a_sheet_page_is_set_on_the_placement_wherever_it_is_and_validated() {
 #[test]
 fn a_sheet_page_reaches_a_placement_that_lives_on_a_child_screen() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
-    b.apply(&Cmd::AddSheet { name: "A".into(), file: "a".into(), at: p(0, 0), size: (10_000, 10_000) }).unwrap();
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
+    b.apply(&Cmd::AddSheet { name: "A".into(), file: "a".into(), at: p(0, 0), size: (10_000_000, 10_000_000) }).unwrap();
     // a grandchild placement written straight into the child screen (no verb draws on a child screen yet)
     let mut design = b.design().clone();
-    let grandchild = eda_model::ir::SheetInstance { id: "g1".into(), name: "G".into(), file: "g.kicad_sch".into(), at: p(0, 0), size: (1000, 1000), pins: vec![], page: String::new() };
+    let grandchild = eda_model::ir::SheetInstance { id: "g1".into(), name: "G".into(), file: "g.kicad_sch".into(), at: p(0, 0), size: (1_000_000, 1_000_000), pins: vec![], page: String::new() };
     design.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap().sheets.push(grandchild);
-    let mut b = Board::new(design, &m, 100, 300);
+    let mut b = Board::new(design, &m, 100_000, 300_000);
     b.apply(&Cmd::SetSheetPage { sheet: "g1".into(), page: "9".into() }).unwrap();
     assert_eq!(b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"].sheets[0].page, "9");
 }
@@ -92,13 +92,13 @@ fn a_sheet_page_reaches_a_placement_that_lives_on_a_child_screen() {
 #[test]
 fn a_label_or_text_changes_its_text_and_keeps_its_id_and_place() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
-    b.apply(&Cmd::AddLabel { net: "DATA0".into(), at: p(5_000, 5_000), kind: eda_model::ir::LabelKind::Local }).unwrap();
-    b.apply(&Cmd::AddSchText { content: "Rev A".into(), at: p(9_000, 9_000), angle_millideg: 0, size_um: 1270 }).unwrap();
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
+    b.apply(&Cmd::AddLabel { net: "DATA0".into(), at: p(5_000_000, 5_000_000), kind: eda_model::ir::LabelKind::Local }).unwrap();
+    b.apply(&Cmd::AddSchText { content: "Rev A".into(), at: p(9_000_000, 9_000_000), angle_millideg: 0, size_nm: 1_270_000 }).unwrap();
     // the studio loads the design fresh for every verb, which hands out the ids; do the same here
     let mut design = b.design().clone();
     design.assign_missing_ids();
-    let mut b = Board::new(design, &m, 100, 300);
+    let mut b = Board::new(design, &m, 100_000, 300_000);
     let (lid, tid) = {
         let sch = b.design().schematic.as_ref().unwrap();
         (sch.labels[0].id.clone(), sch.texts[0].id.clone())
@@ -106,7 +106,7 @@ fn a_label_or_text_changes_its_text_and_keeps_its_id_and_place() {
     b.apply(&Cmd::SetSchItemText { id: lid.clone(), text: "DATA1".into() }).unwrap();
     b.apply(&Cmd::SetSchItemText { id: tid.clone(), text: "Rev B".into() }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
-    assert_eq!((sch.labels[0].id.as_str(), sch.labels[0].net.as_str(), sch.labels[0].at), (lid.as_str(), "DATA1", p(5_000, 5_000)));
+    assert_eq!((sch.labels[0].id.as_str(), sch.labels[0].net.as_str(), sch.labels[0].at), (lid.as_str(), "DATA1", p(5_000_000, 5_000_000)));
     assert_eq!((sch.texts[0].id.as_str(), sch.texts[0].content.as_str()), (tid.as_str(), "Rev B"));
     assert_eq!(b.apply(&Cmd::SetSchItemText { id: lid, text: String::new() }).unwrap_err()[0].check, "ops_bad_label", "a label's text is its net name");
     assert_eq!(b.apply(&Cmd::SetSchItemText { id: "nope".into(), text: "x".into() }).unwrap_err()[0].check, "ops_unknown_item");
@@ -115,10 +115,10 @@ fn a_label_or_text_changes_its_text_and_keeps_its_id_and_place() {
 #[test]
 fn the_library_link_of_a_group_moves_with_its_value_proxy_and_is_checked_first() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
     b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(0, 0), rot_millideg: 0, value: "R".into(), footprint: String::new(), unit: 1 }).unwrap();
-    b.apply(&Cmd::AddSymbol { id: "R2".into(), lib_id: "Device:R".into(), at: p(10_000, 0), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
-    b.apply(&Cmd::AddSymbol { id: "C1".into(), lib_id: "Device:C".into(), at: p(20_000, 0), rot_millideg: 0, value: "C".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { id: "R2".into(), lib_id: "Device:R".into(), at: p(10_000_000, 0), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { id: "C1".into(), lib_id: "Device:C".into(), at: p(20_000_000, 0), rot_millideg: 0, value: "C".into(), footprint: String::new(), unit: 1 }).unwrap();
     let change = |from: &str, to: &str| Cmd::SetSymbolLibIds { changes: vec![(from.into(), to.into())], update_fields: false };
     assert_eq!(b.apply(&change("Device:R", "R")).unwrap_err()[0].check, "ops_bad_lib_id");
     assert_eq!(b.apply(&change("Device:R", "Device:Nope")).unwrap_err()[0].check, "ops_unknown_symbol");
@@ -145,7 +145,7 @@ fn a_symbol_of_the_project_library_is_a_link_target_even_when_it_was_put_there_a
     // Export Symbols... with "Update schematic symbols to link to exported symbols": the symbols go into the project library under the
     // new nickname and the placed ones are linked to them, in one batch -- the model knows nothing of the new entries.
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
     place(&mut b, "R1", "Device:R", 1, 0);
     let sym = eda_model::ir::LibrarySymbol {
         lib_id: "mylib:R".into(),
@@ -183,9 +183,9 @@ fn a_symbol_of_the_project_library_is_a_link_target_even_when_it_was_put_there_a
 #[test]
 fn incrementing_annotations_moves_the_references_together_and_carries_the_pins() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
     for (i, r) in ["R1", "R2", "R3", "C1"].iter().enumerate() {
-        place(&mut b, r, "Device:R", 1, i as Um * 10_000);
+        place(&mut b, r, "Device:R", 1, i as Nm * 10_000_000);
     }
     b.apply(&Cmd::IncrementAnnotations { start: "R2".into(), increment: 1 }).unwrap();
     let mut ids: Vec<String> = symbols(&b).into_iter().map(|s| s.id).collect();
@@ -200,9 +200,9 @@ fn incrementing_annotations_moves_the_references_together_and_carries_the_pins()
 #[test]
 fn incrementing_annotations_refuses_a_collision_a_negative_number_and_leaves_a_bare_start_alone() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut b = Board::new(empty_design(), &m, 100_000, 300_000);
     for (i, r) in ["R1", "R2", "R3"].iter().enumerate() {
-        place(&mut b, r, "Device:R", 1, i as Um * 10_000);
+        place(&mut b, r, "Device:R", 1, i as Nm * 10_000_000);
     }
     let ids = |b: &Board<'_>| {
         let mut ids: Vec<String> = symbols(b).into_iter().map(|s| s.id).collect();

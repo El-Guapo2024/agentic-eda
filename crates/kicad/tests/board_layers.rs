@@ -103,7 +103,7 @@ fn a_board_nobody_set_up_is_the_board_kicad_starts() {
 
     let mut m = ConstraintModel::default();
     m.board.layers = vec!["F.Cu".into(), "B.Cu".into()];
-    let d = eda_model::ir::Design { schema: 1, provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: None, nets: None, placement: Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }, Point { x: 0, y: 10_000 }], footprints: vec![], modules: vec![] }), routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None };
+    let d = eda_model::ir::Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: None, nets: None, placement: Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }, Point { x: 0, y: 10_000 }], footprints: vec![], modules: vec![] }), routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None };
     let layers = layers_section(&export(&d, &m));
     assert_eq!(layers.len(), 2 + 18, "a board with no page is the 18 technical layers KiCad starts a board with");
     assert!(layers.iter().any(|l| l == "(40 \"Dwgs.User\" user \"User.Drawings\")") && layers.iter().any(|l| l == "(45 \"Margin\" user)"));

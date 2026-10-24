@@ -140,8 +140,8 @@ fn qa_board(pcb: &str) -> eda_drc::rule_editor::EditorBoard {
     // `CuStack`: F.Cu, the inner layers in order, B.Cu.
     b.copper.sort_by_key(|l| match l.as_str() {
         "F.Cu" => 0,
-        "B.Cu" => 1000,
-        l => l.trim_start_matches("In").trim_end_matches(".Cu").parse::<i32>().unwrap_or(999),
+        "B.Cu" => 1_000_000,
+        l => l.trim_start_matches("In").trim_end_matches(".Cu").parse::<i32>().unwrap_or(999_000),
     });
     b
 }

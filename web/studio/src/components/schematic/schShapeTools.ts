@@ -140,7 +140,7 @@ export function paintShapePreview(ctx: CanvasRenderingContext2D, view: ViewTrans
     const g = setCursorPosition(withMode(draw.poly, leaderModeOf(lineMode)), [cursor[0], cursor[1]]);
     const color = layerColor("LAYER_RULE_AREAS");
     ctx.save();
-    ctx.lineWidth = Math.max(150, 1.5 / view.scale);
+    ctx.lineWidth = Math.max(150_000, 1.5 / view.scale);
     ctx.strokeStyle = color;
     const outline = [...g.locked, ...g.leader.slice(1), ...g.loop.slice(1, -1)];
     ctx.beginPath();

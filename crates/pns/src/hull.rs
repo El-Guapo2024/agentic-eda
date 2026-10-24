@@ -31,7 +31,7 @@
 //! convex).
 
 use eda_drc::kimath::Shape;
-use eda_model::ir::{Point, Um};
+use eda_model::ir::{Point, Nm};
 
 /// 8 points on a circle of radius `r` centred at `c`, spaced so the circle
 /// of radius `r` is inscribed (apothem == r): vertices at `22.5 + k*45`
@@ -39,7 +39,7 @@ use eda_model::ir::{Point, Um};
 /// `r <= 0` (returns 8 coincident points at `c`, harmless as convex-hull
 /// input).
 ///
-/// `MARGIN_UM` pads the circumradius a couple of micrometers past the
+/// `MARGIN_NM` pads the circumradius a couple of micrometers past the
 /// exact value: every per-vertex coordinate is independently rounded to
 /// the nearest integer micrometer, which can shift a vertex up to ~0.7um
 /// closer to centre than the exact construction -- enough, for an edge's
@@ -48,15 +48,15 @@ use eda_model::ir::{Point, Um};
 /// tests: a route hugging this hull collided with the very pad it was
 /// hugging, `actual: 199` against a required `200`). The hull only has to
 /// be *at least* clearance-offset, never exactly it, so padding is free.
-fn circle_pts(c: Point, r: Um) -> [Point; 8] {
+fn circle_pts(c: Point, r: Nm) -> [Point; 8] {
     const COS22_5: f64 = 0.923_879_532_511_286_8;
-    const MARGIN_UM: f64 = 2.0;
+    const MARGIN_NM: f64 = 2.0;
     let r = r.max(0);
-    let circumradius = r as f64 / COS22_5 + MARGIN_UM;
+    let circumradius = r as f64 / COS22_5 + MARGIN_NM;
     let mut pts = [Point { x: 0, y: 0 }; 8];
     for (k, p) in pts.iter_mut().enumerate() {
         let theta = (22.5 + 45.0 * k as f64).to_radians();
-        *p = Point { x: c.x + (circumradius * theta.cos()).round() as Um, y: c.y + (circumradius * theta.sin()).round() as Um };
+        *p = Point { x: c.x + (circumradius * theta.cos()).round() as Nm, y: c.y + (circumradius * theta.sin()).round() as Nm };
     }
     pts
 }
@@ -104,7 +104,7 @@ pub fn convex_hull(points: &[Point]) -> Vec<Point> {
 /// `clearance + walkaround_width / 2` -- the walking line's own half-width
 /// has to clear the obstacle just as much as the obstacle's own boundary
 /// does, since clearance is measured edge-to-edge, not centreline-to-edge.
-pub fn hull_of(shape: &Shape, clearance: Um, walkaround_width: Um) -> Vec<Point> {
+pub fn hull_of(shape: &Shape, clearance: Nm, walkaround_width: Nm) -> Vec<Point> {
     let offset = clearance + walkaround_width / 2;
     match *shape {
         Shape::Circle { c, r } => convex_hull(&circle_pts(c, r + offset)),
@@ -183,7 +183,7 @@ mod tests {
     fn rect_hull_is_exact_inflated_rect() {
         let hull = hull_of(&Shape::Rect { x0: 0, y0: 0, x1: 1000, y1: 2000 }, 50, 0);
         assert_eq!(hull.len(), 4);
-        let xs: Vec<Um> = hull.iter().map(|p| p.x).collect();
+        let xs: Vec<Nm> = hull.iter().map(|p| p.x).collect();
         assert!(xs.contains(&-50) && xs.contains(&1050));
     }
 
@@ -207,14 +207,14 @@ mod tests {
 /// this IR's whole-µm resolution it can lose up to ~1 µm, enough for a
 /// hull-hugging path to sit 1 µm inside the rule. Every router hull is
 /// grown by this much so its output still meets clearance exactly.
-pub const HULL_ROUNDING_GUARD: Um = 1;
+pub const HULL_ROUNDING_GUARD: Nm = 1;
 
-fn kiround(v: f64) -> Um {
-    v.round() as Um
+fn kiround(v: f64) -> Nm {
+    v.round() as Nm
 }
 
 /// `VECTOR2I::Resize` (integral): same direction, length `len`.
-pub(crate) fn resize(x: Um, y: Um, len: Um) -> (Um, Um) {
+pub(crate) fn resize(x: Nm, y: Nm, len: Nm) -> (Nm, Nm) {
     if x == 0 && y == 0 {
         return (0, 0);
     }
@@ -256,7 +256,7 @@ pub fn make_clockwise(mut pts: Vec<Point>) -> Vec<Point> {
 }
 
 /// `OctagonalHull( aP0, aSize, aClearance, aChamfer )`.
-pub fn octagonal_hull(p0: Point, size: (Um, Um), cl: Um, chamfer: Um) -> Vec<Point> {
+pub fn octagonal_hull(p0: Point, size: (Nm, Nm), cl: Nm, chamfer: Nm) -> Vec<Point> {
     let p = |x, y| Point { x, y };
     let mut s = vec![p(p0.x - cl, p0.y - cl + chamfer)];
     if chamfer != 0 {
@@ -277,16 +277,16 @@ pub fn octagonal_hull(p0: Point, size: (Um, Um), cl: Um, chamfer: Um) -> Vec<Poi
     s
 }
 
-fn is_45(dx: Um, dy: Um) -> bool {
+fn is_45(dx: Nm, dy: Nm) -> bool {
     dx == 0 || dy == 0 || dx.abs() == dy.abs()
 }
 
 /// `SegmentHull( aSeg, aClearance, aWalkaroundThickness )`.
-pub fn segment_hull(a: Point, b0: Point, width: Um, clearance: Um, walk: Um) -> Vec<Point> {
+pub fn segment_hull(a: Point, b0: Point, width: Nm, clearance: Nm, walk: Nm) -> Vec<Point> {
     let kink = clearance / 10;
     let mut cl = clearance + walk / 2;
     let mut b = b0;
-    let len = (((b.x - a.x) as f64).powi(2) + ((b.y - a.y) as f64).powi(2)).sqrt() as Um;
+    let len = (((b.x - a.x) as f64).powi(2) + ((b.y - a.y) as f64).powi(2)).sqrt() as Nm;
     let (mut w, mut h) = (b.x - a.x, b.y - a.y);
     if a != b {
         if !is_45(w, h) {
@@ -325,9 +325,9 @@ pub fn segment_hull(a: Point, b0: Point, width: Um, clearance: Um, walk: Um) -> 
     let ds = resize(px, py, xr2);
     let pd = resize(dx, dy, xr2);
     let dp = resize(dx, dy, dr);
-    let add = |p: Point, v: (Um, Um)| Point { x: p.x + v.0, y: p.y + v.1 };
-    let neg = |v: (Um, Um)| (-v.0, -v.1);
-    let sum = |u: (Um, Um), v: (Um, Um)| (u.0 + v.0, u.1 + v.1);
+    let add = |p: Point, v: (Nm, Nm)| Point { x: p.x + v.0, y: p.y + v.1 };
+    let neg = |v: (Nm, Nm)| (-v.0, -v.1);
+    let sum = |u: (Nm, Nm), v: (Nm, Nm)| (u.0 + v.0, u.1 + v.1);
     let s = vec![
         add(b, sum(p0, pd)),
         add(b, sum(dp, ds)),
@@ -349,9 +349,9 @@ pub fn segment_hull(a: Point, b0: Point, width: Um, clearance: Um, walk: Um) -> 
 }
 
 /// `VIA::Hull`: an equilateral octagon.
-pub fn via_hull(pos: Point, diameter: Um, clearance: Um, walk: Um) -> Vec<Point> {
+pub fn via_hull(pos: Point, diameter: Nm, clearance: Nm, walk: Nm) -> Vec<Point> {
     let cl = clearance + walk / 2;
-    let chamfer = ((2 * cl + diameter) as f64 * (1.0 - std::f64::consts::FRAC_1_SQRT_2)) as Um;
+    let chamfer = ((2 * cl + diameter) as f64 * (1.0 - std::f64::consts::FRAC_1_SQRT_2)) as Nm;
     octagonal_hull(Point { x: pos.x - diameter / 2, y: pos.y - diameter / 2 }, (diameter, diameter), cl, chamfer)
 }
 
@@ -369,7 +369,7 @@ pub(crate) fn intersect_lines(a: (Point, Point), b: (Point, Point)) -> Option<Po
 
 /// `SEG::LineDistance( p )` (seg.cpp:746): `isqrt( rescale( det, det, l ) )`,
 /// i.e. the floor of the rounded squared distance to the infinite line.
-fn line_distance(s: (Point, Point), q: Point) -> Um {
+fn line_distance(s: (Point, Point), q: Point) -> Nm {
     let (p, qq) = ((s.0.y - s.1.y) as i128, (s.1.x - s.0.x) as i128);
     let r = -p * s.0.x as i128 - qq * s.0.y as i128;
     let l = p * p + qq * qq;
@@ -387,14 +387,14 @@ fn line_distance(s: (Point, Point), q: Point) -> Um {
     while (x + 1) * (x + 1) <= dist_sq {
         x += 1;
     }
-    x as Um
+    x as Nm
 }
 
 /// `ConvexHull( SHAPE_SIMPLE, aClearance )`: an octagon of the bbox
 /// (inflated by the clearance) and four 45-degree diagonals moved in to
 /// `aClearance` from the polygon (`MoveDiagonal`).
-pub fn convex_hull_octagon(vertices: &[Point], clearance: Um) -> Vec<Point> {
-    let (mut x0, mut y0, mut x1, mut y1) = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+pub fn convex_hull_octagon(vertices: &[Point], clearance: Nm) -> Vec<Point> {
+    let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
     for p in vertices {
         x0 = x0.min(p.x);
         y0 = y0.min(p.y);
@@ -409,7 +409,7 @@ pub fn convex_hull_octagon(vertices: &[Point], clearance: Um) -> Vec<Point> {
     let leftline = (p(bx, by), p(bx, by + bh));
     // `SHAPE_LINE_CHAIN::NearestPoint( SEG, dist )`: minimum over the polygon's
     // *vertices* of `SEG::LineDistance` (distance to the infinite line).
-    let seg_dist = |d: (Point, Point)| -> Um { vertices.iter().map(|&v| line_distance(d, v)).min().unwrap_or(Um::MAX) };
+    let seg_dist = |d: (Point, Point)| -> Nm { vertices.iter().map(|&v| line_distance(d, v)).min().unwrap_or(Nm::MAX) };
     let mv = |d: (Point, Point)| -> (Point, Point) {
         let dist = seg_dist(d);
         let (vx, vy) = (d.0.x - d.1.x, d.0.y - d.1.y);
@@ -432,10 +432,10 @@ pub fn convex_hull_octagon(vertices: &[Point], clearance: Um) -> Vec<Point> {
 /// shapes this crate's items carry. A rounded rectangle is KiCad's
 /// compound (inner rect + one segment per edge, `PAD::buildEffectiveShape`),
 /// hulled per primitive and unioned.
-pub fn primitive_hull(shape: &Shape, clearance: Um, walk: Um) -> Vec<Point> {
+pub fn primitive_hull(shape: &Shape, clearance: Nm, walk: Nm) -> Vec<Point> {
     let cl = clearance + (walk + 1) / 2;
     match *shape {
-        Shape::Circle { c, r } => make_clockwise(octagonal_hull(Point { x: c.x - r, y: c.y - r }, (2 * r, 2 * r), cl, (2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * (r + cl) as f64) as Um)),
+        Shape::Circle { c, r } => make_clockwise(octagonal_hull(Point { x: c.x - r, y: c.y - r }, (2 * r, 2 * r), cl, (2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * (r + cl) as f64) as Nm)),
         Shape::Stadium { a, b, r } => segment_hull(a, b, 2 * r, clearance, walk),
         Shape::Rect { x0, y0, x1, y1 } => make_clockwise(octagonal_hull(Point { x: x0, y: y0 }, (x1 - x0, y1 - y0), cl, 0)),
         Shape::RoundRect { x0, y0, x1, y1, r } => {
@@ -524,7 +524,7 @@ mod kicad_hull_tests {
         let (w, h, cl) = (500.0f64, 300.0f64, 300);
         for deg in [10.0f64, 30.0, 55.0, 60.0, 70.0, 85.0] {
             let (sn, cs) = deg.to_radians().sin_cos();
-            let poly: Vec<Point> = [(-w, -h), (w, -h), (w, h), (-w, h)].iter().map(|&(x, y)| Point { x: (x * cs - y * sn).round() as Um, y: (x * sn + y * cs).round() as Um }).collect();
+            let poly: Vec<Point> = [(-w, -h), (w, -h), (w, h), (-w, h)].iter().map(|&(x, y)| Point { x: (x * cs - y * sn).round() as Nm, y: (x * sn + y * cs).round() as Nm }).collect();
             let hull = convex_hull_octagon(&poly, cl);
             let mut min_d = f64::INFINITY;
             for i in 0..hull.len() {

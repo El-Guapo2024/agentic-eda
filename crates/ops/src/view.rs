@@ -54,8 +54,8 @@ fn bearing(dx: i64, dy: i64) -> &'static str {
     }
 }
 
-fn mm(um: i64) -> f64 {
-    (um as f64 / 100.0).round() / 10.0
+fn mm(nm: i64) -> f64 {
+    (nm as f64 / 100_000.0).round() / 10.0
 }
 
 /// How much of each ninth of the board is covered, so dead space is
@@ -131,9 +131,9 @@ fn problems(board: &Board, model: &ConstraintModel) -> Value {
                 "check": f.check,
                 "move": f.mover,
                 "toward": f.toward,
-                "apart_mm": mm(f.apart_um),
-                "allowed_mm": mm(f.allowed_um),
-                "close_by_mm": mm(f.close_um()),
+                "apart_mm": mm(f.apart_nm),
+                "allowed_mm": mm(f.allowed_nm),
+                "close_by_mm": mm(f.close_nm()),
                 "actionable": true,
             })
         })

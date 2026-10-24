@@ -2,7 +2,7 @@
 // eeschema/tools/sch_editor_control.cpp::highlightNet): source collects the
 // connectable item under the cursor and highlights its net; nothing there
 // clears the highlight (returns null). Nearest-wire first (within
-// `tolUm`), then a label or power-symbol anchor. Pure.
+// `tolNm`), then a label or power-symbol anchor. Pure.
 
 export interface NetWire {
   net: string;
@@ -16,18 +16,18 @@ export interface NetAnchor {
 /** A pin on the sheet, for the net highlight: the net it is on and how far the point is from its box (0 inside it: `kicad-port/schPins.ts` `pinDistance`). */
 export interface NetPin {
   net: string | null;
-  distUm: number;
+  distNm: number;
 }
 
 /** `Schematic()->Settings().m_PinSymbolSize / 4`: the least accuracy a pin hit test is given (the same floor as `kicad-port/schPins.ts`). */
-const PIN_FLOOR_UM = 158.75;
+const PIN_FLOOR_NM = 158_750;
 
 /**
- * `SCH_SELECTION_TOOL::GetNode`: the connectable items at the point -- pins, wires, labels, power symbols -- tried at the accuracies 0, a quarter, a half and the whole of `tolUm` in
+ * `SCH_SELECTION_TOOL::GetNode`: the connectable items at the point -- pins, wires, labels, power symbols -- tried at the accuracies 0, a quarter, a half and the whole of `tolNm` in
  * turn, the first accuracy that finds one deciding; the nearest of those is the item. Its net is the highlighted one (`highlightNet`), none clears it.
  */
-export function netAtPoint(wires: readonly NetWire[], anchors: readonly NetAnchor[], x: number, y: number, tolUm: number, pins: readonly NetPin[] = []): string | null {
-  for (const t of [0, tolUm / 4, tolUm / 2, tolUm]) {
+export function netAtPoint(wires: readonly NetWire[], anchors: readonly NetAnchor[], x: number, y: number, tolNm: number, pins: readonly NetPin[] = []): string | null {
+  for (const t of [0, tolNm / 4, tolNm / 2, tolNm]) {
     let best: { net: string | null; d: number } | null = null;
     const consider = (net: string | null, d: number) => {
       if (!best || d < best.d) best = { net, d };
@@ -49,7 +49,7 @@ export function netAtPoint(wires: readonly NetWire[], anchors: readonly NetAncho
       }
     }
     // `SCH_PIN::HitTest`: the pin's box, at least the pin symbol size over four around it
-    for (const p of pins) if (p.distUm <= Math.max(t, PIN_FLOOR_UM)) consider(p.net, p.distUm);
+    for (const p of pins) if (p.distNm <= Math.max(t, PIN_FLOOR_NM)) consider(p.net, p.distNm);
     if (best) return (best as { net: string | null }).net;
   }
   return null;

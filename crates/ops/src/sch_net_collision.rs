@@ -22,16 +22,16 @@ use eda_model::ir::Point;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// `DEFAULT_JUNCTION_DIAM`, 36 mil: the preview junction's effective diameter (`SCH_JUNCTION::GetEffectiveDiameter`), micrometres.
-const JUNCTION_DIAMETER_UM: f64 = 914.4;
-/// "std::max( base * 1.5, 800.0 )" and "std::max( { 800.0, ... } )": 800 nm, micrometres.
-const MIN_RADIUS_UM: f64 = 0.8;
+/// `DEFAULT_JUNCTION_DIAM`, 36 mil: the preview junction's effective diameter (`SCH_JUNCTION::GetEffectiveDiameter`), nanometres.
+const JUNCTION_DIAMETER_NM: f64 = 914_400.0;
+/// "std::max( base * 1.5, 800.0 )" and "std::max( { 800.0, ... } )" (sch_drag_net_collision.cpp): 800 schematic IU of 100 nm.
+const MIN_RADIUS_NM: f64 = 80_000.0;
 
 /// A circle where the held items would join two nets (`COLLISION_MARKER`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CollisionMarker {
     pub at: Point,
-    pub radius_um: f64,
+    pub radius_nm: f64,
 }
 
 /// Two points that were one connection and no longer meet, with the line between them (`DISCONNECTION_MARKER`).
@@ -39,7 +39,7 @@ pub struct CollisionMarker {
 pub struct DisconnectionMarker {
     pub a: Point,
     pub b: Point,
-    pub radius_um: f64,
+    pub radius_nm: f64,
 }
 
 /// What the monitor draws for one state of a held selection.
@@ -241,9 +241,9 @@ impl Monitor {
         // `analyzeJunction` for each of `JUNCTION_HELPERS::PreviewJunctions`
         for at in self.preview_junctions(scene, &selection, drag) {
             if self.junction_collides(scene, &selection, &by_key, at) {
-                let radius_um = (JUNCTION_DIAMETER_UM * 1.5).max(MIN_RADIUS_UM);
+                let radius_nm = (JUNCTION_DIAMETER_NM * 1.5).max(MIN_RADIUS_NM);
                 if !out.collisions.iter().any(|m| m.at == at) {
-                    out.collisions.push(CollisionMarker { at, radius_um });
+                    out.collisions.push(CollisionMarker { at, radius_nm });
                 }
             }
         }
@@ -264,8 +264,8 @@ impl Monitor {
             if !(selection.contains(&a) || selection.contains(&b)) {
                 continue;
             }
-            let radius_um = MIN_RADIUS_UM.max(pen_width_um(scene, a)).max(pen_width_um(scene, b));
-            out.disconnections.push(DisconnectionMarker { a: point_a, b: point_b, radius_um });
+            let radius_nm = MIN_RADIUS_NM.max(pen_width_nm(scene, a)).max(pen_width_nm(scene, b));
+            out.disconnections.push(DisconnectionMarker { a: point_a, b: point_b, radius_nm });
         }
         out
     }
@@ -323,19 +323,19 @@ impl Monitor {
 
 /// `SCH_ITEM::GetPenWidth` of what a connection joins, micrometres: a wire is 6 mil and a bus 12 mil (`m_DefaultLineWidth`, `m_DefaultBusThickness`), a label's text is an
 /// eighth of its size; a symbol, a junction and the rest are 0 here.
-fn pen_width_um(scene: &Scene, it: Item) -> f64 {
+fn pen_width_nm(scene: &Scene, it: Item) -> f64 {
     match it {
         Item::Seg(i) => {
-            let stroke = scene.segs[i].from.and_then(|(wi, _)| scene.sch.extras.strokes.get(&scene.meta[wi].id)).map(|s| s.width_um).filter(|w| *w > 0);
+            let stroke = scene.segs[i].from.and_then(|(wi, _)| scene.sch.extras.strokes.get(&scene.meta[wi].id)).map(|s| s.width_nm).filter(|w| *w > 0);
             match stroke {
                 Some(w) => w as f64,
-                None if scene.segs[i].bus => 304.8,
-                None => 152.4,
+                None if scene.segs[i].bus => 304_800.0,
+                None => 152_400.0,
             }
         }
         Item::Label(i) => {
-            let size = scene.sch.extras.label_looks.get(&scene.sch.labels[i].id).map_or(0, |l| l.text_size_um());
-            (if size > 0 { size } else { eda_model::ir::DEFAULT_FIELD_SIZE_UM }) as f64 / 8.0
+            let size = scene.sch.extras.label_looks.get(&scene.sch.labels[i].id).map_or(0, |l| l.text_size_nm());
+            (if size > 0 { size } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }) as f64 / 8.0
         }
         _ => 0.0,
     }

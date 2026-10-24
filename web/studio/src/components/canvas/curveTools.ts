@@ -27,6 +27,6 @@ export function arcClickPoints(g: ArcGeom): [number, number][] {
 }
 
 /** `bezier->SetStart/SetBezierC1/SetEnd/SetBezierC2` as the shape `add_shape` / `add_footprint_graphic` takes. */
-export function bezierShape(curve: BezierCurve, layer: string, strokeWidthUm: number): CmdShape {
-  return { kind: "bezier", layer, stroke_width: strokeWidthUm, filled: false, start: ptXY(curve.start), c1: ptXY(curve.c1), c2: ptXY(curve.c2), end: ptXY(curve.end) };
+export function bezierShape(curve: BezierCurve, layer: string, strokeWidthNm: number): CmdShape {
+  return { kind: "bezier", layer, stroke_width: strokeWidthNm, filled: false, start: ptXY(curve.start), c1: ptXY(curve.c1), c2: ptXY(curve.c2), end: ptXY(curve.end) };
 }

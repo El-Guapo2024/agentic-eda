@@ -202,8 +202,8 @@ test("connectedTrackWidth: a route that starts at a track's end takes that track
 });
 
 test("duplicatedZoneOutline: moved 1 mm each way when the copy stays on the layer, as it was when it goes to another", () => {
-  const outline: [number, number][] = [[0, 0], [10_000, 0], [10_000, 10_000]];
-  assert.deepEqual(duplicatedZoneOutline(outline, true), [[1000, 1000], [11_000, 1000], [11_000, 11_000]]);
+  const outline: [number, number][] = [[0, 0], [10_000_000, 0], [10_000_000, 10_000_000]];
+  assert.deepEqual(duplicatedZoneOutline(outline, true), [[1_000_000, 1_000_000], [11_000_000, 1_000_000], [11_000_000, 11_000_000]]);
   assert.deepEqual(duplicatedZoneOutline(outline, false), outline);
 });
 

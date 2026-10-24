@@ -21,8 +21,8 @@ use eda_model::ir::Design;
 use eda_model::{CheckResult, ConstraintModel, Part};
 use serde_json::{json, Value};
 
-fn um_to_mm(um: i64) -> f64 {
-    (um as f64) / 1000.0
+fn um_to_mm(nm: i64) -> f64 {
+    eda_model::units::to_mm(nm)
 }
 
 /// Map our KiCad-style stackup layer names ("F.Cu", "B.Cu", "In1.Cu", ...)
@@ -248,7 +248,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
             // `width`/`height` are required by the schema; use the
             // footprint's courtyard when present, else the pad bounding
             // box (both in the local, unrotated frame).
-            let (width_um, height_um) = footprint.courtyard.unwrap_or_else(|| {
+            let (width_nm, height_nm) = footprint.courtyard.unwrap_or_else(|| {
                 let mut min_x = i64::MAX;
                 let mut max_x = i64::MIN;
                 let mut min_y = i64::MAX;
@@ -274,8 +274,8 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                 "center": { "x": um_to_mm(fp.at.x), "y": um_to_mm(fp.at.y) },
                 "rotation": fp.rot,
                 "layer": layer,
-                "width": um_to_mm(width_um),
-                "height": um_to_mm(height_um),
+                "width": um_to_mm(width_nm),
+                "height": um_to_mm(height_nm),
             }));
             let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
             let (sin, cos) = rad.sin_cos();
@@ -432,7 +432,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
-                    body_um: None, symbol: None, datasheet: None,
+                    body_nm: None, symbol: None, datasheet: None,
                     edge: None,
                 },
                 Part {
@@ -446,7 +446,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
-                    body_um: None, symbol: None, datasheet: None,
+                    body_nm: None, symbol: None, datasheet: None,
                     edge: None,
                 },
             ],
@@ -458,12 +458,12 @@ mod tests {
     fn design() -> Design {
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
                 symbols: vec![
-                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: 1_000, y: 2_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: 3_000, y: 2_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: 1_000_000, y: 2_000_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: 3_000_000, y: 2_000_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 ],
                 wires: vec![],
                 labels: vec![],
@@ -533,7 +533,7 @@ mod tests {
             footprint: None,
             package: None,
             pins: vec![],
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         });
         assert_eq!(ftype, "simple_chip");
@@ -583,7 +583,7 @@ mod tests {
             id: String::new(),
             net: "VIN".into(),
             pins: vec![],
-            pts: vec![Point { x: 1_000, y: 2_000 }, Point { x: 3_000, y: 2_000 }],
+            pts: vec![Point { x: 1_000_000, y: 2_000_000 }, Point { x: 3_000_000, y: 2_000_000 }],
             bus: false,
         });
         let v = to_circuit_json(&d, &m).unwrap();
@@ -607,8 +607,8 @@ mod tests {
                 pads: vec![
                     eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "1".into(),
-                        at: (-800_000 / 1000, 0),
-                        size: (900, 900),
+                        at: (-800_000, 0),
+                        size: (900_000, 900_000),
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
@@ -618,8 +618,8 @@ mod tests {
                     },
                     eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "2".into(),
-                        at: (800_000 / 1000, 0),
-                        size: (900, 900),
+                        at: (800_000, 0),
+                        size: (900_000, 900_000),
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
@@ -638,10 +638,10 @@ mod tests {
         };
         let mut d = design();
         d.placement = Some(PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 10_000 }],
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }],
             footprints: vec![eda_model::ir::FootprintInstance {
                 id: "R1".into(),
-                at: Point { x: 5_000, y: 5_000 },
+                at: Point { x: 5_000_000, y: 5_000_000 },
                 rot: 0,
                 side: Side::Top, label: Default::default()
             }],

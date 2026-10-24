@@ -74,9 +74,9 @@ test("editing a cell sends one edit_cells of its address, and several cells one 
   assert.deepEqual(edit(s, ["tbl_a:1:2"], "Text", "r1c2"), [], "no change, no command");
   assert.deepEqual(edit(s, ["tbl_a:0:0"], "Bold", true), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { bold: true } }]);
   assert.deepEqual(edit(s, ["tbl_a:0:0"], "Margin Top", 500), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { margins: [null, 500, null, null] } }]);
-  assert.deepEqual(edit(s, ["tbl_a:0:1"], "Column Width", 12_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 1]], edit: { col_width_um: 12_000 } }]);
+  assert.deepEqual(edit(s, ["tbl_a:0:1"], "Column Width", 12_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 1]], edit: { col_width_nm: 12_000 } }]);
   // `SCH_TEXTBOX::SetSchTextSize`: one number for both dimensions of the glyph
-  assert.deepEqual(edit(s, ["tbl_a:0:0"], "Text Size", 1_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { width_um: 1_000, height_um: 1_000 } }]);
+  assert.deepEqual(edit(s, ["tbl_a:0:0"], "Text Size", 1_000_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { width_nm: 1_000_000, height_nm: 1_000_000 } }]);
   const two = edit(s, ["tbl_a:0:0", "tbl_a:0:1"], "Italic", true);
   assert.equal(two.length, 2);
   // the text size must not make the text disappear

@@ -63,27 +63,27 @@ test("the picker offers the copper layers, less the current one for a via that i
 });
 
 const board = (classes: NetClass[], defaultClass?: NetClass): BoardState =>
-  ({ layers: CU4, board_rules: { track_width: 250, via_diameter: 600, via_drill: 300, clearance: 200, net_classes: classes, default_class: defaultClass } }) as unknown as BoardState;
+  ({ layers: CU4, board_rules: { track_width: 250_000, via_diameter: 600_000, via_drill: 300_000, clearance: 200_000, net_classes: classes, default_class: defaultClass } }) as unknown as BoardState;
 
 test("a microvia takes its net class's microvia size, else KiCad's 0.3 / 0.1 mm", () => {
-  const b = board([{ name: "hdi", nets: ["USB*"], microvia_diameter: 250, microvia_drill: 80, priority: 0 }]);
-  assert.deepEqual(viaSizeFor(b, "USB_DP", "micro", { diameter: 800, drill: 400 }), { diameter: 250, drill: 80 }, "even with a via size chosen");
+  const b = board([{ name: "hdi", nets: ["USB*"], microvia_diameter: 250_000, microvia_drill: 80_000, priority: 0 }]);
+  assert.deepEqual(viaSizeFor(b, "USB_DP", "micro", { diameter: 800_000, drill: 400_000 }), { diameter: 250_000, drill: 80_000 }, "even with a via size chosen");
   assert.deepEqual(viaSizeFor(b, "GND", "micro", null), DEFAULT_MICROVIA);
-  assert.deepEqual(viaSizeFor(board([], { name: "Default", nets: [], microvia_diameter: 200, microvia_drill: 100, priority: 0 }), "GND", "micro", null), { diameter: 200, drill: 100 });
+  assert.deepEqual(viaSizeFor(board([], { name: "Default", nets: [], microvia_diameter: 200_000, microvia_drill: 100_000, priority: 0 }), "GND", "micro", null), { diameter: 200_000, drill: 100_000 });
 });
 
 test("a blind or through via takes the chosen via size, else the net class's", () => {
-  const b = board([{ name: "pwr", nets: ["VBAT"], via_diameter: 800, via_drill: 400, priority: 0 }]);
-  assert.deepEqual(viaSizeFor(b, "VBAT", "blind", null), { diameter: 800, drill: 400 });
-  assert.deepEqual(viaSizeFor(b, "GND", "blind", null), { diameter: 600, drill: 300 });
-  assert.deepEqual(viaSizeFor(b, "VBAT", "through", { diameter: 500, drill: 250 }), { diameter: 500, drill: 250 });
+  const b = board([{ name: "pwr", nets: ["VBAT"], via_diameter: 800_000, via_drill: 400_000, priority: 0 }]);
+  assert.deepEqual(viaSizeFor(b, "VBAT", "blind", null), { diameter: 800_000, drill: 400_000 });
+  assert.deepEqual(viaSizeFor(b, "GND", "blind", null), { diameter: 600_000, drill: 300_000 });
+  assert.deepEqual(viaSizeFor(b, "VBAT", "through", { diameter: 500_000, drill: 250_000 }), { diameter: 500_000, drill: 250_000 });
 });
 
 test("PCB_VIA::ValidateViaParameters' messages, word for word", () => {
-  assert.equal(validateViaParameters(0, 300), "Via diameter is too small.");
-  assert.equal(validateViaParameters(600, 0), "Via drill is too small.");
-  assert.equal(validateViaParameters(600, null), "No via hole size defined.");
-  assert.equal(validateViaParameters(null, 300), "No via diameter defined.");
-  assert.equal(validateViaParameters(300, 300), "Via hole size must be smaller than via diameter");
-  assert.equal(validateViaParameters(600, 300), null);
+  assert.equal(validateViaParameters(0, 300_000), "Via diameter is too small.");
+  assert.equal(validateViaParameters(600_000, 0), "Via drill is too small.");
+  assert.equal(validateViaParameters(600_000, null), "No via hole size defined.");
+  assert.equal(validateViaParameters(null, 300_000), "No via diameter defined.");
+  assert.equal(validateViaParameters(300_000, 300_000), "Via hole size must be smaller than via diameter");
+  assert.equal(validateViaParameters(600_000, 300_000), null);
 });

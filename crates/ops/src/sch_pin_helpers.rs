@@ -21,7 +21,7 @@ use crate::sch_labels::PlacedLabel;
 use crate::sch_move::side_of;
 use crate::sch_scene::{placed_lib_symbol, Matrix, Scene};
 use crate::Board;
-use eda_model::ir::{field_key, parse_pin_item_id, LabelKind, LabelShape, NoConnect, Point, Um, Wire};
+use eda_model::ir::{field_key, parse_pin_item_id, LabelKind, LabelShape, NoConnect, Point, Nm, Wire};
 use eda_model::sch_extras::LabelSpin;
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ pub enum PinHelper {
 }
 
 /// The default wire grid, 50 mil (`GRID_HELPER_GRIDS::GRID_WIRES` before the user picks another).
-pub const DEFAULT_WIRE_GRID_UM: Um = 1_270;
+pub const DEFAULT_WIRE_GRID_NM: Nm = 1_270_000;
 
 /// One pin or sheet pin as a helper sees it.
 struct Spot {
@@ -161,7 +161,7 @@ impl<'a> Board<'a> {
     }
 
     /// [`SchCmd::PinHelper`](crate::sch_edit::SchCmd::PinHelper): `what` on every pin and sheet pin of `ids`, with `grid` the wire grid a stub is one step of (0 is 50 mil).
-    pub(crate) fn pin_helper(&mut self, what: PinHelper, ids: &[String], grid: Um) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn pin_helper(&mut self, what: PinHelper, ids: &[String], grid: Nm) -> Result<(), Vec<CheckResult>> {
         let model = self.model;
         let spots: Vec<Spot> = {
             let scene = Scene::new(self.schematic()?, model);
@@ -170,7 +170,7 @@ impl<'a> Board<'a> {
         if spots.is_empty() {
             return Err(fail("ops_nothing_selected", ids.first().map(String::as_str).unwrap_or("pins"), "select a pin or a sheet pin"));
         }
-        let step = if grid > 0 { grid } else { DEFAULT_WIRE_GRID_UM };
+        let step = if grid > 0 { grid } else { DEFAULT_WIRE_GRID_NM };
         let was = drawn_items(self.schematic()?);
         match what {
             PinHelper::NoConnect => {

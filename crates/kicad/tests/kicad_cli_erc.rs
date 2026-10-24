@@ -50,7 +50,7 @@ fn ldo_model() -> ConstraintModel {
         package: None,
         footprint: Some("Foo:Bar".into()),
         pins,
-        body_um: None, symbol: None, datasheet: None,
+        body_nm: None, symbol: None, datasheet: None,
         edge: None,
     };
     let net = |name: &str, pins: &[&str]| Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() };

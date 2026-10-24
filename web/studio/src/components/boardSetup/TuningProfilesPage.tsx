@@ -173,11 +173,11 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
                           <td>{layerSelect(`Row ${row + 1} top reference`, e.top_reference_layer ?? NONE, (v) => setEntry(row, { top_reference_layer: v === NONE ? null : v }), true)}</td>
                           <td>{layerSelect(`Row ${row + 1} bottom reference`, e.bottom_reference_layer ?? NONE, (v) => setEntry(row, { bottom_reference_layer: v === NONE ? null : v }), true)}</td>
                           <td>
-                            <LengthField ariaLabel={`Row ${row + 1} track width`} units={units} value={e.width_um} invalid={!!error} width={70} onChange={(v) => setEntry(row, { width_um: v ?? Number.NaN })} />
+                            <LengthField ariaLabel={`Row ${row + 1} track width`} units={units} value={e.width_nm} invalid={!!error} width={70} onChange={(v) => setEntry(row, { width_nm: v ?? Number.NaN })} />
                           </td>
                           {p.profile_type === "differential" && (
                             <td>
-                              <LengthField ariaLabel={`Row ${row + 1} diff pair gap`} units={units} value={e.diff_pair_gap_um} invalid={!!error} width={70} onChange={(v) => setEntry(row, { diff_pair_gap_um: v ?? Number.NaN })} />
+                              <LengthField ariaLabel={`Row ${row + 1} diff pair gap`} units={units} value={e.diff_pair_gap_nm} invalid={!!error} width={70} onChange={(v) => setEntry(row, { diff_pair_gap_nm: v ?? Number.NaN })} />
                             </td>
                           )}
                           <td>

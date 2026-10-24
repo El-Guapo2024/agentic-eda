@@ -19,36 +19,36 @@ test("DEFAULT_VIEW_CONTROL_SETTINGS matches KiCad's shipped defaults", () => {
 });
 
 test("handleWheel: plain wheel zooms about the cursor, scrolling up (negative deltaY) zooms in", () => {
-  const view: ViewTransform = { scale: 1, x: 0, y: 0 };
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
   const before = screenToWorld(view, 400, 300);
   const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: -100 }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
   assert.equal(result.kind, "zoom");
-  assert.ok(result.view.scale > 1, "scrolling up should zoom in");
+  assert.ok(result.view.scale > 0.001, "scrolling up should zoom in");
   const after = screenToWorld(result.view, 400, 300);
   assert.ok(Math.abs(after[0] - before[0]) < 1e-9, "cursor's world point should stay under the cursor");
   assert.ok(Math.abs(after[1] - before[1]) < 1e-9);
 });
 
 test("handleWheel: scrolling down (positive deltaY) zooms out", () => {
-  const view: ViewTransform = { scale: 1, x: 0, y: 0 };
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
   const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: 100 }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
-  assert.ok(result.view.scale < 1);
+  assert.ok(result.view.scale < 0.001);
 });
 
 test("handleWheel: Ctrl+wheel pans horizontally instead of zooming (scrollModifierPanH default)", () => {
-  const view: ViewTransform = { scale: 1, x: 0, y: 0 };
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
   const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: -100, ctrlOrCmd: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
   assert.equal(result.kind, "pan");
-  assert.equal(result.view.scale, 1, "pan must not change zoom");
+  assert.equal(result.view.scale, 0.001, "pan must not change zoom");
   assert.notEqual(result.view.x, view.x, "x should move for a horizontal pan");
   assert.equal(result.view.y, view.y, "y should NOT move for a horizontal pan");
 });
 
 test("handleWheel: Shift+wheel pans vertically (doesn't match the zoom or pan-h modifier)", () => {
-  const view: ViewTransform = { scale: 1, x: 0, y: 0 };
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
   const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: -100, shiftKey: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
   assert.equal(result.kind, "pan");
@@ -57,7 +57,7 @@ test("handleWheel: Shift+wheel pans vertically (doesn't match the zoom or pan-h 
 });
 
 test("handleWheel: two modifiers at once is left unhandled (forwarded to tools in source)", () => {
-  const view: ViewTransform = { scale: 1, x: 0, y: 0 };
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
   const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: -100, shiftKey: true, ctrlOrCmd: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
   assert.equal(result.kind, "unhandled");
@@ -65,7 +65,7 @@ test("handleWheel: two modifiers at once is left unhandled (forwarded to tools i
 });
 
 test("handleWheel: a dominant horizontal delta always pans horizontally, regardless of modifiers", () => {
-  const view: ViewTransform = { scale: 1, x: 0, y: 0 };
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
   const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaX: -50, ctrlOrCmd: true, shiftKey: true }), DEFAULT_VIEW_CONTROL_SETTINGS, zc);
   assert.equal(result.kind, "pan-horizontal");
@@ -74,11 +74,11 @@ test("handleWheel: a dominant horizontal delta always pans horizontally, regardl
 });
 
 test("handleWheel: reverseScrollZoom flips the zoom direction", () => {
-  const view: ViewTransform = { scale: 1, x: 0, y: 0 };
+  const view: ViewTransform = { scale: 0.001, x: 0, y: 0 };
   const zc = new ConstantZoomController(CONSTANT_SCALE.MSW);
   const settings = { ...DEFAULT_VIEW_CONTROL_SETTINGS, reverseScrollZoom: true };
   const result = handleWheel(view, { width: 800, height: 600 }, wheel({ deltaY: -100 }), settings, zc);
-  assert.ok(result.view.scale < 1, "reversed: scrolling up now zooms out");
+  assert.ok(result.view.scale < 0.001, "reversed: scrolling up now zooms out");
 });
 
 test("computeAutoPanDirection: center of the screen is outside the autopan border", () => {
@@ -108,7 +108,7 @@ test("computeAutoPanStep: far past the border is accelerated to borderSize*accel
   const accel = 0.5 + 5.0 / 5.0; // 1.5 at the default acceleration setting
   const step = computeAutoPanStep({ x: -borderSize * 10, y: 0 }, screenSize, 1); // length 120 >= borderSize(12)
   assert.ok(step);
-  const pixelMagnitude = Math.hypot(step!.x, step!.y) * 1; // scalePxPerUm=1, so world delta == pixel magnitude
+  const pixelMagnitude = Math.hypot(step!.x, step!.y) * 1; // scalePxPerNm=1, so world delta == pixel magnitude
   assert.ok(Math.abs(pixelMagnitude - borderSize * accel) < 1e-9);
 });
 
@@ -139,18 +139,18 @@ test("dragActionOf: the middle and the right button do what the settings say, th
 });
 
 test("dragZoomView: dragging up zooms in and down zooms out by exp( d.y * speed * 0.001 ), the press point staying put on the screen", () => {
-  const view: ViewTransform = { scale: 2, x: 30, y: -10 };
+  const view: ViewTransform = { scale: 0.002, x: 30, y: -10 };
   const anchor = { x: 400, y: 300 };
   const before = screenToWorld(view, anchor.x, anchor.y);
   const up = dragZoomView(view, anchor, -20, 5);
-  assert.ok(Math.abs(up.scale - 2 * Math.exp(20 * 5 * 0.001)) < 1e-12, `${up.scale}`);
+  assert.ok(Math.abs(up.scale - 0.002 * Math.exp(20 * 5 * 0.001)) < 1e-15, `${up.scale}`);
   const down = dragZoomView(view, anchor, 20, 5);
-  assert.ok(down.scale < 2 && Math.abs(down.scale - 2 * Math.exp(-20 * 5 * 0.001)) < 1e-12);
+  assert.ok(down.scale < 0.002 && Math.abs(down.scale - 0.002 * Math.exp(-20 * 5 * 0.001)) < 1e-15);
   for (const v of [up, down]) {
     const after = screenToWorld(v, anchor.x, anchor.y);
     assert.ok(Math.abs(after[0] - before[0]) < 1e-9 && Math.abs(after[1] - before[1]) < 1e-9, "the world point under the press does not move");
   }
   // a faster zoom speed zooms more for the same drag; no movement is no zoom
   assert.ok(dragZoomView(view, anchor, -20, 10).scale > up.scale);
-  assert.equal(dragZoomView(view, anchor, 0, 5).scale, 2);
+  assert.equal(dragZoomView(view, anchor, 0, 5).scale, 0.002);
 });

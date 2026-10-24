@@ -120,13 +120,13 @@ test("a pad's edit is the stored one with the change laid over it; a key set to 
 });
 
 test("the field grid's rows are checked the way the dialog's Validate does", () => {
-  const fmt = (um: number) => `${um / 1000} mm`;
-  assert.equal(checkFieldRow("Vendor", { size: [1000, 1000], thickness: 150 }, fmt), null);
-  assert.equal(checkFieldRow("  ", { size: [1000, 1000], thickness: 150 }, fmt), "Fields must have a name.");
-  assert.equal(checkFieldRow("A", { size: [0, 1000], thickness: 150 }, fmt), "Text width must be at least 0.001 mm.");
-  assert.equal(checkFieldRow("A", { size: [1000, 300_000], thickness: 150 }, fmt), "Text height must be at most 250 mm.");
-  assert.match(checkFieldRow("A", { size: [1000, 1000], thickness: 400 }, fmt)!, /thickness is too large for the text size/);
-  assert.equal(checkFieldRow("A", { size: [1000, 1000], thickness: 250 }, fmt), null, "a quarter of the size is the most");
+  const fmt = (nm: number) => `${nm / 1e6} mm`;
+  assert.equal(checkFieldRow("Vendor", { size: [1_000_000, 1_000_000], thickness: 150_000 }, fmt), null);
+  assert.equal(checkFieldRow("  ", { size: [1_000_000, 1_000_000], thickness: 150_000 }, fmt), "Fields must have a name.");
+  assert.equal(checkFieldRow("A", { size: [0, 1_000_000], thickness: 150_000 }, fmt), "Text width must be at least 0.001 mm.");
+  assert.equal(checkFieldRow("A", { size: [1_000_000, 300_000_000], thickness: 150_000 }, fmt), "Text height must be at most 250 mm.");
+  assert.match(checkFieldRow("A", { size: [1_000_000, 1_000_000], thickness: 400_000 }, fmt)!, /thickness is too large for the text size/);
+  assert.equal(checkFieldRow("A", { size: [1_000_000, 1_000_000], thickness: 250_000 }, fmt), null, "a quarter of the size is the most");
 });
 
 test("a new field starts hidden at the origin on the fabrication layer of the footprint's side", () => {

@@ -8,7 +8,7 @@
 //! by the text's id, as `footprint_extras` is keyed by a footprint's reference: the importer reads them, the writer writes them back, and a text nothing was read for is
 //! written as it always was. The overlay is additive: a design without it reads as "every text is a square-sized, vertically centred, regular line with a stroke width".
 
-use crate::ir::{TextVAlign, Um};
+use crate::ir::{TextVAlign, Nm};
 use serde::{Deserialize, Serialize};
 
 fn is_false(b: &bool) -> bool {
@@ -25,9 +25,10 @@ fn is_zero(n: &i64) -> bool {
 pub struct TextExtra {
     /// The id of the text it belongs to (`Text::id`).
     pub id: String,
-    /// The glyph width, µm, when it is not the height (`(size HEIGHT WIDTH)`; `Text::size_um` is the height).
+    /// The glyph width, nm, when it is not the height (`(size HEIGHT WIDTH)`; `Text::size_nm` is the height).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width_um: Option<Um>,
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Option<Nm>,
     /// The file had no `(thickness ..)`: KiCad draws the text with its automatic stroke width (`GetPenSizeForNormal`, or `GetPenSizeForBold` for a bold one), and the writer
     /// leaves the token out. `Text::stroke_width` then holds that width.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -53,8 +54,8 @@ pub struct TextExtra {
 impl TextExtra {
     /// Whether this says nothing a text without one would not (the importer keeps no entry for such a text).
     pub fn is_default(&self) -> bool {
-        let TextExtra { id: _, width_um, auto_thickness, valign, bold, italic, knockout, line_spacing_permille, face } = self;
-        width_um.is_none() && !auto_thickness && *valign == TextVAlign::Center && !bold && !italic && !knockout && (*line_spacing_permille == 0 || *line_spacing_permille == 1000) && face.is_none()
+        let TextExtra { id: _, width_nm, auto_thickness, valign, bold, italic, knockout, line_spacing_permille, face } = self;
+        width_nm.is_none() && !auto_thickness && *valign == TextVAlign::Center && !bold && !italic && !knockout && (*line_spacing_permille == 0 || *line_spacing_permille == 1000) && face.is_none()
     }
 }
 

@@ -10,9 +10,9 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 
-export const REF_FONT_UM = 1_600;
-export const VALUE_FONT_UM = 1_400;
-export const FIELD_FONT_UM = 1_000;
+export const REF_FONT_NM = 1_600_000;
+export const VALUE_FONT_NM = 1_400_000;
+export const FIELD_FONT_NM = 1_000_000;
 
 export interface FieldBox {
   minX: number;
@@ -42,10 +42,10 @@ export function isVerticalTwoPin(pins: readonly FieldPin[]): boolean {
 
 export function fieldAnchors(bbox: FieldBox, verticalTwoPin: boolean): FieldAnchors {
   if (verticalTwoPin) {
-    const x = bbox.maxX + 800;
+    const x = bbox.maxX + 800_000;
     const cy = (bbox.minY + bbox.maxY) / 2;
-    return { ref: [x, cy - 300], value: [x, cy + 1_500], footprint: [x, cy + 1_500 + 1_150], justify: "left" };
+    return { ref: [x, cy - 300_000], value: [x, cy + 1_500_000], footprint: [x, cy + 1_500_000 + 1_150_000], justify: "left" };
   }
   const cx = (bbox.minX + bbox.maxX) / 2;
-  return { ref: [cx, bbox.minY - 400], value: [cx, bbox.maxY + 1_800], footprint: [cx, bbox.maxY + 1_800 + 1_150], justify: "center" };
+  return { ref: [cx, bbox.minY - 400_000], value: [cx, bbox.maxY + 1_800_000], footprint: [cx, bbox.maxY + 1_800_000 + 1_150_000], justify: "center" };
 }

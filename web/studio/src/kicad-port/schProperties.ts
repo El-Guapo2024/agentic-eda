@@ -102,14 +102,14 @@ export function propertiesTarget(sch: Schematic, ids: readonly string[]): Proper
 // ---------------------------------------------------------------------------------------------------------------------------------- units and colours
 
 /** Millimetres typed in a dialog to micrometres; null when it is not a number. */
-export function mmToUm(text: string): number | null {
+export function mmToNm(text: string): number | null {
   const v = Number(text.trim().replace(",", "."));
-  return text.trim() !== "" && Number.isFinite(v) ? Math.round(v * 1000) : null;
+  return text.trim() !== "" && Number.isFinite(v) ? Math.round(v * 1e6) : null;
 }
 
 /** Micrometres as the millimetres a dialog shows. */
-export function umToMm(um: number): string {
-  return String(Math.round(um) / 1000);
+export function nmToMm(um: number): string {
+  return String(Math.round(um) / 1e6);
 }
 
 /** `COLOR4D::UNSPECIFIED`: the colour of the item's own layer. */
@@ -166,11 +166,11 @@ function sameFields(a: readonly LabelFieldEdit[], b: readonly LabelFieldEdit[]):
 
 /** Label Properties: only the fields that differ from the label as it is (`spin` is the label's current spin, stored or read off its wire). */
 export function labelEditCmd(
-  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_um" | "bold" | "italic" | "auto_rotate" | "fields">>,
+  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_nm" | "bold" | "italic" | "auto_rotate" | "fields">>,
   spin: LabelSpinName,
-  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeUm?: number | null; bold?: boolean; italic?: boolean; autoRotate?: boolean; fields?: LabelFieldEdit[] }
+  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeNm?: number | null; bold?: boolean; italic?: boolean; autoRotate?: boolean; fields?: LabelFieldEdit[] }
 ): Cmd | null {
-  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_um?: number; bold?: boolean; italic?: boolean; auto_rotate?: boolean; fields?: LabelFieldEdit[] } = {};
+  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_nm?: number; bold?: boolean; italic?: boolean; auto_rotate?: boolean; fields?: LabelFieldEdit[] } = {};
   // the grid of the label's own fields, when it changed (the backend drops empty rows and names unnamed ones as the dialog's OK does)
   if (next.fields !== undefined) {
     const canonical = next.fields.map((f) => ({ ...f, name: f.name.trim() === "Net Class" ? "Netclass" : f.name }));
@@ -184,7 +184,7 @@ export function labelEditCmd(
   if (label.scope !== "local" && next.autoRotate !== undefined && next.autoRotate !== !!label.auto_rotate) edit.auto_rotate = next.autoRotate;
   if (!auto && next.spin !== spin) edit.spin = next.spin;
   // the size, bold and italic of the text (`SetTextSize`, `SetBold`, `SetItalic`); a label that was never edited has the default size, regular
-  if (next.sizeUm !== undefined && next.sizeUm !== null && next.sizeUm !== (label.size_um && label.size_um > 0 ? label.size_um : 1270)) edit.size_um = next.sizeUm;
+  if (next.sizeNm !== undefined && next.sizeNm !== null && next.sizeNm !== (label.size_nm && label.size_nm > 0 ? label.size_nm : 1_270_000)) edit.size_nm = next.sizeNm;
   if (next.bold !== undefined && next.bold !== !!label.bold) edit.bold = next.bold;
   if (next.italic !== undefined && next.italic !== !!label.italic) edit.italic = next.italic;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_label", id: label.id, ...edit } : null;
@@ -213,14 +213,14 @@ export function powerEditCmd(
   return cmds.length === 1 ? cmds[0]! : { op: "batch", cmds };
 }
 
-/** Text Properties of a free text: only what differs. `sizeUm` null (not a number) is left out; the backend refuses a size outside 0.01 to 1000 mm. */
+/** Text Properties of a free text: only what differs. `sizeNm` null (not a number) is left out; the backend refuses a size outside 0.01 to 1000 mm. */
 export function textEditCmd(
-  text: Pick<SchematicText, "id" | "content" | "size_um" | "angle"> & Partial<Pick<SchematicText, "h" | "v" | "vertical">>,
-  next: { content: string; sizeUm: number | null; vertical: boolean; h?: SchHAlign; v?: SchVAlign }
+  text: Pick<SchematicText, "id" | "content" | "size_nm" | "angle"> & Partial<Pick<SchematicText, "h" | "v" | "vertical">>,
+  next: { content: string; sizeNm: number | null; vertical: boolean; h?: SchHAlign; v?: SchVAlign }
 ): Cmd | null {
-  const edit: { text?: string; size_um?: number; angle?: number; h?: SchHAlign; v?: SchVAlign } = {};
+  const edit: { text?: string; size_nm?: number; angle?: number; h?: SchHAlign; v?: SchVAlign } = {};
   if (next.content !== text.content) edit.text = next.content;
-  if (next.sizeUm !== null && next.sizeUm !== text.size_um) edit.size_um = next.sizeUm;
+  if (next.sizeNm !== null && next.sizeNm !== text.size_nm) edit.size_nm = next.sizeNm;
   // KiCad offers horizontal and vertical (`m_vertical`); a text is only ever one of the two (`KeepUpright`), so a legacy angle reads as the nearer.
   const lie = textLie(text);
   if (next.vertical !== lie.vertical) edit.angle = next.vertical ? 90_000 : 0;
@@ -262,10 +262,10 @@ export interface StrokeView {
   hasStroke: boolean;
   /** The junctions among the items (they have a diameter and a colour). */
   hasJunction: boolean;
-  widthUm: Shared<number>;
+  widthNm: Shared<number>;
   style: Shared<SchLineStyle>;
   color: Shared<SchColor>;
-  diameterUm: Shared<number>;
+  diameterNm: Shared<number>;
 }
 
 export function strokeView(sch: Schematic, ids: readonly string[]): StrokeView {
@@ -285,38 +285,38 @@ export function strokeView(sch: Schematic, ids: readonly string[]): StrokeView {
     const j = junction.get(id);
     if (w || b || l) {
       const st = (w ?? b ?? l)!.stroke;
-      widths.push(l ? l.width_um : (st?.width_um ?? 0));
+      widths.push(l ? l.width_nm : (st?.width_nm ?? 0));
       styles.push(st?.style ?? "default");
       colors.push(st?.color ?? UNSPECIFIED_COLOR);
     } else if (j) {
-      diameters.push(j.look?.diameter_um ?? 0);
+      diameters.push(j.look?.diameter_nm ?? 0);
       junctionColors.push(j.look?.color ?? UNSPECIFIED_COLOR);
     }
   }
   return {
     hasStroke: widths.length > 0,
     hasJunction: diameters.length > 0,
-    widthUm: shared(widths, (a, b) => a === b),
+    widthNm: shared(widths, (a, b) => a === b),
     style: shared(styles, (a, b) => a === b),
     color: shared([...colors, ...junctionColors], sameColor),
-    diameterUm: shared(diameters, (a, b) => a === b),
+    diameterNm: shared(diameters, (a, b) => a === b),
   };
 }
 
 /** What the user changed in the stroke dialog (a field left `undefined` is untouched). */
 export interface StrokeChange {
-  widthUm?: number;
+  widthNm?: number;
   style?: SchLineStyle;
   color?: SchColor;
-  diameterUm?: number;
+  diameterNm?: number;
 }
 
 export function strokeEditCmd(ids: readonly string[], change: StrokeChange): Cmd | null {
-  const edit: { width_um?: number; style?: SchLineStyle; color?: SchColor; diameter_um?: number } = {};
-  if (change.widthUm !== undefined) edit.width_um = Math.max(0, change.widthUm);
+  const edit: { width_nm?: number; style?: SchLineStyle; color?: SchColor; diameter_nm?: number } = {};
+  if (change.widthNm !== undefined) edit.width_nm = Math.max(0, change.widthNm);
   if (change.style !== undefined) edit.style = change.style;
   if (change.color !== undefined) edit.color = isUnspecified(change.color) ? UNSPECIFIED_COLOR : change.color;
-  if (change.diameterUm !== undefined) edit.diameter_um = Math.max(0, change.diameterUm);
+  if (change.diameterNm !== undefined) edit.diameter_nm = Math.max(0, change.diameterNm);
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "set_stroke", ids: [...ids], ...edit } : null;
 }
 
@@ -328,10 +328,10 @@ function normalised(g: SchGraphic): unknown {
   let shape: unknown = s;
   switch (s.type) {
     case "rectangle":
-      shape = { ...s, corner_radius_um: s.corner_radius_um ?? 0 };
+      shape = { ...s, corner_radius_nm: s.corner_radius_nm ?? 0 };
       break;
     case "text_box":
-      shape = { ...s, angle: s.angle ?? 0, bold: !!s.bold, italic: !!s.italic, h_align: s.h_align ?? "left", v_align: s.v_align ?? "top", margin_um: s.margin_um ?? 0 };
+      shape = { ...s, angle: s.angle ?? 0, bold: !!s.bold, italic: !!s.italic, h_align: s.h_align ?? "left", v_align: s.v_align ?? "top", margin_nm: s.margin_nm ?? 0 };
       break;
     case "rule_area":
       shape = { ...s, exclude_from_sim: !!s.exclude_from_sim, exclude_from_bom: !!s.exclude_from_bom, exclude_from_board: !!s.exclude_from_board, dnp: !!s.dnp };
@@ -344,7 +344,7 @@ function normalised(g: SchGraphic): unknown {
   }
   const fill = g.fill ?? "none";
   const colour = (c: SchColor | undefined) => (c && !isUnspecified(c) ? c : null);
-  return { id: g.id, shape, width_um: g.width_um ?? 0, line_style: g.line_style ?? "default", color: colour(g.color), fill, fill_color: fill === "color" ? colour(g.fill_color) : null };
+  return { id: g.id, shape, width_nm: g.width_nm ?? 0, line_style: g.line_style ?? "default", color: colour(g.color), fill, fill_color: fill === "color" ? colour(g.fill_color) : null };
 }
 
 /** Is `b` the graphic `a` already is? A dialog sends `edit_graphic` only when it is not (the backend refuses an edit that changes nothing). */

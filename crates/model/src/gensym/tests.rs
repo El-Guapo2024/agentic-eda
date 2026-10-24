@@ -16,7 +16,7 @@ fn mcu() -> Part {
     pins.push(pin("14", "VDD2", PinKind::Power));
     pins.push(pin("15", "GND2", PinKind::Ground));
     pins.push(pin("16", "EN", PinKind::Signal));
-    Part { reference: "U1".into(), mpn: Some("MCU16".into()), lcsc: None, value: Some("MCU".into()), package: None, footprint: None, symbol: None, datasheet: None, pins, body_um: None, edge: None }
+    Part { reference: "U1".into(), mpn: Some("MCU16".into()), lcsc: None, value: Some("MCU".into()), package: None, footprint: None, symbol: None, datasheet: None, pins, body_nm: None, edge: None }
 }
 
 fn at_grid(v: f64) -> bool {

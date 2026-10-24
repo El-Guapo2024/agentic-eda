@@ -9,7 +9,7 @@ import { formatLength, type LengthUnit } from "../../state/units";
 
 export interface PreviewStyle {
   color: string;
-  /** `hairlineUm( view, px )`: a width that is `px` screen pixels wide at the current zoom. */
+  /** `hairlineNm( view, px )`: a width that is `px` screen pixels wide at the current zoom. */
   hair: (px: number) => number;
   units: LengthUnit;
 }
@@ -70,5 +70,5 @@ function centreMark(ctx: CanvasRenderingContext2D, x: number, y: number, hair: (
 }
 
 function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, style: PreviewStyle): void {
-  drawStrokeText(ctx, text, x, y, { sizeUm: style.hair(12), justify: "center", color: style.color, thicknessUm: style.hair(1.4) });
+  drawStrokeText(ctx, text, x, y, { sizeNm: style.hair(12), justify: "center", color: style.color, thicknessNm: style.hair(1.4) });
 }

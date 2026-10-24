@@ -111,9 +111,9 @@ mod tests {
     #[test]
     fn the_state_describes_an_image_and_leaves_its_pixels_out() {
         let data = image_info::base64_encode(&image_info::solid_png(60, 40, [1, 2, 3], 254));
-        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: eda_model::ir::Point { x: 0, y: 0 }, end: eda_model::ir::Point { x: 10, y: 10 }, corner_radius_um: 0 });
+        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: eda_model::ir::Point { x: 0, y: 0 }, end: eda_model::ir::Point { x: 10_000, y: 10_000 }, corner_radius_nm: 0 });
         rect.id = "shp_a".into();
-        let mut img = SchGraphic::new(SchGraphicKind::Image { at: eda_model::ir::Point { x: 5, y: 6 }, scale_ppm: 500_000, data: data.clone() });
+        let mut img = SchGraphic::new(SchGraphicKind::Image { at: eda_model::ir::Point { x: 5000, y: 6000 }, scale_ppm: 500_000, data: data.clone() });
         img.id = "img_a".into();
         let v = sch_graphics_json(&[rect, img]);
         assert_eq!(v[0]["shape"]["type"], "rectangle");

@@ -51,7 +51,7 @@ function onSegment(a: P, b: P, p: P): boolean {
  * Half the pen of a line as `SCH_LINE::GetPenWidth` resolves it with nothing set: a wire's 6 mil (the Default net class), a bus's 12 mil, a graphic line's
  * `m_DefaultLineWidth` (6 mil); in micrometres.
  */
-export const HALF_PEN_UM = { wire: 76, bus: 152, line: 76 };
+export const HALF_PEN_NM = { wire: 76_200, bus: 152_400, line: 76_200 };
 
 /**
  * `Items().Overlapping( aPosition )` for a line: the R-tree holds `SCH_LINE::GetBoundingBox`, the box of its two ends grown by half its pen (and 1 IU on the far
@@ -90,7 +90,7 @@ export function labelOrientationForPoint(scene: OrientationScene, at: P, current
 
   // SCH_LINE_T
   for (const l of scene.lines) {
-    if (!inLineBox(l.a, l.b, at, l.half ?? (l.bus ? HALF_PEN_UM.bus : HALF_PEN_UM.wire))) continue;
+    if (!inLineBox(l.a, l.b, at, l.half ?? (l.bus ? HALF_PEN_NM.bus : HALF_PEN_NM.wire))) continue;
     // "line angles goes between -90 and 90 degrees, but normalize": `Angle().Normalize90()` is in (-90, 90], so -45 < angle <= 45 is -dx < dy <= dx for the direction
     // turned to point right (or down, for a vertical line)
     let dx = l.b[0] - l.a[0];
@@ -122,7 +122,7 @@ export function orientationSceneOf(sch: Pick<Schematic, "wires" | "lines" | "bus
   const lines: Array<{ a: P; b: P; bus: boolean; half?: number }> = [];
   for (const w of sch.wires) for (let i = 0; i + 1 < w.pts.length; i++) lines.push({ a: w.pts[i]!, b: w.pts[i + 1]!, bus: !!w.bus });
   for (const l of sch.lines ?? []) {
-    const half = l.width_um > 0 ? Math.floor(l.width_um / 2) : HALF_PEN_UM.line;
+    const half = l.width_nm > 0 ? Math.floor(l.width_nm / 2) : HALF_PEN_NM.line;
     for (let i = 0; i + 1 < l.pts.length; i++) lines.push({ a: l.pts[i]!, b: l.pts[i + 1]!, bus: false, half });
   }
   const symbols: Array<Array<{ at: P; body: P }>> = [];

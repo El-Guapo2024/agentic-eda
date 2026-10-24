@@ -77,7 +77,7 @@
     el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
   };
   const closeDialogs = async () => { for (let i = 0; i < 3; i++) { const b = buttonText(document, "Cancel"); if (!b) break; b.click(); await sleep(150); } };
-  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const near = (a, b, tol = 2_000) => Math.abs(a - b) <= tol;
   /** The angle between two orientations in degrees, in (-180, 180]. */
   const delta = (a, b) => { let d = (((b - a) % 360) + 360) % 360; if (d > 180) d -= 360; return d; };
 
@@ -181,19 +181,19 @@
     // ----- Duplicate and Paste are one undo step with the drop; Escape leaves nothing
     await scenario("Duplicate and Paste are one undo step with the drop, and Escape leaves the history as it was", async (t) => {
       // a marker step of our own, so that "one step too many" shows
-      await post({ op: "move_items", ids: [refC], dx: 1000, dy: 0 });
+      await post({ op: "move_items", ids: [refC], dx: 1_000_000, dy: 0 });
       await sleep(500);
       const movedC = (await partOf(refC)).at;
-      const home = await hover(toScreen, A.at[0] / 1000, A.at[1] / 1000);
+      const home = await hover(toScreen, A.at[0] / 1e6, A.at[1] / 1e6);
       void home;
       await select([refA]);
       await __eda.run("common.Interactive.duplicate"); await sleep(900);
       t(__eda.state().tool === "move" && __eda.state().selection.length === 1, "Duplicate carries the copy");
-      await click(toScreen, A.at[0] / 1000 + 6, A.at[1] / 1000 + 5);
+      await click(toScreen, A.at[0] / 1e6 + 6, A.at[1] / 1e6 + 5);
       const copy = (await placedRefs()).filter((r) => !baseRefs.includes(r));
       t(copy.length === 1, `the copy is on the board (${copy})`);
       const dropped = (await partOf(copy[0])).at;
-      t(near(dropped[0], A.at[0] + 6000, 600) && near(dropped[1], A.at[1] + 5000, 600), `at the dropped place (${dropped} for ${A.at})`);
+      t(near(dropped[0], A.at[0] + 6_000_000, 600_000) && near(dropped[1], A.at[1] + 5_000_000, 600_000), `at the dropped place (${dropped} for ${A.at})`);
       await undo();
       t((await placedRefs()).join() === baseRefs.join(), "one Undo takes the copy away: the duplicate and the drop were one step");
       t(JSON.stringify((await partOf(refC)).at) === JSON.stringify(movedC), "and the step before it is still done");
@@ -204,7 +204,7 @@
       t(JSON.stringify((await partOf(refC)).at) === JSON.stringify(C.at), "the marker step goes with the next Undo");
 
       // Escape: a cancelled carry is `commit.Revert()` -- not even a redo entry
-      await post({ op: "move_items", ids: [refC], dx: 1000, dy: 0 });
+      await post({ op: "move_items", ids: [refC], dx: 1_000_000, dy: 0 });
       await sleep(400);
       await undo();
       t(JSON.stringify((await partOf(refC)).at) === JSON.stringify(C.at), "setup: the marker step is undone, and waits for a Redo");
@@ -222,7 +222,7 @@
       await __eda.run("common.Interactive.copy"); await sleep(500);
       await __eda.run("common.Interactive.paste"); await sleep(1200);
       t(__eda.state().selection.length === 2, "Paste carries both footprints");
-      await click(toScreen, A.at[0] / 1000 + 6, A.at[1] / 1000 + 8);
+      await click(toScreen, A.at[0] / 1e6 + 6, A.at[1] / 1e6 + 8);
       t((await placedRefs()).length === baseRefs.length + 2, "dropped");
       await undo();
       t((await placedRefs()).join() === baseRefs.join(), "one Undo takes the whole paste away");
@@ -289,14 +289,14 @@
         t(near(d15, d90 / 6, 1e-6), `R turns by the step now: ${d15} for ${d90} before`);
         await undo();
         // a carried copy turns by the step too
-        await hover(toScreen, p0.at[0] / 1000, p0.at[1] / 1000);
+        await hover(toScreen, p0.at[0] / 1e6, p0.at[1] / 1e6);
         await select([refA]);
         await __eda.run("common.Interactive.duplicate"); await sleep(900);
         const copy = __eda.state().selection[0]?.id;
         t(!!copy && copy !== refA, `Duplicate carries a copy (${copy})`);
         await __eda.run("pcbnew.InteractiveEdit.rotateCcw"); await sleep(300);
         await __eda.run("pcbnew.InteractiveEdit.rotateCcw"); await sleep(300);
-        await click(toScreen, p0.at[0] / 1000 + 5, p0.at[1] / 1000 + 6);
+        await click(toScreen, p0.at[0] / 1e6 + 5, p0.at[1] / 1e6 + 6);
         const c = copy ? await partOf(copy) : null;
         t(!!c && near(Math.abs(delta(p0.rot, c.rot)), Math.abs(d90) / 3, 1e-6), `two presses of R during the carry turn the copy by 2 steps (${c ? delta(p0.rot, c.rot) : "no copy"})`);
         await undo();
@@ -319,7 +319,7 @@
     await scenario("turning, flipping and deleting a routed footprint leaves its tracks where they are", async (t) => {
       const p = await partOf(refA);
       const pad = p.pads.find((q) => q.net);
-      await post({ op: "add_track", net: pad.net, layer: "F.Cu", width: 200, pts: [{ x: pad.x, y: pad.y }, { x: pad.x + 3000, y: pad.y - 2000 }] });
+      await post({ op: "add_track", net: pad.net, layer: "F.Cu", width: 200_000, pts: [{ x: pad.x, y: pad.y }, { x: pad.x + 3_000_000, y: pad.y - 2_000_000 }] });
       await sleep(500);
       const tracks = async () => ((await state()).routing?.tracks ?? []).length;
       t((await tracks()) === 1, "a track runs out of a pad of the footprint");
@@ -340,14 +340,14 @@
     await scenario("Select Connection with nothing selected takes the track under the cursor and its connection", async (t) => {
       const p = await partOf(refA);
       const pad = p.pads.find((q) => q.net);
-      const a = [pad.x, pad.y], b = [pad.x + 4000, pad.y], c = [pad.x + 4000, pad.y + 4000];
-      await post({ op: "add_track", net: pad.net, layer: "F.Cu", width: 200, pts: [{ x: a[0], y: a[1] }, { x: b[0], y: b[1] }] });
-      await post({ op: "add_track", net: pad.net, layer: "F.Cu", width: 200, pts: [{ x: b[0], y: b[1] }, { x: c[0], y: c[1] }] });
+      const a = [pad.x, pad.y], b = [pad.x + 4_000_000, pad.y], c = [pad.x + 4_000_000, pad.y + 4_000_000];
+      await post({ op: "add_track", net: pad.net, layer: "F.Cu", width: 200_000, pts: [{ x: a[0], y: a[1] }, { x: b[0], y: b[1] }] });
+      await post({ op: "add_track", net: pad.net, layer: "F.Cu", width: 200_000, pts: [{ x: b[0], y: b[1] }, { x: c[0], y: c[1] }] });
       await sleep(600);
       const ids = ((await state()).routing?.tracks ?? []).map((q) => q.id);
       t(ids.length === 2, "two connected tracks");
       await select([]);
-      await hover(toScreen, (a[0] + b[0]) / 2000, a[1] / 1000);
+      await hover(toScreen, (a[0] + b[0]) / 2e6, a[1] / 1e6);
       await __eda.run("pcbnew.InteractiveSelection.SelectConnection"); await sleep(600);
       const sel = __eda.state().selection.map((s) => s.id);
       t(ids.every((id) => sel.includes(id)), `no selection, the cursor on the first track: both tracks are selected (${sel})`);
@@ -391,7 +391,7 @@
     // ----- Add Corner puts the corner on the edge
     await scenario("Add Corner puts the new corner on the nearest edge of a zone and splits a line there", async (t) => {
       const netName = (await partOf(refA)).pads.find((q) => q.net).net;
-      const sq = [[11000, 11000], [21000, 11000], [21000, 21000], [11000, 21000]].map(([x, y]) => ({ x, y }));
+      const sq = [[11_000_000, 11_000_000], [21_000_000, 11_000_000], [21_000_000, 21_000_000], [11_000_000, 21_000_000]].map(([x, y]) => ({ x, y }));
       await post({ op: "add_zone", net: netName, layer: "F.Cu", outline: sq });
       await sleep(600);
       const zone = ((await state()).routing?.zones ?? [])[0];
@@ -403,16 +403,16 @@
       const z2 = ((await state()).routing?.zones ?? []).find((q) => q.id === zone.id);
       t(z2.outline.length === 5, `the outline has a corner more (${z2.outline.length})`);
       const added = z2.outline.find((q) => !zone.outline.some((o) => o[0] === q[0] && o[1] === q[1]));
-      t(!!added && added[0] === 15000 && added[1] === 11000, `the new corner is the nearest point of the edge, (15, 11) mm, not where the cursor is (${added})`);
+      t(!!added && added[0] === 15_000_000 && added[1] === 11_000_000, `the new corner is the nearest point of the edge, (15, 11) mm, not where the cursor is (${added})`);
       await undo();
-      await post({ op: "add_shape", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 150, filled: false, start: { x: 5000, y: 33000 }, end: { x: 15000, y: 33000 } } });
+      await post({ op: "add_shape", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 150_000, filled: false, start: { x: 5_000_000, y: 33_000_000 }, end: { x: 15_000_000, y: 33_000_000 } } });
       await sleep(500);
-      const seg = ((await state()).drawings?.shapes ?? []).find((s) => s.kind === "segment" && s.start[1] === 33000 && s.end[0] === 15000);
+      const seg = ((await state()).drawings?.shapes ?? []).find((s) => s.kind === "segment" && s.start[1] === 33_000_000 && s.end[0] === 15_000_000);
       await select([seg.id]);
       await hover(toScreen, 9.1, 32.4);
       await __eda.run("pcbnew.PointEditor.addCorner"); await sleep(800);
-      const segs = ((await state()).drawings?.shapes ?? []).filter((s) => s.kind === "segment" && s.start[1] === 33000 && s.end[1] === 33000);
-      t(segs.length === 2 && segs.some((s) => s.end[0] === 9000) && segs.some((s) => s.start[0] === 9000), `the line is two lines meeting at (9, 33) mm, on it (${segs.map((s) => s.start[0] + ".." + s.end[0])})`);
+      const segs = ((await state()).drawings?.shapes ?? []).filter((s) => s.kind === "segment" && s.start[1] === 33_000_000 && s.end[1] === 33_000_000);
+      t(segs.length === 2 && segs.some((s) => s.end[0] === 9_000_000) && segs.some((s) => s.start[0] === 9_000_000), `the line is two lines meeting at (9, 33) mm, on it (${segs.map((s) => s.start[0] + ".." + s.end[0])})`);
       for (let i = 0; i < 3 && (await snapshot()) !== base; i++) await undo();
       t((await snapshot()) === base, "undone, the board is as it was");
     });
@@ -429,12 +429,12 @@
       const py = (a1[1] + a0[0] - a1[0] + a0[1]) / 2;
       // (a footprint lands on the 100 um placement grid, so the pivot worked back from two poses is good to about that)
       const offGrid = (v) => Math.min(Math.abs(v % grid), grid - Math.abs(v % grid));
-      const onGrid = offGrid(px) <= 160;
-      const onGridY = offGrid(py) <= 160;
-      const anchor = [a0, b0].some((o) => near(o[0], px, 200) && near(o[1], py, 200));
+      const onGrid = offGrid(px) <= 160_000;
+      const onGridY = offGrid(py) <= 160_000;
+      const anchor = [a0, b0].some((o) => near(o[0], px, 200_000) && near(o[1], py, 200_000));
       t((onGrid && onGridY) || anchor, `the pivot (${px}, ${py}) is on the ${grid} um grid or at a footprint's origin`);
       // the same pivot turns the second footprint
-      t(near(b1[0], px + (b0[1] - py), 250) && near(b1[1], py - (b0[0] - px), 250), `and it is the pivot of the other one too (${b0} -> ${b1})`);
+      t(near(b1[0], px + (b0[1] - py), 250_000) && near(b1[1], py - (b0[0] - px), 250_000), `and it is the pivot of the other one too (${b0} -> ${b1})`);
       await undo();
       t((await snapshot()) === base, "the board is as it was");
     });
@@ -443,11 +443,11 @@
     await scenario("Cleanup Tracks & Vias: Filter Items leaves the other nets alone, Selected items only takes the selection, Refill zones refreshes the fill", async (t) => {
       const netsOnBoard = [...new Set(placed.flatMap((p) => nets(p)).filter(Boolean))].sort();
       const [netA, netB] = netsOnBoard;
-      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6000;
-      const stub = (net, y) => post({ op: "add_track", net, layer: "F.Cu", width: 200, pts: [{ x: 2000, y }, { x: 6000, y }] });
-      await stub(netA, y0); await stub(netB, y0 + 2000); await sleep(600);
+      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6_000_000;
+      const stub = (net, y) => post({ op: "add_track", net, layer: "F.Cu", width: 200_000, pts: [{ x: 2_000_000, y }, { x: 6_000_000, y }] });
+      await stub(netA, y0); await stub(netB, y0 + 2_000_000); await sleep(600);
       const tracks = async () => ((await state()).routing?.tracks ?? []);
-      const stubA = (await tracks()).find((q) => q.net === netA && q.pts[0][1] === y0), stubB = (await tracks()).find((q) => q.net === netB && q.pts[0][1] === y0 + 2000);
+      const stubA = (await tracks()).find((q) => q.net === netA && q.pts[0][1] === y0), stubB = (await tracks()).find((q) => q.net === netB && q.pts[0][1] === y0 + 2_000_000);
       t(!!stubA && !!stubB, `two stubs, one on ${netA} and one on ${netB}`);
       const dlg = () => document.querySelector(".dialog");
       const byAria = (a) => dlg().querySelector(`[aria-label="${a}"]`);
@@ -528,11 +528,11 @@
     await scenario("Edit Track & Via Properties: the via types, width and diameter filters, net, selected items only, and the net remembered for the session", async (t) => {
       const netsOnBoard = [...new Set(placed.flatMap((p) => nets(p)).filter(Boolean))].sort();
       const [netA, netB] = netsOnBoard;
-      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6000;
-      await post({ op: "add_track", net: netA, layer: "F.Cu", width: 200, pts: [{ x: 2000, y: y0 }, { x: 6000, y: y0 }] });
-      await post({ op: "add_track", net: netB, layer: "F.Cu", width: 300, pts: [{ x: 2000, y: y0 + 2000 }, { x: 6000, y: y0 + 2000 }] });
+      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6_000_000;
+      await post({ op: "add_track", net: netA, layer: "F.Cu", width: 200_000, pts: [{ x: 2_000_000, y: y0 }, { x: 6_000_000, y: y0 }] });
+      await post({ op: "add_track", net: netB, layer: "F.Cu", width: 300_000, pts: [{ x: 2_000_000, y: y0 + 2_000_000 }, { x: 6_000_000, y: y0 + 2_000_000 }] });
       const layers = (await state()).layers;
-      await post({ op: "add_via", net: netA, x: 10000, y: y0, drill: 300, diameter: 600, from_layer: layers[0], to_layer: layers[layers.length - 1] });
+      await post({ op: "add_via", net: netA, x: 10_000_000, y: y0, drill: 300_000, diameter: 600_000, from_layer: layers[0], to_layer: layers[layers.length - 1] });
       await sleep(600);
       const dlg = () => document.querySelector(".dialog");
       const byAria = (a) => dlg().querySelector(`[aria-label="${a}"]`);
@@ -547,7 +547,7 @@
       t(counts()[0] === tr.length && counts()[1] === 0, `Tracks: every track (${counts()})`);
       byAria("Filter tracks by width").click(); await sleep(100);
       setValue(byAria("Track width filter"), "0.3"); await sleep(150);
-      t(counts()[0] === tr.filter((q) => q.width === 300).length, `Filter tracks by width: 0.3 keeps the tracks of exactly that width (${counts()[0]})`);
+      t(counts()[0] === tr.filter((q) => q.width === 300_000).length, `Filter tracks by width: 0.3 keeps the tracks of exactly that width (${counts()[0]})`);
       byAria("Through vias").click(); await sleep(100);
       t(byAria("Vias").indeterminate === true && byAria("Vias").checked === false, "one via type ticked leaves the Vias box in between");
       t(counts()[1] === vi.filter((v) => v.from === layers[0] && v.to === layers[layers.length - 1]).length, `and through vias are in scope (${counts()[1]})`);
@@ -555,9 +555,9 @@
       t(byAria("Through vias").checked && byAria("Blind vias").checked && byAria("Buried vias").checked && !byAria("Vias").indeterminate, "clicking the Vias box ticks every type");
       byAria("Filter vias by diameter").click(); await sleep(100);
       setValue(byAria("Via diameter filter"), "0.6"); await sleep(150);
-      t(counts()[1] === vi.filter((v) => v.d === 600).length, `Filter vias by diameter: 0.6 (${counts()[1]})`);
+      t(counts()[1] === vi.filter((v) => v.d === 600_000).length, `Filter vias by diameter: 0.6 (${counts()[1]})`);
       setValue(byAria("Via diameter filter"), "0.9"); await sleep(150);
-      t(counts()[1] === vi.filter((v) => v.d === 900).length, `0.9 (${counts()[1]})`);
+      t(counts()[1] === vi.filter((v) => v.d === 900_000).length, `0.9 (${counts()[1]})`);
       byAria("Filter vias by diameter").click(); await sleep(100);
       byAria("Filter tracks by width").click(); await sleep(100);
       byAria("Filter items by net").click(); await sleep(100);
@@ -577,7 +577,7 @@
       setValue(kv.querySelectorAll('input[type="number"]')[0], "0.5"); await sleep(100);
       buttonText(dlg(), "Apply and Close").click(); await sleep(1500);
       const after = (await state()).routing.tracks;
-      t(after.filter((q) => q.net === netA).every((q) => q.width === 500) && after.filter((q) => q.net !== netA).every((q) => q.width === tr.find((o) => o.id === q.id).width), `Apply and Close widened the ${netA} tracks and no others`);
+      t(after.filter((q) => q.net === netA).every((q) => q.width === 500_000) && after.filter((q) => q.net !== netA).every((q) => q.width === tr.find((o) => o.id === q.id).width), `Apply and Close widened the ${netA} tracks and no others`);
       await undo();
       // the net of the last session is where the dialog opens next
       await __eda.run("pcbnew.GlobalEdit.editTracksAndVias"); await sleep(600);
@@ -598,10 +598,10 @@
 
     // ----- Edit Text & Graphics Properties: dimensions, the layer filter and the layer default values
     await scenario("Edit Text & Graphics Properties: PCB dimensions are a scope, the layer filter lists every layer, Set to layer default values restyles", async (t) => {
-      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6000;
-      await post({ op: "add_text", text: { content: "HELLO", at: { x: 5000, y: y0 }, angle: 0, layer: "F.SilkS", size_um: 2000, stroke_width: 500, justify: "center", mirror: false } });
-      await post({ op: "add_shape", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 400, filled: false, start: { x: 2000, y: y0 + 2000 }, end: { x: 9000, y: y0 + 2000 } } });
-      await post({ op: "add_dimension", dimension: { layer: "Dwgs.User", kind: { kind: "aligned", height: 2000 }, start: { x: 2000, y: y0 + 5000 }, end: { x: 12000, y: y0 + 5000 }, prefix: "", suffix: "", units: "mm", units_format: "no_suffix", precision: 1, suppress_trailing_zeros: false, text_position: "outside", keep_text_aligned: true, text_angle: 0, text_size_um: 1500, text_thickness_um: 400, stroke_width: 300, arrow_length: 1270, extension_offset: 500, extension_height: 600, arrow_direction: "inward" } });
+      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6_000_000;
+      await post({ op: "add_text", text: { content: "HELLO", at: { x: 5_000_000, y: y0 }, angle: 0, layer: "F.SilkS", size_nm: 2_000_000, stroke_width: 500_000, justify: "center", mirror: false } });
+      await post({ op: "add_shape", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 400_000, filled: false, start: { x: 2_000_000, y: y0 + 2_000_000 }, end: { x: 9_000_000, y: y0 + 2_000_000 } } });
+      await post({ op: "add_dimension", dimension: { layer: "Dwgs.User", kind: { kind: "aligned", height: 2_000_000 }, start: { x: 2_000_000, y: y0 + 5_000_000 }, end: { x: 12_000_000, y: y0 + 5_000_000 }, prefix: "", suffix: "", units: "mm", units_format: "no_suffix", precision: 1, suppress_trailing_zeros: false, text_position: "outside", keep_text_aligned: true, text_angle: 0, text_size_nm: 1_500_000, text_thickness_nm: 400_000, stroke_width: 300_000, arrow_length: 1270, extension_offset: 500, extension_height: 600, arrow_direction: "inward" } });
       await sleep(700);
       const dr = async () => (await state()).drawings;
       const d0 = await dr();
@@ -628,14 +628,14 @@
       byAria("Set to layer default values").click(); await sleep(150);
       buttonText(dlg(), "Apply and Close").click(); await sleep(1600);
       const d1 = await dr();
-      const mine = { text: d1.texts.find((x) => x.content === "HELLO"), seg: d1.shapes.find((s) => s.kind === "segment" && s.start[1] === y0 + 2000), dim: d1.dimensions.find((d) => d.start[1] === y0 + 5000) };
-      t(mine.text?.size === 1000 && mine.text?.stroke_width === 100, `the silkscreen text is 1 mm with 0.1 mm lines, the silk defaults of Board Setup (${mine.text?.size}, ${mine.text?.stroke_width})`);
-      t(mine.seg?.stroke_width === 100, `the silkscreen line is 0.1 mm (${mine.seg?.stroke_width})`);
-      t(mine.dim?.stroke_width === 100 && mine.dim?.text_size_um === 1000 && mine.dim?.text_thickness_um === 150 && mine.dim?.precision === 4, `the dimension took the other-layers defaults and the dimension settings (line ${mine.dim?.stroke_width}, text ${mine.dim?.text_size_um}/${mine.dim?.text_thickness_um}, ${mine.dim?.precision} decimals)`);
+      const mine = { text: d1.texts.find((x) => x.content === "HELLO"), seg: d1.shapes.find((s) => s.kind === "segment" && s.start[1] === y0 + 2_000_000), dim: d1.dimensions.find((d) => d.start[1] === y0 + 5_000_000) };
+      t(mine.text?.size === 1_000_000 && mine.text?.stroke_width === 100_000, `the silkscreen text is 1 mm with 0.1 mm lines, the silk defaults of Board Setup (${mine.text?.size}, ${mine.text?.stroke_width})`);
+      t(mine.seg?.stroke_width === 100_000, `the silkscreen line is 0.1 mm (${mine.seg?.stroke_width})`);
+      t(mine.dim?.stroke_width === 100_000 && mine.dim?.text_size_nm === 1_000_000 && mine.dim?.text_thickness_nm === 150_000 && mine.dim?.precision === 4, `the dimension took the other-layers defaults and the dimension settings (line ${mine.dim?.stroke_width}, text ${mine.dim?.text_size_nm}/${mine.dim?.text_thickness_nm}, ${mine.dim?.precision} decimals)`);
       await undo();
       const d2 = await dr();
-      const back = { text: d2.texts.find((x) => x.content === "HELLO"), dim: d2.dimensions.find((d) => d.start[1] === y0 + 5000) };
-      t(back.text?.size === 2000 && back.dim?.stroke_width === 300, "one Undo takes the whole restyle back");
+      const back = { text: d2.texts.find((x) => x.content === "HELLO"), dim: d2.dimensions.find((d) => d.start[1] === y0 + 5_000_000) };
+      t(back.text?.size === 2_000_000 && back.dim?.stroke_width === 300_000, "one Undo takes the whole restyle back");
       for (let i = 0; i < 4 && (await snapshot()) !== base; i++) await undo();
       t((await snapshot()) === base, "undone, the board is as it was");
     });

@@ -174,7 +174,7 @@ mod tests {
     fn flat_board(model: &ConstraintModel) -> Board<'_> {
         let mut design: Design = eda_engine::derive_schematic(model, &EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
-        Board::new(design, model, 100, 300)
+        Board::new(design, model, 100_000, 300_000)
     }
 
     fn drawn_nets(model: &ConstraintModel) -> BTreeMap<String, Vec<String>> {
@@ -253,7 +253,7 @@ mod tests {
         let mut design: Design = eda_engine::derive_schematic(&model, &EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         design.nets = Some(stale.nets.clone());
-        let mut b = Board::new(design, &stale, 100, 300).with_intent_nets(model.nets.clone());
+        let mut b = Board::new(design, &stale, 100_000, 300_000).with_intent_nets(model.nets.clone());
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         assert_eq!(traced(&model, b.design()), drawn_nets(&model));
         assert_eq!(b.design().schematic.as_ref().unwrap().sheets.len(), 3);
@@ -271,7 +271,7 @@ mod tests {
         let mut design: Design = eda_engine::derive_schematic(model, &EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         edit(design.schematic.as_mut().unwrap());
-        Board::new(design, model, 100, 300)
+        Board::new(design, model, 100_000, 300_000)
     }
 
     fn screen_with<'d>(d: &'d Design, reference: &str) -> &'d eda_model::ir::SchematicSection {
@@ -301,13 +301,13 @@ mod tests {
             let u1 = root.field_layout.get_mut("U1").expect("a derivation stores the places of every symbol's fields");
             let value = u1.iter_mut().find(|f| f.name == "Value").unwrap();
             value.bold = true;
-            value.size_um = 1_778;
+            value.size_nm = 1_778;
             assert!(root.extras.fields_autoplaced.contains_key("U1"));
             // a label of a net, set in a look of its own
             // (one the new sheets draw a label for: a net between two modules)
             let l = root.labels.iter().find(|l| l.kind.is_local() && labelled_on_new_sheets.contains(&l.net)).expect("the flat design has a local label of a net the new sheets label").clone();
             label_net = l.net.clone();
-            root.extras.label_looks.insert(l.id.clone(), LabelLook { size_um: 2_032, bold: true, italic: false, auto_rotate: false });
+            root.extras.label_looks.insert(l.id.clone(), LabelLook { size_nm: 2_032, bold: true, italic: false, auto_rotate: false });
         });
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         let d = b.design();
@@ -320,15 +320,15 @@ mod tests {
 
         let u1 = screen_with(d, "U1");
         let value = u1.field_layout["U1"].iter().find(|f| f.name == "Value").unwrap();
-        assert!(value.bold && value.size_um == 1_778, "Autoplace Fields placed it again, and it is still bold and larger: {value:?}");
+        assert!(value.bold && value.size_nm == 1_778, "Autoplace Fields placed it again, and it is still bold and larger: {value:?}");
         let reference = u1.field_layout["U1"].iter().find(|f| f.name == "Reference").unwrap();
-        assert!(!reference.bold && reference.size_um == 0);
+        assert!(!reference.bold && reference.size_nm == 0);
 
         let looked: Vec<&eda_model::ir::NetLabel> = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.labels.iter().map(move |l| (s, l))).filter(|(s, l)| l.net == label_net && s.extras.label_looks.contains_key(&l.id)).map(|(_, l)| l).collect();
         let all: usize = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.labels.iter()).filter(|l| l.net == label_net).count();
         assert!(all > 0 && looked.len() == all, "every label of {label_net} has the net's look ({} of {all})", looked.len());
         let any = d.sheet_contents.as_ref().unwrap().values().find_map(|s| s.labels.iter().find(|l| l.net == label_net).map(|l| s.extras.label_looks[&l.id])).unwrap();
-        assert_eq!((any.size_um, any.bold), (2_032, true));
+        assert_eq!((any.size_nm, any.bold), (2_032, true));
     }
 
     /// A symbol drawn in the alternate body style of its library symbol is laid out in it, and stays in it.
@@ -391,7 +391,7 @@ mod tests {
             alternate: None,
         };
         let pins = ["1", "2", "3", "4", "5", "6", "7", "8"].iter().map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect();
-        let part = Part { reference: "U9".into(), mpn: None, lcsc: None, value: Some("TL072".into()), package: None, footprint: None, symbol: Some("Test:Dual3".into()), datasheet: None, pins, body_um: None, edge: None };
+        let part = Part { reference: "U9".into(), mpn: None, lcsc: None, value: Some("TL072".into()), package: None, footprint: None, symbol: Some("Test:Dual3".into()), datasheet: None, pins, body_nm: None, edge: None };
         (sym, part)
     }
 
@@ -424,12 +424,12 @@ mod tests {
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         {
             let root = design.schematic.as_mut().unwrap();
-            for (unit, x) in [(1, 300_000), (2, 330_000), (3, 360_000)] {
-                root.symbols.push(unit_of(&model, "U9", unit, Point { x, y: 20_000 }));
+            for (unit, x) in [(1, 300_000_000), (2, 330_000_000), (3, 360_000_000)] {
+                root.symbols.push(unit_of(&model, "U9", unit, Point { x, y: 20_000_000 }));
             }
             root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
         }
-        let mut b = Board::new(design, &model, 100, 300);
+        let mut b = Board::new(design, &model, 100_000, 300_000);
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         let d = b.design();
         let units: Vec<(String, u32)> = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.symbols.iter()).filter(|s| s.id == "U9").map(|s| (s.id.clone(), s.unit)).collect();
@@ -477,13 +477,13 @@ mod tests {
         assert_eq!(after.schematic.as_ref().unwrap().sheets.len(), root_before.sheets.len());
         assert_eq!(after.schematic.as_ref().unwrap().wires.len(), root_before.wires.len());
         // The drawing verbs reach the sheet too.
-        let add = Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::AddSchText { content: "note".into(), at: to, angle_millideg: 0, size_um: 1_270 }) };
+        let add = Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::AddSchText { content: "note".into(), at: to, angle_millideg: 0, size_nm: 1_270 }) };
         b.apply(&add).unwrap();
         assert_eq!(b.design().sheet_contents.as_ref().unwrap()[&file].texts.len(), 1);
         assert!(b.design().schematic.as_ref().unwrap().texts.is_empty(), "nothing leaked onto the root");
         // An unknown path is refused and changes nothing.
         let before = serde_json::to_string(b.design()).unwrap();
-        let bad = Cmd::OnSheet { sheet: "no_such_sheet".into(), cmd: Box::new(Cmd::AddSchText { content: "x".into(), at: to, angle_millideg: 0, size_um: 1_270 }) };
+        let bad = Cmd::OnSheet { sheet: "no_such_sheet".into(), cmd: Box::new(Cmd::AddSchText { content: "x".into(), at: to, angle_millideg: 0, size_nm: 1_270 }) };
         assert_eq!(b.apply(&bad).unwrap_err()[0].check, "ops_unknown_sheet");
         assert_eq!(serde_json::to_string(b.design()).unwrap(), before);
         // A failing inner command leaves the design untouched too.
@@ -506,7 +506,7 @@ mod tests {
         }
         root.extras.set_locked("R3", true);
         root.extras.set_locked("U1", true);
-        let mut b = Board::new(design, &model, 100, 300);
+        let mut b = Board::new(design, &model, 100_000, 300_000);
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         let d = b.design();
         let screens = d.sheet_contents.as_ref().unwrap();

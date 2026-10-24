@@ -46,10 +46,10 @@ mod tests {
     use eda_model::ir::{PlacementSection, Provenance, RoutingSection, Track};
 
     fn design(width: i64) -> Design {
-        let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 1000 }], arc_mid_offset: None };
+        let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width, pts: vec![Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 }, Point { x: 1_000_000, y: 1_000_000 }], arc_mid_offset: None };
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] }),
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn a_track_narrower_than_its_class_reports_once_per_segment() {
-        let v = check(&design(200), &model_with_class(400));
+        let v = check(&design(200_000), &model_with_class(400_000));
         assert_eq!(v.len(), 2, "{v:#?}");
         assert_eq!(v[0].check, "routing_track_width");
         assert_eq!(v[0].items[0].id, "t1#0");
@@ -76,6 +76,6 @@ mod tests {
 
     #[test]
     fn a_track_at_its_class_width_is_clean() {
-        assert!(check(&design(400), &model_with_class(400)).is_empty());
+        assert!(check(&design(400_000), &model_with_class(400_000)).is_empty());
     }
 }

@@ -69,7 +69,7 @@ fn pose_x(dir: &Path, reference: &str) -> Option<i64> {
 fn a_rename_through_the_board_directory_leaves_no_part_pose_or_route_under_the_old_reference_and_one_undo_takes_it_back_from_either_tab() {
     let dir = board_with_schematic("rename_carries_the_part");
     // a route that ends on U1's pad 1 and U2's pad 1 (GND), so there is copper to strand
-    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![eda_model::ir::Point { x: 4_000, y: 5_000 }, eda_model::ir::Point { x: 14_000, y: 5_000 }] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![eda_model::ir::Point { x: 4_000_000, y: 5_000_000 }, eda_model::ir::Point { x: 14_000_000, y: 5_000_000 }] }, false, "test").unwrap();
     assert_consistent(&dir);
     rename(&dir, "U1", "U5");
     assert_consistent(&dir);
@@ -78,7 +78,7 @@ fn a_rename_through_the_board_directory_leaves_no_part_pose_or_route_under_the_o
     let u5 = model.part("U5").expect("the part is U5 now");
     assert_eq!(u5.footprint.as_deref(), Some("Test:2PAD"), "with the footprint it had");
     assert!(model.footprint_of(u5).is_some(), "which the model resolves");
-    assert_eq!(pose_x(&dir, "U5"), Some(5_000), "where it stood");
+    assert_eq!(pose_x(&dir, "U5"), Some(5_000_000), "where it stood");
     assert_eq!(pose_x(&dir, "U1"), None);
     assert!(model.nets.iter().any(|n| n.name == "GND" && n.pins.contains(&"U5.1".to_string())), "its pads are on their nets: {:?}", model.nets);
     assert_eq!(design.drawings.as_ref().unwrap().renamed_parts.len(), 1);
@@ -102,7 +102,7 @@ fn a_rename_through_the_board_directory_leaves_no_part_pose_or_route_under_the_o
 #[test]
 fn annotate_with_reset_through_the_board_directory_keeps_every_part_with_its_symbol() {
     let dir = board_with_schematic("annotate_carries_the_parts");
-    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200, pts: vec![eda_model::ir::Point { x: 6_000, y: 5_000 }, eda_model::ir::Point { x: 16_000, y: 5_000 }] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![eda_model::ir::Point { x: 6_000_000, y: 5_000_000 }, eda_model::ir::Point { x: 16_000_000, y: 5_000_000 }] }, false, "test").unwrap();
     rename(&dir, "U1", "U9");
     assert_consistent(&dir);
     let before: BTreeSet<Option<i64>> = ["U9", "U2"].iter().map(|r| pose_x(&dir, r)).collect();
@@ -185,13 +185,13 @@ fn a_symbols_footprint_field_edit_changes_the_boards_footprint_and_one_undo_take
     let u1 = model.part("U1").unwrap();
     assert_eq!(u1.footprint.as_deref(), Some("Alt:WIDE"), "the board follows the symbol's Footprint field");
     let pads: Vec<i64> = model.footprint_of(u1).unwrap().pads.iter().map(|p| p.at.0).collect();
-    assert_eq!(pads, [-2_000, 2_000], "with the library's pads");
+    assert_eq!(pads, [-2_000_000, 2_000_000], "with the library's pads");
     assert_eq!(model.footprint_of(u1).unwrap().art.shapes.len(), 1, "and its silkscreen");
     assert_eq!(design.footprint_assignment("U1").unwrap().footprint, "Alt:WIDE");
     assert_eq!(model.part("U2").unwrap().footprint.as_deref(), Some("Test:2PAD"), "the other part is on its footprint");
     assert_eq!(symbol_footprint(&dir, "U1"), "Alt:WIDE");
     assert!(eda_ops::pending_footprint_changes(&design, &model).is_empty(), "the board and the schematic agree");
-    assert_eq!(pose_x(&dir, "U1"), Some(5_000));
+    assert_eq!(pose_x(&dir, "U1"), Some(5_000_000));
     assert_consistent(&dir);
     // a footprint field with the text it had changes nothing on the board (the Symbol Properties dialog sends it with every edit)
     let again = on_its_sheet(&dir, "U1", Cmd::EditSymbolFields { id: "U1".into(), value: Some("1k".into()), footprint: Some("Alt:WIDE".into()), datasheet: None });
@@ -354,9 +354,9 @@ fn reannotate_cmd(options: serde_json::Value, selection: &[&str]) -> Cmd {
 /// The board with U1 and U2 having exchanged places: U2 is the left one now, so a reannotation by place gives the numbers back the other way round.
 fn board_with_exchanged_parts(name: &str) -> std::path::PathBuf {
     let dir = board_with_schematic(name);
-    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![eda_model::ir::Point { x: 4_000, y: 5_000 }, eda_model::ir::Point { x: 14_000, y: 5_000 }] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![eda_model::ir::Point { x: 4_000_000, y: 5_000_000 }, eda_model::ir::Point { x: 14_000_000, y: 5_000_000 }] }, false, "test").unwrap();
     step(&dir, Cmd::Swap { a: "U1".into(), b: "U2".into() }, false, "test").unwrap();
-    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000), Some(5_000)));
+    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000_000), Some(5_000_000)));
     dir
 }
 
@@ -373,11 +373,11 @@ fn a_geographical_reannotation_renumbers_the_footprints_and_the_symbols_follow_i
     let log: Vec<(&str, &str)> = plan["plan"]["changes"].as_array().unwrap().iter().map(|c| (c["old"].as_str().unwrap(), c["new"].as_str().unwrap())).collect();
     assert_eq!(log, [("U1", "U2"), ("U2", "U1")], "the change log, by the old reference");
     assert_eq!(plan["plan"]["prefixes"], serde_json::json!(["U"]));
-    assert_eq!(pose_x(&dir, "U1"), Some(15_000), "a plan changes nothing");
+    assert_eq!(pose_x(&dir, "U1"), Some(15_000_000), "a plan changes nothing");
 
     step(&dir, reannotate_cmd(serde_json::json!({ "direction": 0 }), &[]), false, "test").unwrap();
     assert_consistent(&dir);
-    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(5_000), Some(15_000)), "the left footprint is U1 now");
+    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(5_000_000), Some(15_000_000)), "the left footprint is U1 now");
     assert_eq!((symbol_at(&dir, "U2"), symbol_at(&dir, "U1")), (Some(u1_before.clone()), Some(u2_before.clone())), "each symbol took its footprint's new reference");
     let (_, design, model) = load(&dir).unwrap();
     assert_eq!(design.drawings.as_ref().unwrap().renamed_parts.len(), 2, "a swap: two entries, applied together");
@@ -388,29 +388,29 @@ fn a_geographical_reannotation_renumbers_the_footprints_and_the_symbols_follow_i
     // one Ctrl+Z from the PCB tab takes the schematic's half and the board's half back
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_consistent(&dir);
-    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000), Some(5_000)));
+    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000_000), Some(5_000_000)));
     assert_eq!((symbol_at(&dir, "U1"), symbol_at(&dir, "U2")), (Some(u1_before), Some(u2_before)));
     assert!(load(&dir).unwrap().1.drawings.as_ref().is_none_or(|d| d.renamed_parts.is_empty()));
     // redo from the schematic tab, and take it back from there
     redo(&dir, "test", Some(Domain::Schematic)).unwrap();
-    assert_eq!(pose_x(&dir, "U1"), Some(5_000));
+    assert_eq!(pose_x(&dir, "U1"), Some(5_000_000));
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
     assert_consistent(&dir);
-    assert_eq!(pose_x(&dir, "U1"), Some(15_000));
+    assert_eq!(pose_x(&dir, "U1"), Some(15_000_000));
 }
 
 #[test]
 fn the_reannotate_command_is_read_from_the_studios_json_with_its_numbers() {
     // the path of `POST /api/cmd`: the body is read as JSON, then the command out of its `cmd`
-    let body = br#"{"cmd":{"op":"reannotate_board","options":{"direction":2,"grid_um":1270,"scope":"selection","exclude":"R C7*","front_start":5,"back_start":0,"front_prefix":"F_","remove_back_prefix":true},"selection":["U1"]}}"#;
+    let body = br#"{"cmd":{"op":"reannotate_board","options":{"direction":2,"grid_nm":1270000,"scope":"selection","exclude":"R C7*","front_start":5,"back_start":0,"front_prefix":"F_","remove_back_prefix":true},"selection":["U1"]}}"#;
     let req: serde_json::Value = serde_json::from_slice(body).unwrap();
     let Cmd::ReannotateBoard { options, selection } = serde_json::from_value::<Cmd>(req["cmd"].clone()).expect("the command reads") else { panic!("not the command") };
-    assert_eq!((options.direction, options.grid_um, options.front_start, options.back_start), (2, 1_270.0, 5, 0));
+    assert_eq!((options.direction, options.grid_nm, options.front_start, options.back_start), (2, 1_270_000.0, 5, 0));
     assert_eq!((options.scope, options.exclude.as_str(), options.front_prefix.as_str(), options.remove_back_prefix), (eda_model::reannotate::Scope::Selection, "R C7*", "F_", true));
     assert_eq!(selection, ["U1"]);
     // a grid of mils is not whole micrometres (the toolbar's 2 mil is 50.8)
-    let mils: Cmd = serde_json::from_value(serde_json::json!({ "op": "reannotate_board", "options": { "grid_um": 50.8 } })).expect("a fractional grid reads");
-    assert!(matches!(mils, Cmd::ReannotateBoard { ref options, .. } if (options.grid_um - 50.8).abs() < 1e-9));
+    let mils: Cmd = serde_json::from_value(serde_json::json!({ "op": "reannotate_board", "options": { "grid_nm": 50.8 } })).expect("a fractional grid reads");
+    assert!(matches!(mils, Cmd::ReannotateBoard { ref options, .. } if (options.grid_nm - 50.8).abs() < 1e-9));
     // options left out take the dialog's own defaults
     let bare: Cmd = serde_json::from_value(serde_json::json!({ "op": "reannotate_board" })).unwrap();
     assert!(matches!(bare, Cmd::ReannotateBoard { ref options, ref selection } if options.front_start == 1 && selection.is_empty()));
@@ -426,7 +426,7 @@ fn the_selection_scope_renumbers_only_the_selected_footprints_and_a_plan_says_wh
     let acts: Vec<(&str, &str)> = plan["plan"]["changes"].as_array().unwrap().iter().map(|c| (c["old"].as_str().unwrap(), c["action"].as_str().unwrap())).collect();
     assert_eq!(acts, [("U1", "exclude"), ("U2", "update")]);
     step(&dir, reannotate_cmd(options, &["U2"]), false, "test").unwrap();
-    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000), Some(5_000)), "U2 is the first free number after U1's: itself");
+    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000_000), Some(5_000_000)), "U2 is the first free number after U1's: itself");
     // a plan for options that are not the dialog's is told, not guessed
     let bad = crate::fp_assign_api::reannotate_plan(&dir, serde_json::json!({ "options": { "direction": "up" } }).to_string().as_bytes());
     assert_eq!(bad["ok"], false);
@@ -483,14 +483,14 @@ fn inserting_the_editors_footprint_adds_a_part_of_its_own_with_the_edited_pads_a
     step(&dir, Cmd::PutLibraryFootprint { footprint: chip.clone(), overwrite: false }, false, "test").unwrap();
     assert_eq!(load(&dir).unwrap().2.parts.iter().filter(|p| p.footprint.as_deref() == Some("Mine:Chip")).count(), 0);
     // Insert footprint into PCB where no part names it: the part and the published entry in one step (what the studio's action sends)
-    let place = Cmd::PlaceFootprint { footprint: "Mine:Chip".into(), at: eda_model::ir::Point { x: 10_000, y: 15_000 }, reference: String::new(), value: String::new(), definition: Some(chip) };
+    let place = Cmd::PlaceFootprint { footprint: "Mine:Chip".into(), at: eda_model::ir::Point { x: 10_000_000, y: 15_000_000 }, reference: String::new(), value: String::new(), definition: Some(chip) };
     step(&dir, Cmd::Batch { cmds: vec![place, Cmd::UpdateFootprintOnBoard { name: "Mine:Chip".into() }] }, false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     let part = model.parts.iter().find(|p| p.footprint.as_deref() == Some("Mine:Chip")).expect("a part of its own names the footprint");
     assert!(part.reference.starts_with("REF"), "the next free reference of the footprint's usual prefix: {}", part.reference);
     assert_eq!(model.footprint_of(part).unwrap().pads.len(), 2, "with the editor's pads");
     assert_eq!(model.footprint_of(part).unwrap().art.shapes.len(), 1, "and its silkscreen");
-    assert_eq!(pose_x(&dir, &part.reference), Some(10_000), "at the point it was sent to");
+    assert_eq!(pose_x(&dir, &part.reference), Some(10_000_000), "at the point it was sent to");
     assert!(design.footprint_library.as_ref().unwrap().by_name("Mine:Chip").unwrap().published, "the entry follows the board by its name from here on");
     let reference = part.reference.clone();
     // one Ctrl+Z on the PCB tab takes the part away; the Footprint Editor's entry stays

@@ -32,7 +32,7 @@ fn source() -> LibSymbol {
 
 fn model() -> ConstraintModel {
     let pins = ["1", "2"].map(|n| Pin { number: n.into(), name: None, kind: PinKind::Passive }).to_vec();
-    let part = Part { reference: "V1".into(), mpn: None, lcsc: None, value: Some("VSIN".into()), package: None, footprint: None, symbol: Some("Simulation_SPICE:VSIN".into()), datasheet: None, pins, body_um: None, edge: None };
+    let part = Part { reference: "V1".into(), mpn: None, lcsc: None, value: Some("VSIN".into()), package: None, footprint: None, symbol: Some("Simulation_SPICE:VSIN".into()), datasheet: None, pins, body_nm: None, edge: None };
     let mut m = ConstraintModel { parts: vec![part], symbols: vec![source()], ..Default::default() };
     m.symbol_sim_fields.insert("Simulation_SPICE:VSIN".into(), vec![("Sim.Pins".into(), "1=+ 2=-".into()), ("Sim.Device".into(), "V".into()), ("Sim.Type".into(), "SIN".into()), ("Sim.Params".into(), "dc=0 ampl=1 f=1k ac=1".into())]);
     m
@@ -40,7 +40,7 @@ fn model() -> ConstraintModel {
 
 fn design(sch: SchematicSection) -> Design {
     Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: Some(sch),
         nets: None,
@@ -57,7 +57,7 @@ fn design(sch: SchematicSection) -> Design {
 fn sheet() -> SchematicSection {
     let sym = SymbolInstance {
         id: "V1".into(),
-        at: Point { x: 50_800, y: 50_800 },
+        at: Point { x: 50_800_000, y: 50_800_000 },
         rot: 0,
         mirrored: false,
         mirror_y: false,

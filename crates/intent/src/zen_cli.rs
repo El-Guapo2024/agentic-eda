@@ -215,7 +215,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
                 package: attr_str(inst, "package"),
                 footprint: attr_str(inst, "footprint"),
                 pins,
-                body_um: None, symbol: None, datasheet: None,
+                body_nm: None, symbol: None, datasheet: None,
                 edge: None,
             }
         })
@@ -267,7 +267,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
     }
     clusters.sort_by(|a, b| a.anchor.cmp(&b.anchor));
 
-    Ok(ConstraintModel {
+    Ok(ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
         parts,
         nets,
         clusters,

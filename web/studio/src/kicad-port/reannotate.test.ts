@@ -24,7 +24,7 @@ const plan = (extra: Partial<ReannotatePlan> = {}): ReannotatePlan => ({
 
 test("the dialog opens with the first order, the footprint's location, the editor's grid and the whole board; a selection makes the scope the selection", () => {
   const f = defaultForm(1270, false);
-  assert.deepEqual([f.direction, f.location, f.gridUm, f.scope, f.frontStart, f.backStart, f.frontPrefix, f.excludeLocked], [0, "footprint", 1270, "all", "1", "", "", false]);
+  assert.deepEqual([f.direction, f.location, f.gridNm, f.scope, f.frontStart, f.backStart, f.frontPrefix, f.excludeLocked], [0, "footprint", 1270, "all", "1", "", "", false]);
   assert.equal(defaultForm(1270, true).scope, "selection");
   assert.equal(DIRECTIONS.length, 8);
 });
@@ -44,7 +44,7 @@ test("the options are the controls with the numbers read and the prefixes filter
   assert.deepEqual(formOptions(f), {
     direction: 5,
     location: "footprint",
-    grid_um: 635,
+    grid_nm: 635,
     scope: "front",
     exclude_locked: false,
     exclude: "R C7*",

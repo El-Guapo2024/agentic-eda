@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SchematicText } from "../api/types";
-import { interlineUm, keepUprightIsVertical, schTextBox, schTextLines, textLie } from "./schTextItem";
+import { interlineNm, keepUprightIsVertical, schTextBox, schTextLines, textLie } from "./schTextItem";
 
 // 0.6 of the size per character: no font needed
 const measure = (text: string, size: number) => text.length * size * 0.6;
 
-const text = (extra: Partial<SchematicText> = {}): SchematicText => ({ id: "txt_a", content: "hello", at: [50_000, 50_000], angle: 0, size_um: 1_270, ...extra });
+const text = (extra: Partial<SchematicText> = {}): SchematicText => ({ id: "txt_a", content: "hello", at: [50_000, 50_000], angle: 0, size_nm: 1_270, ...extra });
 
 test("a text from a backend that sends no justification lies left and bottom along the sheet, as it was always drawn", () => {
   assert.deepEqual(textLie({ angle: 0 }), { h: "left", v: "bottom", vertical: false });
@@ -58,7 +58,7 @@ test("a text that runs up the sheet is the same box turned a quarter counter-clo
 test("the lines of a text are an interline apart and the block is justified as a whole (FONT::getLinePositions)", () => {
   const three = (v: "top" | "center" | "bottom") => schTextLines(text({ content: "a\nbb\nccc", v }), measure);
   const lone = schTextLines(text({ content: "a", v: "bottom" }), measure)[0]!;
-  const interline = interlineUm(1_270);
+  const interline = interlineNm(1_270);
   assert.equal(interline, Math.round(1_270 * 1.68 * 0.9583));
   const bottom = three("bottom");
   assert.deepEqual(bottom.map((l) => l.text), ["a", "bb", "ccc"]);
@@ -81,7 +81,7 @@ test("the lines of a text are an interline apart and the block is justified as a
 test("the box of several lines is taller by an interline for each line after the first", () => {
   const one = schTextBox(text({ content: "a" }), measure);
   const three = schTextBox(text({ content: "a\nb\nc" }), measure);
-  assert.equal(three.maxY - three.minY, one.maxY - one.minY + 2 * interlineUm(1_270));
+  assert.equal(three.maxY - three.minY, one.maxY - one.minY + 2 * interlineNm(1_270));
 });
 
 test("a text with a text variable is laid out and boxed from what the variable stands for (`shown`), not from `${NAME}`", () => {

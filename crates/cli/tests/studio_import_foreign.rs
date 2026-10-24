@@ -266,10 +266,10 @@ fn a_board_file_comes_back_converted_and_the_import_is_one_undo_step_that_is_tak
     assert_eq!(studio.parts(), vec!["J7"], "the file's board is the board; the intent's R1, R2 and C1 are the old board's");
     let rules = studio.get("/api/state")["board_rules"].clone();
     assert_eq!(rules["net_classes"][0]["name"], "highpower", "the importer's net class, from the project: {rules}");
-    assert_eq!(rules["net_classes"][0]["track_width"], 305);
+    assert_eq!(rules["net_classes"][0]["track_width"], 304_800);
     let state = studio.get("/api/state");
     assert_eq!(state["outline"].as_array().map(|o| o.len()), Some(4), "the file's outline: {}", state["outline"]);
-    assert_eq!(state["outline"][2], json!([40_000, 40_000]), "and it is the file's, not the old board's");
+    assert_eq!(state["outline"][2], json!([40_000_000, 40_000_000]), "and it is the file's, not the old board's");
 
     // One Undo (from the PCB tab) brings the old board back with its parts and nets; a Redo, the imported one.
     assert_eq!(studio.undo("pcb")["ok"], true);

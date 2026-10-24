@@ -8,12 +8,12 @@
 
 use std::fmt::Write as _;
 
-use eda_model::ir::{Point, TextJustify, TextVAlign, Um};
+use eda_model::ir::{Point, TextJustify, TextVAlign, Nm};
 use eda_model::sch_extras::{SchColor, SchFill};
 use eda_model::table::{Table, TableBorder, TableCell, TableLineStyle, TableSeparators, TableStroke, TableText};
 
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, fmt_mm_f, mm, mm_to_um, note_uuid, sexpr_str};
+use crate::{duid_for, fmt_mm_f, mm, mm_to_nm, note_uuid, sexpr_str};
 
 /// A flag as the file writes it: `(name yes)`, `(name no)`, `(name)` (yes) or the bare word in the item itself.
 fn flag(item: &[Sexpr], name: &str) -> Option<bool> {
@@ -23,8 +23,8 @@ fn flag(item: &[Sexpr], name: &str) -> Option<bool> {
     item.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == name)).then_some(true)
 }
 
-fn um(v: f64) -> Um {
-    mm_to_um(v)
+fn um(v: f64) -> Nm {
+    mm_to_nm(v)
 }
 
 /// A colour as `(color r g b a)` writes it: the channels 0..255 and an alpha of 0..1.
@@ -41,7 +41,7 @@ fn alpha_str(a: u8) -> String {
 
 /// `(stroke (width w) (type t) [(color r g b a)])` as `STROKE_PARAMS::Format` writes it.
 pub(crate) fn stroke_str(s: &TableStroke) -> String {
-    let mut out = format!("(stroke (width {}) (type {})", mm(s.width_um), s.style.token());
+    let mut out = format!("(stroke (width {}) (type {})", mm(s.width_nm), s.style.token());
     if let Some(c) = s.color {
         let _ = write!(out, " (color {} {} {} {})", c.r, c.g, c.b, alpha_str(c.a));
     }
@@ -53,7 +53,7 @@ pub(crate) fn stroke_str(s: &TableStroke) -> String {
 pub(crate) fn read_stroke(node: &[Sexpr], base: TableStroke) -> TableStroke {
     let mut s = base;
     if let Some(w) = sexpr::find(node, "width").and_then(|w| sexpr::num(w, 1)) {
-        s.width_um = um(w);
+        s.width_nm = um(w);
     }
     if let Some(t) = sexpr::find(node, "type").and_then(|t| sexpr::txt(t, 1)) {
         s.style = TableLineStyle::from_token(t);
@@ -76,11 +76,11 @@ pub(crate) fn read_effects(item: &[Sexpr]) -> TableText {
     if let Some(font) = sexpr::find(e, "font") {
         if let Some(s) = sexpr::find(font, "size") {
             // `(size HEIGHT WIDTH)`
-            t.height_um = um(sexpr::num(s, 1).unwrap_or(1.27));
-            t.width_um = um(sexpr::num(s, 2).unwrap_or(1.27));
+            t.height_nm = um(sexpr::num(s, 1).unwrap_or(1.27));
+            t.width_nm = um(sexpr::num(s, 2).unwrap_or(1.27));
             found_size = true;
         }
-        t.thickness_um = sexpr::find(font, "thickness").and_then(|x| sexpr::num(x, 1)).map(um).unwrap_or(0);
+        t.thickness_nm = sexpr::find(font, "thickness").and_then(|x| sexpr::num(x, 1)).map(um).unwrap_or(0);
         t.bold = flag(font, "bold").unwrap_or(false);
         t.italic = flag(font, "italic").unwrap_or(false);
         t.face = sexpr::find(font, "face").and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(str::to_string);
@@ -89,8 +89,8 @@ pub(crate) fn read_effects(item: &[Sexpr]) -> TableText {
     }
     if !found_size {
         // "Text size was not specified in file, force legacy default units: 60 mils is 1.524 mm".
-        t.height_um = 1_524;
-        t.width_um = 1_524;
+        t.height_nm = 1_524_000;
+        t.width_nm = 1_524_000;
     }
     if let Some(j) = sexpr::find(e, "justify") {
         for tok in j.iter().skip(1).filter_map(Sexpr::text) {
@@ -113,12 +113,12 @@ pub(crate) fn effects_str(t: &TableText) -> String {
     if let Some(f) = t.face.as_deref().filter(|f| !f.is_empty()) {
         let _ = write!(s, " (face {})", sexpr_str(f));
     }
-    let _ = write!(s, " (size {} {})", mm(t.height_um), mm(t.width_um));
+    let _ = write!(s, " (size {} {})", mm(t.height_nm), mm(t.width_nm));
     if t.line_spacing_permille != 0 && t.line_spacing_permille != 1000 {
         let _ = write!(s, " (line_spacing {})", fmt_mm_f(t.line_spacing_permille as f64 / 1000.0));
     }
-    if t.thickness_um != 0 {
-        let _ = write!(s, " (thickness {})", mm(t.thickness_um));
+    if t.thickness_nm != 0 {
+        let _ = write!(s, " (thickness {})", mm(t.thickness_nm));
     }
     if t.bold {
         s.push_str(" bold");
@@ -185,7 +185,7 @@ fn read_cell(item: &[Sexpr]) -> Option<(TableCell, FileCell)> {
     let margins = match sexpr::find(item, "margins") {
         Some(m) => [um(sexpr::num(m, 1).unwrap_or(0.0)), um(sexpr::num(m, 2).unwrap_or(0.0)), um(sexpr::num(m, 3).unwrap_or(0.0)), um(sexpr::num(m, 4).unwrap_or(0.0))],
         // `GetLegacyTextMargin` with the stroke of a cell read from a file (width -1 nm, which is no micrometre at all): three quarters of the height.
-        None => [TableCell::legacy_margin_um(&style, 0); 4],
+        None => [TableCell::legacy_margin_nm(&style, 0); 4],
     };
     let (col_span, row_span) = match sexpr::find(item, "span") {
         Some(s) => (sexpr::num(s, 1).unwrap_or(1.0).max(0.0) as u32, sexpr::num(s, 2).unwrap_or(1.0).max(0.0) as u32),
@@ -225,8 +225,8 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Table> {
     }
     let cols = cols as usize;
     let rows = cells.len() / cols;
-    let widths = |name: &str, n: usize| -> Vec<Um> {
-        let mut v: Vec<Um> = sexpr::find(item, name).map(|l| l.iter().skip(1).filter_map(|x| x.text()?.parse::<f64>().ok()).map(um).collect()).unwrap_or_default();
+    let widths = |name: &str, n: usize| -> Vec<Nm> {
+        let mut v: Vec<Nm> = sexpr::find(item, name).map(|l| l.iter().skip(1).filter_map(|x| x.text()?.parse::<f64>().ok()).map(um).collect()).unwrap_or_default();
         v.resize(n, 0);
         v
     };
@@ -352,7 +352,7 @@ pub(crate) fn write_body(out: &mut String, t: &Table, knockout: bool) {
             let _ = write!(out, " (pts {})", corners.iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect::<Vec<_>>().join(" "));
         }
         // A new cell's legacy margin as KiCad writes it (1.0025, `TableCell::margin_nm`), any other to the micrometre.
-        let m = |i: usize| crate::fmt_mm_f(c.margin_nm(i) as f64 / 1_000_000.0);
+        let m = |i: usize| mm(c.margin_nm(i));
         let _ = write!(out, " (margins {} {} {} {}) (span {} {})", m(0), m(1), m(2), m(3), c.col_span, c.row_span);
         if t.angle != 0 {
             let _ = write!(out, " (angle {})", fmt_mm_f(t.angle as f64 / 1000.0));
@@ -404,20 +404,20 @@ mod tests {
     fn a_table_as_kicad_writes_it_is_read_with_its_grid_its_strokes_and_its_cells_looks() {
         let t = read_text(&table_text("", &flat_cells())).expect("a table");
         assert_eq!((t.col_count(), t.row_count()), (2, 2));
-        assert_eq!(t.at, Point { x: 10_000, y: 20_000 });
-        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![10_000, 20_000], vec![5_000, 6_000]));
+        assert_eq!(t.at, Point { x: 10_000_000, y: 20_000_000 });
+        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![10_000_000, 20_000_000], vec![5_000_000, 6_000_000]));
         assert_eq!(t.layer, "F.SilkS");
         assert_eq!(t.uuid, "11111111-1111-1111-1111-111111111111");
         assert!(t.border.external && t.border.header && !t.separators.cols && t.separators.rows);
-        assert_eq!(t.border.stroke, TableStroke::solid(100));
-        assert_eq!(t.separators.stroke.width_um, 50);
+        assert_eq!(t.border.stroke, TableStroke::solid(100_000));
+        assert_eq!(t.separators.stroke.width_nm, 50_000);
         assert_eq!(t.separators.stroke.style, TableLineStyle::Dash);
         assert_eq!(t.separators.stroke.color, Some(SchColor { r: 255, g: 0, b: 0, a: 255 }));
         let c = t.cell(1, 1).unwrap();
         assert_eq!(c.text, "D");
-        assert_eq!(c.margins, [1_000; 4]);
-        assert_eq!((c.style.height_um, c.style.width_um, c.style.thickness_um, c.style.bold, c.style.h_align, c.style.v_align), (1_500, 1_500, 200, true, TextJustify::Left, TextVAlign::Top));
-        assert_eq!(t.cell_corners(1, 1)[2], Point { x: 40_000, y: 31_000 });
+        assert_eq!(c.margins, [1_000_000; 4]);
+        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.thickness_nm, c.style.bold, c.style.h_align, c.style.v_align), (1_500_000, 1_500_000, 200_000, true, TextJustify::Left, TextVAlign::Top));
+        assert_eq!(t.cell_corners(1, 1)[2], Point { x: 40_000_000, y: 31_000_000 });
     }
 
     #[test]
@@ -442,7 +442,7 @@ mod tests {
     fn a_table_turned_a_quarter_keeps_its_first_corner_and_writes_start_and_end_as_kicad_does() {
         // The grid of `flat_cells` turned 90 degrees about (10, 20): cell (0,0) is 5 mm wide on the screen and 10 mm tall, going up from (10, 20).
         let mut t = read_text(&table_text("", &flat_cells())).unwrap();
-        t.rotate(Point { x: 10_000, y: 20_000 }, 90_000);
+        t.rotate(Point { x: 10_000_000, y: 20_000_000 }, 90_000);
         t.id = "tbl_q".into();
         let mut text = String::new();
         write(&mut text, &t, false);
@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn a_table_turned_by_any_other_angle_is_a_polygon_per_cell() {
         let mut t = read_text(&table_text("", &flat_cells())).unwrap();
-        t.rotate(Point { x: 10_000, y: 20_000 }, 30_000);
+        t.rotate(Point { x: 10_000_000, y: 20_000_000 }, 30_000);
         t.id = "tbl_r".into();
         let mut text = String::new();
         write(&mut text, &t, false);
@@ -474,7 +474,7 @@ mod tests {
         for r in 0..2 {
             for c in 0..2 {
                 for (a, b) in again.cell_corners(r, c).iter().zip(t.cell_corners(r, c).iter()) {
-                    assert!((a.x - b.x).abs() <= 2 && (a.y - b.y).abs() <= 2, "{a:?} {b:?}");
+                    assert!((a.x - b.x).abs() <= 2000 && (a.y - b.y).abs() <= 2000, "{a:?} {b:?}");
                 }
             }
         }
@@ -489,9 +489,9 @@ mod tests {
         assert_eq!((c.style.h_align, c.style.v_align), (TextJustify::Center, TextVAlign::Center));
         // the border and separators the file does not mention: both on, the stroke of a table that has none
         assert!(t.border.external && t.border.header && t.separators.rows && t.separators.cols);
-        assert_eq!(t.border.stroke.width_um, -1);
+        assert_eq!(t.border.stroke.width_nm, -1);
         // a cell read from a file has the stroke -1 of `parseTextBoxContent`: -1 nm and three quarters of the 2 mm height
-        assert_eq!(c.margins, [1_500; 4]);
+        assert_eq!(c.margins, [1_500_000; 4]);
     }
 
     #[test]
@@ -545,16 +545,16 @@ mod tests {
     /// as the same cell; a margin set to the micrometre stays what it is.
     #[test]
     fn a_new_cells_legacy_margin_is_written_to_the_nanometre() {
-        let mut t = Table::new_grid("F.SilkS", eda_model::ir::Point { x: 0, y: 0 }, 2, 1, 10_000, 5_000, 100);
+        let mut t = Table::new_grid("F.SilkS", eda_model::ir::Point { x: 0, y: 0 }, 2, 1, 10_000_000, 5_000_000, 100_000);
         t.id = "tbl_l".into();
-        t.cells = vec![TableCell::pcb_new(false), TableCell { margins: [500; 4], ..TableCell::pcb_new(false) }];
-        assert_eq!(t.cells[0].margins, [1_003; 4]);
+        t.cells = vec![TableCell::pcb_new(false), TableCell { margins: [500_000; 4], ..TableCell::pcb_new(false) }];
+        assert_eq!(t.cells[0].margins, [1_002_500; 4]);
         let mut out = String::new();
         write(&mut out, &t, false);
         assert!(out.contains("(margins 1.0025 1.0025 1.0025 1.0025)"), "{out}");
         assert!(out.contains("(margins 0.5 0.5 0.5 0.5)"), "{out}");
         let back = read_text(&out).expect("a table");
-        assert_eq!((back.cells[0].margins, back.cells[0].margin_nm(0)), ([1_003; 4], 1_002_500));
+        assert_eq!((back.cells[0].margins, back.cells[0].margin_nm(0)), ([1_002_500; 4], 1_002_500));
     }
 
     #[test]
@@ -566,7 +566,7 @@ mod tests {
         let text = format!(r#"(table (column_count 2) (layer "F.SilkS") (column_widths 10 20) (row_heights 5 6) (cells {cells}))"#);
         let t = read_text(&text).expect("a table");
         assert_eq!((t.cell(0, 0).unwrap().col_span, t.cell(0, 1).unwrap().col_span), (2, 0));
-        assert_eq!(t.cell_local_rect(0, 0), (0, 0, 30_000, 5_000));
+        assert_eq!(t.cell_local_rect(0, 0), (0, 0, 30_000_000, 5_000_000));
         let mut out = String::new();
         let mut t = t;
         t.id = "tbl_m".into();

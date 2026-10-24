@@ -43,7 +43,7 @@ export interface ExtraItem {
 }
 
 /** `DEFAULT_PT_SIZE_MM` of `pcbnew/pcb_point.cpp`: the size of a point the Place Point tool makes, µm. */
-export const DEFAULT_POINT_SIZE_UM = 1_000;
+export const DEFAULT_POINT_SIZE_NM = 1_000_000;
 
 /** `PCB_POINT::GetBoundingBox`: `BOX2I::ByCenter( m_pos, { m_size, m_size } )`. */
 export function pointBounds(p: Pick<BoardPoint, "x" | "y" | "size">): Box {

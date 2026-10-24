@@ -73,15 +73,15 @@ export function applyMatrix(m: Matrix, x: number, y: number): [number, number] {
 }
 
 /** A library point (mm, file Y-up) to this app's shared internal space (um, Y-down) -- the one Y-negate every library coordinate needs, before any instance transform/translation. */
-export function libPointToInternalUm([xMm, yMm]: [Mm, Mm]): [number, number] {
-  return [xMm * 1000, -yMm * 1000];
+export function libPointToInternalNm([xMm, yMm]: [Mm, Mm]): [number, number] {
+  return [xMm * 1e6, -yMm * 1e6];
 }
 
 /** A library point, fully resolved: internal-space Y-flip, instance transform, then translation by the instance's own (already Y-down, um) placement. The one function every lib_symbols consumer should call -- never apply the Y-flip or the matrix separately, so there is exactly one place this pipeline can be gotten wrong. */
-export function resolveLibPoint(pMm: [Mm, Mm], m: Matrix, atUm: [number, number]): [number, number] {
-  const [ix, iy] = libPointToInternalUm(pMm);
+export function resolveLibPoint(pMm: [Mm, Mm], m: Matrix, atNm: [number, number]): [number, number] {
+  const [ix, iy] = libPointToInternalNm(pMm);
   const [tx, ty] = applyMatrix(m, ix, iy);
-  return [tx + atUm[0], ty + atUm[1]];
+  return [tx + atNm[0], ty + atNm[1]];
 }
 
 /** eeschema's `v(orientation)` (sch_pin.cpp) -- the unit vector a pin's own `angle_deg` (0/90/180/270, file convention: 0=right,90=up,180=left,270=down) points, directly in this app's shared internal (Y-down) space: `v(90)=(0,-1)` is "up" because up is negative-Y once Y-down, not because the angle itself gets re-flipped -- the file's pin-orientation convention and this app's Y-down convention already agree once the one Y-flip above has been applied. */
@@ -109,23 +109,23 @@ export interface ResolvedPin {
 }
 
 /** A library pin, fully resolved to world space: `tip` (`LibPin.at`) and `root` (`tip` moved `length_mm` into the body, along `angle_deg`) both transformed and translated the same way `resolveLibPoint` resolves any other library point -- see `resolveLibPoint`'s doc comment for why that one shared pipeline matters. */
-export function resolvePin(pin: LibPin, m: Matrix, atUm: [number, number]): ResolvedPin {
-  const [tipIx, tipIy] = libPointToInternalUm(pin.at);
+export function resolvePin(pin: LibPin, m: Matrix, atNm: [number, number]): ResolvedPin {
+  const [tipIx, tipIy] = libPointToInternalNm(pin.at);
   const [dx, dy] = pinDirectionInternal(pin.angle_deg);
-  const lengthUm = pin.length_mm * 1000;
-  const rootIx = tipIx + dx * lengthUm;
-  const rootIy = tipIy + dy * lengthUm;
+  const lengthNm = pin.length_mm * 1e6;
+  const rootIx = tipIx + dx * lengthNm;
+  const rootIy = tipIy + dy * lengthNm;
   const [tx, ty] = applyMatrix(m, tipIx, tipIy);
   const [rx, ry] = applyMatrix(m, rootIx, rootIy);
-  const tip: [number, number] = [tx + atUm[0], ty + atUm[1]];
-  const root: [number, number] = [rx + atUm[0], ry + atUm[1]];
+  const tip: [number, number] = [tx + atNm[0], ty + atNm[1]];
+  const root: [number, number] = [rx + atNm[0], ry + atNm[1]];
   // Normalize losslessly: the matrix only ever has entries in {-1,0,1} and
   // (dx,dy) is axis-aligned, so (tip-root) is already an exact axis-
-  // aligned vector of length `lengthUm` -- dividing by lengthUm (when
+  // aligned vector of length `lengthNm` -- dividing by lengthNm (when
   // nonzero) gives dir directly, with no floating-point drift to guard
   // against. A zero-length pin (hidden power pins) has no defined
   // direction; callers of a zero-length pin's `dir` should expect
   // (0,0) and treat tip===root.
-  const dir: [number, number] = lengthUm === 0 ? [0, 0] : [(tip[0] - root[0]) / lengthUm, (tip[1] - root[1]) / lengthUm];
+  const dir: [number, number] = lengthNm === 0 ? [0, 0] : [(tip[0] - root[0]) / lengthNm, (tip[1] - root[1]) / lengthNm];
   return { pin, tip, root, dir };
 }

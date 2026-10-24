@@ -149,17 +149,17 @@
   const distLines = (p, q) => { let best = Infinity; for (let i = 0; i + 1 < p.length; i++) for (let j = 0; j + 1 < q.length; j++) best = Math.min(best, distSegSeg(p[i], p[i + 1], q[j], q[j + 1])); return best; };
   const distToLine = (pt, q) => { let best = Infinity; for (let j = 0; j + 1 < q.length; j++) best = Math.min(best, distPointSeg(pt, q[j], q[j + 1])); return best; };
   const length = (p) => p.reduce((s, q, i) => (i ? s + Math.hypot(q[0] - p[i - 1][0], q[1] - p[i - 1][1]) : 0), 0);
-  /** The share of line `p`'s length that runs at `pitch` (+-10 um, KiCad's coupled-gap tolerance) from line `q`. */
+  /** The share of line `p`'s length that runs at `pitch` (+-10 um, 10 000 nm, KiCad's coupled-gap tolerance) from line `q`. */
   const coupledShare = (p, q, pitch) => {
     let near = 0, all = 0;
     for (let i = 0; i + 1 < p.length; i++) {
-      const [a, b] = [p[i], p[i + 1]], l = Math.hypot(b[0] - a[0], b[1] - a[1]), steps = Math.max(1, Math.round(l / 25));
-      for (let s = 0; s < steps; s++) { const f = (s + 0.5) / steps, pt = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]; all++; if (Math.abs(distToLine(pt, q) - pitch) <= 10) near++; }
+      const [a, b] = [p[i], p[i + 1]], l = Math.hypot(b[0] - a[0], b[1] - a[1]), steps = Math.max(1, Math.round(l / 25_000));
+      for (let s = 0; s < steps; s++) { const f = (s + 0.5) / steps, pt = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]; all++; if (Math.abs(distToLine(pt, q) - pitch) <= 10_000) near++; }
     }
     return near / all;
   };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  const near = (a, b, tol = 1) => Math.abs(a - b) <= tol;
+  const near = (a, b, tol = 1_000) => Math.abs(a - b) <= tol;
   const tracksOf = (st) => st.routing?.tracks ?? [];
   const viasOf = (st) => st.routing?.vias ?? [];
   const snapshot = (st) => JSON.stringify([tracksOf(st).map((t) => [t.id, t.net, t.layer, t.width, t.pts]), viasOf(st).map((v) => [v.net, v.x, v.y, v.from, v.to])]);
@@ -191,12 +191,12 @@
     return;
   }
   const rules = st0.board_rules;
-  const clearance = rules.clearance, minWidth = rules.constraints.min_track_width_um;
+  const clearance = rules.clearance, minWidth = rules.constraints.min_track_width_nm;
   const [p1, p2] = [padOf["J3.1"], padOf["J3.2"]];
   const mid = (p1[0] + p2[0]) / 2;
   // the pair leaves the pads straight down, comes together at its pitch, and runs along x = mid -+ pitch / 2: the cursor a little to the right of that, a long way down
   // (and 2 mm below the end of the GND track: the studio's snap pulls a click onto a track end that is closer)
-  const target = [Math.round((mid + 120) / 1000) * 1000, p1[1] + 11_000];
+  const target = [Math.round((mid + 120_000) / 1e6) * 1e6, p1[1] + 11_000_000];
   const track = obstacle.pts;
   const wall = [track[0], track[1]];
   /** What `dp_move` answers at the cursor in a mode: the mode is switched by its action, which asks for a preview at the cursor itself (so the cursor has to be where the preview is wanted). */
@@ -234,7 +234,7 @@
     t(m.colliding === true, "the pair collides with the GND track");
     t(m.displaced.length === 0 && m.displaced_vias.length === 0, "nothing is displaced");
     t(coupledShare(m.head_a, m.head_b, pitch) > 0.6 && coupledShare(m.head_b, m.head_a, pitch) > 0.6, `the lines run at the pitch (${pitch}) over most of their length: ${coupledShare(m.head_a, m.head_b, pitch).toFixed(2)}`);
-    t(distLines(m.head_a, m.head_b) >= pitch - 10, `and never closer: ${distLines(m.head_a, m.head_b).toFixed(1)}`);
+    t(distLines(m.head_a, m.head_b) >= pitch - 10_000, `and never closer: ${distLines(m.head_a, m.head_b).toFixed(1)}`);
     t(m.head_a[m.head_a.length - 1][1] === target[1] && m.head_b[m.head_b.length - 1][1] === target[1], `both lines end on the cursor's row: ${JSON.stringify([m.head_a[m.head_a.length - 1], m.head_b[m.head_b.length - 1], target])}`);
     markHeads = heads(m);
   });
@@ -246,14 +246,14 @@
     const m = await inMode("pcbnew.InteractiveRouter.WalkaroundMode");
     t(m && m.colliding === false, `the pair fits: ${m && JSON.stringify({ colliding: m.colliding, head_a: m.head_a })}`);
     t(m.displaced.length === 0, "the track is not pushed");
-    const need = clearance + (obstacle.width + m.width) / 2 - 1; // the clearance and both half widths, centre to centre
+    const need = clearance + (obstacle.width + m.width) / 2 - 500; // the clearance and both half widths, centre to centre
     const dA = distLines(m.head_a, wall), dB = distLines(m.head_b, wall);
-    t(dA >= need && dB >= need, `both lines keep the clearance from the track: ${dA.toFixed(1)} and ${dB.toFixed(1)} um centre to centre (${need + 1} wanted)`);
+    t(dA >= need && dB >= need, `both lines keep the clearance from the track: ${dA.toFixed(1)} and ${dB.toFixed(1)} nm centre to centre (${need + 500} wanted)`);
     t(!same(heads(m), markHeads), "the lines are not the straight ones: they went round");
-    t(distLines(m.head_a, m.head_b) >= pitch - 10, `the lines never come closer than the pair's pitch: ${distLines(m.head_a, m.head_b).toFixed(1)}`);
+    t(distLines(m.head_a, m.head_b) >= pitch - 10_000, `the lines never come closer than the pair's pitch: ${distLines(m.head_a, m.head_b).toFixed(1)}`);
     t(coupledShare(m.head_a, m.head_b, pitch) > 0.6, `and most of the length is at the pitch: ${coupledShare(m.head_a, m.head_b, pitch).toFixed(2)}`);
     const [ea, eb] = [m.head_a[m.head_a.length - 1], m.head_b[m.head_b.length - 1]];
-    t(near(ea[0], markHeads[0][markHeads[0].length - 1][0], 2) && near(eb[0], markHeads[1][markHeads[1].length - 1][0], 2) && ea[1] === target[1], `the lines are back in line at the cursor: ${JSON.stringify([ea, eb])}`);
+    t(near(ea[0], markHeads[0][markHeads[0].length - 1][0], 2_000) && near(eb[0], markHeads[1][markHeads[1].length - 1][0], 2_000) && ea[1] === target[1], `the lines are back in line at the cursor: ${JSON.stringify([ea, eb])}`);
   });
 
   await scenario("Shove keeps the pair straight and pushes the track aside to the clearance", async (t) => {
@@ -267,8 +267,8 @@
     const moved = m.displaced[0] && m.displaced[0].pts;
     t(!!moved && moved.length >= 2 && same([moved[0][1], moved[moved.length - 1][1]], [wall[0][1], wall[1][1]]), `its ends keep their rows: ${JSON.stringify(moved)}`);
     const dA = distLines(m.head_a, moved), dB = distLines(m.head_b, moved);
-    const need = clearance + (obstacle.width + m.width) / 2 - 1;
-    t(dA >= need && dB >= need, `it ends a clearance from both lines: ${dA.toFixed(1)} and ${dB.toFixed(1)} um centre to centre (${need + 1} wanted)`);
+    const need = clearance + (obstacle.width + m.width) / 2 - 500;
+    t(dA >= need && dB >= need, `it ends a clearance from both lines: ${dA.toFixed(1)} and ${dB.toFixed(1)} nm centre to centre (${need + 500} wanted)`);
     t(!!moved && moved[0][0] > wall[0][0], `and it went away from the pair, not towards it: x ${wall[0][0]} -> ${moved && moved[0][0]}`);
   });
 
@@ -299,11 +299,11 @@
     const hasPoint = (pts, p) => pts.some((q) => q[0] === p[0] && q[1] === p[1]);
     t(hasPoint(ends(dp), p1) && hasPoint(ends(dp), padOf["J2.3"]) && hasPoint(ends(dn), p2) && hasPoint(ends(dn), padOf["J2.4"]), "each net runs from its pad of one header to its pad of the other");
     const allDp = dp.flatMap((x) => x.pts), allDn = dn.flatMap((x) => x.pts);
-    t(Math.min(...dp.flatMap((a) => dn.map((b) => distLines(a.pts, b.pts)))) >= pitch - 10, `the two nets are a pitch apart at the closest: ${Math.min(...dp.flatMap((a) => dn.map((b) => distLines(a.pts, b.pts)))).toFixed(1)} (${pitch})`);
+    t(Math.min(...dp.flatMap((a) => dn.map((b) => distLines(a.pts, b.pts)))) >= pitch - 10_000, `the two nets are a pitch apart at the closest: ${Math.min(...dp.flatMap((a) => dn.map((b) => distLines(a.pts, b.pts)))).toFixed(1)} (${pitch})`);
     const gnds = tracks.filter((x) => x.net === "GND");
     const gnd = gnds[0];
     t(gnds.length === 1 && gnd.pts.length === 2 && gnd.pts[0][1] === wall[0][1] && gnd.pts[1][1] === wall[1][1] && gnd.pts[0][0] > wall[0][0], `the GND track was replaced by the pushed one, one track still, its ends in their rows: ${JSON.stringify(gnds.map((x) => x.pts))}`);
-    t(!!gnd && Math.min(...dp.concat(dn).map((x) => distLines(x.pts, gnd.pts))) >= clearance + minWidth - 1, "and is a clearance from both nets");
+    t(!!gnd && Math.min(...dp.concat(dn).map((x) => distLines(x.pts, gnd.pts))) >= clearance + minWidth - 500, "and is a clearance from both nets");
     t(allDp.length > 2 && allDn.length > 2, "the lines have their corners");
     const open = (st.checks ?? []).filter((c) => c.check === "routing_connectivity" && c.fail && (c.at === "USB_DP" || c.at === "USB_DN"));
     t(open.length === 0, `the pair's two connections are closed: ${JSON.stringify(open.map((c) => c.at))}`);
@@ -314,7 +314,7 @@
     await arm();
     await startAt(...p1);
     await inMode("pcbnew.InteractiveRouter.WalkaroundMode");
-    const viaAt = [Math.round((p1[0] - 600) / 1000) * 1000, p1[1] + 5000]; // well away from the GND track: the studio's snap pulls a cursor onto track ends
+    const viaAt = [Math.round((p1[0] - 600_000) / 1e6) * 1e6, p1[1] + 5_000_000]; // well away from the GND track: the studio's snap pulls a cursor onto track ends
     let n = replies.length;
     await E.run("pcbnew.Control.layerToggle");
     const viaCall = await waitReply("dp_via", n);
@@ -325,7 +325,7 @@
       const [va, vb] = m.vias;
       t(va.net === "USB_DP" && vb.net === "USB_DN" && va.from_layer === "F.Cu" && va.to_layer === "B.Cu", `P and N, from F.Cu to B.Cu: ${JSON.stringify([va.net, vb.net, va.from_layer, va.to_layer])}`);
       const apart = Math.hypot(va.x - vb.x, va.y - vb.y) - va.diameter;
-      t(apart >= clearance - 1 && apart < 2 * clearance, `a via gap apart, edge to edge: ${apart.toFixed(1)} um (the clearance is ${clearance})`);
+      t(apart >= clearance - 500 && apart < 2 * clearance, `a via gap apart, edge to edge: ${apart.toFixed(1)} nm (the clearance is ${clearance})`);
       t(m.colliding === false, "and they fit");
     }
     n = replies.length;
@@ -352,7 +352,7 @@
     await arm();
     await startAt(...p1);
     // a cursor from which the pair has two fits: along the row it leaves (through the neighbouring pad: colliding) and diagonal first (clean)
-    const leg = [Math.round((p2[0] + 4850) / 1000) * 1000, p1[1] + 3000];
+    const leg = [Math.round((p2[0] + 4_850_000) / 1e6) * 1e6, p1[1] + 3_000_000];
     await moveTo(...leg);
     const first = await inMode("pcbnew.InteractiveRouter.HighlightMode");
     t(first && first.ok === true && first.head_a.length > 2, `a pair to the cursor: ${first && first.head_a.length} corners`);

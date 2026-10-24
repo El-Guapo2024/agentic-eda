@@ -77,7 +77,7 @@
     Object.getOwnPropertyDescriptor(proto, "value").set.call(el, String(v));
     el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
   };
-  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const near = (a, b, tol = 2_000) => Math.abs(a - b) <= tol;
   const button = (text) => [...document.querySelectorAll(".dialog button")].find((b) => b.textContent.trim() === text);
   const closeDialogs = async () => { for (let i = 0; i < 3; i++) { const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Cancel"); if (!b) break; b.click(); await sleep(150); } };
   const waitFor = async (cond, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await cond()) return true; await sleep(150); } return false; };
@@ -144,7 +144,7 @@
   const coilLengths = async (tw) => {
     const found = {};
     for (let mm = 9; mm <= 300; mm += 0.5) {
-      const r = await post("/api/microwave/inductor", { start: { x: 0, y: 0 }, end: { x: 10000, y: 0 }, length_um: Math.round(mm * 1000), track_width_um: tw });
+      const r = await post("/api/microwave/inductor", { start: { x: 0, y: 0 }, end: { x: 10_000_000, y: 0 }, length_nm: Math.round(mm * 1e6), track_width_nm: tw });
       (found[r.ok ? "ok" : r.message] ??= []).push(mm);
     }
     const mid = (k) => (found[k] ? found[k][Math.floor(found[k].length / 2)] : null);
@@ -170,7 +170,7 @@
   let toScreen = await screenOf();
   if (!toScreen) { results.push({ name: "setup", ok: false, notes: ["FAIL: the canvas gave no cursor readout"] }); check.done = true; return "no canvas"; }
   const outline = (await board()).outline ?? [[0, 0], [35000, 0], [35000, 35000], [0, 35000]];
-  const [bx0, by0] = [Math.min(...outline.map((p) => p[0])) / 1000, Math.min(...outline.map((p) => p[1])) / 1000];
+  const [bx0, by0] = [Math.min(...outline.map((p) => p[0])) / 1e6, Math.min(...outline.map((p) => p[1])) / 1e6];
   const at = (dx, dy) => [bx0 + dx, by0 + dy];
   const TW = await trackWidth();
 
@@ -186,18 +186,18 @@
       t(!!p, "the click opens the prompt");
       if (!p) return;
       t(p.title === "Create Microwave Footprint" && p.label === "Gap Size:", `its title and message are KiCad's (${p.title} / ${p.label})`);
-      t(Number(p.text) === TW / 1000, `the box starts at the current track width (${p.text} mm for ${TW} um)`);
+      t(Number(p.text) === TW / 1e6, `the box starts at the current track width (${p.text} mm for ${TW} um)`);
       await answer("0.5");
       const made = await mine();
       t(made.length === 1, `OK puts one footprint on the board (${made.map((m) => m.ref)})`);
       const g = made[0];
       if (!g) return;
       t(g.footprint === "muwave_gap" && g.ref.startsWith("REF"), `a footprint of its own: ${g.footprint}, ${g.ref}`);
-      t(near(g.at[0], x * 1000, 600) && near(g.at[1], y * 1000, 600), `where the click was (${g.at} for ${x * 1000}, ${y * 1000})`);
+      t(near(g.at[0], x * 1e6, 600_000) && near(g.at[1], y * 1e6, 600_000), `where the click was (${g.at} for ${x * 1e6}, ${y * 1e6})`);
       const pads = [...g.pads].sort((a, b) => a.x - b.x);
       t(pads.length === 2 && pads[0].w === TW && pads[0].h === TW, `two square pads of the track width (${pads.map((q) => `${q.w}x${q.h}`)})`);
-      t(near(pads[0].x, g.at[0] - (500 + TW) / 2, 1) && near(pads[1].x, g.at[0] + (500 + TW) / 2, 1), `at -(gap + w) / 2 and +(gap + w) / 2 from the origin (${pads.map((q) => q.x - g.at[0])})`);
-      t(near(pads[1].x - pads[1].w / 2 - (pads[0].x + pads[0].w / 2), 500, 1), "so the copper is 0.5 mm apart");
+      t(near(pads[0].x, g.at[0] - (500_000 + TW) / 2, 1000) && near(pads[1].x, g.at[0] + (500_000 + TW) / 2, 1000), `at -(gap + w) / 2 and +(gap + w) / 2 from the origin (${pads.map((q) => q.x - g.at[0])})`);
+      t(near(pads[1].x - pads[1].w / 2 - (pads[0].x + pads[0].w / 2), 500_000, 1000), "so the copper is 0.5 mm apart");
       t(E.state().selection.some((s) => s.id === g.ref), "the footprint is selected");
       await undo();
       t((await mine()).length === 0, "one undo step takes it back");
@@ -253,9 +253,9 @@
       t(!!s && s.footprint === "muwave_stub", `a muwave_stub (${s?.footprint})`);
       if (!s) return;
       const pad = (n) => s.pads.find((q) => q.num === n);
-      t(near(pad("1").x, s.at[0], 1) && near(pad("1").y, s.at[1], 1) && pad("1").w === TW && pad("1").h === TW, "pad 1 is the track's square at the origin");
-      t(pad("2").w === TW && pad("2").h === 1500, `pad 2 is as wide as the track and 1.5 mm long (${pad("2").w} x ${pad("2").h})`);
-      t(near(pad("2").y, s.at[1] - (1500 + TW) / 2, 1), `above it: -(stub + h) / 2 (${pad("2").y - s.at[1]})`);
+      t(near(pad("1").x, s.at[0], 1000) && near(pad("1").y, s.at[1], 1000) && pad("1").w === TW && pad("1").h === TW, "pad 1 is the track's square at the origin");
+      t(pad("2").w === TW && pad("2").h === 1_500_000, `pad 2 is as wide as the track and 1.5 mm long (${pad("2").w} x ${pad("2").h})`);
+      t(near(pad("2").y, s.at[1] - (1_500_000 + TW) / 2, 1000), `above it: -(stub + h) / 2 (${pad("2").y - s.at[1]})`);
       const f = s.fields.find((q) => q.name === "Reference");
       t(f && f.w === TW && f.h === TW, `the Reference text is the track's size too (${f?.w})`);
       await deleteAll();
@@ -303,7 +303,7 @@
     });
 
     await scenario("the microwave footprints are footprints: rotated, turned over, duplicated and deleted, each one undo step; Strict does not hold them to a courtyard of their pads", async (t) => {
-      await cmd({ op: "microwave", verb: "stub", at: { x: Math.round(at(10, 20)[0] * 1000), y: Math.round(at(10, 20)[1] * 1000) }, size_um: 1000, track_width_um: TW });
+      await cmd({ op: "microwave", verb: "stub", at: { x: Math.round(at(10, 20)[0] * 1e6), y: Math.round(at(10, 20)[1] * 1e6) }, size_nm: 1_000_000, track_width_nm: TW });
       await sleep(900);
       const s = (await mine())[0];
       t(!!s, "a stub on the board");
@@ -341,8 +341,8 @@
       // Strict on: a stub at a corner of the board and a gap right beside it are placed
       await setStrict(true);
       const c1 = at(0.6, 0.6);
-      await cmdStrict({ op: "microwave", verb: "gap", at: { x: Math.round(c1[0] * 1000), y: Math.round(c1[1] * 1000) }, size_um: 500, track_width_um: TW });
-      await cmdStrict({ op: "microwave", verb: "gap", at: { x: Math.round(c1[0] * 1000) + 600, y: Math.round(c1[1] * 1000) + 3000 }, size_um: 500, track_width_um: TW });
+      await cmdStrict({ op: "microwave", verb: "gap", at: { x: Math.round(c1[0] * 1e6), y: Math.round(c1[1] * 1e6) }, size_nm: 500_000, track_width_nm: TW });
+      await cmdStrict({ op: "microwave", verb: "gap", at: { x: Math.round(c1[0] * 1e6) + 600_000, y: Math.round(c1[1] * 1e6) + 3_000_000 }, size_nm: 500_000, track_width_nm: TW });
       t((await mine()).length === 2, "with Strict on, footprints at the corner of the board and a few mm apart are accepted (no courtyard of their pads to refuse)");
       await setStrict(false);
       await deleteAll();
@@ -402,17 +402,17 @@
       t(made.length === 1 && made[0].footprint === "mw_inductor" && made[0].value === "L7", `the inductor is on the board with the value typed (${made.map((m) => `${m.footprint} ${m.value}`)})`);
       const c = made[0];
       if (!c) return;
-      t(near(c.at[0], x2 * 1000, 600) && near(c.at[1], y1 * 1000, 600), `anchored at the end point, on the axis (${c.at})`);
+      t(near(c.at[0], x2 * 1e6, 600_000) && near(c.at[1], y1 * 1e6, 600_000), `anchored at the end point, on the axis (${c.at})`);
       t(c.pads.length === 2, "two pads");
       const pad1 = c.pads.find((q) => q.num === "1");
       const pad2 = c.pads.find((q) => q.num === "2");
-      t(near(pad1.x, c.at[0], 1) && near(pad2.x, x1 * 1000, 600), "pad 1 at the end point, pad 2 at the start");
+      t(near(pad1.x, c.at[0], 1000) && near(pad2.x, x1 * 1e6, 600_000), "pad 1 at the end point, pad 2 at the start");
       t(E.state().selection.some((s) => s.id === c.ref), "the footprint is selected");
       const text = await pcbText();
       const block = blockOf(text, c.ref);
       const lines = (block.match(/\(fp_line /g) ?? []).length;
       t(lines > 40, `the coil is many segments of the track's width on the front copper (${lines})`);
-      t(new RegExp(`\\(stroke \\(width ${TW / 1000}\\) \\(type solid\\)\\) \\(layer "F\\.Cu"\\)`).test(block), "of the width of the track");
+      t(new RegExp(`\\(stroke \\(width ${TW / 1e6}\\) \\(type solid\\)\\) \\(layer "F\\.Cu"\\)`).test(block), "of the width of the track");
       t(block.startsWith('\t(footprint "mw_inductor"'), "named mw_inductor, with no library link");
       await undo();
       t((await mine()).length === 0, "one undo step takes it back");
@@ -483,7 +483,7 @@
       const s = made[0];
       if (!s) return;
       const xs = s.pads.map((q) => q.x - s.at[0]).sort((a, b) => a - b);
-      t(near(xs[0], -4000, 1) && near(xs[1], 4000, 1), `the two pads are the file's width apart (${xs})`);
+      t(near(xs[0], -4_000_000, 1000) && near(xs[1], 4_000_000, 1000), `the two pads are the file's width apart (${xs})`);
       let block = blockOf(await pcbText(), s.ref);
       const n = pointsOf(block, "(fp_poly", "(stroke");
       t(/\(stroke \(width 0\) \(type solid\)\) \(fill yes\) \(layer "F\.Cu"\)/.test(block), "a filled polygon on the front copper with a stroke of 0");
@@ -520,14 +520,14 @@
     });
 
     await scenario("the footprints of the tools open in the Footprint Editor like any footprint of the board: Edit Footprint (Ctrl+E) loads each, the page keeps running", async (t) => {
-      const [x0, y0] = at(6, 6).map((v) => Math.round(v * 1000));
-      const mk = (c) => cmd({ op: "microwave", track_width_um: TW, ...c });
-      await mk({ verb: "gap", at: { x: x0, y: y0 }, size_um: 500 });
-      await mk({ verb: "stub", at: { x: x0 + 4000, y: y0 }, size_um: 1000 });
-      await mk({ verb: "arc_stub", at: { x: x0 + 8000, y: y0 }, radius_um: 2000, angle_millideg: 60000 });
-      await mk({ verb: "function_shape", at: { x: x0 + 12000, y: y0 }, file: SHAPE });
+      const [x0, y0] = at(6, 6).map((v) => Math.round(v * 1e6));
+      const mk = (c) => cmd({ op: "microwave", track_width_nm: TW, ...c });
+      await mk({ verb: "gap", at: { x: x0, y: y0 }, size_nm: 500_000 });
+      await mk({ verb: "stub", at: { x: x0 + 4_000_000, y: y0 }, size_nm: 1_000_000 });
+      await mk({ verb: "arc_stub", at: { x: x0 + 8_000_000, y: y0 }, radius_nm: 2_000_000, angle_millideg: 60000 });
+      await mk({ verb: "function_shape", at: { x: x0 + 12_000_000, y: y0 }, file: SHAPE });
       const coil = (await coilLengths(TW)).ok;
-      await mk({ verb: "inductor", start: { x: x0, y: y0 + 6000 }, end: { x: x0 + 10000, y: y0 + 6000 }, length_um: Math.round(coil * 1000), name: "L1" });
+      await mk({ verb: "inductor", start: { x: x0, y: y0 + 6_000_000 }, end: { x: x0 + 10_000_000, y: y0 + 6_000_000 }, length_nm: Math.round(coil * 1e6), name: "L1" });
       await sleep(900);
       const made = await mine();
       t(made.length === 5, `five footprints of the tools (${made.map((p) => p.footprint)})`);

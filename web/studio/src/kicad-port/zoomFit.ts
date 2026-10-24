@@ -11,7 +11,7 @@
 //
 // KiCad names a zoom by the GAL zoom factor `Z`: the number of pixels one inch of the drawing takes is
 // `Z * screenDPI`, whatever the editor's internal unit. Here a view's `scale` is screen pixels per um, so
-// `scale = Z * screenDPI / 25400`.
+// `scale = Z * screenDPI / 25400000`.
 import { MAX_SCALE, MIN_SCALE, type ViewTransform } from "./view";
 import { viewCenteredOn } from "./cursorControl";
 import type { Box } from "./itemBoxes";
@@ -21,12 +21,12 @@ export const SCREEN_DPI = 91;
 
 /** A GAL zoom factor as this app's view scale (pixels per um). */
 export function zoomFactorToScale(zoomFactor: number): number {
-  return (zoomFactor * SCREEN_DPI) / 25_400;
+  return (zoomFactor * SCREEN_DPI) / 25_400_000;
 }
 
 /** The GAL zoom factor of a view scale (what `GAL::GetZoomFactor` would say). */
 export function scaleToZoomFactor(scale: number): number {
-  return (scale * 25_400) / SCREEN_DPI;
+  return (scale * 25_400_000) / SCREEN_DPI;
 }
 
 /** `ZOOM_LIST_PCBNEW` -- the board editor, the footprint editor and the footprint viewer. */

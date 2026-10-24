@@ -20,7 +20,7 @@ export interface SymbolSnapView {
   showHiddenPins: boolean;
   /** Screen pixels per um. */
   scale: number;
-  gridUm: number;
+  gridNm: number;
   grids: readonly number[];
   overrides: GridOverrides | null;
 }
@@ -67,7 +67,7 @@ export class SymbolSnap {
   private env(): GridEnv {
     const v = this.view!;
     const scale = v.scale > 0 ? v.scale : 1;
-    return { scale, gridUm: v.gridUm, visibleGridUm: computeVisibleGridSize(v.gridUm, scale), origin: [0, 0], gridSizeOf: (c) => gridSizeFor(c, v.gridUm, v.grids, v.overrides) };
+    return { scale, gridNm: v.gridNm, visibleGridNm: computeVisibleGridSize(v.gridNm, scale), origin: [0, 0], gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides) };
   }
 
   private helperFor(tool: string): SchGridHelper {

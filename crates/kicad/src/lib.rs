@@ -51,7 +51,7 @@ mod page;
 mod import;
 mod fp_transform;
 mod import_items;
-pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, merge_project_setup_pages, mm_to_um, parse_project_net_classes, parse_rule_severities, ImportNotes};
+pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, merge_project_setup_pages, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
 
 mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules};
@@ -367,8 +367,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let part = parts_by_ref[sym.id.as_str()];
         let lib_id = sym_lib_id(sym);
         let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
-        let x = mm(sym.at.x);
-        let y = mm(sym.at.y);
+        let x = sch_mm(sym.at.x);
+        let y = sch_mm(sym.at.y);
         let uuid = duid_for(&format!("sym:{}", sym.id), &sym.id);
         // The body style the symbol is placed in: `(convert N)` (the token of a file before KiCad 10, which reads it as `body_style`, `SCH_SYMBOL::SetBodyStyle`),
         // written only for a symbol in the alternate ("De Morgan") style of a library symbol that has one, as the default is the normal style.
@@ -421,7 +421,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         if !sch.imported_from_kicad {
             if let Some(sim) = model.symbol_sim_fields.get(&lib_id) {
                 for (name, text) in sim.iter().filter(|(n, _)| !shown.iter().any(|f| f.name == *n)) {
-                    write_property(&mut out, name, text, mm(sym.at.x).parse().unwrap_or(0.0), mm(sym.at.y).parse().unwrap_or(0.0), true);
+                    write_property(&mut out, name, text, sch_mm(sym.at.x).parse().unwrap_or(0.0), sch_mm(sym.at.y).parse().unwrap_or(0.0), true);
                 }
             }
         }
@@ -452,8 +452,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
 
     // ---- power symbol instances ----
     for ps in &power_symbols {
-        let x = mm(ps.at.x);
-        let y = mm(ps.at.y);
+        let x = sch_mm(ps.at.x);
+        let y = sch_mm(ps.at.y);
         let uuid = duid_for(&format!("pwr:{}", ps.id), &ps.id);
         // `rot` is KiCad's angle (counter-clockwise on the sheet), as the reader reads it, the editor (`Matrix::of`) turns it and the painter draws it
         let angle = (ps.rot / 1000) % 360;
@@ -492,10 +492,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     for (i, w) in wires.iter().enumerate() {
         let tag = if w.bus { "bus" } else { "wire" };
         for (j, pair) in w.pts.windows(2).enumerate() {
-            let x1 = mm(pair[0].x);
-            let y1 = mm(pair[0].y);
-            let x2 = mm(pair[1].x);
-            let y2 = mm(pair[1].y);
+            let x1 = sch_mm(pair[0].x);
+            let y1 = sch_mm(pair[0].y);
+            let x2 = sch_mm(pair[1].x);
+            let y2 = sch_mm(pair[1].y);
             let uuid = duid_for(&format!("{tag}:{}:{}:{}", w.net, i, j), &w.id);
             writeln!(out, "\t({tag}").unwrap();
             writeln!(out, "\t\t(pts (xy {x1} {y1}) (xy {x2} {y2}))").unwrap();
@@ -512,10 +512,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     let mut bus_entries: Vec<&eda_model::ir::BusEntry> = sch.bus_entries.iter().collect();
     bus_entries.sort_by(|a, b| a.at.cmp(&b.at));
     for be in &bus_entries {
-        let x = mm(be.at.x);
-        let y = mm(be.at.y);
-        let dx = mm(be.size.x);
-        let dy = mm(be.size.y);
+        let x = sch_mm(be.at.x);
+        let y = sch_mm(be.at.y);
+        let dx = sch_mm(be.size.x);
+        let dy = sch_mm(be.size.y);
         let uuid = if be.id.is_empty() { duid(&format!("bent:{}:{}", be.at.x, be.at.y)) } else { be.id.clone() };
         note_item_uuid(&be.id, &uuid);
         writeln!(out, "\t(bus_entry (at {x} {y}) (size {dx} {dy})").unwrap();
@@ -562,8 +562,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     // An explicit junction that sits where a derived one is written is not written twice, but its look (Junction Properties) is the dot's.
     let looks_at: BTreeMap<eda_model::ir::Point, &eda_model::sch_extras::JunctionLook> = sch.junctions.iter().filter_map(|j| sch.extras.junction_looks.get(&j.id).map(|l| (j.at, l))).collect();
     for (net, pt) in &derived_junctions {
-        let x = mm(pt.x);
-        let y = mm(pt.y);
+        let x = sch_mm(pt.x);
+        let y = sch_mm(pt.y);
         let uuid = duid(&format!("junction:{net}:{}:{}", pt.x, pt.y));
         // an explicit junction on the same point is not written twice: the dot above is its dot, in the groups too
         for j in sch.junctions.iter().filter(|j| j.at == *pt) {
@@ -577,8 +577,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     let mut explicit: Vec<&eda_model::ir::Junction> = sch.junctions.iter().filter(|j| !derived_junctions.iter().any(|(_, pt)| *pt == j.at)).collect();
     explicit.sort_by_key(|j| j.at);
     for j in explicit {
-        let x = mm(j.at.x);
-        let y = mm(j.at.y);
+        let x = sch_mm(j.at.x);
+        let y = sch_mm(j.at.y);
         let uuid = duid_for(&format!("junction:{}:{}", j.at.x, j.at.y), &j.id);
         writeln!(out, "\t(junction (at {x} {y}) {}", sch_extras_io::junction_attrs(sch.extras.junction_looks.get(&j.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
@@ -594,13 +594,13 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     lines.sort_by(|a, b| a.pts.cmp(&b.pts));
     for l in lines {
         for (k, seg) in l.pts.windows(2).enumerate() {
-            let pts: String = seg.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
+            let pts: String = seg.iter().map(|p| format!(" (xy {} {})", sch_mm(p.x), sch_mm(p.y))).collect();
             // the first segment keeps the uuid the whole line had
-            let seed = if k == 0 { format!("sch_line:{}", l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect::<String>()) } else { format!("sch_line:{pts}:{k}") };
+            let seed = if k == 0 { format!("sch_line:{}", l.pts.iter().map(|p| format!(" (xy {} {})", sch_mm(p.x), sch_mm(p.y))).collect::<String>()) } else { format!("sch_line:{pts}:{k}") };
             let uuid = duid_for(&seed, &l.id);
             writeln!(out, "\t(polyline").unwrap();
             writeln!(out, "\t\t(pts{pts})").unwrap();
-            writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_um, sch.extras.strokes.get(&l.id))).unwrap();
+            writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_nm, sch.extras.strokes.get(&l.id))).unwrap();
             writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
             if sch.extras.is_locked(&l.id) {
                 writeln!(out, "\t\t(locked yes)").unwrap();
@@ -616,8 +616,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
 
     // ---- no-connect flags ----
     for nc in &no_connects {
-        let x = mm(nc.at.x);
-        let y = mm(nc.at.y);
+        let x = sch_mm(nc.at.x);
+        let y = sch_mm(nc.at.y);
         let uuid = duid_for(&format!("nc:{}:{}", nc.at.x, nc.at.y), &nc.id);
         let locked = if sch.extras.is_locked(&nc.id) { " (locked yes)" } else { "" };
         writeln!(out, "\t(no_connect (at {x} {y}) (uuid \"{uuid}\"){locked})").unwrap();
@@ -625,8 +625,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
 
     // ---- labels: local, global or hierarchical, per `NetLabel::kind` ----
     for l in &labels {
-        let x = mm(l.at.x);
-        let y = mm(l.at.y);
+        let x = sch_mm(l.at.x);
+        let y = sch_mm(l.at.y);
         let uuid = duid_for(&format!("label:{}:{}:{}", l.net, l.at.x, l.at.y), &l.id);
         let (tag, shape) = match &l.kind {
             eda_model::ir::LabelKind::Local => ("label", None),
@@ -657,14 +657,14 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     // ---- free text (`T`) -- same shape as a label's own s-expr, minus the
     // net/shape fields a plain KiCad `(text ...)` has neither of ----
     for t in &texts {
-        let x = mm(t.at.x);
-        let y = mm(t.at.y);
+        let x = sch_mm(t.at.x);
+        let y = sch_mm(t.at.y);
         // KiCad keeps a text's angle upright (0 or 90, `KeepUpright`) and says which end of the text sits on the anchor with the justification
         let angle_deg = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90 } else { 0 };
         let uuid = duid_for(&format!("text:{}:{}:{}", t.content, t.at.x, t.at.y), &t.id);
         writeln!(out, "\t(text {}", sexpr_str(&t.content)).unwrap();
         writeln!(out, "\t\t(at {x} {y} {angle_deg})").unwrap();
-        writeln!(out, "\t\t{}", sch_extras_io::text_effects_str(t.size_um, sch.extras.text_justify_of(&t.id))).unwrap();
+        writeln!(out, "\t\t{}", sch_extras_io::text_effects_str(t.size_nm, sch.extras.text_justify_of(&t.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&t.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
@@ -716,10 +716,10 @@ fn write_sheet_groups(out: &mut String, sch: &eda_model::ir::SchematicSection) {
 /// One `(sheet ...)` item of a screen, as `SCH_IO_KICAD_SEXPR` writes it (`SCH_IO_KICAD_SEXPR::saveSheet`): its place and size, its fields
 /// (`Sheetname`, `Sheetfile`), its pins and the page it has under the path of the screen it is drawn on.
 pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicSection, s: &eda_model::ir::SheetInstance, page: &str, instance_path: &str) {
-    let x = mm(s.at.x);
-    let y = mm(s.at.y);
-    let w = mm(s.size.0);
-    let h = mm(s.size.1);
+    let x = sch_mm(s.at.x);
+    let y = sch_mm(s.at.y);
+    let w = sch_mm(s.size.0);
+    let h = sch_mm(s.size.1);
     let uuid = sheet_uuid(s);
     note_item_uuid(&s.id, &uuid);
     writeln!(out, "\t(sheet").unwrap();
@@ -735,8 +735,8 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         write_page_field(out, &f);
     }
     for p in &s.pins {
-        let px = mm(p.at.x);
-        let py = mm(p.at.y);
+        let px = sch_mm(p.at.x);
+        let py = sch_mm(p.at.y);
         let pin_uuid = if looks_like_uuid(&p.id) { p.id.clone() } else { duid(&format!("sheetpin:{uuid}:{}:{}:{}", p.name, p.at.x, p.at.y)) };
         // The angle is the side of the sheet the pin sits on (`SCH_SHEET_PIN::SetSide`: 0 right, 90 top, 180 left, 270 bottom):
         // KiCad moves the pin onto that edge when it reads the file, so a pin on the left written as 0 would jump to the right.
@@ -756,7 +756,7 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         let justify = if angle == 0 || angle == 90 { "right" } else { "left" };
         // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`)
         let look = sch.extras.sheet_pin_looks.get(&p.id).copied().unwrap_or_default();
-        let font = FieldLook { size_um: look.text_size_um() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
+        let font = FieldLook { size_nm: look.text_size_nm() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
         writeln!(out, "\t\t\t(effects {font} (justify {justify})))").unwrap();
     }
     writeln!(out, "\t\t(instances").unwrap();
@@ -928,7 +928,7 @@ fn justify_tokens(h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::
 /// name is shown and whether Autoplace Fields may move it (`(show_name yes)`, `(do_not_autoplace yes)`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct FieldLook {
-    size_um: f64,
+    size_nm: f64,
     bold: bool,
     italic: bool,
     show_name: bool,
@@ -936,24 +936,24 @@ struct FieldLook {
 }
 
 impl FieldLook {
-    const DEFAULT: FieldLook = FieldLook { size_um: 1270.0, bold: false, italic: false, show_name: false, do_not_autoplace: false };
+    const DEFAULT: FieldLook = FieldLook { size_nm: 1_270_000.0, bold: false, italic: false, show_name: false, do_not_autoplace: false };
 
     fn of(p: &FieldPlacement) -> FieldLook {
-        FieldLook { size_um: p.text_size_um() as f64, bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace }
+        FieldLook { size_nm: p.text_size_nm() as f64, bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace }
     }
 
     fn of_page(f: &eda_engine::fields::PageField) -> FieldLook {
-        FieldLook { size_um: f.size_um, bold: f.bold, italic: f.italic, show_name: f.name_shown, do_not_autoplace: f.no_autoplace }
+        FieldLook { size_nm: f.size_nm, bold: f.bold, italic: f.italic, show_name: f.name_shown, do_not_autoplace: f.no_autoplace }
     }
 
     /// `(font (size S S) (bold yes) (italic yes))`.
     fn font(&self) -> String {
-        let size = fmt_mm_f(self.size_um / 1000.0);
+        let size = fmt_mm_f(self.size_nm / 1e6);
         format!("(font (size {size} {size}){}{})", if self.bold { " (bold yes)" } else { "" }, if self.italic { " (italic yes)" } else { "" })
     }
 }
 
-/// One `(property ...)` of a symbol, a power symbol or a sheet: the text, its anchor (micrometres) and angle, how it is justified, and
+/// One `(property ...)` of a symbol, a power symbol or a sheet: the text, its anchor (nanometres) and angle, how it is justified, and
 /// whether it is hidden.
 #[allow(clippy::too_many_arguments)]
 fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), vertical: bool, h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::VJustify, hide: bool, look: &FieldLook) {
@@ -964,8 +964,8 @@ fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), ve
         "\t\t(property {} {} (at {} {} {}){}\n\t\t\t(effects {}{}{})\n\t\t)",
         sexpr_str(key),
         sexpr_str(value),
-        fmt_mm_f(at.0 / 1000.0),
-        fmt_mm_f(at.1 / 1000.0),
+        fmt_mm_f(at.0 / 1e6),
+        fmt_mm_f(at.1 / 1e6),
         if vertical { 90 } else { 0 },
         flags,
         look.font(),
@@ -985,7 +985,7 @@ pub(crate) fn label_effects(sch: &eda_model::ir::SchematicSection, l: &NetLabel,
     let (angle, justify) = label_spin(sch, l);
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
     let vertical_justify = if local { " bottom" } else { "" };
-    (angle, format!("(effects {} (justify {justify}{vertical_justify}))", FieldLook { size_um: look.text_size_um() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font()))
+    (angle, format!("(effects {} (justify {justify}{vertical_justify}))", FieldLook { size_nm: look.text_size_nm() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font()))
 }
 
 /// `(fields_autoplaced yes)`: the fields of the item are where Autoplace Fields put them (`SCH_ITEM::GetFieldsAutoplaced`).
@@ -1045,8 +1045,8 @@ fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide
 /// `Device:C`'s box corner sits 2.54mm from its library origin, and
 /// `CIN`/`COUT`'s power-flagged pin landed 2.54mm/3.81mm off its own
 /// GND power symbol until this shift was added.
-fn baked_real_point(sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64, p: eda_model::symbol::SPoint) -> eda_model::symbol::SPoint {
-    let (x, y) = baked_local(sym, width_um, (p.x - x0) * 1000.0, (y1 - p.y) * 1000.0);
+fn baked_real_point(sym: &SymbolInstance, width_nm: f64, x0: f64, y1: f64, p: eda_model::symbol::SPoint) -> eda_model::symbol::SPoint {
+    let (x, y) = baked_local(sym, width_nm, (p.x - x0) * 1e6, (y1 - p.y) * 1e6);
     eda_model::symbol::SPoint::new(x, y)
 }
 
@@ -1070,9 +1070,9 @@ fn baked_real_angle(sym: &SymbolInstance, angle_deg: f64) -> f64 {
 /// draw it, in the on-disk library-frame convention [`write_symbol_graphic`]
 /// itself expects. `unit`/`stroke_mm`/`filled`/`size_mm`/`text` carry no
 /// position and pass through untouched.
-fn baked_graphic(g: &eda_model::SymbolGraphic, sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64) -> eda_model::SymbolGraphic {
+fn baked_graphic(g: &eda_model::SymbolGraphic, sym: &SymbolInstance, width_nm: f64, x0: f64, y1: f64) -> eda_model::SymbolGraphic {
     use eda_model::SymbolGraphic::*;
-    let p = |pt| baked_real_point(sym, width_um, x0, y1, pt);
+    let p = |pt| baked_real_point(sym, width_nm, x0, y1, pt);
     match *g {
         Rectangle { unit, start, end, stroke_mm, filled } => Rectangle { unit, start: p(start), end: p(end), stroke_mm, filled },
         Polyline { unit, ref pts, stroke_mm, filled } => Polyline { unit, pts: pts.iter().map(|&pt| p(pt)).collect(), stroke_mm, filled },
@@ -1461,7 +1461,7 @@ fn electrical_type(kind: PinKind, name: Option<&str>) -> &'static str {
     }
 }
 
-/// Local (box-space, um) point for `port`, matching `eda_render::local_port_point`.
+/// Local (box-space, nm) point for `port`, matching `eda_render::local_port_point`.
 fn local_port_point(port: &Port, width: i64, height: i64) -> (f64, f64) {
     match port.side {
         Side::Top => (port.offset as f64, 0.0),
@@ -1471,7 +1471,7 @@ fn local_port_point(port: &Port, width: i64, height: i64) -> (f64, f64) {
     }
 }
 
-/// Local (box-space, um) pin-stub tip, matching `eda_render::stub_tip`.
+/// Local (box-space, nm) pin-stub tip, matching `eda_render::stub_tip`.
 fn local_stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
     let stub = eda_engine::geometry::STUB as f64;
     match port.side {
@@ -1483,7 +1483,7 @@ fn local_stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
 }
 
 /// Applies the symbol's mirror+rotation (but NOT translation) to a local
-/// (um) point, exactly matching `eda_render::SymbolBox::to_abs` minus the
+/// (nm) point, exactly matching `eda_render::SymbolBox::to_abs` minus the
 /// final `+ sym.at`. Returns mm.
 /// KiCad's `lib_symbols` graphics/pins live in the *library's own* frame,
 /// which is +y **up**; everything else in a `.kicad_sch` (the sheet itself,
@@ -1502,16 +1502,29 @@ fn baked_local(sym: &SymbolInstance, width: f64, lx: f64, ly: f64) -> (f64, f64)
     // the editor's and the painter's turn and mirror (KiCad's `TRANSFORM` about `at`): `eda_engine::symgeom::bake`
     let (rot, mirrored) = eda_engine::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
     let (rx, ry) = eda_engine::symgeom::bake(rot, mirrored, width, lx, ly);
-    (rx / 1000.0, -ry / 1000.0)
+    (rx / 1e6, -ry / 1e6)
 }
 
-pub(crate) fn mm(um: i64) -> String {
-    fmt_mm_f(um as f64 / 1000.0)
+/// A board length as KiCad writes it: `EDA_UNIT_UTILS::FormatInternalUnits( pcbIUScale, aValue )` ([`eda_model::units::format_mm`]), exact.
+pub(crate) fn mm(nm: i64) -> String {
+    eda_model::units::format_mm(nm)
 }
 
+/// A schematic length as KiCad writes it: `FormatInternalUnits( schIUScale, aValue )` of the length in KiCad's 100 nm schematic unit
+/// ([`eda_model::units::sch_format_mm`]).
+pub(crate) fn sch_mm(nm: i64) -> String {
+    eda_model::units::sch_format_mm(nm)
+}
+
+/// A board length computed in floating point, millimetres (a turn, a scale): rounded to the nanometre KiCad would hold, then written as [`mm`].
+pub(crate) fn mm_f(v_mm: f64) -> String {
+    mm(eda_model::units::mm(v_mm))
+}
+
+/// A millimetre value written to a tenth of a micrometre, KiCad's schematic precision: a library symbol's own millimetres, a schematic length computed
+/// in floating point.
 pub(crate) fn fmt_mm_f(v: f64) -> String {
-    // Round to 0.1 um to kill float noise from trig, keep well under the
-    // 1 um round-trip tolerance.
+    // Round to 0.1 um (the schematic's internal unit) to kill float noise from trig.
     let rounded = (v * 10_000.0).round() / 10_000.0;
     let s = format!("{rounded:.4}");
     let s = s.trim_end_matches('0');
@@ -1734,7 +1747,7 @@ mod tests {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), pins, body_nm: None, symbol: None, datasheet: None, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }
@@ -1780,7 +1793,7 @@ mod tests {
         assert!(plain.contains("(comment 1 \"engine_version:"), "no comments of its own: the provenance comments, as before");
 
         let sch = design.schematic.as_mut().unwrap();
-        sch.extras.page = Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_um: None });
+        sch.extras.page = Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_nm: None });
         sch.title_block = Some(eda_model::ir::TitleBlock { title: "Mine".into(), comments: vec!["only".into()], ..Default::default() });
         let out = export_kicad_sch(&design, &model, &meta).unwrap();
         assert!(out.contains("(paper \"USLetter\" portrait)"), "{out}");
@@ -1788,7 +1801,7 @@ mod tests {
 
         let (back, _, _) = import_kicad_sch(&out).unwrap();
         let sch = back.schematic.unwrap();
-        assert_eq!(sch.extras.page, Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_um: None }));
+        assert_eq!(sch.extras.page, Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_nm: None }));
         assert_eq!(sch.title_block.map(|t| t.title), Some("Mine".to_string()));
         let (default_back, _, _) = import_kicad_sch(&plain).unwrap();
         assert!(default_back.schematic.unwrap().extras.page.is_none(), "A4 landscape is the default and is not kept");
@@ -1870,8 +1883,8 @@ mod tests {
         let (plx, ply) = local_port_point(&port, width, height);
         let (slx, sly) = local_stub_tip(&port, plx, ply);
         let (bx_mm, by_mm) = baked_local(u1, width as f64, slx, sly);
-        let expected_x_um = u1.at.x + (bx_mm * 1000.0).round() as i64;
-        let expected_y_um = u1.at.y + (by_mm * 1000.0).round() as i64;
+        let expected_x_nm = u1.at.x + (bx_mm * 1e6).round() as i64;
+        let expected_y_nm = u1.at.y + (by_mm * 1e6).round() as i64;
 
         let meta = ExportMeta { date: "2026-01-01", title: "t" };
         let out = export_kicad_sch(&design, &model, &meta).unwrap();
@@ -1886,10 +1899,10 @@ mod tests {
         let at_str = &before[at_idx + 4..];
         let end = at_str.find(" 0)").unwrap();
         let coords: Vec<f64> = at_str[..end].split(' ').map(|t| t.parse().unwrap()).collect();
-        let got_x_um = (coords[0] * 1000.0).round() as i64 + u1.at.x;
-        let got_y_um = (coords[1] * 1000.0).round() as i64 + u1.at.y;
-        assert!((got_x_um - expected_x_um).abs() <= 1, "x mismatch: {got_x_um} vs {expected_x_um}");
-        assert!((got_y_um - expected_y_um).abs() <= 1, "y mismatch: {got_y_um} vs {expected_y_um}");
+        let got_x_nm = (coords[0] * 1e6).round() as i64 + u1.at.x;
+        let got_y_nm = (coords[1] * 1e6).round() as i64 + u1.at.y;
+        assert!((got_x_nm - expected_x_nm).abs() <= 100, "x mismatch: {got_x_nm} vs {expected_x_nm}");
+        assert!((got_y_nm - expected_y_nm).abs() <= 100, "y mismatch: {got_y_nm} vs {expected_y_nm}");
     }
 
     #[test]
@@ -1911,7 +1924,7 @@ mod tests {
     fn missing_schematic_errors() {
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: None,
@@ -1978,9 +1991,9 @@ mod tests {
                 id: String::new(),
                 name: "child".into(),
                 file: "child.kicad_sch".into(),
-                at: Point { x: 10_000, y: 10_000 },
-                size: (20_000, 20_000),
-                pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000, y: 30_000 } }],
+                at: Point { x: 10_000_000, y: 10_000_000 },
+                size: (20_000_000, 20_000_000),
+                pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000_000, y: 30_000_000 } }],
                 page: String::new(),
             }],
             instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),

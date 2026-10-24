@@ -61,13 +61,9 @@ fn map_pt(p: &Pt, res: &UnitRes) -> V {
     V::new(scale(p.x, res), -scale(p.y, res))
 }
 
-/// Nanometres to the design's micrometres.
-fn um(nm: i64) -> i64 {
-    (nm as f64 / 1000.0).round() as i64
-}
-
-fn um_pt(v: V) -> Point {
-    Point { x: um(v.x), y: um(v.y) }
+/// A point of the session, mapped (nanometres), as the design holds it.
+fn pt(v: V) -> Point {
+    Point { x: v.x, y: v.y }
 }
 
 /// `CalcArcMid( aStart, aEnd, aCenter, aMinArcAngle = true )`: the middle of the shorter arc from `start` to `end` about `center`.
@@ -100,9 +96,9 @@ impl Db<'_> {
     /// `SPECCTRA_DB::makeTRACK`: the segment from `points[i]` to `points[i + 1]` of a wire's path.
     fn make_track(&self, wire: &Wire, path: &PathElem, i: usize, net: &str, res: &UnitRes) -> Result<(Track, bool), String> {
         let ndx = self.find_layer_name(&path.layer_id).ok_or_else(|| format!("Session file uses invalid layer id '{}'.", path.layer_id))?;
-        let start = um_pt(map_pt(&path.points[i], res));
-        let end = um_pt(map_pt(&path.points[i + 1], res));
-        let width = um(scale(path.aperture_width, res));
+        let start = pt(map_pt(&path.points[i], res));
+        let end = pt(map_pt(&path.points[i + 1], res));
+        let width = scale(path.aperture_width, res);
         let track = Track { id: String::new(), net: net.to_string(), pins: vec![], layer: self.kicad_layers[ndx].clone(), width, pts: vec![start, end], arc_mid_offset: None };
         // Specctra has 4 types, none exactly KiCad's locked option: `fix` is taken as locked.
         Ok((track, wire.wire_type == Some(WireType::Fix)))
@@ -114,8 +110,8 @@ impl Db<'_> {
         let start = map_pt(&qarc.vertex[0], res);
         let end = map_pt(&qarc.vertex[1], res);
         let mid = calc_arc_mid(start, end, map_pt(&qarc.vertex[2], res));
-        let width = um(scale(qarc.aperture_width, res));
-        let track = Track::new_arc(net.to_string(), self.kicad_layers[ndx].clone(), width, um_pt(start), um_pt(mid), um_pt(end));
+        let width = scale(qarc.aperture_width, res);
+        let track = Track::new_arc(net.to_string(), self.kicad_layers[ndx].clone(), width, pt(start), pt(mid), pt(end));
         Ok((track, wire.wire_type == Some(WireType::Fix)))
     }
 
@@ -133,8 +129,8 @@ impl Db<'_> {
                 // `fast_float::from_chars` with `skip_white_space`: the longest number at the start, 0 when there is none.
                 let t = diam_txt.trim_start();
                 let n = (1..=t.len()).rev().find(|&k| t.is_char_boundary(k) && t[..k].parse::<f64>().is_ok()).unwrap_or(0);
-                let drill_um: f64 = if n == 0 { 0.0 } else { t[..n].parse().unwrap_or(0.0) };
-                drill_diam_iu = (drill_um * (1_000_000.0 / 1000.0)) as i64;
+                let drill_nm: f64 = if n == 0 { 0.0 } else { t[..n].parse().unwrap_or(0.0) };
+                drill_diam_iu = (drill_nm * (1_000_000.0 / 1000.0)) as i64;
                 if drill_diam_iu == via_drill_default {
                     drill_diam_iu = -1; // UNDEFINED_DRILL_DIAMETER
                 }
@@ -146,7 +142,7 @@ impl Db<'_> {
                 other => Err(format!("Unsupported via shape: {}", other.as_ref().map(shape_token).unwrap_or_else(|| "'NONE'".to_string()))),
             }
         };
-        let pos = um_pt(map_pt(point, res));
+        let pos = pt(map_pt(point, res));
         let (kind, diameter, from_layer, to_layer) = if shape_count == 0 {
             return Err("Session via padstack has no shapes".to_string());
         } else if shape_count == 1 || shape_count == copper_layer_count {
@@ -184,8 +180,8 @@ impl Db<'_> {
             let (a, b) = (top.min(bot), top.max(bot));
             (kind, via_diam, self.kicad_layers[a].clone(), self.kicad_layers[b].clone())
         };
-        let drill = if drill_diam_iu > 0 { um(drill_diam_iu) } else { drill_of_net };
-        let via = Via { id: String::new(), net: net.to_string(), at: pos, drill, diameter: um(diameter), from_layer, to_layer };
+        let drill = if drill_diam_iu > 0 { drill_diam_iu } else { drill_of_net };
+        let via = Via { id: String::new(), net: net.to_string(), at: pos, drill, diameter, from_layer, to_layer };
         Ok(SessionVia { via, kind, locked: wire_via.via_type == Some(WireType::Fix) })
     }
 }
@@ -218,7 +214,7 @@ pub fn from_session_db(session: &Session, board: &BoardView, via_drill_default: 
                     return Err(format!("Reference '{}' not found.", place.component_id));
                 }
                 let Some(vertex) = &place.vertex else { continue };
-                let at = um_pt(map_pt(vertex, &res));
+                let at = pt(map_pt(vertex, &res));
                 // KiCad's orientation: the rotation on the front; on the back the rotation plus 180 (the export wrote 180 minus the orientation of the flipped footprint).
                 let (orientation, side) = match place.side {
                     Side::Front => (place.rotation, IrSide::Top),
@@ -266,7 +262,7 @@ pub fn from_session(text: &str, source: &str, design: &Design, model: &Constrain
     let pcb_text = crate::export_kicad_pcb(design, model, &meta).map_err(|e| e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; "))?;
     let board = BoardView::parse(&pcb_text)?;
     let b = &model.board;
-    from_session_db(&session, &board, b.via_drill * 1000, &|net: &str| b.via_drill_of(net))
+    from_session_db(&session, &board, b.via_drill, &|net: &str| b.via_drill_of(net))
 }
 
 /// The session a router that changes nothing would write back for `pcb`, a design file: its placement, its via padstacks as the `library_out` and its wiring as the

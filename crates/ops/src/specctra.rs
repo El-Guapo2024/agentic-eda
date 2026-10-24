@@ -92,7 +92,7 @@ mod tests {
 
     fn model() -> ConstraintModel {
         let pin = |n: &str| Pin { number: n.into(), name: None, kind: PinKind::Passive };
-        let r1 = Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![pin("1"), pin("2")], body_um: None, symbol: None, datasheet: None, edge: None };
+        let r1 = Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("10k".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![pin("1"), pin("2")], body_nm: None, symbol: None, datasheet: None, edge: None };
         ConstraintModel { parts: vec![r1], nets: vec![Net { name: "VCC".into(), pins: vec!["R1.1".into()] }, Net { name: "GND".into(), pins: vec!["R1.2".into()] }], ..Default::default() }
     }
 
@@ -135,7 +135,7 @@ mod tests {
         let m = model();
         let before = design();
         let locked_before = before.drawings.as_ref().unwrap().locked_ids.clone();
-        let mut b = Board::new(before, &m, 100, 300);
+        let mut b = Board::new(before, &m, 100_000, 300_000);
         let cmd = Cmd::Specctra { session: SESSION.into(), name: "r.ses".into() };
         assert!(cmd.imports_session() && !cmd.clears_routing() && !cmd.spans_both_editors());
         b.apply(&cmd).unwrap();
@@ -143,24 +143,24 @@ mod tests {
         let rt = d.routing.as_ref().unwrap();
         let dr = d.drawings.as_ref().unwrap();
         assert!(rt.tracks.iter().any(|t| t.id == locked_before[0]), "the locked track stays");
-        assert!(!rt.tracks.iter().any(|t| t.pts.contains(&Point { x: 12_000, y: 20_000 })), "the unlocked one is gone");
+        assert!(!rt.tracks.iter().any(|t| t.pts.contains(&Point { x: 12_000_000, y: 20_000_000 })), "the unlocked one is gone");
         let vcc: Vec<_> = rt.tracks.iter().filter(|t| t.net == "VCC").map(|t| (t.pts.clone(), t.width)).collect();
         assert_eq!(vcc.len(), 2, "the session's path is two segments");
-        assert!(vcc.iter().all(|(_, w)| *w == 250));
+        assert!(vcc.iter().all(|(_, w)| *w == 250_000));
         assert_eq!(rt.vias.len(), 1);
-        assert_eq!((rt.vias[0].at, rt.vias[0].diameter, rt.vias[0].drill), (Point { x: 20_000, y: 15_000 }, 800, 400));
+        assert_eq!((rt.vias[0].at, rt.vias[0].diameter, rt.vias[0].drill), (Point { x: 20_000_000, y: 15_000_000 }, 800_000, 400_000));
         assert!(dr.via_extras.is_empty(), "the blind via went, and the new one is a through via");
         let gnd_new = rt.tracks.iter().find(|t| t.layer == "B.Cu").expect("the fixed GND wire");
         assert!(dr.locked_ids.contains(&gnd_new.id) && dr.locked_ids.contains(&locked_before[0]), "{:?}", dr.locked_ids);
         let fp = &d.placement.as_ref().unwrap().footprints[0];
-        assert_eq!((fp.at, fp.side, fp.rot), (Point { x: 25_000, y: 20_000 }, Side::Bottom, (360_000 - 270_000)));
+        assert_eq!((fp.at, fp.side, fp.rot), (Point { x: 25_000_000, y: 20_000_000 }, Side::Bottom, (360_000 - 270_000)));
     }
 
     /// A session KiCad would refuse leaves the board as it was, with KiCad's words.
     #[test]
     fn a_refused_session_changes_nothing() {
         let m = model();
-        let mut b = Board::new(design(), &m, 100, 300);
+        let mut b = Board::new(design(), &m, 100_000, 300_000);
         let bad = SESSION.replace("(path B.Cu", "(path In3.Cu");
         let e = b.apply(&Cmd::Specctra { session: bad, name: "r.ses".into() }).unwrap_err();
         assert_eq!(e[0].hint.as_deref(), Some("Session file uses invalid layer id 'In3.Cu'."), "{e:?}");

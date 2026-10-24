@@ -11,17 +11,17 @@
 //!   reads off a label's angle and justification;
 //! * the symbol transform: `SCH_SYMBOL::SetOrientation`.
 //!
-//! Units: micrometres as `f64`, y down (the sheet's own frame).
+//! Units: nanometres as `f64`, y down (the sheet's own frame).
 
 use crate::kicad_font::{default_pen_iu, kiround, string_boundary_limits, text_box_iu, HJustify, VJustify, DEFAULT_TEXT_SIZE_IU};
 
-/// Schematic internal units (0.1 um) to micrometres.
-pub fn um(iu: i64) -> f64 {
-    iu as f64 / 10.0
+/// Schematic internal units (100 nm, `schIUScale`) to nanometres.
+pub fn nm(iu: i64) -> f64 {
+    (iu * crate::units::SCH_IU_NM) as f64
 }
 
-/// Mils to micrometres (a mil is 25.4 um).
-pub const MIL: f64 = 25.4;
+/// A mil in nanometres.
+pub const MIL: f64 = crate::units::NM_PER_MIL as f64;
 
 pub type Pt = (f64, f64);
 
@@ -165,19 +165,19 @@ impl TextStyle {
     /// `EDA_TEXT::GetTextBox` at `anchor`, then turned about the anchor by `quarter_turns` (`GetTextAngle`).
     pub fn text_box(&self, text: &str, anchor: Pt, quarter_turns: i32) -> Rect {
         let (x0, y0, x1, y1) = text_box_iu(text, self.size_iu, self.pen(), self.h, self.v);
-        let a = (anchor.0 + um(x0), anchor.1 + um(y0));
-        let b = (anchor.0 + um(x1), anchor.1 + um(y1));
+        let a = (anchor.0 + nm(x0), anchor.1 + nm(y0));
+        let b = (anchor.0 + nm(x1), anchor.1 + nm(y1));
         Rect::new(rotate_about(a, anchor, quarter_turns), rotate_about(b, anchor, quarter_turns))
     }
 
     /// The size of the box the pin layout measures a text with (`StringBoundaryLimits`, without the 17 % fudge): `(width, height)`.
     pub fn extents(&self, text: &str) -> (f64, f64) {
         let (w, h) = string_boundary_limits(text, self.size_iu, self.pen());
-        (um(w), um(h))
+        (nm(w), nm(h))
     }
 
-    pub fn size_um(&self) -> f64 {
-        um(self.size_iu)
+    pub fn size_nm(&self) -> f64 {
+        nm(self.size_iu)
     }
 }
 
@@ -228,19 +228,19 @@ impl Spin {
 /// anchor itself in it.
 pub fn local_label_rect(fx: &TextStyle, text: &str, at: Pt, turns: i32) -> Rect {
     let (x0, y0, x1, y1) = text_box_iu(text, fx.size_iu, fx.pen(), fx.h, fx.v);
-    let text_offset = um(kiround(0.15 * fx.size_iu as f64));
-    let pen = um(fx.pen());
-    let r = Rect::new((at.0 + um(x0), at.1 + um(y0) - text_offset), (at.0 + um(x1), at.1 + um(y1) - text_offset)).inflate(pen);
+    let text_offset = nm(kiround(0.15 * fx.size_iu as f64));
+    let pen = nm(fx.pen());
+    let r = Rect::new((at.0 + nm(x0), at.1 + nm(y0) - text_offset), (at.0 + nm(x1), at.1 + nm(y1) - text_offset)).inflate(pen);
     Rect::new(rotate_about((r.x0, r.y0), at, turns), rotate_about((r.x1, r.y1), at, turns)).merge_point(at)
 }
 
 /// `SCH_HIERLABEL::GetBodyBoundingBox`: the flag and the text, from just behind the anchor.
 pub fn hier_label_rect(fx: &TextStyle, text: &str, at: Pt, spin: Spin) -> Rect {
-    let pen = um(fx.pen());
-    let margin = um(kiround(0.15 * fx.size_iu as f64));
+    let pen = nm(fx.pen());
+    let margin = nm(kiround(0.15 * fx.size_iu as f64));
     let (x0, _, x1, _) = text_box_iu(text, fx.size_iu, fx.pen(), fx.h, fx.v);
-    let height = um(fx.size_iu) + pen + margin;
-    let length = um(x1 - x0) + height;
+    let height = nm(fx.size_iu) + pen + margin;
+    let length = nm(x1 - x0) + height;
     let dangling = 12.0 * MIL;
     let (x, y) = at;
     match spin {
@@ -287,11 +287,11 @@ pub fn global_label_rect(fx: &TextStyle, text: &str, at: Pt, spin: Spin, shape: 
     };
     let mut r: Option<Rect> = None;
     for (px, py) in pts {
-        let q = rotate_about((um(px + x_offset), um(py)), (0.0, 0.0), turns);
+        let q = rotate_about((nm(px + x_offset), nm(py)), (0.0, 0.0), turns);
         let q = (q.0 + at.0, q.1 + at.1);
         r = Some(r.map_or(Rect::point(q), |b| b.merge_point(q)));
     }
-    r.unwrap_or(Rect::point(at)).inflate(um(pen) / 2.0)
+    r.unwrap_or(Rect::point(at)).inflate(nm(pen) / 2.0)
 }
 
 /// Where one field of a label goes (`SCH_LABEL_BASE::AutoplaceFields`): its anchor, whether it runs up the sheet, and which end of it is at the anchor.
@@ -304,13 +304,13 @@ pub struct LabelFieldPlace {
 
 /// `SCH_LABEL_BASE::AutoplaceFields`: a label's fields one under the other, under the label's text (beside it for a vertical label), the first after half the
 /// text's height -- and for a global label after its flag's margin and pen too -- and a global label's Sheet References (`isr`) at the far end of its flag.
-/// `fields` gives, for each field in order, whether it is the Sheet References and its text height (um). `body_len` is `GetBodyBoundingBox().GetSizeMax()`.
+/// `fields` gives, for each field in order, whether it is the Sheet References and its text height (nm). `body_len` is `GetBodyBoundingBox().GetSizeMax()`.
 pub fn autoplace_label_fields(fx: &TextStyle, global: bool, body_len: f64, spin: Spin, at: Pt, fields: &[(bool, f64)]) -> Vec<LabelFieldPlace> {
     // `GetTextOffset() * 2`: `DEFAULT_TEXT_OFFSET_RATIO` (0.15) of the text size, twice
-    let margin = um(kiround(0.15 * fx.size_iu as f64) * 2);
-    let mut accumulated = um(fx.size_iu) / 2.0;
+    let margin = nm(kiround(0.15 * fx.size_iu as f64) * 2);
+    let mut accumulated = nm(fx.size_iu) / 2.0;
     if global {
-        accumulated += margin + um(fx.pen()) + margin;
+        accumulated += margin + nm(fx.pen()) + margin;
     }
     let mut out = Vec::with_capacity(fields.len());
     for &(isr, height) in fields {
@@ -442,7 +442,7 @@ pub fn shown_name(name: &str) -> &str {
 /// (`GetPinNumberInfo`). `tip` is the pin's connection point.
 pub fn pin_number_rect(tip: Pt, orient: PinOrient, length: f64, number: &str, style: &TextStyle, both: bool) -> Rect {
     let (w, h) = style.extents(number);
-    let size = style.size_um();
+    let size = style.size_nm();
     let half_len = length / 2.0;
     let (cx, cy) = if orient.vertical() {
         let perp = PIN_TEXT_CLEARANCE + size / 2.0 + PIN_TEXT_THICKNESS;
@@ -458,10 +458,10 @@ pub fn pin_number_rect(tip: Pt, orient: PinOrient, length: f64, number: &str, st
 /// Where a pin's name is drawn: inside the body, from the pin's inner end plus the offset, or over the pin (`GetPinNameInfo`).
 pub fn pin_name_rect(tip: Pt, orient: PinOrient, length: f64, name: &str, style: &TextStyle, texts: &PinTexts) -> Rect {
     let (w, h) = style.extents(name);
-    let size = style.size_um();
+    let size = style.size_nm();
     let (bw, bh) = if orient.vertical() { (h, w) } else { (w, h) };
     if texts.name_inside() {
-        let inset = length + texts.name_offset_mm * 1000.0;
+        let inset = length + texts.name_offset_mm * 1e6;
         match orient {
             PinOrient::Right => Rect::new((tip.0 + inset, tip.1 - bh / 2.0), (tip.0 + inset + bw, tip.1 + bh / 2.0)),
             PinOrient::Left => Rect::new((tip.0 - inset - bw, tip.1 - bh / 2.0), (tip.0 - inset, tip.1 + bh / 2.0)),
@@ -489,13 +489,13 @@ pub fn pin_name_rect(tip: Pt, orient: PinOrient, length: f64, name: &str, style:
 pub fn pin_bbox(tip: Pt, orient: PinOrient, length: f64, name: &str, number: &str, name_st: &TextStyle, number_st: &TextStyle, texts: &PinTexts) -> Rect {
     // the pin laid out running right from the origin, as the cache does it
     let offset = 4.0 * MIL;
-    let mut r = Rect::new((0.0, 0.0), (length, 0.0)).inflate(0.1);
+    let mut r = Rect::new((0.0, 0.0), (length, 0.0)).inflate(100.0);
     let show_name = !texts.names_hidden && !name.is_empty();
     let show_number = !texts.numbers_hidden && !number.is_empty();
     if show_name {
         let (w, h) = name_st.extents(name);
         let b = if texts.name_inside() {
-            let x0 = length + texts.name_offset_mm * 1000.0;
+            let x0 = length + texts.name_offset_mm * 1e6;
             Rect::new((x0, -h / 2.0), (x0 + w, h / 2.0))
         } else {
             // centred over the pin, lifted by half its height and the text offset
@@ -518,7 +518,7 @@ pub fn pin_bbox(tip: Pt, orient: PinOrient, length: f64, name: &str, number: &st
         }
     };
     let (a, b) = (turn((r.x0, r.y0)), turn((r.x1, r.y1)));
-    Rect::new((tip.0 + a.0, tip.1 + a.1), (tip.0 + b.0, tip.1 + b.1)).inflate(0.1)
+    Rect::new((tip.0 + a.0, tip.1 + a.1), (tip.0 + b.0, tip.1 + b.1)).inflate(100.0)
 }
 
 #[cfg(test)]
@@ -530,78 +530,78 @@ mod tests {
         // 1.27 mm text, a label's text box offset up by 0.1905 mm and grown by the 0.1588 mm pen, the anchor in it
         let fx = TextStyle::new(HJustify::Left, VJustify::Bottom);
         let r = local_label_rect(&fx, "A", (0.0, 0.0), 0);
-        assert!((r.y0 - -2095.7).abs() < 0.2 && (r.y1 - 265.2).abs() < 0.2, "{r:?}");
-        assert!((r.x0 - -158.8).abs() < 0.2, "{r:?}");
+        assert!((r.y0 - -2_095_700.0).abs() < 1.0 && (r.y1 - 265_200.0).abs() < 1.0, "{r:?}");
+        assert!((r.x0 - -158_800.0).abs() < 1.0, "{r:?}");
         // turned a quarter, the text reads upward
         let up = local_label_rect(&fx, "A", (0.0, 0.0), 1);
-        assert!(up.y0 < -500.0 && up.x0 < -2000.0, "{up:?}");
+        assert!(up.y0 < -500_000.0 && up.x0 < -2_000_000.0, "{up:?}");
     }
 
     #[test]
     fn a_hierarchical_label_flag_starts_just_behind_its_anchor() {
         let fx = TextStyle::new(HJustify::Left, VJustify::Center);
-        let r = hier_label_rect(&fx, "PA0", (10_000.0, 10_000.0), Spin::Right);
-        assert!((r.x0 - (10_000.0 - 304.8)).abs() < 0.2, "{r:?}");
-        assert!((r.h() - 1619.3).abs() < 0.2, "the flag is the text height + pen + offset tall: {}", r.h());
-        let left = hier_label_rect(&TextStyle::new(HJustify::Right, VJustify::Center), "PA0", (10_000.0, 10_000.0), Spin::Left);
-        assert!((left.x1 - (10_000.0 + 304.8)).abs() < 0.2 && left.x0 < 10_000.0 - 3_000.0, "{left:?}");
+        let r = hier_label_rect(&fx, "PA0", (10_000_000.0, 10_000_000.0), Spin::Right);
+        assert!((r.x0 - (10_000_000.0 - 304_800.0)).abs() < 1.0, "{r:?}");
+        assert!((r.h() - 1_619_300.0).abs() < 1.0, "the flag is the text height + pen + offset tall: {}", r.h());
+        let left = hier_label_rect(&TextStyle::new(HJustify::Right, VJustify::Center), "PA0", (10_000_000.0, 10_000_000.0), Spin::Left);
+        assert!((left.x1 - (10_000_000.0 + 304_800.0)).abs() < 1.0 && left.x0 < 10_000_000.0 - 3_000_000.0, "{left:?}");
     }
 
     #[test]
     fn a_pins_number_sits_over_its_line_and_under_it_when_the_name_is_over_it() {
         let style = TextStyle::new(HJustify::Center, VJustify::Center);
         // a pin on the left of a body: its connection point at the origin, the line running right for 2.54 mm
-        let over = pin_number_rect((0.0, 0.0), PinOrient::Right, 2540.0, "7", &style, false);
-        let under = pin_number_rect((0.0, 0.0), PinOrient::Right, 2540.0, "7", &style, true);
+        let over = pin_number_rect((0.0, 0.0), PinOrient::Right, 2_540_000.0, "7", &style, false);
+        let under = pin_number_rect((0.0, 0.0), PinOrient::Right, 2_540_000.0, "7", &style, true);
         assert!(over.y1 < 0.0 && under.y0 > 0.0, "{over:?} {under:?}");
         // centred along the pin
-        assert!((over.center().0 - 1270.0).abs() < 0.2);
+        assert!((over.center().0 - 1_270_000.0).abs() < 1.0);
         // 0.2032 + 0.635 + 0.1524 mm from the line to the centre
-        assert!((over.center().1 + 990.6).abs() < 0.2, "{:?}", over.center());
+        assert!((over.center().1 + 990_600.0).abs() < 1.0, "{:?}", over.center());
     }
 
     #[test]
     fn a_pins_name_inside_starts_the_offset_past_the_pins_inner_end() {
         let style = TextStyle::new(HJustify::Center, VJustify::Center);
         let texts = PinTexts { names_hidden: false, numbers_hidden: false, name_offset_mm: 1.016 };
-        let r = pin_name_rect((0.0, 0.0), PinOrient::Right, 2540.0, "PA0", &style, &texts);
-        assert!((r.x0 - (2540.0 + 1016.0)).abs() < 0.2, "{r:?}");
+        let r = pin_name_rect((0.0, 0.0), PinOrient::Right, 2_540_000.0, "PA0", &style, &texts);
+        assert!((r.x0 - (2_540_000.0 + 1_016_000.0)).abs() < 1.0, "{r:?}");
         // a pin on the right of a body mirrors it
-        let l = pin_name_rect((0.0, 0.0), PinOrient::Left, 2540.0, "PA0", &style, &texts);
-        assert!((l.x1 - -(2540.0 + 1016.0)).abs() < 0.2, "{l:?}");
+        let l = pin_name_rect((0.0, 0.0), PinOrient::Left, 2_540_000.0, "PA0", &style, &texts);
+        assert!((l.x1 - -(2_540_000.0 + 1_016_000.0)).abs() < 1.0, "{l:?}");
         // a pin on the bottom edge runs its name up into the body, vertically
-        let u = pin_name_rect((0.0, 0.0), PinOrient::Up, 2540.0, "PA0", &style, &texts);
-        assert!((u.y1 - -(2540.0 + 1016.0)).abs() < 0.2 && u.h() > u.w(), "{u:?}");
+        let u = pin_name_rect((0.0, 0.0), PinOrient::Up, 2_540_000.0, "PA0", &style, &texts);
+        assert!((u.y1 - -(2_540_000.0 + 1_016_000.0)).abs() < 1.0 && u.h() > u.w(), "{u:?}");
     }
 
     #[test]
     fn pin_texts_sit_where_the_studio_painter_has_them() {
         // the same cases, with the same numbers, as web/studio/src/components/schematic/pinText.test.ts
         let style = TextStyle::new(HJustify::Center, VJustify::Center);
-        let off = 990.6; // 0.2032 + 0.635 + 0.1524 mm
-        let near = |a: (f64, f64), x: f64, y: f64| assert!((a.0 - x).abs() < 0.2 && (a.1 - y).abs() < 0.2, "{a:?} is not ({x}, {y})");
+        let off = 990_600.0; // 0.2032 + 0.635 + 0.1524 mm
+        let near = |a: (f64, f64), x: f64, y: f64| assert!((a.0 - x).abs() < 1.0 && (a.1 - y).abs() < 1.0, "{a:?} is not ({x}, {y})");
         let inside = PinTexts { names_hidden: false, numbers_hidden: false, name_offset_mm: 0.508 };
         let outside = PinTexts { name_offset_mm: 0.0, ..inside };
 
         // a pin running right: the name starts the offset past the inner end, the number is over the line
-        let name = pin_name_rect((0.0, 0.0), PinOrient::Right, 2540.0, "VIN", &style, &inside);
-        assert!((name.x0 - (2540.0 + 508.0)).abs() < 0.2, "{name:?}");
-        near(pin_number_rect((0.0, 0.0), PinOrient::Right, 2540.0, "3", &style, false).center(), 1270.0, -off);
+        let name = pin_name_rect((0.0, 0.0), PinOrient::Right, 2_540_000.0, "VIN", &style, &inside);
+        assert!((name.x0 - (2_540_000.0 + 508_000.0)).abs() < 1.0, "{name:?}");
+        near(pin_number_rect((0.0, 0.0), PinOrient::Right, 2_540_000.0, "3", &style, false).center(), 1_270_000.0, -off);
         // running left, mirrored
-        let name = pin_name_rect((0.0, 0.0), PinOrient::Left, 2540.0, "OUT", &style, &inside);
-        assert!((name.x1 - -(2540.0 + 508.0)).abs() < 0.2, "{name:?}");
-        near(pin_number_rect((0.0, 0.0), PinOrient::Left, 2540.0, "2", &style, false).center(), -1270.0, -off);
+        let name = pin_name_rect((0.0, 0.0), PinOrient::Left, 2_540_000.0, "OUT", &style, &inside);
+        assert!((name.x1 - -(2_540_000.0 + 508_000.0)).abs() < 1.0, "{name:?}");
+        near(pin_number_rect((0.0, 0.0), PinOrient::Left, 2_540_000.0, "2", &style, false).center(), -1_270_000.0, -off);
         // running up: the name runs up from the inner end, the number is left of the line
-        let name = pin_name_rect((0.0, 0.0), PinOrient::Up, 2540.0, "VDD", &style, &inside);
-        assert!((name.y1 - -(2540.0 + 508.0)).abs() < 0.2, "{name:?}");
-        near(pin_number_rect((0.0, 0.0), PinOrient::Up, 2540.0, "1", &style, false).center(), -off, -1270.0);
+        let name = pin_name_rect((0.0, 0.0), PinOrient::Up, 2_540_000.0, "VDD", &style, &inside);
+        assert!((name.y1 - -(2_540_000.0 + 508_000.0)).abs() < 1.0, "{name:?}");
+        near(pin_number_rect((0.0, 0.0), PinOrient::Up, 2_540_000.0, "1", &style, false).center(), -off, -1_270_000.0);
         // running down
-        let name = pin_name_rect((0.0, 0.0), PinOrient::Down, 2540.0, "GND", &style, &inside);
-        assert!((name.y0 - (2540.0 + 508.0)).abs() < 0.2, "{name:?}");
-        near(pin_number_rect((0.0, 0.0), PinOrient::Down, 2540.0, "2", &style, false).center(), -off, 1270.0);
+        let name = pin_name_rect((0.0, 0.0), PinOrient::Down, 2_540_000.0, "GND", &style, &inside);
+        assert!((name.y0 - (2_540_000.0 + 508_000.0)).abs() < 1.0, "{name:?}");
+        near(pin_number_rect((0.0, 0.0), PinOrient::Down, 2_540_000.0, "2", &style, false).center(), -off, 1_270_000.0);
 
         // names at offset zero are over the pin and the numbers under it
-        near(pin_name_rect((0.0, 0.0), PinOrient::Right, 2540.0, "IN", &style, &outside).center(), 1270.0, -off);
+        near(pin_name_rect((0.0, 0.0), PinOrient::Right, 2_540_000.0, "IN", &style, &outside).center(), 1_270_000.0, -off);
         near(pin_number_rect((0.0, 0.0), PinOrient::Right, 2540.0, "1", &style, true).center(), 1270.0, off);
         near(pin_name_rect((0.0, 0.0), PinOrient::Up, 2540.0, "IN", &style, &outside).center(), -off, -1270.0);
         near(pin_number_rect((0.0, 0.0), PinOrient::Up, 2540.0, "1", &style, true).center(), off, -1270.0);

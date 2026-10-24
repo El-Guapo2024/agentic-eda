@@ -18,14 +18,14 @@
 use super::pcb_transform::{transform_shape, Xform};
 use super::Board;
 use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive};
-use eda_model::ir::{LibraryFootprint, LibraryPad, LibraryPadShape, PadEditMode, Point, Shape, Um};
+use eda_model::ir::{LibraryFootprint, LibraryPad, LibraryPadShape, PadEditMode, Point, Shape, Nm};
 use eda_model::CheckResult;
 
 /// `ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM` (`zones.h`): the width a thermal spoke template gets when the pad sets none.
-const THERMAL_SPOKE_WIDTH_UM: Um = 500;
+const THERMAL_SPOKE_WIDTH_NM: Nm = 500_000;
 
 /// The error `PAD::Recombine` converts curves to polygons with (`BOARD_DESIGN_SETTINGS::m_MaxError`, 5 micrometres by default).
-const MAX_ERROR_UM: Um = 5;
+const MAX_ERROR_NM: Nm = 5_000;
 
 /// The layer the pad's shapes are on, and the one a recombine reads: `F.Cu` when the pad is on it, else `B.Cu`, else the first of its layers in
 /// the order the layer lists show (`GetLayerSet().UIOrder().front()`: front copper, inner, back copper, then the technical layers).
@@ -108,7 +108,7 @@ impl PadFrame {
 
 fn rotate(p: Point, angle_mdeg: i64) -> Point {
     let (s, c) = (angle_mdeg as f64 / 1000.0).to_radians().sin_cos();
-    Point { x: (p.x as f64 * c - p.y as f64 * s).round() as Um, y: (p.x as f64 * s + p.y as f64 * c).round() as Um }
+    Point { x: (p.x as f64 * c - p.y as f64 * s).round() as Nm, y: (p.x as f64 * s + p.y as f64 * c).round() as Nm }
 }
 
 /// `PCB_SHAPE::Compare( other ) == 0` for the shapes the editor has: the same kind on the same layer with the same geometry, stroke width and fill.
@@ -131,7 +131,7 @@ impl Board<'_> {
         let index = fp.pads.iter().position(|p| p.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_pad", id, "no pad with this id")])?;
         let layer = pad_edit_layer(&fp.pads[index]);
         let frame = PadFrame::of(&fp.pads[index]);
-        let spoke_width = fp.pads[index].thermal_spoke_width_override.unwrap_or(THERMAL_SPOKE_WIDTH_UM);
+        let spoke_width = fp.pads[index].thermal_spoke_width_override.unwrap_or(THERMAL_SPOKE_WIDTH_NM);
 
         let mut mode = PadEditMode { pad: id.to_string(), zone: CustomZoneMode::Outline, proxies: Vec::new() };
         let mut shapes: Vec<Shape> = Vec::new();
@@ -190,9 +190,9 @@ fn recombine(fp: &mut LibraryFootprint, index: usize, mode: PadEditMode, copper:
     let frame = PadFrame::of(&fp.pads[index]);
 
     // The pad's copper in the footprint's frame, for `findNext`'s test; the graphics on the layer, in the footprint's order.
-    let pad_polys = eda_drc::pad_shape::pad_polygons_in_footprint(&fp.pads[index].to_engine_pad(), MAX_ERROR_UM);
+    let pad_polys = eda_drc::pad_shape::pad_polygons_in_footprint(&fp.pads[index].to_engine_pad(), MAX_ERROR_NM);
     let touches = |shape: &Shape| -> bool {
-        let mut draw = eda_drc::pad_shape::shape_polygons(shape, MAX_ERROR_UM);
+        let mut draw = eda_drc::pad_shape::shape_polygons(shape, MAX_ERROR_NM);
         draw.boolean_intersection(&pad_polys);
         !draw.is_empty()
     };
@@ -250,7 +250,7 @@ fn recombine(fp: &mut LibraryFootprint, index: usize, mode: PadEditMode, copper:
                 LibraryPadShape::Rect => custom.anchor = PadAnchor::Rect,
                 // A new circular anchor the size of the pad's narrower side, and the old outline a polygon primitive.
                 _ => {
-                    let outline = eda_drc::pad_shape::pad_polygons_in_footprint(&pad.to_engine_pad(), MAX_ERROR_UM);
+                    let outline = eda_drc::pad_shape::pad_polygons_in_footprint(&pad.to_engine_pad(), MAX_ERROR_NM);
                     let pts: Vec<Point> = if outline.outline_count() > 0 { outline.outline(0).iter().map(|p| Point { x: p.x, y: p.y }).collect() } else { Vec::new() };
                     let min_extent = pad.size.0.min(pad.size.1);
                     custom.anchor = PadAnchor::Circle;

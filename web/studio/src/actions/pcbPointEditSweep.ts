@@ -4,7 +4,7 @@
 // the dialogs components/PcbPointEditDialogs.tsx. Called from `registerPcbEditSweep`.
 //
 // KiCad's "active point" is the handle the pointer is over; the context menu was opened where the pointer was, so the actions read
-// that place (`state.pcbx.menuCursorUm`, else the live cursor).
+// that place (`state.pcbx.menuCursorNm`, else the live cursor).
 
 import { createElement } from "react";
 import type { Shape } from "../api/types";
@@ -53,8 +53,8 @@ export function pointsOfItem(item: PointItem): EditPoint[] {
 }
 
 /** How near the pointer must be to a handle to count as on it, in um (the zone corner handles' own reach). */
-export function handleToleranceUm(viewScale: number): number {
-  return Math.max(150, 6 / viewScale);
+export function handleToleranceNm(viewScale: number): number {
+  return Math.max(150_000, 6 / viewScale);
 }
 
 export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: SweepCtx): void {
@@ -66,10 +66,10 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
   const target = (): { item: PointItem; points: EditPoint[]; active: EditPoint | null; at: [number, number] } | null => {
     const item = pointItemOf(board, state.selection);
     if (!item || lockedIds.has(item.id)) return null;
-    const cursor = state.pcbx.menuCursorUm ?? state.cursorUm;
+    const cursor = state.pcbx.menuCursorNm ?? state.cursorNm;
     if (!cursor) return null;
     const points = pointsOfItem(item);
-    return { item, points, active: activeEditPoint(points, [cursor.x, cursor.y], handleToleranceUm(state.view.scale)), at: [cursor.x, cursor.y] };
+    return { item, points, active: activeEditPoint(points, [cursor.x, cursor.y], handleToleranceNm(state.view.scale)), at: [cursor.x, cursor.y] };
   };
 
   /** Replace the item's geometry: a zone outline in place, a shape as a new shape (its id is its geometry's). */

@@ -20,8 +20,8 @@ use eda_layout::{Port, Side};
 use eda_model::ir::{Design, Point, SchematicSection, SymbolInstance, Wire};
 use eda_model::{CheckResult, ConstraintModel, Part};
 
-/// Pin stub length, in um, drawn from the box edge outward.
-const STUB: i64 = 1_270; // 1.27mm, one GRID
+/// Pin stub length, in nm, drawn from the box edge outward.
+const STUB: i64 = 1_270_000; // 1.27mm, one GRID
 /// SVG-space margin around all content, in mm.
 const MARGIN_MM: f64 = 5.0;
 
@@ -164,7 +164,7 @@ pub fn render_screen(sch: &SchematicSection, model: &ConstraintModel) -> Result<
     // net labels (`schematic_label_in_symbol`): a tag must never overlap
     // ANY symbol's body, not just steer clear of its own pin's box.
     let symbol_boxes: Vec<geometry::TextBox> =
-        boxes.iter().map(|b| geometry::symbol_box_mm(b.sym.at.x as f64 / 1000.0, b.sym.at.y as f64 / 1000.0, b.width, b.height)).collect();
+        boxes.iter().map(|b| geometry::symbol_box_mm(b.sym.at.x as f64 / 1e6, b.sym.at.y as f64 / 1e6, b.width, b.height)).collect();
 
     let mut label_obstacles: Vec<geometry::TextBox> = Vec::new();
     for b in &boxes {
@@ -430,7 +430,7 @@ fn render_net_label(l: &eda_model::ir::NetLabel, svg: &mut String, obstacles: &m
     geometry::net_label_extent(&resolved, ink)
 }
 
-/// A resolved symbol box: absolute position/size in um plus the pin layout
+/// A resolved symbol box: absolute position/size in nm plus the pin layout
 /// computed the same way the engine computed it (see `eda_engine::geometry`).
 struct SymbolBox<'a> {
     sym: &'a SymbolInstance,
@@ -463,11 +463,11 @@ impl<'a> SymbolBox<'a> {
     /// translate/rotate/mirror transform.
     /// Box corners in local millimetres.
     ///
-    /// `width`/`height` are µm, like every other stored dimension; the
+    /// `width`/`height` are nm, like every other stored dimension; the
     /// drawing divides them at emit time. Bounds have to divide too, or
     /// the sheet measures a thousand times bigger than it draws.
     fn local_corners(&self) -> [(f64, f64); 4] {
-        let (w, h) = (self.width as f64 / 1000.0, self.height as f64 / 1000.0);
+        let (w, h) = (self.width as f64 / 1e6, self.height as f64 / 1e6);
         [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
     }
 
@@ -483,7 +483,7 @@ impl<'a> SymbolBox<'a> {
         for p in &self.ports {
             let (lx, ly) = local_port_point(p, self.width, self.height);
             let (sx, sy) = stub_tip(p, lx, ly);
-            pts.push((sx / 1000.0, sy / 1000.0));
+            pts.push((sx / 1e6, sy / 1e6));
         }
         pts.into_iter().map(|(x, y)| self.to_abs(x, y)).collect()
     }
@@ -498,7 +498,7 @@ impl<'a> SymbolBox<'a> {
         // ~1000x, so the viewBox spanned 133359 units for 133mm of
         // content and the whole drawing rendered as a speck in the
         // corner. Every other use of `sym.at` on this type divides.
-        (self.sym.at.x as f64 / 1000.0 + rx, self.sym.at.y as f64 / 1000.0 + ry)
+        (self.sym.at.x as f64 / 1e6 + rx, self.sym.at.y as f64 / 1e6 + ry)
     }
 
     /// Ref (and, if present, value) text bounding boxes in absolute mm,
@@ -520,11 +520,11 @@ impl<'a> SymbolBox<'a> {
             return out;
         }
         let is_passive = geometry::is_two_pin_passive(self.part);
-        let h_mm = self.height as f64 / 1000.0;
+        let h_mm = self.height as f64 / 1e6;
         let cy = h_mm / 2.0;
         let _ = (is_passive, cy, h_mm);
-        let sym_x = self.sym.at.x as f64 / 1000.0;
-        let sym_y = self.sym.at.y as f64 / 1000.0;
+        let sym_x = self.sym.at.x as f64 / 1e6;
+        let sym_y = self.sym.at.y as f64 / 1e6;
         let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height, self.resolved.as_ref());
         let ref_y = geometry::resolve_text_y_obs(sym_x, sym_y, 0.0, base_ref_y, -1.0, &self.sym.id, 1.6, geometry::HAnchor::Start, wires, obstacles);
         let ref_box = geometry::text_bbox(sym_x, sym_y + ref_y, &self.sym.id, 1.6, geometry::HAnchor::Start);
@@ -548,8 +548,8 @@ impl<'a> SymbolBox<'a> {
     /// too, the same way it already jogs clear of ref/value and other
     /// labels; `eda-gates`' `collect_text_boxes` computes this identically.
     fn pin_text_boxes(&self) -> Vec<geometry::TextBox> {
-        let sym_x = self.sym.at.x as f64 / 1000.0;
-        let sym_y = self.sym.at.y as f64 / 1000.0;
+        let sym_x = self.sym.at.x as f64 / 1e6;
+        let sym_y = self.sym.at.y as f64 / 1e6;
         self.ports
             .iter()
             .enumerate()
@@ -576,8 +576,8 @@ impl<'a> SymbolBox<'a> {
                 let _ = writeln!(
                     svg,
                     r#"<rect class="box-ic" x="0" y="0" width="{w}" height="{h}"/>"#,
-                    w = fmt_f(self.width as f64 / 1000.0),
-                    h = fmt_f(self.height as f64 / 1000.0),
+                    w = fmt_f(self.width as f64 / 1e6),
+                    h = fmt_f(self.height as f64 / 1e6),
                 );
             }
         }
@@ -599,8 +599,8 @@ impl<'a> SymbolBox<'a> {
         // IC box) leaves them floating several mm from the part a reader
         // actually sees. Anchor to `cy` instead for passives.
         let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height, self.resolved.as_ref());
-        let sym_x = self.sym.at.x as f64 / 1000.0;
-        let sym_y = self.sym.at.y as f64 / 1000.0;
+        let sym_x = self.sym.at.x as f64 / 1e6;
+        let sym_y = self.sym.at.y as f64 / 1e6;
         let legacy_fields = self.fields.is_none();
         let ref_y = if legacy_fields { geometry::resolve_text_y_obs(sym_x, sym_y, 0.0, base_ref_y, -1.0, &self.sym.id, 1.6, geometry::HAnchor::Start, wires, obstacles) } else { 0.0 };
         if legacy_fields {
@@ -624,8 +624,8 @@ impl<'a> SymbolBox<'a> {
             // the box's bottom edge, so the value hugs the drawn glyph.
             let (base_value_x, base_value_y) = geometry::value_slot_local(self.part, self.height);
             let vf = geometry::value_font_mm(&val, self.width);
-            let sym_x = self.sym.at.x as f64 / 1000.0;
-            let sym_y = self.sym.at.y as f64 / 1000.0;
+            let sym_x = self.sym.at.x as f64 / 1e6;
+            let sym_y = self.sym.at.y as f64 / 1e6;
             let (value_x, value_y) = geometry::resolve_value_pos_obs(sym_x, sym_y, base_value_x, base_value_y, &val, vf, wires, obstacles);
             obstacles.push(geometry::text_bbox(sym_x + value_x, sym_y + value_y, &val, vf, geometry::HAnchor::Start));
             let _ = writeln!(
@@ -644,16 +644,16 @@ impl<'a> SymbolBox<'a> {
             let _ = writeln!(
                 svg,
                 r#"<line class="pinline" x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}"/>"#,
-                x1 = fmt_f(lx / 1000.0),
-                y1 = fmt_f(ly / 1000.0),
-                x2 = fmt_f(sx / 1000.0),
-                y2 = fmt_f(sy / 1000.0),
+                x1 = fmt_f(lx / 1e6),
+                y1 = fmt_f(ly / 1e6),
+                x2 = fmt_f(sx / 1e6),
+                y2 = fmt_f(sy / 1e6),
             );
 
             if let Some(pin_idx) = self.pin_of_port[port_idx] {
                 let pin = &self.part.pins[pin_idx];
                 let label = pin.name.clone().unwrap_or_else(|| pin.number.clone());
-                let (tx, ty, class) = pin_text_pos(port, lx, ly, self.width as f64 / 1000.0);
+                let (tx, ty, class) = pin_text_pos(port, lx, ly, self.width as f64 / 1e6);
                 let _ = writeln!(
                     svg,
                     r#"<text class="{class}" x="{x}" y="{y}">{t}</text>"#,
@@ -667,11 +667,11 @@ impl<'a> SymbolBox<'a> {
                 // dead end with a small "x" so it reads as deliberately
                 // floating, not a missed connection.
                 let pin_ref = format!("{}.{}", self.sym.id, pin.number);
-                let (attach_x, attach_y) = self.to_abs(lx, ly); // um-scale, on-box attach point
+                let (attach_x, attach_y) = self.to_abs(lx, ly); // nm-scale, on-box attach point
                 let attach_pt = Point { x: attach_x.round() as i64, y: attach_y.round() as i64 };
                 let is_connected = connected.wired_pins.contains(&pin_ref) || connected.label_points.contains(&attach_pt);
                 if !is_connected {
-                    let (lx_m, ly_m) = (sx / 1000.0, sy / 1000.0);
+                    let (lx_m, ly_m) = (sx / 1e6, sy / 1e6);
                     let r = 0.5;
                     let _ = writeln!(
                         svg,
@@ -699,7 +699,7 @@ impl<'a> SymbolBox<'a> {
             let _ = writeln!(
                 svg,
                 r#"<text class="{class}" x="{x}" y="{y}" style="font-size:1.27px;text-anchor:{anchor}">{t}</text>"#,
-                x = fmt_f(f.at.0 / 1000.0),
+                x = fmt_f(f.at.0 / 1e6),
                 y = fmt_f((b.y0 + b.y1) / 2.0 + 0.45),
                 t = xml_escape(&f.text),
             );
@@ -749,8 +749,8 @@ fn passive_kind(part: &Part) -> Option<PassiveKind> {
 /// part (one west pin, one east pin) — the only shape this heuristic ever
 /// matches in practice.
 fn render_passive_glyph(kind: PassiveKind, width: i64, height: i64, svg: &mut String) {
-    let w = width as f64 / 1000.0;
-    let h = height as f64 / 1000.0;
+    let w = width as f64 / 1e6;
+    let h = height as f64 / 1e6;
     let cy = h / 2.0;
     let lead = w * 0.32; // lead runs from the box edge to this x
     let far = w - lead;
@@ -827,7 +827,7 @@ fn symbol_value(part: &Part) -> Option<String> {
     }
 }
 
-/// Local (box-space, um) point for a port.
+/// Local (box-space, nm) point for a port.
 fn local_port_point(port: &Port, width: i64, height: i64) -> (f64, f64) {
     match port.side {
         Side::Top => (port.offset as f64, 0.0),
@@ -837,7 +837,7 @@ fn local_port_point(port: &Port, width: i64, height: i64) -> (f64, f64) {
     }
 }
 
-/// Local (box-space, um) tip of the pin stub, extending outward from the box.
+/// Local (box-space, nm) tip of the pin stub, extending outward from the box.
 fn stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
     match port.side {
         Side::Top => (lx, ly - STUB as f64),
@@ -849,7 +849,7 @@ fn stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
 
 /// Local (mm) pin-name text anchor position + CSS class, placed just inside
 /// the box from the port point.
-fn pin_text_pos(port: &Port, lx_um: f64, ly_um: f64, width_mm: f64) -> (f64, f64, &'static str) {
+fn pin_text_pos(port: &Port, lx_nm: f64, ly_nm: f64, width_mm: f64) -> (f64, f64, &'static str) {
     let _ = width_mm;
     let (dx, dy, anchor) = geometry::pin_text_offset(port.side);
     let class = match anchor {
@@ -857,19 +857,19 @@ fn pin_text_pos(port: &Port, lx_um: f64, ly_um: f64, width_mm: f64) -> (f64, f64
         geometry::HAnchor::Start => "pin-left",
         geometry::HAnchor::End => "pin-right",
     };
-    (lx_um / 1000.0 + dx, ly_um / 1000.0 + dy, class)
+    (lx_nm / 1e6 + dx, ly_nm / 1e6 + dy, class)
 }
 
 /// SVG `transform` attribute for a symbol instance (empty when the symbol
 /// needs no transform, i.e. rot=0 and not mirrored — the common case).
 fn symbol_transform(sym: &SymbolInstance, width: i64) -> String {
-    let x = fmt_f(sym.at.x as f64 / 1000.0);
-    let y = fmt_f(sym.at.y as f64 / 1000.0);
+    let x = fmt_f(sym.at.x as f64 / 1e6);
+    let y = fmt_f(sym.at.y as f64 / 1e6);
     if sym.rot == 0 && !sym.mirrored {
         return format!(r#" transform="translate({x},{y})""#);
     }
     let deg = fmt_f(sym.rot as f64 / 1000.0);
-    let w = fmt_f(width as f64 / 1000.0);
+    let w = fmt_f(width as f64 / 1e6);
     if sym.mirrored {
         format!(r#" transform="translate({x},{y}) rotate({deg}) translate({w},0) scale(-1,1)""#)
     } else {
@@ -917,8 +917,8 @@ fn render_junctions(sch: &SchematicSection, svg: &mut String) {
 /// everything else (a named rail, or `power:PWR_FLAG`) draws as the
 /// upward power arrow.
 fn render_power_symbol(ps: &eda_model::ir::PowerSymbol, svg: &mut String) {
-    let x = ps.at.x as f64 / 1000.0;
-    let y = ps.at.y as f64 / 1000.0;
+    let x = ps.at.x as f64 / 1e6;
+    let y = ps.at.y as f64 / 1e6;
     if ps.lib_id == "power:GND" {
         let drop = y + 0.5;
         let [(bx1, _), (bx2, _), (mx1, d2), (mx2, _), (tx1, d3), (tx2, _)] = geometry::ground_glyph_points(x, drop);
@@ -976,8 +976,8 @@ fn render_power_symbol(ps: &eda_model::ir::PowerSymbol, svg: &mut String) {
 /// nothing and keeps this in lock-step with the fixed (non-jogging) glyph
 /// `render_power_symbol` actually draws.
 fn power_symbol_extent(ps: &eda_model::ir::PowerSymbol) -> geometry::TextBox {
-    let x = ps.at.x as f64 / 1000.0;
-    let y = ps.at.y as f64 / 1000.0;
+    let x = ps.at.x as f64 / 1e6;
+    let y = ps.at.y as f64 / 1e6;
     let half_w = (ps.net.len() as f64 * 0.7 / 2.0).max(0.9);
     if ps.lib_id == "power:GND" {
         geometry::TextBox { x0: x - half_w, y0: y, x1: x + half_w, y1: y + 2.1 }
@@ -1042,7 +1042,7 @@ fn compute_bounds(boxes: &[SymbolBox], sch: &SchematicSection, extra: &[geometry
     }
     for w in &sch.wires {
         for p in &w.pts {
-            feed(p.x as f64 / 1000.0, p.y as f64 / 1000.0);
+            feed(p.x as f64 / 1e6, p.y as f64 / 1e6);
         }
     }
     for b in extra {
@@ -1056,9 +1056,9 @@ fn compute_bounds(boxes: &[SymbolBox], sch: &SchematicSection, extra: &[geometry
     (min_x, min_y, max_x, max_y)
 }
 
-/// um -> mm, 3-decimal max, no trailing float noise, deterministic.
-fn fmt_mm(um: i64) -> String {
-    fmt_f(um as f64 / 1000.0)
+/// nm -> mm, 3-decimal max, no trailing float noise, deterministic.
+fn fmt_mm(nm: i64) -> String {
+    fmt_f(nm as f64 / 1e6)
 }
 
 fn fmt_f(v: f64) -> String {
@@ -1085,7 +1085,7 @@ mod tests {
     }
 
     fn part(reference: &str, value: Option<&str>, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: value.map(String::from), package: None, footprint: None, pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: value.map(String::from), package: None, footprint: None, pins, body_nm: None, symbol: None, datasheet: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {
@@ -1194,15 +1194,15 @@ mod tests {
         let (vx, vy, vw, vh) = (nums[0], nums[1], nums[2], nums[3]);
 
         for sym in &sch.symbols {
-            let x = sym.at.x as f64 / 1000.0;
-            let y = sym.at.y as f64 / 1000.0;
+            let x = sym.at.x as f64 / 1e6;
+            let y = sym.at.y as f64 / 1e6;
             assert!(x >= vx && x <= vx + vw, "symbol {} x out of viewBox", sym.id);
             assert!(y >= vy && y <= vy + vh, "symbol {} y out of viewBox", sym.id);
         }
         for w in &sch.wires {
             for p in &w.pts {
-                let x = p.x as f64 / 1000.0;
-                let y = p.y as f64 / 1000.0;
+                let x = p.x as f64 / 1e6;
+                let y = p.y as f64 / 1e6;
                 assert!(x >= vx && x <= vx + vw);
                 assert!(y >= vy && y <= vy + vh);
             }
@@ -1248,7 +1248,7 @@ mod tests {
     fn malformed_design_no_schematic_returns_check_result_not_panic() {
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: eda_model::ir::Provenance {
                 engine_version: "0".into(),
                 intent_hash: "x".into(),
@@ -1279,7 +1279,7 @@ mod tests {
         let mut d = ldo_design();
         let ldo = d.schematic.take().unwrap();
         let root = SchematicSection {
-            sheets: vec![SheetInstance { id: "s1".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: Point { x: 20_000, y: 20_000 }, size: (30_000, 20_000), pins: vec![], page: String::new() }],
+            sheets: vec![SheetInstance { id: "s1".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: Point { x: 20_000_000, y: 20_000_000 }, size: (30_000_000, 20_000_000), pins: vec![], page: String::new() }],
             ..Default::default()
         };
         d.schematic = Some(root);

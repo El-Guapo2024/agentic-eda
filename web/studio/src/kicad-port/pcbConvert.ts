@@ -30,24 +30,24 @@ export type ConvertStrategy = "copy_linewidth" | "centerline" | "bounding_hull";
 export interface ConvertSettings {
   strategy: ConvertStrategy;
   /** `m_Gap`: the bounding hull's gap. */
-  gapUm: number;
+  gapNm: number;
   /** `m_LineWidth`: the bounding hull's / copied line width (0 = the layer's default). */
-  widthUm: number;
+  widthNm: number;
   /** `m_DeleteOriginals`. */
   deleteOriginals: boolean;
 }
 
 /** `CONVERT_TOOL::initUserSettings`. */
-export const DEFAULT_CONVERT_SETTINGS: ConvertSettings = { strategy: "centerline", gapUm: 0, widthUm: 0, deleteOriginals: true };
+export const DEFAULT_CONVERT_SETTINGS: ConvertSettings = { strategy: "centerline", gapNm: 0, widthNm: 0, deleteOriginals: true };
 
 /**
  * `resolvedSettings` of CreatePolys: a strategy other than the centerline with no width takes the layer's default line width, and a
  * positive hull gap also covers half of that width ("the gap is measured from the stroke's edge").
  */
-export function resolveConvertSettings(s: ConvertSettings, layerLineWidthUm: number): ConvertSettings {
+export function resolveConvertSettings(s: ConvertSettings, layerLineWidthNm: number): ConvertSettings {
   const out = { ...s };
-  if (out.strategy !== "centerline" && out.widthUm === 0) out.widthUm = layerLineWidthUm;
-  if (out.strategy === "bounding_hull" && out.gapUm > 0) out.gapUm += Math.round(out.widthUm / 2);
+  if (out.strategy !== "centerline" && out.widthNm === 0) out.widthNm = layerLineWidthNm;
+  if (out.strategy === "bounding_hull" && out.gapNm > 0) out.gapNm += Math.round(out.widthNm / 2);
   return out;
 }
 
@@ -178,15 +178,15 @@ export interface ConversionPlan {
 
 /**
  * `CONVERT_TOOL::CreateLines` for `convertToLines`: every polygon-like source becomes line segments on `layer`, with the source's width when
- * it has one and `fallbackWidthUm` otherwise; the sources are deleted when asked.
+ * it has one and `fallbackWidthNm` otherwise; the sources are deleted when asked.
  */
-export function planConvertToLines(board: BoardState, ids: readonly string[], layer: string, fallbackWidthUm: number, deleteOriginals: boolean): ConversionPlan {
+export function planConvertToLines(board: BoardState, ids: readonly string[], layer: string, fallbackWidthNm: number, deleteOriginals: boolean): ConversionPlan {
   const cmds: Cmd[] = [];
   const removed: string[] = [];
   for (const id of ids) {
     const rings = sourceRings(board, id);
     if (!rings) continue;
-    const width = sourceWidth(board, id) ?? fallbackWidthUm;
+    const width = sourceWidth(board, id) ?? fallbackWidthNm;
     for (const ring of rings) {
       for (const [a, b] of ringEdges(ring)) {
         cmds.push({ op: "add_shape", shape: { kind: "segment", layer, stroke_width: width, filled: false, start: xy(a), end: xy(b) } });
@@ -214,27 +214,27 @@ export function deleteCmd(board: BoardState, id: string): Cmd {
 
 /**
  * `CONVERT_TOOL::CreateLines` for `convertToTracks`: segments and arcs become tracks of the same width, polygon-like sources a closed track
- * run around each outline (`fallbackWidthUm` for a source with no width). Every track needs a net in this model (`net`), where KiCad
+ * run around each outline (`fallbackWidthNm` for a source with no width). Every track needs a net in this model (`net`), where KiCad
  * leaves the new tracks without one. The sources go when `deleteOriginals`.
  */
-export function planConvertToTracks(board: BoardState, ids: readonly string[], layer: string, net: string, fallbackWidthUm: number, deleteOriginals: boolean): ConversionPlan {
+export function planConvertToTracks(board: BoardState, ids: readonly string[], layer: string, net: string, fallbackWidthNm: number, deleteOriginals: boolean): ConversionPlan {
   const tracks: CmdRouteTrack[] = [];
   const removedShapes: string[] = [];
   for (const id of ids) {
     const s = board.drawings?.shapes.find((sh) => sh.id === id);
     if (s?.kind === "segment") {
-      tracks.push({ net, layer, width: s.stroke_width || fallbackWidthUm, pts: [xy(s.start), xy(s.end)] });
+      tracks.push({ net, layer, width: s.stroke_width || fallbackWidthNm, pts: [xy(s.start), xy(s.end)] });
       removedShapes.push(id);
       continue;
     }
     if (s?.kind === "arc") {
-      tracks.push(arcRouteTrack(net, layer, s.stroke_width || fallbackWidthUm, pt(s.start), pt(s.mid), pt(s.end)));
+      tracks.push(arcRouteTrack(net, layer, s.stroke_width || fallbackWidthNm, pt(s.start), pt(s.mid), pt(s.end)));
       removedShapes.push(id);
       continue;
     }
     const rings = sourceRings(board, id);
     if (!rings) continue;
-    const width = sourceWidth(board, id) ?? fallbackWidthUm;
+    const width = sourceWidth(board, id) ?? fallbackWidthNm;
     for (const ring of rings) {
       const edges = ringEdges(ring);
       for (const [a, b] of edges) tracks.push({ net, layer, width, pts: [xy(a), xy(b)] });
@@ -302,19 +302,19 @@ export function planSegmentToArc(board: BoardState, id: string): Cmd[] | null {
 
 /** `OUTSET_ROUTINE::PARAMETERS`. */
 export interface OutsetParams {
-  outsetUm: number;
+  outsetNm: number;
   roundCorners: boolean;
   useSourceLayers: boolean;
   useSourceWidths: boolean;
   layer: string;
-  lineWidthUm: number;
+  lineWidthNm: number;
   /** `gridRounding`: round rectangular outsets outwards to multiples of this (null = off). */
-  gridRoundingUm: number | null;
+  gridRoundingNm: number | null;
   deleteSourceItems: boolean;
 }
 
 /** The dialog's start values for the board editor (`outset_params_pcb_edit`: 1 mm, rounded corners, copy layers, on Edge.Cuts, 0.05 mm). */
-export const DEFAULT_OUTSET_PARAMS: OutsetParams = { outsetUm: 1000, roundCorners: true, useSourceLayers: true, useSourceWidths: true, layer: "Edge.Cuts", lineWidthUm: 50, gridRoundingUm: null, deleteSourceItems: false };
+export const DEFAULT_OUTSET_PARAMS: OutsetParams = { outsetNm: 1_000_000, roundCorners: true, useSourceLayers: true, useSourceWidths: true, layer: "Edge.Cuts", lineWidthNm: 50_000, gridRoundingNm: null, deleteSourceItems: false };
 
 export interface OutsetResult {
   add: CmdShape[];
@@ -337,11 +337,11 @@ export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): Ou
   const remove: string[] = [];
   let successes = 0;
   let failures = 0;
-  const d = params.outsetUm;
+  const d = params.outsetNm;
 
   for (const s of shapes) {
     const layer = params.useSourceLayers ? s.layer : params.layer;
-    let width = params.lineWidthUm;
+    let width = params.lineWidthNm;
     if (params.useSourceWidths) {
       const w = s.kind === "segment" ? s.stroke_width : s.stroke_width && !s.filled ? s.stroke_width : null;
       if (w != null) width = w;
@@ -355,9 +355,9 @@ export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): Ou
     };
     const rect = (x0: number, y0: number, x1: number, y1: number) => {
       let [ax, ay, bx, by] = [x0, y0, x1, y1];
-      if (params.gridRoundingUm) {
+      if (params.gridRoundingNm) {
         // `GetRectRoundedToGridOutwards`: the top-left corner down, the opposite one up, to grid multiples.
-        const g = params.gridRoundingUm;
+        const g = params.gridRoundingNm;
         [ax, ay, bx, by] = [floorTo(ax, g), floorTo(ay, g), ceilTo(bx, g), ceilTo(by, g)];
       }
       add.push(mk({ kind: "rect", start: xy([ax, ay]), end: xy([bx, by]) }));
@@ -381,7 +381,7 @@ export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): Ou
         // The IR rectangle has no corner radius, so a radius only comes from rounding the outset's corners.
         const radius = params.roundCorners ? Math.max(d, 0) : 0;
         if (radius > 0) {
-          for (const piece of roundedRectPieces(params.gridRoundingUm ? gridOut(x0, y0, x1, y1, params.gridRoundingUm) : [x0, y0, x1, y1], radius)) {
+          for (const piece of roundedRectPieces(params.gridRoundingNm ? gridOut(x0, y0, x1, y1, params.gridRoundingNm) : [x0, y0, x1, y1], radius)) {
             if (piece.kind === "seg") seg(piece.a, piece.b);
             else arc(piece.arc);
           }
@@ -414,7 +414,7 @@ export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): Ou
         const dir = vsub(B, A);
         if (params.roundCorners) {
           // `SHAPE_SEGMENT( seg, outset * 2 )` as a chain: two sides and two half-circle caps.
-          const ext = resize(dir, d * 1000);
+          const ext = resize(dir, d);
           const perp: V = [-ext[1], ext[0]];
           const a1: V = [A[0] + perp[0], A[1] + perp[1]];
           const a2: V = [A[0] - perp[0], A[1] - perp[1]];
@@ -426,7 +426,7 @@ export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): Ou
           arc({ start: a2, mid: [A[0] - ext[0], A[1] - ext[1]], end: a1 });
         } else {
           // The oriented rectangle around the line, as a polygon (no arcs: `addPolygonalChain`).
-          const ext = resize(dir, d * 1000);
+          const ext = resize(dir, d);
           const perp: V = [-ext[1], ext[0]];
           const ring: V[] = [
             [A[0] - ext[0] + perp[0], A[1] - ext[1] + perp[1]],
@@ -443,10 +443,10 @@ export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): Ou
         // Only an arc whose radius is at least the outset ("gets rather complicated if this isn't true"); anything else is neither a success nor a failure.
         const a = { start: toIU(pt(s.start)), mid: toIU(pt(s.mid)), end: toIU(pt(s.end)) };
         const radius = arcRadius(a);
-        if (radius >= d * 1000) {
+        if (radius >= d) {
           const centre = arcCenter(a);
           const angle = arcCentralAngle(a);
-          const startNorm = resize(vsub(a.start, centre), d * 1000);
+          const startNorm = resize(vsub(a.start, centre), d);
           const outer = arcFromCenterAngle(centre, [a.start[0] + startNorm[0], a.start[1] + startNorm[1]], angle);
           const inner = arcFromCenterAngle(centre, [a.start[0] - startNorm[0], a.start[1] - startNorm[1]], angle);
           // End caps: half circles about the arc's ends, from the outer / inner end (`SHAPE_ARC{ P1, outer.GetP1(), ANGLE_180 }`, `SHAPE_ARC{ P0, inner.GetP0(), ANGLE_180 }`).
@@ -479,9 +479,9 @@ function gridOut(x0: number, y0: number, x1: number, y1: number, g: number): [nu
 }
 
 /** The straight sides and corner arcs of a rounded rectangle (`ROUNDRECT::TransformToPolygon`), the radius clamped to half the smaller side. */
-function roundedRectPieces(box: readonly [number, number, number, number], radiusUm: number): Array<{ kind: "seg"; a: P; b: P } | { kind: "arc"; arc: { start: V; mid: V; end: V } }> {
+function roundedRectPieces(box: readonly [number, number, number, number], radiusNm: number): Array<{ kind: "seg"; a: P; b: P } | { kind: "arc"; arc: { start: V; mid: V; end: V } }> {
   const [x0, y0, x1, y1] = box;
-  const r = Math.max(0, Math.min(radiusUm, Math.floor(Math.min(x1 - x0, y1 - y0) / 2)));
+  const r = Math.max(0, Math.min(radiusNm, Math.floor(Math.min(x1 - x0, y1 - y0) / 2)));
   const out: Array<{ kind: "seg"; a: P; b: P } | { kind: "arc"; arc: { start: V; mid: V; end: V } }> = [];
   if (r === 0) return out;
   const xEdge = x1 - x0 - 2 * r;
@@ -496,7 +496,7 @@ function roundedRectPieces(box: readonly [number, number, number, number], radiu
   }
   const corner = (cx: number, cy: number, from: number): void => {
     // A quarter circle about (cx, cy), starting at angle `from` (degrees, y down), turning clockwise on screen.
-    const at = (deg: number): V => [Math.round(toIU([cx, cy])[0] + r * 1000 * Math.cos((deg * Math.PI) / 180)), Math.round(toIU([cx, cy])[1] + r * 1000 * Math.sin((deg * Math.PI) / 180))];
+    const at = (deg: number): V => [Math.round(toIU([cx, cy])[0] + r * Math.cos((deg * Math.PI) / 180)), Math.round(toIU([cx, cy])[1] + r * Math.sin((deg * Math.PI) / 180))];
     out.push({ kind: "arc", arc: { start: at(from), mid: at(from + 45), end: at(from + 90) } });
   };
   corner(x0 + r, y0 + r, 180); // top left: from the left side up to the top

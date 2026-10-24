@@ -235,7 +235,7 @@ export function normalizeDeg(a: number): number {
 
 /** `PCB_GRID_ITEM::PCB_GRID_ITEM`: a cartesian grid 10 mm square with a 1 mm pitch, a full turn and 10 degrees for a polar one, priority 1, affecting everything. */
 export function newGridItem(x: number, y: number): BoardGridItem {
-  return { id: "", kind: "cartesian", x, y, extent: [5_000, 5_000], spacing: [1_000, 1_000], angle: 0, phi_extent: 360, phi_spacing: 10, priority: 1, tick_interval: 0, affects: { cursor: true, routing: true, placement: true } };
+  return { id: "", kind: "cartesian", x, y, extent: [5_000_000, 5_000_000], spacing: [1_000_000, 1_000_000], angle: 0, phi_extent: 360, phi_spacing: 10, priority: 1, tick_interval: 0, affects: { cursor: true, routing: true, placement: true } };
 }
 
 /** `DRAWING_TOOL::PlaceSubGrid`'s `sizeToCursor`: the grid as big as the centre's distance to the cursor each way, turned to face it (`SetOrientation( -EDA_ANGLE( v ) )`). */

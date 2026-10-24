@@ -53,7 +53,7 @@ pub(crate) fn board_center_mm(outline: &[eda_model::ir::Point]) -> (f64, f64) {
     }
     let (x0, x1) = outline.iter().fold((i64::MAX, i64::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
     let (y0, y1) = outline.iter().fold((i64::MAX, i64::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
-    ((x0 + x1) as f64 / 2000.0, (y0 + y1) as f64 / 2000.0)
+    ((x0 + x1) as f64 / 2e6, (y0 + y1) as f64 / 2e6)
 }
 
 /// The formats of `DIALOG_EXPORT_STEP`'s choice (`c_formatCommand`), by their kicad-cli command.
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn the_board_centre_is_the_middle_of_the_outline_in_mm() {
-        let outline = [Point { x: 10_000, y: 20_000 }, Point { x: 110_000, y: 20_000 }, Point { x: 110_000, y: 80_000 }, Point { x: 10_000, y: 80_000 }];
+        let outline = [Point { x: 10_000_000, y: 20_000_000 }, Point { x: 110_000_000, y: 20_000_000 }, Point { x: 110_000_000, y: 80_000_000 }, Point { x: 10_000_000, y: 80_000_000 }];
         assert_eq!(board_center_mm(&outline), (60.0, 50.0));
         assert_eq!(board_center_mm(&[]), (0.0, 0.0));
     }
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn the_tolerance_is_a_positive_distance_of_at_most_a_millimetre() {
-        for (t, want) in [(json!(0.01), "0.010"), (json!(0), "0.001"), (json!(-1), "0.001"), (json!(5), "0.001"), (json!("fine"), "0.001")] {
+        for (t, want) in [(json!(0.01), "0.010"), (json!(0), "0.001"), (json!(-1), "0.001"), (json!(5000), "0.001"), (json!("fine"), "0.001")] {
             let (_, a) = three_d_args(&json!({ "tolerance": t }), (0.0, 0.0));
             assert!(a.contains(&format!("--min-distance={want}mm")), "{t}: {a:?}");
         }

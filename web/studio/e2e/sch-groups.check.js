@@ -158,7 +158,7 @@
   };
   const groups = async () => (await sch(MCU)).groups ?? [];
   /** The capacitors of the MCU sheet sit in a row, C1 first: where to click to be on one (the symbol's `at` is the corner of its box). */
-  const bodyOf = (s, id) => { const x = s.symbols.find((q) => q.id === id); return [x.at[0] + 1000, x.at[1] + 3000]; };
+  const bodyOf = (s, id) => { const x = s.symbols.find((q) => q.id === id); return [x.at[0] + 1_000_000, x.at[1] + 3_000_000]; };
 
   // --------------------------------------------------------------------------------------------------------------------------- run
   const strict = [...document.querySelectorAll("label.toggle")].find((l) => /strict/i.test(l.textContent))?.querySelector("input");
@@ -172,7 +172,7 @@
   await leave();
   await enterSheet(MCU);
   const view0 = __eda.state().view;
-  if (!view0 || !Number.isFinite(view0.x) || !Number.isFinite(view0.scale) || view0.scale < 1e-4) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)}): in a hidden pane take a screenshot after loading the page`] }); check.done = true; return "no canvas size"; }
+  if (!view0 || !Number.isFinite(view0.x) || !Number.isFinite(view0.scale) || view0.scale < 1e-7) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)}): in a hidden pane take a screenshot after loading the page`] }); check.done = true; return "no canvas size"; }
   const base = await snapshotOf(MCU);
   const sheet0 = await sch(MCU);
   const need = ["U1", "C1", "C2", "C3", "C4", "C5"].filter((id) => !sheet0.symbols.some((s) => s.id === id));
@@ -283,7 +283,7 @@
       await __eda.run("common.Interactive.groupEnter");
       await sleep(300);
       const [ex, ey] = bodyOf(s, "C4");
-      await clickAt(ex, ey - 12000);
+      await clickAt(ex, ey - 12_000_000);
       t(__eda.state().entered === null, `a click on nothing outside the group's box leaves it (entered ${__eda.state().entered})`);
       await fit();
     });
@@ -297,28 +297,28 @@
       const grp = (await groups())[0];
       await fitTo(["C1", "C2", "C3", "C4"]);
       const at = (id) => s.symbols.find((q) => q.id === id).at;
-      const top = Math.min(...["C1", "C2", "C3"].map((id) => at(id)[1])) - 3000;
-      const bottom = Math.max(...["C1", "C2", "C3"].map((id) => at(id)[1])) + 14000;
-      const left = at("C1")[0] - 3000;
-      const rightAll = at("C3")[0] + 9000;
+      const top = Math.min(...["C1", "C2", "C3"].map((id) => at(id)[1])) - 3_000_000;
+      const bottom = Math.max(...["C1", "C2", "C3"].map((id) => at(id)[1])) + 14_000_000;
+      const left = at("C1")[0] - 3_000_000;
+      const rightAll = at("C3")[0] + 9_000_000;
       // The boxes also take the power symbols, flags and wires about the capacitors (items in no group), so the answers are read as "holds" and "does not hold".
       const has = (id) => selectedIds().includes(id);
       const members = ["C1", "C2", "C3"];
       // a window (left to right) around all three: the group, and the members only as the group
       await select([]);
-      await dragBox([left, bottom + 4000], [rightAll, top]);
+      await dragBox([left, bottom + 4_000_000], [rightAll, top]);
       t(has(grp.id) && !members.some(has), `a window that holds the whole group selects the group, not its members one by one (${selectedIds()})`);
       // a window around C1 only: not C1, not the group (a member does not count on its own; "if all the members are inside, the group is selected instead")
       await select([]);
-      await dragBox([left, bottom + 4000], [at("C1")[0] + 9000, top]);
+      await dragBox([left, bottom + 4_000_000], [at("C1")[0] + 9_000_000, top]);
       t(!has(grp.id) && !members.some(has), `a window around C1 alone selects neither C1 nor the group (${selectedIds()})`);
       // a crossing box (right to left) that touches C1 only: the group
       await select([]);
-      await dragBox([at("C1")[0] + 4000, bottom + 4000], [left, top + 4000]);
+      await dragBox([at("C1")[0] + 4_000_000, bottom + 4_000_000], [left, top + 4_000_000]);
       t(has(grp.id) && !members.some(has), `a crossing box that touches C1 selects its group (${selectedIds()})`);
       // a window around C4, in no group: C4
       await select([]);
-      await dragBox([at("C4")[0] - 3000, bottom + 4000], [at("C4")[0] + 9000, top]);
+      await dragBox([at("C4")[0] - 3_000_000, bottom + 4_000_000], [at("C4")[0] + 9_000_000, top]);
       t(has("C4") && !has(grp.id), `a window around C4 selects C4 (${selectedIds()})`);
       await fit();
     });
@@ -337,12 +337,12 @@
       await select([grp.id]);
       fire("pointermove", px, py); await sleep(200);
       await __eda.run("eeschema.InteractiveMove.move");
-      const [qx, qy] = screenOf(bodyOf(before, "C2")[0] + 6350, bodyOf(before, "C2")[1] + 2540);
+      const [qx, qy] = screenOf(bodyOf(before, "C2")[0] + 6_350_000, bodyOf(before, "C2")[1] + 2_540_000);
       fire("pointermove", qx, qy); await sleep(900);
       fire("pointerdown", qx, qy, { buttons: 1 }); await sleep(80); fire("pointerup", qx, qy); await sleep(1300);
       const moved = await sch(MCU);
       const dx = pos(moved, "C1")[0] - pos(before, "C1")[0];
-      t(dx > 0 && ["C1", "C2", "C3"].every((id) => pos(moved, id)[0] - pos(before, id)[0] === dx && pos(moved, id)[1] - pos(before, id)[1] === 2540), `M carries C1, C2 and C3 by the same offset (${dx}, 2540)`);
+      t(dx > 0 && ["C1", "C2", "C3"].every((id) => pos(moved, id)[0] - pos(before, id)[0] === dx && pos(moved, id)[1] - pos(before, id)[1] === 2_540_000), `M carries C1, C2 and C3 by the same offset (${dx}, 2_540_000)`);
       t(["C4", "C5", "U1"].every((id) => same(pos(moved, id), pos(before, id))), "and nothing outside the group");
       t(same(moved.groups.map((g) => [g.id, [...g.member_ids].sort()]), before.groups.map((g) => [g.id, [...g.member_ids].sort()])), "the tree is as it was");
       await undo();
@@ -379,7 +379,7 @@
     await scenario("A dragged group stretches nothing attached to it; the same symbol dragged alone does", async (t) => {
       const before = await sch(MCU);
       const wireEnds = (s) => s.wires.map((w) => `${w.id}:${JSON.stringify(w.pts)}`).sort().join("|");
-      await post({ op: "sch_move", verb: "drag", ids: ["C4"], dx: 0, dy: 5080, ortho: true }, MCU);
+      await post({ op: "sch_move", verb: "drag", ids: ["C4"], dx: 0, dy: 5_080_000, ortho: true }, MCU);
       await sleep(900);
       const alone = await sch(MCU);
       t(wireEnds(alone) !== wireEnds(before), "dragging C4 alone stretches the wires that end on its pins");
@@ -389,10 +389,10 @@
       await sleep(900);
       const grp = (await groups())[0];
       const held = await sch(MCU);
-      await post({ op: "sch_move", verb: "drag", ids: [grp.id], dx: 0, dy: 5080, ortho: true }, MCU);
+      await post({ op: "sch_move", verb: "drag", ids: [grp.id], dx: 0, dy: 5_080_000, ortho: true }, MCU);
       await sleep(900);
       const dragged = await sch(MCU);
-      t(["C4", "C5"].every((id) => dragged.symbols.find((q) => q.id === id).at[1] === held.symbols.find((q) => q.id === id).at[1] + 5080), "the group's symbols moved");
+      t(["C4", "C5"].every((id) => dragged.symbols.find((q) => q.id === id).at[1] === held.symbols.find((q) => q.id === id).at[1] + 5_080_000), "the group's symbols moved");
       t(wireEnds(dragged) === wireEnds(held), "and the wires on their pins stayed where they were (a group has no connection points)");
     });
 
@@ -455,7 +455,7 @@
       await sleep(700);
       await __eda.run("common.Interactive.paste");
       await sleep(1300);
-      const [qx, qy] = screenOf(bodyOf(s0, "C4")[0], bodyOf(s0, "C4")[1] + 30000);
+      const [qx, qy] = screenOf(bodyOf(s0, "C4")[0], bodyOf(s0, "C4")[1] + 30_000_000);
       fire("pointermove", qx, qy); await sleep(900);
       fire("pointerdown", qx, qy, { buttons: 1 }); await sleep(80); fire("pointerup", qx, qy); await sleep(1800);
       const s1 = await sch(MCU);
@@ -470,7 +470,7 @@
       await select([grp.id]);
       await __eda.run("common.Interactive.duplicate");
       await sleep(1500);
-      const [rx, ry] = screenOf(bodyOf(s0, "C4")[0], bodyOf(s0, "C4")[1] + 30000);
+      const [rx, ry] = screenOf(bodyOf(s0, "C4")[0], bodyOf(s0, "C4")[1] + 30_000_000);
       fire("pointermove", rx, ry); await sleep(900);
       fire("pointerdown", rx, ry, { buttons: 1 }); await sleep(80); fire("pointerup", rx, ry); await sleep(1800);
       const s2 = await sch(MCU);
@@ -593,7 +593,7 @@
       await select(["C1"]);
       await __eda.run("common.Interactive.duplicate");
       await sleep(1500);
-      const [qx, qy] = screenOf(bodyOf(s0, "C4")[0], bodyOf(s0, "C4")[1] + 30000);
+      const [qx, qy] = screenOf(bodyOf(s0, "C4")[0], bodyOf(s0, "C4")[1] + 30_000_000);
       fire("pointermove", qx, qy); await sleep(900);
       fire("pointerdown", qx, qy, { buttons: 1 }); await sleep(80); fire("pointerup", qx, qy); await sleep(1800);
       const s1 = await sch(MCU);
@@ -682,7 +682,7 @@
       t(f && f.id === "fld:C1:MPN" && f.text === "CL05B104KO5NNNC" && f.visible, `C1 has the field, shown (${JSON.stringify(f && [f.id, f.text, f.visible])})`);
       t(f && new Set([r.at[1], v.at[1], f.at[1]]).size === 3 && f.at[1] > v.at[1] && v.at[1] > r.at[1], `the three texts are stacked on their own lines (${[r.at[1], v.at[1], f.at[1]]})`);
       const p = await fileProperty("C1", "MPN");
-      t(p && p.text === "CL05B104KO5NNNC" && f && near(p.at[0], f.at[0] / 1000, 0.002) && near(p.at[1], f.at[1] / 1000, 0.002) && !/hide/.test(p.effects), `the file has it where the sheet draws it (${JSON.stringify(p)} for ${f && f.at})`);
+      t(p && p.text === "CL05B104KO5NNNC" && f && near(p.at[0], f.at[0] / 1e6, 0.002) && near(p.at[1], f.at[1] / 1e6, 0.002) && !/hide/.test(p.effects), `the file has it where the sheet draws it (${JSON.stringify(p)} for ${f && f.at})`);
       await undo();
       t(!(await fieldOf("C1", "MPN")) && !(await fileProperty("C1", "MPN")), "one Undo takes the field away again");
     });
@@ -694,17 +694,17 @@
       t(f && f.visible, "the field is shown");
       await fitTo(["C1", id]);
       await select([]);
-      await clickAt(f.at[0] + 600, f.at[1]);
+      await clickAt(f.at[0] + 600_000, f.at[1]);
       t(same(selectedIds(), [id]), `a click on its text selects the field (${selectedIds()})`);
       // the others stay when it moves
       const ref0 = (await fieldOf("C1", "Reference")).at;
-      await post({ op: "sch_move", verb: "move", ids: [id], dx: 2540, dy: -2540 }, MCU);
+      await post({ op: "sch_move", verb: "move", ids: [id], dx: 2_540_000, dy: -2_540_000 }, MCU);
       await sleep(500);
       const moved = await fieldOf("C1", "MPN");
-      t(near(moved.at[0], f.at[0] + 2540) && near(moved.at[1], f.at[1] - 2540), `Move takes it by the offset (${f.at} -> ${moved.at})`);
+      t(near(moved.at[0], f.at[0] + 2_540_000) && near(moved.at[1], f.at[1] - 2_540_000), `Move takes it by the offset (${f.at} -> ${moved.at})`);
       t(same((await fieldOf("C1", "Reference")).at, ref0), "and the Reference stays");
       const p = await fileProperty("C1", "MPN");
-      t(p && near(p.at[0], moved.at[0] / 1000, 0.002) && near(p.at[1], moved.at[1] / 1000, 0.002), `the file has it where it was moved (${JSON.stringify(p && p.at)})`);
+      t(p && near(p.at[0], moved.at[0] / 1e6, 0.002) && near(p.at[1], moved.at[1] / 1e6, 0.002), `the file has it where it was moved (${JSON.stringify(p && p.at)})`);
       await undo();
       t(same((await fieldOf("C1", "MPN")).at, f.at), "one Undo puts it back");
       // R turns its text a quarter where it stands, X flips its justification
@@ -733,10 +733,10 @@
       await undo();
       t((await fieldOf("C1", "MPN")).visible === true, "one Undo shows it again");
       // the symbol carries it along
-      await post({ op: "sch_move", verb: "move", ids: ["C1"], dx: 2540, dy: 0 }, MCU);
+      await post({ op: "sch_move", verb: "move", ids: ["C1"], dx: 2_540_000, dy: 0 }, MCU);
       await sleep(500);
       const carried = await fieldOf("C1", "MPN");
-      t(near(carried.at[0], f.at[0] + 2540) && near(carried.at[1], f.at[1]), `a symbol takes it along (${f.at} -> ${carried.at})`);
+      t(near(carried.at[0], f.at[0] + 2_540_000) && near(carried.at[1], f.at[1]), `a symbol takes it along (${f.at} -> ${carried.at})`);
     });
 
     await scenario("Field Properties edit the text of a user-defined field (an empty one too), and its look", async (t) => {
@@ -790,7 +790,7 @@
       await undo();
       t((await fieldOf("C1", "MPN")).text === "CL05B104", "one Undo takes it back");
       // Autoplace Fields (O) puts the field with the others again, in one undo step
-      await post({ op: "sch_move", verb: "move", ids: ["fld:C1:MPN"], dx: 10000, dy: 10000 }, MCU);
+      await post({ op: "sch_move", verb: "move", ids: ["fld:C1:MPN"], dx: 10_000_000, dy: 10_000_000 }, MCU);
       await sleep(400);
       await select(["C1"]);
       await __eda.run("eeschema.InteractiveEdit.autoplaceFields");
@@ -880,14 +880,14 @@
       await sleep(1500);
       const made = await newItems("wires", before);
       const stub = made[0];
-      t(made.length === 1 && same(stub.pts[0], tip) && stub.pts[1][0] === tip[0] && stub.pts[1][1] - tip[1] === 1270, `a stub 1.27 mm long runs from the pin's end down, out of the symbol (${JSON.stringify(stub && stub.pts)})`);
+      t(made.length === 1 && same(stub.pts[0], tip) && stub.pts[1][0] === tip[0] && stub.pts[1][1] - tip[1] === 1_270_000, `a stub 1.27 mm long runs from the pin's end down, out of the symbol (${JSON.stringify(stub && stub.pts)})`);
       t(__eda.state().tool === "drag" && same(selectedIds(), [stub?.id]), `the Drag tool holds it (${__eda.state().tool}; selected ${selectedIds()})`);
-      const [px, py] = screenOf(tip[0], tip[1] + 5080);
+      const [px, py] = screenOf(tip[0], tip[1] + 5_080_000);
       fire("pointermove", px, py); await sleep(500);
       fire("pointermove", px + 1, py + 1); await sleep(600);
       fire("pointerdown", px, py, { buttons: 1 }); await sleep(80); fire("pointerup", px, py); await sleep(1500);
       const moved = (await newItems("wires", before))[0];
-      t(moved && same(moved.pts[0], tip) && moved.pts[moved.pts.length - 1][1] === tip[1] + 5080, `a click drops it: the far end follows the pointer, the end at the pin stays (${JSON.stringify(moved && moved.pts)})`);
+      t(moved && same(moved.pts[0], tip) && moved.pts[moved.pts.length - 1][1] === tip[1] + 5_080_000, `a click drops it: the far end follows the pointer, the end at the pin stays (${JSON.stringify(moved && moved.pts)})`);
       t(__eda.state().tool === "select", "and the tool is the selection tool again");
       await undo();
       t((await newItems("wires", before)).length === 0, "one Undo takes the stub and the drag away");
@@ -935,7 +935,7 @@
       await select(["U1"]);
       await __eda.run("common.Interactive.duplicate");
       await sleep(1500);
-      const [qx, qy] = screenOf(s0.symbols.find((x) => x.id === "U1").at[0] + 60000, s0.symbols.find((x) => x.id === "U1").at[1]);
+      const [qx, qy] = screenOf(s0.symbols.find((x) => x.id === "U1").at[0] + 60_000_000, s0.symbols.find((x) => x.id === "U1").at[1]);
       fire("pointermove", qx, qy); await sleep(900);
       fire("pointerdown", qx, qy, { buttons: 1 }); await sleep(80); fire("pointerup", qx, qy); await sleep(1800);
       const s1 = await sch(MCU);
@@ -950,7 +950,7 @@
       await sleep(900);
       await __eda.run("common.Interactive.paste");
       await sleep(1500);
-      const [rx, ry] = screenOf(s0.symbols.find((x) => x.id === "U1").at[0] + 60000, s0.symbols.find((x) => x.id === "U1").at[1]);
+      const [rx, ry] = screenOf(s0.symbols.find((x) => x.id === "U1").at[0] + 60_000_000, s0.symbols.find((x) => x.id === "U1").at[1]);
       fire("pointermove", rx, ry); await sleep(900);
       fire("pointerdown", rx, ry, { buttons: 1 }); await sleep(80); fire("pointerup", rx, ry); await sleep(1800);
       const s2 = await sch(MCU);
@@ -971,14 +971,14 @@
         const files = (await json("/api/schematic.kicad_sch")).files;
         const text = (files.find((f) => /board/.test(f.name)) ?? files[0]).text;
         // the pin of that name at that place (another sheet may have a pin of the same name)
-        const at = `(at ${pin.at[0] / 1000} ${pin.at[1] / 1000} `;
+        const at = `(at ${pin.at[0] / 1e6} ${pin.at[1] / 1e6} `;
         for (let from = text.indexOf(`(pin "${pin.name}"`); from >= 0; from = text.indexOf(`(pin "${pin.name}"`, from + 1)) {
           const form = text.slice(from, from + 400);
           if (form.slice(0, 160).includes(at)) return form;
         }
         return "";
       };
-      t(!!pin && !pin.size_um && !pin.bold && !pin.italic, `the pin ${pin && pin.name} starts with the default text (${JSON.stringify(pin)})`);
+      t(!!pin && !pin.size_nm && !pin.bold && !pin.italic, `the pin ${pin && pin.name} starts with the default text (${JSON.stringify(pin)})`);
       await select([pin.id]);
       await __eda.run("eeschema.InteractiveEdit.properties");
       await sleep(700);
@@ -996,12 +996,12 @@
       buttonText(dialog(), "OK").click();
       await sleep(1300);
       let now = await pinOf();
-      t(now && now.size_um === 2540 && now.bold === true && now.italic === true, `the pin is set in 2.54 mm bold italic (${JSON.stringify(now)})`);
+      t(now && now.size_nm === 2_540_000 && now.bold === true && now.italic === true, `the pin is set in 2.54 mm bold italic (${JSON.stringify(now)})`);
       const form = await fileForm();
       t(/\(font \(size 2\.54 2\.54\) \(bold yes\) \(italic yes\)\)/.test(form), `and the file says so (${form.replace(/\s+/g, " ").slice(0, 160)})`);
       await undo();
       now = await pinOf();
-      t(now && !now.size_um && !now.bold && !now.italic, "one Undo gives the pin its default text again");
+      t(now && !now.size_nm && !now.bold && !now.italic, "one Undo gives the pin its default text again");
       t(/\(font \(size 1\.27 1\.27\)\)/.test(await fileForm()), "and the file");
       await enterSheet(MCU);
     });

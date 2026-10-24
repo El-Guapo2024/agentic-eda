@@ -13,8 +13,8 @@
 // same "no second hand-built shape" rule `LibrarySymbol`'s own doc in
 // api/types.ts states. Everything *interactive* in this file instead
 // works in this app's shared internal space (integer-scaled µm, +y
-// **down**) -- `gridUm`/`cursorUm`/`moveOriginUm`/`SymMovePreview`'s own
-// `dxUm`/`dyUm` -- exactly like the Footprint Editor's own store, so
+// **down**) -- `gridNm`/`cursorNm`/`moveOriginNm`/`SymMovePreview`'s own
+// `dxNm`/`dyNm` -- exactly like the Footprint Editor's own store, so
 // `SymbolEditorCanvas.tsx` can reuse `kicad-port/view.ts`/`gridHelper.ts`
 // and `components/schematic/transform.ts`'s `resolvePin`/`resolveLibPoint`
 // (which already do the mm->µm, Y-up->Y-down conversion -- the same
@@ -72,8 +72,8 @@ export interface ImportRequest {
 export interface SymMovePreview {
   refs: string[];
   kind: "pin" | "graphic" | "field";
-  dxUm: number;
-  dyUm: number;
+  dxNm: number;
+  dyNm: number;
 }
 
 export interface SymbolEditorState {
@@ -92,9 +92,9 @@ export interface SymbolEditorState {
   activeTool: SymToolId;
   drawState: SymDrawState | null;
   movePreview: SymMovePreview | null;
-  moveOriginUm: { x: number; y: number } | null;
-  cursorUm: { x: number; y: number } | null;
-  gridUm: number;
+  moveOriginNm: { x: number; y: number } | null;
+  cursorNm: { x: number; y: number } | null;
+  gridNm: number;
   gridVisible: boolean;
   /** Which unit (1-based; 0 = "common to all units") new pins/graphics are placed on. */
   activeUnit: number;
@@ -138,7 +138,7 @@ export interface SymbolEditorState {
   /** `updateSymbolFields`: the Update Symbol Fields dialog (`DIALOG_UPDATE_SYMBOL_FIELDS`) is open on the symbol being edited. */
   updateFieldsOpen: boolean;
   /** `placeSymbolText` / the Text tool: where the click landed, in internal µm; the Text Properties dialog asks for the text. */
-  textDialog: { atUm: [number, number] } | null;
+  textDialog: { atNm: [number, number] } | null;
   /** The text the dialog was OK'd with, following the cursor until the click that places it (`TwoClickPlace`'s `item` while `IS_MOVING`). */
   pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
   /** Text Box Properties (`DIALOG_TEXT_PROPERTIES` of a `SCH_TEXTBOX`): `id` is the box being edited, `null` for the one the Text Box tool has just drawn and the dialog is about to add. */
@@ -169,9 +169,9 @@ const initialState: SymbolEditorState = {
   activeTool: "select",
   drawState: null,
   movePreview: null,
-  moveOriginUm: null,
-  cursorUm: null,
-  gridUm: 1270, // 1.27mm (50 mil) -- KiCad's own Symbol Editor default grid
+  moveOriginNm: null,
+  cursorNm: null,
+  gridNm: 1_270_000, // 1.27mm (50 mil) -- KiCad's own Symbol Editor default grid
   gridVisible: true,
   activeUnit: 1,
   activeBodyStyle: 1,
@@ -219,7 +219,7 @@ export type SymAction =
   | { type: "SET_MOVE_PREVIEW"; preview: SymMovePreview | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
-  | { type: "SET_GRID_UM"; um: number }
+  | { type: "SET_GRID_NM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
   | { type: "SET_ACTIVE_UNIT"; unit: number }
   | { type: "SET_ACTIVE_BODY_STYLE"; style: number }
@@ -258,7 +258,7 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return {
         ...initialState,
         libId: action.libId,
-        gridUm: state.gridUm,
+        gridNm: state.gridNm,
         gridVisible: state.gridVisible,
         treeSelection: state.treeSelection,
         showElectricalTypes: state.showElectricalTypes,
@@ -308,11 +308,11 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_MOVE_PREVIEW":
       return { ...state, movePreview: action.preview };
     case "SET_MOVE_ORIGIN":
-      return { ...state, moveOriginUm: action.at };
+      return { ...state, moveOriginNm: action.at };
     case "SET_CURSOR":
-      return { ...state, cursorUm: action.at };
-    case "SET_GRID_UM":
-      return { ...state, gridUm: action.um };
+      return { ...state, cursorNm: action.at };
+    case "SET_GRID_NM":
+      return { ...state, gridNm: action.um };
     case "TOGGLE_GRID_VISIBLE":
       return { ...state, gridVisible: !state.gridVisible };
     case "SET_ACTIVE_UNIT":
@@ -354,7 +354,7 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_UPDATE_FIELDS_OPEN":
       return { ...state, updateFieldsOpen: action.open };
     case "SET_TEXT_DIALOG":
-      return { ...state, textDialog: action.at ? { atUm: action.at } : null };
+      return { ...state, textDialog: action.at ? { atNm: action.at } : null };
     case "SET_TEXT_BOX_DIALOG":
       return { ...state, textBoxDialog: action.dialog, drawState: null };
     case "SET_LAST_TEXT_BOX":

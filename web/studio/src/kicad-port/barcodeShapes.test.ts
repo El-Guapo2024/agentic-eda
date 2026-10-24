@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardBarcode } from "../api/pcbItemTypes";
-import { barcodeBounds, barcodeHitDistance, barcodeLabel, barcodeProblem, barcodeShape, barcodeShapeKey, barcodeToCmd, clampEcc, eccChoices, hasErrorCorrection, hitRects, knockoutMinMarginUm, newBarcode, setBarcodeShape, symbolCorners, toLocal } from "./barcodeShapes";
+import { barcodeBounds, barcodeHitDistance, barcodeLabel, barcodeProblem, barcodeShape, barcodeShapeKey, barcodeToCmd, clampEcc, eccChoices, hasErrorCorrection, hitRects, knockoutMinMarginNm, newBarcode, setBarcodeShape, symbolCorners, toLocal } from "./barcodeShapes";
 
 const code = (over: Partial<BoardBarcode> = {}): BoardBarcode => ({
   id: "bar_a",
@@ -90,13 +90,13 @@ test("the kinds, their error correction and the levels Micro QR has", () => {
 });
 
 test("a new barcode is the QR code of PCB_BARCODE( parent ), 40 mm, level L, text shown; the verbs take it back from the state's record", () => {
-  assert.deepEqual(newBarcode("F.SilkS", { x: 5, y: 6 }, 1_000), { layer: "F.SilkS", at: { x: 5, y: 6 }, angle: 0, width_um: 40_000, height_um: 40_000, text: "", text_height_um: 1_000, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_um: 0, margin_y_um: 0 });
+  assert.deepEqual(newBarcode("F.SilkS", { x: 5, y: 6 }, 1_000), { layer: "F.SilkS", at: { x: 5, y: 6 }, angle: 0, width_nm: 40_000_000, height_nm: 40_000_000, text: "", text_height_nm: 1_000, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_nm: 0, margin_y_nm: 0 });
   const cmd = barcodeToCmd(code({ angle: 90_000, knockout: true, margin_x: 700, margin_y: 800, ecc: "Q" }));
-  assert.deepEqual(cmd, { layer: "F.SilkS", at: { x: 20_000, y: 30_000 }, angle: 90_000, width_um: 10_000, height_um: 6_000, text: "HELLO", text_height_um: 1_500, kind: "qr", ecc: "Q", show_text: true, knockout: true, margin_x_um: 700, margin_y_um: 800 });
+  assert.deepEqual(cmd, { layer: "F.SilkS", at: { x: 20_000, y: 30_000 }, angle: 90_000, width_nm: 10_000, height_nm: 6_000, text: "HELLO", text_height_nm: 1_500, kind: "qr", ecc: "Q", show_text: true, knockout: true, margin_x_nm: 700, margin_y_nm: 800 });
   // a knockout is at least a tenth of the smaller side, rounded up to 0.1 mm (`AssembleBarcode`)
-  assert.equal(knockoutMinMarginUm(10_000, 6_000), 600);
-  assert.equal(knockoutMinMarginUm(40_000, 40_000), 4_000);
-  assert.equal(knockoutMinMarginUm(1_050, 5_000), 200);
+  assert.equal(knockoutMinMarginNm(10_000, 6_000), 600);
+  assert.equal(knockoutMinMarginNm(40_000, 40_000), 4_000);
+  assert.equal(knockoutMinMarginNm(1_050, 5_000), 200);
 });
 
 test("KiCad's words for a barcode in a menu and for a text a kind cannot take", () => {

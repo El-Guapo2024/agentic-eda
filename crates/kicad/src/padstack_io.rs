@@ -40,9 +40,9 @@ const LAYER_SHAPE_TOKENS: &[&str] = &["shape", "size", "offset", "rect_delta", "
 /// missing size nothing (`SHAPE_PROPS()`).
 fn read_layer_shape(layer: &[Sexpr], side: Side) -> PadLayerShape {
     let token = sexpr::find(layer, "shape").and_then(|s| sexpr::txt(s, 1)).unwrap_or("circle");
-    let offset = sexpr::find(layer, "offset").and_then(|o| Some((crate::import::mm_to_um(sexpr::num(o, 1)?), crate::import::mm_to_um(sexpr::num(o, 2)?)))).map(|(x, y)| if side == Side::Bottom { (-x, y) } else { (x, y) });
+    let offset = sexpr::find(layer, "offset").and_then(|o| Some((crate::import::mm_to_nm(sexpr::num(o, 1)?), crate::import::mm_to_nm(sexpr::num(o, 2)?)))).map(|(x, y)| if side == Side::Bottom { (-x, y) } else { (x, y) });
     let read = read_shape_node(layer, token, offset.filter(|o| *o != (0, 0)), side);
-    let size = sexpr::find(layer, "size").and_then(|s| Some((crate::import::mm_to_um(sexpr::num(s, 1)?).max(0), crate::import::mm_to_um(sexpr::num(s, 2)?).max(0)))).unwrap_or((0, 0));
+    let size = sexpr::find(layer, "size").and_then(|s| Some((crate::import::mm_to_nm(sexpr::num(s, 1)?).max(0), crate::import::mm_to_nm(sexpr::num(s, 2)?).max(0)))).unwrap_or((0, 0));
     let tokens = layer.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| LAYER_SHAPE_TOKENS.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     PadLayerShape {
         shape: read.shape,
@@ -258,15 +258,15 @@ mod tests {
     #[test]
     fn a_front_inner_back_padstack_is_read_as_its_three_shapes() {
         let pad = pad_of(FRONT_INNER_BACK, Side::Top, 4);
-        assert_eq!((pad.shape, pad.size), (PadShape::Oval, (3048, 1524)));
+        assert_eq!((pad.shape, pad.size), (PadShape::Oval, (3_048_000, 1_524_000)));
         let stack = &pad.ext.stack;
         assert_eq!(stack.mode, PadStackMode::FrontInnerBack);
-        assert_eq!(stack.inner, Some(PadLayerShape::plain(PadShape::Oval, (1270, 1270))));
-        assert_eq!(stack.back, Some(PadLayerShape::plain(PadShape::Oval, (2540, 1016))));
+        assert_eq!(stack.inner, Some(PadLayerShape::plain(PadShape::Oval, (1_270_000, 1_270_000))));
+        assert_eq!(stack.back, Some(PadLayerShape::plain(PadShape::Oval, (2_540_000, 1_016_000))));
         assert_eq!(stack.unconnected, UnconnectedLayers::KeepAll);
         // What the board's layers have: the front, the two inner layers together, the back.
         let groups = pad.shape_groups(Side::Top, &layers(4));
-        assert_eq!(groups.iter().map(|g| (g.layers.clone(), g.shape.size)).collect::<Vec<_>>(), vec![(vec!["F.Cu".to_string()], (3048, 1524)), (vec!["In1.Cu".to_string(), "In2.Cu".to_string()], (1270, 1270)), (vec!["B.Cu".to_string()], (2540, 1016))]);
+        assert_eq!(groups.iter().map(|g| (g.layers.clone(), g.shape.size)).collect::<Vec<_>>(), vec![(vec!["F.Cu".to_string()], (3_048_000, 1_524_000)), (vec!["In1.Cu".to_string(), "In2.Cu".to_string()], (1_270_000, 1_270_000)), (vec!["B.Cu".to_string()], (2_540_000, 1_016_000))]);
     }
 
     #[test]
@@ -291,9 +291,9 @@ mod tests {
         }
         // On the bottom the file's `F.Cu` is the footprint's back: the main fields of the file hold what the model calls its back.
         let bottom = pad_of(FRONT_INNER_BACK, Side::Bottom, 4);
-        assert_eq!((bottom.shape, bottom.size), (PadShape::Oval, (2540, 1016)), "the file's B.Cu is the footprint's own side");
-        assert_eq!(bottom.ext.stack.back.as_ref().map(|s| s.size), Some((3048, 1524)), "the file's main fields are its back");
-        assert_eq!(bottom.ext.stack.inner.as_ref().map(|s| s.size), Some((1270, 1270)));
+        assert_eq!((bottom.shape, bottom.size), (PadShape::Oval, (2_540_000, 1_016_000)), "the file's B.Cu is the footprint's own side");
+        assert_eq!(bottom.ext.stack.back.as_ref().map(|s| s.size), Some((3_048_000, 1_524_000)), "the file's main fields are its back");
+        assert_eq!(bottom.ext.stack.inner.as_ref().map(|s| s.size), Some((1_270_000, 1_270_000)));
     }
 
     #[test]
@@ -305,8 +305,8 @@ mod tests {
         let stack = &pad.ext.stack;
         assert_eq!(stack.mode, PadStackMode::Custom);
         assert_eq!(stack.layers.keys().map(String::as_str).collect::<Vec<_>>(), vec!["B.Cu", "In1.Cu", "In2.Cu"], "the front is the pad's own");
-        assert_eq!(stack.layers["In2.Cu"].size, (1270, 0), "`PADSTACK::SetSize` takes a negative size to zero");
-        assert_eq!(stack.layers["B.Cu"].size, (1524, 1524));
+        assert_eq!(stack.layers["In2.Cu"].size, (1_270_000, 0), "`PADSTACK::SetSize` takes a negative size to zero");
+        assert_eq!(stack.layers["B.Cu"].size, (1_524_000, 1_524_000));
         let groups = pad.shape_groups(Side::Top, &layers(4));
         assert_eq!(groups.len(), 4, "four layers, four shapes");
         // Written back, the layers in the board's order and without the front, as `format( const PAD* )` does.

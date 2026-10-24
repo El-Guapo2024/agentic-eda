@@ -40,22 +40,22 @@ fn gate() -> LibSymbol {
 
 fn model() -> ConstraintModel {
     let pins = ["1", "2", "3"].map(|n| Pin { number: n.into(), name: None, kind: PinKind::Signal }).to_vec();
-    let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_um: None, edge: None };
+    let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_nm: None, edge: None };
     ConstraintModel { parts: vec![part], symbols: vec![gate()], ..Default::default() }
 }
 
 fn design_with(sch: SchematicSection) -> Design {
-    Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
+    Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None }
 }
 
 /// The gate with a wire from each pin (where the library puts it) out to a label: `NET_A`, `NET_B`, `NET_Y`; with `swapped`, pins 1 and 2 have traded places.
 fn gate_sheet(m: &ConstraintModel, swapped: bool) -> SchematicSection {
-    let sym = SymbolInstance { id: "U1".into(), at: Point { x: 76_200, y: 76_200 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sym = SymbolInstance { id: "U1".into(), at: Point { x: 76_200_000, y: 76_200_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
     let mut sch = SchematicSection { symbols: vec![sym.clone()], ..Default::default() };
     let part = m.part("U1").unwrap();
     for (number, tip) in eda_engine::placed::pin_points(&sym, part, m.real_symbol_of(&sym.lib_id, part).as_ref()) {
         let left = number != "3";
-        let end = Point { x: tip.x + if left { -12_700 } else { 12_700 }, y: tip.y };
+        let end = Point { x: tip.x + if left { -12_700_000 } else { 12_700_000 }, y: tip.y };
         let net = format!("NET_{}", ["A", "B", "Y"][number.parse::<usize>().unwrap() - 1]);
         sch.wires.push(Wire { id: format!("w_{net}"), net: net.clone(), pins: vec![], pts: vec![tip, end], bus: false });
         sch.labels.push(NetLabel { id: format!("l_{net}"), net, at: end, kind: LabelKind::Local });
@@ -103,8 +103,8 @@ fn text_sheet(m: &ConstraintModel) -> SchematicSection {
     use eda_model::ir::{SchematicText, TextJustify as H, TextVAlign as V};
     use eda_model::sch_extras::SchTextJustify as J;
     let mut sch = gate_sheet(m, false);
-    let text = |id: &str, content: &str, x: i64, angle: u32| SchematicText { id: id.into(), content: content.into(), at: Point { x, y: 40_000 }, angle, size_um: 1_270 };
-    sch.texts = vec![text("txt_legacy", "legacy", 10_000, 0), text("txt_centre", "centred", 40_000, 0), text("txt_up", "runs up", 70_000, 90_000), text("txt_mirror", "mirrored", 100_000, 0)];
+    let text = |id: &str, content: &str, x: i64, angle: u32| SchematicText { id: id.into(), content: content.into(), at: Point { x, y: 40_000_000 }, angle, size_nm: 1_270_000 };
+    sch.texts = vec![text("txt_legacy", "legacy", 10_000_000, 0), text("txt_centre", "centred", 40_000_000, 0), text("txt_up", "runs up", 70_000_000, 90_000), text("txt_mirror", "mirrored", 100_000_000, 0)];
     sch.extras.set_text_justify("txt_centre", J::FILE_DEFAULT);
     sch.extras.set_text_justify("txt_up", J { h: H::Right, v: V::Top });
     // what `X` on a left-justified horizontal text leaves: the text ends at its anchor (`SCH_TEXT::MirrorSpinStyle`)
@@ -238,10 +238,10 @@ fn details_design(m: &ConstraintModel) -> Design {
         id: "sheet_a".into(),
         name: "Sub".into(),
         file: "sub.kicad_sch".into(),
-        at: Point { x: 120_000, y: 100_000 },
-        size: (30_000, 20_000),
+        at: Point { x: 120_000_000, y: 100_000_000 },
+        size: (30_000_000, 20_000_000),
         // moved along the border from the left edge, (120, 110) mm, to the top edge
-        pins: vec![SheetPin { id: String::new(), name: "IN".into(), shape: LabelShape::Input, at: Point { x: 135_000, y: 100_000 } }],
+        pins: vec![SheetPin { id: String::new(), name: "IN".into(), shape: LabelShape::Input, at: Point { x: 135_000_000, y: 100_000_000 } }],
         page: "2".into(),
     });
     let mut design = design_with(sch);
@@ -317,7 +317,7 @@ fn a_power_symbol_of_a_project_library_names_its_units_after_its_own_name() {
     rail.lib_id = "complex_hierarchy_schlib:+12V".into();
     m.symbols.push(rail);
     let mut sch = gate_sheet(&m, false);
-    sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "complex_hierarchy_schlib:+12V".into(), at: Point { x: 50_800, y: 50_800 }, rot: 0, net: "+12V".into(), pin: String::new() });
+    sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "complex_hierarchy_schlib:+12V".into(), at: Point { x: 50_800_000, y: 50_800_000 }, rot: 0, net: "+12V".into(), pin: String::new() });
     let text = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
     assert!(text.contains("(symbol \"complex_hierarchy_schlib:+12V\""), "{text}");
     assert!(text.contains("(symbol \"+12V_0_1\""), "the unit is named after the symbol: {text}");

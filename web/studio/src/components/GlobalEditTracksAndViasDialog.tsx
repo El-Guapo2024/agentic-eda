@@ -18,7 +18,7 @@
 // `via_diameter_of` / `via_drill_of`).
 import { useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { umFrom, umTo, type LengthUnit } from "../state/units";
+import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import { initialTracksViasFilter, matchingTracksAndVias, NOTHING_IN_SCOPE, trackViaChoices, viasBoxState, withAllVias, type TracksViasFilter, type TracksViasScope } from "../kicad-port/globalEditTracksVias";
 
 type Action = "specified" | "net_class";
@@ -30,7 +30,7 @@ const GROUP_TITLE = { fontWeight: 600, fontSize: 11, marginBottom: 4 } as const;
 const FILTER_ROW = { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } as const;
 
 /** The number a length field shows: the value in the display unit, without the noise of a conversion. */
-const shown = (um: number, unit: LengthUnit): string => String(Number(umTo(um, unit).toFixed(4)));
+const shown = (um: number, unit: LengthUnit): string => String(Number(nmTo(um, unit).toFixed(4)));
 
 export function GlobalEditTracksAndViasDialog() {
   const state = useStudioState();
@@ -84,8 +84,8 @@ export function GlobalEditTracksAndViasDialog() {
       const ok = await api.cmd({
         op: "edit_tracks_and_vias",
         ids,
-        track_width: action === "net_class" ? { kind: "net_class" } : changeTrackWidth ? { kind: "value", um: Math.round(umFrom(trackWidth, unit)) } : null,
-        via_size: action === "net_class" ? { kind: "net_class" } : changeViaSize ? { kind: "value", diameter: Math.round(umFrom(viaDiameter, unit)), drill: Math.round(umFrom(viaDrill, unit)) } : null,
+        track_width: action === "net_class" ? { kind: "net_class" } : changeTrackWidth ? { kind: "value", nm: Math.round(nmFrom(trackWidth, unit)) } : null,
+        via_size: action === "net_class" ? { kind: "net_class" } : changeViaSize ? { kind: "value", diameter: Math.round(nmFrom(viaDiameter, unit)), drill: Math.round(nmFrom(viaDrill, unit)) } : null,
         layer: action === "specified" && changeLayer && newLayer ? newLayer : null,
       });
       if (ok) close();
@@ -172,7 +172,7 @@ export function GlobalEditTracksAndViasDialog() {
               value={widthText ?? shown(filter.trackWidth, unit)}
               onChange={(e) => {
                 setWidthText(e.target.value);
-                setFilter({ trackWidth: Math.round(umFrom(Number(e.target.value), unit)), trackWidthOn: true });
+                setFilter({ trackWidth: Math.round(nmFrom(Number(e.target.value), unit)), trackWidthOn: true });
               }}
               style={{ width: 80 }}
               aria-label="Track width filter"
@@ -188,7 +188,7 @@ export function GlobalEditTracksAndViasDialog() {
               value={sizeText ?? shown(filter.viaSize, unit)}
               onChange={(e) => {
                 setSizeText(e.target.value);
-                setFilter({ viaSize: Math.round(umFrom(Number(e.target.value), unit)), viaSizeOn: true });
+                setFilter({ viaSize: Math.round(nmFrom(Number(e.target.value), unit)), viaSizeOn: true });
               }}
               style={{ width: 80 }}
               aria-label="Via diameter filter"

@@ -1,0 +1,834 @@
+{
+  "schema": 1,
+  "provenance": {
+    "engine_version": "0.1.0",
+    "intent_hash": "",
+    "seed": 0
+  },
+  "schematic": {
+    "symbols": [
+      {
+        "id": "R201",
+        "at": {
+          "x": 78740,
+          "y": 77470
+        },
+        "rot": 0,
+        "mirrored": false,
+        "mirror_y": false,
+        "lib_id": "Resistors:RES",
+        "value": "RES",
+        "datasheet": "~"
+      }
+    ],
+    "wires": [
+      {
+        "id": "wire_dbbbc470f9ef",
+        "net": "A0",
+        "pts": [
+          {
+            "x": 78740,
+            "y": 63500
+          },
+          {
+            "x": 78740,
+            "y": 66040
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_12a49350578a",
+        "net": "A0",
+        "pts": [
+          {
+            "x": 66040,
+            "y": 68580
+          },
+          {
+            "x": 78740,
+            "y": 68580
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_51a10a189547",
+        "net": "A0",
+        "pts": [
+          {
+            "x": 66040,
+            "y": 66040
+          },
+          {
+            "x": 78740,
+            "y": 66040
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_880111fbbdbb",
+        "net": "A0",
+        "pts": [
+          {
+            "x": 78740,
+            "y": 68580
+          },
+          {
+            "x": 78740,
+            "y": 71120
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_c5dfd1b11496",
+        "net": "A0",
+        "pts": [
+          {
+            "x": 78740,
+            "y": 66040
+          },
+          {
+            "x": 78740,
+            "y": 68580
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_0086e7d96dbe",
+        "net": "A0",
+        "pins": [
+          "R201.1"
+        ],
+        "pts": [
+          {
+            "x": 78740,
+            "y": 71120
+          },
+          {
+            "x": 78740,
+            "y": 73660
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_76e62b8330ef",
+        "net": "A0",
+        "pts": [
+          {
+            "x": 66040,
+            "y": 71120
+          },
+          {
+            "x": 78740,
+            "y": 71120
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_3a286a47f022",
+        "net": "A0",
+        "pts": [
+          {
+            "x": 66040,
+            "y": 63500
+          },
+          {
+            "x": 78740,
+            "y": 63500
+          }
+        ],
+        "bus": false
+      },
+      {
+        "id": "wire_4976bde9d7f1",
+        "net": "A[0..3]",
+        "pts": [
+          {
+            "x": 57150,
+            "y": 60960
+          },
+          {
+            "x": 63500,
+            "y": 60960
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_23e70229cf6f",
+        "net": "A[0..3]",
+        "pts": [
+          {
+            "x": 63500,
+            "y": 60960
+          },
+          {
+            "x": 63500,
+            "y": 63500
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_9cebba67a0ac",
+        "net": "A[0..3]",
+        "pts": [
+          {
+            "x": 63500,
+            "y": 63500
+          },
+          {
+            "x": 63500,
+            "y": 66040
+          }
+        ],
+        "bus": true
+      },
+      {
+        "id": "wire_87f6d5e4f7e9",
+        "net": "A[0..3]",
+        "pts": [
+          {
+            "x": 63500,
+            "y": 66040
+          },
+          {
+            "x": 63500,
+            "y": 68580
+          }
+        ],
+        "bus": true
+      }
+    ],
+    "labels": [
+      {
+        "id": "lbl_43f0cf1cb941",
+        "net": "A0",
+        "at": {
+          "x": 67310,
+          "y": 63500
+        }
+      },
+      {
+        "id": "lbl_0c69fda2a045",
+        "net": "A2",
+        "at": {
+          "x": 67310,
+          "y": 68580
+        }
+      },
+      {
+        "id": "lbl_ed1e9df23127",
+        "net": "A1",
+        "at": {
+          "x": 67310,
+          "y": 66040
+        }
+      },
+      {
+        "id": "lbl_c0d5ccef875f",
+        "net": "A3",
+        "at": {
+          "x": 67310,
+          "y": 71120
+        }
+      },
+      {
+        "id": "lbl_6155822ef410",
+        "net": "A[0..3]",
+        "at": {
+          "x": 57150,
+          "y": 60960
+        },
+        "kind": {
+          "scope": "hierarchical",
+          "shape": "input"
+        }
+      }
+    ],
+    "bus_entries": [
+      {
+        "id": "15589b68-ca95-4890-8b99-39a4f5710b11",
+        "at": {
+          "x": 63500,
+          "y": 68580
+        },
+        "size": {
+          "x": 2540,
+          "y": 2540
+        }
+      },
+      {
+        "id": "8303ca56-63e9-4976-bb7c-b13e79aec9c6",
+        "at": {
+          "x": 63500,
+          "y": 66040
+        },
+        "size": {
+          "x": 2540,
+          "y": 2540
+        }
+      },
+      {
+        "id": "9bc1fdc1-de0c-43fa-89dd-fe6a9971d9d2",
+        "at": {
+          "x": 63500,
+          "y": 63500
+        },
+        "size": {
+          "x": 2540,
+          "y": 2540
+        }
+      },
+      {
+        "id": "9e5ca1b6-b18b-47ca-b922-4ba164d64668",
+        "at": {
+          "x": 63500,
+          "y": 60960
+        },
+        "size": {
+          "x": 2540,
+          "y": 2540
+        }
+      }
+    ],
+    "junctions": [
+      {
+        "id": "jct_230cbb43c059",
+        "at": {
+          "x": 78740,
+          "y": 68580
+        }
+      },
+      {
+        "id": "jct_92ba97848c78",
+        "at": {
+          "x": 78740,
+          "y": 71120
+        }
+      },
+      {
+        "id": "jct_c9766ab86928",
+        "at": {
+          "x": 78740,
+          "y": 66040
+        }
+      }
+    ],
+    "extras": {
+      "label_spins": {
+        "lbl_0c69fda2a045": "right",
+        "lbl_43f0cf1cb941": "right",
+        "lbl_6155822ef410": "left",
+        "lbl_c0d5ccef875f": "right",
+        "lbl_ed1e9df23127": "right"
+      }
+    },
+    "user_fields": {
+      "R201": {
+        "Sim.Device": "R",
+        "Sim.Params": "r=\"${val}\"",
+        "Sim.Pins": "1=+ 2=-",
+        "height": "",
+        "pkg": "",
+        "pwr": "",
+        "tol": "",
+        "val": "Ω"
+      }
+    },
+    "field_layout": {
+      "R201": [
+        {
+          "name": "val",
+          "dx": 1270,
+          "dy": -1270,
+          "h": "left",
+          "size_um": 800
+        },
+        {
+          "name": "tol",
+          "dx": 1270,
+          "dy": 0,
+          "h": "left",
+          "size_um": 800
+        },
+        {
+          "name": "pkg",
+          "dx": 1270,
+          "dy": 1270,
+          "h": "left",
+          "size_um": 800
+        },
+        {
+          "name": "pwr",
+          "dx": 1270,
+          "dy": 2540,
+          "h": "left",
+          "size_um": 800
+        },
+        {
+          "name": "height",
+          "dx": -1270,
+          "dy": 1270,
+          "visible": false
+        },
+        {
+          "name": "Sim.Device",
+          "dx": 0,
+          "dy": 0,
+          "visible": false
+        },
+        {
+          "name": "Sim.Pins",
+          "dx": 0,
+          "dy": 2540,
+          "visible": false
+        },
+        {
+          "name": "Sim.Params",
+          "dx": 0,
+          "dy": 2540,
+          "visible": false
+        }
+      ]
+    },
+    "title_block": {
+      "paper": "A5"
+    },
+    "instance_overrides": [
+      {
+        "at": {
+          "x": 78740,
+          "y": 77470
+        },
+        "parent_sheet_instance_id": "3a95e766-3c8c-4bb3-9c77-13854beaa270",
+        "reference": "R201",
+        "unit": 1
+      }
+    ],
+    "imported_from_kicad": true
+  },
+  "nets": [
+    {
+      "name": "A0",
+      "pins": [
+        "R201.1"
+      ]
+    },
+    {
+      "name": "unconnected-(R201-Pad2)",
+      "pins": [
+        "R201.2"
+      ]
+    }
+  ],
+  "placement": {
+    "outline": [
+      {
+        "x": 0,
+        "y": 0
+      },
+      {
+        "x": 100000,
+        "y": 0
+      },
+      {
+        "x": 100000,
+        "y": 80000
+      },
+      {
+        "x": 0,
+        "y": 80000
+      }
+    ],
+    "footprints": []
+  },
+  "symbol_library": {
+    "symbols": [
+      {
+        "lib_id": "Resistors:RES",
+        "reference_prefix": "R",
+        "datasheet": "~",
+        "power": false,
+        "in_bom": true,
+        "on_board": true,
+        "pin_numbers_hidden": true,
+        "pin_names_hidden": true,
+        "pin_name_offset_mm": 0.0,
+        "has_alternate_body_style": false,
+        "graphics": [
+          {
+            "kind": "polyline",
+            "id": "sym_93b6d20334d8",
+            "unit": 1,
+            "pts": [
+              {
+                "x": 0.0,
+                "y": -2.286
+              },
+              {
+                "x": 0.0,
+                "y": -2.54
+              }
+            ],
+            "stroke_mm": 0.0,
+            "fill": "none"
+          },
+          {
+            "kind": "polyline",
+            "id": "sym_6b05af19a4e8",
+            "unit": 1,
+            "pts": [
+              {
+                "x": 0.0,
+                "y": 2.286
+              },
+              {
+                "x": 0.0,
+                "y": 2.54
+              }
+            ],
+            "stroke_mm": 0.0,
+            "fill": "none"
+          },
+          {
+            "kind": "polyline",
+            "id": "sym_be6d1b8c2a5b",
+            "unit": 1,
+            "pts": [
+              {
+                "x": 0.0,
+                "y": -0.762
+              },
+              {
+                "x": 1.016,
+                "y": -1.143
+              },
+              {
+                "x": 0.0,
+                "y": -1.524
+              },
+              {
+                "x": -1.016,
+                "y": -1.905
+              },
+              {
+                "x": 0.0,
+                "y": -2.286
+              }
+            ],
+            "stroke_mm": 0.0,
+            "fill": "none"
+          },
+          {
+            "kind": "polyline",
+            "id": "sym_0e0630133dd6",
+            "unit": 1,
+            "pts": [
+              {
+                "x": 0.0,
+                "y": 0.762
+              },
+              {
+                "x": 1.016,
+                "y": 0.381
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": -1.016,
+                "y": -0.381
+              },
+              {
+                "x": 0.0,
+                "y": -0.762
+              }
+            ],
+            "stroke_mm": 0.0,
+            "fill": "none"
+          },
+          {
+            "kind": "polyline",
+            "id": "sym_8f195e16f1db",
+            "unit": 1,
+            "pts": [
+              {
+                "x": 0.0,
+                "y": 2.286
+              },
+              {
+                "x": 1.016,
+                "y": 1.905
+              },
+              {
+                "x": 0.0,
+                "y": 1.524
+              },
+              {
+                "x": -1.016,
+                "y": 1.143
+              },
+              {
+                "x": 0.0,
+                "y": 0.762
+              }
+            ],
+            "stroke_mm": 0.0,
+            "fill": "none"
+          }
+        ],
+        "pins": [
+          {
+            "id": "pin_74cf0ce4e58b",
+            "number": "1",
+            "name": "~",
+            "electrical_type": "passive",
+            "shape": "line",
+            "at": {
+              "x": 0.0,
+              "y": 3.81
+            },
+            "angle_deg": 270.0,
+            "length_mm": 1.27,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27,
+            "alternates": [
+              {
+                "name": "bidir",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "in",
+                "electrical_type": "input",
+                "shape": "line"
+              },
+              {
+                "name": "open_collector",
+                "electrical_type": "open_collector",
+                "shape": "line"
+              },
+              {
+                "name": "open_emitter",
+                "electrical_type": "open_emitter",
+                "shape": "line"
+              },
+              {
+                "name": "out",
+                "electrical_type": "output",
+                "shape": "line"
+              },
+              {
+                "name": "pwr_in",
+                "electrical_type": "power_in",
+                "shape": "line"
+              },
+              {
+                "name": "pwr_out",
+                "electrical_type": "power_out",
+                "shape": "line"
+              },
+              {
+                "name": "tristate",
+                "electrical_type": "tri_state",
+                "shape": "line"
+              }
+            ]
+          },
+          {
+            "id": "pin_6951add82926",
+            "number": "2",
+            "name": "~",
+            "electrical_type": "passive",
+            "shape": "line",
+            "at": {
+              "x": 0.0,
+              "y": -3.81
+            },
+            "angle_deg": 90.0,
+            "length_mm": 1.27,
+            "hidden": false,
+            "name_size_mm": 1.27,
+            "number_size_mm": 1.27,
+            "alternates": [
+              {
+                "name": "bidir",
+                "electrical_type": "bidirectional",
+                "shape": "line"
+              },
+              {
+                "name": "in",
+                "electrical_type": "input",
+                "shape": "line"
+              },
+              {
+                "name": "open_collector",
+                "electrical_type": "open_collector",
+                "shape": "line"
+              },
+              {
+                "name": "open_emitter",
+                "electrical_type": "open_emitter",
+                "shape": "line"
+              },
+              {
+                "name": "out",
+                "electrical_type": "output",
+                "shape": "line"
+              },
+              {
+                "name": "pwr_in",
+                "electrical_type": "power_in",
+                "shape": "line"
+              },
+              {
+                "name": "pwr_out",
+                "electrical_type": "power_out",
+                "shape": "line"
+              },
+              {
+                "name": "tristate",
+                "electrical_type": "tri_state",
+                "shape": "line"
+              }
+            ]
+          }
+        ],
+        "published": true,
+        "fields": [
+          {
+            "name": "Reference",
+            "text": "R",
+            "at": {
+              "x": 1.27,
+              "y": 2.54
+            },
+            "size_mm": 1.0,
+            "h_align": "left"
+          },
+          {
+            "name": "Value",
+            "text": "RES",
+            "at": {
+              "x": -1.27,
+              "y": 2.54
+            },
+            "hidden": true
+          },
+          {
+            "name": "Footprint",
+            "text": "",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "Datasheet",
+            "text": "~",
+            "at": {
+              "x": 1.27,
+              "y": 2.54
+            },
+            "hidden": true
+          },
+          {
+            "name": "Description",
+            "text": "",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "val",
+            "text": "Ω",
+            "at": {
+              "x": 1.27,
+              "y": 1.27
+            },
+            "size_mm": 0.8,
+            "h_align": "left"
+          },
+          {
+            "name": "tol",
+            "text": "",
+            "at": {
+              "x": 1.27,
+              "y": 0.0
+            },
+            "size_mm": 0.8,
+            "h_align": "left"
+          },
+          {
+            "name": "pkg",
+            "text": "",
+            "at": {
+              "x": 1.27,
+              "y": -1.27
+            },
+            "size_mm": 0.8,
+            "h_align": "left"
+          },
+          {
+            "name": "pwr",
+            "text": "",
+            "at": {
+              "x": 1.27,
+              "y": -2.54
+            },
+            "size_mm": 0.8,
+            "h_align": "left"
+          },
+          {
+            "name": "height",
+            "text": "",
+            "at": {
+              "x": -1.27,
+              "y": -1.27
+            },
+            "hidden": true
+          },
+          {
+            "name": "Sim.Device",
+            "text": "R",
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "hidden": true
+          },
+          {
+            "name": "Sim.Pins",
+            "text": "1=+ 2=-",
+            "at": {
+              "x": 0.0,
+              "y": -2.54
+            },
+            "hidden": true
+          },
+          {
+            "name": "Sim.Params",
+            "text": "r=\"${val}\"",
+            "at": {
+              "x": 0.0,
+              "y": -2.54
+            },
+            "hidden": true
+          }
+        ]
+      }
+    ]
+  }
+}

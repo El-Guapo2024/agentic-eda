@@ -1,0 +1,162 @@
+fixture dense_small_outline_seed0.dsn
+board -1000 -1000 121000 81000
+layer 0 1 F.Cu
+layer 1 1 B.Cu
+host_cad 1
+user_unit 0.1 1.0
+area_section 50000.0
+min_trace_half_width 10000
+trace_half_widths 10000 1000 1000 1000
+pull_tight_accuracy 500
+id_generator 21
+default_via_diameter 6000.0
+pin_edge_to_turn_dist 1000.0
+classes 4
+cm 1 1 0 2020
+cm 1 1 1 2020
+cm 1 2 0 4920
+cm 1 2 1 4920
+cm 1 3 0 20
+cm 1 3 1 20
+cmax 1 0 4920
+cmax 1 1 4920
+cm 2 1 0 4920
+cm 2 1 1 4920
+cm 2 2 0 2020
+cm 2 2 1 2020
+cm 2 3 0 4920
+cm 2 3 1 4920
+cmax 2 0 4920
+cmax 2 1 4920
+cm 3 1 0 20
+cm 3 1 1 20
+cm 3 2 0 4920
+cm 3 2 1 4920
+cm 3 3 0 2020
+cm 3 3 1 2020
+cmax 3 0 4920
+cmax 3 1 4920
+padstack 1 0 0 6400.0 -1
+padstack_shape 1 0 box -3200 -2700 3200 2700
+padstack 2 0 0 9500.0 -1
+padstack_shape 2 0 box -4000 -4750 4000 4750
+padstack 3 0 0 9500.0 -1
+padstack_shape 3 0 box -4750 -4000 4750 4000
+padstack 4 0 1 6000.0 6000.0
+padstack_shape 4 0 circle 0 0 3000
+padstack_shape 4 1 circle 0 0 3000
+viainfo 0 4 1 0
+viarule 0 0
+viarule 1 0
+netclass 0 1 0 1 1 1000 1000 0 1 0 0
+netclass 1 1 1 1 1 1000 1000 0 1 0 0
+net 1 1 0
+net 2 1 0
+net 3 1 0
+net 4 1 0
+settings 1 50 5 100 0 0
+layer_costs 0 1 1.0 2.5 1.0
+layer_costs 1 1 1.7000000000000002 1.0 1.0
+it 21 pin 0 0 1 0 5 3
+center 21 70750 19000
+pad 21 0 0 1 box 66750 14250 74750 23750
+pin_neckdown 21 0 3999 9500.0
+pin_exit 21 0 1 0 4000.0
+pin_exit 21 0 -1 0 4000.0
+pin_exit 21 0 0 1 4750.0
+pin_exit 21 0 0 -1 4750.0
+it 20 pin 0 0 1 0 5 2
+center 20 87250 19000
+pad 20 0 0 1 box 83250 14250 91250 23750
+pin_neckdown 20 0 3999 9500.0
+pin_exit 20 0 1 0 4000.0
+pin_exit 20 0 -1 0 4000.0
+pin_exit 20 0 0 1 4750.0
+pin_exit 20 0 0 -1 4750.0
+it 19 pin 0 0 1 0 4 2
+center 19 99000 44750
+pad 19 0 0 1 box 94250 40750 103750 48750
+pin_neckdown 19 0 3999 9500.0
+pin_exit 19 0 1 0 4750.0
+pin_exit 19 0 -1 0 4750.0
+pin_exit 19 0 0 1 4000.0
+pin_exit 19 0 0 -1 4000.0
+it 18 pin 0 0 1 0 4 1
+center 18 99000 61250
+pad 18 0 0 1 box 94250 57250 103750 65250
+pin_neckdown 18 0 3999 9500.0
+pin_exit 18 0 1 0 4750.0
+pin_exit 18 0 -1 0 4750.0
+pin_exit 18 0 0 1 4000.0
+pin_exit 18 0 0 -1 4000.0
+it 17 pin 0 0 1 0 3 4
+center 17 48000 48750
+pad 17 0 0 1 box 43250 44750 52750 52750
+pin_neckdown 17 0 3999 9500.0
+pin_exit 17 0 1 0 4750.0
+pin_exit 17 0 -1 0 4750.0
+pin_exit 17 0 0 1 4000.0
+pin_exit 17 0 0 -1 4000.0
+it 16 pin 0 0 1 0 3 1
+center 16 48000 65250
+pad 16 0 0 1 box 43250 61250 52750 69250
+pin_neckdown 16 0 3999 9500.0
+pin_exit 16 0 1 0 4750.0
+pin_exit 16 0 -1 0 4750.0
+pin_exit 16 0 0 1 4000.0
+pin_exit 16 0 0 -1 4000.0
+it 15 pin 0 0 1 0 2 4
+center 15 46000 24100
+pad 15 0 0 1 box 42800 21400 49200 26800
+pin_neckdown 15 0 2699 6400.0
+pin_exit 15 0 1 0 3200.0
+pin_exit 15 0 -1 0 3200.0
+pin_exit 15 0 0 1 2700.0
+pin_exit 15 0 0 -1 2700.0
+it 14 pin 0 0 1 0 2 3
+center 14 46000 13900
+pad 14 0 0 1 box 42800 11200 49200 16600
+pin_neckdown 14 0 2699 6400.0
+pin_exit 14 0 1 0 3200.0
+pin_exit 14 0 -1 0 3200.0
+pin_exit 14 0 0 1 2700.0
+pin_exit 14 0 0 -1 2700.0
+it 13 pin 0 0 1 0 1 2
+center 13 74000 46900
+pad 13 0 0 1 box 70800 44200 77200 49600
+pin_neckdown 13 0 2699 6400.0
+pin_exit 13 0 1 0 3200.0
+pin_exit 13 0 -1 0 3200.0
+pin_exit 13 0 0 1 2700.0
+pin_exit 13 0 0 -1 2700.0
+it 12 pin 0 0 1 0 1 1
+center 12 74000 57100
+pad 12 0 0 1 box 70800 54400 77200 59800
+pin_neckdown 12 0 2699 6400.0
+pin_exit 12 0 1 0 3200.0
+pin_exit 12 0 -1 0 3200.0
+pin_exit 12 0 0 1 2700.0
+pin_exit 12 0 0 -1 2700.0
+it 11 keepout 0 0 3 3 0
+area 11 0 3 box 75400 5250 82600 10950
+it 10 keepout 0 0 3 3 0
+area 10 0 3 box 74800 14250 83200 23750
+it 9 keepout 0 0 3 3 0
+area 9 0 3 box 95400 31750 102600 37450
+it 8 keepout 0 0 3 3 0
+area 8 0 3 box 94250 48800 103750 57200
+it 7 keepout 0 0 3 3 0
+area 7 0 3 box 44400 35750 51600 41450
+it 6 keepout 0 0 3 3 0
+area 6 0 3 box 43250 52800 52750 61200
+it 5 keepout 0 0 3 3 0
+area 5 0 3 box 42400 2200 49600 7900
+it 4 keepout 0 0 3 3 0
+area 4 0 3 box 42800 16650 49200 21350
+it 3 keepout 0 0 3 3 0
+area 3 0 3 box 70400 35200 77600 40900
+it 2 keepout 0 0 3 3 0
+area 2 0 3 box 70800 49650 77200 54350
+it 1 outline 0 1 2 3 0
+outline 1 100 2 2 0
+outline_shape 4 0 0 120000 0 120000 0 120000 80000 120000 80000 0 80000 0 80000 0 0

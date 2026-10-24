@@ -100,10 +100,10 @@ export function enumerateShownNumber(s: EnumerateState, padId: string, own: stri
  * search pads that are on the line" every 0.1 mm. `segments = distance / int( 0.1 * IU_PER_MM ) + 1`, `step = ( mouse - old ) / segments`
  * (integer division), test points `mouse - j * step` for `j < segments` -- from the cursor back towards where it was.
  */
-export function sweepPoints(prev: { x: number; y: number } | null, cur: { x: number; y: number }, searchStepUm = 100): { x: number; y: number }[] {
+export function sweepPoints(prev: { x: number; y: number } | null, cur: { x: number; y: number }, searchStepNm = 100_000): { x: number; y: number }[] {
   const from = prev ?? cur; // `isFirstPoint`: the first event has no previous position
   const distance = Math.hypot(cur.x - from.x, cur.y - from.y);
-  const segments = Math.trunc(distance / searchStepUm) + 1;
+  const segments = Math.trunc(distance / searchStepNm) + 1;
   const stepX = Math.trunc((cur.x - from.x) / segments);
   const stepY = Math.trunc((cur.y - from.y) / segments);
   const out: { x: number; y: number }[] = [];

@@ -86,7 +86,7 @@
     for (const p of s.parts) m[p.ref] = { at: p.at, rot: p.rot, side: p.side };
     for (const k of ["tracks", "vias", "zones"]) for (const t of s.routing?.[k] ?? []) m[t.id] = t;
     for (const k of ["shapes", "texts", "groups"]) for (const t of s.drawings?.[k] ?? []) m[t.id] = t;
-    for (const d of s.drawings?.dimensions ?? []) m[d.id] = { ...d, lines: 0, text_at: 0, computed_text_angle: 0, measured_value_um: 0 };
+    for (const d of s.drawings?.dimensions ?? []) m[d.id] = { ...d, lines: 0, text_at: 0, computed_text_angle: 0, measured_value_nm: 0 };
     m.__locked = s.locked;
     return JSON.stringify(m);
   };

@@ -148,15 +148,15 @@ fn round_trips_shapes_and_text() {
 
     let mut drawings = DrawingsSection {
         shapes: vec![
-            Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 5_000, y: 0 } },
-            Shape::Arc { id: String::new(), layer: "Cmts.User".into(), stroke_width: 100, filled: false, start: Point { x: 10_000, y: 0 }, mid: Point { x: 7_071, y: 7_071 }, end: Point { x: 0, y: 10_000 } },
-            Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: true, start: Point { x: 0, y: 0 }, end: Point { x: 8_000, y: 4_000 } },
-            Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: 120, filled: false, center: Point { x: 20_000, y: 20_000 }, end: Point { x: 23_000, y: 20_000 } },
-            Shape::Polygon { id: String::new(), layer: "F.CrtYd".into(), stroke_width: 50, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 3_000, y: 0 }, Point { x: 3_000, y: 3_000 }, Point { x: 0, y: 3_000 }] },
+            Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 5_000_000, y: 0 } },
+            Shape::Arc { id: String::new(), layer: "Cmts.User".into(), stroke_width: 100_000, filled: false, start: Point { x: 10_000_000, y: 0 }, mid: Point { x: 7_071_068, y: 7_071_068 }, end: Point { x: 0, y: 10_000_000 } },
+            Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: true, start: Point { x: 0, y: 0 }, end: Point { x: 8_000_000, y: 4_000_000 } },
+            Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: 120_000, filled: false, center: Point { x: 20_000_000, y: 20_000_000 }, end: Point { x: 23_000_000, y: 20_000_000 } },
+            Shape::Polygon { id: String::new(), layer: "F.CrtYd".into(), stroke_width: 50_000, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 3_000_000, y: 0 }, Point { x: 3_000_000, y: 3_000_000 }, Point { x: 0, y: 3_000_000 }] },
         ],
         texts: vec![
-            Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 90_000, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
-            Text { id: String::new(), content: "made in eda".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 800, stroke_width: 120, justify: TextJustify::Center, mirror: false },
+            Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000_000, y: 2_000_000 }, angle: 90_000, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Left, mirror: true },
+            Text { id: String::new(), content: "made in eda".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_nm: 800_000, stroke_width: 120_000, justify: TextJustify::Center, mirror: false },
         ],
         ..Default::default()
     };
@@ -164,11 +164,11 @@ fn round_trips_shapes_and_text() {
 
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "drawings_rt".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 30_000, y: 0 }, Point { x: 30_000, y: 30_000 }, Point { x: 0, y: 30_000 }],
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 30_000_000, y: 0 }, Point { x: 30_000_000, y: 30_000_000 }, Point { x: 0, y: 30_000_000 }],
             footprints: vec![],
             modules: vec![],
         }),
@@ -402,17 +402,17 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
 
     // The routing section: an arc track, a teardrop, a keepout, a pour with settings of its own.
     let routing = board.routing.as_mut().unwrap();
-    routing.tracks.push(Track::new_arc(net.clone(), "F.Cu".into(), 250, at(1_000, 1_000), at(2_000, 500), at(3_000, 1_000)));
-    routing.zones.push(Zone { net: net.clone(), layer: "F.Cu".into(), outline: vec![at(1_000, 3_000), at(2_000, 3_300), at(2_000, 4_300)], teardrop: true, ..Default::default() });
-    routing.zones.push(Zone { layer: "F.Cu".into(), outline: vec![at(4_000, 1_000), at(7_000, 1_000), at(7_000, 3_000), at(4_000, 3_000)], is_rule_area: true, keepout_tracks: true, keepout_vias: true, ..Default::default() });
+    routing.tracks.push(Track::new_arc(net.clone(), "F.Cu".into(), 250_000, at(1_000_000, 1_000_000), at(2_000_000, 500_000), at(3_000_000, 1_000_000)));
+    routing.zones.push(Zone { net: net.clone(), layer: "F.Cu".into(), outline: vec![at(1_000_000, 3_000_000), at(2_000_000, 3_300_000), at(2_000_000, 4_300_000)], teardrop: true, ..Default::default() });
+    routing.zones.push(Zone { layer: "F.Cu".into(), outline: vec![at(4_000_000, 1_000_000), at(7_000_000, 1_000_000), at(7_000_000, 3_000_000), at(4_000_000, 3_000_000)], is_rule_area: true, keepout_tracks: true, keepout_vias: true, ..Default::default() });
     routing.zones.push(Zone {
         net: net.clone(),
         layer: "B.Cu".into(),
-        outline: vec![at(1_000, 5_000), at(6_000, 5_000), at(6_000, 8_000), at(1_000, 8_000)],
+        outline: vec![at(1_000_000, 5_000_000), at(6_000_000, 5_000_000), at(6_000_000, 8_000_000), at(1_000_000, 8_000_000)],
         name: "pour".into(),
         priority: 3,
-        clearance: 300,
-        min_thickness: 180,
+        clearance: 300_000,
+        min_thickness: 180_000,
         ..Default::default()
     });
 
@@ -420,9 +420,9 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
     let dimension = Dimension {
         id: String::new(),
         layer: "Dwgs.User".into(),
-        kind: DimensionKind::Aligned { height: 2_000 },
-        start: at(0, 9_000),
-        end: at(8_000, 9_000),
+        kind: DimensionKind::Aligned { height: 2_000_000 },
+        start: at(0, 9_000_000),
+        end: at(8_000_000, 9_000_000),
         prefix: "L=".into(),
         suffix: "".into(),
         override_text: None,
@@ -433,13 +433,13 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
         text_position: DimensionTextPosition::Outside,
         keep_text_aligned: true,
         text_angle: 0,
-        text_size_um: 1_200,
-        stroke_width: 150,
-        arrow_length: 1_270,
-        extension_offset: 500,
-        extension_height: 580,
+        text_size_nm: 1_200_000,
+        stroke_width: 150_000,
+        arrow_length: 1_270_000,
+        extension_offset: 500_000,
+        extension_height: 580_000,
         arrow_direction: ArrowDirection::Inward,
-        text_thickness_um: Some(180),
+        text_thickness_nm: Some(180_000),
     };
     board.drawings = Some(eda_model::ir::DrawingsSection { dimensions: vec![dimension.clone()], ..Default::default() });
     board.assign_missing_ids();
@@ -474,7 +474,7 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
 
     // The arc is still an arc, with the same three points.
     let arcs: Vec<_> = rt.tracks.iter().filter_map(|t| t.arc()).collect();
-    assert_eq!(arcs, vec![(at(1_000, 1_000), at(2_000, 500), at(3_000, 1_000))], "the arc track");
+    assert_eq!(arcs, vec![(at(1_000_000, 1_000_000), at(2_000_000, 500_000), at(3_000_000, 1_000_000))], "the arc track");
     // The dimension keeps its kind, its feature points, its height and its format.
     assert_eq!(dr.dimensions.len(), 1, "the dimension");
     let d = &dr.dimensions[0];
@@ -493,7 +493,7 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
     let keepout = rt.zones.iter().find(|z| z.is_rule_area).expect("the keepout");
     assert!(keepout.keepout_tracks && keepout.keepout_vias && !keepout.keepout_pads, "the keepout's own flags: {keepout:?}");
     let pour = rt.zones.iter().find(|z| z.name == "pour").expect("the pour keeps its name");
-    assert_eq!((pour.priority, pour.clearance, pour.min_thickness, pour.layer.as_str()), (3, 300, 180, "B.Cu"), "the pour's own settings");
+    assert_eq!((pour.priority, pour.clearance, pour.min_thickness, pour.layer.as_str()), (3, 300_000, 180_000, "B.Cu"), "the pour's own settings");
     println!("KiCad loaded and re-saved {} bytes of our board; arc, dimension, group, locks, teardrop, keepout and pour all came back", theirs.len());
 }
 

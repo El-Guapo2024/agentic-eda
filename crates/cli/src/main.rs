@@ -372,7 +372,7 @@ fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
             out.insert("board_use".into(), serde_json::json!((used as f64 / outline_area as f64 * 1000.0).round() / 1000.0));
         }
         if let Some(h) = hpwl(design, model) {
-            out.insert("hpwl_um".into(), h.into());
+            out.insert("hpwl_nm".into(), h.into());
         }
     }
     if let Some(r) = &design.routing {
@@ -387,7 +387,7 @@ fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
         out.insert("tracks".into(), r.tracks.len().into());
         out.insert("vias".into(), r.vias.len().into());
         out.insert("layers_used".into(), layers.len().into());
-        out.insert("track_len_um".into(), total.into());
+        out.insert("track_len_nm".into(), total.into());
         out.insert("routed_nets".into(), len_by_net.len().into());
         // Detour: routed length over the net's own half-perimeter bbox of
         // footprint centres. 1.0 is a straight run; big values are the
@@ -405,7 +405,7 @@ fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
                     }
                 }
                 if x0 == i64::MAX { continue }
-                let hp = ((x1 - x0) + (y1 - y0)).max(2000) as f64;
+                let hp = ((x1 - x0) + (y1 - y0)).max(2_000_000) as f64;
                 detours.push((len as f64 / hp, net.name.as_str()));
             }
             detours.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
@@ -543,9 +543,9 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
             &cx.model,
             &PlaceOptions {
                 seed,
-                spacing: sv.place_spacing_um,
+                spacing: sv.place_spacing_nm,
                 moves_per_part: sv.place_moves_per_part,
-                snap: sv.place_snap_um,
+                snap: sv.place_snap_nm,
                 fit_floor: board_floor,
                 ..Default::default()
             },
@@ -564,7 +564,7 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
                 "flash" => &mut flash,
                 _ => &mut greedy,
             };
-            let (d, report) = eda_ops::build::build(seeded, &cx.model, sv.place_snap_um, sv.place_spacing_um, chooser)?;
+            let (d, report) = eda_ops::build::build(seeded, &cx.model, sv.place_snap_nm, sv.place_spacing_nm, chooser)?;
             eprintln!(
                 "place {}: {} of {} parts in {} steps, {} rip(s), {} gate failure(s)",
                 report.chooser, report.placed, report.total, report.steps, report.ripped, report.failures
@@ -582,7 +582,7 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
     // Courtyard overlap and pad-to-edge clearance are KiCad's: one kicad-cli run.
     checks.extend(eda_gates::kicad::check_placement(&placed, &cx.model));
     let metrics = serde_json::json!({
-        "hpwl_um": hpwl(&placed, &cx.model),
+        "hpwl_nm": hpwl(&placed, &cx.model),
         "features": placement_features(&placed, &cx.model),
     });
     cx.log.candidate(Stage::Placement, 0, seed, &placed, Tier::Geometry, &checks, metrics).ok();
@@ -701,7 +701,7 @@ fn stage_place_looping(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<C
 /// Bounding box of the intent's declared outline. The floorplan stage
 /// needs a board before any placement exists, so an intent with no outline
 /// has nothing to plan on and says so rather than inventing one.
-fn board_bb(model: &eda_model::ConstraintModel) -> (eda_model::ir::Um, eda_model::ir::Um, eda_model::ir::Um, eda_model::ir::Um) {
+fn board_bb(model: &eda_model::ConstraintModel) -> (eda_model::ir::Nm, eda_model::ir::Nm, eda_model::ir::Nm, eda_model::ir::Nm) {
     match model.board.outline.as_ref().filter(|o| !o.is_empty()) {
         Some(o) => {
             let (xs, ys): (Vec<_>, Vec<_>) = o.iter().map(|p| (p.x, p.y)).unzip();
@@ -852,7 +852,7 @@ fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
 }
 
 /// Bookshelf integer unit used for Cypress export/import (100 µm).
-const BOOKSHELF_UNIT_UM: i64 = 100;
+const BOOKSHELF_UNIT_NM: i64 = 100_000;
 
 /// A placement's shape, as numbers, for every candidate we log.
 ///
@@ -874,7 +874,7 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
     let (xs, ys): (Vec<_>, Vec<_>) = pl.outline.iter().map(|p| (p.x, p.y)).unzip();
     let (bx0, bx1) = (xs.iter().min().copied().unwrap_or(0), xs.iter().max().copied().unwrap_or(0));
     let (by0, by1) = (ys.iter().min().copied().unwrap_or(0), ys.iter().max().copied().unwrap_or(0));
-    let board_area = ((bx1 - bx0) as f64 / 1000.0) * ((by1 - by0) as f64 / 1000.0); // mm^2
+    let board_area = ((bx1 - bx0) as f64 / 1e6) * ((by1 - by0) as f64 / 1e6); // mm^2
 
     let mut court_area = 0.0f64;
     let mut pads = 0usize;
@@ -884,7 +884,7 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
         let Some(part) = model.part(&fp.id) else { continue };
         pads += part.pins.len();
         if let Some(r) = eda_model::footprint::placed_courtyard(model, part, fp) {
-            court_area += ((r.2 - r.0) as f64 / 1000.0) * ((r.3 - r.1) as f64 / 1000.0);
+            court_area += ((r.2 - r.0) as f64 / 1e6) * ((r.3 - r.1) as f64 / 1e6);
             rects.push((fp.id.clone(), r));
             if eda_model::footprint::is_edge_connector(part) {
                 worst_edge_gap = worst_edge_gap.max(eda_model::footprint::edge_connector_gap(r, (bx0, by0, bx1, by1)));
@@ -933,7 +933,7 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
         if !ok || area <= 0.0 {
             continue;
         }
-        let bound = (2.0 * area.sqrt()).max(6000.0);
+        let bound = (2.0 * area.sqrt()).max(6_000_000.0);
         let span = ((nx1 - nx0) + (ny1 - ny0)) as f64;
         worst_compact = worst_compact.max(span / bound);
     }
@@ -945,9 +945,9 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
         "board_mm2": (board_area * 100.0).round() / 100.0,
         "courtyard_fill": if board_area > 0.0 { (court_area / board_area * 1000.0).round() / 1000.0 } else { 0.0 },
         "pad_density_per_mm2": if board_area > 0.0 { (pads as f64 / board_area * 1000.0).round() / 1000.0 } else { 0.0 },
-        "min_courtyard_gap_um": if min_gap == i64::MAX { serde_json::Value::Null } else { min_gap.into() },
+        "min_courtyard_gap_nm": if min_gap == i64::MAX { serde_json::Value::Null } else { min_gap.into() },
         "worst_compact_ratio": (worst_compact * 1000.0).round() / 1000.0,
-        "worst_edge_gap_um": worst_edge_gap,
+        "worst_edge_gap_nm": worst_edge_gap,
     })
 }
 
@@ -971,7 +971,7 @@ fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
     }
     if design.placement.is_some() {
         let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
-        let bs = eda::to_bookshelf(design, &cx.model, title, BOOKSHELF_UNIT_UM)?;
+        let bs = eda::to_bookshelf(design, &cx.model, title, BOOKSHELF_UNIT_NM)?;
         for (name, content) in bs.files(title) {
             write(&cx.args.out.join("bookshelf").join(name), content.as_bytes())?;
         }
@@ -1083,7 +1083,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         None => None,
     };
     let blank = || Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: eda_model::ir::Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: cx.ihash.clone(), seed: cx.args.seed, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: None,
@@ -1100,14 +1100,14 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         }
         "floorplan" => {
             let bb = board_bb(&cx.model);
-            let fp = eda_model::floorplan::plan(&cx.model, bb, 500, cx.args.seed)
+            let fp = eda_model::floorplan::plan(&cx.model, bb, 500_000, cx.args.seed)
                 .map_err(|e| vec![CheckResult::fail("floorplan", "arrange", e)])?;
             println!("{} modules, {} free parts, board {:.1} x {:.1} mm",
-                fp.modules.len(), fp.free.len(), (bb.2 - bb.0) as f64 / 1000.0, (bb.3 - bb.1) as f64 / 1000.0);
+                fp.modules.len(), fp.free.len(), (bb.2 - bb.0) as f64 / 1e6, (bb.3 - bb.1) as f64 / 1e6);
             for m in &fp.modules {
                 println!("  {:<10} {:>5.1} x {:>5.1} mm at ({:>5.1}, {:>5.1})  {} parts: {}",
-                    m.name, (m.rect.2 - m.rect.0) as f64 / 1000.0, (m.rect.3 - m.rect.1) as f64 / 1000.0,
-                    m.rect.0 as f64 / 1000.0, m.rect.1 as f64 / 1000.0, m.refs.len(), m.refs.join(" "));
+                    m.name, (m.rect.2 - m.rect.0) as f64 / 1e6, (m.rect.3 - m.rect.1) as f64 / 1e6,
+                    m.rect.0 as f64 / 1e6, m.rect.1 as f64 / 1e6, m.refs.len(), m.refs.join(" "));
             }
             if !fp.free.is_empty() {
                 println!("  free (no proximity rule ties them anywhere): {}", fp.free.join(" "));
@@ -1170,14 +1170,14 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "import-pl", "import-pl needs --design (for the outline)")])?;
             let pl_path = cx.args.pl.clone().ok_or_else(|| vec![CheckResult::fail("cli", "import-pl", "import-pl needs --pl")])?;
             let pl = std::fs::read_to_string(&pl_path).map_err(|e| vec![CheckResult::fail("io", pl_path.display().to_string(), e.to_string())])?;
-            let placed = eda::from_bookshelf_pl(&pl, &d, &cx.model, BOOKSHELF_UNIT_UM)?;
+            let placed = eda::from_bookshelf_pl(&pl, &d, &cx.model, BOOKSHELF_UNIT_NM)?;
             save_design(&cx.args.out, &placed)?;
             let mut checks = check_placement(&placed, &cx.model);
     checks.extend(eda::preflight(&placed, &cx.model, &cx.model.board));
             checks.extend(eda_gates::kicad::check_placement(&placed, &cx.model));
-            let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model), "source": "bookshelf" });
+            let metrics = serde_json::json!({ "hpwl_nm": hpwl(&placed, &cx.model), "source": "bookshelf" });
             cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
-            println!("hpwl_um {}", hpwl(&placed, &cx.model).unwrap_or(-1));
+            println!("hpwl_nm {}", hpwl(&placed, &cx.model).unwrap_or(-1));
             if !print_checks("placement gates", &checks) {
                 return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
             }
@@ -1259,7 +1259,7 @@ fn main() -> ExitCode {
     if argv.first().map(String::as_str) == Some("board") {
         let r = board::run(&argv[1..], |model| {
             let empty = Design {
-                schema: 1,
+                schema: eda_model::ir::SCHEMA_VERSION,
                 provenance: eda_model::ir::Provenance {
                     engine_version: env!("CARGO_PKG_VERSION").into(),
                     intent_hash: String::new(),

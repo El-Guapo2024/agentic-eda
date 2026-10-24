@@ -5,7 +5,7 @@
 
 import { createElement } from "react";
 import type { TextGraphicsDefaults } from "../api/types";
-import { lineThicknessUm } from "../kicad-port/layerDefaults";
+import { lineThicknessNm } from "../kicad-port/layerDefaults";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { BoardState, Cmd } from "../api/types";
 import { convertPolys } from "../api/client";
@@ -36,8 +36,8 @@ const last: { convert: ConvertSettings; outset: OutsetParams; tracks: { layer: s
 };
 
 /** `bds.m_LineThickness[ bds.GetLayerClass( layer ) ]`: the board's Text & Graphics default for the layer's class, KiCad's own table (copper 0.2 mm, silkscreen / fab / other 0.1 mm, edges and courtyard 0.05 mm) when the backend sends none. */
-export function layerLineWidthUm(layer: string, defaults?: TextGraphicsDefaults): number {
-  return lineThicknessUm(defaults, layer);
+export function layerLineWidthNm(layer: string, defaults?: TextGraphicsDefaults): number {
+  return lineThicknessNm(defaults, layer);
 }
 
 /** Every net a pad of the board carries (the nets a new track can belong to). */
@@ -83,8 +83,8 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
             onOk: (chosen: ConvertSettings) => {
               last.convert = chosen;
               void (async () => {
-                const resolved = kind === "poly" ? resolveConvertSettings(chosen, layerLineWidthUm(layer, board?.board_rules?.text_graphics)) : chosen;
-                const reply = await convertPolys(ids, resolved.strategy, resolved.gapUm);
+                const resolved = kind === "poly" ? resolveConvertSettings(chosen, layerLineWidthNm(layer, board?.board_rules?.text_graphics)) : chosen;
+                const reply = await convertPolys(ids, resolved.strategy, resolved.gapNm);
                 if (!reply.ok || reply.rings.length === 0) {
                   if (kind === "poly") toast(`Could not convert selection: ${resolved.strategy === "bounding_hull" ? "Resulting polygon would be empty" : "Objects must form a closed shape"}`, "error");
                   return;
@@ -93,7 +93,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
                 const deleteCmds = sources.map((id) => deleteCmd(board, id));
                 if (kind === "poly") {
                   // COPY_LINEWIDTH takes the stroke of the top-left source item.
-                  const width = resolved.strategy === "copy_linewidth" ? (copiedLineWidth(board, ids) ?? resolved.widthUm) : resolved.widthUm;
+                  const width = resolved.strategy === "copy_linewidth" ? (copiedLineWidth(board, ids) ?? resolved.widthNm) : resolved.widthNm;
                   const adds: Cmd[] = reply.rings.map((ring) => ({ op: "add_shape", shape: { kind: "polygon", layer, stroke_width: width, filled: resolved.strategy === "centerline", pts: ring.map(([x, y]) => ({ x, y })) } }));
                   await applyEdit([...adds, ...deleteCmds], sources);
                 } else {
@@ -135,7 +135,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
           showHull: false,
           onOk: (chosen: ConvertSettings) => {
             last.convert = { ...last.convert, deleteOriginals: chosen.deleteOriginals };
-            const plan = planConvertToLines(board, ids, layer, layerLineWidthUm(layer, board.board_rules?.text_graphics), chosen.deleteOriginals);
+            const plan = planConvertToLines(board, ids, layer, layerLineWidthNm(layer, board.board_rules?.text_graphics), chosen.deleteOriginals);
             if (plan.empty) return;
             void applyEdit(plan.cmds, plan.removed);
           },
@@ -172,7 +172,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
           deleteOriginals: last.tracks.deleteOriginals,
           onOk: (v: { layer: string; net: string; deleteOriginals: boolean }) => {
             last.tracks = v;
-            const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
+            const width = state.currentTrackWidthNm ?? board.board_rules?.track_width ?? 250_000;
             const plan = planConvertToTracks(board, ids, v.layer, v.net, width, v.deleteOriginals);
             if (plan.empty) return;
             void applyEdit(plan.cmds, plan.removed);
@@ -215,7 +215,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
         element: createElement(OutsetItemsDialog, {
           params: start,
           layers,
-          layerDefaultWidth: (layer: string) => layerLineWidthUm(layer, board?.board_rules?.text_graphics),
+          layerDefaultWidth: (layer: string) => layerLineWidthNm(layer, board?.board_rules?.text_graphics),
           onOk: (params: OutsetParams) => {
             last.outset = params;
             const shapes = ids.map((id) => api.shapeById(id)).filter((s): s is NonNullable<typeof s> => !!s);

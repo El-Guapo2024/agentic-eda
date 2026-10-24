@@ -11,7 +11,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { lastPlaced, rememberPlaced } from "../kicad-port/schLastPlaced";
 import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
 
-const DEFAULT_SIZE_UM = 1270; // 1.27mm -- eeschema's own SCHEMATIC_SETTINGS::m_DefaultTextSize default (50 mil)
+const DEFAULT_SIZE_NM = 1_270_000; // 1.27mm -- eeschema's own SCHEMATIC_SETTINGS::m_DefaultTextSize default (50 mil)
 
 export function SchTextDialog() {
   const state = useStudioState();
@@ -20,7 +20,7 @@ export function SchTextDialog() {
   const pending = state.schTextPending;
 
   const [content, setContent] = useState("");
-  const [size, setSize] = useState(DEFAULT_SIZE_UM);
+  const [size, setSize] = useState(DEFAULT_SIZE_NM);
   const [vertical, setVertical] = useState(false);
   const [h, setH] = useState<SchHAlign>("center");
   const [v, setV] = useState<SchVAlign>("center");
@@ -29,7 +29,7 @@ export function SchTextDialog() {
     if (!pending) return;
     const last = lastPlaced();
     setContent("");
-    setSize(DEFAULT_SIZE_UM);
+    setSize(DEFAULT_SIZE_NM);
     setVertical(last.textVertical);
     setH(last.textH);
     setV(last.textV);
@@ -41,7 +41,7 @@ export function SchTextDialog() {
 
   const submit = () => {
     if (!content.trim()) return;
-    void api.cmd({ op: "sch_edit", verb: "place_text", content, at: { x: pending.at[0], y: pending.at[1] }, angle: vertical ? 90_000 : 0, size_um: size, h, v });
+    void api.cmd({ op: "sch_edit", verb: "place_text", content, at: { x: pending.at[0], y: pending.at[1] }, angle: vertical ? 90_000 : 0, size_nm: size, h, v });
     // `m_lastTextHJustify`, `m_lastTextVJustify`, `m_lastTextAngle`
     rememberPlaced({ textH: h, textV: v, textVertical: vertical });
     close();

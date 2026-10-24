@@ -25,28 +25,28 @@ pub use graph::{EdgeEndpoint, LayoutGraph, Node, Point, Port, Side};
 
 use std::collections::BTreeMap;
 
-/// KiCad half-grid: 1.27mm in micrometers.
-pub const DEFAULT_GRID: i64 = 1_270;
+/// KiCad half-grid: 1.27mm in nanometres.
+pub const DEFAULT_GRID: i64 = 1_270_000;
 
 #[derive(Debug, Clone)]
 pub struct LayoutOptions {
-    /// All output coordinates snap to a multiple of this (um).
+    /// All output coordinates snap to a multiple of this (nm).
     pub grid: i64,
-    /// Nominal distance between layer baselines (um); the effective spacing
+    /// Nominal distance between layer baselines (nm); the effective spacing
     /// used is at least this, and at least tall-enough to avoid vertical
     /// overlap given the actual node heights in the graph.
     pub layer_spacing: i64,
-    /// Minimum gap between adjacent node boxes within a layer (um).
+    /// Minimum gap between adjacent node boxes within a layer (nm).
     pub node_spacing: i64,
     /// Barycenter sweep count for crossing minimization.
     pub crossing_sweeps: usize,
-    /// Height (um) of the reserved refdes text slot immediately *above*
+    /// Height (nm) of the reserved refdes text slot immediately *above*
     /// every symbol box on screen, and of the value text slot immediately
     /// *below* it. The router treats box+slots as one solid obstacle, so
     /// no other net's wire is ever routed where a label will be drawn.
     /// (Screen "above"/"below" is the within-layer packing axis; see the
     /// `layout` doc comment for the transpose.) `eda-engine` sets these
-    /// from `geometry::SLOT_ABOVE_UM`/`SLOT_BELOW_UM`, the same constants
+    /// from `geometry::SLOT_ABOVE_NM`/`SLOT_BELOW_NM`, the same constants
     /// `eda-render` and `eda-gates` place the text with.
     pub label_slot_above: i64,
     pub label_slot_below: i64,

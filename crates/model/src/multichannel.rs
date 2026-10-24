@@ -9,7 +9,7 @@
 //! `BuildConvexHull`, `KIGEOM::RectifyPolygon`, `SHAPE_LINE_CHAIN::Simplify` and `SHAPE_LINE_CHAIN::Centre`. The matching of footprints is [`crate::topo_match`]; what a
 //! board does with both is `eda_ops`.
 
-use crate::ir::{Point, Um};
+use crate::ir::{Point, Nm};
 use serde::{Deserialize, Serialize};
 
 /// `PLACEMENT_SOURCE_T` (`pcbnew/zone_settings.h`) as a rule area saves it. KiCad has a fourth kind, `DESIGN_BLOCK`, that Apply Design Block Layout gives its two temporary areas
@@ -78,7 +78,7 @@ impl PlacementArea {
 }
 
 /// `x0, y0, x1, y1`.
-pub type Box4 = (Um, Um, Um, Um);
+pub type Box4 = (Nm, Nm, Nm, Nm);
 
 fn cross(o: Point, a: Point, b: Point) -> i128 {
     (a.x - o.x) as i128 * (b.y - o.y) as i128 - (a.y - o.y) as i128 * (b.x - o.x) as i128
@@ -197,7 +197,7 @@ pub fn rectify_polygon(hull: &[Point]) -> Vec<Point> {
 }
 
 /// `buildRAOutline`: the outline of a rule area for boxes (`x0, y0, x1, y1`), each grown by `margin`: the convex hull of their corners, rectified. Empty for no box.
-pub fn rule_area_outline(boxes: &[Box4], margin: Um) -> Vec<Point> {
+pub fn rule_area_outline(boxes: &[Box4], margin: Nm) -> Vec<Point> {
     let mut corners: Vec<Point> = Vec::with_capacity(boxes.len() * 4);
     for b in boxes {
         collect_box_corners((b.0 - margin, b.1 - margin, b.2 + margin, b.3 + margin), &mut corners);
@@ -248,7 +248,7 @@ pub fn point_inside(chain: &[Point], pt: Point) -> bool {
 mod tests {
     use super::*;
 
-    fn pt(x: Um, y: Um) -> Point {
+    fn pt(x: Nm, y: Nm) -> Point {
         Point { x, y }
     }
 

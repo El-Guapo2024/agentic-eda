@@ -90,7 +90,7 @@ export function CommonToolHost() {
     };
     /** The click answered with the grid-snapped point and, for an item session, the item under it (`SelectPointInteractively` / `SelectItemInteractively`). */
     const answerPicker = (a: EditorAdapter, w: [number, number]) => {
-      const p = alignToGrid({ x: w[0], y: w[1] }, a.gridUm, getSnapOrigin(), { ctrlOrCmd: false });
+      const p = alignToGrid({ x: w[0], y: w[1] }, a.gridNm, getSnapOrigin(), { ctrlOrCmd: false });
       picker.click({ point: { x: p.x, y: p.y }, item: () => a.candidatesAt(w[0], w[1])[0]?.id ?? null });
     };
     /** The lasso as it stands, closed to the cursor, selects what it hits (`SelectMultiple`). */
@@ -124,7 +124,7 @@ export function CommonToolHost() {
       if (ruler && e.button === 0) {
         e.stopPropagation();
         e.preventDefault();
-        const p = alignToGrid({ x: w[0], y: w[1] }, a.gridUm, getSnapOrigin(), { ctrlOrCmd: false });
+        const p = alignToGrid({ x: w[0], y: w[1] }, a.gridNm, getSnapOrigin(), { ctrlOrCmd: false });
         setMeasure({ pts: measureClick(ruler.pts, [p.x, p.y]) });
         return;
       }

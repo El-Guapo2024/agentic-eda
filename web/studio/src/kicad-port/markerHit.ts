@@ -3,11 +3,11 @@
 // `drawErcMarkers`), so the pick is the nearest marker whose circle holds the point.
 //
 // The radii are the circles' radii as drawn when selected (the painters' radius times 1.4): a right click on a marker's glyph always lands inside, and
-// a click that misses by a hair still finds it. The painters' own constants are `DRC_MARKER_RADIUS_UM = 300` and `ERC_MARKER_RADIUS_UM = 450`.
+// a click that misses by a hair still finds it. The painters' own constants are `DRC_MARKER_RADIUS_NM = 300` and `ERC_MARKER_RADIUS_NM = 450`.
 
 /** µm. */
-export const DRC_MARKER_HIT_UM = 420;
-export const ERC_MARKER_HIT_UM = 630;
+export const DRC_MARKER_HIT_NM = 420_000;
+export const ERC_MARKER_HIT_NM = 630_000;
 
 export type MarkerPoint = readonly [number, number];
 

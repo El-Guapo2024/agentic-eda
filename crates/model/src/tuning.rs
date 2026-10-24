@@ -8,7 +8,7 @@
 //! Micrometres, like the rest of the IR, except where a field says nanometres. An additive overlay of `DrawingsSection`: a design without
 //! patterns reads and writes as before.
 
-use crate::ir::{Point, Um};
+use crate::ir::{Point, Nm};
 use serde::{Deserialize, Serialize};
 
 /// `LENGTH_TUNING_MODE`: what the pattern tunes.
@@ -74,16 +74,25 @@ impl PatternSide {
     }
 }
 
-/// `MINOPTMAX`: the target a pattern tunes to and the range it counts as tuned within (micrometres).
+/// `MINOPTMAX`: the target a pattern tunes to and the range it counts as tuned within: nanometres for a length or a skew, attoseconds for a delay (which
+/// is why the fields are plain integers, and why a field of this type that holds lengths reads through `crate::units::de` itself).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TargetRange {
-    pub min: Um,
-    pub opt: Um,
-    pub max: Um,
+    pub min: i64,
+    pub opt: i64,
+    pub max: i64,
 }
 
-/// `MEANDER_SETTINGS::LENGTH_UNCONSTRAINED`, micrometres: a million millimetres, what a pattern with no length target holds.
-pub const LENGTH_UNCONSTRAINED_UM: Um = 1_000_000_000;
+impl crate::units::Lengths for TargetRange {
+    fn scale_lengths(&mut self, k: i64) {
+        self.min *= k;
+        self.opt *= k;
+        self.max *= k;
+    }
+}
+
+/// `MEANDER_SETTINGS::LENGTH_UNCONSTRAINED` (`1000000 * pcbIUScale.IU_PER_MM`): a million millimetres, what a pattern with no length target holds.
+pub const LENGTH_UNCONSTRAINED_NM: Nm = 1_000_000 * crate::units::NM_PER_MM;
 
 /// `MEANDER_SETTINGS::DELAY_UNCONSTRAINED`, attoseconds: a million picoseconds, what a pattern with no delay target holds.
 pub const DELAY_UNCONSTRAINED_AS: i64 = 1_000_000 * 1_000_000;
@@ -109,16 +118,16 @@ impl TargetRange {
 
     /// No target: any length is tuned.
     pub fn unconstrained() -> TargetRange {
-        TargetRange { min: 0, opt: LENGTH_UNCONSTRAINED_UM, max: LENGTH_UNCONSTRAINED_UM }
+        TargetRange { min: 0, opt: LENGTH_UNCONSTRAINED_NM, max: LENGTH_UNCONSTRAINED_NM }
     }
 
     pub fn is_unconstrained(&self) -> bool {
-        self.opt == LENGTH_UNCONSTRAINED_UM
+        self.opt == LENGTH_UNCONSTRAINED_NM
     }
 
     /// `SetTargetLength( aOpt )`: the target with the default tolerance (`DEFAULT_LENGTH_TOLERANCE`, 0.1 mm) either side of it.
-    pub fn around(opt: Um) -> TargetRange {
-        TargetRange { min: opt - 100, opt, max: opt + 100 }
+    pub fn around(opt: Nm) -> TargetRange {
+        TargetRange { min: opt - 100_000, opt, max: opt + 100_000 }
     }
 }
 
@@ -137,7 +146,7 @@ fn d_true() -> bool {
 }
 
 fn d_skew() -> TargetRange {
-    TargetRange { min: -100, opt: 0, max: 100 }
+    TargetRange { min: -100_000, opt: 0, max: 100_000 }
 }
 
 fn d_delay() -> TargetRange {
@@ -181,10 +190,13 @@ pub struct TuningPattern {
     pub end: Point,
     #[serde(default)]
     pub initial_side: PatternSide,
-    pub min_amplitude: Um,
-    pub max_amplitude: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub min_amplitude: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub max_amplitude: Nm,
     /// "Min spacing": the distance between two meanders.
-    pub spacing: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub spacing: Nm,
     #[serde(default = "d_radius")]
     pub corner_radius_percent: u32,
     /// Rounded corners (an arc) or chamfered ones (a 45-degree segment).
@@ -195,9 +207,9 @@ pub struct TuningPattern {
     /// "Override custom rules": the pattern's own target stands where a design rule has a length (or skew) constraint for the net.
     #[serde(default)]
     pub override_custom_rules: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::units::de")]
     pub target_length: TargetRange,
-    #[serde(default = "d_skew")]
+    #[serde(default = "d_skew", deserialize_with = "crate::units::de")]
     pub target_skew: TargetRange,
     /// `m_isTimeDomain` ("Delay" in the Tuning Pattern dialog): the pattern is tuned to a delay -- `target_delay`, or `target_skew_delay` for a skew pattern
     /// -- through the tuning profile of the net's class, instead of to a length.
@@ -217,9 +229,11 @@ pub struct TuningPattern {
     pub base_line_coupled: Vec<Point>,
     /// The width of the tracks and the gap of the pair the tuner last used.
     #[serde(default)]
-    pub last_track_width: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub last_track_width: Nm,
     #[serde(default)]
-    pub last_diff_pair_gap: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub last_diff_pair_gap: Nm,
     /// `m_tuningLength`, nanometres: the length (or skew) the tuner reported last.
     #[serde(default)]
     pub last_tuning_length: i64,
@@ -282,25 +296,25 @@ mod tests {
             id: "tun_1".into(),
             mode: TuningMode::DiffPairSkew,
             layer: "F.Cu".into(),
-            origin: Point { x: 1_000, y: 2_000 },
-            end: Point { x: 9_000, y: 2_000 },
+            origin: Point { x: 1_000_000, y: 2_000_000 },
+            end: Point { x: 9_000_000, y: 2_000_000 },
             initial_side: PatternSide::Right,
-            min_amplitude: 200,
-            max_amplitude: 1_000,
-            spacing: 600,
+            min_amplitude: 200_000,
+            max_amplitude: 1_000_000,
+            spacing: 600_000,
             corner_radius_percent: 100,
             rounded: false,
             single_sided: true,
             override_custom_rules: true,
-            target_length: TargetRange::around(50_000),
-            target_skew: TargetRange { min: -50, opt: 0, max: 50 },
+            target_length: TargetRange::around(50_000_000),
+            target_skew: TargetRange { min: -50_000, opt: 0, max: 50_000 },
             is_time_domain: true,
             target_delay: TargetRange::delay_around(120_000_000),
             target_skew_delay: TargetRange { min: -1_000_000, opt: 0, max: 1_000_000 },
-            base_line: vec![Point { x: 1_000, y: 2_000 }, Point { x: 9_000, y: 2_000 }],
-            base_line_coupled: vec![Point { x: 1_000, y: 2_400 }, Point { x: 9_000, y: 2_400 }],
-            last_track_width: 200,
-            last_diff_pair_gap: 200,
+            base_line: vec![Point { x: 1_000_000, y: 2_000_000 }, Point { x: 9_000_000, y: 2_000_000 }],
+            base_line_coupled: vec![Point { x: 1_000_000, y: 2_400_000 }, Point { x: 9_000_000, y: 2_400_000 }],
+            last_track_width: 200_000,
+            last_diff_pair_gap: 200_000,
             last_tuning_length: 49_999_999,
             last_tuning_delay: 300_050_000,
             last_netname: "D+".into(),
@@ -321,10 +335,10 @@ mod tests {
 
     #[test]
     fn a_pattern_with_only_the_required_fields_gets_kicads_defaults() {
-        let p: TuningPattern = serde_json::from_str(r#"{"mode":"single","layer":"F.Cu","origin":{"x":0,"y":0},"end":{"x":1000,"y":0},"min_amplitude":200,"max_amplitude":1000,"spacing":600}"#).unwrap();
+        let p: TuningPattern = serde_json::from_str(r#"{"mode":"single","layer":"F.Cu","origin":{"x":0,"y":0},"end":{"x":1000000,"y":0},"min_amplitude":200000,"max_amplitude":1000000,"spacing":600000}"#).unwrap();
         assert_eq!((p.corner_radius_percent, p.rounded, p.single_sided, p.initial_side), (80, true, false, PatternSide::Left));
         assert!(p.target_length.is_unconstrained());
-        assert_eq!(p.target_skew, TargetRange { min: -100, opt: 0, max: 100 });
+        assert_eq!(p.target_skew, TargetRange { min: -100_000, opt: 0, max: 100_000 });
         assert!(!p.is_time_domain && p.target_delay.is_delay_unconstrained() && p.target_skew_delay == TargetRange { min: -100_000, opt: 0, max: 100_000 });
         // a pattern that has none of the time domain is written without it
         let text = serde_json::to_string(&p).unwrap();
@@ -335,7 +349,7 @@ mod tests {
 
     #[test]
     fn the_target_helpers_follow_set_target_length() {
-        assert_eq!(TargetRange::around(100_000), TargetRange { min: 99_900, opt: 100_000, max: 100_100 });
+        assert_eq!(TargetRange::around(100_000_000), TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 });
         assert!(TargetRange::unconstrained().is_unconstrained());
         let mut p = pattern();
         p.is_time_domain = false;

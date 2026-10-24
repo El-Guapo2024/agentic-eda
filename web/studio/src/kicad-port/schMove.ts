@@ -20,12 +20,12 @@ export interface SchHeld {
   ids: readonly string[];
   /** The picked points of a wire (a click near a wire's end picks that end); a wire not named is picked whole. */
   vertices?: Readonly<Record<string, readonly number[]>>;
-  dxUm: number;
-  dyUm: number;
+  dxNm: number;
+  dyNm: number;
   /** Turns made while holding, in order. */
   turns?: readonly SchTurn[];
   /** The point the items are held at (where they were picked up plus the offset): turns are about it. */
-  holdUm?: readonly [number, number];
+  holdNm?: readonly [number, number];
 }
 
 const vertexMap = (v: SchHeld["vertices"]): Record<string, number[]> | undefined => {
@@ -38,12 +38,12 @@ const vertexMap = (v: SchHeld["vertices"]): Record<string, number[]> | undefined
 /** The one command a drop commits (the move or drag with the turns made on the way), or null when the items did not go anywhere and were not turned. */
 export function heldCmd(h: SchHeld, opts: { ortho?: boolean } = {}): Cmd | null {
   const turns = h.turns ?? [];
-  if (h.dxUm === 0 && h.dyUm === 0 && turns.length === 0) return null;
-  const about = h.holdUm ? { x: h.holdUm[0], y: h.holdUm[1] } : undefined;
+  if (h.dxNm === 0 && h.dyNm === 0 && turns.length === 0) return null;
+  const about = h.holdNm ? { x: h.holdNm[0], y: h.holdNm[1] } : undefined;
   const ids = [...h.ids];
   const held = turns.length > 0 ? { turns: [...turns], about } : {};
-  if (h.mode === "move") return { op: "sch_move", verb: "move", ids, dx: h.dxUm, dy: h.dyUm, ...held };
-  return { op: "sch_move", verb: "drag", ids, vertices: vertexMap(h.vertices), dx: h.dxUm, dy: h.dyUm, ortho: opts.ortho ?? true, ...held };
+  if (h.mode === "move") return { op: "sch_move", verb: "move", ids, dx: h.dxNm, dy: h.dyNm, ...held };
+  return { op: "sch_move", verb: "drag", ids, vertices: vertexMap(h.vertices), dx: h.dxNm, dy: h.dyNm, ortho: opts.ortho ?? true, ...held };
 }
 
 /** `R`, Shift+`R`, `X`, `Y` on a selection that is not being held. */
@@ -62,21 +62,21 @@ export function turnCmd(ids: readonly string[], turn: SchTurn, vertices?: SchHel
 }
 
 /**
- * Which points of a wire a click at `point` picks (`SCH_SELECTION_TOOL::selectPoint`): within `thresholdUm` of the wire's own first or last end only
+ * Which points of a wire a click at `point` picks (`SCH_SELECTION_TOOL::selectPoint`): within `thresholdNm` of the wire's own first or last end only
  * that end (`STARTPOINT` / `ENDPOINT`), so dragging it stretches the wire; anywhere else on a segment the two ends of that segment, so dragging it
  * drags that segment and its neighbours follow. Null when the point is not on the wire.
  */
-export function wirePick(wire: Pick<SchematicWire, "pts">, point: readonly [number, number], thresholdUm: number): number[] | null {
+export function wirePick(wire: Pick<SchematicWire, "pts">, point: readonly [number, number], thresholdNm: number): number[] | null {
   let best: { k: number; d: number } | null = null;
   for (let k = 0; k + 1 < wire.pts.length; k++) {
     const d = distPointSegment(point, wire.pts[k]!, wire.pts[k + 1]!);
-    if (d <= thresholdUm && (!best || d < best.d)) best = { k, d };
+    if (d <= thresholdNm && (!best || d < best.d)) best = { k, d };
   }
   if (!best) return null;
   const a = wire.pts[best.k]!;
   const b = wire.pts[best.k + 1]!;
-  if (Math.hypot(point[0] - a[0], point[1] - a[1]) <= thresholdUm) return [best.k];
-  if (Math.hypot(point[0] - b[0], point[1] - b[1]) <= thresholdUm) return [best.k + 1];
+  if (Math.hypot(point[0] - a[0], point[1] - a[1]) <= thresholdNm) return [best.k];
+  if (Math.hypot(point[0] - b[0], point[1] - b[1]) <= thresholdNm) return [best.k + 1];
   return [best.k, best.k + 1];
 }
 
@@ -145,10 +145,10 @@ export function previewBody(cmd: Cmd, sheetPath: readonly string[]): { sheet: st
  * The point a held selection is at: where it was picked up (snapped to the grid, as `GetCursorPosition` is) plus how far it has gone -- the point
  * R, Shift+R, X and Y turn it about (`selection.GetReferencePoint()`). Undefined when it is not known where it was picked up.
  */
-export function holdPoint(origin: { x: number; y: number } | null, dxUm: number, dyUm: number, grid = 1270): [number, number] | undefined {
+export function holdPoint(origin: { x: number; y: number } | null, dxNm: number, dyNm: number, grid = 1_270_000): [number, number] | undefined {
   if (!origin) return undefined;
   const snap = (v: number) => Math.round(v / grid) * grid;
-  return [snap(origin.x) + dxUm, snap(origin.y) + dyUm];
+  return [snap(origin.x) + dxNm, snap(origin.y) + dyNm];
 }
 
 /** The points of a wire the last click picked, when the selection is still exactly that wire (what `G` and a drag start from). */

@@ -10,7 +10,7 @@
 // kicad-port/pcbTransform.ts `planMoveExact`), "selection center" (default
 // for 2+ items: one shared point, the bbox center *after* the translation
 // -- source: `selCenter = rp + translation`), or "local coordinates origin"
-// (the status bar's Space-settable point, state.localOriginUm, untouched by
+// (the status bar's Space-settable point, state.localOriginNm, untouched by
 // translation). Any kind of item, locked ones left alone, the whole thing
 // one undo step.
 // KiCad's fourth choice, "drill/place origin" (a board-wide aux origin
@@ -30,7 +30,7 @@
 // polar readout.
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { umFrom } from "../state/units";
+import { nmFrom } from "../state/units";
 import { editableSelection, planMoveExact } from "../kicad-port/pcbTransform";
 
 type Anchor = "item" | "center" | "origin";
@@ -69,14 +69,14 @@ export function MoveExactDialog() {
 
   const close = () => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: false });
 
-  const dxUm = polar ? umFrom(distance, state.units) * Math.cos((angleDeg * Math.PI) / 180) : umFrom(moveX, state.units);
+  const dxNm = polar ? nmFrom(distance, state.units) * Math.cos((angleDeg * Math.PI) / 180) : nmFrom(moveX, state.units);
   // Polar input uses the same CCW-positive/Y-down bridge as toPolar's own inverse.
-  const dyUm = polar ? -umFrom(distance, state.units) * Math.sin((angleDeg * Math.PI) / 180) : umFrom(moveY, state.units);
+  const dyNm = polar ? -nmFrom(distance, state.units) * Math.sin((angleDeg * Math.PI) / 180) : nmFrom(moveY, state.units);
 
   const submit = async () => {
     // One move_items and the turn(s) as one batch (kicad-port/pcbTransform.ts `planMoveExact`); the dialog's angle is counter-clockwise, the backend's clockwise.
     if (!state.board) return;
-    const plan = planMoveExact(state.board, items, dxUm, dyUm, rotate, anchor, [state.localOriginUm.x, state.localOriginUm.y]);
+    const plan = planMoveExact(state.board, items, dxNm, dyNm, rotate, anchor, [state.localOriginNm.x, state.localOriginNm.y]);
     if (plan.cmds.length === 0 || (await api.cmdBatch(plan.cmds))) close();
   };
 

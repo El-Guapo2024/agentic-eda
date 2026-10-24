@@ -43,14 +43,14 @@ fn the_three_hatches_are_read_and_a_solid_or_empty_fill_is_not_one() {
     assert_eq!(dr.shapes.len(), 5);
     assert_eq!(dr.board_items.shape_styles.len(), 3, "{:?}", dr.board_items.shape_styles);
     assert_eq!(hatch_of_shape_at(&design, 0, 0), Some(HatchKind::Hatch));
-    assert_eq!(hatch_of_shape_at(&design, 30_000, 5_000), Some(HatchKind::ReverseHatch));
-    assert_eq!(hatch_of_shape_at(&design, 50_000, 0), Some(HatchKind::CrossHatch));
-    assert_eq!(hatch_of_shape_at(&design, 0, 20_000), None);
-    assert_eq!(hatch_of_shape_at(&design, 20_000, 20_000), None);
+    assert_eq!(hatch_of_shape_at(&design, 30_000_000, 5_000_000), Some(HatchKind::ReverseHatch));
+    assert_eq!(hatch_of_shape_at(&design, 50_000_000, 0), Some(HatchKind::CrossHatch));
+    assert_eq!(hatch_of_shape_at(&design, 0, 20_000_000), None);
+    assert_eq!(hatch_of_shape_at(&design, 20_000_000, 20_000_000), None);
     // A hatched shape is not "filled": the fill the IR has is the solid one.
     let hatched = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: 0, y: 0 })).unwrap();
     assert!(!hatched.is_filled());
-    let solid = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: 0, y: 20_000 })).unwrap();
+    let solid = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: 0, y: 20_000_000 })).unwrap();
     assert!(solid.is_filled());
     // The styles are named by the ids the shapes have.
     for st in &dr.board_items.shape_styles {
@@ -87,7 +87,7 @@ fn the_writer_has_the_token_of_each_hatch_and_it_reads_back_the_same() {
 fn a_hatch_the_design_has_is_written_even_when_it_was_set_by_a_verb_and_not_read() {
     let (mut design, model, _) = import_kicad_pcb(&board(ITEMS)).expect("imports");
     let dr = design.drawings.as_mut().unwrap();
-    let plain = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: 20_000, y: 20_000 })).unwrap().id().to_string();
+    let plain = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: 20_000_000, y: 20_000_000 })).unwrap().id().to_string();
     dr.board_items.set_hatch(&plain, Some(HatchKind::ReverseHatch));
     let text = export(&design, &model);
     assert_eq!(text.matches("(fill reverse_hatch)").count(), 2);
@@ -95,7 +95,7 @@ fn a_hatch_the_design_has_is_written_even_when_it_was_set_by_a_verb_and_not_read
     // A solid fill wins if both are somehow there.
     let solid = {
         let dr = design.drawings.as_mut().unwrap();
-        let id = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: 0, y: 20_000 })).unwrap().id().to_string();
+        let id = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: 0, y: 20_000_000 })).unwrap().id().to_string();
         dr.board_items.set_hatch(&id, Some(HatchKind::Hatch));
         id
     };
@@ -123,7 +123,7 @@ fn the_style_of_a_shape_that_is_gone_is_dropped_before_another_takes_its_id() {
     dr.shapes.retain(|s| s.id() != gone);
     assert!(dr.board_items.hatch_of(&gone).is_some(), "still there until ids are assigned");
     // The same shape added again gets the same id (the id is a hash of the geometry) -- and must not come back hatched.
-    dr.shapes.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 200, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 10_000, y: 10_000 } });
+    dr.shapes.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 200_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 10_000_000, y: 10_000_000 } });
     dr.assign_missing_ids();
     assert_eq!(dr.board_items.hatch_of(&gone), None);
     assert_eq!(dr.board_items.shape_styles.len(), 2);

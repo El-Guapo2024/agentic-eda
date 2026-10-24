@@ -18,7 +18,7 @@
 //! Where it goes further: the references of the design's parts that are not on the board (a symbol whose footprint is not placed yet) are taken like the
 //! excluded footprints' -- their numbers are not given out -- because in the studio a part is its reference, and two parts cannot have one.
 //!
-//! Positions are micrometres; the sorting works in nanometres as KiCad's does (`RoundToGrid`, the grids of the mil lists are whole nanometres).
+//! Positions are nanometres; the sorting works in nanometres as KiCad's does (`RoundToGrid`, the grids of the mil lists are whole nanometres).
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -88,9 +88,10 @@ pub struct ReannotateOptions {
     pub direction: u8,
     #[serde(default)]
     pub location: Location,
-    /// "Round locations to": the grid, micrometres (a grid of mils is not whole micrometres: 50.8 for 2 mil). Footprints a little out of line sort as if on the line.
+    /// "Round locations to": the grid, nanometres (a float, as the dialog holds it). Footprints a little out of line sort as if on the line.
     #[serde(default)]
-    pub grid_um: f64,
+    #[serde(alias = "grid_um")]
+    pub grid_nm: f64,
     #[serde(default)]
     pub scope: Scope,
     /// "Exclude locked footprints".
@@ -124,7 +125,7 @@ impl Default for ReannotateOptions {
         ReannotateOptions {
             direction: 0,
             location: Location::default(),
-            grid_um: 0.0,
+            grid_nm: 0.0,
             scope: Scope::default(),
             exclude_locked: false,
             exclude: String::new(),
@@ -149,7 +150,7 @@ pub struct ReannotateInput {
     pub reference: String,
     /// The footprint's library id as the board has it; empty when it has none (the report says "unknown").
     pub fpid: String,
-    /// The position it is sorted by (`footprint->GetPosition()` or `footprint->Reference().GetPosition()`), micrometres.
+    /// The position it is sorted by (`footprint->GetPosition()` or `footprint->Reference().GetPosition()`), nanometres.
     pub x: i64,
     pub y: i64,
     /// `GetLayer() == F_Cu`.
@@ -180,7 +181,7 @@ pub struct Listed {
     pub reference: String,
     pub x: i64,
     pub y: i64,
-    /// After the rounding to the grid, micrometres (a grid of mils is not whole micrometres).
+    /// After the rounding to the grid, nanometres.
     pub rounded_x: f64,
     pub rounded_y: f64,
 }
@@ -361,7 +362,7 @@ fn before(a: &Info, b: &Info, code: u8) -> bool {
 fn listed(list: &[Info]) -> Vec<Listed> {
     list.iter()
         .enumerate()
-        .map(|(i, f)| Listed { index: i + 1, reference: f.reference.clone(), x: f.x / 1000, y: f.y / 1000, rounded_x: f.rounded_x as f64 / 1000.0, rounded_y: f.rounded_y as f64 / 1000.0 })
+        .map(|(i, f)| Listed { index: i + 1, reference: f.reference.clone(), x: f.x, y: f.y, rounded_x: f.rounded_x as f64, rounded_y: f.rounded_y as f64 })
         .collect()
 }
 
@@ -381,7 +382,7 @@ fn build_change_array(list: &[Info], start: u32, prefix: &str, remove_prefix: bo
         let mut change = Change { old: f.reference.clone(), new: f.reference.clone(), front: f.front, action: f.action };
         if matches!(change.action, Action::Empty | Action::Invalid) {
             changes.push(change);
-            bad.push(Bad { reference: f.reference.clone(), fpid: f.fpid.clone(), x: f.x / 1000, y: f.y / 1000 });
+            bad.push(Bad { reference: f.reference.clone(), fpid: f.fpid.clone(), x: f.x, y: f.y });
             continue;
         }
         if change.action == Action::Update {
@@ -408,7 +409,7 @@ fn build_change_array(list: &[Info], start: u32, prefix: &str, remove_prefix: bo
 /// `BuildFootprintList` and what follows it in `ReannotateBoard`: the plan for `footprints` under `opts`. `elsewhere` are the references of the design's parts that are not
 /// on the board; their numbers are not given out.
 pub fn plan(footprints: &[ReannotateInput], elsewhere: &[String], opts: &ReannotateOptions) -> Plan {
-    let grid = if opts.grid_um > 0.0 { (opts.grid_um * 1000.0).round() as i64 } else { 1000 };
+    let grid = if opts.grid_nm > 0.0 { opts.grid_nm.round() as i64 } else { 1000 };
     let excluded: Vec<String> = opts.exclude.split([',', ' ', '\t', '\r', '\n']).filter(|t| !t.is_empty()).map(str::to_string).collect();
     let (mut front, mut back): (Vec<Info>, Vec<Info>) = (Vec::new(), Vec::new());
     for f in footprints {
@@ -443,7 +444,7 @@ pub fn plan(footprints: &[ReannotateInput], elsewhere: &[String], opts: &Reannot
         } else if opts.scope == Scope::Back {
             action = if f.front { Action::Exclude } else { Action::Update };
         }
-        let (x, y) = (f.x * 1000, f.y * 1000);
+        let (x, y) = (f.x, f.y);
         let info = Info { reference, fpid: f.fpid.clone(), x, y, rounded_x: round_to_grid(x, grid), rounded_y: round_to_grid(y, grid), front: f.front, action, prefix };
         (if f.front { &mut front } else { &mut back }).push(info);
     }
@@ -566,7 +567,7 @@ mod tests {
     #[test]
     fn the_eight_directions_number_a_two_by_two_grid_in_their_order() {
         // a 2 x 2 block at 10 mm pitch: A at the top left, B top right, C bottom left, D bottom right
-        let block = |f: bool| vec![fp("R4", 0, 0, f), fp("R3", 10_000, 0, f), fp("R2", 0, 10_000, f), fp("R1", 10_000, 10_000, f)];
+        let block = |f: bool| vec![fp("R4", 0, 0, f), fp("R3", 10_000_000, 0, f), fp("R2", 0, 10_000_000, f), fp("R1", 10_000_000, 10_000_000, f)];
         let order = |direction: u8, front: bool| -> Vec<String> {
             let opts = ReannotateOptions { direction, ..Default::default() };
             let p = plan(&block(front), &[], &opts);
@@ -591,8 +592,8 @@ mod tests {
     #[test]
     fn a_footprint_a_little_out_of_line_sorts_with_its_row_when_the_grid_is_coarse() {
         // R2 is 0.4 mm lower than R1, a 1 mm grid puts them on one row, so the left one is first
-        let parts = vec![fp("R9", 0, 400, true), fp("R8", 5_000, 0, true), fp("R7", 10_000, 100, true)];
-        let p = plan(&parts, &[], &ReannotateOptions { grid_um: 1_000.0, ..Default::default() });
+        let parts = vec![fp("R9", 0, 400_000, true), fp("R8", 5_000_000, 0, true), fp("R7", 10_000_000, 100_000, true)];
+        let p = plan(&parts, &[], &ReannotateOptions { grid_nm: 1_000_000.0, ..Default::default() });
         assert_eq!(news(&p), pairs(&[("R7", "R3"), ("R8", "R2"), ("R9", "R1")]));
         // with no grid but the minimum the lowest row goes last
         let p = plan(&parts, &[], &ReannotateOptions::default());
@@ -601,7 +602,7 @@ mod tests {
 
     #[test]
     fn each_prefix_counts_on_from_the_start_number_and_the_back_continues_from_the_front() {
-        let parts = vec![fp("R5", 0, 0, true), fp("C1", 5_000, 0, true), fp("R2", 10_000, 0, true), fp("R8", 0, 0, false), fp("C3", 5_000, 0, false)];
+        let parts = vec![fp("R5", 0, 0, true), fp("C1", 5_000_000, 0, true), fp("R2", 10_000_000, 0, true), fp("R8", 0, 0, false), fp("C3", 5_000_000, 0, false)];
         let p = plan(&parts, &[], &ReannotateOptions { front_start: 10, ..Default::default() });
         assert_eq!(news(&p), pairs(&[("C1", "C10"), ("C3", "C11"), ("R2", "R11"), ("R5", "R10"), ("R8", "R12")]));
         assert_eq!(p.prefixes, ["R", "C"]);
@@ -617,18 +618,18 @@ mod tests {
     fn the_numbers_of_the_excluded_footprints_are_not_given_out_again() {
         let mut locked = fp("R2", 0, 0, true);
         locked.locked = true;
-        let parts = vec![fp("R9", 5_000, 0, true), locked, fp("R7", 10_000, 0, true)];
+        let parts = vec![fp("R9", 5_000_000, 0, true), locked, fp("R7", 10_000_000, 0, true)];
         let p = plan(&parts, &[], &ReannotateOptions { exclude_locked: true, ..Default::default() });
         assert_eq!(news(&p), pairs(&[("R2", "R2"), ("R7", "R3"), ("R9", "R1")]));
         assert_eq!(p.changes.iter().find(|c| c.old == "R2").unwrap().action, Action::Exclude);
         // a part that is not on the board keeps its number too
-        let p = plan(&[fp("R9", 0, 0, true), fp("R7", 5_000, 0, true)], &["R1".to_string(), "R3".to_string()], &ReannotateOptions::default());
+        let p = plan(&[fp("R9", 0, 0, true), fp("R7", 5_000_000, 0, true)], &["R1".to_string(), "R3".to_string()], &ReannotateOptions::default());
         assert_eq!(news(&p), pairs(&[("R7", "R4"), ("R9", "R2")]));
     }
 
     #[test]
     fn the_exclusion_list_takes_prefixes_and_patterns_and_the_scope_has_the_last_word() {
-        let parts = vec![fp("R5", 0, 0, true), fp("RN1", 5_000, 0, true), fp("C7", 10_000, 0, true), fp("C70", 15_000, 0, true)];
+        let parts = vec![fp("R5", 0, 0, true), fp("RN1", 5_000_000, 0, true), fp("C7", 10_000_000, 0, true), fp("C70", 15_000_000, 0, true)];
         // `R` is the prefix R, not RN; `C7*` is C7 and C70
         let p = plan(&parts, &[], &ReannotateOptions { exclude: "R, C7*".into(), ..Default::default() });
         let acts: Vec<(String, Action)> = p.changes.iter().map(|c| (c.old.clone(), c.action)).collect();
@@ -643,7 +644,7 @@ mod tests {
     fn the_scope_names_the_footprints_to_update_and_the_others_keep_their_references() {
         let mut selected = fp("R4", 0, 0, true);
         selected.selected = true;
-        let parts = vec![selected, fp("R2", 5_000, 0, true), fp("R6", 0, 0, false)];
+        let parts = vec![selected, fp("R2", 5_000_000, 0, true), fp("R6", 0, 0, false)];
         let acts = |scope: Scope| -> Vec<(String, Action)> { plan(&parts, &[], &ReannotateOptions { scope, ..Default::default() }).changes.iter().map(|c| (c.old.clone(), c.action)).collect() };
         assert_eq!(acts(Scope::Selection), [("R2".to_string(), Action::Exclude), ("R4".to_string(), Action::Update), ("R6".to_string(), Action::Exclude)]);
         assert_eq!(acts(Scope::Back), [("R2".to_string(), Action::Exclude), ("R4".to_string(), Action::Exclude), ("R6".to_string(), Action::Update)]);
@@ -654,7 +655,7 @@ mod tests {
 
     #[test]
     fn a_prefix_is_added_to_a_side_once_and_taken_off_again() {
-        let parts = vec![fp("R1", 0, 0, true), fp("F_R9", 5_000, 0, true), fp("R3", 0, 0, false)];
+        let parts = vec![fp("R1", 0, 0, true), fp("F_R9", 5_000_000, 0, true), fp("R3", 0, 0, false)];
         let p = plan(&parts, &[], &ReannotateOptions { front_prefix: "F_".into(), back_prefix: "B_".into(), ..Default::default() });
         assert_eq!(news(&p), pairs(&[("F_R9", "F_R2"), ("R1", "F_R1"), ("R3", "B_R1")]), "F_R9 has the prefix already; the back's own prefix starts at 1");
         let p = plan(&parts, &[], &ReannotateOptions { front_prefix: "F_".into(), remove_front_prefix: true, ..Default::default() });
@@ -664,7 +665,7 @@ mod tests {
 
     #[test]
     fn a_reference_without_a_number_is_told_not_updated_in_the_scope_all_and_numbered_in_another() {
-        let parts = vec![fp("TP", 0, 0, true), fp("R3", 5_000, 0, true)];
+        let parts = vec![fp("TP", 0, 0, true), fp("R3", 5_000_000, 0, true)];
         let p = plan(&parts, &[], &ReannotateOptions::default());
         assert_eq!(news(&p), pairs(&[("R3", "R1"), ("TP", "TP")]));
         assert_eq!(p.bad.len(), 1);
@@ -677,7 +678,7 @@ mod tests {
 
     #[test]
     fn the_change_log_is_in_the_order_of_the_old_references() {
-        let parts = vec![fp("R10", 0, 0, true), fp("C2", 1_000, 0, true), fp("R9", 2_000, 0, true), fp("C10", 3_000, 0, true)];
+        let parts = vec![fp("R10", 0, 0, true), fp("C2", 1_000_000, 0, true), fp("R9", 2_000_000, 0, true), fp("C10", 3_000_000, 0, true)];
         let p = plan(&parts, &[], &ReannotateOptions::default());
         assert_eq!(p.changes.iter().map(|c| c.old.as_str()).collect::<Vec<_>>(), ["C2", "C10", "R9", "R10"]);
         assert_eq!(p.front.len(), 4);
@@ -687,12 +688,12 @@ mod tests {
 
     #[test]
     fn two_footprints_that_keep_one_reference_are_an_error_and_the_check_gives_up_after_a_while() {
-        let parts = vec![fp("R3", 0, 0, true), fp("R3", 5_000, 0, true), fp("R4", 10_000, 0, true)];
+        let parts = vec![fp("R3", 0, 0, true), fp("R3", 5_000_000, 0, true), fp("R4", 10_000_000, 0, true)];
         let p = plan(&parts, &[], &ReannotateOptions { exclude: "R3*".into(), scope: Scope::All, ..Default::default() });
         assert!(!p.ok());
         assert_eq!(p.errors, ["Duplicate instances of R3"]);
         // fifteen of them
-        let many: Vec<ReannotateInput> = (0..15).map(|i| fp("R3", i * 1000, 0, true)).collect();
+        let many: Vec<ReannotateInput> = (0..15).map(|i| fp("R3", i * 1_000_000, 0, true)).collect();
         let p = plan(&many, &[], &ReannotateOptions { exclude: "R".into(), ..Default::default() });
         assert!(p.errors.iter().any(|e| e == "Aborted: too many errors"));
         assert!(p.errors.len() > MAX_ERRORS);
@@ -701,10 +702,10 @@ mod tests {
     #[test]
     fn a_grid_of_mils_is_whole_nanometres_though_not_whole_micrometres() {
         // 2 mil is 50.8 um: 20 um is on the row, 40 um is on the next one; with the minimum grid (1 um) every um counts
-        let parts = vec![fp("R9", 0, 20, true), fp("R8", 5_000, 0, true), fp("R7", 10_000, 40, true)];
-        let on_grid = plan(&parts, &[], &ReannotateOptions { grid_um: 50.8, ..Default::default() });
+        let parts = vec![fp("R9", 0, 20_000, true), fp("R8", 5_000_000, 0, true), fp("R7", 10_000_000, 40_000, true)];
+        let on_grid = plan(&parts, &[], &ReannotateOptions { grid_nm: 50_800.0, ..Default::default() });
         assert_eq!(news(&on_grid), pairs(&[("R7", "R3"), ("R8", "R2"), ("R9", "R1")]), "R9 and R8 are one row: the left one first");
-        assert_eq!(on_grid.front.iter().map(|f| f.rounded_y).collect::<Vec<_>>(), [0.0, 0.0, 50.8]);
+        assert_eq!(on_grid.front.iter().map(|f| f.rounded_y).collect::<Vec<_>>(), [0.0, 0.0, 50_800.0]);
         let on_minimum = plan(&parts, &[], &ReannotateOptions::default());
         assert_eq!(news(&on_minimum), pairs(&[("R7", "R3"), ("R8", "R1"), ("R9", "R2")]), "three rows: the upper one first");
     }
@@ -717,8 +718,8 @@ mod tests {
 
     #[test]
     fn the_options_read_back_from_json_with_their_defaults() {
-        let o: ReannotateOptions = serde_json::from_str(r#"{"direction":2,"grid_um":1270,"scope":"selection","exclude":"R","front_start":5}"#).unwrap();
-        assert_eq!((o.direction, o.grid_um, o.scope, o.front_start, o.back_start), (2, 1270.0, Scope::Selection, 5, 0));
+        let o: ReannotateOptions = serde_json::from_str(r#"{"direction":2,"grid_nm":1270000,"scope":"selection","exclude":"R","front_start":5}"#).unwrap();
+        assert_eq!((o.direction, o.grid_nm, o.scope, o.front_start, o.back_start), (2, 1_270_000.0, Scope::Selection, 5, 0));
         let o: ReannotateOptions = serde_json::from_str("{}").unwrap();
         assert_eq!(o, ReannotateOptions::default());
         assert_eq!(o.front_start, 1, "the dialog opens with front reference start 1");

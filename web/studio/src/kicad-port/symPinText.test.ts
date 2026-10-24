@@ -1,30 +1,30 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ELECTRICAL_TYPE_NAMES, electricalTypeLayout, pinLabelsShown, pinShown, pinTextOffsetUm, TARGET_PIN_RADIUS_UM } from "./symPinText";
+import { ELECTRICAL_TYPE_NAMES, electricalTypeLayout, pinLabelsShown, pinShown, pinTextOffsetNm, TARGET_PIN_RADIUS_NM } from "./symPinText";
 
 const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`);
 const pin = { electrical_type: "passive" as const, name_size_mm: 1.27 };
 
 test("the text offset is KiROUND( 24 * 0.15 ) = 4 mil", () => {
-  near(pinTextOffsetUm(), 101.6);
+  near(pinTextOffsetNm(), 101_600);
 });
 
 test("the electrical type text sits beyond the connection point of a pin whose body points right", () => {
   // body points right => the way it sticks out (body -> connection point) is -x
   const l = electricalTypeLayout(pin, [0, 0], [-1, 0]);
   assert.equal(l.text, "Passive");
-  near(l.sizeUm, 952.5); // 1.27 mm * 3/4
-  near(l.thicknessUm, 952.5 / 8);
-  near(l.at[0], -(101.6 + 952.5 / 16 + TARGET_PIN_RADIUS_UM + TARGET_PIN_RADIUS_UM / 2));
+  near(l.sizeNm, 952_500); // 1.27 mm * 3/4
+  near(l.thicknessNm, 952_500 / 8);
+  near(l.at[0], -(101_600 + 952_500 / 16 + TARGET_PIN_RADIUS_NM + TARGET_PIN_RADIUS_NM / 2));
   assert.equal(l.at[1], 0);
   assert.equal(l.vertical, false);
   assert.equal(l.justify, "right");
 });
 
 test("a pin whose body points left puts the text on the right, left-aligned", () => {
-  const l = electricalTypeLayout(pin, [1000, 500], [1, 0]);
-  assert.ok(l.at[0] > 1000);
-  assert.equal(l.at[1], 500);
+  const l = electricalTypeLayout(pin, [1_000_000, 500_000], [1, 0]);
+  assert.ok(l.at[0] > 1_000_000);
+  assert.equal(l.at[1], 500_000);
   assert.equal(l.justify, "left");
   assert.equal(l.vertical, false);
 });
@@ -41,13 +41,13 @@ test("vertical pins get vertical text, mirrored alignment between up and down", 
 });
 
 test("the text is never smaller than 0.7 mm", () => {
-  near(electricalTypeLayout({ electrical_type: "input", name_size_mm: 0.5 }, [0, 0], [-1, 0]).sizeUm, 700);
+  near(electricalTypeLayout({ electrical_type: "input", name_size_mm: 0.5 }, [0, 0], [-1, 0]).sizeNm, 700_000);
 });
 
 test("a pin that is connected loses the extra half radius", () => {
   const dangling = electricalTypeLayout(pin, [0, 0], [-1, 0], true);
   const connected = electricalTypeLayout(pin, [0, 0], [-1, 0], false);
-  near(dangling.at[0] - connected.at[0], -TARGET_PIN_RADIUS_UM / 2);
+  near(dangling.at[0] - connected.at[0], -TARGET_PIN_RADIUS_NM / 2);
 });
 
 test("every electrical type has KiCad's name", () => {

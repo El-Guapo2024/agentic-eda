@@ -11,9 +11,9 @@
 //! length is recomputed the next time the pattern is tuned.
 
 use crate::sexpr::{self, Sexpr};
-use crate::{mm, mm_to_um, sexpr_str};
-use eda_model::ir::{Design, Point, Um};
-use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_UM};
+use crate::{mm, mm_to_nm, sexpr_str};
+use eda_model::ir::{Design, Point, Nm};
+use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_NM};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -138,8 +138,8 @@ pub(crate) fn prop_num(list: &[Sexpr], key: &str) -> Option<f64> {
 }
 
 /// A length property in micrometres.
-fn prop_um(list: &[Sexpr], key: &str) -> Option<Um> {
-    prop_num(list, key).map(mm_to_um)
+fn prop_nm(list: &[Sexpr], key: &str) -> Option<Nm> {
+    prop_num(list, key).map(mm_to_nm)
 }
 
 pub(crate) fn prop_str<'a>(list: &'a [Sexpr], key: &str) -> Option<&'a str> {
@@ -153,7 +153,7 @@ fn prop_bool(list: &[Sexpr], key: &str) -> Option<bool> {
 pub(crate) fn prop_point(list: &[Sexpr], key: &str) -> Option<Point> {
     let v = sexpr::find(list, key)?;
     let xy = sexpr::find(v, "xy")?;
-    Some(Point { x: mm_to_um(sexpr::num(xy, 1)?), y: mm_to_um(sexpr::num(xy, 2)?) })
+    Some(Point { x: mm_to_nm(sexpr::num(xy, 1)?), y: mm_to_nm(sexpr::num(xy, 2)?) })
 }
 
 /// `(key (pts (xy x y) .. [(arc (start ..) (mid ..) (end ..))]))`: the points of a line, an arc by its ends.
@@ -165,12 +165,12 @@ pub(crate) fn prop_line(list: &[Sexpr], key: &str) -> Vec<Point> {
         match sexpr::tag(item) {
             Some("xy") => {
                 if let (Some(x), Some(y)) = (sexpr::num(item, 1), sexpr::num(item, 2)) {
-                    out.push(Point { x: mm_to_um(x), y: mm_to_um(y) });
+                    out.push(Point { x: mm_to_nm(x), y: mm_to_nm(y) });
                 }
             }
             Some("arc") => {
                 for part in ["start", "end"] {
-                    if let Some(p) = sexpr::find(item, part).and_then(|s| Some(Point { x: mm_to_um(sexpr::num(s, 1)?), y: mm_to_um(sexpr::num(s, 2)?) })) {
+                    if let Some(p) = sexpr::find(item, part).and_then(|s| Some(Point { x: mm_to_nm(sexpr::num(s, 1)?), y: mm_to_nm(sexpr::num(s, 2)?) })) {
                         out.push(p);
                     }
                 }
@@ -184,12 +184,12 @@ pub(crate) fn prop_line(list: &[Sexpr], key: &str) -> Vec<Point> {
 
 fn prop_range(list: &[Sexpr], key: &str, default: TargetRange) -> TargetRange {
     // `SetTargetLength( val )` gives a target its default tolerance, then the file's own minimum and maximum replace it
-    let opt = prop_um(list, key).unwrap_or(default.opt);
-    let mut r = if opt == LENGTH_UNCONSTRAINED_UM { TargetRange::unconstrained() } else { TargetRange::around(opt) };
-    if let Some(min) = prop_um(list, &format!("{key}_min")) {
+    let opt = prop_nm(list, key).unwrap_or(default.opt);
+    let mut r = if opt == LENGTH_UNCONSTRAINED_NM { TargetRange::unconstrained() } else { TargetRange::around(opt) };
+    if let Some(min) = prop_nm(list, &format!("{key}_min")) {
         r.min = min;
     }
-    if let Some(max) = prop_um(list, &format!("{key}_max")) {
+    if let Some(max) = prop_nm(list, &format!("{key}_max")) {
         r.max = max;
     }
     r
@@ -230,7 +230,7 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
         let mode = prop_str(g, "tuning_mode").and_then(TuningMode::from_token).unwrap_or_default();
         let origin = prop_point(g, "origin").unwrap_or_default();
         let end = prop_point(g, "end").unwrap_or(origin);
-        let mut skew = TargetRange { min: -100, opt: 0, max: 100 };
+        let mut skew = TargetRange { min: -100_000, opt: 0, max: 100_000 };
         skew = prop_range(g, "target_skew", skew);
         out.push(TuningPattern {
             id: String::new(),
@@ -239,9 +239,9 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             origin,
             end,
             initial_side: prop_str(g, "initial_side").and_then(PatternSide::from_token).unwrap_or(PatternSide::Left),
-            min_amplitude: prop_um(g, "min_amplitude").unwrap_or(200),
-            max_amplitude: prop_um(g, "max_amplitude").unwrap_or(1_000),
-            spacing: prop_um(g, "min_spacing").unwrap_or(600),
+            min_amplitude: prop_nm(g, "min_amplitude").unwrap_or(200_000),
+            max_amplitude: prop_nm(g, "max_amplitude").unwrap_or(1_000_000),
+            spacing: prop_nm(g, "min_spacing").unwrap_or(600_000),
             corner_radius_percent: prop_num(g, "corner_radius_percent").map(|v| v.round().clamp(0.0, 100.0) as u32).unwrap_or(80),
             rounded: prop_bool(g, "rounded").unwrap_or(true),
             single_sided: prop_bool(g, "single_sided").unwrap_or(false),
@@ -254,8 +254,8 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             base_line: prop_line(g, "base_line"),
             base_line_coupled: prop_line(g, "base_line_coupled"),
-            last_track_width: prop_um(g, "last_track_width").unwrap_or(0),
-            last_diff_pair_gap: prop_um(g, "last_diff_pair_gap").unwrap_or(0),
+            last_track_width: prop_nm(g, "last_track_width").unwrap_or(0),
+            last_diff_pair_gap: prop_nm(g, "last_diff_pair_gap").unwrap_or(0),
             last_tuning_length: prop_num(g, "last_tuning_length").map(|mm| (mm * 1_000_000.0).round() as i64).unwrap_or(0),
             last_tuning_delay: 0,
             last_netname: prop_str(g, "last_netname").unwrap_or("").to_string(),
@@ -292,25 +292,25 @@ mod tests {
             id: "tun_1".into(),
             mode: TuningMode::DiffPair,
             layer: "F.Cu".into(),
-            origin: p(115_571, 50_140),
-            end: p(123_137, 50_140),
+            origin: p(115_571_000, 50_140_000),
+            end: p(123_137_000, 50_140_000),
             initial_side: PatternSide::Right,
-            min_amplitude: 200,
-            max_amplitude: 1_500,
-            spacing: 1_000,
+            min_amplitude: 200_000,
+            max_amplitude: 1_500_000,
+            spacing: 1_000_000,
             corner_radius_percent: 100,
             rounded: false,
             single_sided: true,
             override_custom_rules: true,
-            target_length: TargetRange { min: 99_900, opt: 100_000, max: 100_100 },
-            target_skew: TargetRange { min: -100, opt: 0, max: 100 },
+            target_length: TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 },
+            target_skew: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             is_time_domain: false,
             target_delay: TargetRange::delay_unconstrained(),
             target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
-            base_line: vec![p(115_571, 50_140), p(123_137, 50_140)],
-            base_line_coupled: vec![p(115_571, 50_540), p(123_137, 50_540)],
-            last_track_width: 200,
-            last_diff_pair_gap: 180,
+            base_line: vec![p(115_571_000, 50_140_000), p(123_137_000, 50_140_000)],
+            base_line_coupled: vec![p(115_571_000, 50_540_000), p(123_137_000, 50_540_000)],
+            last_track_width: 200_000,
+            last_diff_pair_gap: 180_000,
             last_tuning_length: 99_987_654,
             last_tuning_delay: 0,
             last_netname: "USB_P".into(),
@@ -375,9 +375,9 @@ mod tests {
         let back = import_patterns(tree.as_list().unwrap(), &ids);
         assert_eq!(back.len(), 1);
         let t = &back[0];
-        assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", 2_000, 200, 600, 100), "min_amplitude takes MEANDER_SETTINGS' default");
-        assert_eq!((t.target_length, t.last_status.as_str(), t.base_line.len(), t.member_ids.len()), (TargetRange { min: 99_900, opt: 100_000, max: 100_100 }, "too_short", 2, 2));
-        assert_eq!((t.origin, t.end), (p(115_571, 50_140), p(123_137, 50_140)));
+        assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", 2_000_000, 200_000, 600_000, 100), "min_amplitude takes MEANDER_SETTINGS' default");
+        assert_eq!((t.target_length, t.last_status.as_str(), t.base_line.len(), t.member_ids.len()), (TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 }, "too_short", 2, 2));
+        assert_eq!((t.origin, t.end), (p(115_571_487, 50_140_000), p(123_137_350, 50_140_000)));
         // a pattern with no member of the board is a ghost
         assert!(import_patterns(tree.as_list().unwrap(), &BTreeMap::new()).is_empty());
     }

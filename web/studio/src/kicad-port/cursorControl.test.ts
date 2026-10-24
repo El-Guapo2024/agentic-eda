@@ -48,19 +48,19 @@ test("fast grid helpers (GridPreset clamp, GridFastCycle)", () => {
 });
 
 test("zoomToAreaView: left button zooms in so the box fills the limiting axis, centred", () => {
-  const view = { scale: 1, x: 0, y: 0 };
-  // 800x600 screen == 800x600 world; a 200x100 box -> ratio 0.25 -> scale 4.
-  const z = zoomToAreaView(view, 800, 600, { x: 100, y: 100 }, { x: 300, y: 200 })!;
-  assert.equal(z.scale, 4);
+  const view = { scale: 0.001, x: 0, y: 0 };
+  // an 800x600 screen is 800 000 x 600 000 nm; a 200 000 x 100 000 box -> ratio 0.25 -> scale 0.004.
+  const z = zoomToAreaView(view, 800, 600, { x: 100_000, y: 100_000 }, { x: 300_000, y: 200_000 })!;
+  assert.ok(Math.abs(z.scale - 0.004) < 1e-15);
   const c = viewCenter(z, 800, 600);
-  assert.deepEqual([c.x, c.y], [200, 150]);
+  assert.ok(Math.abs(c.x - 200_000) < 1e-6 && Math.abs(c.y - 150_000) < 1e-6);
 });
 
 test("zoomToAreaView: right button zooms out by the same ratio; degenerate box is a no-op", () => {
-  const view = { scale: 2, x: 0, y: 0 };
-  // screen world = 400x300; box 200x150 -> ratio 0.5 -> scale * 0.5.
-  const out = zoomToAreaView(view, 800, 600, { x: 0, y: 0 }, { x: 200, y: 150 }, true)!;
-  assert.equal(out.scale, 2 * 0.5);
-  assert.equal(zoomToAreaView(view, 800, 600, { x: 5, y: 5 }, { x: 5, y: 90 }), null);
-  assert.equal(zoomToAreaView(view, 800, 600, { x: 5, y: 5 }, { x: 90, y: 5 }), null);
+  const view = { scale: 0.002, x: 0, y: 0 };
+  // screen world = 400 000 x 300 000; box 200 000 x 150 000 -> ratio 0.5 -> scale * 0.5.
+  const out = zoomToAreaView(view, 800, 600, { x: 0, y: 0 }, { x: 200_000, y: 150_000 }, true)!;
+  assert.ok(Math.abs(out.scale - 0.002 * 0.5) < 1e-15);
+  assert.equal(zoomToAreaView(view, 800, 600, { x: 5_000, y: 5_000 }, { x: 5_000, y: 90_000 }), null);
+  assert.equal(zoomToAreaView(view, 800, 600, { x: 5_000, y: 5_000 }, { x: 90_000, y: 5_000 }), null);
 });

@@ -343,7 +343,7 @@ mod tests {
             package: Some("0603".into()),
             footprint: None,
             pins: (1..=n).map(|i| eda_model::Pin { number: i.to_string(), name: None, kind: eda_model::PinKind::Signal }).collect(),
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -358,7 +358,7 @@ mod tests {
             package: Some("SOT-23".into()),
             footprint: None,
             pins,
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -558,7 +558,7 @@ mod tests {
                 package: Some("SOT-23".into()),
                 footprint: None,
                 pins: vec![Pin { number: "3".into(), name: Some("EN".into()), kind: PinKind::Signal }],
-                body_um: None, symbol: None, datasheet: None,
+                body_nm: None, symbol: None, datasheet: None,
                 edge: None,
             }],
             nets: vec![],
@@ -584,7 +584,7 @@ mod tests {
                     Pin { number: "1".into(), name: Some("VIN".into()), kind: PinKind::Power },
                     Pin { number: "3".into(), name: Some("EN".into()), kind: PinKind::Signal },
                 ],
-                body_um: None, symbol: None, datasheet: None,
+                body_nm: None, symbol: None, datasheet: None,
                 edge: None,
             }],
             nets: vec![Net { name: "VIN".into(), pins: vec!["U1.1".into(), "U1.3".into()] }],
@@ -627,7 +627,7 @@ mod tests {
 /// DRC cannot see either, because DRC checks copper against copper and
 /// never against the physical component.
 ///
-/// `Part::body_um` is what makes this checkable: the body size the
+/// `Part::body_nm` is what makes this checkable: the body size the
 /// distributor reports for that exact MPN, recorded when the part was
 /// sourced. A part without it is skipped rather than failed -- the gate
 /// reports what it can verify, and an intent that has not sourced its
@@ -644,7 +644,7 @@ const BODY_RATIO: f64 = 3.0;
 fn check_footprint_body_mismatch(model: &ConstraintModel) -> Vec<CheckResult> {
     let mut out = Vec::new();
     for part in &model.parts {
-        let Some((bw, bh)) = part.body_um else { continue };
+        let Some((bw, bh)) = part.body_nm else { continue };
         let Some(fp) = model.footprint_of(part) else { continue };
         if fp.pads.is_empty() || bw <= 0 || bh <= 0 {
             continue;
@@ -680,11 +680,11 @@ fn check_footprint_body_mismatch(model: &ConstraintModel) -> Vec<CheckResult> {
                      ({:.1}x by {:.1}x). These cannot be the same component: the package name matched, \
                      the geometry does not.",
                     part.reference,
-                    bl / 1000.0,
-                    bs / 1000.0,
+                    bl / 1e6,
+                    bs / 1e6,
                     fp.name,
-                    pl / 1000.0,
-                    ps / 1000.0,
+                    pl / 1e6,
+                    ps / 1e6,
                     long,
                     short
                 )),
@@ -708,7 +708,7 @@ mod pad_tests {
             package: Some(package.into()),
             footprint: None,
             pins: (1..=pins).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
-            body_um: None, symbol: None, datasheet: None,
+            body_nm: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -772,7 +772,7 @@ mod body_tests {
             package: Some(package.into()),
             footprint: None,
             pins: vec![],
-            body_um: body, symbol: None, datasheet: None,
+            body_nm: body, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -787,12 +787,12 @@ mod body_tests {
     fn a_real_0603_on_an_0603_footprint_passes() {
         // Imperial 0603: 1.6 x 0.8 mm. This must not fire, or the gate
         // gets switched off and then it catches nothing.
-        assert!(fails(part("R1", "0603", Some((1600, 800)))).is_empty());
+        assert!(fails(part("R1", "0603", Some((1_600_000, 800_000)))).is_empty());
     }
 
     #[test]
     fn a_real_0402_on_an_0402_footprint_passes() {
-        assert!(fails(part("C1", "0402", Some((1000, 500)))).is_empty());
+        assert!(fails(part("C1", "0402", Some((1_000_000, 500_000)))).is_empty());
     }
 
     #[test]
@@ -800,7 +800,7 @@ mod body_tests {
         // The classic: metric 0603 is 0.6 x 0.3 mm, which is imperial
         // 0201. Same string on the reel and in the library, parts 5x
         // apart, and every name-based check passes.
-        assert_eq!(fails(part("R1", "0603", Some((600, 300)))), vec!["R1"]);
+        assert_eq!(fails(part("R1", "0603", Some((600_000, 300_000)))), vec!["R1"]);
     }
 
     #[test]
@@ -808,7 +808,7 @@ mod body_tests {
         // L1's J1. Sixteen pins either way, so the pin-count gate passes
         // it; a USB-C receptacle body is nothing like a 16-way 2.54 mm
         // header, which spans about 40 mm.
-        assert_eq!(fails(part("J1", "PINHEADER-16", Some((9000, 7300)))), vec!["J1"]);
+        assert_eq!(fails(part("J1", "PINHEADER-16", Some((9_000_000, 7_300_000)))), vec!["J1"]);
     }
 
     #[test]
@@ -822,6 +822,6 @@ mod body_tests {
     fn a_rotated_part_is_not_flagged_for_being_rotated() {
         // Long-to-long, short-to-short: a part described 90 degrees from
         // its land pattern is the same component.
-        assert!(fails(part("R1", "0603", Some((800, 1600)))).is_empty());
+        assert!(fails(part("R1", "0603", Some((800_000, 1_600_000)))).is_empty());
     }
 }

@@ -35,7 +35,7 @@ use std::collections::HashMap;
 
 use eda_model::footprint::{placed_pads, PadKind, PlacedPad};
 use eda_model::padstack::UnconnectedLayers;
-use eda_model::ir::{Design, Point, Um};
+use eda_model::ir::{Design, Point, Nm};
 use eda_model::{ConstraintModel, Part};
 
 use crate::geom::bbox_of;
@@ -61,7 +61,7 @@ pub enum ItemShape {
     Pad(PlacedPad),
     Segment { a: Point, b: Point, half_width: f64 },
     /// A track arc (`PCB_ARC`), by its tessellation (`Track::pts`, start to end): one item, as `CN_LIST::Add( PCB_ARC* )` makes it, whose two
-    /// anchors are its ends. KiCad collides the true arc (`SHAPE_ARC`); the tessellation is within a micrometre or so of it.
+    /// anchors are its ends. KiCad collides the true arc (`SHAPE_ARC`); the tessellation is within a nanometre or so of it.
     Arc { pts: Vec<Point>, half_width: f64 },
     Via { center: Point, radius: f64 },
     Zone { outline: Vec<Point> },
@@ -89,7 +89,7 @@ pub struct CnItem {
     pub layer_hi: i32,
     pub anchors: Vec<Point>,
     pub shape: ItemShape,
-    pub bbox: (Um, Um, Um, Um),
+    pub bbox: (Nm, Nm, Nm, Nm),
     /// Filled by [`crate::algo::build_graph`]; empty until then.
     pub connected: Vec<usize>,
     /// A pad whose copper differs from layer to layer ([`eda_model::padstack`]) is one item for each group of layers that shares a shape (a `CN_ITEM` per layer
@@ -133,7 +133,7 @@ fn pad_hole(fp: &eda_model::ir::FootprintInstance, source: &eda_model::footprint
         let half = (w.max(h) - w.min(h)) as f64 / 2.0;
         let (a, b) = if w >= h { ((-half, 0.0), (half, 0.0)) } else { ((0.0, -half), (0.0, half)) };
         let (a, b) = (frame.to_board(a), frame.to_board(b));
-        let pt = |q: (f64, f64)| Point { x: q.0.round() as Um, y: q.1.round() as Um };
+        let pt = |q: (f64, f64)| Point { x: q.0.round() as Nm, y: q.1.round() as Nm };
         return Some(ItemShape::Segment { a: pt(a), b: pt(b), half_width: w.min(h) as f64 / 2.0 });
     }
     source.drill.map(|d| ItemShape::Via { center, radius: d as f64 / 2.0 })
@@ -277,9 +277,9 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
         for t in &rt.tracks {
             let layer = layer_index(layers, &t.layer);
             let half_width = t.width as f64 / 2.0;
-            let margin = (half_width.ceil() as Um).max(0);
+            let margin = (half_width.ceil() as Nm).max(0);
             // An arc is one item (`CN_LIST::Add( PCB_ARC* )`: `AddAnchor( GetStart() )`, `AddAnchor( GetEnd() )`), not the pieces of its tessellation:
-            // a piece in the middle is no end of anything, and the importer's rounding of a small arc to micrometres repeats points of it.
+            // a piece in the middle is no end of anything, and the importer's rounding of a small arc to nanometres repeats points of it.
             if t.arc().is_some() {
                 let (a, b) = (t.pts[0], t.pts[t.pts.len() - 1]);
                 let (x0, y0, x1, y1) = bbox_of(&t.pts);
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn builds_one_item_per_pad_and_per_track_segment() {
         let (mut design, model) = two_pad_model();
-        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 100, y: 0 }, Point { x: 100, y: 100 }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 0, y: 0 }, Point { x: 100_000, y: 0 }, Point { x: 100_000, y: 100_000 }], arc_mid_offset: None });
         let items = build_items(&design, &model, &ZoneCopper::default());
         let pads = items.iter().filter(|i| matches!(i.item, ItemRef::Pad { .. })).count();
         let segs = items.iter().filter(|i| matches!(i.item, ItemRef::TrackSeg { .. })).count();
@@ -390,7 +390,7 @@ mod tests {
         let (design, mut model) = two_pad_model();
         model.footprints.push(eda_model::Footprint {
             name: "THPAD".into(),
-            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1000, 1000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500), drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1_000_000, 1_000_000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500_000), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],

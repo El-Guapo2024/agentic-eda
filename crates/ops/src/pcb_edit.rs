@@ -43,8 +43,8 @@ impl BooleanOp {
 }
 
 /// `SHAPE_ARC::DefaultAccuracyForPCB() / 5` (`getArcPolygonizationMaxError`,
-/// `ARC_HIGH_DEF` = 5 um): the sag a polygonised circle may have, in um.
-const CIRCLE_POLY_MAX_ERROR_UM: i32 = 1;
+/// `ARC_HIGH_DEF` = 5 um): the sag a polygonised circle may have, in nm.
+const CIRCLE_POLY_MAX_ERROR_NM: i32 = 1_000;
 
 fn pt64(p: Point) -> Point64 {
     Point64::new(p.x, p.y)
@@ -56,7 +56,7 @@ fn pt64(p: Point) -> Point64 {
 /// circle widened by half the effective error, so the chord stays inside the
 /// error band.
 fn circle_polyline(center: Point, radius: i64) -> Vec<Point64> {
-    let n = get_arc_to_segment_count(radius.clamp(1, i32::MAX as i64) as i32, CIRCLE_POLY_MAX_ERROR_UM).max(2) as usize;
+    let n = get_arc_to_segment_count(radius.clamp(1, i32::MAX as i64) as i32, CIRCLE_POLY_MAX_ERROR_NM).max(2) as usize;
     let n_for_error = n.max(3) as f64;
     let alpha = std::f64::consts::PI / n_for_error;
     let effective_error = (radius as f64 * (1.0 / alpha.cos() - 1.0)).round();
@@ -229,11 +229,11 @@ mod tests {
     use super::*;
 
     fn rect(id: &str, x0: i64, y0: i64, x1: i64, y1: i64) -> Shape {
-        Shape::Rect { id: id.into(), layer: "F.Fab".into(), stroke_width: 100, filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
+        Shape::Rect { id: id.into(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
     }
 
     fn circle(id: &str, cx: i64, cy: i64, r: i64) -> Shape {
-        Shape::Circle { id: id.into(), layer: "F.SilkS".into(), stroke_width: 150, filled: true, center: Point { x: cx, y: cy }, end: Point { x: cx + r, y: cy } }
+        Shape::Circle { id: id.into(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: true, center: Point { x: cx, y: cy }, end: Point { x: cx + r, y: cy } }
     }
 
     fn section(shapes: Vec<Shape>) -> DrawingsSection {
@@ -258,21 +258,21 @@ mod tests {
 
     #[test]
     fn merge_of_overlapping_rects_is_one_polygon_with_the_union_area() {
-        let mut dr = section(vec![rect("a", 0, 0, 10_000, 10_000), rect("b", 5_000, 5_000, 15_000, 15_000)]);
+        let mut dr = section(vec![rect("a", 0, 0, 10_000_000, 10_000_000), rect("b", 5_000_000, 5_000_000, 15_000_000, 15_000_000)]);
         let all = ids(&dr);
         boolean_shapes(&mut dr, BooleanOp::Merge, &all).unwrap();
         assert_eq!(dr.shapes.len(), 1);
         // 100 + 100 - 25 mm^2
-        assert!((area(&dr.shapes[0]) - 175_000_000.0).abs() < 1.0, "area {}", area(&dr.shapes[0]));
+        assert!((area(&dr.shapes[0]) - 175_000_000_000_000.0).abs() < 1e6, "area {}", area(&dr.shapes[0]));
         // the donor (first shape) supplies layer, width and fill
         assert_eq!(dr.shapes[0].layer(), "F.Fab");
-        assert_eq!(dr.shapes[0].stroke_width(), 100);
+        assert_eq!(dr.shapes[0].stroke_width(), 100_000);
         assert!(!dr.shapes[0].is_filled());
     }
 
     #[test]
     fn merge_of_disjoint_rects_gives_two_polygons() {
-        let mut dr = section(vec![rect("a", 0, 0, 1_000, 1_000), rect("b", 5_000, 5_000, 6_000, 6_000)]);
+        let mut dr = section(vec![rect("a", 0, 0, 1_000_000, 1_000_000), rect("b", 5_000_000, 5_000_000, 6_000_000, 6_000_000)]);
         let all = ids(&dr);
         boolean_shapes(&mut dr, BooleanOp::Merge, &all).unwrap();
         assert_eq!(dr.shapes.len(), 2);
@@ -281,18 +281,18 @@ mod tests {
 
     #[test]
     fn subtract_removes_the_overlap_from_the_first_shape() {
-        let mut dr = section(vec![rect("a", 0, 0, 10_000, 10_000), rect("b", 5_000, 0, 15_000, 10_000)]);
+        let mut dr = section(vec![rect("a", 0, 0, 10_000_000, 10_000_000), rect("b", 5_000_000, 0, 15_000_000, 10_000_000)]);
         let order = vec![dr.shapes[0].id().to_string(), dr.shapes[1].id().to_string()];
         boolean_shapes(&mut dr, BooleanOp::Subtract, &order).unwrap();
         assert_eq!(dr.shapes.len(), 1);
-        assert!((area(&dr.shapes[0]) - 50_000_000.0).abs() < 1.0);
+        assert!((area(&dr.shapes[0]) - 50_000_000_000_000.0).abs() < 1e6);
     }
 
     #[test]
     fn subtract_in_the_wrong_order_retries_largest_first() {
         // the small square first would leave nothing, so the larger one is used as the base
-        let small = rect("small", 2_000, 2_000, 4_000, 4_000);
-        let big = rect("big", 0, 0, 10_000, 10_000);
+        let small = rect("small", 2_000_000, 2_000_000, 4_000_000, 4_000_000);
+        let big = rect("big", 0, 0, 10_000_000, 10_000_000);
         let mut dr = section(vec![small, big]);
         let order = vec![dr.shapes[0].id().to_string(), dr.shapes[1].id().to_string()];
         boolean_shapes(&mut dr, BooleanOp::Subtract, &order).unwrap();
@@ -304,16 +304,16 @@ mod tests {
 
     #[test]
     fn intersect_keeps_only_the_overlap() {
-        let mut dr = section(vec![rect("a", 0, 0, 10_000, 10_000), rect("b", 6_000, 6_000, 20_000, 20_000)]);
+        let mut dr = section(vec![rect("a", 0, 0, 10_000_000, 10_000_000), rect("b", 6_000_000, 6_000_000, 20_000_000, 20_000_000)]);
         let all = ids(&dr);
         boolean_shapes(&mut dr, BooleanOp::Intersect, &all).unwrap();
         assert_eq!(dr.shapes.len(), 1);
-        assert!((area(&dr.shapes[0]) - 16_000_000.0).abs() < 1.0);
+        assert!((area(&dr.shapes[0]) - 16_000_000_000_000.0).abs() < 1e6);
     }
 
     #[test]
     fn intersect_of_disjoint_shapes_is_refused_and_changes_nothing() {
-        let mut dr = section(vec![rect("a", 0, 0, 1_000, 1_000), rect("b", 5_000, 5_000, 6_000, 6_000)]);
+        let mut dr = section(vec![rect("a", 0, 0, 1_000_000, 1_000_000), rect("b", 5_000_000, 5_000_000, 6_000_000, 6_000_000)]);
         let all = ids(&dr);
         let before = dr.shapes.clone();
         let err = boolean_shapes(&mut dr, BooleanOp::Intersect, &all).unwrap_err();
@@ -323,28 +323,28 @@ mod tests {
 
     #[test]
     fn circles_are_polygonised_and_merge_with_rects() {
-        let mut dr = section(vec![circle("c", 0, 0, 5_000), rect("r", 0, -2_000, 12_000, 2_000)]);
+        let mut dr = section(vec![circle("c", 0, 0, 5_000_000), rect("r", 0, -2_000_000, 12_000_000, 2_000_000)]);
         let all = ids(&dr);
         boolean_shapes(&mut dr, BooleanOp::Merge, &all).unwrap();
         assert_eq!(dr.shapes.len(), 1);
         // the donor is the circle: silkscreen layer, 150 wide, filled
         assert_eq!(dr.shapes[0].layer(), "F.SilkS");
-        assert_eq!(dr.shapes[0].stroke_width(), 150);
+        assert_eq!(dr.shapes[0].stroke_width(), 150_000);
         assert!(dr.shapes[0].is_filled());
-        let pi_r2 = std::f64::consts::PI * 25_000_000.0;
+        let pi_r2 = std::f64::consts::PI * 25_000_000_000_000.0;
         // circle + the part of the rect outside it (a 4 mm wide bar from the circle edge to x=12 mm), within polygonisation error
         assert!(area(&dr.shapes[0]) > pi_r2);
     }
 
     #[test]
     fn needs_two_eligible_shapes() {
-        let mut dr = section(vec![rect("a", 0, 0, 1_000, 1_000)]);
+        let mut dr = section(vec![rect("a", 0, 0, 1_000_000, 1_000_000)]);
         let all = ids(&dr);
         assert!(boolean_shapes(&mut dr, BooleanOp::Merge, &all).is_err());
         // a segment is not eligible
         let mut dr2 = section(vec![
-            rect("a", 0, 0, 1_000, 1_000),
-            Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 10, y: 0 } },
+            rect("a", 0, 0, 1_000_000, 1_000_000),
+            Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 10_000, y: 0 } },
         ]);
         let all2 = ids(&dr2);
         assert!(boolean_shapes(&mut dr2, BooleanOp::Merge, &all2).is_err());
@@ -352,12 +352,12 @@ mod tests {
 
     #[test]
     fn circle_polyline_stays_within_the_error_band() {
-        let pts = circle_polyline(Point { x: 0, y: 0 }, 5_000);
+        let pts = circle_polyline(Point { x: 0, y: 0 }, 5_000_000);
         assert!(pts.len() > 20);
         for p in &pts {
             let d = (p.x as f64).hypot(p.y as f64);
-            assert!((d - 5_000.0).abs() < 3.0, "{d}");
+            assert!((d - 5_000_000.0).abs() < 3_000.0, "{d}");
         }
-        assert_eq!((pts[0].x, pts[0].y), (5_000, 0));
+        assert_eq!((pts[0].x, pts[0].y), (5_000_000, 0));
     }
 }

@@ -76,7 +76,7 @@
   const patternsOf = (st) => st.drawings?.tuning_patterns ?? [];
   const snapshot = (st) => JSON.stringify(tracksOf(st).map((t) => [t.id, t.net, t.layer, t.width, t.pts]));
   const length = (p) => p.reduce((s, q, i) => (i ? s + Math.hypot(q[0] - p[i - 1][0], q[1] - p[i - 1][1]) : 0), 0);
-  const netMm = (st, net) => tracksOf(st).filter((t) => t.net === net).reduce((s, t) => s + length(t.pts), 0) / 1000;
+  const netMm = (st, net) => tracksOf(st).filter((t) => t.net === net).reduce((s, t) => s + length(t.pts), 0) / 1e6;
   const near = (a, b, tol) => Math.abs(a - b) <= tol;
   const dialog = () => document.querySelector(".dialog");
   const dialogTitle = () => dialog()?.querySelector(".dialog-header")?.textContent ?? null;
@@ -120,7 +120,7 @@
   }
   const pa0 = byNet("PA0").pts, dp = byNet("USB_DP").pts;
   const mid = (p) => [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2];
-  const startX = pa0[0][0] + 4_000, endX = pa0[1][0] - 6_000; // where a pattern starts and ends along the track
+  const startX = pa0[0][0] + 4_000_000, endX = pa0[1][0] - 6_000_000; // where a pattern starts and ends along the track
   const targetMm = 29;
 
   await scenario("7 arms the tool and a track under the cursor reads its length with no target; nothing under the cursor reads nothing", async (t) => {
@@ -128,12 +128,12 @@
     await sleep(300);
     t(E.state().tool === "tune", `the tuner is armed: tool ${E.state().tool}`);
     const [mx, my] = mid(pa0);
-    const h = await hover(mx, my + 40);
+    const h = await hover(mx, my + 40_000);
     t(h && h.ok && h.hit === true && h.pick.net === "PA0", `the track under the cursor is picked: ${h && JSON.stringify(h.pick)}`);
     t(h && h.readout && h.readout.label === "current length" && near(h.readout.current, 26, 0.001), `it reads its length: ${h && JSON.stringify(h.readout)}`);
     t(h && h.readout && h.readout.min === null && h.readout.max === null && h.readout.constraint === null, "with no target (the box shows ---)");
     t(h && Array.isArray(h.path) && h.path.length === 2, "the line it is part of is highlighted");
-    const none = await hover(mx, my + 1_500); // between PA0 and its neighbour, 1.5 mm from both
+    const none = await hover(mx, my + 1_500_000); // between PA0 and its neighbour, 1.5 mm from both
     t(none && none.ok && none.hit === false, `nothing is picked in the open: ${JSON.stringify(none)}`);
     t(snapshot(await state()) === original, "hovering changes nothing on the board");
     const shot = canvas().toDataURL ? true : true;
@@ -156,8 +156,8 @@
     const n = replies.length;
     await clickAt(startX, pa0[0][1]);
     const s = await waitReply("start", n);
-    t(s && s.body.ok === true && s.req.settings && s.req.settings.target_length === targetMm * 1000, `the first click starts a pattern with the target: ${s && JSON.stringify([s.req, s.body.ok, s.body.message])}`);
-    t(s && s.body.pattern && s.body.pattern.target_length.opt === targetMm * 1000 && s.body.pattern.spacing === 600, "the pattern has the target, the page's spacing");
+    t(s && s.body.ok === true && s.req.settings && s.req.settings.target_length === targetMm * 1e6, `the first click starts a pattern with the target: ${s && JSON.stringify([s.req, s.body.ok, s.body.message])}`);
+    t(s && s.body.pattern && s.body.pattern.target_length.opt === targetMm * 1e6 && s.body.pattern.spacing === 600_000, "the pattern has the target, the page's spacing");
     await E.run("common.Interactive.cancel"); // Escape drops the pattern that was started
     await sleep(300);
     t(snapshot(await state()) === original, "nothing was put on the board");
@@ -172,8 +172,8 @@
     let n = replies.length;
     await clickAt(startX, pa0[0][1]);
     const s = await waitReply("start", n);
-    t(s && s.body.ok === true && s.req.settings && s.req.settings.target_length === targetMm * 1000, "the tool keeps what the dialog set");
-    const m = await moveTo(endX, pa0[0][1] - 400);
+    t(s && s.body.ok === true && s.req.settings && s.req.settings.target_length === targetMm * 1e6, "the tool keeps what the dialog set");
+    const m = await moveTo(endX, pa0[0][1] - 400_000);
     t(m && m.ok && m.moved === true, `moving the cursor fits the meander: ${m && JSON.stringify([m.ok, m.moved, m.message])}`);
     t(m && m.readout && m.readout.status === "tuned" && near(m.readout.current, targetMm, 0.1), `it reads ${targetMm} mm, tuned: ${m && JSON.stringify(m.readout)}`);
     t(m && m.readout && near(m.readout.min, 28.9, 0.001) && near(m.readout.max, 29.1, 0.001), "within the default tolerance either side");
@@ -182,15 +182,15 @@
     n = replies.length;
     key("4"); // Decrease Amplitude
     const k4 = await waitReply("step", n);
-    t(k4 && k4.req.what === "amplitude_down" && k4.body.pattern.max_amplitude === 950, `4 steps the amplitude down: ${k4 && JSON.stringify([k4.req, k4.body.pattern && k4.body.pattern.max_amplitude])}`);
+    t(k4 && k4.req.what === "amplitude_down" && k4.body.pattern.max_amplitude === 950_000, `4 steps the amplitude down: ${k4 && JSON.stringify([k4.req, k4.body.pattern && k4.body.pattern.max_amplitude])}`);
     await quiet();
     n = replies.length;
     key("1"); // Increase Spacing
     const k1 = await waitReply("step", n);
-    t(k1 && k1.req.what === "spacing_up" && k1.body.pattern.spacing === 650 && k1.body.readout.status === "tuned", `1 steps the spacing up and the meander is fitted again, still tuned: ${k1 && JSON.stringify([k1.req, k1.body.pattern && k1.body.pattern.spacing, k1.body.readout && k1.body.readout.status])}`);
+    t(k1 && k1.req.what === "spacing_up" && k1.body.pattern.spacing === 650_000 && k1.body.readout.status === "tuned", `1 steps the spacing up and the meander is fitted again, still tuned: ${k1 && JSON.stringify([k1.req, k1.body.pattern && k1.body.pattern.spacing, k1.body.readout && k1.body.readout.status])}`);
     await quiet();
     n = replies.length;
-    await clickAt(endX, pa0[0][1] - 400);
+    await clickAt(endX, pa0[0][1] - 400_000);
     const f = await waitReply("fix", n, 20000);
     await quiet();
     t(f && f.body.ok === true && !!f.body.pattern_id, `the second click puts it on the board: ${f && JSON.stringify(f.body)}`);
@@ -198,7 +198,7 @@
     pattern = patternsOf(st).find((p) => p.id === (f && f.body.pattern_id));
     t(!!pattern && pattern.mode === "single" && pattern.member_ids.length > 8, `a pattern with the tracks of the meander as members: ${pattern && JSON.stringify([pattern.mode, pattern.member_ids.length])}`);
     t(pattern && pattern.info === `${targetMm} mm (tuned)`, `it is ${pattern && pattern.info}`);
-    t(pattern && pattern.max_amplitude === 950 && pattern.spacing === 650, "it keeps the amplitude and the spacing the keys left");
+    t(pattern && pattern.max_amplitude === 950_000 && pattern.spacing === 650_000, "it keeps the amplitude and the spacing the keys left");
     t(near(netMm(st, "PA0"), targetMm, 0.1), `PA0 is ${netMm(st, "PA0").toFixed(3)} mm long on the board`);
     t(near(netMm(st, "PA1"), 26, 0.001), "the neighbour is untouched");
     t(E.state().selection.length === 1 && E.state().selection[0].id === pattern.id && E.state().selection[0].kind === "group", `the pattern is selected: ${JSON.stringify(E.state().selection)}`);
@@ -255,12 +255,12 @@
     const [hx, hy] = pattern.handles[1];
     t(pattern.handles.length === 4 && hx === pattern.end.x && hy === pattern.end.y, `the end point is where the pattern ends: ${JSON.stringify(pattern.handles)}`);
     const n = replies.length;
-    await drag([hx, hy], [hx - 4_000, hy]);
+    await drag([hx, hy], [hx - 4_000_000, hy]);
     const calls = replies.slice(n).map((r) => r.name);
     t(calls[0] === "edit_start" && calls.filter((c) => c === "edit_move").length >= 2 && calls[calls.length - 1] === "fix", `the press starts an edit, the moves update it, the release puts it on the board: ${calls.join(" ")}`);
     st = await state();
     const p = patternsOf(st)[0];
-    t(p && p.id === pattern.id && p.end.x < pattern.end.x - 3_000 && p.end.y === pattern.end.y, `the end moved back: ${p && JSON.stringify(p.end)} (was ${JSON.stringify(pattern.end)})`);
+    t(p && p.id === pattern.id && p.end.x < pattern.end.x - 3_000_000 && p.end.y === pattern.end.y, `the end moved back: ${p && JSON.stringify(p.end)} (was ${JSON.stringify(pattern.end)})`);
     t(p && p.info.endsWith("(tuned)") && near(netMm(st, "PA0"), 27.5, 0.1), `still ${p && p.info}, ${netMm(st, "PA0").toFixed(3)} mm`);
     await E.run("common.Interactive.undo");
     await sleep(600);
@@ -343,18 +343,18 @@
     await sleep(100);
     await press("OK");
     const [mx, my] = mid(dp);
-    const h = await hover(mx, my + 20);
+    const h = await hover(mx, my + 20_000);
     t(h && h.hit && h.readout.partner === "USB_DN" && h.readout.nets && near(h.readout.nets[0], 26, 0.001) && near(h.readout.nets[1], 26, 0.001), `the hover reads the pair, the partner and both lengths: ${h && JSON.stringify(h.readout)}`);
     t(h && h.readout.status === "too_short" && near(h.readout.opt, 30, 0.001), "26 mm against 30 mm is too short");
     let n = replies.length;
     await clickAt(startX, dp[0][1]);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.body.mode === "diffpair", `the click starts a pair pattern: ${s && JSON.stringify([s.body.ok, s.body.message, s.body.mode])}`);
-    const m = await moveTo(endX, dp[0][1] - 500);
+    const m = await moveTo(endX, dp[0][1] - 500_000);
     t(m && m.ok && m.readout.status === "tuned" && near(m.readout.current, 30, 0.1), `the pair is ${m && m.readout.current} mm, tuned`);
     t(m && m.preview.hide.length === 2, "both lines are replaced in the preview");
     n = replies.length;
-    await clickAt(endX, dp[0][1] - 500);
+    await clickAt(endX, dp[0][1] - 500_000);
     const fx = await waitReply("fix", n, 20000);
     await quiet();
     const st = await state();
@@ -390,9 +390,9 @@
     let n = replies.length;
     await clickAt(startX, dp[0][1]);
     await waitReply("start", n);
-    await moveTo(endX, dp[0][1] - 500);
+    await moveTo(endX, dp[0][1] - 500_000);
     n = replies.length;
-    await clickAt(endX, dp[0][1] - 500);
+    await clickAt(endX, dp[0][1] - 500_000);
     await waitReply("fix", n, 20000);
     await quiet();
     await leaveTool();
@@ -402,18 +402,18 @@
     await sleep(300);
     t(E.state().tool === "tune", "9 arms the tuner for a skew");
     const dn = byNet("USB_DN").pts;
-    const h = await hover(endX + 3_000, dn[0][1] + 20);
+    const h = await hover(endX + 3_000_000, dn[0][1] + 20_000);
     t(h && h.hit && h.pick.net === "USB_DN" && h.readout.label === "current skew", `the hover reads the skew: ${h && JSON.stringify(h.readout)}`);
     t(h && near(h.readout.current, -2, 0.05) && h.readout.status === "too_short", `USB_DN is 2 mm short of its partner: ${h && h.readout.current}`);
     t(h && near(h.readout.min, -0.1, 0.001) && near(h.readout.opt, 0, 0.001) && near(h.readout.max, 0.1, 0.001), "the skew target is zero, 0.1 mm either side");
     n = replies.length;
-    await clickAt(endX - 6_000, dn[0][1]);
+    await clickAt(endX - 6_000_000, dn[0][1]);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.body.mode === "skew", `the click starts a skew pattern: ${s && JSON.stringify([s.body.ok, s.body.message])}`);
-    const m = await moveTo(endX + 2_000, dn[0][1] + 500);
+    const m = await moveTo(endX + 2_000_000, dn[0][1] + 500_000);
     t(m && m.ok && m.readout.status === "tuned" && Math.abs(m.readout.current) < 0.1, `the skew after: ${m && m.readout.current}`);
     n = replies.length;
-    await clickAt(endX + 2_000, dn[0][1] + 500);
+    await clickAt(endX + 2_000_000, dn[0][1] + 500_000);
     await waitReply("fix", n, 20000);
     await quiet();
     st = await state();
@@ -447,7 +447,7 @@
     key("Escape");
     await sleep(300);
     t(E.state().tool === "select", "the second leaves the tool");
-    const gone = await post("/api/tune/move", { x: 1, y: 1 });
+    const gone = await post("/api/tune/move", { x: 1000, y: 1000 });
     t(gone.ok === false && /No tuning pattern is being placed/.test(gone.message || ""), `and the session is over: ${JSON.stringify(gone)}`);
     t(toastsBefore >= 0, "(the refusal is the one error the studio reports)");
   });

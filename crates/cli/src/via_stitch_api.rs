@@ -13,7 +13,7 @@ use eda_ops::Cmd;
 pub(crate) fn plan(dir: &Path, design: &Design, model: &ConstraintModel, stitch: &eda_model::via_stitch::ViaStitch) -> eda_drc::via_stitch::StitchPlan {
     let fills = crate::fill_api::cached(dir).map(|k| k.fills_nm(design)).unwrap_or_default();
     // `GetCurrentViaSize` / `GetCurrentViaDrill`: the board's default via (the via size list's first entry is the net class's).
-    let inputs = eda_drc::via_stitch::PlanInputs { design, model, fills: &fills, current_via_size_um: model.board.via_diameter, current_via_drill_um: model.board.via_drill };
+    let inputs = eda_drc::via_stitch::PlanInputs { design, model, fills: &fills, current_via_size_nm: model.board.via_diameter, current_via_drill_nm: model.board.via_drill };
     eda_drc::via_stitch::plan(&inputs, stitch)
 }
 

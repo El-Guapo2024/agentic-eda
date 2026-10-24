@@ -113,17 +113,17 @@ export function alignToSegment(pointer: V, aligned: V, seg: Seg, snap: boolean):
 }
 
 /**
- * `ROUTER_TOOL::InlineBreakTrack`: split `track` where the pointer is (`pointerUm`; `gridUm` for
+ * `ROUTER_TOOL::InlineBreakTrack`: split `track` where the pointer is (`pointerNm`; `gridNm` for
  * the snap). Refused -- like `SplitAdjacentSegments` returning false -- when the point is an end
  * point or a vertex, or anything else (a track end, a via, a pad) is joined exactly there.
  */
-export function breakTrack(board: EditBoard, track: EditTrack, pointerUm: readonly [number, number], gridUm: number): BreakTrackResult {
+export function breakTrack(board: EditBoard, track: EditTrack, pointerNm: readonly [number, number], gridNm: number): BreakTrackResult {
   const refuse = (message: string | null): BreakTrackResult => ({ ok: false, message, cmd: null });
   const pts = track.pts;
   if (pts.length < 2) return refuse(null);
-  const pointer = toIU(pointerUm);
-  const aligned: V = [Math.round(pointerUm[0] / gridUm) * gridUm * 1000, Math.round(pointerUm[1] / gridUm) * gridUm * 1000];
-  const halfWidthSq = ((track.width * 1000) / 2) ** 2;
+  const pointer = toIU(pointerNm);
+  const aligned: V = [Math.round(pointerNm[0] / gridNm) * gridNm, Math.round(pointerNm[1] / gridNm) * gridNm];
+  const halfWidthSq = (track.width / 2) ** 2;
 
   if (track.arc_mid) {
     // Arc: the point on the arc nearest the pointer (the grid alignment of AlignToArc needs the arc/line intersections; the nearest point serves).
@@ -131,8 +131,8 @@ export function breakTrack(board: EditBoard, track: EditTrack, pointerUm: readon
     const end = pts[pts.length - 1]!;
     const c = circumcircle([start[0], start[1]], [track.arc_mid[0], track.arc_mid[1]], [end[0], end[1]]);
     if (!c) return refuse(null);
-    const dx = pointerUm[0] - c.cx;
-    const dy = pointerUm[1] - c.cy;
+    const dx = pointerNm[0] - c.cx;
+    const dy = pointerNm[1] - c.cy;
     const len = Math.hypot(dx, dy) || 1;
     const at: P = [Math.round(c.cx + (c.r * dx) / len), Math.round(c.cy + (c.r * dy) / len)];
     const distToEnds = Math.min((at[0] - start[0]) ** 2 + (at[1] - start[1]) ** 2, (at[0] - end[0]) ** 2 + (at[1] - end[1]) ** 2);
@@ -205,15 +205,15 @@ interface Work {
 
 /**
  * `EDIT_TOOL::FilletTracks`: round every corner between two selected straight track segments
- * with a radius-`radiusUm` arc. A corner qualifies when exactly one other item is connected at it
+ * with a radius-`radiusNm` arc. A corner qualifies when exactly one other item is connected at it
  * and that item is a selected straight segment; arcs in the selection are skipped.
  */
-export function filletTracks(board: EditBoard, selected: readonly EditTrack[], radiusUm: number): FilletTracksResult {
+export function filletTracks(board: EditBoard, selected: readonly EditTrack[], radiusNm: number): FilletTracksResult {
   const refuse = (message: string): FilletTracksResult => ({ ok: false, message, cmd: null, arcs: 0 });
   const straight = selected.filter((t) => !t.arc_mid && t.pts.length >= 2);
   const segCount = straight.reduce((n, t) => n + t.pts.length - 1, 0);
   if (segCount < 2) return refuse("At least two straight track segments must be selected.");
-  if (radiusUm === 0) return refuse("");
+  if (radiusNm === 0) return refuse("");
 
   const work: Work[] = [];
   for (const t of straight) {
@@ -223,7 +223,7 @@ export function filletTracks(board: EditBoard, selected: readonly EditTrack[], r
       if (norm(vsub(b, a)) > 0) work.push({ track: t, seg: i, a, b });
     }
   }
-  const radius = radiusUm * 1000;
+  const radius = radiusNm;
 
   interface Op {
     t1: Work;
@@ -238,18 +238,18 @@ export function filletTracks(board: EditBoard, selected: readonly EditTrack[], r
 
   /** The items joined at `anchor` besides `w` itself: segments of the selected straight tracks (live `Work`s), everything else just counted. */
   const itemsAt = (anchor: V, w: Work): { selected: Work[]; others: number } => {
-    const anchorUm = fromIU(anchor);
+    const anchorNm = fromIU(anchor);
     const selected: Work[] = [];
     let foreign = 0;
     for (const t of board.tracks) {
       if (t.layer !== w.track.layer || t.net !== w.track.net) continue;
       if (t.arc_mid) {
         const ends = [t.pts[0]!, t.pts[t.pts.length - 1]!];
-        foreign += ends.filter((e) => samePt(e, anchorUm)).length;
+        foreign += ends.filter((e) => samePt(e, anchorNm)).length;
         continue;
       }
       for (let i = 0; i + 1 < t.pts.length; i++) {
-        if (!samePt(t.pts[i]!, anchorUm) && !samePt(t.pts[i + 1]!, anchorUm)) continue;
+        if (!samePt(t.pts[i]!, anchorNm) && !samePt(t.pts[i + 1]!, anchorNm)) continue;
         if (selectedStraight.has(t.id)) {
           const o = work.find((x) => x.track.id === t.id && x.seg === i);
           if (o && o !== w) selected.push(o);
@@ -258,7 +258,7 @@ export function filletTracks(board: EditBoard, selected: readonly EditTrack[], r
         }
       }
     }
-    const joined = itemsJoinedAt(board, anchorUm, w.track.layer, w.track.net);
+    const joined = itemsJoinedAt(board, anchorNm, w.track.layer, w.track.net);
     return { selected, others: selected.length + foreign + joined.vias + joined.pads };
   };
 

@@ -5,8 +5,9 @@
 //   crates/model/src/lib.rs    (PlacementRule, `#[serde(tag = "kind")]`)
 //   crates/model/src/footprint.rs (Pad shapes)
 //
-// Coordinates are micrometres (i64 in Rust; safe as JS `number` for the
-// board sizes this project deals with). Angles in `rot` are degrees
+// Coordinates are nanometres, as KiCad's internal units are (i64 in Rust; safe as
+// JS `number` up to 2^53 nm, 9000 km; an area in nm^2 is not exact past
+// 2^53, about 95 x 95 mm, so it is shown in mm^2). Angles in `rot` are degrees
 // (the backend already divides millidegrees by 1000 before sending).
 
 import type { AnnotateOptions } from "./hierarchyTypes";
@@ -18,7 +19,7 @@ import type { TableCmdWire } from "./tableTypes";
 import type { TuningPattern } from "./tuneTypes";
 import type { LineEnding } from "../kicad-port/lineEnding";
 
-export type Um = number;
+export type Nm = number;
 export type Degrees = number;
 
 export type Side = "top" | "bottom";
@@ -28,11 +29,11 @@ export interface Pad {
   num: string;
   net: string | null;
   /** The copper's centre on the board (the pad's position moved by its shape offset, if it has one). */
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
   /** The copper's extent on the board (a turned pad's bounding box). */
-  w: Um;
-  h: Um;
+  w: Nm;
+  h: Nm;
   round: boolean;
   /** Through-hole (drilled) vs. surface-mount. */
   th: boolean;
@@ -44,29 +45,29 @@ export interface Pad {
   id?: string;
   shape?: PadShapeName;
   kind?: PadKindName;
-  size?: [Um, Um];
+  size?: [Nm, Nm];
   rot?: Degrees;
   ratio?: number | null;
-  drill?: Um | null;
-  slot?: [Um, Um] | null;
-  px?: Um;
-  py?: Um;
-  offset?: [Um, Um] | null;
-  mask_margin?: Um | null;
-  paste_margin?: Um | null;
+  drill?: Nm | null;
+  slot?: [Nm, Nm] | null;
+  px?: Nm;
+  py?: Nm;
+  offset?: [Nm, Nm] | null;
+  mask_margin?: Nm | null;
+  paste_margin?: Nm | null;
   paste_ratio?: number | null;
   /** A trapezoid's two deltas (`PAD::GetDelta`, KiCad keeps one of them zero); null for any other shape. */
-  delta?: [Um, Um] | null;
+  delta?: [Nm, Nm] | null;
   /** A chamfered rectangle's ratio and corners (`PAD::GetChamferRectRatio`, `GetChamferPositions`); null for any other shape. */
   chamfer_ratio?: number | null;
   chamfer_corners?: ChamferCorners | null;
   /** A custom pad's anchor, zone knockout and basic shapes (`PadCustom`); null for any other shape. */
   custom?: PadCustom | null;
   /**
-   * The copper of a trapezoid, a chamfered rectangle or a custom pad as the DRC measures it (`eda_drc::pad_shape::pad_outline`): contours in micrometres on the
+   * The copper of a trapezoid, a chamfered rectangle or a custom pad as the DRC measures it (`eda_drc::pad_shape::pad_outline`): contours in nanometres on the
    * board, the outline of each piece first and then its holes. Fill them with the even-odd rule. Absent for the shapes that `w`, `h` and `shape` draw.
    */
-  outline?: [Um, Um][][] | null;
+  outline?: [Nm, Nm][][] | null;
   /** True once the pad has an edit of its own in the design. */
   edited?: boolean;
   /** The edit as stored (`PadEditCmd`), for the dialog to send back with the one change it makes. */
@@ -86,10 +87,10 @@ export type UnconnectedLayers = "keep_all" | "remove_all" | "remove_except_start
 /** `eda_model::padstack::PadLayerShape`: one copper layer of a padstack (`PADSTACK::COPPER_LAYER_PROPS`), in the pad's own frame. */
 export interface PadLayerShape {
   shape: PadShapeName;
-  size: [Um, Um];
+  size: [Nm, Nm];
   roundrect_ratio?: number | null;
-  offset?: [Um, Um] | null;
-  trapezoid_delta?: [Um, Um] | null;
+  offset?: [Nm, Nm] | null;
+  trapezoid_delta?: [Nm, Nm] | null;
   chamfer_ratio?: number | null;
   chamfer_corners?: ChamferCorners;
   custom?: PadCustom | null;
@@ -109,14 +110,14 @@ export interface PadStack {
 export interface PadStackLayer {
   layers: string[];
   role: string;
-  x: Um;
-  y: Um;
-  w: Um;
-  h: Um;
+  x: Nm;
+  y: Nm;
+  w: Nm;
+  h: Nm;
   round: boolean;
   shape: PadShapeName;
   ratio?: number | null;
-  outline?: [Um, Um][][] | null;
+  outline?: [Nm, Nm][][] | null;
 }
 
 /** The engine's pad shapes (`eda_model::PadShape`) and three pad types (`PadKind`), as the studio state names them. */
@@ -145,12 +146,12 @@ export interface FieldInfo {
   text: string;
   /** What `${NAME}` in `text` stands for; absent when it is `text` itself. See `BoardText.shown`. */
   shown?: string;
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
   angle: number;
-  w: Um;
-  h: Um;
-  thickness: Um;
+  w: Nm;
+  h: Nm;
+  thickness: Nm;
   layer: string;
   visible: boolean;
   halign: -1 | 0 | 1;
@@ -160,8 +161,8 @@ export interface FieldInfo {
   italic: boolean;
   upright: boolean;
   knockout: boolean;
-  lx: Um;
-  ly: Um;
+  lx: Nm;
+  ly: Nm;
   langle: number;
   /** True once the layout is stored in the design; false for the default placement. */
   custom: boolean;
@@ -178,8 +179,8 @@ export interface FootprintAttrsInfo {
   custom: boolean;
 }
 
-/** `[minX, minY, maxX, maxY]`, footprint-local, µm. */
-export type CourtyardBox = [Um, Um, Um, Um];
+/** `[minX, minY, maxX, maxY]`, footprint-local, nm. */
+export type CourtyardBox = [Nm, Nm, Nm, Nm];
 
 /** `STROKE_PARAMS`' line style, the words `(stroke (type ..))` uses. A solid (or `default`) stroke has no `dash` on the wire. */
 export type FpDash = "dash" | "dot" | "dash_dot" | "dash_dot_dot";
@@ -188,7 +189,7 @@ export type FpHatch = "hatch" | "reverse_hatch" | "cross_hatch";
 
 interface FpGraphicCommon {
   layer: string;
-  stroke_width: Um;
+  stroke_width: Nm;
   /** Absent when false. */
   filled?: boolean;
   dash?: FpDash;
@@ -202,12 +203,12 @@ interface FpGraphicCommon {
  * `Shape` the board's own graphics are, in board space like the pads, without an `id` (kicad-port/fpArt.ts `graphicsOf` gives them complete).
  */
 export type FpGraphic =
-  | (FpGraphicCommon & { kind: "segment"; start: [Um, Um]; end: [Um, Um] })
-  | (FpGraphicCommon & { kind: "arc"; start: [Um, Um]; mid: [Um, Um]; end: [Um, Um] })
-  | (FpGraphicCommon & { kind: "rect"; start: [Um, Um]; end: [Um, Um] })
-  | (FpGraphicCommon & { kind: "circle"; center: [Um, Um]; end: [Um, Um] })
-  | (FpGraphicCommon & { kind: "polygon"; pts: [Um, Um][] })
-  | (FpGraphicCommon & { kind: "bezier"; start: [Um, Um]; c1: [Um, Um]; c2: [Um, Um]; end: [Um, Um] });
+  | (FpGraphicCommon & { kind: "segment"; start: [Nm, Nm]; end: [Nm, Nm] })
+  | (FpGraphicCommon & { kind: "arc"; start: [Nm, Nm]; mid: [Nm, Nm]; end: [Nm, Nm] })
+  | (FpGraphicCommon & { kind: "rect"; start: [Nm, Nm]; end: [Nm, Nm] })
+  | (FpGraphicCommon & { kind: "circle"; center: [Nm, Nm]; end: [Nm, Nm] })
+  | (FpGraphicCommon & { kind: "polygon"; pts: [Nm, Nm][] })
+  | (FpGraphicCommon & { kind: "bezier"; start: [Nm, Nm]; c1: [Nm, Nm]; c2: [Nm, Nm]; end: [Nm, Nm] });
 
 /** One text of a placed footprint (`fp_text user`, `Part.texts`): the keys of a field, at the absolute angle it has on the board, variables resolved. */
 export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout"> & {
@@ -243,8 +244,8 @@ export interface ReannotateOptions {
   direction: number;
   /** "Based on location of": the footprint or its Reference text. */
   location: "footprint" | "reference";
-  /** "Round locations to": the grid, um. */
-  grid_um: number;
+  /** "Round locations to": the grid, nm. */
+  grid_nm: number;
   /** "Reannotation Scope". */
   scope: "all" | "front" | "back" | "selection";
   /** "Exclude locked footprints". */
@@ -277,17 +278,17 @@ export interface Part {
   /** Floorplan block this part belongs to, if any. */
   block: string | null;
   placed: boolean;
-  /** Courtyard full (width, height), µm — present even when unplaced. */
-  size: [Um, Um] | null;
+  /** Courtyard full (width, height), nm — present even when unplaced. */
+  size: [Nm, Nm] | null;
 
   // Present only when `placed` is true:
-  at?: [Um, Um];
+  at?: [Nm, Nm];
   rot?: Degrees;
   side?: Side;
   label?: LabelSide;
   courtyard?: CourtyardBox | null;
   /**
-   * The part's body, board-space µm: the box of its footprint's `F.Fab` graphics (crates/cli/src/body_api.rs). The 3D tab sizes its placeholder boxes from this
+   * The part's body, board-space nm: the box of its footprint's `F.Fab` graphics (crates/cli/src/body_api.rs). The 3D tab sizes its placeholder boxes from this
    * (kicad-port/partBody.ts) -- the courtyard is the body plus a clearance margin plus the pads' reach. `null` when no `F.Fab` is known for the footprint.
    */
   body?: CourtyardBox | null;
@@ -318,29 +319,29 @@ export interface PartZoneFacts {
   /** `FOOTPRINT::GetLocalZoneConnection`. */
   connection: PadConnection | null;
   /** `FOOTPRINT::GetLocalClearance`. */
-  clearance: Um | null;
+  clearance: Nm | null;
   /** The pads that set something of their own. */
-  pads: { num: string; connection: PadConnection | null; gap: Um | null; spoke_width: Um | null; spoke_angle_mdeg: number | null; clearance: Um | null }[];
+  pads: { num: string; connection: PadConnection | null; gap: Nm | null; spoke_width: Nm | null; spoke_angle_mdeg: number | null; clearance: Nm | null }[];
 }
 
 export interface Track {
   id: string;
   net: string;
   layer: string;
-  width: Um;
-  pts: [Um, Um][];
+  width: Nm;
+  pts: [Nm, Nm][];
   /** The arc's mid point when this track is a KiCad arc (`PCB_ARC`; `pts` is then its tessellation), else null/absent. */
-  arc_mid?: [Um, Um] | null;
+  arc_mid?: [Nm, Nm] | null;
 }
 
 export interface Via {
   id: string;
   net: string;
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
   /** Diameter (the backend's `d`, its `Via.diameter`). */
-  d: Um;
-  drill: Um;
+  d: Nm;
+  drill: Nm;
   from: string;
   to: string;
   /** What the via does with the layers nothing connects it on (`remove_unused_layers`); absent when it keeps them all. */
@@ -361,8 +362,8 @@ export type FillMode = "Polygons" | "HatchPattern";
 export type ZoneSmoothing = "none" | "chamfer" | "fillet";
 
 /** `crates/ops/src/lib.rs` `SizeSpec`/`ViaSizeSpec`, `#[serde(tag = "kind")]` -- `edit_tracks_and_vias`'s track-width/via-size fields: either resolve from the item's own net class (`BoardRules::width_of`/`via_diameter_of`/`via_drill_of`), or an explicit value. */
-export type SizeSpec = { kind: "net_class" } | { kind: "value"; um: Um };
-export type ViaSizeSpec = { kind: "net_class" } | { kind: "value"; diameter: Um; drill: Um };
+export type SizeSpec = { kind: "net_class" } | { kind: "value"; nm: Nm };
+export type ViaSizeSpec = { kind: "net_class" } | { kind: "value"; diameter: Nm; drill: Nm };
 
 /**
  * `crates/ops/src/lib.rs` `ArrayGeometry` (task item 6), `#[serde(tag =
@@ -375,7 +376,7 @@ export type ViaSizeSpec = { kind: "net_class" } | { kind: "value"; diameter: Um;
  * entered.
  */
 export type ArrayGeometry =
-  | { kind: "grid"; nx: number; ny: number; dx: Um; dy: Um; offset_x?: Um; offset_y?: Um; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean; reverse_alternate?: boolean }
+  | { kind: "grid"; nx: number; ny: number; dx: Nm; dy: Nm; offset_x?: Nm; offset_y?: Nm; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean; reverse_alternate?: boolean }
   | { kind: "circular"; center: PointXY; count: number; angle_millideg: number; angle_offset_millideg?: number; clockwise?: boolean; rotate_items?: boolean };
 
 /** `crates/ops/src/array_numbering.rs` `NumberingType` (`ARRAY_AXIS::NUMBERING_TYPE`), snake_case on the wire. */
@@ -407,18 +408,18 @@ export interface PadNumbering {
  * field list instead of three copies drifting apart.
  */
 export interface ZoneSettingsFields {
-  clearance: Um;
-  min_thickness: Um;
-  thermal_gap: Um;
-  thermal_spoke_width: Um;
+  clearance: Nm;
+  min_thickness: Nm;
+  thermal_gap: Nm;
+  thermal_spoke_width: Nm;
   pad_connection: PadConnection;
   priority: number;
   island_removal_mode: IslandRemovalMode;
-  /** um^2. */
+  /** nm^2. */
   min_island_area: number;
   fill_mode: FillMode;
-  hatch_thickness: Um;
-  hatch_gap: Um;
+  hatch_thickness: Nm;
+  hatch_gap: Nm;
   hatch_orientation_mdeg: number;
   hatch_smoothing_level: number;
   hatch_smoothing_value: number;
@@ -429,8 +430,8 @@ export interface ZoneSettingsFields {
    * backend's zone JSON; optional here so that an `edit_zone` built without it (it keeps the zone's) and a zone literal in a test still type.
    */
   smoothing?: ZoneSmoothing;
-  /** The chamfer distance or fillet radius, µm; only meaningful with `smoothing`. */
-  corner_radius?: Um;
+  /** The chamfer distance or fillet radius, nm; only meaningful with `smoothing`. */
+  corner_radius?: Nm;
 }
 
 /**
@@ -500,13 +501,13 @@ export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   teardrop: boolean;
   /** `ZONE::GetZoneName()` ("" = unnamed); absent from a backend built before the Properties panel. */
   name?: string;
-  outline: [Um, Um][];
+  outline: [Nm, Nm][];
 }
 
 /** `RoutingSection::via_presets`' entry shape -- `BOARD_DESIGN_SETTINGS::m_ViaSizeList`. */
 export interface ViaPreset {
-  diameter: Um;
-  drill: Um;
+  diameter: Nm;
+  drill: Nm;
 }
 
 export interface Routing {
@@ -514,7 +515,7 @@ export interface Routing {
   vias: Via[];
   zones: Zone[];
   /** `BOARD_DESIGN_SETTINGS::m_TrackWidthList` -- Board Setup's editable extra-widths list for the W/Shift+W cycle, beyond `board_rules.track_width`. */
-  track_width_presets: Um[];
+  track_width_presets: Nm[];
   /** `m_ViaSizeList` -- same idea, for the via-size cycle. */
   via_presets: ViaPreset[];
   /** Task item 4: Board Setup > Teardrops. */
@@ -529,8 +530,8 @@ export interface TeardropSettings {
   target_smd_pads: boolean;
   best_length_ratio: number;
   best_width_ratio: number;
-  max_len_um: Um;
-  max_width_um: Um;
+  max_len_nm: Nm;
+  max_width_nm: Nm;
   width_to_size_filter_ratio: number;
 }
 
@@ -547,19 +548,19 @@ export interface TeardropSettings {
 
 export type ShapeKind = "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
 
-/** A hatch line of a hatched shape: `[x1, y1, x2, y2]`, µm (the `SEG`s of `EDA_SHAPE::GetHatchLines`). */
-export type HatchLine = [Um, Um, Um, Um];
+/** A hatch line of a hatched shape: `[x1, y1, x2, y2]`, nm (the `SEG`s of `EDA_SHAPE::GetHatchLines`). */
+export type HatchLine = [Nm, Nm, Nm, Nm];
 
 interface ShapeCommon {
   id: string;
   layer: string;
-  stroke_width: Um;
+  stroke_width: Nm;
   filled: boolean;
   /** The hatch kind of a hatched rectangle, circle or polygon (`FILL_T::HATCH`, `REVERSE_HATCH`, `CROSS_HATCH`); `filled` is false then. Absent for a shape that is not hatched. */
   fill?: "hatch" | "reverse_hatch" | "cross_hatch";
   /** The lines `EDA_SHAPE::UpdateHatching` makes of that hatch from the board as it is, and the width they are drawn with (the shape's line width). */
   hatch_lines?: HatchLine[];
-  hatch_width?: Um;
+  hatch_width?: Nm;
   /** KiCad 10's line endings of a line, an arc or a curve (`(start_shape ..)`, `(end_shape ..)`; kicad-port/lineEnding.ts); absent for none. */
   start_ending?: LineEnding;
   end_ending?: LineEnding;
@@ -568,13 +569,13 @@ interface ShapeCommon {
 }
 
 export type Shape =
-  | (ShapeCommon & { kind: "segment"; start: [Um, Um]; end: [Um, Um] })
-  | (ShapeCommon & { kind: "arc"; start: [Um, Um]; mid: [Um, Um]; end: [Um, Um] })
-  | (ShapeCommon & { kind: "rect"; start: [Um, Um]; end: [Um, Um] })
-  | (ShapeCommon & { kind: "circle"; center: [Um, Um]; end: [Um, Um] })
-  | (ShapeCommon & { kind: "polygon"; pts: [Um, Um][] })
+  | (ShapeCommon & { kind: "segment"; start: [Nm, Nm]; end: [Nm, Nm] })
+  | (ShapeCommon & { kind: "arc"; start: [Nm, Nm]; mid: [Nm, Nm]; end: [Nm, Nm] })
+  | (ShapeCommon & { kind: "rect"; start: [Nm, Nm]; end: [Nm, Nm] })
+  | (ShapeCommon & { kind: "circle"; center: [Nm, Nm]; end: [Nm, Nm] })
+  | (ShapeCommon & { kind: "polygon"; pts: [Nm, Nm][] })
   /** `PCB_SHAPE` BEZIER: a cubic from `start` to `end` with control points `c1`/`c2` (KiCad's `gr_curve` order). The canvas flattens it with kicad-port/bezierPoly.ts (`BEZIER_POLY::GetPoly`). */
-  | (ShapeCommon & { kind: "bezier"; start: [Um, Um]; c1: [Um, Um]; c2: [Um, Um]; end: [Um, Um] });
+  | (ShapeCommon & { kind: "bezier"; start: [Nm, Nm]; c1: [Nm, Nm]; c2: [Nm, Nm]; end: [Nm, Nm] });
 
 export type TextJustify = "left" | "center" | "right";
 
@@ -583,13 +584,13 @@ export interface BoardText {
   content: string;
   /** What `${NAME}` in `content` stands for (the Text Variables page, KiCad's own variables); absent when it is `content` itself. The painter and the boxes use it; an edit starts from `content`. */
   shown?: string;
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
   /** Millidegrees -- NOT divided down like a Part's `rot`. */
   angle: number;
   layer: string;
-  size: Um;
-  stroke_width: Um;
+  size: Nm;
+  stroke_width: Nm;
   justify: TextJustify;
   mirror: boolean;
 }
@@ -627,12 +628,12 @@ export interface Drawings {
 
 /** `STROKE_PARAMS` of a table's border or separators: a width of -1 is "not drawn", `default` is drawn solid. */
 export interface TableStrokeInfo {
-  width: Um;
+  width: Nm;
   style: "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
   color: [number, number, number, number] | null;
 }
 
-/** One line of a cell's text, placed: the point its first glyph's origin is at, board um (fractions kept). */
+/** One line of a cell's text, placed: the point its first glyph's origin is at, board nm (fractions kept). */
 export interface TablePlacedLine {
   text: string;
   x: number;
@@ -651,15 +652,15 @@ export interface BoardTableCell {
   shown?: string;
   col_span: number;
   row_span: number;
-  corners: [[Um, Um], [Um, Um], [Um, Um], [Um, Um]];
+  corners: [[Nm, Nm], [Nm, Nm], [Nm, Nm], [Nm, Nm]];
   /** left, top, right, bottom. */
-  margins: [Um, Um, Um, Um];
+  margins: [Nm, Nm, Nm, Nm];
   h_align: "left" | "center" | "right";
   v_align: "top" | "center" | "bottom";
-  size_w: Um;
-  size_h: Um;
+  size_w: Nm;
+  size_h: Nm;
   /** 0 is KiCad's automatic stroke width. */
-  thickness: Um;
+  thickness: Nm;
   /** The stroke width the glyphs are drawn with. */
   pen: number;
   bold: boolean;
@@ -680,20 +681,20 @@ export interface BoardTable {
   id: string;
   layer: string;
   /** The top-left corner of the first cell. */
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
   /** Millidegrees. */
   angle: number;
   rows: number;
   cols: number;
-  col_widths: Um[];
-  row_heights: Um[];
+  col_widths: Nm[];
+  row_heights: Nm[];
   border: { external: boolean; header: boolean; stroke: TableStrokeInfo };
   separators: { rows: boolean; cols: boolean; stroke: TableStrokeInfo };
   /** x0, y0, x1, y1 of the box round the first and the last cell. */
-  bbox: [Um, Um, Um, Um];
+  bbox: [Nm, Nm, Nm, Nm];
   /** The lines `DrawBorders` draws. */
-  borders: { a: [Um, Um]; b: [Um, Um]; width: Um; style: TableStrokeInfo["style"]; color: [number, number, number, number] | null }[];
+  borders: { a: [Nm, Nm]; b: [Nm, Nm]; width: Nm; style: TableStrokeInfo["style"]; color: [number, number, number, number] | null }[];
   cells: BoardTableCell[];
 }
 
@@ -721,7 +722,7 @@ export type ArrowDirection = "inward" | "outward";
  * actually has (`height`/`horizontal`/`leader_length`, `null` otherwise),
  * not the nested tagged shape `CmdDimension` below sends/receives. The
  * geometry fields (`lines`/`text_at`/`computed_text_angle`/
- * `measured_value_um`/`text`) are computed once, server-side
+ * `measured_value_nm`/`text`) are computed once, server-side
  * (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
  * renderer draws exactly these, never re-deriving crossbar/arrow/text
  * placement itself.
@@ -730,11 +731,11 @@ export interface Dimension {
   id: string;
   layer: string;
   kind: "aligned" | "orthogonal" | "radial" | "leader" | "center";
-  height: Um | null;
+  height: Nm | null;
   horizontal: boolean | null;
-  leader_length: Um | null;
-  start: [Um, Um];
-  end: [Um, Um];
+  leader_length: Nm | null;
+  start: [Nm, Nm];
+  end: [Nm, Nm];
   prefix: string;
   suffix: string;
   override_text: string | null;
@@ -748,22 +749,22 @@ export interface Dimension {
   /** Millidegrees. Only meaningful when `keep_text_aligned` is false --
    * otherwise `computed_text_angle` below is what actually applies. */
   text_angle: number;
-  text_size_um: Um;
-  /** The label's pen, µm; null/absent = 15 % of `text_size_um` (`EDA_TEXT::GetTextThickness`). */
-  text_thickness_um?: Um | null;
-  stroke_width: Um;
-  arrow_length: Um;
-  extension_offset: Um;
-  extension_height: Um;
+  text_size_nm: Nm;
+  /** The label's pen, nm; null/absent = 15 % of `text_size_nm` (`EDA_TEXT::GetTextThickness`). */
+  text_thickness_nm?: Nm | null;
+  stroke_width: Nm;
+  arrow_length: Nm;
+  extension_offset: Nm;
+  extension_height: Nm;
   arrow_direction: ArrowDirection;
   /** Every line segment to draw: extension lines, crossbar/leader pieces
    * (already split around inline text), arrow barbs/tails, a centre cross. */
-  lines: [[Um, Um], [Um, Um]][];
-  text_at: [Um, Um];
+  lines: [[Nm, Nm], [Nm, Nm]][];
+  text_at: [Nm, Nm];
   computed_text_angle: number;
-  measured_value_um: Um;
+  measured_value_nm: Nm;
   /** Fully formatted (prefix + value + units suffix + suffix, or the
-   * override text if set). Draw this verbatim -- do not reformat `measured_value_um` again. */
+   * override text if set). Draw this verbatim -- do not reformat `measured_value_nm` again. */
   text: string;
 }
 
@@ -775,15 +776,15 @@ export interface DimensionSettings {
   suppress_trailing_zeros: boolean;
   text_position: DimensionTextPosition;
   keep_text_aligned: boolean;
-  text_size_um: Um;
-  stroke_width: Um;
-  arrow_length: Um;
-  extension_offset: Um;
-  extension_height: Um;
+  text_size_nm: Nm;
+  stroke_width: Nm;
+  arrow_length: Nm;
+  extension_offset: Nm;
+  extension_height: Nm;
 }
 
 /** `CmdDimensionKind` -- `crates/model/src/ir.rs` `DimensionKind`'s own `#[serde(tag = "kind")]` shape, as `add_dimension`/`edit_dimension` need it (unlike `Dimension.kind` above, a flat string). */
-export type CmdDimensionKind = { kind: "aligned"; height: Um } | { kind: "orthogonal"; height: Um; horizontal: boolean } | { kind: "radial"; leader_length: Um } | { kind: "leader" } | { kind: "center" };
+export type CmdDimensionKind = { kind: "aligned"; height: Nm } | { kind: "orthogonal"; height: Nm; horizontal: boolean } | { kind: "radial"; leader_length: Nm } | { kind: "leader" } | { kind: "center" };
 
 /** `crates/model/src/ir.rs` `Dimension`, IR field names (`PointXY` objects, a nested `kind`) -- for `add_dimension`/`edit_dimension`'s own Cmd payload. See `Dimension` above for the display shape a renderer actually reads. */
 export interface CmdDimension {
@@ -802,13 +803,13 @@ export interface CmdDimension {
   text_position: DimensionTextPosition;
   keep_text_aligned: boolean;
   text_angle: number;
-  text_size_um: Um;
+  text_size_nm: Nm;
   /** Null/absent = the default pen (15 % of the size). */
-  text_thickness_um?: Um | null;
-  stroke_width: Um;
-  arrow_length: Um;
-  extension_offset: Um;
-  extension_height: Um;
+  text_thickness_nm?: Nm | null;
+  stroke_width: Nm;
+  arrow_length: Nm;
+  extension_offset: Nm;
+  extension_height: Nm;
   arrow_direction: ArrowDirection;
 }
 
@@ -852,15 +853,15 @@ export interface LibraryPad {
   at: PointXY;
   /** `PAD::SetOffset` -- the copper shape's center relative to `at`; `{x:0,y:0}` for the overwhelming majority of pads. */
   offset: PointXY;
-  size: [Um, Um];
+  size: [Nm, Nm];
   shape: LibraryPadShape;
   kind: PadKind;
-  drill: Um | null;
-  drill_slot: [Um, Um] | null;
+  drill: Nm | null;
+  drill_slot: [Nm, Nm] | null;
   rot: Degrees;
   roundrect_ratio: number | null;
   /** `(dx, dy)` -- KiCad's own convention of only ever one axis non-zero. */
-  trapezoid_delta: [Um, Um] | null;
+  trapezoid_delta: [Nm, Nm] | null;
   /** Fraction of the shorter side, same shape as `roundrect_ratio`. Only meaningful for `"chamfered_rect"`. */
   chamfer_ratio: number | null;
   chamfer_corners: ChamferCorners;
@@ -869,9 +870,9 @@ export interface LibraryPad {
   /** KiCad layer names this pad occupies ("F.Cu", "F.Paste", "F.Mask", "*.Cu", ...) -- the Pad Properties dialog's layer-preset buttons fill this in; empty means "not set yet". */
   layers: string[];
   /** `None`/`null` = inherit the board/footprint default, KiCad's own 0-means-inherit convention. */
-  clearance_override: Um | null;
-  thermal_gap_override: Um | null;
-  thermal_spoke_width_override: Um | null;
+  clearance_override: Nm | null;
+  thermal_gap_override: Nm | null;
+  thermal_spoke_width_override: Nm | null;
   /** The dialog's "Pad connection" (`PAD::GetLocalZoneConnection`); absent/`null` is "From parent footprint". */
   zone_connection?: PadConnection | null;
   /** The dialog's "Spoke angle" (`PAD::GetThermalSpokeAngle`), millidegrees as in the `.kicad_pcb`; absent/`null` is the shape's default (90 degrees, 45 for a circle). */
@@ -944,7 +945,7 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   graphics: CmdShape[];
   texts: CmdText[];
   fields: FootprintField[];
-  courtyard: [Um, Um] | null;
+  courtyard: [Nm, Nm] | null;
   anchor: PointXY;
   published: boolean;
   /** `PAD_TOOL::InPadEditMode`: the pad being edited as graphic shapes (Edit Pad as Graphic Shapes), until Finish Pad Edit recombines it (kicad-port/padEditMode.ts). Absent when none is. */
@@ -993,17 +994,17 @@ export type Rule =
 export interface BoardState {
   name: string;
   dir: string;
-  outline: [Um, Um][] | null;
+  outline: [Nm, Nm][] | null;
   /** The outline the way KiCad builds it from Edge.Cuts (`BOARD::GetBoardPolygonOutlines`): every outline with its cutouts, where `outline` is one polygon. Absent from an older backend. See `kicad-port/pcbOutline.ts` `boardOutlinePolygons`. */
-  outline_polys?: { outer: [Um, Um][]; holes: [Um, Um][][] }[];
+  outline_polys?: { outer: [Nm, Nm][]; holes: [Nm, Nm][][] }[];
   /** The Edge.Cuts shapes in `drawings` are the whole outline (arcs, circles, cutouts, an open chain...) and `outline` is only their summary: the canvas draws the shapes, not the polygon. */
   outline_is_shapes?: boolean;
   /** What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board. */
-  outline_errors?: { message: string; at: [Um, Um]; items: string[] }[];
+  outline_errors?: { message: string; at: [Nm, Nm]; items: string[] }[];
   /** Copper stackup layer names, e.g. ["F.Cu", "B.Cu"]. */
   layers: string[];
-  /** Placement grid pitch, µm. */
-  snap: Um;
+  /** Placement grid pitch, nm. */
+  snap: Nm;
   parts: Part[];
   rules: Rule[];
   routing: Routing | null;
@@ -1011,10 +1012,10 @@ export interface BoardState {
   checks: Check[];
   /** `BOARD_ITEM::IsLocked()` for every kind at once: a placed part's ref, or a track/via/zone/shape/text id (`DrawingsSection::locked_ids`, set by `set_locked`). Absent from an older backend = nothing locked. */
   locked?: string[];
-  /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` µm; null/absent = (0, 0). */
-  aux_origin?: [Um, Um] | null;
-  /** The point the editing grid is anchored at (`BOARD_DESIGN_SETTINGS::GetGridOrigin`, `common.Control.gridSetOrigin`), `[x, y]` µm; null/absent = (0, 0). */
-  grid_origin?: [Um, Um] | null;
+  /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` nm; null/absent = (0, 0). */
+  aux_origin?: [Nm, Nm] | null;
+  /** The point the editing grid is anchored at (`BOARD_DESIGN_SETTINGS::GetGridOrigin`, `common.Control.gridSetOrigin`), `[x, y]` nm; null/absent = (0, 0). */
+  grid_origin?: [Nm, Nm] | null;
   /** The board's paper and title block (Page Settings, `common.Control.pageSettings`); null/absent are A4 landscape and an empty title block. */
   page?: PageInfo | null;
   title_block?: TitleBlock | null;
@@ -1030,22 +1031,22 @@ export interface BoardState {
    * studio.rs) -- older `eda` binaries won't send it.
    */
   board_rules?: {
-    track_width: Um;
-    via_drill: Um;
-    via_diameter: Um;
-    clearance: Um;
+    track_width: Nm;
+    via_drill: Nm;
+    via_diameter: Nm;
+    clearance: Nm;
     /**
      * `crates/model/src/lib.rs` `NetClass`, the classes other than Default. They start in the intent (or the imported project); Board
      * Setup > Net Classes edits them with `set_net_classes`, the edit lives in `design.json` and `board::load` lays it over the intent.
      */
     net_classes: NetClass[];
-    hole_to_hole_min_um: Um;
-    hole_clearance_um: Um;
-    silk_clearance_um: Um;
-    annular_width_min_um: Um;
-    min_silk_text_height_um: Um;
-    min_silk_text_thickness_um: Um;
-    refdes_font_um: Um | null;
+    hole_to_hole_min_nm: Nm;
+    hole_clearance_nm: Nm;
+    silk_clearance_nm: Nm;
+    annular_width_min_nm: Nm;
+    min_silk_text_height_nm: Nm;
+    min_silk_text_thickness_nm: Nm;
+    refdes_font_nm: Nm | null;
     stackup: Stackup | null;
     /*
      * Board Setup's pages (`eda_model::rules`), as the board is judged by them right now -- the intent's (or the imported
@@ -1058,8 +1059,8 @@ export interface BoardState {
     constraints_explicit?: boolean;
     mask_paste?: MaskPaste;
     text_graphics?: TextGraphicsDefaults;
-    /** `BOARD_DESIGN_SETTINGS::GetBoardThickness`, µm. */
-    board_thickness_um?: Um;
+    /** `BOARD_DESIGN_SETTINGS::GetBoardThickness`, nm. */
+    board_thickness_nm?: Nm;
     copper_layers?: number;
     /** Copper layer names in stack order: `F.Cu`, `In1.Cu` .. `B.Cu`. */
     layer_names?: string[];
@@ -1097,10 +1098,10 @@ export interface FormattingSettings {
   apply_to_fp_barcodes: boolean;
 }
 
-/** `ZONE_LAYER_PROPERTIES::hatching_offset`, µm. */
+/** `ZONE_LAYER_PROPERTIES::hatching_offset`, nm. */
 export interface HatchOffset {
-  x_um: Um;
-  y_um: Um;
+  x_nm: Nm;
+  y_nm: Nm;
 }
 export type HatchOffsets = Record<string, HatchOffset>;
 
@@ -1108,9 +1109,9 @@ export type MeanderCornerStyle = "chamfer" | "round";
 
 /** `PNS::MEANDER_SETTINGS`, the part Board Setup > Length-tuning Patterns edits. */
 export interface MeanderSettings {
-  min_amplitude_um: Um;
-  max_amplitude_um: Um;
-  spacing_um: Um;
+  min_amplitude_nm: Nm;
+  max_amplitude_nm: Nm;
+  spacing_nm: Nm;
   corner_style: MeanderCornerStyle;
   corner_radius_percentage: number;
   single_sided: boolean;
@@ -1128,8 +1129,8 @@ export interface ProfileLayerEntry {
   signal_layer: string;
   top_reference_layer?: string | null;
   bottom_reference_layer?: string | null;
-  width_um: Um;
-  diff_pair_gap_um: Um;
+  width_nm: Nm;
+  diff_pair_gap_nm: Nm;
   delay_as_per_mm: number;
 }
 
@@ -1177,24 +1178,24 @@ export interface NetClassSettings {
   classes: NetClass[];
 }
 
-/** `eda_model::rules::Constraints` -- Board Setup > Design Rules > Constraints (`rules.*` of the `.kicad_pro`), µm unless noted. */
+/** `eda_model::rules::Constraints` -- Board Setup > Design Rules > Constraints (`rules.*` of the `.kicad_pro`), nm unless noted. */
 export interface Constraints {
-  min_clearance_um: Um;
-  min_connection_um: Um;
-  min_track_width_um: Um;
-  min_annular_width_um: Um;
-  min_via_diameter_um: Um;
-  min_through_hole_um: Um;
-  min_microvia_diameter_um: Um;
-  min_microvia_drill_um: Um;
-  min_hole_to_hole_um: Um;
-  min_hole_clearance_um: Um;
-  min_copper_edge_clearance_um: Um;
-  min_silk_clearance_um: Um;
-  min_groove_width_um: Um;
-  min_silk_text_height_um: Um;
-  min_silk_text_thickness_um: Um;
-  max_error_um: Um;
+  min_clearance_nm: Nm;
+  min_connection_nm: Nm;
+  min_track_width_nm: Nm;
+  min_annular_width_nm: Nm;
+  min_via_diameter_nm: Nm;
+  min_through_hole_nm: Nm;
+  min_microvia_diameter_nm: Nm;
+  min_microvia_drill_nm: Nm;
+  min_hole_to_hole_nm: Nm;
+  min_hole_clearance_nm: Nm;
+  min_copper_edge_clearance_nm: Nm;
+  min_silk_clearance_nm: Nm;
+  min_groove_width_nm: Nm;
+  min_silk_text_height_nm: Nm;
+  min_silk_text_thickness_nm: Nm;
+  max_error_nm: Nm;
   min_resolved_spokes: number;
   use_height_for_length_calcs: boolean;
   zones_allow_external_fillets: boolean;
@@ -1202,24 +1203,24 @@ export interface Constraints {
 
 /** `eda_model::SolderMaskRules` -- Board Setup > Board Stackup > Solder Mask/Paste. */
 export interface MaskPaste {
-  expansion_um: Um;
-  min_width_um: Um;
-  to_copper_clearance_um: Um;
+  expansion_nm: Nm;
+  min_width_nm: Nm;
+  to_copper_clearance_nm: Nm;
   allow_bridges_in_footprints: boolean;
   tent_vias_front: boolean;
   tent_vias_back: boolean;
-  /** `pad_to_paste_clearance`: the absolute margin, µm (negative shrinks the opening). */
-  paste_margin_um: Um;
+  /** `pad_to_paste_clearance`: the absolute margin, nm (negative shrinks the opening). */
+  paste_margin_nm: Nm;
   /** `pad_to_paste_clearance_ratio`: a fraction of the pad (-0.05 = -5 %). */
   paste_margin_ratio: number;
 }
 
 /** One row of Board Setup > Text & Graphics > Defaults. */
 export interface LayerClassDefaults {
-  line_width_um: Um;
-  text_width_um: Um;
-  text_height_um: Um;
-  text_thickness_um: Um;
+  line_width_nm: Nm;
+  text_width_nm: Nm;
+  text_height_nm: Nm;
+  text_thickness_nm: Nm;
   italic: boolean;
   upright: boolean;
 }
@@ -1228,8 +1229,8 @@ export interface LayerClassDefaults {
 export interface TextGraphicsDefaults {
   silk: LayerClassDefaults;
   copper: LayerClassDefaults;
-  edge_cuts_line_width_um: Um;
-  courtyard_line_width_um: Um;
+  edge_cuts_line_width_nm: Nm;
+  courtyard_line_width_nm: Nm;
   fab: LayerClassDefaults;
   others: LayerClassDefaults;
 }
@@ -1246,15 +1247,15 @@ export interface NetClass {
   name: string;
   /** Patterns over net names (`*` any run, `?` any one character, anchored), e.g. `["GND", "VBAT*"]` -- first class whose pattern matches a net owns it. */
   nets: string[];
-  track_width?: Um;
-  clearance?: Um;
-  via_diameter?: Um;
-  via_drill?: Um;
-  microvia_diameter?: Um;
-  microvia_drill?: Um;
-  diff_pair_width?: Um;
-  diff_pair_gap?: Um;
-  diff_pair_via_gap?: Um;
+  track_width?: Nm;
+  clearance?: Nm;
+  via_diameter?: Nm;
+  via_drill?: Nm;
+  microvia_diameter?: Nm;
+  microvia_drill?: Nm;
+  diff_pair_width?: Nm;
+  diff_pair_gap?: Nm;
+  diff_pair_via_gap?: Nm;
   priority: number;
 }
 
@@ -1296,18 +1297,18 @@ export type Region = "north_west" | "north" | "north_east" | "west" | "centre" |
 // for the exact same data -- that array form is `state()`'s own hand-
 // built display JSON, not IR's native shape.
 export interface PointXY {
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
 }
 
 /** crates/model/src/ir.rs `Shape`, IR field names/point shape -- for `add_shape` only. Same `kind` tags as the display `Shape` above, different point representation ({x,y}, not [x,y]) and `id` left empty for a new one (the backend assigns it). */
 export type CmdShape =
-  | { kind: "segment"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; end: PointXY }
-  | { kind: "arc"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; mid: PointXY; end: PointXY }
-  | { kind: "rect"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; end: PointXY }
-  | { kind: "circle"; id?: string; layer: string; stroke_width: Um; filled: boolean; center: PointXY; end: PointXY }
-  | { kind: "polygon"; id?: string; layer: string; stroke_width: Um; filled: boolean; pts: PointXY[] }
-  | { kind: "bezier"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; c1: PointXY; c2: PointXY; end: PointXY };
+  | { kind: "segment"; id?: string; layer: string; stroke_width: Nm; filled: boolean; start: PointXY; end: PointXY }
+  | { kind: "arc"; id?: string; layer: string; stroke_width: Nm; filled: boolean; start: PointXY; mid: PointXY; end: PointXY }
+  | { kind: "rect"; id?: string; layer: string; stroke_width: Nm; filled: boolean; start: PointXY; end: PointXY }
+  | { kind: "circle"; id?: string; layer: string; stroke_width: Nm; filled: boolean; center: PointXY; end: PointXY }
+  | { kind: "polygon"; id?: string; layer: string; stroke_width: Nm; filled: boolean; pts: PointXY[] }
+  | { kind: "bezier"; id?: string; layer: string; stroke_width: Nm; filled: boolean; start: PointXY; c1: PointXY; c2: PointXY; end: PointXY };
 
 /** crates/model/src/ir.rs `Text`, IR field names -- for `add_text` only (`edit_text` takes flat fields instead, see Cmd below). */
 export interface CmdText {
@@ -1316,8 +1317,8 @@ export interface CmdText {
   at: PointXY;
   angle: number;
   layer: string;
-  size_um: Um;
-  stroke_width: Um;
+  size_nm: Nm;
+  stroke_width: Nm;
   justify: TextJustify;
   mirror: boolean;
 }
@@ -1333,14 +1334,14 @@ export interface CmdTrack {
   id?: string;
   net: string;
   layer: string;
-  width: Um;
+  width: Nm;
   pts: PointXY[];
 }
 /** `crates/model/src/ir.rs` `Track` as `commit_route` takes it (ids are assigned server side). `arc_mid_offset` is the arc's mid point relative to `pts[0]`; `pts` must then be the arc's tessellation (`kicad-port/trackArc.ts`). */
 export interface CmdRouteTrack {
   net: string;
   layer: string;
-  width: Um;
+  width: Nm;
   pts: PointXY[];
   pins?: string[];
   arc_mid_offset?: PointXY;
@@ -1349,8 +1350,8 @@ export interface CmdVia {
   id?: string;
   net: string;
   at: PointXY;
-  drill: Um;
-  diameter: Um;
+  drill: Nm;
+  diameter: Nm;
   from_layer: string;
   to_layer: string;
 }
@@ -1376,8 +1377,8 @@ export type ZonePriorityMove = "top" | "raise" | "lower" | "bottom";
 export interface FieldLayoutCmd {
   at: PointXY;
   angle?: number;
-  size: [Um, Um];
-  thickness?: Um;
+  size: [Nm, Nm];
+  thickness?: Nm;
   layer: string;
   visible?: boolean;
   halign?: -1 | 0 | 1;
@@ -1423,17 +1424,17 @@ export interface PadEditCmd {
   nth?: number;
   kind?: "smd" | "through_hole" | "non_plated_hole";
   shape?: PadShapeName;
-  size?: [Um, Um];
-  drill?: Um;
-  drill_slot?: [Um, Um];
+  size?: [Nm, Nm];
+  drill?: Nm;
+  drill_slot?: [Nm, Nm];
   offset?: PointXY;
   rot?: number;
   roundrect_ratio?: number;
-  solder_mask_margin?: Um;
-  solder_paste_margin?: Um;
+  solder_mask_margin?: Nm;
+  solder_paste_margin?: Nm;
   solder_paste_margin_ratio?: number;
   /** A trapezoid's deltas; `[0, 0]` takes the delta away. */
-  trapezoid_delta?: [Um, Um];
+  trapezoid_delta?: [Nm, Nm];
   /** A chamfered rectangle's chamfer ratio, `0..1` of the shorter side, and the corners it cuts. */
   chamfer_ratio?: number;
   chamfer_corners?: ChamferCorners;
@@ -1445,7 +1446,7 @@ export interface PadEditCmd {
 
 /**
  * File > Import > Graphics... (`DRAWING_TOOL::PlaceImportedGraphics`): a DXF or SVG file (its `text`) as the board's own lines, arcs, circles, polygons, curves and text on `layer`,
- * one undo step. `offset_*_nm` is the importer's offset after the scale (nanometres); `fix_tolerance_um` is "Fix discontinuities" with its tolerance; `replace_outline` makes
+ * one undo step. `offset_*_nm` is the importer's offset after the scale (nanometres); `fix_tolerance_nm` is "Fix discontinuities" with its tolerance; `replace_outline` makes
  * the imported Edge.Cuts shapes the board's outline. See crates/ops/src/import_graphics.rs.
  */
 export interface ImportGraphicsCmd {
@@ -1457,15 +1458,15 @@ export interface ImportGraphicsCmd {
   scale?: number;
   offset_x_nm?: number;
   offset_y_nm?: number;
-  line_width_um?: Um;
+  line_width_nm?: Nm;
   group?: boolean;
-  fix_tolerance_um?: Um | null;
+  fix_tolerance_nm?: Nm | null;
   replace_outline?: boolean;
 }
 
 /**
  * `SCH_DRAWING_TOOLS::ImportGraphics` (schematic) and `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics` (Symbol Editor): the same file as graphic lines, shapes and text of the sheet in
- * view, or as drawn items of the symbol `lib_id` on `unit` / `body_style`, in one undo step. `offset_*_nm` is the importer's offset after the scale; `line_width_um` 0 is the sheet's
+ * view, or as drawn items of the symbol `lib_id` on `unit` / `body_style`, in one undo step. `offset_*_nm` is the importer's offset after the scale; `line_width_nm` 0 is the sheet's
  * default width. See crates/ops/src/import_graphics_sch.rs.
  */
 export interface ImportSchGraphicsCmd {
@@ -1476,7 +1477,7 @@ export interface ImportSchGraphicsCmd {
   scale?: number;
   offset_x_nm?: number;
   offset_y_nm?: number;
-  line_width_um?: Um;
+  line_width_nm?: Nm;
 }
 
 export interface ImportSymbolGraphicsCmd {
@@ -1490,7 +1491,7 @@ export interface ImportSymbolGraphicsCmd {
   scale?: number;
   offset_x_nm?: number;
   offset_y_nm?: number;
-  line_width_um?: Um;
+  line_width_nm?: Nm;
 }
 
 /** `PASTE_MODE` (`include/dialogs/dialog_paste_special.h`): the reference designators of pasted footprints are given the next free number ("unique"), left as the clipboard has them even if another footprint has them ("keep", a plain paste's default) or cleared to `REF**` ("remove"). */
@@ -1500,8 +1501,8 @@ export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
   | { op: "place_edge"; part: string; edge: Dir; fraction: number }
   | { op: "place_region"; part: string; region: Region }
-  | { op: "place_at"; part: string; x: Um; y: Um }
-  | { op: "move_to"; part: string; x: Um; y: Um }
+  | { op: "place_at"; part: string; x: Nm; y: Nm }
+  | { op: "move_to"; part: string; x: Nm; y: Nm }
   | { op: "nudge"; part: string; dir: Dir; steps: number }
   | { op: "rotate"; part: string; quarter_turns: number }
   | { op: "swap"; a: string; b: string }
@@ -1510,19 +1511,19 @@ export type Cmd =
   /** Footprint Properties' "Text Placement" field (the refdes label's side) -- does not move anything, so (unlike Flip/Rotate/MoveTo) it does not clear routing. */
   | ({ op: "set_label_side"; part: string } & { side: LabelSide })
   /** Footprint Properties' "Zone connection" and "Clearance" on a placed footprint (`FOOTPRINT::SetLocalZoneConnection` / `SetLocalClearance`): a whole-panel commit, `null` inherits. */
-  | { op: "set_footprint_zone_connection"; part: string; zone_connection: PadConnection | null; clearance: Um | null }
+  | { op: "set_footprint_zone_connection"; part: string; zone_connection: PadConnection | null; clearance: Nm | null }
   /** Pad Properties' zone fields on the pads numbered `pad` of a placed footprint: "Pad connection", "Relief gap", "Spoke width", "Spoke angle" (millidegrees) and "Clearance". A whole-panel commit, `null` inherits. */
-  | { op: "set_pad_zone_overrides"; part: string; pad: string; zone_connection: PadConnection | null; thermal_gap: Um | null; thermal_spoke_width: Um | null; thermal_spoke_angle_mdeg: number | null; clearance: Um | null }
-  | { op: "add_track"; net: string; layer: string; width: Um; pts: PointXY[] }
+  | { op: "set_pad_zone_overrides"; part: string; pad: string; zone_connection: PadConnection | null; thermal_gap: Nm | null; thermal_spoke_width: Nm | null; thermal_spoke_angle_mdeg: number | null; clearance: Nm | null }
+  | { op: "add_track"; net: string; layer: string; width: Nm; pts: PointXY[] }
   | { op: "delete_track"; id: string }
-  | { op: "set_track_width"; id: string; width: Um }
-  | { op: "add_via"; net: string; x: Um; y: Um; drill: Um; diameter: Um; from_layer: string; to_layer: string }
+  | { op: "set_track_width"; id: string; width: Nm }
+  | { op: "add_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string }
   | { op: "delete_via"; id: string }
-  | { op: "move_via"; id: string; x: Um; y: Um }
+  | { op: "move_via"; id: string; x: Nm; y: Nm }
   /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */
-  | { op: "edit_via"; id: string; diameter: Um; drill: Um }
+  | { op: "edit_via"; id: string; diameter: Nm; drill: Nm }
   /** Board Setup > Track Widths & Vias: replace the W/Shift+W preset list wholesale (no per-entry add/remove Cmd -- same spirit as `paste_items`). The board's own default (`board_rules.track_width`) is not part of this list. */
-  | { op: "set_track_width_presets"; widths: Um[] }
+  | { op: "set_track_width_presets"; widths: Nm[] }
   /** Same panel's via-size-cycle preset list. */
   | { op: "set_via_presets"; presets: ViaPreset[] }
   /**
@@ -1573,7 +1574,7 @@ export type Cmd =
   | { op: "add_dimension"; dimension: CmdDimension }
   | { op: "delete_dimension"; id: string }
   /** Translate both feature points by `(dx, dy)` -- `PCB_DIMENSION_BASE::Move`. */
-  | { op: "move_dimension"; id: string; dx: Um; dy: Um }
+  | { op: "move_dimension"; id: string; dx: Nm; dy: Nm }
   /** Properties dialog's OK: replace every field at once. `id` on `dimension` is ignored. */
   | { op: "edit_dimension"; id: string; dimension: CmdDimension }
   /** Board Setup > Dimension Properties: applied to new dimensions from then on only. */
@@ -1660,13 +1661,13 @@ export type Cmd =
   | { op: "set_zone_outline"; id: string; outline: PointXY[] }
   | { op: "add_shape"; shape: CmdShape }
   | { op: "delete_shape"; id: string }
-  | { op: "move_shape"; id: string; dx: Um; dy: Um }
+  | { op: "move_shape"; id: string; dx: Nm; dy: Nm }
   /** Shape Properties' editable fields (layer, line width, filled) -- geometry has no dialog field to edit in source either, only by dragging its own points (no point editor for shapes yet). */
-  | { op: "edit_shape"; id: string; layer: string; stroke_width: Um; filled: boolean }
+  | { op: "edit_shape"; id: string; layer: string; stroke_width: Nm; filled: boolean }
   | { op: "add_text"; text: CmdText }
-  | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
+  | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_nm: Nm; stroke_width: Nm; justify: TextJustify; mirror: boolean }
   | { op: "delete_text"; id: string }
-  | { op: "move_text"; id: string; x: Um; y: Um }
+  | { op: "move_text"; id: string; x: Nm; y: Nm }
   /**
    * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
    * scoped to the free-standing board items this model has: graphics,
@@ -1677,7 +1678,7 @@ export type Cmd =
    * fields. Filtering (scope, layer, "selected only") is
    * `kicad-port/globalEditTextGraphics.ts`'s client-side job.
    */
-  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; dimension_ids?: string[]; layer_defaults?: boolean; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
+  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; dimension_ids?: string[]; layer_defaults?: boolean; layer?: string | null; line_width?: Nm | null; text_size?: Nm | null; text_thickness?: Nm | null }
   /** Cmd+D (`EDIT_TOOL::Duplicate`): exact copies of the named items in place, under fresh ids -- footprints (as new parts), tracks, vias, zones, shapes, texts, dimensions, groups (with copies of their members). See crates/ops/src/lib.rs `Cmd::Duplicate`. */
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
@@ -1704,13 +1705,13 @@ export type Cmd =
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */
-  | { op: "move_exact"; parts: string[]; dx: Um; dy: Um; rotate_millideg: number; pivot: PointXY | null }
+  | { op: "move_exact"; parts: string[]; dx: Nm; dy: Nm; rotate_millideg: number; pivot: PointXY | null }
   /**
    * `EDIT_TOOL::Move` / `Rotate` / `Flip` of any mix of footprints (references), tracks, vias, zones, shapes, texts, dimensions and groups,
    * as one undo step each (crates/ops/src/pcb_transform.rs). `rotate_items`'s angle is positive CLOCKWISE on the screen, KiCad's runs the other
    * way; `kicad-port/pcbTransform.ts` plans all three.
    */
-  | { op: "move_items"; ids: string[]; dx: Um; dy: Um }
+  | { op: "move_items"; ids: string[]; dx: Nm; dy: Nm }
   | { op: "rotate_items"; ids: string[]; pivot: PointXY; angle_millideg: number }
   | { op: "flip_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
   /**
@@ -1762,8 +1763,8 @@ export type Cmd =
   // names exactly one instance (every single-unit part, the overwhelming
   // common case); the backend refuses as ambiguous if more than one
   // instance shares `id` and no `unit` was sent.
-  | { op: "move_symbol"; id: string; x: Um; y: Um; unit?: number }
-  | { op: "drag_symbol"; id: string; x: Um; y: Um; attached_wire_endpoints: [number, number][]; unit?: number }
+  | { op: "move_symbol"; id: string; x: Nm; y: Nm; unit?: number }
+  | { op: "drag_symbol"; id: string; x: Nm; y: Nm; attached_wire_endpoints: [number, number][]; unit?: number }
   | { op: "rotate_symbol"; id: string; quarter_turns: number; unit?: number }
   | { op: "mirror_symbol"; id: string; unit?: number }
   | { op: "mirror_symbol_vertical"; id: string; unit?: number }
@@ -1778,10 +1779,10 @@ export type Cmd =
   | { op: "add_junction"; at: PointXY }
   | { op: "delete_junction"; id: string }
   /** `I` (eeschema.InteractiveDrawingLineWireBus.drawLines): a graphic polyline on the notes layer, never a wire. */
-  | { op: "add_sch_line"; pts: PointXY[]; width_um?: Um }
+  | { op: "add_sch_line"; pts: PointXY[]; width_nm?: Nm }
   | { op: "delete_sch_line"; id: string }
   /** `S` (eeschema.InteractiveDrawing.drawSheet): a hierarchical sheet symbol; `file` is a bare `.kicad_sch` name (extension added when missing). */
-  | { op: "add_sheet"; name: string; file: string; at: PointXY; size: [Um, Um] }
+  | { op: "add_sheet"; name: string; file: string; at: PointXY; size: [Nm, Nm] }
   /**
    * Import Sheet... / Draw Sheet from File (`SCH_DRAWING_TOOLS::ImportSheet` / `DrawSheet`, `LoadSheetFromFile`): the schematic file `source` (a path under the board's folder or an
    * absolute one; the server reads it) as a sheet `name` of `size` at `at` showing a copy of it under `file`, or -- with `as_sheet` off -- its items on the sheet in view carried to `at`.
@@ -1794,7 +1795,7 @@ export type Cmd =
       name?: string;
       file?: string;
       at: PointXY;
-      size?: [Um, Um];
+      size?: [Nm, Nm];
       keep_annotations?: boolean;
       order?: "y_then_x" | "x_then_y";
       options?: AnnotateOptions;
@@ -1807,7 +1808,7 @@ export type Cmd =
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
   /** Ctrl+V / Ctrl+Shift+V / Ctrl+D (`SCH_EDITOR_CONTROL::Paste`): the `fragment` `POST /api/sch/clipboard/parse` returned, added to the sheet in view moved by (`dx`, `dy`); `mode` is Paste Special's reference-designator choice. One undo step. */
-  | { op: "paste_sch"; fragment: unknown; dx?: Um; dy?: Um; mode?: "unique" | "keep" | "remove" }
+  | { op: "paste_sch"; fragment: unknown; dx?: Nm; dy?: Nm; mode?: "unique" | "keep" | "remove" }
   /** The schematic editor's other tool verbs (lock, break, convert text, shapes, sheet pins, ...) -- see api/schEditTypes.ts. */
   | ({ op: "sch_edit" } & SchEditCmd)
   /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
@@ -1822,7 +1823,7 @@ export type Cmd =
   | ({ op: "sch_table" } & TableCmdWire)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
-  | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
+  | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_nm: Nm }
   | { op: "delete_sch_text"; id: string }
   | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
   | { op: "delete_power_symbol"; id: string }
@@ -1885,7 +1886,7 @@ export type Cmd =
   | { op: "set_footprint_anchor"; name: string; at: PointXY }
   | { op: "update_footprint_on_board"; name: string }
   | { op: "add_pad"; footprint: string; pad: LibraryPad }
-  | { op: "move_pad"; footprint: string; id: string; x: Um; y: Um }
+  | { op: "move_pad"; footprint: string; id: string; x: Nm; y: Nm }
   | { op: "rotate_pad"; footprint: string; id: string; quarter_turns: number }
   | { op: "delete_pad"; footprint: string; id: string }
   | { op: "edit_pad"; footprint: string; id: string; pad: LibraryPad }
@@ -1895,12 +1896,12 @@ export type Cmd =
   | { op: "set_pad_numbers"; footprint: string; numbers: [string, string][] }
   | { op: "add_footprint_graphic"; footprint: string; shape: CmdShape }
   | { op: "delete_footprint_graphic"; footprint: string; id: string }
-  | { op: "move_footprint_graphic"; footprint: string; id: string; dx: Um; dy: Um }
-  | { op: "edit_footprint_graphic"; footprint: string; id: string; layer: string; stroke_width: Um; filled: boolean }
+  | { op: "move_footprint_graphic"; footprint: string; id: string; dx: Nm; dy: Nm }
+  | { op: "edit_footprint_graphic"; footprint: string; id: string; layer: string; stroke_width: Nm; filled: boolean }
   | { op: "add_footprint_text"; footprint: string; text: CmdText }
-  | { op: "edit_footprint_text"; footprint: string; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
+  | { op: "edit_footprint_text"; footprint: string; id: string; content: string; angle: number; layer: string; size_nm: Nm; stroke_width: Nm; justify: TextJustify; mirror: boolean }
   | { op: "delete_footprint_text"; footprint: string; id: string }
-  | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um }
+  | { op: "move_footprint_text"; footprint: string; id: string; x: Nm; y: Nm }
   /** `pcbnew.Array.createArray` in the Footprint Editor (`ARRAY_TOOL::CreateArray`, `m_isFootprintEditor`): `numbering` renumbers the pads of the array; left out, the copies keep their source's number. */
   | { op: "create_footprint_array"; footprint: string; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; numbering?: PadNumbering | null }
   /** `pcbnew.PadTool.explodePad` / `recombinePad` (Ctrl+E), `PAD_TOOL::EditPad`: a custom pad's basic shapes as free graphics of the footprint on the pad's layer, and the way back. One undo step each. */
@@ -1992,13 +1993,13 @@ export type RouteMode = "mark_obstacles" | "walkaround" | "shove";
 /** A fixed (already-placed-this-session) or displaced run of track. */
 export interface RoutePreviewRun {
   layer: string;
-  pts: [Um, Um][];
+  pts: [Nm, Nm][];
 }
 
 export interface RouteDisplacedLine {
   source_track: string | null;
   layer: string;
-  pts: [Um, Um][];
+  pts: [Nm, Nm][];
 }
 
 /** `Mode::Shove` only: a via the live preview would push aside -- no
@@ -2008,15 +2009,15 @@ export interface RouteDisplacedLine {
  * repeating them over the wire). */
 export interface RouteDisplacedVia {
   source_via: string;
-  x: Um;
-  y: Um;
+  x: Nm;
+  y: Nm;
 }
 
 export interface RouteVia {
-  x: Um;
-  y: Um;
-  diameter: Um;
-  drill: Um;
+  x: Nm;
+  y: Nm;
+  diameter: Nm;
+  drill: Nm;
 }
 
 /** The shape every one of start/move/fix's successful replies carries
@@ -2030,14 +2031,14 @@ export interface RoutePreview {
   /** The live, not-yet-fixed head: last fixed point (or the route's
    * origin) to the cursor, already resolved (walked/shoved/mark-obstacled)
    * server-side -- draw this directly, no client-side posture math needed. */
-  head: [Um, Um][];
+  head: [Nm, Nm][];
   /** Already-fixed runs from earlier in this session (e.g. before a via/
    * layer switch) -- empty until the route has more than one leg. */
   runs: RoutePreviewRun[];
   via: RouteVia | null;
   /** A same-net anchor near the cursor the route would snap onto and
    * finish at, if fixed now. */
-  snapped_end: [Um, Um] | null;
+  snapped_end: [Nm, Nm] | null;
   /** `Mode::Shove` only: other tracks this preview would push out of the
    * way if accepted. */
   displaced: RouteDisplacedLine[];
@@ -2046,7 +2047,7 @@ export interface RoutePreview {
   /** `POST /api/route/continue_from_end` only (Route From Other End): the route fixed so far was committed, so the board changed. */
   committed?: boolean;
   /** `POST /api/route/continue_from_end` only: the far end of the connection, where the new route starts. */
-  from?: [Um, Um];
+  from?: [Nm, Nm];
 }
 
 export interface RouteFixReply {
@@ -2089,7 +2090,7 @@ export interface DragPreview {
   forced_mark_obstacles?: boolean;
   /** The dragged item's own new shape: just its live position (1 point)
    * for a via, or N points for the whole stretched track (a corner or a segment drag). */
-  pts: [Um, Um][];
+  pts: [Nm, Nm][];
   /** `shove` mode only: other tracks this drag would push out of the way. */
   displaced: RouteDisplacedLine[];
   /** `shove` mode only: other vias this drag would push out of the way. */
@@ -2101,16 +2102,16 @@ export interface DragPreview {
    * Carries its own `width` (unlike `RoutePreviewRun`'s `runs`/`displaced`,
    * which reuse the one active session width) since each attached track
    * can genuinely have a different width from its neighbors. */
-  fanout: { layer: string; width: Um; pts: [Um, Um][] }[];
+  fanout: { layer: string; width: Nm; pts: [Nm, Nm][] }[];
 }
 
 /** A via of a pair (`PNS::VIA`, as `DIFF_PAIR_PLACER` places them): one per net, a `viaGap()` apart. */
 export interface DpVia {
   net: string | null;
-  x: Um;
-  y: Um;
-  diameter: Um;
-  drill: Um;
+  x: Nm;
+  y: Nm;
+  diameter: Nm;
+  drill: Nm;
   from_layer: string;
   to_layer: string;
 }
@@ -2132,16 +2133,16 @@ export interface DiffPairPreview {
   net_a: string | null;
   net_b: string | null;
   layer: string;
-  width: Um;
+  width: Nm;
   /** The edge-to-edge gap the pair is routed at. */
-  gap?: Um;
+  gap?: Nm;
   /** The pair does not fit as drawn (`!m_fitOk`). */
   colliding: boolean;
   /** The live, not-yet-fixed head of each line -- already resolved
    * (coupled, walked or shoved per the mode, snapped to the real pad(s) at
    * either end) server-side, draw directly. */
-  head_a: [Um, Um][];
-  head_b: [Um, Um][];
+  head_a: [Nm, Nm][];
+  head_b: [Nm, Nm][];
   /** Already-fixed legs from earlier in this session, one per leg for each line, each on its own layer. */
   runs_a: RoutePreviewRun[];
   runs_b: RoutePreviewRun[];
@@ -2159,7 +2160,7 @@ export interface DiffPairPreview {
   /** `POST /api/route/dp_continue_from_end` only (Route From Other End): the pair fixed so far was committed, so the board changed. */
   committed?: boolean;
   /** `POST /api/route/dp_continue_from_end` only: the far end of the connection, where the new pair starts. */
-  from?: [Um, Um];
+  from?: [Nm, Nm];
 }
 
 export interface DpFixReply {
@@ -2226,13 +2227,13 @@ export interface CleanupReply {
 // `ratsnest_json()`, crates/connectivity (KiCad's own connectivity +
 // ratsnest algorithm, ported: Delaunay + Kruskal MST between connectivity
 // clusters -- ground-truthed against kicad-cli's own unconnected-item
-// list). Coordinates are integer board µm, same convention as everything
+// list). Coordinates are integer board nm, same convention as everything
 // else in BoardState.
 
 export interface RatsnestEdge {
   net: string;
-  from: [Um, Um];
-  to: [Um, Um];
+  from: [Nm, Nm];
+  to: [Nm, Nm];
   /** The items the two ends join (a pad is `REF.NUMBER`, anything else its own id), and the copper layers each spans (inclusive indexes into `BoardState.layers`) -- what the Local Ratsnest tool and the visible-layers ratsnest mode read, as `RATSNEST_VIEW_ITEM::ViewDraw` does. Absent from an older backend. */
   from_id?: string;
   to_id?: string;
@@ -2261,10 +2262,10 @@ export interface FillZone {
   layer: string;
   /** The zone has a fill that is current: it was filled by kicad-cli and not edited since. False: no copper yet, drawn as an outline. */
   filled: boolean;
-  area_um2: number;
-  fragments: [Um, Um][][];
+  area_nm2: number;
+  fragments: [Nm, Nm][][];
   /** Only with `GET /api/fill?polys=1`: the same fill unfractured, one outline and its holes per island (what the triangulation display needs). */
-  polys?: { outline: [Um, Um][]; holes: [Um, Um][][] }[];
+  polys?: { outline: [Nm, Nm][]; holes: [Nm, Nm][][] }[];
 }
 
 /** Whose fill the board holds: `null` when no zone has ever been filled (or the fills were all taken away). */
@@ -2363,7 +2364,7 @@ export type PinElectricalType =
 /** eeschema's GRAPHIC_PINSHAPE -- the decoration drawn at a pin's outer (connection) end. */
 export type PinShape = "line" | "inverted" | "clock" | "inverted_clock" | "input_low" | "clock_low" | "output_low" | "edge_clock_high" | "non_logic";
 
-/** Plain millimetres (a library symbol's own native unit, not this file's usual Um) -- the coordinator's contract description names pin length "length_mm" specifically; kept as a distinct alias so every place that touches library-symbol geometry is grep-able. */
+/** Plain millimetres (a library symbol's own native unit, not this file's usual Nm) -- the coordinator's contract description names pin length "length_mm" specifically; kept as a distinct alias so every place that touches library-symbol geometry is grep-able. */
 export type Mm = number;
 
 /** One pin on a library symbol, in that symbol's own local coordinate space -- eeschema's SCH_PIN. */
@@ -2419,8 +2420,8 @@ export interface SchField {
   text: string;
   /** What `${NAME}` in `text` stands for (`SCH_FIELD::GetShownText`); absent when it is `text` itself. A Reference never has one: the painter writes it with its unit letter. */
   shown?: string;
-  /** The text's anchor on the sheet, micrometres. */
-  at: [Um, Um];
+  /** The text's anchor on the sheet, nanometres. */
+  at: [Nm, Nm];
   /** The text runs upward: a quarter turn counter-clockwise about the anchor. */
   vertical: boolean;
   /** How the text is justified against the anchor, in its own axes. */
@@ -2431,8 +2432,8 @@ export interface SchField {
   id?: string;
   /** The item that has the field: a symbol's reference (`#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. */
   owner?: string;
-  /** The size of the text (its height and width), micrometres; absent is the default, 50 mil. */
-  size_um?: Um;
+  /** The size of the text (its height and width), nanometres; absent is the default, 50 mil. */
+  size_nm?: Nm;
   bold?: boolean;
   italic?: boolean;
   /** `SCH_FIELD::IsNameShown`: the field is drawn as `Name: value`. */
@@ -2451,7 +2452,7 @@ export interface SchematicSymbol {
   reference?: string;
   /** Key into `Schematic.lib_symbols` ("Device:R"). Null, or present but missing from `lib_symbols`, both mean "no real graphics for this instance yet" -- painter.ts falls back to the generic box either way. */
   lib_id: string | null;
-  at: [Um, Um];
+  at: [Nm, Nm];
   rot: Degrees;
   /** KiCad mirrors one axis at a time, never both at once as a single flag -- `(mirror x)` flips the symbol vertically (negates Y), `(mirror y)` flips it horizontally (negates X). Replaces an earlier, incomplete `mirrored: boolean` that could only ever express one of the two. */
   mirror: "x" | "y" | null;
@@ -2499,7 +2500,7 @@ export interface SchematicSymbol {
 export interface PowerSymbol {
   id: string;
   lib_id: string;
-  at: [Um, Um];
+  at: [Nm, Nm];
   rot: Degrees;
   net: string;
   pin: SchematicPin;
@@ -2511,23 +2512,23 @@ export interface PowerSymbol {
 export interface NoConnect {
   /** Stable id (`nc_xxxxxxxxxxxx`) -- for `delete_no_connect`. */
   id: string;
-  at: [Um, Um];
+  at: [Nm, Nm];
 }
 
 /** An explicit junction (`SCH_JUNCTION`, the `J` tool): joins every wire passing through or ending at `at`. */
 export interface SchJunction {
   id: string;
-  at: [Um, Um];
+  at: [Nm, Nm];
   /** The diameter and colour Junction Properties set; absent or null is the default dot. */
   look?: JunctionLook | null;
 }
 
-/** A graphic polyline on the schematic's notes layer (`SCH_LINE` on `LAYER_NOTES`, the `I` tool): decoration, never part of a net. `width_um` 0 is the default line width. */
+/** A graphic polyline on the schematic's notes layer (`SCH_LINE` on `LAYER_NOTES`, the `I` tool): decoration, never part of a net. `width_nm` 0 is the default line width. */
 export interface SchLine {
   id: string;
-  pts: [Um, Um][];
-  width_um: Um;
-  /** The style and colour Line Properties set (the width is `width_um`); absent or null is the default. */
+  pts: [Nm, Nm][];
+  width_nm: Nm;
+  /** The style and colour Line Properties set (the width is `width_nm`); absent or null is the default. */
   stroke?: SchStroke | null;
 }
 
@@ -2541,7 +2542,7 @@ export interface SchematicWire {
   net: string;
   /** "REF.PIN" refs this wire lands on. */
   pins: string[];
-  pts: [Um, Um][];
+  pts: [Nm, Nm][];
   /** True for a bus wire (GAPS.md #20) -- KiCad's `LAYER_BUS` vs `LAYER_WIRE`, same shape either way. */
   bus: boolean;
   /** A bus's member nets (`D[0..3]` -> D0..D3, aliases and groups expanded) -- only sent for a bus wire; what the Unfold from Bus menu lists. */
@@ -2553,8 +2554,8 @@ export interface SchematicWire {
 /** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
 export interface BusEntry {
   id: string;
-  at: [Um, Um];
-  size: [Um, Um];
+  at: [Nm, Nm];
+  size: [Nm, Nm];
   /** The stroke Wire/Bus Properties set; absent or null is the default one. */
   stroke?: SchStroke | null;
 }
@@ -2563,13 +2564,13 @@ export interface SchematicLabel {
   /** Stable id (`lbl_xxxxxxxxxxxx`) -- for `delete_label`. */
   id: string;
   net: string;
-  at: [Um, Um];
+  at: [Nm, Nm];
   scope: LabelScope;
   shape: LabelShape | null;
   /** Which way the text runs from the anchor once Rotate or Mirror has set it (`SCH_LABEL_BASE::GetSpinStyle`); absent or null reads off the wire that ends at the label. */
   spin?: "right" | "up" | "left" | "bottom" | null;
-  /** The text's size (height and width), micrometres, and whether it is bold or italic (`EDA_TEXT`); absent is the default, 50 mil, regular. */
-  size_um?: Um;
+  /** The text's size (height and width), nanometres, and whether it is bold or italic (`EDA_TEXT`); absent is the default, 50 mil, regular. */
+  size_nm?: Nm;
   bold?: boolean;
   italic?: boolean;
   /** The "Auto" check of a global or hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`): the label takes the spin of what it is connected to when it is placed or moved. */
@@ -2587,10 +2588,10 @@ export interface SchLabelField {
   italic: boolean;
   /** The global label's Sheet References (`FIELD_T::INTERSHEET_REFS`): shown or hidden by Schematic Setup, not by the label. */
   intersheet_refs: boolean;
-  at: [Um, Um];
+  at: [Nm, Nm];
   vertical: boolean;
   h: "left" | "center" | "right";
-  size_um: Um;
+  size_nm: Nm;
 }
 
 /** Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). */
@@ -2613,9 +2614,9 @@ export interface SchematicText {
   content: string;
   /** What `${NAME}` in `content` stands for (`SCH_TEXT::GetShownText`); absent when it is `content` itself. */
   shown?: string;
-  at: [Um, Um];
+  at: [Nm, Nm];
   angle: Degrees;
-  size_um: Um;
+  size_nm: Nm;
   vertical?: boolean;
   h?: "left" | "center" | "right";
   v?: "top" | "center" | "bottom";
@@ -2632,21 +2633,21 @@ export interface TitleBlock {
   shown?: { title: string; date: string; rev: string; company: string; comments: string[] };
 }
 
-/** A document's paper (`PAGE_INFO`) as the state JSON reports it: `size_um` is the resolved width and height in its orientation. */
+/** A document's paper (`PAGE_INFO`) as the state JSON reports it: `size_nm` is the resolved width and height in its orientation. */
 export interface PageInfo {
   /** KiCad's name: A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal, USLedger or User. */
   paper: string;
   portrait: boolean;
-  /** A User paper's width and height, µm. */
-  user_size_um: [Um, Um] | null;
-  size_um: [Um, Um] | null;
+  /** A User paper's width and height, nm. */
+  user_size_nm: [Nm, Nm] | null;
+  size_nm: [Nm, Nm] | null;
 }
 
-/** What `set_board_page` / `set_schematic_page` take for the paper: `PageSettings` of the model (no `size_um`). */
+/** What `set_board_page` / `set_schematic_page` take for the paper: `PageSettings` of the model (no `size_nm`). */
 export interface CmdPage {
   paper: string;
   portrait?: boolean;
-  user_size_um?: [Um, Um] | null;
+  user_size_nm?: [Nm, Nm] | null;
 }
 
 /** A hierarchical sheet pin (`SCH_SHEET_PIN`) on a placed sheet's own border -- GAPS.md #6. Tied *by name only* to a hierarchical label of the same name inside the sheet's own file (see crates/kicad/src/erc.rs's `check_hierarchy` doc for why shape is never compared). */
@@ -2654,9 +2655,9 @@ export interface SheetPin {
   id: string;
   name: string;
   shape: LabelShape;
-  at: [Um, Um];
+  at: [Nm, Nm];
   /** How the pin's text is set (Sheet Pin Properties; `SCH_SHEET_PIN` is an `EDA_TEXT`): absent is 50 mil, regular, upright. */
-  size_um?: Um;
+  size_nm?: Nm;
   bold?: boolean;
   italic?: boolean;
 }
@@ -2668,8 +2669,8 @@ export interface Sheet {
   file: string;
   /** The page number the user gave this placement (Edit Sheet Page Number); empty or absent when it is numbered by its place in the hierarchy. */
   page?: string;
-  at: [Um, Um];
-  size: [Um, Um];
+  at: [Nm, Nm];
+  size: [Nm, Nm];
   pins: SheetPin[];
   /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
   fields?: SchField[];
@@ -2682,11 +2683,11 @@ export interface SheetPathEntry {
   name: string;
 }
 
-/** The paper a sheet is drawn on (KiCad's names, landscape, micrometres) -- A4 unless the sheet's title block says otherwise. */
+/** The paper a sheet is drawn on (KiCad's names, landscape, nanometres) -- A4 unless the sheet's title block says otherwise. */
 export interface SchematicPaper {
   name: string;
-  width_um: Um;
-  height_um: Um;
+  width_nm: Nm;
+  height_nm: Nm;
 }
 
 export interface Schematic {
@@ -2928,16 +2929,16 @@ export type PushPinField = "length" | "name_size" | "number_size";
 // with each item's KiCad uuid pointed back at our own id. It takes seconds,
 // so the studio runs it on demand and shows a running state; there is no
 // other DRC engine. `type`/`description`/`severity`/`items` are
-// kicad-cli's own JSON; positions are this API's µm integers (every other
-// endpoint here uses board-space µm, not kicad-cli's mm), as `[x, y]`.
+// kicad-cli's own JSON; positions are this API's nm integers (every other
+// endpoint here uses board-space nm, not kicad-cli's mm), as `[x, y]`.
 // Our own checks, the ones KiCad does not have, are `LintReport` below.
 
 export type DrcSeverity = "error" | "warning";
 
 export interface DrcItem {
   description: string;
-  /** Board-space um, like every other position in this file -- *not* kicad-cli's own mm. */
-  pos: [Um, Um];
+  /** Board-space nm, like every other position in this file -- *not* kicad-cli's own mm. */
+  pos: [Nm, Nm];
   /** Our id for the referenced item (track/via/zone id, or `<ref>.<pad>`/`<ref>` for a footprint/pad; `outline` for the Edge.Cuts outline) -- enough to select it without re-matching on position. `null` for an item that isn't one of ours (e.g. a fill polygon KiCad computed). */
   id: string | null;
   /** The item's uuid in the derived board (kicad-cli's own name for it); what an exclusion is keyed on. Absent on a lint finding. */
@@ -2950,7 +2951,7 @@ export interface DrcFix {
   mover: string;
   /** What to move it toward: another part's reference, "board center", "nearest edge", or similar. */
   toward: string;
-  distance_to_close_um: Um;
+  distance_to_close_nm: Nm;
   /** Human-readable next step. */
   suggested_command: string;
 }
@@ -3156,8 +3157,8 @@ export interface LintReport {
 /**
  * `POST /api/board_stats` (crates/cli/src/kicad_engine.rs `board_stats`):
  * `kicad-cli pcb export stats`, in the shape components/
- * BoardStatisticsDialog.tsx reads. Lengths in µm, areas in µm². An unset
- * minimum is KiCad's own INT_MAX nm sentinel (2147483.647 µm), so it
+ * BoardStatisticsDialog.tsx reads. Lengths in nm, areas in nm². An unset
+ * minimum is KiCad's own INT_MAX nm sentinel (2147483647 nm), so it
  * displays the same.
  */
 export interface BoardStatsOptions {
@@ -3174,8 +3175,8 @@ export interface BoardStatsEntry {
 export interface BoardStatsDrill {
   qty: number;
   shape: "round" | "slot";
-  x_um: number;
-  y_um: number;
+  x_nm: number;
+  y_nm: number;
   plated: boolean;
   is_pad: boolean;
   start_layer: string | null;
@@ -3189,19 +3190,19 @@ export interface BoardStatsReply {
   revision?: string;
   board?: {
     has_outline: boolean;
-    width_um: number;
-    height_um: number;
-    area_um2: number;
-    front_copper_area_um2: number;
-    back_copper_area_um2: number;
-    front_courtyard_area_um2: number;
-    back_courtyard_area_um2: number;
+    width_nm: number;
+    height_nm: number;
+    area_nm2: number;
+    front_copper_area_nm2: number;
+    back_copper_area_nm2: number;
+    front_courtyard_area_nm2: number;
+    back_courtyard_area_nm2: number;
     front_density_pct: number;
     back_density_pct: number;
-    min_track_width_um: number;
-    min_clearance_um: number;
-    min_drill_um: number;
-    thickness_um: number;
+    min_track_width_nm: number;
+    min_clearance_nm: number;
+    min_drill_nm: number;
+    thickness_nm: number;
   };
   footprints?: { title: string; front: number; back: number }[];
   pads?: BoardStatsEntry[];
@@ -3326,7 +3327,7 @@ export interface FindMatch {
   id: string;
   /** Field name or pin number (empty for labels/text). */
   name: string;
-  /** World-space um. */
+  /** World-space nm. */
   at: [number, number];
   text: string;
 }
@@ -3398,10 +3399,10 @@ export interface FpCheckMarker {
   type: string;
   description: string;
   severity: "error" | "warning" | "exclusion" | "ignore";
-  /** Where the marker is drawn, micrometres, the footprint's own frame. */
-  at: [Um, Um];
+  /** Where the marker is drawn, nanometres, the footprint's own frame. */
+  at: [Nm, Nm];
   /** The items the violation names: kicad-cli's description, their position, and the editor's id (a pad, a graphic, a text) when it is one of the footprint's. */
-  items: { description: string; pos: [Um, Um]; id: string | null }[];
+  items: { description: string; pos: [Nm, Nm]; id: string | null }[];
 }
 
 export interface FpCheckReply {

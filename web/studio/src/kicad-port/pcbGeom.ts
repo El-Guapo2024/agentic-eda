@@ -10,8 +10,8 @@
 // Units: every function here works in KiCad's own internal unit (IU, 1 nm)
 // so KiCad's integer tolerances (`SHAPE::MIN_PRECISION_IU` = 4, the dogbone
 // epsilon 8, `SEG::Contains`' squared distance 3) keep their meaning. The
-// design IR is in micrometres: callers scale in with `toIU` and back out
-// with `fromIU` (one rounding, at the end).
+// design IR is in nanometres too: `toIU` is the identity and `fromIU` the
+// one rounding back to whole nanometres.
 //
 // Differences from the C++, all numerical rather than behavioural:
 //  * 64-bit integer cross products become doubles (a 1 m board's nm
@@ -26,13 +26,13 @@ export interface Seg {
   b: V;
 }
 
-/** KiCad's IU is 1 nm; the design IR is 1 um. */
-export const IU_PER_UM = 1000;
+/** KiCad's IU is 1 nm, and so is the design IR's. */
+export const IU_PER_NM = 1;
 /** `SHAPE::MIN_PRECISION_IU`. */
 export const MIN_PRECISION_IU = 4;
 
-export const toIU = (p: readonly [number, number]): V => [p[0] * IU_PER_UM, p[1] * IU_PER_UM];
-export const fromIU = (p: readonly [number, number]): V => [Math.round(p[0] / IU_PER_UM), Math.round(p[1] / IU_PER_UM)];
+export const toIU = (p: readonly [number, number]): V => [p[0] * IU_PER_NM, p[1] * IU_PER_NM];
+export const fromIU = (p: readonly [number, number]): V => [Math.round(p[0] / IU_PER_NM), Math.round(p[1] / IU_PER_NM)];
 
 /** `KiROUND`: round half away from zero. */
 export function kiRound(v: number): number {

@@ -7,13 +7,13 @@ use eda_model::grid_item::{GridAffects, GridItem, GridKind};
 use eda_model::ir::Point;
 
 use crate::sexpr::{self, Sexpr};
-use crate::{fmt_double_2_str, mm, mm_to_um, sexpr_str};
+use crate::{fmt_double_2_str, mm, mm_to_nm, sexpr_str};
 
 /// `parsePCB_GRID_ITEM`: the children in the file's order -- the type word first, as the writer puts it, because `extent` and `spacing` mean a length and an angle on a polar grid
 /// and two lengths on a cartesian one. What the item leaves out keeps what `PCB_GRID_ITEM( nullptr )` starts with; every value goes through the item's setters.
 pub(crate) fn read(item: &[Sexpr]) -> GridItem {
     let mut g = GridItem::new(Point { x: 0, y: 0 });
-    let um = |l: &[Sexpr], i: usize| sexpr::num(l, i).map(mm_to_um).unwrap_or(0);
+    let um = |l: &[Sexpr], i: usize| sexpr::num(l, i).map(mm_to_nm).unwrap_or(0);
     for child in item.iter().skip(1) {
         match child {
             Sexpr::Atom(a) if a == "xy" => g.kind = GridKind::Cartesian,
@@ -116,13 +116,13 @@ mod tests {
         let mut refs = Vec::new();
         let grids = read_all(tree.as_list().unwrap(), &mut refs);
         let g = &grids[0];
-        assert_eq!((g.kind, g.at, g.extent, g.spacing, g.angle, g.priority, g.tick_interval), (GridKind::Cartesian, Point { x: 100_000, y: 50_000 }, Point { x: 4_000, y: 2_500 }, Point { x: 500, y: 250 }, 30.0, 3, 5));
+        assert_eq!((g.kind, g.at, g.extent, g.spacing, g.angle, g.priority, g.tick_interval), (GridKind::Cartesian, Point { x: 100_000_000, y: 50_000_000 }, Point { x: 4_000_000, y: 2_500_000 }, Point { x: 500_000, y: 250_000 }, 30.0, 3, 5));
         assert_eq!(g.affects, GridAffects { cursor: true, routing: false, placement: true });
         assert_eq!(g.custom_properties, vec![("role".to_string(), "via field".to_string())]);
         assert!(refs[0].locked);
         let p = &grids[1];
-        assert_eq!((p.kind, p.extent.x, p.phi_extent_deg, p.spacing.x, p.phi_spacing_deg), (GridKind::Polar, 10_000, 90.0, 1_000, 15.0));
-        assert_eq!((grids[2].priority, grids[2].extent, grids[2].spacing), (1, Point { x: 5_000, y: 5_000 }, Point { x: 1_000, y: 1_000 }), "priority 0 is 1, and the rest the constructor's");
+        assert_eq!((p.kind, p.extent.x, p.phi_extent_deg, p.spacing.x, p.phi_spacing_deg), (GridKind::Polar, 10_000_000, 90.0, 1_000_000, 15.0));
+        assert_eq!((grids[2].priority, grids[2].extent, grids[2].spacing), (1, Point { x: 5_000_000, y: 5_000_000 }, Point { x: 1_000_000, y: 1_000_000 }), "priority 0 is 1, and the rest the constructor's");
 
         let mut text = String::new();
         let uuid = write(&mut text, g, true);

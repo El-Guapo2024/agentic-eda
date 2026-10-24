@@ -327,7 +327,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       if (!part?.at) return null;
       const cam = camera3d.projection === "perspective" ? perspCamera : orthoCamera;
       cam.updateMatrixWorld();
-      const p = new THREE.Vector3(part.at[0] / 1000, part.side === "bottom" ? -1 : 1, part.at[1] / 1000).project(cam);
+      const p = new THREE.Vector3(part.at[0] / 1e6, part.side === "bottom" ? -1 : 1, part.at[1] / 1e6).project(cam);
       return { x: ((p.x + 1) / 2) * renderer.domElement.clientWidth, y: ((1 - p.y) / 2) * renderer.domElement.clientHeight };
     });
 

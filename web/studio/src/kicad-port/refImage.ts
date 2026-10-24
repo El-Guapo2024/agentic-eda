@@ -18,19 +18,19 @@ export const DEFAULT_PPI = 300;
 export type PxSize = readonly [number, number];
 
 /** `BITMAP_BASE::GetSize`: the pixels at their definition (`REFERENCE_IMAGE::updatePixelSizeInIU`: an inch over the definition) times the scale, in micrometres. */
-export function imageSizeUm(px: PxSize, ppi: number, scalePpm: number): [number, number] {
-  const k = (25_400 / ppi) * (scalePpm / SCALE_PPM);
+export function imageSizeNm(px: PxSize, ppi: number, scalePpm: number): [number, number] {
+  const k = (25_400_000 / ppi) * (scalePpm / SCALE_PPM);
   return [Math.round(px[0] * k), Math.round(px[1] * k)];
 }
 
-/** The scale (in millionths) that makes the image `widthUm` wide (`DIALOG_REFERENCE_IMAGE_PROPERTIES::onWidthChanged`: the scale times the wanted width over the width now). */
-export function scaleForWidthUm(px: PxSize, ppi: number, widthUm: number): number {
-  return Math.round((widthUm / ((px[0] * 25_400) / ppi)) * SCALE_PPM);
+/** The scale (in millionths) that makes the image `widthNm` wide (`DIALOG_REFERENCE_IMAGE_PROPERTIES::onWidthChanged`: the scale times the wanted width over the width now). */
+export function scaleForWidthNm(px: PxSize, ppi: number, widthNm: number): number {
+  return Math.round((widthNm / ((px[0] * 25_400_000) / ppi)) * SCALE_PPM);
 }
 
-/** The scale (in millionths) that makes the image `heightUm` high (`onHeightChanged`). */
-export function scaleForHeightUm(px: PxSize, ppi: number, heightUm: number): number {
-  return Math.round((heightUm / ((px[1] * 25_400) / ppi)) * SCALE_PPM);
+/** The scale (in millionths) that makes the image `heightNm` high (`onHeightChanged`). */
+export function scaleForHeightNm(px: PxSize, ppi: number, heightNm: number): number {
+  return Math.round((heightNm / ((px[1] * 25_400_000) / ppi)) * SCALE_PPM);
 }
 
 /** A scale typed as a decimal number, in millionths; NaN when it is not a number. */
@@ -172,8 +172,8 @@ export function schImageUrl(id: string, hash: string, sheet = ""): string {
 export type ImageBox = [number, number, number, number];
 
 /** `REFERENCE_IMAGE::GetBoundingBox`: `BOX2I::ByCenter( m_pos, size )` -- the box of the image centred on `at`, `[x0, y0, x1, y1]`, µm. */
-export function imageBoxUm(at: readonly [number, number], px: PxSize, ppi: number, scalePpm: number): ImageBox {
-  const [w, h] = imageSizeUm(px, ppi, scalePpm);
+export function imageBoxNm(at: readonly [number, number], px: PxSize, ppi: number, scalePpm: number): ImageBox {
+  const [w, h] = imageSizeNm(px, ppi, scalePpm);
   const x0 = at[0] - Math.trunc(w / 2);
   const y0 = at[1] - Math.trunc(h / 2);
   return [x0, y0, x0 + w, y0 + h];

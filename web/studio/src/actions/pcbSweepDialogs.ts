@@ -14,18 +14,18 @@ export interface UnitEntryDialog {
   kind: "unit_entry";
   title: string;
   label: string;
-  valueUm: number;
+  valueNm: number;
   /** The value may be zero (KiCad's own dialogs return "cancelled" for zero; this one just refuses it unless set). */
   allowZero?: boolean;
-  onOk: (valueUm: number) => void;
+  onOk: (valueNm: number) => void;
 }
 
 /** `GetDogboneParams`' `WX_MULTI_ENTRY_DIALOG`: arc radius and "Add slots in acute corners". */
 export interface DogboneDialog {
   kind: "dogbone";
-  radiusUm: number;
+  radiusNm: number;
   addSlots: boolean;
-  onOk: (v: { radiusUm: number; addSlots: boolean }) => void;
+  onOk: (v: { radiusNm: number; addSlots: boolean }) => void;
 }
 
 /** `DIALOG_FILTER_SELECTION`. */

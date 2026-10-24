@@ -54,17 +54,17 @@ fn a_net_pulled_by_two_modules_leaves_the_part_free() {
 #[test]
 fn a_board_too_small_for_its_modules_is_a_hard_fail() {
     let m = two_block_model();
-    let err = plan(&m, (0, 0, 4_000, 4_000), 500, 0).expect_err("4x4 mm cannot hold two blocks");
+    let err = plan(&m, (0, 0, 4_000_000, 4_000_000), 500_000, 0).expect_err("4x4 mm cannot hold two blocks");
     assert!(err.contains("of board"), "{err}");
 }
 
 #[test]
 fn modules_never_overlap_and_stay_on_the_board() {
     let m = two_block_model();
-    let fp = plan(&m, (0, 0, 60_000, 40_000), 500, 7).expect("plan");
+    let fp = plan(&m, (0, 0, 60_000_000, 40_000_000), 500_000, 7000).expect("plan");
     assert_eq!(fp.modules.len(), 2);
     for (i, a) in fp.modules.iter().enumerate() {
-        assert!(a.rect.0 >= 0 && a.rect.1 >= 0 && a.rect.2 <= 60_000 && a.rect.3 <= 40_000, "{a:?}");
+        assert!(a.rect.0 >= 0 && a.rect.1 >= 0 && a.rect.2 <= 60_000_000 && a.rect.3 <= 40_000_000, "{a:?}");
         for b in &fp.modules[i + 1..] {
             let dx = a.rect.2.min(b.rect.2) - a.rect.0.max(b.rect.0);
             let dy = a.rect.3.min(b.rect.3) - a.rect.1.max(b.rect.1);

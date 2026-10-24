@@ -44,37 +44,37 @@ test("formatting starts at ISO 128-2 and refuses a ratio a dashed line cannot ha
 });
 
 test("the hatch offsets are a row for each copper layer and a layer at 0, 0 is none", () => {
-  const rows = hatchRows(COPPER4, { "F.Cu": { x_um: 1500, y_um: -2000 } });
-  assert.deepEqual(rows.map((r) => [r.layer, r.x_um, r.y_um]), [["F.Cu", 1500, -2000], ["In1.Cu", 0, 0], ["In2.Cu", 0, 0], ["B.Cu", 0, 0]]);
-  assert.deepEqual(hatchToSend(rows), { "F.Cu": { x_um: 1500, y_um: -2000 } });
+  const rows = hatchRows(COPPER4, { "F.Cu": { x_nm: 1_500_000, y_nm: -2_000_000 } });
+  assert.deepEqual(rows.map((r) => [r.layer, r.x_nm, r.y_nm]), [["F.Cu", 1_500_000, -2_000_000], ["In1.Cu", 0, 0], ["In2.Cu", 0, 0], ["B.Cu", 0, 0]]);
+  assert.deepEqual(hatchToSend(rows), { "F.Cu": { x_nm: 1_500_000, y_nm: -2_000_000 } });
   assert.deepEqual(hatchProblems(rows), {});
-  rows[1]!.x_um = 2_000_000;
-  rows[2]!.y_um = NaN;
+  rows[1]!.x_nm = 2_000_000_000;
+  rows[2]!.y_nm = NaN;
   assert.deepEqual(Object.keys(hatchProblems(rows)), ["In1.Cu", "In2.Cu"]);
-  assert.ok(sameHatchOffsets({ "F.Cu": { x_um: 0, y_um: 0 } }, undefined) && sameHatchOffsets({ "B.Cu": { x_um: 1, y_um: 0 }, "F.Cu": { x_um: 2, y_um: 0 } }, { "F.Cu": { x_um: 2, y_um: 0 }, "B.Cu": { x_um: 1, y_um: 0 } }));
-  assert.ok(!sameHatchOffsets({ "F.Cu": { x_um: 1, y_um: 0 } }, undefined));
+  assert.ok(sameHatchOffsets({ "F.Cu": { x_nm: 0, y_nm: 0 } }, undefined) && sameHatchOffsets({ "B.Cu": { x_nm: 1, y_nm: 0 }, "F.Cu": { x_nm: 2, y_nm: 0 } }, { "F.Cu": { x_nm: 2, y_nm: 0 }, "B.Cu": { x_nm: 1, y_nm: 0 } }));
+  assert.ok(!sameHatchOffsets({ "F.Cu": { x_nm: 1, y_nm: 0 } }, undefined));
 });
 
 test("the tuning patterns start as MEANDER_SETTINGS and are checked like a meander", () => {
   const p = DEFAULT_TUNING_PATTERNS;
   assert.deepEqual(tuningPatternsProblems(p), {});
-  assert.deepEqual([p.single_track.spacing_um, p.diff_pair.spacing_um, p.diff_pair_skew.spacing_um], [600, 1000, 600]);
-  assert.deepEqual([p.single_track.min_amplitude_um, p.single_track.max_amplitude_um, p.single_track.corner_style, p.single_track.corner_radius_percentage, p.single_track.single_sided], [200, 1000, "round", 80, false]);
+  assert.deepEqual([p.single_track.spacing_nm, p.diff_pair.spacing_nm, p.diff_pair_skew.spacing_nm], [600_000, 1_000_000, 600_000]);
+  assert.deepEqual([p.single_track.min_amplitude_nm, p.single_track.max_amplitude_nm, p.single_track.corner_style, p.single_track.corner_radius_percentage, p.single_track.single_sided], [200_000, 1_000_000, "round", 80, false]);
   assert.ok(sameTuningPatterns(undefined, p));
   const with_ = (f: (q: ReturnType<typeof tuningPatternsOf>) => void) => {
     const q = tuningPatternsOf(undefined);
     f(q);
     return tuningPatternsProblems(q);
   };
-  assert.deepEqual(Object.keys(with_((q) => (q.diff_pair.max_amplitude_um = 0))), ["diff_pair.max_amplitude"]);
-  assert.deepEqual(Object.keys(with_((q) => (q.single_track.min_amplitude_um = 2000))), ["single_track.min_amplitude"], "the minimum is above the maximum");
+  assert.deepEqual(Object.keys(with_((q) => (q.diff_pair.max_amplitude_nm = 0))), ["diff_pair.max_amplitude"]);
+  assert.deepEqual(Object.keys(with_((q) => (q.single_track.min_amplitude_nm = 2_000_000))), ["single_track.min_amplitude"], "the minimum is above the maximum");
   assert.deepEqual(Object.keys(with_((q) => (q.diff_pair_skew.corner_radius_percentage = 101))), ["diff_pair_skew.corner_radius_percentage"]);
-  assert.deepEqual(Object.keys(with_((q) => (q.single_track.spacing_um = 200_000))), ["single_track.spacing"]);
-  assert.deepEqual(Object.keys(with_((q) => (q.single_track.spacing_um = NaN))), ["single_track.spacing"]);
+  assert.deepEqual(Object.keys(with_((q) => (q.single_track.spacing_nm = 200_000_000))), ["single_track.spacing"]);
+  assert.deepEqual(Object.keys(with_((q) => (q.single_track.spacing_nm = NaN))), ["single_track.spacing"]);
 });
 
 function profile(name: string): TuningProfile {
-  return { ...emptyProfile(), name, profile_type: "differential", target_impedance: 90, enable_time_domain_tuning: true, layer_entries: [{ signal_layer: "F.Cu", top_reference_layer: null, bottom_reference_layer: "In1.Cu", width_um: 130, diff_pair_gap_um: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000 };
+  return { ...emptyProfile(), name, profile_type: "differential", target_impedance: 90, enable_time_domain_tuning: true, layer_entries: [{ signal_layer: "F.Cu", top_reference_layer: null, bottom_reference_layer: "In1.Cu", width_nm: 130, diff_pair_gap_nm: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000 };
 }
 
 test("a new track row starts as KiCad's does: front layer first, then the next layer down with its neighbours as references, and round again after the back layer", () => {
@@ -89,7 +89,7 @@ test("a new track row starts as KiCad's does: front layer first, then the next l
   p = addTrackRow(p, COPPER4);
   assert.deepEqual(layers()[4], ["F.Cu", null, "In1.Cu"], "after the back layer it starts again at the front");
   assert.deepEqual(addTrackRow(emptyProfile(), ["F.Cu"]).layer_entries.map((e) => [e.signal_layer, e.bottom_reference_layer]), [["F.Cu", null]]);
-  assert.equal(addTrackRow({ ...emptyProfile(), layer_entries: [{ signal_layer: "Gone", width_um: 0, diff_pair_gap_um: 0, delay_as_per_mm: 0 }] }, COPPER2).layer_entries[1]!.signal_layer, "", "a last row on a layer the board lacks leaves the new row without one");
+  assert.equal(addTrackRow({ ...emptyProfile(), layer_entries: [{ signal_layer: "Gone", width_nm: 0, diff_pair_gap_nm: 0, delay_as_per_mm: 0 }] }, COPPER2).layer_entries[1]!.signal_layer, "", "a last row on a layer the board lacks leaves the new row without one");
   assert.deepEqual(addViaOverride(emptyProfile(), COPPER4).via_overrides, [{ signal_layer_from: "F.Cu", signal_layer_to: "B.Cu", via_layer_from: "F.Cu", via_layer_to: "B.Cu", delay_as: 0 }]);
 });
 

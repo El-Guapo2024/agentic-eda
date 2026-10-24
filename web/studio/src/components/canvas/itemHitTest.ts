@@ -15,7 +15,7 @@ import { hatchDistance } from "../../kicad-port/shapeFill";
 import { endingInks, hasEndings } from "../../kicad-port/lineEnding";
 
 /** `EDA_SHAPE::getMaxError()` for the board (`BOARD_DESIGN_SETTINGS::m_MaxError`, 0.005 mm): the flattening tolerance a Bezier is drawn/hit-tested at. */
-export const BEZIER_MAX_ERROR_UM = 5;
+export const BEZIER_MAX_ERROR_NM = 5;
 
 export function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const dx = bx - ax,
@@ -60,7 +60,7 @@ export function shapePoints(s: Shape): Array<readonly [number, number]> {
       return s.pts;
     case "bezier":
       // the flattened curve (`m_bezierPoints`), not just the control polygon
-      return bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_UM);
+      return bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_NM);
   }
 }
 
@@ -140,7 +140,7 @@ function bodyHitDistance(s: Shape, px: number, py: number): number {
       // arc that's on screen at a normal zoom.
       return Math.min(distToSegment(px, py, s.start[0], s.start[1], s.mid[0], s.mid[1]), distToSegment(px, py, s.mid[0], s.mid[1], s.end[0], s.end[1]));
     case "bezier":
-      return distToPolyline(px, py, bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_UM));
+      return distToPolyline(px, py, bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_NM));
   }
 }
 
@@ -163,7 +163,7 @@ export function shapeArea(s: Shape): number {
     case "polygon":
       return polygonArea(s.pts);
     case "bezier": {
-      const poly = bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_UM);
+      const poly = bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_NM);
       let len = 0;
       for (let i = 0; i + 1 < poly.length; i++) len += Math.hypot(poly[i + 1]![0] - poly[i]![0], poly[i + 1]![1] - poly[i]![1]);
       return len * Math.max(s.stroke_width, 1);

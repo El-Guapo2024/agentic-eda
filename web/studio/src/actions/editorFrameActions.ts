@@ -41,7 +41,7 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
   const fp = ctx.tab === "footprint";
 
   const view = (): ViewTransform => (fp ? ctx.fpApi.getState().view : ctx.symApi.getState().view);
-  const cursor = () => (fp ? ctx.fpApi.getState().cursorUm : ctx.symApi.getState().cursorUm);
+  const cursor = () => (fp ? ctx.fpApi.getState().cursorNm : ctx.symApi.getState().cursorNm);
   const setView = (v: ViewTransform) => (fp ? ctx.fpDispatch({ type: "SET_VIEW", view: v }) : ctx.symDispatch({ type: "SET_VIEW", view: v }));
   const toast = (message: string, kind: "info" | "error" = "info") => (fp ? ctx.fpDispatch({ type: "TOAST", message, kind }) : ctx.symDispatch({ type: "TOAST", message, kind }));
 

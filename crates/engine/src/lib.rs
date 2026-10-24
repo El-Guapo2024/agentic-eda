@@ -34,7 +34,7 @@ pub fn derive_schematic_modules(model: &ConstraintModel, opts: &EngineOptions) -
 /// multiples of this so everything lands on-grid. (Used by tests below;
 /// production code now goes through `geometry::GRID`.)
 #[cfg(test)]
-const GRID: i64 = eda_layout::DEFAULT_GRID; // 1270 um
+const GRID: i64 = eda_layout::DEFAULT_GRID; // 1.27 mm
 
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
@@ -60,11 +60,11 @@ impl EngineOptions {
 /// named net label instead (see the crate design note). Deliberately under
 /// `eda-gates`' 80 mm `schematic_wire_length` limit, so any wire that
 /// survives layout passes the gate with margin.
-pub const WIRE_BUDGET_UM: i64 = 76_000;
+pub const WIRE_BUDGET_NM: i64 = 76_000_000;
 
 /// A same-part run of adjacent same-net pins (see the net-label loop below)
 /// is joined by one bus stub only up to this length/bend count. Mirrors
-/// `eda-gates`' `MAX_POWER_WIRE_LEN_UM`/`MAX_POWER_WIRE_BENDS` with margin
+/// `eda-gates`' `MAX_POWER_WIRE_LEN_NM`/`MAX_POWER_WIRE_BENDS` with margin
 /// (`eda-engine` cannot depend on `eda-gates` -- the same reason
 /// `is_control_pin_name` is duplicated rather than shared -- so the two are
 /// kept in lockstep by inspection/tests instead). "Adjacent" pins on a small
@@ -74,26 +74,26 @@ pub const WIRE_BUDGET_UM: i64 = 76_000;
 /// sheet-spanning rail the gate exists to catch. Past this size each pin in
 /// the run gets its own independent flag instead, which is how a real
 /// schematic draws a connector's several ground pins anyway.
-const MAX_MERGED_STUB_LEN_UM: i64 = 24_000;
+const MAX_MERGED_STUB_LEN_NM: i64 = 24_000_000;
 const MAX_MERGED_STUB_BENDS: usize = 2;
 
-/// Gap left between packed cluster blocks (um), and the slack around a
+/// Gap left between packed cluster blocks (nm), and the slack around a
 /// block's drawn extent for its net-label glyphs/text. Two settings: blocks
 /// *inside* one cluster (an IC and its decoupling caps) are packed tight,
 /// because "next to its IC" is the whole point of a functional block, while
 /// whole clusters are separated generously so the eye reads them as
 /// distinct groups.
-const CLUSTER_GAP_UM: i64 = 10 * eda_layout::DEFAULT_GRID;
-const CLUSTER_MARGIN_UM: i64 = 4 * eda_layout::DEFAULT_GRID;
-const TIGHT_GAP_UM: i64 = 3 * eda_layout::DEFAULT_GRID;
-const TIGHT_MARGIN_UM: i64 = 2 * eda_layout::DEFAULT_GRID;
+const CLUSTER_GAP_NM: i64 = 10 * eda_layout::DEFAULT_GRID;
+const CLUSTER_MARGIN_NM: i64 = 4 * eda_layout::DEFAULT_GRID;
+const TIGHT_GAP_NM: i64 = 3 * eda_layout::DEFAULT_GRID;
+const TIGHT_MARGIN_NM: i64 = 2 * eda_layout::DEFAULT_GRID;
 /// A part with at least this many pins is treated as an IC — a cluster
 /// anchor that passives and connectors hang off.
 const ANCHOR_MIN_PINS: usize = 5;
 
-/// `um` rounded down to a whole number of grid cells.
-fn on_grid(um: i64) -> i64 {
-    um / eda_layout::DEFAULT_GRID * eda_layout::DEFAULT_GRID
+/// `nm` rounded down to a whole number of grid cells.
+fn on_grid(nm: i64) -> i64 {
+    nm / eda_layout::DEFAULT_GRID * eda_layout::DEFAULT_GRID
 }
 
 /// The extra room (grid cells) between parts, block by block, a flat layout is tried with, in turn.
@@ -246,8 +246,8 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         let layout_opts = {
             let d = LayoutOptions::default();
             LayoutOptions {
-                label_slot_above: geometry::SLOT_ABOVE_UM + room,
-                label_slot_below: geometry::SLOT_BELOW_UM + room,
+                label_slot_above: geometry::SLOT_ABOVE_NM + room,
+                label_slot_below: geometry::SLOT_BELOW_NM + room,
                 layer_spacing: d.layer_spacing + room,
                 node_spacing: d.node_spacing + room,
                 ..d
@@ -276,7 +276,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                 // whether a labelled pin is also on the drawn wire.
                 let mut over: BTreeSet<String> = BTreeSet::new();
                 for (net, _, poly) in &laid.edges {
-                    if polyline_len(poly) > WIRE_BUDGET_UM {
+                    if polyline_len(poly) > WIRE_BUDGET_NM {
                         over.insert(net.clone());
                     }
                 }
@@ -316,7 +316,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         }
 
         // ---- pack the blocks ----
-        let offsets = pack_blocks(&blocks, &node_of, CLUSTER_GAP_UM + room, CLUSTER_MARGIN_UM + on_grid(room / 2));
+        let offsets = pack_blocks(&blocks, &node_of, CLUSTER_GAP_NM + room, CLUSTER_MARGIN_NM + on_grid(room / 2));
 
         let mut positions: BTreeMap<String, graph::Point> = BTreeMap::new();
         let mut wires: Vec<Wire> = Vec::new();
@@ -414,7 +414,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     hier::fit_flat(&mut schematic, model);
 
     Ok(Design {
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance {
             engine_version: opts.engine_version.clone(),
             intent_hash: opts.intent_hash.clone(),
@@ -519,7 +519,7 @@ fn layout_cluster(
             .collect();
         sub.push(run_layout(comp, node_of, pin_port_of, parts_by_ref, &nets, opts));
     }
-    let offsets = pack_blocks(&sub, node_of, TIGHT_GAP_UM + room, TIGHT_MARGIN_UM + on_grid(room / 2));
+    let offsets = pack_blocks(&sub, node_of, TIGHT_GAP_NM + room, TIGHT_MARGIN_NM + on_grid(room / 2));
     let mut positions = BTreeMap::new();
     let mut edges = Vec::new();
     for (block, off) in sub.iter().zip(offsets.iter()) {
@@ -790,7 +790,7 @@ fn cluster_order(members: &[String], seed: u64, cluster_index: usize) -> Vec<Str
 // ---------------------------------------------------------------- block packing
 
 /// A block's drawn extent in its own coordinates, grown by
-/// `CLUSTER_MARGIN_UM` for net-label glyphs.
+/// `CLUSTER_MARGIN_NM` for net-label glyphs.
 fn block_extent(b: &Laid, node_of: &BTreeMap<String, Node>, margin: i64) -> (graph::Point, i64, i64) {
     let (mut x0, mut x1, mut y0, mut y1) = (i64::MAX, i64::MIN, i64::MAX, i64::MIN);
     for (r, p) in &b.positions {
@@ -839,8 +839,8 @@ fn block_flow_bias(b: &Laid) -> i32 {
 /// area left under it between that height and the segments it covers.
 /// Ties on `(y, waste)` are broken by `bias`: a left-tending block prefers
 /// the smallest tied x, a right-tending block the largest.
-fn skyline_best_x(segs: &[(i64, i64, i64)], w: i64, width: i64, bias: i32) -> (i64, i64, i64) {
-    let mut best: Option<(i64, i64, i64)> = None; // (y, waste, x)
+fn skyline_best_x(segs: &[(i64, i64, i64)], w: i64, width: i64, bias: i32) -> (i64, i128, i64) {
+    let mut best: Option<(i64, i128, i64)> = None; // (y, waste, x)
     for &(sx0, _, _) in segs {
         let x = sx0;
         if x + w > width {
@@ -853,12 +853,13 @@ fn skyline_best_x(segs: &[(i64, i64, i64)], w: i64, width: i64, bias: i32) -> (i
             }
             y = y.max(h);
         }
-        let mut waste = 0i64;
+        // square nanometres: i128, as a sum of areas can pass an i64
+        let mut waste = 0i128;
         for &(a, b, h) in segs {
             let ox0 = a.max(x);
             let ox1 = b.min(x + w);
             if ox1 > ox0 {
-                waste += (y - h) * (ox1 - ox0);
+                waste += (y - h) as i128 * (ox1 - ox0) as i128;
             }
         }
         best = Some(match best {
@@ -990,7 +991,7 @@ fn pack_blocks(blocks: &[Laid], node_of: &BTreeMap<String, Node>, gap: i64, marg
         area_b.cmp(&area_a).then(a.cmp(&b))
     });
 
-    let total_area: i64 = foot.iter().map(|(w, h)| w * h).sum();
+    let total_area: i128 = foot.iter().map(|(w, h)| *w as i128 * *h as i128).sum();
     let sqrt_w = (total_area as f64).sqrt().max(widest as f64) as i64;
 
     // Try a spread of candidate widths around the "square" width, plus the
@@ -1206,7 +1207,7 @@ mod tests {
     }
 
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, pins, body_nm: None, symbol: None, datasheet: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {
@@ -1380,7 +1381,7 @@ mod tests {
         // the first place. This is the `power_pins`/`PowerSymbol` path
         // (`is_power == true` short-circuits straight to one power symbol
         // per pin -- see the `continue` right after `power_pins.push`), a
-        // stronger fix than `MAX_MERGED_STUB_LEN_UM`/`_BENDS` capping a
+        // stronger fix than `MAX_MERGED_STUB_LEN_NM`/`_BENDS` capping a
         // merged run after the fact; that cap still guards the *ordinary*
         // (non-power) same-part run this test does not exercise.
         let j1 = part(

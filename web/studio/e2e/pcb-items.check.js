@@ -77,7 +77,7 @@
     el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
   };
   const check_ = (el, on) => { if (el.checked !== on) el.click(); };
-  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const near = (a, b, tol = 2_000) => Math.abs(a - b) <= tol;
   const closeDialogs = async () => { for (let i = 0; i < 3; i++) { const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Cancel"); if (!b) break; b.click(); await sleep(150); } };
 
   // The canvas: the pointer events a user makes. The cursor readout of the status bar gives the screen-to-board mapping.
@@ -170,7 +170,7 @@
   let toScreen = await screenOf();
   if (!toScreen) { results.push({ name: "setup", ok: false, notes: ["FAIL: the canvas gave no cursor readout"] }); check.done = true; return "no canvas"; }
   const outline = (await board()).outline ?? [[0, 0], [35000, 0], [35000, 35000], [0, 35000]];
-  const [bx0, by0] = [Math.min(...outline.map((p) => p[0])) / 1000, Math.min(...outline.map((p) => p[1])) / 1000];
+  const [bx0, by0] = [Math.min(...outline.map((p) => p[0])) / 1e6, Math.min(...outline.map((p) => p[1])) / 1e6];
   const at = (dx, dy) => [bx0 + dx, by0 + dy];
   const startCount = (await textBoxes()).length;
 
@@ -199,8 +199,8 @@
       const box = boxes.find((x) => x.text.startsWith("Three lines"));
       t(!!box, "it has the text typed");
       if (!box) return;
-      t(near(box.start[0], a[0] * 1000, 600) && near(box.start[1], a[1] * 1000, 600), `it starts at the first click (${box.start})`);
-      t(box.end[1] - box.start[1] > 3000, `it was grown to hold three lines (${(box.end[1] - box.start[1]) / 1000} mm high)`);
+      t(near(box.start[0], a[0] * 1e6, 600_000) && near(box.start[1], a[1] * 1e6, 600_000), `it starts at the first click (${box.start})`);
+      t(box.end[1] - box.start[1] > 3000, `it was grown to hold three lines (${(box.end[1] - box.start[1]) / 1e6} mm high)`);
       t(E.state().selection.some((s) => s.id === box.id && s.kind === "textbox"), "the new box is selected");
       await undo();
       t((await textBoxes()).length === startCount, "one undo takes it away");
@@ -244,13 +244,13 @@
       const box = (await textBoxes()).find((x) => x.text === "On ${LAYER}");
       t(!!box, "the box is added with its text as typed, variables and all");
       t(box && /^On /.test(box.shown ?? "") && !/\$\{/.test(box.shown ?? ""), `the server expanded the variable (${box?.shown})`);
-      t(box && box.thickness <= 167, `a pen wider than a sixth of the glyph is clamped (${box?.thickness} um)`);
+      t(box && box.thickness <= 166_667, `a pen wider than a sixth of the glyph is clamped (${box?.thickness} um)`);
       await undo();
     });
 
     await scenario("Text Box Properties on a box that is there: layer, border style, margins, knockout, lock; the Properties panel rows say the same", async (t) => {
       await deleteAll();
-      await cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer: "F.SilkS", text: "Edit me please, this is a longer text", start: { x: bx0 * 1000 + 4000, y: by0 * 1000 + 4000 }, end: { x: bx0 * 1000 + 24000, y: by0 * 1000 + 14000 }, margin_left_um: 800, margin_top_um: 800, margin_right_um: 800, margin_bottom_um: 800, stroke_width_um: 100, size_um: 1000, halign: "left", valign: "top" } });
+      await cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer: "F.SilkS", text: "Edit me please, this is a longer text", start: { x: bx0 * 1e6 + 4_000_000, y: by0 * 1e6 + 4_000_000 }, end: { x: bx0 * 1e6 + 24_000_000, y: by0 * 1e6 + 14_000_000 }, margin_left_nm: 800_000, margin_top_nm: 800_000, margin_right_nm: 800_000, margin_bottom_nm: 800_000, stroke_width_nm: 100_000, size_nm: 1_000_000, halign: "left", valign: "top" } });
       const box = (await mine())[0];
       await select([box.id]);
       await sleep(400);
@@ -275,11 +275,11 @@
       await sleep(900);
       const after = (await mine())[0];
       t(after.id === box.id, "the box keeps its id");
-      t(after.layer === "F.Fab" && after.line_style === "dash" && after.margins[0] === 1500 && after.knockout && after.bold, "its layer, border style, left margin, knockout and weight are the dialog's");
+      t(after.layer === "F.Fab" && after.line_style === "dash" && after.margins[0] === 1_500_000 && after.knockout && after.bold, "its layer, border style, left margin, knockout and weight are the dialog's");
       t(((await board()).locked ?? []).includes(box.id), "it is locked");
       await undo();
       const restored = (await mine())[0];
-      t(restored.layer === "F.SilkS" && restored.margins[0] === 800 && !restored.knockout, "one undo puts the whole edit back");
+      t(restored.layer === "F.SilkS" && restored.margins[0] === 800_000 && !restored.knockout, "one undo puts the whole edit back");
       t(!((await board()).locked ?? []).includes(box.id), "lock included");
       // the panel edits the box too: one batch, one undo step
       await select([box.id]);
@@ -290,9 +290,9 @@
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
         input.dispatchEvent(new Event("blur", { bubbles: true }));
         await sleep(900);
-        t((await mine())[0].margins[1] === 1200, "a margin typed in the panel is the box's");
+        t((await mine())[0].margins[1] === 1_200_000, "a margin typed in the panel is the box's");
         await undo();
-        t((await mine())[0].margins[1] === 800, "and one undo takes it back");
+        t((await mine())[0].margins[1] === 800_000, "and one undo takes it back");
       } else t(false, "the Margin Top row has an input");
     });
 
@@ -300,7 +300,7 @@
       await deleteAll();
       // the Properties panel of the last scenario changed the size of the canvas: measure it again
       toScreen = (await screenOf()) ?? toScreen;
-      await cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer: "F.SilkS", text: "Pick me", start: { x: bx0 * 1000 + 6000, y: by0 * 1000 + 6000 }, end: { x: bx0 * 1000 + 16000, y: by0 * 1000 + 10000 }, margin_left_um: 800, margin_top_um: 800, margin_right_um: 800, margin_bottom_um: 800, stroke_width_um: 100, size_um: 1000, halign: "left", valign: "top" } });
+      await cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer: "F.SilkS", text: "Pick me", start: { x: bx0 * 1e6 + 6_000_000, y: by0 * 1e6 + 6_000_000 }, end: { x: bx0 * 1e6 + 16_000_000, y: by0 * 1e6 + 10_000_000 }, margin_left_nm: 800_000, margin_top_nm: 800_000, margin_right_nm: 800_000, margin_bottom_nm: 800_000, stroke_width_nm: 100_000, size_nm: 1_000_000, halign: "left", valign: "top" } });
       const box = (await mine())[0];
       await E.run("common.InteractiveSelection.clear");
       await escape();
@@ -309,12 +309,12 @@
       // carry it with the pointer
       await drag(toScreen, [bx0 + 11, by0 + 8], [bx0 + 16, by0 + 13]);
       const moved = (await mine())[0];
-      t(near(moved.start[0] - box.start[0], 5000, 600) && near(moved.start[1] - box.start[1], 5000, 600), `a drag moves it by the drag (${moved.start[0] - box.start[0]}, ${moved.start[1] - box.start[1]})`);
+      t(near(moved.start[0] - box.start[0], 5_000_000, 600_000) && near(moved.start[1] - box.start[1], 5_000_000, 600_000), `a drag moves it by the drag (${moved.start[0] - box.start[0]}, ${moved.start[1] - box.start[1]})`);
       await undo();
       t((await mine())[0].start[0] === box.start[0], "one undo puts it back");
       // the verbs of any item
-      await cmd({ op: "move_items", ids: [box.id], dx: 1000, dy: 2000 });
-      t((await mine())[0].start[0] === box.start[0] + 1000, "Move Exactly takes it");
+      await cmd({ op: "move_items", ids: [box.id], dx: 1_000_000, dy: 2_000_000 });
+      t((await mine())[0].start[0] === box.start[0] + 1_000_000, "Move Exactly takes it");
       await undo();
       await select([box.id]);
       await E.run("pcbnew.InteractiveEdit.rotateCcw");
@@ -345,7 +345,7 @@
 
     await scenario("the 3D view draws a text box on its layer: the silkscreen, an adhesive layer, a user layer", async (t) => {
       await deleteAll();
-      const mk = (layer) => cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer, text: "3D box", start: { x: bx0 * 1000 + 6000, y: by0 * 1000 + 6000 }, end: { x: bx0 * 1000 + 16000, y: by0 * 1000 + 10000 }, margin_left_um: 800, margin_top_um: 800, margin_right_um: 800, margin_bottom_um: 800, stroke_width_um: 100, size_um: 1000, halign: "left", valign: "top" } });
+      const mk = (layer) => cmd({ op: "pcb_item", verb: "add_text_box", text_box: { layer, text: "3D box", start: { x: bx0 * 1e6 + 6_000_000, y: by0 * 1e6 + 6_000_000 }, end: { x: bx0 * 1e6 + 16_000_000, y: by0 * 1e6 + 10_000_000 }, margin_left_nm: 800_000, margin_top_nm: 800_000, margin_right_nm: 800_000, margin_bottom_nm: 800_000, stroke_width_nm: 100_000, size_nm: 1_000_000, halign: "left", valign: "top" } });
       await mk("F.SilkS");
       await mk("B.SilkS");
       await mk("Dwgs.User");
@@ -387,8 +387,8 @@
       t(list.length === 1, "the click adds the image");
       const im = list[0];
       if (!im) return;
-      t(near(im.x, (bx0 + 10) * 1000, 1500) && near(im.y, (by0 + 10) * 1000, 1500), `at the click (${im.x}, ${im.y}) um`);
-      t(im.w === 20320 && im.h === 13547 && im.px[0] === 240 && im.ppi === 300 && im.scale_ppm === 1000000, `240 x 160 pixels at 300 ppi are 20.32 x 13.55 mm at scale 1 (${im.w} x ${im.h})`);
+      t(near(im.x, (bx0 + 10) * 1e6, 1_500_000) && near(im.y, (by0 + 10) * 1e6, 1_500_000), `at the click (${im.x}, ${im.y}) um`);
+      t(im.w === 20_320_000 && im.h === 13_546_667 && im.px[0] === 240 && im.ppi === 300 && im.scale_ppm === 1000000, `240 x 160 pixels at 300 ppi are 20.32 x 13.55 mm at scale 1 (${im.w} x ${im.h})`);
       t(typeof im.layer === "string" && im.layer.length > 0, `it is on the active layer (${im.layer})`);
       t(E.state().selection.some((s) => s.id === im.id && s.kind === "image"), "the new image is selected");
       const r = await fetch(`/api/pcb_image?id=${im.id}&h=${im.hash}`);
@@ -427,17 +427,17 @@
     await scenario("Reference Image Properties (E): the size and the scale move together, the scale is checked, layer and lock, Convert to Greyscale; one undo step each", async (t) => {
       await deleteImages();
       const png = await makePng(240, 160, MAGENTA);
-      const im = await addImage({ layer: "Cmts.User", at: { x: (bx0 + 20) * 1000, y: (by0 + 20) * 1000 }, data: png.data });
+      const im = await addImage({ layer: "Cmts.User", at: { x: (bx0 + 20) * 1e6, y: (by0 + 20) * 1e6 }, data: png.data });
       if (!im) { t(false, "the image was added"); return; }
       await select([im.id]);
       await E.run("pcbnew.InteractiveEdit.properties");
       await sleep(600);
       t(!!tid("pcb-ref-image-properties"), "E opens Reference Image Properties");
-      t(tid("pri-ppi")?.textContent === "300" && Number(tid("pri-width")?.value) === 20.32 && Number(tid("pri-height")?.value) === 13.547 && tid("pri-scale")?.value === "1", "with the image's definition, size and scale");
+      t(tid("pri-ppi")?.textContent === "300" && Number(tid("pri-width")?.value) === 20.32 && Math.abs(Number(tid("pri-height")?.value) - 13.5467) < 0.0005 && tid("pri-scale")?.value === "1", "with the image's definition, size and scale");
       t(tid("pri-layer")?.value === "Cmts.User" && !tid("pri-locked")?.checked, "its layer, and not locked");
       setValue(tid("pri-width"), "10.16");
       await sleep(150);
-      t(tid("pri-scale").value === "0.5" && Number(tid("pri-height").value) === 6.773, `a width of 10.16 mm is half the scale and the height follows (${tid("pri-scale").value}, ${tid("pri-height").value})`);
+      t(tid("pri-scale").value === "0.5" && Math.abs(Number(tid("pri-height").value) - 6.7733) < 0.0005, `a width of 10.16 mm is half the scale and the height follows (${tid("pri-scale").value}, ${tid("pri-height").value})`);
       setValue(tid("pri-height"), "13.547");
       await sleep(150);
       // (a height typed to the micrometre is 13.547 mm, 0.3 um more than 160 pixels at 300 ppi: the scale is 1.000025)
@@ -455,9 +455,9 @@
       tid("pri-ok").click();
       await sleep(1000);
       const after = (await myImages())[0];
-      t(after.id === im.id && after.scale_ppm === 500000 && after.layer === "Dwgs.User" && near(after.x, (bx0 + 25) * 1000, 2), `OK applies scale, layer and position (${after.scale_ppm}, ${after.layer}, ${after.x})`);
+      t(after.id === im.id && after.scale_ppm === 500000 && after.layer === "Dwgs.User" && near(after.x, (bx0 + 25) * 1e6, 2000), `OK applies scale, layer and position (${after.scale_ppm}, ${after.layer}, ${after.x})`);
       t(((await board()).locked ?? []).includes(im.id), "and the lock");
-      t(after.w === 10160 && after.hash === im.hash, "the size follows the scale and the pixels are the same");
+      t(after.w === 10_160_000 && after.hash === im.hash, "the size follows the scale and the pixels are the same");
       await undo();
       const back = (await myImages())[0];
       t(back.scale_ppm === 1000000 && back.layer === "Cmts.User" && back.x === im.x && !((await board()).locked ?? []).includes(im.id), "one undo puts the whole edit back");
@@ -500,20 +500,20 @@
       await deleteImages();
       const png = await makePng(240, 160, MAGENTA);
       // outside the board, where nothing else is, on a layer that has a back
-      const im = await addImage({ layer: "F.SilkS", at: { x: (bx0 - 20) * 1000, y: (by0 + 10) * 1000 }, data: png.data });
+      const im = await addImage({ layer: "F.SilkS", at: { x: (bx0 - 20) * 1e6, y: (by0 + 10) * 1e6 }, data: png.data });
       await select([im.id]);
       await E.run("common.Control.zoomFitSelection");
       await sleep(700);
       toScreen = (await screenOf(false)) ?? toScreen;
       await E.run("common.InteractiveSelection.clear");
       await escape();
-      const cx = im.x / 1000;
-      const cy = im.y / 1000;
+      const cx = im.x / 1e6;
+      const cy = im.y / 1e6;
       await click(toScreen, cx + 7, cy + 4); // inside the box, off its centre
       t(E.state().selection.some((s) => s.id === im.id && s.kind === "image"), "a click in the box picks the image (PCB_REFERENCE_IMAGE::HitTest is its bounding box)");
       await drag(toScreen, [cx + 7, cy + 4], [cx + 9, cy + 6]);
       const moved = (await myImages())[0];
-      t(near(moved.x - im.x, 2000, 600) && near(moved.y - im.y, 2000, 600), `a drag carries it (${moved.x - im.x}, ${moved.y - im.y})`);
+      t(near(moved.x - im.x, 2_000_000, 600_000) && near(moved.y - im.y, 2_000_000, 600_000), `a drag carries it (${moved.x - im.x}, ${moved.y - im.y})`);
       await undo();
       t((await myImages())[0].x === im.x, "one undo puts it back");
 
@@ -529,7 +529,7 @@
         input.dispatchEvent(new Event("blur", { bubbles: true }));
         await sleep(900);
         const w = (await myImages())[0];
-        t(w.scale_ppm === 500000 && w.w === 10160 && w.x === im.x, `a width typed in the panel is a scale about the centre (${w.scale_ppm}, ${w.w})`);
+        t(w.scale_ppm === 500000 && w.w === 10_160_000 && w.x === im.x, `a width typed in the panel is a scale about the centre (${w.scale_ppm}, ${w.w})`);
         await undo();
         t((await myImages())[0].scale_ppm === 1000000, "one undo");
       } else t(false, "the Width row has an input");
@@ -546,8 +546,8 @@
       t(((await board()).locked ?? []).includes(im.id), "L locks it");
       await E.run("pcbnew.EditorControl.toggleLock");
       await sleep(400);
-      await cmd({ op: "move_items", ids: [im.id], dx: 1000, dy: 0 });
-      t((await myImages())[0].x === im.x + 1000, "Move Exactly takes it");
+      await cmd({ op: "move_items", ids: [im.id], dx: 1_000_000, dy: 0 });
+      t((await myImages())[0].x === im.x + 1_000_000, "Move Exactly takes it");
       await undo();
 
       // the Images row of the Appearance panel: off, the picture is gone; opacity 0 too
@@ -687,13 +687,13 @@
       await E.run("eeschema.InteractiveEdit.properties");
       await sleep(600);
       t(!!tid("sch-image-properties"), "E opens Image Properties");
-      t(tid("sim-ppi")?.textContent === "300" && tid("sim-scale")?.value === "1" && Number(tid("sim-x")?.value) === spot[0] / 1000, "with the image's definition, scale and position");
+      t(tid("sim-ppi")?.textContent === "300" && tid("sim-scale")?.value === "1" && Number(tid("sim-x")?.value) === spot[0] / 1e6, "with the image's definition, scale and position");
       setValue(tid("sim-scale"), "0.01");
       dialogButton("OK")?.click();
       await sleep(500);
       t(/too small/i.test(tid("sim-error")?.textContent ?? "") && !!tid("sch-image-properties"), `a scale that makes the image under 15 pixels is refused (${tid("sim-error")?.textContent})`);
       setValue(tid("sim-scale"), "0.5");
-      setValue(tid("sim-x"), String((spot[0] + 5000) / 1000));
+      setValue(tid("sim-x"), String((spot[0] + 5000) / 1e6));
       await sleep(150);
       dialogButton("OK")?.click();
       await sleep(1000);
@@ -737,8 +737,8 @@
         await undo();
       } else t(false, "the Width row has an input");
       // Move Exactly, a drag, Delete
-      await cmd({ op: "sch_move", verb: "move", ids: [g.id], dx: 2540, dy: 1270 });
-      t((await mySchImages())[0].shape.at.x === spot[0] + 2540, "Move takes it by its centre");
+      await cmd({ op: "sch_move", verb: "move", ids: [g.id], dx: 2_540_000, dy: 1_270_000 });
+      t((await mySchImages())[0].shape.at.x === spot[0] + 2_540_000, "Move takes it by its centre");
       await undo();
       await E.run("common.InteractiveSelection.clear");
       await sheetClick(spot[0] + 5000, spot[1] + 3000);
@@ -805,15 +805,15 @@
       await click(toScreen, ...at(8, 8));
       await waitFor(async () => (await myPoints()).length === 1);
       let list = await myPoints();
-      t(list.length === 1 && near(list[0].x, (bx0 + 8) * 1000, 1500) && near(list[0].y, (by0 + 8) * 1000, 1500), `the first click puts a point there (${JSON.stringify(list[0])})`);
-      t(list[0].size === 1000 && typeof list[0].layer === "string" && list[0].layer.length > 0, `of 1 mm on the active layer (${list[0]?.layer})`);
+      t(list.length === 1 && near(list[0].x, (bx0 + 8) * 1e6, 1_500_000) && near(list[0].y, (by0 + 8) * 1e6, 1_500_000), `the first click puts a point there (${JSON.stringify(list[0])})`);
+      t(list[0].size === 1_000_000 && typeof list[0].layer === "string" && list[0].layer.length > 0, `of 1 mm on the active layer (${list[0]?.layer})`);
       t(E.state().picker != null, "the tool goes on (IPO_REPEAT)");
       await click(toScreen, ...at(14, 8));
       await waitFor(async () => (await myPoints()).length === 2);
       t((await myPoints()).length === 2, "a second click puts a second point");
       // the next click lands on the first point's own position even a little off it: the point is an anchor
       const first = list[0];
-      const [fx, fy] = [first.x / 1000, first.y / 1000];
+      const [fx, fy] = [first.x / 1e6, first.y / 1e6];
       await click(toScreen, fx + 0.06, fy + 0.05);
       await waitFor(async () => (await myPoints()).length === 3);
       const third = (await myPoints()).find((p) => p.id !== first.id && p.id !== (list[1] ?? {}).id) ?? (await myPoints()).at(-1);
@@ -836,18 +836,18 @@
       toScreen = (await screenOf()) ?? toScreen;
       const base = crossPixels();
       const rev0 = E.state().revision;
-      await cmd({ op: "pcb_item", verb: "add_point", point: { layer: "F.SilkS", at: { x: (bx0 + 12) * 1000, y: (by0 + 12) * 1000 }, size_um: 10000 } });
+      await cmd({ op: "pcb_item", verb: "add_point", point: { layer: "F.SilkS", at: { x: (bx0 + 12) * 1e6, y: (by0 + 12) * 1e6 }, size_nm: 10_000_000 } });
       await waitFor(() => E.state().revision !== rev0, 8000);
       await sleep(500);
       const p = (await myPoints())[0];
-      t(!!p && p.size === 10000, "a 10 mm point was added");
+      t(!!p && p.size === 10_000_000, "a 10 mm point was added");
       if (!p) return;
       await waitFor(() => crossPixels() > base + 150);
       t(crossPixels() > base + 150, `the board paints its X in the colour of the Points object (${base} -> ${crossPixels()} pixels)`);
       // a click on a bar of the X, off its centre, picks it
       await E.run("common.InteractiveSelection.clear");
       await escape();
-      await click(toScreen, p.x / 1000 + 2.5, p.y / 1000 + 2.5);
+      await click(toScreen, p.x / 1e6 + 2.5, p.y / 1e6 + 2.5);
       t(E.state().selection.some((s) => s.id === p.id && s.kind === "point"), `a click on a bar of the X picks the point (${JSON.stringify(E.state().selection)})`);
       // the Properties panel: a Size row and a lock that cannot be set
       if (!document.querySelector(".prop-row")) { document.querySelector('button[aria-label="Show Properties"]')?.click(); await sleep(500); }
@@ -860,9 +860,9 @@
         size.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
         size.dispatchEvent(new Event("blur", { bubbles: true }));
         await sleep(900);
-        t((await myPoints())[0].size === 4000, "a size typed in the panel is the point's");
+        t((await myPoints())[0].size === 4_000_000, "a size typed in the panel is the point's");
         await undo();
-        t((await myPoints())[0].size === 10000, "one undo takes it back");
+        t((await myPoints())[0].size === 10_000_000, "one undo takes it back");
       } else t(false, "the Size row has an input");
       // Flip and Move
       await select([p.id]);
@@ -870,9 +870,9 @@
       await sleep(700);
       t((await myPoints())[0].layer === "B.SilkS", `F puts it on the back layer (${(await myPoints())[0].layer})`);
       await undo();
-      await drag(toScreen, [p.x / 1000 + 2.5, p.y / 1000 + 2.5], [p.x / 1000 + 4.5, p.y / 1000 + 4.5]);
+      await drag(toScreen, [p.x / 1e6 + 2.5, p.y / 1e6 + 2.5], [p.x / 1e6 + 4.5, p.y / 1e6 + 4.5]);
       const moved = (await myPoints())[0];
-      t(near(moved.x - p.x, 2000, 700) && near(moved.y - p.y, 2000, 700), `a drag carries it (${moved.x - p.x}, ${moved.y - p.y})`);
+      t(near(moved.x - p.x, 2_000_000, 700_000) && near(moved.y - p.y, 2_000_000, 700_000), `a drag carries it (${moved.x - p.x}, ${moved.y - p.y})`);
       await undo();
       // `L` does nothing to it: no lock
       await select([p.id]);
@@ -923,10 +923,10 @@
     };
     const inked = (px) => Math.max(...px) > 60;
     /** The middle of a hatch line, and the middle of the gap beside it (one millimetre along x + y), in millimetres. */
-    const lineMid = (l) => [(l[0] + l[2]) / 2000, (l[1] + l[3]) / 2000];
+    const lineMid = (l) => [(l[0] + l[2]) / 2e6, (l[1] + l[3]) / 2e6];
     const gapMid = (l) => [lineMid(l)[0] + 0.5, lineMid(l)[1] + 0.5];
     // a 10 mm square left of the board, where nothing else is painted, with a 0.2 mm line: a hatch line every 2 mm along x + y
-    const squareAt = () => ({ kind: "rect", layer: "F.Fab", stroke_width: 200, filled: false, start: { x: Math.round((bx0 - 14) * 1000), y: Math.round((by0 + 4) * 1000) }, end: { x: Math.round((bx0 - 4) * 1000), y: Math.round((by0 + 14) * 1000) } });
+    const squareAt = () => ({ kind: "rect", layer: "F.Fab", stroke_width: 200_000, filled: false, start: { x: Math.round((bx0 - 14) * 1e6), y: Math.round((by0 + 4) * 1e6) }, end: { x: Math.round((bx0 - 4) * 1e6), y: Math.round((by0 + 14) * 1e6) } });
     const fillRow = () => document.querySelector('.prop-row[data-prop="Fill"]');
 
     await scenario("Fill (Properties panel): a rectangle is hatched, reverse-hatched and cross-hatched, painted with the lines the server works out, picked on a line and not between; one undo step each", async (t) => {
@@ -943,9 +943,9 @@
       setValue(sel, "2");
       await waitFor(async () => (await shapeById(sq.id))?.fill === "hatch", 6000);
       let s2 = await shapeById(sq.id);
-      t(s2.fill === "hatch" && s2.filled === false && s2.hatch_width === 200, `Hatch: the state says how it is hatched and with which width (${s2.fill}, ${s2.hatch_width})`);
+      t(s2.fill === "hatch" && s2.filled === false && s2.hatch_width === 200_000, `Hatch: the state says how it is hatched and with which width (${s2.fill}, ${s2.hatch_width})`);
       const lines = s2.hatch_lines ?? [];
-      t(lines.length === 9 && lines.every((l) => l[0] + l[1] === l[2] + l[3] && ((bx0 * 1000 + 0) * 0 + (l[0] + l[1])) % 2000 === (lines[0][0] + lines[0][1]) % 2000), `nine lines of slope -1, 2 mm apart (${lines.length})`);
+      t(lines.length === 9 && lines.every((l) => l[0] + l[1] === l[2] + l[3] && ((bx0 * 1e6 + 0) * 0 + (l[0] + l[1])) % 2000 === (lines[0][0] + lines[0][1]) % 2000), `nine lines of slope -1, 2 mm apart (${lines.length})`);
       // zoom to the square (Zoom to Selection) so a hatch line is several pixels wide and the square is all the canvas shows
       await select([sq.id]);
       await E.run("common.Control.zoomFitSelection");
@@ -1011,8 +1011,8 @@
       const alone = (await shapeById(sq.id)).hatch_lines.length;
       t(alone === 9, `the square has nine lines (${alone})`);
       // a vertical bar across the middle of it, 1 mm wide, on the same layer
-      const cx = Math.round((bx0 - 9) * 1000);
-      const bar = await addShape({ kind: "segment", layer: "F.Fab", stroke_width: 1000, filled: false, start: { x: cx, y: Math.round((by0 + 2) * 1000) }, end: { x: cx, y: Math.round((by0 + 16) * 1000) } });
+      const cx = Math.round((bx0 - 9) * 1e6);
+      const bar = await addShape({ kind: "segment", layer: "F.Fab", stroke_width: 1_000_000, filled: false, start: { x: cx, y: Math.round((by0 + 2) * 1e6) }, end: { x: cx, y: Math.round((by0 + 16) * 1e6) } });
       const cut = (await shapeById(sq.id)).hatch_lines;
       t(cut.length > alone, `the lines the bar crosses are cut in two (${alone} -> ${cut.length})`);
       // no line comes within the bar's half width and half the spacing (1 mm) of its axis
@@ -1039,9 +1039,9 @@
       await undo();
       await select([sq.id]);
       const x0 = (await shapeById(sq.id)).hatch_lines[0][0];
-      await cmd({ op: "move_items", ids: [sq.id], dx: 2000, dy: 0 });
+      await cmd({ op: "move_items", ids: [sq.id], dx: 2_000_000, dy: 0 });
       await sleep(900);
-      t((await shapeById(sq.id)).fill === "hatch" && (await shapeById(sq.id)).hatch_lines[0][0] === x0 + 2000, "Move keeps the hatch and the lines move with the shape");
+      t((await shapeById(sq.id)).fill === "hatch" && (await shapeById(sq.id)).hatch_lines[0][0] === x0 + 2_000_000, "Move keeps the hatch and the lines move with the shape");
       await undo();
       const text = await fetch("/api/board.kicad_pcb").then((r) => r.text());
       t(/\(gr_rect [^\n]*\(fill hatch\)/.test(text), "the derived board has the (fill hatch) of the shape");
@@ -1080,11 +1080,11 @@
       apply()?.click();
       await waitFor(async () => (await shapeById(sq.id))?.fill === "cross_hatch", 6000);
       const s2 = await shapeById(sq.id);
-      t(s2.fill === "cross_hatch" && s2.stroke_width === 300 && s2.hatch_width === 300, `OK sets the line and the fill together (${s2.fill}, ${s2.stroke_width})`);
+      t(s2.fill === "cross_hatch" && s2.stroke_width === 300_000 && s2.hatch_width === 300_000, `OK sets the line and the fill together (${s2.fill}, ${s2.stroke_width})`);
       await sleep(300);
       await undo();
       const s3 = await shapeById(sq.id);
-      t(s3.fill === undefined && s3.stroke_width === 200, `and one undo takes both back (${s3.fill}, ${s3.stroke_width})`);
+      t(s3.fill === undefined && s3.stroke_width === 200_000, `and one undo takes both back (${s3.fill}, ${s3.stroke_width})`);
       await deleteShapes();
     });
 
@@ -1111,7 +1111,7 @@
       }
       return { status: "timeout" };
     };
-    const qrAt = (dx, dy, extra = {}) => ({ layer: "F.SilkS", at: { x: Math.round((bx0 - 20 + dx) * 1000), y: Math.round((by0 + 10 + dy) * 1000) }, angle: 0, width_um: 12000, height_um: 12000, text: "HELLO", text_height_um: 1500, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_um: 0, margin_y_um: 0, ...extra });
+    const qrAt = (dx, dy, extra = {}) => ({ layer: "F.SilkS", at: { x: Math.round((bx0 - 20 + dx) * 1e6), y: Math.round((by0 + 10 + dy) * 1e6) }, angle: 0, width_nm: 12_000_000, height_nm: 12_000_000, text: "HELLO", text_height_nm: 1_500_000, kind: "qr", ecc: "L", show_text: true, knockout: false, margin_x_nm: 0, margin_y_nm: 0, ...extra });
 
     await scenario("Add Barcode: a click opens Barcode Properties with a preview of what kicad-cli plots, OK adds a QR code as one undo step and selects it, Cancel adds nothing, a text the kind cannot encode is refused", async (t) => {
       await deleteBarcodes();
@@ -1151,9 +1151,9 @@
       tid("pbc-ok").click();
       await waitFor(async () => (await barcodesNow()).length === n0 + 1, 8000);
       const made = (await myBarcodes())[0];
-      t(!!made && made.kind === "qr" && made.text === "HELLO" && made.w === 12000 && made.h === 12000 && made.show_text === true, `OK adds the barcode (${JSON.stringify(made && [made.kind, made.text, made.w])})`);
+      t(!!made && made.kind === "qr" && made.text === "HELLO" && made.w === 12_000_000 && made.h === 12_000_000 && made.show_text === true, `OK adds the barcode (${JSON.stringify(made && [made.kind, made.text, made.w])})`);
       if (!made) return;
-      t(near(made.x, (bx0 + 8) * 1000, 1500) && near(made.y, (by0 + 8) * 1000, 1500), `where the click was (${made.x}, ${made.y})`);
+      t(near(made.x, (bx0 + 8) * 1e6, 1_500_000) && near(made.y, (by0 + 8) * 1e6, 1_500_000), `where the click was (${made.x}, ${made.y})`);
       await waitFor(() => E.state().selection.some((x) => x.id === made.id && x.kind === "barcode"), 4000);
       t(E.state().selection.some((x) => x.id === made.id && x.kind === "barcode"), `the new barcode is selected (${JSON.stringify(E.state().selection)})`);
       t(E.state().picker != null, "and the tool goes on");
@@ -1194,12 +1194,12 @@
       await waitFor(() => E.state().revision !== rev0, 8000);
       await sleep(500);
       const code = (await myBarcodes())[0];
-      t(!!code && code.kind === "qr" && code.w === 12000, "a 12 mm QR code was added");
+      t(!!code && code.kind === "qr" && code.w === 12_000_000, "a 12 mm QR code was added");
       if (!code) return;
       const reply = await shapeOf(code.id);
       t(reply.status === "ready" && reply.paths.length > 5, `the server serves the plot's polygons (${reply.status}, ${reply.paths?.length} paths)`);
       const xs = (reply.paths ?? []).flat(2).map((p) => p[0]);
-      t(Math.min(...xs) === -6000 && Math.max(...xs) === 6000, `12 mm wide, centred on the barcode's place (${Math.min(...xs)}..${Math.max(...xs)})`);
+      t(Math.min(...xs) === -6_000_000 && Math.max(...xs) === 6_000_000, `12 mm wide, centred on the barcode's place (${Math.min(...xs)}..${Math.max(...xs)})`);
       await select([code.id]);
       await E.run("common.Control.zoomFitSelection");
       await sleep(800);
@@ -1210,7 +1210,7 @@
       t(base > 800, `the board paints the barcode in the colour of its layer (${base} pixels)`);
       // a click on the symbol picks it, a click far away does not
       await escape();
-      await click(toScreen, code.x / 1000 + 3, code.y / 1000 + 3);
+      await click(toScreen, code.x / 1e6 + 3, code.y / 1e6 + 3);
       t(E.state().selection.some((x) => x.id === code.id && x.kind === "barcode"), `a click on the symbol picks the barcode (${JSON.stringify(E.state().selection)})`);
       // the Properties panel
       if (!document.querySelector(".prop-row")) { document.querySelector('button[aria-label="Show Properties"]')?.click(); await sleep(500); }
@@ -1256,10 +1256,10 @@
       toScreen = (await screenOf(false)) ?? toScreen;
       await E.run("common.InteractiveSelection.clear");
       await sleep(400);
-      const [cx, cy] = [code.x / 1000, code.y / 1000];
+      const [cx, cy] = [code.x / 1e6, code.y / 1e6];
       await drag(toScreen, [cx + 3, cy + 3], [cx + 5, cy + 4]);
       const moved = (await myBarcodes())[0];
-      t(near(moved.x - code.x, 2000, 800) && near(moved.y - code.y, 1000, 800), `a drag carries it (${moved.x - code.x}, ${moved.y - code.y})`);
+      t(near(moved.x - code.x, 2_000_000, 800_000) && near(moved.y - code.y, 1_000_000, 800_000), `a drag carries it (${moved.x - code.x}, ${moved.y - code.y})`);
       if (moved.x !== code.x || moved.y !== code.y) await undo();
       const text2 = await fetch("/api/board.kicad_pcb").then((r) => r.text());
       t(/\(barcode \(at [\d.-]+ [\d.-]+ 0\) \(layer "F\.SilkS"\) \(size 12 12\) \(text "HELLO"\)/.test(text2), "the derived board has the (barcode ..) with its size, text and layer");

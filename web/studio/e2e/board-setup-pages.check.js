@@ -220,12 +220,12 @@
       // ${NAME} in a board text, a footprint's field, the title block and a schematic text.
       step("adding a board text with variables");
       const part = st.parts.find((q) => q.placed);
-      const text = { id: "", content: "Rev ${P9A_REV} by ${Designer name} on ${LAYER} \\${P9A_REV}", at: { x: 9000, y: 28000 }, angle: 0, layer: "F.SilkS", size_um: 1000, stroke_width: 150, justify: "left", mirror: false };
+      const text = { id: "", content: "Rev ${P9A_REV} by ${Designer name} on ${LAYER} \\${P9A_REV}", at: { x: 9_000_000, y: 28_000_000 }, angle: 0, layer: "F.SilkS", size_nm: 1_000_000, stroke_width: 150_000, justify: "left", mirror: false };
       check("a board text is added", (await edit({ op: "add_text", text })).ok);
       step("adding a plain board text");
-      check("a plain board text is added", (await edit({ op: "add_text", text: { ...text, content: "plain P9A text", at: { x: 9000, y: 31000 } } })).ok);
+      check("a plain board text is added", (await edit({ op: "add_text", text: { ...text, content: "plain P9A text", at: { x: 9_000_000, y: 31_000_000 } } })).ok);
       step("adding a footprint field with variables");
-      const layout = { at: { x: 0, y: -2500 }, angle: 0, size: [1000, 1000], thickness: 150, layer: "F.Fab", visible: true, halign: 0, valign: 0, mirror: false, bold: false, italic: false, keep_upright: true, knockout: false };
+      const layout = { at: { x: 0, y: -2_500_000 }, angle: 0, size: [1_000_000, 1_000_000], thickness: 150_000, layer: "F.Fab", visible: true, halign: 0, valign: 0, mirror: false, bold: false, italic: false, keep_upright: true, knockout: false };
       check("a footprint field with a variable is added", !!part && (await edit({ op: "edit_board_footprint", part: part.ref, fields: [{ name: "MPN", text: "ERJ-${P9A_REV} ${NET_NAME(1)} ${FOOTPRINT_NAME}", layout }] })).ok);
       step("setting a title block with a variable");
       check("a title block with a variable is set", (await edit({ op: "set_board_page", page: { paper: "A4" }, title_block: { title: "Board ${P9A_REV}", date: "", rev: "C", company: "", comments: [] } })).ok);
@@ -239,7 +239,7 @@
       check("the title block is edited as stored and drawn expanded", st.title_block?.title === "Board ${P9A_REV}" && st.title_block?.shown?.title === "Board B7", JSON.stringify(st.title_block));
       check("a text with no variable is sent as it was", !("shown" in (st.drawings.texts.find((x) => x.content === "plain P9A text") ?? { shown: 1 })), "");
       step("adding a schematic text with variables");
-      const added = await edit({ op: "add_sch_text", content: "Sheet ${#}/${##} ${SHEETPATH} ${P9A_REV} ${CURRENT_DATE}", at: { x: 15000, y: 30000 }, angle_millideg: 0, size_um: 1270 }, "schematic");
+      const added = await edit({ op: "add_sch_text", content: "Sheet ${#}/${##} ${SHEETPATH} ${P9A_REV} ${CURRENT_DATE}", at: { x: 15_000_000, y: 30_000_000 }, angle_millideg: 0, size_nm: 1_270_000 }, "schematic");
       await sleep(900);
       const sch = await schematic();
       const st1 = (sch.texts ?? []).find((x) => x.content.startsWith("Sheet ${#}"));
@@ -349,7 +349,7 @@
       check("the Appearance panel lists the user layer by its name, and the renamed silkscreen", apRow("User_1")?.querySelector(".ap-name")?.textContent === "Notes" && apRow("f_silks")?.querySelector(".ap-name")?.textContent === "Top art", `${apRow("User_1")?.textContent} ${apRow("f_silks")?.textContent}`);
 
       step("an item on the user layer");
-      const note = { id: "", content: "On ${LAYER}", at: { x: 9000, y: 33000 }, angle: 0, layer: "User.1", size_um: 1000, stroke_width: 150, justify: "left", mirror: false };
+      const note = { id: "", content: "On ${LAYER}", at: { x: 9_000_000, y: 33_000_000 }, angle: 0, layer: "User.1", size_nm: 1_000_000, stroke_width: 150_000, justify: "left", mirror: false };
       check("a text is added on the user layer", (await edit({ op: "add_text", text: note })).ok);
       await sleep(900);
       st = await state();
@@ -438,7 +438,7 @@
       const savedHatch = await apply(p);
       if (savedHatch === "Saved.") steps.push("pcb");
       rules = await stored();
-      check("Zone Hatch Offsets: Apply stores the layer that has an offset, in micrometres", savedHatch === "Saved." && JSON.stringify(rules.zone_hatch_offsets) === JSON.stringify({ "F.Cu": { x_um: 1500, y_um: -2000 } }), JSON.stringify(rules.zone_hatch_offsets));
+      check("Zone Hatch Offsets: Apply stores the layer that has an offset, in micrometres", savedHatch === "Saved." && JSON.stringify(rules.zone_hatch_offsets) === JSON.stringify({ "F.Cu": { x_nm: 1_500_000, y_nm: -2_000_000 } }), JSON.stringify(rules.zone_hatch_offsets));
 
       step("opening Length-tuning Patterns");
       p = await openPage("Length-tuning Patterns");
@@ -446,7 +446,7 @@
       const single = "Single Track";
       const pair = "Differential Pair";
       const patternsBefore = JSON.stringify((await stored()).tuning_patterns);
-      check("Length-tuning Patterns: three groups that start as KiCad's meander settings", field(single, "Maximum amplitude")?.value && JSON.parse(patternsBefore).single_track.max_amplitude_um === 1000 && JSON.parse(patternsBefore).diff_pair.spacing_um === 1000 && JSON.parse(patternsBefore).diff_pair_skew.spacing_um === 600, patternsBefore);
+      check("Length-tuning Patterns: three groups that start as KiCad's meander settings", field(single, "Maximum amplitude")?.value && JSON.parse(patternsBefore).single_track.max_amplitude_nm === 1_000_000 && JSON.parse(patternsBefore).diff_pair.spacing_nm === 1_000_000 && JSON.parse(patternsBefore).diff_pair_skew.spacing_nm === 600_000, patternsBefore);
       step("a minimum amplitude above the maximum");
       await setText(field(single, "Minimum amplitude"), "2mm");
       const refusedPatterns = await apply(p);
@@ -459,13 +459,13 @@
       const savedPatterns = await apply(p);
       if (savedPatterns === "Saved.") steps.push("pcb");
       rules = await stored();
-      check("Length-tuning Patterns: Apply stores the groups", savedPatterns === "Saved." && rules.tuning_patterns.single_track.max_amplitude_um === 1500 && rules.tuning_patterns.single_track.min_amplitude_um === 300 && rules.tuning_patterns.single_track.corner_style === "chamfer" && rules.tuning_patterns.diff_pair.spacing_um === 1200 && rules.tuning_patterns.diff_pair_skew.spacing_um === 600, JSON.stringify(rules.tuning_patterns));
+      check("Length-tuning Patterns: Apply stores the groups", savedPatterns === "Saved." && rules.tuning_patterns.single_track.max_amplitude_nm === 1_500_000 && rules.tuning_patterns.single_track.min_amplitude_nm === 300_000 && rules.tuning_patterns.single_track.corner_style === "chamfer" && rules.tuning_patterns.diff_pair.spacing_nm === 1_200_000 && rules.tuning_patterns.diff_pair_skew.spacing_nm === 600_000, JSON.stringify(rules.tuning_patterns));
       await closeDialog();
 
       step("the length tuner");
       const st = await state();
       const net = st.parts.flatMap((q) => q.pads ?? []).find((q) => q.net)?.net;
-      const added = await edit({ op: "add_track", net, layer: "F.Cu", width: 200, pts: [{ x: 3000, y: 40000 }, { x: 20000, y: 40000 }] });
+      const added = await edit({ op: "add_track", net, layer: "F.Cu", width: 200_000, pts: [{ x: 3_000_000, y: 40_000_000 }, { x: 20_000_000, y: 40_000_000 }] });
       await sleep(600);
       const trackId = ((await state()).routing?.tracks ?? []).at(-1)?.id;
       check("a straight track is added for the tuner", added.ok && !!trackId, JSON.stringify(added).slice(0, 200));
@@ -521,7 +521,7 @@
       if (savedProfiles === "Saved.") steps.push("pcb");
       rules = await stored();
       const prof = rules.tuning_profiles.profiles[0];
-      check("Tuning Profiles: Apply stores the profile, its rows, its via override and the class's name for a profile", savedProfiles === "Saved." && prof?.name === "USB 90" && prof.profile_type === "differential" && prof.target_impedance === 90 && prof.enable_time_domain_tuning === true && prof.via_propagation_delay_as === 25000000 && prof.layer_entries.length === 2 && prof.layer_entries[0].width_um === 130 && prof.layer_entries[0].diff_pair_gap_um === 150 && prof.layer_entries[0].delay_as_per_mm === 6100000 && prof.via_overrides.length === 1 && rules.tuning_profiles.class_profiles.Default === "Gone" && rules.overlay.includes("tuning_profiles"), JSON.stringify(rules.tuning_profiles).slice(0, 400));
+      check("Tuning Profiles: Apply stores the profile, its rows, its via override and the class's name for a profile", savedProfiles === "Saved." && prof?.name === "USB 90" && prof.profile_type === "differential" && prof.target_impedance === 90 && prof.enable_time_domain_tuning === true && prof.via_propagation_delay_as === 25000000 && prof.layer_entries.length === 2 && prof.layer_entries[0].width_nm === 130_000 && prof.layer_entries[0].diff_pair_gap_nm === 150_000 && prof.layer_entries[0].delay_as_per_mm === 6100000 && prof.via_overrides.length === 1 && rules.tuning_profiles.class_profiles.Default === "Gone" && rules.overlay.includes("tuning_profiles"), JSON.stringify(rules.tuning_profiles).slice(0, 400));
       await setText(p.querySelector('input[aria-label="Tuning profile of Default"]'), "USB 90");
       check("naming a profile the page has clears the mark", !p.querySelector('input[aria-label="Tuning profile of Default"]').classList.contains("bs-invalid"), "");
       const savedAgain = await apply(p);
@@ -571,7 +571,7 @@
       if (savedClasses === "Saved.") steps.push("pcb");
       let st = await state();
       const stored = st.board_rules.net_classes;
-      check("Apply stores the classes in the order of the table with their patterns as typed", savedClasses === "Saved." && stored.map((c) => c.name).join() === "pins,leds" && JSON.stringify(stored[0].nets) === JSON.stringify(["PA[0-3]"]) && JSON.stringify(stored[1].nets) === JSON.stringify(["LED?", "PA(1|7)"]) && stored[0].clearance === 300 && stored[1].clearance === 100, JSON.stringify(stored));
+      check("Apply stores the classes in the order of the table with their patterns as typed", savedClasses === "Saved." && stored.map((c) => c.name).join() === "pins,leds" && JSON.stringify(stored[0].nets) === JSON.stringify(["PA[0-3]"]) && JSON.stringify(stored[1].nets) === JSON.stringify(["LED?", "PA(1|7)"]) && stored[0].clearance === 300_000 && stored[1].clearance === 100_000, JSON.stringify(stored));
       step("moving a class");
       const rows = [...p.querySelectorAll("table.bs-grid")][0].querySelectorAll("tbody tr");
       rows[1].click();
@@ -603,10 +603,10 @@
         return lastShape();
       };
       const tg = JSON.parse(JSON.stringify((await state()).board_rules.text_graphics));
-      tg.silk.line_width_um = 180; tg.silk.text_width_um = 1200; tg.silk.text_height_um = 1200; tg.silk.text_thickness_um = 200;
-      tg.copper.line_width_um = 250;
-      tg.fab.line_width_um = 90; tg.fab.text_width_um = 800; tg.fab.text_height_um = 800; tg.fab.text_thickness_um = 120;
-      tg.others.line_width_um = 130;
+      tg.silk.line_width_nm = 180_000; tg.silk.text_width_nm = 1_200_000; tg.silk.text_height_nm = 1_200_000; tg.silk.text_thickness_nm = 200_000;
+      tg.copper.line_width_nm = 250_000;
+      tg.fab.line_width_nm = 90_000; tg.fab.text_width_nm = 800_000; tg.fab.text_height_nm = 800_000; tg.fab.text_thickness_nm = 120_000;
+      tg.others.line_width_nm = 130_000;
       step("setting the defaults");
       check("the defaults are set for the silkscreen, copper, fab and other classes", (await edit({ op: "set_text_graphics_defaults", settings: tg })).ok);
       await sleep(900);
@@ -615,7 +615,7 @@
       step("a line on the silkscreen");
       await pickLayer("f_silks");
       let sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 4], [11, 4]]);
-      check("a line on the front silkscreen is on F.SilkS, at its class's line thickness", sh?.kind === "segment" && sh.layer === "F.SilkS" && sh.stroke_width === 180, JSON.stringify(sh));
+      check("a line on the front silkscreen is on F.SilkS, at its class's line thickness", sh?.kind === "segment" && sh.layer === "F.SilkS" && sh.stroke_width === 180_000, JSON.stringify(sh));
       step("incWidth");
       await __eda.run("pcbnew.InteractiveDrawing.incWidth");
       await sleep(200);
@@ -625,32 +625,32 @@
         const after = await shapeCount();
         if (after > before) steps.push("pcb");
         sh = await lastShape();
-        check("incWidth steps the width by 0.1 mm from the class's", after === before + 1 && sh?.stroke_width === 280, JSON.stringify(sh));
+        check("incWidth steps the width by 0.1 mm from the class's", after === before + 1 && sh?.stroke_width === 280_000, JSON.stringify(sh));
       }
       step("arming again");
       sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 8], [11, 8]]);
-      check("arming the tool again starts at the class's width", sh?.stroke_width === 180, JSON.stringify(sh));
+      check("arming the tool again starts at the class's width", sh?.stroke_width === 180_000, JSON.stringify(sh));
       step("a rectangle");
       sh = await draw("pcbnew.InteractiveDrawing.rectangle", "draw_rect", [[14, 4], [20, 9]]);
-      check("a rectangle takes it too", sh?.kind === "rect" && sh.layer === "F.SilkS" && sh.stroke_width === 180, JSON.stringify(sh));
+      check("a rectangle takes it too", sh?.kind === "rect" && sh.layer === "F.SilkS" && sh.stroke_width === 180_000, JSON.stringify(sh));
       step("a circle");
       sh = await draw("pcbnew.InteractiveDrawing.circle", "draw_circle", [[24, 7], [27, 7]]);
-      check("and a circle", sh?.kind === "circle" && sh.stroke_width === 180, JSON.stringify(sh));
+      check("and a circle", sh?.kind === "circle" && sh.stroke_width === 180_000, JSON.stringify(sh));
       step("an arc");
       sh = await draw("pcbnew.InteractiveDrawing.arc", "draw_arc", [[14, 14], [18, 14], [14, 18]]);
-      check("and an arc", sh?.kind === "arc" && sh.stroke_width === 180, JSON.stringify(sh));
+      check("and an arc", sh?.kind === "arc" && sh.stroke_width === 180_000, JSON.stringify(sh));
       step("a line on the fabrication layer");
       await pickLayer("f_fab");
       sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 12], [11, 12]]);
-      check("a line on another layer has that class's width: the front fabrication layer's", sh?.layer === "F.Fab" && sh.stroke_width === 90, JSON.stringify(sh));
+      check("a line on another layer has that class's width: the front fabrication layer's", sh?.layer === "F.Fab" && sh.stroke_width === 90_000, JSON.stringify(sh));
       step("a line on a user layer");
       await pickLayer("Dwgs_User");
       sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 14], [11, 14]]);
-      check("on a user layer the Others class's", sh?.layer === "Dwgs.User" && sh.stroke_width === 130, JSON.stringify(sh));
+      check("on a user layer the Others class's", sh?.layer === "Dwgs.User" && sh.stroke_width === 130_000, JSON.stringify(sh));
       step("a line on copper");
       await pickLayer("F.Cu");
       sh = await draw("pcbnew.InteractiveDrawing.line", "draw_segment", [[3, 16], [11, 16]]);
-      check("on copper the copper class's", sh?.layer === "F.Cu" && sh.stroke_width === 250, JSON.stringify(sh));
+      check("on copper the copper class's", sh?.layer === "F.Cu" && sh.stroke_width === 250_000, JSON.stringify(sh));
 
       // The Text tool: its dialog starts from the layer class's text.
       step("the Text tool on the silkscreen");
@@ -658,19 +658,19 @@
       await arm("pcbnew.InteractiveDrawing.text", "text");
       await click(3, 22);
       const [size, thickness] = dialogNumbers();
-      check("the Text tool's dialog starts at the silkscreen class's size and thickness, not mirrored", size === 1200 && thickness === 200 && mirrorBox()?.checked === false, `${size} ${thickness} ${mirrorBox()?.checked}`);
+      check("the Text tool's dialog starts at the silkscreen class's size and thickness, not mirrored", size === 1_200_000 && thickness === 200_000 && mirrorBox()?.checked === false, `${size} ${thickness} ${mirrorBox()?.checked}`);
       await setText(document.querySelector(".dialog .kv-grid input"), "P9A tool text");
       const textsBefore = ((await state()).drawings?.texts ?? []).length;
       await press(document.querySelector(".dialog"), "Add", 900);
       const t = ((await state()).drawings?.texts ?? []).find((x) => x.content === "P9A tool text");
       if (((await state()).drawings?.texts ?? []).length > textsBefore) steps.push("pcb");
-      check("the text is made with them, left aligned", t?.layer === "F.SilkS" && t.size === 1200 && t.stroke_width === 200 && t.justify === "left" && t.mirror === false, JSON.stringify(t));
+      check("the text is made with them, left aligned", t?.layer === "F.SilkS" && t.size === 1_200_000 && t.stroke_width === 200_000 && t.justify === "left" && t.mirror === false, JSON.stringify(t));
       step("the Text tool on a back layer");
       await pickLayer("b_fab");
       await arm("pcbnew.InteractiveDrawing.text", "text");
       await click(3, 24);
       const [size2, thickness2] = dialogNumbers();
-      check("on the back fabrication layer: that class's text, mirrored", size2 === 800 && thickness2 === 120 && mirrorBox()?.checked === true, `${size2} ${thickness2} ${mirrorBox()?.checked}`);
+      check("on the back fabrication layer: that class's text, mirrored", size2 === 800_000 && thickness2 === 120_000 && mirrorBox()?.checked === true, `${size2} ${thickness2} ${mirrorBox()?.checked}`);
       await press(document.querySelector(".dialog"), "Cancel", 300);
 
       // A dimension: the class's text size and line thickness, the arrows are the Dimensions page's.
@@ -683,7 +683,7 @@
       const dims = (await state()).drawings?.dimensions ?? [];
       if (dims.length > dimsBefore) steps.push("pcb");
       const dim = dims.at(-1);
-      check("a dimension takes the class's text size and line thickness", dim?.layer === "F.SilkS" && dim.text_size_um === 1200 && dim.stroke_width === 180, JSON.stringify(dim && { layer: dim.layer, text: dim.text_size_um, line: dim.stroke_width }));
+      check("a dimension takes the class's text size and line thickness", dim?.layer === "F.SilkS" && dim.text_size_nm === 1_200_000 && dim.stroke_width === 180_000, JSON.stringify(dim && { layer: dim.layer, text: dim.text_size_nm, line: dim.stroke_width }));
     });
   } catch (e) {
     check(`the run reached its end (stopped at: ${at})`, false, why(e));

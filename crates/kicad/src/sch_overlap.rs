@@ -13,7 +13,7 @@
 //! * symbols: `LIB_SYMBOL::GetBodyBoundingBox` (body graphics, no fields, no pins);
 //! * sheets: `SCH_SHEET::GetBodyBoundingBox`, `SCH_SHEET_PIN::SetSide`.
 //!
-//! Units: micrometres, y down, as `f64`.
+//! Units: nanometres, y down, as `f64`.
 
 use std::collections::BTreeMap;
 
@@ -23,12 +23,12 @@ use eda_model::kicad_geom::{arc_bbox, hier_label_rect, local_label_rect, pin_nam
 
 use crate::sexpr::{self, find, find_all, num, tag, txt, Sexpr};
 
-/// Boxes that overlap by less than this (micrometres) in either direction only touch.
-const TOL: f64 = 3.0;
+/// Boxes that overlap by less than this (nanometres) in either direction only touch.
+const TOL: f64 = 3_000.0;
 
 /// Two drawn boxes, each of which already reaches half its own pen past its strokes, that go into one another by less than a pen's
-/// width (micrometres) touch: their strokes do not cross. Only deeper than this is an overlap.
-const CONTACT_UM: f64 = 100.0;
+/// width (nanometres) touch: their strokes do not cross. Only deeper than this is an overlap.
+const CONTACT_NM: f64 = 100_000.0;
 
 // ------------------------------------------------------------------------------------------------------- items
 
@@ -221,7 +221,7 @@ fn parse_lib_symbol(def: &[Sexpr]) -> LibSym {
                     let fx = effects_of(g, HJustify::Center, VJustify::Center);
                     find(g, "at").and_then(point_of).map(|p| {
                         let (w, h) = fx.st.extents(txt(g, 1).unwrap_or(""));
-                        let (w, h) = (w / 1000.0, h / 1000.0);
+                        let (w, h) = (w / 1e6, h / 1e6);
                         Rect::new((p.0 - w / 2.0, p.1 - h / 2.0), (p.0 + w / 2.0, p.1 + h / 2.0))
                     })
                 }
@@ -264,8 +264,8 @@ pub struct Overlap {
     pub a: String,
     pub b: String,
     pub kinds: (Kind, Kind),
-    /// How deep the two boxes run into one another, micrometres.
-    pub depth_um: f64,
+    /// How deep the two boxes run into one another, nanometres.
+    pub depth_nm: f64,
     pub at: Pt,
 }
 
@@ -292,34 +292,34 @@ impl SheetReport {
     pub fn render(&self) -> String {
         let mut s = format!("{}: {} items, {} overlap(s), {} outside the frame\n", self.file, self.items, self.overlaps.len(), self.outside.len());
         for o in &self.overlaps {
-            s.push_str(&format!("  overlap {:.2} mm at ({:.2}, {:.2}): {} / {}\n", o.depth_um / 1000.0, o.at.0 / 1000.0, o.at.1 / 1000.0, o.a, o.b));
+            s.push_str(&format!("  overlap {:.2} mm at ({:.2}, {:.2}): {} / {}\n", o.depth_nm / 1e6, o.at.0 / 1e6, o.at.1 / 1e6, o.a, o.b));
         }
         for o in &self.outside {
-            s.push_str(&format!("  outside ({}): {} [{:.2},{:.2} - {:.2},{:.2}]\n", o.why, o.what, o.rect.x0 / 1000.0, o.rect.y0 / 1000.0, o.rect.x1 / 1000.0, o.rect.y1 / 1000.0));
+            s.push_str(&format!("  outside ({}): {} [{:.2},{:.2} - {:.2},{:.2}]\n", o.why, o.what, o.rect.x0 / 1e6, o.rect.y0 / 1e6, o.rect.x1 / 1e6, o.rect.y1 / 1e6));
         }
         s
     }
 }
 
-/// The paper sizes KiCad names, landscape, in micrometres.
-fn paper_um(name: &str) -> Option<(f64, f64)> {
+/// The paper sizes KiCad names, landscape, in nanometres.
+fn paper_nm(name: &str) -> Option<(f64, f64)> {
     Some(match name {
-        "A5" => (210_000.0, 148_000.0),
-        "A4" => (297_000.0, 210_000.0),
-        "A3" => (420_000.0, 297_000.0),
-        "A2" => (594_000.0, 420_000.0),
-        "A1" => (841_000.0, 594_000.0),
-        "A0" => (1_189_000.0, 841_000.0),
-        "A" => (279_400.0, 215_900.0),
-        "B" => (431_800.0, 279_400.0),
+        "A5" => (210_000_000.0, 148_000_000.0),
+        "A4" => (297_000_000.0, 210_000_000.0),
+        "A3" => (420_000_000.0, 297_000_000.0),
+        "A2" => (594_000_000.0, 420_000_000.0),
+        "A1" => (841_000_000.0, 594_000_000.0),
+        "A0" => (1_189_000_000.0, 841_000_000.0),
+        "A" => (279_400_000.0, 215_900_000.0),
+        "B" => (431_800_000.0, 279_400_000.0),
         _ => return None,
     })
 }
 
 /// KiCad's default drawing sheet: the frame is 10 mm in, a second line 2 mm inside it, and the title block sits against the inner frame's bottom-right corner.
-const FRAME_INNER: f64 = 12_000.0;
-const TITLE_W: f64 = 108_000.0;
-const TITLE_H: f64 = 32_000.0;
+const FRAME_INNER: f64 = 12_000_000.0;
+const TITLE_W: f64 = 108_000_000.0;
+const TITLE_H: f64 = 32_000_000.0;
 
 struct Builder {
     libs: BTreeMap<String, LibSym>,
@@ -327,7 +327,7 @@ struct Builder {
 }
 
 fn mm_pt(p: Pt) -> Pt {
-    (p.0 * 1000.0, p.1 * 1000.0)
+    (p.0 * 1e6, p.1 * 1e6)
 }
 
 /// `(at x y angle)` of an item, as millimetres.
@@ -417,10 +417,10 @@ impl Builder {
             _ => (0.0, 1.0),
         };
         let d = xf.apply(dir_local);
-        let len = p.length * 1000.0;
+        let len = p.length * 1e6;
         let end = (tip.0 + d.0 * len, tip.1 + d.1 * len);
         if len > 0.0 {
-            let mut it = Item::boxed(Kind::Pin, owner, format!("{owner} pin {} line", p.number), Rect::new(tip, end).inflate(0.1));
+            let mut it = Item::boxed(Kind::Pin, owner, format!("{owner} pin {} line", p.number), Rect::new(tip, end).inflate(100.0));
             it.seg = Some((tip, end));
             it.anchors = vec![tip];
             self.push(it);
@@ -547,7 +547,7 @@ pub fn items_of_sheet(text: &str) -> Result<(Vec<Item>, Option<(f64, f64)>), Str
                 let pts = pts_of(it);
                 for pair in pts.windows(2) {
                     let (a, c) = (mm_pt(pair[0]), mm_pt(pair[1]));
-                    let mut item = Item::boxed(Kind::Wire, "", format!("wire ({:.2},{:.2})-({:.2},{:.2})", a.0 / 1000.0, a.1 / 1000.0, c.0 / 1000.0, c.1 / 1000.0), Rect::new(a, c).inflate(0.1));
+                    let mut item = Item::boxed(Kind::Wire, "", format!("wire ({:.2},{:.2})-({:.2},{:.2})", a.0 / 1e6, a.1 / 1e6, c.0 / 1e6, c.1 / 1e6), Rect::new(a, c).inflate(100.0));
                     item.seg = Some((a, c));
                     item.anchors = vec![a, c];
                     b.push(item);
@@ -556,7 +556,7 @@ pub fn items_of_sheet(text: &str) -> Result<(Vec<Item>, Option<(f64, f64)>), Str
             Some("junction") => {
                 if let Some(p) = find(it, "at").and_then(point_of) {
                     let p = mm_pt(p);
-                    let mut item = Item::boxed(Kind::Junction, "", "junction".to_string(), Rect::new(p, p).inflate(457.2));
+                    let mut item = Item::boxed(Kind::Junction, "", "junction".to_string(), Rect::new(p, p).inflate(457_200.0));
                     item.anchors = vec![p];
                     b.push(item);
                 }
@@ -564,7 +564,7 @@ pub fn items_of_sheet(text: &str) -> Result<(Vec<Item>, Option<(f64, f64)>), Str
             Some("no_connect") => {
                 if let Some(p) = find(it, "at").and_then(point_of) {
                     let p = mm_pt(p);
-                    let mut item = Item::boxed(Kind::NoConnect, "", "no-connect flag".to_string(), Rect::new(p, p).inflate(609.6));
+                    let mut item = Item::boxed(Kind::NoConnect, "", "no-connect flag".to_string(), Rect::new(p, p).inflate(609_600.0));
                     item.anchors = vec![p];
                     b.push(item);
                 }
@@ -575,7 +575,7 @@ pub fn items_of_sheet(text: &str) -> Result<(Vec<Item>, Option<(f64, f64)>), Str
             _ => {}
         }
     }
-    let paper = find(root, "paper").and_then(|p| txt(p, 1)).and_then(paper_um);
+    let paper = find(root, "paper").and_then(|p| txt(p, 1)).and_then(paper_nm);
     Ok((b.items, paper))
 }
 
@@ -716,10 +716,10 @@ fn segs_conflict(a: (Pt, Pt), b: (Pt, Pt)) -> Option<f64> {
 
 fn conflict(a: &Item, b: &Item) -> Option<f64> {
     match (a.seg, b.seg) {
-        (None, None) => a.rect.shared(&b.rect, TOL).map(|(w, h)| w.min(h)).filter(|d| *d > CONTACT_UM),
+        (None, None) => a.rect.shared(&b.rect, TOL).map(|(w, h)| w.min(h)).filter(|d| *d > CONTACT_NM),
         // a wire a pen's width or less inside a box only touches it
-        (Some(s), None) => seg_through(s, &b.rect.inflate(-CONTACT_UM)),
-        (None, Some(s)) => seg_through(s, &a.rect.inflate(-CONTACT_UM)),
+        (Some(s), None) => seg_through(s, &b.rect.inflate(-CONTACT_NM)),
+        (None, Some(s)) => seg_through(s, &a.rect.inflate(-CONTACT_NM)),
         (Some(s), Some(t)) => segs_conflict(s, t),
     }
 }
@@ -741,7 +741,7 @@ pub fn check_items(file: &str, items: &[Item], paper: Option<(f64, f64)>) -> She
             if let Some(depth) = conflict(a, b) {
                 let shared_x = (a.rect.x0.max(b.rect.x0) + a.rect.x1.min(b.rect.x1)) / 2.0;
                 let shared_y = (a.rect.y0.max(b.rect.y0) + a.rect.y1.min(b.rect.y1)) / 2.0;
-                report.overlaps.push(Overlap { a: a.what.clone(), b: b.what.clone(), kinds: (a.kind, b.kind), depth_um: depth, at: (shared_x, shared_y) });
+                report.overlaps.push(Overlap { a: a.what.clone(), b: b.what.clone(), kinds: (a.kind, b.kind), depth_nm: depth, at: (shared_x, shared_y) });
             }
         }
     }

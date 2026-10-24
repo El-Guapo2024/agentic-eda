@@ -11,7 +11,7 @@
 
 use crate::chain::ShapeLineChain;
 use crate::item::{Item, ItemId, Net};
-use crate::kigeom::{ki_round, to_nm, Seg};
+use crate::kigeom::{ki_round, Seg};
 use crate::layer::LayerRange;
 use crate::line::Line;
 use crate::node::{AssembleOpts, Node};
@@ -123,7 +123,7 @@ fn clip_line(pts: &[Point], center: Point, inside: &dyn Fn(Point) -> bool, forwa
 /// `OptimiseTraceInPad( aLine, aPad, aLayer )` / `OptimiseTraceInVia`: a line that ends on the centre of `item` (a pad: its position; a via: any
 /// point of it inside) has its end clipped to the item's outline. `layer` is the line's.
 fn optimise_trace_in(chain: &mut ShapeLineChain, item: &Item, layer: i32, via: bool) {
-    let (center_um, shape, layers) = match item {
+    let (center_nm, shape, layers) = match item {
         Item::Solid(s) => (s.pos, s.shape.clone(), s.layers),
         Item::Via(v) => (v.pos, Shape::Circle { c: v.pos, r: v.diameter / 2 }, v.layers),
         Item::Segment(_) | Item::Arc(_) => return,
@@ -131,10 +131,10 @@ fn optimise_trace_in(chain: &mut ShapeLineChain, item: &Item, layer: i32, via: b
     if !layers.overlaps_layer(layer) || chain.point_count() < 2 {
         return;
     }
-    let center = to_nm(center_um);
+    let center = center_nm;
     let first = chain.c_point(0);
     let last = chain.c_last_point();
-    let inside = |p: Point| contains(&shape, Point { x: ki_round(p.x as f64 / 1000.0), y: ki_round(p.y as f64 / 1000.0) });
+    let inside = |p: Point| contains(&shape, p);
     if !via && first != center && last != center {
         return; // "Only consider lines which terminate in the pad"
     }
@@ -157,11 +157,11 @@ pub(crate) fn line_chain_nm(line: &Line) -> ShapeLineChain {
     while i < line.pts.len() {
         if let Some(r) = runs.iter().find(|r| r.first == i) {
             let a = if r.reversed { line.arcs[r.arc].reversed() } else { line.arcs[r.arc] };
-            c.append_arc(&crate::kigeom::ShapeArc::new(to_nm(a.start), to_nm(a.mid), to_nm(a.end), 0));
+            c.append_arc(&crate::kigeom::ShapeArc::new(a.start, a.mid, a.end, 0));
             i = r.last + 1;
             continue;
         }
-        c.append_point(to_nm(line.pts[i]));
+        c.append_point(line.pts[i]);
         i += 1;
     }
     c
@@ -417,8 +417,8 @@ pub fn nearest_segment(world: &Node, p: Point, layer: i32, net: Option<&Net>, wi
     let id = world.segment_at(p, layer, net, Some(within), &[])?;
     match world.get(id)? {
         Item::Segment(s) => {
-            let nearest = Seg::new(to_nm(s.a), to_nm(s.b)).nearest_point(to_nm(p));
-            Some((id, Point { x: ki_round(nearest.x as f64 / 1000.0), y: ki_round(nearest.y as f64 / 1000.0) }))
+            let nearest = Seg::new(s.a, s.b).nearest_point(p);
+            Some((id, nearest))
         }
         // `getSnappedStartPoint` for an arc: its nearer end
         Item::Arc(a) => Some((id, if crate::seg_ops::length(p, a.start()) <= crate::seg_ops::length(p, a.end()) { a.start() } else { a.end() })),
@@ -437,7 +437,7 @@ mod tests {
     }
 
     fn seg(net: &str, layer: i32, a: Point, b: Point) -> Item {
-        Item::Segment(Segment { net: net_of(net), layer, a, b, width: 250, source_track: None, locked: false })
+        Item::Segment(Segment { net: net_of(net), layer, a, b, width: 250_000, source_track: None, locked: false })
     }
 
     fn pad(net: &str, at: Point) -> Item {
@@ -445,22 +445,22 @@ mod tests {
     }
 
     fn pad_on(net: &str, at: Point, layers: LayerRange) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: 400 }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: 400_000 }, source: "U1.1".into(), edge: false })
     }
 
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
     }
 
     #[test]
     fn a_track_from_pad_to_pad_is_as_long_as_its_segments() {
         let mut w = Node::new();
         w.add(pad("S", p(0, 0)));
-        w.add(pad("S", p(10_000, 5_000)));
-        let a = w.add(seg("S", 0, p(0, 0), p(10_000, 0)));
-        w.add(seg("S", 0, p(10_000, 0), p(10_000, 5_000)));
+        w.add(pad("S", p(10_000_000, 5_000_000)));
+        let a = w.add(seg("S", 0, p(0, 0), p(10_000_000, 0)));
+        w.add(seg("S", 0, p(10_000_000, 0), p(10_000_000, 5_000_000)));
         let path = assemble_tuning_path(&w, a).expect("a path");
         assert_eq!(path.items.len(), 1);
         assert!(path.start_pad.is_some() && path.end_pad.is_some());
@@ -472,10 +472,10 @@ mod tests {
     fn the_path_goes_on_through_a_via_and_counts_its_height() {
         let mut w = Node::new();
         w.add(pad("S", p(0, 0)));
-        let a = w.add(seg("S", 0, p(0, 0), p(10_000, 0)));
-        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000, 0), diameter: 600, drill: 300, source_via: Some("via".into()), locked: false, is_virtual: false }));
-        w.add(seg("S", 1, p(10_000, 0), p(10_000, 8_000)));
-        w.add(pad_on("S", p(10_000, 8_000), LayerRange::new(0, 1)));
+        let a = w.add(seg("S", 0, p(0, 0), p(10_000_000, 0)));
+        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000_000, 0), diameter: 600_000, drill: 300_000, source_via: Some("via".into()), locked: false, is_virtual: false }));
+        w.add(seg("S", 1, p(10_000_000, 0), p(10_000_000, 8_000_000)));
+        w.add(pad_on("S", p(10_000_000, 8_000_000), LayerRange::new(0, 1)));
         let path = assemble_tuning_path(&w, a).expect("a path");
         let kinds: Vec<&str> = path.items.iter().map(|i| if matches!(i, PathItem::Via(_)) { "via" } else { "line" }).collect();
         assert_eq!(kinds, ["line", "via", "line"]);
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(path.length(&w, &e), 18_000_000);
         // a pad on the other side of the board from the line that leaves it is a via KiCad infers (`inferViaInPad`)
         let mut w2 = Node::new();
-        let b = w2.add(seg("S", 1, p(0, 0), p(10_000, 0)));
+        let b = w2.add(seg("S", 1, p(0, 0), p(10_000_000, 0)));
         w2.add(pad("S", p(0, 0)));
         let inferred = assemble_tuning_path(&w2, b).expect("a path");
         assert_eq!(inferred.length(&w2, &env()), 10_000_000 + h);
@@ -499,9 +499,9 @@ mod tests {
     #[test]
     fn a_junction_ends_the_walk_where_the_line_ends() {
         let mut w = Node::new();
-        let a = w.add(seg("S", 0, p(0, 0), p(10_000, 0)));
-        w.add(seg("S", 0, p(10_000, 0), p(10_000, 5_000)));
-        w.add(seg("S", 0, p(10_000, 0), p(20_000, 0)));
+        let a = w.add(seg("S", 0, p(0, 0), p(10_000_000, 0)));
+        w.add(seg("S", 0, p(10_000_000, 0), p(10_000_000, 5_000_000)));
+        w.add(seg("S", 0, p(10_000_000, 0), p(20_000_000, 0)));
         let path = assemble_tuning_path(&w, a).expect("a path");
         assert_eq!(path.items.len(), 1);
         assert_eq!(path.length(&w, &env()), 10_000_000);
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn the_distance_between_inner_layers_counts_half_of_each_copper_layer() {
-        let s = eda_model::rules::default_stackup(4, 1_600);
+        let s = eda_model::rules::default_stackup(4, 1_600_000);
         let copper: Vec<String> = eda_model::rules::copper_layer_names(4);
         let all = stackup_distance_nm(&s, &copper, "F.Cu", "B.Cu");
         let outer_to_in1 = stackup_distance_nm(&s, &copper, "F.Cu", "In1.Cu");

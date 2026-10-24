@@ -44,7 +44,7 @@ function pattern(over: Partial<TuningPattern> = {}): TuningPattern {
 const readout = (over: Partial<TuneReadout> = {}): TuneReadout => ({ label: "current length", current: 21.5, min: 21.9, opt: 22, max: 22.1, delta: -0.5, status: "too_short", constraint: null, partner: null, nets: null, ...over });
 
 test("the status box prints the length red outside the range, the minimum red below it and the maximum red above it", () => {
-  const fmt = (um: number) => `${(um / 1000).toFixed(2)} mm`;
+  const fmt = (nm: number) => `${(nm / 1e6).toFixed(2)} mm`;
   assert.deepEqual(readoutBox(readout(), fmt), { header: ["current length", "min", "max"], values: ["21.50 mm", "21.90 mm", "22.10 mm"], bad: [true, true, false] });
   assert.deepEqual(readoutBox(readout({ current: 22 }), fmt).bad, [false, false, false]);
   assert.deepEqual(readoutBox(readout({ current: 23 }), fmt).bad, [true, false, true]);
@@ -55,7 +55,7 @@ test("the status box prints the length red outside the range, the minimum red be
 });
 
 test("a time domain pattern's box reads the delay in picoseconds, red outside its range, and its pattern settings carry the target delay in picoseconds", () => {
-  const fmt = (um: number) => `${(um / 1000).toFixed(2)} mm`;
+  const fmt = (nm: number) => `${(nm / 1e6).toFixed(2)} mm`;
   const timeDomain = (over: Partial<TuneReadout> = {}) => readout({ time_domain: true, delay: { label: "current delay", current: 122, min: 149.9, opt: 150, max: 150.1, delta: -28 }, ...over });
   assert.deepEqual(readoutBox(timeDomain(), fmt), { header: ["current delay", "min", "max"], values: ["122 ps", "149.9 ps", "150.1 ps"], bad: [true, true, false] });
   assert.deepEqual(readoutBox(timeDomain({ delay: { label: "current delay", current: 150.05, min: 149.9, opt: 150, max: 150.1, delta: 0.05 } }), fmt).bad, [false, false, false]);
@@ -138,17 +138,17 @@ test("the session replies make the draw state, keeping what a reply does not car
 
 test("the settings a tuner starts from are the board's page for its kind; what a session leaves is carried on without its target", () => {
   const s = pageSettings(undefined, "diffpair");
-  assert.deepEqual(s, { min_amplitude: 200, max_amplitude: 1_000, spacing: 1_000, corner_radius_percent: 80, rounded: true, single_sided: false }, "KiCad's pair defaults: a spacing of 1 mm");
-  assert.deepEqual(pageSettings({ single_track: { min_amplitude_um: 300, max_amplitude_um: 900, spacing_um: 700, corner_style: "chamfer", corner_radius_percentage: 50, single_sided: true }, diff_pair: s2(), diff_pair_skew: s2() }, "single"), { min_amplitude: 300, max_amplitude: 900, spacing: 700, corner_radius_percent: 50, rounded: false, single_sided: true });
+  assert.deepEqual(s, { min_amplitude: 200_000, max_amplitude: 1_000_000, spacing: 1_000_000, corner_radius_percent: 80, rounded: true, single_sided: false }, "KiCad's pair defaults: a spacing of 1 mm");
+  assert.deepEqual(pageSettings({ single_track: { min_amplitude_nm: 300, max_amplitude_nm: 900, spacing_nm: 700, corner_style: "chamfer", corner_radius_percentage: 50, single_sided: true }, diff_pair: s2(), diff_pair_skew: s2() }, "single"), { min_amplitude: 300, max_amplitude: 900, spacing: 700, corner_radius_percent: 50, rounded: false, single_sided: true });
   const carried = carriedSettings(pattern({ max_amplitude: 950, spacing: 650 }), { target_length: 5 });
   assert.equal(carried.max_amplitude, 950);
   assert.equal(carried.spacing, 650);
   assert.equal(carried.target_length, 5, "the target the tool had stays what it was");
-  assert.deepEqual(settingsOfPattern(pattern({ target_length: { min: 0, opt: 1_000_000_000, max: 1_000_000_000 } })).target_length, null, "no target");
+  assert.deepEqual(settingsOfPattern(pattern({ target_length: { min: 0, opt: 1_000_000_000_000, max: 1_000_000_000_000 } })).target_length, null, "no target");
 });
 
 function s2() {
-  return { min_amplitude_um: 200, max_amplitude_um: 1_000, spacing_um: 1_000, corner_style: "round" as const, corner_radius_percentage: 80, single_sided: false };
+  return { min_amplitude_nm: 200, max_amplitude_nm: 1_000, spacing_nm: 1_000, corner_style: "round" as const, corner_radius_percentage: 80, single_sided: false };
 }
 
 test("modes and keys", () => {

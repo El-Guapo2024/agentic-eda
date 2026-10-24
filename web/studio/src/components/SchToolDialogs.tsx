@@ -15,8 +15,8 @@ import { LabelPropertiesDialog, SheetPropertiesDialog, ShapePropertiesDialog, St
 import { SchImageDialog } from "./SchImageDialog";
 import { commitGraphic } from "./schematic/schShapeTools";
 
-const DEFAULT_TEXT_SIZE_UM = 1270; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
-const DIRECTIVE_POLE_UM = 2540; // SCH_DIRECTIVE_LABEL's default pin length, 100 mil
+const DEFAULT_TEXT_SIZE_NM = 1_270_000; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
+const DIRECTIVE_POLE_NM = 2_540_000; // SCH_DIRECTIVE_LABEL's default pin length, 100 mil
 
 export function SchToolDialogs() {
   const state = useStudioState();
@@ -83,30 +83,30 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
   const api = useStudioApi();
   const box = edit?.shape.type === "text_box" ? edit.shape : null;
   const [text, setText] = useState(box?.text ?? "");
-  const [size, setSize] = useState(box?.size_um ?? DEFAULT_TEXT_SIZE_UM);
+  const [size, setSize] = useState(box?.size_nm ?? DEFAULT_TEXT_SIZE_NM);
   const [bold, setBold] = useState(box?.bold ?? false);
   const [italic, setItalic] = useState(box?.italic ?? false);
   const [h, setH] = useState<SchHAlign>(box?.h_align ?? "left");
   const [v, setV] = useState<SchVAlign>(box?.v_align ?? "top");
   const [vertical, setVertical] = useState((box?.angle ?? 0) === 90_000);
-  const [width, setWidth] = useState(edit?.width_um ?? 0);
+  const [width, setWidth] = useState(edit?.width_nm ?? 0);
   const [style, setStyle] = useState<SchLineStyle>(edit?.line_style ?? "default");
   const [fill, setFill] = useState<SchFill>(edit?.fill ?? "none");
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
   const submit = () => {
     if (!text.trim() || !state.schematic) return;
-    const shape = { type: "text_box" as const, start: dialog.start, end: dialog.end, text, angle: vertical ? 90_000 : 0, size_um: size, bold, italic, h_align: h, v_align: v, margin_um: box?.margin_um };
+    const shape = { type: "text_box" as const, start: dialog.start, end: dialog.end, text, angle: vertical ? 90_000 : 0, size_nm: size, bold, italic, h_align: h, v_align: v, margin_nm: box?.margin_nm };
     if (edit) {
-      const next: SchGraphic = { ...edit, shape, width_um: width, line_style: style, fill };
+      const next: SchGraphic = { ...edit, shape, width_nm: width, line_style: style, fill };
       if (graphicsEqual(next, edit)) return close();
       void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: edit.id, graphic: next }).then((ok) => ok && close());
       return;
     }
-    commitGraphic({ sch: state.schematic, dispatch, api }, { shape, width_um: width, line_style: style, fill });
+    commitGraphic({ sch: state.schematic, dispatch, api }, { shape, width_nm: width, line_style: style, fill });
     close();
   };
   return (
-    <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0 && size >= 10 && size <= 1_000_000}>
+    <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0 && size >= 10_000 && size <= 1_000_000_000}>
       <span>Text</span>
       <textarea autoFocus rows={4} value={text} onChange={(e) => setText(e.target.value)} />
       <span>Text size (um)</span>
@@ -184,7 +184,7 @@ function DirectiveDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { ki
       void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: edit.id, graphic: next }).then((ok) => ok && close());
       return;
     }
-    commitGraphic({ sch: state.schematic, dispatch, api }, { shape: { type: "directive", at: dialog.at, orientation, shape, pin_length_um: DIRECTIVE_POLE_UM, netclass, component_class: componentClass } });
+    commitGraphic({ sch: state.schematic, dispatch, api }, { shape: { type: "directive", at: dialog.at, orientation, shape, pin_length_nm: DIRECTIVE_POLE_NM, netclass, component_class: componentClass } });
     close();
   };
   return (

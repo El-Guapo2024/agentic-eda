@@ -16,47 +16,47 @@ const drawings = (extra: Record<string, unknown> = {}) => ({ shapes: [], texts: 
 const near = (a: readonly number[], b: readonly number[]) => a.forEach((v, i) => assert.ok(Math.abs(v - b[i]!) < 1e-6, `${a} vs ${b}`));
 
 test("carryMatrix: a plain move is a translation", () => {
-  const p = { refs: ["a"], dxUm: 1500, dyUm: -700 };
+  const p = { refs: ["a"], dxNm: 1500, dyNm: -700 };
   assert.deepEqual(carryMatrix(p), [1, 0, 0, 1, 1500, -700]);
   assert.deepEqual(carryPoint(p, [10, 20]), [1510, -680]);
 });
 
 test("carryMatrix: R turns counter-clockwise on the screen about the pick-up point (Y points down)", () => {
   // (1000, 0) to the right of the pivot (0, 0): a quarter turn counter-clockwise takes it to the top, which is -y on the screen.
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 1, pivotUm: [0, 0] }, [1000, 0]), [0, -1000]);
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 2, pivotUm: [0, 0] }, [1000, 0]), [-1000, 0]);
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 3, pivotUm: [0, 0] }, [1000, 0]), [0, 1000]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: 1, pivotNm: [0, 0] }, [1000, 0]), [0, -1000]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: 2, pivotNm: [0, 0] }, [1000, 0]), [-1000, 0]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: 3, pivotNm: [0, 0] }, [1000, 0]), [0, 1000]);
   // Shift+R is a quarter turn clockwise
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: -1, pivotUm: [0, 0] }, [1000, 0]), [0, 1000]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: -1, pivotNm: [0, 0] }, [1000, 0]), [0, 1000]);
   // the pivot stays where it is
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 1, pivotUm: [5000, 3000] }, [5000, 3000]), [5000, 3000]);
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 1, pivotUm: [5000, 3000] }, [6000, 3000]), [5000, 2000]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: 1, pivotNm: [5000, 3000] }, [5000, 3000]), [5000, 3000]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: 1, pivotNm: [5000, 3000] }, [6000, 3000]), [5000, 2000]);
 });
 
 test("carryMatrix: F mirrors left-right about the flip point, then the move", () => {
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, flipped: true, flipPivotUm: [5000, 0] }, [4000, 700]), [6000, 700]);
-  near(carryPoint({ refs: [], dxUm: 100, dyUm: 200, flipped: true, flipPivotUm: [5000, 0] }, [4000, 700]), [6100, 900]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, flipped: true, flipPivotNm: [5000, 0] }, [4000, 700]), [6000, 700]);
+  near(carryPoint({ refs: [], dxNm: 100, dyNm: 200, flipped: true, flipPivotNm: [5000, 0] }, [4000, 700]), [6100, 900]);
 });
 
 test("carryMatrix: R turns by the rotation step of the preferences, not always a quarter", () => {
   // 45 degrees counter-clockwise about the origin takes (1000, 0) to (707.1, -707.1) on the screen (y down)
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 1, rotateStepDeg: 45, pivotUm: [0, 0] }, [1000, 0]), [1000 * Math.SQRT1_2, -1000 * Math.SQRT1_2]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: 1, rotateStepDeg: 45, pivotNm: [0, 0] }, [1000, 0]), [1000 * Math.SQRT1_2, -1000 * Math.SQRT1_2]);
   // two presses of 45 are one quarter, exactly
-  assert.deepEqual(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 2, rotateStepDeg: 45, pivotUm: [0, 0] }, [1000, 0]).map(Math.round), [0, -1000]);
+  assert.deepEqual(carryPoint({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: 2, rotateStepDeg: 45, pivotNm: [0, 0] }, [1000, 0]).map(Math.round), [0, -1000]);
   // 24 presses of 15 are a full turn: the identity
-  near(carryMatrix({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 24, rotateStepDeg: 15, pivotUm: [3, 4] }), [1, 0, 0, 1, 0, 0]);
+  near(carryMatrix({ refs: [], dxNm: 0, dyNm: 0, rotateQuarterTurns: 24, rotateStepDeg: 15, pivotNm: [3, 4] }), [1, 0, 0, 1, 0, 0]);
 });
 
 test("carryMatrix: F mirrors across the flip direction of the preferences", () => {
   // top/bottom mirrors y about the horizontal line through the flip point, x stays
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, flipped: true, flipDirection: "top_bottom", flipPivotUm: [0, 5000] }, [4000, 4000]), [4000, 6000]);
-  near(carryPoint({ refs: [], dxUm: 10, dyUm: 20, flipped: true, flipDirection: "top_bottom", flipPivotUm: [0, 5000] }, [4000, 4000]), [4010, 6020]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, flipped: true, flipDirection: "top_bottom", flipPivotNm: [0, 5000] }, [4000, 4000]), [4000, 6000]);
+  near(carryPoint({ refs: [], dxNm: 10, dyNm: 20, flipped: true, flipDirection: "top_bottom", flipPivotNm: [0, 5000] }, [4000, 4000]), [4010, 6020]);
   // left/right is the default
-  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, flipped: true, flipPivotUm: [5000, 0] }, [4000, 700]), [6000, 700]);
+  near(carryPoint({ refs: [], dxNm: 0, dyNm: 0, flipped: true, flipPivotNm: [5000, 0] }, [4000, 700]), [6000, 700]);
 });
 
 test("carryMatrix: turn first, then flip, then move -- the order planCarry sends them in", () => {
-  const p = { refs: [], dxUm: 300, dyUm: 400, rotateQuarterTurns: 1, flipped: true, pivotUm: [0, 0] as [number, number], flipPivotUm: [1000, 0] as [number, number] };
+  const p = { refs: [], dxNm: 300, dyNm: 400, rotateQuarterTurns: 1, flipped: true, pivotNm: [0, 0] as [number, number], flipPivotNm: [1000, 0] as [number, number] };
   // (1000, 0) -> turned about (0,0): (0, -1000) -> mirrored about x = 1000: (2000, -1000) -> moved: (2300, -600)
   near(carryPoint(p, [1000, 0]), [2300, -600]);
 });
@@ -69,7 +69,7 @@ test("carryMatrix agrees with planCarry's batch on a track: the drawn track is t
   // the backend's angle is clockwise-positive: a counter-clockwise quarter turn is -90 degrees
   assert.equal(rotate.angle_millideg, -90_000);
   // the preview of the same carry
-  const preview = { refs: ["t1"], dxUm: 500, dyUm: 300, rotateQuarterTurns: 1, pivotUm: [rotate.pivot.x, rotate.pivot.y] as [number, number] };
+  const preview = { refs: ["t1"], dxNm: 500, dyNm: 300, rotateQuarterTurns: 1, pivotNm: [rotate.pivot.x, rotate.pivot.y] as [number, number] };
   // the track turns about its start (1000, 2000): its far end (4000, 2000) lands at (1000, -1000) before the move
   near(carryPoint(preview, [4000, 2000]), [1500, -700]);
   near(carryPoint(preview, [1000, 2000]), [1500, 2300]);

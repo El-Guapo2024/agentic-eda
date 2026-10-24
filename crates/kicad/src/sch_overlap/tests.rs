@@ -121,7 +121,7 @@ fn a_rotated_symbol_turns_its_pins_and_its_body() {
     assert_eq!(pins.len(), 2);
     for p in pins {
         let (a, _) = p.seg.unwrap();
-        assert!((a.1 - 100_000.0).abs() < 1.0 && ((a.0 - 100_000.0).abs() - 3_810.0).abs() < 1.0, "{a:?}");
+        assert!((a.1 - 100_000_000.0).abs() < 1.0 && ((a.0 - 100_000_000.0).abs() - 3_810_000.0).abs() < 1.0, "{a:?}");
     }
     let body = items.iter().find(|i| i.kind == Kind::Body).unwrap();
     assert!(body.rect.w() > body.rect.h(), "{:?}", body.rect);

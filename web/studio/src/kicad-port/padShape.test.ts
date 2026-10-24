@@ -37,7 +37,7 @@ import {
 } from "./padShape";
 
 const pad = (over: Partial<PadShapeSource> = {}): PadShapeSource => ({ shape: "rect", size: [1000, 600], w: 1000, h: 600, ...over });
-const fmt = (um: number) => `${(um / 1000).toFixed(2)} mm`;
+const fmt = (nm: number) => `${(nm / 1e6).toFixed(2)} mm`;
 
 test("the selector has KiCad's nine choices in its order and its words", () => {
   assert.deepEqual(
@@ -80,8 +80,8 @@ test("choosing a chamfered rectangle gives a 20% chamfer and one corner, and the
   const mixed = chooseShape({ ...form, ratio: 0 }, "chamfered_round_rect", 90).form;
   assert.deepEqual([mixed.chamferRatio, mixed.ratio], [0.2, 0.25], "the IPC ratio: 25%, the radius capped at 0.25 mm");
   // The IPC cap: a 2 mm pad's corner radius is 0.25 mm, 12.5%.
-  assert.equal(defaultIpcRoundingRatio([4000, 2000]), 0.125);
-  assert.equal(defaultIpcRoundingRatio([800, 600]), 0.25);
+  assert.equal(defaultIpcRoundingRatio([4_000_000, 2_000_000]), 0.125);
+  assert.equal(defaultIpcRoundingRatio([800_000, 600_000]), 0.25);
   assert.equal(chooseShape({ ...form, ratio: 0 }, "round_rect", 90).form.ratio, 0.25);
 });
 
@@ -238,8 +238,8 @@ test("a polygon keeps at least three points and says what is wrong with a shape 
 });
 
 test("the list of basic shapes describes each one and adds, replaces, duplicates and deletes (the list is replaced whole)", () => {
-  const a = newPrimitive("segment", 1000, 600);
-  const b = newPrimitive("circle", 1000, 600);
+  const a = newPrimitive("segment", 1_000_000, 600_000);
+  const b = newPrimitive("circle", 1_000_000, 600_000);
   assert.equal(describePrimitive(a, fmt), "Line (0.00 mm, 0.00 mm) to (0.60 mm, 0.00 mm), width 0.20 mm");
   assert.equal(describePrimitive(b, fmt), "Circle at (0.00 mm, 0.00 mm), radius 0.30 mm, width 0.20 mm, filled");
   assert.match(describePrimitive({ ...a, proxy: true }, fmt), /\(not copper\)$/);
@@ -249,7 +249,7 @@ test("the list of basic shapes describes each one and adds, replaces, duplicates
   list = primitivesWith(list, { duplicate: 0 });
   assert.deepEqual(list.map((p) => p.shape.kind), ["segment", "segment", "circle"]);
   assert.notEqual(list[0]!.shape, list[1]!.shape, "a copy, not the same shape twice");
-  list = primitivesWith(list, { replace: [1, newPrimitive("arc", 1000, 600)] });
+  list = primitivesWith(list, { replace: [1, newPrimitive("arc", 1_000_000, 600_000)] });
   assert.deepEqual(list.map((p) => p.shape.kind), ["segment", "arc", "circle"]);
   list = primitivesWith(list, { remove: 0 });
   assert.deepEqual(list.map((p) => p.shape.kind), ["arc", "circle"]);

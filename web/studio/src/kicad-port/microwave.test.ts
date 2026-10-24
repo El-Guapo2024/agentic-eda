@@ -4,7 +4,7 @@ import {
   arcStubAngleMillideg,
   centrelineRect,
   inductorEnd,
-  inductorMinLengthUm,
+  inductorMinLengthNm,
   isValidValueName,
   lengthFromText,
   lengthText,
@@ -58,22 +58,22 @@ test("the inductor's end is held by the angle snap the way TWO_POINT_GEOMETRY_MA
 });
 
 test("the length box starts at the distance between the points and never below it", () => {
-  assert.equal(inductorMinLengthUm({ x: 0, y: 0 }, { x: 3000, y: 4000 }), 5000);
-  assert.equal(lengthTextAtLeast(5000, "mm"), "5");
+  assert.equal(inductorMinLengthNm({ x: 0, y: 0 }, { x: 3_000_000, y: 4_000_000 }), 5_000_000);
+  assert.equal(lengthTextAtLeast(5_000_000, "mm"), "5");
   // 1.41421356 mm: KiCad's box shows 1.4142 (less than the distance, so its own default is refused); this one shows 1.4143
-  assert.equal(lengthTextAtLeast(inductorMinLengthUm({ x: 0, y: 0 }, { x: 1000, y: 1000 }), "mm"), "1.4143");
-  assert.equal(lengthTextAtLeast(10_000, "mil"), "393.71");
-  assert.equal(lengthTextAtLeast(25_400, "in"), "1");
+  assert.equal(lengthTextAtLeast(inductorMinLengthNm({ x: 0, y: 0 }, { x: 1_000_000, y: 1_000_000 }), "mm"), "1.4143");
+  assert.equal(lengthTextAtLeast(10_000_000, "mil"), "393.71");
+  assert.equal(lengthTextAtLeast(25_400_000, "in"), "1");
 });
 
 test("lengths are shown to the digits of the units and read with or without a unit name", () => {
-  assert.equal(lengthText(250, "mm"), "0.25");
-  assert.equal(lengthText(250, "mil"), "9.84");
-  assert.equal(lengthText(254, "in"), "0.01");
-  assert.equal(lengthFromText("0.25", "mm"), 250);
-  assert.equal(lengthFromText("10", "mil"), 254);
-  assert.equal(lengthFromText("0.5 mm", "mil"), 500);
-  assert.equal(lengthFromText('0.01"', "mm"), 254);
+  assert.equal(lengthText(250_000, "mm"), "0.25");
+  assert.equal(lengthText(250_000, "mil"), "9.84");
+  assert.equal(lengthText(254_000, "in"), "0.01");
+  assert.equal(lengthFromText("0.25", "mm"), 250_000);
+  assert.equal(lengthFromText("10", "mil"), 254_000);
+  assert.equal(lengthFromText("0.5 mm", "mil"), 500_000);
+  assert.equal(lengthFromText('0.01"', "mm"), 254_000);
   assert.equal(lengthFromText("nonsense", "mm"), 0, "`ValueFromString` reads what is not a length as nothing");
 });
 
@@ -82,7 +82,7 @@ test("the size boxes of the shape dialog: the file's scale shown, sent only once
   assert.equal(shapeSizeText(1_001_330, "mm"), "1.0013");
   assert.equal(shapeSizeOverride("271.501", "271.501", "mm"), null);
   assert.equal(shapeSizeOverride(" 271.501 ", "271.501", "mm"), null);
-  assert.equal(shapeSizeOverride("300", "271.501", "mm"), 300_000);
+  assert.equal(shapeSizeOverride("300", "271.501", "mm"), 300_000_000);
 });
 
 test("the preview between the inductor's clicks is a rectangle along the centre line, half as wide as the line is long", () => {

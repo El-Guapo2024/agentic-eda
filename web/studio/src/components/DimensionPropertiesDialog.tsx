@@ -18,7 +18,7 @@ import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
-import { umFrom, umTo, type LengthUnit } from "../state/units";
+import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import type { ArrowDirection, CmdDimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat } from "../api/types";
 
 export function DimensionPropertiesDialog() {
@@ -62,13 +62,13 @@ export function DimensionPropertiesDialog() {
   useEffect(() => {
     if (!dim) return;
     setLayer(dim.layer);
-    setStartX(umTo(dim.start[0], unit));
-    setStartY(umTo(dim.start[1], unit));
-    setEndX(umTo(dim.end[0], unit));
-    setEndY(umTo(dim.end[1], unit));
-    setHeight(umTo(dim.height ?? 0, unit));
+    setStartX(nmTo(dim.start[0], unit));
+    setStartY(nmTo(dim.start[1], unit));
+    setEndX(nmTo(dim.end[0], unit));
+    setEndY(nmTo(dim.end[1], unit));
+    setHeight(nmTo(dim.height ?? 0, unit));
     setHorizontal(dim.horizontal ?? true);
-    setLeaderLength(umTo(dim.leader_length ?? 0, unit));
+    setLeaderLength(nmTo(dim.leader_length ?? 0, unit));
     setPrefix(dim.prefix);
     setSuffix(dim.suffix);
     setOverrideOn(dim.override_text != null);
@@ -80,11 +80,11 @@ export function DimensionPropertiesDialog() {
     setTextPosition(dim.text_position);
     setKeepAligned(dim.keep_text_aligned);
     setTextAngle(dim.text_angle / 1000);
-    setTextSize(umTo(dim.text_size_um, unit));
-    setStrokeWidth(umTo(dim.stroke_width, unit));
-    setArrowLength(umTo(dim.arrow_length, unit));
-    setExtensionOffset(umTo(dim.extension_offset, unit));
-    setExtensionHeight(umTo(dim.extension_height, unit));
+    setTextSize(nmTo(dim.text_size_nm, unit));
+    setStrokeWidth(nmTo(dim.stroke_width, unit));
+    setArrowLength(nmTo(dim.arrow_length, unit));
+    setExtensionOffset(nmTo(dim.extension_offset, unit));
+    setExtensionHeight(nmTo(dim.extension_height, unit));
     setArrowDirection(dim.arrow_direction);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dim?.id]);
@@ -95,11 +95,11 @@ export function DimensionPropertiesDialog() {
 
   const kindObj: CmdDimensionKind =
     dim.kind === "aligned"
-      ? { kind: "aligned", height: Math.round(umFrom(height, unit)) }
+      ? { kind: "aligned", height: Math.round(nmFrom(height, unit)) }
       : dim.kind === "orthogonal"
-        ? { kind: "orthogonal", height: Math.round(umFrom(height, unit)), horizontal }
+        ? { kind: "orthogonal", height: Math.round(nmFrom(height, unit)), horizontal }
         : dim.kind === "radial"
-          ? { kind: "radial", leader_length: Math.round(umFrom(leaderLength, unit)) }
+          ? { kind: "radial", leader_length: Math.round(nmFrom(leaderLength, unit)) }
           : dim.kind === "leader"
             ? { kind: "leader" }
             : { kind: "center" };
@@ -110,8 +110,8 @@ export function DimensionPropertiesDialog() {
       const cmd = toCmdDimension(dim);
       cmd.layer = layer;
       cmd.kind = kindObj;
-      cmd.start = { x: Math.round(umFrom(startX, unit)), y: Math.round(umFrom(startY, unit)) };
-      cmd.end = { x: Math.round(umFrom(endX, unit)), y: Math.round(umFrom(endY, unit)) };
+      cmd.start = { x: Math.round(nmFrom(startX, unit)), y: Math.round(nmFrom(startY, unit)) };
+      cmd.end = { x: Math.round(nmFrom(endX, unit)), y: Math.round(nmFrom(endY, unit)) };
       cmd.prefix = prefix;
       cmd.suffix = suffix;
       cmd.override_text = overrideOn ? overrideText : null;
@@ -122,11 +122,11 @@ export function DimensionPropertiesDialog() {
       cmd.text_position = textPosition;
       cmd.keep_text_aligned = keepAligned;
       cmd.text_angle = Math.round(textAngle * 1000);
-      cmd.text_size_um = Math.round(umFrom(textSize, unit));
-      cmd.stroke_width = Math.round(umFrom(strokeWidth, unit));
-      cmd.arrow_length = Math.round(umFrom(arrowLength, unit));
-      cmd.extension_offset = Math.round(umFrom(extensionOffset, unit));
-      cmd.extension_height = Math.round(umFrom(extensionHeight, unit));
+      cmd.text_size_nm = Math.round(nmFrom(textSize, unit));
+      cmd.stroke_width = Math.round(nmFrom(strokeWidth, unit));
+      cmd.arrow_length = Math.round(nmFrom(arrowLength, unit));
+      cmd.extension_offset = Math.round(nmFrom(extensionOffset, unit));
+      cmd.extension_height = Math.round(nmFrom(extensionHeight, unit));
       cmd.arrow_direction = arrowDirection;
       const ok = await api.cmd({ op: "edit_dimension", id, dimension: cmd });
       if (ok) close();

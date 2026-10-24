@@ -36,7 +36,7 @@ export function graphicId(shape: SchGraphicShape, taken?: ReadonlySet<string>): 
     case "rectangle":
       return itemId("shp", `rect|${xy(shape.start)}|${xy(shape.end)}`, taken);
     case "circle":
-      return itemId("shp", `circle|${xy(shape.center)}|${shape.radius_um}`, taken);
+      return itemId("shp", `circle|${xy(shape.center)}|${shape.radius_nm}`, taken);
     case "arc":
       return itemId("shp", `arc|${xy(shape.start)}|${xy(shape.mid)}|${xy(shape.end)}`, taken);
     case "bezier":

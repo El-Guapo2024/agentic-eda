@@ -6,7 +6,7 @@
 import type { PinElectricalType } from "../api/types";
 
 /** `TARGET_PIN_RADIUS` (eeschema/sch_pin.h): 15 mil. */
-export const TARGET_PIN_RADIUS_UM = 381;
+export const TARGET_PIN_RADIUS_NM = 381;
 
 /** `DEFAULT_PINNAME_SIZE` (eeschema/default_values.h): 50 mil -- the name size of a pin that does not set one. */
 export const DEFAULT_PIN_NAME_SIZE_MM = 1.27;
@@ -15,8 +15,8 @@ export const DEFAULT_PIN_NAME_SIZE_MM = 1.27;
 export const DEFAULT_TEXT_OFFSET_RATIO = 0.15;
 
 /** `PIN_LAYOUT_CACHE::getPinTextOffset`: `MilsToIU( KiROUND( 24 * offsetRatio ) )`. */
-export function pinTextOffsetUm(ratio = DEFAULT_TEXT_OFFSET_RATIO): number {
-  return Math.round(24 * ratio) * 25.4;
+export function pinTextOffsetNm(ratio = DEFAULT_TEXT_OFFSET_RATIO): number {
+  return Math.round(24 * ratio) * 25_400;
 }
 
 /** `ElectricalPinTypeGetText` (eeschema/pin_type.cpp, `InitTables`). */
@@ -37,8 +37,8 @@ export const ELECTRICAL_TYPE_NAMES: Record<PinElectricalType, string> = {
 
 export interface PinTextLayout {
   text: string;
-  sizeUm: number;
-  thicknessUm: number;
+  sizeNm: number;
+  thicknessNm: number;
   /** Where the text is anchored (not yet centred on its line: the painter does that the way it does for every other label). */
   at: [number, number];
   /** `m_Angle == ANGLE_VERTICAL`: the text reads upward instead of left to right. */
@@ -54,16 +54,16 @@ export interface PinTextLayout {
  * `transformTextForPin` turns for the other three directions (mirrored alignment for left and down, vertical text for up and down).
  */
 export function electricalTypeLayout(pin: { electrical_type: PinElectricalType; name_size_mm: number | null }, tip: [number, number], dir: [number, number], dangling = true): PinTextLayout {
-  const sizeUm = Math.max(((pin.name_size_mm ?? DEFAULT_PIN_NAME_SIZE_MM) * 1000 * 3) / 4, 700);
-  const thicknessUm = sizeUm / 8;
-  let distance = pinTextOffsetUm() + thicknessUm / 2 + TARGET_PIN_RADIUS_UM;
-  if (dangling) distance += TARGET_PIN_RADIUS_UM / 2;
+  const sizeNm = Math.max(((pin.name_size_mm ?? DEFAULT_PIN_NAME_SIZE_MM) * 1e6 * 3) / 4, 700_000);
+  const thicknessNm = sizeNm / 8;
+  let distance = pinTextOffsetNm() + thicknessNm / 2 + TARGET_PIN_RADIUS_NM;
+  if (dangling) distance += TARGET_PIN_RADIUS_NM / 2;
   const at: [number, number] = [tip[0] + dir[0] * distance, tip[1] + dir[1] * distance];
   const vertical = dir[0] === 0;
   // The body points away from `dir`: a pin whose body points right (dir.x < 0) keeps the local right alignment, left flips it; up (dir.y > 0, text
   // below the connection point) keeps it, down flips it.
   const justify: "left" | "right" = vertical ? (dir[1] > 0 ? "right" : "left") : dir[0] < 0 ? "right" : "left";
-  return { text: ELECTRICAL_TYPE_NAMES[pin.electrical_type], sizeUm, thicknessUm, at, vertical, justify };
+  return { text: ELECTRICAL_TYPE_NAMES[pin.electrical_type], sizeNm, thicknessNm, at, vertical, justify };
 }
 
 /** `SCH_PAINTER::draw( SCH_PIN )`: a pin marked hidden is drawn (in the hidden colour) only while "Show Hidden Pins" is on; the same holds for picking it (`IsShowingHiddenPins`). */

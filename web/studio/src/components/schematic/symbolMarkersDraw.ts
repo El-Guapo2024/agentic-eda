@@ -1,7 +1,7 @@
 // Strokes the marks of a symbol's attributes (`SCH_PAINTER::draw( SCH_SYMBOL )`): the Do not Populate cross and the Exclude from Simulation frame --
 // the geometry is `symbolMarkers.ts`.
 import { layerColor } from "../canvas/layers";
-import { DEFAULT_LINE_UM, dnpCross, simExclusionMark, type Box } from "./symbolMarkers";
+import { DEFAULT_LINE_NM, dnpCross, simExclusionMark, type Box } from "./symbolMarkers";
 
 export interface SymbolMarkFlags {
   dnp?: boolean;
@@ -15,7 +15,7 @@ export function drawSymbolMarkers(ctx: CanvasRenderingContext2D, body: Box, all:
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineCap = "round";
-    ctx.lineWidth = 3 * DEFAULT_LINE_UM;
+    ctx.lineWidth = 3 * DEFAULT_LINE_NM;
     ctx.beginPath();
     for (const [a, b] of dnpCross(body, all)) {
       ctx.moveTo(a[0], a[1]);

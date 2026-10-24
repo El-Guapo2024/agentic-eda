@@ -27,7 +27,7 @@ const typed = (base: ArrayOptions, over: Partial<ArrayEntries> = {}): ArrayEntri
 
 test("the dialog starts from KiCad's own entries: 5 x 5 at 2.54 mm, four points a quarter turn apart, unique references", () => {
   const d = DEFAULT_ARRAY_OPTIONS;
-  assert.deepEqual([d.nx, d.ny, d.dx, d.dy, d.stagger, d.count, d.angleDeg, d.clockwise, d.arrange, d.reannotate], [5, 5, 2540, 2540, 1, 4, 90, true, false, true]);
+  assert.deepEqual([d.nx, d.ny, d.dx, d.dy, d.stagger, d.count, d.angleDeg, d.clockwise, d.arrange, d.reannotate], [5, 5, 2_540_000, 2_540_000, 1, 4, 90, true, false, true]);
   assert.equal(d.centred, true, "both position radios are restored true, the second one stays selected");
   assert.equal(checkArrayOptions(d), null);
 });
@@ -125,7 +125,7 @@ test("the grid's points are the backend's: across then down, a serpentine, skewe
 });
 
 test("the entries show the options in the display units, and the angle as the division when Full circle is on", () => {
-  const e = entriesOf(grid({ dx: 2540, dy: 1270, offsetX: 5, centerX: -12345, count: 8, fullCircle: true }), "mm");
+  const e = entriesOf(grid({ dx: 2_540_000, dy: 1_270_000, offsetX: 5_000, centerX: -12_345_000, count: 8, fullCircle: true }), "mm");
   assert.deepEqual([e.nx, e.ny, e.dx, e.dy, e.offsetX, e.offsetY, e.stagger], ["5", "5", "2.54", "1.27", "0.005", "0", "1"]);
   assert.deepEqual([e.centerX, e.count, e.angle, e.offsetAngle], ["-12.345", "8", "45", "0"]);
   assert.equal(entriesOf(grid(), "mil").dx, "100");
@@ -136,13 +136,13 @@ test("typing in the entries is read the way TransferDataFromWindow reads them", 
   const ok = optionsFromEntries(grid(), typed(grid(), { nx: " 3 ", ny: "2", dx: "5", dy: "1.5mm", offsetX: "10mil", stagger: "-2" }), "mm");
   assert.equal(ok.ok, true);
   if (ok.ok) {
-    assert.deepEqual([ok.options.nx, ok.options.ny, ok.options.dx, ok.options.dy, ok.options.offsetX, ok.options.stagger], [3, 2, 5000, 1500, 254, -2]);
+    assert.deepEqual([ok.options.nx, ok.options.ny, ok.options.dx, ok.options.dy, ok.options.offsetX, ok.options.stagger], [3, 2, 5_000_000, 1_500_000, 254_000, -2]);
     assert.equal(ok.options.tab, "grid");
     assert.equal(ok.options.reannotate, true, "the flags are the base's");
   }
   const circle = optionsFromEntries(circular(), typed(circular(), { centerX: "10", centerY: "-2.5", count: "6", angle: "60°", offsetAngle: "15" }), "mm");
   assert.equal(circle.ok, true);
-  if (circle.ok) assert.deepEqual([circle.options.centerX, circle.options.centerY, circle.options.count, circle.options.angleDeg, circle.options.offsetAngleDeg], [10000, -2500, 6, 60, 15]);
+  if (circle.ok) assert.deepEqual([circle.options.centerX, circle.options.centerY, circle.options.count, circle.options.angleDeg, circle.options.offsetAngleDeg], [10_000_000, -2_500_000, 6, 60, 15]);
 });
 
 test("a count that is not whole, or a length that is not a length, is reported with the entry's name and what was typed", () => {

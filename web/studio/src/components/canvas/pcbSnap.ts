@@ -26,7 +26,7 @@ export interface PcbSnapView {
   /** Screen pixels per um. */
   scale: number;
   /** The grid on screen, um. */
-  gridUm: number;
+  gridNm: number;
   /** The editor's grid list and the overrides over it. */
   grids: readonly number[];
   overrides: GridOverrides | null;
@@ -82,10 +82,10 @@ export class PcbSnap {
     const v = this.view!;
     return {
       scale: v.scale > 0 ? v.scale : 1,
-      gridUm: v.gridUm,
-      visibleGridUm: computeVisibleGridSize(v.gridUm, v.scale > 0 ? v.scale : 1),
+      gridNm: v.gridNm,
+      visibleGridNm: computeVisibleGridSize(v.gridNm, v.scale > 0 ? v.scale : 1),
       origin: [getSnapOrigin().x, getSnapOrigin().y],
-      gridSizeOf: (c) => gridSizeFor(c, v.gridUm, v.grids, v.overrides),
+      gridSizeOf: (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides),
     };
   }
 
@@ -169,7 +169,7 @@ export class PcbSnap {
       const mapped: PcbItemKind | null = kind === "part" ? "footprint" : kind === "table" || kind === "tablecell" ? null : kind === "grid" || kind === "via_stitch" || kind === "drill_map" ? "other" : kind;
       return pcbItemGrid(mapped);
     });
-    return selectionGrid(cats, (c) => gridSizeFor(c, v.gridUm, v.grids, v.overrides));
+    return selectionGrid(cats, (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides));
   }
 
   /** The cursor of a move of `ids`: `BestSnapAnchor( mouse, { active layer }, selectionGrid, ids )`. */

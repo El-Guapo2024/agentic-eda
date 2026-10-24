@@ -13,7 +13,7 @@ const arcs = (add: CmdShape[]) => add.filter((s): s is Extract<CmdShape, { kind:
 const close = (a: { x: number; y: number }, b: [number, number], tol = 2) => Math.abs(a.x - b[0]) <= tol && Math.abs(a.y - b[1]) <= tol;
 
 test("fillet two lines sharing a corner: an arc joins them and both lines end on the arc (LINE_FILLET_ROUTINE)", () => {
-  const r = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 0, 0, 0, 10000)], { kind: "fillet", radiusUm: 1000 });
+  const r = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 0, 0, 0, 10000)], { kind: "fillet", radiusNm: 1000 });
   assert.equal(r.ok, true);
   assert.equal(r.successes, 1);
   assert.equal(r.message, null);
@@ -36,7 +36,7 @@ test("fillet two lines sharing a corner: an arc joins them and both lines end on
 });
 
 test("fillet with a radius too big for the lines fails and changes nothing", () => {
-  const r = modifyLines([seg("a", 0, 0, 500, 0), seg("b", 0, 0, 0, 500)], { kind: "fillet", radiusUm: 1000 });
+  const r = modifyLines([seg("a", 0, 0, 500, 0), seg("b", 0, 0, 0, 500)], { kind: "fillet", radiusNm: 1000 });
   assert.equal(r.ok, true);
   assert.equal(r.successes, 0);
   assert.equal(r.failures, 1);
@@ -46,20 +46,20 @@ test("fillet with a radius too big for the lines fails and changes nothing", () 
 });
 
 test("fillet of parallel or non-touching lines does nothing (no failure counted)", () => {
-  const r = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 0, 5000, 10000, 5000)], { kind: "fillet", radiusUm: 500 });
+  const r = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 0, 5000, 10000, 5000)], { kind: "fillet", radiusNm: 500 });
   assert.equal(r.successes, 0);
   assert.equal(r.failures, 0);
   assert.equal(r.message, "Unable to fillet the selected lines.");
 });
 
 test("fillet needs at least two lines", () => {
-  const r = modifyLines([seg("a", 0, 0, 10000, 0)], { kind: "fillet", radiusUm: 500 });
+  const r = modifyLines([seg("a", 0, 0, 10000, 0)], { kind: "fillet", radiusNm: 500 });
   assert.equal(r.ok, false);
   assert.equal(r.message, "A shape with at least two lines must be selected.");
 });
 
 test("fillet of a rectangle decomposes it into four lines and rounds all four corners", () => {
-  const r = modifyLines([rect("r", 0, 0, 10000, 6000)], { kind: "fillet", radiusUm: 1000 });
+  const r = modifyLines([rect("r", 0, 0, 10000, 6000)], { kind: "fillet", radiusNm: 1000 });
   assert.equal(r.successes, 4);
   assert.equal(r.message, null);
   assert.deepEqual(r.remove, ["r"]);
@@ -73,7 +73,7 @@ test("fillet of a rectangle decomposes it into four lines and rounds all four co
 });
 
 test("a polygon's closing edge is decomposed too (EDIT_TOOL::ModifyLines)", () => {
-  const r = modifyLines([poly("p", [[0, 0], [10000, 0], [0, 10000]])], { kind: "chamfer", setbackUm: 1000 });
+  const r = modifyLines([poly("p", [[0, 0], [10000, 0], [0, 10000]])], { kind: "chamfer", setbackNm: 1000 });
   assert.equal(r.successes, 3);
   assert.deepEqual(r.remove, ["p"]);
   // three chamfers + three shortened sides
@@ -81,7 +81,7 @@ test("a polygon's closing edge is decomposed too (EDIT_TOOL::ModifyLines)", () =
 });
 
 test("chamfer: a chord between the setback points and the lines shortened (LINE_CHAMFER_ROUTINE)", () => {
-  const r = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 0, 0, 0, 10000)], { kind: "chamfer", setbackUm: 2000 });
+  const r = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 0, 0, 0, 10000)], { kind: "chamfer", setbackNm: 2000 });
   assert.equal(r.successes, 1);
   assert.equal(r.message, null);
   const lines = segs(r.add);
@@ -93,16 +93,16 @@ test("chamfer: a chord between the setback points and the lines shortened (LINE_
 });
 
 test("chamfer ignores lines that do not share an end point and refuses a setback longer than a line", () => {
-  const apart = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 5000, 5000, 5000, 10000)], { kind: "chamfer", setbackUm: 1000 });
+  const apart = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 5000, 5000, 5000, 10000)], { kind: "chamfer", setbackNm: 1000 });
   assert.equal(apart.failures, 0);
   assert.equal(apart.successes, 0);
-  const long = modifyLines([seg("a", 0, 0, 1000, 0), seg("b", 0, 0, 0, 10000)], { kind: "chamfer", setbackUm: 2000 });
+  const long = modifyLines([seg("a", 0, 0, 1000, 0), seg("b", 0, 0, 0, 10000)], { kind: "chamfer", setbackNm: 2000 });
   assert.equal(long.failures, 1);
   assert.equal(long.message, "Unable to chamfer the selected lines.");
 });
 
 test("chamfer consuming a whole line deletes it (ModifyLineOrDeleteIfZeroLength)", () => {
-  const r = modifyLines([seg("a", 0, 0, 2000, 0), seg("b", 0, 0, 0, 10000)], { kind: "chamfer", setbackUm: 2000 });
+  const r = modifyLines([seg("a", 0, 0, 2000, 0), seg("b", 0, 0, 0, 10000)], { kind: "chamfer", setbackNm: 2000 });
   assert.equal(r.successes, 1);
   assert.ok(r.remove.includes("a"));
   assert.ok(r.remove.includes("b"));
@@ -142,19 +142,19 @@ test("dogbone: needs the corner to point into the board outline; the arc and cap
   const outline: [number, number][] = [[0, 0], [10000, 0], [10000, 5000], [5000, 5000], [5000, 10000], [0, 10000]];
   const a = seg("a", 5000, 5000, 10000, 5000, "Edge.Cuts");
   const b = seg("b", 5000, 5000, 5000, 10000, "Edge.Cuts");
-  const r = modifyLines([a, b], { kind: "dogbone", radiusUm: 500, addSlots: true, boardOutline: [outline] });
+  const r = modifyLines([a, b], { kind: "dogbone", radiusNm: 500, addSlots: true, boardOutline: [outline] });
   assert.equal(r.successes, 1);
   assert.equal(arcs(r.add).length, 1);
   // A convex corner of the same outline is skipped (not inward).
   const cornerA = seg("c", 0, 0, 10000, 0, "Edge.Cuts");
   const cornerB = seg("d", 0, 0, 0, 10000, "Edge.Cuts");
-  const none = modifyLines([cornerA, cornerB], { kind: "dogbone", radiusUm: 500, addSlots: true, boardOutline: [outline] });
+  const none = modifyLines([cornerA, cornerB], { kind: "dogbone", radiusNm: 500, addSlots: true, boardOutline: [outline] });
   assert.equal(none.successes, 0);
   assert.deepEqual(none.add, []);
 });
 
 test("dogbone with no board outline skips every corner", () => {
-  const r = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 0, 0, 0, 10000)], { kind: "dogbone", radiusUm: 500, addSlots: false, boardOutline: [] });
+  const r = modifyLines([seg("a", 0, 0, 10000, 0), seg("b", 0, 0, 0, 10000)], { kind: "dogbone", radiusNm: 500, addSlots: false, boardOutline: [] });
   assert.equal(r.successes, 0);
   assert.equal(r.message, "Unable to add dogbone corners to the selected lines.");
 });
@@ -227,7 +227,7 @@ test("heal shapes ignores shapes it cannot chain (rectangles, polygons)", () => 
 test("a filleted line keeps its endings and net: it is changed in place, as EDIT_TOOL::ModifyLines edits the same PCB_SHAPE", () => {
   const a = { ...seg("a", 0, 0, 10000, 0), end_ending: { style: "arrow" } } as unknown as Shape;
   const b = seg("b", 0, 0, 0, 10000);
-  const r = modifyLines([a, b], { kind: "fillet", radiusUm: 1000 });
+  const r = modifyLines([a, b], { kind: "fillet", radiusNm: 1000 });
   const board = { drawings: { shapes: [a, b] } } as never;
   const { cmds, removed } = modifyResultCmds(board, r);
   assert.deepEqual(removed, ["b"], "only the plain line is deleted and added");

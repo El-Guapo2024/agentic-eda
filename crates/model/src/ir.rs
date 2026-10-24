@@ -3,7 +3,8 @@
 //! One nested document that fills in stage by stage (schematic → placement →
 //! routing). Frozen sections never change; the running loop regenerates only
 //! its own section across N candidates. All coordinates are integer
-//! micrometers: floats in a hashed file are a canonicalization landmine.
+//! nanometres (`crate::units`), as KiCad holds them: floats in a hashed file
+//! are a canonicalization landmine.
 //!
 //! Canonical form contract (what makes byte-hash == content-hash):
 //! - serialization uses sorted object keys (serde_json with BTreeMap-backed
@@ -14,22 +15,45 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Integer micrometers. 1 mm = 1_000 um.
-pub type Um = i64;
+/// Integer nanometres, KiCad's board unit. 1 mm = 1_000_000 nm. See [`crate::units`].
+pub use crate::units::Nm;
 
 /// Rotation in millidegrees (0..360_000) so 45° etc. stay exact integers.
 pub type Millideg = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 pub struct Point {
-    pub x: Um,
-    pub y: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub x: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub y: Nm,
 }
 
+impl crate::units::Lengths for Point {
+    fn scale_lengths(&mut self, k: i64) {
+        self.x *= k;
+        self.y *= k;
+    }
+}
+
+/// The version of the design file this code writes: 2, every length in nanometres. Version 1 (and a file without `schema`) was micrometres; it is read
+/// with every length x1000 ([`Design`]'s reader, `docs/NANOMETRES.md`), and written back as 2. The change is one way: an older binary reading a version 2
+/// file would take every nanometre for a micrometre.
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// The document's version as written: always [`SCHEMA_VERSION`], since a design in memory is always in nanometres whatever file it was read from.
+pub(crate) fn write_schema<S: serde::Serializer>(_: &u32, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_u32(SCHEMA_VERSION)
+}
+
+// `remote = "Self"`: the derived reader and writer are the inherent `Design::deserialize` / `Design::serialize`, which the trait impls below wrap (the
+// reader to migrate an older document's units).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 #[serde(deny_unknown_fields)]
 pub struct Design {
-    /// Schema version of this document; migrations live in the kernel.
+    /// The document's version ([`SCHEMA_VERSION`]): what unit its lengths are in. Read, it is always the current one.
+    #[serde(default, serialize_with = "write_schema")]
     pub schema: u32,
     pub provenance: Provenance,
     /// Filled by loop 1 (E1). Artifact 1 when frozen.
@@ -473,7 +497,8 @@ pub struct SchematicText {
     pub at: Point,
     #[serde(default)]
     pub angle: Millideg,
-    pub size_um: Um,
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
 }
 
 impl SchematicText {
@@ -546,7 +571,7 @@ pub struct BusEntry {
     pub id: String,
     pub at: Point,
     /// Signed offset from `at` to this entry's other endpoint — real KiCad
-    /// always uses a fixed ±100mil (±2540um) magnitude on each axis, but
+    /// always uses a fixed ±100mil (±2.54 mm) magnitude on each axis, but
     /// nothing here enforces that; an imported file's own stored size is
     /// kept exactly.
     pub size: Point,
@@ -581,7 +606,7 @@ impl Junction {
 /// A graphic polyline on the schematic's notes layer (`SCH_LINE` on `LAYER_NOTES`, drawn by the
 /// `Draw Lines` tool, `I`): decoration with no electrical meaning -- never part of any net, never a
 /// connection point. Written to the `.kicad_sch` as a `(polyline ...)` item and read back from one.
-/// `width_um` 0 means the default line width. Additive: absent from every design with none.
+/// `width_nm` 0 means the default line width. Additive: absent from every design with none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchLine {
@@ -589,11 +614,12 @@ pub struct SchLine {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
     pub pts: Vec<Point>,
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub width_um: Um,
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "width_um", deserialize_with = "crate::units::de")]
+    pub width_nm: Nm,
 }
 
-fn is_zero_um(v: &Um) -> bool {
+fn is_zero_nm(v: &Nm) -> bool {
     *v == 0
 }
 
@@ -824,7 +850,8 @@ pub struct SheetInstance {
     pub name: String,
     pub file: String,
     pub at: Point,
-    pub size: (Um, Um),
+    #[serde(deserialize_with = "crate::units::de")]
+    pub size: (Nm, Nm),
     /// Sheet pins on this placement's own border (`SCH_SHEET_PIN`), each
     /// tied *by name* (not by any stored link) to a hierarchical label of
     /// the same name in `file`'s own content -- kicad-cli's ERC
@@ -1040,8 +1067,9 @@ pub struct PlacementSection {
 pub struct ModuleRegion {
     pub name: String,
     pub refs: Vec<String>,
-    /// (x0, y0, x1, y1) µm.
-    pub rect: (Um, Um, Um, Um),
+    /// (x0, y0, x1, y1) nm.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub rect: (Nm, Nm, Nm, Nm),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1103,7 +1131,8 @@ pub struct RoutingSection {
     /// `design.json` reads as "no custom widths saved yet", same as a
     /// freshly created KiCad board.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub track_width_presets: Vec<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub track_width_presets: Vec<Nm>,
     /// `BOARD_DESIGN_SETTINGS::m_ViaSizeList` -- same idea as
     /// `track_width_presets`, for the via-size cycling hotkey.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1154,12 +1183,14 @@ pub struct TeardropSettings {
     /// `TEARDROP_PARAMETERS::m_BestWidthRatio`.
     #[serde(default = "default_td_width_ratio")]
     pub best_width_ratio: f64,
-    /// `m_TdMaxLen`, µm. <= 0 disables the constraint.
+    /// `m_TdMaxLen`, nm. <= 0 disables the constraint.
     #[serde(default = "default_td_max_len")]
-    pub max_len_um: Um,
-    /// `m_TdMaxWidth`, µm. <= 0 disables the constraint.
+    #[serde(alias = "max_len_um", deserialize_with = "crate::units::de")]
+    pub max_len_nm: Nm,
+    /// `m_TdMaxWidth`, nm. <= 0 disables the constraint.
     #[serde(default = "default_td_max_width")]
-    pub max_width_um: Um,
+    #[serde(alias = "max_width_um", deserialize_with = "crate::units::de")]
+    pub max_width_nm: Nm,
     /// `m_WidthtoSizeFilterRatio`: a track narrower than
     /// `anchor_diameter * this` gets a teardrop; 1.0 = always, 0.0 = never.
     #[serde(default = "default_td_width_to_size_ratio")]
@@ -1175,11 +1206,11 @@ fn default_td_length_ratio() -> f64 {
 fn default_td_width_ratio() -> f64 {
     1.0
 }
-fn default_td_max_len() -> Um {
-    1000 // TEARDROP_PARAMETERS() ctor: pcbIUScale.mmToIU(1.0)
+fn default_td_max_len() -> Nm {
+    1_000_000 // TEARDROP_PARAMETERS() ctor: pcbIUScale.mmToIU(1.0)
 }
-fn default_td_max_width() -> Um {
-    2000 // ctor: pcbIUScale.mmToIU(2.0)
+fn default_td_max_width() -> Nm {
+    2_000_000 // ctor: pcbIUScale.mmToIU(2.0)
 }
 fn default_td_width_to_size_ratio() -> f64 {
     0.9
@@ -1198,8 +1229,8 @@ impl Default for TeardropSettings {
             target_smd_pads: default_td_target(),
             best_length_ratio: default_td_length_ratio(),
             best_width_ratio: default_td_width_ratio(),
-            max_len_um: default_td_max_len(),
-            max_width_um: default_td_max_width(),
+            max_len_nm: default_td_max_len(),
+            max_width_nm: default_td_max_width(),
             width_to_size_filter_ratio: default_td_width_to_size_ratio(),
         }
     }
@@ -1209,8 +1240,10 @@ impl Default for TeardropSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViaPreset {
-    pub diameter: Um,
-    pub drill: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub diameter: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub drill: Nm,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1229,7 +1262,8 @@ pub struct Track {
     pub pins: Vec<String>,
     /// Stackup layer name ("F.Cu").
     pub layer: String,
-    pub width: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub width: Nm,
     pub pts: Vec<Point>,
     /// Set when this track is a KiCad arc (`PCB_ARC`, `(arc (start)(mid)
     /// (end))`): its `mid` point, stored as an offset from `pts[0]` so a
@@ -1291,7 +1325,7 @@ pub fn tessellate_arc(start: Point, mid: Point, end: Point, segments: usize) -> 
 
 impl Track {
     /// A KiCad-arc track, from its start, mid and end points.
-    pub fn new_arc(net: String, layer: String, width: Um, start: Point, mid: Point, end: Point) -> Track {
+    pub fn new_arc(net: String, layer: String, width: Nm, start: Point, mid: Point, end: Point) -> Track {
         Track {
             id: String::new(),
             net,
@@ -1310,7 +1344,7 @@ impl Track {
         let (start, end) = (*self.pts.first()?, *self.pts.last()?);
         let mid = Point { x: start.x + off.x, y: start.y + off.y };
         let expect = tessellate_arc(start, mid, end, TRACK_ARC_SEGMENTS);
-        // 1 µm slack: a translated arc re-tessellates through float
+        // 1 nm slack: a translated arc re-tessellates through float
         // round-off that can land a sample one unit over.
         let same = expect.len() == self.pts.len() && expect.iter().zip(&self.pts).all(|(a, b)| (a.x - b.x).abs() <= 1 && (a.y - b.y).abs() <= 1);
         same.then_some((start, mid, end))
@@ -1334,8 +1368,10 @@ pub struct Via {
     pub id: String,
     pub net: String,
     pub at: Point,
-    pub drill: Um,
-    pub diameter: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub drill: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub diameter: Nm,
     pub from_layer: String,
     pub to_layer: String,
 }
@@ -1378,27 +1414,27 @@ pub enum FillMode {
 }
 
 // `ZONE_SETTINGS::ZONE_SETTINGS()`'s hardcoded defaults (`pcbnew/zone_settings.cpp`),
-// converted from KiCad's mm literals to this model's Um (micrometers).
-fn default_zone_clearance() -> Um {
-    500 // ZONE_CLEARANCE_MM = 0.5
+// converted from KiCad's mm literals to this model's Nm.
+fn default_zone_clearance() -> Nm {
+    500_000 // ZONE_CLEARANCE_MM = 0.5
 }
-fn default_zone_min_thickness() -> Um {
-    250 // ZONE_THICKNESS_MM = 0.25
+fn default_zone_min_thickness() -> Nm {
+    250_000 // ZONE_THICKNESS_MM = 0.25
 }
-fn default_thermal_gap() -> Um {
-    500 // ZONE_THERMAL_RELIEF_GAP_MM = 0.5
+fn default_thermal_gap() -> Nm {
+    500_000 // ZONE_THERMAL_RELIEF_GAP_MM = 0.5
 }
-fn default_thermal_spoke_width() -> Um {
-    500 // ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM = 0.5
+fn default_thermal_spoke_width() -> Nm {
+    500_000 // ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM = 0.5
 }
 fn default_min_island_area() -> i64 {
-    10_000_000 // 10 * IU_PER_MM^2, i.e. 10 mm^2, in um^2
+    10_000_000_000_000 // 10 * IU_PER_MM^2, i.e. 10 mm^2, in nm^2
 }
-fn default_hatch_thickness() -> Um {
-    1000 // max(min_thickness(250)*4, 1mm(1000))
+fn default_hatch_thickness() -> Nm {
+    1_000_000 // max(min_thickness(0.25 mm)*4, 1 mm)
 }
-fn default_hatch_gap() -> Um {
-    1500 // max(min_thickness(250)*6, 1.5mm(1500))
+fn default_hatch_gap() -> Nm {
+    1_500_000 // max(min_thickness(0.25 mm)*6, 1.5 mm)
 }
 fn default_hatch_smoothing_value() -> f64 {
     0.1
@@ -1477,16 +1513,20 @@ pub struct Zone {
     // (plus the outline/net/layer above) -- never stored as a second master.
     /// `m_ZoneClearance`.
     #[serde(default = "default_zone_clearance")]
-    pub clearance: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance: Nm,
     /// `m_ZoneMinThickness`.
     #[serde(default = "default_zone_min_thickness")]
-    pub min_thickness: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub min_thickness: Nm,
     /// `m_ThermalReliefGap`.
     #[serde(default = "default_thermal_gap")]
-    pub thermal_gap: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thermal_gap: Nm,
     /// `m_ThermalReliefSpokeWidth`.
     #[serde(default = "default_thermal_spoke_width")]
-    pub thermal_spoke_width: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thermal_spoke_width: Nm,
     /// `ZONE_SETTINGS::GetPadConnection()`.
     #[serde(default)]
     pub pad_connection: PadConnection,
@@ -1496,18 +1536,20 @@ pub struct Zone {
     /// `ZONE_SETTINGS::GetIslandRemovalMode()`.
     #[serde(default)]
     pub island_removal_mode: IslandRemovalMode,
-    /// `ZONE_SETTINGS::GetMinIslandArea()`, in um^2.
-    #[serde(default = "default_min_island_area")]
+    /// `ZONE_SETTINGS::GetMinIslandArea()`, in nm^2 (an area: a micrometre document's is read x1e6).
+    #[serde(default = "default_min_island_area", deserialize_with = "crate::units::de_area")]
     pub min_island_area: i64,
     /// `m_FillMode`.
     #[serde(default)]
     pub fill_mode: FillMode,
     /// `m_HatchThickness` (only meaningful when `fill_mode == HatchPattern`).
     #[serde(default = "default_hatch_thickness")]
-    pub hatch_thickness: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub hatch_thickness: Nm,
     /// `m_HatchGap`.
     #[serde(default = "default_hatch_gap")]
-    pub hatch_gap: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub hatch_gap: Nm,
     /// `m_HatchOrientation`, in millidegrees.
     #[serde(default)]
     pub hatch_orientation_mdeg: Millideg,
@@ -1586,9 +1628,10 @@ pub struct Zone {
     /// `ZONE::GetCornerSmoothingType()`.
     #[serde(default, skip_serializing_if = "ZoneSmoothing::is_none")]
     pub smoothing: ZoneSmoothing,
-    /// `ZONE::GetCornerRadius()`, µm; only meaningful with `smoothing`.
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub corner_radius: Um,
+    /// `ZONE::GetCornerRadius()`, nm; only meaningful with `smoothing`.
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(deserialize_with = "crate::units::de")]
+    pub corner_radius: Nm,
     /// The placement settings of a rule area (`ZONE::GetPlacementAreaEnabled`, `GetPlacementAreaSourceType`, `GetPlacementAreaSource`): the sheet, component class or group whose
     /// footprints the area stands for, which Repeat Layout reads (`pcbnew/tools/multichannel_tool.cpp`). Written as `(placement (enabled yes) (sheetname ".."))`. See
     /// [`crate::multichannel`]. Additive: absent in an older `design.json` reads as "no placement".
@@ -1756,7 +1799,8 @@ pub enum Shape {
         id: String,
         /// KiCad layer name ("F.SilkS", "Edge.Cuts", "F.Cu", ...).
         layer: String,
-        stroke_width: Um,
+        #[serde(deserialize_with = "crate::units::de")]
+        stroke_width: Nm,
         /// Meaningless for a segment (KiCad never fills a line); carried
         /// for schema uniformity across every `Shape` variant and ignored
         /// by the exporter for this one, same as `Arc`.
@@ -1769,7 +1813,8 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         layer: String,
-        stroke_width: Um,
+        #[serde(deserialize_with = "crate::units::de")]
+        stroke_width: Nm,
         #[serde(default)]
         filled: bool,
         start: Point,
@@ -1780,7 +1825,8 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         layer: String,
-        stroke_width: Um,
+        #[serde(deserialize_with = "crate::units::de")]
+        stroke_width: Nm,
         #[serde(default)]
         filled: bool,
         start: Point,
@@ -1790,7 +1836,8 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         layer: String,
-        stroke_width: Um,
+        #[serde(deserialize_with = "crate::units::de")]
+        stroke_width: Nm,
         #[serde(default)]
         filled: bool,
         /// A point on the circumference, KiCad's own way of storing the
@@ -1804,7 +1851,8 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         layer: String,
-        stroke_width: Um,
+        #[serde(deserialize_with = "crate::units::de")]
+        stroke_width: Nm,
         #[serde(default)]
         filled: bool,
         pts: Vec<Point>,
@@ -1822,7 +1870,8 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         layer: String,
-        stroke_width: Um,
+        #[serde(deserialize_with = "crate::units::de")]
+        stroke_width: Nm,
         /// Meaningless for an open curve (KiCad never fills one); carried for schema uniformity, same as `Segment`/`Arc`.
         #[serde(default)]
         filled: bool,
@@ -1857,14 +1906,14 @@ impl Shape {
         }
     }
     /// `PCB_SHAPE::SetWidth` (`STROKE_PARAMS`'s width -- see `set_layer`'s doc).
-    pub fn set_stroke_width(&mut self, width: Um) {
+    pub fn set_stroke_width(&mut self, width: Nm) {
         match self {
             Shape::Segment { stroke_width, .. } | Shape::Arc { stroke_width, .. } | Shape::Rect { stroke_width, .. } | Shape::Circle { stroke_width, .. } | Shape::Polygon { stroke_width, .. } | Shape::Bezier { stroke_width, .. } => {
                 *stroke_width = width
             }
         }
     }
-    pub fn stroke_width(&self) -> Um {
+    pub fn stroke_width(&self) -> Nm {
         match self {
             Shape::Segment { stroke_width, .. } | Shape::Arc { stroke_width, .. } | Shape::Rect { stroke_width, .. } | Shape::Circle { stroke_width, .. } | Shape::Polygon { stroke_width, .. } | Shape::Bezier { stroke_width, .. } => *stroke_width,
         }
@@ -1894,11 +1943,11 @@ impl Shape {
         }
     }
     /// A `Bezier`'s flattened polyline (`EDA_SHAPE::RebuildBezierToSegmentsPointsList`:
-    /// `BEZIER_POLY::GetPoly` at the board's `m_MaxError`, [`crate::bezier::BEZIER_MAX_ERROR_UM`]);
+    /// `BEZIER_POLY::GetPoly` at the board's `m_MaxError`, [`crate::bezier::BEZIER_MAX_ERROR_NM`]);
     /// `None` for every other kind.
     pub fn bezier_points(&self) -> Option<Vec<Point>> {
         match self {
-            Shape::Bezier { start, c1, c2, end, .. } => Some(crate::bezier::bezier_polyline(*start, *c1, *c2, *end, crate::bezier::BEZIER_MAX_ERROR_UM)),
+            Shape::Bezier { start, c1, c2, end, .. } => Some(crate::bezier::bezier_polyline(*start, *c1, *c2, *end, crate::bezier::BEZIER_MAX_ERROR_NM)),
             _ => None,
         }
     }
@@ -1906,7 +1955,7 @@ impl Shape {
     /// hand-drawn shape does; there is no single "position" field to set
     /// the way there is for a via or a text, since a shape's geometry is
     /// two or more points.
-    pub fn translate(&mut self, dx: Um, dy: Um) {
+    pub fn translate(&mut self, dx: Nm, dy: Nm) {
         let shift = |p: &mut Point| {
             p.x += dx;
             p.y += dy;
@@ -1982,9 +2031,11 @@ pub enum TextVAlign {
 pub struct FieldPlacement {
     /// `Reference`, `Value`, `Footprint`, `Datasheet`; a sheet's `Sheetname`, `Sheetfile`; a user field's own name.
     pub name: String,
-    /// The text's anchor, micrometres from the item's origin.
-    pub dx: Um,
-    pub dy: Um,
+    /// The text's anchor, nanometres from the item's origin.
+    #[serde(deserialize_with = "crate::units::de")]
+    pub dx: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub dy: Nm,
     /// The text's own angle before the item turns it: 0 (horizontal) or 90_000 (vertical).
     #[serde(default, skip_serializing_if = "is_zero_angle")]
     pub angle: Millideg,
@@ -1995,10 +2046,11 @@ pub struct FieldPlacement {
     /// Drawn on the sheet (a hidden field keeps its place for when it is shown).
     #[serde(default = "d_true_field", skip_serializing_if = "is_true_field")]
     pub visible: bool,
-    /// The text's size (its height and its width), micrometres: `EDA_TEXT::GetTextWidth`. 0 is KiCad's default for a field, 50 mil
+    /// The text's size (its height and its width), nanometres: `EDA_TEXT::GetTextWidth`. 0 is KiCad's default for a field, 50 mil
     /// (`DEFAULT_SIZE_TEXT`, 1.27 mm), which is what every field has until Field Properties sets another.
-    #[serde(default, skip_serializing_if = "is_zero_um")]
-    pub size_um: Um,
+    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
     /// `EDA_TEXT::IsBold` / `IsItalic`: the pen is a fifth of the size instead of an eighth, the strokes lean.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bold: bool,
@@ -2015,21 +2067,21 @@ pub struct FieldPlacement {
 impl FieldPlacement {
     /// A visible field named `name` at its owner's origin, horizontal, centred, in the default size.
     pub fn at_origin(name: &str) -> FieldPlacement {
-        FieldPlacement { name: name.to_string(), dx: 0, dy: 0, angle: 0, h: TextJustify::Center, v: TextVAlign::Center, visible: true, size_um: 0, bold: false, italic: false, name_shown: false, no_autoplace: false }
+        FieldPlacement { name: name.to_string(), dx: 0, dy: 0, angle: 0, h: TextJustify::Center, v: TextVAlign::Center, visible: true, size_nm: 0, bold: false, italic: false, name_shown: false, no_autoplace: false }
     }
 
-    /// The size the text is set in, micrometres (the default when none was set).
-    pub fn text_size_um(&self) -> Um {
-        if self.size_um > 0 {
-            self.size_um
+    /// The size the text is set in, nanometres (the default when none was set).
+    pub fn text_size_nm(&self) -> Nm {
+        if self.size_nm > 0 {
+            self.size_nm
         } else {
-            DEFAULT_FIELD_SIZE_UM
+            DEFAULT_FIELD_SIZE_NM
         }
     }
 }
 
 /// `DEFAULT_SIZE_TEXT` (50 mils): the size of a field, a label and a text until another is set.
-pub const DEFAULT_FIELD_SIZE_UM: Um = 1_270;
+pub const DEFAULT_FIELD_SIZE_NM: Nm = 1_270_000;
 
 fn d_true_field() -> bool {
     true
@@ -2083,11 +2135,13 @@ pub struct Text {
     pub angle: Millideg,
     /// KiCad layer name ("F.SilkS", "F.Fab", ...).
     pub layer: String,
-    /// Font size, µm, applied equally to height and width (every text this
+    /// Font size, nm, applied equally to height and width (every text this
     /// model produces is drawn at a square aspect, like the schematic
     /// exporter's ref/value labels).
-    pub size_um: Um,
-    pub stroke_width: Um,
+    #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub stroke_width: Nm,
     #[serde(default)]
     pub justify: TextJustify,
     /// Read from the back of the board, KiCad's `justify mirror`.
@@ -2201,18 +2255,24 @@ pub struct Dimension {
     /// `GetTextAngle()` from the crossbar/knee angle on every `Update()`.
     #[serde(default)]
     pub text_angle: Millideg,
-    pub text_size_um: Um,
-    pub stroke_width: Um,
-    pub arrow_length: Um,
-    pub extension_offset: Um,
-    pub extension_height: Um,
+    #[serde(alias = "text_size_um", deserialize_with = "crate::units::de")]
+    pub text_size_nm: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub stroke_width: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub arrow_length: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub extension_offset: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub extension_height: Nm,
     pub arrow_direction: ArrowDirection,
-    /// `EDA_TEXT::GetTextThickness()` of the dimension's text, µm: the pen the label is
+    /// `EDA_TEXT::GetTextThickness()` of the dimension's text, nm: the pen the label is
     /// drawn with, which the text-dimension DRC checks read. `None` = 15 % of
-    /// `text_size_um`, KiCad's own pen for its default 1 mm label. Additive: absent in an
+    /// `text_size_nm`, KiCad's own pen for its default 1 mm label. Additive: absent in an
     /// older `design.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text_thickness_um: Option<Um>,
+    #[serde(alias = "text_thickness_um", deserialize_with = "crate::units::de")]
+    pub text_thickness_nm: Option<Nm>,
 }
 
 impl Dimension {
@@ -2229,17 +2289,27 @@ pub enum DimensionKind {
     /// `PCB_DIM_ALIGNED`: a crossbar parallel to `end - start`, offset
     /// perpendicular by `height` (signed -- which side of the feature
     /// line the crossbar falls on).
-    Aligned { height: Um },
+    Aligned {
+        #[serde(deserialize_with = "crate::units::de")]
+        height: Nm,
+    },
     /// `PCB_DIM_ORTHOGONAL`: like `Aligned`, but the crossbar is locked
     /// horizontal or vertical and only that axis of `end - start` is
     /// measured, with a second, independent extension line compensating
     /// for `end` not actually lying on the (axis-locked) crossbar.
-    Orthogonal { height: Um, horizontal: bool },
+    Orthogonal {
+        #[serde(deserialize_with = "crate::units::de")]
+        height: Nm,
+        horizontal: bool,
+    },
     /// `PCB_DIM_RADIAL`: `start` is the circle/arc centre (also where a
     /// small fixed-size `+` mark is drawn, `PCB_DIM_RADIAL::updateGeometry`'s
     /// own `centerArm` cross), `end` a point on it; a leader runs outward
     /// from `end` by `leader_length` to a knee, then on to the text.
-    Radial { leader_length: Um },
+    Radial {
+        #[serde(deserialize_with = "crate::units::de")]
+        leader_length: Nm,
+    },
     /// `PCB_DIM_LEADER`: a line from `start` (arrow tip) to `end` (knee),
     /// then on to the text. No text-border styling (rect/circle around
     /// the text) -- see PARITY-pcb.md section 18.
@@ -2301,14 +2371,19 @@ pub struct DimensionSettings {
     pub suppress_trailing_zeros: bool,
     pub text_position: DimensionTextPosition,
     pub keep_text_aligned: bool,
-    pub text_size_um: Um,
-    pub stroke_width: Um,
-    pub arrow_length: Um,
-    pub extension_offset: Um,
+    #[serde(alias = "text_size_um", deserialize_with = "crate::units::de")]
+    pub text_size_nm: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub stroke_width: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub arrow_length: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub extension_offset: Nm,
     /// `PCB_DIM_ALIGNED`'s own constructor default (`m_arrowLength *
     /// sin(27.5deg)`) rather than a `BOARD_DESIGN_SETTINGS` field -- source
     /// has no separate board-wide setting for this either.
-    pub extension_height: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub extension_height: Nm,
 }
 
 impl Default for DimensionSettings {
@@ -2316,12 +2391,12 @@ impl Default for DimensionSettings {
     /// defaults (`board_design_settings.cpp`): precision X_XXXX (4
     /// decimals here, this struct's flat scale), units automatic, no unit
     /// suffix, suppress trailing zeroes, text outside, kept aligned,
-    /// 50 mil arrow length, 0.5 mm extension offset. `text_size_um`/
+    /// 50 mil arrow length, 0.5 mm extension offset. `text_size_nm`/
     /// `stroke_width` fall back to this model's own general text/line
     /// defaults (source pulls these from the generic per-layer text/line
     /// style, not a dimension-specific constant).
     fn default() -> Self {
-        let arrow_length = 1270; // 50 mil
+        let arrow_length = 1_270_000; // 50 mil
         DimensionSettings {
             units: DimensionUnits::Automatic,
             units_format: DimensionUnitsFormat::NoSuffix,
@@ -2329,11 +2404,11 @@ impl Default for DimensionSettings {
             suppress_trailing_zeros: true,
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
-            text_size_um: 1000,
-            stroke_width: 200,
+            text_size_nm: 1_000_000,
+            stroke_width: 200_000,
             arrow_length,
-            extension_offset: 500, // 0.5mm
-            extension_height: (arrow_length as f64 * 27.5f64.to_radians().sin()).round() as Um,
+            extension_offset: 500_000, // 0.5mm
+            extension_height: (arrow_length as f64 * 27.5f64.to_radians().sin()).round() as Nm,
         }
     }
 }
@@ -2472,7 +2547,8 @@ pub struct DrawingsSection {
     /// of one width keeps the width: kicad-cli measures edge clearances from the drawn line, and plots it at that width). `None` is the width KiCad gives a line that
     /// says none. Additive: absent in an older `design.json` reads as `None`. Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outline_width_um: Option<Um>,
+    #[serde(alias = "outline_width_um", deserialize_with = "crate::units::de")]
+    pub outline_width_nm: Option<Nm>,
     /// What a board text has beyond [`Text`]'s fields (a glyph width that is not the height, a vertical justification, bold, italic, a knockout, the line spacing,
     /// a font face, an automatic stroke width), one entry per text that has any, keyed by the text's id -- see [`crate::board_text`]. Additive: absent in an older
     /// `design.json` reads as "every text is a square-sized, vertically centred, regular line". Lives here for the reason `rules` does.
@@ -2558,7 +2634,8 @@ pub struct PadMaskInfo {
     /// `(solder_mask_margin ..)`: the pad's own margin override
     /// (`PADSTACK::SolderMaskMargin`); `None` inherits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub solder_mask_margin: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_mask_margin: Option<Nm>,
     /// `(tenting ..)` per outer side (`PADSTACK::*OuterLayers().has_solder_mask`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tent_front: Option<bool>,
@@ -2592,7 +2669,8 @@ pub struct PadMaskInfo {
     /// zone's for this pad (`DRC_ENGINE::EvalRules`: a local override wins over everything but the board minimum). `None`
     /// inherits the footprint's, then the rules'. Pre-9.0 files: 0 meant "inherit".
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clearance: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance: Option<Nm>,
     /// `(zone_connect N)` (`PAD::GetLocalZoneConnection`): how a zone connects to this pad, overriding the footprint's
     /// and then the zone's own `pad_connection`. `None` is `INHERITED`. Read by the zone filler
     /// (`ZONE_FILLER::knockoutThermalReliefs` -> `DRC_ENGINE::EvalZoneConnection`).
@@ -2600,10 +2678,12 @@ pub struct PadMaskInfo {
     pub zone_connection: Option<PadConnection>,
     /// `(thermal_gap g)` (`PAD::GetLocalThermalGapOverride`): the pad's own thermal relief gap; `None` inherits the zone's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thermal_gap: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thermal_gap: Option<Nm>,
     /// `(thermal_bridge_width w)` (`PAD::GetLocalThermalSpokeWidthOverride`): the pad's own spoke width; `None` inherits the zone's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thermal_spoke_width: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thermal_spoke_width: Option<Nm>,
     /// `(thermal_bridge_angle a)` (`PAD::GetThermalSpokeAngle`), millidegrees in KiCad's own sign convention (as in the
     /// file). `None` is the shape's default: 90 degrees for an oval or (rounded) rectangle, 45 for a circle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2615,15 +2695,15 @@ pub struct PadMaskInfo {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PadZoneFacts {
     /// The pad's own `(clearance ..)`; `None` inherits the footprint's. See [`PadZoneFacts::clearance`].
-    pub pad_clearance: Option<Um>,
+    pub pad_clearance: Option<Nm>,
     /// The footprint's `(clearance ..)`.
-    pub footprint_clearance: Option<Um>,
+    pub footprint_clearance: Option<Nm>,
     /// The pad's own `(zone_connect ..)`; `None` inherits.
     pub connection: Option<PadConnection>,
     /// The footprint's `(zone_connect ..)`; `None` inherits (consulted when the pad inherits).
     pub footprint_connection: Option<PadConnection>,
-    pub thermal_gap: Option<Um>,
-    pub thermal_spoke_width: Option<Um>,
+    pub thermal_gap: Option<Nm>,
+    pub thermal_spoke_width: Option<Nm>,
     /// Millidegrees, KiCad's sign convention; `None` is the shape's default.
     pub thermal_spoke_angle_mdeg: Option<Millideg>,
 }
@@ -2635,13 +2715,16 @@ pub struct PadZoneFacts {
 pub struct PadZoneOverride {
     pub number: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clearance: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance: Option<Nm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thermal_gap: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thermal_gap: Option<Nm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thermal_spoke_width: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thermal_spoke_width: Option<Nm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thermal_spoke_angle_mdeg: Option<Millideg>,
 }
@@ -2653,7 +2736,8 @@ pub struct FootprintZoneFacts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clearance: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance: Option<Nm>,
 }
 
 /// Board-level zone-connection edits of one placed footprint (`Cmd::SetFootprintZoneConnection`, `Cmd::SetPadZoneOverrides`).
@@ -2759,7 +2843,7 @@ impl Design {
 
 impl PadZoneFacts {
     /// `PAD::GetClearanceOverrides`: the pad's own clearance, else its footprint's; `None` when neither sets one.
-    pub fn clearance(&self) -> Option<Um> {
+    pub fn clearance(&self) -> Option<Nm> {
         self.pad_clearance.or(self.footprint_clearance)
     }
 }
@@ -2771,7 +2855,8 @@ pub struct FootprintGraphic {
     pub shape: Shape,
     /// `PCB_SHAPE::m_solderMaskMargin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub solder_mask_margin: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_mask_margin: Option<Nm>,
     /// `Some(number)` when this is really a pad that has no copper layer
     /// (a mask-only aperture pad), which KiCad models as `PCB_PAD_T`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2793,7 +2878,8 @@ pub struct FootprintHole {
     pub pad: crate::footprint::Pad,
     /// The pad's own `(clearance ..)` (`PAD::GetLocalClearance`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clearance: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance: Option<Nm>,
 }
 
 /// See [`DrawingsSection::footprint_extras`].
@@ -2808,7 +2894,8 @@ pub struct FootprintExtra {
     pub uuid: Option<String>,
     /// Footprint-level `(solder_mask_margin ..)` (`GetLocalSolderMaskMargin`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub solder_mask_margin: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub solder_mask_margin: Option<Nm>,
     /// `(attr .. allow_soldermask_bridges)`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_soldermask_bridges: bool,
@@ -2818,7 +2905,8 @@ pub struct FootprintExtra {
     /// `(clearance C)` on the footprint (`FOOTPRINT::GetLocalClearance`): the copper clearance of every pad that does not
     /// set its own. `None` inherits the rules'.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clearance: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance: Option<Nm>,
     /// `(zone_connect N)` on the footprint (`FOOTPRINT::GetLocalZoneConnection`): how zones connect to every pad that
     /// does not set its own. `None` is `INHERITED` (the zone's `pad_connection` applies).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2901,9 +2989,11 @@ pub struct FootprintText {
     /// The file's absolute angle, KiCad's sign convention (counter-clockwise
     /// positive), millidegrees.
     pub angle_file_mdeg: i64,
-    pub size: (Um, Um),
+    #[serde(deserialize_with = "crate::units::de")]
+    pub size: (Nm, Nm),
     /// `(thickness ..)` as written (0 = unset).
-    pub thickness: Um,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thickness: Nm,
     /// `-1` left, `0` centre, `1` right.
     pub halign: i8,
     /// `-1` top, `0` centre, `1` bottom.
@@ -3125,7 +3215,8 @@ pub struct LibraryPad {
     pub id: String,
     pub number: String,
     pub at: Point,
-    pub size: (Um, Um),
+    #[serde(deserialize_with = "crate::units::de")]
+    pub size: (Nm, Nm),
     /// `PAD::SetOffset` -- the copper shape's center, relative to `at`
     /// (the pad's drill/anchor position). `{0,0}` for the overwhelming
     /// majority of pads; non-zero mainly shows up on an SMD pad shaped to
@@ -3137,9 +3228,11 @@ pub struct LibraryPad {
     #[serde(default)]
     pub kind: crate::footprint::PadKind,
     #[serde(default)]
-    pub drill: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub drill: Option<Nm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drill_slot: Option<(Um, Um)>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub drill_slot: Option<(Nm, Nm)>,
     #[serde(default)]
     pub rot: Millideg,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3147,7 +3240,8 @@ pub struct LibraryPad {
     /// `PAD::SetTrapezoidDeltaSize` -- (dx, dy), KiCad's own convention of
     /// only ever one axis non-zero (the dialog's axis radio picks which).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trapezoid_delta: Option<(Um, Um)>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub trapezoid_delta: Option<(Nm, Nm)>,
     /// `PAD::SetChamferRectRatio` -- fraction of the shorter side, same
     /// shape as `roundrect_ratio`. Only meaningful for `ChamferedRect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3167,13 +3261,16 @@ pub struct LibraryPad {
     pub layers: Vec<String>,
     /// `PAD::GetLocalClearance()` -- `None` = inherit the board/footprint default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clearance_override: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub clearance_override: Option<Nm>,
     /// `PAD::GetLocalThermalGapOverride()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thermal_gap_override: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thermal_gap_override: Option<Nm>,
     /// `PAD::GetLocalThermalSpokeWidthOverride()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thermal_spoke_width_override: Option<Um>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub thermal_spoke_width_override: Option<Nm>,
     /// `PAD::GetLocalZoneConnection()` -- the Pad Properties dialog's "Pad connection" choice; `None` is `INHERITED`
     /// ("From parent footprint").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3356,7 +3453,7 @@ pub struct PadEditMode {
 
 /// A footprint definition as the Footprint Editor shows/edits it --
 /// GAPS.md #8's "project footprint library section in the IR". Local
-/// frame: micrometers, origin at `anchor` (KiCad's "Place Footprint
+/// frame: nanometres, origin at `anchor` (KiCad's "Place Footprint
 /// Anchor" point -- `{0,0}` until that tool moves it), +x right, +y down,
 /// un-rotated, always as seen from the top side -- same convention
 /// `crate::footprint` already documents for the engine's own `Footprint`/
@@ -3415,7 +3512,8 @@ pub struct LibraryFootprint {
     /// Courtyard half-extents -- same field/meaning as `crate::footprint::
     /// Footprint::courtyard` (`None` derives one from the pad bbox).
     #[serde(default)]
-    pub courtyard: Option<(Um, Um)>,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub courtyard: Option<(Nm, Nm)>,
     /// `(model "...")` 3D model path -- same field/meaning as
     /// `crate::footprint::Footprint::model`: the first model's path when
     /// [`LibraryFootprint::models3d`] is not empty, else the one model of an
@@ -4478,6 +4576,30 @@ pub fn next_item_id(prefix: &str, seed: &str, existing: &std::collections::BTree
     }
 }
 
+impl Serialize for Design {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        Design::serialize(self, s)
+    }
+}
+
+/// Reads a design file of any version: one older than [`SCHEMA_VERSION`] (micrometres) has every length multiplied by 1000 as it is read -- each length
+/// field reads through `crate::units::de`, which applies the scale `crate::units::read_versioned` sets for the document -- so it is in nanometres, once,
+/// and comes back stamped with the current version. Every reader of a design (the board's `design.json`, the `.history` snapshots, a pipeline's output)
+/// goes through this, so each file is converted on its own stamp and an undo across the change never mixes units.
+impl<'de> crate::units::Versioned<'de> for Design {
+    fn derived<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Design::deserialize(d)
+    }
+}
+
+impl<'de> Deserialize<'de> for Design {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let (mut design, _): (Design, _) = crate::units::read_versioned(d, SCHEMA_VERSION, true)?;
+        design.schema = SCHEMA_VERSION;
+        Ok(design)
+    }
+}
+
 impl Design {
     /// Canonical bytes: sorted vectors, then compact JSON. Hash these.
     pub fn canonical_bytes(&self) -> serde_json::Result<Vec<u8>> {
@@ -4523,7 +4645,7 @@ mod tests {
 
     fn sample() -> Design {
         Design {
-            schema: 1,
+            schema: crate::ir::SCHEMA_VERSION,
             provenance: Provenance {
                 engine_version: "0.1.0".into(),
                 intent_hash: "b3a9".into(),
@@ -4532,10 +4654,10 @@ mod tests {
             },
             schematic: Some(SchematicSection {
                 symbols: vec![
-                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800_000, y: 63_500_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100_000, y: 63_500_000 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 ],
-                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }], bus: false }],
+                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000_000, y: 60_000_000 }, Point { x: 48_000_000, y: 60_000_000 }], bus: false }],
                 labels: vec![],
                 texts: vec![],
                 power_symbols: vec![],
@@ -4590,11 +4712,11 @@ mod tests {
 
     // -------------------------------------------------------- item ids
 
-    fn track(net: &str, layer: &str, pts: &[(Um, Um)]) -> Track {
-        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
+    fn track(net: &str, layer: &str, pts: &[(Nm, Nm)]) -> Track {
+        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: 200_000, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
     }
-    fn via(net: &str, x: Um, y: Um) -> Via {
-        Via { id: String::new(), net: net.into(), at: Point { x, y }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+    fn via(net: &str, x: Nm, y: Nm) -> Via {
+        Via { id: String::new(), net: net.into(), at: Point { x, y }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     /// A `design.json` written before ids existed: no `id` key on any
@@ -4631,7 +4753,7 @@ mod tests {
     /// save -> load round trip is stable.
     #[test]
     fn id_assignment_is_deterministic_and_stable_on_resave() {
-        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1_000_000)])], vias: vec![via("GND", 500_000, 500_000)], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
 
         let mut a = build();
         a.assign_missing_ids();
@@ -4651,7 +4773,7 @@ mod tests {
     /// same tracks must not change which id lands on which track.
     #[test]
     fn ids_do_not_depend_on_array_order() {
-        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1_000_000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt1.assign_missing_ids();
         rt2.assign_missing_ids();
@@ -4664,7 +4786,7 @@ mod tests {
     /// verbatim) must still get two distinct ids.
     #[test]
     fn duplicate_content_gets_distinct_ids() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         assert_ne!(rt.tracks[0].id, rt.tracks[1].id);
     }
@@ -4674,18 +4796,18 @@ mod tests {
     /// assigned -- callers (the web UI, `DeleteTrack`) hold onto it.
     #[test]
     fn changing_width_after_assignment_does_not_move_the_id() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         let id = rt.tracks[0].id.clone();
-        rt.tracks[0].width = 500; // what `SetTrackWidth` does
+        rt.tracks[0].width = 500_000; // what `SetTrackWidth` does
         assert_eq!(rt.tracks[0].id, id);
     }
 
     #[test]
     fn shape_and_text_ids_backfill_the_same_way() {
         let mut dr = DrawingsSection {
-            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } }],
-            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } }],
+            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         };
         dr.assign_missing_ids();
@@ -4697,20 +4819,20 @@ mod tests {
 
     #[test]
     fn shape_translate_moves_every_point() {
-        let mut s = Shape::Rect { id: "shp_1".into(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 100, y: 100 } };
-        s.translate(10, 20);
-        assert_eq!(s.points(), vec![Point { x: 10, y: 20 }, Point { x: 110, y: 120 }]);
+        let mut s = Shape::Rect { id: "shp_1".into(), layer: "F.SilkS".into(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 100_000, y: 100_000 } };
+        s.translate(10_000, 20_000);
+        assert_eq!(s.points(), vec![Point { x: 10_000, y: 20_000 }, Point { x: 110_000, y: 120_000 }]);
     }
 
     // -------------------------------------------------- footprint library
 
-    fn lib_pad(number: &str, x: Um, y: Um) -> LibraryPad {
+    fn lib_pad(number: &str, x: Nm, y: Nm) -> LibraryPad {
         LibraryPad {
             id: String::new(),
             number: number.into(),
             at: Point { x, y },
             offset: Point::default(),
-            size: (1000, 1000),
+            size: (1_000_000, 1_000_000),
             shape: LibraryPadShape::RoundRect,
             kind: crate::footprint::PadKind::Smd,
             drill: None,
@@ -4735,7 +4857,7 @@ mod tests {
     #[test]
     fn footprint_library_pad_ids_are_assigned_and_stable() {
         let mut fp = LibraryFootprint::new_empty("Test:Lib");
-        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1000, 0)];
+        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1_000_000, 0)];
         fp.assign_missing_ids();
         assert!(fp.pads.iter().all(|p| !p.id.is_empty()), "{:?}", fp.pads);
         assert_ne!(fp.pads[0].id, fp.pads[1].id);
@@ -4751,13 +4873,13 @@ mod tests {
         assert_eq!(empty.next_pad_number(), "1");
 
         let mut fp = LibraryFootprint::new_empty("Test:Lib");
-        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1000, 0)];
+        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1_000_000, 0)];
         assert_eq!(fp.next_pad_number(), "3");
 
         // `GetNextPadNumber( "3" )` with "3" free is "3" (it was "5": the integer was counted up before it was tried); with "3" taken, the next free one
-        fp.pads.push(lib_pad("4", 2000, 0));
+        fp.pads.push(lib_pad("4", 2_000_000, 0));
         assert_eq!(fp.next_pad_number_after("3"), "3");
-        fp.pads.push(lib_pad("3", 3000, 0));
+        fp.pads.push(lib_pad("3", 3_000_000, 0));
         assert_eq!(fp.next_pad_number_after("3"), "5");
         // the last number "1" of a footprint just loaded fills the first gap, as KiCad's pad tool does
         fp.pads.retain(|p| p.number != "1");
@@ -4769,16 +4891,16 @@ mod tests {
 
     #[test]
     fn library_pad_round_trips_through_engine_pad_for_simple_shapes() {
-        let p = lib_pad("1", 500, -500);
+        let p = lib_pad("1", 500_000, -500_000);
         let engine = p.to_engine_pad();
         assert_eq!(engine.number, "1");
-        assert_eq!(engine.at, (500, -500));
+        assert_eq!(engine.at, (500_000, -500_000));
         assert_eq!(engine.shape, crate::footprint::PadShape::RoundRect);
         assert_eq!(engine.roundrect_ratio, Some(0.25));
 
         let back = LibraryPad::from_engine_pad(&engine);
         assert_eq!(back.number, engine.number);
-        assert_eq!(back.at, Point { x: 500, y: -500 });
+        assert_eq!(back.at, Point { x: 500_000, y: -500_000 });
         assert_eq!(back.shape, LibraryPadShape::RoundRect);
         assert!(back.id.is_empty(), "from_engine_pad must leave id for the caller to assign");
     }
@@ -4789,11 +4911,11 @@ mod tests {
         let mut trap = lib_pad("1", 0, 0);
         trap.shape = LibraryPadShape::Trapezoid;
         trap.roundrect_ratio = None;
-        trap.trapezoid_delta = Some((200, 0));
-        trap.offset = Point { x: 100, y: -50 };
+        trap.trapezoid_delta = Some((200_000, 0));
+        trap.offset = Point { x: 100_000, y: -50_000 };
         let engine = trap.to_engine_pad();
-        assert_eq!((engine.shape, engine.ext.trapezoid_delta, engine.ext.offset), (PadShape::Trapezoid, Some((200, 0)), Some((100, -50))));
-        assert_eq!(LibraryPad::from_engine_pad(&engine).trapezoid_delta, Some((200, 0)));
+        assert_eq!((engine.shape, engine.ext.trapezoid_delta, engine.ext.offset), (PadShape::Trapezoid, Some((200_000, 0)), Some((100_000, -50_000))));
+        assert_eq!(LibraryPad::from_engine_pad(&engine).trapezoid_delta, Some((200_000, 0)));
 
         let mut chf = lib_pad("1", 0, 0);
         chf.shape = LibraryPadShape::ChamferedRect;
@@ -4807,7 +4929,7 @@ mod tests {
         let mut custom = lib_pad("1", 0, 0);
         custom.shape = LibraryPadShape::Custom;
         custom.roundrect_ratio = None;
-        let prim = PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } }, proxy: false };
+        let prim = PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } }, proxy: false };
         custom.custom = Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![prim] });
         let engine = custom.to_engine_pad();
         assert_eq!(engine.shape, PadShape::Custom);

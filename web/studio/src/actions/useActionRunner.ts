@@ -118,7 +118,7 @@ function canvasRect(): DOMRect | null {
 }
 
 /** `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec`'s ("W"/"Shift+W") preset ladder -- see those two action registrations below for why this is a fixed list rather than a per-board setting. */
-const WIDTH_PRESETS_UM = [100, 150, 200, 250, 300, 400, 500, 600, 800, 1000];
+const WIDTH_PRESETS_NM = [100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 800_000, 1_000_000];
 
 /** common/tool/common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the exact per-step factor for zoomIn/zoomOut (F1/F2) and zoomInCenter/zoomOutCenter alike (doZoomInOut/doZoomInOutCenter share it). Source then snaps the result to the nearest entry in a separate zoom% preset list before applying it -- not ported (that preset list lives in per-app window settings this project has no equivalent of yet), so this applies the 1.3 factor directly. */
 const ZOOM_STEP_FACTOR = 1.3;
@@ -177,17 +177,17 @@ export function useActionRunner() {
       // `RequestSelection` with the tool's scan types: a pin is no item of the tools that move, turn or edit, so a selection of pins is trimmed to nothing (a selection that was not empty is
       // not replaced by what is under the cursor); `requestPins` asks for the pins.
       if (state.selection.size > 0) return state.tab === "schematic" ? [...state.selection].filter((id) => !isPinItemId(id)) : [...state.selection];
-      if (!state.cursorUm) return [];
+      if (!state.cursorNm) return [];
       if (state.tab === "schematic") {
         const sch = state.schematic;
         if (!sch) return [];
         // `itemPassesFilter`: an item the selection filter keeps out (a category that is off, a locked item without "Locked items") cannot be picked up by the cursor.
-        const hit = pickItem(sch, state.cursorUm.x, state.cursorUm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "none");
+        const hit = pickItem(sch, state.cursorNm.x, state.cursorNm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "none");
         return hit ? [hit] : [];
       }
       if (state.tab !== "pcb" || !state.board) return [];
-      const toleranceUm = Math.max(150, 6 / state.view.scale);
-      const cands = pickSelectionCandidates(state.board, state.cursorUm.x, state.cursorUm.y, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
+      const toleranceNm = Math.max(150_000, 6 / state.view.scale);
+      const cands = pickSelectionCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
       const hit = cands[0];
       // `FilterCollectorForFreePads`: a pad under the cursor stands for its footprint -- the edit tools work on that.
       return hit ? [hit.kind === "pad" ? (padParent(state.board, hit.id) ?? hit.id) : hit.id] : [];
@@ -196,8 +196,8 @@ export function useActionRunner() {
     const requestPins = (): string[] => {
       if (state.selection.size > 0) return [...state.selection].filter(isPinItemId);
       const sch = state.schematic;
-      if (state.tab !== "schematic" || !sch || !state.cursorUm) return [];
-      const hit = pickItem(sch, state.cursorUm.x, state.cursorUm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "only");
+      if (state.tab !== "schematic" || !sch || !state.cursorNm) return [];
+      const hit = pickItem(sch, state.cursorNm.x, state.cursorNm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "only");
       return hit ? [hit] : [];
     };
     /** RequestSelection for dialog/tool hand-offs that read `state.selection`: adopt the hovered item as the selection first. */
@@ -249,13 +249,13 @@ export function useActionRunner() {
       // A PCB move carries the selection the tool works on (locked items out) and turns and flips it about where it was picked up. (A held
       // schematic selection is `tryHeldTurn`'s: it has its own preview kinds, `sch_move` and `sch_drag`.)
       const kind = state.movePreview?.kind ?? "pcb";
-      let pivots: Pick<NonNullable<typeof state.movePreview>, "pivotUm" | "flipPivotUm"> = {};
+      let pivots: Pick<NonNullable<typeof state.movePreview>, "pivotNm" | "flipPivotNm"> = {};
       if (kind === "pcb" && state.board && !state.movePreview) {
         refs = editableSelection(state.board, refs).ids;
         if (refs.length === 0) return false;
-        pivots = { pivotUm: rotationPivot(state.board, refs, modificationSnapFor(state)) ?? undefined, flipPivotUm: flipPivot(state.board, refs) ?? undefined };
+        pivots = { pivotNm: rotationPivot(state.board, refs, modificationSnapFor(state)) ?? undefined, flipPivotNm: flipPivot(state.board, refs) ?? undefined };
       }
-      const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0, ...pivots };
+      const base = state.movePreview ?? { refs, kind, dxNm: 0, dyNm: 0, ...pivots };
       // Each press turns by the preferences' rotation step (`m_RotationAngle`); on a board viewed flipped the turn runs the other way (`EDIT_TOOL::Rotate`:
       // `if( IsFlippedX() ) rotateAngle = -rotateAngle`). The callers pass 1 for R and 3 (a quarter turn back) for Shift+R.
       const press = (addQuarterTurns === 3 ? -1 : addQuarterTurns) * (state.tab === "pcb" && state.bcx.boardFlipped ? -1 : 1);
@@ -276,7 +276,7 @@ export function useActionRunner() {
       if (!held && !armed) return false;
       const refs = state.movePreview?.refs ?? [...state.selection];
       if (refs.length === 0) return false;
-      const base = held ? state.movePreview! : { refs, kind: state.activeTool === "drag" ? ("sch_drag" as const) : ("sch_move" as const), dxUm: 0, dyUm: 0, vertices: pickedVertices(state) };
+      const base = held ? state.movePreview! : { refs, kind: state.activeTool === "drag" ? ("sch_drag" as const) : ("sch_move" as const), dxNm: 0, dyNm: 0, vertices: pickedVertices(state) };
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, turns: [...(base.turns ?? []), turn] } });
       return true;
     };
@@ -348,7 +348,7 @@ export function useActionRunner() {
     // first-enabled-candidate search always lands on the right one.
     if (state.drawState?.kind === "route") {
       const draw = state.drawState;
-      const cursor = state.cursorUm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
+      const cursor = state.cursorNm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
       // Re-request the preview at the last known cursor after a backend
       // state change (via armed, a segment undone, width changed) that
       // doesn't itself move the cursor -- same reasoning as Canvas.tsx's
@@ -372,7 +372,7 @@ export function useActionRunner() {
           // `layerToggle` (router_tool.cpp): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts).
           const toLayer = otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer);
           const rules = state.board.board_rules;
-          routeToggleVia(!draw.placingVia, rules?.via_diameter ?? 600, rules?.via_drill ?? 300, toLayer).then(() => {
+          routeToggleVia(!draw.placingVia, rules?.via_diameter ?? 600_000, rules?.via_drill ?? 300_000, toLayer).then(() => {
             dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, placingVia: !draw.placingVia, pendingViaLayer: toLayer } });
             refreshPreview();
           });
@@ -387,11 +387,11 @@ export function useActionRunner() {
       // W / Shift+W: cycle the live track width through a small fixed
       // preset list -- this app has no per-board "preferred track widths"
       // setting the way real pcbnew's dialog does, so the preset is just a
-      // reasonable fixed ladder (see WIDTH_PRESETS_UM below).
+      // reasonable fixed ladder (see WIDTH_PRESETS_NM below).
       const cycleWidth = (dir: 1 | -1) => {
-        const i = WIDTH_PRESETS_UM.findIndex((w) => w >= draw.width);
+        const i = WIDTH_PRESETS_NM.findIndex((w) => w >= draw.width);
         // board_editor_control.cpp TrackWidthInc/Dec wrap at both ends.
-        const next = WIDTH_PRESETS_UM[wrapStep(i, WIDTH_PRESETS_UM.length, dir)]!;
+        const next = WIDTH_PRESETS_NM[wrapStep(i, WIDTH_PRESETS_NM.length, dir)]!;
         dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, width: next } });
         routeMove(cursor.x, cursor.y, undefined, next).then((preview) => {
           if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...draw, width: next }, preview) });
@@ -403,7 +403,7 @@ export function useActionRunner() {
       // Same shape as the route branch above (crates/pns/src/dp_placer.rs is the pair's placer): `V` places a pair of vias and the
       // route goes on from them on the other layer; no width cycling.
       const draw = state.drawState;
-      const cursor = state.cursorUm ?? { x: draw.ptsA[draw.ptsA.length - 1]?.[0] ?? 0, y: draw.ptsA[draw.ptsA.length - 1]?.[1] ?? 0 };
+      const cursor = state.cursorNm ?? { x: draw.ptsA[draw.ptsA.length - 1]?.[0] ?? 0, y: draw.ptsA[draw.ptsA.length - 1]?.[1] ?? 0 };
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
         pcbOnly(() => void finishDiffPairRoute(cursor.x, cursor.y, dispatch, api))
@@ -459,15 +459,15 @@ export function useActionRunner() {
     // measure) is already mid-flight (`state.drawState`), same as real
     // pcbnew's tool stack never overlapping two interactive placements.
     const startDragAtCursor = (freeAngle: boolean) => () => {
-      if (!state.board || !state.cursorUm || state.drawState) return;
-      const toleranceUm = Math.max(150, 6 / state.view.scale);
-      const onePixelUm = 1 / state.view.scale;
-      const hit = findDraggableAt(state.board, state.selection, state.cursorUm.x, state.cursorUm.y, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+      if (!state.board || !state.cursorNm || state.drawState) return;
+      const toleranceNm = Math.max(150_000, 6 / state.view.scale);
+      const onePixelNm = 1 / state.view.scale;
+      const hit = findDraggableAt(state.board, state.selection, state.cursorNm.x, state.cursorNm.y, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
       if (!hit) {
         dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
         return;
       }
-      void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings, dispatch, freeAngle);
+      void startInlineDrag(state.cursorNm.x, state.cursorNm.y, hit, state.board, state.routerSettings, dispatch, freeAngle);
     };
     m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
     // `routerInlineDrag` (EDIT_TOOL::invokeInlineRouter -> `RunAction( PCB_ACTIONS::routerInlineDrag, DM_ANY )`): the router's own drag entry point, the one `D` above ends in.
@@ -660,9 +660,9 @@ export function useActionRunner() {
     m.set(
       "pcbnew.EditorControl.highlightNet",
       pcbOnly(() => {
-        if (!state.board || !state.cursorUm) return;
-        const toleranceUm = 10 / (state.view.scale || 1);
-        const net = findNetAtCursor(state.board, state.cursorUm.x, state.cursorUm.y, toleranceUm);
+        if (!state.board || !state.cursorNm) return;
+        const toleranceNm = 10 / (state.view.scale || 1);
+        const net = findNetAtCursor(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm);
         dispatch({ type: "SET_NET_HIGHLIGHT", net: net && net === state.netHighlight ? null : net });
       })
     );
@@ -678,10 +678,10 @@ export function useActionRunner() {
       pcbOnly(() => {
         const board = state.board;
         if (!board) return;
-        const cursor = state.cursorUm;
+        const cursor = state.cursorNm;
         const candidates =
           cursor && connectedStartCount(board, state.selection) === 0
-            ? pickSelectionCandidates(board, cursor.x, cursor.y, Math.max(150, 6 / state.view.scale), 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)
+            ? pickSelectionCandidates(board, cursor.x, cursor.y, Math.max(150_000, 6 / state.view.scale), 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)
             : [];
         const plan = planSelectConnection(board, state.selection, candidates);
         if (plan) dispatch({ type: "SET_SELECTION", refs: plan.refs });
@@ -723,7 +723,7 @@ export function useActionRunner() {
     // now that tools/lib/actionsParser.js's #if __WXMAC__ parsing is
     // fixed) anchor at the cursor instead ("Zoom In/Out at Cursor",
     // doZoomToPreset's `SetScale(scale, cursorPosition)` when
-    // aCenterOnCursor is true). `state.cursorUm` is the last known cursor
+    // aCenterOnCursor is true). `state.cursorNm` is the last known cursor
     // world position (Canvas.tsx's pointer-move handler); converting it
     // back through the CURRENT view gives back the actual screen pixel it
     // was under, since nothing else can have moved the view in between a
@@ -736,7 +736,7 @@ export function useActionRunner() {
     const zoomAtCursor = viewTab((factor: number) => {
       const rect = canvasRect();
       if (!rect) return;
-      const [px, py] = state.cursorUm ? worldToScreen(curView(), state.cursorUm.x, state.cursorUm.y) : [rect.width / 2, rect.height / 2];
+      const [px, py] = state.cursorNm ? worldToScreen(curView(), state.cursorNm.x, state.cursorNm.y) : [rect.width / 2, rect.height / 2];
       setView(zoomAbout(curView(), px, py, factor));
     });
     m.set("common.Control.zoomInCenter", () => zoomAtCenter(ZOOM_STEP_FACTOR));
@@ -755,9 +755,9 @@ export function useActionRunner() {
       "common.Control.zoomCenter",
       viewTab(() => {
         const rect = canvasRect();
-        if (!rect || !state.cursorUm) return;
+        if (!rect || !state.cursorNm) return;
         const [centerWx, centerWy] = screenToWorld(curView(), rect.width / 2, rect.height / 2);
-        setView(panByWorldDelta(curView(), state.cursorUm.x - centerWx, state.cursorUm.y - centerWy));
+        setView(panByWorldDelta(curView(), state.cursorNm.x - centerWx, state.cursorNm.y - centerWy));
       })
     );
     // common_tools.cpp ZoomRedraw: `m_frame->HardRedraw()` -- forces a
@@ -772,11 +772,11 @@ export function useActionRunner() {
     // common_tools.cpp ResetLocalCoords: sets the status bar's dx/dy/dist
     // origin to wherever the cursor currently is (Space). Independent of
     // the move tool, active or not -- see state/store.tsx's
-    // localOriginUm doc.
+    // localOriginNm doc.
     m.set(
       "common.Control.resetLocalCoords",
       pcbOnly(() => {
-        if (state.cursorUm) dispatch({ type: "SET_LOCAL_ORIGIN", at: state.cursorUm });
+        if (state.cursorNm) dispatch({ type: "SET_LOCAL_ORIGIN", at: state.cursorNm });
       })
     );
 
@@ -807,7 +807,7 @@ export function useActionRunner() {
         }
         adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorNm });
       })
     );
     // pcb_selection_tool.cpp's IsCancel() handler (see state/store.tsx's
@@ -949,14 +949,14 @@ export function useActionRunner() {
 
     // pcbnew.EditorControl.trackWidthInc/Dec (W/Shift+W): BOARD_DESIGN_
     // SETTINGS' real behavior is dual-purpose -- step the board's own
-    // "current" width (state.currentTrackWidthUm, read by Canvas.tsx's
+    // "current" width (state.currentTrackWidthNm, read by Canvas.tsx's
     // route tool for the *next* track) AND, if anything is selected,
     // apply the new width to every selected track in the same keypress
     // (so W on an already-drawn track resizes it in place, not just the
     // next one you draw).
     const trackWidthList = (): number[] => {
       const board = state.board;
-      const base = board?.board_rules?.track_width ?? 250;
+      const base = board?.board_rules?.track_width ?? 250_000;
       return [base, ...(board?.routing?.track_width_presets ?? [])];
     };
     // board_editor_control.cpp TrackWidthInc/Dec + ViaSizeInc/Dec. Idle (no tool running) with ONLY
@@ -983,9 +983,9 @@ export function useActionRunner() {
         void api.cmdBatch(cmds);
         return;
       }
-      const cur = state.currentTrackWidthUm ?? list[0]!;
+      const cur = state.currentTrackWidthNm ?? list[0]!;
       const next = list[wrapStep(list.indexOf(cur), list.length, dir)]!;
-      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthUm: next });
+      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: next });
     };
     if (state.drawState?.kind !== "route") {
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleTrackWidth(1)));
@@ -995,7 +995,7 @@ export function useActionRunner() {
     // pcbnew.EditorControl.viaSizeInc/Dec ("\\"/unbound): same rules for `routing.via_presets`.
     const viaPresetList = (): { diameter: number; drill: number }[] => {
       const board = state.board;
-      const base = { diameter: board?.board_rules?.via_diameter ?? 600, drill: board?.board_rules?.via_drill ?? 300 };
+      const base = { diameter: board?.board_rules?.via_diameter ?? 600_000, drill: board?.board_rules?.via_drill ?? 300_000 };
       return [base, ...(board?.routing?.via_presets ?? [])];
     };
     const sameViaPreset = (a: { diameter: number; drill: number }, b: { diameter: number; drill: number }) => a.diameter === b.diameter && a.drill === b.drill;
@@ -1120,7 +1120,7 @@ export function useActionRunner() {
         if (refs.length === 0) return;
         adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool });
-        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorNm });
       });
     m.set("eeschema.InteractiveMove.move", armMove("move"));
     m.set("eeschema.InteractiveMove.drag", armMove("drag"));
@@ -1266,8 +1266,8 @@ export function useActionRunner() {
       pins: sch ? pinItems(sch).map((p) => ({ id: p.id, at: p.tip })) : [],
     });
     const cursorSnapped = (): [number, number] | null => {
-      if (!state.cursorUm) return null;
-      const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, state.schGridUm, { x: 0, y: 0 }, { ctrlOrCmd: false });
+      if (!state.cursorNm) return null;
+      const p = alignToGrid({ x: state.cursorNm.x, y: state.cursorNm.y }, state.schGridNm, { x: 0, y: 0 }, { ctrlOrCmd: false });
       return [p.x, p.y];
     };
 
@@ -1279,7 +1279,7 @@ export function useActionRunner() {
       schematicOnly(() => {
         const c = cursorSnapped();
         if (!sch || !c) return;
-        dispatch({ type: "SET_NET_HIGHLIGHT", net: netAtClick(sch, c[0], c[1], state.schematicView.scale, state.schGridUm) });
+        dispatch({ type: "SET_NET_HIGHLIGHT", net: netAtClick(sch, c[0], c[1], state.schematicView.scale, state.schGridNm) });
       })
     );
     // `~` -- SCH_EDITOR_CONTROL::ClearHighlight: highlightNet(toolMgr, CLEAR).
@@ -1389,7 +1389,7 @@ export function useActionRunner() {
             const b = itemBounds(sch, r);
             return b ? [{ id: r.id, box: [b.minX, b.minY, b.maxX, b.maxY] as const, locked: locked.has(r.id) }] : [];
           });
-        const moves = alignMoves(items, kind, state.cursorUm ? [state.cursorUm.x, state.cursorUm.y] : null).filter((mv) => mv.dx !== 0 || mv.dy !== 0);
+        const moves = alignMoves(items, kind, state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null).filter((mv) => mv.dx !== 0 || mv.dy !== 0);
         if (moves.length > 0) void api.cmd({ op: "sch_move", verb: "align", moves });
       });
     m.set("eeschema.Align.alignLeft", alignItems("left"));
@@ -1431,7 +1431,7 @@ export function useActionRunner() {
     const flippedView = state.tab === "pcb" && state.bcx.boardFlipped;
     const setActiveView = (view: typeof state.view) => dispatch(state.tab === "schematic" ? { type: "SET_SCHEMATIC_VIEW", view } : { type: "SET_VIEW", view });
     /** The grid CursorControl/PanControl step by: the board's grid, or the schematic's. */
-    const activeGridUm = () => (state.tab === "schematic" ? state.schGridUm : state.gridUm);
+    const activeGridNm = () => (state.tab === "schematic" ? state.schGridNm : state.gridNm);
 
     /**
      * Stand-in for `m_toolMgr->ProcessEvent(TC_MOUSE...)` / the warped pointer
@@ -1461,8 +1461,8 @@ export function useActionRunner() {
         const rect = canvasRect();
         const view = activeView();
         if (!rect || !(view.scale > 0)) return;
-        const from = state.cursorUm ?? viewCenter(view, rect.width, rect.height);
-        const to = cursorMove(from, activeGridUm(), dir, fast, flippedView);
+        const from = state.cursorNm ?? viewCenter(view, rect.width, rect.height);
+        const to = cursorMove(from, activeGridNm(), dir, fast, flippedView);
         const nextView = warpViewToInclude(view, rect.width, rect.height, to);
         dispatch({ type: "SET_CURSOR", at: to });
         if (nextView !== view) setActiveView(nextView);
@@ -1485,13 +1485,13 @@ export function useActionRunner() {
     m.set(
       "common.Control.cursorClick",
       canvasOnly(() => {
-        if (!state.cursorUm || (state.tab === "pcb" && state.drawState)) return;
-        emitCanvasPointer("pointerdown", state.cursorUm);
-        emitCanvasPointer("pointerup", state.cursorUm);
+        if (!state.cursorNm || (state.tab === "pcb" && state.drawState)) return;
+        emitCanvasPointer("pointerdown", state.cursorNm);
+        emitCanvasPointer("pointerup", state.cursorNm);
       })
     );
     const dblClickAtCursor = canvasOnly(() => {
-      if (state.cursorUm) emitCanvasPointer("dblclick", state.cursorUm);
+      if (state.cursorNm) emitCanvasPointer("dblclick", state.cursorNm);
     });
     m.set("common.Control.cursorDblClick", dblClickAtCursor);
     // ACTIONS::finishInteractive (End): ends whatever multi-point tool is in
@@ -1513,7 +1513,7 @@ export function useActionRunner() {
         const rect = canvasRect();
         const view = activeView();
         if (!rect || !(view.scale > 0)) return;
-        setActiveView(panByGrid(view, rect.width, rect.height, activeGridUm(), dir, flippedView));
+        setActiveView(panByGrid(view, rect.width, rect.height, activeGridNm(), dir, flippedView));
       });
     m.set("common.Control.panUp", panView("up"));
     m.set("common.Control.panDown", panView("down"));
@@ -1560,8 +1560,8 @@ export function useActionRunner() {
       m.set("common.Control.showDatasheet", () => {
         if (!sch) return;
         let symbol = [...state.selection].map((id) => sch.symbols.find((s) => s.id === id)).find((s) => s != null);
-        if (!symbol && state.cursorUm) {
-          const { x, y } = state.cursorUm;
+        if (!symbol && state.cursorNm) {
+          const { x, y } = state.cursorNm;
           symbol = sch.symbols.find((s) => {
             const b = symbolBounds(s, sch.lib_symbols);
             return x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY;
@@ -1584,8 +1584,8 @@ export function useActionRunner() {
       canvasOnly(() => {
         // `RequestSelection()`: the selection, or the item under the cursor when nothing is selected (a pin is one of the things it can pick)
         const hovered = (): string[] => {
-          if (!sch || !state.cursorUm) return [];
-          const hit = pickItem(sch, state.cursorUm.x, state.cursorUm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "first");
+          if (!sch || !state.cursorNm) return [];
+          const hit = pickItem(sch, state.cursorNm.x, state.cursorNm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "first");
           return hit ? [hit] : [];
         };
         const ids = state.selection.size > 0 || state.tab !== "schematic" ? [...state.selection] : hovered();
@@ -2021,8 +2021,8 @@ export function useActionRunner() {
       m.set(
         "pcbnew.Generator.genUpdateEdit",
         pcbOnly(async () => {
-          if (state.drawState?.kind !== "tune" || !state.cursorUm) return;
-          await updateEditPattern(dispatch, 1, state.cursorUm.x, state.cursorUm.y);
+          if (state.drawState?.kind !== "tune" || !state.cursorNm) return;
+          await updateEditPattern(dispatch, 1, state.cursorNm.x, state.cursorNm.y);
         })
       );
       m.set("pcbnew.Generator.genFinishEdit", pcbOnly(async () => void (await finishEditPattern(dispatch, api))));
@@ -2054,7 +2054,7 @@ export function useActionRunner() {
             return;
           }
           dispatch({ type: "SET_SELECTION", refs: [] });
-          const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
+          const width = state.currentTrackWidthNm ?? board.board_rules?.track_width ?? 250_000;
           const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
@@ -2100,7 +2100,7 @@ export function useActionRunner() {
         m.set(
           "pcbnew.InteractiveRouter.ContinueFromEnd",
           pcbOnly(async () => {
-            const end = live.pts[live.pts.length - 1] ?? (state.cursorUm ? ([state.cursorUm.x, state.cursorUm.y] as [number, number]) : null);
+            const end = live.pts[live.pts.length - 1] ?? (state.cursorNm ? ([state.cursorNm.x, state.cursorNm.y] as [number, number]) : null);
             if (!end) return;
             await continueInteractiveRouteFromEnd(end, live, dispatch, api);
           })
@@ -2168,8 +2168,8 @@ export function useActionRunner() {
         if (!plan) return;
         dispatch({ type: "SET_SELECTION", refs: plan.refs });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
-        dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: plan.refs, kind: "part", dxUm: 0, dyUm: 0, perRefOffsetUm: plan.offsets } });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorNm });
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: plan.refs, kind: "part", dxNm: 0, dyNm: 0, perRefOffsetNm: plan.offsets } });
       });
     }
 
@@ -2215,7 +2215,7 @@ export function useActionRunner() {
       m.set(
         "eeschema.InteractiveDrawingLineWireBus.unfoldBus",
         schematicOnly(() => {
-          const c = state.cursorUm;
+          const c = state.cursorNm;
           if (!sch || !c) return;
           const bus = hitBus(sch, c.x, c.y, 10 / (state.schematicView.scale || 1), cursorSnapped() ?? undefined);
           if (!bus) {
@@ -2380,7 +2380,7 @@ export function useActionRunner() {
       return schControlChecked(name, {
         control: schControl,
         state,
-        requestSelection: () => (selection.size > 0 ? [...selection].filter((id) => !isPinItemId(id)) : sch && state.cursorUm ? [hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText) ?? hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
+        requestSelection: () => (selection.size > 0 ? [...selection].filter((id) => !isPinItemId(id)) : sch && state.cursorNm ? [hitField(sch, state.cursorNm.x, state.cursorNm.y, 3 / (state.schematicView.scale || 1), measureStrokeText) ?? hitSymbol(sch, state.cursorNm.x, state.cursorNm.y)].filter((id): id is string => !!id) : []),
       });
     },
     // `designBlocksShown` is read through `designBlockChecked`: it is listed so the check marks follow the pane being shown or hidden

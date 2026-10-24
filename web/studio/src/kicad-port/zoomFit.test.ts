@@ -5,8 +5,8 @@ import { worldToScreen } from "./view";
 
 test("zoom factor <-> scale: one inch takes factor * 91 pixels", () => {
   assert.equal(SCREEN_DPI, 91);
-  // an inch (25 400 um) at zoom factor 1.0 is 91 px
-  assert.ok(Math.abs(zoomFactorToScale(1) * 25_400 - 91) < 1e-9);
+  // an inch (25 400 000 nm) at zoom factor 1.0 is 91 px
+  assert.ok(Math.abs(zoomFactorToScale(1) * 25_400_000 - 91) < 1e-9);
   assert.ok(Math.abs(scaleToZoomFactor(zoomFactorToScale(3.5)) - 3.5) < 1e-9);
 });
 
@@ -26,25 +26,25 @@ test("doZoomFit margin: 1.04, or 1.10 on a canvas shorter than 768 px", () => {
 });
 
 test("zoomFitBox frames the box with the margin and centres it", () => {
-  // a 2000 x 1000 um box in an 800 x 800 canvas: the width is the tight side
-  const v = zoomFitBox([1000, 500, 3000, 1500], [0, 0, 10, 10], 800, 800)!;
-  assert.ok(Math.abs(v.scale - 800 / 2000 / 1.04) < 1e-12);
-  const [cx, cy] = worldToScreen(v, 2000, 1000);
+  // a 2 x 1 mm box in an 800 x 800 canvas: the width is the tight side
+  const v = zoomFitBox([1_000_000, 500_000, 3_000_000, 1_500_000], [0, 0, 10_000, 10_000], 800, 800)!;
+  assert.ok(Math.abs(v.scale - 800 / 2_000_000 / 1.04) < 1e-15);
+  const [cx, cy] = worldToScreen(v, 2_000_000, 1_000_000);
   assert.ok(Math.abs(cx - 400) < 1e-9 && Math.abs(cy - 400) < 1e-9, "the box centre lands at the canvas centre");
-  const [x0] = worldToScreen(v, 1000, 1000);
-  const [x1] = worldToScreen(v, 3000, 1000);
+  const [x0] = worldToScreen(v, 1_000_000, 1_000_000);
+  const [x1] = worldToScreen(v, 3_000_000, 1_000_000);
   assert.ok(x1 - x0 < 800, "the margin leaves room around the box");
 });
 
 test("zoomFitBox: a short canvas uses the bigger margin; the tight side is the height when the box is tall", () => {
-  const v = zoomFitBox([0, 0, 100, 1000], [0, 0, 10, 10], 700, 500)!;
-  assert.ok(Math.abs(v.scale - 500 / 1000 / 1.1) < 1e-12);
+  const v = zoomFitBox([0, 0, 100_000, 1_000_000], [0, 0, 10_000, 10_000], 700, 500)!;
+  assert.ok(Math.abs(v.scale - 500 / 1_000_000 / 1.1) < 1e-15);
 });
 
 test("zoomFitBox: a box with no width or no height falls back to the default view box", () => {
-  const v = zoomFitBox([5, 5, 5, 5], [0, 0, 400, 200], 800, 800)!;
-  assert.ok(Math.abs(v.scale - 800 / 400 / 1.04) < 1e-12);
-  const [cx, cy] = worldToScreen(v, 200, 100);
+  const v = zoomFitBox([5_000, 5_000, 5_000, 5_000], [0, 0, 400_000, 200_000], 800, 800)!;
+  assert.ok(Math.abs(v.scale - 800 / 400_000 / 1.04) < 1e-15);
+  const [cx, cy] = worldToScreen(v, 200_000, 100_000);
   assert.ok(Math.abs(cx - 400) < 1e-9 && Math.abs(cy - 400) < 1e-9);
   assert.equal(zoomFitBox([5, 5, 5, 5], [1, 1, 1, 9], 800, 800), null, "a degenerate default box too: nothing to frame");
   assert.equal(zoomFitBox([0, 0, 10, 10], [0, 0, 1, 1], 0, 800), null, "no canvas");

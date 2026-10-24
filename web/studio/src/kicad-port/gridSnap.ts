@@ -32,7 +32,7 @@ export interface GridSnapModifiers {
 }
 
 /** grid_helper.cpp GRID_HELPER::Align minus the aux-axis special case (this app has no "auxiliary axis" origin marker) -- the grid half of the decision, before any anchor is considered. */
-export function alignToGrid(point: Point, gridUm: number, origin: Point, modifiers: Pick<GridSnapModifiers, "ctrlOrCmd">): Point {
-  if (modifiers.ctrlOrCmd || gridUm <= 0) return point;
-  return computeNearest(point, { x: gridUm, y: gridUm }, origin);
+export function alignToGrid(point: Point, gridNm: number, origin: Point, modifiers: Pick<GridSnapModifiers, "ctrlOrCmd">): Point {
+  if (modifiers.ctrlOrCmd || gridNm <= 0) return point;
+  return computeNearest(point, { x: gridNm, y: gridNm }, origin);
 }

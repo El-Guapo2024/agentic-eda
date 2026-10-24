@@ -19,7 +19,7 @@ fn a_design_block_placed_with_place_as_group_is_one_group_named_for_the_block_an
     let text = block_text(&["trk_a", "shp_seg", "txt_a"]);
     let mut b = board(&m);
     let (tracks, shapes, texts) = (routing_len(&b), drawings(&b).shapes.len(), drawings(&b).texts.len());
-    b.apply(&place(&text, p(10_000, 5_000), true, "")).unwrap();
+    b.apply(&place(&text, p(10_000_000, 5_000_000), true, "")).unwrap();
     // KiCad has a track to a segment: the polyline of `trk_a` comes back as the segments it was written as
     let came = (routing_len(&b) - tracks, drawings(&b).shapes.len() - shapes, drawings(&b).texts.len() - texts);
     assert!(came.0 >= 1 && came.1 == 1 && came.2 == 1, "{came:?}");
@@ -28,7 +28,7 @@ fn a_design_block_placed_with_place_as_group_is_one_group_named_for_the_block_an
     // every member is one of the new items, none of the board's own
     assert!(!g.member_ids.iter().any(|m| ["trk_a", "shp_seg", "txt_a"].contains(&m.as_str())), "{:?}", g.member_ids);
     // "Place repeated copies" names the next one
-    b.apply(&place(&text, p(40_000, 5_000), true, "Buck2")).unwrap();
+    b.apply(&place(&text, p(40_000_000, 5_000_000), true, "Buck2")).unwrap();
     let names: Vec<String> = drawings(&b).groups.iter().filter(|g| g.design_block == "Power:Buck").map(|g| g.name.clone()).collect();
     assert_eq!(names, vec!["Buck", "Buck2"]);
 }

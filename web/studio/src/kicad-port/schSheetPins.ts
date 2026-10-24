@@ -210,11 +210,11 @@ export const SHEET_PIN_SHAPES: ReadonlyArray<{ value: LabelShape; label: string 
 ];
 
 /** The size a sheet pin's text is set in until Sheet Pin Properties sets another: 50 mil. */
-export const SHEET_PIN_DEFAULT_SIZE_UM = 1270;
+export const SHEET_PIN_DEFAULT_SIZE_NM = 1_270_000;
 
 /** `EDA_TEXT::SetTextSize`'s clamp (`TEXT_MIN_SIZE_MM` 0.001, `TEXT_MAX_SIZE_MM` 250), in micrometres: Sheet Pin Properties validates no size, it clamps it. */
-export const TEXT_MIN_SIZE_UM = 1;
-export const TEXT_MAX_SIZE_UM = 250_000;
+export const TEXT_MIN_SIZE_NM = 1000;
+export const TEXT_MAX_SIZE_NM = 250_000_000;
 
 /**
  * What OK sends in `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow`: the pin's name as it was typed (`SetText( EscapeString( m_comboName->GetValue() ) )`, not
@@ -222,15 +222,15 @@ export const TEXT_MAX_SIZE_UM = 250_000;
  * changed goes, as one `edit_sheet_pin` (a verb that would change nothing is refused and the undo stack never records a step that did nothing); null when nothing did.
  */
 export function sheetPinEditCmd(
-  pin: { id: string; name: string; shape: LabelShape; size_um?: number; bold?: boolean; italic?: boolean },
-  next: { name: string; shape: LabelShape; sizeUm?: number; bold?: boolean; italic?: boolean },
+  pin: { id: string; name: string; shape: LabelShape; size_nm?: number; bold?: boolean; italic?: boolean },
+  next: { name: string; shape: LabelShape; sizeNm?: number; bold?: boolean; italic?: boolean },
 ): Cmd | null {
   const name = next.name;
-  const sizeUm = next.sizeUm === undefined ? undefined : Math.min(TEXT_MAX_SIZE_UM, Math.max(TEXT_MIN_SIZE_UM, Math.round(next.sizeUm)));
-  const edit: { name?: string; shape?: LabelShape; size_um?: number; bold?: boolean; italic?: boolean } = {};
+  const sizeNm = next.sizeNm === undefined ? undefined : Math.min(TEXT_MAX_SIZE_NM, Math.max(TEXT_MIN_SIZE_NM, Math.round(next.sizeNm)));
+  const edit: { name?: string; shape?: LabelShape; size_nm?: number; bold?: boolean; italic?: boolean } = {};
   if (name !== pin.name) edit.name = name;
   if (next.shape !== pin.shape) edit.shape = next.shape;
-  if (sizeUm !== undefined && sizeUm !== (pin.size_um && pin.size_um > 0 ? pin.size_um : SHEET_PIN_DEFAULT_SIZE_UM)) edit.size_um = sizeUm;
+  if (sizeNm !== undefined && sizeNm !== (pin.size_nm && pin.size_nm > 0 ? pin.size_nm : SHEET_PIN_DEFAULT_SIZE_NM)) edit.size_nm = sizeNm;
   if (next.bold !== undefined && next.bold !== !!pin.bold) edit.bold = next.bold;
   if (next.italic !== undefined && next.italic !== !!pin.italic) edit.italic = next.italic;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_sheet_pin", id: pin.id, ...edit } : null;

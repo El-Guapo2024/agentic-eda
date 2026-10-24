@@ -9,8 +9,8 @@ use eda_model::{ConstraintModel, Footprint, Net, Pad};
 
 /// A four-pad footprint, the pads 2 mm apart in a row: `1 2 3 4` at x = -3, -1, 1, 3 mm.
 fn quad() -> Footprint {
-    let pad = |n: &str, x: Um| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-    Footprint { name: "QUAD".into(), pads: vec![pad("1", -3_000), pad("2", -1_000), pad("3", 1_000), pad("4", 3_000)], courtyard: Some((8_000, 3_000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
+    let pad = |n: &str, x: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, 0), size: (800_000, 800_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+    Footprint { name: "QUAD".into(), pads: vec![pad("1", -3_000_000), pad("2", -1_000_000), pad("3", 1_000_000), pad("4", 3_000_000)], courtyard: Some((8_000_000, 3_000_000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
 fn quad_part(r: &str) -> eda_model::Part {
@@ -69,7 +69,7 @@ fn design_of(m: &ConstraintModel) -> Design {
 }
 
 fn board_of(m: &ConstraintModel) -> Board<'_> {
-    Board::new(design_of(m), m, 100, 300)
+    Board::new(design_of(m), m, 100_000, 300_000)
 }
 
 /// A track of `net` from one point to another, on the front.
@@ -108,7 +108,7 @@ fn tracks_and_vias_that_end_on_a_pad_take_its_new_net() {
     let m = model();
     let mut d = design_of(&m);
     let (a, c) = (centre(&d, &m, "U1", "1"), centre(&d, &m, "U1", "2"));
-    let mid = p(a.x, a.y + 3_000);
+    let mid = p(a.x, a.y + 3_000_000);
     {
         let rt = d.routing.as_mut().unwrap();
         // N1 leaves pad 1 and ends in a via; N2 leaves pad 2; a track of N1 that is nowhere near stays.
@@ -116,10 +116,10 @@ fn tracks_and_vias_that_end_on_a_pad_take_its_new_net() {
         let mut v = super::pcb_transform_tests::via("v_n1", (mid.x, mid.y), "F.Cu", "B.Cu");
         v.net = "N1".into();
         rt.vias.push(v);
-        rt.tracks.push(track_of("t_n2", "N2", c, p(c.x, c.y + 2_000)));
-        rt.tracks.push(track_of("t_far", "N1", p(80_000, 80_000), p(81_000, 80_000)));
+        rt.tracks.push(track_of("t_n2", "N2", c, p(c.x, c.y + 2_000_000)));
+        rt.tracks.push(track_of("t_far", "N1", p(80_000_000, 80_000_000), p(81_000_000, 80_000_000)));
     }
-    let mut b = Board::new(d, &m, 100, 300);
+    let mut b = Board::new(d, &m, 100_000, 300_000);
     b.apply(&swap(&["U1.1", "U1.2"], Some(true))).unwrap();
     let rt = b.design().routing.as_ref().unwrap();
     let net = |id: &str| rt.tracks.iter().find(|t| t.id == id).map(|t| t.net.clone()).or_else(|| rt.vias.iter().find(|v| v.id == id).map(|v| v.net.clone())).unwrap();
@@ -134,14 +134,14 @@ fn pads_the_copper_reaches_that_were_not_asked_for_are_asked_about() {
     // U1.1 and U2.1 are on N1 and a track joins them.
     d.routing.as_mut().unwrap().tracks.push(track_of("t_link", "N1", u1, u2));
     // No answer: the swap is refused with the pads in its detail, and nothing changed.
-    let mut b = Board::new(d.clone(), &m, 100, 300);
+    let mut b = Board::new(d.clone(), &m, 100_000, 300_000);
     let e = b.apply(&swap(&["U1.1", "U1.2"], None)).unwrap_err();
     assert_eq!(e[0].check, "ops_swap_unselected_pads");
     assert_eq!(e[0].detail.as_ref().unwrap()["pads"], serde_json::json!(["U2.1"]));
     assert!(e[0].hint.as_deref().unwrap().starts_with("1 unselected pad(s) are connected to these nets"));
     assert_eq!(nets_of(&b, "U1.1"), "N1");
     // "Ignore Unselected Pads": the track goes with the pad, the pad at its far end stays.
-    let mut ignore = Board::new(d.clone(), &m, 100, 300);
+    let mut ignore = Board::new(d.clone(), &m, 100_000, 300_000);
     ignore.apply(&swap(&["U1.1", "U1.2"], Some(false))).unwrap();
     assert_eq!([nets_of(&ignore, "U1.1"), nets_of(&ignore, "U2.1")], ["N2", "N1"]);
     assert_eq!(ignore.design().routing.as_ref().unwrap().tracks[0].net, "N2");
@@ -177,7 +177,7 @@ fn gate_design(m: &ConstraintModel) -> Design {
 }
 
 fn gate_board(m: &ConstraintModel) -> Board<'_> {
-    Board::new(gate_design(m), m, 100, 300)
+    Board::new(gate_design(m), m, 100_000, 300_000)
 }
 
 #[test]
@@ -215,12 +215,12 @@ fn gate_swaps_are_refused_for_a_footprint_with_no_gates_pads_of_two_footprints_a
     // Units of different sizes.
     let mut d = gate_design(&m);
     d.drawings.as_mut().unwrap().footprint_extras[0].units = vec![FootprintUnit { name: "A".into(), pins: vec!["1".into(), "2".into()] }, FootprintUnit { name: "B".into(), pins: vec!["3".into()] }];
-    let mut uneven = Board::new(d, &m, 100, 300);
+    let mut uneven = Board::new(d, &m, 100_000, 300_000);
     assert_eq!(refusal(&mut uneven, swap_gates(&["U1.1", "U1.3"], None)).1, "Gate swapping must be performed on gates with equal pin counts.");
     // A unit with a pad the footprint lacks.
     let mut d = gate_design(&m);
     d.drawings.as_mut().unwrap().footprint_extras[0].units[1].pins[1] = "9".into();
-    let mut missing = Board::new(d, &m, 100, 300);
+    let mut missing = Board::new(d, &m, 100_000, 300_000);
     assert_eq!(refusal(&mut missing, swap_gates(&["U1.1", "U1.3"], None)).1, "Gate swapping failed: pad in unit missing from footprint.");
     // Gates with the same nets everywhere have nothing to exchange.
     let mut same = ConstraintModel { nets: vec![Net { name: "N1".into(), pins: vec!["U1.1".into(), "U1.3".into(), "U1.2".into(), "U1.4".into()] }], ..m.clone() };
@@ -266,7 +266,7 @@ fn selected_pads_that_the_copper_joins_still_take_the_nets_they_were_given() {
     let mut d = design_of(&m);
     let (a, b) = (centre(&d, &m, "U1", "1"), centre(&d, &m, "U2", "1"));
     d.routing.as_mut().unwrap().tracks.push(track_of("t_link", "N1", a, b));
-    let mut board = Board::new(d, &m, 100, 300);
+    let mut board = Board::new(d, &m, 100_000, 300_000);
     board.apply(&swap(&["U1.1", "U2.1", "U1.3"], None)).unwrap();
     assert_eq!([nets_of(&board, "U1.1"), nets_of(&board, "U2.1"), nets_of(&board, "U1.3")], ["N1", "N3", "N1"], "no question: every pad of the copper is one that was asked for");
     // The track is in the cluster of both pads that join it: the last pad's new net wins, as the map of KiCad's tool is overwritten.

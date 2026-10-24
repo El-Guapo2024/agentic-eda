@@ -199,7 +199,7 @@ mod tests {
     use crate::{Cluster, Net, Part, Pin, PinKind};
 
     fn part(r: &str) -> Part {
-        Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: None, symbol: None, datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None }
+        Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: None, symbol: None, datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, edge: None }
     }
 
     fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {

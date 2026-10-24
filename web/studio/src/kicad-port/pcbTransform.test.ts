@@ -13,7 +13,7 @@ const part = (ref: string, at: [number, number], pads: Pad[] = []): Part =>
   ({ ref, value: null, package: null, mpn: null, footprint: null, block: null, placed: true, size: [2000, 1000], at, rot: 0, side: "top", label: "above", courtyard: [at[0] - 1000, at[1] - 500, at[0] + 1000, at[1] + 500], pads }) as Part;
 const track = (id: string, pts: [number, number][]) => ({ id, net: "GND", layer: "F.Cu", width: 200, pts });
 const dim = (id: string): Dimension =>
-  ({ id, layer: "Dwgs.User", kind: "aligned", height: 2000, horizontal: null, leader_length: null, start: [0, 0], end: [10_000, 0], lines: [[[0, 0], [10_000, 0]], [[0, 2000], [10_000, 2000]]], text_at: [5000, 2500], computed_text_angle: 0, text: "10", text_size_um: 1000, stroke_width: 150 }) as unknown as Dimension;
+  ({ id, layer: "Dwgs.User", kind: "aligned", height: 2000, horizontal: null, leader_length: null, start: [0, 0], end: [10_000, 0], lines: [[[0, 0], [10_000, 0]], [[0, 2000], [10_000, 2000]]], text_at: [5000, 2500], computed_text_angle: 0, text: "10", text_size_nm: 1000, stroke_width: 150 }) as unknown as Dimension;
 
 const routing = (tracks: ReturnType<typeof track>[], vias: BoardState["routing"] extends infer R ? (R extends { vias: infer V } ? V : never) : never = [] as never) => ({ tracks, vias, zones: [], track_width_presets: [], via_presets: [], teardrop_settings: {} }) as unknown as BoardState["routing"];
 const drawings = (extra: Partial<NonNullable<BoardState["drawings"]>> = {}) => ({ shapes: [], texts: [], groups: [], dimensions: [], dimension_settings: {}, ...extra }) as unknown as NonNullable<BoardState["drawings"]>;
@@ -225,10 +225,10 @@ test("carryStart: the editable selection with the points a turn and a flip act a
   assert.deepEqual(start.refs, ["U1", "U2"], "the pad stands for its footprint, the locked footprint stays");
   assert.equal(start.lockedOut, true);
   // U1 courtyard x 0..2000 and U2 8000..10000: centre x = 5000
-  assert.deepEqual(start.pivotUm, [5000, 2000]);
-  assert.deepEqual(start.flipPivotUm, [5000, 2000]);
+  assert.deepEqual(start.pivotNm, [5000, 2000]);
+  assert.deepEqual(start.flipPivotNm, [5000, 2000]);
   assert.deepEqual(carryStart(b, ["U3"]), { refs: [], lockedOut: true });
-  assert.deepEqual(carryStart(b, ["U2"]).pivotUm, [9000, 2000], "a lone item turns about its own position");
+  assert.deepEqual(carryStart(b, ["U2"]).pivotNm, [9000, 2000], "a lone item turns about its own position");
 });
 
 test("planMoveExact: move first, then turn about the item's own moved anchor -- one batch for any kind of item", () => {

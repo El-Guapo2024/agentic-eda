@@ -11,16 +11,16 @@
 
 use std::fmt::Write as _;
 
-use eda_model::ir::{Point, SchematicSection, Um};
+use eda_model::ir::{Point, SchematicSection, Nm};
 use eda_model::sch_extras::{SchColor, SchFill};
 use eda_model::table::{Table, TableBorder, TableCell, TableLineStyle, TableSeparators, TableStroke, TableText};
 
 use crate::pcb_table::{effects_str, read_color, read_effects, read_stroke, stroke_str};
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, fmt_mm_f, mm, mm_to_um, note_uuid, sexpr_str};
+use crate::{duid_for, fmt_mm_f, sch_mm, sch_mm_to_nm, note_uuid, sexpr_str};
 
 /// The width of a stroke the file does not write: `DEFAULT_LINE_WIDTH_MILS` (6 mils), which the constructor of the table gives it.
-const DEFAULT_STROKE_UM: Um = 152;
+const DEFAULT_STROKE_NM: Nm = 152_400;
 
 /// A table read from a sheet, with what a `(group ..)` and a lock need to know of it.
 pub(crate) struct ReadTable {
@@ -30,8 +30,8 @@ pub(crate) struct ReadTable {
     pub uuid: Option<String>,
 }
 
-fn um(v: f64) -> Um {
-    mm_to_um(v)
+fn um(v: f64) -> Nm {
+    sch_mm_to_nm(v)
 }
 
 fn yes(b: bool) -> &'static str {
@@ -76,10 +76,10 @@ fn read_cell(item: &[Sexpr]) -> Option<(TableCell, FileCell)> {
     };
     let angle = ((angle_deg * 1000.0).round() as i64).rem_euclid(360_000) as u32;
     // The text of a text box is left and top until `(effects ..)` says otherwise; `(effects ..)` with no `(justify ..)` is centred both ways.
-    let style = if sexpr::find(item, "effects").is_some() { read_effects(item) } else { TableText::sch_default(1_270) };
+    let style = if sexpr::find(item, "effects").is_some() { read_effects(item) } else { TableText::sch_default(1_270_000) };
     let margins = match sexpr::find(item, "margins") {
         Some(m) => [um(sexpr::num(m, 1).unwrap_or(0.0)), um(sexpr::num(m, 2).unwrap_or(0.0)), um(sexpr::num(m, 3).unwrap_or(0.0)), um(sexpr::num(m, 4).unwrap_or(0.0))],
-        None => [TableCell::legacy_margin_um(&style, DEFAULT_STROKE_UM); 4],
+        None => [TableCell::legacy_margin_nm(&style, DEFAULT_STROKE_NM); 4],
     };
     let (col_span, row_span) = match sexpr::find(item, "span") {
         Some(s) => (sexpr::num(s, 1).unwrap_or(1.0).max(0.0) as u32, sexpr::num(s, 2).unwrap_or(1.0).max(0.0) as u32),
@@ -101,7 +101,7 @@ fn read_cell(item: &[Sexpr]) -> Option<(TableCell, FileCell)> {
 }
 
 /// The numbers of `(column_widths ..)` or `(row_heights ..)`.
-fn sizes(item: &[Sexpr], name: &str) -> Vec<Um> {
+fn sizes(item: &[Sexpr], name: &str) -> Vec<Nm> {
     sexpr::find(item, name).map(|l| l.iter().skip(1).filter_map(|x| x.text()?.parse::<f64>().ok()).map(um).collect()).unwrap_or_default()
 }
 
@@ -135,7 +135,7 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<ReadTable> {
     if heights.len() != rows {
         heights = (0..rows).map(|r| if stands { (placed[r * cols].end.x - placed[r * cols].start.x).abs() } else { (placed[r * cols].end.y - placed[r * cols].start.y).abs() }).collect();
     }
-    let default_stroke = TableStroke { width_um: DEFAULT_STROKE_UM, style: TableLineStyle::Default, color: None };
+    let default_stroke = TableStroke { width_nm: DEFAULT_STROKE_NM, style: TableLineStyle::Default, color: None };
     let mut border = TableBorder { external: true, header: true, stroke: default_stroke };
     if let Some(b) = sexpr::find(item, "border") {
         border.external = flag(b, "external").unwrap_or(border.external);
@@ -220,7 +220,7 @@ pub(crate) fn write(out: &mut String, t: &Table, locked: bool) -> String {
     if t.separators.rows || t.separators.cols {
         let _ = write!(out, " {}", stroke_str(&t.separators.stroke));
     }
-    let _ = write!(out, ")\n\t\t(column_widths {})\n\t\t(row_heights {})\n\t\t(uuid \"{uuid}\")", t.col_widths.iter().map(|w| mm(*w)).collect::<Vec<_>>().join(" "), t.row_heights.iter().map(|h| mm(*h)).collect::<Vec<_>>().join(" "));
+    let _ = write!(out, ")\n\t\t(column_widths {})\n\t\t(row_heights {})\n\t\t(uuid \"{uuid}\")", t.col_widths.iter().map(|w| sch_mm(*w)).collect::<Vec<_>>().join(" "), t.row_heights.iter().map(|h| sch_mm(*h)).collect::<Vec<_>>().join(" "));
     if locked {
         out.push_str("\n\t\t(locked yes)");
     }
@@ -235,15 +235,15 @@ pub(crate) fn write(out: &mut String, t: &Table, locked: bool) -> String {
             "\n\t\t\t(table_cell {}\n\t\t\t\t(exclude_from_sim {})\n\t\t\t\t(at {} {} {})\n\t\t\t\t(size {} {})\n\t\t\t\t(margins {} {} {} {})\n\t\t\t\t(span {} {})\n\t\t\t\t{}\n\t\t\t\t{}\n\t\t\t\t(uuid \"{}\")\n\t\t\t)",
             sexpr_str(&c.text),
             yes(c.exclude_from_sim),
-            mm(start.x),
-            mm(start.y),
+            sch_mm(start.x),
+            sch_mm(start.y),
             angle_str(t.angle),
-            mm(end.x - start.x),
-            mm(end.y - start.y),
-            mm(c.margins[0]),
-            mm(c.margins[1]),
-            mm(c.margins[2]),
-            mm(c.margins[3]),
+            sch_mm(end.x - start.x),
+            sch_mm(end.y - start.y),
+            sch_mm(c.margins[0]),
+            sch_mm(c.margins[1]),
+            sch_mm(c.margins[2]),
+            sch_mm(c.margins[3]),
             c.col_span,
             c.row_span,
             fill_str(c),
@@ -372,21 +372,21 @@ mod tests {
     fn the_table_kicad_wrote_reads_as_a_grid_with_its_cells() {
         let r = read_first(KICAD_TABLE);
         let t = &r.table;
-        assert_eq!((t.col_count(), t.row_count(), t.at, t.angle), (2, 2, Point { x: 122_555, y: 29_210 }, 0));
-        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![26_670, 21_590], vec![2_540, 2_540]));
+        assert_eq!((t.col_count(), t.row_count(), t.at, t.angle), (2, 2, Point { x: 122_555_000, y: 29_210_000 }, 0));
+        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![26_670_000, 21_590_000], vec![2_540_000, 2_540_000]));
         assert_eq!(t.texts(), vec![vec!["LED pin (by VectorIndex)", "Expected net"], vec!["LEDs0", "CON_A_1"]]);
         assert_eq!(r.uuid.as_deref(), Some("df0f6b4f-dec6-4a60-8f35-956cd22f196e"));
         assert!(!r.locked);
-        assert_eq!((t.border.external, t.border.header, t.border.stroke.width_um, t.border.stroke.style), (true, true, 0, TableLineStyle::Solid));
-        assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_um), (true, true, 0));
+        assert_eq!((t.border.external, t.border.header, t.border.stroke.width_nm, t.border.stroke.style), (true, true, 0, TableLineStyle::Solid));
+        assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_nm), (true, true, 0));
         let c = &t.cells[0];
-        // 1.27 mm text, left and top, the margin 0.9525 mm (to the micrometre it is held in), no fill, in simulation
-        assert_eq!((c.style.height_um, c.style.width_um, c.style.h_align, c.style.v_align, c.fill, c.exclude_from_sim), (1_270, 1_270, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, SchFill::None, false));
-        assert!(c.margins.iter().all(|m| (*m - 952).abs() <= 1), "{:?}", c.margins);
+        // 1.27 mm text, left and top, the margin 0.9525 mm, no fill, in simulation
+        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.h_align, c.style.v_align, c.fill, c.exclude_from_sim), (1_270_000, 1_270_000, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, SchFill::None, false));
+        assert!(c.margins.iter().all(|m| *m == 952_500), "{:?}", c.margins);
         assert_eq!(c.uuid, "b8109563-e2fa-4fb6-9110-83137bb1a864");
         // the cells are where the file put them
         for (i, (row, col)) in [(0, 0), (0, 1), (1, 0), (1, 1)].into_iter().enumerate() {
-            let want = [Point { x: 122_555, y: 29_210 }, Point { x: 149_225, y: 29_210 }, Point { x: 122_555, y: 31_750 }, Point { x: 149_225, y: 31_750 }][i];
+            let want = [Point { x: 122_555_000, y: 29_210_000 }, Point { x: 149_225_000, y: 29_210_000 }, Point { x: 122_555_000, y: 31_750_000 }, Point { x: 149_225_000, y: 31_750_000 }][i];
             assert_eq!(t.cell_corners(row, col)[0], want);
         }
     }
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn a_table_that_stands_keeps_its_attitude_and_its_cells_places() {
-        let mut t = Table::new_sch_grid(Point { x: 50_000, y: 80_000 }, 2, 2, 20_000, 5_000, 1_270);
+        let mut t = Table::new_sch_grid(Point { x: 50_000_000, y: 80_000_000 }, 2, 2, 20_000_000, 5_000_000, 1_270_000);
         t.angle = 90_000;
         t.cells[0].text = "a \"quoted\"\nline".into();
         t.cells[1].col_span = 1;
@@ -435,10 +435,10 @@ mod tests {
 		(cells (table_cell "x" (at 1 2 0) (size 10 4) (span 1 1))))
 )"#;
         let t = read_first(text).table;
-        assert_eq!((t.border.stroke.width_um, t.separators.stroke.width_um), (152, 152));
-        assert_eq!((t.cells[0].style.h_align, t.cells[0].style.v_align, t.cells[0].style.height_um), (eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, 1_270));
+        assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (152_400, 152_400));
+        assert_eq!((t.cells[0].style.h_align, t.cells[0].style.v_align, t.cells[0].style.height_nm), (eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, 1_270_000));
         // no margins: the legacy margin of the cell (the stroke's half and three quarters of 1.27 mm)
-        assert!(t.cells[0].margins.iter().all(|m| *m == 76 + 953), "{:?}", t.cells[0].margins);
+        assert!(t.cells[0].margins.iter().all(|m| *m == 76_200 + 952_500), "{:?}", t.cells[0].margins);
         // and nothing is written for the strokes of a table that draws none
         let mut out = String::new();
         write(&mut out, &t, false);

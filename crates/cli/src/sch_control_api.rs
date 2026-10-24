@@ -160,12 +160,12 @@ mod tests {
     }
 
     fn placement(id: &str, name: &str, file: &str, page: &str) -> SheetInstance {
-        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![], page: page.into() }
+        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: 0, y: 0 }, size: (1_000_000, 1_000_000), pins: vec![], page: page.into() }
     }
 
     fn design(root: SchematicSection, screens: BTreeMap<String, SchematicSection>) -> Design {
         Design {
-            schema: 1,
+            schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(root),
             nets: None,

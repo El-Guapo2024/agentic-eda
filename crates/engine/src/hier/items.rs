@@ -32,8 +32,8 @@ pub struct Keep {
     pub fields: BTreeMap<String, Vec<eda_model::ir::FieldPlacement>>,
 }
 
-/// The room kept around what hangs on a pin (micrometres), and how many cells a stub may be made longer to find it.
-const HANG_GAP: i64 = 150;
+/// The room kept around what hangs on a pin (nanometres), and how many cells a stub may be made longer to find it.
+const HANG_GAP: i64 = 150_000;
 const MAX_PUSH: i64 = 24;
 
 /// A pin on a supply or ground rail, waiting to be drawn (`Items::rail_pins`).
@@ -205,7 +205,7 @@ pub struct Items {
 
 /// The box of a wire from `a` to `b`: the line and a hair either side.
 fn wire_rect(a: Point, b: Point) -> Rect {
-    Rect::new(a.x.min(b.x) - 200, a.y.min(b.y) - 200, a.x.max(b.x) + 200, a.y.max(b.y) + 200)
+    Rect::new(a.x.min(b.x) - 200_000, a.y.min(b.y) - 200_000, a.x.max(b.x) + 200_000, a.y.max(b.y) + 200_000)
 }
 
 fn shift(p: &mut Point, dx: i64, dy: i64) {
@@ -370,7 +370,7 @@ impl Items {
 
     /// Remember the wire from `tip` to `end` and the box of what it ends in.
     fn hang(&mut self, tip: Point, end: Point, item: Rect) {
-        let wire = Rect::new(tip.x.min(end.x) - 200, tip.y.min(end.y) - 200, tip.x.max(end.x) + 200, tip.y.max(end.y) + 200);
+        let wire = Rect::new(tip.x.min(end.x) - 200_000, tip.y.min(end.y) - 200_000, tip.x.max(end.x) + 200_000, tip.y.max(end.y) + 200_000);
         self.rects.push(wire);
         self.hung.push(wire);
         self.rects.push(item);
@@ -398,7 +398,7 @@ impl Items {
         self.failures += usize::from(!found);
         self.wire(net, vec![pin_ref.to_string()], pts.clone());
         for pair in pts.windows(2) {
-            let wire = Rect::new(pair[0].x.min(pair[1].x) - 200, pair[0].y.min(pair[1].y) - 200, pair[0].x.max(pair[1].x) + 200, pair[0].y.max(pair[1].y) + 200);
+            let wire = Rect::new(pair[0].x.min(pair[1].x) - 200_000, pair[0].y.min(pair[1].y) - 200_000, pair[0].x.max(pair[1].x) + 200_000, pair[0].y.max(pair[1].y) + 200_000);
             self.rects.push(wire);
             self.hung.push(wire);
         }
@@ -451,12 +451,12 @@ impl Items {
                 let ends = ends_at(cells);
                 for (i, p) in run.iter().enumerate() {
                     self.wire(&net, vec![p.pin_ref.clone()], vec![p.tip, ends[i]]);
-                    let w = Rect::new(p.tip.x.min(ends[i].x) - 200, p.tip.y.min(ends[i].y) - 200, p.tip.x.max(ends[i].x) + 200, p.tip.y.max(ends[i].y) + 200);
+                    let w = Rect::new(p.tip.x.min(ends[i].x) - 200_000, p.tip.y.min(ends[i].y) - 200_000, p.tip.x.max(ends[i].x) + 200_000, p.tip.y.max(ends[i].y) + 200_000);
                     self.rects.push(w);
                     self.hung.push(w);
                     if i + 1 < run.len() {
                         self.wire(&net, Vec::new(), vec![ends[i], ends[i + 1]]);
-                        let j = Rect::new(ends[i].x.min(ends[i + 1].x) - 200, ends[i].y.min(ends[i + 1].y) - 200, ends[i].x.max(ends[i + 1].x) + 200, ends[i].y.max(ends[i + 1].y) + 200);
+                        let j = Rect::new(ends[i].x.min(ends[i + 1].x) - 200_000, ends[i].y.min(ends[i + 1].y) - 200_000, ends[i].x.max(ends[i + 1].x) + 200_000, ends[i].y.max(ends[i + 1].y) + 200_000);
                         self.rects.push(j);
                         self.hung.push(j);
                     }
@@ -476,7 +476,7 @@ impl Items {
         let kind = if hierarchical { LabelKind::Hierarchical { shape: LabelShape::Bidirectional } } else { LabelKind::Local };
         self.labels.push(NetLabel { id: String::new(), net: net.to_string(), at: end, kind });
         for pair in pts.windows(2) {
-            let wire = Rect::new(pair[0].x.min(pair[1].x) - 200, pair[0].y.min(pair[1].y) - 200, pair[0].x.max(pair[1].x) + 200, pair[0].y.max(pair[1].y) + 200);
+            let wire = Rect::new(pair[0].x.min(pair[1].x) - 200_000, pair[0].y.min(pair[1].y) - 200_000, pair[0].x.max(pair[1].x) + 200_000, pair[0].y.max(pair[1].y) + 200_000);
             self.rects.push(wire);
             self.hung.push(wire);
         }
@@ -516,13 +516,13 @@ impl Items {
         }
         for ((pin_ref, tip), e) in pins.iter().zip(&ends) {
             self.wire(net, vec![pin_ref.clone()], vec![*tip, *e]);
-            let w = Rect::new(tip.x.min(e.x) - 200, tip.y.min(e.y) - 200, tip.x.max(e.x) + 200, tip.y.max(e.y) + 200);
+            let w = Rect::new(tip.x.min(e.x) - 200_000, tip.y.min(e.y) - 200_000, tip.x.max(e.x) + 200_000, tip.y.max(e.y) + 200_000);
             self.rects.push(w);
             self.hung.push(w);
         }
         for pair in join.windows(2) {
             self.wire(net, Vec::new(), vec![pair[0], pair[1]]);
-            let w = Rect::new(pair[0].x.min(pair[1].x) - 200, pair[0].y.min(pair[1].y) - 200, pair[0].x.max(pair[1].x) + 200, pair[0].y.max(pair[1].y) + 200);
+            let w = Rect::new(pair[0].x.min(pair[1].x) - 200_000, pair[0].y.min(pair[1].y) - 200_000, pair[0].x.max(pair[1].x) + 200_000, pair[0].y.max(pair[1].y) + 200_000);
             self.rects.push(w);
             self.hung.push(w);
         }

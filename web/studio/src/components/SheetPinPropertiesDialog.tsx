@@ -6,8 +6,8 @@
 // OK sends one `edit_sheet_pin` -- one undo step, nothing when nothing changed. Not here because the drawing model has no place for them: the pin's font face and colour.
 import { useEffect, useState } from "react";
 import type { LabelShape } from "../api/types";
-import { mmToUm, umToMm } from "../kicad-port/schProperties";
-import { sheetPinEditCmd, SHEET_PIN_DEFAULT_SIZE_UM, SHEET_PIN_SHAPES } from "../kicad-port/schSheetPins";
+import { mmToNm, nmToMm } from "../kicad-port/schProperties";
+import { sheetPinEditCmd, SHEET_PIN_DEFAULT_SIZE_NM, SHEET_PIN_SHAPES } from "../kicad-port/schSheetPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { loadHierLabels } from "./schematic/schPinTool";
@@ -21,13 +21,13 @@ export function SheetPinPropertiesDialog({ id }: { id: string }) {
   return <Form key={id} sheetId={sheet.id} pin={pin} />;
 }
 
-function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: string; shape: LabelShape; size_um?: number; bold?: boolean; italic?: boolean } }) {
+function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: string; shape: LabelShape; size_nm?: number; bold?: boolean; italic?: boolean } }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const [name, setName] = useState(pin.name);
   const [shape, setShape] = useState<LabelShape>(pin.shape);
-  const [size, setSize] = useState(umToMm(pin.size_um && pin.size_um > 0 ? pin.size_um : SHEET_PIN_DEFAULT_SIZE_UM));
+  const [size, setSize] = useState(nmToMm(pin.size_nm && pin.size_nm > 0 ? pin.size_nm : SHEET_PIN_DEFAULT_SIZE_NM));
   const [bold, setBold] = useState(!!pin.bold);
   const [italic, setItalic] = useState(!!pin.italic);
   const [labels, setLabels] = useState<HierLabel[]>([]);
@@ -41,8 +41,8 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
   }, [state.currentSheetPath, sheetId]);
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
   // `TransferDataFromWindow` validates no size: `SetTextSize` clamps it to 0.001..250 mm (`sheetPinEditCmd`)
-  const sizeUm = mmToUm(size);
-  const sizeOk = sizeUm !== null && sizeUm > 0;
+  const sizeNm = mmToNm(size);
+  const sizeOk = sizeNm !== null && sizeNm > 0;
   const canOk = name.trim().length > 0 && sizeOk;
   const pick = (text: string, picked: boolean) => {
     setName(text);
@@ -53,7 +53,7 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
   };
   const submit = async () => {
     if (!canOk) return;
-    const cmd = sheetPinEditCmd(pin, { name, shape, sizeUm: sizeUm ?? undefined, bold, italic });
+    const cmd = sheetPinEditCmd(pin, { name, shape, sizeNm: sizeNm ?? undefined, bold, italic });
     if (!cmd || (await api.cmd(cmd))) close();
   };
   return (

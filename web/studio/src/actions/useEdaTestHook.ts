@@ -241,7 +241,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         counts: countsOf(studio.board, studio.schematic),
         units: studio.units,
         highlight: highlightedNets(studio.netHighlight, studio.bcx.netHighlightMore),
-        grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : studio.tab === "schematic" ? studio.schGridUm : null,
+        grid: studio.tab === "pcb" ? studio.gridNm : studio.tab === "footprint" ? L.fp.gridNm : studio.tab === "symbol" ? L.sym.gridNm : studio.tab === "schematic" ? studio.schGridNm : null,
         gridOverrides: editor ? getGridOverrides(editor).enabled : null,
         snap: lastSnapReport(),
         dialogs: dialogTitles(),

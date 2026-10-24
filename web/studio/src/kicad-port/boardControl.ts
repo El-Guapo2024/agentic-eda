@@ -219,10 +219,10 @@ export function connectedTrackWidth(from: string | undefined, tracks: ReadonlyAr
 }
 
 /**
- * The track whose copper `(xUm, yUm)` is in on `layer`, the nearest centre line first -- what a route started in the middle of a track starts from
+ * The track whose copper `(xNm, yNm)` is in on `layer`, the nearest centre line first -- what a route started in the middle of a track starts from
  * (`TOOL_BASE::updateStartItem` picking a segment; the router splits it there), so its width can be the route's (`connectedTrackWidth`).
  */
-export function trackUnder(tracks: ReadonlyArray<{ id: string; layer: string; width: number; pts: ReadonlyArray<readonly [number, number]> }>, xUm: number, yUm: number, layer: string): { id: string; width: number } | null {
+export function trackUnder(tracks: ReadonlyArray<{ id: string; layer: string; width: number; pts: ReadonlyArray<readonly [number, number]> }>, xNm: number, yNm: number, layer: string): { id: string; width: number } | null {
   let best: { id: string; width: number } | null = null;
   let bestD = Infinity;
   for (const track of tracks) {
@@ -231,8 +231,8 @@ export function trackUnder(tracks: ReadonlyArray<{ id: string; layer: string; wi
       const [ax, ay] = track.pts[i]!;
       const [bx, by] = track.pts[i + 1]!;
       const len2 = (bx - ax) ** 2 + (by - ay) ** 2;
-      const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((xUm - ax) * (bx - ax) + (yUm - ay) * (by - ay)) / len2));
-      const d = Math.hypot(xUm - (ax + t * (bx - ax)), yUm - (ay + t * (by - ay)));
+      const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((xNm - ax) * (bx - ax) + (yNm - ay) * (by - ay)) / len2));
+      const d = Math.hypot(xNm - (ax + t * (bx - ax)), yNm - (ay + t * (by - ay)));
       if (d <= track.width / 2 && d < bestD) {
         bestD = d;
         best = { id: track.id, width: track.width };
@@ -243,10 +243,10 @@ export function trackUnder(tracks: ReadonlyArray<{ id: string; layer: string; wi
 }
 
 /** `ZoneDuplicate`: "If the new zone is on the same layer(s) as the initial zone, offset it a bit so it can more easily be picked" -- 1 mm each way. */
-export const DUPLICATE_ZONE_OFFSET_UM = 1000;
+export const DUPLICATE_ZONE_OFFSET_NM = 1_000_000;
 
 export function duplicatedZoneOutline(outline: ReadonlyArray<readonly [number, number]>, sameLayer: boolean): [number, number][] {
-  const d = sameLayer ? DUPLICATE_ZONE_OFFSET_UM : 0;
+  const d = sameLayer ? DUPLICATE_ZONE_OFFSET_NM : 0;
   return outline.map(([x, y]) => [x + d, y + d]);
 }
 

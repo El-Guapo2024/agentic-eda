@@ -92,7 +92,7 @@ fn a_board_with_trapezoid_chamfered_and_custom_pads_keeps_every_one_of_them() {
     assert_eq!(pads.len(), 4);
 
     let trap = pad(pads, "1");
-    assert_eq!((trap.shape, trap.size, trap.ext.trapezoid_delta), (PadShape::Trapezoid, (2000, 1000), Some((400, 0))));
+    assert_eq!((trap.shape, trap.size, trap.ext.trapezoid_delta), (PadShape::Trapezoid, (2_000_000, 1_000_000), Some((400_000, 0))));
 
     let chamfered = pad(pads, "2");
     assert_eq!((chamfered.shape, chamfered.roundrect_ratio, chamfered.ext.chamfer_ratio), (PadShape::ChamferedRect, Some(0.2), Some(0.25)));
@@ -115,7 +115,7 @@ fn a_board_with_trapezoid_chamfered_and_custom_pads_keeps_every_one_of_them() {
     assert!(c.primitives[0].shape.is_filled() && !c.primitives[3].shape.is_filled());
 
     let offset = pad(pads, "4");
-    assert_eq!((offset.shape, offset.ext.offset, offset.drill), (PadShape::Oval, Some((300, 0)), Some(700)));
+    assert_eq!((offset.shape, offset.ext.offset, offset.drill), (PadShape::Oval, Some((300_000, 0)), Some(700_000)));
 
     // It writes them the way KiCad does ...
     let text = export(&design, &model);
@@ -163,8 +163,8 @@ fn a_custom_pad_on_the_back_covers_the_mirror_image_of_the_one_on_the_front() {
         let back = board.pads.iter().find(|p| p.id == format!("Q2.{number}")).expect("back pad");
         let (f, b) = (front.copper.bbox(0), back.copper.bbox(0));
         // Mirrored about x = 20: x -> 40 - x.
-        let mirrored = (40_000 - f.2, f.1, 40_000 - f.0, f.3);
-        let tol = 2;
+        let mirrored = (40_000_000 - f.2, f.1, 40_000_000 - f.0, f.3);
+        let tol = 2000;
         assert!((mirrored.0 - b.0).abs() <= tol && (mirrored.1 - b.1).abs() <= tol && (mirrored.2 - b.2).abs() <= tol && (mirrored.3 - b.3).abs() <= tol, "pad {number}: {f:?} mirrored {mirrored:?} vs {b:?}");
     }
 }
@@ -232,7 +232,7 @@ fn pad_areas_mm2(text: &str) -> Vec<(String, f64)> {
         let footprint = model.footprint_of(part).expect("a footprint");
         for pad in &footprint.pads {
             let centre = eda_model::footprint::to_board(fp, pad.at);
-            let area = eda_drc::pad_shape::pad_polygons(fp, pad, centre, 5).area() / 1e6;
+            let area = eda_drc::pad_shape::pad_polygons(fp, pad, centre, 5_000).area() / 1e12;
             out.push((format!("{}.{}", fp.id, pad.number), area));
         }
     }
@@ -480,9 +480,9 @@ fn kicad_cli_drc_measures_the_clearance_to_these_pads_as_the_drc_here_does() {
         let (design, model, _) = import_kicad_pcb(&text).expect("imports");
         let board = eda_drc::board::build(&design, &model);
         let copper = &board.pads[0].copper;
-        let um = |v: f64| (v * 1000.0).round() as i64;
-        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: um(a.0), y: um(a.1) }, b: eda_model::ir::Point { x: um(b.0), y: um(b.1) }, r: 100 };
-        let ours = copper.gap_to(&track) / 1000.0;
+        let nm = |v: f64| (v * 1e6).round() as i64;
+        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: nm(a.0), y: nm(a.1) }, b: eda_model::ir::Point { x: nm(b.0), y: nm(b.1) }, r: 100_000 };
+        let ours = copper.gap_to(&track) / 1e6;
         eprintln!("{name}: kicad-cli {theirs:.4} mm, here {ours:.4} mm");
         assert!((ours - theirs).abs() < 0.002, "{name}: kicad-cli's DRC says {theirs} mm of air, the DRC here {ours} mm");
     }

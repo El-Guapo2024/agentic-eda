@@ -169,7 +169,7 @@ interface Layout {
 }
 
 /** Lays out `text` left-to-right starting at (0,0), baseline at y=0, KiCad's own metrics for sub/superscript sizing and offsets. Reused by both measuring and drawing so they can never disagree. */
-function layout(text: string, sizeUm: number): Layout {
+function layout(text: string, sizeNm: number): Layout {
   const tokens = tokenize(text);
   const placed: PlacedGlyph[] = [];
   let cursorX = 0;
@@ -185,8 +185,8 @@ function layout(text: string, sizeUm: number): Layout {
   };
 
   for (const tok of tokens) {
-    const scaled = tok.style.subscript || tok.style.superscript ? sizeUm * SUPER_SUB_SIZE_MULTIPLIER : sizeUm;
-    const yOffset = tok.style.subscript ? sizeUm * SUB_HEIGHT_OFFSET : tok.style.superscript ? -sizeUm * SUPER_HEIGHT_OFFSET : 0;
+    const scaled = tok.style.subscript || tok.style.superscript ? sizeNm * SUPER_SUB_SIZE_MULTIPLIER : sizeNm;
+    const yOffset = tok.style.subscript ? sizeNm * SUB_HEIGHT_OFFSET : tok.style.superscript ? -sizeNm * SUPER_HEIGHT_OFFSET : 0;
 
     if (tok.style.overbar) {
       if (overbarStart === null) {
@@ -217,15 +217,15 @@ function layout(text: string, sizeUm: number): Layout {
 
 export type StrokeJustify = "left" | "center" | "right";
 
-/** Total advance width of `text` set at `sizeUm`, real units -- for callers that need to position text themselves (e.g. right/center-justify against a fixed anchor) before calling drawStrokeText with justify:"left". */
-export function measureStrokeText(text: string, sizeUm: number): number {
-  return layout(text, sizeUm).width;
+/** Total advance width of `text` set at `sizeNm`, real units -- for callers that need to position text themselves (e.g. right/center-justify against a fixed anchor) before calling drawStrokeText with justify:"left". */
+export function measureStrokeText(text: string, sizeNm: number): number {
+  return layout(text, sizeNm).width;
 }
 
 export interface StrokeTextOptions {
-  sizeUm: number;
+  sizeNm: number;
   /** Stroke width, real units. KiCad's own typical default is ~1/8 of size; callers that carry a real per-item stroke_width (BoardText, Shape, pins) should always pass it explicitly instead of relying on this fallback. */
-  thicknessUm?: number;
+  thicknessNm?: number;
   justify?: StrokeJustify;
   /** Rotation about (x, y), radians, applied after justify. */
   angleRad?: number;
@@ -250,9 +250,9 @@ const ITALIC_TILT = 1 / 8;
  */
 export function drawStrokeText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, opts: StrokeTextOptions): void {
   if (!text) return;
-  const { sizeUm, justify = "left", angleRad = 0, mirror = false, italic = false, color } = opts;
-  const thickness = opts.thicknessUm ?? sizeUm * DEFAULT_THICKNESS_FACTOR;
-  const { glyphs: placed, width, overbars } = layout(text, sizeUm);
+  const { sizeNm, justify = "left", angleRad = 0, mirror = false, italic = false, color } = opts;
+  const thickness = opts.thicknessNm ?? sizeNm * DEFAULT_THICKNESS_FACTOR;
+  const { glyphs: placed, width, overbars } = layout(text, sizeNm);
   const startX = justify === "center" ? -width / 2 : justify === "right" ? -width : 0;
 
   ctx.save();

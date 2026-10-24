@@ -20,7 +20,7 @@ fn empty_design() -> Design {
         sheet_contents: None,
         bus_aliases: vec![],
         symbol_library: None,
-        schema: 1,
+        schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
@@ -30,7 +30,7 @@ fn empty_design() -> Design {
     }
 }
 
-fn p(x: Um, y: Um) -> Point {
+fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
@@ -45,7 +45,7 @@ fn part(reference: &str) -> Part {
         symbol: None,
         datasheet: None,
         pins: (1..=2).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_nm: None,
         edge: None,
     }
 }
@@ -75,7 +75,7 @@ fn resistor(id: &str, at: Point, rot: u32, mirrored: bool) -> SymbolInstance {
 
 /// R1 with one user-defined field, `MPN`.
 fn sheet(rot: u32, mirrored: bool) -> SchematicSection {
-    let mut sch = SchematicSection { symbols: vec![resistor("R1", p(50_800, 50_800), rot, mirrored)], ..Default::default() };
+    let mut sch = SchematicSection { symbols: vec![resistor("R1", p(50_800_000, 50_800_000), rot, mirrored)], ..Default::default() };
     sch.user_fields.entry("R1".into()).or_default().insert("MPN".into(), "ERJ-3EKF".into());
     sch
 }
@@ -84,7 +84,7 @@ fn run(sch: SchematicSection, cmd: Cmd) -> Result<SchematicSection, Vec<CheckRes
     let m = model();
     let mut design = empty_design();
     design.schematic = Some(sch);
-    let mut b = Board::new(design, &m, 100, 300);
+    let mut b = Board::new(design, &m, 100_000, 300_000);
     b.apply(&cmd)?;
     Ok(b.design().schematic.clone().unwrap())
 }
@@ -103,7 +103,7 @@ fn edit(id: &str, f: impl FnOnce(&mut Edit)) -> Cmd {
         vertical: e.vertical,
         h: e.h,
         v: e.v,
-        size_um: e.size_um,
+        size_nm: e.size_nm,
         bold: e.bold,
         italic: e.italic,
         visible: e.visible,
@@ -119,7 +119,7 @@ struct Edit {
     vertical: Option<bool>,
     h: Option<TextJustify>,
     v: Option<TextVAlign>,
-    size_um: Option<Um>,
+    size_nm: Option<Nm>,
     bold: Option<bool>,
     italic: Option<bool>,
     visible: Option<bool>,
@@ -131,7 +131,7 @@ fn show(sch: SchematicSection, name: &str) -> SchematicSection {
     run(sch, edit(&field_id("R1", name), |e| e.visible = Some(true))).unwrap_or_else(|e| panic!("{e:?}"))
 }
 
-fn mv(v: &[&str], dx: Um, dy: Um) -> Cmd {
+fn mv(v: &[&str], dx: Nm, dy: Nm) -> Cmd {
     Cmd::SchMove(SchMoveCmd::Move { ids: ids(v), dx, dy, turns: Vec::new(), about: None })
 }
 
@@ -222,11 +222,11 @@ fn a_user_field_moves_by_the_offset_whatever_the_symbol_is_turned_to_and_the_oth
         for mirrored in [false, true] {
             let before = show(sheet(rot, mirrored), "MPN");
             let (at, reference, value) = (field_named(&before, "MPN").at, field_named(&before, "Reference").at, field_named(&before, "Value").at);
-            let after = run(before, mv(&[&field_id("R1", "MPN")], 2_540, -1_270)).unwrap_or_else(|e| panic!("rot {rot} mirrored {mirrored}: {e:?}"));
+            let after = run(before, mv(&[&field_id("R1", "MPN")], 2_540_000, -1_270_000)).unwrap_or_else(|e| panic!("rot {rot} mirrored {mirrored}: {e:?}"));
             let moved = field_named(&after, "MPN").at;
-            assert!(near(moved, (at.0 + 2_540.0, at.1 - 1_270.0)), "rot {rot} mirrored {mirrored}: {at:?} -> {moved:?}");
+            assert!(near(moved, (at.0 + 2_540_000.0, at.1 - 1_270_000.0)), "rot {rot} mirrored {mirrored}: {at:?} -> {moved:?}");
             assert!(near(field_named(&after, "Reference").at, reference) && near(field_named(&after, "Value").at, value), "the others stay");
-            assert_eq!(after.symbols[0].at, p(50_800, 50_800), "the symbol did not move");
+            assert_eq!(after.symbols[0].at, p(50_800_000, 50_800_000), "the symbol did not move");
             assert!(!after.extras.fields_autoplaced.contains_key("R1"), "a field moved on its own is the user's: `SetFieldsAutoplaced( AUTOPLACE_NONE )`");
         }
     }
@@ -289,21 +289,21 @@ fn field_properties_set_the_look_and_the_place_of_a_user_field_in_one_command() 
     let after = run(
         start,
         edit(&field_id("R1", "MPN"), |e| {
-            e.size_um = Some(2_000);
+            e.size_nm = Some(2_000_000);
             e.bold = Some(true);
             e.italic = Some(true);
             e.name_shown = Some(true);
             e.allow_autoplace = Some(false);
-            e.at = Some(p(before.at.0 as i64 + 2_540, before.at.1 as i64 + 2_540));
+            e.at = Some(p(before.at.0 as i64 + 2_540_000, before.at.1 as i64 + 2_540_000));
             e.vertical = Some(true);
             e.h = Some(TextJustify::Right);
         }),
     )
     .unwrap_or_else(|e| panic!("{e:?}"));
     let f = field_named(&after, "MPN");
-    assert!(f.size_um == 2_000.0 && f.bold && f.italic && f.name_shown && f.no_autoplace && f.vertical, "{f:?}");
+    assert!(f.size_nm == 2_000_000.0 && f.bold && f.italic && f.name_shown && f.no_autoplace && f.vertical, "{f:?}");
     assert_eq!(f.h, eda_model::kicad_font::HJustify::Right);
-    assert!(near(f.at, (before.at.0 + 2_540.0, before.at.1 + 2_540.0)), "{:?}", f.at);
+    assert!(near(f.at, (before.at.0 + 2_540_000.0, before.at.1 + 2_540_000.0)), "{:?}", f.at);
     assert_eq!(f.shown_text(), "MPN: ERJ-3EKF");
 }
 
@@ -311,7 +311,7 @@ fn field_properties_set_the_look_and_the_place_of_a_user_field_in_one_command() 
 fn the_fields_of_a_locked_symbol_include_its_user_fields() {
     let mut start = sheet(0, false);
     start.extras.set_locked("R1", true);
-    let e = run(start.clone(), mv(&[&field_id("R1", "MPN")], 1_270, 0)).unwrap_err();
+    let e = run(start.clone(), mv(&[&field_id("R1", "MPN")], 1_270_000, 0)).unwrap_err();
     assert_eq!(e[0].check, "ops_locked");
     let e = run(start, edit(&field_id("R1", "MPN"), |e| e.text = Some("x".into()))).unwrap_err();
     assert_eq!(e[0].check, "ops_locked");
@@ -423,7 +423,7 @@ fn the_fields_table_removing_a_column_takes_its_places_and_renaming_one_keeps_th
 fn a_user_field_added_by_the_table_after_the_fields_were_placed_is_hidden_and_the_others_stay() {
     use crate::fields_table::{apply_field_changes, FieldChanges};
     let m = model();
-    let mut start = SchematicSection { symbols: vec![resistor("R1", p(50_800, 50_800), 0, false)], ..Default::default() };
+    let mut start = SchematicSection { symbols: vec![resistor("R1", p(50_800_000, 50_800_000), 0, false)], ..Default::default() };
     start.field_layout.insert("R1".into(), OwnerCtx::new(&start, &m, "R1").unwrap().current(&start));
     let (r, v) = (field_named(&start, "Reference"), field_named(&start, "Value"));
     apply_field_changes(&mut start, &FieldChanges { add_fields: vec!["MPN".into()], ..Default::default() }).unwrap();
@@ -448,10 +448,10 @@ fn a_sheet_read_from_a_kicad_file_keeps_its_user_fields_but_has_no_places_to_edi
 #[test]
 fn a_stored_placement_of_a_user_field_is_where_the_sheet_draws_it() {
     let mut start = sheet(0, false);
-    start.field_layout.insert("R1".into(), vec![FieldPlacement { dx: 3_000, dy: -7_000, visible: true, h: TextJustify::Left, ..FieldPlacement::at_origin("MPN") }]);
+    start.field_layout.insert("R1".into(), vec![FieldPlacement { dx: 3_000_000, dy: -7_000_000, visible: true, h: TextJustify::Left, ..FieldPlacement::at_origin("MPN") }]);
     let f = field_named(&start, "MPN");
     assert!(f.visible);
-    assert!(near(f.at, (50_800.0 + 3_000.0, 50_800.0 - 7_000.0)), "{:?}", f.at);
+    assert!(near(f.at, (50_800_000.0 + 3_000_000.0, 50_800_000.0 - 7_000_000.0)), "{:?}", f.at);
     // the standard fields have no stored place: Autoplace Fields' (live)
     assert_eq!(field_key("R1", 1), "R1");
     assert!(field_named(&start, "Reference").visible);

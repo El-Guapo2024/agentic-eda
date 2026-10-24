@@ -13,9 +13,9 @@
 // Not ported: Component Classes -- nothing in the model holds them yet.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { umFrom, umTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
 import { predefinedSizesCmds } from "../kicad-port/boardSetupRules";
-import type { DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Um } from "../api/types";
+import type { DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Nm } from "../api/types";
 import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
 import { FormattingPage } from "./boardSetup/FormattingPage";
@@ -99,11 +99,11 @@ const DEFAULT_DIMENSION_SETTINGS: DimensionSettings = {
   suppress_trailing_zeros: true,
   text_position: "outside",
   keep_text_aligned: true,
-  text_size_um: 1000,
-  stroke_width: 200,
-  arrow_length: 1270,
-  extension_offset: 500,
-  extension_height: 586,
+  text_size_nm: 1_000_000,
+  stroke_width: 200_000,
+  arrow_length: 1_270_000,
+  extension_offset: 500_000,
+  extension_height: 586_421, // arrow_length * sin(27.5 deg), as DimensionSettings::default()
 };
 
 const DEFAULT_TEARDROP_SETTINGS: TeardropSettings = {
@@ -113,8 +113,8 @@ const DEFAULT_TEARDROP_SETTINGS: TeardropSettings = {
   target_smd_pads: true,
   best_length_ratio: 0.5,
   best_width_ratio: 1.0,
-  max_len_um: 1000,
-  max_width_um: 2000,
+  max_len_nm: 1_000_000,
+  max_width_nm: 2_000_000,
   width_to_size_filter_ratio: 0.9,
 };
 
@@ -311,11 +311,11 @@ export function BoardSetupDialog() {
                   <input
                     type="number"
                     step="any"
-                    value={umTo(w, units)}
+                    value={nmTo(w, units)}
                     onChange={(e) => {
                       const n = Number(e.target.value);
                       if (!Number.isFinite(n)) return;
-                      setWidths((ws) => ws.map((cur, j) => (j === i ? Math.round(umFrom(n, units)) : cur)));
+                      setWidths((ws) => ws.map((cur, j) => (j === i ? Math.round(nmFrom(n, units)) : cur)));
                     }}
                     style={{ width: 100 }}
                   />
@@ -323,7 +323,7 @@ export function BoardSetupDialog() {
                   <button onClick={() => setWidths((ws) => ws.filter((_, j) => j !== i))}>Remove</button>
                 </div>
               ))}
-              <button onClick={() => setWidths((ws) => [...ws, (rules?.track_width ?? 250) as Um])}>Add Track Width</button>
+              <button onClick={() => setWidths((ws) => [...ws, (rules?.track_width ?? 250_000) as Nm])}>Add Track Width</button>
 
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 14 }}>Via Sizes (the via-size-cycle hotkey, plus the board default above)</p>
               {vias.map((v, i) => (
@@ -332,11 +332,11 @@ export function BoardSetupDialog() {
                   <input
                     type="number"
                     step="any"
-                    value={umTo(v.diameter, units)}
+                    value={nmTo(v.diameter, units)}
                     onChange={(e) => {
                       const n = Number(e.target.value);
                       if (!Number.isFinite(n)) return;
-                      setVias((vs) => vs.map((cur, j) => (j === i ? { ...cur, diameter: Math.round(umFrom(n, units)) } : cur)));
+                      setVias((vs) => vs.map((cur, j) => (j === i ? { ...cur, diameter: Math.round(nmFrom(n, units)) } : cur)));
                     }}
                     style={{ width: 90 }}
                   />
@@ -344,11 +344,11 @@ export function BoardSetupDialog() {
                   <input
                     type="number"
                     step="any"
-                    value={umTo(v.drill, units)}
+                    value={nmTo(v.drill, units)}
                     onChange={(e) => {
                       const n = Number(e.target.value);
                       if (!Number.isFinite(n)) return;
-                      setVias((vs) => vs.map((cur, j) => (j === i ? { ...cur, drill: Math.round(umFrom(n, units)) } : cur)));
+                      setVias((vs) => vs.map((cur, j) => (j === i ? { ...cur, drill: Math.round(nmFrom(n, units)) } : cur)));
                     }}
                     style={{ width: 90 }}
                   />
@@ -356,7 +356,7 @@ export function BoardSetupDialog() {
                   <button onClick={() => setVias((vs) => vs.filter((_, j) => j !== i))}>Remove</button>
                 </div>
               ))}
-              <button onClick={() => setVias((vs) => [...vs, { diameter: (rules?.via_diameter ?? 600) as Um, drill: (rules?.via_drill ?? 300) as Um }])}>Add Via Size</button>
+              <button onClick={() => setVias((vs) => [...vs, { diameter: (rules?.via_diameter ?? 600_000) as Nm, drill: (rules?.via_drill ?? 300_000) as Nm }])}>Add Via Size</button>
 
               <div style={{ marginTop: 14 }}>
                 <button className="primary" onClick={applyTrackVia}>
@@ -397,10 +397,10 @@ export function BoardSetupDialog() {
                   <input
                     type="number"
                     step="any"
-                    value={umTo(td.max_len_um, units)}
+                    value={nmTo(td.max_len_nm, units)}
                     onChange={(e) => {
                       const n = Number(e.target.value);
-                      if (Number.isFinite(n)) setTdField("max_len_um", Math.round(umFrom(n, units)));
+                      if (Number.isFinite(n)) setTdField("max_len_nm", Math.round(nmFrom(n, units)));
                     }}
                     style={{ width: 90 }}
                   />{" "}
@@ -411,10 +411,10 @@ export function BoardSetupDialog() {
                   <input
                     type="number"
                     step="any"
-                    value={umTo(td.max_width_um, units)}
+                    value={nmTo(td.max_width_nm, units)}
                     onChange={(e) => {
                       const n = Number(e.target.value);
-                      if (Number.isFinite(n)) setTdField("max_width_um", Math.round(umFrom(n, units)));
+                      if (Number.isFinite(n)) setTdField("max_width_nm", Math.round(nmFrom(n, units)));
                     }}
                     style={{ width: 90 }}
                   />{" "}
@@ -487,15 +487,15 @@ export function BoardSetupDialog() {
               <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
                 <span>Arrow length</span>
                 <span>
-                  <input type="number" step="any" value={umTo(dimSettings.arrow_length, units)} onChange={(e) => setDimField("arrow_length", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
+                  <input type="number" step="any" value={nmTo(dimSettings.arrow_length, units)} onChange={(e) => setDimField("arrow_length", Math.round(nmFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
                 </span>
                 <span>Extension line offset</span>
                 <span>
-                  <input type="number" step="any" value={umTo(dimSettings.extension_offset, units)} onChange={(e) => setDimField("extension_offset", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
+                  <input type="number" step="any" value={nmTo(dimSettings.extension_offset, units)} onChange={(e) => setDimField("extension_offset", Math.round(nmFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
                 </span>
                 <span>Extension past crossbar</span>
                 <span>
-                  <input type="number" step="any" value={umTo(dimSettings.extension_height, units)} onChange={(e) => setDimField("extension_height", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
+                  <input type="number" step="any" value={nmTo(dimSettings.extension_height, units)} onChange={(e) => setDimField("extension_height", Math.round(nmFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
                 </span>
               </div>
 

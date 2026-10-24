@@ -25,7 +25,7 @@ export function registerGridListActions(m: Map<string, ActionHandler>, ctx: Comm
   const changeGrid = (um: number, fromHotkey: boolean) => {
     const adapter = ctx.getAdapter();
     if (!adapter) return;
-    adapter.setGridUm(um);
+    adapter.setGridNm(um);
     if (adapter.cursor) {
       const p = alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, um, getSnapOrigin(), { ctrlOrCmd: false });
       adapter.setCursor({ x: p.x, y: p.y });
@@ -53,7 +53,7 @@ export function registerGridListActions(m: Map<string, ActionHandler>, ctx: Comm
   // ACTIONS::gridNext / gridPrev -- COMMON_TOOLS::GridNext / GridPrev: `currentGrid++; if( >= size ) = 0` / `--; if( < 0 ) = size - 1`, wrapping round.
   const step = (dir: 1 | -1): ActionHandler => () => {
     const adapter = ctx.getAdapter();
-    if (adapter) changeGrid(stepGrid(getGridSettings(editor).grids, adapter.gridUm, dir), true);
+    if (adapter) changeGrid(stepGrid(getGridSettings(editor).grids, adapter.gridNm, dir), true);
   };
   m.set("common.Control.gridNext", step(1));
   m.set("common.Control.gridPrev", step(-1));
@@ -66,7 +66,7 @@ export function registerGridListActions(m: Map<string, ActionHandler>, ctx: Comm
     const adapter = ctx.getAdapter();
     if (!adapter) return;
     const { grids, fast1, fast2 } = getGridSettings(editor);
-    const current = grids.findIndex((g) => Math.abs(g - adapter.gridUm) < 1e-9);
+    const current = grids.findIndex((g) => Math.abs(g - adapter.gridNm) < 1e-9);
     preset(fastGridCycleTarget(current, fast1, fast2), true);
   });
 }

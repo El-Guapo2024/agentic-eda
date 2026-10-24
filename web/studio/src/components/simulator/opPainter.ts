@@ -22,9 +22,9 @@ export function paintOperatingPoints(ctx: CanvasRenderingContext2D, scale: numbe
     const dy = l.v === "center" ? size / 2 : 0;
     const angleRad = l.vertical ? -Math.PI / 2 : 0;
     const [x, y] = l.vertical ? [l.x + dy, l.y] : [l.x, l.y + dy];
-    const opts = { sizeUm: size, justify: l.h, angleRad } as const;
+    const opts = { sizeNm: size, justify: l.h, angleRad } as const;
     // knockout: the text first in the background's colour, wider
-    drawStrokeText(ctx, l.text, x, y, { ...opts, thicknessUm: thickness * 3, color: background });
-    drawStrokeText(ctx, l.text, x, y, { ...opts, thicknessUm: thickness, color });
+    drawStrokeText(ctx, l.text, x, y, { ...opts, thicknessNm: thickness * 3, color: background });
+    drawStrokeText(ctx, l.text, x, y, { ...opts, thicknessNm: thickness, color });
   }
 }
