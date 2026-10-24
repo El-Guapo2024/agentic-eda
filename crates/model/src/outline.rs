@@ -111,7 +111,7 @@ pub fn rounded_rect_sides(id: &str, layer: &str, stroke_width: Nm, a: Point, b: 
     let seg = |s: Point, e: Point| Shape::Segment { id: id.to_string(), layer: layer.to_string(), stroke_width, filled: false, start: s, end: e };
     let arc = |s: Point, m: Point, e: Point| Shape::Arc { id: id.to_string(), layer: layer.to_string(), stroke_width, filled: false, start: s, mid: m, end: e };
     let mut out = Vec::new();
-    let mut side = |s: Point, e: Point, out: &mut Vec<Shape>| {
+    let side = |s: Point, e: Point, out: &mut Vec<Shape>| {
         if s != e {
             out.push(seg(s, e));
         }
