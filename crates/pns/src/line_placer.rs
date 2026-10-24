@@ -700,9 +700,27 @@ impl LinePlacer {
         let Some(popped) = self.runs.pop() else { return false };
         // the via that run ended in goes with it, and the route is back on the layer the run was on (`m_currentLayer = st.pts[0].layer`)
         let left = self.runs.len();
+        let ended_in_via = self.fixed_vias.iter().rev().find(|(v, runs)| *runs > left && popped.last() == Some(v.pos)).map(|(v, _)| v.clone());
+        let layer_after = self.current_layer;
         self.fixed_vias.retain(|(_, runs)| *runs <= left);
         *self.last_good.borrow_mut() = None;
         self.current_layer = popped.layer;
+        // `m_placingVia = st.pts[0].placingVia` (what `FixRoute`'s `AddStage` recorded): a run that ended in a via is taken back with the via
+        // armed again, to the layer it went on to
+        match ended_in_via {
+            Some(v) => {
+                self.placing_via = true;
+                self.via_to_layer = Some(layer_after);
+                self.via_span = Some(v.layers);
+                self.via_diameter = v.diameter;
+                self.via_drill = v.drill;
+            }
+            None => {
+                self.placing_via = false;
+                self.via_to_layer = None;
+                self.via_span = None;
+            }
+        }
         // `UnfixRoute`: `m_shove->RewindSpringbackTo( st.commit )` -- the frames from the one the run was fixed in are gone, and with them
         // what its shoves had moved
         if let Some(len) = self.stages.pop() {

@@ -178,8 +178,32 @@ fn a_via_that_ends_the_route_is_committed() {
     router.preview(end);
     assert!(router.fix(end).is_some());
     assert!(router.undo_last_segment());
+    // (Backspace arms the via again, `UnfixRoute`; V takes it back)
+    router.toggle_via(false, 600_000, 300_000, None);
     router.preview(p(-7_000_000, 0));
     let commit = router.finish(p(-7_000_000, 0)).expect("a plain F.Cu route");
     assert!(commit.vias.is_empty(), "{commit:?}");
     assert!(commit.tracks.iter().all(|t| t.layer == "F.Cu"), "back on the layer the undone run was on: {commit:?}");
+}
+
+/// Backspace after a leg that ended in a via takes the leg back with the via armed again (`UnfixRoute`: `m_placingVia =
+/// st.pts[0].placingVia`), on the leg's own layer: the next click places the via again and the route goes on on the other layer.
+#[test]
+fn backspace_takes_a_via_leg_back_with_the_via_armed_again() {
+    let (design, model) = board(vec![]);
+    let mut router = Router::new(&design, &model);
+    router.start(p(-9_000_000, 0), "F.Cu", 200_000).unwrap();
+    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.preview(p(-5_000_000, 0));
+    assert!(router.fix(p(-5_000_000, 0)).is_some());
+    assert_eq!(router.pending_via_layer(), None, "the click placed it");
+    assert!(router.undo_last_segment());
+    assert_eq!(router.pending_via_layer(), Some(1), "armed again, to B.Cu");
+    let pv = router.preview(p(-5_000_000, 0)).unwrap();
+    assert!(pv.via.is_some() && pv.head.layer == 0, "the head is on F.Cu and ends in the via: {pv:?}");
+    assert!(router.fix(p(-5_000_000, 0)).is_some());
+    router.preview(p(-5_000_000, 3_000_000));
+    let commit = router.finish(p(-5_000_000, 3_000_000)).unwrap();
+    assert_eq!(commit.vias.iter().map(|v| v.at).collect::<Vec<_>>(), vec![p(-5_000_000, 0)]);
+    assert!(commit.tracks.iter().any(|t| t.layer == "B.Cu"));
 }

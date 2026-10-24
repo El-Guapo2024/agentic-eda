@@ -381,7 +381,14 @@ export function useActionRunner() {
       m.set(
         "pcbnew.InteractiveRouter.UndoLastSegment",
         pcbOnly(() => {
-          routeUndoSegment().then(() => refreshPreview());
+          // `UnfixRoute` arms again the via the undone leg ended in (`m_placingVia = st.pts[0].placingVia`)
+          routeUndoSegment().then((r) => {
+            const d = r.popped ? { ...draw, placingVia: !!r.placing_via, pendingViaLayer: r.via_to_layer ?? undefined } : draw;
+            if (d !== draw) dispatch({ type: "SET_DRAW_STATE", draw: d });
+            routeMove(cursor.x, cursor.y).then((preview) => {
+              if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(d, preview) });
+            });
+          });
         })
       );
       // W / Shift+W: cycle the live track width through a small fixed

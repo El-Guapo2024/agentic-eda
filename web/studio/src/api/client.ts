@@ -566,7 +566,8 @@ export function routeFix(x: Nm, y: Nm): Promise<RouteFixReply> {
   return postJson("/api/route/fix", { x, y });
 }
 
-export function routeUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
+/** Backspace. `placing_via` / `via_to_layer`: the via the undone leg ended in is armed again (`UnfixRoute`). */
+export function routeUndoSegment(): Promise<{ ok: boolean; popped: boolean; placing_via?: boolean; via_to_layer?: string | null }> {
   return postJson("/api/route/undo_segment", {});
 }
 

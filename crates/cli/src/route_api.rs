@@ -213,7 +213,9 @@ pub fn undo_segment(cell: &RouteCell) -> Value {
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
     let popped = router.undo_last_segment();
-    json!({ "ok": true, "popped": popped })
+    // `UnfixRoute` puts back a via the undone run ended in (`m_placingVia`): the studio shows it armed again
+    let via = router.pending_via_layer().map(|l| router.layer_name(l).to_string());
+    json!({ "ok": true, "popped": popped, "placing_via": via.is_some(), "via_to_layer": via })
 }
 
 /// `POST /api/route/via`: `{enabled, diameter?, drill?, to_layer?, via_type?, span?}` --
