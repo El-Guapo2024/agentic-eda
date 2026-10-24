@@ -54,6 +54,8 @@ export interface ForeignReply {
   text?: string;
   /** A board: the `.kicad_pro` kicad-cli made with it -- the design rules and the net classes the importer set, which the board file does not hold. `null` when it could not be made. */
   project?: string | null;
+  /** A board: the custom DRC rules (`.kicad_dru`) its importer wrote (Eagle's class clearances, PADS's diff-pair gaps, EasyEDA Pro's spacing rules). `null` for none. */
+  rules?: string | null;
   /** A schematic: the sheet file (`eda_model::sheet_file::SheetFile`). */
   content?: unknown;
   notes?: string[];

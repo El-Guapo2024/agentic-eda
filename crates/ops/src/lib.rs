@@ -883,6 +883,10 @@ pub enum Cmd {
         /// The `.kicad_pro` `kicad-cli import` wrote for the board: the design rules and the net classes the importer set, which the server puts in the board's model.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project: Option<String>,
+        /// The custom DRC rules (`.kicad_dru`) the importer wrote beside the board or the file it read (`eda_kicad_engine::foreign::imported_rules`), which the server
+        /// sets as the board's custom rules.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rules: Option<String>,
     },
     /// File > Import > Non-KiCad Schematic File... (`eeschema.EditorControl.importNonKicadSchematic`, `SCH_EDIT_FRAME::OnImportProject`): the schematic -- the root sheet and every
     /// sheet under it -- is replaced by the one kicad-cli made of another EDA format's file (`content`, read by `eda_kicad::load_sheet_file`; `name` is the file it came from).
@@ -2941,7 +2945,7 @@ impl<'a> Board<'a> {
                 None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
-            Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref()),
+            Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project, rules } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref(), rules.as_deref()),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),

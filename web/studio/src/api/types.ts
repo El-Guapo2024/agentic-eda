@@ -1689,7 +1689,7 @@ export type Cmd =
   | ImportSchGraphicsCmd
   | ImportSymbolGraphicsCmd
   /** File > Import > Non-KiCad Board File... (`BOARD_EDITOR_CONTROL::OpenNonKicadBoard`): the open board replaced by `text`, the `.kicad_pcb` kicad-cli made of another EDA format's file (`POST /api/import_foreign`). One undo step; see crates/ops/src/import_foreign.rs. `keep_kicad_layer_names` is the dialog's "Keep KiCad layer names"; `project` is the `.kicad_pro` kicad-cli made with the board, which holds the design rules and net classes the importer set. */
-  | { op: "replace_board"; text: string; name?: string; keep_kicad_layer_names?: boolean; project?: string }
+  | { op: "replace_board"; text: string; name?: string; keep_kicad_layer_names?: boolean; project?: string; rules?: string }
   /** File > Import > Non-KiCad Schematic File... (`SCH_EDIT_FRAME::OnImportProject`): the schematic replaced by `content`, the sheet file `POST /api/import_foreign` answered. One undo step. */
   | { op: "replace_schematic"; content: unknown; name?: string }
   /** File > Import > Specctra Session... (`PCB_EDIT_FRAME::ImportSpecctraSession`, `SPECCTRA_DB::FromSESSION`): the session's wires and vias in place of the board's unlocked tracks and vias, and the footprints where its placement puts them. `session` is the file's text. One undo step; see crates/ops/src/specctra.rs. */

@@ -28,15 +28,17 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 /// `eda_kicad::import_kicad_pcb` makes of it). Content-addressed: the same board is the same file, and a redo finds it where the first run left it. `keep_kicad_layer_names`
 /// (the dialog's "Keep KiCad layer names") makes another model of the same text -- one whose layers show their standard names -- and so does the project the importer wrote with
 /// the board (`project`: its design rules and net classes), so each is another file.
-pub fn imported_intent_file(intent_hash: &str, keep_kicad_layer_names: bool, project: Option<&str>) -> String {
-    // FNV-1a over the project's text: a name for a file, not a defence against anyone.
-    let project = project.map(|p| format!(".p{:08x}", p.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)) as u32)).unwrap_or_default();
-    format!("imports/{}{}{project}.intent.yaml", &intent_hash[..intent_hash.len().min(24)], if keep_kicad_layer_names { ".kicad-names" } else { "" })
+pub fn imported_intent_file(intent_hash: &str, keep_kicad_layer_names: bool, project: Option<&str>, rules: Option<&str>) -> String {
+    // FNV-1a over the project's text (and the rules'): a name for a file, not a defence against anyone.
+    let fnv = |t: &str| t.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)) as u32;
+    let project = project.map(|p| format!(".p{:08x}", fnv(p))).unwrap_or_default();
+    let rules = rules.map(|r| format!(".r{:08x}", fnv(r))).unwrap_or_default();
+    format!("imports/{}{}{project}{rules}.intent.yaml", &intent_hash[..intent_hash.len().min(24)], if keep_kicad_layer_names { ".kicad-names" } else { "" })
 }
 
 impl<'a> Board<'a> {
     /// `Cmd::ReplaceBoard`: see the module doc. `text` is the `.kicad_pcb` kicad-cli wrote.
-    pub(crate) fn replace_board(&mut self, text: &str, name: &str, keep_kicad_layer_names: bool, project: Option<&str>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn replace_board(&mut self, text: &str, name: &str, keep_kicad_layer_names: bool, project: Option<&str>, rules: Option<&str>) -> Result<(), Vec<CheckResult>> {
         let (mut board, _model, _notes) = eda_kicad::import_kicad_pcb(text).map_err(|e| fail("ops_bad_board", name, format!("'{name}' did not convert to a board this reader takes: {}", e.iter().filter_map(|c| c.hint.clone()).collect::<Vec<_>>().join("; "))))?;
         // What stays is the other editor's: the schematic and its sheets, the libraries the editors keep, the bus aliases. The nets the schematic's drawing set are the old
         // board's connectivity: they would override the pads of the board that comes in.
@@ -47,7 +49,7 @@ impl<'a> Board<'a> {
         board.footprint_library = old.footprint_library.take();
         board.bus_aliases = std::mem::take(&mut old.bus_aliases);
         board.nets = None;
-        let file = imported_intent_file(&board.provenance.intent_hash, keep_kicad_layer_names, project);
+        let file = imported_intent_file(&board.provenance.intent_hash, keep_kicad_layer_names, project, rules);
         board.drawings.get_or_insert_with(Default::default).intent_file = Some(file);
         self.design = board;
         Ok(())
@@ -150,7 +152,7 @@ mod tests {
         d.drawings = Some(eda_model::ir::DrawingsSection { page: Some(Default::default()), ..Default::default() });
         d.symbol_library = Some(Default::default());
         let mut b = Board::new(d, &m, 100_000, 300_000);
-        let cmd = Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None };
+        let cmd = Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None, rules: None };
         assert!(cmd.replaces_board() && cmd.spans_both_editors() && !cmd.clears_routing(), "an import is judged by nobody, takes the netlist the drawing set with it, and keeps the copper it brings");
         b.apply(&cmd).unwrap();
         let d = b.design();
@@ -162,10 +164,11 @@ mod tests {
         assert!(d.nets.is_none(), "the netlist the old drawing set would override the pads of the board that came in");
         // The model is a file of its own, named by the hash of the text.
         let file = d.drawings.as_ref().unwrap().intent_file.clone().unwrap();
-        assert_eq!(file, imported_intent_file(&d.provenance.intent_hash, false, None));
-        assert_ne!(file, imported_intent_file(&d.provenance.intent_hash, true, None), "the same text with its layers named the standard way is another model");
-        assert_ne!(file, imported_intent_file(&d.provenance.intent_hash, false, Some("{}")), "and so is the same text with the rules and net classes its importer wrote");
-        assert_eq!(imported_intent_file(&d.provenance.intent_hash, false, Some("{}")), imported_intent_file(&d.provenance.intent_hash, false, Some("{}")));
+        assert_eq!(file, imported_intent_file(&d.provenance.intent_hash, false, None, None));
+        assert_ne!(file, imported_intent_file(&d.provenance.intent_hash, true, None, None), "the same text with its layers named the standard way is another model");
+        assert_ne!(file, imported_intent_file(&d.provenance.intent_hash, false, Some("{}"), None), "and so is the same text with the rules and net classes its importer wrote");
+        assert_eq!(imported_intent_file(&d.provenance.intent_hash, false, Some("{}"), None), imported_intent_file(&d.provenance.intent_hash, false, Some("{}"), None));
+        assert_ne!(file, imported_intent_file(&d.provenance.intent_hash, false, None, Some("(rule a)")), "and the same text with the custom rules its importer wrote");
         assert!(file.starts_with("imports/") && file.ends_with(".intent.yaml"), "{file}");
         assert_eq!(d.provenance.intent_hash.len(), 64, "the blake3 hash of the text");
         // What the old design's drawings held (its page) is the old board's.
@@ -177,7 +180,7 @@ mod tests {
         assert_eq!(again.design().drawings.as_ref().unwrap().intent_file.as_ref(), Some(&file));
         // Not a board: refused, nothing changes.
         let before = serde_json::to_string(b.design()).unwrap();
-        let e = b.apply(&Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into(), keep_kicad_layer_names: false, project: None }).unwrap_err();
+        let e = b.apply(&Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into(), keep_kicad_layer_names: false, project: None, rules: None }).unwrap_err();
         assert_eq!(e[0].check, "ops_bad_board");
         assert_eq!(serde_json::to_string(b.design()).unwrap(), before);
         let _ = (Side::Top, Point { x: 0, y: 0 }, Provenance { engine_version: String::new(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] }, FootprintInstance { id: String::new(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: Default::default() }, PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });

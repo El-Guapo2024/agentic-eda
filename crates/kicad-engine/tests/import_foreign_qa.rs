@@ -366,3 +366,32 @@ fn kicad_cli_converts_the_qa_schematics_and_our_reader_reads_the_symbols_it_plac
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
+
+/// p22 F3: the custom DRC rules an importer writes are the board's custom rules. EasyEDA Pro's go beside the board kicad-cli saved (`JobImport`: `GetImportedDesignRules()`
+/// to `<output>.kicad_dru`), PADS's diff-pair gaps beside the file it read (`PADS_PCB_CONVERTER::generateDrcRules`); `ForeignImport::rules` has them, and merged as a
+/// project's own `.kicad_dru` is (`merge_custom_rules`) they are the model's `custom_rules_text`.
+#[test]
+fn a_board_brings_the_custom_rules_its_importer_wrote() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    if find_cli().is_none() {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    }
+    for (rel, says) in [("easyedapro/Scanning Tunneling Microscope OpenSTM ControlBoard.zip", "EasyEDA safe spacing"), ("pads/Dexter_MotorCtrl/Dexter_MotorCtrl.asc", "DiffPair_")] {
+        with_scratch(|work| {
+            // A copy of the file, so the rules an importer writes beside it land in the scratch folder and not in the QA data.
+            let input = work.join(std::path::Path::new(rel).file_name().unwrap());
+            std::fs::create_dir_all(work).unwrap();
+            std::fs::copy(plugins_dir().join(rel), &input).unwrap_or_else(|e| panic!("{rel}: {e}"));
+            let import = import_foreign_pcb(&work.join("out"), &input, &ForeignOptions::default()).unwrap_or_else(|e| panic!("{rel}: {e:?}"));
+            let rules = import.rules.clone().unwrap_or_else(|| panic!("{rel}: no rules came with the board"));
+            assert!(rules.contains(says), "{rel}: {rules}");
+            let (_, mut model, _) = import_kicad_pcb(&import.text).expect("reads");
+            eda_kicad::merge_custom_rules(&mut model, &rules);
+            assert!(model.board.custom_rules_text.as_deref().is_some_and(|t| t.contains(says)), "{rel}: the model's custom rules");
+        });
+    }
+}

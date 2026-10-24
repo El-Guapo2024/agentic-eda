@@ -97,7 +97,7 @@ async function importForeign(ctx: ImportActionContext, kind: ImportKind, given: 
       }
     }
     // The board comes with the project kicad-cli made of it: the design rules and the net classes the importer set are in that file and not in the board's.
-    const cmd = kind === "board" ? ({ op: "replace_board", text: reply.text ?? "", name: file.name, keep_kicad_layer_names: keepNames, ...(reply.project ? { project: reply.project } : {}) } as const) : ({ op: "replace_schematic", content: reply.content, name: file.name } as const);
+    const cmd = kind === "board" ? ({ op: "replace_board", text: reply.text ?? "", name: file.name, keep_kicad_layer_names: keepNames, ...(reply.project ? { project: reply.project } : {}), ...(reply.rules ? { rules: reply.rules } : {}) } as const) : ({ op: "replace_schematic", content: reply.content, name: file.name } as const);
     // An import is not a move the gates judge: Strict is off for it, as for a paste.
     const done = await postCmd(cmd, false);
     if (!done.ok) return toast(done.message, "error");

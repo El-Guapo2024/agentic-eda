@@ -97,6 +97,8 @@ fn reply(kind: Kind, name: &str, import: &ForeignImport) -> Result<Value, String
             out["text"] = json!(import.text);
             // `Cmd::ReplaceBoard` carries it too, and the server sets the board's rules and net classes from it.
             out["project"] = json!(import.project);
+            // And the custom rules its importer wrote (`.kicad_dru`), which the server sets as the board's.
+            out["rules"] = json!(import.rules);
         }
         Kind::Schematic => {
             let content = sheet_file_of(import).map_err(|e| format!("kicad-cli converted '{name}', but the schematic it made cannot be read: {}", board::reasons(&e)))?;
