@@ -1139,7 +1139,7 @@ export type Action =
   | { type: "ERC_OK"; erc: ErcReport; /** The revision the report was computed on. */ version: string | null }
   | { type: "ERC_ERR"; message: string }
   /** Exclude / un-exclude one finding in the report on screen without re-running kicad-cli (the exclusion itself is a persisted `Cmd`); `version` is the revision the patched report is now valid for (checkRevision.ts's `revisionAfterOwnEdit`): the board's after that Cmd when the report was current, so it is not called out of date by its own exclusion -- the report's own when it already was out of date. */
-  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; comment?: string; version: string | null }
+  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; /** The marker's sheet path, for a finding of one placement of a shared screen. */ sheet?: string[]; excluded: boolean; comment?: string; version: string | null }
   | { type: "SET_ERC_SELECTED"; index: number | null }
   | { type: "SET_ERC_LINT_SELECTED"; index: number | null }
   | { type: "LINT_OK"; lint: LintReport }
@@ -1578,7 +1578,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, ercRunning: false, ercError: action.message };
     case "ERC_MARK_EXCLUDED":
       if (!state.erc) return state;
-      return { ...state, erc: patchErcExcluded(state.erc, [{ check: action.check, location: action.location }], action.excluded, action.comment ?? ""), ercVersion: action.version };
+      return { ...state, erc: patchErcExcluded(state.erc, [{ check: action.check, location: action.location, ...(action.sheet ? { sheet: action.sheet } : {}) }], action.excluded, action.comment ?? ""), ercVersion: action.version };
     case "SET_ERC_SELECTED":
       return { ...state, ercSelected: action.index, ercLintSelected: action.index === null ? state.ercLintSelected : null };
     case "SET_ERC_LINT_SELECTED":

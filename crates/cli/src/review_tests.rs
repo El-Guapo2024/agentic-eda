@@ -118,7 +118,7 @@ fn an_erc_exclusion_with_a_comment_reaches_kicad_cli_and_a_deleted_marker_stays_
     );
 
     // Delete Marker on the excluded marker: the exclusion goes (KiCad's next run records the markers that are left, and this one is not).
-    step(&dir, Cmd::DeleteErcExclusion { check: "footprint_link_issues".into(), location: "U1".into() }, false, "ui").unwrap();
+    step(&dir, Cmd::DeleteErcExclusion { check: "footprint_link_issues".into(), location: "U1".into(), sheet: None }, false, "ui").unwrap();
     for run in 0..2 {
         let again = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
         let back = finding(&again, "footprint_link_issues", "U1");

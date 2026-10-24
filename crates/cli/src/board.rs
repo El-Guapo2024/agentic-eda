@@ -1609,7 +1609,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Table(c) => c.describe(),
         Cmd::SchTable(c) => format!("schematic {}", c.describe()),
         Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
-        Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
+        Cmd::DeleteErcExclusion { check, location, .. } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
         Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
         Cmd::SetIntersheetRefs { settings } => format!("schematic intersheet-refs {}", if settings.show { "shown" } else { "hidden" }),
@@ -4026,10 +4026,10 @@ mod tests {
         );
 
         assert!(
-            step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R404.1".into() }, false, "test").is_err(),
+            step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R404.1".into(), sheet: None }, false, "test").is_err(),
             "nothing excluded under this key"
         );
-        step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), sheet: None }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
         assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), ..Default::default() }]);

@@ -206,6 +206,16 @@ pub fn marker(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sh
     Some(ErcMarker { error_type: error_type.to_string(), at_nm: [at.x_nm, at.y_nm], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
 }
 
+/// Whether an exclusion's marker and a finding's are of one sheet (`SCH_MARKER::GetSheetSpecificPath`): the same sheet path, or either not known (an
+/// exclusion of a check whose marker this module does not know, or one waived before its marker was kept) -- then the `(check, location)` key alone
+/// decides, as it always did.
+pub fn same_sheet(a: Option<&ErcMarker>, b: Option<&ErcMarker>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.sheet == b.sheet,
+        _ => true,
+    }
+}
+
 /// A sheet path as protobuf JSON (`kiapi.common.types.SheetPath`).
 fn sheet_path_json(path: &[String]) -> Value {
     json!({ "path": path.iter().map(|u| json!({ "value": u })).collect::<Vec<_>>() })

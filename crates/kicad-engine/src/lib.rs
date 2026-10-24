@@ -1099,9 +1099,11 @@ impl ErcReport {
     /// that matches no marker into an excluded marker of its own (`SCHEMATIC::ResolveERCExclusions`), so the report can hold an excluded entry
     /// that no check found: one of an item that is gone (no items), a copy of a violation whose own marker the exclusion did not match (the same
     /// items, and the real one listed beside it, not excluded), or a second marker for one. What is left of those is the one stale marker KiCad
-    /// would show -- an exclusion whose violation is gone -- and a check set to Ignore has none.
+    /// would show -- an exclusion whose violation is gone -- and a check set to Ignore has none. A violation is told by its marker's sheet too
+    /// (`SetSheetSpecificPath`): the two placements of a screen two sheets show name the same items, and the excluded one is not a copy of the
+    /// other. (Not by the sheet the report lists it under: kicad-cli lists the stray marker of a check that belongs to no sheet under another one.)
     fn listed(&self) -> Vec<&Violation> {
-        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>());
+        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>(), v.marker.as_ref().map(|m| m.sheet.clone()).unwrap_or_default());
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for v in &self.violations {
@@ -1133,7 +1135,9 @@ impl ErcReport {
             .into_iter()
             .map(|v| {
                 let location = v.items.iter().find_map(|i| i.id.clone()).unwrap_or_default();
-                let studio = if location.is_empty() { None } else { exclusions.iter().find(|e| e.check == v.kind && e.location == location) };
+                // `(check, location)`, and the sheet of the marker where both know one: a screen two sheets show has one id per item, and KiCad's marker of
+                // each placement keeps its own sheet path (`SetSheetSpecificPath`), so the exclusion of one placement leaves the other's finding alone.
+                let studio = if location.is_empty() { None } else { exclusions.iter().find(|e| e.check == v.kind && e.location == location && eda_kicad::erc_exclusions::same_sheet(e.marker.as_ref(), v.marker.as_ref())) };
                 let by_kicad = v.excluded || v.severity == "exclusion";
                 let excluded = by_kicad || studio.is_some();
                 if !excluded {
@@ -2177,6 +2181,21 @@ fi"#;
         assert_eq!(j["violations"][1]["comment"], "unused", "the exclusion's comment comes with it");
         assert_eq!(j["violations"][1]["kicad_matched"], false, "the studio's own exclusion: kicad-cli's project did not hold it");
         assert_eq!(j["violations"][0]["comment"], "");
+    }
+
+    /// p13-p16 F5: a screen two sheets show has one id per item, so its two placements' findings share `(check, location)`; their markers keep their own
+    /// sheets (`SetSheetSpecificPath`), and the exclusion of one placement leaves the other an error.
+    #[test]
+    fn an_erc_exclusion_of_one_placement_leaves_the_other_placements_finding() {
+        let at = |sheet: &str| eda_model::ir::ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1, 2], items: vec!["u-a".into()], sheet: vec!["root".into(), sheet.into()], main_sheet: vec!["root".into(), sheet.into()], ..Default::default() };
+        let placed = |sheet: &str| Violation { marker: Some(at(sheet)), sheet: format!("/root/{sheet}"), ..erc_violation("pin_not_connected", vec![erc_item("Pin 2", Some("R1.2"), "u-a")], false) };
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![placed("s1"), placed("s2")], ignored_checks: vec![] };
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "R1.2".into(), marker: Some(at("s1")), ..Default::default() }]);
+        assert_eq!((j["violations"][0]["severity"].as_str(), j["violations"][1]["severity"].as_str()), (Some("excluded"), Some("error")), "{j:#}");
+        assert_eq!(j["counts"]["pin_not_connected"], 1);
+        // an exclusion with no marker (one of a check whose marker is not known) still keys on (check, location) alone
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "R1.2".into(), ..Default::default() }]);
+        assert_eq!((j["violations"][0]["severity"].as_str(), j["violations"][1]["severity"].as_str()), (Some("excluded"), Some("excluded")));
     }
 
     /// kicad-cli's own ERC report items for the tests below.

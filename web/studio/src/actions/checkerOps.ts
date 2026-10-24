@@ -300,11 +300,11 @@ export async function setErcExcluded(ctx: CheckerCtx, violations: readonly ErcVi
   if (picked.length === 0) return false;
   const before = api.getState();
   const cmds: Cmd[] = picked.map(({ k, marker }) =>
-    excluded ? { op: "add_erc_exclusion", check: k.check, location: k.location, comment, ...(marker ? { marker } : {}) } : { op: "delete_erc_exclusion", check: k.check, location: k.location }
+    excluded ? { op: "add_erc_exclusion", check: k.check, location: k.location, comment, ...(marker ? { marker } : {}) } : { op: "delete_erc_exclusion", check: k.check, location: k.location, ...(k.sheet ? { sheet: k.sheet } : {}) }
   );
   if (!(await api.cmdBatch(cmds))) return false;
   const version = await revisionAfter(before.ercVersion, before);
-  for (const { k } of picked) dispatch({ type: "ERC_MARK_EXCLUDED", check: k.check, location: k.location, excluded, comment, version });
+  for (const { k } of picked) dispatch({ type: "ERC_MARK_EXCLUDED", check: k.check, location: k.location, ...(k.sheet ? { sheet: k.sheet } : {}), excluded, comment, version });
   return true;
 }
 
@@ -423,7 +423,7 @@ export async function deleteMarkerErc(ctx: CheckerCtx): Promise<boolean> {
   const key = v.severity === "excluded" ? ercKey(v) : null;
   let version: string | null | undefined;
   if (key) {
-    if (!(await api.cmd({ op: "delete_erc_exclusion", check: key.check, location: key.location }))) return false;
+    if (!(await api.cmd({ op: "delete_erc_exclusion", check: key.check, location: key.location, ...(key.sheet ? { sheet: key.sheet } : {}) }))) return false;
     version = await revisionAfter(s.ercVersion, s);
   }
   dispatch({ type: "ERC_DELETE_MARKER", index: here, select: next, ...(version !== undefined ? { version } : {}) });

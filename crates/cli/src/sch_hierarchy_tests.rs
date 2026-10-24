@@ -957,8 +957,14 @@ fn annotate_of_a_design_with_a_shared_screen_leaves_no_duplicate() {
 
 /// A KiCad project whose root shows `ldo.kicad_sch` twice, written beside the board as `<file>` (the root) and `ldo.kicad_sch`.
 fn write_twice_placed_tree(dir: &Path, file: &str) {
+    write_twice_placed_tree_with(dir, file, |_| {});
+}
+
+/// [`write_twice_placed_tree`] with the shown screen changed by `edit` first.
+fn write_twice_placed_tree_with(dir: &Path, file: &str, edit: impl Fn(&mut eda_model::ir::SchematicSection)) {
     let (_, model) = example("ldo.yaml");
-    let child = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    let mut child = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    edit(child.schematic.as_mut().unwrap());
     let mut design = child.clone();
     let mut root = eda_model::ir::SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], ..child.schematic.clone().unwrap() };
     root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: 20_000_000 + 60_000_000 * i as i64, y: 20_000_000 }, size: (40_000_000, 20_000_000), pins: vec![], page: String::new() }).collect();
@@ -1020,6 +1026,44 @@ fn slow_an_imported_tree_that_shows_a_screen_twice_is_a_net_per_placement_in_kic
     let (kicad, ours) = (here(&kicad_net_groups(&dir)), here(&our_net_groups(&dir)));
     assert!(!kicad.is_empty());
     assert_eq!(ours, kicad, "a net per placement, as kicad-cli reads the derived files");
+}
+
+/// p13-p16 F5: the two placements of a shared screen give one finding each, with one `(check, location)` (the screen has one id per item) and their own
+/// marker sheets. Excluding one placement's leaves the other an error -- in kicad-cli, which matches the marker, and in the studio's report -- and deleting
+/// that exclusion by its sheet leaves nothing excluded.
+#[test]
+fn slow_an_erc_exclusion_on_one_placement_leaves_the_other() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = mcu30_board("slow_twice_erc_exclusion");
+    // the screen without its wires: its pins are not connected, on each placement
+    write_twice_placed_tree_with(&dir, "twice.kicad_sch", |sch| sch.wires.clear());
+    step(&dir, import_cmd("twice.kicad_sch", true, false), false, "test").unwrap();
+    let report = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let vs = report["violations"].as_array().unwrap().clone();
+    let sheet_of = |v: &serde_json::Value| v["marker"]["sheet"].clone();
+    // a finding whose (check, location) another finding of another sheet has
+    let pair = vs
+        .iter()
+        .find_map(|a| {
+            let b = vs.iter().find(|b| b["check"] == a["check"] && b["location"] == a["location"] && !a["location"].as_str().unwrap_or("").is_empty() && a["marker"].is_object() && b["marker"].is_object() && sheet_of(a) != sheet_of(b))?;
+            Some((a.clone(), b.clone()))
+        })
+        .unwrap_or_else(|| panic!("a finding on both placements: {report:#}"));
+    let (a, b) = pair;
+    let (check, location) = (a["check"].as_str().unwrap().to_string(), a["location"].as_str().unwrap().to_string());
+    let marker: eda_model::ir::ErcMarker = serde_json::from_value(a["marker"].clone()).unwrap();
+    step(&dir, Cmd::AddErcExclusion { check: check.clone(), location: location.clone(), comment: "one placement".into(), marker: Some(marker.clone()) }, false, "test").unwrap();
+    let after = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let find = |r: &serde_json::Value, of: &serde_json::Value| r["violations"].as_array().unwrap().iter().find(|v| v["check"] == check && v["location"] == location && sheet_of(v) == sheet_of(of)).cloned().unwrap_or_else(|| panic!("{check} {location} on {} in {r:#}", sheet_of(of)));
+    let (wa, wb) = (find(&after, &a), find(&after, &b));
+    assert_eq!((wa["severity"].as_str(), wa["kicad_matched"].as_bool()), (Some("excluded"), Some(true)), "the one excluded, by kicad-cli too: {wa:#}");
+    assert_eq!(wb["severity"], b["severity"], "the other placement's is what it was: {wb:#}");
+    assert_eq!(wb["kicad_matched"], false);
+    step(&dir, Cmd::DeleteErcExclusion { check: check.clone(), location: location.clone(), sheet: Some(marker.sheet.clone()) }, false, "test").unwrap();
+    let again = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    assert_eq!((find(&again, &a)["severity"].clone(), find(&again, &b)["severity"].clone()), (a["severity"].clone(), b["severity"].clone()));
 }
 
 // ---------------------------------------------------------------------------------------- KiCad's QA projects: the studio's nets against kicad-cli's
