@@ -46,13 +46,14 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     let drc_board = eda_drc::board::build(design, model);
     let mut node = Node::new();
     let locked = locked_ids_with(design, !patterns_in_edit);
+    node.set_npth(drc_board.pads.iter().filter(|p| p.kind == eda_model::PadKind::NonPlatedHole).map(|p| p.id.clone()).collect());
 
     for pad in &drc_board.pads {
         // A padstack: one solid per group of layers that shares a shape, as `PNS_KICAD_IFACE_BASE::syncPad` makes them (`PADSTACK::ForEachUniqueLayer`; the router treats
         // the pad as flashed on all of them and leaves the test of what is connected to the checks). A group whose layers are not next to each other (a custom stack's front
         // shape on the front and on a deeper layer) is a solid for each run of layers.
         if !pad.copper_by_layer.is_empty() {
-            let net = pad.net.as_deref().map(net_of).unwrap_or(None);
+            let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(net_of).unwrap_or(None) };
             for (names, shape) in pad.copper_groups() {
                 let mut idx: Vec<i32> = names.iter().filter_map(|n| layers.index_of(n)).collect();
                 idx.sort_unstable();
@@ -80,7 +81,8 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
             })
         });
         let layer_range = layer_range.unwrap_or_else(|| layers.all());
-        node.add(Item::Solid(Solid { net: pad.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false }));
+        let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(net_of).unwrap_or(None) };
+        node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false }));
     }
 
     // An arc track (`PCB_ARC`) is an `ARC` (`PNS_KICAD_IFACE_BASE::syncArc`): one item with the arc's three points, linked at its two ends. (A
@@ -162,7 +164,7 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
                     continue;
                 }
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                node.add(Item::Solid(Solid { net: None, layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("edge:{index}"), edge: true }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("edge:{index}"), edge: true }));
             }
         }
     }
@@ -184,7 +186,7 @@ fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap) {
     let mut add = |id: &str, layer: &str, at: Point, rot_deg: f64, segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm| {
         let (Some(layer), false) = (layers.index_of(layer), segs.is_empty()) else { return };
         let hull = text_bounding_hull(segs, r + TEXT_MAX_ERROR_NM, at, rot_deg);
-        node.add(Item::Solid(Solid { net: None, layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source: format!("{}{id}", Solid::TEXT_SOURCE), edge: false }));
+        node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source: format!("{}{id}", Solid::TEXT_SOURCE), edge: false }));
     };
     for (i, t) in d.copper_texts.iter().enumerate() {
         if let Some(Shape::Strokes { segs, r }) = eda_drc::board::footprint_text_shape(t) {
@@ -306,7 +308,7 @@ mod tests {
         let texts: Vec<&Solid> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.is_text() => Some(s), _ => None }).collect();
         assert_eq!(texts.len(), 2, "the two on copper, not the one on silk");
         let (front, back) = (texts.iter().find(|s| s.layers == crate::layer::LayerRange::single(layers.index_of("F.Cu").unwrap())).unwrap(), texts.iter().find(|s| s.layers == crate::layer::LayerRange::single(layers.index_of("B.Cu").unwrap())).unwrap());
-        assert!(front.net.is_none() && !front.routable() && node.get(node.iter().find(|(_, it)| matches!(it, Item::Solid(s) if s.is_text())).unwrap().0).unwrap().anchors().is_empty());
+        assert!(front.net == crate::item::not_a_net() && !front.routable() && node.get(node.iter().find(|(_, it)| matches!(it, Item::Solid(s) if s.is_text())).unwrap().0).unwrap().anchors().is_empty());
         let Shape::Polygon { pts } = &front.shape else { panic!("a polygon: {:?}", front.shape) };
         assert_eq!(pts.len(), 4);
         let (x0, y0, x1, y1) = front.shape.bbox(0);

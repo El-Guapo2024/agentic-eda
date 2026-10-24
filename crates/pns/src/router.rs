@@ -200,10 +200,10 @@ impl Router {
     /// route starts in empty space on no net (`LINE_PLACER::Start`: `m_currentNet =
     /// aStartItem ? aStartItem->Net() : GetOrphanedNetHandle()`), and commits
     /// tracks on no net, as KiCad's recorded `simple-shove-1` session does.
-    /// **Differs:** a pad or via that has no net is still refused ("that item
-    /// has no net to route"): the router's pads do not say whether they are
-    /// non-plated holes, which KiCad refuses ("Cannot start routing from a
-    /// non-plated hole."). `ROUTER::isStartingPointRoutable` first, unless
+    /// An item of no net starts a route of no net (KiCad's no-net items share
+    /// `OrphanedItem()`, [`crate::item::same_net`]); a non-plated hole is
+    /// refused ("Cannot start routing from a non-plated hole.").
+    /// `ROUTER::isStartingPointRoutable` first, unless
     /// violations are allowed: a start whose dot of track collides at the
     /// route's width and at the board's minimum width is refused ("The routing
     /// start point violates DRC.", findings p5 F2-8). Replaces any route
@@ -212,12 +212,13 @@ impl Router {
     pub fn start(&mut self, at: Point, layer_name: &str, width: Nm) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
         let pick = self.pick_start(at, layer);
-        let net = match &pick {
-            Some(pick) => self.world.get(pick.item).map(|i| i.net().clone()).filter(|n| n.is_some()).ok_or("that item has no net to route")?,
-            // the orphaned net: a net of its own, named "" -- the route's own legs are one net with each other (a `None` net is no net,
-            // and every item of no net collides with every other), and it commits as tracks on no net
-            None => Some(std::rc::Rc::from("")),
-        };
+        if let Some(Item::Solid(s)) = pick.as_ref().and_then(|p| self.world.get(p.item)) {
+            if self.world.is_npth(&s.source) {
+                return Err("Cannot start routing from a non-plated hole.".into());
+            }
+        }
+        // the item's net, or none (`OrphanedItem()`: every item of no net is that one net, `same_net`), and none in empty space
+        let net = pick.as_ref().and_then(|p| self.world.get(p.item)).and_then(|i| i.net().clone());
         let start_pos = pick.as_ref().map_or(at, |p| p.pos);
         if !self.settings.allow_drc_violations() {
             // `isStartingPointRoutable`: "If the only reason we collide is track width; it's better to allow the user to start anyway and just
@@ -511,9 +512,20 @@ impl Router {
     pub fn undo_last_segment(&mut self) -> bool {
         self.session.as_mut().is_some_and(|s| {
             let undone = s.placer.undo_last_segment();
-            s.placed_vias.truncate(s.placer.fixed_vias.len());
+            let left = s.placer.fixed_vias.len();
+            // `UnfixRoute`: the via the undone run ended in is armed again, of its type, to the layer it went on to
+            let kind = s.placed_vias.get(left).map(|v| v.kind);
+            s.placed_vias.truncate(left);
+            if undone {
+                (s.pending_via_layer, s.pending_via_kind) = if s.placer.placing_via { (s.placer.via_to_layer, kind.unwrap_or(ViaKind::Through)) } else { (None, ViaKind::Through) };
+            }
             undone
         })
+    }
+
+    /// The layer the armed via goes on to, if one is armed (`IsPlacingVia()`).
+    pub fn pending_via_layer(&self) -> Option<i32> {
+        self.session().and_then(|s| s.pending_via_layer)
     }
 
     /// `ROUTER::StopRouting()` without committing.
@@ -1587,11 +1599,35 @@ mod tests {
         let mut router = Router::new(&design, &model);
         let at = Point { x: 50_000_000, y: 50_000_000 };
         router.start(at, "F.Cu", 200_000).expect("a route in empty space");
-        assert!(router.is_routing() && router.current_net().as_deref() == Some(""));
+        assert!(router.is_routing() && router.current_net().is_none());
         router.preview(Point { x: 53_000_000, y: 50_000_000 });
         let commit = router.finish(Point { x: 53_000_000, y: 50_000_000 }).expect("nothing in the way");
         assert_eq!(commit.tracks.len(), 1);
         assert_eq!((commit.tracks[0].net.as_str(), commit.tracks[0].pts.first().copied()), ("", Some(at)));
+    }
+
+    /// A track routed in empty space is on no net, and so is what starts from its end: the two join (KiCad's no-net items share
+    /// `OrphanedItem()`), and a later no-net route next to it is no violation of it.
+    #[test]
+    fn a_route_from_the_end_of_a_no_net_track_joins_it() {
+        let (mut design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        let (a, b) = (Point { x: 50_000_000, y: 50_000_000 }, Point { x: 53_000_000, y: 50_000_000 });
+        router.start(a, "F.Cu", 200_000).unwrap();
+        router.preview(b);
+        let commit = router.finish(b).unwrap();
+        design.routing.as_mut().unwrap().tracks.extend(commit.tracks);
+        design.assign_missing_ids();
+        let mut router = Router::new(&design, &model);
+        router.start(b, "F.Cu", 200_000).expect("the end of the no-net track");
+        assert!(router.current_net().is_none());
+        let c = Point { x: 53_000_000, y: 53_000_000 };
+        let pv = router.preview(c).unwrap();
+        assert!(!pv.colliding && pv.head.first() == Some(b), "{pv:?}");
+        // a route of no net along it, 100 um away: no collision
+        router.start(Point { x: 50_000_000, y: 50_300_000 }, "F.Cu", 200_000).expect("empty space");
+        let pv = router.preview(Point { x: 53_000_000, y: 50_300_000 }).unwrap();
+        assert!(!pv.colliding && pv.head.pts.len() == 2, "{pv:?}");
     }
 
     /// findings p5 F2-8 / F3-4: `isStartingPointRoutable` refuses a start whose dot of track collides at the route's width and at the board's

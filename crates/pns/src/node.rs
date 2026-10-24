@@ -143,11 +143,13 @@ pub struct Node {
     next_id: ItemId,
     joints: HashMap<JointKey, Joint>,
     index: Index,
+    /// The sources of the pads that are non-plated holes (`PAD_ATTRIB::NPTH`): a route does not start on one (`isStartingPointRoutable`).
+    npth: std::rc::Rc<std::collections::HashSet<String>>,
 }
 
 impl Clone for Node {
     fn clone(&self) -> Self {
-        Node { items: self.items.clone(), next_id: self.next_id, joints: self.joints.clone(), index: self.index.clone() }
+        Node { items: self.items.clone(), next_id: self.next_id, joints: self.joints.clone(), index: self.index.clone(), npth: self.npth.clone() }
     }
 }
 
@@ -158,7 +160,17 @@ const INDEX_CELL_NM: Nm = 5_000_000; // 5 mm
 
 impl Node {
     pub fn new() -> Self {
-        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_NM) }
+        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_NM), npth: Default::default() }
+    }
+
+    /// Is the pad `source` a non-plated hole?
+    pub fn is_npth(&self, source: &str) -> bool {
+        self.npth.contains(source)
+    }
+
+    /// The pads that are non-plated holes ([`Self::is_npth`]).
+    pub fn set_npth(&mut self, sources: std::collections::HashSet<String>) {
+        self.npth = std::rc::Rc::new(sources);
     }
 
     /// `NODE::Branch()`, simplified to a full clone -- see this module's

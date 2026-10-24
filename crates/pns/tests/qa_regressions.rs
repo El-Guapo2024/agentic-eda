@@ -206,7 +206,7 @@ fn simple_shove_1_pushes_the_same_13_tracks_and_leaves_the_board_clean() {
     let mut router = Router::new(&design, &model);
     router.settings = settings;
     router.start(pt(&events[0]["position"]), "F.Cu", width).expect("a route starts in empty space");
-    assert_eq!(router.current_net().as_deref(), Some(""), "on no net");
+    assert!(router.current_net().is_none(), "on no net");
     let mut last = None;
     for e in &events[1..] {
         last = router.preview(pt(&e["position"]));
@@ -576,7 +576,7 @@ fn random_shove_routes_never_leave_a_new_violation() {
         let mut anchors: Vec<(Point, String)> = node
             .iter()
             .filter_map(|(_, it)| match it {
-                Item::Solid(s) if s.net.is_some() && s.layers.overlaps_layer(0) => Some((s.pos, s.net.as_deref().unwrap().to_string())),
+                Item::Solid(s) if s.net.is_some() && s.net != eda_pns::item::not_a_net() && s.layers.overlaps_layer(0) => Some((s.pos, s.net.as_deref().unwrap().to_string())),
                 _ => None,
             })
             .collect();
