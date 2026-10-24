@@ -1494,6 +1494,13 @@ pub struct Zone {
     pub net: String,
     pub layer: String,
     pub outline: Vec<Point>,
+    /// The holes of the outline: KiCad's zone outline is one polygon with holes (`ZONE::m_Poly`, `Outline()->Polygon( 0 )`), read from the file's second and later
+    /// `(polygon ...)`s (`PCB_IO_KICAD_SEXPR_PARSER::parseZONE`, `case T_polygon`, then `ZONE::AddPolygon`: `if( m_Poly->OutlineCount() == 0 ) m_Poly->AddOutline(
+    /// aPolygon ); else m_Poly->AddHole( aPolygon );`) and written back after the outline (`PCB_IO_KICAD_SEXPR::format( const ZONE* )`: `for( const SHAPE_LINE_CHAIN&
+    /// chain : poly )`). Nothing of the zone is inside a hole: no copper is poured there and a rule area keeps nothing out of it. Empty for a zone without holes
+    /// (every zone drawn here, and every `design.json` written before holes were kept).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<Vec<Point>>,
     /// The uuid the zone had in the KiCad file it was imported from (`ZONE::m_Uuid`), empty for a zone drawn here. KiCad breaks the tie between zones of equal priority by
     /// comparing uuids (`ZONE::HigherPriority`), so the derived board is written with it: kicad-cli's fill of the board then has the zones yielding to each other as it
     /// did in the file the board came from.
@@ -1701,6 +1708,7 @@ impl Default for Zone {
             net: String::new(),
             layer: String::new(),
             outline: Vec::new(),
+            holes: Vec::new(),
             uuid: String::new(),
             layers: Vec::new(),
             clearance: default_zone_clearance(),
@@ -2657,6 +2665,12 @@ pub struct PadMaskInfo {
     /// pad had it, where an SMD pad otherwise gets its side's paste layer (a stencil aperture of its own).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_paste: bool,
+    /// An SMD pad with copper on more than one layer (`(pad "1" smd .. (layers "*.Cu" "*.Paste" "*.Mask"))`, which the PADS importer writes): its copper, paste and mask
+    /// layers as the file had them, named as for a top-side footprint like [`Self::art_layers`]. KiCad keeps the pad's layer set as written (`PAD::SetLayerSet`): its DRC
+    /// tests the pad on every copper layer of it ("Padstack is questionable") and its connectivity on the front-most (`CN_LIST::Add( PAD* )`: `item->SetLayer(
+    /// lmsk.front() )`), and the writer gives the set back where an SMD pad otherwise gets its side's copper, paste and mask. Empty for an SMD pad on one copper layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub smd_layers: Vec<String>,
     /// The pad is an edge connector pad (`(pad "1" connect ..)`, `PAD_ATTRIB::CONN`): copper on one side, solder mask on both, no paste. The model holds it as an SMD pad; the writer
     /// gives it back its type and its layers, which kicad-cli's padstack check and the mask plot tell from an SMD pad's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

@@ -1280,10 +1280,12 @@ pub(crate) fn parse_pad_geometry_in(pad: &[Sexpr], fp_side: Side, fp_rot: u32, n
             return None;
         }
         // An SMD pad on the other outer layer than its footprint (layers
-        // on file are already flipped for a back-side footprint).
+        // on file are already flipped for a back-side footprint). A pad on several copper layers is on the front-most of them as far as connectivity goes
+        // (`CN_LIST::Add( PAD* )`: `LSEQ lmsk = pad->GetLayerSet().CuStack(); item->SetLayer( lmsk.front() )`), which is `F.Cu` whenever the set has it.
         if pad_kind == PadKind::Smd {
-            let (f, b) = (names.contains(&"F.Cu"), names.contains(&"B.Cu"));
-            opposite_side = if fp_side == Side::Bottom { f && !b } else { b && !f };
+            let f = names.iter().any(|l| matches!(*l, "F.Cu" | "*.Cu" | "F&B.Cu"));
+            let b = names.iter().any(|l| matches!(*l, "B.Cu" | "*.Cu" | "F&B.Cu"));
+            opposite_side = if fp_side == Side::Bottom { f } else { b && !f };
         }
     }
 
@@ -1761,6 +1763,11 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
         info.connector = sexpr::txt(pad, 2) == Some("connect");
         let smd = matches!(sexpr::txt(pad, 2), Some("smd") | Some("connect"));
         info.no_paste = smd && !info.layers.iter().any(|l| l.ends_with(".Paste"));
+        // An SMD pad on several copper layers keeps its set (`PadMaskInfo::smd_layers`).
+        if sexpr::txt(pad, 2) == Some("smd") && info.layers.iter().filter(|l| l.ends_with(".Cu")).count() > 1 {
+            info.smd_layers = info.layers.iter().filter(|l| l.ends_with(".Cu") || l.ends_with(".Mask") || l.ends_with(".Paste")).map(|l| eda_model::fp_art::layer_on_side(l, side)).collect();
+            info.smd_layers.sort();
+        }
         info.no_mask = !info.layers.iter().any(|l| l.ends_with(".Mask"));
     }
     if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
@@ -2224,9 +2231,9 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
 /// copper pours, teardrops (`(attr (teardrop ...))`) and rule areas
 /// (`(keepout ...)`/`(placement ...)`). A zone keeps its layer set
 /// (`Zone::layers`: `(layers "F.Cu" "B.Cu")`, `*.Cu`, `F&B.Cu`, `*.Mask`), and a zone
-/// with no copper layer in it is a non-copper zone. This IR's `Zone` has a single
-/// outline, so a zone with several `(polygon ...)` outlines (the first is the outline,
-/// the others its holes) becomes one `Zone` per `(polygon ...)`. The stored `(filled_polygon ...)`s are not part of the
+/// with no copper layer in it is a non-copper zone. A zone has one
+/// outline and its holes (`Zone::holes`): the first `(polygon ...)` is the outline, the others
+/// its holes (`ZONE::AddPolygon`). The stored `(filled_polygon ...)`s are not part of the
 /// design: the scan of the file (`eda_kicad::zone_fills::scan_zone_fills`) is handed out in [`ImportNotes::zone_fills`] and kept beside `design.json` as the board's fills (KiCad's
 /// own, as saved), which is what kicad-cli's `pcb drc --refill-zones` replaces on the next Fill All Zones. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
@@ -2403,11 +2410,12 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         }
         // `ZONE::m_Uuid` (`(uuid ..)`, `(tstamp ..)` before KiCad 8): the tie between zones of equal priority is decided by it (`ZONE::HigherPriority`).
         zone.uuid = sexpr::find(z, "uuid").or_else(|| sexpr::find(z, "tstamp")).and_then(|u| sexpr::txt(u, 1)).unwrap_or("").to_string();
-        let item_ref = ItemRef::of(z);
-        for outline in &outlines {
-            out.push(Zone { outline: outline.clone(), ..zone.clone() });
-            refs.zones.push(item_ref.clone());
-        }
+        // `case T_polygon` then `ZONE::AddPolygon`: the first `(polygon ...)` is the outline, every later one a hole in it (`m_Poly->AddHole( aPolygon )`).
+        let mut outlines = outlines.into_iter();
+        zone.outline = outlines.next().unwrap_or_default();
+        zone.holes = outlines.collect();
+        out.push(zone);
+        refs.zones.push(ItemRef::of(z));
     }
     out
 }

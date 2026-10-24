@@ -355,7 +355,8 @@ pub(crate) fn transform_via(v: &mut Via, x: Xform, copper: usize, outer: &(Optio
 /// `ZONE::Move`/`::Rotate`/`::Flip` (`Mirror` of the outline, then the layer flips). The fill is derived from the
 /// outline every time it is wanted, so there is nothing else to carry.
 pub(crate) fn transform_zone(z: &mut Zone, x: Xform, copper: usize) {
-    for p in z.outline.iter_mut() {
+    // The holes go with the outline (`m_Poly->Move`/`Rotate`/`Mirror` move the whole polygon set).
+    for p in z.outline.iter_mut().chain(z.holes.iter_mut().flatten()) {
         *p = x.point(*p);
     }
     if x.is_flip() {

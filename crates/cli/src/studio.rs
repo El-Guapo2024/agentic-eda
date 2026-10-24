@@ -1269,6 +1269,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 // `ZONE::GetLayerSet()`: the zone's layers, `layer` first -- one for a zone on one layer.
                 "layers": z.layer_set(),
                 "outline": z.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+                // The outline's holes (`ZONE::Outline()`'s holes), drawn and hit-tested as outside the zone.
+                "holes": z.holes.iter().map(|h| h.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()).collect::<Vec<_>>(),
                 // Full `ZONE_SETTINGS` (crates/model/src/ir.rs's `Zone`),
                 // for ZoneDialog's edit mode (dialog_copper_zones.cpp) --
                 // was net/layer/outline only. Enums (`pad_connection`/

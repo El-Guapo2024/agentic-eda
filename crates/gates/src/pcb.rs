@@ -34,6 +34,11 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     inside
 }
 
+/// Inside the zone's outline and in none of its holes.
+fn in_zone(p: Point, z: &eda_model::ir::Zone) -> bool {
+    point_in_polygon(p, &z.outline) && !z.holes.iter().any(|h| h.len() >= 3 && point_in_polygon(p, h))
+}
+
 /// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for the board's Edge.Cuts, from the live port of the same
 /// check (`eda_drc::outline::check_board_outline`): a gap wider than the chaining epsilon, a chain that crosses itself, a contour that crosses another,
 /// a line a few nanometres long. One finding per place, located at the Edge.Cuts items it names (or `outline`). A board whose outline is its polygon has
@@ -1174,13 +1179,13 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         let zone_base = via_base + vias.len();
         for (zi, z) in zones.iter().enumerate() {
             for (pi, pad) in net_pads.iter().enumerate() {
-                if pad.layers.iter().any(|l| z.is_on_layer(l)) && point_in_polygon(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, &z.outline) {
+                if pad.layers.iter().any(|l| z.is_on_layer(l)) && in_zone(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, z) {
                     uf.union(pi, zone_base + zi);
                 }
             }
             for (vi, v) in vias.iter().enumerate() {
                 let spans = z.is_on_layer(&v.from_layer) || z.is_on_layer(&v.to_layer);
-                if spans && point_in_polygon(v.at, &z.outline) {
+                if spans && in_zone(v.at, z) {
                     uf.union(via_base + vi, zone_base + zi);
                 }
             }

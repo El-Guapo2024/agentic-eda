@@ -4114,15 +4114,20 @@ impl<'a> Board<'a> {
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let zi = rt.zones.iter().position(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
         let chain = |pts: &[Point]| pts.iter().map(|p| Point64::new(p.x, p.y)).collect::<Vec<_>>();
+        // `SHAPE_POLY_SET originalOutline( *aZone.Outline() )`: the outline with its holes.
         let mut remaining = ShapePolySet::from_outline(chain(&rt.zones[zi].outline));
+        for hole in rt.zones[zi].holes.iter().filter(|h| h.len() >= 3) {
+            remaining.add_hole(chain(hole), Some(0));
+        }
         let before_area = remaining.area();
         remaining.boolean_subtract(&ShapePolySet::from_outline(chain(cutout)));
         if (remaining.area() - before_area).abs() < 0.5 {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "the cutout does not overlap the zone")]);
         }
-        // One zone per remaining main outline; holes ride along fractured.
-        remaining.fracture(false);
+        // `ZONE_CREATE_HELPER::performZoneCutout`: "a zone can have only one main outline, so create as many zones as originalOutline contains main outlines",
+        // each with its own holes (`newZoneOutline->AddHole( originalOutline.CHole( outline, hole ) )`).
         let template = rt.zones.remove(zi);
+        let ring_of = |r: &Vec<Point64>| r.iter().map(|p| Point { x: p.x, y: p.y }).collect::<Vec<Point>>();
         for poly in &remaining.polys {
             let ring = &poly[0];
             if ring.len() < 3 {
@@ -4131,7 +4136,8 @@ impl<'a> Board<'a> {
             let mut z = template.clone();
             z.id = String::new();
             z.uuid.clear();
-            z.outline = ring.iter().map(|p| Point { x: p.x, y: p.y }).collect();
+            z.outline = ring_of(ring);
+            z.holes = poly[1..].iter().filter(|h| h.len() >= 3).map(ring_of).collect();
             rt.zones.push(z);
         }
         rt.assign_missing_ids();

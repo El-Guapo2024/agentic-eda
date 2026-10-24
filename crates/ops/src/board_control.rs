@@ -123,18 +123,27 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
         return Err(fail("ops_zone_merge", &zones[first].id, "the selected zones do not touch, so there is nothing to merge"));
     }
 
-    let chain = |z: &Zone| z.outline.iter().map(|p| Point64::new(p.x, p.y)).collect::<Vec<_>>();
-    let mut union = ShapePolySet::from_outline(chain(&zones[to_merge[0]]));
+    // `ZONE::Outline()`: the outline and its holes.
+    let chain = |r: &[Point]| r.iter().map(|p| Point64::new(p.x, p.y)).collect::<Vec<_>>();
+    let poly = |z: &Zone| {
+        let mut set = ShapePolySet::from_outline(chain(&z.outline));
+        for hole in z.holes.iter().filter(|h| h.len() >= 3) {
+            set.add_hole(chain(hole), Some(0));
+        }
+        set
+    };
+    let mut union = poly(&zones[to_merge[0]]);
     for &m in &to_merge[1..] {
-        union.boolean_add(&ShapePolySet::from_outline(chain(&zones[m])));
+        union.boolean_add(&poly(&zones[m]));
     }
     union.simplify();
     // One polygon, possibly with holes: two means the overlap was a point, or inside a hole.
     if union.outline_count() != 1 {
         return Err(fail("ops_zone_merge", &zones[first].id, "Zones have insufficient overlap for merging."));
     }
-    union.fracture(false);
+    // Not fractured: the merged zone keeps its holes (`aOriginZone->Outline()->Simplify()` and no more).
     let ring: Vec<Point> = union.outline(0).iter().map(|p| Point { x: p.x, y: p.y }).collect();
+    let holes: Vec<Vec<Point>> = union.polys[0][1..].iter().filter(|h| h.len() >= 3).map(|h| h.iter().map(|p| Point { x: p.x, y: p.y }).collect()).collect();
     if ring.len() < 3 {
         return Err(fail("ops_zone_merge", &zones[first].id, "Zones have insufficient overlap for merging."));
     }
@@ -143,6 +152,7 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
     let priority = to_merge.iter().map(|&m| zones[m].priority).max().unwrap_or(0);
     let keep = zones[first].id.clone();
     zones[first].outline = ring;
+    zones[first].holes = holes;
     zones[first].priority = priority;
     let drop: BTreeSet<usize> = to_merge.iter().copied().filter(|&m| m != first).collect();
     let mut at = 0;
@@ -520,17 +530,18 @@ mod tests {
     }
 
     #[test]
-    fn a_merge_that_closes_a_hole_stays_one_zone_with_the_hole_slit_into_its_ring() {
+    fn a_merge_that_closes_a_hole_stays_one_zone_with_the_hole() {
         // A U (a notch open at the top) and a bar across the notch's mouth: the void under the bar is a hole.
         let u = Zone { id: "u".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![pt(0, 0), pt(30_000, 0), pt(30_000, 30_000), pt(20_000, 30_000), pt(20_000, 10_000), pt(10_000, 10_000), pt(10_000, 30_000), pt(0, 30_000)], ..Default::default() };
         let bar = Zone { id: "bar".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![pt(8_000, 25_000), pt(22_000, 25_000), pt(22_000, 35_000), pt(8_000, 35_000)], ..Default::default() };
         let mut d = design(vec![u, bar]);
         merge_zones(&mut d, &["u".into(), "bar".into()]).unwrap();
         assert_eq!(zones(&d).len(), 1);
-        let ring = &zones(&d)[0].outline;
-        assert!(ring.len() > 8, "the hole's slit adds vertices: {ring:?}");
-        // U (700e6) + bar (140e6) - their overlap (20e6); the slit has no area, and the hole is not in the U to begin with.
-        assert!((ring_area(ring) - 820e6).abs() < 1.0, "{}", ring_area(ring));
+        let z = &zones(&d)[0];
+        // Not fractured (`mergeZones` simplifies the union and keeps its holes): the outline round the lot and the void under the bar as a hole.
+        assert_eq!(z.holes.len(), 1, "{z:?}");
+        // U (700e6) + bar (140e6) - their overlap (20e6), the hole (10x15 = 150e6) inside the outer ring and not in the U to begin with.
+        assert!((ring_area(&z.outline) - ring_area(&z.holes[0]) - 820e6).abs() < 1.0, "{} {}", ring_area(&z.outline), ring_area(&z.holes[0]));
     }
 
     #[test]

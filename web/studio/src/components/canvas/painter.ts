@@ -575,14 +575,21 @@ function ruleAreaLabel(z: Zone): string {
   return [keepout, placement].filter((p) => p !== "").join("  ") || "Rule Area";
 }
 
+/** The zone's outline and its holes (`ZONE::Outline()`), each a closed subpath: fill or clip it with the even-odd rule. */
+function traceZone(ctx: CanvasRenderingContext2D, z: Zone) {
+  for (const ring of [z.outline, ...(z.holes ?? [])]) {
+    ring.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+  }
+}
+
 function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean) {
   const color = selected ? layerColor("selection") : RULE_AREA_COLOR;
 
   ctx.save();
   ctx.beginPath();
-  z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-  ctx.closePath();
-  ctx.clip();
+  traceZone(ctx, z);
+  ctx.clip("evenodd");
   // Diagonal (45-degree) hatch across the outline's bounding box, clipped
   // to the real outline above -- KiCad's own keepout rendering is a
   // proper cross-hatch fill pattern; this is a lighter stand-in with the
@@ -603,8 +610,7 @@ function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zon
   ctx.restore();
 
   ctx.beginPath();
-  z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-  ctx.closePath();
+  traceZone(ctx, z);
   ctx.strokeStyle = color;
   ctx.lineWidth = hairlineNm(view, selected ? 2.5 : 1.5);
   ctx.setLineDash([hairlineNm(view, 6), hairlineNm(view, 4)]);
@@ -682,8 +688,7 @@ function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z:
         // outline on top reads the same "this one's selected" cue
         // outline mode already uses, without recoloring the copper.
         ctx.beginPath();
-        z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-        ctx.closePath();
+        traceZone(ctx, z);
         ctx.strokeStyle = layerColor("selection");
         ctx.lineWidth = hairlineNm(view, 2.5);
         ctx.stroke();
@@ -691,8 +696,7 @@ function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z:
       return;
     }
     ctx.beginPath();
-    z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-    ctx.closePath();
+    traceZone(ctx, z);
     ctx.strokeStyle = selected ? layerColor("selection") : color;
     ctx.lineWidth = hairlineNm(view, selected ? 2.5 : 1.5);
     ctx.setLineDash([hairlineNm(view, 5), hairlineNm(view, 3)]);
@@ -734,10 +738,9 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
         // anchor pad/via is never shown as an "outline only" shape either.
         withAlpha(ctx, layerAlpha(opts, layerName) * teardropAlpha, () => {
           ctx.beginPath();
-          z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-          ctx.closePath();
+          traceZone(ctx, z);
           ctx.fillStyle = copperPaint(layerColor(key), z.net, opts);
-          ctx.fill();
+          ctx.fill("evenodd");
           if (selected) {
             ctx.strokeStyle = layerColor("selection");
             ctx.lineWidth = hairlineNm(view, 2.5);

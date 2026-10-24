@@ -1201,13 +1201,23 @@ pub(crate) fn write_footprint(
                 } else {
                     ("F.Cu", "F.Paste", "F.Mask")
                 };
+                // An SMD pad on several copper layers: the set it had (`PadMaskInfo::smd_layers`), on the footprint's side, every copper layer of the board folded into
+                // `*.Cu` (`formatLayers`: `if( ( aLayerMask & cu_board_mask ) == cu_board_mask )`, the copper bits then cleared).
+                let smd_layers: Vec<String> = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.smd_layers.iter().map(|l| eda_model::fp_art::layer_on_side(l, fp.side)).collect()).unwrap_or_default();
+                let mut smd_layers: Vec<&str> = smd_layers.iter().map(String::as_str).collect();
+                if model.board.layers.iter().all(|l| smd_layers.contains(&l.as_str())) {
+                    smd_layers.retain(|l| !l.ends_with(".Cu") || *l == "F.Cu" || *l == "B.Cu");
+                }
                 // The layers the pad had: its side's copper, and its paste and mask unless the file's pad had none; an edge connector pad has mask on both sides and no paste.
-                let base: Vec<&str> = if connector {
+                let several = !connector && !smd_layers.is_empty();
+                let base: Vec<&str> = if several {
+                    smd_layers
+                } else if connector {
                     std::iter::once(cu).chain((!no_mask).then_some(["F.Mask", "B.Mask"]).into_iter().flatten()).collect()
                 } else {
                     std::iter::once(cu).chain((!no_paste).then_some(paste)).chain((!no_mask).then_some(mask)).collect()
                 };
-                if art_layers.is_empty() {
+                if art_layers.is_empty() && !several {
                     write!(out, " (layers {})", base.iter().map(|l| sexpr_str(l)).collect::<Vec<_>>().join(" ")).unwrap();
                 } else {
                     write!(out, " {}", crate::fp_art_io::pad_layers_token(&base, art_layers, fp.side)).unwrap();

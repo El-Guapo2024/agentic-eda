@@ -308,6 +308,15 @@ fn ring_set(pts: &[Point]) -> ShapePolySet {
     ShapePolySet::from_outline(pts.iter().map(|p| p64(*p)).collect())
 }
 
+/// `ZONE::Outline()`: the zone's outline with its holes.
+fn zone_set(z: &eda_model::ir::Zone) -> ShapePolySet {
+    let mut set = ring_set(&z.outline);
+    for hole in z.holes.iter().filter(|h| h.len() >= 3) {
+        set.add_hole(hole.iter().map(|p| p64(*p)).collect(), Some(0));
+    }
+    set
+}
+
 fn bbox_of(set: &ShapePolySet) -> Option<(i64, i64, i64, i64)> {
     let mut b: Option<(i64, i64, i64, i64)> = None;
     for poly in &set.polys {
@@ -555,7 +564,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
         }
         for layer in z.layer_set() {
             let mut clipped = if v.mode == StitchMode::Guard {
-                ring_set(&z.outline)
+                zone_set(z)
             } else {
                 match inputs.fills.get(&(z.id.clone(), layer.to_string())) {
                     Some(f) if !f.is_empty() => f.clone(),
@@ -756,7 +765,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             if !z.keepout_vias || !z.layer_set().iter().any(|l| via_layers.iter().any(|x| x == l)) {
                 continue;
             }
-            let mut area = ring_set(&z.outline);
+            let mut area = zone_set(z);
             area.boolean_intersection(&query_clip);
             if !area.is_empty() {
                 area.inflate(via_size / 2, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
@@ -778,7 +787,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             }
             let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
             near_fill.inflate(margin, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
-            let mut interior = ring_set(&z.outline);
+            let mut interior = zone_set(z);
             interior.boolean_intersection(&query_clip);
             near_fill.boolean_subtract(&interior);
             if !near_fill.is_empty() {

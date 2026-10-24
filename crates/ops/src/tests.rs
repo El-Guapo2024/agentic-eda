@@ -2860,7 +2860,7 @@ fn zone_cutout_that_splits_the_zone_makes_one_zone_per_piece() {
 }
 
 #[test]
-fn zone_cutout_inside_the_zone_is_a_fractured_hole_with_the_right_area() {
+fn zone_cutout_inside_the_zone_is_a_hole_of_the_zone_with_the_right_area() {
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000_000, 10_000_000) }).unwrap();
@@ -2868,8 +2868,11 @@ fn zone_cutout_inside_the_zone_is_a_fractured_hole_with_the_right_area() {
     b.apply(&Cmd::ZoneCutout { id, cutout: square(3_000_000, 3_000_000, 5_000_000, 5_000_000) }).unwrap();
     let zones = &b.design().routing.as_ref().unwrap().zones;
     assert_eq!(zones.len(), 1);
-    assert!(zones[0].outline.len() > 4, "outline plus bridged hole ring");
-    assert!((zone_area(&zones[0]) - 96_000_000_000_000.0).abs() < 1e6, "100 - 4 mm^2 (slit has no width)");
+    // `performZoneCutout`: the zone keeps the outline, and the cutout is a hole of it (`newZoneOutline->AddHole`), not fractured into the outline.
+    assert_eq!(zones[0].outline.len(), 4, "the outline as it was: {:?}", zones[0].outline);
+    assert_eq!(zones[0].holes.len(), 1);
+    let hole = Zone { outline: zones[0].holes[0].clone(), ..Default::default() };
+    assert!((zone_area(&zones[0]) - zone_area(&hole) - 96_000_000_000_000.0).abs() < 1e6, "100 - 4 mm^2");
 }
 
 #[test]

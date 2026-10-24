@@ -446,6 +446,7 @@ impl Board<'_> {
             c.net = if z.is_rule_area { String::new() } else { net_of(&z.net) };
             c.parent_footprint = None;
             c.outline = z.outline.iter().map(|p| mv(*p)).collect();
+            c.holes = z.holes.iter().map(|h| h.iter().map(|p| mv(*p)).collect()).collect();
             zone_ix.push(Some(copies.zones.len()));
             copies.zones.push(c);
         }

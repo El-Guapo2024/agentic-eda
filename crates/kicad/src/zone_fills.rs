@@ -216,6 +216,8 @@ pub fn zone_signature(z: &Zone) -> String {
         z.corner_radius,
         z.is_rule_area,
     );
+    // The holes, for a zone that has them (a zone without keeps the fingerprint it had before holes were kept).
+    let text = if z.holes.is_empty() { text } else { format!("{text}|{:?}", z.holes) };
     blake3::hash(text.as_bytes()).to_hex()[..16].to_string()
 }
 

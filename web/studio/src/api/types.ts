@@ -502,6 +502,8 @@ export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   /** `ZONE::GetZoneName()` ("" = unnamed); absent from a backend built before the Properties panel. */
   name?: string;
   outline: [Nm, Nm][];
+  /** The outline's holes (`ZONE::Outline()`'s holes, `eda_model::ir::Zone::holes`): nothing of the zone is inside one. Absent for a zone without holes. */
+  holes?: [Nm, Nm][][];
 }
 
 /** `RoutingSection::via_presets`' entry shape -- `BOARD_DESIGN_SETTINGS::m_ViaSizeList`. */
