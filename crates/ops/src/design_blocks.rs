@@ -84,24 +84,25 @@ impl Board<'_> {
         Ok(())
     }
 
-    /// `AppendBoard`'s "Synchronize layers": the board takes the block file's copper layer count when it is the larger
-    /// (`BOARD_STACKUP::SynchronizeWithBoard` keeps what the stackup says of the layers both have, [`StackupSettings::with_copper_layers`]).
-    /// The file's count is read from the copper layer names it uses -- its `(layers ..)` table names every one of them -- as the highest
-    /// `In<n>.Cu` plus the two outer layers. Returns the board's copper layers after.
+    /// `AppendBoard`'s "Synchronize layers": the board takes the block file's copper layer count when it is the larger (the reader's
+    /// `copperLayerCount = cu.size()` from the file's `(layers ..)` table, then `if( copperLayerCount > initialCopperLayerCount )
+    /// brd->SetCopperLayerCount( copperLayerCount )`; `BOARD_STACKUP::SynchronizeWithBoard` keeps what the stackup says of the layers both have,
+    /// [`StackupSettings::with_copper_layers`]), and every layer the file enables is enabled on the board as well (`enabledLayers |=
+    /// initialEnabledLayers`). Returns the board's copper layers after.
     fn grow_copper_layers_for(&mut self, text: &str) -> Result<Vec<String>, Vec<CheckResult>> {
         let have = self.model.board.layers.len().max(2);
-        let mut inner = 0usize;
-        let mut rest = text;
-        while let Some(i) = rest.find("In") {
-            rest = &rest[i + 2..];
-            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if !digits.is_empty() && rest[digits.len()..].starts_with(".Cu") {
-                inner = inner.max(digits.parse().unwrap_or(0));
-            }
+        let table = layer_table(text);
+        let copper = table.iter().filter(|l| l.ends_with(".Cu")).count();
+        // the technical and user layers the block enables that the board has turned off
+        let setup = self.design.drawings.as_ref().and_then(|d| d.rules.as_ref()).and_then(|r| r.board_layers.clone()).unwrap_or_else(|| self.model.board.layer_setup.clone());
+        let more: Vec<String> = table.iter().filter(|l| eda_model::layers::is_optional_layer(l) && !setup.enabled.contains(l)).cloned().collect();
+        if !more.is_empty() {
+            let mut next = setup.clone();
+            next.enabled.extend(more);
+            super::board_setup::set_board_layers(&mut self.design, self.model, &next)?;
         }
-        let mut want = (inner + 2).min(32);
-        want += want % 2;
-        if want <= have {
+        let want = copper.min(32);
+        if want <= have || want % 2 != 0 {
             return Ok(self.model.board.layers.clone());
         }
         let current = self.design.drawings.as_ref().and_then(|d| d.rules.as_ref()).and_then(|r| r.stackup.clone()).unwrap_or_else(|| match &self.model.stackup {
@@ -134,4 +135,51 @@ impl Board<'_> {
         }
         nets
     }
+}
+
+/// The canonical layer names of a board file's `(layers (0 "F.Cu" signal) (2 "B.Cu" signal) ..)` table (`PCB_IO_KICAD_SEXPR_PARSER::parseLayers`): the second
+/// token of each entry. Empty when the text has no table (a lone footprint).
+pub(crate) fn layer_table(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(k) = text[from..].find("(layers") {
+        let start = from + k + "(layers".len();
+        from = start;
+        // the table is the `(layers` whose first element is a list; a pad's or a zone's `(layers "F.Cu" ..)` is not
+        let rest = text[start..].trim_start();
+        if !rest.starts_with('(') {
+            continue;
+        }
+        let mut out = Vec::new();
+        let mut depth = 1i32;
+        let mut i = start;
+        let mut entry = String::new();
+        while i < bytes.len() && depth > 0 {
+            let c = bytes[i] as char;
+            match c {
+                '(' => {
+                    depth += 1;
+                    if depth == 2 {
+                        entry.clear();
+                    }
+                }
+                ')' => {
+                    if depth == 2 {
+                        // `(N "Name" type ["user name"])`: the name is the first quoted token
+                        if let Some(q) = entry.find('"') {
+                            if let Some(e) = entry[q + 1..].find('"') {
+                                out.push(entry[q + 1..q + 1 + e].to_string());
+                            }
+                        }
+                    }
+                    depth -= 1;
+                }
+                _ if depth == 2 => entry.push(c),
+                _ => {}
+            }
+            i += 1;
+        }
+        return out;
+    }
+    Vec::new()
 }

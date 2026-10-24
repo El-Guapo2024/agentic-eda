@@ -464,12 +464,13 @@
       t(!!dlg, "the Net Inspector opens");
       if (!dlg) return;
       const heads = [...dlg.querySelectorAll('[role="columnheader"]')].map((h) => h.textContent.replace(/[▲▼]/g, "").trim());
-      t(heads.join("|") === "Name|Netclass|Total Length|Via Count|Via Length|Track Length|Die Length|Pad Count", `the columns (${heads.join(", ")})`);
+      t(heads.join("|") === ["Name", "Netclass", "Total Length", "Via Count", "Via Length", "Track Length", "Die Length", "Pad Count", "F.Cu", "B.Cu"].join("|"), `the columns, one per copper layer at the end (${heads.join(", ")})`);
       const rowOf = (n) => [...dlg.querySelectorAll('[data-testid="net-inspector-row"]')].find((r) => r.dataset.net === n);
       const cell = (n, col) => rowOf(n)?.querySelector(`[data-col="${col}"]`)?.textContent;
       t(cell(many[0], "pad_count") === String(many[1]), `${many[0]} has ${many[1]} pads (${cell(many[0], "pad_count")})`);
       const len = Number.parseFloat(cell(net, "track_length") ?? "NaN");
       t(len >= 6.9 && len <= 7.01, `${net}'s track length counts the 3 + 4 mm track, measured from the pad's centre (${cell(net, "track_length")})`);
+      t(Number.parseFloat(cell(net, "layer:F.Cu") ?? "NaN") >= 6.9, `the F.Cu column has the track (${cell(net, "layer:F.Cu")})`);
       setValue(dlg.querySelector('[data-testid="net-inspector-filter"]'), net); await sleep(300);
       t([...dlg.querySelectorAll('[data-testid="net-inspector-row"]')].every((r) => r.dataset.net.toUpperCase().includes(net.toUpperCase()) || true), "the filter keeps the matching nets");
       dlg.querySelector('[data-testid="net-inspector-col-pad_count"]').click(); await sleep(200);

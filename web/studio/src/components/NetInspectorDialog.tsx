@@ -2,7 +2,7 @@
 //
 // KiCad's columns, filter and report (kicad-port/netInspector.ts) over the numbers the backend measures as KiCad does (`GET /api/net_inspector`,
 // crates/cli/src/net_inspector_api.rs: `calculateNets`, `LENGTH_DELAY_CALCULATION::CalculateLengthDetails`): Name, Netclass, Total Length,
-// Via Count, Via Length, Track Length, Die Length, Pad Count; a click on a column heading sorts by it (again: the other way); the search box
+// Via Count, Via Length, Track Length, Die Length, Pad Count and one length per copper layer; a click on a column heading sorts by it (again: the other way); the search box
 // with Filter by Net Name / Filter by Netclass, Show Zero Pad Nets and Show Unconnected Nets; a click on a row highlights its net (again: clears
 // it); Save Net Inspector Report... writes KiCad's CSV.
 //
@@ -10,7 +10,7 @@
 // none of the net edits of the panel's menu (Rename / Delete / Add Net).
 import { useEffect, useMemo, useState } from "react";
 import { saveTextFile } from "../api/libraryClient";
-import { DEFAULT_NET_INSPECTOR_OPTIONS, NET_INSPECTOR_COLUMNS, netInspectorCell, netInspectorReport, netInspectorRows, type NetInspectorColumn, type NetInspectorOptions, type NetInspectorRow } from "../kicad-port/netInspector";
+import { DEFAULT_NET_INSPECTOR_OPTIONS, netInspectorColumns, netInspectorCell, netInspectorReport, netInspectorRows, type NetInspectorColumn, type NetInspectorOptions, type NetInspectorRow } from "../kicad-port/netInspector";
 import { useStudioDispatch, useStudioState } from "../state/store";
 
 export function NetInspectorDialog() {
@@ -42,6 +42,7 @@ export function NetInspectorDialog() {
   }, [open, state.board]);
 
   const shown = useMemo(() => netInspectorRows(rows ?? [], opts, sort.column, sort.ascending), [rows, opts, sort]);
+  const columns = useMemo(() => netInspectorColumns(state.board?.layers ?? []), [state.board?.layers]);
 
   if (!open) return null;
   const close = () => dispatch({ type: "SET_NET_INSPECTOR_OPEN", open: false });
@@ -81,8 +82,8 @@ export function NetInspectorDialog() {
             {toggle("showUnconnectedNets", "Show Unconnected Nets")}
           </div>
           {error && <div className="panel-empty">{error}</div>}
-          <div role="grid" className="kv-grid" style={{ gridTemplateColumns: "minmax(140px, 2fr) minmax(70px, 1fr) repeat(6, auto)", columnGap: 12, rowGap: 3, fontSize: 12 }}>
-            {NET_INSPECTOR_COLUMNS.map((c) => heading(c.key, c.label))}
+          <div role="grid" className="kv-grid" style={{ gridTemplateColumns: `minmax(140px, 2fr) minmax(70px, 1fr) repeat(${columns.length - 2}, auto)`, columnGap: 12, rowGap: 3, fontSize: 12 }}>
+            {columns.map((c) => heading(c.key, c.label))}
             {shown.map((r) => {
               const hot = state.netHighlight === r.name;
               return (
@@ -94,7 +95,7 @@ export function NetInspectorDialog() {
                   style={{ display: "contents", cursor: "default" }}
                   onClick={() => dispatch({ type: "SET_NET_HIGHLIGHT", net: hot ? null : r.name })}
                 >
-                  {NET_INSPECTOR_COLUMNS.map((c) => (
+                  {columns.map((c) => (
                     <span key={c.key} data-col={c.key} style={{ textAlign: c.key === "name" || c.key === "netclass" ? "left" : "right", fontWeight: hot ? 600 : 400, color: hot ? "var(--chrome-accent)" : c.key === "name" ? undefined : "var(--chrome-text-dim)", whiteSpace: "nowrap" }}>
                       {netInspectorCell(r, c.key, units)}
                     </span>
@@ -106,7 +107,7 @@ export function NetInspectorDialog() {
           {rows && shown.length === 0 && <span className="panel-empty">No nets.</span>}
         </div>
         <div className="dialog-footer">
-          <button onClick={() => saveTextFile(netInspectorReport(shown, units), "net-inspector.csv", "text/csv")} data-testid="net-inspector-report">
+          <button onClick={() => saveTextFile(netInspectorReport(shown, units, columns), "net-inspector.csv", "text/csv")} data-testid="net-inspector-report">
             Save Net Inspector Report...
           </button>
           <button onClick={close}>Close</button>

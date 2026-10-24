@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_NET_INSPECTOR_OPTIONS, netInspectorCell, netInspectorReport, netInspectorRows, netShown, type NetInspectorRow } from "./netInspector";
+import { DEFAULT_NET_INSPECTOR_OPTIONS, netInspectorCell, netInspectorColumns, netInspectorReport, netInspectorRows, netShown, type NetInspectorRow } from "./netInspector";
 
 const row = (name: string, over: Partial<NetInspectorRow> = {}): NetInspectorRow => ({ name, netclass: "Default", total_length: 0, via_count: 0, via_length: 0, track_length: 0, die_length: 0, pad_count: 2, ...over });
 
@@ -33,4 +33,16 @@ test("lengths read as MessageTextFromValue, and the report is KiCad's CSV", () =
     netInspectorReport([r], "mm"),
     '"Net Name";"Netclass";"Net Length (mm)";"Via Count";"Via Length (mm)";"Track Length (mm)";"Die Length (mm)";"Pad Count";\n"GND";"Default";12.3456;1;0.0000;12.3456;0.0000;3;\n'
   );
+});
+
+test("one length column per copper layer, in layer-id order (F.Cu, B.Cu, then the inner ones), shown and in the report", () => {
+  const cols = netInspectorColumns(["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+  assert.deepEqual(cols.slice(8).map((c) => c.label), ["F.Cu", "B.Cu", "In1.Cu", "In2.Cu"]);
+  const r = row("GND", { track_length: 3_000_000, layer_lengths: { "F.Cu": 1_000_000, "In1.Cu": 2_000_000 } });
+  assert.equal(netInspectorCell(r, "layer:In1.Cu", "mm"), "2.0000 mm");
+  assert.equal(netInspectorCell(r, "layer:B.Cu", "mm"), "0.0000 mm");
+  const csv = netInspectorReport([r], "mm", netInspectorColumns(["F.Cu", "B.Cu"]));
+  assert.ok(csv.startsWith('"Net Name";"Netclass";"Net Length (mm)";"Via Count";"Via Length (mm)";"Track Length (mm)";"Die Length (mm)";"Pad Count";"F.Cu (mm)";"B.Cu (mm)";\n'), csv);
+  assert.ok(csv.endsWith(";1.0000;0.0000;\n"), csv);
+  assert.deepEqual(netInspectorRows([row("A", { layer_lengths: { "F.Cu": 5 } }), row("B")], DEFAULT_NET_INSPECTOR_OPTIONS, "layer:F.Cu").map((x) => x.name), ["B", "A"]);
 });

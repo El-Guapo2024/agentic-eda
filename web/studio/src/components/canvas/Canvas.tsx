@@ -931,7 +931,8 @@ export function Canvas() {
       }
       // The same for a single selected graphic shape's handles (kicad-port/pcbPointEdit.ts), unless it is locked.
       const shape = api.shapeById(soleId);
-      if (shape && !(board.locked ?? []).includes(soleId)) {
+      // `if( !item || item->IsLocked() )`: its own lock or a locked group above it
+      if (shape && !isLocked(board, soleId)) {
         const hit = activeEditPoint(shapeEditPoints(shape), [wx, wy], zoneCornerToleranceNm(state.view.scale));
         if (hit) {
           dragRef.current = { kind: "shapePoint", shapeId: shape.id, base: shape, point: hit };

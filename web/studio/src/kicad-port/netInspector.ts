@@ -24,12 +24,22 @@ export interface NetInspectorRow {
   track_length: number;
   die_length: number;
   pad_count: number;
+  /** Track length per copper layer (`LENGTH_DELAY_STATS::LayerLengths`), nm; a layer the net has no track on is absent. */
+  layer_lengths?: Record<string, number>;
 }
 
-export type NetInspectorColumn = keyof NetInspectorRow;
+/** A fixed column, or `layer:<name>` for the length on one copper layer. */
+export type NetInspectorColumn = Exclude<keyof NetInspectorRow, "layer_lengths"> | `layer:${string}`;
+
+export interface NetInspectorColumnDesc {
+  key: NetInspectorColumn;
+  label: string;
+  csv: string;
+  units: boolean;
+}
 
 /** `buildColumns`: (key, display name, CSV name, has units). */
-export const NET_INSPECTOR_COLUMNS: readonly { key: NetInspectorColumn; label: string; csv: string; units: boolean }[] = [
+export const NET_INSPECTOR_COLUMNS: readonly NetInspectorColumnDesc[] = [
   { key: "name", label: "Name", csv: "Net Name", units: false },
   { key: "netclass", label: "Netclass", csv: "Netclass", units: false },
   { key: "total_length", label: "Total Length", csv: "Net Length", units: true },
@@ -39,6 +49,22 @@ export const NET_INSPECTOR_COLUMNS: readonly { key: NetInspectorColumn; label: s
   { key: "die_length", label: "Die Length", csv: "Die Length", units: true },
   { key: "pad_count", label: "Pad Count", csv: "Pad Count", units: false },
 ];
+
+/**
+ * Every column of the panel: the fixed ones, then one per enabled copper layer (`for( PCB_LAYER_ID layer : m_board->GetEnabledLayers().Seq() )`, in
+ * layer-id order: F.Cu, B.Cu, then the inner layers), named by the layer, a length in the user's units.
+ */
+export function netInspectorColumns(copperLayers: readonly string[]): NetInspectorColumnDesc[] {
+  const order = (l: string) => (l === "F.Cu" ? -2 : l === "B.Cu" ? -1 : Number(/^In(\d+)\.Cu$/.exec(l)?.[1] ?? 1000));
+  const layers = [...copperLayers].sort((a, b) => order(a) - order(b));
+  return [...NET_INSPECTOR_COLUMNS, ...layers.map((l): NetInspectorColumnDesc => ({ key: `layer:${l}`, label: l, csv: l, units: true }))];
+}
+
+/** The value of a column of a row (a layer column is the row's length on that layer, 0 for none). */
+function valueOf(row: NetInspectorRow, column: NetInspectorColumn): string | number {
+  if (column.startsWith("layer:")) return row.layer_lengths?.[column.slice(6)] ?? 0;
+  return row[column as Exclude<keyof NetInspectorRow, "layer_lengths">] as string | number;
+}
 
 /** `PANEL_NET_INSPECTOR_SETTINGS`, with the project's defaults (`project_local_settings.cpp`). */
 export interface NetInspectorOptions {
@@ -68,8 +94,8 @@ export function netShown(row: NetInspectorRow, o: NetInspectorOptions): boolean 
 export function netInspectorRows(rows: readonly NetInspectorRow[], o: NetInspectorOptions, column: NetInspectorColumn = "name", ascending = true): NetInspectorRow[] {
   const shown = rows.filter((r) => netShown(r, o));
   const cmp = (a: NetInspectorRow, b: NetInspectorRow): number => {
-    const x = a[column];
-    const y = b[column];
+    const x = valueOf(a, column);
+    const y = valueOf(b, column);
     const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
     return c !== 0 ? c : a.name.localeCompare(b.name);
   };
@@ -79,9 +105,9 @@ export function netInspectorRows(rows: readonly NetInspectorRow[], o: NetInspect
 
 /** A cell as the panel shows it (`formatLength`, `formatCount`), or as the report writes it (no unit label). */
 export function netInspectorCell(row: NetInspectorRow, column: NetInspectorColumn, units: MessageUnits, report = false): string {
-  const col = NET_INSPECTOR_COLUMNS.find((c) => c.key === column)!;
-  const v = row[column];
-  if (col.units) return messageTextFromValue(v as number, units, !report);
+  const v = valueOf(row, column);
+  const lengthColumn = column.startsWith("layer:") || (NET_INSPECTOR_COLUMNS.find((c) => c.key === column)?.units ?? false);
+  if (lengthColumn) return messageTextFromValue(v as number, units, !report);
   return String(v);
 }
 
@@ -91,11 +117,11 @@ function unitLabel(units: MessageUnits): string {
 }
 
 /** `generateReport`: the file's text. */
-export function netInspectorReport(rows: readonly NetInspectorRow[], units: MessageUnits): string {
+export function netInspectorReport(rows: readonly NetInspectorRow[], units: MessageUnits, columns: readonly NetInspectorColumnDesc[] = NET_INSPECTOR_COLUMNS): string {
   const lines: string[] = [];
-  lines.push(NET_INSPECTOR_COLUMNS.map((c) => `"${c.units ? `${c.csv} (${unitLabel(units)})` : c.csv}";`).join(""));
+  lines.push(columns.map((c) => `"${c.units ? `${c.csv} (${unitLabel(units)})` : c.csv}";`).join(""));
   for (const r of rows) {
-    lines.push(NET_INSPECTOR_COLUMNS.map((c) => (c.key === "name" || c.key === "netclass" ? `"${netInspectorCell(r, c.key, units, true)}";` : `${netInspectorCell(r, c.key, units, true)};`)).join(""));
+    lines.push(columns.map((c) => (c.key === "name" || c.key === "netclass" ? `"${netInspectorCell(r, c.key, units, true)}";` : `${netInspectorCell(r, c.key, units, true)};`)).join(""));
   }
   return lines.join("\n") + "\n";
 }

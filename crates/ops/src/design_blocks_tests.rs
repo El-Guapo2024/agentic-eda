@@ -118,3 +118,21 @@ fn place_design_block_grows_the_copper_layers_and_keeps_the_nets() {
     assert!(drawings(&b).rules.as_ref().and_then(|r| r.stackup.as_ref()).is_none());
     assert!(drawings(&b).board_nets.is_empty());
 }
+
+/// Review item 5: the copper count is the `(layers ..)` table's (`cu.size()`), a pad's `(layers "F.Cu" ..)` is not the table, and a user layer the block
+/// enables is enabled on the board (`enabledLayers |= initialEnabledLayers`).
+#[test]
+fn the_block_layer_table_gives_the_copper_count_and_the_enabled_layers() {
+    let text = r#"(kicad_pcb (version 20241229)
+	(layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (8 "In3.Cu" signal "Mid") (10 "In4.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user) (39 "User.1" user))
+	(footprint "X" (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask")))
+)"#;
+    assert_eq!(super::design_blocks::layer_table(text), ["F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu", "Edge.Cuts", "User.1"]);
+    assert!(super::design_blocks::layer_table(r#"(footprint "X" (pad "1" smd rect (layers "F.Cu")))"#).is_empty());
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&place(&text.replace("(footprint \"X\" (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\")))", "(gr_line (start 0 0) (end 5 0) (stroke (width 0.1) (type solid)) (layer \"User.1\"))"), p(0, 0), false, "")).unwrap();
+    let rules = drawings(&b).rules.clone().unwrap();
+    assert_eq!(rules.stackup.map(|s| s.copper_layers), Some(6), "six copper layers in the table, though the block uses none of the inner ones");
+    assert!(rules.board_layers.unwrap().enabled.iter().any(|l| l == "User.1"));
+}

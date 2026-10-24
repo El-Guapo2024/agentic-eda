@@ -65,6 +65,10 @@ fn net_inspector_counts_pads() {
     assert_eq!(row(&rows, "M")["pad_count"], 1);
     assert_eq!(row(&rows, "N")["netclass"], "Default");
     assert_eq!(row(&rows, "N")["total_length"], 0);
+    // a net with no track, via or pad has no row (`calculateNets` only finds the nets of the connectivity items)
+    let mut bare = model();
+    bare.nets.push(Net { name: "EMPTY".into(), pins: vec![] });
+    assert!(!rows_of(&design(vec![], vec![]), &bare).iter().any(|r| r["name"] == "EMPTY"));
 }
 
 /// The track length: the segments of a polyline merged into one line (`mergeLines`), its end on a pad's position and the one in a via measured to their

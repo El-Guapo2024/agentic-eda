@@ -67,6 +67,8 @@ pub(crate) struct LengthStats {
     pub pad_to_die_length: i64,
     /// Track length per copper layer (`LayerLengths`).
     pub layer_lengths: BTreeMap<String, i64>,
+    /// How many tracks, arcs, vias and pads of the net there are (`relevantConnectivityItems`): a net with none has no row (`foundNets`).
+    pub items: usize,
 }
 
 impl LengthStats {
@@ -240,6 +242,7 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
             p.copper_groups().iter().any(|(layers, shape)| layers.iter().any(|l| (lo..=hi).contains(&stack(l))) && shape.collides(&circle, 0).is_some())
         });
         if let Some(p) = coincident {
+            // an SMD pad -- and an edge connector pad (`PAD_ATTRIB::CONN`), which the model holds as one -- sits on its copper layer (`CuStack().begin()`)
             let side = if p.kind == PadKind::Smd { p.layers.first().cloned() } else { Some(if p.side == eda_model::ir::Side::Bottom { "B.Cu".to_string() } else { "F.Cu".to_string() }) };
             span.extend(side);
         }
@@ -292,7 +295,7 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
         }
     }
 
-    let mut stats = LengthStats::default();
+    let mut stats = LengthStats { items: pads.len() + lines.len() + vias.len(), ..LengthStats::default() };
     for l in lines.iter().filter(|l| l.status != Merge::Retired) {
         let length = l.line.length();
         stats.track_length += length;
@@ -370,10 +373,14 @@ pub(crate) fn rows(design: &Design, model: &ConstraintModel) -> Vec<Value> {
     }
     nets.remove("");
     nets.iter()
-        .map(|net| {
+        .filter_map(|net| {
             let s = length_details(&board, net, &copper, &die, height);
+            // `calculateNets` walks the connectivity items: a net with no track, via or pad is not listed
+            if s.items == 0 {
+                return None;
+            }
             let class = model.board.effective_class(net);
-            json!({
+            Some(json!({
                 "name": net,
                 "netclass": human_class_name(&class.constituents),
                 "total_length": s.total(),
@@ -383,7 +390,7 @@ pub(crate) fn rows(design: &Design, model: &ConstraintModel) -> Vec<Value> {
                 "die_length": s.pad_to_die_length,
                 "pad_count": s.num_pads,
                 "layer_lengths": s.layer_lengths,
-            })
+            }))
         })
         .collect()
 }

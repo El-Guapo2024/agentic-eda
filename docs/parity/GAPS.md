@@ -687,6 +687,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 27. Board outline leftovers
 **New, open.** Hit: boards with cutouts, slots or rounded corners. Blocks: no. Package P12, size M. From `PARITY-pcb.md` section 25 ("Not done") and what `crates/zone-filler/PARITY.md` (deleted 2026-10-13) said of the outline.
+- The placer, the DRC lint and the judge still measure a footprint by the symmetric courtyard box (`placed_courtyard`); the studio, Align, Distribute and the 3D tab take the real one (`placed_courtyard_box`, fix batch F). Follow-up: move those to the real box.
 - The autoplacer (`crates/place`) still works from the outline's bounding box: a part can be placed inside a cutout's box. The placement verbs (`Cmd::PlaceAt`, `Place`, `PlaceRegion`, `PlaceEdge`) test the courtyard against the board's real outlines with their cutouts (`GetBoardPolygonOutlines`, fix batch F 2026-10-24); their copper-to-edge band is still measured to the box.
 - The Freerouting DSN boundary (`eda_freeroute::design::to_dsn`) is the summary polygon, with no cutouts, and the autoroute works inside it. (File > Export > Specctra DSN, P19b, is another writer, `FromBOARD`'s: its boundary is the Edge.Cuts outline with its cutouts.)
 - NPTH holes are not cut out of the 3D slab (`aIncludeNPTHAsOutlines`); a mask-only NPTH hole is kept (`FootprintExtra::holes`) and written, so kicad-cli's fill keeps clear of it (item 13).
