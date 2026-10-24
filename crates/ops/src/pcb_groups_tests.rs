@@ -147,8 +147,22 @@ fn deleting_a_member_takes_it_out_of_its_group() {
     let mut b = Board::new(d, &m, 100_000, 300_000);
     b.apply(&Cmd::DeleteShape { id: "shp_seg".into() }).unwrap();
     assert_eq!(members(&b, "grp_a"), ids(&["trk_a", "via_a"]));
+    // p6 F8: `BOARD_COMMIT::Push` only takes the item out (`parentGroup->RemoveItem`); a group of one stays, and the file keeps it
     b.apply(&Cmd::DeleteVia { id: "via_a".into() }).unwrap();
-    assert!(drawings(&b).groups.is_empty(), "a group with one member left is no group: {:?}", drawings(&b).groups);
+    assert_eq!(members(&b, "grp_a"), ids(&["trk_a"]), "a group with one member left stays: {:?}", drawings(&b).groups);
+    // with none left it is gone (the writer skips an empty group)
+    b.apply(&Cmd::DeleteTrack { id: "trk_a".into() }).unwrap();
+    assert!(drawings(&b).groups.is_empty(), "{:?}", drawings(&b).groups);
+}
+
+#[test]
+fn deleting_one_of_two_members_keeps_a_one_member_group() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["shp_seg", "txt_a"])];
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    b.apply(&Cmd::DeleteText { id: "txt_a".into() }).unwrap();
+    assert_eq!(members(&b, "grp_a"), ids(&["shp_seg"]));
 }
 
 #[test]

@@ -151,9 +151,11 @@ impl Board<'_> {
         (!dr.groups.is_empty()).then(|| universe(&self.design))
     }
 
-    /// Takes out of every group the members that were on the board before the command (`before`) and are not now, and dissolves a
-    /// group that is left with fewer than two members (`BOARD_COMMIT::Push`'s `parentGroup->RemoveItem( boardItem )` for a removed
-    /// item, then `GROUP_TOOL::RemoveFromGroup`'s dissolving rule).
+    /// Takes out of every group the members that were on the board before the command (`before`) and are not now
+    /// (`BOARD_COMMIT::Push`'s `parentGroup->RemoveItem( boardItem )` for a removed item). Nothing dissolves a group there: a group of one
+    /// member stays on the board and in the file; a group left with no member is gone (`PCB_IO_KICAD_SEXPR::format( const PCB_GROUP* )`:
+    /// `if( memberIds.empty() ) return;`), and the group above it loses it in turn. (`GROUP_TOOL::RemoveFromGroup`'s `< 2` rule is that
+    /// verb's own.)
     pub(crate) fn tidy_groups(&mut self, before: Option<BTreeSet<String>>) {
         let Some(before) = before else { return };
         if self.design.drawings.as_ref().is_none_or(|d| d.groups.is_empty()) {
@@ -168,7 +170,16 @@ impl Board<'_> {
             for g in dr.groups.iter_mut() {
                 g.member_ids.retain(|m| !gone.contains(m));
             }
-            prune_groups(dr);
+            loop {
+                let empty: Vec<String> = dr.groups.iter().filter(|g| g.member_ids.is_empty()).map(|g| g.id.clone()).collect();
+                if empty.is_empty() {
+                    break;
+                }
+                dr.groups.retain(|g| !g.member_ids.is_empty());
+                for g in dr.groups.iter_mut() {
+                    g.member_ids.retain(|m| !empty.contains(m));
+                }
+            }
         }
     }
 }
