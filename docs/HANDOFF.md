@@ -58,6 +58,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-fix-f-editing` | Fix batch F (editing): Finish Pad Edit chains, Repeat Layout's copper-shape net and groups, Place Design Block grows layers and keeps nets (`board_nets` overlay), the Net Inspector, placement verbs vs cutouts, p6 F1-F17 (`mirror_tracks` verb, carry `hold` step) | all highs; p6 mediums F5-F17 (F10, F11, F18 in part) | Override locks, "Only ..." in the Selection Filter, zone edge handles, the annealing placer's outline, Net Inspector grouping/time domain |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
