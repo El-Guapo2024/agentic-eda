@@ -7,7 +7,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 - **Paused on 2026-10-23 at the user's request.** `main` (this commit) is green and pushed: `tools/check.sh fast` Rust 3627 passed, web 2449, and `tools/run-all-checks.sh` 42/42 browser checks (see "Gates").
 - 738 of KiCad's 785 editor actions are wired: pcbnew 346/369, eeschema 220/233, common 172/183 (`docs/parity/UI-ACTIONS.md`). The other 47 each carry a reason in `web/studio/tools/ui-parity-missing.json`.
 - Every task of the 2026-10-21 list is merged (below), and so are function-by-function reviews against KiCad's source of every port merged on 10-23, plus the library editors (P3/P17) and the schematic core (P4/P10).
-- **In progress:** `task-nanometres`, the IR's lengths from µm to KiCad's nm (the user's decision, 2026-10-23). Not merged and not gated: see "Open branches".
+- **Merged 2026-10-24:** the IR's lengths are KiCad's nanometres (`task-nanometres`; `docs/NANOMETRES.md`). Old design.json files migrate on read, one way.
 - **Found, not fixed:** findings-only reviews of every other package, in `docs/parity/findings/` (`INDEX.md`: 39 high, 87 medium, 71 low, in six fix batches A–F).
 - A real KiCad board brought through the studio gives kicad-cli's DRC the same findings as the original on all 12 QA boards (`docs/parity/REPORT.md` section 2); connectivity agrees with kicad-cli on 97.8% of counts over 186 boards.
 - The rules that don't change:
@@ -58,7 +58,6 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-nanometres` (worktree `~/work/agentic-eda-specctra` on the box) | The IR's lengths in KiCad's integer nanometres (`Nm`); `design.json` schema 2, with old µm files and `.history` migrated on load (×1000, once). The plan, every field and boundary, and the schematic's 100 nm unit are in `docs/NANOMETRES.md` on the branch. | Converted and committed: model, kicad readers and writers (exact), drc, engine, layout, connectivity, place, freeroute, gates, lint, pns (KiCad's own tolerances back), render, judge, grid, interchange, cypress, intent, bench, kicad-engine, ops, the cli server. The last commit `0f5a248` is a WIP: the cli tests' literals and the web studio's conversion (363 files) as they were when paused, **unverified**. | Finish the cli tests and `web/studio`, then every gate: cargo check, `check.sh fast`, the slow tier with `KICAD_QA_DATA` set (the `crates/pns` replays skip silently without it), `parity_report.py` (re-export 12/12, connectivity at least 97.8%, raise the floor), `run-all-checks.sh` 42/42, and the migration test (a board saved by main's binary loads with every length ×1000 and the same kicad-cli DRC). Merge nothing cut before it without converting its unit literals. |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -71,7 +70,7 @@ Gates for any of them:
 
 The 2026-10-21 list is done: Specctra, embedded files and the pad-details fix, the simulator, the rule editor, the router details, the schematic details, the KiCad 10 items, P20's browser checks, and the connectivity measure (each row under "What landed").
 
-1. **Finish `task-nanometres`** (above), gate it and merge it.
+1. ~~**Finish `task-nanometres`**~~ merged 2026-10-24: lengths are KiCad's nanometres, design.json schema 2, old files migrated on read (one way). Connectivity 98.9%. See `docs/NANOMETRES.md`.
 2. **Fix the findings, batch by batch, from the new main** (`docs/parity/findings/INDEX.md`). Each batch's findings carry our `file:line`, KiCad's function, a repro and the failing test to write. A–D can run in parallel, then E and F.
    - **A. KiCad compatibility of what we derive (first).** Today a studio project opened in KiCad and updated from its schematic (F8) renames every net and duplicates every footprint. **The user chose (2026-10-23) KiCad's own net names everywhere, the studio's display included**: `/sheet/NAME`, `/NAME` on a flat sheet, `Net-(REF-PadN)` unlabelled; global and power names unchanged. Also: one footprint name everywhere (the installed KiCad footprint), the footprint-to-symbol `(path ...)` link, symbol fields on footprints, `pinfunction`/`pintype`, the flipped footprint's frame. Prove it: kicad-cli's `--schematic-parity` DRC on the examples finds 0 differences (it finds 76 on mcu30 today).
    - **B. Board reader and writer losses:** zones with holes read as two zones, SMD pads on `*.Cu`, paste-only pads, curves with a control point on an end, footprint Edge.Cuts, rectangle corner radius, Extruded 3D Body, importers' `.kicad_dru`, a project's DRC/ERC exclusions.
