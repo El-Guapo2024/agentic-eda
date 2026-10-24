@@ -280,16 +280,15 @@ impl Dragger {
         out
     }
 
-    /// The candidate geometry for a via at `to`, before any shove/collision resolution: the via-fanout lines, each with its end at the
-    /// via dragged to `to`.
+    /// The candidate geometry for a via at `to`, before any shove/collision resolution (`DRAGGER::dragViaMarkObstacles`): every line of the
+    /// via's fan-out with its end at the via dragged to `to`, re-solved in the drag's angle mode -- `draggedLine.DragCorner( aP,
+    /// origLine.CLine().Find( aHandle.pos ), m_freeAngleMode )`: at 45 degrees for `D`, a straight leg only for `G` (the fan-out lines carry
+    /// no snap threshold of their own).
     fn via_candidate(&self, node: &Node, to: Point) -> Vec<Line> {
         let mut fanout = self.attached_lines(node);
         for l in fanout.iter_mut() {
-            if l.first() == Some(self.via_pos) {
-                l.pts[0] = to;
-            } else if l.last() == Some(self.via_pos) {
-                let last = l.pts.len() - 1;
-                l.pts[last] = to;
+            if let Some(at) = l.find(self.via_pos) {
+                l.drag_corner(to, at, self.free_angle, 0);
             }
         }
         fanout
@@ -1043,9 +1042,9 @@ mod tests {
         assert_eq!(commit.vias[0].0, to);
         assert_eq!(commit.remove_track_ids, vec!["trkA"]);
         assert_eq!(commit.tracks[0].pts, elbow, "the attached track must stretch to follow the via");
-        // Highlight collisions only moves the end: the stretch is the straight line.
+        // Highlight collisions re-solves it at 45 degrees too (`dragViaMarkObstacles`: `DragCorner( .., m_freeAngleMode )`, findings p5 F3-1)
         let marking = RoutingSettings { mode: Mode::MarkObstacles, ..settings };
-        assert_eq!(dragger.preview(&node, &rules, &marking, to).fanout[0].pts, vec![Point { x: 0, y: 0 }, to]);
+        assert_eq!(dragger.preview(&node, &rules, &marking, to).fanout[0].pts, elbow);
     }
 
     /// A via, SIG, with a track coming in from the left, in a world with a GND track straight across where the via is dragged to.
@@ -1057,6 +1056,28 @@ mod tests {
         let dragger = Dragger::start(&node, Point { x: 0, y: 0 }, via_id).expect("a via drag");
         assert_eq!(dragger.kind, DragKind::Via);
         (node, dragger)
+    }
+
+    /// findings p5 F3-1: in Highlight collisions a via's tracks follow it at 45 degrees (`dragViaMarkObstacles`: `DragCorner( aP,
+    /// Find( aHandle.pos ), m_freeAngleMode )`, so `dragCorner45` for `D`); only a free-angle drag (`G`) leaves a straight leg.
+    #[test]
+    fn mark_obstacles_via_drag_keeps_its_tracks_at_45_degrees() {
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 5_000_000, y: 0 }, width: 200_000, source_track: Some(("trkA".into(), 0)), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, diameter: 600_000, drill: 300_000, source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
+        let to = Point { x: 2_000_000, y: 1_300_000 };
+        let d = Dragger::start(&node, Point { x: 0, y: 0 }, via_id).expect("a via drag");
+        let pv = d.preview(&node, &rules, &settings, to);
+        assert_eq!(pv.fanout.len(), 1);
+        let pts = &pv.fanout[0].pts;
+        assert_eq!(pts.len(), 3, "an elbow: {pts:?}");
+        assert!(on_45(pts), "{pts:?}");
+        assert!(pts.contains(&to) && pts.contains(&Point { x: 5_000_000, y: 0 }), "{pts:?}");
+        let free = Dragger::start_with(&node, Point { x: 0, y: 0 }, via_id, true).expect("a free-angle via drag");
+        let pv = free.preview(&node, &rules, &settings, to);
+        assert_eq!(pv.fanout[0].pts.len(), 2, "one straight leg: {:?}", pv.fanout[0].pts);
     }
 
     /// D7, `DRAGGER::dragShove` for `DM_VIA`: the via is the head of a shove, the track attached to it goes with it and the
