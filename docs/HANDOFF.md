@@ -60,8 +60,8 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 |---|---|---|---|
 | `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names, one footprint name, `(path)`, fields, pinfunction, flip frame | started 2026-10-24 | all |
 | `task-fix-bc-board-io` (`~/work/agentic-eda-exports`) | Batches B and C: board reader/writer losses, teardrop fills | started 2026-10-24 | all |
-| `task-fix-e-router` (`~/work/agentic-eda-router`) | Batch E: router | started 2026-10-24 | all |
 | `task-fix-f-editing` (`~/work/agentic-eda-rules`) | Batch F: editing operations | started 2026-10-24 | all |
+| `task-fix-e-router` | Parity batch E: the router findings (`docs/parity/findings/p5-router.md`) | 7/7 high, 18/21 medium, 13/19 low fixed (some lows in part); KiCad's 7 router sessions replay exactly | F2-11, F4-2, the open lows (findings file) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

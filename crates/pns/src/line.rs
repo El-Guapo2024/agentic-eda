@@ -520,6 +520,68 @@ impl Line {
         }
         self.pts = out;
     }
+
+    /// `SHAPE_LINE_CHAIN::Simplify2( aRemoveColinear = true )` (`libs/kimath/src/geometry/shape_line_chain.cpp`), which the router's
+    /// walkaround (`WALKAROUND::singleStep`'s `processCluster`), shove (`shoveLineToHullSet`, `ShoveObstacleLine`, `onCollidingSolid`,
+    /// `pushOrShoveVia`, `preShoveCleanup`) and optimizer (`mergeFull`, `mergeStep`, the pair bypasses) call, where the rest of the
+    /// router calls [`Self::simplify`] (`Simplify()`). A chain of fewer than 3 points is left alone, and one of 3 points only loses
+    /// its second point when it repeats the first ("Always try to keep at least 2 points"). Otherwise duplicates go (stage 1), and
+    /// from each kept point `p0` every next point that lies within `SEG::LineDistance <= 1` of the **infinite** line from `p0` to the
+    /// point after it, or is `SEG::Collinear` with it, goes too (stage 2) -- a fold-back such as (0,0),(10,0),(5,0),(5,5) loses
+    /// (10,0), and so do the 1 nm kinks a hull walk leaves. Only a run that starts on two plain points (not an arc's,
+    /// `SHAPES_ARE_PT`) is merged, as KiCad has it.
+    pub fn simplify2(&mut self) {
+        let n = self.pts.len();
+        if n < 3 {
+            return;
+        }
+        if n == 3 {
+            if self.pts[0] == self.pts[1] {
+                self.pts.remove(1);
+            }
+            return;
+        }
+        let runs = self.arc_runs();
+        let on_arc: Vec<bool> = (0..n).map(|i| runs.iter().any(|r| i >= r.first && i <= r.last)).collect();
+        // stage 1: eliminate duplicate vertices (an arc's points are all distinct, so KiCad's shape test is the plain one here)
+        let mut uniq: Vec<(Point, bool)> = Vec::with_capacity(n);
+        for (i, &p) in self.pts.iter().enumerate() {
+            match uniq.last_mut() {
+                Some(last) if last.0 == p => last.1 |= on_arc[i],
+                _ => uniq.push((p, on_arc[i])),
+            }
+        }
+        let np = uniq.len();
+        let mut out: Vec<Point> = Vec::with_capacity(np);
+        // stage 2: eliminate colinear segments
+        let mut i = 0usize;
+        while i + 2 < np {
+            let p0 = uniq[i].0;
+            let mut k = i;
+            if !uniq[i].1 && !uniq[i + 1].1 {
+                while k + 2 < np
+                    && (crate::seg_ops::line_distance((p0, uniq[k + 2].0), uniq[k + 1].0) <= 1 || crate::seg_ops::collinear((p0, uniq[k + 2].0), (p0, uniq[k + 1].0)))
+                {
+                    k += 1;
+                }
+            }
+            out.push(p0);
+            if k > i {
+                i = k;
+            }
+            if k == np - 2 {
+                out.push(uniq[np - 1].0);
+                self.pts = out;
+                return;
+            }
+            i += 1;
+        }
+        if np > 1 {
+            out.push(uniq[np - 2].0);
+        }
+        out.push(uniq[np - 1].0);
+        self.pts = out;
+    }
 }
 
 /// `dragCornerInternal` (`pns_line.cpp:668`): re-route the chain `origin`
@@ -630,6 +692,33 @@ mod tests {
         let mut l = Line::from_points(None, 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 1000, y: 0 }]);
         l.simplify();
         assert_eq!(l.pts, vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }]);
+    }
+
+    /// findings p5 F1-4 / F2-15: `SHAPE_LINE_CHAIN::Simplify2` drops a point on the infinite line through its neighbours, so a fold-back goes.
+    #[test]
+    fn simplify2_drops_a_backtracking_point_like_kicad() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(0, 0), p(10, 0), p(5, 0), p(5, 5)]);
+        l.simplify2();
+        assert_eq!(l.pts, vec![p(0, 0), p(5, 0), p(5, 5)]);
+    }
+
+    /// `Simplify2` on 3 points only drops a repeated first point ("Always try to keep at least 2 points").
+    #[test]
+    fn simplify2_keeps_a_collinear_middle_of_three_points() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(0, 0), p(500, 0), p(1000, 0)]);
+        l.simplify2();
+        assert_eq!(l.pts.len(), 3);
+        let mut l = Line::from_points(None, 0, 200, vec![p(0, 0), p(0, 0), p(1000, 0)]);
+        l.simplify2();
+        assert_eq!(l.pts, vec![p(0, 0), p(1000, 0)]);
+    }
+
+    /// The 1 nm kinks a walk round a hull leaves (`LineDistance <= 1`) go; a real corner stays.
+    #[test]
+    fn simplify2_drops_one_nanometre_kinks() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(0, 0), p(0, 5_000_000), p(1, 5_000_001), p(0, 9_000_000), p(4_000_000, 9_000_000)]);
+        l.simplify2();
+        assert_eq!(l.pts, vec![p(0, 0), p(0, 9_000_000), p(4_000_000, 9_000_000)]);
     }
 
     #[test]

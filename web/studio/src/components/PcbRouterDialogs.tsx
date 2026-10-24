@@ -133,15 +133,16 @@ export function DiffPairDimensionsDialog({ value, onOk }: { value: CustomDiffPai
   const w = width.parse();
   const g = gap.parse();
   const v = viaGap.parse();
-  // TransferDataFromWindow: "Track gap must be greater than 0."
-  const error = g === null || g <= 0 ? "Track gap must be greater than 0." : w === null || w <= 0 ? "Width must be greater than 0." : !same && (v === null || v < 0) ? "Via gap must be a length." : null;
+  // TransferDataFromWindow: the gap is the one value it checks ("Track gap must be greater than 0."), and it saves the via gap field's own value
+  // whatever the box says (`m_sizes.SetDiffPairViaGap( m_viaGap.GetValue() )`; `DiffPairViaGap()` answers the gap while the box is ticked)
+  const error = g === null || g <= 0 ? "Track gap must be greater than 0." : null;
   const submit = () => {
     if (error || w === null || g === null) return;
     closeSweepDialog();
-    onOk({ widthNm: w, gapNm: g, viaGapNm: same || v === null ? g : v, viaGapSameAsTrackGap: same });
+    onOk({ widthNm: w, gapNm: g, viaGapNm: v ?? value.viaGapNm, viaGapSameAsTrackGap: same });
   };
   return (
-    <DialogShell title="Differential Pair Dimensions" width={340} onCancel={closeSweepDialog} onOk={submit} okDisabled={!!error}>
+    <DialogShell title="Differential Pair Dimensions" width={340} onCancel={closeSweepDialog} onOk={submit} okDisabled={!!error || w === null}>
       <LengthRow label="Width:" field={width} autoFocus onEnter={submit} />
       <LengthRow label="Track gap:" field={gap} onEnter={submit} />
       <LengthRow label="Via gap:" field={viaGap} onEnter={submit} disabled={same} />

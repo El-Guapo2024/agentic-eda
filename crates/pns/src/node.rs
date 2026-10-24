@@ -143,11 +143,13 @@ pub struct Node {
     next_id: ItemId,
     joints: HashMap<JointKey, Joint>,
     index: Index,
+    /// The sources of the pads that are non-plated holes (`PAD_ATTRIB::NPTH`): a route does not start on one (`isStartingPointRoutable`).
+    npth: std::rc::Rc<std::collections::HashSet<String>>,
 }
 
 impl Clone for Node {
     fn clone(&self) -> Self {
-        Node { items: self.items.clone(), next_id: self.next_id, joints: self.joints.clone(), index: self.index.clone() }
+        Node { items: self.items.clone(), next_id: self.next_id, joints: self.joints.clone(), index: self.index.clone(), npth: self.npth.clone() }
     }
 }
 
@@ -158,7 +160,17 @@ const INDEX_CELL_NM: Nm = 5_000_000; // 5 mm
 
 impl Node {
     pub fn new() -> Self {
-        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_NM) }
+        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_NM), npth: Default::default() }
+    }
+
+    /// Is the pad `source` a non-plated hole?
+    pub fn is_npth(&self, source: &str) -> bool {
+        self.npth.contains(source)
+    }
+
+    /// The pads that are non-plated holes ([`Self::is_npth`]).
+    pub fn set_npth(&mut self, sources: std::collections::HashSet<String>) {
+        self.npth = std::rc::Rc::new(sources);
     }
 
     /// `NODE::Branch()`, simplified to a full clone -- see this module's
@@ -202,7 +214,7 @@ impl Node {
 
     /// `NODE::FixupVirtualVias` (`pns_node.cpp:1270`, run by `ROUTER::SyncWorld`): a virtual via (`VVIA`) at every joint on one layer with no pad and no
     /// via where the width changes or where a locked segment ends -- and one at the other end of that locked segment too, pad or via there or not.
-    /// Its diameter is the widest track's plus twice `PNS_HULL_MARGIN` (10 nm, which the micrometre grid has no room for). As KiCad's, only
+    /// Its diameter is the widest track's plus twice `PNS_HULL_MARGIN` (10 nm). As KiCad's, only
     /// segments are counted (an arc is no `SEGMENT`), "the locked one" is the last segment of the joint, and the solder mask, which KiCad compares
     /// too, is not in the model. **Where three segments meet there is none**: the condition reads `n_seg >= 3`, but KiCad's loop never counts a
     /// segment into `n_seg` (it stays 0), so a T of tracks of one width is no virtual via in KiCad's world -- and so not here (the review of
@@ -246,7 +258,7 @@ impl Node {
             }
             let (Some(pos), Some(net)) = (pos, net) else { continue };
             let layer = joint.layers.start();
-            let vvia = |at: Point| Via { net: net.clone(), layers: LayerRange::single(layer), pos: at, diameter: max_w, drill: max_w / 2, source_via: None, locked: false, is_virtual: true };
+            let vvia = |at: Point| Via { net: net.clone(), layers: LayerRange::single(layer), pos: at, diameter: max_w + 2 * crate::hull::PNS_HULL_MARGIN, drill: (max_w + 2 * crate::hull::PNS_HULL_MARGIN) / 2, source_via: None, locked: false, is_virtual: true };
             if (is_width_change || n_seg >= 3 || is_locked) && n_solid == 0 && n_vias == 0 {
                 vvias.push(vvia(pos));
             }

@@ -924,6 +924,56 @@ Proof: `routerVia.test.ts` (12: the flags, the pair, the type, the refusals, the
 In1.Cu and `(via micro ..)` In2.Cu .. B.Cu in the file, kicad-cli finds nothing but the stubs' dangling ends); and the "via actions" scenario
 of `web/studio/e2e/router-leftovers.check.js`.
 
+## Stage 12 -- parity batch E: the router findings fixed (branch `task-fix-e-router`, 2026-10-24)
+
+The fixes of `docs/parity/findings/p5-router.md` (status per finding there). Each was re-read in KiCad 8303b2ad, a failing test
+written, then fixed.
+
+- **KiCad's recorded sessions replay to the nanometre.** `SHAPE_LINE_CHAIN::Simplify2` is ported (`Line::simplify2`: `LineDistance <= 1`
+  to the infinite line, the 3-point rule) and called where KiCad calls it (`processCluster`, the shove's hull walk, the shoved line,
+  `onCollidingSolid`, `pushOrShoveVia`, `preShoveCleanup`, `mergeFull`, `mergeStep`, smart pads, the pair bypasses); the micrometre-era
+  `HULL_ROUNDING_GUARD` is gone and `ShoveObstacleLine`'s arc padding piles up; the shove's line and via collision tests use
+  `collideSimple`'s `clearance - 1` ("the hulls are built to exactly the clearance distance"). `tests/qa_regressions.rs` asserts KiCad's
+  exact compare (`PNS_LOG_FILE::COMMIT_STATE::Compare`): backspace1 2/2, simple-shove-1 28/28, issue22749 11/11,
+  walk_drag_seg_against_board_edge 3/3, simple-drag-shove-singlelayer 134/134, walk-with-teardrops 19/19 (new), and the via-drag crash
+  session clean. The corpus is `$KICAD_QA_DATA` or `$KICAD_SRC_DIR/qa/data`; without it `EDA_SLOW_TESTS=1` fails.
+- **The shove:** `ShoveObstacleLine`'s `LayersOverlap` test (a head's via shoves an other-layer track round the via alone), lines on
+  different layers never collide, `pushOrShoveVia` stops at a locked joint, `VIA::PushoutForce` moves the whole MTV (KiCad's "limit to
+  25%" is a discarded `Resize`), `SelfIntersecting` sees a fold-back.
+- **The line placer:** a via that ends a route is committed (`FixRoute` adds it to `m_lastNode`; `LinePlacer::fixed_vias`, Backspace takes
+  it with its run and restores the run's layer); Walk around pushes the via before walking the head to it (`rhWalkBase`'s two rounds);
+  a failed `routeHead` keeps the last good head (`routeStep`); Shove's failed pad walk is a failure (`rhShoveOnly`); the posture starts at
+  `InitialDirection()`; one `/` keeps Smart Pads off for its leg only; `removeLoops` takes the line the route is part of.
+- **The router:** Esc and a refused finish commit what was fixed (`CommitRouting()` after the loop; `Router::commit_fixed`); the start
+  check (`isStartingPointRoutable`: "The routing start point violates DRC.") and a start in empty space on the orphaned net;
+  AttemptFinish routes to the nearest unconnected anchor (`ROUTER::Finish`, `Router::attempt_finish`); `simplifyNewLine` on the commit
+  (`Router::simplify_new_lines`); a drag keeps the mode it started in.
+- **The dragger:** a via dragged in Highlight collisions keeps its tracks at 45 degrees (`dragViaMarkObstacles`' `DragCorner`); a refused
+  click leaves the drag going; a free-angle grab next to an arc takes the segment's start.
+- **Smart Pads** break out of a rounded-rectangle pad (`customBreakouts` of its outline); `mergeObtuse` checks only its bypass.
+- **Pairs:** `ImportSizes`' gap and via gap (the pair gap, at least the board minimum clearance; not the P-N clearance, not the class via
+  gap), KiCad's Default class sizes as the fallback (0.2 / 0.25 / 0.25 mm), "Cannot start a differential pair in the middle of nowhere.".
+- **The tuner:** the skew box's range is the skew's; a track of another pattern does not start one.
+
+After the review of 2026-10-24: no net is one net (`same_net`: `None` and `""` are KiCad's `OrphanedItem()`), a route starts on a no-net
+item and not on a non-plated hole; Backspace takes a leg that ended in a via back with the via armed again (`UnfixRoute`'s
+`m_placingVia`); Cancel Current Item refreshes the board after its commit. **Differs:** the outline, copper text and NPTH pads carry
+`not_a_net()`, so a no-net route keeps its clearance from them. Lows the review found, left:
+
+- `Router::commit_fixed` cuts the track the route ended in the middle of (`session_splits( true )`) also in Shove mode, where the
+  commit is the newest locked frame's (`RewindToLastLockedNode`), which may not have reached that end.
+- `F` (AttemptFinish) with a via armed fixes the head with its via and goes on on the other layer instead of finishing on the anchor.
+- `F` in a diff pair still finishes at the cursor (no `ROUTER::Finish` for the pair placer).
+- A via placed with no run before it (V at the start pad) continues the route where KiCad's `FixRoute` ends it (`m_idle = true`), and
+  Backspace cannot take it back by itself.
+- `simplifyNewLine`'s `MERGE_COLINEAR` and its first stage (removing a dangling collinear segment the new one subsumes,
+  `processJoint`) are not ported; `Simplify()` does the merge.
+- `Node::colliding_with` (the node's queries) lacks `collideSimple`'s `clearance - 1`; only the shove's line and via tests have it.
+
+Left, with the reason, in the findings file: F2-11 (KiCad's grab radius is the grid size, which the router is not told), F4-2 (arcs in
+the pair router and tuners), and the lows F1-7, F1-8, F1-9, F1-10 (in part), F2-15 (the `line_walk.rs` tolerances, FANOUT_CLEANUP, the
+mark-obstacles hull snap, the cluster timeout), F3-10 (by decision), F3-13, F4-9.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
