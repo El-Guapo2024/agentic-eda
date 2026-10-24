@@ -299,6 +299,21 @@
       t((await snapshot()) === base, "undone, the board is as it was");
     });
 
+    // ----- p6 F11
+    await scenario("Selection Filter: KiCad's rows in KiCad's order, Rule Areas among them", async (t) => {
+      toScreen = (await screenOf()) ?? toScreen;
+      const dockTab = (label) => [...document.querySelectorAll(".dock-tab")].find((x) => x.textContent.trim() === label);
+      const active = document.querySelector(".dock-tab.active")?.textContent.trim() ?? "Appearance";
+      dockTab("Filter")?.click(); await sleep(300);
+      const rows = [...document.querySelectorAll("label.filter-row")].map((l) => l.textContent.trim());
+      const want = ["All items", "Locked items", "Footprints", "Text", "Tracks", "Vias", "Pads", "Graphics", "Zones", "Rule Areas", "Dimensions", "Points", "Other items"];
+      t(want.every((w, i) => rows[i] === w), `the rows (${rows.slice(0, 13).join(", ")})`);
+      // (that a rule area follows Rule Areas and not Zones is selectionCandidates' unit test: padSelection.test.ts)
+      dockTab(active)?.click(); await sleep(200);
+      for (let i = 0; i < 4 && (await snapshot()) !== base; i++) await undo();
+      t((await snapshot()) === base, "undone, the board is as it was");
+    });
+
     // ----- p6 F2
     await scenario("a handle drag of a grouped line and Mirror of a grouped track keep them in their group", async (t) => {
       const [x0, y0] = [two.at[0] / 1e6 + 4, two.at[1] / 1e6 + 6];
