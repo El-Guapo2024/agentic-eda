@@ -389,7 +389,7 @@ mod tests {
                 r#"(table_cell "{text}" (start {x} {y}) (end {} {}) (margins 1 1 1 1) (span 1 1) {extra}(layer "F.SilkS") (uuid "22222222-2222-2222-2222-22222222222{}") (effects (font (size 1.5 1.5) (thickness 0.2) bold) (justify left top)))"#,
                 x + w,
                 y + h,
-                text.len() % 10_000
+                text.len() % 10
             )
         };
         [cell("A", 10.0, 20.0, 10.0, 5.0, ""), cell("B", 20.0, 20.0, 20.0, 5.0, ""), cell("C", 10.0, 25.0, 10.0, 6.0, ""), cell("D", 20.0, 25.0, 20.0, 6.0, "")].join("\n")

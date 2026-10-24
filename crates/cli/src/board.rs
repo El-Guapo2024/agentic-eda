@@ -3501,7 +3501,7 @@ mod tests {
         assert_eq!(count(&dir, "track_width"), 0);
         let constraints = eda_model::rules::Constraints { min_track_width_nm: 250_000, ..eda_model::rules::Constraints::of(&model.board) };
         step(&dir, Cmd::SetConstraints { constraints }, false, "ui").unwrap();
-        assert_eq!(count(&dir, "track_width"), 2000, "both tracks are under the new minimum");
+        assert_eq!(count(&dir, "track_width"), 2, "both tracks are under the new minimum");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(count(&dir, "track_width"), 0);
 
@@ -4608,7 +4608,7 @@ mod tests {
         };
         let base = counts(&dir);
         // On the schematic grid (50 mil, as the studio snaps a click): a pin off it is `endpoint_off_grid`, and rightly.
-        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: 157_000 * 1_270_000, y: 16_000 * 1_270_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: 157 * 1_270_000, y: 16 * 1_270_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         let after = counts(&dir);
         let grew = |kind: &str| after.get(kind).copied().unwrap_or(0).saturating_sub(base.get(kind).copied().unwrap_or(0));
         for kind in ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues", "unannotated", "endpoint_off_grid", "duplicate_reference", "unresolved_variable", "different_unit_footprint", "different_unit_net", "pin_to_pin", "bus_to_net_conflict"] {

@@ -454,13 +454,13 @@ mod tests {
             let (mut across, mut onto, mut dragged, mut pushed_arcs, mut split_arcs) = (0, 0, 0, 0, 0);
             let mut tries = [0usize; 3];
             for (track, net, layer, arc) in &arcs {
-                if across >= 2000 && onto >= 2000 && dragged >= 2000 {
+                if across >= 2 && onto >= 2 && dragged >= 2 {
                     break;
                 }
                 let layer_name = layers.name_of(*layer).to_string();
                 // across: from the nearest pad of another net, 2 to 9 mm from the arc's middle, straight at the arc and 0.15 mm past its middle, where the head's end sits on the
                 // arc's stroke: Shove mode has to push the arc away (a try in which it does not, the router walked or the arc was not in the way, is not judged)
-                if across < 2000 && tries[0] < 30_000 {
+                if across < 2 && tries[0] < 30 {
                     let from = pads.iter().filter(|(p, n, l)| n != net && l.overlaps_layer(*layer) && (2_000.0..9_000.0).contains(&dist(*p, arc.mid))).min_by(|a, b| dist(a.0, arc.mid).total_cmp(&dist(b.0, arc.mid)));
                     if let Some((pad, _, _)) = from {
                         tries[0] += 1;
@@ -481,7 +481,7 @@ mod tests {
                     }
                 }
                 // onto: from a pad of the arc's own net to the middle of the arc, which the route ends on (and so splits there)
-                if onto < 2000 && tries[1] < 16_000 {
+                if onto < 2 && tries[1] < 16 {
                     let from = pads.iter().filter(|(p, n, l)| n == net && l.overlaps_layer(*layer) && (1_500.0..12_000.0).contains(&dist(*p, arc.mid))).min_by(|a, b| dist(a.0, arc.mid).total_cmp(&dist(b.0, arc.mid)));
                     if let Some((pad, _, _)) = from {
                         tries[1] += 1;
@@ -499,7 +499,7 @@ mod tests {
                     }
                 }
                 // dragged: the middle of the arc taken hold of and moved 0.4 mm away from its centre
-                if dragged < 2000 && tries[2] < 16_000 {
+                if dragged < 2 && tries[2] < 16 {
                     tries[2] += 1;
                     let (c, r) = (arc.center_f(), arc.radius());
                     let to = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x as f64 - c.0) / r) * 400.0).round() as i64, y: arc.mid.y + (((arc.mid.y as f64 - c.1) / r) * 400.0).round() as i64 };
@@ -518,7 +518,7 @@ mod tests {
             assert!(across > 0 && onto > 0 && dragged > 0, "{name}: every kind of edit was judged at least once: {across}, {onto}, {dragged}");
             let _ = std::fs::remove_dir_all(&dir);
         }
-        assert!(judged == 0 || judged >= 6000, "{judged} edits judged by kicad-cli");
+        assert!(judged == 0 || judged >= 6, "{judged} edits judged by kicad-cli");
     }
 
     /// Springback (`SHOVE::reduceSpringback` / `pushSpringback`, `FixRoute`'s locked frame, `UnfixRoute`'s rewind) against kicad-cli's DRC
@@ -590,7 +590,7 @@ mod tests {
         pads.sort_by(|a, b| a.1.cmp(&b.1));
         let mut sessions = 0;
         for (pad, name, layer) in &pads {
-            if sessions >= 4000 {
+            if sessions >= 4 {
                 break;
             }
             let layer_name = layers.name_of(*layer).to_string();
@@ -633,7 +633,7 @@ mod tests {
             judged += 1;
         }
         eprintln!("{judged} springback sessions judged ({sessions} on pic_programmer's pads)");
-        assert!(judged >= 3000, "{judged} sessions judged by kicad-cli");
+        assert!(judged >= 3, "{judged} sessions judged by kicad-cli");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -677,7 +677,7 @@ mod tests {
                 // each mode from pads of its own, round the board
                 let offset = (c * 2 + m) * pads.len() / 8;
                 for (pad, name) in pads.iter().cycle().skip(offset).take(pads.len()) {
-                    if done >= 2000 {
+                    if done >= 2 {
                         break;
                     }
                     let mut router = Router::new(&design, &model);
@@ -721,7 +721,7 @@ mod tests {
             }
         }
         eprintln!("{judged} routes judged by kicad-cli, {arcs_written} arcs written, {pushed} of them pushed tracks");
-        assert!(judged >= 12_000, "{judged} routes judged");
+        assert!(judged >= 12, "{judged} routes judged");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -756,8 +756,8 @@ mod tests {
                 for (end, other) in [(s.a, s.b), (s.b, s.a)] {
                     let has = node.joint_at(end, &s.net).is_some_and(|j| j.links.iter().any(|&id| node.get(id).is_some_and(Item::is_virtual)));
                     if has && !junctions.iter().any(|(p, _, _)| *p == end) {
-                        // the grab point: on the segment, a micrometre from the end
-                        let len = (((other.x - end.x) as f64).hypot((other.y - end.y) as f64)).max(1.0);
+                        // the grab point: on the segment, a micrometre (1000 nm) from the end
+                        let len = (((other.x - end.x) as f64).hypot((other.y - end.y) as f64)).max(1.0) / 1000.0;
                         let at = Point { x: end.x + ((other.x - end.x) as f64 / len).round() as i64, y: end.y + ((other.y - end.y) as f64 / len).round() as i64 };
                         junctions.push((end, s.layer, at));
                     }
@@ -767,7 +767,7 @@ mod tests {
             eprintln!("{board}: {} junctions with a virtual via", junctions.len());
             let mut done = 0;
             for (k, (end, layer, at)) in junctions.iter().enumerate() {
-                if done >= 6000 {
+                if done >= 6 {
                     break;
                 }
                 let mode = [Mode::Shove, Mode::Walkaround, Mode::MarkObstacles][k % 3];
@@ -800,7 +800,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
         }
         eprintln!("{judged} junction drags judged by kicad-cli");
-        assert!(judged >= 6000, "{judged} junction drags judged");
+        assert!(judged >= 6, "{judged} junction drags judged");
     }
 
     /// The router's blind/buried via and microvia (`ROUTER_TOOL::handleLayerSwitch` with `VIA_ACTION_FLAGS::BLIND_VIA` / `MICROVIA`, the studio's
@@ -883,7 +883,7 @@ mod tests {
         eprintln!("kicad-cli: {found:?}");
         // the four stubs' outer ends lead nowhere (`track_dangling`); a route that did not reach its stub would leave two more, and the via one
         let dangling = found.iter().filter(|(k, _)| k == "track_dangling").count();
-        assert_eq!(dangling, 4000, "only the stubs' outer ends dangle: {found:?}");
+        assert_eq!(dangling, 4, "only the stubs' outer ends dangle: {found:?}");
         let other: Vec<&(String, String)> = found.iter().filter(|(k, _)| k != "track_dangling").collect();
         assert!(other.is_empty(), "kicad-cli finds {other:?}");
         let _ = std::fs::remove_dir_all(&dir);

@@ -39,7 +39,7 @@ fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
     while let Some(i) = rest.find("<g class=\"stroked-text\">") {
         bare.push_str(&rest[..i]);
         let after = &rest[i..];
-        let end = after.find("</g>").map(|e| e + 4000).unwrap_or(after.len());
+        let end = after.find("</g>").map(|e| e + 4).unwrap_or(after.len());
         rest = &after[end..];
     }
     bare.push_str(rest);
@@ -100,7 +100,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
     let tables = the_tables(&dir);
     assert_eq!(tables.len(), 2, "both tables are on the board");
     let (stackup, chars) = (&tables[0], &tables[1]);
-    assert_eq!((stackup.col_count(), chars.col_count()), (7000, 4000));
+    assert_eq!((stackup.col_count(), chars.col_count()), (7, 4));
 
     // The stackup table, on Dwgs.User (no footprint draws its text there): every cell's text drawn whole on one line, and the lines of its borders.
     let svg = plot(&dir, "Dwgs.User");

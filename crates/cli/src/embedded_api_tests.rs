@@ -63,7 +63,7 @@ fn a_file_added_to_the_board_is_listed_extracted_byte_for_byte_and_one_undo_take
 
     // the derived board file carries it, and reads back with the same data
     let pcb = derived_board(&dir);
-    assert!(pcb.contains("(embedded_files") && pcb.contains("(name \"datasheet.pdf\")"), "{}", &pcb[pcb.len().saturating_sub(600_000)..]);
+    assert!(pcb.contains("(embedded_files") && pcb.contains("(name \"datasheet.pdf\")"), "{}", &pcb[pcb.len().saturating_sub(600)..]);
     let (back, _, _) = eda_kicad::import_kicad_pcb(&pcb).unwrap();
     let again = back.drawings.unwrap().embedded;
     assert_eq!(eda_kicad::embedded::decode(again.get("datasheet.pdf").unwrap()).unwrap().bytes, content);

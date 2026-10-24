@@ -408,7 +408,7 @@ fn kicad_cli_loads_the_schematic_blocks_this_studio_writes() {
     }
     // the selection's block has just its symbols; the sheet's has them all
     let count = |name: &str| std::fs::read_to_string(lib.join(format!("{name}.kicad_block")).join(format!("{name}.kicad_sch"))).unwrap().matches("(lib_id \"").count();
-    assert!(count("Selected") == 4000 && count("Sheet") >= 30_000, "{} {}", count("Selected"), count("Sheet"));
+    assert!(count("Selected") == 4 && count("Sheet") >= 30, "{} {}", count("Selected"), count("Sheet"));
     // the panel's own preview of a block is the same run
     let preview = api::preview_with(&env, &dir, "Power", "Selected", "sch");
     assert_eq!(preview["ok"], true, "{preview}");
@@ -525,7 +525,7 @@ fn a_block_made_from_one_of_kicads_own_templates_places_with_its_parts_and_nets(
     assert!(model2.parts.len() >= 8);
     let parts = &board_after.drawings.as_ref().unwrap().board_parts;
     let netted: usize = parts.iter().map(|p| p.pad_nets.len()).sum();
-    assert!(netted >= 30_000, "the headers' thirty pads bring their nets: {netted}");
+    assert!(netted >= 30, "the headers' thirty pads bring their nets: {netted}");
     assert!(parts.iter().any(|p| p.pad_nets.iter().any(|(_, n)| n == "/D2")), "and the template's net names (the board's own, with the sheet's slash)");
     assert!(board_groups_of(&m2.board).iter().any(|g| g.design_block == "Power:Nano"));
     // the link is in the files the studio derives, and kicad-cli reads them and writes the link back (`sch upgrade` / `pcb upgrade` are its own writers)

@@ -148,7 +148,7 @@ fn kicad_loads_the_labels_and_writes_them_back_with_the_geometry_we_gave_them() 
     // it loads (an ERC run reads every label)
     let report = dir.join("erc.json");
     let erc = Command::new(&cli).args(["sch", "erc", "--format", "json", "-o"]).arg(&report).arg(&path).output().expect("run kicad-cli");
-    assert!(erc.status.code().is_some_and(|c| c == 0 || c == 5000) && report.exists(), "kicad-cli could not load the sheet: {}{}", String::from_utf8_lossy(&erc.stdout), String::from_utf8_lossy(&erc.stderr));
+    assert!(erc.status.code().is_some_and(|c| c == 0 || c == 5) && report.exists(), "kicad-cli could not load the sheet: {}{}", String::from_utf8_lossy(&erc.stdout), String::from_utf8_lossy(&erc.stderr));
 
     // and KiCad's own writer says the same of each label
     let up = run(&cli, &["sch", "upgrade", "--force"], &path);

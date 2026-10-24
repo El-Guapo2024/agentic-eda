@@ -521,11 +521,11 @@ fn a_stitching_carries_on_across_the_inner_planes_past_a_partial_top_pour() {
     let (Some(cli), Some(qa)) = (kicad_cli(), qa_data()) else { return };
     let (_design, plan) = plan_of(&refilled(&cli, &qa, "issue25303.kicad_pcb"));
     let positions: Vec<eda_model::ir::Point> = plan.vias.iter().map(|(_, p)| *p).collect();
-    let under = positions.iter().filter(|p| p.x < 107_000).count();
+    let under = positions.iter().filter(|p| p.x < 107_000_000).count();
     let beyond = positions.len() - under;
     let max_x = positions.iter().map(|p| p.x).max().unwrap_or(0);
-    eprintln!("issue25303: {} vias, {under} under the F.Cu pour, {beyond} beyond, the farthest at x = {max_x} um", positions.len());
-    assert!(positions.len() > 100 && under > 20 && beyond > 20 && max_x > 122_000);
+    eprintln!("issue25303: {} vias, {under} under the F.Cu pour, {beyond} beyond, the farthest at x = {max_x} nm", positions.len());
+    assert!(positions.len() > 100 && under > 20 && beyond > 20 && max_x > 122_000_000);
     assert!(positions.iter().all(|p| inside(&plan.stitch.outline, *p)));
 }
 

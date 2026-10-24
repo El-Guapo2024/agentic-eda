@@ -2368,7 +2368,7 @@ mod tests {
     #[test]
     fn the_tuning_patterns_of_kicads_own_boards_are_read_with_their_tracks() {
         let Ok(dir) = std::env::var("KICAD_SRC_DIR") else { return };
-        for (file, patterns) in [("tuning_generators_load_save.kicad_pcb", 1usize), ("issue22536.kicad_pcb", 4000)] {
+        for (file, patterns) in [("tuning_generators_load_save.kicad_pcb", 1usize), ("issue22536.kicad_pcb", 4)] {
             let Ok(text) = std::fs::read_to_string(std::path::Path::new(&dir).join("qa/data/pcbnew").join(file)) else { continue };
             let (design, model, _) = crate::import_kicad_pcb(&text).unwrap();
             let got = &design.drawings.as_ref().expect("patterns").tuning_patterns;
@@ -3572,7 +3572,7 @@ mod tests {
             assert!(out.contains(want), "{want} in {out}");
         }
         assert!(!out.contains("(path "), "{out}");
-        assert!(out.trim_end().ends_with("(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))\n)"), "the unread items close the board: {}", &out[out.len().saturating_sub(300_000)..]);
+        assert!(out.trim_end().ends_with("(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))\n)"), "the unread items close the board: {}", &out[out.len().saturating_sub(300)..]);
         // Read again, the same.
         let (back, _, back_notes) = crate::import_kicad_pcb(&out).unwrap();
         assert_eq!(back_notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["target"]);

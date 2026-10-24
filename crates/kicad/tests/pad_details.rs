@@ -220,14 +220,14 @@ fn model_boxes(design: &Design, model: &ConstraintModel, layer: &str) -> Vec<[f6
                 if !group.layers.iter().any(|l| l == layer) {
                     continue;
                 }
-                let polys = eda_drc::pad_shape::pad_polygons(fp, &group.shape.lay_on(pad), centre, 5);
+                let polys = eda_drc::pad_shape::pad_polygons(fp, &group.shape.lay_on(pad), centre, 5_000);
                 if polys.is_empty() || polys.area() <= 0.0 {
                     continue;
                 }
                 let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
                 for i in 0..polys.outline_count() {
                     for p in polys.outline(i) {
-                        let (x, y) = (p.x as f64 / 1000.0, p.y as f64 / 1000.0);
+                        let (x, y) = (p.x as f64 / 1e6, p.y as f64 / 1e6);
                         lo = [lo[0].min(x), lo[1].min(y)];
                         hi = [hi[0].max(x), hi[1].max(y)];
                     }

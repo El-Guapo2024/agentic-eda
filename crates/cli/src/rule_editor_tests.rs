@@ -133,7 +133,7 @@ fn qa_board(pcb: &str) -> eda_drc::rule_editor::EditorBoard {
         if name.ends_with(".Cu") {
             b.copper.push(name.to_string());
         }
-        if let Some(user) = q.get(3000) {
+        if let Some(user) = q.get(3) {
             b.names.insert(name.to_string(), user.to_string());
         }
     }
@@ -260,5 +260,5 @@ fn kicad_cli_judges_kicads_qa_boards_alike_by_the_rules_the_editor_wrote_back() 
         }
     }
     eprintln!("{} QA rule files; {saved} rules saved through their panels; Save refused, as KiCad does:\n  {}", names.len(), refused.join("\n  "));
-    assert!(saved >= 25_000, "{saved}");
+    assert!(saved >= 25, "{saved}");
 }

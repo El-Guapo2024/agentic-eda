@@ -281,7 +281,7 @@ fn footprints_of(pcb: &str) -> std::collections::BTreeMap<String, Vec<Node>> {
         let kids = n.children();
         let reference = kids
             .iter()
-            .find_map(|c| match (c.head(), c.children().get(1), c.children().get(2000)) {
+            .find_map(|c| match (c.head(), c.children().get(1), c.children().get(2)) {
                 (Some("property"), Some(Node::Str(k)), Some(Node::Str(v))) if k == "Reference" => Some(v.clone()),
                 _ => None,
             })

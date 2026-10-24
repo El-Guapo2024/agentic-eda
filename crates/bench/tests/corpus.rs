@@ -95,7 +95,7 @@ enum Expect {
 fn default_expect(stem: &str) -> Expect {
     match stem {
         "unroutable_tiny_outline" => Expect::ExpectedFail(Stage::Placement),
-        "dense_small_outline" | "ldo" | "ldo_proximity_heavy" | "mcu_board_30plus" | "mixed_track_widths" | "opamp_filter" | "passive_divider_ladder"
+        "dense_small_outline" | "ldo" | "ldo_proximity_heavy" | "mcu_board_30plus" | "mixed_track_widths" | "passive_divider_ladder"
         | "star_net" | "through_hole_headers" | "two_pin_nets" => Expect::KnownFail(Stage::Schematic),
         _ => Expect::Clean,
     }

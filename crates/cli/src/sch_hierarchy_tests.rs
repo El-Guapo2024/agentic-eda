@@ -367,11 +367,11 @@ fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
             pin("1", "OUT1", 1, 0.0, false),
             pin("2", "IN1-", 1, 2.54, true),
             pin("3", "IN1+", 1, -2.54, true),
-            pin("7", "OUT2", 2000, 0.0, false),
-            pin("6", "IN2-", 2000, 2.54, true),
-            pin("5", "IN2+", 2000, -2.54, true),
-            pin("8", "V+", 3000, 2.54, false),
-            pin("4", "V-", 3000, -2.54, false),
+            pin("7", "OUT2", 2, 0.0, false),
+            pin("6", "IN2-", 2, 2.54, true),
+            pin("5", "IN2+", 2, -2.54, true),
+            pin("8", "V+", 3, 2.54, false),
+            pin("4", "V-", 3, -2.54, false),
         ],
         power: false,
         in_bom: true,
@@ -414,7 +414,7 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     {
         let root = design.schematic.as_mut().unwrap();
-        for (unit, x) in [(1, 300_000_000), (2000, 330_000_000), (3000, 360_000)] {
+        for (unit, x) in [(1, 300_000_000), (2, 330_000_000), (3, 360_000_000)] {
             root.symbols.push(eda_model::ir::SymbolInstance {
                 id: "U9".into(),
                 at: Point { x, y: 20_000_000 },
@@ -1274,7 +1274,7 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
     // the ratchet: 87 of KiCad's 130 QA roots on 2026-10-23 (nightly 20261021); before the review of that day, 53 (turned and mirrored symbols were traced
     // and written otherwise than drawn, and one file hung Import Sheet)
     if only.is_none() {
-        assert!(same >= 87_000, "{same} judged alike, fewer than the 87 of 2026-10-23");
+        assert!(same >= 87, "{same} judged alike, fewer than the 87 of 2026-10-23");
     }
 }
 

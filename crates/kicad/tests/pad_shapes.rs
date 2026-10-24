@@ -181,7 +181,7 @@ fn qa_boards_dir() -> PathBuf {
 #[test]
 fn the_custom_pads_of_kicads_qa_boards_keep_their_primitives_through_a_round_trip() {
     let qa = qa_boards_dir();
-    for (name, custom_pads) in [("custom_pads.kicad_pcb", 2000usize), ("padstacks.kicad_pcb", 3000), ("stonehenge.kicad_pcb", 20_000)] {
+    for (name, custom_pads) in [("custom_pads.kicad_pcb", 2usize), ("padstacks.kicad_pcb", 3), ("stonehenge.kicad_pcb", 20)] {
         let Ok(text) = std::fs::read_to_string(qa.join(name)) else {
             eprintln!("skipped: no QA board {name}");
             continue;
@@ -232,7 +232,7 @@ fn pad_areas_mm2(text: &str) -> Vec<(String, f64)> {
         let footprint = model.footprint_of(part).expect("a footprint");
         for pad in &footprint.pads {
             let centre = eda_model::footprint::to_board(fp, pad.at);
-            let area = eda_drc::pad_shape::pad_polygons(fp, pad, centre, 5000).area() / 1e6;
+            let area = eda_drc::pad_shape::pad_polygons(fp, pad, centre, 5_000).area() / 1e12;
             out.push((format!("{}.{}", fp.id, pad.number), area));
         }
     }
@@ -480,9 +480,9 @@ fn kicad_cli_drc_measures_the_clearance_to_these_pads_as_the_drc_here_does() {
         let (design, model, _) = import_kicad_pcb(&text).expect("imports");
         let board = eda_drc::board::build(&design, &model);
         let copper = &board.pads[0].copper;
-        let um = |v: f64| (v * 1000.0).round() as i64;
-        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: um(a.0), y: um(a.1) }, b: eda_model::ir::Point { x: um(b.0), y: um(b.1) }, r: 100 };
-        let ours = copper.gap_to(&track) / 1000.0;
+        let nm = |v: f64| (v * 1e6).round() as i64;
+        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: nm(a.0), y: nm(a.1) }, b: eda_model::ir::Point { x: nm(b.0), y: nm(b.1) }, r: 100_000 };
+        let ours = copper.gap_to(&track) / 1e6;
         eprintln!("{name}: kicad-cli {theirs:.4} mm, here {ours:.4} mm");
         assert!((ours - theirs).abs() < 0.002, "{name}: kicad-cli's DRC says {theirs} mm of air, the DRC here {ours} mm");
     }

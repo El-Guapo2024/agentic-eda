@@ -163,7 +163,7 @@ fn kicad_cli_loads_a_numbered_pad_array_and_keeps_it_through_fp_upgrade() {
         plots.push(std::fs::read_to_string(out_dir.join("BGA_3x4.svg")).expect("an svg"));
     }
     let shapes = |svg: &str| svg.matches("<path").count();
-    assert!(shapes(&plots[0]) >= 12_000, "kicad-cli drew the 12 pads: {} paths", shapes(&plots[0]));
+    assert!(shapes(&plots[0]) >= 12, "kicad-cli drew the 12 pads: {} paths", shapes(&plots[0]));
     assert_eq!(shapes(&plots[0]), shapes(&plots[1]), "the same number of shapes before and after fp upgrade");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -277,7 +277,7 @@ fn kicad_cli_loads_a_footprint_with_fields_and_keeps_them_through_fp_upgrade() {
     };
     assert_eq!(summary(&theirs_text), summary(&ours_text), "kicad-cli keeps every field: its text, its place, its layer, its size, shown or hidden");
     let theirs = summary(&theirs_text);
-    assert_eq!((theirs.2.as_deref(), theirs.3.len()), (Some("J**"), 2000));
+    assert_eq!((theirs.2.as_deref(), theirs.3.len()), (Some("J**"), 2));
     assert_eq!((theirs.3[0].0.as_str(), theirs.3[0].2, theirs.3[1].2), ("MPN", true, false));
 
     // 2. and draws the same: the fabrication layer of the two libraries is one plot, and it holds the shown fields' text (the plot of the footprint without its fields is smaller)

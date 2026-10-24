@@ -488,7 +488,7 @@ mod tests {
         import(&args(&brd, &out, &["--report", &report_file.display().to_string()]));
         let (_, design, model) = crate::board::load(&out).expect("a board the studio opens");
         assert_eq!(design.placement.as_ref().unwrap().footprints.len(), 19, "the board's footprints, as kicad-cli's report counts them");
-        assert_eq!(placed_symbols(&design), 36_000, "the schematic of the same name beside it: 36 symbols");
+        assert_eq!(placed_symbols(&design), 36, "the schematic of the same name beside it: 36 symbols");
         assert!(design.nets.as_ref().is_some_and(|n| !n.is_empty()), "the drawing's nets are the netlist now");
         // The nets of the schematic reach the board's pads: the part U1 is on the board and on the sheet.
         assert!(model.part("U1").is_some() && model.nets.iter().any(|n| n.pins.iter().any(|p| p.starts_with("U1."))));
@@ -512,11 +512,11 @@ mod tests {
         let from_sch = scratch("eagle_from_sch");
         import(&args(&sch, &from_sch, &[]));
         let (_, d2, _) = crate::board::load(&from_sch).unwrap();
-        assert_eq!((d2.placement.as_ref().unwrap().footprints.len(), placed_symbols(&d2)), (19_000, 36_000));
+        assert_eq!((d2.placement.as_ref().unwrap().footprints.len(), placed_symbols(&d2)), (19, 36));
         let alone = scratch("eagle_alone");
         import(&args(&brd, &alone, &["--no-pair"]));
         let (_, d3, _) = crate::board::load(&alone).unwrap();
-        assert_eq!((d3.placement.as_ref().unwrap().footprints.len(), d3.schematic.is_none()), (19_000, true), "board only");
+        assert_eq!((d3.placement.as_ref().unwrap().footprints.len(), d3.schematic.is_none()), (19, true), "board only");
         for d in [&out, &from_sch, &alone] {
             let _ = std::fs::remove_dir_all(d);
         }
@@ -530,12 +530,12 @@ mod tests {
         import(&args(&prj, &out, &[]));
         let (_, design, model) = crate::board::load(&out).expect("a board the studio opens");
         assert_eq!(design.placement.as_ref().unwrap().footprints.len(), 115);
-        assert_eq!(model.board.min_clearance_nm, 102_000, "Altium's clearance rule (4 mil), from the project kicad-cli made with the board");
+        assert_eq!(model.board.min_clearance_nm, 101_600, "Altium's clearance rule (4 mil), from the project kicad-cli made with the board");
         let root = design.schematic.as_ref().expect("a schematic");
         let names: Vec<(&str, &str)> = root.sheets.iter().map(|s| (s.name.as_str(), s.page.as_str())).collect();
         assert_eq!(names, vec![("it6251_core", "2"), ("power", "3")], "in the order the project lists them, from page 2");
         assert_eq!(placed_symbols(&design), 124_000 + 49_000, "every symbol of both sheets");
-        assert_eq!(design.sheet_contents.as_ref().map(|c| c.len()), Some(2000));
+        assert_eq!(design.sheet_contents.as_ref().map(|c| c.len()), Some(2));
         let _ = std::fs::remove_dir_all(&out);
     }
 
@@ -546,7 +546,7 @@ mod tests {
         let out = scratch("sch_only");
         import(&args(&sch, &out, &[]));
         let (_, design, _) = crate::board::load(&out).unwrap();
-        assert_eq!((design.placement.as_ref().unwrap().footprints.len(), placed_symbols(&design)), (0, 49_000));
+        assert_eq!((design.placement.as_ref().unwrap().footprints.len(), placed_symbols(&design)), (0, 49));
         let _ = std::fs::remove_dir_all(&out);
 
         let brd = qa("pcbnew/plugins/eagle/test_eagle_23016/test_eagle.brd").unwrap();
@@ -569,12 +569,12 @@ mod tests {
         let out = scratch("easyeda_sch");
         import(&args(&sch, &out, &[]));
         let (_, design, _) = crate::board::load(&out).unwrap();
-        assert_eq!((design.placement.as_ref().unwrap().footprints.len(), placed_symbols(&design)), (0, 135_000), "the schematic json is a schematic");
+        assert_eq!((design.placement.as_ref().unwrap().footprints.len(), placed_symbols(&design)), (0, 135), "the schematic json is a schematic");
         let pcb = qa("pcbnew/plugins/easyeda/PCB_PCB_ESP32-PICO-D4 smart watch_2023-09-02.json").unwrap();
         let out2 = scratch("easyeda_pcb");
         import(&args(&pcb, &out2, &[]));
         let (_, d2, _) = crate::board::load(&out2).unwrap();
-        assert_eq!((d2.placement.as_ref().unwrap().footprints.len(), d2.schematic.is_none()), (70_000, true), "and the pcb json is a board");
+        assert_eq!((d2.placement.as_ref().unwrap().footprints.len(), d2.schematic.is_none()), (70, true), "and the pcb json is a board");
         // Said the other way round, the kind is forced.
         let e = run(&args(&sch, &scratch("easyeda_forced"), &["--kind", "board"])).unwrap_err();
         assert!(eda_kicad_engine::foreign::is_unrecognized(&e), "{e:?}");
@@ -591,10 +591,10 @@ mod tests {
         let out = scratch("eagle_two_sheets");
         import(&args(&sch, &out, &[]));
         let (_, design, _) = crate::board::load(&out).expect("a board the studio opens");
-        assert_eq!(placed_symbols(&design), 24_000, "20 on the first sheet and 4 on the second: kicad-cli's report counts 24");
+        assert_eq!(placed_symbols(&design), 24, "20 on the first sheet and 4 on the second: kicad-cli's report counts 24");
         let root = design.schematic.as_ref().unwrap();
         assert_eq!(root.sheets.len(), 2, "two sheets placed on a root: {:?}", root.sheets.iter().map(|s| &s.name).collect::<Vec<_>>());
-        assert_eq!(design.sheet_contents.as_ref().map(|c| c.len()), Some(2000));
+        assert_eq!(design.sheet_contents.as_ref().map(|c| c.len()), Some(2));
         assert!(design.placement.as_ref().unwrap().footprints.len() > 3, "the board of the same name: {}", design.placement.as_ref().unwrap().footprints.len());
         let _ = std::fs::remove_dir_all(&out);
     }

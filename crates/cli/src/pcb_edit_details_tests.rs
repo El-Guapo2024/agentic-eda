@@ -47,14 +47,14 @@ fn kicad_cli_reads_the_references_a_paste_gave_and_the_board_after_paste_special
     // A plain Paste: the references of the copy stay U1 and U2 (KiCad's `KEEP_ANNOTATIONS`).
     step(&dir, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 10_000_000, y: 14_000_000 } }, false, "test").unwrap();
     let kept = positions(&dir);
-    assert_eq!((count(&kept, "U1"), count(&kept, "U2")), (2000, 2000), "kicad-cli sees two U1 and two U2 after the paste:\n{kept}");
+    assert_eq!((count(&kept, "U1"), count(&kept, "U2")), (2, 2), "kicad-cli sees two U1 and two U2 after the paste:\n{kept}");
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!(count(&positions(&dir), "U1"), 1, "Undo takes the paste away");
 
     // Paste Special, references cleared and nets cleared.
     step(&dir, Cmd::PasteSpecial { text: text.clone(), at: Point { x: 10_000_000, y: 14_000_000 }, mode: PasteMode::Remove, clear_nets: true }, false, "test").unwrap();
     let cleared = positions(&dir);
-    assert_eq!(count(&cleared, "REF**"), 2000, "both pasted footprints read REF** to kicad-cli:\n{cleared}");
+    assert_eq!(count(&cleared, "REF**"), 2, "both pasted footprints read REF** to kicad-cli:\n{cleared}");
     assert_eq!((count(&cleared, "U1"), count(&cleared, "U2")), (1, 1), "and the board's own are as they were");
     let (_, design, _) = load(&dir).unwrap();
     assert!(design.drawings.as_ref().unwrap().board_parts.iter().all(|p| p.pad_nets.is_empty()), "the pasted pads are on no net");
@@ -152,7 +152,7 @@ fn kicad_cli_counts_the_stubs_the_filtered_cleanup_left() {
     setup(&dir);
     two_stubs(&dir);
     let dangling = |dir: &Path| drc_counts(dir).get("track_dangling").copied().unwrap_or(0);
-    assert_eq!(dangling(&dir), 2000, "kicad-cli sees both stubs dangle: {:?}", drc_counts(&dir));
+    assert_eq!(dangling(&dir), 2, "kicad-cli sees both stubs dangle: {:?}", drc_counts(&dir));
     let reply = crate::cleanup_api::apply(&dir, &body(serde_json::json!({ "delete_dangling_tracks": true, "filter_net": "GND" })));
     assert_eq!(reply["ok"], true, "{reply}");
     assert_eq!(dangling(&dir), 1, "the VCC stub is the one the filter skipped");
