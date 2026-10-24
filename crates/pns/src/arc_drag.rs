@@ -179,7 +179,7 @@ pub struct ArcDrag {
 }
 
 /// Why an arc cannot be dragged (`EDIT_TOOL::DragArcTrack`'s own refusal).
-pub const TOO_WIDE: &str = "Unable to resize arc tracks of 179° or greater.";
+pub const TOO_WIDE: &str = "Unable to resize arc tracks of 179.0° or greater.";
 
 impl ArcDrag {
     /// `startDragArc` + the set-up of `DragArcTrack` for the arc `run` of `line`. `Err` is KiCad's message; `Ok(None)` when no fillet can be made of it (its
