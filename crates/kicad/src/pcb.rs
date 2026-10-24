@@ -73,7 +73,12 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     // `(general (thickness ..))`: the board's thickness (`BOARD_DESIGN_SETTINGS::GetBoardThickness()`), KiCad's 1.6 mm unless Board Setup's
     // Physical Stackup says otherwise.
     writeln!(out, "\t\t(thickness {})", mm(model.board.board_thickness_nm)).unwrap();
-    writeln!(out, "\t\t(legacy_teardrops no)").unwrap();
+    // `(legacy_teardrops yes)` while the board has teardrops: they are zones of the design, made here (`Cmd::AddAllTeardrops`) or read from a file, and kicad-cli's
+    // refill (`ZONE_FILLER_TOOL::FillAllZones` -> `TEARDROP_MANAGER::UpdateTeardrops( .., forceFullUpdate )`) would otherwise delete every one and rebuild only those of
+    // pads and vias whose own teardrop parameters say `(enabled yes)`, which the studio's do not: the fills, the Gerbers and the plots lost the teardrop copper. A board
+    // with legacy teardrops keeps them (`if( m_board->LegacyTeardrops() ) return;`) and fills them as the zones they are.
+    let has_teardrops = design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| z.teardrop));
+    writeln!(out, "\t\t(legacy_teardrops {})", if has_teardrops { "yes" } else { "no" }).unwrap();
     writeln!(out, "\t)").unwrap();
     // The board's paper and title block (Page Settings); A4 landscape and no title block when it never set them.
     let page = design.drawings.as_ref().and_then(|d| d.page.as_ref());
@@ -281,10 +286,20 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         // `BOARD::GetEnabledLayers`: the copper layers of the stackup and the technical and user layers Board Setup has on. A zone is written on those of its layer set.
         let enabled: std::collections::BTreeSet<String> = model.board.layers.iter().chain(model.board.layer_setup.enabled.iter()).cloned().collect();
         let mut kept_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let teardrop_priority = teardrop_priorities(&routing.zones);
         for z in &zones {
             if z.outline.len() < 3 {
                 continue;
             }
+            // A teardrop of the studio's with the priority KiCad's teardrop manager would give it.
+            let with_priority;
+            let z: &Zone = match teardrop_priority.get(z.id.as_str()) {
+                Some(&p) => {
+                    with_priority = Zone { priority: p, ..(*z).clone() };
+                    &with_priority
+                }
+                None => z,
+            };
             // A rule area has no net at all, whatever its `net` says (`ZONE::GetIsRuleArea()`); asking the
             // net check about it rejected the whole export with `kicad.unknown_net`. Neither has a zone on no
             // copper layer (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
@@ -1201,13 +1216,23 @@ pub(crate) fn write_footprint(
                 } else {
                     ("F.Cu", "F.Paste", "F.Mask")
                 };
+                // An SMD pad on several copper layers: the set it had (`PadMaskInfo::smd_layers`), on the footprint's side, every copper layer of the board folded into
+                // `*.Cu` (`formatLayers`: `if( ( aLayerMask & cu_board_mask ) == cu_board_mask )`, the copper bits then cleared).
+                let smd_layers: Vec<String> = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.smd_layers.iter().map(|l| eda_model::fp_art::layer_on_side(l, fp.side)).collect()).unwrap_or_default();
+                let mut smd_layers: Vec<&str> = smd_layers.iter().map(String::as_str).collect();
+                if model.board.layers.iter().all(|l| smd_layers.contains(&l.as_str())) {
+                    smd_layers.retain(|l| !l.ends_with(".Cu") || *l == "F.Cu" || *l == "B.Cu");
+                }
                 // The layers the pad had: its side's copper, and its paste and mask unless the file's pad had none; an edge connector pad has mask on both sides and no paste.
-                let base: Vec<&str> = if connector {
+                let several = !connector && !smd_layers.is_empty();
+                let base: Vec<&str> = if several {
+                    smd_layers
+                } else if connector {
                     std::iter::once(cu).chain((!no_mask).then_some(["F.Mask", "B.Mask"]).into_iter().flatten()).collect()
                 } else {
                     std::iter::once(cu).chain((!no_paste).then_some(paste)).chain((!no_mask).then_some(mask)).collect()
                 };
-                if art_layers.is_empty() {
+                if art_layers.is_empty() && !several {
                     write!(out, " (layers {})", base.iter().map(|l| sexpr_str(l)).collect::<Vec<_>>().join(" ")).unwrap();
                 } else {
                     write!(out, " {}", crate::fp_art_io::pad_layers_token(&base, art_layers, fp.side)).unwrap();
@@ -1296,6 +1321,35 @@ pub(crate) fn write_footprint(
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
+    // The pads with no copper (`FootprintExtra::aux_pads`: the stencil's openings, mask apertures) as the file had them, while the part is on that footprint and that side;
+    // the angle turned by what the footprint has turned since (the file's angle is the board's: `pad_file_angle`), the net by its name on this board.
+    if let Some(e) = own_extra.filter(|e| !e.aux_pads.is_empty() && e.source_name == lib_name_written && e.courtyard_bottom == (fp.side == Side::Bottom)) {
+        let turned = fp.rot as f64 - e.aux_pads_rot as f64;
+        for aux in &e.aux_pads {
+            let Ok(crate::sexpr::Sexpr::List(mut items)) = crate::sexpr::parse(&aux.text) else { continue };
+            if turned != 0.0 {
+                if let Some(at) = items.iter_mut().find_map(|c| match c {
+                    crate::sexpr::Sexpr::List(l) if crate::sexpr::tag(l) == Some("at") => Some(l),
+                    _ => None,
+                }) {
+                    let angle = crate::sexpr::num(at, 3).unwrap_or(0.0) - turned / 1000.0;
+                    at.truncate(3);
+                    at.push(crate::sexpr::Sexpr::Atom(fmt_mm_f(angle.rem_euclid(360.0))));
+                }
+            }
+            let mut text = crate::sexpr::to_text(&crate::sexpr::Sexpr::List(items));
+            if let Some(&n) = net_num.get(aux.net.as_str()).filter(|_| !aux.net.is_empty()) {
+                // `(net N "name")` before the uuid, where `format( const PAD* )` writes it.
+                let net = format!(" (net {n} {})", sexpr_str(&aux.net));
+                match text.rfind(" (uuid ") {
+                    Some(at) => text.insert_str(at, &net),
+                    None => text.insert_str(text.len() - 1, &net),
+                }
+            }
+            writeln!(out, "\t\t{text}").unwrap();
+        }
+    }
+
     // The courtyard, on the footprint's own side: what KiCad's DRC reads for
     // `courtyards_overlap`, `pth_inside_courtyard` and `npth_inside_courtyard`
     // (the gates that call kicad-cli for those get nothing to judge from a
@@ -1364,6 +1418,38 @@ pub(crate) fn write_footprint(
     uuid
 }
 
+/// `MAGIC_TEARDROP_ZONE_ID`: the priority KiCad's teardrops start from, above any zone a user draws.
+const MAGIC_TEARDROP_ZONE_ID: u32 = 30000;
+
+/// `TEARDROP_MANAGER::setTeardropPriorities` for the teardrops of the design that have no priority (the studio's own, `eda_connectivity::generate_teardrops`): per layer,
+/// by decreasing outline area (then id), `MAGIC_TEARDROP_ZONE_ID` and up, skipping the priorities the layer's other teardrops (a file's, which keep theirs) hold. Without
+/// it a teardrop would tie with a pour of priority 0 of another net, and the uuid would decide which yields (`ZONE::HigherPriority`).
+fn teardrop_priorities(zones: &[Zone]) -> std::collections::HashMap<&str, u32> {
+    let area = |z: &Zone| {
+        let n = z.outline.len();
+        (0..n).map(|i| z.outline[i].x as f64 * z.outline[(i + 1) % n].y as f64 - z.outline[(i + 1) % n].x as f64 * z.outline[i].y as f64).sum::<f64>().abs() / 2.0
+    };
+    let layer_rank = |z: &Zone| eda_model::layers::pcb_layer_id(&z.layer).unwrap_or(u32::MAX);
+    let mut created: Vec<&Zone> = zones.iter().filter(|z| z.teardrop && z.priority == 0 && !z.id.is_empty()).collect();
+    created.sort_by(|a, b| layer_rank(a).cmp(&layer_rank(b)).then(area(b).total_cmp(&area(a))).then(a.id.cmp(&b.id)));
+    let mut out = std::collections::HashMap::new();
+    let mut current: Option<&str> = None;
+    let mut next = MAGIC_TEARDROP_ZONE_ID;
+    for z in created {
+        if current != Some(z.layer.as_str()) {
+            current = Some(z.layer.as_str());
+            next = MAGIC_TEARDROP_ZONE_ID;
+        }
+        let taken = |p: u32| zones.iter().any(|o| o.teardrop && o.priority == p && o.layer == z.layer);
+        while taken(next) {
+            next += 1;
+        }
+        out.insert(z.id.as_str(), next);
+        next += 1;
+    }
+    out
+}
+
 /// A free-standing graphic shape as KiCad's `gr_line`/`gr_arc`/`gr_rect`/
 /// `gr_circle`/`gr_poly`, matching `PCB_IO_KICAD_SEXPR::format(const
 /// PCB_SHAPE*)`: stroke width and type first, `fill` only for the three
@@ -1404,9 +1490,11 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
             .unwrap();
         }
         Shape::Rect { stroke_width, filled, start, end, .. } => {
+            // `if( aShape->GetCornerRadius() > 0 ) m_out->Print( " (radius %s)", .. )`, after the end.
+            let radius = style.map(|st| st.corner_radius).filter(|&r| r > 0).map(|r| format!(" (radius {})", mm(r))).unwrap_or_default();
             writeln!(
                 out,
-                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
+                "\t(gr_rect (start {} {}) (end {} {}){radius} (stroke (width {}) (type solid)) (fill {}){lock} {layer} (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -1482,6 +1570,32 @@ mod tests {
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }
+    }
+
+    /// P13-1: a board with teardrops says `(legacy_teardrops yes)`, so kicad-cli's refill keeps them (`UpdateTeardrops` returns at once) and fills them as zones; the
+    /// studio's teardrops, which have no priority, get `MAGIC_TEARDROP_ZONE_ID` and up per layer by decreasing area (`setTeardropPriorities`), and a teardrop that has
+    /// one (a file's) keeps it and its number is skipped. A board without teardrops says `no`, as before.
+    #[test]
+    fn a_board_with_teardrops_keeps_them_through_kicad_clis_refill() {
+        let (mut design, model) = fixture();
+        assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(legacy_teardrops no)"));
+        let tri = |id: &str, size: i64, priority: u32| Zone {
+            id: id.into(),
+            net: "GND".into(),
+            layer: "F.Cu".into(),
+            outline: vec![Point { x: 1_000_000, y: 1_000_000 }, Point { x: 1_000_000 + size, y: 1_000_000 }, Point { x: 1_000_000, y: 1_000_000 + size }],
+            teardrop: true,
+            priority,
+            ..Default::default()
+        };
+        design.routing.as_mut().unwrap().zones = vec![tri("small", 500_000, 0), tri("big", 900_000, 0), tri("kicads", 700_000, 30000)];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(legacy_teardrops yes)"), "{out}");
+        let priorities: Vec<u32> = out.split("(zone").skip(1).filter_map(|z| z.split("(priority ").nth(1)).map(|p| p.split(')').next().unwrap().parse().unwrap()).collect();
+        let mut sorted = priorities.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![30000, 30001, 30002], "{out}");
+        assert_eq!(teardrop_priorities(&design.routing.as_ref().unwrap().zones).into_iter().collect::<std::collections::BTreeMap<_, _>>(), [("big", 30001), ("small", 30002)].into_iter().collect());
     }
 
     fn fixture() -> (Design, ConstraintModel) {

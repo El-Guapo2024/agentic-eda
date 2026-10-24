@@ -623,6 +623,10 @@ fn is_zero_nm(v: &Nm) -> bool {
     *v == 0
 }
 
+fn is_zero_millideg(v: &Millideg) -> bool {
+    *v == 0
+}
+
 impl SchLine {
     fn id_seed(&self) -> String {
         let pts: Vec<String> = self.pts.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
@@ -1494,6 +1498,13 @@ pub struct Zone {
     pub net: String,
     pub layer: String,
     pub outline: Vec<Point>,
+    /// The holes of the outline: KiCad's zone outline is one polygon with holes (`ZONE::m_Poly`, `Outline()->Polygon( 0 )`), read from the file's second and later
+    /// `(polygon ...)`s (`PCB_IO_KICAD_SEXPR_PARSER::parseZONE`, `case T_polygon`, then `ZONE::AddPolygon`: `if( m_Poly->OutlineCount() == 0 ) m_Poly->AddOutline(
+    /// aPolygon ); else m_Poly->AddHole( aPolygon );`) and written back after the outline (`PCB_IO_KICAD_SEXPR::format( const ZONE* )`: `for( const SHAPE_LINE_CHAIN&
+    /// chain : poly )`). Nothing of the zone is inside a hole: no copper is poured there and a rule area keeps nothing out of it. Empty for a zone without holes
+    /// (every zone drawn here, and every `design.json` written before holes were kept).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<Vec<Point>>,
     /// The uuid the zone had in the KiCad file it was imported from (`ZONE::m_Uuid`), empty for a zone drawn here. KiCad breaks the tie between zones of equal priority by
     /// comparing uuids (`ZONE::HigherPriority`), so the derived board is written with it: kicad-cli's fill of the board then has the zones yielding to each other as it
     /// did in the file the board came from.
@@ -1701,6 +1712,7 @@ impl Default for Zone {
             net: String::new(),
             layer: String::new(),
             outline: Vec::new(),
+            holes: Vec::new(),
             uuid: String::new(),
             layers: Vec::new(),
             clearance: default_zone_clearance(),
@@ -2663,6 +2675,12 @@ pub struct PadMaskInfo {
     /// pad had it, where an SMD pad otherwise gets its side's paste layer (a stencil aperture of its own).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_paste: bool,
+    /// An SMD pad with copper on more than one layer (`(pad "1" smd .. (layers "*.Cu" "*.Paste" "*.Mask"))`, which the PADS importer writes): its copper, paste and mask
+    /// layers as the file had them, named as for a top-side footprint like [`Self::art_layers`]. KiCad keeps the pad's layer set as written (`PAD::SetLayerSet`): its DRC
+    /// tests the pad on every copper layer of it ("Padstack is questionable") and its connectivity on the front-most (`CN_LIST::Add( PAD* )`: `item->SetLayer(
+    /// lmsk.front() )`), and the writer gives the set back where an SMD pad otherwise gets its side's copper, paste and mask. Empty for an SMD pad on one copper layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub smd_layers: Vec<String>,
     /// The pad is an edge connector pad (`(pad "1" connect ..)`, `PAD_ATTRIB::CONN`): copper on one side, solder mask on both, no paste. The model holds it as an SMD pad; the writer
     /// gives it back its type and its layers, which kicad-cli's padstack check and the mask plot tell from an SMD pad's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -2888,6 +2906,19 @@ pub struct FootprintHole {
     pub clearance: Option<Nm>,
 }
 
+/// A pad of a footprint with no copper layer that is not a hole of its own ([`FootprintHole`]): a stencil opening (`(layers "F.Paste")`), a mask aperture, a pad on
+/// a technical layer only. KiCad keeps every pad (`PCB_IO_KICAD_SEXPR_PARSER::parsePAD`) and writes it back; the paste plot makes the stencil of them. The model has no
+/// copper for it, so it is kept as the file wrote it, its net apart (the file's net code is the file's).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintAuxPad {
+    /// The `(pad ...)` as the file had it, without its `(net ..)`.
+    pub text: String,
+    /// The pad's net, empty for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub net: String,
+}
+
 /// See [`DrawingsSection::footprint_extras`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2922,6 +2953,14 @@ pub struct FootprintExtra {
     /// The non-plated holes of the footprint that are on no copper layer ([`FootprintHole`]). Not in `Footprint::pads`: they have no copper to measure, draw or route round.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holes: Vec<FootprintHole>,
+    /// The footprint's pads with no copper that are not holes ([`FootprintAuxPad`]), in file order. Written back after the other pads while the part is on the footprint they
+    /// were read from ([`Self::source_name`]) and on the side they were read for ([`Self::courtyard_bottom`]), each turned by what the footprint has turned since
+    /// ([`Self::aux_pads_rot`]): a pad's `(at x y angle)` is in the footprint's frame, its angle the board's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aux_pads: Vec<FootprintAuxPad>,
+    /// The footprint's rotation (`FootprintInstance::rot`) when [`Self::aux_pads`] were read.
+    #[serde(default, skip_serializing_if = "is_zero_millideg")]
+    pub aux_pads_rot: Millideg,
     /// The name the footprint had in the file when it had no library link (`(footprint "D5" ..)`: `LIB_ID::GetLibNickname()` empty, which `LIB_ID::Format` writes as the bare
     /// item name). The writer gives a footprint the `eda` library unless the footprint it writes is this one: a board that came from a KiCad file keeps its footprints as
     /// unlinked as it had them, and kicad-cli's library check (`lib_footprint_issues`) has no `eda` library to report as missing. `None` for a footprint that was linked.

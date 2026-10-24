@@ -866,7 +866,7 @@ fn search_footprints(ctx: &Ctx, arg: &str) -> Vec<Rc<RuleItem>> {
 fn search_areas(ctx: &Ctx, arg: &str) -> Vec<Rc<AreaFacts>> {
     let by_item = |idx: usize| -> Vec<Rc<AreaFacts>> {
         match &ctx.items[idx] {
-            Some(it) if it.class == Class::Zone => vec![Rc::new(AreaFacts { id: it.id.clone(), name: String::new(), layers: it.layers.clone(), outline: it.outline.clone(), parent_footprint: None })],
+            Some(it) if it.class == Class::Zone => vec![Rc::new(AreaFacts { id: it.id.clone(), name: String::new(), layers: it.layers.clone(), outline: it.outline.clone(), holes: it.holes.clone(), parent_footprint: None })],
             _ => Vec::new(),
         }
     };
@@ -915,10 +915,29 @@ fn collides_with_area(item: &RuleItem, area: &AreaFacts) -> bool {
         let Some(fp) = &item.footprint else { return false };
         let front = area.layers.iter().any(|l| l.starts_with("F."));
         let back = area.layers.iter().any(|l| l.starts_with("B."));
-        let hit = |courtyards: &Vec<Vec<eda_model::ir::Point>>| courtyards.first().is_some_and(|c| c.len() >= 3 && outline.gap_to(&Shape::Polygon { pts: c.clone() }) == 0.0);
+        let hit = |courtyards: &Vec<Vec<eda_model::ir::Point>>| {
+            courtyards.first().is_some_and(|c| c.len() >= 3 && outline.gap_to(&Shape::Polygon { pts: c.clone() }) == 0.0 && !in_a_hole(&Shape::Polygon { pts: c.clone() }, area))
+        };
         return (front && hit(&fp.courtyard_front)) || (back && hit(&fp.courtyard_back));
     }
-    outline.gap_to(&item_shape(item)) == 0.0
+    let shape = item_shape(item);
+    outline.gap_to(&shape) == 0.0 && !in_a_hole(&shape, area)
+}
+
+/// The shape lies wholly inside one of the area's holes, where the area's polygon (`ZONE::Outline()`, holes and all) is not.
+fn in_a_hole(shape: &Shape, area: &AreaFacts) -> bool {
+    area.holes.iter().any(|h| h.len() >= 3 && enclosed_in_ring(shape, h))
+}
+
+/// Every vertex of the shape's outline is inside the ring and none of the ring's edges crosses it.
+fn enclosed_in_ring(shape: &Shape, ring: &[eda_model::ir::Point]) -> bool {
+    let outline = Shape::Polygon { pts: ring.to_vec() };
+    let boundary = outline.boundary_segs();
+    // a shape that is wholly inside has no edge of the ring within it and its probe point is inside the ring
+    let probe = shape.parts().first().map(|s| s.boundary_segs()).and_then(|s| s.first().map(|g| g.a));
+    let Some(p) = probe else { return false };
+    let inside = outline.gap_to(&Shape::Circle { c: p, r: 0 }) == 0.0;
+    inside && boundary.iter().all(|seg| shape.parts().iter().all(|part| part.gap_to(&Shape::Stadium { a: seg.a, b: seg.b, r: 0 }) > 0.0))
 }
 
 /// The call of a function: it takes its arguments off the stack and leaves its result on it. Most results are deferred, worked out when they are first asked for.
@@ -1116,14 +1135,9 @@ fn enclosed_by(item: &RuleItem, area: &AreaFacts) -> bool {
     if area.outline.len() < 3 {
         return false;
     }
-    let outline = Shape::Polygon { pts: area.outline.clone() };
     let shape = item_shape(item);
-    let boundary = outline.boundary_segs();
-    // a shape that is wholly inside has no edge of the area within it and its probe point is inside the area
-    let probe = shape.parts().first().map(|s| s.boundary_segs()).and_then(|s| s.first().map(|g| g.a));
-    let Some(p) = probe else { return false };
-    let inside = Shape::Polygon { pts: area.outline.clone() }.gap_to(&Shape::Circle { c: p, r: 0 }) == 0.0;
-    inside && boundary.iter().all(|seg| shape.parts().iter().all(|part| part.gap_to(&Shape::Stadium { a: seg.a, b: seg.b, r: 0 }) > 0.0))
+    // A hole is outside the area: the item must not meet any of them.
+    enclosed_in_ring(&shape, &area.outline) && area.holes.iter().all(|h| h.len() < 3 || Shape::Polygon { pts: h.clone() }.gap_to(&shape) > 0.0)
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------- compilation

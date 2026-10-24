@@ -102,6 +102,8 @@ pub struct AreaFacts {
     pub name: String,
     pub layers: Vec<String>,
     pub outline: Vec<Point>,
+    /// The holes of the outline (`ZONE::Outline()`'s holes): nothing inside one is in the area.
+    pub holes: Vec<Vec<Point>>,
     pub parent_footprint: Option<String>,
 }
 
@@ -163,6 +165,8 @@ pub struct RuleItem {
     pub has_drilled_hole: bool,
     /// The area outline of a zone or rule area (for `intersectsArea` on it).
     pub outline: Vec<Point>,
+    /// The holes of that outline.
+    pub holes: Vec<Vec<Point>>,
     /// `IsTeardropArea`.
     pub teardrop: bool,
 }
@@ -203,6 +207,7 @@ impl RuleItem {
             has_hole: false,
             has_drilled_hole: false,
             outline: Vec::new(),
+            holes: Vec::new(),
             teardrop: false,
         }
     }

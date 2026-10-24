@@ -197,6 +197,9 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
                 }
             }
             Some("fp_text_private") => warnings.push(format!("{} items are not supported by the library footprint and were left out", sexpr::tag(child).unwrap_or("?"))),
+            // KiCad 10's typed model, the Extruded 3D Body (`(model (type extruded) (overall_height ..) ..)`, `parseFOOTPRINT`'s `case T_model:` "Typed model"): no
+            // path for `models_from` to take, so kept as the file wrote it until the body is ported.
+            Some("model") if sexpr::txt(child, 1).is_none() => fp.kicad.tokens.push(sexpr::to_text(&Sexpr::List(child.to_vec()))),
             Some(tag) if !OWN_TOKENS.contains(&tag) => {
                 // In a file before KiCad 9 a margin or clearance of 0 meant "inherit" (`parseFOOTPRINT_unchecked`): it says nothing, and is not kept.
                 let inherit = version <= 20240201 && KEPT_NUMBERS.contains(&tag) && sexpr::num(child, 1) == Some(0.0);

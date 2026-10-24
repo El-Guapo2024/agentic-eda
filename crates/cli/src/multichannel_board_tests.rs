@@ -139,7 +139,7 @@ fn enclose_the_routing(dir: &Path) {
     let (x0, x1) = (all.iter().map(|p| p.x).min().unwrap() - 500_000, all.iter().map(|p| p.x).max().unwrap() + 500_000);
     let (y0, y1) = (all.iter().map(|p| p.y).min().unwrap() - 500_000, all.iter().map(|p| p.y).max().unwrap() + 500_000);
     let rect = vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
-    step(dir, Cmd::SetZoneOutline { id: id.clone(), outline: rect }, false, "test").unwrap();
+    step(dir, Cmd::SetZoneOutline { id: id.clone(), outline: rect, holes: None }, false, "test").unwrap();
 }
 
 /// Repeat Layout from the first area onto the others, with KiCad's default options, as the dialog's OK sends it.

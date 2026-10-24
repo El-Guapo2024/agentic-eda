@@ -1425,7 +1425,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditZone { id, net, layer, clearance, min_thickness, priority, .. } => {
             format!("zone edit {id} --net {net} --layer {layer} --clearance {} --min-width {} --priority {priority}", mm(*clearance), mm(*min_thickness))
         }
-        Cmd::SetZoneOutline { id, outline } => format!("zone outline {id} --pts \"{}\"", pts(outline)),
+        Cmd::SetZoneOutline { id, outline, .. } => format!("zone outline {id} --pts \"{}\"", pts(outline)),
 
         Cmd::AddShape { shape } => format!("shape add --kind {} --layer {}", shape_kind(shape), shape.layer()),
         Cmd::DeleteShape { id } => format!("shape delete {id}"),

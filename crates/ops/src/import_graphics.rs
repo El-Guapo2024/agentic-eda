@@ -288,7 +288,7 @@ impl Board<'_> {
             self.group_items(&new_ids)?;
         }
         if flips_outline {
-            eda_drc::outline::refresh_outline_summary(&mut self.design);
+            eda_drc::outline::refresh_outline_summary(&mut self.design, Some(self.model));
         }
         Ok(())
     }

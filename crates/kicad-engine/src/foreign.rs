@@ -229,6 +229,8 @@ pub struct ForeignImport {
     pub files: Vec<String>,
     /// The text of the `.kicad_pro` `kicad-cli import` wrote for the board ([`ForeignOptions::project`]): its design rules and net classes; `None` when it was not asked for or could not be made.
     pub project: Option<String>,
+    /// The custom DRC rules the importer wrote (`.kicad_dru`), see [`imported_rules`]; `None` when it wrote none.
+    pub rules: Option<String>,
 }
 
 impl ForeignImport {
@@ -265,6 +267,7 @@ impl ForeignImport {
             "layers": self.report.layers.iter().map(|l| json!({ "source": l.source, "kicad": l.kicad, "explicit": l.explicit })).collect::<Vec<_>>(),
             "files": self.files,
             "has_project": self.project.is_some(),
+            "has_rules": self.rules.is_some(),
         })
     }
 }
@@ -370,7 +373,8 @@ fn import_foreign(kind: Kind, work: &Path, input: &Path, opts: &ForeignOptions) 
     files.sort();
     let mut log = log;
     let project = if kind == Kind::Board && opts.project { make_project(&cli, work, input, opts, &mut log) } else { None };
-    Ok(ForeignImport { engine: format!("kicad-cli {}", cli_version(&cli)), kind, output, text, report, log, files, project })
+    let rules = if kind == Kind::Board { imported_rules(&output, &work.join("project").join("board.kicad_pro"), input) } else { None };
+    Ok(ForeignImport { engine: format!("kicad-cli {}", cli_version(&cli)), kind, output, text, report, log, files, project, rules })
 }
 
 /// The project kicad-cli makes of a board (`kicad-cli import -o <stem> [--layer-map F] INPUT`: "Import non-KiCad board and/or schematic files into a new KiCad project"): the importer runs
@@ -406,6 +410,18 @@ fn make_project(cli: &Path, work: &Path, input: &Path, opts: &ForeignOptions, lo
             None
         }
     }
+}
+
+/// The custom DRC rules an importer wrote, which the board file does not carry: `pcbnew_jobs_handler.cpp::JobImport` writes `GetImportedDesignRules()` (EasyEDA
+/// Pro, Easy-PC) beside the board it saved (`rulesPath( outputPath ); rulesPath.SetExt( FILEEXT::DesignRulesFileExtension )`), the project run beside its project, and
+/// the Eagle and PADS importers beside the file they read (`pcb_io_eagle.cpp::LoadBoard`: `fn.SetExt( wxT( "kicad_dru" ) ); .. rulesFile.Write( m_customRules )`, the
+/// class-to-class clearances; `PADS_PCB_CONVERTER::generateDrcRules`, the diff-pair gaps), where the GUI's project, named after the file, finds them
+/// (`OpenProjectFiles`, `GetDesignRulesPath`). The first of those that has a rule in it; `None` when none does.
+pub fn imported_rules(output: &Path, project: &Path, input: &Path) -> Option<String> {
+    [output.with_extension("kicad_dru"), project.with_extension("kicad_dru"), input.with_extension("kicad_dru")]
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .find(|text| text.contains("(rule "))
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) {

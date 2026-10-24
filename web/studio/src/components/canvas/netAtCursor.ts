@@ -28,7 +28,8 @@ export function findNetAtCursor(board: BoardState, xNm: number, yNm: number, tol
   if (best) return (best as { net: string; d: number }).net;
 
   for (const z of board.routing?.zones ?? []) {
-    const inside = pointInPolygon(xNm, yNm, z.outline);
+    // A hole of the outline is not the zone's.
+    const inside = pointInPolygon(xNm, yNm, z.outline) && !(z.holes ?? []).some((h) => h.length >= 3 && pointInPolygon(xNm, yNm, h));
     const d = inside ? 0 : distToPolyline(xNm, yNm, [...z.outline, z.outline[0]!]);
     if (d <= toleranceNm) return z.net;
   }

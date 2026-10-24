@@ -436,7 +436,7 @@ fn is_node(p: Point, layer: &str, exclude: (&str, &str), tracks: &[Track], vias:
     if pads.iter().any(|pg| pad_covers_layer(pg, layer) && pg.pad.signed_distance(p) <= 0.0) {
         return true;
     }
-    zones.iter().any(|z| z.is_on_layer(layer) && z.outline.len() >= 3 && point_in_polygon(p, &z.outline))
+    zones.iter().any(|z| z.is_on_layer(layer) && z.outline.len() >= 3 && point_in_polygon(p, &z.outline) && !z.holes.iter().any(|h| h.len() >= 3 && point_in_polygon(p, h)))
 }
 
 /// `TRACKS_CLEANER::cleanup`'s merge pass, run to a fixed point (matches

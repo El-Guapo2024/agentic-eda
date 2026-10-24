@@ -28,6 +28,8 @@ pub(crate) struct ItemRef {
     pub endings: eda_model::line_ending::LineEndings,
     /// The net of a shape on copper (`(net ..)`), set by the reader of the shapes, which knows the file's net table.
     pub net: Option<String>,
+    /// A rectangle's corner radius (`(radius r)`, `parsePCB_SHAPE`'s `case T_radius: shape->SetCornerRadius( parseBoardUnits( "corner radius" ) )`), nm.
+    pub corner_radius: Nm,
 }
 
 impl ItemRef {
@@ -39,12 +41,13 @@ impl ItemRef {
             hatch: sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).and_then(eda_model::pcb_items::HatchKind::from_token),
             endings: crate::line_ending_io::read(item),
             net: None,
+            corner_radius: if sexpr::tag(item) == Some("gr_rect") { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_nm).unwrap_or(0).max(0) } else { 0 },
         }
     }
 
     /// The shape's style as the file gave it, by the id `id` the shape now has; `None` when it says nothing.
     pub(crate) fn shape_style(&self, id: &str) -> Option<eda_model::pcb_items::ShapeStyle> {
-        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), ..eda_model::pcb_items::ShapeStyle::empty(id) };
+        let st = eda_model::pcb_items::ShapeStyle { hatch: self.hatch, endings: self.endings, net: self.net.clone(), corner_radius: self.corner_radius, ..eda_model::pcb_items::ShapeStyle::empty(id) };
         (!st.is_empty()).then_some(st)
     }
 }
@@ -81,6 +84,32 @@ pub(crate) struct Refs {
 }
 
 impl Refs {
+    /// The id each item has in `design` by its file uuid (the first item of a uuid), for the kinds [`Self::resolve`] names.
+    pub(crate) fn item_ids(&self, design: &Design) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut note = |refs: &[ItemRef], ids: Vec<&str>| {
+            for (r, id) in refs.iter().zip(ids) {
+                if let (Some(u), false) = (&r.uuid, id.is_empty()) {
+                    out.push((u.clone(), id.to_string()));
+                }
+            }
+        };
+        if let Some(pl) = &design.placement {
+            note(&self.footprints, pl.footprints.iter().map(|f| f.id.as_str()).collect());
+        }
+        if let Some(rt) = &design.routing {
+            note(&self.tracks, rt.tracks.iter().map(|t| t.id.as_str()).collect());
+            note(&self.vias, rt.vias.iter().map(|v| v.id.as_str()).collect());
+            note(&self.zones, rt.zones.iter().map(|z| z.id.as_str()).collect());
+        }
+        if let Some(dr) = &design.drawings {
+            note(&self.shapes, dr.shapes.iter().map(|s| s.id()).collect());
+            note(&self.texts, dr.texts.iter().map(|t| t.id.as_str()).collect());
+            note(&self.dimensions, dr.dimensions.iter().map(|d| d.id.as_str()).collect());
+        }
+        out
+    }
+
     /// The groups of the file, resolved to this design's item ids, and every locked item's id.
     /// `design` has had its ids assigned already; `raw_groups` come from [`import_groups`].
     pub(crate) fn resolve(&self, design: &Design, raw_groups: &[RawGroup]) -> (Vec<Group>, Vec<String>) {

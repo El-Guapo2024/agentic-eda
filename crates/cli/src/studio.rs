@@ -1273,6 +1273,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 // `ZONE::GetLayerSet()`: the zone's layers, `layer` first -- one for a zone on one layer.
                 "layers": z.layer_set(),
                 "outline": z.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+                // The outline's holes (`ZONE::Outline()`'s holes), drawn and hit-tested as outside the zone.
+                "holes": z.holes.iter().map(|h| h.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()).collect::<Vec<_>>(),
                 // Full `ZONE_SETTINGS` (crates/model/src/ir.rs's `Zone`),
                 // for ZoneDialog's edit mode (dialog_copper_zones.cpp) --
                 // was net/layer/outline only. Enums (`pad_connection`/
@@ -1364,9 +1366,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         // The outline the way KiCad builds it from Edge.Cuts (`eda_drc::outline::board_outline`): every outline with its cutouts, where `outline`
         // is one polygon. `outline_is_shapes`: the canvas draws the Edge.Cuts shapes themselves and not the polygon. `outline_errors`: what
         // kicad-cli reports as `invalid_outline`.
-        "outline_polys": outline_polys_json(&design),
+        "outline_polys": outline_polys_json(&design, Some(&model)),
         "outline_is_shapes": eda_model::outline::outline_is_shapes(&design),
-        "outline_errors": outline_errors_json(&design),
+        "outline_errors": outline_errors_json(&design, Some(&model)),
         "layers": model.board.layers,
         "snap": meta.snap_nm,
         "parts": parts,
@@ -1480,8 +1482,8 @@ pub(crate) fn shape_json(s: &Shape) -> Value {
 
 /// `BOARD::GetBoardPolygonOutlines`: `[{ "outer": [[x, y], ..], "holes": [[[x, y], ..], ..] }, ..]`, micrometres. A board with no outline is `[]`; one
 /// whose Edge.Cuts do not close is KiCad's guess, the rectangle round the edges (`outline_errors` says so).
-fn outline_polys_json(design: &eda_model::ir::Design) -> Value {
-    let outline = eda_drc::outline::board_outline(design, true);
+fn outline_polys_json(design: &eda_model::ir::Design, model: Option<&eda_model::ConstraintModel>) -> Value {
+    let outline = eda_drc::outline::board_outline_with(design, model, true);
     let ring = |c: &eda_shape_poly_set::LineChain| c.iter().map(|p| json!([p.x, p.y])).collect::<Vec<_>>();
     Value::Array(
         (0..outline.polys.outline_count())
@@ -1492,12 +1494,13 @@ fn outline_polys_json(design: &eda_model::ir::Design) -> Value {
 
 /// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board, from the live port of the same check:
 /// `[{ "message", "at": [x, y], "items": [id, ..] }, ..]`. Only a board with Edge.Cuts beyond its polygon is checked.
-fn outline_errors_json(design: &eda_model::ir::Design) -> Value {
-    if !(eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design)) {
+fn outline_errors_json(design: &eda_model::ir::Design, model: Option<&eda_model::ConstraintModel>) -> Value {
+    let footprint_edges = model.is_some_and(|m| !eda_drc::outline::footprint_edge_cuts_shapes(design, m).is_empty());
+    if !(eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design) || footprint_edges) {
         return json!([]);
     }
     Value::Array(
-        eda_drc::outline::check_board_outline(design)
+        eda_drc::outline::check_board_outline_with(design, model)
             .iter()
             .map(|e| {
                 let items: Vec<String> = e.item_a.iter().chain(e.item_b.iter()).cloned().collect();
@@ -2620,16 +2623,16 @@ mod tests {
         d.placement = Some(PlacementSection { outline: vec![p(0, 0), p(40_000_000, 0), p(40_000_000, 30_000_000), p(0, 30_000_000)], footprints: vec![], modules: vec![] });
 
         // A plain polygon: one outline, no hole, nothing to report.
-        assert_eq!(outline_polys_json(&d), json!([{ "outer": [[0, 0], [40_000_000, 0], [40_000_000, 30_000_000], [0, 30_000_000]], "holes": [] }]));
-        assert_eq!(outline_errors_json(&d), json!([]));
+        assert_eq!(outline_polys_json(&d, None), json!([{ "outer": [[0, 0], [40_000_000, 0], [40_000_000, 30_000_000], [0, 30_000_000]], "holes": [] }]));
+        assert_eq!(outline_errors_json(&d, None), json!([]));
 
         // A round hole drawn on Edge.Cuts is a hole of it.
         let mut shapes = vec![Shape::Circle { id: "hole".into(), layer: "Edge.Cuts".into(), stroke_width: 50_000, filled: false, center: p(20_000_000, 15_000_000), end: p(23_000_000, 15_000_000) }];
         d.drawings = Some(DrawingsSection { shapes: shapes.clone(), ..Default::default() });
-        let polys = outline_polys_json(&d);
+        let polys = outline_polys_json(&d, None);
         assert_eq!(polys.as_array().map(Vec::len), Some(1));
         assert_eq!(polys[0]["holes"].as_array().map(Vec::len), Some(1), "{polys}");
-        assert_eq!(outline_errors_json(&d), json!([]));
+        assert_eq!(outline_errors_json(&d, None), json!([]));
 
         // The same board with the outline made of shapes, one side of it missing: malformed, and the outline is the rectangle round the edges.
         shapes = vec![line(p(0, 0), p(18_000_000, 0)), line(p(22_000_000, 0), p(40_000_000, 0)), line(p(40_000_000, 0), p(40_000_000, 30_000_000)), line(p(40_000_000, 30_000_000), p(0, 30_000_000)), line(p(0, 30_000_000), p(0, 0))];
@@ -2637,14 +2640,14 @@ mod tests {
             sh.set_id(format!("edge{i}"));
         }
         d.drawings = Some(DrawingsSection { shapes, outline_is_shapes: true, ..Default::default() });
-        let errors = outline_errors_json(&d);
+        let errors = outline_errors_json(&d, None);
         assert_eq!(errors.as_array().map(Vec::len), Some(1), "{errors}");
         assert_eq!(errors[0]["message"], "Board has malformed outline (not a closed shape)");
         assert_eq!(errors[0]["at"], json!([20_000_000, 0]));
         let mut items: Vec<String> = errors[0]["items"].as_array().expect("items").iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
         items.sort();
         assert_eq!(items, vec!["edge0".to_string(), "edge1".to_string()], "the two pieces either side of the gap");
-        let polys = outline_polys_json(&d);
+        let polys = outline_polys_json(&d, None);
         assert_eq!((polys.as_array().map(Vec::len), polys[0]["holes"].as_array().map(Vec::len)), (Some(1), Some(0)), "{polys}");
     }
 

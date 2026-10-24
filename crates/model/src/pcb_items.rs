@@ -345,17 +345,25 @@ pub struct ShapeStyle {
     /// The net of a shape on a copper layer (`(net "name")`, `BOARD_CONNECTED_ITEM::GetNetname`): kicad-cli's DRC takes it as copper of that net. `None` is no net. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub net: Option<String>,
+    /// The corner radius of a rectangle (`(gr_rect .. (radius r))`, `EDA_SHAPE::GetCornerRadius`), nm: the board outline, the plot, the hatch and the file see the
+    /// rounded rectangle (`ROUNDRECT( SHAPE_RECT( .. ), GetCornerRadius() )`). 0 is a sharp one. Additive.
+    #[serde(default, skip_serializing_if = "is_zero", deserialize_with = "crate::units::de")]
+    pub corner_radius: crate::ir::Nm,
+}
+
+fn is_zero(v: &crate::ir::Nm) -> bool {
+    *v == 0
 }
 
 impl ShapeStyle {
     /// The style of `id` that says nothing.
     pub fn empty(id: &str) -> ShapeStyle {
-        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None }
+        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: 0 }
     }
 
     /// Says nothing beyond the shape itself: not kept.
     pub fn is_empty(&self) -> bool {
-        self.hatch.is_none() && self.endings.is_none() && self.net.is_none()
+        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == 0
     }
 }
 
@@ -451,6 +459,16 @@ impl BoardItems {
     /// The line endings of the shape `shape_id` (none when it has no style).
     pub fn endings_of(&self, shape_id: &str) -> crate::line_ending::LineEndings {
         self.style_of(shape_id).map(|st| st.endings).unwrap_or_default()
+    }
+
+    /// The corner radius of the rectangle `shape_id` (0: sharp, or not a rectangle).
+    pub fn corner_radius_of(&self, shape_id: &str) -> crate::ir::Nm {
+        self.style_of(shape_id).map(|st| st.corner_radius).unwrap_or(0)
+    }
+
+    /// Round the corners of the rectangle `shape_id` by `radius` (0: sharp).
+    pub fn set_corner_radius(&mut self, shape_id: &str, radius: crate::ir::Nm) {
+        self.edit_style(shape_id, |st| st.corner_radius = radius.max(0));
     }
 
     /// The net of the shape `shape_id`, if it is on one.

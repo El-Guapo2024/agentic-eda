@@ -110,3 +110,21 @@ test("planMirror: shapes and tracks are mirrored in place (they keep their ids, 
   const edit = plan.cmds.find((c) => c.op === "edit_text")!;
   assert.equal(edit.op === "edit_text" ? edit.justify : "", "right");
 });
+
+test("planMirror: a zone's holes are mirrored with its outline (`ZONE::Mirror` mirrors the whole polygon set)", () => {
+  const b = board({
+    routing: {
+      tracks: [],
+      vias: [],
+      zones: [{ id: "z1", net: "N", layer: "F.Cu", outline: [[0, 0], [10, 0], [10, 10], [0, 10]], holes: [[[2, 2], [4, 2], [4, 4]]] } as never],
+      track_width_presets: [],
+      via_presets: [],
+      teardrop_settings: {} as never,
+    },
+  });
+  const plan = planMirror(b, ["z1"], [0, 0], "leftRight");
+  const cmd = plan.cmds.find((c) => c.op === "set_zone_outline")!;
+  assert.equal(cmd.op, "set_zone_outline");
+  if (cmd.op !== "set_zone_outline") return;
+  assert.deepEqual(cmd.holes, [[{ x: -2, y: 2 }, { x: -4, y: 2 }, { x: -4, y: 4 }]]);
+});

@@ -21,7 +21,7 @@
 # and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), multichannel and
-# simulator (web/studio/e2e/*-board.yaml). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
+# simulator (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR).
 #
 # Needs: Playwright with Chromium ($PLAYWRIGHT_MODULE, default ~/tools/pw/node_modules/playwright/index.mjs), kicad-cli on the PATH
@@ -133,6 +133,8 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
             kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
             echo "replace_board: $reply" | cut -c1-300
             grep -q '"ok":true' <<< "$reply" ;;
+        board-io) # board-io.check.js: a hand-written KiCad board read by the importer
+            "$eda" import-kicad "$e2e/board-io.kicad_pcb" -o "$d" ;;
         multichannel)
             "$eda" board new "$e2e/multichannel-board.yaml" -o "$d" ;;
         simulator)

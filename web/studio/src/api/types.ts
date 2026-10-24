@@ -503,6 +503,8 @@ export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   /** `ZONE::GetZoneName()` ("" = unnamed); absent from a backend built before the Properties panel. */
   name?: string;
   outline: [Nm, Nm][];
+  /** The outline's holes (`ZONE::Outline()`'s holes, `eda_model::ir::Zone::holes`): nothing of the zone is inside one. Absent for a zone without holes. */
+  holes?: [Nm, Nm][][];
 }
 
 /** `RoutingSection::via_presets`' entry shape -- `BOARD_DESIGN_SETTINGS::m_ViaSizeList`. */
@@ -572,7 +574,7 @@ interface ShapeCommon {
 export type Shape =
   | (ShapeCommon & { kind: "segment"; start: [Nm, Nm]; end: [Nm, Nm] })
   | (ShapeCommon & { kind: "arc"; start: [Nm, Nm]; mid: [Nm, Nm]; end: [Nm, Nm] })
-  | (ShapeCommon & { kind: "rect"; start: [Nm, Nm]; end: [Nm, Nm] })
+  | (ShapeCommon & { kind: "rect"; start: [Nm, Nm]; end: [Nm, Nm]; /** `EDA_SHAPE::GetCornerRadius()`, absent for a sharp rectangle. */ corner_radius?: Nm })
   | (ShapeCommon & { kind: "circle"; center: [Nm, Nm]; end: [Nm, Nm] })
   | (ShapeCommon & { kind: "polygon"; pts: [Nm, Nm][] })
   /** `PCB_SHAPE` BEZIER: a cubic from `start` to `end` with control points `c1`/`c2` (KiCad's `gr_curve` order). The canvas flattens it with kicad-port/bezierPoly.ts (`BEZIER_POLY::GetPoly`). */
@@ -1659,7 +1661,7 @@ export type Cmd =
    */
   | ({ op: "edit_zone"; id: string; net: string; layer: string; /** The layers the zone is on (`ZONE_SETTINGS::m_Layers`); absent leaves a set that holds `layer` as it is. */ layers?: string[] } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
-  | { op: "set_zone_outline"; id: string; outline: PointXY[] }
+  | { op: "set_zone_outline"; id: string; outline: PointXY[]; holes?: PointXY[][] }
   | { op: "add_shape"; shape: CmdShape }
   | { op: "delete_shape"; id: string }
   | { op: "move_shape"; id: string; dx: Nm; dy: Nm }
@@ -1688,7 +1690,7 @@ export type Cmd =
   | ImportSchGraphicsCmd
   | ImportSymbolGraphicsCmd
   /** File > Import > Non-KiCad Board File... (`BOARD_EDITOR_CONTROL::OpenNonKicadBoard`): the open board replaced by `text`, the `.kicad_pcb` kicad-cli made of another EDA format's file (`POST /api/import_foreign`). One undo step; see crates/ops/src/import_foreign.rs. `keep_kicad_layer_names` is the dialog's "Keep KiCad layer names"; `project` is the `.kicad_pro` kicad-cli made with the board, which holds the design rules and net classes the importer set. */
-  | { op: "replace_board"; text: string; name?: string; keep_kicad_layer_names?: boolean; project?: string }
+  | { op: "replace_board"; text: string; name?: string; keep_kicad_layer_names?: boolean; project?: string; rules?: string }
   /** File > Import > Non-KiCad Schematic File... (`SCH_EDIT_FRAME::OnImportProject`): the schematic replaced by `content`, the sheet file `POST /api/import_foreign` answered. One undo step. */
   | { op: "replace_schematic"; content: unknown; name?: string }
   /** File > Import > Specctra Session... (`PCB_EDIT_FRAME::ImportSpecctraSession`, `SPECCTRA_DB::FromSESSION`): the session's wires and vias in place of the board's unlocked tracks and vias, and the footprints where its placement puts them. `session` is the file's text. One undo step; see crates/ops/src/specctra.rs. */
