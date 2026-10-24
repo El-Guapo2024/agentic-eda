@@ -115,17 +115,27 @@ function isLoneRectOrPoly(board: BoardState, ids: readonly string[]): boolean {
   return s != null && (s.kind === "rect" || s.kind === "polygon");
 }
 
-/** The point `EDIT_TOOL::Rotate` turns the selection about. */
+/**
+ * The point `EDIT_TOOL::Rotate` turns the selection about: a lone text box about its centre (`PCB_TEXTBOX::GetCenter()`), a lone rectangle, polygon or
+ * table about its centre (`usePcbShapeCenter`), any other lone item about its position, several about the snapped centre of their box.
+ */
 export function rotationPivot(board: BoardState, ids: readonly string[], snap: Snap = NO_SNAP): [number, number] | null {
   if (isLoneRectOrPoly(board, ids)) return selectionCenter(board, ids);
+  if (ids.length === 1) {
+    const kind = itemKind(board, ids[0]!);
+    if (kind === "textbox" || kind === "table") return selectionCenter(board, ids);
+  }
   return modificationPoint(board, ids, snap);
 }
 
-/** The point `EDIT_TOOL::Flip` mirrors the selection about: the centre of its box, or a lone item's own position (a lone rectangle's centre). */
+/**
+ * The point `EDIT_TOOL::Flip` mirrors the selection about: the centre of its box, or a lone item's own position -- but a lone rectangle and a lone table
+ * flip about their centre ("Tables are a bunch of rectangles, so exclude them too").
+ */
 export function flipPivot(board: BoardState, ids: readonly string[]): [number, number] | null {
   if (ids.length === 1) {
     const s = board.drawings?.shapes.find((q) => q.id === ids[0]);
-    if (!(s && s.kind === "rect")) return modificationPoint(board, ids);
+    if (!(s && s.kind === "rect") && itemKind(board, ids[0]!) !== "table") return modificationPoint(board, ids);
   }
   return selectionCenter(board, ids);
 }
