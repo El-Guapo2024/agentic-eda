@@ -74,21 +74,21 @@ export function fillWidthError(kind: Shape["kind"], fill: ShapeFill, widthNm: nu
 }
 
 /**
- * The commands that make the board's shape `id` the shape `next`. A shape's id comes from its geometry, so the board editor has always done an edit of the geometry as a delete and an
- * add (the new shape takes the place of the old one in the selection: `removed` are the ids that are gone). A hatched shape, and one with line endings or a net, is replaced in place
- * instead (`replace_shape` keeps its id, and the hatch, the endings and the net are kept by id), as KiCad edits the same item; nothing is removed then.
+ * The commands that make the board's shape `id` the shape `next`: `replace_shape`, in place, as KiCad edits the same item (the point editor's `commit.Modify( item )`
+ * then `UpdateItem`, `PCB_SHAPE::Mirror`): the shape keeps its id, so its group, its lock, its hatch, its line endings and its net, all kept by id. (A delete and an add,
+ * which this did before for a plain shape, gave it a new id and took it out of its group, which a group of two then lost.) `removed` stays for the callers' selection
+ * updates; nothing is removed.
  */
 export function reshapeCmds(board: Pick<BoardState, "drawings"> | null | undefined, id: string, next: CmdShape): { cmds: Cmd[]; removed: string[] } {
   const current = board?.drawings?.shapes.find((s) => s.id === id);
-  // A shape with line endings or a net keeps them the same way: they are kept by its id too.
-  if (current && (isHatched(current) || current.start_ending || current.end_ending || current.net)) return { cmds: [{ op: "replace_shape", id, shape: next }], removed: [] };
+  if (current) return { cmds: [{ op: "replace_shape", id, shape: next }], removed: [] };
   return { cmds: [{ op: "delete_shape", id }, { op: "add_shape", shape: next }], removed: [id] };
 }
 
 /**
  * The commands of a Fillet, Chamfer, Dogbone, Extend Lines or Heal Shapes result (`pcbModify.ts`'s `ModifyResult`). `EDIT_TOOL::ModifyLines` and `EDIT_TOOL::HealShapes` edit the lines
- * they keep in place (`SetStart` / `SetEnd` on the same `PCB_SHAPE`), so a kept line's endings and net survive; a modified line that has any is therefore replaced in place
- * (`reshapeCmds`), the others are deleted and added as before. The deletes come first, then the replacements, then the new shapes.
+ * they keep in place (`SetStart` / `SetEnd` on the same `PCB_SHAPE`), so a kept line keeps its id, group, endings and net: it is replaced in place (`reshapeCmds`).
+ * The deletes come first, then the replacements, then the new shapes.
  */
 export function modifyResultCmds(
   board: Pick<BoardState, "drawings"> | null | undefined,

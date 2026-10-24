@@ -2514,6 +2514,12 @@ pub struct DrawingsSection {
     /// `design.json` reads as "every footprint is one of the intent's parts".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub board_parts: Vec<BoardPart>,
+    /// Nets the board has that come from neither the intent nor a pad of `board_parts`: the ones a design block placed on the board
+    /// brought (`PCB_CONTROL::AppendBoard` loads the block's file into the board, which adds each of its nets by name). `board::load`
+    /// adds each to the model as a net with no pins. Sorted, no repeats. Additive: absent reads as none. An entry is never taken away again: KiCad's
+    /// Update PCB from Schematic would remove a net nothing uses (`RemoveUnusedNets`), here it stays until the design is edited by hand.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub board_nets: Vec<String>,
     /// Board Setup's edits to the board's rules (net classes, constraints, solder mask and paste, text defaults,
     /// the stackup, violation severities, custom rules): laid over the intent's rules each time the board is
     /// loaded (`crate::rules::RulesOverlay::apply`, `crates/cli/src/board.rs::load`), the way `Design::nets` is.

@@ -176,7 +176,7 @@ fn add_items_pulls_each_out_of_its_old_group_and_refuses_a_loop() {
     run(&mut b, V::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["R3", "lbl_a"]) });
     let s = sch(&b);
     assert_eq!(members(&s, "grp_inner"), ids(&["R1", "R2", "R3", "lbl_a", "txt_a", "wire_in"]));
-    assert!(!s.extras.is_group("grp_outer"), "the outer group is left with the inner one alone, so it dissolves");
+    assert_eq!(members(&s, "grp_outer"), ids(&["grp_inner"]), "the outer group keeps the inner one alone (AddToGroup dissolves nothing)");
 
     let mut b = board(&m, nested());
     assert_eq!(refuse(&mut b, V::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["grp_outer"]) }), "ops_bad_group", "a group cannot hold the group that holds it");
@@ -211,7 +211,7 @@ fn group_properties_set_the_name_and_the_members() {
     // a member taken from another group leaves it
     run(&mut b, V::EditGroup { id: "grp_inner".into(), name: "power stage".into(), member_ids: ids(&["R1", "R2", "R3"]), design_block: None });
     assert_eq!(members(&sch(&b), "grp_inner"), ids(&["R1", "R2", "R3"]));
-    assert!(!sch(&b).extras.is_group("grp_outer"), "the outer group lost R3 and had only the inner one left");
+    assert_eq!(members(&sch(&b), "grp_outer"), ids(&["grp_inner"]), "the outer group lost R3 and keeps the inner one (Group Properties dissolves nothing)");
     let mut b = board(&m, nested());
     assert_eq!(refuse(&mut b, V::EditGroup { id: "grp_inner".into(), name: String::new(), member_ids: ids(&["R1", "grp_outer"]), design_block: None }), "ops_bad_group");
     assert_eq!(refuse(&mut b, V::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: ids(&["R1", "R2"]), design_block: None }), "ops_unknown_group");
@@ -362,10 +362,13 @@ fn deleting_members_takes_them_out_of_their_groups() {
     assert_eq!(members(&s, "grp_inner"), ids(&["R1", "R2", "wire_in"]));
     b.apply(&Cmd::DeleteWire { id: "wire_in".into() }).unwrap();
     assert_eq!(members(&sch(&b), "grp_inner"), ids(&["R1", "R2"]));
+    // `SCH_COMMIT::Push` takes a deleted item out of its group and dissolves nothing: a group of one stays, an empty one goes
     b.apply(&Cmd::DeleteSymbol { id: "R2".into(), unit: None }).unwrap();
+    assert_eq!(members(&sch(&b), "grp_inner"), ids(&["R1"]), "a group of one stays");
+    b.apply(&Cmd::DeleteSymbol { id: "R1".into(), unit: None }).unwrap();
     let s = sch(&b);
-    assert!(!s.extras.is_group("grp_inner"), "a group of one dissolves");
-    assert!(s.extras.groups.is_empty(), "and the group above it, left with R3 alone, dissolves too");
+    assert!(!s.extras.is_group("grp_inner"), "an empty group goes");
+    assert!(s.extras.is_group("grp_outer"), "and the group above it keeps what it has left");
 }
 
 #[test]
@@ -415,6 +418,7 @@ fn groups_belong_to_the_sheet_they_are_on() {
     assert_eq!(err[0].check, "ops_unknown_item");
     // and a delete on the sub sheet tidies the sub sheet's groups
     b.apply(&Cmd::OnSheet { sheet: "sheet_a".into(), cmd: Box::new(Cmd::DeleteSymbol { id: "R6".into(), unit: None }) }).unwrap();
+    b.apply(&Cmd::OnSheet { sheet: "sheet_a".into(), cmd: Box::new(Cmd::DeleteSymbol { id: "R5".into(), unit: None }) }).unwrap();
     assert!(b.design().sheet_contents.as_ref().unwrap()["sub.kicad_sch"].extras.groups.is_empty());
 }
 

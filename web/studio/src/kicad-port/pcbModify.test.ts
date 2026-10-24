@@ -230,9 +230,9 @@ test("a filleted line keeps its endings and net: it is changed in place, as EDIT
   const r = modifyLines([a, b], { kind: "fillet", radiusNm: 1000 });
   const board = { drawings: { shapes: [a, b] } } as never;
   const { cmds, removed } = modifyResultCmds(board, r);
-  assert.deepEqual(removed, ["b"], "only the plain line is deleted and added");
+  assert.deepEqual(removed, [], "every kept line is changed in place (it keeps its id and group)");
   const ops = cmds.map((c) => `${c.op}${"id" in c ? `:${c.id}` : ""}`);
-  assert.deepEqual(ops, ["delete_shape:b", "replace_shape:a", "add_shape", "add_shape"], "the arc and line b's new version are added");
+  assert.deepEqual([...ops].sort(), ["add_shape", "replace_shape:a", "replace_shape:b"], "the arc is added");
   const heal = healShapes([a, seg("c", 10100, 0, 10100, 5000)], 500);
   assert.ok(modifyResultCmds(board, heal).cmds.some((c) => c.op === "replace_shape" && c.id === "a"), "Heal Shapes too");
 });

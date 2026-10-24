@@ -225,6 +225,7 @@ Test to write: `outline.rs::a_line_from_a_circles_rim_is_reported_as_kicad_does`
 **Unit-sensitive:** partly (the size of the move).
 
 ### O10. Placement and the placement verbs use the outline's bounding box (high, already listed; confirmed)
+- **Fixed in part** on task-fix-f-editing: b1eebd75 (the placement verbs test the real outlines with their cutouts). The annealing placer (`crates/place`) still works from the box.
 
 **What differs.**
 - `crates/place/src/lib.rs:972-988` takes the intent's `model.board.outline` (or `opts.outline`) and works in its bbox.

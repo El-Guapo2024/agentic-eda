@@ -14,6 +14,7 @@
 // user clicked on a small item within a much larger one...").
 import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
 import { padIds } from "../../kicad-port/pcbItems";
+import { ancestors } from "../../kicad-port/groupTree";
 import { artBounds, artHitDistance, unionBox } from "../../kicad-port/fpArt";
 import { outlineDistance } from "../../kicad-port/padOutline";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
@@ -61,9 +62,27 @@ export interface SelectionFilter {
   otherItems: boolean;
   /** KiCad 10's `m_filter.gridItems` (Grid Items); absent is on. */
   gridItems?: boolean;
+  /** `m_filter.keepouts` ("Rule Areas"): a zone that is a rule area is gated by this, not by `zones`; absent is on. */
+  keepouts?: boolean;
 }
 
-export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true, pads: true, points: true, otherItems: true, gridItems: true };
+export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, keepouts: true, graphics: true, text: true, dimensions: true, pads: true, points: true, otherItems: true, gridItems: true };
+
+/** `itemPassesFilter`'s zone case: `( !m_filter.zones && !zone->GetIsRuleArea() ) || ( !m_filter.keepouts && zone->GetIsRuleArea() )` rejects. */
+function zoneAllowed(filter: SelectionFilter, ruleArea: boolean): boolean {
+  return ruleArea ? filter.keepouts !== false : filter.zones;
+}
+
+/**
+ * `BOARD_ITEM::IsLocked()` as `itemPassesFilter` asks it: the item's own lock (a pad's and a field's is its footprint's, `lockedId`), or that of a group
+ * above it (`if( group->AsEdaItem()->IsLocked() ) return true;`).
+ */
+function lockedForFilter(board: BoardState, locked: ReadonlySet<string>, lockedId: string): boolean {
+  if (locked.has(lockedId)) return true;
+  const groups = board.drawings?.groups ?? [];
+  if (groups.length === 0 || locked.size === 0) return false;
+  return ancestors(groups, lockedId).some((g) => locked.has(g.id));
+}
 
 function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
   switch (kind) {
@@ -212,11 +231,12 @@ export function collectSelectionCandidates(
 ): SelectionCandidate[] {
   const out: SelectionCandidate[] = [];
   const locked = new Set(board.locked ?? []);
-  const consider = (kind: SelectableKind, id: string, slopNm: number, areaNm2: number, layer: string | null, lockedId: string = id) => {
+  const consider = (kind: SelectableKind, id: string, slopNm: number, areaNm2: number, layer: string | null, lockedId: string = id, ruleArea = false) => {
     if (slopNm > toleranceNm) return;
-    if (!filterAllows(filter, kind) || !objectSelectable(kind, layerVisible)) return;
-    // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected.
-    if (!filter.lockedItems && locked.has(lockedId)) return;
+    if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, kind)) || !objectSelectable(kind, layerVisible)) return;
+    // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected -- but a click may pick a lone pad of a locked
+    // footprint ("allow a single pad to be selected -- there are a lot of operations that require this").
+    if (!filter.lockedItems && kind !== "pad" && lockedForFilter(board, locked, lockedId)) return;
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
     if (subtractiveOnly && !selection.has(id)) return;
     out.push({ kind, id, slopNm: Math.max(slopNm, 0), areaNm2: Math.max(areaNm2, 1), layer });
@@ -282,7 +302,7 @@ export function collectSelectionCandidates(
     const nearEdge = edgeDist <= toleranceNm / 2;
     const d = inside ? 0 : edgeDist;
     const area = nearEdge ? 1 : polygonArea(z.outline);
-    consider("zone", z.id, d, area, zonePickLayer(z, layerVisible, activeLayer));
+    consider("zone", z.id, d, area, zonePickLayer(z, layerVisible, activeLayer), z.id, !!z.is_rule_area);
   }
   for (const s of board.drawings?.shapes ?? []) {
     // A filled or hatched shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
@@ -392,9 +412,9 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   const out: BoxSelectHit[] = [];
   const padHits: BoxSelectHit[] = [];
   const locked = new Set(board.locked ?? []);
-  const consider = (kind: SelectableKind, id: string, itemBox: Box, layer: string | null, lockedId: string = id) => {
-    if (!filterAllows(filter, kind) || !objectSelectable(kind, layerVisible)) return;
-    if (!filter.lockedItems && locked.has(lockedId)) return; // itemPassesFilter, as above
+  const consider = (kind: SelectableKind, id: string, itemBox: Box, layer: string | null, lockedId: string = id, ruleArea = false) => {
+    if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, kind)) || !objectSelectable(kind, layerVisible)) return;
+    if (!filter.lockedItems && lockedForFilter(board, locked, lockedId)) return; // itemPassesFilter, as above (a box is a multi-select: no lone-pad exception)
 
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
     if (boxMatches(itemBox, selBox, crossing)) (kind === "pad" ? padHits : out).push({ kind, id });
@@ -416,7 +436,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   }
   for (const z of board.routing?.zones ?? []) {
     if (z.outline.length < 3) continue;
-    consider("zone", z.id, boxOf(z.outline), zonePickLayer(z, layerVisible, activeLayer));
+    consider("zone", z.id, boxOf(z.outline), zonePickLayer(z, layerVisible, activeLayer), z.id, !!z.is_rule_area);
   }
   for (const s of board.drawings?.shapes ?? []) {
     if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) && !objectOn(layerVisible, "shapes")) continue;

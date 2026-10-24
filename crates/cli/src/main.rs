@@ -80,6 +80,7 @@ mod kicad_engine;
 mod kicad_lane;
 mod tune_api;
 mod inspect_api;
+mod net_inspector_api;
 mod tune_edit;
 
 use eda::prelude::*;

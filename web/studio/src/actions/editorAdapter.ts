@@ -202,12 +202,12 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
           // a click on a member of a group that has not been entered takes the whole group (`FilterCollectorForHierarchy`)
           const groups = board.drawings?.groups ?? [];
           const promoted = ids.map((id) => promoteToGroup(id, groups, studio.enteredGroupId));
-          const { cmds, skippedLocked } = boardDeleteCmds(board, promoted);
+          const { cmds, skippedLocked, message } = boardDeleteCmds(board, promoted);
           // a tuning pattern is removed (`PCB_TUNING_PATTERN::Remove`), not deleted track by track
           const patterns = tuningPatternIds(board, promoted);
           if (patterns.length > 0) await removeTuningPatterns(patterns, snap.api, snap.dispatch);
           if (cmds.length > 0) await snap.api.cmdBatch(cmds);
-          return skippedLocked > 0 && cmds.length === 0 ? "Item locked." : null;
+          return skippedLocked > 0 && cmds.length === 0 ? "Item locked." : (message ?? null);
         },
       };
     }

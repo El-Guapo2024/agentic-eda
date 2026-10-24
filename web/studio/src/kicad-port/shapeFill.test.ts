@@ -60,21 +60,21 @@ test("a fill that is not solid needs a line width, and says so as the shape dial
   assert.equal(fillWidthError("segment", "none", 0), null);
 });
 
-test("a hatched shape is changed in place, any other the way the board editor always did: deleted and added", () => {
+test("a shape's geometry is changed in place, hatched or not, so it keeps its id and its group (p6 F2)", () => {
   const board = { drawings: { shapes: [hatchedRect(), rect({ id: "shp_plain", end: [5_000, 5_000] })] } } as unknown as BoardState;
   const next = { kind: "rect", layer: "F.Fab", stroke_width: 200, filled: false, start: { x: 0, y: 0 }, end: { x: 12_000, y: 10_000 } } as const;
   assert.deepEqual(reshapeCmds(board, "shp_r", next), { cmds: [{ op: "replace_shape", id: "shp_r", shape: next }], removed: [] });
-  assert.deepEqual(reshapeCmds(board, "shp_plain", next), { cmds: [{ op: "delete_shape", id: "shp_plain" }, { op: "add_shape", shape: next }], removed: ["shp_plain"] });
+  assert.deepEqual(reshapeCmds(board, "shp_plain", next), { cmds: [{ op: "replace_shape", id: "shp_plain", shape: next }], removed: [] });
   assert.deepEqual(reshapeCmds(null, "shp_plain", next).removed, ["shp_plain"], "no board, nothing known of the shape");
 });
 
-test("Mirror turns a hatched shape in place and keeps its id, so it keeps its hatch", () => {
+test("Mirror turns a shape in place and keeps its id, so it keeps its hatch and its group", () => {
   const board = { drawings: { shapes: [hatchedRect()] }, routing: { tracks: [], vias: [], zones: [] }, parts: [] } as unknown as BoardState;
   const plan = planMirror(board, ["shp_r"], [5_000, 5_000], "leftRight");
   assert.deepEqual(plan.cmds, [{ op: "replace_shape", id: "shp_r", shape: mirrorShape(hatchedRect(), [5_000, 5_000], "leftRight") }]);
   assert.deepEqual(plan.removed, []);
   const plain = { ...board, drawings: { shapes: [rect()] } } as unknown as BoardState;
   const planPlain = planMirror(plain, ["shp_r"], [5_000, 5_000], "leftRight");
-  assert.deepEqual(planPlain.cmds.map((c) => c.op), ["delete_shape", "add_shape"]);
-  assert.deepEqual(planPlain.removed, ["shp_r"]);
+  assert.deepEqual(planPlain.cmds.map((c) => c.op), ["replace_shape"]);
+  assert.deepEqual(planPlain.removed, []);
 });

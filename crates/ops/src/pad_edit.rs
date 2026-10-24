@@ -189,23 +189,25 @@ fn recombine(fp: &mut LibraryFootprint, index: usize, mode: PadEditMode, copper:
     let layer = pad_edit_layer(&fp.pads[index]);
     let frame = PadFrame::of(&fp.pads[index]);
 
-    // The pad's copper in the footprint's frame, for `findNext`'s test; the graphics on the layer, in the footprint's order.
-    let pad_polys = eda_drc::pad_shape::pad_polygons_in_footprint(&fp.pads[index].to_engine_pad(), MAX_ERROR_NM);
-    let touches = |shape: &Shape| -> bool {
+    // The pad's copper in the footprint's frame, for `findNext`'s test. `findNext` takes the pad's polygon as it is *now*
+    // (`TransformShapeToPolygon( padPoly, ... )` on every call, and each merge's `AddPrimitive` marks the pad dirty), so a
+    // graphic that touches the pad only through an earlier merged one is merged too: each merged graphic's polygon (the
+    // primitive's own, in the footprint's frame) is added to `pad_polys`.
+    let mut pad_polys = eda_drc::pad_shape::pad_polygons_in_footprint(&fp.pads[index].to_engine_pad(), MAX_ERROR_NM);
+    let touches = |shape: &Shape, pad_polys: &eda_shape_poly_set::ShapePolySet| -> bool {
         let mut draw = eda_drc::pad_shape::shape_polygons(shape, MAX_ERROR_NM);
-        draw.boolean_intersection(&pad_polys);
+        draw.boolean_intersection(pad_polys);
         !draw.is_empty()
     };
 
-    // `findNext`, until it finds nothing: the first graphic on the layer that touches the pad; the matching ones follow it out.
+    // `findNext`, until it finds nothing: the first graphic on the layer, scanning from the start of the list every time,
+    // that touches the pad as it has grown; the matching ones follow it out.
     let mut merged: Vec<usize> = Vec::new();
     let mut taken = vec![false; fp.graphics.len()];
-    for i in 0..fp.graphics.len() {
-        if taken[i] || fp.graphics[i].layer() != layer || !touches(&fp.graphics[i]) {
-            continue;
-        }
+    while let Some(i) = (0..fp.graphics.len()).find(|&i| !taken[i] && fp.graphics[i].layer() == layer && touches(&fp.graphics[i], &pad_polys)) {
         taken[i] = true;
         merged.push(i);
+        pad_polys.boolean_add(&eda_drc::pad_shape::shape_polygons(&fp.graphics[i], MAX_ERROR_NM));
         // `findMatching`: "KiCad won't produce these, but old footprints from other vendors have them".
         for j in 0..fp.graphics.len() {
             if !taken[j] && fp.graphics[j].layer() == layer && same_shape(&fp.graphics[i], &fp.graphics[j]) {

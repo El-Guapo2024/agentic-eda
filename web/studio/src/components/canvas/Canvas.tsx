@@ -22,7 +22,7 @@ import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { drawStrokeWidthNm } from "../../kicad-port/layerDefaults";
 import { activeLayerName } from "../../kicad-port/layerPresets";
-import { carryStart } from "../../kicad-port/pcbTransform";
+import { carryStart, isLocked } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
 import { EXTRA_KINDS, extraItemLabel } from "../../kicad-port/pcbExtraItems";
 import { fieldById } from "../../kicad-port/fpFields";
@@ -71,7 +71,7 @@ import { useActionRunner } from "../../actions/useActionRunner";
 import { SchContextMenu } from "../schematic/SchContextMenu";
 import { buildPcbMenu } from "./pcbMenuBuilder";
 import type { MenuNode } from "../../kicad/types";
-import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner } from "../../kicad-port/zonePointEditor";
+import { findNearestCorner, moveCorner } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
@@ -911,7 +911,8 @@ export function Canvas() {
     if (board && e.button === 0 && !e.altKey && state.activeTool === "select" && state.selection.size === 1) {
       const soleId = [...state.selection][0]!;
       const zone = api.zoneById(soleId);
-      if (zone) {
+      // `PCB_POINT_EDITOR::OnSelectionChange`: `if( !item || item->IsLocked() ) return 0;` -- a locked zone (or one in a locked group) has no handles.
+      if (zone && !isLocked(board, zone.id)) {
         const idx = findNearestCorner(zone.outline, wx, wy, zoneCornerToleranceNm(state.view.scale));
         if (idx != null) {
           dragRef.current = { kind: "zoneCorner", zoneId: zone.id, cornerIndex: idx, baseOutline: zone.outline };
@@ -930,7 +931,8 @@ export function Canvas() {
       }
       // The same for a single selected graphic shape's handles (kicad-port/pcbPointEdit.ts), unless it is locked.
       const shape = api.shapeById(soleId);
-      if (shape && !(board.locked ?? []).includes(soleId)) {
+      // `if( !item || item->IsLocked() )`: its own lock or a locked group above it
+      if (shape && !isLocked(board, soleId)) {
         const hit = activeEditPoint(shapeEditPoints(shape), [wx, wy], zoneCornerToleranceNm(state.view.scale));
         if (hit) {
           dragRef.current = { kind: "shapePoint", shapeId: shape.id, base: shape, point: hit };
@@ -942,7 +944,7 @@ export function Canvas() {
 
     if (moveMode) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxNm, state.movePreview.dyNm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped, state.movePreview.perRefOffsetNm);
+      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxNm, state.movePreview.dyNm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped, state.movePreview.perRefOffsetNm, state.movePreview.ops);
       return;
     }
     if (state.armed) {
@@ -1193,8 +1195,9 @@ export function Canvas() {
       // same preview (useActionRunner.ts) -- a fresh preview object every
       // pointer-move must not reset the live rotate/flip state.
       // (`perRefOffsetNm` is Pack and Move's per-footprint packed shift -- it rides along until the drop.)
-      const { rotateQuarterTurns, flipped, perRefOffsetNm } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxNm: sx - ox, dyNm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetNm, pivotNm: held?.pivotNm ?? start?.pivotNm, flipPivotNm: held?.flipPivotNm ?? start?.flipPivotNm } });
+      // The grab point (`BestDragOrigin`): what R turns the carried items about, before the move (kicad-port/pcbCarry.ts `carryPress`).
+      const { rotateQuarterTurns, flipped, perRefOffsetNm, ops } = state.movePreview ?? {};
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxNm: sx - ox, dyNm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetNm, ops, grabNm: [ox, oy], pivotNm: held?.pivotNm ?? start?.pivotNm, flipPivotNm: held?.flipPivotNm ?? start?.flipPivotNm } });
       return;
     }
 
@@ -1211,8 +1214,8 @@ export function Canvas() {
       const [sx, sy] = moveCursor(wx, wy, e, drag.refs, drag.snapOrigin, drag.startWorld);
       const dx = sx - drag.snapOrigin[0];
       const dy = sy - drag.snapOrigin[1];
-      const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxNm: dx, dyNm: dy, rotateQuarterTurns, flipped, pivotNm: drag.pivotNm, flipPivotNm: drag.flipPivotNm } });
+      const { rotateQuarterTurns, flipped, ops } = state.movePreview ?? {};
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxNm: dx, dyNm: dy, rotateQuarterTurns, flipped, ops, grabNm: [drag.snapOrigin[0], drag.snapOrigin[1]], pivotNm: drag.pivotNm, flipPivotNm: drag.flipPivotNm } });
     } else if (drag.kind === "zoneCorner") {
       if (!motion?.dragging) return; // PCB_POINT_EDITOR::Main starts editing at the drag (`evt->IsDrag`), not at the press
       // `grid.BestSnapAnchor( pos, snapLayers, grid.GetItemGrid( item ), { item } )`: on the zone's layer, not onto the zone itself.
@@ -1251,8 +1254,8 @@ export function Canvas() {
       const held = state.movePreview;
       if (drag.moved && held) {
         // A drag that ended where it began (and turned and flipped nothing) leaves the board as it was: no undo step.
-        if (held.dxNm === 0 && held.dyNm === 0 && !held.rotateQuarterTurns && !held.flipped) dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-        else api.commitMove(held.refs, held.dxNm, held.dyNm, held.kind, held.rotateQuarterTurns, held.flipped);
+        if (held.dxNm === 0 && held.dyNm === 0 && !held.rotateQuarterTurns && !held.flipped && !held.ops?.length) dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        else api.commitMove(held.refs, held.dxNm, held.dyNm, held.kind, held.rotateQuarterTurns, held.flipped, undefined, held.ops);
       } else if (drag.moved) {
         dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       } else {
@@ -1302,7 +1305,7 @@ export function Canvas() {
     } else if (drag.kind === "tuneHandle") {
       void drag.drag.finish(api);
     } else if (drag.kind === "shapePoint") {
-      // A shape's id is its geometry's: dropping the handle makes a new shape (selected) in place of the old one, one undo step. A hatched shape is changed in place, to keep its hatch.
+      // Dropping the handle changes the shape in place (`replace_shape`, as the point editor's `commit.Modify( item )`): it keeps its id, so its group and its hatch; one undo step.
       const preview = shapePointPreview;
       setShapePointPreview(null);
       if (preview && JSON.stringify(shapeToCmd(preview.shape)) !== JSON.stringify(shapeToCmd(drag.base))) {
@@ -1450,25 +1453,8 @@ export function Canvas() {
       showDrcInDialog({ api, dispatch }, "violations", markerHit);
       return;
     }
-    // pcb_point_editor.cpp: double-clicking a single selected zone's edge
-    // (not one of its corners -- grabbing a corner is onPointerDown's own
-    // drag-start check, above) adds a new corner there.
-    if (state.activeTool === "select" && state.selection.size === 1) {
-      const zone = api.zoneById([...state.selection][0]!);
-      if (zone) {
-        const [wx, wy] = worldAt(e);
-        const toleranceNm = zoneCornerToleranceNm(state.view.scale);
-        if (findNearestCorner(zone.outline, wx, wy, toleranceNm) == null) {
-          const insertAt = findNearestEdgeInsertionIndex(zone.outline, wx, wy, toleranceNm);
-          if (insertAt != null) {
-            const [sx, sy] = snap.align("insert", [wx, wy], snapMods(e), "current");
-            const next = insertCorner(zone.outline, insertAt, sx, sy);
-            api.cmd({ op: "set_zone_outline", id: zone.id, outline: next.map(([x, y]) => ({ x, y })) });
-            return;
-          }
-        }
-      }
-    }
+    // A double click on a selected zone's edge opens the zone's properties, as on any item: KiCad's point editor has no double-click (`PCB_SELECTION_TOOL::Main`'s
+    // `IsDblClick` opens the item's properties); a corner is added with Create Corner (Insert, `pcbnew.PointEditor.addCorner`).
     let refs = [...state.selection];
     if (refs.length === 0) {
       const [wx, wy] = worldAt(e);

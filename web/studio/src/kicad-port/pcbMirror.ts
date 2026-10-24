@@ -17,9 +17,9 @@
 //   PCB_GROUP::Mirror             every member
 // Output is a list of `Cmd`s (one `batch` = one undo step).
 
-import type { BoardState, Cmd, CmdRouteTrack, CmdShape, Shape } from "../api/types";
+import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
 import { itemKind, itemPosition, itemBounds, unionBounds } from "./pcbItems";
-import { arcRouteTrack, lineRouteTrack, type P } from "./trackArc";
+import type { P } from "./trackArc";
 import { reshapeCmds } from "./shapeFill";
 
 export type FlipDirection = "leftRight" | "topBottom";
@@ -95,8 +95,7 @@ export interface MirrorPlan {
 export function planMirror(board: BoardState, ids: readonly string[], centre: readonly [number, number], dir: FlipDirection): MirrorPlan {
   const cmds: Cmd[] = [];
   const removed: string[] = [];
-  const removeTracks: string[] = [];
-  const addTracks: CmdRouteTrack[] = [];
+  const mirrorTracks: string[] = [];
 
   for (const id of mirrorableIds(board, ids)) {
     const kind = itemKind(board, id);
@@ -106,12 +105,8 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
       cmds.push(...re.cmds);
       removed.push(...re.removed);
     } else if (kind === "track") {
-      const t = board.routing!.tracks.find((q) => q.id === id)!;
-      removeTracks.push(id);
-      removed.push(id);
-      const pts = t.pts.map((p) => mirrorPoint(p, centre, dir));
-      if (t.arc_mid) addTracks.push(arcRouteTrack(t.net, t.layer, t.width, pts[0]!, mirrorPoint(t.arc_mid, centre, dir), pts[pts.length - 1]!));
-      else addTracks.push(lineRouteTrack(t.net, t.layer, t.width, pts));
+      // `PCB_TRACK::Mirror` / `PCB_ARC::Mirror`, in place: the track keeps its id, so its group.
+      mirrorTracks.push(id);
     } else if (kind === "via") {
       const v = board.routing!.vias.find((q) => q.id === id)!;
       const [x, y] = mirrorPoint([v.x, v.y], centre, dir);
@@ -131,6 +126,6 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
       cmds.push({ op: "move_text", id, x, y });
     }
   }
-  if (removeTracks.length > 0) cmds.push({ op: "commit_route", remove_track_ids: removeTracks, remove_via_ids: [], tracks: addTracks });
+  if (mirrorTracks.length > 0) cmds.push({ op: "mirror_tracks", ids: mirrorTracks, pivot: { x: Math.round(centre[0]), y: Math.round(centre[1]) }, direction: dir === "leftRight" ? "left_right" : "top_bottom" });
   return { cmds, removed };
 }

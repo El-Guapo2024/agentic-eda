@@ -38,11 +38,26 @@ test("the Pads filter keeps pads out of a click", () => {
   assert.deepEqual(hit.map((c) => c.kind), ["part"]);
 });
 
-test("a pad of a locked footprint is locked with it", () => {
+test("a lone pad of a locked footprint passes the filter on a click, not in a box (itemPassesFilter: `PCB_PAD_T && !aMultiSelect`)", () => {
   const b = board([u1], { locked: ["U1"] });
-  assert.deepEqual(pickSelectionCandidates(b, -1000, 0, 150, 10, DEFAULT_SELECTION_FILTER, {}, null, false, new Set(), false, false), []);
+  assert.deepEqual(pickSelectionCandidates(b, -1000, 0, 150, 10, DEFAULT_SELECTION_FILTER, {}, null, false, new Set(), false, false).map((c) => c.id), ["U1.1"]);
   const allowed = pickSelectionCandidates(b, -1000, 0, 150, 10, { ...DEFAULT_SELECTION_FILTER, lockedItems: true }, {}, null, false, new Set(), false, false);
   assert.deepEqual(allowed.map((c) => c.id), ["U1.1"]);
+  // a box is a multi-select: the pads of a locked footprint stay out of it
+  assert.deepEqual(collectBoxSelection(b, [-1400, -400, -600, 400], false, DEFAULT_SELECTION_FILTER, {}, null, false), []);
+});
+
+test("a rule area follows Rule Areas (m_filter.keepouts), not Zones; a member of a locked group is locked", () => {
+  const zone = (id: string, rule: boolean, x: number) => ({ id, net: rule ? "" : "N", layer: "F.Cu", outline: [[x, 0], [x + 4000, 0], [x + 4000, 4000], [x, 4000]], is_rule_area: rule });
+  const b = board([], { routing: { tracks: [], vias: [], zones: [zone("Z1", false, 0), zone("R1", true, 10_000)], track_width_presets: [], via_presets: [], teardrop_settings: {} } as never });
+  const ids = (f: typeof DEFAULT_SELECTION_FILTER, x: number) => pickSelectionCandidates(b, x, 2000, 150, 10, f, {}, null, false, new Set(), false, false).map((c) => c.id);
+  assert.deepEqual(ids({ ...DEFAULT_SELECTION_FILTER, zones: false }, 12_000), ["R1"], "with Zones off the rule area is still picked");
+  assert.deepEqual(ids({ ...DEFAULT_SELECTION_FILTER, zones: false }, 2000), []);
+  assert.deepEqual(ids({ ...DEFAULT_SELECTION_FILTER, keepouts: false }, 12_000), []);
+  assert.deepEqual(ids({ ...DEFAULT_SELECTION_FILTER, keepouts: false }, 2000), ["Z1"]);
+  // a member of a locked group cannot be picked with Locked items off
+  const grouped = board([], { locked: ["grp_a"], routing: { tracks: [], vias: [], zones: [zone("Z1", false, 0)], track_width_presets: [], via_presets: [], teardrop_settings: {} } as never, drawings: { shapes: [], texts: [], dimensions: [], dimension_settings: {}, groups: [{ id: "grp_a", name: "", member_ids: ["Z1", "X"] }] } as never });
+  assert.deepEqual(pickSelectionCandidates(grouped, 2000, 2000, 150, 10, DEFAULT_SELECTION_FILTER, {}, null, false, new Set(), false, false), []);
 });
 
 test("a pad on a hidden copper layer cannot be picked, a through-hole pad on any layer can", () => {

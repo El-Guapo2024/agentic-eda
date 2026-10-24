@@ -957,3 +957,27 @@ fn a_drill_chart_is_stale_by_the_drill_generation_not_by_its_text() {
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetDrillChart { id: id.clone(), units: c.units, precision: c.precision, show_totals: c.show_totals, filter: c.filter })).unwrap();
     assert_eq!(cell(&b, 6 + 1), "0.300", "the Properties panel rebuilds its chart");
 }
+
+/// p6 F17: `EDIT_TOOL::Duplicate` duplicates a barcode and a point like any item (`orig_item->Duplicate( true, &commit )`), and
+/// `BOARD_ITEM::Duplicate` is a `Clone()`: a locked item's copy is locked.
+#[test]
+fn duplicate_copies_barcodes_and_points_and_keeps_a_lock() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let bar = add_barcode(&mut b, qr("F.SilkS", p(10_000_000, 20_000_000)));
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new("F.SilkS", p(5_000_000, 5_000_000)) })).unwrap();
+    let pnt = drawings(&b).board_items.points.last().unwrap().id.clone();
+    b.apply(&Cmd::SetLocked { ids: ids(&[&bar]), locked: true }).unwrap();
+    b.apply(&Cmd::Duplicate { ids: ids(&[&bar, &pnt]) }).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.barcodes.len(), 2);
+    assert_eq!(dr.board_items.points.len(), 2);
+    let copy = dr.barcodes.iter().find(|x| x.id != bar).unwrap();
+    assert_eq!((copy.at, copy.text.clone()), (dr.barcodes[0].at, dr.barcodes[0].text.clone()), "an exact copy in place");
+    assert!(dr.locked_ids.contains(&copy.id), "the copy of a locked barcode is locked");
+    let pcopy = dr.board_items.points.iter().find(|x| x.id != pnt).unwrap();
+    assert!(pcopy.id.starts_with("pnt_") && !dr.locked_ids.contains(&pcopy.id));
+    // a lone barcode alone is duplicable
+    b.apply(&Cmd::Duplicate { ids: ids(&[&bar]) }).unwrap();
+    assert_eq!(drawings(&b).barcodes.len(), 3);
+}

@@ -222,6 +222,22 @@ impl Board<'_> {
         self.transform_items("flip_items", ids, Xform::Flip { pivot, dir: direction })
     }
 
+    /// `Cmd::MirrorTracks`: `PCB_TRACK::Mirror` / `PCB_ARC::Mirror` -- the points mirrored across the axis through `pivot`, the layer kept.
+    pub(crate) fn mirror_tracks(&mut self, ids: &[String], pivot: Point, direction: FlipDirection) -> Result<(), Vec<CheckResult>> {
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", ids.join(","), "the board has no routing")])?;
+        if let Some(missing) = ids.iter().find(|id| !rt.tracks.iter().any(|t| &t.id == *id)) {
+            return Err(vec![CheckResult::fail("ops_unknown_track", missing.as_str(), "no track with this id")]);
+        }
+        let x = Xform::Flip { pivot, dir: direction };
+        for t in rt.tracks.iter_mut().filter(|t| ids.contains(&t.id)) {
+            // `transform_track` with the flip, less its layer change.
+            let layer = std::mem::take(&mut t.layer);
+            transform_track(t, x, 2);
+            t.layer = layer;
+        }
+        Ok(())
+    }
+
     pub(crate) fn transform_items(&mut self, verb: &str, ids: &[String], x: Xform) -> Result<(), Vec<CheckResult>> {
         let targets = self.resolve_targets(verb, ids)?;
         let copper = self.model.board.layers.len();
