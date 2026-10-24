@@ -244,3 +244,36 @@ fn a_footprints_edge_cuts_are_written_inside_the_footprint_and_cut_the_outline()
     assert_eq!(outline.polys.outline_count(), 1);
     assert!((outline.polys.area() / 1e12 - 2000.0).abs() < 0.01, "{}", outline.polys.area() / 1e12);
 }
+
+/// p13-p16 P14-1: KiCad 10's Extruded 3D Body (`(model (type extruded) ..)`, a typed model with no path) is kept as the file wrote it, beside the footprint's
+/// ordinary model, so kicad-cli's STEP, GLB and VRML of our board have the body.
+#[test]
+fn an_extruded_body_survives_import_and_export() {
+    let body = r#"(model (type extruded) (overall_height 1.2) (body_pcb_gap 0.1) (layer auto) (material plastic) (color unspecified) (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))"#;
+    let text = format!(
+        r#"(kicad_pcb (version 20260901) (generator "pcbnew")
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+        (footprint "L:R" (layer "F.Cu") (uuid "f1") (at 10 10)
+            (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+            (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask") (uuid "a1"))
+            (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Mask") (uuid "a2"))
+            {body}
+            (model "${{KICAD10_3DMODEL_DIR}}/Resistor_SMD.3dshapes/R_0603_1608Metric.step" (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0))))
+    )"#
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let fp = blocks(&out, "footprint")[0];
+    assert!(fp.contains(body), "the typed model token for token: {fp}");
+    assert!(fp.contains("R_0603_1608Metric.step"), "and the ordinary model: {fp}");
+
+    // A library footprint (`.kicad_mod`) keeps it too.
+    let lib = format!(
+        r#"(footprint "R" (version 20260901) (generator "pcbnew") (layer "F.Cu")
+        (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask"))
+        {body})"#
+    );
+    let parsed = eda_kicad::parse_library_footprint(&lib).expect("parses");
+    let written = eda_kicad::export_kicad_mod(&parsed.footprint);
+    assert!(written.contains(body), "{written}");
+}
