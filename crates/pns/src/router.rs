@@ -137,13 +137,16 @@ pub struct Router {
     /// The type of every via of the board that is not a through via, by id (`DrawingsSection::via_extras`): a via a shove or a drag moves
     /// is removed and put back, and keeps its type (`PNS_KICAD_IFACE::syncVia` reads `aVia->GetViaType()` into the router's via).
     via_kinds: HashMap<String, ViaKind>,
+    /// The `pins` of every board track that has some, by id: a track [`Self::simplify_new_lines`] takes into a new one hands them on.
+    track_pins: HashMap<String, Vec<String>>,
 }
 
 impl Router {
     pub fn new(design: &Design, model: &ConstraintModel) -> Self {
         let (world, layers) = crate::from_ir::build_node(design, model);
         let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds }
+        let track_pins = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| !t.pins.is_empty()).map(|t| (t.id.clone(), t.pins.clone())).collect();
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds, track_pins }
     }
 
     /// The type of the board's via `id` (a through via unless the board says otherwise).
@@ -385,6 +388,7 @@ impl Router {
             self.apply_splits(&splits, &mut commit);
         }
         self.drop_redundant(&mut commit);
+        self.simplify_new_lines(&mut commit);
         Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width: placer.width, from, to: current_end, gap: 0, via_gap: 0 })
     }
 
@@ -546,6 +550,7 @@ impl Router {
             self.apply_splits(&splits, &mut commit);
         }
         self.drop_redundant(&mut commit);
+        self.simplify_new_lines(&mut commit);
         self.session = None;
         Some(commit)
     }
@@ -577,6 +582,7 @@ impl Router {
         let splits = self.session_splits(true);
         self.apply_splits(&splits, &mut commit);
         self.drop_redundant(&mut commit);
+        self.simplify_new_lines(&mut commit);
         self.session = None;
         Some(commit)
     }
@@ -759,6 +765,96 @@ impl Router {
             }
         }
         commit
+    }
+
+    /// `LINE_PLACER::simplifyNewLine`, which every `FixRoute` runs on what it added: the new segments are assembled into one line with the
+    /// tracks they continue (`AssembleLine( aLatest, nullptr, false, false, false )`: no locked segment followed, no change of width; a joint
+    /// that is not a line corner -- a pad, a via, a branch -- ends it), `Simplify()` and `MERGE_COLINEAR` drop the points where it goes straight
+    /// on, and if that changed the line it replaces the old one (`aNode->Remove( l_orig ); aNode->Add( l )`). Here on the board as the commit
+    /// leaves it: for each new track, the line it is part of; when simplifying that line drops a point, the line's tracks -- new ones, and old
+    /// ones the commit then removes -- become the one simplified track. So a route that goes straight on from a track's end, or a click in the
+    /// middle of a straight run, leaves one segment where KiCad does (findings p5 F2-6). **Differs:** an old track is taken in only when the
+    /// whole of its polyline is in the line, and a commit with an arc track is left as it is (`Simplify` keeps an arc's points anyway).
+    fn simplify_new_lines(&self, commit: &mut RouteCommit) {
+        if commit.tracks.is_empty() || commit.tracks.iter().any(|t| t.arc().is_some()) {
+            return;
+        }
+        const NEW: &str = "\u{1}new";
+        let mut w = self.world.branch();
+        let removed: std::collections::HashSet<&str> = commit.remove_track_ids.iter().map(String::as_str).collect();
+        let doomed: Vec<ItemId> = w.iter().filter(|(_, it)| it.source_track_id().is_some_and(|t| removed.contains(t))).map(|(id, _)| id).collect();
+        for id in doomed {
+            w.remove(id);
+        }
+        let gone_vias: std::collections::HashSet<&str> = commit.remove_via_ids.iter().map(String::as_str).collect();
+        let doomed: Vec<ItemId> = w.iter().filter(|(_, it)| matches!(it, Item::Via(v) if v.source_via.as_deref().is_some_and(|s| gone_vias.contains(s)))).map(|(id, _)| id).collect();
+        for id in doomed {
+            w.remove(id);
+        }
+        for v in &commit.vias {
+            let layers = LayerRange::new(self.layer_index(&v.from_layer).unwrap_or(0), self.layer_index(&v.to_layer).unwrap_or(0));
+            w.add(Item::Via(crate::item::Via { net: net_of(&v.net), layers, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: None, locked: false, is_virtual: false }));
+        }
+        let mut new_ids: Vec<Vec<ItemId>> = Vec::with_capacity(commit.tracks.len());
+        for (i, t) in commit.tracks.iter().enumerate() {
+            let Some(layer) = self.layer_index(&t.layer) else {
+                new_ids.push(Vec::new());
+                continue;
+            };
+            let line = Line::from_points(net_of(&t.net), layer, t.width, t.pts.clone());
+            new_ids.push(w.add_line(&line, Some((format!("{NEW}{i}"), 0)), commit.lock_tracks.contains(&i)));
+        }
+        let count_of = |w: &Node, track: &str| w.iter().filter(|(_, it)| it.source_track_id() == Some(track)).count();
+        let opts = crate::node::AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false };
+        let mut consumed: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        let mut merged: Vec<eda_model::ir::Track> = Vec::new();
+        for i in 0..commit.tracks.len() {
+            if consumed.contains(&i) || commit.lock_tracks.contains(&i) {
+                continue;
+            }
+            let Some(&seg) = new_ids[i].first() else { continue };
+            let Some(line) = w.assemble_line_with(seg, opts) else { continue };
+            let mut simplified = line.clone();
+            simplified.simplify();
+            if simplified.pts.len() >= line.pts.len() {
+                continue;
+            }
+            // the tracks of the line, each wholly in it
+            let mut members: Vec<&str> = line.segment_ids.iter().filter_map(|id| w.get(*id).and_then(|it| it.source_track_id())).collect();
+            members.sort_unstable();
+            members.dedup();
+            let whole = members.iter().all(|t| line.segment_ids.iter().filter(|id| w.get(**id).and_then(|it| it.source_track_id()) == Some(*t)).count() == count_of(&w, t));
+            let news: Vec<usize> = members.iter().filter_map(|t| t.strip_prefix(NEW).and_then(|k| k.parse().ok())).collect();
+            if !whole || news.iter().any(|k| consumed.contains(k) || commit.lock_tracks.contains(k)) {
+                continue;
+            }
+            consumed.extend(news.iter().copied());
+            let olds: Vec<&str> = members.iter().copied().filter(|t| !t.starts_with(NEW)).collect();
+            commit.remove_track_ids.extend(olds.iter().map(|t| t.to_string()));
+            // the pads the tracks it takes in land on, it lands on
+            let mut pins: Vec<String> = olds.iter().flat_map(|t| self.track_pins.get(*t).into_iter().flatten().cloned()).chain(news.iter().flat_map(|&k| commit.tracks[k].pins.iter().cloned())).collect();
+            pins.sort();
+            pins.dedup();
+            let template = &commit.tracks[i];
+            merged.push(eda_model::ir::Track { id: String::new(), net: template.net.clone(), pins, layer: template.layer.clone(), width: template.width, pts: simplified.pts, arc_mid_offset: None });
+        }
+        if consumed.is_empty() {
+            return;
+        }
+        let mut tracks = Vec::with_capacity(commit.tracks.len());
+        let mut locks = Vec::new();
+        for (i, t) in std::mem::take(&mut commit.tracks).into_iter().enumerate() {
+            if consumed.contains(&i) {
+                continue;
+            }
+            if commit.lock_tracks.contains(&i) {
+                locks.push(tracks.len());
+            }
+            tracks.push(t);
+        }
+        tracks.extend(merged);
+        commit.tracks = tracks;
+        commit.lock_tracks = locks;
     }
 
     fn net_name_of(&self, line: &Line) -> String {
@@ -1249,7 +1345,32 @@ mod tests {
         let pv = router.preview(Point { x: 8_000_000, y: 3_000_000 }).unwrap();
         assert_eq!(pv.head.first(), Some(Point { x: 4_000_000, y: 0 }));
         let commit = router.finish(Point { x: 8_000_000, y: 3_000_000 }).unwrap();
-        assert!(!commit.remove_track_ids.contains(&"trkA".to_string()), "the track is not touched: {commit:?}");
+        // not cut: the route goes straight on from the track's end, so the two are one line (`simplifyNewLine`), the end point gone
+        assert_eq!(commit.remove_track_ids, vec!["trkA".to_string()], "{commit:?}");
+        assert_eq!(commit.tracks.len(), 1, "{commit:?}");
+        assert_eq!(commit.tracks[0].pts, vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 0 }, Point { x: 8_000_000, y: 3_000_000 }]);
+    }
+
+    /// findings p5 F2-6: `simplifyNewLine` -- a route that continues a track straight on is merged with it, and so is a click in the middle of
+    /// a straight run; a route that turns at the track's end leaves the track alone.
+    #[test]
+    fn a_route_continuing_a_track_straight_is_merged_with_it() {
+        let (design, model) = track_and_a_via_of_the_same_net();
+        let mut router = Router::new(&design, &model);
+        router.settings.auto_posture = false;
+        router.start(Point { x: 4_000_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        router.preview(Point { x: 6_000_000, y: 0 });
+        router.fix(Point { x: 6_000_000, y: 0 });
+        router.preview(Point { x: 7_000_000, y: 0 });
+        let commit = router.finish(Point { x: 7_000_000, y: 0 }).unwrap();
+        assert_eq!(commit.remove_track_ids, vec!["trkA".to_string()]);
+        assert_eq!(commit.tracks.iter().map(|t| t.pts.clone()).collect::<Vec<_>>(), vec![vec![Point { x: 0, y: 0 }, Point { x: 7_000_000, y: 0 }]], "one segment");
+        // a turn at the end: nothing merged
+        let mut router = Router::new(&design, &model);
+        router.start(Point { x: 4_000_000, y: 0 }, "F.Cu", 200_000).unwrap();
+        router.preview(Point { x: 4_000_000, y: -3_000_000 });
+        let commit = router.finish(Point { x: 4_000_000, y: -3_000_000 }).unwrap();
+        assert!(commit.remove_track_ids.is_empty(), "{commit:?}");
     }
 
     /// A point on the track that the studio's snapping put there exactly wins over a pad within the generous 500 um; one that was not
@@ -1460,7 +1581,10 @@ mod tests {
         router.fix(Point { x: 2_000_000, y: 0 });
         router.fix(Point { x: 2_000_000, y: 1_000_000 });
         let commit = router.finish(Point { x: 5_175_000, y: 0 }).expect("must finish");
-        assert!(commit.tracks.len() >= 3);
+        // (the walk round R1.2 ends the first leg going straight down onto the second: the line of the three legs loses that point and is
+        // one track, `simplifyNewLine`)
+        assert!(!commit.tracks.is_empty(), "{:?}", commit.tracks);
+        assert!(!commit.tracks.iter().any(|t| t.pts.contains(&Point { x: 2_000_000, y: 0 })), "the straight-on click point is gone: {:?}", commit.tracks);
         assert!(commit.vias.is_empty(), "got vias: {:?}", commit.vias);
     }
 
