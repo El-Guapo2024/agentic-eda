@@ -1004,6 +1004,7 @@ fn handle(
         ("POST", "/api/tune/remove") => respond(stream, "200 OK", "application/json", tune_api::remove(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune/regenerate") => respond(stream, "200 OK", "application/json", tune_api::regenerate(dir, &body).to_string().as_bytes()),
         // Inspect > Clearance Resolution / Constraints Resolution: read-only reports on which rule wins (`inspect_api`), no kicad-cli.
+        ("GET", "/api/net_inspector") => respond(stream, "200 OK", "application/json", crate::net_inspector_api::net_inspector(dir).to_string().as_bytes()),
         ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
         ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),

@@ -1553,6 +1553,15 @@ Seen in the browser (port 8827, a scratch copy of `mcu30`): `e2e/search-inspect.
 - Item descriptions come from the studio's own items (`Pad 1 [GND] of R1 on F.Cu`, `Track [GND] on F.Cu, length 4.0000 mm`, `Zone 'name' [GND] on F.Cu, priority 0`), as `GetItemDescription` words them; the layer names are the board's.
 
 
+### 32d. The Net Inspector (`pcb_net_inspector_panel.cpp`, `length_delay_calculation.cpp`; fix batch F, 2026-10-24)
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| View > Net Inspector: the columns Name, Netclass (`GetHumanReadableName`: "A and B", "A, B and C", "A, B and N more"), Total Length, Via Count, Via Length, Track Length, Die Length, Pad Count; the lengths in the user's units (`MessageTextFromValue`) | **done** (it was a stub whose pad count counted footprints) | `buildColumns`, `formatLength`, `LIST_ITEM::GetTotalLength` |
+| The numbers: the net's tracks, arcs, vias and pads with `OptimiseVias` (a via's layers are the outermost of the lines that end in it and of the pad it is in; one layer is a stub with no height), `MergeTracks` (lines meeting one to one on one layer, the one taken in with no arc), the line ends in a via's pad and on a pad's position measured from the centre (`clipLineToVia`, `clipLineToPad`); the via height (`StackupHeight`, from Board Setup's stackup or the default one) and the via count only with "Use stackup height for track length calculations"; the pad-to-die length the board file's pad had | **ported** (`crates/cli/src/net_inspector_api.rs`, `GET /api/net_inspector`; 5 Rust tests) | `calculateNets`, `CalculateLengthDetails`, `optimiseVias`, `mergeLines`, `OptimiseTraceInVia`, `OptimiseTraceInPad` |
+| The search box with Filter by Net Name and Filter by Netclass (a substring, upper-cased), Show Zero Pad Nets and Show Unconnected Nets (both off by default); a click on a column heading sorts by it; a click on a net highlights it; Save Net Inspector Report... (KiCad's CSV: `;` after each field, the names quoted, the unit in the length headings) | **done** (`kicad-port/netInspector.ts`, 3 `node --test` cases) | `netFilterMatches`, `generateReport` |
+| Not done | | A dialog over the board, not a docked panel; no Group by Netclass and no custom groups; no time-domain columns ("Show Time Domain Details"); the menu's Rename / Delete / Add Net; a via is in a pad when their copper meets (KiCad asks the connectivity); a clipped end on an arc is measured along the arc's 1 µm polygonisation |
+
 ## 33. Design Rules Checker: Delete Marker, Delete All Markers, a click on a marker, Inspect and Fix, Exclude all violations of rule, Save... (GAPS.md item 11, package P15; 2026-10-14)
 
 Ported from `pcbnew/dialogs/dialog_drc.cpp` (`OnDeleteOneClick`, `OnDeleteAllClick`, `deleteAllMarkers`, `OnRunDRCClick`, `OnDRCItemRClick`, `OnSaveReport`), `common/rc_item.cpp` (`RC_TREE_MODEL::DeleteCurrentItem`, `DeleteItems`),
