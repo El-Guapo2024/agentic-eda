@@ -77,3 +77,19 @@ test("a group with a locked item below it, or that is locked itself, is not dele
   // a member of a locked group is locked too (`BOARD_ITEM::IsLocked` asks its group)
   assert.equal(boardDeleteCmds(lockedGroup, ["T1"]).skippedLocked, 1);
 });
+
+test("a field is hidden, not deleted; one already hidden says to use Footprint Properties (EDIT_TOOL::DeleteItems, PCB_FIELD_T)", () => {
+  const field = (name: string, visible: boolean) => ({ id: `R1:${name}`, name, text: name === "Value" ? "10k" : "R1", visible, lx: 0, ly: 0, langle: 0, w: 1_000_000, h: 1_000_000, thickness: 150_000, layer: "F.Fab", halign: "center", valign: "center", mirror: false, bold: false, italic: false, upright: true, knockout: false });
+  const b = { ...board, parts: [{ ref: "R1", placed: true, fields: [field("Reference", true), field("Value", false)] }] } as unknown as BoardState;
+  const shown = boardDeleteCmds(b, ["R1:Reference"]);
+  assert.equal(shown.cmds.length, 1);
+  const c = shown.cmds[0]!;
+  assert.equal(c.op, "edit_board_field");
+  assert.ok(c.op === "edit_board_field" && c.part === "R1" && c.name === "Reference" && c.layout?.visible === false);
+  assert.equal(shown.message, undefined);
+  const hidden = boardDeleteCmds(b, ["R1:Value"]);
+  assert.deepEqual(hidden.cmds, []);
+  assert.equal(hidden.message, "Use the Footprint Properties dialog to remove fields.");
+  // with the footprint itself, the footprint goes and the field with it
+  assert.deepEqual(boardDeleteCmds(b, ["R1", "R1:Reference"]).cmds, [{ op: "rip", part: "R1" }]);
+});

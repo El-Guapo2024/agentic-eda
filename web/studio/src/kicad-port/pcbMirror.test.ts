@@ -78,7 +78,7 @@ test("mirrorableIds: groups expand to members and footprints are not mirrorable"
   assert.deepEqual(mirrorableIds(b, ["g", "U1"]), ["a"]);
 });
 
-test("planMirror: shapes are replaced, vias and text move, a zone's outline is rewritten, tracks come back through commit_route", () => {
+test("planMirror: shapes and tracks are mirrored in place (they keep their ids, so their groups), vias and text move, a zone's outline is rewritten", () => {
   const b = board({
     routing: {
       tracks: [
@@ -101,18 +101,10 @@ test("planMirror: shapes are replaced, vias and text move, a zone's outline is r
   });
   const plan = planMirror(b, ["t1", "t2", "v1", "z1", "s1", "x1"], [0, 0], "leftRight");
   const ops = plan.cmds.map((c: Cmd) => c.op);
-  assert.deepEqual(ops, ["move_via", "set_zone_outline", "delete_shape", "add_shape", "edit_text", "move_text", "commit_route"]); // in id order, the tracks last
-  assert.deepEqual(plan.removed.sort(), ["s1", "t1", "t2"]);
-  const route = plan.cmds[plan.cmds.length - 1]!;
-  assert.equal(route.op, "commit_route");
-  if (route.op !== "commit_route") return;
-  assert.deepEqual(route.remove_track_ids.sort(), ["t1", "t2"]);
-  const [line, arc] = route.tracks!;
-  assert.deepEqual(line!.pts, [{ x: 0, y: 0 }, { x: -100, y: 0 }]);
-  assert.equal(line!.arc_mid_offset, undefined);
-  // the arc keeps being an arc: its mid offset is relative to the new start
-  assert.deepEqual(arc!.arc_mid_offset, { x: -3, y: 7 });
-  assert.equal(arc!.pts.length, 33);
+  assert.deepEqual(ops, ["move_via", "set_zone_outline", "replace_shape", "edit_text", "move_text", "mirror_tracks"]); // in id order, the tracks last
+  assert.deepEqual(plan.removed, []);
+  const tracks = plan.cmds[plan.cmds.length - 1]!;
+  assert.deepEqual(tracks, { op: "mirror_tracks", ids: ["t1", "t2"], pivot: { x: 0, y: 0 }, direction: "left_right" });
   const move = plan.cmds.find((c) => c.op === "move_via")!;
   assert.deepEqual(move, { op: "move_via", id: "v1", x: -50, y: 20 });
   const edit = plan.cmds.find((c) => c.op === "edit_text")!;

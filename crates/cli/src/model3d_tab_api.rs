@@ -309,7 +309,8 @@ fn preview_part(model: &ConstraintModel, part: &Part) -> Option<Value> {
         .iter()
         .map(|q| json!({ "num": q.number, "net": Value::Null, "x": q.center.x, "y": q.center.y, "w": q.size.0, "h": q.size.1, "round": q.is_round(), "th": q.through_hole }))
         .collect();
-    let courtyard = eda_model::footprint::placed_courtyard(model, part, &pose).map(|c| [c.0, c.1, c.2, c.3]);
+    // the courtyard the file has (`FOOTPRINT::GetBoundingBox` merges the drawings as they are), as the board's parts carry it
+    let courtyard = eda_model::footprint::placed_courtyard_box(model, part, &pose).map(|c| [c.0, c.1, c.2, c.3]);
     let mut p = json!({
         "ref": part.reference,
         "value": part.value,

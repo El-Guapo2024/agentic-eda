@@ -58,6 +58,7 @@ Opening a studio project in KiCad and running Update PCB (F8) renames every net 
 - Test infrastructure: `qa_regressions.rs` defaults to a macOS corpus path and passes without running. Its thresholds are 80%, where KiCad's tests demand an exact match.
 
 ### F. Editing operations (`crates/ops`, `web/studio`)
+**Status (2026-10-24, `task-fix-f-editing`):** every high below fixed (O10 for the placement verbs; the annealing placer still uses the box). p6's mediums F5-F17 fixed, F10, F11 and F18 in part (no Override locks, no "Only ...", no zone edge handles); F19 not a bug; F22 fixed. PARITY-pcb.md section 36's design-block row corrected. Browser check: `e2e/pcb-edit-fixes.check.js`.
 - p6 F2: point-editing or mirroring re-creates the item, which then leaves its group (data loss).
 - p6 F3: an off-centre footprint's bounding box is symmetric about the origin, so Align, Distribute, the rotate pivot and hit testing are wrong.
 - p6 F4: R/F while carrying turns about the wrong point; F then R turns the wrong way.

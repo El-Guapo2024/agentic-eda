@@ -479,10 +479,14 @@ impl Board<'_> {
                 }
                 let refs: Vec<String> = members.iter().map(|&i| mc.fps[i].reference.clone()).collect();
                 let dr = self.drawings_mut();
+                // `pruneExistingGroups`: only the groups that lost a member are tested against the `< 2` rule
+                let mut gone = refs.clone();
+                gone.push(zone_id.clone());
+                let affected = eda_model::groups::groups_holding(&dr.groups, &gone);
                 for g in dr.groups.iter_mut() {
                     g.member_ids.retain(|m| !refs.contains(m) && *m != zone_id);
                 }
-                eda_model::groups::prune_groups(&mut dr.groups);
+                eda_model::groups::prune_affected_groups(&mut dr.groups, &affected);
                 let mut ids = vec![zone_id];
                 ids.extend(refs);
                 dr.groups.push(eda_model::ir::Group { id: String::new(), name: String::new(), member_ids: ids, design_block: String::new() });

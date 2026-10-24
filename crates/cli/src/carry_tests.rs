@@ -163,3 +163,29 @@ fn a_paste_and_its_drop_are_one_step_too_and_cancelling_removes_what_the_paste_b
     assert_eq!(footprints(&dir).len(), 2, "the paste and the drop are undone together");
     assert!(undo_pcb(&dir).is_err());
 }
+
+/// p6 F6: Move Individually picks each item up into the same commit (`aCommit->Modify( nextItem )`) and pushes it once; Escape reverts every drop.
+#[test]
+fn move_individually_is_one_undo_step_and_cancelling_reverts_every_drop() {
+    let dir = scratch("carry_individually");
+    setup(&dir);
+    add_text(&dir);
+    let at0 = footprints(&dir);
+    let hold_with = |cmd: Cmd| step_carrying(&dir, cmd, Strictness::Off, "test", Some(Carry::Hold)).unwrap();
+    hold_with(Cmd::MoveItems { ids: vec!["U1".into()], dx: 1_000_000, dy: 0 });
+    assert!(is_carrying(&dir), "the first drop opens the step");
+    hold_with(Cmd::MoveItems { ids: vec!["U2".into()], dx: 0, dy: 1_000_000 });
+    assert!(is_carrying(&dir), "the next drop joins it");
+    commit(&dir).unwrap();
+    assert_ne!(footprints(&dir), at0);
+    undo_pcb(&dir).unwrap();
+    assert_eq!(footprints(&dir), at0, "one undo puts both back");
+    assert_eq!(texts(&dir), 1, "and leaves the step before alone");
+
+    // Escape after two drops: both go back, no undo entry, no redo entry
+    hold_with(Cmd::MoveItems { ids: vec!["U1".into()], dx: 1_000_000, dy: 0 });
+    hold_with(Cmd::MoveItems { ids: vec!["U2".into()], dx: 0, dy: 1_000_000 });
+    cancel(&dir, "test").unwrap();
+    assert_eq!(footprints(&dir), at0);
+    assert!(redo(&dir, "test", Some(Domain::Pcb)).is_ok(), "the redo stack is as it was: the undone move-individually");
+}

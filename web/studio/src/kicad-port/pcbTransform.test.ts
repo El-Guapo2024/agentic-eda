@@ -260,3 +260,11 @@ test("planMoveExact: nothing to do for a zero move and turn, locked items stay, 
   assert.deepEqual(plan.cmds, [{ op: "move_items", ids: ["U1"], dx: 100, dy: 0 }]);
   assert.equal(plan.lockedOut, true);
 });
+
+test("a lone text box turns about its centre (EDIT_TOOL::Rotate: PCB_TEXTBOX::GetCenter), and flips about its position", () => {
+  const tb = { id: "tb1", layer: "F.SilkS", text: "HI", start: [1000, 2000], end: [5000, 4000], pts: [], angle: 0, margins: [0, 0, 0, 0], border: false, stroke_width: 100 };
+  const b = board({ drawings: drawings({ text_boxes: [tb] } as never) });
+  assert.equal(itemKind(b, "tb1"), "textbox");
+  assert.deepEqual(rotationPivot(b, ["tb1"]), [3000, 3000]);
+  assert.deepEqual(flipPivot(b, ["tb1"]), [1000, 2000]);
+});

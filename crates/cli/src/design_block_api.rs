@@ -388,10 +388,12 @@ fn board_selection_made(dir: &Path, ids: &[String]) -> Result<Made, String> {
         // the groups inside the selection stay (with the members that stay), the group the selection was picked by does not
         let picked: std::collections::BTreeSet<&str> = ids.iter().map(String::as_str).collect();
         dr.groups.retain(|g| !picked.contains(g.id.as_str()));
+        // the groups that lost members to the cut fall under the `< 2` rule; a group of one that was one already stays
+        let affected: std::collections::BTreeSet<String> = dr.groups.iter().filter(|g| g.member_ids.iter().any(|x| !keep.contains(x.as_str()))).map(|g| g.id.clone()).collect();
         for g in dr.groups.iter_mut() {
             g.member_ids.retain(|x| keep.contains(x.as_str()));
         }
-        eda_model::groups::prune_groups(&mut dr.groups);
+        eda_model::groups::prune_affected_groups(&mut dr.groups, &affected);
     }
     let placed: std::collections::BTreeSet<String> = d.placement.iter().flat_map(|p| p.footprints.iter().map(|f| f.id.clone())).collect();
     for n in m.nets.iter_mut() {

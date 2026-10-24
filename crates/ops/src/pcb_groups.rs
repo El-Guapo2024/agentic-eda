@@ -29,19 +29,13 @@
 
 use super::{Board, Cmd};
 use eda_model::groups::{GroupHost, GroupRefusal};
-use eda_model::ir::{Design, DrawingsSection};
+use eda_model::ir::Design;
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
 
 /// A refusal of a group edit as the command's failure (`CheckResult`).
 pub(crate) fn refused(r: GroupRefusal) -> Vec<CheckResult> {
     vec![CheckResult::fail(r.check, &r.subject, r.why)]
-}
-
-/// A group with fewer than two members is meaningless and dissolves (`GROUP_TOOL::RemoveFromGroup`'s
-/// `if( group->GetItems().size() < 2 )`); the group above it loses it as a member, and may fall under two in turn.
-pub(crate) fn prune_groups(dr: &mut DrawingsSection) {
-    eda_model::groups::prune_groups(&mut dr.groups);
 }
 
 /// Every id an item of the board can be listed under: placed footprints, copper, graphics, dimensions and the groups themselves.
@@ -151,9 +145,11 @@ impl Board<'_> {
         (!dr.groups.is_empty()).then(|| universe(&self.design))
     }
 
-    /// Takes out of every group the members that were on the board before the command (`before`) and are not now, and dissolves a
-    /// group that is left with fewer than two members (`BOARD_COMMIT::Push`'s `parentGroup->RemoveItem( boardItem )` for a removed
-    /// item, then `GROUP_TOOL::RemoveFromGroup`'s dissolving rule).
+    /// Takes out of every group the members that were on the board before the command (`before`) and are not now
+    /// (`BOARD_COMMIT::Push`'s `parentGroup->RemoveItem( boardItem )` for a removed item). Nothing dissolves a group there: a group of one
+    /// member stays on the board and in the file; a group left with no member is gone (`PCB_IO_KICAD_SEXPR::format( const PCB_GROUP* )`:
+    /// `if( memberIds.empty() ) return;`), and the group above it loses it in turn. (`GROUP_TOOL::RemoveFromGroup`'s `< 2` rule is that
+    /// verb's own.)
     pub(crate) fn tidy_groups(&mut self, before: Option<BTreeSet<String>>) {
         let Some(before) = before else { return };
         if self.design.drawings.as_ref().is_none_or(|d| d.groups.is_empty()) {
@@ -168,7 +164,16 @@ impl Board<'_> {
             for g in dr.groups.iter_mut() {
                 g.member_ids.retain(|m| !gone.contains(m));
             }
-            prune_groups(dr);
+            loop {
+                let empty: Vec<String> = dr.groups.iter().filter(|g| g.member_ids.is_empty()).map(|g| g.id.clone()).collect();
+                if empty.is_empty() {
+                    break;
+                }
+                dr.groups.retain(|g| !g.member_ids.is_empty());
+                for g in dr.groups.iter_mut() {
+                    g.member_ids.retain(|m| !empty.contains(m));
+                }
+            }
         }
     }
 }

@@ -10,6 +10,8 @@
 //!
 //! * **begin** (`POST /api/cmd` with `"carry": "begin"`): the command runs and is saved as usual, but the design before it is kept aside as the *pending* step
 //!   (`.history/pending/`) instead of going on the undo stack, and the redo stack is left alone;
+//! * **hold** (`"carry": "hold"`): Move Individually's drop of an item that is not the last (`doMoveSelection` picks the next item up into the same
+//!   `aCommit`, pushed once): the command runs inside the pending step, which stays open -- or, with none open, begins it as **begin** does;
 //! * **commit** (`"carry": "commit"`, or `POST /api/carry` `{"action": "commit"}` for a drop that changes nothing): the drop's command runs, then the pending
 //!   design goes on the undo stack as the one step both belong to, and the redo stack is cleared;
 //! * **cancel** (`POST /api/carry` `{"action": "cancel"}`): the pending design comes back and is saved -- no undo entry, no redo entry;
@@ -30,6 +32,8 @@ pub(crate) enum Carry {
     Begin,
     /// The command is the drop: it ends the carry as one step with the command that began it.
     Commit,
+    /// The command joins the step held open (or begins one): Move Individually's drops before the last.
+    Hold,
 }
 
 impl Carry {
@@ -37,6 +41,7 @@ impl Carry {
         match text {
             "begin" => Some(Carry::Begin),
             "commit" => Some(Carry::Commit),
+            "hold" => Some(Carry::Hold),
             _ => None,
         }
     }
@@ -89,6 +94,9 @@ pub(super) fn settle_locked(dir: &Path) -> bool {
 pub(super) fn record(dir: &Path, carry: Option<Carry>, before: &eda_model::ir::Design, tag: &str, by: &str) {
     match carry {
         Some(Carry::Begin) => hold(dir, before, tag, by),
+        // a step already held open keeps the design from before its first command
+        Some(Carry::Hold) if read_pending(dir).is_some() => {}
+        Some(Carry::Hold) => hold(dir, before, tag, by),
         Some(Carry::Commit) if settle_locked(dir) => {}
         _ => {
             let _ = push_snapshot_tagged(&undo_dir(dir), before, tag, by);

@@ -165,9 +165,10 @@ fn a_table_moves_turns_and_flips_with_the_generic_verbs_and_is_lockable_and_grou
     let other = add(&mut b, table(1, 1, "F.SilkS"));
     b.apply(&Cmd::Group { ids: vec![t.clone(), other.clone()] }).unwrap();
     assert_eq!(b.design().drawings.as_ref().unwrap().groups.len(), 1);
-    // deleting one of them takes it out of the group, which then has too few members to stay
+    // deleting one of them takes it out of the group, which stays with the other (`BOARD_COMMIT::Push` dissolves nothing)
     b.apply(&Cmd::Table(TableCmd::Delete { id: other })).unwrap();
-    assert!(b.design().drawings.as_ref().unwrap().groups.is_empty());
+    let groups = &b.design().drawings.as_ref().unwrap().groups;
+    assert_eq!((groups.len(), groups[0].member_ids.clone()), (1, vec![t.clone()]));
     let _ = before;
 }
 

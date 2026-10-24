@@ -206,6 +206,34 @@ fn move_items_moves_a_groups_members_and_a_member_named_twice_only_once() {
     assert_eq!(pose(&b, "U2").at, p(60_000_000, 20_000_000), "a footprint outside the group stays");
 }
 
+/// p6 F2: the point editor and Mirror change an item in place (`commit.Modify( item )`), so it keeps its id and its group: the studio's batches for a
+/// handle drag of a grouped shape (`replace_shape`) and for Mirror of a grouped track (`mirror_tracks`) leave the group of two whole.
+#[test]
+fn point_edit_of_a_grouped_shape_and_mirror_of_a_grouped_track_keep_them_in_their_group() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["shp_seg", "trk_a"]), design_block: String::new() });
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let dragged = Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: p(0, 80_000_000), end: p(12_000_000, 81_000_000) };
+    b.apply(&Cmd::Batch { cmds: vec![Cmd::ReplaceShape { id: "shp_seg".into(), shape: dragged }] }).unwrap();
+    b.apply(&Cmd::MirrorTracks { ids: ids(&["trk_a"]), pivot: p(15_000_000, 0), direction: FlipDirection::LeftRight }).unwrap();
+    let g = drawings(&b).groups.iter().find(|g| g.id == "grp_a").expect("the group is still there");
+    assert_eq!(g.member_ids, ids(&["shp_seg", "trk_a"]));
+    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points(), vec![p(0, 80_000_000), p(12_000_000, 81_000_000)]);
+    // `PCB_TRACK::Mirror`: the points mirror across x = 15 mm, the layer stays (Mirror is not Flip)
+    let t = &routing(&b).tracks[0];
+    assert_eq!((t.id.as_str(), t.layer.as_str(), t.pts.clone()), ("trk_a", "F.Cu", vec![p(20_000_000, 40_000_000), p(10_000_000, 40_000_000), p(10_000_000, 50_000_000)]));
+    // an arc stays an arc, mirrored
+    let mut d = design();
+    let arc = Track::new_arc("GND".into(), "F.Cu".into(), 200_000, p(10_000_000, 10_000_000), p(15_000_000, 5_000_000), p(20_000_000, 10_000_000));
+    d.routing.as_mut().unwrap().tracks.push(Track { id: "trk_arc".into(), ..arc });
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    b.apply(&Cmd::MirrorTracks { ids: ids(&["trk_arc"]), pivot: p(0, 20_000_000), direction: FlipDirection::TopBottom }).unwrap();
+    let t = routing(&b).tracks.iter().find(|t| t.id == "trk_arc").unwrap();
+    assert_eq!(t.arc(), Some((p(10_000_000, 30_000_000), p(15_000_000, 35_000_000), p(20_000_000, 30_000_000))));
+    assert_eq!(b.apply(&Cmd::MirrorTracks { ids: ids(&["trk_nope"]), pivot: p(0, 0), direction: FlipDirection::TopBottom }).unwrap_err()[0].check, "ops_unknown_track");
+}
+
 #[test]
 fn a_moved_arc_track_is_still_an_arc() {
     let m = model(&["F.Cu", "B.Cu"]);

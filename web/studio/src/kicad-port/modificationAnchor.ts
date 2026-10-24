@@ -54,6 +54,27 @@ export function modificationAnchor(view: ModificationView, refPt: readonly [numb
   return [Math.round(p[0]), Math.round(p[1])];
 }
 
+/**
+ * `PCB_GRID_HELPER::BestDragOrigin( mouse, items )` on a helper made for the call: the anchor of the items `ids` (a footprint's origin, a pad the mouse is on,
+ * a track's ends ...) nearest the mouse -- what `EDIT_TOOL::copyToClipboard` takes as the copy's reference point. The mouse itself when the items have none.
+ */
+export function dragOriginAnchor(view: ModificationView, mouse: readonly [number, number], ids: readonly string[]): [number, number] {
+  const scale = view.scale > 0 ? view.scale : 1;
+  const env: GridEnv = {
+    scale,
+    gridNm: view.gridNm,
+    visibleGridNm: computeVisibleGridSize(view.gridNm, scale),
+    origin: [view.origin[0], view.origin[1]],
+    gridSizeOf: (c) => gridSizeFor(c, view.gridNm, view.grids, view.overrides),
+  };
+  const highContrastLayers = view.highContrast && view.activeLayer ? new Set([view.activeLayer]) : null;
+  const helper = new PcbGridHelper(env, sceneOf(view.board), view.magnetic, { layerVisible: (layer) => view.layerVisible[layer] !== false, highContrastLayers });
+  const wanted = new Set(ids);
+  const items = helper.scene.items.filter((i) => wanted.has(i.owner) || wanted.has(i.id));
+  const p = helper.bestDragOrigin([mouse[0], mouse[1]], items);
+  return [Math.round(p[0]), Math.round(p[1])];
+}
+
 /** The `Snap` the planners take (`rotationPivot`, `modificationPoint`, `carryStart`) for this view. */
 export function modificationSnap(view: ModificationView): Snap {
   return (p) => modificationAnchor(view, p);

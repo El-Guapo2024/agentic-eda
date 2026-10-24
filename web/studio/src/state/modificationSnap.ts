@@ -5,7 +5,7 @@ import { getGridSettings } from "./gridSettings";
 import { getGridOverrides } from "./gridOverrides";
 import { getSnapOrigin } from "../components/canvas/gridHelper";
 import { toPcbMagnetic } from "../kicad-port/preferences";
-import { modificationSnap, type ModificationView } from "../kicad-port/modificationAnchor";
+import { dragOriginAnchor, modificationSnap, type ModificationView } from "../kicad-port/modificationAnchor";
 import { snapPoint } from "../components/canvas/gridHelper";
 import type { Snap } from "../kicad-port/pcbTransform";
 
@@ -31,4 +31,10 @@ export function modificationViewOf(state: StudioState): ModificationView | null 
 export function modificationSnapFor(state: StudioState): Snap {
   const view = modificationViewOf(state);
   return view ? modificationSnap(view) : (p) => snapPoint(p[0], p[1], state.gridNm);
+}
+
+/** `BestDragOrigin( cursor, items )` of the items `ids` for the studio's state (`EDIT_TOOL::copyToClipboard`'s reference point); the grid point without a board. */
+export function dragOriginFor(state: StudioState, ids: readonly string[], mouse: readonly [number, number]): [number, number] {
+  const view = modificationViewOf(state);
+  return view ? dragOriginAnchor(view, mouse, ids) : snapPoint(mouse[0], mouse[1], state.gridNm);
 }
