@@ -272,6 +272,11 @@ fn assert_kicad_agrees(example: &str) {
     assert!(said.is_empty(), "{example}: kicad-cli's parity DRC finds {} differences:\n{}", said.len(), said.join("\n"));
     let differences = f8_differences(&dir);
     assert!(differences.is_empty(), "{example}: F8 would change {} things:\n{}", differences.len(), differences.join("\n"));
+    // the routed board after the loader renamed its nets: no copper of two nets touches, and every net is connected
+    let shorts: Vec<&Value> = drc["violations"].as_array().into_iter().flatten().filter(|v| v["type"] == "shorting_items").collect();
+    assert!(shorts.is_empty(), "{example}: kicad-cli's DRC finds shorts: {shorts:#?}");
+    let unconnected = drc["unconnected_items"].as_array().map_or(0, Vec::len);
+    assert_eq!(unconnected, 0, "{example}: kicad-cli's DRC finds unconnected items: {:#?}", drc["unconnected_items"]);
 }
 
 /// A flat sheet: every net a local label names is `/<label>` (the root's path), the rest `Net-(..)`; the footprints are the installed ones.
