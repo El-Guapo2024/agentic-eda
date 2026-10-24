@@ -220,7 +220,11 @@ export function useActionRunner() {
       if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
       // `EDIT_TOOL::DeleteItems`: each item by its own verb, a group with everything below it (the groups it holds opened), a locked item -- or a group with a locked
       // item anywhere in it -- skipped (kicad-port/deleteCmds.ts).
-      if (state.tab === "pcb" && state.board) cmds.push(...boardDeleteCmds(state.board, refs).cmds);
+      if (state.tab === "pcb" && state.board) {
+        const del = boardDeleteCmds(state.board, refs);
+        cmds.push(...del.cmds);
+        if (del.message) dispatch({ type: "TOAST", message: del.message, kind: "error" });
+      }
       // A tuning pattern is removed, its track put back (`PCB_TUNING_PATTERN::Remove`), before what else was selected goes.
       const patterns = state.tab === "pcb" ? tuningPatternIds(state.board, refs) : [];
       dispatch({ type: "CLEAR_SELECTION" });

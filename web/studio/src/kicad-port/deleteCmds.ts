@@ -9,6 +9,7 @@ import { expandGroups } from "./groupTree";
 import { isLocked } from "./pcbTransform";
 import { extraDeleteCmd, extraItems } from "./pcbExtraItems";
 import { cellById } from "./tables";
+import { editFieldCmd, fieldById } from "./fpFields";
 
 /** The tuning patterns (`PCB_GENERATOR`s) among `ids`: deleting one puts the track back as it was before it was tuned, which the tuner's API does (`/api/tune/remove`), not a verb. */
 export function tuningPatternIds(board: BoardState | null | undefined, ids: readonly string[]): string[] {
@@ -22,7 +23,7 @@ export function tuningPatternIds(board: BoardState | null | undefined, ids: read
  * A locked item is skipped (`FilterCollectorForLockedItems`), and so is a group with a locked item anywhere below it or a locked group above it;
  * `skippedLocked` says how many of `ids` were. The backend takes a deleted item out of its groups, and a group left without members goes too.
  */
-export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cmds: Cmd[]; skippedLocked: number } {
+export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cmds: Cmd[]; skippedLocked: number; message?: string } {
   const groups = board.drawings?.groups ?? [];
   let skippedLocked = 0;
   const free: string[] = [];
@@ -57,6 +58,16 @@ export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cm
     cleared.set(cell.table.id, [...(cleared.get(cell.table.id) ?? []), [cell.cell.row, cell.cell.col]]);
   }
   for (const [tid, cells] of cleared) cmds.push({ op: "table", verb: "edit_cells", id: tid, cells, edit: { text: "" } });
+  // `case PCB_FIELD_T:` a field is not deleted: a shown one is hidden ("Hide Field" / "Hide Fields"); for one already hidden, when nothing else was
+  // deleted, "Use the Footprint Properties dialog to remove fields." (A field of a footprint that is itself deleted goes with it.)
+  let alreadyHidden = 0;
+  let deleted = 0;
+  for (const id of wanted) {
+    const f = fieldById(board, id);
+    if (!f || wanted.has(f.part.ref)) continue;
+    if (f.field.visible) cmds.push(editFieldCmd(f.part, f.field, { visible: false }));
+    else alreadyHidden++;
+  }
   for (const id of wanted) {
     const known = tables.has(id) || tracks.has(id) || vias.has(id) || zones.has(id) || shapes.has(id) || texts.has(id) || dimensions.has(id) || extras.has(id) || placed.has(id);
     if (!known) continue;
@@ -69,6 +80,8 @@ export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cm
     else if (dimensions.has(id)) cmds.push({ op: "delete_dimension", id });
     else if (extras.has(id)) cmds.push(extraDeleteCmd(extras.get(id)!));
     else cmds.push({ op: "rip", part: id });
+    deleted++;
   }
-  return { cmds, skippedLocked };
+  const message = deleted === 0 && cleared.size === 0 && cmds.length === 0 && alreadyHidden > 0 ? "Use the Footprint Properties dialog to remove fields." : undefined;
+  return { cmds, skippedLocked, ...(message ? { message } : {}) };
 }
