@@ -333,6 +333,9 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         allow: Default::default(),
         solver: Default::default(),
     };
+    // The summary of an outline made of shapes, now that the shapes have their styles (a rectangle's corner radius) and the model holds the footprints' own Edge.Cuts
+    // (a card-edge tab a footprint closes): `BuildBoardPolygonOutlines` with its footprint pass.
+    eda_drc::outline::refresh_outline_summary(&mut design, Some(&model));
     // The footprints' own Edge.Cuts (their art) take part in the outline, through `BuildBoardPolygonOutlines`' footprint pass: what the notes say of the outline is
     // then the check of the whole, as kicad-cli's `testOutline` makes it.
     if !eda_drc::outline::footprint_edge_cuts_shapes(&design, &model).is_empty() {

@@ -118,7 +118,9 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
       cmds.push({ op: "move_via", id, x, y });
     } else if (kind === "zone") {
       const z = board.routing!.zones.find((q) => q.id === id)!;
-      cmds.push({ op: "set_zone_outline", id, outline: z.outline.map((p) => cmdPt(mirrorPoint(p, centre, dir))) });
+      // `ZONE::Mirror` mirrors the whole polygon set: the holes go with the outline.
+      const holes = (z.holes ?? []).map((h) => h.map((p) => cmdPt(mirrorPoint(p, centre, dir))));
+      cmds.push({ op: "set_zone_outline", id, outline: z.outline.map((p) => cmdPt(mirrorPoint(p, centre, dir))), ...(holes.length > 0 ? { holes } : {}) });
     } else if (kind === "text") {
       const t = board.drawings!.texts.find((q) => q.id === id)!;
       const justify = mirroredJustify(t.justify, t.angle, dir);

@@ -70,7 +70,7 @@ pub fn layer_on_side(layer: &str, side: Side) -> String {
     }
 }
 
-/// Is `layer` one the art keeps? The courtyard and the board edge have homes of their own (module doc).
+/// Is `layer` one the art keeps? Every layer but the courtyard, which has a home of its own (module doc); a footprint's Edge.Cuts are its art.
 pub fn is_art_layer(layer: &str) -> bool {
     !(layer == "F.CrtYd" || layer == "B.CrtYd")
 }

@@ -41,6 +41,27 @@
       t(/\(layers "F\.Paste"\)/.test(j1) && /primitives/.test(j1), "the paste-only pad is still there, with its primitives");
     });
 
+    await scenario("mirroring the pour mirrors its hole with it (`ZONE::Mirror`), and Undo puts both back", async (t) => {
+      const before = (await zones()).find((x) => x.net === "GND");
+      await __eda.run("common.InteractiveSelection.clear");
+      await __eda.run("common.InteractiveSelection.selectItems", [before.id]);
+      await sleep(250);
+      await __eda.run("pcbnew.InteractiveEdit.mirrorHoriontally");
+      await sleep(600);
+      const after = (await zones()).find((x) => x.net === "GND");
+      const xs = (ring) => ring.map((p) => p[0]);
+      // The axis the outline was mirrored about (the selection's reference point): the outline's left edge after is its right edge before, mirrored.
+      const cx = (Math.min(...xs(after.outline)) + Math.max(...xs(before.outline))) / 2;
+      const mirrored = before.holes[0].map(([x, y]) => [2 * cx - x, y]);
+      const same = (a, b) => a.length === b.length && a.every((p) => b.some((q) => Math.abs(p[0] - q[0]) <= 1 && Math.abs(p[1] - q[1]) <= 1));
+      t(after?.holes?.length === 1 && same(after.holes[0], mirrored), `the hole is mirrored about the axis the outline was (${JSON.stringify(after?.holes)})`);
+      await __eda.run("common.Interactive.undo");
+      await sleep(600);
+      const back = (await zones()).find((x) => x.net === "GND");
+      t(JSON.stringify(back?.holes) === JSON.stringify(before.holes), "Undo puts the hole back");
+      await __eda.run("common.InteractiveSelection.clear");
+    });
+
     await scenario("the board outline is KiCad's: the rounded corners and J1's notch cut out, and the notch moves with J1", async (t) => {
       const s = await state();
       const polys = s.outline_polys ?? [];

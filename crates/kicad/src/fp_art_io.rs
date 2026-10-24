@@ -297,12 +297,15 @@ fn layer_rank(layer: &str) -> usize {
     1000
 }
 
-/// `formatLayers( mask, false )`: both outer copper layers are `"*.Cu"`, a front and back pair of any other side-specific layer `"*.X"`, and the rest
-/// one by one in layer order.
+/// `formatLayers( mask, false )`: the two outer copper layers and no inner one are `"*.Cu"` (`( aLayerMask & cu_board_mask ) == fr_bk`), a front and back pair of any
+/// other side-specific layer `"*.X"`, and the rest one by one in layer order. A set with inner copper is listed layer by layer: KiCad folds it into `"*.Cu"` only when it is
+/// every copper layer of the board (`== cu_board_mask`), which this function does not know -- a caller that does folds such a set to the two outer layers first, as the
+/// board writer does for an SMD pad on `*.Cu` -- and `"*.Cu"` read back is every copper layer, more than F, In1 and B on a board of four.
 fn layers_token(layers: &[String]) -> String {
     let mut rest: BTreeSet<&str> = layers.iter().map(String::as_str).collect();
     let mut words: Vec<String> = Vec::new();
-    if rest.contains("F.Cu") && rest.contains("B.Cu") {
+    let inner = rest.iter().any(|l| l.starts_with("In") && l.ends_with(".Cu"));
+    if rest.contains("F.Cu") && rest.contains("B.Cu") && !inner {
         words.push("*.Cu".into());
         rest.remove("F.Cu");
         rest.remove("B.Cu");
@@ -585,5 +588,7 @@ mod tests {
         assert_eq!(l(&["B.Cu", "F.Cu", "F.Mask", "B.Mask"]), "(layers \"*.Cu\" \"*.Mask\")");
         assert_eq!(l(&["F.Fab", "B.Fab", "Dwgs.User"]), "(layers \"*.Fab\" \"Dwgs.User\")");
         assert_eq!(l(&["F.SilkS", "B.Paste"]), "(layers \"B.Paste\" \"F.SilkS\")");
+        // F, In1 and B on a board of four is not every copper layer: listed, not `*.Cu` (which reads back as all four).
+        assert_eq!(l(&["F.Cu", "In1.Cu", "B.Cu", "F.Mask"]), "(layers \"F.Cu\" \"In1.Cu\" \"B.Cu\" \"F.Mask\")");
     }
 }

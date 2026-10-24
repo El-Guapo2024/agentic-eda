@@ -84,8 +84,6 @@ pub(crate) struct Refs {
 }
 
 impl Refs {
-    /// The groups of the file, resolved to this design's item ids, and every locked item's id.
-    /// `design` has had its ids assigned already; `raw_groups` come from [`import_groups`].
     /// The id each item has in `design` by its file uuid (the first item of a uuid), for the kinds [`Self::resolve`] names.
     pub(crate) fn item_ids(&self, design: &Design) -> Vec<(String, String)> {
         let mut out = Vec::new();
@@ -112,6 +110,8 @@ impl Refs {
         out
     }
 
+    /// The groups of the file, resolved to this design's item ids, and every locked item's id.
+    /// `design` has had its ids assigned already; `raw_groups` come from [`import_groups`].
     pub(crate) fn resolve(&self, design: &Design, raw_groups: &[RawGroup]) -> (Vec<Group>, Vec<String>) {
         let mut by_uuid: HashMap<String, Vec<String>> = HashMap::new();
         let mut locked: Vec<String> = Vec::new();

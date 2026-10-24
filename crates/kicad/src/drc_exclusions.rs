@@ -103,7 +103,7 @@ pub fn error_type(check: &str) -> Option<&'static str> {
 
 /// The checks whose marker also carries the layer it is on, which a report does not say (`DRCE_COPPER_SLIVER`, `DRCE_STARVED_THERMAL`,
 /// `DRCE_GENERIC_WARNING`, `DRCE_GENERIC_ERROR`) and the drawing-sheet variable check, whose items are not preserved between runs.
-const LAYERED: &[&str] = &["copper_sliver", "starved_thermal", "generic-warning", "generic-error", "unresolved_variable"];
+const LAYERED: &[&str] = &["copper_sliver", "starved_thermal", "generic_warning", "generic_error", "unresolved_variable"];
 
 /// The markers (`kiapi.board.DrcMarker` as protobuf JSON) to list in the project for one exclusion, one for each position worth trying, sorted and
 /// listed once. Empty when the exclusion has no position to try, its check is not one the project can name, or its marker has a part (the layer) a

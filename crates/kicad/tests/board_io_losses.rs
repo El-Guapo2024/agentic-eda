@@ -95,7 +95,8 @@ fn smd_pad_on_all_copper_layers_keeps_them() {
         (footprint "L:J" (layer "F.Cu") (uuid "f1") (at 10 10)
             (property "Reference" "J1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
             (pad "1" smd rect (at 0 0) (size 1 1) (layers "*.Cu" "*.Paste" "*.Mask") (net 1 "A") (uuid "a1"))
-            (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "a2")))
+            (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "a2"))
+            (pad "3" smd rect (at 4 0) (size 1 1) (layers "F.Cu" "In1.Cu" "B.Cu" "F.Mask") (uuid "a3")))
         (footprint "L:J" (layer "B.Cu") (uuid "f2") (at 20 10)
             (property "Reference" "J2" (at 0 0 0) (layer "B.SilkS") (uuid "p2"))
             (pad "1" smd rect (at 0 0) (size 1 1) (layers "*.Cu" "B.Mask") (uuid "b1"))
@@ -111,6 +112,7 @@ fn smd_pad_on_all_copper_layers_keeps_them() {
     };
     assert_eq!(pad_layers("J1", "1"), r#"(layers "*.Cu" "*.Paste" "*.Mask")"#);
     assert_eq!(pad_layers("J1", "2"), r#"(layers "F.Cu" "F.Paste" "F.Mask")"#, "a pad on one side is as before");
+    assert_eq!(pad_layers("J1", "3"), r#"(layers "F.Cu" "In1.Cu" "B.Cu" "F.Mask")"#, "not every copper layer: listed, not `*.Cu` (`formatLayers`)");
     assert_eq!(pad_layers("J2", "1"), r#"(layers "*.Cu" "B.Mask")"#);
     assert_eq!(pad_layers("J2", "2"), r#"(layers "B.Cu" "B.Paste" "B.Mask")"#);
     // Connectivity has the pad on its front-most copper layer, F.Cu, whatever its footprint's side (`CN_LIST::Add( PAD* )`).
@@ -312,4 +314,42 @@ fn importing_a_project_keeps_its_drc_exclusions() {
     let clearance = waived.iter().find(|e| e.check == "clearance").unwrap();
     assert_eq!(clearance.ids, vec![track_id.clone(), "R1.2".to_string()]);
     assert_eq!(waived.iter().find(|e| e.check == "annular_width").unwrap().comment, "small ring");
+}
+
+/// The board with a card-edge tab its footprint closes: the board's Edge.Cuts are a U open at the top, the footprint's three lines close it round a tab.
+pub const CARD_EDGE: &str = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+    (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+    (net 0 "")
+    (gr_line (start 15 0) (end 0 0) (stroke (width 0.05) (type default)) (layer "Edge.Cuts") (uuid "e1"))
+    (gr_line (start 0 0) (end 0 30) (stroke (width 0.05) (type default)) (layer "Edge.Cuts") (uuid "e2"))
+    (gr_line (start 0 30) (end 40 30) (stroke (width 0.05) (type default)) (layer "Edge.Cuts") (uuid "e3"))
+    (gr_line (start 40 30) (end 40 0) (stroke (width 0.06) (type default)) (layer "Edge.Cuts") (uuid "e4"))
+    (gr_line (start 40 0) (end 25 0) (stroke (width 0.05) (type default)) (layer "Edge.Cuts") (uuid "e5"))
+    (footprint "L:Tab" (layer "F.Cu") (uuid "f1") (at 20 0)
+        (property "Reference" "J1" (at 0 2 0) (layer "F.SilkS") (uuid "p1"))
+        (fp_line (start -5 0) (end -5 -5) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts") (uuid "t1"))
+        (fp_line (start -5 -5) (end 5 -5) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts") (uuid "t2"))
+        (fp_line (start 5 -5) (end 5 0) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts") (uuid "t3"))
+        (pad "1" smd rect (at 0 -3) (size 1 2) (layers "F.Cu" "F.Mask") (uuid "a1")))
+)"#;
+
+/// The summary polygon (`placement.outline`, which the Freerouting boundary, the placer and the canvas fit read) is built with the footprint pass and the shapes'
+/// styles: a card-edge tab a footprint closes is in it (not KiCad's inferred box round an open outline), and a rounded rectangle has its rounded corners.
+#[test]
+fn the_summary_outline_has_the_footprints_tab_and_the_rounded_corners() {
+    let (design, _, notes) = import_kicad_pcb(CARD_EDGE).expect("parses");
+    assert!(notes.outline_errors.is_empty() && !notes.outline_open, "{:?}", notes.outline_errors);
+    let ring = &design.placement.as_ref().unwrap().outline;
+    let area = |r: &[Point]| (0..r.len()).map(|i| r[i].x as f64 * r[(i + 1) % r.len()].y as f64 - r[(i + 1) % r.len()].x as f64 * r[i].y as f64).sum::<f64>().abs() / 2e12;
+    assert!(ring.iter().any(|q| q.y == -5 * MM), "the tab is in the summary: {ring:?}");
+    assert!((area(ring) - (1200.0 + 50.0)).abs() < 0.01, "{}", area(ring));
+
+    let rounded = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+        (gr_rect (start 0 0) (end 50 40) (radius 5) (stroke (width 0.1) (type default)) (fill none) (layer "Edge.Cuts") (uuid "r"))
+        (gr_circle (center 25 20) (end 27 20) (stroke (width 0.1) (type default)) (fill none) (layer "Edge.Cuts") (uuid "c"))
+    )"#;
+    let (design, _, _) = import_kicad_pcb(rounded).expect("parses");
+    let ring = &design.placement.as_ref().unwrap().outline;
+    assert!(ring.len() > 8 && (area(ring) - (2000.0 - (100.0 - 25.0 * std::f64::consts::PI))).abs() < 0.05, "the rounded corners: {} points, {}", ring.len(), area(ring));
 }

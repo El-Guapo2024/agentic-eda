@@ -1660,7 +1660,7 @@ export type Cmd =
    */
   | ({ op: "edit_zone"; id: string; net: string; layer: string; /** The layers the zone is on (`ZONE_SETTINGS::m_Layers`); absent leaves a set that holds `layer` as it is. */ layers?: string[] } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
-  | { op: "set_zone_outline"; id: string; outline: PointXY[] }
+  | { op: "set_zone_outline"; id: string; outline: PointXY[]; holes?: PointXY[][] }
   | { op: "add_shape"; shape: CmdShape }
   | { op: "delete_shape"; id: string }
   | { op: "move_shape"; id: string; dx: Nm; dy: Nm }

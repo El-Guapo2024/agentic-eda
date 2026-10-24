@@ -992,11 +992,13 @@ pub fn board_outline_of(shapes: &[Shape], infer: bool) -> BoardOutline {
 /// largest outline as a ring, or nothing when there is none. A design whose outline is its polygon is left alone.
 ///
 /// [`DrawingsSection::outline_is_shapes`]: eda_model::ir::DrawingsSection::outline_is_shapes
-pub fn refresh_outline_summary(design: &mut Design) {
+///
+/// With `model`, the outline is [`board_outline_with`]'s: the footprints' own Edge.Cuts take part (a card-edge tab a footprint closes), as do the rounded rectangles.
+pub fn refresh_outline_summary(design: &mut Design, model: Option<&eda_model::ConstraintModel>) {
     if !edge::outline_is_shapes(design) {
         return;
     }
-    let ring = board_outline(design, true).main_ring();
+    let ring = board_outline_with(design, model, true).main_ring();
     if let Some(pl) = design.placement.as_mut() {
         if pl.outline != ring {
             pl.outline = ring;
@@ -1544,7 +1546,7 @@ mod tests {
         let out = board_outline(&d, true);
         assert!(out.valid, "{:?}", out.errors);
         assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 1));
-        refresh_outline_summary(&mut d);
+        refresh_outline_summary(&mut d, None);
         let summary = &d.placement.as_ref().expect("placement").outline;
         assert!(summary.len() > 60 && summary.iter().all(|q| (0..=40_000_000).contains(&q.x) && (0..=30_000_000).contains(&q.y)), "{} points", summary.len());
     }
