@@ -19,7 +19,7 @@ import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { Cmd, CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
-import { finishInteractiveRoute, cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute } from "../components/canvas/routing";
+import { cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute, attemptFinishInteractiveRoute } from "../components/canvas/routing";
 import { withTrackSnapping } from "../kicad-port/routerSettings";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
 import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
@@ -360,7 +360,7 @@ export function useActionRunner() {
       };
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
-        pcbOnly(() => void finishInteractiveRoute(cursor.x, cursor.y, dispatch, api))
+        pcbOnly(() => void attemptFinishInteractiveRoute(cursor.x, cursor.y, draw, dispatch, api))
       );
       // V: arm "drop a via here, continue on the other layer" for the next
       // fix (see Router::toggle_via's own doc comment) -- not an immediate
@@ -381,7 +381,14 @@ export function useActionRunner() {
       m.set(
         "pcbnew.InteractiveRouter.UndoLastSegment",
         pcbOnly(() => {
-          routeUndoSegment().then(() => refreshPreview());
+          // `UnfixRoute` arms again the via the undone leg ended in (`m_placingVia = st.pts[0].placingVia`)
+          routeUndoSegment().then((r) => {
+            const d = r.popped ? { ...draw, placingVia: !!r.placing_via, pendingViaLayer: r.via_to_layer ?? undefined } : draw;
+            if (d !== draw) dispatch({ type: "SET_DRAW_STATE", draw: d });
+            routeMove(cursor.x, cursor.y).then((preview) => {
+              if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(d, preview) });
+            });
+          });
         })
       );
       // W / Shift+W: cycle the live track width through a small fixed
@@ -467,7 +474,9 @@ export function useActionRunner() {
         dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
         return;
       }
-      void startInlineDrag(state.cursorNm.x, state.cursorNm.y, hit, state.board, state.routerSettings, dispatch, freeAngle);
+      // the router tool's own drag asks "Drag Anyway" of a locked item; the selection tool's (`EDIT_TOOL::Drag`) only warns
+      const fromRouterTool = state.activeTool === "route" || state.activeTool === "diffpair";
+      void startInlineDrag(state.cursorNm.x, state.cursorNm.y, hit, state.board, state.routerSettings, dispatch, freeAngle, fromRouterTool);
     };
     m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
     // `routerInlineDrag` (EDIT_TOOL::invokeInlineRouter -> `RunAction( PCB_ACTIONS::routerInlineDrag, DM_ANY )`): the router's own drag entry point, the one `D` above ends in.
@@ -828,7 +837,7 @@ export function useActionRunner() {
       // `drag_start` silently replaces it. One backend call covers both
       // kinds (`POST /api/route/cancel` drops whatever's active on the
       // shared `Router`), so route/drag/diff-pair all share this one branch.
-      if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch);
+      if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch, api);
       // `PlaceTuningPattern`: Escape drops the pattern being placed (or the edit of one) and the tool goes on; with none started it leaves the tool (the ESCAPE below).
       if (state.activeTool === "tune" && cancelTune(state, dispatch)) return;
       // RouteSelected's loop (`m_cancelled = true` when Escape arrives while `m_inRouteSelected`): the whole run ends and the tool is popped.

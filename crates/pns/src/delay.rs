@@ -142,7 +142,7 @@ mod tests {
         let mut rules = eda_model::BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
         rules.tuning_profiles = TuningProfiles { profiles: vec![profile(enabled)], class_profiles: [("Default".to_string(), "USB".to_string())].into() };
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
     }
 
     #[test]

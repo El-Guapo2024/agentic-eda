@@ -155,6 +155,11 @@ pub fn start(dir: &Path, body: &[u8]) -> Value {
         Err(m) => return err(m),
     };
     let Some(pk) = pick_for(&scene, &req) else { return err("Select a track to tune first.") };
+    // `DRAWING_TOOL::PlaceTuningPattern`: "if( dynamic_cast<PCB_TUNING_PATTERN*>( m_pickerItem->GetParentGroup() ) ) ShowInfoBarWarning( ..
+    // )" -- a track of another pattern is not tuned again from here (its own pattern is edited instead; findings p5 F4-4)
+    if tune_edit::patterns_of(&scene.design).iter().any(|pat| pat.member_ids.contains(&pk.track_id)) {
+        return err("Unable to tune segments inside other tuning patterns.");
+    }
     let kind = mode_of(&req);
     // the pattern starts at the point of the track nearest the click (`snapToNearestTrack`, the picked item's focus position)
     let tuner = match Tuner::start(scene.clone(), kind, &pk, pk.at, &settings_of(&req)) {
@@ -687,6 +692,12 @@ mod tests {
         // the other net is untouched
         assert!((net_mm(&dir, "/OTHER") - 20.0).abs() < 0.001);
 
+        // findings p5 F4-4: a track of the pattern does not start another pattern (`PlaceTuningPattern`'s warning)
+        let member = rt.tracks.iter().find(|t| &t.id == pat.member_ids.last().unwrap() && t.arc().is_none() && t.pts.len() >= 2).expect("a straight member");
+        let mid = p((member.pts[0].x + member.pts[1].x) / 2, (member.pts[0].y + member.pts[1].y) / 2);
+        let again = start(&dir, &body(json!({ "x": mid.x, "y": mid.y, "layer": "F.Cu", "mode": "single", "tolerance": 0 })));
+        assert_eq!((again["ok"].clone(), again["message"].clone()), (json!(false), json!("Unable to tune segments inside other tuning patterns.")), "{again}");
+
         board::undo(&dir, "test", None).expect("one undo takes the whole pattern back");
         let back = design_of(&dir);
         assert!(tune_edit::patterns_of(&back).is_empty());
@@ -922,6 +933,8 @@ mod tests {
         let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(m["readout"]["status"], "tuned", "{m}");
         assert!(m["readout"]["current"].as_f64().unwrap().abs() < 0.1, "{m}");
+        // findings p5 F4-3: the status box's range is the skew's, around 0 (`statusItem->SetMinMax( m_targetSkew.Min(), Max() )`), not the partner's length
+        assert_eq!((m["readout"]["min"].as_f64(), m["readout"]["max"].as_f64()), (Some(-0.1), Some(0.1)), "{m}");
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(true), "{f}");
         let (p_after, n_after) = (net_mm(&dir, "/USB_P"), net_mm(&dir, "/USB_N"));

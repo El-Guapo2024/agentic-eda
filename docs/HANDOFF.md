@@ -1,4 +1,4 @@
-# Handoff: the KiCad port, 2026-10-23 (paused by the user)
+# Handoff: the KiCad port, 2026-10-24 (paused by the user: session limit)
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
@@ -15,7 +15,9 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
   - kicad-cli is the only DRC, ERC, plot, export and zone-fill engine.
   - Every edit is one undoable `/api/cmd` verb.
 
-## What landed (2026-10-14 to 10-23)
+## What landed (2026-10-14 to 10-24)
+
+- 2026-10-24: **fix batch E, the router** (`a6e4500a`): all 7 highs, 18/21 mediums; KiCad's 7 router QA sessions replay exactly; F is Attempt Finish, Esc commits fixed legs, empty-space routes on no net. Plus `ea752e1a`, the tuner's default board thickness (1.6 µm → 1.6 mm, a nanometre leftover).
 
 Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` section.
 
@@ -58,7 +60,9 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-fix-a-kicad-names` | Fix batch A: KiCad's net names everywhere (the board loader traces the schematic, `crates/cli/src/net_names.rs`), one footprint name (`footprint_lib_id`), `(path)`/`sheetname`/`sheetfile`, symbol fields and `pinfunction`/`pintype` on the board, `unconnected-(..)` pads, a flipped footprint in KiCad's frame | done; parity DRC 0 on opamp, ldo, mcu30 (`crates/cli/tests/kicad_names.rs`) | P14-2 for footprints read from a file; net names that lose their meaning when a net is unlabelled (a pair drawn as wires); commands take KiCad's names (see PARITY-pcb.md 52) |
+| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names everywhere (the board loader traces the schematic, `crates/cli/src/net_names.rs`), one footprint name (`footprint_lib_id`), `(path)`/`sheetname`/`sheetfile`, symbol fields and `pinfunction`/`pintype` on the board, `unconnected-(..)` pads, a flipped footprint in KiCad's frame | done, gated; parity DRC 0 on opamp, ldo, mcu30 (`crates/cli/tests/kicad_names.rs`) | review vs KiCad, merge; P14-2 for footprints read from a file; commands take KiCad's names (PARITY-pcb.md 52); then batch D |
+| `task-fix-bc-board-io` (`~/work/agentic-eda-exports`) | Batches B and C: zones with holes, `*.Cu` SMD pads, paste-only pads, curves, footprint Edge.Cuts, corner radius, 3D body, `.kicad_dru`, DRC exclusions; teardrop fills (`legacy_teardrops yes`, trade-off in GAPS 13) | done, reviewed vs KiCad, review fixes R1-R3 in; main merged in (02696874) | the lead's own gate (cargo check, fast, parity report) was stopped by the pause: rerun it, then merge |
+| `task-fix-f-editing` (`~/work/agentic-eda-rules`) | Batch F: editing (groups, bounding boxes, carry R/F, Position Relative, Recombine, Repeat Layout, design blocks, Net Inspector) | reviewed vs KiCad; review fix M1 committed (868d845f); fixes 2-6 **uncommitted in the worktree** when paused (Net Inspector layer columns and rows, Canvas isLocked, model3d courtyard box, design-block layers) | finish 2-6 and the PARITY notes, merge main in, gate, merge |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -80,7 +84,9 @@ The 2026-10-21 list is done: Specctra, embedded files and the pad-details fix, t
    - **E. Router:** the walk-around detour, lost end vias, Walk-around via violations, Esc discarding fixed segments, the diff-pair gap, and the replay tests' macOS default path.
    - **F. Editing:** point edit and Mirror dropping items from groups, footprint bounding boxes, the carry's rotate pivot, Position Relative's angle, Recombine, Repeat Layout's nets and groups, design-block copper, the Net Inspector.
    - Then the mediums and lows, and the wrong doc claims listed at the end of `INDEX.md`.
-3. **Leftovers named in the merges** (each in GAPS.md): springback in the dragger and the pair placer, a shared screen inside a shared screen, the Symbol Editor's pin and New Symbol dialogs, Both sides placement files, the checks P20 left uncovered.
+   - Order as run (2026-10-24, the user: "do all"): A, B+C, E and F in parallel (agents' extra brief: `~/work/briefs/fix/common-fix.md`); D after A merges (both touch `crates/engine` naming); then the length newtype below.
+3. **The length newtype** (the user, 2026-10-24: do it): make `Nm` a newtype so the compiler catches unit mixing, with `mm()`/`mil()` test helpers and conversions only at the boundaries, done in waves by crate (model, then kicad/drc/engine, then ops/pns, then cli/studio). Run it last, on a quiet main, since it touches every crate.
+4. **Leftovers named in the merges** (each in GAPS.md): springback in the dragger and the pair placer, a shared screen inside a shared screen, the Symbol Editor's pin and New Symbol dialogs, Both sides placement files, the checks P20 left uncovered.
 
 TODO (the user, 2026-10-23: not now): check the kicad-cli fallbacks on a kicad-cli without `pcb export specctra`, `idf` or `gencad` (the Mac's 10.99.0-5334); delete the deprecated Specctra exporter once every machine has the command (scope in GAPS.md P19).
 

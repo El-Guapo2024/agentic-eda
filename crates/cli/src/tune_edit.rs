@@ -701,7 +701,14 @@ impl Tuner {
             Placer::Single(p) => {
                 let moved = p.do_move(to);
                 let edits = if moved { line_edit(&scene.world, p.origin_line(), &p.tuned(), true).map(|e| vec![(p.origin_line().clone(), e)]).unwrap_or_default() } else { Vec::new() };
-                let t = p.target();
+                // the skew tuner's status box shows the skew against the skew's own range (`GetPreviewItems`: `statusItem->SetMinMax(
+                // m_settings.m_targetSkew.Min(), m_settings.m_targetSkew.Max() )`), not the partner's length plus it (findings p5 F4-3)
+                let t = if self.skew_coupled.is_some() {
+                    let ts = p.settings().target_skew;
+                    (ts.min(), ts.opt(), ts.max())
+                } else {
+                    p.target()
+                };
                 let cut = p.tuned().raw;
                 (moved, edits, p.tuning_length_result(), p.tuning_status(), Some(t), None, Some((cut, None)), p.tuning_delay_result())
             }

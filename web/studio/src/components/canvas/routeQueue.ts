@@ -7,7 +7,7 @@
 import type { Dispatch } from "react";
 import { routeCancel } from "../../api/client";
 import { RouteSelectedLoop, type QueueOutcome } from "../../kicad-port/routeSelectedLoop";
-import type { Action } from "../../state/store";
+import type { Action, StudioApi } from "../../state/store";
 
 export type { QueueOutcome };
 
@@ -50,8 +50,10 @@ export function clearRouteQueue(): boolean {
  * `cancelCurrentItem`: end the route being drawn and go on to the next queued connection. Without a loop (a plain route
  * session) it just ends the session -- the route tool stays armed, as in the C++ main loop.
  */
-export async function skipCurrentRoute(dispatch: Dispatch<Action>): Promise<void> {
-  await routeCancel();
+export async function skipCurrentRoute(dispatch: Dispatch<Action>, api?: Pick<StudioApi, "refresh">): Promise<void> {
+  // the cancel commits what the route fixed (`CommitRouting()` after the loop): show it
+  const reply = await routeCancel();
   dispatch({ type: "SET_DRAW_STATE", draw: null });
+  if (reply.committed && api) await api.refresh();
   await advanceRouteQueue();
 }

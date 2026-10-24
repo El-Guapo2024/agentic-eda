@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cornerModeMenuKey, DEFAULT_ROUTER_SETTINGS, modeOptionEnabled, nextCornerMode, routerSettingsToWire, withTrackSnapping, type CornerMode, type RouterSettings } from "./routerSettings";
+import { cornerModeMenuKey, DEFAULT_ROUTER_SETTINGS, modeOptionEnabled, nextCornerMode, parseRouterSettings, routerSettingsToWire, serializeRouterSettings, withTrackSnapping, type CornerMode, type RouterSettings } from "./routerSettings";
 
 test("the defaults are ROUTING_SETTINGS' constructor", () => {
   // pns_routing_settings.cpp: m_routingMode = RM_Walkaround, m_optimizerEffort = OE_MEDIUM, m_removeLoops = true,
@@ -81,4 +81,19 @@ test("the magnetic setting for tracks goes to the router as snap_to_tracks, and 
   assert.equal(routerSettingsToWire(withTrackSnapping(DEFAULT_ROUTER_SETTINGS, "track-tool")).snap_to_tracks, true);
   assert.equal(routerSettingsToWire(withTrackSnapping(DEFAULT_ROUTER_SETTINGS, "always")).snap_to_tracks, true);
   assert.equal(routerSettingsToWire(withTrackSnapping(DEFAULT_ROUTER_SETTINGS, "never")).snap_to_tracks, false);
+});
+
+// findings p5 F3-5: `tools.pns` -- the settings are kept for the next session and read back as they were; a stored value of the wrong type keeps its default
+test("router settings survive a reload", () => {
+  const s: RouterSettings = { ...DEFAULT_ROUTER_SETTINGS, mode: "shove", optimizerEffort: "full", smartPads: false, cornerMode: "rounded_90", snapToTracks: false };
+  const back = parseRouterSettings(serializeRouterSettings(s));
+  const { snapToTracks: _snap, ...expected } = s;
+  assert.deepEqual(back, expected);
+  assert.equal("snapToTracks" in back, false, "the magnetic setting is the canvas's, not stored");
+  assert.deepEqual(parseRouterSettings(null), DEFAULT_ROUTER_SETTINGS);
+  assert.deepEqual(parseRouterSettings("not json"), DEFAULT_ROUTER_SETTINGS);
+  const odd = parseRouterSettings(JSON.stringify({ mode: "teleport", shoveVias: "yes", removeLoops: false }));
+  assert.equal(odd.mode, DEFAULT_ROUTER_SETTINGS.mode);
+  assert.equal(odd.shoveVias, DEFAULT_ROUTER_SETTINGS.shoveVias);
+  assert.equal(odd.removeLoops, false);
 });

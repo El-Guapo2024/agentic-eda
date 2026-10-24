@@ -47,7 +47,8 @@ import { onCurrentSheet } from "../kicad-port/schSheetCmd";
 import { newIdsAfter } from "../kicad-port/schClipboard";
 import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
-import { DEFAULT_ROUTER_SETTINGS, type RouterSettings } from "../kicad-port/routerSettings";
+import { type RouterSettings } from "../kicad-port/routerSettings";
+import { loadRouterSettings, saveRouterSettings } from "./routerSettingsStorage";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
 import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
 import type { SchToolDialog, SchTurn } from "../api/schEditTypes";
@@ -1034,7 +1035,7 @@ const initialState: StudioState = {
   editTextAndGraphicsDialogOpen: false,
   createArrayDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
-  routerSettings: DEFAULT_ROUTER_SETTINGS,
+  routerSettings: loadRouterSettings(),
 };
 
 export type Action =
@@ -1656,6 +1657,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_ROUTER_SETTINGS_DIALOG_OPEN":
       return { ...state, routerSettingsDialogOpen: action.open };
     case "SET_ROUTER_SETTINGS":
+      // `tools.pns` of pcbnew.json: kept for the next session
+      saveRouterSettings(action.settings);
       return { ...state, routerSettings: action.settings };
     case "SET_LENGTH_TUNING_DIALOG_OPEN":
       return { ...state, lengthTuningDialogOpen: action.open, lengthTuningMode: action.mode ?? state.lengthTuningMode };

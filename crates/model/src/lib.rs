@@ -928,26 +928,27 @@ impl BoardRules {
     /// field to fall back to (`NetClass::diff_pair_width` was carried
     /// additively on import with nothing reading it until now -- see that
     /// field's own doc comment); absent a class value (the Default class's
-    /// included), this falls back to
-    /// `SIZES_SETTINGS`'s own hardcoded upstream default
-    /// (`pns_sizes_settings.h`'s constructor: `m_diffPairWidth(125000)`,
-    /// nanometers in KiCad's own internal unit -- the same here).
+    /// included), this falls back to what KiCad's Default class always has
+    /// (`netclass.cpp::NETCLASS::NETCLASS( .., aInitWithDefaults )`:
+    /// `DEFAULT_DIFF_PAIR_WIDTH = pcbIUScale.mmToIU( 0.2 )`), since a KiCad
+    /// board never lacks one. (`SIZES_SETTINGS`' constructor's 125 um only
+    /// applies before there is a board; findings p5 F3-7.)
     pub fn diff_pair_width_of(&self, net: &str) -> ir::Nm {
-        self.class_setting(net, |c| c.diff_pair_width).unwrap_or(125_000)
+        self.class_setting(net, |c| c.diff_pair_width).unwrap_or(200_000)
     }
 
     /// Differential-pair gap for `net`'s class -- see
-    /// `diff_pair_width_of`'s own doc comment; upstream's matching default
-    /// is `m_diffPairGap(180000)` (180 µm).
+    /// `diff_pair_width_of`'s own doc comment; KiCad's Default class has
+    /// `DEFAULT_DIFF_PAIR_GAP = pcbIUScale.mmToIU( 0.25 )`.
     pub fn diff_pair_gap_of(&self, net: &str) -> ir::Nm {
-        self.class_setting(net, |c| c.diff_pair_gap).unwrap_or(180_000)
+        self.class_setting(net, |c| c.diff_pair_gap).unwrap_or(250_000)
     }
 
     /// Differential-pair via-to-via gap for `net`'s class -- upstream's
     /// `SIZES_SETTINGS::DiffPairViaGap()` defaults to "same as the trace
     /// gap" (`m_diffPairViaGapSameAsTraceGap(true)`), so this falls back to
-    /// [`Self::diff_pair_gap_of`] rather than its own separate 180um
-    /// literal when the class doesn't set one either.
+    /// [`Self::diff_pair_gap_of`] when the class doesn't set one either (the
+    /// Default class's `DEFAULT_DIFF_PAIR_VIAGAP` is 0.25 mm, its gap too).
     pub fn diff_pair_via_gap_of(&self, net: &str) -> ir::Nm {
         self.class_setting(net, |c| c.diff_pair_via_gap).unwrap_or_else(|| self.diff_pair_gap_of(net))
     }
@@ -1575,18 +1576,18 @@ mod tests {
         assert_eq!((rules.diff_pair_width_of("ANY"), rules.diff_pair_gap_of("ANY"), rules.diff_pair_via_gap_of("ANY")), (200_000, 220_000, 220_000));
         rules.net_classes.push(NetClass { diff_pair_gap: Some(150_000), ..class_with("tight", &["T*"], None, None) });
         assert_eq!((rules.diff_pair_width_of("T1"), rules.diff_pair_gap_of("T1")), (200_000, 150_000), "the gap from the class, the width from Default");
-        assert_eq!(BoardRules::default().diff_pair_width_of("X"), 125_000, "with no Default class either: upstream's sizes");
+        assert_eq!(BoardRules::default().diff_pair_width_of("X"), 200_000, "with no Default class either: what KiCad's Default class has");
     }
 
     #[test]
-    fn diff_pair_resolvers_fall_back_to_upstreams_own_sizes_settings_defaults() {
+    fn diff_pair_resolvers_fall_back_to_kicads_default_class() {
         let rules = BoardRules::default();
-        // No net class at all -- SIZES_SETTINGS's own hardcoded constructor
-        // defaults (pns_sizes_settings.h): 125um width, 180um gap, via gap
-        // same as trace gap.
-        assert_eq!(rules.diff_pair_width_of("USB_DP"), 125_000);
-        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 180_000);
-        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 180_000);
+        // No net class at all -- what KiCad's Default class always has
+        // (`NETCLASS::NETCLASS( .., aInitWithDefaults )`): 0.2 mm width,
+        // 0.25 mm gap, 0.25 mm via gap.
+        assert_eq!(rules.diff_pair_width_of("USB_DP"), 200_000);
+        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 250_000);
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 250_000);
     }
 
     #[test]
@@ -1598,11 +1599,11 @@ mod tests {
         assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 300_000);
         // A net outside the class keeps the upstream defaults, same as
         // every other per-class resolver.
-        assert_eq!(rules.diff_pair_width_of("GND"), 125_000);
+        assert_eq!(rules.diff_pair_width_of("GND"), 200_000);
     }
 
     #[test]
-    fn diff_pair_via_gap_falls_back_to_the_classs_own_trace_gap_not_the_180um_literal() {
+    fn diff_pair_via_gap_falls_back_to_the_classs_own_trace_gap_not_the_default_literal() {
         let mut rules = BoardRules::default();
         rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: Some(150_000), diff_pair_via_gap: None, priority: 0 });
         assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 150_000, "SIZES_SETTINGS::DiffPairViaGap()'s own \"same as trace gap\" default");

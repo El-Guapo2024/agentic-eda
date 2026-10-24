@@ -78,7 +78,7 @@ fn the_outline_is_one_edge_solid_per_side_on_every_copper_layer() {
     assert_eq!(edges(&node), vec![(p(0, 0), p(20_000_000, 0)), (p(0, 20_000_000), p(0, 0)), (p(20_000_000, 0), p(20_000_000, 20_000_000)), (p(20_000_000, 20_000_000), p(0, 20_000_000))]);
     for (_, it) in node.iter() {
         assert_eq!(it.layers(), layers.all(), "an edge is on every copper layer");
-        assert!(it.net().is_none(), "an edge has no net: it collides with everything");
+        assert_eq!(*it.net(), eda_pns::item::not_a_net(), "an edge is on the net of nothing: it collides with everything, a route of no net too");
         assert!(it.anchors().is_empty(), "nothing connects to an edge");
         assert!(!it.is_movable());
     }
