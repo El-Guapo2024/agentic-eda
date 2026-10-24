@@ -87,8 +87,9 @@ pub struct ImportNotes {
     /// older build still reads.)
     pub non_rect_pad_shapes_approximated: usize,
     /// A `(pad ...)` whose own `(layers ...)` list names no copper layer at
-    /// all (no `F.Cu`/`B.Cu`/`*.Cu`/inner `.Cu`) -- dropped on import rather
-    /// than kept as a phantom copper pad. Real boards use this for a
+    /// all (no `F.Cu`/`B.Cu`/`*.Cu`/inner `.Cu`) -- not a pad of the model's footprint rather
+    /// than a phantom copper pad; it is kept as the file wrote it (`FootprintExtra::aux_pads`, and a mask
+    /// aperture also as a mask graphic for the DRC) and written back, so the stencil keeps its openings. Real boards use this for a
     /// paste-stencil-only or mask-only auxiliary "pad" (a generator's way to
     /// carry extra paste/mask geometry, e.g. a thermal pad split into
     /// solder-paste quadrants for a QFN/SON "PullBack" footprint): it has no
@@ -1564,6 +1565,10 @@ fn import_footprints(
                 }
                 if let Some(h) = layerless_hole(pad, side, rot, file_version, notes) {
                     extra.holes.push(h);
+                } else if let Some(aux) = aux_pad(pad, net_names) {
+                    // A paste-only or mask-only pad (no copper): kept as the file had it (`FootprintExtra::aux_pads`).
+                    extra.aux_pads.push(aux);
+                    extra.aux_pads_rot = rot;
                 }
                 continue;
             };
@@ -1825,6 +1830,18 @@ fn layerless_hole(pad: &[Sexpr], fp_side: Side, fp_rot: u32, file_version: i64, 
     // `(clearance C)` on the pad (`PAD::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
     let clearance = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).filter(|&c| !(file_version <= 20240201 && c == 0));
     Some(eda_model::ir::FootprintHole { pad: p, clearance })
+}
+
+/// A pad with no copper layer, as the file wrote it, its `(net ..)` taken out and named ([`eda_model::ir::FootprintAuxPad`]); `None` for a pad with copper or no
+/// `(layers ..)` (one [`parse_pad_geometry_in`] keeps or cannot place).
+fn aux_pad(pad: &[Sexpr], net_names: &BTreeMap<i64, String>) -> Option<eda_model::ir::FootprintAuxPad> {
+    let names: Vec<&str> = sexpr::find(pad, "layers")?.iter().skip(1).filter_map(Sexpr::text).collect();
+    if names.is_empty() || names.iter().any(|l| l.ends_with(".Cu")) {
+        return None;
+    }
+    let net = net_ref(sexpr::find(pad, "net"), net_names);
+    let kept: Vec<Sexpr> = pad.iter().filter(|c| !c.as_list().is_some_and(|l| sexpr::tag(l) == Some("net"))).cloned().collect();
+    Some(eda_model::ir::FootprintAuxPad { text: sexpr::to_text(&Sexpr::List(kept)), net })
 }
 
 /// A pad with no copper layer but a mask layer is a pure mask aperture

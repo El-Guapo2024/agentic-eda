@@ -1306,6 +1306,35 @@ pub(crate) fn write_footprint(
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
+    // The pads with no copper (`FootprintExtra::aux_pads`: the stencil's openings, mask apertures) as the file had them, while the part is on that footprint and that side;
+    // the angle turned by what the footprint has turned since (the file's angle is the board's: `pad_file_angle`), the net by its name on this board.
+    if let Some(e) = own_extra.filter(|e| !e.aux_pads.is_empty() && e.source_name == lib_name_written && e.courtyard_bottom == (fp.side == Side::Bottom)) {
+        let turned = fp.rot as f64 - e.aux_pads_rot as f64;
+        for aux in &e.aux_pads {
+            let Ok(crate::sexpr::Sexpr::List(mut items)) = crate::sexpr::parse(&aux.text) else { continue };
+            if turned != 0.0 {
+                if let Some(at) = items.iter_mut().find_map(|c| match c {
+                    crate::sexpr::Sexpr::List(l) if crate::sexpr::tag(l) == Some("at") => Some(l),
+                    _ => None,
+                }) {
+                    let angle = crate::sexpr::num(at, 3).unwrap_or(0.0) - turned / 1000.0;
+                    at.truncate(3);
+                    at.push(crate::sexpr::Sexpr::Atom(fmt_mm_f(angle.rem_euclid(360.0))));
+                }
+            }
+            let mut text = crate::sexpr::to_text(&crate::sexpr::Sexpr::List(items));
+            if let Some(&n) = net_num.get(aux.net.as_str()).filter(|_| !aux.net.is_empty()) {
+                // `(net N "name")` before the uuid, where `format( const PAD* )` writes it.
+                let net = format!(" (net {n} {})", sexpr_str(&aux.net));
+                match text.rfind(" (uuid ") {
+                    Some(at) => text.insert_str(at, &net),
+                    None => text.insert_str(text.len() - 1, &net),
+                }
+            }
+            writeln!(out, "\t\t{text}").unwrap();
+        }
+    }
+
     // The courtyard, on the footprint's own side: what KiCad's DRC reads for
     // `courtyards_overlap`, `pth_inside_courtyard` and `npth_inside_courtyard`
     // (the gates that call kicad-cli for those get nothing to judge from a

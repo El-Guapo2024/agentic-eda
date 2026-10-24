@@ -623,6 +623,10 @@ fn is_zero_nm(v: &Nm) -> bool {
     *v == 0
 }
 
+fn is_zero_millideg(v: &Millideg) -> bool {
+    *v == 0
+}
+
 impl SchLine {
     fn id_seed(&self) -> String {
         let pts: Vec<String> = self.pts.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
@@ -2896,6 +2900,19 @@ pub struct FootprintHole {
     pub clearance: Option<Nm>,
 }
 
+/// A pad of a footprint with no copper layer that is not a hole of its own ([`FootprintHole`]): a stencil opening (`(layers "F.Paste")`), a mask aperture, a pad on
+/// a technical layer only. KiCad keeps every pad (`PCB_IO_KICAD_SEXPR_PARSER::parsePAD`) and writes it back; the paste plot makes the stencil of them. The model has no
+/// copper for it, so it is kept as the file wrote it, its net apart (the file's net code is the file's).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintAuxPad {
+    /// The `(pad ...)` as the file had it, without its `(net ..)`.
+    pub text: String,
+    /// The pad's net, empty for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub net: String,
+}
+
 /// See [`DrawingsSection::footprint_extras`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2930,6 +2947,14 @@ pub struct FootprintExtra {
     /// The non-plated holes of the footprint that are on no copper layer ([`FootprintHole`]). Not in `Footprint::pads`: they have no copper to measure, draw or route round.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holes: Vec<FootprintHole>,
+    /// The footprint's pads with no copper that are not holes ([`FootprintAuxPad`]), in file order. Written back after the other pads while the part is on the footprint they
+    /// were read from ([`Self::source_name`]) and on the side they were read for ([`Self::courtyard_bottom`]), each turned by what the footprint has turned since
+    /// ([`Self::aux_pads_rot`]): a pad's `(at x y angle)` is in the footprint's frame, its angle the board's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aux_pads: Vec<FootprintAuxPad>,
+    /// The footprint's rotation (`FootprintInstance::rot`) when [`Self::aux_pads`] were read.
+    #[serde(default, skip_serializing_if = "is_zero_millideg")]
+    pub aux_pads_rot: Millideg,
     /// The name the footprint had in the file when it had no library link (`(footprint "D5" ..)`: `LIB_ID::GetLibNickname()` empty, which `LIB_ID::Format` writes as the bare
     /// item name). The writer gives a footprint the `eda` library unless the footprint it writes is this one: a board that came from a KiCad file keeps its footprints as
     /// unlinked as it had them, and kicad-cli's library check (`lib_footprint_issues`) has no `eda` library to report as missing. `None` for a footprint that was linked.

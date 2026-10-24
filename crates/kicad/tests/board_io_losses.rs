@@ -119,3 +119,33 @@ fn smd_pad_on_all_copper_layers_keeps_them() {
     let on_back = |id: &str, n: &str| pads(id).iter().find(|p| p.number == n).unwrap().on_back(fp_side(id));
     assert_eq!((on_back("J1", "1"), on_back("J2", "1"), on_back("J2", "2")), (false, false, true));
 }
+
+/// p7-p8 F2: a pad with no copper (a stencil opening on `F.Paste` alone, a mask aperture) is kept and written back (`parsePAD` keeps every pad), with its
+/// primitives, and turned with its footprint.
+#[test]
+fn a_paste_only_custom_pad_survives_import_and_export() {
+    let text = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+        (net 0 "") (net 1 "GND")
+        (footprint "L:H" (layer "F.Cu") (uuid "f1") (at 10 10)
+            (property "Reference" "H1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+            (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu" "F.Mask") (net 1 "GND") (uuid "a1"))
+            (pad "" smd custom (at 1 1) (size 0.6 0.6) (layers "F.Paste") (options (clearance outline) (anchor circle))
+                (primitives (gr_poly (pts (xy 0 0) (xy 1 0) (xy 1 1)) (width 0) (fill yes))) (uuid "paste1"))
+            (pad "" smd rect (at -1 1) (size 0.5 0.5) (layers "B.Mask") (uuid "mask1")))
+    )"#;
+    let (mut design, model, _) = import_kicad_pcb(text).expect("parses");
+    let out = export(&design, &model);
+    let fp = blocks(&out, "footprint")[0];
+    let pads = blocks(fp, "pad");
+    assert_eq!(pads.len(), 3, "{fp}");
+    let paste = pads.iter().find(|p| p.contains("paste1")).expect("the paste pad");
+    assert!(paste.contains("(layers \"F.Paste\")") && paste.contains("(primitives (gr_poly (pts (xy 0 0) (xy 1 0) (xy 1 1))"), "{paste}");
+    assert!(pads.iter().any(|p| p.contains("mask1") && p.contains("(layers \"B.Mask\")")));
+
+    // Turned with the footprint: the angle in the file is the board's.
+    design.placement.as_mut().unwrap().footprints[0].rot = 270_000; // 90 degrees in KiCad's sense
+    let out = export(&design, &model);
+    let paste = blocks(&out, "pad").into_iter().find(|p| p.contains("paste1")).unwrap().to_string();
+    assert!(paste.contains("(at 1 1 90)"), "{paste}");
+}
