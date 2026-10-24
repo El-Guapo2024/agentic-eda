@@ -614,6 +614,7 @@ impl<'a> Board<'a> {
                     self.group_placed(&[id], how)?;
                 }
             }
+            self.take_bus_aliases(content);
             return Ok(());
         }
         // the contents of the file go on the sheet in view, as a paste of the file's screen carried to `at`
@@ -637,6 +638,18 @@ impl<'a> Board<'a> {
                 self.annotate_apply(&renames, false);
             }
         }
+        self.take_bus_aliases(content);
         Ok(())
+    }
+
+    /// The bus aliases of a sheet file taken in: into the design's list (`parseBusAlias` adds a file's to the schematic it loads into), one of a name the
+    /// design has not got yet. **Differs**: so do the aliases of the file's own project (`.kicad_pro`), which `LoadSheetFromFile` does not read, so that
+    /// the sheet's buses keep their members.
+    fn take_bus_aliases(&mut self, content: &SheetFile) {
+        for alias in &content.bus_aliases {
+            if !self.design.bus_aliases.iter().any(|a| a.name == alias.name) {
+                self.design.bus_aliases.push(alias.clone());
+            }
+        }
     }
 }

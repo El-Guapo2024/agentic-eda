@@ -102,6 +102,12 @@ impl<'a> Board<'a> {
         }
         self.design.schematic = Some(root);
         self.design.sheet_contents = (!screens.is_empty()).then_some(screens);
+        // The file's bus aliases, which its buses are written with: one of a name the design already has replaces it (the new drawing's buses mean
+        // what the file says; `GetBusAlias` takes the last one added).
+        for alias in &content.bus_aliases {
+            self.design.bus_aliases.retain(|a| a.name != alias.name);
+            self.design.bus_aliases.push(alias.clone());
+        }
         // The nets of the old drawing are not the new one's: the server traces the new drawing against nothing (`reconcile_schematic`).
         self.design.nets = Some(Vec::new());
         Ok(())
@@ -224,7 +230,11 @@ mod tests {
         d.symbol_library = Some(lib);
         let placement_before = serde_json::to_string(&d.placement).unwrap();
 
-        let file = a_file();
+        let mut file = a_file();
+        // p12 S4: the file's aliases come with it, replacing one of the same name
+        let alias = |name: &str, members: &[&str]| eda_model::ir::BusAlias { name: name.into(), members: members.iter().map(|x| x.to_string()).collect() };
+        d.bus_aliases = vec![alias("USB", &["DP", "DM"]), alias("OLD", &["A"])];
+        file.bus_aliases = vec![alias("USB", &["D+", "D-"])];
         let screens: Vec<String> = file.screens.keys().cloned().collect();
         let refs = file.references();
         let mut b = Board::new(d, &m, 100_000, 300_000);
@@ -243,6 +253,8 @@ mod tests {
         let placed: std::collections::BTreeSet<String> = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.symbols.iter().map(|x| x.id.clone())).collect();
         assert!(placed.contains("U1") && placed.contains("R8") && refs.iter().all(|r| placed.contains(r) || r.starts_with('#')), "{placed:?}");
         assert_eq!(d.nets.as_ref().map(Vec::len), Some(0), "the nets of the old drawing are gone; the server traces the new one against nothing");
+        let aliases: Vec<(String, Vec<String>)> = d.bus_aliases.iter().map(|a| (a.name.clone(), a.members.clone())).collect();
+        assert_eq!(aliases, vec![("OLD".to_string(), vec!["A".to_string()]), ("USB".to_string(), vec!["D+".to_string(), "D-".into()])], "the file's bus aliases");
         let lib = d.symbol_library.as_ref().unwrap();
         assert!(lib.by_lib_id("Old:Part").is_none(), "what the old drawing published goes with it");
         assert!(lib.by_lib_id("Mine:Draft").is_some(), "a definition the Symbol Editor holds stays");

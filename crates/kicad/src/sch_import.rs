@@ -439,8 +439,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     }
 
     // `(bus_alias "NAME" (members "A" "B"))` (GAPS.md #20): real modern
-    // KiCad only *writes* these into the `.kicad_pro` project file this
-    // project has no reader/writer for at all -- this legacy per-screen
+    // KiCad only *writes* these into the `.kicad_pro` project file (read by
+    // `import_kicad_sch_tree`, `project_bus_aliases`) -- this legacy per-screen
     // `.kicad_sch` block is kept only for backward compatibility with
     // older files (`SCH_IO_KICAD_SEXPR_PARSER::parseBusAlias`, itself still
     // forwarding into the same project-wide list on import) -- see
@@ -795,10 +795,36 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
         }
     }
     notes.sheets_not_descended = still_not_descended;
+    // The project's aliases (`SCHEMATIC::loadBusAliasesFromProject`, read when the project is set, before the files): a file's own legacy alias of the
+    // same name is added after them and wins (`GetBusAlias` searches from the last one added).
+    if let Ok(pro) = std::fs::read_to_string(path.with_extension("kicad_pro")) {
+        for alias in project_bus_aliases(&pro) {
+            if !design.bus_aliases.iter().any(|a| a.name == alias.name) {
+                design.bus_aliases.push(alias);
+            }
+        }
+    }
     legacy_symbol_instances(&text, &design, &mut sheet_contents, &symbol_places);
     design.sheet_contents = (!sheet_contents.is_empty()).then_some(sheet_contents);
 
     Ok((design, model, notes))
+}
+
+/// The bus aliases of a `.kicad_pro`'s text: `schematic.bus_aliases`, `{ "<name>": ["<member>", ..] }`, where KiCad 10 keeps them (`PROJECT_FILE`'s
+/// `"schematic.bus_aliases"` parameter, whose reader takes an object of arrays of strings, each member stripped and an empty one dropped), sorted by
+/// name as its map holds them. Nothing for a project without the section (one older than KiCad 10, whose aliases are in the `.kicad_sch`).
+pub fn project_bus_aliases(pro_text: &str) -> Vec<eda_model::ir::BusAlias> {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(pro_text) else { return Vec::new() };
+    let Some(map) = json.get("schematic").and_then(|s| s.get("bus_aliases")).and_then(|a| a.as_object()) else { return Vec::new() };
+    let mut out: Vec<eda_model::ir::BusAlias> = map
+        .iter()
+        .filter_map(|(name, members)| {
+            let members = members.as_array()?.iter().filter_map(|m| m.as_str()).map(str::trim).filter(|m| !m.is_empty()).map(String::from).collect();
+            Some(eda_model::ir::BusAlias { name: name.clone(), members })
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// A file's symbols by their `(uuid ..)`: where each is (its library origin, as the reader keeps it) and its `(unit ..)`, `None` when the file gives none (KiCad 6
@@ -1826,6 +1852,26 @@ mod tests {
             let child = screens.get("i2c_thingy.kicad_sch").expect("child content present");
             assert!(!child.instance_overrides.is_empty(), "a twice-placed screen must carry per-instance overrides");
         }
+    }
+
+    /// p12 S4 (b): KiCad 10 keeps a project's bus aliases in the `.kicad_pro` (`schematic.bus_aliases`, `SCHEMATIC::loadBusAliasesFromProject`), not the
+    /// `.kicad_sch`: they are read from the project beside the root, a member stripped and an empty one dropped, and a file's own legacy `(bus_alias ..)` of
+    /// the same name wins (`GetBusAlias` searches from the last one added, and the files are read after the project).
+    #[test]
+    fn a_projects_bus_aliases_are_read_from_the_kicad_pro() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_pro_bus_aliases_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.join("p.kicad_sch");
+        std::fs::write(&root, "(kicad_sch (version 20250114) (generator \"eeschema\") (uuid \"00000000-0000-0000-0000-000000000001\") (paper \"A4\")\n  (bus_alias \"b_yz\" (members \"q\"))\n)\n").unwrap();
+        std::fs::write(dir.join("p.kicad_pro"), r#"{ "schematic": { "bus_aliases": { "b_yz": ["y", "z"], "a_xyz": ["x", " y ", "", "z"] } } }"#).unwrap();
+        let (design, _, _) = import_kicad_sch_tree(&root).unwrap();
+        let aliases: Vec<(String, Vec<String>)> = design.bus_aliases.iter().map(|a| (a.name.clone(), a.members.clone())).collect();
+        let v = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(aliases, vec![("b_yz".to_string(), v(&["q"])), ("a_xyz".to_string(), v(&["x", "y", "z"]))]);
+        // a project without the section (older than KiCad 10) gives none
+        assert!(project_bus_aliases(r#"{ "schematic": {} }"#).is_empty() && project_bus_aliases("not json").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A KiCad 10 file with a symbol that declares `(body_styles demorgan)` and has `Name_1_1` and `Name_1_2` sub-blocks: the importer reads both bodies of the
