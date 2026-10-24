@@ -704,10 +704,12 @@ impl Board<'_> {
                     continue;
                 }
                 let dr = self.drawings_mut();
+                // `pruneExistingGroups( commit, m_affectedItems )`: the `< 2` rule on the groups it pruned, no other
+                let affected = eda_model::groups::groups_holding(&dr.groups, &out.affected);
                 for g in dr.groups.iter_mut() {
                     g.member_ids.retain(|m| !out.affected.contains(m));
                 }
-                eda_model::groups::prune_groups(&mut dr.groups);
+                eda_model::groups::prune_affected_groups(&mut dr.groups, &affected);
                 let mut seen: BTreeSet<&String> = BTreeSet::new();
                 let members: Vec<String> = out.groupable.iter().filter(|m| seen.insert(*m)).cloned().collect();
                 // `group->AddItem( item )`: "Items can only be in one group at a time", so a copy leaves the group cloned for it

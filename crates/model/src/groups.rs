@@ -257,6 +257,39 @@ pub fn prune_groups(groups: &mut Vec<Group>) {
     }
 }
 
+/// The groups left with no member go (`PCB_IO_KICAD_SEXPR::format( const PCB_GROUP* )` skips an empty group), and the group above each loses it, in
+/// turn. A group of one member stays: nothing in KiCad dissolves a group the command did not touch.
+pub fn drop_empty_groups(groups: &mut Vec<Group>) {
+    loop {
+        let empty: Vec<String> = groups.iter().filter(|g| g.member_ids.is_empty()).map(|g| g.id.clone()).collect();
+        if empty.is_empty() {
+            return;
+        }
+        groups.retain(|g| !g.member_ids.is_empty());
+        for g in groups.iter_mut() {
+            g.member_ids.retain(|m| !empty.contains(m));
+        }
+    }
+}
+
+/// The `< 2` rule on the groups a command took members out of (`GROUP_TOOL::RemoveFromGroup`'s `for( EDA_GROUP* group : affectedGroups ) if(
+/// group->GetItems().size() < 2 )`, `MULTICHANNEL_TOOL::pruneExistingGroups` on the groups it pruned): such a group dissolves (its members free, the
+/// group out of the group above it, which is not looked at again); every other group is left alone, a group of one included. A one-item group linked to a
+/// design block stays (see [`prune_groups`]). Then the empty groups go ([`drop_empty_groups`]).
+pub fn prune_affected_groups(groups: &mut Vec<Group>, affected: &BTreeSet<String>) {
+    let doomed: Vec<String> = groups.iter().filter(|g| affected.contains(&g.id) && g.member_ids.len() < 2 && !(g.member_ids.len() == 1 && !g.design_block.is_empty())).map(|g| g.id.clone()).collect();
+    groups.retain(|g| !doomed.contains(&g.id));
+    for g in groups.iter_mut() {
+        g.member_ids.retain(|m| !doomed.contains(m));
+    }
+    drop_empty_groups(groups);
+}
+
+/// The groups of `groups` that hold one of `ids`: the ones a command that takes `ids` out of their groups affects.
+pub fn groups_holding(groups: &[Group], ids: &[String]) -> BTreeSet<String> {
+    groups.iter().filter(|g| g.member_ids.iter().any(|m| ids.contains(m))).map(|g| g.id.clone()).collect()
+}
+
 /// Something that keeps a list of groups: the board's drawings and a sheet's extras. The provided methods are `GROUP_TOOL`'s verbs on that list.
 pub trait GroupHost {
     fn group_list(&self) -> &[Group];
@@ -292,7 +325,7 @@ pub trait GroupHost {
                 g.member_ids.push(new_id);
             }
         }
-        prune_groups(groups);
+        drop_empty_groups(groups);
         Ok(())
     }
 
@@ -304,7 +337,7 @@ pub trait GroupHost {
         for g in groups.iter_mut() {
             g.member_ids.retain(|m| !ids.contains(m));
         }
-        prune_groups(groups);
+        drop_empty_groups(groups);
     }
 
     /// `GROUP_TOOL::AddToGroup`: `ids` join `group_id`, each leaving the group it was in. A group cannot be added to itself or to a group below it.
@@ -327,17 +360,18 @@ pub trait GroupHost {
                 }
             }
         }
-        prune_groups(groups);
+        drop_empty_groups(groups);
         Ok(())
     }
 
     /// `GROUP_TOOL::RemoveFromGroup`: each id leaves the group it is in (a no-op for one that is in none), free of every group above it too.
     fn remove_members(&mut self, ids: &[String]) {
         let groups = self.group_list_mut();
+        let affected = groups_holding(groups, ids);
         for g in groups.iter_mut() {
             g.member_ids.retain(|m| !ids.contains(m));
         }
-        prune_groups(groups);
+        prune_affected_groups(groups, &affected);
     }
 
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`: rename the group and make its members exactly `member_ids`, each pulled out of the group it
@@ -373,7 +407,7 @@ pub trait GroupHost {
                 g.design_block = link;
             }
         }
-        prune_groups(groups);
+        drop_empty_groups(groups);
         Ok(())
     }
 
@@ -410,7 +444,7 @@ pub trait GroupHost {
         self.assign_group_ids();
         let groups = self.group_list_mut();
         let new_id = groups.last().map(|g| g.id.clone()).unwrap_or_default();
-        prune_groups(groups);
+        drop_empty_groups(groups);
         Ok(new_id)
     }
 }
@@ -575,17 +609,17 @@ mod tests {
         let id = e.link_design_block(&strs(&["C1"]), "Power:Boost").unwrap();
         let g = e.group(&id).unwrap();
         assert_eq!((g.name.as_str(), g.design_block.as_str(), g.member_ids.clone()), ("Boost", "Power:Boost", strs(&["C1"])));
-        // a group of one item that is linked survives the pruning every group edit does; one that is not does not
+        // a group of one item that is linked survives `prune_groups`; one that is not does not
         prune_groups(&mut e.groups);
         assert!(e.is_group(&id));
         e.groups.push(g_named("loose", &["Q1"]));
         prune_groups(&mut e.groups);
         assert!(!e.is_group("loose"));
-        // an item taken into the new group leaves its old one, which dissolves when it is left with one -- unless that one is linked to a block too
+        // an item taken into the new group leaves its old one, which stays with the other (Group Items dissolves nothing)
         e.make_group(&strs(&["Q2", "Q3"])).unwrap();
         let pair = e.groups.last().unwrap().id.clone();
         let id2 = e.link_design_block(&strs(&["Q2"]), "Power:Third").unwrap();
-        assert!(!e.is_group(&pair), "the group Q2 left had two members and is left with one: it is not a group");
+        assert_eq!(e.group(&pair).map(|g| g.member_ids.clone()), Some(strs(&["Q3"])), "the group Q2 left keeps Q3");
         assert_eq!(e.group(&id2).unwrap().member_ids, strs(&["Q2"]));
         let id3 = e.link_design_block(&strs(&["R1"]), "Power:Fourth").unwrap();
         assert!(e.is_group(&lone) && e.group(&lone).unwrap().member_ids == strs(&["R2"]), "a linked group left with one item stays, as KiCad's does");

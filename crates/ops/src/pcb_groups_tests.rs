@@ -89,9 +89,12 @@ fn grouping_everything_a_group_holds_leaves_one_group() {
     d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["trk_a", "via_a"])];
     let mut b = Board::new(d, &m, 100_000, 300_000);
     b.apply(&Cmd::Group { ids: ids(&["trk_a", "via_a"]) }).unwrap();
+    // the new group takes the members' place in the group they shared, which holds it alone: PCB_GROUP_TOOL::Group dissolves nothing
     let groups = &drawings(&b).groups;
-    assert_eq!(groups.len(), 1, "the old group is left empty-handed and goes: {groups:?}");
-    assert_eq!(members(&b, &groups[0].id), ids(&["trk_a", "via_a"]));
+    assert_eq!(groups.len(), 2, "{groups:?}");
+    let new = groups.iter().find(|g| g.id != "grp_a").unwrap();
+    assert_eq!(members(&b, &new.id), ids(&["trk_a", "via_a"]));
+    assert_eq!(members(&b, "grp_a"), vec![new.id.clone()]);
 }
 
 #[test]
@@ -107,12 +110,17 @@ fn ungrouping_a_nested_group_frees_its_members_and_the_group_above_loses_it() {
 }
 
 #[test]
-fn removing_a_member_from_a_nested_group_dissolves_what_falls_under_two_all_the_way_up() {
+fn removing_a_member_from_a_nested_group_dissolves_only_the_group_it_left() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = Board::new(nested(), &m, 100_000, 300_000);
-    // inner = {trk_a, via_a} -> {via_a}: gone; outer = {inner, shp_seg} -> {shp_seg}: gone too.
+    // inner = {trk_a, via_a} -> {via_a}: under two, it dissolves (`affectedGroups`); outer = {inner, shp_seg} loses it and keeps shp_seg: it was not
+    // one of the groups the verb took a member out of, so it stays
+    let outer = drawings(&b).parent_group(&nested().drawings.unwrap().groups.iter().find(|g| g.member_ids.contains(&"trk_a".to_string())).unwrap().id).map(|g| g.id.clone());
     b.apply(&Cmd::RemoveFromGroup { ids: ids(&["trk_a"]) }).unwrap();
-    assert!(drawings(&b).groups.is_empty(), "{:?}", drawings(&b).groups);
+    let groups = &drawings(&b).groups;
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(Some(groups[0].id.clone()), outer);
+    assert_eq!(groups[0].member_ids, ids(&["shp_seg"]));
 }
 
 #[test]
@@ -237,4 +245,19 @@ fn a_pasted_group_of_groups_is_nested_again() {
     // The track has three points, which KiCad's clipboard writes as two segments: two tracks, a via and a shape.
     assert_eq!(dr.group_leaves(&outer.id).len(), 4, "{:?}", dr.group_leaves(&outer.id));
     assert_eq!(outer.member_ids.len(), 2);
+}
+
+/// Review M1: a group of one member (kept after a delete, or read from a KiCad file) survives a Ctrl+G of other items: only the groups a verb takes
+/// members out of are its business.
+#[test]
+fn a_one_member_group_survives_an_unrelated_group() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().groups = vec![group("grp_one", &["shp_seg"])];
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    b.apply(&Cmd::Group { ids: ids(&["trk_a", "via_a"]) }).unwrap();
+    assert_eq!(members(&b, "grp_one"), ids(&["shp_seg"]));
+    b.apply(&Cmd::RemoveFromGroup { ids: ids(&["trk_a"]) }).unwrap();
+    assert_eq!(members(&b, "grp_one"), ids(&["shp_seg"]), "Remove Items of another group leaves it too");
+    assert!(drawings(&b).parent_group("via_a").is_none(), "the group trk_a left fell under two and dissolved");
 }

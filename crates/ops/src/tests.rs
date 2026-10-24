@@ -1229,12 +1229,12 @@ fn an_item_can_only_belong_to_one_group_at_a_time() {
     b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
     let first_group_id = b.design().drawings.as_ref().unwrap().groups[0].id.clone();
 
-    // Pulling C1 into a brand new group with C2 must remove it from the
-    // first group -- which then has only 1 member left and dissolves.
+    // Pulling C1 into a brand new group with C2 removes it from the first group, which keeps U1 alone (PCB_GROUP_TOOL::Group dissolves nothing).
     b.apply(&Cmd::Group { ids: vec!["C1".into(), "C2".into()] }).unwrap();
-    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
-    assert_eq!(groups.len(), 1, "the now-single-member first group must dissolve: {groups:?}");
-    assert_ne!(groups[0].id, first_group_id);
+    let all = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_eq!(all.iter().find(|g| g.id == first_group_id).unwrap().member_ids, vec!["U1".to_string()]);
+    let groups: Vec<_> = all.into_iter().filter(|g| g.id != first_group_id).collect();
     let mut members = groups[0].member_ids.clone();
     members.sort();
     assert_eq!(members, vec!["C1".to_string(), "C2".to_string()]);
@@ -1268,19 +1268,23 @@ fn edit_group_renames_it_and_replaces_its_members() {
     b.apply(&Cmd::Group { ids: vec!["C2".into(), "C3".into()] }).unwrap();
     let first = b.design().drawings.as_ref().unwrap().groups.iter().find(|g| g.member_ids.contains(&"U1".to_string())).unwrap().id.clone();
 
-    // rename it and take C2 from the other group: that group is left with C3 alone, so it dissolves
+    // rename it and take C2 from the other group: that group keeps C3 alone (Group Properties dissolves nothing)
     b.apply(&Cmd::EditGroup { id: first.clone(), name: "power".into(), member_ids: vec!["U1".into(), "C1".into(), "C2".into(), "C2".into()], design_block: None }).unwrap();
-    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
-    assert_eq!(groups.len(), 1, "{groups:?}");
+    let all = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert!(all.iter().any(|g| g.member_ids == vec!["C3".to_string()]));
+    let groups: Vec<_> = all.into_iter().filter(|g| g.id == first).collect();
     assert_eq!(groups[0].name, "power");
     assert_eq!(groups[0].id, first, "the group keeps its id");
     let mut members = groups[0].member_ids.clone();
     members.sort();
     assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()], "a member listed twice is one member");
 
-    // a group left with fewer than two members dissolves, as everywhere else
-    b.apply(&Cmd::EditGroup { id: first, name: "x".into(), member_ids: vec!["U1".into()], design_block: None }).unwrap();
-    assert!(b.design().drawings.as_ref().unwrap().groups.is_empty());
+    // a group given one member keeps it; given none it goes
+    b.apply(&Cmd::EditGroup { id: first.clone(), name: "x".into(), member_ids: vec!["U1".into()], design_block: None }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().groups.iter().any(|g| g.id == first && g.member_ids == vec!["U1".to_string()]));
+    b.apply(&Cmd::EditGroup { id: first.clone(), name: "x".into(), member_ids: vec![], design_block: None }).unwrap();
+    assert!(!b.design().drawings.as_ref().unwrap().groups.iter().any(|g| g.id == first));
 }
 
 #[test]

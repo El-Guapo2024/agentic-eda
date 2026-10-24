@@ -628,6 +628,23 @@ fn repeat_grouping_leaves_no_item_in_two_groups() {
     assert_eq!(target.member_ids.iter().filter(|m| m.starts_with("shp_")).count(), 2, "{:?}", target.member_ids);
 }
 
+/// Review M1: Repeat Layout's grouping prunes only the groups it took items out of (`pruneExistingGroups`); a group of one elsewhere stays.
+#[test]
+fn repeat_grouping_leaves_an_unrelated_one_member_group_alone() {
+    let m = model(2);
+    let mut d = design(2);
+    {
+        let dr = d.drawings.as_mut().unwrap();
+        dr.groups.push(Group { id: "grp_one".into(), name: String::new(), member_ids: vec!["shp_mark0".into()], design_block: String::new() });
+    }
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    generate_sheets(&mut b, 2);
+    let ids = areas_of(&b, 2);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { group_items: true, ..RepeatOptions::default() })).unwrap();
+    let g = drawings(&b).groups.iter().find(|g| g.id == "grp_one").cloned();
+    assert_eq!(g.map(|g| g.member_ids), Some(vec!["shp_mark0".to_string()]));
+}
+
 #[test]
 fn the_options_of_the_dialog_each_leave_out_their_part_of_the_copy() {
     let run = |options: RepeatOptions| -> Board<'static> {
