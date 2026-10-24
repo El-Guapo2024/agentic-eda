@@ -110,10 +110,10 @@ export function trackViaWidthMenu(state: StudioState, board: BoardState): MenuNo
 
 /** `DIFF_PAIR_MENU::update`: "Use Net Class Values" and "Use Custom Values..." (this studio keeps no list of pair sizes besides the custom one). */
 export function diffPairMenu(state: StudioState): MenuNode[] {
-  const custom = state.pcbx.customDiffPair != null;
+  const custom = state.pcbx.useCustomDiffPair;
   return [
     { type: "item", action: "studio.Router.useNetclassDiffPair", label: "Use Net Class Values", checked: !custom },
-    { type: "item", action: "pcbnew.InteractiveRouter.DiffPairDialog", label: "Use Custom Values...", checked: custom },
+    { type: "item", action: "studio.Router.useCustomDiffPair", label: "Use Custom Values...", checked: custom },
   ];
 }
 

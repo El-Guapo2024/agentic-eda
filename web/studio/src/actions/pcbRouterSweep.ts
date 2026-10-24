@@ -80,13 +80,15 @@ export function registerPcbRouterSweep(m: Map<string, () => void>, ctx: SweepCtx
 
   // ------------------------------------------------ Differential Pair Dimensions...
   // ROUTER_TOOL::DpDimensionsDialog: DIALOG_PNS_DIFF_PAIR_DIMENSIONS on the router's sizes; accepted values become the board's custom
-  // pair dimensions (`SetCustomDiffPairWidth/Gap/ViaGap`) and apply to the pair being routed right now.
+  // pair dimensions (`SetCustomDiffPairWidth/Gap/ViaGap`) and apply to the pair being routed right now (`m_router->UpdateSizes( sizes )`).
+  // It does not switch the later pairs to them: that is the pair menu's "Use Custom Values..." (findings p5 F3-6).
   m.set(
     "pcbnew.InteractiveRouter.DiffPairDialog",
     pcbOnly(() => {
       const draw = state.drawState;
-      const base = state.pcbx.customDiffPair ?? netClassDiffPair(board);
-      const value: CustomDiffPair = draw?.kind === "diffpair" && !state.pcbx.customDiffPair ? { ...base, widthNm: draw.width } : base;
+      const custom = state.pcbx.useCustomDiffPair ? state.pcbx.customDiffPair : null;
+      const base = custom ?? netClassDiffPair(board);
+      const value: CustomDiffPair = draw?.kind === "diffpair" && !custom ? { ...base, widthNm: draw.width } : base;
       openSweepDialog({
         kind: "element",
         element: createElement(DiffPairDimensionsDialog, {

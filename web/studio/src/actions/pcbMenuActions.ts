@@ -75,7 +75,16 @@ export function registerPcbMenuActions(m: Map<string, Handler>, ctx: SweepCtx): 
   // "Use Net Class Values" of the pair menu (`bds.UseCustomDiffPairDimensions( false )`).
   m.set(
     "studio.Router.useNetclassDiffPair",
-    pcbOnly(() => dispatch({ type: "PCBX", patch: { customDiffPair: null } }))
+    pcbOnly(() => dispatch({ type: "PCBX", patch: { useCustomDiffPair: false } }))
+  );
+  // "Use Custom Values..." of the pair menu (`DIFF_PAIR_MENU::eventHandler`, `ID_POPUP_PCB_SELECT_CUSTOM_DIFFPAIR`): "bds.UseCustomDiffPairDimensions(
+  // true ); toolManager->RunAction( PCB_ACTIONS::routerDiffPairDialog );" -- the flag stays set whatever the dialog returns.
+  m.set(
+    "studio.Router.useCustomDiffPair",
+    pcbOnly(() => {
+      dispatch({ type: "PCBX", patch: { useCustomDiffPair: true } });
+      m.get("pcbnew.InteractiveRouter.DiffPairDialog")?.();
+    })
   );
   // ACT_PlaceThroughVia ("V" while routing) is the studio's layerToggle: only registered while a route is being drawn.
   const placeVia = m.get("pcbnew.Control.layerToggle");
