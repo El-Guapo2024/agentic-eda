@@ -571,6 +571,63 @@ fn repeat_layout_copies_the_other_items_on_the_layers_both_areas_have() {
     assert!(dr.texts.iter().any(|t| t.id != "txt_ch0" && t.at == p(30_000_000 + disp.x, 19_500_000 + disp.y)));
 }
 
+/// `copyRuleAreaContents` runs `fixupNet` on a copied copper shape as on a track: the copy is on the target's net, not the reference channel's.
+#[test]
+fn repeat_puts_a_copper_shape_on_the_target_net() {
+    let m = model(3);
+    let mut d = design(3);
+    // channel 1's copper segment, on U1.4's net
+    d.drawings.as_mut().unwrap().board_items.set_net("shp_cu0", Some("OUT0".into()));
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    generate_sheets(&mut b, 3);
+    let ids = areas_of(&b, 3);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
+    let dr = drawings(&b);
+    let mut nets: Vec<Option<&str>> = dr.shapes.iter().filter(|s| s.layer() == "F.Cu").map(|s| dr.board_items.net_of(s.id())).collect();
+    nets.sort();
+    assert_eq!(nets, vec![Some("OUT0"), Some("OUT1"), Some("OUT2")]);
+
+    // "Restrict to routing connected within the area" takes the shape's own net: it is on a channel net, so it is copied
+    let m = model(2);
+    let mut d = design(2);
+    d.drawings.as_mut().unwrap().board_items.set_net("shp_cu0", Some("OUT0".into()));
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    generate_sheets(&mut b, 2);
+    let ids = areas_of(&b, 2);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { connected_routing_only: true, ..RepeatOptions::default() })).unwrap();
+    let dr = drawings(&b);
+    assert!(dr.shapes.iter().any(|s| s.layer() == "F.Cu" && dr.board_items.net_of(s.id()) == Some("OUT1")), "{:?}", dr.board_items.shape_styles);
+}
+
+/// `RepeatLayout`'s grouping: `group->AddItem( item )` takes each copy out of the group cloned for it, so no item is in two groups.
+#[test]
+fn repeat_grouping_leaves_no_item_in_two_groups() {
+    let m = model(2);
+    let mut d = design(2);
+    {
+        let dr = d.drawings.as_mut().unwrap();
+        dr.shapes.push(Shape::Segment { id: "shp_cu0b".into(), layer: "F.Cu".into(), stroke_width: 200_000, filled: false, start: p(33_000_000, 21_800_000), end: p(35_000_000, 21_800_000) });
+        dr.groups.push(Group { id: String::new(), name: "pair".into(), member_ids: vec!["shp_cu0".into(), "shp_cu0b".into()], design_block: String::new() });
+        eda_model::groups::GroupHost::assign_group_ids(dr);
+    }
+    let mut b = Board::new(d, &m, 100_000, 300_000);
+    generate_sheets(&mut b, 2);
+    let ids = areas_of(&b, 2);
+    b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { group_items: true, ..RepeatOptions::default() })).unwrap();
+    let dr = drawings(&b);
+    let mut seen: std::collections::BTreeMap<&str, usize> = Default::default();
+    for g in &dr.groups {
+        for mbr in &g.member_ids {
+            *seen.entry(mbr.as_str()).or_default() += 1;
+        }
+    }
+    assert!(seen.values().all(|&n| n == 1), "{:?}", dr.groups);
+    // the reference pair keeps its group; the target's group holds the area, the two copies and the footprints
+    assert!(dr.groups.iter().any(|g| g.name == "pair" && g.member_ids.len() == 2 && g.member_ids.contains(&"shp_cu0".to_string())));
+    let target = dr.groups.iter().find(|g| g.member_ids.contains(&ids[1])).expect("the target's group");
+    assert_eq!(target.member_ids.iter().filter(|m| m.starts_with("shp_")).count(), 2, "{:?}", target.member_ids);
+}
+
 #[test]
 fn the_options_of_the_dialog_each_leave_out_their_part_of_the_copy() {
     let run = |options: RepeatOptions| -> Board<'static> {

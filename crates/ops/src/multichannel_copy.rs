@@ -97,20 +97,28 @@ impl Item {
         }
     }
 
+    /// `BOARD_CONNECTED_ITEM::GetNetname()`, "" for none. A board shape's net is in its style (`ShapeStyle::net`), and only a
+    /// shape on copper is connectable (`PCB_SHAPE::IsConnected`: "Only board-level copper shapes are connectable").
     fn net(&self) -> String {
         match self {
             Item::Track(t) => t.net.clone(),
             Item::Via(v) => v.net.clone(),
             Item::Zone(z) => z.net.clone(),
+            Item::Shape(s, style) if s.layer().ends_with(".Cu") => style.as_ref().and_then(|st| st.net.clone()).unwrap_or_default(),
             _ => String::new(),
         }
     }
 
+    /// `BOARD_CONNECTED_ITEM::SetNetCode()`, "" for no net.
     fn set_net(&mut self, net: String) {
         match self {
             Item::Track(t) => t.net = net,
             Item::Via(v) => v.net = net,
             Item::Zone(z) if !z.is_rule_area => z.net = net,
+            Item::Shape(s, style) if s.layer().ends_with(".Cu") => {
+                let st = style.get_or_insert_with(|| eda_model::pcb_items::ShapeStyle::empty(s.id()));
+                st.net = (!net.is_empty()).then_some(net);
+            }
             _ => {}
         }
     }
@@ -390,7 +398,8 @@ impl Board<'_> {
             let mut copy = it.clone();
             if !matches!(&copy, Item::Zone(z) if z.is_rule_area) {
                 let net = copy.net();
-                if !net.is_empty() || matches!(copy, Item::Track(_) | Item::Via(_)) {
+                // `fixupNet( item, copied, ... )` runs on every copied connected item (a track, a via, a copper shape); a zone's net is fixed only when it has one.
+                if !net.is_empty() || copy.is_routing() {
                     let fixed = Self::mc_fix_net(r.fps, tgt_fps, pairs, &net);
                     copy.set_net(fixed);
                 }
@@ -701,6 +710,12 @@ impl Board<'_> {
                 eda_model::groups::prune_groups(&mut dr.groups);
                 let mut seen: BTreeSet<&String> = BTreeSet::new();
                 let members: Vec<String> = out.groupable.iter().filter(|m| seen.insert(*m)).cloned().collect();
+                // `group->AddItem( item )`: "Items can only be in one group at a time", so a copy leaves the group cloned for it
+                // (`fixupParentGroup`); a group that is left empty is not written (`format( const PCB_GROUP* )`: `if( memberIds.empty() ) return;`).
+                for g in dr.groups.iter_mut() {
+                    g.member_ids.retain(|m| !members.contains(m));
+                }
+                dr.groups.retain(|g| !g.member_ids.is_empty());
                 dr.groups.push(Group { id: String::new(), name: String::new(), member_ids: members, design_block: String::new() });
                 eda_model::groups::GroupHost::assign_group_ids(dr);
             }
