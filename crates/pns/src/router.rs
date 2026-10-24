@@ -1377,16 +1377,15 @@ mod tests {
         router.start_diff_pair(Point { x: -825_000, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
         let at = Point { x: 3_000_000, y: 0 };
         let before = router.diff_pair_preview(at).expect("preview");
-        // the model's own 125 um width is under the board's 200 um minimum track width, and its 180 um gap under the 200 um clearance:
-        // the pair is raised to both
-        assert_eq!(before.width, 200_000, "the net class's own width (raised to the minimum) until the dialog says otherwise");
+        // no class: KiCad's Default class sizes, 200 um wide, 250 um apart
+        assert_eq!(before.width, 200_000, "the net class's own width until the dialog says otherwise");
         let pitch_of = |p: &crate::dp_placer::DiffPairPreview| {
             let (a, b) = (p.head_a.last().unwrap(), p.head_b.last().unwrap());
             (((a.x - b.x) as f64).powi(2) + ((a.y - b.y) as f64).powi(2)).sqrt()
         };
         // the pair ends a pitch apart (the gateways' offsets are whole micrometres: within a few of it)
         let near = |actual: f64, pitch: i64| actual >= pitch as f64 - 10.0 && actual <= pitch as f64 + 10.0;
-        assert!(near(pitch_of(&before), 200_000 + 200_000), "{}", pitch_of(&before));
+        assert!(near(pitch_of(&before), 200_000 + 250_000), "{}", pitch_of(&before));
         assert!(router.set_diff_pair_dimensions(Some(200_000), Some(300_000)));
         let after = router.diff_pair_preview(at).expect("preview");
         assert_eq!(after.width, 200_000);

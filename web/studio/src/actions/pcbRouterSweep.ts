@@ -21,14 +21,16 @@ export function layerPairsOf(board: BoardState | null, stored: LayerPairSettings
 }
 
 /**
- * `SIZES_SETTINGS` defaults for a pair: the net class's `diff_pair_width` / `diff_pair_gap` (the model's own fallbacks are
- * 125 / 180 um, upstream's `m_diffPairWidth` / `m_diffPairGap`), the via gap following the track gap.
+ * The pair sizes `PNS_KICAD_IFACE_BASE::ImportSizes` gives in net-class mode: the class's `diff_pair_width` / `diff_pair_gap` (KiCad's
+ * Default class has 0.2 / 0.25 mm, `NETCLASS::NETCLASS( .., aInitWithDefaults )`), the via gap the pair gap too (`diffPairViaGap =
+ * std::max( diffPairViaGap, constraint.m_Value.Opt() )` of the `DIFF_PAIR_GAP` constraint), and "via gap same as track gap" unticked
+ * (`SetDiffPairViaGapSameAsTraceGap( false )`).
  */
 export function netClassDiffPair(board: BoardState | null): CustomDiffPair {
   const classes = board?.board_rules?.net_classes ?? [];
   const cls = classes.find((c) => c.name === "Default") ?? classes.find((c) => c.nets.includes("*"));
-  const gapNm = cls?.diff_pair_gap ?? 180_000;
-  return { widthNm: cls?.diff_pair_width ?? 125_000, gapNm, viaGapNm: cls?.diff_pair_via_gap ?? gapNm, viaGapSameAsTrackGap: cls?.diff_pair_via_gap == null };
+  const gapNm = cls?.diff_pair_gap ?? 250_000;
+  return { widthNm: cls?.diff_pair_width ?? 200_000, gapNm, viaGapNm: gapNm, viaGapSameAsTrackGap: false };
 }
 
 export function registerPcbRouterSweep(m: Map<string, () => void>, ctx: SweepCtx): void {
