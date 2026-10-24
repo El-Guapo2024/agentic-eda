@@ -87,8 +87,8 @@ export function reshapeCmds(board: Pick<BoardState, "drawings"> | null | undefin
 
 /**
  * The commands of a Fillet, Chamfer, Dogbone, Extend Lines or Heal Shapes result (`pcbModify.ts`'s `ModifyResult`). `EDIT_TOOL::ModifyLines` and `EDIT_TOOL::HealShapes` edit the lines
- * they keep in place (`SetStart` / `SetEnd` on the same `PCB_SHAPE`), so a kept line's endings and net survive; a modified line that has any is therefore replaced in place
- * (`reshapeCmds`), the others are deleted and added as before. The deletes come first, then the replacements, then the new shapes.
+ * they keep in place (`SetStart` / `SetEnd` on the same `PCB_SHAPE`), so a kept line keeps its id, group, endings and net: it is replaced in place (`reshapeCmds`).
+ * The deletes come first, then the replacements, then the new shapes.
  */
 export function modifyResultCmds(
   board: Pick<BoardState, "drawings"> | null | undefined,

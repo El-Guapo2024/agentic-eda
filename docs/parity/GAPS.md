@@ -721,6 +721,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 29. Search and inspection tools
 **Done 2026-10-13 on `task-search-inspect` (not merged); what is left below.** Hit: occasionally; Clearance Resolution is how a DRC error is understood. Blocks: no. Package P11, size M-L.
+- **The Net Inspector** (fix batch F, 2026-10-24, `PARITY-pcb.md` section 32d): KiCad's columns and `CalculateLengthDetails`' numbers (`crates/cli/src/net_inspector_api.rs`), the filter, the sort and the report. Left: a dialog, not a docked panel; no Group by Netclass or custom groups, no time-domain columns, no Rename / Delete / Add Net.
 - Done (`PARITY-pcb.md` sections 32a to 32c, `PARITY-fpedit.md` section 12): Find by Properties and Find following the IR (item 21); **Inspect > Clearance Resolution and Constraints Resolution**: `crates/drc` now holds KiCad's PCB expression language
   (`libeval.rs`, `pcbexpr.rs`: the lexer and grammar, the code generator, the stack machine and the built-in functions), the `.kicad_dru` parser (`dru.rs`, `DRC_RULES_PARSER`) and `DRC_ENGINE::EvalRules` (`constraints.rs`, `RuleEngine::eval_rules`: the implicit rules
   of the board setup, the net classes and the composite ones, the diff pairs and the keepout areas, then the rules file in order, the local overrides of a pad and a footprint and a zone's own clearance, net ties, the board minimum and the assertions) in one function that returns
