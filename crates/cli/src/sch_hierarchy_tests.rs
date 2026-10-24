@@ -1224,15 +1224,15 @@ const QA_TRACED_ALIKE: &[&str] = &[
     "issue13112.kicad_sch",
     "issue12814.kicad_sch",
     "ERC_dynamic_power_symbol_test.kicad_sch",
+    "netlists/bus_connection/bus_connection.kicad_sch",
+    "issue17771/issue1771.kicad_sch",
+    "netlists/video/video.kicad_sch",
 ];
 
 /// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
 const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
     ("issue10926_1.kicad_sch", "a screen shown twice inside a screen shown twice: one override per immediate parent"),
     ("netlists/hierarchy_aliases/hierarchy_aliases.kicad_sch", "a screen shown twice inside a screen shown twice"),
-    ("netlists/bus_connection/bus_connection.kicad_sch", "two buses on one sheet joined only by a member name they share"),
-    ("issue17771/issue1771.kicad_sch", "two buses on one sheet joined only by a member name they share"),
-    ("netlists/video/video.kicad_sch", "not looked into"),
 ];
 
 #[test]

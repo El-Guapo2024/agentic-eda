@@ -165,6 +165,14 @@ fn group_local_name<'a>(bus: &str, member: &'a str) -> &'a str {
     }
 }
 
+/// The members of the group bus `name` that are the members of a bus inside it (`{DATA[0..3] CLK}`'s `DATA0`..`DATA3`, with the group's prefix): a group's
+/// member that is itself a bus is no net (`SCH_CONNECTION::IsNet`), and `generateBusAliasMembers` makes no virtual net of it. Empty for a vector.
+fn nested_group_members(name: &str, bus_members: &dyn Fn(&str) -> Option<Vec<String>>) -> BTreeSet<String> {
+    let Some((prefix, inner)) = name.split_once('{').and_then(|(p, rest)| rest.strip_suffix('}').map(|i| (p, i))) else { return BTreeSet::new() };
+    let dot = if prefix.is_empty() { String::new() } else { format!("{prefix}.") };
+    inner.split_whitespace().filter_map(|t| bus_members(t)).flatten().map(|m| format!("{dot}{m}")).collect()
+}
+
 /// KiCad's order of the drivers of a net (`propagateToNeighbors`, "find the best driver for this chain of subgraphs"): a global power pin or global
 /// label first, then a strong driver by priority, then the one closest to the root, then the alphabetically first name.
 fn driver_order(a: &Driver, b: &Driver) -> std::cmp::Ordering {
@@ -445,6 +453,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     // of every bus joined to it, here or through the hierarchy, which joins the nets each sheet has under that member's name and is driven by the
     // member's name: a vector's members by their index (`VectorIndex`), a group's by name.
     if naming.bus_members.is_some() {
+        // `generateBusAliasMembers`: every bus *label* makes a virtual net per net member, named by the member's full local name, and two of one name on
+        // one sheet are one net (`processSubGraphs`, then the pass for "buses that have been linked together somewhere by member (net) connections"): two
+        // buses that share a member name are one net there, with no wire or label of that name. A bus a sheet pin alone names makes none, but its member
+        // of that name is the virtual net's neighbour all the same (`processSubGraphs` checks every member of a strong bus against the nets of the sheet).
+        // (screen, member) -> the member nodes, and whether a label's member is among them.
+        let mut virtual_member: BTreeMap<(usize, String), (Vec<usize>, bool)> = BTreeMap::new();
         let mut buses: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (gid, g) in groups.iter().enumerate() {
             if g.bus {
@@ -469,9 +483,11 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 // a sheet pin)
                 let mut own: Vec<&Driver> = groups[g].drivers.iter().filter(|d| d.prio > PIN).collect();
                 own.sort_by(|a, b| driver_order(a, b));
-                let names: Vec<String> = own.iter().enumerate().filter(|(i, d)| *i == 0 || d.prio >= HIER_LABEL).map(|(_, d)| d.name.clone()).collect();
-                for name in names {
+                let names: Vec<(String, bool)> = own.iter().enumerate().filter(|(i, d)| *i == 0 || d.prio >= HIER_LABEL).map(|(_, d)| (d.name.clone(), d.prio >= HIER_LABEL)).collect();
+                for (name, label) in names {
                     let Some(members) = bus_members(&name) else { continue };
+                    // `GetAllBusLabels`: a label's members, not a sheet pin's; `if( !conn->IsNet() ) continue;`: not those of a bus inside a group
+                    let nested = nested_group_members(&name, &bus_members);
                     for (i, m) in members.iter().enumerate() {
                         // `matchBusMember`: a vector's member by its place; a group's by its local name (the member's name without the group's `prefix.`),
                         // else the member of the group's flattened list at the searched member's `VectorIndex` -- its place in a vector this bus is (a
@@ -485,11 +501,21 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                         };
                         let Some(k) = k else { continue };
                         let node = first + k;
+                        if !nested.contains(m) {
+                            let slot = virtual_member.entry((screen, m.clone())).or_default();
+                            slot.0.push(node);
+                            slot.1 |= label;
+                        }
                         for &n in local.get(&(screen, false, m.clone())).into_iter().flatten().chain(global_here.get(&(screen, m.clone())).into_iter().flatten()) {
                             join.union(node, n);
                         }
                     }
                 }
+            }
+        }
+        for (nodes, _) in virtual_member.values().filter(|(_, from_label)| *from_label) {
+            for w in nodes.windows(2) {
+                join.union(w[0], w[1]);
             }
         }
     }
@@ -813,6 +839,48 @@ mod tests {
     }
     fn bus(pts: &[Point]) -> Wire {
         Wire { id: String::new(), net: String::new(), pins: vec![], pts: pts.to_vec(), bus: true }
+    }
+
+    /// p12 S1 (`generateBusAliasMembers` and the pass for buses "linked together somewhere by member (net) connections"): two buses on one sheet that never
+    /// touch, each labelled, each taken by a sheet pin to a child whose `D0` reaches a pin, are one net per member name they share -- `D0`, named by the root's
+    /// member -- with no wire or label `D0` on the root. Buses whose names share no member (`E[0..3]`) stay apart. A bus named by its sheet pin alone makes no
+    /// virtual net (`GetAllBusLabels` takes labels only), but its `D0` is the labelled bus's virtual `D0`'s neighbour (`processSubGraphs`), so it joins too.
+    #[test]
+    fn two_buses_on_one_sheet_join_by_a_shared_member_name() {
+        let members = |n: &str| test_members(n);
+        let naming = Naming { wire_hints: false, bus_members: Some(&members), ..Naming::default() };
+        for (second, labelled, joined) in [("D[0..3]", true, true), ("E[0..3]", true, false), ("D[0..3]", false, true)] {
+            let mut root = section();
+            let sheet = |id: &str, file: &str, y: i64, pin: &str| SheetInstance { id: id.into(), name: id.into(), file: file.into(), at: p(1000, y), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: pin.into(), shape: LabelShape::Bidirectional, at: p(1000, y + 500) }], page: String::new() };
+            root.sheets.push(sheet("s1", "a.kicad_sch", 0, "D[0..1]"));
+            root.sheets.push(sheet("s2", "b.kicad_sch", 2000, second));
+            root.wires.push(bus(&[p(500, 500), p(1000, 500)]));
+            root.labels.push(label("D[0..1]", p(700, 500), LabelKind::Local));
+            root.wires.push(bus(&[p(500, 2500), p(1000, 2500)]));
+            if labelled {
+                root.labels.push(label(second, p(700, 2500), LabelKind::Local));
+            }
+            let child = |bus_name: &str, member: &str| {
+                let mut c = section();
+                c.wires.push(bus(&[p(10, 10), p(10, 400)]));
+                c.labels.push(label(bus_name, p(10, 10), LabelKind::Hierarchical { shape: LabelShape::Bidirectional }));
+                c.labels.push(label(member, p(200, 100), LabelKind::Local));
+                c
+            };
+            let (mut a, mut b) = (child("D[0..1]", "D0"), child(second, &format!("{}0", &second[..1])));
+            let mut screens = vec![
+                ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
+                ScreenIn { path: Vec::new(), sch: &mut a, file: "a.kicad_sch".into(), pins: pins(&[("U1.1", p(200, 100))]) },
+                ScreenIn { path: Vec::new(), sch: &mut b, file: "b.kicad_sch".into(), pins: pins(&[("U2.1", p(200, 100))]) },
+            ];
+            let nets = trace_nets_with(&mut screens, &naming);
+            let net = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|x| x == pin)).unwrap_or_else(|| panic!("{pin} in {nets:?}")).clone();
+            if joined {
+                assert_eq!((net("U1.1").name.as_str(), net("U1.1").pins.clone()), ("D0", vec!["U1.1".to_string(), "U2.1".into()]), "{nets:?}");
+            } else {
+                assert_eq!(net("U1.1").pins, vec!["U1.1".to_string()], "{second} labelled {labelled}: {nets:?}");
+            }
+        }
     }
 
     /// A bus across sheets (`propagateToNeighbors`, `propagate_bus_neighbors`, `matchBusMember`): the sheet pin `D[0..1]` on the root and the hierarchical
