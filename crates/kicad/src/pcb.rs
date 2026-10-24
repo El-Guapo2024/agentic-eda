@@ -869,12 +869,14 @@ pub fn custom_erc_pin_map(design: &Design) -> Option<Vec<Vec<u8>>> {
 }
 
 /// The per-check ERC severities the derived project holds: Schematic Setup's choices (`SchExtras::erc_severities`), with "ignore" for the
-/// two library-link checks -- every symbol is embedded in the derived schematic, so there is no library for KiCad to compare it against and
-/// each one would report a meaningless `lib_symbol_mismatch` -- unless the table says otherwise. Keyed by the ERC settings key, valued
-/// `error` | `warning` | `ignore`; only the checks that differ from KiCad's default are named (the project's own `rule_severities` loader
-/// leaves a check it does not find at its default).
+/// library-link checks -- every symbol is embedded in the derived schematic, so there is no library for KiCad to compare it against and
+/// each one would report a meaningless `lib_symbol_mismatch`; and a symbol's Footprint field names the installed footprint (`footprint_lib_id`),
+/// whose library is in the global table kicad-cli is run without (`eda_kicad_engine::cli_command`), so `footprint_link_issues` (`TestFootprintLinkIssues`)
+/// would say of every symbol "The current configuration does not include the footprint library" -- unless the table says otherwise. Keyed by the ERC
+/// settings key, valued `error` | `warning` | `ignore`; only the checks that differ from KiCad's default are named (the project's own `rule_severities`
+/// loader leaves a check it does not find at its default).
 pub fn effective_erc_severities(design: &Design) -> BTreeMap<String, String> {
-    let mut severities: BTreeMap<String, String> = BTreeMap::from([("lib_symbol_issues".to_string(), "ignore".to_string()), ("lib_symbol_mismatch".to_string(), "ignore".to_string())]);
+    let mut severities: BTreeMap<String, String> = BTreeMap::from([("lib_symbol_issues".to_string(), "ignore".to_string()), ("lib_symbol_mismatch".to_string(), "ignore".to_string()), ("footprint_link_issues".to_string(), "ignore".to_string())]);
     if let Some(sch) = design.schematic.as_ref() {
         for (key, value) in &sch.extras.erc_severities {
             severities.insert(key.clone(), value.clone());
@@ -1879,7 +1881,7 @@ mod tests {
         let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         assert!(plain["board"]["design_settings"]["drc_exclusions"].is_null(), "nothing waived: the key is not written");
         assert!(plain["board"]["design_settings"]["meta"].is_null() && plain["erc"]["meta"].is_null(), "and neither section says which schema it is at");
-        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2), "only the two library checks, which are always ignored");
+        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(3), "only the three library checks, which are always ignored");
 
         design.drawings = Some(DrawingsSection {
             drc_exclusions: vec![

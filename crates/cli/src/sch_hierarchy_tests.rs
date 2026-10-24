@@ -635,7 +635,7 @@ fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
         assert_eq!(cut(our_net_groups(&dir)), joined, "{bus_label}: and so does the studio's net list");
         let (_, design, _) = load(&dir).unwrap();
         let name_of = |pin: &str| design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone()).unwrap();
-        assert_eq!(name_of("R3.1"), if bus_label.starts_with('X') { "X0" } else { "D0" }, "the root's member names the net");
+        assert_eq!(name_of("R3.1"), if bus_label.starts_with('X') { "/X0" } else { "/D0" }, "the root's member names the net, with the root's path");
         let kinds = erc_kinds(&dir);
         // (a bus labelled X[0..1] on a sheet pin D[0..1] is ERC's `bus_to_bus_conflict`: no member in common by name, which the netlist does not mind)
         let allowed = |k: &str| bus_label.starts_with('X') && k == "bus_to_bus_conflict";
@@ -666,10 +666,13 @@ fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
         return;
     }
     let dir = mcu30_board("slow_label_fields");
-    let (_, design, _) = load(&dir).unwrap();
+    let (_, design, model) = load(&dir).unwrap();
     let root = design.schematic.as_ref().unwrap();
     let label = root.labels.iter().find(|l| l.kind == eda_model::ir::LabelKind::Local && root.wires.iter().any(|w| w.pts.contains(&l.at))).expect("mcu30's flat sheet has a local label on a wire").clone();
-    let net = root.wires.iter().find(|w| w.pts.contains(&label.at)).unwrap().net.clone();
+    // the label's text: KiCad names its net `/LED1` (the root's path in front); the model has that name, or the intent's where this old drawing shows the
+    // net in pieces
+    let net = label.net.clone();
+    let _ = &model;
     let undefined = |dir: &Path| erc_kinds(dir).get("undefined_netclass").copied().unwrap_or(0);
     assert_eq!(undefined(&dir), 0);
 
@@ -687,7 +690,7 @@ fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
     assert_eq!(undefined(&dir), 0, "the class is defined");
     let (_, _, model) = load(&dir).unwrap();
     let class = model.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap();
-    assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{net} is in the class: {:?}", class.nets);
+    assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)) || class.nets.contains(&eda_kicad::exact_pattern(&format!("/{net}"))), "{net} is in the class: {:?}", class.nets);
     let done = crate::kicad_engine::export_sch(&dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).unwrap();
     let xml = std::fs::read_to_string(dir.join(done["files"][0].as_str().unwrap())).unwrap();
     let line = xml.lines().map(str::trim).find(|l| l.starts_with("<net ") && (l.contains(&format!("name=\"/{net}\"")) || l.contains(&format!("name=\"{net}\"")))).unwrap_or_else(|| panic!("{net} in the netlist"));

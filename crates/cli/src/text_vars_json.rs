@@ -73,8 +73,8 @@ impl PcbShown {
         if let Some(pl) = design.placement.as_ref() {
             for part in &model.parts {
                 let (Some(fp), Some(footprint)) = (pl.footprints.iter().find(|f| f.id == part.reference), model.footprint_of(part)) else { continue };
-                let lib_name = part.footprint.clone().unwrap_or_else(|| footprint.name.clone());
-                let lib_id = if lib_name.contains(':') { lib_name } else { format!("eda:{lib_name}") };
+                // the link the board file gives it (`footprint_lib_id`; a name with no library is bare)
+                let lib_id = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).unwrap_or_else(|| footprint.name.clone());
                 let (nickname, item) = lib_id.split_once(':').unwrap_or(("", lib_id.as_str()));
                 let fields: Vec<PcbField> = crate::fp_json::fields_json(design, part, fp, &footprint).iter().map(field_of).collect();
                 let pads = footprint

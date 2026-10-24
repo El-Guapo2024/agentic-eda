@@ -300,8 +300,10 @@ fn gencad_has_the_boards_outline_parts_and_nets() {
     }
     let nets = intent_nets();
     assert!(!nets.is_empty());
+    // each of the intent's nets is a signal of its pins, under the name KiCad gives it (`/FB` for the label FB on the root, `Net-(..)` for a net no label names)
     for (name, pins) in &nets {
-        assert_eq!(cad.signals.get(name), Some(pins), "the net {name} and its pins");
+        let signal = cad.signals.iter().find(|(_, p)| *p == pins).map(|(n, _)| n.clone());
+        assert!(signal.as_deref().is_some_and(|s| s == name || s.ends_with(&format!("/{name}")) || s.starts_with("Net-(")), "the net {name} and its pins: {signal:?}");
     }
 }
 

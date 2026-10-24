@@ -3104,11 +3104,12 @@ pub(crate) mod tests {
             company: state["title_block"]["shown"]["company"].as_str().unwrap().to_string(),
         };
         assert_eq!(shown.board_text, "Rev B7 of intent on F.Silkscreen B7-10k");
-        assert_eq!(shown.mpn, "ERJ-B7 GND 2PAD eda F.Silkscreen ${REV}", "the studio's own reading of the variables it knows");
+        // (`2PAD` is a footprint of no library: the file names it bare, and its library is empty)
+        assert_eq!(shown.mpn, "ERJ-B7 GND 2PAD  F.Silkscreen ${REV}", "the studio's own reading of the variables it knows");
         // A literal `${REV}` that comes back from another field's shown text is a variable again to the text that asked for it (KiCad's ResolveTextVars passes).
         // U1's MPN ends in an escaped `\${REV}`, and it stays literal in a text that looks the field up: the lookup is `INTERNAL`, which keeps the
         // escape (`FinalizeTextVarExpansion`; KiCad 10.99 by build 5334 -- an older one expanded it again).
-        assert_eq!(shown.twin, "B7-10k ERJ-B7 GND 2PAD eda F.Silkscreen ${REV} U2 Default");
+        assert_eq!(shown.twin, "B7-10k ERJ-B7 GND 2PAD  F.Silkscreen ${REV} U2 Default");
         board_with_text_variables(&without, &shown, &[]);
 
         let plot = |dir: &Path| -> String {
@@ -4181,28 +4182,28 @@ pub(crate) mod tests {
         }
         let dir = scratch("erc_severities");
         setup(&dir);
-        // The derived schematic of this board has symbols with no footprint library: `footprint_link_issues`, a warning by default.
+        // The derived schematic of this board has symbols with no footprint library (a bare `2PAD`): `footprint_link_issues`, which the derived project
+        // ignores as it ignores every library check (`effective_erc_severities`) until Schematic Setup turns it on.
         let check = "footprint_link_issues";
         let of = |report: &serde_json::Value, severity: &str| report["violations"].as_array().unwrap().iter().filter(|v| v["check"] == check && v["severity"] == severity).count();
         let ignored = |report: &serde_json::Value| report["ignored_checks"].as_array().unwrap().iter().any(|c| c["key"] == check);
         let before = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
-        let n = of(&before, "warning");
-        assert!(n > 0 && of(&before, "error") == 0 && !ignored(&before), "{before:#}");
+        assert!(of(&before, "warning") + of(&before, "error") == 0 && ignored(&before), "{before:#}");
 
         let table = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
+        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "warning")]) }, false, "ui").unwrap();
+        let warnings = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        let n = of(&warnings, "warning");
+        assert!(n > 0 && of(&warnings, "error") == 0 && !ignored(&warnings), "turned on, the check reports the bare footprints: {warnings:#}");
+
         step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "error")]) }, false, "ui").unwrap();
         let errors = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
         assert_eq!((of(&errors, "error"), of(&errors, "warning")), (n, 0), "the check is reported as an error now");
 
-        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "ignore")]) }, false, "ui").unwrap();
-        let off = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
-        assert_eq!(of(&off, "error") + of(&off, "warning"), 0, "an ignored check is not run");
-        assert!(ignored(&off), "and the report lists it as ignored: {:#}", off["ignored_checks"]);
-
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         let back = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
-        assert_eq!((of(&back, "warning"), ignored(&back)), (n, false), "Undo takes both back");
+        assert_eq!((of(&back, "warning") + of(&back, "error"), ignored(&back)), (0, true), "Undo takes both back");
     }
 
     /// `E`/`V`/`F`: each field is independently settable -- editing just
