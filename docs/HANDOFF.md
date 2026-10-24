@@ -1,4 +1,4 @@
-# Handoff: the KiCad port, 2026-10-23 (paused by the user)
+# Handoff: the KiCad port, 2026-10-24 (paused by the user: session limit)
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
@@ -15,7 +15,9 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
   - kicad-cli is the only DRC, ERC, plot, export and zone-fill engine.
   - Every edit is one undoable `/api/cmd` verb.
 
-## What landed (2026-10-14 to 10-23)
+## What landed (2026-10-14 to 10-24)
+
+- 2026-10-24: **fix batch E, the router** (`a6e4500a`): all 7 highs, 18/21 mediums; KiCad's 7 router QA sessions replay exactly; F is Attempt Finish, Esc commits fixed legs, empty-space routes on no net. Plus `ea752e1a`, the tuner's default board thickness (1.6 µm → 1.6 mm, a nanometre leftover).
 
 Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` section.
 
@@ -58,9 +60,9 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names, one footprint name, `(path)`, fields, pinfunction, flip frame | started 2026-10-24 | all |
-| `task-fix-f-editing` (`~/work/agentic-eda-rules`) | Batch F: editing operations | started 2026-10-24 | all |
-| `task-fix-bc-board-io` | Fix batches B and C of the 2026-10-23 findings: zones keep their holes, SMD pads on `*.Cu`, paste-only pads, curves with a control point on an end, footprint Edge.Cuts in the footprint (with the outline's footprint pass), rectangle corner radius, the Extruded 3D Body kept, importers' `.kicad_dru`, a project's DRC exclusions; Fill All keeps the teardrops' fills. `PARITY-pcb.md` section 52 | done, gated | the ERC exclusions of an imported project (batch D's file); Repeat Layout's target area without holes |
+| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names (option 1), one footprint name, `(path)`, fields, pinfunction, flip frame | paused mid-work 2026-10-24: 5 commits pushed, worktree clean; was running browser checks (diff-pairs failing) | finish, gate, review vs KiCad, merge; then batch D |
+| `task-fix-bc-board-io` (`~/work/agentic-eda-exports`) | Batches B and C: zones with holes, `*.Cu` SMD pads, paste-only pads, curves, footprint Edge.Cuts, corner radius, 3D body, `.kicad_dru`, DRC exclusions; teardrop fills (`legacy_teardrops yes`, trade-off in GAPS 13) | done, reviewed vs KiCad, review fixes R1-R3 in; main merged in (02696874) | the lead's own gate (cargo check, fast, parity report) was stopped by the pause: rerun it, then merge |
+| `task-fix-f-editing` (`~/work/agentic-eda-rules`) | Batch F: editing (groups, bounding boxes, carry R/F, Position Relative, Recombine, Repeat Layout, design blocks, Net Inspector) | reviewed vs KiCad; review fix M1 committed (868d845f); fixes 2-6 **uncommitted in the worktree** when paused (Net Inspector layer columns and rows, Canvas isLocked, model3d courtyard box, design-block layers) | finish 2-6 and the PARITY notes, merge main in, gate, merge |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
