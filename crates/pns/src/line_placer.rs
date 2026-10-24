@@ -808,51 +808,62 @@ impl LinePlacer {
         self.placed_runs()
     }
 
-    /// `LINE_PLACER::removeLoops`, adapted to this port's "one commit per
-    /// whole finished connection" granularity (`crate::router`'s own doc
-    /// comment on why a multi-run, via-switching session still becomes one
-    /// undo step): once the connection reaches a real end (lands on a
-    /// same-net anchor), check whether its own two endpoints -- the
-    /// route's true start (the very first point of its first run) and the
-    /// anchor it just landed on -- are *also* already joined by some
-    /// other, pre-existing same-net path (`Node::find_lines_between_joints`).
-    /// If so, that other path is now a redundant parallel connection
-    /// between the same two electrical points and gets deleted, same as
-    /// upstream -- unless any of its segments are locked (upstream's own
-    /// "don't remove locked tracks" rule). This session's own runs are
-    /// never inserted into `node` while routing (see the module doc
-    /// comment), so every match `find_lines_between_joints` returns here
-    /// is necessarily a *different*, already-committed line, never the one
-    /// just placed.
-    ///
-    /// Deliberately coarser than upstream, which re-checks per internal
-    /// segment of the new line (each one can itself be a `JOINT` if the
-    /// new route happened to touch an intermediate branch point) -- this
-    /// checks only the whole connection's two outer endpoints, matching
-    /// the "whole finished line is the unit" adaptation the rest of this
-    /// crate's commit model already makes. The common case (a route
-    /// finished directly between two points already connected by one
-    /// redundant pre-existing path) behaves identically; a new route that
-    /// also happens to graze a third, unrelated branch point partway
-    /// through is not specially handled.
+    /// `LINE_PLACER::removeLoops( m_lastNode, current )`, which `Move` runs once the head reaches a same-net end item (here: when the route is
+    /// finished on one): the route is added to the world (`aNode->Add( aLatest, true )`), and for each of its segments the line it is part of
+    /// there -- through the tracks it continues, `ourLine = aNode->AssembleLine( seg )` -- gives two joints (`FindLineEnds`; the route's own
+    /// two ends if that line closes on itself); every other line of the net between those two joints (`FindLinesBetweenJoints`) that is not
+    /// that line is redundant, and its tracks are removed (`toErase`). (findings p5 F2-7: only the route's own two end points were tried.)
+    /// **Differs:** the IR keeps a track as a polyline, so a track is removed only when every segment of it is redundant; and a line with a
+    /// locked segment stays ("don't remove locked tracks", as before).
     fn remove_loops(&mut self, node: &Node) {
-        let (Some(start), Some(end)) = (self.runs.first().and_then(|r| r.first()), self.runs.last().and_then(|r| r.last())) else { return };
-        if start == end {
+        let runs = self.placed_runs();
+        let (Some(route_start), Some(route_end)) = (runs.first().and_then(|r| r.first()), runs.last().and_then(|r| r.last())) else { return };
+        if route_start == route_end {
             return;
         }
-        for line in node.find_lines_between_joints(start, end, &self.net) {
-            let has_locked_segment = line.segment_ids.iter().any(|id| node.get(*id).is_some_and(|it| it.is_track() && it.is_locked()));
-            if has_locked_segment {
-                continue;
+        // the world the last `Move` left (what the shoves moved), with the route in it
+        let moved = World { fixed: Vec::new(), fixed_vias: Vec::new(), ..self.last_world.borrow().clone() };
+        let mut w = moved.apply(node);
+        let mut ours: Vec<ItemId> = Vec::new();
+        for run in runs.iter().filter(|r| r.point_count() >= 2) {
+            ours.extend(w.add_line(run, None, false));
+        }
+        for (v, _) in &self.fixed_vias {
+            w.add(Item::Via(v.clone()));
+        }
+        let mut erase: std::collections::BTreeSet<ItemId> = std::collections::BTreeSet::new();
+        for &seg in &ours {
+            let Some(our_line) = w.assemble_line(seg) else { continue };
+            let (mut a, mut b) = (our_line.first(), our_line.last());
+            if a == b {
+                (a, b) = (Some(route_start), Some(route_end));
             }
-            let mut track_ids: Vec<String> = line.segment_ids.iter().filter_map(|id| node.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)).collect();
-            track_ids.sort_unstable();
-            track_ids.dedup();
-            for track_id in track_ids {
-                // An empty replacement (`point_count() < 2`) tells the
-                // eventual caller (`crate::router::Router::build_commit`)
-                // "remove this track, nothing replaces it" -- the same
-                // convention a fully-retracted shove already relies on.
+            let (Some(a), Some(b)) = (a, b) else { continue };
+            for line in w.find_lines_between_joints(a, b, &self.net) {
+                if line.segment_ids.contains(&seg) || line.segment_count() == 0 {
+                    continue;
+                }
+                if line.segment_ids.iter().any(|id| w.get(*id).is_some_and(|it| it.is_track() && it.is_locked())) {
+                    continue;
+                }
+                erase.extend(line.segment_ids.iter().copied());
+            }
+        }
+        // the IR tracks all of whose segments are redundant
+        let mut by_track: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for (id, it) in w.iter() {
+            if let Some(t) = it.source_track_id() {
+                let e = by_track.entry(t.to_string()).or_insert((0, 0));
+                e.0 += 1;
+                if erase.contains(&id) {
+                    e.1 += 1;
+                }
+            }
+        }
+        for (track_id, (total, erased)) in by_track {
+            if erased > 0 && erased == total {
+                // An empty replacement (`point_count() < 2`) tells the eventual caller (`crate::router::Router::build_commit`) "remove this
+                // track, nothing replaces it" -- the same convention a fully-retracted shove already relies on.
                 self.displaced_tracks.insert(track_id, Vec::new());
             }
         }
@@ -1479,28 +1490,49 @@ mod tests {
         assert_eq!(head_effort(&medium, true), optimizer::effort::MERGE_SEGMENTS, "a posture forced with `/` leaves the pad connection alone");
     }
 
-    #[test]
-    fn finishing_a_route_onto_an_already_connected_same_net_anchor_removes_the_redundant_old_path() {
+    /// Two SIG pads, A at (0, 0) and B at (3000, 0), joined by an old detour above them, and the tracks given.
+    fn two_pads_and_a_detour(extra: &[(Point, Point, &str)]) -> Node {
         use crate::item::Segment;
         let mut node = Node::new();
-        // A pre-existing direct connection between (0,0) and (3000,0),
-        // same net as the new route below -- once the new route also joins
-        // those same two points, this one becomes a redundant parallel
-        // path and should be deleted (`RoutingSettings::remove_loops`
-        // defaults `true`, matching upstream).
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 3_000_000, y: 0 }, width: 200_000, source_track: Some(("trkOld".into(), 0)), locked: false }));
+        for at in [Point { x: 0, y: 0 }, Point { x: 3_000_000, y: 0 }] {
+            node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: at, shape: Shape::Circle { c: at, r: 300_000 }, source: "P".into(), edge: false }));
+        }
+        let detour = [Point { x: 0, y: 0 }, Point { x: 0, y: 2_000_000 }, Point { x: 3_000_000, y: 2_000_000 }, Point { x: 3_000_000, y: 0 }];
+        for (k, w) in detour.windows(2).enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: 200_000, source_track: Some(("trkOld".into(), k)), locked: false }));
+        }
+        for (k, &(a, b, track)) in extra.iter().enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: 200_000, source_track: Some((track.into(), k)), locked: false }));
+        }
+        node
+    }
+
+    /// `removeLoops`: a route from pad A to pad B, which an old track already joins, makes the old track redundant, and it goes.
+    #[test]
+    fn finishing_a_route_onto_an_already_connected_same_net_anchor_removes_the_redundant_old_path() {
+        let node = two_pads_and_a_detour(&[]);
         let rules = rules();
         let settings = RoutingSettings::default();
         assert!(settings.remove_loops, "sanity: the default this test exercises");
         let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-
-        let outcome = placer.finish(&node, &rules, &settings, Point { x: 3_000_000, y: 0 }).expect("must finish onto the old track's own endpoint");
+        let outcome = placer.finish(&node, &rules, &settings, Point { x: 3_000_000, y: 0 }).expect("must finish onto pad B");
         assert_eq!(outcome.len(), 1, "the new connection itself is still placed");
-
         let displaced: Vec<_> = placer.displaced_tracks().collect();
         assert_eq!(displaced.len(), 1);
         assert_eq!(displaced[0].0, "trkOld");
         assert!(displaced[0].1.iter().all(|l| l.point_count() < 2), "no replacement geometry -- the old track is simply removed, not moved");
+    }
+
+    /// findings p5 F2-7: the loop's ends are those of the line the route is part of, through the track it continues (`ourLine = AssembleLine(
+    /// seg )`): a route from the free end X of a stub out of pad A to pad B closes a loop A..B with the old detour, which goes; the stub stays.
+    #[test]
+    fn remove_loops_follows_the_track_the_route_continues() {
+        let x = Point { x: 1_000_000, y: 0 };
+        let node = two_pads_and_a_detour(&[(Point { x: 0, y: 0 }, x, "trkStub")]);
+        let mut placer = LinePlacer::start(&node, x, None, net_of("SIG"), 0, 200_000);
+        placer.finish(&node, &rules(), &RoutingSettings::default(), Point { x: 3_000_000, y: 0 }).expect("must finish onto pad B");
+        let displaced: Vec<&str> = placer.displaced_tracks().map(|(t, _)| t).collect();
+        assert_eq!(displaced, vec!["trkOld"], "the old A-B path goes, the stub the route continues stays");
     }
 
     #[test]
