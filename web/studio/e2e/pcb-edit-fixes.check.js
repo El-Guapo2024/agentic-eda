@@ -132,6 +132,37 @@
       t(JSON.stringify((await partOf(two.ref)).at) === JSON.stringify(p0.at), "one Undo puts it back");
     });
 
+    // ----- p6 F14
+    await scenario("Position Relative to the grid origin is the board's grid origin; Move Exactly's anchors are KiCad's", async (t) => {
+      const p0 = await partOf(two.ref);
+      const go = { x: Math.round(p0.at[0] + 3_000_000), y: Math.round(p0.at[1] + 2_000_000) };
+      await post({ op: "set_grid_origin", at: go });
+      await sleep(600);
+      await select([two.ref]);
+      await __eda.run("pcbnew.PositionRelative.positionRelative"); await sleep(600);
+      const dlg = [...document.querySelectorAll(".dialog")].find((d) => d.textContent.includes("Position Relative To..."));
+      t(!!dlg, "the dialog opens");
+      if (!dlg) return;
+      const grid = [...dlg.querySelectorAll("label")].find((l) => l.textContent.trim().startsWith("Grid origin"))?.querySelector("input");
+      grid.click(); await sleep(150);
+      const polar = [...dlg.querySelectorAll("label")].find((l) => l.textContent.includes("Polar coordinates"))?.querySelector("input");
+      if (polar.checked) { polar.click(); await sleep(150); }
+      const inputs = [...dlg.querySelectorAll(".kv-grid input")];
+      setValue(inputs[0], 0); setValue(inputs[1], 0); await sleep(150);
+      buttonText(dlg, "OK").click(); await sleep(1200);
+      const p1 = await partOf(two.ref);
+      t(near(p1.at[0], go.x, 1_000) && near(p1.at[1], go.y, 1_000), `the footprint is on the grid origin (${p1.at} for ${[go.x, go.y]})`);
+      await undo();
+      await undo();
+      await select([two.ref]);
+      await __eda.run("pcbnew.InteractiveEdit.moveExact"); await sleep(600);
+      const menu = document.querySelector('[data-testid="move-exact-anchor"]');
+      const items = menu ? [...menu.options].map((o) => o.textContent) : [];
+      t(items.join("|") === "Rotate around item anchor|Rotate around local coordinates origin|Rotate around drill/place origin", `one item: ${items.join(", ")}`);
+      await closeDialogs();
+      t((await snapshot()) === base, "undone, the board is as it was");
+    });
+
     // ----- p6 F2
     await scenario("a handle drag of a grouped line and Mirror of a grouped track keep them in their group", async (t) => {
       const [x0, y0] = [two.at[0] / 1e6 + 4, two.at[1] / 1e6 + 6];

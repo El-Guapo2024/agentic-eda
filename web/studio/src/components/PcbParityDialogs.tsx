@@ -111,6 +111,9 @@ function FindMoveDialog() {
 
 type AnchorKind = "origin" | "grid" | "item" | "point";
 
+/** `DIALOG_POSITION_RELATIVE::s_anchorType` (`= ANCHOR_ITEM`). */
+let lastAnchorKind: AnchorKind = "item";
+
 /** `DIALOG_POSITION_RELATIVE` -- see this file's header. */
 function PositionRelativeDialog() {
   const state = useStudioState();
@@ -134,7 +137,12 @@ function PositionRelativeDialog() {
   // PositionRelative: "We prefer footprints, then pads, then anything else".
   const selectionAnchor = useMemo(() => positionRelativeSelectionAnchor(movables.map((m) => ({ isFootprint: m.kind === "part", x: m.at[0], y: m.at[1] }))), [movables]);
 
-  const [anchorKind, setAnchorKind] = useState<AnchorKind>("origin");
+  // `s_anchorType`: static, so the dialog opens on the anchor of last time, Item the first time.
+  const [anchorKind, setAnchorKindState] = useState<AnchorKind>(lastAnchorKind);
+  const setAnchorKind = (k: AnchorKind) => {
+    lastAnchorKind = k;
+    setAnchorKindState(k);
+  };
   const [itemRef, setItemRef] = useState("");
   /** An item picked on the canvas ("Select Item..."): any board item, anchored on its position (`UpdatePickedItem`). */
   const [pickedItem, setPickedItem] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -184,8 +192,11 @@ function PositionRelativeDialog() {
     switch (anchorKind) {
       case "origin":
         return state.localOriginNm ?? { x: 0, y: 0 };
-      case "grid":
-        return { x: 0, y: 0 }; // BOARD_DESIGN_SETTINGS grid origin: this model has no grid-origin setting, so it is the board origin.
+      case "grid": {
+        // `GetDesignSettings().GetGridOrigin()`: the board's grid origin (`set_grid_origin`), (0, 0) when none is set.
+        const g = board?.grid_origin;
+        return g ? { x: g[0], y: g[1] } : { x: 0, y: 0 };
+      }
       case "item": {
         if (pickedItem && !itemRef) return { x: pickedItem.x, y: pickedItem.y };
         const p = placed.find((q) => q.ref === itemRef);

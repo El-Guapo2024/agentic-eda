@@ -11,10 +11,12 @@
 // for 2+ items: one shared point, the bbox center *after* the translation
 // -- source: `selCenter = rp + translation`), or "local coordinates origin"
 // (the status bar's Space-settable point, state.localOriginNm, untouched by
-// translation). Any kind of item, locked ones left alone, the whole thing
-// one undo step.
-// KiCad's fourth choice, "drill/place origin" (a board-wide aux origin
-// setting), has no equivalent in this app's model and is left out.
+// translation), or "drill/place origin" (the board's aux origin, `board.aux_origin`).
+// Any kind of item, locked ones left alone, the whole thing one undo step.
+// The menu is KiCad's (`m_menuIDs = { aAnchor, ROTATE_AROUND_USER_ORIGIN, ROTATE_AROUND_AUX_ORIGIN }`, `buildRotationAnchorMenu`): the
+// selection's own anchor first -- "Rotate around item anchor" for one item, "Rotate around selection center" for several -- then "Rotate
+// around local coordinates origin" and "Rotate around drill/place origin". The dialog keeps what was entered the last time it was opened
+// for that kind of selection (DIALOG_SHIM's saved state, keyed by `m_hash_key`: the title, "|with_selection" for several items).
 //
 // Rotation sign: source negates the dialog's own angle before calling
 // Rotate() whenever the display's Y axis is not inverted (the default) --
@@ -33,7 +35,20 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { nmFrom } from "../state/units";
 import { editableSelection, planMoveExact } from "../kicad-port/pcbTransform";
 
-type Anchor = "item" | "center" | "origin";
+type Anchor = "item" | "center" | "origin" | "aux";
+
+/** What the dialog had when it was last closed, per `m_hash_key` (one item / several). */
+interface Saved {
+  polar: boolean;
+  moveX: number;
+  moveY: number;
+  distance: number;
+  angleDeg: number;
+  rotate: number;
+  /** The position in the menu (`m_anchorOptions->GetSelection()`). */
+  anchorIndex: number;
+}
+const saved: Record<"single" | "with_selection", Saved | undefined> = { single: undefined, with_selection: undefined };
 
 export function MoveExactDialog() {
   const state = useStudioState();
@@ -52,16 +67,27 @@ export function MoveExactDialog() {
   const [rotate, setRotate] = useState(0); // rotation, CCW-positive degrees
   const [anchor, setAnchor] = useState<Anchor>("item");
 
+  const key: "single" | "with_selection" = items.length > 1 ? "with_selection" : "single";
+  // EDIT_TOOL::MoveExact: `selection.Size() > 1 ? ROTATE_AROUND_SEL_CENTER : ROTATE_AROUND_ITEM_ANCHOR`, then the two origins.
+  const menu: Anchor[] = [items.length > 1 ? "center" : "item", "origin", "aux"];
+  const label: Record<Anchor, string> = {
+    item: "Rotate around item anchor",
+    center: "Rotate around selection center",
+    origin: "Rotate around local coordinates origin",
+    aux: "Rotate around drill/place origin",
+  };
+
   useEffect(() => {
     if (!open) return;
-    setPolar(false);
-    setMoveX(0);
-    setMoveY(0);
-    setDistance(0);
-    setAngleDeg(0);
-    setRotate(0);
-    // EDIT_TOOL::MoveExact: `selection.Size() > 1 ? ROTATE_AROUND_SEL_CENTER : ROTATE_AROUND_ITEM_ANCHOR`.
-    setAnchor(items.length > 1 ? "center" : "item");
+    // `TransferDataToWindow`: the values of last time ("Force the evaluation when setting previous values"), else zeros on the first anchor.
+    const s = saved[key];
+    setPolar(s?.polar ?? false);
+    setMoveX(s?.moveX ?? 0);
+    setMoveY(s?.moveY ?? 0);
+    setDistance(s?.distance ?? 0);
+    setAngleDeg(s?.angleDeg ?? 0);
+    setRotate(s?.rotate ?? 0);
+    setAnchor(menu[s?.anchorIndex ?? 0] ?? menu[0]!);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -76,7 +102,10 @@ export function MoveExactDialog() {
   const submit = async () => {
     // One move_items and the turn(s) as one batch (kicad-port/pcbTransform.ts `planMoveExact`); the dialog's angle is counter-clockwise, the backend's clockwise.
     if (!state.board) return;
-    const plan = planMoveExact(state.board, items, dxNm, dyNm, rotate, anchor, [state.localOriginNm.x, state.localOriginNm.y]);
+    saved[key] = { polar, moveX, moveY, distance, angleDeg, rotate, anchorIndex: Math.max(0, menu.indexOf(anchor)) };
+    // ROTATE_AROUND_AUX_ORIGIN: the board's drill/place origin, a fixed point as the local origin is.
+    const aux = state.board.aux_origin ?? [0, 0];
+    const plan = anchor === "aux" ? planMoveExact(state.board, items, dxNm, dyNm, rotate, "origin", [aux[0], aux[1]]) : planMoveExact(state.board, items, dxNm, dyNm, rotate, anchor, [state.localOriginNm.x, state.localOriginNm.y]);
     if (plan.cmds.length === 0 || (await api.cmdBatch(plan.cmds))) close();
   };
 
@@ -119,10 +148,12 @@ export function MoveExactDialog() {
           </div>
           <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr", marginTop: 8 }}>
             <span>Rotate around:</span>
-            <select value={anchor} onChange={(e) => setAnchor(e.target.value as Anchor)}>
-              <option value="item">{items.length > 1 ? "Each item's own anchor" : "Item anchor"}</option>
-              <option value="center">Selection center</option>
-              <option value="origin">Local coordinates origin</option>
+            <select value={anchor} onChange={(e) => setAnchor(e.target.value as Anchor)} data-testid="move-exact-anchor">
+              {menu.map((a) => (
+                <option key={a} value={a}>
+                  {label[a]}
+                </option>
+              ))}
             </select>
           </div>
           <div style={{ fontSize: 11, opacity: 0.7, marginTop: 6 }}>
