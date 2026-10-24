@@ -223,17 +223,14 @@ pub struct LinePlacer {
 }
 
 impl LinePlacer {
-    /// `LINE_PLACER::Start`. `start_item`, if given, seeds the initial
-    /// posture: continuing an existing segment keeps its direction
-    /// (`DIRECTION_45(that segment, oriented away from aP)`); anything
-    /// else (a pad, free space) leaves the generic default `N` KiCad's own
-    /// `InitialDirection()` falls back to when "start diagonal" is off.
+    /// `LINE_PLACER::Start`: the posture starts at `InitialDirection()`, `N` ("start diagonal" off) whatever the route starts on -- KiCad
+    /// computes the direction of a segment it starts from (`lastSegDir`, `initialDir`) but hands the tracer `m_initial_direction`
+    /// (`SetDefaultDirections( m_initial_direction, UNDEFINED )`). `start_item` is kept for the callers' shape.
     pub fn start(node: &Node, p: Point, start_item: Option<ItemId>, net: Net, layer: i32, width: Nm) -> Self {
-        let direction = match start_item.and_then(|id| node.get(id)) {
-            Some(Item::Segment(s)) if s.a == p => Direction45::from_seg(s.b, s.a),
-            Some(Item::Segment(s)) if s.b == p => Direction45::from_seg(s.a, s.b),
-            _ => Direction45::N,
-        };
+        // `m_initial_direction = Settings().InitialDirection()`: `N` (`NE` with "start diagonal", which the studio does not set). The start
+        // segment's direction KiCad's `Start` works out (`lastSegDir`, `initialDir`) is never used (findings p5 F2-12).
+        let _ = (node, start_item);
+        let direction = Direction45::N;
         // `LINE_PLACER::Start`: `m_mouseTrailTracer.Clear(); AddTrailPoint( aP ); SetTolerance( m_head.Width() ); SetDefaultDirections( m_initial_direction, UNDEFINED )`
         let mut trail = MouseTrailTracer::new();
         trail.clear();
@@ -326,7 +323,9 @@ impl LinePlacer {
             }
             walked
         };
-        let effort = head_effort(settings, self.manually_forced);
+        // `!m_mouseTrailTracer.IsManuallyForced()`: the tracer's own flag, which `Clear()` resets on every `FixRoute` -- one `/` keeps Smart Pads off
+        // for the leg it was pressed in, not for the rest of the route (findings p5 F2-13)
+        let effort = head_effort(settings, self.trail.borrow().is_manually_forced());
         let optimize = |line: &Line, world: &Node| optimizer::optimize_constrained(line, world, rules, &exclude, effort, &optimizer::Constraints { corner_mode: settings.corner_mode, ..Default::default() });
 
         let mut current = current;
@@ -1451,6 +1450,34 @@ mod tests {
         // off, the posture is the initial one (straight first, `N` is not diagonal) whatever the mouse did
         assert!(!first_direction(&off, true).is_diagonal());
         assert!(!first_direction(&off, false).is_diagonal());
+    }
+
+    /// findings p5 F2-12: a route from the end of a diagonal track starts straight (`InitialDirection()` is `N`), not along the track.
+    #[test]
+    fn a_route_from_a_diagonal_track_end_starts_straight() {
+        use crate::item::Segment;
+        let mut node = Node::new();
+        let seg = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 1_000_000, y: 1_000_000 }, width: 200_000, source_track: None, locked: false }));
+        let settings = RoutingSettings { auto_posture: false, ..RoutingSettings::default() };
+        let placer = LinePlacer::start(&node, Point { x: 1_000_000, y: 1_000_000 }, Some(seg), net_of("SIG"), 0, 200_000);
+        let pts = placer.preview(&node, &rules(), &settings, Point { x: 3_000_000, y: 2_000_000 }).head.pts;
+        assert!(!Direction45::from_seg(pts[0], pts[1]).is_diagonal(), "straight first: {pts:?}");
+    }
+
+    /// findings p5 F2-13: Smart Pads are off for the leg a `/` was pressed in (`IsManuallyForced()`), and on again after the click that fixes it
+    /// (`FixRoute`: `m_mouseTrailTracer.Clear()`).
+    #[test]
+    fn a_flip_turns_smart_pads_off_for_its_leg_only() {
+        let (node, rules) = (Node::new(), rules());
+        let settings = RoutingSettings::default();
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        placer.preview(&node, &rules, &settings, Point { x: 3_000_000, y: 0 });
+        placer.flip_posture();
+        assert!(placer.trail.borrow().is_manually_forced());
+        assert_eq!(head_effort(&settings, placer.trail.borrow().is_manually_forced()) & optimizer::effort::SMART_PADS, 0);
+        placer.fix(&node, &rules, &settings, Point { x: 3_000_000, y: 0 });
+        assert!(!placer.trail.borrow().is_manually_forced(), "the fix starts a new trail");
+        assert_ne!(head_effort(&settings, placer.trail.borrow().is_manually_forced()) & optimizer::effort::SMART_PADS, 0);
     }
 
     /// `FlipPosture` (`/`): the posture flips from the direction of the head shown and stays flipped whatever the mouse does; a fix starts a new trail that
