@@ -385,7 +385,8 @@ fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
         pin_name_offset_mm: 0.508,
         alternate: None,
     };
-    let pins = ["1", "2", "3", "4", "5", "6", "7", "8"].iter().map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect();
+    let names = [("1", "OUT1"), ("2", "IN1-"), ("3", "IN1+"), ("4", "V-"), ("5", "IN2+"), ("6", "IN2-"), ("7", "OUT2"), ("8", "V+")];
+    let pins = names.iter().map(|(n, name)| Pin { number: n.to_string(), name: Some(name.to_string()), kind: PinKind::Passive }).collect();
     let part = Part { reference: "U9".into(), mpn: None, lcsc: None, value: Some("TL072".into()), package: None, footprint: None, symbol: Some("Test:Dual3".into()), datasheet: None, pins, body_nm: None, edge: None };
     (sym, part)
 }
@@ -404,7 +405,8 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
     model.parts.push(part);
     model.nets.iter_mut().find(|n| n.name == "VDD").unwrap().pins.push("U9.8".into());
     model.nets.iter_mut().find(|n| n.name == "GND").unwrap().pins.push("U9.4".into());
-    for (name, a, b) in [("AMP_FB1", "U9.1", "U9.2"), ("AMP_FB2", "U9.7", "U9.6"), ("AMP_X", "U9.3", "U9.5")] {
+    // (U9.3 and U9.5 are on no net: KiCad names each the net of a pin alone, with the unit it is on, `unconnected-(U9A-IN1+-Pad3)`)
+    for (name, a, b) in [("AMP_FB1", "U9.1", "U9.2"), ("AMP_FB2", "U9.7", "U9.6")] {
         model.nets.push(eda_model::Net { name: name.into(), pins: vec![a.into(), b.into()] });
     }
     let intent = dir.join("intent.yaml");
@@ -444,7 +446,40 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
     assert_eq!(units.len(), 3, "each unit is placed once: {units:?}");
     assert_no_reference_findings(&dir, "reorganized with a multi-unit part");
     let kinds = erc_kinds(&dir);
-    assert!(kinds.is_empty(), "the reorganized board with its dual op-amp is clean: {kinds:?}");
+    assert!(kinds.keys().all(|k| k == "pin_not_connected"), "the reorganized board with its dual op-amp is clean but for its two pins left unwired: {kinds:?}");
+    // every pin's net under the name kicad-cli's netlist gives it: the labels' with their sheets' paths, a lone pin's with the unit it is drawn on
+    let (_, mut drawn, model) = load(&dir).unwrap();
+    let ours: std::collections::BTreeMap<String, String> = crate::board::trace_kicad_names(&mut drawn, &model).into_iter().flat_map(|n| n.pins.into_iter().map(move |p| (p, n.name.clone()))).collect();
+    let theirs = kicad_net_names(&dir);
+    assert_eq!(theirs.get("U9.3").map(String::as_str), Some("unconnected-(U9A-IN1+-Pad3)"));
+    assert_eq!(theirs.get("U9.5").map(String::as_str), Some("unconnected-(U9B-IN2+-Pad5)"));
+    // (a pin alone is on no traced net: the board writer names its pad's net, `unconnected_pin_nets`, the way it does here)
+    for (pin, name) in &theirs {
+        let ours = ours.get(pin).cloned().unwrap_or_else(|| {
+            let (reference, number) = pin.split_once('.').unwrap();
+            let shown = model.part(reference).and_then(|p| p.pins.iter().find(|p| p.number == number)).and_then(|p| p.name.clone());
+            let with_unit = model.symbol_links.get(reference).and_then(|l| l.units.get(number)).cloned();
+            eda_engine::nets::unconnected_net_name(pin, shown.as_deref(), with_unit.as_deref())
+        });
+        assert_eq!(&ours, name, "{pin}: kicad-cli names its net {name}");
+    }
+}
+
+/// kicad-cli's netlist of the board: the name of each pin's net, by `REF.PIN`, power symbols left out.
+fn kicad_net_names(dir: &Path) -> std::collections::BTreeMap<String, String> {
+    let done = crate::kicad_engine::export_sch(dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).expect("kicad-cli exports the netlist");
+    let text = std::fs::read_to_string(dir.join(done["files"][0].as_str().expect("one netlist file"))).unwrap();
+    let attr = |line: &str, name: &str| line.split(&format!("{name}=\"")).nth(1).and_then(|r| r.split('"').next()).unwrap_or("").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'");
+    let mut out = std::collections::BTreeMap::new();
+    let mut net = String::new();
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            net = attr(line, "name");
+        } else if line.starts_with("<node ") && !attr(line, "ref").starts_with('#') {
+            out.insert(format!("{}.{}", attr(line, "ref"), attr(line, "pin")), net.clone());
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------------------- a screen shown by two sheets
@@ -1072,7 +1107,7 @@ fn qa_traced(rel: &str) -> Option<(Vec<Vec<String>>, Vec<Vec<String>>)> {
     let aliases = design.bus_aliases.clone();
     let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
     let global_power = |lib_id: &str| -> Option<bool> { model.symbol_of(lib_id).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power) };
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
     let mut ours: Vec<Vec<String>> = crate::board::trace_design(&mut design.clone(), &model, &naming).into_iter().map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).collect::<Vec<_>>()).filter(|p: &Vec<String>| p.len() >= 2).collect();
     for g in ours.iter_mut() {
         g.sort();

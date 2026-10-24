@@ -868,12 +868,21 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
         let no_connect: std::collections::BTreeSet<&str> = sch.no_connects.iter().map(|n| n.pin.as_str()).collect();
         for sym in sch.symbols.iter().filter(|s| !s.exclude_from_board) {
             let reference = eda_model::sheet_list::reference_under(sch, sym, placement);
-            if out.contains_key(&reference) {
-                continue; // a part's later units: the first one's symbol is the footprint's (`GetKIIDs().front()`)
-            }
             let Some(part) = model.part(&sym.id) else { continue };
             let lib_id = sym_lib_id(sym);
             let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
+            // the pins this symbol draws: its unit's and those of every unit (a pin of a unit no symbol places is in no netlist)
+            let drawn = |number: &str| resolved.as_ref().filter(|r| r.unit_count > 1).and_then(|r| r.pin_by_number(number)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit);
+            if let Some(link) = out.get_mut(&reference) {
+                // a part's later units: the first one's symbol is the footprint's (`GetKIIDs().front()`); their pins join its
+                for pin in part.pins.iter().filter(|p| drawn(&p.number)) {
+                    let pin_type = resolve_pin_electrical_type(pin, resolved.as_ref());
+                    let function = pin.name.as_deref().filter(|n| !n.is_empty() && *n != "~").map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
+                    link.pins.entry(pin.number.clone()).or_insert((function, pin_type));
+                    link.units.entry(pin.number.clone()).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
+                }
+                continue;
+            }
             let (_, _, datasheet) = symbol_texts(sym, part, resolved.as_ref());
             // the fields as the writer writes them: every one the sheet shows but the Reference, Value and Footprint, then the simulation fields
             let real_symbol = model.real_symbol_of(&lib_id, part);
@@ -893,6 +902,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
             let pins = part
                 .pins
                 .iter()
+                .filter(|pin| drawn(&pin.number))
                 .map(|pin| {
                     let name = pin.name.as_deref().filter(|n| !n.is_empty() && *n != "~");
                     let function = name.map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
@@ -906,8 +916,21 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                     (pin.number.clone(), (function, pin_type))
                 })
                 .collect();
+            // a symbol of several units: each pin under the reference with the unit it is drawn on (a pin of every unit, unit 0, on this symbol's)
+            let units: BTreeMap<String, String> = match resolved.as_ref().filter(|r| r.unit_count > 1) {
+                Some(r) => part
+                    .pins
+                    .iter()
+                    .filter(|pin| drawn(&pin.number))
+                    .map(|pin| {
+                        let unit = r.pin_by_number(&pin.number).map(|p| p.unit).filter(|u| *u > 0).unwrap_or(sym.unit);
+                        (pin.number.clone(), format!("{reference}{}", eda_model::annotate::unit_letters(unit)))
+                    })
+                    .collect(),
+                None => BTreeMap::new(),
+            };
             let uuid = duid_plain(&format!("{seed}sym:{}", sym.id));
-            out.insert(reference, eda_model::SymbolLink { path: format!("{uuids}/{uuid}"), sheetname: names.clone(), sheetfile: e.file.clone(), fields, pins });
+            out.insert(reference.clone(), eda_model::SymbolLink { path: format!("{uuids}/{uuid}"), sheetname: names.clone(), sheetfile: e.file.clone(), fields, pins, units });
         }
     }
     out

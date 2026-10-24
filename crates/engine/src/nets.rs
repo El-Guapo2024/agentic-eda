@@ -206,6 +206,11 @@ fn driver_order(a: &Driver, b: &Driver) -> std::cmp::Ordering {
 pub struct Naming<'a> {
     /// "REF.PIN" -> the pin's shown name (empty or `~` for none). KiCad's default net name uses it: `Net-(U1-PA0)`.
     pub pin_names: Option<&'a BTreeMap<String, String>>,
+    /// "REF.PIN" -> the reference with the unit the pin is drawn on, for a symbol of several units (`U1A`): KiCad's default net name of a named pin has
+    /// it (`Net-(U1A-OUT)`).
+    pub pin_units: Option<&'a BTreeMap<String, String>>,
+    /// The no-connect pins (`PT_NC`), "REF.PIN": KiCad names a net of theirs `unconnected-(..)` (`PIN_NAME_FACT::noConnect`).
+    pub nc_pins: Option<&'a BTreeSet<String>>,
     /// The member nets of a bus name (`SCH_CONNECTION::ConfigureFromLabel`: a vector `D[0..7]`, a group `{A B}`, an alias), `None` for a name that is
     /// not a bus (`eda_kicad::expand_bus_members` with the design's bus aliases). Without it a bus has no members and joins nothing.
     pub bus_members: Option<&'a dyn Fn(&str) -> Option<Vec<String>>>,
@@ -553,11 +558,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     }
     // The undriven nets, the larger ones first: what KiCad calls them (`SCH_PIN::GetDefaultNetName` of the best pin). A group with no pin (a
     // stray wire, a lone label) has no net and stays unnamed.
-    let shown_count = shown_name_counts(naming.pin_names);
+    let facts = PinFacts { names: naming.pin_names, units: naming.pin_units, nc: naming.nc_pins };
+    let shown_count = shown_name_counts(&facts);
     let mut order: Vec<usize> = (0..finals.len()).filter(|&i| finals[i].name.is_none() && !finals[i].pins.is_empty()).collect();
     order.sort_by(|&a, &b| finals[b].pins.len().cmp(&finals[a].pins.len()).then_with(|| finals[a].pins.first().cmp(&finals[b].pins.first())));
     for i in order {
-        let base = kicad_net_name(&finals[i].pins, naming.pin_names, &shown_count);
+        let base = kicad_net_name(&finals[i].pins, &facts, &shown_count);
         let mut name = base.clone();
         let mut k = 1;
         while used.contains(&name) {
@@ -610,51 +616,76 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     nets
 }
 
-/// How many pins of each part share each shown name, for `has_multiple` of `SCH_PIN::GetDefaultNetName`.
-fn shown_name_counts(names: Option<&BTreeMap<String, String>>) -> BTreeMap<(String, String), usize> {
+/// What KiCad's default name of a pin's net reads of the pin (`SCH_CONNECTIVITY::PIN_NAME_FACT`, `PIN_NAME_REFERENCE`): its shown name, the
+/// reference with the unit of the symbol it is drawn on (`SCH_SYMBOL::GetRef( &path, true )`: `U1A` for a part of several units), and whether it is a
+/// no-connect pin (`PT_NC`), each by "REF.PIN".
+#[derive(Default, Clone, Copy)]
+pub struct PinFacts<'a> {
+    pub names: Option<&'a BTreeMap<String, String>>,
+    pub units: Option<&'a BTreeMap<String, String>>,
+    pub nc: Option<&'a BTreeSet<String>>,
+}
+
+impl PinFacts<'_> {
+    fn shown(&self, pin_ref: &str) -> &str {
+        self.names.and_then(|n| n.get(pin_ref)).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("")
+    }
+    fn is_nc(&self, pin_ref: &str) -> bool {
+        self.nc.is_some_and(|n| n.contains(pin_ref))
+    }
+}
+
+/// How many pins of each part share each shown name, for `hasDuplicateName` of `SCH_PIN::GetDefaultNetName` (a no-connect pin counts for none).
+fn shown_name_counts(facts: &PinFacts) -> BTreeMap<(String, String), usize> {
     let mut out: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for (pin_ref, name) in names.into_iter().flatten() {
+    for pin_ref in facts.names.into_iter().flat_map(|n| n.keys()) {
         if let Some((reference, _)) = pin_ref.split_once('.') {
-            if !name.is_empty() && name != "~" {
-                *out.entry((reference.to_string(), name.clone())).or_default() += 1;
+            let name = facts.shown(pin_ref);
+            if !name.is_empty() && !facts.is_nc(pin_ref) {
+                *out.entry((reference.to_string(), name.to_string())).or_default() += 1;
             }
         }
     }
     out
 }
 
-/// `SCH_PIN::GetDefaultNetName` (eeschema/sch_pin.cpp): the name a pin gives its net when nothing stronger does -- `Net-(R1-Pad1)`; the
-/// pin's name instead of "Pad<number>" when it has one that is not its number (`Net-(U1-PA0)`, with the pad number added when the part has
-/// several pins of that name); `unconnected-(...)` for a pin that is alone. `/` is written `{slash}`.
-fn default_net_name(pin_ref: &str, names: Option<&BTreeMap<String, String>>, shown_count: &BTreeMap<(String, String), usize>, unconnected: bool) -> String {
+/// `SCH_PIN::GetDefaultNetName` and `SCH_CONNECTIVITY::RenderPinNetName` (KiCad 25ec2335, eeschema/connectivity/conn_pin_name.cpp): the name a pin
+/// gives its net when nothing stronger does -- `Net-(R1-Pad1)`; the pin's name instead of "Pad<number>" when it has one that is not its number, after
+/// the reference with its unit (`Net-(U1-PA0)`, `Net-(U1A-OUT)`), with the pad number added when the part has several pins of that name that are not
+/// no-connect pins; `unconnected-(...)` for a pin that is alone or is a no-connect pin. `/` is written `{slash}`.
+fn default_net_name(pin_ref: &str, facts: &PinFacts, shown_count: &BTreeMap<(String, String), usize>, force_no_connect: bool) -> String {
     let (reference, number) = pin_ref.split_once('.').unwrap_or((pin_ref, ""));
     let escape = |s: &str| s.replace('/', "{slash}").replace(['\n', '\r'], "");
-    let shown = names.and_then(|n| n.get(pin_ref)).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("");
+    let shown = facts.shown(pin_ref);
+    let unconnected = force_no_connect || facts.is_nc(pin_ref);
     let prefix = if unconnected { "unconnected-(" } else { "Net-(" };
     if !shown.is_empty() && shown != number {
-        let has_multiple = shown_count.get(&(reference.to_string(), shown.to_string())).is_some_and(|&n| n > 1);
+        let has_multiple = !unconnected && shown_count.get(&(reference.to_string(), shown.to_string())).is_some_and(|&n| n > 1);
         let pad = if unconnected || has_multiple { format!("-Pad{}", escape(number)) } else { String::new() };
-        format!("{prefix}{}-{}{pad})", escape(reference), escape(shown))
+        let with_unit = facts.units.and_then(|u| u.get(pin_ref)).map(String::as_str).unwrap_or(reference);
+        format!("{prefix}{}-{}{pad})", escape(with_unit), escape(shown))
     } else {
         format!("{prefix}{}-Pad{})", escape(reference), escape(number))
     }
 }
 
 /// `SCH_PIN::GetDefaultNetName( path, aForceNoConnect = true )`: the name KiCad gives the net of a pin that is alone on it or on a no-connect flag,
-/// `unconnected-(U1-NC1-Pad12)` (`unconnected-(R1-Pad1)` for a pin with no name of its own). `shown` is the pin's shown name (empty or `~` for none).
-pub fn unconnected_net_name(pin_ref: &str, shown: Option<&str>) -> String {
+/// `unconnected-(U1-NC1-Pad12)` (`unconnected-(R1-Pad1)` for a pin with no name of its own, `unconnected-(U1A-NC-Pad5)` for one of a symbol of several
+/// units). `shown` is the pin's shown name (empty or `~` for none), `with_unit` the reference with the unit the pin is drawn on.
+pub fn unconnected_net_name(pin_ref: &str, shown: Option<&str>, with_unit: Option<&str>) -> String {
     let names: BTreeMap<String, String> = shown.map(|s| (pin_ref.to_string(), s.to_string())).into_iter().collect();
-    default_net_name(pin_ref, Some(&names), &BTreeMap::new(), true)
+    let units: BTreeMap<String, String> = with_unit.map(|u| (pin_ref.to_string(), u.to_string())).into_iter().collect();
+    default_net_name(pin_ref, &PinFacts { names: Some(&names), units: Some(&units), nc: None }, &BTreeMap::new(), true)
 }
 
 /// The name KiCad gives a net nothing drives (`CONNECTION_SUBGRAPH::ResolveDrivers`, `compareDrivers`): among its pins' default names, one
 /// that is not a "-Pad" name first (a pin with a name beats a pin with only a number), then the alphabetically first; a net of one pin is
 /// `unconnected-(...)`.
-fn kicad_net_name(pins: &[String], names: Option<&BTreeMap<String, String>>, shown_count: &BTreeMap<(String, String), usize>) -> String {
+fn kicad_net_name(pins: &[String], facts: &PinFacts, shown_count: &BTreeMap<(String, String), usize>) -> String {
     if let [only] = pins {
-        return default_net_name(only, names, shown_count, true);
+        return default_net_name(only, facts, shown_count, true);
     }
-    pins.iter().map(|p| default_net_name(p, names, shown_count, false)).min_by(|a, b| a.contains("-Pad").cmp(&b.contains("-Pad")).then_with(|| a.cmp(b))).unwrap_or_else(|| "Net-()".to_string())
+    pins.iter().map(|p| default_net_name(p, facts, shown_count, false)).min_by(|a, b| a.contains("-Pad").cmp(&b.contains("-Pad")).then_with(|| a.cmp(b))).unwrap_or_else(|| "Net-()".to_string())
 }
 
 /// What an edit did to the nets, from what was drawn before it and after it: the net list `prev` with only the nets the edit touched
@@ -1151,24 +1182,34 @@ mod tests {
     /// several pins of that name, `unconnected-(...)` for a pin on its own.
     #[test]
     fn a_net_nothing_drives_is_named_the_way_kicad_names_it() {
-        let names = shown(&[("U1.3", "PA0"), ("U1.2", "GND"), ("U1.15", "GND"), ("R1.1", "~")]);
-        let count = shown_name_counts(Some(&names));
-        assert_eq!(default_net_name("R1.1", Some(&names), &count, false), "Net-(R1-Pad1)");
-        assert_eq!(default_net_name("U1.3", Some(&names), &count, false), "Net-(U1-PA0)");
-        assert_eq!(default_net_name("U1.2", Some(&names), &count, false), "Net-(U1-GND-Pad2)");
-        assert_eq!(default_net_name("R2.1", Some(&names), &count, true), "unconnected-(R2-Pad1)");
-        assert_eq!(default_net_name("U1.3", Some(&names), &count, true), "unconnected-(U1-PA0-Pad3)");
+        let names = shown(&[("U1.3", "PA0"), ("U1.2", "GND"), ("U1.15", "GND"), ("R1.1", "~"), ("U2.1", "OUT"), ("U2.5", "NC"), ("U3.4", "NC"), ("U3.5", "NC")]);
+        let units = shown(&[("U2.1", "U2A"), ("U2.5", "U2A")]);
+        let nc: BTreeSet<String> = ["U2.5", "U3.4", "U3.5"].iter().map(|s| s.to_string()).collect();
+        let f = PinFacts { names: Some(&names), units: Some(&units), nc: Some(&nc) };
+        let count = shown_name_counts(&f);
+        assert_eq!(default_net_name("R1.1", &f, &count, false), "Net-(R1-Pad1)");
+        assert_eq!(default_net_name("U1.3", &f, &count, false), "Net-(U1-PA0)");
+        assert_eq!(default_net_name("U1.2", &f, &count, false), "Net-(U1-GND-Pad2)");
+        assert_eq!(default_net_name("R2.1", &f, &count, true), "unconnected-(R2-Pad1)");
+        assert_eq!(default_net_name("U1.3", &f, &count, true), "unconnected-(U1-PA0-Pad3)");
+        // a symbol of several units: the reference with the unit, for a named pin (`referenceWithUnit`); a pin with only a number has the plain one
+        assert_eq!(default_net_name("U2.1", &f, &count, false), "Net-(U2A-OUT)");
+        // a no-connect pin is unconnected whatever its net, and two no-connect pins of one name are no duplicate (`hasDuplicateName` skips `PT_NC`)
+        assert_eq!(default_net_name("U2.5", &f, &count, false), "unconnected-(U2A-NC-Pad5)");
+        assert_eq!(default_net_name("U3.4", &f, &count, false), "unconnected-(U3-NC-Pad4)");
+        assert_eq!(unconnected_net_name("U2.5", Some("NC"), Some("U2A")), "unconnected-(U2A-NC-Pad5)");
         // a pin whose name is its number has no name to show
         let same = shown(&[("J1.1", "1")]);
-        assert_eq!(default_net_name("J1.1", Some(&same), &shown_name_counts(Some(&same)), false), "Net-(J1-Pad1)");
-        // a net of several pins takes the name of its best pin: one with a name beats one with only a number, then the alphabetical order
+        let fs = PinFacts { names: Some(&same), ..PinFacts::default() };
+        assert_eq!(default_net_name("J1.1", &fs, &shown_name_counts(&fs), false), "Net-(J1-Pad1)");
+        // a net of several pins takes the name of its best pin: one with a name beats a pin with only a number, then the alphabetical order
         let pins = vec!["R1.2".to_string(), "U1.3".to_string()];
-        assert_eq!(kicad_net_name(&pins, Some(&names), &count), "Net-(U1-PA0)");
+        assert_eq!(kicad_net_name(&pins, &f, &count), "Net-(U1-PA0)");
         let numbered = vec!["R2.1".to_string(), "R1.2".to_string()];
-        assert_eq!(kicad_net_name(&numbered, Some(&names), &count), "Net-(R1-Pad2)");
-        assert_eq!(kicad_net_name(&["R2.1".to_string()], Some(&names), &count), "unconnected-(R2-Pad1)");
-        assert_eq!(default_net_name("U1.1", None, &BTreeMap::new(), false), "Net-(U1-Pad1)");
-        assert_eq!(default_net_name("A/B.1", None, &BTreeMap::new(), false), "Net-(A{slash}B-Pad1)");
+        assert_eq!(kicad_net_name(&numbered, &f, &count), "Net-(R1-Pad2)");
+        assert_eq!(kicad_net_name(&["R2.1".to_string()], &f, &count), "unconnected-(R2-Pad1)");
+        assert_eq!(default_net_name("U1.1", &PinFacts::default(), &BTreeMap::new(), false), "Net-(U1-Pad1)");
+        assert_eq!(default_net_name("A/B.1", &PinFacts::default(), &BTreeMap::new(), false), "Net-(A{slash}B-Pad1)");
     }
 
     #[test]

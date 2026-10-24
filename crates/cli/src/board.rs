@@ -514,7 +514,36 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
     let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
     // a power symbol names its net when its pin is a power input (`SCH_PIN::IsGlobalPower`), which a PWR_FLAG's is not
     let global_power = |lib_id: &str| -> Option<bool> { resolve_lib_symbol(lib_id, model).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power) };
+    // the reference with the unit of each pin of a symbol of several units (`Net-(U1A-OUT)`), and the no-connect pins (`unconnected-(..)`), as the
+    // schematic writer writes them (`resolve_pin_electrical_type`)
+    let mut pin_units: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        for sym in &sec.symbols {
+            let Some(part) = model.part(&sym.id) else { continue };
+            let Some(lib) = model.real_symbol_of_instance(sec, sym, part).filter(|l| l.unit_count > 1) else { continue };
+            let reference = eda_model::sheet_list::reference_under(sec, sym, e.path.last().map(String::as_str));
+            for p in lib.pins.iter().filter(|p| p.unit == sym.unit || p.unit == 0) {
+                pin_units.entry(format!("{reference}.{}", p.number)).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
+            }
+        }
+    }
+    let nc_pins: std::collections::BTreeSet<String> = model
+        .parts
+        .iter()
+        .flat_map(|part| {
+            let lib = part.symbol.as_deref().and_then(|id| resolve_lib_symbol(id, model));
+            part.pins
+                .iter()
+                .filter(move |pin| match lib.as_ref().and_then(|l| l.pin_by_number(&pin.number)) {
+                    Some(lp) => lp.electrical_type == "no_connect",
+                    None => pin.kind == eda_model::PinKind::Nc,
+                })
+                .map(|pin| format!("{}.{}", part.reference, pin.number))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power) };
     trace_design(design, model, &naming)
 }
 

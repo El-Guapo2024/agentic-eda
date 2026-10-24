@@ -1086,6 +1086,10 @@ pub struct SymbolLink {
     /// Pad number -> (`pinfunction`, `pintype`) as the netlist gives them (`NETLIST_EXPORTER_XML::makeListOfNets`): the pin's shown name and its
     /// number (`PA0_3`; empty for a pin with no name), and its electrical type (`+no_connect` for a pin on a no-connect flag).
     pub pins: BTreeMap<String, (String, String)>,
+    /// Pad number -> the reference with the unit the pin is drawn on, for a symbol of several units (`SCH_SYMBOL::GetRef( &path, true )`: `U1A`), which
+    /// KiCad's default name of a named pin's net has (`unconnected-(U1A-NC-Pad5)`). Empty for a symbol of one unit.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub units: BTreeMap<String, String>,
 }
 
 /// The atomic unit for both schematic and PCB.

@@ -990,10 +990,16 @@ fn unconnected_pin_nets(design: &Design, model: &ConstraintModel, footprints: &[
         if read_from_a_file.contains(fp.id.as_str()) {
             continue;
         }
+        let link = model.symbol_links.get(&fp.id);
         for pin in &part.pins {
             let key = format!("{}.{}", fp.id, pin.number);
+            // (a pin no symbol draws -- of a unit no symbol places -- is in no netlist, and its pad on no net)
+            if link.is_some_and(|l| !l.pins.contains_key(&pin.number)) {
+                continue;
+            }
             if !on_a_net.contains(key.as_str()) {
-                let name = eda_engine::nets::unconnected_net_name(&key, pin.name.as_deref());
+                let with_unit = model.symbol_links.get(&fp.id).and_then(|l| l.units.get(&pin.number)).map(String::as_str);
+                let name = eda_engine::nets::unconnected_net_name(&key, pin.name.as_deref(), with_unit);
                 out.insert(key, name);
             }
         }
