@@ -546,6 +546,14 @@ impl<'a> Shove<'a> {
         Node::clearance(self.rules, a, b)
     }
 
+    /// The distance `ITEM::collideSimple` (no search context: `ITEM::Collide( aOther, aNode, aLayer )`) calls a collision under: the rules'
+    /// clearance less 1 nm -- "The extra "1" here is to account for the fact that the hulls are built to exactly the clearance distance, so
+    /// we need to allow for no collision when exactly at the clearance distance" (`shapeH->Collide( shapeI, clearance + lineWidthH +
+    /// lineWidthI - 1 )`). A line walked round a hull whose vertices were rounded inwards is then not taken for a collision.
+    fn collide_clearance(&self, a: &Net, b: &Net) -> Nm {
+        self.clearance(a, b) - 1
+    }
+
     /// `SHOVE::getClearance`: what a hull is built at -- the forced clearance if there is one, else the rules'. (A *collision* between
     /// two lines is always judged at the rules' clearance: `ITEM::Collide` asks the node, not the shove.)
     fn get_clearance(&self, a: &Net, b: &Net) -> Nm {
@@ -607,7 +615,7 @@ impl<'a> Shove<'a> {
     fn assemble_pre_cleanup(&mut self, seg: ItemId) -> Option<SLine> {
         let cur = self.assemble(seg)?;
         let mut cleaned = cur.line.clone();
-        cleaned.simplify();
+        cleaned.simplify2(); // `orig.Simplify2()`
         if cleaned.pts.len() != cur.line.pts.len() {
             let mut new = cur.clone();
             new.clear_links();
@@ -778,14 +786,14 @@ impl<'a> Shove<'a> {
         }
         let circle = Shape::Circle { c: v.pos, r: v.diameter / 2 };
         if !same_net(&v.net, &l.line.net) && l.line.layer >= v.layers.start() && l.line.layer <= v.layers.end() {
-            let clearance = self.clearance(&v.net, &l.line.net);
+            let clearance = self.collide_clearance(&v.net, &l.line.net);
             if l.line.segs().any(|(a, b)| Shape::Stadium { a, b, r: l.line.width / 2 }.collides(&circle, clearance).is_some()) {
                 return true;
             }
         }
         if let Some(lv) = l.via.as_ref().filter(|lv| !lv.data.is_virtual) {
             if !same_net(&v.net, &lv.data.net) {
-                let clearance = self.clearance(&v.net, &lv.data.net);
+                let clearance = self.collide_clearance(&v.net, &lv.data.net);
                 if (Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }).collides(&circle, clearance).is_some() {
                     return true;
                 }
@@ -797,8 +805,9 @@ impl<'a> Shove<'a> {
     /// `l.Collide( &cur, m_currentNode, layer )` for two lines: track against
     /// track, and either line's via against the other.
     fn lines_collide(&self, l: &SLine, cur: &SLine) -> bool {
-        if !same_net(&l.line.net, &cur.line.net) {
-            let clearance = self.clearance(&l.line.net, &cur.line.net);
+        // `ITEM::collideSimple`: "check if we are not on completely different layers first" -- the vias are tested below on their own layers
+        if !same_net(&l.line.net, &cur.line.net) && l.line.layer == cur.line.layer {
+            let clearance = self.collide_clearance(&l.line.net, &cur.line.net);
             let hit = l.line.segs().any(|(a, b)| cur.line.segs().any(|(c, d)| Shape::Stadium { a, b, r: l.line.width / 2 }.collides(&Shape::Stadium { a: c, b: d, r: cur.line.width / 2 }, clearance).is_some()));
             if hit {
                 return true;
@@ -914,7 +923,7 @@ impl<'a> Shove<'a> {
                         // the arcs of the line stay arcs where the walk left them alone: `Simplify` never drops a vertex an arc starts or ends at (a fillet's first chord is
                         // collinear with the run before it, and its start is that run's end)
                         let mut l = Line { arcs: obstacle.line.arcs.clone(), ..Line::from_points(obstacle.line.net.clone(), obstacle.line.layer, obstacle.line.width, p) };
-                        l.simplify();
+                        l.simplify2(); // `path.Simplify2()`
                         path = l.pts;
                     }
                     None => {
@@ -958,7 +967,9 @@ impl<'a> Shove<'a> {
         let mut obstacle_line = obstacle.clone();
         let obs_via = obstacle_line.via.take();
         result.via = None;
-        if via_on_end && cur.seg_count() == 0 {
+        // `if( viaOnEnd && ( !aCurLine.LayersOverlap( &obstacleLine ) || aCurLine.SegmentCount() == 0 ) )`: a pusher whose segments are on
+        // another layer than the obstacle (it met the obstacle through its via only) shoves it round the via alone
+        if via_on_end && (cur.line.layer != obstacle_line.line.layer || cur.seg_count() == 0) {
             let ok = self.shove_line_from_lone_via(cur, &obstacle_line, result);
             if ok {
                 result.via = obs_via;
@@ -967,23 +978,25 @@ impl<'a> Shove<'a> {
         }
         let obstacle_width = obstacle_line.line.width;
         let clearance = self.get_clearance(&cur.line.net, &obstacle_line.line.net);
+        // "Arcs need additional clearance to ensure the hulls are always bigger than the arc" (`SHAPE_ARC::DefaultAccuracyForPCB()`, 5 um): KiCad adds
+        // it to the `clearance` the loops carry, so it piles up arc chord after arc chord -- every later hull of the line, a straight one too, is
+        // bigger -- and attempt after attempt
+        let mut clearance = clearance;
+        let arc_runs = cur.line.arc_runs();
+        let arc_pad = crate::arcs::ARC_HIGH_DEF_NM;
         for attempt in 0..3 {
             // the hulls grow by `cHullFailureExpansionFactor` after each failed attempt
             let extra = attempt * HULL_FAILURE_EXPANSION;
-            // "Arcs need additional clearance to ensure the hulls are always bigger than the arc" (`SHAPE_ARC::DefaultAccuracyForPCB()`, 5 um); in KiCad the
-            // addition is made to the variable the loop carries, so it piles up segment after segment, and attempt after attempt
-            let arc_runs = cur.line.arc_runs();
-            let arc_pad = crate::arcs::ARC_HIGH_DEF_NM;
-            let mut hulls: Vec<Vec<Point>> = cur
-                .line
-                .segs()
-                .enumerate()
-                .map(|(i, (a, b))| {
-                    let pad = if arc_runs.iter().any(|r| i >= r.first && i < r.last) { arc_pad } else { 0 };
-                    crate::hull::segment_hull(a, b, cur.line.width, clearance + extra + pad + crate::hull::HULL_ROUNDING_GUARD, obstacle_width)
-                })
-                .filter(|h| h.len() >= 3)
-                .collect();
+            let mut hulls: Vec<Vec<Point>> = Vec::with_capacity(cur.seg_count() + 1);
+            for (i, (a, b)) in cur.line.segs().enumerate() {
+                if arc_runs.iter().any(|r| i >= r.first && i < r.last) {
+                    clearance += arc_pad;
+                }
+                let h = crate::hull::segment_hull(a, b, cur.line.width, clearance + extra, obstacle_width);
+                if h.len() >= 3 {
+                    hulls.push(h);
+                }
+            }
             if let Some(lv) = &cur.via {
                 let via_clearance = self.get_clearance(&lv.data.net, &obstacle_line.line.net);
                 hulls.push(Item::Via(lv.data.clone()).hull(via_clearance, obstacle_width, obstacle_line.line.layer));
@@ -1009,7 +1022,7 @@ impl<'a> Shove<'a> {
         if self.shove_obstacle_line(cur, &obstacle_line, &mut shoved) {
             let rank = self.line_rank(cur);
             shoved.rank = rank - 1;
-            shoved.line.simplify();
+            shoved.line.simplify2();
             self.unwind_line(&obstacle_line);
             self.replace_line(&obstacle_line, &mut shoved, true);
             if !self.push_line_stack(shoved, false) {
@@ -1102,7 +1115,7 @@ impl<'a> Shove<'a> {
                 let mut walk_line = cur.clone();
                 walk_line.clear_links();
                 walk_line.line.pts = outcome.line_of(WalkPolicy::Shortest).to_vec();
-                walk_line.line.simplify();
+                walk_line.line.simplify2();
                 if walk_line.line.has_loops() {
                     continue;
                 }
@@ -1228,7 +1241,7 @@ impl<'a> Shove<'a> {
             if let Some(at) = second.line.find(p0) {
                 second.line.drag_corner45(p0_pushed, at);
             }
-            second.line.simplify();
+            second.line.simplify2();
             dragged.push((first, second));
         }
 
@@ -1877,7 +1890,8 @@ mod tests {
             let pusher_shape = Shape::Stadium { a: pusher_leg[0], b: pusher_leg[1], r: 100_000 };
             for moved_leg in moved.segs() {
                 let moved_shape = Shape::Stadium { a: moved_leg.0, b: moved_leg.1, r: 100_000 };
-                assert!(pusher_shape.collides(&moved_shape, rules.clearance_of("SIG")).is_none(), "shoved track still too close to the new route");
+                // KiCad's own test of a shoved line (`ITEM::collideSimple`'s "extra 1": a hull vertex rounded inwards may leave it 1 nm short)
+                assert!(pusher_shape.collides(&moved_shape, rules.clearance_of("SIG") - 1).is_none(), "shoved track still too close to the new route");
             }
         }
         // Endpoints of the shoved track must be preserved (shove never

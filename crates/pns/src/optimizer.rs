@@ -114,7 +114,7 @@ fn merge_step(pts: &[eda_model::ir::Point], arcs: &[ArcPts], origin: &[eda_model
             candidate.extend(pts[(n + step + 2)..].to_vec());
             let mut l = Line::from_points(net.clone(), layer, width, candidate);
             l.arcs = arcs.iter().copied().chain(trace.arcs).collect();
-            l.simplify(); // `Simplify2`
+            l.simplify2(); // `path[i].Simplify2()`
             cost[i] = corner_cost(&l.pts);
             let kept: Vec<ArcPts> = l.arc_runs().into_iter().map(|r| l.arcs[r.arc]).collect();
             path[i] = Some((l.pts, kept));
@@ -224,7 +224,7 @@ fn merge_full(pts: Vec<eda_model::ir::Point>, arcs: Vec<ArcPts>, node: &Node, la
     // KiCad `mergeFull`: `line.Simplify2()` before the search.
     let mut simplified = Line::from_points(net.clone(), layer, width, pts);
     simplified.arcs = arcs;
-    simplified.simplify();
+    simplified.simplify2();
     let (mut pts, mut arcs) = (simplified.pts, simplified.arcs);
     if pts.len() < 3 {
         return (pts, arcs);
@@ -609,7 +609,7 @@ fn smart_pads_single(line: &mut Line, pad: &crate::item::Item, at_end: bool, end
                         v.reverse();
                     }
                     let mut tmp = Line::from_points(line.net.clone(), line.layer, line.width, v);
-                    tmp.simplify();
+                    tmp.simplify2(); // `std::get<2>( vp ).Simplify2()`
                     variants.push((p, chain_len(b), tmp.pts));
                 }
             }
@@ -653,7 +653,7 @@ fn run_smart_pads(line: &mut Line, node: &Node, rules: &BoardRules, exclude: &[I
         let n = line.pts.len() - 1;
         smart_pads_single(line, ep, true, vtx.map_or(n, |v| n.saturating_sub(v)), node, rules, exclude);
     }
-    line.simplify();
+    line.simplify2(); // `aLine->Line().Simplify2()`
 }
 
 /// `OPTIMIZER::fanoutCleanup`: a short (< 10 x width) line from a pad/via
@@ -870,15 +870,15 @@ fn merge_dp_step(cache: &HitCache, pair: &mut crate::diff_pair::DiffPair, try_p:
                 let delta_coupled = pair.coupled_length_of(&new_ref, &new_coup) - clen_pre + budget;
                 if delta_coupled >= 0 {
                     let (mut r, mut c) = (Line::from_points(None, 0, 0, new_ref), Line::from_points(None, 0, 0, new_coup));
-                    r.simplify(); // `Simplify2`
-                    c.simplify();
+                    r.simplify2(); // `newRef.Simplify2()`
+                    c.simplify2();
                     pair.set_shape(r.pts, c.pts, !try_p);
                     return true;
                 }
             } else if delta_uni >= 0 && verify_dp_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &coupled_path) {
                 let (mut r, mut c) = (Line::from_points(None, 0, 0, new_ref), Line::from_points(None, 0, 0, coupled_path.clone()));
-                r.simplify();
-                c.simplify();
+                r.simplify2();
+                c.simplify2();
                 pair.set_shape(r.pts, c.pts, !try_p);
                 return true;
             }

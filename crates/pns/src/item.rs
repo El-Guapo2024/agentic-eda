@@ -287,7 +287,6 @@ impl Item {
     /// `crate::hull` for the construction. Used only by WALKAROUND/
     /// OPTIMIZER (path shaping), never by the exact collision test.
     pub fn hull(&self, clearance: Nm, walkaround_width: Nm, layer: i32) -> Vec<Point> {
-        let clearance = clearance + hull::HULL_ROUNDING_GUARD;
         match self {
             // `SEGMENT::Hull` -> `SegmentHull`, `VIA::Hull`, `SOLID::Hull`.
             Item::Segment(s) => hull::segment_hull(s.a, s.b, s.width, clearance, walkaround_width),

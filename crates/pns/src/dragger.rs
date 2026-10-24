@@ -790,7 +790,7 @@ mod tests {
         assert!(count(&node, p(3_000_000, 0)) >= 1 && count(&node, p(2_000_000, 0)) >= 1, "the ends of the locked segment");
         assert_eq!(count(&node, p(4_000_000, 0)), 0, "a real via is there already");
         let d = node.joint_at(p(1_000_000, 0), &net_of("SIG")).unwrap().links.iter().find_map(|&id| match node.get(id) { Some(Item::Via(v)) if v.is_virtual => Some((v.diameter, v.layers)), _ => None });
-        assert_eq!(d, Some((400_000, LayerRange::single(0))), "as wide as the widest track, on its one layer");
+        assert_eq!(d, Some((400_000 + 2 * crate::hull::PNS_HULL_MARGIN, LayerRange::single(0))), "the widest track plus twice `PNS_HULL_MARGIN`, on its one layer");
     }
 
     #[test]

@@ -699,10 +699,9 @@ impl DiffPairPlacer {
                 let post_walk_pts = Self::walk_line(node, rules, settings, pre_walk, mask)?;
                 let post_walk = Line::from_points(walk_net.clone(), cur.layer, cur.width, post_walk_pts);
                 let pre_shove_line = Line::from_points(shove_net.clone(), cur.layer, cur.width, shove_pts.clone());
-                // `shove.ForceClearance( true, cur.Gap() - 2 * PNS_HULL_MARGIN )`: the margin takes a hair off the gap so that a line already at
-                // the gap is not pushed. It is 20 nm there; here the hulls carry a micrometre of rounding guard of their own
-                // (`HULL_ROUNDING_GUARD`), which is what comes off.
-                let forced = cur.gap - crate::hull::HULL_ROUNDING_GUARD;
+                // `shove.ForceClearance( true, cur.Gap() - 2 * PNS_HULL_MARGIN )`: the margin (`PNS_HULL_MARGIN` 10 nm, `pns_line.h`) takes a hair off
+                // the gap so that a line already at the gap is not pushed
+                let forced = cur.gap - 2 * crate::hull::PNS_HULL_MARGIN;
                 let post_shove = crate::shove::shove_obstacle_line(node, rules, settings, &post_walk, walk_via.as_ref(), &pre_shove_line, shove_via.as_ref(), Some(forced))?;
                 let (mut post_walk, mut post_shove) = (post_walk, post_shove);
                 post_walk.simplify();
