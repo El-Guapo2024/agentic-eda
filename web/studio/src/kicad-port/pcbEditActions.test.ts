@@ -195,3 +195,14 @@ test("routeStartLayer: active layer when the pad can sit on it, else the pad's s
   assert.equal(routeStartLayer({ th: true, side: "top" }, layers, "F.SilkS"), "F.Cu");
 });
 
+
+test("positionRelativeSelectionAnchor prefers a pad over other items (the middle tier: a pad selected on its own)", () => {
+  assert.deepEqual(
+    positionRelativeSelectionAnchor([
+      { isFootprint: false, x: 1, y: 1 },
+      { isFootprint: false, isPad: true, x: 5, y: 5 },
+    ]),
+    { x: 5, y: 5 }
+  );
+  assert.deepEqual(positionRelativeSelectionAnchor([{ isFootprint: true, x: 9, y: 9 }, { isFootprint: false, isPad: true, x: 5, y: 5 }]), { x: 9, y: 9 }, "a footprint still comes first");
+});

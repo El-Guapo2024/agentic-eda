@@ -297,6 +297,8 @@ export function unrouteSegmentReselect(tracks: readonly UnrouteTrack[], vias: re
 
 export interface PositionedItem {
   isFootprint: boolean;
+  /** A pad selected on its own (`PCB_PAD_T`): the middle tier of the anchor. */
+  isPad?: boolean;
   x: number;
   y: number;
 }
@@ -318,11 +320,12 @@ export function topLeftItem<T extends PositionedItem>(items: readonly T[], footp
 /**
  * `POSITION_RELATIVE_TOOL::PositionRelative`'s `m_selectionAnchor`: "We
  * prefer footprints, then pads, then anything else" -- the top-left
- * footprint if the selection has one, else the top-left item of any kind.
- * (This app has no free pads, so the middle tier never applies.)
+ * footprint if the selection has one, else the top-left pad (a pad selected
+ * on its own: its position, while the move takes its footprint), else the
+ * top-left item of any kind.
  */
 export function positionRelativeSelectionAnchor(items: readonly PositionedItem[]): { x: number; y: number } | null {
-  const it = topLeftItem(items, true) ?? topLeftItem(items, false);
+  const it = topLeftItem(items, true) ?? topLeftItem(items.filter((i) => i.isPad), false) ?? topLeftItem(items, false);
   return it ? { x: it.x, y: it.y } : null;
 }
 

@@ -217,3 +217,13 @@ test("a flipped view swaps left and right (ALIGN_DISTRIBUTE_TOOL::AlignLeft: IsM
   assert.deepEqual(planAlignSelection(b, ["U1", "U2"], "top", null, true), planAlignSelection(b, ["U1", "U2"], "top"));
   assert.notDeepEqual(planAlignSelection(b, ["U1", "U2"], "left"), planAlignSelection(b, ["U1", "U2"], "right"));
 });
+
+test("Distribute keeps a pad's own box: a via is spaced between two pads, not between their footprints (DistributeItems: no free-pad filter)", () => {
+  const b = board({
+    parts: [part("U1", [0, 0], [pad("1", -800_000, 0), pad("2", 800_000, 0)]), part("U2", [10_000_000, 0], [pad("1", 9_200_000, 0), pad("2", 10_800_000, 0)])],
+    routing: { tracks: [], vias: [{ id: "V1", net: "N", x: 2_000_000, y: 0, d: 600_000, drill: 300_000, from: "F.Cu", to: "B.Cu" }], zones: [], track_width_presets: [], via_presets: [], teardrop_settings: {} } as never,
+  });
+  // U1.1 is at -0.8 mm, U2.1 at 9.2 mm: the via's centre goes half way between the pads' centres, 4.2 mm (between the footprints it would be 5.0)
+  const cmds = planDistributeSelection(b, ["U1.1", "V1", "U2.1"], "x", "centers");
+  assert.deepEqual(cmds, [{ op: "move_items", ids: ["V1"], dx: 2_200_000, dy: 0 }]);
+});

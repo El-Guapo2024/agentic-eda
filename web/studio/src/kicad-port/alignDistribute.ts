@@ -14,7 +14,7 @@
 // the view is mirrored, we need to call the other one if mirrored." (`AlignLeft`: `if( getView()->IsMirroredX() ) return doAlignRight();`).
 import type { BoardState, Cmd, Nm } from "../api/types";
 import { itemBounds, itemKind, padParent } from "./pcbItems";
-import { editableSelection, groupOf, isLocked } from "./pcbTransform";
+import { groupOf, isLocked } from "./pcbTransform";
 
 export type AlignEdge = "top" | "bottom" | "left" | "right" | "centerX" | "centerY";
 
@@ -222,9 +222,12 @@ export function planAlignSelection(board: BoardState, selection: readonly string
   return moveCmds(planAlign(alignItems(board, selection), e, cursor));
 }
 
-/** Distribute the selection: locked items left out, a pad standing for its footprint. */
+/**
+ * Distribute the selection: locked items left out (`FilterCollectorForLockedItems`), a pad moving its footprint by the pad's own box -- "Don't filter for free
+ * pads. We want to allow for distributing other items (such as a via) between two pads." (`DistributeItems`), so the pads are not promoted first.
+ */
 export function planDistributeSelection(board: BoardState, selection: readonly string[], axis: "x" | "y", mode: "gaps" | "centers"): Cmd[] {
-  const { ids } = editableSelection(board, selection);
+  const ids = selection.filter((id) => !isLocked(board, itemKind(board, id) === "pad" ? (padParent(board, id) ?? id) : id));
   return moveCmds(planDistribute(alignItems(board, ids), axis, mode));
 }
 

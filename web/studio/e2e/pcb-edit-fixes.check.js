@@ -154,6 +154,23 @@
       t(near(p1.at[0], go.x, 1_000) && near(p1.at[1], go.y, 1_000), `the footprint is on the grid origin (${p1.at} for ${[go.x, go.y]})`);
       await undo();
       await undo();
+      // p6 F13: a pad selected on its own anchors the move at the pad, and its footprint moves
+      const padId = `${two.ref}.${p0.pads[1].num}`;
+      await select([padId]);
+      await __eda.run("pcbnew.PositionRelative.positionRelative"); await sleep(600);
+      const dlg2 = [...document.querySelectorAll(".dialog")].find((d) => d.textContent.includes("Position Relative To..."));
+      const pointRadio = [...dlg2.querySelectorAll("label")].find((l) => l.textContent.trim().startsWith("Point:"));
+      const pin = [...pointRadio.querySelectorAll("input[type=number]")];
+      const target = [Math.round(p0.at[0] / 1e6) + 2, Math.round(p0.at[1] / 1e6) + 3];
+      setValue(pin[0], target[0]); setValue(pin[1], target[1]); await sleep(150);
+      pointRadio.querySelector("input[type=radio]").click(); await sleep(100);
+      const off = [...dlg2.querySelectorAll(".kv-grid input")];
+      setValue(off[0], 0); setValue(off[1], 0); await sleep(150);
+      buttonText(dlg2, "OK").click(); await sleep(1200);
+      const p2 = await partOf(two.ref);
+      const q = p2.pads.find((x) => x.num === p0.pads[1].num);
+      t(near(q.x, target[0] * 1e6, 2_000) && near(q.y, target[1] * 1e6, 2_000), `the pad, not the footprint's origin, is on the point (${[q.x, q.y]} for ${target})`);
+      await undo();
       await select([two.ref]);
       await __eda.run("pcbnew.InteractiveEdit.moveExact"); await sleep(600);
       const menu = document.querySelector('[data-testid="move-exact-anchor"]');
