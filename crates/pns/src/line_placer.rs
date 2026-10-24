@@ -120,6 +120,7 @@ pub struct Preview {
 /// [`LinePlacer::build_head`]'s result: the resolved point list, whether
 /// it (or the pending via) still collides, and -- `Mode::Shove` only --
 /// whatever else had to move to make room for it.
+#[derive(Clone)]
 struct HeadResult {
     pts: Vec<Point>,
     /// The arcs of the head (a rounded corner: `CORNER_MODE`'s `ROUNDED_45` / `ROUNDED_90`), as [`Line::arcs`].
@@ -137,12 +138,14 @@ struct HeadResult {
     via: Option<Point>,
     /// `via` was a head of the shove: what was in its way has been moved, so it collides with nothing.
     via_shoved: bool,
+    /// Not routed to this cursor: `routeHead` failed and this is the head of the last `Move` that routed (or an empty one).
+    kept: bool,
 }
 
 impl HeadResult {
     /// A head resolved without a shove, in `world` (whose moved tracks and vias are what the preview shows displaced).
     fn plain(pts: Vec<Point>, colliding: bool, node: &Node, world: World) -> Self {
-        HeadResult { pts, arcs: Vec::new(), colliding, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via: None, via_shoved: false }
+        HeadResult { pts, arcs: Vec::new(), colliding, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via: None, via_shoved: false, kept: false }
     }
 
     /// [`Self::plain`] for a head that may hold arcs.
@@ -211,6 +214,9 @@ pub struct LinePlacer {
     springback: RefCell<Springback>,
     /// The world of the last `Move` (`m_currentNode`): the frame its shove pushed or started from.
     last_world: RefCell<World>,
+    /// `m_head` of the last `Move` that routed (`routeStep`: `LINE prevHead( m_head )`): what a `Move` whose `routeHead` fails shows and a
+    /// click then fixes. `None` once a leg is fixed (the new leg's head is empty).
+    last_good: RefCell<Option<HeadResult>>,
     /// `m_fixedTail`'s stages, one per run: the length of the springback stack when the run was fixed -- its newest frame is the
     /// stage's `commit` node, which Backspace rewinds the stack to (`RewindSpringbackTo( st.commit )`).
     stages: Vec<usize>,
@@ -234,7 +240,7 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), stages: Vec::new() }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new() }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -255,13 +261,35 @@ impl LinePlacer {
     /// stack, shoves from the newest frame left and pushes the world the
     /// shove leaves (`SHOVE::Run`); the result carries that world, and what
     /// it has moved, for [`Self::preview`]/[`Self::fix`].
+    /// `routeStep`: `routeHead`, and when it fails (the walk is stuck, or in Shove mode the walk round the pads is: `rhShoveOnly`'s `if( !
+    /// rhWalkBase( aP, walkSolids, ITEM::SOLID_T, RM_Shove, viaOk ) ) return false;`) the head and tail as they were (`m_tail = std::move(
+    /// prevTail ); m_head = std::move( prevHead );`), or, with no head yet, a zero-length one at the start ("so that the user gets some
+    /// feedback that routing is happening"). In Walk around and Shove the head is never shown colliding: it stays at the last position
+    /// that worked, and a click fixes that (findings p5 F2-4, F2-5).
     fn build_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> HeadResult {
+        match self.route_head(node, rules, settings, p) {
+            Some(r) => {
+                *self.last_good.borrow_mut() = Some(r.clone());
+                r
+            }
+            None => {
+                let kept = self.last_good.borrow().clone().unwrap_or_else(|| {
+                    let current = if settings.mode == Mode::Shove { self.springback.borrow().top().0 } else { self.springback.borrow().locked_top() };
+                    HeadResult::plain(vec![self.fixed_start()], false, node, current)
+                });
+                HeadResult { kept: true, ..kept }
+            }
+        }
+    }
+
+    /// `routeHead`: `None` when it fails.
+    fn route_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Option<HeadResult> {
         let start = self.fixed_start();
         // the world the last `Move` left (`m_currentNode`): in Shove mode the newest springback frame, in the others the world the last click
         // left (those modes never shove, so their `m_currentNode` is `m_lastNode` of the last `FixRoute`)
         let current = if settings.mode == Mode::Shove { self.springback.borrow().top().0 } else { self.springback.borrow().locked_top() };
         if start == p {
-            return HeadResult::plain(vec![start], false, node, current);
+            return Some(HeadResult::plain(vec![start], false, node, current));
         }
         // `buildInitialLine`: `if( GetFreeAngleMode() && Mode() == RM_MarkObstacles ) l = SHAPE_LINE_CHAIN( { m_p_start, aP } )`, else the trace in the
         // corner mode (`guessedDir.BuildInitialTrace( m_p_start, aP, false, cornerMode )`): a rounded corner is an arc of the head
@@ -340,10 +368,14 @@ impl LinePlacer {
                     let mut world = parent;
                     world.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
                     self.springback.borrow_mut().push(node, world.clone(), outcome.area);
-                    return HeadResult { pts: optimized.pts, arcs: optimized.arcs, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via, via_shoved: true };
+                    return Some(HeadResult { pts: optimized.pts, arcs: optimized.arcs, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via, via_shoved: true, kept: false });
                 }
                 // the shove failed: "m_currentNode = parent", and `rhWalkOnly` walks the head in it
                 current = parent;
+            } else {
+                // `rhShoveOnly`: "if( ! rhWalkBase( aP, walkSolids, ITEM::SOLID_T, RM_Shove, viaOk ) ) return false;" -- no fall-back to a
+                // walk round the tracks; `routeStep` keeps the head it had
+                return None;
             }
         }
 
@@ -362,20 +394,18 @@ impl LinePlacer {
                     let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 };
                     world_node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
                 });
-                HeadResult::plain_line(raw, colliding, node, current)
+                Some(HeadResult::plain_line(raw, colliding, node, current))
             }
             Mode::Walkaround | Mode::Shove => {
                 // `rhWalkOnly`: `rhWalkBase( aP, walkFull, ITEM::ANY_T, RM_Walkaround )`, refused if the walk still
                 // collides with anything, then the head optimized per the effort setting.
                 let walked = walk_base(world_node, crate::node::kind_mask::ANY).filter(|path| !walkaround::path_collides(world_node, rules, &self.net, self.current_layer, self.width, &path.pts, &exclude));
-                match walked {
-                    Some(path) => {
-                        let optimized = optimize(&path, world_node);
-                        let via = if self.placing_via { optimized.last() } else { None };
-                        HeadResult { via, ..HeadResult::plain_line(optimized, false, node, current) }
-                    }
-                    None => HeadResult::plain_line(raw, true, node, current), // ST_STUCK: show the direct line, flagged violating
-                }
+                // `rhWalkOnly` fails when the walk does (ST_STUCK) or still collides
+                walked.map(|path| {
+                    let optimized = optimize(&path, world_node);
+                    let via = if self.placing_via { optimized.last() } else { None };
+                    HeadResult { via, ..HeadResult::plain_line(optimized, false, node, current) }
+                })
             }
         }
     }
@@ -455,7 +485,7 @@ impl LinePlacer {
     /// [`Self::fix`]/[`Self::finish`] accepts it (see the module doc comment).
     pub fn preview(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Preview {
         self.begin_move(p);
-        let (mut snapped_end, snapped_segment) = self.snap_end(node, settings, p);
+        let (snapped_end, snapped_segment) = self.snap_end(node, settings, p);
         let target = snapped_end.unwrap_or(p);
         let head_result = self.build_head(node, rules, settings, target);
         *self.last_world.borrow_mut() = head_result.world.clone();
@@ -464,6 +494,9 @@ impl LinePlacer {
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
         head.arcs = head_result.arcs;
         head.simplify();
+        // a head kept from an earlier `Move` does not reach the end the cursor is on
+        let (snapped_end, snapped_segment) = if head_result.kept && snapped_end.is_some() && head.last() != snapped_end { (None, None) } else { (snapped_end, snapped_segment) };
+        let mut snapped_end = snapped_end;
         // `Move`: a route that ends on a track it runs along (its last segment collinear with the track's and overlapping it) ends
         // where it first touches the track, not at the cursor further along it
         if let (Some(seg), true) = (snapped_segment, head.segment_count() > 0) {
@@ -598,6 +631,7 @@ impl LinePlacer {
         self.stages.push(self.springback.borrow().len());
         self.lock_fixed(node, Some(&head), None);
         self.runs.push(head);
+        *self.last_good.borrow_mut() = None;
         self.placement_correct = true;
         if !real_end {
             // `FixRoute`: "m_mouseTrailTracer.Clear(); SetTolerance( m_head.Width() ); AddTrailPoint( m_currentStart ); SetDefaultDirections( lastSegDir, UNDEFINED )"
@@ -645,6 +679,7 @@ impl LinePlacer {
             self.lock_fixed(node, None, Some(via.clone()));
         }
         self.fixed_vias.push((via, self.runs.len()));
+        *self.last_good.borrow_mut() = None;
         self.current_layer = new_layer;
         self.via_diameter = diameter;
         self.via_drill = drill;
@@ -667,6 +702,7 @@ impl LinePlacer {
         // the via that run ended in goes with it, and the route is back on the layer the run was on (`m_currentLayer = st.pts[0].layer`)
         let left = self.runs.len();
         self.fixed_vias.retain(|(_, runs)| *runs <= left);
+        *self.last_good.borrow_mut() = None;
         self.current_layer = popped.layer;
         // `UnfixRoute`: `m_shove->RewindSpringbackTo( st.commit )` -- the frames from the one the run was fixed in are gone, and with them
         // what its shoves had moved
@@ -967,6 +1003,33 @@ mod tests {
         // Highlight collisions never moves a via.
         let marking = RoutingSettings { mode: Mode::MarkObstacles, ..settings };
         assert_eq!(placer.place_via(&node, &rules, &marking, on_the_pad, 1), on_the_pad);
+    }
+
+    /// findings p5 F2-4 / F2-5: a `Move` whose `routeHead` fails keeps the head of the last one that routed (`routeStep`: `m_head = std::move(
+    /// prevHead )`), not colliding, and a click fixes that head; with no head routed yet it is a zero-length one, which a click cannot fix.
+    /// A walk fails when the start itself collides (every clipped prefix does); here the world grows a pad over the start between two moves.
+    #[test]
+    fn a_failed_route_head_keeps_the_last_good_head() {
+        let free = Node::new();
+        let mut blocked = Node::new();
+        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 300_000, y: 0 }, shape: Shape::Circle { c: Point { x: 300_000, y: 0 }, r: 100_000 }, source: "U1.1".into(), edge: false }));
+        let rules = rules();
+        for mode in [Mode::Walkaround, Mode::Shove] {
+            let settings = RoutingSettings { mode, ..RoutingSettings::default() };
+            // nothing routed yet: the zero-length head, where the old port showed the raw line in violation (and in Shove mode walked round the tracks)
+            let mut placer = LinePlacer::start(&blocked, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+            let pv = placer.preview(&blocked, &rules, &settings, Point { x: 5_000_000, y: 0 });
+            assert!(!pv.colliding && pv.head.point_count() < 2, "{mode:?}: {pv:?}");
+            assert_eq!(placer.fix(&blocked, &rules, &settings, Point { x: 5_000_000, y: 0 }), FixOutcome::Blocked);
+            // a head that routed is kept
+            let mut placer = LinePlacer::start(&free, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+            let a = Point { x: 2_000_000, y: 1_000_000 };
+            assert_eq!(placer.preview(&free, &rules, &settings, a).head.last(), Some(a));
+            let pv = placer.preview(&blocked, &rules, &settings, Point { x: 5_000_000, y: -3_000_000 });
+            assert!(!pv.colliding && pv.head.last() == Some(a), "{mode:?}: the head stays where it last worked: {pv:?}");
+            assert_eq!(placer.fix(&blocked, &rules, &settings, Point { x: 5_000_000, y: -3_000_000 }), FixOutcome::Fixed { real_end: false });
+            assert_eq!(placer.runs.last().and_then(|r| r.last()), Some(a), "{mode:?}: the click fixes the head it shows");
+        }
     }
 
     #[test]
