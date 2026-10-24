@@ -157,6 +157,10 @@ pub struct LibPin {
     /// unit) -- see `ir::SchematicSection::symbols`'s own doc.
     #[serde(default = "d_unit_one")]
     pub unit: u32,
+    /// `(hide yes)`: the pin is not drawn (`SCH_PIN::IsVisible`). An invisible power input of a symbol that is not a power symbol is a global
+    /// power pin, the net of its name (`SCH_PIN::IsGlobalPower`, "legacy support": the hidden VCC and GND pins of 74xx and memory symbols).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// The other body of a library symbol that has two body styles (KiCad's "De Morgan" one, `LIB_SYMBOL::HasAlternateBodyStyle`): the `graphics` and `pins` a placed
@@ -444,7 +448,7 @@ pub fn builtin_catalog() -> Vec<LibSymbol> {
 }
 
 fn pin(number: &str, etype: &str, x: Mm, y: Mm, angle_deg: f64, length_mm: Mm) -> LibPin {
-    LibPin { number: number.into(), name: String::new(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg, length_mm, unit: 1 }
+    LibPin { number: number.into(), name: String::new(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg, length_mm, unit: 1, hidden: false }
 }
 
 /// `Device:R` -- transcribed from the installed `Device.kicad_sym`.

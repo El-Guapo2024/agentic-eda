@@ -4270,16 +4270,16 @@ impl LibrarySymbolPin {
     fn id_seed(&self) -> String {
         format!("{}|{}|{:.4},{:.4}", self.unit, self.number, self.at.x, self.at.y)
     }
-    /// The same pin as `crate::symbol::LibPin` -- drops `id`/`hidden`/
+    /// The same pin as `crate::symbol::LibPin` -- drops `id`/
     /// `body_style`/the text-size overrides (see this type's own doc).
     pub fn to_engine_pin(&self) -> crate::symbol::LibPin {
-        crate::symbol::LibPin { number: self.number.clone(), name: self.name.clone(), electrical_type: self.electrical_type.clone(), shape: self.shape.clone(), at: self.at, angle_deg: self.angle_deg, length_mm: self.length_mm, unit: self.unit }
+        crate::symbol::LibPin { number: self.number.clone(), name: self.name.clone(), electrical_type: self.electrical_type.clone(), shape: self.shape.clone(), at: self.at, angle_deg: self.angle_deg, length_mm: self.length_mm, unit: self.unit, hidden: self.hidden }
     }
     /// The reverse of `to_engine_pin` -- `id` empty (backfilled), `body_style`
-    /// 1, `hidden`/text sizes at their defaults (the engine type never had
+    /// 1, text sizes at their defaults (the engine type never had
     /// them to read back).
     pub fn from_engine_pin(p: &crate::symbol::LibPin) -> Self {
-        LibrarySymbolPin { id: String::new(), number: p.number.clone(), name: p.name.clone(), electrical_type: p.electrical_type.clone(), shape: p.shape.clone(), at: p.at, angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() }
+        LibrarySymbolPin { id: String::new(), number: p.number.clone(), name: p.name.clone(), electrical_type: p.electrical_type.clone(), shape: p.shape.clone(), at: p.at, angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: 1, hidden: p.hidden, name_size_mm: None, number_size_mm: None, alternates: Vec::new() }
     }
 }
 

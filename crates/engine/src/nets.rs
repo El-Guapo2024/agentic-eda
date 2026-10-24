@@ -187,6 +187,9 @@ pub struct Naming<'a> {
     /// from its library symbol; `None` for a symbol the library does not give. Without an answer, a symbol called `PWR_FLAG` in any library does not
     /// and every other does.
     pub global_power: Option<&'a dyn Fn(&str) -> Option<bool>>,
+    /// "REF.PIN" -> net name of every pin of an ordinary symbol that is a global power pin (`SCH_PIN::IsGlobalPower`'s legacy rule: an invisible
+    /// power input of a symbol that is not a power symbol): its pin name names the net and joins the others of that name, wired or not.
+    pub power_pins: Option<&'a BTreeMap<String, String>>,
 }
 
 impl Naming<'_> {
@@ -317,6 +320,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             }
             groups[at[p]].pins.push(pin_ref.clone());
             groups[at[p]].drivers.push(Driver { prio: PIN, name: String::new(), depth: depth[si] });
+            // `GetDriverPriority`: a global power pin drives its subgraph at `GLOBAL_POWER_PIN`, named by `GetDefaultNetName` (the lib pin's name), even
+            // where it is wired: `generateGlobalPowerPinSubGraphs` skips only the unwired one's own subgraph, the name joins it to the others all the same.
+            if let Some(name) = naming.power_pins.and_then(|m| m.get(pin_ref)).filter(|n| !n.is_empty()) {
+                groups[at[p]].drivers.push(Driver { prio: GLOBAL_POWER_PIN, name: name.clone(), depth: depth[si] });
+                groups[at[p]].global_names.push(name.clone());
+            }
         }
         for (l, &b) in sch.labels.iter().zip(&label_bus) {
             let g = &mut groups[if b { bus_at[&l.at] } else { at[&l.at] }];

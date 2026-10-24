@@ -534,8 +534,24 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         }
         pin_world
     };
+    // `SCH_PIN::IsGlobalPower`'s legacy rule: an invisible power input of a symbol that is not a power symbol names its net by its pin name
+    let power_pins_of = |sch: &eda_model::ir::SchematicSection| -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        for sym in &sch.symbols {
+            let Some(lib) = resolve_lib_symbol(&sym.lib_id, model) else { continue };
+            if lib.power {
+                continue;
+            }
+            let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
+            for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == sym.unit) && p.hidden && p.electrical_type == "power_in") {
+                out.insert(format!("{}.{}", sym.id, p.number), p.name.clone());
+            }
+        }
+        out
+    };
     let mut contents = design.sheet_contents.take();
     let root_pins = pins_of(&root);
+    let mut power_pins = power_pins_of(&root);
     // (path, file, pins, the first placement of its file); a later placement of a file traces a copy of the screen
     let mut plan: Vec<(Vec<String>, String, std::collections::BTreeMap<String, Point>, bool)> = Vec::new();
     let mut copies: Vec<eda_model::ir::SchematicSection> = Vec::new();
@@ -544,6 +560,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         for e in entries.iter().skip(1) {
             let Some(sec) = contents.as_ref().and_then(|c| c.get(&e.file)) else { continue };
             let pins = pins_under_placement(pins_of(sec), sec, e.path.last().map(String::as_str));
+            power_pins.extend(pins_under_placement(power_pins_of(sec), sec, e.path.last().map(String::as_str)));
             let first = seen.insert(e.file.as_str());
             if !first {
                 copies.push(sec.clone());
@@ -561,7 +578,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
                 screens.push(eda_engine::nets::ScreenIn { path, sch, file, pins });
             }
         }
-        eda_engine::nets::trace_nets_with(&mut screens, naming)
+        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), ..*naming };
+        eda_engine::nets::trace_nets_with(&mut screens, &naming)
     };
     design.schematic = Some(root);
     design.sheet_contents = contents;
@@ -569,7 +587,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
 }
 
 /// `pins` ("REF.PIN" -> point) of `sec` under the references the placement `placement` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
-fn pins_under_placement(pins: std::collections::BTreeMap<String, Point>, sec: &eda_model::ir::SchematicSection, placement: Option<&str>) -> std::collections::BTreeMap<String, Point> {
+fn pins_under_placement<V>(pins: std::collections::BTreeMap<String, V>, sec: &eda_model::ir::SchematicSection, placement: Option<&str>) -> std::collections::BTreeMap<String, V> {
     let renamed: std::collections::BTreeMap<&str, String> = sec
         .symbols
         .iter()
@@ -626,7 +644,7 @@ pub(crate) fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mu
     let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
     // a power symbol names its net when its pin is a power input (`SCH_PIN::IsGlobalPower`), which a PWR_FLAG's is not
     let global_power = |lib_id: &str| -> Option<bool> { resolve_lib_symbol(lib_id, model).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power) };
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), power_pins: None };
     let after = trace_design(design, model, &naming);
     if let Some(before) = before {
         let mut earlier = before.clone();
@@ -3660,7 +3678,7 @@ mod tests {
         let lib = eda_model::LibSymbol {
             lib_id: "TEST:R".into(),
             graphics: vec![],
-            pins: vec![eda_model::LibPin { number: "1".into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, length_mm: 2.54, unit: 1 }],
+            pins: vec![eda_model::LibPin { number: "1".into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, length_mm: 2.54, unit: 1, hidden: false }],
             power: false,
             in_bom: true,
             on_board: true,
@@ -5966,7 +5984,7 @@ mod tests {
     fn setup_pin_swap_board(dir: &Path) {
         let pin = |n: &str| Pin { number: n.into(), name: None, kind: PinKind::Passive };
         let part = |r: &str, pins: &[&str], symbol: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, symbol: Some(symbol.into()), pins: pins.iter().map(|n| pin(n)).collect(), body_nm: None, datasheet: None, edge: None };
-        let lib_pin = |n: &str, y: f64, unit: u32| eda_model::LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit };
+        let lib_pin = |n: &str, y: f64, unit: u32| eda_model::LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit, hidden: false };
         let lib = |id: &str, units: u32, pins: Vec<eda_model::LibPin>| eda_model::LibSymbol {
             lib_id: id.into(),
             graphics: vec![],

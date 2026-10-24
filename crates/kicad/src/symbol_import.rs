@@ -126,7 +126,7 @@ fn file_text(text: &str, tilde_is_empty: bool) -> &str {
 }
 
 /// `(hide yes)` or a bare `hide` among `list`'s own children.
-fn hidden(list: &[Sexpr]) -> bool {
+pub(crate) fn hidden(list: &[Sexpr]) -> bool {
     list.iter().skip(1).any(|c| match c {
         Sexpr::Atom(a) => a == "hide",
         Sexpr::List(l) => sexpr::tag(l) == Some("hide") && sexpr::txt(l, 1).map(|v| v == "yes").unwrap_or(true),

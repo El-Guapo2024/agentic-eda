@@ -178,6 +178,7 @@ pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, un
             angle_deg: angle_for(b.node.ports[pi].side),
             length_mm: mm(STUB),
             unit: 1,
+            hidden: false,
         });
     }
     for (i, local) in nc_pin_local_points(part, w, h, None, unit) {
@@ -191,6 +192,7 @@ pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, un
             angle_deg: 90.0,
             length_mm: 0.0,
             unit: 1,
+            hidden: false,
         });
     }
     let reference_prefix: String = part.reference.chars().take_while(|c| c.is_alphabetic()).collect();

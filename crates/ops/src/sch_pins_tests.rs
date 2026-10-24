@@ -52,7 +52,7 @@ fn section() -> eda_model::ir::SchematicSection {
 }
 
 fn lib_pin(number: &str, x: f64, y: f64, angle: f64, unit: u32) -> LibPin {
-    LibPin { number: number.into(), name: format!("P{number}"), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: angle, length_mm: 2.54, unit }
+    LibPin { number: number.into(), name: format!("P{number}"), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: angle, length_mm: 2.54, unit, hidden: false }
 }
 
 fn lib(lib_id: &str, unit_count: u32, pins: Vec<LibPin>) -> LibSymbol {

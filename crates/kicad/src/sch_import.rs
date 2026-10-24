@@ -1559,6 +1559,7 @@ mod tests {
             angle_deg: angle,
             length_mm: 1.27,
             unit,
+            hidden: false,
         };
         let lib = LibSymbol {
             lib_id: "test:DUAL".into(),
@@ -1653,6 +1654,7 @@ mod tests {
             angle_deg: angle,
             length_mm: 2.54,
             unit: 1,
+            hidden: false,
         };
         let rect = |x0: f64, x1: f64| SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(x0, 2.54), end: SPoint::new(x1, -2.54), stroke_mm: 0.254, filled: false };
         // style 1: inputs on the left, the output on the right; style 2 (the same gate drawn with its bubbles): same pins, a wider body

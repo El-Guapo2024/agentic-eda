@@ -16,7 +16,7 @@ use std::process::Command;
 const META: ExportMeta<'static> = ExportMeta { date: "2026-10-23", title: "orientations" };
 
 fn pin(number: &str, name: &str, etype: &str, x: f64, y: f64, angle: f64) -> LibPin {
-    LibPin { number: number.into(), name: name.into(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: angle, length_mm: 2.54, unit: 1 }
+    LibPin { number: number.into(), name: name.into(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: angle, length_mm: 2.54, unit: 1, hidden: false }
 }
 
 /// A two-input gate: A and B on the left (one grid cell apart), Y on the right.

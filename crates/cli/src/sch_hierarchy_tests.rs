@@ -359,6 +359,7 @@ fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
         angle_deg: if left { 0.0 } else { 180.0 },
         length_mm: 2.54,
         unit,
+        hidden: false,
     };
     let sym = LibSymbol {
         lib_id: "Test:Dual3".into(),
@@ -1053,6 +1054,38 @@ fn kicad_cli_net_groups(root: &Path) -> Vec<Vec<String>> {
     groups
 }
 
+/// `design` traced as the studio traces a board (`board::trace_design`, with the design's bus aliases and the library's power inputs).
+fn traced_as_the_studio(design: &eda_model::ir::Design, model: &ConstraintModel) -> Vec<eda_engine::nets::TracedNet> {
+    let pin_names = std::collections::BTreeMap::new();
+    let aliases = design.bus_aliases.clone();
+    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
+    let global_power = |lib_id: &str| -> Option<bool> { model.symbol_of(lib_id).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), power_pins: None };
+    crate::board::trace_design(&mut design.clone(), model, &naming)
+}
+
+/// p12 S2: an invisible power input of a symbol that is not a power symbol is a global power pin named by its pin (`SCH_PIN::IsGlobalPower`'s legacy
+/// rule), so U1's and U2's hidden `VCC` pins are on the net of the power symbol `VCC` -- U2's though a wire takes it to R2.2 (`GetDriverPriority` gives
+/// the pin `GLOBAL_POWER_PIN` wired or not, so R2.2 is on `VCC` too). A visible power input (pin 3) is an ordinary pin. kicad-cli's netlist of the
+/// file, when it is there, is the same.
+#[test]
+fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
+    let work = scratch("hidden_power_pins");
+    let root = work.join("hidden_power_pins.kicad_sch");
+    std::fs::write(&root, include_str!("../tests/fixtures/hidden_power_pins.kicad_sch")).unwrap();
+    let (design, model, _) = eda_kicad::import_kicad_sch_tree(&root).unwrap();
+    let nets = traced_as_the_studio(&design, &model);
+    let net = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap_or_else(|| panic!("{pin} in {nets:?}")).clone();
+    assert_eq!((net("U1.2").name.as_str(), net("U1.2").pins.clone()), ("VCC", vec!["R1.1".to_string(), "R2.2".into(), "U1.2".into(), "U2.2".into()]), "{nets:?}");
+    assert_eq!(net("U1.3").pins, vec!["U1.3".to_string()], "a visible power input is an ordinary pin: {nets:?}");
+    if kicad_cli_ready() {
+        let mut ours: Vec<Vec<String>> = nets.iter().map(|n| n.pins.iter().filter(|p| !p.starts_with('#')).cloned().collect::<Vec<_>>()).filter(|p| p.len() >= 2).collect();
+        ours.sort();
+        let kicad: Vec<Vec<String>> = kicad_cli_net_groups(&root).into_iter().filter(|g| g.len() >= 2).collect();
+        assert_eq!(ours, kicad, "kicad-cli's netlist of the file");
+    }
+}
+
 /// The QA project `rel` read by our reader as it is (no Import Sheet: the symbols at their library origin) and traced as the studio traces a board
 /// (`board::trace_design`), beside kicad-cli's netlist of KiCad's own file: (ours, KiCad's), nets of two pins or more.
 fn qa_traced(rel: &str) -> Option<(Vec<Vec<String>>, Vec<Vec<String>>)> {
@@ -1065,12 +1098,7 @@ fn qa_traced(rel: &str) -> Option<(Vec<Vec<String>>, Vec<Vec<String>>)> {
     let kicad = kicad_cli_net_groups(&root);
     let (mut design, mut model, _) = eda_kicad::import_kicad_sch_tree(&root).ok()?;
     crate::board::reconcile_schematic(&mut design, &mut model, None);
-    let pin_names = std::collections::BTreeMap::new();
-    let aliases = design.bus_aliases.clone();
-    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
-    let global_power = |lib_id: &str| -> Option<bool> { model.symbol_of(lib_id).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power) };
-    let mut ours: Vec<Vec<String>> = crate::board::trace_design(&mut design.clone(), &model, &naming).into_iter().map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).collect::<Vec<_>>()).filter(|p: &Vec<String>| p.len() >= 2).collect();
+    let mut ours: Vec<Vec<String>> = traced_as_the_studio(&design, &model).into_iter().map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).collect::<Vec<_>>()).filter(|p: &Vec<String>| p.len() >= 2).collect();
     for g in ours.iter_mut() {
         g.sort();
     }
