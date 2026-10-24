@@ -47,7 +47,7 @@ Opening a studio project in KiCad and running Update PCB (F8) renames every net 
 - p13-p16 F5 (P15): the ERC exclusion key merges a shared sheet's placements.
 
 ### E. Router (`crates/pns`)
-**Fixed on `task-fix-e-router` (2026-10-24):** all seven highs and the test infrastructure; 18 of the 21 mediums (F1-5 was fixed by the nanometre merge; F2-11 deferred, KiCad's grab radius is the grid size, which the router is not told; F4-2, arcs in the pair code, deferred); 11 of the 19 lows. The seven 8303b2ad router sessions now replay to the nanometre. Status per finding in `p5-router.md`.
+**Fixed on `task-fix-e-router` (2026-10-24):** all seven highs and the test infrastructure; 18 of the 21 mediums (F1-5 was fixed by the nanometre merge; F2-11 deferred, KiCad's grab radius is the grid size, which the router is not told; F4-2, arcs in the pair code, deferred); 12 of the 19 lows (some in part). The seven 8303b2ad router sessions now replay to the nanometre. Status per finding in `p5-router.md`.
 - p5 P-1: a walk-around drag commits a detour round the whole board.
 - p5 F2-1: a via that ends a route never reaches the board.
 - p5 F2-2: Walk around with a via commits a clearance violation.

@@ -508,7 +508,7 @@ Our comment says disjoint ranges are "not a real configuration for the two-outer
 
 ### F1-10. Smaller helper tolerances (D17, still open) (LOW)
 
-> Open (low).
+> **Partly fixed** on task-fix-e-router: b94d44f0 (`changed_area`'s `Contains`). Open: `line_walk::find`, `point_in_polygon` on the edge, `solid_via_mtv` on a rectangle's edge.
 - `changed_area` (shove.rs:203): `sq_distance_to_point(p2) > 1`, where `LINE::ChangedArea` uses `!s.Contains( p2 )`, i.e. squared distance <= 3.
 - `line_walk::find` (line_walk.rs:130): squared distance <= thr², where KiCad's `Find` uses the rounded norm.
 - `point_in_polygon` on the boundary (`checkShoveDirection`'s `POINT_INSIDE_TRACKER` says "not inside" on the edge).
@@ -872,7 +872,7 @@ The comment at `from_ir.rs:37-38` itself says that KiCad marks only the pattern 
 
 Counts (duplicates counted once): **high 7, medium 21, low 19** (47).
 
-**Status 2026-10-24 (`task-fix-e-router`):** high 7/7 fixed; medium 18 fixed, 2 by the nanometre merge or deferred-with-reason (F1-5 fixed by nm; F2-11 deferred: KiCad's grab radius is the grid size), 1 deferred (F4-2, arcs in the pair code); low 11 fixed or partly, 1 left by decision (F3-10), the rest open. Each finding carries its status under its heading. The test infrastructure: `qa_regressions.rs` reads `$KICAD_QA_DATA` or `$KICAD_SRC_DIR/qa/data`, fails under `EDA_SLOW_TESTS=1` without the corpus, replays `walk-with-teardrops` too, and asserts KiCad's exact compare on all seven 8303b2ad sessions, which pass.
+**Status 2026-10-24 (`task-fix-e-router`):** high 7/7 fixed; medium 18 fixed, 2 by the nanometre merge or deferred-with-reason (F1-5 fixed by nm; F2-11 deferred: KiCad's grab radius is the grid size), 1 deferred (F4-2, arcs in the pair code); low 12 fixed or partly, 1 left by decision (F3-10), the rest open. Each finding carries its status under its heading. The test infrastructure: `qa_regressions.rs` reads `$KICAD_QA_DATA` or `$KICAD_SRC_DIR/qa/data`, fails under `EDA_SLOW_TESTS=1` without the corpus, replays `walk-with-teardrops` too, and asserts KiCad's exact compare on all seven 8303b2ad sessions, which pass.
 
 | ID | Finding | Severity | Unit-sensitive |
 |---|---|---|---|
