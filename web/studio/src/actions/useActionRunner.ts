@@ -467,7 +467,9 @@ export function useActionRunner() {
         dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
         return;
       }
-      void startInlineDrag(state.cursorNm.x, state.cursorNm.y, hit, state.board, state.routerSettings, dispatch, freeAngle);
+      // the router tool's own drag asks "Drag Anyway" of a locked item; the selection tool's (`EDIT_TOOL::Drag`) only warns
+      const fromRouterTool = state.activeTool === "route" || state.activeTool === "diffpair";
+      void startInlineDrag(state.cursorNm.x, state.cursorNm.y, hit, state.board, state.routerSettings, dispatch, freeAngle, fromRouterTool);
     };
     m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
     // `routerInlineDrag` (EDIT_TOOL::invokeInlineRouter -> `RunAction( PCB_ACTIONS::routerInlineDrag, DM_ANY )`): the router's own drag entry point, the one `D` above ends in.

@@ -67,9 +67,15 @@ export function findDraggableAt(
  * mark-obstacles choice, and the rest of the router's settings, a route session does. `freeAngle` is `G`
  * (`PCB_ACTIONS::dragFreeAngle` -> `DM_ANY | DM_FREE_ANGLE`): the drag only
  * marks obstacles, whatever `mode` says. */
-export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false): Promise<void> {
+export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false, fromRouterTool = false): Promise<void> {
   let preview = await routeDragStart(x, y, hit.layer, settings, freeAngle);
-  // `ROUTER_TOOL::performDragging`: a locked item asks first, and "Drag Anyway" unlocks it for the drag
+  // `D` from the selection tool is `EDIT_TOOL::Drag`, whose selection filter drops a locked item (`FilterCollectorForLockedItems`): the
+  // selection comes out empty and the tool only warns (`ReportFilteredLockedItems`; this studio has no "Override locks"). (findings p5 F3-3)
+  if (!preview.ok && preview.locked && !fromRouterTool) {
+    dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+    return;
+  }
+  // `ROUTER_TOOL::performDragging` (`D` while the router tool is active): a locked item asks first, and "Drag Anyway" unlocks it for the drag
   if (!preview.ok && preview.locked) {
     const anyway = await askConfirm({ title: "Confirmation", message: "The selected item is locked.", okLabel: "Drag Anyway" });
     if (!anyway) return;
