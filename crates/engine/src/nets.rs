@@ -190,6 +190,9 @@ pub struct Naming<'a> {
     /// "REF.PIN" -> net name of every pin of an ordinary symbol that is a global power pin (`SCH_PIN::IsGlobalPower`'s legacy rule: an invisible
     /// power input of a symbol that is not a power symbol): its pin name names the net and joins the others of that name, wired or not.
     pub power_pins: Option<&'a BTreeMap<String, String>>,
+    /// A power symbol's Value with its text variables resolved for the placement it is traced in (`SCH_SYMBOL::GetValue( &sheet, FOR_NETNAME )`:
+    /// `${#}` is that sheet path's page), given the placement's [`ScreenIn::path`] and the stored text. Without it the stored text names the net.
+    pub power_value: Option<&'a dyn Fn(&[String], &str) -> String>,
 }
 
 impl Naming<'_> {
@@ -351,9 +354,10 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             if !naming.is_global_power(&ps.lib_id) {
                 continue;
             }
+            let name = naming.power_value.map(|f| f(&screen.path, &ps.net)).unwrap_or_else(|| ps.net.clone());
             let g = &mut groups[at[&ps.at]];
-            g.drivers.push(Driver { prio: GLOBAL_POWER_PIN, name: ps.net.clone(), depth: depth[si] });
-            g.global_names.push(ps.net.clone());
+            g.drivers.push(Driver { prio: GLOBAL_POWER_PIN, name: name.clone(), depth: depth[si] });
+            g.global_names.push(name);
         }
         for (sh, flags) in sch.sheets.iter().zip(&pin_bus) {
             for (p, &b) in sh.pins.iter().zip(flags) {
@@ -1009,6 +1013,32 @@ mod tests {
         ];
         let nets = trace_nets(&mut screens);
         assert_eq!(pins_of(&nets, "MAINBUS"), vec!["R1.1", "U1.1"]);
+    }
+
+    /// p12 S3: a power symbol's Value is resolved for each placement of its screen (`GetValue( &sheet, FOR_NETNAME )`): `P${#}` on a screen shown as pages 2
+    /// and 3 is the two nets `P2` and `P3`, not one net that shorts the placements together.
+    #[test]
+    fn a_power_symbols_page_variable_is_resolved_per_placement() {
+        let mut root = section();
+        for (id, y) in [("s2", 0), ("s3", 2000)] {
+            root.sheets.push(SheetInstance { id: id.into(), name: id.into(), file: "sub.kicad_sch".into(), at: p(0, y), size: (1000, 1000), pins: vec![], page: String::new() });
+        }
+        let sub = || {
+            let mut c = section();
+            c.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "Lib:P".into(), at: p(0, 0), rot: 0, net: "P${#}".into(), pin: String::new() });
+            c.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
+            c
+        };
+        let (mut a, mut b) = (sub(), sub());
+        let mut screens = vec![
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
+            ScreenIn { path: vec!["s2".into()], sch: &mut a, file: "sub.kicad_sch".into(), pins: pins(&[("R1.1", p(1000, 0))]) },
+            ScreenIn { path: vec!["s3".into()], sch: &mut b, file: "sub.kicad_sch".into(), pins: pins(&[("R2.1", p(1000, 0))]) },
+        ];
+        let page = |path: &[String], raw: &str| raw.replace("${#}", path.last().map(|id| &id[1..]).unwrap_or("1"));
+        let nets = trace_nets_with(&mut screens, &Naming { power_value: Some(&page), ..Naming::default() });
+        let named: Vec<(String, Vec<String>)> = nets.iter().map(|n| (n.name.clone(), n.pins.clone())).collect();
+        assert_eq!(named, vec![("P2".to_string(), vec!["R1.1".to_string()]), ("P3".to_string(), vec!["R2.1".to_string()])]);
     }
 
     /// "REF.PIN" -> point for every symbol on `sch`, from the engine's own geometry.

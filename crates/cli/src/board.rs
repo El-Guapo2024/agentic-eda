@@ -498,6 +498,10 @@ fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String
 pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
     // the sheets of the hierarchy: a screen no sheet shows any more (its sheet was deleted) is not part of the schematic, its pins are on no net
     let entries = eda_model::sheet_list::walk(design);
+    // what a power symbol's `${..}` read: the sheets, their pages and title blocks (only when some power symbol's value has a variable)
+    let has_vars = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.power_symbols.iter()).any(|p| eda_model::text_vars::has_text_vars(&p.net));
+    let hierarchy = has_vars.then(|| PowerValueView::of(design));
+    let design_view = hierarchy.as_ref();
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
     // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
     // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
@@ -578,12 +582,60 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
                 screens.push(eda_engine::nets::ScreenIn { path, sch, file, pins });
             }
         }
-        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), ..*naming };
+        let resolve = |path: &[String], raw: &str| power_value_under(design_view, path, raw);
+        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), power_value: naming.power_value.or(Some(&resolve)), ..*naming };
         eda_engine::nets::trace_nets_with(&mut screens, &naming)
     };
     design.schematic = Some(root);
     design.sheet_contents = contents;
     traced
+}
+
+/// The hierarchy as a power symbol's Value reads its text variables: each placement's path with its page, the sheets' fields and the screens' title blocks.
+struct PowerValueView {
+    /// placement path -> (page, the levels from the root down: (Sheetname, Sheetfile) and the title block of the screen it shows)
+    placements: std::collections::BTreeMap<Vec<String>, (String, Vec<eda_model::text_vars::SchSheetLevel>, String)>,
+    page_count: usize,
+}
+
+impl PowerValueView {
+    fn of(design: &eda_model::ir::Design) -> PowerValueView {
+        use eda_model::text_vars::{SchSheetLevel, TitleBlockVars};
+        let tb = |s: Option<&eda_model::ir::SchematicSection>| s.and_then(|s| s.title_block.as_ref()).map(TitleBlockVars::of);
+        let entries = eda_model::sheet_list::walk(design);
+        let mut placements = std::collections::BTreeMap::new();
+        for e in &entries {
+            let mut levels = vec![SchSheetLevel { fields: vec![], title_block: tb(design.schematic.as_ref()) }];
+            let mut here = design.schematic.as_ref();
+            let mut name = String::new();
+            for id in &e.path {
+                let placement = here.and_then(|s| s.sheets.iter().find(|p| &p.id == id));
+                let content = placement.and_then(|p| design.sheet_contents.as_ref().and_then(|c| c.get(&p.file)));
+                name = placement.map(|p| p.name.clone()).unwrap_or_default();
+                levels.push(SchSheetLevel { fields: vec![("Sheetname".into(), name.clone()), ("Sheetfile".into(), placement.map(|p| p.file.clone()).unwrap_or_default())], title_block: tb(content) });
+                here = content;
+            }
+            placements.insert(e.path.clone(), (e.effective_page(), levels, name));
+        }
+        PowerValueView { placements, page_count: entries.len() }
+    }
+}
+
+/// `SCH_SYMBOL::GetValue( &sheet, FOR_NETNAME )` of a power symbol: its Value's text variables resolved for the placement `path` (`SCH_FIELD::GetShownText`, the
+/// sheet's `ResolveTextVar` up the path, `${#}` its page). **Differs**: the project's own variables are not known here (the tracer has no board folder), so a
+/// `${VAR}` of the project is left as it is written.
+fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) -> String {
+    let Some((page, levels, name)) = view.and_then(|v| v.placements.get(path)) else { return raw.to_string() };
+    let sheet = eda_model::text_vars::SchSheet {
+        levels: levels.clone(),
+        page: page.clone(),
+        page_count: view.map_or(1, |v| v.page_count),
+        sheet_name: if path.is_empty() { "Root".to_string() } else { name.clone() },
+        // `PathHumanReadable`: `/` and each sheet's name with a `/`
+        sheet_path: std::iter::once("/".to_string()).chain(levels.iter().skip(1).filter_map(|l| l.fields.first()).map(|(_, n)| format!("{n}/"))).collect(),
+        ..Default::default()
+    };
+    sheet.field_shown(levels.len().saturating_sub(1), None, raw, 0)
 }
 
 /// `pins` ("REF.PIN" -> point) of `sec` under the references the placement `placement` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
@@ -644,7 +696,7 @@ pub(crate) fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mu
     let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
     // a power symbol names its net when its pin is a power input (`SCH_PIN::IsGlobalPower`), which a PWR_FLAG's is not
     let global_power = |lib_id: &str| -> Option<bool> { resolve_lib_symbol(lib_id, model).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), power_pins: None };
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), power_pins: None, power_value: None };
     let after = trace_design(design, model, &naming);
     if let Some(before) = before {
         let mut earlier = before.clone();

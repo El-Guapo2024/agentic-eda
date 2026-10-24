@@ -1104,7 +1104,7 @@ fn traced_as_the_studio(design: &eda_model::ir::Design, model: &ConstraintModel)
     let aliases = design.bus_aliases.clone();
     let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
     let global_power = |lib_id: &str| -> Option<bool> { model.symbol_of(lib_id).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), power_pins: None };
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), power_pins: None, power_value: None };
     crate::board::trace_design(&mut design.clone(), model, &naming)
 }
 
@@ -1223,6 +1223,7 @@ const QA_TRACED_ALIKE: &[&str] = &[
     "issue18092/issue18092.kicad_sch",
     "issue13112.kicad_sch",
     "issue12814.kicad_sch",
+    "ERC_dynamic_power_symbol_test.kicad_sch",
 ];
 
 /// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
@@ -1231,7 +1232,6 @@ const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
     ("netlists/hierarchy_aliases/hierarchy_aliases.kicad_sch", "a screen shown twice inside a screen shown twice"),
     ("netlists/bus_connection/bus_connection.kicad_sch", "two buses on one sheet joined only by a member name they share"),
     ("issue17771/issue1771.kicad_sch", "two buses on one sheet joined only by a member name they share"),
-    ("ERC_dynamic_power_symbol_test.kicad_sch", "a power symbol's ${#} is not resolved per placement"),
     ("netlists/video/video.kicad_sch", "not looked into"),
 ];
 
