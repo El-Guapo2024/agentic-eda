@@ -802,7 +802,7 @@ The comment at `from_ir.rs:37-38` itself says that KiCad marks only the pattern 
 
 ### F4-5. Pair width inheritance covers only two segment ends. (low/medium)
 
-> Open (low).
+> **Fixed** on task-fix-e-router: 6f848f8a (`Router::inherit_track_width`; test `a_pair_started_on_a_pad_with_a_stub_takes_the_stubs_width`). `m_UseConnectedTrackWidth` is taken as on (the router is not told the board's setting).
 
 **What differs.** `dp_placer.rs` `start`: `if let (Item::Segment(sp), Item::Segment(_)) = (&prim_p, &prim_n) { sizes.width = sp.width; }`. KiCad `ImportSizes`: `if( bds.m_UseConnectedTrackWidth && aStartItem ) found = inheritTrackWidth( aStartItem, &diffPairWidth, startPosInt );`. `m_UseConnectedTrackWidth` comes from `board.auto_track_width`, default `true` (`project_local_settings.cpp:200`). `inheritTrackWidth` also takes the width of the track joined to a start *pad or via* (`linkedSegs ... FilterKinds( SEGMENT_T | ARC_T )`, the one whose far end is nearest the cursor), and of an arc. Ours inherits the width unconditionally, but only from two segment ends: a pair started from pads that already have stubs takes the class width, where KiCad takes the stub's.
 
@@ -872,7 +872,7 @@ The comment at `from_ir.rs:37-38` itself says that KiCad marks only the pattern 
 
 Counts (duplicates counted once): **high 7, medium 21, low 19** (47).
 
-**Status 2026-10-24 (`task-fix-e-router`):** high 7/7 fixed; medium 18 fixed, 2 by the nanometre merge or deferred-with-reason (F1-5 fixed by nm; F2-11 deferred: KiCad's grab radius is the grid size), 1 deferred (F4-2, arcs in the pair code); low 12 fixed or partly, 1 left by decision (F3-10), the rest open. Each finding carries its status under its heading. The test infrastructure: `qa_regressions.rs` reads `$KICAD_QA_DATA` or `$KICAD_SRC_DIR/qa/data`, fails under `EDA_SLOW_TESTS=1` without the corpus, replays `walk-with-teardrops` too, and asserts KiCad's exact compare on all seven 8303b2ad sessions, which pass.
+**Status 2026-10-24 (`task-fix-e-router`):** high 7/7 fixed; medium 18 fixed, 2 by the nanometre merge or deferred-with-reason (F1-5 fixed by nm; F2-11 deferred: KiCad's grab radius is the grid size), 1 deferred (F4-2, arcs in the pair code); low 13 fixed or partly, 1 left by decision (F3-10), the rest open. Each finding carries its status under its heading. The test infrastructure: `qa_regressions.rs` reads `$KICAD_QA_DATA` or `$KICAD_SRC_DIR/qa/data`, fails under `EDA_SLOW_TESTS=1` without the corpus, replays `walk-with-teardrops` too, and asserts KiCad's exact compare on all seven 8303b2ad sessions, which pass.
 
 | ID | Finding | Severity | Unit-sensitive |
 |---|---|---|---|

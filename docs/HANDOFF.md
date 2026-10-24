@@ -58,7 +58,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-fix-e-router` | Parity batch E: the router findings (`docs/parity/findings/p5-router.md`) | 7/7 high, 18/21 medium, 12/19 low fixed (some lows in part); KiCad's 7 router sessions replay exactly | F2-11, F4-2, the open lows (findings file) |
+| `task-fix-e-router` | Parity batch E: the router findings (`docs/parity/findings/p5-router.md`) | 7/7 high, 18/21 medium, 13/19 low fixed (some lows in part); KiCad's 7 router sessions replay exactly | F2-11, F4-2, the open lows (findings file) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

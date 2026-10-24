@@ -956,8 +956,8 @@ written, then fixed.
 - **The tuner:** the skew box's range is the skew's; a track of another pattern does not start one.
 
 Left, with the reason, in the findings file: F2-11 (KiCad's grab radius is the grid size, which the router is not told), F4-2 (arcs in
-the pair router and tuners), and the lows F1-7, F1-8, F1-9, F1-10, F2-15 (the `line_walk.rs` tolerances, FANOUT_CLEANUP, the
-mark-obstacles hull snap, the cluster timeout), F3-10 (by decision), F3-13, F4-5, F4-9.
+the pair router and tuners), and the lows F1-7, F1-8, F1-9, F1-10 (in part), F2-15 (the `line_walk.rs` tolerances, FANOUT_CLEANUP, the
+mark-obstacles hull snap, the cluster timeout), F3-10 (by decision), F3-13, F4-9.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
