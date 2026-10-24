@@ -1016,9 +1016,11 @@ impl Router {
     /// in progress. The error is KiCad's own message.
     pub fn start_diff_pair(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
-        let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None);
-        let Some((start_item, _)) = hit else {
-            return Err("no pad, via, or track end there to route from".into());
+        // the pad, via or track end there, else the track under the cursor (`isStartingPointRoutable` with `aStartItem` the item picked:
+        // `FindDpPrimitivePair` then finds its free end, or says "Can't find a suitable starting point. ..."), else nothing (findings p5 F4-6)
+        let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None).map(|(id, _)| id).or_else(|| self.world.segment_at(at, layer, None, None, &[]));
+        let Some(start_item) = hit else {
+            return Err("Cannot start a differential pair in the middle of nowhere.".into());
         };
         let placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, layer, self.layers.all())?;
         self.session = None;
@@ -1492,6 +1494,14 @@ mod tests {
         router.start(Point { x: -825_000, y: 0 }, "F.Cu", 200_000).unwrap();
         let err = router.continue_from_end(Point { x: 1_000_000, y: 0 }).expect_err("everything is connected");
         assert!(err.contains("nothing is left"), "{err}");
+    }
+
+    /// findings p5 F4-6: a pair started where nothing is gets KiCad's own refusal.
+    #[test]
+    fn a_pair_started_in_the_middle_of_nowhere_is_refused_with_kicads_message() {
+        let (design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        assert_eq!(router.start_diff_pair(Point { x: 50_000_000, y: 50_000_000 }, "F.Cu"), Err("Cannot start a differential pair in the middle of nowhere.".to_string()));
     }
 
     /// findings p5 F3-12: a drag keeps the mode it started in (`m_currentMode = Settings().Mode()` in `DRAGGER::Start`).
