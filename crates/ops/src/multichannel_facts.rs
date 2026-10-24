@@ -282,7 +282,8 @@ impl Board<'_> {
             if let Some(e) = extra {
                 pads.extend(e.holes.iter().map(|h| (h.pad.number.clone(), String::new())));
             }
-            let fpid = fpid_of(part.footprint.as_deref().or(part.package.as_deref()).unwrap_or(""));
+            // the link the board file gives the footprint (`footprint_lib_id`: a package's installed KiCad footprint), which a design block saved from it has
+            let fpid = fpid_of(&eda_model::footprint::footprint_lib_id(part));
             let mut fields: Vec<(String, String)> = vec![("Reference".into(), pose.id.clone()), ("Value".into(), part.value.clone().unwrap_or_default()), ("Footprint".into(), fpid.clone())];
             if let Some(d) = &part.datasheet {
                 fields.push(("Datasheet".into(), d.clone()));

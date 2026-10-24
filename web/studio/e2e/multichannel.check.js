@@ -117,11 +117,12 @@
   };
   const ensureSame = async (snap, max = 10) => { for (let i = 0; i < max && (await snapshot()) !== snap; i++) await undo(); return (await snapshot()) === snap; };
 
-  // the channels: roles of each, and the nets of the roles
+  // the channels: roles of each, and the nets of the roles, under KiCad's names (the labels SUM1, OUT1 in the sheet of U1: `/OPAMP (U1)/SUM1`; IN2, a net of
+  // one pin, `unconnected-(R3-Pad1)`)
   const CH = {
-    1: { U: "U1", Rin: "R1", Rf: "R2", C: "C1", sum: "SUM1", out: "OUT1" },
-    2: { U: "U2", Rin: "R3", Rf: "R4", C: "C2", sum: "SUM2", out: "OUT2" },
-    3: { U: "U3", Rin: "R5", Rf: "R6", C: "C3", sum: "SUM3", out: "OUT3" },
+    1: { U: "U1", Rin: "R1", Rf: "R2", C: "C1", sum: "/OPAMP (U1)/SUM1", out: "/OPAMP (U1)/OUT1" },
+    2: { U: "U2", Rin: "R3", Rf: "R4", C: "C2", sum: "/OPAMP (U2)/SUM2", out: "/OPAMP (U2)/OUT2" },
+    3: { U: "U3", Rin: "R5", Rf: "R6", C: "C3", sum: "/OPAMP (U3)/SUM3", out: "/OPAMP (U3)/OUT3" },
   };
   const ROLES = ["U", "Rin", "Rf", "C"];
   const refsOf = (k) => ROLES.map((r) => CH[k][r]);
@@ -426,15 +427,15 @@
       const out = [];
       // the track of the middle net ends on pad 2 of the amplifier, so what a copy of it ends on says whether the copper turns the way the footprints do
       const pad2 = padOf(await board(), "U1", "2");
-      out.push(await post({ op: "add_track", net: "SUM1", layer: "F.Cu", width: 200_000, pts: [{ x: 3_500_000, y: 4_200_000 }, { x: 3_500_000, y: 6_500_000 }, { x: pad2.x, y: pad2.y }] }));
-      out.push(await post({ op: "add_track", net: "OUT1", layer: "F.Cu", width: 250_000, pts: [{ x: 7_700_000, y: 4_200_000 }, { x: 7_700_000, y: 7_000_000 }] }));
+      out.push(await post({ op: "add_track", net: "/OPAMP (U1)/SUM1", layer: "F.Cu", width: 200_000, pts: [{ x: 3_500_000, y: 4_200_000 }, { x: 3_500_000, y: 6_500_000 }, { x: pad2.x, y: pad2.y }] }));
+      out.push(await post({ op: "add_track", net: "/OPAMP (U1)/OUT1", layer: "F.Cu", width: 250_000, pts: [{ x: 7_700_000, y: 4_200_000 }, { x: 7_700_000, y: 7_000_000 }] }));
       out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300_000, pts: [{ x: 3_000_000, y: 9_000_000 }, { x: 3_000_000, y: 10_500_000 }] }));
-      out.push(await post({ op: "add_via", net: "SUM1", x: 5_500_000, y: 11_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu", to_layer: "B.Cu" }));
+      out.push(await post({ op: "add_via", net: "/OPAMP (U1)/SUM1", x: 5_500_000, y: 11_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu", to_layer: "B.Cu" }));
       out.push(await post({ op: "add_zone", net: "GND", layer: "B.Cu", outline: [{ x: 2_500_000, y: 7_000_000 }, { x: 8_500_000, y: 7_000_000 }, { x: 8_500_000, y: 10_500_000 }, { x: 2_500_000, y: 10_500_000 }] }));
       out.push(await post({ op: "add_text", text: { content: "CH", at: { x: 6_500_000, y: 12_500_000 }, angle: 0, layer: "F.Cu", size_nm: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false } }));
       out.push(await post({ op: "add_text", text: { content: "SILK", at: { x: 4_000_000, y: 12_000_000 }, angle: 0, layer: "F.SilkS", size_nm: 800_000, stroke_width: 150_000, justify: "center", mirror: false } }));
       // channel 2's own: a track and a text in its area, a track outside every area
-      out.push(await post({ op: "add_track", net: "SUM2", layer: "F.Cu", width: 200_000, pts: [{ x: 15_000_000, y: 8_000_000 }, { x: 16_000_000, y: 8_000_000 }] }));
+      out.push(await post({ op: "add_track", net: "/OPAMP (U2)/SUM2", layer: "F.Cu", width: 200_000, pts: [{ x: 15_000_000, y: 8_000_000 }, { x: 16_000_000, y: 8_000_000 }] }));
       out.push(await post({ op: "add_text", text: { content: "OLD", at: { x: 19_000_000, y: 12_500_000 }, angle: 0, layer: "F.Cu", size_nm: 800_000, stroke_width: 150_000, justify: "center", mirror: false } }));
       out.push(await post({ op: "add_track", net: "GND", layer: "F.Cu", width: 300_000, pts: [{ x: 2_000_000, y: 20_000_000 }, { x: 8_000_000, y: 20_000_000 }] }));
       t(out.every((o) => o.ok), `ten edits made (${out.filter((o) => !o.ok).map((o) => o.message)})`);
@@ -445,7 +446,7 @@
       const ch1 = (pts) => pts.every((p) => inside(a1.outline, p));
       COPPER.ch1Tracks = tracksOf(b).filter((x) => ch1(x.pts)).map((x) => x.id);
       COPPER.outside = tracksOf(b).filter((x) => x.pts[0][1] === 20_000_000).map((x) => x.id);
-      COPPER.ch2Old = tracksOf(b).filter((x) => x.net === "SUM2").map((x) => x.id);
+      COPPER.ch2Old = tracksOf(b).filter((x) => x.net === "/OPAMP (U2)/SUM2").map((x) => x.id);
       t(COPPER.ch1Tracks.length === 3 && COPPER.outside.length === 1 && COPPER.ch2Old.length === 1, "three tracks are inside channel 1's area, one outside every area, and channel 2 has one of its own");
     });
     const afterSetup = await snapshot();
@@ -507,7 +508,7 @@
         const v = k === 2 ? v2 : v3;
         const ak = ruleAreas(after).find((z) => z.id === AREA[k]);
         const mine = tracksOf(after).filter((x) => x.pts.every((p) => inside(ak.outline, p)));
-        const want = ch1Tracks.map((x) => JSON.stringify([x.net === "SUM1" ? CH[k].sum : x.net === "OUT1" ? CH[k].out : x.net, x.layer, x.width, shifted(x.pts, v)])).sort();
+        const want = ch1Tracks.map((x) => JSON.stringify([x.net === "/OPAMP (U1)/SUM1" ? CH[k].sum : x.net === "/OPAMP (U1)/OUT1" ? CH[k].out : x.net, x.layer, x.width, shifted(x.pts, v)])).sort();
         const got = mine.map((x) => JSON.stringify([x.net, x.layer, x.width, x.pts])).sort();
         t(JSON.stringify(want) === JSON.stringify(got), `channel ${k} has channel 1's three tracks on its own nets, moved (${got.length} tracks${JSON.stringify(want) === JSON.stringify(got) ? "" : `: ${got.join(" ")}`})`);
         const vias = viasOf(after).filter((x) => inside(ak.outline, [x.x, x.y]));
@@ -569,18 +570,18 @@
       await ensureSame(afterSetup);
       // restrict to the routing connected within the area: the track of net GND is on a net of the area's footprints (the pads of U1.3 and U1.4), so it is copied, one on a net
       // of no footprint of the area is not
-      const out = await post({ op: "add_track", net: "IN2", layer: "F.Cu", width: 200_000, pts: [{ x: 8_000_000, y: 8_000_000 }, { x: 8_500_000, y: 8_500_000 }] });
+      const out = await post({ op: "add_track", net: "unconnected-(R3-Pad1)", layer: "F.Cu", width: 200_000, pts: [{ x: 8_000_000, y: 8_000_000 }, { x: 8_500_000, y: 8_500_000 }] });
       t(out.ok, "a track on a net none of channel 1's footprints is on, in its area");
       const withStray = await snapshot();
       await openRepeat(AREA[1], { connected_routing_only: true });
       await press("OK", 2200);
       after = await board();
-      t(tracksOf(after).filter((x) => x.net === "IN2").length === 1 && tracksOf(after).length === 3 + 3 + 3 + 1 + 1, `'Restrict to routing connected within the area' leaves the unrelated track out (${tracksOf(after).length} tracks)`);
+      t(tracksOf(after).filter((x) => x.net === "unconnected-(R3-Pad1)").length === 1 && tracksOf(after).length === 3 + 3 + 3 + 1 + 1, `'Restrict to routing connected within the area' leaves the unrelated track out (${tracksOf(after).length} tracks)`);
       await ensureSame(withStray);
       await openRepeat(AREA[1]);
       await press("OK", 2200);
       after = await board();
-      t(tracksOf(after).filter((x) => x.net === "IN2").length === 3, `with it off the unrelated track is copied too (${tracksOf(after).filter((x) => x.net === "IN2").length} on IN2)`);
+      t(tracksOf(after).filter((x) => x.net === "unconnected-(R3-Pad1)").length === 3, `with it off the unrelated track is copied too (${tracksOf(after).filter((x) => x.net === "unconnected-(R3-Pad1)").length} on IN2)`);
       await ensureSame(withStray);
       await undo(); // the stray track
       await ensureSame(afterSetup);
@@ -624,7 +625,7 @@
       t(!!v2 && near(v2.x, 18_000_000 - 5_500_000) && near(v2.y, 9_000_000 - 9_000_000), `channel 2, with the amplifier unturned, is channel 1 moved to it (${JSON.stringify(v2)})`);
       const turn = turnedBy(after, 3);
       t(turn !== null && near(angle(turn), angle(poseOf(before, "U3").rot - poseOf(before, "U1").rot), 0.01) && !near(angle(turn), 0, 0.01), `channel 3 is channel 1 turned about its amplifier by the angle between the two amplifiers (${turn})`);
-      t(tracksOf(after).filter((x) => x.net === "SUM3").length === 1, "and its routing is copied onto its nets");
+      t(tracksOf(after).filter((x) => x.net === "/OPAMP (U3)/SUM3").length === 1, "and its routing is copied onto its nets");
       // the copper turns the way the footprints do: the track that ends on pad 2 of the amplifier ends on pad 2 of the turned amplifier, which is where the pad is on the board
       for (const k of [2, 3]) {
         const toPad = tracksOf(after).find((x) => x.net === CH[k].sum && x.pts.length === 3);
@@ -670,7 +671,7 @@
       await press("OK", 2200);
       const after = await board();
       t(!!shiftOf(after, 2) && moved(before, after, refsOf(3)).length === 0, "OK copies to channel 2 and leaves channel 3's footprints");
-      t(tracksOf(after).filter((x) => x.net === "SUM3").length === 0, "and its routing");
+      t(tracksOf(after).filter((x) => x.net === "/OPAMP (U3)/SUM3").length === 0, "and its routing");
       await ensureSame(mismatched);
       // from the short area, the table has no area that matches: OK has nothing to copy to
       await openRepeat(AREA[3]);
@@ -740,9 +741,9 @@
       t(refsOf(2).filter((x) => !unmoved.includes(x)).length === 1 || (v && v.x === 12_500_000 && v.y === 0) || refsOf(2).every((x) => unmoved.includes(x)), "the first pair is the anchor");
       // the copper
       const mine = segmentsOf(tracksOf(after).filter((x) => x.pts.every((p) => v && inside(shifted(a1.outline, v), p)) && !COPPER.ch2Old.includes(x.id)));
-      const want = segmentsOf(tracksOf(setup).filter((x) => COPPER.ch1Tracks.includes(x.id)), (n) => (n === "SUM1" ? "SUM2" : n === "OUT1" ? "OUT2" : n), v ?? { x: 0, y: 0 });
+      const want = segmentsOf(tracksOf(setup).filter((x) => COPPER.ch1Tracks.includes(x.id)), (n) => (n === "/OPAMP (U1)/SUM1" ? "/OPAMP (U2)/SUM2" : n === "/OPAMP (U1)/OUT1" ? "/OPAMP (U2)/OUT2" : n), v ?? { x: 0, y: 0 });
       t(want.length === 4 && JSON.stringify(want) === JSON.stringify(mine), `the block's four segments are on the group's nets, moved (${mine.length} there${JSON.stringify(want) === JSON.stringify(mine) ? "" : `: ${mine.join(" ")}`})`);
-      t(viasOf(after).filter((x) => x.net === "SUM2").length === 1 && copperZones(after).length === 2 && textsOf(after).filter((x) => x.content === "CH").length === 2, "the via, the zone and the text too");
+      t(viasOf(after).filter((x) => x.net === "/OPAMP (U2)/SUM2").length === 1 && copperZones(after).length === 2 && textsOf(after).filter((x) => x.content === "CH").length === 2, "the via, the zone and the text too");
       t(tracksOf(after).some((x) => COPPER.ch2Old.includes(x.id)) && textsOf(after).some((x) => x.content === "OLD"), "nothing of the board's own is taken away (the track and the text channel 2 had are still there)");
       const gAfter = groupsOf(after).find((x) => x.id === g2.id);
       t(!!gAfter && gAfter.design_block === `${LIB}:Channel` && gAfter.member_ids.length > g2.member_ids.length + 3, `the copies joined the group (${g2.member_ids.length} to ${gAfter?.member_ids.length} members)`);

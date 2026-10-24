@@ -198,6 +198,11 @@
     t((await snapshot()) === afterPlace, "undone");
   });
 
+  // A net by the label it is drawn with: a swap redraws the derived schematic, and KiCad's name of a net is the label's text with the path of the sheet
+  // it is on now (PA0 with only U1's pins on it is `/MCU (U1)/PA0`, where it was `/LED channels (D1–D8)/PA0`).
+  const label = (net) => (net ?? "").split("/").pop();
+  const same = (x, y) => label(x) === label(y);
+
   await scenario("Swap Pad Nets rotates the nets of the selected pads in the order they were selected", async (t) => {
     t(!!a && !!b, "two pads on different nets");
     await select([a.id, b.id]);
@@ -205,7 +210,7 @@
     await sleep(900);
     t(!res.error, `the action ran: ${res.error ?? "ok"}`);
     const [pa, pb] = [await padOf(a.id), await padOf(b.id)];
-    t(pa.net === b.net && pb.net === a.net, `${a.id}: ${a.net} -> ${pa.net}, ${b.id}: ${b.net} -> ${pb.net}`);
+    t(same(pa.net, b.net) && same(pb.net, a.net), `${a.id}: ${a.net} -> ${pa.net}, ${b.id}: ${b.net} -> ${pb.net}`);
     t(!tid("swap-nets-prompt"), "no question: no copper joins them to other pads");
     await undo();
     t((await snapshot()) === afterPlace, "one undo step");
@@ -214,7 +219,7 @@
     await __eda.run("pcbnew.InteractiveEdit.swapPadNets");
     await sleep(900);
     const [qa, qb] = [await padOf(a.id), await padOf(b.id)];
-    t(qa.net === b.net && qb.net === a.net, "two pads exchange, whichever is first");
+    t(same(qa.net, b.net) && same(qb.net, a.net), "two pads exchange, whichever is first");
     await undo();
   });
 
@@ -238,7 +243,8 @@
     await click("swap-nets-ignore");
     await sleep(1300);
     const track = (await state()).routing.tracks.find((x) => x.pts.some((p) => p[0] === a.x && p[1] === a.y));
-    t((await padOf(a.id)).net === b.net && (await padOf(c.id)).net === a.net && track?.net === b.net, `ignore: ${a.id} ${b.net}, ${c.id} ${a.net} (as it was), track ${track?.net}`);
+    const [na, nc] = [(await padOf(a.id)).net, (await padOf(c.id)).net];
+    t(same(na, b.net) && same(nc, a.net) && track?.net === na, `ignore: ${a.id} ${na} (was ${b.net}'s), ${c.id} ${nc} (as it was), track ${track?.net}`);
     await undo();
     t((await snapshot()) === withTrack, "undone");
     // Swap All Connected Pads: c follows.
@@ -247,7 +253,8 @@
     await sleep(900);
     await click("swap-nets-all");
     await sleep(1300);
-    t((await padOf(a.id)).net === b.net && (await padOf(c.id)).net === b.net, `all: ${a.id} and ${c.id} are on ${b.net}`);
+    const [ma, mc] = [(await padOf(a.id)).net, (await padOf(c.id)).net];
+    t(same(ma, b.net) && mc === ma, `all: ${a.id} and ${c.id} are on ${ma} (${b.net}'s)`);
     await undo();
     // Cancel changes nothing.
     await select([a.id, b.id]);

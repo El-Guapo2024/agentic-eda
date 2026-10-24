@@ -167,7 +167,8 @@
       const pa1 = pinAt(led, "PA1");
       t(!!pa0 && !!pa1, "the LED sheet has the pins PA0 and PA1");
       // the pins PA0 and PA1 are on, on each sheet
-      const pinsOn = async (sheetId, net) => (await sch(sheetId)).symbols.flatMap((s) => s.pins.filter((p) => p.net === net).map((p) => `${s.reference ?? s.id}.${p.number}`));
+      // a pin's net by its label: KiCad's name is the label's text with the path of the sheet that names it (`/LED channels (D1–D8)/PA0`)
+      const pinsOn = async (sheetId, net) => (await sch(sheetId)).symbols.flatMap((s) => s.pins.filter((p) => (p.net ?? "").split("/").pop() === net).map((p) => `${s.reference ?? s.id}.${p.number}`));
       const ledPA0 = await pinsOn(led.id, "PA0");
       const mcuPA0 = await pinsOn(mcu.id, "PA0");
       t(ledPA0.length > 0 && mcuPA0.length > 0, `PA0 has pins on both sheets (${mcuPA0} / ${ledPA0})`);
@@ -198,7 +199,7 @@
       t(joined !== null && joined === (await netOf(mcu.id, mcuPA0[0])), `through the bus the two sheets' PA0 are one net again (${joined})`);
       const r2 = await sch("");
       const busWire = r2.wires.find((w) => w.bus && w.pts.some((q) => same(q, m)));
-      t(!!busWire && (busWire.members ?? []).length === 2 && busWire.net === "PB[0..1]", `the root's bus is PB[0..1] with its two members (${busWire?.net}: ${busWire?.members})`);
+      t(!!busWire && (busWire.members ?? []).length === 2 && busWire.net.split("/").pop() === "PB[0..1]", `the root's bus is PB[0..1] with its two members (${busWire?.net}: ${busWire?.members})`);
       // the user deletes the root's bus: apart; one undo: one net again
       await select([busWire.id]);
       await __eda.run("common.Interactive.delete");

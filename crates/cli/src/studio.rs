@@ -1808,8 +1808,11 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 v["stroke"] = json!(stroke);
             }
             // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias name expansion (`eda_kicad::expand_bus_members`).
+            // A bus named with its sheet's path (KiCad's `/LED channels/PB[0..1]`) is expanded from the label's text, and its members are their local names, as
+            // the unfold menu lists them (`member->FullLocalName()`, `SCH_LINE_WIRE_BUS_TOOL`'s `BUS_UNFOLD_MENU`).
             if w.bus {
-                v["members"] = json!(eda_kicad::expand_bus_members(&w.net, &design.bus_aliases).unwrap_or_default());
+                let text = if w.net.starts_with('/') { w.net.rsplit('/').next().unwrap_or(&w.net) } else { w.net.as_str() };
+                v["members"] = json!(eda_kicad::expand_bus_members(text, &design.bus_aliases).unwrap_or_default());
             }
             v
         })

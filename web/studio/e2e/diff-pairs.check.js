@@ -13,7 +13,7 @@
 //   eda board track add --net GND --layer F.Cu --width 0.2 --pts "4.4,7 4.4,12" -C board    # a free track in the pair's way (and a routing section for the gates)
 //   eda board serve -C board --port 8821 --ui web/studio/dist
 //
-// USB_DP / USB_DN join J3.1 and J3.2 (a pad pair 2.54 mm apart) to J2.3 and J2.4; a GND track runs 0.5 mm beside the line the pair takes. What it checks:
+// USB_DP / USB_DN (KiCad's `/USB_DP` and `/USB_DN`: the derived schematic labels them on its root) join J3.1 and J3.2 (a pad pair 2.54 mm apart) to J2.3 and J2.4; a GND track runs 0.5 mm beside the line the pair takes. What it checks:
 //   starting      a pad of a net that is not half of a pair is refused with KiCad's message; the pair starts from the N pad as from the P pad (net_a is the P net), at the board's
 //                 minimum track width and the clearance between its lines, and the heads leave the two pad centres;
 //   mark          Highlight collisions only reports the track in the way: the pair is straight and `colliding`;
@@ -214,7 +214,7 @@
     let r = await startAt(...padOf["J3.3"]); // D2: no partner net
     t(r && r.body.ok === false && /complementary differential pair nets/.test(r.body.message || ""), `a pad of the net D2 is refused with KiCad's message: ${r && JSON.stringify([r.req && [r.req.x, r.req.y], r.body.ok, r.body.message, r.body.net_a])}`);
     r = await startAt(...p2); // the N pad
-    t(r && r.body.ok === true && r.body.net_a === "USB_DP" && r.body.net_b === "USB_DN", `started from the N pad, the P net is net_a: ${r && JSON.stringify([r.req, r.body.ok, r.body.message, r.body.net_a, r.body.net_b])}`);
+    t(r && r.body.ok === true && r.body.net_a === "/USB_DP" && r.body.net_b === "/USB_DN", `started from the N pad, the P net is net_a: ${r && JSON.stringify([r.req, r.body.ok, r.body.message, r.body.net_a, r.body.net_b])}`);
     t(r && r.body.width >= minWidth, `the pair is not narrower than the board's minimum track width: ${r && r.body.width} >= ${minWidth}`);
     t(r && r.body.gap >= clearance, `its gap is at least the clearance between its lines: ${r && r.body.gap} >= ${clearance}`);
     await inMode("pcbnew.InteractiveRouter.HighlightMode");
@@ -293,7 +293,7 @@
     await sleep(700);
     const st = await state();
     const tracks = tracksOf(st);
-    const dp = tracks.filter((x) => x.net === "USB_DP"), dn = tracks.filter((x) => x.net === "USB_DN");
+    const dp = tracks.filter((x) => x.net === "/USB_DP"), dn = tracks.filter((x) => x.net === "/USB_DN");
     t(dp.length >= 1 && dn.length >= 1 && dp.every((x) => x.width === minWidth && x.layer === "F.Cu") && dn.every((x) => x.width === minWidth && x.layer === "F.Cu"), `a track or more on each net, at the pair's width: ${dp.length} and ${dn.length}`);
     const ends = (list) => { const pts = list.flatMap((x) => [x.pts[0], x.pts[x.pts.length - 1]]); return pts; };
     const hasPoint = (pts, p) => pts.some((q) => q[0] === p[0] && q[1] === p[1]);
@@ -305,7 +305,7 @@
     t(gnds.length === 1 && gnd.pts.length === 2 && gnd.pts[0][1] === wall[0][1] && gnd.pts[1][1] === wall[1][1] && gnd.pts[0][0] > wall[0][0], `the GND track was replaced by the pushed one, one track still, its ends in their rows: ${JSON.stringify(gnds.map((x) => x.pts))}`);
     t(!!gnd && Math.min(...dp.concat(dn).map((x) => distLines(x.pts, gnd.pts))) >= clearance + minWidth - 500, "and is a clearance from both nets");
     t(allDp.length > 2 && allDn.length > 2, "the lines have their corners");
-    const open = (st.checks ?? []).filter((c) => c.check === "routing_connectivity" && c.fail && (c.at === "USB_DP" || c.at === "USB_DN"));
+    const open = (st.checks ?? []).filter((c) => c.check === "routing_connectivity" && c.fail && (c.at === "/USB_DP" || c.at === "/USB_DN"));
     t(open.length === 0, `the pair's two connections are closed: ${JSON.stringify(open.map((c) => c.at))}`);
     await undoOurs(t, "the pair");
   });
@@ -323,7 +323,7 @@
     t(m && m.placing_via === true && m.vias.length === 2, `the head ends in two vias: ${m && m.vias.length}`);
     if (m && m.vias.length === 2) {
       const [va, vb] = m.vias;
-      t(va.net === "USB_DP" && vb.net === "USB_DN" && va.from_layer === "F.Cu" && va.to_layer === "B.Cu", `P and N, from F.Cu to B.Cu: ${JSON.stringify([va.net, vb.net, va.from_layer, va.to_layer])}`);
+      t(va.net === "/USB_DP" && vb.net === "/USB_DN" && va.from_layer === "F.Cu" && va.to_layer === "B.Cu", `P and N, from F.Cu to B.Cu: ${JSON.stringify([va.net, vb.net, va.from_layer, va.to_layer])}`);
       const apart = Math.hypot(va.x - vb.x, va.y - vb.y) - va.diameter;
       t(apart >= clearance - 500 && apart < 2 * clearance, `a via gap apart, edge to edge: ${apart.toFixed(1)} nm (the clearance is ${clearance})`);
       t(m.colliding === false, "and they fit");
@@ -341,10 +341,10 @@
     await sleep(700);
     const st = await state();
     const tracks = tracksOf(st), vias = viasOf(st);
-    t(vias.length === 2 && vias.some((v) => v.net === "USB_DP") && vias.some((v) => v.net === "USB_DN"), `both vias are on the board: ${JSON.stringify(vias.map((v) => [v.net, v.x, v.y]))}`);
-    t(["USB_DP", "USB_DN"].every((net) => tracks.some((x) => x.net === net && x.layer === "F.Cu") && tracks.some((x) => x.net === net && x.layer === "B.Cu")), "each net has copper on both layers");
+    t(vias.length === 2 && vias.some((v) => v.net === "/USB_DP") && vias.some((v) => v.net === "/USB_DN"), `both vias are on the board: ${JSON.stringify(vias.map((v) => [v.net, v.x, v.y]))}`);
+    t(["/USB_DP", "/USB_DN"].every((net) => tracks.some((x) => x.net === net && x.layer === "F.Cu") && tracks.some((x) => x.net === net && x.layer === "B.Cu")), "each net has copper on both layers");
     t(vias.every((v) => tracks.some((x) => x.net === v.net && x.layer === "F.Cu" && x.pts.some((q) => q[0] === v.x && q[1] === v.y)) && tracks.some((x) => x.net === v.net && x.layer === "B.Cu" && x.pts.some((q) => q[0] === v.x && q[1] === v.y))), "a track of each layer ends at each via");
-    t(!(st.checks ?? []).some((c) => c.check === "routing_connectivity" && c.fail && (c.at === "USB_DP" || c.at === "USB_DN")), "the two connections are closed");
+    t(!(st.checks ?? []).some((c) => c.check === "routing_connectivity" && c.fail && (c.at === "/USB_DP" || c.at === "/USB_DN")), "the two connections are closed");
     await undoOurs(t, "the pair with its vias");
   });
 
@@ -398,11 +398,11 @@
     const c = await waitReply("dp_continue_from_end", n, 20000);
     await quiet();
     t(c && c.body.ok === true && c.body.committed === true, `Ctrl+E commits what is fixed and restarts: ${c && JSON.stringify([c.body.ok, c.body.committed, c.body.message])}`);
-    t(c && c.body.net_a === "USB_DP" && c.body.net_b === "USB_DN", `as a pair of the same two nets: ${c && JSON.stringify([c.body.net_a, c.body.net_b])}`);
+    t(c && c.body.net_a === "/USB_DP" && c.body.net_b === "/USB_DN", `as a pair of the same two nets: ${c && JSON.stringify([c.body.net_a, c.body.net_b])}`);
     const far = c && c.body.from;
     t(!!far && Math.hypot(far[0] - padOf["J2.3"][0], far[1] - padOf["J2.3"][1]) <= 5, `at the far end of the P net's connection, the pad on the other header: ${JSON.stringify(far)} (J2.3 is at ${JSON.stringify(padOf["J2.3"])})`);
     let st = await state();
-    t(tracksOf(st).some((x) => x.net === "USB_DP") && tracksOf(st).some((x) => x.net === "USB_DN"), "the legs that were fixed are on the board");
+    t(tracksOf(st).some((x) => x.net === "/USB_DP") && tracksOf(st).some((x) => x.net === "/USB_DN"), "the legs that were fixed are on the board");
     t(!!c && c.body.width === minWidth && c.body.gap >= clearance, `the new pair has the width and the gap of the one it goes on from: ${c && JSON.stringify([c.body.width, c.body.gap])}`);
     t(!!c && Array.isArray(c.body.head_a) && c.body.head_a.length >= 2 && Math.hypot(c.body.head_a[c.body.head_a.length - 1][0] - target[0], c.body.head_a[c.body.head_a.length - 1][1] - target[1]) <= pitch * 2, `its head makes for where the old one ended: ${c && JSON.stringify(c.body.head_a.slice(-2))}`);
     // and it is a session of its own: the click on the end of the committed legs finishes it
@@ -415,7 +415,7 @@
     t(!!fix2 && fix2.body.ok === true, `a click goes on: ${fix2 && JSON.stringify([fix2.body.ok, fix2.body.blocked, fix2.body.real_end, fix2.body.message])}`);
     st = await state();
     if (!fin) { await abandon(); }
-    const open = (st.checks ?? []).filter((x) => x.check === "routing_connectivity" && x.fail && (x.at === "USB_DP" || x.at === "USB_DN"));
+    const open = (st.checks ?? []).filter((x) => x.check === "routing_connectivity" && x.fail && (x.at === "/USB_DP" || x.at === "/USB_DN"));
     t(!!fin && fin.body.ok === true && open.length === 0, `the click on the end of the committed legs finishes the connection of both nets: finish ${fin && fin.body.ok}, ${open.length} open`);
     await undoOurs(t, "the pair continued from the other end");
   });

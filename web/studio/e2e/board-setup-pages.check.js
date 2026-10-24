@@ -548,30 +548,31 @@
       await press(p, "Add Assignment");
       const pattern = (i) => p.querySelector(`input[aria-label="Pattern ${i}"]`);
       const owner = (i) => p.querySelector(`select[aria-label="Net class of pattern ${i}"]`);
-      await setText(pattern(1), "PA[0-3]");
+      // the board's nets have KiCad's names: `/LED channels (D1–D8)/PA0` (the hierarchical label in that sheet), `Net-(D1-Pad1)` (a net no label names)
+      await setText(pattern(1), ".*/PA[0-3]");
       await setSelect(owner(1), "pins");
-      await setText(pattern(2), "LED?");
+      await setText(pattern(2), "Net-(D?-Pad1)");
       await setSelect(owner(2), "leds");
-      await setText(pattern(3), "PA(1|7)");
+      await setText(pattern(3), ".*/PA(1|7)");
       await setSelect(owner(3), "leds");
       pattern(1).closest("tr").click();
       await sleep(200);
       const shown = (label) => [...(p.querySelector(`[aria-label="${label}"]`)?.querySelectorAll("div") ?? [])].map((d) => d.textContent.trim());
-      check("a regular expression's nets are listed: PA[0-3] is the four pins", ["PA0", "PA1", "PA2", "PA3"].every((n) => shown("Nets matching the selected pattern").includes(n)) && !shown("Nets matching the selected pattern").includes("PA4"), shown("Nets matching the selected pattern").join());
+      check("a regular expression's nets are listed: .*/PA[0-3] is the four pins", ["PA0", "PA1", "PA2", "PA3"].every((n) => shown("Nets matching the selected pattern").includes("/LED channels (D1–D8)/" + n)) && !shown("Nets matching the selected pattern").includes("/LED channels (D1–D8)/PA4"), shown("Nets matching the selected pattern").join());
       pattern(2).closest("tr").click();
       await sleep(200);
-      check("a wildcard pattern's too: LED? is the two LEDs", shown("Nets matching the selected pattern").join() === "LED1,LED2", shown("Nets matching the selected pattern").join());
+      check("a wildcard pattern's too: Net-(D?-Pad1) is the two LEDs' nets", shown("Nets matching the selected pattern").join() === "Net-(D1-Pad1),Net-(D2-Pad1)", shown("Nets matching the selected pattern").join());
       pattern(3).closest("tr").click();
       await sleep(200);
-      check("and a group: PA(1|7)", shown("Nets matching the selected pattern").join() === "PA1,PA7", shown("Nets matching the selected pattern").join());
+      check("and a group: .*/PA(1|7)", shown("Nets matching the selected pattern").join() === "/LED channels (D1–D8)/PA1,/LED channels (D1–D8)/PA7", shown("Nets matching the selected pattern").join());
       const composite = p.querySelector('[aria-label="Nets in more than one class"]')?.textContent ?? "";
-      check("a net two classes match is said to be in both, with the name KiCad gives the composite class", /1 net is in more than one class/.test(composite) && /PA1: pins,leds,Default/.test(composite), composite);
+      check("a net two classes match is said to be in both, with the name KiCad gives the composite class", /1 net is in more than one class/.test(composite) && /\/PA1: pins,leds,Default/.test(composite), composite);
       step("applying the net classes");
       const savedClasses = await apply(p);
       if (savedClasses === "Saved.") steps.push("pcb");
       let st = await state();
       const stored = st.board_rules.net_classes;
-      check("Apply stores the classes in the order of the table with their patterns as typed", savedClasses === "Saved." && stored.map((c) => c.name).join() === "pins,leds" && JSON.stringify(stored[0].nets) === JSON.stringify(["PA[0-3]"]) && JSON.stringify(stored[1].nets) === JSON.stringify(["LED?", "PA(1|7)"]) && stored[0].clearance === 300_000 && stored[1].clearance === 100_000, JSON.stringify(stored));
+      check("Apply stores the classes in the order of the table with their patterns as typed", savedClasses === "Saved." && stored.map((c) => c.name).join() === "pins,leds" && JSON.stringify(stored[0].nets) === JSON.stringify([".*/PA[0-3]"]) && JSON.stringify(stored[1].nets) === JSON.stringify(["Net-(D?-Pad1)", ".*/PA(1|7)"]) && stored[0].clearance === 300_000 && stored[1].clearance === 100_000, JSON.stringify(stored));
       step("moving a class");
       const rows = [...p.querySelectorAll("table.bs-grid")][0].querySelectorAll("tbody tr");
       rows[1].click();
@@ -582,7 +583,7 @@
       st = await state();
       check("moving pins down stores the order leds, pins: a class's place is its priority", movedApply === "Saved." && st.board_rules.net_classes.map((c) => c.name).join() === "leds,pins", JSON.stringify(st.board_rules.net_classes.map((c) => c.name)));
       const compositeAfter = p.querySelector('[aria-label="Nets in more than one class"]')?.textContent ?? "";
-      check("and the composite class's name follows it", /PA1: leds,pins,Default/.test(compositeAfter), compositeAfter);
+      check("and the composite class's name follows it", /\/PA1: leds,pins,Default/.test(compositeAfter), compositeAfter);
       check("the classes were not there before", classesBefore === "[]", classesBefore);
     });
 

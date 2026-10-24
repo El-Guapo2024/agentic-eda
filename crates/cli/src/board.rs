@@ -193,6 +193,8 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
     // every board in this project's own test/parity corpus) leaves
     // `model.nets` exactly as the intent declared it, unchanged from
     // before this field existed.
+    // (the intent's own nets, which a net of the same pins in the design's list was named by: see `net_names::remember_intent_names` below)
+    let intent_nets = model.nets.clone();
     if let Some(nets) = design.nets.clone() {
         model.nets = nets;
     }
@@ -252,6 +254,7 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
     let drawn = crate::net_names::drawn(design, &model);
     let renames = crate::net_names::kicad_names(design, &model, &drawn);
     crate::net_names::apply(&mut model, &renames);
+    crate::net_names::remember_intent_names(&mut model, &intent_nets);
     model.symbol_links = drawn.links;
     Ok(model)
 }

@@ -171,6 +171,31 @@ pub(crate) fn apply(model: &mut ConstraintModel, renames: &BTreeMap<String, Stri
     }
 }
 
+/// The intent's name of every net of the model the intent has a net of exactly those pins for, under another name, when no rename of this load recorded one
+/// already: a design whose stored net list has KiCad's names (stored by an earlier load or a schematic edit) still draws its labels with the intent's
+/// names, and a section that still holds an intent's name (a snapshot an undo brought back) is renamed by it ([`rename_design`]).
+pub(crate) fn remember_intent_names(model: &mut ConstraintModel, intent_nets: &[eda_model::Net]) {
+    let pins = |n: &eda_model::Net| -> Vec<String> {
+        let mut p = n.pins.clone();
+        p.sort();
+        p.dedup();
+        p
+    };
+    let current: BTreeSet<String> = model.nets.iter().map(|n| n.name.clone()).collect();
+    let by_pins: BTreeMap<Vec<String>, &str> = intent_nets.iter().filter(|n| !n.pins.is_empty() && !current.contains(&n.name)).map(|n| (pins(n), n.name.as_str())).collect();
+    let taken: BTreeSet<String> = model.intent_net_names.values().cloned().collect();
+    let mut add: Vec<(String, String)> = Vec::new();
+    for n in &model.nets {
+        if model.intent_net_names.contains_key(&n.name) {
+            continue;
+        }
+        if let Some(intent) = by_pins.get(&pins(n)).filter(|i| **i != n.name && !taken.contains(**i)) {
+            add.push((n.name.clone(), intent.to_string()));
+        }
+    }
+    model.intent_net_names.extend(add);
+}
+
 /// The design's own sections with KiCad's names (`renames`): the copper (tracks, vias, zones, a shape on a net), the via tenting, the pads of a footprint
 /// that lives only on the board, and the net list a schematic edit stored. Only a name that is no net's own any more is renamed. Whether anything changed.
 pub(crate) fn rename_design(design: &mut Design, model: &ConstraintModel, renames: &BTreeMap<String, String>) -> bool {
@@ -273,6 +298,22 @@ mod tests {
         assert_eq!(model.board.class_of("/SIG").map(|c| c.name.as_str()), Some("Fast"), "the class the intent put SIG in has it");
         assert_eq!(model.board.custom_rules[0].condition.as_deref(), Some("A.NetName == '/SIG'"));
         assert!(model.board.custom_rules_text.as_deref().unwrap().contains("A.NetName == '/SIG'"));
+
+        // Its drawing and its net list stored under KiCad's names (a schematic edit stores both), and a track on the intent's SIG brought back by an Undo
+        // of a board-only step (the snapshot is the file as it was): the track takes the net's name all the same.
+        let (_, mut design, model) = load(&dir).unwrap();
+        let derived = crate::board::derived_schematic(&design, &model).unwrap();
+        design.schematic = derived.schematic;
+        design.nets = Some(model.nets.clone());
+        let mut old = design.routing.as_ref().unwrap().tracks[0].clone();
+        old.id = "trk_old".into();
+        old.net = "SIG".into();
+        design.routing.as_mut().unwrap().tracks.push(old);
+        save(&dir, &design).unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(model.nets.iter().any(|n| n.name == "/SIG"), "{:?}", model.nets);
+        assert_eq!(design.routing.as_ref().unwrap().tracks.iter().find(|t| t.id == "trk_old").unwrap().net, "/SIG");
+        assert_eq!(model.intent_net_names.get("/SIG").map(String::as_str), Some("SIG"), "the stored list's net is drawn with the intent's name");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
