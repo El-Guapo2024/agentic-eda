@@ -82,6 +82,11 @@ impl Uf {
     }
 }
 
+/// Whether `p` lies strictly inside the axis-aligned run from `a` to `b`.
+pub(crate) fn on_segment(p: Point, a: Point, b: Point) -> bool {
+    on_interior(p, a, b)
+}
+
 fn on_interior(p: Point, a: Point, b: Point) -> bool {
     if a.x == b.x {
         p.x == a.x && p.y > a.y.min(b.y) && p.y < a.y.max(b.y)
@@ -1089,7 +1094,7 @@ mod tests {
     }
 
     /// The whole point of tracing: what `derive_schematic` draws is read back as exactly the nets it was given, named as KiCad names them (the intent's name
-    /// on a label, with the root's `/` in front; a power net's own; a net drawn as wires only after its best pin), for every example design in the repository.
+    /// on its label, with the root's `/` in front; a power net's own), for every example design in the repository.
     #[test]
     fn a_derived_schematic_traces_back_to_its_intent_nets() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
@@ -1097,6 +1102,7 @@ mod tests {
         files.extend(std::fs::read_dir(dir.join("ladder")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "yaml")));
         files.sort();
         let mut checked = 0;
+        let mut mismatches: Vec<String> = Vec::new();
         for f in files {
             let Ok(model) = serde_yaml::from_str::<eda_model::ConstraintModel>(&std::fs::read_to_string(&f).unwrap()) else { continue };
             let Ok(design) = crate::derive_schematic(&model, &crate::EngineOptions::new(1, "t")) else { continue };
@@ -1108,13 +1114,20 @@ mod tests {
             let want = drawn_nets(&model);
             // the same pins, the names KiCad gives what is drawn: a power net's, a label's with the sheet's path, a pin's
             let by_pins = |m: &BTreeMap<String, Vec<String>>| -> BTreeMap<Vec<String>, String> { m.iter().map(|(n, p)| (p.clone(), n.clone())).collect() };
-            let named = by_pins(&got).iter().all(|(pins, name)| by_pins(&want).get(pins).is_some_and(|i| name == i || *name == format!("/{i}") || name.starts_with("Net-(")));
-            if by_pins(&got).keys().ne(by_pins(&want).keys()) || !named {
+            // every named net is labelled on the root (`crate::net_labels`): `/<name>`, or a power net's own name
+            let named = by_pins(&got).iter().all(|(pins, name)| by_pins(&want).get(pins).is_some_and(|i| name == i || *name == format!("/{i}")));
+            // (an example whose flat drawing joins two nets or leaves one out is the layout's to fix, not the naming's: it is skipped, as before)
+            if by_pins(&got).keys().ne(by_pins(&want).keys()) {
                 println!("MISMATCH {}\n   got  {:?}\n   want {:?}", f.display(), got, want);
+                continue;
+            }
+            if !named {
+                mismatches.push(format!("{}\n   got  {:?}\n   want {:?}", f.display(), got, want));
                 continue;
             }
             checked += 1;
         }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
         assert!(checked >= 8, "only {checked} examples were readable");
     }
 

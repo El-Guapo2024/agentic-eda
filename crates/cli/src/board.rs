@@ -159,6 +159,8 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     if design.schematic.is_some() && design.nets.is_none() && !model.intent_net_names.is_empty() {
         design.nets = Some(model.nets.clone());
     }
+    // copper still on a net no name of this load leads to takes the net of the pads it reaches
+    crate::net_names::heal_stale_nets(&mut design, &model);
     Ok((meta, design, model))
 }
 
@@ -2366,36 +2368,6 @@ pub(crate) mod tests {
     use super::*;
     use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side, Nm};
     use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
-
-    /// A test board's schematic, stored, with a local label on every pin of every net, the label the intent's name of the net: KiCad then names each net
-    /// `/<intent name>` (a label on the root), so a board made for a test of something else keeps the intent's names, its root's path in front -- a
-    /// differential pair `USB_P`/`USB_N` stays one (`/USB_P`, `/USB_N`). Without labels KiCad names a net by its best pin (`Net-(U1-Pad1)`).
-    pub(crate) fn label_every_net(dir: &Path) {
-        let (_, mut design, model) = load(dir).unwrap();
-        let mut sch = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::default()).unwrap().schematic.unwrap();
-        sch.wires.clear();
-        sch.labels.clear();
-        sch.power_symbols.clear();
-        sch.no_connects.clear();
-        sch.junctions.clear();
-        let intent_of = |net: &str| model.intent_net_names.get(net).cloned().unwrap_or_else(|| net.to_string());
-        let mut labels = Vec::new();
-        for sym in &sch.symbols {
-            let Some(part) = model.part(&sym.id) else { continue };
-            for (number, at) in eda_engine::placed::pin_points(sym, part, model.real_symbol_of(&sym.lib_id, part).as_ref()) {
-                let pin = format!("{}.{number}", sym.id);
-                if let Some(net) = model.nets.iter().find(|n| n.pins.contains(&pin)) {
-                    labels.push(eda_model::ir::NetLabel { id: String::new(), net: intent_of(&net.name), at, kind: eda_model::ir::LabelKind::Local });
-                }
-            }
-        }
-        sch.labels = labels;
-        sch.assign_missing_ids();
-        design.schematic = Some(sch);
-        design.sheet_contents = None;
-        design.nets = None;
-        save(dir, &design).unwrap();
-    }
 
     pub(crate) fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("eda_cli_board_copper_test_{}_{name}", std::process::id()));
@@ -5550,7 +5522,8 @@ pub(crate) mod tests {
     }
 
     /// An edit that does connect things is read from the drawing, and only what it touched changes: a wire from R1.1 to R3.1 joins the nets PA0 and PA2
-    /// -- whole, under the name that wins -- and nothing else moves; the tracks' nets are still nets; and no net is ever named NET_<n>.
+    /// -- whole, under the name that wins -- and nothing else moves; the tracks' nets are still nets (PA2's copper takes the joined net's name); and no net
+    /// is ever named NET_<n>.
     #[test]
     fn a_wire_on_the_users_board_joins_two_nets_and_nothing_else() {
         let dir = scratch("users_board_wire");
@@ -5578,10 +5551,11 @@ pub(crate) mod tests {
         };
         assert_eq!(joined(&model_after.nets), want);
         assert!(model_after.nets.iter().all(|n| !n.name.starts_with("NET_")), "no net is called NET_<n>: {:?}", model_after.nets.iter().map(|n| &n.name).collect::<Vec<_>>());
-        // the net PA2 is gone, so its track is on a net the design no longer has -- the board says so instead of hiding it
+        // the net PA2 is gone: its track reaches the pads of the joined net, and takes that net's name (`net_names::heal_stale_nets`)
         let routing = after.routing.as_ref().unwrap();
-        assert!(routing.tracks.iter().any(|t| t.net == pa2));
+        assert!(routing.tracks.iter().all(|t| t.net != pa2), "no track is left on the net that is gone");
         assert!(model_after.nets.iter().all(|n| n.name != pa2));
+        assert_every_routed_net_exists(&after, &model_after);
         // Undo puts the net list back, and with it every routed net
         undo(&dir, "ui", Some(Domain::Schematic)).unwrap();
         let (_, undone, model_undone) = load(&dir).unwrap();

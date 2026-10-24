@@ -57,15 +57,15 @@ pub(super) fn traced(model: &ConstraintModel, d: &Design) -> BTreeMap<String, Ve
 }
 
 /// `traced` against `drawn_nets`: the same pins in the same nets, each named as KiCad names what the sheets draw -- the intent's name for a global one
-/// (a power net), the intent's name with a sheet path in front (`/MCU (U1)/RESET`) for a labelled one, or its best pin's (`Net-(D1-Pad1)`) for one no
-/// label names.
+/// (a power net), else the intent's name with its sheet's path in front (`/MCU (U1)/RESET`): every net the intent names has a label.
 pub(super) fn assert_traces_back(got: &BTreeMap<String, Vec<String>>, want: &BTreeMap<String, Vec<String>>, what: &str) {
     let by_pins = |m: &BTreeMap<String, Vec<String>>| -> BTreeMap<Vec<String>, String> { m.iter().map(|(n, p)| (p.clone(), n.clone())).collect() };
     let (got_pins, want_pins) = (by_pins(got), by_pins(want));
     assert_eq!(got_pins.keys().collect::<Vec<_>>(), want_pins.keys().collect::<Vec<_>>(), "{what}: the sheets do not trace back to the intent's nets");
     for (pins, name) in &got_pins {
         let intent = &want_pins[pins];
-        let kicad = name == intent || (name.starts_with('/') && name.ends_with(&format!("/{intent}"))) || name.starts_with("Net-(");
+        // every named net is labelled (`crate::net_labels`), on the root or on one module sheet: `/<name>` or `/<sheet>/<name>`, never `Net-(..)`
+        let kicad = name == intent || *name == format!("/{intent}") || (name.starts_with('/') && name.ends_with(&format!("/{intent}")) && name[1..name.len() - intent.len() - 1].chars().all(|c| c != '/'));
         assert!(kicad, "{what}: {pins:?} is the intent's {intent}, traced as {name}");
     }
 }

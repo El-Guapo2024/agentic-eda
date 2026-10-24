@@ -583,8 +583,8 @@ mod tests {
         board::save(dir, &design).unwrap();
         let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
-        // a label on every pin, so KiCad names the nets `/SIG`, `/OTHER`, `/USB_P` ... (the root's path and the intent's name) and a pair stays a pair
-        crate::board::tests::label_every_net(dir);
+        // (the derived schematic labels every net the intent names, so KiCad names them `/SIG`, `/OTHER`, `/USB_P` ...: the root's path and the intent's
+        // name, a pair still a pair)
         for (net, pts) in tracks {
             let net = if net.starts_with('/') { net.to_string() } else { format!("/{net}") };
             let cmd = Cmd::AddTrack { net, layer: "F.Cu".into(), width: 250_000, pts };

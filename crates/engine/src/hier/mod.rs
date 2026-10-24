@@ -265,6 +265,9 @@ pub fn derive_single_sheet(model: &ConstraintModel, opts: &EngineOptions, module
     if let Some(sec) = design.schematic.as_mut() {
         crate::fields::fill_layout(sec, model);
     }
+    // a label with the intent's name on every net drawn with wires alone, so KiCad names it so (`crate::net_labels`)
+    crate::net_labels::label_named_nets(&mut design, model);
+    design.assign_missing_ids();
     Ok(design)
 }
 
@@ -377,6 +380,9 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
     for sec in design.sheet_contents.iter_mut().flat_map(|c| c.values_mut()) {
         crate::fields::fill_layout(sec, model);
     }
+    // a label with the intent's name on every net drawn with wires alone, so KiCad names it so (`crate::net_labels`)
+    crate::net_labels::label_named_nets(&mut design, model);
+    design.assign_missing_ids();
     Ok(Derived { design, papers })
 }
 

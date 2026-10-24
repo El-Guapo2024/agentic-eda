@@ -258,10 +258,70 @@ pub(crate) fn follow_renames(design: &mut Design, before: &[eda_model::Net], aft
     rename_design(design, &model, &renames);
 }
 
+/// Whether `p` is inside the polygon `outline` (even-odd).
+fn inside(outline: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
+    let mut odd = false;
+    for i in 0..outline.len() {
+        let (a, b) = (outline[i], outline[(i + 1) % outline.len()]);
+        if (a.y > p.y) != (b.y > p.y) {
+            let x = a.x as f64 + (p.y - a.y) as f64 * (b.x - a.x) as f64 / (b.y - a.y) as f64;
+            if (p.x as f64) < x {
+                odd = !odd;
+            }
+        }
+    }
+    odd
+}
+
+/// The copper on a net the design no longer has, given the net of the pads it reaches: a rename that no name of this load records (a part renamed, so a
+/// net named after its pin, `Net-(U1-Pad1)`, is `Net-(U5-Pad1)` now; a net the drawing renamed while no list was stored). For each name of the copper
+/// that is no net's, the pads its tracks and vias touch: when they are all on one net, the copper takes that net's name (as KiCad's connectivity gives
+/// copper the net of the pads it joins). Copper that reaches no pad, or pads of several nets, keeps the name it has, and the board says so.
+pub(crate) fn heal_stale_nets(design: &mut Design, model: &ConstraintModel) {
+    let current: BTreeSet<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+    let Some(routing) = design.routing.as_ref() else { return };
+    let stale: BTreeSet<String> = routing.tracks.iter().map(|t| t.net.clone()).chain(routing.vias.iter().map(|v| v.net.clone())).chain(routing.zones.iter().map(|z| z.net.clone())).filter(|n| !n.is_empty() && !current.contains(n.as_str())).collect();
+    if stale.is_empty() {
+        return;
+    }
+    let net_of: BTreeMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
+    // every placed pad, with the net of its pin
+    let mut pads: Vec<(eda_model::ir::Point, (i64, i64), &str)> = Vec::new();
+    for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
+        let Some(part) = model.part(&fp.id) else { continue };
+        for pad in eda_model::footprint::placed_pads(model, part, fp).unwrap_or_default() {
+            if let Some(net) = net_of.get(format!("{}.{}", fp.id, pad.number).as_str()) {
+                pads.push((pad.center, pad.size, net));
+            }
+        }
+    }
+    let on_pad = |p: eda_model::ir::Point| -> Option<&str> {
+        pads.iter().find(|(c, size, _)| {
+            let r = size.0.max(size.1) / 2;
+            (p.x - c.x).abs() <= r && (p.y - c.y).abs() <= r
+        }).map(|(_, _, n)| *n)
+    };
+    let mut renames: BTreeMap<String, String> = BTreeMap::new();
+    for name in stale {
+        let points = routing.tracks.iter().filter(|t| t.net == name).flat_map(|t| t.pts.iter().copied()).chain(routing.vias.iter().filter(|v| v.net == name).map(|v| v.at));
+        let mut found: BTreeSet<&str> = points.filter_map(on_pad).collect();
+        // a zone of the name: the pads inside its outline
+        for z in routing.zones.iter().filter(|z| z.net == name && z.outline.len() >= 3) {
+            found.extend(pads.iter().filter(|(c, _, _)| inside(&z.outline, *c)).map(|(_, _, n)| *n));
+        }
+        if let [only] = found.into_iter().collect::<Vec<_>>()[..] {
+            renames.insert(name, only.to_string());
+        }
+    }
+    let model = ConstraintModel { nets: model.nets.clone(), ..Default::default() };
+    rename_design(design, &model, &renames);
+}
+
 #[cfg(test)]
 mod tests {
     use crate::board::tests::{scratch, setup};
     use crate::board::{load, save};
+    use std::collections::BTreeSet;
 
     /// A board made from an intent whose net SIG is drawn as a wire (no label): KiCad calls it `/SIG`, and so does everything here -- the model,
     /// a track the design had on SIG, the net class and the custom rule the intent wrote for SIG. The power nets keep their names; the drawing is made
@@ -316,4 +376,89 @@ mod tests {
         assert_eq!(model.intent_net_names.get("/SIG").map(String::as_str), Some("SIG"), "the stored list's net is drawn with the intent's name");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// The intent's nets USB_DP and USB_DN of the test board, drawn as one wire each between U1 and U2: each gets a label (`eda_engine::net_labels`),
+    /// so KiCad names them `/USB_DP` and `/USB_DN` and they are still a differential pair (`BOARD::MatchDpSuffix`) for the router, the tuner and the DRC.
+    #[test]
+    fn a_pair_the_intent_draws_with_wires_alone_is_still_a_pair() {
+        let dir = scratch("kicad_names_pair");
+        setup(&dir);
+        let intent = dir.join("intent.yaml");
+        let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.nets = vec![eda_model::Net { name: "USB_DP".into(), pins: vec!["U1.1".into(), "U2.1".into()] }, eda_model::Net { name: "USB_DN".into(), pins: vec!["U1.2".into(), "U2.2".into()] }];
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let (_, _, model) = load(&dir).unwrap();
+        let mut names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["/USB_DN", "/USB_DP"]);
+        assert_eq!(eda_pns::diff_pair::dp_coupled_net_name("/USB_DP").as_deref(), Some("/USB_DN"));
+        assert_eq!(eda_drc::pcbexpr::match_dp_suffix("/USB_DN").0, -1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A routed board stays routed through the edits that rename its nets: a part renamed, a pin added to a net in the intent, and copper a design kept
+    /// under a name KiCad gives no net any more (`Net-(U1-Pad1)`, the name of a net no label drove, before the part was renamed) -- every track, via
+    /// and zone is on a net the design has (`heal_stale_nets`: the copper takes the net of the pads it reaches).
+    #[test]
+    fn every_track_via_and_zone_stays_on_a_net_through_renames() {
+        use eda_model::ir::Point;
+        let p = |x: i64, y: i64| Point { x: x * 1_000_000, y: y * 1_000_000 };
+        let dir = scratch("kicad_names_routed");
+        setup(&dir);
+        let intent = dir.join("intent.yaml");
+        let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.nets = vec![eda_model::Net { name: "SIG".into(), pins: vec!["U1.1".into(), "U2.1".into()] }, eda_model::Net { name: "VCC".into(), pins: vec!["U1.2".into(), "U2.2".into()] }];
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let on_nets = |dir: &std::path::Path, what: &str| {
+            let (_, design, model) = load(dir).unwrap();
+            let known: BTreeSet<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+            let r = design.routing.as_ref().unwrap();
+            for net in r.tracks.iter().map(|t| &t.net).chain(r.vias.iter().map(|v| &v.net)).chain(r.zones.iter().map(|z| &z.net)) {
+                assert!(known.contains(net.as_str()), "{what}: copper on {net}, which is no net of {known:?}");
+            }
+            (r.tracks.len(), r.vias.len(), r.zones.len())
+        };
+        let sig = load(&dir).unwrap().2.nets.iter().find(|n| n.pins.contains(&"U1.1".to_string())).unwrap().name.clone();
+        assert_eq!(sig, "/SIG");
+        for cmd in [
+            eda_ops::Cmd::AddTrack { net: sig.clone(), layer: "F.Cu".into(), width: 200_000, pts: vec![p(4, 5), p(4, 10), p(14, 10), p(14, 5)] },
+            eda_ops::Cmd::AddVia { net: sig.clone(), x: 4_000_000, y: 10_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() },
+            eda_ops::Cmd::AddZone { net: sig.clone(), layer: "B.Cu".into(), outline: vec![p(13, 4), p(15, 4), p(15, 6), p(13, 6)] },
+        ] {
+            crate::board::step(&dir, cmd, false, "test").unwrap();
+        }
+        assert_eq!(on_nets(&dir, "routed"), (1, 1, 1));
+        // (the rename on the sheet U1 is drawn on, which the first schematic edit stores)
+        let (_, design, model) = load(&dir).unwrap();
+        let derived = crate::board::derived_schematic(&design, &model).unwrap();
+        let rename = eda_ops::Cmd::RenameSymbol { id: "U1".into(), new_id: "U5".into() };
+        let root = derived.schematic.as_ref().unwrap();
+        let cmd = match root.sheets.iter().find(|sh| derived.sheet_contents.as_ref().is_some_and(|c| c.get(&sh.file).is_some_and(|s| s.symbols.iter().any(|x| x.id == "U1")))) {
+            Some(sheet) => eda_ops::Cmd::OnSheet { sheet: sheet.id.clone(), cmd: Box::new(rename) },
+            None => rename,
+        };
+        crate::board::step(&dir, cmd, false, "test").unwrap();
+        on_nets(&dir, "U1 renamed U5");
+        // a pin added to SIG in the intent (a part the board has not placed)
+        let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        let mut u3 = model.parts[0].clone();
+        u3.reference = "U3".into();
+        model.parts.push(u3);
+        model.nets[0].pins.push("U3.1".into());
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        on_nets(&dir, "U3.1 added to SIG");
+        // copper a design kept under a name no net has now: it takes the net of the pads it reaches
+        let (_, mut design, _) = load(&dir).unwrap();
+        for t in design.routing.as_mut().unwrap().tracks.iter_mut() {
+            t.net = "Net-(U1-Pad1)".into();
+        }
+        for v in design.routing.as_mut().unwrap().vias.iter_mut() {
+            v.net = "Net-(U1-Pad1)".into();
+        }
+        design.routing.as_mut().unwrap().zones[0].net = "SIG_OLD".into();
+        save(&dir, &design).unwrap();
+        on_nets(&dir, "stale names");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

@@ -17,6 +17,7 @@ pub mod fields_edit;
 mod flat;
 pub mod geometry;
 pub mod hier;
+pub mod net_labels;
 pub mod nets;
 pub mod obstacles;
 pub mod placed;
@@ -170,12 +171,20 @@ pub fn name_drawn_wires(design: &mut Design, back: &BTreeMap<String, String>) {
 
 /// [`derive_schematic_drawn`] from the names the intent gave the nets ([`drawn_names`]).
 pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result<Design, Vec<CheckResult>> {
+    // a label with the intent's name on every net drawn with wires alone, so KiCad names it so (`net_labels`)
+    let labelled = |m: &ConstraintModel| {
+        derive_schematic_drawn(m, opts).map(|mut d| {
+            net_labels::label_named_nets(&mut d, m);
+            d.assign_missing_ids();
+            d
+        })
+    };
     match drawn_names(model) {
-        Some((drawn, back)) => derive_schematic_drawn(&drawn, opts).map(|mut d| {
+        Some((drawn, back)) => labelled(&drawn).map(|mut d| {
             name_drawn_wires(&mut d, &back);
             d
         }),
-        None => derive_schematic_drawn(model, opts),
+        None => labelled(model),
     }
 }
 
