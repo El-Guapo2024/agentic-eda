@@ -292,10 +292,33 @@ pub fn entries_by_zone(design: &Design, scanned: Vec<ScannedFill>, ids: &HashMap
     out
 }
 
-/// The fills a `.kicad_pcb` carried, for the zones of the design imported from it: the zones are found by the uuid they had in the file (`Zone::uuid`). A zone that the
-/// importer made of several outlines gets the fills of the file's zone on its first.
+/// The name the fills of a zone with no uuid in the file are filed under (a teardrop: KiCad writes none for one): the layer and the zone's outline, in nanometres.
+pub fn outline_key(layer: &str, pts: impl Iterator<Item = [i64; 2]>) -> String {
+    let pts: Vec<String> = pts.map(|[x, y]| format!("{x},{y}")).collect();
+    format!("outline:{layer}:{}", pts.join(";"))
+}
+
+/// [`outline_key`] of each layer of each zone of `design` that `pick` takes, to its id: how the fills of the zones a file holds without a uuid are found.
+fn outline_keys(design: &Design, pick: impl Fn(&Zone) -> bool) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for z in design.routing.as_ref().map_or(&[][..], |r| r.zones.as_slice()).iter().filter(|z| !z.id.is_empty() && pick(z)) {
+        for layer in z.layer_set() {
+            out.entry(outline_key(layer, z.outline.iter().map(|p| [p.x, p.y]))).or_insert_with(|| z.id.clone());
+        }
+    }
+    out
+}
+
+/// The teardrops of `design` by [`outline_key`]: kicad-cli's refilled board writes them without the uuid they were written with, and with the outline they were
+/// written with (a board with teardrops is written `(legacy_teardrops yes)`, so kicad-cli does not rebuild them: `TEARDROP_MANAGER::UpdateTeardrops` returns at once).
+pub fn teardrop_keys(design: &Design) -> HashMap<String, String> {
+    outline_keys(design, |z| z.teardrop)
+}
+
+/// The fills a `.kicad_pcb` carried, for the zones of the design imported from it: the zones are found by the uuid they had in the file (`Zone::uuid`), and a zone that
+/// had none (a teardrop KiCad saved) by its layer and outline ([`outline_key`]).
 pub fn entries_of_imported_file(design: &Design, scanned: Vec<ScannedFill>) -> BTreeMap<String, ZoneEntry> {
-    let mut by_uuid: HashMap<String, String> = HashMap::new();
+    let mut by_uuid: HashMap<String, String> = outline_keys(design, |z| z.uuid.is_empty());
     for z in design.routing.as_ref().map_or(&[][..], |r| r.zones.as_slice()) {
         if !z.uuid.is_empty() && !z.id.is_empty() {
             by_uuid.entry(z.uuid.clone()).or_insert_with(|| z.id.clone());
@@ -472,6 +495,7 @@ impl<'a> Cursor<'a> {
     /// Past a `(zone` and up to its closing paren: the zone's uuid and each `(filled_polygon ..)`.
     fn read_zone(&mut self, out: &mut Vec<ScannedFill>) {
         let mut uuid = String::new();
+        let mut outline: Vec<[i64; 2]> = Vec::new();
         let first = out.len();
         loop {
             self.skip_ws();
@@ -496,6 +520,10 @@ impl<'a> Cursor<'a> {
                                 out.push(f);
                             }
                         }
+                        // The outline (the first `(polygon (pts ..))`): what names a zone written without a uuid.
+                        "polygon" if outline.is_empty() => {
+                            outline = self.read_polygon();
+                        }
                         _ => self.skip_list(),
                     }
                 }
@@ -504,8 +532,35 @@ impl<'a> Cursor<'a> {
                 }
             }
         }
+        // A teardrop has no uuid in the file (`format( const ZONE* )`: `if( !aZone->IsTeardropArea() ) KICAD_FORMAT::FormatUuid( m_out, aZone->m_Uuid )`): its fills are
+        // filed under its layer and outline instead ([`outline_key`]).
         for f in &mut out[first..] {
-            f.zone = uuid.clone();
+            f.zone = if uuid.is_empty() && !outline.is_empty() { outline_key(&f.layer, outline.iter().copied()) } else { uuid.clone() };
+        }
+    }
+
+    /// Past `(polygon` and up to its closing paren: the points of its `(pts ..)`.
+    fn read_polygon(&mut self) -> Vec<[i64; 2]> {
+        let mut pts = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.s.get(self.i) {
+                None => return pts,
+                Some(b')') => {
+                    self.i += 1;
+                    return pts;
+                }
+                Some(b'(') => {
+                    self.i += 1;
+                    match self.atom().unwrap_or("") {
+                        "pts" => pts = self.read_pts(),
+                        _ => self.skip_list(),
+                    }
+                }
+                Some(_) => {
+                    self.atom();
+                }
+            }
         }
     }
 
@@ -685,6 +740,32 @@ mod tests {
 
     fn zone(id: &str, uuid: &str) -> Zone {
         Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }], ..Default::default() }
+    }
+
+    /// P13-1: a teardrop KiCad saved has no uuid (`format( const ZONE* )`); its fills are filed under its layer and outline, and the import finds them by the outline
+    /// of the zone it made of it, as the refill finds a teardrop kicad-cli wrote back without the uuid it was written with.
+    #[test]
+    fn a_teardrop_without_a_uuid_is_found_by_its_layer_and_outline() {
+        let board = r#"(kicad_pcb (version 20241229)
+	(zone (net 1) (net_name "GND") (layer "F.Cu") (hatch none 0.5) (attr (teardrop (type padvia)))
+		(polygon (pts (xy 0 0) (xy 10 0) (xy 10 10)))
+		(filled_polygon (layer "F.Cu") (pts (xy 0 0) (xy 10 0) (xy 10 10)))
+	)
+)"#;
+        let scanned = scan_zone_fills(board);
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].zone, outline_key("F.Cu", [[0, 0], [10_000_000, 0], [10_000_000, 10_000_000]].into_iter()));
+        let mut td = zone("td", "");
+        td.teardrop = true;
+        let d = design(vec![td.clone(), zone("pour", "u-pour")]);
+        let entries = entries_of_imported_file(&d, scanned.clone());
+        assert_eq!(entries.keys().collect::<Vec<_>>(), vec!["td"], "the import files the fill by the outline");
+        // The refill's map: the teardrops by their outline.
+        let d = design(vec![td, zone("pour", "u-pour")]);
+        let keys = teardrop_keys(&d);
+        assert_eq!(keys.values().collect::<Vec<_>>(), vec!["td"]);
+        let entries = entries_by_zone(&d, scanned, &keys);
+        assert_eq!(entries.keys().collect::<Vec<_>>(), vec!["td"]);
     }
 
     fn design(zones: Vec<Zone>) -> Design {
