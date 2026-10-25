@@ -1,5 +1,4 @@
 use eda_model::units::mm;
-use eda_model::units::Nm;
 use super::*;
 use eda_model::{Pin, PinKind};
 
@@ -58,10 +57,10 @@ fn the_fields_of_a_symbol_turned_half_a_turn_are_where_the_unturned_ones_go_turn
     let g0 = SymbolGeom::of(&up, &p, lib.as_ref());
     let placed0 = autoplace_symbol(&up, &g0, &symbol_specs(&up, None, ""));
     // the same placements, kept in the unturned frame, on a symbol that is turned: the fields turn with it and sit to its left
-    let turned = resistor(Point { x: Nm::from_raw_shim(50_800_000 + 2_540_000), y: Nm::from_raw_shim(50_800_000 + 5_080_000) }, 180_000, false);
+    let turned = resistor(Point { x: mm(50.8) + mm(2.54), y: mm(50.8) + mm(5.08) }, 180_000, false);
     let f = page_field(turned.at, turned.rot, turned.mirrored, g0.width, &placed0[0], "R1");
     let f0 = page_field(up.at, up.rot, up.mirrored, g0.width, &placed0[0], "R1");
-    assert!(f.at.0 < turned.at.x.raw_shim() as f64, "turned half a turn the text is on the left of the box: {f:?}");
+    assert!(f.at.0 < turned.at.x.as_f64(), "turned half a turn the text is on the left of the box: {f:?}");
     assert_eq!((f.h, f.v), (HJustify::Right, VJustify::Center), "and still ends at its anchor");
     assert_eq!((f0.h, f0.v), (HJustify::Left, VJustify::Center));
     assert!(!f.vertical && !f0.vertical);

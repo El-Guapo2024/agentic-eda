@@ -14,7 +14,7 @@ use eda_model::ir::{NetLabel, NoConnect, Point, PowerSymbol, Wire};
 use eda_model::{ConstraintModel, Part, PinKind};
 
 use crate::hier::items::{outward_rot, Items, RailPin};
-use crate::hier::kit::{nc_rect, power_rect, Placed, Rect, G};
+use crate::hier::kit::{nc_rect, power_rect, Placed, Rect, G_NM};
 use crate::{pin_index, resolve_pin_ref, split_pin_ref, MAX_MERGED_STUB_BENDS, MAX_MERGED_STUB_LEN_NM};
 
 /// The nets that need a `PWR_FLAG` (a power or ground pin on them and no power output, a name that reads as a rail counting as a power
@@ -55,7 +55,7 @@ fn flag_anchors(model: &ConstraintModel, parts_by_ref: &HashMap<&str, &Part>, po
                         return true;
                     }
                     let Some(n) = next else { return true };
-                    (n.x - tip.x).signum() == dx && (n.y - tip.y).signum() == dy && (n.x - tip.x).abs() + (n.y - tip.y).abs() >= Nm::from_raw_shim(3 * G)
+                    (n.x - tip.x).signum() == dx && (n.y - tip.y).signum() == dy && (n.x - tip.x).abs() + (n.y - tip.y).abs() >= G_NM * 3
                 };
                 leaves(first.unwrap_or(tip), w.pts.get(1)) && leaves(last.unwrap_or(tip), w.pts.len().checked_sub(2).and_then(|i| w.pts.get(i)))
             })
@@ -69,7 +69,7 @@ fn flag_anchors(model: &ConstraintModel, parts_by_ref: &HashMap<&str, &Part>, po
 }
 
 fn thin(a: Point, b: Point) -> Rect {
-    Rect::new((a.x.min(b.x) - mm(0.1)).raw_shim(), (a.y.min(b.y) - mm(0.1)).raw_shim(), (a.x.max(b.x) + mm(0.1)).raw_shim(), (a.y.max(b.y) + mm(0.1)).raw_shim())
+    Rect::around(a, b, mm(0.1))
 }
 
 /// Draw the rails and the labelled nets of a flat schematic: returns the labels and the power symbols (power symbols numbered `#PWR..`, the
@@ -94,8 +94,8 @@ pub fn hang_nets(
         let lib_id = model.lib_id_of(part);
         let resolved = model.real_symbol_of(&lib_id, part);
         let mut p = Placed::new(part, &lib_id, resolved, part.value.as_deref().unwrap_or(""), part.package.as_deref().unwrap_or(""));
-        p.x = x;
-        p.y = y;
+        p.x = Nm::new(x);
+        p.y = Nm::new(y);
         // the pieces of what the part draws, not the box that holds them all: a stub may pass between its body and its fields
         let mut pieces = vec![p.body_rect()];
         pieces.extend(p.field_rects());
@@ -194,12 +194,12 @@ pub fn hang_nets(
                 if tips.is_empty() {
                     continue;
                 }
-                let stub_len: i64 = tips.windows(2).map(|w| ((w[0].1.x - w[1].1.x).abs() + (w[0].1.y - w[1].1.y).abs()).raw_shim()).sum();
+                let stub_len: Nm = tips.windows(2).map(|w| (w[0].1.x - w[1].1.x).abs() + (w[0].1.y - w[1].1.y).abs()).sum();
                 let stub_bends = tips.len().saturating_sub(2);
                 if tips.len() == 1 || stub_len > MAX_MERGED_STUB_LEN_NM || stub_bends > MAX_MERGED_STUB_BENDS {
                     // a single pin, or a run too wide to read as one local jumper: a label at each, no wire between them
                     for (pin_ref, tip, side) in &tips {
-                        let len = if flag_pins.contains(pin_ref) { 3 * G } else { 2 * G };
+                        let len = if flag_pins.contains(pin_ref) { G_NM * 3 } else { G_NM * 2 };
                         items.labelled(pin_ref, *tip, *side, net, false, len);
                     }
                 } else {

@@ -12,7 +12,7 @@ use eda_model::ir::Point;
 use eda_model::modules::{is_anchor_part, natural_cmp, FunctionalModule, ModuleKind};
 
 use super::items::{Ctx, Items, NetClass, RailPin, View};
-use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G, PAPERS};
+use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G, G_NM, PAPERS};
 
 /// A symbol ready to place, resolved the way `derive_schematic` resolves it (or as the existing schematic had it).
 pub fn placed(ctx: &Ctx, reference: &str) -> Placed {
@@ -276,8 +276,8 @@ pub fn plan(ctx: &Ctx, view: &View, module: &FunctionalModule) -> (Vec<BlockPlan
 /// A part with every pin drawn out.
 fn single_block(ctx: &Ctx, view: &View, r: &str) -> Block {
     let mut p = placed(ctx, r);
-    p.x = 0;
-    p.y = 0;
+    p.x = Nm::ZERO;
+    p.y = Nm::ZERO;
     let mut items = Items::default();
     items.symbol(ctx, &p);
     items.core = Some(p.box_rect());
@@ -301,16 +301,16 @@ fn single_block(ctx: &Ctx, view: &View, r: &str) -> Block {
 }
 
 /// Candidate extra offsets for a part that does not fit where the path first puts it: the first fits, the rest nudge it along.
-fn nudges(vertical_to_vertical: bool, horizontal_to_horizontal: bool) -> Vec<(i64, i64)> {
+fn nudges(vertical_to_vertical: bool, horizontal_to_horizontal: bool) -> Vec<(Nm, Nm)> {
     let mut v = Vec::new();
     for k in 0..12 {
         if vertical_to_vertical {
-            v.push((0, k * G));
+            v.push((Nm::ZERO, G_NM * k));
         } else if horizontal_to_horizontal {
-            v.push((k * G, 0));
+            v.push((G_NM * k, Nm::ZERO));
         } else {
             for a in 0..=k {
-                v.push((a * G, (k - a) * G));
+                v.push((G_NM * a, G_NM * (k - a)));
             }
         }
     }
@@ -318,7 +318,7 @@ fn nudges(vertical_to_vertical: bool, horizontal_to_horizontal: bool) -> Vec<(i6
 }
 
 fn chain_block(ctx: &Ctx, view: &View, links: &[ChainLink]) -> Block {
-    let g = 2 * G;
+    let g = G_NM * 2;
     let mut items = Items::default();
     let mut prev: Option<(Point, bool, String)> = None; // (exit tip, previous was vertical, "REF.PIN" of the exit)
     let mut placed_all: Vec<Placed> = Vec::new();
@@ -331,9 +331,9 @@ fn chain_block(ctx: &Ctx, view: &View, links: &[ChainLink]) -> Block {
         let base = match &prev {
             None => Point { x: Nm::ZERO, y: Nm::ZERO },
             Some((e, pv, _)) => match (*pv, vertical) {
-                (true, true) => Point { x: e.x, y: e.y + Nm::from_raw_shim(g) },
-                (false, false) => Point { x: e.x + Nm::from_raw_shim(g), y: e.y },
-                _ => Point { x: e.x + Nm::from_raw_shim(g), y: e.y + Nm::from_raw_shim(g) },
+                (true, true) => Point { x: e.x, y: e.y + g },
+                (false, false) => Point { x: e.x + g, y: e.y },
+                _ => Point { x: e.x + g, y: e.y + g },
             },
         };
         let (vv, hh) = match &prev {
@@ -342,7 +342,7 @@ fn chain_block(ctx: &Ctx, view: &View, links: &[ChainLink]) -> Block {
         };
         let mut target = base;
         for (ex, ey) in nudges(vv, hh) {
-            target = Point { x: base.x + Nm::from_raw_shim(ex), y: base.y + Nm::from_raw_shim(ey) };
+            target = Point { x: base.x + ex, y: base.y + ey };
             p.place_tip(&link.entry, target);
             let ko = p.keepout();
             if placed_all.iter().all(|q| !q.keepout().inflate(G / 2).overlaps(&ko)) {
@@ -491,7 +491,7 @@ pub fn layout_module(ctx: &Ctx, module: &FunctionalModule) -> SheetOut {
     let mut blocks = blocks;
     for (i, bx, by) in pos {
         let mut it = std::mem::take(&mut blocks[i].items);
-        it.translate(dx + bx, dy + by);
+        it.translate(Nm::new(dx + bx), Nm::new(dy + by));
         items.append(it);
     }
     SheetOut { items, paper }

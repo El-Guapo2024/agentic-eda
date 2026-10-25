@@ -853,7 +853,7 @@ mod tests {
     use eda_model::ir::{LabelShape, NetLabel, PowerSymbol, SheetInstance, SheetPin, Wire};
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
     fn wire(net: &str, pts: &[Point]) -> Wire {
         Wire { id: String::new(), net: net.into(), pins: vec![], pts: pts.to_vec(), bus: false }

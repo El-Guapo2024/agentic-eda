@@ -41,7 +41,7 @@ pub fn label_run_dir(sch: &SchematicSection, l: &NetLabel) -> (i64, i64) {
 }
 
 fn thin(a: Point, b: Point) -> Rect {
-    Rect::new((a.x.min(b.x) - mm(0.1)).raw_shim(), (a.y.min(b.y) - mm(0.1)).raw_shim(), (a.x.max(b.x) + mm(0.1)).raw_shim(), (a.y.max(b.y) + mm(0.1)).raw_shim())
+    Rect::around(a, b, mm(0.1))
 }
 
 /// Every drawn item of `sch` but the fields of its symbols.
@@ -87,7 +87,7 @@ pub fn of_section_but_wires(sch: &SchematicSection, model: &ConstraintModel) -> 
         out.push(Obstacle { owner: String::new(), rect: nc_rect(n.at) });
     }
     for j in &sch.junctions {
-        out.push(Obstacle { owner: String::new(), rect: Rect::new((j.at.x - mm(0.4)).raw_shim(), (j.at.y - mm(0.4)).raw_shim(), (j.at.x + mm(0.4)).raw_shim(), (j.at.y + mm(0.4)).raw_shim()) });
+        out.push(Obstacle { owner: String::new(), rect: Rect::at(j.at).inflate(mm(0.4).get()) });
     }
     out
 }

@@ -19,6 +19,9 @@ use crate::placed::{part_box, PartBox};
 
 pub const G: i64 = GRID;
 
+/// One grid cell as a length.
+pub const G_NM: Nm = crate::geometry::GRID_NM;
+
 pub fn snap_up(v: i64) -> i64 {
     v.div_euclid(G) * G + if v.rem_euclid(G) == 0 { 0 } else { G }
 }
@@ -39,6 +42,22 @@ pub struct Rect {
 impl Rect {
     pub fn new(ax: i64, ay: i64, bx: i64, by: i64) -> Rect {
         Rect { x0: ax.min(bx), y0: ay.min(by), x1: ax.max(bx), y1: ay.max(by) }
+    }
+    /// The box with corners `a` and `b` (in either order).
+    pub fn of(a: Point, b: Point) -> Rect {
+        Rect::new(a.x.get(), a.y.get(), b.x.get(), b.y.get())
+    }
+    /// The box of `w` by `h` whose corner is `at`.
+    pub fn sized(at: Point, w: Nm, h: Nm) -> Rect {
+        Rect::new(at.x.get(), at.y.get(), (at.x + w).get(), (at.y + h).get())
+    }
+    /// The empty box at `p`.
+    pub fn at(p: Point) -> Rect {
+        Rect { x0: p.x.get(), y0: p.y.get(), x1: p.x.get(), y1: p.y.get() }
+    }
+    /// The box with corners `a` and `b`, grown by `m` on every side.
+    pub fn around(a: Point, b: Point, m: Nm) -> Rect {
+        Rect::of(a, b).inflate(m.get())
     }
     pub fn w(&self) -> i64 {
         self.x1 - self.x0
@@ -82,7 +101,7 @@ pub fn outward(r: kg::Rect) -> Rect {
 }
 
 fn fpt(p: Point) -> (f64, f64) {
-    (p.x.raw_shim() as f64, p.y.raw_shim() as f64)
+    (p.x.as_f64(), p.y.as_f64())
 }
 
 /// `EDA_TEXT::GetTextBox` of one line of 1.27 mm text at `anchor`, justified `h`/`v`, turned a quarter when `vertical`.
@@ -181,8 +200,8 @@ pub struct Placed {
     pub resolved: Option<LibSymbol>,
     pub b: PartBox,
     /// Top-left corner of the box as drawn (after any half turn).
-    pub x: i64,
-    pub y: i64,
+    pub x: Nm,
+    pub y: Nm,
     pub flip: bool,
     /// The text the painter draws under or beside it.
     pub value: String,
@@ -196,7 +215,7 @@ pub struct Placed {
 impl Placed {
     pub fn new(part: &Part, lib_id: &str, resolved: Option<LibSymbol>, value: &str, footprint: &str) -> Placed {
         let b = part_box(part, resolved.as_ref(), 1);
-        Placed { part: part.clone(), lib_id: lib_id.to_string(), resolved, b, x: 0, y: 0, flip: false, value: value.to_string(), footprint: footprint.to_string(), unit: 1, kept_fields: None }
+        Placed { part: part.clone(), lib_id: lib_id.to_string(), resolved, b, x: Nm::ZERO, y: Nm::ZERO, flip: false, value: value.to_string(), footprint: footprint.to_string(), unit: 1, kept_fields: None }
     }
 
     /// The same symbol drawn as its unit `unit`: the box and the ports of that unit's body and pins.
@@ -206,19 +225,19 @@ impl Placed {
         self
     }
 
-    pub fn w(&self) -> i64 {
-        self.b.width()
+    pub fn w(&self) -> Nm {
+        Nm::new(self.b.width())
     }
-    pub fn h(&self) -> i64 {
-        self.b.height()
+    pub fn h(&self) -> Nm {
+        Nm::new(self.b.height())
     }
 
     /// `SymbolInstance::at` for the current pose.
     pub fn at(&self) -> Point {
         if self.flip {
-            Point { x: Nm::from_raw_shim(self.x + self.w()), y: Nm::from_raw_shim(self.y + self.h()) }
+            Point { x: self.x + self.w(), y: self.y + self.h() }
         } else {
-            Point { x: Nm::from_raw_shim(self.x), y: Nm::from_raw_shim(self.y) }
+            Point { x: self.x, y: self.y }
         }
     }
 
@@ -241,24 +260,24 @@ impl Placed {
         let l = self.b.node.stub_tip(LPoint { x: 0, y: 0 }, pi);
         let side = self.b.node.ports[pi].side;
         if self.flip {
-            Some((Point { x: Nm::from_raw_shim(self.x + self.w() - l.x), y: Nm::from_raw_shim(self.y + self.h() - l.y) }, flip_side(side)))
+            Some((Point { x: self.x + self.w() - Nm::new(l.x), y: self.y + self.h() - Nm::new(l.y) }, flip_side(side)))
         } else {
-            Some((Point { x: Nm::from_raw_shim(self.x + l.x), y: Nm::from_raw_shim(self.y + l.y) }, side))
+            Some((Point { x: self.x + Nm::new(l.x), y: self.y + Nm::new(l.y) }, side))
         }
     }
 
     /// Move the symbol so that `pin_number`'s tip lands on `target`.
     pub fn place_tip(&mut self, pin_number: &str, target: Point) {
-        self.x = 0;
-        self.y = 0;
+        self.x = Nm::ZERO;
+        self.y = Nm::ZERO;
         if let Some((t, _)) = self.tip(pin_number) {
-            self.x = (target.x - t.x).raw_shim();
-            self.y = (target.y - t.y).raw_shim();
+            self.x = target.x - t.x;
+            self.y = target.y - t.y;
         }
     }
 
     pub fn box_rect(&self) -> Rect {
-        Rect { x0: self.x, y0: self.y, x1: self.x + self.w(), y1: self.y + self.h() }
+        Rect { x0: self.x.get(), y0: self.y.get(), x1: (self.x + self.w()).get(), y1: (self.y + self.h()).get() }
     }
 
     /// This symbol as an instance on the sheet, for measuring.
@@ -398,7 +417,7 @@ const NC_HALF_NM: Nm = Nm::new(609_600);
 
 /// A no-connect flag: the cross's own square, `SCH_NO_CONNECT`'s size about its position (KiCad's `GetBoundingBox` adds half the pen).
 pub fn nc_rect(at: Point) -> Rect {
-    Rect { x0: (at.x - NC_HALF_NM).raw_shim(), y0: (at.y - NC_HALF_NM).raw_shim(), x1: (at.x + NC_HALF_NM).raw_shim(), y1: (at.y + NC_HALF_NM).raw_shim() }
+    Rect::at(at).inflate(NC_HALF_NM.get())
 }
 
 #[cfg(test)]
@@ -450,26 +469,26 @@ mod tests {
     fn a_standing_resistor_keeps_its_fields_beside_it_and_a_flipped_one_swaps_its_tips() {
         let resolved = eda_model::symbol::builtin("Device:R");
         let mut r = Placed::new(&two_pin("R1", "330"), "Device:R", resolved, "330", "0603");
-        r.x = 10 * G;
-        r.y = 10 * G;
+        r.x = G_NM * 10;
+        r.y = G_NM * 10;
         let (top, side) = r.tip("1").unwrap();
         assert_eq!(side, Side::Top);
-        assert_eq!(top.y, Nm::from_raw_shim(r.y - STUB));
+        assert_eq!(top.y, r.y - Nm::new(STUB));
         let (bottom, _) = r.tip("2").unwrap();
-        assert_eq!(bottom.y, Nm::from_raw_shim(r.y + r.h() + STUB));
+        assert_eq!(bottom.y, r.y + r.h() + Nm::new(STUB));
         let fields = r.field_rects();
         assert!(fields.iter().all(|f| f.x0 >= r.body_rect().x1), "fields sit to the right of the body: {fields:?}");
         // Turned half a turn, pin 2 is the top one, in the same column.
         r.flip = true;
         let (top2, _) = r.tip("2").unwrap();
         let (bottom1, _) = r.tip("1").unwrap();
-        assert_eq!(top2.y, Nm::from_raw_shim(r.y - STUB));
-        assert_eq!(bottom1.y, Nm::from_raw_shim(r.y + r.h() + STUB));
+        assert_eq!(top2.y, r.y - Nm::new(STUB));
+        assert_eq!(bottom1.y, r.y + r.h() + Nm::new(STUB));
         assert_eq!(top2.x, top.x);
-        assert_eq!(r.at().x, Nm::from_raw_shim(r.x + r.w()));
+        assert_eq!(r.at().x, r.x + r.w());
         // place_tip puts a chosen tip where asked.
-        r.place_tip("2", Point { x: Nm::from_raw_shim(5 * G), y: Nm::from_raw_shim(7 * G) });
-        assert_eq!(r.tip("2").unwrap().0, Point { x: Nm::from_raw_shim(5 * G), y: Nm::from_raw_shim(7 * G) });
+        r.place_tip("2", Point { x: G_NM * 5, y: G_NM * 7 });
+        assert_eq!(r.tip("2").unwrap().0, Point { x: G_NM * 5, y: G_NM * 7 });
     }
 
     #[test]
