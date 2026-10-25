@@ -465,6 +465,29 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 buses.entry(join.find(gid)).or_default().push(gid);
             }
         }
+        // `processSubGraphs`: a bus only a sheet pin names is weakly driven, and it is promoted to a strong one -- the one kind that finds the nets of its
+        // members on the sheet (`m_bus_neighbors`) -- only when no other bus there has its name, a vector none of its prefix either (`collectAllDriverValues`
+        // files a vector under `<prefix>[]` too), and no global label of its name is on the sheet; else it is renamed (`_1`) and has no neighbours.
+        let bus_name = |g: &Group| -> Option<String> {
+            let mut d: Vec<&Driver> = g.drivers.iter().filter(|d| d.prio > PIN).collect();
+            d.sort_by(|a, b| driver_order(a, b));
+            d.first().map(|d| d.name.clone())
+        };
+        let vector_prefix = |n: &str| -> Option<String> { (!n.contains('{')).then(|| n.split('[').next().unwrap_or(n).to_string()) };
+        let names_of: Vec<Option<String>> = groups.iter().map(|g| if g.bus { bus_name(g) } else { None }).collect();
+        let promoted = |g: usize| -> bool {
+            let Some(name) = names_of[g].as_ref() else { return false };
+            let here = |o: usize| groups[o].bus && groups[o].screen == groups[g].screen;
+            let mut peers = (0..names_of.len()).filter(|&o| here(o) && names_of[o].as_ref() == Some(name)).count();
+            if peers <= 1 {
+                if let Some(prefix) = vector_prefix(name) {
+                    peers = (0..names_of.len()).filter(|&o| here(o) && names_of[o].as_deref().and_then(vector_prefix).as_ref() == Some(&prefix)).count();
+                }
+            }
+            let global = groups.iter().any(|o| o.screen == groups[g].screen && o.global_names.contains(name));
+            peers <= 1 && !global
+        };
+        let promoted: Vec<bool> = (0..groups.len()).map(promoted).collect();
         for gids in buses.values() {
             let mut drivers: Vec<&Driver> = gids.iter().flat_map(|&g| groups[g].drivers.iter()).filter(|d| d.prio > PIN && bus_members(&d.name).is_some()).collect();
             drivers.sort_by(|a, b| driver_order(a, b));
@@ -485,8 +508,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 own.sort_by(|a, b| driver_order(a, b));
                 let names: Vec<(String, bool)> = own.iter().enumerate().filter(|(i, d)| *i == 0 || d.prio >= HIER_LABEL).map(|(_, d)| (d.name.clone(), d.prio >= HIER_LABEL)).collect();
                 for (name, label) in names {
+                    // a bus a sheet pin names finds its members' nets only when it is promoted
+                    if !label && !promoted[g] {
+                        continue;
+                    }
                     let Some(members) = bus_members(&name) else { continue };
-                    // `GetAllBusLabels`: a label's members, not a sheet pin's; `if( !conn->IsNet() ) continue;`: not those of a bus inside a group
+                    // `if( !conn->IsNet() ) continue;`: no virtual net of a bus inside a group
                     let nested = nested_group_members(&name, &bus_members);
                     for (i, m) in members.iter().enumerate() {
                         // `matchBusMember`: a vector's member by its place; a group's by its local name (the member's name without the group's `prefix.`),
@@ -844,12 +871,13 @@ mod tests {
     /// p12 S1 (`generateBusAliasMembers` and the pass for buses "linked together somewhere by member (net) connections"): two buses on one sheet that never
     /// touch, each labelled, each taken by a sheet pin to a child whose `D0` reaches a pin, are one net per member name they share -- `D0`, named by the root's
     /// member -- with no wire or label `D0` on the root. Buses whose names share no member (`E[0..3]`) stay apart. A bus named by its sheet pin alone makes no
-    /// virtual net (`GetAllBusLabels` takes labels only), but its `D0` is the labelled bus's virtual `D0`'s neighbour (`processSubGraphs`), so it joins too.
+    /// virtual net (`GetAllBusLabels` takes labels only); its `D0` is the labelled bus's virtual `D0`'s neighbour only when `processSubGraphs` promotes it, which
+    /// it does not beside another vector of its prefix (`D[0..1]` and `D[0..3]` are both `/D[]`): there U2.1 stays apart, and with a group (`{D0 D1}`) it joins.
     #[test]
     fn two_buses_on_one_sheet_join_by_a_shared_member_name() {
-        let members = |n: &str| test_members(n);
+        let members = |n: &str| test_members(n).or_else(|| n.strip_prefix('{').and_then(|r| r.strip_suffix('}')).map(|i| i.split_whitespace().map(String::from).collect()));
         let naming = Naming { wire_hints: false, bus_members: Some(&members), ..Naming::default() };
-        for (second, labelled, joined) in [("D[0..3]", true, true), ("E[0..3]", true, false), ("D[0..3]", false, true)] {
+        for (second, labelled, joined) in [("D[0..3]", true, true), ("E[0..3]", true, false), ("D[0..3]", false, false), ("{D0 D1}", false, true)] {
             let mut root = section();
             let sheet = |id: &str, file: &str, y: i64, pin: &str| SheetInstance { id: id.into(), name: id.into(), file: file.into(), at: p(1000, y), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: pin.into(), shape: LabelShape::Bidirectional, at: p(1000, y + 500) }], page: String::new() };
             root.sheets.push(sheet("s1", "a.kicad_sch", 0, "D[0..1]"));
@@ -867,7 +895,8 @@ mod tests {
                 c.labels.push(label(member, p(200, 100), LabelKind::Local));
                 c
             };
-            let (mut a, mut b) = (child("D[0..1]", "D0"), child(second, &format!("{}0", &second[..1])));
+            let member0 = if second.starts_with('{') { "D0".to_string() } else { format!("{}0", &second[..1]) };
+            let (mut a, mut b) = (child("D[0..1]", "D0"), child(second, &member0));
             let mut screens = vec![
                 ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
                 ScreenIn { path: Vec::new(), sch: &mut a, file: "a.kicad_sch".into(), pins: pins(&[("U1.1", p(200, 100))]) },
