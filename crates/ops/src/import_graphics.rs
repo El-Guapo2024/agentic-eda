@@ -213,10 +213,10 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                 out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_nm: size, stroke_width: Nm::new(m.line_width(*thickness)).max(Nm::new(1)), justify, mirror: false });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
-                let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));
+                let (ps, p1, p2, pe) = (point(m.coord(*start)), point(m.coord(*c1)), point(m.coord(*c2)), point(m.coord(*end)));
                 match spline_or_line(ps, p1, p2, pe) {
-                    SplineOrLine::Curve => out.shapes.push(Shape::Bezier { id: String::new(), layer: layer.clone(), stroke_width: stroke_width(&m, stroke), filled: false, start: point(ps), c1: point(p1), c2: point(p2), end: point(pe) }),
-                    SplineOrLine::Line => out.shapes.push(Shape::Segment { id: String::new(), layer: layer.clone(), stroke_width: stroke_width(&m, stroke), filled: false, start: point(ps), end: point(pe) }),
+                    SplineOrLine::Curve => out.shapes.push(Shape::Bezier { id: String::new(), layer: layer.clone(), stroke_width: stroke_width(&m, stroke), filled: false, start: ps, c1: p1, c2: p2, end: pe }),
+                    SplineOrLine::Line => out.shapes.push(Shape::Segment { id: String::new(), layer: layer.clone(), stroke_width: stroke_width(&m, stroke), filled: false, start: ps, end: pe }),
                     SplineOrLine::Skip => {}
                 }
             }

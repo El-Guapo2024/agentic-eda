@@ -281,11 +281,11 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                 out.texts.push(SchematicText { id: String::new(), content: text.clone(), at: point(m.coord(at)), angle, size_nm });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
-                let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));
+                let (ps, p1, p2, pe) = (point(m.coord(*start)), point(m.coord(*c1)), point(m.coord(*c2)), point(m.coord(*end)));
                 match spline_or_line(ps, p1, p2, pe) {
                     SplineOrLine::Curve => {
                         let (w, style, color) = shape_stroke(stroke);
-                        let mut g = SchGraphic::new(SchGraphicKind::Bezier { start: point(ps), c1: point(p1), c2: point(p2), end: point(pe) });
+                        let mut g = SchGraphic::new(SchGraphicKind::Bezier { start: ps, c1: p1, c2: p2, end: pe });
                         (g.width_nm, g.line_style, g.color) = (w, style, color);
                         out.graphics.push(g);
                     }
