@@ -327,6 +327,7 @@ impl Springback {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::item::{net_of, Segment};
     use eda_model::ir::Nm;
@@ -337,16 +338,16 @@ mod tests {
 
     fn base() -> Node {
         let mut n = Node::new();
-        n.add(Item::Segment(Segment { net: net_of("B"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::from_raw_shim(1_000_000) }, b: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(1_000_000) }, width: Nm::from_raw_shim(250_000), source_track: Some(("t1".into(), 0)), locked: false }));
+        n.add(Item::Segment(Segment { net: net_of("B"), layer: 0, a: Point { x: Nm::ZERO, y: mm(1.0) }, b: Point { x: mm(10.0), y: mm(1.0) }, width: mm(0.25), source_track: Some(("t1".into(), 0)), locked: false }));
         n
     }
 
     fn line(y: Nm) -> Line {
-        Line::from_points(net_of("B"), 0, Nm::from_raw_shim(250_000), vec![Point { x: Nm::ZERO, y }, Point { x: Nm::from_raw_shim(10_000_000), y }])
+        Line::from_points(net_of("B"), 0, mm(0.25), vec![Point { x: Nm::ZERO, y }, Point { x: mm(10.0), y }])
     }
 
     fn head<'a>(pts: &'a [Point], net: &'a Net) -> HeadSet<'a> {
-        HeadSet { pts, net, layer: 0, width: Nm::from_raw_shim(250_000), via: None }
+        HeadSet { pts, net, layer: 0, width: mm(0.25), via: None }
     }
 
     fn moved(y: Nm) -> World {
@@ -360,14 +361,14 @@ mod tests {
         let (b, r, a) = (base(), rules(), net_of("A"));
         let mut sb = Springback::new();
         sb.push(&b, World::default(), None);
-        sb.push(&b, moved(Nm::from_raw_shim(2_000_000)), None);
+        sb.push(&b, moved(mm(2.0)), None);
         // the head at y = 1800 touches the track where the newest frame left it (y = 2000): the frame stays
-        let near = [Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(1_800_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(1_800_000) }];
+        let near = [Point { x: mm(2.0), y: mm(1.8) }, Point { x: mm(8.0), y: mm(1.8) }];
         let (w, _) = sb.reduce(&b, &head(&near, &a), &r);
         assert_eq!(sb.len(), 2);
-        assert_eq!(w.tracks["t1"][0].pts[0].y, Nm::from_raw_shim(2_000_000));
+        assert_eq!(w.tracks["t1"][0].pts[0].y, mm(2.0));
         // drawn back to y = -1000 it touches nothing of that world: the track springs back to the frame below
-        let far = [Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(-1_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(-1_000_000) }];
+        let far = [Point { x: mm(2.0), y: mm(-1.0) }, Point { x: mm(8.0), y: mm(-1.0) }];
         let (w, _) = sb.reduce(&b, &head(&far, &a), &r);
         assert_eq!(sb.len(), 1);
         assert!(w.tracks.is_empty());
@@ -376,13 +377,13 @@ mod tests {
     #[test]
     fn a_locked_frame_and_the_last_frame_are_never_popped() {
         let (b, r, a) = (base(), rules(), net_of("A"));
-        let far = [Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(-5_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(-5_000_000) }];
+        let far = [Point { x: mm(2.0), y: mm(-5.0) }, Point { x: mm(8.0), y: mm(-5.0) }];
         let mut sb = Springback::new();
-        sb.push(&b, moved(Nm::from_raw_shim(2_000_000)), None);
+        sb.push(&b, moved(mm(2.0)), None);
         sb.reduce(&b, &head(&far, &a), &r);
         assert_eq!(sb.len(), 1, "the bottom frame stays");
-        sb.add_locked(&b, moved(Nm::from_raw_shim(2_000_000)));
-        sb.push(&b, moved(Nm::from_raw_shim(3_000_000)), None);
+        sb.add_locked(&b, moved(mm(2.0)));
+        sb.push(&b, moved(mm(3.0)), None);
         sb.reduce(&b, &head(&far, &a), &r);
         assert_eq!(sb.len(), 2, "popped down to the locked frame");
         // the stage of the fix was the frame the shove pushed before it (the stack's length then: 1)
@@ -390,7 +391,7 @@ mod tests {
         undo.rewind_to(1);
         assert_eq!(undo.len(), 0, "Backspace erases the frame the fix was made in and what came after");
         // a stage fixed in a locked frame (the click before's) keeps that frame
-        sb.add_locked(&b, moved(Nm::from_raw_shim(3_000_000)));
+        sb.add_locked(&b, moved(mm(3.0)));
         sb.rewind_to(2);
         assert_eq!(sb.len(), 2, "the locked frame of the click before stays");
     }
@@ -398,12 +399,12 @@ mod tests {
     #[test]
     fn the_world_of_a_frame_is_the_session_world_with_what_it_moved() {
         let b = base();
-        let n = moved(Nm::from_raw_shim(2_000_000)).with_fixed(Some(&Line::from_points(net_of("A"), 0, Nm::from_raw_shim(250_000), vec![Point { x: Nm::ZERO, y: Nm::from_raw_shim(-3_000_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-3_000_000) }])), None).apply(&b);
+        let n = moved(mm(2.0)).with_fixed(Some(&Line::from_points(net_of("A"), 0, mm(0.25), vec![Point { x: Nm::ZERO, y: mm(-3.0) }, Point { x: mm(5.0), y: mm(-3.0) }])), None).apply(&b);
         let segs: Vec<_> = n.iter().filter_map(|(_, it)| match it { Item::Segment(s) => Some((s.a.y, s.locked, s.source_track.as_ref().map(|t| t.0.clone()))), _ => None }).collect();
         assert_eq!(segs.len(), 2);
-        assert!(segs.contains(&(Nm::from_raw_shim(2_000_000), false, Some("t1".into()))), "{segs:?}");
-        assert!(segs.contains(&(Nm::from_raw_shim(-3_000_000), false, Some(run_tag(0)))), "the fixed run is in it, a track a shove may push: {segs:?}");
-        let ends = [Point { x: Nm::ZERO, y: Nm::from_raw_shim(-3_000_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-3_000_000) }];
+        assert!(segs.contains(&(mm(2.0), false, Some("t1".into()))), "{segs:?}");
+        assert!(segs.contains(&(mm(-3.0), false, Some(run_tag(0)))), "the fixed run is in it, a track a shove may push: {segs:?}");
+        let ends = [Point { x: Nm::ZERO, y: mm(-3.0) }, Point { x: mm(5.0), y: mm(-3.0) }];
         assert!(ends.iter().all(|&e| n.joint_at(e, &net_of("A")).is_some_and(|j| j.locked)), "its ends are locked joints (`LockJoint`)");
     }
 
@@ -411,10 +412,10 @@ mod tests {
     fn areas_merge_up_the_stack() {
         let b = base();
         let mut sb = Springback::new();
-        sb.push(&b, World::default(), Some((Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(10_000), Nm::from_raw_shim(10_000))));
-        sb.push(&b, World::default(), Some((Nm::from_raw_shim(5000), Nm::from_raw_shim(-5000), Nm::from_raw_shim(20_000), Nm::from_raw_shim(5000))));
-        assert_eq!(sb.top().1, Some((Nm::ZERO, Nm::from_raw_shim(-5000), Nm::from_raw_shim(20_000), Nm::from_raw_shim(10_000))));
+        sb.push(&b, World::default(), Some((Nm::ZERO, Nm::ZERO, mm(0.01), mm(0.01))));
+        sb.push(&b, World::default(), Some((Nm::new(5000), Nm::new(-5000), mm(0.02), Nm::new(5000))));
+        assert_eq!(sb.top().1, Some((Nm::ZERO, Nm::new(-5000), mm(0.02), mm(0.01))));
         sb.push(&b, World::default(), None);
-        assert_eq!(sb.top().1, Some((Nm::ZERO, Nm::from_raw_shim(-5000), Nm::from_raw_shim(20_000), Nm::from_raw_shim(10_000))));
+        assert_eq!(sb.top().1, Some((Nm::ZERO, Nm::new(-5000), mm(0.02), mm(0.01))));
     }
 }

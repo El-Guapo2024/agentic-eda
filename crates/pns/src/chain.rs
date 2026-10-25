@@ -25,23 +25,24 @@ pub struct ShapeLineChain {
 }
 
 /// `TestSegmentHit( aRefPoint, aStart, aEnd, aDist )` (`libs/kimath/src/trigo.cpp`).
-pub fn test_segment_hit(r: Point, start: Point, end: Point, dist: i64) -> bool {
+pub fn test_segment_hit(r: Point, start: Point, end: Point, dist: Nm) -> bool {
     let (xmin, xmax) = (start.x.min(end.x), start.x.max(end.x));
     let (ymin, ymax) = (start.y.min(end.y), start.y.max(end.y));
     let delta = (start.x - r.x, start.y - r.y);
-    if ymin - r.y > Nm::from_raw_shim(dist) || r.y - ymax > Nm::from_raw_shim(dist) {
+    if ymin - r.y > dist || r.y - ymax > dist {
         return false;
     }
-    if xmin - r.x > Nm::from_raw_shim(dist) || r.x - xmax > Nm::from_raw_shim(dist) {
+    if xmin - r.x > dist || r.x - xmax > dist {
         return false;
     }
     if start.x == end.x && r.y > ymin && r.y < ymax {
-        return delta.0.abs() <= Nm::from_raw_shim(dist);
+        return delta.0.abs() <= dist;
     }
     if start.y == end.y && r.x > xmin && r.x < xmax {
-        return delta.1.abs() <= Nm::from_raw_shim(dist);
+        return delta.1.abs() <= dist;
     }
-    Seg::new(start, end).squared_distance(r) < ((dist + 1) as i128) * ((dist + 1) as i128)
+    let dist1 = dist + Nm::new(1);
+    Seg::new(start, end).squared_distance(r) < dist1.area(dist1)
 }
 
 impl ShapeLineChain {
@@ -232,14 +233,14 @@ impl ShapeLineChain {
         self.append_arc_with(arc, ARC_POLYGONIZATION_MAX_ERROR_NM);
     }
 
-    pub fn append_arc_with(&mut self, arc: &ShapeArc, max_error: i64) {
+    pub fn append_arc_with(&mut self, arc: &ShapeArc, max_error: Nm) {
         let mut chain = ShapeLineChain::from_points(&[]);
         for p in arc.convert_to_polyline(max_error) {
             chain.append_point(p);
         }
         if chain.point_count() > 2 {
             let mut stored = arc.clone();
-            stored.width = 0;
+            stored.width = Nm::ZERO;
             chain.arcs.push(stored);
             for s in &mut chain.shapes {
                 s.0 = 0;
@@ -250,16 +251,22 @@ impl ShapeLineChain {
 
     // ------------------------------------------------------------------------------------------------- measuring
 
-    /// `Length`: the plain segments by `SEG::Length` (each rounded), the arcs by their true length.
+    /// [`ShapeLineChain::length_nm`] as a count of nanometres: the studio's (`crates/cli`) signature until the length type's wave 3.
     pub fn length(&self) -> i64 {
-        let mut l: i64 = 0;
+        self.length_nm().get()
+    }
+
+    /// `Length`: the plain segments by `SEG::Length` (each rounded), the arcs by their true length.
+    pub fn length_nm(&self) -> Nm {
+        let mut l = Nm::ZERO;
         for i in 0..self.segment_count() {
             if !self.is_arc_segment(i) {
                 l += self.c_segment(i).length();
             }
         }
         for a in &self.arcs {
-            l = (l as f64 + a.length()) as i64;
+            // `l += a.Length()` of a double into an `int64_t`: truncated
+            l = Nm::new((l.as_f64() + a.length()) as i64);
         }
         l
     }
@@ -278,7 +285,7 @@ impl ShapeLineChain {
         if self.points.len() == 1 {
             return self.points[0];
         }
-        let mut min_d = i64::MAX;
+        let mut min_d = Nm::MAX;
         let mut nearest = 0usize;
         for i in 0..self.segment_count() {
             let d = self.c_segment(i).distance(p);
@@ -289,8 +296,8 @@ impl ShapeLineChain {
         }
         if !allow_internal && nearest > 0 && nearest < self.points.len() && self.is_arc_segment(nearest) {
             let seg = self.c_segment(nearest);
-            let to_start = crate::kigeom::norm_i((seg.a.x - p.x).raw_shim(), (seg.a.y - p.y).raw_shim());
-            let to_end = crate::kigeom::norm_i((seg.b.x - p.x).raw_shim(), (seg.b.y - p.y).raw_shim());
+            let to_start = crate::kigeom::norm_i(seg.a.x - p.x, seg.a.y - p.y);
+            let to_end = crate::kigeom::norm_i(seg.b.x - p.x, seg.b.y - p.y);
             if to_start > to_end {
                 nearest += 1;
             }
@@ -298,8 +305,8 @@ impl ShapeLineChain {
                 return self.points[nearest];
             }
             let arc = &self.arcs[self.arc_index(nearest) as usize];
-            let to_arc_start = crate::kigeom::norm_i((arc.start.x - p.x).raw_shim(), (arc.start.y - p.y).raw_shim());
-            let to_arc_end = crate::kigeom::norm_i((arc.end.x - p.x).raw_shim(), (arc.end.y - p.y).raw_shim());
+            let to_arc_start = crate::kigeom::norm_i(arc.start.x - p.x, arc.start.y - p.y);
+            let to_arc_end = crate::kigeom::norm_i(arc.end.x - p.x, arc.end.y - p.y);
             return if to_arc_start > to_arc_end { arc.end } else { arc.start };
         }
         self.c_segment(nearest).nearest_point(p)
@@ -316,8 +323,8 @@ impl ShapeLineChain {
 
     /// `Collide( const SEG& aSeg, aClearance )` for the chain's plain segments and the chords of its arcs: is `aSeg` closer than the clearance (or
     /// touching) to the chain?
-    pub fn collides_seg(&self, seg: &Seg, clearance: i64) -> bool {
-        let clearance_sq = (clearance as i128) * (clearance as i128);
+    pub fn collides_seg(&self, seg: &Seg, clearance: Nm) -> bool {
+        let clearance_sq = clearance.area(clearance);
         let mut closest = i128::MAX;
         for i in 0..self.segment_count() {
             let d = self.c_segment(i).squared_distance_seg(seg);
@@ -331,14 +338,19 @@ impl ShapeLineChain {
         closest == 0 || closest < clearance_sq
     }
 
-    /// `PointOnEdge( aPt, aAccuracy )` (`EdgeContainingPoint`).
+    /// [`ShapeLineChain::point_on_edge_nm`] with the accuracy a count of nanometres: the studio's (`crates/cli`) signature until the length type's wave 3.
     pub fn point_on_edge(&self, p: Point, accuracy: i64) -> bool {
-        let threshold = accuracy + 1;
-        let threshold_sq = (threshold as i128) * (threshold as i128);
+        self.point_on_edge_nm(p, Nm::new(accuracy))
+    }
+
+    /// `PointOnEdge( aPt, aAccuracy )` (`EdgeContainingPoint`).
+    pub fn point_on_edge_nm(&self, p: Point, accuracy: Nm) -> bool {
+        let threshold = accuracy + Nm::new(1);
+        let threshold_sq = threshold.area(threshold);
         match self.points.len() {
             0 => false,
             1 => {
-                let d = ((self.points[0].x - p.x).raw_shim() as i128).pow(2) + ((self.points[0].y - p.y).raw_shim() as i128).pow(2);
+                let d = ((self.points[0].x - p.x).get() as i128).pow(2) + ((self.points[0].y - p.y).get() as i128).pow(2);
                 d <= threshold_sq
             }
             _ => (0..self.segment_count()).any(|i| {
@@ -405,10 +417,10 @@ impl ShapeLineChain {
 
     /// `Simplify( 0 )`: drops the vertices that lie on the straight run between their neighbours (within a nanometre), never one on an arc.
     pub fn simplify(&mut self) {
-        self.simplify_with(0);
+        self.simplify_with(Nm::ZERO);
     }
 
-    pub fn simplify_with(&mut self, tolerance: i64) {
+    pub fn simplify_with(&mut self, tolerance: Nm) {
         let len = self.points.len();
         if len < 3 {
             return;
@@ -487,7 +499,7 @@ impl ShapeLineChain {
             return found;
         }
         let mut ii: isize = -1;
-        let mut min_dist = 2i64;
+        let mut min_dist = Nm::new(2);
         for s in 0..self.segment_count() {
             let seg = self.c_segment(s);
             let dist = seg.distance(p);
@@ -597,8 +609,8 @@ impl ShapeLineChain {
 
 /// A convenience for the callers that hold plain polylines: the integer distance `SEG::Distance` gives, kept here so the `i128` squares do not
 /// leak out of this module.
-pub fn distance(a: Point, b: Point) -> i64 {
-    isqrt(((a.x - b.x).raw_shim() as i128).pow(2) + ((a.y - b.y).raw_shim() as i128).pow(2))
+pub fn distance(a: Point, b: Point) -> Nm {
+    Nm::new(isqrt(((a.x - b.x).get() as i128).pow(2) + ((a.y - b.y).get() as i128).pow(2)))
 }
 
 #[cfg(test)]
@@ -606,11 +618,11 @@ mod tests {
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn quarter() -> ShapeArc {
-        ShapeArc::from_start_end_angle(p(0, 0), p(1_000_000, 1_000_000), -90.0, 0)
+        ShapeArc::from_start_end_angle(p(0, 0), p(1_000_000, 1_000_000), -90.0, Nm::ZERO)
     }
 
     #[test]
@@ -620,7 +632,7 @@ mod tests {
             c.append_point(q);
         }
         assert_eq!(c.points(), &[p(0, 0), p(10, 0), p(10, 10)]);
-        assert_eq!((c.point_count(), c.segment_count(), c.length()), (3, 2, 20));
+        assert_eq!((c.point_count(), c.segment_count(), c.length_nm()), (3, 2, Nm::new(20)));
     }
 
     #[test]
@@ -636,7 +648,7 @@ mod tests {
         assert!(!c.is_arc_segment(0) && c.is_arc_segment(1) && c.is_arc_segment(c.point_count() - 3));
         assert!(!c.is_arc_segment(c.point_count() - 2));
         let expect = 1_000_000.0 + 1_000_000.0 * std::f64::consts::FRAC_PI_2 + 2_000_000.0;
-        assert!((c.length() as f64 - expect).abs() < 2.0, "{} vs {expect}", c.length());
+        assert!((c.length_nm().as_f64() - expect).abs() < 2.0, "{} vs {expect}", c.length_nm());
         // the arc starts where the line before it ended: its first point is shared, not repeated
         assert_eq!(c.points().iter().filter(|&&q| q == p(0, 0)).count(), 1);
     }
@@ -688,7 +700,7 @@ mod tests {
         assert_eq!(m.points()[0], p(0, 0));
         assert_eq!(m.c_last_point(), p(1_000_000, -1_000_000));
         assert_eq!(m.arcs()[0].is_ccw(), !c.arcs()[0].is_ccw());
-        assert!((m.length() - c.length()).abs() <= 1);
+        assert!((m.length_nm() - c.length_nm()).abs() <= Nm::new(1));
     }
 
     #[test]
@@ -721,20 +733,20 @@ mod tests {
         assert_eq!(r.arcs().len(), 1);
         assert!(r.is_arc_segment(0));
         assert_eq!(r.arcs()[0].start, quarter().end);
-        assert!((r.length() - c.length()).abs() <= 1);
+        assert!((r.length_nm() - c.length_nm()).abs() <= Nm::new(1));
     }
 
     #[test]
     fn collide_with_a_segment_uses_the_clearance() {
         let c = ShapeLineChain::from_points(&[p(0, 0), p(10_000, 0)]);
-        assert!(c.collides_seg(&Seg::new(p(5_000, 700), p(5_000, 2_000)), 800));
-        assert!(!c.collides_seg(&Seg::new(p(5_000, 900), p(5_000, 2_000)), 800));
-        assert!(c.collides_seg(&Seg::new(p(5_000, -500), p(5_000, 500)), 0), "crossing is a collision");
+        assert!(c.collides_seg(&Seg::new(p(5_000, 700), p(5_000, 2_000)), Nm::new(800)));
+        assert!(!c.collides_seg(&Seg::new(p(5_000, 900), p(5_000, 2_000)), Nm::new(800)));
+        assert!(c.collides_seg(&Seg::new(p(5_000, -500), p(5_000, 500)), Nm::ZERO), "crossing is a collision");
     }
 
     #[test]
     fn point_on_edge_allows_the_accuracy_asked() {
         let c = ShapeLineChain::from_points(&[p(0, 0), p(10, 0)]);
-        assert!(c.point_on_edge(p(5, 1), 1) && !c.point_on_edge(p(5, 3), 1));
+        assert!(c.point_on_edge_nm(p(5, 1), Nm::new(1)) && !c.point_on_edge_nm(p(5, 3), Nm::new(1)));
     }
 }

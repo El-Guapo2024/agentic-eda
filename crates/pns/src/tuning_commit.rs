@@ -10,8 +10,8 @@
 //! flagged: they become the members of its [`TuningPattern`](eda_model::tuning::TuningPattern) (`EditFinish` adds the new tracks inside the
 //! pattern's outline to the generator).
 //!
-//! Micrometres on the way out: the chains are nanometres (see [`crate::kigeom`]) and a vertex is rounded to the board's grid. The same cut
-//! point is the end of one piece and the start of the next, so they still meet.
+//! Nanometres throughout, the chains' and the board's: a vertex goes to the board as it is. The same cut point is the end of one piece and
+//! the start of the next, so they still meet.
 
 use eda_model::units::Nm;
 use crate::chain::{distance, ShapeLineChain};
@@ -23,9 +23,9 @@ use eda_model::ir::Point;
 use std::collections::{BTreeSet, HashSet};
 
 /// How far apart two points that should be one are allowed to be before they are two (nanometres): the rounding of a meander's shapes.
-const SNAP_NM: i64 = 3;
+const SNAP_NM: Nm = Nm::new(3);
 
-/// One track of the new line (micrometres).
+/// One track of the new line.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PieceShape {
     /// A run of straight segments.
@@ -92,7 +92,7 @@ fn head_to(chain: &ShapeLineChain, p: Point) -> Option<ShapeLineChain> {
     (i >= 0).then(|| c.slice(0, i))
 }
 
-/// A chain as the pieces of track it is made of: a polyline for each run of straight segments of one kind and an arc for each arc (micrometres;
+/// A chain as the pieces of track it is made of: a polyline for each run of straight segments of one kind and an arc for each arc (the
 /// segments `members` are the ones from `member_from` up to, not including, `member_to`).
 fn pieces_of(chain: &ShapeLineChain, member_from: usize, member_to: usize, members: bool) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
@@ -161,7 +161,9 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
         if s.a == s.b {
             continue;
         }
-        let mid = Point { x: Nm::from_raw_shim((s.a.x + s.b.x).div_euclid(Nm::from_raw_shim(2))), y: Nm::from_raw_shim((s.a.y + s.b.y).div_euclid(Nm::from_raw_shim(2))) };
+        // the midpoint, halved toward minus infinity
+        let half = |v: Nm| Nm::new(v.get().div_euclid(2));
+        let mid = Point { x: half(s.a.x + s.b.x), y: half(s.a.y + s.b.y) };
         let k = (0..origin.segment_count()).min_by_key(|&k| origin.c_segment(k).squared_distance(mid))?;
         touched.insert(k);
     }
@@ -169,8 +171,8 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
     let (v_lo, v_hi) = (origin.c_point(lo), origin.c_point(hi + 1));
 
     // The touched run's two ends: the one on the side of the pattern's start is the one `pre` reaches back to.
-    let lo_in_pre = t.pre.point_on_edge(v_lo, SNAP_NM);
-    let hi_in_pre = t.pre.point_on_edge(v_hi, SNAP_NM);
+    let lo_in_pre = t.pre.point_on_edge_nm(v_lo, SNAP_NM);
+    let hi_in_pre = t.pre.point_on_edge_nm(v_hi, SNAP_NM);
     let (first, last) = match (lo_in_pre, hi_in_pre) {
         (true, false) => (v_lo, v_hi),
         (false, true) => (v_hi, v_lo),
@@ -201,6 +203,7 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::item::{net_of, Segment};
     use crate::meander::MeanderSettings;
@@ -209,14 +212,14 @@ mod tests {
     use eda_model::BoardRules;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = Nm::from_raw_shim(200_000);
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
+        rules.clearance = mm(0.2);
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
     }
 
     fn settings(target_nm: i64) -> MeanderSettings {
@@ -227,7 +230,7 @@ mod tests {
     }
 
     fn seg(w: &mut Node, track: &str, k: usize, a: Point, b: Point) -> ItemId {
-        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: Nm::from_raw_shim(200_000), source_track: Some((track.into(), k)), locked: false }))
+        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: mm(0.2), source_track: Some((track.into(), k)), locked: false }))
     }
 
     fn poly_points(e: &LineEdit) -> Vec<Point> {
@@ -287,7 +290,7 @@ mod tests {
         // the pattern runs from 13 mm to 22 mm: segment 1 (12..14) and segment 2 (14..30) of track b are touched; track a and c are not
         placer.update_settings({
             let mut s = settings(0);
-            s.set_target_length(placer.orig_path_length() + 3_000_000);
+            s.set_target_length((placer.orig_path_length() + mm(3.0)).get());
             s
         });
         assert!(placer.do_move(p(22_000_000, 0)));
@@ -314,7 +317,7 @@ mod tests {
         let mut placer = MeanderPlacer::start(&w, &env(), s, p(30_000_000, 0), settings(0)).unwrap();
         placer.update_settings({
             let mut st = settings(0);
-            st.set_target_length(placer.orig_path_length() + 2_000_000);
+            st.set_target_length((placer.orig_path_length() + mm(2.0)).get());
             st
         });
         assert!(placer.do_move(p(20_000_000, 0)));
@@ -325,7 +328,7 @@ mod tests {
         assert_connected(&e);
         let pts = poly_points(&e);
         let (lo, hi) = (pts.iter().map(|q| q.x).min().unwrap(), pts.iter().map(|q| q.x).max().unwrap());
-        assert_eq!((lo, hi), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(40_000_000)), "b is replaced whole: its start to its end");
+        assert_eq!((lo, hi), (mm(10.0), mm(40.0)), "b is replaced whole: its start to its end");
         assert!(e.pieces.iter().any(|q| q.member));
     }
 

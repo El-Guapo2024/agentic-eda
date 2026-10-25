@@ -12,8 +12,9 @@
 
 use crate::item::Item;
 use crate::node::Node;
-use crate::tuning_path::{stackup_distance_nm, LengthEnv, PathItem, TuningPath};
+use crate::tuning_path::{stackup_distance, LengthEnv, PathItem, TuningPath};
 use eda_model::setup_pages::ViaOverride;
+use eda_model::units::{Nm, PCB_IU_PER_MM};
 use std::collections::BTreeMap;
 
 /// Attoseconds in a picosecond (`IU_PER_PS`).
@@ -57,23 +58,23 @@ impl DelayParams {
     }
 
     /// The delay of `length_nm` of track on `layer`: `int64_t( delayUnit * ( length / PCB_IU_PER_MM ) )`.
-    pub fn track_delay(&self, layer: &str, length_nm: i64) -> i64 {
-        (self.track_unit(layer) as f64 * (length_nm as f64 / 1_000_000.0)) as i64
+    pub fn track_delay(&self, layer: &str, length_nm: Nm) -> i64 {
+        (self.track_unit(layer) as f64 * length_nm.mm()) as i64
     }
 
     /// `GetTrackLengthForPropagationDelay`: the length of track on `layer` that takes `delay` attoseconds, nanometres. A layer without a delay has no length for it
     /// (KiCad divides by zero there); the answer is nothing.
-    pub fn length_for_delay(&self, layer: &str, delay: i64) -> i64 {
+    pub fn length_for_delay(&self, layer: &str, delay: i64) -> Nm {
         let unit = self.track_unit(layer) as f64;
         if unit == 0.0 {
-            return 0;
+            return Nm::ZERO;
         }
-        ((delay as f64 / unit) * 1_000_000.0) as i64
+        Nm::new(((delay as f64 / unit) * PCB_IU_PER_MM) as i64)
     }
 
     /// `getPropagationDelay` of a via item: zero without the time domain; the override for the signal layers (`from`, `to`, in the order of the path) and the layers
     /// the via spans (`via_from`, `via_to`) when the profile has one, else the profile's via delay over the height of the stackup between the signal layers.
-    pub fn via_delay(&self, signal_from: &str, signal_to: &str, via_from: &str, via_to: &str, stackup_height_nm: i64) -> i64 {
+    pub fn via_delay(&self, signal_from: &str, signal_to: &str, via_from: &str, via_to: &str, stackup_height_nm: Nm) -> i64 {
         if !self.enabled {
             return 0;
         }
@@ -83,7 +84,7 @@ impl DelayParams {
         if let Some(o) = self.via_overrides.iter().rev().find(|o| same(&o.signal_layer_from, &o.signal_layer_to, &o.via_layer_from, &o.via_layer_to)) {
             return o.delay_as;
         }
-        (self.via_as_per_mm as f64 * (stackup_height_nm as f64 / 1_000_000.0)) as i64
+        (self.via_as_per_mm as f64 * stackup_height_nm.mm()) as i64
     }
 }
 
@@ -96,12 +97,12 @@ impl TuningPath {
         let mut total: i64 = 0;
         for (idx, it) in self.items.iter().enumerate() {
             match it {
-                PathItem::Line { line, clipped } => total += params.track_delay(&name(line.layer), clipped.length()),
+                PathItem::Line { line, clipped } => total += params.track_delay(&name(line.layer), clipped.length_nm()),
                 PathItem::Via(vid) if env.rules.use_height_for_length_calcs && idx > 0 && idx + 1 < self.items.len() => {
                     let layer_of = |i: &PathItem| if let PathItem::Line { line, .. } = i { Some(line.layer) } else { None };
                     if let (Some(a), Some(b)) = (layer_of(&self.items[idx - 1]), layer_of(&self.items[idx + 1])) {
                         if a != b {
-                            let height = stackup_distance_nm(&env.stackup, &env.rules.layers, &name(a), &name(b));
+                            let height = stackup_distance(&env.stackup, &env.rules.layers, &name(a), &name(b));
                             // the layers the via spans (`Padstack().StartLayer()`, `EndLayer()`)
                             let (via_from, via_to) = match world.get(*vid) {
                                 Some(Item::Via(v)) => (name(v.layers.start()), name(v.layers.end())),
@@ -120,6 +121,7 @@ impl TuningPath {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, TuningProfiles};
@@ -131,8 +133,8 @@ mod tests {
             target_impedance: 50.0,
             enable_time_domain_tuning: enabled,
             layer_entries: vec![
-                ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 6_100_000 },
-                ProfileLayerEntry { signal_layer: "B.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 6_500_000 },
+                ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::new(200), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 6_100_000 },
+                ProfileLayerEntry { signal_layer: "B.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::new(200), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 6_500_000 },
             ],
             via_propagation_delay_as: 5_000_000,
             via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 12_000_000 }],
@@ -143,7 +145,7 @@ mod tests {
         let mut rules = eda_model::BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
         rules.tuning_profiles = TuningProfiles { profiles: vec![profile(enabled)], class_profiles: [("Default".to_string(), "USB".to_string())].into() };
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
     }
 
     #[test]
@@ -163,24 +165,24 @@ mod tests {
     #[test]
     fn a_profile_without_the_time_domain_has_no_delays_at_all() {
         let p = env(false).delay_params("SIG").unwrap();
-        assert_eq!((p.track_unit("F.Cu"), p.track_delay("F.Cu", 10_000_000), p.length_for_delay("F.Cu", 61_000_000), p.via_delay("F.Cu", "B.Cu", "F.Cu", "B.Cu", 1_600_000)), (0, 0, 0, 0));
+        assert_eq!((p.track_unit("F.Cu"), p.track_delay("F.Cu", mm(10.0)), p.length_for_delay("F.Cu", 61_000_000), p.via_delay("F.Cu", "B.Cu", "F.Cu", "B.Cu", mm(1.6))), (0, 0, Nm::ZERO, 0));
     }
 
     #[test]
     fn the_delay_of_a_track_and_the_length_of_a_delay_are_inverses_at_the_layers_unit() {
         let p = env(true).delay_params("SIG").unwrap();
         // 10 mm at 6.1 ps/mm is 61 ps
-        assert_eq!(p.track_delay("F.Cu", 10_000_000), 61_000_000);
-        assert_eq!(p.length_for_delay("F.Cu", 61_000_000), 10_000_000);
-        assert_eq!(p.track_delay("B.Cu", 10_000_000), 65_000_000, "another layer, another unit");
-        assert_eq!(p.length_for_delay("In1.Cu", 61_000_000), 0);
+        assert_eq!(p.track_delay("F.Cu", mm(10.0)), 61_000_000);
+        assert_eq!(p.length_for_delay("F.Cu", 61_000_000), mm(10.0));
+        assert_eq!(p.track_delay("B.Cu", mm(10.0)), 65_000_000, "another layer, another unit");
+        assert_eq!(p.length_for_delay("In1.Cu", 61_000_000), Nm::ZERO);
     }
 
     #[test]
     fn a_via_has_the_override_for_its_layers_or_the_profiles_delay_over_the_stackup_it_crosses() {
         let p = env(true).delay_params("SIG").unwrap();
-        assert_eq!(p.via_delay("F.Cu", "B.Cu", "F.Cu", "B.Cu", 1_600_000), 12_000_000, "the override");
-        assert_eq!(p.via_delay("B.Cu", "F.Cu", "B.Cu", "F.Cu", 1_600_000), 12_000_000, "either way round");
-        assert_eq!(p.via_delay("F.Cu", "In1.Cu", "F.Cu", "B.Cu", 200_000), 1_000_000, "5 ps/mm over 0.2 mm");
+        assert_eq!(p.via_delay("F.Cu", "B.Cu", "F.Cu", "B.Cu", mm(1.6)), 12_000_000, "the override");
+        assert_eq!(p.via_delay("B.Cu", "F.Cu", "B.Cu", "F.Cu", mm(1.6)), 12_000_000, "either way round");
+        assert_eq!(p.via_delay("F.Cu", "In1.Cu", "F.Cu", "B.Cu", mm(0.2)), 1_000_000, "5 ps/mm over 0.2 mm");
     }
 }

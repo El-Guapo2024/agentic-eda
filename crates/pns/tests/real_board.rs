@@ -13,6 +13,7 @@
 //! `design.json` data does: `eda_drc::board::build`'s real pad-shape
 //! flattening via `eda_pns::from_ir::build_node`.
 
+use eda_model::units::mm;
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Design, FootprintInstance, LabelSide, Millideg, PlacementSection, Point, Provenance, RoutingSection, Side, Nm};
 use eda_model::{ConstraintModel, Net as IrNet, Part, Pin, PinKind};
@@ -73,7 +74,7 @@ fn obstacle_course() -> (Design, ConstraintModel) {
         nets: None,
         placement: Some(PlacementSection {
             outline: vec![],
-            footprints: vec![fp("U1", Nm::ZERO, Nm::ZERO, 0), fp("U2", Nm::from_raw_shim(10_000_000), Nm::ZERO, 180_000_000), fp("R1", Nm::from_raw_shim(3_000_000), Nm::ZERO, 90_000_000), fp("R2", Nm::from_raw_shim(5_000_000), Nm::ZERO, 90_000_000), fp("R3", Nm::from_raw_shim(7_000_000), Nm::ZERO, 90_000_000)],
+            footprints: vec![fp("U1", Nm::ZERO, Nm::ZERO, 0), fp("U2", mm(10.0), Nm::ZERO, 180_000_000), fp("R1", mm(3.0), Nm::ZERO, 90_000_000), fp("R2", mm(5.0), Nm::ZERO, 90_000_000), fp("R3", mm(7.0), Nm::ZERO, 90_000_000)],
             modules: vec![],
         }),
         routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
