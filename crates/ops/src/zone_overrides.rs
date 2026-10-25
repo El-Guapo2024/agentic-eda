@@ -119,10 +119,10 @@ mod tests {
             part: "C1".into(),
             pad: "1".into(),
             zone_connection: Some(PadConnection::Full),
-            thermal_gap: Some(Nm::new(400)),
-            thermal_spoke_width: Some(Nm::new(300)),
+            thermal_gap: Some(mm(0.4)),
+            thermal_spoke_width: Some(mm(0.3)),
             thermal_spoke_angle_mdeg: Some(405_000),
-            clearance: Some(Nm::new(600)),
+            clearance: Some(mm(0.6)),
         })
         .unwrap();
         let edit = pad_edit(&b);
@@ -130,7 +130,7 @@ mod tests {
         assert_eq!(edit[0].zone_connection, Some(PadConnection::Full));
         assert_eq!(edit[0].thermal_spoke_angle_mdeg, Some(45_000), "an angle is kept within one turn");
         let facts = b.design().pad_zone_facts("C1", "0402", 0, 2, "1");
-        assert_eq!((facts.connection, facts.thermal_gap, facts.thermal_spoke_width, facts.clearance()), (Some(PadConnection::Full), Some(Nm::new(400)), Some(Nm::new(300)), Some(Nm::new(600))));
+        assert_eq!((facts.connection, facts.thermal_gap, facts.thermal_spoke_width, facts.clearance()), (Some(PadConnection::Full), Some(mm(0.4)), Some(mm(0.3)), Some(mm(0.6))));
         // pad 2 was not touched
         assert_eq!(b.design().pad_zone_facts("C1", "0402", 1, 2, "2"), Default::default());
     }
@@ -139,13 +139,13 @@ mod tests {
     fn the_footprints_own_connection_is_inherited_by_pads_that_do_not_set_one() {
         let (m, d) = placed();
         let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-        b.apply(&Cmd::SetFootprintZoneConnection { part: "C1".into(), zone_connection: Some(PadConnection::None), clearance: Some(Nm::new(900)) }).unwrap();
+        b.apply(&Cmd::SetFootprintZoneConnection { part: "C1".into(), zone_connection: Some(PadConnection::None), clearance: Some(mm(0.9)) }).unwrap();
         let facts = b.design().pad_zone_facts("C1", "0402", 0, 2, "1");
-        assert_eq!((facts.footprint_connection, facts.clearance()), (Some(PadConnection::None), Some(Nm::new(900))), "the footprint's facts reach its pads");
+        assert_eq!((facts.footprint_connection, facts.clearance()), (Some(PadConnection::None), Some(mm(0.9))), "the footprint's facts reach its pads");
         // a pad's own clearance beats the footprint's
-        b.apply(&Cmd::SetPadZoneOverrides { part: "C1".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(Nm::new(250)) }).unwrap();
-        assert_eq!(b.design().pad_zone_facts("C1", "0402", 0, 2, "1").clearance(), Some(Nm::new(250)));
-        assert_eq!(b.design().pad_zone_facts("C1", "0402", 1, 2, "2").clearance(), Some(Nm::new(900)));
+        b.apply(&Cmd::SetPadZoneOverrides { part: "C1".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(mm(0.25)) }).unwrap();
+        assert_eq!(b.design().pad_zone_facts("C1", "0402", 0, 2, "1").clearance(), Some(mm(0.25)));
+        assert_eq!(b.design().pad_zone_facts("C1", "0402", 1, 2, "2").clearance(), Some(mm(0.9)));
     }
 
     #[test]
@@ -184,8 +184,8 @@ mod tests {
 
     #[test]
     fn the_commands_read_the_json_the_studio_sends() {
-        let c: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_pad_zone_overrides", "part": "C1", "pad": "1", "zone_connection": "Full", "thermal_gap": 400 })).unwrap();
-        assert!(matches!(c, Cmd::SetPadZoneOverrides { zone_connection: Some(PadConnection::Full), thermal_gap: Some(g), thermal_spoke_width: None, .. } if g == Nm::new(400)));
+        let c: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_pad_zone_overrides", "part": "C1", "pad": "1", "zone_connection": "Full", "thermal_gap": 400_000 })).unwrap();
+        assert!(matches!(c, Cmd::SetPadZoneOverrides { zone_connection: Some(PadConnection::Full), thermal_gap: Some(g), thermal_spoke_width: None, .. } if g == mm(0.4)));
         let c: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_footprint_zone_connection", "part": "C1", "zone_connection": null })).unwrap();
         assert!(matches!(c, Cmd::SetFootprintZoneConnection { zone_connection: None, clearance: None, .. }));
     }

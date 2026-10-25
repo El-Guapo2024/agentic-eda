@@ -421,7 +421,7 @@ mod tests {
 
 #[cfg(test)]
 mod verb_tests {
-    use eda_model::units::{mm, um, Nm};
+    use eda_model::units::{mm, Nm};
     use super::*;
     use crate::{Cmd, Domain};
     use eda_model::ir::{Design, LibraryPad, LibrarySymbolGraphic, LibrarySymbolPin};
@@ -442,7 +442,7 @@ mod verb_tests {
             id: String::new(),
             number: number.into(),
             at: eda_model::ir::Point { x, y: Nm::ZERO },
-            size: (um(1.0), Nm::new(600)),
+            size: (mm(1.0), mm(0.6)),
             offset: eda_model::ir::Point::default(),
             shape: eda_model::ir::LibraryPadShape::Rect,
             kind: eda_model::footprint::PadKind::Smd,
@@ -467,7 +467,7 @@ mod verb_tests {
 
     fn footprint_with_pads(name: &str) -> LibraryFootprint {
         let mut fp = LibraryFootprint::new_empty(name);
-        fp.pads = vec![pad("1", Nm::new(-1000)), pad("2", Nm::new(1000))];
+        fp.pads = vec![pad("1", mm(-1.0)), pad("2", mm(1.0))];
         fp.assign_missing_ids();
         fp
     }
@@ -501,20 +501,20 @@ mod verb_tests {
     fn import_pad_settings_copies_the_padstack_and_never_the_number_or_position() {
         let mut master = pad("M", Nm::ZERO);
         master.shape = eda_model::ir::LibraryPadShape::Circle;
-        master.size = (Nm::new(1600), Nm::new(900)); // an inconsistent circle: the import squares it from the x size
+        master.size = (mm(1.6), mm(0.9)); // an inconsistent circle: the import squares it from the x size
         master.kind = eda_model::footprint::PadKind::ThroughHole;
-        master.drill = Some(Nm::new(800));
+        master.drill = Some(mm(0.8));
         master.rot = 90_000;
         master.layers = vec!["*.Cu".into(), "*.Mask".into()];
-        master.clearance_override = Some(Nm::new(250));
-        let mut dst = pad("7", Nm::new(5000));
+        master.clearance_override = Some(mm(0.25));
+        let mut dst = pad("7", mm(5.0));
         import_pad_settings(&mut dst, &master);
         assert_eq!(dst.number, "7");
-        assert_eq!(dst.at.x, um(5.0));
-        assert_eq!((dst.shape, dst.size, dst.drill, dst.rot), (eda_model::ir::LibraryPadShape::Circle, (Nm::new(1600), Nm::new(1600)), Some(Nm::new(800)), 90_000));
+        assert_eq!(dst.at.x, mm(5.0));
+        assert_eq!((dst.shape, dst.size, dst.drill, dst.rot), (eda_model::ir::LibraryPadShape::Circle, (mm(1.6), mm(1.6)), Some(mm(0.8)), 90_000));
         assert_eq!(dst.kind, eda_model::footprint::PadKind::ThroughHole);
         assert_eq!(dst.layers, vec!["*.Cu".to_string(), "*.Mask".to_string()]);
-        assert_eq!(dst.clearance_override, Some(Nm::new(250)));
+        assert_eq!(dst.clearance_override, Some(mm(0.25)));
     }
 
     #[test]
@@ -523,31 +523,31 @@ mod verb_tests {
         use eda_model::ir::{ChamferCorners, Point, Shape};
         let mut master = pad("M", Nm::ZERO);
         master.shape = eda_model::ir::LibraryPadShape::Custom;
-        master.trapezoid_delta = Some((Nm::ZERO, Nm::new(200)));
+        master.trapezoid_delta = Some((Nm::ZERO, mm(0.2)));
         master.chamfer_ratio = Some(0.3);
         master.chamfer_corners = ChamferCorners { top_left: true, bottom_right: true, ..Default::default() };
         master.custom = Some(PadCustom {
             anchor: PadAnchor::Rect,
             zone: CustomZoneMode::ConvexHull,
-            primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::new(200), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::new(1500), y: Nm::ZERO } }, proxy: false }],
+            primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: mm(0.2), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.5), y: Nm::ZERO } }, proxy: false }],
         });
-        let mut dst = pad("7", Nm::new(5000));
+        let mut dst = pad("7", mm(5.0));
         assert_eq!(dst.custom, None);
         import_pad_settings(&mut dst, &master);
         // What `PAD::ImportSettingsFrom` copies is the pad's whole shape, whatever kind it is; the number and position stay.
         assert_eq!(dst.custom, master.custom);
         assert_eq!((dst.shape, dst.trapezoid_delta, dst.chamfer_ratio, dst.chamfer_corners), (master.shape, master.trapezoid_delta, master.chamfer_ratio, master.chamfer_corners));
-        assert_eq!((dst.number.as_str(), dst.at.x), ("7", um(5.0)));
+        assert_eq!((dst.number.as_str(), dst.at.x), ("7", mm(5.0)));
     }
 
     #[test]
     fn import_pad_settings_drops_the_hole_of_an_smd_master_and_the_number_of_an_npth_one() {
         let mut master = pad("M", Nm::ZERO);
         master.kind = eda_model::footprint::PadKind::Smd;
-        master.drill = Some(Nm::new(500)); // a stray hole on an SMD master is not carried over
+        master.drill = Some(mm(0.5)); // a stray hole on an SMD master is not carried over
         let mut dst = pad("3", Nm::ZERO);
         dst.kind = eda_model::footprint::PadKind::ThroughHole;
-        dst.drill = Some(Nm::new(900));
+        dst.drill = Some(mm(0.9));
         import_pad_settings(&mut dst, &master);
         assert_eq!(dst.drill, None, "SetDrillSize( 0, 0 ) for an SMD master");
 
@@ -569,15 +569,15 @@ mod verb_tests {
         let mut src = footprint_with_pads("P").pads[0].clone();
         src.id = ids[0].clone();
         src.rot = 180_000;
-        src.size = (um(2.0), Nm::new(1600));
+        src.size = (mm(2.0), mm(1.6));
         src.kind = eda_model::footprint::PadKind::ThroughHole;
-        src.drill = Some(Nm::new(700));
+        src.drill = Some(mm(0.7));
         src.layers = vec!["*.Cu".into(), "*.Mask".into()];
         b.apply(&Cmd::EditPad { footprint: "P".into(), id: ids[0].clone(), pad: src }).unwrap();
         b.apply(&Cmd::PushPadProperties { footprint: "P".into(), source_pad_id: ids[0].clone(), filter_shape: false, filter_orientation: false, filter_layers: false, filter_type: false }).unwrap();
         let fp = b.design().footprint_library.as_ref().unwrap().by_name("P").unwrap();
         let target = fp.pads.iter().find(|p| p.id == ids[1]).unwrap();
-        assert_eq!((target.rot, target.kind, target.drill), (180_000, eda_model::footprint::PadKind::ThroughHole, Some(Nm::new(700))), "orientation and pad type travel too once their filters are off");
+        assert_eq!((target.rot, target.kind, target.drill), (180_000, eda_model::footprint::PadKind::ThroughHole, Some(mm(0.7))), "orientation and pad type travel too once their filters are off");
         assert_eq!(target.number, "2");
     }
 

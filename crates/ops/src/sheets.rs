@@ -305,7 +305,7 @@ mod tests {
     fn reorganize_keeps_the_places_of_fields_and_the_looks_of_fields_and_labels() {
         let model = mcu30();
         // R3: the user put the Reference far to the left and hid the Value. U1: Autoplace Fields' places, but the Value is bold and larger.
-        let custom = vec![FieldPlacement { h: eda_model::ir::TextJustify::Right, ..placement("Reference", Nm::new(-6_350), Nm::ZERO) }, FieldPlacement { visible: false, ..placement("Value", Nm::new(2_540), Nm::new(5_080)) }];
+        let custom = vec![FieldPlacement { h: eda_model::ir::TextJustify::Right, ..placement("Reference", mm(-6.35), Nm::ZERO) }, FieldPlacement { visible: false, ..placement("Value", mm(2.54), mm(5.08)) }];
         let mut label_net = String::new();
         let labelled_on_new_sheets: BTreeSet<String> = {
             let mut probe = flat_board(&model);
@@ -318,13 +318,13 @@ mod tests {
             let u1 = root.field_layout.get_mut("U1").expect("a derivation stores the places of every symbol's fields");
             let value = u1.iter_mut().find(|f| f.name == "Value").unwrap();
             value.bold = true;
-            value.size_nm = Nm::new(1_778);
+            value.size_nm = mm(1.778);
             assert!(root.extras.fields_autoplaced.contains_key("U1"));
             // a label of a net, set in a look of its own
             // (one the new sheets draw a label for: a net between two modules)
             let l = root.labels.iter().find(|l| l.kind.is_local() && labelled_on_new_sheets.contains(&l.net)).expect("the flat design has a local label of a net the new sheets label").clone();
             label_net = l.net.clone();
-            root.extras.label_looks.insert(l.id.clone(), LabelLook { size_nm: Nm::new(2_032), bold: true, italic: false, auto_rotate: false });
+            root.extras.label_looks.insert(l.id.clone(), LabelLook { size_nm: mm(2.032), bold: true, italic: false, auto_rotate: false });
         });
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         let d = b.design();
@@ -337,7 +337,7 @@ mod tests {
 
         let u1 = screen_with(d, "U1");
         let value = u1.field_layout["U1"].iter().find(|f| f.name == "Value").unwrap();
-        assert!(value.bold && value.size_nm == Nm::new(1_778), "Autoplace Fields placed it again, and it is still bold and larger: {value:?}");
+        assert!(value.bold && value.size_nm == mm(1.778), "Autoplace Fields placed it again, and it is still bold and larger: {value:?}");
         let reference = u1.field_layout["U1"].iter().find(|f| f.name == "Reference").unwrap();
         assert!(!reference.bold && reference.size_nm == Nm::ZERO);
 
@@ -345,7 +345,7 @@ mod tests {
         let all: usize = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.labels.iter()).filter(|l| l.net == label_net).count();
         assert!(all > 0 && looked.len() == all, "every label of {label_net} has the net's look ({} of {all})", looked.len());
         let any = d.sheet_contents.as_ref().unwrap().values().find_map(|s| s.labels.iter().find(|l| l.net == label_net).map(|l| s.extras.label_looks[&l.id])).unwrap();
-        assert_eq!((any.size_nm, any.bold), (Nm::new(2_032), true));
+        assert_eq!((any.size_nm, any.bold), (mm(2.032), true));
     }
 
     /// A symbol drawn in the alternate body style of its library symbol is laid out in it, and stays in it.
@@ -485,7 +485,7 @@ mod tests {
         let mcu = root_before.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().clone();
         let file = mcu.file.clone();
         let at0 = b.design().sheet_contents.as_ref().unwrap()[&file].symbols.iter().find(|s| s.id == "U1").unwrap().at;
-        let to = Point { x: at0.x + Nm::new(2_540), y: at0.y + Nm::new(1_270) };
+        let to = Point { x: at0.x + mm(2.54), y: at0.y + mm(1.27) };
         let cmd = Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::MoveSymbol { id: "U1".into(), x: to.x, y: to.y, unit: None }) };
         assert_eq!(cmd.domain(), Domain::Schematic, "an edit on a sheet is a schematic edit");
         b.apply(&cmd).unwrap();
@@ -495,13 +495,13 @@ mod tests {
         assert_eq!(after.schematic.as_ref().unwrap().sheets.len(), root_before.sheets.len());
         assert_eq!(after.schematic.as_ref().unwrap().wires.len(), root_before.wires.len());
         // The drawing verbs reach the sheet too.
-        let add = Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::AddSchText { content: "note".into(), at: to, angle_millideg: 0, size_nm: Nm::new(1_270) }) };
+        let add = Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::AddSchText { content: "note".into(), at: to, angle_millideg: 0, size_nm: mm(1.27) }) };
         b.apply(&add).unwrap();
         assert_eq!(b.design().sheet_contents.as_ref().unwrap()[&file].texts.len(), 1);
         assert!(b.design().schematic.as_ref().unwrap().texts.is_empty(), "nothing leaked onto the root");
         // An unknown path is refused and changes nothing.
         let before = serde_json::to_string(b.design()).unwrap();
-        let bad = Cmd::OnSheet { sheet: "no_such_sheet".into(), cmd: Box::new(Cmd::AddSchText { content: "x".into(), at: to, angle_millideg: 0, size_nm: Nm::new(1_270) }) };
+        let bad = Cmd::OnSheet { sheet: "no_such_sheet".into(), cmd: Box::new(Cmd::AddSchText { content: "x".into(), at: to, angle_millideg: 0, size_nm: mm(1.27) }) };
         assert_eq!(b.apply(&bad).unwrap_err()[0].check, "ops_unknown_sheet");
         assert_eq!(serde_json::to_string(b.design()).unwrap(), before);
         // A failing inner command leaves the design untouched too.
