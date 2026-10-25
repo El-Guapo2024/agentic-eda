@@ -439,7 +439,7 @@ mod tests {
         assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (Nm::new(152_400), Nm::new(152_400)));
         assert_eq!((t.cells[0].style.h_align, t.cells[0].style.v_align, t.cells[0].style.height_nm), (eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, mm(1.27)));
         // no margins: the legacy margin of the cell (the stroke's half and three quarters of 1.27 mm)
-        assert!(t.cells[0].margins.iter().all(|m| *m == Nm::from_raw_shim(76_200 + 952_500)), "{:?}", t.cells[0].margins);
+        assert!(t.cells[0].margins.iter().all(|m| *m == Nm::new(76_200 + 952_500)), "{:?}", t.cells[0].margins);
         // and nothing is written for the strokes of a table that draws none
         let mut out = String::new();
         write(&mut out, &t, false);

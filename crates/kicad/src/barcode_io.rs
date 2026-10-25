@@ -11,9 +11,9 @@ use crate::sexpr::{self, Sexpr};
 use crate::{fmt_mm_f, mm, mm_to_nm, sexpr_str};
 
 /// `PCB_BARCODE`'s own defaults: 40 mm square, a QR code of error correction level L on `Dwgs.User`, the text printed.
-const DEFAULT_SIZE_NM: i64 = 40_000_000;
+const DEFAULT_SIZE_NM: Nm = Nm::new(40_000_000);
 /// The height of a `PCB_TEXT` that nothing sized (1.5 mm).
-const DEFAULT_TEXT_HEIGHT_NM: i64 = 1_500_000;
+const DEFAULT_TEXT_HEIGHT_NM: Nm = Nm::new(1_500_000);
 
 fn yes(item: &[Sexpr], name: &str) -> Option<bool> {
     sexpr::find(item, name).map(|l| sexpr::txt(l, 1).map_or(true, |v| v != "no"))
@@ -29,10 +29,10 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Barcode> {
         at: Point { x: mm_to_nm(x), y: mm_to_nm(y) },
         angle,
         layer: sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Dwgs.User").to_string(),
-        width_nm: Nm::from_raw_shim(DEFAULT_SIZE_NM),
-        height_nm: Nm::from_raw_shim(DEFAULT_SIZE_NM),
+        width_nm: DEFAULT_SIZE_NM,
+        height_nm: DEFAULT_SIZE_NM,
         text: sexpr::find(item, "text").and_then(|t| sexpr::txt(t, 1)).unwrap_or("").to_string(),
-        text_height_nm: Nm::from_raw_shim(DEFAULT_TEXT_HEIGHT_NM),
+        text_height_nm: DEFAULT_TEXT_HEIGHT_NM,
         kind: BarcodeKind::default(),
         ecc: EccLevel::default(),
         show_text: true,

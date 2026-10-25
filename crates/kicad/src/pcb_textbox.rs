@@ -14,11 +14,11 @@ use crate::sexpr::{self, Sexpr};
 use crate::{fmt_mm_f, mm, mm_to_nm, sexpr_str};
 
 /// `STROKE_PARAMS`' width of a text box that says nothing: KiCad's `STROKE_PARAMS stroke( -1, LINE_STYLE::SOLID )` before the file's `(stroke ..)`.
-const NO_STROKE: i64 = -1;
+const NO_STROKE: Nm = Nm::new(-1);
 /// The first board file version with an explicit `(border yes|no)`; before it a text box had a border when its stroke width was not negative.
 const FIRST_BORDER_FLAG: i64 = 20230825;
 /// The text size of a text with no `(size ..)` in its effects (`parseEDA_TEXT`: "force legacy default units", 60 mils).
-const LEGACY_TEXT_SIZE_NM: i64 = 1_524_000;
+const LEGACY_TEXT_SIZE_NM: Nm = Nm::new(1_524_000);
 
 fn yes(item: &[Sexpr], name: &str) -> Option<bool> {
     sexpr::find(item, name).map(|l| sexpr::txt(l, 1).map_or(true, |v| v != "no"))
@@ -54,7 +54,7 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
 
     // `(stroke (width W) (type T) [(color r g b a)])`: a box with no stroke token has `STROKE_PARAMS( -1, SOLID )`.
     let stroke = sexpr::find(item, "stroke");
-    let width = stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::from_raw_shim(NO_STROKE));
+    let width = stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(NO_STROKE);
     let line_style = stroke.and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1)).map(LineStyle::from_token).unwrap_or(LineStyle::Solid);
     let stroke_color = stroke.and_then(|s| sexpr::find(s, "color")).map(|c| c.iter().skip(1).filter_map(Sexpr::text).collect::<Vec<_>>().join(" ")).filter(|c| !c.is_empty());
     // `if( m_requiredVersion < 20230825 ) aTextBox->SetBorderEnabled( stroke.GetWidth() >= 0 );`
@@ -66,7 +66,7 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
     let has_effects = sexpr::find(item, "effects").is_some();
     let style = crate::board_text_io::read_style(item);
     let has_size = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).is_some();
-    let size_nm = if has_size { style.size_nm } else { Nm::from_raw_shim(LEGACY_TEXT_SIZE_NM) };
+    let size_nm = if has_size { style.size_nm } else { LEGACY_TEXT_SIZE_NM };
 
     let layer = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Dwgs.User").to_string();
     let angle = ((sexpr::find(item, "angle").and_then(|a| sexpr::num(a, 1)).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
@@ -221,7 +221,7 @@ mod tests {
     fn a_box_with_no_margins_has_the_legacy_margin_and_one_with_no_effects_is_left_and_centre() {
         let b = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (border yes) (stroke (width 0.2) (type solid))))"#);
         // 0.2 / 2 + 1.524 * 0.75
-        assert_eq!(b.margin_left_nm, Nm::from_raw_shim(100_000 + 1_143_000));
+        assert_eq!(b.margin_left_nm, Nm::from_mm(0.1) + Nm::from_mm(1.143));
         assert_eq!((b.halign, b.valign, b.size_nm), (TextJustify::Left, TextVAlign::Center, Nm::from_mm(1.524)));
         // The effects of a file that wrote none of the justification are centre and centre.
         let c = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15)))))"#);

@@ -330,7 +330,7 @@ fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
 fn sheet_box_mm(c: &CopiedSymbol<'_>) -> (f64, f64, f64, f64) {
     let (x0, y0, x1, y1) = eda_engine::geometry::real_symbol_bbox(&c.drawn(), c.sym.unit);
     let angle = c.sym.rot as f64 / 1000.0;
-    let (ox, oy) = (c.origin.x.raw_shim() as f64 / 1e6, c.origin.y.raw_shim() as f64 / 1e6);
+    let (ox, oy) = (c.origin.x.mm(), c.origin.y.mm());
     let pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|p| {
         let (dx, dy) = place_offset_mm(angle, c.sym.mirrored, c.sym.mirror_y, p);
         (ox + dx, oy + dy)
@@ -345,7 +345,7 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, l
     let sym = c.sym;
     let part = input.model.part(&sym.id);
     let yes = |b: bool| if b { "yes" } else { "no" };
-    let (ox, oy) = (c.origin.x.raw_shim() as f64 / 1e6, c.origin.y.raw_shim() as f64 / 1e6);
+    let (ox, oy) = (c.origin.x.mm(), c.origin.y.mm());
     let _ = writeln!(out, "\t(symbol");
     // a symbol whose pins Swap Pins moved names its own copy of the library symbol (`SCH_SCREEN::Append`)
     if let Some(name) = lib_name {
@@ -411,7 +411,7 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let angle = p.rot as f64 / 1000.0;
     let pin_local = engine.pins.first().map(|pin| (pin.at.x, pin.at.y)).unwrap_or((0.0, 0.0));
     let (dx, dy) = place_offset_mm(angle, false, false, pin_local);
-    let (ox, oy) = (p.at.x.raw_shim() as f64 / 1e6 - dx, p.at.y.raw_shim() as f64 / 1e6 - dy);
+    let (ox, oy) = (p.at.x.mm() - dx, p.at.y.mm() - dy);
     let _ = writeln!(out, "\t(symbol");
     let _ = writeln!(out, "\t\t(lib_id {})", sexpr_str(&p.lib_id));
     let _ = writeln!(out, "\t\t(at {} {} {})", fmt_mm_f(ox), fmt_mm_f(oy), fmt_mm_f(angle));

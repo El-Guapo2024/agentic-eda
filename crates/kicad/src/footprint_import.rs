@@ -47,9 +47,9 @@ fn hidden(list: &[Sexpr]) -> bool {
 }
 
 /// A stroke width in um: `(stroke (width w))`, else the older `(width w)`, else KiCad's 0.12 mm default.
-fn stroke_width(item: &[Sexpr]) -> i64 {
+fn stroke_width(item: &[Sexpr]) -> Nm {
     let w = sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1));
-    (mm_to_nm(w.unwrap_or(0.12))).raw_shim()
+    mm_to_nm(w.unwrap_or(0.12))
 }
 
 /// `(fill yes|solid)` / `(fill (type solid|outline|...))`.
@@ -103,33 +103,33 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
             }
             Some("fp_line") => {
                 if let (Some(start), Some(end)) = (point(child, "start"), point(child, "end")) {
-                    fp.graphics.push(Shape::Segment { id: String::new(), layer: layer_of(child), stroke_width: Nm::from_raw_shim(stroke_width(child)), filled: false, start, end });
+                    fp.graphics.push(Shape::Segment { id: String::new(), layer: layer_of(child), stroke_width: stroke_width(child), filled: false, start, end });
                 }
             }
             Some("fp_arc") => match (point(child, "start"), point(child, "mid"), point(child, "end")) {
-                (Some(start), Some(mid), Some(end)) => fp.graphics.push(Shape::Arc { id: String::new(), layer: layer_of(child), stroke_width: Nm::from_raw_shim(stroke_width(child)), filled: false, start, mid, end }),
+                (Some(start), Some(mid), Some(end)) => fp.graphics.push(Shape::Arc { id: String::new(), layer: layer_of(child), stroke_width: stroke_width(child), filled: false, start, mid, end }),
                 _ => warnings.push("arcs in the pre-KiCad-7 (centre + angle) format were left out".to_string()),
             },
             Some("fp_rect") => {
                 if let (Some(start), Some(end)) = (point(child, "start"), point(child, "end")) {
-                    fp.graphics.push(Shape::Rect { id: String::new(), layer: layer_of(child), stroke_width: Nm::from_raw_shim(stroke_width(child)), filled: filled(child), start, end });
+                    fp.graphics.push(Shape::Rect { id: String::new(), layer: layer_of(child), stroke_width: stroke_width(child), filled: filled(child), start, end });
                 }
             }
             Some("fp_circle") => {
                 if let (Some(center), Some(end)) = (point(child, "center"), point(child, "end")) {
-                    fp.graphics.push(Shape::Circle { id: String::new(), layer: layer_of(child), stroke_width: Nm::from_raw_shim(stroke_width(child)), filled: filled(child), center, end });
+                    fp.graphics.push(Shape::Circle { id: String::new(), layer: layer_of(child), stroke_width: stroke_width(child), filled: filled(child), center, end });
                 }
             }
             Some("fp_poly") => {
                 let pts = xy_points(child);
                 if pts.len() >= 3 {
-                    fp.graphics.push(Shape::Polygon { id: String::new(), layer: layer_of(child), stroke_width: Nm::from_raw_shim(stroke_width(child)), filled: filled(child), pts });
+                    fp.graphics.push(Shape::Polygon { id: String::new(), layer: layer_of(child), stroke_width: stroke_width(child), filled: filled(child), pts });
                 }
             }
             Some("fp_curve") => {
                 let pts = xy_points(child);
                 if pts.len() == 4 {
-                    fp.graphics.push(Shape::Bezier { id: String::new(), layer: layer_of(child), stroke_width: Nm::from_raw_shim(stroke_width(child)), filled: false, start: pts[0], c1: pts[1], c2: pts[2], end: pts[3] });
+                    fp.graphics.push(Shape::Bezier { id: String::new(), layer: layer_of(child), stroke_width: stroke_width(child), filled: false, start: pts[0], c1: pts[1], c2: pts[2], end: pts[3] });
                 }
             }
             Some("fp_text") => match sexpr::txt(child, 1) {
@@ -435,12 +435,12 @@ mod tests {
     use crate::export_kicad_mod;
     use eda_model::ir::ChamferCorners;
 
-    fn pad(number: &str, kind: PadKind, shape: LibraryPadShape, at: (i64, i64), size: (i64, i64)) -> LibraryPad {
+    fn pad(number: &str, kind: PadKind, shape: LibraryPadShape, at: (Nm, Nm), size: (Nm, Nm)) -> LibraryPad {
         LibraryPad {
             id: String::new(),
             number: number.into(),
-            at: Point { x: Nm::from_raw_shim(at.0), y: Nm::from_raw_shim(at.1) },
-            size: (Nm::from_raw_shim(size.0), Nm::from_raw_shim(size.1)),
+            at: Point { x: at.0, y: at.1 },
+            size,
             offset: Point::default(),
             shape,
             kind,
@@ -469,18 +469,18 @@ mod tests {
         fp.keywords = "one two".into();
         fp.attributes = FootprintAttributes { smd: true, exclude_from_bom: true, exclude_from_position_files: true, dnp: false, ..FootprintAttributes::default() };
         fp.model = Some("${KICAD9_3DMODEL_DIR}/x.step".into());
-        let mut p1 = pad("1", PadKind::Smd, LibraryPadShape::RoundRect, (-1_000_000, 0), (800_000, 1_200_000));
+        let mut p1 = pad("1", PadKind::Smd, LibraryPadShape::RoundRect, (mm(-1.0), Nm::ZERO), (mm(0.8), mm(1.2)));
         p1.roundrect_ratio = Some(0.3);
         p1.rot = 90_000;
         p1.layers = vec!["F.Cu".into(), "F.Mask".into()];
         p1.clearance_override = Some(mm(0.2));
-        let mut p2 = pad("2", PadKind::ThroughHole, LibraryPadShape::Oval, (1_000_000, 0), (1_600_000, 2_000_000));
+        let mut p2 = pad("2", PadKind::ThroughHole, LibraryPadShape::Oval, (mm(1.0), Nm::ZERO), (mm(1.6), mm(2.0)));
         p2.drill = Some(mm(0.8));
         p2.offset = Point { x: mm(0.1), y: mm(-0.05) };
         p2.layers = vec!["*.Cu".into(), "*.Mask".into()];
-        let mut p3 = pad("3", PadKind::ThroughHole, LibraryPadShape::Circle, (0, 2_000_000), (1_700_000, 1_700_000));
+        let mut p3 = pad("3", PadKind::ThroughHole, LibraryPadShape::Circle, (Nm::ZERO, mm(2.0)), (mm(1.7), mm(1.7)));
         p3.drill_slot = Some((mm(0.6), mm(1.7)));
-        let p4 = pad("", PadKind::NonPlatedHole, LibraryPadShape::Circle, (0, -2_000_000), (900_000, 900_000));
+        let p4 = pad("", PadKind::NonPlatedHole, LibraryPadShape::Circle, (Nm::ZERO, mm(-2.0)), (mm(0.9), mm(0.9)));
         fp.pads = vec![p1, p2, p3, p4];
         fp.graphics = vec![
             Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.12), filled: false, start: Point { x: mm(-2.0), y: mm(-1.5) }, end: Point { x: mm(2.0), y: mm(-1.5) } },

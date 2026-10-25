@@ -23,7 +23,7 @@ pub(crate) struct ReadStyle {
 
 /// `GetPenSizeForNormal` and `GetPenSizeForBold` (`common/eda_text.cpp`): an eighth and a fifth of the glyph width.
 fn auto_pen_nm(width_nm: Nm, bold: bool) -> Nm {
-    Nm::from_raw_shim((width_nm.raw_shim() as f64 / if bold { 5.0 } else { 8.0 }).round() as i64)
+    Nm::kiround(width_nm.as_f64() / if bold { 5.0 } else { 8.0 })
 }
 
 /// The looks of the `gr_text` `item`.

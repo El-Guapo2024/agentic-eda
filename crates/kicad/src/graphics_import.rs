@@ -30,7 +30,7 @@ pub const KICAD_IU_PER_MM: f64 = 1_000_000.0;
 pub const DEFAULT_LINE_WIDTH_MM: f64 = 1.0;
 
 /// `ARC_HIGH_DEF` (0.005 mm) in nanometres: the accuracy `setupSplineOrLine` flattens a curve with to see whether it is one.
-pub const ARC_HIGH_DEF_NM: i64 = 5_000;
+pub const ARC_HIGH_DEF_NM: Nm = Nm::new(5_000);
 
 // ------------------------------------------------------------------------------------------------------------------ geometry
 
@@ -557,8 +557,8 @@ pub fn spline_or_line(start: (i64, i64), c1: (i64, i64), c2: (i64, i64), end: (i
     let s_e = (start, end);
     let mut degenerate = approx_collinear(s_e, (start, c1)) && approx_collinear(s_e, (end, c2));
     if !degenerate {
-        let p = |t: (i64, i64)| eda_model::ir::Point { x: Nm::from_raw_shim(t.0), y: Nm::from_raw_shim(t.1) };
-        degenerate = eda_model::bezier::bezier_polyline(p(start), p(c1), p(c2), p(end), Nm::from_raw_shim(ARC_HIGH_DEF_NM)).len() <= 2;
+        let p = |t: (i64, i64)| eda_model::ir::Point { x: Nm::new(t.0), y: Nm::new(t.1) };
+        degenerate = eda_model::bezier::bezier_polyline(p(start), p(c1), p(c2), p(end), ARC_HIGH_DEF_NM).len() <= 2;
     }
     if degenerate {
         // "segment smaller than MIN_SEG_LEN_ACCEPTABLE_NM nanometers are skipped"

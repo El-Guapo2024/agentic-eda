@@ -298,7 +298,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         let geom = eda_connectivity::dimension::compute_dimension_geometry(&moved);
         let uuid = duid(&format!("clip:dimension:{}", d.id));
         let text_uuid = duid(&format!("clip:dimension:{}:text", d.id));
-        write_dimension(&mut out, &moved, &DimensionArgs { uuid: &uuid, text_uuid: &text_uuid, locked: false, text: &geom.text, text_at: (geom.text_at.x.raw_shim(), geom.text_at.y.raw_shim()), text_angle_millideg: geom.text_angle });
+        write_dimension(&mut out, &moved, &DimensionArgs { uuid: &uuid, text_uuid: &text_uuid, locked: false, text: &geom.text, text_at: (geom.text_at.x, geom.text_at.y), text_angle_millideg: geom.text_angle });
         written.entry(d.id.clone()).or_default().push(uuid);
     }
     // Groups last, as KiCad writes them: a group names its members by uuid, and the parser resolves them once every item is read.
@@ -407,8 +407,8 @@ mod tests {
     use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, DrawingsSection, PlacementSection, Provenance, RoutingSection, TextJustify};
     use eda_model::{Net, Part, Pin, PinKind};
 
-    fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+    fn p(x: Nm, y: Nm) -> Point {
+        Point { x, y }
     }
 
     fn part(reference: &str, package: &str, nets: usize) -> Part {
@@ -427,8 +427,8 @@ mod tests {
             id: "dim_a".into(),
             layer: "Dwgs.User".into(),
             kind: DimensionKind::Aligned { height: Nm::from_mm(2.0) },
-            start: p(30_000_000, 30_000_000),
-            end: p(40_000_000, 30_000_000),
+            start: p(Nm::from_mm(30.0), Nm::from_mm(30.0)),
+            end: p(Nm::from_mm(40.0), Nm::from_mm(30.0)),
             prefix: String::new(),
             suffix: String::new(),
             override_text: None,
@@ -459,25 +459,25 @@ mod tests {
             placement: Some(PlacementSection {
                 outline: vec![],
                 footprints: vec![
-                    FootprintInstance { id: "C1".into(), at: p(110_000_000, 120_000_000), rot: 90_000, side: Side::Top, label: LabelSide::Above },
-                    FootprintInstance { id: "C2".into(), at: p(120_000_000, 120_000_000), rot: 0, side: Side::Bottom, label: LabelSide::Above },
+                    FootprintInstance { id: "C1".into(), at: p(Nm::from_mm(110.0), Nm::from_mm(120.0)), rot: 90_000, side: Side::Top, label: LabelSide::Above },
+                    FootprintInstance { id: "C2".into(), at: p(Nm::from_mm(120.0), Nm::from_mm(120.0)), rot: 0, side: Side::Bottom, label: LabelSide::Above },
                 ],
                 modules: vec![],
             }),
             routing: Some(RoutingSection {
                 tracks: vec![
-                    Track { id: "trk_a".into(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_mm(0.25), pts: vec![p(100_000_000, 100_000_000), p(110_000_000, 100_000_000), p(110_000_000, 105_000_000)], arc_mid_offset: None },
-                    Track::new_arc("GND".into(), "B.Cu".into(), Nm::from_mm(0.3), p(100_000_000, 110_000_000), p(105_000_000, 105_000_000), p(110_000_000, 110_000_000)),
+                    Track { id: "trk_a".into(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_mm(0.25), pts: vec![p(Nm::from_mm(100.0), Nm::from_mm(100.0)), p(Nm::from_mm(110.0), Nm::from_mm(100.0)), p(Nm::from_mm(110.0), Nm::from_mm(105.0))], arc_mid_offset: None },
+                    Track::new_arc("GND".into(), "B.Cu".into(), Nm::from_mm(0.3), p(Nm::from_mm(100.0), Nm::from_mm(110.0)), p(Nm::from_mm(105.0), Nm::from_mm(105.0)), p(Nm::from_mm(110.0), Nm::from_mm(110.0))),
                 ],
-                vias: vec![Via { id: "via_a".into(), net: "VIN".into(), at: p(110_000_000, 105_000_000), drill: Nm::from_mm(0.3), diameter: Nm::from_mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
-                zones: vec![Zone { id: "zone_a".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![p(90_000_000, 90_000_000), p(95_000_000, 90_000_000), p(95_000_000, 95_000_000), p(90_000_000, 95_000_000)], ..Default::default() }],
+                vias: vec![Via { id: "via_a".into(), net: "VIN".into(), at: p(Nm::from_mm(110.0), Nm::from_mm(105.0)), drill: Nm::from_mm(0.3), diameter: Nm::from_mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+                zones: vec![Zone { id: "zone_a".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![p(Nm::from_mm(90.0), Nm::from_mm(90.0)), p(Nm::from_mm(95.0), Nm::from_mm(90.0)), p(Nm::from_mm(95.0), Nm::from_mm(95.0)), p(Nm::from_mm(90.0), Nm::from_mm(95.0))], ..Default::default() }],
                 track_width_presets: vec![],
                 via_presets: vec![],
                 teardrop_settings: Default::default(),
             }),
             drawings: Some(DrawingsSection {
-                shapes: vec![Shape::Segment { id: "shp_a".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_mm(0.15), filled: false, start: p(100_000_000, 130_000_000), end: p(110_000_000, 130_000_000) }],
-                texts: vec![Text { id: "txt_a".into(), content: "hello".into(), at: p(100_000_000, 140_000_000), angle: 90_000, layer: "F.SilkS".into(), size_nm: Nm::from_mm(1.0), stroke_width: Nm::from_mm(0.15), justify: TextJustify::Left, mirror: false }],
+                shapes: vec![Shape::Segment { id: "shp_a".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_mm(0.15), filled: false, start: p(Nm::from_mm(100.0), Nm::from_mm(130.0)), end: p(Nm::from_mm(110.0), Nm::from_mm(130.0)) }],
+                texts: vec![Text { id: "txt_a".into(), content: "hello".into(), at: p(Nm::from_mm(100.0), Nm::from_mm(140.0)), angle: 90_000, layer: "F.SilkS".into(), size_nm: Nm::from_mm(1.0), stroke_width: Nm::from_mm(0.15), justify: TextJustify::Left, mirror: false }],
                 dimensions: vec![dimension],
                 groups: vec![Group { id: "grp_a".into(), name: "block".into(), member_ids: vec!["shp_a".into(), "txt_a".into(), "zone_a".into()], design_block: String::new() }],
                 locked_ids: vec!["trk_a".into()],
@@ -504,7 +504,7 @@ mod tests {
         let z = &mut design.routing.as_mut().unwrap().zones[0];
         z.smoothing = ZoneSmoothing::Fillet;
         z.corner_radius = Nm::from_mm(2.0);
-        let text = export_pcb_clipboard(&design, &model, &ids(&["zone_a"]), p(0, 0)).unwrap();
+        let text = export_pcb_clipboard(&design, &model, &ids(&["zone_a"]), p(Nm::ZERO, Nm::ZERO)).unwrap();
         assert!(text.contains("(smoothing fillet)") && text.contains("(radius 2)"), "{text}");
         let clip = parse_pcb_clipboard(&text).unwrap();
         assert_eq!((clip.zones[0].smoothing, clip.zones[0].corner_radius), (ZoneSmoothing::Fillet, Nm::from_mm(2.0)));
@@ -521,7 +521,7 @@ mod tests {
         });
         // A footprint on its own, and the same one inside a board fragment: the text says the same, and the paste reads it back.
         for names in [ids(&["C1"]), ids(&["C1", "zone_a"])] {
-            let text = export_pcb_clipboard(&design, &model, &names, p(110_000_000, 120_000_000)).unwrap();
+            let text = export_pcb_clipboard(&design, &model, &names, p(Nm::from_mm(110.0), Nm::from_mm(120.0))).unwrap();
             assert!(text.contains("(zone_connect 0)") && text.contains("(clearance 0.9)"), "the footprint's own: {text}");
             assert!(text.contains("(zone_connect 2)") && text.contains("(thermal_gap 0.4)") && text.contains("(thermal_bridge_width 0.3)") && text.contains("(thermal_bridge_angle 30)"), "the pad's: {text}");
             let clip = parse_pcb_clipboard(&text).unwrap();
@@ -531,7 +531,7 @@ mod tests {
             assert_eq!((edit.pads[0].number.as_str(), edit.pads[0].zone_connection, edit.pads[0].thermal_gap, edit.pads[0].thermal_spoke_width, edit.pads[0].thermal_spoke_angle_mdeg, edit.pads[0].clearance), ("2", Some(PadConnection::Full), Some(Nm::from_mm(0.4)), Some(Nm::from_mm(0.3)), Some(30_000), Some(Nm::from_mm(0.6))));
         }
         // C2 sets nothing, and its copy says so.
-        let clip = parse_pcb_clipboard(&export_pcb_clipboard(&design, &model, &ids(&["C2"]), p(0, 0)).unwrap()).unwrap();
+        let clip = parse_pcb_clipboard(&export_pcb_clipboard(&design, &model, &ids(&["C2"]), p(Nm::ZERO, Nm::ZERO)).unwrap()).unwrap();
         assert!(clip.footprints[0].zone_overrides.is_none());
     }
 
@@ -539,7 +539,7 @@ mod tests {
     fn a_copy_is_a_board_fragment_measured_from_the_reference_point() {
         let (design, model) = fixture();
         let arc = arc_track_id(&design);
-        let text = export_pcb_clipboard(&design, &model, &ids(&["trk_a", arc.as_str(), "via_a", "zone_a", "shp_a", "txt_a", "dim_a"]), p(100_000_000, 100_000_000)).unwrap();
+        let text = export_pcb_clipboard(&design, &model, &ids(&["trk_a", arc.as_str(), "via_a", "zone_a", "shp_a", "txt_a", "dim_a"]), p(Nm::from_mm(100.0), Nm::from_mm(100.0))).unwrap();
         assert!(text.starts_with("(kicad_pcb"), "{text}");
         assert!(text.contains("(segment (start 0 0) (end 10 0) (width 0.25) (layer \"F.Cu\") (net 2)"), "{text}");
         assert!(text.contains("(arc (start 0 10) (mid 5 5) (end 10 10) (width 0.3) (layer \"B.Cu\") (net 1)"), "{text}");
@@ -553,26 +553,26 @@ mod tests {
     fn what_a_copy_wrote_pastes_back_as_the_same_items_at_the_origin() {
         let (design, model) = fixture();
         let arc = arc_track_id(&design);
-        let text = export_pcb_clipboard(&design, &model, &ids(&["trk_a", arc.as_str(), "via_a", "zone_a", "shp_a", "txt_a", "dim_a", "C1", "C2", "grp_a"]), p(100_000_000, 100_000_000)).unwrap();
+        let text = export_pcb_clipboard(&design, &model, &ids(&["trk_a", arc.as_str(), "via_a", "zone_a", "shp_a", "txt_a", "dim_a", "C1", "C2", "grp_a"]), p(Nm::from_mm(100.0), Nm::from_mm(100.0))).unwrap();
         let clip = parse_pcb_clipboard(&text).unwrap();
 
         // The polyline track came back as its two segments, the arc as an arc.
         assert_eq!(clip.tracks.iter().filter(|t| t.net == "VIN").map(|t| t.pts.clone()).collect::<Vec<_>>().len(), 2);
-        assert!(clip.tracks.iter().any(|t| t.arc().is_some() && t.net == "GND" && t.layer == "B.Cu" && t.pts[0] == p(0, 10_000_000)), "{:?}", clip.tracks);
+        assert!(clip.tracks.iter().any(|t| t.arc().is_some() && t.net == "GND" && t.layer == "B.Cu" && t.pts[0] == p(Nm::ZERO, Nm::from_mm(10.0))), "{:?}", clip.tracks);
         assert_eq!(clip.vias.len(), 1);
-        assert_eq!((clip.vias[0].at, clip.vias[0].net.as_str(), clip.vias[0].from_layer.as_str()), (p(10_000_000, 5_000_000), "VIN", "F.Cu"));
-        assert_eq!((clip.zones.len(), clip.zones[0].net.as_str(), clip.zones[0].outline[0]), (1, "GND", p(-10_000_000, -10_000_000)));
-        assert_eq!(clip.shapes[0].points(), vec![p(0, 30_000_000), p(10_000_000, 30_000_000)]);
-        assert_eq!((clip.texts[0].content.as_str(), clip.texts[0].at, clip.texts[0].angle), ("hello", p(0, 40_000_000), 90_000));
-        assert_eq!((clip.dimensions[0].start, clip.dimensions[0].end), (p(-70_000_000, -70_000_000), p(-60_000_000, -70_000_000)));
+        assert_eq!((clip.vias[0].at, clip.vias[0].net.as_str(), clip.vias[0].from_layer.as_str()), (p(Nm::from_mm(10.0), Nm::from_mm(5.0)), "VIN", "F.Cu"));
+        assert_eq!((clip.zones.len(), clip.zones[0].net.as_str(), clip.zones[0].outline[0]), (1, "GND", p(Nm::from_mm(-10.0), Nm::from_mm(-10.0))));
+        assert_eq!(clip.shapes[0].points(), vec![p(Nm::ZERO, Nm::from_mm(30.0)), p(Nm::from_mm(10.0), Nm::from_mm(30.0))]);
+        assert_eq!((clip.texts[0].content.as_str(), clip.texts[0].at, clip.texts[0].angle), ("hello", p(Nm::ZERO, Nm::from_mm(40.0)), 90_000));
+        assert_eq!((clip.dimensions[0].start, clip.dimensions[0].end), (p(Nm::from_mm(-70.0), Nm::from_mm(-70.0)), p(Nm::from_mm(-60.0), Nm::from_mm(-70.0))));
 
         assert_eq!(clip.footprints.len(), 2);
         let c1 = clip.footprints.iter().find(|f| f.reference == "C1").unwrap();
-        assert_eq!((c1.at, c1.rot, c1.side), (p(10_000_000, 20_000_000), 90_000, Side::Top));
+        assert_eq!((c1.at, c1.rot, c1.side), (p(Nm::from_mm(10.0), Nm::from_mm(20.0)), 90_000, Side::Top));
         assert_eq!(c1.pad_nets, vec![("1".to_string(), "VIN".to_string()), ("2".to_string(), "GND".to_string())]);
         assert!(c1.definition.as_ref().is_some_and(|d| d.pads.len() == 2), "{c1:?}");
         let c2 = clip.footprints.iter().find(|f| f.reference == "C2").unwrap();
-        assert_eq!((c2.at, c2.side), (p(20_000_000, 20_000_000), Side::Bottom));
+        assert_eq!((c2.at, c2.side), (p(Nm::from_mm(20.0), Nm::from_mm(20.0)), Side::Bottom));
 
         // The group named three items, and still does.
         assert_eq!(clip.groups.len(), 1);
@@ -591,7 +591,7 @@ mod tests {
             Group { id: "grp_inner".into(), name: "inner".into(), member_ids: vec!["shp_a".into(), "zone_a".into()], design_block: String::new() },
         ];
         // Copying the outer group takes the inner group and what is in it along (`PCB_GROUP::DeepClone`).
-        let text = export_pcb_clipboard(&design, &model, &ids(&["grp_outer"]), p(100_000_000, 100_000_000)).unwrap();
+        let text = export_pcb_clipboard(&design, &model, &ids(&["grp_outer"]), p(Nm::from_mm(100.0), Nm::from_mm(100.0))).unwrap();
         assert_eq!(text.matches("\t(group ").count(), 2, "{text}");
         let clip = parse_pcb_clipboard(&text).unwrap();
         assert_eq!((clip.shapes.len(), clip.texts.len(), clip.zones.len()), (1, 1, 1), "the inner group's items travel too");
@@ -607,14 +607,14 @@ mod tests {
     #[test]
     fn a_footprint_copied_alone_is_bare_and_has_its_pads_on_no_net() {
         let (design, model) = fixture();
-        let text = export_pcb_clipboard(&design, &model, &ids(&["C1"]), p(110_000_000, 120_000_000)).unwrap();
+        let text = export_pcb_clipboard(&design, &model, &ids(&["C1"]), p(Nm::from_mm(110.0), Nm::from_mm(120.0))).unwrap();
         assert!(text.trim_start().starts_with("(footprint"), "{text}");
         assert!(!text.contains("(net "), "a lone footprint travels without its nets: {text}");
         assert!(text.contains("(at 0 0 -90)"), "moved so its anchor is the origin: {text}");
         let clip = parse_pcb_clipboard(&text).unwrap();
         assert!(clip.bare_footprint);
         assert_eq!(clip.footprints.len(), 1);
-        assert_eq!((clip.footprints[0].reference.as_str(), clip.footprints[0].at, clip.footprints[0].rot), ("C1", p(0, 0), 90_000));
+        assert_eq!((clip.footprints[0].reference.as_str(), clip.footprints[0].at, clip.footprints[0].rot), ("C1", p(Nm::ZERO, Nm::ZERO), 90_000));
         assert!(clip.footprints[0].pad_nets.is_empty());
     }
 
@@ -632,10 +632,10 @@ mod tests {
                 (polygon (pts (xy 1 0) (xy 2 0) (xy 2 1) (xy 1 1)))))"#;
         let clip = parse_pcb_clipboard(text).unwrap();
         assert!(clip.bare_footprint);
-        assert_eq!((clip.footprints[0].reference.as_str(), clip.footprints[0].at, clip.footprints[0].rot), ("U9", p(0, 0), 90_000));
+        assert_eq!((clip.footprints[0].reference.as_str(), clip.footprints[0].at, clip.footprints[0].rot), ("U9", p(Nm::ZERO, Nm::ZERO), 90_000));
         // `RotatePoint` by -90 takes the library point (x, y) to (-y, x) on the board.
         let zone = clip.zones.iter().find(|z| z.parent_footprint.as_deref() == Some("U9")).expect("the footprint's zone");
-        assert_eq!(zone.outline, vec![p(0, 1_000_000), p(0, 2_000_000), p(-1_000_000, 2_000_000), p(-1_000_000, 1_000_000)]);
+        assert_eq!(zone.outline, vec![p(Nm::ZERO, Nm::from_mm(1.0)), p(Nm::ZERO, Nm::from_mm(2.0)), p(Nm::from_mm(-1.0), Nm::from_mm(2.0)), p(Nm::from_mm(-1.0), Nm::from_mm(1.0))]);
     }
 
     #[test]
@@ -648,7 +648,7 @@ mod tests {
             (gr_text "note" (at 3 4 0) (layer "F.SilkS") (uuid "33333333-3333-4333-8333-333333333333") (effects (font (size 1 1) (thickness 0.15))))
         )"#;
         let clip = parse_pcb_clipboard(text).unwrap();
-        assert_eq!((clip.tracks.len(), clip.tracks[0].net.as_str(), clip.tracks[0].pts.clone()), (1, "Net-(R1-Pad1)", vec![p(1_000_000, 2_000_000), p(6_000_000, 2_000_000)]));
+        assert_eq!((clip.tracks.len(), clip.tracks[0].net.as_str(), clip.tracks[0].pts.clone()), (1, "Net-(R1-Pad1)", vec![p(Nm::from_mm(1.0), Nm::from_mm(2.0)), p(Nm::from_mm(6.0), Nm::from_mm(2.0))]));
         assert_eq!((clip.vias.len(), clip.vias[0].net.as_str()), (1, "Net-(R1-Pad1)"));
         assert_eq!(clip.texts[0].content, "note");
     }
@@ -658,6 +658,6 @@ mod tests {
         assert_eq!(parse_pcb_clipboard("hello world").unwrap_err()[0].check, "clipboard.not_kicad");
         assert_eq!(parse_pcb_clipboard("(kicad_sch (version 1))").unwrap_err()[0].check, "clipboard.not_kicad");
         assert_eq!(parse_pcb_clipboard("(kicad_pcb (version 20241229) (layers (0 \"F.Cu\" signal)))").unwrap_err()[0].check, "clipboard.empty", "a board with nothing in it has nothing to paste");
-        assert_eq!(export_pcb_clipboard(&fixture().0, &fixture().1, &ids(&["nope"]), p(0, 0)).unwrap_err()[0].check, "clipboard.unknown_item");
+        assert_eq!(export_pcb_clipboard(&fixture().0, &fixture().1, &ids(&["nope"]), p(Nm::ZERO, Nm::ZERO)).unwrap_err()[0].check, "clipboard.unknown_item");
     }
 }

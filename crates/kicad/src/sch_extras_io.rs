@@ -268,7 +268,7 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
 
 /// `SCH_TEXTBOX::GetLegacyTextMargin` for a box on `LAYER_NOTES`: half the stroke width plus 0.75 of the text height.
 pub fn default_text_box_margin(size_nm: Nm, stroke_width_nm: Nm) -> Nm {
-    Nm::from_raw_shim((stroke_width_nm.raw_shim() as f64 / 2.0).round() as i64) + Nm::from_raw_shim((size_nm.raw_shim() as f64 * 0.75).round() as i64)
+    Nm::kiround(stroke_width_nm.as_f64() / 2.0) + Nm::kiround(size_nm.as_f64() * 0.75)
 }
 
 /// One graphic read from a file, with whether it carried `(locked yes)`.
@@ -616,6 +616,6 @@ mod tests {
     #[test]
     fn text_box_margin_defaults_to_the_kicad_legacy_formula() {
         assert_eq!(default_text_box_margin(mm(1.27), Nm::ZERO), Nm::new(952_500));
-        assert_eq!(default_text_box_margin(mm(1.27), mm(0.2)), Nm::from_raw_shim(100_000 + 952_500));
+        assert_eq!(default_text_box_margin(mm(1.27), mm(0.2)), Nm::new(100_000 + 952_500));
     }
 }

@@ -112,7 +112,7 @@ const LAYERED: &[&str] = &["copper_sliver", "starved_thermal", "generic_warning"
 pub fn markers(e: &DrcExclusion) -> Vec<Value> {
     let Some(error_type) = error_type(&e.check).filter(|_| !LAYERED.contains(&e.check.as_str())) else { return Vec::new() };
     let items: Vec<Value> = e.items.iter().map(|u| json!({ "value": u })).collect();
-    let mut positions: Vec<[i64; 2]> = e.positions_nm.iter().map(|p| [p[0].raw_shim(), p[1].raw_shim()]).collect();
+    let mut positions: Vec<[Nm; 2]> = e.positions_nm.clone();
     positions.sort_unstable();
     positions.dedup();
     positions
@@ -148,7 +148,7 @@ pub fn project_entries(exclusions: &[DrcExclusion]) -> Vec<Value> {
 pub struct Listed {
     pub check: String,
     pub items: Vec<String>,
-    pub at: [i64; 2],
+    pub at: [Nm; 2],
     pub comment: String,
 }
 
@@ -176,7 +176,7 @@ fn listed(entry: &Value) -> Option<Listed> {
             let check = ERROR_TYPES.iter().find(|(_, t)| Some(*t) == error_type.as_str()).map(|(k, _)| k.to_string())?;
             let pos = marker.get("position").cloned().unwrap_or(Value::Null);
             // protobuf JSON prints a 64-bit integer as a string; a number is taken too.
-            let nm = |v: Option<Value>| v.and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0);
+            let nm = |v: Option<Value>| Nm::new(v.and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0));
             let at = [nm(field(&pos, "x_nm", "xNm")), nm(field(&pos, "y_nm", "yNm"))];
             let items = marker.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(|i| i.get("value").and_then(Value::as_str)).filter(|u| *u != NIL_UUID).map(String::from).collect()).unwrap_or_default();
             Some(Listed { check, items, at, comment: entry.get("comment").and_then(Value::as_str).unwrap_or("").to_string() })
@@ -196,7 +196,7 @@ fn from_text(text: &str) -> Option<Listed> {
     let props: Vec<&str> = text.split('|').collect();
     let check = props.first()?.to_string();
     error_type(&check)?;
-    let num = |i: usize| props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0);
+    let num = |i: usize| Nm::new(props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0));
     let item = |i: usize| props.get(i).map(|s| s.trim()).filter(|s| !s.is_empty() && *s != NIL_UUID).map(String::from);
     let items: Vec<String> = match check.as_str() {
         "copper_sliver" | "generic_warning" | "generic_error" => item(3).into_iter().collect(),
@@ -224,7 +224,7 @@ pub fn from_project(pro_text: &str, item_ids: &BTreeMap<String, String>, derived
         let Some(ids) = l.items.iter().map(|u| item_ids.get(u).cloned()).collect::<Option<Vec<String>>>() else { continue };
         let Some(items) = ids.iter().map(|id| uuid_of.get(id.as_str()).map(|u| u.to_string())).collect::<Option<Vec<String>>>() else { continue };
         let e = out.entry((l.check.clone(), items.clone())).or_insert_with(|| DrcExclusion { check: l.check.clone(), items, ids, positions_nm: Vec::new(), comment: l.comment.clone() });
-        e.positions_nm.push([Nm::from_raw_shim(l.at[0]), Nm::from_raw_shim(l.at[1])]);
+        e.positions_nm.push(l.at);
         if e.comment.is_empty() {
             e.comment = l.comment;
         }
@@ -234,26 +234,26 @@ pub fn from_project(pro_text: &str, item_ids: &BTreeMap<String, String>, derived
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
 
-    fn waived(check: &str, items: &[&str], positions: &[[i64; 2]], comment: &str) -> DrcExclusion {
-        DrcExclusion { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), ids: vec![], positions_nm: positions.iter().map(|p| [Nm::from_raw_shim(p[0]), Nm::from_raw_shim(p[1])]).collect(), comment: comment.into() }
+    fn waived(check: &str, items: &[&str], positions: &[[Nm; 2]], comment: &str) -> DrcExclusion {
+        DrcExclusion { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), ids: vec![], positions_nm: positions.to_vec(), comment: comment.into() }
     }
 
     #[test]
     fn a_marker_is_the_kind_of_finding_the_position_and_the_items_as_protobuf_json() {
-        let two = markers(&waived("clearance", &["u-1", "u-2"], &[[4_400_000, 22_225_000]], ""));
+        let two = markers(&waived("clearance", &["u-1", "u-2"], &[[mm(4.4), mm(22.225)]], ""));
         assert_eq!(two, vec![json!({ "errorType": "DRCET_CLEARANCE", "position": { "xNm": "4400000", "yNm": "22225000" }, "items": [{ "value": "u-1" }, { "value": "u-2" }] })]);
         // One item: one is named, no second one is made up.
-        let one = markers(&waived("annular_width", &["u-1"], &[[12_459_000, -18_390_000]], ""));
+        let one = markers(&waived("annular_width", &["u-1"], &[[mm(12.459), mm(-18.39)]], ""));
         assert_eq!(one, vec![json!({ "errorType": "DRCET_ANNULAR_WIDTH", "position": { "xNm": "12459000", "yNm": "-18390000" }, "items": [{ "value": "u-1" }] })]);
     }
 
     #[test]
     fn an_unconnected_pair_is_a_marker_like_any_other() {
         // The nightly before this one wrote a layer and a marker type into the text of a ratsnest marker; a record is the kind, the position and the items.
-        let m = markers(&waived("unconnected_items", &["p-1", "p-2"], &[[9_025_000, 26_200_000], [9_562_000, 26_200_000]], ""));
+        let m = markers(&waived("unconnected_items", &["p-1", "p-2"], &[[mm(9.025), mm(26.2)], [mm(9.562), mm(26.2)]], ""));
         assert_eq!(m.len(), 2);
         assert_eq!(m[0]["errorType"], "DRCET_UNCONNECTED_ITEMS");
         assert_eq!(m[1]["position"]["xNm"], "9562000");
@@ -261,17 +261,17 @@ mod tests {
 
     #[test]
     fn every_position_to_try_is_a_record_and_a_check_whose_marker_needs_a_layer_is_left_out() {
-        let e = waived("clearance", &["a", "b"], &[[2, 1], [1, 1], [1, 1]], "");
+        let e = waived("clearance", &["a", "b"], &[[Nm::new(2), Nm::new(1)], [Nm::new(1), Nm::new(1)], [Nm::new(1), Nm::new(1)]], "");
         assert_eq!(markers(&e).len(), 2, "the same position twice is one record");
-        assert!(markers(&waived("copper_sliver", &["a"], &[[1, 1]], "")).is_empty());
-        assert!(markers(&waived("starved_thermal", &["a", "b"], &[[1, 1]], "")).is_empty());
+        assert!(markers(&waived("copper_sliver", &["a"], &[[Nm::new(1), Nm::new(1)]], "")).is_empty());
+        assert!(markers(&waived("starved_thermal", &["a", "b"], &[[Nm::new(1), Nm::new(1)]], "")).is_empty());
         assert!(markers(&waived("clearance", &["a", "b"], &[], "")).is_empty(), "no position to try: the studio's own exclusion");
-        assert!(markers(&waived("not_a_check", &["a"], &[[1, 1]], "")).is_empty(), "a check the project cannot name");
+        assert!(markers(&waived("not_a_check", &["a"], &[[Nm::new(1), Nm::new(1)]], "")).is_empty(), "a check the project cannot name");
     }
 
     #[test]
     fn the_project_lists_each_marker_with_its_comment_sorted() {
-        let list = project_entries(&[waived("track_width", &["t"], &[[5, 5]], "thin on purpose"), waived("annular_width", &["v"], &[[1, 2]], "")]);
+        let list = project_entries(&[waived("track_width", &["t"], &[[Nm::new(5), Nm::new(5)]], "thin on purpose"), waived("annular_width", &["v"], &[[Nm::new(1), Nm::new(2)]], "")]);
         assert_eq!(
             list,
             vec![

@@ -474,7 +474,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             write_dimension(
                 &mut out,
                 d,
-                &DimensionArgs { uuid: &uuid, text_uuid: &text_uuid, locked: is_locked(&d.id), text: &geom.text, text_at: (geom.text_at.x.raw_shim(), geom.text_at.y.raw_shim()), text_angle_millideg: geom.text_angle },
+                &DimensionArgs { uuid: &uuid, text_uuid: &text_uuid, locked: is_locked(&d.id), text: &geom.text, text_at: (geom.text_at.x, geom.text_at.y), text_angle_millideg: geom.text_angle },
             );
         }
     }
@@ -1575,7 +1575,7 @@ const MAGIC_TEARDROP_ZONE_ID: u32 = 30000;
 fn teardrop_priorities(zones: &[Zone]) -> std::collections::HashMap<&str, u32> {
     let area = |z: &Zone| {
         let n = z.outline.len();
-        (0..n).map(|i| z.outline[i].x.raw_shim() as f64 * z.outline[(i + 1) % n].y.raw_shim() as f64 - z.outline[(i + 1) % n].x.raw_shim() as f64 * z.outline[i].y.raw_shim() as f64).sum::<f64>().abs() / 2.0
+        (0..n).map(|i| z.outline[i].x.as_f64() * z.outline[(i + 1) % n].y.as_f64() - z.outline[(i + 1) % n].x.as_f64() * z.outline[i].y.as_f64()).sum::<f64>().abs() / 2.0
     };
     let layer_rank = |z: &Zone| eda_model::layers::pcb_layer_id(&z.layer).unwrap_or(u32::MAX);
     let mut created: Vec<&Zone> = zones.iter().filter(|z| z.teardrop && z.priority == 0 && !z.id.is_empty()).collect();
@@ -1727,16 +1727,16 @@ mod tests {
     fn a_board_with_teardrops_keeps_them_through_kicad_clis_refill() {
         let (mut design, model) = fixture();
         assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(legacy_teardrops no)"));
-        let tri = |id: &str, size: i64, priority: u32| Zone {
+        let tri = |id: &str, size: Nm, priority: u32| Zone {
             id: id.into(),
             net: "GND".into(),
             layer: "F.Cu".into(),
-            outline: vec![Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) }, Point { x: Nm::from_raw_shim(1_000_000 + size), y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(1.0), y: Nm::from_raw_shim(1_000_000 + size) }],
+            outline: vec![Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(1.0) + size, y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) + size }],
             teardrop: true,
             priority,
             ..Default::default()
         };
-        design.routing.as_mut().unwrap().zones = vec![tri("small", 500_000, 0), tri("big", 900_000, 0), tri("kicads", 700_000, 30000)];
+        design.routing.as_mut().unwrap().zones = vec![tri("small", Nm::from_mm(0.5), 0), tri("big", Nm::from_mm(0.9), 0), tri("kicads", Nm::from_mm(0.7), 30000)];
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(legacy_teardrops yes)"), "{out}");
         let priorities: Vec<u32> = out.split("(zone").skip(1).filter_map(|z| z.split("(priority ").nth(1)).map(|p| p.split(')').next().unwrap().parse().unwrap()).collect();
@@ -3133,7 +3133,7 @@ mod tests {
             for pad in eda_model::footprint::placed_pads(&model, part, fp).unwrap() {
                 let key = format!("{}.{}", fp.id, pad.number);
                 let (x, y) = kicad[&key];
-                let (ex, ey) = (pad.center.x.raw_shim() as f64 / 1e6, pad.center.y.raw_shim() as f64 / 1e6);
+                let (ex, ey) = (pad.center.x.mm(), pad.center.y.mm());
                 assert!(
                     (x - ex).abs() < 1e-6 && (y - ey).abs() < 1e-6,
                     "{key} ({:?}, rot {}): KiCad puts it at ({x:.3}, {y:.3}), the engine routed to ({ex:.3}, {ey:.3})",

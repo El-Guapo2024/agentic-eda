@@ -204,7 +204,7 @@ pub fn marker(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sh
         Paths::SpecificMainAux if single && !path.is_empty() => (path.clone(), path.clone(), path),
         _ => return None,
     };
-    Some(ErcMarker { error_type: error_type.to_string(), at_nm: [Nm::from_raw_shim(at.x_nm), Nm::from_raw_shim(at.y_nm)], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
+    Some(ErcMarker { error_type: error_type.to_string(), at_nm: [Nm::new(at.x_nm), Nm::new(at.y_nm)], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
 }
 
 /// Whether an exclusion's marker and a finding's are of one sheet (`SCH_MARKER::GetSheetSpecificPath`): the same sheet path, or either not known (an
@@ -298,10 +298,10 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
         }
         // `ERC_ITEM::Create( key )` takes the first item type of the key: `pin_to_pin` is the warning (`pinTableWarning` comes before the error)
         let error_type = error_type(check, "warning")?;
-        let iu = |i: usize| props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0) * 100;
+        let iu = |i: usize| Nm::new(props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0) * eda_model::units::SCH_IU_NM);
         let items = [3, 4].iter().filter_map(|&i| props.get(i).map(|s| s.trim())).filter(|u| !u.is_empty() && *u != NIL_UUID).map(String::from).collect();
         let p = |i: usize| props.get(i).map(|t| text_path(t)).unwrap_or_default();
-        Some((ErcMarker { error_type: error_type.to_string(), at_nm: [Nm::from_raw_shim(iu(1)), Nm::from_raw_shim(iu(2))], items, sheet: p(5), main_sheet: p(6), aux_sheet: p(7) }, comment.to_string()))
+        Some((ErcMarker { error_type: error_type.to_string(), at_nm: [iu(1), iu(2)], items, sheet: p(5), main_sheet: p(6), aux_sheet: p(7) }, comment.to_string()))
     };
     entries
         .iter()
@@ -312,11 +312,11 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
                 check_of(&error_type)?;
                 let pos = field(m, "position", "position");
                 // protobuf JSON prints a 64-bit integer as a string; a number is taken too
-                let nm = |v: Value| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0);
+                let nm = |v: Value| Nm::new(v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0));
                 let items = m.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(|i| i.get("value").and_then(Value::as_str)).filter(|u| *u != NIL_UUID).map(String::from).collect()).unwrap_or_default();
                 let marker = ErcMarker {
                     error_type,
-                    at_nm: [Nm::from_raw_shim(nm(field(&pos, "x_nm", "xNm"))), Nm::from_raw_shim(nm(field(&pos, "y_nm", "yNm")))],
+                    at_nm: [nm(field(&pos, "x_nm", "xNm")), nm(field(&pos, "y_nm", "yNm"))],
                     items,
                     sheet: path(field(m, "sheet_specific_path", "sheetSpecificPath")),
                     main_sheet: path(field(m, "main_item_sheet_path", "mainItemSheetPath")),

@@ -699,8 +699,8 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
                                 signal_layer: layer_of(r, "signal_layer")?,
                                 top_reference_layer: layer_of(r, "top_reference_layer"),
                                 bottom_reference_layer: layer_of(r, "bottom_reference_layer"),
-                                width_nm: Nm::from_raw_shim(int(r, "width")),
-                                diff_pair_gap_nm: Nm::from_raw_shim(int(r, "diff_pair_gap")),
+                                width_nm: Nm::new(int(r, "width")),
+                                diff_pair_gap_nm: Nm::new(int(r, "diff_pair_gap")),
                                 delay_as_per_mm: int(r, "delay"),
                             })
                         })
@@ -1450,8 +1450,8 @@ pub(crate) fn footprint_courtyard_outlines(fp: &[Sexpr], side: Side) -> Vec<Vec<
     }
     for item in sexpr::find_all(fp, "fp_circle").filter(|it| is_crtyd(it)) {
         let (Some(c), Some(e)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
-        let r = ((e.x - c.x).raw_shim() as f64).hypot((e.y - c.y).raw_shim() as f64);
-        outlines.push((0..32).map(|i| { let t = i as f64 * std::f64::consts::TAU / 32.0; Point { x: c.x + Nm::from_raw_shim((r * t.cos()).round() as i64), y: c.y + Nm::from_raw_shim((r * t.sin()).round() as i64) } }).collect());
+        let r = ((e.x - c.x).as_f64()).hypot((e.y - c.y).as_f64());
+        outlines.push((0..32).map(|i| { let t = i as f64 * std::f64::consts::TAU / 32.0; Point { x: c.x + Nm::kiround(r * t.cos()), y: c.y + Nm::kiround(r * t.sin()) } }).collect());
     }
     let mut edges: Vec<(Point, Point)> = Vec::new();
     for item in sexpr::find_all(fp, "fp_line").filter(|it| is_crtyd(it)) {
@@ -1513,8 +1513,8 @@ fn footprint_courtyard_half(fp: &[Sexpr], side: Side) -> Option<(Nm, Nm)> {
     }
     for item in sexpr::find_all(fp, "fp_circle").filter(|it| is_crtyd(it)) {
         let (Some(c), Some(e)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
-        let r = (((e.x - c.x).raw_shim() as f64).powi(2) + ((e.y - c.y).raw_shim() as f64).powi(2)).sqrt().round() as i64;
-        pts.extend([Point { x: c.x - Nm::from_raw_shim(r), y: c.y }, Point { x: c.x + Nm::from_raw_shim(r), y: c.y }, Point { x: c.x, y: c.y - Nm::from_raw_shim(r) }, Point { x: c.x, y: c.y + Nm::from_raw_shim(r) }]);
+        let r = Nm::kiround(((e.x - c.x).as_f64().powi(2) + (e.y - c.y).as_f64().powi(2)).sqrt());
+        pts.extend([Point { x: c.x - r, y: c.y }, Point { x: c.x + r, y: c.y }, Point { x: c.x, y: c.y - r }, Point { x: c.x, y: c.y + r }]);
     }
     if pts.is_empty() {
         return None;
@@ -1868,8 +1868,8 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
 fn rotated_extent(rot_millideg: i64, size: (Nm, Nm)) -> (Nm, Nm) {
     let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    let (w, h) = (size.0.raw_shim() as f64, size.1.raw_shim() as f64);
-    (Nm::from_raw_shim((w * cos.abs() + h * sin.abs()).round() as i64), Nm::from_raw_shim((w * sin.abs() + h * cos.abs()).round() as i64))
+    let (w, h) = (size.0.as_f64(), size.1.as_f64());
+    (Nm::kiround(w * cos.abs() + h * sin.abs()), Nm::kiround(w * sin.abs() + h * cos.abs()))
 }
 
 /// A non-plated hole whose `(layers ..)` name no copper layer (the mounting holes and plugs of `*.Mask`-only pads): no pad copper, but a drilled hole that zones keep clear of
@@ -2158,8 +2158,8 @@ fn import_drawings(root: &[Sexpr], net_names: &BTreeMap<i64, String>, refs: &mut
 }
 
 /// An item's `(stroke (width ..))`, or the `(width ..)` of the files before it (KiCad 6 and older), micrometres.
-fn stroke_width_of(item: &[Sexpr]) -> i64 {
-    (sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::ZERO)).raw_shim()
+fn stroke_width_of(item: &[Sexpr]) -> Nm {
+    sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::ZERO)
 }
 
 /// The arc of a file written before `LEGACY_ARC_FORMATTING` (20210925), `(start CENTER) (end ARC_START) (angle A)` in degrees, as the
@@ -2168,8 +2168,8 @@ fn stroke_width_of(item: &[Sexpr]) -> i64 {
 pub(crate) fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point, Point, Point) {
     let turn = |deg: f64| -> Point {
         let (s, c) = deg.to_radians().sin_cos();
-        let (dx, dy) = ((start.x - center.x).raw_shim() as f64, (start.y - center.y).raw_shim() as f64);
-        Point { x: center.x + Nm::from_raw_shim((dx * c - dy * s).round() as i64), y: center.y + Nm::from_raw_shim((dx * s + dy * c).round() as i64) }
+        let (dx, dy) = ((start.x - center.x).as_f64(), (start.y - center.y).as_f64());
+        Point { x: center.x + Nm::kiround(dx * c - dy * s), y: center.y + Nm::kiround(dx * s + dy * c) }
     };
     (start, turn(angle_deg / 2.0), turn(angle_deg))
 }
@@ -2191,25 +2191,25 @@ pub(crate) fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Poi
     let pt = |name: &str| sexpr::find(item, name).and_then(xy_point).map(&at);
     let (layer, stroke_width, filled) = (layer_of(item), stroke_width_of(item), filled_of(item));
     Some(match tag {
-        "gr_line" => Shape::Segment { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: pt("start")?, end: pt("end")? },
+        "gr_line" => Shape::Segment { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
         "gr_arc" => match sexpr::find(item, "angle").and_then(|a| sexpr::num(a, 1)).filter(|_| sexpr::find(item, "mid").is_none()) {
             // The legacy grammar: `start` is the centre and `end` the start of the arc.
             Some(angle) => {
                 let (start, mid, end) = legacy_arc(pt("start")?, pt("end")?, angle);
-                Shape::Arc { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start, mid, end }
+                Shape::Arc { id: String::new(), layer, stroke_width, filled, start, mid, end }
             }
-            None => Shape::Arc { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: pt("start")?, mid: pt("mid")?, end: pt("end")? },
+            None => Shape::Arc { id: String::new(), layer, stroke_width, filled, start: pt("start")?, mid: pt("mid")?, end: pt("end")? },
         },
-        "gr_rect" => Shape::Rect { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: pt("start")?, end: pt("end")? },
-        "gr_circle" => Shape::Circle { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, center: pt("center")?, end: pt("end")? },
-        "gr_poly" => Shape::Polygon { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, pts: poly_points(item)?.into_iter().map(&at).collect() },
+        "gr_rect" => Shape::Rect { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
+        "gr_circle" => Shape::Circle { id: String::new(), layer, stroke_width, filled, center: pt("center")?, end: pt("end")? },
+        "gr_poly" => Shape::Polygon { id: String::new(), layer, stroke_width, filled, pts: poly_points(item)?.into_iter().map(&at).collect() },
         // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`), never filled. The four points as they are (`parsePCB_SHAPE`,
         // `case T_pts` then `SetStart`, `SetBezierC1`, `SetBezierC2`, `SetEnd`): a control point on an end point, which KiCad's curve tool leaves until it is dragged, is no
         // repeated point to drop as in a polygon.
         "gr_curve" => {
             let pts: Vec<Point> = sexpr::find(item, "pts")?.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l) == Some("xy")).filter_map(xy_point).map(&at).collect();
             let [start, c1, c2, end] = pts[..] else { return None };
-            Shape::Bezier { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled: false, start, c1, c2, end }
+            Shape::Bezier { id: String::new(), layer, stroke_width, filled: false, start, c1, c2, end }
         }
         _ => return None,
     })
@@ -2237,12 +2237,12 @@ fn import_outline(shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNo
         return (Vec::new(), false, None);
     }
 
-    let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_NM.raw_shim() as f64, edge::CHAINING_EPSILON_NM, true);
+    let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_NM.as_f64(), edge::CHAINING_EPSILON_NM, true);
     let one_loop = chained && polys.outline_count() == 1 && !polys.has_holes();
     let line_widths: std::collections::BTreeSet<Nm> = items.iter().filter_map(|s| if let Shape::Segment { stroke_width, .. } = s { Some(*stroke_width) } else { None }).collect();
     if one_loop && items.iter().all(|s| matches!(s, Shape::Segment { .. })) && line_widths.len() == 1 {
         // The loop, in the order its sides chain; the sides themselves are not kept.
-        let ring: Vec<Point> = polys.outline(0).iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect();
+        let ring: Vec<Point> = polys.outline(0).iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect();
         let keep: Vec<bool> = shapes.iter().map(|s| !edge::is_edge_cuts(s)).collect();
         let mut k = keep.iter();
         shapes.retain(|_| *k.next().expect("one flag per shape"));
@@ -2386,7 +2386,7 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             }
             // `parseBoardUnits( T_island_area_min ) * pcbIUScale.IU_PER_MM`: mm^2 in the file, nm^2 here.
             if let Some(v) = raw("island_area_min") {
-                zone.min_island_area = (mm_to_nm(v) * eda_model::units::NM_PER_MM).raw_shim();
+                zone.min_island_area = mm_to_nm(v).get() * eda_model::units::NM_PER_MM;
             }
             // `(smoothing none|chamfer|fillet)` and `(radius r)`; both are ignored for a rule area (`parseZONE`).
             let smoothing = sexpr::find(f, "smoothing").and_then(|v| sexpr::txt(v, 1));
@@ -2478,7 +2478,7 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
                 let (start, mid, end) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "mid").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point));
                 match (start, mid, end) {
                     (Some(s), Some(m), Some(e)) => {
-                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_NM.raw_shim() as f64) {
+                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_NM.as_f64()) {
                             push(pt, &mut out);
                         }
                     }
@@ -2571,13 +2571,13 @@ mod tests {
         assert!(pts.len() > 16, "{} points", pts.len());
         // Every point sits on one of the four circles, within the 5 micrometres (5000 nm) the flattening is held to, and the ends of the arcs are exact.
         let centres = [(5_000_000.0, 1_000_000.0), (5_000_000.0, 3_000_000.0), (1_000_000.0, 3_000_000.0), (1_000_000.0, 1_000_000.0)];
-        let on_arc = |p: &Point| centres.iter().any(|c| ((p.x.raw_shim() as f64 - c.0).hypot(p.y.raw_shim() as f64 - c.1) - 1_000_000.0).abs() <= 5_000.0);
+        let on_arc = |p: &Point| centres.iter().any(|c| ((p.x.as_f64() - c.0).hypot(p.y.as_f64() - c.1) - 1_000_000.0).abs() <= 5_000.0);
         assert!(pts.iter().all(on_arc), "{pts:?}");
         for exact in [Point { x: mm(5.0), y: Nm::ZERO }, Point { x: mm(6.0), y: mm(1.0) }, Point { x: mm(6.0), y: mm(3.0) }, Point { x: mm(5.0), y: mm(4.0) }, Point { x: mm(1.0), y: mm(4.0) }, Point { x: Nm::ZERO, y: mm(3.0) }, Point { x: Nm::ZERO, y: mm(1.0) }, Point { x: mm(1.0), y: Nm::ZERO }] {
             assert!(pts.contains(&exact), "{exact:?} in {pts:?}");
         }
         // The area is the rounded rectangle's, 24 - (4 - pi) = 23.14 mm^2; the chords of the four arcs would leave 22.
-        let area: f64 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x.raw_shim() as f64 * b.y.raw_shim() as f64 - b.x.raw_shim() as f64 * a.y.raw_shim() as f64 }).sum::<f64>().abs() / 2.0 / 1.0e12;
+        let area: f64 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x.as_f64() * b.y.as_f64() - b.x.as_f64() * a.y.as_f64() }).sum::<f64>().abs() / 2.0 / 1.0e12;
         assert!((area - (24.0 - (4.0 - std::f64::consts::PI))).abs() < 0.01, "area {area}");
         // An arc with no middle is its chord, as before.
         let broken = crate::sexpr::parse("(gr_poly (pts (xy 0 0) (arc (start 1 0) (end 1 1)) (xy 0 1)))").unwrap();

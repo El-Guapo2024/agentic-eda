@@ -89,7 +89,7 @@ fn pts_of(item: &[Sexpr]) -> Vec<Point> {
             Some("arc") => {
                 let get = |name: &str| sexpr::find(e, name).and_then(xy_point);
                 if let (Some(s), Some(m), Some(en)) = (get("start"), get("mid"), get("end")) {
-                    let line = GeoArc::through(s, m, en).polyline(eda_model::outline::MAX_ERROR_NM.raw_shim() as f64);
+                    let line = GeoArc::through(s, m, en).polyline(eda_model::outline::MAX_ERROR_NM.as_f64());
                     for p in line {
                         if out.last() != Some(&p) {
                             out.push(p);
@@ -247,11 +247,11 @@ fn fitted_art(lib: &Footprint, builtin: &Footprint) -> eda_model::fp_art::FpArt 
     // (not the library's courtyard: the built-in footprint has its own, round its own pads)
     let lib = Footprint { art: eda_model::fp_art::FpArt { courtyard: vec![], ..lib.art.clone() }, ..lib.clone() };
     let lib = &lib;
-    let pads = |f: &Footprint| -> Vec<(String, (f64, f64))> { f.pads.iter().map(|p| (p.number.clone(), (p.at.0.raw_shim() as f64, p.at.1.raw_shim() as f64))).collect() };
+    let pads = |f: &Footprint| -> Vec<(String, (f64, f64))> { f.pads.iter().map(|p| (p.number.clone(), (p.at.0.as_f64(), p.at.1.as_f64()))).collect() };
     match crate::fit_pads(&pads(lib), &pads(builtin)) {
         None => lib.art.clone(),
         Some(fit) => {
-            let by = FootprintInstance { id: String::new(), at: Point { x: Nm::from_raw_shim(fit.dx_nm.round() as i64), y: Nm::from_raw_shim(fit.dy_nm.round() as i64) }, rot: (fit.rot_deg * 1000.0).round().rem_euclid(360_000.0) as Millideg, side: Side::Top, label: Default::default() };
+            let by = FootprintInstance { id: String::new(), at: Point { x: Nm::kiround(fit.dx_nm), y: Nm::kiround(fit.dy_nm) }, rot: (fit.rot_deg * 1000.0).round().rem_euclid(360_000.0) as Millideg, side: Side::Top, label: Default::default() };
             lib.art.moved(&by)
         }
     }
@@ -267,7 +267,7 @@ fn same_frame(lib: &Footprint, builtin: &Footprint) -> bool {
     !builtin.pads.is_empty()
         && numbers(lib) == numbers(builtin)
         && builtin.pads.iter().filter(|p| !p.number.is_empty()).all(|q| {
-            lib.pads.iter().any(|p| p.number == q.number && ((p.at.0 - q.at.0).raw_shim() as f64).hypot((p.at.1 - q.at.1).raw_shim() as f64) <= 100_000.0)
+            lib.pads.iter().any(|p| p.number == q.number && ((p.at.0 - q.at.0).as_f64()).hypot((p.at.1 - q.at.1).as_f64()) <= 100_000.0)
         })
 }
 

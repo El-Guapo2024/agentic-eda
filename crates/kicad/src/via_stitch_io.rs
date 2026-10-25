@@ -134,12 +134,12 @@ pub(crate) fn write_all(out: &mut String, stitches: &[ViaStitch], written: &BTre
             writeln!(out, "\t\t(net_name {})", sexpr_str(&v.net)).unwrap();
         }
         point_prop(out, "origin", v.origin);
-        writeln!(out, "\t\t(origin_offset_x {})", fmt_g10(v.origin_offset.x.raw_shim() as f64 / 1e6)).unwrap();
-        writeln!(out, "\t\t(origin_offset_y {})", fmt_g10(v.origin_offset.y.raw_shim() as f64 / 1e6)).unwrap();
+        writeln!(out, "\t\t(origin_offset_x {})", fmt_g10(v.origin_offset.x.mm())).unwrap();
+        writeln!(out, "\t\t(origin_offset_y {})", fmt_g10(v.origin_offset.y.mm())).unwrap();
         if v.outline.len() >= 3 {
             line_prop(out, "outline", &v.outline);
         }
-        writeln!(out, "\t\t(pitch {})", fmt_g10(v.pitch_nm.raw_shim() as f64 / 1e6)).unwrap();
+        writeln!(out, "\t\t(pitch {})", fmt_g10(v.pitch_nm.mm())).unwrap();
         writeln!(out, "\t\t(seed {})", v.seed as i32).unwrap();
         let template_uuid = crate::duid_for(&format!("via_stitch:{}:template", v.id), &v.id);
         writeln!(out, "\t\t(templates (template (name \"via\") {}))", template_text(&v.via, &template_uuid)).unwrap();

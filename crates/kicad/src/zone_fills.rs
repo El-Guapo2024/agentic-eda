@@ -177,11 +177,11 @@ fn fill_is_of(entry: &ZoneEntry, zone: &Zone) -> bool {
 
 /// `zone` with its lengths in micrometres (its area in square micrometres), as a design of version 1 held it; `None` when a length is not a whole micrometre.
 fn micrometre_zone(zone: &Zone) -> Option<Zone> {
-    let um = |v: i64| (v % 1000 == 0).then_some(v / 1000);
+    let um = |v: Nm| (v.get() % eda_model::units::NM_PER_UM == 0).then(|| Nm::new(v.get() / eda_model::units::NM_PER_UM));
     let mut z = zone.clone();
-    z.outline = zone.outline.iter().map(|p| Some(eda_model::ir::Point { x: Nm::from_raw_shim(um(p.x.raw_shim())?), y: Nm::from_raw_shim(um(p.y.raw_shim())?) })).collect::<Option<_>>()?;
+    z.outline = zone.outline.iter().map(|p| Some(eda_model::ir::Point { x: um(p.x)?, y: um(p.y)? })).collect::<Option<_>>()?;
     for v in [&mut z.clearance, &mut z.min_thickness, &mut z.thermal_gap, &mut z.thermal_spoke_width, &mut z.hatch_thickness, &mut z.hatch_gap, &mut z.corner_radius] {
-        *v = Nm::from_raw_shim(um((*v).raw_shim())?);
+        *v = um(*v)?;
     }
     z.min_island_area = (zone.min_island_area % 1_000_000 == 0).then_some(zone.min_island_area / 1_000_000)?;
     Some(z)
@@ -304,7 +304,7 @@ fn outline_keys(design: &Design, pick: impl Fn(&Zone) -> bool) -> HashMap<String
     let mut out = HashMap::new();
     for z in design.routing.as_ref().map_or(&[][..], |r| r.zones.as_slice()).iter().filter(|z| !z.id.is_empty() && pick(z)) {
         for layer in z.layer_set() {
-            out.entry(outline_key(layer, z.outline.iter().map(|p| [p.x.raw_shim(), p.y.raw_shim()]))).or_insert_with(|| z.id.clone());
+            out.entry(outline_key(layer, z.outline.iter().map(|p| [p.x.get(), p.y.get()]))).or_insert_with(|| z.id.clone());
         }
     }
     out

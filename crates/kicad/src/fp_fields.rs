@@ -476,8 +476,8 @@ mod tests {
         assert_eq!(t.margins, " (solder_mask_margin 0.05) (solder_paste_margin -0.03) (solder_paste_margin_ratio -0.1)");
         for side in [Side::Top, Side::Bottom] {
             // The offset in the file's frame: x negated on the bottom side, where the whole frame is mirrored.
-            let ox = if side == Side::Bottom { -300_000 } else { 300_000 };
-            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(Nm::from_raw_shim(ox)), mm(Nm::from_mm(-0.1)), t.margins));
+            let ox = if side == Side::Bottom { Nm::from_mm(-0.3) } else { Nm::from_mm(0.3) };
+            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(Nm::from_mm(-0.1)), t.margins));
             let back = parse_pad_extras(&node, side, 20241229);
             assert_eq!((back.offset, back.solder_mask_margin, back.solder_paste_margin, back.solder_paste_margin_ratio), (e.offset, e.solder_mask_margin, e.solder_paste_margin, e.solder_paste_margin_ratio), "{side:?}");
         }
