@@ -257,23 +257,18 @@ fn fitted_art(lib: &Footprint, builtin: &Footprint) -> eda_model::fp_art::FpArt 
     }
 }
 
-/// Whether the installed footprint is the built-in one's in the same frame: the same pad numbers, each where the built-in has it (the mean centre of
-/// the pads of a number, within 0.1 mm: the built-in is the library's to the micrometre, or a few tens of micrometres off for a capacitor's or an LED's
-/// pads, which share the resistor's). A built-in whose frame is not the library's (the pin headers are centred, KiCad's have pin 1 at the origin) is
-/// not: a board placed with it would see its pads move.
+/// Whether the installed footprint is the built-in one's in the same frame: the same pad numbers, and every built-in pad on a library pad of its number
+/// (centres within 0.1 mm: the built-in is the library's to the micrometre, or a few tens of micrometres off for a capacitor's or an LED's pads, which
+/// share the resistor's). The library may have more pads of a number than the built-in: `SOT-223-3_TabPin2`'s pin 2 is the tab and a lead beside pin
+/// 1, the built-in's the tab alone. A built-in whose frame is not the library's (the pin headers are centred, KiCad's have pin 1 at the origin) is not:
+/// a board placed with it would see its pads move.
 fn same_frame(lib: &Footprint, builtin: &Footprint) -> bool {
-    let centres = |f: &Footprint| -> BTreeMap<String, (f64, f64, f64)> {
-        let mut out: BTreeMap<String, (f64, f64, f64)> = BTreeMap::new();
-        for p in f.pads.iter().filter(|p| !p.number.is_empty()) {
-            let e = out.entry(p.number.clone()).or_default();
-            *e = (e.0 + p.at.0 as f64, e.1 + p.at.1 as f64, e.2 + 1.0);
-        }
-        out
-    };
-    let (a, b) = (centres(lib), centres(builtin));
-    !b.is_empty()
-        && a.keys().eq(b.keys())
-        && a.values().zip(b.values()).all(|(p, q)| (p.0 / p.2 - q.0 / q.2).hypot(p.1 / p.2 - q.1 / q.2) <= 100_000.0)
+    let numbers = |f: &Footprint| -> BTreeSet<String> { f.pads.iter().map(|p| p.number.clone()).filter(|n| !n.is_empty()).collect() };
+    !builtin.pads.is_empty()
+        && numbers(lib) == numbers(builtin)
+        && builtin.pads.iter().filter(|p| !p.number.is_empty()).all(|q| {
+            lib.pads.iter().any(|p| p.number == q.number && ((p.at.0 - q.at.0) as f64).hypot((p.at.1 - q.at.1) as f64) <= 100_000.0)
+        })
 }
 
 /// For every part whose footprint is one of the studio's built-in packages (no footprint of the intent or the libraries under its name), the art of the installed

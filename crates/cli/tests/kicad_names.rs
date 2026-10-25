@@ -277,7 +277,17 @@ fn assert_kicad_agrees(example: &str) {
     assert!(shorts.is_empty(), "{example}: kicad-cli's DRC finds shorts: {shorts:#?}");
     let unconnected = drc["unconnected_items"].as_array().map_or(0, Vec::len);
     assert_eq!(unconnected, 0, "{example}: kicad-cli's DRC finds unconnected items: {:#?}", drc["unconnected_items"]);
-    let library = library_differences(&dir);
+    // (but for the pin headers: their built-in pads are centred where KiCad's have pin 1 at the origin, so they keep the built-in pads -- PARITY-pcb.md
+    // section 53 -- and the check says those differ)
+    let intent: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../examples/{example}.yaml"))).unwrap()).unwrap();
+    let headers: Vec<String> = intent["parts"]
+        .as_sequence()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["package"].as_str().is_some_and(|k| k.starts_with("PINHEADER")))
+        .filter_map(|p| p["reference"].as_str().map(|r| format!("Footprint {r}")))
+        .collect();
+    let library: Vec<String> = library_differences(&dir).into_iter().filter(|d| !headers.iter().any(|h| d.ends_with(h.as_str()))).collect();
     assert!(library.is_empty(), "{example}: Update Footprints from Library would change {} footprints:\n{}", library.len(), library.join("\n"));
 }
 
