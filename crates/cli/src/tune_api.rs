@@ -618,7 +618,7 @@ mod tests {
                 _ => None,
             })
             .expect("a segment of the net");
-        eda_pns::tuning_path::assemble_tuning_path(&scene.world, id).unwrap().length(&scene.world, &scene.env) as f64 / 1e6
+        eda_pns::tuning_path::assemble_tuning_path(&scene.world, id).unwrap().length(&scene.world, &scene.env).mm()
     }
 
     #[test]

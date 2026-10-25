@@ -28,7 +28,7 @@ use crate::kigeom::ShapeArc;
 use crate::kigeom::Seg;
 use crate::layer::LayerRange;
 use crate::line::Line;
-use crate::meander::{tune_line_length, MeanderEnv, MeanderSettings, MeanderShape, MeanderSide, MeanderType, MeanderedLine};
+use crate::meander::{tune_line_length, MeanderEnv, MeanderSettings, MinOptMax, MeanderShape, MeanderSide, MeanderType, MeanderedLine};
 use crate::node::Node;
 use crate::tuning_path::{assemble_opts, assemble_tuning_path, LengthEnv, TuningPath};
 use eda_drc::kimath::Shape;
@@ -100,7 +100,7 @@ impl MeanderEnv for FitEnv<'_> {
             return false;
         }
         let w = shape.width();
-        let clearance = w + Nm::new(self.settings.spacing);
+        let clearance = w + self.settings.spacing;
         MeanderedLine::check_self_intersections(existing, shape, clearance)
     }
 }
@@ -175,7 +175,7 @@ impl MeanderPlacer {
         let path = assemble_tuning_path(world, start).ok_or("Please select a track whose length you want to tune.")?;
         let mut w = world.clone();
         w.remove_line_segments(&origin_line);
-        let path_length = path.length_nm(world, env);
+        let path_length = path.length(world, env);
         let delay_params = origin_line.net.as_deref().and_then(|net| env.delay_params(net));
         let path_delay = delay_params.as_ref().map_or(0, |p| path.delay(world, env, p));
         Ok(MeanderPlacer {
@@ -204,11 +204,10 @@ impl MeanderPlacer {
     }
 
     /// `MEANDER_SKEW_PLACER::Start`: the same on the line of a pair, judged against the partner net: `coupled_length` is the partner's tuning path
-    /// (nanometres, `m_coupledLength`) and `coupled_delay` its delay (attoseconds, `m_coupledDelay`), and the line tuned is the clicked one's.
-    /// (`coupled_length` is an `i64` for the studio's `tune_edit` until the length type's wave 3.)
-    pub fn start_skew(world: &Node, env: &LengthEnv, start: ItemId, at: Point, settings: MeanderSettings, coupled_length: i64, coupled_delay: i64) -> Result<MeanderPlacer, String> {
+    /// (`m_coupledLength`) and `coupled_delay` its delay (attoseconds, `m_coupledDelay`), and the line tuned is the clicked one's.
+    pub fn start_skew(world: &Node, env: &LengthEnv, start: ItemId, at: Point, settings: MeanderSettings, coupled_length: Nm, coupled_delay: i64) -> Result<MeanderPlacer, String> {
         let mut p = MeanderPlacer::start_inner(world, env, start, at, settings)?;
-        p.skew = Some(Skew { coupled_length: Nm::new(coupled_length), coupled_delay });
+        p.skew = Some(Skew { coupled_length, coupled_delay });
         p.last_length = p.path_length;
         p.last_delay = p.path_delay;
         p.calculate_time_domain_targets();
@@ -287,7 +286,7 @@ impl MeanderPlacer {
 
     /// `CalculatePropagationDelayForShapeLineChain`: the delay of a stretch of the tuned layer.
     fn chain_delay(&self, chain: &ShapeLineChain) -> i64 {
-        self.params().track_delay(&self.layer_name(), chain.length_nm())
+        self.params().track_delay(&self.layer_name(), chain.length())
     }
 
     pub fn settings(&self) -> &MeanderSettings {
@@ -301,15 +300,15 @@ impl MeanderPlacer {
 
     /// `MEANDER_PLACER_BASE::AmplitudeStep`: the maximum amplitude one step more or less, not below the minimum.
     pub fn amplitude_step(&mut self, sign: i64) {
-        let a = self.settings.max_amplitude + sign * self.settings.step.get();
+        let a = self.settings.max_amplitude + sign * self.settings.step;
         self.settings.max_amplitude = a.max(self.settings.min_amplitude);
     }
 
     /// `MEANDER_PLACER_BASE::SpacingStep`: the spacing one step more or less, not below the width and clearance.
     pub fn spacing_step(&mut self, sign: i64) {
-        let s = Nm::new(self.settings.spacing) + sign * self.settings.step;
+        let s = self.settings.spacing + sign * self.settings.step;
         let clearance = Node::clearance(&self.env.rules, &self.origin_line.net, &None);
-        self.settings.spacing = s.max(self.width_nm + clearance).get();
+        self.settings.spacing = s.max(self.width_nm + clearance);
     }
 
     pub fn origin_line(&self) -> &Line {
@@ -338,10 +337,9 @@ impl MeanderPlacer {
         self.path_length
     }
 
-    /// `TuningLengthResult()`: the length of the net after the last move (the skew, for a skew placer), nanometres (an `i64` for the
-    /// studio's `tune_edit` until the length type's wave 3).
-    pub fn tuning_length_result(&self) -> i64 {
-        let l = match &self.skew {
+    /// `TuningLengthResult()`: the length of the net after the last move (the skew, for a skew placer).
+    pub fn tuning_length_result(&self) -> Nm {
+        match &self.skew {
             Some(s) => self.last_length - s.coupled_length,
             None => {
                 if self.last_length != Nm::ZERO {
@@ -350,8 +348,7 @@ impl MeanderPlacer {
                     self.path_length
                 }
             }
-        };
-        l.get()
+        }
     }
 
     /// The length the net would be without tuning, as the status box starts: for a skew placer, the skew.
@@ -367,13 +364,16 @@ impl MeanderPlacer {
         self.skew.is_some()
     }
 
-    /// The target the status is judged against, nanometres: the net's length (`m_targetLength`), or the partner's plus the target skew. A count
-    /// of the `MINOPTMAX` it comes from (an `i64`, for the studio's `tune_edit` too).
-    pub fn target(&self) -> (i64, i64, i64) {
-        let c = |s: &Skew| s.coupled_length.get();
+    /// The target the status is judged against: the net's length (`m_targetLength`), or the partner's plus the target skew (the `MINOPTMAX`
+    /// it comes from holds a count of nanometres: [`MinOptMax`]).
+    pub fn target(&self) -> (Nm, Nm, Nm) {
+        let m = |v: &MinOptMax| (Nm::new(v.min()), Nm::new(v.opt()), Nm::new(v.max()));
         match &self.skew {
-            Some(s) => (c(s) + self.settings.target_skew.min(), c(s) + self.settings.target_skew.opt(), c(s) + self.settings.target_skew.max()),
-            None => (self.settings.target_length.min(), self.settings.target_length.opt(), self.settings.target_length.max()),
+            Some(s) => {
+                let (min, opt, max) = m(&self.settings.target_skew);
+                (s.coupled_length + min, s.coupled_length + opt, s.coupled_length + max)
+            }
+            None => m(&self.settings.target_length),
         }
     }
 
@@ -381,7 +381,7 @@ impl MeanderPlacer {
     pub fn do_move(&mut self, to: Point) -> bool {
         self.calculate_time_domain_targets();
         let (min, opt, max) = self.target();
-        self.do_move_to(to, Nm::new(opt), Nm::new(min), Nm::new(max))
+        self.do_move_to(to, opt, min, max)
     }
 
     /// `MEANDER_PLACER::doMove( aP, aEndItem, aTargetLength, aTargetMin, aTargetMax )`.
@@ -401,7 +401,7 @@ impl MeanderPlacer {
         result.set_baseline_offset(Nm::ZERO);
 
         // `AddArc` for an arc of the stretch (it is passed through as it is, a meander goes on the straight segments), `NextShape` to its end
-        let empty_arc = ShapeArc::new_nm(zero, zero, zero, Nm::ZERO);
+        let empty_arc = ShapeArc::new(zero, zero, zero, Nm::ZERO);
         let mut i = 0;
         while i < tuned.segment_count() {
             if tuned.is_arc_segment(i) {
@@ -430,7 +430,7 @@ impl MeanderPlacer {
         if line_len > Nm::new(self.settings.target_length.max()) {
             self.last_status = TuningStatus::TooLong;
         } else {
-            self.last_length = line_len - tuned.length_nm();
+            self.last_length = line_len - tuned.length();
             if self.settings.is_time_domain {
                 self.last_delay = line_delay - self.chain_delay(&tuned);
             }
@@ -444,7 +444,7 @@ impl MeanderPlacer {
                     tuned.append_chain(m.c_line(0));
                 }
             }
-            self.last_length += tuned.length_nm();
+            self.last_length += tuned.length();
             if self.settings.is_time_domain {
                 self.last_delay += self.chain_delay(&tuned);
             }
@@ -545,7 +545,7 @@ mod tests {
         assert_eq!(placer.orig_path_length(), mm(40.0));
         assert!(placer.do_move(p(35_000_000, 0)));
         let len = placer.tuning_length_result();
-        assert!((len - 44_000_000).abs() < 100_000, "{len}");
+        assert!((len - mm(44.0)).abs() < mm(0.1), "{len}");
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
         let t = placer.tuned();
         assert_eq!(t.pre.points(), &[p(0, 0), p(5_000_000, 0)]);
@@ -574,20 +574,20 @@ mod tests {
         let (w, seg, _, arc) = bent_board();
         let arc_len = arc.length();
         let straight = 20_000_000.0 + 15_000_000.0;
-        let original = (straight + arc_len) as i64;
+        let original = Nm::new((straight + arc_len) as i64);
         let mut placer = MeanderPlacer::start(&w, &env(), seg, p(3_000_000, 0), settings(((straight + arc_len) as i64) + 4_000_000)).expect("a placer on the first segment");
-        assert!((placer.orig_path_length().get() - original).abs() < 50_000, "the arc is measured as an arc: {} vs {original}", placer.orig_path_length());
+        assert!((placer.orig_path_length() - original).abs() < um(50.0), "the arc is measured as an arc: {} vs {original}", placer.orig_path_length());
         assert!(placer.do_move(p(25_000_000, 15_000_000)));
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
         let t = placer.tuned();
         let arcs: Vec<_> = t.tuned.arcs().iter().filter(|a| a.start == arc.start && a.end == arc.end).collect();
         assert_eq!(arcs.len(), 1, "the arc of the track is in the tuned stretch, as the arc it was");
-        assert!((placer.tuning_length_result() - original - 4_000_000).abs() < 100_000, "{}", placer.tuning_length_result());
+        assert!((placer.tuning_length_result() - original - mm(4.0)).abs() < mm(0.1), "{}", placer.tuning_length_result());
         // the meanders fill the straight before the arc (rounded corners: arcs of their own) and the stretch still goes on through the arc to where it ended,
         // the straight after the arc counted in the length (KiCad's loop steps over that segment)
         assert!(t.tuned.arcs().iter().filter(|a| a.start != arc.start).count() >= 4);
         assert_eq!(t.tuned.c_last_point(), p(25_000_000, 15_000_000));
-        assert!((placer.final_shape().length() - placer.tuning_length_result()).abs() < 1_000, "the shape is as long as the status says, to a micrometre");
+        assert!((placer.final_shape().length() - placer.tuning_length_result()).abs() < um(1.0), "the shape is as long as the status says, to a micrometre");
     }
 
     #[test]
@@ -605,11 +605,11 @@ mod tests {
         let mut placer = MeanderPlacer::start(&w, &env(), seg, p(5_000_000, 0), settings(400_000_000)).unwrap();
         assert!(placer.do_move(p(35_000_000, 0)));
         assert_eq!(placer.tuning_status(), TuningStatus::TooShort);
-        assert!(placer.tuning_length_result() > 40_000_000 && placer.tuning_length_result() < 400_000_000);
+        assert!(placer.tuning_length_result() > mm(40.0) && placer.tuning_length_result() < mm(400.0));
         let mut placer = MeanderPlacer::start(&w, &env(), seg, p(5_000_000, 0), settings(30_000_000)).unwrap();
         assert!(placer.do_move(p(35_000_000, 0)));
         assert_eq!(placer.tuning_status(), TuningStatus::TooLong);
-        assert_eq!(placer.tuning_length_result(), 40_000_000, "nothing is added to a net that is already too long");
+        assert_eq!(placer.tuning_length_result(), mm(40.0), "nothing is added to a net that is already too long");
     }
 
     #[test]
@@ -620,7 +620,7 @@ mod tests {
         let mut placer = MeanderPlacer::start(&w, &env(), seg, p(5_000_000, 0), settings(44_000_000)).unwrap();
         assert!(placer.do_move(p(35_000_000, 0)));
         let t = placer.tuned().tuned;
-        assert!((placer.tuning_length_result() - 44_000_000).abs() < 100_000);
+        assert!((placer.tuning_length_result() - mm(44.0)).abs() < mm(0.1));
         // nothing on the GND side of the line beyond what fits: every vertex at least (200 + 200 + 100) um from the GND track's axis
         for q in t.points() {
             assert!(mm(1.2) - q.y >= mm(0.2) + mm(0.1) + mm(0.2) - um(1.0), "{q:?} is too close to the GND track");
@@ -640,17 +640,17 @@ mod tests {
         let (w, seg) = board();
         let mut placer = MeanderPlacer::start(&w, &env(), seg, p(5_000_000, 0), settings(44_000_000)).unwrap();
         placer.amplitude_step(-1);
-        assert_eq!(placer.settings().max_amplitude, 950_000);
+        assert_eq!(placer.settings().max_amplitude, mm(0.95));
         for _ in 0..40 {
             placer.amplitude_step(-1);
         }
-        assert_eq!(placer.settings().max_amplitude, 200_000, "never below the minimum");
+        assert_eq!(placer.settings().max_amplitude, mm(0.2), "never below the minimum");
         placer.spacing_step(1);
-        assert_eq!(placer.settings().spacing, 650_000);
+        assert_eq!(placer.settings().spacing, mm(0.65));
         for _ in 0..40 {
             placer.spacing_step(-1);
         }
-        assert_eq!(placer.settings().spacing, 200_000 + 200_000, "never below the track width and its clearance");
+        assert_eq!(placer.settings().spacing, mm(0.2) + mm(0.2), "never below the track width and its clearance");
     }
 
     /// `env()` with a tuning profile on the Default class: 6.1 ps/mm on F.Cu, 6.5 ps/mm on B.Cu, 5 ps/mm for a via over the stackup it crosses.
@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
         let delay = placer.tuning_delay_result();
         assert!((delay - 300_000_000).abs() < 200_000, "the net takes {delay} as");
-        assert!((placer.tuning_length_result() - target).abs() < 20_000, "{}", placer.tuning_length_result());
+        assert!((placer.tuning_length_result() - Nm::new(target)).abs() < um(20.0), "{}", placer.tuning_length_result());
         // a target the path already beats is too long (a delay lower than the net's own): nothing is added
         let mut placer = MeanderPlacer::start(&w, &e, seg, p(5_000_000, 0), delay_settings(100)).unwrap();
         assert!(placer.do_move(p(35_000_000, 0)));
@@ -715,10 +715,10 @@ mod tests {
         s.keep_endpoints = true;
         s.is_time_domain = true;
         s.set_target_skew_delay(-5 * crate::delay::ATTOSECONDS_PER_PS);
-        let mut placer = MeanderPlacer::start_skew(&w, &e, seg, p(5_000_000, 0), s, 43_000_000, 262_300_000).unwrap();
+        let mut placer = MeanderPlacer::start_skew(&w, &e, seg, p(5_000_000, 0), s, mm(43.0), 262_300_000).unwrap();
         assert!(placer.do_move(p(35_000_000, 0)));
         let skew = placer.tuning_length_result();
-        assert!((skew - (-5_000_000_000_i64 / 6_100_000_i64 * 1000) as i64).abs() < 50_000, "the skew is {skew} nm: -5 ps of 6.1 ps/mm is -0.82 mm");
+        assert!((skew - Nm::new(-5_000_000_000_i64 / 6_100_000_i64 * 1000)).abs() < um(50.0), "the skew is {skew} nm: -5 ps of 6.1 ps/mm is -0.82 mm");
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
         let skew_delay = placer.tuning_delay_result();
         assert!((skew_delay + 5_000_000).abs() < 300_000, "{skew_delay} as");
@@ -730,11 +730,11 @@ mod tests {
         let mut s = MeanderSettings::default();
         s.keep_endpoints = true;
         s.set_target_skew(0);
-        let mut placer = MeanderPlacer::start_skew(&w, &env(), seg, p(5_000_000, 0), s, 43_000_000, 0).unwrap();
+        let mut placer = MeanderPlacer::start_skew(&w, &env(), seg, p(5_000_000, 0), s, mm(43.0), 0).unwrap();
         assert_eq!(placer.current_skew(), Some(mm(40.0) - mm(43.0)));
         assert!(placer.do_move(p(35_000_000, 0)));
         let skew = placer.tuning_length_result();
-        assert!(skew.abs() < 100_000, "the skew is {skew}");
+        assert!(skew.abs() < mm(0.1), "the skew is {skew}");
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
     }
 }

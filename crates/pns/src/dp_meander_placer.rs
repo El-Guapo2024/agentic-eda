@@ -39,9 +39,8 @@ pub struct PairAssembly {
     pub net_n: Net,
     /// Track width of the pair.
     pub width: Nm,
-    /// Edge-to-edge gap, nanometres (-1: the two segments are not parallel enough to tell). An `i64` for the studio's `tune_edit` until the
-    /// length type's wave 3.
-    pub gap: i64,
+    /// Edge-to-edge gap (-1 nm, KiCad's `-1`: the two segments are not parallel enough to tell).
+    pub gap: Nm,
 }
 
 /// `SEG::SquaredDistance` from a point to the stadium of a segment of `width` (what `Shape( -1 )->SquaredDistance( p )` of a segment is, up to the
@@ -136,9 +135,9 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
             let disp = (r.b.x - c.b.x, r.b.y - c.b.y);
             let cross = dir.0.area(disp.1) - dir.1.area(disp.0);
             let norm = crate::kigeom::norm_i(dir.0, dir.1).max(Nm::new(1)).get() as i128;
-            (Nm::new((cross.abs() / norm) as i64) - lp.width).get()
+            Nm::new((cross.abs() / norm) as i64) - lp.width
         }
-        _ => -1,
+        _ => Nm::new(-1),
     };
     Some(PairAssembly { net_p: lp.net.clone(), net_n: ln.net.clone(), width: lp.width, gap, p: lp, n: ln })
 }
@@ -290,12 +289,12 @@ impl TunedPair {
 pub const NO_PAIR_FOR_SKEW: &str = "Unable to find complementary differential pair net for skew tuning. Make sure the names of the nets belonging to a differential pair end with either _N/_P or +/-.";
 
 /// What a skew placer starts from: the pair the clicked track belongs to, the tuning path length of the clicked net and of its partner
-/// (`m_lastLength` and `m_coupledLength`), nanometres (`i64`s for the studio's `tune_edit` until the length type's wave 3).
+/// (`m_lastLength` and `m_coupledLength`).
 #[derive(Debug, Clone)]
 pub struct SkewSetup {
     pub partner_net: Net,
-    pub own_length: i64,
-    pub coupled_length: i64,
+    pub own_length: Nm,
+    pub coupled_length: Nm,
     /// The same as delays, attoseconds (`m_lastDelay` and `m_coupledDelay`): zero without a tuning profile that has the time domain.
     pub own_delay: i64,
     pub coupled_delay: i64,
@@ -309,7 +308,7 @@ pub fn skew_setup(world: &Node, env: &LengthEnv, start: ItemId) -> Result<SkewSe
     if pair.p.segment_ids.is_empty() || pair.n.segment_ids.is_empty() {
         return Err("Unable to find the lines of the pair.".into());
     }
-    let len = |ids: &[ItemId]| assemble_tuning_path(world, ids[0]).map(|p| p.length_nm(world, env).get());
+    let len = |ids: &[ItemId]| assemble_tuning_path(world, ids[0]).map(|p| p.length(world, env));
     let (len_p, len_n) = (len(&pair.p.segment_ids).ok_or("Please select a differential pair track you want to tune.")?, len(&pair.n.segment_ids).ok_or("Please select a differential pair track you want to tune.")?);
     // `lineDelay` of each net's path, by the profile of the clicked net's class
     let params = seg.net.as_deref().and_then(|net| env.delay_params(net));
@@ -332,15 +331,15 @@ impl DpMeanderPlacer {
         let Some(Item::Segment(seg)) = world.get(start) else { return Err("Please select a track whose length you want to tune.".into()) };
         let current_start = Seg::new(seg.a, seg.b).nearest_point(at);
         let mut pair = assemble_diff_pair(world, start).ok_or(NO_PAIR)?;
-        if pair.gap < 0 {
-            pair.gap = env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or("")).get();
+        if pair.gap < Nm::ZERO {
+            pair.gap = env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or(""));
         }
         if pair.p.segment_ids.is_empty() || pair.n.segment_ids.is_empty() {
             return Err("Unable to find the lines of the pair.".into());
         }
         let path_p = assemble_tuning_path(world, pair.p.segment_ids[0]).ok_or("Please select a track whose length you want to tune.")?;
         let path_n = assemble_tuning_path(world, pair.n.segment_ids[0]).ok_or("Please select a track whose length you want to tune.")?;
-        let (len_p, len_n) = (path_p.length_nm(world, env), path_n.length_nm(world, env));
+        let (len_p, len_n) = (path_p.length(world, env), path_n.length(world, env));
         // `m_netClass = conItem->GetEffectiveNetClass()`: the clicked net's class, and its tuning profile
         let delay_params = seg.net.as_deref().and_then(|net| env.delay_params(net));
         let (delay_p, delay_n) = match &delay_params {
@@ -415,9 +414,9 @@ impl DpMeanderPlacer {
         self.len_p.max(self.len_n)
     }
 
-    /// The lengths of the two nets before the tuning, nanometres (`i64`s for the studio's `tune_edit` until the length type's wave 3).
-    pub fn net_lengths(&self) -> (i64, i64) {
-        (self.len_p.get(), self.len_n.get())
+    /// The lengths of the two nets before the tuning.
+    pub fn net_lengths(&self) -> (Nm, Nm) {
+        (self.len_p, self.len_n)
     }
 
     /// `origPathDelay()`: the pair is as slow as its slower net, attoseconds.
@@ -444,7 +443,7 @@ impl DpMeanderPlacer {
 
     /// `CalculatePropagationDelayForShapeLineChain`: the delay of a stretch of the tuned layer.
     fn chain_delay(&self, chain: &ShapeLineChain) -> i64 {
-        self.params().track_delay(&self.layer_name(), chain.length_nm())
+        self.params().track_delay(&self.layer_name(), chain.length())
     }
 
     /// `DP_MEANDER_PLACER::calculateTimeDomainTargets`: with the time domain on, the target delay (min, opt, max) becomes the target length it comes to on
@@ -471,20 +470,19 @@ impl DpMeanderPlacer {
     }
 
     pub fn amplitude_step(&mut self, sign: i64) {
-        let a = self.settings.max_amplitude + sign * self.settings.step.get();
+        let a = self.settings.max_amplitude + sign * self.settings.step;
         self.settings.max_amplitude = a.max(self.settings.min_amplitude);
     }
 
     pub fn spacing_step(&mut self, sign: i64) {
-        let s = Nm::new(self.settings.spacing) + sign * self.settings.step;
+        let s = self.settings.spacing + sign * self.settings.step;
         let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
-        self.settings.spacing = s.max(self.width_nm + clearance).get();
+        self.settings.spacing = s.max(self.width_nm + clearance);
     }
 
-    /// `TuningLengthResult()`, nanometres (an `i64` for the studio's `tune_edit` until the length type's wave 3).
-    pub fn tuning_length_result(&self) -> i64 {
-        let l = if self.last_length != Nm::ZERO { self.last_length } else { self.orig_path_length() };
-        l.get()
+    /// `TuningLengthResult()`.
+    pub fn tuning_length_result(&self) -> Nm {
+        if self.last_length != Nm::ZERO { self.last_length } else { self.orig_path_length() }
     }
 
     pub fn tuning_status(&self) -> TuningStatus {
@@ -544,7 +542,7 @@ impl DpMeanderPlacer {
             return false;
         }
 
-        let coupled = coupled_segment_pairs(&tuned_p, &tuned_n, self.width_nm, Nm::new(self.pair.gap));
+        let coupled = coupled_segment_pairs(&tuned_p, &tuned_n, self.width_nm, self.pair.gap);
         if coupled.is_empty() {
             // "Tuning started at an uncoupled area of the DP": the original, as it was
             self.final_p = self.cp.clone();
@@ -558,7 +556,7 @@ impl DpMeanderPlacer {
         let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_nm: self.pair.width };
         let mut result = MeanderedLine::new(true);
         result.set_width(self.width_nm);
-        let mut offset = (Nm::new(self.pair.gap) + self.width_nm) / 2;
+        let mut offset = (self.pair.gap + self.width_nm) / 2;
         if pair_orientation(&coupled[0]) {
             offset *= -1;
         }
@@ -612,7 +610,7 @@ impl DpMeanderPlacer {
             self.last_length = dp_len;
             self.last_delay = dp_delay;
         } else {
-            self.last_length = dp_len - tuned_p.length_nm().max(tuned_n.length_nm());
+            self.last_length = dp_len - tuned_p.length().max(tuned_n.length());
             if self.settings.is_time_domain {
                 self.last_delay = dp_delay - self.chain_delay(&tuned_p).max(self.chain_delay(&tuned_n));
             }
@@ -628,7 +626,7 @@ impl DpMeanderPlacer {
                     tuned_n.append_chain(m.c_line(1));
                 }
             }
-            self.last_length += tuned_p.length_nm().max(tuned_n.length_nm());
+            self.last_length += tuned_p.length().max(tuned_n.length());
             if self.settings.is_time_domain {
                 self.last_delay += self.chain_delay(&tuned_p).max(self.chain_delay(&tuned_n));
             }
@@ -712,7 +710,7 @@ mod tests {
 
     fn settings(target_nm: i64) -> MeanderSettings {
         let mut s = MeanderSettings::default();
-        s.spacing = 1_000_000;
+        s.spacing = mm(1.0);
         s.set_target_length(target_nm);
         s.keep_endpoints = true;
         s
@@ -724,7 +722,7 @@ mod tests {
         let pair = assemble_diff_pair(&w, a).expect("a pair");
         assert_eq!((pair.net_p.as_deref(), pair.net_n.as_deref()), (Some("USB_P"), Some("USB_N")));
         assert_eq!(pair.width, mm(0.2));
-        assert_eq!(pair.gap, 200_000, "0.4 mm between the centres less a width");
+        assert_eq!(pair.gap, mm(0.2), "0.4 mm between the centres less a width");
         // from the N line the pair is the same, P first
         let from_n = assemble_diff_pair(&w, b).expect("a pair");
         assert_eq!(from_n.net_p.as_deref(), Some("USB_P"));
@@ -741,7 +739,7 @@ mod tests {
         assert_eq!(placer.orig_path_length(), mm(40.0));
         assert!(placer.do_move(p(35_000_000, 0)));
         let len = placer.tuning_length_result();
-        assert!((len - 43_000_000).abs() < 100_000, "{len}");
+        assert!((len - mm(43.0)).abs() < mm(0.1), "{len}");
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
         let t = placer.tuned();
         assert!(!t.tuned_p.arcs().is_empty() && !t.tuned_n.arcs().is_empty());
@@ -752,9 +750,9 @@ mod tests {
         let d = min_dist(&t.tuned_p, &t.tuned_n);
         assert!((d - mm(0.4)).abs() < um(3.0), "closest approach {d}");
         // the two nets are within a miter of each other in length
-        let (lp, ln) = (t.pre_p.length_nm() + t.tuned_p.length_nm() + t.post_p.length_nm(), t.pre_n.length_nm() + t.tuned_n.length_nm() + t.post_n.length_nm());
+        let (lp, ln) = (t.pre_p.length() + t.tuned_p.length() + t.post_p.length(), t.pre_n.length() + t.tuned_n.length() + t.post_n.length());
         assert!((lp - ln).abs() < mm(0.7), "{lp} vs {ln}");
-        assert!(lp.max(ln).get() == len);
+        assert!(lp.max(ln) == len);
     }
 
     /// The time domain for a pair: the pair is as slow as its slower net (`origPathDelay`), and the target delay is made the target length from it.
@@ -774,7 +772,7 @@ mod tests {
         };
         e.rules.tuning_profiles = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "USB".to_string())].into() };
         let mut s = MeanderSettings::default();
-        s.spacing = 1_000_000;
+        s.spacing = mm(1.0);
         s.keep_endpoints = true;
         s.is_time_domain = true;
         s.set_target_length_delay(280 * crate::delay::ATTOSECONDS_PER_PS);
@@ -786,7 +784,7 @@ mod tests {
         assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
         let delay = placer.tuning_delay_result();
         assert!((delay - 280_000_000).abs() < 300_000, "the pair takes {delay} as");
-        assert!((placer.tuning_length_result() - placer.settings().target_length.opt()).abs() < 20_000);
+        assert!((placer.tuning_length_result() - Nm::new(placer.settings().target_length.opt())).abs() < um(20.0));
     }
 
     #[test]

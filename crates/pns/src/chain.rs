@@ -251,13 +251,8 @@ impl ShapeLineChain {
 
     // ------------------------------------------------------------------------------------------------- measuring
 
-    /// [`ShapeLineChain::length_nm`] as a count of nanometres: the studio's (`crates/cli`) signature until the length type's wave 3.
-    pub fn length(&self) -> i64 {
-        self.length_nm().get()
-    }
-
     /// `Length`: the plain segments by `SEG::Length` (each rounded), the arcs by their true length.
-    pub fn length_nm(&self) -> Nm {
+    pub fn length(&self) -> Nm {
         let mut l = Nm::ZERO;
         for i in 0..self.segment_count() {
             if !self.is_arc_segment(i) {
@@ -338,13 +333,8 @@ impl ShapeLineChain {
         closest == 0 || closest < clearance_sq
     }
 
-    /// [`ShapeLineChain::point_on_edge_nm`] with the accuracy a count of nanometres: the studio's (`crates/cli`) signature until the length type's wave 3.
-    pub fn point_on_edge(&self, p: Point, accuracy: i64) -> bool {
-        self.point_on_edge_nm(p, Nm::new(accuracy))
-    }
-
     /// `PointOnEdge( aPt, aAccuracy )` (`EdgeContainingPoint`).
-    pub fn point_on_edge_nm(&self, p: Point, accuracy: Nm) -> bool {
+    pub fn point_on_edge(&self, p: Point, accuracy: Nm) -> bool {
         let threshold = accuracy + Nm::new(1);
         let threshold_sq = threshold.area(threshold);
         match self.points.len() {
@@ -632,7 +622,7 @@ mod tests {
             c.append_point(q);
         }
         assert_eq!(c.points(), &[p(0, 0), p(10, 0), p(10, 10)]);
-        assert_eq!((c.point_count(), c.segment_count(), c.length_nm()), (3, 2, Nm::new(20)));
+        assert_eq!((c.point_count(), c.segment_count(), c.length()), (3, 2, Nm::new(20)));
     }
 
     #[test]
@@ -648,7 +638,7 @@ mod tests {
         assert!(!c.is_arc_segment(0) && c.is_arc_segment(1) && c.is_arc_segment(c.point_count() - 3));
         assert!(!c.is_arc_segment(c.point_count() - 2));
         let expect = 1_000_000.0 + 1_000_000.0 * std::f64::consts::FRAC_PI_2 + 2_000_000.0;
-        assert!((c.length_nm().as_f64() - expect).abs() < 2.0, "{} vs {expect}", c.length_nm());
+        assert!((c.length().as_f64() - expect).abs() < 2.0, "{} vs {expect}", c.length());
         // the arc starts where the line before it ended: its first point is shared, not repeated
         assert_eq!(c.points().iter().filter(|&&q| q == p(0, 0)).count(), 1);
     }
@@ -700,7 +690,7 @@ mod tests {
         assert_eq!(m.points()[0], p(0, 0));
         assert_eq!(m.c_last_point(), p(1_000_000, -1_000_000));
         assert_eq!(m.arcs()[0].is_ccw(), !c.arcs()[0].is_ccw());
-        assert!((m.length_nm() - c.length_nm()).abs() <= Nm::new(1));
+        assert!((m.length() - c.length()).abs() <= Nm::new(1));
     }
 
     #[test]
@@ -733,7 +723,7 @@ mod tests {
         assert_eq!(r.arcs().len(), 1);
         assert!(r.is_arc_segment(0));
         assert_eq!(r.arcs()[0].start, quarter().end);
-        assert!((r.length_nm() - c.length_nm()).abs() <= Nm::new(1));
+        assert!((r.length() - c.length()).abs() <= Nm::new(1));
     }
 
     #[test]
@@ -747,6 +737,6 @@ mod tests {
     #[test]
     fn point_on_edge_allows_the_accuracy_asked() {
         let c = ShapeLineChain::from_points(&[p(0, 0), p(10, 0)]);
-        assert!(c.point_on_edge_nm(p(5, 1), Nm::new(1)) && !c.point_on_edge_nm(p(5, 3), Nm::new(1)));
+        assert!(c.point_on_edge(p(5, 1), Nm::new(1)) && !c.point_on_edge(p(5, 3), Nm::new(1)));
     }
 }

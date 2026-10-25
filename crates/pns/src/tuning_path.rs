@@ -158,7 +158,7 @@ pub(crate) fn line_chain_nm(line: &Line) -> ShapeLineChain {
     while i < line.pts.len() {
         if let Some(r) = runs.iter().find(|r| r.first == i) {
             let a = if r.reversed { line.arcs[r.arc].reversed() } else { line.arcs[r.arc] };
-            c.append_arc(&crate::kigeom::ShapeArc::new_nm(a.start, a.mid, a.end, Nm::ZERO));
+            c.append_arc(&crate::kigeom::ShapeArc::new(a.start, a.mid, a.end, Nm::ZERO));
             i = r.last + 1;
             continue;
         }
@@ -248,7 +248,7 @@ fn walk_tuning_path(world: &Node, start: &Line, from_back: bool, visited: &HashS
                 next_items.push(PathItem::Line { line: cont.clone(), clipped: chain.clone() });
                 let mut next_visited = current.visited.clone();
                 next_visited.extend(cont.segment_ids.iter().copied());
-                stack.push(State { endpoint: forward_endpoint, items: next_items, length: current.length + chain.length_nm(), visited: next_visited });
+                stack.push(State { endpoint: forward_endpoint, items: next_items, length: current.length + chain.length(), visited: next_visited });
             }
             if continuations.is_empty() && current.length > best.length {
                 let mut items = current.items.clone();
@@ -323,11 +323,6 @@ fn path_net(path: &TuningPath) -> Net {
 }
 
 impl TuningPath {
-    /// [`TuningPath::length_nm`] as a count of nanometres: the studio's (`crates/cli`) signature until the length type's wave 3.
-    pub fn length(&self, world: &Node, env: &LengthEnv) -> i64 {
-        self.length_nm(world, env).get()
-    }
-
     /// The origin line.
     pub fn origin_line(&self) -> &Line {
         match &self.items[self.origin] {
@@ -339,11 +334,11 @@ impl TuningPath {
     /// `lineLength( path, startPad, endPad )` (`CalculateRoutedPathLength`): the lines of the path (pad-clipped), plus the height of the stackup a
     /// via of the path spans when the board uses height in its lengths, plus the via KiCad infers where the path leaves a pad on the other side
     /// of the board (`inferViaInPad`). Nanometres.
-    pub fn length_nm(&self, world: &Node, env: &LengthEnv) -> Nm {
+    pub fn length(&self, world: &Node, env: &LengthEnv) -> Nm {
         let mut total = Nm::ZERO;
         for (idx, it) in self.items.iter().enumerate() {
             match it {
-                PathItem::Line { clipped, .. } => total += clipped.length_nm(),
+                PathItem::Line { clipped, .. } => total += clipped.length(),
                 PathItem::Via(_) if env.rules.use_height_for_length_calcs && idx > 0 && idx + 1 < self.items.len() => {
                     // `getLengthDelayCalculationItems`: a via between two lines on different layers
                     let layer_of = |i: &PathItem| if let PathItem::Line { line, .. } = i { Some(line.layer) } else { None };
@@ -371,11 +366,6 @@ impl TuningPath {
         }
         total
     }
-}
-
-/// [`stackup_distance`] as a count of nanometres: the studio's (`crates/cli`) signature until the length type's wave 3.
-pub fn stackup_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: &str) -> i64 {
-    stackup_distance(stackup, copper, first, second).get()
 }
 
 /// `BOARD_STACKUP::GetLayerDistance( aFirstLayer, aSecondLayer )`: the thickness between two copper layers, half of an inner copper layer at
@@ -476,7 +466,7 @@ mod tests {
         let path = assemble_tuning_path(&w, a).expect("a path");
         assert_eq!(path.items.len(), 1);
         assert!(path.start_pad.is_some() && path.end_pad.is_some());
-        assert_eq!(path.length_nm(&w, &env()), mm(15.0), "15 mm in nanometres, the ends on the pad centres");
+        assert_eq!(path.length(&w, &env()), mm(15.0), "15 mm in nanometres, the ends on the pad centres");
         assert_eq!(path.origin_line().pts.len(), 3);
     }
 
@@ -492,20 +482,20 @@ mod tests {
         let kinds: Vec<&str> = path.items.iter().map(|i| if matches!(i, PathItem::Via(_)) { "via" } else { "line" }).collect();
         assert_eq!(kinds, ["line", "via", "line"]);
         // 10 mm + 8 mm, minus nothing; plus the 1.6 mm board less its two mask coats and half... (the stackup between the two copper layers)
-        let l = path.length_nm(&w, &env());
+        let l = path.length(&w, &env());
         let h = stackup_distance(&env().stackup, &env().rules.layers, "F.Cu", "B.Cu");
         assert!(h > mm(1.4) && h < mm(1.6), "{h}");
         assert_eq!(l, mm(18.0) + h);
         // the same without the height setting
         let mut e = env();
         e.rules.use_height_for_length_calcs = false;
-        assert_eq!(path.length_nm(&w, &e), mm(18.0));
+        assert_eq!(path.length(&w, &e), mm(18.0));
         // a pad on the other side of the board from the line that leaves it is a via KiCad infers (`inferViaInPad`)
         let mut w2 = Node::new();
         let b = w2.add(seg("S", 1, p(0, 0), p(10_000_000, 0)));
         w2.add(pad("S", p(0, 0)));
         let inferred = assemble_tuning_path(&w2, b).expect("a path");
-        assert_eq!(inferred.length_nm(&w2, &env()), mm(10.0) + h);
+        assert_eq!(inferred.length(&w2, &env()), mm(10.0) + h);
     }
 
     #[test]
@@ -516,7 +506,7 @@ mod tests {
         w.add(seg("S", 0, p(10_000_000, 0), p(20_000_000, 0)));
         let path = assemble_tuning_path(&w, a).expect("a path");
         assert_eq!(path.items.len(), 1);
-        assert_eq!(path.length_nm(&w, &env()), mm(10.0));
+        assert_eq!(path.length(&w, &env()), mm(10.0));
         assert!(path.start_pad.is_none() && path.end_pad.is_none());
     }
 

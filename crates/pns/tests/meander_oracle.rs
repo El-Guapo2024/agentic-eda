@@ -82,7 +82,7 @@ impl MeanderEnv for Env {
             return true;
         }
         let w = shape.width();
-        MeanderedLine::check_self_intersections(existing, shape, if self.dual_fit { w + w * 3 } else { w + Nm::new(self.settings.spacing) })
+        MeanderedLine::check_self_intersections(existing, shape, if self.dual_fit { w + w * 3 } else { w + self.settings.spacing })
     }
 }
 
@@ -142,7 +142,7 @@ impl Nums {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn settings_from(min: i64, max: i64, spacing: i64, step: Nm, style: i64, radius: i64, single: i64, initial: i64) -> MeanderSettings {
+fn settings_from(min: Nm, max: Nm, spacing: Nm, step: Nm, style: i64, radius: i64, single: i64, initial: i64) -> MeanderSettings {
     let mut s = MeanderSettings::default();
     s.min_amplitude = min;
     s.max_amplitude = max;
@@ -197,7 +197,7 @@ fn evaluate(input: &str) -> String {
             let pp = n.point();
             let side = n.next() != 0;
             let (width, clearance, dual, offset) = (n.len(), n.len(), n.next() != 0, n.len());
-            let (min, max, spacing, step, style, radius, single) = (n.next(), n.next(), n.next(), n.len(), n.next(), n.next(), n.next());
+            let (min, max, spacing, step, style, radius, single) = (n.len(), n.len(), n.len(), n.len(), n.next(), n.next(), n.next());
             let (tbl, amp) = (n.len(), n.len());
             let obstacles = n.obstacles();
             let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, 0), clearance, obstacles, line: false, dual_fit: false };
@@ -221,7 +221,7 @@ fn evaluate(input: &str) -> String {
             let base = Seg::new(n.point(), n.point());
             let side = n.next() != 0;
             let (width, clearance) = (n.len(), n.len());
-            let (min, max, spacing, step, style, radius, single, initial) = (n.next(), n.next(), n.next(), n.len(), n.next(), n.next(), n.next(), n.next());
+            let (min, max, spacing, step, style, radius, single, initial) = (n.len(), n.len(), n.len(), n.len(), n.next(), n.next(), n.next(), n.next());
             let elong = n.len();
             let obstacles = n.obstacles();
             let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, initial), clearance, obstacles, line: true, dual_fit: false };
@@ -264,7 +264,7 @@ fn evaluate(input: &str) -> String {
             let base = Seg::new(n.point(), n.point());
             let side = n.next() != 0;
             let (width, clearance) = (n.len(), n.len());
-            let (min, max, spacing, step, style, radius, single, initial) = (n.next(), n.next(), n.next(), n.len(), n.next(), n.next(), n.next(), n.next());
+            let (min, max, spacing, step, style, radius, single, initial) = (n.len(), n.len(), n.len(), n.len(), n.next(), n.next(), n.next(), n.next());
             let elong = n.len();
             let offset = n.len();
             let obstacles = n.obstacles();

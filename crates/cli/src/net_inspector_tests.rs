@@ -91,8 +91,8 @@ fn the_lengths_are_kicads_merged_and_clipped_lines_and_the_stackup_height_of_the
     assert!((track - 10 * MM).abs() <= 2, "{n}");
     assert_eq!(n["via_count"], 1);
     let stackup = eda_model::rules::default_stackup(2, m.board.board_thickness_nm);
-    let height = eda_pns::tuning_path::stackup_distance_nm(&stackup, &m.board.layers, "F.Cu", "B.Cu");
-    assert!(height > 1_000_000, "{height}");
+    let height = eda_pns::tuning_path::stackup_distance(&stackup, &m.board.layers, "F.Cu", "B.Cu").get();
+    assert!(height > MM, "{height}");
     assert_eq!(n["via_length"], height);
     assert_eq!(n["total_length"].as_i64().unwrap(), track + height);
     assert!((n["layer_lengths"]["F.Cu"].as_i64().unwrap() - 6 * MM).abs() <= 2);

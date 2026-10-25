@@ -48,7 +48,7 @@ impl ArcPts {
 
     /// `SHAPE_ARC` of it on the nanometre grid, width 0.
     pub fn shape_nm(&self) -> ShapeArc {
-        ShapeArc::new_nm(self.start, self.mid, self.end, Nm::ZERO)
+        ShapeArc::new(self.start, self.mid, self.end, Nm::ZERO)
     }
 
     /// No circle through the three points (they are one point, or in a line): the arc is its chord.
