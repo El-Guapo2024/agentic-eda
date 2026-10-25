@@ -24,8 +24,8 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
         let (xi, yi) = (poly[i].x, poly[i].y);
         let (xj, yj) = (poly[j].x, poly[j].y);
         if (yi > p.y) != (yj > p.y) {
-            let x_int = xi.raw_shim() as f64 + ((p.y - yi).raw_shim() as f64) * ((xj - xi).raw_shim() as f64) / ((yj - yi).raw_shim() as f64);
-            if (p.x.raw_shim() as f64) < x_int {
+            let x_int = xi.as_f64() + (p.y - yi).as_f64() * (xj - xi).as_f64() / (yj - yi).as_f64();
+            if (p.x.as_f64()) < x_int {
                 inside = !inside;
             }
         }
@@ -106,7 +106,7 @@ impl<'a> Region<'a> {
 }
 
 fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
-    let (ax, ay, bx, by, px, py) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, p.x.raw_shim() as f64, p.y.raw_shim() as f64);
+    let (ax, ay, bx, by, px, py) = (a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64(), p.x.as_f64(), p.y.as_f64());
     let (dx, dy) = (bx - ax, by - ay);
     let len2 = dx * dx + dy * dy;
     let t = if len2 == 0.0 { 0.0 } else { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) };
@@ -115,7 +115,7 @@ fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
 }
 
 fn orient(a: Point, b: Point, c: Point) -> i128 {
-    (b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128
+    (b.x - a.x).area(c.y - a.y) - (b.y - a.y).area(c.x - a.x)
 }
 
 fn segments_intersect(a: Point, b: Point, c: Point, d: Point) -> bool {
@@ -154,8 +154,8 @@ impl Rect {
         p.x >= self.0 && p.x <= self.2 && p.y >= self.1 && p.y <= self.3
     }
     fn gap(&self, o: &Rect) -> f64 {
-        let dx = ((self.0 - o.2).max(o.0 - self.2).max(Nm::ZERO)).raw_shim() as f64;
-        let dy = ((self.1 - o.3).max(o.1 - self.3).max(Nm::ZERO)).raw_shim() as f64;
+        let dx = ((self.0 - o.2).max(o.0 - self.2).max(Nm::ZERO)).as_f64();
+        let dy = ((self.1 - o.3).max(o.1 - self.3).max(Nm::ZERO)).as_f64();
         (dx * dx + dy * dy).sqrt()
     }
 }
@@ -358,8 +358,8 @@ pub fn placement_region(design: &Design, model: &ConstraintModel) -> Vec<CheckRe
             };
             let Some(part) = model.part(id) else { continue };
             let Some(c) = placed_courtyard(model, part, fp) else { continue };
-            let outx = ((m.rect.0 - c.0).max(Nm::ZERO) + (c.2 - m.rect.2).max(Nm::ZERO)).raw_shim() as f64 / 1e6;
-            let outy = ((m.rect.1 - c.1).max(Nm::ZERO) + (c.3 - m.rect.3).max(Nm::ZERO)).raw_shim() as f64 / 1e6;
+            let outx = ((m.rect.0 - c.0).max(Nm::ZERO) + (c.2 - m.rect.2).max(Nm::ZERO)).mm();
+            let outy = ((m.rect.1 - c.1).max(Nm::ZERO) + (c.3 - m.rect.3).max(Nm::ZERO)).mm();
             if outx > 0.0 || outy > 0.0 {
                 ok = false;
                 out.push(
@@ -432,7 +432,7 @@ fn locality_with(design: &Design, model: &ConstraintModel, lint: &[eda_lint::Fin
         pl.outline.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO),
         pl.outline.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO),
     );
-    let board_diag = (((bb.2 - bb.0).raw_shim() as f64).powi(2) + ((bb.3 - bb.1).raw_shim() as f64).powi(2)).sqrt();
+    let board_diag = ((bb.2 - bb.0).as_f64().powi(2) + (bb.3 - bb.1).as_f64().powi(2)).sqrt();
     // Allow a generous multiple of the two courtyards' own extents before
     // calling a point-to-point net "far apart" — small parts on a huge
     // board can legitimately sit a good fraction of the diagonal apart, but
@@ -589,15 +589,15 @@ fn seg_pad_dist(a: Point, b: Point, pad: &PadItem) -> f64 {
     let g = &pad.geom;
     let center = g.center;
     if g.is_round() {
-        let rmin = (g.size.0.min(g.size.1) / 2).raw_shim() as f64;
+        let rmin = (g.size.0.min(g.size.1) / 2).as_f64();
         (seg_point_dist(a, b, center) - rmin).max(0.0)
     } else {
         let r = g.corner_radius();
         let inset = Rect(
-            Nm::from_raw_shim((center.x.raw_shim() as f64 - g.size.0.raw_shim() as f64 / 2.0 + r).round() as i64),
-            Nm::from_raw_shim((center.y.raw_shim() as f64 - g.size.1.raw_shim() as f64 / 2.0 + r).round() as i64),
-            Nm::from_raw_shim((center.x.raw_shim() as f64 + g.size.0.raw_shim() as f64 / 2.0 - r).round() as i64),
-            Nm::from_raw_shim((center.y.raw_shim() as f64 + g.size.1.raw_shim() as f64 / 2.0 - r).round() as i64),
+            Nm::kiround(center.x.as_f64() - g.size.0.as_f64() / 2.0 + r),
+            Nm::kiround(center.y.as_f64() - g.size.1.as_f64() / 2.0 + r),
+            Nm::kiround(center.x.as_f64() + g.size.0.as_f64() / 2.0 - r),
+            Nm::kiround(center.y.as_f64() + g.size.1.as_f64() / 2.0 - r),
         );
         (seg_rect_dist(a, b, &inset) - r).max(0.0)
     }
@@ -847,7 +847,7 @@ fn check_workmanship(
         for i in 0..fpads.len() {
             for j in i + 1..fpads.len() {
                 let (a, b) = (fpads[i], fpads[j]);
-                if (Nm::from_raw_shim(a.rect.gap(&b.rect) as i64)) > BETWEEN_PADS_MAX_GAP {
+                if Nm::new(a.rect.gap(&b.rect) as i64) > BETWEEN_PADS_MAX_GAP {
                     continue;
                 }
                 // Adjacent pairs only: pins 1 and 3 of a row have pin 2
@@ -910,14 +910,14 @@ fn check_workmanship(
             if t.layer != layer {
                 continue;
             }
-            let half = (t.width / 2).raw_shim() as f64;
+            let half = (t.width / 2).as_f64();
             if t.pts.windows(2).any(|w| seg_rect_dist(w[0], w[1], &bx) - half < 0.0) {
                 n_refdes += 1;
                 out.push(CheckResult::fail("routing_over_refdes", format!("{}#{ti}/{}", t.net, fp.id), "track runs under the refdes label (max 0)"));
             }
         }
         for (vi, v) in rt.vias.iter().enumerate() {
-            if bx.gap(&Rect::centered(v.at, (Nm::ZERO, Nm::ZERO))) - ((v.diameter / 2).raw_shim() as f64) < 0.0 {
+            if bx.gap(&Rect::centered(v.at, (Nm::ZERO, Nm::ZERO))) - (v.diameter / 2).as_f64() < 0.0 {
                 n_refdes += 1;
                 out.push(CheckResult::fail("routing_over_refdes", format!("via:{}#{vi}/{}", v.net, fp.id), "via sits under the refdes label (max 0)"));
             }
@@ -930,13 +930,13 @@ fn check_workmanship(
 
 /// Intersection point of two properly crossing segments (rounded to µm).
 fn seg_seg_cross(a: Point, b: Point, c: Point, d: Point) -> Point {
-    let (ax, ay, bx, by, cx, cy, dx, dy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, c.x.raw_shim() as f64, c.y.raw_shim() as f64, d.x.raw_shim() as f64, d.y.raw_shim() as f64);
+    let (ax, ay, bx, by, cx, cy, dx, dy) = (a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64(), c.x.as_f64(), c.y.as_f64(), d.x.as_f64(), d.y.as_f64());
     let den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
     if den == 0.0 {
         return a;
     }
     let t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den;
-    Point { x: Nm::from_raw_shim((ax + t * (bx - ax)).round() as i64), y: Nm::from_raw_shim((ay + t * (by - ay)).round() as i64) }
+    Point { x: Nm::kiround(ax + t * (bx - ax)), y: Nm::kiround(ay + t * (by - ay)) }
 }
 
 /// Routing *quality* gate (loop-3): exact-geometry judge over track/via
@@ -1020,8 +1020,8 @@ pub fn check_routing_quality(design: &Design, model: &ConstraintModel) -> Vec<Ch
         if airline == Nm::ZERO {
             continue;
         }
-        let length: i64 = tracks.iter().map(|t| polyline_len(&t.pts)).sum();
-        let ratio = length as f64 / airline.raw_shim() as f64;
+        let length: Nm = tracks.iter().map(|t| polyline_len(&t.pts)).sum();
+        let ratio = length.ratio(airline);
         if ratio > MAX_DETOUR_RATIO {
             detour_ok = false;
             out.push(CheckResult::fail(
@@ -1043,8 +1043,8 @@ pub fn check_routing_quality(design: &Design, model: &ConstraintModel) -> Vec<Ch
     out
 }
 
-fn polyline_len(pts: &[Point]) -> i64 {
-    pts.windows(2).map(|w| ((w[1].x - w[0].x).abs() + (w[1].y - w[0].y).abs()).raw_shim()).sum()
+fn polyline_len(pts: &[Point]) -> Nm {
+    pts.windows(2).map(|w| (w[1].x - w[0].x).abs() + (w[1].y - w[0].y).abs()).sum()
 }
 
 fn on_boundary(p: Point, poly: &[Point]) -> bool {
@@ -1127,7 +1127,7 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
                 if !pad.layers.contains(&t.layer) {
                     continue;
                 }
-                let half = (t.width.max(track_w) / 2).raw_shim() as f64;
+                let half = (t.width.max(track_w) / 2).as_f64();
                 for k in 0..t.pts.len() {
                     let a = t.pts[k];
                     let b = if k + 1 < t.pts.len() { t.pts[k + 1] } else { a };
@@ -1156,7 +1156,7 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
                 if ti == tj || tracks[ti].layer != tracks[tj].layer {
                     continue;
                 }
-                let half = (tracks[tj].width / 2).raw_shim() as f64;
+                let half = (tracks[tj].width / 2).as_f64();
                 let ends = [(0usize, tracks[ti].pts.first()), (tracks[ti].pts.len().saturating_sub(1), tracks[ti].pts.last())];
                 for (k, end) in ends {
                     let Some(&end) = end else { continue };
@@ -1297,7 +1297,7 @@ impl<'a> Copper<'a> {
 /// [`DRC_EPSILON_NM`], as kicad-cli's `clearance` check counts it.
 fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearance: Nm, out: &mut Vec<CheckResult>) {
     let mut ok = true;
-    let need = clearance.raw_shim() as f64 - DRC_EPSILON_NM;
+    let need = clearance.as_f64() - DRC_EPSILON_NM;
     let mut fail = |a: &Copper, b: &Copper, gap: f64| {
         ok = false;
         out.push(
@@ -1664,7 +1664,7 @@ mod tests {
         // A 1.6 x 0.4 mm bar turned 45 degrees, by its own rotation and, the same, by its footprint's. A track alongside the
         // bar's long edge, 560 um from its axis (260 um of air), crosses the bar's bounding square.
         let along = |k: Nm| a_track("F.Cu", &[(mm(7.0) + k, mm(7.0)), (mm(13.0) + k, mm(13.0))]); // x - y = k, parallel to the bar
-        let k_for = |axis_nm: f64| Nm::from_raw_shim((axis_nm * std::f64::consts::SQRT_2).round() as i64);
+        let k_for = |axis_nm: f64| Nm::kiround(axis_nm * std::f64::consts::SQRT_2);
         let by_pad_rot = |k: Nm| {
             let mut pad = test_pad("1", (Nm::ZERO, Nm::ZERO), (mm(1.6), mm(0.4)), PadShape::Rect);
             pad.rot = 45_000;
@@ -1707,7 +1707,7 @@ mod tests {
             let (ux, uy) = (-800.0 / 1280.625, -1000.0 / 1280.625);
             let off = air + 100_000.0;
             let (cx, cy) = (1_000_000.0 + nx * off, 0.0 + ny * off);
-            let pt = |t: f64| (Nm::from_raw_shim((10_000_000.0 + cx + ux * t).round() as i64), Nm::from_raw_shim((10_000_000.0 + cy + uy * t).round() as i64));
+            let pt = |t: f64| (Nm::kiround(10_000_000.0 + cx + ux * t), Nm::kiround(10_000_000.0 + cy + uy * t));
             routing_of(vec![a_track("F.Cu", &[pt(-2_500_000.0), pt(2_500_000.0)])], vec![])
         };
         let (d, m) = pad_fixture(pads(), 0, Side::Top, alongside(260_000.0));
@@ -1715,9 +1715,9 @@ mod tests {
         let (d, m) = pad_fixture(pads(), 0, Side::Top, alongside(150_000.0));
         assert_eq!(clearance_fails(&d, &m), 1, "150 um of air is under the clearance");
         // The same pad on the back of the board is the mirror image: the wide corner is at x = -1400 there.
-        let (d, m) = pad_fixture(pads(), 0, Side::Bottom, routing_of(vec![Track { layer: "B.Cu".into(), ..a_track("B.Cu", &[(Nm::from_raw_shim(10_000_000 - 1_699_000), mm(8.0)), (Nm::from_raw_shim(10_000_000 - 1_699_000), mm(12.0))]) }], vec![]));
+        let (d, m) = pad_fixture(pads(), 0, Side::Bottom, routing_of(vec![Track { layer: "B.Cu".into(), ..a_track("B.Cu", &[(mm(10.0) - mm(1.699), mm(8.0)), (mm(10.0) - mm(1.699), mm(12.0))]) }], vec![]));
         assert_eq!(clearance_fails(&d, &m), 1, "mirrored on the bottom side");
-        let (d, m) = pad_fixture(pads(), 0, Side::Bottom, routing_of(vec![Track { layer: "B.Cu".into(), ..a_track("B.Cu", &[(Nm::from_raw_shim(10_000_000 - 1_700_000), mm(8.0)), (Nm::from_raw_shim(10_000_000 - 1_700_000), mm(12.0))]) }], vec![]));
+        let (d, m) = pad_fixture(pads(), 0, Side::Bottom, routing_of(vec![Track { layer: "B.Cu".into(), ..a_track("B.Cu", &[(mm(10.0) - mm(1.7), mm(8.0)), (mm(10.0) - mm(1.7), mm(12.0))]) }], vec![]));
         assert_eq!(clearance_fails(&d, &m), 0);
     }
 
@@ -1731,9 +1731,9 @@ mod tests {
         pad.ext = PadShapeExt { chamfer_ratio: Some(0.4), chamfer_corners: ChamferCorners { top_left: true, ..Default::default() }, ..Default::default() };
         // The track on x + y = c is |c - 20000 + 600| / sqrt 2 from the face: 250 um of air is 350 um from its axis.
         let air = |a: f64| 20_000_000.0 - 600_000.0 - (a + 100_000.0) * std::f64::consts::SQRT_2;
-        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(Nm::from_raw_shim(air(250_000.0).round() as i64))], vec![]));
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(Nm::kiround(air(250_000.0)))], vec![]));
         assert_eq!(clearance_fails(&d, &m), 0, "250 um from the cut face (the square corner at (-500, -500) is 67 um nearer): {:?}", fails(&d, &m, "routing_clearance"));
-        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(Nm::from_raw_shim(air(150_000.0).round() as i64))], vec![]));
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(Nm::kiround(air(150_000.0)))], vec![]));
         assert_eq!(clearance_fails(&d, &m), 1, "150 um from the face");
         // The corner that is not cut is square: the same track beside the bottom right corner is as close as a rectangle's.
         let (d, m) = pad_fixture(vec![pad], 0, Side::Top, routing_of(vec![diagonal(mm(21.202))], vec![]));
