@@ -44,8 +44,8 @@ pub fn isqrt(x: i128) -> i64 {
     r
 }
 
-fn sq(x: i64) -> i128 {
-    (x as i128) * (x as i128)
+fn sq(x: Nm) -> i128 {
+    (x.get() as i128) * (x.get() as i128)
 }
 
 /// A line segment `A -> B`, exactly KiCad's `SEG` (a degenerate segment,
@@ -68,15 +68,15 @@ impl Seg {
 
     /// Squared distance to a point -- ported from `SEG::SquaredDistance(const VECTOR2I&)`.
     pub fn sq_distance_to_point(&self, p: Point) -> i128 {
-        let ab = ((self.b.x - self.a.x).raw_shim() as i128, (self.b.y - self.a.y).raw_shim() as i128);
-        let ap = ((p.x - self.a.x).raw_shim() as i128, (p.y - self.a.y).raw_shim() as i128);
+        let ab = ((self.b.x - self.a.x).get() as i128, (self.b.y - self.a.y).get() as i128);
+        let ap = ((p.x - self.a.x).get() as i128, (p.y - self.a.y).get() as i128);
         let e = ap.0 * ab.0 + ap.1 * ab.1;
         if e <= 0 {
             return ap.0 * ap.0 + ap.1 * ap.1;
         }
         let f = ab.0 * ab.0 + ab.1 * ab.1;
         if e >= f {
-            let bp = ((p.x - self.b.x).raw_shim() as i128, (p.y - self.b.y).raw_shim() as i128);
+            let bp = ((p.x - self.b.x).get() as i128, (p.y - self.b.y).get() as i128);
             return bp.0 * bp.0 + bp.1 * bp.1;
         }
         let ap_sq = ap.0 * ap.0 + ap.1 * ap.1;
@@ -89,12 +89,12 @@ impl Seg {
 
     /// Nearest point on the segment to `p` -- ported from `SEG::NearestPoint(const VECTOR2I&)`.
     pub fn nearest_point(&self, p: Point) -> Point {
-        let d = ((self.b.x - self.a.x).raw_shim() as i128, (self.b.y - self.a.y).raw_shim() as i128);
+        let d = ((self.b.x - self.a.x).get() as i128, (self.b.y - self.a.y).get() as i128);
         let l_sq = d.0 * d.0 + d.1 * d.1;
         if l_sq == 0 {
             return self.a;
         }
-        let pa = ((p.x - self.a.x).raw_shim() as i128, (p.y - self.a.y).raw_shim() as i128);
+        let pa = ((p.x - self.a.x).get() as i128, (p.y - self.a.y).get() as i128);
         let t = d.0 * pa.0 + d.1 * pa.1;
         if t < 0 {
             return self.a;
@@ -103,7 +103,7 @@ impl Seg {
         }
         let xp = (t * d.0) / l_sq;
         let yp = (t * d.1) / l_sq;
-        Point { x: self.a.x + Nm::from_raw_shim(xp as i64), y: self.a.y + Nm::from_raw_shim(yp as i64) }
+        Point { x: self.a.x + Nm::new(xp as i64), y: self.a.y + Nm::new(yp as i64) }
     }
 
     /// Squared distance to another segment -- ported from `SEG::SquaredDistance(const SEG&)`:
@@ -131,8 +131,8 @@ impl Seg {
     /// collinear overlap, a rare case for tracks, is reported as no
     /// intersection here -- see the module doc's fidelity notes).
     pub fn intersect(&self, other: &Seg) -> Option<Point> {
-        let (ax, ay, bx, by) = (self.a.x.raw_shim() as i128, self.a.y.raw_shim() as i128, self.b.x.raw_shim() as i128, self.b.y.raw_shim() as i128);
-        let (cx, cy, dx, dy) = (other.a.x.raw_shim() as i128, other.a.y.raw_shim() as i128, other.b.x.raw_shim() as i128, other.b.y.raw_shim() as i128);
+        let (ax, ay, bx, by) = (self.a.x.get() as i128, self.a.y.get() as i128, self.b.x.get() as i128, self.b.y.get() as i128);
+        let (cx, cy, dx, dy) = (other.a.x.get() as i128, other.a.y.get() as i128, other.b.x.get() as i128, other.b.y.get() as i128);
         // Bounding-box rejection first (cheap, and matches SEG::intersects).
         if bx.max(ax) < cx.min(dx) || dx.max(cx) < ax.min(bx) || by.max(ay) < cy.min(dy) || dy.max(cy) < ay.min(by) {
             return None;
@@ -183,7 +183,7 @@ impl Seg {
         };
         let px = cx + rescale(param1, dir2x, det);
         let py = cy + rescale(param1, dir2y, det);
-        Some(Point { x: Nm::from_raw_shim(px as i64), y: Nm::from_raw_shim(py as i64) })
+        Some(Point { x: Nm::new(px as i64), y: Nm::new(py as i64) })
     }
 }
 
@@ -254,8 +254,8 @@ impl Core {
             // d = rescale(diff.x, (pt.y - p1.y), diff.y), matching KiCad's
             // integer rescale (proportional, rounds toward zero as `/` does).
             let diff = (p2.x - p1.x, p2.y - p1.y);
-            let d = (diff.0.raw_shim() as i128 * (p.y - p1.y).raw_shim() as i128) / diff.1.raw_shim() as i128;
-            if (p1.y >= p.y) != (p2.y >= p.y) && ((p.x - p1.x).raw_shim() as i128) < d {
+            let d = (diff.0.get() as i128 * (p.y - p1.y).get() as i128) / diff.1.get() as i128;
+            if (p1.y >= p.y) != (p2.y >= p.y) && ((p.x - p1.x).get() as i128) < d {
                 inside = !inside;
             }
         }
@@ -412,9 +412,9 @@ impl Shape {
             return pairwise(self, other).map(|(a, b)| a.clearance_to(b)).min_by_key(|(d, _)| *d).expect("a compound has parts");
         }
         let Some((best_sq, best_pt)) = self.core_sq_distance(other) else { return (Nm::ZERO, self.core().probe_point()) };
-        let core_dist = isqrt(best_sq);
-        let actual = (core_dist - self.radius().raw_shim() - other.radius().raw_shim()).max(0);
-        (Nm::from_raw_shim(actual), best_pt)
+        let core_dist = Nm::new(isqrt(best_sq));
+        let actual = (core_dist - self.radius() - other.radius()).max(Nm::ZERO);
+        (actual, best_pt)
     }
 
     /// The exact gap to `other`, in nm and not rounded: 0 when the shapes touch or overlap, otherwise the distance between
@@ -427,7 +427,7 @@ impl Shape {
         }
         match self.core_sq_distance(other) {
             None => 0.0,
-            Some((best_sq, _)) => ((best_sq as f64).sqrt() - (self.radius() + other.radius()).raw_shim() as f64).max(0.0),
+            Some((best_sq, _)) => ((best_sq as f64).sqrt() - (self.radius() + other.radius()).as_f64()).max(0.0),
         }
     }
 
@@ -448,11 +448,11 @@ impl Shape {
         // integer root first would round a 199.6 µm gap down to 199 and
         // flag it against a 200 µm clearance.
         let Some((best_sq, best_pt)) = self.core_sq_distance(other) else { return Some((Nm::ZERO, self.core().probe_point())) };
-        let reach = (self.radius() + other.radius()).raw_shim() as i128;
-        let need = reach + (clearance.max(Nm::ZERO)).raw_shim() as i128;
+        let reach = (self.radius() + other.radius()).get() as i128;
+        let need = reach + (clearance.max(Nm::ZERO)).get() as i128;
         if best_sq <= reach * reach || best_sq < need * need {
-            let actual = (isqrt(best_sq) - self.radius().raw_shim() - other.radius().raw_shim()).max(0);
-            Some((Nm::from_raw_shim(actual), best_pt))
+            let actual = (Nm::new(isqrt(best_sq)) - self.radius() - other.radius()).max(Nm::ZERO);
+            Some((actual, best_pt))
         } else {
             None
         }
@@ -507,15 +507,15 @@ pub fn distance_to_open_segments(shape: &Shape, edges: &[Seg]) -> (Nm, Point) {
             }
         }
     }
-    let actual = (isqrt(best_sq) - shape.radius().raw_shim()).max(0);
-    (Nm::from_raw_shim(actual), best_pt)
+    let actual = (Nm::new(isqrt(best_sq)) - shape.radius()).max(Nm::ZERO);
+    (actual, best_pt)
 }
 
 /// Euclidean distance between two points, rounded to the nearest micron --
 /// used where KiCad reports `(a - b).EuclideanNorm()` directly (hole-to-hole
 /// centre distance, annular width).
 pub fn dist(a: Point, b: Point) -> Nm {
-    Nm::from_raw_shim(isqrt(sq((a.x - b.x).raw_shim()) + sq((b.y - a.y).raw_shim()).max(sq((a.y - b.y).raw_shim()))))
+    Nm::new(isqrt(sq(a.x - b.x) + sq(b.y - a.y).max(sq(a.y - b.y))))
 }
 
 #[cfg(test)]
