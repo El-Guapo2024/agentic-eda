@@ -27,7 +27,7 @@ use eda_model::BoardRules;
 use std::collections::HashSet;
 
 fn dist_f(a: Point, b: Point) -> f64 {
-    (((b.x - a.x).raw_shim() as f64).powi(2) + ((b.y - a.y).raw_shim() as f64).powi(2)).sqrt()
+    (((b.x - a.x).as_f64()).powi(2) + ((b.y - a.y).as_f64()).powi(2)).sqrt()
 }
 
 pub(crate) fn point_in_polygon(poly: &[Point], p: Point) -> bool {
@@ -39,8 +39,8 @@ pub(crate) fn point_in_polygon(poly: &[Point], p: Point) -> bool {
     for i in 0..n {
         let (p1, p2) = (poly[i], poly[(i + 1) % n]);
         if (p1.y > p.y) != (p2.y > p.y) {
-            let x_cross = p1.x.raw_shim() as f64 + (p.y - p1.y).raw_shim() as f64 * (p2.x - p1.x).raw_shim() as f64 / (p2.y - p1.y).raw_shim() as f64;
-            if ((p.x).raw_shim() as f64) < x_cross {
+            let x_cross = p1.x.as_f64() + (p.y - p1.y).as_f64() * (p2.x - p1.x).as_f64() / (p2.y - p1.y).as_f64();
+            if ((p.x).as_f64()) < x_cross {
                 inside = !inside;
             }
         }

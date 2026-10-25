@@ -23,7 +23,7 @@ fn point_in_polygon(poly: &[Point], q: Point) -> bool {
     let n = poly.len();
     for i in 0..n {
         let (a, b) = (poly[i], poly[(i + 1) % n]);
-        if (a.y > q.y) != (b.y > q.y) && (q.x.raw_shim() as f64) < (b.x - a.x).raw_shim() as f64 * (q.y - a.y).raw_shim() as f64 / (b.y - a.y).raw_shim() as f64 + a.x.raw_shim() as f64 {
+        if (a.y > q.y) != (b.y > q.y) && (q.x.as_f64()) < (b.x - a.x).as_f64() * (q.y - a.y).as_f64() / (b.y - a.y).as_f64() + a.x.as_f64() {
             inside = !inside;
         }
     }

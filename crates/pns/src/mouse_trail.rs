@@ -145,7 +145,7 @@ impl MouseTrailTracer {
 
         let p0 = self.trail[0];
         // `double refLength = SEG( p0, aP ).Length()`: the length is an integer (`EuclideanNorm` truncates)
-        let ref_length = ((((p.x - p0.x).raw_shim() as f64).powi(2) + ((p.y - p0.y).raw_shim() as f64).powi(2)).sqrt() as i64) as f64;
+        let ref_length = ((((p.x - p0.x).as_f64()).powi(2) + ((p.y - p0.y).as_f64()).powi(2)).sqrt() as i64) as f64;
         let reversed: Vec<Point> = self.trail.iter().rev().copied().collect();
 
         // `SHAPE_LINE_CHAIN straight( DIRECTION_45().BuildInitialTrace( p0, aP, false ) ); straight.SetClosed( true ); straight.Append( m_trail.Reverse() );
@@ -287,7 +287,7 @@ fn area(chain: &[Point]) -> f64 {
     let mut sum = 0.0f64;
     let mut j = size.wrapping_sub(1);
     for i in 0..size {
-        sum += (chain[j].x.raw_shim() as f64 + chain[i].x.raw_shim() as f64) * (chain[j].y.raw_shim() as f64 - chain[i].y.raw_shim() as f64);
+        sum += (chain[j].x.as_f64() + chain[i].x.as_f64()) * (chain[j].y.as_f64() - chain[i].y.as_f64());
         j = i;
     }
     (sum * 0.5).abs()

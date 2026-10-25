@@ -23,7 +23,7 @@ use eda_model::ir::Point;
 use std::collections::{BTreeSet, HashSet};
 
 /// How far apart two points that should be one are allowed to be before they are two (nanometres): the rounding of a meander's shapes.
-const SNAP_NM: i64 = 3;
+const SNAP_NM: Nm = Nm::new(3);
 
 /// One track of the new line (micrometres).
 #[derive(Debug, Clone, PartialEq)]
@@ -161,7 +161,9 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
         if s.a == s.b {
             continue;
         }
-        let mid = Point { x: Nm::from_raw_shim((s.a.x + s.b.x).div_euclid(Nm::from_raw_shim(2))), y: Nm::from_raw_shim((s.a.y + s.b.y).div_euclid(Nm::from_raw_shim(2))) };
+        // the midpoint, halved toward minus infinity
+        let half = |v: Nm| Nm::new(v.get().div_euclid(2));
+        let mid = Point { x: half(s.a.x + s.b.x), y: half(s.a.y + s.b.y) };
         let k = (0..origin.segment_count()).min_by_key(|&k| origin.c_segment(k).squared_distance(mid))?;
         touched.insert(k);
     }
@@ -169,8 +171,8 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
     let (v_lo, v_hi) = (origin.c_point(lo), origin.c_point(hi + 1));
 
     // The touched run's two ends: the one on the side of the pattern's start is the one `pre` reaches back to.
-    let lo_in_pre = t.pre.point_on_edge(v_lo, SNAP_NM);
-    let hi_in_pre = t.pre.point_on_edge(v_hi, SNAP_NM);
+    let lo_in_pre = t.pre.point_on_edge_nm(v_lo, SNAP_NM);
+    let hi_in_pre = t.pre.point_on_edge_nm(v_hi, SNAP_NM);
     let (first, last) = match (lo_in_pre, hi_in_pre) {
         (true, false) => (v_lo, v_hi),
         (false, true) => (v_hi, v_lo),
@@ -210,7 +212,7 @@ mod tests {
     use eda_model::BoardRules;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn env() -> LengthEnv {
@@ -288,7 +290,7 @@ mod tests {
         // the pattern runs from 13 mm to 22 mm: segment 1 (12..14) and segment 2 (14..30) of track b are touched; track a and c are not
         placer.update_settings({
             let mut s = settings(0);
-            s.set_target_length(placer.orig_path_length() + 3_000_000);
+            s.set_target_length((placer.orig_path_length() + mm(3.0)).get());
             s
         });
         assert!(placer.do_move(p(22_000_000, 0)));
@@ -315,7 +317,7 @@ mod tests {
         let mut placer = MeanderPlacer::start(&w, &env(), s, p(30_000_000, 0), settings(0)).unwrap();
         placer.update_settings({
             let mut st = settings(0);
-            st.set_target_length(placer.orig_path_length() + 2_000_000);
+            st.set_target_length((placer.orig_path_length() + mm(2.0)).get());
             st
         });
         assert!(placer.do_move(p(20_000_000, 0)));

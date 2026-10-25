@@ -98,7 +98,7 @@ pub fn offset_polyline(centerline: &[Point], offset: i64) -> Vec<Point> {
     let mut offset_segs: Vec<(Point, Point)> = Vec::with_capacity(centerline.len() - 1);
     for w in centerline.windows(2) {
         let (a, b) = (w[0], w[1]);
-        let (dx, dy) = ((b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
+        let (dx, dy) = ((b.x - a.x).as_f64(), (b.y - a.y).as_f64());
         let len = (dx * dx + dy * dy).sqrt();
         if len == 0.0 {
             continue; // a zero-length leg contributes no direction to offset by; skip it.
@@ -183,7 +183,7 @@ fn vperp(v: Vec2) -> Vec2 {
 }
 
 fn vdot(a: Vec2, b: Vec2) -> i128 {
-    a.0.raw_shim() as i128 * b.0.raw_shim() as i128 + a.1.raw_shim() as i128 * b.1.raw_shim() as i128
+    a.0.area(b.0) + a.1.area(b.1)
 }
 
 /// `( a + b ) / 2` on a `VECTOR2I`: integer division of each component, truncating toward zero.
@@ -205,7 +205,7 @@ pub(crate) fn line_project(s: Seg2, p: Point) -> Point {
         return s.0;
     }
     let t = vdot(d, vsub(p, s.0));
-    Point { x: s.0.x + Nm::from_raw_shim(rescale(t, d.0.raw_shim() as i128, l_squared) as i64), y: s.0.y + Nm::from_raw_shim(rescale(t, d.1.raw_shim() as i128, l_squared) as i64) }
+    Point { x: s.0.x + Nm::new(rescale(t, d.0.get() as i128, l_squared) as i64), y: s.0.y + Nm::new(rescale(t, d.1.get() as i128, l_squared) as i64) }
 }
 
 /// `SEG::TCoef`.
@@ -215,21 +215,21 @@ fn t_coef(s: Seg2, p: Point) -> i128 {
 
 /// `SEG::Distance( SEG )`.
 pub(crate) fn seg_distance(a: Seg2, b: Seg2) -> Nm {
-    Nm::from_raw_shim(isqrt(Seg::new(a.0, a.1).sq_distance_to_seg(&Seg::new(b.0, b.1))))
+    Nm::new(isqrt(Seg::new(a.0, a.1).sq_distance_to_seg(&Seg::new(b.0, b.1))))
 }
 
 /// `SEG::mutualDistanceSquared`: the signed squared distances of the shorter segment's ends to the line of the longer.
 fn mutual_distance_squared(s: Seg2, o: Seg2) -> Option<(i128, i128)> {
     let (a, b) = if seg_sq_len(s) < seg_sq_len(o) { (o, s) } else { (s, o) };
-    let p = a.0.y.raw_shim() as i128 - a.1.y.raw_shim() as i128;
-    let q = a.1.x.raw_shim() as i128 - a.0.x.raw_shim() as i128;
-    let r = -p * a.0.x.raw_shim() as i128 - q * a.0.y.raw_shim() as i128;
+    let p = a.0.y.get() as i128 - a.1.y.get() as i128;
+    let q = a.1.x.get() as i128 - a.0.x.get() as i128;
+    let r = -p * a.0.x.get() as i128 - q * a.0.y.get() as i128;
     let l = p * p + q * q;
     if l == 0 {
         return None;
     }
-    let det1 = p * b.0.x.raw_shim() as i128 + q * b.0.y.raw_shim() as i128 + r;
-    let det2 = p * b.1.x.raw_shim() as i128 + q * b.1.y.raw_shim() as i128 + r;
+    let det1 = p * b.0.x.get() as i128 + q * b.0.y.get() as i128 + r;
+    let det2 = p * b.1.x.get() as i128 + q * b.1.y.get() as i128 + r;
     Some((det1.signum() * rescale(det1, det1, l), det2.signum() * rescale(det2, det2, l)))
 }
 
@@ -237,7 +237,7 @@ fn mutual_distance_squared(s: Seg2, o: Seg2) -> Option<(i128, i128)> {
 pub(crate) fn approx_parallel(s: Seg2, o: Seg2, threshold: Nm) -> bool {
     match mutual_distance_squared(s, o) {
         None => false,
-        Some((d1, d2)) => (d1 - d2).abs() <= ((threshold).raw_shim() as i128) * ((threshold).raw_shim() as i128),
+        Some((d1, d2)) => (d1 - d2).abs() <= ((threshold).get() as i128) * ((threshold).get() as i128),
     }
 }
 
@@ -396,7 +396,7 @@ pub const GAP_CHECK_SLACK: Nm = Nm::from_raw_shim(100);
 
 /// `checkGap`: no segment of `p` is nearer to a segment of `n` than `gap` (less the slack).
 fn check_gap(p: &[Point], n: &[Point], gap: Nm) -> bool {
-    let gap_sq = ((gap - GAP_CHECK_SLACK).raw_shim() as i128).pow(2);
+    let gap_sq = ((gap - GAP_CHECK_SLACK).get() as i128).pow(2);
     for sp in p.windows(2) {
         for sn in n.windows(2) {
             if Seg::new(sp[0], sp[1]).sq_distance_to_seg(&Seg::new(sn[0], sn[1])) < gap_sq {
@@ -664,9 +664,9 @@ impl DpGateways {
         };
         let delta = vsub(pair.anchor_p, pair.anchor_n);
         if delta.0.abs() < EPSILON || delta.1.abs() < EPSILON || (delta.0 - delta.1).abs() < EPSILON {
-            add_angled(self, Nm::from_raw_shim((self.gap.raw_shim() as f64 * SIN_22_5).round() as i64), 20);
+            add_angled(self, Nm::from_raw_shim((self.gap.as_f64() * SIN_22_5).round() as i64), 20);
             // "fixme; sin(22.5) doesn't always work, so we also add some lower priority ones with a bit of wiggle room."
-            add_angled(self, Nm::from_raw_shim((self.gap.raw_shim() as f64 * SIN_23_5).round() as i64), 5);
+            add_angled(self, Nm::from_raw_shim((self.gap.as_f64() * SIN_23_5).round() as i64), 5);
         }
     }
 
@@ -720,7 +720,7 @@ impl DpGateways {
                     let Some(m) = *ip else { continue };
                     if m != p0_p && m != p0_n {
                         let prio = if pad_dist > PAD_TO_GAP_THRESHOLD * gap.raw_shim() { 10 } else { 20 };
-                        let reach = Nm::from_raw_shim((gap.raw_shim() as f64 * std::f64::consts::FRAC_1_SQRT_2).ceil() as i64);
+                        let reach = Nm::from_raw_shim((gap.as_f64() * std::f64::consts::FRAC_1_SQRT_2).ceil() as i64);
                         let g_p = vresize(vsub(p0_p, m), reach);
                         let g_n = vresize(vsub(p0_n, m), reach);
                         self.gateways.push(DpGateway::with(vadd(m, g_p), vadd(m, g_n), k == 0, ANG_OBTUSE, prio));
@@ -732,13 +732,13 @@ impl DpGateways {
                 for ip in ips2.iter() {
                     let Some(m) = *ip else { continue };
                     if !via_mode && m != p0_p && m != p0_n {
-                        let mut g_p = vresize(vsub(p0_p, m), Nm::from_raw_shim((gap.raw_shim() as f64 * std::f64::consts::SQRT_2).ceil() as i64));
+                        let mut g_p = vresize(vsub(p0_p, m), Nm::from_raw_shim((gap.as_f64() * std::f64::consts::SQRT_2).ceil() as i64));
                         let mut g_n = vresize(vsub(p0_n, m), gap);
                         if angle_between(g_p, g_n) != ANG_ACUTE {
                             self.gateways.push(DpGateway::new(vadd(m, g_p), vadd(m, g_n), true));
                         }
                         g_p = vresize(vsub(p0_p, m), gap);
-                        g_n = vresize(vsub(p0_n, m), Nm::from_raw_shim((gap.raw_shim() as f64 * std::f64::consts::SQRT_2).ceil() as i64));
+                        g_n = vresize(vsub(p0_n, m), Nm::from_raw_shim((gap.as_f64() * std::f64::consts::SQRT_2).ceil() as i64));
                         if angle_between(g_p, g_n) != ANG_ACUTE {
                             self.gateways.push(DpGateway::new(vadd(m, g_p), vadd(m, g_n), true));
                         }
@@ -1129,7 +1129,7 @@ pub(crate) fn common_parallel_projection(p: Seg2, n: Seg2) -> Option<(Seg2, Seg2
     tv.sort_unstable(); // "fixme: awful and disgusting way of finding 2 midpoints"
     let p_len_sq = seg_sq_len(p);
     let dp = vsub(p.1, p.0);
-    let clip = |t: i128| Point { x: p.0.x + Nm::from_raw_shim(rescale(dp.0.raw_shim() as i128, t, p_len_sq) as i64), y: p.0.y + Nm::from_raw_shim(rescale(dp.1.raw_shim() as i128, t, p_len_sq) as i64) };
+    let clip = |t: i128| Point { x: p.0.x + Nm::new(rescale(dp.0.get() as i128, t, p_len_sq) as i64), y: p.0.y + Nm::new(rescale(dp.1.get() as i128, t, p_len_sq) as i64) };
     let p_clip = (clip(tv[1]), clip(tv[2]));
     let n_clip = (line_project(n, p_clip.0), line_project(n, p_clip.1));
     Some((p_clip, n_clip))

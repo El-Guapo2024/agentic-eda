@@ -1020,13 +1020,13 @@ mod tests {
         let on_the_pad = Point { x: mm(0.2), y: mm(0.3) };
         let settings = RoutingSettings::default();
         let placed = placer.place_via(&node, &rules, &settings, on_the_pad, 1);
-        let centre_distance = ((placed.x.raw_shim() as f64).powi(2) + (placed.y.raw_shim() as f64).powi(2)).sqrt();
+        let centre_distance = ((placed.x.as_f64()).powi(2) + (placed.y.as_f64()).powi(2)).sqrt();
         assert!(centre_distance >= 1_000_000.0 - 500.0, "the 600 um via is {centre_distance} um from the 500 um pad's centre: {placed:?}");
         // one step of the whole MTV leaves the pad (KiCad's quarter-diameter limit is a no-op, findings p5 F1-3), and the next
         // iteration finds it free -- two iterations; with one, the loop ends at the limit and the push counts as failed
         let two = RoutingSettings { via_force_prop_iteration_limit: 2, ..settings.clone() };
         let placed = placer.place_via(&node, &rules, &two, on_the_pad, 1);
-        assert!(((placed.x.raw_shim() as f64).powi(2) + (placed.y.raw_shim() as f64).powi(2)).sqrt() >= 1_000_000.0 - 500.0, "{placed:?}");
+        assert!(((placed.x.as_f64()).powi(2) + (placed.y.as_f64()).powi(2)).sqrt() >= 1_000_000.0 - 500.0, "{placed:?}");
         let tight = RoutingSettings { via_force_prop_iteration_limit: 1, ..settings.clone() };
         assert_eq!(placer.place_via(&node, &rules, &tight, on_the_pad, 1), on_the_pad, "out of steps: the via stays where the cursor put it");
         // Highlight collisions never moves a via.
@@ -1439,7 +1439,7 @@ mod tests {
         assert!(!pv.colliding, "{pv:?}");
         let (at, d, _) = pv.via.expect("a via");
         assert_eq!(pv.head.last(), Some(at), "the head ends at the via");
-        let gap = (((at.x - mm(4.0)).raw_shim() as f64).powi(2) + ((at.y - mm(0.1)).raw_shim() as f64).powi(2)).sqrt() - 400_000.0 - d.raw_shim() as f64 / 2.0;
+        let gap = (((at.x - mm(4.0)).as_f64()).powi(2) + ((at.y - mm(0.1)).as_f64()).powi(2)).sqrt() - 400_000.0 - d.as_f64() / 2.0;
         assert!(gap >= 200_000.0 - 500.0, "the via clears the pad by the clearance: {gap} um at {at:?}");
     }
 

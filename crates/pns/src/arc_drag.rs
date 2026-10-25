@@ -21,7 +21,7 @@ pub const MAX_TRACK_LENGTH_TO_KEEP_NM: f64 = 500.0;
 type V = (f64, f64);
 
 fn v(p: Point) -> V {
-    (p.x.raw_shim() as f64, p.y.raw_shim() as f64)
+    (p.x.as_f64(), p.y.as_f64())
 }
 
 fn sub(a: V, b: V) -> V {
@@ -314,7 +314,7 @@ mod tests {
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     /// The corner of two tracks at (10000, 0): one comes along y = 0 from the left, one goes down x = 10000; a quarter circle of radius 4000 rounds it:

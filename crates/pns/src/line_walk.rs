@@ -12,7 +12,7 @@ use eda_drc::kimath::Seg;
 use eda_model::ir::Point;
 
 fn cross(o: Point, a: Point, b: Point) -> i128 {
-    (a.x - o.x).raw_shim() as i128 * (b.y - o.y).raw_shim() as i128 - (a.y - o.y).raw_shim() as i128 * (b.x - o.x).raw_shim() as i128
+    (a.x - o.x).area(b.y - o.y) - (a.y - o.y).area(b.x - o.x)
 }
 
 /// `SEG::Side`.
@@ -129,7 +129,7 @@ pub(crate) fn hull_intersection(hull: &[Point], line: &[Point]) -> Vec<(Point, u
 
 /// `SHAPE_LINE_CHAIN::Find( p, aThreshold )`.
 fn find(chain: &[Point], p: Point, threshold: i64) -> Option<usize> {
-    chain.iter().position(|q| ((q.x - p.x).raw_shim() as i128).pow(2) + ((q.y - p.y).raw_shim() as i128).pow(2) <= (threshold as i128).pow(2))
+    chain.iter().position(|q| ((q.x - p.x).get() as i128).pow(2) + ((q.y - p.y).get() as i128).pow(2) <= (threshold as i128).pow(2))
 }
 
 /// `SHAPE_LINE_CHAIN::Split( p )`: insert `p` into the segment containing it.
@@ -177,8 +177,8 @@ fn inside(hull: &[Point], p: Point) -> bool {
         if dy == Nm::ZERO {
             continue;
         }
-        let d = ((dx.raw_shim() as i128 * (p.y - p1.y).raw_shim() as i128) as f64 / dy.raw_shim() as f64).round() as i128;
-        if ((p1.y >= p.y) != (p2.y >= p.y)) && ((p.x - p1.x).raw_shim() as i128) < d {
+        let d = ((dx.area(p.y - p1.y)) as f64 / dy.as_f64()).round() as i128;
+        if ((p1.y >= p.y) != (p2.y >= p.y)) && ((p.x - p1.x).get() as i128) < d {
             ins = !ins;
         }
     }
@@ -359,7 +359,7 @@ pub fn walkaround(line: &[Point], obstacle: &[Point], cw: bool) -> Option<Vec<Po
                     }
                     if let (true, Some(nx)) = (in_last, v_next) {
                         let q = vts[nx].pos;
-                        let d = ((q.x - last.x).raw_shim() as i128).pow(2) + ((q.y - last.y).raw_shim() as i128).pow(2);
+                        let d = ((q.x - last.x).get() as i128).pow(2) + ((q.y - last.y).get() as i128).pow(2);
                         if d < last_dst {
                             last_dst = d;
                         } else {
@@ -430,11 +430,11 @@ mod tests {
                 let Some(path) = walkaround(&line, &hull, cw) else { continue };
                 for w in path.windows(2) {
                     for f in [0.25f64, 0.5, 0.75] {
-                        let (x, y) = (w[0].x.raw_shim() as f64 + (w[1].x - w[0].x).raw_shim() as f64 * f, w[0].y.raw_shim() as f64 + (w[1].y - w[0].y).raw_shim() as f64 * f);
+                        let (x, y) = (w[0].x.as_f64() + (w[1].x - w[0].x).as_f64() * f, w[0].y.as_f64() + (w[1].y - w[0].y).as_f64() * f);
                         let depth = (0..hull.len()).map(|i| {
                             let (a, b) = (hull[i], hull[(i + 1) % hull.len()]);
-                            let (ex, ey) = ((b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
-                            let cr = ex * (y - a.y.raw_shim() as f64) - ey * (x - a.x.raw_shim() as f64);
+                            let (ex, ey) = ((b.x - a.x).as_f64(), (b.y - a.y).as_f64());
+                            let cr = ex * (y - a.y.as_f64()) - ey * (x - a.x.as_f64());
                             cr / (ex * ex + ey * ey).sqrt()
                         });
                         // hull is clockwise (y up): interior has all-negative or all-positive cross; use sign-agnostic min of |.| when same sign

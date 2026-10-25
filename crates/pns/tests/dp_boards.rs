@@ -240,10 +240,10 @@ fn a_pair_leaves_the_connectors_pad_pair_and_runs_at_the_pitch() {
         assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(p(mm(124.7), mm(95.9))), Some(p(mm(124.7), mm(94.63)))), "from the pad centres");
         let pitch = pv.width + pv.gap;
         let (a, b) = (pv.head_a.last().unwrap(), pv.head_b.last().unwrap());
-        let end = (((a.x - b.x).raw_shim() as f64).powi(2) + ((a.y - b.y).raw_shim() as f64).powi(2)).sqrt();
-        assert!(end >= pitch.raw_shim() as f64 - 10.0 && end <= pitch.raw_shim() as f64 + 10.0, "{mode:?}: the pair ends a pitch ({pitch}) apart, not {end}: {a:?} {b:?}");
+        let end = (((a.x - b.x).as_f64()).powi(2) + ((a.y - b.y).as_f64()).powi(2)).sqrt();
+        assert!(end >= pitch.as_f64() - 10.0 && end <= pitch.as_f64() + 10.0, "{mode:?}: the pair ends a pitch ({pitch}) apart, not {end}: {a:?} {b:?}");
         let gap = gap_between(&pv.head_a.pts, pv.width, &pv.head_b.pts, pv.width);
-        assert!(gap >= pv.gap.raw_shim() as f64 - 100.0, "{mode:?}: the lines come within {gap} of each other");
+        assert!(gap >= pv.gap.as_f64() - 100.0, "{mode:?}: the lines come within {gap} of each other");
         // fix it where it is, and finish
         router.fix_diff_pair(at).expect("a pair");
         let commit = router.finish_diff_pair(at).expect("commits");
@@ -301,14 +301,14 @@ fn sweep(design: &Design, model: &ConstraintModel, start: Point, modes: &[Mode],
             shoved += usize::from(!pv.displaced_lines.is_empty() || !pv.displaced_vias.is_empty());
             // the lines never come within the clearance of each other, and where they run side by side (a stretch of one has a
             // stretch of the other beside it) they are the gap apart
-            let clearance = model.board.clearance.raw_shim() as f64;
+            let clearance = model.board.clearance.as_f64();
             let gap = gap_between(&pv.head_a.pts, pv.width, &pv.head_b.pts, pv.width);
             assert!(gap >= clearance - 500.0, "{mode:?} at {at:?}: the lines come within {gap} of each other (clearance {clearance})\n P {:?}\n N {:?}", pv.head_a.pts, pv.head_b.pts);
             let mut dp = eda_pns::diff_pair::DiffPair { p: pv.head_a.pts.clone(), n: pv.head_b.pts.clone(), width: pv.width, ..Default::default() };
             dp.set_gap(pv.gap);
             for c in dp.coupled_segment_pairs() {
                 let g = gap_between(&[c.coupled_p.0, c.coupled_p.1], pv.width, &[c.coupled_n.0, c.coupled_n.1], pv.width);
-                assert!(g >= pv.gap.raw_shim() as f64 - 1500.0, "{mode:?} at {at:?}: coupled stretches {c:?} are {g} apart (gap {})\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
+                assert!(g >= pv.gap.as_f64() - 1500.0, "{mode:?} at {at:?}: coupled stretches {c:?} are {g} apart (gap {})\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
             }
             let Some(commit) = router.finish_diff_pair(at) else { panic!("{mode:?} at {at:?}: a pair that fits finishes") };
             let after = commit_into_node(&node, &layers, &commit);

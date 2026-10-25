@@ -1112,7 +1112,7 @@ mod tests {
     /// length the lines run beside each other at it (`DIFF_PAIR::CoupledLength`).
     fn assert_coupled(pv: &DiffPairPreview, min_share: f64) {
         let gap = min_gap(&pv.head_a.pts, pv.width, &pv.head_b.pts, pv.width);
-        assert!(gap >= pv.gap.raw_shim() as f64 - 100.0, "the lines come within {gap} of each other, the gap is {}\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
+        assert!(gap >= pv.gap.as_f64() - 100.0, "the lines come within {gap} of each other, the gap is {}\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
         let mut dp = DiffPair { p: pv.head_a.pts.clone(), n: pv.head_b.pts.clone(), width: pv.width, ..DiffPair::default() };
         dp.set_gap(pv.gap);
         let share = dp.coupled_length() / dp.total_length();

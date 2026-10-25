@@ -154,7 +154,7 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
         // therefore given the error as its radius: the band holds the true curve, and the clearance is kept from all of it.
         let curved = matches!(shape, eda_model::ir::Shape::Arc { .. } | eda_model::ir::Shape::Circle { .. } | eda_model::ir::Shape::Bezier { .. });
         let band = if curved { eda_model::outline::MAX_ERROR_NM } else { Nm::ZERO };
-        for chain in eda_model::outline::shape_chains(shape, eda_model::outline::MAX_ERROR_NM.raw_shim() as f64) {
+        for chain in eda_model::outline::shape_chains(shape, eda_model::outline::MAX_ERROR_NM.as_f64()) {
             let n = chain.pts.len();
             let sides = if chain.closed { n } else { n.saturating_sub(1) };
             for k in 0..sides {
@@ -218,10 +218,10 @@ fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm, at: P
     let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in segs.iter().flat_map(|s| [s.a, s.b]) {
-        let q = turn(((p.x - at.x).raw_shim() as f64, (p.y - at.y).raw_shim() as f64), -sin);
+        let q = turn(((p.x - at.x).as_f64(), (p.y - at.y).as_f64()), -sin);
         (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
     }
-    let r = r.raw_shim() as f64;
+    let r = r.as_f64();
     [(x0 - r, y0 - r), (x1 + r, y0 - r), (x1 + r, y1 + r), (x0 - r, y1 + r)]
         .into_iter()
         .map(|c| {

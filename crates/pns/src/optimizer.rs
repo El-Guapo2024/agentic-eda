@@ -147,16 +147,16 @@ fn merge_step(pts: &[eda_model::ir::Point], arcs: &[ArcPts], origin: &[eda_model
 /// meet" query to re-join consecutive offset segments at their own
 /// mitered corner, and reuses this rather than duplicating it.
 pub(crate) fn intersect_lines(a1: eda_model::ir::Point, a2: eda_model::ir::Point, b1: eda_model::ir::Point, b2: eda_model::ir::Point) -> Option<eda_model::ir::Point> {
-    let (dir1x, dir1y) = ((a2.x - a1.x).raw_shim() as i128, (a2.y - a1.y).raw_shim() as i128);
-    let (dir2x, dir2y) = ((b2.x - b1.x).raw_shim() as i128, (b2.y - b1.y).raw_shim() as i128);
+    let (dir1x, dir1y) = ((a2.x - a1.x).get() as i128, (a2.y - a1.y).get() as i128);
+    let (dir2x, dir2y) = ((b2.x - b1.x).get() as i128, (b2.y - b1.y).get() as i128);
     let det = dir2x * dir1y - dir2y * dir1x; // dir2.Cross(dir1)
     if det == 0 {
         return None;
     }
-    let (offx, offy) = ((b1.x - a1.x).raw_shim() as i128, (b1.y - a1.y).raw_shim() as i128);
+    let (offx, offy) = ((b1.x - a1.x).get() as i128, (b1.y - a1.y).get() as i128);
     let t = dir2x * offy - dir2y * offx; // dir2.Cross(offset); point = a1 + (t/det)*dir1
-    let px = a1.x.raw_shim() as i128 + (dir1x * t) / det;
-    let py = a1.y.raw_shim() as i128 + (dir1y * t) / det;
+    let px = a1.x.get() as i128 + (dir1x * t) / det;
+    let py = a1.y.get() as i128 + (dir1y * t) / det;
     Some(eda_model::ir::Point { x: Nm::from_raw_shim(px as i64), y: Nm::from_raw_shim(py as i64) })
 }
 
@@ -344,7 +344,7 @@ fn point_inside2(poly: &[Point], p: Point) -> bool {
             return true; // pt on polygon boundary
         }
         if (ip.y < p.y) != (ip_next.y < p.y) {
-            let d = (ip.x.raw_shim() as f64 - p.x.raw_shim() as f64) * (ip_next.y.raw_shim() as f64 - p.y.raw_shim() as f64) - (ip_next.x.raw_shim() as f64 - p.x.raw_shim() as f64) * (ip.y.raw_shim() as f64 - p.y.raw_shim() as f64);
+            let d = (ip.x.as_f64() - p.x.as_f64()) * (ip_next.y.as_f64() - p.y.as_f64()) - (ip_next.x.as_f64() - p.x.as_f64()) * (ip.y.as_f64() - p.y.as_f64());
             if ip.x >= p.x {
                 if ip_next.x > p.x {
                     result = !result;
@@ -409,7 +409,7 @@ fn keep_topology_allows(node: &Node, origin: &[Point], v1: usize, v2: usize, rep
 /// never touched keeps its shape).
 fn area_allows(area: Area, v1: usize, v2: usize, path: &[eda_model::ir::Point], replacement: &[eda_model::ir::Point]) -> bool {
     let inside = |p: eda_model::ir::Point| p.x >= area.0 && p.x <= area.2 && p.y >= area.1 && p.y <= area.3;
-    let parallel = |a: (eda_model::ir::Point, eda_model::ir::Point), b: (eda_model::ir::Point, eda_model::ir::Point)| (a.1.x - a.0.x).raw_shim() as i128 * (b.1.y - b.0.y).raw_shim() as i128 - (a.1.y - a.0.y).raw_shim() as i128 * (b.1.x - b.0.x).raw_shim() as i128 == 0;
+    let parallel = |a: (eda_model::ir::Point, eda_model::ir::Point), b: (eda_model::ir::Point, eda_model::ir::Point)| (a.1.x - a.0.x).area(b.1.y - b.0.y) - (a.1.y - a.0.y).area(b.1.x - b.0.x) == 0;
     let (p1_in, p2_in) = (inside(path[v1]), inside(path[v2]));
     if p1_in && p2_in {
         return true;
@@ -464,7 +464,7 @@ fn merge_colinear_line(line: &mut Line) {
     while i + 2 < line.pts.len() {
         let (a, b, c) = (line.pts[i], line.pts[i + 1], line.pts[i + 2]);
         let degenerate = a == b || b == c;
-        let cross = (b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128;
+        let cross = (b.x - a.x).area(c.y - a.y) - (b.y - a.y).area(c.x - a.x);
         if !degenerate && cross == 0 && !line.is_pt_on_arc(i + 1) {
             line.pts.remove(i + 1);
         } else {
@@ -485,7 +485,7 @@ fn count_forbidden_corners(pts: &[eda_model::ir::Point]) -> usize {
 }
 
 fn chain_len(pts: &[eda_model::ir::Point]) -> i64 {
-    pts.windows(2).map(|w| (((w[1].x - w[0].x).raw_shim() as f64).hypot((w[1].y - w[0].y).raw_shim() as f64)) as i64).sum()
+    pts.windows(2).map(|w| (((w[1].x - w[0].x).as_f64()).hypot((w[1].y - w[0].y).as_f64())) as i64).sum()
 }
 
 /// `SHAPE_LINE_CHAIN::Append( chain )`: skip a duplicate joining point.
@@ -545,14 +545,14 @@ fn breakouts(width: Nm, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Poin
         Shape::Circle { c, r } => (0..8)
             .map(|i| {
                 let a = i as f64 * std::f64::consts::FRAC_PI_4;
-                let l = r.raw_shim() as f64 * std::f64::consts::SQRT_2;
+                let l = r.as_f64() * std::f64::consts::SQRT_2;
                 vec![c, Point { x: c.x + Nm::from_raw_shim((l * a.cos()).round() as i64), y: c.y + Nm::from_raw_shim((l * a.sin()).round() as i64) }]
             })
             .collect(),
         Shape::Polygon { ref pts } => custom_breakouts(solid.pos, pts),
         Shape::RoundRect { x0, y0, x1, y1, r } => {
-            let c = ((x0 + x1).raw_shim() as f64 / 2.0, (y0 + y1).raw_shim() as f64 / 2.0);
-            let outline = eda_model::pad_geom::chamfered_rect_polygon((x1 - x0, y1 - y0), r, 0.0, eda_model::ir::ChamferCorners::default(), eda_model::outline::MAX_ERROR_NM.raw_shim() as f64);
+            let c = ((x0 + x1).as_f64() / 2.0, (y0 + y1).as_f64() / 2.0);
+            let outline = eda_model::pad_geom::chamfered_rect_polygon((x1 - x0, y1 - y0), r, 0.0, eda_model::ir::ChamferCorners::default(), eda_model::outline::MAX_ERROR_NM.as_f64());
             let pts: Vec<Point> = outline.iter().map(|&(x, y)| Point { x: Nm::from_raw_shim((c.0 + x).round() as i64), y: Nm::from_raw_shim((c.1 + y).round() as i64) }).collect();
             custom_breakouts(solid.pos, &pts)
         }
@@ -571,7 +571,7 @@ fn custom_breakouts(p0: eda_model::ir::Point, pts: &[eda_model::ir::Point]) -> V
     (0..8)
         .filter_map(|i| {
             let a = i as f64 * std::f64::consts::FRAC_PI_4;
-            let v0 = Point { x: p0.x + Nm::from_raw_shim((length.raw_shim() as f64 * a.cos()).round() as i64), y: p0.y + Nm::from_raw_shim((length.raw_shim() as f64 * a.sin()).round() as i64) };
+            let v0 = Point { x: p0.x + Nm::from_raw_shim((length.as_f64() * a.cos()).round() as i64), y: p0.y + Nm::from_raw_shim((length.as_f64() * a.sin()).round() as i64) };
             let ray = eda_drc::kimath::Seg::new(p0, v0);
             (0..n).find_map(|k| ray.intersect(&eda_drc::kimath::Seg::new(pts[k], pts[(k + 1) % n]))).map(|hit| vec![p0, hit])
         })

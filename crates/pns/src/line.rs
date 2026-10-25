@@ -183,7 +183,7 @@ impl Line {
 
     /// `SHAPE_LINE_CHAIN::Length()` -- sum of segment lengths.
     pub fn length(&self) -> f64 {
-        self.pts.windows(2).map(|w| (((w[1].x - w[0].x).raw_shim() as f64).powi(2) + ((w[1].y - w[0].y).raw_shim() as f64).powi(2)).sqrt()).sum()
+        self.pts.windows(2).map(|w| (((w[1].x - w[0].x).as_f64()).powi(2) + ((w[1].y - w[0].y).as_f64()).powi(2)).sqrt()).sum()
     }
 
     /// `SEG`s of this line, in order -- what `Node::commit_line` turns into
@@ -506,7 +506,7 @@ impl Line {
         out.push(self.pts[0]);
         for i in 1..self.pts.len() - 1 {
             let (a, b, c) = (*out.last().unwrap(), self.pts[i], self.pts[i + 1]);
-            let cross = (b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128;
+            let cross = (b.x - a.x).area(c.y - a.y) - (b.y - a.y).area(c.x - a.x);
             if cross == 0 && on_segment(a, c, b) && !protected(i) {
                 continue; // b is collinear with and between a,c -- drop it.
             }
@@ -729,7 +729,7 @@ mod tests {
     }
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn on_45(pts: &[Point]) -> bool {

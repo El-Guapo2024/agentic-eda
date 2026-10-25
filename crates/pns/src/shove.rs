@@ -186,7 +186,7 @@ fn hull_nearest(hull: &[Point], p: Point) -> Point {
 
 /// `VECTOR2I::EuclideanNorm()` of `b - a`: the rounded length.
 fn norm(a: Point, b: Point) -> i64 {
-    (((b.x - a.x).raw_shim() as f64).powi(2) + ((b.y - a.y).raw_shim() as f64).powi(2)).sqrt().round() as i64
+    (((b.x - a.x).as_f64()).powi(2) + ((b.y - a.y).as_f64()).powi(2)).sqrt().round() as i64
 }
 
 fn merge_area(a: Option<Area>, b: Area) -> Option<Area> {
@@ -282,7 +282,7 @@ fn pushout_force(c: Point, r: Nm, seg: Seg, clearance: Nm) -> (i64, i64) {
 /// within `clearance` of the chain, `mtv` being the sum of the push-outs of
 /// the circle out of each segment in turn.
 fn circle_chain_mtv(c: Point, r: Nm, chain: &[Point], clearance: Nm) -> Option<(i64, i64)> {
-    let reach = (r.raw_shim() as i128 + clearance.raw_shim() as i128).max(0);
+    let reach = (r.get() as i128 + clearance.get() as i128).max(0);
     let hit = chain.windows(2).any(|w| {
         let d = Seg::new(w[0], w[1]).sq_distance_to_point(c);
         d == 0 || d < reach * reach
@@ -304,10 +304,10 @@ fn circle_chain_mtv(c: Point, r: Nm, chain: &[Point], clearance: Nm) -> Option<(
 /// rounding error" 3.
 fn circle_circle_mtv(a: Point, ra: Nm, b: Point, rb: Nm, clearance: Nm) -> Option<(i64, i64)> {
     let min_dist = clearance + ra + rb;
-    let (dx, dy) = ((b.x - a.x).raw_shim() as i128, (b.y - a.y).raw_shim() as i128);
+    let (dx, dy) = ((b.x - a.x).get() as i128, (b.y - a.y).get() as i128);
     let dist_sq = dx * dx + dy * dy;
-    if dist_sq == 0 || dist_sq < ((min_dist).raw_shim() as i128) * ((min_dist).raw_shim() as i128) {
-        let len = Nm::from_raw_shim((min_dist.raw_shim() as f64 - (dist_sq as f64).sqrt() + 3.0) as i64);
+    if dist_sq == 0 || dist_sq < ((min_dist).get() as i128) * ((min_dist).get() as i128) {
+        let len = Nm::from_raw_shim((min_dist.as_f64() - (dist_sq as f64).sqrt() + 3.0) as i64);
         let m = crate::hull::resize(b.x - a.x, b.y - a.y, len);
         return Some((m.0.raw_shim(), m.1.raw_shim()));
     }
@@ -340,8 +340,8 @@ fn solid_via_mtv(shape: &Shape, c: Point, r: Nm, clearance: Nm) -> Option<(i64, 
         }
     }
     let inside = best > 0 && shape.collides(&Shape::Circle { c, r: Nm::ZERO }, Nm::ZERO).is_some();
-    let dist = (best as f64).sqrt() + shape.radius().raw_shim() as f64 * if inside { -1.0 } else { 0.0 };
-    let min_dist = clearance.raw_shim() as f64 + r.raw_shim() as f64;
+    let dist = (best as f64).sqrt() + shape.radius().as_f64() * if inside { -1.0 } else { 0.0 };
+    let min_dist = clearance.as_f64() + r.as_f64();
     let (delta, len) = if inside { ((nearest.x - c.x, nearest.y - c.y), Nm::from_raw_shim(((min_dist + 1.0 + dist).abs() + 1.0) as i64)) } else { ((c.x - nearest.x, c.y - nearest.y), Nm::from_raw_shim(((min_dist + 1.0 - dist).abs() + 1.0) as i64)) };
     let m = crate::hull::resize(delta.0, delta.1, len);
     Some((m.0.raw_shim(), m.1.raw_shim()))
@@ -391,7 +391,7 @@ pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, dire
             return None;
         }
         let magnitude = ((force.0 as f64).powi(2) + (force.1 as f64).powi(2)).sqrt();
-        let step = if iter > max_iterations / 2 && magnitude > threshold.raw_shim() as f64 {
+        let step = if iter > max_iterations / 2 && magnitude > threshold.as_f64() {
             let l = crate::hull::resize(Nm::from_raw_shim(direction.0), Nm::from_raw_shim(direction.1), threshold);
             (l.0.raw_shim(), l.1.raw_shim())
         } else {
@@ -907,7 +907,7 @@ impl<'a> Shove<'a> {
                     for &i in &order {
                         let hull = &hulls[i];
                         let p = hull_nearest(hull, pref);
-                        let d = if walkaround::point_in_polygon(hull, pref) { 0.0 } else { (((p.x - pref.x).raw_shim() as f64).powi(2) + ((p.y - pref.y).raw_shim() as f64).powi(2)).sqrt() };
+                        let d = if walkaround::point_in_polygon(hull, pref) { 0.0 } else { (((p.x - pref.x).as_f64()).powi(2) + ((p.y - pref.y).as_f64()).powi(2)).sqrt() };
                         if d < ENDPOINT_ON_HULL_THRESHOLD && best.is_none_or(|(bd, _)| d < bd) {
                             best = Some((d, p));
                         }
@@ -999,7 +999,7 @@ impl<'a> Shove<'a> {
             let mut hulls: Vec<Vec<Point>> = Vec::with_capacity(cur.seg_count() + 1);
             for (i, (a, b)) in cur.line.segs().enumerate() {
                 if arc_runs.iter().any(|r| i >= r.first && i < r.last) {
-                    clearance += Nm::from_raw_shim(arc_pad);
+                    clearance += arc_pad;
                 }
                 let h = crate::hull::segment_hull(a, b, cur.line.width, clearance + extra, obstacle_width);
                 if h.len() >= 3 {

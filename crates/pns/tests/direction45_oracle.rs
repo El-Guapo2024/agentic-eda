@@ -40,7 +40,7 @@ enum Piece {
 
 /// An arc of KiCad's whose middle is in line with its ends: the IR cannot hold its curve, and the port makes it its chord. Compared as the chord.
 fn flat_on_the_grid(s: Point, m: Point, e: Point) -> bool {
-    (m.x - s.x).raw_shim() as i128 * (e.y - s.y).raw_shim() as i128 - (m.y - s.y).raw_shim() as i128 * (e.x - s.x).raw_shim() as i128 == 0
+    (m.x - s.x).area(e.y - s.y) - (m.y - s.y).area(e.x - s.x) == 0
 }
 
 fn parse(answer: &str) -> Vec<Piece> {

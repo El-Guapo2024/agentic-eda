@@ -312,7 +312,7 @@ fn issue22749_pushes_the_same_5_tracks_and_leaves_the_board_clean() {
     assert!(commit.remove_track_ids.iter().all(|id| ids.contains(id)), "every removed track exists: {:?}", commit.remove_track_ids);
     let committed_design = apply_commit(&design, &commit);
     let (after_node, _) = build_node(&committed_design, &model);
-    let length_of = |d: &eda_model::ir::Design, net: &str| -> i64 { d.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == net).map(|t| t.pts.windows(2).map(|w| (((w[1].x - w[0].x).raw_shim() as f64).powi(2) + ((w[1].y - w[0].y).raw_shim() as f64).powi(2)).sqrt() as i64).sum::<i64>()).sum() };
+    let length_of = |d: &eda_model::ir::Design, net: &str| -> i64 { d.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == net).map(|t| t.pts.windows(2).map(|w| (((w[1].x - w[0].x).as_f64()).powi(2) + ((w[1].y - w[0].y).as_f64()).powi(2)).sqrt() as i64).sum::<i64>()).sum() };
     // the pushed net is still one run from end to end, not the old track plus a copy of it
     assert!(length_of(&committed_design, "/VPP{slash}MCLR") < 2 * length_of(&design, "/VPP{slash}MCLR"), "the pushed track was replaced, not duplicated");
     let after_new = violations(&after_node, &model.board);
@@ -533,7 +533,7 @@ fn walk_with_teardrops_drag_does_not_detour_round_the_board() {
     let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), mm(0.3)).expect("the SWCLK segment");
     let mut dragger = Dragger::start_with(&node, start, id, false).expect("a track");
     assert_eq!(dragger.kind, DragKind::Segment, "grabbed in the middle of the segment");
-    let length = |pts: &[Point]| pts.windows(2).map(|w| (((w[1].x - w[0].x).raw_shim() as f64).powi(2) + ((w[1].y - w[0].y).raw_shim() as f64).powi(2)).sqrt()).sum::<f64>();
+    let length = |pts: &[Point]| pts.windows(2).map(|w| (((w[1].x - w[0].x).as_f64()).powi(2) + ((w[1].y - w[0].y).as_f64()).powi(2)).sqrt()).sum::<f64>();
     let original = length(&dragger.original.pts);
     for e in &events[1..] {
         let to = pt(&e["position"]);

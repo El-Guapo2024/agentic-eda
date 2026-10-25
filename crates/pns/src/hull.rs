@@ -52,7 +52,7 @@ fn circle_pts(c: Point, r: Nm) -> [Point; 8] {
     const COS22_5: f64 = 0.923_879_532_511_286_8;
     const MARGIN_NM: f64 = 2.0;
     let r = r.max(Nm::ZERO);
-    let circumradius = r.raw_shim() as f64 / COS22_5 + MARGIN_NM;
+    let circumradius = r.as_f64() / COS22_5 + MARGIN_NM;
     let mut pts = [Point { x: Nm::ZERO, y: Nm::ZERO }; 8];
     for (k, p) in pts.iter_mut().enumerate() {
         let theta = (22.5 + 45.0 * k as f64).to_radians();
@@ -76,7 +76,7 @@ pub fn convex_hull(points: &[Point]) -> Vec<Point> {
         return pts;
     }
     fn cross(o: Point, a: Point, b: Point) -> i128 {
-        (a.x - o.x).raw_shim() as i128 * (b.y - o.y).raw_shim() as i128 - (a.y - o.y).raw_shim() as i128 * (b.x - o.x).raw_shim() as i128
+        (a.x - o.x).area(b.y - o.y) - (a.y - o.y).area(b.x - o.x)
     }
     let mut lower: Vec<Point> = Vec::new();
     for &p in &pts {
@@ -164,7 +164,7 @@ mod tests {
         // Every hull vertex must be at least `r+clearance` from centre
         // (apothem == r+clearance, vertices a bit further out).
         for p in &hull {
-            let d = ((p.x * p.x.raw_shim() + p.y * p.y.raw_shim()).raw_shim() as f64).sqrt();
+            let d = ((p.x * p.x.raw_shim() + p.y * p.y.raw_shim()).as_f64()).sqrt();
             assert!(d >= 1200.0 - 1.0, "vertex {:?} at {d}, expected >= 1200", p);
         }
     }
@@ -218,12 +218,12 @@ pub(crate) fn resize(x: Nm, y: Nm, len: Nm) -> (Nm, Nm) {
         return (Nm::ZERO, Nm::ZERO);
     }
     let (nx, ny) = if x.abs() == y.abs() {
-        let v = (len.abs().raw_shim() as f64) * std::f64::consts::FRAC_1_SQRT_2;
+        let v = (len.abs().as_f64()) * std::f64::consts::FRAC_1_SQRT_2;
         (v, v)
     } else {
-        let (xs, ys) = (((x).raw_shim() as f64).powi(2), ((y).raw_shim() as f64).powi(2));
+        let (xs, ys) = (((x).as_f64()).powi(2), ((y).as_f64()).powi(2));
         let l = xs + ys;
-        let n = ((len).raw_shim() as f64).powi(2);
+        let n = ((len).as_f64()).powi(2);
         ((n * xs / l).sqrt(), (n * ys / l).sqrt())
     };
     let s = len.signum();
@@ -232,7 +232,7 @@ pub(crate) fn resize(x: Nm, y: Nm, len: Nm) -> (Nm, Nm) {
 
 fn shoelace(pts: &[Point]) -> i128 {
     let n = pts.len();
-    (0..n).map(|i| pts[i].x.raw_shim() as i128 * pts[(i + 1) % n].y.raw_shim() as i128 - pts[(i + 1) % n].x.raw_shim() as i128 * pts[i].y.raw_shim() as i128).sum()
+    (0..n).map(|i| pts[i].x.get() as i128 * pts[(i + 1) % n].y.get() as i128 - pts[(i + 1) % n].x.area(pts[i].y)).sum()
 }
 
 /// Reverse `pts` if needed so it winds clockwise in KiCad's sense.
@@ -285,7 +285,7 @@ pub fn segment_hull(a: Point, b0: Point, width: Nm, clearance: Nm, walk: Nm) -> 
     let kink = clearance / 10;
     let mut cl = clearance + walk / 2;
     let mut b = b0;
-    let len = Nm::from_raw_shim((((b.x - a.x).raw_shim() as f64).powi(2) + ((b.y - a.y).raw_shim() as f64).powi(2)).sqrt() as i64);
+    let len = Nm::from_raw_shim((((b.x - a.x).as_f64()).powi(2) + ((b.y - a.y).as_f64()).powi(2)).sqrt() as i64);
     let (mut w, mut h) = (b.x - a.x, b.y - a.y);
     if a != b {
         if !is_45(w, h) {
@@ -310,7 +310,7 @@ pub fn segment_hull(a: Point, b0: Point, width: Nm, clearance: Nm, walk: Nm) -> 
             b = Point { x: a.x + w, y: a.y + h };
         }
     }
-    let d = width.raw_shim() as f64 / 2.0 + cl.raw_shim() as f64;
+    let d = width.as_f64() / 2.0 + cl.as_f64();
     if a == b {
         let xx2 = kiround(2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * d);
         return make_clockwise(octagonal_hull(Point { x: a.x - width / 2, y: a.y - width / 2 }, (width, width), cl, xx2));
@@ -339,7 +339,7 @@ pub fn segment_hull(a: Point, b0: Point, width: Nm, clearance: Nm, walk: Nm) -> 
     ];
     // "make sure the hull outline is always clockwise": s.CSegment(0).Side(a) < 0 -> reverse.
     let (s0, s1) = (s[0], s[1]);
-    let side = (s1.x - s0.x).raw_shim() as i128 * (a.y - s0.y).raw_shim() as i128 - (s1.y - s0.y).raw_shim() as i128 * (a.x - s0.x).raw_shim() as i128;
+    let side = (s1.x - s0.x).area(a.y - s0.y) - (s1.y - s0.y).area(a.x - s0.x);
     if side < 0 {
         s.into_iter().rev().collect()
     } else {
@@ -350,14 +350,14 @@ pub fn segment_hull(a: Point, b0: Point, width: Nm, clearance: Nm, walk: Nm) -> 
 /// `VIA::Hull`: an equilateral octagon.
 pub fn via_hull(pos: Point, diameter: Nm, clearance: Nm, walk: Nm) -> Vec<Point> {
     let cl = clearance + walk / 2;
-    let chamfer = Nm::from_raw_shim(((2 * cl + diameter).raw_shim() as f64 * (1.0 - std::f64::consts::FRAC_1_SQRT_2)) as i64);
+    let chamfer = Nm::from_raw_shim(((2 * cl + diameter).as_f64() * (1.0 - std::f64::consts::FRAC_1_SQRT_2)) as i64);
     octagonal_hull(Point { x: pos.x - diameter / 2, y: pos.y - diameter / 2 }, (diameter, diameter), cl, chamfer)
 }
 
 /// Line-line intersection (`SEG::IntersectLines`).
 pub(crate) fn intersect_lines(a: (Point, Point), b: (Point, Point)) -> Option<Point> {
-    let (x1, y1, x2, y2) = (a.0.x.raw_shim() as f64, a.0.y.raw_shim() as f64, a.1.x.raw_shim() as f64, a.1.y.raw_shim() as f64);
-    let (x3, y3, x4, y4) = (b.0.x.raw_shim() as f64, b.0.y.raw_shim() as f64, b.1.x.raw_shim() as f64, b.1.y.raw_shim() as f64);
+    let (x1, y1, x2, y2) = (a.0.x.as_f64(), a.0.y.as_f64(), a.1.x.as_f64(), a.1.y.as_f64());
+    let (x3, y3, x4, y4) = (b.0.x.as_f64(), b.0.y.as_f64(), b.1.x.as_f64(), b.1.y.as_f64());
     let den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
     if den == 0.0 {
         return None;
@@ -369,10 +369,10 @@ pub(crate) fn intersect_lines(a: (Point, Point), b: (Point, Point)) -> Option<Po
 /// `SEG::LineDistance( p )` (seg.cpp:746): `isqrt( rescale( det, det, l ) )`,
 /// i.e. the floor of the rounded squared distance to the infinite line.
 fn line_distance(s: (Point, Point), q: Point) -> Nm {
-    let (p, qq) = ((s.0.y - s.1.y).raw_shim() as i128, (s.1.x - s.0.x).raw_shim() as i128);
-    let r = -p * s.0.x.raw_shim() as i128 - qq * s.0.y.raw_shim() as i128;
+    let (p, qq) = ((s.0.y - s.1.y).get() as i128, (s.1.x - s.0.x).get() as i128);
+    let r = -p * s.0.x.get() as i128 - qq * s.0.y.get() as i128;
     let l = p * p + qq * qq;
-    let det = p * q.x.raw_shim() as i128 + qq * q.y.raw_shim() as i128 + r;
+    let det = p * q.x.get() as i128 + qq * q.y.get() as i128 + r;
     let dist_sq = if l > 0 {
         let n = det * det;
         (n + l / 2) / l
@@ -434,7 +434,7 @@ pub fn convex_hull_octagon(vertices: &[Point], clearance: Nm) -> Vec<Point> {
 pub fn primitive_hull(shape: &Shape, clearance: Nm, walk: Nm) -> Vec<Point> {
     let cl = clearance + (walk + Nm::new(1)) / 2;
     match *shape {
-        Shape::Circle { c, r } => make_clockwise(octagonal_hull(Point { x: c.x - r, y: c.y - r }, (2 * r, 2 * r), cl, Nm::from_raw_shim((2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * (r + cl).raw_shim() as f64) as i64))),
+        Shape::Circle { c, r } => make_clockwise(octagonal_hull(Point { x: c.x - r, y: c.y - r }, (2 * r, 2 * r), cl, Nm::from_raw_shim((2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * (r + cl).as_f64()) as i64))),
         Shape::Stadium { a, b, r } => segment_hull(a, b, 2 * r, clearance, walk),
         Shape::Rect { x0, y0, x1, y1 } => make_clockwise(octagonal_hull(Point { x: x0, y: y0 }, (x1 - x0, y1 - y0), cl, Nm::ZERO)),
         Shape::RoundRect { x0, y0, x1, y1, r } => {

@@ -16,6 +16,12 @@ pub fn ki_round(v: f64) -> i64 {
     (if v < 0.0 { v - 0.5 } else { v + 0.5 }) as i64
 }
 
+/// `KiROUND( v )` of a length computed in floating-point nanometres (this module's own rounding, `(v +- 0.5)` truncated, not
+/// [`Nm::kiround`]'s `f64::round`: the two differ just below a half).
+pub fn ki_round_nm(v: f64) -> Nm {
+    Nm::new(ki_round(v))
+}
+
 /// `isqrt` of `libs/kimath/src/geometry/seg.cpp`: the integer square root, rounded down.
 pub fn isqrt(x: i128) -> i64 {
     if x < 0 {
@@ -49,12 +55,12 @@ impl V2 {
 
     /// `VECTOR2D( const VECTOR2I& )`.
     pub fn of(p: Point) -> V2 {
-        V2 { x: p.x.raw_shim() as f64, y: p.y.raw_shim() as f64 }
+        V2 { x: p.x.as_f64(), y: p.y.as_f64() }
     }
 
     /// `VECTOR2I( const VECTOR2D& )`: the coordinates truncated toward zero ("beware of rounding issues").
     pub fn trunc(self) -> Point {
-        Point { x: Nm::from_raw_shim(self.x as i64), y: Nm::from_raw_shim(self.y as i64) }
+        Point { x: Nm::new(self.x as i64), y: Nm::new(self.y as i64) }
     }
 
     pub fn add(self, o: V2) -> V2 {
@@ -211,7 +217,7 @@ pub fn rotate_d(v: V2, angle_deg: f64) -> V2 {
 }
 
 /// `RotatePoint( int* pX, int* pY, aAngle )`: the same for integer coordinates, rounded.
-fn rotate_i(x: i64, y: i64, angle_deg: f64) -> (i64, i64) {
+fn rotate_i(x: Nm, y: Nm, angle_deg: f64) -> (Nm, Nm) {
     let angle = normalize(angle_deg);
     if angle == 0.0 {
         (x, y)
@@ -223,14 +229,14 @@ fn rotate_i(x: i64, y: i64, angle_deg: f64) -> (i64, i64) {
         (-y, x)
     } else {
         let (sinus, cosinus) = (sin_deg(angle), cos_deg(angle));
-        (ki_round(y as f64 * sinus + x as f64 * cosinus), ki_round(y as f64 * cosinus - x as f64 * sinus))
+        (ki_round_nm(y.as_f64() * sinus + x.as_f64() * cosinus), ki_round_nm(y.as_f64() * cosinus - x.as_f64() * sinus))
     }
 }
 
 /// `RotatePoint( VECTOR2I& aPoint, const VECTOR2I& aCentre, aAngle )`.
 pub fn rotate_about(p: Point, center: Point, angle_deg: f64) -> Point {
-    let (ox, oy) = rotate_i((p.x - center.x).raw_shim(), (p.y - center.y).raw_shim(), angle_deg);
-    Point { x: Nm::from_raw_shim(ox + center.x.raw_shim()), y: Nm::from_raw_shim(oy + center.y.raw_shim()) }
+    let (ox, oy) = rotate_i(p.x - center.x, p.y - center.y, angle_deg);
+    Point { x: ox + center.x, y: oy + center.y }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -238,17 +244,17 @@ pub fn rotate_about(p: Point, center: Point, angle_deg: f64) -> Point {
 // ---------------------------------------------------------------------------------------------------------------------
 
 /// `VECTOR2I::EuclideanNorm` of the vector `(dx, dy)`: rounded to an integer, exact on the diagonals.
-pub fn norm_i(dx: i64, dy: i64) -> i64 {
+pub fn norm_i(dx: Nm, dy: Nm) -> Nm {
     if dx.abs() == dy.abs() {
-        return ki_round(dx.abs() as f64 * std::f64::consts::SQRT_2);
+        return ki_round_nm(dx.abs().as_f64() * std::f64::consts::SQRT_2);
     }
-    if dx == 0 {
+    if dx == Nm::ZERO {
         return dy.abs();
     }
-    if dy == 0 {
+    if dy == Nm::ZERO {
         return dx.abs();
     }
-    ki_round((dx as f64).hypot(dy as f64))
+    ki_round_nm(dx.as_f64().hypot(dy.as_f64()))
 }
 
 /// `SEG`.
@@ -264,13 +270,13 @@ impl Seg {
     }
 
     /// `SEG::Length`.
-    pub fn length(&self) -> i64 {
-        norm_i((self.a.x - self.b.x).raw_shim(), (self.a.y - self.b.y).raw_shim())
+    pub fn length(&self) -> Nm {
+        norm_i(self.a.x - self.b.x, self.a.y - self.b.y)
     }
 
     /// `SEG::Side`: -1, 0 or 1 for the side of the line `aP` is on.
     pub fn side(&self, p: Point) -> i32 {
-        let det = (self.b.x - self.a.x).raw_shim() as i128 * (p.y - self.a.y).raw_shim() as i128 - (self.b.y - self.a.y).raw_shim() as i128 * (p.x - self.a.x).raw_shim() as i128;
+        let det = (self.b.x - self.a.x).area(p.y - self.a.y) - (self.b.y - self.a.y).area(p.x - self.a.x);
         if det < 0 {
             -1
         } else if det > 0 {
@@ -282,62 +288,62 @@ impl Seg {
 
     /// `SEG::LineProject`.
     pub fn line_project(&self, p: Point) -> Point {
-        let (dx, dy) = ((self.b.x - self.a.x).raw_shim() as i128, (self.b.y - self.a.y).raw_shim() as i128);
+        let (dx, dy) = ((self.b.x - self.a.x).get() as i128, (self.b.y - self.a.y).get() as i128);
         let l_squared = dx * dx + dy * dy;
         if l_squared == 0 {
             return self.a;
         }
-        let t = dx * (p.x - self.a.x).raw_shim() as i128 + dy * (p.y - self.a.y).raw_shim() as i128;
-        Point { x: self.a.x + Nm::from_raw_shim(rescale(t, dx, l_squared) as i64), y: self.a.y + Nm::from_raw_shim(rescale(t, dy, l_squared) as i64) }
+        let t = dx * (p.x - self.a.x).get() as i128 + dy * (p.y - self.a.y).get() as i128;
+        Point { x: self.a.x + Nm::new(rescale(t, dx, l_squared) as i64), y: self.a.y + Nm::new(rescale(t, dy, l_squared) as i64) }
     }
 
     /// `SEG::ReflectPoint`.
     pub fn reflect_point(&self, p: Point) -> Point {
-        let (dx, dy) = ((self.b.x - self.a.x).raw_shim() as i128, (self.b.y - self.a.y).raw_shim() as i128);
+        let (dx, dy) = ((self.b.x - self.a.x).get() as i128, (self.b.y - self.a.y).get() as i128);
         let l_squared = dx * dx + dy * dy;
-        let t = dx * (p.x - self.a.x).raw_shim() as i128 + dy * (p.y - self.a.y).raw_shim() as i128;
-        let (cx, cy) = if l_squared == 0 { (p.x.raw_shim() as i128, p.y.raw_shim() as i128) } else { (self.a.x.raw_shim() as i128 + rescale(t, dx, l_squared), self.a.y.raw_shim() as i128 + rescale(t, dy, l_squared)) };
-        Point { x: Nm::from_raw_shim((2 * cx - p.x.raw_shim() as i128) as i64), y: Nm::from_raw_shim((2 * cy - p.y.raw_shim() as i128) as i64) }
+        let t = dx * (p.x - self.a.x).get() as i128 + dy * (p.y - self.a.y).get() as i128;
+        let (cx, cy) = if l_squared == 0 { (p.x.get() as i128, p.y.get() as i128) } else { (self.a.x.get() as i128 + rescale(t, dx, l_squared), self.a.y.get() as i128 + rescale(t, dy, l_squared)) };
+        Point { x: Nm::new((2 * cx - p.x.get() as i128) as i64), y: Nm::new((2 * cy - p.y.get() as i128) as i64) }
     }
 
     /// `SEG::NearestPoint( VECTOR2I )`.
     pub fn nearest_point(&self, p: Point) -> Point {
-        let (dx, dy) = ((self.b.x - self.a.x).raw_shim() as i128, (self.b.y - self.a.y).raw_shim() as i128);
+        let (dx, dy) = ((self.b.x - self.a.x).get() as i128, (self.b.y - self.a.y).get() as i128);
         let l_squared = dx * dx + dy * dy;
         if l_squared == 0 {
             return self.a;
         }
-        let t = dx * (p.x - self.a.x).raw_shim() as i128 + dy * (p.y - self.a.y).raw_shim() as i128;
+        let t = dx * (p.x - self.a.x).get() as i128 + dy * (p.y - self.a.y).get() as i128;
         if t < 0 {
             return self.a;
         }
         if t > l_squared {
             return self.b;
         }
-        Point { x: self.a.x + Nm::from_raw_shim(rescale(t, dx, l_squared) as i64), y: self.a.y + Nm::from_raw_shim(rescale(t, dy, l_squared) as i64) }
+        Point { x: self.a.x + Nm::new(rescale(t, dx, l_squared) as i64), y: self.a.y + Nm::new(rescale(t, dy, l_squared) as i64) }
     }
 
     /// `SEG::TCoef`: the dot product of the segment's direction with the vector from its start to `p`.
     pub fn t_coef(&self, p: Point) -> i128 {
-        (self.b.x - self.a.x).raw_shim() as i128 * (p.x - self.a.x).raw_shim() as i128 + (self.b.y - self.a.y).raw_shim() as i128 * (p.y - self.a.y).raw_shim() as i128
+        (self.b.x - self.a.x).area(p.x - self.a.x) + (self.b.y - self.a.y).area(p.y - self.a.y)
     }
 
     /// `SEG::Distance( SEG )`.
-    pub fn distance_seg(&self, o: &Seg) -> i64 {
-        isqrt(self.squared_distance_seg(o))
+    pub fn distance_seg(&self, o: &Seg) -> Nm {
+        Nm::new(isqrt(self.squared_distance_seg(o)))
     }
 
     /// `SEG::SquaredDistance( VECTOR2I )`.
     pub fn squared_distance(&self, p: Point) -> i128 {
-        let ab = ((self.b.x - self.a.x).raw_shim() as i128, (self.b.y - self.a.y).raw_shim() as i128);
-        let ap = ((p.x - self.a.x).raw_shim() as i128, (p.y - self.a.y).raw_shim() as i128);
+        let ab = ((self.b.x - self.a.x).get() as i128, (self.b.y - self.a.y).get() as i128);
+        let ap = ((p.x - self.a.x).get() as i128, (p.y - self.a.y).get() as i128);
         let e = ap.0 * ab.0 + ap.1 * ab.1;
         if e <= 0 {
             return ap.0 * ap.0 + ap.1 * ap.1;
         }
         let f = ab.0 * ab.0 + ab.1 * ab.1;
         if e >= f {
-            let bp = ((p.x - self.b.x).raw_shim() as i128, (p.y - self.b.y).raw_shim() as i128);
+            let bp = ((p.x - self.b.x).get() as i128, (p.y - self.b.y).get() as i128);
             return bp.0 * bp.0 + bp.1 * bp.1;
         }
         let g = (ap.0 * ap.0 + ap.1 * ap.1) as f64 - (e as f64 * e as f64) / f as f64;
@@ -348,8 +354,8 @@ impl Seg {
     }
 
     /// `SEG::Distance( VECTOR2I )`.
-    pub fn distance(&self, p: Point) -> i64 {
-        isqrt(self.squared_distance(p))
+    pub fn distance(&self, p: Point) -> Nm {
+        Nm::new(isqrt(self.squared_distance(p)))
     }
 
     /// `SEG::Contains`.
@@ -373,35 +379,35 @@ impl Seg {
         if self.intersects(o) {
             return 0;
         }
-        let d = |p: Point, q: Point| ((p.x - q.x).raw_shim() as i128).pow(2) + ((p.y - q.y).raw_shim() as i128).pow(2);
+        let d = |p: Point, q: Point| ((p.x - q.x).get() as i128).pow(2) + ((p.y - q.y).get() as i128).pow(2);
         [d(o.nearest_point(self.a), self.a), d(o.nearest_point(self.b), self.b), d(self.nearest_point(o.a), o.a), d(self.nearest_point(o.b), o.b)].into_iter().min().expect("four candidates")
     }
 
     fn squared_length(&self) -> i128 {
-        ((self.a.x - self.b.x).raw_shim() as i128).pow(2) + ((self.a.y - self.b.y).raw_shim() as i128).pow(2)
+        ((self.a.x - self.b.x).get() as i128).pow(2) + ((self.a.y - self.b.y).get() as i128).pow(2)
     }
 
     /// `SEG::mutualDistanceSquared`.
     fn mutual_distance_squared(&self, o: &Seg) -> Option<(i128, i128)> {
         let (a, b) = if self.squared_length() < o.squared_length() { (*o, *self) } else { (*self, *o) };
-        let p = (a.a.y - a.b.y).raw_shim() as i128;
-        let q = (a.b.x - a.a.x).raw_shim() as i128;
-        let r = -p * a.a.x.raw_shim() as i128 - q * a.a.y.raw_shim() as i128;
+        let p = (a.a.y - a.b.y).get() as i128;
+        let q = (a.b.x - a.a.x).get() as i128;
+        let r = -p * a.a.x.get() as i128 - q * a.a.y.get() as i128;
         let l = p * p + q * q;
         if l == 0 {
             return None;
         }
-        let det1 = p * b.a.x.raw_shim() as i128 + q * b.a.y.raw_shim() as i128 + r;
-        let det2 = p * b.b.x.raw_shim() as i128 + q * b.b.y.raw_shim() as i128 + r;
+        let det1 = p * b.a.x.get() as i128 + q * b.a.y.get() as i128 + r;
+        let det2 = p * b.b.x.get() as i128 + q * b.b.y.get() as i128 + r;
         let dsq1 = rescale(det1, det1, l);
         let dsq2 = rescale(det2, det2, l);
         Some((det1.signum() * dsq1, det2.signum() * dsq2))
     }
 
     /// `SEG::ApproxParallel( aSeg, aDistanceThreshold )`.
-    pub fn approx_parallel(&self, o: &Seg, threshold: i64) -> bool {
+    pub fn approx_parallel(&self, o: &Seg, threshold: Nm) -> bool {
         let Some((d1, d2)) = self.mutual_distance_squared(o) else { return false };
-        (d1 - d2).abs() <= (threshold as i128) * (threshold as i128)
+        (d1 - d2).abs() <= threshold.area(threshold)
     }
 }
 
@@ -422,9 +428,9 @@ pub fn common_parallel_projection(p: Seg, n: Seg) -> Option<(Seg, Seg)> {
     }
     let mut tv = [0i128, p.t_coef(p.b), p.t_coef(n_proj_p.a), p.t_coef(n_proj_p.b)];
     tv.sort_unstable(); // "fixme: awful and disgusting way of finding 2 midpoints"
-    let p_len_sq = (p.b.x - p.a.x).raw_shim() as i128 * (p.b.x - p.a.x).raw_shim() as i128 + (p.b.y - p.a.y).raw_shim() as i128 * (p.b.y - p.a.y).raw_shim() as i128;
+    let p_len_sq = (p.b.x - p.a.x).area(p.b.x - p.a.x) + (p.b.y - p.a.y).area(p.b.y - p.a.y);
     let dp = (p.b.x - p.a.x, p.b.y - p.a.y);
-    let clip = |t: i128| Point { x: p.a.x + Nm::from_raw_shim(rescale(dp.0.raw_shim() as i128, t, p_len_sq) as i64), y: p.a.y + Nm::from_raw_shim(rescale(dp.1.raw_shim() as i128, t, p_len_sq) as i64) };
+    let clip = |t: i128| Point { x: p.a.x + Nm::new(rescale(dp.0.get() as i128, t, p_len_sq) as i64), y: p.a.y + Nm::new(rescale(dp.1.get() as i128, t, p_len_sq) as i64) };
     let p_clip = Seg::new(clip(tv[1]), clip(tv[2]));
     let n_clip = Seg::new(n.line_project(p_clip.a), n.line_project(p_clip.b));
     Some((p_clip, n_clip))
@@ -560,7 +566,7 @@ pub fn calc_arc_center_d(start: V2, mid: V2, end: V2) -> V2 {
 pub fn calc_arc_center(start: Point, mid: Point, end: Point) -> Point {
     let c = calc_arc_center_d(V2::of(start), V2::of(mid), V2::of(end));
     let (lo, hi) = (i32::MIN as f64 + 100.0, i32::MAX as f64 - 100.0);
-    Point { x: Nm::from_raw_shim(ki_round(c.x.clamp(lo, hi))), y: Nm::from_raw_shim(ki_round(c.y.clamp(lo, hi))) }
+    Point { x: ki_round_nm(c.x.clamp(lo, hi)), y: ki_round_nm(c.y.clamp(lo, hi)) }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -568,14 +574,14 @@ pub fn calc_arc_center(start: Point, mid: Point, end: Point) -> Point {
 // ---------------------------------------------------------------------------------------------------------------------
 
 /// `getArcPolygonizationMaxError()`: `SHAPE_ARC::DefaultAccuracyForPCB() / 5`, with `ARC_HIGH_DEF` 0.005 mm.
-pub const ARC_POLYGONIZATION_MAX_ERROR_NM: i64 = 1_000;
+pub const ARC_POLYGONIZATION_MAX_ERROR_NM: Nm = Nm::new(1_000);
 
 /// `GetArcToSegmentCount( aRadius, aErrorMax, aArcAngle )`.
-pub fn arc_to_segment_count(radius: i64, error_max: i64, arc_angle_deg: f64) -> i64 {
+pub fn arc_to_segment_count(radius: Nm, error_max: Nm, arc_angle_deg: f64) -> i64 {
     const MIN_SEGCOUNT_FOR_CIRCLE: f64 = 8.0;
-    let radius = radius.max(1);
-    let error_max = error_max.max(1);
-    let rel_error = error_max as f64 / radius as f64;
+    let radius = radius.max(Nm::new(1));
+    let error_max = error_max.max(Nm::new(1));
+    let rel_error = error_max.ratio(radius);
     let mut arc_increment = 180.0 / std::f64::consts::PI * (1.0 - rel_error).acos() * 2.0;
     arc_increment = arc_increment.min(360.0 / MIN_SEGCOUNT_FOR_CIRCLE);
     let seg_count = ki_round(arc_angle_deg.abs() / arc_increment);
@@ -583,10 +589,10 @@ pub fn arc_to_segment_count(radius: i64, error_max: i64, arc_angle_deg: f64) -> 
 }
 
 /// `CircleToEndSegmentDeltaRadius( aRadius, aSegCount )`.
-pub fn circle_to_end_segment_delta_radius(radius: i64, seg_count: i64) -> i64 {
+pub fn circle_to_end_segment_delta_radius(radius: Nm, seg_count: i64) -> Nm {
     let seg_count = if seg_count <= 2 { 3 } else { seg_count };
     let alpha = std::f64::consts::PI / seg_count as f64;
-    ki_round((radius as f64 * (1.0 - 1.0 / alpha.cos())).abs())
+    ki_round_nm((radius.as_f64() * (1.0 - 1.0 / alpha.cos())).abs())
 }
 
 /// `SHAPE_ARC`: the arc from `start` through `mid` to `end`.
@@ -595,24 +601,30 @@ pub struct ShapeArc {
     pub start: Point,
     pub mid: Point,
     pub end: Point,
-    pub width: i64,
+    pub width: Nm,
     center: Point,
     radius: f64,
 }
 
 impl ShapeArc {
-    /// `SHAPE_ARC( aArcStart, aArcMid, aArcEnd, aWidth )`.
+    /// `SHAPE_ARC( aArcStart, aArcMid, aArcEnd, aWidth )`, the width a count of nanometres: the studio's (`crates/cli`) signature until
+    /// the length type's wave 3, when it becomes [`ShapeArc::new_nm`]'s.
     pub fn new(start: Point, mid: Point, end: Point, width: i64) -> ShapeArc {
+        ShapeArc::new_nm(start, mid, end, Nm::new(width))
+    }
+
+    /// `SHAPE_ARC( aArcStart, aArcMid, aArcEnd, aWidth )`.
+    pub fn new_nm(start: Point, mid: Point, end: Point, width: Nm) -> ShapeArc {
         let mut a = ShapeArc { start, mid, end, width, center: Point::default(), radius: 0.0 };
         a.update_values();
         a
     }
 
     /// `SHAPE_ARC::ConstructFromStartEndAngle( aStart, aEnd, aAngle, aWidth )`.
-    pub fn from_start_end_angle(start: Point, end: Point, angle_deg: f64, width: i64) -> ShapeArc {
+    pub fn from_start_end_angle(start: Point, end: Point, angle_deg: f64, width: Nm) -> ShapeArc {
         let center = calc_arc_center_by_angle(V2::of(start), V2::of(end), angle_deg).trunc();
         let mid = rotate_about(start, center, -angle_deg / 2.0);
-        ShapeArc::new(start, mid, end, width)
+        ShapeArc::new_nm(start, mid, end, width)
     }
 
     /// `SHAPE_ARC::ConstructFromStartEndCenter`.
@@ -624,12 +636,12 @@ impl ShapeArc {
         let mut angle = end_angle - start_angle;
         angle = if clockwise { normalize(angle) - 360.0 } else { normalize(angle) };
         let mid = rotate_about(start, center, -angle / 2.0);
-        ShapeArc::new(start, mid, end, 0)
+        ShapeArc::new_nm(start, mid, end, Nm::ZERO)
     }
 
     fn update_values(&mut self) {
         self.center = calc_arc_center(self.start, self.mid, self.end);
-        let (dx, dy) = ((self.start.x - self.center.x).raw_shim() as f64, (self.start.y - self.center.y).raw_shim() as f64);
+        let (dx, dy) = ((self.start.x - self.center.x).as_f64(), (self.start.y - self.center.y).as_f64());
         self.radius = (dx * dx + dy * dy).sqrt();
     }
 
@@ -643,8 +655,8 @@ impl ShapeArc {
 
     /// `SHAPE_ARC::IsCCW`.
     pub fn is_ccw(&self) -> bool {
-        let v1 = ((self.end.x - self.mid.x).raw_shim() as i128, (self.end.y - self.mid.y).raw_shim() as i128);
-        let v2 = ((self.start.x - self.mid.x).raw_shim() as i128, (self.start.y - self.mid.y).raw_shim() as i128);
+        let v1 = ((self.end.x - self.mid.x).get() as i128, (self.end.y - self.mid.y).get() as i128);
+        let v2 = ((self.start.x - self.mid.x).get() as i128, (self.start.y - self.mid.y).get() as i128);
         v1.0 * v2.1 - v1.1 * v2.0 > 0
     }
 
@@ -654,12 +666,12 @@ impl ShapeArc {
 
     /// `SHAPE_ARC::GetStartAngle`, degrees in `[0, 360)`.
     pub fn start_angle(&self) -> f64 {
-        normalize(angle_of((self.start.x - self.center.x).raw_shim() as f64, (self.start.y - self.center.y).raw_shim() as f64))
+        normalize(angle_of((self.start.x - self.center.x).as_f64(), (self.start.y - self.center.y).as_f64()))
     }
 
     /// `SHAPE_ARC::GetEndAngle`.
     pub fn end_angle(&self) -> f64 {
-        normalize(angle_of((self.end.x - self.center.x).raw_shim() as f64, (self.end.y - self.center.y).raw_shim() as f64))
+        normalize(angle_of((self.end.x - self.center.x).as_f64(), (self.end.y - self.center.y).as_f64()))
     }
 
     /// `SHAPE_ARC::GetCentralAngle`, degrees: positive counter-clockwise, 360 for a circle.
@@ -667,8 +679,8 @@ impl ShapeArc {
         if self.start == self.end {
             return 360.0;
         }
-        let a_end = angle_of((self.end.x - self.center.x).raw_shim() as f64, (self.end.y - self.center.y).raw_shim() as f64);
-        let a_start = angle_of((self.start.x - self.center.x).raw_shim() as f64, (self.start.y - self.center.y).raw_shim() as f64);
+        let a_end = angle_of((self.end.x - self.center.x).as_f64(), (self.end.y - self.center.y).as_f64());
+        let a_start = angle_of((self.start.x - self.center.x).as_f64(), (self.start.y - self.center.y).as_f64());
         let mut angle = a_end - a_start;
         if self.is_ccw() {
             if angle < 0.0 {
@@ -687,24 +699,25 @@ impl ShapeArc {
 
     /// `SHAPE_ARC::ConvertToPolyline( aMaxError )`: the first and last points are the arc's own, the ones between sit at the middle of each slice,
     /// a little outside the arc.
-    pub fn convert_to_polyline(&self, max_error: i64) -> Vec<Point> {
+    pub fn convert_to_polyline(&self, max_error: Nm) -> Vec<Point> {
         let r = self.radius;
         let sa = self.start_angle();
         let c = self.center;
         let ca = self.central_angle();
         let start_to_end = Seg::new(self.start, self.end);
-        let half_max_error = 1.0f64.max(max_error as f64 / 2.0);
-        let external_radius = r + (self.width as f64 / 2.0);
+        let half_max_error = 1.0f64.max(max_error.as_f64() / 2.0);
+        let external_radius = r + (self.width.as_f64() / 2.0);
         let n: i64;
         let effective_error: f64;
-        if external_radius < half_max_error || (start_to_end.distance(self.mid) as f64) < half_max_error {
+        if external_radius < half_max_error || start_to_end.distance(self.mid).as_f64() < half_max_error {
             // "a very rare case: the arc is approximated by one segment"
             n = 0;
             effective_error = external_radius;
         } else {
-            n = arc_to_segment_count(external_radius as i64, max_error, ca);
+            // `(int) external_radius`: the float radius truncated to a length
+            n = arc_to_segment_count(Nm::new(external_radius as i64), max_error, ca);
             let seg360 = (n as f64 * 360.0 / ca.abs()) as i64;
-            effective_error = circle_to_end_segment_delta_radius(external_radius as i64, seg360) as f64;
+            effective_error = circle_to_end_segment_delta_radius(Nm::new(external_radius as i64), seg360).as_f64();
         }
         let r = r + effective_error / 2.0;
         let n = n * 2;
@@ -715,9 +728,9 @@ impl ShapeArc {
             if n != 0 {
                 a += (ca * i as f64) / n as f64;
             }
-            let x = c.x.raw_shim() as f64 + r * cos_deg(a);
-            let y = c.y.raw_shim() as f64 + r * sin_deg(a);
-            let p = Point { x: Nm::from_raw_shim(ki_round(x)), y: Nm::from_raw_shim(ki_round(y)) };
+            let x = c.x.as_f64() + r * cos_deg(a);
+            let y = c.y.as_f64() + r * sin_deg(a);
+            let p = Point { x: ki_round_nm(x), y: ki_round_nm(y) };
             if out.last() != Some(&p) {
                 out.push(p);
             }
@@ -748,7 +761,7 @@ mod tests {
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     #[test]
@@ -777,23 +790,23 @@ mod tests {
         assert_eq!(s.line_project(p(4, 7)), p(4, 0));
         assert_eq!(s.reflect_point(p(4, 7)), p(4, -7));
         assert_eq!(s.nearest_point(p(-5, 2)), p(0, 0));
-        assert_eq!(s.distance(p(12, 0)), 2);
+        assert_eq!(s.distance(p(12, 0)), Nm::new(2));
         assert!(s.contains(p(5, 1)) && !s.contains(p(5, 2)));
-        assert_eq!(Seg::new(p(0, 0), p(3, 4)).length(), 5);
-        assert_eq!(Seg::new(p(0, 0), p(10, 10)).length(), 14, "the diagonal is rounded once");
-        assert!(Seg::new(p(0, 0), p(10, 0)).approx_parallel(&Seg::new(p(0, 5), p(10, 5)), 1));
-        assert!(!Seg::new(p(0, 0), p(10, 0)).approx_parallel(&Seg::new(p(0, 0), p(10, 10)), 1));
+        assert_eq!(Seg::new(p(0, 0), p(3, 4)).length(), Nm::new(5));
+        assert_eq!(Seg::new(p(0, 0), p(10, 10)).length(), Nm::new(14), "the diagonal is rounded once");
+        assert!(Seg::new(p(0, 0), p(10, 0)).approx_parallel(&Seg::new(p(0, 5), p(10, 5)), Nm::new(1)));
+        assert!(!Seg::new(p(0, 0), p(10, 0)).approx_parallel(&Seg::new(p(0, 0), p(10, 10)), Nm::new(1)));
         assert_eq!(Seg::new(p(0, 0), p(10, 0)).squared_distance_seg(&Seg::new(p(3, 4), p(3, 9))), 16);
     }
 
     #[test]
     fn a_ninety_degree_arc_is_built_the_way_the_meander_builds_it() {
         // `makeMiterShape`: a quarter arc of angle -90 from (0,0) to (1 mm, 1 mm) has its centre at (1 mm, 0), +90 at (0, 1 mm).
-        let a = ShapeArc::from_start_end_angle(p(0, 0), p(1_000_000, 1_000_000), -90.0, 0);
+        let a = ShapeArc::from_start_end_angle(p(0, 0), p(1_000_000, 1_000_000), -90.0, Nm::ZERO);
         assert_eq!(a.center(), p(1_000_000, 0));
         assert!((a.radius() - 1_000_000.0).abs() < 1e-3);
         assert!(!a.is_ccw() && (a.central_angle() + 90.0).abs() < 1e-6, "{}", a.central_angle());
-        let b = ShapeArc::from_start_end_angle(p(0, 0), p(1_000_000, 1_000_000), 90.0, 0);
+        let b = ShapeArc::from_start_end_angle(p(0, 0), p(1_000_000, 1_000_000), 90.0, Nm::ZERO);
         assert_eq!(b.center(), p(0, 1_000_000));
         assert!(b.is_ccw() && (b.central_angle() - 90.0).abs() < 1e-6, "{}", b.central_angle());
         assert!((a.length() - 1_000_000.0 * std::f64::consts::FRAC_PI_2).abs() < 1e-3);
@@ -803,14 +816,14 @@ mod tests {
 
     #[test]
     fn an_arc_polygonises_with_its_own_ends_and_the_segments_in_between() {
-        let a = ShapeArc::from_start_end_angle(p(0, 0), p(1_000_000, 1_000_000), -90.0, 0);
+        let a = ShapeArc::from_start_end_angle(p(0, 0), p(1_000_000, 1_000_000), -90.0, Nm::ZERO);
         let pl = a.convert_to_polyline(ARC_POLYGONIZATION_MAX_ERROR_NM);
         assert_eq!((pl.first(), pl.last()), (Some(&p(0, 0)), Some(&p(1_000_000, 1_000_000))));
         assert_eq!(pl.len(), 20, "18 slices: the two ends and a point in the middle of each slice");
         // every chord vertex is within a micrometre of the circle
         let c = a.center();
         for q in &pl[1..pl.len() - 1] {
-            let d = (((q.x - c.x).raw_shim() as f64).powi(2) + ((q.y - c.y).raw_shim() as f64).powi(2)).sqrt();
+            let d = (((q.x - c.x).as_f64()).powi(2) + ((q.y - c.y).as_f64()).powi(2)).sqrt();
             assert!((d - a.radius()).abs() <= 1000.0, "{d}");
         }
     }

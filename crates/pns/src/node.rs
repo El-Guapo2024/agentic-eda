@@ -799,7 +799,7 @@ impl Node {
             if item_layer != layer || net.is_some_and(|n| !same_net(item.net(), n)) || exclude.contains(&id) {
                 continue;
             }
-            let reach = (within.unwrap_or(width / 2)).raw_shim() as i128;
+            let reach = (within.unwrap_or(width / 2)).get() as i128;
             if d2 <= reach * reach && best.is_none_or(|(bid, bd)| (d2, id) < (bd, bid)) {
                 best = Some((id, d2));
             }
@@ -1061,7 +1061,7 @@ impl Node {
         pending.push_back(start);
         let bbox_of_shape = |it: &Item| it.shape(layer).bbox(Nm::ZERO);
         let merge = |a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
-        let area = |b: (Nm, Nm, Nm, Nm)| (b.2 - b.0).raw_shim() as i128 * (b.3 - b.1).raw_shim() as i128;
+        let area = |b: (Nm, Nm, Nm, Nm)| (b.2 - b.0).area(b.3 - b.1);
         let mut cluster_bbox = bbox_of_shape(start_item);
         let initial_area = area(cluster_bbox);
         let mut processed: std::collections::HashSet<ItemId> = std::collections::HashSet::new();
@@ -1150,11 +1150,11 @@ impl Node {
                 }
             }
             for a in item.anchors() {
-                let d2 = (a.x - pos.x).raw_shim() as i128 * (a.x - pos.x).raw_shim() as i128 + (a.y - pos.y).raw_shim() as i128 * (a.y - pos.y).raw_shim() as i128;
+                let d2 = (a.x - pos.x).area(a.x - pos.x) + (a.y - pos.y).area(a.y - pos.y);
                 // equal distances (a track ending exactly on a pad's centre) are resolved by
                 // item id, not by the order the item table happens to iterate in -- the start
                 // item decides the starting posture, so a random pick made routes unrepeatable
-                if d2 <= ((max_dist).raw_shim() as i128) * ((max_dist).raw_shim() as i128) && best.as_ref().map(|(bid, _, bd)| (d2, id) < (*bd, *bid)).unwrap_or(true) {
+                if d2 <= ((max_dist).get() as i128) * ((max_dist).get() as i128) && best.as_ref().map(|(bid, _, bd)| (d2, id) < (*bd, *bid)).unwrap_or(true) {
                     best = Some((id, a, d2));
                 }
             }
@@ -1212,7 +1212,7 @@ fn line_bbox(l: &Line) -> Option<(Nm, Nm, Nm, Nm)> {
 /// the last segment). Segment lengths are rounded like `SEG::Length()`.
 pub(crate) fn path_length(pts: &[Point], p: Point, index: usize) -> i64 {
     let n_segs = pts.len().saturating_sub(1);
-    let dist = |a: Point, b: Point| -> i64 { (((b.x - a.x).raw_shim() as f64).powi(2) + ((b.y - a.y).raw_shim() as f64).powi(2)).sqrt().round() as i64 };
+    let dist = |a: Point, b: Point| -> i64 { (((b.x - a.x).as_f64()).powi(2) + ((b.y - a.y).as_f64()).powi(2)).sqrt().round() as i64 };
     let mut sum = 0;
     for i in 0..n_segs {
         let hit = if index == n_segs { i == n_segs - 1 } else { i == index };

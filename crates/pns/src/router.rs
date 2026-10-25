@@ -271,7 +271,7 @@ impl Router {
             match self.world.get(id) {
                 Some(Item::Segment(s)) => {
                     let seg = eda_drc::kimath::Seg::new(s.a, s.b);
-                    let on = if seg.sq_distance_to_point(at) <= (EXACT_NM * EXACT_NM.raw_shim()).raw_shim() as i128 { at } else { seg.nearest_point(at) };
+                    let on = if seg.sq_distance_to_point(at) <= (EXACT_NM * EXACT_NM.raw_shim()).get() as i128 { at } else { seg.nearest_point(at) };
                     let half = s.width / 2;
                     let (da, db) = (crate::seg_ops::length(at, s.a), crate::seg_ops::length(at, s.b));
                     if da < half.raw_shim() || db < half.raw_shim() {
@@ -290,7 +290,7 @@ impl Router {
                         return Some(StartPick { item: id, pos: if da < db { a.start() } else { a.end() }, split: None });
                     }
                     if a.source_track.is_some() {
-                        let on = if a.arc.distance_to(at) <= EXACT_NM.raw_shim() as f64 { at } else { a.arc.nearest_point(at) };
+                        let on = if a.arc.distance_to(at) <= EXACT_NM.as_f64() { at } else { a.arc.nearest_point(at) };
                         return Some(StartPick { item: id, pos: on, split: Some(id) });
                     }
                 }
@@ -640,7 +640,7 @@ impl Router {
             }) {
                 let mut pieces = vec![arc.arc];
                 for p in points {
-                    if let Some(k) = pieces.iter().position(|a| a.start != p && a.end != p && a.distance_to(p) <= EXACT_NM.raw_shim() as f64) {
+                    if let Some(k) = pieces.iter().position(|a| a.start != p && a.end != p && a.distance_to(p) <= EXACT_NM.as_f64()) {
                         if let Some((l, r)) = pieces[k].split(p) {
                             pieces.splice(k..=k, [l, r]);
                         }
@@ -665,7 +665,7 @@ impl Router {
                 if pts.contains(&p) {
                     continue;
                 }
-                if let Some(k) = (0..pts.len() - 1).find(|&k| eda_drc::kimath::Seg::new(pts[k], pts[k + 1]).sq_distance_to_point(p) <= (EXACT_NM * EXACT_NM.raw_shim()).raw_shim() as i128) {
+                if let Some(k) = (0..pts.len() - 1).find(|&k| eda_drc::kimath::Seg::new(pts[k], pts[k + 1]).sq_distance_to_point(p) <= (EXACT_NM * EXACT_NM.raw_shim()).get() as i128) {
                     pts.insert(k + 1, p);
                 }
             }
@@ -1061,7 +1061,7 @@ impl Router {
         };
         let joint = self.world.joint_at(p, it.net())?;
         let linked: Vec<&Item> = joint.links.iter().filter(|&&id| id != item).filter_map(|&id| self.world.get(id)).filter(|i| i.is_track()).collect();
-        let sq = |a: Point, b: Point| ((a.x - b.x).raw_shim() as i128).pow(2) + ((a.y - b.y).raw_shim() as i128).pow(2);
+        let sq = |a: Point, b: Point| ((a.x - b.x).get() as i128).pow(2) + ((a.y - b.y).get() as i128).pow(2);
         let closest = linked.iter().filter(|i| i.layers().start() == layer).filter_map(|i| i.track_ends().map(|(a, b)| (i, if sq(a, p) > sq(b, p) { a } else { b }))).min_by_key(|(_, far)| sq(*far, at));
         if let Some((i, _)) = closest {
             return Some(i.width());
@@ -1721,7 +1721,7 @@ mod tests {
         assert_eq!(before.width, mm(0.2), "the net class's own width until the dialog says otherwise");
         let pitch_of = |p: &crate::dp_placer::DiffPairPreview| {
             let (a, b) = (p.head_a.last().unwrap(), p.head_b.last().unwrap());
-            (((a.x - b.x).raw_shim() as f64).powi(2) + ((a.y - b.y).raw_shim() as f64).powi(2)).sqrt()
+            (((a.x - b.x).as_f64()).powi(2) + ((a.y - b.y).as_f64()).powi(2)).sqrt()
         };
         // the pair ends a pitch apart (the gateways' offsets are whole micrometres: within a few of it)
         let near = |actual: f64, pitch: i64| actual >= pitch as f64 - 10.0 && actual <= pitch as f64 + 10.0;

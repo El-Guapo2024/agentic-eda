@@ -124,7 +124,7 @@ impl Segment {
     }
 
     pub fn length(&self) -> f64 {
-        let (dx, dy) = ((self.b.x - self.a.x).raw_shim() as f64, (self.b.y - self.a.y).raw_shim() as f64);
+        let (dx, dy) = ((self.b.x - self.a.x).as_f64(), (self.b.y - self.a.y).as_f64());
         (dx * dx + dy * dy).sqrt()
     }
 }

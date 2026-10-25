@@ -221,10 +221,10 @@ fn an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge() {
     let (node, layers) = build_node(&design, &model);
     let sides = edges(&node);
     // The arc is chords of its curve, every one of them on the 5 mm circle round (15, 15).
-    let on_arc: Vec<_> = sides.iter().filter(|(a, b)| [a, b].iter().all(|q| ((q.x - mm(15.0)).raw_shim() as f64).hypot((q.y - mm(15.0)).raw_shim() as f64) > 4_990_000.0 && q.x >= mm(15.0) && q.y >= mm(15.0))).collect();
+    let on_arc: Vec<_> = sides.iter().filter(|(a, b)| [a, b].iter().all(|q| ((q.x - mm(15.0)).as_f64()).hypot((q.y - mm(15.0)).as_f64()) > 4_990_000.0 && q.x >= mm(15.0) && q.y >= mm(15.0))).collect();
     assert!(on_arc.len() >= 10, "{} chords of the corner arc in {} edges", on_arc.len(), sides.len());
     // The hole is a ring round (8, 10) of radius 3 mm.
-    let on_ring = sides.iter().filter(|(a, b)| [a, b].iter().all(|q| (((q.x - mm(8.0)).raw_shim() as f64).hypot((q.y - mm(10.0)).raw_shim() as f64) - 3_000_000.0).abs() < 10_000.0)).count();
+    let on_ring = sides.iter().filter(|(a, b)| [a, b].iter().all(|q| (((q.x - mm(8.0)).as_f64()).hypot((q.y - mm(10.0)).as_f64()) - 3_000_000.0).abs() < 10_000.0)).count();
     assert!(on_ring >= 30, "{on_ring} sides of the hole's ring");
     assert_eq!(sides.len(), 4 + on_arc.len() + on_ring, "and the four straight sides, nothing else: {sides:?}");
 
@@ -239,7 +239,7 @@ fn an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge() {
     // ... and from the corner's arc.
     let near_corner = |gap: Nm| {
         // On the diagonal, `gap` inside the arc's 5 mm radius round (15, 15).
-        let r = 5_000_000.0 - gap.raw_shim() as f64 - 100_000.0;
+        let r = 5_000_000.0 - gap.as_f64() - 100_000.0;
         let c = p(mm(15.0) + Nm::from_raw_shim((r * std::f64::consts::FRAC_1_SQRT_2) as i64), mm(15.0) + Nm::from_raw_shim((r * std::f64::consts::FRAC_1_SQRT_2) as i64));
         let shape = Shape2::Stadium { a: c, b: c, r: mm(0.1) };
         !node.all_colliding(&shape, &net_of("SIG"), LayerRange::single(layers.index_of("F.Cu").unwrap()), &model.board, &[]).is_empty()

@@ -75,8 +75,8 @@ pub enum DragKind {
 /// first), where the joint has a virtual via -- that via.
 fn check_virtual_via(node: &Node, at: Point, seg: &crate::item::Segment) -> Option<ItemId> {
     // `( aP - aSeg->Seg().A ).EuclideanNorm() <= w2`: a double against the integer half width, not rounded
-    let w2 = (seg.width / 2).raw_shim() as f64;
-    let norm = |p: Point| ((at.x - p.x).raw_shim() as f64).hypot((at.y - p.y).raw_shim() as f64);
+    let w2 = (seg.width / 2).as_f64();
+    let norm = |p: Point| ((at.x - p.x).as_f64()).hypot((at.y - p.y).as_f64());
     let psnap = if norm(seg.a) <= w2 {
         seg.a
     } else if norm(seg.b) <= w2 {
@@ -186,7 +186,7 @@ fn assemble(node: &Node, id: ItemId) -> Option<Line> {
 }
 
 fn dist(a: Point, b: Point) -> f64 {
-    let (dx, dy) = ((a.x - b.x).raw_shim() as f64, (a.y - b.y).raw_shim() as f64);
+    let (dx, dy) = ((a.x - b.x).as_f64(), (a.y - b.y).as_f64());
     dx.hypot(dy)
 }
 
@@ -243,7 +243,7 @@ impl Dragger {
                 let mut index = line.segment_ids.iter().position(|&id| id == item_id)?.min(line.segment_count().saturating_sub(1));
                 let (dist_a, dist_b) = (dist(at, seg_a), dist(at, seg_b));
                 let kind;
-                if dist_a < w2.raw_shim() as f64 || dist_b < w2.raw_shim() as f64 {
+                if dist_a < w2.as_f64() || dist_b < w2.as_f64() {
                     // within half its width of an end: that end is the corner to drag
                     kind = DragKind::Corner;
                     if dist_b <= dist_a {
@@ -669,7 +669,7 @@ fn nearest_point_of(pts: &[Point], p: Point) -> Point {
     for w in pts.windows(2) {
         let seg = eda_drc::kimath::Seg::new(w[0], w[1]);
         let q = seg.nearest_point(p);
-        let d = ((q.x - p.x).raw_shim() as i128).pow(2) + ((q.y - p.y).raw_shim() as i128).pow(2);
+        let d = ((q.x - p.x).get() as i128).pow(2) + ((q.y - p.y).get() as i128).pow(2);
         if best.is_none_or(|(bd, _)| d < bd) {
             best = Some((d, q));
         }
@@ -711,7 +711,7 @@ mod tests {
     }
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn on_45(pts: &[Point]) -> bool {
@@ -1144,7 +1144,7 @@ mod tests {
             let preview = dragger.preview(&node, &rules, &settings, onto_the_pad);
             assert!(!preview.colliding, "{mode:?}: {preview:?}");
             let end = preview.pts[0];
-            let centre_distance = (((end.x - mm(4.0)).raw_shim() as f64).powi(2) + (end.y.raw_shim() as f64).powi(2)).sqrt();
+            let centre_distance = (((end.x - mm(4.0)).as_f64()).powi(2) + (end.y.as_f64()).powi(2)).sqrt();
             assert!(centre_distance >= 500_000.0 + 300_000.0 + 200_000.0 - 500.0, "{mode:?}: the via ended {centre_distance} um from the pad's centre, at {end:?}");
             assert_eq!(preview.fanout[0].last(), Some(end), "{mode:?}: the track ends at the via");
             let commit = dragger.finish(&node, &rules, &settings, onto_the_pad, false).expect("a via that clears commits");
