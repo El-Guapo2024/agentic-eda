@@ -431,8 +431,10 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     // against the oracle across the example boards (see the task report);
     // still an approximation, so a residual mismatch against kicad-cli
     // remains on some boards.
-    let half_w_box = 220 * Nm::from_raw_shim(fp.id.chars().count() as i64);
-    let (w, h) = rotated_extent_by(fp.rot as i64, (half_w_box * 2, Nm::from_raw_shim(500)));
+    // 0.22 mm of half-width per character, 0.5 mm high. (Written `220` and `500` when the IR was micrometres; the move to nanometres
+    // converted the anchor's constants above but left these, a box a thousandth of the label's size.)
+    let half_w_box = Nm::new(220_000) * fp.id.chars().count() as i64;
+    let (w, h) = rotated_extent_by(fp.rot as i64, (half_w_box * 2, Nm::new(500_000)));
     Some(Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 })
 }
 
@@ -803,3 +805,25 @@ impl DrcTrackSeg {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eda_model::footprint::{Footprint, Pad, PadKind, PadShape};
+    use eda_model::ir::{FootprintInstance, LabelSide};
+    use eda_model::units::mm;
+    use eda_model::Part;
+
+    /// The reference's silk box is the label's size (0.44 mm a character by 0.5 mm), not a thousandth of it.
+    #[test]
+    fn the_reference_box_is_the_size_of_the_label() {
+        let fp = Footprint { name: "2PAD".into(), pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }], courtyard: Some((mm(2.0), mm(1.0))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: Some("2PAD".into()), footprint: Some("2PAD".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
+        let model = ConstraintModel { parts: vec![part.clone()], footprints: vec![fp], ..Default::default() };
+        let inst = FootprintInstance { id: "U1".into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot: 0, side: Side::Top, label: LabelSide::Above };
+        let Some(Shape::Rect { x0, y0, x1, y1 }) = exported_refdes_shape(&model, &part, &inst) else { panic!("a box") };
+        assert_eq!((x1 - x0, y1 - y0), (mm(0.88), mm(0.5)));
+        // above the courtyard (half height 1 mm) by 0.7 mm
+        assert_eq!(((x0 + x1) / 2, (y0 + y1) / 2), (mm(10.0), mm(10.0 - 1.0 - 0.7)));
+    }
+}
