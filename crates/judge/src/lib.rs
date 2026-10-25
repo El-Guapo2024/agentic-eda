@@ -11,6 +11,7 @@ use base64::Engine;
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::Design;
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
+use eda_model::units::{mm, Nm};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -91,15 +92,15 @@ pub fn render_stage_svg(stage: Stage, design: &Design, model: &ConstraintModel) 
 
 pub fn render_board_svg(design: &Design, model: &ConstraintModel, with_routing: bool) -> Result<String, Vec<CheckResult>> {
     let pl = design.placement.as_ref().ok_or_else(|| unavailable("design has no placement to render"))?;
-    let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+    let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
     for p in &pl.outline {
-        x0 = x0.min(p.x.raw_shim()); y0 = y0.min(p.y.raw_shim()); x1 = x1.max(p.x.raw_shim()); y1 = y1.max(p.y.raw_shim());
+        x0 = x0.min(p.x); y0 = y0.min(p.y); x1 = x1.max(p.x); y1 = y1.max(p.y);
     }
-    if x0 == i64::MAX {
+    if x0 == Nm::MAX {
         return Err(unavailable("placement has no outline"));
     }
-    let m = 2_000_000;
-    let (vx, vy, vw, vh) = (x0 - m, y0 - m, x1 - x0 + 2 * m, y1 - y0 + 2 * m);
+    let m = mm(2.0);
+    let (vx, vy, vw, vh) = (x0 - m, y0 - m, x1 - x0 + m * 2, y1 - y0 + m * 2);
     let mut s = String::new();
     s.push_str(&format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{vx} {vy} {vw} {vh}\" width=\"{}\" height=\"{}\">\n", vw / 20_000, vh / 20_000));
     s.push_str("<rect x=\"-1e12\" y=\"-1e12\" width=\"2e12\" height=\"2e12\" fill=\"#0d1b12\"/>\n");
