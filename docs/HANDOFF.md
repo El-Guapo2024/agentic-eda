@@ -17,6 +17,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## What landed (2026-10-14 to 10-24)
 
+- 2026-10-25: **the length type, wave 1** (`7745bb56`): `Nm` is a newtype (see `docs/NANOMETRES.md` "The length type"); the model converted, other crates through `raw_shim` markers; no behaviour change (`tools/same_design.sh`: 138 cases identical). Caught three micrometre leftovers: the no-connect obstacle, the custom-pad max error, DRC's reference silk box.
 - 2026-10-25: **fix batch D, schematic connectivity**: buses sharing a member name, hidden power pins, `${#}` per placement, bus aliases, unit-0 pins, ERC exclusions per shared-sheet placement and on import; an imported KiCad schematic is no longer left in KiCad's frame. 22 QA hierarchies trace as kicad-cli reads them. Open: F5 keyed on a second item, project `${VAR}` in power values.
 - 2026-10-25: **fix batch A, KiCad's names** (`a8287704`): KiCad's net names everywhere incl. the studio (option 1), every net the intent names labelled in the derived schematic (the user, 2026-10-24), one footprint name, `(path)`/sheetname/sheetfile, fields and pinfunction/pintype, back footprints in KiCad's frame; kicad-cli's schematic-parity DRC: 0 differences on opamp_filter, ldo, mcu30 (were 22 and 76). R6 merged 2026-10-25: package parts carry the installed footprint whole (pin headers keep the built-in pads); the repair loop reorders LED/resistor chains and re-places for proximity, so every example places at seeds 0-2.
 - 2026-10-24: **fix batches B and C** (`28ba30c4`): zones keep their holes, SMD pads on several copper layers, paste-only pads, curves, footprint Edge.Cuts (KiCad's footprint outline pass), rectangle corner radius (the router's edge as KiCad's effective shapes), Extruded 3D Body, importers' `.kicad_dru`, a project's DRC exclusions; refills keep teardrop copper via `(legacy_teardrops yes)` (trade-off: GAPS 13). Open: imported ERC exclusions (batch D's file), Repeat Layout target holes.
@@ -64,6 +65,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-nm2-ops` (`~/work/agentic-eda-exports`), `task-nm2-pns` (`-embedded`), `task-nm2-cli` (`-rules`: cli, kicad-engine, eda, intent, judge), `task-nm2-core` (`-router`: kicad, drc, connectivity, engine, gates, lint, place, freeroute, interchange, cypress, render, grid) | Length type wave 2: remove the wave-1 shims crate by crate (brief `~/work/briefs/fix/nm-wave2.md`) | started 2026-10-25 | all; then wave 3: the cross-crate pub signatures each lists |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
