@@ -139,11 +139,19 @@ fn a_footprint_on_the_back_is_mirrored_as_pad_flip_mirrors_it() {
     let (top, bottom) = (pads_of(&top_model, "Q1"), pads_of(&bottom_model, "Q1"));
     for number in ["1", "2", "3", "4"] {
         let (t, b) = (pad(top, number), pad(bottom, number));
-        // The engine keeps a footprint as seen from the top whatever side it is on, so the two read the same (save the side the SMD copper is on).
+        // The engine keeps a footprint as seen from the top whatever side it is on: the bottom one is read in the library's frame, which for a file that
+        // mirrors x (as this fixture's does, at orientation 0) is the top's turned half a turn (KiCad's flip mirrors y and turns the orientation half a
+        // turn), its orientation 180; the two read the same so (save the side the SMD copper is on).
         let mut b = b.clone();
         b.opposite_side = t.opposite_side;
-        assert_eq!(*t, b, "pad {number}");
+        let mut t = t.clone();
+        t.at = (-t.at.0, -t.at.1);
+        if !t.ext.is_default() {
+            t.rot = (t.rot + 180_000) % 360_000;
+        }
+        assert_eq!(t, b, "pad {number}");
     }
+    assert_eq!(bottom_design.placement.as_ref().unwrap().footprints[0].rot, 180_000);
     // Written out again, the bottom side holds the file's mirrored tokens.
     let text = export(&bottom_design, &bottom_model);
     assert!(text.contains("(rect_delta -0.4 0)") && text.contains("(chamfer top_right bottom_left)") && text.contains("(drill 0.7 (offset -0.3 0))"), "{text}");

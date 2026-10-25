@@ -184,12 +184,12 @@
       await select(["pin:R1:1"]);
       const sel = __eda.state().selection;
       t(sel.length === 1 && sel[0].id === "pin:R1:1" && sel[0].kind === "pin", `a pin is an item of the selection (${JSON.stringify(sel)})`);
-      // R1's pin 1 is on the PA0 net: its end is at (49530, 83820), its wire runs up from there to a hierarchical label
+      // R1's pin 1 is on the PA0 net (KiCad's `/LED channels (D1–D8)/PA0`): its end is at (49530, 83820), its wire runs up from there to a hierarchical label
       await select([]);
       await hoverAt(49_530_000, 83_820_000);
       await __eda.run("eeschema.EditorControl.highlightNet");
       await sleep(600);
-      t(__eda.state().highlight.includes("PA0"), `Highlight Net with the cursor on a pin highlights its net (${__eda.state().highlight})`);
+      t(__eda.state().highlight.includes("/LED channels (D1–D8)/PA0"), `Highlight Net with the cursor on a pin highlights its net (${__eda.state().highlight})`);
       await __eda.run("eeschema.EditorControl.clearHighlight");
       await sleep(300);
       t(__eda.state().highlight.length === 0, "Clear Highlight clears it");
@@ -227,7 +227,7 @@
       const after = await sch(led.id);
       const r1 = after.symbols.find((x) => x.id === "R1");
       t(JSON.stringify(r1.pin_swaps) === JSON.stringify({ 1: "2", 2: "1" }), `with it on, R1's pins traded places (${JSON.stringify(r1.pin_swaps)})`);
-      t(netsOf(before) === "1:PA0,2:LED1" && netsOf(after) === "1:LED1,2:PA0", `and the nets they are on (${netsOf(before)} -> ${netsOf(after)})`);
+      t(netsOf(before) === "1:/LED channels (D1–D8)/PA0,2:/LED channels (D1–D8)/LED1" && netsOf(after) === "1:/LED channels (D1–D8)/LED1,2:/LED channels (D1–D8)/PA0", `and the nets they are on (KiCad's names: the hierarchical label PA0 and the local label LED1 in their sheet) (${netsOf(before)} -> ${netsOf(after)})`);
       t(JSON.stringify(after.wires.map((w) => w.pts)) === JSON.stringify(before.wires.map((w) => w.pts)), "the wires stayed where they were");
       t(JSON.stringify(after.symbols.find((x) => x.id === "R1").at) === JSON.stringify(before.symbols.find((x) => x.id === "R1").at), "so did the symbol");
       await undo();
@@ -245,7 +245,7 @@
       const m1 = await sch(mcu.id);
       t(lbl(m1, [135_890_000, 69_850_000]) === "PA1" && lbl(m1, [135_890_000, 72_390_000]) === "PA0", `the labels traded their text (${lbl(m1, [135890, 69850])}, ${lbl(m1, [135890, 72390])})`);
       const u1 = m1.symbols.find((x) => x.id === "U1");
-      t(u1.pins.find((p) => p.number === "3").net === "PA1" && u1.pins.find((p) => p.number === "4").net === "PA0", "and the pins are on each other's nets");
+      t(u1.pins.find((p) => p.number === "3").net === "/LED channels (D1–D8)/PA1" && u1.pins.find((p) => p.number === "4").net === "/LED channels (D1–D8)/PA0", `and the pins are on each other's nets (${u1.pins.find((p) => p.number === "3").net}, ${u1.pins.find((p) => p.number === "4").net})`);
       t(JSON.stringify(u1.pin_swaps ?? null) === JSON.stringify(m0.symbols.find((x) => x.id === "U1").pin_swaps ?? null), "the pins did not move");
       await undo();
       t(lbl(await sch(mcu.id), [135_890_000, 69_850_000]) === "PA0", "one Undo puts the labels back");

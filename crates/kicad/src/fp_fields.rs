@@ -88,20 +88,33 @@ pub(crate) fn write_property(out: &mut String, name: &str, text: &str, l: &Field
     writeln!(out, "\t\t(property {} {} (at {} {} {angle}){unlocked} (layer {}{knockout}){hide}\n\t\t\t(uuid \"{uuid}\")\n\t\t\t{}\n\t\t)", sexpr_str(name), sexpr_str(text), mm(x), mm(y), sexpr_str(&l.layer), effects(l)).unwrap();
 }
 
-/// The Reference, the Value and the user fields of a footprint, in KiCad's order.
-pub(crate) fn write_fields(out: &mut String, fp: &FootprintInstance, part: &Part, footprint: &Footprint, extra: &FpExtra) {
-    let reference = extra.edit.and_then(|e| e.reference.clone()).unwrap_or_else(|| default_reference_layout(fp, footprint));
+/// The Reference, the Value and the user fields of a footprint, in KiCad's order. `turned` is the footprint as the file has it when that is `fp` turned half
+/// a turn in its own frame (a footprint on the back made here, `pcb::write_footprint`): each field is placed as for `fp`, then turned with the frame.
+pub(crate) fn write_fields(out: &mut String, fp: &FootprintInstance, part: &Part, footprint: &Footprint, extra: &FpExtra, turned: Option<&FootprintInstance>) {
+    let file_fp = turned.unwrap_or(fp);
+    let in_file = |l: FieldLayout| -> FieldLayout {
+        match turned {
+            Some(_) => {
+                let mut l = l;
+                l.at = eda_model::ir::Point { x: -l.at.x, y: -l.at.y };
+                l.angle = (l.angle + 180_000).rem_euclid(360_000);
+                l
+            }
+            None => l,
+        }
+    };
+    let reference = in_file(extra.edit.and_then(|e| e.reference.clone()).unwrap_or_else(|| default_reference_layout(fp, footprint)));
     let ref_uuid = duid_for(&format!("footprint:{}:ref", fp.id), &fp.id);
-    write_property(out, REFERENCE, reference.shown(&fp.id), &reference, fp.side, fp.rot, &ref_uuid);
+    write_property(out, REFERENCE, reference.shown(&fp.id), &reference, file_fp.side, file_fp.rot, &ref_uuid);
 
-    let value = extra.edit.and_then(|e| e.value.clone()).unwrap_or_else(|| default_value_layout(fp));
+    let value = in_file(extra.edit.and_then(|e| e.value.clone()).unwrap_or_else(|| default_value_layout(fp)));
     let val_uuid = duid_for(&format!("footprint:{}:val", fp.id), &fp.id);
-    write_property(out, VALUE, value.shown(part.value.as_deref().unwrap_or(&fp.id)), &value, fp.side, fp.rot, &val_uuid);
+    write_property(out, VALUE, value.shown(part.value.as_deref().unwrap_or(&fp.id)), &value, file_fp.side, file_fp.rot, &val_uuid);
 
     if let Some(edit) = extra.edit {
         for (i, f) in edit.fields.iter().enumerate() {
             let uuid = duid_for(&format!("footprint:{}:field:{i}", fp.id), &fp.id);
-            write_property(out, &f.name, &f.text, &f.layout, fp.side, fp.rot, &uuid);
+            write_property(out, &f.name, &f.text, &in_file(f.layout.clone()), file_fp.side, file_fp.rot, &uuid);
         }
     }
 }

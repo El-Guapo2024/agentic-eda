@@ -9,7 +9,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// The board `setup` makes (two parts whose footprint belongs to no library), with the schematic the studio shows for it stored, as the first schematic edit
-/// stores it: kicad-cli's ERC finds a `footprint_link_issues` warning on each symbol, and nothing it does not find the same way twice.
+/// stores it, and the footprint link check on (Schematic Setup; the derived project ignores the library checks until then): kicad-cli's ERC finds a
+/// `footprint_link_issues` warning on each symbol, and nothing it does not find the same way twice.
 fn board_with_schematic(name: &str) -> PathBuf {
     let dir = scratch(name);
     setup(&dir);
@@ -17,6 +18,7 @@ fn board_with_schematic(name: &str) -> PathBuf {
     let derived = derived_schematic(&design, &model).unwrap();
     design.schematic = derived.schematic;
     design.sheet_contents = derived.sheet_contents;
+    design.schematic.as_mut().unwrap().extras.erc_severities.insert("footprint_link_issues".into(), "warning".into());
     save(&dir, &design).unwrap();
     dir
 }

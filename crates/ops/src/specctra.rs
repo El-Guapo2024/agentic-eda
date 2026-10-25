@@ -153,7 +153,9 @@ mod tests {
         let gnd_new = rt.tracks.iter().find(|t| t.layer == "B.Cu").expect("the fixed GND wire");
         assert!(dr.locked_ids.contains(&gnd_new.id) && dr.locked_ids.contains(&locked_before[0]), "{:?}", dr.locked_ids);
         let fp = &d.placement.as_ref().unwrap().footprints[0];
-        assert_eq!((fp.at, fp.side, fp.rot), (Point { x: 25_000_000, y: 20_000_000 }, Side::Bottom, (360_000 - 270_000)));
+        // KiCad's orientation is 90 + 180 on the back; a footprint made here is written with a half turn in its orientation (KiCad's frame of a flipped
+        // footprint, `eda_kicad::pcb::write_footprint`), so the studio's own turn is 180 - 270
+        assert_eq!((fp.at, fp.side, fp.rot), (Point { x: 25_000_000, y: 20_000_000 }, Side::Bottom, 270_000));
     }
 
     /// A session KiCad would refuse leaves the board as it was, with KiCad's words.

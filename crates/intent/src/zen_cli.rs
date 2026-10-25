@@ -270,6 +270,8 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
     Ok(ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
         parts,
         nets,
+        intent_net_names: Default::default(),
+        symbol_links: Default::default(),
         clusters,
         placement_rules: Vec::new(),
         stackup: None,

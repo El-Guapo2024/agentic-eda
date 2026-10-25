@@ -393,13 +393,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         }
         write!(out, "{}", fields_autoplaced_token(sch, &eda_model::ir::field_key(&sym.id, sym.unit))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-        let value = if !sym.value.is_empty() { sym.value.as_str() } else { part.value.as_deref().unwrap_or(&sym.id) };
-        let footprint = if !sym.footprint.is_empty() { sym.footprint.as_str() } else { part.footprint.as_deref().unwrap_or("") };
-        let datasheet = if !sym.datasheet.is_empty() {
-            sym.datasheet.as_str()
-        } else {
-            resolved.as_ref().map(|s| s.datasheet.as_str()).filter(|s| !s.is_empty()).unwrap_or("")
-        };
+        let (value, footprint, datasheet) = symbol_texts(sym, part, resolved.as_ref());
+        let (value, footprint, datasheet) = (value.as_str(), footprint.as_str(), datasheet.as_str());
         // where each field is drawn: the placements the section keeps for this symbol, else Autoplace Fields' (`eda_engine::fields`)
         let lib_for_geometry = real_symbol.map(|r| if body_style > 1 { r.in_style(body_style).into_owned() } else { r });
         let geom = eda_engine::symgeom::SymbolGeom::of(sym, part, lib_for_geometry.as_ref());
@@ -418,12 +413,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         }
         // The library symbol's simulation fields the symbol has none of (`SCH_SYMBOL` gets every field of its library symbol when it is placed), hidden, so
         // kicad-cli's SPICE netlist models a `Simulation_SPICE` source or transistor the way KiCad does. A sheet read from a KiCad file has its symbols' own.
-        if !sch.imported_from_kicad {
-            if let Some(sim) = model.symbol_sim_fields.get(&lib_id) {
-                for (name, text) in sim.iter().filter(|(n, _)| !shown.iter().any(|f| f.name == *n)) {
-                    write_property(&mut out, name, text, sch_mm(sym.at.x).parse().unwrap_or(0.0), sch_mm(sym.at.y).parse().unwrap_or(0.0), true);
-                }
-            }
+        for (name, text) in sim_fields_written(sch, &lib_id, model, &shown) {
+            write_property(&mut out, name, text, sch_mm(sym.at.x).parse().unwrap_or(0.0), sch_mm(sym.at.y).parse().unwrap_or(0.0), true);
         }
         // Only this instance's own unit's pins (plus any `unit == 0`
         // common-to-every-unit pin) -- a multi-unit instance's pin-uuid
@@ -833,6 +824,116 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
     // Symbol cross-references the way KiCad stores them, across the files (`sch_crossref`).
     sch_crossref::refs_to_kiids(&mut out);
     Ok(out)
+}
+
+/// The Value, Footprint and Datasheet a symbol is written with: its own, else its part's (the Footprint the one the board's footprint is written with,
+/// `footprint_lib_id`; the Datasheet the library symbol's).
+fn symbol_texts(sym: &SymbolInstance, part: &Part, resolved: Option<&eda_model::LibSymbol>) -> (String, String, String) {
+    let value = if !sym.value.is_empty() { sym.value.clone() } else { part.value.clone().unwrap_or_else(|| sym.id.clone()) };
+    let footprint = if !sym.footprint.is_empty() { sym.footprint.clone() } else { eda_model::footprint::footprint_lib_id(part) };
+    let datasheet = if !sym.datasheet.is_empty() { sym.datasheet.clone() } else { resolved.map(|s| s.datasheet.clone()).unwrap_or_default() };
+    (value, footprint, datasheet)
+}
+
+/// The library symbol's simulation fields a symbol is written with besides the fields it shows (`shown`); none on a sheet read from a KiCad file.
+fn sim_fields_written<'a>(sch: &eda_model::ir::SchematicSection, lib_id: &str, model: &'a ConstraintModel, shown: &[eda_engine::fields::PageField]) -> Vec<(&'a String, &'a String)> {
+    if sch.imported_from_kicad {
+        return Vec::new();
+    }
+    model.symbol_sim_fields.get(lib_id).map(|sim| sim.iter().filter(|(n, _)| !shown.iter().any(|f| f.name == *n)).map(|(n, t)| (n, t)).collect()).unwrap_or_default()
+}
+
+/// What each footprint of the board takes from its symbol in the schematic [`export_kicad_sch_tree`] writes ([`eda_model::SymbolLink`]), by the reference
+/// each placement gives the symbol: the uuids it is written with, the sheet's path and file, its fields as written, and its pins' names and types.
+pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String, eda_model::SymbolLink> {
+    let mut out = BTreeMap::new();
+    if design.schematic.is_none() {
+        return out;
+    }
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(sch) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        // the sheets from the root down: their uuids (`SCH_SHEET_PATH::Path`, the root's left out) and names (`PathHumanReadable`)
+        let mut uuids = String::new();
+        let mut names = String::from("/");
+        for k in 1..=e.path.len() {
+            let Some(sheet) = eda_model::sheet_list::placement_at(design, &e.path[..k]) else { continue };
+            uuids.push('/');
+            uuids.push_str(&sheet_uuid(sheet));
+            names.push_str(&sheet.name);
+            names.push('/');
+        }
+        // the seed the screen's uuids are minted with (`export_kicad_sch_tree`'s `ScreenCtx::seed`)
+        let seed = if e.file.is_empty() { String::new() } else { format!("{}|", e.file) };
+        let placement = e.path.last().map(String::as_str);
+        let no_connect: std::collections::BTreeSet<&str> = sch.no_connects.iter().map(|n| n.pin.as_str()).collect();
+        for sym in sch.symbols.iter().filter(|s| !s.exclude_from_board) {
+            let reference = eda_model::sheet_list::reference_under(sch, sym, placement);
+            let Some(part) = model.part(&sym.id) else { continue };
+            let lib_id = sym_lib_id(sym);
+            let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
+            // the pins this symbol draws: its unit's and those of every unit (a pin of a unit no symbol places is in no netlist)
+            let drawn = |number: &str| resolved.as_ref().filter(|r| r.unit_count > 1).and_then(|r| r.pin_by_number(number)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit);
+            if let Some(link) = out.get_mut(&reference) {
+                // a part's later units: the first one's symbol is the footprint's (`GetKIIDs().front()`); their pins join its
+                for pin in part.pins.iter().filter(|p| drawn(&p.number)) {
+                    let pin_type = resolve_pin_electrical_type(pin, resolved.as_ref());
+                    let function = pin.name.as_deref().filter(|n| !n.is_empty() && *n != "~").map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
+                    link.pins.entry(pin.number.clone()).or_insert((function, pin_type));
+                    link.units.entry(pin.number.clone()).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
+                }
+                continue;
+            }
+            let (_, _, datasheet) = symbol_texts(sym, part, resolved.as_ref());
+            // the fields as the writer writes them: every one the sheet shows but the Reference, Value and Footprint, then the simulation fields
+            let real_symbol = model.real_symbol_of(&lib_id, part);
+            let geom = eda_engine::symgeom::SymbolGeom::of(sym, part, real_symbol.as_ref());
+            let shown = eda_engine::fields::symbol_fields(sch, sym, Some(part), real_symbol.as_ref(), &geom);
+            let mut fields: Vec<(String, String)> = Vec::new();
+            for f in &shown {
+                match f.name.as_str() {
+                    "Reference" | "Value" | "Footprint" => {}
+                    "Datasheet" => fields.push((f.name.clone(), datasheet.clone())),
+                    _ => fields.push((f.name.clone(), f.text.clone())),
+                }
+            }
+            for (name, text) in sim_fields_written(sch, &lib_id, model, &shown) {
+                fields.push((name.clone(), text.clone()));
+            }
+            let pins = part
+                .pins
+                .iter()
+                .filter(|pin| drawn(&pin.number))
+                .map(|pin| {
+                    let name = pin.name.as_deref().filter(|n| !n.is_empty() && *n != "~");
+                    let function = name.map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
+                    // `+no_connect` when the net has a no-connect flag (`EXPORT_NET::hasNoConnect`: the subgraph's `GetNoConnect()` is a `SCH_NO_CONNECT`).
+                    // **Differs** where KiCad's answer hangs on the order of the subgraph's items: `resolveAllDrivers` keeps the last of the flag and a
+                    // no-connect pin as the subgraph's, and for a no-connect pin on a flag kicad-cli 25ec2335 says plain `no_connect`, which this gives.
+                    let mut pin_type = resolve_pin_electrical_type(pin, resolved.as_ref());
+                    if pin_type != "no_connect" && no_connect.contains(format!("{}.{}", sym.id, pin.number).as_str()) {
+                        pin_type.push_str("+no_connect");
+                    }
+                    (pin.number.clone(), (function, pin_type))
+                })
+                .collect();
+            // a symbol of several units: each pin under the reference with the unit it is drawn on (a pin of every unit, unit 0, on this symbol's)
+            let units: BTreeMap<String, String> = match resolved.as_ref().filter(|r| r.unit_count > 1) {
+                Some(r) => part
+                    .pins
+                    .iter()
+                    .filter(|pin| drawn(&pin.number))
+                    .map(|pin| {
+                        let unit = r.pin_by_number(&pin.number).map(|p| p.unit).filter(|u| *u > 0).unwrap_or(sym.unit);
+                        (pin.number.clone(), format!("{reference}{}", eda_model::annotate::unit_letters(unit)))
+                    })
+                    .collect(),
+                None => BTreeMap::new(),
+            };
+            let uuid = duid_plain(&format!("{seed}sym:{}", sym.id));
+            out.insert(reference.clone(), eda_model::SymbolLink { path: format!("{uuids}/{uuid}"), sheetname: names.clone(), sheetfile: e.file.clone(), fields, pins, units });
+        }
+    }
+    out
 }
 
 /// [`export_kicad_sch_tree`] plus every exported item's KiCad uuid -> our id, across all the files: how a kicad-cli ERC report on

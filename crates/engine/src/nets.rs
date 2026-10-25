@@ -82,6 +82,11 @@ impl Uf {
     }
 }
 
+/// Whether `p` lies strictly inside the axis-aligned run from `a` to `b`.
+pub(crate) fn on_segment(p: Point, a: Point, b: Point) -> bool {
+    on_interior(p, a, b)
+}
+
 fn on_interior(p: Point, a: Point, b: Point) -> bool {
     if a.x == b.x {
         p.x == a.x && p.y > a.y.min(b.y) && p.y < a.y.max(b.y)
@@ -95,8 +100,22 @@ fn on_interior(p: Point, a: Point, b: Point) -> bool {
 #[derive(Debug, Clone)]
 struct Driver {
     prio: u8,
+    /// The driver's own text (`CONNECTION_SUBGRAPH::GetNameForDriver`): a label's, a sheet pin's, a power symbol's value.
     name: String,
     depth: usize,
+    /// The net name this driver gives (`SCH_CONNECTION::Name()`, `m_cached_name_with_path`): [`Self::name`] with the path of its sheet in front, but for a
+    /// global label or a global power pin (`recacheName`'s `prepend_path`).
+    full: String,
+}
+
+impl Driver {
+    /// `name` as the label, sheet pin or power symbol shows it: the driver's name is it escaped (`CONNECTION_SUBGRAPH::GetNameForDriver`:
+    /// `EscapeString( GetShownText(), CTX_NETNAME )`, a label `A/B` names `/A{slash}B`).
+    fn new(prio: u8, name: String, depth: usize, sheet_path: &str) -> Self {
+        let name = escape_net_name(&name);
+        let full = if prio >= GLOBAL_POWER_PIN || name.is_empty() { name.clone() } else { format!("{sheet_path}/{name}") };
+        Driver { prio, name, depth, full }
+    }
 }
 
 /// A subgraph: the points that are one node on one screen.
@@ -109,8 +128,6 @@ struct Group {
     member: bool,
     pins: Vec<String>,
     drivers: Vec<Driver>,
-    /// Names the wires of this group already carry.
-    wire_names: Vec<String>,
     /// (name) of every hierarchical label and sheet pin here, for the hierarchy links.
     hier_labels: Vec<String>,
     sheet_pins: Vec<String>,
@@ -128,7 +145,13 @@ fn child_of(screens: &[ScreenIn], si: usize, sh: &eda_model::ir::SheetInstance) 
     screens.iter().position(|x| !x.file.is_empty() && x.file == sh.file)
 }
 
-/// Each screen's depth from the root through `sheets` / `file`, and the sheet-name path to it.
+/// `EscapeString( aSource, CTX_NETNAME )` (common/string_utils.cpp): a `/` is written `{slash}`, a line break is dropped.
+pub fn escape_net_name(s: &str) -> String {
+    s.replace('/', "{slash}").replace(['\n', '\r'], "")
+}
+
+/// Each screen's depth from the root through `sheets` / `file`, and the sheet-name path to it: `""` for the root, `/<sheet name>/..` below it (KiCad's
+/// `PathHumanReadable` without its trailing `/`), the sheet names escaped as KiCad escapes them in a net name.
 fn depths(screens: &[ScreenIn]) -> (Vec<usize>, Vec<String>) {
     let mut depth = vec![usize::MAX; screens.len()];
     let mut path = vec![String::new(); screens.len()];
@@ -143,7 +166,8 @@ fn depths(screens: &[ScreenIn]) -> (Vec<usize>, Vec<String>) {
             let Some(c) = child_of(screens, s, sh) else { continue };
             if depth[c] == usize::MAX {
                 depth[c] = depth[s] + 1;
-                path[c] = format!("{}/{}", path[s], sh.name);
+                // `PathHumanReadable( .., aEscapeSheetNames = true )`: `EscapeString( name, CTX_NETNAME )`
+                path[c] = format!("{}/{}", path[s], escape_net_name(&sh.name));
                 queue.push(c);
             }
         }
@@ -166,20 +190,30 @@ fn group_local_name<'a>(bus: &str, member: &'a str) -> &'a str {
 }
 
 /// KiCad's order of the drivers of a net (`propagateToNeighbors`, "find the best driver for this chain of subgraphs"): a global power pin or global
-/// label first, then a strong driver by priority, then the one closest to the root, then the alphabetically first name.
+/// label first, then a strong driver by priority, then the one closest to the root, then the alphabetically first name -- the name with its path
+/// (`candidateName < bestName` compares `m_driver_connection->Name()`), so of two sibling sheets' hierarchical labels `RESET` the one on `/Header/` wins
+/// over `/MCU/`'s. Within one subgraph (`compareDrivers`) a name with `-Pad` in it loses to one without.
 fn driver_order(a: &Driver, b: &Driver) -> std::cmp::Ordering {
     let a_global = a.prio >= GLOBAL_POWER_PIN;
     let b_global = b.prio >= GLOBAL_POWER_PIN;
-    b_global.cmp(&a_global).then_with(|| b.prio.cmp(&a.prio)).then_with(|| a.depth.cmp(&b.depth)).then_with(|| a.name.cmp(&b.name))
+    b_global
+        .cmp(&a_global)
+        .then_with(|| b.prio.cmp(&a.prio))
+        .then_with(|| a.depth.cmp(&b.depth))
+        .then_with(|| a.full.contains("-Pad").cmp(&b.full.contains("-Pad")))
+        .then_with(|| a.full.cmp(&b.full))
 }
 
 /// How the tracer names a net that no label, power symbol or sheet pin names.
 #[derive(Default, Clone, Copy)]
 pub struct Naming<'a> {
-    /// Take the name the net's wires already carry (what a derived schematic writes on them) before KiCad's default name.
-    pub wire_hints: bool,
     /// "REF.PIN" -> the pin's shown name (empty or `~` for none). KiCad's default net name uses it: `Net-(U1-PA0)`.
     pub pin_names: Option<&'a BTreeMap<String, String>>,
+    /// "REF.PIN" -> the reference with the unit the pin is drawn on, for a symbol of several units (`U1A`): KiCad's default net name of a named pin has
+    /// it (`Net-(U1A-OUT)`).
+    pub pin_units: Option<&'a BTreeMap<String, String>>,
+    /// The no-connect pins (`PT_NC`), "REF.PIN": KiCad names a net of theirs `unconnected-(..)` (`PIN_NAME_FACT::noConnect`).
+    pub nc_pins: Option<&'a BTreeSet<String>>,
     /// The member nets of a bus name (`SCH_CONNECTION::ConfigureFromLabel`: a vector `D[0..7]`, a group `{A B}`, an alias), `None` for a name that is
     /// not a bus (`eda_kicad::expand_bus_members` with the design's bus aliases). Without it a bus has no members and joins nothing.
     pub bus_members: Option<&'a dyn Fn(&str) -> Option<Vec<String>>>,
@@ -204,9 +238,9 @@ pub struct TracedNet {
     pub driven: bool,
 }
 
-/// [`trace_nets_with`] naming a net nothing drives after the wires that carry its name, as a derived schematic does.
+/// [`trace_nets_with`] with no pin names, bus members or library symbols to ask.
 pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
-    trace_nets_with(screens, &Naming { wire_hints: true, ..Naming::default() }).into_iter().map(|t| Net { name: t.name, pins: t.pins }).collect()
+    trace_nets_with(screens, &Naming::default()).into_iter().map(|t| Net { name: t.name, pins: t.pins }).collect()
 }
 
 /// Trace the nets of every screen, write each wire's `net`/`pins`, each power symbol's and no-connect flag's `pin` back, and
@@ -316,7 +350,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 continue;
             }
             groups[at[p]].pins.push(pin_ref.clone());
-            groups[at[p]].drivers.push(Driver { prio: PIN, name: String::new(), depth: depth[si] });
+            groups[at[p]].drivers.push(Driver::new(PIN, String::new(), depth[si], &spath[si]));
         }
         for (l, &b) in sch.labels.iter().zip(&label_bus) {
             let g = &mut groups[if b { bus_at[&l.at] } else { at[&l.at] }];
@@ -325,7 +359,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 LabelKind::Hierarchical { .. } => (HIER_LABEL, 1),
                 LabelKind::Global { .. } => (GLOBAL, 2),
             };
-            g.drivers.push(Driver { prio, name: l.net.clone(), depth: depth[si] });
+            g.drivers.push(Driver::new(prio, l.net.clone(), depth[si], &spath[si]));
             match bucket {
                 0 => g.local_names.push(l.net.clone()),
                 1 => {
@@ -343,25 +377,19 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 continue;
             }
             let g = &mut groups[at[&ps.at]];
-            g.drivers.push(Driver { prio: GLOBAL_POWER_PIN, name: ps.net.clone(), depth: depth[si] });
+            g.drivers.push(Driver::new(GLOBAL_POWER_PIN, ps.net.clone(), depth[si], &spath[si]));
             g.global_names.push(ps.net.clone());
         }
         for (sh, flags) in sch.sheets.iter().zip(&pin_bus) {
             for (p, &b) in sh.pins.iter().zip(flags) {
                 let g = &mut groups[if b { bus_at[&p.at] } else { at[&p.at] }];
-                g.drivers.push(Driver { prio: SHEET_PIN, name: p.name.clone(), depth: depth[si] });
+                g.drivers.push(Driver::new(SHEET_PIN, p.name.clone(), depth[si], &spath[si]));
                 g.sheet_pins.push(p.name.clone());
             }
         }
         let mut per_wire: Vec<Option<usize>> = Vec::with_capacity(sch.wires.len());
         for w in &sch.wires {
-            let gid = w.pts.first().map(|p| if w.bus { bus_at[p] } else { at[p] });
-            if let Some(g) = gid {
-                if !w.net.is_empty() {
-                    groups[g].wire_names.push(w.net.clone());
-                }
-            }
-            per_wire.push(gid);
+            per_wire.push(w.pts.first().map(|p| if w.bus { bus_at[p] } else { at[p] }));
         }
         group_at.push(at);
         bus_group_at.push(bus_at);
@@ -447,7 +475,9 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             let first = groups.len();
             for m in &best_members {
                 let screen = gids.iter().map(|&g| groups[g].screen).find(|&s| depth[s] == best.depth).unwrap_or(groups[gids[0]].screen);
-                groups.push(Group { screen, member: true, drivers: vec![Driver { prio: best.prio, name: m.clone(), depth: best.depth }], ..Default::default() });
+                // a member's name is the bus's, with the bus driver's path (`SCH_CONNECTION::ConfigureFromLabel` gives the members the bus's sheet)
+                let sheet_path = best.full.strip_suffix(best.name.as_str()).and_then(|p| p.strip_suffix('/')).unwrap_or("");
+                groups.push(Group { screen, member: true, drivers: vec![Driver::new(best.prio, m.clone(), best.depth, sheet_path)], ..Default::default() });
                 join.add();
             }
             for &g in gids {
@@ -491,8 +521,6 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         gids: Vec<usize>,
         pins: Vec<String>,
         name: Option<String>,
-        /// Whether the name came from a local or hierarchical label (so it is only unique inside its sheet).
-        local_name: bool,
         /// Whether a driver (label, power symbol, sheet pin) named it.
         driven: bool,
         screen: usize,
@@ -508,10 +536,11 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         drivers.sort_by(|a, b| driver_order(a, b));
         let best = drivers.first();
         let screen = gids.iter().map(|&g| groups[g].screen).min_by_key(|&s| depth[s]).unwrap_or(0);
-        finals.push(Final { gids, pins, name: best.map(|d| d.name.clone()), local_name: best.is_some_and(|d| d.prio < GLOBAL_POWER_PIN), driven: best.is_some(), screen });
+        finals.push(Final { gids, pins, name: best.map(|d| d.full.clone()), driven: best.is_some(), screen });
     }
 
-    // Names are unique across the design: a local name two different nets share is told apart by its sheet path.
+    // KiCad's names are unique by construction (a local name has its sheet's path); two nets that still share one (two sheet pins of one name
+    // on a sheet, which KiCad does not join) are told apart by a suffix. **Differs**: KiCad gives both the name.
     finals.sort_by(|a, b| (depth[a.screen], a.name.clone(), a.pins.first().cloned()).cmp(&(depth[b.screen], b.name.clone(), b.pins.first().cloned())));
     let mut used: BTreeSet<String> = BTreeSet::new();
     for f in finals.iter_mut() {
@@ -520,38 +549,24 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             continue;
         }
         if let Some(n) = f.name.clone() {
-            let candidate = if used.contains(&n) && f.local_name { format!("{}/{}", spath[f.screen], n) } else { n };
-            let mut unique = candidate.clone();
+            let mut unique = n.clone();
             let mut k = 1;
             while used.contains(&unique) {
                 k += 1;
-                unique = format!("{candidate}_{k}");
+                unique = format!("{n}_{k}");
             }
             used.insert(unique.clone());
             f.name = Some(unique);
         }
     }
-    // The undriven nets, the larger ones first. With `wire_hints` the name its wires already carry (a derived schematic writes the net's
-    // name on every wire); otherwise, or when there is none, what KiCad calls it. A group with no pin (a stray wire, a lone label) has no
-    // net and stays unnamed.
-    let shown_count = shown_name_counts(naming.pin_names);
+    // The undriven nets, the larger ones first: what KiCad calls them (`SCH_PIN::GetDefaultNetName` of the best pin). A group with no pin (a
+    // stray wire, a lone label) has no net and stays unnamed.
+    let facts = PinFacts { names: naming.pin_names, units: naming.pin_units, nc: naming.nc_pins };
+    let shown_count = shown_name_counts(&facts);
     let mut order: Vec<usize> = (0..finals.len()).filter(|&i| finals[i].name.is_none() && !finals[i].pins.is_empty()).collect();
     order.sort_by(|&a, &b| finals[b].pins.len().cmp(&finals[a].pins.len()).then_with(|| finals[a].pins.first().cmp(&finals[b].pins.first())));
     for i in order {
-        let hinted = if naming.wire_hints {
-            let mut hints: BTreeMap<&str, usize> = BTreeMap::new();
-            for &g in &finals[i].gids {
-                for n in &groups[g].wire_names {
-                    *hints.entry(n.as_str()).or_default() += 1;
-                }
-            }
-            let mut ranked: Vec<(&str, usize)> = hints.into_iter().collect();
-            ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-            ranked.iter().map(|(n, _)| (*n).to_string()).find(|n| !used.contains(n))
-        } else {
-            None
-        };
-        let base = hinted.unwrap_or_else(|| kicad_net_name(&finals[i].pins, naming.pin_names, &shown_count));
+        let base = kicad_net_name(&finals[i].pins, &facts, &shown_count);
         let mut name = base.clone();
         let mut k = 1;
         while used.contains(&name) {
@@ -604,44 +619,76 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     nets
 }
 
-/// How many pins of each part share each shown name, for `has_multiple` of `SCH_PIN::GetDefaultNetName`.
-fn shown_name_counts(names: Option<&BTreeMap<String, String>>) -> BTreeMap<(String, String), usize> {
+/// What KiCad's default name of a pin's net reads of the pin (`SCH_CONNECTIVITY::PIN_NAME_FACT`, `PIN_NAME_REFERENCE`): its shown name, the
+/// reference with the unit of the symbol it is drawn on (`SCH_SYMBOL::GetRef( &path, true )`: `U1A` for a part of several units), and whether it is a
+/// no-connect pin (`PT_NC`), each by "REF.PIN".
+#[derive(Default, Clone, Copy)]
+pub struct PinFacts<'a> {
+    pub names: Option<&'a BTreeMap<String, String>>,
+    pub units: Option<&'a BTreeMap<String, String>>,
+    pub nc: Option<&'a BTreeSet<String>>,
+}
+
+impl PinFacts<'_> {
+    fn shown(&self, pin_ref: &str) -> &str {
+        self.names.and_then(|n| n.get(pin_ref)).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("")
+    }
+    fn is_nc(&self, pin_ref: &str) -> bool {
+        self.nc.is_some_and(|n| n.contains(pin_ref))
+    }
+}
+
+/// How many pins of each part share each shown name, for `hasDuplicateName` of `SCH_PIN::GetDefaultNetName` (a no-connect pin counts for none).
+fn shown_name_counts(facts: &PinFacts) -> BTreeMap<(String, String), usize> {
     let mut out: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for (pin_ref, name) in names.into_iter().flatten() {
+    for pin_ref in facts.names.into_iter().flat_map(|n| n.keys()) {
         if let Some((reference, _)) = pin_ref.split_once('.') {
-            if !name.is_empty() && name != "~" {
-                *out.entry((reference.to_string(), name.clone())).or_default() += 1;
+            let name = facts.shown(pin_ref);
+            if !name.is_empty() && !facts.is_nc(pin_ref) {
+                *out.entry((reference.to_string(), name.to_string())).or_default() += 1;
             }
         }
     }
     out
 }
 
-/// `SCH_PIN::GetDefaultNetName` (eeschema/sch_pin.cpp): the name a pin gives its net when nothing stronger does -- `Net-(R1-Pad1)`; the
-/// pin's name instead of "Pad<number>" when it has one that is not its number (`Net-(U1-PA0)`, with the pad number added when the part has
-/// several pins of that name); `unconnected-(...)` for a pin that is alone. `/` is written `{slash}`.
-fn default_net_name(pin_ref: &str, names: Option<&BTreeMap<String, String>>, shown_count: &BTreeMap<(String, String), usize>, unconnected: bool) -> String {
+/// `SCH_PIN::GetDefaultNetName` and `SCH_CONNECTIVITY::RenderPinNetName` (KiCad 25ec2335, eeschema/connectivity/conn_pin_name.cpp): the name a pin
+/// gives its net when nothing stronger does -- `Net-(R1-Pad1)`; the pin's name instead of "Pad<number>" when it has one that is not its number, after
+/// the reference with its unit (`Net-(U1-PA0)`, `Net-(U1A-OUT)`), with the pad number added when the part has several pins of that name that are not
+/// no-connect pins; `unconnected-(...)` for a pin that is alone or is a no-connect pin. `/` is written `{slash}`.
+fn default_net_name(pin_ref: &str, facts: &PinFacts, shown_count: &BTreeMap<(String, String), usize>, force_no_connect: bool) -> String {
     let (reference, number) = pin_ref.split_once('.').unwrap_or((pin_ref, ""));
     let escape = |s: &str| s.replace('/', "{slash}").replace(['\n', '\r'], "");
-    let shown = names.and_then(|n| n.get(pin_ref)).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("");
+    let shown = facts.shown(pin_ref);
+    let unconnected = force_no_connect || facts.is_nc(pin_ref);
     let prefix = if unconnected { "unconnected-(" } else { "Net-(" };
     if !shown.is_empty() && shown != number {
-        let has_multiple = shown_count.get(&(reference.to_string(), shown.to_string())).is_some_and(|&n| n > 1);
+        let has_multiple = !unconnected && shown_count.get(&(reference.to_string(), shown.to_string())).is_some_and(|&n| n > 1);
         let pad = if unconnected || has_multiple { format!("-Pad{}", escape(number)) } else { String::new() };
-        format!("{prefix}{}-{}{pad})", escape(reference), escape(shown))
+        let with_unit = facts.units.and_then(|u| u.get(pin_ref)).map(String::as_str).unwrap_or(reference);
+        format!("{prefix}{}-{}{pad})", escape(with_unit), escape(shown))
     } else {
         format!("{prefix}{}-Pad{})", escape(reference), escape(number))
     }
 }
 
+/// `SCH_PIN::GetDefaultNetName( path, aForceNoConnect = true )`: the name KiCad gives the net of a pin that is alone on it or on a no-connect flag,
+/// `unconnected-(U1-NC1-Pad12)` (`unconnected-(R1-Pad1)` for a pin with no name of its own, `unconnected-(U1A-NC-Pad5)` for one of a symbol of several
+/// units). `shown` is the pin's shown name (empty or `~` for none), `with_unit` the reference with the unit the pin is drawn on.
+pub fn unconnected_net_name(pin_ref: &str, shown: Option<&str>, with_unit: Option<&str>) -> String {
+    let names: BTreeMap<String, String> = shown.map(|s| (pin_ref.to_string(), s.to_string())).into_iter().collect();
+    let units: BTreeMap<String, String> = with_unit.map(|u| (pin_ref.to_string(), u.to_string())).into_iter().collect();
+    default_net_name(pin_ref, &PinFacts { names: Some(&names), units: Some(&units), nc: None }, &BTreeMap::new(), true)
+}
+
 /// The name KiCad gives a net nothing drives (`CONNECTION_SUBGRAPH::ResolveDrivers`, `compareDrivers`): among its pins' default names, one
 /// that is not a "-Pad" name first (a pin with a name beats a pin with only a number), then the alphabetically first; a net of one pin is
 /// `unconnected-(...)`.
-fn kicad_net_name(pins: &[String], names: Option<&BTreeMap<String, String>>, shown_count: &BTreeMap<(String, String), usize>) -> String {
+fn kicad_net_name(pins: &[String], facts: &PinFacts, shown_count: &BTreeMap<(String, String), usize>) -> String {
     if let [only] = pins {
-        return default_net_name(only, names, shown_count, true);
+        return default_net_name(only, facts, shown_count, true);
     }
-    pins.iter().map(|p| default_net_name(p, names, shown_count, false)).min_by(|a, b| a.contains("-Pad").cmp(&b.contains("-Pad")).then_with(|| a.cmp(b))).unwrap_or_else(|| "Net-()".to_string())
+    pins.iter().map(|p| default_net_name(p, facts, shown_count, false)).min_by(|a, b| a.contains("-Pad").cmp(&b.contains("-Pad")).then_with(|| a.cmp(b))).unwrap_or_else(|| "Net-()".to_string())
 }
 
 /// What an edit did to the nets, from what was drawn before it and after it: the net list `prev` with only the nets the edit touched
@@ -756,15 +803,17 @@ mod tests {
         nets.iter().find(|n| n.name == name).unwrap_or_else(|| panic!("no net {name} in {nets:?}")).pins.clone()
     }
 
+    /// A wire joins its pins, and a net nothing drives is named after its best pin as KiCad names it, whatever name the wire carried before.
     #[test]
-    fn a_wire_joins_its_pins_and_keeps_its_name() {
+    fn a_wire_joins_its_pins_and_the_net_takes_kicads_name() {
         let mut root = section();
         root.wires.push(wire("LED1", &[p(0, 0), p(1000, 0)]));
         let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.2", p(0, 0)), ("D1.1", p(1000, 0)), ("R2.1", p(5000, 5000))]) }];
         let nets = trace_nets(&mut screens);
-        assert_eq!(pins_of(&nets, "LED1"), vec!["D1.1", "R1.2"]);
-        assert_eq!(nets.len(), 2, "the lone pin is a net of its own: {nets:?}");
-        assert_eq!(root.wires[0].net, "LED1");
+        assert_eq!(pins_of(&nets, "Net-(D1-Pad1)"), vec!["D1.1", "R1.2"]);
+        assert_eq!(pins_of(&nets, "unconnected-(R2-Pad1)"), vec!["R2.1"], "the lone pin is a net of its own: {nets:?}");
+        assert_eq!(nets.len(), 2, "{nets:?}");
+        assert_eq!(root.wires[0].net, "Net-(D1-Pad1)");
         assert_eq!(root.wires[0].pins, vec!["D1.1", "R1.2"]);
     }
 
@@ -784,11 +833,11 @@ mod tests {
         ];
         let nets = trace_nets(&mut screens);
         assert_eq!(nets.len(), 1, "{nets:?}");
-        assert_eq!(nets[0].name, "SIG", "the hierarchical label names the net");
+        assert_eq!(nets[0].name, "/child/SIG", "the hierarchical label names the net, with its sheet's path (`recacheName`)");
         assert_eq!(nets[0].pins, vec!["R1.1", "U1.3"]);
         // And both wires carry the name.
-        assert_eq!(root.wires[0].net, "SIG");
-        assert_eq!(child.wires[0].net, "SIG");
+        assert_eq!(root.wires[0].net, "/child/SIG");
+        assert_eq!(child.wires[0].net, "/child/SIG");
     }
 
     /// The member nets of the few bus names the bus tests use (the real expansion is `eda_kicad::expand_bus_members`).
@@ -808,7 +857,7 @@ mod tests {
     #[test]
     fn a_bus_across_sheets_joins_its_members_nets_on_both_sides() {
         let members = |n: &str| test_members(n);
-        let naming = Naming { wire_hints: false, bus_members: Some(&members), ..Naming::default() };
+        let naming = Naming { bus_members: Some(&members), ..Naming::default() };
         for root_bus_label in ["D[0..1]", "X[0..1]"] {
             let mut root = section();
             root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
@@ -833,9 +882,9 @@ mod tests {
             let net = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|x| x == pin)).unwrap_or_else(|| panic!("{pin} in {nets:?}")).clone();
             assert_eq!(net("U1.1").pins, vec!["R1.1", "U1.1"], "{root_bus_label}: {nets:?}");
             assert_eq!(net("U1.2").pins, vec!["R2.1", "U1.2"], "{root_bus_label}: {nets:?}");
-            assert_eq!(net("U1.1").name, m0, "the root's member names the net");
+            assert_eq!(net("U1.1").name, format!("/{m0}"), "the root's member names the net");
             assert_eq!(net("R9.1").pins, vec!["R9.1"], "a wire that ends on a bus is not on it: {nets:?}");
-            assert_eq!(root.wires[0].net, root_bus_label, "the bus is named by its label");
+            assert_eq!(root.wires[0].net, format!("/{root_bus_label}"), "the bus is named by its label, with the root's path");
         }
         // Without the expansion a bus has no members: the two sheets' nets stay apart, as before.
         let mut root = section();
@@ -862,7 +911,7 @@ mod tests {
             let inner = rest.strip_suffix('}')?;
             Some(inner.split_whitespace().map(|m| if prefix.is_empty() { m.to_string() } else { format!("{prefix}.{m}") }).collect())
         };
-        let naming = Naming { wire_hints: false, bus_members: Some(&members), ..Naming::default() };
+        let naming = Naming { bus_members: Some(&members), ..Naming::default() };
         for child_bus in ["{B A}", "{B C}"] {
             let mut root = section();
             root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: child_bus.into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
@@ -981,9 +1030,51 @@ mod tests {
             ScreenIn { path: Vec::new(), sch: &mut b, file: "b.kicad_sch".into(), pins: pins(&[("R3.1", p(0, 0))]) },
         ];
         let nets = trace_nets(&mut screens);
-        assert_eq!(pins_of(&nets, "X"), vec!["R1.1", "R2.1"], "two labels on one sheet are one net");
+        assert_eq!(pins_of(&nets, "/a/X"), vec!["R1.1", "R2.1"], "two labels on one sheet are one net");
         let other = nets.iter().find(|n| n.pins == vec!["R3.1".to_string()]).expect("the other sheet's X is its own net");
-        assert_eq!(other.name, "/b/X", "told apart by its sheet path, like KiCad's /b/X");
+        assert_eq!(other.name, "/b/X", "each with its own sheet's path, like KiCad's /a/X and /b/X");
+    }
+
+    /// p1-p2 F1's test: a local label on the root names its net with the root's path, `/IN` (`recacheName`: `PathHumanReadable` of the root is `/`),
+    /// and a global label or a power symbol names its net without one.
+    #[test]
+    fn a_local_label_on_the_root_names_its_net_with_the_root_path() {
+        let mut root = section();
+        root.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
+        root.labels.push(label("IN", p(0, 0), LabelKind::Local));
+        root.wires.push(wire("", &[p(0, 500), p(1000, 500)]));
+        root.labels.push(label("CLK", p(0, 500), LabelKind::Global { shape: LabelShape::Input }));
+        root.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(0, 900), rot: 0, net: "GND".into(), pin: String::new() });
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(1000, 0)), ("R2.1", p(1000, 500)), ("C1.2", p(0, 900))]) }];
+        let nets = trace_nets_with(&mut screens, &Naming::default());
+        let name = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|x| x == pin)).map(|n| n.name.clone()).unwrap();
+        assert_eq!((name("R1.1"), name("R2.1"), name("C1.2")), ("/IN".to_string(), "CLK".to_string(), "GND".to_string()), "{nets:?}");
+    }
+
+    /// Two sibling sheets' hierarchical labels of one name, both on the root's net through their sheet pins: of drivers of one rank the alphabetically
+    /// first name wins, compared with its path (`propagateToNeighbors`' `candidateName < bestName` over `Name()`), so the sheet named first in the
+    /// alphabet names the net -- `/Header/RESET` and not `/MCU/RESET` -- and a `/` in a sheet's name is `{slash}`.
+    #[test]
+    fn hierarchical_labels_of_two_sheets_name_the_net_by_the_first_sheet_with_its_path() {
+        let mut root = section();
+        let sheet = |id: &str, name: &str, file: &str, y: i64| SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: p(100, y), size: (100, 100), pins: vec![SheetPin { id: String::new(), name: "RESET".into(), shape: LabelShape::Bidirectional, at: p(100, y + 50) }], page: String::new() };
+        root.sheets.push(sheet("s1", "MCU", "mcu.kicad_sch", 0));
+        root.sheets.push(sheet("s2", "Header/J1", "hdr.kicad_sch", 200));
+        root.wires.push(wire("", &[p(100, 50), p(50, 50), p(50, 250), p(100, 250)]));
+        let child = |at: Point| {
+            let mut c = section();
+            c.labels.push(label("RESET", at, LabelKind::Hierarchical { shape: LabelShape::Bidirectional }));
+            c
+        };
+        let (mut mcu, mut hdr) = (child(p(10, 10)), child(p(20, 20)));
+        let mut screens = vec![
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
+            ScreenIn { path: Vec::new(), sch: &mut mcu, file: "mcu.kicad_sch".into(), pins: pins(&[("U1.11", p(10, 10))]) },
+            ScreenIn { path: Vec::new(), sch: &mut hdr, file: "hdr.kicad_sch".into(), pins: pins(&[("J1.4", p(20, 20))]) },
+        ];
+        let nets = trace_nets(&mut screens);
+        assert_eq!(nets.len(), 1, "{nets:?}");
+        assert_eq!((nets[0].name.as_str(), nets[0].pins.clone()), ("/Header{slash}J1/RESET", vec!["J1.4".to_string(), "U1.11".into()]));
     }
 
     #[test]
@@ -999,7 +1090,7 @@ mod tests {
             ScreenIn { path: Vec::new(), sch: &mut child, file: "child.kicad_sch".into(), pins: pins(&[("U1.1", p(10, 10))]) },
         ];
         let nets = trace_nets(&mut screens);
-        assert_eq!(pins_of(&nets, "MAINBUS"), vec!["R1.1", "U1.1"]);
+        assert_eq!(pins_of(&nets, "/MAINBUS"), vec!["R1.1", "U1.1"]);
     }
 
     /// "REF.PIN" -> point for every symbol on `sch`, from the engine's own geometry.
@@ -1036,8 +1127,8 @@ mod tests {
             .collect()
     }
 
-    /// The whole point of tracing: what `derive_schematic` draws is read back as exactly the nets it was given, with their names,
-    /// for every example design in the repository.
+    /// The whole point of tracing: what `derive_schematic` draws is read back as exactly the nets it was given, named as KiCad names them (the intent's name
+    /// on its label, with the root's `/` in front; a power net's own), for every example design in the repository.
     #[test]
     fn a_derived_schematic_traces_back_to_its_intent_nets() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
@@ -1045,6 +1136,7 @@ mod tests {
         files.extend(std::fs::read_dir(dir.join("ladder")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "yaml")));
         files.sort();
         let mut checked = 0;
+        let mut mismatches: Vec<String> = Vec::new();
         for f in files {
             let Ok(model) = serde_yaml::from_str::<eda_model::ConstraintModel>(&std::fs::read_to_string(&f).unwrap()) else { continue };
             let Ok(design) = crate::derive_schematic(&model, &crate::EngineOptions::new(1, "t")) else { continue };
@@ -1054,12 +1146,24 @@ mod tests {
             let got = trace_nets(&mut screens);
             let got: BTreeMap<String, Vec<String>> = got.into_iter().filter(|n| n.pins.len() >= 2).map(|n| (n.name, n.pins)).collect();
             let want = drawn_nets(&model);
-            if got != want {
+            // the same pins, the names KiCad gives what is drawn: a power net's, a label's with the sheet's path, a pin's
+            let by_pins = |m: &BTreeMap<String, Vec<String>>| -> BTreeMap<Vec<String>, String> { m.iter().map(|(n, p)| (p.clone(), n.clone())).collect() };
+            // every named net is labelled on the root (`crate::net_labels`): a power net is its symbol's name (`GND`, a power symbol outranks a label), any
+            // other `/<name>`
+            let power: BTreeSet<&str> = sch.power_symbols.iter().filter(|p| !p.lib_id.ends_with(":PWR_FLAG")).map(|p| p.net.as_str()).collect();
+            let named = by_pins(&got).iter().all(|(pins, name)| by_pins(&want).get(pins).is_some_and(|i| *name == if power.contains(i.as_str()) { i.clone() } else { format!("/{i}") }));
+            // (an example whose flat drawing joins two nets or leaves one out is the layout's to fix, not the naming's: it is skipped, as before)
+            if by_pins(&got).keys().ne(by_pins(&want).keys()) {
                 println!("MISMATCH {}\n   got  {:?}\n   want {:?}", f.display(), got, want);
+                continue;
+            }
+            if !named {
+                mismatches.push(format!("{}\n   got  {:?}\n   want {:?}", f.display(), got, want));
                 continue;
             }
             checked += 1;
         }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
         assert!(checked >= 8, "only {checked} examples were readable");
     }
 
@@ -1082,25 +1186,43 @@ mod tests {
     /// `SCH_PIN::GetDefaultNetName`: `Net-(R1-Pad1)`, the pin's name when it has one (`Net-(U1-PA0)`), the pad number added when the part has
     /// several pins of that name, `unconnected-(...)` for a pin on its own.
     #[test]
+    fn a_label_with_a_slash_names_its_net_with_the_slash_escaped() {
+        // `EscapeString( text, CTX_NETNAME )`: the sheet path's separator stays the only `/`
+        assert_eq!(Driver::new(LOCAL_LABEL, "A/B".into(), 0, "").full, "/A{slash}B");
+        assert_eq!(Driver::new(GLOBAL_POWER_PIN, "+3V3/A".into(), 0, "").full, "+3V3{slash}A");
+        assert_eq!(Driver::new(LOCAL_LABEL, "A{slash}B".into(), 1, "/Sub").full, "/Sub/A{slash}B", "an escaped name stays as it is");
+    }
+
+    #[test]
     fn a_net_nothing_drives_is_named_the_way_kicad_names_it() {
-        let names = shown(&[("U1.3", "PA0"), ("U1.2", "GND"), ("U1.15", "GND"), ("R1.1", "~")]);
-        let count = shown_name_counts(Some(&names));
-        assert_eq!(default_net_name("R1.1", Some(&names), &count, false), "Net-(R1-Pad1)");
-        assert_eq!(default_net_name("U1.3", Some(&names), &count, false), "Net-(U1-PA0)");
-        assert_eq!(default_net_name("U1.2", Some(&names), &count, false), "Net-(U1-GND-Pad2)");
-        assert_eq!(default_net_name("R2.1", Some(&names), &count, true), "unconnected-(R2-Pad1)");
-        assert_eq!(default_net_name("U1.3", Some(&names), &count, true), "unconnected-(U1-PA0-Pad3)");
+        let names = shown(&[("U1.3", "PA0"), ("U1.2", "GND"), ("U1.15", "GND"), ("R1.1", "~"), ("U2.1", "OUT"), ("U2.5", "NC"), ("U3.4", "NC"), ("U3.5", "NC")]);
+        let units = shown(&[("U2.1", "U2A"), ("U2.5", "U2A")]);
+        let nc: BTreeSet<String> = ["U2.5", "U3.4", "U3.5"].iter().map(|s| s.to_string()).collect();
+        let f = PinFacts { names: Some(&names), units: Some(&units), nc: Some(&nc) };
+        let count = shown_name_counts(&f);
+        assert_eq!(default_net_name("R1.1", &f, &count, false), "Net-(R1-Pad1)");
+        assert_eq!(default_net_name("U1.3", &f, &count, false), "Net-(U1-PA0)");
+        assert_eq!(default_net_name("U1.2", &f, &count, false), "Net-(U1-GND-Pad2)");
+        assert_eq!(default_net_name("R2.1", &f, &count, true), "unconnected-(R2-Pad1)");
+        assert_eq!(default_net_name("U1.3", &f, &count, true), "unconnected-(U1-PA0-Pad3)");
+        // a symbol of several units: the reference with the unit, for a named pin (`referenceWithUnit`); a pin with only a number has the plain one
+        assert_eq!(default_net_name("U2.1", &f, &count, false), "Net-(U2A-OUT)");
+        // a no-connect pin is unconnected whatever its net, and two no-connect pins of one name are no duplicate (`hasDuplicateName` skips `PT_NC`)
+        assert_eq!(default_net_name("U2.5", &f, &count, false), "unconnected-(U2A-NC-Pad5)");
+        assert_eq!(default_net_name("U3.4", &f, &count, false), "unconnected-(U3-NC-Pad4)");
+        assert_eq!(unconnected_net_name("U2.5", Some("NC"), Some("U2A")), "unconnected-(U2A-NC-Pad5)");
         // a pin whose name is its number has no name to show
         let same = shown(&[("J1.1", "1")]);
-        assert_eq!(default_net_name("J1.1", Some(&same), &shown_name_counts(Some(&same)), false), "Net-(J1-Pad1)");
-        // a net of several pins takes the name of its best pin: one with a name beats one with only a number, then the alphabetical order
+        let fs = PinFacts { names: Some(&same), ..PinFacts::default() };
+        assert_eq!(default_net_name("J1.1", &fs, &shown_name_counts(&fs), false), "Net-(J1-Pad1)");
+        // a net of several pins takes the name of its best pin: one with a name beats a pin with only a number, then the alphabetical order
         let pins = vec!["R1.2".to_string(), "U1.3".to_string()];
-        assert_eq!(kicad_net_name(&pins, Some(&names), &count), "Net-(U1-PA0)");
+        assert_eq!(kicad_net_name(&pins, &f, &count), "Net-(U1-PA0)");
         let numbered = vec!["R2.1".to_string(), "R1.2".to_string()];
-        assert_eq!(kicad_net_name(&numbered, Some(&names), &count), "Net-(R1-Pad2)");
-        assert_eq!(kicad_net_name(&["R2.1".to_string()], Some(&names), &count), "unconnected-(R2-Pad1)");
-        assert_eq!(default_net_name("U1.1", None, &BTreeMap::new(), false), "Net-(U1-Pad1)");
-        assert_eq!(default_net_name("A/B.1", None, &BTreeMap::new(), false), "Net-(A{slash}B-Pad1)");
+        assert_eq!(kicad_net_name(&numbered, &f, &count), "Net-(R1-Pad2)");
+        assert_eq!(kicad_net_name(&["R2.1".to_string()], &f, &count), "unconnected-(R2-Pad1)");
+        assert_eq!(default_net_name("U1.1", &PinFacts::default(), &BTreeMap::new(), false), "Net-(U1-Pad1)");
+        assert_eq!(default_net_name("A/B.1", &PinFacts::default(), &BTreeMap::new(), false), "Net-(A{slash}B-Pad1)");
     }
 
     #[test]
@@ -1108,7 +1230,7 @@ mod tests {
         let mut root = section();
         root.wires.push(wire("OLD_NAME", &[p(0, 0), p(1000, 0)]));
         let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(1000, 0))]) }];
-        let named = trace_nets_with(&mut screens, &Naming { wire_hints: false, ..Naming::default() });
+        let named = trace_nets_with(&mut screens, &Naming::default());
         assert_eq!(named.len(), 1);
         assert_eq!((named[0].name.as_str(), named[0].driven), ("Net-(R1-Pad1)", false));
         assert_eq!(root.wires[0].net, "Net-(R1-Pad1)");

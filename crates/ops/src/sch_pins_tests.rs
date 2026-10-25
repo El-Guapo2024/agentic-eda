@@ -120,7 +120,7 @@ fn pin_points(sch: &eda_model::ir::SchematicSection) -> BTreeMap<String, Point> 
 fn traced(sch: &eda_model::ir::SchematicSection) -> Vec<(Vec<String>, Option<String>)> {
     let mut copy = sch.clone();
     let mut screens = vec![eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut copy, file: String::new(), pins: pin_points(sch) }];
-    let naming = eda_engine::nets::Naming { wire_hints: false, ..Default::default() };
+    let naming = eda_engine::nets::Naming::default();
     let mut out: Vec<(Vec<String>, Option<String>)> = eda_engine::nets::trace_nets_with(&mut screens, &naming).into_iter().map(|t| (t.pins.clone(), t.driven.then(|| t.name.clone()))).collect();
     out.sort();
     out
@@ -151,8 +151,8 @@ fn swap_pins_trades_the_places_of_the_two_pins_and_the_wires_stay() {
     assert_eq!(before["R1.1"], p(20_320_000, 21_590_000));
     assert_eq!(before["R1.2"], p(20_320_000, 29_210_000));
     let nets = traced(&s);
-    assert_eq!(net_of(&nets, "R1.1").as_deref(), Some("A"));
-    assert_eq!(net_of(&nets, "R1.2").as_deref(), Some("B"));
+    assert_eq!(net_of(&nets, "R1.1").as_deref(), Some("/A"));
+    assert_eq!(net_of(&nets, "R1.2").as_deref(), Some("/B"));
 
     let after = ok(s.clone(), SchCmd::SwapPins { pins: ids(&["pin:R1:1", "pin:R1:2"]) });
     let now = pin_points(&after);
@@ -163,8 +163,8 @@ fn swap_pins_trades_the_places_of_the_two_pins_and_the_wires_stay() {
     assert_eq!(after.wires.iter().map(|w| w.pts.clone()).collect::<Vec<_>>(), s.wires.iter().map(|w| w.pts.clone()).collect::<Vec<_>>());
     // so the pins are on each other's nets: the connection graph reads the new places
     let nets = traced(&after);
-    assert_eq!(net_of(&nets, "R1.1").as_deref(), Some("B"), "{nets:?}");
-    assert_eq!(net_of(&nets, "R1.2").as_deref(), Some("A"), "{nets:?}");
+    assert_eq!(net_of(&nets, "R1.1").as_deref(), Some("/B"), "{nets:?}");
+    assert_eq!(net_of(&nets, "R1.2").as_deref(), Some("/A"), "{nets:?}");
     // the swap is an overlay: both entries, nothing else written
     assert_eq!(after.extras.pin_swaps["R1"], BTreeMap::from([("1".to_string(), "2".to_string()), ("2".to_string(), "1".to_string())]));
 }
@@ -180,8 +180,8 @@ fn a_rename_takes_the_swap_with_the_reference_and_a_delete_drops_it() {
     assert!(s.extras.pin_swaps.contains_key("R9") && !s.extras.pin_swaps.contains_key("R1"), "{:?}", s.extras.pin_swaps);
     // the pins are still where the swap put them: R9's pin 1 is at the place pin 2 has in the library, on the net B
     let nets = traced(&s);
-    assert_eq!(net_of(&nets, "R9.1").as_deref(), Some("B"), "{nets:?}");
-    assert_eq!(net_of(&nets, "R9.2").as_deref(), Some("A"), "{nets:?}");
+    assert_eq!(net_of(&nets, "R9.1").as_deref(), Some("/B"), "{nets:?}");
+    assert_eq!(net_of(&nets, "R9.2").as_deref(), Some("/A"), "{nets:?}");
     // a symbol that is deleted takes its swap with it, so a new R9 is not born with swapped pins
     b.apply(&Cmd::DeleteSymbol { id: "R9".into(), unit: None }).unwrap();
     assert!(b.design().schematic.as_ref().unwrap().extras.pin_swaps.is_empty(), "{:?}", b.design().schematic.as_ref().unwrap().extras.pin_swaps);
@@ -303,8 +303,8 @@ fn swap_pin_labels_trades_the_texts_of_the_labels_on_the_pins() {
     assert_eq!(after.symbols[0].at, s.symbols[0].at);
     // so the pins are on each other's nets
     let nets = traced(&after);
-    assert_eq!(net_of(&nets, "R1.1").as_deref(), Some("B"));
-    assert_eq!(net_of(&nets, "R1.2").as_deref(), Some("A"));
+    assert_eq!(net_of(&nets, "R1.1").as_deref(), Some("/B"));
+    assert_eq!(net_of(&nets, "R1.2").as_deref(), Some("/A"));
 }
 
 #[test]

@@ -111,13 +111,13 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
                 && "$eda" board place J3 --at 11.5,3 -C "$d" && "$eda" board place J2 --at 6,20 -C "$d" && "$eda" board place J1 --at 7.5,11 -C "$d" \
                 && "$eda" board place R1 --at 3,16 -C "$d" && "$eda" board place R2 --at 17,18 -C "$d" \
                 && "$eda" board track add --net GND --layer F.Cu --width 0.2 --pts "4.4,7 4.4,12" -C "$d" ;;
-        tune-board) # length-tuning.check.js
+        tune-board) # length-tuning.check.js (the nets under KiCad's names: the hierarchical labels of the LED sheet)
             perl -pe 's/\bPA2\b/USB_DP/g; s/\bPA3\b/USB_DN/g' "$yaml_mcu" > "$t/tune_board.yaml" \
                 && "$eda" board new "$t/tune_board.yaml" -o "$d" \
-                && "$eda" board track add --net PA0 --layer F.Cu --width 0.2 --pts "4,5 30,5" -C "$d" \
-                && "$eda" board track add --net PA1 --layer F.Cu --width 0.2 --pts "4,8 30,8" -C "$d" \
-                && "$eda" board track add --net USB_DP --layer F.Cu --width 0.2 --pts "4,20 30,20" -C "$d" \
-                && "$eda" board track add --net USB_DN --layer F.Cu --width 0.2 --pts "4,20.5 30,20.5" -C "$d" ;;
+                && "$eda" board track add --net "/LED channels (D1–D8)/PA0" --layer F.Cu --width 0.2 --pts "4,5 30,5" -C "$d" \
+                && "$eda" board track add --net "/LED channels (D1–D8)/PA1" --layer F.Cu --width 0.2 --pts "4,8 30,8" -C "$d" \
+                && "$eda" board track add --net "/LED channels (D1–D8)/USB_DP" --layer F.Cu --width 0.2 --pts "4,20 30,20" -C "$d" \
+                && "$eda" board track add --net "/LED channels (D1–D8)/USB_DN" --layer F.Cu --width 0.2 --pts "4,20.5 30,20.5" -C "$d" ;;
         kicad10-stitch) # kicad10-items.check.js: KiCad 25ec2335's qa/data/pcbnew/stitch_fp_rulearea.kicad_pcb brought in with `replace_board` (which keeps its zone fills)
             local f="${KICAD10_SRC_DIR:-$HOME/src/kicad-src-25ec2335}/qa/data/pcbnew/stitch_fp_rulearea.kicad_pcb" sp
             [ -f "$f" ] || { echo "no $f (set KICAD10_SRC_DIR to a KiCad 10 source)"; return 1; }

@@ -231,7 +231,8 @@
       const label = newOf(labelsBefore, s1.labels)[0];
       t(!!label && label.net === "P20_SENSE" && JSON.stringify(label.at) === JSON.stringify([X0 + 4 * G, yw]), `the label is on the wire with its name (${JSON.stringify(label && [label.net, label.at])})`);
       const w1 = s1.wires.find((w) => w.id === wire.id) ?? s1.wires.find((w) => w.pts[0][1] === yw && w.pts[0][0] === X0);
-      t(w1?.net === "P20_SENSE", `the wire's net is the label's now (${netBefore} -> ${w1?.net})`);
+      // KiCad's name of the net a local label on the root names: `/P20_SENSE`
+      t(w1?.net === "/P20_SENSE", `the wire's net is the label's now (${netBefore} -> ${w1?.net})`);
       await undo();
       t(!(await sch()).labels.some((l) => l.net === "P20_SENSE"), "one undo takes the label away");
       await undo();

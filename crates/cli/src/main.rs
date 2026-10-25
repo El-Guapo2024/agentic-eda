@@ -18,6 +18,7 @@
 //! ```
 
 mod board;
+mod net_names;
 mod board_control_api;
 mod board_output_api;
 mod body_api;

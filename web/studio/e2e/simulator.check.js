@@ -81,7 +81,8 @@
   const measurementRows = () => [...(q('table[aria-label="Measurements"]')?.querySelectorAll("tbody tr") ?? [])].map((r) => [r.querySelector("input")?.value ?? "", r.querySelectorAll("td")[1]?.textContent ?? ""]);
   const action = (id) => E.actions({ all: true }).find((a) => a.id === id);
   const plotPixels = () => { const c = q("canvas[data-testid=sim-plot]"); if (!c) return null; const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) n += d[i] * 7 + d[i + 1] * 3 + d[i + 2]; return n; };
-  const RC = "V(Net-_C1-Pad1_)";
+  // the RC net is labelled RC on the root (every net the intent names has a label), so KiCad names it /RC and the simulator its voltage V(/RC)
+  const RC = "V(/RC)";
   const newTab = async (type, fill) => {
     await run("eeschema.Simulation.newAnalysisTab");
     await sleep(800);

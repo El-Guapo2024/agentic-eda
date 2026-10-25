@@ -17,6 +17,7 @@ These come from findings-only reviews against KiCad 8303b2ad (and 25ec2335 for t
 ## Fix batches, by code area (so batches can run in parallel without conflicts), most urgent first
 
 ### A. KiCad compatibility of what we derive (`crates/kicad` writers, `crates/engine` naming). **The user chose option 1 (2026-10-23): KiCad's net names everywhere, the studio's display included.**
+**Fixed** on `task-fix-a-kicad-names` (fc8ee220, 860f861a): F1, F1b, F2, F3, F4, F5, P14-2; kicad-cli's parity DRC finds 0 differences on `opamp_filter`, `ldo` and the routed `mcu_board_30plus` (76 before), and its netlist agrees with the board (`crates/cli/tests/kicad_names.rs`). Left: P14-2 for footprints read from a file and pads with an offset or a padstack; `nc_pins`' SOT-223 has no pad 4.
 Opening a studio project in KiCad and running Update PCB (F8) renames every net and duplicates every footprint.
 - p1-p2 F1: net names on the board are the intent's, not KiCad's (`/sheet/NAME`, `Net-(D1-Pad1)`), and our tracer agrees with neither.
 - p1-p2 F2: one footprint has three names (empty Footprint field, `eda:0603`, `0603`). It should be the installed KiCad footprint everywhere.

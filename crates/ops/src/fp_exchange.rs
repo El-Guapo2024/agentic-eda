@@ -129,6 +129,12 @@ pub fn footprint_name_of(part: &Part) -> String {
     part.footprint.clone().or_else(|| part.package.clone()).unwrap_or_default()
 }
 
+/// Whether `name` names the footprint `part` is on: [`footprint_name_of`], or the name the files give it (`eda_model::footprint::footprint_lib_id`: a built-in
+/// `0603` is `Resistor_SMD:R_0603_1608Metric` on the board and in its symbol's Footprint field), so that a field holding what the files say is no change.
+pub fn names_footprint_of(part: &Part, name: &str) -> bool {
+    footprint_name_of(part) == name || eda_model::footprint::footprint_lib_id(part) == name
+}
+
 /// The parts whose symbol names another footprint than the board has (`BOARD_NETLIST_UPDATER::replaceFootprint`'s test: the netlist component's `GetFPID()` against the
 /// footprint's): what Update PCB from Schematic lists and applies, and what Update Schematic from PCB would carry back. A symbol with no Footprint field, one excluded from the
 /// board and a part the model has none of say nothing.
@@ -142,8 +148,8 @@ pub fn pending_footprint_changes(design: &eda_model::ir::Design, model: &Constra
                 continue;
             }
             let Some(part) = model.part(&sym.id) else { continue };
-            let from = footprint_name_of(part);
-            if from != to {
+            if !names_footprint_of(part, to) {
+                let from = eda_model::footprint::footprint_lib_id(part);
                 out.push(FootprintChange { reference: sym.id.clone(), from, to: to.to_string(), locked: locked.contains(sym.id.as_str()) });
             }
         }

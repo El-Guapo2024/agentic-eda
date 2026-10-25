@@ -72,7 +72,7 @@ fn need_cli() -> Result<PathBuf, Vec<CheckResult>> {
 ///
 /// That folder has no global library table: the derived files carry their footprints and symbols, and 3D models resolve through the path
 /// variables KiCad sets from its own install (`${KICAD10_3DMODEL_DIR}`). The library checks (`lib_footprint_issues`, `lib_footprint_mismatch`,
-/// `lib_symbol_issues`, `lib_symbol_mismatch`) are the one use of a table, and every derived project sets them to `ignore` unless the design
+/// `lib_symbol_issues`, `lib_symbol_mismatch`, `footprint_link_issues`) are the one use of a table, and every derived project sets them to `ignore` unless the design
 /// says otherwise; when `project` (the `.kicad_pro` the run reads) turns one on, the run gets a second folder whose tables are a fresh install's:
 /// one entry each, naming the install's default table, as KiCad's first start writes them.
 ///
@@ -97,7 +97,7 @@ fn library_checks_on(project: &Path) -> bool {
     let on = |severities: &Value, key: &str| severities.get(key).and_then(Value::as_str).is_some_and(|s| s != "ignore");
     let board = &pro["board"]["design_settings"]["rule_severities"];
     let schematic = &pro["erc"]["rule_severities"];
-    ["lib_footprint_issues", "lib_footprint_mismatch"].iter().any(|k| on(board, k)) || ["lib_symbol_issues", "lib_symbol_mismatch"].iter().any(|k| on(schematic, k))
+    ["lib_footprint_issues", "lib_footprint_mismatch"].iter().any(|k| on(board, k)) || ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues"].iter().any(|k| on(schematic, k))
 }
 
 /// The settings folder of [`cli_command`]: `<base>/empty`, or `<base>/libraries` with a fresh install's global library tables in it.
@@ -193,6 +193,8 @@ mod settings_tests {
         assert!(library_checks_on(&board_on));
         let sch_on = write("sch.kicad_pro", json!({ "erc": { "rule_severities": { "lib_symbol_mismatch": "error" } } }));
         assert!(library_checks_on(&sch_on));
+        let link_on = write("link.kicad_pro", json!({ "erc": { "rule_severities": { "footprint_link_issues": "warning" } } }));
+        assert!(library_checks_on(&link_on), "the Footprint fields' libraries are the global table's");
         let scratch_project = write("scratch.kicad_pro", json!({ "board": { "design_settings": { "rule_severities": { "malformed_courtyard": "error" } } } }));
         assert!(!library_checks_on(&scratch_project), "a project that does not name them leaves them off");
         assert!(!library_checks_on(&d.join("missing.kicad_pro")));
@@ -445,7 +447,8 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
     let mut pro_text = export_kicad_pro_for(design, model);
     // What the person chose in the studio's Appearance panel (layers and objects shown, colours, presets, views) goes into the derived project as KiCad keeps it:
     // the net colours, layer presets and viewports in the project file, the rest in the project's local settings (`<stem>.kicad_prl`).
-    let appearance = studio_appearance(work);
+    // (a net it names under the intent's name is the net's under the board's: `with_board_net_names`)
+    let appearance = studio_appearance(work).map(|a| eda_kicad::appearance::with_board_net_names(&a, model));
     if appearance.is_some() || classes.is_some() {
         if let Ok(mut pro) = serde_json::from_str::<Value>(&pro_text) {
             let before = pro.clone();
