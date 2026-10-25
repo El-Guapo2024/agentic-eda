@@ -143,10 +143,14 @@
   });
 
   await scenario("a click on a stroke of the outline picks the footprint, wherever the stroke is", async (t) => {
-    const [x0, y0, x1, y1] = u.courtyard;
-    const outside = u.graphics.map((g) => ({ g, at: mid(g) })).find(({ at }) => at[0] < x0 || at[0] > x1 || at[1] < y0 || at[1] > y1);
-    const target = outside ?? { g: u.graphics[0], at: mid(u.graphics[0]) };
-    t(!!outside, `a stroke outside the courtyard (${JSON.stringify(target.g.kind)} on ${target.g.layer} at ${JSON.stringify(target.at)})`);
+    // The stroke farthest from the footprint's origin, clear of its pads: the installed footprint's courtyard is drawn round all of it (KiCad's
+    // footprints' rule), so the stroke is inside the courtyard but on no pad, and what the click hits is the drawing.
+    const pads = (await state()).parts.find((p) => p.ref === u.ref).pads ?? [];
+    const onPad = ([x, y]) => pads.some((p) => Math.abs(x - p.x) <= (p.w ?? 0) / 2 && Math.abs(y - p.y) <= (p.h ?? 0) / 2);
+    const strokes = u.graphics.map((g) => ({ g, at: mid(g) })).filter(({ at }) => !onPad(at));
+    strokes.sort((a, b) => Math.hypot(b.at[0] - u.at[0], b.at[1] - u.at[1]) - Math.hypot(a.at[0] - u.at[0], a.at[1] - u.at[1]));
+    const target = strokes[0] ?? { g: u.graphics[0], at: mid(u.graphics[0]) };
+    t(!!strokes[0], `a stroke clear of the pads (${JSON.stringify(target.g.kind)} on ${target.g.layer} at ${JSON.stringify(target.at)})`);
     await click(...target.at);
     const sel = __eda.state().selection.map((s) => s.id);
     t(sel.length === 1 && sel[0] === u.ref, `the click selects ${u.ref}: ${JSON.stringify(sel)}`);

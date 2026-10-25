@@ -786,12 +786,14 @@
     const pointsBefore = new Set((await points()).map((p) => p.id));
     const myPoints = async () => (await points()).filter((p) => !pointsBefore.has(p.id));
     const deletePoints = async () => { for (const p of await myPoints()) await cmd({ op: "pcb_item", verb: "delete_point", id: p.id }); };
-    /** Pixels of the colour of the Points object (`LAYER_POINTS`, #ff26e2): the cross of a point. A footprint's anchor is the same colour, so a test compares counts. */
+    /** Pixels of the colour of the Points object (`LAYER_POINTS`, #ff26e2): the cross of a point. A footprint's anchor is the same colour, so a test compares counts.
+     * Magenta-ish, not the colour itself: the cross's bars are thin diagonals, mostly antialiased pixels blended with the board's background, and which
+     * of them come near the pure colour depends on where the zoom puts them (a board 34 mm square instead of 35 left 2 of 217). */
     const crossPixels = () => {
       const c = pcbCanvas();
       const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
       let n = 0;
-      for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] > 20 && d[i + 1] < 90 && d[i + 2] > 180) n++;
+      for (let i = 0; i < d.length; i += 4) if (d[i] > 110 && d[i + 2] > 100 && d[i + 1] < d[i] * 0.45) n++;
       return n;
     };
 

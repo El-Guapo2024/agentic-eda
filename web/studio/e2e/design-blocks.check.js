@@ -163,8 +163,9 @@
   const view0 = E.state().view;
   if (!view0 || !Number.isFinite(view0.x) || !Number.isFinite(view0.scale) || view0.scale < 1e-7) { results.push({ name: "setup", ok: false, notes: [`FAIL: the canvas has no size (view ${JSON.stringify(view0)}): in a hidden pane take a screenshot after loading the page`] }); check.done = true; return "no canvas size"; }
   const base0 = await snapshotSch();
-  // the board's parts the scenarios place (the example board comes with none placed)
-  const PLACE = [["U1", 30_000_000, 30_000_000], ["C1", 22_000_000, 24_000_000], ["C2", 24_500_000, 24_000_000]];
+  // the board's parts the scenarios place (the example board comes with none placed). U1 at the middle of the board `eda board new` sizes from the
+  // parts (34 mm square with the installed footprints' courtyards): the installed SOIC-16's courtyard reaches 5.2 mm from its centre.
+  const PLACE = [["U1", 17_000_000, 17_000_000], ["C1", 22_000_000, 24_000_000], ["C2", 24_500_000, 24_000_000]];
 
   (async () => {
     // ======================================================================================================================== the actions
