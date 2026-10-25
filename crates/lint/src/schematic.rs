@@ -14,8 +14,13 @@ use eda_layout::{Node as LayoutNode, Point as LPoint, Port};
 use eda_model::ir::{Design, Point as IrPoint, SchematicSection, SymbolInstance};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel, Part};
 
+/// The drawn (Manhattan) length of a polyline: each segment's `|dx| + |dy|`, summed.
+fn polyline_len(pts: &[IrPoint]) -> Nm {
+    pts.windows(2).map(|s| (s[0].x - s[1].x).abs() + (s[0].y - s[1].y).abs()).sum()
+}
+
 fn to_lpoint(p: IrPoint) -> LPoint {
-    LPoint { x: p.x.raw_shim(), y: p.y.raw_shim() }
+    LPoint { x: p.x.get(), y: p.y.get() }
 }
 
 
@@ -217,7 +222,7 @@ fn check_flow_direction(sch: &SchematicSection, model: &ConstraintModel, out: &m
         if !is_flow_source_part(part) {
             continue;
         }
-        let mut others: Vec<i64> = Vec::new();
+        let mut others: Vec<Nm> = Vec::new();
         for w in &sch.wires {
             if geometry::is_power_or_ground_net_name(&w.net) {
                 continue;
@@ -241,15 +246,15 @@ fn check_flow_direction(sch: &SchematicSection, model: &ConstraintModel, out: &m
                     continue;
                 }
                 if let Some(&x) = sym_x.get(r) {
-                    others.push(x.raw_shim());
+                    others.push(x);
                 }
             }
         }
         if others.is_empty() {
             continue;
         }
-        let avg = others.iter().sum::<i64>() as f64 / others.len() as f64;
-        if ((sym.at.x).raw_shim() as f64) > avg {
+        let avg = others.iter().sum::<Nm>().as_f64() / others.len() as f64;
+        if ((sym.at.x).as_f64()) > avg {
             out.push(CheckResult {
                 check: "schematic_flow_direction".into(),
                 status: CheckStatus::Fail,
@@ -329,8 +334,8 @@ fn check_label_over_wire(sch: &SchematicSection, model: &ConstraintModel, out: &
     for (name, bbox) in &boxes {
         for w in &sch.wires {
             for seg in w.pts.windows(2) {
-                let (ax, ay) = (seg[0].x.raw_shim() as f64 / 1e6, seg[0].y.raw_shim() as f64 / 1e6);
-                let (bx, by) = (seg[1].x.raw_shim() as f64 / 1e6, seg[1].y.raw_shim() as f64 / 1e6);
+                let (ax, ay) = (seg[0].x.mm(), seg[0].y.mm());
+                let (bx, by) = (seg[1].x.mm(), seg[1].y.mm());
                 if geometry::segment_crosses_box(ax, ay, bx, by, bbox) {
                     out.push(CheckResult {
                         check: "schematic_label_over_wire".into(),
@@ -397,8 +402,8 @@ fn check_value_label_distance(sch: &SchematicSection, model: &ConstraintModel, o
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
         let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
-        let x = sym.at.x.raw_shim() as f64 / 1e6;
-        let y = sym.at.y.raw_shim() as f64 / 1e6;
+        let x = sym.at.x.mm();
+        let y = sym.at.y.mm();
         let w = width as f64 / 1e6;
         let h = height as f64 / 1e6;
         let (box_x0, box_x1, box_y0, box_y1) = (x, x + w, y, y + h);
@@ -460,7 +465,7 @@ fn collect_symbol_boxes(sch: &SchematicSection, model: &ConstraintModel) -> Vec<
         .filter_map(|sym| {
             let part = model.part(&sym.id)?;
             let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
-            Some(geometry::symbol_box_mm(sym.at.x.raw_shim() as f64 / 1e6, sym.at.y.raw_shim() as f64 / 1e6, width, height))
+            Some(geometry::symbol_box_mm(sym.at.x.mm(), sym.at.y.mm(), width, height))
         })
         .collect()
 }
@@ -489,8 +494,8 @@ fn collect_text_boxes_and_label_extents(sch: &SchematicSection, model: &Constrai
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
         let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
-        let x = sym.at.x.raw_shim() as f64 / 1e6;
-        let y = sym.at.y.raw_shim() as f64 / 1e6;
+        let x = sym.at.x.mm();
+        let y = sym.at.y.mm();
         let _w = width as f64 / 1e6;
         let h = height as f64 / 1e6;
 
@@ -543,8 +548,8 @@ fn collect_text_boxes_and_label_extents(sch: &SchematicSection, model: &Constrai
         let resolved = model.real_symbol_of(&sym.lib_id, part);
         let (width, height) = geometry::node_size(part, resolved.as_ref(), sym.unit);
         let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref(), sym.unit);
-        let sym_x = sym.at.x.raw_shim() as f64 / 1e6;
-        let sym_y = sym.at.y.raw_shim() as f64 / 1e6;
+        let sym_x = sym.at.x.mm();
+        let sym_y = sym.at.y.mm();
         for (pin_idx, port_idx) in pin_port.iter().enumerate() {
             let Some(port_idx) = port_idx else { continue };
             let pin = &part.pins[pin_idx];
@@ -563,7 +568,7 @@ fn collect_text_boxes_and_label_extents(sch: &SchematicSection, model: &Constrai
         // the same `sch.labels` order render draws them in), so this gate
         // and the renderer can never disagree on where a label lands or how
         // far its ink reaches.
-        let (resolved, ink) = geometry::resolve_net_label(l.at.x.raw_shim(), l.at.y.raw_shim(), &l.net, 1.3, &mut obstacles, &symbol_boxes, &sch.wires);
+        let (resolved, ink) = geometry::resolve_net_label(l.at.x, l.at.y, &l.net, 1.3, &mut obstacles, &symbol_boxes, &sch.wires);
         let key = format!("label:{}@{},{}", l.net, l.at.x, l.at.y);
         out.push((key.clone(), ink));
         label_extents.push((key, geometry::net_label_extent(&resolved, ink)));
@@ -592,19 +597,19 @@ fn check_text_overlap(sch: &SchematicSection, model: &ConstraintModel, out: &mut
     }
 }
 
-const GRID: i64 = geometry::GRID;
+const GRID: Nm = geometry::GRID_NM;
 
 fn check_offgrid(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
     let mut ok = true;
     for s in &sch.symbols {
-        if s.at.x % Nm::from_raw_shim(GRID) != Nm::ZERO || s.at.y % Nm::from_raw_shim(GRID) != Nm::ZERO {
+        if s.at.x % GRID != Nm::ZERO || s.at.y % GRID != Nm::ZERO {
             out.push(CheckResult::fail("schematic_offgrid", s.id.clone(), format!("symbol position {:?} is not on the {GRID} nm grid", s.at)));
             ok = false;
         }
     }
     for w in &sch.wires {
         for p in &w.pts {
-            if p.x % Nm::from_raw_shim(GRID) != Nm::ZERO || p.y % Nm::from_raw_shim(GRID) != Nm::ZERO {
+            if p.x % GRID != Nm::ZERO || p.y % GRID != Nm::ZERO {
                 out.push(CheckResult::fail("schematic_offgrid", w.net.clone(), format!("wire point {p:?} is not on the {GRID} nm grid")));
                 ok = false;
             }
@@ -860,11 +865,13 @@ fn check_sheet_aspect(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>
     }
     for w in &sch.wires {
         for p in &w.pts {
-            add(p.x.raw_shim(), p.x.raw_shim(), p.y.raw_shim(), p.y.raw_shim(), &mut seen);
+            let q = to_lpoint(*p);
+            add(q.x, q.x, q.y, q.y, &mut seen);
         }
     }
     for l in &sch.labels {
-        add(l.at.x.raw_shim(), l.at.x.raw_shim(), l.at.y.raw_shim(), l.at.y.raw_shim(), &mut seen);
+        let q = to_lpoint(l.at);
+        add(q.x, q.x, q.y, q.y, &mut seen);
     }
     if !seen {
         out.push(CheckResult::pass("schematic_sheet_aspect"));
@@ -943,11 +950,13 @@ fn check_sheet_density(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_
     }
     for w in &sch.wires {
         for p in &w.pts {
-            extend(p.x.raw_shim(), p.x.raw_shim(), p.y.raw_shim(), p.y.raw_shim());
+            let q = to_lpoint(*p);
+            extend(q.x, q.x, q.y, q.y);
         }
     }
     for l in &sch.labels {
-        extend(l.at.x.raw_shim(), l.at.x.raw_shim(), l.at.y.raw_shim(), l.at.y.raw_shim());
+        let q = to_lpoint(l.at);
+        extend(q.x, q.x, q.y, q.y);
     }
     if !seen {
         out.push(CheckResult::pass("schematic_sheet_density"));
@@ -978,16 +987,18 @@ fn check_sheet_density(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_
     }
     for w in &sch.wires {
         for seg in w.pts.windows(2) {
-            let (a, b) = (seg[0], seg[1]);
-            mark_rect((a.x.min(b.x)).raw_shim(), (a.x.max(b.x)).raw_shim(), (a.y.min(b.y)).raw_shim(), (a.y.max(b.y)).raw_shim());
+            let (a, b) = (to_lpoint(seg[0]), to_lpoint(seg[1]));
+            mark_rect(a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y));
         }
         if w.pts.len() == 1 {
             let p = w.pts[0];
-            mark_rect(p.x.raw_shim(), p.x.raw_shim(), p.y.raw_shim(), p.y.raw_shim());
+            let q = to_lpoint(p);
+            mark_rect(q.x, q.x, q.y, q.y);
         }
     }
     for l in &sch.labels {
-        mark_rect(l.at.x.raw_shim(), l.at.x.raw_shim(), l.at.y.raw_shim(), l.at.y.raw_shim());
+        let q = to_lpoint(l.at);
+        mark_rect(q.x, q.x, q.y, q.y);
     }
 
     let total_cells = rows * cols;
@@ -1119,7 +1130,7 @@ fn check_content_in_bounds(sch: &SchematicSection, model: &ConstraintModel, geos
     // Wire segment endpoints.
     for (wi, w) in sch.wires.iter().enumerate() {
         for p in &w.pts {
-            check_point(&format!("wire{wi}"), p.x.raw_shim() as f64 / 1e6, p.y.raw_shim() as f64 / 1e6, x0, y0, x1, y1, eps, &mut ok, out);
+            check_point(&format!("wire{wi}"), p.x.mm(), p.y.mm(), x0, y0, x1, y1, eps, &mut ok, out);
         }
     }
     // Every refdes/value/pin-name/net-label ink box, plus each net label's
@@ -1224,23 +1235,23 @@ fn check_wire_detour(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>>
                 continue;
             }
         }
-        let manhattan: i64 = {
+        let manhattan: Nm = {
             let a = w.pts[0];
             let b = w.pts[w.pts.len() - 1];
-            ((a.x - b.x).abs() + (a.y - b.y).abs()).raw_shim()
+            (a.x - b.x).abs() + (a.y - b.y).abs()
         };
-        if manhattan == 0 {
+        if manhattan == Nm::ZERO {
             continue;
         }
-        let drawn: i64 = w.pts.windows(2).map(|s| ((s[0].x - s[1].x).abs() + (s[0].y - s[1].y).abs()).raw_shim()).sum();
-        if (drawn as f64) > DETOUR_RATIO * (manhattan as f64) {
+        let drawn = polyline_len(&w.pts);
+        if drawn.as_f64() > DETOUR_RATIO * manhattan.as_f64() {
             out.push(CheckResult {
                 check: "schematic_wire_detour".into(),
                 status: CheckStatus::Fail,
                 location: Some(format!("{}:{:?}", w.net, w.pins)),
                 hint: Some(format!(
                     "wire length {drawn}um is {:.1}x the {manhattan}um Manhattan distance between its pins (max {DETOUR_RATIO}x)",
-                    drawn as f64 / manhattan as f64
+                    drawn.ratio(manhattan)
                 )), detail: None
             });
             ok = false;
@@ -1261,7 +1272,7 @@ fn check_wire_detour(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>>
 /// "net" in this sense, but a hand-authored intent could still tie two
 /// adjacent power pins directly), so this only flags a wire that actually
 /// behaves like the sheet-spanning rail this gate exists to catch.
-const MAX_POWER_WIRE_LEN_NM: i64 = 30_000_000; // 30mm
+const MAX_POWER_WIRE_LEN_NM: Nm = Nm::new(30_000_000); // 30mm
 const MAX_POWER_WIRE_BENDS: usize = 2;
 
 fn check_power_net_as_wire(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
@@ -1270,7 +1281,7 @@ fn check_power_net_as_wire(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
         if !geometry::is_power_or_ground_net_name(&w.net) || w.pts.len() < 2 {
             continue;
         }
-        let length: i64 = w.pts.windows(2).map(|s| ((s[0].x - s[1].x).abs() + (s[0].y - s[1].y).abs()).raw_shim()).sum();
+        let length = polyline_len(&w.pts);
         let bends = w.pts.len().saturating_sub(2);
         if length > MAX_POWER_WIRE_LEN_NM || bends > MAX_POWER_WIRE_BENDS {
             out.push(CheckResult {
@@ -1300,12 +1311,12 @@ fn check_power_net_as_wire(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
 const MAX_COLUMN_SIZE: usize = 8;
 
 fn check_column_overflow(sch: &SchematicSection, model: &ConstraintModel, out: &mut Vec<CheckResult>) {
-    let mut by_x: BTreeMap<i64, Vec<&str>> = BTreeMap::new();
+    let mut by_x: BTreeMap<Nm, Vec<&str>> = BTreeMap::new();
     for sym in &sch.symbols {
         if model.part(&sym.id).is_none() {
             continue;
         }
-        by_x.entry(sym.at.x.raw_shim()).or_default().push(&sym.id);
+        by_x.entry(sym.at.x).or_default().push(&sym.id);
     }
     let mut ok = true;
     for (x, ids) in &by_x {
@@ -1337,7 +1348,7 @@ fn check_column_overflow(sch: &SchematicSection, model: &ConstraintModel, out: &
 /// to bite exactly the drawings that already carried one page-crossing
 /// wire, and the layout change (not a tuned threshold) is what brings every
 /// fixture under it. Not since relaxed.
-const MAX_WIRE_LEN_NM: i64 = 80_000_000;
+const MAX_WIRE_LEN_NM: Nm = Nm::new(80_000_000);
 
 fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
     let mut ok = true;
@@ -1345,7 +1356,7 @@ fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
         if w.pts.len() < 2 {
             continue;
         }
-        let len: i64 = w.pts.windows(2).map(|s| ((s[0].x - s[1].x).abs() + (s[0].y - s[1].y).abs()).raw_shim()).sum();
+        let len = polyline_len(&w.pts);
         if len > MAX_WIRE_LEN_NM {
             out.push(CheckResult {
                 check: "schematic_wire_length".into(),
@@ -1353,8 +1364,8 @@ fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
                 location: Some(format!("{}:{:?}", w.net, w.pins)),
                 hint: Some(format!(
                     "wire polyline is {:.1}mm long (max {:.1}mm) — this net belongs on a net label, not a wire",
-                    len as f64 / 1e6,
-                    MAX_WIRE_LEN_NM as f64 / 1e6
+                    len.mm(),
+                    MAX_WIRE_LEN_NM.mm()
                 )), detail: None
             });
             ok = false;
@@ -1377,13 +1388,9 @@ fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
 const MAX_WIRE_INK_NM_PER_PART: f64 = 60_000_000.0;
 
 fn check_wire_ink(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
-    let total: i64 = sch
-        .wires
-        .iter()
-        .map(|w| w.pts.windows(2).map(|s| ((s[0].x - s[1].x).abs() + (s[0].y - s[1].y).abs()).raw_shim()).sum::<i64>())
-        .sum();
+    let total: Nm = sch.wires.iter().map(|w| polyline_len(&w.pts)).sum();
     let parts = sch.symbols.len().max(1);
-    let per_part = total as f64 / parts as f64;
+    let per_part = total.as_f64() / parts as f64;
     if per_part > MAX_WIRE_INK_NM_PER_PART {
         out.push(CheckResult {
             check: "schematic_wire_ink".into(),
@@ -1391,7 +1398,7 @@ fn check_wire_ink(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
             location: Some("sheet".into()),
             hint: Some(format!(
                 "{:.0}mm of wire over {parts} parts = {:.1}mm/part (max {:.0}mm/part)",
-                total as f64 / 1e6,
+                total.mm(),
                 per_part / 1e6,
                 MAX_WIRE_INK_NM_PER_PART / 1e6
             )), detail: None
@@ -1468,6 +1475,11 @@ mod tests {
     use super::*;
     use eda_model::ir::{NetLabel, Provenance, Wire};
     use eda_model::{Pin, PinKind};
+
+    /// A point of the symbol geometry's integer frame (`SymGeo`, the layout's nanometres) on the sheet.
+    fn sheet(x: i64, y: i64) -> IrPoint {
+        IrPoint { x: Nm::new(x), y: Nm::new(y) }
+    }
 
     fn provenance() -> Provenance {
         Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }
@@ -1639,7 +1651,7 @@ mod tests {
         let mid_y = (top + bottom) / 2;
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![r1_symbol(IrPoint { x: Nm::ZERO, y: Nm::ZERO })],
-            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: Nm::from_raw_shim(left - 100_000), y: Nm::from_raw_shim(mid_y) }, IrPoint { x: Nm::from_raw_shim(right + 100_000), y: Nm::from_raw_shim(mid_y) }], bus: false }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![sheet(left - 100_000, mid_y), sheet(right + 100_000, mid_y)], bus: false }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1673,11 +1685,11 @@ mod tests {
             ..Default::default()
         };
         let model = two_conn_model(());
-        let sch_for = |u1_x: i64| SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
+        let sch_for = |u1_x: Nm| SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![
                 SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J1".into(), at: IrPoint { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: mm(12.7), y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: Nm::from_raw_shim(u1_x), y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: u1_x, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
             ],
             wires: vec![Wire { id: String::new(),
                 net: "SIG".into(),
@@ -1687,14 +1699,14 @@ mod tests {
             labels: vec![],
         };
         // U1 to the right of both connectors: passes.
-        let results = check_style(&design(sch_for(25_400_000)), &model);
+        let results = check_style(&design(sch_for(mm(25.4))), &model);
         assert!(
             results.iter().any(|r| r.check == "schematic_flow_direction" && r.status == CheckStatus::Pass),
             "{results:#?}"
         );
         // U1 to the left of both: both connectors are genuinely on the wrong
         // side of what they drive, and must still be flagged.
-        let results = check_style(&design(sch_for(-12_700_000)), &model);
+        let results = check_style(&design(sch_for(mm(-12.7))), &model);
         let fails: Vec<&CheckResult> =
             results.iter().filter(|r| r.check == "schematic_flow_direction" && r.status == CheckStatus::Fail).collect();
         assert_eq!(fails.len(), 2, "{results:#?}");
@@ -1714,7 +1726,7 @@ mod tests {
             wires: vec![Wire { id: String::new(),
                 net: "N".into(),
                 pins: vec![],
-                pts: vec![IrPoint { x: Nm::from_raw_shim(left), y: Nm::from_raw_shim(top) }, IrPoint { x: Nm::from_raw_shim(left + 4 * w), y: Nm::from_raw_shim(top) }, IrPoint { x: Nm::from_raw_shim(left + 4 * w), y: Nm::from_raw_shim(top + 4 * w) }], bus: false,
+                pts: vec![sheet(left, top), sheet(left + 4 * w, top), sheet(left + 4 * w, top + 4 * w)], bus: false,
             }],
             labels: vec![],
         };
@@ -1727,7 +1739,7 @@ mod tests {
             wires: vec![Wire { id: String::new(),
                 net: "N".into(),
                 pins: vec![],
-                pts: vec![IrPoint { x: Nm::from_raw_shim(left), y: Nm::from_raw_shim(top) }, IrPoint { x: Nm::from_raw_shim(left), y: Nm::from_raw_shim(top + 40_000 * w) }], bus: false,
+                pts: vec![sheet(left, top), sheet(left, top + 40_000 * w)], bus: false,
             }],
             labels: vec![],
         };
@@ -1748,7 +1760,7 @@ mod tests {
             wires: vec![Wire { id: String::new(),
                 net: "N".into(),
                 pins: vec!["R1.1".into(), "R1.2".into()],
-                pts: vec![IrPoint { x: Nm::from_raw_shim(p1.x), y: Nm::from_raw_shim(p1.y) }, IrPoint { x: Nm::from_raw_shim(p2.x), y: Nm::from_raw_shim(p2.y) }], bus: false,
+                pts: vec![sheet(p1.x, p1.y), sheet(p2.x, p2.y)], bus: false,
             }],
             labels: vec![],
         };
@@ -1768,7 +1780,7 @@ mod tests {
                 net: "N".into(),
                 pins: vec!["R1.1".into(), "R1.2".into()],
                 // first point is on the box boundary, not the stub tip.
-                pts: vec![IrPoint { x: Nm::from_raw_shim(p1.x + 1), y: Nm::from_raw_shim(p1.y) }, IrPoint { x: Nm::from_raw_shim(p2.x), y: Nm::from_raw_shim(p2.y) }], bus: false,
+                pts: vec![sheet(p1.x + 1, p1.y), sheet(p2.x, p2.y)], bus: false,
             }],
             labels: vec![],
         };
