@@ -1250,7 +1250,7 @@ fn check_wire_detour(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>>
                 status: CheckStatus::Fail,
                 location: Some(format!("{}:{:?}", w.net, w.pins)),
                 hint: Some(format!(
-                    "wire length {drawn}um is {:.1}x the {manhattan}um Manhattan distance between its pins (max {DETOUR_RATIO}x)",
+                    "wire length {drawn} nm is {:.1}x the {manhattan} nm Manhattan distance between its pins (max {DETOUR_RATIO}x)",
                     drawn.ratio(manhattan)
                 )), detail: None
             });
@@ -1493,6 +1493,17 @@ mod tests {
     /// (offset 1270), so `geometry::node_size(2)` -> width 10160, height
     /// 7620, and both ports land at grid-aligned offsets (see
     /// `geometry::distribute_offsets`).
+    /// The detour's lengths are nanometres and say so (the message said `um`, left from the micrometre IR).
+    #[test]
+    fn a_wire_detour_reports_its_lengths_in_nanometres() {
+        let wire = Wire { id: String::new(), net: "N".into(), pins: vec!["A.1".into(), "B.1".into()], pts: vec![IrPoint { x: Nm::ZERO, y: Nm::ZERO }, IrPoint { x: Nm::ZERO, y: mm(10.0) }, IrPoint { x: mm(1.0), y: mm(10.0) }, IrPoint { x: mm(1.0), y: Nm::ZERO }], bus: false };
+        let sch = SchematicSection { wires: vec![wire], ..Default::default() };
+        let mut out = Vec::new();
+        check_wire_detour(&sch, &BTreeMap::new(), &mut out);
+        let hint = out[0].hint.clone().unwrap();
+        assert!(hint.starts_with("wire length 21000000 nm is 21.0x the 1000000 nm Manhattan distance"), "{hint}");
+    }
+
     fn one_part_model() -> ConstraintModel {
         let r1 = Part {
             reference: "R1".into(),
