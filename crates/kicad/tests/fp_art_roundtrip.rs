@@ -82,15 +82,15 @@ fn a_boards_footprint_graphics_are_part_of_its_footprint_and_come_back_out() {
     let bottom = art_of(&model, "U2");
     assert_eq!(bottom.shapes.len(), 6);
     assert!(bottom.shapes.iter().all(|s| s.layer() == "F.SilkS" || s.layer() == "F.Fab"), "{bottom:#?}");
-    // The fixture draws the same coordinates on both footprints, which is a mirrored drawing on the bottom one: its definition (the part seen from the
-    // top) is the top footprint's with x negated.
+    // The fixture draws the same coordinates on both footprints, which is a mirrored drawing on the bottom one: its definition (the library's, the part
+    // seen from the top, `FootprintExtra::library_frame`) is the top footprint's mirrored as KiCad's flip mirrors it, y negated in its own frame.
     let line = |art: &FpArt| match &art.shapes[0].shape {
         Shape::Segment { start, end, .. } => (start.x, start.y, end.x, end.y),
         other => panic!("{other:?}"),
     };
     assert_eq!(line(top), (-1_000_000, -2_000_000, 1_000_000, -2_000_000));
-    assert_eq!(line(bottom), (1_000_000, -2_000_000, -1_000_000, -2_000_000));
-    assert_eq!(top.texts[0].layout.at.x, -bottom.texts[0].layout.at.x);
+    assert_eq!(line(bottom), (-1_000_000, 2_000_000, 1_000_000, 2_000_000));
+    assert_eq!((top.texts[0].layout.at.x, top.texts[0].layout.at.y), (bottom.texts[0].layout.at.x, -bottom.texts[0].layout.at.y));
 
     let text = export(&design, &model);
     for tag in ["(fp_line ", "(fp_arc ", "(fp_circle ", "(fp_poly ", "(fp_curve ", "(fp_text user "] {

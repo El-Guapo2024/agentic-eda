@@ -640,6 +640,11 @@ fn exempt(a: &Item, b: &Item) -> bool {
     if power_on_wire(a, b) || power_on_wire(b, a) {
         return true;
     }
+    // a label whose anchor is on a wire sits on it, as eeschema draws a label put on the middle of a wire (`SCH_LABEL`: the text just above the line)
+    let label_on_wire = |l: &Item, w: &Item| l.kind == Kind::Label && w.kind == Kind::Wire && w.seg.is_some_and(|(s, e)| l.anchors.iter().any(|q| on_seg(*q, s, e)));
+    if label_on_wire(a, b) || label_on_wire(b, a) {
+        return true;
+    }
     // a power symbol or flag stands on a pin's end, over that pin's own texts, where KiCad's own schematics put them
     let power_on_texts = |p: &Item, t: &Item| p.power && p.kind == Kind::Body && matches!(t.kind, Kind::PinName | Kind::PinNumber) && t.pin_tip.is_some_and(|tip| p.anchors.iter().any(|q| same_point(*q, tip)));
     nc_on_texts(a, b) || nc_on_texts(b, a) || power_on_texts(a, b) || power_on_texts(b, a)

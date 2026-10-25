@@ -104,9 +104,8 @@ pub fn export_cmp(dir: &Path) -> Value {
     let mut rows: Vec<(String, String, String, String, String)> = Vec::new();
     for fp in &placement.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
-        let full = part.footprint.clone().or_else(|| model.footprint_of(part).map(|f| f.name)).unwrap_or_default();
-        // The exporter's own lib id for it: a footprint with no library is `eda:<name>`.
-        let id = if full.contains(':') || full.is_empty() { full } else { format!("eda:{full}") };
+        // The exporter's own lib id for it (`footprint_lib_id`: a package's installed KiCad footprint, a name with no library bare).
+        let id = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).or_else(|| model.footprint_of(part).map(|f| f.name)).unwrap_or_default();
         let symbol = uuid_of(&sch_ids, &fp.id);
         rows.push((uuid_of(&pcb_ids, &fp.id), if symbol.is_empty() { String::new() } else { format!("/{symbol}") }, fp.id.clone(), part.value.clone().unwrap_or_default(), id));
     }

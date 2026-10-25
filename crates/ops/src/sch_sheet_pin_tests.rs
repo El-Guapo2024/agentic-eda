@@ -105,7 +105,7 @@ fn nets(d: &Design) -> BTreeMap<String, String> {
         eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: BTreeMap::new() },
         eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut child, file: "sub.kicad_sch".into(), pins: child_pins },
     ];
-    let naming = eda_engine::nets::Naming { wire_hints: false, ..Default::default() };
+    let naming = eda_engine::nets::Naming::default();
     let mut out = BTreeMap::new();
     for net in eda_engine::nets::trace_nets_with(&mut screens, &naming) {
         for pin in &net.pins {
@@ -127,7 +127,7 @@ fn drag(ids: &[&str], dx: Nm, dy: Nm) -> Cmd {
 fn the_hierarchy_ties_the_pin_to_the_label_of_its_name() {
     // sanity: the fixture is what the tests say it is
     let n = nets(&design());
-    assert_eq!((n["R1.1"].as_str(), n["R1.2"].as_str()), ("SIG", "RES"), "{n:?}");
+    assert_eq!((n["R1.1"].as_str(), n["R1.2"].as_str()), ("/SIG", "/RES"), "{n:?}");
 }
 
 #[test]
@@ -138,8 +138,8 @@ fn a_lone_pin_moves_along_its_border_and_the_net_it_was_wired_to_lets_go() {
     assert_eq!(pin_at(&after, "shpin_in"), p(100_000_000, 65_080_000));
     assert_eq!(root_of(&after).wires.iter().find(|w| w.id == "wire_in").unwrap().pts, vec![p(80_000_000, 60_000_000), p(100_000_000, 60_000_000)]);
     let n = nets(&after);
-    assert_ne!(n["R1.1"], "SIG", "the pin is off the wire: R1.1 is no longer on SIG ({n:?})");
-    assert_eq!(n["R1.2"], "RES", "the other pin did not move");
+    assert_ne!(n["R1.1"], "/SIG", "the pin is off the wire: R1.1 is no longer on SIG ({n:?})");
+    assert_eq!(n["R1.2"], "/RES", "the other pin did not move");
     // and the sheet's other pin, the sheet itself and its file are as they were
     assert_eq!(pin_at(&after, "shpin_out"), p(140_000_000, 70_000_000));
     assert_eq!(root_of(&after).sheets[0].at, SHEET_AT);
@@ -167,7 +167,7 @@ fn dragging_the_pin_takes_the_wire_with_it_and_the_net_stays() {
     let wire = root_of(&after).wires.iter().find(|w| w.pts.contains(&p(100_000_000, 65_080_000))).expect("a wire ends at the pin");
     assert!(wire.pts.contains(&p(80_000_000, 60_000_000)) || root_of(&after).wires.len() > 2, "{:?}", root_of(&after).wires);
     let n = nets(&after);
-    assert_eq!(n["R1.1"], "SIG", "{n:?}");
+    assert_eq!(n["R1.1"], "/SIG", "{n:?}");
 }
 
 #[test]
@@ -178,8 +178,8 @@ fn deleting_a_pin_cuts_the_net_through_it_and_a_second_delete_is_refused() {
     assert_eq!(sheet.pins.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["shpin_out"]);
     assert_eq!(root_of(&after).wires.len(), 2, "the wire stays: only the pin goes");
     let n = nets(&after);
-    assert_ne!(n["R1.1"], "SIG");
-    assert_eq!(n["R1.2"], "RES");
+    assert_ne!(n["R1.1"], "/SIG");
+    assert_eq!(n["R1.2"], "/RES");
     let e = run(&after, Cmd::SchEdit(SchCmd::DeleteSheetPin { id: "shpin_in".into() })).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_sheet_pin");
 }
@@ -195,7 +195,7 @@ fn renaming_a_pin_ties_it_to_the_label_of_the_new_name() {
     assert_eq!((pin.name.as_str(), pin.shape), ("CLK", LabelShape::Bidirectional));
     assert_eq!(pin.at, p(100_000_000, 60_000_000), "where it is does not change with its name");
     let n = nets(&renamed);
-    assert_ne!(n["R1.1"], "SIG", "no label of the name CLK in the sheet's file: R1.1 is not on SIG any more ({n:?})");
+    assert_ne!(n["R1.1"], "/SIG", "no label of the name CLK in the sheet's file: R1.1 is not on SIG any more ({n:?})");
     // an empty name and a point off the border are refused
     let e = run(&d, Cmd::SchEdit(SchCmd::EditSheetPin { id: "shpin_in".into(), name: Some("  ".into()), shape: None, at: None, size_nm: None, bold: None, italic: None }));
     assert!(e.is_err());
@@ -212,7 +212,7 @@ fn two_pins_of_one_sheet_trade_places_and_with_them_the_nets_they_reach() {
     assert_eq!(pin_at(&after, "shpin_out"), p(100_000_000, 60_000_000));
     // the wires stayed: SIG now reaches OUT, so R1.2 is on SIG, and RES reaches IN: R1.1 is on RES
     let n = nets(&after);
-    assert_eq!((n["R1.1"].as_str(), n["R1.2"].as_str()), ("RES", "SIG"), "{n:?}");
+    assert_eq!((n["R1.1"].as_str(), n["R1.2"].as_str()), ("/RES", "/SIG"), "{n:?}");
 }
 
 #[test]

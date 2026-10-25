@@ -91,8 +91,11 @@ impl<'a> Board<'a> {
             let mut traced = retrace();
             if agreement(&traced, intent) >= TRACED_BELIEVABLE {
                 let by_pins: BTreeMap<Vec<String>, &str> = intent.iter().map(|n| (pin_set(n), n.name.as_str())).collect();
-                let mut used: BTreeSet<String> = traced.iter().filter(|n| !n.name.starts_with("NET_")).map(|n| n.name.clone()).collect();
-                for n in traced.iter_mut().filter(|n| n.name.starts_with("NET_")) {
+                // a net the drawing names by its pins only (`Net-(R1-Pad1)`, KiCad's name for a net no label drives) takes the intent's name, which the new
+                // sheets' labels then show
+                let by_its_pins = |name: &str| name.starts_with("NET_") || name.starts_with("Net-(") || name.starts_with("unconnected-(");
+                let mut used: BTreeSet<String> = traced.iter().filter(|n| !by_its_pins(&n.name)).map(|n| n.name.clone()).collect();
+                for n in traced.iter_mut().filter(|n| by_its_pins(&n.name)) {
                     if let Some(name) = by_pins.get(&pin_set(n)) {
                         if used.insert((*name).to_string()) {
                             n.name = (*name).to_string();
@@ -190,6 +193,18 @@ mod tests {
             .collect()
     }
 
+    /// `traced` against `drawn_nets`: the same pins in the same nets, each named as KiCad names what is drawn -- the intent's name for a power net, the
+    /// intent's name under a sheet's path (`/MCU (U1)/RESET`) for a labelled one, its best pin's (`Net-(D1-Pad1)`) for one no label names.
+    fn assert_same_nets(got: &BTreeMap<String, Vec<String>>, want: &BTreeMap<String, Vec<String>>) {
+        let by_pins = |m: &BTreeMap<String, Vec<String>>| -> BTreeMap<Vec<String>, String> { m.iter().map(|(n, p)| (p.clone(), n.clone())).collect() };
+        let (got, want) = (by_pins(got), by_pins(want));
+        assert_eq!(got.keys().collect::<Vec<_>>(), want.keys().collect::<Vec<_>>(), "the same nets, the same pins");
+        for (pins, name) in &got {
+            let intent = &want[pins];
+            assert!(name == intent || (name.starts_with('/') && name.ends_with(&format!("/{intent}"))) || name.starts_with("Net-("), "{pins:?} is the intent's {intent}, traced as {name}");
+        }
+    }
+
     /// The nets a design's sheets draw, by tracing them.
     fn traced(model: &ConstraintModel, d: &Design) -> BTreeMap<String, Vec<String>> {
         let mut all: Vec<(String, eda_model::ir::SchematicSection)> = vec![(String::new(), d.schematic.clone().unwrap())];
@@ -227,7 +242,7 @@ mod tests {
         assert!(root.symbols.is_empty());
         assert_eq!(d.sheet_contents.as_ref().unwrap().len(), 3);
         // The nets after are the nets before: drawn back from the new sheets, and stored.
-        assert_eq!(traced(&model, d), drawn_nets(&model));
+        assert_same_nets(&traced(&model, d), &drawn_nets(&model));
         let stored: BTreeMap<String, Vec<String>> = d.nets.clone().unwrap().into_iter().filter(|n| n.pins.len() >= 2).map(|n| (n.name, n.pins)).collect();
         assert_eq!(stored, drawn_nets(&model));
         // Every symbol keeps its identity: same references, same library symbol, same value.
@@ -255,7 +270,7 @@ mod tests {
         design.nets = Some(stale.nets.clone());
         let mut b = Board::new(design, &stale, 100_000, 300_000).with_intent_nets(model.nets.clone());
         b.apply(&Cmd::ReorganizeSheets).unwrap();
-        assert_eq!(traced(&model, b.design()), drawn_nets(&model));
+        assert_same_nets(&traced(&model, b.design()), &drawn_nets(&model));
         assert_eq!(b.design().schematic.as_ref().unwrap().sheets.len(), 3);
     }
 
@@ -350,7 +365,7 @@ mod tests {
         assert_eq!(sheet.extras.body_styles.get("D1"), Some(&2), "D1 is still in the alternate body style");
         assert!(sheet.extras.body_styles.get("D2").is_none());
         // it is laid out in that body: the pins the tracer finds are where the wires end
-        assert_eq!(traced(&model, d), drawn_nets(&model));
+        assert_same_nets(&traced(&model, d), &drawn_nets(&model));
     }
 
     /// A dual op-amp the way a library has it: unit 1 and unit 2 the amplifiers, unit 3 the power pins.
@@ -451,7 +466,7 @@ mod tests {
             assert!(sheet.field_layout.contains_key(key), "{key}");
         }
         // the nets after are the nets before, drawn back from the units
-        assert_eq!(traced(&model, d), drawn_nets(&model));
+        assert_same_nets(&traced(&model, d), &drawn_nets(&model));
     }
 
     #[test]

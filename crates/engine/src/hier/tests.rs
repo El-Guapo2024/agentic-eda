@@ -56,6 +56,44 @@ pub(super) fn traced(model: &ConstraintModel, d: &Design) -> BTreeMap<String, Ve
     trace_nets(&mut view).into_iter().filter(|n| n.pins.len() >= 2).map(|n| (n.name, n.pins)).collect()
 }
 
+/// `traced` against `drawn_nets`: the same pins in the same nets, each under the one name KiCad gives it. Every net the intent names has a label
+/// (`crate::net_labels`), so the name is its strongest driver among the items the sheets draw with the intent's name, by `CONNECTION_SUBGRAPH`'s
+/// `compareDrivers`: a global power symbol (not a `PWR_FLAG`), then a local label, a hierarchical label, a sheet pin; the shallowest sheet; the first
+/// name. A label names the net with its sheet's path in front (`/MCU (U2)/BOOT0`, `/I2C_SDA` on the root), a power symbol without one (`GND`).
+pub(super) fn assert_traces_back(got: &BTreeMap<String, Vec<String>>, want: &BTreeMap<String, Vec<String>>, design: &Design, what: &str) {
+    let by_pins = |m: &BTreeMap<String, Vec<String>>| -> BTreeMap<Vec<String>, String> { m.iter().map(|(n, p)| (p.clone(), n.clone())).collect() };
+    let (got_pins, want_pins) = (by_pins(got), by_pins(want));
+    assert_eq!(got_pins.keys().collect::<Vec<_>>(), want_pins.keys().collect::<Vec<_>>(), "{what}: the sheets do not trace back to the intent's nets");
+    // (priority, depth, full name) of every item drawn with a name, by the name
+    let mut drivers: BTreeMap<String, Vec<(std::cmp::Reverse<u8>, usize, String)>> = BTreeMap::new();
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(screen) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        let path: String = std::iter::once(String::new()).chain(eda_model::sheet_list::walk(design).into_iter().filter(|x| e.path.starts_with(&x.path) && !x.path.is_empty()).map(|x| crate::nets::escape_net_name(&x.name))).collect::<Vec<_>>().join("/");
+        let depth = e.path.len();
+        let mut add = |prio: u8, name: &str, full: String| drivers.entry(name.to_string()).or_default().push((std::cmp::Reverse(prio), depth, full));
+        for l in &screen.labels {
+            match l.kind {
+                LabelKind::Global { .. } => add(7, &l.net, l.net.clone()),
+                LabelKind::Local => add(4, &l.net, format!("{path}/{}", l.net)),
+                LabelKind::Hierarchical { .. } => add(3, &l.net, format!("{path}/{}", l.net)),
+            }
+        }
+        for p in screen.power_symbols.iter().filter(|p| !p.lib_id.ends_with(":PWR_FLAG")) {
+            add(6, &p.net, p.net.clone());
+        }
+        for sh in &screen.sheets {
+            for pin in &sh.pins {
+                add(2, &pin.name, format!("{path}/{}", pin.name));
+            }
+        }
+    }
+    for (pins, name) in &got_pins {
+        let intent = &want_pins[pins];
+        let expected = drivers.get(intent).and_then(|d| d.iter().min()).map(|d| d.2.clone()).unwrap_or_else(|| panic!("{what}: nothing is drawn with the name of {intent}"));
+        assert_eq!(name, &expected, "{what}: {pins:?} is the intent's {intent}");
+    }
+}
+
 fn drawn_nets(model: &ConstraintModel) -> BTreeMap<String, Vec<String>> {
     model
         .nets
@@ -229,7 +267,7 @@ fn pins_side_by_side_on_one_rail_share_a_power_symbol_beyond_the_parts_texts() {
 #[test]
 fn mcu30_module_sheets_trace_back_to_the_intent_nets() {
     let (model, d) = mcu30();
-    assert_eq!(traced(&model, &d), drawn_nets(&model));
+    assert_traces_back(&traced(&model, &d), &drawn_nets(&model), &d, "mcu30");
 }
 
 #[test]
@@ -250,7 +288,7 @@ fn every_example_with_modules_traces_back_and_is_tidy() {
         let modules = infer_modules(&model, &[]);
         let d = derive_schematic_modules(&model, &opts()).unwrap_or_else(|e| panic!("{}: {e:?}", f.display()));
         let label = f.file_name().unwrap().to_string_lossy().to_string();
-        assert_eq!(traced(&model, &d), drawn_nets(&model), "{label}: the sheets do not trace back to the intent's nets");
+        assert_traces_back(&traced(&model, &d), &drawn_nets(&model), &d, &label);
         assert_tidy(&model, &d, &label);
         if modules.len() >= 2 {
             hierarchical += 1;

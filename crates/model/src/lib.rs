@@ -84,6 +84,15 @@ pub struct ConstraintModel {
     pub parts: Vec<Part>,
     #[serde(default)]
     pub nets: Vec<Net>,
+    /// The intent's own name of each net the board loader gave KiCad's name (`/LED channels/PA7` -> `PA7`, `Net-(D1-Pad1)` -> `LED1`): [`Self::nets`] carry
+    /// the names KiCad gives the derived schematic's nets (the user's decision of 2026-10-23, `crates/cli/src/net_names.rs`), and the schematic is derived
+    /// from the names the intent wrote, which its labels show (`eda_engine::derive_schematic` reads them from here). Never part of an intent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intent_net_names: BTreeMap<String, String>,
+    /// What the board's schematic says of the symbol each footprint stands for, by reference ([`SymbolLink`]): what KiCad's Update PCB from Schematic writes
+    /// onto the footprint, so the board writer writes it too. Filled by the board loader from the stored or derived schematic. Never part of an intent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub symbol_links: BTreeMap<String, SymbolLink>,
     #[serde(default)]
     pub clusters: Vec<Cluster>,
     #[serde(default)]
@@ -1058,6 +1067,29 @@ pub struct Net {
     /// Pin refs as "U1.3".
     #[serde(default)]
     pub pins: Vec<String>,
+}
+
+/// What a footprint takes from its symbol when KiCad updates the board from the schematic (`BOARD_NETLIST_UPDATER::updateFootprintParameters`,
+/// `updateComponentPadConnections`), as the schematic written beside the board gives it to kicad-cli's netlist.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolLink {
+    /// `FOOTPRINT::GetPath`: the uuids of the sheets from the root down (the root's own left out, `SCH_SHEET_PATH::Path` with the virtual root) and the
+    /// symbol's, `/<sheet>/<symbol>`; `/<symbol>` for a symbol on the root.
+    pub path: String,
+    /// `FOOTPRINT::GetSheetname`: the sheet's human-readable path (`SCH_SHEET_PATH::PathHumanReadable`), `/` for the root, `/LED channels/` below it.
+    pub sheetname: String,
+    /// `FOOTPRINT::GetSheetfile`: the file of the sheet's screen; empty for the root sheet, whose file is named after the board.
+    pub sheetfile: String,
+    /// The symbol's fields but the Reference, the Value and the Footprint (`compFields`), by name, in its order: Datasheet, Description, the
+    /// simulation fields, the user's.
+    pub fields: Vec<(String, String)>,
+    /// Pad number -> (`pinfunction`, `pintype`) as the netlist gives them (`NETLIST_EXPORTER_XML::makeListOfNets`): the pin's shown name and its
+    /// number (`PA0_3`; empty for a pin with no name), and its electrical type (`+no_connect` for a pin on a no-connect flag).
+    pub pins: BTreeMap<String, (String, String)>,
+    /// Pad number -> the reference with the unit the pin is drawn on, for a symbol of several units (`SCH_SYMBOL::GetRef( &path, true )`: `U1A`), which
+    /// KiCad's default name of a named pin's net has (`unconnected-(U1A-NC-Pad5)`). Empty for a symbol of one unit.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub units: BTreeMap<String, String>,
 }
 
 /// The atomic unit for both schematic and PCB.

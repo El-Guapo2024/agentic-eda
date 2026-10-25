@@ -1044,6 +1044,21 @@ pub fn kicad_footprint_of_part(part: &crate::Part) -> Option<KicadFootprintRef> 
     [part.footprint.as_deref(), part.package.as_deref()].into_iter().flatten().find_map(|name| kicad_footprint_for(&normalize_name(name), &part.reference, part.value.as_deref()))
 }
 
+/// The one name a part's footprint goes by in every file written here -- the board's `(footprint "..")`, the derived symbol's Footprint field, what Update PCB from
+/// Schematic compares (`BOARD_NETLIST_UPDATER::replaceFootprint`: `GetFPID()` against the netlist component's): the footprint the part names, as named (`Lib:Name`;
+/// a bare name, which a board read from a file can have, stays bare: `LIB_ID::Format` writes the item name alone), else the installed KiCad footprint its package
+/// stands for ([`kicad_footprint_of_part`]: `package: 0603` on an `R` is `Resistor_SMD:R_0603_1608Metric`), else the package's name. Empty for a part with no
+/// footprint.
+pub fn footprint_lib_id(part: &crate::Part) -> String {
+    if let Some(named) = part.footprint.as_deref().filter(|f| !f.is_empty()) {
+        return named.to_string();
+    }
+    if let Some(twin) = kicad_footprint_of_part(part) {
+        return twin.id();
+    }
+    part.package.clone().unwrap_or_default()
+}
+
 /// The `(model ...)` path an exported footprint of this part gets when the footprint itself carries none -- an explicit definition (a project-library entry, a
 /// `.kicad_mod` read for its pads) has no model of its own, and without one `kicad-cli pcb export glb` leaves the part out of the 3D view altogether.
 pub fn model_path_for_part(part: &crate::Part) -> Option<String> {

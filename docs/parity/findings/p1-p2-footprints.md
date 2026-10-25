@@ -36,6 +36,8 @@ The test stops at the first mismatched field (`break`), so each footprint report
 
 ### F1. The board's net names are the intent's; the derived schematic's KiCad net names are path-prefixed or default names. HIGH.
 
+**Fixed** on task-fix-a-kicad-names: fc8ee220 (option (a), the user's decision: the tracer names as `recacheName` does, the board loader gives every net KiCad's name, `crates/cli/src/net_names.rs`; `crates/cli/tests/kicad_names.rs` finds 0 parity differences on `opamp_filter`, `ldo` and `mcu_board_30plus`; web/studio/PARITY-pcb.md section 53).
+
 This causes 34 of the 38 net conflicts here. The other 4 come from F1b and F3.
 
 **What differs.**
@@ -84,6 +86,8 @@ Option (a) renames nets across the studio: rules, net classes and `design.nets`.
 
 ### F1b. A no-connect pin's pad gets no net; KiCad gives it `unconnected-(...)`. MEDIUM.
 
+**Fixed** on task-fix-a-kicad-names: fc8ee220 (`pcb::unconnected_pin_nets`: every pin of a footprint made here on no net gets `unconnected-(..)`; the `_%d` de-duplication of no-connect pads is not ported).
+
 **What differs.**
 - **KiCad.** `BOARD_NETLIST_UPDATER::updateComponentPadConnections` connects every pad the netlist names, single-pin nets included. A no-connect pad gets a unique `"%s_%d"` copy of the name: `if( pad->IsNoConnectPad() ) { ... netName = wxString::Format( wxS( "%s_%d" ), ...` (`board_netlist_updater.cpp:1151`).
 - **Ours.** `pcb.rs:1224` writes no `(net ..)` for a pin that is in no intent net, so the pad is left with none.
@@ -95,6 +99,8 @@ Test: `a_no_connect_pin_is_written_on_its_unconnected_net`. Assert that `pad "12
 **Unit-sensitive:** no.
 
 ### F2. The derived schematic's Footprint field is empty where the board writes `eda:<package>`. HIGH.
+
+**Fixed** on task-fix-a-kicad-names: fc8ee220 (`eda_model::footprint::footprint_lib_id`, called by both writers; `pending_footprint_changes` and the Footprint-field follower accept either name, `names_footprint_of`).
 
 This causes all 30 `footprint_symbol_mismatch` reports.
 
@@ -129,6 +135,8 @@ Why the slow tier never caught it: the P2 tests use a fixture whose parts name `
 
 ### F3. The symbol's fields are never copied onto the footprint: Sim.*, Datasheet, Description and user fields. MEDIUM.
 
+**Fixed** on task-fix-a-kicad-names: fc8ee220 (`eda_kicad::symbol_links` gives the fields as the schematic writer writes them; hidden on F.Fab/B.Fab at the origin, as `updateFootprintParameters` adds them).
+
 This causes the 8 `footprint_symbol_field_mismatch` reports.
 
 **What differs.**
@@ -153,6 +161,8 @@ Test: `a_symbols_fields_are_on_its_footprint`.
 
 ### F4. The board writes no `(path ...)` link to the symbol, so KiCad's default F8 matches no footprint. HIGH.
 
+**Fixed** on task-fix-a-kicad-names: fc8ee220 (`(path)`, `sheetname`, `sheetfile` from `symbol_links`, checked against kicad-cli's netlist `tstamps`; an imported footprint keeps the sheet its file named).
+
 **What differs.**
 - **Ours.** `write_footprint` never writes `(path "/<sheet uuid>/<symbol uuid>")`. `(sheetname)` and `(sheetfile)` are written only from an imported board's extras (`pcb.rs:1029-1034`). The test at `pcb.rs:3179` asserts that the path is absent, "the derived schematic's symbols have uuids of their own".
 - **The uuids are deterministic.** The symbol's uuid is `duid_for("sym:<ref>")` (`lib.rs:372`), so the board could write the link.
@@ -172,6 +182,8 @@ Test: `every_footprint_links_to_its_symbol`. Assert that each footprint's `(path
 **Unit-sensitive:** no.
 
 ### F5. Pads of a board made here carry no `pinfunction` or `pintype`. MEDIUM.
+
+**Fixed** on task-fix-a-kicad-names: fc8ee220 (the netlist's: `PA0_3` -- name and number, as kicad-cli 25ec2335 writes it, not `PA0` as this finding guessed -- and the electrical type).
 
 **What differs.**
 - **Ours.** `pcb.rs:1232-1237` writes them only from an imported board's `PadMaskInfo`.

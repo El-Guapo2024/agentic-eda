@@ -53,7 +53,9 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
         p["graphics"] = Value::Array(art.shapes.iter().map(|s| graphic_json(&s.placed(fp))).collect());
     }
     if !art.texts.is_empty() {
-        let vars = TextVars { reference: &part.reference, value: part.value.as_deref().unwrap_or(""), footprint: part.footprint.as_deref().or(part.package.as_deref()).unwrap_or("") };
+        // `${FOOTPRINT_LIBRARY}:${FOOTPRINT_NAME}` of the link the board file gives the footprint (`footprint_lib_id`)
+        let fpid = eda_model::footprint::footprint_lib_id(part);
+        let vars = TextVars { reference: &part.reference, value: part.value.as_deref().unwrap_or(""), footprint: &fpid };
         p["texts"] = Value::Array(
             art.texts
                 .iter()

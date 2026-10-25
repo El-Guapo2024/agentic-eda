@@ -386,7 +386,8 @@ fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
         pin_name_offset_mm: 0.508,
         alternate: None,
     };
-    let pins = ["1", "2", "3", "4", "5", "6", "7", "8"].iter().map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect();
+    let names = [("1", "OUT1"), ("2", "IN1-"), ("3", "IN1+"), ("4", "V-"), ("5", "IN2+"), ("6", "IN2-"), ("7", "OUT2"), ("8", "V+")];
+    let pins = names.iter().map(|(n, name)| Pin { number: n.to_string(), name: Some(name.to_string()), kind: PinKind::Passive }).collect();
     let part = Part { reference: "U9".into(), mpn: None, lcsc: None, value: Some("TL072".into()), package: None, footprint: None, symbol: Some("Test:Dual3".into()), datasheet: None, pins, body_nm: None, edge: None };
     (sym, part)
 }
@@ -405,7 +406,8 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
     model.parts.push(part);
     model.nets.iter_mut().find(|n| n.name == "VDD").unwrap().pins.push("U9.8".into());
     model.nets.iter_mut().find(|n| n.name == "GND").unwrap().pins.push("U9.4".into());
-    for (name, a, b) in [("AMP_FB1", "U9.1", "U9.2"), ("AMP_FB2", "U9.7", "U9.6"), ("AMP_X", "U9.3", "U9.5")] {
+    // (U9.3 and U9.5 are on no net: KiCad names each the net of a pin alone, with the unit it is on, `unconnected-(U9A-IN1+-Pad3)`)
+    for (name, a, b) in [("AMP_FB1", "U9.1", "U9.2"), ("AMP_FB2", "U9.7", "U9.6")] {
         model.nets.push(eda_model::Net { name: name.into(), pins: vec![a.into(), b.into()] });
     }
     let intent = dir.join("intent.yaml");
@@ -445,7 +447,40 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
     assert_eq!(units.len(), 3, "each unit is placed once: {units:?}");
     assert_no_reference_findings(&dir, "reorganized with a multi-unit part");
     let kinds = erc_kinds(&dir);
-    assert!(kinds.is_empty(), "the reorganized board with its dual op-amp is clean: {kinds:?}");
+    assert!(kinds.keys().all(|k| k == "pin_not_connected"), "the reorganized board with its dual op-amp is clean but for its two pins left unwired: {kinds:?}");
+    // every pin's net under the name kicad-cli's netlist gives it: the labels' with their sheets' paths, a lone pin's with the unit it is drawn on
+    let (_, mut drawn, model) = load(&dir).unwrap();
+    let ours: std::collections::BTreeMap<String, String> = crate::board::trace_kicad_names(&mut drawn, &model).into_iter().flat_map(|n| n.pins.into_iter().map(move |p| (p, n.name.clone()))).collect();
+    let theirs = kicad_net_names(&dir);
+    assert_eq!(theirs.get("U9.3").map(String::as_str), Some("unconnected-(U9A-IN1+-Pad3)"));
+    assert_eq!(theirs.get("U9.5").map(String::as_str), Some("unconnected-(U9B-IN2+-Pad5)"));
+    // (a pin alone is on no traced net: the board writer names its pad's net, `unconnected_pin_nets`, the way it does here)
+    for (pin, name) in &theirs {
+        let ours = ours.get(pin).cloned().unwrap_or_else(|| {
+            let (reference, number) = pin.split_once('.').unwrap();
+            let shown = model.part(reference).and_then(|p| p.pins.iter().find(|p| p.number == number)).and_then(|p| p.name.clone());
+            let with_unit = model.symbol_links.get(reference).and_then(|l| l.units.get(number)).cloned();
+            eda_engine::nets::unconnected_net_name(pin, shown.as_deref(), with_unit.as_deref())
+        });
+        assert_eq!(&ours, name, "{pin}: kicad-cli names its net {name}");
+    }
+}
+
+/// kicad-cli's netlist of the board: the name of each pin's net, by `REF.PIN`, power symbols left out.
+fn kicad_net_names(dir: &Path) -> std::collections::BTreeMap<String, String> {
+    let done = crate::kicad_engine::export_sch(dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).expect("kicad-cli exports the netlist");
+    let text = std::fs::read_to_string(dir.join(done["files"][0].as_str().expect("one netlist file"))).unwrap();
+    let attr = |line: &str, name: &str| line.split(&format!("{name}=\"")).nth(1).and_then(|r| r.split('"').next()).unwrap_or("").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'");
+    let mut out = std::collections::BTreeMap::new();
+    let mut net = String::new();
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            net = attr(line, "name");
+        } else if line.starts_with("<node ") && !attr(line, "ref").starts_with('#') {
+            out.insert(format!("{}.{}", attr(line, "ref"), attr(line, "pin")), net.clone());
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------------------- a screen shown by two sheets
@@ -628,6 +663,7 @@ fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
         };
         let apart = vec![vec!["R1.1".to_string()], vec!["R2.1".into()], vec!["R3.1".into()], vec!["R4.1".into()]];
         assert_eq!(cut(kicad_net_groups(&dir)), apart, "{bus_label}: kicad-cli has the two sheets apart before the bus is drawn");
+        let ours_before = our_net_groups(&dir);
         let add = Cmd::AddLabel { net: "D[0..1]".into(), at: hl, kind: eda_model::ir::LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Bidirectional } };
         step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(add) }, false, "test").unwrap();
         let joined = vec![vec!["R1.1".to_string(), "R3.1".into()], vec!["R2.1".to_string(), "R4.1".into()]];
@@ -636,15 +672,14 @@ fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
         assert_eq!(cut(our_net_groups(&dir)), joined, "{bus_label}: and so does the studio's net list");
         let (_, design, _) = load(&dir).unwrap();
         let name_of = |pin: &str| design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone()).unwrap();
-        assert_eq!(name_of("R3.1"), if bus_label.starts_with('X') { "X0" } else { "D0" }, "the root's member names the net");
+        assert_eq!(name_of("R3.1"), if bus_label.starts_with('X') { "/X0" } else { "/D0" }, "the root's member names the net, with the root's path");
         let kinds = erc_kinds(&dir);
         // (a bus labelled X[0..1] on a sheet pin D[0..1] is ERC's `bus_to_bus_conflict`: no member in common by name, which the netlist does not mind)
         let allowed = |k: &str| bus_label.starts_with('X') && k == "bus_to_bus_conflict";
         assert!(!kinds.keys().any(|k| (k.starts_with("bus_") && !allowed(k)) || k == "net_not_bus_member" || k == "hier_label_mismatch"), "{bus_label}: {kinds:?}");
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         assert_eq!(cut(kicad_net_groups(&dir)), apart, "{bus_label}: one undo takes the bus and the joins back");
-        let ours = cut(our_net_groups(&dir));
-        assert!(ours.is_empty() || ours == apart, "{bus_label}: {ours:?}");
+        assert_eq!(our_net_groups(&dir), ours_before, "{bus_label}: and the studio's net list is the one it was");
     }
 }
 
@@ -667,10 +702,13 @@ fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
         return;
     }
     let dir = mcu30_board("slow_label_fields");
-    let (_, design, _) = load(&dir).unwrap();
+    let (_, design, model) = load(&dir).unwrap();
     let root = design.schematic.as_ref().unwrap();
     let label = root.labels.iter().find(|l| l.kind == eda_model::ir::LabelKind::Local && root.wires.iter().any(|w| w.pts.contains(&l.at))).expect("mcu30's flat sheet has a local label on a wire").clone();
-    let net = root.wires.iter().find(|w| w.pts.contains(&label.at)).unwrap().net.clone();
+    // the label's text: KiCad names its net `/LED1` (the root's path in front); the model has that name, or the intent's where this old drawing shows the
+    // net in pieces
+    let net = label.net.clone();
+    let _ = &model;
     let undefined = |dir: &Path| erc_kinds(dir).get("undefined_netclass").copied().unwrap_or(0);
     assert_eq!(undefined(&dir), 0);
 
@@ -688,7 +726,7 @@ fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
     assert_eq!(undefined(&dir), 0, "the class is defined");
     let (_, _, model) = load(&dir).unwrap();
     let class = model.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap();
-    assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{net} is in the class: {:?}", class.nets);
+    assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)) || class.nets.contains(&eda_kicad::exact_pattern(&format!("/{net}"))), "{net} is in the class: {:?}", class.nets);
     let done = crate::kicad_engine::export_sch(&dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).unwrap();
     let xml = std::fs::read_to_string(dir.join(done["files"][0].as_str().unwrap())).unwrap();
     let line = xml.lines().map(str::trim).find(|l| l.starts_with("<net ") && (l.contains(&format!("name=\"/{net}\"")) || l.contains(&format!("name=\"{net}\"")))).unwrap_or_else(|| panic!("{net} in the netlist"));
@@ -1100,12 +1138,7 @@ fn kicad_cli_net_groups(root: &Path) -> Vec<Vec<String>> {
 
 /// `design` traced as the studio traces a board (`board::trace_design`, with the design's bus aliases and the library's power inputs).
 fn traced_as_the_studio(design: &eda_model::ir::Design, model: &ConstraintModel) -> Vec<eda_engine::nets::TracedNet> {
-    let pin_names = std::collections::BTreeMap::new();
-    let aliases = design.bus_aliases.clone();
-    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
-    let global_power = |lib_id: &str| -> Option<bool> { model.symbol_of(lib_id).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), power_pins: None, power_value: None };
-    crate::board::trace_design(&mut design.clone(), model, &naming)
+    crate::board::trace_kicad_names(&mut design.clone(), model)
 }
 
 /// p12 S2: an invisible power input of a symbol that is not a power symbol is a global power pin named by its pin (`SCH_PIN::IsGlobalPower`'s legacy
@@ -1407,8 +1440,9 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
             *erc_w.entry(v["check"].as_str().or_else(|| v["type"].as_str()).unwrap_or("?").to_string()).or_insert(0) += 1;
         }
         let groups_w = std::panic::catch_unwind(|| kicad_net_groups(&dir)).unwrap_or_default();
-        // (`lib_symbol_issues` says the original's libraries are not in this machine's tables; ours are the project's own)
-        let erc_diff: Vec<String> = erc_o.keys().chain(erc_w.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "lib_symbol_issues" && erc_o.get(*k) != erc_w.get(*k)).map(|k| format!("{k} {}->{}", erc_o.get(k).unwrap_or(&0), erc_w.get(k).unwrap_or(&0))).collect();
+        // (`lib_symbol_issues` says the original's libraries are not in this machine's tables; ours are the project's own. `footprint_link_issues` says
+        // the same of the footprints' libraries, a check the studio's project leaves to its own library check, PARITY-pcb.md section 53)
+        let erc_diff: Vec<String> = erc_o.keys().chain(erc_w.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "lib_symbol_issues" && *k != "footprint_link_issues" && erc_o.get(*k) != erc_w.get(*k)).map(|k| format!("{k} {}->{}", erc_o.get(k).unwrap_or(&0), erc_w.get(k).unwrap_or(&0))).collect();
         let nets_only_o = groups_o.iter().filter(|g| !groups_w.contains(g)).count();
         let nets_only_w = groups_w.iter().filter(|g| !groups_o.contains(g)).count();
         if erc_diff.is_empty() && nets_only_o == 0 && nets_only_w == 0 {

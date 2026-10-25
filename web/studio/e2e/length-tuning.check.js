@@ -9,10 +9,10 @@
 //
 //   perl -pe 's/\bPA2\b/USB_DP/g; s/\bPA3\b/USB_DN/g' examples/mcu_board_30plus.yaml > tune_board.yaml
 //   eda board new tune_board.yaml -o board
-//   eda board track add --net PA0    --layer F.Cu --width 0.2 --pts "4,5 30,5"       -C board     # 26 mm, to tune alone
-//   eda board track add --net PA1    --layer F.Cu --width 0.2 --pts "4,8 30,8"       -C board     # a neighbour, 3 mm away
-//   eda board track add --net USB_DP --layer F.Cu --width 0.2 --pts "4,20 30,20"     -C board     # a pair, 0.5 mm pitch
-//   eda board track add --net USB_DN --layer F.Cu --width 0.2 --pts "4,20.5 30,20.5" -C board
+//   eda board track add --net "/LED channels (D1–D8)/PA0"    --layer F.Cu --width 0.2 --pts "4,5 30,5"       -C board     # 26 mm, to tune alone
+//   eda board track add --net "/LED channels (D1–D8)/PA1"    --layer F.Cu --width 0.2 --pts "4,8 30,8"       -C board     # a neighbour, 3 mm away
+//   eda board track add --net "/LED channels (D1–D8)/USB_DP" --layer F.Cu --width 0.2 --pts "4,20 30,20"     -C board     # a pair, 0.5 mm pitch
+//   eda board track add --net "/LED channels (D1–D8)/USB_DN" --layer F.Cu --width 0.2 --pts "4,20.5 30,20.5" -C board
 //   eda board serve -C board --port 8825 --ui web/studio/dist
 //
 // What it checks:
@@ -111,14 +111,14 @@
   const st0 = await state();
   const original = snapshot(st0);
   const byNet = (net) => tracksOf(st0).find((t) => t.net === net);
-  const have = ["PA0", "PA1", "USB_DP", "USB_DN"].every((n) => byNet(n) && byNet(n).pts.length === 2);
+  const have = ["/LED channels (D1–D8)/PA0", "/LED channels (D1–D8)/PA1", "/LED channels (D1–D8)/USB_DP", "/LED channels (D1–D8)/USB_DN"].every((n) => byNet(n) && byNet(n).pts.length === 2);
   if (!have || patternsOf(st0).length > 0) {
     results.push({ name: "the scratch board is as the header says", ok: false, notes: [`FAIL: tracks ${JSON.stringify(tracksOf(st0).map((t) => [t.net, t.pts.length]))}, patterns ${patternsOf(st0).length}`] });
     window.fetch = realFetch;
     check.done = true;
     return;
   }
-  const pa0 = byNet("PA0").pts, dp = byNet("USB_DP").pts;
+  const pa0 = byNet("/LED channels (D1–D8)/PA0").pts, dp = byNet("/LED channels (D1–D8)/USB_DP").pts;
   const mid = (p) => [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2];
   const startX = pa0[0][0] + 4_000_000, endX = pa0[1][0] - 6_000_000; // where a pattern starts and ends along the track
   const targetMm = 29;
@@ -129,7 +129,7 @@
     t(E.state().tool === "tune", `the tuner is armed: tool ${E.state().tool}`);
     const [mx, my] = mid(pa0);
     const h = await hover(mx, my + 40_000);
-    t(h && h.ok && h.hit === true && h.pick.net === "PA0", `the track under the cursor is picked: ${h && JSON.stringify(h.pick)}`);
+    t(h && h.ok && h.hit === true && h.pick.net === "/LED channels (D1–D8)/PA0", `the track under the cursor is picked: ${h && JSON.stringify(h.pick)}`);
     t(h && h.readout && h.readout.label === "current length" && near(h.readout.current, 26, 0.001), `it reads its length: ${h && JSON.stringify(h.readout)}`);
     t(h && h.readout && h.readout.min === null && h.readout.max === null && h.readout.constraint === null, "with no target (the box shows ---)");
     t(h && Array.isArray(h.path) && h.path.length === 2, "the line it is part of is highlighted");
@@ -177,7 +177,7 @@
     t(m && m.ok && m.moved === true, `moving the cursor fits the meander: ${m && JSON.stringify([m.ok, m.moved, m.message])}`);
     t(m && m.readout && m.readout.status === "tuned" && near(m.readout.current, targetMm, 0.1), `it reads ${targetMm} mm, tuned: ${m && JSON.stringify(m.readout)}`);
     t(m && m.readout && near(m.readout.min, 28.9, 0.001) && near(m.readout.max, 29.1, 0.001), "within the default tolerance either side");
-    t(m && m.preview && m.preview.pieces.length > 8 && m.preview.hide.length === 1 && m.preview.hide[0] === byNet("PA0").id, `the track it replaces is hidden: ${m && JSON.stringify(m.preview && [m.preview.pieces.length, m.preview.hide])}`);
+    t(m && m.preview && m.preview.pieces.length > 8 && m.preview.hide.length === 1 && m.preview.hide[0] === byNet("/LED channels (D1–D8)/PA0").id, `the track it replaces is hidden: ${m && JSON.stringify(m.preview && [m.preview.pieces.length, m.preview.hide])}`);
     t(m && m.pattern.initial_side === "left", "the cursor is on the left of the track, so the first meander is");
     n = replies.length;
     key("4"); // Decrease Amplitude
@@ -199,8 +199,8 @@
     t(!!pattern && pattern.mode === "single" && pattern.member_ids.length > 8, `a pattern with the tracks of the meander as members: ${pattern && JSON.stringify([pattern.mode, pattern.member_ids.length])}`);
     t(pattern && pattern.info === `${targetMm} mm (tuned)`, `it is ${pattern && pattern.info}`);
     t(pattern && pattern.max_amplitude === 950_000 && pattern.spacing === 650_000, "it keeps the amplitude and the spacing the keys left");
-    t(near(netMm(st, "PA0"), targetMm, 0.1), `PA0 is ${netMm(st, "PA0").toFixed(3)} mm long on the board`);
-    t(near(netMm(st, "PA1"), 26, 0.001), "the neighbour is untouched");
+    t(near(netMm(st, "/LED channels (D1–D8)/PA0"), targetMm, 0.1), `PA0 is ${netMm(st, "/LED channels (D1–D8)/PA0").toFixed(3)} mm long on the board`);
+    t(near(netMm(st, "/LED channels (D1–D8)/PA1"), 26, 0.001), "the neighbour is untouched");
     t(E.state().selection.length === 1 && E.state().selection[0].id === pattern.id && E.state().selection[0].kind === "group", `the pattern is selected: ${JSON.stringify(E.state().selection)}`);
     t(tracksOf(st).some((q) => q.arc_mid), "the rounded corners are arc tracks");
     await E.run("common.Interactive.undo");
@@ -210,7 +210,7 @@
     await E.run("common.Interactive.redo");
     await sleep(600);
     const again = await state();
-    t(patternsOf(again).length === 1 && near(netMm(again, "PA0"), targetMm, 0.1), "and one Redo brings it back");
+    t(patternsOf(again).length === 1 && near(netMm(again, "/LED channels (D1–D8)/PA0"), targetMm, 0.1), "and one Redo brings it back");
   });
 
   await scenario("a click on a track of the meander selects the whole pattern; its properties tune it again, in one undo step", async (t) => {
@@ -238,13 +238,13 @@
     st = await state();
     const now = patternsOf(st);
     t(now.length === 1 && now[0].id === pattern.id, "the same pattern: its id is kept");
-    t(near(netMm(st, "PA0"), 27.5, 0.1), `the net is ${netMm(st, "PA0").toFixed(3)} mm long`);
+    t(near(netMm(st, "/LED channels (D1–D8)/PA0"), 27.5, 0.1), `the net is ${netMm(st, "/LED channels (D1–D8)/PA0").toFixed(3)} mm long`);
     await E.run("common.Interactive.undo");
     await sleep(600);
     t(snapshot(await state()) === before, "one Undo puts the first tuning back");
     await E.run("common.Interactive.redo");
     await sleep(600);
-    t(near(netMm(await state(), "PA0"), 27.5, 0.1), "and Redo the second");
+    t(near(netMm(await state(), "/LED channels (D1–D8)/PA0"), 27.5, 0.1), "and Redo the second");
   });
 
   await scenario("an edit point is dragged: the pattern's end moves, it is fitted again and the edit is one undo step", async (t) => {
@@ -261,7 +261,7 @@
     st = await state();
     const p = patternsOf(st)[0];
     t(p && p.id === pattern.id && p.end.x < pattern.end.x - 3_000_000 && p.end.y === pattern.end.y, `the end moved back: ${p && JSON.stringify(p.end)} (was ${JSON.stringify(pattern.end)})`);
-    t(p && p.info.endsWith("(tuned)") && near(netMm(st, "PA0"), 27.5, 0.1), `still ${p && p.info}, ${netMm(st, "PA0").toFixed(3)} mm`);
+    t(p && p.info.endsWith("(tuned)") && near(netMm(st, "/LED channels (D1–D8)/PA0"), 27.5, 0.1), `still ${p && p.info}, ${netMm(st, "/LED channels (D1–D8)/PA0").toFixed(3)} mm`);
     await E.run("common.Interactive.undo");
     await sleep(600);
     t(snapshot(await state()) === before, "one Undo puts the pattern back where it was");
@@ -287,7 +287,7 @@
     const tab = dialog()?.querySelector('[role="tab"]')?.textContent;
     const rows = [...(dialog()?.querySelectorAll("tbody tr") ?? [])].map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent));
     t(tab === "Tuning Pattern (1)", `a page for the type: ${tab}`);
-    t(rows.length === 1 && rows[0][0] === "PA0" && /^27\.5.* \(tuned\)$/.test(rows[0][1]) && rows[0][2] === "F.Cu", `its row: Net, Tuning, Layer: ${JSON.stringify(rows)}`);
+    t(rows.length === 1 && rows[0][0] === "/LED channels (D1–D8)/PA0" && /^27\.5.* \(tuned\)$/.test(rows[0][1]) && rows[0][2] === "F.Cu", `its row: Net, Tuning, Layer: ${JSON.stringify(rows)}`);
     dialog().querySelector("tbody tr").click();
     await sleep(300);
     t(E.state().selection.length === 1 && E.state().selection[0].kind === "group", "a row selects the pattern on the board");
@@ -298,7 +298,7 @@
     await quiet();
     t(g && g.body.ok === true && g.body.regenerated === 1, `Rebuild All: ${g && JSON.stringify(g.body)}`);
     const st = await state();
-    t(near(netMm(st, "PA0"), 27.5, 0.1) && patternsOf(st).length === 1, "the pattern is tuned again, as it was");
+    t(near(netMm(st, "/LED channels (D1–D8)/PA0"), 27.5, 0.1) && patternsOf(st).length === 1, "the pattern is tuned again, as it was");
     await press("Close");
     await E.run("common.Interactive.undo");
     await sleep(600);
@@ -319,8 +319,8 @@
     await sleep(500);
     st = await state();
     t(r && r.body.ok === true && patternsOf(st).length === 0, `the pattern is gone: ${r && JSON.stringify(r.body)}`);
-    const pa0Tracks = tracksOf(st).filter((q) => q.net === "PA0");
-    t(near(netMm(st, "PA0"), 26, 0.001) && pa0Tracks.every((q) => q.pts.every((p) => p[1] === pa0[0][1])), `PA0 is a straight 26 mm again: ${pa0Tracks.length} tracks, ${netMm(st, "PA0").toFixed(3)} mm`);
+    const pa0Tracks = tracksOf(st).filter((q) => q.net === "/LED channels (D1–D8)/PA0");
+    t(near(netMm(st, "/LED channels (D1–D8)/PA0"), 26, 0.001) && pa0Tracks.every((q) => q.pts.every((p) => p[1] === pa0[0][1])), `PA0 is a straight 26 mm again: ${pa0Tracks.length} tracks, ${netMm(st, "/LED channels (D1–D8)/PA0").toFixed(3)} mm`);
     await E.run("common.Interactive.undo");
     await sleep(600);
     t(snapshot(await state()) === before && patternsOf(await state()).length === 1, "one Undo brings the pattern back");
@@ -344,7 +344,7 @@
     await press("OK");
     const [mx, my] = mid(dp);
     const h = await hover(mx, my + 20_000);
-    t(h && h.hit && h.readout.partner === "USB_DN" && h.readout.nets && near(h.readout.nets[0], 26, 0.001) && near(h.readout.nets[1], 26, 0.001), `the hover reads the pair, the partner and both lengths: ${h && JSON.stringify(h.readout)}`);
+    t(h && h.hit && h.readout.partner === "/LED channels (D1–D8)/USB_DN" && h.readout.nets && near(h.readout.nets[0], 26, 0.001) && near(h.readout.nets[1], 26, 0.001), `the hover reads the pair, the partner and both lengths: ${h && JSON.stringify(h.readout)}`);
     t(h && h.readout.status === "too_short" && near(h.readout.opt, 30, 0.001), "26 mm against 30 mm is too short");
     let n = replies.length;
     await clickAt(startX, dp[0][1]);
@@ -361,8 +361,8 @@
     const pat = patternsOf(st).find((p) => p.mode === "diff_pair");
     t(fx && fx.body.ok === true && !!pat, `it is on the board: ${fx && JSON.stringify(fx.body.message)}`);
     const nets = pat ? [...new Set(pat.member_ids.map((id) => tracksOf(st).find((q) => q.id === id).net))].sort() : [];
-    t(nets.join(",") === "USB_DN,USB_DP", `its members are tracks of both nets: ${nets.join(",")}`);
-    t(near(netMm(st, "USB_DP"), 30, 0.15) && near(netMm(st, "USB_DN"), 30, 0.15), `both nets are ${netMm(st, "USB_DP").toFixed(3)} and ${netMm(st, "USB_DN").toFixed(3)} mm`);
+    t(nets.join(",") === "/LED channels (D1–D8)/USB_DN,/LED channels (D1–D8)/USB_DP", `its members are tracks of both nets: ${nets.join(",")}`);
+    t(near(netMm(st, "/LED channels (D1–D8)/USB_DP"), 30, 0.15) && near(netMm(st, "/LED channels (D1–D8)/USB_DN"), 30, 0.15), `both nets are ${netMm(st, "/LED channels (D1–D8)/USB_DP").toFixed(3)} and ${netMm(st, "/LED channels (D1–D8)/USB_DN").toFixed(3)} mm`);
     t(pat && pat.base_line.length >= 2 && pat.base_line_coupled.length >= 2, "it keeps both baselines");
     await leaveTool();
     await selectPattern(pat);
@@ -372,7 +372,7 @@
     await quiet();
     await sleep(500);
     const after = await state();
-    t(rm && rm.body.ok === true && patternsOf(after).length === 0 && near(netMm(after, "USB_DP"), 26, 0.001) && near(netMm(after, "USB_DN"), 26, 0.001), `Delete puts both lines back: ${netMm(after, "USB_DP").toFixed(3)} and ${netMm(after, "USB_DN").toFixed(3)} mm`);
+    t(rm && rm.body.ok === true && patternsOf(after).length === 0 && near(netMm(after, "/LED channels (D1–D8)/USB_DP"), 26, 0.001) && near(netMm(after, "/LED channels (D1–D8)/USB_DN"), 26, 0.001), `Delete puts both lines back: ${netMm(after, "/LED channels (D1–D8)/USB_DP").toFixed(3)} and ${netMm(after, "/LED channels (D1–D8)/USB_DN").toFixed(3)} mm`);
     await undoTo(pairBefore);
     t(snapshot(await state()) === pairBefore, "and everything undone, the board is as it was");
   });
@@ -397,13 +397,13 @@
     await quiet();
     await leaveTool();
     let st = await state();
-    t(near(netMm(st, "USB_DP"), 28, 0.1) && near(netMm(st, "USB_DN"), 26, 0.001), `USB_DP is ${netMm(st, "USB_DP").toFixed(3)} mm, USB_DN ${netMm(st, "USB_DN").toFixed(3)}`);
+    t(near(netMm(st, "/LED channels (D1–D8)/USB_DP"), 28, 0.1) && near(netMm(st, "/LED channels (D1–D8)/USB_DN"), 26, 0.001), `USB_DP is ${netMm(st, "/LED channels (D1–D8)/USB_DP").toFixed(3)} mm, USB_DN ${netMm(st, "/LED channels (D1–D8)/USB_DN").toFixed(3)}`);
     key("9");
     await sleep(300);
     t(E.state().tool === "tune", "9 arms the tuner for a skew");
-    const dn = byNet("USB_DN").pts;
+    const dn = byNet("/LED channels (D1–D8)/USB_DN").pts;
     const h = await hover(endX + 3_000_000, dn[0][1] + 20_000);
-    t(h && h.hit && h.pick.net === "USB_DN" && h.readout.label === "current skew", `the hover reads the skew: ${h && JSON.stringify(h.readout)}`);
+    t(h && h.hit && h.pick.net === "/LED channels (D1–D8)/USB_DN" && h.readout.label === "current skew", `the hover reads the skew: ${h && JSON.stringify(h.readout)}`);
     t(h && near(h.readout.current, -2, 0.05) && h.readout.status === "too_short", `USB_DN is 2 mm short of its partner: ${h && h.readout.current}`);
     t(h && near(h.readout.min, -0.1, 0.001) && near(h.readout.opt, 0, 0.001) && near(h.readout.max, 0.1, 0.001), "the skew target is zero, 0.1 mm either side");
     n = replies.length;
@@ -417,9 +417,9 @@
     await waitReply("fix", n, 20000);
     await quiet();
     st = await state();
-    t(near(netMm(st, "USB_DN"), netMm(st, "USB_DP"), 0.1), `the nets are ${netMm(st, "USB_DP").toFixed(3)} and ${netMm(st, "USB_DN").toFixed(3)} mm`);
+    t(near(netMm(st, "/LED channels (D1–D8)/USB_DN"), netMm(st, "/LED channels (D1–D8)/USB_DP"), 0.1), `the nets are ${netMm(st, "/LED channels (D1–D8)/USB_DP").toFixed(3)} and ${netMm(st, "/LED channels (D1–D8)/USB_DN").toFixed(3)} mm`);
     const skewPattern = patternsOf(st).find((p) => p.mode === "diff_pair_skew");
-    t(skewPattern && skewPattern.member_ids.every((id) => tracksOf(st).find((q) => q.id === id).net === "USB_DN"), "its members are USB_DN's tracks: only the clicked line was lengthened");
+    t(skewPattern && skewPattern.member_ids.every((id) => tracksOf(st).find((q) => q.id === id).net === "/LED channels (D1–D8)/USB_DN"), "its members are USB_DN's tracks: only the clicked line was lengthened");
     await leaveTool();
     await undoTo(pairBefore);
     t(snapshot(await state()) === pairBefore, "undone, the board is as it was");

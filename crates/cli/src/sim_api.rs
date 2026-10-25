@@ -468,8 +468,8 @@ mod tests {
 
         // The RC beside it charging from 12 V (".tran 10u 5m 0 10u uic", what the Transient page writes for "use initial conditions"):
         // 12 (1 - e^-1) at t = RC = 1 ms. A tuned R5 of 2k halves the rate: 12 (1 - e^-0.5).
-        let tran = run(&b, json!({ "command": ".tran 10u 5m 0 10u uic", "options": opts, "measurements": [{ "row": 0, "text": "MAX V(Net-_C1-Pad1_)" }], "user_signals": [{ "id": 0, "expr": "V(Net-_C1-Pad1_)*2" }] }));
-        let (t, rc) = (vector(&tran, "time"), vector(&tran, "v(net-_c1-pad1_)"));
+        let tran = run(&b, json!({ "command": ".tran 10u 5m 0 10u uic", "options": opts, "measurements": [{ "row": 0, "text": "MAX V(/RC)" }], "user_signals": [{ "id": 0, "expr": "V(/RC)*2" }] }));
+        let (t, rc) = (vector(&tran, "time"), vector(&tran, "v(/rc)"));
         let want = 12.0 * (1.0 - (-1.0f64).exp());
         let got = at(&t, &rc, 1e-3);
         assert!((got - want).abs() < 0.005 * want, "V(RC) at 1 ms = {got}, by hand {want}");
@@ -479,7 +479,7 @@ mod tests {
         let user = vector(&tran, "user0");
         assert!((at(&t, &user, 1e-3) - 2.0 * got).abs() < 1e-9, "user0 is twice the signal");
         let tuned = run(&b, json!({ "command": ".tran 10u 5m 0 10u uic", "options": opts, "tuners": [{ "ref": "R5", "value": 2000.0 }] }));
-        let got2 = at(&vector(&tuned, "time"), &vector(&tuned, "v(net-_c1-pad1_)"), 1e-3);
+        let got2 = at(&vector(&tuned, "time"), &vector(&tuned, "v(/rc)"), 1e-3);
         let want2 = 12.0 * (1.0 - (-0.5f64).exp());
         assert!((got2 - want2).abs() < 0.005 * want2, "tuned V(RC) at 1 ms = {got2}, by hand {want2}");
 
@@ -487,7 +487,7 @@ mod tests {
         let a_board = board("rc", RC);
         let ac = run(&a_board, json!({ "command": ".ac dec 10 1 100k", "options": opts }));
         let f = vector(&ac, "frequency");
-        let (re, im) = (vector(&ac, "v(net-_c1-pad1_)"), imag(&ac, "v(net-_c1-pad1_)"));
+        let (re, im) = (vector(&ac, "v(/out)"), imag(&ac, "v(/out)"));
         let i = f.iter().position(|x| (x - 1000.0).abs() < 1.0).expect("1 kHz is a point of the sweep");
         let w = 2.0 * std::f64::consts::PI * f[i] * 1e-3;
         let gain = re[i].hypot(im[i]);
@@ -499,7 +499,7 @@ mod tests {
         assert!((at(&f, &gains, fc) + 3.0103).abs() < 0.05, "{} dB at fc", at(&f, &gains, fc));
 
         // A noise analysis writes both of its plots.
-        let noise = run(&a_board, json!({ "command": ".noise v(Net-_C1-Pad1_) V1 dec 10 1 10k", "options": opts }));
+        let noise = run(&a_board, json!({ "command": ".noise v(/OUT) V1 dec 10 1 10k", "options": opts }));
         assert!(noise["plots"][0]["vectors"].as_array().unwrap().iter().any(|v| v["name"] == "onoise_spectrum"), "{}", noise["plots"][0]["plot_name"]);
         assert!(noise["second_plots"][0]["vectors"].as_array().unwrap().iter().any(|v| v["name"].as_str().is_some_and(|n| n.contains("onoise_total"))));
 

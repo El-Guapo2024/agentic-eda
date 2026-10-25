@@ -583,8 +583,11 @@ mod tests {
         board::save(dir, &design).unwrap();
         let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+        // (the derived schematic labels every net the intent names, so KiCad names them `/SIG`, `/OTHER`, `/USB_P` ...: the root's path and the intent's
+        // name, a pair still a pair)
         for (net, pts) in tracks {
-            let cmd = Cmd::AddTrack { net: net.into(), layer: "F.Cu".into(), width: 250_000, pts };
+            let net = if net.starts_with('/') { net.to_string() } else { format!("/{net}") };
+            let cmd = Cmd::AddTrack { net, layer: "F.Cu".into(), width: 250_000, pts };
             board::step(dir, cmd, false, "test").unwrap();
         }
     }
@@ -625,7 +628,7 @@ mod tests {
         let r = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
         assert_eq!(r["ok"], json!(true), "{r}");
         assert_eq!(r["hit"], json!(true), "{r}");
-        assert_eq!(r["pick"]["net"], "SIG");
+        assert_eq!(r["pick"]["net"], "/SIG");
         assert_eq!(r["readout"]["label"], "current length");
         assert!((r["readout"]["current"].as_f64().unwrap() - 20.0).abs() < 0.01, "{r}");
         // the rule's range, `Opt()` being its minimum
@@ -684,10 +687,10 @@ mod tests {
         let rt = after.routing.as_ref().unwrap();
         assert!(pat.member_ids.iter().all(|m| rt.tracks.iter().any(|t| &t.id == m)));
         assert!(rt.tracks.iter().any(|t| t.arc().is_some()), "rounded corners are arc tracks");
-        assert!((net_mm(&dir, "SIG") - 22.0).abs() < 0.1, "{}", net_mm(&dir, "SIG"));
+        assert!((net_mm(&dir, "/SIG") - 22.0).abs() < 0.1, "{}", net_mm(&dir, "/SIG"));
         assert_eq!(pat.tuning_info().split(' ').last(), Some("(tuned)"));
         // the other net is untouched
-        assert!((net_mm(&dir, "OTHER") - 20.0).abs() < 0.001);
+        assert!((net_mm(&dir, "/OTHER") - 20.0).abs() < 0.001);
 
         // findings p5 F4-4: a track of the pattern does not start another pattern (`PlaceTuningPattern`'s warning)
         let member = rt.tracks.iter().find(|t| &t.id == pat.member_ids.last().unwrap() && t.arc().is_none() && t.pts.len() >= 2).expect("a straight member");
@@ -731,7 +734,7 @@ mod tests {
         setup(&dir, ["SIG", "OTHER"], vec![]);
         with_profile(&dir, true);
         // 20 mm at 6.1 ps/mm is 122 ps
-        assert!((net_ps(&dir, "SIG") - 122.0).abs() < 0.01);
+        assert!((net_ps(&dir, "/SIG") - 122.0).abs() < 0.01);
         let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
         assert_eq!(h["ok"], json!(true), "{h}");
         assert_eq!(h["readout"]["time_domain"], json!(true), "the class names a profile with the time domain on: {h}");
@@ -758,12 +761,12 @@ mod tests {
         assert!((pat.last_tuning_delay as f64 / 1e6 - 150.0).abs() < 0.2, "{}", pat.last_tuning_delay);
         assert_eq!(pat.tuning_info().split(' ').next_back(), Some("(tuned)"));
         assert!(pat.tuning_info().contains(" ps "), "{}", pat.tuning_info());
-        assert!((net_ps(&dir, "SIG") - 150.0).abs() < 0.2, "{}", net_ps(&dir, "SIG"));
+        assert!((net_ps(&dir, "/SIG") - 150.0).abs() < 0.2, "{}", net_ps(&dir, "/SIG"));
         // the other net has the same profile, and is untouched
-        assert!((net_ps(&dir, "OTHER") - 122.0).abs() < 0.01);
+        assert!((net_ps(&dir, "/OTHER") - 122.0).abs() < 0.01);
 
         board::undo(&dir, "test", None).expect("one undo takes the whole pattern back");
-        assert!((net_ps(&dir, "SIG") - 122.0).abs() < 0.01);
+        assert!((net_ps(&dir, "/SIG") - 122.0).abs() < 0.01);
     }
 
     #[test]
@@ -795,7 +798,7 @@ mod tests {
         // the pattern is listed with its tuning info, and its properties carry the target a rule would give
         let list = patterns(&dir);
         assert_eq!(list["patterns"].as_array().unwrap().len(), 1);
-        assert_eq!(list["patterns"][0]["nets"], json!(["SIG"]));
+        assert_eq!(list["patterns"][0]["nets"], json!(["/SIG"]));
         assert!(list["patterns"][0]["info"].as_str().unwrap().ends_with("(tuned)"), "{list}");
         let props = pattern(&dir, &body(json!({ "id": id })));
         assert_eq!(props["ok"], json!(true), "{props}");
@@ -809,7 +812,7 @@ mod tests {
         assert_eq!(patterns_after.len(), 1);
         assert_eq!(patterns_after[0].id, id, "a pattern tuned again keeps its id");
         assert_eq!(patterns_after[0].target_length.opt, 24_000_000);
-        assert!((net_mm(&dir, "SIG") - 24.0).abs() < 0.1, "{}", net_mm(&dir, "SIG"));
+        assert!((net_mm(&dir, "/SIG") - 24.0).abs() < 0.1, "{}", net_mm(&dir, "/SIG"));
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned_once), "one undo puts the first tuning back");
         assert_eq!(tune_edit::patterns_of(&design_of(&dir)), tune_edit::patterns_of(&tuned_once));
@@ -818,7 +821,7 @@ mod tests {
         let g = regenerate(&dir, &body(json!({})));
         assert_eq!(g["ok"], json!(true), "{g}");
         assert_eq!(g["regenerated"], json!(1));
-        assert!((net_mm(&dir, "SIG") - 22.0).abs() < 0.1);
+        assert!((net_mm(&dir, "/SIG") - 22.0).abs() < 0.1);
         board::undo(&dir, "test", None).unwrap();
 
         // removed: the track is straight again and the pattern is gone
@@ -826,8 +829,8 @@ mod tests {
         assert_eq!(r["ok"], json!(true), "{r}");
         let gone = design_of(&dir);
         assert!(tune_edit::patterns_of(&gone).is_empty());
-        assert!((net_mm(&dir, "SIG") - 20.0).abs() < 0.001, "{}", net_mm(&dir, "SIG"));
-        let tracks: Vec<&eda_model::ir::Track> = gone.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "SIG").collect();
+        assert!((net_mm(&dir, "/SIG") - 20.0).abs() < 0.001, "{}", net_mm(&dir, "/SIG"));
+        let tracks: Vec<&eda_model::ir::Track> = gone.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "/SIG").collect();
         assert!(tracks.iter().all(|t| t.pts.iter().all(|q| q.y == 9_500_000)), "all straight again: {tracks:?}");
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tune_edit::patterns_of(&design_of(&dir)).len(), 1, "one undo brings the pattern back");
@@ -872,7 +875,7 @@ mod tests {
         let after = tune_edit::patterns_of(&design_of(&dir));
         assert_eq!(after.len(), 1);
         assert_eq!((after[0].id.as_str(), after[0].end, after[0].max_amplitude, after[0].target_length.opt), (id.as_str(), p(18_000_000, 9_500_000), 800_000, 21_000_000));
-        assert!((net_mm(&dir, "SIG") - 21.0).abs() < 0.1);
+        assert!((net_mm(&dir, "/SIG") - 21.0).abs() < 0.1);
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned), "the whole edit is one undo step");
 
@@ -892,11 +895,11 @@ mod tests {
         assert_eq!(s["ok"], json!(true), "{s}");
         let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(m["moved"], json!(true), "{m}");
-        assert_eq!(m["readout"]["partner"], "USB_N");
+        assert_eq!(m["readout"]["partner"], "/USB_N");
         assert_eq!(m["preview"]["hide"].as_array().unwrap().len(), 2, "both lines are replaced");
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(true), "{f}");
-        let (p_len, n_len) = (net_mm(&dir, "USB_P"), net_mm(&dir, "USB_N"));
+        let (p_len, n_len) = (net_mm(&dir, "/USB_P"), net_mm(&dir, "/USB_N"));
         assert_eq!(m["readout"]["status"], "tuned", "{m}");
         assert!((p_len.max(n_len) - 26.0).abs() < 0.05, "P {p_len} N {n_len}");
         assert!((p_len - n_len).abs() < 0.7, "tuned together: P {p_len} N {n_len}");
@@ -908,7 +911,7 @@ mod tests {
 
         let r = remove(&dir, &body(json!({ "id": pat.id })));
         assert_eq!(r["ok"], json!(true), "{r}");
-        assert!((net_mm(&dir, "USB_P") - 20.0).abs() < 0.001 && (net_mm(&dir, "USB_N") - 20.0).abs() < 0.001);
+        assert!((net_mm(&dir, "/USB_P") - 20.0).abs() < 0.001 && (net_mm(&dir, "/USB_N") - 20.0).abs() < 0.001);
     }
 
     #[test]
@@ -916,8 +919,8 @@ mod tests {
         let dir = scratch("skew");
         // USB_N takes a 0.7 mm detour on the way: 1.4 mm longer than USB_P, which runs straight
         let n_path = vec![p(5_000_000, 10_500_000), p(10_000_000, 10_500_000), p(10_000_000, 11_200_000), p(12_000_000, 11_200_000), p(12_000_000, 10_500_000), p(25_000_000, 10_500_000)];
-        setup_with(&dir, ["USB_P", "USB_N"], vec![], vec![("USB_P", vec![p(5_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("USB_N", n_path)]);
-        let (p_before, n_before) = (net_mm(&dir, "USB_P"), net_mm(&dir, "USB_N"));
+        setup_with(&dir, ["USB_P", "USB_N"], vec![], vec![("/USB_P", vec![p(5_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("/USB_N", n_path)]);
+        let (p_before, n_before) = (net_mm(&dir, "/USB_P"), net_mm(&dir, "/USB_N"));
         assert!((n_before - p_before - 1.4).abs() < 0.01, "P {p_before} N {n_before}");
         let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "skew" })));
         assert_eq!(h["readout"]["label"], "current skew", "{h}");
@@ -934,16 +937,16 @@ mod tests {
         assert_eq!((m["readout"]["min"].as_f64(), m["readout"]["max"].as_f64()), (Some(-0.1), Some(0.1)), "{m}");
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(true), "{f}");
-        let (p_after, n_after) = (net_mm(&dir, "USB_P"), net_mm(&dir, "USB_N"));
+        let (p_after, n_after) = (net_mm(&dir, "/USB_P"), net_mm(&dir, "/USB_N"));
         assert!((p_after - n_after).abs() < 0.1, "P {p_after} N {n_after}");
         assert!((n_after - n_before).abs() < 0.001, "only the clicked line is lengthened");
         let pat = tune_edit::patterns_of(&design_of(&dir)).remove(0);
         assert_eq!(pat.mode, TuningMode::DiffPairSkew);
-        assert!(pat.member_ids.iter().all(|m| design_of(&dir).routing.unwrap().tracks.iter().any(|t| &t.id == m && t.net == "USB_P")), "the members are USB_P's");
+        assert!(pat.member_ids.iter().all(|m| design_of(&dir).routing.unwrap().tracks.iter().any(|t| &t.id == m && t.net == "/USB_P")), "the members are USB_P's");
         // a skew pattern puts back only its own line
         let r = remove(&dir, &body(json!({ "id": pat.id })));
         assert_eq!(r["ok"], json!(true), "{r}");
-        assert!((net_mm(&dir, "USB_P") - p_before).abs() < 0.001);
+        assert!((net_mm(&dir, "/USB_P") - p_before).abs() < 0.001);
     }
 
     #[test]
@@ -954,10 +957,10 @@ mod tests {
             &dir,
             ["SIG", "OTHER"],
             vec![],
-            vec![("SIG", vec![p(5_000_000, 9_500_000), p(10_000_000, 9_500_000)]), ("SIG", vec![p(10_000_000, 9_500_000), p(15_000_000, 9_500_000), p(20_000_000, 9_500_000)]), ("SIG", vec![p(20_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("OTHER", vec![p(5_000_000, 10_500_000), p(25_000_000, 10_500_000)])],
+            vec![("/SIG", vec![p(5_000_000, 9_500_000), p(10_000_000, 9_500_000)]), ("/SIG", vec![p(10_000_000, 9_500_000), p(15_000_000, 9_500_000), p(20_000_000, 9_500_000)]), ("/SIG", vec![p(20_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("/OTHER", vec![p(5_000_000, 10_500_000), p(25_000_000, 10_500_000)])],
         );
         let before = design_of(&dir);
-        let ids_before: Vec<String> = tracks_of(&before).iter().filter(|t| t.net == "SIG").map(|t| t.id.clone()).collect();
+        let ids_before: Vec<String> = tracks_of(&before).iter().filter(|t| t.net == "/SIG").map(|t| t.id.clone()).collect();
         assert_eq!(ids_before.len(), 3);
         start(&dir, &body(json!({ "x": 12_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
         let m = mv(&dir, &body(json!({ "x": 18_000_000, "y": 9_000_000 })));
@@ -965,11 +968,11 @@ mod tests {
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(true), "{f}");
         let after = design_of(&dir);
-        let sig_ids: Vec<String> = tracks_of(&after).iter().filter(|t| t.net == "SIG").map(|t| t.id.clone()).collect();
+        let sig_ids: Vec<String> = tracks_of(&after).iter().filter(|t| t.net == "/SIG").map(|t| t.id.clone()).collect();
         // the first and the last track were not touched: they are the very same tracks
         assert!(sig_ids.contains(&ids_before[0]) && sig_ids.contains(&ids_before[2]), "{sig_ids:?} {ids_before:?}");
         assert!(!sig_ids.contains(&ids_before[1]), "the middle track is replaced");
-        assert!((net_mm(&dir, "SIG") - 22.0).abs() < 0.1);
+        assert!((net_mm(&dir, "/SIG") - 22.0).abs() < 0.1);
         let pat = tune_edit::patterns_of(&after).remove(0);
         assert!(pat.member_ids.iter().all(|m| !ids_before.contains(m)));
         board::undo(&dir, "test", None).unwrap();
@@ -991,17 +994,17 @@ mod tests {
         // SIG: 7 mm straight, a quarter arc of radius 3 mm turning up, 5 mm straight on; the arc is a track of its own
         let h = (3_000_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as i64;
         let (arc_start, arc_mid, arc_end) = (p(12_000_000, 9_500_000), p(12_000_000 + h, 6_500_000 + h), p(15_000_000, 6_500_000));
-        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("SIG", vec![p(5_000_000, 9_500_000), p(12_000_000, 9_500_000)]), ("SIG", vec![p(15_000_000, 6_500_000), p(15_000_000, 1_500_000)]), ("OTHER", vec![p(5_000_000, 10_500_000), p(25_000_000, 10_500_000)])]);
-        add_arc_track(&dir, "SIG", arc_start, arc_mid, arc_end);
+        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("/SIG", vec![p(5_000_000, 9_500_000), p(12_000_000, 9_500_000)]), ("/SIG", vec![p(15_000_000, 6_500_000), p(15_000_000, 1_500_000)]), ("/OTHER", vec![p(5_000_000, 10_500_000), p(25_000_000, 10_500_000)])]);
+        add_arc_track(&dir, "/SIG", arc_start, arc_mid, arc_end);
         let before = design_of(&dir);
-        let original = net_mm(&dir, "SIG");
+        let original = net_mm(&dir, "/SIG");
         let arc_len = 3.0 * std::f64::consts::FRAC_PI_2;
         assert!((original - (7.0 + arc_len + 5.0)).abs() < 0.01, "the arc is measured as an arc: {original}");
 
         // hovering the arc picks it (its track), the pattern would start at the end of it the cursor is nearer to
         let hov = hover(&dir, &body(json!({ "x": arc_mid.x, "y": arc_mid.y, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
         assert_eq!(hov["hit"], json!(true), "{hov}");
-        assert_eq!(hov["pick"]["net"], "SIG");
+        assert_eq!(hov["pick"]["net"], "/SIG");
         assert!((hov["readout"]["current"].as_f64().unwrap() - original).abs() < 0.01, "{hov}");
 
         // a pattern from the first straight, through the arc, along the second straight
@@ -1015,9 +1018,9 @@ mod tests {
         let after = design_of(&dir);
         let rt = after.routing.as_ref().unwrap();
         // the arc track is replaced by the very same arc: the pattern passes through it as it is
-        let arcs: Vec<_> = rt.tracks.iter().filter(|t| t.net == "SIG").filter_map(|t| t.arc()).collect();
+        let arcs: Vec<_> = rt.tracks.iter().filter(|t| t.net == "/SIG").filter_map(|t| t.arc()).collect();
         assert!(arcs.contains(&(arc_start, arc_mid, arc_end)), "the arc is written back as the arc it was: {arcs:?}");
-        assert!((net_mm(&dir, "SIG") - (original + 3.0)).abs() < 0.1, "{} vs {}", net_mm(&dir, "SIG"), original + 3.0);
+        assert!((net_mm(&dir, "/SIG") - (original + 3.0)).abs() < 0.1, "{} vs {}", net_mm(&dir, "/SIG"), original + 3.0);
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&before));
     }
@@ -1042,7 +1045,7 @@ mod tests {
         setup(&dir, ["SIG", "OTHER"], vec![]);
         start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
         mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
-        board::step(&dir, Cmd::AddTrack { net: "OTHER".into(), layer: "F.Cu".into(), width: 250_000, pts: vec![p(2_000_000, 3_000_000), p(4_000_000, 3_000_000)] }, false, "test").unwrap();
+        board::step(&dir, Cmd::AddTrack { net: "/OTHER".into(), layer: "F.Cu".into(), width: 250_000, pts: vec![p(2_000_000, 3_000_000), p(4_000_000, 3_000_000)] }, false, "test").unwrap();
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(false));
         assert!(f["message"].as_str().unwrap().contains("changed"), "{f}");
@@ -1072,7 +1075,7 @@ mod tests {
         let one = scratch("kicad_single");
         setup(&one, ["SIG", "OTHER"], vec![]);
         let rule = |name: &str, nets: &str, constraint: &str| format!("(rule \"{name}\" (condition \"{nets}\") (constraint {constraint}))");
-        let sig = |c: &str| rule("sig", "A.NetName == 'SIG'", c);
+        let sig = |c: &str| rule("sig", "A.NetName == '/SIG'", c);
         let untuned = judge(&one, &sig("length (min 21.9mm) (max 22.1mm)"), "length_out_of_range");
         assert_eq!(untuned.len(), 1, "the control: the straight 20 mm track is out of the range: {untuned:?}");
         start(&one, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
@@ -1098,7 +1101,7 @@ mod tests {
         // a pair tuned to 26 mm: both nets, and the skew between them
         let pair = scratch("kicad_pair");
         setup(&pair, ["USB_P", "USB_N"], vec![]);
-        let usb = |c: &str| rule("usb", "A.NetName == 'USB_P' || A.NetName == 'USB_N'", c);
+        let usb = |c: &str| rule("usb", "A.NetName == '/USB_P' || A.NetName == '/USB_N'", c);
         start(&pair, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "diffpair", "settings": { "target_length": 26_000_000 } })));
         mv(&pair, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
         assert_eq!(fix(&pair, &body(json!({})))["ok"], json!(true));
@@ -1110,7 +1113,7 @@ mod tests {
         // the skew tuner: USB_N takes a 0.7 mm detour (1.4 mm longer than USB_P), the skew is tuned away
         let sk = scratch("kicad_skew");
         let n_path = vec![p(5_000_000, 10_500_000), p(10_000_000, 10_500_000), p(10_000_000, 11_200_000), p(12_000_000, 11_200_000), p(12_000_000, 10_500_000), p(25_000_000, 10_500_000)];
-        setup_with(&sk, ["USB_P", "USB_N"], vec![], vec![("USB_P", vec![p(5_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("USB_N", n_path)]);
+        setup_with(&sk, ["USB_P", "USB_N"], vec![], vec![("/USB_P", vec![p(5_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("/USB_N", n_path)]);
         let rule_skew = usb("skew (max 0.15mm) (within_diff_pairs)");
         assert_eq!(judge(&sk, &rule_skew, "skew_out_of_range").len(), 1, "the control: 1.4 mm of skew is flagged, on the shorter net (the longest has none against itself)");
         start(&sk, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "skew" })));
@@ -1141,7 +1144,7 @@ mod tests {
         let dir = scratch("kicad_delay");
         setup(&dir, ["SIG", "OTHER"], vec![]);
         with_profile(&dir, true);
-        let rule = |range: &str| format!("(rule \"sig\" (condition \"A.NetName == 'SIG'\") (constraint length {range}))");
+        let rule = |range: &str| format!("(rule \"sig\" (condition \"A.NetName == '/SIG'\") (constraint length {range}))");
         let untuned = judge(&dir, &rule("(min 149.5ps) (max 150.5ps)"));
         assert_eq!(untuned.len(), 1, "the control: the straight 20 mm track takes 122 ps, out of 149.5..150.5: {untuned:?}");
         assert!(untuned[0].contains("ps"), "kicad-cli reports a time: {untuned:?}");

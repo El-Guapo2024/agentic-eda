@@ -152,6 +152,15 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     // the moment it is opened. A no-op once every id is already set.
     design.assign_missing_ids();
     let model = build_model(dir, &meta, &design)?;
+    // A design routed under the intent's net names takes KiCad's, which the model has now (`net_names`). A drawing of its own with no net list stored yet
+    // (a board from before `Design::nets`) gets the list it reads as, under those names: a later edit that only moves a symbol, and leaves a net drawn in
+    // pieces, does not give the net its old name back.
+    crate::net_names::rename_design(&mut design, &model, &model.intent_net_names.iter().map(|(kicad, intent)| (intent.clone(), kicad.clone())).collect());
+    if design.schematic.is_some() && design.nets.is_none() && !model.intent_net_names.is_empty() {
+        design.nets = Some(model.nets.clone());
+    }
+    // copper still on a net no name of this load leads to takes the net of the pads it reaches
+    crate::net_names::heal_stale_nets(&mut design, &model);
     Ok((meta, design, model))
 }
 
@@ -186,6 +195,8 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
     // every board in this project's own test/parity corpus) leaves
     // `model.nets` exactly as the intent declared it, unchanged from
     // before this field existed.
+    // (the intent's own nets, which a net of the same pins in the design's list was named by: see `net_names::remember_intent_names` below)
+    let intent_nets = model.nets.clone();
     if let Some(nets) = design.nets.clone() {
         model.nets = nets;
     }
@@ -240,6 +251,13 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
     // The pads a footprint's Pad Properties edits changed: its own footprint, for every reader of `footprint_of` (after the libraries are resolved, so
     // a part placed from an installed library has its footprint to lay the edits on).
     fold_footprint_edits(design, &mut model);
+    // The nets under the names KiCad gives the board's schematic (`/MCU/RESET`, `Net-(D1-Pad1)`), last: everything above keys by the intent's names.
+    // And what each footprint takes from its symbol there (`SymbolLink`: the path, the sheet, the fields, the pins' names), which the board is written with.
+    let drawn = crate::net_names::drawn(design, &model);
+    let renames = crate::net_names::kicad_names(design, &model, &drawn);
+    crate::net_names::apply(&mut model, &renames);
+    crate::net_names::remember_intent_names(&mut model, &intent_nets);
+    model.symbol_links = drawn.links;
     Ok(model)
 }
 
@@ -488,6 +506,47 @@ fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String
     names
 }
 
+/// [`trace_design`] with what KiCad names the nets by: the parts' pin names, the design's bus aliases, and which power symbols are global power pins.
+pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &ConstraintModel) -> Vec<eda_engine::nets::TracedNet> {
+    let pin_names = shown_pin_names(model);
+    // a bus's members: its vector, its group, the design's aliases (`SCH_CONNECTION::ConfigureFromLabel`)
+    let aliases = design.bus_aliases.clone();
+    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
+    // a power symbol names its net when its pin is a power input (`SCH_PIN::IsGlobalPower`), which a PWR_FLAG's is not
+    let global_power = |lib_id: &str| -> Option<bool> { resolve_lib_symbol(lib_id, model).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
+    // the reference with the unit of each pin of a symbol of several units (`Net-(U1A-OUT)`), and the no-connect pins (`unconnected-(..)`), as the
+    // schematic writer writes them (`resolve_pin_electrical_type`)
+    let mut pin_units: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        for sym in &sec.symbols {
+            let Some(part) = model.part(&sym.id) else { continue };
+            let Some(lib) = model.real_symbol_of_instance(sec, sym, part).filter(|l| l.unit_count > 1) else { continue };
+            let reference = eda_model::sheet_list::reference_under(sec, sym, e.path.last().map(String::as_str));
+            for p in lib.pins.iter().filter(|p| p.unit == sym.unit || p.unit == 0) {
+                pin_units.entry(format!("{reference}.{}", p.number)).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
+            }
+        }
+    }
+    let nc_pins: std::collections::BTreeSet<String> = model
+        .parts
+        .iter()
+        .flat_map(|part| {
+            let lib = part.symbol.as_deref().and_then(|id| resolve_lib_symbol(id, model));
+            part.pins
+                .iter()
+                .filter(move |pin| match lib.as_ref().and_then(|l| l.pin_by_number(&pin.number)) {
+                    Some(lp) => lp.electrical_type == "no_connect",
+                    None => pin.kind == eda_model::PinKind::Nc,
+                })
+                .map(|pin| format!("{}.{}", part.reference, pin.number))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
+    trace_design(design, model, &naming)
+}
+
 /// Trace the nets of the whole schematic tree of `design` (`eda_engine::nets`): a sheet pin and the hierarchical label of the same name,
 /// global labels and power symbols are one net across sheets. Writes what the drawing says back into the design's wires (their net and
 /// pins), power symbols and no-connect flags, and returns the nets read.
@@ -548,8 +607,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             }
             let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
             for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == sym.unit) && p.hidden && p.electrical_type == "power_in") {
-                // `GetDefaultNetName`: `EscapeString( pin name, CTX_NETNAME )`
-                out.insert(format!("{}.{}", sym.id, p.number), escape_net_name(&p.name));
+                // escaped as a net name by the tracer (`GetDefaultNetName`: `EscapeString( pin name, CTX_NETNAME )`, `Driver::new`)
+                out.insert(format!("{}.{}", sym.id, p.number), p.name.clone());
             }
         }
         out
@@ -626,7 +685,7 @@ impl PowerValueView {
 /// sheet's `ResolveTextVar` up the path, `${#}` its page). **Differs**: the project's own variables are not known here (the tracer has no board folder), so a
 /// `${VAR}` of the project is left as it is written.
 fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) -> String {
-    let Some((page, levels, name)) = view.and_then(|v| v.placements.get(path)) else { return escape_net_name(raw) };
+    let Some((page, levels, name)) = view.and_then(|v| v.placements.get(path)) else { return raw.to_string() };
     let sheet = eda_model::text_vars::SchSheet {
         levels: levels.clone(),
         page: page.clone(),
@@ -636,14 +695,8 @@ fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) 
         sheet_path: std::iter::once("/".to_string()).chain(levels.iter().skip(1).filter_map(|l| l.fields.first()).map(|(_, n)| format!("{n}/"))).collect(),
         ..Default::default()
     };
-    // `GetDefaultNetName`: `EscapeString( GetValue( &aPath, FOR_NETNAME ), CTX_NETNAME )`
-    escape_net_name(&sheet.field_shown(levels.len().saturating_sub(1), None, raw, 0))
-}
-
-/// `EscapeString( aSource, CTX_NETNAME )` (common/string_utils.cpp): a `/` is written `{slash}`, a line break is dropped. (Batch A brings the tracer's own,
-/// `eda_engine::nets::escape_net_name`: this goes when it is in.)
-fn escape_net_name(s: &str) -> String {
-    s.replace('/', "{slash}").replace(['\n', '\r'], "")
+    // escaped as a net name by the tracer (`GetDefaultNetName`: `EscapeString( GetValue( &aPath, FOR_NETNAME ), CTX_NETNAME )`, `Driver::new`)
+    sheet.field_shown(levels.len().saturating_sub(1), None, raw, 0)
 }
 
 /// `pins` ("REF.PIN" -> point) of `sec` under the references the placement `placement` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
@@ -698,17 +751,10 @@ pub(crate) fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mu
 
     // The nets in force after the command applied: the design's own list (Reorganize sets one), else the intent's.
     let in_force: Vec<eda_model::Net> = design.nets.clone().unwrap_or_else(|| model.nets.clone());
-    let pin_names = shown_pin_names(model);
-    // a bus's members: its vector, its group, the design's aliases (`SCH_CONNECTION::ConfigureFromLabel`)
-    let aliases = design.bus_aliases.clone();
-    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
-    // a power symbol names its net when its pin is a power input (`SCH_PIN::IsGlobalPower`), which a PWR_FLAG's is not
-    let global_power = |lib_id: &str| -> Option<bool> { resolve_lib_symbol(lib_id, model).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), power_pins: None, power_value: None };
-    let after = trace_design(design, model, &naming);
+    let after = trace_kicad_names(design, model);
     if let Some(before) = before {
         let mut earlier = before.clone();
-        let was = trace_design(&mut earlier, model, &naming);
+        let was = trace_kicad_names(&mut earlier, model);
         if let Some(nets) = eda_engine::nets::follow(&in_force, &was, &after) {
             design.nets = Some(nets);
         }
@@ -1411,7 +1457,12 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // -- see `reconcile_schematic`'s own doc on why this is the entire
     // "one netlist" mechanism and why it never touches a PCB-only board.
     if cmd.domain() == Domain::Schematic {
+        let nets_before = model.nets.clone();
         reconcile_schematic(&mut design, &mut model, drawn_before.as_ref());
+        // A net the command left with the same pins under another name (Reorganize into Module Sheets draws the nets anew) keeps its copper.
+        if let Some(after) = design.nets.clone() {
+            crate::net_names::follow_renames(&mut design, &nets_before, &after);
+        }
     }
     save(dir, &design)?;
     let summary = format!(
@@ -2414,12 +2465,12 @@ pub fn run(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side, Nm};
     use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
-    pub(super) fn scratch(name: &str) -> PathBuf {
+    pub(crate) fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("eda_cli_board_copper_test_{}_{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -2431,7 +2482,7 @@ mod tests {
     /// can be pointed exactly at a pad. U1 and U2 each have pad 1 on GND
     /// and pad 2 on VCC; U1's pads sit at board (4000,5000) and
     /// (6000,5000).
-    pub(super) fn setup(dir: &Path) {
+    pub(crate) fn setup(dir: &Path) {
         let fp = Footprint {
             name: "2PAD".into(),
             pads: vec![
@@ -3136,11 +3187,12 @@ mod tests {
             company: state["title_block"]["shown"]["company"].as_str().unwrap().to_string(),
         };
         assert_eq!(shown.board_text, "Rev B7 of intent on F.Silkscreen B7-10k");
-        assert_eq!(shown.mpn, "ERJ-B7 GND 2PAD eda F.Silkscreen ${REV}", "the studio's own reading of the variables it knows");
+        // (`2PAD` is a footprint of no library: the file names it bare, and its library is empty)
+        assert_eq!(shown.mpn, "ERJ-B7 GND 2PAD  F.Silkscreen ${REV}", "the studio's own reading of the variables it knows");
         // A literal `${REV}` that comes back from another field's shown text is a variable again to the text that asked for it (KiCad's ResolveTextVars passes).
         // U1's MPN ends in an escaped `\${REV}`, and it stays literal in a text that looks the field up: the lookup is `INTERNAL`, which keeps the
         // escape (`FinalizeTextVarExpansion`; KiCad 10.99 by build 5334 -- an older one expanded it again).
-        assert_eq!(shown.twin, "B7-10k ERJ-B7 GND 2PAD eda F.Silkscreen ${REV} U2 Default");
+        assert_eq!(shown.twin, "B7-10k ERJ-B7 GND 2PAD  F.Silkscreen ${REV} U2 Default");
         board_with_text_variables(&without, &shown, &[]);
 
         let plot = |dir: &Path| -> String {
@@ -3904,7 +3956,7 @@ mod tests {
 
         let (_, design, model) = load(&dir).unwrap();
         let merged = net_of(&model.nets, "R1.1").expect("R1.1 must still be on a net");
-        assert_eq!(merged.name, "SIG", "the merged net must take the label's own name, not a synthesized one");
+        assert_eq!(merged.name, "/SIG", "the merged net must take the label's own name (with the root's path, as KiCad names it), not a synthesized one");
         assert_eq!(merged.name, net_of(&model.nets, "R2.1").unwrap().name, "two same-named labels must merge R1 and R2 onto one net with no wire drawn at all");
 
         let sch = design.schematic.as_ref().unwrap();
@@ -4213,28 +4265,28 @@ mod tests {
         }
         let dir = scratch("erc_severities");
         setup(&dir);
-        // The derived schematic of this board has symbols with no footprint library: `footprint_link_issues`, a warning by default.
+        // The derived schematic of this board has symbols with no footprint library (a bare `2PAD`): `footprint_link_issues`, which the derived project
+        // ignores as it ignores every library check (`effective_erc_severities`) until Schematic Setup turns it on.
         let check = "footprint_link_issues";
         let of = |report: &serde_json::Value, severity: &str| report["violations"].as_array().unwrap().iter().filter(|v| v["check"] == check && v["severity"] == severity).count();
         let ignored = |report: &serde_json::Value| report["ignored_checks"].as_array().unwrap().iter().any(|c| c["key"] == check);
         let before = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
-        let n = of(&before, "warning");
-        assert!(n > 0 && of(&before, "error") == 0 && !ignored(&before), "{before:#}");
+        assert!(of(&before, "warning") + of(&before, "error") == 0 && ignored(&before), "{before:#}");
 
         let table = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
+        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "warning")]) }, false, "ui").unwrap();
+        let warnings = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        let n = of(&warnings, "warning");
+        assert!(n > 0 && of(&warnings, "error") == 0 && !ignored(&warnings), "turned on, the check reports the bare footprints: {warnings:#}");
+
         step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "error")]) }, false, "ui").unwrap();
         let errors = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
         assert_eq!((of(&errors, "error"), of(&errors, "warning")), (n, 0), "the check is reported as an error now");
 
-        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "ignore")]) }, false, "ui").unwrap();
-        let off = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
-        assert_eq!(of(&off, "error") + of(&off, "warning"), 0, "an ignored check is not run");
-        assert!(ignored(&off), "and the report lists it as ignored: {:#}", off["ignored_checks"]);
-
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         let back = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
-        assert_eq!((of(&back, "warning"), ignored(&back)), (n, false), "Undo takes both back");
+        assert_eq!((of(&back, "warning") + of(&back, "error"), ignored(&back)), (0, true), "Undo takes both back");
     }
 
     /// `E`/`V`/`F`: each field is independently settable -- editing just
@@ -5170,6 +5222,14 @@ mod tests {
         canonical(nets).into_iter().filter(|(_, p)| p.len() >= 2).collect()
     }
 
+    /// [`joined`]'s pins alone: what a redrawing keeps when the names change with it (KiCad's names of what the new sheets draw: `/MCU (U1)/RESET`
+    /// where the flat sheet had `/RESET`).
+    fn pins_only(nets: &[(String, Vec<String>)]) -> Vec<Vec<String>> {
+        let mut v: Vec<Vec<String>> = nets.iter().map(|(_, p)| p.clone()).collect();
+        v.sort();
+        v
+    }
+
     /// The user's own board: mcu30 as it was before the drag that broke its nets (a copy of `work/mcu30`'s state, kept as a fixture; the board
     /// itself is never touched). The flat schematic is one an older engine drew -- its labels sit on the edge of the symbol box, not on the pin
     /// tips, so most pins read as loose -- over a routed PCB, and no net list is stored: the intent's nets are the board's nets.
@@ -5215,7 +5275,9 @@ mod tests {
         let dir = scratch("users_board_drag");
         setup_mcu30_users_board(&dir);
         let (_, before, model_before) = load(&dir).unwrap();
-        assert!(before.nets.is_none(), "the board has never stored a net list: the intent's nets are its nets");
+        assert!(!std::fs::read_to_string(dir.join("design.json")).unwrap().contains("\"nets\""), "the board has never stored a net list: the intent's nets are its nets");
+        // read, it has the list its drawing reads as, under KiCad's names (`net_names`), which the next command stores
+        assert_eq!(before.nets.as_deref().map(canonical), Some(canonical(&model_before.nets)));
         let intent = joined(&model_before.nets);
         assert_eq!(intent.len(), 20);
         assert_every_routed_net_exists(&before, &model_before);
@@ -5223,8 +5285,8 @@ mod tests {
         step(&dir, Cmd::DragSymbol { id: "J1".into(), x: 133_350_000, y: 86_360_000, attached_wire_endpoints: vec![], unit: None }, true, "ui").unwrap();
         let (_, after, model_after) = load(&dir).unwrap();
         assert_eq!(after.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "J1").unwrap().at, Point { x: 133_350_000, y: 86_360_000 }, "the part moved");
-        assert!(after.nets.is_none(), "a move does not store a net list at all");
-        assert_eq!(joined(&model_after.nets), intent);
+        assert_eq!(after.nets.as_deref().map(canonical), before.nets.as_deref().map(canonical), "a move stores the net list it was read with, and changes nothing in it");
+        assert_eq!(pins_only(&joined(&model_after.nets)), pins_only(&intent));
         assert_eq!(canonical(&model_after.nets), canonical(&model_before.nets), "same names, same pins, lone pins included");
         assert_every_routed_net_exists(&after, &model_after);
         let _ = std::fs::remove_dir_all(&dir);
@@ -5561,7 +5623,8 @@ mod tests {
     }
 
     /// An edit that does connect things is read from the drawing, and only what it touched changes: a wire from R1.1 to R3.1 joins the nets PA0 and PA2
-    /// -- whole, under the name that wins -- and nothing else moves; the tracks' nets are still nets; and no net is ever named NET_<n>.
+    /// -- whole, under the name that wins -- and nothing else moves; the tracks' nets are still nets (PA2's copper takes the joined net's name); and no net
+    /// is ever named NET_<n>.
     #[test]
     fn a_wire_on_the_users_board_joins_two_nets_and_nothing_else() {
         let dir = scratch("users_board_wire");
@@ -5576,18 +5639,24 @@ mod tests {
         let (a, b) = (tip("R1", "1"), tip("R3", "1"));
         step(&dir, Cmd::AddWire { pts: vec![a, Point { x: a.x, y: a.y - 2_540_000 }, Point { x: b.x, y: a.y - 2_540_000 }, b], bus: false }, true, "ui").unwrap();
         let (_, after, model_after) = load(&dir).unwrap();
+        // the intent's PA0 and PA2, under the names KiCad gives what the board's drawing has of them (`Net-(U1-PA0)`, `Net-(U1-PA2)`)
+        let name_of = |pin: &str| model.nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap().name.clone();
+        let (pa0, pa2) = (name_of("U1.3"), name_of("U1.5"));
+        assert_eq!((pa0.as_str(), pa2.as_str()), ("Net-(U1-PA0)", "Net-(U1-PA2)"));
         let want: Vec<(String, Vec<String>)> = {
-            let mut nets: Vec<(String, Vec<String>)> = joined(&model.nets).into_iter().filter(|(n, _)| n != "PA0" && n != "PA2").collect();
-            nets.push(("PA0".into(), vec!["R1.1".into(), "R3.1".into(), "U1.3".into(), "U1.5".into()]));
+            let mut nets: Vec<(String, Vec<String>)> = joined(&model.nets).into_iter().filter(|(n, _)| *n != pa0 && *n != pa2).collect();
+            // joined, the net takes the name of its best pin (`compareDrivers`: U1-PA0 before U1-PA2)
+            nets.push((pa0.clone(), vec!["R1.1".into(), "R3.1".into(), "U1.3".into(), "U1.5".into()]));
             nets.sort();
             nets
         };
         assert_eq!(joined(&model_after.nets), want);
         assert!(model_after.nets.iter().all(|n| !n.name.starts_with("NET_")), "no net is called NET_<n>: {:?}", model_after.nets.iter().map(|n| &n.name).collect::<Vec<_>>());
-        // the net PA2 is gone, so its track is on a net the design no longer has -- the board says so instead of hiding it
+        // the net PA2 is gone: its track reaches the pads of the joined net, and takes that net's name (`net_names::heal_stale_nets`)
         let routing = after.routing.as_ref().unwrap();
-        assert!(routing.tracks.iter().any(|t| t.net == "PA2"));
-        assert!(model_after.nets.iter().all(|n| n.name != "PA2"));
+        assert!(routing.tracks.iter().all(|t| t.net != pa2), "no track is left on the net that is gone");
+        assert!(model_after.nets.iter().all(|n| n.name != pa2));
+        assert_every_routed_net_exists(&after, &model_after);
         // Undo puts the net list back, and with it every routed net
         undo(&dir, "ui", Some(Domain::Schematic)).unwrap();
         let (_, undone, model_undone) = load(&dir).unwrap();
@@ -5654,7 +5723,7 @@ mod tests {
         step(&dir, Cmd::ReorganizeSheets, true, "ui").unwrap();
         let (_, after, model_after) = load(&dir).unwrap();
         assert_eq!(after.schematic.as_ref().unwrap().sheets.len(), 3);
-        assert_eq!(joined(&model_after.nets), intent);
+        assert_eq!(pins_only(&joined(&model_after.nets)), pins_only(&intent));
         assert!(model_after.nets.iter().all(|n| !n.name.starts_with("NET_")));
         assert_every_routed_net_exists(&after, &model_after);
         // and the next edit, on a sheet, keeps them
@@ -5662,7 +5731,7 @@ mod tests {
         let note = Cmd::AddSchText { content: "checked".into(), at: Point { x: 20_000_000, y: 20_000_000 }, angle_millideg: 0, size_nm: 1_270_000 };
         step(&dir, Cmd::OnSheet { sheet: mcu, cmd: Box::new(note) }, true, "ui").unwrap();
         let (_, noted, model_noted) = load(&dir).unwrap();
-        assert_eq!(joined(&model_noted.nets), intent);
+        assert_eq!(pins_only(&joined(&model_noted.nets)), pins_only(&intent));
         assert_every_routed_net_exists(&noted, &model_noted);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5689,8 +5758,11 @@ mod tests {
         assert!(root.symbols.is_empty(), "the root holds sheet symbols only");
         let screens = hier.sheet_contents.as_ref().unwrap();
         assert_eq!(screens.len(), 3);
-        assert_eq!(joined(hier.nets.as_ref().unwrap()), nets_before, "design.nets after the reorganization: the same nets, the same pins");
-        assert_eq!(joined(&model_hier.nets), nets_before, "...and so is the netlist everything else reads");
+        assert_eq!(pins_only(&joined(hier.nets.as_ref().unwrap())), pins_only(&nets_before), "design.nets after the reorganization: the same nets, the same pins");
+        assert_eq!(pins_only(&joined(&model_hier.nets)), pins_only(&nets_before), "...and so is the netlist everything else reads");
+        // under the names KiCad gives what the sheets draw: a net between two sheets by the hierarchical label of the first sheet
+        assert!(model_hier.nets.iter().any(|n| n.name == "/Header (J1)/RESET"), "{:?}", model_hier.nets.iter().map(|n| &n.name).collect::<Vec<_>>());
+        let nets_hier = joined(&model_hier.nets);
 
         // An edit inside the MCU sheet lands on that sheet alone, and the nets are still read across all the sheets.
         let mcu = root.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().clone();
@@ -5699,20 +5771,20 @@ mod tests {
         let (_, noted, _) = load(&dir).unwrap();
         assert_eq!(noted.sheet_contents.as_ref().unwrap()[&mcu.file].texts.len(), 1);
         assert!(noted.schematic.as_ref().unwrap().texts.is_empty(), "nothing leaked onto the root");
-        assert_eq!(joined(noted.nets.as_ref().unwrap()), nets_before);
+        assert_eq!(joined(noted.nets.as_ref().unwrap()), nets_hier);
 
         // Taking the hierarchical label PA0 out of the MCU sheet is an electrical edit: U1.3 leaves the net, read across the sheets.
         let label = noted.sheet_contents.as_ref().unwrap()[&mcu.file].labels.iter().find(|l| l.net == "PA0").expect("the MCU sheet has a PA0 label").id.clone();
         step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::DeleteLabel { id: label }) }, false, "test").unwrap();
         let (_, cut, model_cut) = load(&dir).unwrap();
-        let pa0 = |nets: &[Net]| nets.iter().find(|n| n.name == "PA0").map(|n| n.pins.clone());
+        let pa0 = |nets: &[Net]| nets.iter().find(|n| n.name.ends_with("/PA0")).map(|n| n.pins.clone());
         assert_eq!(pa0(&model_cut.nets), Some(vec!["R1.1".to_string()]), "PA0 keeps the LED side: {:?}", cut.nets);
         assert!(model_cut.nets.iter().any(|n| n.pins == vec!["U1.3".to_string()]), "U1.3 is on a net of its own");
         assert!(model_cut.nets.iter().all(|n| !n.name.starts_with("NET_")), "no net is called NET_<n>");
         // ...and Undo puts the label and the nets back.
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         let (_, restored, _) = load(&dir).unwrap();
-        assert_eq!(joined(restored.nets.as_ref().unwrap()), nets_before);
+        assert_eq!(joined(restored.nets.as_ref().unwrap()), nets_hier);
         assert!(restored.sheet_contents.as_ref().unwrap()[&mcu.file].labels.iter().any(|l| l.net == "PA0"));
 
         // Moving U1 is layout: it lands on the sheet, and the nets stay as they were (the wires it leaves behind are what ERC is for).
@@ -5722,13 +5794,13 @@ mod tests {
         let (_, edited, _) = load(&dir).unwrap();
         assert_eq!(edited.sheet_contents.as_ref().unwrap()[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at, moved);
         assert_eq!(edited.schematic.as_ref().unwrap().sheets.len(), 3);
-        assert_eq!(joined(edited.nets.as_ref().unwrap()), nets_before, "moving a symbol leaves the nets alone");
+        assert_eq!(joined(edited.nets.as_ref().unwrap()), nets_hier, "moving a symbol leaves the nets alone");
 
         // Undo takes the move back; then the note; then the reorganization, back to the flat sheet.
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         let (_, undone, _) = load(&dir).unwrap();
         assert_eq!(undone.sheet_contents.as_ref().unwrap()[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at, u1);
-        assert_eq!(joined(undone.nets.as_ref().unwrap()), nets_before);
+        assert_eq!(joined(undone.nets.as_ref().unwrap()), nets_hier);
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         assert!(load(&dir).unwrap().1.sheet_contents.as_ref().unwrap()[&mcu.file].texts.is_empty());
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
@@ -6324,7 +6396,7 @@ mod tests {
         let (_, d, model) = load(&dir).unwrap();
         assert_ne!(sheet_of(&d), start);
         assert_eq!(d.schematic.as_ref().unwrap().extras.pin_swaps["R1"].len(), 2);
-        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("B".to_string(), "A".to_string()), "R1.1 is on the net of the wire to B now: {:?}", model.nets);
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("/B".to_string(), "/A".to_string()), "R1.1 is on the net of the wire to B now: {:?}", model.nets);
         undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{}", reasons(&e)));
         let (_, d, model) = load(&dir).unwrap();
         assert_eq!(sheet_of(&d), start, "one Undo puts the sheet and its net list back");
@@ -6336,7 +6408,7 @@ mod tests {
         let sch = d.schematic.as_ref().unwrap();
         assert_eq!(sch.labels.iter().find(|l| l.id == "lbl_A").unwrap().net, "B");
         assert!(sch.extras.pin_swaps.is_empty(), "the pins did not move");
-        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("B".to_string(), "A".to_string()), "{:?}", model.nets);
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("/B".to_string(), "/A".to_string()), "{:?}", model.nets);
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
 
@@ -6346,7 +6418,7 @@ mod tests {
         let sch = d.schematic.as_ref().unwrap();
         let text = |id: &str| sch.labels.iter().find(|l| l.id == id).unwrap().net.clone();
         assert_eq!((text("lbl_L1"), text("lbl_L2"), text("lbl_L3"), text("lbl_L4")), ("L3".into(), "L4".into(), "L1".into(), "L2".into()));
-        assert_eq!((mate(&model, "U2.1"), mate(&model, "U2.3")), ("L3".to_string(), "L1".to_string()), "{:?}", model.nets);
+        assert_eq!((mate(&model, "U2.1"), mate(&model, "U2.3")), ("/L3".to_string(), "/L1".to_string()), "{:?}", model.nets);
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
 

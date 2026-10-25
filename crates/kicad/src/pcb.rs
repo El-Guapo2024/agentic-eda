@@ -39,7 +39,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, meta: &super::
 
 /// [`export_kicad_pcb`] with the fills of the zones: each zone is written with the rings kicad-cli made of it for as long as the zone is the one it filled (a zone that was
 /// edited since is written unfilled, as KiCad writes a zone it has emptied), nanometre for nanometre and with `(island yes)` where kicad-cli said so.
-pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &super::ExportMeta, fills: Option<&crate::zone_fills::KicadFills>) -> Result<String, Vec<CheckResult>> {
+pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &super::ExportMeta, fills: Option<&crate::zone_fills::KicadFills>) -> Result<String, Vec<CheckResult>> {
     let Some(pl) = &design.placement else {
         return Err(vec![CheckResult::fail("kicad.no_placement", "design", "design has no placement section")]);
     };
@@ -58,8 +58,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         return Err(errors);
     }
 
+    // The pads of a pin the schematic has on no net of its own (a pin alone, a pin on a no-connect flag): KiCad's netlist gives each a net of its own
+    // (`unconnected-(U1-NC1-Pad12)`, `SCH_PIN::GetDefaultNetName( .., aForceNoConnect = true )`), which Update PCB from Schematic puts on the pad
+    // (`BOARD_NETLIST_UPDATER::updateComponentPadConnections`). A footprint read from a KiCad file keeps the pads the file gave no net.
+    let unconnected = unconnected_pin_nets(design, model, &footprints, &parts_by_ref);
+    let from_schematic = FromSchematic { unconnected: unconnected.clone(), root_sheetfile: format!("{}.kicad_sch", meta.title) };
     // Net name -> number, sorted by name, 1-indexed (0 is the unconnected net).
-    let mut net_names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+    let mut net_names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).chain(unconnected.values().map(String::as_str)).collect();
     net_names.sort();
     net_names.dedup();
     let net_num: BTreeMap<&str, usize> = net_names.iter().enumerate().map(|(i, n)| (*n, i + 1)).collect();
@@ -333,7 +338,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             continue;
         };
         let own_zones: String = zone_blocks.iter().filter(|(parent, _)| parent.as_deref() == Some(fp.id.as_str())).map(|(_, text)| text.as_str()).collect();
-        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, design, is_locked(&fp.id), &own_zones, &FpExtra::of(design, &fp.id, &footprint));
+        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, design, is_locked(&fp.id), &own_zones, &FpExtra::of(design, &fp.id, &footprint), &from_schematic);
         written.entry(fp.id.clone()).or_default().push(uuid);
     }
     if !errors.is_empty() {
@@ -879,12 +884,14 @@ pub fn custom_erc_pin_map(design: &Design) -> Option<Vec<Vec<u8>>> {
 }
 
 /// The per-check ERC severities the derived project holds: Schematic Setup's choices (`SchExtras::erc_severities`), with "ignore" for the
-/// two library-link checks -- every symbol is embedded in the derived schematic, so there is no library for KiCad to compare it against and
-/// each one would report a meaningless `lib_symbol_mismatch` -- unless the table says otherwise. Keyed by the ERC settings key, valued
-/// `error` | `warning` | `ignore`; only the checks that differ from KiCad's default are named (the project's own `rule_severities` loader
-/// leaves a check it does not find at its default).
+/// library-link checks -- every symbol is embedded in the derived schematic, so there is no library for KiCad to compare it against and
+/// each one would report a meaningless `lib_symbol_mismatch`; and a symbol's Footprint field names the installed footprint (`footprint_lib_id`),
+/// whose library is in the global table kicad-cli is run without (`eda_kicad_engine::cli_command`), so `footprint_link_issues` (`TestFootprintLinkIssues`)
+/// would say of every symbol "The current configuration does not include the footprint library" -- unless the table says otherwise. Keyed by the ERC
+/// settings key, valued `error` | `warning` | `ignore`; only the checks that differ from KiCad's default are named (the project's own `rule_severities`
+/// loader leaves a check it does not find at its default).
 pub fn effective_erc_severities(design: &Design) -> BTreeMap<String, String> {
-    let mut severities: BTreeMap<String, String> = BTreeMap::from([("lib_symbol_issues".to_string(), "ignore".to_string()), ("lib_symbol_mismatch".to_string(), "ignore".to_string())]);
+    let mut severities: BTreeMap<String, String> = BTreeMap::from([("lib_symbol_issues".to_string(), "ignore".to_string()), ("lib_symbol_mismatch".to_string(), "ignore".to_string()), ("footprint_link_issues".to_string(), "ignore".to_string())]);
     if let Some(sch) = design.schematic.as_ref() {
         for (key, value) in &sch.extras.erc_severities {
             severities.insert(key.clone(), value.clone());
@@ -964,7 +971,78 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     text
 }
 
+/// What the footprints of a board made here take from the schematic written beside it, beyond the model's nets.
+#[derive(Default)]
+pub(crate) struct FromSchematic {
+    /// "REF.PIN" -> `unconnected-(..)`, the net of a pin the schematic has alone ([`unconnected_pin_nets`]).
+    pub unconnected: BTreeMap<String, String>,
+    /// The root sheet's file (`<title>.kicad_sch`): the `(sheetfile ..)` of a footprint whose symbol is on the root.
+    pub root_sheetfile: String,
+}
+
+/// "REF.PIN" -> `unconnected-(..)` for every pin of a footprint made here that is on no net of `model` (see `export_kicad_pcb_with`).
+fn unconnected_pin_nets(design: &Design, model: &ConstraintModel, footprints: &[&FootprintInstance], parts: &BTreeMap<&str, &Part>) -> BTreeMap<String, String> {
+    let on_a_net: std::collections::BTreeSet<&str> = model.nets.iter().flat_map(|n| n.pins.iter().map(String::as_str)).collect();
+    let read_from_a_file: std::collections::BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.footprint_extras.iter().map(|e| e.id.as_str())).collect();
+    let mut out = BTreeMap::new();
+    for fp in footprints {
+        let Some(part) = parts.get(fp.id.as_str()) else { continue };
+        if read_from_a_file.contains(fp.id.as_str()) {
+            continue;
+        }
+        let link = model.symbol_links.get(&fp.id);
+        for pin in &part.pins {
+            let key = format!("{}.{}", fp.id, pin.number);
+            // (a pin no symbol draws -- of a unit no symbol places -- is in no netlist, and its pad on no net)
+            if link.is_some_and(|l| !l.pins.contains_key(&pin.number)) {
+                continue;
+            }
+            if !on_a_net.contains(key.as_str()) {
+                let with_unit = model.symbol_links.get(&fp.id).and_then(|l| l.units.get(&pin.number)).map(String::as_str);
+                let name = eda_engine::nets::unconnected_net_name(&key, pin.name.as_deref(), with_unit);
+                out.insert(key, name);
+            }
+        }
+    }
+    out
+}
+
+/// `footprint` turned half a turn in its own frame: its pads, its art and its courtyard. With the footprint's orientation turned half a turn back it is the same
+/// footprint on the board (see `write_footprint`). A pad's shape turns with the frame, which is no change to a shape that a half turn maps onto itself (every
+/// shape with no offset, deltas, chamfers, primitives or padstack of its own): its own angle stays, and the file's absolute angle then turns with the
+/// footprint, as KiCad's flip turns it. **Differs**: a pad with any of those keeps its absolute angle and is turned by its own angle instead -- the same copper,
+/// the pad's own frame half a turn from KiCad's.
+pub(crate) fn half_turned(footprint: &eda_model::Footprint) -> eda_model::Footprint {
+    let mut f = footprint.clone();
+    for pad in f.pads.iter_mut() {
+        half_turn_pad(pad);
+    }
+    for outline in f.courtyard_outlines.iter_mut() {
+        for p in outline.iter_mut() {
+            *p = (-p.0, -p.1);
+        }
+    }
+    let half_turn = FootprintInstance { id: String::new(), at: eda_model::ir::Point { x: 0, y: 0 }, rot: 180_000, side: Side::Top, label: Default::default() };
+    f.art = f.art.moved(&half_turn);
+    f
+}
+
+/// A pad turned half a turn with its footprint's frame (see [`half_turned`]): its own angle kept when a half turn maps its shape onto itself.
+pub(crate) fn half_turn_pad(pad: &mut Pad) {
+    pad.at = (-pad.at.0, -pad.at.1);
+    if !pad.ext.is_default() {
+        pad.rot = (pad.rot + 180_000) % 360_000;
+    }
+}
+
+/// A field's place turned half a turn with its footprint's frame: the same place on the board once the footprint's orientation turns back.
+pub(crate) fn half_turn_layout(l: &mut eda_model::fp_edit::FieldLayout) {
+    l.at = eda_model::ir::Point { x: -l.at.x, y: -l.at.y };
+    l.angle = (l.angle + 180_000).rem_euclid(360_000);
+}
+
 /// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write_footprint(
     out: &mut String,
     fp: &FootprintInstance,
@@ -976,7 +1054,27 @@ pub(crate) fn write_footprint(
     locked: bool,
     zones: &str,
     extra: &FpExtra,
+    from_schematic: &FromSchematic,
 ) -> String {
+    let unconnected = &from_schematic.unconnected;
+    // A footprint on the back is written in KiCad's frame (`FOOTPRINT::Flip`: "we flip around the X axis, and after rotate 180 deg" -- y mirrored in the
+    // footprint's own frame, the half turn in its orientation). This model mirrors x instead (`to_board`), the same board geometry a half turn apart: so a
+    // footprint made here is written turned by half a turn in its own frame and back again in its orientation (`half_turned`), and every file position the
+    // writer mirrors in x comes out mirrored in y. KiCad's Change Footprint and Update from Library, which flip the library's footprint and give it the old
+    // orientation (`ExchangeFootprint`), then put it where it was, and its 3D models need no turn of their own. A footprint read from a KiCad file is in
+    // that frame already (the reader keeps the file's numbers), and is written as it was read.
+    // (one read in the library's frame, `FootprintExtra::library_frame`, is turned as one made here)
+    let read_in_the_files_frame = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id && !e.library_frame));
+    let turn = fp.side == Side::Bottom && !read_in_the_files_frame;
+    let (as_placed, footprint_as_placed) = (fp, footprint);
+    let (turned_fp, turned_footprint);
+    let (fp, footprint) = if turn {
+        turned_fp = FootprintInstance { rot: (fp.rot + 180_000) % 360_000, ..fp.clone() };
+        turned_footprint = half_turned(footprint);
+        (&turned_fp, &turned_footprint)
+    } else {
+        (fp, footprint)
+    };
     let layer = if fp.side == Side::Bottom { "B.Cu" } else { "F.Cu" };
     let x = mm(fp.at.x);
     let y = mm(fp.at.y);
@@ -987,7 +1085,14 @@ pub(crate) fn write_footprint(
     // router/placer computed them. Verified empirically against
     // `footprint::to_board` output and `kicad-cli pcb drc` unconnected-item
     // positions for a rotated part.
-    let rot_deg = fmt_mm_f(-(fp.rot as f64) / 1000.0);
+    // `FOOTPRINT::SetOrientation` keeps the angle in (-180, 180] (`Normalize180`), and the file has it so.
+    let rot_deg = {
+        let mut a = -(fp.rot as i64) % 360_000;
+        if a <= -180_000 {
+            a += 360_000;
+        }
+        fmt_mm_f(a as f64 / 1000.0)
+    };
     // A footprint imported from a KiCad file keeps the uuid it had there (the first footprint to claim one), as a pour does: a text can name a footprint by its uuid
     // (`${uuid:REFERENCE}`) and `kicad-cli pcb diff` matches items by it.
     let kept_uuid = design.drawings.as_ref().and_then(|d| {
@@ -1002,18 +1107,18 @@ pub(crate) fn write_footprint(
         }
         None => crate::duid_for(&format!("footprint:{}", fp.id), &fp.id),
     };
-    let lib_name = part.footprint.clone().unwrap_or_else(|| footprint.name.clone());
+    // The name the derived symbol's Footprint field gives too (`footprint_lib_id`): the installed KiCad footprint a built-in package stands for.
+    let lib_name = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).unwrap_or_else(|| footprint.name.clone());
     // A `#2`, `#3` ... slot is the importer's way to keep apart instances of one library footprint whose pads, models or graphics differ (`dedup_footprint_key`): in the file it is
     // still that library's footprint.
     let lib_name = match lib_name.rsplit_once('#') {
         Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && model.footprints.iter().any(|f| f.name == base) => base.to_string(),
         _ => lib_name,
     };
-    // A footprint the file wrote with no library link is written with none (`LIB_ID::Format`: the bare item name); the others, built here and named for no library,
-    // are in the `eda` library, which the board file stands for.
+    // A footprint named for no library is written with none (`LIB_ID::Format`: the bare item name), as the derived symbol names it.
     let own_extra = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id));
     let lib_name_written = lib_name.clone();
-    let lib_id = if lib_name.contains(':') || own_extra.is_some_and(|e| e.unlinked_name.as_deref() == Some(lib_name.as_str())) { lib_name } else { format!("eda:{lib_name}") };
+    let lib_id = lib_name;
 
     writeln!(out, "\t(footprint {}", sexpr_str(&lib_id)).unwrap();
     if locked {
@@ -1025,7 +1130,23 @@ pub(crate) fn write_footprint(
 
     // The Reference, the Value and the user fields (`format( PCB_FIELD )`), then the footprint's attributes. A footprint nothing was
     // edited on gets the Reference beside its courtyard and the Value below its origin, as it always has (`eda_model::fp_edit`).
-    write_fields(out, fp, part, footprint, extra);
+    write_fields(out, as_placed, part, footprint_as_placed, extra, turn.then_some(fp));
+    // The symbol's other fields, as Update PCB from Schematic gives them to a footprint made here (`BOARD_NETLIST_UPDATER::updateFootprintParameters`: a
+    // field the footprint lacks is added hidden, on F.Fab or B.Fab, at the footprint's origin and orientation): Datasheet, Description, the simulation
+    // fields, the user's. A field the footprint has of its own (Footprint Properties) is the footprint's.
+    let link = model.symbol_links.get(&fp.id);
+    if let Some(link) = link.filter(|_| own_extra.is_none()) {
+        let fab = if fp.side == Side::Bottom { "B.Fab" } else { "F.Fab" };
+        for (name, text) in &link.fields {
+            if extra.edit.is_some_and(|e| e.fields.iter().any(|f| f.name == *name)) {
+                continue;
+            }
+            let mut layout = eda_model::fp_edit::FieldLayout::new(eda_model::ir::Point { x: 0, y: 0 }, fab);
+            layout.visible = false;
+            let uuid = crate::duid_for(&format!("footprint:{}:symfield:{name}", fp.id), &fp.id);
+            crate::fp_fields::write_property(out, name, text, &layout, fp.side, fp.rot, &uuid);
+        }
+    }
     // The classes the file gave the footprint, and the sheet its symbol is on (`format( FOOTPRINT )` writes them after the properties).
     if let Some(e) = own_extra {
         // Its description, tags, jumper pad groups, Datasheet and Description fields ..., as the file had them, while the part is on the footprint they describe.
@@ -1046,6 +1167,19 @@ pub(crate) fn write_footprint(
         }
         if let Some(file) = e.sheetfile.as_deref().filter(|n| !n.is_empty()) {
             writeln!(out, "\t\t(sheetfile {})", sexpr_str(file)).unwrap();
+        }
+    }
+    // The link to the symbol in the schematic written beside the board (`FOOTPRINT::GetPath`, `GetSheetname`, `GetSheetfile`, as Update PCB from
+    // Schematic sets them): KiCad's F8 matches a footprint to its symbol by the path unless told to relink by reference, and a footprint with none is
+    // matched by nothing, so it would add a second footprint for every symbol. A footprint read from a file keeps the sheet the file named.
+    if let Some(link) = link {
+        writeln!(out, "\t\t(path {})", sexpr_str(&link.path)).unwrap();
+        if own_extra.is_none_or(|e| e.sheetname.as_deref().is_none_or(str::is_empty)) {
+            let file = if link.sheetfile.is_empty() { from_schematic.root_sheetfile.as_str() } else { link.sheetfile.as_str() };
+            writeln!(out, "\t\t(sheetname {})", sexpr_str(&link.sheetname)).unwrap();
+            if !file.is_empty() {
+                writeln!(out, "\t\t(sheetfile {})", sexpr_str(file)).unwrap();
+            }
         }
     }
     // The footprint's gates (`format( FOOTPRINT )` writes `(units ..)` after the sheet): the ones the file gave it, else the symbol's when it has two or more -- what the
@@ -1111,7 +1245,7 @@ pub(crate) fn write_footprint(
     // Net assignment: look up which net (if any) this pad's "REF.PIN" belongs to.
     let pin_net = |number: &str| -> Option<&str> {
         let key = format!("{}.{}", fp.id, number);
-        model.nets.iter().find(|n| n.pins.iter().any(|p| p == &key)).map(|n| n.name.as_str())
+        model.nets.iter().find(|n| n.pins.iter().any(|p| p == &key)).map(|n| n.name.as_str()).or_else(|| unconnected.get(&key).map(String::as_str))
     };
 
     // The layers a pad of an imported board is on besides copper, paste and mask (an older library's through-hole pads are on the silkscreen too, and kicad-cli's silkscreen checks
@@ -1254,10 +1388,14 @@ pub(crate) fn write_footprint(
         }
         // `(pintype "free")` and the other pin types a pad was given (`PAD::SetPinType`): a free pad takes part in no net, and the copper clearance, solder mask and
         // connectivity checks leave it be (`PAD::IsFreePad`). Written after the net, as `format( const PAD* )` does.
-        if let Some(function) = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str()).filter(|t| !t.is_empty()) {
+        // A pad of a footprint made here has its pin's (`updateComponentPadConnections`: `SetPinFunction( net.GetPinFunction() )`, `SetPinType( net.GetPinType() )`).
+        let from_pin = link.filter(|_| pad_infos.is_none() && pad.kind != PadKind::NonPlatedHole).and_then(|l| l.pins.get(&pad.number));
+        let function = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str()).or(from_pin.map(|(f, _)| f.as_str()));
+        if let Some(function) = function.filter(|t| !t.is_empty()) {
             write!(out, " (pinfunction {})", sexpr_str(function)).unwrap();
         }
-        if let Some(pin_type) = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str()).filter(|t| !t.is_empty()) {
+        let pin_type = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str()).or(from_pin.map(|(_, t)| t.as_str()));
+        if let Some(pin_type) = pin_type.filter(|t| !t.is_empty()) {
             write!(out, " (pintype {})", sexpr_str(pin_type)).unwrap();
         }
         // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..).
@@ -1302,7 +1440,12 @@ pub(crate) fn write_footprint(
     // and kicad-cli's zone fill would not keep clear of them.
     let holes: &[eda_model::ir::FootprintHole] = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).map(|e| e.holes.as_slice()).unwrap_or_default();
     for (i, hole) in holes.iter().enumerate() {
-        let pad = &hole.pad;
+        // (in the footprint's frame as the model holds it: turned with it when it is written in KiCad's frame)
+        let mut turned_pad = hole.pad.clone();
+        if turn {
+            half_turn_pad(&mut turned_pad);
+        }
+        let pad = &turned_pad;
         let drill = match (pad.drill, pad.drill_slot) {
             (Some(d), _) => format!("(drill {})", mm(d)),
             (None, Some((w, h))) => format!("(drill oval {} {})", mm(w), mm(h)),
@@ -1406,10 +1549,10 @@ pub(crate) fn write_footprint(
     // board's own), else the one its generic package name stands for -- the installed KiCad footprint's model with its own placement, fitted to the pads
     // this footprint has (`part_models`). Without a `(model ...)` kicad-cli's 3D export leaves the part out altogether.
     //
-    // A bottom-side footprint is written the way KiCad stores one: mirrored in y and turned by `Ry(pi) Rz(pi)` in 3D, where this studio mirrors x. The
-    // half turn between the two goes into the model's own placement (`Model3d::flipped_frame`), so the model stands on the pads in KiCad's render as it
-    // does in the studio's. The path is written exactly as stored (`${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step`).
-    let placed: Vec<eda_model::footprint::Model3d> = crate::part_models(model, part, footprint).map(|p| p.models).unwrap_or_default().into_iter().map(|m| if fp.side == Side::Bottom { m.flipped_frame() } else { m }).collect();
+    // A bottom-side footprint is written the way KiCad stores one (`turn` above), its models as held. One a reader of before
+    // `FootprintExtra::library_frame` read is in its file's frame mirrored in x: the half turn between the two goes into the model's own placement
+    // (`Model3d::flipped_frame`). The path is written exactly as stored (`${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step`).
+    let placed: Vec<eda_model::footprint::Model3d> = crate::part_models(model, part, footprint_as_placed).map(|p| p.models).unwrap_or_default().into_iter().map(|m| if fp.side == Side::Bottom && !turn { m.flipped_frame() } else { m }).collect();
     crate::footprint_lib::write_models(out, &placed, 2);
 
     // The footprint's own zones (rule areas it carries), after its pads and graphics as KiCad writes them.
@@ -1763,8 +1906,41 @@ mod tests {
         assert!(c1_back.reference.as_ref().unwrap().mirror);
     }
 
+    /// p13-p16 P14-2: a footprint flipped here is written as KiCad's `FOOTPRINT::Flip` leaves one -- y mirrored in its own frame, the half turn in its
+    /// orientation, its pads' absolute angles turned with it, its 3D model as the library has it -- where it was written mirrored in x with the half turn in
+    /// the model. The copper is where it was: read back, every pad is on the same point of the board.
     #[test]
-    fn a_bottom_side_footprint_edit_goes_across_and_back_with_the_footprints_turn() {
+    fn a_flipped_footprint_is_written_in_kicads_frame() {
+        let (mut design, model) = fixture();
+        let c1 = design.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "C1").unwrap();
+        c1.rot = 0;
+        let lib = model.footprint_of(model.part("C1").unwrap()).unwrap();
+        let pad1 = lib.pads.iter().find(|p| p.number == "1").unwrap().at;
+        assert!(pad1.0 < 0 && pad1.1 == 0, "the 0603's pad 1 is on the left: {pad1:?}");
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let start = out.find("(footprint \"0603\"").expect("C1");
+        let block = &out[start..start + out[start..].find("\n\t)").unwrap()];
+        assert!(block.contains("(layer \"B.Cu\")") && block.contains("(at 10 10 180)"), "the half turn is in the orientation: {block}");
+        let x = mm(pad1.0);
+        assert!([180, -180].iter().any(|a| block.contains(&format!("(pad \"1\" smd roundrect (at {x} 0 {a})"))), "pad 1 at its library x, y mirrored, turned with the footprint: {block}");
+        // its model as it is held, with no half turn of its own (`Model3d::flipped_frame` is the reader's)
+        let held = crate::part_models(&model, model.part("C1").unwrap(), &lib).unwrap().models;
+        let mut want = String::new();
+        crate::footprint_lib::write_models(&mut want, &held, 2);
+        assert!(block.contains(want.trim_end()), "{block}\n{want}");
+        // the same pads on the board: read back, each is where the studio has it
+        let (back, back_model, _) = crate::import_kicad_pcb(&out).unwrap();
+        let placed = |d: &Design, m: &ConstraintModel| -> Vec<(String, Point)> {
+            let f = d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "C1").unwrap();
+            let mut pads: Vec<(String, Point)> = m.footprint_of(m.part("C1").unwrap()).unwrap().pads.iter().map(|p| (p.number.clone(), eda_model::footprint::to_board(f, p.at))).collect();
+            pads.sort_by(|a, b| a.0.cmp(&b.0));
+            pads
+        };
+        assert_eq!(placed(&back, &back_model), placed(&design, &model));
+    }
+
+    #[test]
+    fn a_bottom_side_footprint_edit_goes_across_and_back_to_the_same_place_on_the_board() {
         use eda_model::fp_edit::{FieldLayout, FootprintEdit};
         let (mut design, model) = fixture();
         // C1 sits on the bottom, turned 90: its field's angle and position cross the mirror and the turn and come back the same.
@@ -1775,7 +1951,11 @@ mod tests {
         design.drawings = Some(eda_model::ir::DrawingsSection { footprint_edits: vec![c1], ..Default::default() });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        let got = back.drawings.unwrap().footprint_edits.into_iter().find(|e| e.id == "C1").unwrap().reference.unwrap();
+        let got = back.drawings.as_ref().unwrap().footprint_edits.iter().find(|e| e.id == "C1").unwrap().reference.clone().unwrap();
+        // The footprint is written in KiCad's frame (`write_footprint`'s half turn) and read back in the library's (`FootprintExtra::library_frame`): the
+        // field comes back as it was, and the footprint's orientation too.
+        let instance = |d: &Design| d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "C1").unwrap().clone();
+        assert_eq!(instance(&back).rot, instance(&design).rot);
         assert_eq!(got, l);
     }
 
@@ -1835,7 +2015,7 @@ mod tests {
         let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         assert!(plain["board"]["design_settings"]["drc_exclusions"].is_null(), "nothing waived: the key is not written");
         assert!(plain["board"]["design_settings"]["meta"].is_null() && plain["erc"]["meta"].is_null(), "and neither section says which schema it is at");
-        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2), "only the two library checks, which are always ignored");
+        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(3), "only the three library checks, which are always ignored");
 
         design.drawings = Some(DrawingsSection {
             drc_exclusions: vec![
@@ -2146,7 +2326,7 @@ mod tests {
         };
         design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![extra], ..Default::default() });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
-        let u1 = &out[out.find("(footprint \"eda:SOT-23\"").expect("U1")..];
+        let u1 = &out[out.find("(footprint \"SOT-23\"").expect("U1")..];
         let u1 = &u1[..u1.find("\n\t(footprint").map_or(u1.len(), |i| i + 1)];
         assert!(u1.contains("(net_tie_pad_groups \"1, 2\" \"3\")"), "{u1}");
         let pad = u1.lines().find(|l| l.contains("np_thru_hole")).expect("the hole as a pad");
@@ -2530,7 +2710,7 @@ mod tests {
         design.drawings.as_mut().unwrap().locked_ids = locked.clone();
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("(locked yes)").count(), 5, "{out}");
-        assert!(out.contains("(footprint \"eda:SOT-23\"\n\t\t(locked yes)\n\t\t(layer"), "{out}");
+        assert!(out.contains("(footprint \"SOT-23\"\n\t\t(locked yes)\n\t\t(layer"), "{out}");
 
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let mut got = back.drawings.as_ref().unwrap().locked_ids.clone();
@@ -2983,9 +3163,9 @@ mod tests {
     }
 
     /// What kicad-cli draws a footprint's 3D model at is the footprint's `(model ...)` placement, and KiCad turns a flipped footprint's model with
-    /// `Ry(pi) Rz(pi)` where this studio mirrors x: the half turn between them is written into the bottom-side footprint's model and taken out again when
-    /// the board is read, so the model stands on the pads in KiCad's render as it does in the studio (checked against kicad-cli's VRML export of a
-    /// pin header on both sides, which turns the model by `rotation 1 0 0 3.14159` on the back and not on the front).
+    /// `Ry(pi) Rz(pi)` where this studio mirrors x. A bottom footprint made here is written in KiCad's frame (mirrored in y, the half turn in its
+    /// orientation, `write_footprint`), so its model is written as it is held, as KiCad's Flip leaves a model; the reader reads it back in the library's frame
+    /// (`FootprintExtra::library_frame`), the model as it was.
     #[test]
     fn a_footprints_models_are_written_with_their_placement_and_a_bottom_one_in_kicads_frame() {
         use eda_model::footprint::Model3d;
@@ -3000,7 +3180,7 @@ mod tests {
         }
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let block = |reference: &str| -> String {
-            let start = out.find(&format!("(footprint \"eda:{reference}_FP\"")).unwrap_or_else(|| panic!("{reference}_FP is written:\n{out}"));
+            let start = out.find(&format!("(footprint \"{reference}_FP\"")).unwrap_or_else(|| panic!("{reference}_FP is written:\n{out}"));
             let rest = &out[start..];
             let fp = &rest[..rest[1..].find("\n\t(footprint ").map_or(rest.len(), |i| i + 1)];
             fp[fp.find("\t\t(model ").expect("a model is written")..].to_string()
@@ -3008,7 +3188,7 @@ mod tests {
         let top = block("U1");
         assert!(top.contains("(offset\n\t\t\t\t(xyz 1 2 0.5)") && top.contains("(rotate\n\t\t\t\t(xyz 90 0 30)"), "a top footprint's model is written as it is held: {top}");
         let bottom = block("C1");
-        assert!(bottom.contains("(offset\n\t\t\t\t(xyz -1 -2 0.5)") && bottom.contains("(rotate\n\t\t\t\t(xyz 90 0 -150)"), "a bottom footprint's model carries the half turn about z: {bottom}");
+        assert!(bottom.contains("(offset\n\t\t\t\t(xyz 1 2 0.5)") && bottom.contains("(rotate\n\t\t\t\t(xyz 90 0 30)"), "a bottom footprint's model is written as it is held, in KiCad's frame: {bottom}");
 
         let (_, back, _) = crate::import_kicad_pcb(&out).unwrap();
         let held = |reference: &str| -> Vec<Model3d> {
@@ -3016,7 +3196,7 @@ mod tests {
             back.footprint_of(part).unwrap().models3d
         };
         assert_eq!(held("U1"), vec![placed.clone()]);
-        assert_eq!(held("C1"), vec![placed], "read back, the bottom footprint's model is the one it was written from");
+        assert_eq!(held("C1"), vec![placed], "read back, the bottom footprint's model is the one it was written from (the reader undoes the frame)");
     }
 
     /// Two pads of one footprint on the same point with the same number (`complex_hierarchy`'s MIRE: crossed bars, every pad numbered "", two of them on one
@@ -3166,7 +3346,7 @@ mod tests {
 
     /// A footprint the file gave no library link (`(footprint "D5" ..)`, `LIB_ID::GetLibNickname()` empty) is written with none, as `LIB_ID::Format` writes it: the bare name.
     /// Written as `eda:D5` it linked the footprint to a library that does not exist, and a project that checks library links reported it (72 times on `complex_hierarchy`,
-    /// `lib_footprint_issues`). A footprint built here, named for no library, is in the `eda` library as it always was.
+    /// `lib_footprint_issues`). A footprint built here is named as its symbol names it (`footprint_lib_id`), never `eda:`.
     #[test]
     fn a_footprint_with_no_library_link_is_written_with_none() {
         let (design, model, _) = crate::import_kicad_pcb(FOOTPRINT_BOARD).unwrap();
@@ -3178,14 +3358,15 @@ mod tests {
         let (back, back_model, _) = crate::import_kicad_pcb(&out).unwrap();
         let again = export_kicad_pcb(&back, &back_model, &meta()).unwrap();
         assert!(again.contains("(footprint \"D5\"\n") && !again.contains("\"eda:"), "{again}");
-        // A part built here is still in the `eda` library.
+        // A part built here is on the footprint it names, with no library when the name has none (`footprint_lib_id`), as its symbol's Footprint
+        // field names it.
         let (made, made_model) = fixture();
-        assert!(export_kicad_pcb(&made, &made_model, &meta()).unwrap().contains("(footprint \"eda:SOT-23\""));
-        // The footprint exchanged for another one is not the unlinked one any more.
+        assert!(export_kicad_pcb(&made, &made_model, &meta()).unwrap().contains("(footprint \"SOT-23\""));
+        // The footprint exchanged for another one is the one it is named: a bare name with no library.
         let (swapped, mut swapped_model, _) = crate::import_kicad_pcb(FOOTPRINT_BOARD).unwrap();
         swapped_model.parts.iter_mut().find(|p| p.reference == "D1").unwrap().footprint = Some("SOT-23".into());
         let out = export_kicad_pcb(&swapped, &swapped_model, &meta()).unwrap();
-        assert!(out.contains("(footprint \"eda:SOT-23\""), "{out}");
+        assert!(out.contains("(footprint \"SOT-23\""), "{out}");
     }
 
     /// A footprint with nothing on its courtyard layers gets none in the file; before, it got the box its pads derive, and two such boxes overlapped

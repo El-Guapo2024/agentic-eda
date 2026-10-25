@@ -100,8 +100,10 @@ fn kicad_cli_reads_a_copy_as_a_board_and_finds_the_items_where_the_copy_put_them
     assert!(at("Track [VIN] on F.Cu", 20.0, 20.0), "{seen:?}");
     assert!(at("Track [GND] on F.Cu", 60.0, 10.0), "{seen:?}");
     assert!(at("Via [VIN]", 40.0, 20.0), "{seen:?}");
-    assert!(at("Footprint C1", 50.0, 40.0), "{seen:?}");
+    // The footprint itself is named in no violation (it is named for no library rather than for an `eda` library KiCad has not got): its two pads, half a
+    // pitch either side of it, put it at (50, 40), where the copy put it.
     assert!(at("Pad 1 [VIN] of C1", 49.175, 40.0), "the footprint's pads kept their nets: {seen:?}");
+    assert!(at("Pad 2 [GND] of C1", 50.825, 40.0), "{seen:?}");
 
     // The same text is what our own reader takes back.
     let clip = parse_pcb_clipboard(&text).unwrap();
