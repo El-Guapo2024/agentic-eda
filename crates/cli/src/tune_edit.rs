@@ -1383,7 +1383,7 @@ mod tests {
                     tried += 1;
                     // its length (or skew) now, and the target 3 mm longer
                     let Ok(h) = hover(&scene, kind, &pk, &Value::Null) else { continue };
-                    let target_nm = Nm::new(h.readout.current.get() / 1_000_000 + 3_000_000);
+                    let target_nm = h.readout.current + mm(3.0);
                     let settings = if kind == TuningMode::DiffPairSkew { json!({}) } else { json!({ "target_length": target_nm }) };
                     let Ok(mut t) = Tuner::start(scene.clone(), kind, &pk, pk.at, &settings) else { continue };
                     started += 1;
@@ -1397,9 +1397,10 @@ mod tests {
                     committed += 1;
                     if kind == TuningMode::Single && was_moved && status == TuningStatus::Tuned {
                         let scene2 = Scene::of(after, scene.model.clone());
-                        let member = scene2.design.drawings.as_ref().and_then(|d| d.tuning_patterns.last()).and_then(|p| p.member_ids.first().cloned()).expect("the new pattern has members");
+                        // a straight member of the pattern (its first may be an arc of a rounded meander)
+                        let members = scene2.design.drawings.as_ref().and_then(|d| d.tuning_patterns.last()).map(|p| p.member_ids.clone()).filter(|m| !m.is_empty()).expect("the new pattern has members");
                         let seg = scene2.world.iter().find_map(|(id, it)| match it {
-                            Item::Segment(s) if s.source_track.as_ref().is_some_and(|(tid, _)| *tid == member) => Some(id),
+                            Item::Segment(s) if s.source_track.as_ref().is_some_and(|(tid, _)| members.contains(tid)) => Some(id),
                             _ => None,
                         });
                         if let Some(seg) = seg {
@@ -1443,6 +1444,6 @@ mod tests {
             }
         }
         eprintln!("tried {tried}, started {started}, committed {committed}, tuned and measured {measured} (left out, a meander in a pad: {in_pad})");
-        assert!(started > 20 && committed > 10, "the test is not testing much: {started} started, {committed} committed");
+        assert!(started > 20 && committed > 10 && measured > 10, "the test is not testing much: {started} started, {committed} committed, {measured} measured");
     }
 }
