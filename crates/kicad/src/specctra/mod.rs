@@ -72,7 +72,7 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
             }
         }
         let max_error = model.board.max_error_nm;
-        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error.raw_shim() as f64, eda_model::outline::CHAINING_EPSILON_NM, true);
+        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error.as_f64(), eda_model::outline::CHAINING_EPSILON_NM, true);
         // "Make polygon strictly simple to avoid issues (especially in 3D viewer)".
         outline.polys.simplify();
         outline
@@ -82,19 +82,19 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
     let facts_of = |net: &str| -> export::ClassFacts {
         export::ClassFacts {
             name: b.effective_class(net).name,
-            track_width: (b.width_of(net)).raw_shim(),
-            clearance: (b.clearance_of(net)).raw_shim(),
-            via_diameter: (b.via_diameter_of(net)).raw_shim(),
-            via_drill: (b.via_drill_of(net)).raw_shim(),
+            track_width: b.width_of(net).get(),
+            clearance: b.clearance_of(net).get(),
+            via_diameter: b.via_diameter_of(net).get(),
+            via_drill: b.via_drill_of(net).get(),
         }
     };
-    let default_class = export::ClassFacts { name: "Default".into(), track_width: b.track_width.raw_shim(), clearance: b.clearance.raw_shim(), via_diameter: b.via_diameter.raw_shim(), via_drill: b.via_drill.raw_shim() };
+    let default_class = export::ClassFacts { name: "Default".into(), track_width: b.track_width.get(), clearance: b.clearance.get(), via_diameter: b.via_diameter.get(), via_drill: b.via_drill.get() };
     let settings = export::Settings {
         pcb_name: pcb_name.to_string(),
         host_version: HOST_VERSION.to_string(),
         outline: &outline,
-        hole_clearance: b.hole_clearance_nm.raw_shim(),
-        max_error: b.max_error_nm.raw_shim(),
+        hole_clearance: b.hole_clearance_nm.get(),
+        max_error: b.max_error_nm.get(),
         default_class,
         class_of_net: &facts_of,
     };

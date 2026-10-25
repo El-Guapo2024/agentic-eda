@@ -321,7 +321,7 @@ fn a_qarc_is_an_arc_through_its_middle() {
     assert_eq!((start, end), (Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(2.54), y: mm(2.54) }));
     // The centre is (2540000, 0) on the board: the middle of the quarter is at 45 degrees from it, towards the origin's side.
     let r = 2_540_000.0_f64;
-    assert!(((mid.x.raw_shim() as f64) - (r - r / 2f64.sqrt())).abs() <= 1.0 && ((mid.y.raw_shim() as f64) - r / 2f64.sqrt()).abs() <= 1.0, "{mid:?}");
+    assert!(((mid.x.as_f64()) - (r - r / 2f64.sqrt())).abs() <= 1.0 && ((mid.y.as_f64()) - r / 2f64.sqrt()).abs() <= 1.0, "{mid:?}");
 }
 
 /// The `IO_ERROR`s of `FromSESSION`, `makeTRACK` and `makeVIA`, in KiCad's words.
