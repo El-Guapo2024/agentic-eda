@@ -45,7 +45,7 @@ fn pad_interior_cells(grid: &Grid, pad: &PadInfo, rules: &RouteRules) -> Vec<(i6
     // pad shape; rounded corners and circles have less copper than their
     // bounding box). The centre cell is always included: on tiny pads the
     // margin may exceed the pad, and the centre is the best we can do.
-    let margin = ((rules.track_width).raw_shim() as f64) / 2.0;
+    let margin = rules.track_width.as_f64() / 2.0;
     let mut out = vec![(cx, cy)];
     for dx in -hx..=hx {
         for dy in -hy..=hy {
@@ -78,7 +78,7 @@ fn pad_cells(grid: &Grid, pad: &PadInfo) -> Vec<(i64, i64)> {
 /// (adjacent pins on the same package), nm; `i64::MAX` when the board has
 /// no multi-pad SMD footprint. Decides whether the grid needs refining to
 /// see a fine-pitch part's escapes at all.
-fn smallest_same_footprint_gap(pads: &HashMap<String, PadInfo>) -> i64 {
+fn smallest_same_footprint_gap(pads: &HashMap<String, PadInfo>) -> Nm {
     let mut by_fp: HashMap<&str, Vec<&PadInfo>> = HashMap::new();
     for (refpin, p) in pads {
         if p.geom.through_hole {
@@ -87,7 +87,7 @@ fn smallest_same_footprint_gap(pads: &HashMap<String, PadInfo>) -> i64 {
         let r = refpin.rsplit_once('.').map(|(r, _)| r).unwrap_or(refpin);
         by_fp.entry(r).or_default().push(p);
     }
-    let mut min_gap = i64::MAX;
+    let mut min_gap = Nm::MAX;
     for fpads in by_fp.values() {
         for i in 0..fpads.len() {
             for j in i + 1..fpads.len() {
@@ -103,7 +103,7 @@ fn smallest_same_footprint_gap(pads: &HashMap<String, PadInfo>) -> i64 {
                 } else {
                     continue;
                 };
-                min_gap = min_gap.min(gap.raw_shim());
+                min_gap = min_gap.min(gap);
             }
         }
     }
@@ -290,7 +290,7 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     // established performance.
     let min_pad_gap = smallest_same_footprint_gap(&pads);
     let mut eff_rules = rules.clone();
-    if rules.grid > mm(0.13) && min_pad_gap < rules.grid.raw_shim() {
+    if rules.grid > mm(0.13) && min_pad_gap < rules.grid {
         eff_rules.grid = rules.grid / 2;
     }
     if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
@@ -423,7 +423,7 @@ pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -
             eprintln!("{}", grid.dump_why(cx, cy, pad.layers[0], &pad.net, 14));
         }
         if !reached {
-            let mm2 = best_pocket as f64 * (rules.grid.raw_shim() as f64 / 1e6).powi(2);
+            let mm2 = best_pocket as f64 * rules.grid.mm().powi(2);
             out.push(CheckResult::fail(
                 "placement_pad_reach",
                 refpin,
