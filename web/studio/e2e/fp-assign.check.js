@@ -152,7 +152,8 @@
     const was = await part(r4);
     await click("exchange-run", 2000);
     const msg = text("exchange-messages");
-    t(msg.includes(`Changed footprint ${r4} from '0603' to '${wide}': OK`), `the message window: ${msg.split("\n")[0]}`);
+    // (the built-in `0603` under the name the board gives it, the installed footprint it stands for)
+    t(msg.includes(`Changed footprint ${r4} from 'Resistor_SMD:R_0603_1608Metric' to '${wide}': OK`), `the message window: ${msg.split("\n")[0]}`);
     const now = await part(r4);
     t(now.footprint === wide && JSON.stringify(now.at) === JSON.stringify(was.at) && now.rot === was.rot, "R4 is on it, where it was");
     t(__eda.state().selection.some((s) => s.id === r4), "and still selected");
@@ -227,8 +228,9 @@
     await select([r5]);
     await __eda.run("pcbnew.InspectionTool.DiffFootprint");
     await sleep(600);
-    t(text("footprint-diff-summary").includes("The library is not included in the current configuration."), "a built-in package says the library is not in the configuration");
-    t(!dialog("footprint-diff-tab-visual"), "and has no visual page");
+    const builtin = text("footprint-diff-summary");
+    t(builtin.includes("Library: Resistor_SMD") && builtin.includes("Library item: R_0603_1608Metric"), `a built-in package is compared with the installed footprint the board names: ${builtin.replace(/\n/g, " | ").slice(0, 200)}`);
+    t(!!dialog("footprint-diff-tab-visual"), "and has a visual page");
     await closeDialogs();
     t(await restore(original), "the undos bring the board back");
   });
