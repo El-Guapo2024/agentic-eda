@@ -67,3 +67,48 @@ One handoff item at a time, a failing test first, committed only on this branch,
 - The pair placer's failure path sets `last_node` to the reduced frame; that only matters for a fix under `AllowDRCViolations`.
 - I did not run `tools/check.sh fast` workspace-wide or `tools/run-all-checks.sh` (web and e2e) for this item: the change is confined to
   `eda-pns`, its whole fast and slow tiers are green, and the workspace compiles with tests. Say if the lane gate needs those too.
+
+## Item 4, leftover 2 -- a shared screen inside a shared screen (stopped: needs a decision and touches four crates)
+
+**Not done; the question is below.** The handoff says it "needs references keyed by the whole path". I mapped what that key change touches and
+stopped there, under the lane's rule for a design decision that spans many crates at once.
+
+**What I found.**
+
+- The model keys a screen's per-placement references by the *immediate* parent: `SchematicSection::instance_overrides` (`SymbolPathOverride`,
+  `crates/model/src/ir.rs:281-289` and `:901-924`, key `parent_sheet_instance_id`), looked up by
+  `eda_model::sheet_list::reference_under(screen, sym, placement: Option<&str>)` (`crates/model/src/sheet_list.rs:188-196`) and pruned by
+  `prune_orphaned_overrides` (`:210-227`).
+- Why that is wrong once a shared screen is nested: a screen's content is stored once (`Design::sheet_contents`), so the `SheetInstance` ids of
+  a screen placed twice are the *same* ids under both placements. In KiCad's `qa/data/eeschema/issue10926_1`, the inner screen's symbols carry
+  the paths `/30037e9f.../745d7512.../0203a5e0...` (U4) and `/30037e9f.../48e5c29d.../0203a5e0...` (U1) -- the same last component
+  `0203a5e0...`, two references -- so a key on the last component can hold only one of them for both. `netlists/hierarchy_aliases` is the
+  same shape. That is exactly the two projects the slow QA test still prints as differing (`QA_TRACED_OTHERWISE`,
+  `crates/cli/src/sch_hierarchy_tests.rs:1291-1293`).
+- The writer already builds full paths (`ScreenCtx`'s parallel `instance_paths`/`instance_parents`, `crates/kicad/src/lib.rs:138-151`;
+  `export_kicad_sch_tree`'s walk makes `/<root-uuid>/<sheet-uuid>...`) but hands `reference_under` only the last id (`lib.rs:433-434`).
+  `write_sheet_item` also writes the `(instances (path ... (page ...)))` of a shared screen's own sheets under only
+  `instance_paths.first()` (`lib.rs:676`, `:754-757`), so a screen placed twice that has sheets of its own is under-described there too.
+- The importer keeps only the last component of each instance path (`sch_import.rs:1052-1077`).
+- Callers to change with the key: `crates/ops/src/{sch_sheets,sch_clipboard,multichannel_facts}.rs`, `crates/kicad/src/lib.rs` (two
+  lookups), `crates/cli/src/{board,studio}.rs`, and tests in `crates/cli/src/sch_hierarchy_tests.rs` that compare keys directly. Four
+  crates (model, ops, kicad, cli) and a change to what `design.json` means, not just to code.
+
+**The question.**
+
+1. *Key format and old designs.* Store the root-relative chain of `SheetInstance::id`s (`"745d7512.../0203a5e0..."`) as the key. Keep the
+   field name `parent_sheet_instance_id` (a bare value is the depth-1 path it always was, so old `design.json`s read exactly as today --
+   nested sharing included -- until saved again), or add a new field (`sheet_path: Vec<String>` or `path: String`, `#[serde(default)]`) and
+   migrate on read? The struct is `deny_unknown_fields`, so a new field reads old files; the old one would then be retired or kept in sync.
+2. *The root component.* KiCad's instance paths start with the root screen's uuid, which the model does not keep as a sheet id
+   (`SheetEntry::path` starts at the first child). The import would drop the first component of every parsed path and join the rest; the
+   writer would pass the model-relative chain to `reference_under` and go on writing the full KiCad path. Is "drop the first component" the
+   convention to adopt, or should the root screen's uuid become part of the model?
+3. *The shared screen's own page paths.* May `write_sheet_item` write one `(instances (path ... (page ...)))` per placement of the screen it
+   draws (KiCad does), in the same change?
+4. *Paste.* GAPS pairs this with "a screen that has sheets of its own is still pasted as a copy" (KiCad shares that screen too:
+   `SCH_EDITOR_CONTROL::Paste`'s `SearchHierarchy`/`loadedScreens`); the same path keying is what it needs. Should Paste share nested
+   screens in this item, or stay a copy for now?
+5. *Acceptance.* Move `issue10926_1` and `netlists/hierarchy_aliases` from `QA_TRACED_OTHERWISE` to `QA_TRACED_ALIKE` in
+   `slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them`, plus a unit test that a screen shown twice inside a screen shown twice gets one
+   reference per full path (the fixture is the `issue10926_1` shape above).
