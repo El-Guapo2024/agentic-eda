@@ -12,7 +12,7 @@ use eda_model::ir::Point;
 use eda_model::modules::{is_anchor_part, natural_cmp, FunctionalModule, ModuleKind};
 
 use super::items::{Ctx, Items, NetClass, RailPin, View};
-use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G, G_NM, PAPERS};
+use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G_NM, PAPERS};
 
 /// A symbol ready to place, resolved the way `derive_schematic` resolves it (or as the existing schematic had it).
 pub fn placed(ctx: &Ctx, reference: &str) -> Placed {
@@ -64,15 +64,15 @@ impl BlockPlan {
 /// A drawn block, from the origin.
 pub struct Block {
     pub items: Items,
-    pub w: i64,
-    pub h: i64,
+    pub w: Nm,
+    pub h: Nm,
     /// The anchor's box, for centring.
     pub core: Option<Rect>,
 }
 
 fn finish(mut items: Items) -> Block {
     items.normalize();
-    let e = items.extent().unwrap_or(Rect { x0: 0, y0: 0, x1: 0, y1: 0 });
+    let e = items.extent().unwrap_or(Rect { x0: Nm::ZERO, y0: Nm::ZERO, x1: Nm::ZERO, y1: Nm::ZERO });
     let core = items.core;
     Block { w: snap_up(e.x1), h: snap_up(e.y1), items, core }
 }
@@ -345,7 +345,7 @@ fn chain_block(ctx: &Ctx, view: &View, links: &[ChainLink]) -> Block {
             target = Point { x: base.x + ex, y: base.y + ey };
             p.place_tip(&link.entry, target);
             let ko = p.keepout();
-            if placed_all.iter().all(|q| !q.keepout().inflate(G / 2).overlaps(&ko)) {
+            if placed_all.iter().all(|q| !q.keepout().inflate(G_NM / 2).overlaps(&ko)) {
                 break;
             }
         }
@@ -381,9 +381,9 @@ fn chain_block(ctx: &Ctx, view: &View, links: &[ChainLink]) -> Block {
 
 // ------------------------------------------------------------------------------------------- arrangement
 
-fn shelf(sizes: &[(i64, i64)], idx: &[usize], max_w: i64, gap: i64) -> Vec<Vec<usize>> {
+fn shelf(sizes: &[(Nm, Nm)], idx: &[usize], max_w: Nm, gap: Nm) -> Vec<Vec<usize>> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
-    let mut width = 0;
+    let mut width = Nm::ZERO;
     for &i in idx {
         let w = sizes[i].0;
         match rows.last_mut() {
@@ -401,23 +401,23 @@ fn shelf(sizes: &[(i64, i64)], idx: &[usize], max_w: i64, gap: i64) -> Vec<Vec<u
 }
 
 /// Block origins (top-left) for two groups of blocks, rows centred on one another; and the content's size.
-fn arrange(sizes: &[(i64, i64)], groups: [&[usize]; 2], max_w: i64) -> (Vec<(usize, i64, i64)>, i64, i64) {
-    let gap_x = 3 * G;
+fn arrange(sizes: &[(Nm, Nm)], groups: [&[usize]; 2], max_w: Nm) -> (Vec<(usize, Nm, Nm)>, Nm, Nm) {
+    let gap_x = G_NM * 3;
     let mut all_rows: Vec<(Vec<usize>, bool)> = Vec::new(); // (row, first row of the second group)
     for (gi, g) in groups.iter().enumerate() {
         for (ri, row) in shelf(sizes, g, max_w, gap_x).into_iter().enumerate() {
             all_rows.push((row, gi == 1 && ri == 0));
         }
     }
-    let row_w = |row: &Vec<usize>| row.iter().map(|&i| sizes[i].0).sum::<i64>() + gap_x * (row.len() as i64 - 1);
-    let content_w = all_rows.iter().map(|(r, _)| row_w(r)).max().unwrap_or(0);
+    let row_w = |row: &Vec<usize>| row.iter().map(|&i| sizes[i].0).sum::<Nm>() + gap_x * (row.len() as i64 - 1);
+    let content_w = all_rows.iter().map(|(r, _)| row_w(r)).max().unwrap_or(Nm::ZERO);
     let mut out = Vec::new();
-    let mut y = 0;
+    let mut y = Nm::ZERO;
     for (n, (row, group_break)) in all_rows.iter().enumerate() {
         if n > 0 {
-            y += if *group_break { 7 * G } else { 3 * G };
+            y += if *group_break { G_NM * 7 } else { G_NM * 3 };
         }
-        let h = row.iter().map(|&i| sizes[i].1).max().unwrap_or(0);
+        let h = row.iter().map(|&i| sizes[i].1).max().unwrap_or(Nm::ZERO);
         let mut x = snap_down((content_w - row_w(row)) / 2);
         for &i in row {
             out.push((i, x, y));
@@ -450,7 +450,7 @@ pub fn layout_module(ctx: &Ctx, module: &FunctionalModule) -> SheetOut {
             BlockPlan::Chain(l) => chain_block(ctx, &view, l),
         })
         .collect();
-    let sizes: Vec<(i64, i64)> = blocks.iter().map(|b| (b.w, b.h)).collect();
+    let sizes: Vec<(Nm, Nm)> = blocks.iter().map(|b| (b.w, b.h)).collect();
     let a_idx: Vec<usize> = (0..anchors.len()).collect();
     let r_idx: Vec<usize> = (anchors.len()..blocks.len()).collect();
 
@@ -491,7 +491,7 @@ pub fn layout_module(ctx: &Ctx, module: &FunctionalModule) -> SheetOut {
     let mut blocks = blocks;
     for (i, bx, by) in pos {
         let mut it = std::mem::take(&mut blocks[i].items);
-        it.translate(Nm::new(dx + bx), Nm::new(dy + by));
+        it.translate(dx + bx, dy + by);
         items.append(it);
     }
     SheetOut { items, paper }

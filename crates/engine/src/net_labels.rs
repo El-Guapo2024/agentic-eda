@@ -142,7 +142,7 @@ fn place_for(sch: &SchematicSection, model: &ConstraintModel, net: &str, usable:
                         continue;
                     }
                     // the junction at the stub's foot keeps clear too
-                    let junction = Rect::at(p).inflate(mm(0.5).get());
+                    let junction = Rect::at(p).inflate(mm(0.5));
                     if clear(&thin(p, end)) && clear(&junction) && label_clear(end, &label_rect(end, d, net, false)) {
                         return Some(Place { at: end, stub: Some(p) });
                     }

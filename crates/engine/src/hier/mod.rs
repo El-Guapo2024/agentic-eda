@@ -138,7 +138,7 @@ pub fn fit_flat(sch: &mut SchematicSection, model: &ConstraintModel) {
     let u = paper.usable();
     let dx = u.x0 + snap_down((u.w() - w) / 2) - snap_down(bb.x0);
     let dy = u.y0 - snap_down(bb.y0);
-    translate_section(sch, Nm::new(dx), Nm::new(dy));
+    translate_section(sch, dx, dy);
     let tb = sch.title_block.get_or_insert_with(TitleBlock::default);
     tb.paper = paper.name.to_string();
 }

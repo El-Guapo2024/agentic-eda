@@ -35,7 +35,7 @@ pub struct Keep {
 }
 
 /// The room kept around what hangs on a pin (nanometres), and how many cells a stub may be made longer to find it.
-const HANG_GAP: i64 = 150_000;
+const HANG_GAP: Nm = Nm::new(150_000);
 const MAX_PUSH: i64 = 24;
 
 /// A pin on a supply or ground rail, waiting to be drawn (`Items::rail_pins`).
@@ -249,24 +249,24 @@ impl Items {
             shift(t, dx, dy);
         }
         for r in &mut self.rects {
-            *r = r.translate(dx.get(), dy.get());
+            *r = r.translate(dx, dy);
         }
         for (_, r) in &mut self.keepouts {
-            *r = r.translate(dx.get(), dy.get());
+            *r = r.translate(dx, dy);
         }
         for r in &mut self.hung {
-            *r = r.translate(dx.get(), dy.get());
+            *r = r.translate(dx, dy);
         }
         for (_, r) in &mut self.reserved {
-            *r = r.translate(dx.get(), dy.get());
+            *r = r.translate(dx, dy);
         }
-        self.core = self.core.map(|c| c.translate(dx.get(), dy.get()));
+        self.core = self.core.map(|c| c.translate(dx, dy));
     }
 
     /// Move so the extent's top-left sits at the origin (on the grid, never past it).
     pub fn normalize(&mut self) {
         if let Some(e) = self.extent() {
-            self.translate(Nm::new(-snap_down(e.x0)), Nm::new(-snap_down(e.y0)));
+            self.translate(-snap_down(e.x0), -snap_down(e.y0));
         }
     }
 

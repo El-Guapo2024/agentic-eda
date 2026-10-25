@@ -1,5 +1,4 @@
 use eda_model::units::mm;
-use eda_model::units::Nm;
 use super::*;
 use eda_model::{Part, Pin, PinKind};
 
@@ -70,8 +69,8 @@ fn a_page_offset_moves_the_stored_position_by_the_offset_taken_back_through_the_
             let ctx = OwnerCtx::new(&sch, &m, "R1").expect("the symbol");
             let old = ctx.current(&sch)[0].clone();
             let before = ctx.page(&old, "R1").at;
-            let (dx, dy) = ctx.local_delta(2_540_000, -1_270_000);
-            let moved = FieldPlacement { dx: old.dx + Nm::new(dx), dy: old.dy + Nm::new(dy), ..old.clone() };
+            let (dx, dy) = ctx.local_delta(mm(2.54), mm(-1.27));
+            let moved = FieldPlacement { dx: old.dx + dx, dy: old.dy + dy, ..old.clone() };
             let after = ctx.page(&moved, "R1").at;
             assert!((after.0 - before.0 - 2_540_000.0).abs() < 1.0 && (after.1 - before.1 + 1_270_000.0).abs() < 1.0, "rot {rot} mirrored {mirrored}: {before:?} -> {after:?}");
         }

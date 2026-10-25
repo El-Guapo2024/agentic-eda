@@ -95,7 +95,7 @@ impl<'m> Scene<'m> {
         let i = ctx.specs.iter().position(|s| s.name == f.name)?;
         let pf = ctx.page(&ctx.current(&self.sch)[i], &ctx.specs[i].text);
         let r = eda_engine::fields::field_rect(&pf);
-        Some((Point { x: Nm::new(r.x0), y: Nm::new(r.y0) }, Point { x: Nm::new(r.x1), y: Nm::new(r.y1) }))
+        Some((Point { x: r.x0, y: r.y0 }, Point { x: r.x1, y: r.y1 }))
     }
 
     /// Run `edit` on the placement of `f` (every field of its item is stored: a field moved on its own is the first to leave the live placement), then
@@ -113,9 +113,9 @@ impl<'m> Scene<'m> {
     /// `SCH_MOVE_TOOL::moveItem` on a field: the offset, taken back through the transform of the symbol that has it.
     pub(crate) fn move_field(&mut self, f: &FieldSel, delta: Point) {
         self.edit_placement(f, |ctx, _, p| {
-            let (dx, dy) = ctx.local_delta(delta.x.get(), delta.y.get());
-            p.dx += Nm::new(dx);
-            p.dy += Nm::new(dy);
+            let (dx, dy) = ctx.local_delta(delta.x, delta.y);
+            p.dx += dx;
+            p.dy += dy;
         });
     }
 
@@ -145,9 +145,7 @@ impl<'m> Scene<'m> {
             }
             let at = Point { x: Nm::kiround(anchor.0), y: Nm::kiround(anchor.1) };
             let to = rotate_point(at, center, ccw);
-            let (lx, ly) = ctx.local_pos((to.x.as_f64(), to.y.as_f64()));
-            p.dx = Nm::new(lx);
-            p.dy = Nm::new(ly);
+            (p.dx, p.dy) = ctx.local_pos((to.x.as_f64(), to.y.as_f64()));
         });
     }
 
