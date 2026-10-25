@@ -227,7 +227,7 @@
       const after = await sch(led.id);
       const r1 = after.symbols.find((x) => x.id === "R1");
       t(JSON.stringify(r1.pin_swaps) === JSON.stringify({ 1: "2", 2: "1" }), `with it on, R1's pins traded places (${JSON.stringify(r1.pin_swaps)})`);
-      t(netsOf(before) === "1:/LED channels (D1–D8)/PA0,2:Net-(D1-Pad1)" && netsOf(after) === "1:Net-(D1-Pad1),2:/LED channels (D1–D8)/PA0", `and the nets they are on (KiCad's names: the hierarchical label PA0 in its sheet, the LED net by its best pin) (${netsOf(before)} -> ${netsOf(after)})`);
+      t(netsOf(before) === "1:/LED channels (D1–D8)/PA0,2:/LED channels (D1–D8)/LED1" && netsOf(after) === "1:/LED channels (D1–D8)/LED1,2:/LED channels (D1–D8)/PA0", `and the nets they are on (KiCad's names: the hierarchical label PA0 and the local label LED1 in their sheet) (${netsOf(before)} -> ${netsOf(after)})`);
       t(JSON.stringify(after.wires.map((w) => w.pts)) === JSON.stringify(before.wires.map((w) => w.pts)), "the wires stayed where they were");
       t(JSON.stringify(after.symbols.find((x) => x.id === "R1").at) === JSON.stringify(before.symbols.find((x) => x.id === "R1").at), "so did the symbol");
       await undo();
