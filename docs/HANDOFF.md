@@ -62,7 +62,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names everywhere (the loader traces the schematic, `crates/cli/src/net_names.rs`; the derived schematic labels every net the intent names), one footprint name (`footprint_lib_id`), `(path)`/`sheetname`/`sheetfile`, fields, `pinfunction`/`pintype`, `unconnected-(..)`, the flip frame | review fixes R1-R6 in progress | gate, merge; then batch D |
+| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names everywhere (the loader traces the schematic, `crates/cli/src/net_names.rs`; the derived schematic labels every net the intent names), one footprint name (`footprint_lib_id`), `(path)`/`sheetname`/`sheetfile`, fields, `pinfunction`/`pintype`, `unconnected-(..)`, the flip frame | review fixes R1-R5 and the cheap items done; R6 on `task-fix-a-kicad-names-r6`, held back (mcu30's greedy placement fails `placement_stub_crossings` with the real courtyards) | gate, merge; decide R6 with the placement lane; then batch D |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
