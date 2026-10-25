@@ -40,22 +40,22 @@ enum Piece {
 
 /// An arc of KiCad's whose middle is in line with its ends: the IR cannot hold its curve, and the port makes it its chord. Compared as the chord.
 fn flat_on_the_grid(s: Point, m: Point, e: Point) -> bool {
-    (m.x - s.x).raw_shim() as i128 * (e.y - s.y).raw_shim() as i128 - (m.y - s.y).raw_shim() as i128 * (e.x - s.x).raw_shim() as i128 == 0
+    (m.x - s.x).area(e.y - s.y) - (m.y - s.y).area(e.x - s.x) == 0
 }
 
 fn parse(answer: &str) -> Vec<Piece> {
     let t: Vec<&str> = answer.split_whitespace().collect();
     let mut out = Vec::new();
     let mut i = 0;
-    let n = |s: &str| s.parse::<i64>().unwrap();
+    let n = |s: &str| s.parse::<Nm>().unwrap();
     while i < t.len() {
         match t[i] {
             "P" => {
-                out.push(Piece::P(Point { x: Nm::from_raw_shim(n(t[i + 1])), y: Nm::from_raw_shim(n(t[i + 2])) }));
+                out.push(Piece::P(Point { x: n(t[i + 1]), y: n(t[i + 2]) }));
                 i += 3;
             }
             "A" => {
-                let p = |k: usize| Point { x: Nm::from_raw_shim(n(t[i + k])), y: Nm::from_raw_shim(n(t[i + k + 1])) };
+                let p = |k: usize| Point { x: n(t[i + k]), y: n(t[i + k + 1]) };
                 if flat_on_the_grid(p(1), p(3), p(5)) {
                     out.push(Piece::P(p(1)));
                     out.push(Piece::P(p(5)));
@@ -93,7 +93,7 @@ fn parse(answer: &str) -> Vec<Piece> {
 fn port(case: &str) -> Vec<Piece> {
     let v: Vec<i64> = case.split_whitespace().map(|s| s.parse().unwrap()).collect();
     let dir = if v[0] < 0 { Direction45::Undefined } else { DIRS[v[0] as usize] };
-    let p = |x: i64, y: i64| Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) };
+    let p = |x: i64, y: i64| Point { x: Nm::new(x), y: Nm::new(y) };
     let trace = dir.build_initial_line(p(v[1], v[2]), p(v[3], v[4]), v[5] != 0, MODES[v[6] as usize]);
     let line = eda_pns::line::Line { arcs: trace.arcs.clone(), ..eda_pns::line::Line::from_points(None, 0, Nm::ZERO, trace.pts.clone()) };
     let runs = line.arc_runs();

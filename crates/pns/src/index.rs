@@ -27,7 +27,7 @@ pub struct Index {
 
 impl Index {
     pub fn new(cell_size: Nm) -> Self {
-        Index { cell_size: cell_size.max(Nm::from_raw_shim(1)), cells: HashMap::new(), boxes: HashMap::new() }
+        Index { cell_size: cell_size.max(Nm::new(1)), cells: HashMap::new(), boxes: HashMap::new() }
     }
 
     fn cell_of(&self, x: Nm, y: Nm) -> CellKey {
@@ -100,23 +100,24 @@ impl Clone for Index {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
     fn insert_query_remove() {
-        let mut idx = Index::new(Nm::from_raw_shim(1000));
-        idx.insert(1, (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100), Nm::from_raw_shim(100)));
-        idx.insert(2, (Nm::from_raw_shim(50_000), Nm::ZERO, Nm::from_raw_shim(50_100), Nm::from_raw_shim(100)));
-        assert_eq!(idx.query((Nm::from_raw_shim(-10), Nm::from_raw_shim(-10), Nm::from_raw_shim(10), Nm::from_raw_shim(10))), vec![1]);
+        let mut idx = Index::new(Nm::new(1000));
+        idx.insert(1, (Nm::ZERO, Nm::ZERO, Nm::new(100), Nm::new(100)));
+        idx.insert(2, (mm(0.05), Nm::ZERO, Nm::new(50_100), Nm::new(100)));
+        assert_eq!(idx.query((Nm::new(-10), Nm::new(-10), Nm::new(10), Nm::new(10))), vec![1]);
         idx.remove(1);
-        assert!(idx.query((Nm::from_raw_shim(-10), Nm::from_raw_shim(-10), Nm::from_raw_shim(10), Nm::from_raw_shim(10))).is_empty());
-        assert_eq!(idx.query((Nm::from_raw_shim(49_000), Nm::from_raw_shim(-10), Nm::from_raw_shim(51_000), Nm::from_raw_shim(10))), vec![2]);
+        assert!(idx.query((Nm::new(-10), Nm::new(-10), Nm::new(10), Nm::new(10))).is_empty());
+        assert_eq!(idx.query((mm(0.049), Nm::new(-10), mm(0.051), Nm::new(10))), vec![2]);
     }
 
     #[test]
     fn item_spanning_many_cells_returned_once() {
-        let mut idx = Index::new(Nm::from_raw_shim(100));
-        idx.insert(9, (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(10_000), Nm::from_raw_shim(50)));
-        assert_eq!(idx.query((Nm::from_raw_shim(4_900), Nm::from_raw_shim(-200), Nm::from_raw_shim(5_100), Nm::from_raw_shim(200))), vec![9]);
+        let mut idx = Index::new(Nm::new(100));
+        idx.insert(9, (Nm::ZERO, Nm::ZERO, mm(0.01), Nm::new(50)));
+        assert_eq!(idx.query((Nm::new(4900), Nm::new(-200), Nm::new(5100), Nm::new(200))), vec![9]);
     }
 }

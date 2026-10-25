@@ -2,6 +2,7 @@
 
 use super::pcb_transform_tests::{board, design, drawings, ids, model, p};
 use super::*;
+use eda_model::units::mm;
 
 /// The KiCad text of a Copy of `names` on the fixture board, which is what a design block's board file holds.
 fn block_text(names: &[&str]) -> String {
@@ -19,7 +20,7 @@ fn a_design_block_placed_with_place_as_group_is_one_group_named_for_the_block_an
     let text = block_text(&["trk_a", "shp_seg", "txt_a"]);
     let mut b = board(&m);
     let (tracks, shapes, texts) = (routing_len(&b), drawings(&b).shapes.len(), drawings(&b).texts.len());
-    b.apply(&place(&text, p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000)), true, "")).unwrap();
+    b.apply(&place(&text, p(mm(10.0), mm(5.0)), true, "")).unwrap();
     // KiCad has a track to a segment: the polyline of `trk_a` comes back as the segments it was written as
     let came = (routing_len(&b) - tracks, drawings(&b).shapes.len() - shapes, drawings(&b).texts.len() - texts);
     assert!(came.0 >= 1 && came.1 == 1 && came.2 == 1, "{came:?}");
@@ -28,7 +29,7 @@ fn a_design_block_placed_with_place_as_group_is_one_group_named_for_the_block_an
     // every member is one of the new items, none of the board's own
     assert!(!g.member_ids.iter().any(|m| ["trk_a", "shp_seg", "txt_a"].contains(&m.as_str())), "{:?}", g.member_ids);
     // "Place repeated copies" names the next one
-    b.apply(&place(&text, p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(5_000_000)), true, "Buck2")).unwrap();
+    b.apply(&place(&text, p(mm(40.0), mm(5.0)), true, "Buck2")).unwrap();
     let names: Vec<String> = drawings(&b).groups.iter().filter(|g| g.design_block == "Power:Buck").map(|g| g.name.clone()).collect();
     assert_eq!(names, vec!["Buck", "Buck2"]);
 }
@@ -91,10 +92,10 @@ fn place_design_block_grows_the_copper_layers_and_keeps_the_nets() {
     let mut block = design();
     {
         let rt = block.routing.as_mut().unwrap();
-        let mut t = super::pcb_transform_tests::track("trk_in", "In1.Cu", &[(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000))]);
+        let mut t = super::pcb_transform_tests::track("trk_in", "In1.Cu", &[(mm(10.0), mm(10.0)), (mm(20.0), mm(10.0))]);
         t.net = "BLK".into();
         rt.tracks.push(t);
-        let mut v = super::pcb_transform_tests::via("via_in", (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000)), "F.Cu", "In2.Cu");
+        let mut v = super::pcb_transform_tests::via("via_in", (mm(20.0), mm(10.0)), "F.Cu", "In2.Cu");
         v.net = "BLK".into();
         rt.vias.push(v);
     }

@@ -4,6 +4,7 @@ use super::pcb_transform_tests::{board, id, model, p};
 use super::*;
 use eda_model::table::{Table, TableBorder, TableCell, TableSeparators, TableStroke};
 use eda_model::table_edit::{CellEdit, TablePatch};
+use eda_model::units::mm;
 
 /// A `rows` x `cols` table of 10 x 5 mm cells at (10, 20) mm on `layer`, each cell's text its row and column (`r0c1`).
 fn table(rows: usize, cols: usize, layer: &str) -> Table {
@@ -15,13 +16,13 @@ fn table(rows: usize, cols: usize, layer: &str) -> Table {
         id: String::new(),
         uuid: "stale-uuid".into(),
         layer: layer.into(),
-        at: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000)),
+        at: p(mm(10.0), mm(20.0)),
         angle: 0,
-        col_widths: vec![Nm::from_raw_shim(10_000_000); cols],
-        row_heights: vec![Nm::from_raw_shim(5_000_000); rows],
+        col_widths: vec![mm(10.0); cols],
+        row_heights: vec![mm(5.0); rows],
         cells,
-        border: TableBorder { external: true, header: true, stroke: TableStroke::solid(Nm::from_raw_shim(100_000)) },
-        separators: TableSeparators { rows: true, cols: true, stroke: TableStroke::solid(Nm::from_raw_shim(100_000)) },
+        border: TableBorder { external: true, header: true, stroke: TableStroke::solid(mm(0.1)) },
+        separators: TableSeparators { rows: true, cols: true, stroke: TableStroke::solid(mm(0.1)) },
     }
 }
 
@@ -119,14 +120,14 @@ fn the_dialogs_edit_the_cells_the_border_the_layer_and_the_lock() {
     // Table Properties: layer, lock, the grid and the borders in one step
     let patch = TablePatch {
         texts: Some(vec![vec!["a".into(), "b".into()], vec!["c".into(), "d".into()]]),
-        border: Some(eda_model::table_edit::BorderEdit { external: false, header: true, width_nm: Nm::from_raw_shim(200_000), style: eda_model::table::TableLineStyle::Dash }),
+        border: Some(eda_model::table_edit::BorderEdit { external: false, header: true, width_nm: mm(0.2), style: eda_model::table::TableLineStyle::Dash }),
         ..TablePatch::default()
     };
     b.apply(&Cmd::Table(TableCmd::Set { id: t.clone(), layer: Some("F.Fab".into()), locked: Some(true), patch })).unwrap();
     let g = get(&b, &t);
     assert_eq!(g.layer, "F.Fab");
     assert_eq!(g.texts(), vec![vec!["a", "b"], vec!["c", "d"]]);
-    assert!(!g.border.external && g.border.header && g.border.stroke.width_nm == Nm::from_raw_shim(200_000));
+    assert!(!g.border.external && g.border.header && g.border.stroke.width_nm == mm(0.2));
     assert!(b.design().drawings.as_ref().unwrap().locked_ids.contains(&t), "locked");
     b.apply(&Cmd::Table(TableCmd::Set { id: t.clone(), layer: None, locked: Some(false), patch: TablePatch::default() })).unwrap();
     assert!(!b.design().drawings.as_ref().unwrap().locked_ids.contains(&t), "unlocked");
@@ -143,8 +144,8 @@ fn a_table_moves_turns_and_flips_with_the_generic_verbs_and_is_lockable_and_grou
     let mut b = board(&m);
     let t = add(&mut b, table(2, 3, "F.SilkS"));
     let before = get(&b, &t).clone();
-    b.apply(&Cmd::MoveItems { ids: vec![t.clone()], dx: Nm::from_raw_shim(5_000_000), dy: Nm::from_raw_shim(-2_000_000) }).unwrap();
-    assert_eq!(get(&b, &t).at, p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(18_000_000)));
+    b.apply(&Cmd::MoveItems { ids: vec![t.clone()], dx: mm(5.0), dy: mm(-2.0) }).unwrap();
+    assert_eq!(get(&b, &t).at, p(mm(15.0), mm(18.0)));
     // a quarter turn clockwise about the table's own corner: the table's angle runs the other way (KiCad's), so it reads 270 degrees
     b.apply(&Cmd::RotateItems { ids: vec![t.clone()], pivot: get(&b, &t).at, angle_millideg: 90_000 }).unwrap();
     assert_eq!(get(&b, &t).angle, 270_000);
@@ -177,43 +178,43 @@ fn draw_table_makes_a_grid_with_kicads_cell_defaults_and_what_its_dialog_set() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     let patch = TablePatch { texts: Some(vec![vec!["a".into(), "b".into(), "c".into()], vec!["d".into(), "e".into(), "f".into()]]), ..TablePatch::default() };
-    b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(6_000_000)), cols: 3, rows: 2, cell_w_nm: Nm::from_raw_shim(12_000_000), cell_h_nm: Nm::from_raw_shim(4_000_000), line_width_nm: Nm::from_raw_shim(150_000), locked: true, patch })).unwrap();
+    b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(mm(5.0), mm(6.0)), cols: 3, rows: 2, cell_w_nm: mm(12.0), cell_h_nm: mm(4.0), line_width_nm: mm(0.15), locked: true, patch })).unwrap();
     let t = b.design().drawings.as_ref().unwrap().tables[0].clone();
-    assert_eq!((t.col_count(), t.row_count(), t.at), (3, 2, p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(6_000_000))));
-    assert_eq!(t.col_widths, vec![Nm::from_raw_shim(12_000_000); 3]);
+    assert_eq!((t.col_count(), t.row_count(), t.at), (3, 2, p(mm(5.0), mm(6.0))));
+    assert_eq!(t.col_widths, vec![mm(12.0); 3]);
     assert_eq!(t.texts()[1], vec!["d", "e", "f"]);
     // the cells are `new PCB_TABLECELL`: 50 mil text, automatic thickness, left and centred, a margin of the legacy formula, not mirrored on a front layer
     let c = t.cell(0, 0).unwrap();
-    assert_eq!((c.style.height_nm, c.style.thickness_nm, c.margins, c.style.mirror), (Nm::from_raw_shim(1_270_000), Nm::ZERO, [Nm::from_raw_shim(1_002_500); 4], false));
-    assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (Nm::from_raw_shim(150_000), Nm::from_raw_shim(150_000)));
+    assert_eq!((c.style.height_nm, c.style.thickness_nm, c.margins, c.style.mirror), (mm(1.27), Nm::ZERO, [Nm::new(1_002_500); 4], false));
+    assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (mm(0.15), mm(0.15)));
     assert!(b.design().drawings.as_ref().unwrap().locked_ids.contains(&t.id));
     // on a back layer the cells are mirrored
-    b.apply(&Cmd::Table(TableCmd::Draw { layer: "B.SilkS".into(), at: p(Nm::ZERO, Nm::ZERO), cols: 1, rows: 1, cell_w_nm: Nm::from_raw_shim(5_000_000), cell_h_nm: Nm::from_raw_shim(5_000_000), line_width_nm: Nm::from_raw_shim(100_000), locked: false, patch: TablePatch::default() })).unwrap();
+    b.apply(&Cmd::Table(TableCmd::Draw { layer: "B.SilkS".into(), at: p(Nm::ZERO, Nm::ZERO), cols: 1, rows: 1, cell_w_nm: mm(5.0), cell_h_nm: mm(5.0), line_width_nm: mm(0.1), locked: false, patch: TablePatch::default() })).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().tables.iter().any(|t| t.layer == "B.SilkS" && t.cells[0].style.mirror));
     // refused: no size, no columns
-    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(Nm::ZERO, Nm::ZERO), cols: 0, rows: 1, cell_w_nm: Nm::from_raw_shim(5_000_000), cell_h_nm: Nm::from_raw_shim(5_000_000), line_width_nm: Nm::from_raw_shim(100_000), locked: false, patch: TablePatch::default() })).is_err());
-    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(Nm::ZERO, Nm::ZERO), cols: 1, rows: 1, cell_w_nm: Nm::ZERO, cell_h_nm: Nm::from_raw_shim(5_000_000), line_width_nm: Nm::from_raw_shim(100_000), locked: false, patch: TablePatch::default() })).is_err());
+    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(Nm::ZERO, Nm::ZERO), cols: 0, rows: 1, cell_w_nm: mm(5.0), cell_h_nm: mm(5.0), line_width_nm: mm(0.1), locked: false, patch: TablePatch::default() })).is_err());
+    assert!(b.apply(&Cmd::Table(TableCmd::Draw { layer: "F.SilkS".into(), at: p(Nm::ZERO, Nm::ZERO), cols: 1, rows: 1, cell_w_nm: Nm::ZERO, cell_h_nm: mm(5.0), line_width_nm: mm(0.1), locked: false, patch: TablePatch::default() })).is_err());
 }
 
 fn numbers() -> crate::pcb_table_builders::BoardNumbers {
-    crate::pcb_table_builders::BoardNumbers { thickness_nm: 1_600_000, width_nm: 80_000_000, height_nm: 60_000_000, min_track_nm: 150_000, min_clearance_nm: 180_000, min_drill_nm: 300_000, castellated_pads: 2, press_fit_pads: 0 }
+    crate::pcb_table_builders::BoardNumbers { thickness_nm: mm(1.6), width_nm: mm(80.0), height_nm: mm(60.0), min_track_nm: mm(0.15), min_clearance_nm: mm(0.18), min_drill_nm: mm(0.3), castellated_pads: 2, press_fit_pads: 0 }
 }
 
 #[test]
 fn place_stackup_table_builds_the_boards_stackup_at_the_point_in_the_users_units() {
     let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::Table(TableCmd::PlaceStackup { layer: "F.SilkS".into(), at: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000)), units: Some("mil".into()) })).unwrap();
+    b.apply(&Cmd::Table(TableCmd::PlaceStackup { layer: "F.SilkS".into(), at: p(mm(10.0), mm(20.0)), units: Some("mil".into()) })).unwrap();
     let t = b.design().drawings.as_ref().unwrap().tables[0].clone();
     assert!(!t.id.is_empty(), "the table has an id of its own");
-    assert_eq!((t.col_count(), t.layer.as_str(), t.at), (7, "F.SilkS", p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000))));
+    assert_eq!((t.col_count(), t.layer.as_str(), t.at), (7, "F.SilkS", p(mm(10.0), mm(20.0))));
     // a header row and a row for each of the 13 layers of a four layer board
     assert_eq!(t.row_count(), 14);
     assert_eq!(t.cell(4, 0).unwrap().text, "F.Cu");
     assert_eq!(t.cell(4, 3).unwrap().text, "1.37795 mils", "0.035 mm in the user's units");
     assert_eq!(t.cell(5, 0).unwrap().text, "Dielectric 1");
     // what the board setup says wins over the default: a thicker front copper shows
-    let mut settings = eda_model::rules::StackupSettings::new(4, Nm::from_raw_shim(1_600_000));
+    let mut settings = eda_model::rules::StackupSettings::new(4, mm(1.6));
     settings.stackup.layers.iter_mut().find(|l| l.name == "F.Cu").unwrap().thickness_mm = Some(0.07);
     settings.stackup.copper_finish = Some("ENIG".into());
     b.apply(&Cmd::SetStackup { settings }).unwrap();
@@ -229,13 +230,13 @@ fn place_stackup_table_builds_the_boards_stackup_at_the_point_in_the_users_units
 fn place_board_characteristics_builds_the_table_from_the_stackup_and_the_numbers_it_is_given() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    let mut settings = eda_model::rules::StackupSettings::new(2, Nm::from_raw_shim(1_600_000));
+    let mut settings = eda_model::rules::StackupSettings::new(2, mm(1.6));
     settings.stackup.copper_finish = Some("HASL".into());
     settings.stackup.edge_plating = true;
     b.apply(&Cmd::SetStackup { settings }).unwrap();
-    b.apply(&Cmd::Table(TableCmd::PlaceCharacteristics { layer: "Dwgs.User".into(), at: p(Nm::from_raw_shim(-5_000_000), Nm::from_raw_shim(7_000_000)), units: None, numbers: numbers() })).unwrap();
+    b.apply(&Cmd::Table(TableCmd::PlaceCharacteristics { layer: "Dwgs.User".into(), at: p(mm(-5.0), mm(7.0)), units: None, numbers: numbers() })).unwrap();
     let t = b.design().drawings.as_ref().unwrap().tables[0].clone();
-    assert_eq!((t.col_count(), t.row_count(), t.at, t.layer.as_str()), (4, 7, p(Nm::from_raw_shim(-5_000_000), Nm::from_raw_shim(7_000_000)), "Dwgs.User"));
+    assert_eq!((t.col_count(), t.row_count(), t.at, t.layer.as_str()), (4, 7, p(mm(-5.0), mm(7.0)), "Dwgs.User"));
     let row = |r: usize| (0..4).map(|c| t.cell(r, c).unwrap().text.clone()).collect::<Vec<_>>();
     assert_eq!(row(1), ["Copper layer count: ", "2", "Board thickness: ", "1.6000 mm"]);
     assert_eq!(row(2)[1], "80.0000 mm x 60.0000 mm");
@@ -249,11 +250,11 @@ fn place_board_characteristics_builds_the_table_from_the_stackup_and_the_numbers
 #[test]
 fn the_place_verbs_read_from_and_write_to_the_json_the_studio_sends() {
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "table", "verb": "place_stackup", "layer": "F.SilkS", "at": { "x": 100_000, "y": 200_000 }, "units": "in" })).unwrap();
-    assert_eq!(cmd, Cmd::Table(TableCmd::PlaceStackup { layer: "F.SilkS".into(), at: p(Nm::from_raw_shim(100_000), Nm::from_raw_shim(200_000)), units: Some("in".into()) }));
+    assert_eq!(cmd, Cmd::Table(TableCmd::PlaceStackup { layer: "F.SilkS".into(), at: p(mm(0.1), mm(0.2)), units: Some("in".into()) }));
     let text = r#"{"op":"table","verb":"place_characteristics","layer":"Dwgs.User","at":{"x":0,"y":0},"numbers":{"thickness_nm":1600000,"width_nm":1,"height_nm":2,"min_track_nm":3,"min_clearance_nm":4,"min_drill_nm":5,"castellated_pads":1}}"#;
     let value: serde_json::Value = serde_json::from_str(text).unwrap();
     let cmd: Cmd = serde_json::from_value(value).unwrap();
-    assert!(matches!(&cmd, Cmd::Table(TableCmd::PlaceCharacteristics { units: None, numbers, .. }) if numbers.castellated_pads == 1 && numbers.press_fit_pads == 0 && numbers.min_drill_nm == 5));
+    assert!(matches!(&cmd, Cmd::Table(TableCmd::PlaceCharacteristics { units: None, numbers, .. }) if numbers.castellated_pads == 1 && numbers.press_fit_pads == 0 && numbers.min_drill_nm == Nm::new(5)));
 }
 
 #[test]
@@ -273,5 +274,5 @@ fn the_verbs_read_from_and_write_to_the_json_the_studio_sends() {
     let back: Cmd = serde_json::from_value(value).unwrap();
     assert_eq!(back, add);
     let edit: Cmd = serde_json::from_value(serde_json::json!({ "op": "table", "verb": "edit_cells", "id": "tbl_x", "cells": [[0, 1], [1, 1]], "edit": { "text": "x", "margins": [null, 500_000, null, null] } })).unwrap();
-    assert!(matches!(&edit, Cmd::Table(TableCmd::EditCells { cells, edit, .. }) if cells == &vec![(0, 1), (1, 1)] && edit.margins[1] == Some(Nm::from_raw_shim(500_000))));
+    assert!(matches!(&edit, Cmd::Table(TableCmd::EditCells { cells, edit, .. }) if cells == &vec![(0, 1), (1, 1)] && edit.margins[1] == Some(mm(0.5))));
 }

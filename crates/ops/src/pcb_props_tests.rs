@@ -3,10 +3,11 @@
 
 use super::pcb_transform_tests::{board, design, drawings, ids, model, p, routing, track};
 use super::*;
+use eda_model::units::{mm, um};
 
 fn with_arc() -> Design {
     let mut d = design();
-    let arc = Track::new_arc("GND".into(), "F.Cu".into(), Nm::from_raw_shim(200_000), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000)));
+    let arc = Track::new_arc("GND".into(), "F.Cu".into(), mm(0.2), p(mm(10.0), mm(10.0)), p(mm(15.0), mm(5.0)), p(mm(20.0), mm(10.0)));
     d.routing.as_mut().unwrap().tracks.push(Track { id: "trk_arc".into(), ..arc });
     d
 }
@@ -17,24 +18,24 @@ fn with_arc() -> Design {
 fn edit_track_moves_the_first_and_the_last_point_and_nothing_else() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::EditTrack { id: "trk_a".into(), start: Some(p(Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(41_000_000))), end: None }).unwrap();
-    assert_eq!(routing(&b).tracks[0].pts, vec![p(Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(41_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(40_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(50_000_000))], "only the first vertex moves");
-    b.apply(&Cmd::EditTrack { id: "trk_a".into(), start: None, end: Some(p(Nm::from_raw_shim(21_000_000), Nm::from_raw_shim(52_000_000))) }).unwrap();
-    assert_eq!(routing(&b).tracks[0].pts, vec![p(Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(41_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(40_000_000)), p(Nm::from_raw_shim(21_000_000), Nm::from_raw_shim(52_000_000))], "and the last one, the bend stays");
+    b.apply(&Cmd::EditTrack { id: "trk_a".into(), start: Some(p(mm(11.0), mm(41.0))), end: None }).unwrap();
+    assert_eq!(routing(&b).tracks[0].pts, vec![p(mm(11.0), mm(41.0)), p(mm(20.0), mm(40.0)), p(mm(20.0), mm(50.0))], "only the first vertex moves");
+    b.apply(&Cmd::EditTrack { id: "trk_a".into(), start: None, end: Some(p(mm(21.0), mm(52.0))) }).unwrap();
+    assert_eq!(routing(&b).tracks[0].pts, vec![p(mm(11.0), mm(41.0)), p(mm(20.0), mm(40.0)), p(mm(21.0), mm(52.0))], "and the last one, the bend stays");
     let t = &routing(&b).tracks[0];
-    assert_eq!((t.id.as_str(), t.net.as_str(), t.layer.as_str(), t.width), ("trk_a", "GND", "F.Cu", Nm::from_raw_shim(200_000)), "id, net, layer and width are untouched");
+    assert_eq!((t.id.as_str(), t.net.as_str(), t.layer.as_str(), t.width), ("trk_a", "GND", "F.Cu", mm(0.2)), "id, net, layer and width are untouched");
 }
 
 #[test]
 fn edit_track_keeps_the_mid_point_of_an_arc_and_draws_it_through_the_new_end() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(with_arc(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    b.apply(&Cmd::EditTrack { id: "trk_arc".into(), start: None, end: Some(p(Nm::from_raw_shim(25_000_000), Nm::from_raw_shim(12_000_000))) }).unwrap();
+    let mut b = Board::new(with_arc(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::EditTrack { id: "trk_arc".into(), start: None, end: Some(p(mm(25.0), mm(12.0))) }).unwrap();
     let t = routing(&b).tracks.iter().find(|t| t.id == "trk_arc").unwrap();
-    assert_eq!(t.arc(), Some((p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(25_000_000), Nm::from_raw_shim(12_000_000)))), "still an arc, through the same mid point");
-    b.apply(&Cmd::EditTrack { id: "trk_arc".into(), start: Some(p(Nm::from_raw_shim(9_000_000), Nm::from_raw_shim(9_000_000))), end: None }).unwrap();
+    assert_eq!(t.arc(), Some((p(mm(10.0), mm(10.0)), p(mm(15.0), mm(5.0)), p(mm(25.0), mm(12.0)))), "still an arc, through the same mid point");
+    b.apply(&Cmd::EditTrack { id: "trk_arc".into(), start: Some(p(mm(9.0), mm(9.0))), end: None }).unwrap();
     let t = routing(&b).tracks.iter().find(|t| t.id == "trk_arc").unwrap();
-    assert_eq!(t.arc(), Some((p(Nm::from_raw_shim(9_000_000), Nm::from_raw_shim(9_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(25_000_000), Nm::from_raw_shim(12_000_000)))));
+    assert_eq!(t.arc(), Some((p(mm(9.0), mm(9.0)), p(mm(15.0), mm(5.0)), p(mm(25.0), mm(12.0)))));
 }
 
 #[test]
@@ -47,10 +48,10 @@ fn edit_track_refuses_what_is_not_a_track_edit() {
 
     // A two-point track whose two ends meet is no track.
     let mut d = design();
-    d.routing.as_mut().unwrap().tracks.push(track("trk_two", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(1_000_000), Nm::ZERO)]));
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    d.routing.as_mut().unwrap().tracks.push(track("trk_two", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (mm(1.0), Nm::ZERO)]));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     assert_eq!(b.apply(&Cmd::EditTrack { id: "trk_two".into(), start: None, end: Some(p(Nm::ZERO, Nm::ZERO)) }).unwrap_err()[0].check, "ops_bad_track");
-    assert_eq!(routing(&b).tracks.iter().find(|t| t.id == "trk_two").unwrap().pts, vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1_000_000), Nm::ZERO)], "a refusal changes nothing");
+    assert_eq!(routing(&b).tracks.iter().find(|t| t.id == "trk_two").unwrap().pts, vec![p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO)], "a refusal changes nothing");
 }
 
 // ----------------------------------------------------------- SetItemNet
@@ -65,7 +66,7 @@ fn set_item_net_sets_the_net_of_tracks_vias_and_zones_in_one_command() {
     assert_eq!(routing(&b).zones[0].net, "VCC");
     // Everything else of them is as it was.
     assert_eq!(routing(&b).tracks[0].pts.len(), 3);
-    assert_eq!(routing(&b).vias[0].diameter, Nm::from_raw_shim(600_000));
+    assert_eq!(routing(&b).vias[0].diameter, mm(0.6));
 }
 
 #[test]
@@ -102,10 +103,10 @@ fn replace_shape_changes_the_geometry_in_place_and_keeps_the_id_and_the_lock() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     b.apply(&Cmd::SetLocked { ids: ids(&["shp_rect"]), locked: true }).unwrap();
-    let wider = Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: p(Nm::ZERO, Nm::from_raw_shim(90_000_000)), end: p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(95_000_000)) };
+    let wider = Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: p(Nm::ZERO, mm(90.0)), end: p(mm(15.0), mm(95.0)) };
     b.apply(&Cmd::ReplaceShape { id: "shp_rect".into(), shape: wider }).unwrap();
     let s = drawings(&b).shapes.iter().find(|s| s.id() == "shp_rect").expect("the id is kept even though the replacement carried none");
-    assert_eq!(s.points(), vec![p(Nm::ZERO, Nm::from_raw_shim(90_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(95_000_000))]);
+    assert_eq!(s.points(), vec![p(Nm::ZERO, mm(90.0)), p(mm(15.0), mm(95.0))]);
     assert!(drawings(&b).locked_ids.iter().any(|i| i.as_str() == "shp_rect"), "the lock stays");
     assert_eq!(drawings(&b).shapes.len(), 3, "replaced, not added");
     assert_eq!(drawings(&b).shapes[1].id(), "shp_rect", "and it keeps its place in the drawing order");
@@ -115,15 +116,15 @@ fn replace_shape_changes_the_geometry_in_place_and_keeps_the_id_and_the_lock() {
 fn replace_shape_refuses_a_degenerate_or_unknown_shape() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    let seg = |layer: &str, w| Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: w, filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(Nm::from_raw_shim(1_000_000), Nm::ZERO) };
-    assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: seg("", Nm::from_raw_shim(150_000)) }).unwrap_err()[0].check, "ops_bad_shape");
-    assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: seg("F.SilkS", Nm::from_raw_shim(-1)) }).unwrap_err()[0].check, "ops_bad_shape");
-    let poly = Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1_000_000), Nm::ZERO)] };
+    let seg = |layer: &str, w| Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: w, filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(mm(1.0), Nm::ZERO) };
+    assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: seg("", mm(0.15)) }).unwrap_err()[0].check, "ops_bad_shape");
+    assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: seg("F.SilkS", Nm::new(-1)) }).unwrap_err()[0].check, "ops_bad_shape");
+    let poly = Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO)] };
     assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: poly }).unwrap_err()[0].check, "ops_bad_shape");
-    let circle = Shape::Circle { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, center: p(Nm::from_raw_shim(5000), Nm::from_raw_shim(5000)), end: p(Nm::from_raw_shim(5000), Nm::from_raw_shim(5000)) };
+    let circle = Shape::Circle { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, center: p(um(5.0), um(5.0)), end: p(um(5.0), um(5.0)) };
     assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: circle }).unwrap_err()[0].check, "ops_bad_shape");
-    assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_nope".into(), shape: seg("F.SilkS", Nm::from_raw_shim(150_000)) }).unwrap_err()[0].check, "ops_unknown_shape");
-    assert_eq!(drawings(&b).shapes[0].points(), vec![p(Nm::ZERO, Nm::from_raw_shim(80_000_000)), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(80_000_000))], "refusals change nothing");
+    assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_nope".into(), shape: seg("F.SilkS", mm(0.15)) }).unwrap_err()[0].check, "ops_unknown_shape");
+    assert_eq!(drawings(&b).shapes[0].points(), vec![p(Nm::ZERO, mm(80.0)), p(mm(10.0), mm(80.0))], "refusals change nothing");
 }
 
 // ---------------------------------------------------------------- batch
@@ -131,11 +132,11 @@ fn replace_shape_refuses_a_degenerate_or_unknown_shape() {
 #[test]
 fn a_panel_edit_of_several_items_is_one_batch_that_either_all_lands_or_none_does() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(with_arc(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(with_arc(), &m, mm(0.1), mm(0.3));
     let edit = Cmd::Batch {
         cmds: vec![
             Cmd::SetItemNet { ids: ids(&["trk_a"]), net: "VCC".into() },
-            Cmd::EditTrack { id: "trk_a".into(), start: Some(p(Nm::from_raw_shim(12_000_000), Nm::from_raw_shim(40_000_000))), end: None },
+            Cmd::EditTrack { id: "trk_a".into(), start: Some(p(mm(12.0), mm(40.0))), end: None },
             Cmd::SetZoneName { id: "zone_a".into(), name: "pour".into() },
         ],
     };

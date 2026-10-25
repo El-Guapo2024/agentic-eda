@@ -4,7 +4,7 @@
 //! `SEG::Length`.
 //!
 //! Segments are `(a, b)` point pairs; all arithmetic is exact on `i128` and rounds where
-//! KiCad's `rescale` / `KiROUND` do, so a result matches KiCad's at this IR's micrometre grid.
+//! KiCad's `rescale` / `KiROUND` do, so a result matches KiCad's on its (and the IR's) nanometre grid.
 
 use eda_model::units::Nm;
 use eda_model::ir::Point;
@@ -28,7 +28,7 @@ fn cross(a: (i128, i128), b: (i128, i128)) -> i128 {
 }
 
 fn vec_of(a: Point, b: Point) -> (i128, i128) {
-    ((b.x - a.x).raw_shim() as i128, (b.y - a.y).raw_shim() as i128)
+    ((b.x - a.x).get() as i128, (b.y - a.y).get() as i128)
 }
 
 /// `SEG::checkCollinearOverlap`: where two collinear segments overlap, the midpoint of the overlap.
@@ -51,7 +51,7 @@ fn collinear_overlap(s: Seg2, o: Seg2, use_x_axis: bool, ignore_endpoints: bool)
         }
     }
     let proj = (overlap_start + overlap_end) / 2;
-    let other = if s1_end != s1_start { c1_start + Nm::from_raw_shim(rescale((proj - s1_start).raw_shim() as i128, (c1_end - c1_start).raw_shim() as i128, (s1_end - s1_start).raw_shim() as i128) as i64) } else { c1_start };
+    let other = if s1_end != s1_start { c1_start + Nm::new(rescale((proj - s1_start).get() as i128, (c1_end - c1_start).get() as i128, (s1_end - s1_start).get() as i128) as i64) } else { c1_start };
     Some(if use_x_axis { Point { x: proj, y: other } } else { Point { x: other, y: proj } })
 }
 
@@ -97,7 +97,7 @@ pub fn intersect(s: Seg2, o: Seg2, ignore_endpoints: bool, lines: bool) -> Optio
             return None;
         }
     }
-    Some(Point { x: c.x + Nm::from_raw_shim(rescale(param1, dir2.0, determinant) as i64), y: c.y + Nm::from_raw_shim(rescale(param1, dir2.1, determinant) as i64) })
+    Some(Point { x: c.x + Nm::new(rescale(param1, dir2.0, determinant) as i64), y: c.y + Nm::new(rescale(param1, dir2.1, determinant) as i64) })
 }
 
 /// `SEG::Intersect( aSeg )`: the segments' crossing point, endpoints included.
@@ -111,15 +111,15 @@ pub fn intersect_lines(s: Seg2, o: Seg2) -> Option<Point> {
 }
 
 /// `SEG::LineDistance( aP )`: the distance from `p` to the infinite line through the segment, rounded down.
-pub fn line_distance(s: Seg2, p: Point) -> i64 {
+pub fn line_distance(s: Seg2, p: Point) -> Nm {
     let (a, b) = s;
-    let pp = a.y.raw_shim() as i128 - b.y.raw_shim() as i128;
-    let q = b.x.raw_shim() as i128 - a.x.raw_shim() as i128;
-    let r = -pp * a.x.raw_shim() as i128 - q * a.y.raw_shim() as i128;
+    let pp = a.y.get() as i128 - b.y.get() as i128;
+    let q = b.x.get() as i128 - a.x.get() as i128;
+    let r = -pp * a.x.get() as i128 - q * a.y.get() as i128;
     let l = pp * pp + q * q;
-    let det = pp * p.x.raw_shim() as i128 + q * p.y.raw_shim() as i128 + r;
+    let det = pp * p.x.get() as i128 + q * p.y.get() as i128 + r;
     let dist_sq = if l > 0 { rescale(det, det, l) } else { 0 };
-    eda_drc::kimath::isqrt(dist_sq)
+    Nm::new(eda_drc::kimath::isqrt(dist_sq))
 }
 
 /// `SEG::Contains( aP )`: within `SquaredDistance <= 3` of the segment.
@@ -130,11 +130,11 @@ pub fn contains(s: Seg2, p: Point) -> bool {
 /// `SEG::Collinear( aSeg )`: both ends of `o` are (to the cross product's `<= 1`) on the line through `s`.
 pub fn collinear(s: Seg2, o: Seg2) -> bool {
     let (a, b) = s;
-    let qa = a.y.raw_shim() as i128 - b.y.raw_shim() as i128;
-    let qb = b.x.raw_shim() as i128 - a.x.raw_shim() as i128;
-    let qc = -qa * a.x.raw_shim() as i128 - qb * a.y.raw_shim() as i128;
-    let d1 = (o.0.x.raw_shim() as i128 * qa + o.0.y.raw_shim() as i128 * qb + qc).abs();
-    let d2 = (o.1.x.raw_shim() as i128 * qa + o.1.y.raw_shim() as i128 * qb + qc).abs();
+    let qa = a.y.get() as i128 - b.y.get() as i128;
+    let qb = b.x.get() as i128 - a.x.get() as i128;
+    let qc = -qa * a.x.get() as i128 - qb * a.y.get() as i128;
+    let d1 = (o.0.x.get() as i128 * qa + o.0.y.get() as i128 * qb + qc).abs();
+    let d2 = (o.1.x.get() as i128 * qa + o.1.y.get() as i128 * qb + qc).abs();
     d1 <= 1 && d2 <= 1
 }
 
@@ -154,16 +154,16 @@ pub fn overlaps(s: Seg2, o: Seg2) -> bool {
 }
 
 /// `SEG::Length()`: `VECTOR2I::EuclideanNorm`, rounded to the nearest unit.
-pub fn length(a: Point, b: Point) -> i64 {
+pub fn length(a: Point, b: Point) -> Nm {
     let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
     if dx == dy {
-        (dx.raw_shim() as f64 * std::f64::consts::SQRT_2).round() as i64
+        Nm::kiround(dx.as_f64() * std::f64::consts::SQRT_2)
     } else if dx == Nm::ZERO {
-        dy.raw_shim()
+        dy
     } else if dy == Nm::ZERO {
-        dx.raw_shim()
+        dx
     } else {
-        ((dx).raw_shim() as f64).hypot(dy.raw_shim() as f64).round() as i64
+        Nm::kiround(dx.as_f64().hypot(dy.as_f64()))
     }
 }
 
@@ -172,7 +172,7 @@ mod tests {
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     #[test]
@@ -205,9 +205,9 @@ mod tests {
 
     #[test]
     fn line_distance_is_to_the_infinite_line() {
-        assert_eq!(line_distance((p(0, 0), p(10, 0)), p(500, 7)), 7);
-        assert_eq!(line_distance((p(0, 0), p(10, 10)), p(10, 0)), 7); // 10 / sqrt 2, rounded down
-        assert_eq!(line_distance((p(3, 3), p(3, 3)), p(9, 9)), 0, "a point has no line");
+        assert_eq!(line_distance((p(0, 0), p(10, 0)), p(500, 7)), Nm::new(7));
+        assert_eq!(line_distance((p(0, 0), p(10, 10)), p(10, 0)), Nm::new(7)); // 10 / sqrt 2, rounded down
+        assert_eq!(line_distance((p(3, 3), p(3, 3)), p(9, 9)), Nm::ZERO, "a point has no line");
     }
 
     #[test]
@@ -225,8 +225,8 @@ mod tests {
 
     #[test]
     fn length_is_rounded_like_euclidean_norm() {
-        assert_eq!(length(p(0, 0), p(10, 10)), 14);
-        assert_eq!(length(p(0, 0), p(3, 4)), 5);
-        assert_eq!(length(p(0, 0), p(0, -9)), 9);
+        assert_eq!(length(p(0, 0), p(10, 10)), Nm::new(14));
+        assert_eq!(length(p(0, 0), p(3, 4)), Nm::new(5));
+        assert_eq!(length(p(0, 0), p(0, -9)), Nm::new(9));
     }
 }

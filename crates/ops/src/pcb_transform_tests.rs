@@ -5,6 +5,7 @@ use super::*;
 use eda_model::footprint::{placed_pads, PlacedPad};
 use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
 use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
+use eda_model::units::{mm, um};
 
 pub(super) fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
@@ -16,8 +17,8 @@ pub(super) fn id(s: &str) -> String {
 
 /// Three pads, none on an axis of symmetry, so a mirror image cannot be mistaken for the original.
 pub(super) fn lopsided() -> Footprint {
-    let pad = |n: &str, at: (Nm, Nm)| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at, size: (Nm::from_raw_shim(600_000), Nm::from_raw_shim(600_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-    Footprint { name: "LOPSIDED".into(), pads: vec![pad("1", (Nm::from_raw_shim(-1_500_000), Nm::from_raw_shim(-600_000))), pad("2", (Nm::from_raw_shim(1_500_000), Nm::ZERO)), pad("3", (Nm::from_raw_shim(-1_500_000), Nm::from_raw_shim(700_000)))], courtyard: Some((Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(2_400_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
+    let pad = |n: &str, at: (Nm, Nm)| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at, size: (mm(0.6), mm(0.6)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+    Footprint { name: "LOPSIDED".into(), pads: vec![pad("1", (mm(-1.5), mm(-0.6))), pad("2", (mm(1.5), Nm::ZERO)), pad("3", (mm(-1.5), mm(0.7)))], courtyard: Some((mm(4.0), mm(2.4))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
 pub(super) fn part(r: &str) -> Part {
@@ -48,11 +49,11 @@ pub(super) fn model(layers: &[&str]) -> ConstraintModel {
 }
 
 pub(super) fn track(id: &str, layer: &str, pts: &[(Nm, Nm)]) -> Track {
-    Track { id: id.into(), net: "GND".into(), pins: vec![], layer: layer.into(), width: Nm::from_raw_shim(200_000), pts: pts.iter().map(|&(x, y)| p(x, y)).collect(), arc_mid_offset: None }
+    Track { id: id.into(), net: "GND".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: pts.iter().map(|&(x, y)| p(x, y)).collect(), arc_mid_offset: None }
 }
 
 pub(super) fn via(id: &str, at: (Nm, Nm), from: &str, to: &str) -> Via {
-    Via { id: id.into(), net: "GND".into(), at: p(at.0, at.1), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: from.into(), to_layer: to.into() }
+    Via { id: id.into(), net: "GND".into(), at: p(at.0, at.1), drill: mm(0.3), diameter: mm(0.6), from_layer: from.into(), to_layer: to.into() }
 }
 
 pub(super) fn zone(id: &str, layer: &str, outline: &[(Nm, Nm)]) -> Zone {
@@ -76,18 +77,18 @@ pub(super) fn dimension(id: &str, kind: DimensionKind, start: Point, end: Point)
         text_position: DimensionTextPosition::Outside,
         keep_text_aligned: true,
         text_angle: 0,
-        text_size_nm: Nm::from_raw_shim(1_000_000),
-        stroke_width: Nm::from_raw_shim(150_000),
-        arrow_length: Nm::from_raw_shim(1_000_000),
-        extension_offset: Nm::from_raw_shim(300_000),
-        extension_height: Nm::from_raw_shim(500_000),
+        text_size_nm: mm(1.0),
+        stroke_width: mm(0.15),
+        arrow_length: mm(1.0),
+        extension_offset: mm(0.3),
+        extension_height: mm(0.5),
         arrow_direction: ArrowDirection::Inward,
         text_thickness_nm: None,
     }
 }
 
 pub(super) fn text(id: &str, layer: &str, at: (Nm, Nm), angle: Millideg) -> Text {
-    Text { id: id.into(), content: "T".into(), at: p(at.0, at.1), angle, layer: layer.into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false }
+    Text { id: id.into(), content: "T".into(), at: p(at.0, at.1), angle, layer: layer.into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Center, mirror: false }
 }
 
 /// A board with one of everything, on the given copper layers.
@@ -102,36 +103,36 @@ pub(super) fn design() -> Design {
         schematic: None,
         nets: None,
         placement: Some(PlacementSection {
-            outline: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(100_000_000), Nm::ZERO), p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(100_000_000)), p(Nm::ZERO, Nm::from_raw_shim(100_000_000))],
+            outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(100.0), Nm::ZERO), p(mm(100.0), mm(100.0)), p(Nm::ZERO, mm(100.0))],
             footprints: vec![
-                FootprintInstance { id: "U1".into(), at: p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)), rot: 0, side: Side::Top, label: LabelSide::Above },
-                FootprintInstance { id: "U2".into(), at: p(Nm::from_raw_shim(60_000_000), Nm::from_raw_shim(20_000_000)), rot: 90_000, side: Side::Top, label: LabelSide::Left },
+                FootprintInstance { id: "U1".into(), at: p(mm(30.0), mm(20.0)), rot: 0, side: Side::Top, label: LabelSide::Above },
+                FootprintInstance { id: "U2".into(), at: p(mm(60.0), mm(20.0)), rot: 90_000, side: Side::Top, label: LabelSide::Left },
             ],
             modules: vec![],
         }),
         routing: Some(RoutingSection {
-            tracks: vec![track("trk_a", "F.Cu", &[(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(40_000_000)), (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(40_000_000)), (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(50_000_000))])],
-            vias: vec![via("via_a", (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(50_000_000)), "F.Cu", "B.Cu")],
-            zones: vec![zone("zone_a", "F.Cu", &[(Nm::ZERO, Nm::from_raw_shim(60_000_000)), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(60_000_000)), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(70_000_000)), (Nm::ZERO, Nm::from_raw_shim(70_000_000))])],
+            tracks: vec![track("trk_a", "F.Cu", &[(mm(10.0), mm(40.0)), (mm(20.0), mm(40.0)), (mm(20.0), mm(50.0))])],
+            vias: vec![via("via_a", (mm(20.0), mm(50.0)), "F.Cu", "B.Cu")],
+            zones: vec![zone("zone_a", "F.Cu", &[(Nm::ZERO, mm(60.0)), (mm(10.0), mm(60.0)), (mm(10.0), mm(70.0)), (Nm::ZERO, mm(70.0))])],
             track_width_presets: vec![],
             via_presets: vec![],
             teardrop_settings: Default::default(),
         }),
         drawings: Some(DrawingsSection {
             shapes: vec![
-                Shape::Segment { id: "shp_seg".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: p(Nm::ZERO, Nm::from_raw_shim(80_000_000)), end: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(80_000_000)) },
-                Shape::Rect { id: "shp_rect".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: p(Nm::ZERO, Nm::from_raw_shim(90_000_000)), end: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(95_000_000)) },
-                Shape::Arc { id: "shp_arc".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(80_000_000)), mid: p(Nm::from_raw_shim(45_000_000), Nm::from_raw_shim(75_000_000)), end: p(Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(80_000_000)) },
+                Shape::Segment { id: "shp_seg".into(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: p(Nm::ZERO, mm(80.0)), end: p(mm(10.0), mm(80.0)) },
+                Shape::Rect { id: "shp_rect".into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: p(Nm::ZERO, mm(90.0)), end: p(mm(10.0), mm(95.0)) },
+                Shape::Arc { id: "shp_arc".into(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: p(mm(40.0), mm(80.0)), mid: p(mm(45.0), mm(75.0)), end: p(mm(50.0), mm(80.0)) },
             ],
-            texts: vec![text("txt_a", "F.SilkS", (Nm::from_raw_shim(70_000_000), Nm::from_raw_shim(80_000_000)), 0)],
-            dimensions: vec![dimension("dim_a", DimensionKind::Aligned { height: Nm::from_raw_shim(2_000_000) }, p(Nm::from_raw_shim(70_000_000), Nm::from_raw_shim(50_000_000)), p(Nm::from_raw_shim(80_000_000), Nm::from_raw_shim(50_000_000)))],
+            texts: vec![text("txt_a", "F.SilkS", (mm(70.0), mm(80.0)), 0)],
+            dimensions: vec![dimension("dim_a", DimensionKind::Aligned { height: mm(2.0) }, p(mm(70.0), mm(50.0)), p(mm(80.0), mm(50.0)))],
             ..Default::default()
         }),
     }
 }
 
 pub(super) fn board(m: &ConstraintModel) -> Board<'_> {
-    Board::new(design(), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))
+    Board::new(design(), m, mm(0.1), mm(0.3))
 }
 
 pub(super) fn routing<'a>(b: &'a Board<'_>) -> &'a RoutingSection {
@@ -161,19 +162,19 @@ pub(super) fn everything() -> Vec<String> {
 fn move_items_moves_every_kind_by_the_same_delta_and_keeps_their_ids() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::MoveItems { ids: everything(), dx: Nm::from_raw_shim(2_000_000), dy: Nm::from_raw_shim(-1_000_000) }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: everything(), dx: mm(2.0), dy: mm(-1.0) }).unwrap();
 
     assert_eq!(routing(&b).tracks[0].id, "trk_a");
-    assert_eq!(routing(&b).tracks[0].pts, vec![p(Nm::from_raw_shim(12_000_000), Nm::from_raw_shim(39_000_000)), p(Nm::from_raw_shim(22_000_000), Nm::from_raw_shim(39_000_000)), p(Nm::from_raw_shim(22_000_000), Nm::from_raw_shim(49_000_000))]);
-    assert_eq!(routing(&b).vias[0].at, p(Nm::from_raw_shim(22_000_000), Nm::from_raw_shim(49_000_000)));
-    assert_eq!(routing(&b).zones[0].outline[0], p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(59_000_000)));
+    assert_eq!(routing(&b).tracks[0].pts, vec![p(mm(12.0), mm(39.0)), p(mm(22.0), mm(39.0)), p(mm(22.0), mm(49.0))]);
+    assert_eq!(routing(&b).vias[0].at, p(mm(22.0), mm(49.0)));
+    assert_eq!(routing(&b).zones[0].outline[0], p(mm(2.0), mm(59.0)));
     let d = drawings(&b);
-    assert_eq!(d.shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points(), vec![p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(79_000_000)), p(Nm::from_raw_shim(12_000_000), Nm::from_raw_shim(79_000_000))]);
-    assert_eq!(d.shapes.iter().find(|s| s.id() == "shp_arc").unwrap().points(), vec![p(Nm::from_raw_shim(42_000_000), Nm::from_raw_shim(79_000_000)), p(Nm::from_raw_shim(47_000_000), Nm::from_raw_shim(74_000_000)), p(Nm::from_raw_shim(52_000_000), Nm::from_raw_shim(79_000_000))]);
-    assert_eq!(d.texts[0].at, p(Nm::from_raw_shim(72_000_000), Nm::from_raw_shim(79_000_000)));
-    assert_eq!((d.dimensions[0].start, d.dimensions[0].end), (p(Nm::from_raw_shim(72_000_000), Nm::from_raw_shim(49_000_000)), p(Nm::from_raw_shim(82_000_000), Nm::from_raw_shim(49_000_000))));
-    assert_eq!(pose(&b, "U1").at, p(Nm::from_raw_shim(32_000_000), Nm::from_raw_shim(19_000_000)));
-    assert_eq!(pose(&b, "U2").at, p(Nm::from_raw_shim(62_000_000), Nm::from_raw_shim(19_000_000)));
+    assert_eq!(d.shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points(), vec![p(mm(2.0), mm(79.0)), p(mm(12.0), mm(79.0))]);
+    assert_eq!(d.shapes.iter().find(|s| s.id() == "shp_arc").unwrap().points(), vec![p(mm(42.0), mm(79.0)), p(mm(47.0), mm(74.0)), p(mm(52.0), mm(79.0))]);
+    assert_eq!(d.texts[0].at, p(mm(72.0), mm(79.0)));
+    assert_eq!((d.dimensions[0].start, d.dimensions[0].end), (p(mm(72.0), mm(49.0)), p(mm(82.0), mm(49.0))));
+    assert_eq!(pose(&b, "U1").at, p(mm(32.0), mm(19.0)));
+    assert_eq!(pose(&b, "U2").at, p(mm(62.0), mm(19.0)));
     // Only a position changed.
     assert_eq!((pose(&b, "U2").rot, pose(&b, "U2").side), (90_000, Side::Top));
 }
@@ -184,13 +185,13 @@ fn move_items_moves_every_kind_by_the_same_delta_and_keeps_their_ids() {
 fn move_and_rotate_items_put_a_footprint_where_the_edit_says_off_the_placement_grid() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::MoveItems { ids: ids(&["U1"]), dx: Nm::from_raw_shim(1_250_000), dy: Nm::from_raw_shim(-30_000) }).unwrap();
-    assert_eq!(pose(&b, "U1").at, p(Nm::from_raw_shim(31_250_000), Nm::from_raw_shim(19_970_000)), "moved by the delta, to the um");
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1"]), dx: mm(1.25), dy: mm(-0.03) }).unwrap();
+    assert_eq!(pose(&b, "U1").at, p(mm(31.25), mm(19.97)), "moved by the delta, to the um");
     // Turned about a pivot the footprint is not on: the position is the rotated one, unrounded.
-    b.apply(&Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)), angle_millideg: 90_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), angle_millideg: 90_000 }).unwrap();
     let at = pose(&b, "U1").at;
-    assert_eq!((at.x - Nm::from_raw_shim(30_000_000)).abs() + (at.y - Nm::from_raw_shim(20_000_000)).abs(), Nm::from_raw_shim(1_250_000 + 30_000), "about the pivot, the offset kept: {at:?}");
-    assert!(at.x % Nm::from_raw_shim(100_000) != Nm::ZERO || at.y % Nm::from_raw_shim(100_000) != Nm::ZERO, "not snapped to the 0.1 mm placement grid: {at:?}");
+    assert_eq!((at.x - mm(30.0)).abs() + (at.y - mm(20.0)).abs(), mm(1.25) + mm(0.03), "about the pivot, the offset kept: {at:?}");
+    assert!(at.x % mm(0.1) != Nm::ZERO || at.y % mm(0.1) != Nm::ZERO, "not snapped to the 0.1 mm placement grid: {at:?}");
 }
 
 #[test]
@@ -198,12 +199,12 @@ fn move_items_moves_a_groups_members_and_a_member_named_twice_only_once() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["trk_a", "via_a", "U1"]), design_block: String::new() });
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    b.apply(&Cmd::MoveItems { ids: ids(&["grp_a", "via_a"]), dx: Nm::from_raw_shim(500_000), dy: Nm::ZERO }).unwrap();
-    assert_eq!(routing(&b).vias[0].at, p(Nm::from_raw_shim(20_500_000), Nm::from_raw_shim(50_000_000)), "named by the group and by itself: moved once");
-    assert_eq!(routing(&b).tracks[0].pts[0], p(Nm::from_raw_shim(10_500_000), Nm::from_raw_shim(40_000_000)));
-    assert_eq!(pose(&b, "U1").at, p(Nm::from_raw_shim(30_500_000), Nm::from_raw_shim(20_000_000)));
-    assert_eq!(pose(&b, "U2").at, p(Nm::from_raw_shim(60_000_000), Nm::from_raw_shim(20_000_000)), "a footprint outside the group stays");
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::MoveItems { ids: ids(&["grp_a", "via_a"]), dx: mm(0.5), dy: Nm::ZERO }).unwrap();
+    assert_eq!(routing(&b).vias[0].at, p(mm(20.5), mm(50.0)), "named by the group and by itself: moved once");
+    assert_eq!(routing(&b).tracks[0].pts[0], p(mm(10.5), mm(40.0)));
+    assert_eq!(pose(&b, "U1").at, p(mm(30.5), mm(20.0)));
+    assert_eq!(pose(&b, "U2").at, p(mm(60.0), mm(20.0)), "a footprint outside the group stays");
 }
 
 /// p6 F2: the point editor and Mirror change an item in place (`commit.Modify( item )`), so it keeps its id and its group: the studio's batches for a
@@ -213,24 +214,24 @@ fn point_edit_of_a_grouped_shape_and_mirror_of_a_grouped_track_keep_them_in_thei
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["shp_seg", "trk_a"]), design_block: String::new() });
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let dragged = Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: p(Nm::ZERO, Nm::from_raw_shim(80_000_000)), end: p(Nm::from_raw_shim(12_000_000), Nm::from_raw_shim(81_000_000)) };
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let dragged = Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: p(Nm::ZERO, mm(80.0)), end: p(mm(12.0), mm(81.0)) };
     b.apply(&Cmd::Batch { cmds: vec![Cmd::ReplaceShape { id: "shp_seg".into(), shape: dragged }] }).unwrap();
-    b.apply(&Cmd::MirrorTracks { ids: ids(&["trk_a"]), pivot: p(Nm::from_raw_shim(15_000_000), Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    b.apply(&Cmd::MirrorTracks { ids: ids(&["trk_a"]), pivot: p(mm(15.0), Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let g = drawings(&b).groups.iter().find(|g| g.id == "grp_a").expect("the group is still there");
     assert_eq!(g.member_ids, ids(&["shp_seg", "trk_a"]));
-    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points(), vec![p(Nm::ZERO, Nm::from_raw_shim(80_000_000)), p(Nm::from_raw_shim(12_000_000), Nm::from_raw_shim(81_000_000))]);
+    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points(), vec![p(Nm::ZERO, mm(80.0)), p(mm(12.0), mm(81.0))]);
     // `PCB_TRACK::Mirror`: the points mirror across x = 15 mm, the layer stays (Mirror is not Flip)
     let t = &routing(&b).tracks[0];
-    assert_eq!((t.id.as_str(), t.layer.as_str(), t.pts.clone()), ("trk_a", "F.Cu", vec![p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(40_000_000)), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(40_000_000)), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(50_000_000))]));
+    assert_eq!((t.id.as_str(), t.layer.as_str(), t.pts.clone()), ("trk_a", "F.Cu", vec![p(mm(20.0), mm(40.0)), p(mm(10.0), mm(40.0)), p(mm(10.0), mm(50.0))]));
     // an arc stays an arc, mirrored
     let mut d = design();
-    let arc = Track::new_arc("GND".into(), "F.Cu".into(), Nm::from_raw_shim(200_000), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000)));
+    let arc = Track::new_arc("GND".into(), "F.Cu".into(), mm(0.2), p(mm(10.0), mm(10.0)), p(mm(15.0), mm(5.0)), p(mm(20.0), mm(10.0)));
     d.routing.as_mut().unwrap().tracks.push(Track { id: "trk_arc".into(), ..arc });
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    b.apply(&Cmd::MirrorTracks { ids: ids(&["trk_arc"]), pivot: p(Nm::ZERO, Nm::from_raw_shim(20_000_000)), direction: FlipDirection::TopBottom }).unwrap();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::MirrorTracks { ids: ids(&["trk_arc"]), pivot: p(Nm::ZERO, mm(20.0)), direction: FlipDirection::TopBottom }).unwrap();
     let t = routing(&b).tracks.iter().find(|t| t.id == "trk_arc").unwrap();
-    assert_eq!(t.arc(), Some((p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(30_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(35_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(30_000_000)))));
+    assert_eq!(t.arc(), Some((p(mm(10.0), mm(30.0)), p(mm(15.0), mm(35.0)), p(mm(20.0), mm(30.0)))));
     assert_eq!(b.apply(&Cmd::MirrorTracks { ids: ids(&["trk_nope"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::TopBottom }).unwrap_err()[0].check, "ops_unknown_track");
 }
 
@@ -238,22 +239,22 @@ fn point_edit_of_a_grouped_shape_and_mirror_of_a_grouped_track_keep_them_in_thei
 fn a_moved_arc_track_is_still_an_arc() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    let arc = Track::new_arc("GND".into(), "F.Cu".into(), Nm::from_raw_shim(200_000), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000)));
+    let arc = Track::new_arc("GND".into(), "F.Cu".into(), mm(0.2), p(mm(10.0), mm(10.0)), p(mm(15.0), mm(5.0)), p(mm(20.0), mm(10.0)));
     d.routing.as_mut().unwrap().tracks.push(Track { id: "trk_arc".into(), ..arc });
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    b.apply(&Cmd::MoveItems { ids: ids(&["trk_arc"]), dx: Nm::from_raw_shim(3_333_000), dy: Nm::from_raw_shim(777_000) }).unwrap();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::MoveItems { ids: ids(&["trk_arc"]), dx: mm(3.333), dy: mm(0.777) }).unwrap();
     let t = routing(&b).tracks.iter().find(|t| t.id == "trk_arc").unwrap();
-    assert_eq!(t.arc(), Some((p(Nm::from_raw_shim(13_333_000), Nm::from_raw_shim(10_777_000)), p(Nm::from_raw_shim(18_333_000), Nm::from_raw_shim(5_777_000)), p(Nm::from_raw_shim(23_333_000), Nm::from_raw_shim(10_777_000)))));
+    assert_eq!(t.arc(), Some((p(mm(13.333), mm(10.777)), p(mm(18.333), mm(5.777)), p(mm(23.333), mm(10.777)))));
 }
 
 #[test]
 fn an_unknown_id_refuses_the_whole_command_and_nothing_moves() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    let e = b.apply(&Cmd::MoveItems { ids: ids(&["trk_a", "no_such_item"]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO }).unwrap_err();
+    let e = b.apply(&Cmd::MoveItems { ids: ids(&["trk_a", "no_such_item"]), dx: mm(1.0), dy: Nm::ZERO }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_item");
-    assert_eq!(routing(&b).tracks[0].pts[0], p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(40_000_000)));
-    let e = b.apply(&Cmd::MoveItems { ids: vec![], dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO }).unwrap_err();
+    assert_eq!(routing(&b).tracks[0].pts[0], p(mm(10.0), mm(40.0)));
+    let e = b.apply(&Cmd::MoveItems { ids: vec![], dx: mm(1.0), dy: Nm::ZERO }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_transform");
 }
 
@@ -265,21 +266,21 @@ fn rotate_items_turns_copper_and_graphics_about_one_shared_pivot() {
     let mut b = board(&m);
     // A quarter turn clockwise on the screen: (dx, dy) -> (-dy, dx).
     b.apply(&Cmd::RotateItems { ids: ids(&["trk_a", "via_a", "zone_a", "shp_seg", "txt_a", "dim_a"]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
-    assert_eq!(routing(&b).tracks[0].pts, vec![p(Nm::from_raw_shim(-40_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(-40_000_000), Nm::from_raw_shim(20_000_000)), p(Nm::from_raw_shim(-50_000_000), Nm::from_raw_shim(20_000_000))]);
-    assert_eq!(routing(&b).vias[0].at, p(Nm::from_raw_shim(-50_000_000), Nm::from_raw_shim(20_000_000)));
-    assert_eq!(routing(&b).zones[0].outline[0], p(Nm::from_raw_shim(-60_000_000), Nm::ZERO));
-    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points(), vec![p(Nm::from_raw_shim(-80_000_000), Nm::ZERO), p(Nm::from_raw_shim(-80_000_000), Nm::from_raw_shim(10_000_000))]);
-    assert_eq!(drawings(&b).dimensions[0].start, p(Nm::from_raw_shim(-50_000_000), Nm::from_raw_shim(70_000_000)));
+    assert_eq!(routing(&b).tracks[0].pts, vec![p(mm(-40.0), mm(10.0)), p(mm(-40.0), mm(20.0)), p(mm(-50.0), mm(20.0))]);
+    assert_eq!(routing(&b).vias[0].at, p(mm(-50.0), mm(20.0)));
+    assert_eq!(routing(&b).zones[0].outline[0], p(mm(-60.0), Nm::ZERO));
+    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points(), vec![p(mm(-80.0), Nm::ZERO), p(mm(-80.0), mm(10.0))]);
+    assert_eq!(drawings(&b).dimensions[0].start, p(mm(-50.0), mm(70.0)));
 }
 
 #[test]
 fn a_text_turned_clockwise_loses_the_same_angle_because_its_angle_is_kicads() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::RotateItems { ids: ids(&["txt_a"]), pivot: p(Nm::from_raw_shim(70_000_000), Nm::from_raw_shim(80_000_000)), angle_millideg: 90_000 }).unwrap();
-    assert_eq!(drawings(&b).texts[0].at, p(Nm::from_raw_shim(70_000_000), Nm::from_raw_shim(80_000_000)), "it turns about its own anchor");
+    b.apply(&Cmd::RotateItems { ids: ids(&["txt_a"]), pivot: p(mm(70.0), mm(80.0)), angle_millideg: 90_000 }).unwrap();
+    assert_eq!(drawings(&b).texts[0].at, p(mm(70.0), mm(80.0)), "it turns about its own anchor");
     assert_eq!(drawings(&b).texts[0].angle, 270_000, "KiCad angles run counter-clockwise: a clockwise quarter turn is 270");
-    b.apply(&Cmd::RotateItems { ids: ids(&["txt_a"]), pivot: p(Nm::from_raw_shim(70_000_000), Nm::from_raw_shim(80_000_000)), angle_millideg: -90_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["txt_a"]), pivot: p(mm(70.0), mm(80.0)), angle_millideg: -90_000 }).unwrap();
     assert_eq!(drawings(&b).texts[0].angle, 0);
 }
 
@@ -291,14 +292,14 @@ fn a_footprint_turned_about_a_pivot_has_its_pads_where_the_same_turn_puts_them()
         let fp = d.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "U1").unwrap();
         fp.rot = rot;
         fp.side = side;
-        let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
         let before = pads_of(&b, &m, "U1");
-        let pivot = p(Nm::from_raw_shim(35_000_000), Nm::from_raw_shim(25_000_000));
+        let pivot = p(mm(35.0), mm(25.0));
         b.apply(&Cmd::RotateItems { ids: ids(&["U1"]), pivot, angle_millideg: 90_000 }).unwrap();
         let after = pads_of(&b, &m, "U1");
         for (was, now) in before.iter().zip(&after) {
             let want = rotate_point_about(was.center, pivot, 90_000);
-            assert!((now.center.x - want.x).abs() <= Nm::from_raw_shim(1) && (now.center.y - want.y).abs() <= Nm::from_raw_shim(1), "pad {} of a part at rot {rot} {side:?}: {:?} -> {:?}, wanted {want:?}", was.number, was.center, now.center);
+            assert!((now.center.x - want.x).abs() <= Nm::new(1) && (now.center.y - want.y).abs() <= Nm::new(1), "pad {} of a part at rot {rot} {side:?}: {:?} -> {:?}, wanted {want:?}", was.number, was.center, now.center);
         }
         assert_eq!(pose(&b, "U1").rot, ((rot as i64 + 90_000) % 360_000) as u32);
     }
@@ -308,13 +309,13 @@ fn a_footprint_turned_about_a_pivot_has_its_pads_where_the_same_turn_puts_them()
 fn a_rectangle_turned_a_quarter_stays_a_normalised_rectangle_and_any_other_turn_makes_it_a_polygon() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(92_500_000)), angle_millideg: 90_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(mm(5.0), mm(92.5)), angle_millideg: 90_000 }).unwrap();
     let r = drawings(&b).shapes.iter().find(|s| s.id() == "shp_rect").unwrap();
     // 10 x 5 mm about its own centre: 5 x 10 mm, start at the top left.
-    assert_eq!(r.points(), vec![p(Nm::from_raw_shim(2_500_000), Nm::from_raw_shim(87_500_000)), p(Nm::from_raw_shim(7_500_000), Nm::from_raw_shim(97_500_000))]);
+    assert_eq!(r.points(), vec![p(mm(2.5), mm(87.5)), p(mm(7.5), mm(97.5))]);
 
     let mut b = board(&m);
-    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(92_500_000)), angle_millideg: 45_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(mm(5.0), mm(92.5)), angle_millideg: 45_000 }).unwrap();
     let r = drawings(&b).shapes.iter().find(|s| s.id() == "shp_rect").unwrap();
     assert!(matches!(r, Shape::Polygon { pts, .. } if pts.len() == 4), "{r:?}");
     assert_eq!(r.id(), "shp_rect", "it is still the same item");
@@ -324,12 +325,12 @@ fn a_rectangle_turned_a_quarter_stays_a_normalised_rectangle_and_any_other_turn_
 fn a_rotated_arc_track_is_still_an_arc_with_its_mid_point_turned() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    let arc = Track::new_arc("GND".into(), "F.Cu".into(), Nm::from_raw_shim(200_000), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000)));
+    let arc = Track::new_arc("GND".into(), "F.Cu".into(), mm(0.2), p(mm(10.0), mm(10.0)), p(mm(15.0), mm(5.0)), p(mm(20.0), mm(10.0)));
     d.routing.as_mut().unwrap().tracks.push(Track { id: "trk_arc".into(), ..arc });
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    b.apply(&Cmd::RotateItems { ids: ids(&["trk_arc"]), pivot: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), angle_millideg: 90_000 }).unwrap();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::RotateItems { ids: ids(&["trk_arc"]), pivot: p(mm(10.0), mm(10.0)), angle_millideg: 90_000 }).unwrap();
     let t = routing(&b).tracks.iter().find(|t| t.id == "trk_arc").unwrap();
-    assert_eq!(t.arc(), Some((p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(15_000_000)), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000)))));
+    assert_eq!(t.arc(), Some((p(mm(10.0), mm(10.0)), p(mm(15.0), mm(15.0)), p(mm(10.0), mm(20.0)))));
 }
 
 #[test]
@@ -338,14 +339,14 @@ fn an_orthogonal_dimension_swaps_its_axis_and_its_side_with_a_quarter_turn() {
     // KiCad: counter-clockwise 90 on a horizontal crossbar makes it vertical, height unchanged; the same turn on a vertical one makes it
     // horizontal with the height negated. Ours is clockwise-positive, so the signs below are KiCad's, negated.
     let mut d = design();
-    d.drawings.as_mut().unwrap().dimensions = vec![dimension("o_h", DimensionKind::Orthogonal { height: Nm::from_raw_shim(3_000_000), horizontal: true }, p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000))), dimension("o_v", DimensionKind::Orthogonal { height: Nm::from_raw_shim(3_000_000), horizontal: false }, p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000)))];
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    d.drawings.as_mut().unwrap().dimensions = vec![dimension("o_h", DimensionKind::Orthogonal { height: mm(3.0), horizontal: true }, p(Nm::ZERO, Nm::ZERO), p(mm(10.0), mm(5.0))), dimension("o_v", DimensionKind::Orthogonal { height: mm(3.0), horizontal: false }, p(Nm::ZERO, Nm::ZERO), p(mm(10.0), mm(5.0)))];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::RotateItems { ids: ids(&["o_h", "o_v"]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: -90_000 }).unwrap();
     let kinds: Vec<DimensionKind> = drawings(&b).dimensions.iter().map(|d| d.kind).collect();
-    assert_eq!(kinds, vec![DimensionKind::Orthogonal { height: Nm::from_raw_shim(3_000_000), horizontal: false }, DimensionKind::Orthogonal { height: Nm::from_raw_shim(-3_000_000), horizontal: true }]);
+    assert_eq!(kinds, vec![DimensionKind::Orthogonal { height: mm(3.0), horizontal: false }, DimensionKind::Orthogonal { height: mm(-3.0), horizontal: true }]);
     // Half a turn only changes the side.
     b.apply(&Cmd::RotateItems { ids: ids(&["o_h"]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 180_000 }).unwrap();
-    assert_eq!(drawings(&b).dimensions[0].kind, DimensionKind::Orthogonal { height: Nm::from_raw_shim(-3_000_000), horizontal: false });
+    assert_eq!(drawings(&b).dimensions[0].kind, DimensionKind::Orthogonal { height: mm(-3.0), horizontal: false });
 }
 
 // --------------------------------------------------------------------- flip
@@ -354,18 +355,18 @@ fn an_orthogonal_dimension_swaps_its_axis_and_its_side_with_a_quarter_turn() {
 fn flip_items_mirrors_copper_across_the_axis_and_puts_it_on_the_other_layer() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::FlipItems { ids: ids(&["trk_a", "via_a", "zone_a"]), pivot: p(Nm::from_raw_shim(50_000_000), Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["trk_a", "via_a", "zone_a"]), pivot: p(mm(50.0), Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let t = &routing(&b).tracks[0];
-    assert_eq!((t.layer.as_str(), t.pts.clone()), ("B.Cu", vec![p(Nm::from_raw_shim(90_000_000), Nm::from_raw_shim(40_000_000)), p(Nm::from_raw_shim(80_000_000), Nm::from_raw_shim(40_000_000)), p(Nm::from_raw_shim(80_000_000), Nm::from_raw_shim(50_000_000))]));
-    assert_eq!(routing(&b).vias[0].at, p(Nm::from_raw_shim(80_000_000), Nm::from_raw_shim(50_000_000)));
+    assert_eq!((t.layer.as_str(), t.pts.clone()), ("B.Cu", vec![p(mm(90.0), mm(40.0)), p(mm(80.0), mm(40.0)), p(mm(80.0), mm(50.0))]));
+    assert_eq!(routing(&b).vias[0].at, p(mm(80.0), mm(50.0)));
     assert_eq!((routing(&b).vias[0].from_layer.as_str(), routing(&b).vias[0].to_layer.as_str()), ("F.Cu", "B.Cu"), "a through via has no layer pair to change");
     let z = &routing(&b).zones[0];
-    assert_eq!((z.layer.as_str(), z.outline[0]), ("B.Cu", p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(60_000_000))));
+    assert_eq!((z.layer.as_str(), z.outline[0]), ("B.Cu", p(mm(100.0), mm(60.0))));
 
     // Top-bottom mirrors y instead.
     let mut b = board(&m);
-    b.apply(&Cmd::FlipItems { ids: ids(&["trk_a"]), pivot: p(Nm::ZERO, Nm::from_raw_shim(40_000_000)), direction: FlipDirection::TopBottom }).unwrap();
-    assert_eq!(routing(&b).tracks[0].pts, vec![p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(40_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(40_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(30_000_000))]);
+    b.apply(&Cmd::FlipItems { ids: ids(&["trk_a"]), pivot: p(Nm::ZERO, mm(40.0)), direction: FlipDirection::TopBottom }).unwrap();
+    assert_eq!(routing(&b).tracks[0].pts, vec![p(mm(10.0), mm(40.0)), p(mm(20.0), mm(40.0)), p(mm(20.0), mm(30.0))]);
 }
 
 /// `ZONE::Flip`: every layer of a zone's set goes to the other side, inner layers mirrored through the stack; a technical zone swaps its front and back layer.
@@ -373,13 +374,13 @@ fn flip_items_mirrors_copper_across_the_axis_and_puts_it_on_the_other_layer() {
 fn a_flipped_zone_flips_each_layer_of_its_set() {
     let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu"]);
     let mut d = design();
-    let mut inner = zone("zone_in", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(1_000_000), Nm::ZERO), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000))]);
+    let mut inner = zone("zone_in", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (mm(1.0), Nm::ZERO), (mm(1.0), mm(1.0))]);
     inner.set_layer_set(&["F.Cu", "In1.Cu", "In2.Cu"]);
-    let mut silk = zone("zone_silk", "F.SilkS", &[(Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(1_000_000), Nm::ZERO), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000))]);
+    let mut silk = zone("zone_silk", "F.SilkS", &[(Nm::ZERO, Nm::ZERO), (mm(1.0), Nm::ZERO), (mm(1.0), mm(1.0))]);
     silk.net = String::new();
     silk.set_layer_set(&["F.SilkS", "F.Mask"]);
     d.routing.as_mut().unwrap().zones = vec![inner, silk];
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::FlipItems { ids: ids(&["zone_in", "zone_silk"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let zones = &routing(&b).zones;
     assert_eq!(zones[0].layer_set(), vec!["In3.Cu", "In4.Cu", "B.Cu"], "F.Cu to B.Cu, In1.Cu to In4.Cu and In2.Cu to In3.Cu on six layers, in the order of the stack");
@@ -390,9 +391,9 @@ fn a_flipped_zone_flips_each_layer_of_its_set() {
 fn a_flipped_blind_via_changes_its_layer_pair_and_inner_layers_mirror_through_the_stack() {
     let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
     let mut d = design();
-    d.routing.as_mut().unwrap().vias.push(via("via_blind", (Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(30_000_000)), "F.Cu", "In1.Cu"));
-    d.routing.as_mut().unwrap().tracks.push(track("trk_in", "In1.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(1_000_000), Nm::ZERO)]));
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    d.routing.as_mut().unwrap().vias.push(via("via_blind", (mm(30.0), mm(30.0)), "F.Cu", "In1.Cu"));
+    d.routing.as_mut().unwrap().tracks.push(track("trk_in", "In1.Cu", &[(Nm::ZERO, Nm::ZERO), (mm(1.0), Nm::ZERO)]));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::FlipItems { ids: ids(&["via_blind", "trk_in"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let v = routing(&b).vias.iter().find(|v| v.id == "via_blind").unwrap();
     assert_eq!((v.from_layer.as_str(), v.to_layer.as_str()), ("B.Cu", "In2.Cu"));
@@ -421,11 +422,11 @@ fn flipped_graphics_mirror_swap_an_arcs_ends_and_change_layer() {
     b.apply(&Cmd::FlipItems { ids: ids(&["shp_seg", "shp_rect", "shp_arc"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let d = drawings(&b);
     let seg = d.shapes.iter().find(|s| s.id() == "shp_seg").unwrap();
-    assert_eq!((seg.layer(), seg.points()), ("B.SilkS", vec![p(Nm::ZERO, Nm::from_raw_shim(80_000_000)), p(Nm::from_raw_shim(-10_000_000), Nm::from_raw_shim(80_000_000))]));
+    assert_eq!((seg.layer(), seg.points()), ("B.SilkS", vec![p(Nm::ZERO, mm(80.0)), p(mm(-10.0), mm(80.0))]));
     let rect = d.shapes.iter().find(|s| s.id() == "shp_rect").unwrap();
-    assert_eq!((rect.layer(), rect.points()), ("B.Fab", vec![p(Nm::from_raw_shim(-10_000_000), Nm::from_raw_shim(90_000_000)), p(Nm::ZERO, Nm::from_raw_shim(95_000_000))]), "normalised: start at the top left");
+    assert_eq!((rect.layer(), rect.points()), ("B.Fab", vec![p(mm(-10.0), mm(90.0)), p(Nm::ZERO, mm(95.0))]), "normalised: start at the top left");
     let arc = d.shapes.iter().find(|s| s.id() == "shp_arc").unwrap();
-    assert_eq!(arc.points(), vec![p(Nm::from_raw_shim(-50_000_000), Nm::from_raw_shim(80_000_000)), p(Nm::from_raw_shim(-45_000_000), Nm::from_raw_shim(75_000_000)), p(Nm::from_raw_shim(-40_000_000), Nm::from_raw_shim(80_000_000))], "start and end swapped, still the same arc");
+    assert_eq!(arc.points(), vec![p(mm(-50.0), mm(80.0)), p(mm(-45.0), mm(75.0)), p(mm(-40.0), mm(80.0))], "start and end swapped, still the same arc");
 }
 
 #[test]
@@ -434,7 +435,7 @@ fn a_flipped_text_changes_layer_negates_its_angle_and_reads_mirrored() {
     let mut d = design();
     d.drawings.as_mut().unwrap().texts.push(text("txt_b", "F.SilkS", (Nm::ZERO, Nm::ZERO), 30_000));
     d.drawings.as_mut().unwrap().texts.push(text("txt_user", "Dwgs.User", (Nm::ZERO, Nm::ZERO), 30_000));
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::FlipItems { ids: ids(&["txt_b", "txt_user"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let t = drawings(&b).texts.iter().find(|t| t.id == "txt_b").unwrap();
     assert_eq!((t.layer.as_str(), t.angle, t.mirror), ("B.SilkS", 330_000, true));
@@ -450,17 +451,17 @@ fn a_flipped_dimension_moves_its_crossbar_side_with_the_mirror() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().dimensions = vec![
-        dimension("aligned", DimensionKind::Aligned { height: Nm::from_raw_shim(2_000_000) }, p(Nm::from_raw_shim(10_000_000), Nm::ZERO), p(Nm::from_raw_shim(20_000_000), Nm::ZERO)),
-        dimension("o_h", DimensionKind::Orthogonal { height: Nm::from_raw_shim(3_000_000), horizontal: true }, p(Nm::from_raw_shim(10_000_000), Nm::ZERO), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000))),
-        dimension("o_v", DimensionKind::Orthogonal { height: Nm::from_raw_shim(3_000_000), horizontal: false }, p(Nm::from_raw_shim(10_000_000), Nm::ZERO), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000))),
+        dimension("aligned", DimensionKind::Aligned { height: mm(2.0) }, p(mm(10.0), Nm::ZERO), p(mm(20.0), Nm::ZERO)),
+        dimension("o_h", DimensionKind::Orthogonal { height: mm(3.0), horizontal: true }, p(mm(10.0), Nm::ZERO), p(mm(20.0), mm(5.0))),
+        dimension("o_v", DimensionKind::Orthogonal { height: mm(3.0), horizontal: false }, p(mm(10.0), Nm::ZERO), p(mm(20.0), mm(5.0))),
     ];
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::FlipItems { ids: ids(&["aligned", "o_h", "o_v"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let by_id = |name: &str| drawings(&b).dimensions.iter().find(|d| d.id == name).unwrap().clone();
-    assert_eq!(by_id("aligned").kind, DimensionKind::Aligned { height: Nm::from_raw_shim(-2_000_000) });
-    assert_eq!((by_id("aligned").start, by_id("aligned").end), (p(Nm::from_raw_shim(-10_000_000), Nm::ZERO), p(Nm::from_raw_shim(-20_000_000), Nm::ZERO)));
-    assert_eq!(by_id("o_h").kind, DimensionKind::Orthogonal { height: Nm::from_raw_shim(3_000_000), horizontal: true }, "a left-right flip keeps a horizontal crossbar's side");
-    assert_eq!(by_id("o_v").kind, DimensionKind::Orthogonal { height: Nm::from_raw_shim(-3_000_000), horizontal: false }, "and swaps a vertical one's");
+    assert_eq!(by_id("aligned").kind, DimensionKind::Aligned { height: mm(-2.0) });
+    assert_eq!((by_id("aligned").start, by_id("aligned").end), (p(mm(-10.0), Nm::ZERO), p(mm(-20.0), Nm::ZERO)));
+    assert_eq!(by_id("o_h").kind, DimensionKind::Orthogonal { height: mm(3.0), horizontal: true }, "a left-right flip keeps a horizontal crossbar's side");
+    assert_eq!(by_id("o_v").kind, DimensionKind::Orthogonal { height: mm(-3.0), horizontal: false }, "and swaps a vertical one's");
     assert_eq!(by_id("aligned").layer, "Dwgs.User");
 }
 
@@ -473,9 +474,9 @@ fn a_flipped_footprint_has_every_pad_where_the_mirror_image_puts_it() {
             let fp = d.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "U1").unwrap();
             fp.rot = rot;
             fp.side = side;
-            let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+            let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
             let before = pads_of(&b, &m, "U1");
-            let pivot = p(Nm::from_raw_shim(35_000_000), Nm::from_raw_shim(26_000_000));
+            let pivot = p(mm(35.0), mm(26.0));
             b.apply(&Cmd::FlipItems { ids: ids(&["U1"]), pivot, direction: dir }).unwrap();
             let after = pads_of(&b, &m, "U1");
             let new_pose = pose(&b, "U1");
@@ -485,7 +486,7 @@ fn a_flipped_footprint_has_every_pad_where_the_mirror_image_puts_it() {
                     FlipDirection::LeftRight => p(2 * pivot.x - was.center.x, was.center.y),
                     FlipDirection::TopBottom => p(was.center.x, 2 * pivot.y - was.center.y),
                 };
-                assert!((now.center.x - want.x).abs() <= Nm::from_raw_shim(1) && (now.center.y - want.y).abs() <= Nm::from_raw_shim(1), "{dir:?}, part at rot {rot} {side:?}, pad {}: {:?} -> {:?}, the mirror image is {want:?}", was.number, was.center, now.center);
+                assert!((now.center.x - want.x).abs() <= Nm::new(1) && (now.center.y - want.y).abs() <= Nm::new(1), "{dir:?}, part at rot {rot} {side:?}, pad {}: {:?} -> {:?}, the mirror image is {want:?}", was.number, was.center, now.center);
             }
         }
     }
@@ -496,10 +497,10 @@ fn flipping_a_footprint_twice_gives_it_back_and_swaps_its_label_side_both_ways()
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     let was = pose(&b, "U2");
-    b.apply(&Cmd::FlipItems { ids: ids(&["U2"]), pivot: p(Nm::from_raw_shim(50_000_000), Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["U2"]), pivot: p(mm(50.0), Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let once = pose(&b, "U2");
-    assert_eq!((once.at, once.rot, once.side, once.label), (p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000)), 270_000, Side::Bottom, LabelSide::Right));
-    b.apply(&Cmd::FlipItems { ids: ids(&["U2"]), pivot: p(Nm::from_raw_shim(50_000_000), Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!((once.at, once.rot, once.side, once.label), (p(mm(40.0), mm(20.0)), 270_000, Side::Bottom, LabelSide::Right));
+    b.apply(&Cmd::FlipItems { ids: ids(&["U2"]), pivot: p(mm(50.0), Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let twice = pose(&b, "U2");
     assert_eq!((twice.at, twice.rot, twice.side, twice.label), (was.at, was.rot, was.side, was.label));
 }
@@ -514,11 +515,11 @@ fn the_edit_tools_never_clear_the_routing_even_of_a_footprint_with_copper_on_its
     let m = model(&["F.Cu", "B.Cu"]);
     // U1's pad 2 sits at (31 500, 20 000): a track runs into it, and a via sits on it.
     let mut routed = design();
-    routed.routing.as_mut().unwrap().tracks.push(track("trk_u1", "F.Cu", &[(Nm::from_raw_shim(31_500_000), Nm::from_raw_shim(20_000_000)), (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000))]));
-    routed.routing.as_mut().unwrap().vias.push(via("via_u1", (Nm::from_raw_shim(31_500_000), Nm::from_raw_shim(20_000_000)), "F.Cu", "B.Cu"));
-    let b = Board::new(routed.clone(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    routed.routing.as_mut().unwrap().tracks.push(track("trk_u1", "F.Cu", &[(mm(31.5), mm(20.0)), (mm(40.0), mm(20.0))]));
+    routed.routing.as_mut().unwrap().vias.push(via("via_u1", (mm(31.5), mm(20.0)), "F.Cu", "B.Cu"));
+    let b = Board::new(routed.clone(), &m, mm(0.1), mm(0.3));
 
-    let move_u1 = Cmd::MoveItems { ids: ids(&["trk_a", "U1"]), dx: Nm::from_raw_shim(1), dy: Nm::from_raw_shim(1) };
+    let move_u1 = Cmd::MoveItems { ids: ids(&["trk_a", "U1"]), dx: Nm::new(1), dy: Nm::new(1) };
     assert!(!move_u1.clears_routing_in(&b), "a footprint with a track on its pad moves without the routing");
     assert!(!Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 15_000 }.clears_routing_in(&b));
     assert!(!Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::TopBottom }.clears_routing_in(&b));
@@ -528,7 +529,7 @@ fn the_edit_tools_never_clear_the_routing_even_of_a_footprint_with_copper_on_its
     // A group moves its footprint members the same way.
     let mut with_group = routed;
     with_group.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["trk_a", "U1"]), design_block: String::new() });
-    assert!(!Cmd::MoveItems { ids: ids(&["grp_a"]), dx: Nm::from_raw_shim(1), dy: Nm::from_raw_shim(1) }.clears_routing_in(&Board::new(with_group, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))));
+    assert!(!Cmd::MoveItems { ids: ids(&["grp_a"]), dx: Nm::new(1), dy: Nm::new(1) }.clears_routing_in(&Board::new(with_group, &m, mm(0.1), mm(0.3))));
     // The old verbs keep their old answer: a placement made there is followed by a new routing.
     assert!(Cmd::MoveTo { part: id("U2"), x: Nm::ZERO, y: Nm::ZERO }.clears_routing_in(&b));
     assert!(Cmd::Rotate { part: id("U2"), quarter_turns: 1 }.clears_routing_in(&b));
@@ -539,23 +540,23 @@ fn the_edit_tools_never_clear_the_routing_even_of_a_footprint_with_copper_on_its
 fn moving_turning_flipping_and_deleting_a_routed_footprint_leave_every_track_and_via_as_they_were() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    d.routing.as_mut().unwrap().tracks.push(track("trk_u1", "F.Cu", &[(Nm::from_raw_shim(31_500_000), Nm::from_raw_shim(20_000_000)), (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000))]));
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    d.routing.as_mut().unwrap().tracks.push(track("trk_u1", "F.Cu", &[(mm(31.5), mm(20.0)), (mm(40.0), mm(20.0))]));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     let copper = |b: &Board<'_>| (routing(b).tracks.clone(), routing(b).vias.clone(), routing(b).zones.clone());
     let before = copper(&b);
-    b.apply(&Cmd::MoveItems { ids: ids(&["U1"]), dx: Nm::from_raw_shim(5_000_000), dy: Nm::from_raw_shim(3_000_000) }).unwrap();
-    b.apply(&Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(Nm::from_raw_shim(35_000_000), Nm::from_raw_shim(23_000_000)), angle_millideg: -15_000 }).unwrap();
-    b.apply(&Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(Nm::from_raw_shim(35_000_000), Nm::from_raw_shim(23_000_000)), direction: FlipDirection::TopBottom }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1"]), dx: mm(5.0), dy: mm(3.0) }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(mm(35.0), mm(23.0)), angle_millideg: -15_000 }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(mm(35.0), mm(23.0)), direction: FlipDirection::TopBottom }).unwrap();
     assert_eq!(copper(&b), before, "the footprint went; the copper did not follow it");
-    assert_ne!(pose(&b, "U1").at, p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)));
+    assert_ne!(pose(&b, "U1").at, p(mm(30.0), mm(20.0)));
 }
 
 #[test]
 fn the_new_verbs_round_trip_through_json_as_the_studio_sends_them() {
     let cmds = [
-        Cmd::MoveItems { ids: ids(&["trk_a"]), dx: Nm::from_raw_shim(-1_500_000), dy: Nm::from_raw_shim(20_000) },
-        Cmd::RotateItems { ids: ids(&["trk_a", "U1"]), pivot: p(Nm::from_raw_shim(1000), Nm::from_raw_shim(2000)), angle_millideg: -90_000 },
-        Cmd::FlipItems { ids: ids(&["zone_a"]), pivot: p(Nm::from_raw_shim(3000), Nm::from_raw_shim(4000)), direction: FlipDirection::TopBottom },
+        Cmd::MoveItems { ids: ids(&["trk_a"]), dx: mm(-1.5), dy: mm(0.02) },
+        Cmd::RotateItems { ids: ids(&["trk_a", "U1"]), pivot: p(um(1.0), um(2.0)), angle_millideg: -90_000 },
+        Cmd::FlipItems { ids: ids(&["zone_a"]), pivot: p(um(3.0), um(4.0)), direction: FlipDirection::TopBottom },
     ];
     for c in cmds {
         let json = serde_json::to_string(&c).unwrap();
@@ -563,5 +564,5 @@ fn the_new_verbs_round_trip_through_json_as_the_studio_sends_them() {
         assert_eq!(back, c, "{json}");
     }
     let from_studio: Cmd = serde_json::from_str(r#"{"op":"flip_items","ids":["a"],"pivot":{"x":5,"y":6},"direction":"left_right"}"#).unwrap();
-    assert_eq!(from_studio, Cmd::FlipItems { ids: ids(&["a"]), pivot: p(Nm::from_raw_shim(5), Nm::from_raw_shim(6)), direction: FlipDirection::LeftRight });
+    assert_eq!(from_studio, Cmd::FlipItems { ids: ids(&["a"]), pivot: p(Nm::new(5), Nm::new(6)), direction: FlipDirection::LeftRight });
 }

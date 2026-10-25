@@ -16,7 +16,7 @@ use crate::chain::ShapeLineChain;
 use crate::delay::DelayParams;
 use crate::diff_pair::{dp_coupled_net_name, dp_net_polarity};
 use crate::item::{net_of, Item, ItemId, Net};
-use crate::kigeom::{common_parallel_projection, ki_round, Seg};
+use crate::kigeom::{common_parallel_projection, ki_round_nm, Seg};
 use crate::line::Line;
 use crate::meander::{tune_line_length, MeanderEnv, MeanderSettings, MeanderShape, MeanderSide, MeanderType, MeanderedLine};
 use crate::meander_placer::{chain_collides, chain_of, Tuned, TuningStatus};
@@ -26,29 +26,30 @@ use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
 
 /// `DP_PARALLELITY_THRESHOLD` (`pns_topology.h`), nanometres.
-const DP_PARALLELITY_THRESHOLD: i64 = 5;
+const DP_PARALLELITY_THRESHOLD: Nm = Nm::new(5);
 /// `RANGED_NUM<int>( m_gap, 10000, 10000 )`: how far from the pair's gap a coupled segment may be, nanometres.
-const GAP_TOLERANCE: i64 = 10_000;
+const GAP_TOLERANCE: Nm = Nm::new(10_000);
 
-/// A pair as `TOPOLOGY::AssembleDiffPair` finds it: the two lines (micrometres), P and N, and the width and gap they were routed with.
+/// A pair as `TOPOLOGY::AssembleDiffPair` finds it: the two lines, P and N, and the width and gap they were routed with.
 #[derive(Debug, Clone)]
 pub struct PairAssembly {
     pub p: Line,
     pub n: Line,
     pub net_p: Net,
     pub net_n: Net,
-    /// Track width of the pair, micrometres.
+    /// Track width of the pair.
     pub width: Nm,
-    /// Edge-to-edge gap, nanometres (-1: the two segments are not parallel enough to tell).
+    /// Edge-to-edge gap, nanometres (-1: the two segments are not parallel enough to tell). An `i64` for the studio's `tune_edit` until the
+    /// length type's wave 3.
     pub gap: i64,
 }
 
 /// `SEG::SquaredDistance` from a point to the stadium of a segment of `width` (what `Shape( -1 )->SquaredDistance( p )` of a segment is, up to the
 /// polygonisation of the stadium's ends).
-fn stadium_sq_distance(seg: &Seg, p: Point, width_nm: i64) -> i128 {
-    let d = crate::kigeom::isqrt(seg.squared_distance(p)) - width_nm / 2;
-    let d = d.max(0) as i128;
-    d * d
+fn stadium_sq_distance(seg: &Seg, p: Point, width_nm: Nm) -> i128 {
+    let d = Nm::new(crate::kigeom::isqrt(seg.squared_distance(p))) - width_nm / 2;
+    let d = d.max(Nm::ZERO);
+    d.area(d)
 }
 
 /// The best pair of a segment of the clicked line and a segment of the partner net `findNItem` has found so far.
@@ -71,15 +72,15 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
     let mut n_items: Vec<ItemId> = world.iter().filter(|(_, it)| matches!(it, Item::Segment(s) if s.net == coupled_net && s.layer == layer)).map(|(id, _)| id).collect();
     n_items.sort_unstable();
 
-    let seg_nm = |id: ItemId| -> Option<(Seg, i64)> {
+    let seg_nm = |id: ItemId| -> Option<(Seg, Nm)> {
         match world.get(id) {
-            Some(Item::Segment(s)) => Some((Seg::new(s.a, s.b), s.width.raw_shim())),
+            Some(Item::Segment(s)) => Some((Seg::new(s.a, s.b), s.width)),
             _ => None,
         }
     };
     let (start_nm, _) = seg_nm(start)?;
     // `Shape( -1 )->Centre()`
-    let center = Point { x: start_nm.a.x + Nm::from_raw_shim(ki_round((start_nm.b.x - start_nm.a.x).raw_shim() as f64 / 2.0)), y: start_nm.a.y + Nm::from_raw_shim(ki_round((start_nm.b.y - start_nm.a.y).raw_shim() as f64 / 2.0)) };
+    let center = Point { x: start_nm.a.x + ki_round_nm((start_nm.b.x - start_nm.a.x).as_f64() / 2.0), y: start_nm.a.y + ki_round_nm((start_nm.b.y - start_nm.a.y).as_f64() / 2.0) };
 
     // `findNItem( p_item )`
     let find_n_item = |best: &mut BestPair, p_item: ItemId| {
@@ -133,9 +134,9 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
         (Some((r, _)), Some((c, _))) => {
             let dir = (r.b.x - r.a.x, r.b.y - r.a.y);
             let disp = (r.b.x - c.b.x, r.b.y - c.b.y);
-            let cross = dir.0.raw_shim() as i128 * disp.1.raw_shim() as i128 - dir.1.raw_shim() as i128 * disp.0.raw_shim() as i128;
-            let norm = crate::kigeom::norm_i(dir.0.raw_shim(), dir.1.raw_shim()).max(1) as i128;
-            (cross.abs() / norm) as i64 - lp.width.raw_shim()
+            let cross = dir.0.area(disp.1) - dir.1.area(disp.0);
+            let norm = crate::kigeom::norm_i(dir.0, dir.1).max(Nm::new(1)).get() as i128;
+            (Nm::new((cross.abs() / norm) as i64) - lp.width).get()
         }
         _ => -1,
     };
@@ -153,7 +154,7 @@ pub struct CoupledSegments {
 }
 
 /// `DIFF_PAIR::CoupledSegmentPairs`, nanometres: `width` is the pair's track width, `gap` its gap.
-pub fn coupled_segment_pairs(p: &ShapeLineChain, n: &ShapeLineChain, width: i64, gap: i64) -> Vec<CoupledSegments> {
+pub fn coupled_segment_pairs(p: &ShapeLineChain, n: &ShapeLineChain, width: Nm, gap: Nm) -> Vec<CoupledSegments> {
     let mut out = Vec::new();
     for i in 0..p.segment_count() {
         if p.is_arc_segment(i) {
@@ -165,7 +166,7 @@ pub fn coupled_segment_pairs(p: &ShapeLineChain, n: &ShapeLineChain, width: i64,
             }
             let (sp, sn) = (p.c_segment(i), n.c_segment(j));
             let dist = (sp.distance_seg(&sn) - width).abs();
-            if sp.approx_parallel(&sn, 2) && dist >= gap - GAP_TOLERANCE && dist <= gap + GAP_TOLERANCE {
+            if sp.approx_parallel(&sn, Nm::new(2)) && dist >= gap - GAP_TOLERANCE && dist <= gap + GAP_TOLERANCE {
                 if let Some((coupled_p, coupled_n)) = common_parallel_projection(sp, sn) {
                     out.push(CoupledSegments { coupled_p, coupled_n, index_p: i, index_n: j });
                 }
@@ -177,20 +178,20 @@ pub fn coupled_segment_pairs(p: &ShapeLineChain, n: &ShapeLineChain, width: i64,
 
 /// `baselineSegment`: the midline of a coupled pair of segments.
 pub fn baseline_segment(c: &CoupledSegments) -> Seg {
-    let mid = |a: Point, b: Point| Point { x: Nm::from_raw_shim(ki_round((a.x + b.x).raw_shim() as f64 / 2.0)), y: Nm::from_raw_shim(ki_round((a.y + b.y).raw_shim() as f64 / 2.0)) };
+    let mid = |a: Point, b: Point| Point { x: ki_round_nm((a.x + b.x).as_f64() / 2.0), y: ki_round_nm((a.y + b.y).as_f64() / 2.0) };
     Seg::new(mid(c.coupled_p.a, c.coupled_n.a), mid(c.coupled_p.b, c.coupled_n.b))
 }
 
 /// `pairOrientation`: is the midpoint of the pair on the positive side of P's segment?
 pub fn pair_orientation(c: &CoupledSegments) -> bool {
-    let midp = Point { x: Nm::from_raw_shim(ki_round((c.coupled_p.a.x + c.coupled_n.a.x).raw_shim() as f64 / 2.0)), y: Nm::from_raw_shim(ki_round((c.coupled_p.a.y + c.coupled_n.a.y).raw_shim() as f64 / 2.0)) };
+    let midp = Point { x: ki_round_nm((c.coupled_p.a.x + c.coupled_n.a.x).as_f64() / 2.0), y: ki_round_nm((c.coupled_p.a.y + c.coupled_n.a.y).as_f64() / 2.0) };
     c.coupled_p.side(midp) > 0
 }
 
 /// What the shapes ask their placer for a pair.
 struct FitEnv<'a> {
     settings: MeanderSettings,
-    clearance: i64,
+    clearance: Nm,
     world: &'a Node,
     rules: &'a BoardRules,
     net_p: Net,
@@ -208,7 +209,7 @@ impl MeanderEnv for FitEnv<'_> {
         self.settings = s;
     }
 
-    fn clearance(&self) -> i64 {
+    fn clearance(&self) -> Nm {
         self.clearance
     }
 
@@ -235,17 +236,17 @@ pub struct DpMeanderPlacer {
     cn: ShapeLineChain,
     path_p: TuningPath,
     path_n: TuningPath,
-    len_p: i64,
-    len_n: i64,
+    len_p: Nm,
+    len_n: Nm,
     /// The delays of the two nets' tuning paths before the tuning (attoseconds), and the tuning profile of their class ([`crate::delay`]).
     delay_p: i64,
     delay_n: i64,
     delay_params: Option<DelayParams>,
     current_start: Point,
-    width_nm: i64,
+    width_nm: Nm,
     settings: MeanderSettings,
 
-    last_length: i64,
+    last_length: Nm,
     last_delay: i64,
     last_status: TuningStatus,
     pre_p: ShapeLineChain,
@@ -289,7 +290,7 @@ impl TunedPair {
 pub const NO_PAIR_FOR_SKEW: &str = "Unable to find complementary differential pair net for skew tuning. Make sure the names of the nets belonging to a differential pair end with either _N/_P or +/-.";
 
 /// What a skew placer starts from: the pair the clicked track belongs to, the tuning path length of the clicked net and of its partner
-/// (`m_lastLength` and `m_coupledLength`), nanometres.
+/// (`m_lastLength` and `m_coupledLength`), nanometres (`i64`s for the studio's `tune_edit` until the length type's wave 3).
 #[derive(Debug, Clone)]
 pub struct SkewSetup {
     pub partner_net: Net,
@@ -308,7 +309,7 @@ pub fn skew_setup(world: &Node, env: &LengthEnv, start: ItemId) -> Result<SkewSe
     if pair.p.segment_ids.is_empty() || pair.n.segment_ids.is_empty() {
         return Err("Unable to find the lines of the pair.".into());
     }
-    let len = |ids: &[ItemId]| assemble_tuning_path(world, ids[0]).map(|p| p.length(world, env));
+    let len = |ids: &[ItemId]| assemble_tuning_path(world, ids[0]).map(|p| p.length_nm(world, env).get());
     let (len_p, len_n) = (len(&pair.p.segment_ids).ok_or("Please select a differential pair track you want to tune.")?, len(&pair.n.segment_ids).ok_or("Please select a differential pair track you want to tune.")?);
     // `lineDelay` of each net's path, by the profile of the clicked net's class
     let params = seg.net.as_deref().and_then(|net| env.delay_params(net));
@@ -332,14 +333,14 @@ impl DpMeanderPlacer {
         let current_start = Seg::new(seg.a, seg.b).nearest_point(at);
         let mut pair = assemble_diff_pair(world, start).ok_or(NO_PAIR)?;
         if pair.gap < 0 {
-            pair.gap = (env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or(""))).raw_shim();
+            pair.gap = env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or("")).get();
         }
         if pair.p.segment_ids.is_empty() || pair.n.segment_ids.is_empty() {
             return Err("Unable to find the lines of the pair.".into());
         }
         let path_p = assemble_tuning_path(world, pair.p.segment_ids[0]).ok_or("Please select a track whose length you want to tune.")?;
         let path_n = assemble_tuning_path(world, pair.n.segment_ids[0]).ok_or("Please select a track whose length you want to tune.")?;
-        let (len_p, len_n) = (path_p.length(world, env), path_n.length(world, env));
+        let (len_p, len_n) = (path_p.length_nm(world, env), path_n.length_nm(world, env));
         // `m_netClass = conItem->GetEffectiveNetClass()`: the clicked net's class, and its tuning profile
         let delay_params = seg.net.as_deref().and_then(|net| env.delay_params(net));
         let (delay_p, delay_n) = match &delay_params {
@@ -355,7 +356,7 @@ impl DpMeanderPlacer {
             initial_segment: start,
             cp: chain_of(&pair.p),
             cn: chain_of(&pair.n),
-            width_nm: pair.width.raw_shim(),
+            width_nm: pair.width,
             pair,
             path_p,
             path_n,
@@ -366,7 +367,7 @@ impl DpMeanderPlacer {
             delay_params,
             current_start,
             settings,
-            last_length: 0,
+            last_length: Nm::ZERO,
             last_delay: 0,
             last_status: TuningStatus::TooShort,
             pre_p: ShapeLineChain::new(),
@@ -410,13 +411,13 @@ impl DpMeanderPlacer {
     }
 
     /// `origPathLength()`: the pair is as long as its longer net, nanometres.
-    pub fn orig_path_length(&self) -> i64 {
+    pub fn orig_path_length(&self) -> Nm {
         self.len_p.max(self.len_n)
     }
 
-    /// The lengths of the two nets before the tuning, nanometres.
+    /// The lengths of the two nets before the tuning, nanometres (`i64`s for the studio's `tune_edit` until the length type's wave 3).
     pub fn net_lengths(&self) -> (i64, i64) {
-        (self.len_p, self.len_n)
+        (self.len_p.get(), self.len_n.get())
     }
 
     /// `origPathDelay()`: the pair is as slow as its slower net, attoseconds.
@@ -443,7 +444,7 @@ impl DpMeanderPlacer {
 
     /// `CalculatePropagationDelayForShapeLineChain`: the delay of a stretch of the tuned layer.
     fn chain_delay(&self, chain: &ShapeLineChain) -> i64 {
-        self.params().track_delay(&self.layer_name(), chain.length())
+        self.params().track_delay(&self.layer_name(), chain.length_nm())
     }
 
     /// `DP_MEANDER_PLACER::calculateTimeDomainTargets`: with the time domain on, the target delay (min, opt, max) becomes the target length it comes to on
@@ -464,29 +465,26 @@ impl DpMeanderPlacer {
         if difference_opt <= 0 {
             length_diff_opt = -length_diff_opt;
         }
-        self.settings.target_length.set_min(cur_length + length_diff_opt - length_diff_min);
-        self.settings.target_length.set_opt(cur_length + length_diff_opt);
-        self.settings.target_length.set_max(cur_length + length_diff_opt + length_diff_max);
+        self.settings.target_length.set_min((cur_length + length_diff_opt - length_diff_min).get());
+        self.settings.target_length.set_opt((cur_length + length_diff_opt).get());
+        self.settings.target_length.set_max((cur_length + length_diff_opt + length_diff_max).get());
     }
 
     pub fn amplitude_step(&mut self, sign: i64) {
-        let a = self.settings.max_amplitude + sign * self.settings.step;
+        let a = self.settings.max_amplitude + sign * self.settings.step.get();
         self.settings.max_amplitude = a.max(self.settings.min_amplitude);
     }
 
     pub fn spacing_step(&mut self, sign: i64) {
-        let s = self.settings.spacing + sign * self.settings.step;
+        let s = Nm::new(self.settings.spacing) + sign * self.settings.step;
         let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
-        self.settings.spacing = s.max(self.width_nm + clearance.raw_shim());
+        self.settings.spacing = s.max(self.width_nm + clearance).get();
     }
 
-    /// `TuningLengthResult()`.
+    /// `TuningLengthResult()`, nanometres (an `i64` for the studio's `tune_edit` until the length type's wave 3).
     pub fn tuning_length_result(&self) -> i64 {
-        if self.last_length != 0 {
-            self.last_length
-        } else {
-            self.orig_path_length()
-        }
+        let l = if self.last_length != Nm::ZERO { self.last_length } else { self.orig_path_length() };
+        l.get()
     }
 
     pub fn tuning_status(&self) -> TuningStatus {
@@ -515,9 +513,9 @@ impl DpMeanderPlacer {
     }
 
     fn update_status(&mut self) {
-        self.last_status = if self.last_length > self.settings.target_length.max() {
+        self.last_status = if self.last_length > Nm::new(self.settings.target_length.max()) {
             TuningStatus::TooLong
-        } else if self.last_length < self.settings.target_length.min() {
+        } else if self.last_length < Nm::new(self.settings.target_length.min()) {
             TuningStatus::TooShort
         } else {
             TuningStatus::Tuned
@@ -546,7 +544,7 @@ impl DpMeanderPlacer {
             return false;
         }
 
-        let coupled = coupled_segment_pairs(&tuned_p, &tuned_n, self.width_nm, self.pair.gap);
+        let coupled = coupled_segment_pairs(&tuned_p, &tuned_n, self.width_nm, Nm::new(self.pair.gap));
         if coupled.is_empty() {
             // "Tuning started at an uncoupled area of the DP": the original, as it was
             self.final_p = self.cp.clone();
@@ -557,10 +555,10 @@ impl DpMeanderPlacer {
         }
 
         let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
-        let mut env = FitEnv { settings: self.settings.clone(), clearance: clearance.raw_shim(), world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_nm: self.pair.width };
+        let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_nm: self.pair.width };
         let mut result = MeanderedLine::new(true);
         result.set_width(self.width_nm);
-        let mut offset = (self.pair.gap + self.width_nm) / 2;
+        let mut offset = (Nm::new(self.pair.gap) + self.width_nm) / 2;
         if pair_orientation(&coupled[0]) {
             offset *= -1;
         }
@@ -609,16 +607,16 @@ impl DpMeanderPlacer {
         let dp_len = self.orig_path_length();
         let dp_delay = self.orig_path_delay();
         self.last_status = TuningStatus::Tuned;
-        if dp_len > self.settings.target_length.max() {
+        if dp_len > Nm::new(self.settings.target_length.max()) {
             self.last_status = TuningStatus::TooLong;
             self.last_length = dp_len;
             self.last_delay = dp_delay;
         } else {
-            self.last_length = dp_len - tuned_p.length().max(tuned_n.length());
+            self.last_length = dp_len - tuned_p.length_nm().max(tuned_n.length_nm());
             if self.settings.is_time_domain {
                 self.last_delay = dp_delay - self.chain_delay(&tuned_p).max(self.chain_delay(&tuned_n));
             }
-            tune_line_length(&mut result, self.settings.target_length.opt() - dp_len);
+            tune_line_length(&mut result, Nm::new(self.settings.target_length.opt()) - dp_len);
         }
 
         if self.last_status != TuningStatus::TooLong {
@@ -630,7 +628,7 @@ impl DpMeanderPlacer {
                     tuned_n.append_chain(m.c_line(1));
                 }
             }
-            self.last_length += tuned_p.length().max(tuned_n.length());
+            self.last_length += tuned_p.length_nm().max(tuned_n.length_nm());
             if self.settings.is_time_domain {
                 self.last_delay += self.chain_delay(&tuned_p).max(self.chain_delay(&tuned_n));
             }
@@ -675,28 +673,29 @@ impl DpMeanderPlacer {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::{mm, um};
     use super::*;
     use crate::item::{Segment, Solid};
     use crate::layer::LayerRange;
     use eda_drc::kimath::Shape;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = Nm::from_raw_shim(150_000);
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
+        rules.clearance = mm(0.15);
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
     }
 
     fn pad(net: &str, at: Point) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: Nm::from_raw_shim(300_000) }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "U1.1".into(), edge: false })
     }
 
     fn seg(net: &str, a: Point, b: Point) -> Item {
-        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width: Nm::from_raw_shim(200_000), source_track: None, locked: false })
+        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width: mm(0.2), source_track: None, locked: false })
     }
 
     /// USB_P and USB_N, 40 mm long, 0.5 mm apart (centre to centre 0.4 mm: gap 0.2 mm).
@@ -724,7 +723,7 @@ mod tests {
         let (w, a, b) = board();
         let pair = assemble_diff_pair(&w, a).expect("a pair");
         assert_eq!((pair.net_p.as_deref(), pair.net_n.as_deref()), (Some("USB_P"), Some("USB_N")));
-        assert_eq!(pair.width, Nm::from_raw_shim(200_000));
+        assert_eq!(pair.width, mm(0.2));
         assert_eq!(pair.gap, 200_000, "0.4 mm between the centres less a width");
         // from the N line the pair is the same, P first
         let from_n = assemble_diff_pair(&w, b).expect("a pair");
@@ -739,7 +738,7 @@ mod tests {
     fn a_pair_is_lengthened_together_and_stays_a_pitch_apart() {
         let (w, a, _) = board();
         let mut placer = DpMeanderPlacer::start(&w, &env(), a, p(5_000_000, 0), settings(43_000_000)).expect("a placer");
-        assert_eq!(placer.orig_path_length(), 40_000_000);
+        assert_eq!(placer.orig_path_length(), mm(40.0));
         assert!(placer.do_move(p(35_000_000, 0)));
         let len = placer.tuning_length_result();
         assert!((len - 43_000_000).abs() < 100_000, "{len}");
@@ -751,11 +750,11 @@ mod tests {
             a.points().iter().map(|&q| (0..b.segment_count()).map(|i| b.c_segment(i).distance(q)).min().unwrap()).min().unwrap()
         };
         let d = min_dist(&t.tuned_p, &t.tuned_n);
-        assert!((d - 400_000).abs() < 3_000, "closest approach {d}");
+        assert!((d - mm(0.4)).abs() < um(3.0), "closest approach {d}");
         // the two nets are within a miter of each other in length
-        let (lp, ln) = (t.pre_p.length() + t.tuned_p.length() + t.post_p.length(), t.pre_n.length() + t.tuned_n.length() + t.post_n.length());
-        assert!((lp - ln).abs() < 700_000, "{lp} vs {ln}");
-        assert!(lp.max(ln) == len);
+        let (lp, ln) = (t.pre_p.length_nm() + t.tuned_p.length_nm() + t.post_p.length_nm(), t.pre_n.length_nm() + t.tuned_n.length_nm() + t.post_n.length_nm());
+        assert!((lp - ln).abs() < mm(0.7), "{lp} vs {ln}");
+        assert!(lp.max(ln).get() == len);
     }
 
     /// The time domain for a pair: the pair is as slow as its slower net (`origPathDelay`), and the target delay is made the target length from it.
@@ -769,7 +768,7 @@ mod tests {
             profile_type: ProfileType::Differential,
             target_impedance: 90.0,
             enable_time_domain_tuning: true,
-            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200_000), diff_pair_gap_nm: Nm::from_raw_shim(200_000), delay_as_per_mm: 6_100_000 }],
+            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: mm(0.2), diff_pair_gap_nm: mm(0.2), delay_as_per_mm: 6_100_000 }],
             via_propagation_delay_as: 0,
             via_overrides: vec![],
         };
@@ -802,13 +801,13 @@ mod tests {
     fn coupled_segments_are_the_stretches_that_face_each_other_at_the_gap() {
         let p_line = ShapeLineChain::from_points(&[p(0, 0), p(10_000_000, 0), p(10_000_000, 5_000_000)]);
         let n_line = ShapeLineChain::from_points(&[p(0, 400_000), p(9_600_000, 400_000), p(9_600_000, 5_000_000)]);
-        let c = coupled_segment_pairs(&p_line, &n_line, 200_000, 200_000);
+        let c = coupled_segment_pairs(&p_line, &n_line, mm(0.2), mm(0.2));
         assert_eq!(c.len(), 2, "the two straight runs are coupled, the corners are not");
         assert_eq!((c[0].index_p, c[0].index_n), (0, 0));
         let base = baseline_segment(&c[0]);
-        assert_eq!(base.a.y, Nm::from_raw_shim(200_000));
+        assert_eq!(base.a.y, mm(0.2));
         assert!(pair_orientation(&c[0]), "N is below P, on the positive side");
         // a line too far for the gap
-        assert!(coupled_segment_pairs(&p_line, &n_line, 200_000, 500_000).is_empty());
+        assert!(coupled_segment_pairs(&p_line, &n_line, mm(0.2), mm(0.5)).is_empty());
     }
 }
