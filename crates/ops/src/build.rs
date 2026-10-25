@@ -153,7 +153,7 @@ pub trait Chooser {
 /// trap for a change meant to be invisible when nothing actually
 /// disagrees). `Ord`'s lexicographic tuple comparison does the rest:
 /// smaller is better, same as the old `(fails, wl) < (*bf, *bw)`.
-type Rank = (usize, usize, i64, usize);
+type Rank = (usize, usize, Nm, usize);
 
 fn rank_of(trial: &Board, model: &ConstraintModel, idx: usize) -> Rank {
     let (fails, warns) = trial.search_rank();
@@ -230,8 +230,8 @@ impl Chooser for Greedy {
 }
 
 /// Total half-perimeter wirelength over the nets whose parts are placed.
-fn hpwl_of(design: &Design, model: &ConstraintModel) -> i64 {
-    let Some(pl) = design.placement.as_ref() else { return 0 };
+fn hpwl_of(design: &Design, model: &ConstraintModel) -> Nm {
+    let Some(pl) = design.placement.as_ref() else { return Nm::ZERO };
     let at: std::collections::BTreeMap<&str, (Nm, Nm)> =
         pl.footprints.iter().map(|f| (f.id.as_str(), (f.at.x, f.at.y))).collect();
     let mut total = Nm::ZERO;
@@ -248,7 +248,7 @@ fn hpwl_of(design: &Design, model: &ConstraintModel) -> i64 {
         total += (xs.iter().max().unwrap() - xs.iter().min().unwrap())
             + (ys.iter().max().unwrap() - ys.iter().min().unwrap());
     }
-    total.raw_shim()
+    total
 }
 
 /// How the build went, for reporting against the annealer.
@@ -492,21 +492,21 @@ fn shrink_to_parts(design: &mut Design, model: &ConstraintModel) {
             Some(u) => (u.0.min(k.0), u.1.min(k.1), u.2.max(k.2), u.3.max(k.3)),
         });
         if eda_model::footprint::is_edge_connector(part) {
-            const FLUSH: i64 = 1_500_000;
-            if k.0 - bb.0 <= Nm::from_raw_shim(FLUSH) { edge_held[0] = true }
-            if k.1 - bb.1 <= Nm::from_raw_shim(FLUSH) { edge_held[1] = true }
-            if bb.2 - k.2 <= Nm::from_raw_shim(FLUSH) { edge_held[2] = true }
-            if bb.3 - k.3 <= Nm::from_raw_shim(FLUSH) { edge_held[3] = true }
+            const FLUSH: Nm = Nm::new(1_500_000);
+            if k.0 - bb.0 <= FLUSH { edge_held[0] = true }
+            if k.1 - bb.1 <= FLUSH { edge_held[1] = true }
+            if bb.2 - k.2 <= FLUSH { edge_held[2] = true }
+            if bb.3 - k.3 <= FLUSH { edge_held[3] = true }
         }
     }
     let Some(u) = used else { return };
 
     // Leave a rim so nothing sits hard against the cut edge.
-    const MARGIN: i64 = 1_000_000;
-    let x0 = if edge_held[0] { bb.0 } else { (u.0 - Nm::from_raw_shim(MARGIN)).max(bb.0) };
-    let y0 = if edge_held[1] { bb.1 } else { (u.1 - Nm::from_raw_shim(MARGIN)).max(bb.1) };
-    let x1 = if edge_held[2] { bb.2 } else { (u.2 + Nm::from_raw_shim(MARGIN)).min(bb.2) };
-    let y1 = if edge_held[3] { bb.3 } else { (u.3 + Nm::from_raw_shim(MARGIN)).min(bb.3) };
+    const MARGIN: Nm = Nm::new(1_000_000);
+    let x0 = if edge_held[0] { bb.0 } else { (u.0 - MARGIN).max(bb.0) };
+    let y0 = if edge_held[1] { bb.1 } else { (u.1 - MARGIN).max(bb.1) };
+    let x1 = if edge_held[2] { bb.2 } else { (u.2 + MARGIN).min(bb.2) };
+    let y1 = if edge_held[3] { bb.3 } else { (u.3 + MARGIN).min(bb.3) };
     if x1 <= x0 || y1 <= y0 {
         return;
     }

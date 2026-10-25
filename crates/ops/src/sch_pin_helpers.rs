@@ -43,7 +43,7 @@ pub enum PinHelper {
 }
 
 /// The default wire grid, 50 mil (`GRID_HELPER_GRIDS::GRID_WIRES` before the user picks another).
-pub const DEFAULT_WIRE_GRID_NM: Nm = Nm::from_raw_shim(1_270_000);
+pub const DEFAULT_WIRE_GRID_NM: Nm = Nm::new(1_270_000);
 
 /// One pin or sheet pin as a helper sees it.
 struct Spot {
@@ -131,10 +131,10 @@ impl<'a> Board<'a> {
             let sym = &scene.sch.symbols[i];
             let k = scene.shapes[i].pins.iter().position(|(n, _)| n == number)?;
             let m = Matrix::of(sym.rot, sym.mirrored, sym.mirror_y);
-            let (x, y) = m.apply((scene.shapes[i].pins[k].1 .0).raw_shim(), (scene.shapes[i].pins[k].1 .1).raw_shim());
-            let at = Point { x: sym.at.x + Nm::from_raw_shim(x), y: sym.at.y + Nm::from_raw_shim(y) };
+            let (x, y) = m.apply(scene.shapes[i].pins[k].1 .0, scene.shapes[i].pins[k].1 .1);
+            let at = Point { x: sym.at.x + x, y: sym.at.y + y };
             // `RotateAndMirrorPin( dummy, parent->GetOrientation() )`: the library pin's direction through the symbol's turn and mirror; a pin with no direction known runs right
-            let body = scene.shapes[i].dirs.get(k).map(|&(dx, dy)| m.apply(dx, dy)).unwrap_or((1, 0));
+            let body = scene.shapes[i].dirs.get(k).map(|&(dx, dy)| m.apply_dir(dx, dy)).unwrap_or((1, 0));
             // the pin's own name and type, from the symbol as it is placed (a swapped pin keeps its own, and sits where the other one was)
             let lib_pin = placed_lib_symbol(self.model, &scene.sch, sym).and_then(|l| l.pins.iter().find(|p| p.number == number && (p.unit == 0 || p.unit == sym.unit)).cloned());
             let (name, etype) = match lib_pin {

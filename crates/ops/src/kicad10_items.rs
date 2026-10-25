@@ -102,7 +102,7 @@ impl<'a> Board<'a> {
         let mut kept: BTreeMap<(i64, i64), Via> = BTreeMap::new();
         let mut removed: Vec<String> = Vec::new();
         for v in existing {
-            let cell = eda_drc::via_stitch::cell_for_position(&stitch, pitch.raw_shim(), (v.at.x.raw_shim(), v.at.y.raw_shim()));
+            let cell = eda_drc::via_stitch::cell_for_position(&stitch, pitch.get(), (v.at.x.get(), v.at.y.get()));
             if desired.contains_key(&cell) && !kept.contains_key(&cell) {
                 kept.insert(cell, v);
             } else {
@@ -221,7 +221,7 @@ impl<'a> Board<'a> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_drill_map", id, "the board has no drawings yet"))?;
         let slot = dr.board_items.drill_maps.iter_mut().find(|x| x.id == id).ok_or_else(|| fail("ops_unknown_drill_map", id, "no drill map with this id"))?;
         // `SetSymbolSize`: at least one.
-        *slot = DrillMap { id: id.to_string(), size_nm: m.size_nm.max(Nm::from_raw_shim(1)), ..m };
+        *slot = DrillMap { id: id.to_string(), size_nm: m.size_nm.max(Nm::new(1)), ..m };
         Ok(())
     }
 

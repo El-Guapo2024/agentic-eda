@@ -10,6 +10,7 @@ use eda_model::ir::{LabelKind, LabelShape, Provenance, SchematicSection, SheetIn
 use eda_model::sch_extras::LabelSpin;
 use eda_model::symbol::SPoint;
 use eda_model::{LibPin, LibSymbol};
+use eda_model::units::mm;
 
 fn empty_design() -> Design {
     Design {
@@ -99,14 +100,14 @@ fn symbol(id: &str, lib_id: &str, at: Point, rot: u32, mirrored: bool) -> Symbol
 
 /// U1 (`Test:FOUR`) at (50.8, 50.8) mm, turned `rot` and mirrored or not.
 fn sheet(rot: u32, mirrored: bool) -> SchematicSection {
-    SchematicSection { imported_from_kicad: true, symbols: vec![symbol("U1", "Test:FOUR", p(Nm::from_raw_shim(50_800_000), Nm::from_raw_shim(50_800_000)), rot, mirrored)], ..Default::default() }
+    SchematicSection { imported_from_kicad: true, symbols: vec![symbol("U1", "Test:FOUR", p(mm(50.8), mm(50.8)), rot, mirrored)], ..Default::default() }
 }
 
 fn run(sch: SchematicSection, cmd: SchCmd) -> Result<SchematicSection, Vec<CheckResult>> {
     let m = model();
     let mut design = empty_design();
     design.schematic = Some(sch);
-    let mut b = Board::new(design, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::SchEdit(cmd))?;
     Ok(b.design().schematic.clone().unwrap())
 }
@@ -149,22 +150,22 @@ fn a_wire_helper_draws_a_stub_one_grid_step_out_of_each_pin_along_its_line() {
     // pin 1 runs right (the body is to its right): the stub goes left; pin 2 runs left: right; pin 3 runs up: down; pin 4 runs down: up
     let after = ok(start, PinHelper::Wire, &["pin:U1:1", "pin:U1:2", "pin:U1:3", "pin:U1:4"]);
     assert_eq!(after.wires.len(), 4);
-    assert_eq!(stub_from(&after, p1), p(p1.x - Nm::from_raw_shim(1_270_000), p1.y));
-    assert_eq!(stub_from(&after, p2), p(p2.x + Nm::from_raw_shim(1_270_000), p2.y));
-    assert_eq!(stub_from(&after, p3), p(p3.x, p3.y + Nm::from_raw_shim(1_270_000)));
-    assert_eq!(stub_from(&after, p4), p(p4.x, p4.y - Nm::from_raw_shim(1_270_000)));
+    assert_eq!(stub_from(&after, p1), p(p1.x - mm(1.27), p1.y));
+    assert_eq!(stub_from(&after, p2), p(p2.x + mm(1.27), p2.y));
+    assert_eq!(stub_from(&after, p3), p(p3.x, p3.y + mm(1.27)));
+    assert_eq!(stub_from(&after, p4), p(p4.x, p4.y - mm(1.27)));
 }
 
 #[test]
 fn a_stub_goes_out_of_a_turned_and_mirrored_symbol_the_way_the_pin_runs_there() {
     // `pinOrientation`: the library pin's orientation turned and mirrored by the symbol's (the mirror after the turn, `SetOrientation`)
     for (rot, mirrored, pin, step) in [
-        (90_000, false, "1", (Nm::ZERO, Nm::from_raw_shim(1_270_000))),   // pin 1 runs right; a quarter turn counter-clockwise takes it up, so the stub goes down
-        (180_000, false, "1", (Nm::from_raw_shim(1_270_000), Nm::ZERO)),  // runs left: the stub goes right
-        (270_000, false, "1", (Nm::ZERO, Nm::from_raw_shim(-1_270_000))), // runs down: the stub goes up
-        (0, true, "1", (Nm::from_raw_shim(1_270_000), Nm::ZERO)),         // mirrored: runs left
-        (0, true, "2", (Nm::from_raw_shim(-1_270_000), Nm::ZERO)),        // pin 2 ran left, now runs right
-        (90_000, true, "3", (Nm::from_raw_shim(-1_270_000), Nm::ZERO)),   // pin 3 runs up; the quarter turn takes it left and the mirror right, so the stub goes left
+        (90_000, false, "1", (Nm::ZERO, mm(1.27))),   // pin 1 runs right; a quarter turn counter-clockwise takes it up, so the stub goes down
+        (180_000, false, "1", (mm(1.27), Nm::ZERO)),  // runs left: the stub goes right
+        (270_000, false, "1", (Nm::ZERO, mm(-1.27))), // runs down: the stub goes up
+        (0, true, "1", (mm(1.27), Nm::ZERO)),         // mirrored: runs left
+        (0, true, "2", (mm(-1.27), Nm::ZERO)),        // pin 2 ran left, now runs right
+        (90_000, true, "3", (mm(-1.27), Nm::ZERO)),   // pin 3 runs up; the quarter turn takes it left and the mirror right, so the stub goes left
     ] {
         let start = sheet(rot, mirrored);
         let tip = pin_at(&start, pin);
@@ -178,8 +179,8 @@ fn a_stub_goes_out_of_a_turned_and_mirrored_symbol_the_way_the_pin_runs_there() 
 fn the_stub_takes_the_wire_grid_the_command_names() {
     let start = sheet(0, false);
     let tip = pin_at(&start, "1");
-    let after = run(start, helper(PinHelper::Wire, &["pin:U1:1"], Nm::from_raw_shim(2_540_000))).unwrap();
-    assert_eq!(stub_from(&after, tip), p(tip.x - Nm::from_raw_shim(2_540_000), tip.y));
+    let after = run(start, helper(PinHelper::Wire, &["pin:U1:1"], mm(2.54))).unwrap();
+    assert_eq!(stub_from(&after, tip), p(tip.x - mm(2.54), tip.y));
 }
 
 #[test]
@@ -187,7 +188,7 @@ fn a_pin_with_a_wire_on_it_gets_the_junction_its_stub_needs() {
     let mut start = sheet(0, false);
     let tip = pin_at(&start, "1");
     // a wire already runs off pin 1 downwards
-    start.wires.push(Wire { id: "w1".into(), net: "N".into(), pins: vec![], pts: vec![tip, p(tip.x, tip.y + Nm::from_raw_shim(5_080_000))], bus: false });
+    start.wires.push(Wire { id: "w1".into(), net: "N".into(), pins: vec![], pts: vec![tip, p(tip.x, tip.y + mm(5.08))], bus: false });
     let after = ok(start, PinHelper::Wire, &["pin:U1:1"]);
     assert!(after.junctions.iter().any(|j| j.at == tip), "the pin, the old wire and the stub meet there: {:?}", after.junctions);
 }
@@ -217,7 +218,7 @@ fn a_stub_that_lies_along_a_wire_that_is_there_changes_nothing_and_is_refused() 
     let mut start = sheet(0, false);
     let tip = pin_at(&start, "1");
     // the wire of pin 1 already leaves it to the left: the stub is a part of it
-    start.wires.push(Wire { id: "w1".into(), net: "N".into(), pins: vec![], pts: vec![tip, p(tip.x - Nm::from_raw_shim(5_080_000), tip.y)], bus: false });
+    start.wires.push(Wire { id: "w1".into(), net: "N".into(), pins: vec![], pts: vec![tip, p(tip.x - mm(5.08), tip.y)], bus: false });
     let e = run(start, helper(PinHelper::Wire, &["pin:U1:1"], Nm::ZERO)).unwrap_err();
     assert_eq!(e[0].check, "ops_pin_helper_unchanged");
 }
@@ -243,7 +244,7 @@ fn a_label_helper_labels_each_pin_with_its_name_and_reads_away_from_it() {
 
 #[test]
 fn a_hierarchical_or_global_label_takes_the_shape_of_the_pins_type() {
-    let sch = SchematicSection { imported_from_kicad: true, symbols: vec![symbol("U2", "Test:KINDS", p(Nm::from_raw_shim(50_800_000), Nm::from_raw_shim(50_800_000)), 0, false)], ..Default::default() };
+    let sch = SchematicSection { imported_from_kicad: true, symbols: vec![symbol("U2", "Test:KINDS", p(mm(50.8), mm(50.8)), 0, false)], ..Default::default() };
     let shape_of = |sch: &SchematicSection, name: &str| match &sch.labels.iter().find(|l| l.net == name).unwrap().kind {
         LabelKind::Hierarchical { shape } | LabelKind::Global { shape } => *shape,
         LabelKind::Local => panic!("a local label has no shape"),
@@ -290,7 +291,7 @@ fn a_swapped_pin_is_labelled_where_it_sits_now_running_the_way_the_pin_it_swappe
 // ----------------------------------------------------------------------------------------------------------------------------- sheet pins
 
 fn sheet_with_pins() -> SchematicSection {
-    let at = p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(50_000_000));
+    let at = p(mm(100.0), mm(50.0));
     let pin = |id: &str, name: &str, shape: LabelShape, x: Nm, y: Nm| SheetPin { id: id.into(), name: name.into(), shape, at: p(x, y) };
     SchematicSection {
         imported_from_kicad: true,
@@ -299,12 +300,12 @@ fn sheet_with_pins() -> SchematicSection {
             name: "Sub".into(),
             file: "sub.kicad_sch".into(),
             at,
-            size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(30_000_000)),
+            size: (mm(40.0), mm(30.0)),
             pins: vec![
-                pin("shpin_l", "CLK", LabelShape::Input, Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(60_000_000)),
-                pin("shpin_r", "DATA", LabelShape::Output, Nm::from_raw_shim(140_000_000), Nm::from_raw_shim(60_000_000)),
-                pin("shpin_t", "EN", LabelShape::Passive, Nm::from_raw_shim(110_000_000), Nm::from_raw_shim(50_000_000)),
-                pin("shpin_b", "IO", LabelShape::Bidirectional, Nm::from_raw_shim(110_000_000), Nm::from_raw_shim(80_000_000)),
+                pin("shpin_l", "CLK", LabelShape::Input, mm(100.0), mm(60.0)),
+                pin("shpin_r", "DATA", LabelShape::Output, mm(140.0), mm(60.0)),
+                pin("shpin_t", "EN", LabelShape::Passive, mm(110.0), mm(50.0)),
+                pin("shpin_b", "IO", LabelShape::Bidirectional, mm(110.0), mm(80.0)),
             ],
             page: String::new(),
         }],
@@ -316,10 +317,10 @@ fn sheet_with_pins() -> SchematicSection {
 fn the_helpers_work_on_a_sheet_pin_which_runs_into_the_sheet_from_its_side() {
     // a stub goes out of the sheet: left of a pin on the left side, right of one on the right, up from the top and down from the bottom
     let after = ok(sheet_with_pins(), PinHelper::Wire, &["shpin_l", "shpin_r", "shpin_t", "shpin_b"]);
-    assert_eq!(stub_from(&after, p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(60_000_000))), p(Nm::from_raw_shim(98_730_000), Nm::from_raw_shim(60_000_000)));
-    assert_eq!(stub_from(&after, p(Nm::from_raw_shim(140_000_000), Nm::from_raw_shim(60_000_000))), p(Nm::from_raw_shim(141_270_000), Nm::from_raw_shim(60_000_000)));
-    assert_eq!(stub_from(&after, p(Nm::from_raw_shim(110_000_000), Nm::from_raw_shim(50_000_000))), p(Nm::from_raw_shim(110_000_000), Nm::from_raw_shim(48_730_000)));
-    assert_eq!(stub_from(&after, p(Nm::from_raw_shim(110_000_000), Nm::from_raw_shim(80_000_000))), p(Nm::from_raw_shim(110_000_000), Nm::from_raw_shim(81_270_000)));
+    assert_eq!(stub_from(&after, p(mm(100.0), mm(60.0))), p(mm(98.73), mm(60.0)));
+    assert_eq!(stub_from(&after, p(mm(140.0), mm(60.0))), p(mm(141.27), mm(60.0)));
+    assert_eq!(stub_from(&after, p(mm(110.0), mm(50.0))), p(mm(110.0), mm(48.73)));
+    assert_eq!(stub_from(&after, p(mm(110.0), mm(80.0))), p(mm(110.0), mm(81.27)));
     // a label says the pin's name, reads out of the sheet, and has the pin's shape (a passive pin is an input: `PT_PASSIVE` is no label shape)
     let labelled = ok(sheet_with_pins(), PinHelper::GlobalLabel, &["shpin_l", "shpin_r", "shpin_t", "shpin_b"]);
     let kind = |name: &str| labelled.labels.iter().find(|l| l.net == name).map(|l| (l.kind.clone(), labelled.extras.label_spins.get(&l.id).copied())).unwrap();
@@ -330,7 +331,7 @@ fn the_helpers_work_on_a_sheet_pin_which_runs_into_the_sheet_from_its_side() {
     assert_eq!(kind("IO"), (LabelKind::Global { shape: LabelShape::Bidirectional }, Some(LabelSpin::Bottom)));
     let flagged = ok(sheet_with_pins(), PinHelper::NoConnect, &["shpin_l"]);
     assert_eq!(flagged.no_connects.len(), 1);
-    assert_eq!(flagged.no_connects[0].at, p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(60_000_000)));
+    assert_eq!(flagged.no_connects[0].at, p(mm(100.0), mm(60.0)));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------- the refusals

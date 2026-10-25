@@ -6,6 +6,7 @@ use eda_model::fp_edit::{FootprintEdit, PadEdit};
 use eda_model::padstack::UnconnectedLayers;
 use eda_model::via_extra::{ViaExtra, ViaKind};
 use eda_model::{ConstraintModel, PadKind};
+use eda_model::units::mm;
 
 const FOUR: [&str; 4] = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 
@@ -14,7 +15,7 @@ fn through_hole_model(layers: &[&str]) -> ConstraintModel {
     let mut m = model(layers);
     for pad in m.footprints[0].pads.iter_mut().filter(|p| p.number != "2") {
         pad.kind = PadKind::ThroughHole;
-        pad.drill = Some(Nm::from_raw_shim(300_000));
+        pad.drill = Some(mm(0.3));
     }
     m.parts = vec![part("U1"), part("U2")];
     m
@@ -141,14 +142,14 @@ fn a_blind_or_buried_via_is_taken_by_the_layer_depth_between_its_ends() {
     {
         let rt = d.routing.as_mut().unwrap();
         rt.vias[0].to_layer = "In1.Cu".into();
-        rt.vias.push(super::pcb_transform_tests::via("via_b", (Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(50_000_000)), "In1.Cu", "In2.Cu"));
-        rt.vias.push(super::pcb_transform_tests::via("via_c", (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(50_000_000)), "In1.Cu", "B.Cu"));
-        rt.vias.push(super::pcb_transform_tests::via("via_d", (Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(50_000_000)), "F.Cu", "B.Cu"));
+        rt.vias.push(super::pcb_transform_tests::via("via_b", (mm(30.0), mm(50.0)), "In1.Cu", "In2.Cu"));
+        rt.vias.push(super::pcb_transform_tests::via("via_c", (mm(40.0), mm(50.0)), "In1.Cu", "B.Cu"));
+        rt.vias.push(super::pcb_transform_tests::via("via_d", (mm(50.0), mm(50.0)), "F.Cu", "B.Cu"));
         let mut dr = dr.clone();
         dr.via_extras = ["via_a", "via_b", "via_c", "via_d"].iter().map(|id| ViaExtra { id: (*id).into(), kind: ViaKind::Blind, tokens: vec![] }).collect();
         d.drawings = Some(dr);
     }
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&remove(None, true, false, true, true)).unwrap();
     // The dialog takes every via that spans more than a depth of 1, and with KiCad's layer ids that is every pair of layers but the front and the back of a board of
     // two copper layers.
@@ -169,7 +170,7 @@ fn a_blind_or_buried_via_is_taken_by_the_layer_depth_between_its_ends() {
         dr.via_extras = vec![ViaExtra { id: "via_a".into(), kind: ViaKind::Blind, tokens: vec![] }];
         d.drawings = Some(dr);
     }
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     assert!(refusal(&mut b, remove(None, true, false, true, true)).starts_with("ops_nothing_to_change"));
     assert_eq!(via_mode(&b, "via_a"), UnconnectedLayers::KeepAll);
 }
@@ -180,7 +181,7 @@ fn a_pad_that_already_has_a_padstack_keeps_it_and_the_setting_goes_with_it() {
     let m = through_hole_model(&FOUR);
     let mut b = board(&m);
     // A front/inner/back stack the board already had on U1.1.
-    let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(eda_model::PadShape::Circle, (Nm::from_raw_shim(900_000), Nm::from_raw_shim(900_000)))), back: Some(PadLayerShape::plain(eda_model::PadShape::Rect, (Nm::from_raw_shim(1_400_000), Nm::from_raw_shim(1_400_000)))), ..Default::default() };
+    let stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(eda_model::PadShape::Circle, (mm(0.9), mm(0.9)))), back: Some(PadLayerShape::plain(eda_model::PadShape::Rect, (mm(1.4), mm(1.4)))), ..Default::default() };
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: PadEdit { number: "1".into(), nth: 1, stack: Some(stack.clone()), ..Default::default() } }).unwrap();
     b.apply(&remove(Some(&["U1"]), false, true, false, true)).unwrap();
     let e = edit_of(&b, "U1").unwrap().pad("1", 1).unwrap().stack.clone().unwrap();

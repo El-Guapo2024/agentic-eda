@@ -4,6 +4,7 @@ use super::pcb_transform_tests::{board, design, lopsided, model};
 use super::*;
 use eda_model::footprint::Model3d;
 use eda_model::fp_edit::FootprintEdit;
+use eda_model::units::mm;
 
 const LIB: &str = "${KICAD10_3DMODEL_DIR}/Test.3dshapes/Lib.step";
 
@@ -122,7 +123,7 @@ fn a_list_set_with_the_fields_of_the_dialog_keeps_the_pad_and_field_edits_of_the
     let m0 = library_model();
     let mut b = board(&m0);
     let mut pad = eda_model::fp_edit::PadEdit::none("1", 1);
-    pad.size = Some((Nm::from_raw_shim(900_000), Nm::from_raw_shim(900_000)));
+    pad.size = Some((mm(0.9), mm(0.9)));
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: pad.clone() }).unwrap();
     b.apply(&add("U1", m("two.step"))).unwrap();
     let e = b.design().footprint_edit("U1").unwrap();
@@ -284,14 +285,14 @@ fn a_footprint_put_on_another_keeps_the_list_the_board_set_unless_the_models_are
     let list = vec![Model3d { offset: [1.0, 0.0, 0.5], ..m("a.step") }, m("b.step")];
     // "Update/reset 3D models" off: the footprint keeps its models, on the new footprint's pads
     let (model, design) = set_up_with(&list);
-    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
     exchange_for_other(&mut b, ExchangeOptions { reset_3d_models: false, ..ExchangeOptions::change() });
     assert_eq!(listed(&b, "U1"), Some(list.clone()), "the list the board set stays set");
     assert_eq!(b.design().footprint_assignment("U1").unwrap().definition.as_ref().unwrap().models3d, list, "and the board's copy of the new footprint carries it");
 
     // on: they are the new footprint's own, and the board no longer sets any
     let (model, design) = set_up_with(&list);
-    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
     exchange_for_other(&mut b, ExchangeOptions { reset_3d_models: true, ..ExchangeOptions::change() });
     assert_eq!(listed(&b, "U1"), None);
     assert_eq!(paths(&b.design().footprint_assignment("U1").unwrap().definition.as_ref().unwrap().models3d), ["other.step"]);
@@ -299,7 +300,7 @@ fn a_footprint_put_on_another_keeps_the_list_the_board_set_unless_the_models_are
 
     // a footprint the person took every model off keeps having none when the models are kept
     let (model, design) = set_up_with(&[]);
-    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
     exchange_for_other(&mut b, ExchangeOptions { reset_3d_models: false, ..ExchangeOptions::change() });
     assert_eq!(listed(&b, "U1"), Some(vec![]), "no model is still no model: it is not the new footprint's");
     // and one nothing was set on has no list of its own after either

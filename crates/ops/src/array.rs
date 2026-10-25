@@ -201,13 +201,13 @@ pub(crate) fn shape_position(s: &Shape) -> Point {
 
 /// The centre of the circle through three points; `None` when they are in a line.
 fn arc_centre(a: Point, b: Point, c: Point) -> Option<Point> {
-    let (ax, ay, bx, by, cx, cy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, c.x.raw_shim() as f64, c.y.raw_shim() as f64);
+    let (ax, ay, bx, by, cx, cy) = (a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64(), c.x.as_f64(), c.y.as_f64());
     let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
     if d.abs() < 1e-9 {
         return None;
     }
     let (a2, b2, c2) = (ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy);
-    Some(Point { x: Nm::from_raw_shim(((a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d).round() as i64), y: Nm::from_raw_shim(((a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d).round() as i64) })
+    Some(Point { x: Nm::kiround((a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d), y: Nm::kiround((a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d) })
 }
 
 /// The centre of the box the points span (`PCB_GROUP::GetPosition` is the middle of its bounding box).
