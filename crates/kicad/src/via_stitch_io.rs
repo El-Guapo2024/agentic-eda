@@ -5,6 +5,7 @@
 //! in millimetres), a point as `(key (xy x y))`, a line as `(key (pts ..))`, the excluded cells as `(excluded_grid_cells (cells (ij c r) ..))`, a string quoted; then the
 //! template via, the members (the uuids the vias were written with, sorted) and the custom properties.
 
+use eda_model::units::Nm;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -23,7 +24,7 @@ fn read_template(g: &[Sexpr]) -> ViaTemplate {
         .find(|t| sexpr::find(t, "name").and_then(|n| sexpr::txt(n, 1)) == Some("via"))
         .and_then(|t| sexpr::find(t, "via"));
     let Some(via) = via else { return ViaTemplate::default() };
-    let um = |name: &str| sexpr::find(via, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).unwrap_or(0);
+    let um = |name: &str| sexpr::find(via, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).unwrap_or(Nm::ZERO);
     let layers = sexpr::find(via, "layers");
     ViaTemplate {
         size_nm: um("size"),
@@ -39,11 +40,11 @@ fn read(g: &[Sexpr], via_ids: &BTreeMap<String, String>) -> ViaStitch {
     let mut v = ViaStitch::new(prop_line(g, "outline"));
     v.layer = prop_str(g, "layer").unwrap_or("F.Cu").to_string();
     v.name = prop_str(g, "name").unwrap_or("Via Stitching").to_string();
-    v.pitch_nm = prop_num(g, "pitch").map(mm_to_nm).unwrap_or(0);
+    v.pitch_nm = prop_num(g, "pitch").map(mm_to_nm).unwrap_or(Nm::ZERO);
     v.layout = prop_num(g, "layout").map(|n| StitchLayout::from_index(n as i64)).unwrap_or_default();
     v.mode = prop_num(g, "mode").map(|n| StitchMode::from_index(n as i64)).unwrap_or_default();
     v.seed = prop_num(g, "seed").map(|n| n as i64 as u32).unwrap_or(0);
-    v.origin_offset = Point { x: prop_num(g, "origin_offset_x").map(mm_to_nm).unwrap_or(0), y: prop_num(g, "origin_offset_y").map(mm_to_nm).unwrap_or(0) };
+    v.origin_offset = Point { x: prop_num(g, "origin_offset_x").map(mm_to_nm).unwrap_or(Nm::ZERO), y: prop_num(g, "origin_offset_y").map(mm_to_nm).unwrap_or(Nm::ZERO) };
     v.origin = prop_point(g, "origin").unwrap_or_default();
     v.net = prop_str(g, "net_name").unwrap_or("").to_string();
     v.guarded_net = prop_str(g, "guarded_net_name").unwrap_or("").to_string();
@@ -133,12 +134,12 @@ pub(crate) fn write_all(out: &mut String, stitches: &[ViaStitch], written: &BTre
             writeln!(out, "\t\t(net_name {})", sexpr_str(&v.net)).unwrap();
         }
         point_prop(out, "origin", v.origin);
-        writeln!(out, "\t\t(origin_offset_x {})", fmt_g10(v.origin_offset.x as f64 / 1e6)).unwrap();
-        writeln!(out, "\t\t(origin_offset_y {})", fmt_g10(v.origin_offset.y as f64 / 1e6)).unwrap();
+        writeln!(out, "\t\t(origin_offset_x {})", fmt_g10(v.origin_offset.x.raw_shim() as f64 / 1e6)).unwrap();
+        writeln!(out, "\t\t(origin_offset_y {})", fmt_g10(v.origin_offset.y.raw_shim() as f64 / 1e6)).unwrap();
         if v.outline.len() >= 3 {
             line_prop(out, "outline", &v.outline);
         }
-        writeln!(out, "\t\t(pitch {})", fmt_g10(v.pitch_nm as f64 / 1e6)).unwrap();
+        writeln!(out, "\t\t(pitch {})", fmt_g10(v.pitch_nm.raw_shim() as f64 / 1e6)).unwrap();
         writeln!(out, "\t\t(seed {})", v.seed as i32).unwrap();
         let template_uuid = crate::duid_for(&format!("via_stitch:{}:template", v.id), &v.id);
         writeln!(out, "\t\t(templates (template (name \"via\") {}))", template_text(&v.via, &template_uuid)).unwrap();
@@ -152,6 +153,7 @@ pub(crate) fn write_all(out: &mut String, stitches: &[ViaStitch], written: &BTre
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     const GEN: &str = r#"(kicad_pcb (generated (uuid "130c265f-9b69-4b91-90aa-258955818fd2") (type via_stitch) (name "Via Stitching") (layer "F.Cu") (layout 1) (mode 0) (net_name "GND")
@@ -166,10 +168,10 @@ mod tests {
         let g = sexpr::find(tree.as_list().unwrap(), "generated").unwrap();
         let ids: BTreeMap<String, String> = [("04288bcc-34bb-42f3-875a-f6ee14bb69e9".to_string(), "via_a".to_string())].into_iter().collect();
         let v = read(g, &ids);
-        assert_eq!((v.layout, v.mode, v.net.as_str(), v.pitch_nm, v.seed, v.origin_offset), (StitchLayout::Staggered, StitchMode::Stitch, "GND", 1_000_000, 7, Point { x: 250_000, y: 0 }));
+        assert_eq!((v.layout, v.mode, v.net.as_str(), v.pitch_nm, v.seed, v.origin_offset), (StitchLayout::Staggered, StitchMode::Stitch, "GND", Nm::from_raw_shim(1_000_000), 7, Point { x: Nm::from_raw_shim(250_000), y: Nm::ZERO }));
         assert_eq!(v.outline.len(), 4);
         assert_eq!(v.excluded_cells, vec![(3, 4), (-1, 2)]);
-        assert_eq!((v.via.size_nm, v.via.drill_nm, v.via.from_layer.as_str()), (600_000, 300_000, "F.Cu"));
+        assert_eq!((v.via.size_nm, v.via.drill_nm, v.via.from_layer.as_str()), (Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), "F.Cu"));
         assert_eq!(v.member_ids, vec!["via_a".to_string()], "a member that is not a via of the board is not one");
 
         let written: BTreeMap<String, Vec<String>> = [("via_a".to_string(), vec!["u-1".to_string()])].into_iter().collect();
@@ -180,11 +182,11 @@ mod tests {
         assert!(at.windows(2).all(|w| w[0] < w[1]), "{out}");
         assert!(out.contains("(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"b3482f35-c371-4e19-8d52-5caeb32238dd\"))"), "{out}");
         // An edited template keeps the rest of the file's via.
-        let edited = ViaTemplate { size_nm: 800_000, drill_nm: 400_000, ..v.via.clone() };
+        let edited = ViaTemplate { size_nm: Nm::from_raw_shim(800_000), drill_nm: Nm::from_raw_shim(400_000), ..v.via.clone() };
         assert!(template_text(&edited, "x").contains("(size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (free yes)"));
         // and a new span is the template's too (the dialog's From / To).
         let blind = ViaTemplate { from_layer: "F.Cu".into(), to_layer: "In1.Cu".into(), ..v.via.clone() };
         assert!(template_text(&blind, "x").contains("(layers \"F.Cu\" \"In1.Cu\") (free yes)"), "{}", template_text(&blind, "x"));
-        assert_eq!(template_text(&ViaTemplate { size_nm: 600_000, drill_nm: 300_000, ..Default::default() }, "t"), "(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"t\"))");
+        assert_eq!(template_text(&ViaTemplate { size_nm: Nm::from_raw_shim(600_000), drill_nm: Nm::from_raw_shim(300_000), ..Default::default() }, "t"), "(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"t\"))");
     }
 }

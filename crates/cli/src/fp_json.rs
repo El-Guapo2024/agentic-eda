@@ -96,7 +96,7 @@ fn copper_centre(pad: &Pad, offset: Option<Point>) -> (Nm, Nm) {
     let Some(o) = offset else { return pad.at };
     let rad = (pad.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    (pad.at.0 + (o.x as f64 * cos - o.y as f64 * sin).round() as Nm, pad.at.1 + (o.x as f64 * sin + o.y as f64 * cos).round() as Nm)
+    (pad.at.0 + Nm::from_raw_shim((o.x.raw_shim() as f64 * cos - o.y.raw_shim() as f64 * sin).round() as i64), pad.at.1 + Nm::from_raw_shim((o.x.raw_shim() as f64 * sin + o.y.raw_shim() as f64 * cos).round() as i64))
 }
 
 /// One pad of `fp` for the studio: where it is and how big (the keys the canvas has always drawn from), plus its own shape, type,
@@ -107,11 +107,11 @@ pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintI
     let edit: Option<&PadEdit> = design.footprint_edit(&fp.id).and_then(|e| e.pad(&pad.number, nth));
     let flashed_here: Option<&Vec<String>> = flashed.pads.get(&eda_model::fp_edit::pad_id(&fp.id, &pad.number, nth));
     // The offset the pad has (the library's or the one an edit made: the engine's pad already holds the edit).
-    let offset = pad.ext.offset.map(|(x, y)| Point { x, y }).filter(|o| o.x != 0 || o.y != 0);
+    let offset = pad.ext.offset.map(|(x, y)| Point { x, y }).filter(|o| o.x != Nm::ZERO || o.y != Nm::ZERO);
     let centre = if offset.is_some() { to_board(fp, copper_centre(pad, offset)) } else { placed.center };
     // A trapezoid, a chamfered rectangle or a custom pad is not given by its size: the studio draws and hit-tests the outline the DRC measures
     // (`eda_drc::pad_shape::pad_outline`, the contours of the copper in micrometres on the board, holes included; fill them even-odd).
-    let outline: Option<Vec<Vec<[i64; 2]>>> = pad.has_complex_outline().then(|| eda_drc::pad_shape::pad_outline(fp, pad, placed.center, 5).into_iter().map(|c| c.into_iter().map(|p| [p.x, p.y]).collect()).collect());
+    let outline: Option<Vec<Vec<[Nm; 2]>>> = pad.has_complex_outline().then(|| eda_drc::pad_shape::pad_outline(fp, pad, placed.center, Nm::from_raw_shim(5)).into_iter().map(|c| c.into_iter().map(|p| [p.x, p.y]).collect()).collect());
     json!({
         "num": placed.number,
         "net": net,
@@ -174,9 +174,9 @@ fn stack_layers_json(model: &ConstraintModel, fp: &FootprintInstance, pad: &Pad,
         .map(|g| {
             let view = g.shape.lay_on(pad);
             let placed = eda_model::footprint::placed_pad_of(fp, &view);
-            let offset = view.ext.offset.map(|(x, y)| Point { x, y }).filter(|o| o.x != 0 || o.y != 0);
+            let offset = view.ext.offset.map(|(x, y)| Point { x, y }).filter(|o| o.x != Nm::ZERO || o.y != Nm::ZERO);
             let centre = if offset.is_some() { to_board(fp, copper_centre(&view, offset)) } else { placed.center };
-            let outline: Option<Vec<Vec<[i64; 2]>>> = view.has_complex_outline().then(|| eda_drc::pad_shape::pad_outline(fp, &view, placed.center, 5).into_iter().map(|c| c.into_iter().map(|p| [p.x, p.y]).collect()).collect());
+            let outline: Option<Vec<Vec<[Nm; 2]>>> = view.has_complex_outline().then(|| eda_drc::pad_shape::pad_outline(fp, &view, placed.center, Nm::from_raw_shim(5)).into_iter().map(|c| c.into_iter().map(|p| [p.x, p.y]).collect()).collect());
             json!({
                 "layers": g.layers,
                 "role": g.role,

@@ -10,6 +10,7 @@ pub mod grid;
 pub mod pads;
 pub mod pour;
 
+use eda_model::units::Nm;
 use eda_model::ir::{Design, Point, Track, Via};
 use eda_model::{CheckResult, ConstraintModel};
 use grid::{Grid, Occ};
@@ -23,7 +24,7 @@ pub use eda_model::BoardRules as RouteRules;
 /// unassigned pins, so they still act as physical obstacles).
 struct PadInfo {
     pt: Point,
-    size: (i64, i64),
+    size: (Nm, Nm),
     /// Full board-space pad geometry (shape-aware containment).
     geom: eda_model::footprint::PlacedPad,
     net: String,
@@ -43,7 +44,7 @@ fn pad_interior_cells(grid: &Grid, pad: &PadInfo, rules: &RouteRules) -> Vec<(i6
     // pad shape; rounded corners and circles have less copper than their
     // bounding box). The centre cell is always included: on tiny pads the
     // margin may exceed the pad, and the centre is the best we can do.
-    let margin = (rules.track_width as f64) / 2.0;
+    let margin = ((rules.track_width).raw_shim() as f64) / 2.0;
     let mut out = vec![(cx, cy)];
     for dx in -hx..=hx {
         for dy in -hy..=hy {
@@ -101,7 +102,7 @@ fn smallest_same_footprint_gap(pads: &HashMap<String, PadInfo>) -> i64 {
                 } else {
                     continue;
                 };
-                min_gap = min_gap.min(gap);
+                min_gap = min_gap.min(gap.raw_shim());
             }
         }
     }
@@ -288,7 +289,7 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     // established performance.
     let min_pad_gap = smallest_same_footprint_gap(&pads);
     let mut eff_rules = rules.clone();
-    if rules.grid > 130_000 && min_pad_gap < rules.grid {
+    if rules.grid > Nm::from_raw_shim(130_000) && min_pad_gap < rules.grid.raw_shim() {
         eff_rules.grid = rules.grid / 2;
     }
     if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
@@ -421,7 +422,7 @@ pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -
             eprintln!("{}", grid.dump_why(cx, cy, pad.layers[0], &pad.net, 14));
         }
         if !reached {
-            let mm2 = best_pocket as f64 * (rules.grid as f64 / 1e6).powi(2);
+            let mm2 = best_pocket as f64 * (rules.grid.raw_shim() as f64 / 1e6).powi(2);
             out.push(CheckResult::fail(
                 "placement_pad_reach",
                 refpin,

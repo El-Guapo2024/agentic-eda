@@ -3,6 +3,7 @@
 //! placement and pass once the offending part is moved. Numbers here are
 //! the gate thresholds; if a threshold moves these fixtures should too.
 
+use eda_model::units::Nm;
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, Side};
 use eda_model::{CheckStatus, ConstraintModel};
 
@@ -59,11 +60,11 @@ nets:
 "#;
 
 fn square(side: i64) -> Vec<Point> {
-    vec![Point { x: 0, y: 0 }, Point { x: side, y: 0 }, Point { x: side, y: side }, Point { x: 0, y: side }]
+    vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(side), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(side), y: Nm::from_raw_shim(side) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(side) }]
 }
 
 fn fp(id: &str, x: i64, y: i64, rot_deg: u32) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: Point { x, y }, rot: rot_deg * 1000, side: Side::Top, label: Default::default() }
+    FootprintInstance { id: id.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, rot: rot_deg * 1000, side: Side::Top, label: Default::default() }
 }
 
 fn design(outline: Vec<Point>, fps: Vec<FootprintInstance>) -> Design {

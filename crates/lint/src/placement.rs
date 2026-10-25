@@ -22,19 +22,19 @@ struct Rect(Nm, Nm, Nm, Nm);
 
 impl Rect {
     fn gap(&self, o: &Rect) -> f64 {
-        let dx = (self.0 - o.2).max(o.0 - self.2).max(0) as f64;
-        let dy = (self.1 - o.3).max(o.1 - self.3).max(0) as f64;
+        let dx = ((self.0 - o.2).max(o.0 - self.2).max(Nm::ZERO)).raw_shim() as f64;
+        let dy = ((self.1 - o.3).max(o.1 - self.3).max(Nm::ZERO)).raw_shim() as f64;
         (dx * dx + dy * dy).sqrt()
     }
     fn overlap_area(&self, o: &Rect) -> i128 {
-        let w = (self.2.min(o.2) - self.0.max(o.0)).max(0) as i128;
-        let h = (self.3.min(o.3) - self.1.max(o.1)).max(0) as i128;
+        let w = ((self.2.min(o.2) - self.0.max(o.0)).max(Nm::ZERO)).raw_shim() as i128;
+        let h = ((self.3.min(o.3) - self.1.max(o.1)).max(Nm::ZERO)).raw_shim() as i128;
         w * h
     }
 }
 
 fn orient(a: Point, b: Point, c: Point) -> i128 {
-    (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128
+    (b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128
 }
 
 /// Max gap, nm, between an edge connector's courtyard and the nearest
@@ -56,7 +56,7 @@ pub const BOARD_USE_MIN_SPAN: f64 = 0.5;
 /// `fit_board_utilization: 0` and is exempt.
 pub const BOARD_USE_MIN_DENSITY_FRACTION: f64 = 0.5;
 /// See [`eda_model::DECOUPLING_MAX_GAP_NM`].
-pub const DECOUPLING_MAX_GAP_NM: i64 = eda_model::DECOUPLING_MAX_GAP_NM;
+pub const DECOUPLING_MAX_GAP_NM: i64 = eda_model::DECOUPLING_MAX_GAP_NM.raw_shim();
 /// A net's pad bounding-box half-perimeter may not exceed this multiple of
 /// its lower bound, `2·sqrt(Σ member courtyard areas)` — roughly the HPWL
 /// the net would have with its members packed touching.
@@ -104,10 +104,10 @@ pub fn check(design: &Design, model: &ConstraintModel) -> Vec<Finding> {
     }
     let bare: BTreeMap<String, Rect> = courtyards.iter().map(|(k, (r, _))| (k.clone(), *r)).collect();
     let bb = (
-        pl.outline.iter().map(|p| p.x).min().unwrap_or(0),
-        pl.outline.iter().map(|p| p.y).min().unwrap_or(0),
-        pl.outline.iter().map(|p| p.x).max().unwrap_or(0),
-        pl.outline.iter().map(|p| p.y).max().unwrap_or(0),
+        pl.outline.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO),
+        pl.outline.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO),
+        pl.outline.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO),
+        pl.outline.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO),
     );
 
     proximity(model, &courtyards, &mut out);
@@ -135,7 +135,7 @@ fn proximity(model: &ConstraintModel, courtyards: &BTreeMap<String, (Rect, eda_m
             };
             let reason_suffix = reason.as_deref().map(|r| format!("; {r}")).unwrap_or_default();
             let v = Finding::new(Check::PlacementProximity, format!("{d:.2} mm apart, rule allows {max_mm} mm{reason_suffix}"), vec![item(a, center(ra), a.clone()), item(b, center(rb), b.clone())]);
-            out.push(v.with_fix(FixHint { mover: b.clone(), toward: a.clone(), distance_to_close_nm: (over * 1e6).round() as Nm, suggested_command: suggest.into() }));
+            out.push(v.with_fix(FixHint { mover: b.clone(), toward: a.clone(), distance_to_close_nm: Nm::from_raw_shim((over * 1e6).round() as i64), suggested_command: suggest.into() }));
         }
     }
 }
@@ -168,7 +168,7 @@ fn edge_connector(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, 
         }
         let Some(r) = courtyards.get(&part.reference) else { continue };
         let gap = edge_connector_gap((r.0, r.1, r.2, r.3), bb);
-        if gap > EDGE_CONNECTOR_MAX_GAP_NM {
+        if gap > Nm::from_raw_shim(EDGE_CONNECTOR_MAX_GAP_NM) {
             let v = Finding::new(
                 Check::PlacementEdgeConnector,
                 format!("connector courtyard is {gap} nm from the nearest board edge (max {EDGE_CONNECTOR_MAX_GAP_NM} nm)"),
@@ -177,7 +177,7 @@ fn edge_connector(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, 
             out.push(v.with_fix(FixHint {
                 mover: part.reference.clone(),
                 toward: "nearest board edge".into(),
-                distance_to_close_nm: gap - EDGE_CONNECTOR_MAX_GAP_NM,
+                distance_to_close_nm: gap - Nm::from_raw_shim(EDGE_CONNECTOR_MAX_GAP_NM),
                 suggested_command: "move the connector to the board edge it faces".into(),
             }));
         }
@@ -194,10 +194,10 @@ fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Nm, Nm, Nm, Nm), fit_targ
         courtyards.values().map(|r| r.2).max().unwrap(),
         courtyards.values().map(|r| r.3).max().unwrap(),
     );
-    let (w, h) = ((bb.2 - bb.0).max(1) as f64, (bb.3 - bb.1).max(1) as f64);
-    let (l, r, t, b) = ((u.0 - bb.0) as f64, (bb.2 - u.2) as f64, (u.1 - bb.1) as f64, (bb.3 - u.3) as f64);
+    let (w, h) = (((bb.2 - bb.0).max(Nm::from_raw_shim(1))).raw_shim() as f64, ((bb.3 - bb.1).max(Nm::from_raw_shim(1))).raw_shim() as f64);
+    let (l, r, t, b) = ((u.0 - bb.0).raw_shim() as f64, (bb.2 - u.2).raw_shim() as f64, (u.1 - bb.1).raw_shim() as f64, (bb.3 - u.3).raw_shim() as f64);
     let (imb_x, imb_y) = ((l - r).abs() / w, (t - b).abs() / h);
-    let (span_x, span_y) = ((u.2 - u.0) as f64 / w, (u.3 - u.1) as f64 / h);
+    let (span_x, span_y) = ((u.2 - u.0).raw_shim() as f64 / w, (u.3 - u.1).raw_shim() as f64 / h);
     let board_center = Point { x: (bb.0 + bb.2) / 2, y: (bb.1 + bb.3) / 2 };
     if imb_x > BOARD_USE_MAX_IMBALANCE || imb_y > BOARD_USE_MAX_IMBALANCE {
         out.push(Finding::new(
@@ -207,7 +207,7 @@ fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Nm, Nm, Nm, Nm), fit_targ
         ));
     }
     if fit_target > 0.0 {
-        let parts_area: f64 = courtyards.values().map(|r| ((r.2 - r.0) as f64) * ((r.3 - r.1) as f64)).sum();
+        let parts_area: f64 = courtyards.values().map(|r| ((r.2 - r.0).raw_shim() as f64) * ((r.3 - r.1).raw_shim() as f64)).sum();
         let density = parts_area / (w * h);
         let floor = fit_target * BOARD_USE_MIN_DENSITY_FRACTION;
         if density < floor {
@@ -252,7 +252,7 @@ fn decoupling(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out:
                     format!("decoupling capacitor is {d:.0} nm from the IC it decouples (max {DECOUPLING_MAX_GAP_NM} nm)"),
                     vec![item(c, center(rc), c.to_string()), item(u, center(&ru), u.to_string())],
                 );
-                out.push(v.with_fix(FixHint { mover: c.to_string(), toward: u.to_string(), distance_to_close_nm: (d - DECOUPLING_MAX_GAP_NM as f64).round() as Nm, suggested_command: format!("move {c} next to {u}") }));
+                out.push(v.with_fix(FixHint { mover: c.to_string(), toward: u.to_string(), distance_to_close_nm: Nm::from_raw_shim((d - DECOUPLING_MAX_GAP_NM as f64).round() as i64), suggested_command: format!("move {c} next to {u}") }));
             }
         }
     }
@@ -292,10 +292,10 @@ fn net_compactness(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel
             continue;
         }
         let hpwl = (pts.iter().map(|p| p.x).max().unwrap() - pts.iter().map(|p| p.x).min().unwrap()) + (pts.iter().map(|p| p.y).max().unwrap() - pts.iter().map(|p| p.y).min().unwrap());
-        let area: f64 = members.iter().filter_map(|m| courtyards.get(*m)).map(|r| ((r.2 - r.0) as f64) * ((r.3 - r.1) as f64)).sum();
+        let area: f64 = members.iter().filter_map(|m| courtyards.get(*m)).map(|r| ((r.2 - r.0).raw_shim() as f64) * ((r.3 - r.1).raw_shim() as f64)).sum();
         let bound = 2.0 * area.sqrt();
-        let ratio = hpwl as f64 / bound.max(1.0);
-        if hpwl > NET_COMPACTNESS_FLOOR_NM && ratio > NET_COMPACTNESS_MAX_RATIO {
+        let ratio = hpwl.raw_shim() as f64 / bound.max(1.0);
+        if hpwl > Nm::from_raw_shim(NET_COMPACTNESS_FLOOR_NM) && ratio > NET_COMPACTNESS_MAX_RATIO {
             let anchor = pts[0];
             out.push(Finding::new(
                 Check::PlacementNetCompactness,
@@ -345,7 +345,7 @@ fn stub_crossings(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel,
     let allowed = (STUB_CROSSING_MAX_RATIO * stubs.len() as f64).floor() as usize;
     if crossings.len() > allowed {
         let names = crossings.iter().map(|(a, b, _)| format!("{a}\u{d7}{b}")).collect::<Vec<_>>().join(",");
-        let anchor = crossings.first().map(|(_, _, p)| *p).unwrap_or(Point { x: 0, y: 0 });
+        let anchor = crossings.first().map(|(_, _, p)| *p).unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
         out.push(Finding::new(
             Check::PlacementStubCrossings,
             format!("{} crossing pair(s) of 2-pin net stubs among {} nets (max {allowed})", crossings.len(), stubs.len()),
@@ -374,7 +374,7 @@ mod tests {
             schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
-            placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 50_000_000, y: 0 }, Point { x: 50_000_000, y: 50_000_000 }, Point { x: 0, y: 50_000_000 }], footprints, modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(50_000_000) }], footprints, modules: vec![] }),
             routing: None,
             drawings: None,
         }
@@ -387,13 +387,13 @@ mod tests {
             placement_rules: vec![PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 3.0, reason: None }],
             ..Default::default()
         };
-        let d = design(vec![fp("U1", 5_000_000, 5_000_000), fp("C1", 20_000_000, 5_000_000)]); // 15mm apart, way over 3mm
+        let d = design(vec![fp("U1", Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)), fp("C1", Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000))]); // 15mm apart, way over 3mm
         let v = check(&d, &model);
         let hit = v.iter().find(|x| x.check == "placement_proximity").expect("proximity violation");
         let fix = hit.fix.as_ref().expect("fix hint");
         assert_eq!(fix.mover, "C1");
         assert_eq!(fix.toward, "U1");
-        assert!(fix.distance_to_close_nm > 0);
+        assert!(fix.distance_to_close_nm > Nm::ZERO);
     }
 
     #[test]
@@ -403,7 +403,7 @@ mod tests {
             placement_rules: vec![PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 30.0, reason: None }],
             ..Default::default()
         };
-        let d = design(vec![fp("U1", 5_000_000, 5_000_000), fp("C1", 6_000_000, 5_000_000)]);
+        let d = design(vec![fp("U1", Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)), fp("C1", Nm::from_raw_shim(6_000_000), Nm::from_raw_shim(5_000_000))]);
         let v = check(&d, &model);
         assert!(v.iter().all(|x| x.check != "placement_proximity"), "{v:#?}");
     }

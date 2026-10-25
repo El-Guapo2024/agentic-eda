@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`): the glyph sizes the Text Box Properties dialog accepts.
-const TEXT_MIN_SIZE_NM: Nm = 1_000;
-const TEXT_MAX_SIZE_NM: Nm = 250_000_000;
+const TEXT_MIN_SIZE_NM: Nm = Nm::from_raw_shim(1_000);
+const TEXT_MAX_SIZE_NM: Nm = Nm::from_raw_shim(250_000_000);
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, what, msg.into())]
@@ -254,16 +254,16 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_barcode", what, "a barcode needs a layer"));
         }
         self.layer_is_on(&b.layer, what)?;
-        if b.width_nm <= 0 || b.height_nm <= 0 {
+        if b.width_nm <= Nm::ZERO || b.height_nm <= Nm::ZERO {
             return Err(fail("ops_bad_barcode", what, "the size of a barcode must be greater than zero"));
         }
-        if b.text_height_nm <= 0 {
+        if b.text_height_nm <= Nm::ZERO {
             return Err(fail("ops_bad_barcode", what, "the text size of a barcode must be greater than zero"));
         }
         if b.angle >= 360_000 {
             return Err(fail("ops_bad_barcode", what, "the angle of a barcode is below 360 degrees"));
         }
-        if b.margin_x_nm < 0 || b.margin_y_nm < 0 {
+        if b.margin_x_nm < Nm::ZERO || b.margin_y_nm < Nm::ZERO {
             return Err(fail("ops_bad_barcode", what, "the margins of a barcode cannot be negative"));
         }
         Ok(())
@@ -354,7 +354,7 @@ impl<'a> Board<'a> {
         if !(TEXT_MIN_SIZE_NM..=TEXT_MAX_SIZE_NM).contains(&t.size_nm) || !(TEXT_MIN_SIZE_NM..=TEXT_MAX_SIZE_NM).contains(&width) {
             return Err(fail("ops_bad_text_box", what, "the text size must be between 0.001 mm and 250 mm"));
         }
-        if t.thickness_nm < 0 || t.stroke_width_nm < 0 || t.margin_left_nm < 0 || t.margin_top_nm < 0 || t.margin_right_nm < 0 || t.margin_bottom_nm < 0 {
+        if t.thickness_nm < Nm::ZERO || t.stroke_width_nm < Nm::ZERO || t.margin_left_nm < Nm::ZERO || t.margin_top_nm < Nm::ZERO || t.margin_right_nm < Nm::ZERO || t.margin_bottom_nm < Nm::ZERO {
             return Err(fail("ops_bad_text_box", what, "the pen, the border and the margins cannot be negative"));
         }
         if !t.pts.is_empty() && t.pts.len() != 4 {
@@ -468,7 +468,7 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_point", what, "a point needs a layer"));
         }
         self.layer_is_on(layer, what)?;
-        if size_nm <= 0 {
+        if size_nm <= Nm::ZERO {
             return Err(fail("ops_bad_point", what, "the size of a point must be greater than zero"));
         }
         Ok(())
@@ -572,8 +572,8 @@ pub fn corners_in_sequence(t: &TextBox, angle: Millideg) -> [Point; 4] {
     }
     let mut corners = t.pts.clone();
     while corners.len() < 4 {
-        let last = *corners.last().unwrap_or(&Point { x: 0, y: 0 });
-        corners.push(Point { x: last.x + 10, y: last.y + 10 });
+        let last = *corners.last().unwrap_or(&Point { x: Nm::ZERO, y: Nm::ZERO });
+        corners.push(Point { x: last.x + Nm::from_raw_shim(10), y: last.y + Nm::from_raw_shim(10) });
     }
     let (mut min_x, mut max_x, mut min_y, mut max_y) = (corners[0], corners[0], corners[0], corners[0]);
     for c in &corners {
@@ -711,11 +711,11 @@ mod tests {
     use eda_model::pcb_items::TextBox;
 
     fn bx() -> TextBox {
-        TextBox::new("F.SilkS", Point { x: 10_000_000, y: 10_000_000 }, Point { x: 30_000_000, y: 20_000_000 }, 1_000_000, 120_000)
+        TextBox::new("F.SilkS", Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(120_000))
     }
 
     fn rot(angle_cw: i64) -> Xform {
-        Xform::Rotate { pivot: Point { x: 0, y: 0 }, angle: angle_cw }
+        Xform::Rotate { pivot: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: angle_cw }
     }
 
     #[test]
@@ -724,7 +724,7 @@ mod tests {
         transform_text_box(&mut t, rot(90_000), 2);
         assert!(t.is_rect());
         // clockwise on the screen: (x, y) -> (-y, x)
-        assert_eq!((t.start, t.end), (Point { x: -10_000_000, y: 10_000_000 }, Point { x: -20_000_000, y: 30_000_000 }));
+        assert_eq!((t.start, t.end), (Point { x: Nm::from_raw_shim(-10_000_000), y: Nm::from_raw_shim(10_000_000) }, Point { x: Nm::from_raw_shim(-20_000_000), y: Nm::from_raw_shim(30_000_000) }));
         assert_eq!(t.angle, 270_000, "the text angle is KiCad's, counter-clockwise: a clockwise quarter turn takes 90 from 0");
         // ... and the next brings the frame round to 180
         transform_text_box(&mut t, rot(90_000), 2);
@@ -752,35 +752,35 @@ mod tests {
         assert!(t.is_rect(), "the polygon is a rectangle again at a multiple of 90 degrees: {t:?}");
         let [x0, y0, x1, y1] = t.bounds();
         // The rounding of two 45 degree turns is a micrometre at most.
-        assert!((x0 - 10_000_000).abs() <= 1 && (y0 - 10_000_000).abs() <= 1 && (x1 - 30_000_000).abs() <= 1 && (y1 - 20_000_000).abs() <= 1, "{:?}", t.bounds());
+        assert!((x0 - Nm::from_raw_shim(10_000_000)).abs() <= Nm::from_raw_shim(1) && (y0 - Nm::from_raw_shim(10_000_000)).abs() <= Nm::from_raw_shim(1) && (x1 - Nm::from_raw_shim(30_000_000)).abs() <= Nm::from_raw_shim(1) && (y1 - Nm::from_raw_shim(20_000_000)).abs() <= Nm::from_raw_shim(1), "{:?}", t.bounds());
         assert_eq!(t.angle, 0);
     }
 
     #[test]
     fn a_flip_moves_the_box_to_the_other_side_and_mirrors_its_text() {
         let mut t = bx();
-        transform_text_box(&mut t, Xform::Flip { pivot: Point { x: 0, y: 0 }, dir: FlipDirection::LeftRight }, 2);
+        transform_text_box(&mut t, Xform::Flip { pivot: Point { x: Nm::ZERO, y: Nm::ZERO }, dir: FlipDirection::LeftRight }, 2);
         assert_eq!(t.layer, "B.SilkS");
         assert!(t.mirror, "text on a back layer reads mirrored");
-        assert_eq!((t.start, t.end), (Point { x: -10_000_000, y: 10_000_000 }, Point { x: -30_000_000, y: 20_000_000 }));
+        assert_eq!((t.start, t.end), (Point { x: Nm::from_raw_shim(-10_000_000), y: Nm::from_raw_shim(10_000_000) }, Point { x: Nm::from_raw_shim(-30_000_000), y: Nm::from_raw_shim(20_000_000) }));
         assert_eq!(t.angle, 0);
         let mut u = bx();
         u.angle = 90_000;
-        transform_text_box(&mut u, Xform::Flip { pivot: Point { x: 0, y: 0 }, dir: FlipDirection::TopBottom }, 2);
+        transform_text_box(&mut u, Xform::Flip { pivot: Point { x: Nm::ZERO, y: Nm::ZERO }, dir: FlipDirection::TopBottom }, 2);
         assert_eq!(u.angle, 90_000, "180 - 90");
-        assert_eq!((u.start.y, u.end.y), (-10_000_000, -20_000_000));
+        assert_eq!((u.start.y, u.end.y), (Nm::from_raw_shim(-10_000_000), Nm::from_raw_shim(-20_000_000)));
     }
 
     #[test]
     fn corners_follow_the_text_frame() {
         let mut t = bx();
         let at = |a| corners_in_sequence(&t, a);
-        assert_eq!(at(0)[0], Point { x: 10_000_000, y: 10_000_000 });
-        assert_eq!(at(90_000)[0], Point { x: 10_000_000, y: 20_000_000 });
-        assert_eq!(at(180_000)[0], Point { x: 30_000_000, y: 20_000_000 });
-        assert_eq!(at(270_000)[0], Point { x: 30_000_000, y: 10_000_000 });
-        t.pts = vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 5_000_000 }, Point { x: 0, y: 10_000_000 }, Point { x: -5_000_000, y: 5_000_000 }];
+        assert_eq!(at(0)[0], Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) });
+        assert_eq!(at(90_000)[0], Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) });
+        assert_eq!(at(180_000)[0], Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) });
+        assert_eq!(at(270_000)[0], Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(10_000_000) });
+        t.pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) }, Point { x: Nm::from_raw_shim(-5_000_000), y: Nm::from_raw_shim(5_000_000) }];
         // 45 degrees: minX, minY, maxX, maxY
-        assert_eq!(corners_in_sequence(&t, 45_000), [Point { x: -5_000_000, y: 5_000_000 }, Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 5_000_000 }, Point { x: 0, y: 10_000_000 }]);
+        assert_eq!(corners_in_sequence(&t, 45_000), [Point { x: Nm::from_raw_shim(-5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) }]);
     }
 }

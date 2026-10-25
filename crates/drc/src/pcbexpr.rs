@@ -11,6 +11,7 @@
 //!
 //! A property a class has in KiCad but this studio does not model ([`crate::known_props`]) compiles and reads as undefined.
 
+use eda_model::units::Nm;
 use crate::kimath::Shape;
 use crate::libeval::{self, Node, Op, UnitResolver, PCB_UNIT_NAMES};
 use crate::rule_item::{AreaFacts, Class, FootprintFacts, Prop, RuleItem};
@@ -888,7 +889,7 @@ fn item_shape(item: &RuleItem) -> Shape {
         return Shape::Polygon { pts: item.outline.clone() };
     }
     match item.shapes.len() {
-        0 => Shape::Circle { c: item.position, r: 0 },
+        0 => Shape::Circle { c: item.position, r: Nm::ZERO },
         1 => item.shapes[0].clone(),
         _ => Shape::Compound { parts: item.shapes.iter().flat_map(|s| s.parts().to_vec()).collect() },
     }
@@ -936,8 +937,8 @@ fn enclosed_in_ring(shape: &Shape, ring: &[eda_model::ir::Point]) -> bool {
     // a shape that is wholly inside has no edge of the ring within it and its probe point is inside the ring
     let probe = shape.parts().first().map(|s| s.boundary_segs()).and_then(|s| s.first().map(|g| g.a));
     let Some(p) = probe else { return false };
-    let inside = outline.gap_to(&Shape::Circle { c: p, r: 0 }) == 0.0;
-    inside && boundary.iter().all(|seg| shape.parts().iter().all(|part| part.gap_to(&Shape::Stadium { a: seg.a, b: seg.b, r: 0 }) > 0.0))
+    let inside = outline.gap_to(&Shape::Circle { c: p, r: Nm::ZERO }) == 0.0;
+    inside && boundary.iter().all(|seg| shape.parts().iter().all(|part| part.gap_to(&Shape::Stadium { a: seg.a, b: seg.b, r: Nm::ZERO }) > 0.0))
 }
 
 /// The call of a function: it takes its arguments off the stack and leaves its result on it. Most results are deferred, worked out when they are first asked for.
@@ -1476,6 +1477,7 @@ pub fn evaluate_number(text: &str, unitless: bool) -> Result<(i64, Unit), Compil
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::Point;
 
@@ -1503,7 +1505,7 @@ mod tests {
         it.set("Orientation", Prop::Double(90.0));
         it.footprint = Some(Rc::new(FootprintFacts { reference: "U1".into(), fpid: "Package:QFN".into(), fields: vec![("Value".into(), "MCU".into()), ("Supplier".into(), "ACME".into())], ..Default::default() }));
         it.plated = false;
-        it.position = Point { x: 12_000_000, y: 0 };
+        it.position = Point { x: Nm::from_raw_shim(12_000_000), y: Nm::ZERO };
         Rc::new(it)
     }
 

@@ -2,6 +2,7 @@
 //! (`.kicad/zone_fills.json`, which the design does not hold): `eda_drc::via_stitch::plan`, the port of `PCB_VIA_STITCH::Update`'s placement. The command that runs is the
 //! one with the vias in it, so the step is one undo step whoever sent it, and an agent can send the vias itself.
 
+use eda_model::units::Nm;
 use std::path::Path;
 
 use eda_model::ir::Design;
@@ -34,7 +35,7 @@ pub(crate) fn with_planned_vias(cmd: &Cmd, dir: &Path, design: &Design, model: &
             if moved.is_empty() {
                 return None;
             }
-            let mut b = eda_ops::Board::new(design.clone(), model, snap, spacing);
+            let mut b = eda_ops::Board::new(design.clone(), model, Nm::from_raw_shim(snap), Nm::from_raw_shim(spacing));
             b.apply(cmd).ok()?;
             let after = b.design();
             let mut cmds = vec![cmd.clone()];

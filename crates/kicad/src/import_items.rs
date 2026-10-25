@@ -41,7 +41,7 @@ impl ItemRef {
             hatch: sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).and_then(eda_model::pcb_items::HatchKind::from_token),
             endings: crate::line_ending_io::read(item),
             net: None,
-            corner_radius: if sexpr::tag(item) == Some("gr_rect") { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_nm).unwrap_or(0).max(0) } else { 0 },
+            corner_radius: if sexpr::tag(item) == Some("gr_rect") { sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_nm).unwrap_or(Nm::ZERO).max(Nm::ZERO) } else { Nm::ZERO },
         }
     }
 
@@ -297,12 +297,12 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
         let mut points = sexpr::find_all(pts, "xy").filter_map(xy);
         let (Some(start), Some(end)) = (points.next(), points.next()) else { continue };
         let layer = sexpr::find(d, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string();
-        let height = um_of(d, "height").unwrap_or(0);
+        let height = um_of(d, "height").unwrap_or(Nm::ZERO);
         let kind = match ty {
             "aligned" => DimensionKind::Aligned { height },
             // `PCB_DIM_ORTHOGONAL::DIR`: HORIZONTAL 0, VERTICAL 1.
             "orthogonal" => DimensionKind::Orthogonal { height, horizontal: sexpr::find(d, "orientation").and_then(|o| sexpr::num(o, 1)).unwrap_or(0.0) as i64 == 0 },
-            "radial" => DimensionKind::Radial { leader_length: um_of(d, "leader_length").unwrap_or(0) },
+            "radial" => DimensionKind::Radial { leader_length: um_of(d, "leader_length").unwrap_or(Nm::ZERO) },
             "leader" => DimensionKind::Leader,
             "center" => DimensionKind::Center,
             _ => continue,

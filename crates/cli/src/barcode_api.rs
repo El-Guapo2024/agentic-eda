@@ -10,6 +10,7 @@
 //! (not the barcode's place: the polygons are kept with its centre at the origin) and starts the plot in a thread the first time a shape is asked for; the browser asks again
 //! while the answer is `pending` (`GET /api/barcode_shape?id=..`, `POST /api/barcode_preview` for the dialog's barcode that is not on the board yet).
 
+use eda_model::units::Nm;
 use eda_model::barcode::Barcode;
 use eda_model::ir::{Design, DrawingsSection, PlacementSection, Point, Provenance};
 use serde_json::{json, Value};
@@ -21,7 +22,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 /// holds its contours; the paths are separate so that two that overlap are not cut out of one another.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BarcodeShape {
-    pub paths: Vec<Vec<Vec<[i64; 2]>>>,
+    pub paths: Vec<Vec<Vec<[eda_model::units::Nm; 2]>>>,
 }
 
 /// What the cache holds for a barcode's parameters.
@@ -133,7 +134,7 @@ pub fn shape_blocking(b: &Barcode, text: &str) -> Result<Arc<BarcodeShape>, Stri
 fn lone_barcode(b: &Barcode, text: &str) -> Design {
     let mut barcode = b.clone();
     barcode.id = "bar_plot".into();
-    barcode.at = Point { x: 0, y: 0 };
+    barcode.at = Point { x: Nm::ZERO, y: Nm::ZERO };
     barcode.text = text.to_string();
     Design {
         footprint_library: None,
@@ -145,7 +146,7 @@ fn lone_barcode(b: &Barcode, text: &str) -> Design {
         schematic: None,
         nets: None,
         routing: None,
-        placement: Some(PlacementSection { outline: vec![Point { x: -1_000_000, y: -1_000_000 }, Point { x: 1_000_000, y: -1_000_000 }, Point { x: 1_000_000, y: 1_000_000 }, Point { x: -1_000_000, y: 1_000_000 }], footprints: vec![], modules: vec![] }),
+        placement: Some(PlacementSection { outline: vec![Point { x: Nm::from_raw_shim(-1_000_000), y: Nm::from_raw_shim(-1_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(-1_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(-1_000_000), y: Nm::from_raw_shim(1_000_000) }], footprints: vec![], modules: vec![] }),
         drawings: Some(DrawingsSection { barcodes: vec![barcode], ..Default::default() }),
     }
 }
@@ -179,7 +180,7 @@ fn compute(b: &Barcode, text: &str) -> Result<BarcodeShape, String> {
 }
 
 /// The filled polygons of a kicad-cli SVG plot (`<path style=".. stroke:none;fill-rule:evenodd;" d="M x,y x,y .. Z ..">`), one entry per path, each a list of contours in micrometres.
-pub fn filled_paths(svg: &str) -> Vec<Vec<Vec<[i64; 2]>>> {
+pub fn filled_paths(svg: &str) -> Vec<Vec<Vec<[eda_model::units::Nm; 2]>>> {
     let mut out = Vec::new();
     for path in svg.split("<path ").skip(1) {
         let Some((head, rest)) = path.split_once("d=\"") else { continue };
@@ -187,7 +188,7 @@ pub fn filled_paths(svg: &str) -> Vec<Vec<Vec<[i64; 2]>>> {
             continue;
         }
         let d = rest.split('"').next().unwrap_or("");
-        let contours: Vec<Vec<[i64; 2]>> = d
+        let contours: Vec<Vec<[eda_model::units::Nm; 2]>> = d
             .split('M')
             .filter(|s| !s.trim().is_empty())
             .map(|sub| {
@@ -255,25 +256,26 @@ pub(crate) fn preview_route(dir: &Path, body: &[u8]) -> Answer {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::barcode::BarcodeKind;
 
     fn qr(text: &str) -> Barcode {
         Barcode {
             id: "bar_a".into(),
-            at: Point { x: 5_000_000, y: 5_000_000 },
+            at: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) },
             angle: 0,
             layer: "F.SilkS".into(),
-            width_nm: 10_000_000,
-            height_nm: 10_000_000,
+            width_nm: Nm::from_raw_shim(10_000_000),
+            height_nm: Nm::from_raw_shim(10_000_000),
             text: text.into(),
-            text_height_nm: 1_500_000,
+            text_height_nm: Nm::from_raw_shim(1_500_000),
             kind: BarcodeKind::Qr,
             ecc: eda_model::barcode::EccLevel::L,
             show_text: true,
             knockout: false,
-            margin_x_nm: 0,
-            margin_y_nm: 0,
+            margin_x_nm: Nm::ZERO,
+            margin_y_nm: Nm::ZERO,
         }
     }
 
@@ -281,20 +283,20 @@ mod tests {
     fn the_key_has_what_the_shape_depends_on_and_not_the_place_or_the_id() {
         let a = qr("HELLO");
         let mut moved = a.clone();
-        moved.at = Point { x: 9_000_000, y: -3_000_000 };
+        moved.at = Point { x: Nm::from_raw_shim(9_000_000), y: Nm::from_raw_shim(-3_000_000) };
         moved.id = "bar_b".into();
         assert_eq!(key(&a, "HELLO"), key(&moved, "HELLO"));
         for change in [
-            Box::new(|b: &mut Barcode| b.width_nm = 12_000_000) as Box<dyn Fn(&mut Barcode)>,
-            Box::new(|b| b.height_nm = 12_000_000),
+            Box::new(|b: &mut Barcode| b.width_nm = Nm::from_raw_shim(12_000_000)) as Box<dyn Fn(&mut Barcode)>,
+            Box::new(|b| b.height_nm = Nm::from_raw_shim(12_000_000)),
             Box::new(|b| b.angle = 90_000),
             Box::new(|b| b.layer = "B.SilkS".into()),
             Box::new(|b| b.show_text = false),
             Box::new(|b| b.knockout = true),
-            Box::new(|b| b.margin_x_nm = 500_000),
+            Box::new(|b| b.margin_x_nm = Nm::from_raw_shim(500_000)),
             Box::new(|b| b.kind = BarcodeKind::DataMatrix),
             Box::new(|b| b.ecc = eda_model::barcode::EccLevel::H),
-            Box::new(|b| b.text_height_nm = 2_000_000),
+            Box::new(|b| b.text_height_nm = Nm::from_raw_shim(2_000_000)),
         ] {
             let mut c = a.clone();
             change(&mut c);
@@ -316,16 +318,16 @@ mod tests {
                    <path style=\"fill:#F2EDA1; fill-opacity:1.0000; stroke:none;fill-rule:evenodd;\"\nd=\"M 0.0000,0.0000\n1.0000,0.0000\n1.0000,1.0000\nZ M 0.2500,0.2500\n0.5000,0.2500\n0.5000,0.5000\nZ\" /> \n</g>";
         let paths = filled_paths(svg);
         assert_eq!(paths.len(), 2, "the stroked outline is not a shape: {paths:?}");
-        assert_eq!(paths[0], vec![vec![[-838_900, 6_001_800], [-805_100, 6_015_800], [-779_200, 6_041_700]]]);
+        assert_eq!(paths[0], vec![vec![[Nm::from_raw_shim(-838_900), Nm::from_raw_shim(6_001_800)], [Nm::from_raw_shim(-805_100), Nm::from_raw_shim(6_015_800)], [Nm::from_raw_shim(-779_200), Nm::from_raw_shim(6_041_700)]]]);
         assert_eq!(paths[1].len(), 2, "a path may have a hole");
-        assert_eq!(paths[1][1], vec![[250_000, 250_000], [500_000, 250_000], [500_000, 500_000]]);
+        assert_eq!(paths[1][1], vec![[Nm::from_raw_shim(250_000), Nm::from_raw_shim(250_000)], [Nm::from_raw_shim(500_000), Nm::from_raw_shim(250_000)], [Nm::from_raw_shim(500_000), Nm::from_raw_shim(500_000)]]);
     }
 
     #[test]
     fn a_reply_has_the_json_and_the_status_of_the_route() {
         assert_eq!(Reply::Pending.json(), json!({ "status": "pending" }));
         assert_eq!(Reply::Pending.http_status(), "202 Accepted");
-        let ready = Reply::Ready(Arc::new(BarcodeShape { paths: vec![vec![vec![[0, 0], [1, 0], [1, 1]]]] }));
+        let ready = Reply::Ready(Arc::new(BarcodeShape { paths: vec![vec![vec![[Nm::ZERO, Nm::ZERO], [Nm::from_raw_shim(1), Nm::ZERO], [Nm::from_raw_shim(1), Nm::from_raw_shim(1)]]]] }));
         assert_eq!(ready.json(), json!({ "status": "ready", "paths": [[[[0, 0], [1, 0], [1, 1]]]] }));
         assert_eq!(ready.http_status(), "200 OK");
         assert_eq!(Reply::Failed("no kicad-cli".into()).json()["error"], "no kicad-cli");

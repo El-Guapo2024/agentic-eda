@@ -71,13 +71,13 @@ impl Board<'_> {
             if matches!(e.layer, Some(l) if l.is_empty()) {
                 return refuse("ops_bad_shape", "a layer, if given, cannot be empty");
             }
-            if matches!(e.line_width, Some(w) if w <= 0) {
+            if matches!(e.line_width, Some(w) if w <= Nm::ZERO) {
                 return refuse("ops_bad_shape", "line width must be positive");
             }
-            if matches!(e.text_size, Some(s) if s <= 0) {
+            if matches!(e.text_size, Some(s) if s <= Nm::ZERO) {
                 return refuse("ops_bad_text", "text size must be positive");
             }
-            if matches!(e.text_thickness, Some(t) if t <= 0) {
+            if matches!(e.text_thickness, Some(t) if t <= Nm::ZERO) {
                 return refuse("ops_bad_text", "text thickness must be positive");
             }
         }

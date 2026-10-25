@@ -60,7 +60,7 @@ pub struct PlaceOptions {
 
 impl Default for PlaceOptions {
     fn default() -> Self {
-        PlaceOptions { seed: 0, snap: 100_000, moves_per_part: 4000, outline: None, spacing: 600_000, fit_floor: 0.0, floorplan: None }
+        PlaceOptions { seed: 0, snap: Nm::from_raw_shim(100_000), moves_per_part: 4000, outline: None, spacing: Nm::from_raw_shim(600_000), fit_floor: 0.0, floorplan: None }
     }
 }
 
@@ -152,9 +152,9 @@ fn boxed_pads(pads: &[(String, (Nm, Nm))], pitch_max: Nm) -> Vec<usize> {
         let (mut left, mut right, mut up, mut down) = (false, false, false, false);
         for (j, (_, (ox, oy))) in pads.iter().enumerate() {
             if j == k { continue }
-            let (dx, dy) = (ox - x, oy - y);
-            if dy.abs() < 250_000 && dx != 0 && dx.abs() <= pitch_max { if dx < 0 { left = true } else { right = true } }
-            if dx.abs() < 250_000 && dy != 0 && dy.abs() <= pitch_max { if dy < 0 { up = true } else { down = true } }
+            let (dx, dy) = (*ox - *x, *oy - *y);
+            if dy.abs() < Nm::from_raw_shim(250_000) && dx != Nm::ZERO && dx.abs() <= pitch_max { if dx < Nm::ZERO { left = true } else { right = true } }
+            if dx.abs() < Nm::from_raw_shim(250_000) && dy != Nm::ZERO && dy.abs() <= pitch_max { if dy < Nm::ZERO { up = true } else { down = true } }
         }
         if (left && right) || (up && down) { out.push(k) }
     }
@@ -220,15 +220,15 @@ fn courtyard(item: &Item, pose: Pose) -> (Nm, Nm, Nm, Nm) {
 }
 
 fn overlap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> i64 {
-    let w = (a.2.min(b.2) - a.0.max(b.0)).max(0);
-    let h = (a.3.min(b.3) - a.1.max(b.1)).max(0);
-    w * h
+    let w = (a.2.min(b.2) - a.0.max(b.0)).max(Nm::ZERO);
+    let h = (a.3.min(b.3) - a.1.max(b.1)).max(Nm::ZERO);
+    (w * h.raw_shim()).raw_shim()
 }
 
 /// Edge-to-edge gap between two rectangles (0 when they touch/overlap).
 fn gap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> f64 {
-    let dx = (a.0 - b.2).max(b.0 - a.2).max(0) as f64;
-    let dy = (a.1 - b.3).max(b.1 - a.3).max(0) as f64;
+    let dx = ((a.0 - b.2).max(b.0 - a.2).max(Nm::ZERO)).raw_shim() as f64;
+    let dy = ((a.1 - b.3).max(b.1 - a.3).max(Nm::ZERO)).raw_shim() as f64;
     (dx * dx + dy * dy).sqrt()
 }
 
@@ -239,14 +239,14 @@ fn gap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> f64 {
 /// modest wirelength gain. A block boundary has to get more expensive the
 /// further you are from it, the way the proximity rules do.
 fn region_escape(c: (Nm, Nm, Nm, Nm), r: (Nm, Nm, Nm, Nm)) -> f64 {
-    let dx = (r.0 - c.0).max(0) + (c.2 - r.2).max(0);
-    let dy = (r.1 - c.1).max(0) + (c.3 - r.3).max(0);
-    (dx.max(0) + dy.max(0)) as f64
+    let dx = (r.0 - c.0).max(Nm::ZERO) + (c.2 - r.2).max(Nm::ZERO);
+    let dy = (r.1 - c.1).max(Nm::ZERO) + (c.3 - r.3).max(Nm::ZERO);
+    (dx.max(Nm::ZERO) + dy.max(Nm::ZERO)).raw_shim() as f64
 }
 
 fn outside_area(r: (Nm, Nm, Nm, Nm), bb: (Nm, Nm, Nm, Nm)) -> i64 {
-    let area = (r.2 - r.0) * (r.3 - r.1);
-    area - overlap(r, bb)
+    let area = (r.2 - r.0) * (r.3 - r.1).raw_shim();
+    (area - Nm::from_raw_shim(overlap(r, bb))).raw_shim()
 }
 
 struct Problem<'a> {
@@ -376,10 +376,10 @@ impl Problem<'_> {
         let mut c = bare;
         let side = self.label_side(i, pose);
         let lane = if self.items[i].pads.len() <= 8 { self.escape_lane_small } else { self.escape_lane };
-        if !self.items[i].boxed.is_empty() && lane > 0 {
+        if !self.items[i].boxed.is_empty() && lane > Nm::ZERO {
             let (l, r, t, b) = self.escape_faces(i, pose);
             let e = lane;
-            c = (c.0 - if l { e } else { 0 }, c.1 - if t { e } else { 0 }, c.2 + if r { e } else { 0 }, c.3 + if b { e } else { 0 });
+            c = (c.0 - if l { e } else { Nm::ZERO }, c.1 - if t { e } else { Nm::ZERO }, c.2 + if r { e } else { Nm::ZERO }, c.3 + if b { e } else { Nm::ZERO });
         }
         // The label hangs off the *bare* courtyard (the gate's geometry);
         // it is silkscreen and needs no routing-channel spacing of its own,
@@ -394,7 +394,7 @@ impl Problem<'_> {
     /// copper breaks the edge clearance.
     fn bounds(&self, i: usize) -> (Nm, Nm, Nm, Nm) {
         let b = if self.items[i].connector { self.bbox } else { self.inner };
-        let s = (self.copper_edge - self.items[i].pad_inset).max(0);
+        let s = (self.copper_edge - self.items[i].pad_inset).max(Nm::ZERO);
         (b.0.max(self.bbox.0 + s), b.1.max(self.bbox.1 + s), b.2.min(self.bbox.2 - s), b.3.min(self.bbox.3 - s))
     }
 
@@ -405,10 +405,10 @@ impl Problem<'_> {
 
     fn hpwl(&self, net: usize, poses: &[Pose]) -> i64 {
         let (x0, y0, x1, y1) = self.net_bbox(net, poses);
-        if x0 == i64::MAX {
+        if x0 == Nm::from_raw_shim(i64::MAX) {
             0
         } else {
-            (x1 - x0) + (y1 - y0)
+            ((x1 - x0) + (y1 - y0)).raw_shim()
         }
     }
 
@@ -418,12 +418,12 @@ impl Problem<'_> {
         let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
         for &(i, k) in &self.nets[net] {
             let p = self.pad_center(i, k, poses[i]);
-            x0 = x0.min(p.x);
-            y0 = y0.min(p.y);
-            x1 = x1.max(p.x);
-            y1 = y1.max(p.y);
+            x0 = x0.min(p.x.raw_shim());
+            y0 = y0.min(p.y.raw_shim());
+            x1 = x1.max(p.x.raw_shim());
+            y1 = y1.max(p.y.raw_shim());
         }
-        (x0, y0, x1, y1)
+        (Nm::from_raw_shim(x0), Nm::from_raw_shim(y0), Nm::from_raw_shim(x1), Nm::from_raw_shim(y1))
     }
 
     /// RUDY-style demand this net adds to each grid bin it overlaps:
@@ -432,12 +432,12 @@ impl Problem<'_> {
     /// net's bounding box. Empty for ineligible (wide fan-out) nets.
     fn congest_contrib(&self, net: usize, poses: &[Pose], out: &mut Vec<((i32, i32), f64)>) {
         let (x0, y0, x1, y1) = self.net_bbox(net, poses);
-        if x0 == i64::MAX {
+        if x0 == Nm::from_raw_shim(i64::MAX) {
             return;
         }
-        let (w, h) = ((x1 - x0).max(1), (y1 - y0).max(1));
-        let area = w as f64 * h as f64;
-        let hpwl = (w + h) as f64;
+        let (w, h) = ((x1 - x0).max(Nm::from_raw_shim(1)), (y1 - y0).max(Nm::from_raw_shim(1)));
+        let area = w.raw_shim() as f64 * h.raw_shim() as f64;
+        let hpwl = (w + h).raw_shim() as f64;
         let bin = self.bin_nm;
         let (bx0, by0, bx1, by1) = ((x0.div_euclid(bin)) as i32, (y0.div_euclid(bin)) as i32, (x1.div_euclid(bin)) as i32, (y1.div_euclid(bin)) as i32);
         if (bx1 - bx0 + 1) as i64 * (by1 - by0 + 1) as i64 > 64 {
@@ -449,11 +449,11 @@ impl Problem<'_> {
         for by in by0..=by1 {
             for bx in bx0..=bx1 {
                 let (cx0, cy0, cx1, cy1) = (bx as i64 * bin, by as i64 * bin, (bx as i64 + 1) * bin, (by as i64 + 1) * bin);
-                let ow = (x1.min(cx1) - x0.max(cx0)).max(0) as f64;
-                let oh = (y1.min(cy1) - y0.max(cy0)).max(0) as f64;
+                let ow = ((x1.min(cx1) - x0.max(cx0)).max(Nm::ZERO)).raw_shim() as f64;
+                let oh = ((y1.min(cy1) - y0.max(cy0)).max(Nm::ZERO)).raw_shim() as f64;
                 let ov = ow * oh;
                 if ov > 0.0 {
-                    out.push(((bx, by), hpwl * ov / area / bin as f64));
+                    out.push(((bx, by), hpwl * ov / area / bin.raw_shim() as f64));
                 }
             }
         }
@@ -477,11 +477,11 @@ impl Problem<'_> {
     /// overlap. `esc` is a short probe, one clearance + a hair, along each
     /// axis from the pad centre.
     fn escape_cost(&self, i: usize, poses: &[Pose]) -> f64 {
-        let esc = self.model.board.clearance + self.spacing + 200_000;
+        let esc = self.model.board.clearance + self.spacing + Nm::from_raw_shim(200_000);
         let mut cost = 0.0;
         for k in 0..self.items[i].pads.len() {
             let p = self.pad_center(i, k, poses[i]);
-            let probes = [(esc, 0), (-esc, 0), (0, esc), (0, -esc)];
+            let probes = [(esc, Nm::ZERO), (-esc, Nm::ZERO), (Nm::ZERO, esc), (Nm::ZERO, -esc)];
             let mut blocked = 0;
             for (dx, dy) in probes {
                 let probe = (p.x.min(p.x + dx), p.y.min(p.y + dy), p.x.max(p.x + dx), p.y.max(p.y + dy));
@@ -630,7 +630,7 @@ impl Problem<'_> {
             return 0.0;
         }
         let gap = eda_model::footprint::edge_connector_gap(self.raw_courtyard(i, poses[i]), self.bbox);
-        W_EDGE * gap.max(0) as f64
+        W_EDGE * (gap.max(Nm::ZERO)).raw_shim() as f64
     }
 
     /// Crossing pairs between item `i`'s 2-pin stubs and every other stub.
@@ -662,18 +662,18 @@ impl Problem<'_> {
         let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
         for (i, it) in self.items.iter().enumerate() {
             let r = courtyard(it, poses[i]);
-            x0 = x0.min(r.0);
-            y0 = y0.min(r.1);
-            x1 = x1.max(r.2);
-            y1 = y1.max(r.3);
+            x0 = x0.min(r.0.raw_shim());
+            y0 = y0.min(r.1.raw_shim());
+            x1 = x1.max(r.2.raw_shim());
+            y1 = y1.max(r.3.raw_shim());
         }
         // The gate measures true courtyards: strip the spacing inflation
         // from the union so a span that only just clears the target here
         // clears it there too.
-        let (x0, y0, x1, y1) = (x0 + self.spacing, y0 + self.spacing, x1 - self.spacing, y1 - self.spacing);
-        let (w, h) = ((self.bbox.2 - self.bbox.0) as f64, (self.bbox.3 - self.bbox.1) as f64);
-        let imb_x = ((x0 - self.bbox.0) - (self.bbox.2 - x1)).abs() as f64;
-        let imb_y = ((y0 - self.bbox.1) - (self.bbox.3 - y1)).abs() as f64;
+        let (x0, y0, x1, y1) = (x0 + self.spacing.raw_shim(), y0 + self.spacing.raw_shim(), x1 - self.spacing.raw_shim(), y1 - self.spacing.raw_shim());
+        let (w, h) = ((self.bbox.2 - self.bbox.0).raw_shim() as f64, (self.bbox.3 - self.bbox.1).raw_shim() as f64);
+        let imb_x = ((x0 - self.bbox.0.raw_shim()) - (self.bbox.2 - Nm::from_raw_shim(x1)).raw_shim()).abs() as f64;
+        let imb_y = ((y0 - self.bbox.1.raw_shim()) - (self.bbox.3 - Nm::from_raw_shim(y1)).raw_shim()).abs() as f64;
         let short_x = USE_MIN_SPAN * w - (x1 - x0) as f64;
         let short_y = USE_MIN_SPAN * h - (y1 - y0) as f64;
         W_USE * ((imb_x - USE_MAX_IMBALANCE * w).max(0.0) + (imb_y - USE_MAX_IMBALANCE * h).max(0.0) + short_x.max(0.0) + short_y.max(0.0))
@@ -801,7 +801,7 @@ impl Problem<'_> {
 }
 
 fn orient(a: Point, b: Point, c: Point) -> i128 {
-    (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128
+    (b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128
 }
 
 /// Proper crossing of segments ab and cd (shared endpoints don't count).
@@ -823,15 +823,15 @@ fn decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
 }
 
 fn snap_up(v: Nm, s: Nm) -> Nm {
-    if s <= 1 {
+    if s <= Nm::from_raw_shim(1) {
         v
     } else {
-        v.div_euclid(s) * s + if v.rem_euclid(s) == 0 { 0 } else { s }
+        v.div_euclid(s) * s + if v.rem_euclid(s) == Nm::ZERO { Nm::ZERO } else { s }
     }
 }
 
 fn snap_down(v: Nm, s: Nm) -> Nm {
-    if s <= 1 {
+    if s <= Nm::from_raw_shim(1) {
         v
     } else {
         v.div_euclid(s) * s
@@ -839,10 +839,10 @@ fn snap_down(v: Nm, s: Nm) -> Nm {
 }
 
 fn snap(v: Nm, s: Nm) -> Nm {
-    if s <= 1 {
+    if s <= Nm::from_raw_shim(1) {
         v
     } else {
-        (v as f64 / s as f64).round() as Nm * s
+        Nm::from_raw_shim((v.raw_shim() as f64 / s.raw_shim() as f64).round() as i64) * s.raw_shim()
     }
 }
 
@@ -858,8 +858,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
                 pads.sort_by(|a, b| a.0.cmp(&b.0));
                 let (hw, hh) = fp.courtyard_half();
                 let half = (hw + opts.spacing, hh + opts.spacing);
-                let pad_inset = fp.pads.iter().map(|p| (half.0 - p.at.0.abs() - p.size.0 / 2).min(half.1 - p.at.1.abs() - p.size.1 / 2)).min().unwrap_or(0);
-                let boxed = boxed_pads(&pads, 1_300_000);
+                let pad_inset = fp.pads.iter().map(|p| (half.0 - p.at.0.abs() - p.size.0 / 2).min(half.1 - p.at.1.abs() - p.size.1 / 2)).min().unwrap_or(Nm::ZERO);
+                let boxed = boxed_pads(&pads, Nm::from_raw_shim(1_300_000));
                 items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half, pads, pad_inset, boxed });
             }
             None => fails.push(CheckResult::fail(
@@ -907,7 +907,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
             if parts.len() < 2 || parts.len() > 6 || parts.iter().any(|&i| items[i].connector) {
                 return None;
             }
-            let area: f64 = parts.iter().map(|&i| ((items[i].half.0 - opts.spacing) * 2) as f64 * ((items[i].half.1 - opts.spacing) * 2) as f64).sum();
+            let area: f64 = parts.iter().map(|&i| ((items[i].half.0 - opts.spacing) * 2).raw_shim() as f64 * ((items[i].half.1 - opts.spacing) * 2).raw_shim() as f64).sum();
             Some((COMPACT_RATIO * 2.0 * area.sqrt()).max(6_000_000.0))
         })
         .collect();
@@ -975,10 +975,10 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         Some(_) => return Err(vec![CheckResult::fail("place_precondition", "outline", "outline needs at least 3 points")]),
         None => {
             // Auto square: 2.5x the summed courtyard area, rounded up to mm.
-            let area: f64 = items.iter().map(|it| (it.half.0 * 2) as f64 * (it.half.1 * 2) as f64).sum();
-            let side = ((area * 2.5).sqrt() / 1e6).ceil() as Nm * 1_000_000;
-            let side = side.max(items.iter().map(|it| it.half.0.max(it.half.1) * 2 + 1_000_000).max().unwrap_or(1_000_000));
-            vec![Point { x: 0, y: 0 }, Point { x: side, y: 0 }, Point { x: side, y: side }, Point { x: 0, y: side }]
+            let area: f64 = items.iter().map(|it| (it.half.0 * 2).raw_shim() as f64 * (it.half.1 * 2).raw_shim() as f64).sum();
+            let side = Nm::from_raw_shim(((area * 2.5).sqrt() / 1e6).ceil() as i64) * 1_000_000;
+            let side = side.max(items.iter().map(|it| it.half.0.max(it.half.1) * 2 + Nm::from_raw_shim(1_000_000)).max().unwrap_or(Nm::from_raw_shim(1_000_000)));
+            vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: side, y: Nm::ZERO }, Point { x: side, y: side }, Point { x: Nm::ZERO, y: side }]
         }
     };
     let bbox = (
@@ -997,15 +997,15 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     // A track lane (not a via site): the label-side rule is what unsealed
     // D2/D3 on L4; a via-sized lane on IC pad rows made every 1.5 mm
     // decoupling rule infeasible (caps ended at 1.55 mm).
-    let escape_lane = (model.board.track_width + 2 * model.board.clearance - opts.spacing).max(0);
+    let escape_lane = (model.board.track_width + 2 * model.board.clearance - opts.spacing).max(Nm::ZERO);
     // Small packages (SOT-23-6, SOT-23-5) have pockets a few cells wide
     // between their own pads and need room for a via site outward;
     // IC rows open onto the board and only need a track lane.
-    let escape_lane_small = (model.board.via_diameter + 2 * model.board.clearance + model.board.track_width - opts.spacing).max(0);
+    let escape_lane_small = (model.board.via_diameter + 2 * model.board.clearance + model.board.track_width - opts.spacing).max(Nm::ZERO);
 
-    let bin_nm: Nm = 2_000_000;
-    let pitch = (model.board.track_width + model.board.clearance).max(1);
-    let congest_capacity = model.board.layers.len() as f64 * bin_nm as f64 / pitch as f64;
+    let bin_nm: Nm = Nm::from_raw_shim(2_000_000);
+    let pitch = (model.board.track_width + model.board.clearance).max(Nm::from_raw_shim(1));
+    let congest_capacity = model.board.layers.len() as f64 * bin_nm.raw_shim() as f64 / pitch.raw_shim() as f64;
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
     let font = model.board.refdes_font(&outline);
@@ -1074,23 +1074,23 @@ fn connectivity_order(pb: &Problem) -> Vec<usize> {
 fn initial(pb: &Problem, snap_nm: Nm) -> Vec<Pose> {
     let n = pb.items.len();
     let order = connectivity_order(pb);
-    let mut poses = vec![Pose { x: 0, y: 0, rot: 0, label: LabelSide::Above }; n];
+    let mut poses = vec![Pose { x: Nm::ZERO, y: Nm::ZERO, rot: 0, label: LabelSide::Above }; n];
     let (bx0, by0, bx1, by1) = pb.bbox;
 
     // Edge connectors first, walking the perimeter: along the top edge
     // left to right, then down the right edge, along the bottom, up the
     // left — long side along the edge, flush against it. The inner
     // rectangle left over is inset by the thickest connector on each edge.
-    let mut inset = [0i64; 4]; // top, right, bottom, left
+    let mut inset = [Nm::ZERO; 4]; // top, right, bottom, left
     let mut edge = 0usize;
-    let mut along = 0i64;
+    let mut along = Nm::ZERO;
     for &i in order.iter().filter(|&&i| pb.items[i].connector) {
         let (hw, hh) = pb.items[i].half;
         let (long, thick) = ((hw.max(hh)) * 2, (hw.min(hh)) * 2);
         let mut placed = false;
         for _ in 0..4 {
             let edge_len = if edge % 2 == 0 { bx1 - bx0 } else { by1 - by0 };
-            if along + long <= edge_len || along == 0 {
+            if along + long <= edge_len || along == Nm::ZERO {
                 let rot: u8 = if (edge % 2 == 0) == (hw >= hh) { 0 } else { 1 };
                 let c = along + long / 2;
                 let (x, y) = match edge {
@@ -1106,7 +1106,7 @@ fn initial(pb: &Problem, snap_nm: Nm) -> Vec<Pose> {
                 break;
             }
             edge = (edge + 1) % 4;
-            along = 0;
+            along = Nm::ZERO;
         }
         if !placed {
             poses[i] = pb.flush_to_edge(i, Pose { x: bx0 + long / 2, y: by0 + thick / 2, rot: 0, label: LabelSide::Above }, snap_nm);
@@ -1118,13 +1118,13 @@ fn initial(pb: &Problem, snap_nm: Nm) -> Vec<Pose> {
     let (ix0, iy0, ix1) = (bx0 + inset[3], by0 + inset[0], bx1 - inset[1]);
     let mut x = ix0;
     let mut y = iy0;
-    let mut row_h = 0;
+    let mut row_h = Nm::ZERO;
     for &i in order.iter().filter(|&&i| !pb.items[i].connector) {
         let (w, h) = (pb.items[i].half.0 * 2, pb.items[i].half.1 * 2);
         if x + w > ix1 && x > ix0 {
             x = ix0;
             y += row_h;
-            row_h = 0;
+            row_h = Nm::ZERO;
         }
         poses[i] = Pose { x: snap(x + w / 2, snap_nm), y: snap(y + h / 2, snap_nm), rot: 0, label: LabelSide::Above };
         x += w;
@@ -1139,7 +1139,7 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
         return;
     }
     let mut rng = Rng(opts.seed ^ 0xA5A5_5A5A_1234_5678);
-    let span = ((pb.bbox.2 - pb.bbox.0).max(pb.bbox.3 - pb.bbox.1)) as f64;
+    let span = ((pb.bbox.2 - pb.bbox.0).max(pb.bbox.3 - pb.bbox.1)).raw_shim() as f64;
     // Floor: a six-part board gets the schedule of a 25-part one — the
     // moves are cheap and the extra length is what lets a star net fold
     // into a ring instead of freezing in the first tidy local minimum.
@@ -1173,7 +1173,7 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
     for step in 0..total_moves {
         let frac = step as f64 / total_moves.max(1) as f64;
         let temp = t0 * (t_end / t0).powf(frac);
-        let reach = (span * (1.0 - frac) * 0.5).max(opts.snap as f64 * 2.0);
+        let reach = (span * (1.0 - frac) * 0.5).max(opts.snap.raw_shim() as f64 * 2.0);
 
         let kind = rng.below(10);
         let i = rng.below(n);
@@ -1220,8 +1220,8 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
             let dx = rng.range(-(reach as i64), reach as i64 + 1);
             let dy = rng.range(-(reach as i64), reach as i64 + 1);
             poses[i] = Pose {
-                x: snap((old_i.x + dx).clamp(pb.bbox.0, pb.bbox.2), opts.snap),
-                y: snap((old_i.y + dy).clamp(pb.bbox.1, pb.bbox.3), opts.snap),
+                x: snap((old_i.x + Nm::from_raw_shim(dx)).clamp(pb.bbox.0, pb.bbox.2), opts.snap),
+                y: snap((old_i.y + Nm::from_raw_shim(dy)).clamp(pb.bbox.1, pb.bbox.3), opts.snap),
                 rot: old_i.rot,
                 label: LabelSide::Above,
             };
@@ -1241,18 +1241,18 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
                 let x = match side {
                     0 => pb.bbox.0 + w / 2,
                     1 => pb.bbox.2 - w / 2,
-                    _ => rng.range(pb.bbox.0 + w / 2, (pb.bbox.2 - w / 2).max(pb.bbox.0 + w / 2) + 1),
+                    _ => Nm::from_raw_shim(rng.range((pb.bbox.0 + w / 2).raw_shim(), ((pb.bbox.2 - w / 2).max(pb.bbox.0 + w / 2) + Nm::from_raw_shim(1)).raw_shim())),
                 };
                 let y = match side {
                     2 => pb.bbox.1 + h / 2,
                     3 => pb.bbox.3 - h / 2,
-                    _ => rng.range(pb.bbox.1 + h / 2, (pb.bbox.3 - h / 2).max(pb.bbox.1 + h / 2) + 1),
+                    _ => Nm::from_raw_shim(rng.range((pb.bbox.1 + h / 2).raw_shim(), ((pb.bbox.3 - h / 2).max(pb.bbox.1 + h / 2) + Nm::from_raw_shim(1)).raw_shim())),
                 };
                 poses[i] = Pose { x: snap(x, opts.snap), y: snap(y, opts.snap), rot, label: LabelSide::Above };
             } else {
                 poses[i] = Pose {
-                    x: snap(rng.range(pb.bbox.0, pb.bbox.2 + 1), opts.snap),
-                    y: snap(rng.range(pb.bbox.1, pb.bbox.3 + 1), opts.snap),
+                    x: snap(Nm::from_raw_shim(rng.range(pb.bbox.0.raw_shim(), (pb.bbox.2 + Nm::from_raw_shim(1)).raw_shim())), opts.snap),
+                    y: snap(Nm::from_raw_shim(rng.range(pb.bbox.1.raw_shim(), (pb.bbox.3 + Nm::from_raw_shim(1)).raw_shim())), opts.snap),
                     rot: old_i.rot,
                 label: LabelSide::Above,
             };
@@ -1379,7 +1379,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) {
                         // Three rings out from the pad: the nearest spot
                         // is often inside a decoupling ring or another
                         // part's courtyard; the next ones are not.
-                        for (dx, dy) in [(w, 0), (-w, 0), (0, h), (0, -h), (w, h), (-w, h), (w, -h), (-w, -h)] {
+                        for (dx, dy) in [(w, Nm::ZERO), (-w, Nm::ZERO), (Nm::ZERO, h), (Nm::ZERO, -h), (w, h), (-w, h), (w, -h), (-w, -h)] {
                             for m in [3, 6, 10] {
                                 cands.push((q.x + dx * m / 4, q.y + dy * m / 4));
                             }
@@ -1388,8 +1388,8 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) {
                 }
                 if pb.items[i].connector {
                     for t in [0.25, 0.5, 0.75] {
-                        let x = pb.bbox.0 + ((pb.bbox.2 - pb.bbox.0) as f64 * t) as Nm;
-                        let y = pb.bbox.1 + ((pb.bbox.3 - pb.bbox.1) as f64 * t) as Nm;
+                        let x = pb.bbox.0 + Nm::from_raw_shim(((pb.bbox.2 - pb.bbox.0).raw_shim() as f64 * t) as i64);
+                        let y = pb.bbox.1 + Nm::from_raw_shim(((pb.bbox.3 - pb.bbox.1).raw_shim() as f64 * t) as i64);
                         cands.push((snap_up(pb.bbox.0 + w / 2, snap_nm), y));
                         cands.push((snap_down(pb.bbox.2 - w / 2, snap_nm), y));
                         cands.push((x, snap_up(pb.bbox.1 + h / 2, snap_nm)));
@@ -1422,7 +1422,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) {
 
 /// Margin, nm, from the placed cluster's true courtyards to an auto-sized
 /// board edge (routing channel + mechanical clearance).
-const AUTO_OUTLINE_MARGIN: Nm = 2_000_000;
+const AUTO_OUTLINE_MARGIN: Nm = Nm::from_raw_shim(2_000_000);
 
 /// Shrink an auto-sized outline to the placed cluster: the board becomes
 /// the union of true courtyards plus `AUTO_OUTLINE_MARGIN`, except on a
@@ -1440,17 +1440,17 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Nm, Nm, Nm,
         (r.0 + sp, r.1 + sp, r.2 - sp, r.3 - sp)
     }).collect();
     for r in &rects {
-        x0 = x0.min(r.0);
-        y0 = y0.min(r.1);
-        x1 = x1.max(r.2);
-        y1 = y1.max(r.3);
+        x0 = x0.min(r.0.raw_shim());
+        y0 = y0.min(r.1.raw_shim());
+        x1 = x1.max(r.2.raw_shim());
+        y1 = y1.max(r.3.raw_shim());
     }
     for (it, r) in pb.items.iter().zip(rects.iter()) {
         if it.connector {
-            flush[0] |= r.0 == x0;
-            flush[1] |= r.1 == y0;
-            flush[2] |= r.2 == x1;
-            flush[3] |= r.3 == y1;
+            flush[0] |= r.0 == Nm::from_raw_shim(x0);
+            flush[1] |= r.1 == Nm::from_raw_shim(y0);
+            flush[2] |= r.2 == Nm::from_raw_shim(x1);
+            flush[3] |= r.3 == Nm::from_raw_shim(y1);
         }
     }
     // On a tiny board the margin is capped at a quarter of the cluster so
@@ -1460,31 +1460,31 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Nm, Nm, Nm,
     // clears the edge, and is not rounded further out (gate
     // `placement_edge_connector`: ≤ 1.5 mm); the opposite side absorbs
     // the rounding so the board dimension still comes out on the grid.
-    const HELD: Nm = 1_200_000;
-    const GRID: Nm = 500_000;
+    const HELD: Nm = Nm::from_raw_shim(1_200_000);
+    const GRID: Nm = Nm::from_raw_shim(500_000);
     let span_of = |lo: Nm, hi: Nm, held_lo: bool, held_hi: bool| -> (Nm, Nm) {
         let margin = AUTO_OUTLINE_MARGIN.min((hi - lo) / 4);
         match (held_lo, held_hi) {
-            (true, true) => (snap_down(lo - HELD, 100_000), snap_up(hi + HELD, 100_000)),
+            (true, true) => (snap_down(lo - HELD, Nm::from_raw_shim(100_000)), snap_up(hi + HELD, Nm::from_raw_shim(100_000))),
             (true, false) => {
-                let b0 = snap_down(lo - HELD, 100_000);
+                let b0 = snap_down(lo - HELD, Nm::from_raw_shim(100_000));
                 (b0, b0 + snap_up(hi + margin - b0, GRID))
             }
             (false, true) => {
-                let b1 = snap_up(hi + HELD, 100_000);
+                let b1 = snap_up(hi + HELD, Nm::from_raw_shim(100_000));
                 (b1 - snap_up(b1 - (lo - margin), GRID), b1)
             }
             (false, false) => (snap_down(lo - margin, GRID), snap_up(hi + margin, GRID)),
         }
     };
-    let (bx0, bx1) = span_of(x0, x1, flush[0], flush[2]);
-    let (by0, by1) = span_of(y0, y1, flush[1], flush[3]);
+    let (bx0, bx1) = span_of(Nm::from_raw_shim(x0), Nm::from_raw_shim(x1), flush[0], flush[2]);
+    let (by0, by1) = span_of(Nm::from_raw_shim(y0), Nm::from_raw_shim(y1), flush[1], flush[3]);
     for p in poses.iter_mut() {
         p.x -= bx0;
         p.y -= by0;
     }
     let (w, h) = (bx1 - bx0, by1 - by0);
-    (vec![Point { x: 0, y: 0 }, Point { x: w, y: 0 }, Point { x: w, y: h }, Point { x: 0, y: h }], (0, 0, w, h))
+    (vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: w, y: Nm::ZERO }, Point { x: w, y: h }, Point { x: Nm::ZERO, y: h }], (Nm::ZERO, Nm::ZERO, w, h))
 }
 
 /// Push overlapping courtyards apart (each half the penetration along the
@@ -1550,7 +1550,7 @@ fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_nm: Nm, debug: bool) {
             // Try the non-connector (or smaller) part first, then the
             // other one; a connector only slides along its own edge (one
             // axis), which legalize re-flushes afterwards.
-            let area = |i: usize| { let c = courtyard(&pb.items[i], poses[i]); (c.2 - c.0) * (c.3 - c.1) };
+            let area = |i: usize| { let c = courtyard(&pb.items[i], poses[i]); (c.2 - c.0) * (c.3 - c.1).raw_shim() };
             let first = match (pb.items[a].connector, pb.items[b].connector) {
                 (true, false) => b,
                 (false, true) => a,
@@ -1610,8 +1610,8 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) -> bool {
     let clamp_inside = |pb: &Problem, poses: &mut [Pose], i: usize| {
         let ci = pb.keepout(i, poses[i]);
         let bb = pb.bounds(i);
-        let mut dx = 0;
-        let mut dy = 0;
+        let mut dx = Nm::ZERO;
+        let mut dy = Nm::ZERO;
         if ci.0 < bb.0 {
             dx += bb.0 - ci.0;
         }
@@ -1624,7 +1624,7 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) -> bool {
         if ci.3 > bb.3 {
             dy -= ci.3 - bb.3;
         }
-        if dx != 0 || dy != 0 {
+        if dx != Nm::ZERO || dy != Nm::ZERO {
             // Snap toward the interior so an odd half-extent can't
             // oscillate half a snap outside the edge forever.
             poses[i].x = snap(poses[i].x + dx, snap_nm) + dx.signum() * snap_nm;
@@ -1734,8 +1734,8 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
     let opts = if opts.outline.is_none() && model.board.outline.is_some() && model.solver.fit_board_utilization > 0.0 {
         let outline = model.board.outline.clone().unwrap_or_default();
         let c = Point {
-            x: (outline.iter().map(|p| p.x).min().unwrap_or(0) + outline.iter().map(|p| p.x).max().unwrap_or(0)) / 2,
-            y: (outline.iter().map(|p| p.y).min().unwrap_or(0) + outline.iter().map(|p| p.y).max().unwrap_or(0)) / 2,
+            x: (outline.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO) + outline.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO)) / 2,
+            y: (outline.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO) + outline.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO)) / 2,
         };
         // `fit_outline` measures a placement, so give it one: every part
         // parked at the centre of the declared outline.
@@ -1765,12 +1765,12 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
             return Err(vec![CheckResult::fail("floorplan_precondition", "board.outline", "solver.floorplan needs a board outline to cut into modules; none was declared and none was fitted")]);
         }
         let bb = (
-            o.iter().map(|p| p.x).min().unwrap_or(0),
-            o.iter().map(|p| p.y).min().unwrap_or(0),
-            o.iter().map(|p| p.x).max().unwrap_or(0),
-            o.iter().map(|p| p.y).max().unwrap_or(0),
+            o.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO),
+            o.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO),
+            o.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO),
+            o.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO),
         );
-        let fp = eda_model::floorplan::plan(model, bb, opts.snap.max(100_000), opts.seed)
+        let fp = eda_model::floorplan::plan(model, bb, opts.snap.max(Nm::from_raw_shim(100_000)), opts.seed)
             .map_err(|e| vec![CheckResult::fail("floorplan_arrange", "modules", e)])?;
         planned = PlaceOptions { floorplan: Some(fp), ..opts.clone() };
         &planned
@@ -1976,7 +1976,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
 
 /// Total half-perimeter wirelength of a placed design, nm. A cheap,
 /// generator-agnostic quality number for scorecards.
-pub fn hpwl(design: &Design, model: &ConstraintModel) -> Option<i64> {
+pub fn hpwl(design: &Design, model: &ConstraintModel) -> Option<Nm> {
     let pl = design.placement.as_ref()?;
     let mut centers: HashMap<String, Point> = HashMap::new();
     for fp in &pl.footprints {
@@ -1985,7 +1985,7 @@ pub fn hpwl(design: &Design, model: &ConstraintModel) -> Option<i64> {
             centers.insert(format!("{}.{}", fp.id, pad.number), pad.center);
         }
     }
-    let mut total = 0;
+    let mut total = Nm::ZERO;
     for net in &model.nets {
         let pts: Vec<&Point> = net.pins.iter().filter_map(|p| centers.get(p)).collect();
         if pts.len() < 2 {

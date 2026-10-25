@@ -14,6 +14,7 @@
 //!
 //! A board read from a KiCad file keeps the names the file gave: they are KiCad's already, and our tracer is the one that could be wrong.
 
+use eda_model::units::Nm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
@@ -385,8 +386,8 @@ fn inside(outline: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
     for i in 0..outline.len() {
         let (a, b) = (outline[i], outline[(i + 1) % outline.len()]);
         if (a.y > p.y) != (b.y > p.y) {
-            let x = a.x as f64 + (p.y - a.y) as f64 * (b.x - a.x) as f64 / (b.y - a.y) as f64;
-            if (p.x as f64) < x {
+            let x = a.x.raw_shim() as f64 + (p.y - a.y).raw_shim() as f64 * (b.x - a.x).raw_shim() as f64 / (b.y - a.y).raw_shim() as f64;
+            if (p.x.raw_shim() as f64) < x {
                 odd = !odd;
             }
         }
@@ -407,7 +408,7 @@ pub(crate) fn heal_stale_nets(design: &mut Design, model: &ConstraintModel) {
     }
     let net_of: BTreeMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     // every placed pad, with the net of its pin
-    let mut pads: Vec<(eda_model::ir::Point, (i64, i64), &str)> = Vec::new();
+    let mut pads: Vec<(eda_model::ir::Point, (eda_model::units::Nm, eda_model::units::Nm), &str)> = Vec::new();
     for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
         let Some(part) = model.part(&fp.id) else { continue };
         for pad in eda_model::footprint::placed_pads(model, part, fp).unwrap_or_default() {
@@ -419,7 +420,7 @@ pub(crate) fn heal_stale_nets(design: &mut Design, model: &ConstraintModel) {
     let on_pad = |p: eda_model::ir::Point| -> Option<&str> {
         pads.iter().find(|(c, size, _)| {
             let r = size.0.max(size.1) / 2;
-            (p.x - c.x).abs() <= r && (p.y - c.y).abs() <= r
+            (p.x - c.x).abs() <= Nm::from_raw_shim(r.raw_shim()) && (p.y - c.y).abs() <= Nm::from_raw_shim(r.raw_shim())
         }).map(|(_, _, n)| *n)
     };
     let mut renames: BTreeMap<String, String> = BTreeMap::new();
@@ -440,6 +441,7 @@ pub(crate) fn heal_stale_nets(design: &mut Design, model: &ConstraintModel) {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use crate::board::tests::{scratch, setup};
     use crate::board::{load, save};
     use std::collections::BTreeSet;
@@ -457,9 +459,9 @@ mod tests {
         // U1.1-U2.1 is SIG now, GND is gone; VCC stays a power net
         model.nets.retain(|n| n.name != "GND");
         model.nets.iter_mut().find(|n| n.name == "SIG").unwrap().pins = vec!["U1.1".into(), "U2.1".into()];
-        model.board.net_classes.push(eda_model::NetClass { name: "Fast".into(), nets: vec!["SIG".into()], track_width: Some(300_000), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        model.board.net_classes.push(eda_model::NetClass { name: "Fast".into(), nets: vec!["SIG".into()], track_width: Some(Nm::from_raw_shim(300_000)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         model.board.custom_rules_text = Some("(version 1)\n(rule \"sig\" (condition \"A.NetName == 'SIG'\") (constraint length (min 10mm)))\n".into());
-        model.board.custom_rules = vec![eda_model::CustomRule { name: "sig".into(), constraint_type: "length".into(), min: Some(10_000_000), max: None, opt: None, layer: None, severity: None, condition: Some("A.NetName == 'SIG'".into()) }];
+        model.board.custom_rules = vec![eda_model::CustomRule { name: "sig".into(), constraint_type: "length".into(), min: Some(Nm::from_raw_shim(10_000_000)), max: None, opt: None, layer: None, severity: None, condition: Some("A.NetName == 'SIG'".into()) }];
         std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
         // a design routed before: its track is on the intent's SIG
         let (_, mut design, _) = load(&dir).unwrap();
@@ -467,7 +469,7 @@ mod tests {
             .routing
             .get_or_insert_with(|| eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() })
             .tracks
-            .push(eda_model::ir::Track { id: "trk_sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![eda_model::ir::Point { x: 4_000_000, y: 5_000_000 }, eda_model::ir::Point { x: 14_000_000, y: 5_000_000 }], arc_mid_offset: None });
+            .push(eda_model::ir::Track { id: "trk_sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(5_000_000) }, eda_model::ir::Point { x: Nm::from_raw_shim(14_000_000), y: Nm::from_raw_shim(5_000_000) }], arc_mid_offset: None });
         save(&dir, &design).unwrap();
 
         let (_, design, model) = load(&dir).unwrap();
@@ -523,7 +525,7 @@ mod tests {
     #[test]
     fn every_track_via_and_zone_stays_on_a_net_through_renames() {
         use eda_model::ir::Point;
-        let p = |x: i64, y: i64| Point { x: x * 1_000_000, y: y * 1_000_000 };
+        let p = |x: i64, y: i64| Point { x: Nm::from_raw_shim(x * 1_000_000), y: Nm::from_raw_shim(y * 1_000_000) };
         let dir = scratch("kicad_names_routed");
         setup(&dir);
         let intent = dir.join("intent.yaml");
@@ -542,8 +544,8 @@ mod tests {
         let sig = load(&dir).unwrap().2.nets.iter().find(|n| n.pins.contains(&"U1.1".to_string())).unwrap().name.clone();
         assert_eq!(sig, "/SIG");
         for cmd in [
-            eda_ops::Cmd::AddTrack { net: sig.clone(), layer: "F.Cu".into(), width: 200_000, pts: vec![p(4, 5), p(4, 10), p(14, 10), p(14, 5)] },
-            eda_ops::Cmd::AddVia { net: sig.clone(), x: 4_000_000, y: 10_000_000, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() },
+            eda_ops::Cmd::AddTrack { net: sig.clone(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(4, 5), p(4, 10), p(14, 10), p(14, 5)] },
+            eda_ops::Cmd::AddVia { net: sig.clone(), x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(10_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() },
             eda_ops::Cmd::AddZone { net: sig.clone(), layer: "B.Cu".into(), outline: vec![p(13, 4), p(15, 4), p(15, 6), p(13, 6)] },
         ] {
             crate::board::step(&dir, cmd, false, "test").unwrap();

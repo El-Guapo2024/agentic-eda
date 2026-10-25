@@ -22,8 +22,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM` of the label and text dialogs: "Don't allow text to disappear".
-const TEXT_SIZE_MIN_NM: Nm = 10_000;
-const TEXT_SIZE_MAX_NM: Nm = 1_000_000_000;
+const TEXT_SIZE_MIN_NM: Nm = Nm::from_raw_shim(10_000);
+const TEXT_SIZE_MAX_NM: Nm = Nm::from_raw_shim(1_000_000_000);
 
 /// `AutoRotateOnPlacementSupported`: a global label and a hierarchical label rotate themselves, a plain label and a directive label do not.
 pub(crate) fn auto_rotate_supported(kind: &LabelKind) -> bool {
@@ -61,14 +61,14 @@ impl<'m> Scene<'m> {
             let Some(bus) = self.segs.iter().find(|s| !s.dead && s.bus && (on_segment(s.a, s.b, b.at) || on_segment(s.a, s.b, end))) else { continue };
             // "bus->Angle().AsDegrees() == 90.0": the angle of the line as drawn, not normalised, so only a bus drawn downwards or to the right counts
             let (dx, dy) = (bus.b.x - bus.a.x, bus.b.y - bus.a.y);
-            if dx == 0 && dy > 0 {
+            if dx == Nm::ZERO && dy > Nm::ZERO {
                 // "bus is vertical -> label shall be horizontal and shall be placed to the side where the bus entry is"
                 if at.x < bus.a.x {
                     ret = LabelSpin::Left;
                 } else if at.x > bus.a.x {
                     ret = LabelSpin::Right;
                 }
-            } else if dy == 0 && dx >= 0 {
+            } else if dy == Nm::ZERO && dx >= Nm::ZERO {
                 // "bus is horizontal -> label shall be vertical and shall be placed to the side where the bus entry is"
                 if at.y < bus.a.y {
                     ret = LabelSpin::Up;
@@ -82,7 +82,7 @@ impl<'m> Scene<'m> {
         // grown by half the pen (`GetPenWidth() / 2`, and 1 IU on the far side): a point anywhere in that box counts, on the line or not.
         let mut lines: Vec<(Point, Point, Nm)> = self.segs.iter().filter(|s| !s.dead).map(|s| (s.a, s.b, if s.bus { HALF_BUS_PEN_NM } else { HALF_WIRE_PEN_NM })).collect();
         for l in &self.sch.lines {
-            let half = if l.width_nm > 0 { l.width_nm / 2 } else { HALF_WIRE_PEN_NM };
+            let half = if l.width_nm > Nm::ZERO { l.width_nm / 2 } else { HALF_WIRE_PEN_NM };
             lines.extend(l.pts.windows(2).map(|w| (w[0], w[1], half)));
         }
         for (start, end, half) in lines {
@@ -92,11 +92,11 @@ impl<'m> Scene<'m> {
             // "line angles goes between -90 and 90 degrees, but normalize": `Angle().Normalize90()` is in (-90, 90], so -45 < angle <= 45 is
             // -dx < dy <= dx for the direction turned to point right (or down, for a vertical line)
             let (mut dx, mut dy) = (end.x - start.x, end.y - start.y);
-            if dx < 0 || (dx == 0 && dy < 0) {
+            if dx < Nm::ZERO || (dx == Nm::ZERO && dy < Nm::ZERO) {
                 (dx, dy) = (-dx, -dy);
             }
             let at_end = end == at;
-            if (dx == 0 && dy == 0) || (dx > 0 && -dx < dy && dy <= dx) {
+            if (dx == Nm::ZERO && dy == Nm::ZERO) || (dx > Nm::ZERO && -dx < dy && dy <= dx) {
                 ret = if start.x <= end.x {
                     if at_end { LabelSpin::Right } else { LabelSpin::Left }
                 } else if at_end {
@@ -132,8 +132,8 @@ impl<'m> Scene<'m> {
             let m = Matrix::of(p.rot, false, false);
             let shape = &self.power_shapes[i];
             for (k, (px, py)) in shape.pins.iter().map(|(_, at)| *at).enumerate() {
-                let (x, y) = m.apply(px, py);
-                if (Point { x: p.at.x + x, y: p.at.y + y }) != at {
+                let (x, y) = m.apply(px.raw_shim(), py.raw_shim());
+                if (Point { x: p.at.x + Nm::from_raw_shim(x), y: p.at.y + Nm::from_raw_shim(y) }) != at {
                     continue;
                 }
                 if let Some(spin) = shape.dirs.get(k).and_then(|d| pin_spin_style(m.apply(d.0, d.1))) {
@@ -166,8 +166,8 @@ impl<'m> Scene<'m> {
 
 /// Half the pen `SCH_LINE::GetPenWidth` gives a wire with nothing set (the Default net class's 6 mil; a graphic line's `m_DefaultLineWidth` is 6 mil too) and a bus
 /// (12 mil), in nanometres.
-const HALF_WIRE_PEN_NM: Nm = 76_200;
-const HALF_BUS_PEN_NM: Nm = 152_400;
+const HALF_WIRE_PEN_NM: Nm = Nm::from_raw_shim(76_200);
+const HALF_BUS_PEN_NM: Nm = Nm::from_raw_shim(152_400);
 
 /// What Place Label sets on the label it puts down (`createNewLabel`: the properties dialog's result).
 #[derive(Debug, Clone, Default)]
@@ -202,7 +202,7 @@ impl<'a> Board<'a> {
 
         let mut look = LabelLook::default();
         if let Some(size) = props.size_nm {
-            look.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { size };
+            look.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
         }
         look.bold = props.bold.unwrap_or(false);
         look.italic = props.italic.unwrap_or(false);

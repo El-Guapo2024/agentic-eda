@@ -40,7 +40,7 @@ impl DrcRTree {
     /// clearance configured anywhere) floors at 1 so cell arithmetic never
     /// divides by zero.
     pub fn new(cell_size: Nm) -> Self {
-        DrcRTree { cell_size: cell_size.max(1), cells: HashMap::new(), boxes: Vec::new() }
+        DrcRTree { cell_size: cell_size.max(Nm::from_raw_shim(1)), cells: HashMap::new(), boxes: Vec::new() }
     }
 
     fn cell_of(&self, x: Nm, y: Nm) -> CellKey {
@@ -52,7 +52,7 @@ impl DrcRTree {
     /// list) and must be stable across `insert`/`query` for one `DrcRTree`.
     pub fn insert(&mut self, id: usize, bbox: BBox) {
         if self.boxes.len() <= id {
-            self.boxes.resize(id + 1, (0, 0, 0, 0));
+            self.boxes.resize(id + 1, (Nm::ZERO, Nm::ZERO, Nm::ZERO, Nm::ZERO));
         }
         self.boxes[id] = bbox;
         let (x0, y0, x1, y1) = bbox;
@@ -99,35 +99,35 @@ mod tests {
 
     #[test]
     fn finds_nearby_and_skips_far_items() {
-        let mut idx = DrcRTree::new(1000);
-        idx.insert(0, (0, 0, 100, 100));
-        idx.insert(1, (50_000, 50_000, 50_100, 50_100));
-        let hits = idx.query((-500, -500, 500, 500));
+        let mut idx = DrcRTree::new(Nm::from_raw_shim(1000));
+        idx.insert(0, (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100), Nm::from_raw_shim(100)));
+        idx.insert(1, (Nm::from_raw_shim(50_000), Nm::from_raw_shim(50_000), Nm::from_raw_shim(50_100), Nm::from_raw_shim(50_100)));
+        let hits = idx.query((Nm::from_raw_shim(-500), Nm::from_raw_shim(-500), Nm::from_raw_shim(500), Nm::from_raw_shim(500)));
         assert_eq!(hits, vec![0]);
     }
 
     #[test]
     fn an_item_spanning_many_cells_is_returned_once() {
-        let mut idx = DrcRTree::new(100);
-        idx.insert(0, (0, 0, 10_000, 50)); // a long thin "track" spanning ~100 cells
-        let hits = idx.query((4_900, -200, 5_100, 200));
+        let mut idx = DrcRTree::new(Nm::from_raw_shim(100));
+        idx.insert(0, (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(10_000), Nm::from_raw_shim(50))); // a long thin "track" spanning ~100 cells
+        let hits = idx.query((Nm::from_raw_shim(4_900), Nm::from_raw_shim(-200), Nm::from_raw_shim(5_100), Nm::from_raw_shim(200)));
         assert_eq!(hits, vec![0]);
     }
 
     #[test]
     fn empty_index_returns_nothing() {
-        let idx = DrcRTree::new(500);
-        assert!(idx.query((-1000, -1000, 1000, 1000)).is_empty());
+        let idx = DrcRTree::new(Nm::from_raw_shim(500));
+        assert!(idx.query((Nm::from_raw_shim(-1000), Nm::from_raw_shim(-1000), Nm::from_raw_shim(1000), Nm::from_raw_shim(1000))).is_empty());
     }
 
     #[test]
     fn query_matches_touching_bbox() {
-        let mut idx = DrcRTree::new(500);
-        idx.insert(7, (0, 0, 100, 100));
+        let mut idx = DrcRTree::new(Nm::from_raw_shim(500));
+        idx.insert(7, (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100), Nm::from_raw_shim(100)));
         // Query box touches at a single point (101,101 vs inclusive 100) --
         // bbox overlap test is inclusive, matching the all-pairs code this
         // replaces (which never skips a boundary-touching pair).
-        assert_eq!(idx.query((100, 100, 200, 200)), vec![7]);
-        assert!(idx.query((101, 101, 200, 200)).is_empty());
+        assert_eq!(idx.query((Nm::from_raw_shim(100), Nm::from_raw_shim(100), Nm::from_raw_shim(200), Nm::from_raw_shim(200))), vec![7]);
+        assert!(idx.query((Nm::from_raw_shim(101), Nm::from_raw_shim(101), Nm::from_raw_shim(200), Nm::from_raw_shim(200))).is_empty());
     }
 }

@@ -158,11 +158,11 @@ fn oval_extents(a: (f64, f64), b: (f64, f64), pen_nm: f64) -> (f64, f64, f64, f6
 /// of fifteen glyphs laid out in micrometres comes out a few micrometres wider than KiCad's.
 fn ink_size(text: &str, size: (Nm, Nm), thickness: Nm, bold: bool) -> (f64, f64) {
     let (size_nm, thickness_nm) = (size, thickness);
-    let pen = effective_pen_width(thickness_nm, size_nm, bold) as f64;
-    let segments = kicad_text_segments(&TextLayout { text, pos: Point { x: 0, y: 0 }, size: size_nm, thickness: thickness_nm, angle_deg: 0.0, mirror: false, halign: -1, valign: 0 });
+    let pen = (effective_pen_width(thickness_nm, size_nm, bold)).raw_shim() as f64;
+    let segments = kicad_text_segments(&TextLayout { text, pos: Point { x: Nm::ZERO, y: Nm::ZERO }, size: size_nm, thickness: thickness_nm, angle_deg: 0.0, mirror: false, halign: -1, valign: 0 });
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for seg in &segments {
-        let (ax0, ay0, ax1, ay1) = oval_extents((seg.a.x as f64, seg.a.y as f64), (seg.b.x as f64, seg.b.y as f64), pen);
+        let (ax0, ay0, ax1, ay1) = oval_extents((seg.a.x.raw_shim() as f64, seg.a.y.raw_shim() as f64), (seg.b.x.raw_shim() as f64, seg.b.y.raw_shim() as f64), pen);
         x0 = x0.min(ax0);
         y0 = y0.min(ay0);
         x1 = x1.max(ax1);
@@ -194,20 +194,20 @@ pub fn autosize(t: &mut Table) {
         for row in 0..rows {
             let cell = &t.cells[row * cols + col];
             // `GetMarginLeft() + GetMarginRight()`, nanometres (a new cell's 1.0025 mm, not the IR's 1.003).
-            let margins_nm = (cell.margin_nm(0) + cell.margin_nm(2)) as f64;
+            let margins_nm = (cell.margin_nm(0) + cell.margin_nm(2)).raw_shim() as f64;
             // `std::max<int>( colWidth, width + margins * 1.5 )`: the sum is cut to an integer, in nanometres.
             width = width.max((extents[row][col].0 + margins_nm * 1.5).trunc() as i64);
         }
-        t.col_widths[col] = width;
+        t.col_widths[col] = Nm::from_raw_shim(width);
     }
     for row in 0..rows {
         let mut height: i64 = 0;
         for col in 0..cols {
             let cell = &t.cells[row * cols + col];
             let margins_nm = cell.margin_nm(0) + cell.margin_nm(2);
-            height = height.max(extents[row][col].1.trunc() as i64 + margins_nm);
+            height = height.max(extents[row][col].1.trunc() as i64 + margins_nm.raw_shim());
         }
-        t.row_heights[row] = height;
+        t.row_heights[row] = Nm::from_raw_shim(height);
     }
 }
 
@@ -231,7 +231,7 @@ fn cell(text: &str, size_mm: f64, thickness_mm: f64, right: bool) -> TableCell {
 /// `new PCB_TABLE( aBoard, DEFAULT_LINE_WIDTH )` with the cells given, row by row, on `layer`: the border and the separators are 0.1 mm wide and drawn.
 fn table_of(layer: &str, cols: usize, cells: Vec<TableCell>) -> Table {
     let rows = cells.len() / cols.max(1);
-    let mut t = Table::new_grid("F.Cu", Point { x: 0, y: 0 }, cols, rows, 0, 0, 100_000);
+    let mut t = Table::new_grid("F.Cu", Point { x: Nm::ZERO, y: Nm::ZERO }, cols, rows, Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100_000));
     t.cells = cells;
     t.layer = layer.to_string();
     t
@@ -342,7 +342,7 @@ pub fn stackup_table(layer: &str, stackup: &Stackup, units: Units) -> Table {
     }
     let mut t = table_of(layer, 7, cells);
     autosize(&mut t);
-    t.at = Point { x: 0, y: 0 };
+    t.at = Point { x: Nm::ZERO, y: Nm::ZERO };
     t
 }
 
@@ -397,7 +397,7 @@ pub fn characteristics_table(layer: &str, copper_layers: usize, stackup: &Stacku
     t.separators.cols = false;
     t.separators.rows = false;
     autosize(&mut t);
-    t.at = Point { x: 0, y: 0 };
+    t.at = Point { x: Nm::ZERO, y: Nm::ZERO };
     t
 }
 
@@ -446,19 +446,19 @@ mod tests {
 
     #[test]
     fn the_ink_of_a_text_is_wider_for_more_text_and_has_none_for_a_space() {
-        let one = ink_size("H", (1500_000, 1500_000), 200_000, false);
-        let two = ink_size("HH", (1500_000, 1500_000), 200_000, false);
+        let one = ink_size("H", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false);
+        let two = ink_size("HH", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false);
         assert!(one.0 > 800_000.0 && one.0 < 1_500_000.0, "{one:?}");
         assert!(two.0 > one.0 * 1.8 && two.1 == one.1, "{two:?} {one:?}");
-        assert_eq!(ink_size("  ", (1500_000, 1500_000), 200_000, false), (0.0, 0.0));
-        assert_eq!(ink_size("", (1500_000, 1500_000), 200_000, false), (0.0, 0.0));
+        assert_eq!(ink_size("  ", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false), (0.0, 0.0));
+        assert_eq!(ink_size("", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false), (0.0, 0.0));
         // A thicker pen makes the ink bigger.
-        assert!(ink_size("H", (1500_000, 1500_000), 300_000, false).0 > one.0);
+        assert!(ink_size("H", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(300_000), false).0 > one.0);
     }
 
     #[test]
     fn a_four_layer_stackup_table_has_a_row_for_every_layer_and_sizes_itself_from_its_text() {
-        let stackup = default_stackup(4, 1_600_000);
+        let stackup = default_stackup(4, Nm::from_raw_shim(1_600_000));
         let t = stackup_table("F.SilkS", &stackup, Units::Mm);
         assert_eq!((t.col_count(), t.row_count()), (7, 1 + stackup.layers.len()));
         let text = |row: usize, col: usize| t.cell(row, col).unwrap().text.clone();
@@ -471,24 +471,24 @@ mod tests {
         assert_eq!(text(5, 0), "Dielectric 1");
         assert_eq!((1..7).map(|c| text(5, c)).collect::<Vec<_>>(), ["Core", "FR4", "0.48 mm", "Not specified", "4.5", "0.02"].map(String::from).to_vec());
         // The sizes of the text and its justification.
-        assert_eq!(t.cell(0, 0).unwrap().style.thickness_nm, 300_000);
-        assert_eq!(t.cell(1, 0).unwrap().style.thickness_nm, 200_000);
+        assert_eq!(t.cell(0, 0).unwrap().style.thickness_nm, Nm::from_raw_shim(300_000));
+        assert_eq!(t.cell(1, 0).unwrap().style.thickness_nm, Nm::from_raw_shim(200_000));
         assert_eq!(t.cell(1, 3).unwrap().style.h_align, TextJustify::Right);
         assert_eq!(t.cell(1, 0).unwrap().style.h_align, TextJustify::Left);
         // Autosize: every column is as wide as its widest text and the margins ask, every row as high; the corner is the origin.
-        assert_eq!(t.at, Point { x: 0, y: 0 });
-        assert!(t.col_widths.iter().all(|w| *w > 3_009_000), "{:?}", t.col_widths);
+        assert_eq!(t.at, Point { x: Nm::ZERO, y: Nm::ZERO });
+        assert!(t.col_widths.iter().all(|w| *w > Nm::from_raw_shim(3_009_000)), "{:?}", t.col_widths);
         let widest_name = t.col_widths[0];
-        assert!(widest_name > ink_size("Dielectric 1", (1500_000, 1500_000), 200_000, false).0 as i64, "{widest_name}");
-        assert!(t.row_heights.iter().all(|h| *h > 2_006_000), "{:?}", t.row_heights);
+        assert!(widest_name > Nm::from_raw_shim(ink_size("Dielectric 1", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false).0 as i64), "{widest_name}");
+        assert!(t.row_heights.iter().all(|h| *h > Nm::from_raw_shim(2_006_000)), "{:?}", t.row_heights);
         assert_eq!(t.layer, "F.SilkS");
         assert!(t.border.external && t.border.header && t.separators.rows && t.separators.cols);
-        assert_eq!(t.border.stroke.width_nm, 100_000);
+        assert_eq!(t.border.stroke.width_nm, Nm::from_raw_shim(100_000));
     }
 
     #[test]
     fn the_stackup_table_follows_the_units() {
-        let stackup = default_stackup(2, 1_600_000);
+        let stackup = default_stackup(2, Nm::from_raw_shim(1_600_000));
         let mils = stackup_table("F.SilkS", &stackup, Units::Mils);
         // Row 4 is F.Cu: 0.035 mm = 1.37795 mils.
         assert_eq!(mils.cell(4, 3).unwrap().text, "1.37795 mils");
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn a_layer_with_no_type_is_what_its_name_says() {
-        let mut stackup = default_stackup(2, 1_600_000);
+        let mut stackup = default_stackup(2, Nm::from_raw_shim(1_600_000));
         for l in stackup.layers.iter_mut() {
             l.kind = None;
         }
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn the_characteristics_table_is_a_title_and_label_value_pairs_two_to_a_row() {
-        let mut stackup = default_stackup(4, 1_600_000);
+        let mut stackup = default_stackup(4, Nm::from_raw_shim(1_600_000));
         stackup.copper_finish = Some("ENIG".into());
         stackup.dielectric_constraints = true;
         stackup.edge_connector = 2;
@@ -530,10 +530,10 @@ mod tests {
         assert_eq!(row(6), ["Plated board edge: ", "No", "Edge card connectors: ", "Yes, Bevelled"]);
         // No lines at all, 2 mm / 0.4 mm title, 1.5 mm / 0.2 mm data.
         assert!(!t.border.external && !t.border.header && !t.separators.rows && !t.separators.cols);
-        assert_eq!((t.cell(0, 0).unwrap().style.height_nm, t.cell(0, 0).unwrap().style.thickness_nm), (2_000_000, 400_000));
-        assert_eq!((t.cell(1, 0).unwrap().style.height_nm, t.cell(1, 0).unwrap().style.thickness_nm), (1_500_000, 200_000));
+        assert_eq!((t.cell(0, 0).unwrap().style.height_nm, t.cell(0, 0).unwrap().style.thickness_nm), (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(400_000)));
+        assert_eq!((t.cell(1, 0).unwrap().style.height_nm, t.cell(1, 0).unwrap().style.thickness_nm), (Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(200_000)));
         // Autosize looks at the title's ink for the first column, as KiCad does (it does not know the title spans four).
-        assert!(t.col_widths[0] > ink_size("BOARD CHARACTERISTICS", (2000_000, 2000_000), 400_000, false).0 as i64);
+        assert!(t.col_widths[0] > Nm::from_raw_shim(ink_size("BOARD CHARACTERISTICS", (Nm::from_raw_shim(2000_000), Nm::from_raw_shim(2000_000)), Nm::from_raw_shim(400_000), false).0 as i64));
     }
 
     /// The point of sizing a table from its ink: KiCad's own line breaking (`GetShownText` breaks to the column less the margins) does not break any cell of it.
@@ -557,13 +557,13 @@ mod tests {
 
     #[test]
     fn no_cell_of_a_built_table_is_broken_into_lines_whatever_the_units() {
-        let mut stackup = default_stackup(6, 1_600_000);
+        let mut stackup = default_stackup(6, Nm::from_raw_shim(1_600_000));
         stackup.copper_finish = Some("ENIG".into());
         for units in [Units::Mm, Units::Mils, Units::Inch] {
             assert_no_cell_wraps(&stackup_table("F.SilkS", &stackup, units));
             assert_no_cell_wraps(&characteristics_table("Dwgs.User", 6, &stackup, &numbers(), units));
         }
-        let mut odd = default_stackup(2, 1_600_000);
+        let mut odd = default_stackup(2, Nm::from_raw_shim(1_600_000));
         odd.layers[3].material = Some("a long material name for the Material column".into());
         odd.layers[3].color = Some("#336699FF".into());
         assert_no_cell_wraps(&stackup_table("B.SilkS", &odd, Units::Mm));
@@ -571,9 +571,9 @@ mod tests {
 
     #[test]
     fn a_board_without_a_stackup_gets_the_default_one_for_its_layers() {
-        let (n, s) = effective_stackup(None, 4, 1_600_000);
-        assert_eq!((n, s.layers.len()), (4, default_stackup(4, 1_600_000).layers.len()));
-        let own = default_stackup(2, 1_000_000);
-        assert_eq!(effective_stackup(Some((2, own.clone())), 4, 1_600_000), (2, own));
+        let (n, s) = effective_stackup(None, 4, Nm::from_raw_shim(1_600_000));
+        assert_eq!((n, s.layers.len()), (4, default_stackup(4, Nm::from_raw_shim(1_600_000)).layers.len()));
+        let own = default_stackup(2, Nm::from_raw_shim(1_000_000));
+        assert_eq!(effective_stackup(Some((2, own.clone())), 4, Nm::from_raw_shim(1_600_000)), (2, own));
     }
 }

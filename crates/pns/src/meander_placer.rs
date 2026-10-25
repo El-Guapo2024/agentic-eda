@@ -183,7 +183,7 @@ impl MeanderPlacer {
             env: env.clone(),
             initial_segment: start,
             origin_chain: chain_of(&origin_line),
-            width_nm: origin_line.width,
+            width_nm: origin_line.width.raw_shim(),
             origin_line,
             path,
             current_start,
@@ -308,7 +308,7 @@ impl MeanderPlacer {
     pub fn spacing_step(&mut self, sign: i64) {
         let s = self.settings.spacing + sign * self.settings.step;
         let clearance = Node::clearance(&self.env.rules, &self.origin_line.net, &None);
-        self.settings.spacing = s.max(self.width_nm + clearance);
+        self.settings.spacing = s.max(self.width_nm + clearance.raw_shim());
     }
 
     pub fn origin_line(&self) -> &Line {
@@ -389,8 +389,8 @@ impl MeanderPlacer {
         let raw = tuned.clone();
 
         let clearance = Node::clearance(&self.env.rules, &self.origin_line.net, &None);
-        let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net: self.origin_line.net.clone(), layer: self.origin_line.layer, width_nm: self.origin_line.width };
-        let zero = Point { x: 0, y: 0 };
+        let mut env = FitEnv { settings: self.settings.clone(), clearance: clearance.raw_shim(), world: &self.world, rules: &self.env.rules, net: self.origin_line.net.clone(), layer: self.origin_line.layer, width_nm: self.origin_line.width };
+        let zero = Point { x: Nm::ZERO, y: Nm::ZERO };
         let mut result = MeanderedLine::new(false);
         result.set_width(self.width_nm);
         result.set_baseline_offset(0);
@@ -502,18 +502,18 @@ mod tests {
     use crate::tuning_path::LengthEnv;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = 200_000;
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
+        rules.clearance = Nm::from_raw_shim(200_000);
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
     }
 
     fn pad(net: &str, at: Point, layers: LayerRange) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: 400_000 }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false })
     }
 
     /// Two pads 40 mm apart on net SIG joined by a straight track.
@@ -521,7 +521,7 @@ mod tests {
         let mut w = Node::new();
         w.add(pad("SIG", p(0, 0), LayerRange::single(0)));
         w.add(pad("SIG", p(40_000_000, 0), LayerRange::single(0)));
-        let s = w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(40_000_000, 0), width: 200_000, source_track: Some(("trk".into(), 0)), locked: false }));
+        let s = w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(40_000_000, 0), width: Nm::from_raw_shim(200_000), source_track: Some(("trk".into(), 0)), locked: false }));
         (w, s)
     }
 
@@ -557,9 +557,9 @@ mod tests {
         let mut w = Node::new();
         w.add(pad("SIG", p(0, 0), LayerRange::single(0)));
         w.add(pad("SIG", p(25_000_000, 20_000_000), LayerRange::single(0)));
-        let s1 = w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: arc.start, width: 200_000, source_track: Some(("t1".into(), 0)), locked: false }));
-        let a = w.add(Item::Arc(crate::item::Arc::new(net_of("SIG"), 0, 200_000, arc, Some("t2".into()), false)));
-        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: arc.end, b: p(25_000_000, 20_000_000), width: 200_000, source_track: Some(("t3".into(), 0)), locked: false }));
+        let s1 = w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: arc.start, width: Nm::from_raw_shim(200_000), source_track: Some(("t1".into(), 0)), locked: false }));
+        let a = w.add(Item::Arc(crate::item::Arc::new(net_of("SIG"), 0, Nm::from_raw_shim(200_000), arc, Some("t2".into()), false)));
+        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: arc.end, b: p(25_000_000, 20_000_000), width: Nm::from_raw_shim(200_000), source_track: Some(("t3".into(), 0)), locked: false }));
         (w, s1, a, arc)
     }
 
@@ -610,16 +610,16 @@ mod tests {
     fn the_meanders_keep_the_clearance_to_another_net() {
         let (mut w, seg) = board();
         // a GND track 1.2 mm above the line (so a 1 mm meander fits on the other side only)
-        w.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(0, 1_200_000), b: p(40_000_000, 1_200_000), width: 200_000, source_track: Some(("gnd".into(), 0)), locked: false }));
+        w.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(0, 1_200_000), b: p(40_000_000, 1_200_000), width: Nm::from_raw_shim(200_000), source_track: Some(("gnd".into(), 0)), locked: false }));
         let mut placer = MeanderPlacer::start(&w, &env(), seg, p(5_000_000, 0), settings(44_000_000)).unwrap();
         assert!(placer.do_move(p(35_000_000, 0)));
         let t = placer.tuned().tuned;
         assert!((placer.tuning_length_result() - 44_000_000).abs() < 100_000);
         // nothing on the GND side of the line beyond what fits: every vertex at least (200 + 200 + 100) um from the GND track's axis
         for q in t.points() {
-            assert!(1_200_000 - q.y >= 200_000 + 100_000 + 200_000 - 1_000, "{q:?} is too close to the GND track");
+            assert!(Nm::from_raw_shim(1_200_000) - q.y >= Nm::from_raw_shim(200_000 + 100_000 + 200_000 - 1_000), "{q:?} is too close to the GND track");
         }
-        assert!(t.points().iter().any(|q| q.y < 0), "the meanders went to the free side");
+        assert!(t.points().iter().any(|q| q.y < Nm::ZERO), "the meanders went to the free side");
     }
 
     #[test]
@@ -651,7 +651,7 @@ mod tests {
     fn profiled_env(time_domain: bool) -> LengthEnv {
         use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, TuningProfiles};
         let mut e = env();
-        let entry = |layer: &str, delay: i64| ProfileLayerEntry { signal_layer: layer.into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200_000, diff_pair_gap_nm: 0, delay_as_per_mm: delay };
+        let entry = |layer: &str, delay: i64| ProfileLayerEntry { signal_layer: layer.into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200_000), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: delay };
         let profile = TuningProfile { name: "FR4".into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: time_domain, layer_entries: vec![entry("F.Cu", 6_100_000), entry("B.Cu", 6_500_000)], via_propagation_delay_as: 5_000_000, via_overrides: vec![] };
         e.rules.tuning_profiles = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "FR4".to_string())].into() };
         e

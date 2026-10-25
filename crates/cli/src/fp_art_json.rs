@@ -105,7 +105,7 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
 pub(crate) fn placed_body(fp: &FootprintInstance, footprint: &Footprint) -> Option<(Nm, Nm, Nm, Nm)> {
     let (x0, y0, x1, y1) = footprint.art.geometry_bbox_on("F.Fab")?;
     // A degenerate box (one fab line) is no body.
-    if x1 - x0 <= 0 || y1 - y0 <= 0 {
+    if x1 - x0 <= Nm::ZERO || y1 - y0 <= Nm::ZERO {
         return None;
     }
     let corners: [Point; 4] = [to_board(fp, (x0, y0)), to_board(fp, (x1, y0)), to_board(fp, (x1, y1)), to_board(fp, (x0, y1))];
@@ -128,14 +128,14 @@ mod tests {
 
     fn footprint() -> Footprint {
         let mut art = FpArt::default();
-        art.shapes.push(FpShape::new(Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120_000, filled: false, start: p(-1_000_000, -2_000_000), end: p(1_000_000, -2_000_000) }));
-        art.shapes.push(FpShape { style: LineStyle::Dash, hatch: Some(Hatch::CrossHatch), ..FpShape::new(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: p(-1_500_000, -1_000_000), end: p(1_500_000, 1_000_000) }) });
-        art.texts.push(FpText::new("${REFERENCE} ${VALUE}", p(0, 0), "F.Fab"));
+        art.shapes.push(FpShape::new(Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(120_000), filled: false, start: p(Nm::from_raw_shim(-1_000_000), Nm::from_raw_shim(-2_000_000)), end: p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(-2_000_000)) }));
+        art.shapes.push(FpShape { style: LineStyle::Dash, hatch: Some(Hatch::CrossHatch), ..FpShape::new(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: p(Nm::from_raw_shim(-1_500_000), Nm::from_raw_shim(-1_000_000)), end: p(Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(1_000_000)) }) });
+        art.texts.push(FpText::new("${REFERENCE} ${VALUE}", p(Nm::ZERO, Nm::ZERO), "F.Fab"));
         Footprint { name: "SOIC-8".into(), art, ..Default::default() }
     }
 
     fn pose(side: Side, rot: u32) -> FootprintInstance {
-        FootprintInstance { id: "U1".into(), at: p(10_000_000, 20_000_000), rot, side, label: Default::default() }
+        FootprintInstance { id: "U1".into(), at: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000)), rot, side, label: Default::default() }
     }
 
     #[test]
@@ -172,8 +172,8 @@ mod tests {
         add_art(&mut v, &part(), &pose(Side::Top, 0), &Footprint::default());
         assert_eq!(v, json!({"ref": "R1"}));
         // the fab rectangle is 3 x 2 mm and 0.1 wide: the box does not include the stroke, as the library's body never did
-        assert_eq!(placed_body(&pose(Side::Top, 0), &footprint()), Some((8_500_000, 19_000_000, 11_500_000, 21_000_000)));
-        assert_eq!(placed_body(&pose(Side::Top, 90_000), &footprint()), Some((9_000_000, 18_500_000, 11_000_000, 21_500_000)));
+        assert_eq!(placed_body(&pose(Side::Top, 0), &footprint()), Some((Nm::from_raw_shim(8_500_000), Nm::from_raw_shim(19_000_000), Nm::from_raw_shim(11_500_000), Nm::from_raw_shim(21_000_000))));
+        assert_eq!(placed_body(&pose(Side::Top, 90_000), &footprint()), Some((Nm::from_raw_shim(9_000_000), Nm::from_raw_shim(18_500_000), Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(21_500_000))));
         assert_eq!(placed_body(&pose(Side::Top, 0), &Footprint::default()), None);
     }
 
@@ -182,7 +182,7 @@ mod tests {
     fn a_hidden_text_is_not_sent_to_the_canvas() {
         let mut fp = footprint();
         fp.art.texts.push({
-            let mut t = FpText::new("hidden", p(0, 100_000), "F.Fab");
+            let mut t = FpText::new("hidden", p(Nm::ZERO, Nm::from_raw_shim(100_000)), "F.Fab");
             t.layout.visible = false;
             t
         });

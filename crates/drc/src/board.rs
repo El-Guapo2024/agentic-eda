@@ -34,19 +34,19 @@ pub struct SilkItem {
 /// for clearance purposes without rasterizing an arc.
 pub fn from_ir_shape(s: &IrShape) -> Shape {
     match s {
-        IrShape::Segment { start, end, stroke_width, .. } => Shape::Stadium { a: *start, b: *end, r: stroke_width / 2 },
+        IrShape::Segment { start, end, stroke_width, .. } => Shape::Stadium { a: *start, b: *end, r: *stroke_width / 2 },
         IrShape::Rect { start, end, .. } => {
             let (x0, x1) = (start.x.min(end.x), start.x.max(end.x));
             let (y0, y1) = (start.y.min(end.y), start.y.max(end.y));
             Shape::Rect { x0, y0, x1, y1 }
         }
-        IrShape::Circle { center, end, stroke_width, .. } => Shape::Circle { c: *center, r: crate::kimath::dist(*center, *end) + stroke_width / 2 },
-        IrShape::Arc { start, end, stroke_width, .. } => Shape::Stadium { a: *start, b: *end, r: stroke_width / 2 },
+        IrShape::Circle { center, end, stroke_width, .. } => Shape::Circle { c: *center, r: crate::kimath::dist(*center, *end) + *stroke_width / 2 },
+        IrShape::Arc { start, end, stroke_width, .. } => Shape::Stadium { a: *start, b: *end, r: *stroke_width / 2 },
         IrShape::Polygon { pts, .. } => Shape::Polygon { pts: pts.clone() },
         // `EDA_SHAPE::makeEffectiveShapes` BEZIER: the flattened curve as a stroked polyline.
         IrShape::Bezier { stroke_width, .. } => {
             let pts = s.bezier_points().unwrap_or_default();
-            Shape::Strokes { segs: pts.windows(2).map(|w| crate::kimath::Seg::new(w[0], w[1])).collect(), r: stroke_width / 2 }
+            Shape::Strokes { segs: pts.windows(2).map(|w| crate::kimath::Seg::new(w[0], w[1])).collect(), r: *stroke_width / 2 }
         }
     }
 }
@@ -68,7 +68,7 @@ pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
     };
     let mut out = Vec::new();
     match s {
-        IrShape::Segment { start, end, stroke_width, .. } => out.push(Shape::Stadium { a: *start, b: *end, r: stroke_width / 2 }),
+        IrShape::Segment { start, end, stroke_width, .. } => out.push(Shape::Stadium { a: *start, b: *end, r: *stroke_width / 2 }),
         IrShape::Arc { start, mid, end, stroke_width, .. } => {
             let pts = arc_polyline(*start, *mid, *end, ARC_HIGH_DEF);
             let segs: Vec<_> = pts.windows(2).map(|w| crate::kimath::Seg::new(w[0], w[1])).collect();
@@ -79,7 +79,7 @@ pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
             if *filled {
                 out.push(Shape::Polygon { pts: pts.to_vec() });
             }
-            if *stroke_width > 0 || !*filled {
+            if *stroke_width > Nm::ZERO || !*filled {
                 out.extend(stroke(ring(&pts), *stroke_width));
             }
         }
@@ -88,13 +88,13 @@ pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
             if *filled {
                 out.push(Shape::Circle { c: *center, r });
             }
-            if *stroke_width > 0 || !*filled {
+            if *stroke_width > Nm::ZERO || !*filled {
                 // `SHAPE_ARC( center, end, ANGLE_360, width )`
-                let n = if r as f64 > ARC_HIGH_DEF { ((std::f64::consts::PI / (1.0 - ARC_HIGH_DEF / r as f64).acos()).ceil() as usize).clamp(8, 4096) } else { 8 };
+                let n = if r.raw_shim() as f64 > ARC_HIGH_DEF { ((std::f64::consts::PI / (1.0 - ARC_HIGH_DEF / r.raw_shim() as f64).acos()).ceil() as usize).clamp(8, 4096) } else { 8 };
                 let pts: Vec<Point> = (0..n)
                     .map(|i| {
                         let a = std::f64::consts::TAU * i as f64 / n as f64;
-                        Point { x: center.x + (r as f64 * a.cos()).round() as Nm, y: center.y + (r as f64 * a.sin()).round() as Nm }
+                        Point { x: center.x + Nm::from_raw_shim((r.raw_shim() as f64 * a.cos()).round() as i64), y: center.y + Nm::from_raw_shim((r.raw_shim() as f64 * a.sin()).round() as i64) }
                     })
                     .collect();
                 out.extend(stroke(ring(&pts), *stroke_width));
@@ -105,7 +105,7 @@ pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
                 if *filled && pts.len() >= 3 {
                     out.push(Shape::Polygon { pts: pts.clone() });
                 }
-                if *stroke_width > 0 || !*filled {
+                if *stroke_width > Nm::ZERO || !*filled {
                     out.extend(stroke(ring(pts), *stroke_width));
                 }
             }
@@ -357,8 +357,8 @@ pub struct DrcBoard {
 fn rotated_extent_by(rot_millideg: i64, size: (Nm, Nm)) -> (Nm, Nm) {
     let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    let (w, h) = (size.0 as f64, size.1 as f64);
-    ((w * cos.abs() + h * sin.abs()).round() as Nm, (w * sin.abs() + h * cos.abs()).round() as Nm)
+    let (w, h) = (size.0.raw_shim() as f64, size.1.raw_shim() as f64);
+    (Nm::from_raw_shim((w * cos.abs() + h * sin.abs()).round() as i64), Nm::from_raw_shim((w * sin.abs() + h * cos.abs()).round() as i64))
 }
 
 /// The copper shape of a `size`-sized pad of `shape` centred at `center` --
@@ -373,7 +373,7 @@ fn shape_of(center: Point, size: (Nm, Nm), shape: PadShape, roundrect_ratio: Opt
         // A trapezoid, a chamfered rectangle and a custom pad are built from their pieces (`pad_shape::pad_copper`); the box is the stand-in.
         PadShape::Rect | PadShape::Trapezoid | PadShape::ChamferedRect | PadShape::Custom => Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 },
         PadShape::RoundRect => {
-            let r = (roundrect_ratio.unwrap_or(0.25) * w.min(h) as f64).round() as Nm;
+            let r = Nm::from_raw_shim((roundrect_ratio.unwrap_or(0.25) * (w.min(h)).raw_shim() as f64).round() as i64);
             Shape::RoundRect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2, r }
         }
         PadShape::Oval => {
@@ -415,12 +415,12 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     // position* (so this item sits where the real label really is): 0.3 mm
     // per character of half-width for the Left/Right offset, a 0.7 mm gap
     // above/below the courtyard (0.2 mm beside it).
-    let half_w_offset = 300_000 * fp.id.chars().count() as Nm;
+    let half_w_offset = Nm::from_raw_shim(300_000) * fp.id.chars().count() as i64;
     let local = match fp.label {
-        LabelSide::Above => (0, -(hh + 700_000)),
-        LabelSide::Below => (0, hh + 700_000),
-        LabelSide::Left => (-(hw + 200_000 + half_w_offset), 0),
-        LabelSide::Right => (hw + 200_000 + half_w_offset, 0),
+        LabelSide::Above => (Nm::ZERO, -(hh + Nm::from_raw_shim(700_000))),
+        LabelSide::Below => (Nm::ZERO, hh + Nm::from_raw_shim(700_000)),
+        LabelSide::Left => (-(hw + Nm::from_raw_shim(200_000) + half_w_offset), Nm::ZERO),
+        LabelSide::Right => (hw + Nm::from_raw_shim(200_000) + half_w_offset, Nm::ZERO),
     };
     let center = pad_center(fp, local);
     // The label's own *rendered* extent, for collision purposes, is a
@@ -431,8 +431,8 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     // against the oracle across the example boards (see the task report);
     // still an approximation, so a residual mismatch against kicad-cli
     // remains on some boards.
-    let half_w_box = 220 * fp.id.chars().count() as Nm;
-    let (w, h) = rotated_extent_by(fp.rot as i64, (half_w_box * 2, 500));
+    let half_w_box = 220 * Nm::from_raw_shim(fp.id.chars().count() as i64);
+    let (w, h) = rotated_extent_by(fp.rot as i64, (half_w_box * 2, Nm::from_raw_shim(500)));
     Some(Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 })
 }
 
@@ -455,15 +455,15 @@ fn pad_frame_to_board(fp: &eda_model::ir::FootprintInstance, pad_rot_mdeg: i64, 
 /// the axis-aligned box around it, which over-reports clearance and
 /// shorts between neighbouring pads of a 45-degree footprint.
 fn rotated_pad_shape(fp: &eda_model::ir::FootprintInstance, pad: &Pad, center: Point) -> Shape {
-    let (w, h) = (pad.size.0 as f64, pad.size.1 as f64);
+    let (w, h) = (pad.size.0.raw_shim() as f64, pad.size.1.raw_shim() as f64);
     let to_pt = |v: (f64, f64)| {
         let (dx, dy) = pad_frame_to_board(fp, pad.rot as i64, v);
-        Point { x: center.x + dx.round() as Nm, y: center.y + dy.round() as Nm }
+        Point { x: center.x + Nm::from_raw_shim(dx.round() as i64), y: center.y + Nm::from_raw_shim(dy.round() as i64) }
     };
     match pad.shape {
         PadShape::Circle => Shape::Circle { c: center, r: pad.size.0.max(pad.size.1) / 2 },
         PadShape::Oval => {
-            let r = (w.min(h) / 2.0).round() as Nm;
+            let r = Nm::from_raw_shim((w.min(h) / 2.0).round() as i64);
             let f = (w.max(h) - w.min(h)) / 2.0;
             let axis = if w >= h { (f, 0.0) } else { (0.0, f) };
             Shape::Stadium { a: to_pt((-axis.0, -axis.1)), b: to_pt(axis), r }
@@ -648,7 +648,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 tracks.push(DrcTrackSeg { id: format!("{}#{i}", t.id), net: net.clone(), layer: t.layer.clone(), width: t.width, a: w[0], b: w[1], arc_mid: None });
             }
         }
-        let tenting: HashMap<(i64, i64, &str), &eda_model::ir::ViaTenting> = design.drawings.as_ref().map(|d| d.via_tenting.iter().map(|t| ((t.at.x, t.at.y, t.net.as_str()), t)).collect()).unwrap_or_default();
+        let tenting: HashMap<(Nm, Nm, &str), &eda_model::ir::ViaTenting> = design.drawings.as_ref().map(|d| d.via_tenting.iter().map(|t| ((t.at.x, t.at.y, t.net.as_str()), t)).collect()).unwrap_or_default();
         for v in &rt.vias {
             let t = tenting.get(&(v.at.x, v.at.y, v.net.as_str()));
             mask.vias.push(DrcViaMask { tent_front: t.and_then(|t| t.front), tent_back: t.and_then(|t| t.back) });
@@ -667,7 +667,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 fp: None,
                 id: s.id().to_string(),
                 desc: format!("Graphic on {}", s.layer()),
-                pos: s.points().first().copied().unwrap_or(Point { x: 0, y: 0 }),
+                pos: s.points().first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO }),
                 layer: s.layer().to_string(),
                 shapes: effective_shapes(s),
                 margin: None,
@@ -684,7 +684,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 fp: None,
                 id: s.id().to_string(),
                 desc: format!("Graphic on {}", s.layer()),
-                pos: s.points().first().copied().unwrap_or(Point { x: 0, y: 0 }),
+                pos: s.points().first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO }),
                 layer: s.layer().to_string(),
                 shapes: effective_shapes(s),
                 is_shape: true,
@@ -771,13 +771,13 @@ pub fn arc_polyline(start: Point, mid: Point, end: Point, max_error: f64) -> Vec
     if probe.len() < 3 {
         return probe;
     }
-    let (sx, sy, mx, my, ex, ey) = (start.x as f64, start.y as f64, mid.x as f64, mid.y as f64, end.x as f64, end.y as f64);
+    let (sx, sy, mx, my, ex, ey) = (start.x.raw_shim() as f64, start.y.raw_shim() as f64, mid.x.raw_shim() as f64, mid.y.raw_shim() as f64, end.x.raw_shim() as f64, end.y.raw_shim() as f64);
     let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
     let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
     let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
     let r = (sx - ux).hypot(sy - uy);
     // Sweep from the two-segment probe's own direction choice.
-    let ang = |p: Point| (p.y as f64 - uy).atan2(p.x as f64 - ux);
+    let ang = |p: Point| (p.y.raw_shim() as f64 - uy).atan2(p.x.raw_shim() as f64 - ux);
     let half = (ang(probe[1]) - ang(start)).rem_euclid(std::f64::consts::TAU);
     let half = if half > std::f64::consts::PI { std::f64::consts::TAU - half } else { half };
     let sweep = 2.0 * half;

@@ -9,6 +9,7 @@
 //! outline; so is a zone that was never filled. Everything that reads zone copper (the canvas, the 3D view, live connectivity, the derived `.kicad_pcb`) reads it through
 //! [`KicadFills::copper`] or [`KicadFills::current`], so a zone with no current fill is *no copper in that zone yet* everywhere at once.
 
+use eda_model::units::Nm;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -178,9 +179,9 @@ fn fill_is_of(entry: &ZoneEntry, zone: &Zone) -> bool {
 fn micrometre_zone(zone: &Zone) -> Option<Zone> {
     let um = |v: i64| (v % 1000 == 0).then_some(v / 1000);
     let mut z = zone.clone();
-    z.outline = zone.outline.iter().map(|p| Some(eda_model::ir::Point { x: um(p.x)?, y: um(p.y)? })).collect::<Option<_>>()?;
+    z.outline = zone.outline.iter().map(|p| Some(eda_model::ir::Point { x: Nm::from_raw_shim(um(p.x.raw_shim())?), y: Nm::from_raw_shim(um(p.y.raw_shim())?) })).collect::<Option<_>>()?;
     for v in [&mut z.clearance, &mut z.min_thickness, &mut z.thermal_gap, &mut z.thermal_spoke_width, &mut z.hatch_thickness, &mut z.hatch_gap, &mut z.corner_radius] {
-        *v = um(*v)?;
+        *v = Nm::from_raw_shim(um((*v).raw_shim())?);
     }
     z.min_island_area = (zone.min_island_area % 1_000_000 == 0).then_some(zone.min_island_area / 1_000_000)?;
     Some(z)
@@ -303,7 +304,7 @@ fn outline_keys(design: &Design, pick: impl Fn(&Zone) -> bool) -> HashMap<String
     let mut out = HashMap::new();
     for z in design.routing.as_ref().map_or(&[][..], |r| r.zones.as_slice()).iter().filter(|z| !z.id.is_empty() && pick(z)) {
         for layer in z.layer_set() {
-            out.entry(outline_key(layer, z.outline.iter().map(|p| [p.x, p.y]))).or_insert_with(|| z.id.clone());
+            out.entry(outline_key(layer, z.outline.iter().map(|p| [p.x.raw_shim(), p.y.raw_shim()]))).or_insert_with(|| z.id.clone());
         }
     }
     out
@@ -701,6 +702,7 @@ pub fn fmt_nm(v: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Point, PlacementSection, Provenance, RoutingSection};
 
@@ -739,7 +741,7 @@ mod tests {
 )"#;
 
     fn zone(id: &str, uuid: &str) -> Zone {
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }], ..Default::default() }
     }
 
     /// P13-1: a teardrop KiCad saved has no uuid (`format( const ZONE* )`); its fills are filed under its layer and outline, and the import finds them by the outline
@@ -843,7 +845,7 @@ mod tests {
 
         // An edit elsewhere on the board changes nothing about the zone; an edit to the zone itself empties it.
         let mut moved = z.clone();
-        moved.outline[2] = Point { x: 11_000_000, y: 10_000_000 };
+        moved.outline[2] = Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(10_000_000) };
         assert!(fills.current(&moved).is_none() && fills.rings(&moved, "F.Cu").is_empty());
         let d2 = design(vec![moved.clone()]);
         assert_eq!(fills.tally(&d2), (0, 1), "one zone out of date");
@@ -853,7 +855,7 @@ mod tests {
         renamed.uuid = "other".into();
         assert!(fills.current(&renamed).is_some(), "a name is no part of what a fill is a fill of");
         let mut thicker = z.clone();
-        thicker.min_thickness += 10;
+        thicker.min_thickness += Nm::from_raw_shim(10);
         assert!(fills.current(&thicker).is_none(), "a setting is");
         let mut other_net = z.clone();
         other_net.net = "VCC".into();

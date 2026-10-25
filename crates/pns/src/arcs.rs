@@ -19,7 +19,7 @@ pub const ARC_HIGH_DEF_NM: i64 = 5_000;
 /// How far an arc's collision shape is fattened past the track's half width. None: the polyline it is made of is held to half a micrometre of the
 /// curve (vertices a little outside it, chord midpoints a little inside, `ConvertToPolyline`), inside the 0.5 um the router's clearance epsilon allows, and
 /// the segments of a line that goes through the arc are the very same chords -- so an arc as an item and as part of a line are judged alike.
-pub const ARC_SHAPE_PAD_NM: Nm = 0;
+pub const ARC_SHAPE_PAD_NM: Nm = Nm::ZERO;
 
 /// An arc by three of its points: where it starts, a point on it, where it ends (`PCB_ARC`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,11 +30,11 @@ pub struct ArcPts {
 }
 
 fn cross(o: Point, a: Point, b: Point) -> i128 {
-    (a.x - o.x) as i128 * (b.y - o.y) as i128 - (a.y - o.y) as i128 * (b.x - o.x) as i128
+    (a.x - o.x).raw_shim() as i128 * (b.y - o.y).raw_shim() as i128 - (a.y - o.y).raw_shim() as i128 * (b.x - o.x).raw_shim() as i128
 }
 
 fn dist(a: Point, b: Point) -> f64 {
-    (((a.x - b.x) as f64).powi(2) + ((a.y - b.y) as f64).powi(2)).sqrt()
+    (((a.x - b.x).raw_shim() as f64).powi(2) + ((a.y - b.y).raw_shim() as f64).powi(2)).sqrt()
 }
 
 impl ArcPts {
@@ -92,7 +92,7 @@ impl ArcPts {
     /// The circle's centre as KiCad computes it.
     pub fn center_f(&self) -> (f64, f64) {
         let c = self.shape_nm().center();
-        (c.x as f64, c.y as f64)
+        (c.x.raw_shim() as f64, c.y.raw_shim() as f64)
     }
 
     /// `SHAPE_ARC::GetRadius`.
@@ -122,7 +122,7 @@ impl ArcPts {
     fn within_sweep(&self, p: Point) -> bool {
         let a = self.shape_nm();
         let c = a.center();
-        let (px, py) = (p.x as f64 - c.x as f64, p.y as f64 - c.y as f64);
+        let (px, py) = (p.x.raw_shim() as f64 - c.x.raw_shim() as f64, p.y.raw_shim() as f64 - c.y.raw_shim() as f64);
         let ap = normalize(angle_of(px, py));
         let ca = a.central_angle();
         let sa = a.start_angle();
@@ -138,11 +138,11 @@ impl ArcPts {
         }
         if self.within_sweep(p) {
             let (cx, cy) = self.center_f();
-            let (dx, dy) = (p.x as f64 - cx, p.y as f64 - cy);
+            let (dx, dy) = (p.x.raw_shim() as f64 - cx, p.y.raw_shim() as f64 - cy);
             let l = dx.hypot(dy);
             if l > 0.0 {
                 let r = self.radius();
-                return Point { x: (cx + dx / l * r).round() as Nm, y: (cy + dy / l * r).round() as Nm };
+                return Point { x: Nm::from_raw_shim((cx + dx / l * r).round() as i64), y: Nm::from_raw_shim((cy + dy / l * r).round() as i64) };
             }
         }
         if dist(p, self.start) <= dist(p, self.end) {
@@ -159,7 +159,7 @@ impl ArcPts {
         }
         if self.within_sweep(p) {
             let (cx, cy) = self.center_f();
-            ((p.x as f64 - cx).hypot(p.y as f64 - cy) - self.radius()).abs()
+            ((p.x.raw_shim() as f64 - cx).hypot(p.y.raw_shim() as f64 - cy) - self.radius()).abs()
         } else {
             dist(p, self.start).min(dist(p, self.end))
         }
@@ -192,8 +192,8 @@ impl ArcPts {
 /// from the end to it, which is the middle of the shorter arc between the two. Micrometres in and out; the turn is done on the nanometre grid.
 pub fn calc_arc_mid(start: Point, end: Point, center: Point) -> Point {
     let (s, e, c) = (start, end, center);
-    let start_angle = angle_of((s.x - c.x) as f64, (s.y - c.y) as f64);
-    let end_angle = angle_of((e.x - c.x) as f64, (e.y - c.y) as f64);
+    let start_angle = angle_of((s.x - c.x).raw_shim() as f64, (s.y - c.y).raw_shim() as f64);
+    let end_angle = angle_of((e.x - c.x).raw_shim() as f64, (e.y - c.y).raw_shim() as f64);
     // `( startAngle - endAngle ).Normalize180() / 2`
     let mut d = start_angle - end_angle;
     while d <= -180.0 {
@@ -217,29 +217,29 @@ pub fn arc_shape(poly: &[Point], width: Nm) -> Shape {
 /// KiCad builds it in nanometres from a polygonisation at `ARC_LOW_DEF` (0.02 mm) and pads it by `ARC_HIGH_DEF`; the polygonisation here is held to
 /// `ARC_HIGH_DEF` (0.005 mm), so the ring's inner and outer sides are never closer to the curve than the pad allows for.
 pub fn arc_hull(arc: &ArcPts, width: Nm, clearance: Nm, walk: Nm) -> Vec<Point> {
-    let cl = clearance + (walk + 1) / 2;
+    let cl = clearance + (walk + Nm::from_raw_shim(1)) / 2;
     let (cl_nm, width_nm) = (cl, width);
     let shape = arc.shape_nm();
     let radius = shape.radius();
-    let d = width_nm / 2 + cl_nm + ARC_HIGH_DEF_NM;
+    let d = width_nm / 2 + cl_nm + Nm::from_raw_shim(ARC_HIGH_DEF_NM);
     if arc.is_degenerate() {
         return crate::hull::make_clockwise(crate::hull::segment_hull(arc.start, arc.end, width, clearance, walk));
     }
     // "If we can't route through the arc, we might as well treat it as a circle" (plus: the inner offset of a tight arc folds over itself)
-    if (shape.central_angle().abs() > 180.0 && arc.chord() < cl_nm as f64) || radius <= d as f64 {
+    if (shape.central_angle().abs() > 180.0 && arc.chord() < cl_nm.raw_shim() as f64) || radius <= d.raw_shim() as f64 {
         let c = shape.center();
         let r = radius as i64;
-        let hull_nm = crate::hull::octagonal_hull(Point { x: c.x - r, y: c.y - r }, (2 * r, 2 * r), cl_nm, (2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * (r + cl_nm) as f64) as i64);
+        let hull_nm = crate::hull::octagonal_hull(Point { x: c.x - Nm::from_raw_shim(r), y: c.y - Nm::from_raw_shim(r) }, (Nm::from_raw_shim(2 * r), Nm::from_raw_shim(2 * r)), cl_nm, Nm::from_raw_shim((2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * (r + cl_nm.raw_shim()) as f64) as i64));
         return crate::hull::make_clockwise(hull_nm.into_iter().collect());
     }
-    let x = ((2.0 / (1.0 + std::f64::consts::SQRT_2) * d as f64) as i64) / 2;
+    let x = ((2.0 / (1.0 + std::f64::consts::SQRT_2) * d.raw_shim() as f64) as i64) / 2;
     let line = shape.convert_to_polyline(ARC_HIGH_DEF_NM);
     let seg = |i: usize| (line[i], line[i + 1]);
     let n_seg = line.len() - 1;
-    let add = |p: Point, v: (i64, i64)| Point { x: p.x + v.0, y: p.y + v.1 };
-    let neg = |v: (i64, i64)| (-v.0, -v.1);
-    let sum = |u: (i64, i64), v: (i64, i64)| (u.0 + v.0, u.1 + v.1);
-    let sub = |u: (i64, i64), v: (i64, i64)| (u.0 - v.0, u.1 - v.1);
+    let add = |p: Point, v: (Nm, Nm)| Point { x: p.x + v.0, y: p.y + v.1 };
+    let neg = |v: (Nm, Nm)| (-v.0, -v.1);
+    let sum = |u: (Nm, Nm), v: (Nm, Nm)| (u.0 + v.0, u.1 + v.1);
+    let sub = |u: (Nm, Nm), v: (Nm, Nm)| (u.0 - v.0, u.1 - v.1);
     let perp = |s: (Point, Point)| (-(s.1.y - s.0.y), s.1.x - s.0.x);
     let dirv = |s: (Point, Point)| (s.1.x - s.0.x, s.1.y - s.0.y);
     let mut s: Vec<Point> = Vec::with_capacity(2 * n_seg + 8);
@@ -249,8 +249,8 @@ pub fn arc_hull(arc: &ArcPts, width: Nm, clearance: Nm, walk: Nm) -> Vec<Point> 
     let first = seg(0);
     let (dir, pr) = (dirv(first), perp(first));
     let p0 = neg(crate::hull::resize(pr.0, pr.1, d));
-    let ds = neg(crate::hull::resize(pr.0, pr.1, x));
-    let pd = crate::hull::resize(dir.0, dir.1, x);
+    let ds = neg(crate::hull::resize(pr.0, pr.1, Nm::from_raw_shim(x)));
+    let pd = crate::hull::resize(dir.0, dir.1, Nm::from_raw_shim(x));
     let dp = crate::hull::resize(dir.0, dir.1, d);
     s.push(add(first.0, sub(p0, pd)));
     s.push(add(first.0, sum(neg(dp), ds)));
@@ -262,7 +262,7 @@ pub fn arc_hull(arc: &ArcPts, width: Nm, clearance: Nm, walk: Nm) -> Vec<Point> 
         let (sa, sb) = (seg(i - 1), seg(i));
         let (pp, pp2) = (perp(sa), perp(sb));
         let (pp, pp2) = (crate::hull::resize(pp.0, pp.1, d), crate::hull::resize(pp2.0, pp2.1, d));
-        let shifted = |sg: (Point, Point), v: (i64, i64)| (add(sg.0, v), add(sg.1, v));
+        let shifted = |sg: (Point, Point), v: (Nm, Nm)| (add(sg.0, v), add(sg.1, v));
         let (sa_out, sb_out) = (shifted(sa, pp), shifted(sb, pp2));
         let (sa_in, sb_in) = (shifted(sa, neg(pp)), shifted(sb, neg(pp2)));
         let ip_out = crate::hull::intersect_lines(sa_out, sb_out).unwrap_or(sb_out.0);
@@ -275,8 +275,8 @@ pub fn arc_hull(arc: &ArcPts, width: Nm, clearance: Nm, walk: Nm) -> Vec<Point> 
     let last = seg(n_seg - 1);
     let (dir, pr) = (dirv(last), perp(last));
     let p0 = neg(crate::hull::resize(pr.0, pr.1, d));
-    let ds = neg(crate::hull::resize(pr.0, pr.1, x));
-    let pd = crate::hull::resize(dir.0, dir.1, x);
+    let ds = neg(crate::hull::resize(pr.0, pr.1, Nm::from_raw_shim(x)));
+    let pd = crate::hull::resize(dir.0, dir.1, Nm::from_raw_shim(x));
     let dp = crate::hull::resize(dir.0, dir.1, d);
     s.push(add(last.1, sum(neg(p0), pd)));
     s.push(add(last.1, sub(dp, ds)));
@@ -299,7 +299,7 @@ mod tests {
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     /// A quarter circle of radius 5 mm round (0, 0) from (5000, 0) to (0, 5000).
@@ -316,7 +316,7 @@ mod tests {
         assert!(pl.len() > 20, "{}", pl.len());
         let c = a.center_f();
         for q in &pl {
-            let d = ((q.x as f64 - c.0).powi(2) + (q.y as f64 - c.1).powi(2)).sqrt();
+            let d = ((q.x.raw_shim() as f64 - c.0).powi(2) + (q.y.raw_shim() as f64 - c.1).powi(2)).sqrt();
             assert!((d - a.radius()).abs() <= 1000.0, "{q:?} is {d} from the centre, radius {}", a.radius());
         }
         // reading it again gives the same points: a line finds its arcs by them
@@ -349,7 +349,7 @@ mod tests {
         let a = quarter();
         let n = a.nearest_point(p(6_000_000, 6_000_000));
         assert!(a.distance_to(n) < 1500.0, "{n:?}");
-        assert!(n.x > 3_000_000 && n.y > 3_000_000, "the middle of the arc: {n:?}");
+        assert!(n.x > Nm::from_raw_shim(3_000_000) && n.y > Nm::from_raw_shim(3_000_000), "the middle of the arc: {n:?}");
         // behind the start, off the sweep: the start
         assert_eq!(a.nearest_point(p(5_000_000, -3_000_000)), a.start);
         assert!((a.distance_to(p(0, 0)) - 5_000_000.0).abs() < 1000.0);
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn the_hull_of_an_arc_encloses_the_clearance_round_it_and_not_the_arc_centre() {
         let a = quarter();
-        let hull = arc_hull(&a, 250_000, 200_000, 250_000);
+        let hull = arc_hull(&a, Nm::from_raw_shim(250_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(250_000));
         assert!(hull.len() > 8);
         let poly_contains = |q: Point| crate::walkaround::point_in_polygon(&hull, q);
         // points of the arc, and points up to clearance + both half widths either side of it, are inside
@@ -374,14 +374,14 @@ mod tests {
         // and a point a whole millimetre off it is not in it
         assert!(!poly_contains(p((6_200_000.0 * 0.7071) as i64, (6_200_000.0 * 0.7071) as i64)));
         // clockwise like every hull
-        let area2: i128 = (0..hull.len()).map(|i| hull[i].x as i128 * hull[(i + 1) % hull.len()].y as i128 - hull[(i + 1) % hull.len()].x as i128 * hull[i].y as i128).sum();
+        let area2: i128 = (0..hull.len()).map(|i| hull[i].x.raw_shim() as i128 * hull[(i + 1) % hull.len()].y.raw_shim() as i128 - hull[(i + 1) % hull.len()].x.raw_shim() as i128 * hull[i].y.raw_shim() as i128).sum();
         assert!(area2 > 0, "{area2}");
     }
 
     #[test]
     fn a_tight_arc_is_hulled_as_its_circle() {
         let tight = ArcPts::new(p(300_000, 0), p(212_000, 212_000), p(0, 300_000));
-        let hull = arc_hull(&tight, 250_000, 200_000, 250_000);
+        let hull = arc_hull(&tight, Nm::from_raw_shim(250_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(250_000));
         assert_eq!(hull.len(), 8, "an octagon round the circle");
     }
 }

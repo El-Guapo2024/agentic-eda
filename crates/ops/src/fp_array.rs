@@ -16,6 +16,7 @@
 //! * **Arrange selection** puts the selected items on the points one after the other and numbers nothing (`ShouldArrangeSelection()` returns before
 //!   the numbering).
 
+use eda_model::units::Nm;
 use super::array::shape_position;
 use super::array_numbering::{NumberingAxes, PadNumberProvider, PadNumbering};
 use super::library_editors::pad_can_have_number;
@@ -66,9 +67,9 @@ impl Piece {
     /// `BOARD_ITEM::Move`.
     fn move_by(&mut self, dx: i64, dy: i64) {
         match self {
-            Piece::Pad(p) => p.at = Point { x: p.at.x + dx, y: p.at.y + dy },
-            Piece::Graphic(s) => transform_shape(s, Xform::Move { dx, dy }, 2),
-            Piece::Text(t) => transform_text(t, Xform::Move { dx, dy }, 2),
+            Piece::Pad(p) => p.at = Point { x: p.at.x + Nm::from_raw_shim(dx), y: p.at.y + Nm::from_raw_shim(dy) },
+            Piece::Graphic(s) => transform_shape(s, Xform::Move { dx: Nm::from_raw_shim(dx), dy: Nm::from_raw_shim(dy) }, 2),
+            Piece::Text(t) => transform_text(t, Xform::Move { dx: Nm::from_raw_shim(dx), dy: Nm::from_raw_shim(dy) }, 2),
         }
     }
 
@@ -91,8 +92,8 @@ impl Piece {
     /// `TransformItem`: `GetTransform( aIndex, aItem.GetPosition() )`, `Move( offset )`, `Rotate( GetPosition(), rotation )`.
     fn transform(&mut self, geometry: &ArrayGeometry, index: i64) {
         let (offset, turn) = geometry.transform(index, self.position());
-        if offset != (Point { x: 0, y: 0 }) {
-            self.move_by(offset.x, offset.y);
+        if offset != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
+            self.move_by(offset.x.raw_shim(), offset.y.raw_shim());
         }
         if turn != 0 {
             self.turn_about_itself(turn);
@@ -156,7 +157,7 @@ fn arrange_into_array(fp: &mut LibraryFootprint, selection: &[Item], geometry: &
         let mut piece = Piece::of(fp, *item);
         if let Some(origin) = first {
             let here = piece.position();
-            piece.move_by(origin.x - here.x, origin.y - here.y);
+            piece.move_by((origin.x - here.x).raw_shim(), (origin.y - here.y).raw_shim());
         }
         piece.transform(geometry, index as i64);
         if first.is_none() {

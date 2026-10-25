@@ -9,6 +9,7 @@
 //!
 //! Lines are kept in micrometres (the world's unit) and measured in nanometres, as KiCad's `SHAPE_LINE_CHAIN::Length` is.
 
+use eda_model::units::Nm;
 use crate::chain::ShapeLineChain;
 use crate::item::{Item, ItemId, Net};
 use crate::kigeom::{ki_round, Seg};
@@ -51,7 +52,7 @@ impl LengthEnv {
     /// The board's rules and its stackup (the default one for its copper layers when it has none: `BuildDefaultStackupList`).
     pub fn of(model: &eda_model::ConstraintModel) -> LengthEnv {
         let rules = model.board.clone();
-        let stackup = model.stackup.clone().unwrap_or_else(|| eda_model::rules::default_stackup(rules.layers.len(), 1_600_000));
+        let stackup = model.stackup.clone().unwrap_or_else(|| eda_model::rules::default_stackup(rules.layers.len(), Nm::from_raw_shim(1_600_000)));
         LengthEnv { rules, stackup }
     }
 }
@@ -61,12 +62,12 @@ fn all_layers() -> LayerRange {
 }
 
 fn contains(shape: &Shape, p: Point) -> bool {
-    shape.collides(&Shape::Circle { c: p, r: 0 }, 0).is_some()
+    shape.collides(&Shape::Circle { c: p, r: Nm::ZERO }, Nm::ZERO).is_some()
 }
 
 /// `HitTest( aPt )` among the world's pads and vias of `net`: the items whose shape holds the point.
 fn hits_at(world: &Node, p: Point) -> Vec<ItemId> {
-    world.overlapping(&Shape::Circle { c: p, r: 0 }, all_layers(), &[])
+    world.overlapping(&Shape::Circle { c: p, r: Nm::ZERO }, all_layers(), &[])
 }
 
 fn same_net(a: &Net, b: &Net) -> bool {
@@ -91,14 +92,14 @@ fn clip_line(pts: &[Point], center: Point, inside: &dyn Fn(Point) -> bool, forwa
             let (mut lo, mut hi) = (0.0f64, 1.0f64);
             for _ in 0..40 {
                 let mid = (lo + hi) / 2.0;
-                let q = Point { x: prev.x + ((out.x - prev.x) as f64 * mid).round() as i64, y: prev.y + ((out.y - prev.y) as f64 * mid).round() as i64 };
+                let q = Point { x: prev.x + Nm::from_raw_shim(((out.x - prev.x).raw_shim() as f64 * mid).round() as i64), y: prev.y + Nm::from_raw_shim(((out.y - prev.y).raw_shim() as f64 * mid).round() as i64) };
                 if inside(q) {
                     lo = mid;
                 } else {
                     hi = mid;
                 }
             }
-            let cross = Point { x: prev.x + ((out.x - prev.x) as f64 * hi).round() as i64, y: prev.y + ((out.y - prev.y) as f64 * hi).round() as i64 };
+            let cross = Point { x: prev.x + Nm::from_raw_shim(((out.x - prev.x).raw_shim() as f64 * hi).round() as i64), y: prev.y + Nm::from_raw_shim(((out.y - prev.y).raw_shim() as f64 * hi).round() as i64) };
             let mut chain = ShapeLineChain::new();
             if forward {
                 chain.append_point(center);
@@ -234,7 +235,7 @@ fn walk_tuning_path(world: &Node, start: &Line, from_back: bool, visited: &HashS
             let continuations = lines_from_via(world, via, &current.visited);
             for cont in &continuations {
                 let ep = current.endpoint;
-                let d = |p: Point| ((p.x - ep.x) as i128).pow(2) + ((p.y - ep.y) as i128).pow(2);
+                let d = |p: Point| ((p.x - ep.x).raw_shim() as i128).pow(2) + ((p.y - ep.y).raw_shim() as i128).pow(2);
                 let (first, last) = (cont.pts[0], *cont.pts.last().unwrap());
                 let start_near_via = d(first) <= d(last);
                 let forward_endpoint = if start_near_via { last } else { first };
@@ -414,7 +415,7 @@ pub fn stackup_distance_nm(stackup: &Stackup, copper: &[String], first: &str, se
 
 /// The segment of `world` the point `p` is on the track of: `PCB_TRACK`s nearest to `p` of `net` on `layer` (a segment id), within `within`.
 pub fn nearest_segment(world: &Node, p: Point, layer: i32, net: Option<&Net>, within: i64) -> Option<(ItemId, Point)> {
-    let id = world.segment_at(p, layer, net, Some(within), &[])?;
+    let id = world.segment_at(p, layer, net, Some(Nm::from_raw_shim(within)), &[])?;
     match world.get(id)? {
         Item::Segment(s) => {
             let nearest = Seg::new(s.a, s.b).nearest_point(p);
@@ -433,11 +434,11 @@ mod tests {
     use crate::layer::LayerRange;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     fn seg(net: &str, layer: i32, a: Point, b: Point) -> Item {
-        Item::Segment(Segment { net: net_of(net), layer, a, b, width: 250_000, source_track: None, locked: false })
+        Item::Segment(Segment { net: net_of(net), layer, a, b, width: Nm::from_raw_shim(250_000), source_track: None, locked: false })
     }
 
     fn pad(net: &str, at: Point) -> Item {
@@ -445,13 +446,13 @@ mod tests {
     }
 
     fn pad_on(net: &str, at: Point, layers: LayerRange) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: 400_000 }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false })
     }
 
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
     }
 
     #[test]
@@ -473,7 +474,7 @@ mod tests {
         let mut w = Node::new();
         w.add(pad("S", p(0, 0)));
         let a = w.add(seg("S", 0, p(0, 0), p(10_000_000, 0)));
-        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000_000, 0), diameter: 600_000, drill: 300_000, source_via: Some("via".into()), locked: false, is_virtual: false }));
+        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000_000, 0), diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("via".into()), locked: false, is_virtual: false }));
         w.add(seg("S", 1, p(10_000_000, 0), p(10_000_000, 8_000_000)));
         w.add(pad_on("S", p(10_000_000, 8_000_000), LayerRange::new(0, 1)));
         let path = assemble_tuning_path(&w, a).expect("a path");
@@ -510,7 +511,7 @@ mod tests {
 
     #[test]
     fn the_distance_between_inner_layers_counts_half_of_each_copper_layer() {
-        let s = eda_model::rules::default_stackup(4, 1_600_000);
+        let s = eda_model::rules::default_stackup(4, Nm::from_raw_shim(1_600_000));
         let copper: Vec<String> = eda_model::rules::copper_layer_names(4);
         let all = stackup_distance_nm(&s, &copper, "F.Cu", "B.Cu");
         let outer_to_in1 = stackup_distance_nm(&s, &copper, "F.Cu", "In1.Cu");

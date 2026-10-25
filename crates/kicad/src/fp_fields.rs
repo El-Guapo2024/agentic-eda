@@ -46,7 +46,7 @@ pub(crate) fn effects_with(l: &FieldLayout, face: Option<&str>, line_spacing_per
     if line_spacing_permille != 0 && line_spacing_permille != 1000 {
         write!(s, " (line_spacing {})", fmt_mm_f(line_spacing_permille as f64 / 1000.0)).unwrap();
     }
-    if l.thickness > 0 {
+    if l.thickness > Nm::ZERO {
         write!(s, " (thickness {})", mm(l.thickness)).unwrap();
     }
     if l.bold {
@@ -187,7 +187,7 @@ pub(crate) fn parse_layout(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Fiel
     let default_layer = if side == Side::Bottom { "B.Fab" } else { "F.Fab" };
     let layer_node = sexpr::find(item, "layer");
     let layer = layer_node.and_then(|l| sexpr::txt(l, 1)).unwrap_or(default_layer);
-    let mut l = FieldLayout::new(Point { x: 0, y: 0 }, layer);
+    let mut l = FieldLayout::new(Point { x: Nm::ZERO, y: Nm::ZERO }, layer);
     l.knockout = layer_node.is_some_and(|n| n.iter().skip(2).any(|c| matches!(c, Sexpr::Atom(a) if a == "knockout")));
     if let Some(at) = sexpr::find(item, "at") {
         let (x, y) = (sexpr::num(at, 1).unwrap_or(0.0), sexpr::num(at, 2).unwrap_or(0.0));
@@ -198,7 +198,7 @@ pub(crate) fn parse_layout(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Fiel
             l.keep_upright = false;
         }
     } else {
-        l.set_from_file(side, fp_rot, 0, 0, 0.0);
+        l.set_from_file(side, fp_rot, Nm::ZERO, Nm::ZERO, 0.0);
     }
     if let Some(u) = bool_tok(item, "unlocked") {
         l.keep_upright = !u;
@@ -213,7 +213,7 @@ pub(crate) fn parse_layout(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Fiel
                 // `(size HEIGHT WIDTH)`
                 l.size = (mm_to_nm_f(sexpr::num(s, 2).unwrap_or(1.0)), mm_to_nm_f(sexpr::num(s, 1).unwrap_or(1.0)));
             }
-            l.thickness = sexpr::find(font, "thickness").and_then(|t| sexpr::num(t, 1)).map(mm_to_nm_f).unwrap_or(0);
+            l.thickness = sexpr::find(font, "thickness").and_then(|t| sexpr::num(t, 1)).map(mm_to_nm_f).unwrap_or(Nm::ZERO);
             l.bold = bool_tok(font, "bold").unwrap_or(false);
             l.italic = bool_tok(font, "italic").unwrap_or(false);
         }
@@ -320,14 +320,14 @@ pub(crate) fn parse_pad_extras(pad: &[Sexpr], side: Side, file_version: i64) -> 
     if let Some(d) = sexpr::find(pad, "drill") {
         if let Some(o) = sexpr::find(d, "offset") {
             let (x, y) = (mm_to_nm_f(sexpr::num(o, 1).unwrap_or(0.0)), mm_to_nm_f(sexpr::num(o, 2).unwrap_or(0.0)));
-            if x != 0 || y != 0 {
+            if x != Nm::ZERO || y != Nm::ZERO {
                 e.offset = Some(Point { x: if side == Side::Bottom { -x } else { x }, y });
             }
         }
     }
     let margin = |name: &str| -> Option<Nm> {
         let m = sexpr::find(pad, name).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm_f)?;
-        if file_version <= 20240201 && m == 0 {
+        if file_version <= 20240201 && m == Nm::ZERO {
             None
         } else {
             Some(m)
@@ -349,9 +349,9 @@ mod tests {
 
     #[test]
     fn a_property_is_written_the_way_kicad_formats_a_field() {
-        let mut l = FieldLayout::new(Point { x: 1_000_000, y: -2_000_000 }, "F.SilkS");
-        l.size = (1_200_000, 800_000);
-        l.thickness = 150_000;
+        let mut l = FieldLayout::new(Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(-2_000_000) }, "F.SilkS");
+        l.size = (Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(800_000));
+        l.thickness = Nm::from_raw_shim(150_000);
         l.bold = true;
         l.halign = -1;
         l.valign = 1;
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn a_bottom_side_field_is_written_unmirrored_in_the_file_frame_and_mirrored_in_its_effects() {
-        let mut l = FieldLayout::new(Point { x: 1_000_000, y: 0 }, "B.SilkS");
+        let mut l = FieldLayout::new(Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, "B.SilkS");
         l.angle = 90_000;
         let mut out = String::new();
         write_property(&mut out, "Value", "10k", &l, Side::Bottom, 0, "u-2");
@@ -377,10 +377,10 @@ mod tests {
     #[test]
     fn what_is_written_reads_back_to_the_same_layout() {
         for (side, rot) in [(Side::Top, 0), (Side::Top, 90_000), (Side::Bottom, 0), (Side::Bottom, 270_000)] {
-            let mut l = FieldLayout::new(Point { x: 1_234_000, y: -2_345_000 }, if side == Side::Bottom { "B.SilkS" } else { "F.SilkS" });
+            let mut l = FieldLayout::new(Point { x: Nm::from_raw_shim(1_234_000), y: Nm::from_raw_shim(-2_345_000) }, if side == Side::Bottom { "B.SilkS" } else { "F.SilkS" });
             l.angle = 45_000;
-            l.size = (1_100_000, 900_000);
-            l.thickness = 120_000;
+            l.size = (Nm::from_raw_shim(1_100_000), Nm::from_raw_shim(900_000));
+            l.thickness = Nm::from_raw_shim(120_000);
             l.italic = true;
             l.halign = 1;
             l.valign = -1;
@@ -448,7 +448,7 @@ mod tests {
                 (fp_text value "1u" (at 0 2 0) (layer "F.Fab") hide (effects (font (size 1 1) (thickness 0.15)))))"#,
         );
         let e = parse_footprint_edit(&node, "C3", Some("1u"), Side::Top, 0);
-        assert_eq!(e.reference.as_ref().unwrap().at, Point { x: 0, y: -2_000_000 });
+        assert_eq!(e.reference.as_ref().unwrap().at, Point { x: Nm::ZERO, y: Nm::from_raw_shim(-2_000_000) });
         assert!(!e.value.as_ref().unwrap().visible, "the bare `hide` of the old files");
         assert!(e.attrs.is_none(), "no (attr ..) is no attributes edit");
     }
@@ -468,16 +468,16 @@ mod tests {
     #[test]
     fn a_pads_margins_are_written_and_read_back_and_its_offset_is_read_on_either_side() {
         let mut e = PadEdit::none("1", 1);
-        e.offset = Some(Point { x: 300_000, y: -100_000 });
-        e.solder_mask_margin = Some(50_000);
-        e.solder_paste_margin = Some(-30_000);
+        e.offset = Some(Point { x: Nm::from_raw_shim(300_000), y: Nm::from_raw_shim(-100_000) });
+        e.solder_mask_margin = Some(Nm::from_raw_shim(50_000));
+        e.solder_paste_margin = Some(Nm::from_raw_shim(-30_000));
         e.solder_paste_margin_ratio = Some(-0.1);
         let t = pad_text(Some(&e));
         assert_eq!(t.margins, " (solder_mask_margin 0.05) (solder_paste_margin -0.03) (solder_paste_margin_ratio -0.1)");
         for side in [Side::Top, Side::Bottom] {
             // The offset in the file's frame: x negated on the bottom side, where the whole frame is mirrored.
             let ox = if side == Side::Bottom { -300_000 } else { 300_000 };
-            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(-100_000), t.margins));
+            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(Nm::from_raw_shim(ox)), mm(Nm::from_raw_shim(-100_000)), t.margins));
             let back = parse_pad_extras(&node, side, 20241229);
             assert_eq!((back.offset, back.solder_mask_margin, back.solder_paste_margin, back.solder_paste_margin_ratio), (e.offset, e.solder_mask_margin, e.solder_paste_margin, e.solder_paste_margin_ratio), "{side:?}");
         }
@@ -490,6 +490,6 @@ mod tests {
         let old = parse_pad_extras(&node, Side::Top, 20231231);
         assert_eq!(old.solder_mask_margin, None);
         let new = parse_pad_extras(&node, Side::Top, 20241229);
-        assert_eq!(new.solder_mask_margin, Some(0));
+        assert_eq!(new.solder_mask_margin, Some(Nm::ZERO));
     }
 }

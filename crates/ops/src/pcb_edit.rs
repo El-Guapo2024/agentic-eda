@@ -10,6 +10,7 @@
 //! commands; only what needs Clipper lives here, on `eda_shape_poly_set`
 //! (a port of `SHAPE_POLY_SET`).
 
+use eda_model::units::Nm;
 use eda_clipper2::Point64;
 use eda_model::ir::{DrawingsSection, Point, Shape};
 use eda_model::CheckResult;
@@ -47,7 +48,7 @@ impl BooleanOp {
 const CIRCLE_POLY_MAX_ERROR_NM: i32 = 1_000;
 
 fn pt64(p: Point) -> Point64 {
-    Point64::new(p.x, p.y)
+    Point64::new(p.x.raw_shim(), p.y.raw_shim())
 }
 
 /// A circle as `SHAPE_LINE_CHAIN::Append( SHAPE_ARC( centre, centre + (R, 0), FULL_CIRCLE ) )`
@@ -62,10 +63,10 @@ fn circle_polyline(center: Point, radius: i64) -> Vec<Point64> {
     let effective_error = (radius as f64 * (1.0 / alpha.cos() - 1.0)).round();
     let r = radius as f64 + effective_error / 2.0;
     let mut out = Vec::with_capacity(n + 1);
-    out.push(Point64::new(center.x + radius, center.y));
+    out.push(Point64::new((center.x + Nm::from_raw_shim(radius)).raw_shim(), center.y.raw_shim()));
     for k in 0..n {
         let angle = (2 * k + 1) as f64 * std::f64::consts::PI / n as f64;
-        out.push(Point64::new((center.x as f64 + r * angle.cos()).round() as i64, (center.y as f64 + r * angle.sin()).round() as i64));
+        out.push(Point64::new((center.x.raw_shim() as f64 + r * angle.cos()).round() as i64, (center.y.raw_shim() as f64 + r * angle.sin()).round() as i64));
     }
     out
 }
@@ -77,12 +78,12 @@ fn poly_of(shape: &Shape) -> Option<ShapePolySet> {
         Shape::Polygon { pts, .. } => Some(ShapePolySet::from_outline(pts.iter().map(|p| pt64(*p)).collect())),
         Shape::Rect { start, end, .. } => Some(ShapePolySet::from_outline(vec![
             pt64(*start),
-            Point64::new(end.x, start.y),
+            Point64::new(end.x.raw_shim(), start.y.raw_shim()),
             pt64(*end),
-            Point64::new(start.x, end.y),
+            Point64::new(start.x.raw_shim(), end.y.raw_shim()),
         ])),
         Shape::Circle { center, end, .. } => {
-            let r = (((end.x - center.x) as f64).hypot((end.y - center.y) as f64)).round() as i64;
+            let r = (((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64;
             if r <= 0 {
                 return None;
             }
@@ -96,16 +97,16 @@ fn poly_of(shape: &Shape) -> Option<ShapePolySet> {
 fn bbox_area(shape: &Shape) -> f64 {
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
     let mut take = |p: Point| {
-        x0 = x0.min(p.x);
-        y0 = y0.min(p.y);
-        x1 = x1.max(p.x);
-        y1 = y1.max(p.y);
+        x0 = x0.min(p.x.raw_shim());
+        y0 = y0.min(p.y.raw_shim());
+        x1 = x1.max(p.x.raw_shim());
+        y1 = y1.max(p.y.raw_shim());
     };
     match shape {
         Shape::Circle { center, end, .. } => {
-            let r = ((end.x - center.x) as f64).hypot((end.y - center.y) as f64).round() as i64;
-            take(Point { x: center.x - r, y: center.y - r });
-            take(Point { x: center.x + r, y: center.y + r });
+            let r = ((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64).round() as i64;
+            take(Point { x: center.x - Nm::from_raw_shim(r), y: center.y - Nm::from_raw_shim(r) });
+            take(Point { x: center.x + Nm::from_raw_shim(r), y: center.y + Nm::from_raw_shim(r) });
         }
         other => other.points().into_iter().for_each(&mut take),
     }
@@ -123,7 +124,7 @@ struct Outcome {
     rings: Vec<Vec<Point>>,
     successes: usize,
     /// `layer`, `stroke_width`, `filled` of the first shape: the property donor.
-    donor: Option<(String, i64, bool)>,
+    donor: Option<(String, Nm, bool)>,
 }
 
 /// `POLYGON_BOOLEAN_ROUTINE::ProcessShape` over every shape, then `Finalize`.
@@ -177,7 +178,7 @@ fn run_routine(op: BooleanOp, items: &[Shape]) -> Outcome {
         for poly in &working.polys {
             let ring = &poly[0];
             if ring.len() >= 3 {
-                rings.push(ring.iter().map(|p| Point { x: p.x, y: p.y }).collect());
+                rings.push(ring.iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect());
             }
         }
     }
@@ -226,14 +227,15 @@ pub fn boolean_shapes(dr: &mut DrawingsSection, op: BooleanOp, ids: &[String]) -
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     fn rect(id: &str, x0: i64, y0: i64, x1: i64, y1: i64) -> Shape {
-        Shape::Rect { id: id.into(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
+        Shape::Rect { id: id.into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) } }
     }
 
     fn circle(id: &str, cx: i64, cy: i64, r: i64) -> Shape {
-        Shape::Circle { id: id.into(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: true, center: Point { x: cx, y: cy }, end: Point { x: cx + r, y: cy } }
+        Shape::Circle { id: id.into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: true, center: Point { x: Nm::from_raw_shim(cx), y: Nm::from_raw_shim(cy) }, end: Point { x: Nm::from_raw_shim(cx + r), y: Nm::from_raw_shim(cy) } }
     }
 
     fn section(shapes: Vec<Shape>) -> DrawingsSection {
@@ -251,7 +253,7 @@ mod tests {
         let mut a = 0.0;
         for i in 0..pts.len() {
             let (p, q) = (pts[i], pts[(i + 1) % pts.len()]);
-            a += (p.x * q.y - q.x * p.y) as f64;
+            a += (p.x * q.y.raw_shim() - q.x * p.y.raw_shim()).raw_shim() as f64;
         }
         a.abs() / 2.0
     }
@@ -266,7 +268,7 @@ mod tests {
         assert!((area(&dr.shapes[0]) - 175_000_000_000_000.0).abs() < 1e6, "area {}", area(&dr.shapes[0]));
         // the donor (first shape) supplies layer, width and fill
         assert_eq!(dr.shapes[0].layer(), "F.Fab");
-        assert_eq!(dr.shapes[0].stroke_width(), 100_000);
+        assert_eq!(dr.shapes[0].stroke_width(), Nm::from_raw_shim(100_000));
         assert!(!dr.shapes[0].is_filled());
     }
 
@@ -329,7 +331,7 @@ mod tests {
         assert_eq!(dr.shapes.len(), 1);
         // the donor is the circle: silkscreen layer, 150 wide, filled
         assert_eq!(dr.shapes[0].layer(), "F.SilkS");
-        assert_eq!(dr.shapes[0].stroke_width(), 150_000);
+        assert_eq!(dr.shapes[0].stroke_width(), Nm::from_raw_shim(150_000));
         assert!(dr.shapes[0].is_filled());
         let pi_r2 = std::f64::consts::PI * 25_000_000_000_000.0;
         // circle + the part of the rect outside it (a 4 mm wide bar from the circle edge to x=12 mm), within polygonisation error
@@ -344,7 +346,7 @@ mod tests {
         // a segment is not eligible
         let mut dr2 = section(vec![
             rect("a", 0, 0, 1_000_000, 1_000_000),
-            Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 10_000, y: 0 } },
+            Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(10_000), y: Nm::ZERO } },
         ]);
         let all2 = ids(&dr2);
         assert!(boolean_shapes(&mut dr2, BooleanOp::Merge, &all2).is_err());
@@ -352,7 +354,7 @@ mod tests {
 
     #[test]
     fn circle_polyline_stays_within_the_error_band() {
-        let pts = circle_polyline(Point { x: 0, y: 0 }, 5_000_000);
+        let pts = circle_polyline(Point { x: Nm::ZERO, y: Nm::ZERO }, 5_000_000);
         assert!(pts.len() > 20);
         for p in &pts {
             let d = (p.x as f64).hypot(p.y as f64);

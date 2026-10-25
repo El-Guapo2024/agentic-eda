@@ -238,7 +238,7 @@ pub(crate) fn courtyard_from(root: &[Sexpr]) -> Option<(Nm, Nm)> {
     }
     let half_w = mm_to_nm(x0.abs().max(x1.abs()));
     let half_h = mm_to_nm(y0.abs().max(y1.abs()));
-    Some((half_w.max(1), half_h.max(1)))
+    Some((half_w.max(Nm::from_raw_shim(1)), half_h.max(Nm::from_raw_shim(1))))
 }
 
 /// For every part naming a `"Library:Footprint"` footprint that is not
@@ -406,34 +406,34 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             Shape::Segment { stroke_width, start, end, .. } => writeln!(
                 out,
                 "\t(fp_line (start {} {}) (end {} {}) (stroke (width {}) (type {solid})) (layer {layer}) (uuid \"{uuid}\"))",
-                crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
+                crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(Nm::ZERO))
             ),
             Shape::Arc { stroke_width, start, mid, end, .. } => writeln!(
                 out,
                 "\t(fp_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type {solid})) (layer {layer}) (uuid \"{uuid}\"))",
-                crate::mm(start.x), crate::mm(start.y), crate::mm(mid.x), crate::mm(mid.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
+                crate::mm(start.x), crate::mm(start.y), crate::mm(mid.x), crate::mm(mid.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(Nm::ZERO))
             ),
             Shape::Rect { stroke_width, filled, start, end, .. } => writeln!(
                 out,
                 "\t(fp_rect (start {} {}) (end {} {}) (stroke (width {}) (type {solid})) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
-                crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0)), fp_fill(*filled)
+                crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(Nm::ZERO)), fp_fill(*filled)
             ),
             Shape::Circle { stroke_width, filled, center, end, .. } => writeln!(
                 out,
                 "\t(fp_circle (center {} {}) (end {} {}) (stroke (width {}) (type {solid})) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
-                crate::mm(center.x), crate::mm(center.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0)), fp_fill(*filled)
+                crate::mm(center.x), crate::mm(center.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(Nm::ZERO)), fp_fill(*filled)
             ),
             Shape::Polygon { stroke_width, filled, pts, .. } => {
                 write!(out, "\t(fp_poly (pts").unwrap();
                 for p in pts {
                     write!(out, " (xy {} {})", crate::mm(p.x), crate::mm(p.y)).unwrap();
                 }
-                writeln!(out, ") (stroke (width {}) (type {solid})) (fill {}) (layer {layer}) (uuid \"{uuid}\"))", crate::mm((*stroke_width).max(0)), fp_fill(*filled))
+                writeln!(out, ") (stroke (width {}) (type {solid})) (fill {}) (layer {layer}) (uuid \"{uuid}\"))", crate::mm((*stroke_width).max(Nm::ZERO)), fp_fill(*filled))
             }
             Shape::Bezier { stroke_width, start, c1, c2, end, .. } => writeln!(
                 out,
                 "\t(fp_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type {solid})) (layer {layer}) (uuid \"{uuid}\"))",
-                crate::mm(start.x), crate::mm(start.y), crate::mm(c1.x), crate::mm(c1.y), crate::mm(c2.x), crate::mm(c2.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
+                crate::mm(start.x), crate::mm(start.y), crate::mm(c1.x), crate::mm(c1.y), crate::mm(c2.x), crate::mm(c2.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(Nm::ZERO))
             ),
         }
         .unwrap();
@@ -618,11 +618,11 @@ mod tests {
 
         let npth = fp.pads.iter().find(|p| p.kind == PadKind::NonPlatedHole).expect("the mounting hole");
         assert_eq!(npth.number, "");
-        assert_eq!(npth.drill, Some(650_000));
+        assert_eq!(npth.drill, Some(Nm::from_raw_shim(650_000)));
 
         let shields: Vec<_> = fp.pads.iter().filter(|p| p.number == "SH").collect();
         assert_eq!(shields.len(), 2, "both shield pads must survive under the shared number");
-        assert_eq!(shields[0].drill_slot, Some((600_000, 1_700_000)));
+        assert_eq!(shields[0].drill_slot, Some((Nm::from_raw_shim(600_000), Nm::from_raw_shim(1_700_000))));
         assert_eq!(shields[0].drill, None);
 
         let signal = fp.pads.iter().find(|p| p.number == "A1").unwrap();
@@ -631,8 +631,8 @@ mod tests {
         // Asymmetric F.CrtYd (y: -5..4) conservatively enclosed by a
         // symmetric half-extent of 5mm either way.
         let (hw, hh) = fp.courtyard.expect("courtyard from F.CrtYd");
-        assert_eq!(hw, 5_000_000);
-        assert_eq!(hh, 5_000_000);
+        assert_eq!(hw, Nm::from_raw_shim(5_000_000));
+        assert_eq!(hh, Nm::from_raw_shim(5_000_000));
 
         assert!(fp.validate().is_empty(), "{:?}", fp.validate());
     }
@@ -713,11 +713,11 @@ mod tests {
             id: format!("pad_{number}"),
             number: number.into(),
             at: eda_model::ir::Point { x, y },
-            offset: eda_model::ir::Point { x: 0, y: 0 },
-            size: (1_000_000, 1_000_000),
+            offset: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO },
+            size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)),
             shape,
             kind,
-            drill: if kind == PadKind::Smd { None } else { Some(600_000) },
+            drill: if kind == PadKind::Smd { None } else { Some(Nm::from_raw_shim(600_000)) },
             drill_slot: None,
             rot: 0,
             roundrect_ratio: Some(0.25),
@@ -744,11 +744,11 @@ mod tests {
             keywords: "test".into(),
             attributes: eda_model::ir::FootprintAttributes { smd: true, ..Default::default() },
             pads: vec![
-                lib_pad("1", -1_000_000, 0, eda_model::ir::LibraryPadShape::RoundRect, PadKind::Smd),
-                lib_pad("2", 1_000_000, 0, eda_model::ir::LibraryPadShape::Circle, PadKind::Smd),
-                lib_pad("3", 0, 1_500_000, eda_model::ir::LibraryPadShape::Oval, PadKind::ThroughHole),
+                lib_pad("1", Nm::from_raw_shim(-1_000_000), Nm::ZERO, eda_model::ir::LibraryPadShape::RoundRect, PadKind::Smd),
+                lib_pad("2", Nm::from_raw_shim(1_000_000), Nm::ZERO, eda_model::ir::LibraryPadShape::Circle, PadKind::Smd),
+                lib_pad("3", Nm::ZERO, Nm::from_raw_shim(1_500_000), eda_model::ir::LibraryPadShape::Oval, PadKind::ThroughHole),
             ],
-            graphics: vec![eda_model::ir::Shape::Rect { id: "g1".into(), layer: "F.CrtYd".into(), stroke_width: 50_000, filled: false, start: eda_model::ir::Point { x: -2_000_000, y: -2_000_000 }, end: eda_model::ir::Point { x: 2_000_000, y: 2_000_000 } }],
+            graphics: vec![eda_model::ir::Shape::Rect { id: "g1".into(), layer: "F.CrtYd".into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: eda_model::ir::Point { x: Nm::from_raw_shim(-2_000_000), y: Nm::from_raw_shim(-2_000_000) }, end: eda_model::ir::Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) } }],
             texts: vec![],
             fields: vec![],
             reference_visible: true,
@@ -758,7 +758,7 @@ mod tests {
             courtyard: None,
             model: Some("${KICAD10_3DMODEL_DIR}/Test.3dshapes/RoundTrip.step".into()),
             models3d: vec![],
-            anchor: eda_model::ir::Point { x: 0, y: 0 },
+            anchor: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO },
             published: false,
             zone_connection: None,
             pad_edit: None,
@@ -774,10 +774,10 @@ mod tests {
 
         let by_num = |n: &str| parsed.pads.iter().find(|p| p.number == n).unwrap();
         assert_eq!(by_num("1").shape, eda_model::PadShape::RoundRect);
-        assert_eq!(by_num("1").at, (-1_000_000, 0));
+        assert_eq!(by_num("1").at, (Nm::from_raw_shim(-1_000_000), Nm::ZERO));
         assert_eq!(by_num("2").shape, eda_model::PadShape::Circle);
         assert_eq!(by_num("3").kind, PadKind::ThroughHole);
-        assert_eq!(by_num("3").drill, Some(600_000));
+        assert_eq!(by_num("3").drill, Some(Nm::from_raw_shim(600_000)));
         assert!(parsed.courtyard.is_some(), "the exported F.CrtYd rect must be picked back up as the courtyard");
         assert_eq!(parsed.model.as_deref(), Some("${KICAD10_3DMODEL_DIR}/Test.3dshapes/RoundTrip.step"));
     }
@@ -791,15 +791,15 @@ mod tests {
         let plain = export_kicad_mod(&eda_model::ir::LibraryFootprint::new_empty("Test:Plain"));
         assert!(!plain.contains("(property"), "a footprint with no fields writes none: {plain}");
 
-        let mut reference = FieldLayout::new(Point { x: 500_000, y: -2_500_000 }, "F.SilkS");
-        reference.size = (1_200_000, 1_000_000);
-        reference.thickness = 180_000;
+        let mut reference = FieldLayout::new(Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(-2_500_000) }, "F.SilkS");
+        reference.size = (Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(1_000_000));
+        reference.thickness = Nm::from_raw_shim(180_000);
         reference.text = Some("J**".into());
-        let mut value = FieldLayout::new(Point { x: -300_000, y: 2_200_000 }, "F.Fab");
+        let mut value = FieldLayout::new(Point { x: Nm::from_raw_shim(-300_000), y: Nm::from_raw_shim(2_200_000) }, "F.Fab");
         value.italic = true;
         value.angle = 90_000;
         let mut mpn = new_library_field_layout();
-        mpn.at = Point { x: 1_500_000, y: 3_000_000 };
+        mpn.at = Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(3_000_000) };
         mpn.layer = "F.Fab".into();
         mpn.bold = true;
         mpn.halign = -1;
@@ -829,7 +829,7 @@ mod tests {
         let m = &back.fields[0];
         assert_eq!((m.name.as_str(), m.value.as_str(), m.visible), ("MPN", "ABC-1", true));
         let ml = m.layout.as_ref().expect("a layout");
-        assert_eq!((ml.at, ml.layer.as_str(), ml.bold, ml.halign, ml.visible), (Point { x: 1_500_000, y: 3_000_000 }, "F.Fab", true, -1, true));
+        assert_eq!((ml.at, ml.layer.as_str(), ml.bold, ml.halign, ml.visible), (Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(3_000_000) }, "F.Fab", true, -1, true));
         assert_eq!((back.fields[1].name.as_str(), back.fields[1].value.as_str(), back.fields[1].visible), ("Vendor", "ACME \"Inc\"", false));
         // and a file read and written again says the same
         assert_eq!(export_kicad_mod(&back), text, "the fields survive a read and a write");
@@ -842,19 +842,19 @@ mod tests {
     fn export_kicad_mod_writes_trapezoid_chamfered_and_custom_pads_as_kicad_does_and_reads_them_back() {
         use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive};
         use eda_model::ir::{ChamferCorners, Point, Shape};
-        let mut trap = lib_pad("1", 0, 0, eda_model::ir::LibraryPadShape::Trapezoid, PadKind::Smd);
-        trap.trapezoid_delta = Some((200_000, 0));
+        let mut trap = lib_pad("1", Nm::ZERO, Nm::ZERO, eda_model::ir::LibraryPadShape::Trapezoid, PadKind::Smd);
+        trap.trapezoid_delta = Some((Nm::from_raw_shim(200_000), Nm::ZERO));
         trap.roundrect_ratio = None;
-        let mut chf = lib_pad("2", 2_000_000, 0, eda_model::ir::LibraryPadShape::ChamferedRect, PadKind::Smd);
+        let mut chf = lib_pad("2", Nm::from_raw_shim(2_000_000), Nm::ZERO, eda_model::ir::LibraryPadShape::ChamferedRect, PadKind::Smd);
         chf.chamfer_ratio = Some(0.3);
         chf.chamfer_corners = ChamferCorners { top_left: true, bottom_right: true, ..Default::default() };
         chf.roundrect_ratio = Some(0.1);
-        let mut custom = lib_pad("3", 4_000_000, 0, eda_model::ir::LibraryPadShape::Custom, PadKind::Smd);
+        let mut custom = lib_pad("3", Nm::from_raw_shim(4_000_000), Nm::ZERO, eda_model::ir::LibraryPadShape::Custom, PadKind::Smd);
         custom.roundrect_ratio = None;
         custom.custom = Some(PadCustom {
             anchor: PadAnchor::Rect,
             zone: CustomZoneMode::ConvexHull,
-            primitives: vec![PadPrimitive { shape: Shape::Polygon { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 1_500_000, y: 0 }, Point { x: 0, y: 1_500_000 }] }, proxy: false }],
+            primitives: vec![PadPrimitive { shape: Shape::Polygon { id: String::new(), layer: String::new(), stroke_width: Nm::ZERO, filled: true, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(1_500_000) }] }, proxy: false }],
         });
         let fp = eda_model::ir::LibraryFootprint { name: "Test:Shapes".into(), pads: vec![trap, chf, custom], ..eda_model::ir::LibraryFootprint::new_empty("Test:Shapes") };
 
@@ -865,7 +865,7 @@ mod tests {
         let parsed = parse_footprint_file(&text, "Test:Shapes").expect("a footprint with these pads loads");
         assert!(parsed.validate().is_empty());
         let by_num = |n: &str| parsed.pads.iter().find(|p| p.number == n).unwrap();
-        assert_eq!((by_num("1").shape, by_num("1").ext.trapezoid_delta), (eda_model::PadShape::Trapezoid, Some((200_000, 0))));
+        assert_eq!((by_num("1").shape, by_num("1").ext.trapezoid_delta), (eda_model::PadShape::Trapezoid, Some((Nm::from_raw_shim(200_000), Nm::ZERO))));
         assert_eq!((by_num("2").shape, by_num("2").roundrect_ratio, by_num("2").ext.chamfer_ratio), (eda_model::PadShape::ChamferedRect, Some(0.1), Some(0.3)));
         assert_eq!(by_num("3").shape, eda_model::PadShape::Custom);
         assert_eq!(by_num("3").ext.custom.as_ref().map(|c| (c.anchor, c.zone, c.primitives.len())), Some((PadAnchor::Rect, CustomZoneMode::ConvexHull, 1)));
@@ -909,7 +909,7 @@ mod tests {
             Model3d { path: "two.wrl".into(), offset: [0.0, 0.0, 0.0], scale: [1.0, 1.0, 1.0], rotate: [0.0, 0.0, 0.0], opacity: 0.25, show: false },
         ];
         let mut fp = eda_model::ir::LibraryFootprint::new_empty("Test:Two");
-        fp.pads.push(lib_pad("1", 0, 0, eda_model::ir::LibraryPadShape::Rect, PadKind::Smd));
+        fp.pads.push(lib_pad("1", Nm::ZERO, Nm::ZERO, eda_model::ir::LibraryPadShape::Rect, PadKind::Smd));
         fp.models3d = list.clone();
         fp.model = Some(list[0].path.clone());
         let text = export_kicad_mod(&fp);
@@ -926,7 +926,7 @@ mod tests {
 
         // an older entry: the one path
         let mut old = eda_model::ir::LibraryFootprint::new_empty("Test:One");
-        old.pads.push(lib_pad("1", 0, 0, eda_model::ir::LibraryPadShape::Rect, PadKind::Smd));
+        old.pads.push(lib_pad("1", Nm::ZERO, Nm::ZERO, eda_model::ir::LibraryPadShape::Rect, PadKind::Smd));
         old.model = Some("old.step".into());
         assert_eq!(footprint_models(&export_kicad_mod(&old)), vec![Model3d::identity("old.step")]);
         assert_eq!(old.to_engine_footprint().model.as_deref(), Some("old.step"));

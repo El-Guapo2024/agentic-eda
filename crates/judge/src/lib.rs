@@ -93,7 +93,7 @@ pub fn render_board_svg(design: &Design, model: &ConstraintModel, with_routing: 
     let pl = design.placement.as_ref().ok_or_else(|| unavailable("design has no placement to render"))?;
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
     for p in &pl.outline {
-        x0 = x0.min(p.x); y0 = y0.min(p.y); x1 = x1.max(p.x); y1 = y1.max(p.y);
+        x0 = x0.min(p.x.raw_shim()); y0 = y0.min(p.y.raw_shim()); x1 = x1.max(p.x.raw_shim()); y1 = y1.max(p.y.raw_shim());
     }
     if x0 == i64::MAX {
         return Err(unavailable("placement has no outline"));

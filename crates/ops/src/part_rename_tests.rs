@@ -23,7 +23,7 @@ fn part(r: &str, pkg: &str) -> Part {
 }
 
 fn pose(id: &str, x: Nm) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: p(x, 20_000_000), rot: 0, side: Side::Top, label: LabelSide::default() }
+    FootprintInstance { id: id.into(), at: p(x, Nm::from_raw_shim(20_000_000)), rot: 0, side: Side::Top, label: LabelSide::default() }
 }
 
 fn net(name: &str, pins: &[&str]) -> eda_model::Net {
@@ -33,23 +33,23 @@ fn net(name: &str, pins: &[&str]) -> eda_model::Net {
 /// R1, R2 and U1 on a board with a stored schematic, routed from R1.2 to U1.1, with a net list, a floorplan block, and every kind of edit a footprint can have.
 fn fixture() -> (ConstraintModel, Design) {
     let model = ConstraintModel { parts: vec![part("R1", "0603"), part("R2", "0603"), part("U1", "SOIC-8")], nets: vec![net("N1", &["R1.2", "U1.1"]), net("N2", &["R2.1", "U1.2"])], ..Default::default() };
-    let sym = |id: &str, x: Nm| symbol(id, "Device:R", "10k", 1, p(x, 0));
+    let sym = |id: &str, x: Nm| symbol(id, "Device:R", "10k", 1, p(x, Nm::ZERO));
     let mut pad_edit = PadEdit::none("1", 1);
-    pad_edit.size = Some((900_000, 900_000));
+    pad_edit.size = Some((Nm::from_raw_shim(900_000), Nm::from_raw_shim(900_000)));
     let mut edit = FootprintEdit::new("U1");
     edit.set_pad(pad_edit);
     let design = Design {
         schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-        schematic: Some(section(vec![sym("R1", 0), sym("R2", 10_000_000), sym("U1", 20_000_000)], vec![])),
+        schematic: Some(section(vec![sym("R1", Nm::ZERO), sym("R2", Nm::from_raw_shim(10_000_000)), sym("U1", Nm::from_raw_shim(20_000_000))], vec![])),
         nets: Some(vec![net("N1", &["R1.2", "U1.1"]), net("N2", &["R2.1", "U1.2"])]),
         placement: Some(PlacementSection {
-            outline: vec![p(0, 0), p(100_000_000, 0), p(100_000_000, 100_000_000), p(0, 100_000_000)],
-            footprints: vec![pose("R1", 10_000_000), pose("R2", 20_000_000), pose("U1", 40_000_000)],
-            modules: vec![ModuleRegion { name: "main".into(), refs: vec!["R1".into(), "U1".into()], rect: (0, 0, 50_000_000, 50_000_000) }],
+            outline: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(100_000_000), Nm::ZERO), p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(100_000_000)), p(Nm::ZERO, Nm::from_raw_shim(100_000_000))],
+            footprints: vec![pose("R1", Nm::from_raw_shim(10_000_000)), pose("R2", Nm::from_raw_shim(20_000_000)), pose("U1", Nm::from_raw_shim(40_000_000))],
+            modules: vec![ModuleRegion { name: "main".into(), refs: vec!["R1".into(), "U1".into()], rect: (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(50_000_000)) }],
         }),
         routing: Some(RoutingSection {
-            tracks: vec![Track { id: "trk_1".into(), net: "N1".into(), pins: vec!["R1.2".into(), "U1.1".into()], layer: "F.Cu".into(), width: 200_000, pts: vec![p(11_000_000, 20_000_000), p(39_000_000, 20_000_000)], arc_mid_offset: None }],
+            tracks: vec![Track { id: "trk_1".into(), net: "N1".into(), pins: vec!["R1.2".into(), "U1.1".into()], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(20_000_000)), p(Nm::from_raw_shim(39_000_000), Nm::from_raw_shim(20_000_000))], arc_mid_offset: None }],
             vias: vec![],
             zones: vec![],
             track_width_presets: vec![],
@@ -101,21 +101,21 @@ fn loaded(model: &ConstraintModel, design: &Design) -> ConstraintModel {
 fn renaming_a_symbol_moves_the_boards_part_with_it_and_leaves_nothing_under_the_old_reference() {
     let (model, design) = fixture();
     let before = design.clone();
-    let mut b = Board::new(design, &model, 100_000, 300_000);
+    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::RenameSymbol { id: "U1".into(), new_id: "U7".into() }).unwrap();
     let d = b.design();
     assert!(mentions(d, "U1").is_empty(), "stranded: {:?}", mentions(d, "U1"));
     assert!(!mentions(d, "U7").is_empty());
     let pl = d.placement.as_ref().unwrap();
     assert_eq!(pl.footprints.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["R1", "R2", "U7"], "the pose, still sorted");
-    assert_eq!(pl.footprints[2].at, p(40_000_000, 20_000_000), "where it was");
+    assert_eq!(pl.footprints[2].at, p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000)), "where it was");
     assert_eq!(pl.modules[0].refs, ["R1", "U7"]);
     assert_eq!(d.routing.as_ref().unwrap().tracks[0].pins, ["R1.2", "U7.1"], "the route still ends on its pad");
     assert_eq!(d.nets.as_ref().unwrap()[0].pins, ["R1.2", "U7.1"]);
     assert_eq!(d.nets.as_ref().unwrap()[1].pins, ["R2.1", "U7.2"]);
     let dr = d.drawings.as_ref().unwrap();
     assert_eq!(dr.footprint_edits[0].id, "U7");
-    assert_eq!(dr.footprint_edits[0].pad("1", 1).unwrap().size, Some((900_000, 900_000)), "its pad edit");
+    assert_eq!(dr.footprint_edits[0].pad("1", 1).unwrap().size, Some((Nm::from_raw_shim(900_000), Nm::from_raw_shim(900_000))), "its pad edit");
     assert_eq!(dr.zone_overrides[0].id, "U7");
     assert_eq!(dr.locked_ids, ["R1", "U7"]);
     assert_eq!(dr.groups[0].member_ids, ["R1", "U7", "trk_1"]);
@@ -130,20 +130,20 @@ fn renaming_a_symbol_moves_the_boards_part_with_it_and_leaves_nothing_under_the_
 #[test]
 fn a_second_rename_moves_the_one_entry_on_and_the_way_back_drops_it() {
     let (intent, design) = fixture();
-    let mut b = Board::new(design, &intent, 100_000, 300_000);
+    let mut b = Board::new(design, &intent, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::RenameSymbol { id: "U1".into(), new_id: "U7".into() }).unwrap();
     // the next command sees the model the loader builds: the intent's U1 is U7 in it
     let design = b.into_design();
     let model = loaded(&intent, &design);
     assert_eq!(model.parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), ["R1", "R2", "U7"], "no part left under U1");
     assert_eq!(model.nets[0].pins, ["R1.2", "U7.1"]);
-    let mut b = Board::new(design, &model, 100_000, 300_000);
+    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::RenameSymbol { id: "U7".into(), new_id: "U9".into() }).unwrap();
     assert_eq!(b.design().drawings.as_ref().unwrap().renamed_parts, [PartRename { from: "U1".into(), to: "U9".into() }]);
     assert!(mentions(b.design(), "U7").is_empty());
     let design = b.into_design();
     let model = loaded(&intent, &design);
-    let mut b = Board::new(design, &model, 100_000, 300_000);
+    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::RenameSymbol { id: "U9".into(), new_id: "U1".into() }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().renamed_parts.is_empty(), "back under the intent's own reference");
     assert!(!mentions(b.design(), "U1").is_empty());
@@ -155,8 +155,8 @@ fn a_footprint_made_on_the_board_is_not_taken_by_a_rename() {
     let (mut model, mut design) = fixture();
     model.parts.push(part("H1", "0603"));
     design.drawings.as_mut().unwrap().board_parts.push(eda_model::ir::BoardPart { reference: "H1".into(), value: None, footprint: "MountingHole:MH".into(), definition: None, pad_nets: vec![] });
-    design.placement.as_mut().unwrap().footprints.push(pose("H1", 60_000_000));
-    let mut b = Board::new(design, &model, 100_000, 300_000);
+    design.placement.as_mut().unwrap().footprints.push(pose("H1", Nm::from_raw_shim(60_000_000)));
+    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let e = b.apply(&Cmd::RenameSymbol { id: "R2".into(), new_id: "H1".into() }).unwrap_err();
     assert_eq!(e[0].check, "ops_duplicate_symbol");
     assert!(e[0].hint.as_deref().unwrap_or("").contains("footprint"), "{e:?}");
@@ -166,11 +166,11 @@ fn a_footprint_made_on_the_board_is_not_taken_by_a_rename() {
 #[test]
 fn increment_annotations_moves_the_parts_in_one_go_so_no_two_share_a_reference() {
     let (model, design) = fixture();
-    let mut b = Board::new(design, &model, 100_000, 300_000);
+    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::IncrementAnnotations { start: "R1".into(), increment: 1 }).unwrap();
     let d = b.design();
     assert_eq!(d.placement.as_ref().unwrap().footprints.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["R2", "R3", "U1"]);
-    assert_eq!(d.placement.as_ref().unwrap().footprints[0].at, p(10_000_000, 20_000_000), "R1 became R2 where it stood");
+    assert_eq!(d.placement.as_ref().unwrap().footprints[0].at, p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000)), "R1 became R2 where it stood");
     assert_eq!(d.routing.as_ref().unwrap().tracks[0].pins, ["R2.2", "U1.1"]);
     assert_eq!(d.nets.as_ref().unwrap()[1].pins, ["R3.1", "U1.2"], "R2.1 -> R3.1");
     let dr = d.drawings.as_ref().unwrap();
@@ -184,14 +184,14 @@ fn annotate_with_reset_numbers_the_parts_by_place_and_the_board_follows_each() {
     let (model, mut design) = fixture();
     // R1 right of R2 on the sheet: a reset in reading order swaps their numbers
     let sch = design.schematic.as_mut().unwrap();
-    sch.symbols[0].at = p(30_000_000, 0);
-    let mut b = Board::new(design, &model, 100_000, 300_000);
+    sch.symbols[0].at = p(Nm::from_raw_shim(30_000_000), Nm::ZERO);
+    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let opts = AnnotateOptions { scope: Some(AnnotateScope::All), ..Default::default() };
     b.apply(&Cmd::Annotate { reset_existing: true, order: AnnotateOrder::XThenY, ids: None, options: opts }).unwrap();
     let d = b.design();
     let at = |id: &str| d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == id).map(|f| f.at.x);
     // the part that was R1 (pose x=10000, symbol now at x=30000) is the second resistor: R2; the former R2 (pose x=20000) is R1
-    assert_eq!((at("R1"), at("R2")), (Some(20_000_000), Some(10_000_000)), "the poses followed their symbols");
+    assert_eq!((at("R1"), at("R2")), (Some(Nm::from_raw_shim(20_000_000)), Some(Nm::from_raw_shim(10_000_000))), "the poses followed their symbols");
     assert_eq!(d.routing.as_ref().unwrap().tracks[0].pins, ["R2.2", "U1.1"], "the route stays on the pad of the same part");
     assert_eq!(d.nets.as_ref().unwrap()[0].pins, ["R2.2", "U1.1"]);
     assert_eq!(d.nets.as_ref().unwrap()[1].pins, ["R1.1", "U1.2"]);
@@ -208,7 +208,7 @@ fn a_rename_is_a_step_of_both_editors() {
     assert!(Cmd::IncrementAnnotations { start: "R1".into(), increment: 1 }.spans_both_editors());
     assert!(Cmd::Annotate { reset_existing: false, order: AnnotateOrder::default(), ids: None, options: Default::default() }.spans_both_editors());
     assert!(Cmd::OnSheet { sheet: "a".into(), cmd: Box::new(rename.clone()) }.spans_both_editors());
-    assert!(Cmd::Batch { cmds: vec![Cmd::AddJunction { at: p(0, 0) }, rename] }.spans_both_editors());
-    assert!(!Cmd::MoveSymbol { id: "U1".into(), x: 0, y: 0, unit: None }.spans_both_editors());
+    assert!(Cmd::Batch { cmds: vec![Cmd::AddJunction { at: p(Nm::ZERO, Nm::ZERO) }, rename] }.spans_both_editors());
+    assert!(!Cmd::MoveSymbol { id: "U1".into(), x: Nm::ZERO, y: Nm::ZERO, unit: None }.spans_both_editors());
     assert!(!Cmd::EditSymbolFields { id: "U1".into(), value: Some("1k".into()), footprint: None, datasheet: None }.spans_both_editors());
 }

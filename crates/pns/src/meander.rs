@@ -12,6 +12,7 @@
 //! The world the shapes have to fit in is the placer's ([`MeanderEnv::check_fit`], `MEANDER_PLACER_BASE::CheckFit`);
 //! see [`crate::meander_placer`]. Nanometres throughout (see [`crate::kigeom`]).
 
+use eda_model::units::Nm;
 use crate::chain::ShapeLineChain;
 use crate::kigeom::{ki_round, rotate_d, Seg, ShapeArc, V2};
 use eda_model::ir::Point;
@@ -326,7 +327,7 @@ struct Turtle {
 impl MeanderShape {
     /// `MEANDER_SHAPE( aPlacer, aWidth, aIsDual )`.
     pub fn new(env: &dyn MeanderEnv, width: i64, dual: bool) -> MeanderShape {
-        let zero = Point { x: 0, y: 0 };
+        let zero = Point { x: Nm::ZERO, y: Nm::ZERO };
         MeanderShape {
             settings: env.settings().clone(),
             clearance: env.clearance(),
@@ -649,7 +650,7 @@ impl MeanderShape {
     fn update_base_segment(&mut self) {
         if self.dual {
             // `( CLine( 0 ).CPoint( 0 ) + CLine( 1 ).CPoint( 0 ) ) / 2`: `VECTOR2I::operator/( double )` rounds.
-            let mid = |p: Point, q: Point| Point { x: ki_round((p.x + q.x) as f64 / 2.0), y: ki_round((p.y + q.y) as f64 / 2.0) };
+            let mid = |p: Point, q: Point| Point { x: Nm::from_raw_shim(ki_round((p.x + q.x).raw_shim() as f64 / 2.0)), y: Nm::from_raw_shim(ki_round((p.y + q.y).raw_shim() as f64 / 2.0)) };
             let a = mid(self.c_line(0).c_point(0), self.c_line(1).c_point(0));
             let b = mid(self.c_line(0).c_last_point(), self.c_line(1).c_last_point());
             self.clipped_base_seg = Seg::new(self.base_seg.line_project(a), self.base_seg.line_project(b));
@@ -799,7 +800,7 @@ pub struct MeanderedLine {
 impl MeanderedLine {
     /// `MEANDERED_LINE( aPlacer, aIsDual )`.
     pub fn new(dual: bool) -> MeanderedLine {
-        MeanderedLine { last: Point { x: 0, y: 0 }, meanders: Vec::new(), dual, width: 0, baseline_offset: 0 }
+        MeanderedLine { last: Point { x: Nm::ZERO, y: Nm::ZERO }, meanders: Vec::new(), dual, width: 0, baseline_offset: 0 }
     }
 
     pub fn set_width(&mut self, w: i64) {
@@ -869,7 +870,7 @@ impl MeanderedLine {
         let dir = V2::of(Point { x: base.b.x - base.a.x, y: base.b.y - base.a.y });
 
         if !self.dual {
-            self.add_corner(&*env, base.a, Point { x: 0, y: 0 });
+            self.add_corner(&*env, base.a, Point { x: Nm::ZERO, y: Nm::ZERO });
         }
 
         let mut turning = false;
@@ -883,7 +884,7 @@ impl MeanderedLine {
 
             let thr = m.spacing() as f64;
             let mut fail = false;
-            let mut remaining = base_len - crate::kigeom::norm_i(self.last.x - base.a.x, self.last.y - base.a.y) as f64;
+            let mut remaining = base_len - crate::kigeom::norm_i((self.last.x - base.a.x).raw_shim(), (self.last.y - base.a.y).raw_shim()) as f64;
 
             if (remaining as f64) < env.settings().step as f64 {
                 break;
@@ -954,7 +955,7 @@ impl MeanderedLine {
                 fail = true;
             }
 
-            remaining = base_len - crate::kigeom::norm_i(self.last.x - base.a.x, self.last.y - base.a.y) as f64;
+            remaining = base_len - crate::kigeom::norm_i((self.last.x - base.a.x).raw_shim(), (self.last.y - base.a.y).raw_shim()) as f64;
             if remaining < env.settings().step as f64 {
                 break;
             }
@@ -966,9 +967,9 @@ impl MeanderedLine {
                 let next_p = tmp.spacing() - 2 * tmp.corner_radius() + env.settings().step;
                 // `VECTOR2I pn = m_last + dir.Resize( nextP )`: the sum is a `VECTOR2D`, truncated to integers.
                 let step = dir.resize(next_p as f64);
-                let pn = Point { x: (self.last.x as f64 + step.x) as i64, y: (self.last.y as f64 + step.y) as i64 };
+                let pn = Point { x: Nm::from_raw_shim((self.last.x.raw_shim() as f64 + step.x) as i64), y: Nm::from_raw_shim((self.last.y.raw_shim() as f64 + step.y) as i64) };
                 if base.contains(pn) && !self.dual {
-                    self.add_corner(&*env, pn, Point { x: 0, y: 0 });
+                    self.add_corner(&*env, pn, Point { x: Nm::ZERO, y: Nm::ZERO });
                 } else {
                     break;
                 }
@@ -976,7 +977,7 @@ impl MeanderedLine {
         }
 
         if !self.dual {
-            self.add_corner(&*env, base.b, Point { x: 0, y: 0 });
+            self.add_corner(&*env, base.b, Point { x: Nm::ZERO, y: Nm::ZERO });
         }
     }
 }
@@ -1158,7 +1159,7 @@ mod tests {
     }
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     #[test]
@@ -1187,18 +1188,18 @@ mod tests {
         let line = m.c_line(0);
         assert_eq!(line.c_point(0), p(0, 0));
         // it climbs to the maximum amplitude on the side a "false" side is, and comes back to the baseline
-        let ys: Vec<i64> = line.points().iter().map(|q| q.y).collect();
+        let ys: Vec<Nm> = line.points().iter().map(|q| q.y).collect();
         let (lo, hi) = (*ys.iter().min().unwrap(), *ys.iter().max().unwrap());
-        assert_eq!((lo, hi), (0, 1_000_000), "amplitude 1 mm up (y grows downward: the left of a line along +x is +y)");
+        assert_eq!((lo, hi), (Nm::ZERO, Nm::from_raw_shim(1_000_000)), "amplitude 1 mm up (y grows downward: the left of a line along +x is +y)");
         assert_eq!(line.arcs().len(), 4, "four rounded corners");
-        assert_eq!(line.c_last_point().y, 0);
+        assert_eq!(line.c_last_point().y, Nm::ZERO);
         // the right side is the mirror image
         let mut right = MeanderShape::new(&env, 200_000, false);
         assert!(right.fit(&mut env, &[], MeanderType::Single, base, p(0, 0), true));
-        let ys: Vec<i64> = right.c_line(0).points().iter().map(|q| q.y).collect();
-        assert_eq!((*ys.iter().min().unwrap(), *ys.iter().max().unwrap()), (-1_000_000, 0));
+        let ys: Vec<Nm> = right.c_line(0).points().iter().map(|q| q.y).collect();
+        assert_eq!((*ys.iter().min().unwrap(), *ys.iter().max().unwrap()), (Nm::from_raw_shim(-1_000_000), Nm::ZERO));
         assert_eq!(right.c_line(0).length(), m.c_line(0).length());
-        assert_eq!(m.baseline_length(), m.end().x);
+        assert_eq!(m.baseline_length(), m.end().x.raw_shim());
     }
 
     #[test]
@@ -1212,8 +1213,8 @@ mod tests {
         for i in 0..m.c_line(0).segment_count() {
             let s = m.c_line(0).c_segment(i);
             let (dx, dy) = ((s.b.x - s.a.x).abs(), (s.b.y - s.a.y).abs());
-            assert!(dx == 0 || dy == 0 || dx == dy || (dx - dy).abs() <= 2, "segment {i} {s:?} is not on a 45-degree heading");
-            diagonals += (dx != 0 && dy != 0) as usize;
+            assert!(dx == Nm::ZERO || dy == Nm::ZERO || dx == dy || (dx - dy).abs() <= Nm::from_raw_shim(2), "segment {i} {s:?} is not on a 45-degree heading");
+            diagonals += (dx != Nm::ZERO && dy != Nm::ZERO) as usize;
         }
         assert_eq!(diagonals, 4);
     }
@@ -1233,7 +1234,7 @@ mod tests {
                 self.0.clearance()
             }
             fn check_fit(&mut self, shape: &MeanderShape, _: &[MeanderShape]) -> bool {
-                shape.c_line(0).points().iter().all(|q| q.y.abs() <= 401_000)
+                shape.c_line(0).points().iter().all(|q| q.y.abs() <= Nm::from_raw_shim(401_000))
             }
         }
         let mut env = Narrow(free());
@@ -1263,8 +1264,8 @@ mod tests {
             if matches!(m.kind(), MeanderType::Corner) {
                 continue;
             }
-            assert!(m.base_segment().a.x >= at, "{:?} starts before the last one ended at {at}", m.base_segment());
-            at = m.base_segment().b.x;
+            assert!(m.base_segment().a.x >= Nm::from_raw_shim(at), "{:?} starts before the last one ended at {at}", m.base_segment());
+            at = m.base_segment().b.x.raw_shim();
         }
         assert!(at <= 30_000_000);
         // it is a clear line: no two meanders of it come closer than the spacing
@@ -1286,7 +1287,7 @@ mod tests {
         for m in line.meanders() {
             ys.extend(m.c_line(0).points().iter().map(|q| q.y));
         }
-        assert!(ys.iter().all(|&y| y >= 0), "all on the left");
+        assert!(ys.iter().all(|&y| y >= Nm::ZERO), "all on the left");
         assert!(line.meanders().iter().filter(|m| m.kind() == MeanderType::Single).count() > 5);
     }
 

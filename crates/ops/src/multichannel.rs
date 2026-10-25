@@ -16,6 +16,7 @@
 //!
 //! The footprints' sheet, classes, group and box are `multichannel_facts`; the selection of what lies in an area is `multichannel_geom`.
 
+use eda_model::units::Nm;
 use super::multichannel_facts::{in_sheet_or_below, member_of_group, member_of_sheet_or_children, McBoard, McFootprint};
 use super::Board;
 use eda_model::ir::{Point, Zone, ZoneBorderStyle};
@@ -436,7 +437,7 @@ impl Board<'_> {
             } else {
                 row.members.iter().map(|&i| mc.fps[i].bbox).collect()
             };
-            let outline = rule_area_outline(&boxes, AREA_MARGIN_NM);
+            let outline = rule_area_outline(&boxes, Nm::from_raw_shim(AREA_MARGIN_NM));
             if outline.len() < 3 {
                 continue;
             }
@@ -515,10 +516,10 @@ impl Board<'_> {
     /// The box of a board item other than a footprint (`BOARD_ITEM::GetBoundingBox`), a group's the box of what it holds.
     pub(crate) fn mc_item_box(&self, id: &str) -> Option<Box4> {
         let union = |a: Option<Box4>, b: Box4| -> Option<Box4> { Some(a.map_or(b, |a| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))) };
-        let around = |pts: &[Point], r: i64| -> Option<Box4> { eda_model::multichannel::polygon_box(pts).map(|b| (b.0 - r, b.1 - r, b.2 + r, b.3 + r)) };
+        let around = |pts: &[Point], r: i64| -> Option<Box4> { eda_model::multichannel::polygon_box(pts).map(|b| (b.0 - Nm::from_raw_shim(r), b.1 - Nm::from_raw_shim(r), b.2 + Nm::from_raw_shim(r), b.3 + Nm::from_raw_shim(r))) };
         if let Some(rt) = &self.design.routing {
             if let Some(t) = rt.tracks.iter().find(|t| t.id == id) {
-                return around(&t.pts, t.width / 2);
+                return around(&t.pts, (t.width / 2).raw_shim());
             }
             if let Some(v) = rt.vias.iter().find(|v| v.id == id) {
                 return Some((v.at.x - v.diameter / 2, v.at.y - v.diameter / 2, v.at.x + v.diameter / 2, v.at.y + v.diameter / 2));
@@ -531,20 +532,20 @@ impl Board<'_> {
         if let Some(s) = dr.shapes.iter().find(|s| s.id() == id) {
             let pts = match s {
                 eda_model::ir::Shape::Circle { center, end, .. } => {
-                    let r = (((end.x - center.x) as f64).hypot((end.y - center.y) as f64)).round() as i64;
-                    vec![Point { x: center.x - r, y: center.y - r }, Point { x: center.x + r, y: center.y + r }]
+                    let r = (((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64;
+                    vec![Point { x: center.x - Nm::from_raw_shim(r), y: center.y - Nm::from_raw_shim(r) }, Point { x: center.x + Nm::from_raw_shim(r), y: center.y + Nm::from_raw_shim(r) }]
                 }
                 eda_model::ir::Shape::Arc { start, mid, end, .. } => eda_model::ir::tessellate_arc(*start, *mid, *end, 16),
                 other => other.points(),
             };
-            return around(&pts, s.stroke_width() / 2);
+            return around(&pts, (s.stroke_width() / 2).raw_shim());
         }
         if let Some(t) = dr.texts.iter().find(|t| t.id == id) {
             let half = (t.content.chars().count().max(1) as i64 * t.size_nm * 6 / 10) / 2;
             return Some((t.at.x - half, t.at.y - t.size_nm / 2, t.at.x + half, t.at.y + t.size_nm / 2));
         }
         if let Some(d) = dr.dimensions.iter().find(|d| d.id == id) {
-            return around(&[d.start, d.end], d.stroke_width / 2);
+            return around(&[d.start, d.end], (d.stroke_width / 2).raw_shim());
         }
         if let Some(b) = dr.board_items.text_boxes.iter().find(|b| b.id == id) {
             let [x0, y0, x1, y1] = b.bounds();

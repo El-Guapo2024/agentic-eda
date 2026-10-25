@@ -2559,7 +2559,7 @@ impl<'a> Board<'a> {
 
     /// `BOARD_DESIGN_SETTINGS::GetGridOrigin()`: where the editing grid is anchored, (0, 0) unless the board has set one.
     fn grid_origin(&self) -> Point {
-        self.design.drawings.as_ref().and_then(|d| d.grid_origin).unwrap_or(Point { x: 0, y: 0 })
+        self.design.drawings.as_ref().and_then(|d| d.grid_origin).unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO })
     }
 
     /// A point on the placement grid: whole snap steps from the grid origin, not from (0, 0), so a position the editor snapped to the grid it
@@ -3182,10 +3182,10 @@ impl<'a> Board<'a> {
     fn board_bbox(&self) -> (Nm, Nm, Nm, Nm) {
         let o = &self.placement().outline;
         (
-            o.iter().map(|p| p.x).min().unwrap_or(0),
-            o.iter().map(|p| p.y).min().unwrap_or(0),
-            o.iter().map(|p| p.x).max().unwrap_or(0),
-            o.iter().map(|p| p.y).max().unwrap_or(0),
+            o.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO),
+            o.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO),
+            o.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO),
+            o.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO),
         )
     }
 
@@ -3201,7 +3201,7 @@ impl<'a> Board<'a> {
         if region.polys.outline_count() == 0 {
             return true;
         }
-        let ring = vec![eda_clipper2::Point64::new(cr.0, cr.1), eda_clipper2::Point64::new(cr.2, cr.1), eda_clipper2::Point64::new(cr.2, cr.3), eda_clipper2::Point64::new(cr.0, cr.3)];
+        let ring = vec![eda_clipper2::Point64::new(cr.0.raw_shim(), cr.1.raw_shim()), eda_clipper2::Point64::new(cr.2.raw_shim(), cr.1.raw_shim()), eda_clipper2::Point64::new(cr.2.raw_shim(), cr.3.raw_shim()), eda_clipper2::Point64::new(cr.0.raw_shim(), cr.3.raw_shim())];
         let mut outside = eda_shape_poly_set::ShapePolySet::from_outline(ring);
         outside.boolean_subtract(&region.polys);
         outside.is_empty()
@@ -3253,7 +3253,7 @@ impl<'a> Board<'a> {
             .ok_or_else(|| vec![CheckResult::fail("ops_no_footprint", anchor, "the anchor has no resolvable footprint")])?;
 
         // The part's own extent, at rotation 0, measured about its origin.
-        let probe = FootprintInstance { id: part.into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above };
+        let probe = FootprintInstance { id: part.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::Above };
         let c = self.courtyard_at(part, &probe)?;
         let (half_w, half_h) = ((c.2 - c.0) / 2, (c.3 - c.1) / 2);
 
@@ -3268,7 +3268,7 @@ impl<'a> Board<'a> {
         };
         // A stand-off that falls half way between two grid points takes the one nearer the anchor (`- 1`): in micrometres the
         // halving above truncated the half away, and the placer's results were made on that rule.
-        let base = (ax + dx * (stand_off - 1), ay + dy * (stand_off - 1));
+        let base = (ax + dx * (stand_off - Nm::from_raw_shim(1)), ay + dy * (stand_off - Nm::from_raw_shim(1)));
 
         // Slide perpendicular to the placement direction.
         let (sx, sy) = if dx != 0 { (0, 1) } else { (1, 0) };
@@ -3317,13 +3317,13 @@ impl<'a> Board<'a> {
         let (fx, fy) = region.fractions();
         let board_area = self.board_region();
         let centre = (
-            bb.0 + ((bb.2 - bb.0) as f64 * fx) as Nm,
-            bb.1 + ((bb.3 - bb.1) as f64 * fy) as Nm,
+            bb.0 + Nm::from_raw_shim(((bb.2 - bb.0).raw_shim() as f64 * fx) as i64),
+            bb.1 + Nm::from_raw_shim(((bb.3 - bb.1).raw_shim() as f64 * fy) as i64),
         );
         for ring in 0..MAX_SLIDE_STEPS {
             let r = ring as i64 * self.snap;
-            let offsets: Vec<(i64, i64)> = if ring == 0 {
-                vec![(0, 0)]
+            let offsets: Vec<(Nm, Nm)> = if ring == 0 {
+                vec![(Nm::ZERO, Nm::ZERO)]
             } else {
                 let mut v = Vec::new();
                 for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1)] {
@@ -3374,19 +3374,19 @@ impl<'a> Board<'a> {
         // fails `placement_edge_connector` anyway. The annealer's own
         // seeding has always done this; leaving it out here was worth
         // one gate failure on L1 and no clue as to why.
-        let flat = FootprintInstance { id: part.into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above };
+        let flat = FootprintInstance { id: part.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::Above };
         let c0 = self.courtyard_at(part, &flat)?;
         let wider_than_tall = (c0.2 - c0.0) >= (c0.3 - c0.1);
         let horizontal_edge = matches!(edge, Dir::North | Dir::South);
         let rot: u32 = if horizontal_edge == wider_than_tall { 0 } else { 90_000 };
 
-        let probe = FootprintInstance { id: part.into(), at: Point { x: 0, y: 0 }, rot, side: Side::Top, label: LabelSide::Above };
+        let probe = FootprintInstance { id: part.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot, side: Side::Top, label: LabelSide::Above };
         let c = self.courtyard_at(part, &probe)?;
         let (half_w, half_h) = ((c.2 - c.0) / 2, (c.3 - c.1) / 2);
 
         let along = |lo: Nm, hi: Nm, half: Nm| -> Nm {
             let usable = (hi - half) - (lo + half);
-            lo + half + (usable as f64 * fraction) as Nm
+            lo + half + Nm::from_raw_shim((usable.raw_shim() as f64 * fraction) as i64)
         };
         // Sit one snap step inside the edge, not exactly on it.
         //
@@ -3403,7 +3403,7 @@ impl<'a> Board<'a> {
         // KiCad measures copper to Edge.Cuts, and a header's pads sit a
         // few tenths inside its courtyard -- 0.35 mm on L1, where 0.5 mm
         // is the rule.
-        let step = self.snap.max(1);
+        let step = self.snap.max(Nm::from_raw_shim(1));
         let clearance = self.model.board.tuning.copper_edge_clearance();
         let pads = placed_pads(self.model, self.part(part)?, &probe).unwrap_or_default();
         let copper = pads.iter().fold((Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN), |r, p| {
@@ -3415,9 +3415,9 @@ impl<'a> Board<'a> {
         // a row put near a corner has its end pad by the other edge.
         let room = |gap: Nm| -> Nm {
             let short = clearance - gap;
-            if short <= 0 { 0 } else { (short + step - 1) / step * step + step }
+            if short <= Nm::ZERO { Nm::ZERO } else { (short + step - Nm::from_raw_shim(1)) / step * step + step }
         };
-        let (w, n, e, s) = if pads.is_empty() { (0, 0, 0, 0) } else { (room(copper.0 - c.0), room(copper.1 - c.1), room(c.2 - copper.2), room(c.3 - copper.3)) };
+        let (w, n, e, s) = if pads.is_empty() { (Nm::ZERO, Nm::ZERO, Nm::ZERO, Nm::ZERO) } else { (room(copper.0 - c.0), room(copper.1 - c.1), room(c.2 - copper.2), room(c.3 - copper.3)) };
         let at = match edge {
             Dir::North => Point { x: along(bb.0 + w, bb.2 - e, half_w), y: bb.1 + half_h + step.max(n) },
             Dir::South => Point { x: along(bb.0 + w, bb.2 - e, half_w), y: bb.3 - half_h - step.max(s) },
@@ -3640,7 +3640,7 @@ impl<'a> Board<'a> {
     fn add_track(&mut self, net: &str, layer: &str, width: Nm, pts: &[Point]) -> Result<(), Vec<CheckResult>> {
         self.known_net(net)?;
         self.known_layer(layer)?;
-        if width <= 0 {
+        if width <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_track", net, "track width must be positive")]);
         }
         if pts.len() < 2 {
@@ -3664,7 +3664,7 @@ impl<'a> Board<'a> {
     }
 
     fn set_track_width(&mut self, id: &str, width: Nm) -> Result<(), Vec<CheckResult>> {
-        if width <= 0 {
+        if width <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_track", id, "track width must be positive")]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "the board has no routing yet")])?;
@@ -3681,7 +3681,7 @@ impl<'a> Board<'a> {
         if from_layer == to_layer {
             return Err(vec![CheckResult::fail("ops_bad_via", net, "a via needs two different layers to span")]);
         }
-        if drill <= 0 || diameter <= 0 {
+        if drill <= Nm::ZERO || diameter <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_via", net, "via drill and diameter must be positive")]);
         }
         if drill >= diameter {
@@ -3716,7 +3716,7 @@ impl<'a> Board<'a> {
     }
 
     fn edit_via(&mut self, id: &str, diameter: Nm, drill: Nm) -> Result<(), Vec<CheckResult>> {
-        if drill <= 0 || diameter <= 0 {
+        if drill <= Nm::ZERO || diameter <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_via", id, "via drill and diameter must be positive")]);
         }
         if drill >= diameter {
@@ -3732,7 +3732,7 @@ impl<'a> Board<'a> {
     /// Board Setup > Track Widths & Vias' "Track Widths" list -- a plain
     /// whole-list replace (see `Cmd::SetTrackWidthPresets`'s own doc).
     fn set_track_width_presets(&mut self, widths: &[Nm]) -> Result<(), Vec<CheckResult>> {
-        if widths.iter().any(|w| *w <= 0) {
+        if widths.iter().any(|w| *w <= Nm::ZERO) {
             return Err(vec![CheckResult::fail("ops_bad_track", "track_width_presets", "every preset width must be positive")]);
         }
         self.routing_mut().track_width_presets = widths.to_vec();
@@ -3742,7 +3742,7 @@ impl<'a> Board<'a> {
     /// Same panel's "Via Sizes" list.
     fn set_via_presets(&mut self, presets: &[ViaPreset]) -> Result<(), Vec<CheckResult>> {
         for p in presets {
-            if p.drill <= 0 || p.diameter <= 0 {
+            if p.drill <= Nm::ZERO || p.diameter <= Nm::ZERO {
                 return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", "via drill and diameter must be positive")]);
             }
             if p.drill >= p.diameter {
@@ -3767,12 +3767,12 @@ impl<'a> Board<'a> {
             self.known_layer(l)?;
         }
         if let Some(SizeSpec::Value { nm: um }) = track_width {
-            if *um <= 0 {
+            if *um <= Nm::ZERO {
                 return Err(vec![CheckResult::fail("ops_bad_track", "edit_tracks_and_vias", "track width must be positive")]);
             }
         }
         if let Some(ViaSizeSpec::Value { diameter, drill }) = via_size {
-            if *drill <= 0 || *diameter <= 0 {
+            if *drill <= Nm::ZERO || *diameter <= Nm::ZERO {
                 return Err(vec![CheckResult::fail("ops_bad_via", "edit_tracks_and_vias", "via drill and diameter must be positive")]);
             }
             if *drill >= *diameter {
@@ -3922,13 +3922,13 @@ impl<'a> Board<'a> {
         if !is_rule_area && copper && wanted.iter().any(|l| !eda_model::layers::is_copper_layer_name(l)) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "a zone is on copper layers or on technical layers, not both (only a rule area can be on both)")]);
         }
-        if clearance < 0 {
+        if clearance < Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "clearance cannot be negative")]);
         }
         // A zone on no copper layer may have no minimum width at all (`issue22826`'s mask zones; the non-copper dialog does not check it), and has no thermal
         // spokes to check it against: both are copper pours' (`panel_zone_properties.cpp`'s `AcceptOptions`).
         let pour = copper && !is_rule_area;
-        if min_thickness < 0 || (min_thickness == 0 && copper) {
+        if min_thickness < Nm::ZERO || (min_thickness == Nm::ZERO && copper) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "minimum width must be positive")]);
         }
         if pour && thermal_spoke_width < min_thickness {
@@ -3939,7 +3939,7 @@ impl<'a> Board<'a> {
         if fill_mode == FillMode::HatchPattern && (hatch_thickness < min_thickness || hatch_gap < min_thickness) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "hatch thickness and gap must be at least the minimum width")]);
         }
-        if corner_radius.is_some_and(|r| r < 0) {
+        if corner_radius.is_some_and(|r| r < Nm::ZERO) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "the outline smoothing size cannot be negative")]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
@@ -4166,7 +4166,7 @@ impl<'a> Board<'a> {
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let zi = rt.zones.iter().position(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
-        let chain = |pts: &[Point]| pts.iter().map(|p| Point64::new(p.x, p.y)).collect::<Vec<_>>();
+        let chain = |pts: &[Point]| pts.iter().map(|p| Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect::<Vec<_>>();
         // `SHAPE_POLY_SET originalOutline( *aZone.Outline() )`: the outline with its holes.
         let mut remaining = ShapePolySet::from_outline(chain(&rt.zones[zi].outline));
         for hole in rt.zones[zi].holes.iter().filter(|h| h.len() >= 3) {
@@ -4180,7 +4180,7 @@ impl<'a> Board<'a> {
         // `ZONE_CREATE_HELPER::performZoneCutout`: "a zone can have only one main outline, so create as many zones as originalOutline contains main outlines",
         // each with its own holes (`newZoneOutline->AddHole( originalOutline.CHole( outline, hole ) )`).
         let template = rt.zones.remove(zi);
-        let ring_of = |r: &Vec<Point64>| r.iter().map(|p| Point { x: p.x, y: p.y }).collect::<Vec<Point>>();
+        let ring_of = |r: &Vec<Point64>| r.iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect::<Vec<Point>>();
         for poly in &remaining.polys {
             let ring = &poly[0];
             if ring.len() < 3 {
@@ -4296,7 +4296,7 @@ impl<'a> Board<'a> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "a shape needs a layer")]);
         }
-        if stroke_width <= 0 {
+        if stroke_width <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width must be positive")]);
         }
         self.layer_is_on(layer, id)?;
@@ -4316,7 +4316,7 @@ impl<'a> Board<'a> {
         if text.layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", "text", "text needs a layer")]);
         }
-        if text.size_nm <= 0 {
+        if text.size_nm <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_text", "text", "text size must be positive")]);
         }
         self.layer_is_on(&text.layer, "text")?;
@@ -4332,7 +4332,7 @@ impl<'a> Board<'a> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text needs a layer")]);
         }
-        if size_nm <= 0 {
+        if size_nm <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
         }
         self.layer_is_on(&layer, id)?;
@@ -4428,7 +4428,7 @@ impl<'a> Board<'a> {
         for t in &tracks {
             self.known_net(&t.net)?;
             self.known_layer(&t.layer)?;
-            if t.width <= 0 || t.pts.len() < 2 {
+            if t.width <= Nm::ZERO || t.pts.len() < 2 {
                 return Err(vec![CheckResult::fail("ops_bad_track", &t.net, "a committed route track needs a positive width and at least two points")]);
             }
         }
@@ -4436,7 +4436,7 @@ impl<'a> Board<'a> {
             self.known_net(&v.net)?;
             self.known_layer(&v.from_layer)?;
             self.known_layer(&v.to_layer)?;
-            if v.drill <= 0 || v.diameter <= 0 || v.drill >= v.diameter {
+            if v.drill <= Nm::ZERO || v.diameter <= Nm::ZERO || v.drill >= v.diameter {
                 return Err(vec![CheckResult::fail("ops_bad_via", &v.net, "a committed route via needs a drill smaller than its diameter, both positive")]);
             }
         }
@@ -4809,7 +4809,7 @@ impl<'a> Board<'a> {
         if pts.len() < 2 {
             return Err(vec![CheckResult::fail("ops_bad_line", "line", "a line needs at least two points")]);
         }
-        if width_nm < 0 {
+        if width_nm < Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_line", "line", "a line width cannot be negative")]);
         }
         let sch = self.schematic_mut_or_create();
@@ -4839,7 +4839,7 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_sheet", file, "a sheet file is a bare file name (no folders)")]);
         }
         let file = if file.ends_with(".kicad_sch") { file.to_string() } else { format!("{file}.kicad_sch") };
-        if size.0 <= 0 || size.1 <= 0 {
+        if size.0 <= Nm::ZERO || size.1 <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_sheet", name, "a sheet needs a positive size")]);
         }
         let sch = self.schematic_mut_or_create();
@@ -5476,7 +5476,7 @@ impl<'a> Board<'a> {
     /// footprint is checked against) on a one-pad probe footprint, rather
     /// than re-deriving a second copy of those rules here.
     fn validate_pad(pad: &LibraryPad) -> Result<(), Vec<CheckResult>> {
-        if pad.size.0 <= 0 || pad.size.1 <= 0 {
+        if pad.size.0 <= Nm::ZERO || pad.size.1 <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_pad", &pad.number, "pad size must be positive")]);
         }
         let probe = Footprint { name: "probe".into(), pads: vec![pad.to_engine_pad()], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
@@ -5622,7 +5622,7 @@ impl<'a> Board<'a> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "a shape needs a layer")]);
         }
-        if stroke_width <= 0 {
+        if stroke_width <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width must be positive")]);
         }
         let fp = self.library_footprint_mut(footprint)?;
@@ -5637,7 +5637,7 @@ impl<'a> Board<'a> {
         if text.layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", footprint, "text needs a layer")]);
         }
-        if text.size_nm <= 0 {
+        if text.size_nm <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_text", footprint, "text size must be positive")]);
         }
         text.id = String::new();
@@ -5663,7 +5663,7 @@ impl<'a> Board<'a> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text needs a layer")]);
         }
-        if size_nm <= 0 {
+        if size_nm <= Nm::ZERO {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
         }
         let fp = self.library_footprint_mut(footprint)?;
@@ -6066,9 +6066,9 @@ const NO_BORDER_MM: f64 = -0.0001;
 fn rotate_point_about(pt: Point, pivot: Point, angle_millideg: i64) -> Point {
     let rad = (angle_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    let dx = (pt.x - pivot.x) as f64;
-    let dy = (pt.y - pivot.y) as f64;
-    Point { x: pivot.x + (dx * cos - dy * sin).round() as Nm, y: pivot.y + (dx * sin + dy * cos).round() as Nm }
+    let dx = (pt.x - pivot.x).raw_shim() as f64;
+    let dy = (pt.y - pivot.y).raw_shim() as f64;
+    Point { x: pivot.x + Nm::from_raw_shim((dx * cos - dy * sin).round() as i64), y: pivot.y + Nm::from_raw_shim((dx * sin + dy * cos).round() as i64) }
 }
 
 /// How far a `Place` will slide along the anchor before giving up.
@@ -6082,10 +6082,10 @@ fn rotate_point_about(pt: Point, pivot: Point, angle_millideg: i64) -> Point {
 const MAX_SLIDE_STEPS: u32 = 400;
 
 fn snap(v: Nm, to: Nm) -> Nm {
-    if to <= 0 {
+    if to <= Nm::ZERO {
         return v;
     }
-    ((v as f64 / to as f64).round() as i64) * to
+    ((v.raw_shim() as f64 / to.raw_shim() as f64).round() as i64) * to
 }
 
 fn overlaps(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> bool {

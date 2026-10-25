@@ -18,11 +18,11 @@ fn dxf(entities: &str) -> String {
 }
 
 fn sch_req(format: GraphicsFormat, text: String) -> ImportSchGraphics {
-    ImportSchGraphics { format, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 }
+    ImportSchGraphics { format, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::ZERO }
 }
 
 fn sym_req(text: String) -> ImportSymbolGraphics {
-    ImportSymbolGraphics { lib_id: "Test:Sym".into(), unit: 1, body_style: 1, format: GraphicsFormat::Dxf, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 }
+    ImportSymbolGraphics { lib_id: "Test:Sym".into(), unit: 1, body_style: 1, format: GraphicsFormat::Dxf, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::ZERO }
 }
 
 fn sch<'a>(b: &'a Board<'_>) -> &'a eda_model::ir::SchematicSection {
@@ -57,20 +57,20 @@ fn a_dxf_outline_becomes_graphic_lines_and_arcs_of_the_sheet() {
     let arcs: Vec<&SchGraphic> = s.extras.graphics.iter().filter(|g| matches!(g.shape, SchGraphicKind::Arc { .. })).collect();
     assert_eq!((arcs.len(), s.extras.graphics.len()), (4, 4));
     // No line width in the file, none in the dialog: the sheet's default width (0), the way `MapLineWidth( 0 )` gives it.
-    assert!(s.lines.iter().all(|l| l.width_nm == 0 && l.pts.len() == 2 && !l.id.is_empty()), "{:?}", s.lines);
-    assert!(arcs.iter().all(|g| g.width_nm == 0 && g.fill == SchFill::None));
+    assert!(s.lines.iter().all(|l| l.width_nm == Nm::ZERO && l.pts.len() == 2 && !l.id.is_empty()), "{:?}", s.lines);
+    assert!(arcs.iter().all(|g| g.width_nm == Nm::ZERO && g.fill == SchFill::None));
     // Y is down on a sheet as on the board: the 40 x 30 outline hangs above the origin.
-    let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x as f64, p.y as f64))));
+    let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x.raw_shim() as f64, p.y.raw_shim() as f64))));
     assert_eq!((x0, y0, x1, y1), (0.0, -30_000_000.0, 40_000_000.0, 0.0));
     // An arc's middle is on its circle: the corner at the origin side, radius 3 mm.
     let SchGraphicKind::Arc { start, mid, end } = arcs[0].shape else { unreachable!() };
     let (cx, cy) = circle_through(start, mid, end);
-    assert!((((start.x as f64 - cx).hypot(start.y as f64 - cy)) - 3_000_000.0).abs() < 2.0, "{start:?} {mid:?} {end:?}");
+    assert!((((start.x.raw_shim() as f64 - cx).hypot(start.y.raw_shim() as f64 - cy)) - 3_000_000.0).abs() < 2.0, "{start:?} {mid:?} {end:?}");
 }
 
 /// The centre of the circle through three points.
 fn circle_through(a: Point, b: Point, c: Point) -> (f64, f64) {
-    let (ax, ay, bx, by, cx, cy) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, c.x as f64, c.y as f64);
+    let (ax, ay, bx, by, cx, cy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, c.x.raw_shim() as f64, c.y.raw_shim() as f64);
     let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
     let ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
     let uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
@@ -84,17 +84,17 @@ fn the_scale_the_offset_and_the_default_line_width_are_the_dialogs() {
     let mut r = sch_req(GraphicsFormat::Dxf, fixture("no_units.dxf"));
     r.dxf_units = "mm".into();
     r.scale = 2.0;
-    r.line_width_nm = 150_000;
+    r.line_width_nm = Nm::from_raw_shim(150_000);
     r.offset_x_nm = 10_000_000;
     r.offset_y_nm = -5_000_000;
     b.apply(&Cmd::ImportSchGraphics(r)).unwrap();
     let s = sch(&b);
     assert_eq!(s.lines.len(), 4);
     // The 2 x 1 rectangle, doubled and moved by (10, -5) mm, the lines 0.15 mm doubled.
-    let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x as f64, p.y as f64))));
+    let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x.raw_shim() as f64, p.y.raw_shim() as f64))));
     assert_eq!((x0, x1), (10_000_000.0, 14_000_000.0));
     assert_eq!((y1 - y0).round(), 2_000_000.0);
-    assert!(s.lines.iter().all(|l| l.width_nm == 300_000), "{:?}", s.lines);
+    assert!(s.lines.iter().all(|l| l.width_nm == Nm::from_raw_shim(300_000)), "{:?}", s.lines);
 }
 
 #[test]
@@ -106,14 +106,14 @@ fn circles_are_shapes_with_a_centre_and_a_radius() {
         .into_iter()
         .map(|g| match g.shape {
             SchGraphicKind::Circle { center, radius_nm } => {
-                assert_eq!((g.fill, g.width_nm), (SchFill::None, 0));
+                assert_eq!((g.fill, g.width_nm), (SchFill::None, Nm::ZERO));
                 (center, radius_nm)
             }
             other => panic!("{other:?}"),
         })
         .collect();
     circles.sort_by_key(|(c, _)| c.x);
-    assert_eq!(circles, vec![(Point { x: 5_000_000, y: -5_000_000 }, 1_600_000), (Point { x: 20_000_000, y: -15_000_000 }, 4_000_000), (Point { x: 35_000_000, y: -25_000_000 }, 1_600_000)]);
+    assert_eq!(circles, vec![(Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-5_000_000) }, Nm::from_raw_shim(1_600_000)), (Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(-15_000_000) }, Nm::from_raw_shim(4_000_000)), (Point { x: Nm::from_raw_shim(35_000_000), y: Nm::from_raw_shim(-25_000_000) }, Nm::from_raw_shim(1_600_000))]);
 }
 
 #[test]
@@ -125,9 +125,9 @@ fn a_dashed_red_svg_line_keeps_its_style_and_colour_in_the_stroke_table() {
     let s = sch(&b);
     assert_eq!(s.lines.len(), 1, "{:?}", s.lines);
     let l = &s.lines[0];
-    assert_eq!((l.pts[0], l.pts[1], l.width_nm), (Point { x: 1_000_000, y: 2_000_000 }, Point { x: 11_000_000, y: 2_000_000 }, 300_000));
+    assert_eq!((l.pts[0], l.pts[1], l.width_nm), (Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(2_000_000) }, Nm::from_raw_shim(300_000)));
     let st = s.extras.strokes.get(&l.id).expect("the style and colour are in the stroke table");
-    assert_eq!((st.width_nm, st.style, st.color), (0, SchLineStyle::Dash, Some(SchColor { r: 255, g: 0, b: 0, a: 255 })));
+    assert_eq!((st.width_nm, st.style, st.color), (Nm::ZERO, SchLineStyle::Dash, Some(SchColor { r: 255, g: 0, b: 0, a: 255 })));
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn a_filled_svg_polygon_is_filled_with_its_colour_and_has_no_outline_to_speak_of
     assert_eq!(pts.len(), 4);
     assert_eq!((g[0].fill, g[0].fill_color), (SchFill::Color, Some(SchColor { r: 0, g: 255, b: 0, a: 255 })));
     // "Historically -1 meant no-stroke": a hairline stands for it.
-    assert_eq!(g[0].width_nm, 1_000);
+    assert_eq!(g[0].width_nm, Nm::from_raw_shim(1_000));
 }
 
 #[test]
@@ -157,12 +157,12 @@ fn a_text_keeps_the_files_size_and_angle_and_stands_at_the_left_end_of_its_basel
     let t = &sch(&b).texts;
     assert_eq!(t.len(), 3, "{t:?}");
     let (plain, centred, up) = (&t[0], &t[1], &t[2]);
-    assert_eq!((plain.content.as_str(), plain.at, plain.angle, plain.size_nm), ("Hello", Point { x: 10_000_000, y: -5_000_000 }, 0, 2_500_000));
+    assert_eq!((plain.content.as_str(), plain.at, plain.angle, plain.size_nm), ("Hello", Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(-5_000_000) }, 0, Nm::from_raw_shim(2_500_000)));
     // Centred: the anchor is half the text's width to the left of the point the file gives.
     let width_nm = kicad_font::text_advance_iu("Hello", kicad_font::mm_to_iu(2.5)) * 100;
-    assert!((centred.at.x - (10_000_000 - width_nm / 2)).abs() <= 100 && centred.at.y == -20_000_000, "{centred:?} {width_nm}");
+    assert!((centred.at.x - Nm::from_raw_shim(10_000_000 - width_nm / 2)).abs() <= Nm::from_raw_shim(100) && centred.at.y == Nm::from_raw_shim(-20_000_000), "{centred:?} {width_nm}");
     let angle: Millideg = 90_000;
-    assert_eq!((up.content.as_str(), up.at, up.angle, up.size_nm), ("Up", Point { x: 30_000_000, y: -5_000_000 }, angle, 1_500_000));
+    assert_eq!((up.content.as_str(), up.at, up.angle, up.size_nm), ("Up", Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(-5_000_000) }, angle, Nm::from_raw_shim(1_500_000)));
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn the_commands_are_the_editors_own_and_read_from_json() {
     assert!(!c.edits_connectivity(), "drawn lines are not wires");
     assert_eq!(Cmd::ImportSymbolGraphics(sym_req("x".into())).domain(), Domain::SymbolEditor);
     let json = serde_json::json!({ "op": "import_sch_graphics", "format": "svg", "text": "<svg/>" });
-    assert_eq!(serde_json::from_value::<Cmd>(json).unwrap(), Cmd::ImportSchGraphics(ImportSchGraphics { format: GraphicsFormat::Svg, text: "<svg/>".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 0 }));
+    assert_eq!(serde_json::from_value::<Cmd>(json).unwrap(), Cmd::ImportSchGraphics(ImportSchGraphics { format: GraphicsFormat::Svg, text: "<svg/>".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::ZERO }));
     let json = serde_json::json!({ "op": "import_symbol_graphics", "lib_id": "Test:Sym", "unit": 2, "format": "dxf", "text": "x", "scale": 0.5, "offset_x_nm": -1500000 });
     let Cmd::ImportSymbolGraphics(r) = serde_json::from_value::<Cmd>(json).unwrap() else { panic!() };
     assert_eq!((r.unit, r.body_style, r.scale, r.offset_x_nm, r.offset_y_nm), (2, 1, 0.5, -1_500_000, 0));

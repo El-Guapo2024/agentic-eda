@@ -12,6 +12,7 @@
 //!
 //! The dialog stages the result and applies it on OK (`edit_zone` per zone), as KiCad's does with its clones of the zones.
 
+use eda_model::units::Nm;
 use std::collections::BTreeMap;
 
 use eda_connectivity::geom::{point_in_polygon, polygons_overlap};
@@ -39,21 +40,21 @@ struct Edge {
 }
 
 fn bbox(outline: &[Point]) -> (i64, i64, i64, i64) {
-    outline.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |b, p| (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y)))
+    outline.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |b, p| (b.0.min(p.x.raw_shim()), b.1.min(p.y.raw_shim()), b.2.max(p.x.raw_shim()), b.3.max(p.y.raw_shim())))
 }
 
 fn area(outline: &[Point]) -> f64 {
-    let twice: i128 = (0..outline.len()).map(|i| outline[i].x as i128 * outline[(i + 1) % outline.len()].y as i128 - outline[(i + 1) % outline.len()].x as i128 * outline[i].y as i128).sum();
+    let twice: i128 = (0..outline.len()).map(|i| outline[i].x.raw_shim() as i128 * outline[(i + 1) % outline.len()].y.raw_shim() as i128 - outline[(i + 1) % outline.len()].x.raw_shim() as i128 * outline[i].y.raw_shim() as i128).sum();
     (twice as f64 / 2.0).abs()
 }
 
 fn ring(outline: &[Point]) -> ShapePolySet {
-    ShapePolySet::from_outline(outline.iter().map(|p| eda_clipper2::Point64::new(p.x, p.y)).collect())
+    ShapePolySet::from_outline(outline.iter().map(|p| eda_clipper2::Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect())
 }
 
 /// `SHAPE_POLY_SET::Contains`: inside an outline of the set and in none of its holes.
 fn contains(set: &ShapePolySet, p: Point) -> bool {
-    let pts = |chain: &Vec<eda_clipper2::Point64>| chain.iter().map(|q| Point { x: q.x, y: q.y }).collect::<Vec<_>>();
+    let pts = |chain: &Vec<eda_clipper2::Point64>| chain.iter().map(|q| Point { x: Nm::from_raw_shim(q.x), y: Nm::from_raw_shim(q.y) }).collect::<Vec<_>>();
     set.polys.iter().any(|poly| point_in_polygon(p, &pts(&poly[0])) && !poly[1..].iter().any(|hole| point_in_polygon(p, &pts(hole))))
 }
 
@@ -228,13 +229,14 @@ pub fn auto_assign_zone_priorities(design: &Design, model: &ConstraintModel) -> 
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{PlacementSection, Provenance, RoutingSection, Via};
     use eda_model::{BoardRules, Net, Part, Pin, PinKind};
 
     fn square(id: &str, net: &str, x: i64, y: i64, side: i64, priority: u32) -> Zone {
         let p = |x, y| Point { x, y };
-        Zone { id: id.into(), net: net.into(), layer: "F.Cu".into(), outline: vec![p(x, y), p(x + side, y), p(x + side, y + side), p(x, y + side)], priority, ..Default::default() }
+        Zone { id: id.into(), net: net.into(), layer: "F.Cu".into(), outline: vec![p(Nm::from_raw_shim(x), Nm::from_raw_shim(y)), p(Nm::from_raw_shim(x + side), Nm::from_raw_shim(y)), p(Nm::from_raw_shim(x + side), Nm::from_raw_shim(y + side)), p(Nm::from_raw_shim(x), Nm::from_raw_shim(y + side))], priority, ..Default::default() }
     }
 
     fn board(zones: Vec<Zone>, vias: Vec<Via>) -> (Design, ConstraintModel) {
@@ -257,7 +259,7 @@ mod tests {
     }
 
     fn via(net: &str, x: i64, y: i64) -> Via {
-        Via { id: format!("v{x}_{y}"), net: net.into(), at: Point { x, y }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+        Via { id: format!("v{x}_{y}"), net: net.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, drill: Nm::from_raw_shim(300), diameter: Nm::from_raw_shim(600), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     fn assigned(design: &Design, model: &ConstraintModel) -> Vec<(String, u32)> {

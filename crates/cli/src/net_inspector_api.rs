@@ -21,6 +21,7 @@
 //! pad on a layer both have; a clipped end on an arc is measured along the arc's polygonisation (the 1 um `SHAPE_LINE_CHAIN` of it); the time
 //! domain columns ("Show Time Domain Details") are not offered.
 
+use eda_model::units::Nm;
 use crate::board;
 use eda_drc::board::DrcBoard;
 use eda_drc::kimath::Shape;
@@ -79,12 +80,12 @@ impl LengthStats {
 }
 
 fn contains(shape: &Shape, p: Point) -> bool {
-    shape.collides(&Shape::Circle { c: p, r: 0 }, 0).is_some()
+    shape.collides(&Shape::Circle { c: p, r: Nm::ZERO }, Nm::ZERO).is_some()
 }
 
 /// Where the segment from `inside` (in the shape) to `outside` (not) leaves the shape, to a nanometre (`SHAPE::Collide( SEG, 0, .., &loc )`).
 fn exit_point(inside_pt: Point, outside: Point, inside: &dyn Fn(Point) -> bool) -> Point {
-    let at = |t: f64| Point { x: inside_pt.x + ((outside.x - inside_pt.x) as f64 * t).round() as i64, y: inside_pt.y + ((outside.y - inside_pt.y) as f64 * t).round() as i64 };
+    let at = |t: f64| Point { x: inside_pt.x + Nm::from_raw_shim(((outside.x - inside_pt.x).raw_shim() as f64 * t).round() as i64), y: inside_pt.y + Nm::from_raw_shim(((outside.y - inside_pt.y).raw_shim() as f64 * t).round() as i64) };
     let (mut lo, mut hi) = (0.0f64, 1.0f64);
     for _ in 0..48 {
         let mid = (lo + hi) / 2.0;
@@ -155,12 +156,12 @@ fn merge_lines(lines: &mut [LineItem]) {
     let mut at: BTreeMap<(i64, i64), BTreeSet<usize>> = BTreeMap::new();
     for (i, l) in lines.iter().enumerate() {
         let (a, b) = (l.line.c_point(0), l.line.c_last_point());
-        at.entry((a.x, a.y)).or_default().insert(i);
-        at.entry((b.x, b.y)).or_default().insert(i);
+        at.entry((a.x.raw_shim(), a.y.raw_shim())).or_default().insert(i);
+        at.entry((b.x.raw_shim(), b.y.raw_shim())).or_default().insert(i);
     }
     let remove = |at: &mut BTreeMap<(i64, i64), BTreeSet<usize>>, l: &LineItem, i: usize| {
         for p in [l.line.c_point(0), l.line.c_last_point()] {
-            if let Some(s) = at.get_mut(&(p.x, p.y)) {
+            if let Some(s) = at.get_mut(&(p.x.raw_shim(), p.y.raw_shim())) {
                 s.remove(&i);
             }
         }
@@ -176,7 +177,7 @@ fn merge_lines(lines: &mut [LineItem]) {
             let mut merged = false;
             for at_start in [true, false] {
                 let pos = if at_start { lines[primary].line.c_point(0) } else { lines[primary].line.c_last_point() };
-                let Some(set) = at.get(&(pos.x, pos.y)) else { continue };
+                let Some(set) = at.get(&(pos.x.raw_shim(), pos.y.raw_shim())) else { continue };
                 if set.len() != 1 {
                     continue;
                 }
@@ -239,7 +240,7 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
         // `GetConnectedPads( pcbVia )`: the pad the via is in (its copper meets the via's on a layer of the via's)
         let (lo, hi) = { let (a, b) = (stack(&v.from_layer), stack(&v.to_layer)); (a.min(b), a.max(b)) };
         let coincident = pads.iter().map(|&i| &board.pads[i]).find(|p| {
-            p.copper_groups().iter().any(|(layers, shape)| layers.iter().any(|l| (lo..=hi).contains(&stack(l))) && shape.collides(&circle, 0).is_some())
+            p.copper_groups().iter().any(|(layers, shape)| layers.iter().any(|l| (lo..=hi).contains(&stack(l))) && shape.collides(&circle, Nm::ZERO).is_some())
         });
         if let Some(p) = coincident {
             // an SMD pad -- and an edge connector pad (`PAD_ATTRIB::CONN`), which the model holds as one -- sits on its copper layer (`CuStack().begin()`)
@@ -253,14 +254,14 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
             // "Nothing connects to this via": `pcbVia->GetLayer()` twice
             _ => (v.from_layer.clone(), v.from_layer.clone()),
         };
-        vias.push(ViaItem { at: v.at, radius, layers });
+        vias.push(ViaItem { at: v.at, radius: radius.raw_shim(), layers });
     }
 
     merge_lines(&mut lines);
 
     // "Clip traces inside VIA pads after merging"
     for v in &vias {
-        let circle = Shape::Circle { c: v.at, r: v.radius };
+        let circle = Shape::Circle { c: v.at, r: Nm::from_raw_shim(v.radius) };
         let inside = |p: Point| contains(&circle, p);
         for l in lines.iter_mut().filter(|l| l.status == Merge::InUse) {
             if l.line.point_count() < 2 {
@@ -316,11 +317,11 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
 
 /// The `(die_length ..)` a board file gave the pad, in nanometres (`PAD::GetPadToDieLength`): one of the pad's tokens the IR keeps.
 fn die_length_of(tokens: &[String]) -> i64 {
-    tokens
+    (tokens
         .iter()
         .find_map(|t| t.trim().strip_prefix("(die_length").and_then(|r| r.trim().trim_end_matches(')').trim().parse::<f64>().ok()))
         .map(eda_model::units::from_mm)
-        .unwrap_or(0)
+        .unwrap_or(Nm::ZERO)).raw_shim()
 }
 
 /// The pad-to-die length of each of `board.pads`: the k-th pad numbered N of a footprint is the k-th pad numbered N of its footprint's pads,

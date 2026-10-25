@@ -7,6 +7,7 @@
 //! layers of a custom stack flip with the board's number of copper layers (`::FlipLayer`). The x of every position in a layer is mirrored on the bottom, as
 //! the main fields' are.
 
+use eda_model::units::Nm;
 use crate::pad_shape::{read_shape_node, write_custom_text, write_pad_shape};
 use crate::sexpr::{self, Sexpr};
 use crate::{mm, sexpr_str};
@@ -41,8 +42,8 @@ const LAYER_SHAPE_TOKENS: &[&str] = &["shape", "size", "offset", "rect_delta", "
 fn read_layer_shape(layer: &[Sexpr], side: Side) -> PadLayerShape {
     let token = sexpr::find(layer, "shape").and_then(|s| sexpr::txt(s, 1)).unwrap_or("circle");
     let offset = sexpr::find(layer, "offset").and_then(|o| Some((crate::import::mm_to_nm(sexpr::num(o, 1)?), crate::import::mm_to_nm(sexpr::num(o, 2)?)))).map(|(x, y)| if side == Side::Bottom { (-x, y) } else { (x, y) });
-    let read = read_shape_node(layer, token, offset.filter(|o| *o != (0, 0)), side);
-    let size = sexpr::find(layer, "size").and_then(|s| Some((crate::import::mm_to_nm(sexpr::num(s, 1)?).max(0), crate::import::mm_to_nm(sexpr::num(s, 2)?).max(0)))).unwrap_or((0, 0));
+    let read = read_shape_node(layer, token, offset.filter(|o| *o != (Nm::ZERO, Nm::ZERO)), side);
+    let size = sexpr::find(layer, "size").and_then(|s| Some((crate::import::mm_to_nm(sexpr::num(s, 1)?).max(Nm::ZERO), crate::import::mm_to_nm(sexpr::num(s, 2)?).max(Nm::ZERO)))).unwrap_or((Nm::ZERO, Nm::ZERO));
     let tokens = layer.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| LAYER_SHAPE_TOKENS.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     PadLayerShape {
         shape: read.shape,
@@ -214,6 +215,7 @@ pub(crate) fn write_padstack(pad: &Pad, side: Side, copper_layers: &[String]) ->
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::footprint::{PadAnchor, PadCustom, PadKind, PadPrimitive, PadShapeExt};
     use eda_model::ir::{Point, Shape};
@@ -258,15 +260,15 @@ mod tests {
     #[test]
     fn a_front_inner_back_padstack_is_read_as_its_three_shapes() {
         let pad = pad_of(FRONT_INNER_BACK, Side::Top, 4);
-        assert_eq!((pad.shape, pad.size), (PadShape::Oval, (3_048_000, 1_524_000)));
+        assert_eq!((pad.shape, pad.size), (PadShape::Oval, (Nm::from_raw_shim(3_048_000), Nm::from_raw_shim(1_524_000))));
         let stack = &pad.ext.stack;
         assert_eq!(stack.mode, PadStackMode::FrontInnerBack);
-        assert_eq!(stack.inner, Some(PadLayerShape::plain(PadShape::Oval, (1_270_000, 1_270_000))));
-        assert_eq!(stack.back, Some(PadLayerShape::plain(PadShape::Oval, (2_540_000, 1_016_000))));
+        assert_eq!(stack.inner, Some(PadLayerShape::plain(PadShape::Oval, (Nm::from_raw_shim(1_270_000), Nm::from_raw_shim(1_270_000)))));
+        assert_eq!(stack.back, Some(PadLayerShape::plain(PadShape::Oval, (Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(1_016_000)))));
         assert_eq!(stack.unconnected, UnconnectedLayers::KeepAll);
         // What the board's layers have: the front, the two inner layers together, the back.
         let groups = pad.shape_groups(Side::Top, &layers(4));
-        assert_eq!(groups.iter().map(|g| (g.layers.clone(), g.shape.size)).collect::<Vec<_>>(), vec![(vec!["F.Cu".to_string()], (3_048_000, 1_524_000)), (vec!["In1.Cu".to_string(), "In2.Cu".to_string()], (1_270_000, 1_270_000)), (vec!["B.Cu".to_string()], (2_540_000, 1_016_000))]);
+        assert_eq!(groups.iter().map(|g| (g.layers.clone(), g.shape.size)).collect::<Vec<_>>(), vec![(vec!["F.Cu".to_string()], (Nm::from_raw_shim(3_048_000), Nm::from_raw_shim(1_524_000))), (vec!["In1.Cu".to_string(), "In2.Cu".to_string()], (Nm::from_raw_shim(1_270_000), Nm::from_raw_shim(1_270_000))), (vec!["B.Cu".to_string()], (Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(1_016_000)))]);
     }
 
     #[test]
@@ -291,9 +293,9 @@ mod tests {
         }
         // On the bottom the file's `F.Cu` is the footprint's back: the main fields of the file hold what the model calls its back.
         let bottom = pad_of(FRONT_INNER_BACK, Side::Bottom, 4);
-        assert_eq!((bottom.shape, bottom.size), (PadShape::Oval, (2_540_000, 1_016_000)), "the file's B.Cu is the footprint's own side");
-        assert_eq!(bottom.ext.stack.back.as_ref().map(|s| s.size), Some((3_048_000, 1_524_000)), "the file's main fields are its back");
-        assert_eq!(bottom.ext.stack.inner.as_ref().map(|s| s.size), Some((1_270_000, 1_270_000)));
+        assert_eq!((bottom.shape, bottom.size), (PadShape::Oval, (Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(1_016_000))), "the file's B.Cu is the footprint's own side");
+        assert_eq!(bottom.ext.stack.back.as_ref().map(|s| s.size), Some((Nm::from_raw_shim(3_048_000), Nm::from_raw_shim(1_524_000))), "the file's main fields are its back");
+        assert_eq!(bottom.ext.stack.inner.as_ref().map(|s| s.size), Some((Nm::from_raw_shim(1_270_000), Nm::from_raw_shim(1_270_000))));
     }
 
     #[test]
@@ -305,8 +307,8 @@ mod tests {
         let stack = &pad.ext.stack;
         assert_eq!(stack.mode, PadStackMode::Custom);
         assert_eq!(stack.layers.keys().map(String::as_str).collect::<Vec<_>>(), vec!["B.Cu", "In1.Cu", "In2.Cu"], "the front is the pad's own");
-        assert_eq!(stack.layers["In2.Cu"].size, (1_270_000, 0), "`PADSTACK::SetSize` takes a negative size to zero");
-        assert_eq!(stack.layers["B.Cu"].size, (1_524_000, 1_524_000));
+        assert_eq!(stack.layers["In2.Cu"].size, (Nm::from_raw_shim(1_270_000), Nm::ZERO), "`PADSTACK::SetSize` takes a negative size to zero");
+        assert_eq!(stack.layers["B.Cu"].size, (Nm::from_raw_shim(1_524_000), Nm::from_raw_shim(1_524_000)));
         let groups = pad.shape_groups(Side::Top, &layers(4));
         assert_eq!(groups.len(), 4, "four layers, four shapes");
         // Written back, the layers in the board's order and without the front, as `format( const PAD* )` does.
@@ -336,7 +338,7 @@ mod tests {
             crate::import::parse_pad_geometry_in(&node(&t), Side::Top, 0, &mut notes, false, &layers(2)).unwrap()
         };
         assert_eq!(again.ext.stack, pad.ext.stack);
-        let _ = (PadKind::Smd, PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 0, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 0, y: 0 } }, proxy: false }, PadCustom::default());
+        let _ = (PadKind::Smd, PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::ZERO, filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::ZERO, y: Nm::ZERO } }, proxy: false }, PadCustom::default());
     }
 
     #[test]

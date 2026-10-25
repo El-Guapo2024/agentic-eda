@@ -1,6 +1,7 @@
 //! The board items of GAPS.md item 24 (package P16) through a board directory: a text box is one undo step of the board and reaches the derived `.kicad_pcb`, and (the slow tier,
 //! `EDA_SLOW_TESTS=1`) kicad-cli loads what this studio writes and plots it as it plots the same board after its own rewrite of the file.
 
+use eda_model::units::Nm;
 use super::tests::{scratch, setup};
 use super::{load, step, undo};
 use eda_model::ir::Point;
@@ -26,17 +27,17 @@ fn boxes(dir: &Path) -> Vec<TextBox> {
 
 /// A text box as the Draw Text Box tool and its dialog make one on the silkscreen: three lines of text in a box 20 mm by 8 mm, a dashed border, margins of its own.
 fn notes_box() -> TextBox {
-    let mut t = TextBox::new("F.SilkS", Point { x: 2_000_000, y: 2_000_000 }, Point { x: 22_000_000, y: 10_000_000 }, 1_000_000, 120_000);
+    let mut t = TextBox::new("F.SilkS", Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(22_000_000), y: Nm::from_raw_shim(10_000_000) }, Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(120_000));
     t.text = "REV A\nBuilt by the studio, wrapped to the width of its box when the line is long".into();
     t.line_style = eda_model::pcb_items::LineStyle::Dash;
-    t.margin_left_nm = 900_000;
-    t.margin_right_nm = 1_100_000;
+    t.margin_left_nm = Nm::from_raw_shim(900_000);
+    t.margin_right_nm = Nm::from_raw_shim(1_100_000);
     t
 }
 
 /// A knockout box: the box is copper-free silkscreen ink with the text cut out of it, turned a quarter, mirrored on the back.
 fn knockout_box() -> TextBox {
-    let mut t = TextBox::new("B.SilkS", Point { x: 2_000_000, y: 14_000_000 }, Point { x: 18_000_000, y: 20_000_000 }, 1_200_000, 150_000);
+    let mut t = TextBox::new("B.SilkS", Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(14_000_000) }, Point { x: Nm::from_raw_shim(18_000_000), y: Nm::from_raw_shim(20_000_000) }, Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(150_000));
     t.text = "TOP SECRET".into();
     t.knockout = true;
     t.border = false;
@@ -58,14 +59,14 @@ fn a_text_box_is_one_undo_step_of_the_board_and_survives_the_project_file() {
     // The project file is design.json: a fresh load has the box with everything the dialog set.
     let design: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("design.json")).unwrap()).unwrap();
     assert_eq!(design["drawings"]["board_items"]["text_boxes"][0]["line_style"], "dash", "{design}");
-    assert_eq!((shown[0].margin_left_nm, shown[0].margin_right_nm), (900_000, 1_100_000));
+    assert_eq!((shown[0].margin_left_nm, shown[0].margin_right_nm), (Nm::from_raw_shim(900_000), Nm::from_raw_shim(1_100_000)));
 
     // Move, edit and delete are verbs of the same history.
     let id = shown[0].id.clone();
-    step(&dir, Cmd::MoveItems { ids: vec![id.clone()], dx: 1_000_000, dy: 500_000 }, false, "test").unwrap();
-    assert_eq!(boxes(&dir)[0].start, Point { x: 3_000_000, y: 2_500_000 });
+    step(&dir, Cmd::MoveItems { ids: vec![id.clone()], dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(500_000) }, false, "test").unwrap();
+    assert_eq!(boxes(&dir)[0].start, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_500_000) });
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    assert_eq!(boxes(&dir)[0].start, Point { x: 2_000_000, y: 2_000_000 }, "one undo takes the move back");
+    assert_eq!(boxes(&dir)[0].start, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, "one undo takes the move back");
     let mut edited = boxes(&dir)[0].clone();
     edited.text = "REV B".into();
     step(&dir, Cmd::PcbItem(PcbItemCmd::EditTextBox { id: id.clone(), text_box: edited }), false, "test").unwrap();
@@ -177,7 +178,7 @@ fn a_reference_image_is_one_undo_step_described_by_the_state_served_by_the_route
     let dir = scratch("p16_ref_image");
     setup(&dir);
     assert!(ref_images(&dir).is_empty());
-    let id = add_image(&dir, "Cmts.User", Point { x: 30_000_000, y: 20_000_000 }, 500_000);
+    let id = add_image(&dir, "Cmts.User", Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, 500_000);
     assert!(id.starts_with("img_"));
 
     let s = state(&dir);
@@ -200,7 +201,7 @@ fn a_reference_image_is_one_undo_step_described_by_the_state_served_by_the_route
     assert!(data_lines >= 2, "the data is in lines: {text}");
 
     // Edit and undo: the image comes back as it was; one undo per step.
-    step(&dir, Cmd::PcbItem(PcbItemCmd::EditRefImage { id: id.clone(), layer: "Dwgs.User".into(), at: Point { x: 0, y: 0 }, scale_ppm: 2_000_000 }), false, "test").unwrap();
+    step(&dir, Cmd::PcbItem(PcbItemCmd::EditRefImage { id: id.clone(), layer: "Dwgs.User".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, scale_ppm: 2_000_000 }), false, "test").unwrap();
     assert_eq!((ref_images(&dir)[0].layer.as_str(), ref_images(&dir)[0].scale_ppm), ("Dwgs.User", 2_000_000));
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!((ref_images(&dir)[0].layer.as_str(), ref_images(&dir)[0].scale_ppm), ("Cmts.User", 500_000));
@@ -227,8 +228,8 @@ fn kicad_cli_loads_the_reference_image_this_studio_writes_keeps_its_pixels_and_d
     };
     let dir = scratch("p16_ref_image_cli");
     setup(&dir);
-    add_image(&dir, "Cmts.User", Point { x: 30_000_000, y: 20_000_000 }, 500_000);
-    add_image(&dir, "F.SilkS", Point { x: 60_000_000, y: 40_000_000 }, 1_000_000);
+    add_image(&dir, "Cmts.User", Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, 500_000);
+    add_image(&dir, "F.SilkS", Point { x: Nm::from_raw_shim(60_000_000), y: Nm::from_raw_shim(40_000_000) }, 1_000_000);
     let args: Vec<String> = ["--layers", "Cmts.User"].iter().map(|s| s.to_string()).collect();
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let derived = std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board file");
@@ -247,8 +248,8 @@ fn kicad_cli_loads_the_reference_image_this_studio_writes_keeps_its_pixels_and_d
     images.sort_by_key(|i| i.at.x);
     assert_eq!(images.len(), 2);
     let (first, second) = (&images[0], &images[1]);
-    assert_eq!((first.layer.as_str(), first.at, first.scale_ppm), ("Cmts.User", Point { x: 30_000_000, y: 20_000_000 }, 500_000), "kicad-cli read the place, the layer and the scale as written");
-    assert_eq!((second.layer.as_str(), second.at, second.scale_ppm), ("F.SilkS", Point { x: 60_000_000, y: 40_000_000 }, 1_000_000));
+    assert_eq!((first.layer.as_str(), first.at, first.scale_ppm), ("Cmts.User", Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, 500_000), "kicad-cli read the place, the layer and the scale as written");
+    assert_eq!((second.layer.as_str(), second.at, second.scale_ppm), ("F.SilkS", Point { x: Nm::from_raw_shim(60_000_000), y: Nm::from_raw_shim(40_000_000) }, 1_000_000));
     assert_eq!(first.data, base64_encode(&red_png()), "the pixels are the file this studio embedded, byte for byte");
     assert_eq!(second.data, first.data);
 
@@ -291,7 +292,7 @@ fn a_schematic_image_is_one_undo_step_described_by_the_state_served_by_the_route
     let dir = scratch("p16_sch_image");
     super::tests::setup_schematic(&dir);
     assert!(sch_images(&dir).is_empty());
-    add_sch_image(&dir, Point { x: 50_800_000, y: 38_100_000 }, 1_000_000);
+    add_sch_image(&dir, Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(38_100_000) }, 1_000_000);
     let images = sch_images(&dir);
     assert_eq!(images.len(), 1);
     let id = images[0].0.clone();
@@ -311,14 +312,14 @@ fn a_schematic_image_is_one_undo_step_described_by_the_state_served_by_the_route
     assert!(text.contains("(image\n\t\t(at 50.8 38.1)\n\t\t(uuid"), "{text}");
     let (back, _, _) = eda_kicad::import_kicad_sch(&text).unwrap();
     let read = back.schematic.unwrap().extras.graphics.into_iter().find_map(|g| if let SchGraphicKind::Image { at, scale_ppm, data } = g.shape { Some((at, scale_ppm, data)) } else { None }).expect("the image reads back");
-    assert_eq!(read, (Point { x: 50_800_000, y: 38_100_000 }, 1_000_000, base64_encode(&red_png())));
+    assert_eq!(read, (Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(38_100_000) }, 1_000_000, base64_encode(&red_png())));
 
     // an edit that sends no pixels keeps them; one undo takes the edit back
-    let edit = eda_model::sch_extras::SchGraphic::new(SchGraphicKind::Image { at: Point { x: 0, y: 0 }, scale_ppm: 2_000_000, data: String::new() });
+    let edit = eda_model::sch_extras::SchGraphic::new(SchGraphicKind::Image { at: Point { x: Nm::ZERO, y: Nm::ZERO }, scale_ppm: 2_000_000, data: String::new() });
     step(&dir, Cmd::sch(SchCmd::EditGraphic { id: id.clone(), graphic: edit }), false, "test").unwrap();
-    assert_eq!((sch_images(&dir)[0].1, sch_images(&dir)[0].2, sch_images(&dir)[0].3.clone()), (Point { x: 0, y: 0 }, 2_000_000, base64_encode(&red_png())));
+    assert_eq!((sch_images(&dir)[0].1, sch_images(&dir)[0].2, sch_images(&dir)[0].3.clone()), (Point { x: Nm::ZERO, y: Nm::ZERO }, 2_000_000, base64_encode(&red_png())));
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
-    assert_eq!((sch_images(&dir)[0].1, sch_images(&dir)[0].2), (Point { x: 50_800_000, y: 38_100_000 }, 1_000_000));
+    assert_eq!((sch_images(&dir)[0].1, sch_images(&dir)[0].2), (Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(38_100_000) }, 1_000_000));
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
     assert!(sch_images(&dir).is_empty());
 }
@@ -336,7 +337,7 @@ fn kicad_cli_plots_the_schematic_image_this_studio_writes() {
     }
     let dir = scratch("p16_sch_image_cli");
     super::tests::setup_schematic(&dir);
-    add_sch_image(&dir, Point { x: 100_000_000, y: 80_000_000 }, 500_000);
+    add_sch_image(&dir, Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(80_000_000) }, 500_000);
     let out = crate::kicad_engine::export_sch(&dir, "svg", &[]).expect("kicad-cli plots the schematic");
     let file = out["files"].as_array().and_then(|f| f.first()).and_then(|f| f.as_str()).unwrap_or_else(|| panic!("{out}")).to_string();
     let svg = std::fs::read_to_string(dir.join(&file)).unwrap();
@@ -363,7 +364,7 @@ fn points(dir: &Path) -> Vec<PcbPoint> {
 
 fn add_point(dir: &Path, layer: &str, at: Point, size_nm: i64) {
     let mut point = PcbPoint::new(layer, at);
-    point.size_nm = size_nm;
+    point.size_nm = Nm::from_raw_shim(size_nm);
     step(dir, Cmd::PcbItem(PcbItemCmd::AddPoint { point }), false, "test").unwrap();
 }
 
@@ -373,7 +374,7 @@ fn a_point_is_one_undo_step_described_by_the_state_and_written_to_the_board() {
     let dir = scratch("p16_point");
     setup(&dir);
     assert!(points(&dir).is_empty());
-    add_point(&dir, "F.SilkS", Point { x: 30_000_000, y: 20_000_000 }, 2_000_000);
+    add_point(&dir, "F.SilkS", Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, 2_000_000);
     let id = points(&dir)[0].id.clone();
     assert!(id.starts_with("pnt_"));
     let s = state(&dir);
@@ -387,12 +388,12 @@ fn a_point_is_one_undo_step_described_by_the_state_and_written_to_the_board() {
     let (back, _, notes) = eda_kicad::import_kicad_pcb(&text).unwrap();
     assert!(!notes.unread_items.contains_key("point"), "the importer reads it");
     let read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_nm)).collect();
-    assert_eq!(read, vec![("F.SilkS".to_string(), Point { x: 30_000_000, y: 20_000_000 }, 2_000_000)]);
+    assert_eq!(read, vec![("F.SilkS".to_string(), Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, Nm::from_raw_shim(2_000_000))]);
 
-    step(&dir, Cmd::PcbItem(PcbItemCmd::EditPoint { id: id.clone(), layer: "B.SilkS".into(), at: Point { x: 0, y: 0 }, size_nm: 3_000_000 }), false, "test").unwrap();
-    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_nm), ("B.SilkS", 3_000_000));
+    step(&dir, Cmd::PcbItem(PcbItemCmd::EditPoint { id: id.clone(), layer: "B.SilkS".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size_nm: Nm::from_raw_shim(3_000_000) }), false, "test").unwrap();
+    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_nm), ("B.SilkS", Nm::from_raw_shim(3_000_000)));
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_nm), ("F.SilkS", 2_000_000), "one undo takes the edit back");
+    assert_eq!((points(&dir)[0].layer.as_str(), points(&dir)[0].size_nm), ("F.SilkS", Nm::from_raw_shim(2_000_000)), "one undo takes the edit back");
     step(&dir, Cmd::PcbItem(PcbItemCmd::DeletePoint { id }), false, "test").unwrap();
     assert!(points(&dir).is_empty());
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -419,8 +420,8 @@ fn kicad_cli_loads_the_points_this_studio_writes_keeps_them_and_does_not_plot_th
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let without = body(&plot(&cli, &derived_of(&dir), "F.SilkS", &dir.join("without.svg")));
     // inside the board's own extent: the plot's page is the board's extent, points included
-    add_point(&dir, "F.SilkS", Point { x: 10_000_000, y: 12_000_000 }, 2_000_000);
-    add_point(&dir, "B.Cu", Point { x: 5_000_000, y: 6_000_000 }, 1_000_000);
+    add_point(&dir, "F.SilkS", Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(12_000_000) }, 2_000_000);
+    add_point(&dir, "B.Cu", Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(6_000_000) }, 1_000_000);
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let derived = derived_of(&dir);
     let text = std::fs::read_to_string(&derived).unwrap();
@@ -435,7 +436,7 @@ fn kicad_cli_loads_the_points_this_studio_writes_keeps_them_and_does_not_plot_th
     let (back, _, _) = eda_kicad::import_kicad_pcb(&upgraded).unwrap();
     let mut read: Vec<_> = back.drawings.unwrap().board_items.points.into_iter().map(|p| (p.layer, p.at, p.size_nm)).collect();
     read.sort_by_key(|p| p.1.x);
-    assert_eq!(read, vec![("B.Cu".to_string(), Point { x: 5_000_000, y: 6_000_000 }, 1_000_000), ("F.SilkS".to_string(), Point { x: 10_000_000, y: 12_000_000 }, 2_000_000)], "kicad-cli read the place, size and layer as written");
+    assert_eq!(read, vec![("B.Cu".to_string(), Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(6_000_000) }, Nm::from_raw_shim(1_000_000)), ("F.SilkS".to_string(), Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(12_000_000) }, Nm::from_raw_shim(2_000_000))], "kicad-cli read the place, size and layer as written");
     let with = body(&plot(&cli, &derived, "F.SilkS", &dir.join("with.svg")));
     assert_eq!(with, without, "a point is in no plot");
 }
@@ -459,12 +460,12 @@ fn set_fill(dir: &Path, id: &str, fill: ShapeFill) {
 }
 
 fn rect_shape(layer: &str, (x0, y0): (i64, i64), (x1, y1): (i64, i64)) -> Shape {
-    Shape::Rect { id: String::new(), layer: layer.into(), stroke_width: 200_000, filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
+    Shape::Rect { id: String::new(), layer: layer.into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, start: Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) } }
 }
 
 /// A vertical line 0.6 mm wide at `x` from `y0` to `y1`.
 fn bar(layer: &str, x: i64, y0: i64, y1: i64) -> Shape {
-    Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 600_000, filled: false, start: Point { x, y: y0 }, end: Point { x, y: y1 } }
+    Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: Nm::from_raw_shim(600_000), filled: false, start: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y1) } }
 }
 
 /// The state's description of the shape `id`.
@@ -591,9 +592,9 @@ fn kicad_cli_plots_the_hatching_this_studio_works_out() {
     let rect = add_shape(&dir, rect_shape("F.Fab", (1_000_000, 1_000_000), (9_000_000, 9_000_000)));
     set_fill(&dir, &rect, ShapeFill::Hatch);
     add_shape(&dir, bar("F.Fab", 5_000_000, 0, 12_000_000));
-    let circle = add_shape(&dir, Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 200_000, filled: false, center: Point { x: 15_000_000, y: 5_000_000 }, end: Point { x: 18_500_000, y: 5_000_000 } });
+    let circle = add_shape(&dir, Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, center: Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(5_000_000) }, end: Point { x: Nm::from_raw_shim(18_500_000), y: Nm::from_raw_shim(5_000_000) } });
     set_fill(&dir, &circle, ShapeFill::ReverseHatch);
-    let tri = add_shape(&dir, Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 200_000, filled: false, pts: vec![Point { x: 11_000_000, y: 11_000_000 }, Point { x: 19_000_000, y: 11_000_000 }, Point { x: 15_000_000, y: 19_000_000 }] });
+    let tri = add_shape(&dir, Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, pts: vec![Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(11_000_000) }, Point { x: Nm::from_raw_shim(19_000_000), y: Nm::from_raw_shim(11_000_000) }, Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(19_000_000) }] });
     set_fill(&dir, &tri, ShapeFill::CrossHatch);
 
     let args: Vec<String> = ["--layers", "F.Fab"].iter().map(|s| s.to_string()).collect();
@@ -659,16 +660,16 @@ fn qr(layer: &str, at: Point, text: &str) -> Barcode {
         at,
         angle: 0,
         layer: layer.into(),
-        width_nm: 8_000_000,
-        height_nm: 8_000_000,
+        width_nm: Nm::from_raw_shim(8_000_000),
+        height_nm: Nm::from_raw_shim(8_000_000),
         text: text.into(),
-        text_height_nm: 1_000_000,
+        text_height_nm: Nm::from_raw_shim(1_000_000),
         kind: BarcodeKind::Qr,
         ecc: EccLevel::L,
         show_text: true,
         knockout: false,
-        margin_x_nm: 0,
-        margin_y_nm: 0,
+        margin_x_nm: Nm::ZERO,
+        margin_y_nm: Nm::ZERO,
     }
 }
 
@@ -683,7 +684,7 @@ fn a_barcode_is_one_undo_step_described_by_the_state_and_written_to_the_board() 
     let dir = scratch("p16_barcode");
     setup(&dir);
     assert!(barcodes(&dir).is_empty());
-    add_barcode(&dir, qr("F.SilkS", Point { x: 10_000_000, y: 12_000_000 }, "HELLO"));
+    add_barcode(&dir, qr("F.SilkS", Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(12_000_000) }, "HELLO"));
     let id = barcodes(&dir)[0].id.clone();
     assert!(id.starts_with("bar_"));
     let s = state(&dir);
@@ -723,7 +724,7 @@ fn the_barcode_shape_routes_answer_without_a_plot_for_what_has_nothing_to_plot()
     let unknown = crate::barcode_api::shape_route(&dir, "/api/barcode_shape?id=bar_nope");
     assert_eq!(unknown.status, "404 Not Found");
     assert_eq!(serde_json::from_str::<serde_json::Value>(&unknown.body).unwrap()["status"], "failed");
-    add_barcode(&dir, qr("F.SilkS", Point { x: 5_000_000, y: 5_000_000 }, ""));
+    add_barcode(&dir, qr("F.SilkS", Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, ""));
     let id = barcodes(&dir)[0].id.clone();
     let empty = crate::barcode_api::shape_route(&dir, &format!("/api/barcode_shape?id={id}"));
     assert_eq!(empty.status, "200 OK");
@@ -748,12 +749,12 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     };
     let dir = scratch("p16_barcode_cli");
     setup(&dir);
-    let at = Point { x: 10_000_000, y: 12_000_000 };
+    let at = Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(12_000_000) };
     let case = |layer: &str, kind: BarcodeKind, text: &str, w: i64, h: i64, mutate: &dyn Fn(&mut Barcode)| {
         let mut b = qr(layer, at, text);
         b.kind = kind;
-        b.width_nm = w;
-        b.height_nm = h;
+        b.width_nm = Nm::from_raw_shim(w);
+        b.height_nm = Nm::from_raw_shim(h);
         mutate(&mut b);
         b
     };
@@ -765,12 +766,12 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
         })),
         ("micro qr", case("F.SilkS", BarcodeKind::MicroQr, "MQ1", 6_000_000, 6_000_000, &|b| b.ecc = EccLevel::M)),
         ("data matrix", case("F.SilkS", BarcodeKind::DataMatrix, "DM-2026", 7_000_000, 7_000_000, &|_| {})),
-        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", 14_000_000, 5_000_000, &|b| b.text_height_nm = 1_200_000)),
+        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", 14_000_000, 5_000_000, &|b| b.text_height_nm = Nm::from_raw_shim(1_200_000))),
         ("qr on the back (mirrored)", case("B.SilkS", BarcodeKind::Qr, "BACK", 8_000_000, 8_000_000, &|_| {})),
         ("qr knocked out of the silkscreen", case("F.SilkS", BarcodeKind::Qr, "KO", 8_000_000, 8_000_000, &|b| {
             b.knockout = true;
-            b.margin_x_nm = 1_000_000;
-            b.margin_y_nm = 600_000;
+            b.margin_x_nm = Nm::from_raw_shim(1_000_000);
+            b.margin_y_nm = Nm::from_raw_shim(600_000);
         })),
         ("code 39 with a text it cannot take", case("F.SilkS", BarcodeKind::Code39, "h\u{e9}llo", 14_000_000, 5_000_000, &|_| {})),
     ];
@@ -781,15 +782,15 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
         crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
         let derived = derived_of(&dir);
         let svg = plot(&cli, &derived, &barcode.layer, &dir.join("theirs.svg"));
-        let theirs: Vec<Vec<Vec<[i64; 2]>>> = crate::barcode_api::filled_paths(&svg);
+        let theirs: Vec<Vec<Vec<[Nm; 2]>>> = crate::barcode_api::filled_paths(&svg);
         let ours = crate::barcode_api::shape_blocking(&barcode, &barcode.text).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let moved: Vec<Vec<Vec<[i64; 2]>>> = ours.paths.iter().map(|path| path.iter().map(|ring| ring.iter().map(|p| [p[0] + at.x, p[1] + at.y]).collect()).collect()).collect();
+        let moved: Vec<Vec<Vec<[Nm; 2]>>> = ours.paths.iter().map(|path| path.iter().map(|ring| ring.iter().map(|p| [p[0] + at.x, p[1] + at.y]).collect()).collect()).collect();
         assert_eq!(moved.len(), theirs.len(), "{name}: the same number of polygons ({} served, {} plotted)", moved.len(), theirs.len());
         for (i, (a, b)) in moved.iter().zip(&theirs).enumerate() {
             assert_eq!(a.len(), b.len(), "{name}: polygon {i} has the same contours");
             for (ra, rb) in a.iter().zip(b) {
                 assert_eq!(ra.len(), rb.len(), "{name}: polygon {i}");
-                assert!(ra.iter().zip(rb).all(|(p, q)| (p[0] - q[0]).abs() <= 2000 && (p[1] - q[1]).abs() <= 2000), "{name}: polygon {i} differs: {ra:?} against {rb:?}");
+                assert!(ra.iter().zip(rb).all(|(p, q)| (p[0] - q[0]).abs() <= Nm::from_raw_shim(2000) && (p[1] - q[1]).abs() <= Nm::from_raw_shim(2000)), "{name}: polygon {i} differs: {ra:?} against {rb:?}");
             }
         }
         if name == "code 39 with a text it cannot take" {
@@ -799,9 +800,9 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
         }
         // the extent: the barcode's own size, centred where it is (the text under it, and a knockout's margin, are outside it)
         if name == "qr" {
-            let (xs, ys): (Vec<i64>, Vec<i64>) = (theirs.iter().flatten().flatten().map(|p| p[0]).collect(), theirs.iter().flatten().flatten().map(|p| p[1]).collect());
-            assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(at.x - 4_000_000), Some(at.x + 4_000_000)), "8 mm wide, centred on x");
-            assert!(ys.iter().min().copied() == Some(at.y - 4_000_000) && ys.iter().max().unwrap() > &(at.y + 4_000_000), "8 mm tall from the top, with its text under it");
+            let (xs, ys): (Vec<Nm>, Vec<Nm>) = (theirs.iter().flatten().flatten().map(|p| p[0]).collect(), theirs.iter().flatten().flatten().map(|p| p[1]).collect());
+            assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(at.x - Nm::from_raw_shim(4_000_000)), Some(at.x + Nm::from_raw_shim(4_000_000))), "8 mm wide, centred on x");
+            assert!(ys.iter().min().copied() == Some(at.y - Nm::from_raw_shim(4_000_000)) && ys.iter().max().unwrap() > &(at.y + Nm::from_raw_shim(4_000_000)), "8 mm tall from the top, with its text under it");
         }
         let id = barcodes(&dir)[0].id.clone();
         step(&dir, Cmd::PcbItem(PcbItemCmd::DeleteBarcode { id }), false, "test").unwrap();
@@ -809,7 +810,7 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
 
     // kicad-cli reads the barcodes and writes them back with what they were given
     add_barcode(&dir, case("F.SilkS", BarcodeKind::Qr, "KEPT", 8_000_000, 8_000_000, &|b| b.ecc = EccLevel::Q));
-    add_barcode(&dir, case("F.SilkS", BarcodeKind::Code128, "KEPT-TOO", 14_000_000, 5_000_000, &|b| b.at = Point { x: 4_000_000, y: 3_000_000 }));
+    add_barcode(&dir, case("F.SilkS", BarcodeKind::Code128, "KEPT-TOO", 14_000_000, 5_000_000, &|b| b.at = Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(3_000_000) }));
     let args: Vec<String> = ["--layers", "F.SilkS"].iter().map(|s| s.to_string()).collect();
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let derived = derived_of(&dir);
@@ -823,7 +824,7 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     let mut read: Vec<_> = back.drawings.unwrap().barcodes.into_iter().map(|b| (b.text, b.kind, b.ecc, b.at, b.width_nm)).collect();
     read.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(read[0].0, "KEPT");
-    assert_eq!((read[0].1, read[0].2, read[0].3, read[0].4), (BarcodeKind::Qr, EccLevel::Q, at, 8_000_000));
+    assert_eq!((read[0].1, read[0].2, read[0].3, read[0].4), (BarcodeKind::Qr, EccLevel::Q, at, Nm::from_raw_shim(8_000_000)));
     assert_eq!((read[1].0.as_str(), read[1].1), ("KEPT-TOO", BarcodeKind::Code128));
 }
 
@@ -836,7 +837,7 @@ fn a_lines_endings_are_one_undo_step_described_by_the_state_and_written_to_the_b
     let dir = scratch("k10_endings");
     setup(&dir);
     let id = add_shape(&dir, bar("F.SilkS", 5_000_000, 10_000_000, 20_000_000));
-    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: 2_000_000, ..Default::default() };
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: Nm::from_raw_shim(2_000_000), ..Default::default() };
     step(&dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.clone()], fill: None, start_ending: Some(arrow), end_ending: Some(LineEnding::new(LineEndingStyle::ArrowOpen)) }), false, "test").unwrap();
     let s = shape_json(&dir, &id);
     assert_eq!(s["start_ending"], serde_json::json!({ "style": "arrow", "length": 2_000_000, "width": 0, "stroke_width": 0 }));
@@ -855,7 +856,7 @@ fn a_grid_item_is_one_undo_step_and_the_state_lists_it() {
     use eda_model::grid_item::GridItem;
     let dir = scratch("k10_grid");
     setup(&dir);
-    let g = GridItem { angle: 30.0, tick_interval: 5000, ..GridItem::new(Point { x: 20_000_000, y: 15_000_000 }) };
+    let g = GridItem { angle: 30.0, tick_interval: 5000, ..GridItem::new(Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(15_000_000) }) };
     step(&dir, Cmd::PcbItem(PcbItemCmd::AddGridItem { grid_item: g }), false, "test").unwrap();
     let grids = state(&dir)["drawings"]["grid_items"].clone();
     assert_eq!(grids.as_array().unwrap().len(), 1);
@@ -906,7 +907,7 @@ fn fill_all_regenerates_a_via_stitching_over_the_new_fill() {
     step(&dir, Cmd::ReplaceBoard { text, name: "stitch_fp_rulearea.kicad_pcb".into(), keep_kicad_layer_names: false, project: None, rules: None }, false, "test").unwrap();
     let design = load(&dir).unwrap().1;
     let v = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
-    let kicad: std::collections::BTreeSet<(i64, i64)> = design.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
+    let kicad: std::collections::BTreeSet<(Nm, Nm)> = design.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
     assert_eq!(kicad.len(), 73);
     step(&dir, Cmd::PcbItem(PcbItemCmd::SetViaStitch { id: Some(v.id.clone()), stitch: v.clone(), vias: Some(Vec::new()) }), false, "test").unwrap();
     assert!(load(&dir).unwrap().1.drawings.unwrap().board_items.via_stitches[0].member_ids.is_empty());
@@ -914,6 +915,6 @@ fn fill_all_regenerates_a_via_stitching_over_the_new_fill() {
     assert_eq!(done["ok"], true, "{done}");
     let after = load(&dir).unwrap().1;
     let v = &after.drawings.as_ref().unwrap().board_items.via_stitches[0];
-    let ours: std::collections::BTreeSet<(i64, i64)> = after.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
+    let ours: std::collections::BTreeSet<(Nm, Nm)> = after.routing.as_ref().unwrap().vias.iter().filter(|x| v.member_ids.contains(&x.id)).map(|x| (x.at.x, x.at.y)).collect();
     assert_eq!(ours, kicad, "the fill put the stitching's vias back where KiCad's Update put them");
 }

@@ -73,13 +73,13 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
 
     let seg_nm = |id: ItemId| -> Option<(Seg, i64)> {
         match world.get(id) {
-            Some(Item::Segment(s)) => Some((Seg::new(s.a, s.b), s.width)),
+            Some(Item::Segment(s)) => Some((Seg::new(s.a, s.b), s.width.raw_shim())),
             _ => None,
         }
     };
     let (start_nm, _) = seg_nm(start)?;
     // `Shape( -1 )->Centre()`
-    let center = Point { x: start_nm.a.x + ki_round((start_nm.b.x - start_nm.a.x) as f64 / 2.0), y: start_nm.a.y + ki_round((start_nm.b.y - start_nm.a.y) as f64 / 2.0) };
+    let center = Point { x: start_nm.a.x + Nm::from_raw_shim(ki_round((start_nm.b.x - start_nm.a.x).raw_shim() as f64 / 2.0)), y: start_nm.a.y + Nm::from_raw_shim(ki_round((start_nm.b.y - start_nm.a.y).raw_shim() as f64 / 2.0)) };
 
     // `findNItem( p_item )`
     let find_n_item = |best: &mut BestPair, p_item: ItemId| {
@@ -133,9 +133,9 @@ pub fn assemble_diff_pair(world: &Node, start: ItemId) -> Option<PairAssembly> {
         (Some((r, _)), Some((c, _))) => {
             let dir = (r.b.x - r.a.x, r.b.y - r.a.y);
             let disp = (r.b.x - c.b.x, r.b.y - c.b.y);
-            let cross = dir.0 as i128 * disp.1 as i128 - dir.1 as i128 * disp.0 as i128;
-            let norm = crate::kigeom::norm_i(dir.0, dir.1).max(1) as i128;
-            (cross.abs() / norm) as i64 - lp.width
+            let cross = dir.0.raw_shim() as i128 * disp.1.raw_shim() as i128 - dir.1.raw_shim() as i128 * disp.0.raw_shim() as i128;
+            let norm = crate::kigeom::norm_i(dir.0.raw_shim(), dir.1.raw_shim()).max(1) as i128;
+            (cross.abs() / norm) as i64 - lp.width.raw_shim()
         }
         _ => -1,
     };
@@ -177,13 +177,13 @@ pub fn coupled_segment_pairs(p: &ShapeLineChain, n: &ShapeLineChain, width: i64,
 
 /// `baselineSegment`: the midline of a coupled pair of segments.
 pub fn baseline_segment(c: &CoupledSegments) -> Seg {
-    let mid = |a: Point, b: Point| Point { x: ki_round((a.x + b.x) as f64 / 2.0), y: ki_round((a.y + b.y) as f64 / 2.0) };
+    let mid = |a: Point, b: Point| Point { x: Nm::from_raw_shim(ki_round((a.x + b.x).raw_shim() as f64 / 2.0)), y: Nm::from_raw_shim(ki_round((a.y + b.y).raw_shim() as f64 / 2.0)) };
     Seg::new(mid(c.coupled_p.a, c.coupled_n.a), mid(c.coupled_p.b, c.coupled_n.b))
 }
 
 /// `pairOrientation`: is the midpoint of the pair on the positive side of P's segment?
 pub fn pair_orientation(c: &CoupledSegments) -> bool {
-    let midp = Point { x: ki_round((c.coupled_p.a.x + c.coupled_n.a.x) as f64 / 2.0), y: ki_round((c.coupled_p.a.y + c.coupled_n.a.y) as f64 / 2.0) };
+    let midp = Point { x: Nm::from_raw_shim(ki_round((c.coupled_p.a.x + c.coupled_n.a.x).raw_shim() as f64 / 2.0)), y: Nm::from_raw_shim(ki_round((c.coupled_p.a.y + c.coupled_n.a.y).raw_shim() as f64 / 2.0)) };
     c.coupled_p.side(midp) > 0
 }
 
@@ -332,7 +332,7 @@ impl DpMeanderPlacer {
         let current_start = Seg::new(seg.a, seg.b).nearest_point(at);
         let mut pair = assemble_diff_pair(world, start).ok_or(NO_PAIR)?;
         if pair.gap < 0 {
-            pair.gap = env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or(""));
+            pair.gap = (env.rules.diff_pair_gap_of(pair.net_p.as_deref().unwrap_or(""))).raw_shim();
         }
         if pair.p.segment_ids.is_empty() || pair.n.segment_ids.is_empty() {
             return Err("Unable to find the lines of the pair.".into());
@@ -355,7 +355,7 @@ impl DpMeanderPlacer {
             initial_segment: start,
             cp: chain_of(&pair.p),
             cn: chain_of(&pair.n),
-            width_nm: pair.width,
+            width_nm: pair.width.raw_shim(),
             pair,
             path_p,
             path_n,
@@ -477,7 +477,7 @@ impl DpMeanderPlacer {
     pub fn spacing_step(&mut self, sign: i64) {
         let s = self.settings.spacing + sign * self.settings.step;
         let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
-        self.settings.spacing = s.max(self.width_nm + clearance);
+        self.settings.spacing = s.max(self.width_nm + clearance.raw_shim());
     }
 
     /// `TuningLengthResult()`.
@@ -557,7 +557,7 @@ impl DpMeanderPlacer {
         }
 
         let clearance = Node::clearance(&self.env.rules, &self.pair.net_p, &None);
-        let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_nm: self.pair.width };
+        let mut env = FitEnv { settings: self.settings.clone(), clearance: clearance.raw_shim(), world: &self.world, rules: &self.env.rules, net_p: self.pair.net_p.clone(), net_n: self.pair.net_n.clone(), layer: self.pair.p.layer, width_nm: self.pair.width };
         let mut result = MeanderedLine::new(true);
         result.set_width(self.width_nm);
         let mut offset = (self.pair.gap + self.width_nm) / 2;
@@ -681,22 +681,22 @@ mod tests {
     use eda_drc::kimath::Shape;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = 150_000;
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
+        rules.clearance = Nm::from_raw_shim(150_000);
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
     }
 
     fn pad(net: &str, at: Point) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: 300_000 }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: Nm::from_raw_shim(300_000) }, source: "U1.1".into(), edge: false })
     }
 
     fn seg(net: &str, a: Point, b: Point) -> Item {
-        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width: 200_000, source_track: None, locked: false })
+        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width: Nm::from_raw_shim(200_000), source_track: None, locked: false })
     }
 
     /// USB_P and USB_N, 40 mm long, 0.5 mm apart (centre to centre 0.4 mm: gap 0.2 mm).
@@ -724,7 +724,7 @@ mod tests {
         let (w, a, b) = board();
         let pair = assemble_diff_pair(&w, a).expect("a pair");
         assert_eq!((pair.net_p.as_deref(), pair.net_n.as_deref()), (Some("USB_P"), Some("USB_N")));
-        assert_eq!(pair.width, 200_000);
+        assert_eq!(pair.width, Nm::from_raw_shim(200_000));
         assert_eq!(pair.gap, 200_000, "0.4 mm between the centres less a width");
         // from the N line the pair is the same, P first
         let from_n = assemble_diff_pair(&w, b).expect("a pair");
@@ -769,7 +769,7 @@ mod tests {
             profile_type: ProfileType::Differential,
             target_impedance: 90.0,
             enable_time_domain_tuning: true,
-            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200_000, diff_pair_gap_nm: 200_000, delay_as_per_mm: 6_100_000 }],
+            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200_000), diff_pair_gap_nm: Nm::from_raw_shim(200_000), delay_as_per_mm: 6_100_000 }],
             via_propagation_delay_as: 0,
             via_overrides: vec![],
         };
@@ -806,7 +806,7 @@ mod tests {
         assert_eq!(c.len(), 2, "the two straight runs are coupled, the corners are not");
         assert_eq!((c[0].index_p, c[0].index_n), (0, 0));
         let base = baseline_segment(&c[0]);
-        assert_eq!(base.a.y, 200_000);
+        assert_eq!(base.a.y, Nm::from_raw_shim(200_000));
         assert!(pair_orientation(&c[0]), "N is below P, on the positive side");
         // a line too far for the gap
         assert!(coupled_segment_pairs(&p_line, &n_line, 200_000, 500_000).is_empty());

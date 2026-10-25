@@ -54,7 +54,7 @@ impl MouseTrailTracer {
 
     /// `SetTolerance`: the track width.
     pub fn set_tolerance(&mut self, tolerance: Nm) {
-        self.tolerance = tolerance;
+        self.tolerance = tolerance.raw_shim();
     }
 
     /// `SetDefaultDirections( aInitDirection, aLastSegDir )`.
@@ -81,7 +81,7 @@ impl MouseTrailTracer {
     /// `GetTrailLeadVector`: from the first point of the trail to its last, micrometres.
     pub fn trail_lead_vector(&self) -> (Nm, Nm) {
         if self.trail.len() < 2 {
-            (0, 0)
+            (Nm::ZERO, Nm::ZERO)
         } else {
             let (first, last) = (self.trail[0], *self.trail.last().unwrap());
             (last.x - first.x, last.y - first.y)
@@ -145,7 +145,7 @@ impl MouseTrailTracer {
 
         let p0 = self.trail[0];
         // `double refLength = SEG( p0, aP ).Length()`: the length is an integer (`EuclideanNorm` truncates)
-        let ref_length = ((((p.x - p0.x) as f64).powi(2) + ((p.y - p0.y) as f64).powi(2)).sqrt() as i64) as f64;
+        let ref_length = ((((p.x - p0.x).raw_shim() as f64).powi(2) + ((p.y - p0.y).raw_shim() as f64).powi(2)).sqrt() as i64) as f64;
         let reversed: Vec<Point> = self.trail.iter().rev().copied().collect();
 
         // `SHAPE_LINE_CHAIN straight( DIRECTION_45().BuildInitialTrace( p0, aP, false ) ); straight.SetClosed( true ); straight.Append( m_trail.Reverse() );
@@ -287,7 +287,7 @@ fn area(chain: &[Point]) -> f64 {
     let mut sum = 0.0f64;
     let mut j = size.wrapping_sub(1);
     for i in 0..size {
-        sum += (chain[j].x as f64 + chain[i].x as f64) * (chain[j].y as f64 - chain[i].y as f64);
+        sum += (chain[j].x.raw_shim() as f64 + chain[i].x.raw_shim() as f64) * (chain[j].y.raw_shim() as f64 - chain[i].y.raw_shim() as f64);
         j = i;
     }
     (sum * 0.5).abs()
@@ -306,18 +306,18 @@ fn test_segment_hit(p: Point, a: Point, b: Point) -> bool {
     let (xmin, xmax) = (a.x.min(b.x), a.x.max(b.x));
     let (ymin, ymax) = (a.y.min(b.y), a.y.max(b.y));
     // outside of the bounding box
-    if ymin - p.y > 0 || p.y - ymax > 0 {
+    if ymin - p.y > Nm::ZERO || p.y - ymax > Nm::ZERO {
         return false;
     }
-    if xmin - p.x > 0 || p.x - xmax > 0 {
+    if xmin - p.x > Nm::ZERO || p.x - xmax > Nm::ZERO {
         return false;
     }
     // eliminate easy cases
     if a.x == b.x && p.y > ymin && p.y < ymax {
-        return (a.x - p.x).abs() <= 0;
+        return (a.x - p.x).abs() <= Nm::ZERO;
     }
     if a.y == b.y && p.x > xmin && p.x < xmax {
-        return (a.y - p.y).abs() <= 0;
+        return (a.y - p.y).abs() <= Nm::ZERO;
     }
     Seg::new(a, b).sq_distance_to_point(p) < 1
 }
@@ -391,7 +391,7 @@ mod tests {
         // `LINE_PLACER::Start`
         let mut t = MouseTrailTracer::new();
         t.clear();
-        t.add_trail_point(p(0, 0));
+        t.add_trail_point(p(Nm::ZERO, Nm::ZERO));
         t.set_tolerance(tolerance);
         t.set_default_directions(init, Direction45::Undefined);
         t
@@ -406,79 +406,79 @@ mod tests {
 
     #[test]
     fn simplify_drops_only_points_exactly_between_their_neighbours() {
-        let mut c = vec![p(0, 0), p(10_000, 0), p(20_000, 0), p(20_000, 10_000), p(20_000, 5_000)];
+        let mut c = vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::ZERO), p(Nm::from_raw_shim(20_000), Nm::ZERO), p(Nm::from_raw_shim(20_000), Nm::from_raw_shim(10_000)), p(Nm::from_raw_shim(20_000), Nm::from_raw_shim(5_000))];
         simplify(&mut c, false);
         // (10,0) is between (0,0) and (20,0); (20,10) is a corner and (20,5) is back along the leg, so both stay
-        assert_eq!(c, vec![p(0, 0), p(20_000, 0), p(20_000, 10_000), p(20_000, 5_000)]);
-        let mut dup = vec![p(0, 0), p(0, 0), p(10_000, 10_000)];
+        assert_eq!(c, vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(20_000), Nm::ZERO), p(Nm::from_raw_shim(20_000), Nm::from_raw_shim(10_000)), p(Nm::from_raw_shim(20_000), Nm::from_raw_shim(5_000))]);
+        let mut dup = vec![p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::from_raw_shim(10_000))];
         simplify(&mut dup, false);
-        assert_eq!(dup, vec![p(0, 0), p(10_000, 10_000)]);
+        assert_eq!(dup, vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::from_raw_shim(10_000))]);
     }
 
     #[test]
     fn a_closed_square_with_a_point_on_a_side_loses_that_point_and_keeps_its_corners() {
-        let mut c = vec![p(0, 0), p(5_000, 0), p(10_000, 0), p(10_000, 10_000), p(0, 10_000)];
+        let mut c = vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(5_000), Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::from_raw_shim(10_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000))];
         simplify(&mut c, true);
-        assert_eq!(c, vec![p(0, 0), p(10_000, 0), p(10_000, 10_000), p(0, 10_000)]);
+        assert_eq!(c, vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::from_raw_shim(10_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000))]);
         assert_eq!(area(&c), 100.0 * 1.0e6);
     }
 
     #[test]
     fn the_trail_is_the_simplified_path_of_the_cursor_and_a_loop_back_across_it_cuts_the_loop_out() {
-        let mut t = tracer(200_000, Direction45::E);
-        for at in [p(1_000_000, 0), p(2_000_000, 0), p(3_000_000, 1_000_000)] {
+        let mut t = tracer(Nm::from_raw_shim(200_000), Direction45::E);
+        for at in [p(Nm::from_raw_shim(1_000_000), Nm::ZERO), p(Nm::from_raw_shim(2_000_000), Nm::ZERO), p(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(1_000_000))] {
             t.add_trail_point(at);
         }
-        assert_eq!(t.trail(), vec![p(0, 0), p(2_000_000, 0), p(3_000_000, 1_000_000)]);
+        assert_eq!(t.trail(), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(2_000_000), Nm::ZERO), p(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(1_000_000))]);
         // up, back left and down again across the first leg: the part of the trail after the crossing is cut off
-        for at in [p(3_000_000, 3_000_000), p(1_000_000, 3_000_000), p(1_000_000, -500_000)] {
+        for at in [p(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(3_000_000)), p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(3_000_000)), p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(-500_000))] {
             t.add_trail_point(at);
         }
-        assert_eq!(t.trail().first(), Some(&p(0, 0)));
-        assert_eq!(t.trail().last(), Some(&p(1_000_000, -500_000)));
-        assert!(!t.trail().contains(&p(3_000_000, 3_000_000)), "the loop is out of the trail: {:?}", t.trail());
+        assert_eq!(t.trail().first(), Some(&p(Nm::ZERO, Nm::ZERO)));
+        assert_eq!(t.trail().last(), Some(&p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(-500_000))));
+        assert!(!t.trail().contains(&p(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(3_000_000))), "the loop is out of the trail: {:?}", t.trail());
     }
 
     #[test]
     fn with_one_point_in_the_trail_the_posture_is_the_one_the_route_started_with() {
-        let mut t = tracer(200_000, Direction45::NE);
-        assert_eq!(t.get_posture(p(5_000_000, 1_000_000)), Direction45::NE);
-        let mut t = tracer(200_000, Direction45::E);
-        assert_eq!(t.get_posture(p(5_000_000, 1_000_000)), Direction45::E);
+        let mut t = tracer(Nm::from_raw_shim(200_000), Direction45::NE);
+        assert_eq!(t.get_posture(p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(1_000_000))), Direction45::NE);
+        let mut t = tracer(Nm::from_raw_shim(200_000), Direction45::E);
+        assert_eq!(t.get_posture(p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(1_000_000))), Direction45::E);
     }
 
     #[test]
     fn moving_the_mouse_along_a_diagonal_and_then_straight_makes_the_head_diagonal_first_and_the_other_way_round_straight_first() {
         // a trail that goes up-right at 45 degrees for 6 mm and then flat for 6 mm: the head from the start to the cursor wants the diagonal first
-        let mut t = tracer(200_000, Direction45::E);
+        let mut t = tracer(Nm::from_raw_shim(200_000), Direction45::E);
         let mut d = Direction45::E;
         for i in 1..=12 {
-            d = move_to(&mut t, p(500_000 * i, -500_000 * i));
+            d = move_to(&mut t, p(Nm::from_raw_shim(500_000 * i), Nm::from_raw_shim(-500_000 * i)));
         }
         for i in 1..=12 {
-            d = move_to(&mut t, p(6_000_000 + 500_000 * i, -6_000_000));
+            d = move_to(&mut t, p(Nm::from_raw_shim(6_000_000 + 500_000 * i), Nm::from_raw_shim(-6_000_000)));
         }
         assert!(d.is_diagonal(), "diagonal first: {d:?}");
 
         // flat first, then the diagonal
-        let mut t = tracer(200_000, Direction45::NE);
+        let mut t = tracer(Nm::from_raw_shim(200_000), Direction45::NE);
         for i in 1..=12 {
-            d = move_to(&mut t, p(500_000 * i, 0));
+            d = move_to(&mut t, p(Nm::from_raw_shim(500_000 * i), Nm::ZERO));
         }
         for i in 1..=12 {
-            d = move_to(&mut t, p(6_000_000 + 500_000 * i, -500_000 * i));
+            d = move_to(&mut t, p(Nm::from_raw_shim(6_000_000 + 500_000 * i), Nm::from_raw_shim(-500_000 * i)));
         }
         assert!(!d.is_diagonal(), "straight first: {d:?}");
     }
 
     #[test]
     fn a_flip_locks_the_posture_in_and_the_cursor_cannot_change_it() {
-        let mut t = tracer(200_000, Direction45::E);
+        let mut t = tracer(Nm::from_raw_shim(200_000), Direction45::E);
         t.flip_posture();
         assert!(t.is_manually_forced());
         assert_eq!(t.direction(), Direction45::SE);
         for i in 1..=20 {
-            assert_eq!(move_to(&mut t, p(500_000 * i, -500_000 * i)), Direction45::SE);
+            assert_eq!(move_to(&mut t, p(Nm::from_raw_shim(500_000 * i), Nm::from_raw_shim(-500_000 * i))), Direction45::SE);
         }
         t.clear();
         assert!(!t.is_manually_forced());
@@ -486,35 +486,35 @@ mod tests {
 
     #[test]
     fn with_the_mouse_disabled_the_cursor_never_changes_the_posture() {
-        let mut t = tracer(200_000, Direction45::E);
+        let mut t = tracer(Nm::from_raw_shim(200_000), Direction45::E);
         t.set_mouse_disabled(true);
         for i in 1..=20 {
-            assert_eq!(move_to(&mut t, p(500_000 * i, -500_000 * i)), Direction45::E);
+            assert_eq!(move_to(&mut t, p(Nm::from_raw_shim(500_000 * i), Nm::from_raw_shim(-500_000 * i))), Direction45::E);
         }
     }
 
     #[test]
     fn a_posture_locked_by_distance_is_unlocked_when_the_cursor_comes_back_to_the_start() {
-        let mut t = tracer(200_000, Direction45::E);
+        let mut t = tracer(Nm::from_raw_shim(200_000), Direction45::E);
         for i in 1..=30 {
-            move_to(&mut t, p(400_000 * i, -400_000 * i));
+            move_to(&mut t, p(Nm::from_raw_shim(400_000 * i), Nm::from_raw_shim(-400_000 * i)));
         }
         assert!(t.forced, "30 tolerances from the start locks the solution in");
         // back to within 10 tolerances of the start: unlocked, the trail restarts from the start point
-        let _ = move_to(&mut t, p(1_000_000, -1_000_000));
+        let _ = move_to(&mut t, p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(-1_000_000)));
         assert!(!t.forced);
-        assert_eq!(t.trail(), vec![p(0, 0), p(1_000_000, -1_000_000)]);
+        assert_eq!(t.trail(), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(-1_000_000))]);
     }
 
     #[test]
     fn the_direction_of_the_last_segment_decides_the_posture_for_the_first_move_after_a_fix() {
         // `UnfixRoute`: `SetDefaultDirections( m_initial_direction, m_direction )` -- the last segment's direction is set
         let mut t = MouseTrailTracer::new();
-        t.add_trail_point(p(0, 0));
-        t.set_tolerance(200_000);
+        t.add_trail_point(p(Nm::ZERO, Nm::ZERO));
+        t.set_tolerance(Nm::from_raw_shim(200_000));
         t.set_default_directions(Direction45::E, Direction45::NE);
-        assert_eq!(t.get_posture(p(5_000_000, 0)), Direction45::NE, "one point in the trail: the last segment's direction");
+        assert_eq!(t.get_posture(p(Nm::from_raw_shim(5_000_000), Nm::ZERO)), Direction45::NE, "one point in the trail: the last segment's direction");
         t.set_mouse_disabled(true);
-        assert_eq!(t.get_posture(p(5_000_000, 0)), Direction45::E, "mouse off: the next octant after it");
+        assert_eq!(t.get_posture(p(Nm::from_raw_shim(5_000_000), Nm::ZERO)), Direction45::E, "mouse off: the next octant after it");
     }
 }

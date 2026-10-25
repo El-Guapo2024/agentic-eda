@@ -302,6 +302,7 @@ impl<'a> PadNumberProvider<'a> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     fn axis(kind: NumberingType, start: &str, step: i32) -> ArrayAxis {
@@ -404,7 +405,7 @@ mod tests {
 
     #[test]
     fn first_free_number_skips_every_pad_outside_the_array() {
-        let g = ArrayGeometry::Grid { nx: 4, ny: 1, dx: 1000, dy: 1000, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+        let g = ArrayGeometry::Grid { nx: 4, ny: 1, dx: Nm::from_raw_shim(1000), dy: Nm::from_raw_shim(1000), offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
         let axes = PadNumbering::default().resolve(false).unwrap();
         let reserved: BTreeSet<String> = ["1", "3"].iter().map(|s| s.to_string()).collect();
         let mut p = PadNumberProvider::new(reserved.clone(), &g, &axes);
@@ -417,7 +418,7 @@ mod tests {
 
     #[test]
     fn a_grid_numbers_by_coordinates_in_the_order_it_is_walked() {
-        let g = ArrayGeometry::Grid { nx: 3, ny: 2, dx: 1000, dy: 1000, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+        let g = ArrayGeometry::Grid { nx: 3, ny: 2, dx: Nm::from_raw_shim(1000), dy: Nm::from_raw_shim(1000), offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
         let numbering = PadNumbering {
             start_specified: true,
             two_d: true,
@@ -434,7 +435,7 @@ mod tests {
 
     #[test]
     fn the_serpentine_and_the_walking_direction_decide_which_point_is_which() {
-        let mut g = ArrayGeometry::Grid { nx: 3, ny: 2, dx: 1000, dy: 1000, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: true };
+        let mut g = ArrayGeometry::Grid { nx: 3, ny: 2, dx: Nm::from_raw_shim(1000), dy: Nm::from_raw_shim(1000), offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: true };
         let numbering = PadNumbering { start_specified: true, two_d: true, primary: AxisSpec { kind: NumberingType::AlphaFull, start: "A".into(), step: 1 }, secondary: AxisSpec::default() };
         let axes = numbering.resolve(false).unwrap();
         // the second row runs back: point 3 is the third column

@@ -108,6 +108,7 @@ fn narrow(model: &ConstraintModel, placed: &BTreeSet<&str>) -> ConstraintModel {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{FootprintInstance, LabelSide, PlacementSection, Point, Provenance, Side};
     use eda_model::{Net, Part};
@@ -132,7 +133,7 @@ mod tests {
     }
 
     fn fp(r: &str, x: i64, y: i64) -> FootprintInstance {
-        FootprintInstance { id: r.into(), at: Point { x, y }, rot: 0, side: Side::Top, label: LabelSide::Above }
+        FootprintInstance { id: r.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, rot: 0, side: Side::Top, label: LabelSide::Above }
     }
 
     fn model_of(parts: &[&str], nets: &[(&str, &[&str])], rules: Vec<PlacementRule>) -> ConstraintModel {
@@ -156,10 +157,10 @@ mod tests {
             routing: None,
             placement: Some(PlacementSection {
                 outline: vec![
-                    Point { x: 0, y: 0 },
-                    Point { x: 100_000_000, y: 0 },
-                    Point { x: 100_000_000, y: 100_000_000 },
-                    Point { x: 0, y: 100_000_000 },
+                    Point { x: Nm::ZERO, y: Nm::ZERO },
+                    Point { x: Nm::from_raw_shim(100_000_000), y: Nm::ZERO },
+                    Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(100_000_000) },
+                    Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000_000) },
                 ],
                 footprints: fps,
                 modules: Vec::new(),

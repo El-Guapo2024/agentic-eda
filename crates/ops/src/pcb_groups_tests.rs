@@ -26,28 +26,28 @@ fn members(b: &Board<'_>, id: &str) -> Vec<String> {
 #[test]
 fn a_group_of_groups_moves_everything_below_it() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(nested(), &m, 100_000, 300_000);
-    b.apply(&Cmd::MoveItems { ids: ids(&["grp_outer"]), dx: 1_000_000, dy: 2_000_000 }).unwrap();
-    assert_eq!(routing(&b).tracks[0].pts[0], p(11_000_000, 42_000_000), "a track of the inner group");
-    assert_eq!(routing(&b).vias[0].at, p(21_000_000, 52_000_000), "a via of the inner group");
-    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points()[0], p(1_000_000, 82_000_000), "a shape of the outer group");
-    assert_eq!(pose(&b, "U1").at, p(30_000_000, 20_000_000), "a footprint outside every group stays");
-    assert_eq!(routing(&b).zones[0].outline[0], p(0, 60_000_000));
+    let mut b = Board::new(nested(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    b.apply(&Cmd::MoveItems { ids: ids(&["grp_outer"]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(2_000_000) }).unwrap();
+    assert_eq!(routing(&b).tracks[0].pts[0], p(Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(42_000_000)), "a track of the inner group");
+    assert_eq!(routing(&b).vias[0].at, p(Nm::from_raw_shim(21_000_000), Nm::from_raw_shim(52_000_000)), "a via of the inner group");
+    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().points()[0], p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(82_000_000)), "a shape of the outer group");
+    assert_eq!(pose(&b, "U1").at, p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)), "a footprint outside every group stays");
+    assert_eq!(routing(&b).zones[0].outline[0], p(Nm::ZERO, Nm::from_raw_shim(60_000_000)));
 }
 
 #[test]
 fn a_group_of_groups_turns_and_flips_as_its_items_do() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut by_group = Board::new(nested(), &m, 100_000, 300_000);
-    let mut by_items = Board::new(design(), &m, 100_000, 300_000);
-    let turn = |ids: Vec<String>| Cmd::RotateItems { ids, pivot: p(20_000_000, 50_000_000), angle_millideg: 90_000 };
+    let mut by_group = Board::new(nested(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut by_items = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let turn = |ids: Vec<String>| Cmd::RotateItems { ids, pivot: p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(50_000_000)), angle_millideg: 90_000 };
     by_group.apply(&turn(ids(&["grp_outer"]))).unwrap();
     by_items.apply(&turn(ids(&["trk_a", "via_a", "shp_seg"]))).unwrap();
     assert_eq!(routing(&by_group).tracks, routing(&by_items).tracks);
     assert_eq!(routing(&by_group).vias, routing(&by_items).vias);
     assert_eq!(drawings(&by_group).shapes, drawings(&by_items).shapes);
 
-    let flip = |ids: Vec<String>| Cmd::FlipItems { ids, pivot: p(20_000_000, 50_000_000), direction: FlipDirection::LeftRight };
+    let flip = |ids: Vec<String>| Cmd::FlipItems { ids, pivot: p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(50_000_000)), direction: FlipDirection::LeftRight };
     by_group.apply(&flip(ids(&["grp_outer"]))).unwrap();
     by_items.apply(&flip(ids(&["trk_a", "via_a", "shp_seg"]))).unwrap();
     assert_eq!(routing(&by_group).tracks, routing(&by_items).tracks);
@@ -59,10 +59,10 @@ fn a_footprint_inside_a_nested_group_moves_with_it() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_outer", &["grp_inner", "shp_seg"]), group("grp_inner", &["U1", "trk_a"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
-    b.apply(&Cmd::MoveItems { ids: ids(&["grp_outer"]), dx: 2_000_000, dy: 0 }).unwrap();
-    assert_eq!(pose(&b, "U1").at, p(32_000_000, 20_000_000));
-    assert_eq!(pose(&b, "U2").at, p(60_000_000, 20_000_000));
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    b.apply(&Cmd::MoveItems { ids: ids(&["grp_outer"]), dx: Nm::from_raw_shim(2_000_000), dy: Nm::ZERO }).unwrap();
+    assert_eq!(pose(&b, "U1").at, p(Nm::from_raw_shim(32_000_000), Nm::from_raw_shim(20_000_000)));
+    assert_eq!(pose(&b, "U2").at, p(Nm::from_raw_shim(60_000_000), Nm::from_raw_shim(20_000_000)));
 }
 
 // ------------------------------------------------------------------- nesting
@@ -72,7 +72,7 @@ fn a_group_made_of_items_that_share_a_group_takes_their_place_in_it() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["trk_a", "via_a", "shp_seg"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Group { ids: ids(&["trk_a", "via_a"]) }).unwrap();
     let groups = &drawings(&b).groups;
     assert_eq!(groups.len(), 2, "{groups:?}");
@@ -87,7 +87,7 @@ fn grouping_everything_a_group_holds_leaves_one_group() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["trk_a", "via_a"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Group { ids: ids(&["trk_a", "via_a"]) }).unwrap();
     // the new group takes the members' place in the group they shared, which holds it alone: PCB_GROUP_TOOL::Group dissolves nothing
     let groups = &drawings(&b).groups;
@@ -102,7 +102,7 @@ fn ungrouping_a_nested_group_frees_its_members_and_the_group_above_loses_it() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_outer", &["grp_inner", "shp_seg", "txt_a"]), group("grp_inner", &["trk_a", "via_a"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Ungroup { ids: ids(&["grp_inner"]) }).unwrap();
     assert!(!drawings(&b).is_group("grp_inner"));
     assert_eq!(members(&b, "grp_outer"), ids(&["shp_seg", "txt_a"]));
@@ -112,7 +112,7 @@ fn ungrouping_a_nested_group_frees_its_members_and_the_group_above_loses_it() {
 #[test]
 fn removing_a_member_from_a_nested_group_dissolves_only_the_group_it_left() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(nested(), &m, 100_000, 300_000);
+    let mut b = Board::new(nested(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     // inner = {trk_a, via_a} -> {via_a}: under two, it dissolves (`affectedGroups`); outer = {inner, shp_seg} loses it and keeps shp_seg: it was not
     // one of the groups the verb took a member out of, so it stays
     let outer = drawings(&b).parent_group(&nested().drawings.unwrap().groups.iter().find(|g| g.member_ids.contains(&"trk_a".to_string())).unwrap().id).map(|g| g.id.clone());
@@ -126,7 +126,7 @@ fn removing_a_member_from_a_nested_group_dissolves_only_the_group_it_left() {
 #[test]
 fn a_group_cannot_be_added_to_itself_or_to_a_group_below_it() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(nested(), &m, 100_000, 300_000);
+    let mut b = Board::new(nested(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let e = b.apply(&Cmd::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["grp_outer"]) }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_group");
     let e = b.apply(&Cmd::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["grp_inner"]) }).unwrap_err();
@@ -139,7 +139,7 @@ fn a_group_can_be_added_to_another_group() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["trk_a", "via_a"]), group("grp_b", &["shp_seg", "txt_a"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::AddToGroup { group_id: "grp_a".into(), ids: ids(&["grp_b"]) }).unwrap();
     assert_eq!(members(&b, "grp_a"), ids(&["grp_b", "trk_a", "via_a"]));
     assert_eq!(drawings(&b).group_leaves("grp_a"), ids(&["trk_a", "via_a", "shp_seg", "txt_a"]));
@@ -152,7 +152,7 @@ fn deleting_a_member_takes_it_out_of_its_group() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["trk_a", "via_a", "shp_seg"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::DeleteShape { id: "shp_seg".into() }).unwrap();
     assert_eq!(members(&b, "grp_a"), ids(&["trk_a", "via_a"]));
     // p6 F8: `BOARD_COMMIT::Push` only takes the item out (`parentGroup->RemoveItem`); a group of one stays, and the file keeps it
@@ -168,7 +168,7 @@ fn deleting_one_of_two_members_keeps_a_one_member_group() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["shp_seg", "txt_a"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::DeleteText { id: "txt_a".into() }).unwrap();
     assert_eq!(members(&b, "grp_a"), ids(&["shp_seg"]));
 }
@@ -176,7 +176,7 @@ fn deleting_one_of_two_members_keeps_a_one_member_group() {
 #[test]
 fn deleting_every_member_of_a_nested_group_leaves_no_group_behind() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(nested(), &m, 100_000, 300_000);
+    let mut b = Board::new(nested(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Batch { cmds: vec![Cmd::DeleteTrack { id: "trk_a".into() }, Cmd::DeleteVia { id: "via_a".into() }, Cmd::DeleteShape { id: "shp_seg".into() }] }).unwrap();
     assert!(drawings(&b).groups.is_empty(), "{:?}", drawings(&b).groups);
 }
@@ -186,7 +186,7 @@ fn a_footprint_taken_off_the_board_leaves_its_group() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["U1", "U2", "shp_seg"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Rip { part: "U1".into() }).unwrap();
     assert_eq!(members(&b, "grp_a"), ids(&["U2", "shp_seg"]));
 }
@@ -197,8 +197,8 @@ fn a_member_the_board_never_had_stays_in_its_group() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["never_placed", "trk_a", "via_a"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
-    b.apply(&Cmd::MoveItems { ids: ids(&["trk_a"]), dx: 100_000, dy: 0 }).unwrap();
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    b.apply(&Cmd::MoveItems { ids: ids(&["trk_a"]), dx: Nm::from_raw_shim(100_000), dy: Nm::ZERO }).unwrap();
     assert_eq!(members(&b, "grp_a"), ids(&["never_placed", "trk_a", "via_a"]));
 }
 
@@ -207,7 +207,7 @@ fn a_member_the_board_never_had_stays_in_its_group() {
 #[test]
 fn duplicating_a_group_of_groups_copies_the_whole_tree() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(nested(), &m, 100_000, 300_000);
+    let mut b = Board::new(nested(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Duplicate { ids: ids(&["grp_outer"]) }).unwrap();
     let dr = drawings(&b);
     assert_eq!(dr.groups.len(), 4, "the two originals stay and two copies are made: {:?}", dr.groups);
@@ -225,7 +225,7 @@ fn duplicating_a_group_of_groups_copies_the_whole_tree() {
 #[test]
 fn the_copy_of_a_nested_group_joins_the_group_above_it() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(nested(), &m, 100_000, 300_000);
+    let mut b = Board::new(nested(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Duplicate { ids: ids(&["grp_inner"]) }).unwrap();
     let dr = drawings(&b);
     assert_eq!(dr.groups.len(), 3, "{:?}", dr.groups);
@@ -236,9 +236,9 @@ fn the_copy_of_a_nested_group_joins_the_group_above_it() {
 #[test]
 fn a_pasted_group_of_groups_is_nested_again() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let text = eda_kicad::export_pcb_clipboard(&nested(), &m, &ids(&["grp_outer"]), p(0, 0)).unwrap();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
-    b.apply(&Cmd::PasteClipboard { text, at: p(5_000_000, 5_000_000) }).unwrap();
+    let text = eda_kicad::export_pcb_clipboard(&nested(), &m, &ids(&["grp_outer"]), p(Nm::ZERO, Nm::ZERO)).unwrap();
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    b.apply(&Cmd::PasteClipboard { text, at: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)) }).unwrap();
     let dr = drawings(&b);
     assert_eq!(dr.groups.len(), 2, "{:?}", dr.groups);
     let outer = dr.groups.iter().find(|g| g.member_ids.iter().any(|m| dr.is_group(m))).expect("the outer group");
@@ -254,7 +254,7 @@ fn a_one_member_group_survives_an_unrelated_group() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups = vec![group("grp_one", &["shp_seg"])];
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Group { ids: ids(&["trk_a", "via_a"]) }).unwrap();
     assert_eq!(members(&b, "grp_one"), ids(&["shp_seg"]));
     b.apply(&Cmd::RemoveFromGroup { ids: ids(&["trk_a"]) }).unwrap();

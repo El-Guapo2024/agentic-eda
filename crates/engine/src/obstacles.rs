@@ -4,6 +4,7 @@
 //! and pin texts, a power symbol with its Value, a label with its flag, a wire, a junction, a no-connect flag. A symbol's own fields
 //! are not here: they are what is being placed.
 
+use eda_model::units::Nm;
 use eda_model::ir::{NetLabel, Point, SchematicSection};
 use eda_model::ConstraintModel;
 
@@ -40,7 +41,7 @@ pub fn label_run_dir(sch: &SchematicSection, l: &NetLabel) -> (i64, i64) {
 }
 
 fn thin(a: Point, b: Point) -> Rect {
-    Rect::new(a.x.min(b.x) - 100_000, a.y.min(b.y) - 100_000, a.x.max(b.x) + 100_000, a.y.max(b.y) + 100_000)
+    Rect::new((a.x.min(b.x) - Nm::from_raw_shim(100_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(100_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(100_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(100_000)).raw_shim())
 }
 
 /// Every drawn item of `sch` but the fields of its symbols.
@@ -86,7 +87,7 @@ pub fn of_section_but_wires(sch: &SchematicSection, model: &ConstraintModel) -> 
         out.push(Obstacle { owner: String::new(), rect: nc_rect(n.at) });
     }
     for j in &sch.junctions {
-        out.push(Obstacle { owner: String::new(), rect: Rect::new(j.at.x - 400_000, j.at.y - 400_000, j.at.x + 400_000, j.at.y + 400_000) });
+        out.push(Obstacle { owner: String::new(), rect: Rect::new((j.at.x - Nm::from_raw_shim(400_000)).raw_shim(), (j.at.y - Nm::from_raw_shim(400_000)).raw_shim(), (j.at.x + Nm::from_raw_shim(400_000)).raw_shim(), (j.at.y + Nm::from_raw_shim(400_000)).raw_shim()) });
     }
     out
 }

@@ -13,6 +13,7 @@
 //! Micrometres on the way out: the chains are nanometres (see [`crate::kigeom`]) and a vertex is rounded to the board's grid. The same cut
 //! point is the end of one piece and the start of the next, so they still meet.
 
+use eda_model::units::Nm;
 use crate::chain::{distance, ShapeLineChain};
 use crate::item::{Item, ItemId};
 use crate::line::Line;
@@ -160,7 +161,7 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
         if s.a == s.b {
             continue;
         }
-        let mid = Point { x: (s.a.x + s.b.x).div_euclid(2), y: (s.a.y + s.b.y).div_euclid(2) };
+        let mid = Point { x: Nm::from_raw_shim((s.a.x + s.b.x).div_euclid(Nm::from_raw_shim(2))), y: Nm::from_raw_shim((s.a.y + s.b.y).div_euclid(Nm::from_raw_shim(2))) };
         let k = (0..origin.segment_count()).min_by_key(|&k| origin.c_segment(k).squared_distance(mid))?;
         touched.insert(k);
     }
@@ -208,14 +209,14 @@ mod tests {
     use eda_model::BoardRules;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = 200_000;
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
+        rules.clearance = Nm::from_raw_shim(200_000);
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
     }
 
     fn settings(target_nm: i64) -> MeanderSettings {
@@ -226,7 +227,7 @@ mod tests {
     }
 
     fn seg(w: &mut Node, track: &str, k: usize, a: Point, b: Point) -> ItemId {
-        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: 200_000, source_track: Some((track.into(), k)), locked: false }))
+        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: Nm::from_raw_shim(200_000), source_track: Some((track.into(), k)), locked: false }))
     }
 
     fn poly_points(e: &LineEdit) -> Vec<Point> {
@@ -324,7 +325,7 @@ mod tests {
         assert_connected(&e);
         let pts = poly_points(&e);
         let (lo, hi) = (pts.iter().map(|q| q.x).min().unwrap(), pts.iter().map(|q| q.x).max().unwrap());
-        assert_eq!((lo, hi), (10_000_000, 40_000_000), "b is replaced whole: its start to its end");
+        assert_eq!((lo, hi), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(40_000_000)), "b is replaced whole: its start to its end");
         assert!(e.pieces.iter().any(|q| q.member));
     }
 

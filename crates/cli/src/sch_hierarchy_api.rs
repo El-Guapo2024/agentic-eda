@@ -3,6 +3,7 @@
 //! * `POST /api/sch/annotate`: what Annotate Schematic would do (`DIALOG_ANNOTATE`'s message window): the messages `AnnotateSymbols` reports and
 //!   the findings of `CheckAnnotate`, on a copy of the board. The annotation itself is the `annotate` verb of `/api/cmd`.
 
+use eda_model::units::Nm;
 use crate::board;
 use eda_model::CheckResult;
 use eda_ops::{AnnotateOptions, AnnotateOrder, Board};
@@ -50,7 +51,7 @@ fn annotate_report(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         _ => AnnotateOptions::default(),
     };
     let (meta, design, model) = loaded(dir)?;
-    let b = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
+    let b = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
     let report = b.annotate_report(&sheet, reset, order, ids.as_deref(), &options)?;
     Ok(json!({
         "ok": true,
@@ -126,7 +127,7 @@ fn check_sheet_file(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> 
     let keep = req.get("keep_annotations").and_then(Value::as_bool).unwrap_or(false);
     let name = req.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).unwrap_or(&stem).to_string();
     let (meta, design, model) = loaded(dir)?;
-    let board = Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
+    let board = Board::new(design.clone(), &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
     let mut findings: Vec<Value> = board.check_sheet_file(&content, &name, keep).iter().map(|f| json!({ "severity": f.severity, "text": f.text })).collect();
 
     // `LoadSheetFromFile`'s library check: a library the project lacks (the symbols come in from the definitions the file carries)

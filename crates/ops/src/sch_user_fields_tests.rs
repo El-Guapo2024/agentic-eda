@@ -75,7 +75,7 @@ fn resistor(id: &str, at: Point, rot: u32, mirrored: bool) -> SymbolInstance {
 
 /// R1 with one user-defined field, `MPN`.
 fn sheet(rot: u32, mirrored: bool) -> SchematicSection {
-    let mut sch = SchematicSection { symbols: vec![resistor("R1", p(50_800_000, 50_800_000), rot, mirrored)], ..Default::default() };
+    let mut sch = SchematicSection { symbols: vec![resistor("R1", p(Nm::from_raw_shim(50_800_000), Nm::from_raw_shim(50_800_000)), rot, mirrored)], ..Default::default() };
     sch.user_fields.entry("R1".into()).or_default().insert("MPN".into(), "ERJ-3EKF".into());
     sch
 }
@@ -84,7 +84,7 @@ fn run(sch: SchematicSection, cmd: Cmd) -> Result<SchematicSection, Vec<CheckRes
     let m = model();
     let mut design = empty_design();
     design.schematic = Some(sch);
-    let mut b = Board::new(design, &m, 100_000, 300_000);
+    let mut b = Board::new(design, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&cmd)?;
     Ok(b.design().schematic.clone().unwrap())
 }
@@ -136,11 +136,11 @@ fn mv(v: &[&str], dx: Nm, dy: Nm) -> Cmd {
 }
 
 fn rotate(v: &[&str], ccw: bool) -> Cmd {
-    Cmd::SchMove(SchMoveCmd::Rotate { ids: ids(v), vertices: BTreeMap::new(), ccw, about: None, grid: 0 })
+    Cmd::SchMove(SchMoveCmd::Rotate { ids: ids(v), vertices: BTreeMap::new(), ccw, about: None, grid: Nm::ZERO })
 }
 
 fn mirror(v: &[&str], vertical: bool) -> Cmd {
-    Cmd::SchMove(SchMoveCmd::Mirror { ids: ids(v), vertices: BTreeMap::new(), vertical, about: None, grid: 0 })
+    Cmd::SchMove(SchMoveCmd::Mirror { ids: ids(v), vertices: BTreeMap::new(), vertical, about: None, grid: Nm::ZERO })
 }
 
 /// The fields of `R1` as they read on the sheet.
@@ -222,11 +222,11 @@ fn a_user_field_moves_by_the_offset_whatever_the_symbol_is_turned_to_and_the_oth
         for mirrored in [false, true] {
             let before = show(sheet(rot, mirrored), "MPN");
             let (at, reference, value) = (field_named(&before, "MPN").at, field_named(&before, "Reference").at, field_named(&before, "Value").at);
-            let after = run(before, mv(&[&field_id("R1", "MPN")], 2_540_000, -1_270_000)).unwrap_or_else(|e| panic!("rot {rot} mirrored {mirrored}: {e:?}"));
+            let after = run(before, mv(&[&field_id("R1", "MPN")], Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(-1_270_000))).unwrap_or_else(|e| panic!("rot {rot} mirrored {mirrored}: {e:?}"));
             let moved = field_named(&after, "MPN").at;
             assert!(near(moved, (at.0 + 2_540_000.0, at.1 - 1_270_000.0)), "rot {rot} mirrored {mirrored}: {at:?} -> {moved:?}");
             assert!(near(field_named(&after, "Reference").at, reference) && near(field_named(&after, "Value").at, value), "the others stay");
-            assert_eq!(after.symbols[0].at, p(50_800_000, 50_800_000), "the symbol did not move");
+            assert_eq!(after.symbols[0].at, p(Nm::from_raw_shim(50_800_000), Nm::from_raw_shim(50_800_000)), "the symbol did not move");
             assert!(!after.extras.fields_autoplaced.contains_key("R1"), "a field moved on its own is the user's: `SetFieldsAutoplaced( AUTOPLACE_NONE )`");
         }
     }
@@ -260,10 +260,10 @@ fn a_user_field_goes_round_with_its_symbol() {
     let after = field_named(&turned, "MPN");
     assert!(after.vertical && !before.vertical, "the text turned with the symbol");
     // the offset from the symbol's origin was turned a quarter, as the symbol's own points are (KiCad's `TRANSFORM` for 90: (x, y) goes to (y, -x))
-    let (dx, dy) = (before.at.0 - sym.x as f64, before.at.1 - sym.y as f64);
+    let (dx, dy) = (before.at.0 - sym.x.raw_shim() as f64, before.at.1 - sym.y.raw_shim() as f64);
     let at = turned.symbols[0].at;
     assert_eq!(turned.symbols[0].rot, 90_000);
-    assert!(near(after.at, (at.x as f64 + dy, at.y as f64 - dx)), "{:?} from {:?}", after.at, (dx, dy));
+    assert!(near(after.at, (at.x.raw_shim() as f64 + dy, at.y.raw_shim() as f64 - dx)), "{:?} from {:?}", after.at, (dx, dy));
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- edit
@@ -289,12 +289,12 @@ fn field_properties_set_the_look_and_the_place_of_a_user_field_in_one_command() 
     let after = run(
         start,
         edit(&field_id("R1", "MPN"), |e| {
-            e.size_nm = Some(2_000_000);
+            e.size_nm = Some(Nm::from_raw_shim(2_000_000));
             e.bold = Some(true);
             e.italic = Some(true);
             e.name_shown = Some(true);
             e.allow_autoplace = Some(false);
-            e.at = Some(p(before.at.0 as i64 + 2_540_000, before.at.1 as i64 + 2_540_000));
+            e.at = Some(p(Nm::from_raw_shim(before.at.0 as i64 + 2_540_000), Nm::from_raw_shim(before.at.1 as i64 + 2_540_000)));
             e.vertical = Some(true);
             e.h = Some(TextJustify::Right);
         }),
@@ -311,7 +311,7 @@ fn field_properties_set_the_look_and_the_place_of_a_user_field_in_one_command() 
 fn the_fields_of_a_locked_symbol_include_its_user_fields() {
     let mut start = sheet(0, false);
     start.extras.set_locked("R1", true);
-    let e = run(start.clone(), mv(&[&field_id("R1", "MPN")], 1_270_000, 0)).unwrap_err();
+    let e = run(start.clone(), mv(&[&field_id("R1", "MPN")], Nm::from_raw_shim(1_270_000), Nm::ZERO)).unwrap_err();
     assert_eq!(e[0].check, "ops_locked");
     let e = run(start, edit(&field_id("R1", "MPN"), |e| e.text = Some("x".into()))).unwrap_err();
     assert_eq!(e[0].check, "ops_locked");
@@ -423,7 +423,7 @@ fn the_fields_table_removing_a_column_takes_its_places_and_renaming_one_keeps_th
 fn a_user_field_added_by_the_table_after_the_fields_were_placed_is_hidden_and_the_others_stay() {
     use crate::fields_table::{apply_field_changes, FieldChanges};
     let m = model();
-    let mut start = SchematicSection { symbols: vec![resistor("R1", p(50_800_000, 50_800_000), 0, false)], ..Default::default() };
+    let mut start = SchematicSection { symbols: vec![resistor("R1", p(Nm::from_raw_shim(50_800_000), Nm::from_raw_shim(50_800_000)), 0, false)], ..Default::default() };
     start.field_layout.insert("R1".into(), OwnerCtx::new(&start, &m, "R1").unwrap().current(&start));
     let (r, v) = (field_named(&start, "Reference"), field_named(&start, "Value"));
     apply_field_changes(&mut start, &FieldChanges { add_fields: vec!["MPN".into()], ..Default::default() }).unwrap();
@@ -448,7 +448,7 @@ fn a_sheet_read_from_a_kicad_file_keeps_its_user_fields_but_has_no_places_to_edi
 #[test]
 fn a_stored_placement_of_a_user_field_is_where_the_sheet_draws_it() {
     let mut start = sheet(0, false);
-    start.field_layout.insert("R1".into(), vec![FieldPlacement { dx: 3_000_000, dy: -7_000_000, visible: true, h: TextJustify::Left, ..FieldPlacement::at_origin("MPN") }]);
+    start.field_layout.insert("R1".into(), vec![FieldPlacement { dx: Nm::from_raw_shim(3_000_000), dy: Nm::from_raw_shim(-7_000_000), visible: true, h: TextJustify::Left, ..FieldPlacement::at_origin("MPN") }]);
     let f = field_named(&start, "MPN");
     assert!(f.visible);
     assert!(near(f.at, (50_800_000.0 + 3_000_000.0, 50_800_000.0 - 7_000_000.0)), "{:?}", f.at);

@@ -6,7 +6,7 @@ use super::*;
 /// The KiCad text of a Copy of `names` on the fixture board, which is what a design block's board file holds.
 fn block_text(names: &[&str]) -> String {
     let m = model(&["F.Cu", "B.Cu"]);
-    eda_kicad::export_pcb_clipboard(&design(), &m, &ids(names), p(0, 0)).unwrap()
+    eda_kicad::export_pcb_clipboard(&design(), &m, &ids(names), p(Nm::ZERO, Nm::ZERO)).unwrap()
 }
 
 fn place(text: &str, at: Point, as_group: bool, group_name: &str) -> Cmd {
@@ -19,7 +19,7 @@ fn a_design_block_placed_with_place_as_group_is_one_group_named_for_the_block_an
     let text = block_text(&["trk_a", "shp_seg", "txt_a"]);
     let mut b = board(&m);
     let (tracks, shapes, texts) = (routing_len(&b), drawings(&b).shapes.len(), drawings(&b).texts.len());
-    b.apply(&place(&text, p(10_000_000, 5_000_000), true, "")).unwrap();
+    b.apply(&place(&text, p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000)), true, "")).unwrap();
     // KiCad has a track to a segment: the polyline of `trk_a` comes back as the segments it was written as
     let came = (routing_len(&b) - tracks, drawings(&b).shapes.len() - shapes, drawings(&b).texts.len() - texts);
     assert!(came.0 >= 1 && came.1 == 1 && came.2 == 1, "{came:?}");
@@ -28,7 +28,7 @@ fn a_design_block_placed_with_place_as_group_is_one_group_named_for_the_block_an
     // every member is one of the new items, none of the board's own
     assert!(!g.member_ids.iter().any(|m| ["trk_a", "shp_seg", "txt_a"].contains(&m.as_str())), "{:?}", g.member_ids);
     // "Place repeated copies" names the next one
-    b.apply(&place(&text, p(40_000_000, 5_000_000), true, "Buck2")).unwrap();
+    b.apply(&place(&text, p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(5_000_000)), true, "Buck2")).unwrap();
     let names: Vec<String> = drawings(&b).groups.iter().filter(|g| g.design_block == "Power:Buck").map(|g| g.name.clone()).collect();
     assert_eq!(names, vec!["Buck", "Buck2"]);
 }
@@ -37,16 +37,16 @@ fn a_design_block_placed_with_place_as_group_is_one_group_named_for_the_block_an
 fn a_design_block_is_not_grouped_when_not_asked_or_when_one_thing_came_in_and_a_bad_block_is_refused() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&place(&block_text(&["trk_a", "shp_seg"]), p(0, 0), false, "")).unwrap();
+    b.apply(&place(&block_text(&["trk_a", "shp_seg"]), p(Nm::ZERO, Nm::ZERO), false, "")).unwrap();
     assert!(drawings(&b).groups.iter().all(|g| g.design_block.is_empty()), "Place as group is off");
     // `if( groupableCount >= 2 )`: one item is not a group
     let before = drawings(&b).groups.len();
-    b.apply(&place(&block_text(&["shp_seg"]), p(0, 0), true, "")).unwrap();
+    b.apply(&place(&block_text(&["shp_seg"]), p(Nm::ZERO, Nm::ZERO), true, "")).unwrap();
     assert_eq!(drawings(&b).groups.len(), before);
     // a block that is not a Lib:Name, and a file that is not a board
-    let bad = Cmd::PlaceDesignBlock { text: block_text(&["shp_seg"]), at: p(0, 0), block: "nonsense".into(), as_group: true, group_name: String::new() };
+    let bad = Cmd::PlaceDesignBlock { text: block_text(&["shp_seg"]), at: p(Nm::ZERO, Nm::ZERO), block: "nonsense".into(), as_group: true, group_name: String::new() };
     assert_eq!(b.apply(&bad).unwrap_err()[0].check, "ops_bad_design_block");
-    assert!(b.apply(&place("not a board", p(0, 0), true, "")).is_err());
+    assert!(b.apply(&place("not a board", p(Nm::ZERO, Nm::ZERO), true, "")).is_err());
 }
 
 #[test]
@@ -91,18 +91,18 @@ fn place_design_block_grows_the_copper_layers_and_keeps_the_nets() {
     let mut block = design();
     {
         let rt = block.routing.as_mut().unwrap();
-        let mut t = super::pcb_transform_tests::track("trk_in", "In1.Cu", &[(10_000_000, 10_000_000), (20_000_000, 10_000_000)]);
+        let mut t = super::pcb_transform_tests::track("trk_in", "In1.Cu", &[(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000))]);
         t.net = "BLK".into();
         rt.tracks.push(t);
-        let mut v = super::pcb_transform_tests::via("via_in", (20_000_000, 10_000_000), "F.Cu", "In2.Cu");
+        let mut v = super::pcb_transform_tests::via("via_in", (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000)), "F.Cu", "In2.Cu");
         v.net = "BLK".into();
         rt.vias.push(v);
     }
-    let text = eda_kicad::export_pcb_clipboard(&block, &block_model, &ids(&["trk_in", "via_in", "trk_a"]), p(0, 0)).unwrap();
+    let text = eda_kicad::export_pcb_clipboard(&block, &block_model, &ids(&["trk_in", "via_in", "trk_a"]), p(Nm::ZERO, Nm::ZERO)).unwrap();
 
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&place(&text, p(0, 0), true, "")).unwrap();
+    b.apply(&place(&text, p(Nm::ZERO, Nm::ZERO), true, "")).unwrap();
     let dr = drawings(&b);
     assert_eq!(dr.rules.as_ref().and_then(|r| r.stackup.as_ref()).map(|s| s.copper_layers), Some(4), "the board has the block's four copper layers");
     assert_eq!(dr.board_nets, vec!["BLK".to_string()], "the block's net is the board's");
@@ -114,7 +114,7 @@ fn place_design_block_grows_the_copper_layers_and_keeps_the_nets() {
 
     // a two-layer block leaves a two-layer board as it is
     let mut b = board(&m);
-    b.apply(&place(&block_text(&["trk_a", "shp_seg"]), p(0, 0), true, "")).unwrap();
+    b.apply(&place(&block_text(&["trk_a", "shp_seg"]), p(Nm::ZERO, Nm::ZERO), true, "")).unwrap();
     assert!(drawings(&b).rules.as_ref().and_then(|r| r.stackup.as_ref()).is_none());
     assert!(drawings(&b).board_nets.is_empty());
 }
@@ -131,7 +131,7 @@ fn the_block_layer_table_gives_the_copper_count_and_the_enabled_layers() {
     assert!(super::design_blocks::layer_table(r#"(footprint "X" (pad "1" smd rect (layers "F.Cu")))"#).is_empty());
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&place(&text.replace("(footprint \"X\" (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\")))", "(gr_line (start 0 0) (end 5 0) (stroke (width 0.1) (type solid)) (layer \"User.1\"))"), p(0, 0), false, "")).unwrap();
+    b.apply(&place(&text.replace("(footprint \"X\" (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\")))", "(gr_line (start 0 0) (end 5 0) (stroke (width 0.1) (type solid)) (layer \"User.1\"))"), p(Nm::ZERO, Nm::ZERO), false, "")).unwrap();
     let rules = drawings(&b).rules.clone().unwrap();
     assert_eq!(rules.stackup.map(|s| s.copper_layers), Some(6), "six copper layers in the table, though the block uses none of the inner ones");
     assert!(rules.board_layers.unwrap().enabled.iter().any(|l| l == "User.1"));

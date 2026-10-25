@@ -848,11 +848,12 @@ pub fn follow(prev: &[Net], before: &[TracedNet], after: &[TracedNet]) -> Option
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{LabelShape, NetLabel, PowerSymbol, SheetInstance, SheetPin, Wire};
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
     fn wire(net: &str, pts: &[Point]) -> Wire {
         Wire { id: String::new(), net: net.into(), pins: vec![], pts: pts.to_vec(), bus: false }
@@ -889,7 +890,7 @@ mod tests {
         // Root: a sheet symbol "child" with pin SIG at (100, 50), wired to R1.1 on the root. Inside: a hierarchical label SIG on a
         // wire to U1.3.
         let mut root = section();
-        root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(100, 0), size: (100, 100), pins: vec![SheetPin { id: String::new(), name: "SIG".into(), shape: LabelShape::Bidirectional, at: p(100, 50) }], page: String::new() });
+        root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(100, 0), size: (Nm::from_raw_shim(100), Nm::from_raw_shim(100)), pins: vec![SheetPin { id: String::new(), name: "SIG".into(), shape: LabelShape::Bidirectional, at: p(100, 50) }], page: String::new() });
         root.wires.push(wire("", &[p(0, 50), p(100, 50)]));
         let mut child = section();
         child.wires.push(wire("", &[p(10, 10), p(40, 10)]));
@@ -929,7 +930,7 @@ mod tests {
         let naming = Naming { bus_members: Some(&members), ..Naming::default() };
         for (second, labelled, joined) in [("D[0..3]", true, true), ("E[0..3]", true, false), ("D[0..3]", false, false), ("{D0 D1}", false, true)] {
             let mut root = section();
-            let sheet = |id: &str, file: &str, y: i64, pin: &str| SheetInstance { id: id.into(), name: id.into(), file: file.into(), at: p(1000, y), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: pin.into(), shape: LabelShape::Bidirectional, at: p(1000, y + 500) }], page: String::new() };
+            let sheet = |id: &str, file: &str, y: i64, pin: &str| SheetInstance { id: id.into(), name: id.into(), file: file.into(), at: p(1000, y), size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), pins: vec![SheetPin { id: String::new(), name: pin.into(), shape: LabelShape::Bidirectional, at: p(1000, y + 500) }], page: String::new() };
             root.sheets.push(sheet("s1", "a.kicad_sch", 0, "D[0..1]"));
             root.sheets.push(sheet("s2", "b.kicad_sch", 2000, second));
             root.wires.push(bus(&[p(500, 500), p(1000, 500)]));
@@ -971,7 +972,7 @@ mod tests {
         let naming = Naming { bus_members: Some(&members), ..Naming::default() };
         for root_bus_label in ["D[0..1]", "X[0..1]"] {
             let mut root = section();
-            root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
+            root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
             root.wires.push(bus(&[p(500, 500), p(1000, 500)]));
             root.labels.push(label(root_bus_label, p(700, 500), LabelKind::Local));
             let m0 = if root_bus_label.starts_with('X') { "X0" } else { "D0" };
@@ -999,7 +1000,7 @@ mod tests {
         }
         // Without the expansion a bus has no members: the two sheets' nets stay apart, as before.
         let mut root = section();
-        root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
+        root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
         root.wires.push(bus(&[p(500, 500), p(1000, 500)]));
         root.labels.push(label("D0", p(0, 0), LabelKind::Local));
         let mut child = section();
@@ -1025,7 +1026,7 @@ mod tests {
         let naming = Naming { bus_members: Some(&members), ..Naming::default() };
         for child_bus in ["{B A}", "{B C}"] {
             let mut root = section();
-            root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (1000, 1000), pins: vec![SheetPin { id: String::new(), name: child_bus.into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
+            root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(1000, 0), size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), pins: vec![SheetPin { id: String::new(), name: child_bus.into(), shape: LabelShape::Bidirectional, at: p(1000, 500) }], page: String::new() });
             root.wires.push(bus(&[p(500, 500), p(1000, 500)]));
             root.labels.push(label("pre{A B}", p(700, 500), LabelKind::Local));
             root.labels.push(label("pre.A", p(0, 0), LabelKind::Local));
@@ -1058,8 +1059,8 @@ mod tests {
     fn a_screen_shown_twice_is_a_net_per_placement() {
         let mut root = section();
         let pin = |at: Point| vec![SheetPin { id: String::new(), name: "IN".into(), shape: LabelShape::Input, at }];
-        root.sheets.push(SheetInstance { id: "s1".into(), name: "a".into(), file: "ch.kicad_sch".into(), at: p(0, 0), size: (100, 100), pins: pin(p(100, 50)), page: String::new() });
-        root.sheets.push(SheetInstance { id: "s2".into(), name: "b".into(), file: "ch.kicad_sch".into(), at: p(0, 200), size: (100, 100), pins: pin(p(100, 250)), page: String::new() });
+        root.sheets.push(SheetInstance { id: "s1".into(), name: "a".into(), file: "ch.kicad_sch".into(), at: p(0, 0), size: (Nm::from_raw_shim(100), Nm::from_raw_shim(100)), pins: pin(p(100, 50)), page: String::new() });
+        root.sheets.push(SheetInstance { id: "s2".into(), name: "b".into(), file: "ch.kicad_sch".into(), at: p(0, 200), size: (Nm::from_raw_shim(100), Nm::from_raw_shim(100)), pins: pin(p(100, 250)), page: String::new() });
         root.wires.push(wire("", &[p(100, 50), p(300, 50)]));
         root.wires.push(wire("", &[p(100, 250), p(300, 250)]));
         let mut ch = section();
@@ -1087,8 +1088,8 @@ mod tests {
     #[test]
     fn power_symbols_are_one_net_on_every_sheet() {
         let mut root = section();
-        root.sheets.push(SheetInstance { id: "s1".into(), name: "a".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (10, 10), pins: vec![], page: String::new() });
-        root.sheets.push(SheetInstance { id: "s2".into(), name: "b".into(), file: "b.kicad_sch".into(), at: p(20, 0), size: (10, 10), pins: vec![], page: String::new() });
+        root.sheets.push(SheetInstance { id: "s1".into(), name: "a".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (Nm::from_raw_shim(10), Nm::from_raw_shim(10)), pins: vec![], page: String::new() });
+        root.sheets.push(SheetInstance { id: "s2".into(), name: "b".into(), file: "b.kicad_sch".into(), at: p(20, 0), size: (Nm::from_raw_shim(10), Nm::from_raw_shim(10)), pins: vec![], page: String::new() });
         let gnd = |at: Point| PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at, rot: 0, net: "GND".into(), pin: String::new() };
         let mut a = section();
         a.power_symbols.push(gnd(p(5, 5)));
@@ -1128,8 +1129,8 @@ mod tests {
     #[test]
     fn local_labels_do_not_leak_across_sheets_but_share_a_sheet() {
         let mut root = section();
-        root.sheets.push(SheetInstance { id: "s1".into(), name: "a".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (10, 10), pins: vec![], page: String::new() });
-        root.sheets.push(SheetInstance { id: "s2".into(), name: "b".into(), file: "b.kicad_sch".into(), at: p(20, 0), size: (10, 10), pins: vec![], page: String::new() });
+        root.sheets.push(SheetInstance { id: "s1".into(), name: "a".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (Nm::from_raw_shim(10), Nm::from_raw_shim(10)), pins: vec![], page: String::new() });
+        root.sheets.push(SheetInstance { id: "s2".into(), name: "b".into(), file: "b.kicad_sch".into(), at: p(20, 0), size: (Nm::from_raw_shim(10), Nm::from_raw_shim(10)), pins: vec![], page: String::new() });
         let mut a = section();
         a.labels.push(label("X", p(0, 0), LabelKind::Local));
         a.labels.push(label("X", p(50, 50), LabelKind::Local));
@@ -1168,7 +1169,7 @@ mod tests {
     #[test]
     fn hierarchical_labels_of_two_sheets_name_the_net_by_the_first_sheet_with_its_path() {
         let mut root = section();
-        let sheet = |id: &str, name: &str, file: &str, y: i64| SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: p(100, y), size: (100, 100), pins: vec![SheetPin { id: String::new(), name: "RESET".into(), shape: LabelShape::Bidirectional, at: p(100, y + 50) }], page: String::new() };
+        let sheet = |id: &str, name: &str, file: &str, y: i64| SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: p(100, y), size: (Nm::from_raw_shim(100), Nm::from_raw_shim(100)), pins: vec![SheetPin { id: String::new(), name: "RESET".into(), shape: LabelShape::Bidirectional, at: p(100, y + 50) }], page: String::new() };
         root.sheets.push(sheet("s1", "MCU", "mcu.kicad_sch", 0));
         root.sheets.push(sheet("s2", "Header/J1", "hdr.kicad_sch", 200));
         root.wires.push(wire("", &[p(100, 50), p(50, 50), p(50, 250), p(100, 250)]));
@@ -1191,7 +1192,7 @@ mod tests {
     #[test]
     fn a_local_label_at_the_root_beats_the_hierarchical_label_inside() {
         let mut root = section();
-        root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(100, 0), size: (100, 100), pins: vec![SheetPin { id: String::new(), name: "IN".into(), shape: LabelShape::Input, at: p(100, 50) }], page: String::new() });
+        root.sheets.push(SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: p(100, 0), size: (Nm::from_raw_shim(100), Nm::from_raw_shim(100)), pins: vec![SheetPin { id: String::new(), name: "IN".into(), shape: LabelShape::Input, at: p(100, 50) }], page: String::new() });
         root.wires.push(wire("", &[p(0, 50), p(100, 50)]));
         root.labels.push(label("MAINBUS", p(0, 50), LabelKind::Local));
         let mut child = section();
@@ -1210,7 +1211,7 @@ mod tests {
     fn a_power_symbols_page_variable_is_resolved_per_placement() {
         let mut root = section();
         for (id, y) in [("s2", 0), ("s3", 2000)] {
-            root.sheets.push(SheetInstance { id: id.into(), name: id.into(), file: "sub.kicad_sch".into(), at: p(0, y), size: (1000, 1000), pins: vec![], page: String::new() });
+            root.sheets.push(SheetInstance { id: id.into(), name: id.into(), file: "sub.kicad_sch".into(), at: p(0, y), size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), pins: vec![], page: String::new() });
         }
         let sub = || {
             let mut c = section();

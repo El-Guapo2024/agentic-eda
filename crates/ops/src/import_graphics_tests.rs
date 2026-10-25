@@ -11,7 +11,7 @@ fn fixture(name: &str) -> String {
 }
 
 fn req(text: String, layer: &str) -> ImportGraphics {
-    ImportGraphics { format: GraphicsFormat::Dxf, text, layer: layer.into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: 200_000, group: false, fix_tolerance_nm: None, replace_outline: false }
+    ImportGraphics { format: GraphicsFormat::Dxf, text, layer: layer.into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::from_raw_shim(200_000), group: false, fix_tolerance_nm: None, replace_outline: false }
 }
 
 /// The shapes an import added to the fixture board (it has three of its own).
@@ -33,18 +33,18 @@ fn a_dxf_outline_becomes_segments_and_arcs_on_the_layer_the_dialog_chose() {
     b.apply(&Cmd::ImportGraphics(req(fixture("board_outline_lines_arcs.dxf"), "Edge.Cuts"))).unwrap();
     let new = added(&b);
     assert_eq!(new.len(), 8, "{new:?}");
-    assert!(new.iter().all(|s| s.layer() == "Edge.Cuts" && s.stroke_width() == 200_000 && !s.is_filled()), "{new:?}");
+    assert!(new.iter().all(|s| s.layer() == "Edge.Cuts" && s.stroke_width() == Nm::from_raw_shim(200_000) && !s.is_filled()), "{new:?}");
     assert_eq!(new.iter().filter(|s| matches!(s, Shape::Segment { .. })).count(), 4);
     assert_eq!(new.iter().filter(|s| matches!(s, Shape::Arc { .. })).count(), 4);
     // The DXF has its Y axis up and the board's points down: the 40 x 30 board hangs above the origin, x 0 to 40 mm, y -30 to 0 mm.
     let xs: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
     let ys: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.y)).collect();
-    assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(0), Some(40_000_000)));
-    assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(-30_000_000), Some(0)));
+    assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(Nm::ZERO), Some(Nm::from_raw_shim(40_000_000))));
+    assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(Nm::from_raw_shim(-30_000_000)), Some(Nm::ZERO)));
     // An arc's middle is on its circle: the corner at the origin side, radius 3 mm.
     let Shape::Arc { start, mid, end, .. } = new.iter().find(|s| matches!(s, Shape::Arc { .. })).unwrap() else { unreachable!() };
     let (cx, cy) = circle_through(*start, *mid, *end);
-    assert!((((start.x as f64 - cx).hypot(start.y as f64 - cy)) - 3_000_000.0).abs() < 2.0, "radius of the corner: {start:?} {mid:?} {end:?}");
+    assert!((((start.x.raw_shim() as f64 - cx).hypot(start.y.raw_shim() as f64 - cy)) - 3_000_000.0).abs() < 2.0, "radius of the corner: {start:?} {mid:?} {end:?}");
     // The outline makes one closed loop, as kicad-cli will see it.
     let outline = eda_drc::outline::board_outline_of(&new, false);
     assert!(outline.valid && outline.polys.outline_count() == 1, "{:?}", outline.errors);
@@ -52,7 +52,7 @@ fn a_dxf_outline_becomes_segments_and_arcs_on_the_layer_the_dialog_chose() {
 
 /// The centre of the circle through three points.
 fn circle_through(a: Point, b: Point, c: Point) -> (f64, f64) {
-    let (ax, ay, bx, by, cx, cy) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, c.x as f64, c.y as f64);
+    let (ax, ay, bx, by, cx, cy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, c.x.raw_shim() as f64, c.y.raw_shim() as f64);
     let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
     let ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
     let uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
@@ -71,8 +71,8 @@ fn the_import_scale_multiplies_the_coordinates_and_the_default_line_width() {
     assert_eq!(new.len(), 4);
     // The 2 x 1 rectangle, doubled, with its lines doubled (0.2 mm default width -> 0.4 mm).
     let xs: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
-    assert_eq!(xs.iter().max().copied(), Some(4_000_000));
-    assert!(new.iter().all(|s| s.stroke_width() == 400_000 && s.layer() == "Dwgs.User"), "{new:?}");
+    assert_eq!(xs.iter().max().copied(), Some(Nm::from_raw_shim(4_000_000)));
+    assert!(new.iter().all(|s| s.stroke_width() == Nm::from_raw_shim(400_000) && s.layer() == "Dwgs.User"), "{new:?}");
 }
 
 #[test]
@@ -88,9 +88,9 @@ fn the_origin_moves_the_whole_picture_after_the_scale() {
     let new = added(&b);
     let xs: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
     let ys: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.y)).collect();
-    assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(10_000_000), Some(14_000_000)));
+    assert_eq!((xs.iter().min().copied(), xs.iter().max().copied()), (Some(Nm::from_raw_shim(10_000_000)), Some(Nm::from_raw_shim(14_000_000))));
     // The picture's y runs 0 to -1 mm in the board's frame; scaled 0 to -2 mm, then 5 mm up.
-    assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(-7_000_000), Some(-5_000_000)));
+    assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(Nm::from_raw_shim(-7_000_000)), Some(Nm::from_raw_shim(-5_000_000))));
 }
 
 fn req_copy(r: &ImportGraphics) -> ImportGraphics {
@@ -108,10 +108,10 @@ fn the_units_of_the_file_win_over_the_dialogs_and_a_file_with_none_takes_the_dia
         let xs: Vec<Nm> = added(&b).iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
         xs.iter().max().unwrap() - xs.iter().min().unwrap()
     };
-    assert_eq!(width("inches.dxf", "mm"), 50_800_000, "$INSUNITS 1");
-    assert_eq!(width("no_units.dxf", "inch"), 50_800_000);
-    assert_eq!(width("no_units.dxf", "mm"), 2_000_000);
-    assert_eq!(width("no_units.dxf", ""), 2_000_000);
+    assert_eq!(width("inches.dxf", "mm"), Nm::from_raw_shim(50_800_000), "$INSUNITS 1");
+    assert_eq!(width("no_units.dxf", "inch"), Nm::from_raw_shim(50_800_000));
+    assert_eq!(width("no_units.dxf", "mm"), Nm::from_raw_shim(2_000_000));
+    assert_eq!(width("no_units.dxf", ""), Nm::from_raw_shim(2_000_000));
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn a_circle_keeps_its_centre_and_a_point_on_it_for_the_radius() {
         })
         .collect();
     circles.sort_by_key(|c| c.0.x);
-    assert_eq!(circles, vec![(p(5_000_000, -5_000_000), p(6_600_000, -5_000_000)), (p(20_000_000, -15_000_000), p(24_000_000, -15_000_000)), (p(35_000_000, -25_000_000), p(36_600_000, -25_000_000))]);
+    assert_eq!(circles, vec![(p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(-5_000_000)), p(Nm::from_raw_shim(6_600_000), Nm::from_raw_shim(-5_000_000))), (p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(-15_000_000)), p(Nm::from_raw_shim(24_000_000), Nm::from_raw_shim(-15_000_000))), (p(Nm::from_raw_shim(35_000_000), Nm::from_raw_shim(-25_000_000)), p(Nm::from_raw_shim(36_600_000), Nm::from_raw_shim(-25_000_000)))]);
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn a_gap_in_the_outline_is_closed_when_fix_discontinuities_has_the_tolerance() {
     // With it (the dialog's default tolerance is 1 mm) the four corners meet.
     let mut b = board(&m);
     let mut r = req(dxf, "Edge.Cuts");
-    r.fix_tolerance_nm = Some(1_000_000);
+    r.fix_tolerance_nm = Some(Nm::from_raw_shim(1_000_000));
     b.apply(&Cmd::ImportGraphics(r)).unwrap();
     let new = added(&b);
     let outline = eda_drc::outline::board_outline_of(&new, false);
@@ -184,7 +184,7 @@ fn a_gap_in_the_outline_is_closed_when_fix_discontinuities_has_the_tolerance() {
     for (i, s) in new.iter().enumerate() {
         assert_eq!(ends(s).1, ends(&new[(i + 1) % 4]).0, "{new:?}");
     }
-    assert!(corners.contains(&p(10_000_000, 0)) || corners.contains(&p(10_000_000, 0)), "{corners:?}");
+    assert!(corners.contains(&p(Nm::from_raw_shim(10_000_000), Nm::ZERO)) || corners.contains(&p(Nm::from_raw_shim(10_000_000), Nm::ZERO)), "{corners:?}");
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn an_outline_that_replaces_the_boards_becomes_the_boards_outline() {
     let ring = &b.design().placement.as_ref().unwrap().outline;
     let (minx, maxx) = (ring.iter().map(|p| p.x).min().unwrap(), ring.iter().map(|p| p.x).max().unwrap());
     let (miny, maxy) = (ring.iter().map(|p| p.y).min().unwrap(), ring.iter().map(|p| p.y).max().unwrap());
-    assert_eq!((minx, maxx, miny, maxy), (0, 40_000_000, -30_000_000, 0), "{ring:?}");
+    assert_eq!((minx, maxx, miny, maxy), (Nm::ZERO, Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(-30_000_000), Nm::ZERO), "{ring:?}");
     // Edge.Cuts of the board are the imported shapes only: kicad-cli will see no 100 x 100 mm polygon.
     let edge = eda_model::outline::edge_cuts_shapes(b.design());
     assert_eq!(edge.len(), 8);
@@ -227,9 +227,9 @@ fn text_becomes_a_board_text_on_the_layer() {
     let dxf = "0\nSECTION\n2\nENTITIES\n0\nTEXT\n10\n5\n20\n5\n40\n2\n1\nREV A\n50\n90\n0\nENDSEC\n0\nEOF\n".to_string();
     b.apply(&Cmd::ImportGraphics(req(dxf, "F.SilkS"))).unwrap();
     let t = drawings(&b).texts.iter().find(|t| t.content == "REV A").unwrap();
-    assert_eq!((t.layer.as_str(), t.size_nm, t.angle, t.justify), ("F.SilkS", 2_000_000, 90_000, TextJustify::Left));
+    assert_eq!((t.layer.as_str(), t.size_nm, t.angle, t.justify), ("F.SilkS", Nm::from_raw_shim(2_000_000), 90_000, TextJustify::Left));
     // Baseline justified (bottom): the board's text is centred, so the anchor moved up half a height along the text's own up (here to the left).
-    assert_eq!((t.at.x, t.at.y), (4_000_000, -5_000_000), "{t:?}");
+    assert_eq!((t.at.x, t.at.y), (Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(-5_000_000)), "{t:?}");
 }
 
 #[test]
@@ -271,10 +271,10 @@ fn an_svg_outline_becomes_a_polygon_on_the_layer_with_the_strokes_width() {
     assert_eq!(new.len(), 1, "{new:?}");
     let Shape::Polygon { layer, stroke_width, filled, pts, .. } = &new[0] else { panic!("{new:?}") };
     // The stroke of the SVG is 0.1 mm; the dialog's DXF line width (0.2) has no say for an SVG. An SVG's Y axis already points down.
-    assert_eq!((layer.as_str(), *stroke_width, *filled), ("Dwgs.User", 100_000, false));
+    assert_eq!((layer.as_str(), *stroke_width, *filled), ("Dwgs.User", Nm::from_raw_shim(100_000), false));
     let (minx, maxx) = (pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap());
     let (miny, maxy) = (pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap());
-    assert_eq!((minx, maxx, miny, maxy), (0, 40_000_000, 0, 30_000_000));
+    assert_eq!((minx, maxx, miny, maxy), (Nm::ZERO, Nm::from_raw_shim(40_000_000), Nm::ZERO, Nm::from_raw_shim(30_000_000)));
     assert!(pts.len() > 20, "the rounded corners are cut into segments: {}", pts.len());
 }
 
@@ -288,9 +288,9 @@ fn an_svg_scale_and_origin_work_as_a_dxfs_do() {
     r.offset_y_nm = 20_000_000;
     b.apply(&Cmd::ImportGraphics(r)).unwrap();
     let Shape::Polygon { stroke_width, pts, .. } = &added(&b)[0] else { panic!() };
-    assert_eq!(*stroke_width, 50_000, "0.1 mm halved");
-    assert_eq!((pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap()), (10_000_000, 30_000_000));
-    assert_eq!((pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap()), (20_000_000, 35_000_000));
+    assert_eq!(*stroke_width, Nm::from_raw_shim(50_000), "0.1 mm halved");
+    assert_eq!((pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap()), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(30_000_000)));
+    assert_eq!((pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap()), (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(35_000_000)));
 }
 
 #[test]
@@ -303,7 +303,7 @@ fn an_svg_with_curves_filled_shapes_and_text_keeps_the_curves_and_the_fills() {
     assert!(new.iter().any(|s| matches!(s, Shape::Segment { .. })), "the straight pieces are lines");
     let fills: Vec<&Shape> = new.iter().filter(|s| matches!(s, Shape::Polygon { filled: true, .. })).collect();
     assert_eq!(fills.len(), 1, "the shape with the hole is one filled polygon");
-    assert_eq!(fills[0].stroke_width(), 0, "a fill with no stroke has no width");
+    assert_eq!(fills[0].stroke_width(), Nm::ZERO, "a fill with no stroke has no width");
     assert_eq!(drawings(&b).texts.len(), 1, "text is not imported: only the fixture board's own is there");
 }
 
@@ -320,7 +320,7 @@ fn an_svg_outline_can_replace_the_boards_outline_too() {
     b.apply(&Cmd::ImportGraphics(r)).unwrap();
     assert!(eda_model::outline::outline_is_shapes(b.design()));
     let ring = &b.design().placement.as_ref().unwrap().outline;
-    assert_eq!((ring.iter().map(|p| p.x).min().unwrap(), ring.iter().map(|p| p.x).max().unwrap(), ring.iter().map(|p| p.y).max().unwrap()), (0, 40_000_000, 30_000_000), "{}", ring.len());
+    assert_eq!((ring.iter().map(|p| p.x).min().unwrap(), ring.iter().map(|p| p.x).max().unwrap(), ring.iter().map(|p| p.y).max().unwrap()), (Nm::ZERO, Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(30_000_000)), "{}", ring.len());
 }
 
 #[test]
@@ -334,7 +334,7 @@ fn the_command_reads_from_and_writes_to_the_json_the_studio_sends() {
     // Everything but the format, the text and the layer defaults.
     let minimal = serde_json::json!({ "op": "import_graphics", "format": "svg", "text": "<svg/>", "layer": "F.SilkS" });
     let Cmd::ImportGraphics(r) = serde_json::from_value::<Cmd>(minimal).unwrap() else { panic!() };
-    assert_eq!((r.format, r.scale, r.offset_x_nm, r.line_width_nm, r.group, r.fix_tolerance_nm, r.replace_outline), (GraphicsFormat::Svg, 1.0, 0, 200_000, false, None, false));
+    assert_eq!((r.format, r.scale, r.offset_x_nm, r.line_width_nm, r.group, r.fix_tolerance_nm, r.replace_outline), (GraphicsFormat::Svg, 1.0, 0, Nm::from_raw_shim(200_000), false, None, false));
     assert_eq!(GraphicsFormat::from_extension("a/b/Board.DXF"), Some(GraphicsFormat::Dxf));
     assert_eq!(GraphicsFormat::from_extension("logo.svg"), Some(GraphicsFormat::Svg));
     assert_eq!(GraphicsFormat::from_extension("board.kicad_pcb"), None);

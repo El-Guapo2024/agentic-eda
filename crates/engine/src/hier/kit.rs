@@ -6,6 +6,7 @@
 //! stroke font's widths, `crate::fields` for where Autoplace Fields puts the fields), the same ones the overlap checker
 //! (`eda_kicad::sch_overlap`) holds the written `.kicad_sch` files to. Everything is nanometres, rounded outward to whole ones.
 
+use eda_model::units::Nm;
 use eda_layout::{Point as LPoint, Side};
 use eda_model::ir::{Point, PowerSymbol, SymbolInstance};
 use eda_model::kicad_font::{HJustify, VJustify};
@@ -81,7 +82,7 @@ pub fn outward(r: kg::Rect) -> Rect {
 }
 
 fn fpt(p: Point) -> (f64, f64) {
-    (p.x as f64, p.y as f64)
+    (p.x.raw_shim() as f64, p.y.raw_shim() as f64)
 }
 
 /// `EDA_TEXT::GetTextBox` of one line of 1.27 mm text at `anchor`, justified `h`/`v`, turned a quarter when `vertical`.
@@ -215,9 +216,9 @@ impl Placed {
     /// `SymbolInstance::at` for the current pose.
     pub fn at(&self) -> Point {
         if self.flip {
-            Point { x: self.x + self.w(), y: self.y + self.h() }
+            Point { x: Nm::from_raw_shim(self.x + self.w()), y: Nm::from_raw_shim(self.y + self.h()) }
         } else {
-            Point { x: self.x, y: self.y }
+            Point { x: Nm::from_raw_shim(self.x), y: Nm::from_raw_shim(self.y) }
         }
     }
 
@@ -240,9 +241,9 @@ impl Placed {
         let l = self.b.node.stub_tip(LPoint { x: 0, y: 0 }, pi);
         let side = self.b.node.ports[pi].side;
         if self.flip {
-            Some((Point { x: self.x + self.w() - l.x, y: self.y + self.h() - l.y }, flip_side(side)))
+            Some((Point { x: Nm::from_raw_shim(self.x + self.w() - l.x), y: Nm::from_raw_shim(self.y + self.h() - l.y) }, flip_side(side)))
         } else {
-            Some((Point { x: self.x + l.x, y: self.y + l.y }, side))
+            Some((Point { x: Nm::from_raw_shim(self.x + l.x), y: Nm::from_raw_shim(self.y + l.y) }, side))
         }
     }
 
@@ -251,8 +252,8 @@ impl Placed {
         self.x = 0;
         self.y = 0;
         if let Some((t, _)) = self.tip(pin_number) {
-            self.x = target.x - t.x;
-            self.y = target.y - t.y;
+            self.x = (target.x - t.x).raw_shim();
+            self.y = (target.y - t.y).raw_shim();
         }
     }
 
@@ -393,7 +394,7 @@ pub fn sheet_pin_rect(pin: Point, left: bool, name: &str) -> Rect {
 
 /// A no-connect flag.
 pub fn nc_rect(at: Point) -> Rect {
-    Rect { x0: at.x - 610, y0: at.y - 610, x1: at.x + 610, y1: at.y + 610 }
+    Rect { x0: (at.x - Nm::from_raw_shim(610)).raw_shim(), y0: (at.y - Nm::from_raw_shim(610)).raw_shim(), x1: (at.x + Nm::from_raw_shim(610)).raw_shim(), y1: (at.y + Nm::from_raw_shim(610)).raw_shim() }
 }
 
 #[cfg(test)]
@@ -440,22 +441,22 @@ mod tests {
         r.y = 10 * G;
         let (top, side) = r.tip("1").unwrap();
         assert_eq!(side, Side::Top);
-        assert_eq!(top.y, r.y - STUB);
+        assert_eq!(top.y, Nm::from_raw_shim(r.y - STUB));
         let (bottom, _) = r.tip("2").unwrap();
-        assert_eq!(bottom.y, r.y + r.h() + STUB);
+        assert_eq!(bottom.y, Nm::from_raw_shim(r.y + r.h() + STUB));
         let fields = r.field_rects();
         assert!(fields.iter().all(|f| f.x0 >= r.body_rect().x1), "fields sit to the right of the body: {fields:?}");
         // Turned half a turn, pin 2 is the top one, in the same column.
         r.flip = true;
         let (top2, _) = r.tip("2").unwrap();
         let (bottom1, _) = r.tip("1").unwrap();
-        assert_eq!(top2.y, r.y - STUB);
-        assert_eq!(bottom1.y, r.y + r.h() + STUB);
+        assert_eq!(top2.y, Nm::from_raw_shim(r.y - STUB));
+        assert_eq!(bottom1.y, Nm::from_raw_shim(r.y + r.h() + STUB));
         assert_eq!(top2.x, top.x);
-        assert_eq!(r.at().x, r.x + r.w());
+        assert_eq!(r.at().x, Nm::from_raw_shim(r.x + r.w()));
         // place_tip puts a chosen tip where asked.
-        r.place_tip("2", Point { x: 5 * G, y: 7 * G });
-        assert_eq!(r.tip("2").unwrap().0, Point { x: 5 * G, y: 7 * G });
+        r.place_tip("2", Point { x: Nm::from_raw_shim(5 * G), y: Nm::from_raw_shim(7 * G) });
+        assert_eq!(r.tip("2").unwrap().0, Point { x: Nm::from_raw_shim(5 * G), y: Nm::from_raw_shim(7 * G) });
     }
 
     #[test]

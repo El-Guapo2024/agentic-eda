@@ -23,8 +23,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM` in `DIALOG_LABEL_PROPERTIES` and `DIALOG_TEXT_PROPERTIES`: "Don't allow text to disappear; it can be difficult to
 /// correct if you can't select it" (`m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`).
-const TEXT_SIZE_MIN_NM: Nm = 10_000;
-const TEXT_SIZE_MAX_NM: Nm = 1_000_000_000;
+const TEXT_SIZE_MIN_NM: Nm = Nm::from_raw_shim(10_000);
+const TEXT_SIZE_MAX_NM: Nm = Nm::from_raw_shim(1_000_000_000);
 
 /// `COLOR4D::UNSPECIFIED` is all four channels zero: the colour of the item's layer.
 fn specified(c: SchColor) -> Option<SchColor> {
@@ -158,7 +158,7 @@ impl<'a> Board<'a> {
         let before: LabelLook = sch.extras.label_looks.get(id).copied().unwrap_or_default();
         let mut now = before;
         if let Some(size) = look.size_nm {
-            now.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { size };
+            now.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
         }
         if let Some(b) = look.bold {
             now.bold = b;
@@ -345,7 +345,7 @@ impl<'a> Board<'a> {
                     let before = stroke;
                     if let (Some(w), Kind::Stroked) = (width_nm, kind) {
                         // `int width = std::max( 0, m_wireWidth.GetIntValue() )`
-                        stroke.width_nm = w.max(0);
+                        stroke.width_nm = w.max(Nm::ZERO);
                     }
                     if let Some(s) = style {
                         stroke.style = s;
@@ -354,7 +354,7 @@ impl<'a> Board<'a> {
                         stroke.color = c;
                     }
                     if let (Some(w), Kind::Notes(i)) = (width_nm, kind) {
-                        let w = w.max(0);
+                        let w = w.max(Nm::ZERO);
                         changed |= sch.lines[*i].width_nm != w;
                         sch.lines[*i].width_nm = w;
                     }
@@ -369,7 +369,7 @@ impl<'a> Board<'a> {
                     let mut look: JunctionLook = sch.extras.junction_looks.get(id).copied().unwrap_or_default();
                     let before = look;
                     if let Some(d) = diameter_nm {
-                        look.diameter_nm = d.max(0);
+                        look.diameter_nm = d.max(Nm::ZERO);
                     }
                     if let Some(c) = color {
                         look.color = c;

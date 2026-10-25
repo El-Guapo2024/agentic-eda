@@ -124,7 +124,7 @@ impl Segment {
     }
 
     pub fn length(&self) -> f64 {
-        let (dx, dy) = ((self.b.x - self.a.x) as f64, (self.b.y - self.a.y) as f64);
+        let (dx, dy) = ((self.b.x - self.a.x).raw_shim() as f64, (self.b.y - self.a.y).raw_shim() as f64);
         (dx * dx + dy * dy).sqrt()
     }
 }
@@ -327,7 +327,7 @@ impl Item {
 
     pub fn width(&self) -> Nm {
         match self {
-            Item::Solid(_) => 0,
+            Item::Solid(_) => Nm::ZERO,
             Item::Segment(s) => s.width,
             Item::Arc(a) => a.width,
             Item::Via(v) => v.diameter,

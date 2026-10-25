@@ -11,7 +11,7 @@ fn design() -> Design {
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         routing: None,
-        placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 50_000_000, y: 0 }, Point { x: 50_000_000, y: 50_000_000 }, Point { x: 0, y: 50_000_000 }], footprints: vec![], modules: vec![] }),
+        placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(50_000_000) }], footprints: vec![], modules: vec![] }),
         drawings: None,
     }
 }
@@ -31,14 +31,14 @@ fn key(check: &str, items: &[&str]) -> DrcExclusionKey {
 #[test]
 fn a_waived_violation_is_stored_sorted_and_adding_it_again_edits_its_comment() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     assert!(waived(&b).is_empty());
     let mut a = exclusion("clearance", &["u-2", "u-1"]);
-    a.positions_nm = vec![[300_000, 4000], [100_000, 2000], [300_000, 4000]];
+    a.positions_nm = vec![[Nm::from_raw_shim(300_000), Nm::from_raw_shim(4000)], [Nm::from_raw_shim(100_000), Nm::from_raw_shim(2000)], [Nm::from_raw_shim(300_000), Nm::from_raw_shim(4000)]];
     b.apply(&Cmd::AddDrcExclusions { exclusions: vec![exclusion("track_width", &["u-9"]), a] }).unwrap();
     let list = waived(&b);
     assert_eq!(list.iter().map(|e| e.check.as_str()).collect::<Vec<_>>(), vec!["clearance", "track_width"], "kept in order, one entry for each");
-    assert_eq!(list[0].positions_nm, vec![[100_000, 2000], [300_000, 4000]], "the marker positions to try are sorted and listed once");
+    assert_eq!(list[0].positions_nm, vec![[Nm::from_raw_shim(100_000), Nm::from_raw_shim(2000)], [Nm::from_raw_shim(300_000), Nm::from_raw_shim(4000)]], "the marker positions to try are sorted and listed once");
 
     // The same violation again (a comment typed in "Edit exclusion comment...") replaces the entry; it does not pile up.
     let mut again = exclusion("clearance", &["u-2", "u-1"]);
@@ -57,7 +57,7 @@ fn a_waived_violation_is_stored_sorted_and_adding_it_again_edits_its_comment() {
 #[test]
 fn an_exclusion_is_removed_by_its_key_and_removing_one_that_is_not_there_is_refused() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::AddDrcExclusions { exclusions: vec![exclusion("clearance", &["a", "b"]), exclusion("clearance", &["a", "c"]), exclusion("hole_clearance", &["a", "b"])] }).unwrap();
     b.apply(&Cmd::DeleteDrcExclusions { exclusions: vec![key("clearance", &["a", "b"])] }).unwrap();
     assert_eq!(waived(&b).iter().map(|e| (e.check.as_str(), e.items.join("+"))).collect::<Vec<_>>(), vec![("clearance", "a+c".to_string()), ("hole_clearance", "a+b".to_string())]);
@@ -71,7 +71,7 @@ fn an_exclusion_is_removed_by_its_key_and_removing_one_that_is_not_there_is_refu
 #[test]
 fn delete_all_markers_with_the_exclusions_forgets_every_waived_violation_in_one_step() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     // Nothing waived: refused, nothing to undo.
     let e = b.apply(&Cmd::ClearDrcExclusions).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_drc_exclusion");
@@ -90,7 +90,7 @@ fn delete_all_markers_with_the_exclusions_forgets_every_waived_violation_in_one_
 #[test]
 fn an_exclusion_that_names_nothing_is_refused_and_stores_nothing() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     for (what, bad) in [
         ("no violation at all", vec![]),
         ("no check", vec![exclusion("", &["a"])]),
@@ -119,7 +119,7 @@ fn the_review_verbs_belong_to_the_editor_they_work_in() {
 #[test]
 fn erc_severities_are_stored_as_sent_and_replace_the_whole_table() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let sev = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
     let stored = |b: &Board| b.design().schematic.as_ref().unwrap().extras.erc_severities.clone();
     // A check may be named at its own default: the derived project ignores the library-link checks unless the table says otherwise,
@@ -150,7 +150,7 @@ fn the_commands_read_from_the_json_the_studio_sends() {
         "exclusions": [{ "check": "clearance", "items": ["a", "b"], "ids": ["R1.1", "t5"], "positions_nm": [[1_500_000_000, -2_000_000_000]], "comment": "ok" }],
     });
     let cmd: Cmd = serde_json::from_value(body).unwrap();
-    assert!(matches!(&cmd, Cmd::AddDrcExclusions { exclusions } if exclusions[0].positions_nm == vec![[1_500_000_000, -2_000_000_000]] && exclusions[0].ids.len() == 2));
+    assert!(matches!(&cmd, Cmd::AddDrcExclusions { exclusions } if exclusions[0].positions_nm == vec![[Nm::from_raw_shim(1_500_000_000), Nm::from_raw_shim(-2_000_000_000)]] && exclusions[0].ids.len() == 2));
     let del: Cmd = serde_json::from_value(serde_json::json!({ "op": "delete_drc_exclusions", "exclusions": [{ "check": "clearance", "items": ["a", "b"] }] })).unwrap();
     assert!(matches!(del, Cmd::DeleteDrcExclusions { .. }));
     let sev: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_erc_severities", "severities": { "pin_not_connected": "warning" } })).unwrap();
@@ -163,9 +163,9 @@ fn the_commands_read_from_the_json_the_studio_sends() {
 #[test]
 fn the_design_json_stays_the_same_without_exclusions_and_round_trips_with_them() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     assert!(!serde_json::to_string(b.design()).unwrap().contains("drc_exclusions"), "an older design.json reads, and writes, as before");
-    b.apply(&Cmd::AddDrcExclusions { exclusions: vec![DrcExclusion { comment: "known".into(), positions_nm: vec![[1, 2000]], ids: vec!["R1.1".into()], ..exclusion("annular_width", &["u-1"]) }] }).unwrap();
+    b.apply(&Cmd::AddDrcExclusions { exclusions: vec![DrcExclusion { comment: "known".into(), positions_nm: vec![[Nm::from_raw_shim(1), Nm::from_raw_shim(2000)]], ids: vec!["R1.1".into()], ..exclusion("annular_width", &["u-1"]) }] }).unwrap();
     let text = serde_json::to_string(b.design()).unwrap();
     let back: Design = serde_json::from_str(&text).unwrap();
     assert_eq!(back.drawings.unwrap().drc_exclusions, waived(&b));
@@ -176,7 +176,7 @@ fn the_design_json_stays_the_same_without_exclusions_and_round_trips_with_them()
 #[test]
 fn a_table_of_erc_severities_is_written_to_design_json_and_read_back() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let table: BTreeMap<String, String> = [("pin_not_connected".to_string(), "ignore".to_string())].into();
     b.apply(&Cmd::SetErcSeverities { severities: table.clone() }).unwrap();
     assert!(!b.design().schematic.as_ref().unwrap().extras.writes_nothing(), "a table alone makes the extras worth writing");
@@ -197,7 +197,7 @@ fn marker(error_type: &str, x: i64, item: &str) -> Option<eda_model::ir::ErcMark
     if error_type.is_empty() {
         return None;
     }
-    Some(eda_model::ir::ErcMarker { error_type: error_type.into(), at_nm: [x, x], items: vec![item.into()], ..Default::default() })
+    Some(eda_model::ir::ErcMarker { error_type: error_type.into(), at_nm: [Nm::from_raw_shim(x), Nm::from_raw_shim(x)], items: vec![item.into()], ..Default::default() })
 }
 
 fn add_erc(check: &str, location: &str, comment: &str, marker: Option<eda_model::ir::ErcMarker>) -> Cmd {
@@ -207,7 +207,7 @@ fn add_erc(check: &str, location: &str, comment: &str, marker: Option<eda_model:
 #[test]
 fn an_erc_exclusion_keeps_its_comment_and_marker_text_and_adding_it_again_edits_them() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&add_erc("wire_dangling", "w2", "", None)).unwrap();
     b.apply(&add_erc("pin_not_connected", "U1.1", "left open on purpose", marker("ERCET_PIN_NOT_CONNECTED", 1, "u"))).unwrap();
     let list = erc_waived(&b);
@@ -227,7 +227,7 @@ fn an_erc_exclusion_keeps_its_comment_and_marker_text_and_adding_it_again_edits_
 #[test]
 fn an_erc_finding_with_no_location_cannot_be_excluded_and_deleting_needs_the_exact_key() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let e = b.apply(&add_erc("wire_dangling", "", "why", None)).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_erc_exclusion");
     assert!(erc_waived(&b).is_empty());
@@ -246,7 +246,7 @@ fn an_erc_finding_with_no_location_cannot_be_excluded_and_deleting_needs_the_exa
 #[test]
 fn an_erc_exclusion_on_one_placement_leaves_the_other() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let on = |sheet: &str| marker("ERCET_PIN_NOT_CONNECTED", 1, "u").map(|mk| eda_model::ir::ErcMarker { sheet: vec!["root".into(), sheet.into()], main_sheet: vec!["root".into(), sheet.into()], ..mk });
     b.apply(&add_erc("pin_not_connected", "R1.2", "first", on("s1"))).unwrap();
     b.apply(&add_erc("pin_not_connected", "R1.2", "second", on("s2"))).unwrap();
@@ -268,7 +268,7 @@ fn the_erc_exclusion_json_reads_with_or_without_a_comment_and_writes_nothing_ext
     assert_eq!(full.domain(), Domain::Schematic);
 
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&add_erc("wire_dangling", "w1", "", None)).unwrap();
     let text = serde_json::to_string(b.design()).unwrap();
     assert!(text.contains("erc_exclusions") && !text.contains("\"comment\"") && !text.contains("\"marker\""), "a bare exclusion serializes as it always did: {text}");
@@ -280,7 +280,7 @@ fn the_erc_exclusion_json_reads_with_or_without_a_comment_and_writes_nothing_ext
 #[test]
 fn delete_all_markers_with_the_exclusions_clears_the_list_and_is_refused_when_it_is_empty() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let e = b.apply(&Cmd::ClearErcExclusions).unwrap_err();
     assert_eq!(e[0].check, "ops_no_schematic", "a board with no schematic has no exclusion to clear");
     b.apply(&add_erc("wire_dangling", "w1", "x", marker("ERCET_WIRE_DANGLING", 1, "w"))).unwrap();
@@ -306,7 +306,7 @@ fn grid(b: &Board) -> Option<u32> {
 #[test]
 fn the_connection_grid_is_from_25_to_10000_mils_and_kicads_default_is_no_setting_at_all() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     assert_eq!(grid(&b), None);
     b.apply(&Cmd::SetConnectionGrid { mils: 25 }).unwrap();
     assert_eq!(grid(&b), Some(25));
@@ -326,7 +326,7 @@ fn the_connection_grid_is_from_25_to_10000_mils_and_kicads_default_is_no_setting
 #[test]
 fn a_connection_grid_is_written_to_design_json_and_read_back_and_the_command_reads_from_the_studios_json() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::SetConnectionGrid { mils: 100 }).unwrap();
     assert!(!b.design().schematic.as_ref().unwrap().extras.writes_nothing(), "the grid alone makes the extras worth writing");
     let text = serde_json::to_string(b.design()).unwrap();

@@ -127,7 +127,7 @@ pub fn operations(design: &Design, model: &ConstraintModel, span: &DrillSpan, no
     let through = span_pair.0 == "F.Cu" && span_pair.1 == "B.Cu";
     if !non_plated || merged {
         for v in design.routing.iter().flat_map(|r| r.vias.iter()) {
-            if v.drill == 0 {
+            if v.drill == Nm::ZERO {
                 continue;
             }
             let pair = top_bottom(&layers, &v.from_layer, &v.to_layer);
@@ -209,7 +209,7 @@ fn pad_op(fp: &FootprintInstance, pad: &Pad, tokens: &[String], non_plated: bool
         (None, Some(d)) => (d, d),
         _ => return None,
     };
-    if size.0 == 0 {
+    if size.0 == Nm::ZERO {
         return None;
     }
     let has = |p: &str| tokens.iter().any(|t| t == &format!("(property {p})"));
@@ -284,7 +284,7 @@ pub struct DrillGroup {
     pub first: DrillOp,
     pub operations: usize,
     /// Distinct positions, nm.
-    pub sites: BTreeSet<(i64, i64)>,
+    pub sites: BTreeSet<(Nm, Nm)>,
     pub symbol: DrillSymbolAssignment,
 }
 
@@ -547,8 +547,8 @@ pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, char
                 DrillChartColumnId::AspectRatio => {
                     let depth = layer_distance_nm(stackup, &copper, &f.top, &f.bottom);
                     let d = f.diameter;
-                    if depth > 0 && d > 0 {
-                        format!("{:.1}:1", depth as f64 / d as f64)
+                    if depth > 0 && d > Nm::ZERO {
+                        format!("{:.1}:1", depth as f64 / d.raw_shim() as f64)
                     } else {
                         NO_VALUE.into()
                     }
@@ -561,7 +561,7 @@ pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, char
     let mut trailer = Vec::new();
     if chart.show_totals {
         let ops: usize = gs.iter().map(|g| g.operations).sum();
-        let sites: BTreeSet<(i64, i64)> = gs.iter().flat_map(|g| g.sites.iter().copied()).collect();
+        let sites: BTreeSet<(Nm, Nm)> = gs.iter().flat_map(|g| g.sites.iter().copied()).collect();
         trailer.push(vec![format!("{ops} OPS / {} SITES", sites.len())]);
     }
     ChartContent { rows, trailer, row_shapes, symbol_column }
@@ -695,7 +695,7 @@ pub fn rebuild(t: &mut Table, chart: &mut DrillChart, c: &ChartContent) {
     let cols = chart.columns.len().max(1);
     let data = c.rows.len();
     let rows = 1 + data + c.trailer.len();
-    let anchor = if t.cells.is_empty() { Point { x: 0, y: 0 } } else { t.at };
+    let anchor = if t.cells.is_empty() { Point { x: Nm::ZERO, y: Nm::ZERO } } else { t.at };
     let mut new_keys = vec![String::new(); rows];
     for (i, (k, _)) in c.rows.iter().enumerate() {
         new_keys[1 + i] = k.clone();
@@ -732,8 +732,8 @@ pub fn rebuild(t: &mut Table, chart: &mut DrillChart, c: &ChartContent) {
         }
     }
     t.cells = cells;
-    t.col_widths = vec![0; cols];
-    t.row_heights = vec![0; rows];
+    t.col_widths = vec![Nm::ZERO; cols];
+    t.row_heights = vec![Nm::ZERO; rows];
     crate::pcb_table_builders::autosize(t);
     for (col, def) in chart.columns.iter().enumerate() {
         if def.width_nm > t.col_widths[col] {
@@ -748,7 +748,7 @@ pub fn rebuild(t: &mut Table, chart: &mut DrillChart, c: &ChartContent) {
 
 /// A new chart's table (`PCB_DRILL_CHART( board )`: no cells yet, lines 0.1 mm wide), on `layer` with its first corner at `at`.
 pub fn new_chart_table(layer: &str, at: Point) -> Table {
-    let mut t = Table::new_grid(layer, at, 1, 1, 0, 0, 100_000);
+    let mut t = Table::new_grid(layer, at, 1, 1, Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100_000));
     t.cells.clear();
     t.col_widths.clear();
     t.row_heights.clear();
@@ -843,21 +843,21 @@ mod tests {
 
     #[test]
     fn lengths_are_written_as_the_generated_tables_write_them() {
-        assert_eq!(format_length(300_000, TableUnits::Mm, 3), "0.300");
-        assert_eq!(format_length(1_143_000, TableUnits::Mm, 2), "1.14");
-        assert_eq!(format_length(1_524_000, TableUnits::Inch, 3), "0.0600\u{2033}");
-        assert_eq!(format_length(1_524_000, TableUnits::Mils, 3), "60.0 mil");
-        assert_eq!(format_length(1_524_000, TableUnits::Mils, 1), "60 mil");
+        assert_eq!(format_length(Nm::from_raw_shim(300_000), TableUnits::Mm, 3), "0.300");
+        assert_eq!(format_length(Nm::from_raw_shim(1_143_000), TableUnits::Mm, 2), "1.14");
+        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Inch, 3), "0.0600\u{2033}");
+        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Mils, 3), "60.0 mil");
+        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Mils, 1), "60 mil");
     }
 
     #[test]
     fn marks_are_assigned_from_the_lowest_free_shape_and_then_letters() {
-        let op = |d: Nm| DrillOp { source: String::new(), at: Point { x: 0, y: 0 }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
+        let op = |d: Nm| DrillOp { source: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
         let p = DrillSymbolProfile::default();
-        assert_eq!(group_key(&p, &op(300_000)), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
+        assert_eq!(group_key(&p, &op(Nm::from_raw_shim(300_000))), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
         let mut profile = DrillSymbolProfile::default();
-        profile.assignments.insert(group_key(&p, &op(400_000)), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
-        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(300_000 + i * 100_000)), first: op(300_000 + i * 100_000), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
+        profile.assignments.insert(group_key(&p, &op(Nm::from_raw_shim(400_000))), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
+        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(Nm::from_raw_shim(300_000 + i * 100_000))), first: op(Nm::from_raw_shim(300_000 + i * 100_000)), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
         assign(&mut gs, &mut profile);
         assert_eq!((gs[0].symbol.mode, gs[0].symbol.shape_index), (DrillMarkMode::Shape, 1), "shape 0 is the frozen 0.4 mm group's");
         assert_eq!(gs[1].symbol.shape_index, 0);

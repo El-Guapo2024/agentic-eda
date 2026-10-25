@@ -83,12 +83,12 @@ use std::collections::BTreeMap;
 /// Matches the existing single-segment router's own snap radius
 /// (`web/studio/src/components/canvas/routing.ts`'s `findRouteAnchor`
 /// caller), so the two tools feel consistent.
-pub const SNAP_NM: Nm = 500_000;
+pub const SNAP_NM: Nm = Nm::from_raw_shim(500_000);
 
 /// How far off a point may be and still be the point: the studio's own snapping (`PcbSnap.routePoint`) has put the cursor exactly on a
 /// pad, a via, a track end or a track's centre line, and the rounding of the browser's coordinates moves it at most this much (the 2 um
 /// the studio's micrometre coordinates once allowed).
-pub const EXACT_NM: Nm = 2_000;
+pub const EXACT_NM: Nm = Nm::from_raw_shim(2_000);
 
 #[derive(Debug, Clone)]
 pub struct Preview {
@@ -237,7 +237,7 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new() }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new() }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -470,9 +470,9 @@ impl LinePlacer {
         }
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers(to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, is_virtual: false };
         let start = self.fixed_start();
-        let lead = (at.x - start.x, at.y - start.y);
+        let lead = ((at.x - start.x).raw_shim(), (at.y - start.y).raw_shim());
         match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
-            Some(force) => Point { x: at.x + force.0 as Nm, y: at.y + force.1 as Nm },
+            Some(force) => Point { x: at.x + Nm::from_raw_shim(force.0), y: at.y + Nm::from_raw_shim(force.1) },
             None => at,
         }
     }
@@ -917,13 +917,13 @@ mod tests {
         let node = Node::new();
         let rules = rules();
         let settings = RoutingSettings::default();
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        let pv = placer.preview(&node, &rules, &settings, Point { x: 1_000_000, y: 0 });
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        let pv = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
         assert!(!pv.colliding);
-        assert_eq!(pv.head.last(), Some(Point { x: 1_000_000, y: 0 }));
-        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: 1_000_000, y: 0 }), FixOutcome::Fixed { real_end: false });
+        assert_eq!(pv.head.last(), Some(Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }));
+        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }), FixOutcome::Fixed { real_end: false });
         assert_eq!(placer.runs.len(), 1);
-        let finished = placer.finish(&node, &rules, &settings, Point { x: 2_000_000, y: 0 }).expect("collision-free finish must succeed");
+        let finished = placer.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO }).expect("collision-free finish must succeed");
         assert!(placer.idle);
         assert!(!finished.is_empty());
         let total_len: f64 = finished.iter().map(|l| l.length()).sum();
@@ -933,11 +933,11 @@ mod tests {
     #[test]
     fn walks_around_an_obstacle_between_fixed_points() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2_500_000, y: 0 }, shape: Shape::Circle { c: Point { x: 2_500_000, y: 0 }, r: 500_000 }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::ZERO }, r: Nm::from_raw_shim(500_000) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
-        let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        let pv = placer.preview(&node, &rules, &settings, Point { x: 5_000_000, y: 0 });
+        let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        let pv = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
         assert!(!pv.colliding, "walkaround must clear the obstacle");
         assert!(pv.head.point_count() > 2, "must actually detour, not run straight through the pad");
     }
@@ -946,15 +946,15 @@ mod tests {
     #[test]
     fn mark_obstacles_commits_collision_only_when_can_violate_drc() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 1_000_000, y: 0 }, shape: Shape::Circle { c: Point { x: 1_000_000, y: 0 }, r: 500_000 }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, r: Nm::from_raw_shim(500_000) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let mut settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         assert!(!settings.can_violate_drc);
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: 2_000_000, y: 0 }), FixOutcome::Blocked);
-        assert!(placer.finish(&node, &rules, &settings, Point { x: 2_000_000, y: 0 }).is_none());
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO }), FixOutcome::Blocked);
+        assert!(placer.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO }).is_none());
         settings.can_violate_drc = true;
-        assert!(matches!(placer.fix(&node, &rules, &settings, Point { x: 2_000_000, y: 0 }), FixOutcome::Fixed { .. }));
+        assert!(matches!(placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO }), FixOutcome::Fixed { .. }));
     }
 
     /// `GetFixAllSegments()` off: a click fixes every segment but the last, which stays free (`FixRoute`'s `lastV`).
@@ -962,9 +962,9 @@ mod tests {
     fn without_fix_all_segments_a_click_leaves_the_last_segment_free() {
         let node = Node::new();
         let rules = rules();
-        let target = Point { x: 3_000_000, y: 1_000_000 };
+        let target = Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(1_000_000) };
         let mut all = RoutingSettings::default();
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
         let head = placer.preview(&node, &rules, &all, target).head.pts;
         assert_eq!(head.len(), 3, "an elbow of two legs: {head:?}");
         assert_eq!(placer.fix(&node, &rules, &all, target), FixOutcome::Fixed { real_end: false });
@@ -972,13 +972,13 @@ mod tests {
         assert_eq!(placer.fixed_start(), target);
 
         all.fix_all_segments = false;
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
         assert_eq!(placer.fix(&node, &rules, &all, target), FixOutcome::Fixed { real_end: false });
         assert_eq!(placer.runs[0].pts, head[..2].to_vec(), "only the first leg is fixed");
         assert_eq!(placer.fixed_start(), head[1], "and the next one starts where the free one did");
         assert_eq!(placer.direction, Direction45::from_seg(head[0], head[1]), "continuing in the direction of the leg before it");
         // A click that ends the route fixes the lot, whatever the setting says.
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
         let finished = placer.finish(&node, &rules, &all, target).unwrap();
         assert_eq!(finished[0].pts, head);
     }
@@ -989,17 +989,17 @@ mod tests {
     fn a_long_detour_hugs_the_obstacle_unless_the_hug_threshold_allows_it() {
         let mut node = Node::new();
         // a 20 mm wall of GND between the start and the cursor, 4 mm apart: the way round is 5 times as long
-        node.add(Item::Segment(crate::item::Segment { net: net_of("GND"), layer: 0, a: Point { x: 2_000_000, y: -10_000_000 }, b: Point { x: 2_000_000, y: 10_000_000 }, width: 200_000, source_track: None, locked: false }));
+        node.add(Item::Segment(crate::item::Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(-10_000_000) }, b: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(10_000_000) }, width: Nm::from_raw_shim(200_000), source_track: None, locked: false }));
         let rules = rules();
-        let cursor = Point { x: 4_000_000, y: 0 };
-        let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let cursor = Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO };
+        let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
 
         let hugging = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
         let pv = placer.preview(&node, &rules, &hugging, cursor);
         assert!(!pv.colliding);
         let end = pv.head.last().unwrap();
         assert_ne!(end, cursor, "the head does not go the 20 mm round to the cursor: {:?}", pv.head.pts);
-        assert!(end.x < 2_000_000 && pv.head.length() < 6_000_000.0, "it stops at the wall's clearance, on the near side: {:?}", pv.head.pts);
+        assert!(end.x < Nm::from_raw_shim(2_000_000) && pv.head.length() < 6_000_000.0, "it stops at the wall's clearance, on the near side: {:?}", pv.head.pts);
 
         let patient = RoutingSettings { walkaround_hug_length_threshold: 3.0, ..hugging.clone() };
         let pv = placer.preview(&node, &rules, &patient, cursor);
@@ -1012,20 +1012,20 @@ mod tests {
     #[test]
     fn a_via_placed_on_a_pad_is_pushed_off_within_the_via_force_iteration_limit() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 500_000 }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: Nm::from_raw_shim(500_000) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
-        let mut placer = LinePlacer::start(&node, Point { x: 3_000_000, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.toggle_via(true, 600_000, 300_000);
-        let on_the_pad = Point { x: 200_000, y: 300_000 };
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000));
+        let on_the_pad = Point { x: Nm::from_raw_shim(200_000), y: Nm::from_raw_shim(300_000) };
         let settings = RoutingSettings::default();
         let placed = placer.place_via(&node, &rules, &settings, on_the_pad, 1);
-        let centre_distance = ((placed.x as f64).powi(2) + (placed.y as f64).powi(2)).sqrt();
+        let centre_distance = ((placed.x.raw_shim() as f64).powi(2) + (placed.y.raw_shim() as f64).powi(2)).sqrt();
         assert!(centre_distance >= 1_000_000.0 - 500.0, "the 600 um via is {centre_distance} um from the 500 um pad's centre: {placed:?}");
         // one step of the whole MTV leaves the pad (KiCad's quarter-diameter limit is a no-op, findings p5 F1-3), and the next
         // iteration finds it free -- two iterations; with one, the loop ends at the limit and the push counts as failed
         let two = RoutingSettings { via_force_prop_iteration_limit: 2, ..settings.clone() };
         let placed = placer.place_via(&node, &rules, &two, on_the_pad, 1);
-        assert!(((placed.x as f64).powi(2) + (placed.y as f64).powi(2)).sqrt() >= 1_000_000.0 - 500.0, "{placed:?}");
+        assert!(((placed.x.raw_shim() as f64).powi(2) + (placed.y.raw_shim() as f64).powi(2)).sqrt() >= 1_000_000.0 - 500.0, "{placed:?}");
         let tight = RoutingSettings { via_force_prop_iteration_limit: 1, ..settings.clone() };
         assert_eq!(placer.place_via(&node, &rules, &tight, on_the_pad, 1), on_the_pad, "out of steps: the via stays where the cursor put it");
         // Highlight collisions never moves a via.
@@ -1040,22 +1040,22 @@ mod tests {
     fn a_failed_route_head_keeps_the_last_good_head() {
         let free = Node::new();
         let mut blocked = Node::new();
-        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 300_000, y: 0 }, shape: Shape::Circle { c: Point { x: 300_000, y: 0 }, r: 100_000 }, source: "U1.1".into(), edge: false }));
+        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(300_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(300_000), y: Nm::ZERO }, r: Nm::from_raw_shim(100_000) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         for mode in [Mode::Walkaround, Mode::Shove] {
             let settings = RoutingSettings { mode, ..RoutingSettings::default() };
             // nothing routed yet: the zero-length head, where the old port showed the raw line in violation (and in Shove mode walked round the tracks)
-            let mut placer = LinePlacer::start(&blocked, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-            let pv = placer.preview(&blocked, &rules, &settings, Point { x: 5_000_000, y: 0 });
+            let mut placer = LinePlacer::start(&blocked, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+            let pv = placer.preview(&blocked, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
             assert!(!pv.colliding && pv.head.point_count() < 2, "{mode:?}: {pv:?}");
-            assert_eq!(placer.fix(&blocked, &rules, &settings, Point { x: 5_000_000, y: 0 }), FixOutcome::Blocked);
+            assert_eq!(placer.fix(&blocked, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }), FixOutcome::Blocked);
             // a head that routed is kept
-            let mut placer = LinePlacer::start(&free, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-            let a = Point { x: 2_000_000, y: 1_000_000 };
+            let mut placer = LinePlacer::start(&free, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+            let a = Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(1_000_000) };
             assert_eq!(placer.preview(&free, &rules, &settings, a).head.last(), Some(a));
-            let pv = placer.preview(&blocked, &rules, &settings, Point { x: 5_000_000, y: -3_000_000 });
+            let pv = placer.preview(&blocked, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-3_000_000) });
             assert!(!pv.colliding && pv.head.last() == Some(a), "{mode:?}: the head stays where it last worked: {pv:?}");
-            assert_eq!(placer.fix(&blocked, &rules, &settings, Point { x: 5_000_000, y: -3_000_000 }), FixOutcome::Fixed { real_end: false });
+            assert_eq!(placer.fix(&blocked, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-3_000_000) }), FixOutcome::Fixed { real_end: false });
             assert_eq!(placer.runs.last().and_then(|r| r.last()), Some(a), "{mode:?}: the click fixes the head it shows");
         }
     }
@@ -1065,13 +1065,13 @@ mod tests {
         let node = Node::new();
         let rules = rules();
         let settings = RoutingSettings::default();
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.fix(&node, &rules, &settings, Point { x: 1_000_000, y: 0 });
-        placer.fix(&node, &rules, &settings, Point { x: 1_000_000, y: 1_000_000 }); // (0,0) stayed fixed-start for this leg; the first fix moved it to (1000,0)
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
+        placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }); // (0,0) stayed fixed-start for this leg; the first fix moved it to (1000,0)
         assert_eq!(placer.runs.len(), 2);
         assert!(placer.undo_last_segment());
         assert_eq!(placer.runs.len(), 1);
-        assert_eq!(placer.fixed_start(), Point { x: 1_000_000, y: 0 });
+        assert_eq!(placer.fixed_start(), Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
         assert!(placer.undo_last_segment());
         assert_eq!(placer.runs.len(), 0);
         assert!(!placer.undo_last_segment(), "nothing left to undo");
@@ -1080,13 +1080,13 @@ mod tests {
     #[test]
     fn snaps_onto_a_same_net_pad_and_reports_real_end() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 3_000_000, y: 0 }, shape: Shape::Circle { c: Point { x: 3_000_000, y: 0 }, r: 400_000 }, source: "U2.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, r: Nm::from_raw_shim(400_000) }, source: "U2.1".into(), edge: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        let outcome = placer.fix(&node, &rules, &settings, Point { x: 3_010_000, y: 10_000 });
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        let outcome = placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_010_000), y: Nm::from_raw_shim(10_000) });
         assert_eq!(outcome, FixOutcome::Fixed { real_end: true }, "a click near a same-net pad must finish the route");
-        assert_eq!(placer.runs[0].last(), Some(Point { x: 3_000_000, y: 0 }), "the fixed point must snap exactly onto the pad centre");
+        assert_eq!(placer.runs[0].last(), Some(Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }), "the fixed point must snap exactly onto the pad centre");
     }
 
     #[test]
@@ -1094,14 +1094,14 @@ mod tests {
         let node = Node::new();
         let rules = rules();
         let settings = RoutingSettings::default();
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.toggle_via(true, 600_000, 300_000);
-        placer.switch_layer(&node, &rules, &settings, Point { x: 1_000_000, y: 0 }, 1, 600_000, 300_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000));
+        placer.switch_layer(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, 1, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000));
         assert_eq!(placer.current_layer, 1);
         assert_eq!(placer.runs.len(), 1);
         assert_eq!(placer.runs[0].layer, 0);
-        assert_eq!(placer.origin, Point { x: 1_000_000, y: 0 });
-        let pv = placer.preview(&node, &rules, &settings, Point { x: 2_000_000, y: 0 });
+        assert_eq!(placer.origin, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
+        let pv = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO });
         assert_eq!(pv.head.layer, 1);
     }
 
@@ -1109,18 +1109,18 @@ mod tests {
     fn shove_mode_pushes_a_crossing_track_and_records_it_for_commit() {
         use crate::item::Segment;
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 2_500_000, y: -2_000_000 }, b: Point { x: 2_500_000, y: 2_000_000 }, width: 200_000, source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
 
-        let pv = placer.preview(&node, &rules, &settings, Point { x: 5_000_000, y: 0 });
+        let pv = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
         assert!(!pv.colliding, "shove must resolve the crossing, not just report it");
-        assert_eq!(pv.head.pts, vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 0 }], "shove moves the obstacle, not the pusher");
+        assert_eq!(pv.head.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }], "shove moves the obstacle, not the pusher");
         assert_eq!(pv.displaced_lines.len(), 1);
         assert!(placer.displaced_tracks().next().is_none(), "preview alone must not persist anything");
 
-        let outcome = placer.finish(&node, &rules, &settings, Point { x: 5_000_000, y: 0 }).expect("collision-free shoved finish must succeed");
+        let outcome = placer.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }).expect("collision-free shoved finish must succeed");
         assert_eq!(outcome.len(), 1);
         let displaced: Vec<_> = placer.displaced_tracks().collect();
         assert_eq!(displaced.len(), 1);
@@ -1135,17 +1135,17 @@ mod tests {
         use crate::item::{Segment, Solid};
         use crate::layer::LayerRange;
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2_000_000, y: 0 }, shape: Shape::Circle { c: Point { x: 2_000_000, y: 0 }, r: 400_000 }, source: "U1.1".into(), edge: false }));
-        node.add(Item::Segment(Segment { net: net_of("PWR"), layer: 0, a: Point { x: 4_300_000, y: -2_500_000 }, b: Point { x: 4_300_000, y: -300_000 }, width: 200_000, source_track: Some(("trkP".into(), 0)), locked: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO }, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Segment(Segment { net: net_of("PWR"), layer: 0, a: Point { x: Nm::from_raw_shim(4_300_000), y: Nm::from_raw_shim(-2_500_000) }, b: Point { x: Nm::from_raw_shim(4_300_000), y: Nm::from_raw_shim(-300_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkP".into(), 0)), locked: false }));
         let rules = rules();
-        let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        let shove = placer.preview(&node, &rules, &RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() }, Point { x: 8_000_000, y: 0 });
+        let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        let shove = placer.preview(&node, &rules, &RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::ZERO });
         assert!(!shove.colliding);
         assert!(shove.head.point_count() > 2, "the head had to go around the pad: {:?}", shove.head.pts);
-        assert!(shove.head.pts.iter().any(|p| p.y.abs() > 500_000), "{:?}", shove.head.pts);
-        assert_eq!(shove.head.last(), Some(Point { x: 8_000_000, y: 0 }));
+        assert!(shove.head.pts.iter().any(|p| p.y.abs() > Nm::from_raw_shim(500_000)), "{:?}", shove.head.pts);
+        assert_eq!(shove.head.last(), Some(Point { x: Nm::from_raw_shim(8_000_000), y: Nm::ZERO }));
         // contrast: Walkaround routes around both and moves neither
-        let walk = placer.preview(&node, &rules, &RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() }, Point { x: 8_000_000, y: 0 });
+        let walk = placer.preview(&node, &rules, &RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::ZERO });
         assert!(walk.displaced_lines.is_empty());
         assert!(walk.head.length() >= shove.head.length() - 1000.0, "pushing the track needs no more detour than walking around it");
     }
@@ -1158,40 +1158,40 @@ mod tests {
         use crate::item::Segment;
         let mut node = Node::new();
         // GND on the other layer, 50 um inside the via's clearance ring and clear of the head's own line
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: Point { x: 4_450_000, y: -3_000_000 }, b: Point { x: 4_450_000, y: 3_000_000 }, width: 200_000, source_track: Some(("trkG".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: Point { x: Nm::from_raw_shim(4_450_000), y: Nm::from_raw_shim(-3_000_000) }, b: Point { x: Nm::from_raw_shim(4_450_000), y: Nm::from_raw_shim(3_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkG".into(), 0)), locked: false }));
         let rules = rules();
         let shove = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.toggle_via(true, 600_000, 300_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000));
         placer.via_to_layer = Some(1);
-        let pv = placer.preview(&node, &rules, &shove, Point { x: 4_000_000, y: 0 });
+        let pv = placer.preview(&node, &rules, &shove, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO });
         assert!(!pv.colliding, "{pv:?}");
-        assert_eq!(pv.head.pts, vec![Point { x: 0, y: 0 }, Point { x: 4_000_000, y: 0 }]);
-        assert_eq!(pv.via, Some((Point { x: 4_000_000, y: 0 }, 600_000, 300_000)));
+        assert_eq!(pv.head.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }]);
+        assert_eq!(pv.via, Some((Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000))));
         assert_eq!(pv.displaced_lines.len(), 1, "the track under the via is pushed aside: {:?}", pv.displaced_lines);
         // the track bulges round the via: abreast of it, it is the via's edge (4300) + the clearance (200) + the track's half width (100) away
-        let bulge: Vec<_> = pv.displaced_lines[0].line.pts.iter().filter(|q| q.y.abs() <= 300_000).collect();
-        assert!(!bulge.is_empty() && bulge.iter().all(|q| q.x >= 4_600_000 - 1), "{:?}", pv.displaced_lines[0].line.pts);
+        let bulge: Vec<_> = pv.displaced_lines[0].line.pts.iter().filter(|q| q.y.abs() <= Nm::from_raw_shim(300_000)).collect();
+        assert!(!bulge.is_empty() && bulge.iter().all(|q| q.x >= Nm::from_raw_shim(4_600_000 - 1)), "{:?}", pv.displaced_lines[0].line.pts);
         // Highlight collisions only reports it: the same via collides with the track on the other layer
         let mark = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
-        let pv = placer.preview(&node, &rules, &mark, Point { x: 4_000_000, y: 0 });
+        let pv = placer.preview(&node, &rules, &mark, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO });
         assert!(pv.colliding && pv.displaced_lines.is_empty());
         // and Walk around pushes the via off the track rather than the track off the via
         let walk = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
-        let pv = placer.preview(&node, &rules, &walk, Point { x: 4_000_000, y: 0 });
-        assert!(!pv.colliding && pv.displaced_lines.is_empty() && pv.via.is_some_and(|(at, _, _)| at != Point { x: 4_000_000, y: 0 }), "{pv:?}");
+        let pv = placer.preview(&node, &rules, &walk, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO });
+        assert!(!pv.colliding && pv.displaced_lines.is_empty() && pv.via.is_some_and(|(at, _, _)| at != Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }), "{pv:?}");
         // and a shove that cannot move the track (locked) falls back to the walk (`rhShoveOnly` -> `rhWalkOnly`), which pushes the via off the
         // track as Walk around does (`buildInitialLine( .., RM_Walkaround )`: `collMask = ITEM::ANY_T`); the head ends at the pushed via
         let mut locked = Node::new();
-        locked.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: Point { x: 4_450_000, y: -3_000_000 }, b: Point { x: 4_450_000, y: 3_000_000 }, width: 200_000, source_track: Some(("trkG".into(), 0)), locked: true }));
+        locked.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: Point { x: Nm::from_raw_shim(4_450_000), y: Nm::from_raw_shim(-3_000_000) }, b: Point { x: Nm::from_raw_shim(4_450_000), y: Nm::from_raw_shim(3_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkG".into(), 0)), locked: true }));
         // (a new route: a placer's springback frames are of the world it routes in)
-        let mut placer = LinePlacer::start(&locked, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.toggle_via(true, 600_000, 300_000);
+        let mut placer = LinePlacer::start(&locked, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000));
         placer.via_to_layer = Some(1);
-        let pv = placer.preview(&locked, &rules, &shove, Point { x: 4_000_000, y: 0 });
+        let pv = placer.preview(&locked, &rules, &shove, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO });
         assert!(pv.displaced_lines.is_empty() && !pv.colliding, "a locked track is not shoved, the via is pushed off it: {pv:?}");
         let (at, _, _) = pv.via.unwrap();
-        assert!(at.x <= 4_450_000 - 100_000 - 200_000 - 300_000 && pv.head.last() == Some(at), "{pv:?}");
+        assert!(at.x <= Nm::from_raw_shim(4_450_000 - 100_000 - 200_000 - 300_000) && pv.head.last() == Some(at), "{pv:?}");
     }
 
     /// The click that places the via (`switch_layer`) takes the shoved track along into the commit, and the next run starts on the via.
@@ -1199,20 +1199,20 @@ mod tests {
     fn placing_the_via_of_a_shoved_head_records_what_it_pushed() {
         use crate::item::Segment;
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: Point { x: 4_450_000, y: -3_000_000 }, b: Point { x: 4_450_000, y: 3_000_000 }, width: 200_000, source_track: Some(("trkG".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: Point { x: Nm::from_raw_shim(4_450_000), y: Nm::from_raw_shim(-3_000_000) }, b: Point { x: Nm::from_raw_shim(4_450_000), y: Nm::from_raw_shim(3_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkG".into(), 0)), locked: false }));
         let rules = rules();
         let shove = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.toggle_via(true, 600_000, 300_000);
-        placer.switch_layer(&node, &rules, &shove, Point { x: 4_000_000, y: 0 }, 1, 600_000, 300_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000));
+        placer.switch_layer(&node, &rules, &shove, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, 1, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000));
         assert_eq!(placer.current_layer, 1);
         assert_eq!(placer.runs.len(), 1);
-        assert_eq!(placer.runs[0].pts, vec![Point { x: 0, y: 0 }, Point { x: 4_000_000, y: 0 }]);
-        assert_eq!(placer.origin, Point { x: 4_000_000, y: 0 });
+        assert_eq!(placer.runs[0].pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }]);
+        assert_eq!(placer.origin, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO });
         let displaced: Vec<_> = placer.displaced_tracks().collect();
         assert_eq!(displaced.len(), 1);
         assert_eq!(displaced[0].0, "trkG");
-        assert!(displaced[0].1.iter().all(|l| l.pts.iter().filter(|q| q.y.abs() <= 300_000).all(|q| q.x >= 4_600_000 - 1)), "{displaced:?}");
+        assert!(displaced[0].1.iter().all(|l| l.pts.iter().filter(|q| q.y.abs() <= Nm::from_raw_shim(300_000)).all(|q| q.x >= Nm::from_raw_shim(4_600_000 - 1))), "{displaced:?}");
         assert!(!placer.placing_via && placer.via_to_layer.is_none());
     }
 
@@ -1243,7 +1243,7 @@ mod tests {
     fn crossing_track() -> Node {
         use crate::item::Segment;
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 2_500_000, y: -2_000_000 }, b: Point { x: 2_500_000, y: 2_000_000 }, width: 200_000, source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
         node
     }
 
@@ -1253,18 +1253,18 @@ mod tests {
     fn a_pushed_track_is_pushed_on_from_where_it_was_left_and_springs_back_when_the_head_draws_back() {
         let (node, rules) = (crossing_track(), rules());
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
         // the first move (KiCad's first frame: the head a few pixels long) touches nothing
-        assert!(placer.preview(&node, &rules, &settings, Point { x: 500_000, y: 0 }).displaced_lines.is_empty());
-        let reach = |pv: &Preview| pv.displaced_lines.iter().flat_map(|d| d.line.pts.iter()).map(|q| q.x).max().unwrap_or(2_500_000);
-        let pushed = placer.preview(&node, &rules, &settings, Point { x: 5_000_000, y: 0 });
+        assert!(placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(500_000), y: Nm::ZERO }).displaced_lines.is_empty());
+        let reach = |pv: &Preview| pv.displaced_lines.iter().flat_map(|d| d.line.pts.iter()).map(|q| q.x).max().unwrap_or(Nm::from_raw_shim(2_500_000));
+        let pushed = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
         assert_eq!(pushed.displaced_lines.len(), 1);
-        assert!(reach(&pushed) >= 5_000_000 + 100_000 + 200_000 + 100_000 - 1, "{:?}", pushed.displaced_lines);
-        let further = placer.preview(&node, &rules, &settings, Point { x: 6_000_000, y: 0 });
-        assert!(reach(&further) >= 6_000_000 + 400_000 - 1, "{:?}", further.displaced_lines);
+        assert!(reach(&pushed) >= Nm::from_raw_shim(5_000_000 + 100_000 + 200_000 + 100_000 - 1), "{:?}", pushed.displaced_lines);
+        let further = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::ZERO });
+        assert!(reach(&further) >= Nm::from_raw_shim(6_000_000 + 400_000 - 1), "{:?}", further.displaced_lines);
         assert_eq!(placer.springback.borrow().len(), 3, "a frame per move that shoved");
         // drawn back off the track: every frame it no longer presses on is popped, down to the first
-        let back = placer.preview(&node, &rules, &settings, Point { x: 1_500_000, y: 0 });
+        let back = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::ZERO });
         assert!(back.displaced_lines.is_empty(), "the track springs back: {:?}", back.displaced_lines);
         assert_eq!(placer.springback.borrow().len(), 2, "the first frame and the one this move pushed");
     }
@@ -1276,13 +1276,13 @@ mod tests {
     fn the_next_leg_shoves_from_the_world_the_click_left_and_backspace_takes_the_push_back() {
         let (node, rules) = (crossing_track(), rules());
         let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.preview(&node, &rules, &settings, Point { x: 500_000, y: 0 });
-        placer.preview(&node, &rules, &settings, Point { x: 5_000_000, y: 0 });
-        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: 5_000_000, y: 0 }), FixOutcome::Fixed { real_end: false });
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(500_000), y: Nm::ZERO });
+        placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
+        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }), FixOutcome::Fixed { real_end: false });
         assert_eq!(placer.displaced_tracks().count(), 1, "the click keeps the push");
         // a leg going north from the click runs into the track where the first leg left it (bulged round x = 5000)
-        let mut path = vec![Point { x: 5_000_000, y: -500_000 }, Point { x: 5_000_000, y: -1_500_000 }, Point { x: 5_000_000, y: -3_000_000 }];
+        let mut path = vec![Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-500_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-1_500_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-3_000_000) }];
         let last = path.pop().unwrap();
         for p in path {
             placer.preview(&node, &rules, &settings, p);
@@ -1295,13 +1295,13 @@ mod tests {
         assert!(violations(&board, &rules).is_empty(), "the commit is clean: {:?}", violations(&board, &rules));
 
         // Backspace after the first click: the track is back where it was
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.preview(&node, &rules, &settings, Point { x: 500_000, y: 0 });
-        placer.fix(&node, &rules, &settings, Point { x: 5_000_000, y: 0 });
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(500_000), y: Nm::ZERO });
+        placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
         assert_eq!(placer.displaced_tracks().count(), 1);
         assert!(placer.undo_last_segment());
         assert_eq!(placer.displaced_tracks().count(), 0, "the leg and its push are gone");
-        assert!(placer.preview(&node, &rules, &settings, Point { x: 1_500_000, y: 0 }).displaced_lines.is_empty());
+        assert!(placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::ZERO }).displaced_lines.is_empty());
     }
 
     /// `UnfixRoute`: `RewindSpringbackTo( st.commit )`. When no shove of the undone leg succeeded, its stage's `commit` is the locked frame the
@@ -1312,16 +1312,16 @@ mod tests {
     fn backspace_after_a_leg_whose_shoves_all_failed_keeps_the_leg_before() {
         let (node, rules) = (Node::new(), rules());
         let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.preview(&node, &rules, &settings, Point { x: 500_000, y: 0 });
-        placer.preview(&node, &rules, &settings, Point { x: 5_000_000, y: 0 });
-        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: 5_000_000, y: 0 }), FixOutcome::Fixed { real_end: false });
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(500_000), y: Nm::ZERO });
+        placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
+        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }), FixOutcome::Fixed { real_end: false });
         // the second leg: every shove fails (the iteration limit), so the head is walked in the first click's world
         let failing = RoutingSettings { shove_iteration_limit: 1, ..settings.clone() };
         let len = placer.springback.borrow().len();
-        placer.preview(&node, &rules, &failing, Point { x: 5_000_000, y: -1_000_000 });
+        placer.preview(&node, &rules, &failing, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-1_000_000) });
         assert_eq!(placer.springback.borrow().len(), len, "no shove succeeded, no frame was pushed");
-        assert_eq!(placer.fix(&node, &rules, &failing, Point { x: 5_000_000, y: -1_000_000 }), FixOutcome::Fixed { real_end: false });
+        assert_eq!(placer.fix(&node, &rules, &failing, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-1_000_000) }), FixOutcome::Fixed { real_end: false });
         assert!(placer.undo_last_segment());
         let world = placer.springback.borrow().locked_top();
         assert_eq!(world.fixed.len(), 1, "the first leg is still in the world");
@@ -1338,29 +1338,29 @@ mod tests {
         use crate::item::Segment;
         let rules = rules();
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 3_000_000, y: -700_000 }, b: Point { x: 7_000_000, y: -700_000 }, width: 200_000, source_track: Some(("B".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(-700_000) }, b: Point { x: Nm::from_raw_shim(7_000_000), y: Nm::from_raw_shim(-700_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("B".into(), 0)), locked: false }));
         let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
         for (moves, fix) in [(vec![(500_000, 0), (5_000_000, 0)], (10_000_000, 0)), (vec![(10_000_000, -1_000_000)], (10_000_000, -3_000_000)), (vec![(9_000_000, -3_000_000)], (5_000_000, -3_000_000))] {
             for m in moves {
-                placer.preview(&node, &rules, &settings, Point { x: m.0, y: m.1 });
+                placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(m.0), y: Nm::from_raw_shim(m.1) });
             }
-            assert_eq!(placer.fix(&node, &rules, &settings, Point { x: fix.0, y: fix.1 }), FixOutcome::Fixed { real_end: false });
+            assert_eq!(placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(fix.0), y: Nm::from_raw_shim(fix.1) }), FixOutcome::Fixed { real_end: false });
         }
         let mut last = None;
         for y in [-2_500_000, -2_000_000, -1_500_000, -1_200_000, -1_000_000, -900_000, -800_000, -700_000, -650_000] {
-            last = Some(placer.preview(&node, &rules, &settings, Point { x: 5_000_000, y }));
+            last = Some(placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(y) }));
         }
         let pv = last.unwrap();
         assert!(!pv.colliding);
-        assert_eq!(pv.head.last(), Some(Point { x: 5_000_000, y: -650_000 }), "the head reaches the cursor: {:?}", pv.head.pts);
+        assert_eq!(pv.head.last(), Some(Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-650_000) }), "the head reaches the cursor: {:?}", pv.head.pts);
         assert_eq!(pv.displaced_lines.len(), 1, "GND's track, not the route's own run: {:?}", pv.displaced_lines);
         let first = &pv.runs[0];
-        assert_eq!((first.first(), first.last()), (Some(Point { x: 0, y: 0 }), Some(Point { x: 10_000_000, y: 0 })), "its ends stay: {:?}", first.pts);
-        assert!(first.pts.iter().any(|q| q.y > 0), "the first leg bulges away from the push: {:?}", first.pts);
+        assert_eq!((first.first(), first.last()), (Some(Point { x: Nm::ZERO, y: Nm::ZERO }), Some(Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO })), "its ends stay: {:?}", first.pts);
+        assert!(first.pts.iter().any(|q| q.y > Nm::ZERO), "the first leg bulges away from the push: {:?}", first.pts);
         assert_eq!(pv.runs.len(), 3);
-        placer.finish(&node, &rules, &settings, Point { x: 5_000_000, y: -650_000 }).expect("finishes");
-        assert!(placer.placed_runs()[0].pts.iter().any(|q| q.y > 0), "and the commit writes it pushed");
+        placer.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-650_000) }).expect("finishes");
+        assert!(placer.placed_runs()[0].pts.iter().any(|q| q.y > Nm::ZERO), "and the commit writes it pushed");
         let board = committed_world(&node, &placer);
         assert!(violations(&board, &rules).is_empty(), "the commit is clean: {:?}", violations(&board, &rules));
     }
@@ -1372,20 +1372,20 @@ mod tests {
     fn the_corner_mode_shapes_the_head_and_a_rounded_corner_is_an_arc_of_it() {
         use crate::direction45::CornerMode;
         let (node, rules) = (Node::new(), rules());
-        let to = Point { x: 6_000_000, y: 2_000_000 };
+        let to = Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(2_000_000) };
         for mode in [Mode::MarkObstacles, Mode::Walkaround, Mode::Shove] {
             for corner in [CornerMode::Mitered45, CornerMode::Rounded45, CornerMode::Mitered90, CornerMode::Rounded90] {
                 let settings = RoutingSettings { mode, corner_mode: corner, auto_posture: false, ..RoutingSettings::default() };
-                let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+                let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
                 placer.direction = Direction45::E;
-                placer.restart_trail(Point { x: 0, y: 0 }, Direction45::E);
+                placer.restart_trail(Point { x: Nm::ZERO, y: Nm::ZERO }, Direction45::E);
                 let pv = placer.preview(&node, &rules, &settings, to);
                 assert!(!pv.colliding);
-                assert_eq!((pv.head.first(), pv.head.last()), (Some(Point { x: 0, y: 0 }), Some(to)), "{mode:?} {corner:?}");
+                assert_eq!((pv.head.first(), pv.head.last()), (Some(Point { x: Nm::ZERO, y: Nm::ZERO }), Some(to)), "{mode:?} {corner:?}");
                 let arcs = pv.head.arc_runs();
                 match corner {
-                    CornerMode::Mitered45 => assert_eq!(pv.head.pts, vec![Point { x: 0, y: 0 }, Point { x: 4_000_000, y: 0 }, to], "{mode:?}"),
-                    CornerMode::Mitered90 => assert_eq!(pv.head.pts, vec![Point { x: 0, y: 0 }, Point { x: 6_000_000, y: 0 }, to], "{mode:?}"),
+                    CornerMode::Mitered45 => assert_eq!(pv.head.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, to], "{mode:?}"),
+                    CornerMode::Mitered90 => assert_eq!(pv.head.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::ZERO }, to], "{mode:?}"),
                     CornerMode::Rounded45 | CornerMode::Rounded90 => {
                         assert_eq!(arcs.len(), 1, "{mode:?} {corner:?}: {:?}", pv.head);
                         let arc = pv.head.arcs[arcs[0].arc];
@@ -1393,7 +1393,7 @@ mod tests {
                         let want = if corner == CornerMode::Rounded45 { 45.0 } else { 90.0 };
                         assert!((sweep - want).abs() < 0.5, "{mode:?} {corner:?}: a {sweep} degree arc");
                         // it leaves the straight leg along it (tangent) and ends at the cursor
-                        assert_eq!(pv.head.pts[0].y, 0);
+                        assert_eq!(pv.head.pts[0].y, Nm::ZERO);
                         assert_eq!(pv.head.last(), Some(to));
                     }
                 }
@@ -1410,17 +1410,17 @@ mod tests {
         use crate::item::Segment;
         let mut node = Node::new();
         // across the arc of the corner (the arc of radius ~4.8 mm from (1172, 0) to (6000, 2000))
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 4_500_000, y: -2_000_000 }, b: Point { x: 4_500_000, y: 4_000_000 }, width: 200_000, source_track: Some(("g".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(4_500_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(4_500_000), y: Nm::from_raw_shim(4_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("g".into(), 0)), locked: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, corner_mode: CornerMode::Rounded45, auto_posture: false, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
         placer.direction = Direction45::E;
-        placer.restart_trail(Point { x: 0, y: 0 }, Direction45::E);
-        let pv = placer.preview(&node, &rules, &settings, Point { x: 6_000_000, y: 2_000_000 });
+        placer.restart_trail(Point { x: Nm::ZERO, y: Nm::ZERO }, Direction45::E);
+        let pv = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(2_000_000) });
         assert!(!pv.colliding);
         assert_eq!(pv.head.arc_count(), 1, "{:?}", pv.head);
         assert_eq!(pv.displaced_lines.len(), 1, "the track is pushed");
-        placer.finish(&node, &rules, &settings, Point { x: 6_000_000, y: 2_000_000 }).expect("finishes");
+        placer.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(2_000_000) }).expect("finishes");
         let board = committed_world(&node, &placer);
         assert!(violations(&board, &rules).is_empty(), "{:?}", violations(&board, &rules));
     }
@@ -1429,16 +1429,16 @@ mod tests {
     #[test]
     fn a_head_via_on_a_pad_is_pushed_off_it_and_the_head_ends_at_the_via() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 4_000_000, y: 100_000 }, shape: Shape::Circle { c: Point { x: 4_000_000, y: 100_000 }, r: 400_000 }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(100_000) }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(100_000) }, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let shove = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.toggle_via(true, 600_000, 300_000);
-        let pv = placer.preview(&node, &rules, &shove, Point { x: 4_000_000, y: 0 });
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000));
+        let pv = placer.preview(&node, &rules, &shove, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO });
         assert!(!pv.colliding, "{pv:?}");
         let (at, d, _) = pv.via.expect("a via");
         assert_eq!(pv.head.last(), Some(at), "the head ends at the via");
-        let gap = (((at.x - 4_000_000) as f64).powi(2) + ((at.y - 100_000) as f64).powi(2)).sqrt() - 400_000.0 - d as f64 / 2.0;
+        let gap = (((at.x - Nm::from_raw_shim(4_000_000)).raw_shim() as f64).powi(2) + ((at.y - Nm::from_raw_shim(100_000)).raw_shim() as f64).powi(2)).sqrt() - 400_000.0 - d.raw_shim() as f64 / 2.0;
         assert!(gap >= 200_000.0 - 500.0, "the via clears the pad by the clearance: {gap} um at {at:?}");
     }
 
@@ -1452,13 +1452,13 @@ mod tests {
         assert!(on.auto_posture, "KiCad's default");
         let off = RoutingSettings { auto_posture: false, ..on.clone() };
         let first_direction = |settings: &RoutingSettings, up_first: bool| {
-            let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+            let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
             let mut head = Vec::new();
             for i in 1..=12 {
-                head = placer.preview(&node, &rules, settings, if up_first { Point { x: 500_000 * i, y: -500_000 * i } } else { Point { x: 500_000 * i, y: 0 } }).head.pts;
+                head = placer.preview(&node, &rules, settings, if up_first { Point { x: Nm::from_raw_shim(500_000 * i), y: Nm::from_raw_shim(-500_000 * i) } } else { Point { x: Nm::from_raw_shim(500_000 * i), y: Nm::ZERO } }).head.pts;
             }
             for i in 1..=12 {
-                head = placer.preview(&node, &rules, settings, if up_first { Point { x: 6_000_000 + 500_000 * i, y: -6_000_000 } } else { Point { x: 6_000_000 + 500_000 * i, y: -500_000 * i } }).head.pts;
+                head = placer.preview(&node, &rules, settings, if up_first { Point { x: Nm::from_raw_shim(6_000_000 + 500_000 * i), y: Nm::from_raw_shim(-6_000_000) } } else { Point { x: Nm::from_raw_shim(6_000_000 + 500_000 * i), y: Nm::from_raw_shim(-500_000 * i) } }).head.pts;
             }
             assert_eq!(head.len(), 3, "{head:?}");
             Direction45::from_seg(head[0], head[1])
@@ -1475,10 +1475,10 @@ mod tests {
     fn a_route_from_a_diagonal_track_end_starts_straight() {
         use crate::item::Segment;
         let mut node = Node::new();
-        let seg = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 1_000_000, y: 1_000_000 }, width: 200_000, source_track: None, locked: false }));
+        let seg = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, width: Nm::from_raw_shim(200_000), source_track: None, locked: false }));
         let settings = RoutingSettings { auto_posture: false, ..RoutingSettings::default() };
-        let placer = LinePlacer::start(&node, Point { x: 1_000_000, y: 1_000_000 }, Some(seg), net_of("SIG"), 0, 200_000);
-        let pts = placer.preview(&node, &rules(), &settings, Point { x: 3_000_000, y: 2_000_000 }).head.pts;
+        let placer = LinePlacer::start(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, Some(seg), net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        let pts = placer.preview(&node, &rules(), &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }).head.pts;
         assert!(!Direction45::from_seg(pts[0], pts[1]).is_diagonal(), "straight first: {pts:?}");
     }
 
@@ -1488,12 +1488,12 @@ mod tests {
     fn a_flip_turns_smart_pads_off_for_its_leg_only() {
         let (node, rules) = (Node::new(), rules());
         let settings = RoutingSettings::default();
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        placer.preview(&node, &rules, &settings, Point { x: 3_000_000, y: 0 });
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO });
         placer.flip_posture();
         assert!(placer.trail.borrow().is_manually_forced());
         assert_eq!(head_effort(&settings, placer.trail.borrow().is_manually_forced()) & optimizer::effort::SMART_PADS, 0);
-        placer.fix(&node, &rules, &settings, Point { x: 3_000_000, y: 0 });
+        placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO });
         assert!(!placer.trail.borrow().is_manually_forced(), "the fix starts a new trail");
         assert_ne!(head_effort(&settings, placer.trail.borrow().is_manually_forced()) & optimizer::effort::SMART_PADS, 0);
     }
@@ -1504,23 +1504,23 @@ mod tests {
     fn a_flip_stays_and_a_fix_continues_in_the_direction_of_the_last_segment() {
         let (node, rules) = (Node::new(), rules());
         let settings = RoutingSettings::default();
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        let shown = placer.preview(&node, &rules, &settings, Point { x: 6_000_000, y: -2_000_000 }).head.pts;
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        let shown = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(-2_000_000) }).head.pts;
         assert_eq!(Direction45::from_seg(shown[0], shown[1]), Direction45::E, "straight first at the start");
         placer.flip_posture();
         assert!(placer.manually_forced);
-        let flipped = placer.preview(&node, &rules, &settings, Point { x: 6_000_000, y: -2_000_000 }).head.pts;
+        let flipped = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(-2_000_000) }).head.pts;
         assert!(Direction45::from_seg(flipped[0], flipped[1]).is_diagonal(), "E flipped is the next octant: diagonal first, {flipped:?}");
         // however the mouse moves, the flip holds
         for i in 1..=10 {
-            let moved = placer.preview(&node, &rules, &settings, Point { x: 6_000_000 + 500_000 * i, y: -2_000_000 - 700_000 * i }).head.pts;
+            let moved = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000 + 500_000 * i), y: Nm::from_raw_shim(-2_000_000 - 700_000 * i) }).head.pts;
             assert!(Direction45::from_seg(moved[0], moved[1]).is_diagonal(), "{moved:?}");
         }
         // a fix: the next leg starts in the direction the last one ended in, and the flip is forgotten (`m_mouseTrailTracer.Clear()`)
-        let at = Point { x: 6_000_000, y: -2_000_000 };
+        let at = Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(-2_000_000) };
         assert!(matches!(placer.fix(&node, &rules, &settings, at), FixOutcome::Fixed { real_end: false }));
         let last = placer.runs[0].pts.windows(2).rev().find(|w| w[0] != w[1]).map(|w| Direction45::from_seg(w[0], w[1])).unwrap();
-        let next = placer.preview(&node, &rules, &settings, Point { x: 12_000_000, y: -5_000_000 }).head.pts;
+        let next = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(-5_000_000) }).head.pts;
         assert_eq!(Direction45::from_seg(next[0], next[1]), last, "continues in the direction of the last segment: {next:?} after {:?}", placer.runs[0].pts);
     }
 
@@ -1539,15 +1539,15 @@ mod tests {
     fn two_pads_and_a_detour(extra: &[(Point, Point, &str)]) -> Node {
         use crate::item::Segment;
         let mut node = Node::new();
-        for at in [Point { x: 0, y: 0 }, Point { x: 3_000_000, y: 0 }] {
-            node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: at, shape: Shape::Circle { c: at, r: 300_000 }, source: "P".into(), edge: false }));
+        for at in [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }] {
+            node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: at, shape: Shape::Circle { c: at, r: Nm::from_raw_shim(300_000) }, source: "P".into(), edge: false }));
         }
-        let detour = [Point { x: 0, y: 0 }, Point { x: 0, y: 2_000_000 }, Point { x: 3_000_000, y: 2_000_000 }, Point { x: 3_000_000, y: 0 }];
+        let detour = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }];
         for (k, w) in detour.windows(2).enumerate() {
-            node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: 200_000, source_track: Some(("trkOld".into(), k)), locked: false }));
+            node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: Nm::from_raw_shim(200_000), source_track: Some(("trkOld".into(), k)), locked: false }));
         }
         for (k, &(a, b, track)) in extra.iter().enumerate() {
-            node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: 200_000, source_track: Some((track.into(), k)), locked: false }));
+            node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: Nm::from_raw_shim(200_000), source_track: Some((track.into(), k)), locked: false }));
         }
         node
     }
@@ -1559,8 +1559,8 @@ mod tests {
         let rules = rules();
         let settings = RoutingSettings::default();
         assert!(settings.remove_loops, "sanity: the default this test exercises");
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
-        let outcome = placer.finish(&node, &rules, &settings, Point { x: 3_000_000, y: 0 }).expect("must finish onto pad B");
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        let outcome = placer.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }).expect("must finish onto pad B");
         assert_eq!(outcome.len(), 1, "the new connection itself is still placed");
         let displaced: Vec<_> = placer.displaced_tracks().collect();
         assert_eq!(displaced.len(), 1);
@@ -1572,10 +1572,10 @@ mod tests {
     /// seg )`): a route from the free end X of a stub out of pad A to pad B closes a loop A..B with the old detour, which goes; the stub stays.
     #[test]
     fn remove_loops_follows_the_track_the_route_continues() {
-        let x = Point { x: 1_000_000, y: 0 };
-        let node = two_pads_and_a_detour(&[(Point { x: 0, y: 0 }, x, "trkStub")]);
-        let mut placer = LinePlacer::start(&node, x, None, net_of("SIG"), 0, 200_000);
-        placer.finish(&node, &rules(), &RoutingSettings::default(), Point { x: 3_000_000, y: 0 }).expect("must finish onto pad B");
+        let x = Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO };
+        let node = two_pads_and_a_detour(&[(Point { x: Nm::ZERO, y: Nm::ZERO }, x, "trkStub")]);
+        let mut placer = LinePlacer::start(&node, x, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
+        placer.finish(&node, &rules(), &RoutingSettings::default(), Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }).expect("must finish onto pad B");
         let displaced: Vec<&str> = placer.displaced_tracks().map(|(t, _)| t).collect();
         assert_eq!(displaced, vec!["trkOld"], "the old A-B path goes, the stub the route continues stays");
     }
@@ -1584,12 +1584,12 @@ mod tests {
     fn remove_loops_leaves_a_locked_redundant_path_alone() {
         use crate::item::Segment;
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 3_000_000, y: 0 }, width: 200_000, source_track: Some(("trkOld".into(), 0)), locked: true }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkOld".into(), 0)), locked: true }));
         let rules = rules();
         let settings = RoutingSettings::default();
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
 
-        placer.finish(&node, &rules, &settings, Point { x: 3_000_000, y: 0 }).expect("must finish");
+        placer.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }).expect("must finish");
         assert!(placer.displaced_tracks().next().is_none(), "a locked redundant path must never be removed, matching upstream");
     }
 
@@ -1597,12 +1597,12 @@ mod tests {
     fn remove_loops_is_a_no_op_when_the_setting_is_off() {
         use crate::item::Segment;
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 3_000_000, y: 0 }, width: 200_000, source_track: Some(("trkOld".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkOld".into(), 0)), locked: false }));
         let rules = rules();
         let settings = RoutingSettings { remove_loops: false, ..RoutingSettings::default() };
-        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200_000);
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, Nm::from_raw_shim(200_000));
 
-        placer.finish(&node, &rules, &settings, Point { x: 3_000_000, y: 0 }).expect("must finish");
+        placer.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }).expect("must finish");
         assert!(placer.displaced_tracks().next().is_none(), "remove_loops: false must leave the redundant path in place");
     }
 }

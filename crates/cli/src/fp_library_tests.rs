@@ -1,6 +1,7 @@
 //! Update Footprints from Library and Compare Footprint with Library (GAPS.md package P2): the library copy is read through the library tables, the board's footprint is
 //! compared with it (`FootprintNeedsUpdate`), and an update puts the library's copy on the part.
 
+use eda_model::units::Nm;
 use super::tests::{scratch, setup};
 use super::{derived_schematic, load, save, step, undo};
 use eda_ops::{Cmd, Domain, ExchangeOptions};
@@ -42,7 +43,7 @@ fn plan(dir: &Path, references: &[&str], to: Option<&str>) -> serde_json::Value 
     crate::fp_assign_api::exchange_plan(dir, serde_json::json!({ "references": references, "footprint": to }).to_string().as_bytes())
 }
 
-fn pad_sizes(dir: &Path, reference: &str) -> Vec<(i64, i64)> {
+fn pad_sizes(dir: &Path, reference: &str) -> Vec<(eda_model::units::Nm, eda_model::units::Nm)> {
     let (_, _, model) = load(dir).unwrap();
     model.footprint_of(model.part(reference).unwrap()).unwrap().pads.iter().map(|p| p.size).collect()
 }
@@ -52,7 +53,7 @@ fn an_update_reads_the_library_copy_through_the_tables_and_lists_what_differs_be
     let dir = board_with_library("update_from_library");
     // U1 is put on Alt:WIDE; the board now holds its own copy of it
     step(&dir, Cmd::replace_footprint("U1", "Alt:WIDE"), false, "test").unwrap();
-    assert_eq!(pad_sizes(&dir, "U1"), [(1_000_000, 1_000_000), (1_000_000, 1_000_000)]);
+    assert_eq!(pad_sizes(&dir, "U1"), [(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000))]);
     // as the library has it, the board's footprint needs no update
     let report = plan(&dir, &["U1"], None);
     assert_eq!(report["ok"], true, "{report}");
@@ -65,7 +66,7 @@ fn an_update_reads_the_library_copy_through_the_tables_and_lists_what_differs_be
     assert_eq!((e["found"].as_bool(), e["differs"].as_bool()), (Some(true), Some(true)), "{e}");
     let lines: Vec<&str> = e["lines"].as_array().unwrap().iter().filter_map(|l| l.as_str()).collect();
     assert_eq!(lines, ["Pad 1 size differs on layer F.Cu.", "Pad 2 size differs on layer F.Cu."]);
-    assert_eq!(pad_sizes(&dir, "U1"), [(1_000_000, 1_000_000), (1_000_000, 1_000_000)], "listing changes nothing");
+    assert_eq!(pad_sizes(&dir, "U1"), [(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000))], "listing changes nothing");
     // a footprint that is no library's (the intent's own) has no library copy
     let e = &plan(&dir, &["U2"], None)["entries"][0];
     assert_eq!((e["found"].as_bool(), e["differs"].as_bool()), (Some(false), Some(false)), "{e}");
@@ -73,11 +74,11 @@ fn an_update_reads_the_library_copy_through_the_tables_and_lists_what_differs_be
     // the update takes the library's copy; one undo step
     let update = Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: None, options: ExchangeOptions::update(), library: Default::default() };
     step(&dir, update, false, "test").unwrap();
-    assert_eq!(pad_sizes(&dir, "U1"), [(1_200_000, 1_200_000), (1_200_000, 1_200_000)]);
+    assert_eq!(pad_sizes(&dir, "U1"), [(Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(1_200_000)), (Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(1_200_000))]);
     let e = &plan(&dir, &["U1"], None)["entries"][0];
     assert_eq!(e["differs"], false, "{e}");
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    assert_eq!(pad_sizes(&dir, "U1"), [(1_000_000, 1_000_000), (1_000_000, 1_000_000)], "and Undo gives the board's copy back");
+    assert_eq!(pad_sizes(&dir, "U1"), [(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000))], "and Undo gives the board's copy back");
 }
 
 #[test]

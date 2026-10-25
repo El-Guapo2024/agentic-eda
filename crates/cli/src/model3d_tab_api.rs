@@ -18,6 +18,7 @@
 //!     (`PANEL_PREVIEW_3D_MODEL`: "the footprint is shown like in Fp editor: rot 0, not flipped") -- its pads, graphics and texts in its own frame on the top side, in the
 //!     shape `/api/state` sends a placed part, so the page draws it with the 3D view's own board builder.
 
+use eda_model::units::Nm;
 use crate::library_tables::{model_names, ModelNames};
 use crate::model3d_api::{board_roots, expand, finds_file, format_of, models_dir, percent_decode, resolve, Format, Reject, Reply, Roots};
 use eda_model::footprint::placed_pads;
@@ -303,7 +304,7 @@ pub(crate) fn migrate_in(dir: &Path, target: &str, allowed: &Roots, listing: &[R
 /// The part of a footprint at the origin, top side, not turned, in the shape `/api/state` sends a placed part: its pads, its graphics and texts, its courtyard and body.
 fn preview_part(model: &ConstraintModel, part: &Part) -> Option<Value> {
     let footprint = model.footprint_of(part)?;
-    let pose = FootprintInstance { id: part.reference.clone(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above };
+    let pose = FootprintInstance { id: part.reference.clone(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::Above };
     let pads: Vec<Value> = placed_pads(model, part, &pose)
         .unwrap_or_default()
         .iter()
@@ -363,6 +364,7 @@ pub fn preview(dir: &Path, target: &str) -> Reply {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     fn tree(tag: &str) -> PathBuf {
@@ -546,10 +548,10 @@ mod tests {
     #[test]
     fn the_preview_is_the_footprint_at_the_origin_with_its_pads_and_drawings() {
         use eda_model::footprint::{Pad, PadKind, PadShape};
-        let pad = |n: &str, x: i64, y: i64| Pad { number: n.into(), at: (x, y), size: (800_000, 600_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let pad = |n: &str, x: i64, y: i64| Pad { number: n.into(), at: (Nm::from_raw_shim(x), Nm::from_raw_shim(y)), size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(600_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
         let mut art = eda_model::fp_art::FpArt::default();
-        art.shapes.push(eda_model::fp_art::FpShape::new(eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120_000, filled: false, start: Point { x: -1_000_000, y: -900_000 }, end: Point { x: 1_000_000, y: -900_000 } }));
-        let footprint = eda_model::Footprint { name: "T:Two".into(), pads: vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], courtyard: Some((2_400_000, 1_000_000)), art, ..Default::default() };
+        art.shapes.push(eda_model::fp_art::FpShape::new(eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(120_000), filled: false, start: Point { x: Nm::from_raw_shim(-1_000_000), y: Nm::from_raw_shim(-900_000) }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(-900_000) } }));
+        let footprint = eda_model::Footprint { name: "T:Two".into(), pads: vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], courtyard: Some((Nm::from_raw_shim(2_400_000), Nm::from_raw_shim(1_000_000))), art, ..Default::default() };
         let probe = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("v".into()), package: None, footprint: Some("T:Two".into()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
         let model = ConstraintModel { parts: vec![probe.clone()], footprints: vec![footprint], ..Default::default() };
         let p = preview_part(&model, &probe).unwrap();

@@ -23,7 +23,7 @@ pub(crate) struct ReadStyle {
 
 /// `GetPenSizeForNormal` and `GetPenSizeForBold` (`common/eda_text.cpp`): an eighth and a fifth of the glyph width.
 fn auto_pen_nm(width_nm: Nm, bold: bool) -> Nm {
-    (width_nm as f64 / if bold { 5.0 } else { 8.0 }).round() as Nm
+    Nm::from_raw_shim((width_nm.raw_shim() as f64 / if bold { 5.0 } else { 8.0 }).round() as i64)
 }
 
 /// The looks of the `gr_text` `item`.
@@ -32,7 +32,7 @@ pub(crate) fn read_style(item: &[Sexpr]) -> ReadStyle {
     let l = crate::fp_fields::parse_layout(item, eda_model::ir::Side::Top, 0);
     let (width, height) = (l.size.0, l.size.1);
     let font = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font"));
-    let auto_thickness = l.thickness == 0;
+    let auto_thickness = l.thickness == Nm::ZERO;
     let stroke_width = if auto_thickness { auto_pen_nm(width, l.bold) } else { l.thickness };
     let line_spacing_permille = font.and_then(|f| sexpr::find(f, "line_spacing")).and_then(|s| sexpr::num(s, 1)).map(|v| (v * 1000.0).round() as i64).filter(|v| *v != 1000).unwrap_or(0);
     let face = font.and_then(|f| sexpr::find(f, "face")).and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(str::to_string);
@@ -68,9 +68,9 @@ pub(crate) fn read_style(item: &[Sexpr]) -> ReadStyle {
 pub(crate) fn effects(text: &Text, extra: Option<&TextExtra>) -> String {
     let default = TextExtra::default();
     let extra = extra.unwrap_or(&default);
-    let mut l = FieldLayout::new(Point { x: 0, y: 0 }, &text.layer);
+    let mut l = FieldLayout::new(Point { x: Nm::ZERO, y: Nm::ZERO }, &text.layer);
     l.size = (extra.width_nm.unwrap_or(text.size_nm), text.size_nm);
-    l.thickness = if extra.auto_thickness { 0 } else { text.stroke_width };
+    l.thickness = if extra.auto_thickness { Nm::ZERO } else { text.stroke_width };
     l.halign = match text.justify {
         TextJustify::Left => -1,
         TextJustify::Center => 0,

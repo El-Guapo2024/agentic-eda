@@ -40,10 +40,10 @@ const MULTI: u32 = u32::MAX - 1;
 /// KiCad's default board-setup copper-to-edge clearance, enforced by
 /// `kicad-cli pcb drc` against Edge.Cuts.
 /// Default copper-to-edge clearance (see `RoutingTuning::edge_clearance_nm`).
-pub const EDGE_CLEARANCE_NM: Nm = 500_000;
+pub const EDGE_CLEARANCE_NM: Nm = Nm::from_raw_shim(500_000);
 
 fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
-    let (ax, ay, bx, by, px, py) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, p.x as f64, p.y as f64);
+    let (ax, ay, bx, by, px, py) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, p.x.raw_shim() as f64, p.y.raw_shim() as f64);
     let (dx, dy) = (bx - ax, by - ay);
     let len2 = dx * dx + dy * dy;
     let t = if len2 == 0.0 { 0.0 } else { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) };
@@ -155,7 +155,7 @@ impl Grid {
         // layer count is the depth of every lookup. Same reasoning as the
         // outline: a caller that gets here with either at zero has already
         // skipped BoardRules::validate, and a crash is the honest outcome.
-        assert!(grid_nm > 0, "Grid::with_widths needs a positive pitch, got {grid_nm} nm");
+        assert!(grid_nm > Nm::ZERO, "Grid::with_widths needs a positive pitch, got {grid_nm} nm");
         assert!(num_layers > 0, "Grid::with_widths needs at least one copper layer");
         let min_x = outline.iter().map(|p| p.x).min().expect("outline non-empty");
         let min_y = outline.iter().map(|p| p.y).min().expect("outline non-empty");
@@ -164,7 +164,7 @@ impl Grid {
         let cells_x = ((max_x - min_x) / grid_nm).max(0) + 1;
         let cells_y = ((max_y - min_y) / grid_nm).max(0) + 1;
         // Widest separation any pair can need: via-to-via.
-        let clearance_cells = ((clearance_nm + via_diameter + grid_nm - 1) / grid_nm).max(1) - 1;
+        let clearance_cells = ((clearance_nm + via_diameter + grid_nm - Nm::from_raw_shim(1)) / grid_nm).max(1) - 1;
 
         let mut g = Grid {
             tuning: RoutingTuning::default(),
@@ -198,7 +198,7 @@ impl Grid {
             net_names: Vec::new(),
         };
         let mut inside = vec![false; (cells_x * cells_y) as usize];
-        let mut edge_dist = vec![0; (cells_x * cells_y) as usize];
+        let mut edge_dist = vec![Nm::ZERO; (cells_x * cells_y) as usize];
         let n = outline.len();
         for cy in 0..cells_y {
             for cx in 0..cells_x {
@@ -206,7 +206,7 @@ impl Grid {
                 if point_in_polygon(p, &outline) {
                     inside[(cy * cells_x + cx) as usize] = true;
                     let d = (0..n).map(|i| seg_point_dist(outline[i], outline[(i + 1) % n], p)).fold(f64::MAX, f64::min);
-                    edge_dist[(cy * cells_x + cx) as usize] = d as Nm;
+                    edge_dist[(cy * cells_x + cx) as usize] = Nm::from_raw_shim(d as i64);
                 }
             }
         }
@@ -240,7 +240,7 @@ impl Grid {
             // Pad copper itself is stamped exactly from its rectangle (see
             // `pads_exact`); only an own-net track/via laid over the pad
             // cell adds cell-centred copper here.
-            if half_nm == 0 {
+            if half_nm == Nm::ZERO {
                 return;
             }
         }
@@ -278,7 +278,7 @@ impl Grid {
     /// `b_half_nm`.
     fn sep_cells_for(&self, query_half_nm: Nm, b_half_nm: Nm) -> i64 {
         let um = self.clearance_nm + query_half_nm + b_half_nm;
-        (um + self.grid_nm - 1) / self.grid_nm
+        (um + self.grid_nm - Nm::from_raw_shim(1)) / self.grid_nm
     }
 
     /// Exact separation stamping for one pad's copper on `layer`: every
@@ -306,7 +306,7 @@ impl Grid {
             for cx in x0..=x1 {
                 for cy in y0..=y1 {
                     let Some(j) = self.idx(cx, cy, layer) else { continue };
-                    if pad.rect_distance(self.to_point(cx, cy)) < need as f64 {
+                    if pad.rect_distance(self.to_point(cx, cy)) < need.raw_shim() as f64 {
                         let slot = if is_via { &mut self.near_via[j] } else { &mut self.near_track[b][j] };
                         *slot = match *slot {
                             EMPTY => net_id,
@@ -337,12 +337,12 @@ impl Grid {
         if let Some(i) = self.idx(cx, cy, layer) {
             if let Some(c) = &mut self.occ[i] {
                 if c.net_id == net_id {
-                    c.half_nm = c.half_nm.max(half);
+                    c.half_nm = c.half_nm.max(Nm::from_raw_shim(half));
                     return;
                 }
             }
-            self.occ[i] = Some(Cell { net_id, kind: Occ::Pad, half_nm: half });
-            self.stamp(cx, cy, layer, net_id, half, Occ::Pad);
+            self.occ[i] = Some(Cell { net_id, kind: Occ::Pad, half_nm: Nm::from_raw_shim(half) });
+            self.stamp(cx, cy, layer, net_id, Nm::from_raw_shim(half), Occ::Pad);
         }
     }
 
@@ -476,7 +476,7 @@ impl Grid {
         // its own width from there (ldo: GND over its tab's edge cell,
         // VOUT then laid adjacent with a 54 µm gap).
         let half = match kind {
-            Occ::Pad => 0,
+            Occ::Pad => Nm::ZERO,
             Occ::Track => self.net_track_half.get(&net_id).copied().unwrap_or(self.track_half_nm),
             _ => self.half_extent(kind),
         };
@@ -566,7 +566,7 @@ impl Grid {
     /// cell (the pad edge lies up to half a cell past its outermost cell
     /// centre), in cells.
     pub fn via_pad_radius_cells(&self) -> i64 {
-        (self.via_half_nm + self.grid_nm / 2 + self.grid_nm - 1) / self.grid_nm
+        (self.via_half_nm + self.grid_nm / 2 + self.grid_nm - Nm::from_raw_shim(1)) / self.grid_nm
     }
 
     /// Debug: why a cell is impassable for a track of `net`: ` ` outside,
@@ -670,7 +670,7 @@ impl Grid {
                         // record, or the inflation would outlive the
                         // copper that caused it and permanently
                         // over-block the neighbourhood.
-                        cell.half_nm = 0;
+                        cell.half_nm = Nm::ZERO;
                     } else {
                         *c = None;
                     }
@@ -694,7 +694,7 @@ impl Grid {
 
     fn min_sep_cells_half(&self, a: Occ, b_half_nm: Nm) -> i64 {
         let um = self.clearance_nm + self.half_extent(a) + b_half_nm;
-        (um + self.grid_nm - 1) / self.grid_nm
+        (um + self.grid_nm - Nm::from_raw_shim(1)) / self.grid_nm
     }
 
     /// True if (cx,cy,layer) is usable for a track of `net`.
@@ -766,7 +766,7 @@ impl Grid {
             for dy in -r..=r {
                 if let Some(i) = self.idx(cx + dx, cy + dy, layer) {
                     if let Some(c) = &self.occ[i] {
-                        if c.net_id != net_id && !(c.kind == Occ::Pad && c.half_nm == 0) {
+                        if c.net_id != net_id && !(c.kind == Occ::Pad && c.half_nm == Nm::ZERO) {
                             let d = dx.abs().max(dy.abs());
                             if d < self.min_sep_cells_half(me, c.half_nm) {
                                 return false;
@@ -776,7 +776,7 @@ impl Grid {
                 }
             }
         }
-        let need = (self.clearance_nm + self.half_extent(me)) as f64;
+        let need = (self.clearance_nm + self.half_extent(me)).raw_shim() as f64;
         let p = self.to_point(cx, cy);
         for (nid, l, pad) in &self.pads_exact {
             if *l == layer && *nid != net_id && pad.rect_distance(p) < need {
@@ -800,8 +800,8 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
         let (xi, yi) = (poly[i].x, poly[i].y);
         let (xj, yj) = (poly[j].x, poly[j].y);
         if (yi > p.y) != (yj > p.y) {
-            let x_int = xi as f64 + ((p.y - yi) as f64) * ((xj - xi) as f64) / ((yj - yi) as f64);
-            if (p.x as f64) < x_int {
+            let x_int = xi.raw_shim() as f64 + ((p.y - yi).raw_shim() as f64) * ((xj - xi).raw_shim() as f64) / ((yj - yi).raw_shim() as f64);
+            if ((p.x).raw_shim() as f64) < x_int {
                 inside = !inside;
             }
         }

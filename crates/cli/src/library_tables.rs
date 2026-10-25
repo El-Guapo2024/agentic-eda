@@ -948,6 +948,7 @@ impl ModelNames {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     fn temp(tag: &str) -> PathBuf {
@@ -1557,12 +1558,12 @@ pub(crate) mod tests {
         assert_eq!((fp["numbered_pads"].clone(), fp["footprint"]["name"].clone()), (json!(2), json!("Mine:Pad2")));
         // placing it keeps its definition with the schematic, with the library's Footprint field
         let design: eda_model::ir::Design = serde_json::from_str(r#"{"schema":1,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]}}"#).unwrap();
-        let cmd = eda_ops::Cmd::AddSymbol { id: "U1".into(), lib_id: "Mine:Chip9000".into(), at: eda_model::ir::Point { x: 1000, y: 1000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
+        let cmd = eda_ops::Cmd::AddSymbol { id: "U1".into(), lib_id: "Mine:Chip9000".into(), at: eda_model::ir::Point { x: Nm::from_raw_shim(1000), y: Nm::from_raw_shim(1000) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
         let rewritten = crate::library_place::rewrite_for_tests(&cmd, &design, &eda_model::ConstraintModel::default(), &syms, &fps).expect("placed from the table library");
         let eda_ops::Cmd::Batch { cmds } = rewritten else { panic!("{rewritten:?}") };
         assert!(matches!(&cmds[0], eda_ops::Cmd::EmbedLibSymbol { symbol } if symbol.lib_id == "Mine:Chip9000" && symbol.pins.len() == 2));
         assert!(matches!(&cmds[1], eda_ops::Cmd::AddSymbol { value, footprint, .. } if value == "Chip9000" && footprint == "Mine:Pad2"));
-        let place = eda_ops::Cmd::PlaceFootprint { footprint: "Mine:Pad2".into(), at: eda_model::ir::Point { x: 0, y: 0 }, reference: String::new(), value: String::new(), definition: None };
+        let place = eda_ops::Cmd::PlaceFootprint { footprint: "Mine:Pad2".into(), at: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, reference: String::new(), value: String::new(), definition: None };
         let Some(eda_ops::Cmd::PlaceFootprint { definition: Some(def), .. }) = crate::library_place::rewrite_for_tests(&place, &design, &eda_model::ConstraintModel::default(), &syms, &fps) else { panic!("not rewritten") };
         assert_eq!(def.pads.len(), 2);
         // and an intent part naming the footprint finds its pads

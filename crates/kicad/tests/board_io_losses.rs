@@ -2,6 +2,7 @@
 //! `import_kicad_pcb`, writes it back with `export_kicad_pcb` and checks that the item is in the design and in the file as KiCad's parser and writer have it
 //! (`pcb_io_kicad_sexpr_parser.cpp`, `pcb_io_kicad_sexpr.cpp`).
 
+use eda_model::units::Nm;
 use eda_kicad::{export_kicad_pcb, import_kicad_pcb, ExportMeta};
 use eda_model::ir::{Design, Point};
 
@@ -44,7 +45,7 @@ fn blocks<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
 }
 
 fn p(x: i64, y: i64) -> Point {
-    Point { x, y }
+    Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
 }
 
 const MM: i64 = 1_000_000;
@@ -199,9 +200,9 @@ fn a_board_rectangles_corner_radius_is_read_and_written_back() {
     assert!(!lines.is_empty());
     // Outside the rounded rectangle: beyond a corner's arc (centres 3 mm in from each corner), by more than the flattening.
     let outside = |q: Point| {
-        let cx = q.x.clamp(23 * MM, 37 * MM);
-        let cy = q.y.clamp(23 * MM, 27 * MM);
-        (((q.x - cx) as f64).hypot((q.y - cy) as f64)) > 3.0 * MM as f64 + 20_000.0
+        let cx = q.x.clamp(Nm::from_raw_shim(23 * MM), Nm::from_raw_shim(37 * MM));
+        let cy = q.y.clamp(Nm::from_raw_shim(23 * MM), Nm::from_raw_shim(27 * MM));
+        (((q.x - cx).raw_shim() as f64).hypot((q.y - cy).raw_shim() as f64)) > 3.0 * MM as f64 + 20_000.0
     };
     assert!(lines.iter().all(|(a, b)| !outside(*a) && !outside(*b)), "a hatch line in a rounded-off corner: {lines:?}");
 }
@@ -226,7 +227,7 @@ fn a_footprints_edge_cuts_are_written_inside_the_footprint_and_cut_the_outline()
     };
     // A: the notch across the top edge, its pad on the board.
     let (design, model, _) = import_kicad_pcb(&board("25 0")).expect("parses");
-    assert!(design.drawings.as_ref().map_or(true, |d| d.shapes.iter().all(|s| s.layer() != "Edge.Cuts" || matches!(s, eda_model::ir::Shape::Rect { .. }) && s.stroke_width() == 50_000)), "no footprint edge became a board shape");
+    assert!(design.drawings.as_ref().map_or(true, |d| d.shapes.iter().all(|s| s.layer() != "Edge.Cuts" || matches!(s, eda_model::ir::Shape::Rect { .. }) && s.stroke_width() == Nm::from_raw_shim(50_000))), "no footprint edge became a board shape");
     let out = export(&design, &model);
     let fp = blocks(&out, "footprint")[0];
     assert!(fp.contains("(fp_rect (start -3 -2) (end 3 2)") && fp.contains("(layer \"Edge.Cuts\")"), "{fp}");
@@ -309,7 +310,7 @@ fn importing_a_project_keeps_its_drc_exclusions() {
     assert_eq!(checks, vec!["annular_width", "clearance", "track_width", "via_dangling"], "the one naming an item the board lacks is left out");
     let width = waived.iter().find(|e| e.check == "track_width").unwrap();
     let track_id = &design.routing.as_ref().unwrap().tracks[0].id;
-    assert_eq!((&width.ids, width.positions_nm.clone(), width.comment.as_str()), (&vec![track_id.clone()], vec![[9_000_000, 12_000_000]], "thin on purpose"));
+    assert_eq!((&width.ids, width.positions_nm.clone(), width.comment.as_str()), (&vec![track_id.clone()], vec![[Nm::from_raw_shim(9_000_000), Nm::from_raw_shim(12_000_000)]], "thin on purpose"));
     assert!(out.contains(&format!("(uuid \"{}\")", width.items[0])), "the item is named as the derived board names it");
     let clearance = waived.iter().find(|e| e.check == "clearance").unwrap();
     assert_eq!(clearance.ids, vec![track_id.clone(), "R1.2".to_string()]);
@@ -340,8 +341,8 @@ fn the_summary_outline_has_the_footprints_tab_and_the_rounded_corners() {
     let (design, _, notes) = import_kicad_pcb(CARD_EDGE).expect("parses");
     assert!(notes.outline_errors.is_empty() && !notes.outline_open, "{:?}", notes.outline_errors);
     let ring = &design.placement.as_ref().unwrap().outline;
-    let area = |r: &[Point]| (0..r.len()).map(|i| r[i].x as f64 * r[(i + 1) % r.len()].y as f64 - r[(i + 1) % r.len()].x as f64 * r[i].y as f64).sum::<f64>().abs() / 2e12;
-    assert!(ring.iter().any(|q| q.y == -5 * MM), "the tab is in the summary: {ring:?}");
+    let area = |r: &[Point]| (0..r.len()).map(|i| r[i].x.raw_shim() as f64 * r[(i + 1) % r.len()].y.raw_shim() as f64 - r[(i + 1) % r.len()].x.raw_shim() as f64 * r[i].y.raw_shim() as f64).sum::<f64>().abs() / 2e12;
+    assert!(ring.iter().any(|q| q.y == Nm::from_raw_shim(-5 * MM)), "the tab is in the summary: {ring:?}");
     assert!((area(ring) - (1200.0 + 50.0)).abs() < 0.01, "{}", area(ring));
 
     let rounded = r#"(kicad_pcb (version 20240108) (generator "pcbnew")

@@ -187,7 +187,7 @@ impl Board<'_> {
                 if *cols == 0 || *rows == 0 || *cols > 100 || *rows > 1000 {
                     return Err(fail("ops_bad_table", "table", "a table has from 1 to 100 columns and from 1 to 1000 rows"));
                 }
-                if *cell_w_nm <= 0 || *cell_h_nm <= 0 {
+                if *cell_w_nm <= Nm::ZERO || *cell_h_nm <= Nm::ZERO {
                     return Err(fail("ops_bad_table", "table", "a cell has a size"));
                 }
                 let mut t = match scope {

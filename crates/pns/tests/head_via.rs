@@ -19,13 +19,13 @@ fn part(r: &str) -> Part {
 }
 
 fn track(id: &str, net: &str, layer: &str, pts: &[Point]) -> Track {
-    Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: 200_000, pts: pts.to_vec(), arc_mid_offset: None }
+    Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: Nm::from_raw_shim(200_000), pts: pts.to_vec(), arc_mid_offset: None }
 }
 
 /// Two parts far from the action, a SIG stub on F.Cu ending at (-9000, 0), and the tracks given.
 fn board(tracks: Vec<Track>) -> (Design, ConstraintModel) {
     let model = ConstraintModel { parts: vec![part("R1"), part("R2")], nets: vec![IrNet { name: "SIG".into(), pins: vec!["R1.1".into(), "R2.1".into()] }], ..Default::default() };
-    let mut all = vec![track("t_sig", "SIG", "F.Cu", &[p(-10_000_000, 0), p(-9_000_000, 0)])];
+    let mut all = vec![track("t_sig", "SIG", "F.Cu", &[p(Nm::from_raw_shim(-10_000_000), Nm::ZERO), p(Nm::from_raw_shim(-9_000_000), Nm::ZERO)])];
     all.extend(tracks);
     let design = Design {
         footprint_library: None,
@@ -38,7 +38,7 @@ fn board(tracks: Vec<Track>) -> (Design, ConstraintModel) {
         nets: None,
         placement: Some(PlacementSection {
             outline: vec![],
-            footprints: vec![FootprintInstance { id: "R1".into(), at: p(-9_000_000, 30_000_000), rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: p(9_000_000, 30_000_000), rot: 0, side: Side::Top, label: LabelSide::Above }],
+            footprints: vec![FootprintInstance { id: "R1".into(), at: p(Nm::from_raw_shim(-9_000_000), Nm::from_raw_shim(30_000_000)), rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: p(Nm::from_raw_shim(9_000_000), Nm::from_raw_shim(30_000_000)), rot: 0, side: Side::Top, label: LabelSide::Above }],
             modules: vec![],
         }),
         routing: Some(RoutingSection { tracks: all, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
@@ -74,23 +74,23 @@ fn violations(design: &Design, model: &ConstraintModel) -> HashSet<(ItemId, Item
 /// `V` while routing on F.Cu: the route goes on on B.Cu from the via; a GND track on B.Cu runs 50 um inside the via's clearance ring.
 #[test]
 fn a_route_with_a_via_pushes_the_track_on_the_other_layer_the_via_sits_on() {
-    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3_000_000, -4_000_000), p(-3_000_000, 4_000_000)])]);
+    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(-4_000_000)), p(Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(4_000_000))])]);
     // the via at (-3000 - 300 - 100 - 50 - 300, 0) is 50 um short of the clearance ring of the GND track
-    let via_at = p(-3_450_000, 0);
+    let via_at = p(Nm::from_raw_shim(-3_450_000), Nm::ZERO);
     assert!(violations(&design, &model).is_empty(), "the board starts clean");
     let mut router = Router::new(&design, &model);
     router.settings.mode = Mode::Shove;
-    router.start(p(-9_000_000, 0), "F.Cu", 200_000).expect("starts on the end of the SIG stub");
-    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.start(p(Nm::from_raw_shim(-9_000_000), Nm::ZERO), "F.Cu", Nm::from_raw_shim(200_000)).expect("starts on the end of the SIG stub");
+    router.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), Some(1));
     let pv = router.preview(via_at).expect("a route in progress");
     assert!(!pv.colliding, "{pv:?}");
-    assert_eq!(pv.via, Some((via_at, 600_000, 300_000)), "the via is where the head ends");
+    assert_eq!(pv.via, Some((via_at, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000))), "the via is where the head ends");
     assert_eq!(pv.head.last(), Some(via_at));
     assert_eq!(pv.displaced_lines.len(), 1, "the track under the via is pushed: {:?}", pv.displaced_lines);
 
     // `V` armed: the click fixes the head with its via and the route goes on on B.Cu; finishing it commits all of it as one
     assert!(router.fix(via_at).is_some());
-    let commit = router.finish(p(-3_450_000, 3_000_000)).expect("the route goes on on the other layer");
+    let commit = router.finish(p(Nm::from_raw_shim(-3_450_000), Nm::from_raw_shim(3_000_000))).expect("the route goes on on the other layer");
     assert_eq!(commit.vias.len(), 1);
     assert_eq!((commit.vias[0].at, commit.vias[0].from_layer.as_str(), commit.vias[0].to_layer.as_str()), (via_at, "F.Cu", "B.Cu"));
     assert!(commit.remove_track_ids.contains(&"t_gnd".to_string()), "{:?}", commit.remove_track_ids);
@@ -102,15 +102,15 @@ fn a_route_with_a_via_pushes_the_track_on_the_other_layer_the_via_sits_on() {
 /// The same board in Walk around: the via is pushed off the track instead (`VIA::PushoutForce` with every kind), nothing is displaced.
 #[test]
 fn the_same_via_in_walkaround_mode_moves_the_via_not_the_track() {
-    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3_000_000, -4_000_000), p(-3_000_000, 4_000_000)])]);
+    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(-4_000_000)), p(Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(4_000_000))])]);
     let mut router = Router::new(&design, &model);
     router.settings.mode = Mode::Walkaround;
-    router.start(p(-9_000_000, 0), "F.Cu", 200_000).unwrap();
-    router.toggle_via(true, 600_000, 300_000, Some(1));
-    let pv = router.preview(p(-3_450_000, 0)).expect("a route in progress");
+    router.start(p(Nm::from_raw_shim(-9_000_000), Nm::ZERO), "F.Cu", Nm::from_raw_shim(200_000)).unwrap();
+    router.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), Some(1));
+    let pv = router.preview(p(Nm::from_raw_shim(-3_450_000), Nm::ZERO)).expect("a route in progress");
     assert!(!pv.colliding && pv.displaced_lines.is_empty(), "{pv:?}");
     let (at, _, _) = pv.via.expect("a via");
-    assert_ne!(at, p(-3_450_000, 0), "the via was pushed off the track");
+    assert_ne!(at, p(Nm::from_raw_shim(-3_450_000), Nm::ZERO), "the via was pushed off the track");
 }
 
 /// findings p5 F2-2: in Walk around the via is pushed off the track *before* the head is built to it (`rhWalkBase` / `buildInitialLine`:
@@ -118,18 +118,18 @@ fn the_same_via_in_walkaround_mode_moves_the_via_not_the_track() {
 /// starts there, and the commit has the via where the preview drew it -- clear of the GND track, where the cursor's point was 150 um short.
 #[test]
 fn a_walkaround_via_is_committed_where_it_was_pushed_and_the_route_goes_on_from_it() {
-    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3_000_000, -4_000_000), p(-3_000_000, 4_000_000)])]);
+    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(-4_000_000)), p(Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(4_000_000))])]);
     let mut router = Router::new(&design, &model);
     router.settings.mode = Mode::Walkaround;
-    router.start(p(-9_000_000, 0), "F.Cu", 200_000).unwrap();
-    router.toggle_via(true, 600_000, 300_000, Some(1));
-    let pv = router.preview(p(-3_450_000, 0)).expect("a route in progress");
+    router.start(p(Nm::from_raw_shim(-9_000_000), Nm::ZERO), "F.Cu", Nm::from_raw_shim(200_000)).unwrap();
+    router.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), Some(1));
+    let pv = router.preview(p(Nm::from_raw_shim(-3_450_000), Nm::ZERO)).expect("a route in progress");
     let (at, _, _) = pv.via.expect("a via");
-    assert!(!pv.colliding && at != p(-3_450_000, 0), "{pv:?}");
+    assert!(!pv.colliding && at != p(Nm::from_raw_shim(-3_450_000), Nm::ZERO), "{pv:?}");
     assert_eq!(pv.head.last(), Some(at), "the head ends at the pushed via");
-    assert!(router.fix(p(-3_450_000, 0)).is_some());
-    router.preview(p(-3_450_000, 3_000_000));
-    let commit = router.finish(p(-3_450_000, 3_000_000)).expect("the route goes on on B.Cu");
+    assert!(router.fix(p(Nm::from_raw_shim(-3_450_000), Nm::ZERO)).is_some());
+    router.preview(p(Nm::from_raw_shim(-3_450_000), Nm::from_raw_shim(3_000_000)));
+    let commit = router.finish(p(Nm::from_raw_shim(-3_450_000), Nm::from_raw_shim(3_000_000))).expect("the route goes on on B.Cu");
     assert_eq!(commit.vias.len(), 1);
     assert_eq!(commit.vias[0].at, at, "committed where it was pushed to");
     let b = commit.tracks.iter().find(|t| t.layer == "B.Cu").expect("a B.Cu leg");
@@ -144,12 +144,12 @@ fn a_walkaround_via_is_committed_where_it_was_pushed_and_the_route_goes_on_from_
 #[test]
 fn a_via_that_ends_the_route_is_committed() {
     let (design, model) = board(vec![]);
-    let start = p(-9_000_000, 0);
-    let end = p(-5_000_000, 0);
+    let start = p(Nm::from_raw_shim(-9_000_000), Nm::ZERO);
+    let end = p(Nm::from_raw_shim(-5_000_000), Nm::ZERO);
     // fixed with the click, finished on it
     let mut router = Router::new(&design, &model);
-    router.start(start, "F.Cu", 200_000).unwrap();
-    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.start(start, "F.Cu", Nm::from_raw_shim(200_000)).unwrap();
+    router.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), Some(1));
     router.preview(end);
     assert!(router.fix(end).is_some());
     let commit = router.finish(end).expect("finished on the via");
@@ -157,31 +157,31 @@ fn a_via_that_ends_the_route_is_committed() {
     assert_eq!(commit.tracks.len(), 1);
     // armed, and the route finished with the head ending in it
     let mut router = Router::new(&design, &model);
-    router.start(start, "F.Cu", 200_000).unwrap();
-    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.start(start, "F.Cu", Nm::from_raw_shim(200_000)).unwrap();
+    router.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), Some(1));
     router.preview(end);
     let commit = router.finish(end).expect("finished with the via armed");
     assert_eq!(commit.vias.iter().map(|v| (v.at, v.from_layer.as_str(), v.to_layer.as_str())).collect::<Vec<_>>(), vec![(end, "F.Cu", "B.Cu")], "{commit:?}");
     // placed at the start of the route, before any segment, and the route goes on on B.Cu
     let mut router = Router::new(&design, &model);
-    router.start(start, "F.Cu", 200_000).unwrap();
-    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.start(start, "F.Cu", Nm::from_raw_shim(200_000)).unwrap();
+    router.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), Some(1));
     assert!(router.fix(start).is_some());
-    router.preview(p(-9_000_000, 3_000_000));
-    let commit = router.finish(p(-9_000_000, 3_000_000)).expect("the B.Cu leg");
+    router.preview(p(Nm::from_raw_shim(-9_000_000), Nm::from_raw_shim(3_000_000)));
+    let commit = router.finish(p(Nm::from_raw_shim(-9_000_000), Nm::from_raw_shim(3_000_000))).expect("the B.Cu leg");
     assert_eq!(commit.vias.iter().map(|v| v.at).collect::<Vec<_>>(), vec![start], "{commit:?}");
     assert!(commit.tracks.iter().all(|t| t.layer == "B.Cu"));
     // and Backspace takes the via away with the run it ended
     let mut router = Router::new(&design, &model);
-    router.start(start, "F.Cu", 200_000).unwrap();
-    router.toggle_via(true, 600_000, 300_000, Some(1));
+    router.start(start, "F.Cu", Nm::from_raw_shim(200_000)).unwrap();
+    router.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), Some(1));
     router.preview(end);
     assert!(router.fix(end).is_some());
     assert!(router.undo_last_segment());
     // (Backspace arms the via again, `UnfixRoute`; V takes it back)
-    router.toggle_via(false, 600_000, 300_000, None);
-    router.preview(p(-7_000_000, 0));
-    let commit = router.finish(p(-7_000_000, 0)).expect("a plain F.Cu route");
+    router.toggle_via(false, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), None);
+    router.preview(p(Nm::from_raw_shim(-7_000_000), Nm::ZERO));
+    let commit = router.finish(p(Nm::from_raw_shim(-7_000_000), Nm::ZERO)).expect("a plain F.Cu route");
     assert!(commit.vias.is_empty(), "{commit:?}");
     assert!(commit.tracks.iter().all(|t| t.layer == "F.Cu"), "back on the layer the undone run was on: {commit:?}");
 }
@@ -192,18 +192,18 @@ fn a_via_that_ends_the_route_is_committed() {
 fn backspace_takes_a_via_leg_back_with_the_via_armed_again() {
     let (design, model) = board(vec![]);
     let mut router = Router::new(&design, &model);
-    router.start(p(-9_000_000, 0), "F.Cu", 200_000).unwrap();
-    router.toggle_via(true, 600_000, 300_000, Some(1));
-    router.preview(p(-5_000_000, 0));
-    assert!(router.fix(p(-5_000_000, 0)).is_some());
+    router.start(p(Nm::from_raw_shim(-9_000_000), Nm::ZERO), "F.Cu", Nm::from_raw_shim(200_000)).unwrap();
+    router.toggle_via(true, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), Some(1));
+    router.preview(p(Nm::from_raw_shim(-5_000_000), Nm::ZERO));
+    assert!(router.fix(p(Nm::from_raw_shim(-5_000_000), Nm::ZERO)).is_some());
     assert_eq!(router.pending_via_layer(), None, "the click placed it");
     assert!(router.undo_last_segment());
     assert_eq!(router.pending_via_layer(), Some(1), "armed again, to B.Cu");
-    let pv = router.preview(p(-5_000_000, 0)).unwrap();
+    let pv = router.preview(p(Nm::from_raw_shim(-5_000_000), Nm::ZERO)).unwrap();
     assert!(pv.via.is_some() && pv.head.layer == 0, "the head is on F.Cu and ends in the via: {pv:?}");
-    assert!(router.fix(p(-5_000_000, 0)).is_some());
-    router.preview(p(-5_000_000, 3_000_000));
-    let commit = router.finish(p(-5_000_000, 3_000_000)).unwrap();
-    assert_eq!(commit.vias.iter().map(|v| v.at).collect::<Vec<_>>(), vec![p(-5_000_000, 0)]);
+    assert!(router.fix(p(Nm::from_raw_shim(-5_000_000), Nm::ZERO)).is_some());
+    router.preview(p(Nm::from_raw_shim(-5_000_000), Nm::from_raw_shim(3_000_000)));
+    let commit = router.finish(p(Nm::from_raw_shim(-5_000_000), Nm::from_raw_shim(3_000_000))).unwrap();
+    assert_eq!(commit.vias.iter().map(|v| v.at).collect::<Vec<_>>(), vec![p(Nm::from_raw_shim(-5_000_000), Nm::ZERO)]);
     assert!(commit.tracks.iter().any(|t| t.layer == "B.Cu"));
 }

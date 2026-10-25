@@ -101,10 +101,10 @@ impl Direction45 {
     /// relative geometry (used by `right`/`angle_to`/`build_initial_trace`)
     /// matters to any caller.
     pub fn from_vector(dx: Nm, dy: Nm) -> Self {
-        if dx == 0 && dy == 0 {
+        if dx == Nm::ZERO && dy == Nm::ZERO {
             return Direction45::Undefined;
         }
-        let deg = (dy as f64).atan2(dx as f64).to_degrees(); // -180..180, 0 = +x (E)
+        let deg = ((dy).raw_shim() as f64).atan2(dx.raw_shim() as f64).to_degrees(); // -180..180, 0 = +x (E)
         let idx = (((deg + 360.0) % 360.0) / 45.0 + 0.5).floor() as i64 % 8;
         // idx: 0=E,1=SE,2=S,3=SW,4=W,5=NW,6=N,7=NE (since +y is down, +45deg from E is SE)
         match idx {
@@ -202,25 +202,25 @@ impl Direction45 {
         let is90 = mode.is_90();
         let mut out = TraceBuilder::default();
         // "Shortcut where we can generate just one segment and quit."
-        if w == 0 || h == 0 || (!is90 && h == w) {
+        if w == Nm::ZERO || h == Nm::ZERO || (!is90 && h == w) {
             return Trace { pts: vec![p0, p1], arcs: Vec::new() };
         }
         let add = |a: Point, b: Point| Point { x: a.x + b.x, y: a.y + b.y };
         let sub = |a: Point, b: Point| Point { x: a.x - b.x, y: a.y - b.y };
-        let norm = |v: Point| ki_round((v.x as f64).hypot(v.y as f64));
-        let resize = |v: Point, len: i64| {
+        let norm = |v: Point| ki_round(((v.x).raw_shim() as f64).hypot(v.y.raw_shim() as f64));
+        let resize = |v: Point, len: Nm| {
             let (x, y) = crate::hull::resize(v.x, v.y, len);
             Point { x, y }
         };
         let (mp0, mp1, tangent_length) = if is90 {
             // direction E, else N
-            (if start_diagonal == (h >= w) { Point { x: w * sw, y: 0 } } else { Point { x: 0, y: sh * h } }, Point::default(), 0i64)
+            (if start_diagonal == (h >= w) { Point { x: w * sw, y: Nm::ZERO } } else { Point { x: Nm::ZERO, y: sh * h } }, Point::default(), Nm::ZERO)
         } else if w > h {
             let mp1 = Point { x: h * sw, y: h * sh };
-            (Point { x: (w - h) * sw, y: 0 }, mp1, (w - h) - norm(mp1))
+            (Point { x: (w - h) * sw, y: Nm::ZERO }, mp1, (w - h) - Nm::from_raw_shim(norm(mp1)))
         } else {
             let mp1 = Point { x: sw * w, y: sh * w };
-            (Point { x: 0, y: sh * (h - w) }, mp1, (h - w) - norm(mp1))
+            (Point { x: Nm::ZERO, y: sh * (h - w) }, mp1, (h - w) - Nm::from_raw_shim(norm(mp1)))
         };
         match mode {
             CornerMode::Mitered45 => {
@@ -229,13 +229,13 @@ impl Direction45 {
                 out.point(a1);
             }
             CornerMode::Rounded45 => {
-                let sq = |v: Point| (v.x as f64) * (v.x as f64) + (v.y as f64) * (v.y as f64);
-                let diag2 = if tangent_length >= 0 { sq(mp1) } else { sq(mp0) };
+                let sq = |v: Point| ((v.x).raw_shim() as f64) * ((v.x).raw_shim() as f64) + ((v.y).raw_shim() as f64) * ((v.y).raw_shim() as f64);
+                let diag2 = if tangent_length >= Nm::ZERO { sq(mp1) } else { sq(mp0) };
                 let diag_length = ((2.0 * diag2) - (2.0 * diag2 * (3.0 * std::f64::consts::FRAC_PI_4).cos())).sqrt();
                 let arc_radius = ki_round(diag_length / (2.0 * (67.5f64.to_radians()).cos()));
                 let rotation_sign = if w > h { sw * sh * -1 } else { sw * sh };
                 if start_diagonal {
-                    if tangent_length >= 0 {
+                    if tangent_length >= Nm::ZERO {
                         // "Positive tangentLength, diagonal start: arc goes at the start"
                         let arc_endpoint = sub(a1, resize(mp0, tangent_length));
                         out.arc_or_point(ShapeArc::from_start_end_angle(a0, arc_endpoint, 45.0 * rotation_sign as f64, 0), a0);
@@ -248,7 +248,7 @@ impl Direction45 {
                     }
                 } else {
                     let center_dir = rotate_d(V2::of(mp0), 90.0 * rotation_sign as f64);
-                    if tangent_length >= 0 {
+                    if tangent_length >= Nm::ZERO {
                         // "Positive tangentLength: arc goes at the end"
                         let arc_endpoint = add(a0, resize(mp0, tangent_length));
                         out.point(a0);
@@ -256,14 +256,14 @@ impl Direction45 {
                     } else {
                         // "Negative tangentLength: arc goes at the start"
                         let c = center_dir.resize(arc_radius as f64);
-                        let arc_center = Point { x: a0.x + ki_round(c.x), y: a0.y + ki_round(c.y) };
+                        let arc_center = Point { x: a0.x + Nm::from_raw_shim(ki_round(c.x)), y: a0.y + Nm::from_raw_shim(ki_round(c.y)) };
                         let mut ca = arc_from_center(arc_center, a0, -45.0 * rotation_sign as f64);
                         // "Constructing with a center can lead to imprecise endpoint. We need to guarantee tangency of the endpoint."
                         let endpoint = ca.end;
                         const MIN_PRECISION_IU: i64 = 4;
-                        if (endpoint.y - a1.y).abs() < MIN_PRECISION_IU {
+                        if (endpoint.y - a1.y).abs() < Nm::from_raw_shim(MIN_PRECISION_IU) {
                             ca = ShapeArc::from_start_end_angle(ca.start, Point { x: endpoint.x, y: a1.y }, 45.0 * rotation_sign as f64, 0);
-                        } else if (endpoint.x - a1.x).abs() < MIN_PRECISION_IU {
+                        } else if (endpoint.x - a1.x).abs() < Nm::from_raw_shim(MIN_PRECISION_IU) {
                             ca = ShapeArc::from_start_end_angle(ca.start, Point { x: a1.x, y: endpoint.y }, 45.0 * rotation_sign as f64, 0);
                         }
                         out.arc_or_point(ca, a0);
@@ -313,8 +313,8 @@ impl Direction45 {
 /// rounded.
 fn arc_from_center(center: Point, start: Point, angle_deg: f64) -> ShapeArc {
     let turn = |deg: f64| {
-        let v = rotate_d(V2::new((start.x - center.x) as f64, (start.y - center.y) as f64), deg);
-        Point { x: center.x + ki_round(v.x), y: center.y + ki_round(v.y) }
+        let v = rotate_d(V2::new((start.x - center.x).raw_shim() as f64, (start.y - center.y).raw_shim() as f64), deg);
+        Point { x: center.x + Nm::from_raw_shim(ki_round(v.x)), y: center.y + Nm::from_raw_shim(ki_round(v.y)) }
     };
     ShapeArc::new(start, turn(-angle_deg / 2.0), turn(-angle_deg), 0)
 }
@@ -345,7 +345,7 @@ impl TraceBuilder {
     }
 
     fn finish(self, simplify: bool) -> Trace {
-        let mut line = crate::line::Line::new(None, 0, 0);
+        let mut line = crate::line::Line::new(None, 0, Nm::ZERO);
         for part in self.parts {
             match part {
                 Ok(p) => {
@@ -385,10 +385,10 @@ mod tests {
 
     #[test]
     fn from_vector_quantizes_to_nearest_octant() {
-        assert_eq!(Direction45::from_vector(100, 0), Direction45::E);
-        assert_eq!(Direction45::from_vector(100, 100), Direction45::SE);
-        assert_eq!(Direction45::from_vector(0, -100), Direction45::N);
-        assert_eq!(Direction45::from_vector(0, 0), Direction45::Undefined);
+        assert_eq!(Direction45::from_vector(Nm::from_raw_shim(100), Nm::ZERO), Direction45::E);
+        assert_eq!(Direction45::from_vector(Nm::from_raw_shim(100), Nm::from_raw_shim(100)), Direction45::SE);
+        assert_eq!(Direction45::from_vector(Nm::ZERO, Nm::from_raw_shim(-100)), Direction45::N);
+        assert_eq!(Direction45::from_vector(Nm::ZERO, Nm::ZERO), Direction45::Undefined);
     }
 
     #[test]
@@ -418,26 +418,26 @@ mod tests {
 
     #[test]
     fn build_initial_trace_45_degree_elbow() {
-        let p0 = Point { x: 0, y: 0 };
-        let p1 = Point { x: 1000, y: 500 };
+        let p0 = Point { x: Nm::ZERO, y: Nm::ZERO };
+        let p1 = Point { x: Nm::from_raw_shim(1000), y: Nm::from_raw_shim(500) };
         let path = Direction45::E.build_initial_trace(p0, p1, false, CornerMode::Mitered45);
         assert_eq!(path.len(), 3);
         // E is not diagonal -> straight leg first (due east, matching the
         // heading), covering the longer axis's excess (1000-500=500),
         // then a 45-degree leg covers the remaining (500,500) into p1.
-        assert_eq!(path[1], Point { x: 500, y: 0 });
+        assert_eq!(path[1], Point { x: Nm::from_raw_shim(500), y: Nm::ZERO });
     }
 
     #[test]
     fn build_initial_trace_degenerates_to_one_segment_on_pure_diagonal() {
-        let path = Direction45::N.build_initial_trace(Point { x: 0, y: 0 }, Point { x: 500, y: 500 }, false, CornerMode::Mitered45);
-        assert_eq!(path, vec![Point { x: 0, y: 0 }, Point { x: 500, y: 500 }]);
+        let path = Direction45::N.build_initial_trace(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500), y: Nm::from_raw_shim(500) }, false, CornerMode::Mitered45);
+        assert_eq!(path, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500), y: Nm::from_raw_shim(500) }]);
     }
 
     #[test]
     fn build_initial_trace_90_mode_is_axis_aligned() {
-        let path = Direction45::E.build_initial_trace(Point { x: 0, y: 0 }, Point { x: 1000, y: 500 }, false, CornerMode::Mitered90);
+        let path = Direction45::E.build_initial_trace(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::from_raw_shim(500) }, false, CornerMode::Mitered90);
         assert_eq!(path.len(), 3);
-        assert!(path[1] == Point { x: 1000, y: 0 } || path[1] == Point { x: 0, y: 500 });
+        assert!(path[1] == Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO } || path[1] == Point { x: Nm::ZERO, y: Nm::from_raw_shim(500) });
     }
 }

@@ -19,6 +19,7 @@
 //! * A group's position is the middle of the box of its members' positions (`PCB_GROUP::GetPosition` is the middle of the group's own box); the items of a group are not
 //!   candidates for the top left one, as the selection holds the group and not them.
 
+use eda_model::units::Nm;
 use crate::board;
 use eda_kicad::{ClipRef, Clipboard};
 use eda_model::ir::{Point, Shape};
@@ -148,7 +149,7 @@ pub fn reference_point(clip: &Clipboard) -> Point {
     for (i, z) in clip.zones.iter().enumerate() {
         if free(2, i) {
             // `ZONE::GetPosition`: the first corner of the outline.
-            consider(z.outline.first().copied().unwrap_or(Point { x: 0, y: 0 }));
+            consider(z.outline.first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO }));
         }
     }
     for (i, s) in clip.shapes.iter().enumerate() {
@@ -176,7 +177,7 @@ pub fn reference_point(clip: &Clipboard) -> Point {
             consider(p);
         }
     }
-    best.unwrap_or(Point { x: 0, y: 0 })
+    best.unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO })
 }
 
 /// `PCB_TRACK::GetPosition` is the start; `PCB_ARC::GetPosition` the centre of the arc.
@@ -186,7 +187,7 @@ fn track_position(t: &eda_model::ir::Track) -> Point {
             return c;
         }
     }
-    t.pts.first().copied().unwrap_or(Point { x: 0, y: 0 })
+    t.pts.first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO })
 }
 
 /// `EDA_SHAPE::getPosition`: an arc's centre, a polygon's first vertex, the start of anything else (a circle's is its centre).
@@ -194,16 +195,16 @@ fn shape_position(s: &Shape) -> Point {
     match s {
         Shape::Segment { start, .. } | Shape::Rect { start, .. } | Shape::Bezier { start, .. } => *start,
         Shape::Circle { center, .. } => *center,
-        Shape::Polygon { pts, .. } => pts.first().copied().unwrap_or(Point { x: 0, y: 0 }),
+        Shape::Polygon { pts, .. } => pts.first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO }),
         Shape::Arc { start, mid, end, .. } => arc_center(*start, *mid, *end).unwrap_or(*start),
     }
 }
 
 /// `CalcArcCenter`: the centre of the circle through three points (the middle of a whole circle's diameter when the ends meet); `None` when they are collinear.
 fn arc_center(start: Point, mid: Point, end: Point) -> Option<Point> {
-    let (sx, sy, mx, my, ex, ey) = (start.x as f64, start.y as f64, mid.x as f64, mid.y as f64, end.x as f64, end.y as f64);
+    let (sx, sy, mx, my, ex, ey) = (start.x.raw_shim() as f64, start.y.raw_shim() as f64, mid.x.raw_shim() as f64, mid.y.raw_shim() as f64, end.x.raw_shim() as f64, end.y.raw_shim() as f64);
     if start == end {
-        return Some(Point { x: ((sx + mx) / 2.0).round() as i64, y: ((sy + my) / 2.0).round() as i64 });
+        return Some(Point { x: Nm::from_raw_shim(((sx + mx) / 2.0).round() as i64), y: Nm::from_raw_shim(((sy + my) / 2.0).round() as i64) });
     }
     let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
     if d == 0.0 {
@@ -211,7 +212,7 @@ fn arc_center(start: Point, mid: Point, end: Point) -> Option<Point> {
     }
     let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
     let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
-    Some(Point { x: ux.round() as i64, y: uy.round() as i64 })
+    Some(Point { x: Nm::from_raw_shim(ux.round() as i64), y: Nm::from_raw_shim(uy.round() as i64) })
 }
 
 /// The middle of the box of the positions of everything a group holds (the groups in it included): `PCB_GROUP::GetPosition` stands at the middle of the group's own box,
@@ -248,10 +249,11 @@ fn collect_group(clip: &Clipboard, group: usize, out: &mut Vec<Point>, seen: &mu
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     /// A board file with a footprint, two tracks, a via, a zone, a line on Edge.Cuts and a text, each at a position of its own.
@@ -291,9 +293,9 @@ mod tests {
     fn an_arcs_position_is_its_centre_and_a_circles_is_its_centre() {
         assert_eq!(arc_center(p(10_000_000, 0), p(0, 10_000_000), p(-10_000_000, 0)), Some(p(0, 0)));
         assert_eq!(arc_center(p(0, 0), p(10_000, 10_000), p(20_000, 20_000)), None, "collinear points have no centre");
-        let c = Shape::Circle { id: String::new(), layer: "Dwgs.User".into(), stroke_width: 100_000, filled: false, center: p(5000, 6000), end: p(9000, 6000) };
+        let c = Shape::Circle { id: String::new(), layer: "Dwgs.User".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: p(5000, 6000), end: p(9000, 6000) };
         assert_eq!(shape_position(&c), p(5000, 6000));
-        let a = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 100_000, filled: false, start: p(10_000_000, 0), mid: p(0, 10_000_000), end: p(-10_000_000, 0) };
+        let a = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: p(10_000_000, 0), mid: p(0, 10_000_000), end: p(-10_000_000, 0) };
         assert_eq!(shape_position(&a), p(0, 0));
     }
 
@@ -317,8 +319,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eda_append_api_board_{}_{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, 0), size: (800_000, 800_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: Some((3_000_000, 1_500_000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: Some((Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(1_500_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "R1".into(),
             mpn: None,
@@ -385,12 +387,12 @@ mod tests {
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
         let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
         let cursor = p(60_000_000, 70_000_000);
-        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(cursor.x - rx, cursor.y - ry) }, false, "test").unwrap();
+        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p((cursor.x - Nm::from_raw_shim(rx)).raw_shim(), (cursor.y - Nm::from_raw_shim(ry)).raw_shim()) }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
         let dr = d.drawings.as_ref().unwrap();
         let line = dr.shapes.iter().find(|s| s.layer() == "Edge.Cuts").expect("the file's Edge.Cuts line came in");
         assert_eq!(line.points()[0], cursor, "the top left item of the file is where the cursor was");
-        assert_eq!(line.points()[1], p(cursor.x + 80_000_000, cursor.y), "and the rest keeps its place relative to it");
+        assert_eq!(line.points()[1], p((cursor.x + Nm::from_raw_shim(80_000_000)).raw_shim(), cursor.y.raw_shim()), "and the rest keeps its place relative to it");
         // The file's footprint R1 met this board's R1: it is a part of its own now, filed under the next free reference.
         assert_eq!(d.placement.as_ref().unwrap().footprints.len(), 2);
         assert_eq!(model.parts.len(), 2, "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());
@@ -415,7 +417,7 @@ mod tests {
         assert_eq!(r["ok"], true, "{r}");
         let at = p(60_000_000, 70_000_000);
         let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
-        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(at.x - rx, at.y - ry) }, false, "test").unwrap();
+        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p((at.x - Nm::from_raw_shim(rx)).raw_shim(), (at.y - Nm::from_raw_shim(ry)).raw_shim()) }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
         let new_part = model.parts.iter().find(|p| p.reference != "R1").expect("the appended footprint is a part of its own");
         let fp = model.footprint_of(new_part).expect("and has its own definition");

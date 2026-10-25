@@ -132,6 +132,7 @@ pub fn export_symbols(dir: &Path, body: &[u8]) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Point, Provenance, SheetInstance};
     use std::collections::BTreeMap;
@@ -160,7 +161,7 @@ mod tests {
     }
 
     fn placement(id: &str, name: &str, file: &str, page: &str) -> SheetInstance {
-        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: 0, y: 0 }, size: (1_000_000, 1_000_000), pins: vec![], page: page.into() }
+        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), pins: vec![], page: page.into() }
     }
 
     fn design(root: SchematicSection, screens: BTreeMap<String, SchematicSection>) -> Design {
@@ -209,11 +210,11 @@ mod tests {
     }
 
     fn placed(id: &str, lib_id: &str) -> eda_model::ir::SymbolInstance {
-        eda_model::ir::SymbolInstance { id: id.into(), at: Point { x: 0, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+        eda_model::ir::SymbolInstance { id: id.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
     }
 
     fn power(id: &str, lib_id: &str) -> eda_model::ir::PowerSymbol {
-        eda_model::ir::PowerSymbol { id: id.into(), lib_id: lib_id.into(), at: Point { x: 0, y: 0 }, rot: 0, net: "GND".into(), pin: String::new() }
+        eda_model::ir::PowerSymbol { id: id.into(), lib_id: lib_id.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, net: "GND".into(), pin: String::new() }
     }
 
     #[test]

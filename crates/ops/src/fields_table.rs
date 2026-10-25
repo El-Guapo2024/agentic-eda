@@ -994,6 +994,7 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::Point;
 
@@ -1058,7 +1059,7 @@ mod tests {
     fn sym(id: &str, value: &str, fp: &str, unit: u32) -> SymbolInstance {
         SymbolInstance {
             id: id.into(),
-            at: Point { x: 0, y: 0 },
+            at: Point { x: Nm::ZERO, y: Nm::ZERO },
             rot: 0,
             mirrored: false,
             mirror_y: false,

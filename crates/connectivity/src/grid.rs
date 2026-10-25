@@ -55,7 +55,7 @@ impl Grid {
     }
 
     fn cells_of(b: (Nm, Nm, Nm, Nm), cell_size: i64) -> impl Iterator<Item = CellKey> {
-        let (x0, y0, x1, y1) = (b.0.div_euclid(cell_size), b.1.div_euclid(cell_size), b.2.div_euclid(cell_size), b.3.div_euclid(cell_size));
+        let (x0, y0, x1, y1) = (b.0.div_euclid(Nm::from_raw_shim(cell_size)), b.1.div_euclid(Nm::from_raw_shim(cell_size)), b.2.div_euclid(Nm::from_raw_shim(cell_size)), b.3.div_euclid(Nm::from_raw_shim(cell_size)));
         (x0..=x1).flat_map(move |cx| (y0..=y1).map(move |cy| (cx, cy)))
     }
 
@@ -75,7 +75,7 @@ impl Grid {
             x1 = x1.max(b.2);
             y1 = y1.max(b.3);
         }
-        let area = ((x1 - x0).max(1) as f64) * ((y1 - y0).max(1) as f64);
+        let area = ((x1 - x0).max(Nm::from_raw_shim(1)).raw_shim() as f64) * ((y1 - y0).max(Nm::from_raw_shim(1)).raw_shim() as f64);
         let target = (area / boxes.len().max(1) as f64).sqrt();
         (target as i64).max(MIN_CELL_NM)
     }
@@ -87,9 +87,9 @@ mod tests {
 
     #[test]
     fn finds_overlapping_boxes_across_cell_boundaries() {
-        let boxes = vec![(0, 0, 100_000, 100_000), (90_000, 90_000, 200_000, 200_000), (10_000_000, 10_000_000, 10_100_000, 10_100_000)];
+        let boxes = vec![(Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100_000), Nm::from_raw_shim(100_000)), (Nm::from_raw_shim(90_000), Nm::from_raw_shim(90_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(200_000)), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_100_000), Nm::from_raw_shim(10_100_000))];
         let grid = Grid::build(&boxes);
-        let hits = grid.query((50_000, 50_000, 95_000, 95_000));
+        let hits = grid.query((Nm::from_raw_shim(50_000), Nm::from_raw_shim(50_000), Nm::from_raw_shim(95_000), Nm::from_raw_shim(95_000)));
         assert!(hits.contains(&0));
         assert!(hits.contains(&1));
         assert!(!hits.contains(&2));
@@ -97,9 +97,9 @@ mod tests {
 
     #[test]
     fn query_dedupes_items_spanning_many_cells() {
-        let boxes = vec![(0, 0, 50_000_000, 50_000_000)];
+        let boxes = vec![(Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(50_000_000))];
         let grid = Grid::build(&boxes);
-        let hits = grid.query((0, 0, 50_000_000, 50_000_000));
+        let hits = grid.query((Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(50_000_000)));
         assert_eq!(hits, vec![0]);
     }
 }

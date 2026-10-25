@@ -35,19 +35,19 @@ fn qa_root() -> Option<PathBuf> {
 /// How many of the `expected` segments `ours` reproduces exactly (KiCad's compare) and within `TOL`, printed for the report.
 fn hits(case: &str, expected: &[(String, Point, Point)], ours: &[(String, Point, Point)]) -> (usize, usize) {
     let count = |tol: Nm| expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, tol))).count();
-    let (exact, near) = (count(0), count(TOL));
+    let (exact, near) = (count(Nm::ZERO), count(TOL));
     eprintln!("{case}: {exact} of {} recorded segments exact, {near} within {TOL} nm; ours {} segments", expected.len(), ours.len());
-    for e in expected.iter().filter(|e| !ours.iter().any(|o| same_segment(e, o, 0))) {
+    for e in expected.iter().filter(|e| !ours.iter().any(|o| same_segment(e, o, Nm::ZERO))) {
         eprintln!("MISS {e:?}");
     }
-    for o in ours.iter().filter(|o| !expected.iter().any(|e| same_segment(e, o, 0))) {
+    for o in ours.iter().filter(|o| !expected.iter().any(|e| same_segment(e, o, Nm::ZERO))) {
         eprintln!("OURS {o:?}");
     }
     (exact, near)
 }
 
 fn nm(v: &serde_json::Value) -> Nm {
-    v.as_i64().unwrap_or_else(|| v.as_f64().unwrap().round() as Nm)
+    Nm::from_raw_shim(v.as_i64().unwrap_or_else(|| (Nm::from_raw_shim(v.as_f64().unwrap().round() as i64)).raw_shim()))
 }
 
 fn pt(v: &serde_json::Value) -> Point {
@@ -156,7 +156,7 @@ fn recorded_segments(log: &serde_json::Value) -> Vec<(String, Point, Point)> {
 }
 
 /// The near-miss count printed beside the exact one, to tell a rounding from a different path (3 um on the micrometre grid).
-const TOL: Nm = 10;
+const TOL: Nm = Nm::from_raw_shim(10);
 
 fn close(a: Point, b: Point, tol: Nm) -> bool {
     (a.x - b.x).abs() <= tol && (a.y - b.y).abs() <= tol
@@ -283,7 +283,7 @@ fn issue22749_pushes_the_same_5_tracks_and_leaves_the_board_clean() {
     router.settings = settings;
     let events = log["events"].as_array().unwrap();
     let start = pt(&events[0]["position"]);
-    let net = node.nearest_anchor(start, eda_pns::layer::LayerRange::single(1), 500_000, None).and_then(|(id, _)| node.get(id).and_then(|i| i.net().clone())).expect("a track end with a net");
+    let net = node.nearest_anchor(start, eda_pns::layer::LayerRange::single(1), Nm::from_raw_shim(500_000), None).and_then(|(id, _)| node.get(id).and_then(|i| i.net().clone())).expect("a track end with a net");
     router.start(start, "B.Cu", model.board.width_of(&net)).expect("starts on the track end");
     let mut last = None;
     for e in &events[1..] {
@@ -311,7 +311,7 @@ fn issue22749_pushes_the_same_5_tracks_and_leaves_the_board_clean() {
     assert!(commit.remove_track_ids.iter().all(|id| ids.contains(id)), "every removed track exists: {:?}", commit.remove_track_ids);
     let committed_design = apply_commit(&design, &commit);
     let (after_node, _) = build_node(&committed_design, &model);
-    let length_of = |d: &eda_model::ir::Design, net: &str| -> i64 { d.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == net).map(|t| t.pts.windows(2).map(|w| (((w[1].x - w[0].x) as f64).powi(2) + ((w[1].y - w[0].y) as f64).powi(2)).sqrt() as i64).sum::<i64>()).sum() };
+    let length_of = |d: &eda_model::ir::Design, net: &str| -> i64 { d.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == net).map(|t| t.pts.windows(2).map(|w| (((w[1].x - w[0].x).raw_shim() as f64).powi(2) + ((w[1].y - w[0].y).raw_shim() as f64).powi(2)).sqrt() as i64).sum::<i64>()).sum() };
     // the pushed net is still one run from end to end, not the old track plus a copy of it
     assert!(length_of(&committed_design, "/VPP{slash}MCLR") < 2 * length_of(&design, "/VPP{slash}MCLR"), "the pushed track was replaced, not duplicated");
     let after_new = violations(&after_node, &model.board);
@@ -376,7 +376,7 @@ fn replay_drag(case: &str, board: &str) -> (usize, usize) {
     let start = pt(&events[0]["position"]);
     // the dragged item's own layer (the event's is the router's active one)
     let layer = log["headItems"].as_array().and_then(|h| h.first()).map(|h| h["layers"][0].as_i64().unwrap() as i32).unwrap_or_else(|| events[0]["layer"].as_i64().unwrap() as i32);
-    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), 300_000).unwrap_or_else(|| panic!("nothing to drag at {start:?} on {}", layers.name_of(layer)));
+    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), Nm::from_raw_shim(300_000)).unwrap_or_else(|| panic!("nothing to drag at {start:?} on {}", layers.name_of(layer)));
     let dragger = Dragger::start_with(&node, start, id, false).expect("a track or via");
     let (mut accepted, mut shoved) = (0, 0);
     for e in &events[1..] {
@@ -432,7 +432,7 @@ fn walk_drag_seg_against_board_edge_slides_the_segment_to_where_kicad_stopped_it
     let events = log["events"].as_array().unwrap();
     let start = pt(&events[0]["position"]);
     let layer = log["headItems"].as_array().and_then(|h| h.first()).map(|h| h["layers"][0].as_i64().unwrap() as i32).unwrap();
-    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), 300_000).unwrap_or_else(|| panic!("nothing to drag at {start:?} on {}", layers.name_of(layer)));
+    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), Nm::from_raw_shim(300_000)).unwrap_or_else(|| panic!("nothing to drag at {start:?} on {}", layers.name_of(layer)));
     let mut dragger = Dragger::start_with(&node, start, id, false).expect("a track");
     assert_eq!(dragger.kind, DragKind::Segment, "grabbed in the middle of the segment");
     let mut last_valid = None;
@@ -484,7 +484,7 @@ fn simple_drag_shove_singlelayer_reproduces_what_kicad_recorded() {
     let events = log["events"].as_array().unwrap();
     let start = pt(&events[0]["position"]);
     let layer = log["headItems"].as_array().and_then(|h| h.first()).map(|h| h["layers"][0].as_i64().unwrap() as i32).unwrap();
-    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), 300_000).expect("the dragged track");
+    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), Nm::from_raw_shim(300_000)).expect("the dragged track");
     let mut dragger = Dragger::start_with(&node, start, id, false).expect("a track");
     assert_eq!(dragger.kind, DragKind::Segment);
     let mut restored = 0;
@@ -529,10 +529,10 @@ fn walk_with_teardrops_drag_does_not_detour_round_the_board() {
     let events = log["events"].as_array().unwrap();
     let start = pt(&events[0]["position"]);
     let layer = layers.index_of("B.Cu").unwrap();
-    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), 300_000).expect("the SWCLK segment");
+    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), Nm::from_raw_shim(300_000)).expect("the SWCLK segment");
     let mut dragger = Dragger::start_with(&node, start, id, false).expect("a track");
     assert_eq!(dragger.kind, DragKind::Segment, "grabbed in the middle of the segment");
-    let length = |pts: &[Point]| pts.windows(2).map(|w| (((w[1].x - w[0].x) as f64).powi(2) + ((w[1].y - w[0].y) as f64).powi(2)).sqrt()).sum::<f64>();
+    let length = |pts: &[Point]| pts.windows(2).map(|w| (((w[1].x - w[0].x).raw_shim() as f64).powi(2) + ((w[1].y - w[0].y).raw_shim() as f64).powi(2)).sqrt()).sum::<f64>();
     let original = length(&dragger.original.pts);
     for e in &events[1..] {
         let to = pt(&e["position"]);
@@ -585,8 +585,8 @@ fn random_shove_routes_never_leave_a_new_violation() {
         let (mut accepted, mut shoved) = (0, 0);
         for k in 0..50 {
             let (start, _) = anchors[rng.below(anchors.len() as i64) as usize].clone();
-            let target = Point { x: start.x + rng.below(24_000) * 1000 - 12_000_000, y: start.y + rng.below(24_000) * 1000 - 12_000_000 };
-            router.start(start, "F.Cu", 250_000).expect("starts on a pad");
+            let target = Point { x: start.x + Nm::from_raw_shim(rng.below(24_000) * 1000) - Nm::from_raw_shim(12_000_000), y: start.y + Nm::from_raw_shim(rng.below(24_000) * 1000) - Nm::from_raw_shim(12_000_000) };
+            router.start(start, "F.Cu", Nm::from_raw_shim(250_000)).expect("starts on a pad");
             let pv = router.preview(target).unwrap();
             if pv.colliding {
                 continue;
@@ -624,7 +624,7 @@ fn random_corner_drags_never_leave_a_new_violation() {
         for k in 0..50 {
             let (id, at) = tracks[rng.below(tracks.len() as i64) as usize];
             let Some(d) = Dragger::start_with(&node, at, id, false) else { continue };
-            let to = Point { x: at.x + rng.below(6_000) * 1000 - 3_000_000, y: at.y + rng.below(6_000) * 1000 - 3_000_000 };
+            let to = Point { x: at.x + Nm::from_raw_shim(rng.below(6_000) * 1000) - Nm::from_raw_shim(3_000_000), y: at.y + Nm::from_raw_shim(rng.below(6_000) * 1000) - Nm::from_raw_shim(3_000_000) };
             let pv = d.preview(&node, &model.board, &settings, to);
             if pv.colliding {
                 continue;
@@ -669,7 +669,7 @@ fn random_segment_and_corner_drags_never_leave_a_new_violation() {
                 // the priming move at the grab point, then a few cursor positions
                 let mut shown = d.drag(&node, &model.board, &settings, at);
                 for _ in 0..3 {
-                    let to = Point { x: at.x + rng.below(5_000) * 1000 - 2_500_000, y: at.y + rng.below(5_000) * 1000 - 2_500_000 };
+                    let to = Point { x: at.x + Nm::from_raw_shim(rng.below(5_000) * 1000) - Nm::from_raw_shim(2_500_000), y: at.y + Nm::from_raw_shim(rng.below(5_000) * 1000) - Nm::from_raw_shim(2_500_000) };
                     shown = d.drag(&node, &model.board, &settings, to);
                     restored += usize::from(shown.restored);
                 }
@@ -706,7 +706,7 @@ fn random_via_drags_never_leave_a_new_violation() {
             for k in 0..60 {
                 let (id, at) = vias[rng.below(vias.len() as i64) as usize];
                 let Some(d) = Dragger::start_with(&node, at, id, false) else { continue };
-                let to = Point { x: at.x + rng.below(4_000) * 1000 - 2_000_000, y: at.y + rng.below(4_000) * 1000 - 2_000_000 };
+                let to = Point { x: at.x + Nm::from_raw_shim(rng.below(4_000) * 1000) - Nm::from_raw_shim(2_000_000), y: at.y + Nm::from_raw_shim(rng.below(4_000) * 1000) - Nm::from_raw_shim(2_000_000) };
                 let pv = d.preview(&node, &model.board, &settings, to);
                 if pv.colliding {
                     continue;

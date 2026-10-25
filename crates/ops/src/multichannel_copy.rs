@@ -143,7 +143,7 @@ impl Item {
         match self {
             Item::Track(t) => e.contains_stroke(&t.pts, t.width / 2),
             Item::Via(v) => e.contains_disc(v.at, v.diameter / 2),
-            Item::Zone(z) => e.contains_ring(&z.outline, 0),
+            Item::Zone(z) => e.contains_ring(&z.outline, Nm::ZERO),
             Item::Shape(s, _) => {
                 let half = s.stroke_width() / 2;
                 match s {
@@ -154,7 +154,7 @@ impl Item {
                         e.contains_ring(&[Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }], half)
                     }
                     Shape::Circle { center, end, .. } => {
-                        let r = (((end.x - center.x) as f64).hypot((end.y - center.y) as f64)).round() as Nm;
+                        let r = Nm::from_raw_shim((((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64);
                         e.contains_disc(*center, r + half)
                     }
                     Shape::Polygon { pts, .. } => e.contains_ring(pts, half),
@@ -292,9 +292,9 @@ impl Placing {
 
     fn apply(self, it: &mut Item, copper: usize, outer: &(Option<String>, Option<String>)) {
         if self.rot != 0 {
-            it.transform(Xform::Rotate { pivot: Point { x: 0, y: 0 }, angle: self.rot }, copper, outer);
+            it.transform(Xform::Rotate { pivot: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: self.rot }, copper, outer);
         }
-        if self.disp.x != 0 || self.disp.y != 0 {
+        if self.disp.x != Nm::ZERO || self.disp.y != Nm::ZERO {
             it.transform(Xform::Move { dx: self.disp.x, dy: self.disp.y }, copper, outer);
         }
     }
@@ -773,8 +773,8 @@ impl Board<'_> {
         let copper: Vec<String> = self.model.board.layers.clone();
         let items = super::multichannel_facts::block_items(&clip);
         // The block's area is all the copper layers (`LSET::AllCuMask()`): only what is on copper comes across.
-        let ref_side = RefSide { fps: &block_fps, outline: &[], layers: &copper, center: Point { x: 0, y: 0 }, items: &items, design_block: true };
-        let tgt_side = TargetSide { zone: None, outline: &[], layers: &copper, center: Point { x: 0, y: 0 }, group: true };
+        let ref_side = RefSide { fps: &block_fps, outline: &[], layers: &copper, center: Point { x: Nm::ZERO, y: Nm::ZERO }, items: &items, design_block: true };
+        let tgt_side = TargetSide { zone: None, outline: &[], layers: &copper, center: Point { x: Nm::ZERO, y: Nm::ZERO }, group: true };
         let opts = RepeatOptions { copy_routing: true, connected_routing_only: false, copy_placement: true, copy_other_items: true, group_items: false, include_locked_items: true, anchor: None };
         // "If no anchor is provided, pick the first matched pair": the group stays where it is.
         let anchor = res.pairs.first().map(|(r, _)| *r);

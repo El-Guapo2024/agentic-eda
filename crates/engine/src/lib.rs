@@ -6,6 +6,7 @@
 //! graph to `eda_layout::layout` and assembles the result into a
 //! `Design::schematic` section.
 
+use eda_model::units::Nm;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use eda_layout::{graph, layout, EdgeEndpoint, LayoutGraph, LayoutOptions, Node};
@@ -399,7 +400,7 @@ fn derive_schematic_drawn(model: &ConstraintModel, opts: &EngineOptions) -> Resu
                     id: String::new(),
                     net: net.clone(),
                     pins: pins.clone(),
-                    pts: poly.iter().map(|p| Point { x: p.x + off.x, y: p.y + off.y }).collect(),
+                    pts: poly.iter().map(|p| Point { x: Nm::from_raw_shim(p.x + off.x), y: Nm::from_raw_shim(p.y + off.y) }).collect(),
                     bus: false,
                 });
             }
@@ -410,7 +411,7 @@ fn derive_schematic_drawn(model: &ConstraintModel, opts: &EngineOptions) -> Resu
             let at = positions.get(&part.reference).copied().unwrap_or(graph::Point { x: 0, y: 0 });
             symbols.push(SymbolInstance {
                 id: part.reference.clone(),
-                at: Point { x: at.x, y: at.y },
+                at: Point { x: Nm::from_raw_shim(at.x), y: Nm::from_raw_shim(at.y) },
                 rot: 0,
                 mirrored: false,
                 mirror_y: false,
@@ -435,7 +436,7 @@ fn derive_schematic_drawn(model: &ConstraintModel, opts: &EngineOptions) -> Resu
             let resolved = model.real_symbol_of(&model.lib_id_of(part), part);
             for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height, resolved.as_ref(), 1) {
                 let at = graph::Point { x: top_left.x + local.x, y: top_left.y + local.y };
-                no_connects.push(NoConnect { id: String::new(), at: Point { x: at.x, y: at.y }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
+                no_connects.push(NoConnect { id: String::new(), at: Point { x: Nm::from_raw_shim(at.x), y: Nm::from_raw_shim(at.y) }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
             }
         }
 
@@ -1269,6 +1270,7 @@ fn is_connector_only_net(pins: &[String], parts_by_ref: &HashMap<&str, &Part>) -
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::Net;
 
@@ -1326,7 +1328,7 @@ mod tests {
     /// A rail is drawn as power symbols hung off the pins on short wires: nothing but stubs (a wire out of a pin, at most a bend along the row of pins)
     /// and the joins across the stubs of pins side by side.
     fn only_short_stubs(sch: &SchematicSection, net: &str) -> bool {
-        sch.wires.iter().filter(|w| w.net == net).all(|w| w.pts.len() <= 3 && polyline_len(&w.pts.iter().map(|p| graph::Point { x: p.x, y: p.y }).collect::<Vec<_>>()) <= 12 * GRID)
+        sch.wires.iter().filter(|w| w.net == net).all(|w| w.pts.len() <= 3 && polyline_len(&w.pts.iter().map(|p| graph::Point { x: p.x.raw_shim(), y: p.y.raw_shim() }).collect::<Vec<_>>()) <= 12 * GRID)
     }
 
     #[test]
@@ -1372,10 +1374,10 @@ mod tests {
         // symbol's own `at`.
         let port_idx = pin_port[1].unwrap();
         let node = Node { id: 0, width, height, ports };
-        let tip = node.stub_tip(graph::Point { x: u1.at.x, y: u1.at.y }, port_idx);
+        let tip = node.stub_tip(graph::Point { x: u1.at.x.raw_shim(), y: u1.at.y.raw_shim() }, port_idx);
         let ps = sch.power_symbols.iter().find(|p| p.pin == "U1.2").expect("U1.2 has a power symbol");
         // the symbol stands off the tip, on a wire that starts at the tip and ends at the symbol's pin
-        let tip = Point { x: tip.x, y: tip.y };
+        let tip = Point { x: Nm::from_raw_shim(tip.x), y: Nm::from_raw_shim(tip.y) };
         assert_ne!(ps.at, tip);
         let stub = sch.wires.iter().find(|w| w.net == "GND" && w.pins == ["U1.2"]).expect("U1.2's power symbol hangs on a wire");
         assert_eq!(stub.pts.first(), Some(&tip), "the wire starts at the pin's tip");
@@ -1524,26 +1526,26 @@ mod tests {
         let d = derive_schematic(&ldo_model(), &opts(7)).unwrap();
         let sch = d.schematic.unwrap();
         for s in &sch.symbols {
-            assert_eq!(s.at.x % GRID, 0, "symbol {} x off-grid", s.id);
-            assert_eq!(s.at.y % GRID, 0, "symbol {} y off-grid", s.id);
+            assert_eq!(s.at.x % Nm::from_raw_shim(GRID), Nm::ZERO, "symbol {} x off-grid", s.id);
+            assert_eq!(s.at.y % Nm::from_raw_shim(GRID), Nm::ZERO, "symbol {} y off-grid", s.id);
         }
         for w in &sch.wires {
             for p in &w.pts {
-                assert_eq!(p.x % GRID, 0, "wire point x off-grid on net {}", w.net);
-                assert_eq!(p.y % GRID, 0, "wire point y off-grid on net {}", w.net);
+                assert_eq!(p.x % Nm::from_raw_shim(GRID), Nm::ZERO, "wire point x off-grid on net {}", w.net);
+                assert_eq!(p.y % Nm::from_raw_shim(GRID), Nm::ZERO, "wire point y off-grid on net {}", w.net);
             }
         }
         for l in &sch.labels {
-            assert_eq!(l.at.x % GRID, 0);
-            assert_eq!(l.at.y % GRID, 0);
+            assert_eq!(l.at.x % Nm::from_raw_shim(GRID), Nm::ZERO);
+            assert_eq!(l.at.y % Nm::from_raw_shim(GRID), Nm::ZERO);
         }
         for p in &sch.power_symbols {
-            assert_eq!(p.at.x % GRID, 0, "power symbol {} x off-grid", p.id);
-            assert_eq!(p.at.y % GRID, 0, "power symbol {} y off-grid", p.id);
+            assert_eq!(p.at.x % Nm::from_raw_shim(GRID), Nm::ZERO, "power symbol {} x off-grid", p.id);
+            assert_eq!(p.at.y % Nm::from_raw_shim(GRID), Nm::ZERO, "power symbol {} y off-grid", p.id);
         }
         for nc in &sch.no_connects {
-            assert_eq!(nc.at.x % GRID, 0, "no_connect {} x off-grid", nc.pin);
-            assert_eq!(nc.at.y % GRID, 0, "no_connect {} y off-grid", nc.pin);
+            assert_eq!(nc.at.x % Nm::from_raw_shim(GRID), Nm::ZERO, "no_connect {} x off-grid", nc.pin);
+            assert_eq!(nc.at.y % Nm::from_raw_shim(GRID), Nm::ZERO, "no_connect {} y off-grid", nc.pin);
         }
     }
 

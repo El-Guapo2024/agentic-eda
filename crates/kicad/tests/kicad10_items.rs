@@ -6,6 +6,7 @@
 //! `/home/team_braneboard_com/src/kicad-src-25ec2335/qa/data`; the 8303b2ad source of the rest of the port predates all four kinds). Run with
 //! `EDA_SLOW_TESTS=1 cargo test -p eda-kicad --test kicad10_items -- --nocapture`.
 
+use eda_model::units::Nm;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -384,11 +385,11 @@ fn a_via_stitching_regenerates_the_vias_kicad_made() {
     let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
     let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
     let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
-    let kicad: std::collections::BTreeSet<(i64, i64)> = design.routing.as_ref().unwrap().vias.iter().filter(|v| stitch.member_ids.contains(&v.id)).map(|v| (v.at.x, v.at.y)).collect();
+    let kicad: std::collections::BTreeSet<(Nm, Nm)> = design.routing.as_ref().unwrap().vias.iter().filter(|v| stitch.member_ids.contains(&v.id)).map(|v| (v.at.x, v.at.y)).collect();
     assert_eq!(kicad.len(), 73);
-    let inputs = eda_drc::via_stitch::PlanInputs { design: &design, model: &model, fills: &fills, current_via_size_nm: 600_000, current_via_drill_nm: 300_000 };
+    let inputs = eda_drc::via_stitch::PlanInputs { design: &design, model: &model, fills: &fills, current_via_size_nm: Nm::from_raw_shim(600_000), current_via_drill_nm: Nm::from_raw_shim(300_000) };
     let plan = eda_drc::via_stitch::plan(&inputs, &stitch);
-    let ours: std::collections::BTreeSet<(i64, i64)> = plan.vias.iter().map(|(_, p)| (p.x, p.y)).collect();
+    let ours: std::collections::BTreeSet<(Nm, Nm)> = plan.vias.iter().map(|(_, p)| (p.x, p.y)).collect();
     let missing: Vec<_> = kicad.difference(&ours).collect();
     let extra: Vec<_> = ours.difference(&kicad).collect();
     eprintln!("stitch_fp_rulearea: KiCad made {} vias, the regeneration {} ({:?} first)", kicad.len(), ours.len(), ours.iter().next());
@@ -414,19 +415,19 @@ fn a_new_pitch_or_layout_keeps_the_grid_anchored() {
     let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
     let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
     let plan = |d: &eda_model::ir::Design, v: &eda_model::via_stitch::ViaStitch| {
-        eda_drc::via_stitch::plan(&eda_drc::via_stitch::PlanInputs { design: d, model: &model, fills: &fills, current_via_size_nm: 600_000, current_via_drill_nm: 300_000 }, v)
+        eda_drc::via_stitch::plan(&eda_drc::via_stitch::PlanInputs { design: d, model: &model, fills: &fills, current_via_size_nm: Nm::from_raw_shim(600_000), current_via_drill_nm: Nm::from_raw_shim(300_000) }, v)
     };
-    let before: std::collections::BTreeSet<(i64, i64)> = plan(&design, &stitch).vias.iter().map(|(_, p)| (p.x, p.y)).collect();
+    let before: std::collections::BTreeSet<(Nm, Nm)> = plan(&design, &stitch).vias.iter().map(|(_, p)| (p.x, p.y)).collect();
     assert!(before.len() > 10);
 
     // A pitch of 2 mm: every via on the 2 mm lattice of the same anchor.
     let mut coarse = stitch.clone();
-    coarse.pitch_nm = 2 * stitch.pitch_nm.max(1_000_000);
+    coarse.pitch_nm = 2 * stitch.pitch_nm.max(Nm::from_raw_shim(1_000_000));
     let p = plan(&design, &coarse);
     assert_eq!(p.stitch.origin_offset, stitch.origin_offset, "the anchor is kept");
     assert!(!p.vias.is_empty());
     let off = stitch.origin_offset;
-    assert!(p.vias.iter().all(|(_, at)| (at.x - off.x).rem_euclid(coarse.pitch_nm) == 0 && (at.y - off.y).rem_euclid(coarse.pitch_nm) == 0), "on the {} nm lattice", coarse.pitch_nm);
+    assert!(p.vias.iter().all(|(_, at)| (at.x - off.x).rem_euclid(coarse.pitch_nm) == Nm::ZERO && (at.y - off.y).rem_euclid(coarse.pitch_nm) == Nm::ZERO), "on the {} nm lattice", coarse.pitch_nm);
 
     // Out to Poisson (the board's vias where Poisson put them), and back.
     let mut poisson = stitch.clone();
@@ -444,7 +445,7 @@ fn a_new_pitch_or_layout_keeps_the_grid_anchored() {
         }
     }
     let back = plan(&d, &stitch);
-    let after: std::collections::BTreeSet<(i64, i64)> = back.vias.iter().map(|(_, p)| (p.x, p.y)).collect();
+    let after: std::collections::BTreeSet<(Nm, Nm)> = back.vias.iter().map(|(_, p)| (p.x, p.y)).collect();
     assert_eq!(back.stitch.origin_offset, stitch.origin_offset, "a Poisson via is no dragged via");
     assert_eq!(after, before, "the grid comes back where it was");
 }
@@ -465,7 +466,7 @@ fn a_text_on_copper_keeps_the_stitching_off() {
     let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
     let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
     let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
-    let plan = |d: &eda_model::ir::Design| eda_drc::via_stitch::plan(&eda_drc::via_stitch::PlanInputs { design: d, model: &model, fills: &fills, current_via_size_nm: 600_000, current_via_drill_nm: 300_000 }, &stitch);
+    let plan = |d: &eda_model::ir::Design| eda_drc::via_stitch::plan(&eda_drc::via_stitch::PlanInputs { design: d, model: &model, fills: &fills, current_via_size_nm: Nm::from_raw_shim(600_000), current_via_drill_nm: Nm::from_raw_shim(300_000) }, &stitch);
     let before = plan(&design);
     let at = before.vias[before.vias.len() / 2].1;
     let t: eda_model::ir::Text = serde_json::from_value(serde_json::json!({ "content": "X", "at": { "x": at.x, "y": at.y }, "layer": "F.Cu", "size_nm": 1_000_000, "stroke_width": 150_000, "justify": "center" })).unwrap();
@@ -494,7 +495,7 @@ fn plan_of(text: &str) -> (eda_model::ir::Design, eda_drc::via_stitch::StitchPla
     let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
     let fills = eda_kicad::zone_fills::KicadFills::new("file".into(), String::new(), 0, entries).fills_nm(&design);
     let stitch = design.drawings.as_ref().unwrap().board_items.via_stitches[0].clone();
-    let inputs = eda_drc::via_stitch::PlanInputs { design: &design, model: &model, fills: &fills, current_via_size_nm: 600_000, current_via_drill_nm: 300_000 };
+    let inputs = eda_drc::via_stitch::PlanInputs { design: &design, model: &model, fills: &fills, current_via_size_nm: Nm::from_raw_shim(600_000), current_via_drill_nm: Nm::from_raw_shim(300_000) };
     let plan = eda_drc::via_stitch::plan(&inputs, &stitch);
     (design, plan)
 }
@@ -504,7 +505,7 @@ fn inside(ring: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
     let n = ring.len();
     for i in 0..n {
         let (a, b) = (ring[i], ring[(i + 1) % n]);
-        if (a.y > p.y) != (b.y > p.y) && (p.x as f64) < (b.x - a.x) as f64 * (p.y - a.y) as f64 / (b.y - a.y) as f64 + a.x as f64 {
+        if (a.y > p.y) != (b.y > p.y) && (p.x.raw_shim() as f64) < (b.x - a.x).raw_shim() as f64 * (p.y - a.y).raw_shim() as f64 / (b.y - a.y).raw_shim() as f64 + a.x.raw_shim() as f64 {
             c = !c;
         }
     }
@@ -521,11 +522,11 @@ fn a_stitching_carries_on_across_the_inner_planes_past_a_partial_top_pour() {
     let (Some(cli), Some(qa)) = (kicad_cli(), qa_data()) else { return };
     let (_design, plan) = plan_of(&refilled(&cli, &qa, "issue25303.kicad_pcb"));
     let positions: Vec<eda_model::ir::Point> = plan.vias.iter().map(|(_, p)| *p).collect();
-    let under = positions.iter().filter(|p| p.x < 107_000_000).count();
+    let under = positions.iter().filter(|p| p.x < Nm::from_raw_shim(107_000_000)).count();
     let beyond = positions.len() - under;
-    let max_x = positions.iter().map(|p| p.x).max().unwrap_or(0);
+    let max_x = positions.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO);
     eprintln!("issue25303: {} vias, {under} under the F.Cu pour, {beyond} beyond, the farthest at x = {max_x} nm", positions.len());
-    assert!(positions.len() > 100 && under > 20 && beyond > 20 && max_x > 122_000_000);
+    assert!(positions.len() > 100 && under > 20 && beyond > 20 && max_x > Nm::from_raw_shim(122_000_000));
     assert!(positions.iter().all(|p| inside(&plan.stitch.outline, *p)));
 }
 

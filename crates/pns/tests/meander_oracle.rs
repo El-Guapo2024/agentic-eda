@@ -10,6 +10,7 @@
 //!   number of cases (default 400, times 4 for arcs and chains, 10 for shapes, 2 for lines; 100 000 cases ran when this was written).
 //!   `KICAD_SRC_DIR=<checkout of KiCad 8303b2ad> crates/pns/oracle/build.sh` builds it (a minute, clang++, no downloads).
 
+use eda_model::units::Nm;
 use eda_model::ir::Point;
 use eda_pns::chain::ShapeLineChain;
 use eda_pns::dp_meander_placer::coupled_segment_pairs;
@@ -34,7 +35,7 @@ fn render_chain(tag: &str, c: &ShapeLineChain) -> String {
 }
 
 fn p(x: i64, y: i64) -> Point {
-    Point { x, y }
+    Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
 }
 
 #[derive(Clone)]
@@ -45,7 +46,7 @@ struct Circle {
 }
 
 fn hits(c: &ShapeLineChain, obstacles: &[Circle]) -> bool {
-    c.points().iter().any(|q| obstacles.iter().any(|o| (q.x - o.cx) * (q.x - o.cx) + (q.y - o.cy) * (q.y - o.cy) < o.r * o.r))
+    c.points().iter().any(|q| obstacles.iter().any(|o| (q.x - Nm::from_raw_shim(o.cx)) * (q.x - Nm::from_raw_shim(o.cx)).raw_shim() + (q.y - Nm::from_raw_shim(o.cy)) * (q.y - Nm::from_raw_shim(o.cy)).raw_shim() < Nm::from_raw_shim(o.r * o.r)))
 }
 
 /// The stand-in for `CheckFit` the oracle repeats: no vertex of a line inside an obstacle circle, then `CheckSelfIntersections` for a line.
@@ -324,7 +325,7 @@ fn base_segment(r: &mut Rng) -> Seg {
             ((len as f64 * ang.cos()) as i64, (len as f64 * ang.sin()) as i64)
         }
     };
-    Seg::new(a, p(a.x + dx, a.y + dy))
+    Seg::new(a, p((a.x + Nm::from_raw_shim(dx)).raw_shim(), (a.y + Nm::from_raw_shim(dy)).raw_shim()))
 }
 
 /// "min max spacing step style radius single" and the initial side.
@@ -346,7 +347,7 @@ fn obstacle_text(r: &mut Rng, around: &Seg, n: i64) -> String {
         let t = r.range(0, 100);
         let (x, y) = (around.a.x + (around.b.x - around.a.x) * t / 100, around.a.y + (around.b.y - around.a.y) * t / 100);
         let (dx, dy, rad) = (r.range(-1_500_000, 1_500_000), r.range(-1_500_000, 1_500_000), r.range(300_000, 3_000_000));
-        s += &format!(" {} {} {}", x + dx, y + dy, rad);
+        s += &format!(" {} {} {}", x + Nm::from_raw_shim(dx), y + Nm::from_raw_shim(dy), rad);
     }
     s
 }
@@ -355,7 +356,7 @@ fn arc_case(r: &mut Rng) -> String {
     let s = p(r.range(-50_000_000, 50_000_000), r.range(-50_000_000, 50_000_000));
     let chord = r.range(100_000, 5_000_000);
     let ang = r.range(0, 359_999) as f64 * std::f64::consts::PI / 180_000.0;
-    let e = p(s.x + (chord as f64 * ang.cos()) as i64, s.y + (chord as f64 * ang.sin()) as i64);
+    let e = p((s.x + Nm::from_raw_shim((chord as f64 * ang.cos()) as i64)).raw_shim(), (s.y + Nm::from_raw_shim((chord as f64 * ang.sin()) as i64)).raw_shim());
     let (rnd1, rnd2) = (r.range(-179_000, 179_000), r.range(-179_000, 179_000));
     let millideg = r.pick(&[-90_000i64, 90_000, -90_000, 90_000, rnd1, rnd2]);
     let millideg = if millideg == 0 { 45_000 } else { millideg };
@@ -374,13 +375,13 @@ fn chain_case(r: &mut Rng) -> String {
             2 => (r.pick(&[-1, 1]) * len, r.pick(&[-1, 1]) * len),
             _ => (r.range(-6_000_000, 6_000_000), r.range(-6_000_000, 6_000_000)),
         };
-        let q = p(last.x + dx, last.y + dy);
+        let q = p((last.x + Nm::from_raw_shim(dx)).raw_shim(), (last.y + Nm::from_raw_shim(dy)).raw_shim());
         if q != last {
             pts.push(q);
         }
         // sometimes a point in the middle of the run it just made (collinear)
         if r.chance(25) && pts.len() < n {
-            let q2 = p((last.x + q.x) / 2, (last.y + q.y) / 2);
+            let q2 = p(((last.x + q.x) / 2).raw_shim(), ((last.y + q.y) / 2).raw_shim());
             if q2 != last && q2 != q {
                 let at = pts.len() - 1;
                 pts.insert(at, q2);
@@ -392,7 +393,7 @@ fn chain_case(r: &mut Rng) -> String {
         let seg = Seg::new(pts[i], pts[i + 1]);
         let t = r.range(0, 100);
         let (jx, jy) = (r.range(-3, 3), r.range(-3, 3));
-        p(seg.a.x + (seg.b.x - seg.a.x) * t / 100 + jx, seg.a.y + (seg.b.y - seg.a.y) * t / 100 + jy)
+        p((seg.a.x + (seg.b.x - seg.a.x) * t / 100 + Nm::from_raw_shim(jx)).raw_shim(), (seg.a.y + (seg.b.y - seg.a.y) * t / 100 + Nm::from_raw_shim(jy)).raw_shim())
     };
     let (a, b) = (near(r), near(r));
     let mut input = format!("CHAIN {}", pts.len());
@@ -408,7 +409,7 @@ fn shape_case(r: &mut Rng) -> String {
     let (width, clearance) = (r.range(100_000, 500_000), r.range(100_000, 400_000));
     let ty = r.range(0, 6);
     let t = if r.chance(50) { 0 } else { r.range(0, 60) };
-    let pp = p(base.a.x + (base.b.x - base.a.x) * t / 100, base.a.y + (base.b.y - base.a.y) * t / 100);
+    let pp = p((base.a.x + (base.b.x - base.a.x) * t / 100).raw_shim(), (base.a.y + (base.b.y - base.a.y) * t / 100).raw_shim());
     let side = r.chance(50);
     let dual = r.chance(35);
     let offset = if dual { r.range(100_000, 700_000) * r.pick(&[-1, 1]) } else { 0 };
@@ -444,16 +445,16 @@ fn coupled_case(r: &mut Rng) -> String {
             2 => (r.pick(&[-1, 1]) * len, r.pick(&[-1, 1]) * len),
             _ => (r.range(-8_000_000, 8_000_000), r.range(-8_000_000, 8_000_000)),
         };
-        let q = p(last.x + dx, last.y + dy);
+        let q = p((last.x + Nm::from_raw_shim(dx)).raw_shim(), (last.y + Nm::from_raw_shim(dy)).raw_shim());
         if q != last {
             pts.push(q);
         }
     }
     let (tx, ty) = (r.range(-700_000, 700_000), r.range(-700_000, 700_000));
-    let mut other: Vec<Point> = pts.iter().map(|q| p(q.x + tx, q.y + ty)).collect();
+    let mut other: Vec<Point> = pts.iter().map(|q| p((q.x + Nm::from_raw_shim(tx)).raw_shim(), (q.y + Nm::from_raw_shim(ty)).raw_shim())).collect();
     if r.chance(40) {
         let k = r.range(0, other.len() as i64 - 1) as usize;
-        other[k] = p(other[k].x + r.range(-300_000, 300_000), other[k].y + r.range(-300_000, 300_000));
+        other[k] = p((other[k].x + Nm::from_raw_shim(r.range(-300_000, 300_000))).raw_shim(), (other[k].y + Nm::from_raw_shim(r.range(-300_000, 300_000))).raw_shim());
     }
     if r.chance(30) && other.len() > 2 {
         other.pop();

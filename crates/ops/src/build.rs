@@ -23,6 +23,7 @@
 //! the chooser can be swapped without touching geometry, which is the
 //! only way to find out whether a smarter chooser is what helped.
 
+use eda_model::units::Nm;
 use crate::{Board, Cmd, Dir, Region};
 use eda_model::ir::Design;
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
@@ -231,11 +232,11 @@ impl Chooser for Greedy {
 /// Total half-perimeter wirelength over the nets whose parts are placed.
 fn hpwl_of(design: &Design, model: &ConstraintModel) -> i64 {
     let Some(pl) = design.placement.as_ref() else { return 0 };
-    let at: std::collections::BTreeMap<&str, (i64, i64)> =
+    let at: std::collections::BTreeMap<&str, (Nm, Nm)> =
         pl.footprints.iter().map(|f| (f.id.as_str(), (f.at.x, f.at.y))).collect();
-    let mut total = 0;
+    let mut total = Nm::ZERO;
     for n in &model.nets {
-        let pts: Vec<(i64, i64)> = n
+        let pts: Vec<(Nm, Nm)> = n
             .pins
             .iter()
             .filter_map(|p| at.get(p.split('.').next().unwrap_or(p)).copied())
@@ -243,11 +244,11 @@ fn hpwl_of(design: &Design, model: &ConstraintModel) -> i64 {
         if pts.len() < 2 {
             continue;
         }
-        let (xs, ys): (Vec<i64>, Vec<i64>) = pts.into_iter().unzip();
+        let (xs, ys): (Vec<Nm>, Vec<Nm>) = pts.into_iter().unzip();
         total += (xs.iter().max().unwrap() - xs.iter().min().unwrap())
             + (ys.iter().max().unwrap() - ys.iter().min().unwrap());
     }
-    total
+    total.raw_shim()
 }
 
 /// How the build went, for reporting against the annealer.
@@ -474,14 +475,14 @@ fn shrink_to_parts(design: &mut Design, model: &ConstraintModel) {
         return;
     }
     let bb = (
-        pl.outline.iter().map(|p| p.x).min().unwrap_or(0),
-        pl.outline.iter().map(|p| p.y).min().unwrap_or(0),
-        pl.outline.iter().map(|p| p.x).max().unwrap_or(0),
-        pl.outline.iter().map(|p| p.y).max().unwrap_or(0),
+        pl.outline.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO),
+        pl.outline.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO),
+        pl.outline.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO),
+        pl.outline.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO),
     );
 
     // Union of every keepout, so refdes labels stay on the board too.
-    let mut used: std::option::Option<(i64, i64, i64, i64)> = None;
+    let mut used: std::option::Option<(Nm, Nm, Nm, Nm)> = None;
     let mut edge_held = [false; 4]; // west, north, east, south
     for f in &pl.footprints {
         let Some(part) = model.part(&f.id) else { continue };
@@ -492,20 +493,20 @@ fn shrink_to_parts(design: &mut Design, model: &ConstraintModel) {
         });
         if eda_model::footprint::is_edge_connector(part) {
             const FLUSH: i64 = 1_500_000;
-            if k.0 - bb.0 <= FLUSH { edge_held[0] = true }
-            if k.1 - bb.1 <= FLUSH { edge_held[1] = true }
-            if bb.2 - k.2 <= FLUSH { edge_held[2] = true }
-            if bb.3 - k.3 <= FLUSH { edge_held[3] = true }
+            if k.0 - bb.0 <= Nm::from_raw_shim(FLUSH) { edge_held[0] = true }
+            if k.1 - bb.1 <= Nm::from_raw_shim(FLUSH) { edge_held[1] = true }
+            if bb.2 - k.2 <= Nm::from_raw_shim(FLUSH) { edge_held[2] = true }
+            if bb.3 - k.3 <= Nm::from_raw_shim(FLUSH) { edge_held[3] = true }
         }
     }
     let Some(u) = used else { return };
 
     // Leave a rim so nothing sits hard against the cut edge.
     const MARGIN: i64 = 1_000_000;
-    let x0 = if edge_held[0] { bb.0 } else { (u.0 - MARGIN).max(bb.0) };
-    let y0 = if edge_held[1] { bb.1 } else { (u.1 - MARGIN).max(bb.1) };
-    let x1 = if edge_held[2] { bb.2 } else { (u.2 + MARGIN).min(bb.2) };
-    let y1 = if edge_held[3] { bb.3 } else { (u.3 + MARGIN).min(bb.3) };
+    let x0 = if edge_held[0] { bb.0 } else { (u.0 - Nm::from_raw_shim(MARGIN)).max(bb.0) };
+    let y0 = if edge_held[1] { bb.1 } else { (u.1 - Nm::from_raw_shim(MARGIN)).max(bb.1) };
+    let x1 = if edge_held[2] { bb.2 } else { (u.2 + Nm::from_raw_shim(MARGIN)).min(bb.2) };
+    let y1 = if edge_held[3] { bb.3 } else { (u.3 + Nm::from_raw_shim(MARGIN)).min(bb.3) };
     if x1 <= x0 || y1 <= y0 {
         return;
     }

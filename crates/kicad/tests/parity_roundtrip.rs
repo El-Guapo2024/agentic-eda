@@ -45,6 +45,7 @@
 //!   judged alike (files in `<temp dir>/eda_parity_reexport_upgraded/`); it does not write `roundtrip.json` either (the measurement is the older formats').
 //! - `EDA_PARITY_DRC_TIMEOUT_SECS`: how long one kicad-cli DRC may run (default 600).
 
+use eda_model::units::Nm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -254,7 +255,7 @@ fn sch_corpus_notes(root: &Path) -> SchCorpusStats {
 // Part 2: our own pipeline's round trip, field-by-field
 // ---------------------------------------------------------------------
 
-type Segment = (String, String, i64, ((i64, i64), (i64, i64)));
+type Segment = (String, String, Nm, ((Nm, Nm), (Nm, Nm)));
 fn segment_set(tracks: &[Track]) -> BTreeSet<Segment> {
     let mut out = BTreeSet::new();
     for t in tracks {
@@ -268,7 +269,7 @@ fn segment_set(tracks: &[Track]) -> BTreeSet<Segment> {
     }
     out
 }
-fn via_set(vias: &[Via]) -> BTreeSet<(String, i64, i64, i64, i64, String, String)> {
+fn via_set(vias: &[Via]) -> BTreeSet<(String, Nm, Nm, Nm, Nm, String, String)> {
     vias.iter().map(|v| (v.net.clone(), v.at.x, v.at.y, v.drill, v.diameter, v.from_layer.clone(), v.to_layer.clone())).collect()
 }
 

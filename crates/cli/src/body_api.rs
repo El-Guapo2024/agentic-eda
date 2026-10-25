@@ -61,7 +61,7 @@ pub fn fab_bbox(graphics: &[Shape]) -> Option<Rect> {
             Shape::Segment { start, end, .. } | Shape::Rect { start, end, .. } => pts.extend([*start, *end]),
             Shape::Arc { start, mid, end, .. } => pts.extend([*start, *mid, *end]),
             Shape::Circle { center, end, .. } => {
-                let r = (((end.x - center.x) as f64).hypot((end.y - center.y) as f64)).round() as Nm;
+                let r = Nm::from_raw_shim((((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64);
                 pts.extend([Point { x: center.x - r, y: center.y - r }, Point { x: center.x + r, y: center.y + r }]);
             }
             Shape::Polygon { pts: p, .. } => pts.extend(p.iter().copied()),
@@ -72,7 +72,7 @@ pub fn fab_bbox(graphics: &[Shape]) -> Option<Rect> {
     let init = (first.x, first.y, first.x, first.y);
     let bb = rest.iter().fold(init, |b, p| (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y)));
     // A degenerate box (one fab line) is no body.
-    ((bb.2 - bb.0) > 0 && (bb.3 - bb.1) > 0).then_some(bb)
+    ((bb.2 - bb.0) > Nm::ZERO && (bb.3 - bb.1) > Nm::ZERO).then_some(bb)
 }
 
 /// Each library footprint's body box with the modification time of the file it was read from.
@@ -149,41 +149,41 @@ mod tests {
     }
 
     fn seg(layer: &str, a: (Nm, Nm), b: (Nm, Nm)) -> Shape {
-        Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 100_000, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
+        Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
     }
 
     #[test]
     fn the_body_is_the_fab_graphics_box_not_the_silkscreen_or_courtyard() {
-        let g = vec![seg("F.Fab", (-800_000, -400_000), (800_000, -400_000)), seg("F.Fab", (800_000, -400_000), (800_000, 400_000)), seg("F.SilkS", (-3_000_000, -3_000_000), (3_000_000, 3_000_000)), seg("F.CrtYd", (-2_000_000, -1_000_000), (2_000_000, 1_000_000))];
-        assert_eq!(fab_bbox(&g), Some((-800_000, -400_000, 800_000, 400_000)));
-        assert_eq!(fab_bbox(&[seg("F.SilkS", (0, 0), (1_000_000, 1_000_000))]), None, "no fab graphics, no body: the caller falls back to the courtyard");
-        assert_eq!(fab_bbox(&[seg("F.Fab", (0, 0), (1_000_000, 0))]), None, "a single line is not a body");
+        let g = vec![seg("F.Fab", (Nm::from_raw_shim(-800_000), Nm::from_raw_shim(-400_000)), (Nm::from_raw_shim(800_000), Nm::from_raw_shim(-400_000))), seg("F.Fab", (Nm::from_raw_shim(800_000), Nm::from_raw_shim(-400_000)), (Nm::from_raw_shim(800_000), Nm::from_raw_shim(400_000))), seg("F.SilkS", (Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(-3_000_000)), (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(3_000_000))), seg("F.CrtYd", (Nm::from_raw_shim(-2_000_000), Nm::from_raw_shim(-1_000_000)), (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(1_000_000)))];
+        assert_eq!(fab_bbox(&g), Some((Nm::from_raw_shim(-800_000), Nm::from_raw_shim(-400_000), Nm::from_raw_shim(800_000), Nm::from_raw_shim(400_000))));
+        assert_eq!(fab_bbox(&[seg("F.SilkS", (Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)))]), None, "no fab graphics, no body: the caller falls back to the courtyard");
+        assert_eq!(fab_bbox(&[seg("F.Fab", (Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(1_000_000), Nm::ZERO))]), None, "a single line is not a body");
     }
 
     #[test]
     fn a_circle_and_a_polygon_count_too() {
-        let c = Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, center: Point { x: 0, y: 0 }, end: Point { x: 1_500_000, y: 0 } };
-        assert_eq!(fab_bbox(&[c]), Some((-1_500_000, -1_500_000, 1_500_000, 1_500_000)));
-        let p = Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, pts: vec![Point { x: -1_950_000, y: -4_950_000 }, Point { x: 1_950_000, y: -4_950_000 }, Point { x: 1_950_000, y: 4_950_000 }, Point { x: -1_950_000, y: 4_950_000 }] };
-        assert_eq!(fab_bbox(&[p]), Some((-1_950_000, -4_950_000, 1_950_000, 4_950_000)));
+        let c = Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_500_000), y: Nm::ZERO } };
+        assert_eq!(fab_bbox(&[c]), Some((Nm::from_raw_shim(-1_500_000), Nm::from_raw_shim(-1_500_000), Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(1_500_000))));
+        let p = Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, pts: vec![Point { x: Nm::from_raw_shim(-1_950_000), y: Nm::from_raw_shim(-4_950_000) }, Point { x: Nm::from_raw_shim(1_950_000), y: Nm::from_raw_shim(-4_950_000) }, Point { x: Nm::from_raw_shim(1_950_000), y: Nm::from_raw_shim(4_950_000) }, Point { x: Nm::from_raw_shim(-1_950_000), y: Nm::from_raw_shim(4_950_000) }] };
+        assert_eq!(fab_bbox(&[p]), Some((Nm::from_raw_shim(-1_950_000), Nm::from_raw_shim(-4_950_000), Nm::from_raw_shim(1_950_000), Nm::from_raw_shim(4_950_000))));
     }
 
     #[test]
     fn a_project_library_entry_of_that_name_is_the_body_before_anything_installed() {
         let mut fp = eda_model::ir::LibraryFootprint::new_empty("0603");
-        fp.graphics.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: Point { x: -500_000, y: -250_000 }, end: Point { x: 500_000, y: 250_000 } });
+        fp.graphics.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(-500_000), y: Nm::from_raw_shim(-250_000) }, end: Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(250_000) } });
         let d = design(Some(eda_model::ir::FootprintLibrarySection { footprints: vec![fp], ..Default::default() }));
         let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
-        assert_eq!(local_body(&Libs::of_source(Arc::new(PathBuf::new())), &d, &part), Some((-500_000, -250_000, 500_000, 250_000)), "the entry the Footprint Editor edits, not the KiCad 0603 it was copied from");
+        assert_eq!(local_body(&Libs::of_source(Arc::new(PathBuf::new())), &d, &part), Some((Nm::from_raw_shim(-500_000), Nm::from_raw_shim(-250_000), Nm::from_raw_shim(500_000), Nm::from_raw_shim(250_000))), "the entry the Footprint Editor edits, not the KiCad 0603 it was copied from");
     }
 
     #[test]
     fn the_placed_body_follows_rotation_and_position() {
-        let fp = FootprintInstance { id: "R1".into(), at: Point { x: 10_000_000, y: 5_000_000 }, rot: 90_000, side: Side::Top, label: Default::default() };
+        let fp = FootprintInstance { id: "R1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) }, rot: 90_000, side: Side::Top, label: Default::default() };
         // A 1600 x 800 body turned a quarter turn is 800 wide and 1600 tall about the part's position.
-        let corners = [to_board(&fp, (-800_000, -400_000)), to_board(&fp, (800_000, 400_000))];
-        assert_eq!(corners[0].x.min(corners[1].x), 10_000_000 - 400_000);
-        assert_eq!(corners[0].y.min(corners[1].y), 5_000_000 - 800_000);
+        let corners = [to_board(&fp, (Nm::from_raw_shim(-800_000), Nm::from_raw_shim(-400_000))), to_board(&fp, (Nm::from_raw_shim(800_000), Nm::from_raw_shim(400_000)))];
+        assert_eq!(corners[0].x.min(corners[1].x), Nm::from_raw_shim(10_000_000 - 400_000));
+        assert_eq!(corners[0].y.min(corners[1].y), Nm::from_raw_shim(5_000_000 - 800_000));
     }
 
     /// The brief's four parts, with KiCad.app installed: their bodies are the real footprints' F.Fab boxes.
@@ -197,12 +197,12 @@ mod tests {
         let libs = Libs::of_source(Arc::new(eda_kicad::default_footprint_library_root()));
         let size = |p: Part| local_body(&libs, &design, &p).map(|b| (b.2 - b.0, b.3 - b.1));
         // The fab outline of R_0603_1608Metric is 1.6 x 0.826 mm (the file draws the body slightly taller than the 0.8 mm nominal).
-        let near = |got: Option<(Nm, Nm)>, w: Nm, h: Nm| got.is_some_and(|(gw, gh)| (gw - w).abs() <= 60_000 && (gh - h).abs() <= 60_000);
-        assert!(near(size(part("R1", "0603", Some("330"))), 1_600_000, 800_000), "R_0603_1608Metric: a 1.6 x 0.8 mm body");
-        assert!(near(size(part("D1", "0603", Some("LED"))), 1_600_000, 800_000), "LED_0603_1608Metric");
+        let near = |got: Option<(Nm, Nm)>, w: Nm, h: Nm| got.is_some_and(|(gw, gh)| (gw - w).abs() <= Nm::from_raw_shim(60_000) && (gh - h).abs() <= Nm::from_raw_shim(60_000));
+        assert!(near(size(part("R1", "0603", Some("330"))), Nm::from_raw_shim(1_600_000), Nm::from_raw_shim(800_000)), "R_0603_1608Metric: a 1.6 x 0.8 mm body");
+        assert!(near(size(part("D1", "0603", Some("LED"))), Nm::from_raw_shim(1_600_000), Nm::from_raw_shim(800_000)), "LED_0603_1608Metric");
         let soic = size(part("U1", "SOIC-16", None)).expect("SOIC-16 has a fab outline");
-        assert!((soic.0 - 3_900_000).abs() <= 200_000 && (soic.1 - 9_900_000).abs() <= 200_000, "SOIC-16_3.9x9.9mm: {soic:?}");
+        assert!((soic.0 - Nm::from_raw_shim(3_900_000)).abs() <= Nm::from_raw_shim(200_000) && (soic.1 - Nm::from_raw_shim(9_900_000)).abs() <= Nm::from_raw_shim(200_000), "SOIC-16_3.9x9.9mm: {soic:?}");
         let header = size(part("J1", "PINHEADER-4", None)).expect("a 1x04 header has a fab outline");
-        assert!(header.1 >= 10_000_000 && header.0 <= 3_000_000, "PinHeader_1x04_P2.54mm_Vertical is about 2.5 x 10 mm: {header:?}");
+        assert!(header.1 >= Nm::from_raw_shim(10_000_000) && header.0 <= Nm::from_raw_shim(3_000_000), "PinHeader_1x04_P2.54mm_Vertical is about 2.5 x 10 mm: {header:?}");
     }
 }

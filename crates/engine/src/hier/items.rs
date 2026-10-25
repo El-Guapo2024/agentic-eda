@@ -1,5 +1,6 @@
 //! What a layout emits: the drawn items of one block or one sheet, with the rectangles they occupy.
 
+use eda_model::units::Nm;
 use std::collections::BTreeMap;
 
 use eda_model::ir::{LabelKind, LabelShape, NetLabel, NoConnect, Point, PowerSymbol, SymbolInstance, Wire};
@@ -205,12 +206,12 @@ pub struct Items {
 
 /// The box of a wire from `a` to `b`: the line and a hair either side.
 fn wire_rect(a: Point, b: Point) -> Rect {
-    Rect::new(a.x.min(b.x) - 200_000, a.y.min(b.y) - 200_000, a.x.max(b.x) + 200_000, a.y.max(b.y) + 200_000)
+    Rect::new((a.x.min(b.x) - Nm::from_raw_shim(200_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(200_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(200_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(200_000)).raw_shim())
 }
 
 fn shift(p: &mut Point, dx: i64, dy: i64) {
-    p.x += dx;
-    p.y += dy;
+    p.x += Nm::from_raw_shim(dx);
+    p.y += Nm::from_raw_shim(dy);
 }
 
 impl Items {
@@ -218,7 +219,7 @@ impl Items {
         let mut r = super::kit::union_all(self.rects.iter().copied());
         for w in &self.wires {
             for p in &w.pts {
-                let pr = Rect { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+                let pr = Rect { x0: p.x.raw_shim(), y0: p.y.raw_shim(), x1: p.x.raw_shim(), y1: p.y.raw_shim() };
                 r = Some(r.map_or(pr, |e| e.union(pr)));
             }
         }
@@ -347,7 +348,7 @@ impl Items {
     /// its end faces; the straight stub of `min` cells when nothing is clear.
     fn hang_route(&self, pin_ref: &str, tip: Point, side: Side, min: i64, item_at: impl Fn(Point, (i64, i64)) -> Rect) -> (Vec<Point>, (i64, i64), bool) {
         let (dx, dy) = side_dir(side);
-        let out = |p: Point, d: (i64, i64), c: i64| Point { x: p.x + d.0 * c * G, y: p.y + d.1 * c * G };
+        let out = |p: Point, d: (i64, i64), c: i64| Point { x: p.x + Nm::from_raw_shim(d.0 * c * G), y: p.y + Nm::from_raw_shim(d.1 * c * G) };
         for c in min..=min + MAX_PUSH {
             let end = out(tip, (dx, dy), c);
             if self.hangs_clear(pin_ref, tip, end, item_at(end, (dx, dy))) {
@@ -370,7 +371,7 @@ impl Items {
 
     /// Remember the wire from `tip` to `end` and the box of what it ends in.
     fn hang(&mut self, tip: Point, end: Point, item: Rect) {
-        let wire = Rect::new(tip.x.min(end.x) - 200_000, tip.y.min(end.y) - 200_000, tip.x.max(end.x) + 200_000, tip.y.max(end.y) + 200_000);
+        let wire = Rect::new((tip.x.min(end.x) - Nm::from_raw_shim(200_000)).raw_shim(), (tip.y.min(end.y) - Nm::from_raw_shim(200_000)).raw_shim(), (tip.x.max(end.x) + Nm::from_raw_shim(200_000)).raw_shim(), (tip.y.max(end.y) + Nm::from_raw_shim(200_000)).raw_shim());
         self.rects.push(wire);
         self.hung.push(wire);
         self.rects.push(item);
@@ -398,7 +399,7 @@ impl Items {
         self.failures += usize::from(!found);
         self.wire(net, vec![pin_ref.to_string()], pts.clone());
         for pair in pts.windows(2) {
-            let wire = Rect::new(pair[0].x.min(pair[1].x) - 200_000, pair[0].y.min(pair[1].y) - 200_000, pair[0].x.max(pair[1].x) + 200_000, pair[0].y.max(pair[1].y) + 200_000);
+            let wire = Rect::new((pair[0].x.min(pair[1].x) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.min(pair[1].y) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].x.max(pair[1].x) + Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.max(pair[1].y) + Nm::from_raw_shim(200_000)).raw_shim());
             self.rects.push(wire);
             self.hung.push(wire);
         }
@@ -425,7 +426,7 @@ impl Items {
             for p in group {
                 let axis = |q: &RailPin| if horizontal { q.tip.x } else { q.tip.y };
                 match runs.last_mut() {
-                    Some(run) if axis(&p) - axis(run.last().expect("a run has a pin")) <= 3 * G => run.push(p),
+                    Some(run) if axis(&p) - axis(run.last().expect("a run has a pin")) <= Nm::from_raw_shim(3 * G) => run.push(p),
                     _ => runs.push(vec![p]),
                 }
             }
@@ -439,7 +440,7 @@ impl Items {
                 // the stubs, three cells at least, as long as it takes for the join, the symbol and its name to clear what is already hung
                 let lib_id = power_lib_id(&net);
                 let rot = outward_rot(!is_ground_net_name(&net), side);
-                let ends_at = |c: i64| -> Vec<Point> { run.iter().map(|p| Point { x: p.tip.x + dx * c * G, y: p.tip.y + dy * c * G }).collect() };
+                let ends_at = |c: i64| -> Vec<Point> { run.iter().map(|p| Point { x: p.tip.x + Nm::from_raw_shim(dx * c * G), y: p.tip.y + Nm::from_raw_shim(dy * c * G) }).collect() };
                 let found = (3..=3 + MAX_PUSH).find(|&c| {
                     let ends = ends_at(c);
                     run.iter().zip(&ends).all(|(p, e)| self.rect_clear(&p.pin_ref, wire_rect(p.tip, *e)))
@@ -451,12 +452,12 @@ impl Items {
                 let ends = ends_at(cells);
                 for (i, p) in run.iter().enumerate() {
                     self.wire(&net, vec![p.pin_ref.clone()], vec![p.tip, ends[i]]);
-                    let w = Rect::new(p.tip.x.min(ends[i].x) - 200_000, p.tip.y.min(ends[i].y) - 200_000, p.tip.x.max(ends[i].x) + 200_000, p.tip.y.max(ends[i].y) + 200_000);
+                    let w = Rect::new((p.tip.x.min(ends[i].x) - Nm::from_raw_shim(200_000)).raw_shim(), (p.tip.y.min(ends[i].y) - Nm::from_raw_shim(200_000)).raw_shim(), (p.tip.x.max(ends[i].x) + Nm::from_raw_shim(200_000)).raw_shim(), (p.tip.y.max(ends[i].y) + Nm::from_raw_shim(200_000)).raw_shim());
                     self.rects.push(w);
                     self.hung.push(w);
                     if i + 1 < run.len() {
                         self.wire(&net, Vec::new(), vec![ends[i], ends[i + 1]]);
-                        let j = Rect::new(ends[i].x.min(ends[i + 1].x) - 200_000, ends[i].y.min(ends[i + 1].y) - 200_000, ends[i].x.max(ends[i + 1].x) + 200_000, ends[i].y.max(ends[i + 1].y) + 200_000);
+                        let j = Rect::new((ends[i].x.min(ends[i + 1].x) - Nm::from_raw_shim(200_000)).raw_shim(), (ends[i].y.min(ends[i + 1].y) - Nm::from_raw_shim(200_000)).raw_shim(), (ends[i].x.max(ends[i + 1].x) + Nm::from_raw_shim(200_000)).raw_shim(), (ends[i].y.max(ends[i + 1].y) + Nm::from_raw_shim(200_000)).raw_shim());
                         self.rects.push(j);
                         self.hung.push(j);
                     }
@@ -476,7 +477,7 @@ impl Items {
         let kind = if hierarchical { LabelKind::Hierarchical { shape: LabelShape::Bidirectional } } else { LabelKind::Local };
         self.labels.push(NetLabel { id: String::new(), net: net.to_string(), at: end, kind });
         for pair in pts.windows(2) {
-            let wire = Rect::new(pair[0].x.min(pair[1].x) - 200_000, pair[0].y.min(pair[1].y) - 200_000, pair[0].x.max(pair[1].x) + 200_000, pair[0].y.max(pair[1].y) + 200_000);
+            let wire = Rect::new((pair[0].x.min(pair[1].x) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.min(pair[1].y) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].x.max(pair[1].x) + Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.max(pair[1].y) + Nm::from_raw_shim(200_000)).raw_shim());
             self.rects.push(wire);
             self.hung.push(wire);
         }
@@ -489,7 +490,7 @@ impl Items {
     /// one label stands on a tail out of the middle of the join, its text running on outward -- so two labels of one net never crowd each other.
     pub fn label_run(&mut self, pins: &[(String, Point)], side: Side, net: &str) {
         let (dx, dy) = side_dir(side);
-        let at = |p: Point, c: i64| Point { x: p.x + dx * c * G, y: p.y + dy * c * G };
+        let at = |p: Point, c: i64| Point { x: p.x + Nm::from_raw_shim(dx * c * G), y: p.y + Nm::from_raw_shim(dy * c * G) };
         // the stubs, three cells at least, as long as it takes for the join and the label on its tail to clear what is already hung
         let own = pins[0].0.clone();
         let fits = |c: i64| -> bool {
@@ -516,13 +517,13 @@ impl Items {
         }
         for ((pin_ref, tip), e) in pins.iter().zip(&ends) {
             self.wire(net, vec![pin_ref.clone()], vec![*tip, *e]);
-            let w = Rect::new(tip.x.min(e.x) - 200_000, tip.y.min(e.y) - 200_000, tip.x.max(e.x) + 200_000, tip.y.max(e.y) + 200_000);
+            let w = Rect::new((tip.x.min(e.x) - Nm::from_raw_shim(200_000)).raw_shim(), (tip.y.min(e.y) - Nm::from_raw_shim(200_000)).raw_shim(), (tip.x.max(e.x) + Nm::from_raw_shim(200_000)).raw_shim(), (tip.y.max(e.y) + Nm::from_raw_shim(200_000)).raw_shim());
             self.rects.push(w);
             self.hung.push(w);
         }
         for pair in join.windows(2) {
             self.wire(net, Vec::new(), vec![pair[0], pair[1]]);
-            let w = Rect::new(pair[0].x.min(pair[1].x) - 200_000, pair[0].y.min(pair[1].y) - 200_000, pair[0].x.max(pair[1].x) + 200_000, pair[0].y.max(pair[1].y) + 200_000);
+            let w = Rect::new((pair[0].x.min(pair[1].x) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.min(pair[1].y) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].x.max(pair[1].x) + Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.max(pair[1].y) + Nm::from_raw_shim(200_000)).raw_shim());
             self.rects.push(w);
             self.hung.push(w);
         }

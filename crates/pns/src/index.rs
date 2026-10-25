@@ -27,7 +27,7 @@ pub struct Index {
 
 impl Index {
     pub fn new(cell_size: Nm) -> Self {
-        Index { cell_size: cell_size.max(1), cells: HashMap::new(), boxes: HashMap::new() }
+        Index { cell_size: cell_size.max(Nm::from_raw_shim(1)), cells: HashMap::new(), boxes: HashMap::new() }
     }
 
     fn cell_of(&self, x: Nm, y: Nm) -> CellKey {
@@ -104,19 +104,19 @@ mod tests {
 
     #[test]
     fn insert_query_remove() {
-        let mut idx = Index::new(1000);
-        idx.insert(1, (0, 0, 100, 100));
-        idx.insert(2, (50_000, 0, 50_100, 100));
-        assert_eq!(idx.query((-10, -10, 10, 10)), vec![1]);
+        let mut idx = Index::new(Nm::from_raw_shim(1000));
+        idx.insert(1, (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100), Nm::from_raw_shim(100)));
+        idx.insert(2, (Nm::from_raw_shim(50_000), Nm::ZERO, Nm::from_raw_shim(50_100), Nm::from_raw_shim(100)));
+        assert_eq!(idx.query((Nm::from_raw_shim(-10), Nm::from_raw_shim(-10), Nm::from_raw_shim(10), Nm::from_raw_shim(10))), vec![1]);
         idx.remove(1);
-        assert!(idx.query((-10, -10, 10, 10)).is_empty());
-        assert_eq!(idx.query((49_000, -10, 51_000, 10)), vec![2]);
+        assert!(idx.query((Nm::from_raw_shim(-10), Nm::from_raw_shim(-10), Nm::from_raw_shim(10), Nm::from_raw_shim(10))).is_empty());
+        assert_eq!(idx.query((Nm::from_raw_shim(49_000), Nm::from_raw_shim(-10), Nm::from_raw_shim(51_000), Nm::from_raw_shim(10))), vec![2]);
     }
 
     #[test]
     fn item_spanning_many_cells_returned_once() {
-        let mut idx = Index::new(100);
-        idx.insert(9, (0, 0, 10_000, 50));
-        assert_eq!(idx.query((4_900, -200, 5_100, 200)), vec![9]);
+        let mut idx = Index::new(Nm::from_raw_shim(100));
+        idx.insert(9, (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(10_000), Nm::from_raw_shim(50)));
+        assert_eq!(idx.query((Nm::from_raw_shim(4_900), Nm::from_raw_shim(-200), Nm::from_raw_shim(5_100), Nm::from_raw_shim(200))), vec![9]);
     }
 }

@@ -484,13 +484,13 @@ impl<'m> Scene<'m> {
         let mut y_bend: i64 = 1;
         // The move is split in x and y so a dragged orthogonal line can be told which way it is going. (KiCad also splits a move that
         // changes the sign of the running offset; a drag applied in one step never does.)
-        let splits = [Point { x: delta.x, y: 0 }, Point { x: 0, y: delta.y }];
+        let splits = [Point { x: delta.x, y: Nm::ZERO }, Point { x: Nm::ZERO, y: delta.y }];
         st.move_offset = Point { x: st.move_offset.x + delta.x, y: st.move_offset.y + delta.y };
         for split in splits {
-            if split == (Point { x: 0, y: 0 }) {
+            if split == (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                 continue;
             }
-            for it in self.sorted_selection(delta.x >= 0, delta.y >= 0) {
+            for it in self.sorted_selection(delta.x >= Nm::ZERO, delta.y >= Nm::ZERO) {
                 if drag_mode && st.ortho {
                     if let Item::Seg(i) = it {
                         let s = &self.segs[i];
@@ -605,7 +605,7 @@ impl<'m> Scene<'m> {
     /// along (or a line of no length is lengthened), and when the fixed end is attached to something that cannot move two lines are
     /// added to keep it there, joined by a right angle.
     pub(crate) fn ortho_line_drag(&mut self, st: &mut Drag, line: usize, split: Point, x_bend: &mut i64, y_bend: &mut i64) {
-        let sd = (split.x, split.y);
+        let sd = (split.x.raw_shim(), split.y.raw_shim());
         if parallel(sd, self.segs[line].dir()) && self.segs[line].length() != 0.0 {
             return;
         }
@@ -717,8 +717,8 @@ impl<'m> Scene<'m> {
             // soon-to-move unselected end connected to these items. To keep our drag selections all the same, we'll move our unselected
             // end point and then put wires between it and its original endpoint."
             let grid = st.grid;
-            let x_move_bit = (split.x != 0) as i64;
-            let y_move_bit = (split.y != 0) as i64;
+            let x_move_bit = (split.x != Nm::ZERO) as i64;
+            let y_move_bit = (split.y != Nm::ZERO) as i64;
             let x_length = (unselected_end.x - selected_end.x).abs();
             let y_length = (unselected_end.y - selected_end.y).abs();
             let x_move = (x_length - *x_bend * grid) * (selected_end.x - unselected_end.x).signum();
@@ -745,7 +745,7 @@ impl<'m> Scene<'m> {
             *y_bend += x_move_bit;
 
             // move the unselected end of our item
-            let step = Point { x: if split.x != 0 { split.x } else { x_move }, y: if split.y != 0 { split.y } else { y_move } };
+            let step = Point { x: if split.x != Nm::ZERO { split.x } else { x_move }, y: if split.y != Nm::ZERO { split.y } else { y_move } };
             if start_flagged {
                 self.segs[line].b = add(self.segs[line].b, step);
             } else {
@@ -942,13 +942,13 @@ fn add(p: Point, d: Point) -> Point {
 
 /// `SEG::NearestPoint`.
 fn nearest_on_segment(a: Point, b: Point, p: Point) -> Point {
-    let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+    let (dx, dy) = ((b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
     let len2 = dx * dx + dy * dy;
     if len2 == 0.0 {
         return a;
     }
-    let t = (((p.x - a.x) as f64 * dx + (p.y - a.y) as f64 * dy) / len2).clamp(0.0, 1.0);
-    Point { x: a.x + (dx * t).round() as i64, y: a.y + (dy * t).round() as i64 }
+    let t = (((p.x - a.x).raw_shim() as f64 * dx + (p.y - a.y).raw_shim() as f64 * dy) / len2).clamp(0.0, 1.0);
+    Point { x: a.x + Nm::from_raw_shim((dx * t).round() as i64), y: a.y + Nm::from_raw_shim((dy * t).round() as i64) }
 }
 
 /// `SCH_SHEET_PIN::ConstrainOnEdge( aPos, aAllowEdgeSwitch )`: where a pin dragged to `pos` sits on its sheet's border. `current` is the
@@ -1000,5 +1000,5 @@ pub(crate) fn constrain_on_edge(sheet: &eda_model::ir::SheetInstance, pos: Point
 
 fn distance_to_segment(p: Point, a: Point, b: Point) -> f64 {
     let n = nearest_on_segment(a, b, p);
-    ((p.x - n.x) as f64).hypot((p.y - n.y) as f64)
+    ((p.x - n.x).raw_shim() as f64).hypot((p.y - n.y).raw_shim() as f64)
 }

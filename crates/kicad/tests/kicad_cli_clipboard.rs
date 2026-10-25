@@ -1,6 +1,7 @@
 //! A Copy's text is KiCad's: kicad-cli (the same board reader pcbnew's Paste uses) loads it as a board and finds every item
 //! where the copy put it. Skipped, loudly, when there is no kicad-cli.
 
+use eda_model::units::Nm;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -23,7 +24,7 @@ fn find_kicad_cli() -> Option<PathBuf> {
 }
 
 fn p(x: i64, y: i64) -> Point {
-    Point { x, y }
+    Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -66,10 +67,10 @@ fn kicad_cli_reads_a_copy_as_a_board_and_finds_the_items_where_the_copy_put_them
         placement: Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "C1".into(), at: p(150_000_000, 140_000_000), rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] }),
         routing: Some(RoutingSection {
             tracks: vec![
-                Track { id: "trk_h".into(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 250_000, pts: vec![p(120_000_000, 120_000_000), p(140_000_000, 120_000_000)], arc_mid_offset: None },
-                Track { id: "trk_v".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 250_000, pts: vec![p(160_000_000, 110_000_000), p(160_000_000, 130_000_000)], arc_mid_offset: None },
+                Track { id: "trk_h".into(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(250_000), pts: vec![p(120_000_000, 120_000_000), p(140_000_000, 120_000_000)], arc_mid_offset: None },
+                Track { id: "trk_v".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(250_000), pts: vec![p(160_000_000, 110_000_000), p(160_000_000, 130_000_000)], arc_mid_offset: None },
             ],
-            vias: vec![Via { id: "via_a".into(), net: "VIN".into(), at: p(140_000_000, 120_000_000), drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+            vias: vec![Via { id: "via_a".into(), net: "VIN".into(), at: p(140_000_000, 120_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
             zones: vec![],
             track_width_presets: vec![],
             via_presets: vec![],
@@ -139,10 +140,10 @@ fn what_kicad_itself_writes_for_those_items_reads_back_the_same() {
         placement: Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "C1".into(), at: p(150_000_000, 140_000_000), rot: 90_000, side: Side::Top, label: LabelSide::Above }], modules: vec![] }),
         routing: Some(RoutingSection {
             tracks: vec![
-                Track { id: "trk_h".into(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 250_000, pts: vec![p(120_000_000, 120_000_000), p(140_000_000, 120_000_000)], arc_mid_offset: None },
-                Track::new_arc("GND".into(), "B.Cu".into(), 300_000, p(160_000_000, 110_000_000), p(165_000_000, 115_000_000), p(160_000_000, 120_000_000)),
+                Track { id: "trk_h".into(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(250_000), pts: vec![p(120_000_000, 120_000_000), p(140_000_000, 120_000_000)], arc_mid_offset: None },
+                Track::new_arc("GND".into(), "B.Cu".into(), Nm::from_raw_shim(300_000), p(160_000_000, 110_000_000), p(165_000_000, 115_000_000), p(160_000_000, 120_000_000)),
             ],
-            vias: vec![Via { id: "via_a".into(), net: "VIN".into(), at: p(140_000_000, 120_000_000), drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+            vias: vec![Via { id: "via_a".into(), net: "VIN".into(), at: p(140_000_000, 120_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
             zones: vec![],
             track_width_presets: vec![],
             via_presets: vec![],
@@ -165,10 +166,10 @@ fn what_kicad_itself_writes_for_those_items_reads_back_the_same() {
     let clip = parse_pcb_clipboard(&written_by_kicad).unwrap();
     assert_eq!(clip.tracks.len(), 2);
     let straight = clip.tracks.iter().find(|t| t.arc().is_none()).unwrap();
-    assert_eq!((straight.net.as_str(), straight.layer.as_str(), straight.width, straight.pts.clone()), ("VIN", "F.Cu", 250_000, vec![p(20_000_000, 20_000_000), p(40_000_000, 20_000_000)]));
+    assert_eq!((straight.net.as_str(), straight.layer.as_str(), straight.width, straight.pts.clone()), ("VIN", "F.Cu", Nm::from_raw_shim(250_000), vec![p(20_000_000, 20_000_000), p(40_000_000, 20_000_000)]));
     let arc = clip.tracks.iter().find(|t| t.arc().is_some()).unwrap();
     assert_eq!((arc.net.as_str(), arc.layer.as_str(), arc.arc()), ("GND", "B.Cu", Some((p(60_000_000, 10_000_000), p(65_000_000, 15_000_000), p(60_000_000, 20_000_000)))));
-    assert_eq!((clip.vias[0].net.as_str(), clip.vias[0].at, clip.vias[0].diameter, clip.vias[0].drill), ("VIN", p(40_000_000, 20_000_000), 600_000, 300_000));
+    assert_eq!((clip.vias[0].net.as_str(), clip.vias[0].at, clip.vias[0].diameter, clip.vias[0].drill), ("VIN", p(40_000_000, 20_000_000), Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000)));
     let c1 = &clip.footprints[0];
     assert_eq!((c1.reference.as_str(), c1.at, c1.rot, c1.side), ("C1", p(50_000_000, 40_000_000), 90_000, Side::Top));
     assert_eq!(c1.pad_nets, vec![("1".to_string(), "VIN".to_string()), ("2".to_string(), "GND".to_string())]);

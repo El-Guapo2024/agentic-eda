@@ -26,6 +26,7 @@
 //! violation under -- `MainItemHasSheetPath() ? GetMainItemSheetPath() : sheetList[0]`. The rest of the record depends on the check: which of the
 //! three path fields its marker sets (`SetSheetSpecificPath`, `SetItemsSheetPaths`) and which item's position it is put at. [`rule`] is that table.
 
+use eda_model::units::Nm;
 use eda_model::ir::{ErcExclusion, ErcMarker};
 use serde_json::{json, Value};
 
@@ -203,7 +204,7 @@ pub fn marker(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sh
         Paths::SpecificMainAux if single && !path.is_empty() => (path.clone(), path.clone(), path),
         _ => return None,
     };
-    Some(ErcMarker { error_type: error_type.to_string(), at_nm: [at.x_nm, at.y_nm], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
+    Some(ErcMarker { error_type: error_type.to_string(), at_nm: [Nm::from_raw_shim(at.x_nm), Nm::from_raw_shim(at.y_nm)], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
 }
 
 /// Whether an exclusion's marker and a finding's are of one sheet (`SCH_MARKER::GetSheetSpecificPath`): the same sheet path, or either not known (an
@@ -300,7 +301,7 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
         let iu = |i: usize| props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0) * 100;
         let items = [3, 4].iter().filter_map(|&i| props.get(i).map(|s| s.trim())).filter(|u| !u.is_empty() && *u != NIL_UUID).map(String::from).collect();
         let p = |i: usize| props.get(i).map(|t| text_path(t)).unwrap_or_default();
-        Some((ErcMarker { error_type: error_type.to_string(), at_nm: [iu(1), iu(2)], items, sheet: p(5), main_sheet: p(6), aux_sheet: p(7) }, comment.to_string()))
+        Some((ErcMarker { error_type: error_type.to_string(), at_nm: [Nm::from_raw_shim(iu(1)), Nm::from_raw_shim(iu(2))], items, sheet: p(5), main_sheet: p(6), aux_sheet: p(7) }, comment.to_string()))
     };
     entries
         .iter()
@@ -315,7 +316,7 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
                 let items = m.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(|i| i.get("value").and_then(Value::as_str)).filter(|u| *u != NIL_UUID).map(String::from).collect()).unwrap_or_default();
                 let marker = ErcMarker {
                     error_type,
-                    at_nm: [nm(field(&pos, "x_nm", "xNm")), nm(field(&pos, "y_nm", "yNm"))],
+                    at_nm: [Nm::from_raw_shim(nm(field(&pos, "x_nm", "xNm"))), Nm::from_raw_shim(nm(field(&pos, "y_nm", "yNm")))],
                     items,
                     sheet: path(field(m, "sheet_specific_path", "sheetSpecificPath")),
                     main_sheet: path(field(m, "main_item_sheet_path", "mainItemSheetPath")),
@@ -367,6 +368,7 @@ pub fn from_project(pro_text: &str, file_ids: &std::collections::BTreeMap<String
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     const ROOT: &str = "/172726e6-8494-4d0f-8495-8bee6ad09c57";
@@ -392,7 +394,7 @@ mod tests {
         let m = marker("pin_not_connected", "error", &[pin], ROOT, 1).unwrap();
         assert_eq!(
             m,
-            ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [115_570_000, 110_490_000], items: only(&["693a38f5-591c-4c06-9786-e8973d13af99"]), sheet: only(&[ROOT_UUID]), main_sheet: only(&[ROOT_UUID]), aux_sheet: vec![] }
+            ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [Nm::from_raw_shim(115_570_000), Nm::from_raw_shim(110_490_000)], items: only(&["693a38f5-591c-4c06-9786-e8973d13af99"]), sheet: only(&[ROOT_UUID]), main_sheet: only(&[ROOT_UUID]), aux_sheet: vec![] }
         );
         assert_eq!(
             entry(&m, "unused on purpose"),
@@ -414,7 +416,7 @@ mod tests {
     fn a_symbols_footprint_link_issue_has_no_sheet_in_it() {
         let symbol = item("a4f97020-e09b-4e24-b611-b376f3c27df7", 113_030_000, 100_330_000, "Symbol C1 [C]");
         let m = marker("footprint_link_issues", "warning", &[symbol.clone()], ROOT, 1).unwrap();
-        assert_eq!((m.error_type.as_str(), m.at_nm), ("ERCET_FOOTPRINT_LINK_ISSUES", [113_030_000, 100_330_000]));
+        assert_eq!((m.error_type.as_str(), m.at_nm), ("ERCET_FOOTPRINT_LINK_ISSUES", [Nm::from_raw_shim(113_030_000), Nm::from_raw_shim(100_330_000)]));
         assert!(m.sheet.is_empty() && m.main_sheet.is_empty() && m.aux_sheet.is_empty());
         let e = entry(&m, "");
         assert!(e["marker"].get("sheetSpecificPath").is_none() && e["marker"].get("mainItemSheetPath").is_none(), "{e}");
@@ -450,10 +452,10 @@ mod tests {
         let b = item("bbbbbbbb-0000-4000-8000-000000000000", 30, 40, "Symbol U2 Pin 1");
         // `pin_to_pin` is put at the first pin, `multiple_net_names` at the second item (the driver).
         let p = marker("pin_to_pin", "warning", &[a.clone(), b.clone()], ROOT, 1).unwrap();
-        assert_eq!((p.error_type.as_str(), p.at_nm, p.items.len(), p.aux_sheet.len()), ("ERCET_PIN_TO_PIN_WARNING", [10, 20], 2, 1));
+        assert_eq!((p.error_type.as_str(), p.at_nm, p.items.len(), p.aux_sheet.len()), ("ERCET_PIN_TO_PIN_WARNING", [Nm::from_raw_shim(10), Nm::from_raw_shim(20)], 2, 1));
         assert_eq!(marker("pin_to_pin", "error", &[a.clone(), b.clone()], ROOT, 1).unwrap().error_type, "ERCET_PIN_TO_PIN_ERROR");
         let d = marker("multiple_net_names", "error", &[a.clone(), b], ROOT, 1).unwrap();
-        assert_eq!((d.error_type.as_str(), d.at_nm), ("ERCET_DRIVER_CONFLICT", [30, 40]));
+        assert_eq!((d.error_type.as_str(), d.at_nm), ("ERCET_DRIVER_CONFLICT", [Nm::from_raw_shim(30), Nm::from_raw_shim(40)]));
         assert!(marker("multiple_net_names", "error", &[a], ROOT, 1).is_none(), "a pair check with one item named: the position is the second item's, which is not there");
     }
 
@@ -489,7 +491,7 @@ mod tests {
 
     #[test]
     fn the_project_lists_each_known_marker_with_its_comment_and_leaves_the_studios_own_out() {
-        let sym = |u: &str| ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [1, 1], items: vec![u.into()], ..Default::default() };
+        let sym = |u: &str| ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [Nm::from_raw_shim(1), Nm::from_raw_shim(1)], items: vec![u.into()], ..Default::default() };
         let list = project_entries(&[
             excl("footprint_link_issues", "R1", Some(sym("r1")), ""),
             excl("wire_dangling", "w1", None, "no marker: the studio's alone"),
@@ -519,12 +521,12 @@ mod tests {
         let file_ids: std::collections::BTreeMap<String, String> = [("f-pin".to_string(), "U1.1".to_string())].into();
         let derived: std::collections::HashMap<String, String> = [("d-pin".to_string(), "U1.1".to_string())].into();
         let got = from_project(&records, &file_ids, &derived, "f-root", "d-root");
-        let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1000, 2000], items: only(&["d-pin"]), sheet: only(&["d-root", "s1"]), main_sheet: only(&["d-root", "s1"]), aux_sheet: vec![] };
+        let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [Nm::from_raw_shim(1000), Nm::from_raw_shim(2000)], items: only(&["d-pin"]), sheet: only(&["d-root", "s1"]), main_sheet: only(&["d-root", "s1"]), aux_sheet: vec![] };
         assert_eq!(got, vec![excl("pin_not_connected", "U1.1", Some(marker), "kept")], "the record whose second item is not in the import is left out, and the text is not read at schema 1");
         // schema 0: the texts, and not the records
         let legacy = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": [["pin_not_connected|13335|8128|f-pin|00000000-0000-0000-0000-000000000000|||", "comment1"], "generic-warning|1|1|f-pin|some text|||", "bad|1"] } }).to_string();
         let got = from_project(&legacy, &file_ids, &derived, "f-root", "d-root");
-        let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1_333_500, 812_800], items: only(&["d-pin"]), ..Default::default() };
+        let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [Nm::from_raw_shim(1_333_500), Nm::from_raw_shim(812_800)], items: only(&["d-pin"]), ..Default::default() };
         assert_eq!(got, vec![excl("pin_not_connected", "U1.1", Some(marker), "comment1")]);
         let pin_to_pin = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": ["pin_to_pin|1|1|f-pin|00000000-0000-0000-0000-000000000000|||"] } }).to_string();
         assert_eq!(read_project(&pin_to_pin)[0].0.error_type, "ERCET_PIN_TO_PIN_WARNING", "a legacy pin_to_pin text is the warning");
