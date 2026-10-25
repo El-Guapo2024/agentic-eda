@@ -141,8 +141,8 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
         let (xi, yi) = (poly[i].x, poly[i].y);
         let (xj, yj) = (poly[j].x, poly[j].y);
         if (yi > p.y) != (yj > p.y) {
-            let x_int = xi.raw_shim() as f64 + ((p.y - yi).raw_shim() as f64) * ((xj - xi).raw_shim() as f64) / ((yj - yi).raw_shim() as f64);
-            if (p.x.raw_shim() as f64) < x_int {
+            let x_int = xi.as_f64() + (p.y - yi).as_f64() * (xj - xi).as_f64() / (yj - yi).as_f64();
+            if p.x.as_f64() < x_int {
                 inside = !inside;
             }
         }
@@ -155,9 +155,9 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
 /// they overlap on an axis. Matches `eda-gates`' `Rect::gap` semantics for
 /// the `placement_proximity` check.
 fn rect_gap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> f64 {
-    let dx = (a.0 - b.2).max(b.0 - a.2).max(Nm::ZERO).raw_shim();
-    let dy = (a.1 - b.3).max(b.1 - a.3).max(Nm::ZERO).raw_shim();
-    ((dx * dx + dy * dy) as f64).sqrt()
+    let dx = (a.0 - b.2).max(b.0 - a.2).max(Nm::ZERO);
+    let dy = (a.1 - b.3).max(b.1 - a.3).max(Nm::ZERO);
+    ((dx.get() * dx.get() + dy.get() * dy.get()) as f64).sqrt()
 }
 
 fn rect_overlaps(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> bool {
@@ -204,8 +204,8 @@ fn dbg_on() -> bool {
     std::env::var("CYPRESS_DEBUG_LEGALIZE").is_ok()
 }
 
-fn rect_expand(ct: (Nm, Nm, Nm, Nm), by: i64) -> (Nm, Nm, Nm, Nm) {
-    (ct.0 - Nm::from_raw_shim(by), ct.1 - Nm::from_raw_shim(by), ct.2 + Nm::from_raw_shim(by), ct.3 + Nm::from_raw_shim(by))
+fn rect_expand(ct: (Nm, Nm, Nm, Nm), by: Nm) -> (Nm, Nm, Nm, Nm) {
+    (ct.0 - by, ct.1 - by, ct.2 + by, ct.3 + by)
 }
 
 fn clamp_box(b: (Nm, Nm, Nm, Nm), bounds: (Nm, Nm, Nm, Nm)) -> (Nm, Nm, Nm, Nm) {
@@ -234,26 +234,26 @@ fn find_spot(
     search_box: (Nm, Nm, Nm, Nm),
     gap_check: Option<((Nm, Nm, Nm, Nm), f64)>,
     avoid: &[(Nm, Nm, Nm, Nm)],
-    step_nm: i64,
+    step_nm: Nm,
     is_legal: &dyn Fn(&Design) -> bool,
-) -> Option<(i64, i64, i32)> {
+) -> Option<(Nm, Nm, i32)> {
     let (sx0, sy0, sx1, sy1) = search_box;
     if sx0 > sx1 || sy0 > sy1 {
         return None;
     }
     let outline = &base.placement.as_ref()?.outline;
-    let mut candidates: Vec<(i64, i32, i64, i64)> = Vec::new(); // (dist2, rot, x, y)
+    let mut candidates: Vec<(i64, i32, Nm, Nm)> = Vec::new(); // (dist2, rot, x, y)
     let mut x = sx0;
     while x <= sx1 {
         let mut y = sy0;
         while y <= sy1 {
             for rot in [0i32, 90_000, 180_000, 270_000] {
                 let (dx, dy) = (x - mover_fp.at.x, y - mover_fp.at.y);
-                candidates.push(((dx * dx.raw_shim() + dy * dy.raw_shim()).raw_shim(), rot, x.raw_shim(), y.raw_shim()));
+                candidates.push((dx.get() * dx.get() + dy.get() * dy.get(), rot, x, y));
             }
-            y += Nm::from_raw_shim(step_nm);
+            y += step_nm;
         }
-        x += Nm::from_raw_shim(step_nm);
+        x += step_nm;
     }
     candidates.sort_by_key(|c| (c.0, c.1, c.2, c.3));
 
@@ -285,7 +285,7 @@ fn find_spot(
 
     for (_, rot, x, y) in candidates {
         let mut candidate_fp = mover_fp.clone();
-        candidate_fp.at = Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) };
+        candidate_fp.at = Point { x, y };
         candidate_fp.rot = rot as u32;
         let Some(mover_ct) = placed_courtyard(model, mover_part, &candidate_fp) else { continue };
         let Some(mover_ko) = placed_keepout(model, outline, mover_part, &candidate_fp) else { continue };
@@ -304,7 +304,7 @@ fn find_spot(
         {
             let tp = trial.placement.as_mut().unwrap();
             let f = tp.footprints.iter_mut().find(|f| f.id == mover_id).unwrap();
-            f.at = Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) };
+            f.at = Point { x, y };
             f.rot = rot as u32;
         }
         if is_legal(&trial) {
@@ -352,9 +352,9 @@ fn rules_ok_for(model: &ConstraintModel, design: &Design, ids: &[&str]) -> bool 
     true
 }
 
-fn apply_move(design: &mut Design, id: &str, x: i64, y: i64, rot: i32) {
+fn apply_move(design: &mut Design, id: &str, x: Nm, y: Nm, rot: i32) {
     let f = design.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == id).unwrap();
-    f.at = Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) };
+    f.at = Point { x, y };
     f.rot = rot as u32;
 }
 
@@ -379,12 +379,12 @@ fn try_ripple(
     anchor_ct: (Nm, Nm, Nm, Nm),
     max_mm: f64,
     bounds: (Nm, Nm, Nm, Nm),
-    max_nm: i64,
-    step_nm: i64,
+    max_nm: Nm,
+    step_nm: Nm,
     is_legal: &dyn Fn(&Design) -> bool,
 ) -> Option<Design> {
     const MAX_BLOCKERS: usize = 2;
-    const RIPPLE_RADIUS_NM: i64 = 6_000_000; // how far a blocker may look for its own new spot
+    const RIPPLE_RADIUS_NM: Nm = Nm::new(6_000_000); // how far a blocker may look for its own new spot
     // Each attempted candidate costs up to MAX_BLOCKERS full find_spot
     // searches; an unsatisfiable rule otherwise walks every candidate in
     // the halo (l3 U7/C15: the legaliser sat in this loop for 15+ min).
@@ -399,18 +399,18 @@ fn try_ripple(
     if sx0 > sx1 || sy0 > sy1 {
         return None;
     }
-    let mut candidates: Vec<(i64, i32, i64, i64)> = Vec::new();
+    let mut candidates: Vec<(i64, i32, Nm, Nm)> = Vec::new();
     let mut x = sx0;
     while x <= sx1 {
         let mut y = sy0;
         while y <= sy1 {
             for rot in [0i32, 90_000, 180_000, 270_000] {
                 let (dx, dy) = (x - mover_fp.at.x, y - mover_fp.at.y);
-                candidates.push(((dx * dx.raw_shim() + dy * dy.raw_shim()).raw_shim(), rot, x.raw_shim(), y.raw_shim()));
+                candidates.push((dx.get() * dx.get() + dy.get() * dy.get(), rot, x, y));
             }
-            y += Nm::from_raw_shim(step_nm);
+            y += step_nm;
         }
-        x += Nm::from_raw_shim(step_nm);
+        x += step_nm;
     }
     candidates.sort_by_key(|c| (c.0, c.1, c.2, c.3));
 
@@ -419,7 +419,7 @@ fn try_ripple(
 
     for (_, rot, x, y) in candidates {
         let mut candidate_fp = mover_fp.clone();
-        candidate_fp.at = Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) };
+        candidate_fp.at = Point { x, y };
         candidate_fp.rot = rot as u32;
         let Some(mover_ct) = placed_courtyard(model, mover_part, &candidate_fp) else { continue };
         let Some(mover_ko) = placed_keepout(model, &placement.outline, mover_part, &candidate_fp) else { continue };
@@ -530,8 +530,8 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
 /// candidates for the frozen one (which used to burn half an hour on a
 /// 25 µm grid proving the obvious).
 pub fn legalize_proximity_pass_frozen(design: &Design, model: &ConstraintModel, is_legal: &dyn Fn(&Design) -> bool, frozen: &BTreeSet<String>) -> Design {
-    const STEP_NM: i64 = 100_000;
-    const FINE_STEP_NM: i64 = 25_000;
+    const STEP_NM: Nm = Nm::new(100_000);
+    const FINE_STEP_NM: Nm = Nm::new(25_000);
     let mut out = design.clone();
     let Some(placement) = out.placement.clone() else { return out };
     let outline = &placement.outline;
@@ -550,7 +550,7 @@ pub fn legalize_proximity_pass_frozen(design: &Design, model: &ConstraintModel, 
     }
     for rule in &model.placement_rules {
         let PlacementRule::Proximity { a, b, max_mm, .. } = rule else { continue };
-        let max_nm = (*max_mm * 1e6) as i64;
+        let max_nm = Nm::new((*max_mm * 1e6) as i64);
         let (Some(fa), Some(fb)) =
             (out.placement.as_ref().unwrap().footprints.iter().find(|f| &f.id == a).cloned(),
              out.placement.as_ref().unwrap().footprints.iter().find(|f| &f.id == b).cloned())
@@ -563,7 +563,7 @@ pub fn legalize_proximity_pass_frozen(design: &Design, model: &ConstraintModel, 
             continue; // already satisfied, don't perturb a fine placement
         }
 
-        let area = |ct: (Nm, Nm, Nm, Nm)| (ct.2 - ct.0).raw_shim() * (ct.3 - ct.1).raw_shim();
+        let area = |ct: (Nm, Nm, Nm, Nm)| (ct.2 - ct.0).get() * (ct.3 - ct.1).get();
         let (small_id, small_fp, small_part, small_ct, large_id, large_fp, large_part, large_ct) = if area(ca) <= area(cb) {
             (a.as_str(), fa.clone(), pa, ca, b.as_str(), fb.clone(), pb, cb)
         } else {
@@ -706,9 +706,9 @@ fn run_cypress(bs: &Bookshelf, seed: u64, o: &CypressOptions, tag: &str) -> Resu
 }
 
 /// Spacing, nm, kept between two connectors pinned along one edge.
-const EDGE_SPACING_NM: i64 = 1_000_000;
+const EDGE_SPACING_NM: Nm = Nm::new(1_000_000);
 /// Extra distance charged to an edge a connector must turn 90° to lie on.
-const ROTATE_PENALTY_NM: i64 = 10_000_000;
+const ROTATE_PENALTY_NM: Nm = Nm::new(10_000_000);
 
 /// Pin every edge connector to the board edge nearest to where Cypress's
 /// free run left it (long side along the edge, per
@@ -731,7 +731,7 @@ pub fn pin_connectors_to_edges(design: &Design, model: &ConstraintModel) -> Resu
     // second-best usable edge has the most room to spare. Edge 0 left,
     // 1 right, 2 top, 3 bottom.
     let edge_len = |e: u8| if e >= 2 { bb.2 - bb.0 } else { bb.3 - bb.1 } - 2 * EDGE_PIN_GAP_NM;
-    let mut cands: Vec<(usize, Vec<(u8, Nm)>, i64)> = Vec::new(); // (index, usable (edge, gap) sorted, length along an edge)
+    let mut cands: Vec<(usize, Vec<(u8, Nm)>, Nm)> = Vec::new(); // (index, usable (edge, gap) sorted, length along an edge)
     for (i, f) in pl.footprints.iter().enumerate() {
         let Some(part) = model.part(&f.id) else { continue };
         if !is_edge_connector(part) {
@@ -747,29 +747,29 @@ pub fn pin_connectors_to_edges(design: &Design, model: &ConstraintModel) -> Resu
         let mut gaps: Vec<(u8, Nm)> = [(ul, cx - bb.0), (ur, bb.2 - cx), (ut, cy - bb.1), (ub, bb.3 - cy)]
             .iter()
             .enumerate()
-            .map(|(e, (u, g))| (e as u8, if *u { *g } else { *g + Nm::from_raw_shim(ROTATE_PENALTY_NM) }))
+            .map(|(e, (u, g))| (e as u8, if *u { *g } else { *g + ROTATE_PENALTY_NM }))
             .collect();
         gaps.sort_by_key(|(_, g)| *g);
         // Along-edge length: the keep-out's long side.
-        cands.push((i, gaps, ((k.2 - k.0).max(k.3 - k.1)).raw_shim()));
+        cands.push((i, gaps, (k.2 - k.0).max(k.3 - k.1)));
     }
     let mut choice: Vec<u8> = cands.iter().map(|(_, g, _)| g[0].0).collect();
-    let need = |choice: &Vec<u8>, e: u8| -> i64 {
-        let n: Vec<i64> = cands.iter().zip(choice).filter(|(_, c)| **c == e).map(|((_, _, l), _)| *l).collect();
-        if n.is_empty() { 0 } else { n.iter().sum::<i64>() + EDGE_SPACING_NM * (n.len() as i64 - 1) }
+    let need = |choice: &Vec<u8>, e: u8| -> Nm {
+        let n: Vec<Nm> = cands.iter().zip(choice).filter(|(_, c)| **c == e).map(|((_, _, l), _)| *l).collect();
+        if n.is_empty() { Nm::ZERO } else { n.iter().sum::<Nm>() + EDGE_SPACING_NM * (n.len() as i64 - 1) }
     };
     loop {
-        let Some(over) = (0..4u8).find(|&e| need(&choice, e) > (edge_len(e)).raw_shim()) else { break };
+        let Some(over) = (0..4u8).find(|&e| need(&choice, e) > edge_len(e)) else { break };
         // Best move: a connector on `over` with another usable edge that has room.
-        let mut best: Option<(i64, usize, u8)> = None; // (spare after move, cand idx, edge)
+        let mut best: Option<(Nm, usize, u8)> = None; // (spare after move, cand idx, edge)
         for (ci, (_, gaps, l)) in cands.iter().enumerate() {
             if choice[ci] != over {
                 continue;
             }
             for &(e, _) in gaps.iter().skip(1) {
-                let spare = edge_len(e) - Nm::from_raw_shim(need(&choice, e)) - Nm::from_raw_shim(*l) - Nm::from_raw_shim(EDGE_SPACING_NM);
-                if spare >= Nm::ZERO && best.map_or(true, |(s, _, _)| spare > Nm::from_raw_shim(s)) {
-                    best = Some((spare.raw_shim(), ci, e));
+                let spare = edge_len(e) - need(&choice, e) - *l - EDGE_SPACING_NM;
+                if spare >= Nm::ZERO && best.map_or(true, |(s, _, _)| spare > s) {
+                    best = Some((spare, ci, e));
                 }
             }
         }
@@ -834,8 +834,8 @@ pub fn pin_connectors_to_edges(design: &Design, model: &ConstraintModel) -> Resu
             for &(e, j) in &on_edge {
                 let k = ko(pl, j);
                 let vertical_overlap = if edge == 2 { k.1 < bb.1 + 2 * EDGE_PIN_GAP_NM + (k.3 - k.1) } else { k.3 > bb.3 - 2 * EDGE_PIN_GAP_NM - (k.3 - k.1) };
-                if e == 0 && vertical_overlap { lo = lo.max(k.2 + Nm::from_raw_shim(EDGE_SPACING_NM)) }
-                if e == 1 && vertical_overlap { hi = hi.min(k.0 - Nm::from_raw_shim(EDGE_SPACING_NM)) }
+                if e == 0 && vertical_overlap { lo = lo.max(k.2 + EDGE_SPACING_NM) }
+                if e == 1 && vertical_overlap { hi = hi.min(k.0 - EDGE_SPACING_NM) }
             }
         }
         ids.sort_by_key(|&i| along(ko(pl, i)).0);
@@ -844,7 +844,7 @@ pub fn pin_connectors_to_edges(design: &Design, model: &ConstraintModel) -> Resu
             let k = along(ko(pl, i));
             let shift = (cursor - k.0).max(Nm::ZERO);
             if horizontal { pl.footprints[i].at.x += shift } else { pl.footprints[i].at.y += shift }
-            cursor = k.1 + shift + Nm::from_raw_shim(EDGE_SPACING_NM);
+            cursor = k.1 + shift + EDGE_SPACING_NM;
         }
         let last = along(ko(pl, *ids.last().unwrap())).1;
         let over = last - hi;
@@ -855,7 +855,7 @@ pub fn pin_connectors_to_edges(design: &Design, model: &ConstraintModel) -> Resu
                 let k = along(ko(pl, i));
                 let shift = (k.1 - cursor).max(Nm::ZERO);
                 if horizontal { pl.footprints[i].at.x -= shift } else { pl.footprints[i].at.y -= shift }
-                cursor = k.0 - shift - Nm::from_raw_shim(EDGE_SPACING_NM);
+                cursor = k.0 - shift - EDGE_SPACING_NM;
             }
             if along(ko(pl, ids[0])).0 < lo {
                 let edge_name = ["left", "right", "top", "bottom"][edge as usize];
@@ -909,7 +909,7 @@ fn with_decoupling_rules(model: &ConstraintModel, placed: &Design) -> Constraint
 }
 
 fn orient(a: Point, b: Point, c: Point) -> i64 {
-    ((b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128).signum() as i64
+    ((b.x - a.x).area(c.y - a.y) - (b.y - a.y).area(c.x - a.x)).signum() as i64
 }
 
 /// Crossing pairs of 2-pin net stubs where both stubs end on a free 2-pin
@@ -1124,8 +1124,8 @@ pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o
                 break placed;
             }
             Err(fails) => {
-                let fitted_scale = fitted.placement.as_ref().map(|p| (p.outline.iter().map(|q| q.x).max().unwrap() - p.outline.iter().map(|q| q.x).min().unwrap()).raw_shim() as f64).unwrap_or(1.0)
-                    / seed_design.placement.as_ref().map(|p| (p.outline.iter().map(|q| q.x).max().unwrap() - p.outline.iter().map(|q| q.x).min().unwrap()).raw_shim() as f64).unwrap_or(1.0);
+                let fitted_scale = fitted.placement.as_ref().map(|p| (p.outline.iter().map(|q| q.x).max().unwrap() - p.outline.iter().map(|q| q.x).min().unwrap()).as_f64()).unwrap_or(1.0)
+                    / seed_design.placement.as_ref().map(|p| (p.outline.iter().map(|q| q.x).max().unwrap() - p.outline.iter().map(|q| q.x).min().unwrap()).as_f64()).unwrap_or(1.0);
                 if fitted_scale >= 0.999 {
                     return Err(fails);
                 }
