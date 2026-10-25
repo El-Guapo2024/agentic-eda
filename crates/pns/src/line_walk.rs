@@ -128,8 +128,8 @@ pub(crate) fn hull_intersection(hull: &[Point], line: &[Point]) -> Vec<(Point, u
 }
 
 /// `SHAPE_LINE_CHAIN::Find( p, aThreshold )`.
-fn find(chain: &[Point], p: Point, threshold: i64) -> Option<usize> {
-    chain.iter().position(|q| ((q.x - p.x).get() as i128).pow(2) + ((q.y - p.y).get() as i128).pow(2) <= (threshold as i128).pow(2))
+fn find(chain: &[Point], p: Point, threshold: Nm) -> Option<usize> {
+    chain.iter().position(|q| (q.x - p.x).area(q.x - p.x) + (q.y - p.y).area(q.y - p.y) <= threshold.area(threshold))
 }
 
 /// `SHAPE_LINE_CHAIN::Split( p )`: insert `p` into the segment containing it.
@@ -233,16 +233,16 @@ pub fn walkaround(line: &[Point], obstacle: &[Point], cw: bool) -> Option<Vec<Po
     }
 
     for &ip in &ips {
-        if find(&pnew, ip, 1).is_none() {
+        if find(&pnew, ip, Nm::new(1)).is_none() {
             split(&mut pnew, false, ip);
         }
-        if find(&hnew, ip, 1).is_none() {
+        if find(&hnew, ip, Nm::new(1)).is_none() {
             split(&mut hnew, true, ip);
         }
     }
     for i in 0..pnew.len() {
         let p = pnew[i];
-        if on_edge(&hnew, p) && find(&hnew, p, 0).is_none() {
+        if on_edge(&hnew, p) && find(&hnew, p, Nm::ZERO).is_none() {
             split(&mut hnew, true, p);
         }
     }

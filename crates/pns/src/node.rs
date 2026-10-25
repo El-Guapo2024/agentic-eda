@@ -101,7 +101,7 @@ pub struct NearestHit {
     pub kind: Kind,
     /// `OBSTACLE::m_distFirst`: path length from the line's start to the first
     /// hull crossing (`INT_MAX`, here `i64::MAX`, when no crossing was found).
-    pub dist_first: i64,
+    pub dist_first: Nm,
     /// `OBSTACLE::m_ipFirst`.
     pub ip: Point,
 }
@@ -994,7 +994,7 @@ impl Node {
             return None;
         }
         let eps = |c: Nm| if opts.use_epsilon && c > Nm::ZERO { (c - CLEARANCE_EPSILON).max(Nm::ZERO) } else { c };
-        let first_entry = |hull: &[Point]| -> Option<(i64, Point)> {
+        let first_entry = |hull: &[Point]| -> Option<(Nm, Point)> {
             crate::line_walk::hull_intersection(hull, &line.pts).into_iter().map(|(p, idx)| (path_length(&line.pts, p, idx), p)).min_by_key(|&(d, _)| d)
         };
         let mut best: Option<NearestHit> = None;
@@ -1004,7 +1004,7 @@ impl Node {
             // `makeHull`: the bounding box of the hull in a 90-degree corner mode (`simplifyHull`)
             let make_hull = |h: Vec<Point>| if opts.box_hull { crate::hull::bbox_hull(&h) } else { h };
             let hull = make_hull(item.hull(eps(Self::clearance_to(rules, &line.net, item)) + line.width / 2, Nm::ZERO, line.layer));
-            let mut dist: Option<(i64, Point)> = first_entry(&hull);
+            let mut dist: Option<(Nm, Point)> = first_entry(&hull);
             if let Some(v) = via {
                 let via_hull = make_hull(item.hull(eps(Self::clearance_to(rules, &v.net, item)) + v.diameter / 2, Nm::ZERO, line.layer));
                 if let Some(d) = first_entry(&via_hull) {
@@ -1016,14 +1016,14 @@ impl Node {
             if let Some((d, ip)) = dist {
                 if best.as_ref().is_none_or(|b| d < b.dist_first) {
                     best = Some(NearestHit { id: o.id, kind: o.kind, dist_first: d, ip });
-                    if d == 0 {
+                    if d == Nm::ZERO {
                         break;
                     }
                 }
             }
         }
         // `if( nearest.m_distFirst == INT_MAX ) nearest = obstacles[0];`
-        best.or_else(|| found.values().next().map(|o| NearestHit { id: o.id, kind: o.kind, dist_first: i64::MAX, ip: o.pos }))
+        best.or_else(|| found.values().next().map(|o| NearestHit { id: o.id, kind: o.kind, dist_first: Nm::MAX, ip: o.pos }))
     }
 
     /// `QueryColliding` with `m_differentNetsOnly = false` and
@@ -1210,10 +1210,10 @@ fn line_bbox(l: &Line) -> Option<(Nm, Nm, Nm, Nm)> {
 /// from its start to `p`, where `p` lies on segment `index` (or at vertex
 /// `index`, which is the start of segment `index`; `index == segments` means
 /// the last segment). Segment lengths are rounded like `SEG::Length()`.
-pub(crate) fn path_length(pts: &[Point], p: Point, index: usize) -> i64 {
+pub(crate) fn path_length(pts: &[Point], p: Point, index: usize) -> Nm {
     let n_segs = pts.len().saturating_sub(1);
-    let dist = |a: Point, b: Point| -> i64 { (((b.x - a.x).as_f64()).powi(2) + ((b.y - a.y).as_f64()).powi(2)).sqrt().round() as i64 };
-    let mut sum = 0;
+    let dist = |a: Point, b: Point| -> Nm { Nm::kiround(((b.x - a.x).as_f64().powi(2) + (b.y - a.y).as_f64().powi(2)).sqrt()) };
+    let mut sum = Nm::ZERO;
     for i in 0..n_segs {
         let hit = if index == n_segs { i == n_segs - 1 } else { i == index };
         if hit {
@@ -1221,7 +1221,7 @@ pub(crate) fn path_length(pts: &[Point], p: Point, index: usize) -> i64 {
         }
         sum += dist(pts[i], pts[i + 1]);
     }
-    -1
+    Nm::new(-1)
 }
 
 impl std::fmt::Debug for Node {
@@ -1373,7 +1373,7 @@ mod tests {
         assert_eq!(hit.id, early);
         assert_eq!(hit.kind, Kind::Segment);
         // the line enters the track's hull (200 + 100 + 100 from its centre line) at x = 2000 - 400 + a bit
-        assert!(hit.dist_first > 1_500_000 && hit.dist_first < 2_000_000, "{}", hit.dist_first);
+        assert!(hit.dist_first > mm(1.5) && hit.dist_first < mm(2.0), "{}", hit.dist_first);
         // searching only pads skips the track, as `shoveIteration`'s per-kind search does
         let only_pads = n.nearest_obstacle(&line, None, &rules, &[], QueryOpts { kind_mask: kind_mask::SOLID, ..QueryOpts::default() }).unwrap();
         assert_eq!(only_pads.kind, Kind::Solid);
@@ -1408,9 +1408,9 @@ mod tests {
     #[test]
     fn path_length_counts_whole_legs_before_the_hit_leg() {
         let pts = [p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO), p(mm(1.0), mm(0.5))];
-        assert_eq!(path_length(&pts, p(mm(0.4), Nm::ZERO), 0), 400_000);
-        assert_eq!(path_length(&pts, p(mm(1.0), mm(0.2)), 1), 1_200_000);
-        assert_eq!(path_length(&pts, p(mm(1.0), mm(0.5)), 2), 1_500_000, "an index one past the last leg means the last leg");
+        assert_eq!(path_length(&pts, p(mm(0.4), Nm::ZERO), 0), mm(0.4));
+        assert_eq!(path_length(&pts, p(mm(1.0), mm(0.2)), 1), mm(1.2));
+        assert_eq!(path_length(&pts, p(mm(1.0), mm(0.5)), 2), mm(1.5), "an index one past the last leg means the last leg");
     }
 
     /// D10: a shove assembles a line of one width, and never through a locked segment.
