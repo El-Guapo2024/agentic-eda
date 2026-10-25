@@ -65,7 +65,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-nm2-ops` (`~/work/agentic-eda-exports`), `task-nm2-pns` (`-embedded`), `task-nm2-cli` (`-rules`: cli, kicad-engine, eda, intent, judge), `task-nm2-core` (`-router`: kicad, drc, connectivity, engine, gates, lint, place, freeroute, interchange, cypress, render, grid) | Length type wave 2: remove the wave-1 shims crate by crate (brief `~/work/briefs/fix/nm-wave2.md`) | started 2026-10-25 | all; then wave 3: the cross-crate pub signatures each lists |
+| `task-nm3-pub` (`~/work/agentic-eda-exports`) | Length type wave 3: the cross-crate pub items wave 2 kept on `i64` typed with all their callers, `raw_shim` / `from_raw_shim` deleted, three test leftovers of the micrometre move fixed, `docs/NANOMETRES.md` "The length type" final, the parity outputs refreshed | done 2026-10-25 | merge |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

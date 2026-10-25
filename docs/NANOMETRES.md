@@ -254,6 +254,10 @@ schema-1 x1000 migration (`units::de`, `Lengths`) reads into it as it read into 
 
 The ratios `NM_PER_MM`, `NM_PER_UM`, `NM_PER_MIL`, `NM_PER_INCH`, `SCH_IU_NM` stay `i64`: they are counts per unit, not lengths.
 
+That is the whole API. The wave-1 shims (`raw_shim`, `from_raw_shim`, below) are deleted (wave 3, `task-nm3-pub`): a length enters as `Nm::new`,
+`from_mm`, `kiround` or `mm` / `um` / `mil`, and leaves as `get`, `mm`, `um`, `mils` or `as_f64`, only where it meets an integer or
+floating-point kernel, a file format or a wire value.
+
 ### Wave 1: the IR, and shims everywhere else
 
 `crates/model` is converted: `Point`, every length field of the IR (footprints, rules, stackup, outlines, groups, tables, tuning, the overlays),
@@ -302,21 +306,71 @@ file; nearly all the test ones are literals in `Nm::from_raw_shim(..)`):
 | **total** | 1797 | 1041 | 353 | 11792 | 14983 |
 
 The shims were put in mechanically (a script driven by the compiler's diagnostics, then the rest by hand), so many read badly
-(`Nm::from_raw_shim((a - b).raw_shim())`); wave 2 should rewrite an expression, not just drop the markers.
+(`Nm::from_raw_shim((a - b).raw_shim())`); wave 2 rewrote the expressions, not just the markers.
 
-### Bugs the shims showed
+### Waves 2 and 3: every crate typed, the shims gone
 
-A length literal is a shim outside `crates/model`, so each micrometre left over from the IR's micrometre days shows up as a small
-`Nm::from_raw_shim(..)`. Three were real, each fixed in a commit of its own with a test (after the no-change proofs):
+Wave 2 (four branches at once, `task-nm2-ops`, `-pns`, `-cli`, `-core`, merged 2026-10-25) removed every shim crate by crate: lengths inside a
+crate became `Nm` (fields, locals, parameters, returns), test literals `mm(..)` / `um(..)` / `Nm::new(..)`. A `pub` item another crate read as an
+`i64` kept its signature for the wave. Wave 3 (`task-nm3-pub`) typed those with all their callers and deleted the shims:
 
-- `crates/engine/src/hier/kit.rs::nc_rect`: a no-connect flag's obstacle was +-610 nm (the micrometre 610); now KiCad's 48 mil square.
-- `crates/cli/src/fp_json.rs`: a complex pad's outline for the studio at a max error of 5 nm (the micrometre 5), ~2800 vertices for one custom
-  pad's ring; now `ARC_HIGH_DEF`.
-- `crates/drc/src/board.rs::exported_refdes_shape`: the reference's silk box was 220 nm a character by 500 nm (the anchor's constants beside it
-  had been converted); now 0.22 mm by 0.5 mm.
+- ops: `convert::polys_from_items`' gap; the `ImportGraphics` / `ImportSchGraphics` / `ImportSymbolGraphics` offsets (`offset_x_nm`,
+  `offset_y_nm`: `Cmd` fields, the same JSON, the studio's types unchanged); `microwave::build_corners_s_shape` / `SShape::Corners` /
+  `inductor_corners` take and give `Point`s.
+- pns: one typed function where wave 2 kept a twin for the studio (`ShapeLineChain::length` and `point_on_edge`, `ShapeArc::new`,
+  `TuningPath::length`, `tuning_path::stackup_distance`); `MeanderSettings::{min_amplitude, max_amplitude, spacing}`, `PairAssembly::gap`
+  (`-1 nm` for KiCad's `-1`: not parallel), `SkewSetup`'s lengths, `start_skew`'s coupled length, `tuning_length_result`, `target`,
+  `net_lengths`; with them the studio's tuner `Readout` and the net inspector's stackup-height callback.
+- kicad-engine: a report item's `Item::pos` and `Violation::markers_nm` are `Point`s (ordered x then y, as the tuples were); kicad:
+  `erc_exclusions::MarkerItem`'s position, `graphics_import::spline_or_line`'s points.
+- interchange / cypress / cli: the Bookshelf unit (`to_bookshelf*` / `from_bookshelf_pl*`, `cypress::UNIT_NM`, the CLI's
+  `BOOKSHELF_UNIT_NM`).
+- engine: the hierarchy layout kit (`hier::kit::Rect`, `Paper`, the frame and text constants, `snap_up` / `snap_down`, `smallest_paper`) and the
+  layouts that measure in it (block and sheet-box sizes, `arrange`, the root's columns and lanes, the autoplacer's overlap area);
+  `fields_edit::OwnerCtx::local_delta` / `local_pos`.
+- drc: `via_stitch::cell_for_position` / `position_for_cell` / `detect_origin_offset` take the pitch as `Nm` and positions as `Point`s.
 
-Left as they are (no unit question, or arbitrary): `ops/src/pcb_items.rs` pads a text box of fewer than four points with corners 10 nm apart
-(10 µm before); the tests' self-consistent small coordinates.
+**The router's geometry carries `Nm`** (pns, wave 2): KiCad's router computes in the units it stores (`VECTOR2I` of `int` nanometres), so a
+second raw-`i64` geometry would only have moved the conversions inside the crate, to every call into `eda_drc::kimath` and every point back to
+the IR. KiCad's integer and floating-point steps are written out where it leaves `int`: products as `i128` (`area`), its `KiROUND` and
+truncation where the C++ has them (`crates/pns/PARITY.md`, "The length type").
+
+**Integer kernels keep their `i64` and convert at their edge** (`get` in, `Nm::new` / `kiround` out), where typing them would only push the
+conversions around: clipper2's `Point64` and `eda_shape_poly_set`, the i128 segment kernels of `drc::kimath` (`isqrt` stays an integer
+function), the Specctra `V` and FreeRouting's board units, ops' `VECTOR2I` ports (`fix_shapes`' and `microwave`'s `P`), connectivity's cross and
+dot products, `eda_layout`'s Sugiyama graph (its `Node` / `Point`; with it `engine::geometry::node_size`, `build_ports`,
+`nc_pin_local_points`, `stub_tip`, `PartBox::width` / `height` and `placed::bake_offset`, the symbol's own frame: `kit::Placed::w` / `h` and
+`at` are its edge), the field autoplacer's schematic-IU boxes (`fields::iu_box`), the via stitching's cell keys and `sample_guard_envelope`
+(clipper outlines), the zone fills' outline keys.
+
+**Kept `i64` on purpose** (not lengths, or not always nanometres): `meander::MinOptMax`, `LENGTH_UNCONSTRAINED` and the model's `TargetRange`
+(a length or attoseconds by the tuning's domain; `MeanderPlacer::target` reads it at its edge); `graphics_import::Mapper::coord` /
+`line_width` (counts of the editor's unit: nanometres for the board and the schematic, 100 nm for a library symbol at `iu_per_mm` 10000);
+`kicad_font` / `kicad_geom` (schematic IU); areas (nm^2, `i128` from `area`); counts, angles (millidegrees), ratios, delays.
+
+### Bugs the three waves found
+
+Each micrometre left over from the IR's micrometre days showed up as a literal the types would not take, or a value a typed signature made
+plain. Each was fixed in a commit of its own, with a test, after the no-change proofs:
+
+- wave 1: `engine/src/hier/kit.rs::nc_rect`: a no-connect flag's obstacle was +-610 nm (the micrometre 610); now KiCad's 48 mil square.
+  `cli/src/fp_json.rs`: a complex pad's outline for the studio at a max error of 5 nm (the micrometre 5), ~2800 vertices for one custom pad's
+  ring; now `ARC_HIGH_DEF`. `drc/src/board.rs::exported_refdes_shape`: the reference's silk box was 220 nm a character by 500 nm; now 0.22 mm by
+  0.5 mm.
+- wave 2: `import-kicad` of a schematic without a board gave it an outline of 0.1 x 0.08 mm (the micrometre 100_000 / 80_000), now the
+  100 x 80 mm of a new project; the undo tests' sheet stood at x = 0.09 mm (the micrometre 90_000 beside scaled neighbours), now 90 mm; render
+  flipped a mirrored symbol's bounds about its width in nanometres taken from a millimetre offset (a sheet's viewBox ran ~15 km to the right);
+  lint's wire-detour message said um for nm; pns' mouse-trail oracle test divided KiCad's nanometre cases by 1000 (now at KiCad's scale); ops
+  tests held micrometre values (a 1.6 um pad, a 1.778 um field text, a 0.4 um thermal gap) for the millimetres they meant.
+- wave 3: the tuner's QA-board test (`cli/src/tune_edit.rs`, slow tier) asked for `current / 1_000_000 + 3_000_000` nm (the micrometre
+  `/ 1000 + 3000` scaled), about 3 mm for every track, so 82 of 83 single tunings came out too long and the board's measure ran once: now the
+  length plus 3 mm, the straight member found among all the pattern's members, and the test fails under 11 measured (34 now). Two tests
+  were scaled by 1000 a second time by the move (their values were already nanometres): the inductor's S shape (a 30 m coil over 10 m, now
+  30 mm over 10 mm) and fill_api's kept island (at 5 m, now 5 mm).
+
+Left as they are: `ops/src/pcb_items.rs::corners_in_sequence` pads a text box of fewer than four points with corners 10 nm apart, which is
+KiCad's `corners.back() + VECTOR2I( 10, 10 )` in IU (`EDA_SHAPE::GetCornersInSequence`): it was the micrometre 10 that was wrong, and the move
+fixed it. The tests' self-consistent small coordinates.
 
 ### Proof of no behaviour change
 
@@ -325,7 +379,7 @@ same numbers. Checked by: every test passes with its assertions unchanged (only 
 `tools/same_design.sh <main's eda> <this eda>` (every example through `eda pipeline` at seed 0 and every KiCad QA board through `eda import-kicad`,
 every file compared with `cmp`); `tools/parity_report.py` re-export and connectivity as on main; `tools/run-all-checks.sh`.
 
-### Gates (2026-10-25, on the box)
+### Gates of wave 1 (2026-10-25, on the box)
 
 1. `cargo check --workspace --tests --keep-going`: no warnings.
 2. `tools/check.sh fast`: on the refactor (`c333fc24`) `rust (debug): 3737 passed, 0 failed, 25 ignored`; on the branch with the three fixes
@@ -336,3 +390,16 @@ every file compared with `cmp`); `tools/parity_report.py` re-export and connecti
    `roundtrip.json` identical but for the date; re-export 12/12, connectivity 552/558 (98.9%).
 5. `tools/run-all-checks.sh -j 2 --ports 8822-8823`: 43 passed, 1 failed of 44 (`import-foreign`: `KICAD_SRC_DIR` was not set), and
    `import-foreign` alone with it set: 1 passed of 1. So 44/44.
+
+### Gates of wave 3 (2026-10-25, on the box)
+
+1. `cargo check --workspace --tests --keep-going`: no warnings; `grep -rn raw_shim crates` is empty.
+2. `tools/check.sh fast`: `rust (debug): 3743 passed, 0 failed, 25 ignored`; `web: typecheck ok, 2466 unit tests passed`.
+3. The slow tier of every crate touched (`EDA_SLOW_TESTS=1 cargo test -p eda-ops -p eda-pns -p eda-cli -p eda-kicad-engine -p eda-kicad
+   -p eda-gates -p eda-interchange -p eda-cypress -p eda-engine -p eda-drc -p eda-model`, with `KICAD_SRC_DIR`, `KICAD_QA_DATA`,
+   `EDA_KICAD_CLI`): 3335 passed, 0 failed, 15 ignored.
+4. `tools/same_design.sh <main 3bb23b95's eda> <this eda>` (release): `same_design: 138 same, 0 different (8 of the same runs failed in both)`.
+5. `tools/parity_report.py` (`EDA_PARITY_PARTS=reexport`) on main and on the branch: `docs/parity/raw/connectivity.json` and `roundtrip.json`
+   byte-identical; re-export 12/12, connectivity 552/558 (98.9%). The committed outputs refreshed in their own commit (they differed only in
+   `unroutable_tiny_outline`'s placement-failure text since the R6 merge, and the dates).
+6. `tools/run-all-checks.sh -j 3 --ports 8822-8824`: `run-all-checks: 44 passed, 0 failed of 44 in 1446s`.

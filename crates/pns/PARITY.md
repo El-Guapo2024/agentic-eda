@@ -994,12 +994,12 @@ operator, and the places where KiCad leaves `int` for something wider or for flo
 - `MINOPTMAX` (`meander::MinOptMax`) stays `i64`: it holds a length or a delay (attoseconds) by the tuning's domain, as the model's
   `TargetRange` does; a length goes in and out of it with `get()` / `Nm::new()`. Delays, areas, counts and angles are not `Nm`.
 
-The studio (`crates/cli`, converted by another agent in the same wave) still reads some of the crate's public items as counts; those
-keep their `i64` signatures until wave 3, each a thin wrapper over the typed one where the crate needs it typed:
-`ShapeLineChain::length` (`length_nm`) and `point_on_edge` (`point_on_edge_nm`), `ShapeArc::new` (`new_nm`), `TuningPath::length`
-(`length_nm`), `tuning_path::stackup_distance_nm` (`stackup_distance`), `MeanderSettings::{min_amplitude, max_amplitude, spacing}`,
-`PairAssembly::gap`, `SkewSetup::{own_length, coupled_length}`, `MeanderPlacer::{start_skew's coupled_length, tuning_length_result,
-target}`, `DpMeanderPlacer::{tuning_length_result, net_lengths}`, `meander::LENGTH_UNCONSTRAINED` (with `MinOptMax`).
+The studio (`crates/cli`) read some of the crate's public items as counts in wave 2; wave 3 typed them with their callers: one typed
+`ShapeLineChain::length` / `point_on_edge`, `ShapeArc::new`, `TuningPath::length` and `tuning_path::stackup_distance` (the `_nm` twins are
+gone), and `MeanderSettings::{min_amplitude, max_amplitude, spacing}`, `PairAssembly::gap` (`-1 nm`, KiCad's `-1`: not parallel enough),
+`SkewSetup::{own_length, coupled_length}`, `MeanderPlacer::{start_skew's coupled_length, tuning_length_result, target}` and
+`DpMeanderPlacer::{tuning_length_result, net_lengths}` are `Nm`. `MinOptMax` and `meander::LENGTH_UNCONSTRAINED` stay `i64` (above);
+`target()` reads the `MINOPTMAX` at its edge.
 
 No behaviour change: every test passes with its values unchanged, KiCad's QA replays (`tests/qa_regressions.rs`) stay exact, and
 `tools/same_design.sh` writes the same files as main. One micrometre leftover in a test harness: `tests/mouse_trail_oracle.rs` divided
