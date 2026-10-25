@@ -57,12 +57,14 @@ impl Bookshelf {
 /// rule, so `.wts` can target them without touching any real net's weight.
 pub const PROXIMITY_NET_PREFIX: &str = "prox";
 
-fn div_ceil(v: i64, unit: i64) -> i64 {
-    if v >= 0 { (v + unit - 1) / unit } else { -((-v) / unit) }
+/// `v` in whole `unit`s, rounded up (towards zero below zero).
+fn div_ceil(v: Nm, unit: Nm) -> i64 {
+    if v >= Nm::ZERO { (v + unit - Nm::new(1)) / unit } else { -((-v) / unit) }
 }
 
-fn div_round(v: i64, unit: i64) -> i64 {
-    if v >= 0 {
+/// `v` in `unit`s, to the nearest (half away from zero).
+fn div_round(v: Nm, unit: Nm) -> i64 {
+    if v >= Nm::ZERO {
         (v + unit / 2) / unit
     } else {
         -((-v + unit / 2) / unit)
@@ -95,7 +97,7 @@ pub use eda_model::board::EDGE_PIN_GAP_NM;
 /// label side (`.nodes` ` terminal`, `.pl` `/FIXED`), and Cypress places
 /// everything else around them. A fixed part must already be placed.
 pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, unit_nm: i64, proximity_weight: f64, fixed: &BTreeSet<String>) -> Result<Bookshelf, Vec<CheckResult>> {
-    let unit = unit_nm.max(1);
+    let unit = Nm::new(unit_nm.max(1));
     // Board extent.
     let outline: Vec<Point> = match design.placement.as_ref().map(|p| p.outline.clone()).or_else(|| model.board.outline.clone()) {
         Some(o) if o.len() >= 3 => o,
@@ -106,8 +108,8 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
     let max_x = outline.iter().map(|p| p.x).max().unwrap();
     let max_y = outline.iter().map(|p| p.y).max().unwrap();
     // Board rounds DOWN so every legal Cypress position lies inside the outline.
-    let bw = ((max_x - min_x).raw_shim() / unit).max(1);
-    let bh = ((max_y - min_y).raw_shim() / unit).max(1);
+    let bw = ((max_x - min_x) / unit).max(1);
+    let bh = ((max_y - min_y) / unit).max(1);
     let font = model.board.refdes_font(&outline);
 
     let placed: BTreeMap<&str, &FootprintInstance> =
@@ -150,12 +152,12 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
         // beside it (gate `placement_refdes_clear`), so Cypress reserves
         // label space and no neighbour's pad ends up under a label. The
         // node centre is offset (ox, oy) from the part centre.
-        let ko = keepout_side((-hw_r, -hh_r, hw_r, hh_r), &part.reference, font, Nm::from_raw_shim(i64::MIN), label);
+        let ko = keepout_side((-hw_r, -hh_r, hw_r, hh_r), &part.reference, font, Nm::MIN, label);
         let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
         // Sizes round UP: Cypress packs nodes flush on its integer grid, so a
         // rounded-down courtyard would overlap its neighbour at nm precision.
-        let w = div_ceil((ko.2 - ko.0).raw_shim(), unit).max(1);
-        let h = div_ceil((ko.3 - ko.1).raw_shim(), unit).max(1);
+        let w = div_ceil(ko.2 - ko.0, unit).max(1);
+        let h = div_ceil(ko.3 - ko.1, unit).max(1);
         writeln!(nodes, "{} {} {}{}", part.reference, w, h, if is_fixed { " terminal" } else { "" }).unwrap();
         let origin = FootprintInstance { id: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot, side: Side::Top, label };
         let offs: BTreeMap<String, (i64, i64)> = fp
@@ -163,7 +165,7 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
             .iter()
             .map(|p| {
                 let b = to_board(&origin, p.at);
-                (p.number.clone(), (div_round((b.x - ox).raw_shim(), unit), div_round((b.y - oy).raw_shim(), unit)))
+                (p.number.clone(), (div_round(b.x - ox, unit), div_round(b.y - oy, unit)))
             })
             .collect();
         pad_offsets.insert(part.reference.clone(), offs);
@@ -172,8 +174,8 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
             Some(f) => (f.at.x - min_x + ox, f.at.y - min_y + oy),
             None => ((max_x - min_x) / 2, (max_y - min_y) / 2),
         };
-        let llx = div_round(cx.raw_shim(), unit) - w / 2;
-        let lly = div_round(cy.raw_shim(), unit) - h / 2;
+        let llx = div_round(cx, unit) - w / 2;
+        let lly = div_round(cy, unit) - h / 2;
         centers_units.insert(part.reference.clone(), (llx + w / 2, lly + h / 2));
         let orient = match rot { 90_000 => "W", 180_000 => "S", 270_000 => "E", _ => "N" };
         writeln!(pl, "{} {} {} : {orient}{}", part.reference, llx.max(0), lly.max(0), if is_fixed { " /FIXED" } else { "" }).unwrap();
@@ -308,7 +310,7 @@ pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, uni
 /// [`from_bookshelf_pl`] for a problem written by [`to_bookshelf_fixed`]:
 /// `fixed` parts take their label side from `design`'s placement.
 pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintModel, unit_nm: i64, fixed: &BTreeSet<String>) -> Result<Design, Vec<CheckResult>> {
-    let unit = unit_nm.max(1);
+    let unit = Nm::new(unit_nm.max(1));
     let prior: BTreeMap<&str, &FootprintInstance> =
         design.placement.as_ref().map(|p| p.footprints.iter().map(|f| (f.id.as_str(), f)).collect()).unwrap_or_default();
     let outline: Vec<Point> = match design.placement.as_ref().map(|p| p.outline.clone()).or_else(|| model.board.outline.clone()) {
@@ -347,10 +349,10 @@ pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintMode
         // undo the node-centre offset to recover the part centre. A fixed
         // part was exported with its own label side; movable ones upright.
         let label = if fixed.contains(name) { prior.get(name).map(|f| f.label).unwrap_or_default() } else { LabelSide::Above };
-        let ko = keepout_side((-w / 2, -h / 2, w / 2, h / 2), name, font, Nm::from_raw_shim(i64::MIN), label);
+        let ko = keepout_side((-w / 2, -h / 2, w / 2, h / 2), name, font, Nm::MIN, label);
         let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
-        let cx = min_x + Nm::from_raw_shim((x * unit as f64).round() as i64) + (ko.2 - ko.0) / 2 - ox;
-        let cy = min_y + Nm::from_raw_shim((y * unit as f64).round() as i64) + (ko.3 - ko.1) / 2 - oy;
+        let cx = min_x + unit.scale(x) + (ko.2 - ko.0) / 2 - ox;
+        let cy = min_y + unit.scale(y) + (ko.3 - ko.1) / 2 - oy;
         footprints.push(FootprintInstance {
             id: name.to_string(),
             at: Point { x: cx, y: cy },
