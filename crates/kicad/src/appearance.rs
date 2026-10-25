@@ -163,6 +163,36 @@ fn viewport_json(v: &Value) -> Option<Value> {
     Some(json!({ "name": name, "x": nm("x"), "y": nm("y"), "w": nm("w"), "h": nm("h") }))
 }
 
+/// The Appearance settings with the nets they name under the board's names: a net colour (`project.net_colors`) or a hidden net (`local.hidden_nets`) saved
+/// under a name the board's nets no longer have -- the intent's, before the board loader gave the net KiCad's (`ConstraintModel::intent_net_names`,
+/// `FB` is `/FB`) -- is the net's under its new name, as a net class follows its nets (`crates/cli/src/net_names.rs`). A name that is neither stays.
+pub fn with_board_net_names(appearance: &Value, model: &eda_model::ConstraintModel) -> Value {
+    let current: std::collections::BTreeSet<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+    let mut by_intent: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    for (kicad, intent) in &model.intent_net_names {
+        by_intent.insert(intent.as_str(), kicad.as_str());
+    }
+    let rename = |name: &str| -> String {
+        if current.contains(name) {
+            return name.to_string();
+        }
+        by_intent.get(name).map_or_else(|| name.to_string(), |k| k.to_string())
+    };
+    let mut out = appearance.clone();
+    if let Some(colors) = out.pointer_mut("/project/net_colors").and_then(Value::as_object_mut) {
+        let renamed: Map<String, Value> = std::mem::take(colors).into_iter().map(|(k, v)| (rename(&k), v)).collect();
+        *colors = renamed;
+    }
+    if let Some(hidden) = out.pointer_mut("/local/hidden_nets").and_then(Value::as_array_mut) {
+        for h in hidden.iter_mut() {
+            if let Some(name) = h.as_str() {
+                *h = json!(rename(name));
+            }
+        }
+    }
+    out
+}
+
 /// Puts the studio's `project` section into a derived `.kicad_pro`: the net colours (`net_settings.net_colors`), the layer presets and the viewports
 /// (`board.layer_presets`, `board.viewports`). Nothing is added for an empty list, so an untouched project is byte-for-byte what it was.
 pub fn merge_into_project(project: &mut Value, appearance: &Value) {
@@ -477,6 +507,17 @@ mod tests {
     fn an_untouched_project_has_no_local_settings_file() {
         assert!(local_settings(&json!({}), "b").is_none());
         assert!(local_settings(&json!({ "version": 1, "local": {}, "project": {} }), "b").is_none());
+    }
+
+    #[test]
+    fn a_net_colour_or_hidden_net_saved_under_the_intents_name_is_the_nets_under_the_boards() {
+        let mut model = eda_model::ConstraintModel::default();
+        model.nets = vec![eda_model::Net { name: "/FB".into(), pins: vec![] }, eda_model::Net { name: "GND".into(), pins: vec![] }];
+        model.intent_net_names.insert("/FB".into(), "FB".into());
+        let a = json!({ "local": { "hidden_nets": ["FB", "GND", "OLD"] }, "project": { "net_colors": { "FB": "rgb(1, 2, 3)", "GND": "rgb(4, 5, 6)" } } });
+        let b = with_board_net_names(&a, &model);
+        assert_eq!(b["local"]["hidden_nets"], json!(["/FB", "GND", "OLD"]));
+        assert_eq!(b["project"]["net_colors"], json!({ "/FB": "rgb(1, 2, 3)", "GND": "rgb(4, 5, 6)" }));
     }
 
     #[test]

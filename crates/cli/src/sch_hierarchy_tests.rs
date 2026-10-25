@@ -662,6 +662,7 @@ fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
         };
         let apart = vec![vec!["R1.1".to_string()], vec!["R2.1".into()], vec!["R3.1".into()], vec!["R4.1".into()]];
         assert_eq!(cut(kicad_net_groups(&dir)), apart, "{bus_label}: kicad-cli has the two sheets apart before the bus is drawn");
+        let ours_before = our_net_groups(&dir);
         let add = Cmd::AddLabel { net: "D[0..1]".into(), at: hl, kind: eda_model::ir::LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Bidirectional } };
         step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(add) }, false, "test").unwrap();
         let joined = vec![vec!["R1.1".to_string(), "R3.1".into()], vec!["R2.1".to_string(), "R4.1".into()]];
@@ -677,8 +678,7 @@ fn slow_a_bus_across_sheets_is_one_net_per_member_as_kicad_cli_makes_it() {
         assert!(!kinds.keys().any(|k| (k.starts_with("bus_") && !allowed(k)) || k == "net_not_bus_member" || k == "hier_label_mismatch"), "{bus_label}: {kinds:?}");
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
         assert_eq!(cut(kicad_net_groups(&dir)), apart, "{bus_label}: one undo takes the bus and the joins back");
-        let ours = cut(our_net_groups(&dir));
-        assert!(ours.is_empty() || ours == apart, "{bus_label}: {ours:?}");
+        assert_eq!(our_net_groups(&dir), ours_before, "{bus_label}: and the studio's net list is the one it was");
     }
 }
 
@@ -1297,8 +1297,9 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
             *erc_w.entry(v["check"].as_str().or_else(|| v["type"].as_str()).unwrap_or("?").to_string()).or_insert(0) += 1;
         }
         let groups_w = std::panic::catch_unwind(|| kicad_net_groups(&dir)).unwrap_or_default();
-        // (`lib_symbol_issues` says the original's libraries are not in this machine's tables; ours are the project's own)
-        let erc_diff: Vec<String> = erc_o.keys().chain(erc_w.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "lib_symbol_issues" && erc_o.get(*k) != erc_w.get(*k)).map(|k| format!("{k} {}->{}", erc_o.get(k).unwrap_or(&0), erc_w.get(k).unwrap_or(&0))).collect();
+        // (`lib_symbol_issues` says the original's libraries are not in this machine's tables; ours are the project's own. `footprint_link_issues` says
+        // the same of the footprints' libraries, a check the studio's project leaves to its own library check, PARITY-pcb.md section 53)
+        let erc_diff: Vec<String> = erc_o.keys().chain(erc_w.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "lib_symbol_issues" && *k != "footprint_link_issues" && erc_o.get(*k) != erc_w.get(*k)).map(|k| format!("{k} {}->{}", erc_o.get(k).unwrap_or(&0), erc_w.get(k).unwrap_or(&0))).collect();
         let nets_only_o = groups_o.iter().filter(|g| !groups_w.contains(g)).count();
         let nets_only_w = groups_w.iter().filter(|g| !groups_o.contains(g)).count();
         if erc_diff.is_empty() && nets_only_o == 0 && nets_only_w == 0 {

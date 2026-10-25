@@ -918,7 +918,15 @@ fn handle(
         ("GET", "/api/view") => respond(stream, "200 OK", "application/json", crate::view_api::get(dir).to_string().as_bytes()),
         ("POST", "/api/view") => respond(stream, "200 OK", "application/json", crate::view_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
         // The Appearance panel's per-project settings (`appearance.json`, never `design.json`).
-        ("GET", "/api/appearance") => respond(stream, "200 OK", "application/json", crate::appearance_api::get(dir).to_string().as_bytes()),
+        // (the nets it names under the board's names: a colour saved under the intent's name of a net is the net's under KiCad's)
+        ("GET", "/api/appearance") => {
+            let a = crate::appearance_api::get(dir);
+            let a = match crate::board::load(dir) {
+                Ok((_, _, model)) => eda_kicad::appearance::with_board_net_names(&a, &model),
+                Err(_) => a,
+            };
+            respond(stream, "200 OK", "application/json", a.to_string().as_bytes())
+        }
         ("POST", "/api/appearance") => respond(stream, "200 OK", "application/json", crate::appearance_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
         ("POST", "/api/undo") => {
             let scope = request_domain(&body);

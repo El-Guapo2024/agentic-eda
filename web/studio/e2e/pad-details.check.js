@@ -70,7 +70,9 @@
   const shared = Object.values(withNet.reduce((m, q) => ((m[q.net] ??= []).push(q), m), {})).find((v) => v.length >= 2) ?? [];
   const a = shared[0];
   const c = a && shared.filter((q) => q.id !== a.id).sort((p, q) => Math.hypot(p.x - a.x, p.y - a.y) - Math.hypot(q.x - a.x, q.y - a.y))[0];
-  const b = a && withNet.find((q) => q.net !== a.net && q.ref !== a.ref);
+  const b = a && withNet.find((q) => q.net !== a.net && q.ref !== a.ref && withNet.some((r) => r.net === q.net && r.id !== q.id));
+  // a pad that stays on b's net, whose net's name after an edit is the one b's net then has
+  const peer = b && withNet.find((r) => r.net === b.net && r.id !== b.id);
   const original = await snapshot();
 
   // A pin header (through-hole pads, no nets) from the installed libraries.
@@ -82,7 +84,7 @@
 
   await scenario("the board has what the check needs", async (t) => {
     t(placed.ok === true, `the pin header is placed: ${placed.message}`);
-    t(!!a && !!b && !!c, `three pads on two nets: ${a?.id} (${a?.net}), ${b?.id} (${b?.net}), ${c?.id} (${c?.net})`);
+    t(!!a && !!b && !!c && !!peer && ![a.id, c.id].includes(peer.id), `four pads on two nets: ${a?.id} and ${c?.id} (${a?.net}), ${b?.id} and ${peer?.id} (${b?.net})`);
     t(!!th && (await padOf(th))?.th === true, `${th} is a through-hole pad`);
   });
 
@@ -198,10 +200,9 @@
     t((await snapshot()) === afterPlace, "undone");
   });
 
-  // A net by the label it is drawn with: a swap redraws the derived schematic, and KiCad's name of a net is the label's text with the path of the sheet
-  // it is on now (PA0 with only U1's pins on it is `/MCU (U1)/PA0`, where it was `/LED channels (D1–D8)/PA0`).
-  const label = (net) => (net ?? "").split("/").pop();
-  const same = (x, y) => label(x) === label(y);
+  // A net after a swap by a pad that stayed on it: the swap redraws the derived schematic, and KiCad's name of a net is its label's text with the path of
+  // the sheet it is on now (PA0 with only U1's pins on it is `/MCU (U1)/PA0`, where it was `/LED channels (D1–D8)/PA0`), the name its other pads have.
+  const now = async (pad) => (await padOf(pad.id))?.net;
 
   await scenario("Swap Pad Nets rotates the nets of the selected pads in the order they were selected", async (t) => {
     t(!!a && !!b, "two pads on different nets");
@@ -210,7 +211,7 @@
     await sleep(900);
     t(!res.error, `the action ran: ${res.error ?? "ok"}`);
     const [pa, pb] = [await padOf(a.id), await padOf(b.id)];
-    t(same(pa.net, b.net) && same(pb.net, a.net), `${a.id}: ${a.net} -> ${pa.net}, ${b.id}: ${b.net} -> ${pb.net}`);
+    t(pa.net === (await now(peer)) && pb.net === (await now(c)), `${a.id}: ${a.net} -> ${pa.net} (${peer.id}'s), ${b.id}: ${b.net} -> ${pb.net} (${c.id}'s)`);
     t(!tid("swap-nets-prompt"), "no question: no copper joins them to other pads");
     await undo();
     t((await snapshot()) === afterPlace, "one undo step");
@@ -219,7 +220,7 @@
     await __eda.run("pcbnew.InteractiveEdit.swapPadNets");
     await sleep(900);
     const [qa, qb] = [await padOf(a.id), await padOf(b.id)];
-    t(same(qa.net, b.net) && same(qb.net, a.net), "two pads exchange, whichever is first");
+    t(qa.net === (await now(peer)) && qb.net === (await now(c)), "two pads exchange, whichever is first");
     await undo();
   });
 
@@ -244,7 +245,7 @@
     await sleep(1300);
     const track = (await state()).routing.tracks.find((x) => x.pts.some((p) => p[0] === a.x && p[1] === a.y));
     const [na, nc] = [(await padOf(a.id)).net, (await padOf(c.id)).net];
-    t(same(na, b.net) && same(nc, a.net) && track?.net === na, `ignore: ${a.id} ${na} (was ${b.net}'s), ${c.id} ${nc} (as it was), track ${track?.net}`);
+    t(na === (await now(peer)) && nc === (await now(b)) && track?.net === na, `ignore: ${a.id} ${na} (${peer.id}'s), ${c.id} ${nc} (the net ${b.id} took), track ${track?.net}`);
     await undo();
     t((await snapshot()) === withTrack, "undone");
     // Swap All Connected Pads: c follows.
@@ -254,7 +255,7 @@
     await click("swap-nets-all");
     await sleep(1300);
     const [ma, mc] = [(await padOf(a.id)).net, (await padOf(c.id)).net];
-    t(same(ma, b.net) && mc === ma, `all: ${a.id} and ${c.id} are on ${ma} (${b.net}'s)`);
+    t(ma === (await now(peer)) && mc === ma, `all: ${a.id} and ${c.id} are on ${ma} (${peer.id}'s)`);
     await undo();
     // Cancel changes nothing.
     await select([a.id, b.id]);

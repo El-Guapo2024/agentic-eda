@@ -20,7 +20,7 @@
 use crate::library_index::{Kind, LibSource};
 use eda_model::ir::Design;
 use eda_model::ConstraintModel;
-use eda_ops::{footprint_name_of, Cmd, ExchangeOptions};
+use eda_ops::{Cmd, ExchangeOptions};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -103,7 +103,8 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
             // the library copy of each footprint it needs: the one the parts change to, or the one each is on
             let mut names: Vec<String> = match footprint {
                 Some(f) => vec![f.trim().to_string()],
-                None => references.iter().filter_map(|r| model.part(r)).map(footprint_name_of).collect(),
+                // (the footprint each is on, by the name the board gives it: a built-in `0603` is `Resistor_SMD:R_0603_1608Metric`)
+                None => references.iter().filter_map(|r| model.part(r)).map(eda_model::footprint::footprint_lib_id).collect(),
             };
             names.sort();
             names.dedup();

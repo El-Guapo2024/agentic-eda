@@ -447,7 +447,8 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
     let mut pro_text = export_kicad_pro_for(design, model);
     // What the person chose in the studio's Appearance panel (layers and objects shown, colours, presets, views) goes into the derived project as KiCad keeps it:
     // the net colours, layer presets and viewports in the project file, the rest in the project's local settings (`<stem>.kicad_prl`).
-    let appearance = studio_appearance(work);
+    // (a net it names under the intent's name is the net's under the board's: `with_board_net_names`)
+    let appearance = studio_appearance(work).map(|a| eda_kicad::appearance::with_board_net_names(&a, model));
     if appearance.is_some() || classes.is_some() {
         if let Ok(mut pro) = serde_json::from_str::<Value>(&pro_text) {
             let before = pro.clone();

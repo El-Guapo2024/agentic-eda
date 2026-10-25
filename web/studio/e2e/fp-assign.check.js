@@ -152,7 +152,8 @@
     const was = await part(r4);
     await click("exchange-run", 2000);
     const msg = text("exchange-messages");
-    t(msg.includes(`Changed footprint ${r4} from '0603' to '${wide}': OK`), `the message window: ${msg.split("\n")[0]}`);
+    // (the built-in `0603` under the name the board gives it, the installed footprint it stands for)
+    t(msg.includes(`Changed footprint ${r4} from 'Resistor_SMD:R_0603_1608Metric' to '${wide}': OK`), `the message window: ${msg.split("\n")[0]}`);
     const now = await part(r4);
     t(now.footprint === wide && JSON.stringify(now.at) === JSON.stringify(was.at) && now.rot === was.rot, "R4 is on it, where it was");
     t(__eda.state().selection.some((s) => s.id === r4), "and still selected");
@@ -181,7 +182,8 @@
     const plan = await (await fetch("/api/exchange_plan", { method: "POST", body: JSON.stringify({ references: [r4, r5], footprint: null }) })).json();
     const e4 = plan.entries.find((e) => e.reference === r4);
     t(e4.found && e4.differs && e4.lines.some((l) => /Pad 1 size differs/.test(l)), `the plan lists it: ${JSON.stringify(e4.lines)}`);
-    t(plan.entries.find((e) => e.reference === r5).found === false, `${r5} is a built-in package: no library copy`);
+    const e5 = plan.entries.find((e) => e.reference === r5);
+    t(e5.found === true && e5.from === e5.to && e5.from.includes(":"), `${r5}'s built-in package is the installed footprint the board names, whose library copy an update takes: ${e5.from}`);
     await select([r4]);
     await __eda.run("pcbnew.GlobalEdit.updateFootprint");
     await sleep(500);
@@ -226,8 +228,9 @@
     await select([r5]);
     await __eda.run("pcbnew.InspectionTool.DiffFootprint");
     await sleep(600);
-    t(text("footprint-diff-summary").includes("The library is not included in the current configuration."), "a built-in package says the library is not in the configuration");
-    t(!dialog("footprint-diff-tab-visual"), "and has no visual page");
+    const builtin = text("footprint-diff-summary");
+    t(builtin.includes("Library: Resistor_SMD") && builtin.includes("Library item: R_0603_1608Metric"), `a built-in package is compared with the installed footprint the board names: ${builtin.replace(/\n/g, " | ").slice(0, 200)}`);
+    t(!!dialog("footprint-diff-tab-visual"), "and has a visual page");
     await closeDialogs();
     t(await restore(original), "the undos bring the board back");
   });

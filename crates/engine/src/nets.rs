@@ -109,7 +109,10 @@ struct Driver {
 }
 
 impl Driver {
+    /// `name` as the label, sheet pin or power symbol shows it: the driver's name is it escaped (`CONNECTION_SUBGRAPH::GetNameForDriver`:
+    /// `EscapeString( GetShownText(), CTX_NETNAME )`, a label `A/B` names `/A{slash}B`).
     fn new(prio: u8, name: String, depth: usize, sheet_path: &str) -> Self {
+        let name = escape_net_name(&name);
         let full = if prio >= GLOBAL_POWER_PIN || name.is_empty() { name.clone() } else { format!("{sheet_path}/{name}") };
         Driver { prio, name, depth, full }
     }
@@ -1145,8 +1148,10 @@ mod tests {
             let want = drawn_nets(&model);
             // the same pins, the names KiCad gives what is drawn: a power net's, a label's with the sheet's path, a pin's
             let by_pins = |m: &BTreeMap<String, Vec<String>>| -> BTreeMap<Vec<String>, String> { m.iter().map(|(n, p)| (p.clone(), n.clone())).collect() };
-            // every named net is labelled on the root (`crate::net_labels`): `/<name>`, or a power net's own name
-            let named = by_pins(&got).iter().all(|(pins, name)| by_pins(&want).get(pins).is_some_and(|i| name == i || *name == format!("/{i}")));
+            // every named net is labelled on the root (`crate::net_labels`): a power net is its symbol's name (`GND`, a power symbol outranks a label), any
+            // other `/<name>`
+            let power: BTreeSet<&str> = sch.power_symbols.iter().filter(|p| !p.lib_id.ends_with(":PWR_FLAG")).map(|p| p.net.as_str()).collect();
+            let named = by_pins(&got).iter().all(|(pins, name)| by_pins(&want).get(pins).is_some_and(|i| *name == if power.contains(i.as_str()) { i.clone() } else { format!("/{i}") }));
             // (an example whose flat drawing joins two nets or leaves one out is the layout's to fix, not the naming's: it is skipped, as before)
             if by_pins(&got).keys().ne(by_pins(&want).keys()) {
                 println!("MISMATCH {}\n   got  {:?}\n   want {:?}", f.display(), got, want);
@@ -1180,6 +1185,14 @@ mod tests {
 
     /// `SCH_PIN::GetDefaultNetName`: `Net-(R1-Pad1)`, the pin's name when it has one (`Net-(U1-PA0)`), the pad number added when the part has
     /// several pins of that name, `unconnected-(...)` for a pin on its own.
+    #[test]
+    fn a_label_with_a_slash_names_its_net_with_the_slash_escaped() {
+        // `EscapeString( text, CTX_NETNAME )`: the sheet path's separator stays the only `/`
+        assert_eq!(Driver::new(LOCAL_LABEL, "A/B".into(), 0, "").full, "/A{slash}B");
+        assert_eq!(Driver::new(GLOBAL_POWER_PIN, "+3V3/A".into(), 0, "").full, "+3V3{slash}A");
+        assert_eq!(Driver::new(LOCAL_LABEL, "A{slash}B".into(), 1, "/Sub").full, "/Sub/A{slash}B", "an escaped name stays as it is");
+    }
+
     #[test]
     fn a_net_nothing_drives_is_named_the_way_kicad_names_it() {
         let names = shown(&[("U1.3", "PA0"), ("U1.2", "GND"), ("U1.15", "GND"), ("R1.1", "~"), ("U2.1", "OUT"), ("U2.5", "NC"), ("U3.4", "NC"), ("U3.5", "NC")]);
