@@ -3,8 +3,7 @@
 //! points of a line.
 //!
 //! An arc is held as the three points of it the IR holds ([`ArcPts`]: start, a point on it, end -- `PCB_ARC`'s `(start) (mid) (end)`),
-//! in micrometres. KiCad's own `SHAPE_ARC` is computed on the nanometre grid, so everything that needs its arithmetic goes through
-//! [`crate::kigeom::ShapeArc`] (micrometres in, nanometres inside, micrometres out), and the polyline of an arc is KiCad's
+//! in nanometres. Everything that needs `SHAPE_ARC`'s arithmetic goes through [`crate::kigeom::ShapeArc`], and the polyline of an arc is KiCad's
 //! `ConvertToPolyline` at its 1 um polygonisation error ([`ArcPts::polyline`]), which is what a `LINE` holds for an arc and what
 //! [`crate::line::Line::arc_runs`] finds again in a line's points.
 
@@ -152,7 +151,7 @@ impl ArcPts {
         }
     }
 
-    /// How far `p` is from the arc's centre line, micrometres.
+    /// How far `p` is from the arc's centre line, nanometres.
     pub fn distance_to(&self, p: Point) -> f64 {
         if self.is_degenerate() {
             return (Seg::new(self.start, self.end).sq_distance_to_point(p) as f64).sqrt();
@@ -189,7 +188,7 @@ impl ArcPts {
 }
 
 /// `CalcArcMid( aStart, aEnd, aCenter, aMinArcAngle = true )` (`libs/kimath/src/trigo.cpp:209`): the start turned about the centre by half the angle
-/// from the end to it, which is the middle of the shorter arc between the two. Micrometres in and out; the turn is done on the nanometre grid.
+/// from the end to it, which is the middle of the shorter arc between the two, on the nanometre grid.
 pub fn calc_arc_mid(start: Point, end: Point, center: Point) -> Point {
     let (s, e, c) = (start, end, center);
     let start_angle = angle_of((s.x - c.x).as_f64(), (s.y - c.y).as_f64());

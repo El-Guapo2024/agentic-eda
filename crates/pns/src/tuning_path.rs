@@ -7,7 +7,7 @@
 //! (`OptimiseTraceInPad`), the part of a line inside a via's pad to the via's centre (`OptimiseTraceInVia`) -- plus, with *Use height for
 //! length calculations*, the height of the stackup a via spans (`StackupHeight`). The pad-to-die length is not in the model.
 //!
-//! Lines are kept in micrometres (the world's unit) and measured in nanometres, as KiCad's `SHAPE_LINE_CHAIN::Length` is.
+//! Lines are kept and measured in nanometres, as KiCad's `SHAPE_LINE_CHAIN::Length` is.
 
 use eda_model::units::{mm, Nm, PCB_IU_PER_MM};
 use crate::chain::ShapeLineChain;
@@ -24,7 +24,7 @@ use std::collections::HashSet;
 /// What a tuning path is made of, in order from one end to the other.
 #[derive(Debug, Clone)]
 pub enum PathItem {
-    /// A line of the net, as `NODE::AssembleLine` made it (micrometres), with the pad-clipped ends of `AssembleTuningPath` already applied
+    /// A line of the net, as `NODE::AssembleLine` made it, with the pad-clipped ends of `AssembleTuningPath` already applied
     /// to its measuring copy, [`PathItem::clipped`].
     Line { line: Line, clipped: ShapeLineChain },
     /// A via of the net, between the lines on either side of it.

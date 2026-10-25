@@ -4,7 +4,7 @@
 //! `SEG::Length`.
 //!
 //! Segments are `(a, b)` point pairs; all arithmetic is exact on `i128` and rounds where
-//! KiCad's `rescale` / `KiROUND` do, so a result matches KiCad's at this IR's micrometre grid.
+//! KiCad's `rescale` / `KiROUND` do, so a result matches KiCad's on its (and the IR's) nanometre grid.
 
 use eda_model::units::Nm;
 use eda_model::ir::Point;

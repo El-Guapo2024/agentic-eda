@@ -10,8 +10,8 @@
 //! flagged: they become the members of its [`TuningPattern`](eda_model::tuning::TuningPattern) (`EditFinish` adds the new tracks inside the
 //! pattern's outline to the generator).
 //!
-//! Micrometres on the way out: the chains are nanometres (see [`crate::kigeom`]) and a vertex is rounded to the board's grid. The same cut
-//! point is the end of one piece and the start of the next, so they still meet.
+//! Nanometres throughout, the chains' and the board's: a vertex goes to the board as it is. The same cut point is the end of one piece and
+//! the start of the next, so they still meet.
 
 use eda_model::units::Nm;
 use crate::chain::{distance, ShapeLineChain};
@@ -25,7 +25,7 @@ use std::collections::{BTreeSet, HashSet};
 /// How far apart two points that should be one are allowed to be before they are two (nanometres): the rounding of a meander's shapes.
 const SNAP_NM: Nm = Nm::new(3);
 
-/// One track of the new line (micrometres).
+/// One track of the new line.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PieceShape {
     /// A run of straight segments.
@@ -92,7 +92,7 @@ fn head_to(chain: &ShapeLineChain, p: Point) -> Option<ShapeLineChain> {
     (i >= 0).then(|| c.slice(0, i))
 }
 
-/// A chain as the pieces of track it is made of: a polyline for each run of straight segments of one kind and an arc for each arc (micrometres;
+/// A chain as the pieces of track it is made of: a polyline for each run of straight segments of one kind and an arc for each arc (the
 /// segments `members` are the ones from `member_from` up to, not including, `member_to`).
 fn pieces_of(chain: &ShapeLineChain, member_from: usize, member_to: usize, members: bool) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();

@@ -65,7 +65,7 @@ fn circle_pts(c: Point, r: Nm) -> [Point; 8] {
 /// space is +x right/+y down, so CCW on screen is CW mathematically --
 /// winding direction does not matter to any caller here, which only ever
 /// walks the polygon as a cyclic point list). Cross products use `i128` so
-/// board-scale coordinates (micrometers, fitting `i64`) never overflow.
+/// board-scale coordinates (nanometres, fitting `i64`) never overflow.
 /// Collinear boundary points are dropped. A degenerate input (<=2 distinct
 /// points) returns those points as-is.
 pub fn convex_hull(points: &[Point]) -> Vec<Point> {

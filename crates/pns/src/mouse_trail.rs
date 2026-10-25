@@ -4,7 +4,7 @@
 //! diagonal-first head, one who moves the other way gets a straight-first one. "Use mouse path to set track posture" (`m_autoPosture`) is its
 //! switch (`SetMouseDisabled`): off, the posture is the one the route started with, or the one `/` flipped it to.
 //!
-//! The interface takes micrometre points like the rest of the crate; inside, the trail and every distance and area are in nanometres, because the
+//! The trail and every distance and area are in nanometres, the crate's unit and KiCad's, because the
 //! solver's tests are integer ones (`SEG::SquaredDistance( SEG ) <= tolerance^2`, `TestSegmentHit` to the nanometre, `refLength` truncated to an
 //! integer, `ratio = areaS / ( areaDiag + 1.0 )`) and the same arithmetic on the same numbers gives KiCad's answers. `SHAPE_LINE_CHAIN`'s `Append`,
 //! `Simplify` (the 2024 version: "points must be exactly co-linear to be removed"), `Slice`, `Reverse` and `Area` are the few functions of it the

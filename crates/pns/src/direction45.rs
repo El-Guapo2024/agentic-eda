@@ -10,8 +10,8 @@
 //! A rounded corner is an arc of the trace ([`Trace::arcs`],
 //! [`crate::arcs::ArcPts`]), which a line keeps as the points of its
 //! polyline ([`crate::line::Line::arcs`]); [`Direction45::build_initial_line`]
-//! is `BuildInitialTrace`, computed on the nanometre grid as KiCad's is and
-//! rounded to the IR's micrometres where it becomes points.
+//! is `BuildInitialTrace`, computed on the nanometre grid as KiCad's is (the
+//! IR's grid too).
 use crate::arcs::ArcPts;
 use crate::kigeom::{ki_round_nm, rotate_d, ShapeArc, V2};
 use eda_model::ir::{Point, Nm};
@@ -192,8 +192,7 @@ impl Direction45 {
     /// `DIRECTION_45::BuildInitialTrace( aP0, aP1, aStartDiagonal, aMode )` (`direction_45.cpp`): the trace from `p0` to `p1` with one corner.
     /// `start_diagonal` is only read when `self` is `Undefined`; a direction starts diagonal when it is a diagonal. 45 degrees: a straight leg
     /// and a diagonal one (`ROUNDED_45`: the diagonal one an arc of 45 degrees tangent to the straight one); 90 degrees: a horizontal and a vertical
-    /// leg (`ROUNDED_90`: the corner a quarter arc of the shorter leg's length). The arithmetic is KiCad's, on the nanometre grid; the points come
-    /// back in micrometres.
+    /// leg (`ROUNDED_90`: the corner a quarter arc of the shorter leg's length). The arithmetic is KiCad's, on the nanometre grid.
     pub fn build_initial_line(&self, p0: Point, p1: Point, start_diagonal: bool, mode: CornerMode) -> Trace {
         let start_diagonal = if *self == Direction45::Undefined { start_diagonal } else { self.is_diagonal() };
         let (a0, a1) = (p0, p1);
@@ -319,7 +318,7 @@ fn arc_from_center(center: Point, start: Point, angle_deg: f64) -> ShapeArc {
     ShapeArc::new_nm(start, turn(-angle_deg / 2.0), turn(-angle_deg), Nm::ZERO)
 }
 
-/// The `SHAPE_LINE_CHAIN` `BuildInitialTrace` appends to, in nanometres; [`Self::finish`] hands it back in micrometres.
+/// The `SHAPE_LINE_CHAIN` `BuildInitialTrace` appends to; [`Self::finish`] hands it back as a [`Trace`].
 #[derive(Default)]
 struct TraceBuilder {
     /// Points (nm) and arcs (nm), in order.
