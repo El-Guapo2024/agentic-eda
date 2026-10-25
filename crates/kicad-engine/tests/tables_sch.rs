@@ -3,7 +3,7 @@
 //! `SCH_TABLE::DrawBorders` draws them -- and the table of KiCad's own QA sheet comes back from our reader and writer plotted as it was. Slow tier (`EDA_SLOW_TESTS=1`);
 //! skipped, loudly, without kicad-cli, and the QA sheet is skipped without `KICAD_QA_DATA` (default `~/ws/kicad-src-8303b2ad/qa/data`).
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use eda_drc::stroke_font::{kicad_text_segments, TextLayout};
 use eda_kicad::{export_kicad_sch, export_kicad_sch_tree, import_kicad_sch_tree, ExportMeta};
 use eda_model::ir::{Design, Point, Provenance, SchematicSection, TextJustify, TextVAlign};
@@ -79,7 +79,7 @@ fn plotted_text(svg: &str) -> Vec<(String, [f64; 4])> {
 }
 
 /// The straight lines of the plot that are not glyph strokes, in nanometres, ends in reading order.
-fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
+fn plotted_lines(svg: &str) -> Vec<[Nm; 4]> {
     let mut bare = String::new();
     let mut rest = svg;
     while let Some(i) = rest.find("<g class=\"stroked-text\">") {
@@ -100,7 +100,7 @@ fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
             continue;
         }
         if let [x0, y0, x1, y1] = numbers(&format!("M{d}"))[..] {
-            let nm = |v: f64| (v * 1e6).round() as i64;
+            let nm = Nm::from_mm;
             let (a, b) = ((nm(x0), nm(y0)), (nm(x1), nm(y1)));
             let (a, b) = if a <= b { (a, b) } else { (b, a) };
             out.push([a.0, a.1, b.0, b.1]);
@@ -110,22 +110,22 @@ fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
 }
 
 /// The box round the ink of one line of a cell's text, as the stroke font draws it with its first glyph's origin at `origin` (µm).
-fn expected_ink(text: &str, origin: (f64, f64), size: i64, pen_nm: f64, angle_deg: f64) -> Option<[f64; 4]> {
-    let (offx, offy) = (pen_nm / 1.52, size as f64 - pen_nm * 0.052);
+fn expected_ink(text: &str, origin: (f64, f64), size: Nm, pen_nm: f64, angle_deg: f64) -> Option<[f64; 4]> {
+    let (offx, offy) = (pen_nm / 1.52, size.as_f64() - pen_nm * 0.052);
     let (s, c) = angle_deg.to_radians().sin_cos();
     let (rx, ry) = (offx * c + offy * s, offy * c - offx * s);
-    let pos = Point { x: Nm::from_raw_shim((origin.0 - rx).round() as i64), y: Nm::from_raw_shim((origin.1 - ry).round() as i64) };
-    let segs = kicad_text_segments(&TextLayout { text, pos, size: (Nm::from_raw_shim(size), Nm::from_raw_shim(size)), thickness: Nm::from_raw_shim(pen_nm.round() as i64), angle_deg, mirror: false, halign: -1, valign: -1 });
+    let pos = Point { x: Nm::kiround(origin.0 - rx), y: Nm::kiround(origin.1 - ry) };
+    let segs = kicad_text_segments(&TextLayout { text, pos, size: (size, size), thickness: Nm::kiround(pen_nm), angle_deg, mirror: false, halign: -1, valign: -1 });
     if segs.is_empty() {
         return None;
     }
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for s in &segs {
         for p in [s.a, s.b] {
-            x0 = x0.min(p.x.raw_shim() as f64);
-            x1 = x1.max(p.x.raw_shim() as f64);
-            y0 = y0.min(p.y.raw_shim() as f64);
-            y1 = y1.max(p.y.raw_shim() as f64);
+            x0 = x0.min(p.x.as_f64());
+            x1 = x1.max(p.x.as_f64());
+            y0 = y0.min(p.y.as_f64());
+            y1 = y1.max(p.y.as_f64());
         }
     }
     Some([x0, y0, x1, y1])
@@ -139,7 +139,7 @@ fn expected_text(t: &Table) -> Vec<(String, [f64; 4])> {
             let draw = sch_cell_draw(t, row, col, &|_: &str| None);
             let cell = t.cell(row, col).unwrap();
             for line in &draw.lines {
-                if let Some(b) = expected_ink(&line.text, (line.x_nm, line.y_nm), cell.style.height_nm.raw_shim(), draw.pen_nm, draw.angle as f64 / 1000.0) {
+                if let Some(b) = expected_ink(&line.text, (line.x_nm, line.y_nm), cell.style.height_nm, draw.pen_nm, draw.angle as f64 / 1000.0) {
                     out.push((line.text.clone(), b));
                 }
             }
@@ -184,7 +184,7 @@ fn assert_borders_drawn_as_kicad_cli_plots_them(t: &Table, svg: &str, what: &str
         .collect();
     assert!(!expected.is_empty());
     for line in &expected {
-        assert!(lines.iter().any(|l| l.iter().zip(line).all(|(a, b)| (Nm::from_raw_shim(*a) - *b).abs() <= Nm::from_raw_shim(100))), "{what}: kicad-cli draws no line {line:?}; it drew {lines:?}");
+        assert!(lines.iter().any(|l| l.iter().zip(line).all(|(a, b)| (*a - *b).abs() <= Nm::new(100))), "{what}: kicad-cli draws no line {line:?}; it drew {lines:?}");
     }
 }
 
@@ -201,7 +201,7 @@ fn sheet_of(tables: Vec<Table>) -> Design {
 
 /// A 3 x 2 table: left and top, centred, right and bottom text; one cell of several lines; a bold one; a variable.
 fn lying_table() -> Table {
-    let mut t = Table::new_sch_grid(Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(40_000_000) }, 2, 3, Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(8_000_000), Nm::from_raw_shim(1_270_000));
+    let mut t = Table::new_sch_grid(Point { x: mm(30.0), y: mm(40.0) }, 2, 3, mm(30.0), mm(8.0), mm(1.27));
     let texts = ["Header", "Value", "centred", "r ight\nbottom", "a long text that must be broken to the width of its column", "${ROW}:${COL} ${ADDR}"];
     for (cell, text) in t.cells.iter_mut().zip(texts) {
         cell.text = text.to_string();
@@ -211,9 +211,9 @@ fn lying_table() -> Table {
     t.cells[3].style.h_align = TextJustify::Right;
     t.cells[3].style.v_align = TextVAlign::Bottom;
     t.cells[1].style.bold = true;
-    t.cells[1].style.height_nm = Nm::from_raw_shim(1_800_000);
-    t.cells[1].style.width_nm = Nm::from_raw_shim(1_800_000);
-    t.cells[4].style.thickness_nm = Nm::from_raw_shim(300_000);
+    t.cells[1].style.height_nm = mm(1.8);
+    t.cells[1].style.width_nm = mm(1.8);
+    t.cells[4].style.thickness_nm = mm(0.3);
     t
 }
 
@@ -224,7 +224,7 @@ fn kicad_cli_plots_a_table_we_wrote_on_a_sheet_the_way_it_was_laid_out() {
     let standing = {
         // The same grid turned a quarter: the text stands, anchored along the height of the cell.
         let mut t = lying_table();
-        t.at = Point { x: Nm::from_raw_shim(150_000_000), y: Nm::from_raw_shim(120_000_000) };
+        t.at = Point { x: mm(150.0), y: mm(120.0) };
         t.angle = 90_000;
         t
     };

@@ -651,22 +651,22 @@ fn check_footprint_body_mismatch(model: &ConstraintModel) -> Vec<CheckResult> {
             continue;
         }
         // Bounding box of the copper the part has to land on.
-        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
         for pad in &fp.pads {
-            x0 = x0.min((pad.at.0 - pad.size.0 / 2).raw_shim());
-            y0 = y0.min((pad.at.1 - pad.size.1 / 2).raw_shim());
-            x1 = x1.max((pad.at.0 + pad.size.0 / 2).raw_shim());
-            y1 = y1.max((pad.at.1 + pad.size.1 / 2).raw_shim());
+            x0 = x0.min(pad.at.0 - pad.size.0 / 2);
+            y0 = y0.min(pad.at.1 - pad.size.1 / 2);
+            x1 = x1.max(pad.at.0 + pad.size.0 / 2);
+            y1 = y1.max(pad.at.1 + pad.size.1 / 2);
         }
         // Compare like with like: a part may be rotated relative to the
         // land pattern, so match long-to-long and short-to-short rather
         // than width-to-width, which would flag every 90-degree part.
         let (pl, ps) = {
-            let (a, b) = ((x1 - x0) as f64, (y1 - y0) as f64);
+            let (a, b) = ((x1 - x0).as_f64(), (y1 - y0).as_f64());
             (a.max(b), a.min(b))
         };
         let (bl, bs) = {
-            let (a, b) = (bw.raw_shim() as f64, bh.raw_shim() as f64);
+            let (a, b) = (bw.as_f64(), bh.as_f64());
             (a.max(b), a.min(b))
         };
         let long = pl / bl;
@@ -762,7 +762,7 @@ mod pad_tests {
 
 #[cfg(test)]
 mod body_tests {
-    use eda_model::units::Nm;
+    use eda_model::units::mm;
     use eda_model::{ConstraintModel, Part};
 
     fn part(reference: &str, package: &str, body: Option<(eda_model::units::Nm, eda_model::units::Nm)>) -> Part {
@@ -789,12 +789,12 @@ mod body_tests {
     fn a_real_0603_on_an_0603_footprint_passes() {
         // Imperial 0603: 1.6 x 0.8 mm. This must not fire, or the gate
         // gets switched off and then it catches nothing.
-        assert!(fails(part("R1", "0603", Some((Nm::from_raw_shim(1_600_000), Nm::from_raw_shim(800_000))))).is_empty());
+        assert!(fails(part("R1", "0603", Some((mm(1.6), mm(0.8))))).is_empty());
     }
 
     #[test]
     fn a_real_0402_on_an_0402_footprint_passes() {
-        assert!(fails(part("C1", "0402", Some((Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(500_000))))).is_empty());
+        assert!(fails(part("C1", "0402", Some((mm(1.0), mm(0.5))))).is_empty());
     }
 
     #[test]
@@ -802,7 +802,7 @@ mod body_tests {
         // The classic: metric 0603 is 0.6 x 0.3 mm, which is imperial
         // 0201. Same string on the reel and in the library, parts 5x
         // apart, and every name-based check passes.
-        assert_eq!(fails(part("R1", "0603", Some((Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000))))), vec!["R1"]);
+        assert_eq!(fails(part("R1", "0603", Some((mm(0.6), mm(0.3))))), vec!["R1"]);
     }
 
     #[test]
@@ -810,7 +810,7 @@ mod body_tests {
         // L1's J1. Sixteen pins either way, so the pin-count gate passes
         // it; a USB-C receptacle body is nothing like a 16-way 2.54 mm
         // header, which spans about 40 mm.
-        assert_eq!(fails(part("J1", "PINHEADER-16", Some((Nm::from_raw_shim(9_000_000), Nm::from_raw_shim(7_300_000))))), vec!["J1"]);
+        assert_eq!(fails(part("J1", "PINHEADER-16", Some((mm(9.0), mm(7.3))))), vec!["J1"]);
     }
 
     #[test]
@@ -824,6 +824,6 @@ mod body_tests {
     fn a_rotated_part_is_not_flagged_for_being_rotated() {
         // Long-to-long, short-to-short: a part described 90 degrees from
         // its land pattern is the same component.
-        assert!(fails(part("R1", "0603", Some((Nm::from_raw_shim(800_000), Nm::from_raw_shim(1_600_000))))).is_empty());
+        assert!(fails(part("R1", "0603", Some((mm(0.8), mm(1.6))))).is_empty());
     }
 }

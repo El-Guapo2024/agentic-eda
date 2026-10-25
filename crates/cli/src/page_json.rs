@@ -22,7 +22,7 @@ pub(crate) fn title_block_json(tb: &TitleBlock) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
@@ -36,7 +36,7 @@ mod tests {
 
     #[test]
     fn a_user_paper_reports_the_size_it_was_given() {
-        let v = page_json(&PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((Nm::from_raw_shim(300_000_000), Nm::from_raw_shim(200_000_000))) });
+        let v = page_json(&PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((mm(300.0), mm(200.0))) });
         assert_eq!(v["size_nm"], json!([300_000_000, 200_000_000]));
         assert_eq!(v["user_size_nm"], json!([300_000_000, 200_000_000]));
     }

@@ -27,7 +27,7 @@
 //! and the `.PcbDoc` and `.SchDoc`s it lists. Either file of a pair brings the other, unless `--no-pair`. The board is the design's board; the schematic is put in with the same
 //! command the studio's File > Import > Non-KiCad Schematic uses (`Cmd::ReplaceSchematic`), so the nets the drawing says are the design's netlist.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use crate::import_foreign as foreign;
 use eda_kicad_engine::foreign::{ForeignImport, ForeignOptions, Kind};
 use eda_model::sheet_file::SheetFile;
@@ -48,8 +48,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 #[derive(serde::Serialize)]
 struct Meta {
     intent: String,
-    snap_nm: i64,
-    spacing_nm: i64,
+    snap_nm: Nm,
+    spacing_nm: Nm,
 }
 
 const USAGE: &str = "usage: eda import-kicad <board.kicad_pcb | schematic.kicad_sch | file of another EDA format> -o <dir> [--format NAME] [--kind board|schematic] [--layer-map FILE] [--keep-kicad-layer-names] [--report FILE|-] [--no-pair]";
@@ -282,7 +282,7 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     // `board::load` reads `meta.intent` as a plain path (no relativizing to the board dir), so it has to survive the board directory moving relative to the cwd it was
     // created from -- same as `eda board new`.
     let abs_intent = std::fs::canonicalize(&intent_path).unwrap_or(intent_path);
-    let meta = Meta { intent: abs_intent.display().to_string(), snap_nm: model.solver.place_snap_nm.raw_shim(), spacing_nm: model.solver.place_spacing_nm.raw_shim() };
+    let meta = Meta { intent: abs_intent.display().to_string(), snap_nm: model.solver.place_snap_nm, spacing_nm: model.solver.place_spacing_nm };
     std::fs::write(out.join("board.json"), serde_json::to_string_pretty(&meta).expect("meta encodes")).map_err(|e| fail("io", "board.json", e.to_string()))?;
 
     // The libraries kicad-cli made of the footprints and symbols it read, and the tables that name them, so "Update from Library" finds them from this folder.
@@ -399,7 +399,7 @@ fn empty_board() -> eda_model::ir::Design {
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
-        placement: Some(PlacementSection { outline: vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::from_raw_shim(100_000), Nm::ZERO), pt(Nm::from_raw_shim(100_000), Nm::from_raw_shim(80_000)), pt(Nm::ZERO, Nm::from_raw_shim(80_000))], footprints: vec![], modules: vec![] }),
+        placement: Some(PlacementSection { outline: vec![pt(Nm::ZERO, Nm::ZERO), pt(mm(100.0), Nm::ZERO), pt(mm(100.0), mm(80.0)), pt(Nm::ZERO, mm(80.0))], footprints: vec![], modules: vec![] }),
         routing: None,
         drawings: None,
         footprint_library: None,
@@ -440,6 +440,16 @@ mod tests {
     use super::*;
 
     /// A project that has library tables and variables of its own is imported with them: the libraries still resolve from the new board folder.
+    /// The board a schematic without one gets is the 100 by 80 mm of a new project, not the 0.1 by 0.08 mm the micrometre literals were left as by the move to
+    /// nanometres.
+    #[test]
+    fn a_schematic_without_a_board_gets_a_100_by_80_mm_outline() {
+        let d = empty_board();
+        let outline = &d.placement.as_ref().unwrap().outline;
+        let (x1, y1) = (outline.iter().map(|p| p.x).max().unwrap(), outline.iter().map(|p| p.y).max().unwrap());
+        assert_eq!((x1.mm(), y1.mm()), (100.0, 80.0));
+    }
+
     #[test]
     fn the_projects_library_tables_and_variables_come_along() {
         let root = std::env::temp_dir().join(format!("eda-import-setup-{}", std::process::id()));
@@ -539,8 +549,8 @@ mod tests {
         // The nets of the schematic reach the board's pads: the part U1 is on the board and on the sheet.
         assert!(model.part("U1").is_some() && model.nets.iter().any(|n| n.pins.iter().any(|p| p.starts_with("U1."))));
         // The design rules and the net classes Eagle's board has are in the project kicad-cli makes of it, not in the board file: the board is judged by them.
-        assert!(model.board.net_classes.iter().any(|c| c.name == "highpower" && c.track_width == Some(Nm::from_raw_shim(304_800))), "{:?}", model.board.net_classes.iter().map(|c| &c.name).collect::<Vec<_>>());
-        assert_eq!(model.board.min_clearance_nm, Nm::from_raw_shim(203_200), "Eagle's 8 mil minimum clearance");
+        assert!(model.board.net_classes.iter().any(|c| c.name == "highpower" && c.track_width == Some(Nm::new(304_800))), "{:?}", model.board.net_classes.iter().map(|c| &c.name).collect::<Vec<_>>());
+        assert_eq!(model.board.min_clearance_nm, Nm::new(203_200), "Eagle's 8 mil minimum clearance");
         assert!(out.join("fp-lib-table").is_file() && out.join("sym-lib-table").is_file(), "the tables that name the libraries");
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with("-import-fps.pretty")));
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".kicad_sym")));
@@ -576,7 +586,7 @@ mod tests {
         import(&args(&prj, &out, &[]));
         let (_, design, model) = crate::board::load(&out).expect("a board the studio opens");
         assert_eq!(design.placement.as_ref().unwrap().footprints.len(), 115);
-        assert_eq!(model.board.min_clearance_nm, Nm::from_raw_shim(101_600), "Altium's clearance rule (4 mil), from the project kicad-cli made with the board");
+        assert_eq!(model.board.min_clearance_nm, Nm::new(101_600), "Altium's clearance rule (4 mil), from the project kicad-cli made with the board");
         let root = design.schematic.as_ref().expect("a schematic");
         let names: Vec<(&str, &str)> = root.sheets.iter().map(|s| (s.name.as_str(), s.page.as_str())).collect();
         assert_eq!(names, vec![("it6251_core", "2"), ("power", "3")], "in the order the project lists them, from page 2");

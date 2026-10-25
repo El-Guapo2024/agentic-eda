@@ -205,7 +205,7 @@ pub(crate) fn rewrite_for_tests(cmd: &Cmd, design: &Design, model: &ConstraintMo
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
     use eda_model::ir::Point;
 
@@ -222,7 +222,7 @@ mod tests {
         (symbol "Plain" (property "Reference" "U") (property "Value" "Plain") (property "Datasheet" "~") (symbol "Plain_1_1" (pin input line (at 0 0 0) (length 1) (name "A") (number "1")))))"##;
 
     fn add(lib_id: &str, value: &str, footprint: &str) -> Cmd {
-        Cmd::AddSymbol { id: "U1".into(), lib_id: lib_id.into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, rot_millideg: 0, value: value.into(), footprint: footprint.into(), unit: 1 }
+        Cmd::AddSymbol { id: "U1".into(), lib_id: lib_id.into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot_millideg: 0, value: value.into(), footprint: footprint.into(), unit: 1 }
     }
 
     fn root_with_lm358(tag: &str) -> std::path::PathBuf {
@@ -323,9 +323,9 @@ mod tests {
         std::fs::create_dir_all(root.join("MountingHole.pretty")).unwrap();
         std::fs::write(root.join("MountingHole.pretty").join("MH.kicad_mod"), r#"(footprint "MH" (pad "" np_thru_hole circle (at 0 0) (size 3.2 3.2) (drill 3.2) (layers "*.Cu" "*.Mask")))"#).unwrap();
         let model = ConstraintModel::default();
-        let place = Cmd::PlaceFootprint { footprint: "MountingHole:MH".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, reference: String::new(), value: String::new(), definition: None };
+        let place = Cmd::PlaceFootprint { footprint: "MountingHole:MH".into(), at: Point { x: mm(1.0), y: mm(2.0) }, reference: String::new(), value: String::new(), definition: None };
         let Some(Cmd::PlaceFootprint { definition: Some(def), at, .. }) = rewrite(&place, &design(), &model, &root, &root) else { panic!("not rewritten") };
-        assert_eq!((def.name.as_str(), def.pads.len(), at), ("MountingHole:MH", 1, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }));
+        assert_eq!((def.name.as_str(), def.pads.len(), at), ("MountingHole:MH", 1, Point { x: mm(1.0), y: mm(2.0) }));
         // already carrying one, or not installed: left as it is
         let carrying = Cmd::PlaceFootprint { footprint: "MountingHole:MH".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, reference: String::new(), value: String::new(), definition: Some(def) };
         assert!(rewrite(&carrying, &design(), &model, &root, &root).is_none());

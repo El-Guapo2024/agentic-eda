@@ -18,6 +18,7 @@
 
 use super::{cli_version, fail, need_cli, run_report, with_scratch, work_dir, write_file, Violation};
 use eda_model::ir::{LibraryFootprint, Shape, Nm};
+use eda_model::units::mm;
 use eda_model::CheckResult;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -62,8 +63,8 @@ fn uuid_of(n: usize) -> String {
 }
 
 /// Millimetres as KiCad's files write them.
-fn mm(nm: Nm) -> String {
-    let s = format!("{:.6}", nm.raw_shim() as f64 / 1e6);
+fn mm_text(nm: Nm) -> String {
+    let s = format!("{:.6}", nm.mm());
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() || s == "-" || s == "-0" {
         "0".to_string()
@@ -179,7 +180,7 @@ fn shape_extent(s: &Shape) -> Nm {
 fn reach(fp: &LibraryFootprint) -> Nm {
     let pads = fp.pads.iter().map(|p| p.at.x.abs().max(p.at.y.abs()) + p.size.0.max(p.size.1) + p.offset.x.abs().max(p.offset.y.abs()));
     let graphics = fp.graphics.iter().map(shape_extent);
-    let texts = fp.texts.iter().map(|t| t.at.x.abs().max(t.at.y.abs()) + t.size_nm * (Nm::from_raw_shim(t.content.chars().count() as i64) + Nm::from_raw_shim(1)).raw_shim());
+    let texts = fp.texts.iter().map(|t| t.at.x.abs().max(t.at.y.abs()) + t.size_nm * (t.content.chars().count() as i64 + 1));
     pads.chain(graphics).chain(texts).max().unwrap_or(Nm::ZERO)
 }
 
@@ -259,7 +260,7 @@ pub fn scratch_board(fp: &LibraryFootprint) -> Scratch {
     // The Footprint Editor's footprint carries the Reference `REF**`; here it is hidden, so that what the checks say of the footprint names it and no text of its own lands on a pad.
     body.insert_str(0, &format!("\t\t(property \"Reference\" \"REF**\" (at 0 0 0) (layer \"F.SilkS\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n", uuid_of(next)));
     next += 1;
-    let r = reach(fp) + Nm::from_raw_shim(10_000_000);
+    let r = reach(fp) + mm(10.0);
     let mut pcb = String::from("(kicad_pcb\n\t(version 20241229)\n\t(generator \"eda-kicad\")\n\t(generator_version \"9.0\")\n\t(general\n\t\t(thickness 1.6)\n\t\t(legacy_teardrops no)\n\t)\n\t(paper \"A3\")\n");
     pcb.push_str(LAYERS);
     pcb.push_str("\t(setup\n\t\t(pad_to_mask_clearance 0)\n\t)\n\t(net 0 \"\")\n");
@@ -269,10 +270,10 @@ pub fn scratch_board(fp: &LibraryFootprint) -> Scratch {
     pcb.push_str(&format!("\t(footprint {name}\n\t\t(layer \"F.Cu\")\n\t\t(uuid \"{}\")\n\t\t(at 0 0)\n{body}\t)\n", uuid_of(0)));
     pcb.push_str(&format!(
         "\t(gr_rect (start {} {}) (end {} {}) (stroke (width 0.05) (type default)) (fill no) (layer \"Edge.Cuts\") (uuid \"{}\"))\n)\n",
-        mm(-r),
-        mm(-r),
-        mm(r),
-        mm(r),
+        mm_text(-r),
+        mm_text(-r),
+        mm_text(r),
+        mm_text(r),
         uuid_of(next)
     ));
     Scratch { pcb, project: project_text(), ids }
@@ -292,8 +293,8 @@ pub struct FootprintCheck {
 pub fn marker_at(v: &Violation) -> (Nm, Nm) {
     match v.items.as_slice() {
         [] => (Nm::ZERO, Nm::ZERO),
-        [a] => (Nm::from_raw_shim(a.pos.0), Nm::from_raw_shim(a.pos.1)),
-        [a, b, ..] => (Nm::from_raw_shim((a.pos.0 + b.pos.0) / 2), Nm::from_raw_shim((a.pos.1 + b.pos.1) / 2)),
+        [a] => (Nm::new(a.pos.0), Nm::new(a.pos.1)),
+        [a, b, ..] => (Nm::new((a.pos.0 + b.pos.0) / 2), Nm::new((a.pos.1 + b.pos.1) / 2)),
     }
 }
 
@@ -360,7 +361,7 @@ mod tests {
             id: id.into(),
             number: number.into(),
             at: Point { x, y },
-            size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)),
+            size: (mm(1.0), mm(1.0)),
             offset: Point { x: Nm::ZERO, y: Nm::ZERO },
             shape: LibraryPadShape::Rect,
             kind,
@@ -388,13 +389,13 @@ mod tests {
     }
 
     fn line(id: &str, layer: &str, a: (Nm, Nm), b: (Nm, Nm)) -> Shape {
-        Shape::Segment { id: id.into(), layer: layer.into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
+        Shape::Segment { id: id.into(), layer: layer.into(), stroke_width: mm(0.05), filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
     }
 
     #[test]
     fn the_scratch_board_has_the_footprint_a_net_per_pad_number_and_an_outline() {
-        let mut fp = footprint(vec![pad("p1", "1", Nm::from_raw_shim(-1_000_000), Nm::ZERO, PadKind::Smd, None), pad("p2", "2", Nm::from_raw_shim(1_000_000), Nm::ZERO, PadKind::Smd, None), pad("p3", "2", Nm::from_raw_shim(3_000_000), Nm::ZERO, PadKind::Smd, None), pad("p4", "", Nm::from_raw_shim(5_000_000), Nm::ZERO, PadKind::NonPlatedHole, Some(Nm::from_raw_shim(800_000)))]);
-        fp.graphics = vec![line("g1", "F.CrtYd", (Nm::from_raw_shim(-2_000_000), Nm::from_raw_shim(-1_000_000)), (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(-1_000_000)))];
+        let mut fp = footprint(vec![pad("p1", "1", mm(-1.0), Nm::ZERO, PadKind::Smd, None), pad("p2", "2", mm(1.0), Nm::ZERO, PadKind::Smd, None), pad("p3", "2", mm(3.0), Nm::ZERO, PadKind::Smd, None), pad("p4", "", mm(5.0), Nm::ZERO, PadKind::NonPlatedHole, Some(mm(0.8)))]);
+        fp.graphics = vec![line("g1", "F.CrtYd", (mm(-2.0), mm(-1.0)), (mm(2.0), mm(-1.0)))];
         let s = scratch_board(&fp);
         assert!(s.pcb.starts_with("(kicad_pcb\n"), "{}", &s.pcb[..40]);
         assert!(s.pcb.contains("(net 1 \"1\")") && s.pcb.contains("(net 2 \"2\")") && !s.pcb.contains("(net 3 "), "one net per pad number");
@@ -435,13 +436,13 @@ mod tests {
 
     #[test]
     fn marker_positions_follow_the_items() {
-        let item = |x: Nm, y: Nm| super::super::Item { description: "d".into(), pos: (x.raw_shim(), y.raw_shim()), id: None, uuid: String::new() };
+        let item = |x: Nm, y: Nm| super::super::Item { description: "d".into(), pos: (x.get(), y.get()), id: None, uuid: String::new() };
         let mut v = Violation { kind: "shorting_items".into(), ..Default::default() };
         assert_eq!(marker_at(&v), (Nm::ZERO, Nm::ZERO));
-        v.items = vec![item(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000))];
-        assert_eq!(marker_at(&v), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000)));
-        v.items = vec![item(Nm::ZERO, Nm::ZERO), item(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000))];
-        assert_eq!(marker_at(&v), (Nm::from_raw_shim(500_000), Nm::from_raw_shim(1_000_000)));
+        v.items = vec![item(mm(1.0), mm(2.0))];
+        assert_eq!(marker_at(&v), (mm(1.0), mm(2.0)));
+        v.items = vec![item(Nm::ZERO, Nm::ZERO), item(mm(1.0), mm(2.0))];
+        assert_eq!(marker_at(&v), (mm(0.5), mm(1.0)));
     }
 
     /// kicad-cli on the scratch board: each defect the footprint checker finds is found, a clean footprint has none, and what the checker reports is what the
@@ -458,7 +459,7 @@ mod tests {
             eprintln!("skipped: kicad-cli not found");
             return;
         }
-        let courtyard = |layer: &str| vec![line("c1", layer, (Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(-2_000_000)), (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(-2_000_000))), line("c2", layer, (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(-2_000_000)), (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(2_000_000))), line("c3", layer, (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(2_000_000)), (Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(2_000_000))), line("c4", layer, (Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(2_000_000)), (Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(-2_000_000)))];
+        let courtyard = |layer: &str| vec![line("c1", layer, (mm(-3.0), mm(-2.0)), (mm(3.0), mm(-2.0))), line("c2", layer, (mm(3.0), mm(-2.0)), (mm(3.0), mm(2.0))), line("c3", layer, (mm(3.0), mm(2.0)), (mm(-3.0), mm(2.0))), line("c4", layer, (mm(-3.0), mm(2.0)), (mm(-3.0), mm(-2.0)))];
         let kinds = |c: &FootprintCheck| -> Vec<String> {
             let mut k: Vec<String> = c.violations.iter().map(|v| v.kind.clone()).collect();
             k.sort();
@@ -467,7 +468,7 @@ mod tests {
         };
 
         // a clean footprint: two SMD pads apart, a closed courtyard
-        let mut clean = footprint(vec![pad("p1", "1", Nm::from_raw_shim(-1_500_000), Nm::ZERO, PadKind::Smd, None), pad("p2", "2", Nm::from_raw_shim(1_500_000), Nm::ZERO, PadKind::Smd, None)]);
+        let mut clean = footprint(vec![pad("p1", "1", mm(-1.5), Nm::ZERO, PadKind::Smd, None), pad("p2", "2", mm(1.5), Nm::ZERO, PadKind::Smd, None)]);
         clean.graphics = courtyard("F.CrtYd");
         clean.attributes.smd = true;
         let c = footprint_check(&clean).expect("kicad-cli runs");
@@ -491,7 +492,7 @@ mod tests {
 
         // two pads of different numbers that overlap are shorting items, with the editor's ids on the items
         let mut touching = clean.clone();
-        touching.pads[1].at = Point { x: Nm::from_raw_shim(-1_000_000), y: Nm::ZERO };
+        touching.pads[1].at = Point { x: mm(-1.0), y: Nm::ZERO };
         let c = footprint_check(&touching).unwrap();
         assert_eq!(kinds(&c), ["shorting_items"], "{:?}", c.violations.iter().map(|v| (&v.kind, &v.description)).collect::<Vec<_>>());
         let mut ids: Vec<_> = c.violations[0].items.iter().filter_map(|i| i.id.clone()).collect();
@@ -513,7 +514,7 @@ mod tests {
         assert!(c.violations.iter().all(|v| v.severity == "error"));
 
         // a footprint marked SMD that has through-hole pads: the type mismatch, a warning
-        let mut mismatch = footprint(vec![pad("p1", "1", Nm::from_raw_shim(-1_500_000), Nm::ZERO, PadKind::ThroughHole, Some(Nm::from_raw_shim(600_000))), pad("p2", "2", Nm::from_raw_shim(1_500_000), Nm::ZERO, PadKind::ThroughHole, Some(Nm::from_raw_shim(600_000)))]);
+        let mut mismatch = footprint(vec![pad("p1", "1", mm(-1.5), Nm::ZERO, PadKind::ThroughHole, Some(mm(0.6))), pad("p2", "2", mm(1.5), Nm::ZERO, PadKind::ThroughHole, Some(mm(0.6)))]);
         mismatch.graphics = courtyard("F.CrtYd");
         mismatch.attributes.smd = true;
         let c = footprint_check(&mismatch).unwrap();
@@ -521,16 +522,16 @@ mod tests {
         assert_eq!(c.violations[0].severity, "warning");
 
         // two drilled holes at the same place
-        let mut colocated = footprint(vec![pad("p1", "1", Nm::ZERO, Nm::ZERO, PadKind::ThroughHole, Some(Nm::from_raw_shim(600_000))), pad("p2", "1", Nm::ZERO, Nm::ZERO, PadKind::ThroughHole, Some(Nm::from_raw_shim(600_000)))]);
+        let mut colocated = footprint(vec![pad("p1", "1", Nm::ZERO, Nm::ZERO, PadKind::ThroughHole, Some(mm(0.6))), pad("p2", "1", Nm::ZERO, Nm::ZERO, PadKind::ThroughHole, Some(mm(0.6)))]);
         colocated.graphics = courtyard("F.CrtYd");
         colocated.attributes.through_hole = true;
         let c = footprint_check(&colocated).unwrap();
         assert!(kinds(&c).contains(&"holes_co_located".to_string()), "{:?}", c.violations.iter().map(|v| (&v.kind, &v.description)).collect::<Vec<_>>());
         // holes that are close but do not overlap are not a finding (the board's 0.25 mm does not apply)
-        colocated.pads[1].at = Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO };
+        colocated.pads[1].at = Point { x: mm(1.0), y: Nm::ZERO };
         colocated.pads[1].number = "2".into();
-        colocated.pads[1].size = (Nm::from_raw_shim(400_000), Nm::from_raw_shim(400_000));
-        colocated.pads[0].size = (Nm::from_raw_shim(400_000), Nm::from_raw_shim(400_000));
+        colocated.pads[1].size = (mm(0.4), mm(0.4));
+        colocated.pads[0].size = (mm(0.4), mm(0.4));
         let c = footprint_check(&colocated).unwrap();
         assert!(!kinds(&c).contains(&"hole_to_hole".to_string()), "{:?}", c.violations.iter().map(|v| (&v.kind, &v.description)).collect::<Vec<_>>());
 

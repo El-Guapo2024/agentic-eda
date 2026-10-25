@@ -23,7 +23,7 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
     let ids: Vec<String> = req.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     // Read field by field: this build's `serde_json` keeps numbers arbitrary-precision (starlark turns it on), which a derived
     // reader of a tagged type cannot take.
-    let reference = req.get("reference").filter(|r| r.is_object()).map(|r| Point { x: Nm::from_raw_shim(r.get("x").and_then(Value::as_i64).unwrap_or(0)), y: Nm::from_raw_shim(r.get("y").and_then(Value::as_i64).unwrap_or(0)) }).unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
+    let reference = req.get("reference").filter(|r| r.is_object()).map(|r| Point { x: Nm::new(r.get("x").and_then(Value::as_i64).unwrap_or(0)), y: Nm::new(r.get("y").and_then(Value::as_i64).unwrap_or(0)) }).unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
     let (_, design, model) = match board::load(dir) {
         Ok(t) => t,
         Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),

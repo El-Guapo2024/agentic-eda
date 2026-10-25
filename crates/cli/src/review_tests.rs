@@ -1,7 +1,7 @@
 //! The review workflow through a board directory (GAPS.md package P15): an ERC exclusion with a comment reaches the derived project and kicad-cli's ERC report,
 //! and an excluded marker that was deleted stays deleted when kicad-cli runs again.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use super::tests::{scratch, setup};
 use super::{derived_schematic, load, save, step, undo};
 use eda_model::ir::ErcMarker;
@@ -93,7 +93,7 @@ fn an_erc_exclusion_with_a_comment_reaches_kicad_cli_and_a_deleted_marker_stays_
     let marker = marker_of(&u1);
     assert_eq!(marker.error_type, "ERCET_FOOTPRINT_LINK_ISSUES");
     assert!(marker.sheet.is_empty() && marker.main_sheet.is_empty(), "a symbol's footprint link has no sheet in its marker: {marker:?}");
-    assert!(marker.at_nm[0] > Nm::from_raw_shim(1_000_000), "the position is in nanometres, as kicad-cli's report says millimetres: {marker:?}");
+    assert!(marker.at_nm[0] > mm(1.0), "the position is in nanometres, as kicad-cli's report says millimetres: {marker:?}");
     let (n, warnings) = (listed(&first), first["counts"]["footprint_link_issues"].as_u64().unwrap());
     assert!(warnings >= 2, "{first:#}");
 
@@ -150,7 +150,7 @@ fn an_exclusion_whose_marker_matches_nothing_does_not_add_a_finding() {
     let mut marker = marker_of(&finding(&first, "footprint_link_issues", "U1"));
     let n = listed(&first);
     // The right item, a position it is not at.
-    marker.at_nm[0] = Nm::from_raw_shim(1);
+    marker.at_nm[0] = Nm::new(1);
     step(&dir, add("footprint_link_issues", "U1", "moved since", Some(marker)), false, "ui").unwrap();
 
     let after = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
@@ -164,7 +164,7 @@ fn an_exclusion_whose_marker_matches_nothing_does_not_add_a_finding() {
 #[test]
 fn an_erc_exclusion_is_one_undo_step_and_its_marker_is_in_the_derived_project() {
     let dir = board_with_schematic("review_erc_undo");
-    let marker = ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [Nm::from_raw_shim(113_030_000), Nm::from_raw_shim(100_330_000)], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() };
+    let marker = ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [mm(113.03), mm(100.33)], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() };
     step(&dir, add("footprint_link_issues", "U1", "why", Some(marker.clone())), false, "ui").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     let pro: Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap();

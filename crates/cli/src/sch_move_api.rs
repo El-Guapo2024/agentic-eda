@@ -4,7 +4,6 @@
 //! (`SchMovePatch`, `web/studio/src/api/schEditTypes.ts`). Nothing is written, no history is kept, no checks run: the preview and the
 //! commit are one code path (`eda_ops::Board::apply`), so the wire that is shown with a bend is the wire that is committed with it.
 
-use eda_model::units::Nm;
 use crate::board;
 use eda_model::ir::SchematicSection;
 use eda_model::CheckResult;
@@ -34,7 +33,7 @@ fn preview(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         design.schematic = derived.schematic;
         design.sheet_contents = derived.sheet_contents;
     }
-    let mut b = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
+    let mut b = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     for cmd in cmds {
         let cmd = if sheet.is_empty() { cmd } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(cmd) } };
         b.apply(&cmd)?;

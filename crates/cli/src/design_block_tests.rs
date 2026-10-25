@@ -2,7 +2,7 @@
 //! the board or a selection of it, placing a block (the schematic's Import Sheet, the board's Place Design Block) as one undo step, Properties and Delete -- and (the slow
 //! tier, `EDA_SLOW_TESTS=1`) what kicad-cli makes of the blocks this studio writes, and of a block made from one of KiCad's own templates.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use super::tests::{scratch, setup};
 use super::{load, meta_path, save, step, undo, Meta};
 use crate::design_block_api as api;
@@ -41,7 +41,7 @@ fn mcu30_flat(dir: &Path) {
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     save(dir, &design).unwrap();
-    let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+    let meta = Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
     std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 }
 
@@ -153,7 +153,7 @@ fn a_board_saved_as_a_block_is_placed_as_a_linked_group_in_one_undo_step() {
     let file = api::file_with(&env, &dir, "Power", "TwoParts", "pcb");
     assert_eq!(file["ok"], true, "{file}");
     let (_, before, model_before) = load(&dir).unwrap();
-    let placed = Cmd::PlaceDesignBlock { text: file["text"].as_str().unwrap().to_string(), at: Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, block: "Power:TwoParts".into(), as_group: true, group_name: String::new() };
+    let placed = Cmd::PlaceDesignBlock { text: file["text"].as_str().unwrap().to_string(), at: Point { x: mm(30.0), y: mm(20.0) }, block: "Power:TwoParts".into(), as_group: true, group_name: String::new() };
     step(&dir, placed, false, "test").unwrap();
     let (_, after, model_after) = load(&dir).unwrap();
     assert_eq!(after.placement.as_ref().unwrap().footprints.len(), before.placement.as_ref().unwrap().footprints.len() + 2, "the block's two footprints are on the board");
@@ -194,7 +194,7 @@ fn a_block_on_more_copper_layers_grows_the_board_and_brings_its_nets() {
     let text = FOUR_LAYER_BLOCK;
     let (_, _, model_before) = load(&dir).unwrap();
     assert_eq!(model_before.board.layers.len(), 2);
-    let placed = Cmd::PlaceDesignBlock { text: text.to_string(), at: Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, block: "Power:Four".into(), as_group: true, group_name: String::new() };
+    let placed = Cmd::PlaceDesignBlock { text: text.to_string(), at: Point { x: mm(30.0), y: mm(20.0) }, block: "Power:Four".into(), as_group: true, group_name: String::new() };
     step(&dir, placed, false, "test").unwrap();
     let (_, after, model) = load(&dir).unwrap();
     assert_eq!(model.board.layers, ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
@@ -220,7 +220,7 @@ fn kicad_cli_reads_the_board_a_four_layer_block_grew() {
     }
     let dir = super::tests::scratch("db_grow_cli");
     setup(&dir);
-    let placed = Cmd::PlaceDesignBlock { text: FOUR_LAYER_BLOCK.to_string(), at: Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, block: "Power:Four".into(), as_group: true, group_name: String::new() };
+    let placed = Cmd::PlaceDesignBlock { text: FOUR_LAYER_BLOCK.to_string(), at: Point { x: mm(30.0), y: mm(20.0) }, block: "Power:Four".into(), as_group: true, group_name: String::new() };
     step(&dir, placed, false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-24", title: "grow" }).unwrap();
@@ -344,7 +344,7 @@ fn a_selection_of_the_sheet_saved_as_a_block_is_grouped_and_linked_and_placed_ag
         as_sheet: false,
         name: String::new(),
         file: String::new(),
-        at: Point { x: Nm::from_raw_shim(250_000_000), y: Nm::from_raw_shim(40_000_000) },
+        at: Point { x: mm(250.0), y: mm(40.0) },
         size: (Nm::ZERO, Nm::ZERO),
         keep_annotations: false,
         order: eda_ops::AnnotateOrder::XThenY,
@@ -381,7 +381,7 @@ fn a_sheet_saved_as_a_block_is_the_sheets_file_and_a_sheet_with_sheets_in_it_is_
     // no group is made for a sheet, and nothing on the sheet changed
     assert!(groups_of(&dir).is_empty());
     // a sheet that places sheets cannot be a block ("Design blocks with nested sheets are not supported.")
-    step(&dir, Cmd::AddSheet { name: "Sub".into(), file: "sub.kicad_sch".into(), at: Point { x: Nm::from_raw_shim(250_000_000), y: Nm::from_raw_shim(40_000_000) }, size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000)) }, false, "test").unwrap();
+    step(&dir, Cmd::AddSheet { name: "Sub".into(), file: "sub.kicad_sch".into(), at: Point { x: mm(250.0), y: mm(40.0) }, size: (mm(40.0), mm(20.0)) }, false, "test").unwrap();
     let nested = api::prepare_with(&env, &dir, &req(json!({ "what": "sheet", "sheet": "", "lib": "Power" })));
     assert_eq!(nested["message"], "Design blocks with nested sheets are not supported.");
     let nested = api::save_with(&env, &dir, &req(json!({ "what": "sheet", "sheet": "", "lib": "Power", "name": "Nested" })));
@@ -412,8 +412,8 @@ fn a_block_placed_as_a_sheet_is_a_sheet_of_its_own_in_a_linked_group() {
         as_sheet: true,
         name: "Trio".into(),
         file: "trio.kicad_sch".into(),
-        at: Point { x: Nm::from_raw_shim(250_000_000), y: Nm::from_raw_shim(40_000_000) },
-        size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000)),
+        at: Point { x: mm(250.0), y: mm(40.0) },
+        size: (mm(40.0), mm(20.0)),
         keep_annotations: false,
         order: eda_ops::AnnotateOrder::XThenY,
         options: Default::default(),
@@ -548,7 +548,7 @@ fn a_block_made_from_one_of_kicads_own_templates_places_with_its_parts_and_nets(
         as_sheet: false,
         name: String::new(),
         file: String::new(),
-        at: Point { x: Nm::from_raw_shim(250_000_000), y: Nm::from_raw_shim(40_000_000) },
+        at: Point { x: mm(250.0), y: mm(40.0) },
         size: (Nm::ZERO, Nm::ZERO),
         keep_annotations: false,
         order: eda_ops::AnnotateOrder::XThenY,
@@ -581,7 +581,7 @@ fn a_block_made_from_one_of_kicads_own_templates_places_with_its_parts_and_nets(
     let file = api::file_with(&env2, &m2.board, "Power", "Nano", "pcb");
     assert_eq!(file["ok"], true, "{file}");
     let (_, board_before, _) = load(&m2.board).unwrap();
-    let cmd = Cmd::PlaceDesignBlock { text: file["text"].as_str().unwrap().to_string(), at: Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(60_000_000) }, block: "Power:Nano".into(), as_group: true, group_name: String::new() };
+    let cmd = Cmd::PlaceDesignBlock { text: file["text"].as_str().unwrap().to_string(), at: Point { x: mm(100.0), y: mm(60.0) }, block: "Power:Nano".into(), as_group: true, group_name: String::new() };
     step(&m2.board, cmd, false, "test").unwrap();
     let (_, board_after, model2) = load(&m2.board).unwrap();
     let added = board_after.placement.as_ref().unwrap().footprints.len() - board_before.placement.as_ref().unwrap().footprints.len();

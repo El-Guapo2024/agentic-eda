@@ -1,7 +1,7 @@
 //! The library editors' leftovers (GAPS.md package P17, items 19 and 22) through a board directory: what an array of pads writes into the project and into the derived
 //! `.kicad_mod`, and (the slow tier, `EDA_SLOW_TESTS=1`) what kicad-cli makes of the files this studio writes.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use super::tests::{scratch, setup};
 use super::{load, step, undo};
 use eda_model::ir::{Point, Shape};
@@ -28,14 +28,14 @@ fn slow() -> bool {
     !off
 }
 
-fn library_pad(number: &str, x: i64, y: i64) -> eda_model::ir::LibraryPad {
+fn library_pad(number: &str, x: Nm, y: Nm) -> eda_model::ir::LibraryPad {
     use eda_model::footprint::PadKind;
     use eda_model::ir::{ChamferCorners, LibraryPadShape};
     eda_model::ir::LibraryPad {
         id: String::new(),
         number: number.into(),
-        at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) },
-        size: (Nm::from_raw_shim(900_000), Nm::from_raw_shim(600_000)),
+        at: Point { x, y },
+        size: (mm(0.9), mm(0.6)),
         offset: Point::default(),
         shape: LibraryPadShape::RoundRect,
         kind: PadKind::Smd,
@@ -63,7 +63,7 @@ fn library_pad(number: &str, x: i64, y: i64) -> eda_model::ir::LibraryPad {
 fn bga_in(dir: &Path) -> String {
     let name = "Test:BGA_3x4";
     step(dir, Cmd::NewFootprint { name: name.into() }, false, "test").unwrap();
-    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("X", 0, 0) }, false, "test").unwrap();
+    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("X", Nm::ZERO, Nm::ZERO) }, false, "test").unwrap();
     let (_, design, _) = load(dir).unwrap();
     let id = design.footprint_library.as_ref().unwrap().by_name(name).unwrap().pads[0].id.clone();
     let numbering = PadNumbering {
@@ -72,11 +72,11 @@ fn bga_in(dir: &Path) -> String {
         primary: AxisSpec { kind: NumberingType::AlphaNoIosqxz, start: "A".into(), step: 1 },
         secondary: AxisSpec { kind: NumberingType::Numeric, start: "1".into(), step: 1 },
     };
-    let geometry = ArrayGeometry::Grid { nx: 3, ny: 4, dx: Nm::from_raw_shim(800_000), dy: Nm::from_raw_shim(800_000), offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: true, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+    let geometry = ArrayGeometry::Grid { nx: 3, ny: 4, dx: mm(0.8), dy: mm(0.8), offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: true, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
     step(dir, Cmd::CreateFootprintArray { footprint: name.into(), ids: vec![id], geometry, arrange: false, numbering: Some(numbering) }, false, "test").unwrap();
     step(
         dir,
-        Cmd::AddFootprintGraphic { footprint: name.into(), shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(120_000), filled: false, start: Point { x: Nm::from_raw_shim(-1_500_000), y: Nm::from_raw_shim(-1_700_000) }, end: Point { x: Nm::from_raw_shim(-900_000), y: Nm::from_raw_shim(-2_300_000) } } },
+        Cmd::AddFootprintGraphic { footprint: name.into(), shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.12), filled: false, start: Point { x: mm(-1.5), y: mm(-1.7) }, end: Point { x: mm(-0.9), y: mm(-2.3) } } },
         false,
         "test",
     )
@@ -96,7 +96,7 @@ fn an_array_of_pads_is_one_undo_step_of_the_footprint_editor_and_reaches_the_der
     assert_eq!(numbers, ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4"]);
     let a1 = fp.pads.iter().find(|p| p.number == "A1").unwrap();
     let c4 = fp.pads.iter().find(|p| p.number == "C4").unwrap();
-    assert_eq!((a1.at.x, a1.at.y, c4.at.x, c4.at.y), (Nm::from_raw_shim(-800_000), Nm::from_raw_shim(-1_200_000), Nm::from_raw_shim(800_000), Nm::from_raw_shim(1_200_000)), "centred on the source pad: the 3 x 4 grid is 1.6 mm by 2.4 mm across");
+    assert_eq!((a1.at.x, a1.at.y, c4.at.x, c4.at.y), (mm(-0.8), mm(-1.2), mm(0.8), mm(1.2)), "centred on the source pad: the 3 x 4 grid is 1.6 mm by 2.4 mm across");
 
     // what the file the studio exports says: a pad per point, with its number
     let text = eda_kicad::export_kicad_mod(fp);
@@ -176,11 +176,11 @@ fn footprint_with_fields_in(dir: &Path) -> String {
     use eda_model::ir::FootprintField;
     let name = "Test:Fielded";
     step(dir, Cmd::NewFootprint { name: name.into() }, false, "test").unwrap();
-    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("1", 0, 0) }, false, "test").unwrap();
-    let mut reference = FieldLayout::new(Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(-2_500_000) }, "F.Fab");
-    reference.size = (Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(1_000_000));
+    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("1", Nm::ZERO, Nm::ZERO) }, false, "test").unwrap();
+    let mut reference = FieldLayout::new(Point { x: mm(0.5), y: mm(-2.5) }, "F.Fab");
+    reference.size = (mm(1.2), mm(1.0));
     reference.text = Some("J**".into());
-    let mut mpn = FieldLayout::new(Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(3_000_000) }, "F.Fab");
+    let mut mpn = FieldLayout::new(Point { x: mm(1.5), y: mm(3.0) }, "F.Fab");
     mpn.bold = true;
     mpn.halign = -1;
     step(
@@ -196,7 +196,7 @@ fn footprint_with_fields_in(dir: &Path) -> String {
             models3d: None,
             zone_connection: None,
             reference: Some(reference),
-            value: Some(FieldLayout::new(Point { x: Nm::ZERO, y: Nm::from_raw_shim(2_200_000) }, "F.Fab")),
+            value: Some(FieldLayout::new(Point { x: Nm::ZERO, y: mm(2.2) }, "F.Fab")),
             fields: Some(vec![
                 FootprintField { name: "MPN".into(), value: "ABC-1".into(), visible: true, layout: Some(mpn) },
                 FootprintField { name: "Vendor".into(), value: "ACME".into(), visible: false, layout: None },

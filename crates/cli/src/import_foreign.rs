@@ -176,8 +176,8 @@ pub(crate) fn top_level_siblings(import: &ForeignImport, first: &SheetFile) -> V
 /// looks for "an existing screen" of the same name), and the screens inside each file are filed under names that cannot meet another file's.
 pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
     // 1000 mil, in nanometres, and the default size of a sheet symbol (`MIN_SHEET_WIDTH`, `MIN_SHEET_HEIGHT`: 500 and 150 mil)
-    const GRID: i64 = 25_400_000;
-    const SHEET: (Nm, Nm) = (Nm::from_raw_shim(12_700_000), Nm::from_raw_shim(3_810_000));
+    const GRID: Nm = Nm::new(25_400_000);
+    const SHEET: (Nm, Nm) = (Nm::new(12_700_000), Nm::new(3_810_000));
     let mut root = SchematicSection { imported_from_kicad: true, ..Default::default() };
     let mut screens: BTreeMap<String, SchematicSection> = BTreeMap::new();
     let mut lib_symbols: Vec<eda_model::ir::LibrarySymbol> = Vec::new();
@@ -214,7 +214,7 @@ pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
             screens.insert(renamed(&f), sec);
         }
         screens.insert(key.clone(), top);
-        root.sheets.push(SheetInstance { id: String::new(), name: sheet_name, file: key, at: Point { x: Nm::from_raw_shim(x * GRID), y: Nm::from_raw_shim(y * GRID) }, size: SHEET, pins: vec![], page: page.to_string() });
+        root.sheets.push(SheetInstance { id: String::new(), name: sheet_name, file: key, at: Point { x: GRID * x, y: GRID * y }, size: SHEET, pins: vec![], page: page.to_string() });
         page += 1;
         x += 2;
         if x > 10 {
@@ -292,7 +292,7 @@ pub(crate) fn prepare_board(cmd: &Cmd, dir: &Path) -> Result<(), Vec<CheckResult
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
     use eda_model::ir::{LabelShape, NetLabel};
 
@@ -362,7 +362,7 @@ mod tests {
         root.labels.push(NetLabel { id: String::new(), net: "VCC".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, kind: label_kind });
         let mut screens = BTreeMap::new();
         if let Some(inner) = inner {
-            root.sheets.push(SheetInstance { id: String::new(), name: "Inner".into(), file: inner.into(), at: Point { x: Nm::from_raw_shim(1), y: Nm::from_raw_shim(1) }, size: (Nm::from_raw_shim(1), Nm::from_raw_shim(1)), pins: vec![], page: String::new() });
+            root.sheets.push(SheetInstance { id: String::new(), name: "Inner".into(), file: inner.into(), at: Point { x: Nm::new(1), y: Nm::new(1) }, size: (Nm::new(1), Nm::new(1)), pins: vec![], page: String::new() });
             screens.insert(inner.to_string(), SchematicSection { imported_from_kicad: true, ..Default::default() });
         }
         SheetFile { root, screens, lib_symbols: vec![], notes: vec![], ..Default::default() }
@@ -376,13 +376,13 @@ mod tests {
         assert_eq!(
             placed,
             vec![
-                ("Top", "Top.kicad_sch", Point { x: Nm::from_raw_shim(25_400_000), y: Nm::from_raw_shim(25_400_000) }, "2"),
-                ("Power", "Power.kicad_sch", Point { x: Nm::from_raw_shim(76_200_000), y: Nm::from_raw_shim(25_400_000) }, "3"),
-                ("Top_1", "Top_1.kicad_sch", Point { x: Nm::from_raw_shim(127_000_000), y: Nm::from_raw_shim(25_400_000) }, "4"),
+                ("Top", "Top.kicad_sch", Point { x: mm(25.4), y: mm(25.4) }, "2"),
+                ("Power", "Power.kicad_sch", Point { x: mm(76.2), y: mm(25.4) }, "3"),
+                ("Top_1", "Top_1.kicad_sch", Point { x: mm(127.0), y: mm(25.4) }, "4"),
             ],
             "1000 mil, two apart, pages from 2, a name taken gets _1"
         );
-        assert!(all.root.sheets.iter().all(|s| s.size == (Nm::from_raw_shim(12_700_000), Nm::from_raw_shim(3_810_000))), "500 by 150 mil");
+        assert!(all.root.sheets.iter().all(|s| s.size == (mm(12.7), mm(3.81))), "500 by 150 mil");
         let top = &all.screens["Top.kicad_sch"];
         assert!(matches!(top.labels[0].kind, LabelKind::Global { .. }), "a top-level sheet has no parent: its hierarchical labels are global");
         assert!(matches!(all.screens["Top_1.kicad_sch"].labels[0].kind, LabelKind::Local), "a local label stays");
@@ -427,8 +427,8 @@ mod tests {
         use eda_model::ir::{FootprintInstance, PlacementSection, Provenance, Side};
         use eda_model::{ConstraintModel, Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
         let dir = scratch(&format!("board_{tag}"));
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "HDR".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: Some((Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(1_500_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, x: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "HDR".into(), pads: vec![pad("1", mm(-0.8)), pad("2", mm(0.8))], courtyard: Some((mm(3.0), mm(1.5))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "J9".into(),
             mpn: None,
@@ -456,7 +456,7 @@ mod tests {
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
-            placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(100_000_000), Nm::ZERO), p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(100_000_000)), p(Nm::ZERO, Nm::from_raw_shim(100_000_000))], footprints: vec![FootprintInstance { id: "J9".into(), at: p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(20_000_000)), rot: 0, side: Side::Top, label: Default::default() }], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(100.0), Nm::ZERO), p(mm(100.0), mm(100.0)), p(Nm::ZERO, mm(100.0))], footprints: vec![FootprintInstance { id: "J9".into(), at: p(mm(20.0), mm(20.0)), rot: 0, side: Side::Top, label: Default::default() }], modules: vec![] }),
             routing: None,
             drawings: None,
         };
@@ -519,13 +519,13 @@ mod tests {
 
         crate::board::step(&dir, import(None), false, "test").unwrap();
         let (_, _, plain) = crate::board::load(&dir).unwrap();
-        assert!(plain.board.net_classes.iter().all(|c| c.name != "highpower") && plain.board.min_clearance_nm != Nm::from_raw_shim(203_200), "the board file alone says nothing of them");
+        assert!(plain.board.net_classes.iter().all(|c| c.name != "highpower") && plain.board.min_clearance_nm != Nm::new(203_200), "the board file alone says nothing of them");
 
         crate::board::step(&dir, import(Some(pro)), false, "test").unwrap();
         let (_, design, model) = crate::board::load(&dir).unwrap();
         let class = model.board.net_classes.iter().find(|c| c.name == "highpower").expect("the importer's net class");
-        assert_eq!((class.nets.clone(), class.track_width), (vec!["VCC".to_string()], Some(Nm::from_raw_shim(304_800))));
-        assert_eq!(model.board.min_clearance_nm, Nm::from_raw_shim(203_200), "and its design rules");
+        assert_eq!((class.nets.clone(), class.track_width), (vec!["VCC".to_string()], Some(Nm::new(304_800))));
+        assert_eq!(model.board.min_clearance_nm, Nm::new(203_200), "and its design rules");
         assert!(model.board.constraints_explicit, "stated by the project: kept as stated");
         assert_eq!(model.parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), vec!["R1"], "the same board");
         let file = design.drawings.as_ref().unwrap().intent_file.clone().unwrap();
@@ -537,7 +537,7 @@ mod tests {
         assert!(back.board.net_classes.iter().all(|c| c.name != "highpower"), "the import without the project is the step before");
         crate::board::redo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let (_, _, again) = crate::board::load(&dir).unwrap();
-        assert_eq!(again.board.min_clearance_nm, Nm::from_raw_shim(203_200), "a redo finds the file the first run left");
+        assert_eq!(again.board.min_clearance_nm, Nm::new(203_200), "a redo finds the file the first run left");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
