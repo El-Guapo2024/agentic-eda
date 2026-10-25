@@ -17,6 +17,7 @@ use eda_pns::mouse_trail::MouseTrailTracer;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+/// The generators draw the cursor on a micrometre grid; the cases are nanometres, as the port and the oracle take them.
 const NM: i64 = 1000;
 
 fn p(x: i64, y: i64) -> Point {
@@ -49,14 +50,10 @@ fn evaluate(case: &str) -> String {
     let mut next = || it.next().expect("a token").parse::<i64>().unwrap();
     let tolerance_nm = next();
     let (init, last, disabled, nops) = (next(), next(), next(), next());
-    let um = |nm: i64| {
-        assert_eq!(nm % NM, 0, "the port's grid is the micrometre");
-        nm / NM
-    };
     let mut t = MouseTrailTracer::new();
     t.clear();
     t.add_trail_point(p(0, 0));
-    t.set_tolerance(Nm::new(um(tolerance_nm)));
+    t.set_tolerance(Nm::new(tolerance_nm));
     t.set_default_directions(direction(init), direction(last));
     t.set_mouse_disabled(disabled != 0);
     let mut out = String::from("ok");
@@ -65,25 +62,25 @@ fn evaluate(case: &str) -> String {
     for _ in 0..nops {
         match rest[k] {
             "M" => {
-                let at = p(um(rest[k + 1].parse().unwrap()), um(rest[k + 2].parse().unwrap()));
+                let at = p(rest[k + 1].parse().unwrap(), rest[k + 2].parse().unwrap());
                 k += 3;
                 let d = t.get_posture(at);
                 t.add_trail_point(at);
                 let (lx, ly) = t.trail_lead_vector();
-                out += &format!(" d{} m{},{} f{}", number(d), lx * NM, ly * NM, i32::from(t.is_manually_forced()));
+                out += &format!(" d{} m{},{} f{}", number(d), lx, ly, i32::from(t.is_manually_forced()));
             }
             "F" => {
                 k += 1;
                 t.flip_posture();
                 let (lx, ly) = t.trail_lead_vector();
-                out += &format!(" F m{},{} f{}", lx * NM, ly * NM, i32::from(t.is_manually_forced()));
+                out += &format!(" F m{},{} f{}", lx, ly, i32::from(t.is_manually_forced()));
             }
             "R" => {
-                let at = p(um(rest[k + 1].parse().unwrap()), um(rest[k + 2].parse().unwrap()));
+                let at = p(rest[k + 1].parse().unwrap(), rest[k + 2].parse().unwrap());
                 let (ri, rl) = (rest[k + 3].parse().unwrap(), rest[k + 4].parse().unwrap());
                 k += 5;
                 t.clear();
-                t.set_tolerance(Nm::new(um(tolerance_nm)));
+                t.set_tolerance(Nm::new(tolerance_nm));
                 t.add_trail_point(at);
                 t.set_default_directions(direction(ri), direction(rl));
                 out += " R";
