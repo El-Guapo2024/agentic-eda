@@ -381,7 +381,7 @@ mod tests {
         };
         let scanned = vec![
             ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1_000_000, 0], [1_000_000, 1_000_000]] },
-            ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: true, pts: vec![[5_000_000_000, 5_000_000_000], [6_000_000_000, 5_000_000_000], [6_000_000_000, 6_000_000_000]] },
+            ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: true, pts: vec![[5_000_000, 5_000_000], [6_000_000, 5_000_000], [6_000_000, 6_000_000]] },
             ScannedFill { zone: "somebody else".into(), layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1, 0], [1, 1]] },
         ];
         keep_imported(&dir, &design, scanned);
