@@ -548,7 +548,7 @@ pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, char
                     let depth = layer_distance_nm(stackup, &copper, &f.top, &f.bottom);
                     let d = f.diameter;
                     if depth > 0 && d > Nm::ZERO {
-                        format!("{:.1}:1", depth as f64 / d.raw_shim() as f64)
+                        format!("{:.1}:1", depth as f64 / d.as_f64())
                     } else {
                         NO_VALUE.into()
                     }
@@ -858,7 +858,7 @@ mod tests {
         assert_eq!(group_key(&p, &op(mm(0.3))), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
         let mut profile = DrillSymbolProfile::default();
         profile.assignments.insert(group_key(&p, &op(mm(0.4))), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
-        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(Nm::from_raw_shim(300_000 + i * 100_000))), first: op(Nm::from_raw_shim(300_000 + i * 100_000)), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
+        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(mm(0.3) + i * mm(0.1))), first: op(mm(0.3) + i * mm(0.1)), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
         assign(&mut gs, &mut profile);
         assert_eq!((gs[0].symbol.mode, gs[0].symbol.shape_index), (DrillMarkMode::Shape, 1), "shape 0 is the frozen 0.4 mm group's");
         assert_eq!(gs[1].symbol.shape_index, 0);

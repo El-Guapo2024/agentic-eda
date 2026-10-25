@@ -437,11 +437,11 @@ mod verb_tests {
         Board::new(design(), m, mm(0.1), mm(0.3))
     }
 
-    fn pad(number: &str, x: i64) -> LibraryPad {
+    fn pad(number: &str, x: Nm) -> LibraryPad {
         LibraryPad {
             id: String::new(),
             number: number.into(),
-            at: eda_model::ir::Point { x: Nm::from_raw_shim(x), y: Nm::ZERO },
+            at: eda_model::ir::Point { x, y: Nm::ZERO },
             size: (um(1.0), Nm::new(600)),
             offset: eda_model::ir::Point::default(),
             shape: eda_model::ir::LibraryPadShape::Rect,
@@ -467,7 +467,7 @@ mod verb_tests {
 
     fn footprint_with_pads(name: &str) -> LibraryFootprint {
         let mut fp = LibraryFootprint::new_empty(name);
-        fp.pads = vec![pad("1", -1000), pad("2", 1000)];
+        fp.pads = vec![pad("1", Nm::new(-1000)), pad("2", Nm::new(1000))];
         fp.assign_missing_ids();
         fp
     }
@@ -499,7 +499,7 @@ mod verb_tests {
 
     #[test]
     fn import_pad_settings_copies_the_padstack_and_never_the_number_or_position() {
-        let mut master = pad("M", 0);
+        let mut master = pad("M", Nm::ZERO);
         master.shape = eda_model::ir::LibraryPadShape::Circle;
         master.size = (Nm::new(1600), Nm::new(900)); // an inconsistent circle: the import squares it from the x size
         master.kind = eda_model::footprint::PadKind::ThroughHole;
@@ -507,7 +507,7 @@ mod verb_tests {
         master.rot = 90_000;
         master.layers = vec!["*.Cu".into(), "*.Mask".into()];
         master.clearance_override = Some(Nm::new(250));
-        let mut dst = pad("7", 5000);
+        let mut dst = pad("7", Nm::new(5000));
         import_pad_settings(&mut dst, &master);
         assert_eq!(dst.number, "7");
         assert_eq!(dst.at.x, um(5.0));
@@ -521,7 +521,7 @@ mod verb_tests {
     fn import_pad_settings_carries_a_trapezoids_delta_a_chamfers_corners_and_a_custom_pads_shapes() {
         use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive};
         use eda_model::ir::{ChamferCorners, Point, Shape};
-        let mut master = pad("M", 0);
+        let mut master = pad("M", Nm::ZERO);
         master.shape = eda_model::ir::LibraryPadShape::Custom;
         master.trapezoid_delta = Some((Nm::ZERO, Nm::new(200)));
         master.chamfer_ratio = Some(0.3);
@@ -531,7 +531,7 @@ mod verb_tests {
             zone: CustomZoneMode::ConvexHull,
             primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::new(200), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::new(1500), y: Nm::ZERO } }, proxy: false }],
         });
-        let mut dst = pad("7", 5000);
+        let mut dst = pad("7", Nm::new(5000));
         assert_eq!(dst.custom, None);
         import_pad_settings(&mut dst, &master);
         // What `PAD::ImportSettingsFrom` copies is the pad's whole shape, whatever kind it is; the number and position stay.
@@ -542,19 +542,19 @@ mod verb_tests {
 
     #[test]
     fn import_pad_settings_drops_the_hole_of_an_smd_master_and_the_number_of_an_npth_one() {
-        let mut master = pad("M", 0);
+        let mut master = pad("M", Nm::ZERO);
         master.kind = eda_model::footprint::PadKind::Smd;
         master.drill = Some(Nm::new(500)); // a stray hole on an SMD master is not carried over
-        let mut dst = pad("3", 0);
+        let mut dst = pad("3", Nm::ZERO);
         dst.kind = eda_model::footprint::PadKind::ThroughHole;
         dst.drill = Some(Nm::new(900));
         import_pad_settings(&mut dst, &master);
         assert_eq!(dst.drill, None, "SetDrillSize( 0, 0 ) for an SMD master");
 
-        let mut npth = pad("M", 0);
+        let mut npth = pad("M", Nm::ZERO);
         npth.kind = eda_model::footprint::PadKind::NonPlatedHole;
         npth.drill = Some(Nm::new(1200));
-        let mut dst = pad("4", 0);
+        let mut dst = pad("4", Nm::ZERO);
         import_pad_settings(&mut dst, &npth);
         assert_eq!(dst.number, "", "a pad that cannot have a number loses it");
         assert_eq!(dst.drill, Some(Nm::new(1200)));

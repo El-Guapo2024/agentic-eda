@@ -61,17 +61,17 @@ fn a_dxf_outline_becomes_graphic_lines_and_arcs_of_the_sheet() {
     assert!(s.lines.iter().all(|l| l.width_nm == Nm::ZERO && l.pts.len() == 2 && !l.id.is_empty()), "{:?}", s.lines);
     assert!(arcs.iter().all(|g| g.width_nm == Nm::ZERO && g.fill == SchFill::None));
     // Y is down on a sheet as on the board: the 40 x 30 outline hangs above the origin.
-    let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x.raw_shim() as f64, p.y.raw_shim() as f64))));
+    let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x.as_f64(), p.y.as_f64()))));
     assert_eq!((x0, y0, x1, y1), (0.0, -30_000_000.0, 40_000_000.0, 0.0));
     // An arc's middle is on its circle: the corner at the origin side, radius 3 mm.
     let SchGraphicKind::Arc { start, mid, end } = arcs[0].shape else { unreachable!() };
     let (cx, cy) = circle_through(start, mid, end);
-    assert!((((start.x.raw_shim() as f64 - cx).hypot(start.y.raw_shim() as f64 - cy)) - 3_000_000.0).abs() < 2.0, "{start:?} {mid:?} {end:?}");
+    assert!((((start.x.as_f64() - cx).hypot(start.y.as_f64() - cy)) - 3_000_000.0).abs() < 2.0, "{start:?} {mid:?} {end:?}");
 }
 
 /// The centre of the circle through three points.
 fn circle_through(a: Point, b: Point, c: Point) -> (f64, f64) {
-    let (ax, ay, bx, by, cx, cy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, c.x.raw_shim() as f64, c.y.raw_shim() as f64);
+    let (ax, ay, bx, by, cx, cy) = (a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64(), c.x.as_f64(), c.y.as_f64());
     let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
     let ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
     let uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
@@ -92,7 +92,7 @@ fn the_scale_the_offset_and_the_default_line_width_are_the_dialogs() {
     let s = sch(&b);
     assert_eq!(s.lines.len(), 4);
     // The 2 x 1 rectangle, doubled and moved by (10, -5) mm, the lines 0.15 mm doubled.
-    let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x.raw_shim() as f64, p.y.raw_shim() as f64))));
+    let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x.as_f64(), p.y.as_f64()))));
     assert_eq!((x0, x1), (10_000_000.0, 14_000_000.0));
     assert_eq!((y1 - y0).round(), 2_000_000.0);
     assert!(s.lines.iter().all(|l| l.width_nm == mm(0.3)), "{:?}", s.lines);
@@ -161,7 +161,7 @@ fn a_text_keeps_the_files_size_and_angle_and_stands_at_the_left_end_of_its_basel
     assert_eq!((plain.content.as_str(), plain.at, plain.angle, plain.size_nm), ("Hello", Point { x: mm(10.0), y: mm(-5.0) }, 0, mm(2.5)));
     // Centred: the anchor is half the text's width to the left of the point the file gives.
     let width_nm = kicad_font::text_advance_iu("Hello", kicad_font::mm_to_iu(2.5)) * 100;
-    assert!((centred.at.x - Nm::from_raw_shim(10_000_000 - width_nm / 2)).abs() <= Nm::new(100) && centred.at.y == mm(-20.0), "{centred:?} {width_nm}");
+    assert!((centred.at.x - (mm(10.0) - Nm::new(width_nm / 2))).abs() <= Nm::new(100) && centred.at.y == mm(-20.0), "{centred:?} {width_nm}");
     let angle: Millideg = 90_000;
     assert_eq!((up.content.as_str(), up.at, up.angle, up.size_nm), ("Up", Point { x: mm(30.0), y: mm(-5.0) }, angle, mm(1.5)));
 }

@@ -346,7 +346,7 @@ fn labels_on_a_dragged_wire_stay_on_it() {
     s.labels.push(label("lbl_a", "A", p(mm(20.32), mm(25.4)), LabelKind::Local));
     s.labels.push(label("lbl_b", "B", p(mm(20.32), mm(33.02)), LabelKind::Local));
     for (dx, dy) in [(5 * G, Nm::ZERO), (Nm::ZERO, -2 * G), (Nm::ZERO, 2 * G)] {
-        let after = run_on(s.clone(), drag(&["R1"], dx, Nm::from_raw_shim(dy.raw_shim())));
+        let after = run_on(s.clone(), drag(&["R1"], dx, dy));
         let segs: Vec<(Point, Point)> = after.wires.iter().flat_map(|w| w.pts.windows(2).map(|q| (q[0], q[1])).collect::<Vec<_>>()).collect();
         for l in &after.labels {
             assert!(segs.iter().any(|(a, b)| crate::sch_scene::on_segment(*a, *b, l.at)), "{} at {:?} is off every wire {segs:?} after {dx},{dy}", l.id, l.at);
@@ -492,7 +492,7 @@ fn a_lone_symbol_turns_about_its_own_anchor() {
     assert_eq!(after.symbols[0].rot, 90_000);
     // the pins swung from above and below to the left and right
     let pins = pin_points_of(&after, "R1");
-    assert_eq!(pins, vec![p(Nm::from_raw_shim(20_320_000 - 3_810_000), mm(25.4)), p(Nm::from_raw_shim(20_320_000 + 3_810_000), mm(25.4))]);
+    assert_eq!(pins, vec![p(mm(20.32) - mm(3.81), mm(25.4)), p(mm(20.32) + mm(3.81), mm(25.4))]);
     let cw = run_on(s, rotate(&["R1"], false));
     assert_eq!(cw.symbols[0].rot, 270_000);
 }
@@ -580,8 +580,8 @@ fn a_junction_a_no_connect_and_a_bus_entry_turn_about_their_own_anchor_or_the_se
 }
 
 fn half_grid_of(q: Point) -> Point {
-    let h = G.raw_shim() as f64 / 2.0;
-    p(Nm::from_raw_shim(((q.x.raw_shim() as f64 / h).round() * h) as i64), Nm::from_raw_shim(((q.y.raw_shim() as f64 / h).round() * h) as i64))
+    let h = G.as_f64() / 2.0;
+    p(Nm::new(((q.x.as_f64() / h).round() * h) as i64), Nm::new(((q.y.as_f64() / h).round() * h) as i64))
 }
 
 #[test]
@@ -635,7 +635,7 @@ fn a_lone_symbol_mirrors_in_place() {
     assert!(h.symbols[0].mirrored && !h.symbols[0].mirror_y);
     let v = run_on(s.clone(), mirror(&["R1"], true));
     assert!(!v.symbols[0].mirrored && v.symbols[0].mirror_y);
-    assert_eq!(pin_points_of(&v, "R1"), vec![p(mm(20.32), Nm::from_raw_shim(25_400_000 + 3_810_000)), p(mm(20.32), Nm::from_raw_shim(25_400_000 - 3_810_000))], "mirrored top to bottom, the pins swap");
+    assert_eq!(pin_points_of(&v, "R1"), vec![p(mm(20.32), mm(25.4) + mm(3.81)), p(mm(20.32), mm(25.4) - mm(3.81))], "mirrored top to bottom, the pins swap");
 }
 
 #[test]
@@ -656,8 +656,8 @@ fn several_items_mirror_about_the_half_grid_point_nearest_the_centre() {
     s.wires.push(wire("wire_a", &[p(mm(20.32), mm(10.16)), p(mm(45.72), mm(10.16))]));
     let after = run_on(s, mirror(&["R1", "R2", "wire_a"], false));
     // centre x = (20_320 + 45_720) / 2 = 33_020 (already a half-grid multiple: 52 * 635)
-    assert_eq!(after.symbols[0].at.x, Nm::from_raw_shim(33_020_000 * 2 - 20_320_000));
-    assert_eq!(after.symbols[1].at.x, Nm::from_raw_shim(33_020_000 * 2 - 45_720_000));
+    assert_eq!(after.symbols[0].at.x, mm(33.02) * 2 - mm(20.32));
+    assert_eq!(after.symbols[1].at.x, mm(33.02) * 2 - mm(45.72));
     assert_eq!(wire_pts(&after), vec![vec![p(mm(45.72), mm(10.16)), p(mm(20.32), mm(10.16))]]);
     assert!(after.symbols.iter().all(|x| x.mirrored));
 }
@@ -756,7 +756,7 @@ fn a_drag_turned_while_it_is_held_turns_the_wires_it_brought_along() {
     assert_eq!((r1.at, r1.rot), (p(mm(20.32), mm(45.72) + 2 * G), 90_000));
     // the wire's end on R1's pin 1 turned with the symbol: pin 1 was 3 cells above its origin, a quarter turn puts it 3 cells to the left
     let pin1 = pin_points_of(&after, "R1")[0];
-    assert_eq!(pin1, p(Nm::from_raw_shim(20_320_000 - 3_810_000), mm(45.72) + 2 * G));
+    assert_eq!(pin1, p(mm(20.32) - mm(3.81), mm(45.72) + 2 * G));
     assert!(after.wires.iter().any(|w| w.pts.contains(&pin1)), "a wire still ends on the pin: {:?}", after.wires);
 }
 
@@ -766,13 +766,13 @@ fn a_drag_turned_while_it_is_held_turns_the_wires_it_brought_along() {
 fn align_to_grid_puts_a_symbol_pins_on_the_grid_and_takes_its_wire_along() {
     let mut s = section();
     // R1 is half a grid cell off in x: its pins are off the grid
-    s.symbols.push(sym("R1", p(Nm::from_raw_shim(20_320_000 + 300_000), mm(25.4))));
-    s.wires.push(wire("wire_a", &[p(Nm::from_raw_shim(20_320_000 + 300_000), mm(21.59)), p(Nm::from_raw_shim(20_320_000 + 300_000), mm(10.16))]));
+    s.symbols.push(sym("R1", p(mm(20.32) + mm(0.3), mm(25.4))));
+    s.wires.push(wire("wire_a", &[p(mm(20.32) + mm(0.3), mm(21.59)), p(mm(20.32) + mm(0.3), mm(10.16))]));
     let after = run_on(s, SchMoveCmd::AlignToGrid { ids: ids(&["R1"]), grid: Nm::ZERO });
     assert_eq!(after.symbols[0].at.x, mm(20.32));
     assert!(pin_points_of(&after, "R1").iter().all(|q| q.x % G == Nm::ZERO && q.y % G == Nm::ZERO));
     // the end of the wire on the pin goes with it; the far end was not selected and stays
-    assert_eq!(wire_pts(&after), vec![vec![p(mm(20.32), mm(21.59)), p(Nm::from_raw_shim(20_320_000 + 300_000), mm(10.16))]]);
+    assert_eq!(wire_pts(&after), vec![vec![p(mm(20.32), mm(21.59)), p(mm(20.32) + mm(0.3), mm(10.16))]]);
 }
 
 #[test]
@@ -781,7 +781,7 @@ fn align_moves_each_item_by_its_offset_keeping_pins_on_the_grid() {
     s.symbols.push(sym("R1", p(mm(20.32), mm(25.4))));
     s.symbols.push(sym("R2", p(mm(40.64), mm(35.56))));
     // the caller measured boxes and wants R2 up by an off-grid 3.3 mm to line up with R1
-    let after = run_on(s, SchMoveCmd::Align { moves: vec![AlignMove { id: "R2".into(), dx: Nm::ZERO, dy: Nm::from_raw_shim(-10_160_000 - 330_000) }], grid: Nm::ZERO });
+    let after = run_on(s, SchMoveCmd::Align { moves: vec![AlignMove { id: "R2".into(), dx: Nm::ZERO, dy: -mm(10.16) - mm(0.33) }], grid: Nm::ZERO });
     let r2 = after.symbols.iter().find(|x| x.id == "R2").unwrap();
     assert_eq!(r2.at.y % G, Nm::ZERO, "the offset is snapped to the grid: {:?}", r2.at);
 }
@@ -849,7 +849,7 @@ fn dragging_a_symbol_keeps_every_net_and_its_pins() {
     let before = traced(&s);
     for dir in [(5 * G, Nm::ZERO), (-5 * G, Nm::ZERO), (Nm::ZERO, 4 * G), (Nm::ZERO, -4 * G), (3 * G, 3 * G)] {
         for who in ["R1", "R2"] {
-            let after = run_on(s.clone(), drag(&[who], dir.0, Nm::from_raw_shim(dir.1.raw_shim())));
+            let after = run_on(s.clone(), drag(&[who], dir.0, dir.1));
             assert_eq!(traced(&after), before, "dragging {who} by {dir:?}");
         }
     }

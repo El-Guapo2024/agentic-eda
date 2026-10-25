@@ -45,7 +45,7 @@ fn a_dxf_outline_becomes_segments_and_arcs_on_the_layer_the_dialog_chose() {
     // An arc's middle is on its circle: the corner at the origin side, radius 3 mm.
     let Shape::Arc { start, mid, end, .. } = new.iter().find(|s| matches!(s, Shape::Arc { .. })).unwrap() else { unreachable!() };
     let (cx, cy) = circle_through(*start, *mid, *end);
-    assert!((((start.x.raw_shim() as f64 - cx).hypot(start.y.raw_shim() as f64 - cy)) - 3_000_000.0).abs() < 2.0, "radius of the corner: {start:?} {mid:?} {end:?}");
+    assert!((((start.x.as_f64() - cx).hypot(start.y.as_f64() - cy)) - 3_000_000.0).abs() < 2.0, "radius of the corner: {start:?} {mid:?} {end:?}");
     // The outline makes one closed loop, as kicad-cli will see it.
     let outline = eda_drc::outline::board_outline_of(&new, false);
     assert!(outline.valid && outline.polys.outline_count() == 1, "{:?}", outline.errors);
@@ -53,7 +53,7 @@ fn a_dxf_outline_becomes_segments_and_arcs_on_the_layer_the_dialog_chose() {
 
 /// The centre of the circle through three points.
 fn circle_through(a: Point, b: Point, c: Point) -> (f64, f64) {
-    let (ax, ay, bx, by, cx, cy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, c.x.raw_shim() as f64, c.y.raw_shim() as f64);
+    let (ax, ay, bx, by, cx, cy) = (a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64(), c.x.as_f64(), c.y.as_f64());
     let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
     let ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
     let uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;

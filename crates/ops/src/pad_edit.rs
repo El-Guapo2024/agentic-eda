@@ -108,7 +108,7 @@ impl PadFrame {
 
 fn rotate(p: Point, angle_mdeg: i64) -> Point {
     let (s, c) = (angle_mdeg as f64 / 1000.0).to_radians().sin_cos();
-    Point { x: Nm::from_raw_shim((p.x.raw_shim() as f64 * c - p.y.raw_shim() as f64 * s).round() as i64), y: Nm::from_raw_shim((p.x.raw_shim() as f64 * s + p.y.raw_shim() as f64 * c).round() as i64) }
+    Point { x: Nm::kiround(p.x.as_f64() * c - p.y.as_f64() * s), y: Nm::kiround(p.x.as_f64() * s + p.y.as_f64() * c) }
 }
 
 /// `PCB_SHAPE::Compare( other ) == 0` for the shapes the editor has: the same kind on the same layer with the same geometry, stroke width and fill.
@@ -253,7 +253,7 @@ fn recombine(fp: &mut LibraryFootprint, index: usize, mode: PadEditMode, copper:
                 // A new circular anchor the size of the pad's narrower side, and the old outline a polygon primitive.
                 _ => {
                     let outline = eda_drc::pad_shape::pad_polygons_in_footprint(&pad.to_engine_pad(), MAX_ERROR_NM);
-                    let pts: Vec<Point> = if outline.outline_count() > 0 { outline.outline(0).iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect() } else { Vec::new() };
+                    let pts: Vec<Point> = if outline.outline_count() > 0 { outline.outline(0).iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect() } else { Vec::new() };
                     let min_extent = pad.size.0.min(pad.size.1);
                     custom.anchor = PadAnchor::Circle;
                     pad.size = (min_extent, min_extent);

@@ -261,10 +261,10 @@ fn a_user_field_goes_round_with_its_symbol() {
     let after = field_named(&turned, "MPN");
     assert!(after.vertical && !before.vertical, "the text turned with the symbol");
     // the offset from the symbol's origin was turned a quarter, as the symbol's own points are (KiCad's `TRANSFORM` for 90: (x, y) goes to (y, -x))
-    let (dx, dy) = (before.at.0 - sym.x.raw_shim() as f64, before.at.1 - sym.y.raw_shim() as f64);
+    let (dx, dy) = (before.at.0 - sym.x.as_f64(), before.at.1 - sym.y.as_f64());
     let at = turned.symbols[0].at;
     assert_eq!(turned.symbols[0].rot, 90_000);
-    assert!(near(after.at, (at.x.raw_shim() as f64 + dy, at.y.raw_shim() as f64 - dx)), "{:?} from {:?}", after.at, (dx, dy));
+    assert!(near(after.at, (at.x.as_f64() + dy, at.y.as_f64() - dx)), "{:?} from {:?}", after.at, (dx, dy));
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- edit
@@ -295,7 +295,7 @@ fn field_properties_set_the_look_and_the_place_of_a_user_field_in_one_command() 
             e.italic = Some(true);
             e.name_shown = Some(true);
             e.allow_autoplace = Some(false);
-            e.at = Some(p(Nm::from_raw_shim(before.at.0 as i64 + 2_540_000), Nm::from_raw_shim(before.at.1 as i64 + 2_540_000)));
+            e.at = Some(p(Nm::new(before.at.0 as i64) + mm(2.54), Nm::new(before.at.1 as i64) + mm(2.54)));
             e.vertical = Some(true);
             e.h = Some(TextJustify::Right);
         }),

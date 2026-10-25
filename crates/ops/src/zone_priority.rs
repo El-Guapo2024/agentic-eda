@@ -39,22 +39,22 @@ struct Edge {
     from_area: bool,
 }
 
-fn bbox(outline: &[Point]) -> (i64, i64, i64, i64) {
-    outline.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |b, p| (b.0.min(p.x.raw_shim()), b.1.min(p.y.raw_shim()), b.2.max(p.x.raw_shim()), b.3.max(p.y.raw_shim())))
+fn bbox(outline: &[Point]) -> (Nm, Nm, Nm, Nm) {
+    outline.iter().fold((Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN), |b, p| (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y)))
 }
 
 fn area(outline: &[Point]) -> f64 {
-    let twice: i128 = (0..outline.len()).map(|i| outline[i].x.raw_shim() as i128 * outline[(i + 1) % outline.len()].y.raw_shim() as i128 - outline[(i + 1) % outline.len()].x.raw_shim() as i128 * outline[i].y.raw_shim() as i128).sum();
+    let twice: i128 = (0..outline.len()).map(|i| outline[i].x.area(outline[(i + 1) % outline.len()].y) - outline[(i + 1) % outline.len()].x.area(outline[i].y)).sum();
     (twice as f64 / 2.0).abs()
 }
 
 fn ring(outline: &[Point]) -> ShapePolySet {
-    ShapePolySet::from_outline(outline.iter().map(|p| eda_clipper2::Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect())
+    ShapePolySet::from_outline(outline.iter().map(|p| eda_clipper2::Point64::new(p.x.get(), p.y.get())).collect())
 }
 
 /// `SHAPE_POLY_SET::Contains`: inside an outline of the set and in none of its holes.
 fn contains(set: &ShapePolySet, p: Point) -> bool {
-    let pts = |chain: &Vec<eda_clipper2::Point64>| chain.iter().map(|q| Point { x: Nm::from_raw_shim(q.x), y: Nm::from_raw_shim(q.y) }).collect::<Vec<_>>();
+    let pts = |chain: &Vec<eda_clipper2::Point64>| chain.iter().map(|q| Point { x: Nm::new(q.x), y: Nm::new(q.y) }).collect::<Vec<_>>();
     set.polys.iter().any(|poly| point_in_polygon(p, &pts(&poly[0])) && !poly[1..].iter().any(|hole| point_in_polygon(p, &pts(hole))))
 }
 
@@ -234,9 +234,9 @@ mod tests {
     use eda_model::ir::{PlacementSection, Provenance, RoutingSection, Via};
     use eda_model::{BoardRules, Net, Part, Pin, PinKind};
 
-    fn square(id: &str, net: &str, x: i64, y: i64, side: i64, priority: u32) -> Zone {
+    fn square(id: &str, net: &str, x: Nm, y: Nm, side: Nm, priority: u32) -> Zone {
         let p = |x, y| Point { x, y };
-        Zone { id: id.into(), net: net.into(), layer: "F.Cu".into(), outline: vec![p(Nm::from_raw_shim(x), Nm::from_raw_shim(y)), p(Nm::from_raw_shim(x + side), Nm::from_raw_shim(y)), p(Nm::from_raw_shim(x + side), Nm::from_raw_shim(y + side)), p(Nm::from_raw_shim(x), Nm::from_raw_shim(y + side))], priority, ..Default::default() }
+        Zone { id: id.into(), net: net.into(), layer: "F.Cu".into(), outline: vec![p(x, y), p(x + side, y), p(x + side, y + side), p(x, y + side)], priority, ..Default::default() }
     }
 
     fn board(zones: Vec<Zone>, vias: Vec<Via>) -> (Design, ConstraintModel) {
@@ -258,8 +258,8 @@ mod tests {
         (design, model)
     }
 
-    fn via(net: &str, x: i64, y: i64) -> Via {
-        Via { id: format!("v{x}_{y}"), net: net.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, drill: Nm::new(300), diameter: Nm::new(600), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+    fn via(net: &str, x: Nm, y: Nm) -> Via {
+        Via { id: format!("v{x}_{y}"), net: net.into(), at: Point { x, y }, drill: Nm::new(300), diameter: Nm::new(600), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     fn assigned(design: &Design, model: &ConstraintModel) -> Vec<(String, u32)> {
@@ -269,20 +269,20 @@ mod tests {
     #[test]
     fn the_zone_with_more_of_its_own_pads_and_vias_in_the_overlap_goes_above() {
         // GND and VCC overlap on x 5..10 mm; three GND vias and one VCC via sit in the overlap: 3 against 1, a clear win for GND whatever the sizes.
-        let (d, m) = board(vec![square("gnd", "GND", 0, 0, 10_000, 0), square("vcc", "VCC", 5_000, 0, 10_000, 5)], vec![via("GND", 6_000, 2_000), via("GND", 7_000, 4_000), via("GND", 8_000, 6_000), via("VCC", 9_000, 8_000)]);
+        let (d, m) = board(vec![square("gnd", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("vcc", "VCC", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 5)], vec![via("GND", Nm::new(6_000), Nm::new(2_000)), via("GND", Nm::new(7_000), Nm::new(4_000)), via("GND", Nm::new(8_000), Nm::new(6_000)), via("VCC", Nm::new(9_000), Nm::new(8_000))]);
         assert_eq!(assigned(&d, &m), vec![("gnd".to_string(), 1), ("vcc".to_string(), 0)]);
     }
 
     #[test]
     fn with_nothing_to_count_or_counts_within_twenty_percent_the_smaller_zone_goes_above() {
-        let (d, m) = board(vec![square("big", "GND", 0, 0, 20_000, 3), square("small", "VCC", 5_000, 5_000, 6_000, 0)], vec![]);
+        let (d, m) = board(vec![square("big", "GND", Nm::ZERO, Nm::ZERO, Nm::new(20_000), 3), square("small", "VCC", Nm::new(5_000), Nm::new(5_000), Nm::new(6_000), 0)], vec![]);
         assert_eq!(assigned(&d, &m), vec![("big".to_string(), 0), ("small".to_string(), 1)], "a small pour inside a big one is the exception to it");
         // Five vias each way is a tie: the size decides, not the counts.
-        let vias = (0..5).flat_map(|i| [via("GND", 6_000 + i * 400, 6_000), via("VCC", 6_000 + i * 400, 8_000)]).collect();
-        let (d, m) = board(vec![square("big", "GND", 0, 0, 20_000, 3), square("small", "VCC", 5_000, 5_000, 6_000, 0)], vias);
+        let vias = (0..5).flat_map(|i| [via("GND", Nm::new(6_000) + i * Nm::new(400), Nm::new(6_000)), via("VCC", Nm::new(6_000) + i * Nm::new(400), Nm::new(8_000))]).collect();
+        let (d, m) = board(vec![square("big", "GND", Nm::ZERO, Nm::ZERO, Nm::new(20_000), 3), square("small", "VCC", Nm::new(5_000), Nm::new(5_000), Nm::new(6_000), 0)], vias);
         assert_eq!(assigned(&d, &m), vec![("big".to_string(), 0), ("small".to_string(), 1)]);
         // Equal sizes say nothing: the priorities are left as they are.
-        let (d, m) = board(vec![square("a", "GND", 0, 0, 10_000, 4), square("b", "VCC", 5_000, 0, 10_000, 4)], vec![]);
+        let (d, m) = board(vec![square("a", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 4), square("b", "VCC", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 4)], vec![]);
         assert!(auto_assign_zone_priorities(&d, &m).is_none());
     }
 
@@ -290,8 +290,8 @@ mod tests {
     fn zones_of_one_net_that_overlap_share_the_highest_priority_any_of_the_group_got() {
         // a and b are GND and overlap; c is VCC and overlaps b only, with more VCC vias in the overlap, so the edge says c above b.
         let (d, m) = board(
-            vec![square("a", "GND", 0, 0, 10_000, 0), square("b", "GND", 8_000, 0, 10_000, 1), square("c", "VCC", 15_000, 0, 10_000, 2)],
-            vec![via("VCC", 16_000, 2_000), via("VCC", 16_500, 4_000), via("VCC", 17_000, 6_000)],
+            vec![square("a", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("b", "GND", Nm::new(8_000), Nm::ZERO, Nm::new(10_000), 1), square("c", "VCC", Nm::new(15_000), Nm::ZERO, Nm::new(10_000), 2)],
+            vec![via("VCC", Nm::new(16_000), Nm::new(2_000)), via("VCC", Nm::new(16_500), Nm::new(4_000)), via("VCC", Nm::new(17_000), Nm::new(6_000))],
         );
         let got = assigned(&d, &m);
         let p = |id: &str| got.iter().find(|(i, _)| i == id).unwrap().1;
@@ -302,8 +302,8 @@ mod tests {
 
         // Where c is the one with the lowest current priority, it is taken first and stays above its group.
         let (d, m) = board(
-            vec![square("a", "GND", 0, 0, 10_000, 5), square("b", "GND", 8_000, 0, 10_000, 6), square("c", "VCC", 15_000, 0, 10_000, 0)],
-            vec![via("VCC", 16_000, 2_000), via("VCC", 16_500, 4_000), via("VCC", 17_000, 6_000)],
+            vec![square("a", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 5), square("b", "GND", Nm::new(8_000), Nm::ZERO, Nm::new(10_000), 6), square("c", "VCC", Nm::new(15_000), Nm::ZERO, Nm::new(10_000), 0)],
+            vec![via("VCC", Nm::new(16_000), Nm::new(2_000)), via("VCC", Nm::new(16_500), Nm::new(4_000)), via("VCC", Nm::new(17_000), Nm::new(6_000))],
         );
         let got = assigned(&d, &m);
         let p = |id: &str| got.iter().find(|(i, _)| i == id).unwrap().1;
@@ -313,25 +313,25 @@ mod tests {
     #[test]
     fn a_chain_of_overlaps_is_ordered_from_the_top_and_a_cycle_keeps_its_current_order() {
         // c is smallest, then b, then a: c above b above a.
-        let (d, m) = board(vec![square("a", "GND", 0, 0, 30_000, 0), square("b", "VCC", 5_000, 5_000, 20_000, 0), square("c", "AUX", 10_000, 10_000, 8_000, 0)], vec![]);
+        let (d, m) = board(vec![square("a", "GND", Nm::ZERO, Nm::ZERO, Nm::new(30_000), 0), square("b", "VCC", Nm::new(5_000), Nm::new(5_000), Nm::new(20_000), 0), square("c", "AUX", Nm::new(10_000), Nm::new(10_000), Nm::new(8_000), 0)], vec![]);
         let got = assigned(&d, &m);
         let p = |id: &str| got.iter().find(|(i, _)| i == id).unwrap().1;
         assert_eq!((p("c"), p("b"), p("a")), (2, 1, 0), "{got:?}");
         // Already so: nothing to change.
-        let (d, m) = board(vec![square("a", "GND", 0, 0, 30_000, 0), square("b", "VCC", 5_000, 5_000, 20_000, 1), square("c", "AUX", 10_000, 10_000, 8_000, 2)], vec![]);
+        let (d, m) = board(vec![square("a", "GND", Nm::ZERO, Nm::ZERO, Nm::new(30_000), 0), square("b", "VCC", Nm::new(5_000), Nm::new(5_000), Nm::new(20_000), 1), square("c", "AUX", Nm::new(10_000), Nm::new(10_000), Nm::new(8_000), 2)], vec![]);
         assert!(auto_assign_zone_priorities(&d, &m).is_none());
     }
 
     #[test]
     fn rule_areas_teardrops_zones_on_other_layers_and_disjoint_zones_are_left_alone() {
-        let mut keepout = square("k", "", 0, 0, 10_000, 0);
+        let mut keepout = square("k", "", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0);
         keepout.is_rule_area = true;
-        let mut other_layer = square("o", "VCC", 0, 0, 10_000, 0);
+        let mut other_layer = square("o", "VCC", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0);
         other_layer.layer = "B.Cu".into();
-        let (d, m) = board(vec![square("a", "GND", 0, 0, 10_000, 0), keepout, other_layer, square("far", "AUX", 90_000, 0, 5_000, 0)], vec![]);
+        let (d, m) = board(vec![square("a", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), keepout, other_layer, square("far", "AUX", Nm::new(90_000), Nm::ZERO, Nm::new(5_000), 0)], vec![]);
         assert!(auto_assign_zone_priorities(&d, &m).is_none());
         // One pour alone has nothing to be ordered against.
-        let (d, m) = board(vec![square("a", "GND", 0, 0, 10_000, 0)], vec![]);
+        let (d, m) = board(vec![square("a", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0)], vec![]);
         assert!(auto_assign_zone_priorities(&d, &m).is_none());
     }
 }

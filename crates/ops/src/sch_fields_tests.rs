@@ -264,7 +264,7 @@ fn field_properties_set_the_text_size_look_and_place_in_one_command() {
         e.size_nm = Some(mm(2.0));
         e.bold = Some(true);
         e.italic = Some(true);
-        e.at = Some(p(Nm::from_raw_shim(before.at.0 as i64 + 2_540_000), Nm::from_raw_shim(before.at.1 as i64 + 2_540_000)));
+        e.at = Some(p(Nm::new(before.at.0 as i64) + mm(2.54), Nm::new(before.at.1 as i64) + mm(2.54)));
         e.vertical = Some(true);
         e.h = Some(TextJustify::Right);
     }))

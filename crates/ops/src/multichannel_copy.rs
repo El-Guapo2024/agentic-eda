@@ -154,7 +154,7 @@ impl Item {
                         e.contains_ring(&[Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }], half)
                     }
                     Shape::Circle { center, end, .. } => {
-                        let r = Nm::from_raw_shim((((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64);
+                        let r = Nm::kiround((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64()));
                         e.contains_disc(*center, r + half)
                     }
                     Shape::Polygon { pts, .. } => e.contains_ring(pts, half),

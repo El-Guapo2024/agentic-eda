@@ -158,11 +158,11 @@ fn oval_extents(a: (f64, f64), b: (f64, f64), pen_nm: f64) -> (f64, f64, f64, f6
 /// of fifteen glyphs laid out in micrometres comes out a few micrometres wider than KiCad's.
 fn ink_size(text: &str, size: (Nm, Nm), thickness: Nm, bold: bool) -> (f64, f64) {
     let (size_nm, thickness_nm) = (size, thickness);
-    let pen = (effective_pen_width(thickness_nm, size_nm, bold)).raw_shim() as f64;
+    let pen = effective_pen_width(thickness_nm, size_nm, bold).as_f64();
     let segments = kicad_text_segments(&TextLayout { text, pos: Point { x: Nm::ZERO, y: Nm::ZERO }, size: size_nm, thickness: thickness_nm, angle_deg: 0.0, mirror: false, halign: -1, valign: 0 });
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for seg in &segments {
-        let (ax0, ay0, ax1, ay1) = oval_extents((seg.a.x.raw_shim() as f64, seg.a.y.raw_shim() as f64), (seg.b.x.raw_shim() as f64, seg.b.y.raw_shim() as f64), pen);
+        let (ax0, ay0, ax1, ay1) = oval_extents((seg.a.x.as_f64(), seg.a.y.as_f64()), (seg.b.x.as_f64(), seg.b.y.as_f64()), pen);
         x0 = x0.min(ax0);
         y0 = y0.min(ay0);
         x1 = x1.max(ax1);
@@ -190,24 +190,24 @@ pub fn autosize(t: &mut Table) {
         extents.push(line);
     }
     for col in 0..cols {
-        let mut width: i64 = 0;
+        let mut width = Nm::ZERO;
         for row in 0..rows {
             let cell = &t.cells[row * cols + col];
             // `GetMarginLeft() + GetMarginRight()`, nanometres (a new cell's 1.0025 mm, not the IR's 1.003).
-            let margins_nm = (cell.margin_nm(0) + cell.margin_nm(2)).raw_shim() as f64;
+            let margins_nm = (cell.margin_nm(0) + cell.margin_nm(2)).as_f64();
             // `std::max<int>( colWidth, width + margins * 1.5 )`: the sum is cut to an integer, in nanometres.
-            width = width.max((extents[row][col].0 + margins_nm * 1.5).trunc() as i64);
+            width = width.max(Nm::new((extents[row][col].0 + margins_nm * 1.5).trunc() as i64));
         }
-        t.col_widths[col] = Nm::from_raw_shim(width);
+        t.col_widths[col] = width;
     }
     for row in 0..rows {
-        let mut height: i64 = 0;
+        let mut height = Nm::ZERO;
         for col in 0..cols {
             let cell = &t.cells[row * cols + col];
             let margins_nm = cell.margin_nm(0) + cell.margin_nm(2);
-            height = height.max(extents[row][col].1.trunc() as i64 + margins_nm.raw_shim());
+            height = height.max(Nm::new(extents[row][col].1.trunc() as i64) + margins_nm);
         }
-        t.row_heights[row] = Nm::from_raw_shim(height);
+        t.row_heights[row] = height;
     }
 }
 
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(t.at, Point { x: Nm::ZERO, y: Nm::ZERO });
         assert!(t.col_widths.iter().all(|w| *w > mm(3.009)), "{:?}", t.col_widths);
         let widest_name = t.col_widths[0];
-        assert!(widest_name > Nm::from_raw_shim(ink_size("Dielectric 1", (mm(1.5), mm(1.5)), mm(0.2), false).0 as i64), "{widest_name}");
+        assert!(widest_name > Nm::new(ink_size("Dielectric 1", (mm(1.5), mm(1.5)), mm(0.2), false).0 as i64), "{widest_name}");
         assert!(t.row_heights.iter().all(|h| *h > mm(2.006)), "{:?}", t.row_heights);
         assert_eq!(t.layer, "F.SilkS");
         assert!(t.border.external && t.border.header && t.separators.rows && t.separators.cols);
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!((t.cell(0, 0).unwrap().style.height_nm, t.cell(0, 0).unwrap().style.thickness_nm), (mm(2.0), mm(0.4)));
         assert_eq!((t.cell(1, 0).unwrap().style.height_nm, t.cell(1, 0).unwrap().style.thickness_nm), (mm(1.5), mm(0.2)));
         // Autosize looks at the title's ink for the first column, as KiCad does (it does not know the title spans four).
-        assert!(t.col_widths[0] > Nm::from_raw_shim(ink_size("BOARD CHARACTERISTICS", (mm(2.0), mm(2.0)), mm(0.4), false).0 as i64));
+        assert!(t.col_widths[0] > Nm::new(ink_size("BOARD CHARACTERISTICS", (mm(2.0), mm(2.0)), mm(0.4), false).0 as i64));
     }
 
     /// The point of sizing a table from its ink: KiCad's own line breaking (`GetShownText` breaks to the column less the margins) does not break any cell of it.

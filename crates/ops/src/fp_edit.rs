@@ -30,7 +30,7 @@ const TEXT_MAX_NM: Nm = Nm::new(250_000_000);
 
 /// `ClampTextPenSize`: the thickest pen a text of this size takes (a quarter of its smaller side).
 fn max_pen(size: (Nm, Nm)) -> Nm {
-    Nm::from_raw_shim(((size.0.abs().min(size.1.abs())).raw_shim() as f64 * 0.25).round() as i64)
+    Nm::kiround(size.0.abs().min(size.1.abs()).as_f64() * 0.25)
 }
 
 impl Board<'_> {

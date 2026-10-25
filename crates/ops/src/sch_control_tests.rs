@@ -186,7 +186,7 @@ fn incrementing_annotations_moves_the_references_together_and_carries_the_pins()
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
     for (i, r) in ["R1", "R2", "R3", "C1"].iter().enumerate() {
-        place(&mut b, r, "Device:R", 1, Nm::from_raw_shim(i as i64) * 10_000_000);
+        place(&mut b, r, "Device:R", 1, i as i64 * mm(10.0));
     }
     b.apply(&Cmd::IncrementAnnotations { start: "R2".into(), increment: 1 }).unwrap();
     let mut ids: Vec<String> = symbols(&b).into_iter().map(|s| s.id).collect();
@@ -203,7 +203,7 @@ fn incrementing_annotations_refuses_a_collision_a_negative_number_and_leaves_a_b
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
     for (i, r) in ["R1", "R2", "R3"].iter().enumerate() {
-        place(&mut b, r, "Device:R", 1, Nm::from_raw_shim(i as i64) * 10_000_000);
+        place(&mut b, r, "Device:R", 1, i as i64 * mm(10.0));
     }
     let ids = |b: &Board<'_>| {
         let mut ids: Vec<String> = symbols(b).into_iter().map(|s| s.id).collect();

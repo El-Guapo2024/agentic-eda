@@ -36,7 +36,7 @@ fn fail(check: &str, location: &str, hint: &str) -> Vec<CheckResult> {
 // ------------------------------------------------------------------ geometry
 
 fn orient(a: Point, b: Point, c: Point) -> i128 {
-    (b.x.raw_shim() as i128 - a.x.raw_shim() as i128) * (c.y.raw_shim() as i128 - a.y.raw_shim() as i128) - (b.y.raw_shim() as i128 - a.y.raw_shim() as i128) * (c.x.raw_shim() as i128 - a.x.raw_shim() as i128)
+    (b.x.get() as i128 - a.x.get() as i128) * (c.y.get() as i128 - a.y.get() as i128) - (b.y.get() as i128 - a.y.get() as i128) * (c.x.get() as i128 - a.x.get() as i128)
 }
 
 fn on_segment(a: Point, b: Point, p: Point) -> bool {
@@ -72,8 +72,8 @@ fn ring_contains(ring: &[Point], p: Point) -> bool {
     inside
 }
 
-fn bbox(ring: &[Point]) -> (i64, i64, i64, i64) {
-    ring.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(x0, y0, x1, y1), p| (x0.min(p.x.raw_shim()), y0.min(p.y.raw_shim()), x1.max(p.x.raw_shim()), y1.max(p.y.raw_shim())))
+fn bbox(ring: &[Point]) -> (Nm, Nm, Nm, Nm) {
+    ring.iter().fold((Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN), |(x0, y0, x1, y1), p| (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)))
 }
 
 fn bboxes_meet(a: &[Point], b: &[Point]) -> bool {
@@ -125,7 +125,7 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
     }
 
     // `ZONE::Outline()`: the outline and its holes.
-    let chain = |r: &[Point]| r.iter().map(|p| Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect::<Vec<_>>();
+    let chain = |r: &[Point]| r.iter().map(|p| Point64::new(p.x.get(), p.y.get())).collect::<Vec<_>>();
     let poly = |z: &Zone| {
         let mut set = ShapePolySet::from_outline(chain(&z.outline));
         for hole in z.holes.iter().filter(|h| h.len() >= 3) {
@@ -143,8 +143,8 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
         return Err(fail("ops_zone_merge", &zones[first].id, "Zones have insufficient overlap for merging."));
     }
     // Not fractured: the merged zone keeps its holes (`aOriginZone->Outline()->Simplify()` and no more).
-    let ring: Vec<Point> = union.outline(0).iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect();
-    let holes: Vec<Vec<Point>> = union.polys[0][1..].iter().filter(|h| h.len() >= 3).map(|h| h.iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect()).collect();
+    let ring: Vec<Point> = union.outline(0).iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect();
+    let holes: Vec<Vec<Point>> = union.polys[0][1..].iter().filter(|h| h.len() >= 3).map(|h| h.iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect()).collect();
     if ring.len() < 3 {
         return Err(fail("ops_zone_merge", &zones[first].id, "Zones have insufficient overlap for merging."));
     }
@@ -418,11 +418,11 @@ mod tests {
     use eda_model::units::Nm;
     use super::*;
 
-    fn pt(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+    fn pt(x: Nm, y: Nm) -> Point {
+        Point { x, y }
     }
 
-    fn square(id: &str, layer: &str, net: &str, x: i64, y: i64, side: i64, priority: u32) -> Zone {
+    fn square(id: &str, layer: &str, net: &str, x: Nm, y: Nm, side: Nm, priority: u32) -> Zone {
         Zone { id: id.into(), net: net.into(), layer: layer.into(), outline: vec![pt(x, y), pt(x + side, y), pt(x + side, y + side), pt(x, y + side)], priority, ..Default::default() }
     }
 
@@ -443,49 +443,49 @@ mod tests {
 
     #[test]
     fn segments_that_touch_collide_and_ones_that_miss_do_not() {
-        assert!(segments_touch(pt(0, 0), pt(10, 10), pt(0, 10), pt(10, 0)), "a cross");
-        assert!(segments_touch(pt(0, 0), pt(10, 0), pt(10, 0), pt(10, 10)), "end to end");
-        assert!(segments_touch(pt(0, 0), pt(10, 0), pt(5, 0), pt(5, 10)), "a T");
-        assert!(segments_touch(pt(0, 0), pt(10, 0), pt(5, 0), pt(15, 0)), "collinear and overlapping");
-        assert!(!segments_touch(pt(0, 0), pt(10, 0), pt(11, 0), pt(15, 0)), "collinear, apart");
-        assert!(!segments_touch(pt(0, 0), pt(10, 0), pt(0, 1), pt(10, 1)), "parallel");
+        assert!(segments_touch(pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::new(10)), pt(Nm::ZERO, Nm::new(10)), pt(Nm::new(10), Nm::ZERO)), "a cross");
+        assert!(segments_touch(pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::new(10))), "end to end");
+        assert!(segments_touch(pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(5), Nm::ZERO), pt(Nm::new(5), Nm::new(10))), "a T");
+        assert!(segments_touch(pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(5), Nm::ZERO), pt(Nm::new(15), Nm::ZERO)), "collinear and overlapping");
+        assert!(!segments_touch(pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(11), Nm::ZERO), pt(Nm::new(15), Nm::ZERO)), "collinear, apart");
+        assert!(!segments_touch(pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::ZERO, Nm::new(1)), pt(Nm::new(10), Nm::new(1))), "parallel");
     }
 
     #[test]
     fn a_point_is_inside_a_ring_the_way_pointinside_says() {
-        let ring = [pt(0, 0), pt(10, 0), pt(10, 10), pt(0, 10)];
-        assert!(ring_contains(&ring, pt(5, 5)));
-        assert!(ring_contains(&ring, pt(10, 5)), "on an edge");
-        assert!(ring_contains(&ring, pt(0, 0)), "on a corner");
-        assert!(!ring_contains(&ring, pt(11, 5)));
-        assert!(!ring_contains(&ring, pt(5, -1)));
+        let ring = [pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::new(10)), pt(Nm::ZERO, Nm::new(10))];
+        assert!(ring_contains(&ring, pt(Nm::new(5), Nm::new(5))));
+        assert!(ring_contains(&ring, pt(Nm::new(10), Nm::new(5))), "on an edge");
+        assert!(ring_contains(&ring, pt(Nm::ZERO, Nm::ZERO)), "on a corner");
+        assert!(!ring_contains(&ring, pt(Nm::new(11), Nm::new(5))));
+        assert!(!ring_contains(&ring, pt(Nm::new(5), Nm::new(-1))));
         // A concave ring: the notch is outside.
-        let c = [pt(0, 0), pt(10, 0), pt(10, 10), pt(6, 10), pt(6, 4), pt(4, 4), pt(4, 10), pt(0, 10)];
-        assert!(!ring_contains(&c, pt(5, 8)));
-        assert!(ring_contains(&c, pt(2, 8)));
+        let c = [pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::new(10)), pt(Nm::new(6), Nm::new(10)), pt(Nm::new(6), Nm::new(4)), pt(Nm::new(4), Nm::new(4)), pt(Nm::new(4), Nm::new(10)), pt(Nm::ZERO, Nm::new(10))];
+        assert!(!ring_contains(&c, pt(Nm::new(5), Nm::new(8))));
+        assert!(ring_contains(&c, pt(Nm::new(2), Nm::new(8))));
     }
 
     #[test]
     fn two_zones_intersect_when_edges_touch_or_one_holds_the_other_and_only_on_one_layer() {
-        let a = square("a", "F.Cu", "GND", 0, 0, 10_000, 0);
-        assert!(zones_intersect(&a, &square("b", "F.Cu", "GND", 5_000, 5_000, 10_000, 0)), "overlap");
-        assert!(zones_intersect(&a, &square("b", "F.Cu", "GND", 2_000, 2_000, 2_000, 0)), "inside: no edge crosses, a corner is inside");
-        assert!(zones_intersect(&a, &square("b", "F.Cu", "GND", 10_000, 0, 5_000, 0)), "sharing an edge");
-        assert!(!zones_intersect(&a, &square("b", "F.Cu", "GND", 20_000, 0, 5_000, 0)), "apart");
-        assert!(!zones_intersect(&a, &square("b", "B.Cu", "GND", 5_000, 5_000, 10_000, 0)), "another layer");
+        let a = square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0);
+        assert!(zones_intersect(&a, &square("b", "F.Cu", "GND", Nm::new(5_000), Nm::new(5_000), Nm::new(10_000), 0)), "overlap");
+        assert!(zones_intersect(&a, &square("b", "F.Cu", "GND", Nm::new(2_000), Nm::new(2_000), Nm::new(2_000), 0)), "inside: no edge crosses, a corner is inside");
+        assert!(zones_intersect(&a, &square("b", "F.Cu", "GND", Nm::new(10_000), Nm::ZERO, Nm::new(5_000), 0)), "sharing an edge");
+        assert!(!zones_intersect(&a, &square("b", "F.Cu", "GND", Nm::new(20_000), Nm::ZERO, Nm::new(5_000), 0)), "apart");
+        assert!(!zones_intersect(&a, &square("b", "B.Cu", "GND", Nm::new(5_000), Nm::new(5_000), Nm::new(10_000), 0)), "another layer");
     }
 
     #[test]
     fn merging_overlapping_zones_keeps_the_first_and_its_settings_and_takes_the_highest_priority() {
-        let mut d = design(vec![square("z1", "F.Cu", "GND", 0, 0, 10_000, 1), square("z2", "F.Cu", "GND", 5_000, 0, 10_000, 3), square("z3", "F.Cu", "GND", 100_000, 0, 5_000, 9)]);
+        let mut d = design(vec![square("z1", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 1), square("z2", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 3), square("z3", "F.Cu", "GND", Nm::new(100_000), Nm::ZERO, Nm::new(5_000), 9)]);
         let kept = merge_zones(&mut d, &["z1".into(), "z2".into(), "z3".into()]).unwrap();
         assert_eq!(kept, "z1");
         assert_eq!(priorities(&d), vec![("z1".to_string(), 3), ("z3".to_string(), 9)], "z2 is gone, z3 (apart) is untouched and was not merged");
         let merged = &zones(&d)[0];
         let (x0, y0, x1, y1) = bbox(&merged.outline);
-        assert_eq!((x0, y0, x1, y1), (0, 0, 15_000, 10_000), "the union of the two squares");
+        assert_eq!((x0, y0, x1, y1), (Nm::ZERO, Nm::ZERO, Nm::new(15_000), Nm::new(10_000)), "the union of the two squares");
         let area = {
-            let mut s = ShapePolySet::from_outline(merged.outline.iter().map(|p| Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect());
+            let mut s = ShapePolySet::from_outline(merged.outline.iter().map(|p| Point64::new(p.x.get(), p.y.get())).collect());
             s.simplify();
             s.area()
         };
@@ -494,32 +494,32 @@ mod tests {
 
     #[test]
     fn merging_skips_zones_of_another_net_layer_or_kind_and_chains_through_a_zone_that_touches_a_chosen_one() {
-        let other_net = square("n", "F.Cu", "VCC", 5_000, 0, 10_000, 0);
-        let mut keepout = square("k", "F.Cu", "GND", 5_000, 0, 10_000, 0);
+        let other_net = square("n", "F.Cu", "VCC", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 0);
+        let mut keepout = square("k", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 0);
         keepout.is_rule_area = true;
         let mut d = design(vec![
-            square("a", "F.Cu", "GND", 0, 0, 10_000, 0),
+            square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0),
             other_net,
             keepout,
-            square("b", "B.Cu", "GND", 5_000, 0, 10_000, 0),
+            square("b", "B.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 0),
             // c touches only b2, which is chosen before it, so c chains in through b2.
-            square("b2", "F.Cu", "GND", 9_000, 0, 6_000, 0),
-            square("c", "F.Cu", "GND", 14_000, 0, 6_000, 0),
+            square("b2", "F.Cu", "GND", Nm::new(9_000), Nm::ZERO, Nm::new(6_000), 0),
+            square("c", "F.Cu", "GND", Nm::new(14_000), Nm::ZERO, Nm::new(6_000), 0),
         ]);
         merge_zones(&mut d, &["a".into(), "n".into(), "k".into(), "b".into(), "b2".into(), "c".into()]).unwrap();
         let left: Vec<&str> = zones(&d).iter().map(|z| z.id.as_str()).collect();
         assert_eq!(left, ["a", "n", "k", "b"], "a absorbed b2, then c (which only touches b2)");
-        assert_eq!(bbox(&zones(&d)[0].outline), (0, 0, 20_000, 10_000));
+        assert_eq!(bbox(&zones(&d)[0].outline), (Nm::ZERO, Nm::ZERO, Nm::new(20_000), Nm::new(10_000)));
     }
 
     #[test]
     fn merging_zones_that_do_not_touch_or_touch_only_at_a_corner_is_refused() {
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 0), square("b", "F.Cu", "GND", 50_000, 0, 10_000, 0)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("b", "F.Cu", "GND", Nm::new(50_000), Nm::ZERO, Nm::new(10_000), 0)]);
         let e = merge_zones(&mut d, &["a".into(), "b".into()]).unwrap_err();
         assert_eq!(e[0].check, "ops_zone_merge");
         assert_eq!(zones(&d).len(), 2, "nothing changed");
         // Corner to corner: the intersection test passes (they touch), but the union is two outlines.
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 0), square("b", "F.Cu", "GND", 10_000, 10_000, 10_000, 0)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("b", "F.Cu", "GND", Nm::new(10_000), Nm::new(10_000), Nm::new(10_000), 0)]);
         let e = merge_zones(&mut d, &["a".into(), "b".into()]).unwrap_err();
         assert_eq!(e[0].hint.as_deref(), Some("Zones have insufficient overlap for merging."));
         assert_eq!(zones(&d).len(), 2);
@@ -528,15 +528,15 @@ mod tests {
     }
 
     fn ring_area(ring: &[Point]) -> f64 {
-        let twice: i128 = (0..ring.len()).map(|i| (ring[i].x.raw_shim() as i128 * ring[(i + 1) % ring.len()].y.raw_shim() as i128) - (ring[(i + 1) % ring.len()].x.raw_shim() as i128 * ring[i].y.raw_shim() as i128)).sum();
+        let twice: i128 = (0..ring.len()).map(|i| ring[i].x.area(ring[(i + 1) % ring.len()].y) - ring[(i + 1) % ring.len()].x.area(ring[i].y)).sum();
         (twice as f64 / 2.0).abs()
     }
 
     #[test]
     fn a_merge_that_closes_a_hole_stays_one_zone_with_the_hole() {
         // A U (a notch open at the top) and a bar across the notch's mouth: the void under the bar is a hole.
-        let u = Zone { id: "u".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![pt(0, 0), pt(30_000, 0), pt(30_000, 30_000), pt(20_000, 30_000), pt(20_000, 10_000), pt(10_000, 10_000), pt(10_000, 30_000), pt(0, 30_000)], ..Default::default() };
-        let bar = Zone { id: "bar".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![pt(8_000, 25_000), pt(22_000, 25_000), pt(22_000, 35_000), pt(8_000, 35_000)], ..Default::default() };
+        let u = Zone { id: "u".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(30_000), Nm::ZERO), pt(Nm::new(30_000), Nm::new(30_000)), pt(Nm::new(20_000), Nm::new(30_000)), pt(Nm::new(20_000), Nm::new(10_000)), pt(Nm::new(10_000), Nm::new(10_000)), pt(Nm::new(10_000), Nm::new(30_000)), pt(Nm::ZERO, Nm::new(30_000))], ..Default::default() };
+        let bar = Zone { id: "bar".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![pt(Nm::new(8_000), Nm::new(25_000)), pt(Nm::new(22_000), Nm::new(25_000)), pt(Nm::new(22_000), Nm::new(35_000)), pt(Nm::new(8_000), Nm::new(35_000))], ..Default::default() };
         let mut d = design(vec![u, bar]);
         merge_zones(&mut d, &["u".into(), "bar".into()]).unwrap();
         assert_eq!(zones(&d).len(), 1);
@@ -550,10 +550,10 @@ mod tests {
     #[test]
     fn priority_raise_goes_just_above_the_next_overlapping_zone_and_leaves_the_others_alone() {
         let mut d = design(vec![
-            square("a", "F.Cu", "GND", 0, 0, 10_000, 1),
-            square("b", "F.Cu", "GND", 5_000, 0, 10_000, 4),
-            square("c", "F.Cu", "GND", 5_000, 5_000, 10_000, 7),
-            square("far", "F.Cu", "GND", 90_000, 0, 1_000, 2),
+            square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 1),
+            square("b", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 4),
+            square("c", "F.Cu", "GND", Nm::new(5_000), Nm::new(5_000), Nm::new(10_000), 7),
+            square("far", "F.Cu", "GND", Nm::new(90_000), Nm::ZERO, Nm::new(1_000), 2),
         ]);
         set_zone_priority(&mut d, "a", ZonePriorityMove::Raise).unwrap();
         assert_eq!(priorities(&d), [("a", 5), ("b", 4), ("c", 7), ("far", 2)].map(|(i, p)| (i.to_string(), p)).to_vec(), "just above b, the lowest above it; nothing else moved");
@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn priority_lower_goes_just_below_the_next_overlapping_zone() {
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 9), square("b", "F.Cu", "GND", 5_000, 0, 10_000, 4), square("c", "F.Cu", "GND", 5_000, 5_000, 10_000, 2)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 9), square("b", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 4), square("c", "F.Cu", "GND", Nm::new(5_000), Nm::new(5_000), Nm::new(10_000), 2)]);
         set_zone_priority(&mut d, "a", ZonePriorityMove::Lower).unwrap();
         assert_eq!(priorities(&d)[0].1, 3, "just below b, the highest below it");
         set_zone_priority(&mut d, "a", ZonePriorityMove::Lower).unwrap();
@@ -575,10 +575,10 @@ mod tests {
 
     #[test]
     fn raising_over_a_zone_at_the_ceiling_swaps_the_two_and_lowering_under_one_at_zero_swaps_too() {
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 5), square("b", "F.Cu", "GND", 5_000, 0, 10_000, u32::MAX)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 5), square("b", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), u32::MAX)]);
         set_zone_priority(&mut d, "a", ZonePriorityMove::Raise).unwrap();
         assert_eq!(priorities(&d), vec![("a".to_string(), u32::MAX), ("b".to_string(), 5)]);
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 5), square("b", "F.Cu", "GND", 5_000, 0, 10_000, 0)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 5), square("b", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 0)]);
         set_zone_priority(&mut d, "a", ZonePriorityMove::Lower).unwrap();
         assert_eq!(priorities(&d), vec![("a".to_string(), 0), ("b".to_string(), 5)]);
     }
@@ -587,7 +587,7 @@ mod tests {
     fn move_to_top_takes_the_slot_that_displaces_fewer_zones() {
         // a (1) overlaps b (2) and c (3). Top: A takes 3 and pushes c to 2 -- but b is at 2, so b goes to 1: 2 moved.
         // B takes 4 and pushes nothing (4 is free): 0 moved. B wins.
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 1), square("b", "F.Cu", "GND", 5_000, 0, 10_000, 2), square("c", "F.Cu", "GND", 5_000, 5_000, 10_000, 3)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 1), square("b", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 2), square("c", "F.Cu", "GND", Nm::new(5_000), Nm::new(5_000), Nm::new(10_000), 3)]);
         set_zone_priority(&mut d, "a", ZonePriorityMove::Top).unwrap();
         assert_eq!(priorities(&d), [("a", 4), ("b", 2), ("c", 3)].map(|(i, p)| (i.to_string(), p)).to_vec());
         // Already on top.
@@ -595,28 +595,28 @@ mod tests {
         // When the slot above is taken by a zone that does not overlap, pushing it up costs one more than pushing the
         // overlapping ones down only if fewer: a (1), b (2) overlap; far sits at 3 (not overlapping). A: take 2, push b to 1 (1 moved).
         // B: take 3, push far to 4 (1 moved). A wins a tie (down <= up).
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 1), square("b", "F.Cu", "GND", 5_000, 0, 10_000, 2), square("far", "F.Cu", "GND", 90_000, 0, 1_000, 3)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 1), square("b", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 2), square("far", "F.Cu", "GND", Nm::new(90_000), Nm::ZERO, Nm::new(1_000), 3)]);
         set_zone_priority(&mut d, "a", ZonePriorityMove::Top).unwrap();
         assert_eq!(priorities(&d), [("a", 2), ("b", 1), ("far", 3)].map(|(i, p)| (i.to_string(), p)).to_vec(), "ties go down");
     }
 
     #[test]
     fn move_to_bottom_is_the_mirror_image_and_a_cascade_into_zero_is_not_viable() {
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 9), square("b", "F.Cu", "GND", 5_000, 0, 10_000, 5), square("c", "F.Cu", "GND", 5_000, 5_000, 10_000, 4)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 9), square("b", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 5), square("c", "F.Cu", "GND", Nm::new(5_000), Nm::new(5_000), Nm::new(10_000), 4)]);
         set_zone_priority(&mut d, "a", ZonePriorityMove::Bottom).unwrap();
         // A: take 4 and push c (4) to 5 and b (5) to 6: 2 moved. B: take 3, push nothing (3 is free). B wins.
         assert_eq!(priorities(&d), [("a", 3), ("b", 5), ("c", 4)].map(|(i, p)| (i.to_string(), p)).to_vec());
         // Zero is occupied below: the only way is up. a (3) overlaps b (0).
-        let mut d = design(vec![square("a", "F.Cu", "GND", 0, 0, 10_000, 3), square("b", "F.Cu", "GND", 5_000, 0, 10_000, 0)]);
+        let mut d = design(vec![square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 3), square("b", "F.Cu", "GND", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 0)]);
         set_zone_priority(&mut d, "a", ZonePriorityMove::Bottom).unwrap();
         assert_eq!(priorities(&d), [("a", 0), ("b", 1)].map(|(i, p)| (i.to_string(), p)).to_vec(), "a takes 0, b is pushed up (pushing down from -1 is not viable)");
     }
 
     #[test]
     fn the_priority_moves_only_apply_to_copper_zones_and_only_count_zones_on_the_same_layer() {
-        let mut keepout = square("k", "F.Cu", "", 0, 0, 10_000, 0);
+        let mut keepout = square("k", "F.Cu", "", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0);
         keepout.is_rule_area = true;
-        let mut d = design(vec![keepout, square("a", "F.Cu", "GND", 0, 0, 10_000, 0), square("b", "B.Cu", "GND", 0, 0, 10_000, 5)]);
+        let mut d = design(vec![keepout, square("a", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("b", "B.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 5)]);
         assert!(set_zone_priority(&mut d, "k", ZonePriorityMove::Raise).is_err(), "a rule area has no fill priority");
         assert!(set_zone_priority(&mut d, "a", ZonePriorityMove::Raise).is_err(), "b is on another layer, the keepout is not copper: nothing to rise over");
         assert!(set_zone_priority(&mut d, "nope", ZonePriorityMove::Raise).is_err());
@@ -625,37 +625,37 @@ mod tests {
     #[test]
     fn the_drill_origin_is_set_and_reset_and_setting_what_is_there_is_refused() {
         let mut d = design(vec![]);
-        set_aux_origin(&mut d, Some(pt(1_000, 2_000))).unwrap();
-        assert_eq!(d.drawings.as_ref().unwrap().aux_origin, Some(pt(1_000, 2_000)));
-        assert!(set_aux_origin(&mut d, Some(pt(1_000, 2_000))).is_err());
+        set_aux_origin(&mut d, Some(pt(Nm::new(1_000), Nm::new(2_000)))).unwrap();
+        assert_eq!(d.drawings.as_ref().unwrap().aux_origin, Some(pt(Nm::new(1_000), Nm::new(2_000))));
+        assert!(set_aux_origin(&mut d, Some(pt(Nm::new(1_000), Nm::new(2_000)))).is_err());
         set_aux_origin(&mut d, None).unwrap();
         assert_eq!(d.drawings.as_ref().unwrap().aux_origin, None);
         assert!(set_aux_origin(&mut d, None).is_err(), "already at (0, 0)");
         // (0, 0) is a reset, not a stored origin.
-        set_aux_origin(&mut d, Some(pt(5, 5))).unwrap();
-        set_aux_origin(&mut d, Some(pt(0, 0))).unwrap();
+        set_aux_origin(&mut d, Some(pt(Nm::new(5), Nm::new(5)))).unwrap();
+        set_aux_origin(&mut d, Some(pt(Nm::ZERO, Nm::ZERO))).unwrap();
         assert_eq!(d.drawings.as_ref().unwrap().aux_origin, None);
     }
 
     #[test]
     fn the_grid_origin_is_set_and_reset_and_setting_what_is_there_is_refused() {
         let mut d = design(vec![]);
-        set_grid_origin(&mut d, Some(pt(1_250, 2_500))).unwrap();
-        assert_eq!(d.drawings.as_ref().unwrap().grid_origin, Some(pt(1_250, 2_500)));
-        assert!(set_grid_origin(&mut d, Some(pt(1_250, 2_500))).is_err());
+        set_grid_origin(&mut d, Some(pt(Nm::new(1_250), Nm::new(2_500)))).unwrap();
+        assert_eq!(d.drawings.as_ref().unwrap().grid_origin, Some(pt(Nm::new(1_250), Nm::new(2_500))));
+        assert!(set_grid_origin(&mut d, Some(pt(Nm::new(1_250), Nm::new(2_500)))).is_err());
         set_grid_origin(&mut d, None).unwrap();
         assert_eq!(d.drawings.as_ref().unwrap().grid_origin, None);
         assert!(set_grid_origin(&mut d, None).is_err(), "already at (0, 0)");
         // (0, 0) is a reset, not a stored origin, and the grid origin is not the drill/place file origin.
-        set_grid_origin(&mut d, Some(pt(5, 5))).unwrap();
+        set_grid_origin(&mut d, Some(pt(Nm::new(5), Nm::new(5)))).unwrap();
         assert_eq!(d.drawings.as_ref().unwrap().aux_origin, None);
-        set_grid_origin(&mut d, Some(pt(0, 0))).unwrap();
+        set_grid_origin(&mut d, Some(pt(Nm::ZERO, Nm::ZERO))).unwrap();
         assert_eq!(d.drawings.as_ref().unwrap().grid_origin, None);
     }
 
     #[test]
     fn repair_gives_duplicate_ids_new_ones_and_reports_kicads_lines() {
-        let mut d = design(vec![square("zon_1", "F.Cu", "GND", 0, 0, 10_000, 0), square("zon_1", "B.Cu", "GND", 0, 0, 10_000, 0), square("zon_1", "F.Cu", "GND", 50_000, 0, 10_000, 0)]);
+        let mut d = design(vec![square("zon_1", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("zon_1", "B.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("zon_1", "F.Cu", "GND", Nm::new(50_000), Nm::ZERO, Nm::new(10_000), 0)]);
         let nets = vec![Net { name: "GND".into(), pins: vec![] }];
         let r = repair_board(&mut d, &nets);
         assert_eq!(r, RepairReport { repaired: 2, details: vec!["2 duplicate IDs replaced.".into()] });
@@ -671,7 +671,7 @@ mod tests {
     fn the_four_commands_read_from_json_and_apply_through_a_board() {
         use crate::{Board, Cmd};
         let model = eda_model::ConstraintModel::default();
-        let mut d = design(vec![square("a", "F.Cu", "", 0, 0, 10_000, 1), square("b", "F.Cu", "", 5_000, 0, 10_000, 4), square("ghost", "F.Cu", "NOPE", 90_000, 0, 1_000, 0)]);
+        let mut d = design(vec![square("a", "F.Cu", "", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 1), square("b", "F.Cu", "", Nm::new(5_000), Nm::ZERO, Nm::new(10_000), 4), square("ghost", "F.Cu", "NOPE", Nm::new(90_000), Nm::ZERO, Nm::new(1_000), 0)]);
         d.placement = Some(serde_json::from_value(serde_json::json!({ "outline": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": 1, "y": 1 }], "footprints": [] })).unwrap());
         let mut board = Board::new(d, &model, mm(0.1), mm(0.3));
         let cmd = |j: serde_json::Value| serde_json::from_value::<Cmd>(j).unwrap();
@@ -680,7 +680,7 @@ mod tests {
         board.apply(&cmd(serde_json::json!({ "op": "merge_zones", "ids": ["a", "b"] }))).unwrap();
         assert_eq!(zones(board.design()).len(), 2, "b merged into a; ghost stays");
         board.apply(&cmd(serde_json::json!({ "op": "set_aux_origin", "at": { "x": 3_000, "y": 4_000 } }))).unwrap();
-        assert_eq!(board.design().drawings.as_ref().unwrap().aux_origin, Some(pt(3_000, 4_000)));
+        assert_eq!(board.design().drawings.as_ref().unwrap().aux_origin, Some(pt(Nm::new(3_000), Nm::new(4_000))));
         board.apply(&cmd(serde_json::json!({ "op": "set_aux_origin", "at": null }))).unwrap();
         assert_eq!(board.design().drawings.as_ref().unwrap().aux_origin, None);
         // The ghost zone's net is not in the (empty) netlist: one problem, then none.
@@ -695,7 +695,7 @@ mod tests {
 
     #[test]
     fn repair_adds_back_a_net_that_items_use_but_the_netlist_lacks() {
-        let mut d = design(vec![square("z", "F.Cu", "GHOST", 0, 0, 10_000, 0), square("y", "F.Cu", "GND", 0, 0, 10_000, 0), square("x", "F.Cu", "", 0, 0, 10_000, 0)]);
+        let mut d = design(vec![square("z", "F.Cu", "GHOST", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("y", "F.Cu", "GND", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0), square("x", "F.Cu", "", Nm::ZERO, Nm::ZERO, Nm::new(10_000), 0)]);
         let nets = vec![Net { name: "GND".into(), pins: vec!["U1.1".into()] }];
         let r = repair_board(&mut d, &nets);
         assert_eq!(r, RepairReport { repaired: 1, details: vec!["Orphaned net GHOST re-parented.".into()] });

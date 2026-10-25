@@ -102,7 +102,7 @@ impl<'a> Board<'a> {
         let mut kept: BTreeMap<(i64, i64), Via> = BTreeMap::new();
         let mut removed: Vec<String> = Vec::new();
         for v in existing {
-            let cell = eda_drc::via_stitch::cell_for_position(&stitch, pitch.raw_shim(), (v.at.x.raw_shim(), v.at.y.raw_shim()));
+            let cell = eda_drc::via_stitch::cell_for_position(&stitch, pitch.get(), (v.at.x.get(), v.at.y.get()));
             if desired.contains_key(&cell) && !kept.contains_key(&cell) {
                 kept.insert(cell, v);
             } else {

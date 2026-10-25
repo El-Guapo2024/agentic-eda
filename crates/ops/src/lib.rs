@@ -3201,7 +3201,7 @@ impl<'a> Board<'a> {
         if region.polys.outline_count() == 0 {
             return true;
         }
-        let ring = vec![eda_clipper2::Point64::new(cr.0.raw_shim(), cr.1.raw_shim()), eda_clipper2::Point64::new(cr.2.raw_shim(), cr.1.raw_shim()), eda_clipper2::Point64::new(cr.2.raw_shim(), cr.3.raw_shim()), eda_clipper2::Point64::new(cr.0.raw_shim(), cr.3.raw_shim())];
+        let ring = vec![eda_clipper2::Point64::new(cr.0.get(), cr.1.get()), eda_clipper2::Point64::new(cr.2.get(), cr.1.get()), eda_clipper2::Point64::new(cr.2.get(), cr.3.get()), eda_clipper2::Point64::new(cr.0.get(), cr.3.get())];
         let mut outside = eda_shape_poly_set::ShapePolySet::from_outline(ring);
         outside.boolean_subtract(&region.polys);
         outside.is_empty()
@@ -3317,8 +3317,8 @@ impl<'a> Board<'a> {
         let (fx, fy) = region.fractions();
         let board_area = self.board_region();
         let centre = (
-            bb.0 + Nm::from_raw_shim(((bb.2 - bb.0).raw_shim() as f64 * fx) as i64),
-            bb.1 + Nm::from_raw_shim(((bb.3 - bb.1).raw_shim() as f64 * fy) as i64),
+            bb.0 + Nm::new(((bb.2 - bb.0).as_f64() * fx) as i64),
+            bb.1 + Nm::new(((bb.3 - bb.1).as_f64() * fy) as i64),
         );
         for ring in 0..MAX_SLIDE_STEPS {
             let r = ring as i64 * self.snap;
@@ -3386,7 +3386,7 @@ impl<'a> Board<'a> {
 
         let along = |lo: Nm, hi: Nm, half: Nm| -> Nm {
             let usable = (hi - half) - (lo + half);
-            lo + half + Nm::from_raw_shim((usable.raw_shim() as f64 * fraction) as i64)
+            lo + half + Nm::new((usable.as_f64() * fraction) as i64)
         };
         // Sit one snap step inside the edge, not exactly on it.
         //
@@ -4166,7 +4166,7 @@ impl<'a> Board<'a> {
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let zi = rt.zones.iter().position(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
-        let chain = |pts: &[Point]| pts.iter().map(|p| Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect::<Vec<_>>();
+        let chain = |pts: &[Point]| pts.iter().map(|p| Point64::new(p.x.get(), p.y.get())).collect::<Vec<_>>();
         // `SHAPE_POLY_SET originalOutline( *aZone.Outline() )`: the outline with its holes.
         let mut remaining = ShapePolySet::from_outline(chain(&rt.zones[zi].outline));
         for hole in rt.zones[zi].holes.iter().filter(|h| h.len() >= 3) {
@@ -4180,7 +4180,7 @@ impl<'a> Board<'a> {
         // `ZONE_CREATE_HELPER::performZoneCutout`: "a zone can have only one main outline, so create as many zones as originalOutline contains main outlines",
         // each with its own holes (`newZoneOutline->AddHole( originalOutline.CHole( outline, hole ) )`).
         let template = rt.zones.remove(zi);
-        let ring_of = |r: &Vec<Point64>| r.iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect::<Vec<Point>>();
+        let ring_of = |r: &Vec<Point64>| r.iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect::<Vec<Point>>();
         for poly in &remaining.polys {
             let ring = &poly[0];
             if ring.len() < 3 {
@@ -6066,9 +6066,9 @@ const NO_BORDER_MM: f64 = -0.0001;
 fn rotate_point_about(pt: Point, pivot: Point, angle_millideg: i64) -> Point {
     let rad = (angle_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    let dx = (pt.x - pivot.x).raw_shim() as f64;
-    let dy = (pt.y - pivot.y).raw_shim() as f64;
-    Point { x: pivot.x + Nm::from_raw_shim((dx * cos - dy * sin).round() as i64), y: pivot.y + Nm::from_raw_shim((dx * sin + dy * cos).round() as i64) }
+    let dx = (pt.x - pivot.x).as_f64();
+    let dy = (pt.y - pivot.y).as_f64();
+    Point { x: pivot.x + Nm::kiround(dx * cos - dy * sin), y: pivot.y + Nm::kiround(dx * sin + dy * cos) }
 }
 
 /// How far a `Place` will slide along the anchor before giving up.
@@ -6085,7 +6085,7 @@ fn snap(v: Nm, to: Nm) -> Nm {
     if to <= Nm::ZERO {
         return v;
     }
-    ((v.raw_shim() as f64 / to.raw_shim() as f64).round() as i64) * to
+    v.ratio(to).round() as i64 * to
 }
 
 fn overlaps(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> bool {

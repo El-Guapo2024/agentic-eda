@@ -14,7 +14,7 @@ pub(crate) struct Enclosure<'a> {
 }
 
 fn cross(o: Point, a: Point, b: Point) -> i128 {
-    (a.x - o.x).raw_shim() as i128 * (b.y - o.y).raw_shim() as i128 - (a.y - o.y).raw_shim() as i128 * (b.x - o.x).raw_shim() as i128
+    (a.x - o.x).area(b.y - o.y) - (a.y - o.y).area(b.x - o.x)
 }
 
 fn on_segment(p: Point, a: Point, b: Point) -> bool {
@@ -28,7 +28,7 @@ fn properly_cross(a: Point, b: Point, c: Point, d: Point) -> bool {
 }
 
 fn dist_point_segment(p: Point, a: Point, b: Point) -> f64 {
-    let (px, py, ax, ay, bx, by) = (p.x.raw_shim() as f64, p.y.raw_shim() as f64, a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64);
+    let (px, py, ax, ay, bx, by) = (p.x.as_f64(), p.y.as_f64(), a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64());
     let (dx, dy) = (bx - ax, by - ay);
     let len2 = dx * dx + dy * dy;
     if len2 == 0.0 {
@@ -65,7 +65,7 @@ impl Enclosure<'_> {
         if !pts.iter().all(|p| self.contains_point(*p)) {
             return false;
         }
-        let r = half_width.raw_shim() as f64;
+        let r = half_width.as_f64();
         if pts.len() == 1 {
             return self.edges().all(|(a, b)| dist_point_segment(pts[0], a, b) >= r);
         }

@@ -89,13 +89,13 @@ impl<'m> Scene<'m> {
         self.fields.iter().filter(|f| !self.owner_selected(&f.key)).cloned().collect()
     }
 
-    /// The box a field's text takes on the sheet (`SCH_FIELD::GetBoundingBox`), micrometres.
+    /// The box a field's text takes on the sheet (`SCH_FIELD::GetBoundingBox`).
     pub(crate) fn field_box(&self, f: &FieldSel) -> Option<(Point, Point)> {
         let ctx = OwnerCtx::new(&self.sch, self.model, &f.key)?;
         let i = ctx.specs.iter().position(|s| s.name == f.name)?;
         let pf = ctx.page(&ctx.current(&self.sch)[i], &ctx.specs[i].text);
         let r = eda_engine::fields::field_rect(&pf);
-        Some((Point { x: Nm::from_raw_shim(r.x0), y: Nm::from_raw_shim(r.y0) }, Point { x: Nm::from_raw_shim(r.x1), y: Nm::from_raw_shim(r.y1) }))
+        Some((Point { x: Nm::new(r.x0), y: Nm::new(r.y0) }, Point { x: Nm::new(r.x1), y: Nm::new(r.y1) }))
     }
 
     /// Run `edit` on the placement of `f` (every field of its item is stored: a field moved on its own is the first to leave the live placement), then
@@ -113,9 +113,9 @@ impl<'m> Scene<'m> {
     /// `SCH_MOVE_TOOL::moveItem` on a field: the offset, taken back through the transform of the symbol that has it.
     pub(crate) fn move_field(&mut self, f: &FieldSel, delta: Point) {
         self.edit_placement(f, |ctx, _, p| {
-            let (dx, dy) = ctx.local_delta(delta.x.raw_shim(), delta.y.raw_shim());
-            p.dx += Nm::from_raw_shim(dx);
-            p.dy += Nm::from_raw_shim(dy);
+            let (dx, dy) = ctx.local_delta(delta.x.get(), delta.y.get());
+            p.dx += Nm::new(dx);
+            p.dy += Nm::new(dy);
         });
     }
 
@@ -143,11 +143,11 @@ impl<'m> Scene<'m> {
                 }
                 p.angle = 90_000;
             }
-            let at = Point { x: Nm::from_raw_shim(anchor.0.round() as i64), y: Nm::from_raw_shim(anchor.1.round() as i64) };
+            let at = Point { x: Nm::kiround(anchor.0), y: Nm::kiround(anchor.1) };
             let to = rotate_point(at, center, ccw);
-            let (lx, ly) = ctx.local_pos((to.x.raw_shim() as f64, to.y.raw_shim() as f64));
-            p.dx = Nm::from_raw_shim(lx);
-            p.dy = Nm::from_raw_shim(ly);
+            let (lx, ly) = ctx.local_pos((to.x.as_f64(), to.y.as_f64()));
+            p.dx = Nm::new(lx);
+            p.dy = Nm::new(ly);
         });
     }
 
@@ -264,7 +264,7 @@ impl<'a> Board<'a> {
         let mut placements = ctx.current(sch);
         let old = placements[index].clone();
         let now = ctx.page(&old, &ctx.specs[index].text);
-        let anchor = edit.at.map(|p| (p.x.raw_shim() as f64, p.y.raw_shim() as f64)).unwrap_or(now.at);
+        let anchor = edit.at.map(|p| (p.x.as_f64(), p.y.as_f64())).unwrap_or(now.at);
         let vertical = edit.vertical.unwrap_or(now.vertical);
         let h = edit.h.map(hjustify).unwrap_or(now.h);
         let v = edit.v.map(vjustify).unwrap_or(now.v);

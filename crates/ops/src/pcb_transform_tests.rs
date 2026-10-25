@@ -190,7 +190,7 @@ fn move_and_rotate_items_put_a_footprint_where_the_edit_says_off_the_placement_g
     // Turned about a pivot the footprint is not on: the position is the rotated one, unrounded.
     b.apply(&Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), angle_millideg: 90_000 }).unwrap();
     let at = pose(&b, "U1").at;
-    assert_eq!((at.x - mm(30.0)).abs() + (at.y - mm(20.0)).abs(), Nm::from_raw_shim(1_250_000 + 30_000), "about the pivot, the offset kept: {at:?}");
+    assert_eq!((at.x - mm(30.0)).abs() + (at.y - mm(20.0)).abs(), mm(1.25) + mm(0.03), "about the pivot, the offset kept: {at:?}");
     assert!(at.x % mm(0.1) != Nm::ZERO || at.y % mm(0.1) != Nm::ZERO, "not snapped to the 0.1 mm placement grid: {at:?}");
 }
 

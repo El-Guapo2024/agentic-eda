@@ -846,16 +846,16 @@ fn set_zone_outline_replaces_the_outline_only() {
 fn set_zone_outline_with_holes_replaces_them_and_without_keeps_them() {
     let m = net_model();
     let mut b = board(&m);
-    let sq = |x0: i64, y0: i64, x1: i64, y1: i64| vec![Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y0) }, Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) }, Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y1) }];
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: sq(0, 0, 10_000_000, 10_000_000) }).unwrap();
+    let sq = |x0: Nm, y0: Nm, x1: Nm, y1: Nm| vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: sq(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)) }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
-    let hole = sq(2_000_000, 2_000_000, 4_000_000, 4_000_000);
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(0, 0, 10_000_000, 10_000_000), holes: Some(vec![hole.clone()]) }).unwrap();
+    let hole = sq(mm(2.0), mm(2.0), mm(4.0), mm(4.0));
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), holes: Some(vec![hole.clone()]) }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![hole.clone()]);
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(0, 0, 12_000_000, 10_000_000), holes: None }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(12.0), mm(10.0)), holes: None }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![hole], "a corner edit leaves the holes");
-    let mirrored = sq(-4_000_000, 2_000_000, -2_000_000, 4_000_000);
-    b.apply(&Cmd::SetZoneOutline { id, outline: sq(-12_000_000, 0, 0, 10_000_000), holes: Some(vec![mirrored.clone()]) }).unwrap();
+    let mirrored = sq(mm(-4.0), mm(2.0), mm(-2.0), mm(4.0));
+    b.apply(&Cmd::SetZoneOutline { id, outline: sq(mm(-12.0), Nm::ZERO, Nm::ZERO, mm(10.0)), holes: Some(vec![mirrored.clone()]) }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![mirrored]);
 }
 
@@ -998,7 +998,7 @@ fn the_outline_summary_follows_the_edge_cuts_shapes_when_they_are_the_outline() 
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     let area = |b: &Board| {
         let o = &b.design().placement.as_ref().unwrap().outline;
-        (0..o.len()).map(|i| o[i].x.raw_shim() * o[(i + 1) % o.len()].y.raw_shim() - o[(i + 1) % o.len()].x.raw_shim() * o[i].y.raw_shim()).sum::<i64>().abs() / 2
+        (0..o.len()).map(|i| o[i].x.area(o[(i + 1) % o.len()].y) - o[(i + 1) % o.len()].x.area(o[i].y)).sum::<i128>().abs() / 2
     };
     assert_eq!(area(&b), 100_000_000_000_000);
 
@@ -1819,7 +1819,7 @@ fn next_pad_number_matches_what_add_pad_actually_produces() {
     for n in 1..=3 {
         let next = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().next_pad_number();
         assert_eq!(next, n.to_string());
-        b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad(&next, Nm::from_raw_shim(n as i64) * 1_000_000, Nm::ZERO) }).unwrap();
+        b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad(&next, n as i64 * mm(1.0), Nm::ZERO) }).unwrap();
     }
 }
 
@@ -2844,8 +2844,8 @@ fn set_locked_accepts_a_placed_part_but_not_an_unplaced_one() {
 fn swap_chain_shifts_every_pose_one_step_including_rotation_and_side() {
     let m = model(vec![part("R1", "0603"), part("R2", "0603"), part("R3", "0603")], &[], vec![]);
     let mut b = board(&m);
-    for (r, x) in [("R1", 10_000_000), ("R2", 30_000_000), ("R3", 50_000_000)] {
-        b.apply(&Cmd::PlaceAt { part: r.into(), x: Nm::from_raw_shim(x), y: mm(20.0) }).unwrap();
+    for (r, x) in [("R1", mm(10.0)), ("R2", mm(30.0)), ("R3", mm(50.0))] {
+        b.apply(&Cmd::PlaceAt { part: r.into(), x, y: mm(20.0) }).unwrap();
     }
     b.apply(&Cmd::Rotate { part: "R2".into(), quarter_turns: 1 }).unwrap();
     b.apply(&Cmd::Flip { part: "R3".into() }).unwrap();
@@ -2874,24 +2874,24 @@ fn swap_chain_of_two_is_a_plain_pose_swap_and_refuses_bad_input() {
     assert_eq!(b.apply(&Cmd::SwapChain { parts: vec!["R1".into(), "R9".into()] }).unwrap_err()[0].check, "ops_not_placed");
 }
 
-fn square(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<Point> {
-    vec![Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y0) }, Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) }, Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y1) }]
+fn square(x0: Nm, y0: Nm, x1: Nm, y1: Nm) -> Vec<Point> {
+    vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }]
 }
 
 fn zone_area(z: &Zone) -> f64 {
     let n = z.outline.len();
-    (0..n).map(|i| (z.outline[i].x.raw_shim() as f64) * (z.outline[(i + 1) % n].y.raw_shim() as f64) - (z.outline[(i + 1) % n].x.raw_shim() as f64) * (z.outline[i].y.raw_shim() as f64)).sum::<f64>().abs() / 2.0
+    (0..n).map(|i| (z.outline[i].x.as_f64()) * (z.outline[(i + 1) % n].y.as_f64()) - (z.outline[(i + 1) % n].x.as_f64()) * (z.outline[i].y.as_f64())).sum::<f64>().abs() / 2.0
 }
 
 #[test]
 fn zone_cutout_across_an_edge_trims_the_zone_and_keeps_its_settings() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000_000, 10_000_000) }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)) }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
     b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.clearance = mm(0.777))).unwrap();
 
-    b.apply(&Cmd::ZoneCutout { id, cutout: square(6_000_000, -1_000_000, 11_000_000, 11_000_000) }).unwrap();
+    b.apply(&Cmd::ZoneCutout { id, cutout: square(mm(6.0), mm(-1.0), mm(11.0), mm(11.0)) }).unwrap();
     let zones = &b.design().routing.as_ref().unwrap().zones;
     assert_eq!(zones.len(), 1);
     assert!((zone_area(&zones[0]) - 60_000_000_000_000.0).abs() < 1e6, "10x10mm minus the right 4mm strip");
@@ -2902,9 +2902,9 @@ fn zone_cutout_across_an_edge_trims_the_zone_and_keeps_its_settings() {
 fn zone_cutout_that_splits_the_zone_makes_one_zone_per_piece() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000_000, 10_000_000) }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)) }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
-    b.apply(&Cmd::ZoneCutout { id, cutout: square(4_000_000, -1_000_000, 6_000_000, 11_000_000) }).unwrap();
+    b.apply(&Cmd::ZoneCutout { id, cutout: square(mm(4.0), mm(-1.0), mm(6.0), mm(11.0)) }).unwrap();
     let zones = &b.design().routing.as_ref().unwrap().zones;
     assert_eq!(zones.len(), 2, "source makes one new ZONE per main outline");
     assert!(zones.iter().all(|z| (zone_area(z) - 40_000_000_000_000.0).abs() < 1e6));
@@ -2915,9 +2915,9 @@ fn zone_cutout_that_splits_the_zone_makes_one_zone_per_piece() {
 fn zone_cutout_inside_the_zone_is_a_hole_of_the_zone_with_the_right_area() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000_000, 10_000_000) }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)) }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
-    b.apply(&Cmd::ZoneCutout { id, cutout: square(3_000_000, 3_000_000, 5_000_000, 5_000_000) }).unwrap();
+    b.apply(&Cmd::ZoneCutout { id, cutout: square(mm(3.0), mm(3.0), mm(5.0), mm(5.0)) }).unwrap();
     let zones = &b.design().routing.as_ref().unwrap().zones;
     assert_eq!(zones.len(), 1);
     // `performZoneCutout`: the zone keeps the outline, and the cutout is a hole of it (`newZoneOutline->AddHole`), not fractured into the outline.
@@ -2931,13 +2931,13 @@ fn zone_cutout_inside_the_zone_is_a_hole_of_the_zone_with_the_right_area() {
 fn zone_cutout_refuses_a_disjoint_cutout_a_degenerate_one_and_an_unknown_zone() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000_000, 10_000_000) }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)) }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
-    let e = b.apply(&Cmd::ZoneCutout { id: id.clone(), cutout: square(20_000_000, 20_000_000, 30_000_000, 30_000_000) }).unwrap_err();
+    let e = b.apply(&Cmd::ZoneCutout { id: id.clone(), cutout: square(mm(20.0), mm(20.0), mm(30.0), mm(30.0)) }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
     let e = b.apply(&Cmd::ZoneCutout { id: id.clone(), cutout: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
-    let e = b.apply(&Cmd::ZoneCutout { id: "zone_nope".into(), cutout: square(0, 0, 1_000_000, 1_000_000) }).unwrap_err();
+    let e = b.apply(&Cmd::ZoneCutout { id: "zone_nope".into(), cutout: square(Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0)) }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_zone");
     assert_eq!(b.design().routing.as_ref().unwrap().zones.len(), 1, "a refused cutout leaves the zone alone");
 }
@@ -3031,7 +3031,7 @@ fn place_at_refuses_a_cutout() {
     // Place in the centre region spirals out of the cutout
     b.apply(&Cmd::PlaceRegion { part: "U2".into(), region: Region::Centre }).unwrap();
     let at = b.pose_of("U2").unwrap().at;
-    let (dx, dy) = ((at.x - mm(50.0)).raw_shim() as f64, (at.y - mm(50.0)).raw_shim() as f64);
+    let (dx, dy) = ((at.x - mm(50.0)).as_f64(), (at.y - mm(50.0)).as_f64());
     assert!(dx.hypot(dy) > 10_000_000.0, "{at:?} is in the cutout");
 }
 

@@ -280,9 +280,9 @@ mod tests {
     fn a_placed_footprint_is_a_part_of_its_own_with_the_next_free_reference() {
         let model = ConstraintModel::default();
         let mut b = board(&model);
-        let place = |b: &mut Board, x: i64| b.apply(&Cmd::PlaceFootprint { footprint: "MountingHole:MountingHole_3.2mm_M3".into(), at: Point { x: Nm::from_raw_shim(x), y: mm(5.0) }, reference: String::new(), value: String::new(), definition: Some(hole()) });
-        place(&mut b, 10_000_000).unwrap();
-        place(&mut b, 20_000_000).unwrap();
+        let place = |b: &mut Board, x: Nm| b.apply(&Cmd::PlaceFootprint { footprint: "MountingHole:MountingHole_3.2mm_M3".into(), at: Point { x, y: mm(5.0) }, reference: String::new(), value: String::new(), definition: Some(hole()) });
+        place(&mut b, mm(10.0)).unwrap();
+        place(&mut b, mm(20.0)).unwrap();
         let dr = b.design().drawings.as_ref().unwrap();
         assert_eq!(dr.board_parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), ["H1", "H2"]);
         assert_eq!(dr.board_parts[0].value.as_deref(), Some("MountingHole_3.2mm_M3"), "KiCad's value is the footprint's name");

@@ -82,14 +82,14 @@ pub(super) fn design(channels: usize) -> Design {
     let mut extras: Vec<FootprintExtra> = Vec::new();
     for c in 0..channels {
         let (u, r, cap) = names(c);
-        let oy = mm(20.0) + 30_000_000 * Nm::from_raw_shim(c as i64);
+        let oy = mm(20.0) + c as i64 * mm(30.0);
         if c == 0 {
             footprints_.push(pose(&u, (mm(30.0), oy), 0));
             footprints_.push(pose(&r, (mm(22.0), oy), 90_000));
             footprints_.push(pose(&cap, (mm(38.0), oy), 0));
         } else {
             // scattered: other places, other turns, one on the back
-            footprints_.push(pose(&u, (mm(31.0) + 700_000 * Nm::from_raw_shim(c as i64), oy + mm(0.9)), 180_000));
+            footprints_.push(pose(&u, (mm(31.0) + c as i64 * mm(0.7), oy + mm(0.9)), 180_000));
             footprints_.push(pose(&r, (mm(21.0), oy - mm(1.5)), 0));
             let mut f = pose(&cap, (mm(40.0), oy + mm(1.0)), 270_000);
             f.side = Side::Top;
@@ -236,7 +236,7 @@ fn generate_makes_a_rule_area_for_each_sheet_ticked_from_the_boxes_of_its_footpr
     // a rectangle round the three footprints of the row, 0.1 mm clear of their boxes: the courtyards (±2.5 mm × ±2 mm for the amplifier at x = 30 mm; the resistor
     // turned a quarter, ±0.8 × ±1.5 mm at x = 22 mm; the capacitor at x = 38 mm) grown by the stroke of the courtyard (25 um) and the margin
     let bounds = eda_model::multichannel::polygon_box(&z.outline).unwrap();
-    assert_eq!(bounds, (Nm::from_raw_shim(22_000_000 - 800_000 - 25_000 - 100_000), Nm::from_raw_shim(20_000_000 - 2_000_000 - 25_000 - 100_000), Nm::from_raw_shim(38_000_000 + 1_500_000 + 25_000 + 100_000), Nm::from_raw_shim(20_000_000 + 2_000_000 + 25_000 + 100_000)));
+    assert_eq!(bounds, (mm(22.0) - mm(0.8) - mm(0.025) - mm(0.1), mm(20.0) - mm(2.0) - mm(0.025) - mm(0.1), mm(38.0) + mm(1.5) + mm(0.025) + mm(0.1), mm(20.0) + mm(2.0) + mm(0.025) + mm(0.1)));
     // the hull of the three boxes, rectified as KiCad does it: a staircase, because the resistor and the capacitor are lower than the amplifier
     assert_eq!(z.outline.len(), 9, "{:?}", z.outline);
     // the second channel's, from where its footprints are
@@ -323,7 +323,7 @@ fn generate_from_a_group_makes_the_area_from_everything_in_the_group() {
     assert_eq!((z.placement.source_type, z.placement.source.as_str()), (PlacementSourceType::Group, "A"));
     // the text sticks out above the footprints (y = 17.8 mm - half its height), so the area does too
     let bounds = eda_model::multichannel::polygon_box(&z.outline).unwrap();
-    assert!(bounds.1 <= Nm::from_raw_shim(19_500_000 - 400_000 - 100_000) && bounds.1 < Nm::from_raw_shim(20_000_000 - 2_000_000 - 25_000 - 100_000 + 1), "{bounds:?}");
+    assert!(bounds.1 <= mm(19.5) - mm(0.4) - mm(0.1) && bounds.1 < mm(20.0) - mm(2.0) - mm(0.025) - mm(0.1) + Nm::new(1), "{bounds:?}");
 }
 
 #[test]
@@ -737,8 +737,8 @@ fn copper_that_ends_on_a_pad_ends_on_the_matching_pad_of_a_target_turned_a_quart
     let stubs = [("U1", "4", "OUT0"), ("R1", "2", "MID0"), ("C1", "2", "OUT0")];
     for (reference, number, net) in stubs {
         let at = pad_centre(&d, reference, number);
-        let inwards = if at.x >= d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == reference).unwrap().at.x { -300_000 } else { 300_000 };
-        d.routing.as_mut().unwrap().tracks.push(track(&format!("stub_{reference}"), net, "F.Cu", &[(at.x, at.y), (at.x + Nm::from_raw_shim(inwards), at.y)]));
+        let inwards = if at.x >= d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == reference).unwrap().at.x { mm(-0.3) } else { mm(0.3) };
+        d.routing.as_mut().unwrap().tracks.push(track(&format!("stub_{reference}"), net, "F.Cu", &[(at.x, at.y), (at.x + inwards, at.y)]));
     }
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     generate_sheets(&mut b, 2);

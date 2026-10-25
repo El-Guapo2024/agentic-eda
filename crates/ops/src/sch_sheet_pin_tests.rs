@@ -10,7 +10,7 @@ use crate::sch_move::SchMoveCmd;
 use crate::sch_scene::Scene;
 use eda_model::ir::{LabelKind, LabelShape, NetLabel, Provenance, SheetInstance, SheetPin, SymbolInstance, Wire};
 use std::collections::BTreeMap;
-use eda_model::units::mm;
+use eda_model::units::{mm, um};
 
 const SHEET_AT: Point = Point { x: Nm::new(100_000_000), y: Nm::new(50_000_000) };
 const SHEET_SIZE: (Nm, Nm) = (Nm::new(40_000_000), Nm::new(30_000_000));
@@ -266,9 +266,9 @@ fn a_look_that_is_already_there_is_refused_and_a_size_is_clamped_as_set_text_siz
     let e = run(&d, look_edit("shpin_in", Some(mm(1.27)), Some(false), Some(false))).unwrap_err();
     assert_eq!(e[0].check, "ops_sheet_pin_unchanged", "50 mil, regular and upright is what it has");
     // `TEXT_MIN_SIZE_MM` 0.001 and `TEXT_MAX_SIZE_MM` 250
-    for (size, kept) in [(0, 1_000), (5000, 5000), (1_000_001_000, 250_000_000)] {
-        let after = ok(&d, look_edit("shpin_in", Some(Nm::from_raw_shim(size)), None, None));
-        assert_eq!(root_of(&after).extras.sheet_pin_looks["shpin_in"].size_nm, Nm::from_raw_shim(kept), "{size}");
+    for (size, kept) in [(Nm::ZERO, um(1.0)), (um(5.0), um(5.0)), (Nm::new(1_000_001_000), mm(250.0))] {
+        let after = ok(&d, look_edit("shpin_in", Some(size), None, None));
+        assert_eq!(root_of(&after).extras.sheet_pin_looks["shpin_in"].size_nm, kept, "{size}");
     }
     let styled = ok(&d, look_edit("shpin_in", None, Some(true), None));
     let e = run(&styled, look_edit("shpin_in", None, Some(true), None)).unwrap_err();

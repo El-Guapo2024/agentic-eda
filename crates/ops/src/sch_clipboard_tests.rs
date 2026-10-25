@@ -106,11 +106,11 @@ fn the_numbers_are_unique_across_every_sheet() {
     // R1 and R2 on the root, R3 and R4 on a sheet.
     b.apply(&Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: p(Nm::ZERO, Nm::ZERO), size: (mm(10.0), mm(10.0)) }).unwrap();
     let sheet_id = b.design().schematic.as_ref().unwrap().sheets[0].id.clone();
-    for (id, x) in [("R1", 0), ("R2", 10_000_000)] {
-        b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: p(Nm::from_raw_shim(x), mm(50.0)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    for (id, x) in [("R1", Nm::ZERO), ("R2", mm(10.0))] {
+        b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: p(x, mm(50.0)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
     }
-    for (id, x) in [("R3", 0), ("R4", 10_000_000)] {
-        b.apply(&Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: p(Nm::from_raw_shim(x), mm(50.0)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }) }).unwrap();
+    for (id, x) in [("R3", Nm::ZERO), ("R4", mm(10.0))] {
+        b.apply(&Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: p(x, mm(50.0)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }) }).unwrap();
     }
     // Pasting R1 and R3 onto the child sheet: both references exist (on one sheet or the other), so each takes the next free number from its own.
     let f = fragment(|s| {

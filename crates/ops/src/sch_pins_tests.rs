@@ -274,7 +274,7 @@ fn swap_pins_is_refused_for_a_symbol_of_a_sheet_that_is_placed_twice() {
     child.imported_from_kicad = true;
     let mut root = section();
     for (i, name) in ["Left", "Right"].iter().enumerate() {
-        root.sheets.push(SheetInstance { id: format!("sheet_{i}"), name: (*name).into(), file: "sub.kicad_sch".into(), at: p(Nm::from_raw_shim(10_000_000 + i as i64 * 60_000_000), mm(10.0)), size: (mm(40.0), mm(20.0)), pins: vec![], page: String::new() });
+        root.sheets.push(SheetInstance { id: format!("sheet_{i}"), name: (*name).into(), file: "sub.kicad_sch".into(), at: p(mm(10.0) + i as i64 * mm(60.0), mm(10.0)), size: (mm(40.0), mm(20.0)), pins: vec![], page: String::new() });
     }
     let mut design = empty_design();
     design.schematic = Some(root);

@@ -15,11 +15,11 @@ use eda_model::ir::{Point, Shape, Nm};
 type P = (i64, i64);
 
 fn pt(p: Point) -> P {
-    (p.x.raw_shim(), p.y.raw_shim())
+    (p.x.get(), p.y.get())
 }
 
 fn point(p: P) -> Point {
-    Point { x: Nm::from_raw_shim(p.0), y: Nm::from_raw_shim(p.1) }
+    Point { x: Nm::new(p.0), y: Nm::new(p.1) }
 }
 
 fn sub(a: P, b: P) -> P {
@@ -151,7 +151,7 @@ struct Piece {
 }
 
 /// `ConnectBoardShapes( aShapeList, aChainingEpsilon )` over the shapes of `shapes` that are lines, arcs or curves. Moves their end
-/// points in place; nothing is added or removed. `epsilon` is in micrometres (the design's unit).
+/// points in place; nothing is added or removed. `epsilon` is a length (the design's nanometres).
 pub(crate) fn connect_board_shapes(shapes: &mut [Shape], epsilon: Nm) {
     // The pieces and every end point of them as they were before anything moved (the k-d tree is built once).
     let pieces: Vec<Piece> = shapes.iter().enumerate().filter(|(_, s)| matches!(s, Shape::Segment { .. } | Shape::Arc { .. } | Shape::Bezier { .. })).map(|(at, _)| Piece { at }).collect();
@@ -169,7 +169,7 @@ pub(crate) fn connect_board_shapes(shapes: &mut [Shape], epsilon: Nm) {
         [(a, pi), (b, pi)]
     }).collect();
     let mut skip = vec![false; pieces.len()];
-    let eps_sq = epsilon.raw_shim() as i128 * epsilon.raw_shim() as i128;
+    let eps_sq = epsilon.area(epsilon);
 
     // `findNext`: of the two nearest end points to `p`, the closest valid one of another piece that is within the epsilon.
     let find_next = |curr: usize, p: P, skip: &[bool]| -> Option<usize> {
@@ -257,11 +257,11 @@ fn move_bezier_end(s: &mut Shape, at_start: bool, to: P) {
         if at_start {
             let d = sub(to, pt(*start));
             *start = point(to);
-            *c1 = Point { x: c1.x + Nm::from_raw_shim(d.0), y: c1.y + Nm::from_raw_shim(d.1) };
+            *c1 = Point { x: c1.x + Nm::new(d.0), y: c1.y + Nm::new(d.1) };
         } else {
             let d = sub(to, pt(*end));
             *end = point(to);
-            *c2 = Point { x: c2.x + Nm::from_raw_shim(d.0), y: c2.y + Nm::from_raw_shim(d.1) };
+            *c2 = Point { x: c2.x + Nm::new(d.0), y: c2.y + Nm::new(d.1) };
         }
     }
 }
@@ -356,13 +356,13 @@ mod tests {
     use eda_model::units::mm;
     use super::*;
 
-    fn seg(a: (i64, i64), b: (i64, i64)) -> Shape {
-        Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::from_raw_shim(a.0), y: Nm::from_raw_shim(a.1) }, end: Point { x: Nm::from_raw_shim(b.0), y: Nm::from_raw_shim(b.1) } }
+    fn seg(a: P, b: P) -> Shape {
+        Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: point(a), end: point(b) }
     }
 
-    fn ends_of(s: &Shape) -> ((i64, i64), (i64, i64)) {
+    fn ends_of(s: &Shape) -> (P, P) {
         match s {
-            Shape::Segment { start, end, .. } => ((start.x.raw_shim(), start.y.raw_shim()), (end.x.raw_shim(), end.y.raw_shim())),
+            Shape::Segment { start, end, .. } => (pt(*start), pt(*end)),
             _ => panic!(),
         }
     }

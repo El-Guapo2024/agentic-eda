@@ -295,8 +295,8 @@ mod tests {
         d.sheet_contents.as_ref().unwrap().values().find(|s| s.symbols.iter().any(|x| x.id == reference)).unwrap_or_else(|| panic!("no sheet has {reference}"))
     }
 
-    fn placement(name: &str, dx: i64, dy: i64) -> FieldPlacement {
-        FieldPlacement { dx: Nm::from_raw_shim(dx), dy: Nm::from_raw_shim(dy), ..FieldPlacement::at_origin(name) }
+    fn placement(name: &str, dx: Nm, dy: Nm) -> FieldPlacement {
+        FieldPlacement { dx, dy, ..FieldPlacement::at_origin(name) }
     }
 
     /// Fields the user placed stay where they were put; fields Autoplace Fields placed are placed again but keep their look; a label keeps the look
@@ -305,7 +305,7 @@ mod tests {
     fn reorganize_keeps_the_places_of_fields_and_the_looks_of_fields_and_labels() {
         let model = mcu30();
         // R3: the user put the Reference far to the left and hid the Value. U1: Autoplace Fields' places, but the Value is bold and larger.
-        let custom = vec![FieldPlacement { h: eda_model::ir::TextJustify::Right, ..placement("Reference", -6_350, 0) }, FieldPlacement { visible: false, ..placement("Value", 2_540, 5_080) }];
+        let custom = vec![FieldPlacement { h: eda_model::ir::TextJustify::Right, ..placement("Reference", Nm::new(-6_350), Nm::ZERO) }, FieldPlacement { visible: false, ..placement("Value", Nm::new(2_540), Nm::new(5_080)) }];
         let mut label_net = String::new();
         let labelled_on_new_sheets: BTreeSet<String> = {
             let mut probe = flat_board(&model);
@@ -442,8 +442,8 @@ mod tests {
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         {
             let root = design.schematic.as_mut().unwrap();
-            for (unit, x) in [(1, 300_000_000), (2, 330_000_000), (3, 360_000_000)] {
-                root.symbols.push(unit_of(&model, "U9", unit, Point { x: Nm::from_raw_shim(x), y: mm(20.0) }));
+            for (unit, x) in [(1, mm(300.0)), (2, mm(330.0)), (3, mm(360.0))] {
+                root.symbols.push(unit_of(&model, "U9", unit, Point { x, y: mm(20.0) }));
             }
             root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
         }

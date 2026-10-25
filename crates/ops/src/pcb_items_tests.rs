@@ -282,18 +282,18 @@ fn a_point_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     assert!(id.starts_with("pnt_"), "{id}");
     assert_eq!((points(&b)[0].size_nm, points(&b)[0].bounds()), (mm(1.0), [mm(4.5), mm(5.5), mm(5.5), mm(6.5)]), "a new point is 1 mm");
 
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id: id.clone(), layer: "F.Fab".into(), at: p_at(1_000_000, 2_000_000), size_nm: mm(2.5) })).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id: id.clone(), layer: "F.Fab".into(), at: p_at(mm(1.0), mm(2.0)), size_nm: mm(2.5) })).unwrap();
     let q = &points(&b)[0];
-    assert_eq!((q.id.as_str(), q.layer.as_str(), q.at, q.size_nm), (id.as_str(), "F.Fab", p_at(1_000_000, 2_000_000), mm(2.5)), "an edit keeps the id");
+    assert_eq!((q.id.as_str(), q.layer.as_str(), q.at, q.size_nm), (id.as_str(), "F.Fab", p_at(mm(1.0), mm(2.0)), mm(2.5)), "an edit keeps the id");
 
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeletePoint { id: id.clone() })).unwrap();
     assert!(points(&b).is_empty());
     assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeletePoint { id: id.clone() })).unwrap_err()[0].check, "ops_unknown_point");
-    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id, layer: "F.Fab".into(), at: p_at(0, 0), size_nm: mm(1.0) })).unwrap_err()[0].check, "ops_unknown_point");
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id, layer: "F.Fab".into(), at: p_at(Nm::ZERO, Nm::ZERO), size_nm: mm(1.0) })).unwrap_err()[0].check, "ops_unknown_point");
 }
 
-fn p_at(x: i64, y: i64) -> Point {
-    p(Nm::from_raw_shim(x), Nm::from_raw_shim(y))
+fn p_at(x: Nm, y: Nm) -> Point {
+    p(x, y)
 }
 
 #[test]
@@ -301,7 +301,7 @@ fn a_point_that_cannot_be_drawn_is_refused() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let refused = |b: &mut Board<'_>, mutate: &dyn Fn(&mut PcbPoint)| {
-        let mut q = PcbPoint::new("F.SilkS", p_at(0, 0));
+        let mut q = PcbPoint::new("F.SilkS", p_at(Nm::ZERO, Nm::ZERO));
         mutate(&mut q);
         let e = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: q })).unwrap_err();
         assert!(points(b).is_empty(), "nothing was added");
@@ -313,20 +313,20 @@ fn a_point_that_cannot_be_drawn_is_refused() {
     let mut off = model(&["F.Cu", "B.Cu"]);
     off.board.layer_setup.enabled.retain(|l| l != "F.Fab");
     let mut c = Board::new(design(), &off, mm(0.1), mm(0.3));
-    assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new("F.Fab", p_at(0, 0)) })).unwrap_err()[0].check, "ops_layer_off");
+    assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new("F.Fab", p_at(Nm::ZERO, Nm::ZERO)) })).unwrap_err()[0].check, "ops_layer_off");
 }
 
 #[test]
 fn a_point_moves_turns_and_flips_with_the_verbs_that_take_any_item_but_cannot_be_locked() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
-    let id = add_point(&mut b, "F.SilkS", p_at(10_000_000, 20_000_000));
+    let id = add_point(&mut b, "F.SilkS", p_at(mm(10.0), mm(20.0)));
     b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: mm(1.0), dy: mm(-2.0) }).unwrap();
-    assert_eq!(points(&b)[0].at, p_at(11_000_000, 18_000_000));
-    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p_at(0, 0), angle_millideg: 90_000 }).unwrap();
-    assert_eq!(points(&b)[0].at, p_at(-18_000_000, 11_000_000), "clockwise on the screen about the pivot");
-    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p_at(0, 0), direction: FlipDirection::LeftRight }).unwrap();
-    assert_eq!((points(&b)[0].layer.as_str(), points(&b)[0].at), ("B.SilkS", p_at(18_000_000, 11_000_000)));
+    assert_eq!(points(&b)[0].at, p_at(mm(11.0), mm(18.0)));
+    b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p_at(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
+    assert_eq!(points(&b)[0].at, p_at(mm(-18.0), mm(11.0)), "clockwise on the screen about the pivot");
+    b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p_at(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!((points(&b)[0].layer.as_str(), points(&b)[0].at), ("B.SilkS", p_at(mm(18.0), mm(11.0))));
     // the file has no lock for a point
     assert_eq!(b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap_err()[0].check, "ops_unknown_item");
 }
@@ -335,7 +335,7 @@ fn a_point_moves_turns_and_flips_with_the_verbs_that_take_any_item_but_cannot_be
 fn the_point_commands_have_one_wire_form() {
     let add: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "add_point", "point": {"layer": "F.SilkS", "at": {"x": 1_000_000, "y": 2_000_000}}})).unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point }) = &add else { panic!("{add:?}") };
-    assert_eq!((point.layer.as_str(), point.at, point.size_nm), ("F.SilkS", p_at(1_000_000, 2_000_000), mm(1.0)), "the size left out is 1 mm");
+    assert_eq!((point.layer.as_str(), point.at, point.size_nm), ("F.SilkS", p_at(mm(1.0), mm(2.0)), mm(1.0)), "the size left out is 1 mm");
     assert_eq!(add.domain(), Domain::Pcb);
     let edit: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "edit_point", "id": "pnt_x", "layer": "F.Cu", "at": {"x": 1_000, "y": 2000}, "size_nm": 3_000_000})).unwrap();
     assert_eq!(edit.subjects(), vec!["pnt_x"]);
@@ -756,7 +756,7 @@ fn stitch() -> ViaStitch {
 }
 
 fn planned(cells: &[(i64, i64)]) -> Vec<PlannedVia> {
-    cells.iter().map(|&(c, r)| PlannedVia { cell: (c, r), at: p(Nm::from_raw_shim(c * 2_000_000), Nm::from_raw_shim(r * 2_000_000)) }).collect()
+    cells.iter().map(|&(c, r)| PlannedVia { cell: (c, r), at: p(c * mm(2.0), r * mm(2.0)) }).collect()
 }
 
 fn set_stitch(b: &mut Board<'_>, id: Option<&str>, v: ViaStitch, cells: &[(i64, i64)]) -> Result<(), Vec<CheckResult>> {

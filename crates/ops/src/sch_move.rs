@@ -463,8 +463,8 @@ pub enum Turn {
 
 /// `GetNearestHalfGridPosition`.
 fn half_grid(p: Point, grid: Nm) -> Point {
-    let half = (grid.raw_shim() as f64) / 2.0;
-    let snap = |v: Nm| Nm::from_raw_shim(((v.raw_shim() as f64 / half).round() * half).round() as i64);
+    let half = grid.as_f64() / 2.0;
+    let snap = |v: Nm| Nm::kiround((v.as_f64() / half).round() * half);
     Point { x: snap(p.x), y: snap(p.y) }
 }
 
@@ -483,7 +483,7 @@ fn selection_center(scene: &Scene, items: &[Item], fields: &[FieldSel]) -> Point
             let p = scene.position(*it);
             (x + p.x, y + p.y)
         });
-        return Point { x: Nm::from_raw_shim((sx / n).raw_shim()), y: Nm::from_raw_shim((sy / n).raw_shim()) };
+        return Point { x: sx / n, y: sy / n };
     }
     let mut lo: Option<Point> = None;
     let mut hi: Option<Point> = None;
@@ -1157,7 +1157,7 @@ fn mirror_graphic(g: &mut SchGraphic, c: Point, vertical: bool) {
 
 /// `GRID_HELPER::AlignGrid`.
 fn align_grid(p: Point, grid: Nm) -> Point {
-    let snap = |v: Nm| (Nm::from_raw_shim((v.raw_shim() as f64 / grid.raw_shim() as f64).round() as i64)) * grid.raw_shim();
+    let snap = |v: Nm| v.ratio(grid).round() as i64 * grid;
     Point { x: snap(p.x), y: snap(p.y) }
 }
 
