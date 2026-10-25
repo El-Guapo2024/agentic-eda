@@ -34,8 +34,8 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerItem {
     pub uuid: String,
-    pub x_nm: i64,
-    pub y_nm: i64,
+    pub x_nm: Nm,
+    pub y_nm: Nm,
     pub description: String,
 }
 
@@ -204,7 +204,7 @@ pub fn marker(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sh
         Paths::SpecificMainAux if single && !path.is_empty() => (path.clone(), path.clone(), path),
         _ => return None,
     };
-    Some(ErcMarker { error_type: error_type.to_string(), at_nm: [Nm::new(at.x_nm), Nm::new(at.y_nm)], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
+    Some(ErcMarker { error_type: error_type.to_string(), at_nm: [at.x_nm, at.y_nm], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
 }
 
 /// Whether an exclusion's marker and a finding's are of one sheet (`SCH_MARKER::GetSheetSpecificPath`): the same sheet path, or either not known (an
@@ -376,7 +376,7 @@ mod tests {
     const ROOT_UUID: &str = "172726e6-8494-4d0f-8495-8bee6ad09c57";
 
     fn item(uuid: &str, x_nm: i64, y_nm: i64, description: &str) -> MarkerItem {
-        MarkerItem { uuid: uuid.into(), x_nm, y_nm, description: description.into() }
+        MarkerItem { uuid: uuid.into(), x_nm: Nm::new(x_nm), y_nm: Nm::new(y_nm), description: description.into() }
     }
 
     fn excl(check: &str, location: &str, marker: Option<ErcMarker>, comment: &str) -> ErcExclusion {

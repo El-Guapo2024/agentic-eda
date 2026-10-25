@@ -25,7 +25,8 @@ pub use foreign::{import_foreign_pcb, import_foreign_sch, ForeignImport, Foreign
 
 use eda_kicad::zone_fills::KicadFills;
 use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
-use eda_model::ir::{Design, DrcExclusion, ErcExclusion};
+use eda_model::ir::{Design, DrcExclusion, ErcExclusion, Point};
+use eda_model::units::Nm;
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -660,13 +661,13 @@ pub fn convert_models_to_vrml(work: &Path, models: &[PathBuf]) -> Result<Vec<Opt
 
 // --------------------------------------------------------------------- reports
 
-/// One item a violation names: kicad-cli's own description and position
-/// (nm), plus our id for it (`None` when it is not one of ours, e.g. a zone
+/// One item a violation names: kicad-cli's own description and position,
+/// plus our id for it (`None` when it is not one of ours, e.g. a zone
 /// fill KiCad computed).
 #[derive(Debug, Clone)]
 pub struct Item {
     pub description: String,
-    pub pos: (i64, i64),
+    pub pos: Point,
     pub id: Option<String>,
     pub uuid: String,
 }
@@ -686,9 +687,9 @@ pub struct Violation {
     pub excluded: bool,
     /// The exclusion's comment (`RC_JSON::VIOLATION::comment`).
     pub comment: String,
-    /// Where the violation's marker may sit, in nanometres: the positions worth writing an exclusion for ([`marker_candidates`]).
+    /// Where the violation's marker may sit: the positions worth writing an exclusion for ([`marker_candidates`]).
     /// kicad-cli's report does not give the marker's position, only its items'.
-    pub markers_nm: Vec<(i64, i64)>,
+    pub markers_nm: Vec<Point>,
     /// An ERC violation's sheet: the path (`ERC_SHEET::uuid_path`) of the sheet kicad-cli's report lists it under. Empty for a DRC one.
     pub sheet: String,
     /// An ERC violation's marker as KiCad keeps an exclusion (`SCH_MARKER`, `kiapi.schematic.ErcMarker`), when the report says enough to write it to the
@@ -698,7 +699,8 @@ pub struct Violation {
 
 impl Violation {
     fn from_json(v: &Value, map: &HashMap<String, String>, units_mm: bool) -> Violation {
-        let to_nm = |x: f64| if units_mm { (x * 1_000_000.0).round() as i64 } else { (x * 25_400_000.0).round() as i64 };
+        let to_nm = |x: f64| Nm::kiround(if units_mm { x * 1_000_000.0 } else { x * 25_400_000.0 });
+        let pos = |it: &Value| Point { x: to_nm(it["pos"]["x"].as_f64().unwrap_or(0.0)), y: to_nm(it["pos"]["y"].as_f64().unwrap_or(0.0)) };
         let items = v["items"]
             .as_array()
             .map(|is| {
@@ -707,7 +709,7 @@ impl Violation {
                         let uuid = it["uuid"].as_str().unwrap_or("").to_string();
                         Item {
                             description: it["description"].as_str().unwrap_or("").to_string(),
-                            pos: (to_nm(it["pos"]["x"].as_f64().unwrap_or(0.0)), to_nm(it["pos"]["y"].as_f64().unwrap_or(0.0))),
+                            pos: pos(it),
                             id: map.get(&uuid).cloned(),
                             uuid,
                         }
@@ -715,7 +717,7 @@ impl Violation {
                     .collect()
             })
             .unwrap_or_default();
-        let at_nm: Vec<(i64, i64)> = v["items"].as_array().map(|is| is.iter().map(|it| (to_nm(it["pos"]["x"].as_f64().unwrap_or(0.0)), to_nm(it["pos"]["y"].as_f64().unwrap_or(0.0)))).collect()).unwrap_or_default();
+        let at_nm: Vec<Point> = v["items"].as_array().map(|is| is.iter().map(pos).collect()).unwrap_or_default();
         Violation {
             kind: v["type"].as_str().unwrap_or("?").to_string(),
             description: v["description"].as_str().unwrap_or("").to_string(),
@@ -737,7 +739,7 @@ impl Violation {
         if !units_mm {
             return Vec::new();
         }
-        let nm = |x: f64| (x * 1_000_000.0).round() as i64;
+        let nm = |x: f64| Nm::kiround(x * 1_000_000.0);
         v["items"]
             .as_array()
             .map(|is| {
@@ -761,10 +763,10 @@ impl Violation {
             "type": self.kind,
             "description": self.description,
             "severity": self.severity,
-            "items": self.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
+            "items": self.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.x, i.pos.y], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
             "excluded": self.excluded,
             "comment": self.comment,
-            "marker_nm": self.markers_nm.iter().map(|(x, y)| json!([x, y])).collect::<Vec<_>>(),
+            "marker_nm": self.markers_nm.iter().map(|p| json!([p.x, p.y])).collect::<Vec<_>>(),
         })
     }
 
@@ -805,10 +807,10 @@ impl Violation {
 /// the first pad of an unconnected pair, a track's start) and the middle of the first two. kicad-cli's report carries no marker position
 /// -- `RC_ITEM::GetJsonViolation` writes `EDA_ITEM::GetPosition` of the items -- and KiCad matches an exclusion to a marker by the exact
 /// text of the marker, position included, so these are the guesses an exclusion offers (`eda_kicad::drc_exclusions`).
-pub fn marker_candidates(items_nm: &[(i64, i64)]) -> Vec<(i64, i64)> {
-    let mut out: Vec<(i64, i64)> = items_nm.to_vec();
-    if let [a, b, ..] = items_nm {
-        out.push(((a.0 + b.0) / 2, (a.1 + b.1) / 2));
+pub fn marker_candidates(items: &[Point]) -> Vec<Point> {
+    let mut out: Vec<Point> = items.to_vec();
+    if let [a, b, ..] = items {
+        out.push(Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
     }
     out.sort_unstable();
     out.dedup();
@@ -817,7 +819,7 @@ pub fn marker_candidates(items_nm: &[(i64, i64)]) -> Vec<(i64, i64)> {
 
 /// The ends and the middle of one segment of the track `id` names (`<track id>` for the first segment, `<track id>#<n>` for the n-th), in
 /// nanometres. Empty for an id that is not a track's. The middle is KiCad's `(start + end) / 2` on integers.
-fn track_anchors(design: &Design, id: &str) -> Vec<(i64, i64)> {
+fn track_anchors(design: &Design, id: &str) -> Vec<Point> {
     let (base, n) = match id.rsplit_once('#') {
         Some((b, n)) if n.parse::<usize>().is_ok() => (b, n.parse::<usize>().unwrap_or(0)),
         _ => (id, 0),
@@ -825,12 +827,10 @@ fn track_anchors(design: &Design, id: &str) -> Vec<(i64, i64)> {
     let Some(track) = design.routing.as_ref().and_then(|r| r.tracks.iter().find(|t| t.id == base)) else {
         return Vec::new();
     };
-    let nm = |p: &eda_model::ir::Point| (p.x.get(), p.y.get());
     let (Some(a), Some(b)) = (track.pts.get(n), track.pts.get(n + 1)) else {
         return Vec::new();
     };
-    let (a, b) = (nm(a), nm(b));
-    vec![a, b, ((a.0 + b.0) / 2, (a.1 + b.1) / 2)]
+    vec![*a, *b, Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }]
 }
 
 fn counts_of<'a>(vs: impl Iterator<Item = &'a Violation>) -> BTreeMap<String, usize> {
@@ -1155,7 +1155,7 @@ impl ErcReport {
                     "base_severity": if v.severity == "warning" { "warning" } else { "error" },
                     "location": location,
                     "hint": format!("{}{}{}", v.description, if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
-                    "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
+                    "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.x, i.pos.y], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
                     "comment": if excluded { comment } else { "" },
                     "kicad_matched": by_kicad,
                 });
@@ -1820,6 +1820,10 @@ mod tests {
     use eda_model::units::{mm, Nm};
     use super::*;
 
+    fn pt(x: i64, y: i64) -> Point {
+        Point { x: Nm::new(x), y: Nm::new(y) }
+    }
+
     #[test]
     fn the_export_kinds_are_read_from_the_usage_line_or_the_subcommand_list() {
         let nightly = "Usage: pcb export [--help] {3dpdf,bom,drill,specctra,step}\n\nExport utilities\n\nSubcommands:\n  3dpdf  Export PDF\n";
@@ -1925,7 +1929,7 @@ mod tests {
         assert!(v.excluded && v.comment == "fine");
         assert_eq!(v.severity, "error", "a waived violation keeps the severity it would have had");
         // Each item's own position and the middle of the first two, in nanometres.
-        assert_eq!(v.markers_nm, vec![(1_500_000, -2_000_000), (2_500_000, -999_500), (3_500_000, 1_000)]);
+        assert_eq!(v.markers_nm, vec![pt(1_500_000, -2_000_000), pt(2_500_000, -999_500), pt(3_500_000, 1_000)]);
         let j = v.to_json();
         assert_eq!(j["excluded"], true);
         assert_eq!(j["marker_nm"][0], json!([1_500_000, -2_000_000]));
@@ -1942,19 +1946,19 @@ mod tests {
             vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default(),
         });
         // The first segment is the track's own id, the next ones `<id>#n`: `DRC_TEST_PROVIDER_TRACK_WIDTH` puts a trace's marker at (start + end) / 2.
-        assert_eq!(track_anchors(&design, "t7"), vec![(1_000_000, 2_000_000), (3_001_000, 2_000_000), (2_000_500, 2_000_000)]);
-        assert_eq!(track_anchors(&design, "t7#1"), vec![(3_001_000, 2_000_000), (3_001_000, 9_000_000), (3_001_000, 5_500_000)]);
+        assert_eq!(track_anchors(&design, "t7"), vec![pt(1_000_000, 2_000_000), pt(3_001_000, 2_000_000), pt(2_000_500, 2_000_000)]);
+        assert_eq!(track_anchors(&design, "t7#1"), vec![pt(3_001_000, 2_000_000), pt(3_001_000, 9_000_000), pt(3_001_000, 5_500_000)]);
         assert!(track_anchors(&design, "t7#2").is_empty(), "there is no third segment");
         assert!(track_anchors(&design, "R1.1").is_empty() && track_anchors(&design, "t8").is_empty());
 
-        let mut v = Violation { kind: "track_width".into(), items: vec![Item { description: "Track".into(), pos: (1_000_000, 2_000_000), id: Some("t7".into()), uuid: "u".into() }], markers_nm: vec![(1_000_000, 2_000_000)], ..Default::default() };
+        let mut v = Violation { kind: "track_width".into(), items: vec![Item { description: "Track".into(), pos: pt(1_000_000, 2_000_000), id: Some("t7".into()), uuid: "u".into() }], markers_nm: vec![pt(1_000_000, 2_000_000)], ..Default::default() };
         v.add_design_anchors(&design);
-        assert_eq!(v.markers_nm, vec![(1_000_000, 2_000_000), (2_000_500, 2_000_000), (3_001_000, 2_000_000)], "the start (the report's) is listed once");
+        assert_eq!(v.markers_nm, vec![pt(1_000_000, 2_000_000), pt(2_000_500, 2_000_000), pt(3_001_000, 2_000_000)], "the start (the report's) is listed once");
     }
 
     #[test]
     fn the_studio_marks_a_waived_violation_by_its_check_and_items_and_says_whether_kicad_matched_it() {
-        let item = |uuid: &str| Item { description: uuid.into(), pos: (0, 0), id: None, uuid: uuid.into() };
+        let item = |uuid: &str| Item { description: uuid.into(), pos: Point::default(), id: None, uuid: uuid.into() };
         let found = |kind: &str, uuids: &[&str], by_kicad: bool| Violation { kind: kind.into(), severity: "error".into(), items: uuids.iter().map(|u| item(u)).collect(), excluded: by_kicad, ..Default::default() };
         let rep = DrcReport {
             engine: "kicad-cli test".into(),
@@ -2170,8 +2174,8 @@ fi"#;
         let rep = ErcReport {
             engine: "kicad-cli test".into(),
             violations: vec![
-                Violation { kind: "pin_not_connected".into(), description: "Pin not connected".into(), severity: "error".into(), items: vec![Item { description: "Pin 1".into(), pos: (0, 0), id: Some("U1.1".into()), uuid: "a".into() }], ..Default::default() },
-                Violation { kind: "pin_not_connected".into(), description: "Pin not connected".into(), severity: "error".into(), items: vec![Item { description: "Pin 2".into(), pos: (0, 0), id: Some("U1.2".into()), uuid: "b".into() }], ..Default::default() },
+                Violation { kind: "pin_not_connected".into(), description: "Pin not connected".into(), severity: "error".into(), items: vec![Item { description: "Pin 1".into(), pos: Point::default(), id: Some("U1.1".into()), uuid: "a".into() }], ..Default::default() },
+                Violation { kind: "pin_not_connected".into(), description: "Pin not connected".into(), severity: "error".into(), items: vec![Item { description: "Pin 2".into(), pos: Point::default(), id: Some("U1.2".into()), uuid: "b".into() }], ..Default::default() },
             ],
             ignored_checks: vec![],
         };
@@ -2204,7 +2208,7 @@ fi"#;
 
     /// kicad-cli's own ERC report items for the tests below.
     fn erc_item(desc: &str, id: Option<&str>, uuid: &str) -> Item {
-        Item { description: desc.into(), pos: (0, 0), id: id.map(str::to_string), uuid: uuid.into() }
+        Item { description: desc.into(), pos: Point::default(), id: id.map(str::to_string), uuid: uuid.into() }
     }
 
     fn erc_violation(kind: &str, items: Vec<Item>, excluded: bool) -> Violation {
@@ -2247,7 +2251,7 @@ fi"#;
         let v = json!({ "type": "pin_not_connected", "description": "Pin not connected", "severity": "error",
             "items": [{ "description": "Symbol #PWR03 Pin 1 [Power input, Line]", "pos": { "x": 115.57, "y": 110.49 }, "uuid": "693a38f5-591c-4c06-9786-e8973d13af99" }] });
         let items = Violation::marker_items(&v, true);
-        assert_eq!((items[0].x_nm, items[0].y_nm), (115_570_000, 110_490_000));
+        assert_eq!((items[0].x_nm, items[0].y_nm), (mm(115.57), mm(110.49)));
         assert!(Violation::marker_items(&v, false).is_empty(), "inches: not known");
         let mut violation = Violation::from_json(&v, &HashMap::new(), true);
         violation.sheet = "/r".into();

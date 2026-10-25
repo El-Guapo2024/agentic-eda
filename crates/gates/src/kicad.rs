@@ -145,13 +145,13 @@ mod tests {
     use eda_kicad_engine::Item;
 
     fn violation(kind: &str, severity: &str, first_item: &str, id: Option<&str>) -> Violation {
-        Violation { kind: kind.into(), description: format!("{kind} description"), severity: severity.into(), items: vec![Item { description: first_item.into(), pos: (0, 0), id: id.map(str::to_string), uuid: "u".into() }], ..Default::default() }
+        Violation { kind: kind.into(), description: format!("{kind} description"), severity: severity.into(), items: vec![Item { description: first_item.into(), pos: eda_model::ir::Point::default(), id: id.map(str::to_string), uuid: "u".into() }], ..Default::default() }
     }
 
     /// kicad-cli's edge-clearance shape: the Edge.Cuts segment and the copper, in either order.
     fn edge_violation(copper: &str, id: &str, edge_first: bool) -> Violation {
         let mut v = violation("copper_edge_clearance", "error", copper, Some(id));
-        let edge = Item { description: "Segment on Edge.Cuts".into(), pos: (0, 0), id: Some("outline".into()), uuid: "e".into() };
+        let edge = Item { description: "Segment on Edge.Cuts".into(), pos: eda_model::ir::Point::default(), id: Some("outline".into()), uuid: "e".into() };
         if edge_first {
             v.items.insert(0, edge);
         } else {
@@ -187,7 +187,7 @@ mod tests {
     fn an_edge_shape_that_is_not_the_polygon_outline_is_dropped_from_the_location_too() {
         // An arc or a circle of the outline has a shape id of its own, not "outline"; the pad is still where the finding is.
         let mut v = edge_violation("Pad 1 [GND] of R1 on F.Cu", "R1.1", true);
-        v.items[0] = Item { description: "Arc on Edge.Cuts".into(), pos: (0, 0), id: Some("shp_3f9a".into()), uuid: "e".into() };
+        v.items[0] = Item { description: "Arc on Edge.Cuts".into(), pos: eda_model::ir::Point::default(), id: Some("shp_3f9a".into()), uuid: "e".into() };
         let r = placement_from(&report(vec![v]));
         let pad: Vec<_> = r.iter().filter(|c| c.check == "placement_pad_edge_clearance").collect();
         assert_eq!(pad.len(), 1);
