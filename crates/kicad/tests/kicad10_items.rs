@@ -506,7 +506,7 @@ fn inside(ring: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
     let n = ring.len();
     for i in 0..n {
         let (a, b) = (ring[i], ring[(i + 1) % n]);
-        if (a.y > p.y) != (b.y > p.y) && (p.x.raw_shim() as f64) < (b.x - a.x).raw_shim() as f64 * (p.y - a.y).raw_shim() as f64 / (b.y - a.y).raw_shim() as f64 + a.x.raw_shim() as f64 {
+        if (a.y > p.y) != (b.y > p.y) && (p.x.as_f64()) < (b.x - a.x).as_f64() * (p.y - a.y).as_f64() / (b.y - a.y).as_f64() + a.x.as_f64() {
             c = !c;
         }
     }

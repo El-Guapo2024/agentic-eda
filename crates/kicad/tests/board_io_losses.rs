@@ -45,11 +45,11 @@ fn blocks<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
     out
 }
 
-fn p(x: i64, y: i64) -> Point {
-    Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+fn p(x: Nm, y: Nm) -> Point {
+    Point { x, y }
 }
 
-const MM: i64 = 1_000_000;
+const MM: Nm = Nm::new(1_000_000);
 
 /// p22 F1: `parseZONE`'s `case T_polygon` hands every `(polygon ...)` to `ZONE::AddPolygon`, which makes the first the outline and the others its holes. The zone
 /// stays one zone, the hole is not a zone of its own, and the writer gives back one `(zone` with both `(polygon`s.
@@ -71,7 +71,7 @@ fn zone_with_a_hole_is_one_zone_with_a_hole() {
     let zones = &design.routing.as_ref().expect("routing").zones;
     assert_eq!(zones.len(), 1, "one zone, not one per (polygon): {zones:?}");
     let z = &zones[0];
-    assert_eq!(z.outline, vec![p(0, 0), p(10 * MM, 0), p(10 * MM, 10 * MM), p(0, 10 * MM)]);
+    assert_eq!(z.outline, vec![p(Nm::ZERO, Nm::ZERO), p(10 * MM, Nm::ZERO), p(10 * MM, 10 * MM), p(Nm::ZERO, 10 * MM)]);
     assert_eq!(z.holes, vec![vec![p(4 * MM, 4 * MM), p(6 * MM, 4 * MM), p(6 * MM, 6 * MM), p(4 * MM, 6 * MM)]]);
     assert!(z.is_rule_area && z.keepout_tracks);
 
@@ -170,7 +170,7 @@ fn a_curve_with_a_control_point_on_its_end_is_kept() {
         eda_model::ir::Shape::Bezier { start, c1, c2, end, .. } => Some((*start, *c1, *c2, *end)),
         _ => None,
     });
-    assert_eq!(curve, Some((p(0, 0), p(0, 0), p(3 * MM, 2 * MM), p(3 * MM, 0))), "{shapes:?}");
+    assert_eq!(curve, Some((p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, Nm::ZERO), p(3 * MM, 2 * MM), p(3 * MM, Nm::ZERO))), "{shapes:?}");
     assert!(notes.outline_errors.is_empty(), "the slot is closed: {:?}", notes.outline_errors);
     let out = export(&design, &model);
     assert!(out.contains("(gr_curve (pts (xy 0 0) (xy 0 0) (xy 3 2) (xy 3 0))"), "{out}");
@@ -201,9 +201,9 @@ fn a_board_rectangles_corner_radius_is_read_and_written_back() {
     assert!(!lines.is_empty());
     // Outside the rounded rectangle: beyond a corner's arc (centres 3 mm in from each corner), by more than the flattening.
     let outside = |q: Point| {
-        let cx = q.x.clamp(Nm::from_raw_shim(23 * MM), Nm::from_raw_shim(37 * MM));
-        let cy = q.y.clamp(Nm::from_raw_shim(23 * MM), Nm::from_raw_shim(27 * MM));
-        (((q.x - cx).raw_shim() as f64).hypot((q.y - cy).raw_shim() as f64)) > 3.0 * MM as f64 + 20_000.0
+        let cx = q.x.clamp(23 * MM, 37 * MM);
+        let cy = q.y.clamp(23 * MM, 27 * MM);
+        (((q.x - cx).as_f64()).hypot((q.y - cy).as_f64())) > 3.0 * MM.as_f64() + 20_000.0
     };
     assert!(lines.iter().all(|(a, b)| !outside(*a) && !outside(*b)), "a hatch line in a rounded-off corner: {lines:?}");
 }
@@ -237,7 +237,7 @@ fn a_footprints_edge_cuts_are_written_inside_the_footprint_and_cut_the_outline()
     assert!((outline.polys.area() / 1e12 - 1988.0).abs() < 0.01, "{}", outline.polys.area() / 1e12);
     // Moving the footprint moves the notch: it is in the footprint's frame.
     let mut moved = design.clone();
-    moved.placement.as_mut().unwrap().footprints[0].at = p(10 * MM, 0);
+    moved.placement.as_mut().unwrap().footprints[0].at = p(10 * MM, Nm::ZERO);
     let after = eda_drc::outline::board_outline_with(&moved, Some(&model), true);
     assert!((after.polys.area() / 1e12 - 1988.0).abs() < 0.01);
     assert_ne!(after.polys.outline(0), outline.polys.outline(0));
@@ -342,8 +342,8 @@ fn the_summary_outline_has_the_footprints_tab_and_the_rounded_corners() {
     let (design, _, notes) = import_kicad_pcb(CARD_EDGE).expect("parses");
     assert!(notes.outline_errors.is_empty() && !notes.outline_open, "{:?}", notes.outline_errors);
     let ring = &design.placement.as_ref().unwrap().outline;
-    let area = |r: &[Point]| (0..r.len()).map(|i| r[i].x.raw_shim() as f64 * r[(i + 1) % r.len()].y.raw_shim() as f64 - r[(i + 1) % r.len()].x.raw_shim() as f64 * r[i].y.raw_shim() as f64).sum::<f64>().abs() / 2e12;
-    assert!(ring.iter().any(|q| q.y == Nm::from_raw_shim(-5 * MM)), "the tab is in the summary: {ring:?}");
+    let area = |r: &[Point]| (0..r.len()).map(|i| r[i].x.as_f64() * r[(i + 1) % r.len()].y.as_f64() - r[(i + 1) % r.len()].x.as_f64() * r[i].y.as_f64()).sum::<f64>().abs() / 2e12;
+    assert!(ring.iter().any(|q| q.y == -5 * MM), "the tab is in the summary: {ring:?}");
     assert!((area(ring) - (1200.0 + 50.0)).abs() < 0.01, "{}", area(ring));
 
     let rounded = r#"(kicad_pcb (version 20240108) (generator "pcbnew")

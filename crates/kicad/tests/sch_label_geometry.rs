@@ -61,7 +61,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     let sch = design.schematic.as_mut().unwrap();
     for (i, (kind, spin, look)) in cases().into_iter().enumerate() {
         let id = format!("lbl_geometry_{i}");
-        let at = Point { x: mm(250.0), y: Nm::from_raw_shim(20_000_000 + 14_000_000 * i as i64) };
+        let at = Point { x: mm(250.0), y: mm(20.0) + mm(14.0) * i as i64 };
         sch.labels.push(NetLabel { id: id.clone(), net: format!("LABEL{i}"), at, kind });
         sch.extras.label_spins.insert(id.clone(), spin);
         if !look.is_default() {

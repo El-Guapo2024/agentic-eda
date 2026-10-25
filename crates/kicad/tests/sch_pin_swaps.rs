@@ -102,7 +102,7 @@ fn sheet(m: &ConstraintModel, rot: u32, swapped: bool) -> SchematicSection {
     for (number, tip) in eda_engine::placed::pin_points(&sym, part, lib.as_ref()) {
         let net = format!("NET_{}", ["A", "B", "Y"][number.parse::<usize>().unwrap() - 1]);
         let toward_body = geom.pins.iter().find(|g| g.number == number).map(|g| g.orient.dir()).expect("the pin has a geometry");
-        let end = Point { x: tip.x - Nm::from_raw_shim((toward_body.0 * 12_700_000.0).round() as i64), y: tip.y - Nm::from_raw_shim((toward_body.1 * 12_700_000.0).round() as i64) };
+        let end = Point { x: tip.x - Nm::kiround(toward_body.0 * 12_700_000.0), y: tip.y - Nm::kiround(toward_body.1 * 12_700_000.0) };
         sch.wires.push(Wire { id: format!("w_{net}"), net: net.clone(), pins: vec![], pts: vec![tip, end], bus: false });
         sch.labels.push(NetLabel { id: format!("l_{net}"), net, at: end, kind: LabelKind::Local });
     }

@@ -105,8 +105,8 @@ fn text_sheet(m: &ConstraintModel) -> SchematicSection {
     use eda_model::ir::{SchematicText, TextJustify as H, TextVAlign as V};
     use eda_model::sch_extras::SchTextJustify as J;
     let mut sch = gate_sheet(m, false);
-    let text = |id: &str, content: &str, x: i64, angle: u32| SchematicText { id: id.into(), content: content.into(), at: Point { x: Nm::from_raw_shim(x), y: mm(40.0) }, angle, size_nm: mm(1.27) };
-    sch.texts = vec![text("txt_legacy", "legacy", 10_000_000, 0), text("txt_centre", "centred", 40_000_000, 0), text("txt_up", "runs up", 70_000_000, 90_000), text("txt_mirror", "mirrored", 100_000_000, 0)];
+    let text = |id: &str, content: &str, x: Nm, angle: u32| SchematicText { id: id.into(), content: content.into(), at: Point { x, y: mm(40.0) }, angle, size_nm: mm(1.27) };
+    sch.texts = vec![text("txt_legacy", "legacy", mm(10.0), 0), text("txt_centre", "centred", mm(40.0), 0), text("txt_up", "runs up", mm(70.0), 90_000), text("txt_mirror", "mirrored", mm(100.0), 0)];
     sch.extras.set_text_justify("txt_centre", J::FILE_DEFAULT);
     sch.extras.set_text_justify("txt_up", J { h: H::Right, v: V::Top });
     // what `X` on a left-justified horizontal text leaves: the text ends at its anchor (`SCH_TEXT::MirrorSpinStyle`)

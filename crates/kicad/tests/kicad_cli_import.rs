@@ -272,7 +272,7 @@ fn norm360(deg: f64) -> f64 {
 /// (see `pcb.rs::write_footprint`'s negation comment, and `import.rs`'s
 /// `import_rot_millideg`, which undoes it on the way in).
 fn expected_pos(fp: &eda_model::ir::FootprintInstance) -> (f64, f64, f64, &'static str) {
-    (fp.at.x.raw_shim() as f64 / 1000.0, -(fp.at.y.raw_shim() as f64) / 1000.0, norm360(-(fp.rot as f64) / 1000.0), if fp.side == Side::Bottom { "bottom" } else { "top" })
+    (fp.at.x.as_f64() / 1000.0, -(fp.at.y.as_f64()) / 1000.0, norm360(-(fp.rot as f64) / 1000.0), if fp.side == Side::Bottom { "bottom" } else { "top" })
 }
 
 /// Cross-check against KiCad's own template boards (installed alongside
@@ -400,17 +400,17 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
     let net = model.nets[0].name.clone();
     let footprint = board.placement.as_ref().unwrap().footprints[0].id.clone();
     let corner = board.placement.as_ref().unwrap().outline[0];
-    let at = |dx: i64, dy: i64| Point { x: corner.x + Nm::from_raw_shim(dx), y: corner.y + Nm::from_raw_shim(dy) };
+    let at = |dx: Nm, dy: Nm| Point { x: corner.x + dx, y: corner.y + dy };
 
     // The routing section: an arc track, a teardrop, a keepout, a pour with settings of its own.
     let routing = board.routing.as_mut().unwrap();
-    routing.tracks.push(Track::new_arc(net.clone(), "F.Cu".into(), mm(0.25), at(1_000_000, 1_000_000), at(2_000_000, 500_000), at(3_000_000, 1_000_000)));
-    routing.zones.push(Zone { net: net.clone(), layer: "F.Cu".into(), outline: vec![at(1_000_000, 3_000_000), at(2_000_000, 3_300_000), at(2_000_000, 4_300_000)], teardrop: true, ..Default::default() });
-    routing.zones.push(Zone { layer: "F.Cu".into(), outline: vec![at(4_000_000, 1_000_000), at(7_000_000, 1_000_000), at(7_000_000, 3_000_000), at(4_000_000, 3_000_000)], is_rule_area: true, keepout_tracks: true, keepout_vias: true, ..Default::default() });
+    routing.tracks.push(Track::new_arc(net.clone(), "F.Cu".into(), mm(0.25), at(mm(1.0), mm(1.0)), at(mm(2.0), mm(0.5)), at(mm(3.0), mm(1.0))));
+    routing.zones.push(Zone { net: net.clone(), layer: "F.Cu".into(), outline: vec![at(mm(1.0), mm(3.0)), at(mm(2.0), mm(3.3)), at(mm(2.0), mm(4.3))], teardrop: true, ..Default::default() });
+    routing.zones.push(Zone { layer: "F.Cu".into(), outline: vec![at(mm(4.0), mm(1.0)), at(mm(7.0), mm(1.0)), at(mm(7.0), mm(3.0)), at(mm(4.0), mm(3.0))], is_rule_area: true, keepout_tracks: true, keepout_vias: true, ..Default::default() });
     routing.zones.push(Zone {
         net: net.clone(),
         layer: "B.Cu".into(),
-        outline: vec![at(1_000_000, 5_000_000), at(6_000_000, 5_000_000), at(6_000_000, 8_000_000), at(1_000_000, 8_000_000)],
+        outline: vec![at(mm(1.0), mm(5.0)), at(mm(6.0), mm(5.0)), at(mm(6.0), mm(8.0)), at(mm(1.0), mm(8.0))],
         name: "pour".into(),
         priority: 3,
         clearance: mm(0.3),
@@ -423,8 +423,8 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
         id: String::new(),
         layer: "Dwgs.User".into(),
         kind: DimensionKind::Aligned { height: mm(2.0) },
-        start: at(0, 9_000_000),
-        end: at(8_000_000, 9_000_000),
+        start: at(Nm::ZERO, mm(9.0)),
+        end: at(mm(8.0), mm(9.0)),
         prefix: "L=".into(),
         suffix: "".into(),
         override_text: None,
@@ -476,7 +476,7 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
 
     // The arc is still an arc, with the same three points.
     let arcs: Vec<_> = rt.tracks.iter().filter_map(|t| t.arc()).collect();
-    assert_eq!(arcs, vec![(at(1_000_000, 1_000_000), at(2_000_000, 500_000), at(3_000_000, 1_000_000))], "the arc track");
+    assert_eq!(arcs, vec![(at(mm(1.0), mm(1.0)), at(mm(2.0), mm(0.5)), at(mm(3.0), mm(1.0)))], "the arc track");
     // The dimension keeps its kind, its feature points, its height and its format.
     assert_eq!(dr.dimensions.len(), 1, "the dimension");
     let d = &dr.dimensions[0];

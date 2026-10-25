@@ -32,9 +32,9 @@ fn export(d: &Design, model: &ConstraintModel) -> String {
     export_kicad_pcb(d, model, &ExportMeta { date: "2026-01-01", title: "hatch_rt" }).expect("export_kicad_pcb")
 }
 
-fn hatch_of_shape_at(d: &Design, x: i64, y: i64) -> Option<HatchKind> {
+fn hatch_of_shape_at(d: &Design, x: Nm, y: Nm) -> Option<HatchKind> {
     let dr = d.drawings.as_ref()?;
-    let shape = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }))?;
+    let shape = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x, y }))?;
     dr.board_items.hatch_of(shape.id())
 }
 
@@ -44,11 +44,11 @@ fn the_three_hatches_are_read_and_a_solid_or_empty_fill_is_not_one() {
     let dr = design.drawings.as_ref().expect("drawings");
     assert_eq!(dr.shapes.len(), 5);
     assert_eq!(dr.board_items.shape_styles.len(), 3, "{:?}", dr.board_items.shape_styles);
-    assert_eq!(hatch_of_shape_at(&design, 0, 0), Some(HatchKind::Hatch));
-    assert_eq!(hatch_of_shape_at(&design, 30_000_000, 5_000_000), Some(HatchKind::ReverseHatch));
-    assert_eq!(hatch_of_shape_at(&design, 50_000_000, 0), Some(HatchKind::CrossHatch));
-    assert_eq!(hatch_of_shape_at(&design, 0, 20_000_000), None);
-    assert_eq!(hatch_of_shape_at(&design, 20_000_000, 20_000_000), None);
+    assert_eq!(hatch_of_shape_at(&design, Nm::ZERO, Nm::ZERO), Some(HatchKind::Hatch));
+    assert_eq!(hatch_of_shape_at(&design, mm(30.0), mm(5.0)), Some(HatchKind::ReverseHatch));
+    assert_eq!(hatch_of_shape_at(&design, mm(50.0), Nm::ZERO), Some(HatchKind::CrossHatch));
+    assert_eq!(hatch_of_shape_at(&design, Nm::ZERO, mm(20.0)), None);
+    assert_eq!(hatch_of_shape_at(&design, mm(20.0), mm(20.0)), None);
     // A hatched shape is not "filled": the fill the IR has is the solid one.
     let hatched = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: Nm::ZERO, y: Nm::ZERO })).unwrap();
     assert!(!hatched.is_filled());

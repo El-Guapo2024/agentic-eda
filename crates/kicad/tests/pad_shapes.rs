@@ -174,8 +174,8 @@ fn a_custom_pad_on_the_back_covers_the_mirror_image_of_the_one_on_the_front() {
         let (f, b) = (front.copper.bbox(Nm::ZERO), back.copper.bbox(Nm::ZERO));
         // Mirrored about x = 20: x -> 40 - x.
         let mirrored = (mm(40.0) - f.2, f.1, mm(40.0) - f.0, f.3);
-        let tol = 2000;
-        assert!((mirrored.0 - b.0).abs() <= Nm::from_raw_shim(tol) && (mirrored.1 - b.1).abs() <= Nm::from_raw_shim(tol) && (mirrored.2 - b.2).abs() <= Nm::from_raw_shim(tol) && (mirrored.3 - b.3).abs() <= Nm::from_raw_shim(tol), "pad {number}: {f:?} mirrored {mirrored:?} vs {b:?}");
+        let tol = Nm::new(2000);
+        assert!((mirrored.0 - b.0).abs() <= tol && (mirrored.1 - b.1).abs() <= tol && (mirrored.2 - b.2).abs() <= tol && (mirrored.3 - b.3).abs() <= tol, "pad {number}: {f:?} mirrored {mirrored:?} vs {b:?}");
     }
 }
 
@@ -490,8 +490,8 @@ fn kicad_cli_drc_measures_the_clearance_to_these_pads_as_the_drc_here_does() {
         let (design, model, _) = import_kicad_pcb(&text).expect("imports");
         let board = eda_drc::board::build(&design, &model);
         let copper = &board.pads[0].copper;
-        let nm = |v: f64| (v * 1e6).round() as i64;
-        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: Nm::from_raw_shim(nm(a.0)), y: Nm::from_raw_shim(nm(a.1)) }, b: eda_model::ir::Point { x: Nm::from_raw_shim(nm(b.0)), y: Nm::from_raw_shim(nm(b.1)) }, r: mm(0.1) };
+        let nm = |v: f64| Nm::kiround(v * 1e6);
+        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: nm(a.0), y: nm(a.1) }, b: eda_model::ir::Point { x: nm(b.0), y: nm(b.1) }, r: mm(0.1) };
         let ours = copper.gap_to(&track) / 1e6;
         eprintln!("{name}: kicad-cli {theirs:.4} mm, here {ours:.4} mm");
         assert!((ours - theirs).abs() < 0.002, "{name}: kicad-cli's DRC says {theirs} mm of air, the DRC here {ours} mm");
