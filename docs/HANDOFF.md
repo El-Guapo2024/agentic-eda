@@ -17,6 +17,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## What landed (2026-10-14 to 10-24)
 
+- 2026-10-25: **the length type, wave 2** (`53d856b7` ops, `044a5b46` pns, `027cfd87` cli group, `3bb23b95` core crates): every shim removed; same_design 138/138. Bugs caught: import-kicad's empty board was 0.1 x 0.08 mm (now 100 x 80), render's mirrored-symbol bounds ~15 km off (mm/nm mix), lint's um/nm message, the mouse-trail oracle test at 1/1000 scale, the undo tests' sheet at 0.09 mm.
 - 2026-10-25: **the length type, wave 1** (`7745bb56`): `Nm` is a newtype (see `docs/NANOMETRES.md` "The length type"); the model converted, other crates through `raw_shim` markers; no behaviour change (`tools/same_design.sh`: 138 cases identical). Caught three micrometre leftovers: the no-connect obstacle, the custom-pad max error, DRC's reference silk box.
 - 2026-10-25: **fix batch D, schematic connectivity**: buses sharing a member name, hidden power pins, `${#}` per placement, bus aliases, unit-0 pins, ERC exclusions per shared-sheet placement and on import; an imported KiCad schematic is no longer left in KiCad's frame. 22 QA hierarchies trace as kicad-cli reads them. Open: F5 keyed on a second item, project `${VAR}` in power values.
 - 2026-10-25: **fix batch A, KiCad's names** (`a8287704`): KiCad's net names everywhere incl. the studio (option 1), every net the intent names labelled in the derived schematic (the user, 2026-10-24), one footprint name, `(path)`/sheetname/sheetfile, fields and pinfunction/pintype, back footprints in KiCad's frame; kicad-cli's schematic-parity DRC: 0 differences on opamp_filter, ldo, mcu30 (were 22 and 76). R6 merged 2026-10-25: package parts carry the installed footprint whole (pin headers keep the built-in pads); the repair loop reorders LED/resistor chains and re-places for proximity, so every example places at seeds 0-2.
@@ -65,7 +66,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-nm2-ops` (`~/work/agentic-eda-exports`), `task-nm2-pns` (`-embedded`), `task-nm2-cli` (`-rules`: cli, kicad-engine, eda, intent, judge), `task-nm2-core` (`-router`: kicad, drc, connectivity, engine, gates, lint, place, freeroute, interchange, cypress, render, grid) | Length type wave 2: remove the wave-1 shims crate by crate (brief `~/work/briefs/fix/nm-wave2.md`) | started 2026-10-25 | all; then wave 3: the cross-crate pub signatures each lists |
+| `task-nm3-pub` (`~/work/agentic-eda-exports`) | Length type wave 3: type the cross-crate pub items wave 2 kept on i64, delete the shim methods, NANOMETRES.md, refresh the stale parity raw outputs | started 2026-10-25 | all |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
