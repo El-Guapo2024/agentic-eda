@@ -397,7 +397,7 @@ mod tests {
     }
 
     fn fp(pads: Vec<Pad>, shapes: Vec<FpShape>) -> Footprint {
-        Footprint { name: "X".into(), pads, art: FpArt { shapes, texts: vec![] }, courtyard: Some((1_700_000, 800_000)), ..Default::default() }
+        Footprint { name: "X".into(), pads, art: FpArt { shapes, texts: vec![], courtyard: vec![] }, courtyard: Some((1_700_000, 800_000)), ..Default::default() }
     }
 
     fn facts(f: &Footprint) -> InstanceFacts<'_> {

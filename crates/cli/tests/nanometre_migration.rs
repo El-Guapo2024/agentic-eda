@@ -193,8 +193,22 @@ fn the_old_boards_drc_is_the_one_the_old_binary_got() {
     let dir = old_board("drc");
     let out = eda(&["board", "drc", "-C", dir.to_str().unwrap()]);
     let start = out.find('{').expect("a JSON report");
-    let new: Value = serde_json::from_str(out[start..].trim()).unwrap_or_else(|e| panic!("{e}: {out}"));
+    let mut new: Value = serde_json::from_str(out[start..].trim()).unwrap_or_else(|e| panic!("{e}: {out}"));
     let old = json(&fixture().join("old_board_um.drc.json"));
+    // U1, a `SOIC-8` package part, carries the installed `Package_SO:SOIC-8_3.9x4.9mm_P1.27mm` whole since R6 (PARITY-pcb.md section 53), its
+    // reference field where the library puts it, over C2's silkscreen and its pad 2: two violations the old binary's built-in field did not have,
+    // which say nothing of the units. They are left out, and every other violation is the old binary's.
+    let library_field = |v: &Value| v["items"].as_array().into_iter().flatten().any(|i| i["description"] == "Reference field of U1");
+    let dropped: Vec<Value> = new["violations"].as_array().into_iter().flatten().filter(|v| library_field(v)).cloned().collect();
+    assert_eq!(dropped.iter().map(|v| v["type"].as_str().unwrap_or("").to_string()).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>(), ["silk_over_copper", "silk_overlap"], "{dropped:#?}");
+    assert_eq!(dropped.len(), 2, "{dropped:#?}");
+    if let Some(v) = new["violations"].as_array_mut() {
+        v.retain(|x| !library_field(x));
+    }
+    for d in &dropped {
+        let k = d["type"].as_str().unwrap();
+        new["counts"][k] = Value::from(new["counts"][k].as_i64().unwrap() - 1);
+    }
     assert_eq!(new["counts"], old["counts"], "the same violations, kind by kind");
     let places = |r: &Value| {
         let mut v: Vec<String> = r["violations"].as_array().into_iter().flatten().map(|x| format!("{} {}", x["type"], x["positions_nm"])).collect();

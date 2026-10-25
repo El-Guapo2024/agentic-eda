@@ -194,6 +194,7 @@ pub fn import_zen(path: &Path) -> Result<ConstraintModel, Vec<CheckResult>> {
         instance_footprints: Default::default(),
         edited_models: Default::default(),
         installed_art: Default::default(),
+        installed_footprints: Default::default(),
         symbols: Vec::new(),
         symbol_sim_fields: Default::default(),
         board: Default::default(),

@@ -329,6 +329,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         instance_footprints: Default::default(),
         edited_models: Default::default(),
         installed_art: Default::default(),
+        installed_footprints: Default::default(),
         symbols: vec![],
         symbol_sim_fields: Default::default(),
         board,
@@ -1432,7 +1433,7 @@ fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str,
 /// `fp_rect`/`fp_poly`/`fp_circle` are closed already; `fp_line`/`fp_arc`
 /// segments are chained end to end. An open chain is dropped, like the
 /// malformed-courtyard case in source.
-fn footprint_courtyard_outlines(fp: &[Sexpr], side: Side) -> Vec<Vec<(i64, i64)>> {
+pub(crate) fn footprint_courtyard_outlines(fp: &[Sexpr], side: Side) -> Vec<Vec<(i64, i64)>> {
     let is_crtyd = |item: &[Sexpr]| -> bool { matches!(sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd")) };
     let mut outlines: Vec<Vec<Point>> = Vec::new();
     for item in sexpr::find_all(fp, "fp_rect").filter(|it| is_crtyd(it)) {

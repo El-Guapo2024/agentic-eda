@@ -146,6 +146,7 @@ impl ConstraintModel {
         }
         self.instance_footprints = rekey(std::mem::take(&mut self.instance_footprints), map);
         self.installed_art = rekey(std::mem::take(&mut self.installed_art), map);
+        self.installed_footprints = rekey(std::mem::take(&mut self.installed_footprints), map);
     }
 }
 

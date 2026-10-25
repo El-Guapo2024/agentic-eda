@@ -430,11 +430,16 @@ pub struct FpArt {
     pub shapes: Vec<FpShape>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<FpText>,
+    /// The courtyard's own graphics, as a library footprint draws them (`F.CrtYd` lines, a rectangle ...): what the board writes for the courtyard, so it
+    /// is the library's item for item (`FOOTPRINT::FootprintNeedsUpdate` compares every graphic). Not the courtyard the checks use
+    /// (`Footprint::courtyard_outlines`, `courtyard`), and empty but for a footprint read from a library file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub courtyard: Vec<FpShape>,
 }
 
 impl FpArt {
     pub fn is_empty(&self) -> bool {
-        self.shapes.is_empty() && self.texts.is_empty()
+        self.shapes.is_empty() && self.texts.is_empty() && self.courtyard.is_empty()
     }
 
     /// The shapes on `layer` (as for a top-side footprint).
@@ -462,6 +467,7 @@ impl FpArt {
                     t
                 })
                 .collect(),
+            courtyard: self.courtyard.iter().map(|s| s.placed(by)).collect(),
         }
     }
 
@@ -476,6 +482,7 @@ impl FpArt {
         FpArt {
             shapes: graphics.iter().filter(|g| is_art_layer(g.layer())).map(|g| FpShape::new(strip_id(g))).collect(),
             texts: texts.iter().map(FpText::from_library).collect(),
+            courtyard: vec![],
         }
     }
 

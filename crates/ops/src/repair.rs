@@ -232,7 +232,13 @@ pub fn repair(board: &mut Board, model: &ConstraintModel, max_steps: u32) -> usi
                     eda_model::units::to_mm(fix.close_nm())
                 );
             }
+            let was = board.failures();
             apply_fix(board, &fix, max_steps);
+            if board.failures() >= was && !replace(board, model, &fix) && !pinned(model).contains(&fix.toward) {
+                // the other part of the pair, put down beside the first
+                let back = Fix { mover: fix.toward.clone(), toward: fix.mover.clone(), ..fix.clone() };
+                replace(board, model, &back);
+            }
         }
         let uncrossed = uncross(board, model);
         if board.failures() >= before && !uncrossed {
@@ -240,6 +246,102 @@ pub fn repair(board: &mut Board, model: &ConstraintModel, max_steps: u32) -> usi
         }
     }
     start.saturating_sub(board.failures())
+}
+
+/// Put the mover of a proximity failure down again where its rules want it, when walking it there does not work: ripped and placed beside the part
+/// it has to be near (or beside any part one of its rules names), on every side and every way round; and if no such pose has room, with a part that
+/// sits beside the target ripped first, so the mover takes its place, and that part put back wherever it now places best. The best move that leaves
+/// fewer failures and no new overlap or edge fault is kept.
+///
+/// A walk is blocked by whatever lies between: on `ldo_proximity_heavy` with the installed SOT-223 (a courtyard 0.3 mm taller than the built-in's
+/// pads give it), C4 took the last room beside U1 and C3, C1 went down 9 mm from C3 under a 3 mm rule, and a nudge towards C3 ran into U1 at once.
+fn replace(board: &mut Board, model: &ConstraintModel, fix: &Fix) -> bool {
+    let pin = pinned(model);
+    let mover = fix.mover.as_str();
+    // the parts the mover's rules name, the target first
+    let mut anchors: Vec<String> = vec![fix.toward.clone()];
+    for r in &model.placement_rules {
+        if let eda_model::PlacementRule::Proximity { a, b, .. } = r {
+            let other = if a == mover { b } else if b == mover { a } else { continue };
+            if !anchors.contains(other) {
+                anchors.push(other.clone());
+            }
+        }
+    }
+    let placed = board.placed();
+    anchors.retain(|a| placed.contains(a));
+    let beside = |cmds: &mut Vec<Vec<Cmd>>, prefix: &[Cmd]| {
+        for anchor in &anchors {
+            for side in Dir::ALL {
+                for quarter_turns in 0..4u8 {
+                    let mut c: Vec<Cmd> = prefix.to_vec();
+                    c.push(Cmd::Rip { part: mover.to_string() });
+                    c.push(Cmd::Place { part: mover.to_string(), anchor: anchor.clone(), side });
+                    if quarter_turns > 0 {
+                        c.push(Cmd::Rotate { part: mover.to_string(), quarter_turns });
+                    }
+                    cmds.push(c);
+                }
+            }
+        }
+    };
+    let mut moves = Vec::new();
+    beside(&mut moves, &[]);
+    let mut best = best_move(board, moves, None);
+    if best.is_none() {
+        // the free parts that sit beside the target: within the rule's distance of it, courtyard to courtyard
+        let Some(pl) = board.design().placement.as_ref() else { return false };
+        let rect = |id: &str| pl.footprints.iter().find(|f| f.id == id).and_then(|f| eda_model::footprint::placed_courtyard(model, model.part(id)?, f));
+        let Some(t) = rect(&fix.toward) else { return false };
+        let reach = fix.allowed_nm;
+        let near: Vec<String> = pl
+            .footprints
+            .iter()
+            .map(|f| f.id.clone())
+            .filter(|k| k != mover && *k != fix.toward && !pin.contains(k))
+            .filter(|k| rect(k).is_some_and(|r| r.0 - reach < t.2 && t.0 < r.2 + reach && r.1 - reach < t.3 && t.1 < r.3 + reach))
+            .collect();
+        for k in near {
+            let mut moves = Vec::new();
+            beside(&mut moves, &[Cmd::Rip { part: k.clone() }]);
+            if let Some((trial, f)) = best_move(board, moves, Some(&k)) {
+                if best.as_ref().is_none_or(|(_, bf)| f < *bf) {
+                    best = Some((trial, f));
+                }
+            }
+        }
+    }
+    let Some((trial, f)) = best else { return false };
+    if std::env::var("EDA_BUILD_TRACE").is_ok() {
+        eprintln!("TRACE replace {mover} beside {}: {} -> {f} failure(s)", fix.toward, board.failures());
+    }
+    *board = trial;
+    true
+}
+
+/// The best of `moves` on a fork of `board` (with `reseat`, a part each move ripped, put back at its best pose): fewer failures than now and no new
+/// overlap or edge fault, the fewest failures first.
+fn best_move<'a>(board: &Board<'a>, moves: Vec<Vec<Cmd>>, reseat: Option<&str>) -> Option<(Board<'a>, usize)> {
+    let (fails_now, faults_now) = (board.failures(), faults(board));
+    let mut best: Option<(Board, usize)> = None;
+    for cmds in moves {
+        let mut trial = board.fork();
+        if cmds.iter().any(|c| trial.apply(c).is_err()) {
+            continue;
+        }
+        // the ripped neighbour goes back where it now places best
+        if let Some(k) = reseat {
+            let Some((o, _)) = crate::build::best_pose(&trial, k) else { continue };
+            if trial.apply(&Cmd::Place { part: o.part, anchor: o.anchor, side: o.side }).is_err() {
+                continue;
+            }
+        }
+        let f = trial.failures();
+        if f < fails_now && faults(&trial) <= faults_now && best.as_ref().is_none_or(|(_, bf)| f < *bf) {
+            best = Some((trial, f));
+        }
+    }
+    best
 }
 
 /// Failing gates other than the crossing gate, and the crossing stub
@@ -254,6 +356,151 @@ fn crossing_pairs(board: &Board) -> (usize, Vec<String>) {
         .and_then(|c| c.location.as_deref())
         .map_or_else(Vec::new, |loc| loc.split(',').map(String::from).collect());
     (other.len(), pairs)
+}
+
+/// A chain of free two-pin parts hung off a fixed part: `head` is the fixed part's pin, `parts` the free parts from it outwards (a resistor and the LED
+/// it feeds), each with the number of its pin towards the head.
+struct Chain {
+    head: String,
+    head_pin: String,
+    parts: Vec<(String, String)>,
+}
+
+/// The chains of the board's two-pin stubs: a free two-pin part on a two-pin net to a part that is not one (U1.3 -- R1.1), and the free two-pin parts
+/// that follow it on two-pin nets (R1.2 -- D1.1), up to three.
+fn chains(model: &ConstraintModel, pin: &BTreeSet<String>) -> Vec<Chain> {
+    let free = |r: &str| !pin.contains(r) && model.part(r).is_some_and(eda_model::is_free_two_pin);
+    let two_pin: Vec<[(&str, &str); 2]> = model
+        .nets
+        .iter()
+        .filter(|n| n.pins.len() == 2)
+        .filter_map(|n| Some([n.pins[0].split_once('.')?, n.pins[1].split_once('.')?]))
+        .filter(|[a, b]| a.0 != b.0)
+        .collect();
+    let mut out = Vec::new();
+    for [a, b] in &two_pin {
+        for (head, first) in [(a, b), (b, a)] {
+            if free(head.0) || !free(first.0) {
+                continue;
+            }
+            let mut parts = vec![(first.0.to_string(), first.1.to_string())];
+            while parts.len() < 3 {
+                let (last, in_pin) = parts.last().cloned().unwrap();
+                // the free part on the last one's other pin
+                let next = two_pin.iter().find_map(|[x, y]| {
+                    let theirs = if x.0 == last && x.1 != in_pin { y } else if y.0 == last && y.1 != in_pin { x } else { return None };
+                    (free(theirs.0) && !parts.iter().any(|(p, _)| p == theirs.0)).then(|| (theirs.0.to_string(), theirs.1.to_string()))
+                });
+                match next {
+                    Some(n) => parts.push(n),
+                    None => break,
+                }
+            }
+            out.push(Chain { head: head.0.to_string(), head_pin: head.1.to_string(), parts });
+        }
+    }
+    out
+}
+
+/// Give the chains hung off one part the places their pins' order asks for: the chains of one shape (the same footprints, link by link) on one head
+/// trade places so that, going round the head, their places come in the order of their pins on it -- the order in which no two stubs cross -- each
+/// part turned whichever way puts its pin nearer the one it joins. Kept when it leaves fewer crossing pairs, no other gate failing that was passing,
+/// and no new overlap or edge fault.
+///
+/// A constructive placer hangs each chain off the head where there is room when its turn comes, and the order the chains come in is the order of the
+/// parts' names, not of their pins: on `mcu_board_30plus`, R6 (U1's pin 8, low on its left side) went down above U1 and R1, R5 and R2 below it out of
+/// order, six crossing pairs that no single turn or swap undoes (each one moves a crossing rather than removing it).
+fn reorder_chains(board: &mut Board, model: &ConstraintModel) -> bool {
+    let pin = pinned(model);
+    let all = chains(model, &pin);
+    let Some(pl) = board.design().placement.clone() else { return false };
+    let fp_of = |id: &str| pl.footprints.iter().find(|f| f.id == id).cloned();
+    let pin_at = |fp: &eda_model::ir::FootprintInstance, number: &str| -> Option<(f64, f64)> {
+        let pads = eda_model::footprint::placed_pads(model, model.part(&fp.id)?, fp)?;
+        let on: Vec<_> = pads.iter().filter(|p| p.number == number).collect();
+        (!on.is_empty()).then(|| (on.iter().map(|p| p.center.x as f64).sum::<f64>() / on.len() as f64, on.iter().map(|p| p.center.y as f64).sum::<f64>() / on.len() as f64))
+    };
+    let shape = |c: &Chain| -> Vec<String> { c.parts.iter().map(|(p, _)| model.part(p).map(crate::footprint_name_of).unwrap_or_default()).collect() };
+    // the groups: one head, one shape, every part placed
+    let mut groups: std::collections::BTreeMap<(String, Vec<String>), Vec<&Chain>> = std::collections::BTreeMap::new();
+    for c in &all {
+        if fp_of(&c.head).is_some() && c.parts.iter().all(|(p, _)| fp_of(p).is_some()) {
+            groups.entry((c.head.clone(), shape(c))).or_default().push(c);
+        }
+    }
+    let (fails, pairs) = crossing_pairs(board);
+    if pairs.is_empty() {
+        return false;
+    }
+    let faults_now = faults(board);
+    let mut best: Option<(Board, usize)> = None;
+    for ((head, _), group) in &groups {
+        if group.len() < 2 {
+            continue;
+        }
+        let Some(hfp) = fp_of(head) else { continue };
+        let centre = (hfp.at.x as f64, hfp.at.y as f64);
+        let angle = |p: (f64, f64)| (p.1 - centre.1).atan2(p.0 - centre.0);
+        // the chains in the order of their pins round the head, and their places in the order round it
+        let mut by_pin: Vec<(f64, &Chain)> = group.iter().filter_map(|c| Some((angle(pin_at(&hfp, &c.head_pin)?), *c))).collect();
+        if by_pin.len() != group.len() {
+            continue;
+        }
+        by_pin.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.parts[0].0.cmp(&b.1.parts[0].0)));
+        let mut slots: Vec<(f64, Vec<eda_model::ir::FootprintInstance>)> =
+            group.iter().map(|c| { let fps: Vec<_> = c.parts.iter().filter_map(|(p, _)| fp_of(p)).collect(); (angle((fps[0].at.x as f64, fps[0].at.y as f64)), fps) }).collect();
+        slots.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1[0].id.cmp(&b.1[0].id)));
+        let n = by_pin.len();
+        for shift in 0..n {
+            let mut trial = board.fork();
+            let mut ok = true;
+            for (i, (_, chain)) in by_pin.iter().enumerate() {
+                let slot = &slots[(i + shift) % n].1;
+                // each part to its slot, turned whichever way of the two puts the pin towards the last one nearer it
+                let mut towards = pin_at(&hfp, &chain.head_pin).unwrap_or(centre);
+                for ((part, in_pin), place) in chain.parts.iter().zip(slot) {
+                    let mut pick: Option<(f64, u32)> = None;
+                    for rot in [place.rot, (place.rot + 180_000) % 360_000] {
+                        let fp = eda_model::ir::FootprintInstance { id: part.clone(), at: place.at, rot, side: place.side, label: place.label };
+                        let Some(p) = pin_at(&fp, in_pin) else { continue };
+                        let d = (p.0 - towards.0).hypot(p.1 - towards.1);
+                        if pick.is_none_or(|(bd, _)| d < bd) {
+                            pick = Some((d, rot));
+                        }
+                    }
+                    let Some((_, rot)) = pick else { ok = false; break };
+                    let Some(cur) = fp_of(part) else { ok = false; break };
+                    let turns = (((rot + 360_000 - cur.rot) % 360_000) / 90_000) as u8;
+                    if trial.apply(&Cmd::MoveTo { part: part.clone(), x: place.at.x, y: place.at.y }).is_err()
+                        || (turns > 0 && trial.apply(&Cmd::Rotate { part: part.clone(), quarter_turns: turns }).is_err())
+                    {
+                        ok = false;
+                        break;
+                    }
+                    // the far pin of this part is what the next one joins
+                    let fp = eda_model::ir::FootprintInstance { id: part.clone(), at: place.at, rot, side: place.side, label: place.label };
+                    let other = model.part(part).and_then(|p| p.pins.iter().map(|q| q.number.clone()).find(|q| q != in_pin));
+                    towards = other.and_then(|o| pin_at(&fp, &o)).unwrap_or(towards);
+                }
+                if !ok {
+                    break;
+                }
+            }
+            if !ok || faults(&trial) > faults_now {
+                continue;
+            }
+            let (f, p) = crossing_pairs(&trial);
+            if f <= fails && p.len() < pairs.len() && best.as_ref().is_none_or(|(_, bp)| p.len() < *bp) {
+                best = Some((trial, p.len()));
+            }
+        }
+    }
+    let Some((trial, after)) = best else { return false };
+    if std::env::var("EDA_BUILD_TRACE").is_ok() {
+        eprintln!("TRACE reorder chains: {} -> {after} crossing pair(s)", pairs.len());
+    }
+    *board = trial;
+    true
 }
 
 /// Turn or swap the free two-pin parts on crossing stubs until nothing
@@ -274,7 +521,7 @@ fn crossing_pairs(board: &Board) -> (usize, Vec<String>) {
 /// taken each round.
 fn uncross(board: &mut Board, model: &ConstraintModel) -> bool {
     let pin = pinned(model);
-    let mut improved = false;
+    let mut improved = reorder_chains(board, model);
     for _ in 0..32 {
         let (fails, pairs) = crossing_pairs(board);
         if pairs.is_empty() {
@@ -356,4 +603,99 @@ pub fn unactionable(board: &Board) -> Vec<CheckResult> {
         .into_iter()
         .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail) && c.check != "placement_proximity")
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eda_model::ir::{Design, PlacementSection, Point, Provenance};
+    use eda_model::{Net, Part, Pin, PinKind};
+
+    fn part(r: &str, pkg: &str, pins: usize) -> Part {
+        Part {
+            reference: r.into(),
+            mpn: None,
+            lcsc: None,
+            value: None,
+            package: Some(pkg.into()),
+            footprint: None,
+            pins: (1..=pins).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
+            body_nm: None,
+            symbol: None,
+            datasheet: None,
+            edge: None,
+        }
+    }
+
+    /// U1 (SOIC-8) with three chains off its left pins 1, 2, 3: `PAi` U1.i -- Ri.1, `LEDi` Ri.2 -- Di.1, the LEDs' pins 2 on GND with U1.4.
+    fn model() -> ConstraintModel {
+        let mut parts = vec![part("U1", "SOIC-8", 8)];
+        let mut nets = vec![Net { name: "GND".into(), pins: vec!["U1.4".into()] }];
+        for i in 1..=3 {
+            parts.push(part(&format!("R{i}"), "0603", 2));
+            parts.push(part(&format!("D{i}"), "0603", 2));
+            nets.push(Net { name: format!("PA{i}"), pins: vec![format!("U1.{i}"), format!("R{i}.1")] });
+            nets.push(Net { name: format!("LED{i}"), pins: vec![format!("R{i}.2"), format!("D{i}.1")] });
+            nets[0].pins.push(format!("D{i}.2"));
+        }
+        ConstraintModel { parts, nets, ..Default::default() }
+    }
+
+    fn design() -> Design {
+        let o = 100_000_000;
+        Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            routing: None,
+            placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: o, y: 0 }, Point { x: o, y: o }, Point { x: 0, y: o }], footprints: vec![], modules: vec![] }),
+            drawings: None,
+        }
+    }
+
+    fn y_of(b: &Board, r: &str) -> i64 {
+        b.design().placement.as_ref().unwrap().footprints.iter().find(|f| f.id == r).unwrap().at.y
+    }
+
+    /// The chains down the left side in the reverse of their pins' order (R3 at the top, R1 at the bottom): every pair of PA stubs crosses, and one
+    /// reorder puts R1 at the top and R3 at the bottom, with nothing crossing and no part on another.
+    #[test]
+    fn chains_hung_out_of_their_pins_order_are_put_in_it() {
+        let m = model();
+        let mut b = Board::new(design(), &m, 100_000, 300_000);
+        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 50_000_000, y: 50_000_000 }).unwrap();
+        for (i, y) in [(3, 47_000_000), (2, 49_500_000), (1, 52_000_000)] {
+            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: 44_500_000, y }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: 41_500_000, y }).unwrap();
+        }
+        let (_, before) = crossing_pairs(&b);
+        assert_eq!(before.len(), 3, "{before:?}");
+        assert!(reorder_chains(&mut b, &m));
+        let (fails, after) = crossing_pairs(&b);
+        assert!(after.is_empty(), "{after:?}");
+        assert_eq!(fails, 0);
+        assert!(y_of(&b, "R1") < y_of(&b, "R2") && y_of(&b, "R2") < y_of(&b, "R3"), "the resistors in the order of U1's pins");
+        assert!(y_of(&b, "D1") < y_of(&b, "D2") && y_of(&b, "D2") < y_of(&b, "D3"), "each LED goes with its resistor");
+        assert_eq!(faults(&b), 0);
+    }
+
+    /// Chains already in their pins' order are left as they are.
+    #[test]
+    fn chains_in_their_pins_order_stay() {
+        let m = model();
+        let mut b = Board::new(design(), &m, 100_000, 300_000);
+        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 50_000_000, y: 50_000_000 }).unwrap();
+        for (i, y) in [(1, 47_000_000), (2, 49_500_000), (3, 52_000_000)] {
+            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: 44_500_000, y }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: 41_500_000, y }).unwrap();
+        }
+        let was = b.design().placement.clone();
+        assert!(!reorder_chains(&mut b, &m));
+        assert_eq!(serde_json::to_string(&b.design().placement).unwrap(), serde_json::to_string(&was).unwrap());
+    }
 }

@@ -1508,6 +1508,11 @@ pub(crate) fn write_footprint(
         for item in &e.courtyard_items {
             writeln!(out, "\t\t{item}").unwrap();
         }
+    } else if !footprint.art.courtyard.is_empty() {
+        // a library footprint's courtyard, item for item as the library draws it
+        for (i, s) in footprint.art.courtyard.iter().enumerate() {
+            crate::fp_art_io::write_shape(out, s, fp, &crate::duid_for(&format!("footprint:{}:crtyd:{i}", fp.id), &fp.id));
+        }
     } else if footprint.courtyard_outlines.is_empty() && own_extra.is_some_and(|e| e.no_courtyard) {
         // The footprint the file had has no courtyard: none is made up for it.
     } else if footprint.courtyard_outlines.is_empty() {

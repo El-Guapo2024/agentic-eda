@@ -88,7 +88,11 @@ pub fn parse_footprint_file(text: &str, name: &str) -> Result<Footprint, String>
         return Err("footprint has no pads this reader could place (missing at/size?)".into());
     }
 
-    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root), courtyard_outlines: vec![], models3d: models_from(root), art: crate::fp_art_io::read_art(root, Side::Top, 0) })
+    // the courtyard as its graphics draw it, for the board to write the same items (`FpArt::courtyard`), and as the outlines the checks use
+    let mut art = crate::fp_art_io::read_art(root, Side::Top, 0);
+    art.courtyard = crate::fp_art_io::read_courtyard(root, Side::Top);
+    let courtyard_outlines = crate::import::footprint_courtyard_outlines(root, Side::Top);
+    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root), courtyard_outlines, models3d: models_from(root), art })
 }
 
 /// The `(model "...")` path, verbatim (KiCad writes it with its own

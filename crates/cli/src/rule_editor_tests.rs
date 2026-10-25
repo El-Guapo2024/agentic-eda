@@ -161,7 +161,8 @@ fn qa_findings(cli: &Path, dir: &Path, name: &str) -> Option<Vec<String>> {
         return None;
     }
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&out).ok()?).ok()?;
-    // (A marker on the board itself gets a new id each run.)
+    // (A marker on the board itself gets a new id each run. The items of one finding in their own order: a connection-width finding's two tracks come
+    // in either order from one run of kicad-cli to the next, its test being run on several threads.)
     let mut f: Vec<String> = ["violations", "unconnected_items"]
         .iter()
         .flat_map(|k| v[*k].as_array().cloned().unwrap_or_default())
@@ -170,6 +171,9 @@ fn qa_findings(cli: &Path, dir: &Path, name: &str) -> Option<Vec<String>> {
                 if item["description"] == "PCB" {
                     item["uuid"] = Value::Null;
                 }
+            }
+            if let Some(items) = x["items"].as_array_mut() {
+                items.sort_by_key(|i| i.to_string());
             }
             x.to_string()
         })

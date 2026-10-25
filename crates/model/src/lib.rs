@@ -121,6 +121,12 @@ pub struct ConstraintModel {
     /// puts it on the built-in footprint it returns. Never part of an intent.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub installed_art: BTreeMap<String, fp_art::FpArt>,
+    /// The installed KiCad footprint a part's *built-in* package stands for, whole -- its pads, art, courtyard and models (reference -> footprint): the one
+    /// the board names (`footprint::footprint_lib_id`), so the board carries that footprint's pads and not the built-in approximation of them (KiCad's Update
+    /// Footprints from Library then changes nothing). Filled by the library loader when the installed library has the footprint and it has the built-in's pad
+    /// numbers; [`ConstraintModel::library_footprint_of`] answers with it before the built-in. Never part of an intent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub installed_footprints: BTreeMap<String, Footprint>,
     /// Resolved library symbols, keyed by their own `lib_id`: filled in by
     /// `eda-kicad`'s symbol-library loader (real installed `.kicad_sym`
     /// files, falling back to `symbol::builtin`) before the schematic is
@@ -1377,6 +1383,9 @@ impl ConstraintModel {
             if let Some(fp) = self.footprints.iter().find(|f| footprint::normalize_name(&f.name) == norm) {
                 return Some(fp.clone());
             }
+        }
+        if let Some(installed) = self.installed_footprints.get(&part.reference) {
+            return Some(installed.clone());
         }
         for key in [part.footprint.as_deref(), part.package.as_deref()].into_iter().flatten() {
             if let Some(mut fp) = footprint::builtin(key) {
