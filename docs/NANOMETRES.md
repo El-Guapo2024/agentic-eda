@@ -232,3 +232,52 @@ Two tolerances stay or got looser, each for a reason:
 4. `tools/parity_report.py`: re-export 12/12, connectivity 98.9% (552/558), and the floor raised to it.
 5. `tools/run-all-checks.sh -j 3`: 42/42.
 6. The migration test (`crates/cli/tests/nanometre_migration.rs`, `crates/model/tests/nanometre_migration.rs`): passes, fast and slow.
+
+## The length type (task-length-newtype, 2026-10-24)
+
+The user's decision of 2026-10-24: lengths are a type of their own, so the compiler catches unit mixing. A tuner default board thickness written
+`1_600` (1.6 µm) for `1_600_000` was the bug of this kind that prompted it: with `Nm = i64` nothing stopped a millimetre float, a micrometre literal
+or a count from being taken for a length.
+
+### `eda_model::units::Nm`
+
+`#[repr(transparent)]` over `i64`, `#[serde(transparent)]`: `design.json`, the intents, the API's JSON and `schema` 2 are the bytes they were, and the
+schema-1 x1000 migration (`units::de`, `Lengths`) reads into it as it read into the `i64`.
+
+| | |
+|---|---|
+| build | `Nm::new(i64)` (a count of nanometres, `const`), `Nm::from_mm(f64)` (KiCad's `parseBoardUnits`: `KiROUND` of the clamp to `INT_LIMIT`), `Nm::kiround(f64)` (a length computed in floating-point nanometres), `units::mm(f64)` / `um(f64)` / `mil(f64)` (a typed or test value, rounded half away from zero, no clamp), `Nm::ZERO`, `Nm::MAX`, `Nm::MIN` |
+| read | `nm.get()` (the count), `nm.mm()`, `nm.um()`, `nm.mils()`, `nm.as_f64()` (nanometres as a float, for geometry), `a.ratio(b)` (`a / b` as a float), `a.area(b)` (nm^2 as an `i128`) |
+| arithmetic | `Nm ± Nm` (also by reference), `-Nm`, `Nm * i64`, `i64 * Nm`, `Nm / i64`, `Nm % Nm`, `Nm / Nm -> i64` (a count, truncated), `+=`, `-=`, `*= i64`, `/= i64`, `Sum`, `abs`, `signum -> i64`, `min` / `max` / `clamp` (`Ord`), `rem_euclid(Nm) -> Nm`, `div_euclid(Nm) -> i64`, `checked_add` / `_sub`, `saturating_add` / `_sub`, `scale(f64)` (`KiROUND( v * k )`), `sch_round()` |
+| not there | `Nm * Nm` (an area is not a length: `area`), `Nm + i64`, `as` casts, `From<i64>` (no silent conversion either way) |
+| printed | `Debug` and `Display` print the bare count, as the `i64` did (messages, `{:?}` keys and snapshots are unchanged); `FromStr` parses a count; `serde_json::Value::from(nm)` is the count |
+
+The ratios `NM_PER_MM`, `NM_PER_UM`, `NM_PER_MIL`, `NM_PER_INCH`, `SCH_IU_NM` stay `i64`: they are counts per unit, not lengths.
+
+### Wave 1: the IR, and shims everywhere else
+
+`crates/model` is converted: `Point`, every length field of the IR (footprints, rules, stackup, outlines, groups, tables, tuning, the overlays),
+and the model's own helpers (`table_text`, `reannotate`, `annotate`'s positions, the floorplan, the board trim). Length fields that were bare `i64`
+became `Nm`: `ErcMarker::at_nm`, `DrcExclusion::positions_nm`, `TuningPattern::last_tuning_length`, `ReannotateInput` / `Listed` / `Bad` `x`,
+`y`, `annotate::Entry::pos`. Three of those held nanometres even in the micrometre IR and were never scaled by the migration, rightly; the source test
+of `tests/nanometre_migration.rs` now takes a field marked `// nanometres since schema 1` as one that is not scaled. What stays `i64` on purpose:
+`TargetRange` (nanometres or attoseconds, by the pattern's domain), `kicad_font` / `kicad_geom` (KiCad's schematic IU, 100 nm), areas
+(`min_island_area`, nm^2), counts and angles.
+
+The other crates compile through **shims**, kept in each crate's own files so the crates can be converted one by one:
+
+- `nm.raw_shim()`: the same as `nm.get()`, where a length meets code that still holds lengths as `i64`;
+- `Nm::from_raw_shim(v)`: the same as `Nm::new(v)`, where an `i64` (a literal, a value from code not converted yet) becomes a length.
+
+Both are `#[doc(hidden)]` and named for `grep -rn raw_shim crates/<crate>`. A literal `0` became `Nm::ZERO` and a type annotation that held an IR
+length became `Nm` where that was the smaller change; neither is a shim. Wave 2 replaces every shim with the typed form: a literal with `mm(..)`,
+`Nm::from_mm`, or a typed constant (`const X: Nm = Nm::new(..)`), and an `i64` local, field, parameter or return type that holds a length with `Nm`.
+Kernels on raw integers (clipper2, shape-poly-set, the Specctra `V`, the router's force vectors) keep their `i64` and convert at their boundary with
+`get` / `new`. The counts per crate at the end of wave 1 are in the table below (`.raw_shim()` / `from_raw_shim(`).
+
+### Proof of no behaviour change
+
+Every shim and every conversion is the identity on the bits, and every operator of `Nm` is the `i64` operator: a program that compiles computes the
+same numbers. Checked by: every test passes with its assertions unchanged (only the types and constructors of test literals changed);
+`tools/same_design.sh <main's eda> <this eda>` (every example through `eda pipeline` at seed 0 and every KiCad QA board through `eda import-kicad`,
+every file compared with `cmp`); `tools/parity_report.py` re-export and connectivity as on main; `tools/run-all-checks.sh`.
