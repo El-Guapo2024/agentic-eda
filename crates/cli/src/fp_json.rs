@@ -96,7 +96,7 @@ fn copper_centre(pad: &Pad, offset: Option<Point>) -> (Nm, Nm) {
     let Some(o) = offset else { return pad.at };
     let rad = (pad.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    (pad.at.0 + Nm::from_raw_shim((o.x.raw_shim() as f64 * cos - o.y.raw_shim() as f64 * sin).round() as i64), pad.at.1 + Nm::from_raw_shim((o.x.raw_shim() as f64 * sin + o.y.raw_shim() as f64 * cos).round() as i64))
+    (pad.at.0 + Nm::kiround(o.x.as_f64() * cos - o.y.as_f64() * sin), pad.at.1 + Nm::kiround(o.x.as_f64() * sin + o.y.as_f64() * cos))
 }
 
 /// One pad of `fp` for the studio: where it is and how big (the keys the canvas has always drawn from), plus its own shape, type,

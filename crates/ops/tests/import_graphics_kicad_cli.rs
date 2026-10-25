@@ -11,6 +11,7 @@ use eda_model::ConstraintModel;
 use eda_ops::{Board, Cmd, GraphicsFormat, ImportGraphics};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use eda_model::units::mm;
 
 fn find_kicad_cli() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("EDA_KICAD_CLI").map(PathBuf::from).filter(|p| p.exists()) {
@@ -65,8 +66,8 @@ fn empty_design() -> Design {
 
 fn import(text: String, fix: Option<Nm>) -> (Design, ConstraintModel) {
     let model = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let req = ImportGraphics { format: GraphicsFormat::Dxf, text, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::from_raw_shim(100_000), group: false, fix_tolerance_nm: fix, replace_outline: false };
+    let mut b = Board::new(empty_design(), &model, mm(0.1), mm(0.3));
+    let req = ImportGraphics { format: GraphicsFormat::Dxf, text, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: mm(0.1), group: false, fix_tolerance_nm: fix, replace_outline: false };
     b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
     (b.design().clone(), model)
 }
@@ -163,7 +164,7 @@ fn fix_discontinuities_closes_an_outline_whose_corners_miss() {
     let dir = scratch("gap");
     let pcb = write_board(&dir, &design, &model);
     assert!(has_violation(&drc(&cli, &dir, &pcb), "invalid_outline"), "the gaps are open to kicad-cli");
-    let (design, model) = import(dxf, Some(Nm::from_raw_shim(1_000_000)));
+    let (design, model) = import(dxf, Some(mm(1.0)));
     let dir = scratch("gap_fixed");
     let pcb = write_board(&dir, &design, &model);
     let report = drc(&cli, &dir, &pcb);
@@ -180,9 +181,9 @@ fn an_svg_outline_is_a_closed_outline_to_kicad_cli_too() {
         return;
     };
     let model = ConstraintModel::default();
-    let mut b = Board::new(empty_design(), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(empty_design(), &model, mm(0.1), mm(0.3));
     let svg = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_rect.svg", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::from_raw_shim(100_000), group: false, fix_tolerance_nm: None, replace_outline: false };
+    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: mm(0.1), group: false, fix_tolerance_nm: None, replace_outline: false };
     b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
     let dir = scratch("svg");
     let pcb = write_board(&dir, b.design(), &model);

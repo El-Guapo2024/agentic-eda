@@ -28,7 +28,7 @@ pub fn read_shape(body: &[u8]) -> Value {
 
 /// A point `{ "x", "y" }` of the request, read field by field.
 fn point_of(v: &Value) -> Option<Point> {
-    Some(Point { x: Nm::from_raw_shim(v.get("x")?.as_i64()?), y: Nm::from_raw_shim(v.get("y")?.as_i64()?) })
+    Some(Point { x: Nm::new(v.get("x")?.as_i64()?), y: Nm::new(v.get("y")?.as_i64()?) })
 }
 
 pub fn check_inductor(body: &[u8]) -> Value {
@@ -37,8 +37,8 @@ pub fn check_inductor(body: &[u8]) -> Value {
         Err(e) => return json!({ "ok": false, "message": format!("not an inductor request: {e}") }),
     };
     let (Some(start), Some(end)) = (req.get("start").and_then(point_of), req.get("end").and_then(point_of)) else { return json!({ "ok": false, "message": "an inductor needs two points" }) };
-    let (Some(length), Some(width)) = (req.get("length_nm").and_then(Value::as_i64), req.get("track_width_nm").and_then(Value::as_i64)) else { return json!({ "ok": false, "message": "an inductor needs a length and a track width" }) };
-    match eda_ops::microwave::inductor_corners(start, end, Nm::from_raw_shim(length), Nm::from_raw_shim(width)) {
+    let (Some(length), Some(width)) = (req.get("length_nm").and_then(Value::as_i64).map(Nm::new), req.get("track_width_nm").and_then(Value::as_i64).map(Nm::new)) else { return json!({ "ok": false, "message": "an inductor needs a length and a track width" }) };
+    match eda_ops::microwave::inductor_corners(start, end, length, width) {
         Ok(_) => json!({ "ok": true }),
         Err(message) => json!({ "ok": false, "message": message }),
     }

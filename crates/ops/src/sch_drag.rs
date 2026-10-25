@@ -605,7 +605,7 @@ impl<'m> Scene<'m> {
     /// along (or a line of no length is lengthened), and when the fixed end is attached to something that cannot move two lines are
     /// added to keep it there, joined by a right angle.
     pub(crate) fn ortho_line_drag(&mut self, st: &mut Drag, line: usize, split: Point, x_bend: &mut i64, y_bend: &mut i64) {
-        let sd = (split.x.raw_shim(), split.y.raw_shim());
+        let sd = (split.x, split.y);
         if parallel(sd, self.segs[line].dir()) && self.segs[line].length() != 0.0 {
             return;
         }
@@ -942,13 +942,13 @@ fn add(p: Point, d: Point) -> Point {
 
 /// `SEG::NearestPoint`.
 fn nearest_on_segment(a: Point, b: Point, p: Point) -> Point {
-    let (dx, dy) = ((b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
+    let (dx, dy) = ((b.x - a.x).as_f64(), (b.y - a.y).as_f64());
     let len2 = dx * dx + dy * dy;
     if len2 == 0.0 {
         return a;
     }
-    let t = (((p.x - a.x).raw_shim() as f64 * dx + (p.y - a.y).raw_shim() as f64 * dy) / len2).clamp(0.0, 1.0);
-    Point { x: a.x + Nm::from_raw_shim((dx * t).round() as i64), y: a.y + Nm::from_raw_shim((dy * t).round() as i64) }
+    let t = (((p.x - a.x).as_f64() * dx + (p.y - a.y).as_f64() * dy) / len2).clamp(0.0, 1.0);
+    Point { x: a.x + Nm::kiround(dx * t), y: a.y + Nm::kiround(dy * t) }
 }
 
 /// `SCH_SHEET_PIN::ConstrainOnEdge( aPos, aAllowEdgeSwitch )`: where a pin dragged to `pos` sits on its sheet's border. `current` is the
@@ -1000,5 +1000,5 @@ pub(crate) fn constrain_on_edge(sheet: &eda_model::ir::SheetInstance, pos: Point
 
 fn distance_to_segment(p: Point, a: Point, b: Point) -> f64 {
     let n = nearest_on_segment(a, b, p);
-    ((p.x - n.x).raw_shim() as f64).hypot((p.y - n.y).raw_shim() as f64)
+    (p.x - n.x).as_f64().hypot((p.y - n.y).as_f64())
 }

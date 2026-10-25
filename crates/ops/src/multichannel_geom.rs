@@ -14,7 +14,7 @@ pub(crate) struct Enclosure<'a> {
 }
 
 fn cross(o: Point, a: Point, b: Point) -> i128 {
-    (a.x - o.x).raw_shim() as i128 * (b.y - o.y).raw_shim() as i128 - (a.y - o.y).raw_shim() as i128 * (b.x - o.x).raw_shim() as i128
+    (a.x - o.x).area(b.y - o.y) - (a.y - o.y).area(b.x - o.x)
 }
 
 fn on_segment(p: Point, a: Point, b: Point) -> bool {
@@ -28,7 +28,7 @@ fn properly_cross(a: Point, b: Point, c: Point, d: Point) -> bool {
 }
 
 fn dist_point_segment(p: Point, a: Point, b: Point) -> f64 {
-    let (px, py, ax, ay, bx, by) = (p.x.raw_shim() as f64, p.y.raw_shim() as f64, a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64);
+    let (px, py, ax, ay, bx, by) = (p.x.as_f64(), p.y.as_f64(), a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64());
     let (dx, dy) = (bx - ax, by - ay);
     let len2 = dx * dx + dy * dy;
     if len2 == 0.0 {
@@ -65,7 +65,7 @@ impl Enclosure<'_> {
         if !pts.iter().all(|p| self.contains_point(*p)) {
             return false;
         }
-        let r = half_width.raw_shim() as f64;
+        let r = half_width.as_f64();
         if pts.len() == 1 {
             return self.edges().all(|(a, b)| dist_point_segment(pts[0], a, b) >= r);
         }
@@ -109,6 +109,7 @@ pub(crate) fn polygon_meets_box(poly: &[Point], b: Box4) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::{mm, um};
     use super::*;
 
     fn p(x: Nm, y: Nm) -> Point {
@@ -116,38 +117,38 @@ mod tests {
     }
 
     fn l_shape() -> Vec<Point> {
-        vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::from_raw_shim(4_000)), p(Nm::from_raw_shim(4_000), Nm::from_raw_shim(4_000)), p(Nm::from_raw_shim(4_000), Nm::from_raw_shim(10_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000))]
+        vec![p(Nm::ZERO, Nm::ZERO), p(mm(0.01), Nm::ZERO), p(mm(0.01), um(4.0)), p(um(4.0), um(4.0)), p(um(4.0), mm(0.01)), p(Nm::ZERO, mm(0.01))]
     }
 
     #[test]
     fn a_track_is_enclosed_when_it_and_its_width_stay_inside() {
         let area = l_shape();
         let e = Enclosure { outline: &area };
-        assert!(e.contains_stroke(&[p(Nm::from_raw_shim(1_000), Nm::from_raw_shim(1_000)), p(Nm::from_raw_shim(9_000), Nm::from_raw_shim(1_000))], Nm::from_raw_shim(100)));
+        assert!(e.contains_stroke(&[p(um(1.0), um(1.0)), p(um(9.0), um(1.0))], Nm::new(100)));
         // the end cap of a wide track reaches the edge
-        assert!(!e.contains_stroke(&[p(Nm::from_raw_shim(1_000), Nm::from_raw_shim(1_000)), p(Nm::from_raw_shim(9_000), Nm::from_raw_shim(1_000))], Nm::from_raw_shim(1_500)));
+        assert!(!e.contains_stroke(&[p(um(1.0), um(1.0)), p(um(9.0), um(1.0))], Nm::new(1_500)));
         // inside at both ends, across the notch of the L
-        assert!(!e.contains_stroke(&[p(Nm::from_raw_shim(9_000), Nm::from_raw_shim(3_000)), p(Nm::from_raw_shim(3_000), Nm::from_raw_shim(9_000))], Nm::from_raw_shim(100)));
+        assert!(!e.contains_stroke(&[p(um(9.0), um(3.0)), p(um(3.0), um(9.0))], Nm::new(100)));
         // an end outside
-        assert!(!e.contains_stroke(&[p(Nm::from_raw_shim(1_000), Nm::from_raw_shim(1_000)), p(Nm::from_raw_shim(11_000), Nm::from_raw_shim(1_000))], Nm::from_raw_shim(100)));
+        assert!(!e.contains_stroke(&[p(um(1.0), um(1.0)), p(mm(0.011), um(1.0))], Nm::new(100)));
     }
 
     #[test]
     fn a_via_a_ring_and_a_box_follow_the_same_rule() {
         let area = l_shape();
         let e = Enclosure { outline: &area };
-        assert!(e.contains_disc(p(Nm::from_raw_shim(2_000), Nm::from_raw_shim(2_000)), Nm::from_raw_shim(300)));
-        assert!(!e.contains_disc(p(Nm::from_raw_shim(9_900), Nm::from_raw_shim(3_900)), Nm::from_raw_shim(300)), "the disc crosses the edge");
-        assert!(e.contains_ring(&[p(Nm::from_raw_shim(1_000), Nm::from_raw_shim(1_000)), p(Nm::from_raw_shim(3_000), Nm::from_raw_shim(1_000)), p(Nm::from_raw_shim(3_000), Nm::from_raw_shim(3_000)), p(Nm::from_raw_shim(1_000), Nm::from_raw_shim(3_000))], Nm::ZERO));
-        assert!(e.contains_box((Nm::from_raw_shim(1_000), Nm::from_raw_shim(5_000), Nm::from_raw_shim(3_000), Nm::from_raw_shim(9_000))));
-        assert!(!e.contains_box((Nm::from_raw_shim(3_000), Nm::from_raw_shim(3_000), Nm::from_raw_shim(6_000), Nm::from_raw_shim(6_000))), "the corner of the L is cut away");
+        assert!(e.contains_disc(p(um(2.0), um(2.0)), Nm::new(300)));
+        assert!(!e.contains_disc(p(Nm::new(9_900), Nm::new(3_900)), Nm::new(300)), "the disc crosses the edge");
+        assert!(e.contains_ring(&[p(um(1.0), um(1.0)), p(um(3.0), um(1.0)), p(um(3.0), um(3.0)), p(um(1.0), um(3.0))], Nm::ZERO));
+        assert!(e.contains_box((um(1.0), um(5.0), um(3.0), um(9.0))));
+        assert!(!e.contains_box((um(3.0), um(3.0), um(6.0), um(6.0))), "the corner of the L is cut away");
     }
 
     #[test]
     fn a_polygon_meets_a_box_when_a_corner_is_in_or_an_edge_crosses() {
         let area = l_shape();
-        assert!(polygon_meets_box(&area, (Nm::from_raw_shim(9_000), Nm::from_raw_shim(1_000), Nm::from_raw_shim(11_000), Nm::from_raw_shim(2_000))));
-        assert!(polygon_meets_box(&area, (Nm::from_raw_shim(-500), Nm::from_raw_shim(3_000), Nm::from_raw_shim(500), Nm::from_raw_shim(3_500))));
-        assert!(!polygon_meets_box(&area, (Nm::from_raw_shim(6_000), Nm::from_raw_shim(6_000), Nm::from_raw_shim(8_000), Nm::from_raw_shim(8_000))));
+        assert!(polygon_meets_box(&area, (um(9.0), um(1.0), mm(0.011), um(2.0))));
+        assert!(polygon_meets_box(&area, (Nm::new(-500), um(3.0), Nm::new(500), Nm::new(3_500))));
+        assert!(!polygon_meets_box(&area, (um(6.0), um(6.0), um(8.0), um(8.0))));
     }
 }

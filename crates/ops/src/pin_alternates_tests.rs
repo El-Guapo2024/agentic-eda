@@ -5,13 +5,14 @@ use super::*;
 use eda_model::ir::{Design, PinAlternate};
 use eda_model::symbol::SPoint;
 use eda_model::ConstraintModel;
+use eda_model::units::mm;
 
 fn design() -> Design {
     serde_json::from_str(r#"{"schema":1,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]}}"#).unwrap()
 }
 
 fn board(m: &ConstraintModel) -> Board<'_> {
-    Board::new(design(), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))
+    Board::new(design(), m, mm(0.1), mm(0.3))
 }
 
 fn alt(name: &str, t: &str, shape: &str) -> PinAlternate {

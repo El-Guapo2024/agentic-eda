@@ -4,12 +4,12 @@
 //!
 //! The file is KiCad's, in its source tree: the test runs when `KICAD_SRC_DIR` names that tree (as the parity audit's does) and says so when it does not.
 
-use eda_model::units::Nm;
 use eda_kicad::{export_kicad_pcb, ExportMeta};
 use eda_model::ir::{Design, Point, Zone};
 use eda_model::multichannel::PlacementSourceType;
 use eda_ops::{AreaKind, AreaPick, Board, Cmd, MultichannelCmd};
 use std::path::Path;
+use eda_model::units::mm;
 
 fn qa_board() -> Option<String> {
     let src = std::env::var_os("KICAD_SRC_DIR")?;
@@ -52,7 +52,7 @@ fn the_rule_areas_of_kicads_multichannel_board_are_read_made_again_and_written_b
     assert_eq!(ch0.layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"], "the four copper layers of the board, in stack order");
 
     // the Generate dialog's rows: the two channel sheets, each holding its own footprints (KiCad's file also has a footprint on the root sheet, which makes it a row too)
-    let mut board = Board::new(design.clone(), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut board = Board::new(design.clone(), &model, mm(0.1), mm(0.3));
     let rows = board.mc_potential_areas();
     let row = |key: &str| rows.iter().find(|r| r.kind == AreaKind::Sheet && r.key == key).unwrap_or_else(|| panic!("no row for {key}: {rows:?}"));
     assert_eq!(row("/i2c_thingy_ch0/").components.len(), 2, "{rows:?}");
@@ -76,7 +76,7 @@ fn the_rule_areas_of_kicads_multichannel_board_are_read_made_again_and_written_b
     assert_eq!(ours.layer_set(), ch0.layer_set(), "on the copper layers of the board");
     // The file's other area is not the hull of its sheet's footprints: its polygon is the first one's, moved (what a Repeat Layout leaves of the area it copies to), and the footprints
     // of its sheet are elsewhere. Made from them, the area is a staircase round both footprints.
-    let moved: Vec<Point> = ch0.outline.iter().map(|p| Point { x: p.x + Nm::from_raw_shim(12_155_000), y: p.y + Nm::from_raw_shim(30_000) }).collect();
+    let moved: Vec<Point> = ch0.outline.iter().map(|p| Point { x: p.x + mm(12.155), y: p.y + mm(0.03) }).collect();
     assert!(same_cycle(&moved, &ch1.outline), "KiCad's second area is the first one moved by 12.155 mm and 0.03 mm");
     let theirs = area_of(&made, "/i2c_thingy_ch1/");
     assert_eq!(theirs.name, "auto-placement-area-/i2c_thingy_ch1/");

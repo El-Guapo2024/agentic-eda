@@ -48,8 +48,8 @@ pub fn read(body: &[u8]) -> Value {
     // The items the board would get, at this scale and with no offset: the size check and the picture's box in the board's unit.
     let mut mapper = r.mapper();
     let items = graphics_board_items(&imported, &mut mapper, &r.layer);
-    let mut bbox: Option<[i64; 4]> = None;
-    let mut grow = |x: i64, y: i64| match &mut bbox {
+    let mut bbox: Option<[Nm; 4]> = None;
+    let mut grow = |x: Nm, y: Nm| match &mut bbox {
         None => bbox = Some([x, y, x, y]),
         Some(b) => {
             b[0] = b[0].min(x);
@@ -60,17 +60,17 @@ pub fn read(body: &[u8]) -> Value {
     };
     for s in &items.shapes {
         for p in s.points() {
-            grow(p.x.raw_shim(), p.y.raw_shim());
+            grow(p.x, p.y);
         }
         // A circle's box is its centre's, one radius out.
         if let eda_model::ir::Shape::Circle { center, end, .. } = s {
-            let r = (((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64;
-            grow((center.x - Nm::from_raw_shim(r)).raw_shim(), (center.y - Nm::from_raw_shim(r)).raw_shim());
-            grow((center.x + Nm::from_raw_shim(r)).raw_shim(), (center.y + Nm::from_raw_shim(r)).raw_shim());
+            let r = Nm::kiround((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64()));
+            grow(center.x - r, center.y - r);
+            grow(center.x + r, center.y + r);
         }
     }
     for t in &items.texts {
-        grow(t.at.x.raw_shim(), t.at.y.raw_shim());
+        grow(t.at.x, t.at.y);
     }
     let mut messages: Vec<(String, usize)> = imported.message_counts();
     for m in &items.messages {

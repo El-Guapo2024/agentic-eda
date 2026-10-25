@@ -2,7 +2,7 @@
 //! and Add Board Characteristics build are plotted by kicad-cli (`pcb export svg`) the way we laid them out -- the text of every cell on a line of its own, no cell
 //! broken by KiCad's line breaking, and the lines of the border and the separators where `PCB_TABLE::DrawBorders` puts them.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use super::tests::{scratch, setup};
 use super::{load, step};
 use eda_model::ir::Point;
@@ -34,7 +34,7 @@ fn plotted_texts(svg: &str) -> Vec<String> {
 
 /// The straight lines the plot draws that are not glyph strokes (`<path d="M x y\nL x y">` outside the `stroked-text` groups): the table's border and separators, in
 /// micrometres, each with its ends in reading order.
-fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
+fn plotted_lines(svg: &str) -> Vec<[Nm; 4]> {
     let mut bare = String::new();
     let mut rest = svg;
     while let Some(i) = rest.find("<g class=\"stroked-text\">") {
@@ -57,8 +57,7 @@ fn plotted_lines(svg: &str) -> Vec<[i64; 4]> {
         }
         let nums: Vec<f64> = d.split(|c: char| c == 'L' || c.is_whitespace()).filter(|s| !s.is_empty()).filter_map(|s| s.parse().ok()).collect();
         if let [x0, y0, x1, y1] = nums[..] {
-            let nm = |v: f64| (v * 1e6).round() as i64;
-            let (a, b) = ((nm(x0), nm(y0)), (nm(x1), nm(y1)));
+            let (a, b) = ((Nm::from_mm(x0), Nm::from_mm(y0)), (Nm::from_mm(x1), Nm::from_mm(y1)));
             let (a, b) = if a <= b { (a, b) } else { (b, a) };
             out.push([a.0, a.1, b.0, b.1]);
         }
@@ -91,7 +90,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
     }
     let dir = scratch("tables_plot");
     setup(&dir);
-    step(&dir, Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, units: None }), false, "test").unwrap();
+    step(&dir, Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: Point { x: mm(2.0), y: mm(2.0) }, units: None }), false, "test").unwrap();
     let characteristics: Cmd = serde_json::from_value(serde_json::json!({
         "op": "table", "verb": "place_characteristics", "layer": "Cmts.User", "at": { "x": 2_000_000, "y": 100_000_000 }, "units": "mm",
         "numbers": { "thickness_nm": 1_600_000, "width_nm": 20_000_000, "height_nm": 20_000_000, "min_track_nm": 200_000, "min_clearance_nm": 200_000, "min_drill_nm": 300_000, "castellated_pads": 0, "press_fit_pads": 2 }
@@ -109,18 +108,18 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
     drawn.sort();
     assert_eq!(drawn, cell_texts(stackup), "kicad-cli draws the text of every cell of the stackup table on a line of its own (none broken to the column)");
     let lines = plotted_lines(&svg);
-    let expected: Vec<[i64; 4]> = stackup
+    let expected: Vec<[Nm; 4]> = stackup
         .borders()
         .iter()
         .map(|l| {
             let (a, b) = ((l.a.x, l.a.y), (l.b.x, l.b.y));
             let (a, b) = if a <= b { (a, b) } else { (b, a) };
-            [a.0.raw_shim(), a.1.raw_shim(), b.0.raw_shim(), b.1.raw_shim()]
+            [a.0, a.1, b.0, b.1]
         })
         .collect();
     assert!(!expected.is_empty());
     for line in &expected {
-        assert!(lines.iter().any(|l| l.iter().zip(line).all(|(a, b)| (a - b).abs() <= 2000)), "kicad-cli draws no line {line:?} of the table's border; it drew {lines:?}");
+        assert!(lines.iter().any(|l| l.iter().zip(line).all(|(a, b)| (*a - *b).abs() <= Nm::new(2000))), "kicad-cli draws no line {line:?} of the table's border; it drew {lines:?}");
     }
     assert_eq!(lines.len(), expected.len(), "and no other line: {lines:?} against {expected:?}");
 
@@ -139,7 +138,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
 fn the_move_preview_carries_a_held_sheet_table_where_it_would_be() {
     let dir = scratch("sch_table_preview");
     setup(&dir);
-    let mut t = Table::new_sch_grid(Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(30_000_000) }, 2, 2, Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(1_270_000));
+    let mut t = Table::new_sch_grid(Point { x: mm(20.0), y: mm(30.0) }, 2, 2, mm(20.0), mm(5.0), mm(1.27));
     t.cells[0].text = "TITLE ${ROW}".into();
     step(&dir, Cmd::SchTable(TableCmd::Add { table: t }), false, "test").unwrap();
     let (_, design, _) = load(&dir).expect("the board loads");

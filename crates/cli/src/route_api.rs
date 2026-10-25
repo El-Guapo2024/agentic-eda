@@ -16,7 +16,7 @@
 //! `board::step`, the same single seam every other board edit uses, so it
 //! gets the same undo-stack/activity-log treatment as a hand-typed `Cmd`.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use crate::board;
 use eda_model::ir::Point;
 use eda_model::via_extra::ViaKind;
@@ -33,14 +33,14 @@ fn body_json(body: &[u8]) -> Value {
     serde_json::from_slice(body).unwrap_or(Value::Null)
 }
 
-/// A whole number of micrometres: the studio sends the cursor as it converted it from the screen, which is not always whole
+/// A length, a whole number of nanometres: the studio sends the cursor as it converted it from the screen, which is not always whole
 /// (`32000.000000000004` after Backspace warps it), and such a number is rounded -- not read as missing, which put the head at 0.
-fn num(v: &Value, key: &str, default: i64) -> i64 {
-    v.get(key).and_then(|n| n.as_i64().or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.round() as i64))).unwrap_or(default)
+fn num(v: &Value, key: &str, default: Nm) -> Nm {
+    v.get(key).and_then(|n| n.as_i64().map(Nm::new).or_else(|| n.as_f64().filter(|f| f.is_finite()).map(Nm::kiround))).unwrap_or(default)
 }
 
 fn point_of(v: &Value) -> Point {
-    Point { x: Nm::from_raw_shim(num(v, "x", 0)), y: Nm::from_raw_shim(num(v, "y", 0)) }
+    Point { x: num(v, "x", Nm::ZERO), y: num(v, "y", Nm::ZERO) }
 }
 
 fn pts_json(pts: &[Point]) -> Value {
@@ -165,8 +165,8 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     router.settings = settings_of(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
-    let width = num(&req, "width", model.board.track_width.raw_shim());
-    match router.start(at, layer, Nm::from_raw_shim(width)) {
+    let width = num(&req, "width", model.board.track_width);
+    match router.start(at, layer, width) {
         Ok(()) => {
             let reply = router.preview(at).map(|p| preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
@@ -187,7 +187,7 @@ pub fn mv(cell: &RouteCell, body: &[u8]) -> Value {
         router.flip_posture();
     }
     if let Some(w) = req.get("width").and_then(Value::as_i64) {
-        router.set_width(Nm::from_raw_shim(w));
+        router.set_width(Nm::new(w));
     }
     let at = point_of(&req);
     router.preview(at).map(|p| preview_json(router, &p)).unwrap_or_else(|| err("not routing"))
@@ -230,8 +230,8 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
     let enabled = req.get("enabled").and_then(Value::as_bool).unwrap_or(true);
-    let diameter = num(&req, "diameter", 600_000);
-    let drill = num(&req, "drill", 300_000);
+    let diameter = num(&req, "diameter", mm(0.6));
+    let drill = num(&req, "drill", mm(0.3));
     let to_layer = req.get("to_layer").and_then(Value::as_str).and_then(|n| router.layer_index(n));
     let kind = match req.get("via_type").and_then(Value::as_str) {
         None | Some("through") => ViaKind::Through,
@@ -247,7 +247,7 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
             _ => return err("a via span is two copper layers of the board"),
         },
     };
-    router.toggle_via_typed(enabled, Nm::from_raw_shim(diameter), Nm::from_raw_shim(drill), to_layer, span, kind);
+    router.toggle_via_typed(enabled, diameter, drill, to_layer, span, kind);
     json!({ "ok": true })
 }
 
@@ -586,7 +586,7 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     match router.start_diff_pair(at, layer) {
         Ok(()) => {
-            router.set_diff_pair_sizes(req.get("width").and_then(Value::as_i64).map(Nm::from_raw_shim), req.get("gap").and_then(Value::as_i64).map(Nm::from_raw_shim), req.get("via_gap").and_then(Value::as_i64).map(Nm::from_raw_shim));
+            router.set_diff_pair_sizes(req.get("width").and_then(Value::as_i64).map(Nm::new), req.get("gap").and_then(Value::as_i64).map(Nm::new), req.get("via_gap").and_then(Value::as_i64).map(Nm::new));
             let reply = router.diff_pair_preview(at).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
             reply
@@ -600,7 +600,7 @@ pub fn dp_dims(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
-    if router.set_diff_pair_sizes(req.get("width").and_then(Value::as_i64).map(Nm::from_raw_shim), req.get("gap").and_then(Value::as_i64).map(Nm::from_raw_shim), req.get("via_gap").and_then(Value::as_i64).map(Nm::from_raw_shim)) {
+    if router.set_diff_pair_sizes(req.get("width").and_then(Value::as_i64).map(Nm::new), req.get("gap").and_then(Value::as_i64).map(Nm::new), req.get("via_gap").and_then(Value::as_i64).map(Nm::new)) {
         json!({ "ok": true })
     } else {
         err("not routing a diff pair")
@@ -630,7 +630,7 @@ pub fn dp_via(cell: &RouteCell, body: &[u8]) -> Value {
     }
     let enabled = req.get("enabled").and_then(Value::as_bool).unwrap_or(true);
     let to_layer = req.get("to_layer").and_then(Value::as_str).and_then(|n| router.layer_index(n));
-    router.toggle_diff_pair_via(enabled, req.get("diameter").and_then(Value::as_i64).map(Nm::from_raw_shim), req.get("drill").and_then(Value::as_i64).map(Nm::from_raw_shim), to_layer);
+    router.toggle_diff_pair_via(enabled, req.get("diameter").and_then(Value::as_i64).map(Nm::new), req.get("drill").and_then(Value::as_i64).map(Nm::new), to_layer);
     json!({ "ok": true })
 }
 
@@ -740,7 +740,7 @@ pub fn dp_continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value 
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
     use eda_model::ir::{Design, PlacementSection, Provenance, RoutingSection, Track, Via};
     use eda_model::ConstraintModel;
@@ -766,8 +766,13 @@ mod tests {
         Scratch(d)
     }
 
-    fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+    fn p(x: Nm, y: Nm) -> Point {
+        Point { x, y }
+    }
+
+    /// A point the API sent back: its x and y, nanometres.
+    fn p_json(x: &Value, y: &Value) -> Point {
+        p(Nm::new(x.as_i64().unwrap()), Nm::new(y.as_i64().unwrap()))
     }
 
     /// `corner_mode`: the Track Corner Mode the studio sends with a route's settings; an unknown name keeps the default.
@@ -786,15 +791,15 @@ mod tests {
     #[test]
     fn a_cursor_that_is_not_a_whole_nanometre_is_rounded() {
         let req = body_json(br#"{"x": 25000000, "y": 32000000.000000004}"#);
-        assert_eq!(point_of(&req), p(25_000_000, 32_000_000));
-        assert_eq!(point_of(&body_json(br#"{"x": -10.6, "y": 7.4}"#)), p(-11, 7));
-        assert_eq!(point_of(&body_json(br#"{}"#)), p(0, 0));
+        assert_eq!(point_of(&req), p(mm(25.0), mm(32.0)));
+        assert_eq!(point_of(&body_json(br#"{"x": -10.6, "y": 7.4}"#)), p(Nm::new(-11), Nm::new(7)));
+        assert_eq!(point_of(&body_json(br#"{}"#)), p(Nm::ZERO, Nm::ZERO));
     }
 
     /// A 20 mm board with a SIG stub ending at (10000, 8000) and a GND via at (10000, 5000), right in the way of SIG going down.
     fn setup(dir: &Path) {
-        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)], arc_mid_offset: None };
-        let via = Via { id: "v_gnd".into(), net: "GND".into(), at: p(10_000_000, 5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))], arc_mid_offset: None };
+        let via = Via { id: "v_gnd".into(), net: "GND".into(), at: p(mm(10.0), mm(5.0)), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
         setup_board(dir, vec![stub], vec![via]);
     }
 
@@ -818,12 +823,12 @@ mod tests {
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
-            placement: Some(PlacementSection { outline: vec![p(0, 0), p(20_000_000, 0), p(20_000_000, 20_000_000), p(0, 20_000_000)], footprints: vec![], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(20.0)), p(Nm::ZERO, mm(20.0))], footprints: vec![], modules: vec![] }),
             routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         board::save(dir, &design).unwrap();
-        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -841,8 +846,8 @@ mod tests {
     fn attempt_finish_commits_at_the_nearest_unconnected_anchor() {
         let dir = scratch("attempt_finish");
         // a SIG stub to reach, and the GND via of `setup` out of the way
-        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)], arc_mid_offset: None };
-        let other = Track { id: "sig2".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(15_000_000, 12_000_000), p(16_000_000, 12_000_000)], arc_mid_offset: None };
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))], arc_mid_offset: None };
+        let other = Track { id: "sig2".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(15.0), mm(12.0)), p(mm(16.0), mm(12.0))], arc_mid_offset: None };
         setup_board(&dir, vec![stub, other], vec![]);
         let cell: RouteCell = Mutex::new(None);
         start_with(&dir, &cell, json!({ "mode": "walkaround" }));
@@ -850,7 +855,7 @@ mod tests {
         let reply = attempt_finish(&dir, &cell, &body(json!({ "x": 12_000_000, "y": 8_000_000 })));
         assert_eq!((reply["ok"].clone(), reply["finished"].clone()), (json!(true), json!(true)), "{reply}");
         let (_, design, _) = board::load(&dir).unwrap();
-        let reached = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.id != "sig" && t.id != "sig2").any(|t| t.pts.contains(&p(15_000_000, 12_000_000)));
+        let reached = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.id != "sig" && t.id != "sig2").any(|t| t.pts.contains(&p(mm(15.0), mm(12.0))));
         assert!(reached, "the new track ends on the other stub: {:?}", design.routing.as_ref().unwrap().tracks);
         assert!(cell.lock().unwrap().is_none());
     }
@@ -873,8 +878,8 @@ mod tests {
         let (_, design, _) = board::load(&dir).unwrap();
         let sig: Vec<&Track> = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "SIG" && t.id != "sig").collect();
         let pts: Vec<Point> = sig.iter().flat_map(|t| t.pts.iter().copied()).collect();
-        assert!(pts.contains(&p(13_000_000, 8_000_000)) && pts.contains(&p(13_000_000, 11_000_000)), "both fixed runs are on the board: {sig:?}");
-        assert!(!pts.contains(&p(16_000_000, 11_000_000)), "the head is not: {sig:?}");
+        assert!(pts.contains(&p(mm(13.0), mm(8.0))) && pts.contains(&p(mm(13.0), mm(11.0))), "both fixed runs are on the board: {sig:?}");
+        assert!(!pts.contains(&p(mm(16.0), mm(11.0))), "the head is not: {sig:?}");
         // nothing fixed: nothing committed
         start_with(&dir, &cell, json!({ "mode": "walkaround" }));
         mv(&cell, &body(json!({ "x": 13_000_000, "y": 8_000_000 })));
@@ -897,8 +902,8 @@ mod tests {
         assert_eq!((reply["ok"].clone(), reply["committed"].clone()), (json!(false), json!(true)), "{reply}");
         let (_, design, _) = board::load(&dir).unwrap();
         let pts: Vec<Point> = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "SIG" && t.id != "sig").flat_map(|t| t.pts.iter().copied()).collect();
-        assert!(pts.contains(&p(13_000_000, 8_000_000)), "the fixed run is on the board: {pts:?}");
-        assert!(!pts.contains(&p(10_000_000, 5_000_000)), "the colliding head is not: {pts:?}");
+        assert!(pts.contains(&p(mm(13.0), mm(8.0))), "the fixed run is on the board: {pts:?}");
+        assert!(!pts.contains(&p(mm(10.0), mm(5.0))), "the colliding head is not: {pts:?}");
         assert!(cell.lock().unwrap().is_none(), "the session has ended");
     }
 
@@ -991,11 +996,11 @@ mod tests {
     }
 
     fn track(id: &str, net: &str, pts: &[Point]) -> Track {
-        Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: pts.to_vec(), arc_mid_offset: None }
+        Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: pts.to_vec(), arc_mid_offset: None }
     }
 
     fn pts_of(reply: &Value, key: &str) -> Vec<Point> {
-        reply[key].as_array().unwrap_or_else(|| panic!("{key} in {reply}")).iter().map(|v| p(v[0].as_i64().unwrap(), v[1].as_i64().unwrap())).collect()
+        reply[key].as_array().unwrap_or_else(|| panic!("{key} in {reply}")).iter().map(|v| p_json(&v[0], &v[1])).collect()
     }
 
     /// `DRAGGER::Start`: grabbing the middle of a segment slides it (`DM_SEGMENT`), its neighbours following; the commit replaces the
@@ -1003,7 +1008,7 @@ mod tests {
     #[test]
     fn a_drag_grabbed_in_the_middle_of_a_segment_slides_it() {
         let dir = scratch("drag_segment");
-        setup_board(&dir, vec![track("u", "SIG", &[p(2_000_000, 12_000_000), p(2_000_000, 10_000_000), p(12_000_000, 10_000_000), p(12_000_000, 12_000_000)])], vec![]);
+        setup_board(&dir, vec![track("u", "SIG", &[p(mm(2.0), mm(12.0)), p(mm(2.0), mm(10.0)), p(mm(12.0), mm(10.0)), p(mm(12.0), mm(12.0))])], vec![]);
         let cell: RouteCell = Mutex::new(None);
         let started = drag_start(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 10_000_000, "layer": "F.Cu" })));
         assert_eq!(started["ok"], json!(true), "{started}");
@@ -1012,10 +1017,10 @@ mod tests {
         let moved = drag_move(&cell, &body(json!({ "x": 7_000_000, "y": 8_000_000 })));
         assert_eq!(moved["colliding"], json!(false), "{moved}");
         assert_eq!(moved["restored"], json!(false));
-        assert_eq!(pts_of(&moved, "pts"), vec![p(2_000_000, 12_000_000), p(2_000_000, 8_000_000), p(12_000_000, 8_000_000), p(12_000_000, 12_000_000)]);
+        assert_eq!(pts_of(&moved, "pts"), vec![p(mm(2.0), mm(12.0)), p(mm(2.0), mm(8.0)), p(mm(12.0), mm(8.0)), p(mm(12.0), mm(12.0))]);
         let done = drag_finish(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 8_000_000 })));
         assert_eq!(done["ok"], json!(true), "{done}");
-        assert_eq!(tracks_of(&dir), vec![("SIG".to_string(), vec![p(2_000_000, 12_000_000), p(2_000_000, 8_000_000), p(12_000_000, 8_000_000), p(12_000_000, 12_000_000)])]);
+        assert_eq!(tracks_of(&dir), vec![("SIG".to_string(), vec![p(mm(2.0), mm(12.0)), p(mm(2.0), mm(8.0)), p(mm(12.0), mm(8.0)), p(mm(12.0), mm(12.0))])]);
         // near an end it is the corner instead
         let near_end = drag_start(&dir, &cell, &body(json!({ "x": 2_000_000, "y": 8_050_000, "layer": "F.Cu" })));
         assert_eq!(near_end["drag"], json!("corner"), "{near_end}");
@@ -1041,7 +1046,7 @@ mod tests {
         assert_eq!(done["ok"], json!(true), "{done}");
         let tracks = tracks_of(&dir);
         assert_eq!(tracks.len(), 1);
-        assert_eq!(tracks[0].1.last(), Some(&p(12_000_000, 6_500_000)), "committed at the last valid point: {tracks:?}");
+        assert_eq!(tracks[0].1.last(), Some(&p(mm(12.0), mm(6.5))), "committed at the last valid point: {tracks:?}");
     }
 
     /// `GetForceMarkObstaclesMode`: a drag whose first position is already a violation only marks obstacles; Ctrl+click commits it.
@@ -1049,7 +1054,7 @@ mod tests {
     fn a_drag_that_starts_in_violation_only_marks_and_ctrl_click_commits_it() {
         let dir = scratch("drag_force");
         // the stub's end sits on the GND via: it is in violation where it starts
-        setup_board(&dir, vec![track("sig", "SIG", &[p(10_000_000, 9_000_000), p(10_000_000, 5_200_000)])], vec![Via { id: "v".into(), net: "GND".into(), at: p(10_000_000, 5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
+        setup_board(&dir, vec![track("sig", "SIG", &[p(mm(10.0), mm(9.0)), p(mm(10.0), mm(5.2))])], vec![Via { id: "v".into(), net: "GND".into(), at: p(mm(10.0), mm(5.0)), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
         let cell: RouteCell = Mutex::new(None);
         let started = drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_200_000, "layer": "F.Cu" })));
         assert_eq!(started["ok"], json!(true), "{started}");
@@ -1072,7 +1077,7 @@ mod tests {
     fn route_from_other_end_commits_what_is_fixed_and_restarts_at_the_far_end() {
         let dir = scratch("continue");
         // a SIG stub ending at (10000, 8000) and a SIG via at (10000, 2000) it is to be connected to
-        setup_board(&dir, vec![track("sig", "SIG", &[p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)])], vec![Via { id: "far".into(), net: "SIG".into(), at: p(10_000_000, 2_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
+        setup_board(&dir, vec![track("sig", "SIG", &[p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))])], vec![Via { id: "far".into(), net: "SIG".into(), at: p(mm(10.0), mm(2.0)), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
         let cell: RouteCell = Mutex::new(None);
         start_with(&dir, &cell, json!({}));
         // nothing fixed: nothing is committed, the route restarts at the via
@@ -1080,8 +1085,8 @@ mod tests {
         assert_eq!(first["ok"], json!(true), "{first}");
         assert_eq!(first["committed"], json!(false));
         assert_eq!(first["from"], json!([10_000_000, 2_000_000]));
-        assert_eq!(pts_of(&first, "head").first(), Some(&p(10_000_000, 2_000_000)), "the new head leaves the far end");
-        assert_eq!(pts_of(&first, "head").last(), Some(&p(10_000_000, 6_500_000)), "and heads for where the old one ended");
+        assert_eq!(pts_of(&first, "head").first(), Some(&p(mm(10.0), mm(2.0))), "the new head leaves the far end");
+        assert_eq!(pts_of(&first, "head").last(), Some(&p(mm(10.0), mm(6.5))), "and heads for where the old one ended");
         assert_eq!(tracks_of(&dir).len(), 1);
         // fix a leg of a route started again from the stub, then continue from the other end
         start_with(&dir, &cell, json!({}));
@@ -1092,8 +1097,8 @@ mod tests {
         assert_eq!(second["committed"], json!(true), "the fixed leg is on the board now");
         let tracks = tracks_of(&dir);
         assert_eq!(tracks.len(), 2, "{tracks:?}");
-        assert!(tracks.iter().any(|(_, pts)| pts.first() == Some(&p(10_000_000, 8_000_000)) && pts.last() == Some(&p(12_000_000, 8_000_000))), "{tracks:?}");
-        assert_eq!(pts_of(&second, "head").first(), Some(&p(10_000_000, 2_000_000)));
+        assert!(tracks.iter().any(|(_, pts)| pts.first() == Some(&p(mm(10.0), mm(8.0))) && pts.last() == Some(&p(mm(12.0), mm(8.0)))), "{tracks:?}");
+        assert_eq!(pts_of(&second, "head").first(), Some(&p(mm(10.0), mm(2.0))));
         // a session is running again, from the far end
         let again = mv(&cell, &body(json!({ "x": 12_000_000, "y": 5_000_000 })));
         assert_eq!(again["ok"], json!(true), "{again}");
@@ -1109,8 +1114,8 @@ mod tests {
         assert_eq!(nothing["ok"], json!(false));
     }
 
-    fn via_at(id: &str, net: &str, x: i64, y: i64) -> Via {
-        Via { id: id.into(), net: net.into(), at: p(x, y), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+    fn via_at(id: &str, net: &str, x: Nm, y: Nm) -> Via {
+        Via { id: id.into(), net: net.into(), at: p(x, y), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     fn vias_of(dir: &Path) -> Vec<(String, Point)> {
@@ -1120,7 +1125,7 @@ mod tests {
 
     /// A pair of vias, USB_DP and USB_DN a millimetre apart, to start a pair from.
     fn pair_board(dir: &Path) {
-        setup_board(dir, vec![], vec![via_at("dp", "USB_DP", 3_000_000, 5_000_000), via_at("dn", "USB_DN", 3_000_000, 6_000_000)]);
+        setup_board(dir, vec![], vec![via_at("dp", "USB_DP", mm(3.0), mm(5.0)), via_at("dn", "USB_DN", mm(3.0), mm(6.0))]);
     }
 
     /// `DIFF_PAIR_PLACER` through the HTTP calls the studio makes: start on one via of a pair, move, fix, finish. Both nets are committed in
@@ -1136,11 +1141,12 @@ mod tests {
         let moved = dp_move(&cell, &body(json!({ "x": 12_000_000, "y": 5_500_000 })));
         assert_eq!((moved["ok"].clone(), moved["colliding"].clone()), (json!(true), json!(false)), "{moved}");
         let (a, b) = (pts_of(&moved, "head_a"), pts_of(&moved, "head_b"));
-        assert_eq!((a.first(), b.first()), (Some(&p(3_000_000, 5_000_000)), Some(&p(3_000_000, 6_000_000))), "the lines leave the vias' centres");
-        let pitch = moved["width"].as_i64().unwrap() + moved["gap"].as_i64().unwrap();
+        assert_eq!((a.first(), b.first()), (Some(&p(mm(3.0), mm(5.0))), Some(&p(mm(3.0), mm(6.0)))), "the lines leave the vias' centres");
+        let pitch = Nm::new(moved["width"].as_i64().unwrap() + moved["gap"].as_i64().unwrap());
         let (la, lb) = (a.last().unwrap(), b.last().unwrap());
-        let apart = (((la.x - lb.x).raw_shim().pow(2) + (la.y - lb.y).raw_shim().pow(2)) as f64).sqrt();
-        assert!(apart >= pitch as f64 - 1.0 && apart <= pitch as f64 + 3.0, "they end a pitch ({pitch}) apart: {apart}");
+        let apart = ((la.x - lb.x).area(la.x - lb.x) + (la.y - lb.y).area(la.y - lb.y)) as f64;
+        let apart = apart.sqrt();
+        assert!(apart >= pitch.as_f64() - 1.0 && apart <= pitch.as_f64() + 3.0, "they end a pitch ({pitch}) apart: {apart}");
         let fixed = dp_fix(&cell, &body(json!({ "x": 12_000_000, "y": 5_500_000 })));
         assert_eq!((fixed["ok"].clone(), fixed["blocked"].clone(), fixed["real_end"].clone()), (json!(true), json!(false), json!(false)), "{fixed}");
         assert_eq!(fixed["preview"]["runs_a"].as_array().unwrap().len(), 1, "one leg fixed: {fixed}");
@@ -1148,7 +1154,7 @@ mod tests {
         assert_eq!(done["ok"], json!(true), "{done}");
         let tracks = tracks_of(&dir);
         assert_eq!(tracks.len(), 2, "{tracks:?}");
-        assert!(tracks.iter().any(|(net, pts)| net == "USB_DP" && pts.first() == Some(&p(3_000_000, 5_000_000))) && tracks.iter().any(|(net, pts)| net == "USB_DN" && pts.first() == Some(&p(3_000_000, 6_000_000))), "{tracks:?}");
+        assert!(tracks.iter().any(|(net, pts)| net == "USB_DP" && pts.first() == Some(&p(mm(3.0), mm(5.0)))) && tracks.iter().any(|(net, pts)| net == "USB_DN" && pts.first() == Some(&p(mm(3.0), mm(6.0)))), "{tracks:?}");
         let undone = board::undo(&dir, "test", Some(eda_ops::Domain::Pcb));
         assert!(undone.is_ok(), "{undone:?}");
         assert!(tracks_of(&dir).is_empty(), "one undo took both lines back");
@@ -1172,7 +1178,7 @@ mod tests {
         assert_eq!((vias[0]["net"].clone(), vias[1]["net"].clone()), (json!("USB_DP"), json!("USB_DN")));
         assert_eq!((vias[0]["from_layer"].clone(), vias[0]["to_layer"].clone()), (json!("F.Cu"), json!("B.Cu")));
         let (la, lb) = (pts_of(&moved, "head_a").pop().unwrap(), pts_of(&moved, "head_b").pop().unwrap());
-        assert_eq!((la, lb), (p(vias[0]["x"].as_i64().unwrap(), vias[0]["y"].as_i64().unwrap()), p(vias[1]["x"].as_i64().unwrap(), vias[1]["y"].as_i64().unwrap())), "each line ends in its via");
+        assert_eq!((la, lb), (p_json(&vias[0]["x"], &vias[0]["y"]), p_json(&vias[1]["x"], &vias[1]["y"])), "each line ends in its via");
         let fixed = dp_fix(&cell, &at);
         assert_eq!((fixed["ok"].clone(), fixed["blocked"].clone()), (json!(true), json!(false)), "{fixed}");
         assert_eq!(fixed["preview"]["layer"], json!("B.Cu"), "the route goes on on the other layer: {fixed}");
@@ -1180,7 +1186,7 @@ mod tests {
         assert_eq!(fixed["preview"]["placing_via"], json!(false));
         let on = dp_move(&cell, &body(json!({ "x": 15_000_000, "y": 5_500_000 })));
         assert_eq!((on["layer"].clone(), on["colliding"].clone()), (json!("B.Cu"), json!(false)), "{on}");
-        assert_eq!(pts_of(&on, "head_a").first().copied(), Some(p(vias[0]["x"].as_i64().unwrap(), vias[0]["y"].as_i64().unwrap())), "from the via");
+        assert_eq!(pts_of(&on, "head_a").first().copied(), Some(p_json(&vias[0]["x"], &vias[0]["y"])), "from the via");
         let done = dp_finish(&dir, &cell, &body(json!({ "x": 15_000_000, "y": 5_500_000 })));
         assert_eq!(done["ok"], json!(true), "{done}");
         let (_, design, _) = board::load(&dir).unwrap();
@@ -1195,7 +1201,7 @@ mod tests {
     #[test]
     fn route_from_other_end_continues_a_pair_as_a_pair_and_the_two_commits_are_one_undo_step() {
         let dir = scratch("dp_continue");
-        setup_board(&dir, vec![], vec![via_at("dp", "USB_DP", 3_000_000, 5_000_000), via_at("dn", "USB_DN", 3_000_000, 6_000_000), via_at("dp2", "USB_DP", 15_000_000, 5_000_000), via_at("dn2", "USB_DN", 15_000_000, 6_000_000)]);
+        setup_board(&dir, vec![], vec![via_at("dp", "USB_DP", mm(3.0), mm(5.0)), via_at("dn", "USB_DN", mm(3.0), mm(6.0)), via_at("dp2", "USB_DP", mm(15.0), mm(5.0)), via_at("dn2", "USB_DN", mm(15.0), mm(6.0))]);
         let cell: RouteCell = Mutex::new(None);
         let started = dp_start(&dir, &cell, &body(json!({ "x": 3_000_000, "y": 6_000_000, "layer": "F.Cu", "settings": { "mode": "walkaround" } })));
         assert_eq!(started["ok"], json!(true), "{started}");
@@ -1209,9 +1215,9 @@ mod tests {
         assert_eq!(on["ok"], json!(true), "{on}");
         assert_eq!((on["committed"].clone(), on["from"].clone()), (json!(true), json!([15_000_000, 5_000_000])), "{on}");
         assert_eq!(tracks_of(&dir).len(), 2, "one leg per net: {:?}", tracks_of(&dir));
-        assert_eq!((pts_of(&on, "head_a").first().copied(), pts_of(&on, "head_b").first().copied()), (Some(p(15_000_000, 5_000_000)), Some(p(15_000_000, 6_000_000))), "the pair leaves the far vias: {on}");
+        assert_eq!((pts_of(&on, "head_a").first().copied(), pts_of(&on, "head_b").first().copied()), (Some(p(mm(15.0), mm(5.0))), Some(p(mm(15.0), mm(6.0)))), "the pair leaves the far vias: {on}");
         assert_eq!((on["net_a"].clone(), on["net_b"].clone()), (json!("USB_DP"), json!("USB_DN")));
-        assert_eq!(pts_of(&on, "head_a").last().map(|q| q.x), Some(Nm::from_raw_shim(9_000_000)), "and heads for where the old head ended");
+        assert_eq!(pts_of(&on, "head_a").last().map(|q| q.x), Some(mm(9.0)), "and heads for where the old head ended");
         // a pair is running again; finish it, and one undo takes both commits back
         let done = dp_finish(&dir, &cell, &body(json!({ "x": 9_000_000, "y": 5_500_000 })));
         assert_eq!(done["ok"], json!(true), "{done}");
@@ -1228,7 +1234,7 @@ mod tests {
     #[test]
     fn a_pair_cannot_start_from_a_net_that_is_not_half_of_one() {
         let dir = scratch("dp_refused");
-        setup_board(&dir, vec![], vec![via_at("g", "GND", 3_000_000, 5_000_000)]);
+        setup_board(&dir, vec![], vec![via_at("g", "GND", mm(3.0), mm(5.0))]);
         let cell: RouteCell = Mutex::new(None);
         let refused = dp_start(&dir, &cell, &body(json!({ "x": 3_000_000, "y": 5_000_000, "layer": "F.Cu" })));
         assert_eq!(refused["ok"], json!(false));
@@ -1252,7 +1258,7 @@ mod tests {
     #[test]
     fn a_blind_via_and_a_microvia_are_committed_with_their_type_layers_and_size_as_one_undo_step() {
         let dir = scratch("typed_vias");
-        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(2_000_000, 8_000_000), p(4_000_000, 8_000_000)], arc_mid_offset: None };
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(2.0), mm(8.0)), p(mm(4.0), mm(8.0))], arc_mid_offset: None };
         setup_board_on(&dir, vec![stub], vec![], &["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
         let cell: RouteCell = Mutex::new(None);
         let started = start(&dir, &cell, &body(json!({ "x": 4_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000, "settings": { "mode": "walkaround" } })));
@@ -1270,7 +1276,7 @@ mod tests {
         let kind = |id: &str| design.drawings.as_ref().and_then(|d| d.via_extra(id)).map(|e| e.kind).unwrap_or_default();
         let mut got: Vec<(Point, &str, &str, Nm, Nm, ViaKind)> = vias.iter().map(|v| (v.at, v.from_layer.as_str(), v.to_layer.as_str(), v.diameter, v.drill, kind(&v.id))).collect();
         got.sort_by_key(|g| g.0.x);
-        assert_eq!(got, vec![(p(8_000_000, 8_000_000), "F.Cu", "In1.Cu", Nm::from_raw_shim(500_000), Nm::from_raw_shim(250_000), ViaKind::Blind), (p(12_000_000, 8_000_000), "In1.Cu", "In2.Cu", Nm::from_raw_shim(300_000), Nm::from_raw_shim(100_000), ViaKind::Micro)]);
+        assert_eq!(got, vec![(p(mm(8.0), mm(8.0)), "F.Cu", "In1.Cu", mm(0.5), mm(0.25), ViaKind::Blind), (p(mm(12.0), mm(8.0)), "In1.Cu", "In2.Cu", mm(0.3), mm(0.1), ViaKind::Micro)]);
         let layers: Vec<String> = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.id != "sig").map(|t| t.layer.clone()).collect();
         assert!(layers.contains(&"In1.Cu".to_string()) && layers.contains(&"In2.Cu".to_string()), "the route went on on the via's other layer: {layers:?}");
         let undone = board::undo(&dir, "test", Some(eda_ops::Domain::Pcb));

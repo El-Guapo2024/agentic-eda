@@ -1,4 +1,4 @@
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, Side};
 use eda_model::footprint::{Footprint, Pad, PadKind, PadShape};
 use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
@@ -29,7 +29,7 @@ fn lin(n: usize) -> Footprint {
     Footprint {
         name: format!("LIN{n}"),
         pads: (0..n)
-            .map(|i| Pad { opposite_side: false, ext: Default::default(), number: (i + 1).to_string(), at: (Nm::from_raw_shim(i as i64 * 1_000_000), Nm::ZERO), size: (Nm::from_raw_shim(500_000), Nm::from_raw_shim(500_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None })
+            .map(|i| Pad { opposite_side: false, ext: Default::default(), number: (i + 1).to_string(), at: (mm(1.0) * i as i64, Nm::ZERO), size: (mm(0.5), mm(0.5)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None })
             .collect(),
         courtyard: None,
         model: None,
@@ -52,11 +52,11 @@ fn lin_th(n: usize) -> Footprint {
         pads: (0..n)
             .map(|i| Pad { opposite_side: false, ext: Default::default(),
                 number: (i + 1).to_string(),
-                at: (Nm::from_raw_shim(i as i64 * 1_000_000), Nm::ZERO),
-                size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000)),
+                at: (mm(1.0) * i as i64, Nm::ZERO),
+                size: (mm(0.8), mm(0.8)),
                 shape: PadShape::Circle,
                 kind: PadKind::ThroughHole,
-                drill: Some(Nm::from_raw_shim(400_000)),
+                drill: Some(mm(0.4)),
                 drill_slot: None,
                 rot: 0,
                 roundrect_ratio: None,
@@ -86,12 +86,12 @@ fn part_th(reference: &str, npins: usize) -> Part {
     }
 }
 
-fn fp(id: &str, x: i64, y: i64) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, rot: 0, side: Side::Top, label: Default::default() }
+fn fp(id: &str, x: Nm, y: Nm) -> FootprintInstance {
+    FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side: Side::Top, label: Default::default() }
 }
 
-fn fp_side(id: &str, x: i64, y: i64, side: Side) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, rot: 0, side, label: Default::default() }
+fn fp_side(id: &str, x: Nm, y: Nm, side: Side) -> FootprintInstance {
+    FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side, label: Default::default() }
 }
 
 fn design(outline: Vec<Point>, footprints: Vec<FootprintInstance>) -> Design {
@@ -106,18 +106,18 @@ fn design(outline: Vec<Point>, footprints: Vec<FootprintInstance>) -> Design {
     }
 }
 
-fn rect(w: i64, h: i64) -> Vec<Point> {
+fn rect(w: Nm, h: Nm) -> Vec<Point> {
     vec![
         Point { x: Nm::ZERO, y: Nm::ZERO },
-        Point { x: Nm::from_raw_shim(w), y: Nm::ZERO },
-        Point { x: Nm::from_raw_shim(w), y: Nm::from_raw_shim(h) },
-        Point { x: Nm::ZERO, y: Nm::from_raw_shim(h) },
+        Point { x: w, y: Nm::ZERO },
+        Point { x: w, y: h },
+        Point { x: Nm::ZERO, y: h },
     ]
 }
 
 // -------------------------------------------------------------- fixture 1: 2 parts, 2 nets
 fn fixture_2p2n() -> (Design, ConstraintModel) {
-    let d = design(rect(20_000_000, 10_000_000), vec![fp("U1", 2_000_000, 5_000_000), fp("U2", 15_000_000, 5_000_000)]);
+    let d = design(rect(mm(20.0), mm(10.0)), vec![fp("U1", mm(2.0), mm(5.0)), fp("U2", mm(15.0), mm(5.0))]);
     let m = model(vec![part("U1", 2), part("U2", 2)], vec![
             Net { name: "NET1".into(), pins: vec!["U1.1".into(), "U2.1".into()] },
             Net { name: "NET2".into(), pins: vec!["U1.2".into(), "U2.2".into()] },
@@ -128,12 +128,12 @@ fn fixture_2p2n() -> (Design, ConstraintModel) {
 // -------------------------------------------------------------- fixture 2: 4 parts, 6 nets crossing
 fn fixture_4p6n() -> (Design, ConstraintModel) {
     let d = design(
-        rect(30_000_000, 30_000_000),
+        rect(mm(30.0), mm(30.0)),
         vec![
-            fp("U1", 3_000_000, 3_000_000),
-            fp("U2", 25_000_000, 3_000_000),
-            fp("U3", 3_000_000, 25_000_000),
-            fp("U4", 25_000_000, 25_000_000),
+            fp("U1", mm(3.0), mm(3.0)),
+            fp("U2", mm(25.0), mm(3.0)),
+            fp("U3", mm(3.0), mm(25.0)),
+            fp("U4", mm(25.0), mm(25.0)),
         ],
     );
     let parts = vec![part("U1", 3), part("U2", 3), part("U3", 3), part("U4", 3)];
@@ -153,22 +153,22 @@ fn fixture_4p6n() -> (Design, ConstraintModel) {
 fn fixture_via_crossing() -> (Design, ConstraintModel) {
     // Two footprints whose only route requires hopping over a wall of
     // same-row obstacle pads on layer 0 -> forces a layer change.
-    let mut footprints = vec![fp("U1", 1_000_000, 5_000_000), fp("U2", 19_000_000, 5_000_000)];
+    let mut footprints = vec![fp("U1", mm(1.0), mm(5.0)), fp("U2", mm(19.0), mm(5.0))];
     // A dense wall of single-pin obstacle parts across the board at x=10000,
     // each on its own net, blocking every grid row on F.Cu except via use.
     let mut parts = vec![part("U1", 1), part("U2", 1)];
     let mut nets = vec![Net { name: "SIGNAL".into(), pins: vec!["U1.1".into(), "U2.1".into()] }];
-    let mut y = 0;
+    let mut y = Nm::ZERO;
     let mut i = 0;
-    while y <= 10_000_000 {
+    while y <= mm(10.0) {
         let id = format!("W{i}");
-        footprints.push(fp(&id, 10_000_000, y));
+        footprints.push(fp(&id, mm(10.0), y));
         parts.push(part(&id, 1));
         nets.push(Net { name: format!("WALL{i}"), pins: vec![format!("{id}.1")] });
-        y += 254_000;
+        y += Nm::new(254_000);
         i += 1;
     }
-    let d = design(rect(20_000_000, 10_000_000), footprints);
+    let d = design(rect(mm(20.0), mm(10.0)), footprints);
     let m = model(parts, nets);
     (d, m)
 }
@@ -179,7 +179,7 @@ fn fixture_2p_through_hole() -> (Design, ConstraintModel) {
     // unobstructed path between them should never need a via — there's
     // no obstacle to dodge, and either endpoint can legally start/end on
     // whichever layer the path finds cheapest.
-    let d = design(rect(20_000_000, 10_000_000), vec![fp("U1", 2_000_000, 5_000_000), fp("U2", 15_000_000, 5_000_000)]);
+    let d = design(rect(mm(20.0), mm(10.0)), vec![fp("U1", mm(2.0), mm(5.0)), fp("U2", mm(15.0), mm(5.0))]);
     let m = model(vec![part_th("U1", 1), part_th("U2", 1)], vec![Net {
         name: "NET1".into(),
         pins: vec!["U1.1".into(), "U2.1".into()],
@@ -191,24 +191,24 @@ fn fixture_2p_through_hole() -> (Design, ConstraintModel) {
 fn fixture_unroutable() -> (Design, ConstraintModel) {
     // A wall of paired Top+Bottom obstacle pads at every grid row blocks
     // both F.Cu and B.Cu at x=10000 -> no path (direct or via) exists.
-    let mut footprints = vec![fp("U1", 1_000_000, 5_000_000), fp("U2", 19_000_000, 5_000_000)];
+    let mut footprints = vec![fp("U1", mm(1.0), mm(5.0)), fp("U2", mm(19.0), mm(5.0))];
     let mut parts = vec![part("U1", 1), part("U2", 1)];
     let mut nets = vec![Net { name: "SIGNAL".into(), pins: vec!["U1.1".into(), "U2.1".into()] }];
-    let mut y = -2_000_000;
+    let mut y = mm(-2.0);
     let mut i = 0;
-    while y <= 12_000_000 {
+    while y <= mm(12.0) {
         let top_id = format!("WT{i}");
         let bot_id = format!("WB{i}");
-        footprints.push(fp_side(&top_id, 10_000_000, y, Side::Top));
-        footprints.push(fp_side(&bot_id, 10_000_000, y, Side::Bottom));
+        footprints.push(fp_side(&top_id, mm(10.0), y, Side::Top));
+        footprints.push(fp_side(&bot_id, mm(10.0), y, Side::Bottom));
         parts.push(part(&top_id, 1));
         parts.push(part(&bot_id, 1));
         nets.push(Net { name: format!("WALLT{i}"), pins: vec![format!("{top_id}.1")] });
         nets.push(Net { name: format!("WALLB{i}"), pins: vec![format!("{bot_id}.1")] });
-        y += 254_000;
+        y += Nm::new(254_000);
         i += 1;
     }
-    let d = design(rect(20_000_000, 10_000_000), footprints);
+    let d = design(rect(mm(20.0), mm(10.0)), footprints);
     let m = model(parts, nets);
     (d, m)
 }
@@ -218,25 +218,25 @@ fn fixture_unroutable() -> (Design, ConstraintModel) {
 /// far pin P2 along the bottom edge, straight across P3's copper. The
 /// track may not use P3 as a stepping stone: it ends in P3 or goes round.
 fn fixture_pass_through_bait() -> (Design, ConstraintModel) {
-    let mut footprints = vec![fp("P1", 2_000_000, 5_000_000), fp("P2", 11_000_000, 5_000_000), fp("P3", 6_500_000, 9_900_000)];
+    let mut footprints = vec![fp("P1", mm(2.0), mm(5.0)), fp("P2", mm(11.0), mm(5.0)), fp("P3", mm(6.5), mm(9.9))];
     let mut parts = vec![part("P1", 1), part("P2", 1), part("P3", 1)];
     let mut nets = vec![Net { name: "N".into(), pins: vec!["P1.1".into(), "P2.1".into(), "P3.1".into()] }];
-    let mut y = -500_000;
+    let mut y = mm(-0.5);
     let mut i = 0;
-    while y <= 9_200_000 {
+    while y <= mm(9.2) {
         // Both sides, so a via pair can't duck under the wall.
         for (side, tag) in [(Side::Top, "T"), (Side::Bottom, "B")] {
             let id = format!("W{tag}{i}");
-            footprints.push(fp_side(&id, 6_500_000, y, side));
+            footprints.push(fp_side(&id, mm(6.5), y, side));
             parts.push(part(&id, 1));
             nets.push(Net { name: format!("WALL{tag}{i}"), pins: vec![format!("{id}.1")] });
         }
         // 300 µm between 500 µm pads: legal pad-pad clearance, no room
         // for a 200 µm track with 200 µm clearance on each side.
-        y += 800_000;
+        y += mm(0.8);
         i += 1;
     }
-    let d = design(rect(20_000_000, 11_500_000), footprints);
+    let d = design(rect(mm(20.0), mm(11.5)), footprints);
     let m = model(parts, nets);
     (d, m)
 }
@@ -248,7 +248,7 @@ fn pass_through_bait_never_uses_a_pad_as_a_stepping_stone() {
     let out = route(&d, &m, &rules, 1).expect("should route");
     let r = out.routing.as_ref().unwrap();
     // The bait works: the N net does route below the wall, past P3.
-    assert!(r.tracks.iter().any(|t| t.net == "N" && t.pts.iter().any(|p| p.y > Nm::from_raw_shim(9_400_000))), "expected a path under the wall: {:?}", r.tracks);
+    assert!(r.tracks.iter().any(|t| t.net == "N" && t.pts.iter().any(|p| p.y > mm(9.4))), "expected a path under the wall: {:?}", r.tracks);
     // The real gate (pad-mediated connectivity + workmanship).
     assert_gate_clean(&out, &m);
 }
@@ -417,12 +417,12 @@ fn missing_placement_fails_cleanly() {
 /// GND that touches every part, which is the shape a plane exists for.
 fn fixture_pour() -> (Design, ConstraintModel) {
     let d = design(
-        rect(30_000_000, 30_000_000),
+        rect(mm(30.0), mm(30.0)),
         vec![
-            fp("U1", 3_000_000, 3_000_000),
-            fp("U2", 25_000_000, 3_000_000),
-            fp("U3", 3_000_000, 25_000_000),
-            fp("U4", 25_000_000, 25_000_000),
+            fp("U1", mm(3.0), mm(3.0)),
+            fp("U2", mm(25.0), mm(3.0)),
+            fp("U3", mm(3.0), mm(25.0)),
+            fp("U4", mm(25.0), mm(25.0)),
         ],
     );
     let parts = vec![part("U1", 3), part("U2", 3), part("U3", 3), part("U4", 3)];
@@ -511,9 +511,9 @@ fn a_pour_on_a_layer_outside_the_stackup_is_a_hard_fail() {
 /// A board whose outline does not start at the coordinate origin, at an
 /// offset that is no multiple of anything.
 fn fixture_offset_outline() -> (Design, ConstraintModel) {
-    let (ox, oy) = (1_325_000, 700_000);
-    let outline = rect(20_000_000, 10_000_000).into_iter().map(|p| Point { x: p.x + Nm::from_raw_shim(ox), y: p.y + Nm::from_raw_shim(oy) }).collect();
-    let d = design(outline, vec![fp("U1", ox + 2_000_000, oy + 5_000_000), fp("U2", ox + 15_000_000, oy + 5_000_000)]);
+    let (ox, oy) = (Nm::new(1_325_000), mm(0.7));
+    let outline = rect(mm(20.0), mm(10.0)).into_iter().map(|p| Point { x: p.x + ox, y: p.y + oy }).collect();
+    let d = design(outline, vec![fp("U1", ox + mm(2.0), oy + mm(5.0)), fp("U2", ox + mm(15.0), oy + mm(5.0))]);
     let m = model(vec![part("U1", 2), part("U2", 2)], vec![
             Net { name: "NET1".into(), pins: vec!["U1.1".into(), "U2.1".into()] },
             Net { name: "NET2".into(), pins: vec!["U1.2".into(), "U2.2".into()] },

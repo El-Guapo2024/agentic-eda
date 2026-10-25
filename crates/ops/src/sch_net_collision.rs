@@ -329,14 +329,14 @@ fn pen_width_nm(scene: &Scene, it: Item) -> f64 {
         Item::Seg(i) => {
             let stroke = scene.segs[i].from.and_then(|(wi, _)| scene.sch.extras.strokes.get(&scene.meta[wi].id)).map(|s| s.width_nm).filter(|w| *w > Nm::ZERO);
             match stroke {
-                Some(w) => w.raw_shim() as f64,
+                Some(w) => w.as_f64(),
                 None if scene.segs[i].bus => 304_800.0,
                 None => 152_400.0,
             }
         }
         Item::Label(i) => {
             let size = scene.sch.extras.label_looks.get(&scene.sch.labels[i].id).map_or(Nm::ZERO, |l| l.text_size_nm());
-            (if size > Nm::ZERO { size } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }).raw_shim() as f64 / 8.0
+            (if size > Nm::ZERO { size } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }).as_f64() / 8.0
         }
         _ => 0.0,
     }

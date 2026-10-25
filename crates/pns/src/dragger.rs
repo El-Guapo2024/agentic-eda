@@ -75,8 +75,8 @@ pub enum DragKind {
 /// first), where the joint has a virtual via -- that via.
 fn check_virtual_via(node: &Node, at: Point, seg: &crate::item::Segment) -> Option<ItemId> {
     // `( aP - aSeg->Seg().A ).EuclideanNorm() <= w2`: a double against the integer half width, not rounded
-    let w2 = (seg.width / 2).raw_shim() as f64;
-    let norm = |p: Point| ((at.x - p.x).raw_shim() as f64).hypot((at.y - p.y).raw_shim() as f64);
+    let w2 = (seg.width / 2).as_f64();
+    let norm = |p: Point| ((at.x - p.x).as_f64()).hypot((at.y - p.y).as_f64());
     let psnap = if norm(seg.a) <= w2 {
         seg.a
     } else if norm(seg.b) <= w2 {
@@ -186,7 +186,7 @@ fn assemble(node: &Node, id: ItemId) -> Option<Line> {
 }
 
 fn dist(a: Point, b: Point) -> f64 {
-    let (dx, dy) = ((a.x - b.x).raw_shim() as f64, (a.y - b.y).raw_shim() as f64);
+    let (dx, dy) = ((a.x - b.x).as_f64(), (a.y - b.y).as_f64());
     dx.hypot(dy)
 }
 
@@ -243,7 +243,7 @@ impl Dragger {
                 let mut index = line.segment_ids.iter().position(|&id| id == item_id)?.min(line.segment_count().saturating_sub(1));
                 let (dist_a, dist_b) = (dist(at, seg_a), dist(at, seg_b));
                 let kind;
-                if dist_a < w2.raw_shim() as f64 || dist_b < w2.raw_shim() as f64 {
+                if dist_a < w2.as_f64() || dist_b < w2.as_f64() {
                     // within half its width of an end: that end is the corner to drag
                     kind = DragKind::Corner;
                     if dist_b <= dist_a {
@@ -342,7 +342,7 @@ impl Dragger {
             let mut colliding = !self.via_virtual && node.first_colliding(&shape, &self.net, self.via_layers, rules, &exclude).is_some();
             for l in &fanout {
                 colliding |= l.segs().any(|(a, b)| {
-                    let shape = Shape::Stadium { a, b, r: l.width.max(Nm::from_raw_shim(1)) / 2 };
+                    let shape = Shape::Stadium { a, b, r: l.width.max(Nm::new(1)) / 2 };
                     node.first_colliding(&shape, &l.net, LayerRange::single(l.layer), rules, &exclude).is_some()
                 });
             }
@@ -351,7 +351,7 @@ impl Dragger {
         let line = self.dragged_line(to, self.snap_threshold(settings, false), self.free_angle);
         let layers = LayerRange::single(self.layer);
         let colliding = line.pts.windows(2).any(|w| {
-            let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width.max(Nm::from_raw_shim(1)) / 2 };
+            let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width.max(Nm::new(1)) / 2 };
             node.first_colliding(&shape, &self.net, layers, rules, &exclude).is_some()
         });
         DragPreview { pts: line.pts, arcs: line.arcs, colliding, ..DragPreview::default() }
@@ -367,14 +367,14 @@ impl Dragger {
         let exclude = self.exclude();
         let dragged = self.dragged_line(to, self.snap_threshold(settings, false), false);
         let pts = dragged.pts.clone();
-        let colliding = path_collides(node, rules, &self.net, self.layer, self.width.max(Nm::from_raw_shim(1)), &pts, &exclude);
+        let colliding = path_collides(node, rules, &self.net, self.layer, self.width.max(Nm::new(1)), &pts, &exclude);
         // an arc is not walked round anything: the arc drag either fits where the cursor puts it or is refused
         let walked = if !colliding {
             Some(pts)
         } else if self.kind == DragKind::Arc {
             None
         } else {
-            try_walkaround(node, rules, settings, &self.net, self.layer, self.width.max(Nm::from_raw_shim(1)), &pts, &dragged.arcs)
+            try_walkaround(node, rules, settings, &self.net, self.layer, self.width.max(Nm::new(1)), &pts, &dragged.arcs)
         };
         let walked = walked.filter(|w| w.len() >= 2)?;
         // `optimizeAndUpdateDraggedLine( draggedWalk, origLine, aP )` (the lines of an arc drag are left as they are: DM_ARC is not a PNS drag)
@@ -419,7 +419,7 @@ impl Dragger {
         let dragged = self.dragged_line(to, self.snap_threshold(settings, true), false);
         // `m_mode == DM_CORNER && m_draggedSegmentIndex == 0`: the head is dragged by its first vertex, so its last point is the pusher
         let reversed = self.kind == DragKind::Corner && self.grabbed_index == 0;
-        let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &dragged.pts, &dragged.arcs, &self.net, self.layer, self.width.max(Nm::from_raw_shim(1)), rules, settings, reversed)?;
+        let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &dragged.pts, &dragged.arcs, &self.net, self.layer, self.width.max(Nm::new(1)), rules, settings, reversed)?;
         // `optimizeAndUpdateDraggedLine( draggedPostShove, m_draggedLine, aP )`, against the world the shove left (`m_lastNode = m_shove->CurrentNode()->Branch()`)
         let shoved = Line { pts: outcome.head.clone(), arcs: dragged.arcs.clone(), ..dragged };
         let shoved = if self.kind == DragKind::Arc { shoved } else { self.optimize_and_update_dragged_line(&outcome.world, rules, settings, &shoved, &self.original, to) };
@@ -554,13 +554,13 @@ impl Dragger {
     fn drag_via_walkaround(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         let exclude = self.exclude();
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, is_virtual: false };
-        let lead = ((self.via_pos.x - to.x).raw_shim(), (self.via_pos.y - to.y).raw_shim());
+        let lead = (self.via_pos.x - to.x, self.via_pos.y - to.y);
         let Some(force) = shove::via_pushout_force(node, rules, &via, lead, crate::node::kind_mask::ANY, settings.via_force_prop_iteration_limit, &exclude) else {
             // can't force-propagate the via? bummer...
             let fanout = self.via_candidate(node, to);
             return DragPreview { pts: vec![to], colliding: true, fanout, ..DragPreview::default() };
         };
-        let target = Point { x: to.x + Nm::from_raw_shim(force.0), y: to.y + Nm::from_raw_shim(force.1) };
+        let target = Point { x: to.x + force.0, y: to.y + force.1 };
         let mut colliding = false;
         let mut fanout = Vec::new();
         for original in self.attached_lines(node) {
@@ -569,8 +569,8 @@ impl Dragger {
                 dragged.drag_corner45(target, at);
                 dragged.simplify();
             }
-            if dragged.point_count() >= 2 && path_collides(node, rules, &dragged.net, dragged.layer, dragged.width.max(Nm::from_raw_shim(1)), &dragged.pts, &exclude) {
-                match try_walkaround(node, rules, settings, &dragged.net, dragged.layer, dragged.width.max(Nm::from_raw_shim(1)), &dragged.pts, &dragged.arcs) {
+            if dragged.point_count() >= 2 && path_collides(node, rules, &dragged.net, dragged.layer, dragged.width.max(Nm::new(1)), &dragged.pts, &exclude) {
+                match try_walkaround(node, rules, settings, &dragged.net, dragged.layer, dragged.width.max(Nm::new(1)), &dragged.pts, &dragged.arcs) {
                     Some(walked) => {
                         dragged.pts = walked;
                         // `optimizeAndUpdateDraggedLine( walkLine, origLine, aP )`
@@ -669,7 +669,7 @@ fn nearest_point_of(pts: &[Point], p: Point) -> Point {
     for w in pts.windows(2) {
         let seg = eda_drc::kimath::Seg::new(w[0], w[1]);
         let q = seg.nearest_point(p);
-        let d = ((q.x - p.x).raw_shim() as i128).pow(2) + ((q.y - p.y).raw_shim() as i128).pow(2);
+        let d = ((q.x - p.x).get() as i128).pow(2) + ((q.y - p.y).get() as i128).pow(2);
         if best.is_none_or(|(bd, _)| d < bd) {
             best = Some((d, q));
         }
@@ -702,6 +702,7 @@ fn try_walkaround(node: &Node, rules: &BoardRules, settings: &RoutingSettings, n
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::item::{net_of, Segment, Via};
 
@@ -710,7 +711,7 @@ mod tests {
     }
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn on_45(pts: &[Point]) -> bool {
@@ -722,7 +723,7 @@ mod tests {
 
     /// A SIG track of `pts` on layer 0 (width 200) in the node, one `Segment` per leg, all of IR track `track`.
     fn add_track(node: &mut Node, net: &str, track: &str, pts: &[Point]) -> Vec<ItemId> {
-        pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of(net), layer: 0, a: w[0], b: w[1], width: Nm::from_raw_shim(200_000), source_track: Some((track.into(), i)), locked: false }))).collect()
+        pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of(net), layer: 0, a: w[0], b: w[1], width: mm(0.2), source_track: Some((track.into(), i)), locked: false }))).collect()
     }
 
     /// `NODE::FixupVirtualVias` + `DRAGGER::checkVirtualVia`: where tracks of different widths meet with no pad or via, the world has a virtual via,
@@ -742,12 +743,12 @@ mod tests {
         };
         assert!(one_width.joint_at(p(0, 0), &net_of("SIG")).unwrap().links.iter().all(|&id| !one_width.get(id).is_some_and(Item::is_virtual)), "a T of one width: none");
         assert_eq!(Dragger::start(&one_width, p(-50_000, 0), a[0]).expect("a drag").kind, DragKind::Corner, "and its end is a corner drag");
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(0, 3_000_000), width: Nm::from_raw_shim(300_000), source_track: Some(("trkC".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(0, 3_000_000), width: mm(0.3), source_track: Some(("trkC".into(), 0)), locked: false }));
         node.fixup_virtual_vias();
         let joint = node.joint_at(p(0, 0), &net_of("SIG")).unwrap();
         let vvia = joint.links.iter().copied().find(|&id| node.get(id).is_some_and(Item::is_virtual)).expect("a virtual via at the T");
         assert!(node.iter().all(|(id, _)| id != vvia), "a virtual via is not one of the items the world lists");
-        assert!(node.item_at(p(0, 0), LayerRange::single(0), Nm::from_raw_shim(100_000)).is_some_and(|id| id != vvia), "and not one it picks");
+        assert!(node.item_at(p(0, 0), LayerRange::single(0), mm(0.1)).is_some_and(|id| id != vvia), "and not one it picks");
         let rules = rules();
         for mode in [Mode::MarkObstacles, Mode::Walkaround, Mode::Shove] {
             let settings = RoutingSettings { mode, ..RoutingSettings::default() };
@@ -778,11 +779,11 @@ mod tests {
     fn virtual_vias_go_where_the_width_changes_and_at_the_ends_of_a_locked_segment() {
         let count = |n: &Node, at: Point| n.joint_at(at, &net_of("SIG")).map_or(0, |j| j.links.iter().filter(|&&id| n.get(id).is_some_and(Item::is_virtual)).count());
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(1_000_000, 0), width: Nm::from_raw_shim(200_000), source_track: None, locked: false }));
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(1_000_000, 0), b: p(2_000_000, 0), width: Nm::from_raw_shim(400_000), source_track: None, locked: false }));
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(2_000_000, 0), b: p(3_000_000, 0), width: Nm::from_raw_shim(400_000), source_track: None, locked: true }));
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(3_000_000, 0), b: p(4_000_000, 0), width: Nm::from_raw_shim(400_000), source_track: None, locked: false }));
-        node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(4_000_000, 0), diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: None, locked: false, is_virtual: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(1_000_000, 0), width: mm(0.2), source_track: None, locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(1_000_000, 0), b: p(2_000_000, 0), width: mm(0.4), source_track: None, locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(2_000_000, 0), b: p(3_000_000, 0), width: mm(0.4), source_track: None, locked: true }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(3_000_000, 0), b: p(4_000_000, 0), width: mm(0.4), source_track: None, locked: false }));
+        node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(4_000_000, 0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false }));
         node.fixup_virtual_vias();
         assert_eq!(count(&node, p(1_000_000, 0)), 1, "where the width changes");
         assert_eq!(count(&node, p(0, 0)), 0, "a free end");
@@ -790,25 +791,25 @@ mod tests {
         assert!(count(&node, p(3_000_000, 0)) >= 1 && count(&node, p(2_000_000, 0)) >= 1, "the ends of the locked segment");
         assert_eq!(count(&node, p(4_000_000, 0)), 0, "a real via is there already");
         let d = node.joint_at(p(1_000_000, 0), &net_of("SIG")).unwrap().links.iter().find_map(|&id| match node.get(id) { Some(Item::Via(v)) if v.is_virtual => Some((v.diameter, v.layers)), _ => None });
-        assert_eq!(d, Some((Nm::from_raw_shim(400_000) + 2 * crate::hull::PNS_HULL_MARGIN, LayerRange::single(0))), "the widest track plus twice `PNS_HULL_MARGIN`, on its one layer");
+        assert_eq!(d, Some((mm(0.4) + 2 * crate::hull::PNS_HULL_MARGIN, LayerRange::single(0))), "the widest track plus twice `PNS_HULL_MARGIN`, on its one layer");
     }
 
     #[test]
     fn drags_a_track_end_and_keeps_the_other_end_attached() {
         let mut node = Node::new();
-        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
+        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
-        let mut dragger = Dragger::start(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, seg_id).expect("must start a corner drag");
+        let mut dragger = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id).expect("must start a corner drag");
         assert_eq!(dragger.kind, DragKind::Corner);
-        let preview = dragger.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) });
+        let preview = dragger.preview(&node, &rules, &settings, Point { x: mm(1.0), y: mm(1.0) });
         assert!(!preview.colliding);
         assert_eq!(preview.pts.first(), Some(&Point { x: Nm::ZERO, y: Nm::ZERO }), "the ungrabbed end must stay put");
-        assert_eq!(preview.pts.last(), Some(&Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }), "the grabbed end follows the cursor");
-        let commit = dragger.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, false).expect("collision-free drag must commit");
+        assert_eq!(preview.pts.last(), Some(&Point { x: mm(1.0), y: mm(1.0) }), "the grabbed end follows the cursor");
+        let commit = dragger.finish(&node, &rules, &settings, Point { x: mm(1.0), y: mm(1.0) }, false).expect("collision-free drag must commit");
         assert_eq!(commit.remove_track_ids, vec!["trkA"]);
         assert_eq!(commit.tracks.len(), 1);
-        assert_eq!(commit.tracks[0].pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }]);
+        assert_eq!(commit.tracks[0].pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: mm(1.0) }]);
     }
 
     /// `startDragSegment`: within half the width of an end it is that corner, anywhere else the segment; `G` makes a middle grab a corner.
@@ -848,7 +849,7 @@ mod tests {
         assert_eq!(commit.remove_track_ids, vec!["t"]);
         assert_eq!(commit.tracks.len(), 1);
         assert_eq!(commit.tracks[0].pts, pv.pts);
-        assert_eq!((commit.tracks[0].net.clone(), commit.tracks[0].width), (net_of("SIG"), Nm::from_raw_shim(200_000)));
+        assert_eq!((commit.tracks[0].net.clone(), commit.tracks[0].width), (net_of("SIG"), mm(0.2)));
     }
 
     /// `SmoothDraggedSegments`: within a quarter of the track width (Highlight collisions, Walk around) or half of it (Shove) of the line of
@@ -858,7 +859,7 @@ mod tests {
     fn smooth_dragged_segments_lines_the_slid_segment_up_with_the_next_parallel_one() {
         let mut node = Node::new();
         let pts = [p(0, 0), p(1_000_000, 0), p(2_000_000, 1_000_000), p(3_000_000, 1_000_000), p(4_000_000, 2_000_000)];
-        let ids: Vec<ItemId> = pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: Nm::from_raw_shim(250_000), source_track: Some(("t".into(), i)), locked: false }))).collect();
+        let ids: Vec<ItemId> = pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: mm(0.25), source_track: Some(("t".into(), i)), locked: false }))).collect();
         let rules = rules();
         // the cursor is 70 um from the line of the last diagonal: inside the 125 of Shove (width / 2), outside the 62 of Walk around (width / 4)
         let slid = |settings: &RoutingSettings| {
@@ -881,7 +882,7 @@ mod tests {
     fn optimize_entire_track_being_dragged_merges_what_the_drag_left_next_to_the_dragged_segment() {
         let mut node = Node::new();
         let pts = [p(0, 0), p(1_000_000, 0), p(1_500_000, 500_000), p(2_500_000, 500_000), p(3_000_000, 1_000_000), p(4_000_000, 1_000_000)];
-        let ids: Vec<ItemId> = pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: Nm::from_raw_shim(250_000), source_track: Some(("t".into(), i)), locked: false }))).collect();
+        let ids: Vec<ItemId> = pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: mm(0.25), source_track: Some(("t".into(), i)), locked: false }))).collect();
         let rules = rules();
         let dragged = |settings: &RoutingSettings| {
             let mut d = Dragger::start(&node, p(2_000_000, 500_000), ids[2]).unwrap();
@@ -927,8 +928,8 @@ mod tests {
     fn track_end_and_a_pad() -> (Node, Dragger) {
         use crate::item::Solid;
         let mut node = Node::new();
-        let seg = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(1_000_000, 0), width: Nm::from_raw_shim(200_000), source_track: Some(("t".into(), 0)), locked: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(3_000_000, 0), shape: Shape::Circle { c: p(3_000_000, 0), r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false }));
+        let seg = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(1_000_000, 0), width: mm(0.2), source_track: Some(("t".into(), 0)), locked: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(3_000_000, 0), shape: Shape::Circle { c: p(3_000_000, 0), r: mm(0.4) }, source: "U1.1".into(), edge: false }));
         let dragger = Dragger::start(&node, p(1_000_000, 0), seg).unwrap();
         assert_eq!((dragger.kind, dragger.grabbed_index), (DragKind::Corner, 1));
         (node, dragger)
@@ -1025,18 +1026,18 @@ mod tests {
     #[test]
     fn dragging_a_via_drags_its_connected_track_with_it() {
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
-        let mut dragger = Dragger::start(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, via_id).expect("must start a via drag");
+        let mut dragger = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, via_id).expect("must start a via drag");
         assert_eq!(dragger.kind, DragKind::Via);
-        let to = Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) };
+        let to = Point { x: mm(1.0), y: mm(2.0) };
         let preview = dragger.preview(&node, &rules, &settings, to);
         assert!(!preview.colliding);
         assert_eq!(preview.fanout.len(), 1, "the live preview must carry the attached track's stretched shape too, not just the via's own new point");
         // `DragCorner` re-solves the track's last leg at 45 degrees (`dragViaWalkaround`)
-        let elbow = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(1_000_000) }, to];
+        let elbow = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(1.0) }, to];
         assert_eq!(preview.fanout[0].pts, elbow, "the fanout track must already end at the via's live (not yet committed) position");
         let commit = dragger.finish(&node, &rules, &settings, to, false).expect("collision-free via drag must commit");
         assert_eq!(commit.remove_via_ids, vec!["viaA"]);
@@ -1051,9 +1052,9 @@ mod tests {
     /// A via, SIG, with a track coming in from the left, in a world with a GND track straight across where the via is dragged to.
     fn via_across_a_gnd_track() -> (Node, Dragger) {
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::from_raw_shim(-3_000_000), y: Nm::ZERO }, b: Point { x: Nm::ZERO, y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(-3_000_000) }, b: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(3_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkB".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: mm(-3.0), y: Nm::ZERO }, b: Point { x: Nm::ZERO, y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(4.0), y: mm(-3.0) }, b: Point { x: mm(4.0), y: mm(3.0) }, width: mm(0.2), source_track: Some(("trkB".into(), 0)), locked: false }));
         let dragger = Dragger::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, via_id).expect("a via drag");
         assert_eq!(dragger.kind, DragKind::Via);
         (node, dragger)
@@ -1064,18 +1065,18 @@ mod tests {
     #[test]
     fn mark_obstacles_via_drag_keeps_its_tracks_at_45_degrees() {
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(5.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
-        let to = Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(1_300_000) };
+        let to = Point { x: mm(2.0), y: mm(1.3) };
         let d = Dragger::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, via_id).expect("a via drag");
         let pv = d.preview(&node, &rules, &settings, to);
         assert_eq!(pv.fanout.len(), 1);
         let pts = &pv.fanout[0].pts;
         assert_eq!(pts.len(), 3, "an elbow: {pts:?}");
         assert!(on_45(pts), "{pts:?}");
-        assert!(pts.contains(&to) && pts.contains(&Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }), "{pts:?}");
+        assert!(pts.contains(&to) && pts.contains(&Point { x: mm(5.0), y: Nm::ZERO }), "{pts:?}");
         let free = Dragger::start_with(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, via_id, true).expect("a free-angle via drag");
         let pv = free.preview(&node, &rules, &settings, to);
         assert_eq!(pv.fanout[0].pts.len(), 2, "one straight leg: {:?}", pv.fanout[0].pts);
@@ -1088,7 +1089,7 @@ mod tests {
         let (node, mut dragger) = via_across_a_gnd_track();
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let to = Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO };
+        let to = Point { x: mm(5.0), y: Nm::ZERO };
         let preview = dragger.preview(&node, &rules, &settings, to);
         assert!(!preview.colliding, "{preview:?}");
         assert_eq!(preview.pts, vec![to], "nothing sits where the cursor is: the via goes there");
@@ -1103,7 +1104,7 @@ mod tests {
         assert_eq!(removed, vec!["trkA", "trkB"]);
         // and the board it leaves is clean: nothing the router's own collision test calls a violation
         let mut after = Node::new();
-        after.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: to, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: None, locked: false, is_virtual: false }));
+        after.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: to, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false }));
         for l in &commit.tracks {
             after.add_line(l, None, false);
         }
@@ -1119,7 +1120,7 @@ mod tests {
         let (node, dragger) = via_across_a_gnd_track();
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, shove_vias: false, ..RoutingSettings::default() };
-        let to = Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO };
+        let to = Point { x: mm(5.0), y: Nm::ZERO };
         let preview = dragger.preview(&node, &rules, &settings, to);
         assert!(preview.displaced_lines.is_empty(), "nothing is pushed: {:?}", preview.displaced_lines);
         // the via is dragged across the GND track too (a via cannot walk around), so the drag is in collision with it
@@ -1132,18 +1133,18 @@ mod tests {
     fn a_via_dragged_onto_a_pad_ends_clear_of_it() {
         use crate::item::Solid;
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::from_raw_shim(-3_000_000), y: Nm::ZERO }, b: Point { x: Nm::ZERO, y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, r: Nm::from_raw_shim(500_000) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: mm(-3.0), y: Nm::ZERO }, b: Point { x: Nm::ZERO, y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(4.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(4.0), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
-        let onto_the_pad = Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(300_000) };
+        let onto_the_pad = Point { x: mm(4.0), y: mm(0.3) };
         for mode in [Mode::Walkaround, Mode::Shove] {
             let mut dragger = Dragger::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, via_id).unwrap();
             let settings = RoutingSettings { mode, ..RoutingSettings::default() };
             let preview = dragger.preview(&node, &rules, &settings, onto_the_pad);
             assert!(!preview.colliding, "{mode:?}: {preview:?}");
             let end = preview.pts[0];
-            let centre_distance = (((end.x - Nm::from_raw_shim(4_000_000)).raw_shim() as f64).powi(2) + (end.y.raw_shim() as f64).powi(2)).sqrt();
+            let centre_distance = (((end.x - mm(4.0)).as_f64()).powi(2) + (end.y.as_f64()).powi(2)).sqrt();
             assert!(centre_distance >= 500_000.0 + 300_000.0 + 200_000.0 - 500.0, "{mode:?}: the via ended {centre_distance} um from the pad's centre, at {end:?}");
             assert_eq!(preview.fanout[0].last(), Some(end), "{mode:?}: the track ends at the via");
             let commit = dragger.finish(&node, &rules, &settings, onto_the_pad, false).expect("a via that clears commits");
@@ -1162,37 +1163,37 @@ mod tests {
     fn walkaround_mode_corner_drag_is_walked_around_a_pad() {
         use crate::item::Solid;
         let mut node = Node::new();
-        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false }));
+        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
-        let mut dragger = Dragger::start(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, seg_id).unwrap();
+        let mut dragger = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id).unwrap();
         let settings = RoutingSettings::default();
         assert_eq!(settings.mode, Mode::Walkaround);
-        let preview = dragger.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
+        let preview = dragger.preview(&node, &rules, &settings, Point { x: mm(5.0), y: Nm::ZERO });
         assert!(!preview.colliding, "the drag is walked around the pad: {preview:?}");
-        assert!(preview.pts.len() > 2 && preview.pts.last() == Some(&Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }) && preview.pts.first() == Some(&Point { x: Nm::ZERO, y: Nm::ZERO }), "{:?}", preview.pts);
-        let commit = dragger.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }, false).expect("the walked drag commits");
+        assert!(preview.pts.len() > 2 && preview.pts.last() == Some(&Point { x: mm(5.0), y: Nm::ZERO }) && preview.pts.first() == Some(&Point { x: Nm::ZERO, y: Nm::ZERO }), "{:?}", preview.pts);
+        let commit = dragger.finish(&node, &rules, &settings, Point { x: mm(5.0), y: Nm::ZERO }, false).expect("the walked drag commits");
         assert_eq!(commit.tracks[0].pts, preview.pts);
         // Dropped on the pad itself, there is nowhere for the end to go: the pad's place is refused, and the last valid point -- the
         // walked drag above -- is what a release there commits
-        let on_the_pad = dragger.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO });
+        let on_the_pad = dragger.preview(&node, &rules, &settings, Point { x: mm(3.0), y: Nm::ZERO });
         assert!(on_the_pad.colliding);
-        let commit = dragger.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, false).expect("the last valid point");
+        let commit = dragger.finish(&node, &rules, &settings, Point { x: mm(3.0), y: Nm::ZERO }, false).expect("the last valid point");
         assert_eq!(commit.tracks[0].pts, preview.pts);
         // a drag whose first position is the pad has no valid point to fall back to
-        let mut fresh = Dragger::start(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, seg_id).unwrap();
-        assert!(fresh.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, false).is_none());
+        let mut fresh = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id).unwrap();
+        assert!(fresh.finish(&node, &rules, &settings, Point { x: mm(3.0), y: Nm::ZERO }, false).is_none());
     }
 
     #[test]
     fn shove_mode_pushes_an_obstacle_out_of_a_dragged_tracks_new_path() {
         let mut node = Node::new();
-        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkB".into(), 0)), locked: false }));
+        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(2.5), y: mm(-2.0) }, b: Point { x: mm(2.5), y: mm(2.0) }, width: mm(0.2), source_track: Some(("trkB".into(), 0)), locked: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let dragger = Dragger::start(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, seg_id).unwrap();
-        let preview = dragger.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
+        let dragger = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id).unwrap();
+        let preview = dragger.preview(&node, &rules, &settings, Point { x: mm(5.0), y: Nm::ZERO });
         assert!(!preview.colliding, "shove must clear the crossing track rather than reporting a collision");
         assert_eq!(preview.displaced_lines.len(), 1);
         assert_eq!(preview.displaced_lines[0].source_track.as_deref(), Some("trkB"));
@@ -1204,7 +1205,7 @@ mod tests {
         let mut node = Node::new();
         let ids = add_track(&mut node, "SIG", "u", &[p(0, -3_000_000), p(0, 0), p(6_000_000, 0), p(6_000_000, -3_000_000)]);
         // a GND track below, across where the middle leg is dragged to
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(3_000_000, 1_000_000), b: p(3_000_000, 6_000_000), width: Nm::from_raw_shim(200_000), source_track: Some(("gnd".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(3_000_000, 1_000_000), b: p(3_000_000, 6_000_000), width: mm(0.2), source_track: Some(("gnd".into(), 0)), locked: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
         let mut dragger = Dragger::start(&node, p(4_500_000, 0), ids[1]).unwrap();
@@ -1233,51 +1234,51 @@ mod tests {
         use crate::item::Solid;
         use crate::layer::LayerRange;
         let mut node = Node::new();
-        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false }));
+        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let mut dragger = Dragger::start(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, seg_id).unwrap();
-        let preview = dragger.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::ZERO });
+        let mut dragger = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id).unwrap();
+        let preview = dragger.preview(&node, &rules, &settings, Point { x: mm(6.0), y: Nm::ZERO });
         assert!(!preview.colliding);
         assert!(preview.pts.len() > 2, "walked around the pad: {:?}", preview.pts);
         assert_eq!(preview.pts.first(), Some(&Point { x: Nm::ZERO, y: Nm::ZERO }));
-        assert_eq!(preview.pts.last(), Some(&Point { x: Nm::from_raw_shim(6_000_000), y: Nm::ZERO }));
+        assert_eq!(preview.pts.last(), Some(&Point { x: mm(6.0), y: Nm::ZERO }));
         for w in preview.pts.windows(2) {
-            let leg = Shape::Stadium { a: w[0], b: w[1], r: Nm::from_raw_shim(100_000) };
-            assert!(leg.collides(&Shape::Circle { c: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, r: Nm::from_raw_shim(400_000) }, Nm::from_raw_shim(199_000)).is_none(), "{:?} touches the pad", w);
+            let leg = Shape::Stadium { a: w[0], b: w[1], r: mm(0.1) };
+            assert!(leg.collides(&Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, mm(0.199)).is_none(), "{:?} touches the pad", w);
         }
         // and what finish() commits is that shape
-        let commit = dragger.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::ZERO }, false).expect("the walked drag is accepted");
+        let commit = dragger.finish(&node, &rules, &settings, Point { x: mm(6.0), y: Nm::ZERO }, false).expect("the walked drag is accepted");
         assert_eq!(commit.tracks[0].pts, preview.pts);
     }
 
     #[test]
     fn free_angle_drag_never_shoves_it_only_reports_the_collision() {
         let mut node = Node::new();
-        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkB".into(), 0)), locked: false }));
+        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(2.5), y: mm(-2.0) }, b: Point { x: mm(2.5), y: mm(2.0) }, width: mm(0.2), source_track: Some(("trkB".into(), 0)), locked: false }));
         let rules = rules();
         // Shove mode: a plain drag pushes the crossing track aside ...
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
-        let plain = Dragger::start(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, seg_id).unwrap();
+        let plain = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id).unwrap();
         assert!(!plain.free_angle);
-        assert!(!plain.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }).colliding);
+        assert!(!plain.preview(&node, &rules, &settings, Point { x: mm(5.0), y: Nm::ZERO }).colliding);
         // ... but DM_FREE_ANGLE (`G`) always takes `dragMarkObstacles`: nothing is displaced, the collision is reported.
-        let mut free = Dragger::start_with(&node, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, seg_id, true).unwrap();
+        let mut free = Dragger::start_with(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id, true).unwrap();
         assert!(free.free_angle);
-        let preview = free.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
+        let preview = free.preview(&node, &rules, &settings, Point { x: mm(5.0), y: Nm::ZERO });
         assert!(preview.colliding, "a free-angle drag must report, not resolve, the collision");
         assert!(preview.displaced_lines.is_empty());
         // `FixRoute` refuses the colliding drop (outside MarkObstacles + can_violate_drc) ...
-        assert!(free.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }, false).is_none());
+        assert!(free.finish(&node, &rules, &settings, Point { x: mm(5.0), y: Nm::ZERO }, false).is_none());
         // ... and commits a clear one, free angle included (the grabbed end simply follows the cursor).
-        let commit = free.finish(&node, &rules, &settings, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, false).expect("a clear free-angle drop commits");
-        assert_eq!(commit.tracks[0].pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }]);
+        let commit = free.finish(&node, &rules, &settings, Point { x: mm(1.0), y: mm(1.0) }, false).expect("a clear free-angle drop commits");
+        assert_eq!(commit.tracks[0].pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: mm(1.0) }]);
         // a free-angle grab in the middle of a segment is a corner (the nearer vertex), not a slide
         let mut node = Node::new();
-        let long = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("t".into(), 0)), locked: false }));
-        let mid = Dragger::start_with(&node, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::ZERO }, long, true).unwrap();
+        let long = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(4.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("t".into(), 0)), locked: false }));
+        let mid = Dragger::start_with(&node, Point { x: mm(1.5), y: Nm::ZERO }, long, true).unwrap();
         assert_eq!((mid.kind, mid.grabbed_index), (DragKind::Corner, 0));
     }
 
@@ -1285,7 +1286,7 @@ mod tests {
     fn starting_on_a_pad_refuses() {
         use crate::item::Solid;
         let mut node = Node::new();
-        let pad_id = node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false }));
+        let pad_id = node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false }));
         assert!(Dragger::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, pad_id).is_none());
     }
 }

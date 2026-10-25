@@ -5,7 +5,7 @@
 //! The board is the one of `web/studio/e2e/multichannel-board.yaml` (three amplifier channels): channel 1 laid out compactly and routed by the router, the other two placed in
 //! other arrangements and not routed.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use super::tests::scratch;
 use super::{load, meta_path, save, step, undo, Meta};
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, Side};
@@ -24,20 +24,20 @@ fn slow() -> bool {
     !off
 }
 
-/// Where the footprints go (um): channel 1 compact, the others in their own ways.
-const PLACE: [(&str, i64, i64); 12] = [
-    ("U1", 5_500_000, 9_000_000),
-    ("R1", 3_500_000, 4_200_000),
-    ("R2", 7_700_000, 4_200_000),
-    ("C1", 5_500_000, 13_200_000),
-    ("U2", 18_000_000, 9_000_000),
-    ("R3", 20_200_000, 4_200_000),
-    ("R4", 15_800_000, 4_200_000),
-    ("C2", 18_000_000, 14_000_000),
-    ("U3", 30_500_000, 9_000_000),
-    ("R5", 30_500_000, 4_200_000),
-    ("R6", 32_500_000, 13_500_000),
-    ("C3", 28_000_000, 13_500_000),
+/// Where the footprints go: channel 1 compact, the others in their own ways.
+const PLACE: [(&str, Nm, Nm); 12] = [
+    ("U1", Nm::new(5_500_000), Nm::new(9_000_000)),
+    ("R1", Nm::new(3_500_000), Nm::new(4_200_000)),
+    ("R2", Nm::new(7_700_000), Nm::new(4_200_000)),
+    ("C1", Nm::new(5_500_000), Nm::new(13_200_000)),
+    ("U2", Nm::new(18_000_000), Nm::new(9_000_000)),
+    ("R3", Nm::new(20_200_000), Nm::new(4_200_000)),
+    ("R4", Nm::new(15_800_000), Nm::new(4_200_000)),
+    ("C2", Nm::new(18_000_000), Nm::new(14_000_000)),
+    ("U3", Nm::new(30_500_000), Nm::new(9_000_000)),
+    ("R5", Nm::new(30_500_000), Nm::new(4_200_000)),
+    ("R6", Nm::new(32_500_000), Nm::new(13_500_000)),
+    ("C3", Nm::new(28_000_000), Nm::new(13_500_000)),
 ];
 
 const CH1: [&str; 4] = ["U1", "R1", "R2", "C1"];
@@ -62,7 +62,7 @@ fn channel_one(full: &ConstraintModel) -> ConstraintModel {
     m
 }
 
-fn design(placed: &[(&str, i64, i64)]) -> Design {
+fn design(placed: &[(&str, Nm, Nm)]) -> Design {
     Design {
         footprint_library: None,
         sheet_contents: None,
@@ -73,8 +73,8 @@ fn design(placed: &[(&str, i64, i64)]) -> Design {
         schematic: None,
         nets: None,
         placement: Some(PlacementSection {
-            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(36_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(36_000_000), y: Nm::from_raw_shim(25_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(25_000_000) }],
-            footprints: placed.iter().map(|(id, x, y)| FootprintInstance { id: id.to_string(), at: Point { x: Nm::from_raw_shim(*x), y: Nm::from_raw_shim(*y) }, rot: 0, side: Side::Top, label: Default::default() }).collect(),
+            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(36.0), y: Nm::ZERO }, Point { x: mm(36.0), y: mm(25.0) }, Point { x: Nm::ZERO, y: mm(25.0) }],
+            footprints: placed.iter().map(|(id, x, y)| FootprintInstance { id: id.to_string(), at: Point { x: *x, y: *y }, rot: 0, side: Side::Top, label: Default::default() }).collect(),
             modules: vec![],
         }),
         routing: None,
@@ -98,7 +98,7 @@ fn channels(dir: &Path) {
 /// `design` as the board folder `dir`'s design, with the intent of the three channels.
 fn write_board(dir: &Path, design: &Design) {
     save(dir, design).unwrap();
-    let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_nm: 100_000, spacing_nm: 600_000 };
+    let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.6) };
     std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 }
 
@@ -109,7 +109,7 @@ fn design_json(dir: &Path) -> Value {
 /// Generate Placement Rule Areas with every sheet ticked, as the dialog's OK sends it.
 fn generate(dir: &Path) {
     let (meta, design, model) = load(dir).unwrap();
-    let rows = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm)).mc_potential_areas();
+    let rows = Board::new(design, &model, meta.snap_nm, meta.spacing_nm).mc_potential_areas();
     let areas: Vec<AreaPick> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| AreaPick { kind: r.kind, key: r.key.clone() }).collect();
     assert_eq!(areas.len(), 3, "one sheet for each amplifier: {rows:?}");
     step(dir, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { areas, replace_existing: false, group_items: false }), false, "test").unwrap();
@@ -137,8 +137,8 @@ fn enclose_the_routing(dir: &Path) {
     for t in &design.routing.as_ref().unwrap().tracks {
         all.extend(t.pts.iter().copied());
     }
-    let (x0, x1) = (all.iter().map(|p| p.x).min().unwrap() - Nm::from_raw_shim(500_000), all.iter().map(|p| p.x).max().unwrap() + Nm::from_raw_shim(500_000));
-    let (y0, y1) = (all.iter().map(|p| p.y).min().unwrap() - Nm::from_raw_shim(500_000), all.iter().map(|p| p.y).max().unwrap() + Nm::from_raw_shim(500_000));
+    let (x0, x1) = (all.iter().map(|p| p.x).min().unwrap() - mm(0.5), all.iter().map(|p| p.x).max().unwrap() + mm(0.5));
+    let (y0, y1) = (all.iter().map(|p| p.y).min().unwrap() - mm(0.5), all.iter().map(|p| p.y).max().unwrap() + mm(0.5));
     let rect = vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
     step(dir, Cmd::SetZoneOutline { id: id.clone(), outline: rect, holes: None }, false, "test").unwrap();
 }
@@ -205,7 +205,7 @@ fn strict_refuses_neither_the_areas_nor_the_repeat_on_a_board_that_is_not_routed
     write_board(&dir, &design(&PLACE));
     assert!(design_json(&dir)["routing"].is_null(), "no routing yet");
     let (meta, d, model) = load(&dir).unwrap();
-    let rows = Board::new(d, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm)).mc_potential_areas();
+    let rows = Board::new(d, &model, meta.snap_nm, meta.spacing_nm).mc_potential_areas();
     let areas: Vec<AreaPick> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| AreaPick { kind: r.kind, key: r.key.clone() }).collect();
     step(&dir, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { areas, replace_existing: false, group_items: false }), true, "test").expect("Strict lets the rule areas be made");
     let found = rule_areas(&dir);
@@ -216,7 +216,7 @@ fn strict_refuses_neither_the_areas_nor_the_repeat_on_a_board_that_is_not_routed
     // the same board, a copper pour on it instead: the gate does judge that (it is what the exemption is not)
     let other = scratch("p24_strict_pour");
     write_board(&other, &design(&PLACE));
-    let pour = Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(16_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(16_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(20_000_000) }] };
+    let pour = Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: mm(1.0), y: mm(16.0) }, Point { x: mm(8.0), y: mm(16.0) }, Point { x: mm(8.0), y: mm(20.0) }, Point { x: mm(1.0), y: mm(20.0) }] };
     assert_eq!(step(&other, pour, true, "test").unwrap_err()[0].check, "board_worse", "the first pour of a board with no routing is judged, a rule area is not");
 }
 
@@ -330,7 +330,7 @@ fn kicad_cli_reads_the_rule_areas_as_its_own_rewrite_and_finds_the_repeated_chan
             assert!((x1 - x2).abs() < 1e-6 && (y1 - y2).abs() < 1e-6, "{source}: ({x1}, {y1}) against ({x2}, {y2})");
         }
         for (p, (x, y)) in outline.iter().zip(a.iter()) {
-            assert!(((p.x.raw_shim() as f64 / 1e6) - x).abs() < 1e-6 && ((p.y.raw_shim() as f64 / 1e6) - y).abs() < 1e-6, "{source}: the corner of the area is the corner written");
+            assert!((p.x.mm() - x).abs() < 1e-6 && (p.y.mm() - y).abs() < 1e-6, "{source}: the corner of the area is the corner written");
         }
     }
 
@@ -346,7 +346,7 @@ fn kicad_cli_reads_the_rule_areas_as_its_own_rewrite_and_finds_the_repeated_chan
     let areas = rule_areas(&dir);
     let mut per: BTreeMap<(usize, String), u64> = BTreeMap::new();
     for v in after["violations"].as_array().unwrap().iter().chain(after["unconnected_items"].as_array().unwrap().iter()) {
-        let at: Vec<Point> = v["items"].as_array().unwrap().iter().map(|i| Point { x: Nm::from_raw_shim(i["pos"][0].as_i64().unwrap_or(0)), y: Nm::from_raw_shim(i["pos"][1].as_i64().unwrap_or(0)) }).collect();
+        let at: Vec<Point> = v["items"].as_array().unwrap().iter().map(|i| Point { x: Nm::new(i["pos"][0].as_i64().unwrap_or(0)), y: Nm::new(i["pos"][1].as_i64().unwrap_or(0)) }).collect();
         if at.is_empty() {
             continue;
         }

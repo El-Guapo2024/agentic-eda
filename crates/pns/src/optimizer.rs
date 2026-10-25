@@ -147,17 +147,17 @@ fn merge_step(pts: &[eda_model::ir::Point], arcs: &[ArcPts], origin: &[eda_model
 /// meet" query to re-join consecutive offset segments at their own
 /// mitered corner, and reuses this rather than duplicating it.
 pub(crate) fn intersect_lines(a1: eda_model::ir::Point, a2: eda_model::ir::Point, b1: eda_model::ir::Point, b2: eda_model::ir::Point) -> Option<eda_model::ir::Point> {
-    let (dir1x, dir1y) = ((a2.x - a1.x).raw_shim() as i128, (a2.y - a1.y).raw_shim() as i128);
-    let (dir2x, dir2y) = ((b2.x - b1.x).raw_shim() as i128, (b2.y - b1.y).raw_shim() as i128);
+    let (dir1x, dir1y) = ((a2.x - a1.x).get() as i128, (a2.y - a1.y).get() as i128);
+    let (dir2x, dir2y) = ((b2.x - b1.x).get() as i128, (b2.y - b1.y).get() as i128);
     let det = dir2x * dir1y - dir2y * dir1x; // dir2.Cross(dir1)
     if det == 0 {
         return None;
     }
-    let (offx, offy) = ((b1.x - a1.x).raw_shim() as i128, (b1.y - a1.y).raw_shim() as i128);
+    let (offx, offy) = ((b1.x - a1.x).get() as i128, (b1.y - a1.y).get() as i128);
     let t = dir2x * offy - dir2y * offx; // dir2.Cross(offset); point = a1 + (t/det)*dir1
-    let px = a1.x.raw_shim() as i128 + (dir1x * t) / det;
-    let py = a1.y.raw_shim() as i128 + (dir1y * t) / det;
-    Some(eda_model::ir::Point { x: Nm::from_raw_shim(px as i64), y: Nm::from_raw_shim(py as i64) })
+    let px = a1.x.get() as i128 + (dir1x * t) / det;
+    let py = a1.y.get() as i128 + (dir1y * t) / det;
+    Some(eda_model::ir::Point { x: Nm::new(px as i64), y: Nm::new(py as i64) })
 }
 
 /// `OPTIMIZER::mergeObtuse`: see this module's own doc comment for how
@@ -344,7 +344,7 @@ fn point_inside2(poly: &[Point], p: Point) -> bool {
             return true; // pt on polygon boundary
         }
         if (ip.y < p.y) != (ip_next.y < p.y) {
-            let d = (ip.x.raw_shim() as f64 - p.x.raw_shim() as f64) * (ip_next.y.raw_shim() as f64 - p.y.raw_shim() as f64) - (ip_next.x.raw_shim() as f64 - p.x.raw_shim() as f64) * (ip.y.raw_shim() as f64 - p.y.raw_shim() as f64);
+            let d = (ip.x.as_f64() - p.x.as_f64()) * (ip_next.y.as_f64() - p.y.as_f64()) - (ip_next.x.as_f64() - p.x.as_f64()) * (ip.y.as_f64() - p.y.as_f64());
             if ip.x >= p.x {
                 if ip_next.x > p.x {
                     result = !result;
@@ -409,7 +409,7 @@ fn keep_topology_allows(node: &Node, origin: &[Point], v1: usize, v2: usize, rep
 /// never touched keeps its shape).
 fn area_allows(area: Area, v1: usize, v2: usize, path: &[eda_model::ir::Point], replacement: &[eda_model::ir::Point]) -> bool {
     let inside = |p: eda_model::ir::Point| p.x >= area.0 && p.x <= area.2 && p.y >= area.1 && p.y <= area.3;
-    let parallel = |a: (eda_model::ir::Point, eda_model::ir::Point), b: (eda_model::ir::Point, eda_model::ir::Point)| (a.1.x - a.0.x).raw_shim() as i128 * (b.1.y - b.0.y).raw_shim() as i128 - (a.1.y - a.0.y).raw_shim() as i128 * (b.1.x - b.0.x).raw_shim() as i128 == 0;
+    let parallel = |a: (eda_model::ir::Point, eda_model::ir::Point), b: (eda_model::ir::Point, eda_model::ir::Point)| (a.1.x - a.0.x).area(b.1.y - b.0.y) - (a.1.y - a.0.y).area(b.1.x - b.0.x) == 0;
     let (p1_in, p2_in) = (inside(path[v1]), inside(path[v2]));
     if p1_in && p2_in {
         return true;
@@ -464,7 +464,7 @@ fn merge_colinear_line(line: &mut Line) {
     while i + 2 < line.pts.len() {
         let (a, b, c) = (line.pts[i], line.pts[i + 1], line.pts[i + 2]);
         let degenerate = a == b || b == c;
-        let cross = (b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128;
+        let cross = (b.x - a.x).area(c.y - a.y) - (b.y - a.y).area(c.x - a.x);
         if !degenerate && cross == 0 && !line.is_pt_on_arc(i + 1) {
             line.pts.remove(i + 1);
         } else {
@@ -484,8 +484,8 @@ fn count_forbidden_corners(pts: &[eda_model::ir::Point]) -> usize {
     dirs.windows(2).filter(|w| forbidden(w[0].angle_to(&w[1]))).count()
 }
 
-fn chain_len(pts: &[eda_model::ir::Point]) -> i64 {
-    pts.windows(2).map(|w| (((w[1].x - w[0].x).raw_shim() as f64).hypot((w[1].y - w[0].y).raw_shim() as f64)) as i64).sum()
+fn chain_len(pts: &[eda_model::ir::Point]) -> Nm {
+    pts.windows(2).map(|w| Nm::new((w[1].x - w[0].x).as_f64().hypot((w[1].y - w[0].y).as_f64()) as i64)).sum()
 }
 
 /// `SHAPE_LINE_CHAIN::Append( chain )`: skip a duplicate joining point.
@@ -545,15 +545,15 @@ fn breakouts(width: Nm, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Poin
         Shape::Circle { c, r } => (0..8)
             .map(|i| {
                 let a = i as f64 * std::f64::consts::FRAC_PI_4;
-                let l = r.raw_shim() as f64 * std::f64::consts::SQRT_2;
-                vec![c, Point { x: c.x + Nm::from_raw_shim((l * a.cos()).round() as i64), y: c.y + Nm::from_raw_shim((l * a.sin()).round() as i64) }]
+                let l = r.as_f64() * std::f64::consts::SQRT_2;
+                vec![c, Point { x: c.x + Nm::kiround(l * a.cos()), y: c.y + Nm::kiround(l * a.sin()) }]
             })
             .collect(),
         Shape::Polygon { ref pts } => custom_breakouts(solid.pos, pts),
         Shape::RoundRect { x0, y0, x1, y1, r } => {
-            let c = ((x0 + x1).raw_shim() as f64 / 2.0, (y0 + y1).raw_shim() as f64 / 2.0);
-            let outline = eda_model::pad_geom::chamfered_rect_polygon((x1 - x0, y1 - y0), r, 0.0, eda_model::ir::ChamferCorners::default(), eda_model::outline::MAX_ERROR_NM.raw_shim() as f64);
-            let pts: Vec<Point> = outline.iter().map(|&(x, y)| Point { x: Nm::from_raw_shim((c.0 + x).round() as i64), y: Nm::from_raw_shim((c.1 + y).round() as i64) }).collect();
+            let c = ((x0 + x1).as_f64() / 2.0, (y0 + y1).as_f64() / 2.0);
+            let outline = eda_model::pad_geom::chamfered_rect_polygon((x1 - x0, y1 - y0), r, 0.0, eda_model::ir::ChamferCorners::default(), eda_model::outline::MAX_ERROR_NM.as_f64());
+            let pts: Vec<Point> = outline.iter().map(|&(x, y)| Point { x: Nm::kiround(c.0 + x), y: Nm::kiround(c.1 + y) }).collect();
             custom_breakouts(solid.pos, &pts)
         }
         _ => Vec::new(),
@@ -566,12 +566,12 @@ fn custom_breakouts(p0: eda_model::ir::Point, pts: &[eda_model::ir::Point]) -> V
     use eda_model::ir::Point;
     let (x0, x1) = (pts.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO), pts.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO));
     let (y0, y1) = (pts.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO), pts.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO));
-    let length = (x1 - x0).max(y1 - y0) / 2 + Nm::from_raw_shim(5);
+    let length = (x1 - x0).max(y1 - y0) / 2 + Nm::new(5);
     let n = pts.len();
     (0..8)
         .filter_map(|i| {
             let a = i as f64 * std::f64::consts::FRAC_PI_4;
-            let v0 = Point { x: p0.x + Nm::from_raw_shim((length.raw_shim() as f64 * a.cos()).round() as i64), y: p0.y + Nm::from_raw_shim((length.raw_shim() as f64 * a.sin()).round() as i64) };
+            let v0 = Point { x: p0.x + Nm::kiround(length.as_f64() * a.cos()), y: p0.y + Nm::kiround(length.as_f64() * a.sin()) };
             let ray = eda_drc::kimath::Seg::new(p0, v0);
             (0..n).find_map(|k| ray.intersect(&eda_drc::kimath::Seg::new(pts[k], pts[(k + 1) % n]))).map(|hit| vec![p0, hit])
         })
@@ -598,7 +598,7 @@ fn smart_pads_single(line: &mut Line, pad: &crate::item::Item, at_end: bool, end
         pts.reverse();
     }
     let p_end = end_vertex.min(3.min(pts.len().saturating_sub(1)));
-    let mut variants: Vec<(usize, i64, Vec<eda_model::ir::Point>)> = Vec::new();
+    let mut variants: Vec<(usize, Nm, Vec<eda_model::ir::Point>)> = Vec::new();
     for p in 1..=p_end {
         let seg = Shape::Stadium { a: pts[0], b: pts[p], r: line.width / 2 };
         if solid.shape.collides(&seg, Nm::ZERO).is_none() {
@@ -633,7 +633,7 @@ fn smart_pads_single(line: &mut Line, pad: &crate::item::Item, at_end: bool, end
         }
     }
     let mut min_cost = corner_cost(&line.pts);
-    let mut max_len = 0i64;
+    let mut max_len = Nm::ZERO;
     let mut best: Option<(usize, Vec<eda_model::ir::Point>)> = None;
     for (p, len, v) in variants {
         let cost = corner_cost(&v);
@@ -685,7 +685,7 @@ fn fanout_cleanup(line: &mut Line, node: &Node, rules: &BoardRules, exclude: &[I
         return false;
     }
     let end_match = find_pad_or_via(node, line.layer, &line.net, p_end).is_some() || line.via_at_end.is_some();
-    if !(end_match && chain_len(&line.pts) < (line.width * 10).raw_shim()) {
+    if !(end_match && chain_len(&line.pts) < line.width * 10) {
         return false;
     }
     for diag in [false, true] {
@@ -710,7 +710,7 @@ fn find_coupled_vertices(vertex: eda_model::ir::Point, orig_seg: crate::seg_ops:
     for (i, s) in coupled.windows(2).enumerate() {
         let seg = (s[0], s[1]);
         let proj_over_coupled = line_project(seg, vertex);
-        if approx_parallel(seg, orig_seg, Nm::from_raw_shim(1)) {
+        if approx_parallel(seg, orig_seg, Nm::new(1)) {
             let dist = vnorm(vsub(proj_over_coupled, vertex)) - pair.width;
             if pair.gap_constraint.matches(dist) {
                 out.push(i);
@@ -827,7 +827,7 @@ fn coupled_bypass(cache: &HitCache, base: (&ChainHits, &ChainHits), pair: &crate
     let starts = find_coupled_vertices(ref_bypass[0], (ref_bypass[0], ref_bypass[1]), coupled, pair);
     let dir = Direction45::from_seg(ref_bypass[0], ref_bypass[1]);
     // (coupled length, position in KiCad's order, the coupled line with the bypass in it)
-    let mut candidates: Vec<(i64, usize, Vec<eda_model::ir::Point>)> = Vec::new();
+    let mut candidates: Vec<(Nm, usize, Vec<eda_model::ir::Point>)> = Vec::new();
     for &si in &starts {
         for j in 1..coupled.len().saturating_sub(1) {
             if si.abs_diff(j) <= 1 {
@@ -862,8 +862,8 @@ fn merge_dp_step(cache: &HitCache, pair: &mut crate::diff_pair::DiffPair, try_p:
     // `CoupledLength( aRef, aCoupled )` is a sum over every segment of the reference with every segment of the coupled line. Each
     // candidate replaces a stretch of the reference, so its coupled length is the total less the replaced segments' share plus the
     // bypass's: the shares are worked out once here, not for every candidate (a walk round a pad cluster leaves tens of segments).
-    let share = |a: crate::seg_ops::Seg2| coupled_path.windows(2).map(|w| pair.coupled_length_of_segs(a, (w[0], w[1]))).sum::<i64>();
-    let mut prefix = vec![0i64];
+    let share = |a: crate::seg_ops::Seg2| coupled_path.windows(2).map(|w| pair.coupled_length_of_segs(a, (w[0], w[1]))).sum::<Nm>();
+    let mut prefix = vec![Nm::ZERO];
     for w in current_path.windows(2) {
         prefix.push(prefix.last().unwrap() + share((w[0], w[1])));
     }
@@ -878,21 +878,21 @@ fn merge_dp_step(cache: &HitCache, pair: &mut crate::diff_pair::DiffPair, try_p:
             let mut new_ref = current_path.clone();
             crate::line::replace_points(&mut new_ref, n, n + step, bypass.clone());
             // segments 0..n and n+step+1.. of the reference are as they were; the bypass is new
-            let coupled_uni = prefix[n] + (clen_pre - prefix[n + step + 1]) + bypass.windows(2).map(|w| share((w[0], w[1]))).sum::<i64>();
+            let coupled_uni = prefix[n] + (clen_pre - prefix[n + step + 1]) + bypass.windows(2).map(|w| share((w[0], w[1]))).sum::<Nm>();
             if cfg!(test) {
                 assert_eq!(coupled_uni, pair.coupled_length_of(&new_ref, &coupled_path), "the coupled length of a candidate is the total less what it replaced plus what it adds");
             }
             let delta_uni = coupled_uni - clen_pre + budget;
             if let Some(new_coup) = coupled_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &bypass, &coupled_path) {
                 let delta_coupled = pair.coupled_length_of(&new_ref, &new_coup) - clen_pre + budget;
-                if delta_coupled >= 0 {
+                if delta_coupled >= Nm::ZERO {
                     let (mut r, mut c) = (Line::from_points(None, 0, Nm::ZERO, new_ref), Line::from_points(None, 0, Nm::ZERO, new_coup));
                     r.simplify2(); // `newRef.Simplify2()`
                     c.simplify2();
                     pair.set_shape(r.pts, c.pts, !try_p);
                     return true;
                 }
-            } else if delta_uni >= 0 && verify_dp_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &coupled_path) {
+            } else if delta_uni >= Nm::ZERO && verify_dp_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &coupled_path) {
                 let (mut r, mut c) = (Line::from_points(None, 0, Nm::ZERO, new_ref), Line::from_points(None, 0, Nm::ZERO, coupled_path.clone()));
                 r.simplify2();
                 c.simplify2();
@@ -934,6 +934,7 @@ pub fn optimize_pair(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pai
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::item::net_of;
     use eda_model::ir::Point;
@@ -949,22 +950,22 @@ mod tests {
         // `mergeStep`: `DIRECTION_45().BuildInitialTrace( s1.A, s2.B, i, cornerMode )` -- in arc 45 the shortcut of a staircase is an arc
         let node = Node::new();
         let pt = |x, y| Point { x, y };
-        let stairs = vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::from_raw_shim(3_000_000), Nm::ZERO), pt(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(300_000)), pt(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(300_000)), pt(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(600_000)), pt(Nm::from_raw_shim(6_000_000), Nm::from_raw_shim(600_000))];
-        let line = Line::from_points(net_of("SIG"), 0, Nm::from_raw_shim(200_000), stairs);
+        let stairs = vec![pt(Nm::ZERO, Nm::ZERO), pt(mm(3.0), Nm::ZERO), pt(mm(3.0), mm(0.3)), pt(mm(2.0), mm(0.3)), pt(mm(2.0), mm(0.6)), pt(mm(6.0), mm(0.6))];
+        let line = Line::from_points(net_of("SIG"), 0, mm(0.2), stairs);
         let mitered = optimize_with(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS);
         assert_eq!(mitered.arc_count(), 0);
         let rounded = optimize_constrained(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS, &Constraints { corner_mode: CornerMode::Rounded45, ..Constraints::default() });
         assert!(rounded.arc_count() >= 1, "{rounded:?} cost {} vs {}", corner_cost(&rounded.pts), corner_cost(&line.pts));
         assert!(corner_cost(&rounded.pts) < corner_cost(&line.pts));
-        assert_eq!((rounded.first(), rounded.last()), (Some(pt(Nm::ZERO, Nm::ZERO)), Some(pt(Nm::from_raw_shim(6_000_000), Nm::from_raw_shim(600_000)))));
+        assert_eq!((rounded.first(), rounded.last()), (Some(pt(Nm::ZERO, Nm::ZERO)), Some(pt(mm(6.0), mm(0.6)))));
     }
 
     #[test]
     fn merge_full_simplifies_collinear_points() {
         let node = Node::new();
         let pt = |x, y| Point { x, y };
-        let (out, _) = merge_full(vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::from_raw_shim(500_000), Nm::ZERO), pt(Nm::from_raw_shim(1_000_000), Nm::ZERO), pt(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000))], Vec::new(), &node, 0, Nm::from_raw_shim(200_000), &net_of("SIG"), &rules(), &[], &Constraints::default());
-        assert_eq!(out, vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::from_raw_shim(1_000_000), Nm::ZERO), pt(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000))]);
+        let (out, _) = merge_full(vec![pt(Nm::ZERO, Nm::ZERO), pt(mm(0.5), Nm::ZERO), pt(mm(1.0), Nm::ZERO), pt(mm(1.0), mm(1.0))], Vec::new(), &node, 0, mm(0.2), &net_of("SIG"), &rules(), &[], &Constraints::default());
+        assert_eq!(out, vec![pt(Nm::ZERO, Nm::ZERO), pt(mm(1.0), Nm::ZERO), pt(mm(1.0), mm(1.0))]);
     }
 
     /// `KEEP_TOPOLOGY_CONSTRAINT`: a hat of track goes over a pad of another net; the straight shortcut under the pad collides with nothing, but it would
@@ -975,22 +976,22 @@ mod tests {
         use crate::layer::LayerRange;
         let (net, other) = (net_of("SIG"), net_of("GND"));
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: other, layers: LayerRange::new(0, 0), pos: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(750_000) }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(750_000) }, r: Nm::from_raw_shim(200_000) }, source: "U1.1".into(), edge: false }));
-        let hat = vec![Point { x: Nm::from_raw_shim(-1_000_000), y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_500_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(1_500_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }];
-        let line = Line::from_points(net, 0, Nm::from_raw_shim(200_000), hat.clone());
-        let straight = vec![Point { x: Nm::from_raw_shim(-1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }];
+        node.add(Item::Solid(Solid { net: other, layers: LayerRange::new(0, 0), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false }));
+        let hat = vec![Point { x: mm(-1.0), y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: mm(1.5) }, Point { x: mm(3.0), y: mm(1.5) }, Point { x: mm(4.0), y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
+        let line = Line::from_points(net, 0, mm(0.2), hat.clone());
+        let straight = vec![Point { x: mm(-1.0), y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
         let free = optimize_with(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS);
         assert_eq!(free.pts, straight, "nothing is in the straight path's way");
         let kept = optimize_with(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY);
-        assert!(kept.pts.iter().any(|q| q.y >= Nm::from_raw_shim(750_000)), "the pad is inside the hat: the shortcut under it is refused: {:?}", kept.pts);
+        assert!(kept.pts.iter().any(|q| q.y >= mm(0.75)), "the pad is inside the hat: the shortcut under it is refused: {:?}", kept.pts);
         // a pad of the line's own net is no topology to keep
         let mut same = Node::new();
-        same.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(750_000) }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(750_000) }, r: Nm::from_raw_shim(200_000) }, source: "U1.1".into(), edge: false }));
+        same.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false }));
         let own = optimize_with(&line, &same, &rules(), &[], effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY);
         assert_eq!(own.pts, straight);
         // and neither is a pad on the other layer
         let mut below = Node::new();
-        below.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(1, 1), pos: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(750_000) }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(750_000) }, r: Nm::from_raw_shim(200_000) }, source: "U1.1".into(), edge: false }));
+        below.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(1, 1), pos: Point { x: mm(2.0), y: mm(0.75) }, shape: Shape::Circle { c: Point { x: mm(2.0), y: mm(0.75) }, r: mm(0.2) }, source: "U1.1".into(), edge: false }));
         let other_layer = optimize_with(&line, &below, &rules(), &[], effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY);
         assert_eq!(other_layer.pts, straight);
     }
@@ -1001,16 +1002,16 @@ mod tests {
     fn preserve_vertex_keeps_the_point_the_cursor_holds_on_the_line() {
         let node = Node::new();
         let pt = |x, y| Point { x, y };
-        let zigzag = vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::from_raw_shim(1_000_000), Nm::ZERO), pt(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(1_000_000)), pt(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(1_000_000)), pt(Nm::from_raw_shim(4_000_000), Nm::ZERO), pt(Nm::from_raw_shim(5_000_000), Nm::ZERO)];
-        let line = Line::from_points(net_of("SIG"), 0, Nm::from_raw_shim(200_000), zigzag.clone());
+        let zigzag = vec![pt(Nm::ZERO, Nm::ZERO), pt(mm(1.0), Nm::ZERO), pt(mm(2.0), mm(1.0)), pt(mm(3.0), mm(1.0)), pt(mm(4.0), Nm::ZERO), pt(mm(5.0), Nm::ZERO)];
+        let line = Line::from_points(net_of("SIG"), 0, mm(0.2), zigzag.clone());
         let free = optimize_with(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS);
-        assert_eq!(free.pts, vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::from_raw_shim(5_000_000), Nm::ZERO)], "nothing holds the line: it goes straight");
+        assert_eq!(free.pts, vec![pt(Nm::ZERO, Nm::ZERO), pt(mm(5.0), Nm::ZERO)], "nothing holds the line: it goes straight");
         // the point (2500, 1000) is held: any shortcut has to pass through it
-        let held = optimize_constrained(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS | effort::PRESERVE_VERTEX, &Constraints { preserve_vertex: Some(pt(Nm::from_raw_shim(2_500_000), Nm::from_raw_shim(1_000_000))), ..Constraints::default() });
-        assert!(held.pts.windows(2).any(|w| eda_drc::kimath::Seg::new(w[0], w[1]).sq_distance_to_point(pt(Nm::from_raw_shim(2_500_000), Nm::from_raw_shim(1_000_000))) <= 1), "{:?}", held.pts);
+        let held = optimize_constrained(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS | effort::PRESERVE_VERTEX, &Constraints { preserve_vertex: Some(pt(mm(2.5), mm(1.0))), ..Constraints::default() });
+        assert!(held.pts.windows(2).any(|w| eda_drc::kimath::Seg::new(w[0], w[1]).sq_distance_to_point(pt(mm(2.5), mm(1.0))) <= 1), "{:?}", held.pts);
         assert!(held.pts.len() < zigzag.len(), "but the corners that could go did: {:?}", held.pts);
         // a held point that is no longer on the stretch being replaced changes nothing
-        let far = optimize_constrained(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS | effort::PRESERVE_VERTEX, &Constraints { preserve_vertex: Some(pt(Nm::from_raw_shim(9_000_000), Nm::from_raw_shim(9_000_000))), ..Constraints::default() });
+        let far = optimize_constrained(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS | effort::PRESERVE_VERTEX, &Constraints { preserve_vertex: Some(pt(mm(9.0), mm(9.0))), ..Constraints::default() });
         assert_eq!(far.pts, free.pts);
     }
 
@@ -1020,9 +1021,9 @@ mod tests {
         use crate::layer::LayerRange;
         let net = net_of("SIG");
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Rect { x0: Nm::from_raw_shim(-1_000_000), y0: Nm::from_raw_shim(-250_000), x1: Nm::from_raw_shim(1_000_000), y1: Nm::from_raw_shim(250_000) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Rect { x0: mm(-1.0), y0: mm(-0.25), x1: mm(1.0), y1: mm(0.25) }, source: "U1.1".into(), edge: false }));
         // Drawn leaving the pad centre straight down, then across.
-        let line = Line::from_points(net, 0, Nm::from_raw_shim(200_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(3_000_000) }]);
+        let line = Line::from_points(net, 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(3.0) }, Point { x: mm(5.0), y: mm(3.0) }, Point { x: mm(8.0), y: mm(3.0) }]);
         let out = optimize_with(&line, &node, &rules(), &[], effort::SMART_PADS);
         assert_eq!(out.pts[0], Point { x: Nm::ZERO, y: Nm::ZERO });
         // KiCad prefers the longer breakout on a tie: out along +x (the long axis).
@@ -1039,12 +1040,12 @@ mod tests {
         use crate::layer::LayerRange;
         let net = net_of("SIG");
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::RoundRect { x0: Nm::from_raw_shim(-1_000_000), y0: Nm::from_raw_shim(-250_000), x1: Nm::from_raw_shim(1_000_000), y1: Nm::from_raw_shim(250_000), r: Nm::from_raw_shim(125_000) }, source: "U1.1".into(), edge: false }));
-        let line = Line::from_points(net, 0, Nm::from_raw_shim(200_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(3_000_000) }]);
+        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::RoundRect { x0: mm(-1.0), y0: mm(-0.25), x1: mm(1.0), y1: mm(0.25), r: mm(0.125) }, source: "U1.1".into(), edge: false }));
+        let line = Line::from_points(net, 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(3.0) }, Point { x: mm(5.0), y: mm(3.0) }, Point { x: mm(8.0), y: mm(3.0) }]);
         let out = optimize_with(&line, &node, &rules(), &[], effort::SMART_PADS);
-        assert_eq!(out.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(3_000_000) }]);
+        assert_eq!(out.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: mm(3.0) }, Point { x: mm(8.0), y: mm(3.0) }]);
         let pad = node.iter().find_map(|(_, it)| matches!(it, Item::Solid(_)).then(|| it.clone())).unwrap();
-        assert_eq!(breakouts(Nm::from_raw_shim(200_000), &pad).len(), 8);
+        assert_eq!(breakouts(mm(0.2), &pad).len(), 8);
     }
 
     /// findings p5 F2-14: `mergeObtuse` checks only the bypass (`opt_path`: `s1.A`, `ip`, `s2.B`) against the world, so a violation elsewhere
@@ -1056,15 +1057,15 @@ mod tests {
         let net = net_of("SIG");
         let mut node = Node::new();
         // a GND pad on the line's last leg, far from the obtuse zigzag at its start
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 0), pos: Point { x: Nm::from_raw_shim(9_000_000), y: Nm::from_raw_shim(-2_000_000) }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(9_000_000), y: Nm::from_raw_shim(-2_000_000) }, r: Nm::from_raw_shim(300_000) }, source: "U1.1".into(), edge: false }));
-        let pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(-500_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(-1_500_000) }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(-2_000_000) }, Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(-2_000_000) }];
-        let out = merge_obtuse(pts.clone(), &node, 0, Nm::from_raw_shim(200_000), &net, &rules(), &[]);
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 0), pos: Point { x: mm(9.0), y: mm(-2.0) }, shape: Shape::Circle { c: Point { x: mm(9.0), y: mm(-2.0) }, r: mm(0.3) }, source: "U1.1".into(), edge: false }));
+        let pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(3.0), y: mm(-0.5) }, Point { x: mm(4.0), y: mm(-1.5) }, Point { x: mm(6.0), y: mm(-2.0) }, Point { x: mm(12.0), y: mm(-2.0) }];
+        let out = merge_obtuse(pts.clone(), &node, 0, mm(0.2), &net, &rules(), &[]);
         assert!(out.len() < pts.len(), "merged despite the pad on the last leg: {out:?}");
     }
 
     #[test]
     fn merge_colinear_drops_a_midpoint() {
-        let mut v = Line::from_points(None, 0, Nm::from_raw_shim(200_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(500_000) }]);
+        let mut v = Line::from_points(None, 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.5), y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.0), y: mm(0.5) }]);
         merge_colinear_line(&mut v);
         assert_eq!(v.pts.len(), 3);
     }
@@ -1073,10 +1074,10 @@ mod tests {
     fn rect_pad_has_eight_breakouts_and_circle_eight() {
         use crate::item::{Item, Solid};
         use crate::layer::LayerRange;
-        let rect = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Rect { x0: Nm::from_raw_shim(-500_000), y0: Nm::from_raw_shim(-250_000), x1: Nm::from_raw_shim(500_000), y1: Nm::from_raw_shim(250_000) }, source: "U1.1".into(), edge: false });
-        assert_eq!(breakouts(Nm::from_raw_shim(200_000), &rect).len(), 8);
-        let circ = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: Nm::from_raw_shim(300_000) }, source: "U1.2".into(), edge: false });
-        assert_eq!(breakouts(Nm::from_raw_shim(200_000), &circ).len(), 8);
+        let rect = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Rect { x0: mm(-0.5), y0: mm(-0.25), x1: mm(0.5), y1: mm(0.25) }, source: "U1.1".into(), edge: false });
+        assert_eq!(breakouts(mm(0.2), &rect).len(), 8);
+        let circ = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.3) }, source: "U1.2".into(), edge: false });
+        assert_eq!(breakouts(mm(0.2), &circ).len(), 8);
     }
 
     #[test]
@@ -1085,7 +1086,7 @@ mod tests {
         let rules = rules();
         // A jagged path that could be a single straight line with no
         // obstacles in the way -- optimizer should collapse it.
-        let line = Line::from_points(net_of("SIG"), 0, Nm::from_raw_shim(200_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(1_000_000) }]);
+        let line = Line::from_points(net_of("SIG"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.0), y: mm(0.5) }, Point { x: mm(2.0), y: mm(0.5) }, Point { x: mm(2.0), y: mm(1.0) }, Point { x: mm(3.0), y: mm(1.0) }]);
         let optimized = optimize(&line, &node, &rules, &[]);
         assert!(optimized.segment_count() <= line.segment_count(), "optimizer must never add complexity");
         assert!(corner_cost(&optimized.pts) <= corner_cost(&line.pts));
@@ -1097,13 +1098,13 @@ mod tests {
     fn a_restricted_area_keeps_the_optimizer_off_the_rest_of_the_line() {
         let node = Node::new();
         let rules = rules();
-        let zigzag = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(1_000_000) }];
-        let line = Line::from_points(net_of("SIG"), 0, Nm::from_raw_shim(200_000), zigzag);
+        let zigzag = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.5), y: mm(0.5) }, Point { x: mm(2.5), y: mm(0.5) }, Point { x: mm(3.0), y: mm(1.0) }, Point { x: mm(4.0), y: mm(1.0) }];
+        let line = Line::from_points(net_of("SIG"), 0, mm(0.2), zigzag);
         let free = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, None);
         assert!(free.pts.len() < line.pts.len(), "unrestricted, it merges: {:?}", free.pts);
-        let whole = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, Some((Nm::from_raw_shim(-100_000), Nm::from_raw_shim(-100_000), Nm::from_raw_shim(4_100_000), Nm::from_raw_shim(1_100_000))));
+        let whole = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, Some((mm(-0.1), mm(-0.1), mm(4.1), mm(1.1))));
         assert_eq!(whole.pts, free.pts, "an area around the whole line changes nothing");
-        let elsewhere = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, Some((Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(11_000_000))));
+        let elsewhere = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, Some((mm(10.0), mm(10.0), mm(11.0), mm(11.0))));
         assert_eq!(elsewhere.pts, line.pts, "an area the line never enters keeps it as it is");
     }
 
@@ -1115,9 +1116,9 @@ mod tests {
         use crate::layer::LayerRange;
         let mut node = Node::new();
         // a pad the line's first leg already runs through
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: Nm::from_raw_shim(300_000) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.3) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
-        let line = Line::from_points(net_of("SIG"), 0, Nm::from_raw_shim(200_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_500_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(5_500_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(1_000_000) }]);
+        let line = Line::from_points(net_of("SIG"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: Nm::ZERO }, Point { x: mm(3.5), y: mm(0.5) }, Point { x: mm(5.0), y: mm(0.5) }, Point { x: mm(5.5), y: mm(1.0) }, Point { x: mm(8.0), y: mm(1.0) }]);
         let out = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, None);
         assert!(out.pts.len() < line.pts.len(), "{:?}", out.pts);
         assert_eq!(out.pts.first(), line.pts.first());
@@ -1132,12 +1133,12 @@ mod tests {
         // A pad directly in the path of the straight-line shortcut between
         // the line's endpoints, but clear of the detour the line already
         // takes around it.
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(1_500_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(1_500_000), y: Nm::ZERO }, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(1.5), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
-        let line = Line::from_points(net_of("SIG"), 0, Nm::from_raw_shim(200_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }]);
-        assert!(!collides(&node, &line.pts, 0, Nm::from_raw_shim(200_000), &net_of("SIG"), &rules, &[]), "test setup: the original detour must itself be collision-free");
+        let line = Line::from_points(net_of("SIG"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(1.0) }, Point { x: mm(3.0), y: mm(1.0) }, Point { x: mm(3.0), y: Nm::ZERO }]);
+        assert!(!collides(&node, &line.pts, 0, mm(0.2), &net_of("SIG"), &rules, &[]), "test setup: the original detour must itself be collision-free");
         let optimized = optimize(&line, &node, &rules, &[]);
-        assert!(!collides(&node, &optimized.pts, 0, Nm::from_raw_shim(200_000), &net_of("SIG"), &rules, &[]));
+        assert!(!collides(&node, &optimized.pts, 0, mm(0.2), &net_of("SIG"), &rules, &[]));
     }
 
     #[test]
@@ -1146,12 +1147,12 @@ mod tests {
         // below relies on -- verified independently here so a failure in
         // that test points at the right cause.
         let p0 = Point { x: Nm::ZERO, y: Nm::ZERO };
-        let p1 = Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO };
-        let p2 = Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(-500_000) };
-        let p3 = Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(500_000) };
-        assert_eq!(intersect_lines(p0, p1, p2, p3), Some(Point { x: Nm::from_raw_shim(3_500_000), y: Nm::ZERO }));
+        let p1 = Point { x: mm(1.0), y: Nm::ZERO };
+        let p2 = Point { x: mm(3.0), y: mm(-0.5) };
+        let p3 = Point { x: mm(4.0), y: mm(0.5) };
+        assert_eq!(intersect_lines(p0, p1, p2, p3), Some(Point { x: mm(3.5), y: Nm::ZERO }));
         // Parallel lines never meet.
-        assert_eq!(intersect_lines(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(500_000) }), None);
+        assert_eq!(intersect_lines(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(0.5) }, Point { x: mm(1.0), y: mm(0.5) }), None);
     }
 
     #[test]
@@ -1166,16 +1167,16 @@ mod tests {
         // shortcut (see this module's header comment on why both passes
         // earn their keep).
         let p0 = Point { x: Nm::ZERO, y: Nm::ZERO };
-        let p1 = Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }; // seg0 (p0->p1): E
-        let p2 = Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(-500_000) };
-        let p3 = Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(500_000) }; // seg2 (p2->p3): NE
-        let p4 = Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(500_000) };
+        let p1 = Point { x: mm(1.0), y: Nm::ZERO }; // seg0 (p0->p1): E
+        let p2 = Point { x: mm(3.0), y: mm(-0.5) };
+        let p3 = Point { x: mm(4.0), y: mm(0.5) }; // seg2 (p2->p3): NE
+        let p4 = Point { x: mm(5.0), y: mm(0.5) };
         let pts = vec![p0, p1, p2, p3, p4];
-        let result = merge_obtuse(pts.clone(), &node, 0, Nm::from_raw_shim(200_000), &net, &rules, &[]);
+        let result = merge_obtuse(pts.clone(), &node, 0, mm(0.2), &net, &rules, &[]);
         assert!(result.len() < pts.len(), "the two in-between points must collapse into one new corner");
         assert_eq!(result.first(), Some(&p0), "the line's own start must survive untouched");
         assert_eq!(result.last(), Some(&p4), "the line's own end must survive untouched");
-        assert!(result.contains(&Point { x: Nm::from_raw_shim(3_500_000), y: Nm::ZERO }), "the new corner must be the two segments' own extended meeting point");
+        assert!(result.contains(&Point { x: mm(3.5), y: Nm::ZERO }), "the new corner must be the two segments' own extended meeting point");
     }
 
     #[test]
@@ -1190,17 +1191,17 @@ mod tests {
         // approach to it to be genuinely clear, while still sitting
         // exactly on the (0,0)-(35000,0) shortcut the merge would
         // otherwise produce.
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(20.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(20.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let net = net_of("SIG");
-        let pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(-5_000_000) }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(5_000_000) }];
-        assert!(!collides(&node, &pts, 0, Nm::from_raw_shim(200_000), &net, &rules, &[]), "test setup: the original zigzag must itself be collision-free");
-        let result = merge_obtuse(pts.clone(), &node, 0, Nm::from_raw_shim(200_000), &net, &rules, &[]);
+        let pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(30.0), y: mm(-5.0) }, Point { x: mm(40.0), y: mm(5.0) }, Point { x: mm(50.0), y: mm(5.0) }];
+        assert!(!collides(&node, &pts, 0, mm(0.2), &net, &rules, &[]), "test setup: the original zigzag must itself be collision-free");
+        let result = merge_obtuse(pts.clone(), &node, 0, mm(0.2), &net, &rules, &[]);
         // The only candidate this geometry offers collides, so the honest
         // outcome is "leave it as it was" -- same as upstream's own
         // "found_anything == false at every span" fallback.
         assert_eq!(result, pts, "the blocked merge must be refused outright, not silently applied anyway");
-        assert!(!collides(&node, &result, 0, Nm::from_raw_shim(200_000), &net, &rules, &[]));
+        assert!(!collides(&node, &result, 0, mm(0.2), &net, &rules, &[]));
     }
 
     // ---- the pair optimizer
@@ -1214,17 +1215,17 @@ mod tests {
         use crate::item::{Item, Segment, Solid};
         use crate::layer::LayerRange;
         let mut node = Node::new();
-        for (x, y) in [(2_000_000, 400_000), (6_000_000, -700_000), (9_000_000, 900_000)] {
-            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, r: Nm::from_raw_shim(300_000) }, source: "U1.1".into(), edge: false }));
+        for (x, y) in [(mm(2.0), mm(0.4)), (mm(6.0), mm(-0.7)), (mm(9.0), mm(0.9))] {
+            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x, y }, shape: Shape::Circle { c: Point { x, y }, r: mm(0.3) }, source: "U1.1".into(), edge: false }));
         }
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(-750_000) }, width: Nm::from_raw_shim(200_000), source_track: None, locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(4.0), y: mm(-2.0) }, b: Point { x: mm(4.0), y: mm(-0.75) }, width: mm(0.2), source_track: None, locked: false }));
         let mut dp = crate::diff_pair::DiffPair::default();
         dp.set_nets(net_of("P"), net_of("N"));
-        dp.width = Nm::from_raw_shim(200_000);
-        dp.set_gap(Nm::from_raw_shim(250_000));
-        let centre = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(-500_000) }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-500_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_500_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(7_000_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(7_500_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }];
-        dp.p = crate::diff_pair::offset_polyline(&centre, 225_000);
-        dp.n = crate::diff_pair::offset_polyline(&centre, -225_000);
+        dp.width = mm(0.2);
+        dp.set_gap(mm(0.25));
+        let centre = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.5), y: mm(-0.5) }, Point { x: mm(2.5), y: mm(-0.5) }, Point { x: mm(3.0), y: Nm::ZERO }, Point { x: mm(4.5), y: Nm::ZERO }, Point { x: mm(5.0), y: mm(0.5) }, Point { x: mm(7.0), y: mm(0.5) }, Point { x: mm(7.5), y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }];
+        dp.p = crate::diff_pair::offset_polyline(&centre, mm(0.225));
+        dp.n = crate::diff_pair::offset_polyline(&centre, mm(-0.225));
         (node, dp)
     }
 
@@ -1250,7 +1251,7 @@ mod tests {
             let mut cand = dp.p.clone();
             let a = next(cand.len() as i64 - 2) as usize;
             let b = a + 1 + next((cand.len() - a - 1) as i64) as usize;
-            let extra: Vec<Point> = (0..next(4)).map(|_| Point { x: Nm::from_raw_shim(next(10_000_000)), y: Nm::from_raw_shim(next(2_000_000) - 1_000_000) }).collect();
+            let extra: Vec<Point> = (0..next(4)).map(|_| Point { x: Nm::new(next(10_000_000)), y: Nm::new(next(2_000_000)) - mm(1.0) }).collect();
             cand.splice(a + 1..b, extra);
             let want = direct(&cand);
             assert_eq!(cache.hits_with_base(&base, &PairLine { pts: &cand, ..dp.p_pair_line() }), want, "candidate {cand:?}");
@@ -1280,8 +1281,8 @@ mod tests {
         // the two diagonals and the flat stretch between them became one diagonal, on both lines
         assert!(dp.p.len() < before.p.len() && dp.n.len() < before.n.len(), "{dp:?}");
         // never longer (a micrometre of rounding aside), clear of the world, clear of each other
-        assert!(crate::diff_pair::chain_length(&dp.p) <= crate::diff_pair::chain_length(&before.p) + 1);
-        assert!(crate::diff_pair::chain_length(&dp.n) <= crate::diff_pair::chain_length(&before.n) + 1);
+        assert!(crate::diff_pair::chain_length(&dp.p) <= crate::diff_pair::chain_length(&before.p) + Nm::new(1));
+        assert!(crate::diff_pair::chain_length(&dp.n) <= crate::diff_pair::chain_length(&before.n) + Nm::new(1));
         assert!(!dp.p_pair_line().hits_line(&dp.n_pair_line(), &rules), "{dp:?}");
         assert!(!world_hit(&dp), "{dp:?}");
         // and no less coupled than it was: `mergeDpStep` only accepts a merge that keeps the coupled length
@@ -1294,7 +1295,7 @@ mod tests {
         use crate::item::{Item, Solid};
         use crate::layer::LayerRange;
         let (mut node, mut dp) = pair_world();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(3_500_000), y: Nm::from_raw_shim(900_000) }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(3_500_000), y: Nm::from_raw_shim(900_000) }, r: Nm::from_raw_shim(300_000) }, source: "U1.2".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.5), y: mm(0.9) }, shape: Shape::Circle { c: Point { x: mm(3.5), y: mm(0.9) }, r: mm(0.3) }, source: "U1.2".into(), edge: false }));
         let rules = pair_rules();
         let before = dp.clone();
         let world_hit = |dp: &crate::diff_pair::DiffPair| dp.p_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY) || dp.n_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY);

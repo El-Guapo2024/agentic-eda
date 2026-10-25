@@ -94,14 +94,15 @@ pub fn pick(scene: &Scene, x: Nm, y: Nm, tolerance: Nm, layer: Option<&str>) -> 
         if s_net.is_none() {
             continue;
         }
-        let reach = ((width / 2 + tolerance).max(Nm::from_raw_shim(1))).raw_shim() as f64;
+        let reach = ((width / 2 + tolerance).max(Nm::new(1))).as_f64();
         if dist > reach {
             continue;
         }
         let layer_name = scene.layers.name_of(s_layer).to_string();
         let on_layer = layer.is_some_and(|l| l == layer_name);
         // "the track whose centre is nearest the cursor", the active layer first
-        let d = ((centre.x - cursor.x).raw_shim() as i128).pow(2) + ((centre.y - cursor.y).raw_shim() as i128).pow(2);
+        let (dx, dy) = (centre.x - cursor.x, centre.y - cursor.y);
+        let d = dx.area(dx) + dy.area(dy);
         let key = (!on_layer, d);
         if best.as_ref().is_none_or(|(o, bd, _)| key < (*o, *bd)) {
             best = Some((key.0, key.1, Pick { item: id, track_id: track, net: Scene::net_name(s_net), layer: layer_name, width, at }));
@@ -166,15 +167,15 @@ fn range_of(v: &Value, skew: bool) -> Option<TargetRange> {
         return Some(if skew { TargetRange { min: -100_000, opt: 0, max: 100_000 } } else { TargetRange::unconstrained() });
     }
     if let Some(n) = v.as_f64() {
-        return Some(TargetRange::around(Nm::from_raw_shim(n.round() as i64)));
+        return Some(TargetRange::around(Nm::kiround(n)));
     }
     let obj = v.as_object()?;
     let get = |k: &str| obj.get(k).and_then(Value::as_f64).map(|f| f.round() as i64);
     let opt = get("opt").or_else(|| get("min")).unwrap_or(0);
-    if !skew && opt >= LENGTH_UNCONSTRAINED_NM.raw_shim() {
+    if !skew && opt >= LENGTH_UNCONSTRAINED_NM.get() {
         return Some(TargetRange::unconstrained());
     }
-    let base = TargetRange::around(Nm::from_raw_shim(opt));
+    let base = TargetRange::around(Nm::new(opt));
     Some(TargetRange { min: get("min").unwrap_or(base.min), opt, max: get("max").unwrap_or(base.max) })
 }
 
@@ -202,13 +203,13 @@ fn delay_range_of(v: &Value, skew: bool) -> Option<TargetRange> {
 /// `time_domain` and `target_delay`, `target_skew_delay`.
 pub fn apply_settings(p: &mut TuningPattern, v: &Value) {
     if let Some(n) = int(v, "min_amplitude") {
-        p.min_amplitude = Nm::from_raw_shim(n);
+        p.min_amplitude = Nm::new(n);
     }
     if let Some(n) = int(v, "max_amplitude") {
-        p.max_amplitude = Nm::from_raw_shim(n);
+        p.max_amplitude = Nm::new(n);
     }
     if let Some(n) = int(v, "spacing") {
-        p.spacing = Nm::from_raw_shim(n);
+        p.spacing = Nm::new(n);
     }
     if let Some(n) = int(v, "corner_radius_percent") {
         p.corner_radius_percent = n.clamp(0, 100) as u32;
@@ -245,9 +246,9 @@ pub fn apply_settings(p: &mut TuningPattern, v: &Value) {
 /// `PNS::MEANDER_SETTINGS` (nanometres) for a pattern.
 pub fn meander_settings(p: &TuningPattern) -> MeanderSettings {
     let mut s = MeanderSettings::default();
-    s.min_amplitude = p.min_amplitude.raw_shim();
-    s.max_amplitude = p.max_amplitude.raw_shim();
-    s.spacing = p.spacing.raw_shim();
+    s.min_amplitude = p.min_amplitude.get();
+    s.max_amplitude = p.max_amplitude.get();
+    s.spacing = p.spacing.get();
     s.corner_radius_percentage = p.corner_radius_percent as i64;
     s.corner_style = if p.rounded { MeanderStyle::Round } else { MeanderStyle::Chamfer };
     s.single_sided = p.single_sided;
@@ -290,8 +291,8 @@ pub fn meander_settings(p: &TuningPattern) -> MeanderSettings {
 
 /// What the placer changed of a pattern's settings (the amplitude and spacing keys, a flipped initial side), back into the pattern.
 fn sync_back(p: &mut TuningPattern, s: &MeanderSettings) {
-    p.max_amplitude = Nm::from_raw_shim(s.max_amplitude);
-    p.spacing = Nm::from_raw_shim(s.spacing);
+    p.max_amplitude = Nm::new(s.max_amplitude);
+    p.spacing = Nm::new(s.spacing);
     p.initial_side = match s.initial_side {
         MeanderSide::Left => PatternSide::Left,
         MeanderSide::Default => PatternSide::Default,
@@ -355,7 +356,7 @@ pub fn constraint_for(rules: &BoardRules, kind: TuningMode, net: &str, partner: 
         }
         let opt = r.opt.or(r.min).unwrap_or(Nm::ZERO);
         let tolerance = TargetRange::around(opt);
-        won = Some(Constraint { name: r.name.clone(), range: TargetRange { min: (r.min.unwrap_or(Nm::from_raw_shim(tolerance.min))).raw_shim(), opt: opt.raw_shim(), max: (r.max.unwrap_or(Nm::from_raw_shim(tolerance.max))).raw_shim() } });
+        won = Some(Constraint { name: r.name.clone(), range: TargetRange { min: r.min.map_or(tolerance.min, Nm::get), opt: opt.get(), max: r.max.map_or(tolerance.max, Nm::get) } });
     }
     won
 }
@@ -657,7 +658,7 @@ impl Tuner {
         let mut base = raw_primary.c_segment(raw_primary.segment_count() - 1);
         if let (TuningMode::DiffPair, Some(c)) = (self.pattern.mode, raw_coupled) {
             if c.point_count() > 0 {
-                let off = Point { x: Nm::from_raw_shim(((c.c_last_point().x - raw_primary.c_last_point().x).raw_shim() as f64 / 2.0).round() as i64), y: Nm::from_raw_shim(((c.c_last_point().y - raw_primary.c_last_point().y).raw_shim() as f64 / 2.0).round() as i64) };
+                let off = Point { x: Nm::kiround((c.c_last_point().x - raw_primary.c_last_point().x).as_f64() / 2.0), y: Nm::kiround((c.c_last_point().y - raw_primary.c_last_point().y).as_f64() / 2.0) };
                 base = Seg::new(Point { x: base.a.x + off.x, y: base.a.y + off.y }, Point { x: base.b.x + off.x, y: base.b.y + off.y });
             }
         }
@@ -775,9 +776,9 @@ impl Tuner {
         };
         if let Placer::Pair(p) = &self.placer {
             self.pattern.last_track_width = p.pair().width;
-            self.pattern.last_diff_pair_gap = Nm::from_raw_shim(p.pair().gap.max(0));
+            self.pattern.last_diff_pair_gap = Nm::new(p.pair().gap.max(0));
         }
-        self.pattern.last_tuning_length = Nm::from_raw_shim(length);
+        self.pattern.last_tuning_length = Nm::new(length);
         self.pattern.last_status = status.name().to_string();
     }
 
@@ -855,7 +856,7 @@ pub fn preview_json(scene: &Scene, moved: &Moved) -> Value {
 // ----------------------------------------------------------------------------------------------------------------------------- existing patterns
 
 fn apply_cmd(scene: &Scene, cmd: &Cmd) -> Result<Design, String> {
-    let mut board = Board::new(scene.design.clone(), &scene.model, Nm::from_raw_shim(1), Nm::ZERO);
+    let mut board = Board::new(scene.design.clone(), &scene.model, Nm::new(1), Nm::ZERO);
     board.apply(cmd).map_err(|e| crate::board::reasons(&e))?;
     Ok(board.design().clone())
 }
@@ -871,9 +872,9 @@ pub fn segment_near(scene: &Scene, at: Point, layer: &str, baseline: &[Point]) -
             continue;
         }
         let seg = Seg::new(s.a, s.b);
-        let slop = (Node::clearance(&scene.env.rules, &s.net, &None) + s.width / 2 + Nm::from_raw_shim(1)).raw_shim() as i128;
+        let slop = Node::clearance(&scene.env.rules, &s.net, &None) + s.width / 2 + Nm::new(1);
         let d = seg.squared_distance(at);
-        if d > slop * slop {
+        if d > slop.area(slop) {
             continue;
         }
         let centre = Point { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
@@ -973,7 +974,7 @@ pub struct Retune {
 
 fn point_setting(v: &Value, key: &str) -> Option<Point> {
     let p = v.get(key)?;
-    Some(Point { x: Nm::from_raw_shim(p.get("x")?.as_f64()?.round() as i64), y: Nm::from_raw_shim(p.get("y")?.as_f64()?.round() as i64) })
+    Some(Point { x: Nm::kiround(p.get("x")?.as_f64()?), y: Nm::kiround(p.get("y")?.as_f64()?) })
 }
 
 /// The settings of a pattern as the request keys name them.
@@ -1064,15 +1065,15 @@ pub fn retune_cmds(scene: &Scene, pattern: &TuningPattern, settings: &Value) -> 
 
 // ------------------------------------------------------------------------------------------------------------------------------------- edit points
 
-fn half(a: i64) -> i64 {
-    (a as f64 / 2.0).round() as i64
+fn half(a: Nm) -> Nm {
+    Nm::kiround(a.as_f64() / 2.0)
 }
 
 /// The offsets of a pair's centreline from the baseline of the clicked line, at the start and at the end (`MakeEditPoints`).
 fn centerline_offsets(p: &TuningPattern) -> (Point, Point) {
     if p.mode == TuningMode::DiffPair && p.base_line_coupled.len() >= 2 {
         let (first, last) = (p.base_line_coupled[0], *p.base_line_coupled.last().unwrap());
-        (Point { x: Nm::from_raw_shim(half((first.x - p.origin.x).raw_shim())), y: Nm::from_raw_shim(half((first.y - p.origin.y).raw_shim())) }, Point { x: Nm::from_raw_shim(half((last.x - p.end.x).raw_shim())), y: Nm::from_raw_shim(half((last.y - p.end.y).raw_shim())) })
+        (Point { x: half(first.x - p.origin.x), y: half(first.y - p.origin.y) }, Point { x: half(last.x - p.end.x), y: half(last.y - p.end.y) })
     } else {
         (Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::ZERO })
     }
@@ -1099,30 +1100,30 @@ fn resized(v: (f64, f64), len: f64) -> (f64, f64) {
 pub fn handle_positions(p: &TuningPattern) -> [Point; 4] {
     let (off, off_end) = centerline_offsets(p);
     let (a, b) = base_segment(p);
-    let mut amplitude = p.max_amplitude + Nm::from_raw_shim(half(p.last_track_width.raw_shim()));
+    let mut amplitude = p.max_amplitude + half(p.last_track_width);
     if p.mode == TuningMode::DiffPair {
         amplitude += p.last_track_width + p.last_diff_pair_gap;
     }
     if p.initial_side == PatternSide::Left {
         amplitude = -amplitude;
     }
-    let dir = ((b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
+    let dir = ((b.x - a.x).as_f64(), (b.y - a.y).as_f64());
     let perp = (-dir.1, dir.0);
-    let w = resized(perp, amplitude.raw_shim() as f64);
-    let along = resized(dir, (p.spacing.raw_shim() as f64 * 1.5).round());
-    let width_handle = Point { x: a.x + Nm::from_raw_shim(w.0.round() as i64), y: a.y + Nm::from_raw_shim(w.1.round() as i64) };
-    let spacing_handle = Point { x: a.x + Nm::from_raw_shim((w.0 + along.0).round() as i64), y: a.y + Nm::from_raw_shim((w.1 + along.1).round() as i64) };
+    let w = resized(perp, amplitude.as_f64());
+    let along = resized(dir, (p.spacing.as_f64() * 1.5).round());
+    let width_handle = Point { x: a.x + Nm::kiround(w.0), y: a.y + Nm::kiround(w.1) };
+    let spacing_handle = Point { x: a.x + Nm::kiround(w.0 + along.0), y: a.y + Nm::kiround(w.1 + along.1) };
     [Point { x: p.origin.x + off.x, y: p.origin.y + off.y }, Point { x: p.end.x + off_end.x, y: p.end.y + off_end.y }, width_handle, spacing_handle]
 }
 
 /// The distance from `q` to the infinite line through `a` and `b`.
 fn line_distance(a: Point, b: Point, q: Point) -> f64 {
-    let (dx, dy) = ((b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
+    let (dx, dy) = ((b.x - a.x).as_f64(), (b.y - a.y).as_f64());
     let n = dx.hypot(dy);
     if n == 0.0 {
-        return ((q.x - a.x).raw_shim() as f64).hypot((q.y - a.y).raw_shim() as f64);
+        return ((q.x - a.x).as_f64()).hypot((q.y - a.y).as_f64());
     }
-    (dx * (q.y - a.y).raw_shim() as f64 - dy * (q.x - a.x).raw_shim() as f64).abs() / n
+    (dx * (q.y - a.y).as_f64() - dy * (q.x - a.x).as_f64()).abs() / n
 }
 
 /// `PCB_TUNING_PATTERN::UpdateFromEditPoints` for one handle moved to `pos`: the start or the end of the pattern, the amplitude and the side of its meanders,
@@ -1130,16 +1131,16 @@ fn line_distance(a: Point, b: Point, q: Point) -> f64 {
 pub fn apply_handle(p: &mut TuningPattern, handle: usize, pos: Point) {
     let (off, off_end) = centerline_offsets(p);
     let (a, b) = base_segment(p);
-    let ten = |v: f64| ((v / 10_000.0).round() as i64) * 10_000;
+    let ten = |v: f64| Nm::new(10_000) * (v / 10_000.0).round() as i64;
     match handle {
         0 => p.origin = Point { x: pos.x - off.x, y: pos.y - off.y },
         1 => p.end = Point { x: pos.x - off_end.x, y: pos.y - off_end.y },
         2 => {
-            let mut value = line_distance(a, b, pos) - (p.last_track_width.raw_shim() as f64 / 2.0).round();
+            let mut value = line_distance(a, b, pos) - (p.last_track_width.as_f64() / 2.0).round();
             if p.mode == TuningMode::DiffPair {
-                value -= (p.last_track_width + p.last_diff_pair_gap).raw_shim() as f64;
+                value -= (p.last_track_width + p.last_diff_pair_gap).as_f64();
             }
-            p.max_amplitude = Nm::from_raw_shim(ten(value).max(1));
+            p.max_amplitude = ten(value).max(Nm::new(1));
             // `base.Side( wHandle ) < 0` is the left
             let side = Seg::new(a, b).side(pos);
             p.initial_side = if side < 0 { PatternSide::Left } else { PatternSide::Right };
@@ -1147,7 +1148,7 @@ pub fn apply_handle(p: &mut TuningPattern, handle: usize, pos: Point) {
         3 => {
             let w = handle_positions(p)[2];
             let value = (line_distance(a, w, pos) / 1.5).round();
-            p.spacing = Nm::from_raw_shim(ten(value).max(1));
+            p.spacing = ten(value).max(Nm::new(1));
         }
         _ => {}
     }
@@ -1155,7 +1156,7 @@ pub fn apply_handle(p: &mut TuningPattern, handle: usize, pos: Point) {
 
 /// Applies `cmds` in order to a copy of the scene's board, for the next pattern of a batch to be tuned on.
 pub fn apply_all(scene: &Scene, cmds: &[Cmd]) -> Result<Scene, String> {
-    let mut board = Board::new(scene.design.clone(), &scene.model, Nm::from_raw_shim(1), Nm::ZERO);
+    let mut board = Board::new(scene.design.clone(), &scene.model, Nm::new(1), Nm::ZERO);
     for c in cmds {
         board.apply(c).map_err(|e| crate::board::reasons(&e))?;
     }
@@ -1170,6 +1171,7 @@ pub fn patterns_of(design: &Design) -> Vec<TuningPattern> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_model::units::mm;
 
     fn rule(name: &str, ty: &str, min: Option<Nm>, max: Option<Nm>, opt: Option<Nm>, cond: Option<&str>) -> eda_model::CustomRule {
         eda_model::CustomRule { name: name.into(), constraint_type: ty.into(), min, max, opt, layer: None, severity: None, condition: cond.map(String::from) }
@@ -1178,16 +1180,16 @@ mod tests {
     #[test]
     fn a_length_rule_sets_the_target_the_way_set_target_length_does() {
         let mut rules = BoardRules::default();
-        rules.custom_rules = vec![rule("all", "length", Some(Nm::from_raw_shim(99_900_000)), Some(Nm::from_raw_shim(100_100_000)), None, None)];
+        rules.custom_rules = vec![rule("all", "length", Some(mm(99.9)), Some(mm(100.1)), None, None)];
         let c = constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").expect("a rule");
         // Opt() with no opt is the minimum; the rule's own min and max win over the tolerance round it
         assert_eq!(c.range, TargetRange { min: 99_900_000, opt: 99_900_000, max: 100_100_000 });
         assert_eq!(c.name, "all");
         // a rule with an optimum only: the default tolerance either side
-        rules.custom_rules = vec![rule("opt", "length", None, None, Some(Nm::from_raw_shim(50_000_000)), None)];
+        rules.custom_rules = vec![rule("opt", "length", None, None, Some(mm(50.0)), None)];
         assert_eq!(constraint_for(&rules, TuningMode::DiffPair, "SIG", None, "F.Cu").unwrap().range, TargetRange { min: 49_900_000, opt: 50_000_000, max: 50_100_000 });
         // a skew rule is for the skew tuner only
-        rules.custom_rules = vec![rule("skew", "skew", None, Some(Nm::from_raw_shim(100_000)), None, None)];
+        rules.custom_rules = vec![rule("skew", "skew", None, Some(mm(0.1)), None, None)];
         assert!(constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").is_none());
         assert_eq!(constraint_for(&rules, TuningMode::DiffPairSkew, "USB_P", Some("USB_N"), "F.Cu").unwrap().range, TargetRange { min: -100_000, opt: 0, max: 100_000 });
     }
@@ -1196,9 +1198,9 @@ mod tests {
     fn the_last_rule_that_applies_wins_and_a_condition_picks_the_nets() {
         let mut rules = BoardRules::default();
         rules.custom_rules = vec![
-            rule("first", "length", Some(Nm::from_raw_shim(10_000_000)), Some(Nm::from_raw_shim(10_200_000)), None, None),
-            rule("clk", "length", Some(Nm::from_raw_shim(20_000_000)), Some(Nm::from_raw_shim(20_200_000)), None, Some("A.NetName == 'CLK'")),
-            rule("never", "length", Some(Nm::from_raw_shim(30_000_000)), Some(Nm::from_raw_shim(30_200_000)), None, Some("A.NetName == 'OTHER'")),
+            rule("first", "length", Some(mm(10.0)), Some(mm(10.2)), None, None),
+            rule("clk", "length", Some(mm(20.0)), Some(mm(20.2)), None, Some("A.NetName == 'CLK'")),
+            rule("never", "length", Some(mm(30.0)), Some(mm(30.2)), None, Some("A.NetName == 'OTHER'")),
         ];
         assert_eq!(constraint_for(&rules, TuningMode::Single, "CLK", None, "F.Cu").unwrap().name, "clk");
         assert_eq!(constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").unwrap().name, "first");
@@ -1208,16 +1210,16 @@ mod tests {
 
     fn pattern_for_handles(mode: TuningMode) -> TuningPattern {
         let mut p = default_pattern(&ConstraintModel::default(), mode, "F.Cu");
-        p.origin = Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) };
-        p.end = Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(5_000_000) };
+        p.origin = Point { x: mm(10.0), y: mm(5.0) };
+        p.end = Point { x: mm(30.0), y: mm(5.0) };
         p.base_line = vec![p.origin, p.end];
-        p.last_track_width = Nm::from_raw_shim(250_000);
-        p.max_amplitude = Nm::from_raw_shim(1_000_000);
-        p.spacing = Nm::from_raw_shim(600_000);
+        p.last_track_width = mm(0.25);
+        p.max_amplitude = mm(1.0);
+        p.spacing = mm(0.6);
         p.initial_side = PatternSide::Right;
         if mode == TuningMode::DiffPair {
-            p.base_line_coupled = vec![Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_700_000) }, Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(5_700_000) }];
-            p.last_diff_pair_gap = Nm::from_raw_shim(450_000);
+            p.base_line_coupled = vec![Point { x: mm(10.0), y: mm(5.7) }, Point { x: mm(30.0), y: mm(5.7) }];
+            p.last_diff_pair_gap = mm(0.45);
         }
         p
     }
@@ -1226,19 +1228,19 @@ mod tests {
     fn the_edit_points_of_a_pattern_are_where_make_edit_points_puts_them() {
         let p = pattern_for_handles(TuningMode::Single);
         let h = handle_positions(&p);
-        assert_eq!(h[0], Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) });
-        assert_eq!(h[1], Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(5_000_000) });
+        assert_eq!(h[0], Point { x: mm(10.0), y: mm(5.0) });
+        assert_eq!(h[1], Point { x: mm(30.0), y: mm(5.0) });
         // the width handle is the amplitude and half the track away from the start of the baseline, on the side of the first meander: perpendicular is (-dy, dx), so +y for a baseline along +x
-        assert_eq!(h[2], Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000 + 1_000_000 + 125_000) });
+        assert_eq!(h[2], Point { x: mm(10.0), y: mm(5.0) + mm(1.0) + Nm::new(125_000) });
         // the spacing handle is one and a half spacings along from it
-        assert_eq!(h[3], Point { x: Nm::from_raw_shim(10_000_000 + 900_000), y: Nm::from_raw_shim(5_000_000 + 1_125_000) });
+        assert_eq!(h[3], Point { x: mm(10.0) + mm(0.9), y: mm(5.0) + Nm::new(1_125_000) });
         let mut left = p.clone();
         left.initial_side = PatternSide::Left;
-        assert_eq!(handle_positions(&left)[2], Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000 - 1_125_000) });
+        assert_eq!(handle_positions(&left)[2], Point { x: mm(10.0), y: mm(5.0) - Nm::new(1_125_000) });
         // a pair's handles are on the centreline: half way to the partner's baseline, and the amplitude is counted from there
         let d = handle_positions(&pattern_for_handles(TuningMode::DiffPair));
-        assert_eq!(d[0], Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_350_000) });
-        assert_eq!(d[2], Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_350_000 + 1_000_000 + 125_000 + 250_000 + 450_000) });
+        assert_eq!(d[0], Point { x: mm(10.0), y: mm(5.35) });
+        assert_eq!(d[2], Point { x: mm(10.0), y: mm(5.35) + mm(1.0) + Nm::new(125_000) + mm(0.25) + mm(0.45) });
     }
 
     #[test]
@@ -1254,23 +1256,23 @@ mod tests {
         }
         let mut p = pattern_for_handles(TuningMode::Single);
         // the width handle dragged to the other side and further out: a wider pattern that starts on the left
-        apply_handle(&mut p, 2, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000 - 1_525_000) });
-        assert_eq!((p.max_amplitude, p.initial_side), (Nm::from_raw_shim(1_400_000), PatternSide::Left));
+        apply_handle(&mut p, 2, Point { x: mm(10.0), y: mm(5.0) - Nm::new(1_525_000) });
+        assert_eq!((p.max_amplitude, p.initial_side), (mm(1.4), PatternSide::Left));
         // the spacing handle dragged two spacings along from the width handle's line
         let w = handle_positions(&p)[2];
-        apply_handle(&mut p, 3, Point { x: w.x + Nm::from_raw_shim(1_500_000), y: w.y });
-        assert_eq!(p.spacing, Nm::from_raw_shim(1_000_000));
-        apply_handle(&mut p, 1, Point { x: Nm::from_raw_shim(25_000_000), y: Nm::from_raw_shim(5_000_000) });
-        assert_eq!(p.end, Point { x: Nm::from_raw_shim(25_000_000), y: Nm::from_raw_shim(5_000_000) });
+        apply_handle(&mut p, 3, Point { x: w.x + mm(1.5), y: w.y });
+        assert_eq!(p.spacing, mm(1.0));
+        apply_handle(&mut p, 1, Point { x: mm(25.0), y: mm(5.0) });
+        assert_eq!(p.end, Point { x: mm(25.0), y: mm(5.0) });
     }
 
     #[test]
     fn settings_come_from_the_page_then_the_request() {
         let model = ConstraintModel::default();
         let mut p = default_pattern(&model, TuningMode::DiffPair, "F.Cu");
-        assert_eq!((p.min_amplitude, p.max_amplitude, p.spacing, p.corner_radius_percent, p.rounded), (Nm::from_raw_shim(200_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000), 80, true), "the pair's page: a spacing of 1 mm");
+        assert_eq!((p.min_amplitude, p.max_amplitude, p.spacing, p.corner_radius_percent, p.rounded), (mm(0.2), mm(1.0), mm(1.0), 80, true), "the pair's page: a spacing of 1 mm");
         apply_settings(&mut p, &json!({ "max_amplitude": 1_500_000, "spacing": 800_000.0, "rounded": false, "initial_side": "right", "target_length": 52_000_000, "target_skew": { "max": 50_000 } }));
-        assert_eq!((p.max_amplitude, p.spacing, p.rounded, p.initial_side), (Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(800_000), false, PatternSide::Right));
+        assert_eq!((p.max_amplitude, p.spacing, p.rounded, p.initial_side), (mm(1.5), mm(0.8), false, PatternSide::Right));
         assert_eq!(p.target_length, TargetRange { min: 51_900_000, opt: 52_000_000, max: 52_100_000 });
         assert_eq!(p.target_skew, TargetRange { min: -100_000, opt: 0, max: 50_000 });
         apply_settings(&mut p, &json!({ "target_length": null }));
@@ -1300,7 +1302,7 @@ mod tests {
             };
             let after = apply_all(&scene, &cmds).expect("the commands apply");
             let q = patterns_of(&after.design).into_iter().find(|q| q.id == p.id).expect("the pattern is still there");
-            let mm = q.last_tuning_length.raw_shim() as f64 / 1e6;
+            let mm = q.last_tuning_length.mm();
             eprintln!("pattern {} on {}: {} members -> {} after, {mm:.4} mm, made to {lo:.4}..{hi:.4} ({})", p.id, p.layer, p.member_ids.len(), q.member_ids.len(), q.last_status);
             assert!(mm >= lo && mm <= hi, "pattern {} on {}: {mm:.4} mm, made to {lo:.4}..{hi:.4}", p.id, p.layer);
             // and the board's own measure of the net agrees with the placer's
@@ -1361,7 +1363,7 @@ mod tests {
                 .world
                 .iter()
                 .filter_map(|(id, it)| match it {
-                    Item::Segment(s) if s.net.is_some() && s.source_track.is_some() && ((s.b.x - s.a.x).abs() + (s.b.y - s.a.y).abs()) > Nm::from_raw_shim(3_000_000) => Some((id, s.a, s.b, scene.layers.name_of(s.layer).to_string())),
+                    Item::Segment(s) if s.net.is_some() && s.source_track.is_some() && ((s.b.x - s.a.x).abs() + (s.b.y - s.a.y).abs()) > mm(3.0) => Some((id, s.a, s.b, scene.layers.name_of(s.layer).to_string())),
                     _ => None,
                 })
                 .collect();
@@ -1372,7 +1374,7 @@ mod tests {
                 }
                 let (_, a, b, layer) = candidates[next(candidates.len() as u64) as usize].clone();
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                let Some(pk) = pick(&scene, mid.x, mid.y, Nm::from_raw_shim(60_000), Some(&layer)) else { continue };
+                let Some(pk) = pick(&scene, mid.x, mid.y, mm(0.06), Some(&layer)) else { continue };
                 for kind in [TuningMode::Single, TuningMode::DiffPair, TuningMode::DiffPairSkew] {
                     tried += 1;
                     // its length (or skew) now, and the target 3 mm longer
@@ -1383,7 +1385,7 @@ mod tests {
                     started += 1;
                     // the end of the stretch: an end of the picked segment, and the cursor a little off it
                     let to = if next(2000) == 0 { b } else { a };
-                    let cursor = Point { x: to.x + Nm::from_raw_shim(next(400_000) as i64 - 200_000), y: to.y + Nm::from_raw_shim(next(400_000) as i64 - 200_000) };
+                    let cursor = Point { x: to.x + Nm::new(next(400_000) as i64) - mm(0.2), y: to.y + Nm::new(next(400_000) as i64) - mm(0.2) };
                     let Ok(moved) = t.mv(cursor, true) else { continue };
                     let (was_moved, status, current) = (moved.moved && !moved.edits.is_empty(), moved.readout.status, moved.readout.current as f64 / 1e6);
                     let Ok(cmd) = t.command() else { continue };
@@ -1404,7 +1406,7 @@ mod tests {
                             let (mut raw, mut clipped) = (0.0f64, 0.0f64);
                             for it in &path.items {
                                 if let eda_pns::tuning_path::PathItem::Line { line, clipped: c } = it {
-                                    raw += line.pts.windows(2).map(|w| ((w[1].x - w[0].x).raw_shim() as f64).hypot((w[1].y - w[0].y).raw_shim() as f64)).sum::<f64>() / 1e6;
+                                    raw += line.pts.windows(2).map(|w| ((w[1].x - w[0].x).as_f64()).hypot((w[1].y - w[0].y).as_f64())).sum::<f64>() / 1e6;
                                     clipped += c.length() as f64 / 1e6;
                                 }
                             }
@@ -1429,7 +1431,7 @@ mod tests {
                                 let again = retune_cmds(&scene2, &pat, &Value::Null).unwrap_or_else(|e| panic!("{name}: {} cannot be tuned again: {e}", pk.net));
                                 let scene4 = apply_all(&scene2, &again).expect("the retune applies");
                                 let q = scene4.design.drawings.as_ref().and_then(|d| d.tuning_patterns.iter().find(|q| q.id == pat.id)).expect("the pattern is still there");
-                                assert!((q.last_tuning_length.raw_shim() as f64 / 1e6 - current).abs() < 0.08, "{name}: net {} tuned again to {:.4}, it was {current:.4}", pk.net, q.last_tuning_length.raw_shim() as f64 / 1e6);
+                                assert!((q.last_tuning_length.mm() - current).abs() < 0.08, "{name}: net {} tuned again to {:.4}, it was {current:.4}", pk.net, q.last_tuning_length.mm());
                             }
                         }
                     }

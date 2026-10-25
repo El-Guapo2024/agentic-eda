@@ -202,9 +202,9 @@ fn shape_position(s: &Shape) -> Point {
 
 /// `CalcArcCenter`: the centre of the circle through three points (the middle of a whole circle's diameter when the ends meet); `None` when they are collinear.
 fn arc_center(start: Point, mid: Point, end: Point) -> Option<Point> {
-    let (sx, sy, mx, my, ex, ey) = (start.x.raw_shim() as f64, start.y.raw_shim() as f64, mid.x.raw_shim() as f64, mid.y.raw_shim() as f64, end.x.raw_shim() as f64, end.y.raw_shim() as f64);
+    let (sx, sy, mx, my, ex, ey) = (start.x.as_f64(), start.y.as_f64(), mid.x.as_f64(), mid.y.as_f64(), end.x.as_f64(), end.y.as_f64());
     if start == end {
-        return Some(Point { x: Nm::from_raw_shim(((sx + mx) / 2.0).round() as i64), y: Nm::from_raw_shim(((sy + my) / 2.0).round() as i64) });
+        return Some(Point { x: Nm::kiround((sx + mx) / 2.0), y: Nm::kiround((sy + my) / 2.0) });
     }
     let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
     if d == 0.0 {
@@ -212,7 +212,7 @@ fn arc_center(start: Point, mid: Point, end: Point) -> Option<Point> {
     }
     let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
     let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
-    Some(Point { x: Nm::from_raw_shim(ux.round() as i64), y: Nm::from_raw_shim(uy.round() as i64) })
+    Some(Point { x: Nm::kiround(ux), y: Nm::kiround(uy) })
 }
 
 /// The middle of the box of the positions of everything a group holds (the groups in it included): `PCB_GROUP::GetPosition` stands at the middle of the group's own box,
@@ -249,11 +249,11 @@ fn collect_group(clip: &Clipboard, group: usize, out: &mut Vec<Point>, seen: &mu
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
 
-    fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+    fn p(x: Nm, y: Nm) -> Point {
+        Point { x, y }
     }
 
     /// A board file with a footprint, two tracks, a via, a zone, a line on Edge.Cuts and a text, each at a position of its own.
@@ -282,21 +282,21 @@ mod tests {
     fn the_item_with_the_smallest_x_then_the_smallest_y_is_the_one_the_items_are_held_by() {
         let clip = eda_kicad::parse_pcb_clipboard(&board_file()).unwrap();
         // The gr_line at (10, 10) is the leftmost of every position: the footprint (50, 40), the segments (30, 60) and (30, 20), the via (70, 25), the text (20, 80).
-        assert_eq!(reference_point(&clip), p(10_000_000, 10_000_000));
+        assert_eq!(reference_point(&clip), p(mm(10.0), mm(10.0)));
         // Two items at the same x: the higher (smaller y) wins.
         let text = board_file().replace("(gr_line (start 10 10) (end 90 10)", "(gr_line (start 30 5) (end 90 10)").replace("(at 20 80 0)", "(at 31 80 0)");
         let clip = eda_kicad::parse_pcb_clipboard(&text).unwrap();
-        assert_eq!(reference_point(&clip), p(30_000_000, 5_000_000));
+        assert_eq!(reference_point(&clip), p(mm(30.0), mm(5.0)));
     }
 
     #[test]
     fn an_arcs_position_is_its_centre_and_a_circles_is_its_centre() {
-        assert_eq!(arc_center(p(10_000_000, 0), p(0, 10_000_000), p(-10_000_000, 0)), Some(p(0, 0)));
-        assert_eq!(arc_center(p(0, 0), p(10_000, 10_000), p(20_000, 20_000)), None, "collinear points have no centre");
-        let c = Shape::Circle { id: String::new(), layer: "Dwgs.User".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: p(5000, 6000), end: p(9000, 6000) };
-        assert_eq!(shape_position(&c), p(5000, 6000));
-        let a = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: p(10_000_000, 0), mid: p(0, 10_000_000), end: p(-10_000_000, 0) };
-        assert_eq!(shape_position(&a), p(0, 0));
+        assert_eq!(arc_center(p(mm(10.0), Nm::ZERO), p(Nm::ZERO, mm(10.0)), p(mm(-10.0), Nm::ZERO)), Some(p(Nm::ZERO, Nm::ZERO)));
+        assert_eq!(arc_center(p(Nm::ZERO, Nm::ZERO), p(mm(0.01), mm(0.01)), p(mm(0.02), mm(0.02))), None, "collinear points have no centre");
+        let c = Shape::Circle { id: String::new(), layer: "Dwgs.User".into(), stroke_width: mm(0.1), filled: false, center: p(Nm::new(5000), Nm::new(6000)), end: p(Nm::new(9000), Nm::new(6000)) };
+        assert_eq!(shape_position(&c), p(Nm::new(5000), Nm::new(6000)));
+        let a = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: p(mm(10.0), Nm::ZERO), mid: p(Nm::ZERO, mm(10.0)), end: p(mm(-10.0), Nm::ZERO) };
+        assert_eq!(shape_position(&a), p(Nm::ZERO, Nm::ZERO));
     }
 
     #[test]
@@ -319,8 +319,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eda_append_api_board_{}_{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: Some((Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(1_500_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, x: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", mm(-0.8)), pad("2", mm(0.8))], courtyard: Some((mm(3.0), mm(1.5))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "R1".into(),
             mpn: None,
@@ -348,8 +348,8 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection {
-                outline: vec![p(0, 0), p(100_000_000, 0), p(100_000_000, 100_000_000), p(0, 100_000_000)],
-                footprints: vec![FootprintInstance { id: "R1".into(), at: p(20_000_000, 20_000_000), rot: 0, side: Side::Top, label: Default::default() }],
+                outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(100.0), Nm::ZERO), p(mm(100.0), mm(100.0)), p(Nm::ZERO, mm(100.0))],
+                footprints: vec![FootprintInstance { id: "R1".into(), at: p(mm(20.0), mm(20.0)), rot: 0, side: Side::Top, label: Default::default() }],
                 modules: vec![],
             }),
             routing: None,
@@ -385,14 +385,14 @@ mod tests {
         let dir = board_dir("paste");
         let text = board_file();
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
-        let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
-        let cursor = p(60_000_000, 70_000_000);
-        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p((cursor.x - Nm::from_raw_shim(rx)).raw_shim(), (cursor.y - Nm::from_raw_shim(ry)).raw_shim()) }, false, "test").unwrap();
+        let (rx, ry) = (Nm::new(r["reference"]["x"].as_i64().unwrap()), Nm::new(r["reference"]["y"].as_i64().unwrap()));
+        let cursor = p(mm(60.0), mm(70.0));
+        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(cursor.x - rx, cursor.y - ry) }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
         let dr = d.drawings.as_ref().unwrap();
         let line = dr.shapes.iter().find(|s| s.layer() == "Edge.Cuts").expect("the file's Edge.Cuts line came in");
         assert_eq!(line.points()[0], cursor, "the top left item of the file is where the cursor was");
-        assert_eq!(line.points()[1], p((cursor.x + Nm::from_raw_shim(80_000_000)).raw_shim(), cursor.y.raw_shim()), "and the rest keeps its place relative to it");
+        assert_eq!(line.points()[1], p(cursor.x + mm(80.0), cursor.y), "and the rest keeps its place relative to it");
         // The file's footprint R1 met this board's R1: it is a part of its own now, filed under the next free reference.
         assert_eq!(d.placement.as_ref().unwrap().footprints.len(), 2);
         assert_eq!(model.parts.len(), 2, "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());
@@ -415,9 +415,9 @@ mod tests {
         let text = board_file().replacen("(pad \"1\" smd rect (at -0.8 0)", art, 1).replace("Lib:R0603", "Custom:Widget_9x9");
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
         assert_eq!(r["ok"], true, "{r}");
-        let at = p(60_000_000, 70_000_000);
-        let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
-        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p((at.x - Nm::from_raw_shim(rx)).raw_shim(), (at.y - Nm::from_raw_shim(ry)).raw_shim()) }, false, "test").unwrap();
+        let at = p(mm(60.0), mm(70.0));
+        let (rx, ry) = (Nm::new(r["reference"]["x"].as_i64().unwrap()), Nm::new(r["reference"]["y"].as_i64().unwrap()));
+        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(at.x - rx, at.y - ry) }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
         let new_part = model.parts.iter().find(|p| p.reference != "R1").expect("the appended footprint is a part of its own");
         let fp = model.footprint_of(new_part).expect("and has its own definition");
@@ -439,8 +439,8 @@ mod tests {
         let text = board_file().replacen("(pad \"1\" smd rect (at -0.8 0)", art, 1).replace("Lib:R0603", "Resistor_SMD:R_0603_1608Metric");
         let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
         assert_eq!(r["ok"], true, "{r}");
-        let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
-        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(60_000_000 - rx, 70_000_000 - ry) }, false, "test").unwrap();
+        let (rx, ry) = (Nm::new(r["reference"]["x"].as_i64().unwrap()), Nm::new(r["reference"]["y"].as_i64().unwrap()));
+        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(mm(60.0) - rx, mm(70.0) - ry) }, false, "test").unwrap();
         let (_, d, model) = board::load(&dir).unwrap();
         let new_part = model.parts.iter().find(|p| p.reference != "R1").expect("the appended footprint is a part of its own");
         let fp = model.footprint_of(new_part).expect("and resolves");

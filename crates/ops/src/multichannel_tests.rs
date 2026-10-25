@@ -7,20 +7,21 @@ use super::*;
 use eda_model::ir::{DrawingsSection, FootprintExtra, PlacementSection, Provenance, ZoneBorderStyle};
 use eda_model::multichannel::{PlacementArea, PlacementSourceType};
 use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
+use eda_model::units::mm;
 
 fn p(x: Nm, y: Nm) -> Point {
     Point { x, y }
 }
 
 fn pad(n: &str, at: (Nm, Nm)) -> Pad {
-    Pad { opposite_side: false, ext: Default::default(), number: n.into(), at, size: (Nm::from_raw_shim(600_000), Nm::from_raw_shim(600_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
+    Pad { opposite_side: false, ext: Default::default(), number: n.into(), at, size: (mm(0.6), mm(0.6)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
 }
 
 fn footprints() -> Vec<Footprint> {
     vec![
-        Footprint { name: "AMP5".into(), pads: vec![pad("1", (Nm::from_raw_shim(-1_500_000), Nm::from_raw_shim(-1_000_000))), pad("2", (Nm::from_raw_shim(-1_500_000), Nm::ZERO)), pad("3", (Nm::from_raw_shim(-1_500_000), Nm::from_raw_shim(1_000_000))), pad("4", (Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(-1_000_000))), pad("5", (Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(1_000_000)))], courtyard: Some((Nm::from_raw_shim(2_500_000), Nm::from_raw_shim(2_000_000))), ..Default::default() },
-        Footprint { name: "R0603".into(), pads: vec![pad("1", (Nm::from_raw_shim(-800_000), Nm::ZERO)), pad("2", (Nm::from_raw_shim(800_000), Nm::ZERO))], courtyard: Some((Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(800_000))), ..Default::default() },
-        Footprint { name: "C0603".into(), pads: vec![pad("1", (Nm::from_raw_shim(-800_000), Nm::ZERO)), pad("2", (Nm::from_raw_shim(800_000), Nm::ZERO))], courtyard: Some((Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(800_000))), ..Default::default() },
+        Footprint { name: "AMP5".into(), pads: vec![pad("1", (mm(-1.5), mm(-1.0))), pad("2", (mm(-1.5), Nm::ZERO)), pad("3", (mm(-1.5), mm(1.0))), pad("4", (mm(1.5), mm(-1.0))), pad("5", (mm(1.5), mm(1.0)))], courtyard: Some((mm(2.5), mm(2.0))), ..Default::default() },
+        Footprint { name: "R0603".into(), pads: vec![pad("1", (mm(-0.8), Nm::ZERO)), pad("2", (mm(0.8), Nm::ZERO))], courtyard: Some((mm(1.5), mm(0.8))), ..Default::default() },
+        Footprint { name: "C0603".into(), pads: vec![pad("1", (mm(-0.8), Nm::ZERO)), pad("2", (mm(0.8), Nm::ZERO))], courtyard: Some((mm(1.5), mm(0.8))), ..Default::default() },
     ]
 }
 
@@ -67,7 +68,7 @@ pub(super) fn model(channels: usize) -> ConstraintModel {
 }
 
 fn track(id: &str, net: &str, layer: &str, pts: &[(Nm, Nm)]) -> Track {
-    Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: Nm::from_raw_shim(200_000), pts: pts.iter().map(|&(x, y)| p(x, y)).collect(), arc_mid_offset: None }
+    Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: pts.iter().map(|&(x, y)| p(x, y)).collect(), arc_mid_offset: None }
 }
 
 fn pose(id: &str, at: (Nm, Nm), rot: u32) -> FootprintInstance {
@@ -81,16 +82,16 @@ pub(super) fn design(channels: usize) -> Design {
     let mut extras: Vec<FootprintExtra> = Vec::new();
     for c in 0..channels {
         let (u, r, cap) = names(c);
-        let oy = Nm::from_raw_shim(20_000_000) + 30_000_000 * Nm::from_raw_shim(c as i64);
+        let oy = mm(20.0) + c as i64 * mm(30.0);
         if c == 0 {
-            footprints_.push(pose(&u, (Nm::from_raw_shim(30_000_000), oy), 0));
-            footprints_.push(pose(&r, (Nm::from_raw_shim(22_000_000), oy), 90_000));
-            footprints_.push(pose(&cap, (Nm::from_raw_shim(38_000_000), oy), 0));
+            footprints_.push(pose(&u, (mm(30.0), oy), 0));
+            footprints_.push(pose(&r, (mm(22.0), oy), 90_000));
+            footprints_.push(pose(&cap, (mm(38.0), oy), 0));
         } else {
             // scattered: other places, other turns, one on the back
-            footprints_.push(pose(&u, (Nm::from_raw_shim(31_000_000) + 700_000 * Nm::from_raw_shim(c as i64), oy + Nm::from_raw_shim(900_000)), 180_000));
-            footprints_.push(pose(&r, (Nm::from_raw_shim(21_000_000), oy - Nm::from_raw_shim(1_500_000)), 0));
-            let mut f = pose(&cap, (Nm::from_raw_shim(40_000_000), oy + Nm::from_raw_shim(1_000_000)), 270_000);
+            footprints_.push(pose(&u, (mm(31.0) + c as i64 * mm(0.7), oy + mm(0.9)), 180_000));
+            footprints_.push(pose(&r, (mm(21.0), oy - mm(1.5)), 0));
+            let mut f = pose(&cap, (mm(40.0), oy + mm(1.0)), 270_000);
             f.side = Side::Top;
             footprints_.push(f);
         }
@@ -102,14 +103,14 @@ pub(super) fn design(channels: usize) -> Design {
     // channel 0's copper: a track from the resistor to the capacitor, one from the amplifier's pin 4 to the capacitor, a via on the middle net; channel 1 has a track of its
     // own in the way that the copy replaces
     let mut tracks = vec![
-        track("trk_mid0", "MID0", "F.Cu", &[(Nm::from_raw_shim(23_000_000), Nm::from_raw_shim(20_000_000)), (Nm::from_raw_shim(28_000_000), Nm::from_raw_shim(20_000_000)), (Nm::from_raw_shim(28_000_000), Nm::from_raw_shim(21_500_000)), (Nm::from_raw_shim(36_000_000), Nm::from_raw_shim(21_500_000))]),
-        track("trk_out0", "OUT0", "F.Cu", &[(Nm::from_raw_shim(33_000_000), Nm::from_raw_shim(20_500_000)), (Nm::from_raw_shim(37_000_000), Nm::from_raw_shim(20_500_000))]),
-        track("trk_gnd0", "GND", "F.Cu", &[(Nm::from_raw_shim(28_000_000), Nm::from_raw_shim(20_500_000)), (Nm::from_raw_shim(28_000_000), Nm::from_raw_shim(19_000_000))]),
+        track("trk_mid0", "MID0", "F.Cu", &[(mm(23.0), mm(20.0)), (mm(28.0), mm(20.0)), (mm(28.0), mm(21.5)), (mm(36.0), mm(21.5))]),
+        track("trk_out0", "OUT0", "F.Cu", &[(mm(33.0), mm(20.5)), (mm(37.0), mm(20.5))]),
+        track("trk_gnd0", "GND", "F.Cu", &[(mm(28.0), mm(20.5)), (mm(28.0), mm(19.0))]),
     ];
-    let mut vias = vec![Via { id: "via_mid0".into(), net: "MID0".into(), at: p(Nm::from_raw_shim(28_000_000), Nm::from_raw_shim(21_500_000)), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }];
+    let mut vias = vec![Via { id: "via_mid0".into(), net: "MID0".into(), at: p(mm(28.0), mm(21.5)), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }];
     if channels > 1 {
-        tracks.push(track("trk_old1", "MID1", "F.Cu", &[(Nm::from_raw_shim(30_500_000), Nm::from_raw_shim(52_500_000)), (Nm::from_raw_shim(32_500_000), Nm::from_raw_shim(52_500_000))]));
-        vias.push(Via { id: "via_old1".into(), net: "MID1".into(), at: p(Nm::from_raw_shim(33_000_000), Nm::from_raw_shim(52_500_000)), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        tracks.push(track("trk_old1", "MID1", "F.Cu", &[(mm(30.5), mm(52.5)), (mm(32.5), mm(52.5))]));
+        vias.push(Via { id: "via_old1".into(), net: "MID1".into(), at: p(mm(33.0), mm(52.5)), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
     }
     Design {
         footprint_library: None,
@@ -120,14 +121,14 @@ pub(super) fn design(channels: usize) -> Design {
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
-        placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(100_000_000), Nm::ZERO), p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(100_000_000)), p(Nm::ZERO, Nm::from_raw_shim(100_000_000))], footprints: footprints_, modules: vec![] }),
+        placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(100.0), Nm::ZERO), p(mm(100.0), mm(100.0)), p(Nm::ZERO, mm(100.0))], footprints: footprints_, modules: vec![] }),
         routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
         drawings: Some(DrawingsSection {
             shapes: vec![
-                Shape::Segment { id: "shp_mark0".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: p(Nm::from_raw_shim(24_000_000), Nm::from_raw_shim(18_500_000)), end: p(Nm::from_raw_shim(26_000_000), Nm::from_raw_shim(18_500_000)) },
-                Shape::Segment { id: "shp_cu0".into(), layer: "F.Cu".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, start: p(Nm::from_raw_shim(33_000_000), Nm::from_raw_shim(22_000_000)), end: p(Nm::from_raw_shim(35_000_000), Nm::from_raw_shim(22_000_000)) },
+                Shape::Segment { id: "shp_mark0".into(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: p(mm(24.0), mm(18.5)), end: p(mm(26.0), mm(18.5)) },
+                Shape::Segment { id: "shp_cu0".into(), layer: "F.Cu".into(), stroke_width: mm(0.2), filled: false, start: p(mm(33.0), mm(22.0)), end: p(mm(35.0), mm(22.0)) },
             ],
-            texts: vec![Text { id: "txt_ch0".into(), content: "CH1".into(), at: p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(19_500_000)), angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(800_000), stroke_width: Nm::from_raw_shim(120_000), justify: eda_model::ir::TextJustify::Center, mirror: false }],
+            texts: vec![Text { id: "txt_ch0".into(), content: "CH1".into(), at: p(mm(30.0), mm(19.5)), angle: 0, layer: "F.SilkS".into(), size_nm: mm(0.8), stroke_width: mm(0.12), justify: eda_model::ir::TextJustify::Center, mirror: false }],
             footprint_extras: extras,
             ..Default::default()
         }),
@@ -135,7 +136,7 @@ pub(super) fn design(channels: usize) -> Design {
 }
 
 fn board(m: &ConstraintModel, channels: usize) -> Board<'_> {
-    Board::new(design(channels), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))
+    Board::new(design(channels), m, mm(0.1), mm(0.3))
 }
 
 fn routing<'a>(b: &'a Board<'_>) -> &'a RoutingSection {
@@ -196,7 +197,7 @@ fn the_potential_areas_are_a_row_for_each_sheet_class_and_group_with_the_footpri
     d.drawings.as_mut().unwrap().footprint_extras.iter_mut().find(|e| e.id == "C3").unwrap().sheetname = Some("/".into());
     d.drawings.as_mut().unwrap().footprint_extras.iter_mut().find(|e| e.id == "R3").unwrap().component_classes = vec!["Passives".into()];
     d.drawings.as_mut().unwrap().footprint_extras.iter_mut().find(|e| e.id == "R2").unwrap().component_classes = vec!["Passives".into()];
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::Group { ids: vec!["U1".into(), "R1".into()] }).unwrap();
     let gid = drawings(&b).groups[0].id.clone();
     b.apply(&Cmd::EditGroup { id: gid, name: "ch1 core".into(), member_ids: vec!["U1".into(), "R1".into()], design_block: None }).unwrap();
@@ -235,7 +236,7 @@ fn generate_makes_a_rule_area_for_each_sheet_ticked_from_the_boxes_of_its_footpr
     // a rectangle round the three footprints of the row, 0.1 mm clear of their boxes: the courtyards (±2.5 mm × ±2 mm for the amplifier at x = 30 mm; the resistor
     // turned a quarter, ±0.8 × ±1.5 mm at x = 22 mm; the capacitor at x = 38 mm) grown by the stroke of the courtyard (25 um) and the margin
     let bounds = eda_model::multichannel::polygon_box(&z.outline).unwrap();
-    assert_eq!(bounds, (Nm::from_raw_shim(22_000_000 - 800_000 - 25_000 - 100_000), Nm::from_raw_shim(20_000_000 - 2_000_000 - 25_000 - 100_000), Nm::from_raw_shim(38_000_000 + 1_500_000 + 25_000 + 100_000), Nm::from_raw_shim(20_000_000 + 2_000_000 + 25_000 + 100_000)));
+    assert_eq!(bounds, (mm(22.0) - mm(0.8) - mm(0.025) - mm(0.1), mm(20.0) - mm(2.0) - mm(0.025) - mm(0.1), mm(38.0) + mm(1.5) + mm(0.025) + mm(0.1), mm(20.0) + mm(2.0) + mm(0.025) + mm(0.1)));
     // the hull of the three boxes, rectified as KiCad does it: a staircase, because the resistor and the capacitor are lower than the amplifier
     assert_eq!(z.outline.len(), 9, "{:?}", z.outline);
     // the second channel's, from where its footprints are
@@ -322,14 +323,14 @@ fn generate_from_a_group_makes_the_area_from_everything_in_the_group() {
     assert_eq!((z.placement.source_type, z.placement.source.as_str()), (PlacementSourceType::Group, "A"));
     // the text sticks out above the footprints (y = 17.8 mm - half its height), so the area does too
     let bounds = eda_model::multichannel::polygon_box(&z.outline).unwrap();
-    assert!(bounds.1 <= Nm::from_raw_shim(19_500_000 - 400_000 - 100_000) && bounds.1 < Nm::from_raw_shim(20_000_000 - 2_000_000 - 25_000 - 100_000 + 1), "{bounds:?}");
+    assert!(bounds.1 <= mm(19.5) - mm(0.4) - mm(0.1) && bounds.1 < mm(20.0) - mm(2.0) - mm(0.025) - mm(0.1) + Nm::new(1), "{bounds:?}");
 }
 
 #[test]
 fn the_placement_of_a_rule_area_is_edited_with_the_zone_and_only_a_rule_area_has_one() {
     let m = model(1);
     let mut b = board(&m, 1);
-    b.apply(&Cmd::AddZone { net: String::new(), layer: "F.Cu".into(), outline: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000))] }).unwrap();
+    b.apply(&Cmd::AddZone { net: String::new(), layer: "F.Cu".into(), outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0))] }).unwrap();
     let id = routing(&b).zones[0].id.clone();
     let edit = |placement: Option<PlacementArea>, rule: bool| -> Cmd {
         let z = Zone { id: id.clone(), net: String::new(), layer: "F.Cu".into(), is_rule_area: rule, ..Default::default() };
@@ -434,7 +435,7 @@ fn a_different_number_of_footprints_lists_both_sets_in_the_reasons() {
     let mut d = design(2);
     // channel 2 has its capacitor on another sheet
     d.drawings.as_mut().unwrap().footprint_extras.iter_mut().find(|e| e.id == "C2").unwrap().sheetname = Some("/elsewhere/".into());
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&generate(&[(AreaKind::Sheet, "/ch1/"), (AreaKind::Sheet, "/ch2/")], false, false)).unwrap();
     let ids = areas_of(&b, 2);
     let t = b.mc_compat(&ids[0]).unwrap().targets.remove(0);
@@ -467,7 +468,7 @@ fn repeat_layout_places_the_footprints_of_the_other_channels_as_the_first_one() 
     assert_eq!(after.outline, z0.outline.iter().map(|q| p(q.x + disp.x, q.y + disp.y)).collect::<Vec<_>>());
     assert_eq!(pose_of(&b, "U3").at, p(pose_of(&b, "U1").at.x + disp3.x, pose_of(&b, "U1").at.y + disp3.y));
     // the reference stayed
-    assert_eq!(pose_of(&b, "U1").at, p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)));
+    assert_eq!(pose_of(&b, "U1").at, p(mm(30.0), mm(20.0)));
 }
 
 #[test]
@@ -568,7 +569,7 @@ fn repeat_layout_copies_the_other_items_on_the_layers_both_areas_have() {
     let want: Vec<Point> = mark.points().iter().map(|q| p(q.x + disp.x, q.y + disp.y)).collect();
     assert!(dr.shapes.iter().any(|s| s.id() != "shp_mark0" && s.layer() == "F.SilkS" && s.points() == want), "{:?}", dr.shapes);
     assert_eq!(dr.texts.len(), 2);
-    assert!(dr.texts.iter().any(|t| t.id != "txt_ch0" && t.at == p(Nm::from_raw_shim(30_000_000) + disp.x, Nm::from_raw_shim(19_500_000) + disp.y)));
+    assert!(dr.texts.iter().any(|t| t.id != "txt_ch0" && t.at == p(mm(30.0) + disp.x, mm(19.5) + disp.y)));
 }
 
 /// `copyRuleAreaContents` runs `fixupNet` on a copied copper shape as on a track: the copy is on the target's net, not the reference channel's.
@@ -578,7 +579,7 @@ fn repeat_puts_a_copper_shape_on_the_target_net() {
     let mut d = design(3);
     // channel 1's copper segment, on U1.4's net
     d.drawings.as_mut().unwrap().board_items.set_net("shp_cu0", Some("OUT0".into()));
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     generate_sheets(&mut b, 3);
     let ids = areas_of(&b, 3);
     b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
@@ -591,7 +592,7 @@ fn repeat_puts_a_copper_shape_on_the_target_net() {
     let m = model(2);
     let mut d = design(2);
     d.drawings.as_mut().unwrap().board_items.set_net("shp_cu0", Some("OUT0".into()));
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     generate_sheets(&mut b, 2);
     let ids = areas_of(&b, 2);
     b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { connected_routing_only: true, ..RepeatOptions::default() })).unwrap();
@@ -606,11 +607,11 @@ fn repeat_grouping_leaves_no_item_in_two_groups() {
     let mut d = design(2);
     {
         let dr = d.drawings.as_mut().unwrap();
-        dr.shapes.push(Shape::Segment { id: "shp_cu0b".into(), layer: "F.Cu".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, start: p(Nm::from_raw_shim(33_000_000), Nm::from_raw_shim(21_800_000)), end: p(Nm::from_raw_shim(35_000_000), Nm::from_raw_shim(21_800_000)) });
+        dr.shapes.push(Shape::Segment { id: "shp_cu0b".into(), layer: "F.Cu".into(), stroke_width: mm(0.2), filled: false, start: p(mm(33.0), mm(21.8)), end: p(mm(35.0), mm(21.8)) });
         dr.groups.push(Group { id: String::new(), name: "pair".into(), member_ids: vec!["shp_cu0".into(), "shp_cu0b".into()], design_block: String::new() });
         eda_model::groups::GroupHost::assign_group_ids(dr);
     }
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     generate_sheets(&mut b, 2);
     let ids = areas_of(&b, 2);
     b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { group_items: true, ..RepeatOptions::default() })).unwrap();
@@ -637,7 +638,7 @@ fn repeat_grouping_leaves_an_unrelated_one_member_group_alone() {
         let dr = d.drawings.as_mut().unwrap();
         dr.groups.push(Group { id: "grp_one".into(), name: String::new(), member_ids: vec!["shp_mark0".into()], design_block: String::new() });
     }
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     generate_sheets(&mut b, 2);
     let ids = areas_of(&b, 2);
     b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { group_items: true, ..RepeatOptions::default() })).unwrap();
@@ -649,13 +650,13 @@ fn repeat_grouping_leaves_an_unrelated_one_member_group_alone() {
 fn the_options_of_the_dialog_each_leave_out_their_part_of_the_copy() {
     let run = |options: RepeatOptions| -> Board<'static> {
         let m: &'static ConstraintModel = Box::leak(Box::new(model(2)));
-        let mut b = Board::new(design(2), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design(2), m, mm(0.1), mm(0.3));
         generate_sheets(&mut b, 2);
         let ids = areas_of(&b, 2);
         b.apply(&repeat(&ids[0], &ids[1..], options)).unwrap();
         b
     };
-    let scattered = pose_of(&Board::new(design(2), &model(2), Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000)), "U2");
+    let scattered = pose_of(&Board::new(design(2), &model(2), mm(0.1), mm(0.3)), "U2");
     // no placement: the footprints stay, the copper comes
     let b = run(RepeatOptions { copy_placement: false, ..Default::default() });
     assert_eq!(pose_of(&b, "U2"), scattered);
@@ -680,7 +681,7 @@ fn the_options_of_the_dialog_each_leave_out_their_part_of_the_copy() {
 fn locked_items_are_left_alone_unless_the_dialog_includes_them() {
     let run = |include_locked_items: bool| -> (Board<'static>, Pose) {
         let m: &'static ConstraintModel = Box::leak(Box::new(model(2)));
-        let mut b = Board::new(design(2), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design(2), m, mm(0.1), mm(0.3));
         generate_sheets(&mut b, 2);
         let ids = areas_of(&b, 2);
         // the old track of channel 2 and the footprint R2 are locked
@@ -692,7 +693,7 @@ fn locked_items_are_left_alone_unless_the_dialog_includes_them() {
     let (b, r2) = run(false);
     assert!(routing(&b).tracks.iter().any(|t| t.id == "trk_old1"), "a locked track is not taken away");
     assert_eq!(pose_of(&b, "R2"), r2, "a locked footprint is not moved");
-    assert_ne!(pose_of(&b, "U2").at, p(Nm::from_raw_shim(31_700_000), Nm::from_raw_shim(51_900_000)), "the rest of the channel is");
+    assert_ne!(pose_of(&b, "U2").at, p(mm(31.7), mm(51.9)), "the rest of the channel is");
     // the locked copper of the reference area is not copied either
     let (b, r2) = run(true);
     assert!(!routing(&b).tracks.iter().any(|t| t.id == "trk_old1"));
@@ -712,10 +713,10 @@ fn an_anchor_footprint_turns_and_moves_the_copy_to_lie_where_the_anchor_is() {
     assert_eq!(pose_of(&b, "U2").rot, u2.rot);
     // the resistor, 8 mm to the left of the amplifier and turned a quarter, is 8 mm to the right of it now and turned three quarters: half a turn about U
     let r2 = pose_of(&b, "R2");
-    assert_eq!(r2.at, p(u2.at.x + Nm::from_raw_shim(8_000_000), u2.at.y));
+    assert_eq!(r2.at, p(u2.at.x + mm(8.0), u2.at.y));
     assert_eq!(r2.rot, (90_000 + 180_000) % 360_000);
     // a copper track went with it: the middle net's first point was 7 mm left of U1, it is 7 mm right of U2 now
-    assert!(routing(&b).tracks.iter().any(|t| t.net == "MID1" && t.pts.first() == Some(&p(u2.at.x + Nm::from_raw_shim(7_000_000), u2.at.y))), "{:?}", routing(&b).tracks);
+    assert!(routing(&b).tracks.iter().any(|t| t.net == "MID1" && t.pts.first() == Some(&p(u2.at.x + mm(7.0), u2.at.y))), "{:?}", routing(&b).tracks);
     // an anchor that is not in the reference area is refused
     assert_eq!(b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions { anchor: Some("U9".into()), ..Default::default() })).unwrap_err()[0].check, "ops_unknown_anchor");
 }
@@ -736,10 +737,10 @@ fn copper_that_ends_on_a_pad_ends_on_the_matching_pad_of_a_target_turned_a_quart
     let stubs = [("U1", "4", "OUT0"), ("R1", "2", "MID0"), ("C1", "2", "OUT0")];
     for (reference, number, net) in stubs {
         let at = pad_centre(&d, reference, number);
-        let inwards = if at.x >= d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == reference).unwrap().at.x { -300_000 } else { 300_000 };
-        d.routing.as_mut().unwrap().tracks.push(track(&format!("stub_{reference}"), net, "F.Cu", &[(at.x, at.y), (at.x + Nm::from_raw_shim(inwards), at.y)]));
+        let inwards = if at.x >= d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == reference).unwrap().at.x { mm(-0.3) } else { mm(0.3) };
+        d.routing.as_mut().unwrap().tracks.push(track(&format!("stub_{reference}"), net, "F.Cu", &[(at.x, at.y), (at.x + inwards, at.y)]));
     }
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     generate_sheets(&mut b, 2);
     let ids = areas_of(&b, 2);
     let area = zone_named(&b, "auto-placement-area-/ch1/").outline.clone();
@@ -754,7 +755,7 @@ fn copper_that_ends_on_a_pad_ends_on_the_matching_pad_of_a_target_turned_a_quart
         let want = pad_centre(b.design(), target, number);
         let copies: Vec<&Track> = routing(&b).tracks.iter().filter(|t| t.net == net && t.pts.len() == 2 && t.id != format!("stub_{reference}")).collect();
         // (a micrometre of rounding: the pad's place and the copy's are each rounded to it)
-        assert!(copies.iter().any(|t| (t.pts[0].x - want.x).abs() <= Nm::from_raw_shim(1) && (t.pts[0].y - want.y).abs() <= Nm::from_raw_shim(1)), "the copy of the stub of {reference}'s pad {number} starts on pad {number} of {target} at {want:?}: {:?}", copies.iter().map(|t| &t.pts).collect::<Vec<_>>());
+        assert!(copies.iter().any(|t| (t.pts[0].x - want.x).abs() <= Nm::new(1) && (t.pts[0].y - want.y).abs() <= Nm::new(1)), "the copy of the stub of {reference}'s pad {number} starts on pad {number} of {target} at {want:?}: {:?}", copies.iter().map(|t| &t.pts).collect::<Vec<_>>());
     }
 }
 
@@ -765,14 +766,14 @@ fn the_text_fields_and_the_models_of_the_footprints_follow_the_placement() {
     // the reference of R1 is laid out by hand, the value hidden
     let dr = d.drawings.as_mut().unwrap();
     let mut e = eda_model::fp_edit::FootprintEdit::new("R1");
-    let mut layout = eda_model::fp_edit::FieldLayout::new(p(Nm::ZERO, Nm::from_raw_shim(-2_500_000)), "F.SilkS");
-    layout.size = (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000));
+    let mut layout = eda_model::fp_edit::FieldLayout::new(p(Nm::ZERO, mm(-2.5)), "F.SilkS");
+    layout.size = (mm(0.8), mm(0.8));
     e.reference = Some(layout.clone());
-    let mut hidden = eda_model::fp_edit::FieldLayout::new(p(Nm::ZERO, Nm::from_raw_shim(1_000_000)), "F.Fab");
+    let mut hidden = eda_model::fp_edit::FieldLayout::new(p(Nm::ZERO, mm(1.0)), "F.Fab");
     hidden.visible = false;
     e.value = Some(hidden.clone());
     dr.footprint_edits.push(e);
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     generate_sheets(&mut b, 2);
     let ids = areas_of(&b, 2);
     b.apply(&repeat(&ids[0], &ids[1..], RepeatOptions::default())).unwrap();
@@ -814,7 +815,7 @@ fn block_text(channels: usize) -> String {
 
 /// A board whose channel 2 is a group of the three footprints, linked to the design block.
 fn board_with_group(m: &ConstraintModel) -> (Board<'_>, String) {
-    let mut b = Board::new(design(2), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(2), m, mm(0.1), mm(0.3));
     b.apply(&Cmd::Group { ids: vec!["U2".into(), "R2".into(), "C2".into()] }).unwrap();
     let gid = drawings(&b).groups[0].id.clone();
     b.apply(&Cmd::EditGroup { id: gid.clone(), name: "ch2".into(), member_ids: vec!["U2".into(), "R2".into(), "C2".into()], design_block: Some("Amps:Channel".into()) }).unwrap();
@@ -834,7 +835,7 @@ fn the_layout_of_a_design_block_is_applied_to_the_footprints_of_a_group_matched_
     // The block's footprints are placed as a rigid copy of the layout of the block, anchored on the first pair: that footprint of the group stays where it was and the layout
     // is turned to its orientation. So one of the three has not moved, and the three are the block's poses (U 30/20 mm, R 22/20 turned a quarter, C 38/20) turned by one
     // angle about the origin and moved by one vector.
-    let block = [("U2", p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)), 0u32), ("R2", p(Nm::from_raw_shim(22_000_000), Nm::from_raw_shim(20_000_000)), 90_000), ("C2", p(Nm::from_raw_shim(38_000_000), Nm::from_raw_shim(20_000_000)), 0)];
+    let block = [("U2", p(mm(30.0), mm(20.0)), 0u32), ("R2", p(mm(22.0), mm(20.0)), 90_000), ("C2", p(mm(38.0), mm(20.0)), 0)];
     let unmoved: Vec<&str> = before.iter().filter(|(r, was)| &pose_of(&b, r) == was).map(|(r, _)| r.as_str()).collect();
     assert_eq!(unmoved.len(), 1, "the anchor stays: {unmoved:?}");
     let (anchor_ref, anchor_block, anchor_rot) = block.iter().find(|(r, _, _)| *r == unmoved[0]).unwrap();
@@ -876,7 +877,7 @@ fn a_group_that_does_not_match_the_block_or_is_locked_is_refused_in_kicads_words
     let err = b.apply(&apply_block(&gid, block_text(2))).unwrap_err();
     assert_eq!(err[0].hint.as_deref(), Some("Footprint R2 is locked and cannot be placed."));
     // a group with no link, one with no footprints and one that is not there
-    let mut plain = Board::new(design(2), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut plain = Board::new(design(2), &m, mm(0.1), mm(0.3));
     plain.apply(&Cmd::Group { ids: vec!["U2".into(), "R2".into()] }).unwrap();
     let pid = drawings(&plain).groups[0].id.clone();
     assert_eq!(plain.apply(&apply_block(&pid, block_text(2))).unwrap_err()[0].check, "ops_no_design_block_link");
@@ -893,7 +894,7 @@ fn a_board_with_no_stored_schematic_is_on_the_module_sheets_the_studio_derives()
     let m = model(3);
     let mut d = design(3);
     d.drawings.as_mut().unwrap().footprint_extras.clear();
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     let sheets = b.mc_part_sheets();
     for (reference, module) in [("U1", "U1"), ("R2", "U2"), ("C3", "U3")] {
         assert_eq!((sheets[reference].name.as_str(), sheets[reference].file.as_str()), (format!("/{module}/").as_str(), format!("{}.kicad_sch", module.to_lowercase()).as_str()), "{reference}");
@@ -911,12 +912,12 @@ fn a_board_with_no_stored_schematic_is_on_the_module_sheets_the_studio_derives()
 fn schematic_with_a_sheet_placed_twice(d: &mut Design) {
     use eda_model::ir::{SchematicSection, SheetInstance, SymbolInstance, SymbolPathOverride};
     let symbol = |id: &str, x: Nm| -> SymbolInstance { serde_json::from_value(serde_json::json!({ "id": id, "at": { "x": x, "y": 10_000_000 }, "rot": 0 })).unwrap() };
-    let sheet = |id: &str, name: &str| SheetInstance { id: id.into(), name: name.into(), file: "channel.kicad_sch".into(), at: p(Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), pins: vec![], page: String::new() };
-    let over = |parent: &str, x: Nm, reference: &str| SymbolPathOverride { at: p(x, Nm::from_raw_shim(10_000_000)), parent_sheet_instance_id: parent.into(), reference: reference.into(), unit: 1 };
+    let sheet = |id: &str, name: &str| SheetInstance { id: id.into(), name: name.into(), file: "channel.kicad_sch".into(), at: p(Nm::ZERO, Nm::ZERO), size: (mm(10.0), mm(10.0)), pins: vec![], page: String::new() };
+    let over = |parent: &str, x: Nm, reference: &str| SymbolPathOverride { at: p(x, mm(10.0)), parent_sheet_instance_id: parent.into(), reference: reference.into(), unit: 1 };
     d.schematic = Some(SchematicSection { sheets: vec![sheet("sh_a", "ch1"), sheet("sh_b", "ch2")], ..Default::default() });
     let screen = SchematicSection {
-        symbols: vec![symbol("U1", Nm::from_raw_shim(10_000_000)), symbol("R1", Nm::from_raw_shim(20_000_000)), symbol("C1", Nm::from_raw_shim(30_000_000))],
-        instance_overrides: vec![over("sh_a", Nm::from_raw_shim(10_000_000), "U1"), over("sh_a", Nm::from_raw_shim(20_000_000), "R1"), over("sh_a", Nm::from_raw_shim(30_000_000), "C1"), over("sh_b", Nm::from_raw_shim(10_000_000), "U2"), over("sh_b", Nm::from_raw_shim(20_000_000), "R2"), over("sh_b", Nm::from_raw_shim(30_000_000), "C2")],
+        symbols: vec![symbol("U1", mm(10.0)), symbol("R1", mm(20.0)), symbol("C1", mm(30.0))],
+        instance_overrides: vec![over("sh_a", mm(10.0), "U1"), over("sh_a", mm(20.0), "R1"), over("sh_a", mm(30.0), "C1"), over("sh_b", mm(10.0), "U2"), over("sh_b", mm(20.0), "R2"), over("sh_b", mm(30.0), "C2")],
         ..Default::default()
     };
     d.sheet_contents = Some([("channel.kicad_sch".to_string(), screen)].into_iter().collect());
@@ -928,7 +929,7 @@ fn a_sheet_placed_twice_puts_the_parts_of_each_placement_on_the_sheet_of_that_pl
     let mut d = design(2);
     d.drawings.as_mut().unwrap().footprint_extras.clear();
     schematic_with_a_sheet_placed_twice(&mut d);
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     let sheets = b.mc_part_sheets();
     assert_eq!((sheets["U1"].name.as_str(), sheets["U1"].file.as_str()), ("/ch1/", "channel.kicad_sch"));
     assert_eq!(sheets["R2"].name, "/ch2/");
@@ -967,7 +968,7 @@ fn the_classes_the_project_gives_a_footprint_are_those_its_assignment_rules_matc
             rule("Custom", true, vec![cond(ConditionKind::Custom, "A.Layer == 'F.Cu'", "")]),
         ],
     };
-    let b = Board::new(design(2), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let b = Board::new(design(2), &m, mm(0.1), mm(0.3));
     let mc = b.mc_board();
     let classes = |r: &str| -> Vec<String> { mc.fps[mc.index_of(r).unwrap()].classes.iter().cloned().collect() };
     assert_eq!(classes("U1"), vec!["Amplifiers", "Everything"]);
@@ -979,7 +980,7 @@ fn the_classes_the_project_gives_a_footprint_are_those_its_assignment_rules_matc
     m2.board.component_classes.sheet_classes = true;
     let mut d = design(2);
     d.drawings.as_mut().unwrap().footprint_extras.iter_mut().find(|e| e.id == "C2").unwrap().sheetname = Some("/".into());
-    let b2 = Board::new(d, &m2, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let b2 = Board::new(d, &m2, mm(0.1), mm(0.3));
     let mc2 = b2.mc_board();
     assert_eq!(mc2.fps[mc2.index_of("U1").unwrap()].classes.iter().cloned().collect::<Vec<_>>(), vec!["/ch1/"]);
     assert!(mc2.fps[mc2.index_of("C2").unwrap()].classes.is_empty(), "the root sheet has no class");
@@ -987,7 +988,7 @@ fn the_classes_the_project_gives_a_footprint_are_those_its_assignment_rules_matc
     let mut d3 = design(2);
     d3.drawings.as_mut().unwrap().footprint_extras.iter_mut().find(|e| e.id == "U1").unwrap().component_classes = vec!["Stage A".into()];
     let m3 = model(2);
-    let b3 = Board::new(d3, &m3, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let b3 = Board::new(d3, &m3, mm(0.1), mm(0.3));
     let rows = b3.mc_potential_areas();
     assert_eq!(rows.iter().find(|r| r.kind == AreaKind::ComponentClass).map(|r| (r.key.as_str(), r.components.clone())), Some(("Stage A", vec!["U1".to_string()])));
     // a rule area for the class finds the footprints that have it

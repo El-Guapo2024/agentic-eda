@@ -6,6 +6,7 @@
 //!
 //! Skipped (prints a line, passes) when the QA corpus is not on this machine: `KICAD_QA_DATA`, default `~/ws/kicad-src-8303b2ad/qa/data`.
 
+use eda_model::units::{mm, um};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Design, Point, Track, Nm};
 use eda_model::{ConstraintModel, NetClass};
@@ -28,7 +29,7 @@ fn corpus() -> Option<PathBuf> {
 fn dp_test() -> Option<(Design, ConstraintModel)> {
     let text = std::fs::read_to_string(corpus()?).ok()?;
     let (mut design, mut model, _) = eda_kicad::import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import: {e:?}"));
-    model.board.net_classes.push(NetClass { name: "usb".into(), nets: vec!["/D+".into(), "/D-".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(Nm::from_raw_shim(200_000)), diff_pair_gap: Some(Nm::from_raw_shim(250_000)), diff_pair_via_gap: Some(Nm::from_raw_shim(250_000)), priority: 0 });
+    model.board.net_classes.push(NetClass { name: "usb".into(), nets: vec!["/D+".into(), "/D-".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(mm(0.2)), diff_pair_gap: Some(mm(0.25)), diff_pair_via_gap: Some(mm(0.25)), priority: 0 });
     design.assign_missing_ids();
     Some((design, model))
 }
@@ -110,8 +111,8 @@ fn gap_between(a: &[Point], wa: Nm, b: &[Point], wb: Nm) -> f64 {
 }
 
 /// The dangling ends of the J1 side's pair, and of the U1 side's stubs (0.075 mm wide), that it has to meet.
-const J1_SIDE: (Point, Point) = (Point { x: Nm::from_raw_shim(118_950_000), y: Nm::from_raw_shim(95_075_000) }, Point { x: Nm::from_raw_shim(118_950_000), y: Nm::from_raw_shim(94_625_000) });
-const U1_STUBS: (Point, Point) = (Point { x: Nm::from_raw_shim(118_050_000), y: Nm::from_raw_shim(95_300_000) }, Point { x: Nm::from_raw_shim(118_050_000), y: Nm::from_raw_shim(94_750_000) });
+const J1_SIDE: (Point, Point) = (Point { x: Nm::new(118_950_000), y: Nm::new(95_075_000) }, Point { x: Nm::new(118_950_000), y: Nm::new(94_625_000) });
+const U1_STUBS: (Point, Point) = (Point { x: Nm::new(118_050_000), y: Nm::new(95_300_000) }, Point { x: Nm::new(118_050_000), y: Nm::new(94_750_000) });
 
 fn track_of<'a>(commit: &'a RouteCommit, net: &str) -> &'a Track {
     commit.tracks.iter().find(|t| t.net == net).unwrap_or_else(|| panic!("no track on {net} in {commit:?}"))
@@ -142,7 +143,7 @@ fn a_pair_continues_from_a_pair_of_tracks_and_meets_the_two_stubs_in_every_mode(
         assert_eq!(commit.tracks.len(), 2, "{mode:?}: one track per net: {commit:?}");
         assert!(commit.remove_track_ids.is_empty() && commit.vias.is_empty());
         let (d_plus, d_minus) = (track_of(&commit, "/D+"), track_of(&commit, "/D-"));
-        assert_eq!((d_plus.width, d_minus.width), (Nm::from_raw_shim(200_000), Nm::from_raw_shim(200_000)), "the width of the tracks it continues");
+        assert_eq!((d_plus.width, d_minus.width), (mm(0.2), mm(0.2)), "the width of the tracks it continues");
         // the two tracks keep the pair's gap where they run side by side, and each net's copper joins its stub
         let (after_design, after_node) = {
             let d = apply_commit(&design, &commit);
@@ -153,7 +154,7 @@ fn a_pair_continues_from_a_pair_of_tracks_and_meets_the_two_stubs_in_every_mode(
         assert!(new_ones.is_empty(), "{mode:?}: new violations {new_ones:#?}");
         let _ = after_design;
         let straight = |t: &Track| t.pts.windows(2).filter(|w| w[0].y == w[1].y).map(|w| (w[0].x - w[1].x).abs()).max().unwrap_or(Nm::ZERO);
-        assert!(straight(d_plus) > Nm::from_raw_shim(300_000) && straight(d_minus) > Nm::from_raw_shim(300_000), "{mode:?}: a run side by side: {commit:?}");
+        assert!(straight(d_plus) > mm(0.3) && straight(d_minus) > mm(0.3), "{mode:?}: a run side by side: {commit:?}");
     }
 }
 
@@ -176,13 +177,13 @@ fn route_from_other_end_restarts_the_pair_at_the_far_end_and_commits_what_was_fi
             router.settings = settings.clone();
             router.start_diff_pair(J1_SIDE.0, "F.Cu").unwrap_or_else(|e| panic!("{mode:?}: {e}"));
             // a head drawn from the J1 side's tracks towards the stubs, short of them
-            let mid = p(Nm::from_raw_shim(118_700_000), Nm::from_raw_shim(95_000_000));
+            let mid = p(mm(118.7), mm(95.0));
             let pv = router.diff_pair_preview(mid).expect("preview");
             assert!(!pv.colliding && !pv.head_a.pts.is_empty(), "{mode:?}: {pv:?}");
             let mut to = mid;
             if fix_first {
                 assert!(matches!(router.fix_diff_pair(mid), Some(FixOutcome::Fixed { real_end: false })), "{mode:?}");
-                to = p(Nm::from_raw_shim(118_500_000), Nm::from_raw_shim(95_000_000));
+                to = p(mm(118.5), mm(95.0));
                 let next_leg = router.diff_pair_preview(to).expect("the next leg");
                 assert!(!next_leg.head_a.pts.is_empty(), "{mode:?}: {next_leg:?}");
             }
@@ -190,7 +191,7 @@ fn route_from_other_end_restarts_the_pair_at_the_far_end_and_commits_what_was_fi
             assert_eq!(c.net, "/D+", "the P net");
             assert_eq!(c.from, U1_STUBS.0, "{mode:?}: the far end of D+ is the U1 side's stub");
             assert_eq!(c.layer, "F.Cu");
-            assert_eq!((c.width, c.gap), (Nm::from_raw_shim(200_000), Nm::from_raw_shim(250_000)), "the pair's own sizes go on");
+            assert_eq!((c.width, c.gap), (mm(0.2), mm(0.25)), "the pair's own sizes go on");
             assert_eq!(c.commit.tracks.is_empty(), !fix_first, "{mode:?}: what was fixed is committed, nothing if nothing was");
             if fix_first {
                 assert!(c.commit.tracks.iter().any(|t| t.net == "/D+") && c.commit.tracks.iter().any(|t| t.net == "/D-"), "{:?}", c.commit);
@@ -232,17 +233,17 @@ fn a_pair_leaves_the_connectors_pad_pair_and_runs_at_the_pitch() {
         let mut router = Router::new(&design, &model);
         router.settings = settings(mode);
         // J1.1 (D+, square) at (124.7, 95.9) and J1.2 (D-, round) at (124.7, 94.63)
-        router.start_diff_pair(p(Nm::from_raw_shim(124_700_000), Nm::from_raw_shim(95_900_000)), "F.Cu").unwrap_or_else(|e| panic!("{mode:?}: {e}"));
-        let at = p(Nm::from_raw_shim(135_000_000), Nm::from_raw_shim(95_265_000));
+        router.start_diff_pair(p(mm(124.7), mm(95.9)), "F.Cu").unwrap_or_else(|e| panic!("{mode:?}: {e}"));
+        let at = p(mm(135.0), mm(95.265));
         let pv = router.diff_pair_preview(at).expect("preview");
         assert!(!pv.colliding && !pv.snapped_end, "{mode:?}: {pv:?}");
-        assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(p(Nm::from_raw_shim(124_700_000), Nm::from_raw_shim(95_900_000))), Some(p(Nm::from_raw_shim(124_700_000), Nm::from_raw_shim(94_630_000)))), "from the pad centres");
+        assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(p(mm(124.7), mm(95.9))), Some(p(mm(124.7), mm(94.63)))), "from the pad centres");
         let pitch = pv.width + pv.gap;
         let (a, b) = (pv.head_a.last().unwrap(), pv.head_b.last().unwrap());
-        let end = (((a.x - b.x).raw_shim() as f64).powi(2) + ((a.y - b.y).raw_shim() as f64).powi(2)).sqrt();
-        assert!(end >= pitch.raw_shim() as f64 - 10.0 && end <= pitch.raw_shim() as f64 + 10.0, "{mode:?}: the pair ends a pitch ({pitch}) apart, not {end}: {a:?} {b:?}");
+        let end = (((a.x - b.x).as_f64()).powi(2) + ((a.y - b.y).as_f64()).powi(2)).sqrt();
+        assert!(end >= pitch.as_f64() - 10.0 && end <= pitch.as_f64() + 10.0, "{mode:?}: the pair ends a pitch ({pitch}) apart, not {end}: {a:?} {b:?}");
         let gap = gap_between(&pv.head_a.pts, pv.width, &pv.head_b.pts, pv.width);
-        assert!(gap >= pv.gap.raw_shim() as f64 - 100.0, "{mode:?}: the lines come within {gap} of each other");
+        assert!(gap >= pv.gap.as_f64() - 100.0, "{mode:?}: the lines come within {gap} of each other");
         // fix it where it is, and finish
         router.fix_diff_pair(at).expect("a pair");
         let commit = router.finish_diff_pair(at).expect("commits");
@@ -268,11 +269,11 @@ impl Rng {
 /// pair heading north-west takes), south of it, and east of the J1 connector's pads.
 fn dp_test_with_obstacles() -> Option<(Design, ConstraintModel)> {
     let (mut design, model) = dp_test()?;
-    let track = |id: &str, pts: &[Point]| Track { id: id.into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: pts.to_vec(), arc_mid_offset: None };
+    let track = |id: &str, pts: &[Point]| Track { id: id.into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: pts.to_vec(), arc_mid_offset: None };
     let rt = design.routing.as_mut().unwrap();
-    rt.tracks.push(track("gnd_north", &[p(Nm::from_raw_shim(109_000_000), Nm::from_raw_shim(92_500_000)), p(Nm::from_raw_shim(114_000_000), Nm::from_raw_shim(91_500_000)), p(Nm::from_raw_shim(119_000_000), Nm::from_raw_shim(91_500_000)), p(Nm::from_raw_shim(121_000_000), Nm::from_raw_shim(89_500_000))]));
-    rt.tracks.push(track("gnd_south", &[p(Nm::from_raw_shim(109_000_000), Nm::from_raw_shim(100_500_000)), p(Nm::from_raw_shim(116_000_000), Nm::from_raw_shim(100_500_000)), p(Nm::from_raw_shim(120_000_000), Nm::from_raw_shim(104_500_000))]));
-    rt.tracks.push(track("gnd_east", &[p(Nm::from_raw_shim(128_000_000), Nm::from_raw_shim(90_000_000)), p(Nm::from_raw_shim(128_000_000), Nm::from_raw_shim(93_000_000)), p(Nm::from_raw_shim(130_000_000), Nm::from_raw_shim(95_000_000)), p(Nm::from_raw_shim(130_000_000), Nm::from_raw_shim(100_000_000))]));
+    rt.tracks.push(track("gnd_north", &[p(mm(109.0), mm(92.5)), p(mm(114.0), mm(91.5)), p(mm(119.0), mm(91.5)), p(mm(121.0), mm(89.5))]));
+    rt.tracks.push(track("gnd_south", &[p(mm(109.0), mm(100.5)), p(mm(116.0), mm(100.5)), p(mm(120.0), mm(104.5))]));
+    rt.tracks.push(track("gnd_east", &[p(mm(128.0), mm(90.0)), p(mm(128.0), mm(93.0)), p(mm(130.0), mm(95.0)), p(mm(130.0), mm(100.0))]));
     design.assign_missing_ids();
     Some((design, model))
 }
@@ -300,14 +301,14 @@ fn sweep(design: &Design, model: &ConstraintModel, start: Point, modes: &[Mode],
             shoved += usize::from(!pv.displaced_lines.is_empty() || !pv.displaced_vias.is_empty());
             // the lines never come within the clearance of each other, and where they run side by side (a stretch of one has a
             // stretch of the other beside it) they are the gap apart
-            let clearance = model.board.clearance.raw_shim() as f64;
+            let clearance = model.board.clearance.as_f64();
             let gap = gap_between(&pv.head_a.pts, pv.width, &pv.head_b.pts, pv.width);
             assert!(gap >= clearance - 500.0, "{mode:?} at {at:?}: the lines come within {gap} of each other (clearance {clearance})\n P {:?}\n N {:?}", pv.head_a.pts, pv.head_b.pts);
             let mut dp = eda_pns::diff_pair::DiffPair { p: pv.head_a.pts.clone(), n: pv.head_b.pts.clone(), width: pv.width, ..Default::default() };
             dp.set_gap(pv.gap);
             for c in dp.coupled_segment_pairs() {
                 let g = gap_between(&[c.coupled_p.0, c.coupled_p.1], pv.width, &[c.coupled_n.0, c.coupled_n.1], pv.width);
-                assert!(g >= pv.gap.raw_shim() as f64 - 1500.0, "{mode:?} at {at:?}: coupled stretches {c:?} are {g} apart (gap {})\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
+                assert!(g >= pv.gap.as_f64() - 1500.0, "{mode:?} at {at:?}: coupled stretches {c:?} are {g} apart (gap {})\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
             }
             let Some(commit) = router.finish_diff_pair(at) else { panic!("{mode:?} at {at:?}: a pair that fits finishes") };
             let after = commit_into_node(&node, &layers, &commit);
@@ -326,8 +327,8 @@ fn a_pair_from_the_connector_walks_or_shoves_across_the_open_board_and_leaves_it
         eprintln!("KiCad QA corpus not found: skipping");
         return;
     };
-    let cursors = [p(Nm::from_raw_shim(133_000_000), Nm::from_raw_shim(95_265_000)), p(Nm::from_raw_shim(135_000_000), Nm::from_raw_shim(99_000_000)), p(Nm::from_raw_shim(134_000_000), Nm::from_raw_shim(91_000_000)), p(Nm::from_raw_shim(129_000_000), Nm::from_raw_shim(94_000_000)), p(Nm::from_raw_shim(138_000_000), Nm::from_raw_shim(96_500_000))];
-    let (tried, accepted, shoved) = sweep(&design, &model, p(Nm::from_raw_shim(124_700_000), Nm::from_raw_shim(95_900_000)), &[Mode::Walkaround, Mode::Shove, Mode::MarkObstacles], &cursors);
+    let cursors = [p(mm(133.0), mm(95.265)), p(mm(135.0), mm(99.0)), p(mm(134.0), mm(91.0)), p(mm(129.0), mm(94.0)), p(mm(138.0), mm(96.5))];
+    let (tried, accepted, shoved) = sweep(&design, &model, p(mm(124.7), mm(95.9)), &[Mode::Walkaround, Mode::Shove, Mode::MarkObstacles], &cursors);
     eprintln!("tried {tried}, accepted {accepted}, shoved something {shoved} times");
     assert!(accepted >= 6, "{accepted} of {tried} accepted");
     assert!(shoved >= 1, "the shove never shoved the GND track across the way");
@@ -347,8 +348,8 @@ fn whatever_the_cursor_does_an_accepted_pair_leaves_the_board_clean_and_keeps_it
     };
     let mut rng = Rng(0x2545_F491_4F6C_DD1D);
     let mut totals = (0, 0, 0);
-    for (start, x0, y0, w, h) in [(J1_SIDE.0, 104_000_000, 86_000_000, 14_000_000, 22_000_000), (p(Nm::from_raw_shim(124_700_000), Nm::from_raw_shim(95_900_000)), 125_500_000, 86_000_000, 14_000_000, 22_000_000)] {
-        let cursors: Vec<Point> = (0..30).map(|_| p(Nm::from_raw_shim(x0 + rng.below(w / 1000) * 1000), Nm::from_raw_shim(y0 + rng.below(h / 1000) * 1000))).collect();
+    for (start, x0, y0, w, h) in [(J1_SIDE.0, mm(104.0), mm(86.0), mm(14.0), mm(22.0)), (p(mm(124.7), mm(95.9)), mm(125.5), mm(86.0), mm(14.0), mm(22.0))] {
+        let cursors: Vec<Point> = (0..30).map(|_| p(x0 + um(1.0) * rng.below(w / um(1.0)), y0 + um(1.0) * rng.below(h / um(1.0)))).collect();
         let (t, a, s) = sweep(&design, &model, start, &[Mode::Walkaround, Mode::Shove, Mode::MarkObstacles], &cursors);
         totals = (totals.0 + t, totals.1 + a, totals.2 + s);
     }

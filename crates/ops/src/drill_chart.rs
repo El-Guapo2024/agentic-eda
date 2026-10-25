@@ -445,16 +445,16 @@ pub fn format_length(nm: Nm, units: TableUnits, precision: i32) -> String {
 const NO_VALUE: &str = "\u{2014}";
 
 /// `BOARD_STACKUP::GetLayerDistance`: the thickness between two copper layers, half of an inner one at either end, nm.
-fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: &str) -> i64 {
+fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: &str) -> Nm {
     if first == second {
-        return 0;
+        return Nm::ZERO;
     }
     let pos = |n: &str| copper.iter().position(|c| c == n).unwrap_or(0);
     let (a, b) = if pos(second) < pos(first) { (second, first) } else { (first, second) };
     let is_copper = |l: &eda_model::StackupLayer| l.kind.as_deref() == Some("copper") || (l.kind.is_none() && l.name.ends_with(".Cu"));
     let is_dielectric = |l: &eda_model::StackupLayer| matches!(l.kind.as_deref(), Some("core") | Some("prepreg") | Some("dielectric"));
     let inner = |n: &str| n != "F.Cu" && n != "B.Cu";
-    let (mut total, mut start, mut half) = (0i64, false, false);
+    let (mut total, mut start, mut half) = (Nm::ZERO, false, false);
     for l in &stackup.layers {
         let layer = is_copper(l).then_some(l.name.as_str());
         if layer.is_none() && !is_dielectric(l) {
@@ -469,7 +469,7 @@ fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: 
         if layer == Some(b) && inner(b) {
             half = true;
         }
-        let t = (l.thickness_mm.unwrap_or(0.0) * 1_000_000.0).round() as i64;
+        let t = Nm::kiround(l.thickness_mm.unwrap_or(0.0) * 1_000_000.0);
         total += if half { t / 2 } else { t };
         half = false;
         if layer == Some(b) {
@@ -547,8 +547,8 @@ pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, char
                 DrillChartColumnId::AspectRatio => {
                     let depth = layer_distance_nm(stackup, &copper, &f.top, &f.bottom);
                     let d = f.diameter;
-                    if depth > 0 && d > Nm::ZERO {
-                        format!("{:.1}:1", depth as f64 / d.raw_shim() as f64)
+                    if depth > Nm::ZERO && d > Nm::ZERO {
+                        format!("{:.1}:1", depth.ratio(d))
                     } else {
                         NO_VALUE.into()
                     }
@@ -748,7 +748,7 @@ pub fn rebuild(t: &mut Table, chart: &mut DrillChart, c: &ChartContent) {
 
 /// A new chart's table (`PCB_DRILL_CHART( board )`: no cells yet, lines 0.1 mm wide), on `layer` with its first corner at `at`.
 pub fn new_chart_table(layer: &str, at: Point) -> Table {
-    let mut t = Table::new_grid(layer, at, 1, 1, Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100_000));
+    let mut t = Table::new_grid(layer, at, 1, 1, Nm::ZERO, Nm::ZERO, Nm::new(100_000));
     t.cells.clear();
     t.col_widths.clear();
     t.row_heights.clear();
@@ -839,25 +839,26 @@ impl super::Board<'_> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
     fn lengths_are_written_as_the_generated_tables_write_them() {
-        assert_eq!(format_length(Nm::from_raw_shim(300_000), TableUnits::Mm, 3), "0.300");
-        assert_eq!(format_length(Nm::from_raw_shim(1_143_000), TableUnits::Mm, 2), "1.14");
-        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Inch, 3), "0.0600\u{2033}");
-        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Mils, 3), "60.0 mil");
-        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Mils, 1), "60 mil");
+        assert_eq!(format_length(mm(0.3), TableUnits::Mm, 3), "0.300");
+        assert_eq!(format_length(mm(1.143), TableUnits::Mm, 2), "1.14");
+        assert_eq!(format_length(mm(1.524), TableUnits::Inch, 3), "0.0600\u{2033}");
+        assert_eq!(format_length(mm(1.524), TableUnits::Mils, 3), "60.0 mil");
+        assert_eq!(format_length(mm(1.524), TableUnits::Mils, 1), "60 mil");
     }
 
     #[test]
     fn marks_are_assigned_from_the_lowest_free_shape_and_then_letters() {
         let op = |d: Nm| DrillOp { source: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
         let p = DrillSymbolProfile::default();
-        assert_eq!(group_key(&p, &op(Nm::from_raw_shim(300_000))), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
+        assert_eq!(group_key(&p, &op(mm(0.3))), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
         let mut profile = DrillSymbolProfile::default();
-        profile.assignments.insert(group_key(&p, &op(Nm::from_raw_shim(400_000))), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
-        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(Nm::from_raw_shim(300_000 + i * 100_000))), first: op(Nm::from_raw_shim(300_000 + i * 100_000)), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
+        profile.assignments.insert(group_key(&p, &op(mm(0.4))), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
+        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(mm(0.3) + i * mm(0.1))), first: op(mm(0.3) + i * mm(0.1)), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
         assign(&mut gs, &mut profile);
         assert_eq!((gs[0].symbol.mode, gs[0].symbol.shape_index), (DrillMarkMode::Shape, 1), "shape 0 is the frozen 0.4 mm group's");
         assert_eq!(gs[1].symbol.shape_index, 0);

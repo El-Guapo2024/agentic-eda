@@ -25,12 +25,12 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 }
 
 /// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`), nm.
-const TEXT_MIN_NM: Nm = Nm::from_raw_shim(1_000);
-const TEXT_MAX_NM: Nm = Nm::from_raw_shim(250_000_000);
+const TEXT_MIN_NM: Nm = Nm::new(1_000);
+const TEXT_MAX_NM: Nm = Nm::new(250_000_000);
 
 /// `ClampTextPenSize`: the thickest pen a text of this size takes (a quarter of its smaller side).
 fn max_pen(size: (Nm, Nm)) -> Nm {
-    Nm::from_raw_shim(((size.0.abs().min(size.1.abs())).raw_shim() as f64 * 0.25).round() as i64)
+    Nm::kiround(size.0.abs().min(size.1.abs()).as_f64() * 0.25)
 }
 
 impl Board<'_> {
@@ -397,5 +397,5 @@ fn primitive_problem(prim: &eda_model::footprint::PadPrimitive) -> Option<String
 /// How many separate pieces of copper a custom pad is: its anchor and basic shapes merged (`PAD::MergePrimitivesAsPolygon`).
 fn custom_outline_count(pad: &eda_model::Pad) -> usize {
     let fp = eda_model::ir::FootprintInstance { id: String::new(), at: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() };
-    eda_drc::pad_shape::pad_polygons(&fp, pad, eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(5_000)).polys.len()
+    eda_drc::pad_shape::pad_polygons(&fp, pad, eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::new(5_000)).polys.len()
 }

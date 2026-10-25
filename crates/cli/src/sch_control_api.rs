@@ -132,7 +132,7 @@ pub fn export_symbols(dir: &Path, body: &[u8]) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
     use eda_model::ir::{Point, Provenance, SheetInstance};
     use std::collections::BTreeMap;
@@ -161,7 +161,7 @@ mod tests {
     }
 
     fn placement(id: &str, name: &str, file: &str, page: &str) -> SheetInstance {
-        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), pins: vec![], page: page.into() }
+        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (mm(1.0), mm(1.0)), pins: vec![], page: page.into() }
     }
 
     fn design(root: SchematicSection, screens: BTreeMap<String, SchematicSection>) -> Design {

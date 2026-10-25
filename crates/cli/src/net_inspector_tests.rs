@@ -1,6 +1,6 @@
 //! The Net Inspector's numbers (`PCB_NET_INSPECTOR_PANEL::calculateNets`, `LENGTH_DELAY_CALCULATION::CalculateLengthDetails`).
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use super::*;
 use eda_model::ir::{FootprintExtra, FootprintInstance, LabelSide, PadMaskInfo, PlacementSection, Provenance, RoutingSection, Side, Track, Via};
 use eda_model::{Footprint, Net, Pad, PadShape, Part, Pin, PinKind};
@@ -8,11 +8,11 @@ use eda_model::{Footprint, Net, Pad, PadShape, Part, Pin, PinKind};
 const MM: i64 = 1_000_000;
 
 fn p(x: f64, y: f64) -> Point {
-    Point { x: Nm::from_raw_shim((x * MM as f64) as i64), y: Nm::from_raw_shim((y * MM as f64) as i64) }
+    Point { x: mm(x), y: mm(y) }
 }
 
-fn pad(n: &str, x: i64) -> Pad {
-    Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
+fn pad(n: &str, x: Nm) -> Pad {
+    Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
 }
 
 fn part(r: &str, pins: usize) -> Part {
@@ -21,7 +21,7 @@ fn part(r: &str, pins: usize) -> Part {
 
 /// R1 at (10, 10) mm with both pads on `N` (pads at x 9 and 11 mm), U1 at (20, 10) with pad 1 on `N`.
 fn model() -> ConstraintModel {
-    let fp = Footprint { name: "2PAD".into(), pads: vec![pad("1", -MM), pad("2", MM)], courtyard: Some((Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(600_000))), ..Default::default() };
+    let fp = Footprint { name: "2PAD".into(), pads: vec![pad("1", mm(-1.0)), pad("2", mm(1.0))], courtyard: Some((mm(1.5), mm(0.6))), ..Default::default() };
     let mut m = ConstraintModel { footprints: vec![fp], parts: vec![part("R1", 2), part("U1", 2)], ..Default::default() };
     m.board.layers = vec!["F.Cu".into(), "B.Cu".into()];
     m.nets = vec![Net { name: "N".into(), pins: vec!["R1.1".into(), "R1.2".into(), "U1.1".into()] }, Net { name: "M".into(), pins: vec!["U1.2".into()] }];
@@ -29,7 +29,7 @@ fn model() -> ConstraintModel {
 }
 
 fn track(net: &str, layer: &str, pts: &[Point]) -> Track {
-    Track { id: format!("trk_{}_{}", layer, pts.len()), net: net.into(), pins: vec![], layer: layer.into(), width: Nm::from_raw_shim(200_000), pts: pts.to_vec(), arc_mid_offset: None }
+    Track { id: format!("trk_{}_{}", layer, pts.len()), net: net.into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: pts.to_vec(), arc_mid_offset: None }
 }
 
 fn design(tracks: Vec<Track>, vias: Vec<Via>) -> Design {
@@ -50,7 +50,7 @@ fn design(tracks: Vec<Track>, vias: Vec<Via>) -> Design {
 }
 
 fn via(at: Point) -> Via {
-    Via { id: "via_a".into(), net: "N".into(), at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+    Via { id: "via_a".into(), net: "N".into(), at, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
 }
 
 fn row<'a>(rows: &'a [Value], net: &str) -> &'a Value {
@@ -131,7 +131,7 @@ fn the_die_length_is_the_pads_own() {
     let rows = rows(&d, &m);
     assert_eq!(row(&rows, "N")["die_length"], 1_500_000);
     assert_eq!(row(&rows, "N")["total_length"], 1_500_000);
-    assert_eq!(die_length_of(&["(die_length 0.25)".to_string()]), 250_000);
+    assert_eq!(die_length_of(&["(die_length 0.25)".to_string()]), mm(0.25));
 }
 
 #[test]

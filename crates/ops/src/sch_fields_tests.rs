@@ -11,6 +11,7 @@ use eda_model::ir::{field_key, FieldPlacement, PowerSymbol, Provenance, Schemati
 use eda_model::sch_extras::AutoplaceAlgo;
 use eda_model::{Part, Pin, PinKind};
 use std::collections::BTreeMap;
+use eda_model::units::mm;
 
 fn empty_design() -> Design {
     Design {
@@ -57,13 +58,13 @@ fn resistor(id: &str, at: Point, rot: u32, mirrored: bool) -> SymbolInstance {
 }
 
 fn sheet(rot: u32, mirrored: bool) -> SchematicSection {
-    SchematicSection { symbols: vec![resistor("R1", p(Nm::from_raw_shim(50_800_000), Nm::from_raw_shim(50_800_000)), rot, mirrored)], ..Default::default() }
+    SchematicSection { symbols: vec![resistor("R1", p(mm(50.8), mm(50.8)), rot, mirrored)], ..Default::default() }
 }
 
 fn board(sch: SchematicSection, m: &ConstraintModel) -> Board<'_> {
     let mut design = empty_design();
     design.schematic = Some(sch);
-    Board::new(design, m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))
+    Board::new(design, m, mm(0.1), mm(0.3))
 }
 
 fn run(sch: SchematicSection, cmd: Cmd) -> Result<SchematicSection, Vec<CheckResult>> {
@@ -133,12 +134,12 @@ fn a_field_moves_by_the_offset_whatever_the_symbol_is_turned_to_and_the_other_fi
             let before = sheet(rot, mirrored);
             let reference = field_named(&before, "Reference").at;
             let value = field_named(&before, "Value").at;
-            let after = run(before, mv(&[&field_id("R1", "Reference")], Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(-1_270_000))).unwrap_or_else(|e| panic!("{e:?}"));
+            let after = run(before, mv(&[&field_id("R1", "Reference")], mm(2.54), mm(-1.27))).unwrap_or_else(|e| panic!("{e:?}"));
             let moved = field_named(&after, "Reference").at;
             assert!(near(moved, (reference.0 + 2_540_000.0, reference.1 - 1_270_000.0)), "rot {rot} mirrored {mirrored}: {reference:?} -> {moved:?}");
             assert!(near(field_named(&after, "Value").at, value), "the Value stays");
             // the symbol did not move
-            assert_eq!(after.symbols[0].at, p(Nm::from_raw_shim(50_800_000), Nm::from_raw_shim(50_800_000)));
+            assert_eq!(after.symbols[0].at, p(mm(50.8), mm(50.8)));
         }
     }
 }
@@ -147,12 +148,12 @@ fn a_field_moves_by_the_offset_whatever_the_symbol_is_turned_to_and_the_other_fi
 fn a_field_moved_on_its_own_is_no_longer_autoplaced_but_moving_its_symbol_keeps_the_fields_with_it() {
     let mut start = sheet(0, false);
     start.extras.fields_autoplaced.insert("R1".into(), AutoplaceAlgo::Auto);
-    let moved_field = run(start.clone(), mv(&[&field_id("R1", "Value")], Nm::from_raw_shim(1_270_000), Nm::ZERO)).unwrap();
+    let moved_field = run(start.clone(), mv(&[&field_id("R1", "Value")], mm(1.27), Nm::ZERO)).unwrap();
     assert!(!moved_field.extras.fields_autoplaced.contains_key("R1"), "SetFieldsAutoplaced( AUTOPLACE_NONE )");
     assert!(moved_field.field_layout.contains_key("R1"), "its fields are now stored");
 
     let before = field_named(&start, "Reference").at;
-    let moved_symbol = run(start, mv(&["R1"], Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(2_540_000))).unwrap();
+    let moved_symbol = run(start, mv(&["R1"], mm(2.54), mm(2.54))).unwrap();
     assert!(near(field_named(&moved_symbol, "Reference").at, (before.0 + 2_540_000.0, before.1 + 2_540_000.0)), "the fields go with the symbol");
     assert_eq!(moved_symbol.extras.fields_autoplaced.get("R1"), Some(&AutoplaceAlgo::Auto), "and are still autoplaced");
 }
@@ -161,7 +162,7 @@ fn a_field_moved_on_its_own_is_no_longer_autoplaced_but_moving_its_symbol_keeps_
 fn a_field_whose_symbol_is_moved_with_it_does_not_move_twice() {
     let start = sheet(0, false);
     let before = field_named(&start, "Reference").at;
-    let after = run(start, mv(&["R1", &field_id("R1", "Reference")], Nm::from_raw_shim(2_540_000), Nm::ZERO)).unwrap();
+    let after = run(start, mv(&["R1", &field_id("R1", "Reference")], mm(2.54), Nm::ZERO)).unwrap();
     assert!(near(field_named(&after, "Reference").at, (before.0 + 2_540_000.0, before.1)), "once, not twice: {:?}", field_named(&after, "Reference").at);
 }
 
@@ -169,15 +170,15 @@ fn a_field_whose_symbol_is_moved_with_it_does_not_move_twice() {
 fn the_fields_of_a_locked_symbol_stay_where_they_are() {
     let mut start = sheet(0, false);
     start.extras.set_locked("R1", true);
-    let e = run(start, mv(&[&field_id("R1", "Value")], Nm::from_raw_shim(1_270_000), Nm::ZERO)).unwrap_err();
+    let e = run(start, mv(&[&field_id("R1", "Value")], mm(1.27), Nm::ZERO)).unwrap_err();
     assert_eq!(e[0].check, "ops_locked");
 }
 
 #[test]
 fn a_field_that_is_not_there_is_refused() {
-    let e = run(sheet(0, false), mv(&[&field_id("R1", "Nothing")], Nm::from_raw_shim(1_270_000), Nm::ZERO)).unwrap_err();
+    let e = run(sheet(0, false), mv(&[&field_id("R1", "Nothing")], mm(1.27), Nm::ZERO)).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_item");
-    let e = run(sheet(0, false), mv(&[&field_id("R9", "Value")], Nm::from_raw_shim(1_270_000), Nm::ZERO)).unwrap_err();
+    let e = run(sheet(0, false), mv(&[&field_id("R9", "Value")], mm(1.27), Nm::ZERO)).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_item");
 }
 
@@ -260,10 +261,10 @@ fn field_properties_set_the_text_size_look_and_place_in_one_command() {
     let before = field_named(&start, "Value");
     let after = run(start, edit(&field_id("R1", "Value"), |e| {
         e.text = Some("470".into());
-        e.size_nm = Some(Nm::from_raw_shim(2_000_000));
+        e.size_nm = Some(mm(2.0));
         e.bold = Some(true);
         e.italic = Some(true);
-        e.at = Some(p(Nm::from_raw_shim(before.at.0 as i64 + 2_540_000), Nm::from_raw_shim(before.at.1 as i64 + 2_540_000)));
+        e.at = Some(p(Nm::new(before.at.0 as i64) + mm(2.54), Nm::new(before.at.1 as i64) + mm(2.54)));
         e.vertical = Some(true);
         e.h = Some(TextJustify::Right);
     }))
@@ -323,11 +324,11 @@ fn renaming_a_symbol_from_its_reference_field_keeps_where_its_fields_are() {
 fn a_power_symbols_value_and_a_sheets_name_are_edited_like_any_field() {
     let m = model();
     let mut start = SchematicSection::default();
-    start.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), rot: 0, net: "GND".into(), pin: "R1.2".into() });
-    start.sheets.push(SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: p(Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(80_000_000)), size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(30_000_000)), pins: vec![], page: String::new() });
+    start.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(mm(10.0), mm(10.0)), rot: 0, net: "GND".into(), pin: "R1.2".into() });
+    start.sheets.push(SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: p(mm(100.0), mm(80.0)), size: (mm(40.0), mm(30.0)), pins: vec![], page: String::new() });
     let mut b = board(start, &m);
     // the Value of a ground symbol sits below it; moved to the right it stays there
-    b.apply(&mv(&[&field_id("#PWR01", "Value")], Nm::from_raw_shim(5_080_000), Nm::ZERO)).unwrap_or_else(|e| panic!("{e:?}"));
+    b.apply(&mv(&[&field_id("#PWR01", "Value")], mm(5.08), Nm::ZERO)).unwrap_or_else(|e| panic!("{e:?}"));
     let ctx = OwnerCtx::new(b.design().schematic.as_ref().unwrap(), &m, "#PWR01").unwrap();
     let f = ctx.page_fields(b.design().schematic.as_ref().unwrap());
     assert!(near(f[1].at, (15_080_000.0, 13_810_000.0)), "{:?}", f[1].at);
@@ -348,7 +349,7 @@ fn autoplace_fields_places_the_fields_again_and_keeps_them_autoplaced() {
     let m = model();
     let mut start = sheet(0, false);
     // the user dragged the Value far off
-    start = run(start, mv(&[&field_id("R1", "Value")], Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(20_320_000))).unwrap();
+    start = run(start, mv(&[&field_id("R1", "Value")], mm(20.32), mm(20.32))).unwrap();
     assert!(start.extras.fields_autoplaced.is_empty());
     let off = field_named(&start, "Value").at;
     let after = run(start, Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["R1"]) })).unwrap_or_else(|e| panic!("{e:?}"));
@@ -367,7 +368,7 @@ fn autoplace_fields_on_a_field_places_the_fields_of_its_symbol_and_skips_a_field
     let kept = field_named(&start, "Value").at;
     // the Value does not allow autoplacement
     let start = run(start, edit(&field_id("R1", "Value"), |e| e.allow_autoplace = Some(false))).unwrap();
-    let start = run(start, mv(&[&field_id("R1", "Reference")], Nm::from_raw_shim(25_400_000), Nm::from_raw_shim(25_400_000))).unwrap();
+    let start = run(start, mv(&[&field_id("R1", "Reference")], mm(25.4), mm(25.4))).unwrap();
     let after = run(start, Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&[&field_id("R1", "Reference")]) })).unwrap_or_else(|e| panic!("{e:?}"));
     assert!(near(field_named(&after, "Value").at, kept), "the Value stayed");
     assert!(field_named(&after, "Reference").at.0 < 80_000_000.0, "the Reference came back");
@@ -377,7 +378,7 @@ fn autoplace_fields_on_a_field_places_the_fields_of_its_symbol_and_skips_a_field
 fn autoplace_fields_keeps_the_fields_off_a_wire_beside_the_symbol() {
     let m = model();
     let mut start = sheet(0, false);
-    start.wires.push(Wire { id: "w1".into(), net: "N".into(), pins: vec![], pts: vec![p(Nm::from_raw_shim(56_000_000), Nm::from_raw_shim(30_000_000)), p(Nm::from_raw_shim(56_000_000), Nm::from_raw_shim(80_000_000))], bus: false });
+    start.wires.push(Wire { id: "w1".into(), net: "N".into(), pins: vec![], pts: vec![p(mm(56.0), mm(30.0)), p(mm(56.0), mm(80.0))], bus: false });
     let after = run(start, Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["R1"]) })).unwrap_or_else(|e| panic!("{e:?}"));
     let _ = &m;
     let at = field_named(&after, "Reference").at;

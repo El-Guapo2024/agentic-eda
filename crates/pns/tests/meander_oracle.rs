@@ -35,24 +35,29 @@ fn render_chain(tag: &str, c: &ShapeLineChain) -> String {
 }
 
 fn p(x: i64, y: i64) -> Point {
-    Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+    Point { x: Nm::new(x), y: Nm::new(y) }
+}
+
+/// `a` moved by `(dx, dy)` nanometres (the generators draw counts).
+fn off(a: Point, dx: i64, dy: i64) -> Point {
+    Point { x: a.x + Nm::new(dx), y: a.y + Nm::new(dy) }
 }
 
 #[derive(Clone)]
 struct Circle {
-    cx: i64,
-    cy: i64,
-    r: i64,
+    cx: Nm,
+    cy: Nm,
+    r: Nm,
 }
 
 fn hits(c: &ShapeLineChain, obstacles: &[Circle]) -> bool {
-    c.points().iter().any(|q| obstacles.iter().any(|o| (q.x - Nm::from_raw_shim(o.cx)) * (q.x - Nm::from_raw_shim(o.cx)).raw_shim() + (q.y - Nm::from_raw_shim(o.cy)) * (q.y - Nm::from_raw_shim(o.cy)).raw_shim() < Nm::from_raw_shim(o.r * o.r)))
+    c.points().iter().any(|q| obstacles.iter().any(|o| (q.x - o.cx).area(q.x - o.cx) + (q.y - o.cy).area(q.y - o.cy) < o.r.area(o.r)))
 }
 
 /// The stand-in for `CheckFit` the oracle repeats: no vertex of a line inside an obstacle circle, then `CheckSelfIntersections` for a line.
 struct Env {
     settings: MeanderSettings,
-    clearance: i64,
+    clearance: Nm,
     obstacles: Vec<Circle>,
     line: bool,
     /// `DP_MEANDER_PLACER::CheckFit` keeps four widths from the earlier shapes, not `width + spacing`.
@@ -66,7 +71,7 @@ impl MeanderEnv for Env {
     fn update_settings(&mut self, s: MeanderSettings) {
         self.settings = s;
     }
-    fn clearance(&self) -> i64 {
+    fn clearance(&self) -> Nm {
         self.clearance
     }
     fn check_fit(&mut self, shape: &MeanderShape, existing: &[MeanderShape]) -> bool {
@@ -77,7 +82,7 @@ impl MeanderEnv for Env {
             return true;
         }
         let w = shape.width();
-        MeanderedLine::check_self_intersections(existing, shape, if self.dual_fit { w + w * 3 } else { w + self.settings.spacing })
+        MeanderedLine::check_self_intersections(existing, shape, if self.dual_fit { w + w * 3 } else { w + Nm::new(self.settings.spacing) })
     }
 }
 
@@ -116,6 +121,10 @@ impl Nums {
     fn next(&mut self) -> i64 {
         self.0.next().expect("a number")
     }
+    /// The next number, a length.
+    fn len(&mut self) -> Nm {
+        Nm::new(self.next())
+    }
     fn point(&mut self) -> Point {
         let x = self.next();
         p(x, self.next())
@@ -124,16 +133,16 @@ impl Nums {
         let n = self.next();
         (0..n)
             .map(|_| {
-                let cx = self.next();
-                let cy = self.next();
-                Circle { cx, cy, r: self.next() }
+                let cx = self.len();
+                let cy = self.len();
+                Circle { cx, cy, r: self.len() }
             })
             .collect()
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn settings_from(min: i64, max: i64, spacing: i64, step: i64, style: i64, radius: i64, single: i64, initial: i64) -> MeanderSettings {
+fn settings_from(min: i64, max: i64, spacing: i64, step: Nm, style: i64, radius: i64, single: i64, initial: i64) -> MeanderSettings {
     let mut s = MeanderSettings::default();
     s.min_amplitude = min;
     s.max_amplitude = max;
@@ -159,7 +168,7 @@ fn evaluate(input: &str) -> String {
         "ARC" => {
             let (s, e) = (n.point(), n.point());
             let millideg = n.next();
-            let arc = ShapeArc::from_start_end_angle(s, e, millideg as f64 / 1000.0, 0);
+            let arc = ShapeArc::from_start_end_angle(s, e, millideg as f64 / 1000.0, Nm::ZERO);
             let mut pl = ShapeLineChain::new();
             for q in arc.convert_to_polyline(ARC_POLYGONIZATION_MAX_ERROR_NM) {
                 pl.append_point(q);
@@ -187,19 +196,19 @@ fn evaluate(input: &str) -> String {
             let base = Seg::new(n.point(), n.point());
             let pp = n.point();
             let side = n.next() != 0;
-            let (width, clearance, dual, offset) = (n.next(), n.next(), n.next() != 0, n.next());
-            let (min, max, spacing, step, style, radius, single) = (n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next());
-            let (tbl, amp) = (n.next(), n.next());
+            let (width, clearance, dual, offset) = (n.len(), n.len(), n.next() != 0, n.len());
+            let (min, max, spacing, step, style, radius, single) = (n.next(), n.next(), n.next(), n.len(), n.next(), n.next(), n.next());
+            let (tbl, amp) = (n.len(), n.len());
             let obstacles = n.obstacles();
             let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, 0), clearance, obstacles, line: false, dual_fit: false };
             let mut m = MeanderShape::new(&env, width, dual);
             m.set_baseline_offset(offset);
             m.set_target_baseline_length(tbl);
             let ok = m.fit(&mut env, &[], type_of(ty), base, pp, side);
-            if ok && amp > 0 {
+            if ok && amp > Nm::ZERO {
                 m.resize(amp);
             }
-            let mut out = format!("SHAPE ok {} amp {} end {},{} base {} mincr {} minamp {} tunable {}", ok as i32, m.amplitude(), m.end().x, m.end().y, m.baseline_length(), 0, m.min_amplitude(), if ok { m.min_tunable_length() } else { 0 });
+            let mut out = format!("SHAPE ok {} amp {} end {},{} base {} mincr {} minamp {} tunable {}", ok as i32, m.amplitude(), m.end().x, m.end().y, m.baseline_length(), 0, m.min_amplitude(), if ok { m.min_tunable_length() } else { Nm::ZERO });
             if ok {
                 out += &render_chain("l0", m.c_line(0));
                 if dual {
@@ -211,14 +220,14 @@ fn evaluate(input: &str) -> String {
         "LINE" => {
             let base = Seg::new(n.point(), n.point());
             let side = n.next() != 0;
-            let (width, clearance) = (n.next(), n.next());
-            let (min, max, spacing, step, style, radius, single, initial) = (n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next());
-            let elong = n.next();
+            let (width, clearance) = (n.len(), n.len());
+            let (min, max, spacing, step, style, radius, single, initial) = (n.next(), n.next(), n.next(), n.len(), n.next(), n.next(), n.next(), n.next());
+            let elong = n.len();
             let obstacles = n.obstacles();
             let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, initial), clearance, obstacles, line: true, dual_fit: false };
             let mut result = MeanderedLine::new(false);
             result.set_width(width);
-            result.set_baseline_offset(0);
+            result.set_baseline_offset(Nm::ZERO);
             result.add_corner(&env, base.a, p(0, 0));
             result.meander_segment(&mut env, base, side, 0);
             result.add_corner(&env, base.b, p(0, 0));
@@ -243,7 +252,7 @@ fn evaluate(input: &str) -> String {
             let pp: Vec<Point> = (0..np).map(|_| n.point()).collect();
             let nn = n.next() as usize;
             let nt: Vec<Point> = (0..nn).map(|_| n.point()).collect();
-            let (width, gap) = (n.next(), n.next());
+            let (width, gap) = (n.len(), n.len());
             let pairs = coupled_segment_pairs(&ShapeLineChain::from_points(&pp), &ShapeLineChain::from_points(&nt), width, gap);
             let mut out = format!("COUPLED n {}", pairs.len());
             for c in &pairs {
@@ -254,10 +263,10 @@ fn evaluate(input: &str) -> String {
         "DLINE" => {
             let base = Seg::new(n.point(), n.point());
             let side = n.next() != 0;
-            let (width, clearance) = (n.next(), n.next());
-            let (min, max, spacing, step, style, radius, single, initial) = (n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next());
-            let elong = n.next();
-            let offset = n.next();
+            let (width, clearance) = (n.len(), n.len());
+            let (min, max, spacing, step, style, radius, single, initial) = (n.next(), n.next(), n.next(), n.len(), n.next(), n.next(), n.next(), n.next());
+            let elong = n.len();
+            let offset = n.len();
             let obstacles = n.obstacles();
             let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, initial), clearance, obstacles, line: true, dual_fit: true };
             let mut result = MeanderedLine::new(true);
@@ -325,7 +334,7 @@ fn base_segment(r: &mut Rng) -> Seg {
             ((len as f64 * ang.cos()) as i64, (len as f64 * ang.sin()) as i64)
         }
     };
-    Seg::new(a, p((a.x + Nm::from_raw_shim(dx)).raw_shim(), (a.y + Nm::from_raw_shim(dy)).raw_shim()))
+    Seg::new(a, off(a, dx, dy))
 }
 
 /// "min max spacing step style radius single" and the initial side.
@@ -347,7 +356,7 @@ fn obstacle_text(r: &mut Rng, around: &Seg, n: i64) -> String {
         let t = r.range(0, 100);
         let (x, y) = (around.a.x + (around.b.x - around.a.x) * t / 100, around.a.y + (around.b.y - around.a.y) * t / 100);
         let (dx, dy, rad) = (r.range(-1_500_000, 1_500_000), r.range(-1_500_000, 1_500_000), r.range(300_000, 3_000_000));
-        s += &format!(" {} {} {}", x + Nm::from_raw_shim(dx), y + Nm::from_raw_shim(dy), rad);
+        s += &format!(" {} {} {}", x + Nm::new(dx), y + Nm::new(dy), rad);
     }
     s
 }
@@ -356,7 +365,7 @@ fn arc_case(r: &mut Rng) -> String {
     let s = p(r.range(-50_000_000, 50_000_000), r.range(-50_000_000, 50_000_000));
     let chord = r.range(100_000, 5_000_000);
     let ang = r.range(0, 359_999) as f64 * std::f64::consts::PI / 180_000.0;
-    let e = p((s.x + Nm::from_raw_shim((chord as f64 * ang.cos()) as i64)).raw_shim(), (s.y + Nm::from_raw_shim((chord as f64 * ang.sin()) as i64)).raw_shim());
+    let e = off(s, (chord as f64 * ang.cos()) as i64, (chord as f64 * ang.sin()) as i64);
     let (rnd1, rnd2) = (r.range(-179_000, 179_000), r.range(-179_000, 179_000));
     let millideg = r.pick(&[-90_000i64, 90_000, -90_000, 90_000, rnd1, rnd2]);
     let millideg = if millideg == 0 { 45_000 } else { millideg };
@@ -375,13 +384,13 @@ fn chain_case(r: &mut Rng) -> String {
             2 => (r.pick(&[-1, 1]) * len, r.pick(&[-1, 1]) * len),
             _ => (r.range(-6_000_000, 6_000_000), r.range(-6_000_000, 6_000_000)),
         };
-        let q = p((last.x + Nm::from_raw_shim(dx)).raw_shim(), (last.y + Nm::from_raw_shim(dy)).raw_shim());
+        let q = off(last, dx, dy);
         if q != last {
             pts.push(q);
         }
         // sometimes a point in the middle of the run it just made (collinear)
         if r.chance(25) && pts.len() < n {
-            let q2 = p(((last.x + q.x) / 2).raw_shim(), ((last.y + q.y) / 2).raw_shim());
+            let q2 = Point { x: (last.x + q.x) / 2, y: (last.y + q.y) / 2 };
             if q2 != last && q2 != q {
                 let at = pts.len() - 1;
                 pts.insert(at, q2);
@@ -393,7 +402,7 @@ fn chain_case(r: &mut Rng) -> String {
         let seg = Seg::new(pts[i], pts[i + 1]);
         let t = r.range(0, 100);
         let (jx, jy) = (r.range(-3, 3), r.range(-3, 3));
-        p((seg.a.x + (seg.b.x - seg.a.x) * t / 100 + Nm::from_raw_shim(jx)).raw_shim(), (seg.a.y + (seg.b.y - seg.a.y) * t / 100 + Nm::from_raw_shim(jy)).raw_shim())
+        off(Point { x: seg.a.x + (seg.b.x - seg.a.x) * t / 100, y: seg.a.y + (seg.b.y - seg.a.y) * t / 100 }, jx, jy)
     };
     let (a, b) = (near(r), near(r));
     let mut input = format!("CHAIN {}", pts.len());
@@ -409,7 +418,7 @@ fn shape_case(r: &mut Rng) -> String {
     let (width, clearance) = (r.range(100_000, 500_000), r.range(100_000, 400_000));
     let ty = r.range(0, 6);
     let t = if r.chance(50) { 0 } else { r.range(0, 60) };
-    let pp = p((base.a.x + (base.b.x - base.a.x) * t / 100).raw_shim(), (base.a.y + (base.b.y - base.a.y) * t / 100).raw_shim());
+    let pp = Point { x: base.a.x + (base.b.x - base.a.x) * t / 100, y: base.a.y + (base.b.y - base.a.y) * t / 100 };
     let side = r.chance(50);
     let dual = r.chance(35);
     let offset = if dual { r.range(100_000, 700_000) * r.pick(&[-1, 1]) } else { 0 };
@@ -445,25 +454,25 @@ fn coupled_case(r: &mut Rng) -> String {
             2 => (r.pick(&[-1, 1]) * len, r.pick(&[-1, 1]) * len),
             _ => (r.range(-8_000_000, 8_000_000), r.range(-8_000_000, 8_000_000)),
         };
-        let q = p((last.x + Nm::from_raw_shim(dx)).raw_shim(), (last.y + Nm::from_raw_shim(dy)).raw_shim());
+        let q = off(last, dx, dy);
         if q != last {
             pts.push(q);
         }
     }
     let (tx, ty) = (r.range(-700_000, 700_000), r.range(-700_000, 700_000));
-    let mut other: Vec<Point> = pts.iter().map(|q| p((q.x + Nm::from_raw_shim(tx)).raw_shim(), (q.y + Nm::from_raw_shim(ty)).raw_shim())).collect();
+    let mut other: Vec<Point> = pts.iter().map(|&q| off(q, tx, ty)).collect();
     if r.chance(40) {
         let k = r.range(0, other.len() as i64 - 1) as usize;
-        other[k] = p((other[k].x + Nm::from_raw_shim(r.range(-300_000, 300_000))).raw_shim(), (other[k].y + Nm::from_raw_shim(r.range(-300_000, 300_000))).raw_shim());
+        other[k] = off(other[k], r.range(-300_000, 300_000), r.range(-300_000, 300_000));
     }
     if r.chance(30) && other.len() > 2 {
         other.pop();
     }
-    let width = r.pick(&[100_000, 200_000, 250_000]);
+    let width = Nm::new(r.pick(&[100_000, 200_000, 250_000]));
     let i = r.range(0, pts.len() as i64 - 2) as usize;
     let j = r.range(0, other.len() as i64 - 2) as usize;
     let real = ((Seg::new(pts[i], pts[i + 1]).distance_seg(&Seg::new(other[j], other[j + 1]))) - width).abs();
-    let gap = real + r.pick(&[0, 0, 0, 5_000, 9_999, 10_001, -9_000, -11_000, 40_000]);
+    let gap = real + Nm::new(r.pick(&[0, 0, 0, 5_000, 9_999, 10_001, -9_000, -11_000, 40_000]));
     let mut input = format!("COUPLED {}", pts.len());
     for q in &pts {
         input += &format!(" {} {}", q.x, q.y);

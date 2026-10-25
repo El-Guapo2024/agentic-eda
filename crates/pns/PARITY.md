@@ -57,11 +57,10 @@ exists rather than letting you rediscover it.
    **Status (2026-10-11):** the diff pair is KiCad's `DIFF_PAIR_PLACER` now
    (Stage 7): coupled in all three modes, walked and shoved as one unit, with
    vias.
-5. **Units**: integer micrometers throughout (`eda_model::ir::Um`), like
-   the rest of this workspace, not KiCad's internal nanometers. The length
-   tuner is the exception inside the crate: its geometry (`kigeom.rs`,
-   `chain.rs`, `meander*.rs`) is nanometres, as KiCad's meanders are, and is
-   rounded to micrometres where it becomes tracks (`tuning_commit.rs`).
+5. **Units**: KiCad's own, integer nanometres, typed as `eda_model::units::Nm` (the IR moved to nanometres on 2026-10-23, the length
+   type came on 2026-10-24; Stage 13 below). The router's geometry *is* the IR's: a point is `eda_model::ir::Point` (two `Nm`), a vector
+   (`diff_pair::Vec2`, a force, an MTV) is `(Nm, Nm)`, and every width, clearance, distance and length is `Nm`. Some module docs older
+   than the nanometre move still speak of micrometres; the numbers are nanometres throughout.
 
 ## Stage 1 -- core (done)
 
@@ -973,6 +972,39 @@ item and not on a non-plated hole; Backspace takes a leg that ended in a via bac
 Left, with the reason, in the findings file: F2-11 (KiCad's grab radius is the grid size, which the router is not told), F4-2 (arcs in
 the pair router and tuners), and the lows F1-7, F1-8, F1-9, F1-10 (in part), F2-15 (the `line_walk.rs` tolerances, FANOUT_CLEANUP, the
 mark-obstacles hull snap, the cluster timeout), F3-10 (by decision), F3-13, F4-9.
+
+## Stage 13 -- the length type (branch `task-nm2-pns`, 2026-10-25)
+
+Wave 2 of the length type (`docs/NANOMETRES.md` "The length type"): the ~3500 wave-1 shims of this crate are gone; lengths are `Nm` in
+fields, locals, parameters and returns.
+
+**The decision: the router's geometry carries `Nm`, with no conversion where the IR enters (`from_ir`) or leaves (the commits).** It
+was already the IR's `Point` (wave 1 left the router computing on IR points through shims), and KiCad's router computes in the same
+units it stores (`VECTOR2I` of `int` nanometres), so a second, raw `i64` geometry would only move the conversions inside the crate --
+to every call into `eda_drc::kimath` (the router's collision shapes) and every point that goes back to the IR. What keeps KiCad's
+integer arithmetic exact is that nothing about the bits changes: `Nm` is `repr(transparent)` over `i64`, every operator is the `i64`
+operator, and the places where KiCad leaves `int` for something wider or for floating point say so in the code:
+
+- products of coordinates (`VECTOR2I::Cross` / `Dot`, `SEG::SquaredDistance`, `ecoord`) are `i128`: `a.area(b)`, or `v.get() as i128`
+  inside a kernel that works on the wide integers (`rescale`, `SEG::LineProject`, `mutualDistanceSquared`), and come back as a length
+  with `Nm::new` of the kernel's result;
+- floating point (`VECTOR2D`, `EuclideanNorm`, `RotatePoint` of doubles, the hulls' trigonometry) goes through `as_f64()` and comes
+  back at KiCad's rounding: `kigeom::ki_round_nm` (that module's own `KiROUND`, `(v +- 0.5)` truncated, which is not `f64::round`
+  just below a half), `Nm::kiround` (`f64::round`, where the code had it), `Nm::new( f as i64 )` where the C++ truncates;
+- `MINOPTMAX` (`meander::MinOptMax`) stays `i64`: it holds a length or a delay (attoseconds) by the tuning's domain, as the model's
+  `TargetRange` does; a length goes in and out of it with `get()` / `Nm::new()`. Delays, areas, counts and angles are not `Nm`.
+
+The studio (`crates/cli`, converted by another agent in the same wave) still reads some of the crate's public items as counts; those
+keep their `i64` signatures until wave 3, each a thin wrapper over the typed one where the crate needs it typed:
+`ShapeLineChain::length` (`length_nm`) and `point_on_edge` (`point_on_edge_nm`), `ShapeArc::new` (`new_nm`), `TuningPath::length`
+(`length_nm`), `tuning_path::stackup_distance_nm` (`stackup_distance`), `MeanderSettings::{min_amplitude, max_amplitude, spacing}`,
+`PairAssembly::gap`, `SkewSetup::{own_length, coupled_length}`, `MeanderPlacer::{start_skew's coupled_length, tuning_length_result,
+target}`, `DpMeanderPlacer::{tuning_length_result, net_lengths}`, `meander::LENGTH_UNCONSTRAINED` (with `MinOptMax`).
+
+No behaviour change: every test passes with its values unchanged, KiCad's QA replays (`tests/qa_regressions.rs`) stay exact, and
+`tools/same_design.sh` writes the same files as main. One micrometre leftover in a test harness: `tests/mouse_trail_oracle.rs` divided
+KiCad's nanometre cases by 1000 before giving them to the port (and multiplied the answers back); it now runs them at KiCad's scale, and
+the baked answers of `pns_mouse_trail_tracer.cpp` all agree.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
