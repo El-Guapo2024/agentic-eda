@@ -217,7 +217,7 @@ pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckRes
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
     use eda_kicad::zone_fills::{zone_signature, KicadRing, ZoneEntry};
     use eda_model::ir::{PlacementSection, Point, Provenance, RoutingSection, Zone};
@@ -227,7 +227,7 @@ mod tests {
 
     fn square(id: &str, uuid: &str, layer: &str, x: i64) -> Zone {
         let p = |x, y| Point { x, y };
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(Nm::from_raw_shim(x), Nm::ZERO), p(Nm::from_raw_shim(x + 10_000_000), Nm::ZERO), p(Nm::from_raw_shim(x + 10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(x), Nm::from_raw_shim(10_000_000))], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(Nm::from_raw_shim(x), Nm::ZERO), p(Nm::from_raw_shim(x + 10_000_000), Nm::ZERO), p(Nm::from_raw_shim(x + 10_000_000), mm(10.0)), p(Nm::from_raw_shim(x), mm(10.0))], ..Default::default() }
     }
 
     /// A board directory with an intent of two nets, no part, and `zones`.
@@ -248,7 +248,7 @@ mod tests {
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
-            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }], footprints: vec![], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(40.0), y: Nm::ZERO }, Point { x: mm(40.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }], footprints: vec![], modules: vec![] }),
             routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
             footprint_library: None,
@@ -314,7 +314,7 @@ mod tests {
 
         // Zone A is edited: its fill is no longer its own.
         let mut edited = a.clone();
-        edited.min_thickness += Nm::from_raw_shim(10_000);
+        edited.min_thickness += mm(0.01);
         write_zones(&dir, vec![edited, b, keepout, line]);
         let r = report(&dir, false).unwrap();
         assert_eq!(by_id(&r, "za")["filled"], false);

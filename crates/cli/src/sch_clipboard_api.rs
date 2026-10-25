@@ -10,7 +10,7 @@
 //!    point of the fragment the cursor holds (`SCH_SELECTION::GetTopLeftItem`, or, for Duplicate, the connection point nearest the cursor).
 //!    Text that is not a schematic fragment comes back as `kind: "text"`: a single text item, as KiCad pastes it.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use crate::board;
 use eda_model::ir::{Design, Point, SchematicSection, SchematicText};
 use std::collections::BTreeMap;
@@ -104,7 +104,7 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
 fn text_fragment(text: &str) -> SchFragment {
     let content = text.lines().map(str::trim_end).collect::<Vec<_>>().join(" ");
     let mut f = SchFragment::default();
-    f.section.texts.push(SchematicText { id: String::new(), content, at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, size_nm: Nm::from_raw_shim(1_270_000) });
+    f.section.texts.push(SchematicText { id: String::new(), content, at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, size_nm: mm(1.27) });
     f
 }
 
@@ -207,7 +207,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
     use eda_model::{Net, Part, Pin, PinKind};
     use eda_ops::Domain;
@@ -249,7 +249,7 @@ mod tests {
         std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
         let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "hash")).unwrap();
         // A board always has a placement section; this one has no part on the PCB yet.
-        design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }], footprints: vec![], modules: vec![] });
+        design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }], footprints: vec![], modules: vec![] });
         board::save(dir, &design).unwrap();
         let meta = board::Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(post(parse, &dir, json!({ "text": "  " }))["ok"], false);
 
         // A paste onto a second sheet numbers against the first one too.
-        board::step(&dir, Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: Point { x: Nm::from_raw_shim(200_000_000), y: Nm::from_raw_shim(20_000_000) }, size: (Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)) }, false, "test").unwrap();
+        board::step(&dir, Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: Point { x: mm(200.0), y: mm(20.0) }, size: (mm(30.0), mm(20.0)) }, false, "test").unwrap();
         let (_, d, _) = board::load(&dir).unwrap();
         let sheet = d.schematic.as_ref().unwrap().sheets[0].id.clone();
         let copy = post(copy, &dir, json!({ "ids": ["R1", "C1"] }));

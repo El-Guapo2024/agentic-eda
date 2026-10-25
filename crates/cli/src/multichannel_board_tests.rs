@@ -5,7 +5,7 @@
 //! The board is the one of `web/studio/e2e/multichannel-board.yaml` (three amplifier channels): channel 1 laid out compactly and routed by the router, the other two placed in
 //! other arrangements and not routed.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use super::tests::scratch;
 use super::{load, meta_path, save, step, undo, Meta};
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, Side};
@@ -73,7 +73,7 @@ fn design(placed: &[(&str, i64, i64)]) -> Design {
         schematic: None,
         nets: None,
         placement: Some(PlacementSection {
-            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(36_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(36_000_000), y: Nm::from_raw_shim(25_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(25_000_000) }],
+            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(36.0), y: Nm::ZERO }, Point { x: mm(36.0), y: mm(25.0) }, Point { x: Nm::ZERO, y: mm(25.0) }],
             footprints: placed.iter().map(|(id, x, y)| FootprintInstance { id: id.to_string(), at: Point { x: Nm::from_raw_shim(*x), y: Nm::from_raw_shim(*y) }, rot: 0, side: Side::Top, label: Default::default() }).collect(),
             modules: vec![],
         }),
@@ -137,8 +137,8 @@ fn enclose_the_routing(dir: &Path) {
     for t in &design.routing.as_ref().unwrap().tracks {
         all.extend(t.pts.iter().copied());
     }
-    let (x0, x1) = (all.iter().map(|p| p.x).min().unwrap() - Nm::from_raw_shim(500_000), all.iter().map(|p| p.x).max().unwrap() + Nm::from_raw_shim(500_000));
-    let (y0, y1) = (all.iter().map(|p| p.y).min().unwrap() - Nm::from_raw_shim(500_000), all.iter().map(|p| p.y).max().unwrap() + Nm::from_raw_shim(500_000));
+    let (x0, x1) = (all.iter().map(|p| p.x).min().unwrap() - mm(0.5), all.iter().map(|p| p.x).max().unwrap() + mm(0.5));
+    let (y0, y1) = (all.iter().map(|p| p.y).min().unwrap() - mm(0.5), all.iter().map(|p| p.y).max().unwrap() + mm(0.5));
     let rect = vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
     step(dir, Cmd::SetZoneOutline { id: id.clone(), outline: rect, holes: None }, false, "test").unwrap();
 }
@@ -216,7 +216,7 @@ fn strict_refuses_neither_the_areas_nor_the_repeat_on_a_board_that_is_not_routed
     // the same board, a copper pour on it instead: the gate does judge that (it is what the exemption is not)
     let other = scratch("p24_strict_pour");
     write_board(&other, &design(&PLACE));
-    let pour = Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(16_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(16_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(20_000_000) }] };
+    let pour = Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: mm(1.0), y: mm(16.0) }, Point { x: mm(8.0), y: mm(16.0) }, Point { x: mm(8.0), y: mm(20.0) }, Point { x: mm(1.0), y: mm(20.0) }] };
     assert_eq!(step(&other, pour, true, "test").unwrap_err()[0].check, "board_worse", "the first pour of a board with no routing is judged, a rule area is not");
 }
 

@@ -500,7 +500,7 @@ pub fn regenerate(dir: &Path, body: &[u8]) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
     use eda_model::ir::{FootprintInstance, PlacementSection, Provenance, Side};
     use eda_model::{ConstraintModel, Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
@@ -538,8 +538,8 @@ mod tests {
 
     /// [`setup`] with the tracks the caller draws (each its own track).
     fn setup_with(dir: &Path, nets: [&str; 2], rules: Vec<eda_model::CustomRule>, tracks: Vec<(&str, Vec<Point>)>) {
-        let pad = |n: &str, y: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::ZERO, Nm::from_raw_shim(y)), size: (Nm::from_raw_shim(400_000), Nm::from_raw_shim(400_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -500_000), pad("2", 500_000)], courtyard: Some((Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, y: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::ZERO, Nm::from_raw_shim(y)), size: (mm(0.4), mm(0.4)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -500_000), pad("2", 500_000)], courtyard: Some((mm(1.0), mm(2.0))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = |r: &str| Part {
             reference: r.into(),
             mpn: None,
@@ -589,7 +589,7 @@ mod tests {
         // name, a pair still a pair)
         for (net, pts) in tracks {
             let net = if net.starts_with('/') { net.to_string() } else { format!("/{net}") };
-            let cmd = Cmd::AddTrack { net, layer: "F.Cu".into(), width: Nm::from_raw_shim(250_000), pts };
+            let cmd = Cmd::AddTrack { net, layer: "F.Cu".into(), width: mm(0.25), pts };
             board::step(dir, cmd, false, "test").unwrap();
         }
     }
@@ -624,7 +624,7 @@ mod tests {
     #[test]
     fn hovering_a_track_reads_its_length_against_the_rule_and_places_nothing() {
         let dir = scratch("hover");
-        let rule = eda_model::CustomRule { name: "sig_length".into(), constraint_type: "length".into(), min: Some(Nm::from_raw_shim(21_900_000)), max: Some(Nm::from_raw_shim(22_100_000)), opt: None, layer: None, severity: None, condition: None };
+        let rule = eda_model::CustomRule { name: "sig_length".into(), constraint_type: "length".into(), min: Some(mm(21.9)), max: Some(mm(22.1)), opt: None, layer: None, severity: None, condition: None };
         setup(&dir, ["SIG", "OTHER"], vec![rule]);
         let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
         let r = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
@@ -684,7 +684,7 @@ mod tests {
         assert_eq!(f["pattern_id"], json!(pat.id));
         assert_eq!((pat.mode, pat.layer.as_str(), pat.origin, pat.end), (TuningMode::Single, "F.Cu", p(8_000_000, 9_500_000), p(22_000_000, 9_500_000)));
         assert_eq!(pat.base_line, vec![p(8_000_000, 9_500_000), p(22_000_000, 9_500_000)]);
-        assert_eq!((pat.max_amplitude, pat.spacing), (Nm::from_raw_shim(950_000), Nm::from_raw_shim(650_000)));
+        assert_eq!((pat.max_amplitude, pat.spacing), (mm(0.95), mm(0.65)));
         assert!(pat.member_ids.len() > 10, "the meander's tracks are the members: {}", pat.member_ids.len());
         let rt = after.routing.as_ref().unwrap();
         assert!(pat.member_ids.iter().all(|m| rt.tracks.iter().any(|t| &t.id == m)));
@@ -711,7 +711,7 @@ mod tests {
         use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, TuningProfiles};
         let intent = dir.join("intent.yaml");
         let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
-        let entry = ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200_000), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 6_100_000 };
+        let entry = ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: mm(0.2), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 6_100_000 };
         let profile = TuningProfile { name: "FR4".into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: time_domain, layer_entries: vec![entry], via_propagation_delay_as: 0, via_overrides: vec![] };
         model.board.tuning_profiles = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "FR4".to_string())].into() };
         std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
@@ -833,7 +833,7 @@ mod tests {
         assert!(tune_edit::patterns_of(&gone).is_empty());
         assert!((net_mm(&dir, "/SIG") - 20.0).abs() < 0.001, "{}", net_mm(&dir, "/SIG"));
         let tracks: Vec<&eda_model::ir::Track> = gone.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "/SIG").collect();
-        assert!(tracks.iter().all(|t| t.pts.iter().all(|q| q.y == Nm::from_raw_shim(9_500_000))), "all straight again: {tracks:?}");
+        assert!(tracks.iter().all(|t| t.pts.iter().all(|q| q.y == mm(9.5))), "all straight again: {tracks:?}");
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tune_edit::patterns_of(&design_of(&dir)).len(), 1, "one undo brings the pattern back");
     }
@@ -876,7 +876,7 @@ mod tests {
         assert_eq!(f["pattern_id"], json!(id));
         let after = tune_edit::patterns_of(&design_of(&dir));
         assert_eq!(after.len(), 1);
-        assert_eq!((after[0].id.as_str(), after[0].end, after[0].max_amplitude, after[0].target_length.opt), (id.as_str(), p(18_000_000, 9_500_000), Nm::from_raw_shim(800_000), 21_000_000));
+        assert_eq!((after[0].id.as_str(), after[0].end, after[0].max_amplitude, after[0].target_length.opt), (id.as_str(), p(18_000_000, 9_500_000), mm(0.8), 21_000_000));
         assert!((net_mm(&dir, "/SIG") - 21.0).abs() < 0.1);
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned), "the whole edit is one undo step");
@@ -984,7 +984,7 @@ mod tests {
     /// A track that is an arc, put on the board as KiCad's `PCB_ARC` (`Track::new_arc`).
     fn add_arc_track(dir: &Path, net: &str, start: Point, mid: Point, end: Point) {
         let (_, mut design, _) = board::load(dir).unwrap();
-        let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), Nm::from_raw_shim(250_000), start, mid, end);
+        let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), mm(0.25), start, mid, end);
         t.id = format!("trk_arc_{net}");
         design.routing.as_mut().expect("the board has tracks").tracks.push(t);
         board::save(dir, &design).unwrap();
@@ -1047,7 +1047,7 @@ mod tests {
         setup(&dir, ["SIG", "OTHER"], vec![]);
         start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
         mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
-        board::step(&dir, Cmd::AddTrack { net: "/OTHER".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(250_000), pts: vec![p(2_000_000, 3_000_000), p(4_000_000, 3_000_000)] }, false, "test").unwrap();
+        board::step(&dir, Cmd::AddTrack { net: "/OTHER".into(), layer: "F.Cu".into(), width: mm(0.25), pts: vec![p(2_000_000, 3_000_000), p(4_000_000, 3_000_000)] }, false, "test").unwrap();
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(false));
         assert!(f["message"].as_str().unwrap().contains("changed"), "{f}");

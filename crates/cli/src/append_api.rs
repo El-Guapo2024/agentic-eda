@@ -249,7 +249,7 @@ fn collect_group(clip: &Clipboard, group: usize, out: &mut Vec<Point>, seen: &mu
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
@@ -293,9 +293,9 @@ mod tests {
     fn an_arcs_position_is_its_centre_and_a_circles_is_its_centre() {
         assert_eq!(arc_center(p(10_000_000, 0), p(0, 10_000_000), p(-10_000_000, 0)), Some(p(0, 0)));
         assert_eq!(arc_center(p(0, 0), p(10_000, 10_000), p(20_000, 20_000)), None, "collinear points have no centre");
-        let c = Shape::Circle { id: String::new(), layer: "Dwgs.User".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: p(5000, 6000), end: p(9000, 6000) };
+        let c = Shape::Circle { id: String::new(), layer: "Dwgs.User".into(), stroke_width: mm(0.1), filled: false, center: p(5000, 6000), end: p(9000, 6000) };
         assert_eq!(shape_position(&c), p(5000, 6000));
-        let a = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: p(10_000_000, 0), mid: p(0, 10_000_000), end: p(-10_000_000, 0) };
+        let a = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: p(10_000_000, 0), mid: p(0, 10_000_000), end: p(-10_000_000, 0) };
         assert_eq!(shape_position(&a), p(0, 0));
     }
 
@@ -319,8 +319,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eda_append_api_board_{}_{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: Some((Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(1_500_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: Some((mm(3.0), mm(1.5))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "R1".into(),
             mpn: None,
@@ -392,7 +392,7 @@ mod tests {
         let dr = d.drawings.as_ref().unwrap();
         let line = dr.shapes.iter().find(|s| s.layer() == "Edge.Cuts").expect("the file's Edge.Cuts line came in");
         assert_eq!(line.points()[0], cursor, "the top left item of the file is where the cursor was");
-        assert_eq!(line.points()[1], p((cursor.x + Nm::from_raw_shim(80_000_000)).raw_shim(), cursor.y.raw_shim()), "and the rest keeps its place relative to it");
+        assert_eq!(line.points()[1], p((cursor.x + mm(80.0)).raw_shim(), cursor.y.raw_shim()), "and the rest keeps its place relative to it");
         // The file's footprint R1 met this board's R1: it is a part of its own now, filed under the next free reference.
         assert_eq!(d.placement.as_ref().unwrap().footprints.len(), 2);
         assert_eq!(model.parts.len(), 2, "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());

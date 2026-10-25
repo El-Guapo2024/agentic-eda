@@ -740,7 +740,7 @@ pub fn dp_continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value 
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::{mm, Nm};
     use super::*;
     use eda_model::ir::{Design, PlacementSection, Provenance, RoutingSection, Track, Via};
     use eda_model::ConstraintModel;
@@ -793,8 +793,8 @@ mod tests {
 
     /// A 20 mm board with a SIG stub ending at (10000, 8000) and a GND via at (10000, 5000), right in the way of SIG going down.
     fn setup(dir: &Path) {
-        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)], arc_mid_offset: None };
-        let via = Via { id: "v_gnd".into(), net: "GND".into(), at: p(10_000_000, 5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)], arc_mid_offset: None };
+        let via = Via { id: "v_gnd".into(), net: "GND".into(), at: p(10_000_000, 5_000_000), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
         setup_board(dir, vec![stub], vec![via]);
     }
 
@@ -841,8 +841,8 @@ mod tests {
     fn attempt_finish_commits_at_the_nearest_unconnected_anchor() {
         let dir = scratch("attempt_finish");
         // a SIG stub to reach, and the GND via of `setup` out of the way
-        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)], arc_mid_offset: None };
-        let other = Track { id: "sig2".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(15_000_000, 12_000_000), p(16_000_000, 12_000_000)], arc_mid_offset: None };
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)], arc_mid_offset: None };
+        let other = Track { id: "sig2".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(15_000_000, 12_000_000), p(16_000_000, 12_000_000)], arc_mid_offset: None };
         setup_board(&dir, vec![stub, other], vec![]);
         let cell: RouteCell = Mutex::new(None);
         start_with(&dir, &cell, json!({ "mode": "walkaround" }));
@@ -991,7 +991,7 @@ mod tests {
     }
 
     fn track(id: &str, net: &str, pts: &[Point]) -> Track {
-        Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: pts.to_vec(), arc_mid_offset: None }
+        Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: pts.to_vec(), arc_mid_offset: None }
     }
 
     fn pts_of(reply: &Value, key: &str) -> Vec<Point> {
@@ -1049,7 +1049,7 @@ mod tests {
     fn a_drag_that_starts_in_violation_only_marks_and_ctrl_click_commits_it() {
         let dir = scratch("drag_force");
         // the stub's end sits on the GND via: it is in violation where it starts
-        setup_board(&dir, vec![track("sig", "SIG", &[p(10_000_000, 9_000_000), p(10_000_000, 5_200_000)])], vec![Via { id: "v".into(), net: "GND".into(), at: p(10_000_000, 5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
+        setup_board(&dir, vec![track("sig", "SIG", &[p(10_000_000, 9_000_000), p(10_000_000, 5_200_000)])], vec![Via { id: "v".into(), net: "GND".into(), at: p(10_000_000, 5_000_000), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
         let cell: RouteCell = Mutex::new(None);
         let started = drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_200_000, "layer": "F.Cu" })));
         assert_eq!(started["ok"], json!(true), "{started}");
@@ -1072,7 +1072,7 @@ mod tests {
     fn route_from_other_end_commits_what_is_fixed_and_restarts_at_the_far_end() {
         let dir = scratch("continue");
         // a SIG stub ending at (10000, 8000) and a SIG via at (10000, 2000) it is to be connected to
-        setup_board(&dir, vec![track("sig", "SIG", &[p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)])], vec![Via { id: "far".into(), net: "SIG".into(), at: p(10_000_000, 2_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
+        setup_board(&dir, vec![track("sig", "SIG", &[p(10_000_000, 9_000_000), p(10_000_000, 8_000_000)])], vec![Via { id: "far".into(), net: "SIG".into(), at: p(10_000_000, 2_000_000), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
         let cell: RouteCell = Mutex::new(None);
         start_with(&dir, &cell, json!({}));
         // nothing fixed: nothing is committed, the route restarts at the via
@@ -1110,7 +1110,7 @@ mod tests {
     }
 
     fn via_at(id: &str, net: &str, x: i64, y: i64) -> Via {
-        Via { id: id.into(), net: net.into(), at: p(x, y), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+        Via { id: id.into(), net: net.into(), at: p(x, y), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     fn vias_of(dir: &Path) -> Vec<(String, Point)> {
@@ -1211,7 +1211,7 @@ mod tests {
         assert_eq!(tracks_of(&dir).len(), 2, "one leg per net: {:?}", tracks_of(&dir));
         assert_eq!((pts_of(&on, "head_a").first().copied(), pts_of(&on, "head_b").first().copied()), (Some(p(15_000_000, 5_000_000)), Some(p(15_000_000, 6_000_000))), "the pair leaves the far vias: {on}");
         assert_eq!((on["net_a"].clone(), on["net_b"].clone()), (json!("USB_DP"), json!("USB_DN")));
-        assert_eq!(pts_of(&on, "head_a").last().map(|q| q.x), Some(Nm::from_raw_shim(9_000_000)), "and heads for where the old head ended");
+        assert_eq!(pts_of(&on, "head_a").last().map(|q| q.x), Some(mm(9.0)), "and heads for where the old head ended");
         // a pair is running again; finish it, and one undo takes both commits back
         let done = dp_finish(&dir, &cell, &body(json!({ "x": 9_000_000, "y": 5_500_000 })));
         assert_eq!(done["ok"], json!(true), "{done}");
@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn a_blind_via_and_a_microvia_are_committed_with_their_type_layers_and_size_as_one_undo_step() {
         let dir = scratch("typed_vias");
-        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![p(2_000_000, 8_000_000), p(4_000_000, 8_000_000)], arc_mid_offset: None };
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(2_000_000, 8_000_000), p(4_000_000, 8_000_000)], arc_mid_offset: None };
         setup_board_on(&dir, vec![stub], vec![], &["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
         let cell: RouteCell = Mutex::new(None);
         let started = start(&dir, &cell, &body(json!({ "x": 4_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000, "settings": { "mode": "walkaround" } })));
@@ -1270,7 +1270,7 @@ mod tests {
         let kind = |id: &str| design.drawings.as_ref().and_then(|d| d.via_extra(id)).map(|e| e.kind).unwrap_or_default();
         let mut got: Vec<(Point, &str, &str, Nm, Nm, ViaKind)> = vias.iter().map(|v| (v.at, v.from_layer.as_str(), v.to_layer.as_str(), v.diameter, v.drill, kind(&v.id))).collect();
         got.sort_by_key(|g| g.0.x);
-        assert_eq!(got, vec![(p(8_000_000, 8_000_000), "F.Cu", "In1.Cu", Nm::from_raw_shim(500_000), Nm::from_raw_shim(250_000), ViaKind::Blind), (p(12_000_000, 8_000_000), "In1.Cu", "In2.Cu", Nm::from_raw_shim(300_000), Nm::from_raw_shim(100_000), ViaKind::Micro)]);
+        assert_eq!(got, vec![(p(8_000_000, 8_000_000), "F.Cu", "In1.Cu", mm(0.5), mm(0.25), ViaKind::Blind), (p(12_000_000, 8_000_000), "In1.Cu", "In2.Cu", mm(0.3), mm(0.1), ViaKind::Micro)]);
         let layers: Vec<String> = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.id != "sig").map(|t| t.layer.clone()).collect();
         assert!(layers.contains(&"In1.Cu".to_string()) && layers.contains(&"In2.Cu".to_string()), "the route went on on the via's other layer: {layers:?}");
         let undone = board::undo(&dir, "test", Some(eda_ops::Domain::Pcb));

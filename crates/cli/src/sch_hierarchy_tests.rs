@@ -4,7 +4,7 @@
 //! The slow tier (`EDA_SLOW_TESTS=1`) hands the results to kicad-cli: the hierarchy is a KiCad project that loads, and the operations leave no
 //! `unannotated`, `duplicate_reference` or `duplicate_sheet_names` finding behind.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use crate::board::{load, save, step, undo, Meta};
 use eda_model::ir::Point;
 use eda_model::ConstraintModel;
@@ -54,8 +54,8 @@ fn import_cmd(source: &str, as_sheet: bool, keep: bool) -> Cmd {
         as_sheet,
         name: "LDO stage".into(),
         file: "ldo_stage".into(),
-        at: Point { x: Nm::from_raw_shim(250_000_000), y: Nm::from_raw_shim(40_000_000) },
-        size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000)),
+        at: Point { x: mm(250.0), y: mm(40.0) },
+        size: (mm(40.0), mm(20.0)),
         keep_annotations: keep,
         order: eda_ops::AnnotateOrder::XThenY,
         options: Default::default(),
@@ -99,7 +99,7 @@ fn import_sheet_reads_the_file_into_the_command_and_the_sheet_is_one_undo_step()
     step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
     let (_, design, model) = load(&dir).unwrap();
     let sheet = design.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name == "LDO stage").expect("the sheet is on the root");
-    assert_eq!((sheet.file.as_str(), sheet.at, sheet.size), ("ldo_stage.kicad_sch", Point { x: Nm::from_raw_shim(250_000_000), y: Nm::from_raw_shim(40_000_000) }, (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000))));
+    assert_eq!((sheet.file.as_str(), sheet.at, sheet.size), ("ldo_stage.kicad_sch", Point { x: mm(250.0), y: mm(40.0) }, (mm(40.0), mm(20.0))));
     let screen = &design.sheet_contents.as_ref().unwrap()["ldo_stage.kicad_sch"];
     assert!(screen.symbols.len() >= 6, "the LDO's six parts: {:?}", screen.symbols.iter().map(|s| &s.id).collect::<Vec<_>>());
 
@@ -317,13 +317,13 @@ fn slow_the_annotated_import_and_paste_leave_kicad_cli_with_no_reference_finding
     // fields the user placed and a look they gave, then mcu30 as module sheets: the places and looks are kept and the board is as clean as before
     let (_, flat, _) = load(&dir).unwrap();
     let r3 = flat.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R3").unwrap().at;
-    let edit: Cmd = serde_json::from_value(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R3:Reference", "at": { "x": r3.x - Nm::from_raw_shim(12_700_000), "y": r3.y + Nm::from_raw_shim(1_270_000) }, "h": "right", "size_nm": 1_778_000, "bold": true })).unwrap();
+    let edit: Cmd = serde_json::from_value(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R3:Reference", "at": { "x": r3.x - mm(12.7), "y": r3.y + mm(1.27) }, "h": "right", "size_nm": 1_778_000, "bold": true })).unwrap();
     step(&dir, edit, false, "test").unwrap();
     step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
     let (_, sheets, _) = load(&dir).unwrap();
     let kept = sheets.sheet_contents.iter().flatten().flat_map(|(_, s)| s.symbols.iter().map(move |x| (s, x))).find(|(_, x)| x.id == "R3").unwrap();
     let place = kept.0.field_layout.get("R3").and_then(|f| f.iter().find(|p| p.name == "Reference")).expect("R3's Reference keeps a place of its own");
-    assert_eq!((place.dx, place.dy), (Nm::from_raw_shim(-12_700_000), Nm::from_raw_shim(1_270_000)), "the field is where the user put it from its symbol");
+    assert_eq!((place.dx, place.dy), (mm(-12.7), mm(1.27)), "the field is where the user put it from its symbol");
     assert_no_reference_findings(&dir, "reorganized");
     assert!(erc_kinds(&dir).is_empty(), "the reorganized board is clean: {:?}", erc_kinds(&dir));
     // Replace All over the sheets: values change, nothing else
@@ -421,7 +421,7 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
         for (unit, x) in [(1, 300_000_000), (2, 330_000_000), (3, 360_000_000)] {
             root.symbols.push(eda_model::ir::SymbolInstance {
                 id: "U9".into(),
-                at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(20_000_000) },
+                at: Point { x: Nm::from_raw_shim(x), y: mm(20.0) },
                 rot: 0,
                 mirrored: false,
                 mirror_y: false,
@@ -620,19 +620,19 @@ fn bus_board(name: &str, bus_label: &str) -> (PathBuf, String, Point) {
         let names = if refs[0] == "R1" { eda_kicad::expand_bus_members(bus_label, &[]).unwrap() } else { vec!["D0".to_string(), "D1".to_string()] };
         for (r, net) in refs.iter().zip(names) {
             let at = pin1(sec, r);
-            let end = Point { x: at.x - Nm::from_raw_shim(5_080_000), y: at.y };
+            let end = Point { x: at.x - mm(5.08), y: at.y };
             sec.wires.push(wire(vec![at, end], false));
             sec.labels.push(label(&net, end, LabelKind::Local));
         }
     }
     // the child: a bus from the hierarchical label down
-    let hl = Point { x: Nm::from_raw_shim(20_320_000), y: Nm::from_raw_shim(20_320_000) };
-    child.wires.push(wire(vec![hl, Point { x: Nm::from_raw_shim(20_320_000), y: Nm::from_raw_shim(40_640_000) }], true));
+    let hl = Point { x: mm(20.32), y: mm(20.32) };
+    child.wires.push(wire(vec![hl, Point { x: mm(20.32), y: mm(40.64) }], true));
     // the root: the sheet, its bus pin, and a bus label on a stub of bus away from it
-    let sheet_at = Point { x: Nm::from_raw_shim(152_400_000), y: Nm::from_raw_shim(25_400_000) };
-    let pin_at = Point { x: sheet_at.x, y: sheet_at.y + Nm::from_raw_shim(5_080_000) };
-    root.sheets.push(SheetInstance { id: String::new(), name: "child".into(), file: "child.kicad_sch".into(), at: sheet_at, size: (Nm::from_raw_shim(25_400_000), Nm::from_raw_shim(20_320_000)), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: pin_at }], page: String::new() });
-    let stub = Point { x: pin_at.x - Nm::from_raw_shim(25_400_000), y: pin_at.y };
+    let sheet_at = Point { x: mm(152.4), y: mm(25.4) };
+    let pin_at = Point { x: sheet_at.x, y: sheet_at.y + mm(5.08) };
+    root.sheets.push(SheetInstance { id: String::new(), name: "child".into(), file: "child.kicad_sch".into(), at: sheet_at, size: (mm(25.4), mm(20.32)), pins: vec![SheetPin { id: String::new(), name: "D[0..1]".into(), shape: LabelShape::Bidirectional, at: pin_at }], page: String::new() });
+    let stub = Point { x: pin_at.x - mm(25.4), y: pin_at.y };
     root.wires.push(wire(vec![stub, pin_at], true));
     root.labels.push(label(bus_label, stub, LabelKind::Local));
     root.assign_missing_ids();
@@ -721,7 +721,7 @@ fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
     // the board defines the class: no finding, and the label's net is in it
     let (_, _, model) = load(&dir).unwrap();
     let defaults = eda_model::rules::net_class_settings_of(&model.board);
-    let power = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(Nm::from_raw_shim(400_000)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+    let power = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(mm(0.4)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
     step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "test").unwrap();
     step(&dir, edit_label_fields(&label.id, vec![netclass("HighCurrent")]), false, "test").unwrap();
     assert_eq!(undefined(&dir), 0, "the class is defined");
@@ -753,7 +753,7 @@ fn slow_a_labels_net_class_field_is_read_by_kicad_cli() {
 fn define_high_current(dir: &Path) {
     let (_, _, model) = load(dir).unwrap();
     let defaults = eda_model::rules::net_class_settings_of(&model.board);
-    let class = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(Nm::from_raw_shim(400_000)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+    let class = eda_model::NetClass { name: "HighCurrent".into(), nets: vec![], track_width: Some(mm(0.4)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
     step(dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![class], ..defaults } }, false, "test").unwrap();
 }
 
@@ -856,8 +856,8 @@ fn slow_a_global_labels_sheet_references_read_as_kicad_cli_plots_them() {
     }
     let (dir, sheet_id, _) = bus_board("slow_isr", "D[0..1]");
     let global = || eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input };
-    step(&dir, Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(101_600_000) }, kind: global() }, false, "test").unwrap();
-    step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: Nm::from_raw_shim(60_960_000), y: Nm::from_raw_shim(101_600_000) }, kind: global() }) }, false, "test").unwrap();
+    step(&dir, Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: mm(50.8), y: mm(101.6) }, kind: global() }, false, "test").unwrap();
+    step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddLabel { net: "GLOBX".into(), at: Point { x: mm(60.96), y: mm(101.6) }, kind: global() }) }, false, "test").unwrap();
     assert!(!plotted_texts(&dir).iter().any(|t| t.starts_with('[')), "not shown by default (`m_IntersheetRefsShow` is off)");
     let shown = |dir: &Path, sheet: &str| -> Vec<String> {
         let (_, d, m) = load(dir).unwrap();
@@ -1006,7 +1006,7 @@ fn write_twice_placed_tree_with(dir: &Path, file: &str, edit: impl Fn(&mut eda_m
     edit(child.schematic.as_mut().unwrap());
     let mut design = child.clone();
     let mut root = eda_model::ir::SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], ..child.schematic.clone().unwrap() };
-    root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: Nm::from_raw_shim(20_000_000 + 60_000_000 * i as i64), y: Nm::from_raw_shim(20_000_000) }, size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000)), pins: vec![], page: String::new() }).collect();
+    root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: Nm::from_raw_shim(20_000_000 + 60_000_000 * i as i64), y: mm(20.0) }, size: (mm(40.0), mm(20.0)), pins: vec![], page: String::new() }).collect();
     design.schematic = Some(root);
     design.sheet_contents = Some([("ldo.kicad_sch".to_string(), child.schematic.unwrap())].into_iter().collect());
     let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-23", title: "twice" }, file).unwrap();
@@ -1319,7 +1319,7 @@ fn a_board_without_a_stored_schematic_is_loaded_with_the_derived_one_and_keeps_i
     let (intent, model) = example("mcu_board_30plus.yaml");
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.schematic = None;
-    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(35_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(35_000_000), y: Nm::from_raw_shim(35_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(35_000_000) }], footprints: vec![], modules: vec![] });
+    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(35.0), y: Nm::ZERO }, Point { x: mm(35.0), y: mm(35.0) }, Point { x: Nm::ZERO, y: mm(35.0) }], footprints: vec![], modules: vec![] });
     design.drawings = Some(eda_model::ir::DrawingsSection::default());
     save(&dir, &design).unwrap();
     let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
@@ -1424,7 +1424,7 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
         // the click on a point of the 50 mil grid, as the tool snaps it
         let mut cmd = import_cmd(&file, std::env::var_os("EDA_QA_SCH_AS_SHEET").is_some(), true);
         if let Cmd::ImportSheet { at, .. } = &mut cmd {
-            *at = Point { x: Nm::from_raw_shim(254_000_000), y: Nm::from_raw_shim(50_800_000) };
+            *at = Point { x: mm(254.0), y: mm(50.8) };
         }
         if let Err(e) = step(&dir, cmd, false, "test") {
             println!("FAIL {rel}: Import Sheet refuses it: {e:?}");

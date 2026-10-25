@@ -84,7 +84,7 @@ mod inspect_api;
 mod net_inspector_api;
 mod tune_edit;
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use eda::prelude::*;
 use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, to_circuit_json, PlaceOptions, Placer};
 use eda::ExportMeta;
@@ -1103,7 +1103,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         }
         "floorplan" => {
             let bb = board_bb(&cx.model);
-            let fp = eda_model::floorplan::plan(&cx.model, bb, Nm::from_raw_shim(500_000), cx.args.seed)
+            let fp = eda_model::floorplan::plan(&cx.model, bb, mm(0.5), cx.args.seed)
                 .map_err(|e| vec![CheckResult::fail("floorplan", "arrange", e)])?;
             println!("{} modules, {} free parts, board {:.1} x {:.1} mm",
                 fp.modules.len(), fp.free.len(), (bb.2 - bb.0).raw_shim() as f64 / 1e6, (bb.3 - bb.1).raw_shim() as f64 / 1e6);
@@ -1180,7 +1180,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             checks.extend(eda_gates::kicad::check_placement(&placed, &cx.model));
             let metrics = serde_json::json!({ "hpwl_nm": hpwl(&placed, &cx.model), "source": "bookshelf" });
             cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
-            println!("hpwl_nm {}", hpwl(&placed, &cx.model).unwrap_or(Nm::from_raw_shim(-1)));
+            println!("hpwl_nm {}", hpwl(&placed, &cx.model).unwrap_or(Nm::new(-1)));
             if !print_checks("placement gates", &checks) {
                 return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
             }

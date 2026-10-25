@@ -324,7 +324,7 @@ pub fn pcb_bom(dir: &Path) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::mm;
     use super::*;
     use eda_model::ir::Point;
     use serde_json::json;
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn the_board_centre_is_the_middle_of_the_outline_in_mm() {
-        let outline = [Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::from_raw_shim(110_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::from_raw_shim(110_000_000), y: Nm::from_raw_shim(80_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(80_000_000) }];
+        let outline = [Point { x: mm(10.0), y: mm(20.0) }, Point { x: mm(110.0), y: mm(20.0) }, Point { x: mm(110.0), y: mm(80.0) }, Point { x: mm(10.0), y: mm(80.0) }];
         assert_eq!(board_center_mm(&outline), (60.0, 50.0));
         assert_eq!(board_center_mm(&[]), (0.0, 0.0));
     }

@@ -2,7 +2,7 @@
 //! and Add Board Characteristics build are plotted by kicad-cli (`pcb export svg`) the way we laid them out -- the text of every cell on a line of its own, no cell
 //! broken by KiCad's line breaking, and the lines of the border and the separators where `PCB_TABLE::DrawBorders` puts them.
 
-use eda_model::units::Nm;
+use eda_model::units::mm;
 use super::tests::{scratch, setup};
 use super::{load, step};
 use eda_model::ir::Point;
@@ -91,7 +91,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
     }
     let dir = scratch("tables_plot");
     setup(&dir);
-    step(&dir, Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, units: None }), false, "test").unwrap();
+    step(&dir, Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: Point { x: mm(2.0), y: mm(2.0) }, units: None }), false, "test").unwrap();
     let characteristics: Cmd = serde_json::from_value(serde_json::json!({
         "op": "table", "verb": "place_characteristics", "layer": "Cmts.User", "at": { "x": 2_000_000, "y": 100_000_000 }, "units": "mm",
         "numbers": { "thickness_nm": 1_600_000, "width_nm": 20_000_000, "height_nm": 20_000_000, "min_track_nm": 200_000, "min_clearance_nm": 200_000, "min_drill_nm": 300_000, "castellated_pads": 0, "press_fit_pads": 2 }
@@ -139,7 +139,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
 fn the_move_preview_carries_a_held_sheet_table_where_it_would_be() {
     let dir = scratch("sch_table_preview");
     setup(&dir);
-    let mut t = Table::new_sch_grid(Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(30_000_000) }, 2, 2, Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(1_270_000));
+    let mut t = Table::new_sch_grid(Point { x: mm(20.0), y: mm(30.0) }, 2, 2, mm(20.0), mm(5.0), mm(1.27));
     t.cells[0].text = "TITLE ${ROW}".into();
     step(&dir, Cmd::SchTable(TableCmd::Add { table: t }), false, "test").unwrap();
     let (_, design, _) = load(&dir).expect("the board loads");
