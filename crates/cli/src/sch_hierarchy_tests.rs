@@ -1297,8 +1297,9 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
             *erc_w.entry(v["check"].as_str().or_else(|| v["type"].as_str()).unwrap_or("?").to_string()).or_insert(0) += 1;
         }
         let groups_w = std::panic::catch_unwind(|| kicad_net_groups(&dir)).unwrap_or_default();
-        // (`lib_symbol_issues` says the original's libraries are not in this machine's tables; ours are the project's own)
-        let erc_diff: Vec<String> = erc_o.keys().chain(erc_w.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "lib_symbol_issues" && erc_o.get(*k) != erc_w.get(*k)).map(|k| format!("{k} {}->{}", erc_o.get(k).unwrap_or(&0), erc_w.get(k).unwrap_or(&0))).collect();
+        // (`lib_symbol_issues` says the original's libraries are not in this machine's tables; ours are the project's own. `footprint_link_issues` says
+        // the same of the footprints' libraries, a check the studio's project leaves to its own library check, PARITY-pcb.md section 53)
+        let erc_diff: Vec<String> = erc_o.keys().chain(erc_w.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().filter(|k| *k != "lib_symbol_issues" && *k != "footprint_link_issues" && erc_o.get(*k) != erc_w.get(*k)).map(|k| format!("{k} {}->{}", erc_o.get(k).unwrap_or(&0), erc_w.get(k).unwrap_or(&0))).collect();
         let nets_only_o = groups_o.iter().filter(|g| !groups_w.contains(g)).count();
         let nets_only_w = groups_w.iter().filter(|g| !groups_o.contains(g)).count();
         if erc_diff.is_empty() && nets_only_o == 0 && nets_only_w == 0 {
