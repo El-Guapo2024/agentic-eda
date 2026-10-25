@@ -490,7 +490,8 @@ impl<'a> SymbolBox<'a> {
     }
 
     fn to_abs(&self, lx: f64, ly: f64) -> (f64, f64) {
-        let lx = if self.sym.mirrored { self.width as f64 - lx } else { lx };
+        // mirrored about the box's own width, in millimetres as `lx` is (the drawing's `translate(w,0) scale(-1,1)`, `symbol_transform`)
+        let lx = if self.sym.mirrored { Nm::new(self.width).mm() - lx } else { lx };
         let theta = (self.sym.rot as f64 / 1000.0) * std::f64::consts::PI / 180.0;
         let rx = lx * theta.cos() - ly * theta.sin();
         let ry = lx * theta.sin() + ly * theta.cos();
@@ -1182,6 +1183,27 @@ mod tests {
         let svg1 = render_schematic(&design, &model).unwrap();
         let svg2 = render_schematic(&design, &model).unwrap();
         assert_eq!(svg1, svg2);
+    }
+
+    /// A mirrored symbol's bounds are its box flipped about its own width, in millimetres as the drawing's `translate(w,0) scale(-1,1)`
+    /// has it: `to_abs` took the local millimetres from the box's width in nanometres, so a mirrored symbol's bounds reached
+    /// some ten thousand metres to the right and the sheet's viewBox with them.
+    #[test]
+    fn a_mirrored_symbol_is_bounded_by_its_own_box() {
+        let model = ldo_model();
+        let design = ldo_design();
+        let sch = design.schematic.as_ref().unwrap();
+        let sym = sch.symbols.iter().find(|s| s.id == "U1").unwrap().clone();
+        let part = model.part("U1").unwrap();
+        let mirrored = SymbolInstance { mirrored: true, ..sym.clone() };
+        let corners = |s: &SymbolInstance| {
+            let b = SymbolBox::build(s, part, &model, sch);
+            let pts = b.abs_bounds_points();
+            let xs: Vec<f64> = pts[..4].iter().map(|p| p.0).collect();
+            (xs.iter().cloned().fold(f64::INFINITY, f64::min), xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max))
+        };
+        let (plain, flipped) = (corners(&sym), corners(&mirrored));
+        assert!((plain.0 - flipped.0).abs() < 1e-9 && (plain.1 - flipped.1).abs() < 1e-9, "the box is the same box mirrored: {plain:?} vs {flipped:?}");
     }
 
     #[test]
