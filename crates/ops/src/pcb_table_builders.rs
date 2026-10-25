@@ -231,7 +231,7 @@ fn cell(text: &str, size_mm: f64, thickness_mm: f64, right: bool) -> TableCell {
 /// `new PCB_TABLE( aBoard, DEFAULT_LINE_WIDTH )` with the cells given, row by row, on `layer`: the border and the separators are 0.1 mm wide and drawn.
 fn table_of(layer: &str, cols: usize, cells: Vec<TableCell>) -> Table {
     let rows = cells.len() / cols.max(1);
-    let mut t = Table::new_grid("F.Cu", Point { x: Nm::ZERO, y: Nm::ZERO }, cols, rows, Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100_000));
+    let mut t = Table::new_grid("F.Cu", Point { x: Nm::ZERO, y: Nm::ZERO }, cols, rows, Nm::ZERO, Nm::ZERO, Nm::new(100_000));
     t.cells = cells;
     t.layer = layer.to_string();
     t

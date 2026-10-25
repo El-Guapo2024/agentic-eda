@@ -220,7 +220,7 @@ fn courtyard_half_stroke(extra: Option<&FootprintExtra>) -> Nm {
             item[at..at + end].trim().parse::<f64>().ok()
         })
         .fold(0.0_f64, f64::max);
-    let width_nm = if widest > 0.0 { eda_model::units::from_mm(widest) } else { Nm::from_raw_shim(50_000) };
+    let width_nm = if widest > 0.0 { eda_model::units::from_mm(widest) } else { Nm::new(50_000) };
     width_nm / 2
 }
 
@@ -453,7 +453,7 @@ pub(crate) fn block_footprint(f: &eda_kicad::ClipFootprint) -> McFootprint {
         groups_up: Vec::new(),
         locked: false,
         symbol: None,
-        bbox: (f.at.x - Nm::from_raw_shim(250_000), f.at.y - Nm::from_raw_shim(250_000), f.at.x + Nm::from_raw_shim(250_000), f.at.y + Nm::from_raw_shim(250_000)),
+        bbox: (f.at.x - Nm::new(250_000), f.at.y - Nm::new(250_000), f.at.x + Nm::new(250_000), f.at.y + Nm::new(250_000)),
         reference_layout,
         value_layout,
         user_fields: f.edit.as_ref().map(|e| e.fields.clone()).unwrap_or_default(),

@@ -223,8 +223,8 @@ pub(crate) struct FieldEdit {
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear; it can be difficult to correct if you can't select it".
-const TEXT_SIZE_MIN_NM: Nm = Nm::from_raw_shim(10_000);
-const TEXT_SIZE_MAX_NM: Nm = Nm::from_raw_shim(1_000_000_000);
+const TEXT_SIZE_MIN_NM: Nm = Nm::new(10_000);
+const TEXT_SIZE_MAX_NM: Nm = Nm::new(1_000_000_000);
 
 impl<'a> Board<'a> {
     /// Field Properties: see [`SchCmd::EditField`](crate::sch_edit::SchCmd::EditField).

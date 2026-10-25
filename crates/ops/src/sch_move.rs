@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The schematic's connection grid, 50 mil (`GRID_CONNECTABLE`).
-pub const GRID_NM: Nm = Nm::from_raw_shim(1_270_000);
+pub const GRID_NM: Nm = Nm::new(1_270_000);
 
 fn d_true() -> bool {
     true

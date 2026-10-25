@@ -168,11 +168,16 @@ const ARC_HIGH_DEF_NM: i64 = 5_000;
 const IU_PER_MM: f64 = 1_000_000.0;
 const IU_PER_INCH: f64 = 25_400_000.0;
 
-/// A point in KiCad's units.
+/// A point in KiCad's units, a count of nanometres on each axis: the integer `VECTOR2I` the tools' geometry is ported on (`point_nm` and
+/// `p_of` are its boundary with the IR's lengths).
 type P = (i64, i64);
 
 fn point_nm(p: P) -> Point {
-    Point { x: Nm::from_raw_shim(p.0), y: Nm::from_raw_shim(p.1) }
+    Point { x: Nm::new(p.0), y: Nm::new(p.1) }
+}
+
+fn p_of(p: Point) -> P {
+    (p.x.get(), p.y.get())
 }
 
 /// `KiROUND`: `llround`, half away from zero.
@@ -616,8 +621,8 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
     y += fab_h / 2;
     let user_y = y;
 
-    let styled = |at_y: i64, layer: &str| {
-        let mut l = FieldLayout::new(Point { x: Nm::ZERO, y: Nm::from_raw_shim(at_y) }, layer);
+    let styled = |at_y: Nm, layer: &str| {
+        let mut l = FieldLayout::new(Point { x: Nm::ZERO, y: at_y }, layer);
         l.size = defaults.text_size_nm(layer);
         l.thickness = defaults.text_thickness_nm(layer);
         let (italic, upright) = defaults.text_italic_upright(layer);
@@ -625,8 +630,8 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
         l.keep_upright = upright;
         l
     };
-    let mut reference = styled(reference_y.raw_shim(), "F.SilkS");
-    let mut value_layout = styled(value_y.raw_shim(), "F.Fab");
+    let mut reference = styled(reference_y, "F.SilkS");
+    let mut value_layout = styled(value_y, "F.Fab");
     if text_size > Nm::ZERO {
         for l in [&mut reference, &mut value_layout] {
             l.size = (text_size, text_size);
@@ -686,7 +691,7 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
         // KiCad's tools make no courtyard, and the file has none (`FootprintExtra::no_courtyard`); the engine would otherwise derive a keep-out from the pads, and the placement gates
         // would refuse (under Strict) what these footprints are for -- elements that touch and overlap, a stub on its line. A point (1 nm) keeps them out of that; the copper is still judged
         // by the routing and DRC checks.
-        courtyard: Some((Nm::from_raw_shim(1), Nm::from_raw_shim(1))),
+        courtyard: Some((Nm::new(1), Nm::new(1))),
         ..LibraryFootprint::new_empty(name)
     };
     Built { footprint, reference, value: value_layout, value_text: value.to_string() }
@@ -745,7 +750,7 @@ fn build_arc_stub(defaults: &TextGraphicsDefaults, radius_nm: Nm, angle_millideg
     poly.push((0, 0));
     let mut theta = -angle / 2.0;
     for _ in 1..(num_points - 1) {
-        poly.push(rotate_point((0, (-radius).raw_shim()), theta));
+        poly.push(rotate_point((0, (-radius).get()), theta));
         theta += 5.0;
         if theta > angle / 2.0 {
             theta = angle / 2.0;
@@ -769,8 +774,8 @@ fn build_arc_stub(defaults: &TextGraphicsDefaults, radius_nm: Nm, angle_millideg
 fn build_function_shape(defaults: &TextGraphicsDefaults, file: &str, kind: ShapeKind, size_x_nm: Option<Nm>, size_y_nm: Option<Nm>, track_width: Nm) -> Result<Built, Vec<CheckResult>> {
     check_width(POLYGON_NAME, track_width)?;
     let shape = read_shape_file(file);
-    let scale_x = size_x_nm.map_or(shape.scale_x, |v| v.raw_shim() as f64);
-    let mut scale_y = size_y_nm.map_or(shape.scale_y, |v| v.raw_shim() as f64);
+    let scale_x = size_x_nm.map_or(shape.scale_x, Nm::as_f64);
+    let mut scale_y = size_y_nm.map_or(shape.scale_y, Nm::as_f64);
     if kind == ShapeKind::Mirrored {
         scale_y = -scale_y;
     }
@@ -786,8 +791,8 @@ fn build_function_shape(defaults: &TextGraphicsDefaults, file: &str, kind: Shape
     let mut built = create_base_footprint(defaults, POLYGON_NAME, POLYGON_NAME, Nm::ZERO, 2, track_width);
     // The anchor in the middle of the shape's length.
     let offset = (-size.0 / 2, 0_i64);
-    built.footprint.pads[0].at.x = Nm::from_raw_shim(offset.0);
-    built.footprint.pads[1].at.x = Nm::from_raw_shim(offset.0 + size.0);
+    built.footprint.pads[0].at.x = Nm::new(offset.0);
+    built.footprint.pads[1].at.x = Nm::new(offset.0 + size.0);
 
     let mut poly: Vec<P> = Vec::with_capacity(shape.edges.len() * 2 + 2);
     poly.push((offset.0, 0));
@@ -818,16 +823,15 @@ pub fn inductor_corners(start: Point, end: Point, length_nm: Nm, width_nm: Nm) -
     if width_nm <= Nm::ZERO {
         return Err("the track width must be greater than zero".to_string());
     }
-    let (s, e) = ((start.x.raw_shim(), start.y.raw_shim()), (end.x.raw_shim(), end.y.raw_shim()));
+    let (s, e) = (p_of(start), p_of(end));
     let min_len = euclidean_norm((e.0 - s.0, e.1 - s.1));
     if min_len == 0 {
         return Err("the two ends of the inductor are the same point".to_string());
     }
-    let length = length_nm;
-    if length < Nm::from_raw_shim(min_len) {
+    if length_nm.get() < min_len {
         return Err("Requested length < minimum length".to_string());
     }
-    match build_corners_s_shape(s, e, length.raw_shim(), width_nm.raw_shim()) {
+    match build_corners_s_shape(s, e, length_nm.get(), width_nm.get()) {
         SShape::Corners(c) => Ok(c),
         SShape::TooLong => Err("Requested length too large".to_string()),
         SShape::TooShort => Err("Requested length too small".to_string()),
@@ -841,7 +845,7 @@ pub const ILLEGAL_NAME_CHARS: &str = "%$<>\t\n\r\"\\/:";
 /// What `createMicrowaveInductor` makes of the two points, in nanometres, relative to the footprint (whose anchor is the end point): the segments of the coil and the two pads.
 fn build_inductor(defaults: &TextGraphicsDefaults, start: Point, end: Point, length_nm: Nm, name: &str, width_nm: Nm) -> Result<Built, Vec<CheckResult>> {
     check_width(INDUCTOR_NAME, width_nm)?;
-    let (s, e) = ((start.x.raw_shim(), start.y.raw_shim()), (end.x.raw_shim(), end.y.raw_shim()));
+    let (s, e) = (p_of(start), p_of(end));
     let corners = inductor_corners(start, end, length_nm, width_nm).map_err(|m| fail("ops_bad_microwave", INDUCTOR_NAME, m))?;
     let name = name.trim();
     if name.is_empty() {
@@ -888,8 +892,8 @@ fn build_inductor(defaults: &TextGraphicsDefaults, start: Point, end: Point, len
     let mid = ((s.0 + e.0) / 2, (s.1 + e.1) / 2);
     let silk_h = defaults.text_size_nm("F.SilkS").1;
     let fab_h = defaults.text_size_nm("F.Fab").1;
-    built.reference.at = local((mid.0, mid.1 - silk_h.raw_shim()));
-    built.value.at = local((mid.0, mid.1 + fab_h.raw_shim()));
+    built.reference.at = local((mid.0, mid.1 - silk_h.get()));
+    built.value.at = local((mid.0, mid.1 + fab_h.get()));
     built.footprint.reference = Some(built.reference.clone());
     built.footprint.value = Some(built.value.clone());
     Ok(built)

@@ -48,7 +48,7 @@ impl BooleanOp {
 const CIRCLE_POLY_MAX_ERROR_NM: i32 = 1_000;
 
 fn pt64(p: Point) -> Point64 {
-    Point64::new(p.x.raw_shim(), p.y.raw_shim())
+    Point64::new(p.x.get(), p.y.get())
 }
 
 /// A circle as `SHAPE_LINE_CHAIN::Append( SHAPE_ARC( centre, centre + (R, 0), FULL_CIRCLE ) )`
@@ -56,17 +56,17 @@ fn pt64(p: Point) -> Point64 {
 /// circle, then one point per segment at the middle of its angular span on a
 /// circle widened by half the effective error, so the chord stays inside the
 /// error band.
-fn circle_polyline(center: Point, radius: i64) -> Vec<Point64> {
-    let n = get_arc_to_segment_count(radius.clamp(1, i32::MAX as i64) as i32, CIRCLE_POLY_MAX_ERROR_NM).max(2) as usize;
+fn circle_polyline(center: Point, radius: Nm) -> Vec<Point64> {
+    let n = get_arc_to_segment_count(radius.get().clamp(1, i32::MAX as i64) as i32, CIRCLE_POLY_MAX_ERROR_NM).max(2) as usize;
     let n_for_error = n.max(3) as f64;
     let alpha = std::f64::consts::PI / n_for_error;
-    let effective_error = (radius as f64 * (1.0 / alpha.cos() - 1.0)).round();
-    let r = radius as f64 + effective_error / 2.0;
+    let effective_error = (radius.as_f64() * (1.0 / alpha.cos() - 1.0)).round();
+    let r = radius.as_f64() + effective_error / 2.0;
     let mut out = Vec::with_capacity(n + 1);
-    out.push(Point64::new((center.x + Nm::from_raw_shim(radius)).raw_shim(), center.y.raw_shim()));
+    out.push(pt64(Point { x: center.x + radius, y: center.y }));
     for k in 0..n {
         let angle = (2 * k + 1) as f64 * std::f64::consts::PI / n as f64;
-        out.push(Point64::new((center.x.raw_shim() as f64 + r * angle.cos()).round() as i64, (center.y.raw_shim() as f64 + r * angle.sin()).round() as i64));
+        out.push(Point64::new((center.x.as_f64() + r * angle.cos()).round() as i64, (center.y.as_f64() + r * angle.sin()).round() as i64));
     }
     out
 }
@@ -78,13 +78,13 @@ fn poly_of(shape: &Shape) -> Option<ShapePolySet> {
         Shape::Polygon { pts, .. } => Some(ShapePolySet::from_outline(pts.iter().map(|p| pt64(*p)).collect())),
         Shape::Rect { start, end, .. } => Some(ShapePolySet::from_outline(vec![
             pt64(*start),
-            Point64::new(end.x.raw_shim(), start.y.raw_shim()),
+            pt64(Point { x: end.x, y: start.y }),
             pt64(*end),
-            Point64::new(start.x.raw_shim(), end.y.raw_shim()),
+            pt64(Point { x: start.x, y: end.y }),
         ])),
         Shape::Circle { center, end, .. } => {
-            let r = (((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64;
-            if r <= 0 {
+            let r = Nm::kiround((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64()));
+            if r <= Nm::ZERO {
                 return None;
             }
             Some(ShapePolySet::from_outline(circle_polyline(*center, r)))
@@ -95,25 +95,25 @@ fn poly_of(shape: &Shape) -> Option<ShapePolySet> {
 
 /// `shape->GetBoundingBox().GetArea()`, the sort key of `BooleanPolygons`'s reverse-order retry.
 fn bbox_area(shape: &Shape) -> f64 {
-    let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+    let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
     let mut take = |p: Point| {
-        x0 = x0.min(p.x.raw_shim());
-        y0 = y0.min(p.y.raw_shim());
-        x1 = x1.max(p.x.raw_shim());
-        y1 = y1.max(p.y.raw_shim());
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
     };
     match shape {
         Shape::Circle { center, end, .. } => {
-            let r = ((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64).round() as i64;
-            take(Point { x: center.x - Nm::from_raw_shim(r), y: center.y - Nm::from_raw_shim(r) });
-            take(Point { x: center.x + Nm::from_raw_shim(r), y: center.y + Nm::from_raw_shim(r) });
+            let r = Nm::kiround((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64()));
+            take(Point { x: center.x - r, y: center.y - r });
+            take(Point { x: center.x + r, y: center.y + r });
         }
         other => other.points().into_iter().for_each(&mut take),
     }
     if x1 < x0 {
         return 0.0;
     }
-    (x1 - x0) as f64 * (y1 - y0) as f64
+    (x1 - x0).as_f64() * (y1 - y0).as_f64()
 }
 
 /// The result of one pass of the routine over the shapes in a given order.
@@ -178,7 +178,7 @@ fn run_routine(op: BooleanOp, items: &[Shape]) -> Outcome {
         for poly in &working.polys {
             let ring = &poly[0];
             if ring.len() >= 3 {
-                rings.push(ring.iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect());
+                rings.push(ring.iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect());
             }
         }
     }
@@ -231,12 +231,12 @@ mod tests {
     use eda_model::units::Nm;
     use super::*;
 
-    fn rect(id: &str, x0: i64, y0: i64, x1: i64, y1: i64) -> Shape {
-        Shape::Rect { id: id.into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) } }
+    fn rect(id: &str, x0: Nm, y0: Nm, x1: Nm, y1: Nm) -> Shape {
+        Shape::Rect { id: id.into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
     }
 
-    fn circle(id: &str, cx: i64, cy: i64, r: i64) -> Shape {
-        Shape::Circle { id: id.into(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: true, center: Point { x: Nm::from_raw_shim(cx), y: Nm::from_raw_shim(cy) }, end: Point { x: Nm::from_raw_shim(cx + r), y: Nm::from_raw_shim(cy) } }
+    fn circle(id: &str, cx: Nm, cy: Nm, r: Nm) -> Shape {
+        Shape::Circle { id: id.into(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: true, center: Point { x: cx, y: cy }, end: Point { x: cx + r, y: cy } }
     }
 
     fn section(shapes: Vec<Shape>) -> DrawingsSection {
@@ -254,14 +254,14 @@ mod tests {
         let mut a = 0.0;
         for i in 0..pts.len() {
             let (p, q) = (pts[i], pts[(i + 1) % pts.len()]);
-            a += (p.x * q.y.raw_shim() - q.x * p.y.raw_shim()).raw_shim() as f64;
+            a += (p.x.area(q.y) - q.x.area(p.y)) as f64;
         }
         a.abs() / 2.0
     }
 
     #[test]
     fn merge_of_overlapping_rects_is_one_polygon_with_the_union_area() {
-        let mut dr = section(vec![rect("a", 0, 0, 10_000_000, 10_000_000), rect("b", 5_000_000, 5_000_000, 15_000_000, 15_000_000)]);
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), rect("b", mm(5.0), mm(5.0), mm(15.0), mm(15.0))]);
         let all = ids(&dr);
         boolean_shapes(&mut dr, BooleanOp::Merge, &all).unwrap();
         assert_eq!(dr.shapes.len(), 1);
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn merge_of_disjoint_rects_gives_two_polygons() {
-        let mut dr = section(vec![rect("a", 0, 0, 1_000_000, 1_000_000), rect("b", 5_000_000, 5_000_000, 6_000_000, 6_000_000)]);
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0)), rect("b", mm(5.0), mm(5.0), mm(6.0), mm(6.0))]);
         let all = ids(&dr);
         boolean_shapes(&mut dr, BooleanOp::Merge, &all).unwrap();
         assert_eq!(dr.shapes.len(), 2);
@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn subtract_removes_the_overlap_from_the_first_shape() {
-        let mut dr = section(vec![rect("a", 0, 0, 10_000_000, 10_000_000), rect("b", 5_000_000, 0, 15_000_000, 10_000_000)]);
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), rect("b", mm(5.0), Nm::ZERO, mm(15.0), mm(10.0))]);
         let order = vec![dr.shapes[0].id().to_string(), dr.shapes[1].id().to_string()];
         boolean_shapes(&mut dr, BooleanOp::Subtract, &order).unwrap();
         assert_eq!(dr.shapes.len(), 1);
@@ -294,8 +294,8 @@ mod tests {
     #[test]
     fn subtract_in_the_wrong_order_retries_largest_first() {
         // the small square first would leave nothing, so the larger one is used as the base
-        let small = rect("small", 2_000_000, 2_000_000, 4_000_000, 4_000_000);
-        let big = rect("big", 0, 0, 10_000_000, 10_000_000);
+        let small = rect("small", mm(2.0), mm(2.0), mm(4.0), mm(4.0));
+        let big = rect("big", Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0));
         let mut dr = section(vec![small, big]);
         let order = vec![dr.shapes[0].id().to_string(), dr.shapes[1].id().to_string()];
         boolean_shapes(&mut dr, BooleanOp::Subtract, &order).unwrap();
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn intersect_keeps_only_the_overlap() {
-        let mut dr = section(vec![rect("a", 0, 0, 10_000_000, 10_000_000), rect("b", 6_000_000, 6_000_000, 20_000_000, 20_000_000)]);
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), rect("b", mm(6.0), mm(6.0), mm(20.0), mm(20.0))]);
         let all = ids(&dr);
         boolean_shapes(&mut dr, BooleanOp::Intersect, &all).unwrap();
         assert_eq!(dr.shapes.len(), 1);
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn intersect_of_disjoint_shapes_is_refused_and_changes_nothing() {
-        let mut dr = section(vec![rect("a", 0, 0, 1_000_000, 1_000_000), rect("b", 5_000_000, 5_000_000, 6_000_000, 6_000_000)]);
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0)), rect("b", mm(5.0), mm(5.0), mm(6.0), mm(6.0))]);
         let all = ids(&dr);
         let before = dr.shapes.clone();
         let err = boolean_shapes(&mut dr, BooleanOp::Intersect, &all).unwrap_err();
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn circles_are_polygonised_and_merge_with_rects() {
-        let mut dr = section(vec![circle("c", 0, 0, 5_000_000), rect("r", 0, -2_000_000, 12_000_000, 2_000_000)]);
+        let mut dr = section(vec![circle("c", Nm::ZERO, Nm::ZERO, mm(5.0)), rect("r", Nm::ZERO, mm(-2.0), mm(12.0), mm(2.0))]);
         let all = ids(&dr);
         boolean_shapes(&mut dr, BooleanOp::Merge, &all).unwrap();
         assert_eq!(dr.shapes.len(), 1);
@@ -341,12 +341,12 @@ mod tests {
 
     #[test]
     fn needs_two_eligible_shapes() {
-        let mut dr = section(vec![rect("a", 0, 0, 1_000_000, 1_000_000)]);
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0))]);
         let all = ids(&dr);
         assert!(boolean_shapes(&mut dr, BooleanOp::Merge, &all).is_err());
         // a segment is not eligible
         let mut dr2 = section(vec![
-            rect("a", 0, 0, 1_000_000, 1_000_000),
+            rect("a", Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0)),
             Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(0.01), y: Nm::ZERO } },
         ]);
         let all2 = ids(&dr2);
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn circle_polyline_stays_within_the_error_band() {
-        let pts = circle_polyline(Point { x: Nm::ZERO, y: Nm::ZERO }, 5_000_000);
+        let pts = circle_polyline(Point { x: Nm::ZERO, y: Nm::ZERO }, mm(5.0));
         assert!(pts.len() > 20);
         for p in &pts {
             let d = (p.x as f64).hypot(p.y as f64);

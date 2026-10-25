@@ -730,7 +730,7 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
     }
     // `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow` validates no size: `EDA_TEXT::SetTextSize` clamps it to `TEXT_MIN_SIZE_MM` .. `TEXT_MAX_SIZE_MM`
     // (0.001 .. 250 mm)
-    let look = SheetPinLookEdit { size_nm: look.size_nm.map(|size| size.clamp(Nm::from_raw_shim(1_000), Nm::from_raw_shim(250_000_000))), ..look };
+    let look = SheetPinLookEdit { size_nm: look.size_nm.map(|size| size.clamp(Nm::new(1_000), Nm::new(250_000_000))), ..look };
     let (s, i) = find_sheet_pin(sch, id)?;
     if let Some(p) = at {
         if !on_sheet_border(s, p) {

@@ -50,7 +50,7 @@ fn d_one() -> f64 {
 }
 
 fn d_dxf_width() -> Nm {
-    Nm::from_raw_shim(200_000)
+    Nm::new(200_000)
 }
 
 /// `Cmd::ImportGraphics`: what the Import Graphics dialog (`DIALOG_IMPORT_GRAPHICS`) hands `PlaceImportedGraphics`.

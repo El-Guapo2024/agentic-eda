@@ -3268,7 +3268,7 @@ impl<'a> Board<'a> {
         };
         // A stand-off that falls half way between two grid points takes the one nearer the anchor (`- 1`): in micrometres the
         // halving above truncated the half away, and the placer's results were made on that rule.
-        let base = (ax + dx * (stand_off - Nm::from_raw_shim(1)), ay + dy * (stand_off - Nm::from_raw_shim(1)));
+        let base = (ax + dx * (stand_off - Nm::new(1)), ay + dy * (stand_off - Nm::new(1)));
 
         // Slide perpendicular to the placement direction.
         let (sx, sy) = if dx != 0 { (0, 1) } else { (1, 0) };
@@ -3403,7 +3403,7 @@ impl<'a> Board<'a> {
         // KiCad measures copper to Edge.Cuts, and a header's pads sit a
         // few tenths inside its courtyard -- 0.35 mm on L1, where 0.5 mm
         // is the rule.
-        let step = self.snap.max(Nm::from_raw_shim(1));
+        let step = self.snap.max(Nm::new(1));
         let clearance = self.model.board.tuning.copper_edge_clearance();
         let pads = placed_pads(self.model, self.part(part)?, &probe).unwrap_or_default();
         let copper = pads.iter().fold((Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN), |r, p| {
@@ -3415,7 +3415,7 @@ impl<'a> Board<'a> {
         // a row put near a corner has its end pad by the other edge.
         let room = |gap: Nm| -> Nm {
             let short = clearance - gap;
-            if short <= Nm::ZERO { Nm::ZERO } else { (short + step - Nm::from_raw_shim(1)) / step * step + step }
+            if short <= Nm::ZERO { Nm::ZERO } else { (short + step - Nm::new(1)) / step * step + step }
         };
         let (w, n, e, s) = if pads.is_empty() { (Nm::ZERO, Nm::ZERO, Nm::ZERO, Nm::ZERO) } else { (room(copper.0 - c.0), room(copper.1 - c.1), room(c.2 - copper.2), room(c.3 - copper.3)) };
         let at = match edge {

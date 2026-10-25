@@ -78,13 +78,13 @@ pub(crate) struct Seg {
     pub net: String,
     pub flags: u8,
     /// `SCH_LINE::StoreAngle`: the direction the line had when the drag started, for a line that has shrunk to nothing.
-    pub stored: (i64, i64),
+    pub stored: (Nm, Nm),
     pub dead: bool,
 }
 
 impl Seg {
     pub(crate) fn new(a: Point, b: Point, bus: bool) -> Seg {
-        Seg { a, b, bus, from: None, net: String::new(), flags: 0, stored: (1, 0), dead: false }
+        Seg { a, b, bus, from: None, net: String::new(), flags: 0, stored: (Nm::new(1), Nm::ZERO), dead: false }
     }
     pub(crate) fn has(&self, f: u8) -> bool {
         self.flags & f == f
@@ -93,14 +93,14 @@ impl Seg {
         self.a == self.b
     }
     pub(crate) fn length(&self) -> f64 {
-        ((self.b.x - self.a.x).raw_shim() as f64).hypot((self.b.y - self.a.y).raw_shim() as f64)
+        (self.b.x - self.a.x).as_f64().hypot((self.b.y - self.a.y).as_f64())
     }
     /// `SCH_LINE::Angle` as a direction (a null line points along +x, which is what `EDA_ANGLE( 0 vector )` is).
-    pub(crate) fn dir(&self) -> (i64, i64) {
+    pub(crate) fn dir(&self) -> (Nm, Nm) {
         if self.is_null() {
-            (1, 0)
+            (Nm::new(1), Nm::ZERO)
         } else {
-            ((self.b.x - self.a.x).raw_shim(), (self.b.y - self.a.y).raw_shim())
+            (self.b.x - self.a.x, self.b.y - self.a.y)
         }
     }
     pub(crate) fn midpoint(&self) -> Point {
@@ -125,10 +125,11 @@ pub(crate) struct WireMeta {
 }
 
 /// `EDA_ANGLE::IsParallelTo` for two directions (a zero vector is the angle 0).
-pub(crate) fn parallel(a: (i64, i64), b: (i64, i64)) -> bool {
-    let a = if a == (0, 0) { (1, 0) } else { a };
-    let b = if b == (0, 0) { (1, 0) } else { b };
-    a.0 as i128 * b.1 as i128 - a.1 as i128 * b.0 as i128 == 0
+pub(crate) fn parallel(a: (Nm, Nm), b: (Nm, Nm)) -> bool {
+    let zero = (Nm::ZERO, Nm::ZERO);
+    let a = if a == zero { (Nm::new(1), Nm::ZERO) } else { a };
+    let b = if b == zero { (Nm::new(1), Nm::ZERO) } else { b };
+    a.0.area(b.1) - a.1.area(b.0) == 0
 }
 
 /// `IsPointOnSegment`: `p` lies on the segment `a`-`b` (ends included).
@@ -136,7 +137,7 @@ pub(crate) fn on_segment(a: Point, b: Point, p: Point) -> bool {
     if a == b {
         return p == a;
     }
-    let cross = (b.x - a.x).raw_shim() as i128 * (p.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (p.x - a.x).raw_shim() as i128;
+    let cross = (b.x - a.x).area(p.y - a.y) - (b.y - a.y).area(p.x - a.x);
     cross == 0 && p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y)
 }
 
@@ -188,8 +189,13 @@ impl Matrix {
     /// `SYM_MIRROR_X`: negates y ("Mirror Vertically"; this IR's `SymbolInstance::mirror_y`).
     pub(crate) const MIRROR_X: Matrix = Matrix { x1: 1, y1: 0, x2: 0, y2: -1 };
 
-    pub(crate) fn apply(self, x: i64, y: i64) -> (i64, i64) {
-        (self.x1 * x + self.y1 * y, self.x2 * x + self.y2 * y)
+    pub(crate) fn apply(self, x: Nm, y: Nm) -> (Nm, Nm) {
+        (x * self.x1 + y * self.y1, x * self.x2 + y * self.y2)
+    }
+
+    /// [`Matrix::apply`] on a pin's direction (a unit step, not a length).
+    pub(crate) fn apply_dir(self, dx: i64, dy: i64) -> (i64, i64) {
+        (self.x1 * dx + self.y1 * dy, self.x2 * dx + self.y2 * dy)
     }
 
     /// The matrix of a file orientation: the rotation first, then the mirror (`parseSymbol`: `SetOrientation( angle )`, then
@@ -386,8 +392,8 @@ impl<'m> Scene<'m> {
         let s = &self.sch.symbols[i];
         let m = Matrix::of(s.rot, s.mirrored, s.mirror_y);
         self.shapes[i].pins.iter().map(|(_, (x, y))| {
-            let (px, py) = m.apply((*x).raw_shim(), (*y).raw_shim());
-            Point { x: s.at.x + Nm::from_raw_shim(px), y: s.at.y + Nm::from_raw_shim(py) }
+            let (px, py) = m.apply(*x, *y);
+            Point { x: s.at.x + px, y: s.at.y + py }
         }).collect()
     }
 
@@ -396,8 +402,8 @@ impl<'m> Scene<'m> {
         let s = &self.sch.symbols[i];
         let m = Matrix::of(s.rot, s.mirrored, s.mirror_y);
         self.shapes[i].pins.iter().map(|(n, (x, y))| {
-            let (px, py) = m.apply((*x).raw_shim(), (*y).raw_shim());
-            (n.clone(), Point { x: s.at.x + Nm::from_raw_shim(px), y: s.at.y + Nm::from_raw_shim(py) })
+            let (px, py) = m.apply(*x, *y);
+            (n.clone(), Point { x: s.at.x + px, y: s.at.y + py })
         }).collect()
     }
 
@@ -489,8 +495,8 @@ impl<'m> Scene<'m> {
             Item::Seg(i) => Some((Point { x: self.segs[i].a.x.min(self.segs[i].b.x), y: self.segs[i].a.y.min(self.segs[i].b.y) }, Point { x: self.segs[i].a.x.max(self.segs[i].b.x), y: self.segs[i].a.y.max(self.segs[i].b.y) })),
             Item::NoteLine(i) => points_box(&self.sch.lines[i].pts),
             // `DEFAULT_JUNCTION_DIAMETER` 36 mil, `DEFAULT_NOCONNECT_SIZE` 48 mil: the same boxes the studio draws and picks by.
-            Item::Junction(i) => around(self.sch.junctions[i].at, Nm::from_raw_shim(457_200)),
-            Item::NoConnect(i) => around(self.sch.no_connects[i].at, Nm::from_raw_shim(609_600)),
+            Item::Junction(i) => around(self.sch.junctions[i].at, Nm::new(457_200)),
+            Item::NoConnect(i) => around(self.sch.no_connects[i].at, Nm::new(609_600)),
             Item::BusEntry(i) => {
                 let b = &self.sch.bus_entries[i];
                 points_box(&[b.at, Point { x: b.at.x + b.size.x, y: b.at.y + b.size.y }])
@@ -920,7 +926,7 @@ pub(crate) fn is_bus_label(text: &str) -> bool {
 
 /// `SCH_LINE::GetAngleFrom`: the direction from `p` towards `other`, in whole degrees.
 fn angle_from(p: Point, other: Point) -> i32 {
-    let (dx, dy) = ((other.x - p.x).raw_shim() as f64, (other.y - p.y).raw_shim() as f64);
+    let (dx, dy) = ((other.x - p.x).as_f64(), (other.y - p.y).as_f64());
     dy.atan2(dx).to_degrees().round() as i32
 }
 
@@ -942,9 +948,8 @@ pub(crate) fn merge_ends(a1: Point, b1: Point, a2: Point, b2: Point) -> Option<(
     } else if ls.x == le.x && os.x == oe.x {
         ls.x == os.x
     } else {
-        let dx = (le.x - ls.x).raw_shim() as i128;
-        let dy = (le.y - ls.y).raw_shim() as i128;
-        (os.y - ls.y).raw_shim() as i128 * dx == (os.x - ls.x).raw_shim() as i128 * dy && (oe.y - ls.y).raw_shim() as i128 * dx == (oe.x - ls.x).raw_shim() as i128 * dy
+        let (dx, dy) = (le.x - ls.x, le.y - ls.y);
+        (os.y - ls.y).area(dx) == (os.x - ls.x).area(dy) && (oe.y - ls.y).area(dx) == (oe.x - ls.x).area(dy)
     };
     if !colinear {
         return None;
@@ -1001,8 +1006,8 @@ fn graphic_box(g: &SchGraphic) -> Option<(Point, Point)> {
 fn shape_box(shape: &SymbolShape, m: Matrix, at: Point) -> Option<(Point, Point)> {
     let (x0, y0, x1, y1) = shape.bbox?;
     let pts: Vec<Point> = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].iter().map(|&(x, y)| {
-        let (px, py) = m.apply(x.raw_shim(), y.raw_shim());
-        Point { x: at.x + Nm::from_raw_shim(px), y: at.y + Nm::from_raw_shim(py) }
+        let (px, py) = m.apply(x, y);
+        Point { x: at.x + px, y: at.y + py }
     }).collect();
     points_box(&pts)
 }
@@ -1055,7 +1060,7 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
 fn power_shape(model: &ConstraintModel, p: &eda_model::ir::PowerSymbol) -> SymbolShape {
     match model.symbol_of(&p.lib_id) {
         Some(lib) => lib_shape(&lib, 1),
-        None => SymbolShape { pins: vec![(String::new(), (Nm::ZERO, Nm::ZERO))], bbox: Some((Nm::from_raw_shim(-300_000), Nm::from_raw_shim(-300_000), Nm::from_raw_shim(300_000), Nm::from_raw_shim(300_000))), dirs: Vec::new() },
+        None => SymbolShape { pins: vec![(String::new(), (Nm::ZERO, Nm::ZERO))], bbox: Some((Nm::new(-300_000), Nm::new(-300_000), Nm::new(300_000), Nm::new(300_000))), dirs: Vec::new() },
     }
 }
 
@@ -1111,8 +1116,8 @@ fn lib_shape(lib: &LibSymbol, unit: u32) -> SymbolShape {
 /// The spin a label has when nothing set one: read off the wire that ends at its anchor (`labelShape.ts::inferSpin`, which draws labels
 /// that way). A label no wire ends at reads to the right.
 pub(crate) fn inferred_spin(segs: &[Seg], at: Point) -> LabelSpin {
-    let tol = 50_000;
-    let near = |p: Point| (p.x - at.x).abs() <= Nm::from_raw_shim(tol) && (p.y - at.y).abs() <= Nm::from_raw_shim(tol);
+    let tol = Nm::new(50_000);
+    let near = |p: Point| (p.x - at.x).abs() <= tol && (p.y - at.y).abs() <= tol;
     for s in segs.iter().filter(|s| !s.dead) {
         let hit = if near(s.b) {
             Some((s.b.x - s.a.x, s.b.y - s.a.y))

@@ -748,7 +748,7 @@ pub fn rebuild(t: &mut Table, chart: &mut DrillChart, c: &ChartContent) {
 
 /// A new chart's table (`PCB_DRILL_CHART( board )`: no cells yet, lines 0.1 mm wide), on `layer` with its first corner at `at`.
 pub fn new_chart_table(layer: &str, at: Point) -> Table {
-    let mut t = Table::new_grid(layer, at, 1, 1, Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100_000));
+    let mut t = Table::new_grid(layer, at, 1, 1, Nm::ZERO, Nm::ZERO, Nm::new(100_000));
     t.cells.clear();
     t.col_widths.clear();
     t.row_heights.clear();

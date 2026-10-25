@@ -190,7 +190,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
     let m = *mapper;
     let mut out = SchItems::default();
     // `MapStrokeParams` for a shape: -1 is "no stroke", which this IR draws as a hairline; any other width is mapped.
-    let shape_stroke = |s: &Stroke| -> (Nm, SchLineStyle, Option<SchColor>) { (if s.width == -1.0 { Nm::from_raw_shim(1_000) } else { Nm::from_raw_shim(m.line_width(s.width)) }, line_style(s.style), s.color.map(sch_color)) };
+    let shape_stroke = |s: &Stroke| -> (Nm, SchLineStyle, Option<SchColor>) { (if s.width == -1.0 { Nm::new(1_000) } else { Nm::from_raw_shim(m.line_width(s.width)) }, line_style(s.style), s.color.map(sch_color)) };
     // "Arcs with a too big radius cannot" be handled: radius >= INT_MAX / 2 in KiCad's tenth-of-a-micrometre unit, a hundred times that in nanometres.
     let max_radius_nm = i32::MAX as f64 / 2.0 * 100.0;
     let add_line = |out: &mut SchItems, a: V2, b: V2, stroke: &Stroke| {

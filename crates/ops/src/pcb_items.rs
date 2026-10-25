@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`): the glyph sizes the Text Box Properties dialog accepts.
-const TEXT_MIN_SIZE_NM: Nm = Nm::from_raw_shim(1_000);
-const TEXT_MAX_SIZE_NM: Nm = Nm::from_raw_shim(250_000_000);
+const TEXT_MIN_SIZE_NM: Nm = Nm::new(1_000);
+const TEXT_MAX_SIZE_NM: Nm = Nm::new(250_000_000);
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, what, msg.into())]
@@ -573,7 +573,7 @@ pub fn corners_in_sequence(t: &TextBox, angle: Millideg) -> [Point; 4] {
     let mut corners = t.pts.clone();
     while corners.len() < 4 {
         let last = *corners.last().unwrap_or(&Point { x: Nm::ZERO, y: Nm::ZERO });
-        corners.push(Point { x: last.x + Nm::from_raw_shim(10), y: last.y + Nm::from_raw_shim(10) });
+        corners.push(Point { x: last.x + Nm::new(10), y: last.y + Nm::new(10) });
     }
     let (mut min_x, mut max_x, mut min_y, mut max_y) = (corners[0], corners[0], corners[0], corners[0]);
     for c in &corners {
