@@ -15,7 +15,7 @@ use eda_model::ir::{LabelKind, LabelShape, NetLabel, Point, SheetInstance, Sheet
 use eda_model::modules::{natural_cmp, FunctionalModule, ModuleKind};
 
 use super::items::Items;
-use super::kit::{label_rect, sheet_pin_rect, smallest_paper, snap_down, snap_up, text_rect, text_w, Paper, Rect, G, SHEET_FILE_FONT, SHEET_NAME_FONT};
+use super::kit::{label_rect, sheet_pin_rect, smallest_paper, snap_down, snap_up, text_rect, text_w, Paper, Rect, G, G_NM, SHEET_FILE_FONT, SHEET_NAME_FONT};
 
 #[derive(Debug, Clone)]
 struct PinSpec {
@@ -201,24 +201,25 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
     let mut sheets: Vec<SheetInstance> = Vec::new();
     let mut pin_at: BTreeMap<(usize, String), Point> = BTreeMap::new();
     for m in 0..n {
-        let at = Point { x: Nm::from_raw_shim(col_x[col[m]]), y: Nm::from_raw_shim(y_of[m]) };
+        let at = Point { x: Nm::new(col_x[col[m]]), y: Nm::new(y_of[m]) };
         let b = &boxes[m];
+        let (w, h) = (Nm::new(b.w), Nm::new(b.h));
         let mut pins: Vec<SheetPin> = Vec::new();
         for (i, p) in b.left.iter().enumerate() {
-            let pt = Point { x: at.x, y: at.y + Nm::from_raw_shim(SheetBox::pin_y(i)) };
+            let pt = Point { x: at.x, y: at.y + Nm::new(SheetBox::pin_y(i)) };
             pin_at.insert((m, p.net.clone()), pt);
             pins.push(SheetPin { id: String::new(), name: p.net.clone(), shape: LabelShape::Bidirectional, at: pt });
             items.rects.push(sheet_pin_rect(pt, true, &p.net));
         }
         for (i, p) in b.right.iter().enumerate() {
-            let pt = Point { x: at.x + Nm::from_raw_shim(b.w), y: at.y + Nm::from_raw_shim(SheetBox::pin_y(i)) };
+            let pt = Point { x: at.x + w, y: at.y + Nm::new(SheetBox::pin_y(i)) };
             pin_at.insert((m, p.net.clone()), pt);
             pins.push(SheetPin { id: String::new(), name: p.net.clone(), shape: LabelShape::Bidirectional, at: pt });
             items.rects.push(sheet_pin_rect(pt, false, &p.net));
         }
-        let sheet = SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (Nm::from_raw_shim(b.w), Nm::from_raw_shim(b.h)), pins, page: String::new() };
+        let sheet = SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (w, h), pins, page: String::new() };
         // the symbol, its name above and its file below, where KiCad's Autoplace Fields puts them
-        let mut r = Rect::new(at.x.raw_shim(), at.y.raw_shim(), (at.x + Nm::from_raw_shim(b.w)).raw_shim(), (at.y + Nm::from_raw_shim(b.h)).raw_shim());
+        let mut r = Rect::sized(at, w, h);
         for f in crate::fields::sheet_fields(&eda_model::ir::SchematicSection::default(), &sheet) {
             r = r.union(text_rect(&f.text, f.at, f.h, f.v, f.vertical));
         }
@@ -243,7 +244,8 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
             let k = lane_of_gap.entry(col[a]).or_insert(0);
             let lane = gap_start + 4 * G + *k;
             *k += 2 * G;
-            vec![pa, Point { x: Nm::from_raw_shim(lane), y: pa.y }, Point { x: Nm::from_raw_shim(lane), y: pb.y }, pb]
+            let lane = Nm::new(lane);
+            vec![pa, Point { x: lane, y: pa.y }, Point { x: lane, y: pb.y }, pb]
         };
         routes.insert(net.clone(), pts);
     }
@@ -292,7 +294,7 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
                 }
                 let pt = pin_at[&(m, p.net.clone())];
                 let dir = if side == Side::Left { (-1, 0) } else { (1, 0) };
-                let end = Point { x: pt.x + Nm::from_raw_shim(dir.0 * 2 * G), y: pt.y };
+                let end = Point { x: pt.x + G_NM * (dir.0 * 2), y: pt.y };
                 items.wires.push(Wire { id: String::new(), net: p.net.clone(), pins: Vec::new(), pts: vec![pt, end], bus: false });
                 items.labels.push(NetLabel { id: String::new(), net: p.net.clone(), at: end, kind: LabelKind::Local });
                 items.rects.push(label_rect(end, dir, &p.net, false));
@@ -304,20 +306,21 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
     let e = items.extent().unwrap_or(Rect::new(0, 0, 0, 0));
     let mut ext = e;
     for s in &sheets {
-        ext = ext.union(Rect::new(s.at.x.raw_shim(), s.at.y.raw_shim(), (s.at.x + s.size.0).raw_shim(), (s.at.y + s.size.1).raw_shim()));
+        ext = ext.union(Rect::sized(s.at, s.size.0, s.size.1));
     }
     let (w, h) = (snap_up(ext.x1) - snap_down(ext.x0), snap_up(ext.y1) - snap_down(ext.y0));
     let paper = smallest_paper(w, h);
     let u = paper.usable();
     let dx = u.x0 + snap_down((u.w() - w) / 2) - snap_down(ext.x0);
     let dy = u.y0 + snap_down((u.h() - h) / 2) - snap_down(ext.y0);
+    let (dx, dy) = (Nm::new(dx), Nm::new(dy));
     items.translate(dx, dy);
     for s in &mut sheets {
-        s.at.x += Nm::from_raw_shim(dx);
-        s.at.y += Nm::from_raw_shim(dy);
+        s.at.x += dx;
+        s.at.y += dy;
         for p in &mut s.pins {
-            p.at.x += Nm::from_raw_shim(dx);
-            p.at.y += Nm::from_raw_shim(dy);
+            p.at.x += dx;
+            p.at.y += dy;
         }
     }
     let _ = segments;

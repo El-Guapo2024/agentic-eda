@@ -42,7 +42,8 @@ pub(crate) fn write_board_title_block(out: &mut String, tb: &TitleBlock) {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::mm;
+    
     use super::*;
 
     fn page_of(text: &str) -> Option<PageSettings> {
@@ -53,7 +54,7 @@ mod tests {
     #[test]
     fn the_paper_element_is_read() {
         assert_eq!(page_of("(kicad_pcb (paper \"A3\" portrait))"), Some(PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None }));
-        assert_eq!(page_of("(kicad_pcb (paper \"User\" 300 200.5))"), Some(PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((Nm::from_raw_shim(300_000_000), Nm::from_raw_shim(200_500_000))) }));
+        assert_eq!(page_of("(kicad_pcb (paper \"User\" 300 200.5))"), Some(PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((mm(300.0), mm(200.5))) }));
         assert_eq!(page_of("(kicad_pcb (paper \"A4\"))"), Some(PageSettings::default()));
         assert_eq!(page_of("(kicad_pcb (version 1))"), None);
     }

@@ -160,11 +160,11 @@ mod tests {
     use eda_model::ConstraintModel;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn seg(layer: &str, a: Point, b: Point, w: i64) -> FpShape {
-        FpShape::new(IrShape::Segment { id: String::new(), layer: layer.into(), stroke_width: Nm::from_raw_shim(w), filled: false, start: a, end: b })
+        FpShape::new(IrShape::Segment { id: String::new(), layer: layer.into(), stroke_width: Nm::new(w), filled: false, start: a, end: b })
     }
 
     /// One footprint at (10, 10) mm with a silk line, a fab line, a mask rectangle, a copper line, and a text on the silk and one on the fab layer.
@@ -172,7 +172,7 @@ mod tests {
         let mut art = FpArt::default();
         art.shapes.push(seg("F.SilkS", p(-1_000, -2_000), p(1_000, -2_000), 120));
         art.shapes.push(seg("F.Fab", p(-1_000, -1_000), p(1_000, -1_000), 100));
-        art.shapes.push(FpShape { mask_margin: Some(Nm::from_raw_shim(50)), ..FpShape::new(IrShape::Rect { id: String::new(), layer: "F.Mask".into(), stroke_width: Nm::ZERO, filled: true, start: p(-500, -500), end: p(500, 500) }) });
+        art.shapes.push(FpShape { mask_margin: Some(Nm::new(50)), ..FpShape::new(IrShape::Rect { id: String::new(), layer: "F.Mask".into(), stroke_width: Nm::ZERO, filled: true, start: p(-500, -500), end: p(500, 500) }) });
         art.shapes.push(seg("F.Cu", p(-2_000, 3_000), p(2_000, 3_000), 300));
         art.texts.push(FpText::new("${REFERENCE}", p(0, 0), "F.SilkS"));
         art.texts.push(FpText::new("fab note", p(0, 500), "F.Fab"));
@@ -211,7 +211,7 @@ mod tests {
         assert!(b.mask.has_footprint_silk);
         // the mask rectangle
         assert_eq!(b.mask.graphics.len(), 1);
-        assert_eq!((b.mask.graphics[0].layer.as_str(), b.mask.graphics[0].margin, b.mask.graphics[0].filled), ("F.Mask", Some(Nm::from_raw_shim(50)), true));
+        assert_eq!((b.mask.graphics[0].layer.as_str(), b.mask.graphics[0].margin, b.mask.graphics[0].filled), ("F.Mask", Some(Nm::new(50)), true));
     }
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
         let (mut design, mut model) = board(Side::Top, 0);
         model.footprints[0].art = FpArt::default();
         let mut extra = FootprintExtra { id: "U1".into(), ..Default::default() };
-        extra.graphics.push(eda_model::ir::FootprintGraphic { shape: IrShape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(120), filled: false, start: p(1, 1), end: p(2, 2) }, solder_mask_margin: None, pad_number: None, net: String::new(), pin_type: String::new() });
+        extra.graphics.push(eda_model::ir::FootprintGraphic { shape: IrShape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::new(120), filled: false, start: p(1, 1), end: p(2, 2) }, solder_mask_margin: None, pad_number: None, net: String::new(), pin_type: String::new() });
         extra.graphics.push(eda_model::ir::FootprintGraphic { shape: IrShape::Circle { id: String::new(), layer: "F.Mask".into(), stroke_width: Nm::ZERO, filled: true, center: p(5, 5), end: p(105, 5) }, solder_mask_margin: None, pad_number: Some("9".into()), net: "N".into(), pin_type: "free".into() });
         design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![extra], ..Default::default() });
         let b = crate::board::build(&design, &model);
@@ -243,7 +243,7 @@ mod tests {
     fn a_footprint_with_art_ignores_what_an_older_import_left_in_board_space_but_keeps_its_mask_pads() {
         let (mut design, model) = board(Side::Top, 0);
         let mut extra = FootprintExtra { id: "U1".into(), ..Default::default() };
-        extra.graphics.push(eda_model::ir::FootprintGraphic { shape: IrShape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(120), filled: false, start: p(1, 1), end: p(2, 2) }, solder_mask_margin: None, pad_number: None, net: String::new(), pin_type: String::new() });
+        extra.graphics.push(eda_model::ir::FootprintGraphic { shape: IrShape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::new(120), filled: false, start: p(1, 1), end: p(2, 2) }, solder_mask_margin: None, pad_number: None, net: String::new(), pin_type: String::new() });
         extra.graphics.push(eda_model::ir::FootprintGraphic { shape: IrShape::Circle { id: String::new(), layer: "F.Mask".into(), stroke_width: Nm::ZERO, filled: true, center: p(5, 5), end: p(105, 5) }, solder_mask_margin: None, pad_number: Some("9".into()), net: String::new(), pin_type: String::new() });
         design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![extra], ..Default::default() });
         let b = crate::board::build(&design, &model);

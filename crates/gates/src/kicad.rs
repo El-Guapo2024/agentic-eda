@@ -139,6 +139,7 @@ pub fn check(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_kicad_engine::Item;
@@ -240,16 +241,16 @@ mod tests {
             board: BoardRules { layers: vec!["F.Cu".into(), "B.Cu".into()], ..Default::default() },
             ..Default::default()
         };
-        let design = |second_x: i64| Design {
+        let design = |second_x: Nm| Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(40_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(40_000_000) }],
+                outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(40.0), y: Nm::ZERO }, Point { x: mm(40.0), y: mm(40.0) }, Point { x: Nm::ZERO, y: mm(40.0) }],
                 footprints: vec![
-                    FootprintInstance { id: "R1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "R2".into(), at: Point { x: Nm::from_raw_shim(second_x), y: Nm::from_raw_shim(20_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: mm(10.0), y: mm(20.0) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R2".into(), at: Point { x: second_x, y: mm(20.0) }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: vec![],
             }),
@@ -257,10 +258,10 @@ mod tests {
             drawings: None,
         };
         let overlap = |checks: &[CheckResult]| checks.iter().filter(|c| c.check == "placement_courtyard_overlap" && c.status == CheckStatus::Fail).count();
-        let stacked = check_placement(&design(10_000_000), &model);
+        let stacked = check_placement(&design(mm(10.0)), &model);
         assert_eq!(overlap(&stacked), 1, "{stacked:?}");
         assert_eq!(stacked.iter().find(|c| c.check == "placement_courtyard_overlap").and_then(|c| c.location.as_deref()), Some("R1/R2"), "the report maps back to our own part ids: {stacked:?}");
-        let apart = check_placement(&design(25_000_000), &model);
+        let apart = check_placement(&design(mm(25.0)), &model);
         assert_eq!(overlap(&apart), 0, "{apart:?}");
         assert!(apart.iter().any(|c| c.check == "placement_courtyard_overlap" && c.status == CheckStatus::Pass), "{apart:?}");
     }

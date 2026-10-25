@@ -3,6 +3,7 @@
 //! (`netclass_flag`), written the way `SCH_IO_KICAD_SEXPR` (`saveShape`, `saveTextBox`, `saveRuleArea`,
 //! `saveText`) writes them and read back from the same tokens.
 
+use eda_model::units::mm;
 use crate::sexpr::{self, Sexpr};
 use crate::{duid_for, sch_mm, sexpr_str};
 use eda_model::ir::{Millideg, Point, SchematicSection, Nm};
@@ -232,9 +233,9 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
             SchGraphicKind::Directive { at, orientation, shape, pin_length_nm, netclass, component_class } => {
                 // `SCH_DIRECTIVE_LABEL::AutoplaceFields`: the fields stack along the flag's pole.
                 // the field's 1.27 mm text, `m_symbolSize` (`MilsToIU( 20 )`, twice for a diamond or a rectangle) and `GetTextOffset()` (0.15 of the text: 1905 IU)
-                let size = Nm::from_raw_shim(1_270_000);
-                let symbol = Nm::from_raw_shim(508_000) * if matches!(shape, DirectiveShape::Diamond | DirectiveShape::Rectangle) { 2 } else { 1 };
-                let margin = Nm::from_raw_shim(190_500);
+                let size = mm(1.27);
+                let symbol = mm(0.508) * if matches!(shape, DirectiveShape::Diamond | DirectiveShape::Rectangle) { 2 } else { 1 };
+                let margin = Nm::new(190_500);
                 let mut origin = *pin_length_nm;
                 let mut props = String::new();
                 for (name, value, italic) in [("Netclass", netclass, false), ("Component Class", component_class, true)] {
@@ -267,7 +268,7 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
 
 /// `SCH_TEXTBOX::GetLegacyTextMargin` for a box on `LAYER_NOTES`: half the stroke width plus 0.75 of the text height.
 pub fn default_text_box_margin(size_nm: Nm, stroke_width_nm: Nm) -> Nm {
-    Nm::from_raw_shim((stroke_width_nm.raw_shim() as f64 / 2.0).round() as i64) + Nm::from_raw_shim((size_nm.raw_shim() as f64 * 0.75).round() as i64)
+    Nm::kiround(stroke_width_nm.as_f64() / 2.0) + Nm::kiround(size_nm.as_f64() * 0.75)
 }
 
 /// One graphic read from a file, with whether it carried `(locked yes)`.
@@ -308,7 +309,7 @@ pub(crate) struct EffectsLook {
 pub(crate) fn read_effects(item: &[Sexpr]) -> EffectsLook {
     let effects = sexpr::find(item, "effects");
     let font = effects.and_then(|e| sexpr::find(e, "font"));
-    let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(Nm::from_raw_shim(1_270_000));
+    let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(mm(1.27));
     let flag = |tag: &str| font.is_some_and(|f| parse_bool(f, tag).unwrap_or(false) || f.iter().skip(1).any(|c| c.text() == Some(tag)));
     let justify: Vec<String> = effects.and_then(|e| sexpr::find(e, "justify")).map(|j| j.iter().skip(1).filter_map(Sexpr::text).map(String::from).collect()).unwrap_or_default();
     EffectsLook { size_nm, bold: flag("bold"), italic: flag("italic"), justify }
@@ -415,7 +416,7 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let margin_nm = sexpr::find(item, "margins").and_then(|m| sexpr::num(m, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(Nm::ZERO);
                 let effects = sexpr::find(item, "effects");
                 let font = effects.and_then(|e| sexpr::find(e, "font"));
-                let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(Nm::from_raw_shim(1_270_000));
+                let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(mm(1.27));
                 let flag = |tag: &str| font.and_then(|f| parse_bool(f, tag)).unwrap_or(false);
                 let justify: Vec<&str> = effects.and_then(|e| sexpr::find(e, "justify")).map(|j| j.iter().skip(1).filter_map(Sexpr::text).collect()).unwrap_or_default();
                 let h_align = if justify.contains(&"left") {
@@ -454,7 +455,7 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let Some(at) = sexpr::find(item, "at") else { continue };
                 let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
                 let orientation = (sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round().rem_euclid(360_000.0) as Millideg;
-                let pin_length_nm = sexpr::find(item, "length").and_then(|l| sexpr::num(l, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(Nm::from_raw_shim(2_540_000));
+                let pin_length_nm = sexpr::find(item, "length").and_then(|l| sexpr::num(l, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(mm(2.54));
                 let shape = sexpr::find(item, "shape").and_then(|s| sexpr::txt(s, 1)).map(DirectiveShape::from_token).unwrap_or_default();
                 let field = |name: &str| sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
                 let kind = SchGraphicKind::Directive { at: Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, orientation, shape, pin_length_nm, netclass: field("Netclass"), component_class: field("Component Class") };
@@ -472,6 +473,7 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     fn p(x: Nm, y: Nm) -> Point {
@@ -479,28 +481,28 @@ mod tests {
     }
 
     fn sample_graphics() -> Vec<SchGraphic> {
-        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000)), end: p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(50_000_000)), corner_radius_nm: Nm::ZERO });
-        rect.width_nm = Nm::from_raw_shim(254_000);
+        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(mm(10.0), mm(20.0)), end: p(mm(30.0), mm(50.0)), corner_radius_nm: Nm::ZERO });
+        rect.width_nm = mm(0.254);
         rect.line_style = SchLineStyle::Dash;
         rect.fill = SchFill::Background;
-        let mut circle = SchGraphic::new(SchGraphicKind::Circle { center: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)), radius_nm: Nm::from_raw_shim(2_500_000) });
+        let mut circle = SchGraphic::new(SchGraphicKind::Circle { center: p(mm(5.0), mm(5.0)), radius_nm: mm(2.5) });
         circle.fill = SchFill::Color;
         circle.fill_color = Some(SchColor { r: 255, g: 0, b: 0, a: 255 });
         circle.color = Some(SchColor { r: 0, g: 128, b: 0, a: 255 });
         vec![
             rect,
             circle,
-            SchGraphic::new(SchGraphicKind::Arc { start: p(Nm::ZERO, Nm::ZERO), mid: p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(-1_000_000)), end: p(Nm::from_raw_shim(2_000_000), Nm::ZERO) }),
-            SchGraphic::new(SchGraphicKind::Bezier { start: p(Nm::ZERO, Nm::ZERO), c1: p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000)), c2: p(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(2_000_000)), end: p(Nm::from_raw_shim(4_000_000), Nm::ZERO) }),
+            SchGraphic::new(SchGraphicKind::Arc { start: p(Nm::ZERO, Nm::ZERO), mid: p(mm(1.0), mm(-1.0)), end: p(mm(2.0), Nm::ZERO) }),
+            SchGraphic::new(SchGraphicKind::Bezier { start: p(Nm::ZERO, Nm::ZERO), c1: p(mm(1.0), mm(2.0)), c2: p(mm(3.0), mm(2.0)), end: p(mm(4.0), Nm::ZERO) }),
             {
-                let mut poly = SchGraphic::new(SchGraphicKind::Polygon { pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000))] });
+                let mut poly = SchGraphic::new(SchGraphicKind::Polygon { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0))] });
                 poly.fill = SchFill::Outline;
                 poly
             },
-            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(20_000_000), Nm::ZERO), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000_000))], exclude_from_sim: true, exclude_from_bom: false, exclude_from_board: true, dnp: true }),
-            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, Nm::ZERO), end: p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(10_000_000)), text: "Hello\nworld".into(), angle: 90_000, size_nm: Nm::from_raw_shim(1_270_000), bold: true, italic: false, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO }),
-            SchGraphic::new(SchGraphicKind::Directive { at: p(Nm::from_raw_shim(50_800_000), Nm::from_raw_shim(25_400_000)), orientation: 90_000, shape: DirectiveShape::Diamond, pin_length_nm: Nm::from_raw_shim(2_540_000), netclass: "HV".into(), component_class: "Power".into() }),
-            SchGraphic::new(SchGraphicKind::Image { at: p(Nm::from_raw_shim(60_000_000), Nm::from_raw_shim(40_000_000)), scale_ppm: 750_000, data: eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254)) }),
+            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(10.0)), p(Nm::ZERO, mm(10.0))], exclude_from_sim: true, exclude_from_bom: false, exclude_from_board: true, dnp: true }),
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, Nm::ZERO), end: p(mm(40.0), mm(10.0)), text: "Hello\nworld".into(), angle: 90_000, size_nm: mm(1.27), bold: true, italic: false, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(mm(50.8), mm(25.4)), orientation: 90_000, shape: DirectiveShape::Diamond, pin_length_nm: mm(2.54), netclass: "HV".into(), component_class: "Power".into() }),
+            SchGraphic::new(SchGraphicKind::Image { at: p(mm(60.0), mm(40.0)), scale_ppm: 750_000, data: eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254)) }),
         ]
     }
 
@@ -574,7 +576,7 @@ mod tests {
     fn an_image_is_written_as_save_bitmap_writes_it_and_read_back_with_the_old_versions_scale_rule() {
         let data = eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254));
         let mut sch = SchematicSection::default();
-        sch.extras.graphics = vec![SchGraphic::new(SchGraphicKind::Image { at: p(Nm::from_raw_shim(60_000_000), Nm::from_raw_shim(40_000_000)), scale_ppm: 1_000_000, data: data.clone() }), SchGraphic::new(SchGraphicKind::Image { at: p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000)), scale_ppm: 2_250_000, data: data.clone() })];
+        sch.extras.graphics = vec![SchGraphic::new(SchGraphicKind::Image { at: p(mm(60.0), mm(40.0)), scale_ppm: 1_000_000, data: data.clone() }), SchGraphic::new(SchGraphicKind::Image { at: p(mm(1.0), mm(2.0)), scale_ppm: 2_250_000, data: data.clone() })];
         sch.assign_missing_ids();
         let ids: Vec<String> = sch.extras.graphics.iter().map(|g| g.id.clone()).collect();
         sch.extras.set_locked(&ids[1], true);
@@ -587,7 +589,7 @@ mod tests {
         assert!(text.lines().filter(|l| l.trim_start().starts_with('"')).all(|l| l.trim().len() <= 78), "lines of at most 76 characters");
         let back = read_graphics(sexpr::parse(&text).unwrap().as_list().unwrap());
         assert_eq!(back.len(), 2);
-        assert!(matches!(&back[0].graphic.shape, SchGraphicKind::Image { at, scale_ppm: 1_000_000, data: d } if *at == p(Nm::from_raw_shim(60_000_000), Nm::from_raw_shim(40_000_000)) && *d == data));
+        assert!(matches!(&back[0].graphic.shape, SchGraphicKind::Image { at, scale_ppm: 1_000_000, data: d } if *at == p(mm(60.0), mm(40.0)) && *d == data));
         assert!(matches!(&back[1].graphic.shape, SchGraphicKind::Image { scale_ppm: 2_250_000, .. }));
         assert!(!back[0].locked && back[1].locked);
         // an old file: the scale is of a 300 ppi image
@@ -613,7 +615,7 @@ mod tests {
 
     #[test]
     fn text_box_margin_defaults_to_the_kicad_legacy_formula() {
-        assert_eq!(default_text_box_margin(Nm::from_raw_shim(1_270_000), Nm::ZERO), Nm::from_raw_shim(952_500));
-        assert_eq!(default_text_box_margin(Nm::from_raw_shim(1_270_000), Nm::from_raw_shim(200_000)), Nm::from_raw_shim(100_000 + 952_500));
+        assert_eq!(default_text_box_margin(mm(1.27), Nm::ZERO), Nm::new(952_500));
+        assert_eq!(default_text_box_margin(mm(1.27), mm(0.2)), Nm::new(100_000 + 952_500));
     }
 }

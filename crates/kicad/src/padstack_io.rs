@@ -260,15 +260,15 @@ mod tests {
     #[test]
     fn a_front_inner_back_padstack_is_read_as_its_three_shapes() {
         let pad = pad_of(FRONT_INNER_BACK, Side::Top, 4);
-        assert_eq!((pad.shape, pad.size), (PadShape::Oval, (Nm::from_raw_shim(3_048_000), Nm::from_raw_shim(1_524_000))));
+        assert_eq!((pad.shape, pad.size), (PadShape::Oval, (Nm::from_mm(3.048), Nm::from_mm(1.524))));
         let stack = &pad.ext.stack;
         assert_eq!(stack.mode, PadStackMode::FrontInnerBack);
-        assert_eq!(stack.inner, Some(PadLayerShape::plain(PadShape::Oval, (Nm::from_raw_shim(1_270_000), Nm::from_raw_shim(1_270_000)))));
-        assert_eq!(stack.back, Some(PadLayerShape::plain(PadShape::Oval, (Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(1_016_000)))));
+        assert_eq!(stack.inner, Some(PadLayerShape::plain(PadShape::Oval, (Nm::from_mm(1.27), Nm::from_mm(1.27)))));
+        assert_eq!(stack.back, Some(PadLayerShape::plain(PadShape::Oval, (Nm::from_mm(2.54), Nm::from_mm(1.016)))));
         assert_eq!(stack.unconnected, UnconnectedLayers::KeepAll);
         // What the board's layers have: the front, the two inner layers together, the back.
         let groups = pad.shape_groups(Side::Top, &layers(4));
-        assert_eq!(groups.iter().map(|g| (g.layers.clone(), g.shape.size)).collect::<Vec<_>>(), vec![(vec!["F.Cu".to_string()], (Nm::from_raw_shim(3_048_000), Nm::from_raw_shim(1_524_000))), (vec!["In1.Cu".to_string(), "In2.Cu".to_string()], (Nm::from_raw_shim(1_270_000), Nm::from_raw_shim(1_270_000))), (vec!["B.Cu".to_string()], (Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(1_016_000)))]);
+        assert_eq!(groups.iter().map(|g| (g.layers.clone(), g.shape.size)).collect::<Vec<_>>(), vec![(vec!["F.Cu".to_string()], (Nm::from_mm(3.048), Nm::from_mm(1.524))), (vec!["In1.Cu".to_string(), "In2.Cu".to_string()], (Nm::from_mm(1.27), Nm::from_mm(1.27))), (vec!["B.Cu".to_string()], (Nm::from_mm(2.54), Nm::from_mm(1.016)))]);
     }
 
     #[test]
@@ -293,9 +293,9 @@ mod tests {
         }
         // On the bottom the file's `F.Cu` is the footprint's back: the main fields of the file hold what the model calls its back.
         let bottom = pad_of(FRONT_INNER_BACK, Side::Bottom, 4);
-        assert_eq!((bottom.shape, bottom.size), (PadShape::Oval, (Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(1_016_000))), "the file's B.Cu is the footprint's own side");
-        assert_eq!(bottom.ext.stack.back.as_ref().map(|s| s.size), Some((Nm::from_raw_shim(3_048_000), Nm::from_raw_shim(1_524_000))), "the file's main fields are its back");
-        assert_eq!(bottom.ext.stack.inner.as_ref().map(|s| s.size), Some((Nm::from_raw_shim(1_270_000), Nm::from_raw_shim(1_270_000))));
+        assert_eq!((bottom.shape, bottom.size), (PadShape::Oval, (Nm::from_mm(2.54), Nm::from_mm(1.016))), "the file's B.Cu is the footprint's own side");
+        assert_eq!(bottom.ext.stack.back.as_ref().map(|s| s.size), Some((Nm::from_mm(3.048), Nm::from_mm(1.524))), "the file's main fields are its back");
+        assert_eq!(bottom.ext.stack.inner.as_ref().map(|s| s.size), Some((Nm::from_mm(1.27), Nm::from_mm(1.27))));
     }
 
     #[test]
@@ -307,8 +307,8 @@ mod tests {
         let stack = &pad.ext.stack;
         assert_eq!(stack.mode, PadStackMode::Custom);
         assert_eq!(stack.layers.keys().map(String::as_str).collect::<Vec<_>>(), vec!["B.Cu", "In1.Cu", "In2.Cu"], "the front is the pad's own");
-        assert_eq!(stack.layers["In2.Cu"].size, (Nm::from_raw_shim(1_270_000), Nm::ZERO), "`PADSTACK::SetSize` takes a negative size to zero");
-        assert_eq!(stack.layers["B.Cu"].size, (Nm::from_raw_shim(1_524_000), Nm::from_raw_shim(1_524_000)));
+        assert_eq!(stack.layers["In2.Cu"].size, (Nm::from_mm(1.27), Nm::ZERO), "`PADSTACK::SetSize` takes a negative size to zero");
+        assert_eq!(stack.layers["B.Cu"].size, (Nm::from_mm(1.524), Nm::from_mm(1.524)));
         let groups = pad.shape_groups(Side::Top, &layers(4));
         assert_eq!(groups.len(), 4, "four layers, four shapes");
         // Written back, the layers in the board's order and without the front, as `format( const PAD* )` does.

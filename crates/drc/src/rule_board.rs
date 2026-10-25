@@ -252,20 +252,20 @@ impl<'a> RuleBoard<'a> {
             it.set("Reference", Prop::Str(fp.id.clone()));
             it.set("Value", Prop::Str(value));
             it.set("Library Link", Prop::Str(fpid));
-            it.set("Position X", Prop::Int(fp.at.x.raw_shim()));
-            it.set("Position Y", Prop::Int(fp.at.y.raw_shim()));
+            it.set("Position X", Prop::Int(fp.at.x.get()));
+            it.set("Position Y", Prop::Int(fp.at.y.get()));
             it.set("Orientation", Prop::Double(fp.rot as f64 / 1000.0));
             it.set("Layer", Prop::Layer(side_layer.to_string()));
             it.set("Locked", Prop::Bool(false));
             if let Some(e) = extras.get(fp.id.as_str()) {
                 if let Some(c) = e.clearance {
-                    it.overrides.clearance = Some((c.raw_shim(), format!("footprint {}", fp.id)));
-                    it.local_clearance = Some((c.raw_shim(), format!("footprint {}", fp.id)));
+                    it.overrides.clearance = Some((c, format!("footprint {}", fp.id)));
+                    it.local_clearance = Some((c, format!("footprint {}", fp.id)));
                 }
                 if let Some(z) = e.zone_connection {
                     it.overrides.zone_connection = Some((ZoneConnection::from_pad_connection(z), format!("footprint {}", fp.id)));
                 }
-                it.overrides.solder_mask_margin = e.solder_mask_margin.map(Nm::raw_shim);
+                it.overrides.solder_mask_margin = e.solder_mask_margin;
             }
             it.footprint = Some(Rc::new(facts));
             out.insert(fp.id.clone(), Rc::new(it));
@@ -341,26 +341,26 @@ impl<'a> RuleBoard<'a> {
         it.plated = p.kind == PadKind::ThroughHole;
         it.position = p.center;
         it.flashed = p.layers.clone();
-        it.drill = (p.drill_round.or_else(|| p.drill_slot.map(|(w, _)| w)).unwrap_or(Nm::ZERO)).raw_shim();
+        it.drill = p.drill_round.or_else(|| p.drill_slot.map(|(w, _)| w)).unwrap_or(Nm::ZERO);
         it.parent = parent.clone();
         it.footprint = parent.as_ref().and_then(|f| f.footprint.clone());
         it.net_tie = self.net_tie_nets(p);
         if let Some(m) = self.board.mask.pads.get(idx) {
             it.tented = [m.tent_front.unwrap_or(false), m.tent_back.unwrap_or(false)];
-            it.overrides.solder_mask_margin = m.margin.map(Nm::raw_shim);
+            it.overrides.solder_mask_margin = m.margin;
         }
         // `PAD::GetClearanceOverrides`: its own clearance, else its footprint's. `GetLocalClearance` is the pad's alone.
         if let Some(c) = p.zone.pad_clearance {
-            it.overrides.clearance = Some((c.raw_shim(), "pad".to_string()));
-            it.local_clearance = Some((c.raw_shim(), "pad".to_string()));
+            it.overrides.clearance = Some((c, "pad".to_string()));
+            it.local_clearance = Some((c, "pad".to_string()));
         } else if let Some(c) = p.zone.footprint_clearance {
-            it.overrides.clearance = Some((c.raw_shim(), format!("footprint {}", p.footprint_ref)));
+            it.overrides.clearance = Some((c, format!("footprint {}", p.footprint_ref)));
         }
         if let Some(z) = p.zone.connection {
             it.overrides.zone_connection = Some((ZoneConnection::from_pad_connection(z), "pad".to_string()));
         }
-        it.overrides.thermal_gap = p.zone.thermal_gap.map(|g| (g.raw_shim(), "pad".to_string()));
-        it.overrides.spoke_width = p.zone.thermal_spoke_width.map(|g| (g.raw_shim(), "pad".to_string()));
+        it.overrides.thermal_gap = p.zone.thermal_gap.map(|g| (g, "pad".to_string()));
+        it.overrides.spoke_width = p.zone.thermal_spoke_width.map(|g| (g, "pad".to_string()));
         // properties
         let shape_label = match p.shape {
             PadShape::Circle => "Circle",
@@ -379,20 +379,20 @@ impl<'a> RuleBoard<'a> {
         it.set("Pad Number", Prop::Str(p.number.clone()));
         it.set("Pad Type", Prop::Enum(type_label.to_string()));
         it.set("Pad Shape", Prop::Enum(shape_label.to_string()));
-        it.set("Size X", Prop::Int(p.size.0.raw_shim()));
-        it.set("Size Y", Prop::Int(p.size.1.raw_shim()));
-        it.set("Position X", Prop::Int(p.center.x.raw_shim()));
-        it.set("Position Y", Prop::Int(p.center.y.raw_shim()));
+        it.set("Size X", Prop::Int(p.size.0.get()));
+        it.set("Size Y", Prop::Int(p.size.1.get()));
+        it.set("Position X", Prop::Int(p.center.x.get()));
+        it.set("Position Y", Prop::Int(p.center.y.get()));
         it.set("Orientation", Prop::Double(-(p.orientation_mdeg as f64) / 1000.0));
         it.set("Net", Prop::Enum(net.clone()));
         it.set("Locked", Prop::Bool(false));
         it.set("Layer", Prop::Layer(layers.first().cloned().unwrap_or_default()));
         if let Some(d) = p.drill_round {
-            it.set("Hole Size X", Prop::Int(d.raw_shim()));
-            it.set("Hole Size Y", Prop::Int(d.raw_shim()));
+            it.set("Hole Size X", Prop::Int(d.get()));
+            it.set("Hole Size Y", Prop::Int(d.get()));
         } else if let Some((w, h)) = p.drill_slot {
-            it.set("Hole Size X", Prop::Int(w.raw_shim()));
-            it.set("Hole Size Y", Prop::Int(h.raw_shim()));
+            it.set("Hole Size X", Prop::Int(w.get()));
+            it.set("Hole Size Y", Prop::Int(h.get()));
         }
         // PAD::GetItemDescription
         let fp_ref = &p.footprint_ref;
@@ -426,20 +426,20 @@ impl<'a> RuleBoard<'a> {
         it.layer = Some(s.layer.clone());
         it.shapes = vec![s.shape()];
         it.position = s.a;
-        it.set("Width", Prop::Int(s.width.raw_shim()));
+        it.set("Width", Prop::Int(s.width.get()));
         it.set("Layer", Prop::Layer(s.layer.clone()));
         it.set("Net", Prop::Enum(net.clone()));
-        it.set("Start X", Prop::Int(s.a.x.raw_shim()));
-        it.set("Start Y", Prop::Int(s.a.y.raw_shim()));
-        it.set("End X", Prop::Int(s.b.x.raw_shim()));
-        it.set("End Y", Prop::Int(s.b.y.raw_shim()));
+        it.set("Start X", Prop::Int(s.a.x.get()));
+        it.set("Start Y", Prop::Int(s.a.y.get()));
+        it.set("End X", Prop::Int(s.b.x.get()));
+        it.set("End Y", Prop::Int(s.b.y.get()));
         it.set("Locked", Prop::Bool(false));
         let length = match s.arc_mid {
             Some(mid) => {
                 let pts = crate::board::arc_polyline(s.a, mid, s.b, crate::board::ARC_HIGH_DEF);
-                pts.windows(2).map(|w| (crate::kimath::dist(w[0], w[1])).raw_shim() as f64).sum::<f64>()
+                pts.windows(2).map(|w| (crate::kimath::dist(w[0], w[1])).as_f64()).sum::<f64>()
             }
-            None => (crate::kimath::dist(s.a, s.b)).raw_shim() as f64,
+            None => (crate::kimath::dist(s.a, s.b)).as_f64(),
         };
         let layer_name = self.rules.layer_setup.display_name(&s.layer);
         it.description = format!("{} {} on {}, length {}", if s.is_arc() { "Track (arc)" } else { "Track" }, net_msg(&net), layer_name, message_text(length, self.units));
@@ -480,16 +480,16 @@ impl<'a> RuleBoard<'a> {
         it.plated = true;
         it.position = v.at;
         it.via_type = Some(kind);
-        it.drill = v.drill.raw_shim();
+        it.drill = v.drill;
         it.flashed = layers;
         if let Some(t) = self.board.mask.vias.get(idx) {
             it.tented = [t.tent_front.unwrap_or(self.rules.solder_mask.tent_vias_front), t.tent_back.unwrap_or(self.rules.solder_mask.tent_vias_back)];
         }
         it.set("Via Type", Prop::Enum(kind.to_string()));
-        it.set("Diameter", Prop::Int(v.diameter.raw_shim()));
-        it.set("Hole", Prop::Int(v.drill.raw_shim()));
-        it.set("Position X", Prop::Int(v.at.x.raw_shim()));
-        it.set("Position Y", Prop::Int(v.at.y.raw_shim()));
+        it.set("Diameter", Prop::Int(v.diameter.get()));
+        it.set("Hole", Prop::Int(v.drill.get()));
+        it.set("Position X", Prop::Int(v.at.x.get()));
+        it.set("Position Y", Prop::Int(v.at.y.get()));
         it.set("Layer Top", Prop::Layer(v.from_layer.clone()));
         it.set("Layer Bottom", Prop::Layer(v.to_layer.clone()));
         it.set("Net", Prop::Enum(net.clone()));
@@ -527,8 +527,8 @@ impl<'a> RuleBoard<'a> {
         let net = z.net.clone();
         it.net = net.clone();
         it.set("Net", Prop::Enum(net.clone()));
-        it.set("Clearance", Prop::Int(z.clearance.raw_shim()));
-        it.set("Minimum Width", Prop::Int(z.min_thickness.raw_shim()));
+        it.set("Clearance", Prop::Int(z.clearance.get()));
+        it.set("Minimum Width", Prop::Int(z.min_thickness.get()));
         let pc = ZoneConnection::from_pad_connection(z.pad_connection);
         it.set(
             "Pad Connections",
@@ -544,10 +544,10 @@ impl<'a> RuleBoard<'a> {
             ),
         );
         it.zone_pad_connection = Some(pc);
-        it.zone_thermal_gap = z.thermal_gap.raw_shim();
-        it.zone_spoke_width = z.thermal_spoke_width.raw_shim();
-        it.zone_min_thickness = z.min_thickness.raw_shim();
-        it.local_clearance = Some((z.clearance.raw_shim(), "zone".to_string()));
+        it.zone_thermal_gap = z.thermal_gap;
+        it.zone_spoke_width = z.thermal_spoke_width;
+        it.zone_min_thickness = z.min_thickness;
+        it.local_clearance = Some((z.clearance, "zone".to_string()));
         it.description = if z.teardrop {
             format!("Teardrop {} on {layer_name}", net_msg(&net))
         } else if z.name.is_empty() {
@@ -568,7 +568,7 @@ impl<'a> RuleBoard<'a> {
         it.shapes = crate::board::effective_shapes(s);
         it.position = s.points().first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
         it.set("Layer", Prop::Layer(layer.clone()));
-        it.set("Line Width", Prop::Int(s.stroke_width().raw_shim()));
+        it.set("Line Width", Prop::Int(s.stroke_width().get()));
         let name = match s {
             eda_model::ir::Shape::Segment { .. } => "Line",
             eda_model::ir::Shape::Rect { .. } => "Rectangle",
@@ -587,14 +587,14 @@ impl<'a> RuleBoard<'a> {
         it.layers = vec![t.layer.clone()];
         it.layer = Some(t.layer.clone());
         it.position = t.at;
-        it.text_height = t.size_nm.raw_shim();
-        it.text_thickness = t.stroke_width.raw_shim();
+        it.text_height = t.size_nm;
+        it.text_thickness = t.stroke_width;
         it.set("Text", Prop::Str(t.content.clone()));
         it.set("Layer", Prop::Layer(t.layer.clone()));
-        it.set("Text Height", Prop::Int(t.size_nm.raw_shim()));
-        it.set("Text Thickness", Prop::Int(t.stroke_width.raw_shim()));
-        it.set("Position X", Prop::Int(t.at.x.raw_shim()));
-        it.set("Position Y", Prop::Int(t.at.y.raw_shim()));
+        it.set("Text Height", Prop::Int(t.size_nm.get()));
+        it.set("Text Thickness", Prop::Int(t.stroke_width.get()));
+        it.set("Position X", Prop::Int(t.at.x.get()));
+        it.set("Position Y", Prop::Int(t.at.y.get()));
         it.description = format!("PCB text '{}' on {}", t.content, self.rules.layer_setup.display_name(&t.layer));
         it
     }
@@ -718,10 +718,10 @@ impl<'a> RuleBoard<'a> {
         it.plated = true;
         it.position = at;
         it.via_type = Some(if lo == 0 && hi + 1 == copper.len() { "Through" } else if lo == 0 || hi + 1 == copper.len() { "Blind" } else { "Buried" });
-        it.drill = drill.raw_shim();
+        it.drill = drill;
         it.flashed = layers;
-        it.set("Diameter", Prop::Int(diameter.raw_shim()));
-        it.set("Hole", Prop::Int(drill.raw_shim()));
+        it.set("Diameter", Prop::Int(diameter.get()));
+        it.set("Hole", Prop::Int(drill.get()));
         it.set("Net", Prop::Enum(net.to_string()));
         Rc::new(it)
     }
@@ -743,14 +743,14 @@ impl<'a> RuleBoard<'a> {
         it.layers = vec![t.layer.clone()];
         it.layer = Some(t.layer.clone());
         it.position = t.at;
-        it.text_height = t.size.1.raw_shim();
-        it.text_thickness = t.thickness.raw_shim();
+        it.text_height = t.size.1;
+        it.text_thickness = t.thickness;
         it.set("Text", Prop::Str(t.text.clone()));
         it.set("Layer", Prop::Layer(t.layer.clone()));
-        it.set("Text Height", Prop::Int(t.size.1.raw_shim()));
-        it.set("Text Thickness", Prop::Int(t.thickness.raw_shim()));
-        it.set("Position X", Prop::Int(t.at.x.raw_shim()));
-        it.set("Position Y", Prop::Int(t.at.y.raw_shim()));
+        it.set("Text Height", Prop::Int(t.size.1.get()));
+        it.set("Text Thickness", Prop::Int(t.thickness.get()));
+        it.set("Position X", Prop::Int(t.at.x.get()));
+        it.set("Position Y", Prop::Int(t.at.y.get()));
         it.description = format!("PCB text '{}' on {}", t.text, self.rules.layer_setup.display_name(&t.layer));
         Rc::new(it)
     }

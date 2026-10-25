@@ -458,8 +458,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         // the file keeps a turned symbol's field where it is on the sheet, with the angle and justification it has before the turn
         for (p, text) in eda_engine::fields::power_placements(sch, ps) {
-            let (ox, oy) = eda_engine::symgeom::bake(ps.rot, false, 0.0, p.dx.raw_shim() as f64, p.dy.raw_shim() as f64);
-            write_field_text(&mut out, &p.name, &text, (ps.at.x.raw_shim() as f64 + ox, ps.at.y.raw_shim() as f64 + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible, &FieldLook::of(&p));
+            let (ox, oy) = eda_engine::symgeom::bake(ps.rot, false, 0.0, p.dx.as_f64(), p.dy.as_f64());
+            write_field_text(&mut out, &p.name, &text, (ps.at.x.as_f64() + ox, ps.at.y.as_f64() + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible, &FieldLook::of(&p));
         }
         write_property(&mut out, "Footprint", "", 0.0, 0.0, true);
         write_property(&mut out, "Datasheet", "", 0.0, 0.0, true);
@@ -748,7 +748,7 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         let justify = if angle == 0 || angle == 90 { "right" } else { "left" };
         // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`)
         let look = sch.extras.sheet_pin_looks.get(&p.id).copied().unwrap_or_default();
-        let font = FieldLook { size_nm: look.text_size_nm().raw_shim() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
+        let font = FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
         writeln!(out, "\t\t\t(effects {font} (justify {justify})))").unwrap();
     }
     writeln!(out, "\t\t(instances").unwrap();
@@ -1041,7 +1041,7 @@ impl FieldLook {
     const DEFAULT: FieldLook = FieldLook { size_nm: 1_270_000.0, bold: false, italic: false, show_name: false, do_not_autoplace: false };
 
     fn of(p: &FieldPlacement) -> FieldLook {
-        FieldLook { size_nm: p.text_size_nm().raw_shim() as f64, bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace }
+        FieldLook { size_nm: p.text_size_nm().as_f64(), bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace }
     }
 
     fn of_page(f: &eda_engine::fields::PageField) -> FieldLook {
@@ -1087,7 +1087,7 @@ pub(crate) fn label_effects(sch: &eda_model::ir::SchematicSection, l: &NetLabel,
     let (angle, justify) = label_spin(sch, l);
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
     let vertical_justify = if local { " bottom" } else { "" };
-    (angle, format!("(effects {} (justify {justify}{vertical_justify}))", FieldLook { size_nm: look.text_size_nm().raw_shim() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font()))
+    (angle, format!("(effects {} (justify {justify}{vertical_justify}))", FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font()))
 }
 
 /// `(fields_autoplaced yes)`: the fields of the item are where Autoplace Fields put them (`SCH_ITEM::GetFieldsAutoplaced`).
@@ -1988,8 +1988,8 @@ mod tests {
         let (plx, ply) = local_port_point(&port, width, height);
         let (slx, sly) = local_stub_tip(&port, plx, ply);
         let (bx_mm, by_mm) = baked_local(u1, width as f64, slx, sly);
-        let expected_x_nm = u1.at.x + Nm::from_raw_shim((bx_mm * 1e6).round() as i64);
-        let expected_y_nm = u1.at.y + Nm::from_raw_shim((by_mm * 1e6).round() as i64);
+        let expected_x_nm = u1.at.x + Nm::kiround(bx_mm * 1e6);
+        let expected_y_nm = u1.at.y + Nm::kiround(by_mm * 1e6);
 
         let meta = ExportMeta { date: "2026-01-01", title: "t" };
         let out = export_kicad_sch(&design, &model, &meta).unwrap();
@@ -2004,10 +2004,10 @@ mod tests {
         let at_str = &before[at_idx + 4..];
         let end = at_str.find(" 0)").unwrap();
         let coords: Vec<f64> = at_str[..end].split(' ').map(|t| t.parse().unwrap()).collect();
-        let got_x_nm = (coords[0] * 1e6).round() as i64 + u1.at.x.raw_shim();
-        let got_y_nm = (coords[1] * 1e6).round() as i64 + u1.at.y.raw_shim();
-        assert!((got_x_nm - expected_x_nm.raw_shim()).abs() <= 100, "x mismatch: {got_x_nm} vs {expected_x_nm}");
-        assert!((got_y_nm - expected_y_nm.raw_shim()).abs() <= 100, "y mismatch: {got_y_nm} vs {expected_y_nm}");
+        let got_x_nm = Nm::kiround(coords[0] * 1e6) + u1.at.x;
+        let got_y_nm = Nm::kiround(coords[1] * 1e6) + u1.at.y;
+        assert!((got_x_nm - expected_x_nm).abs() <= Nm::new(100), "x mismatch: {got_x_nm} vs {expected_x_nm}");
+        assert!((got_y_nm - expected_y_nm).abs() <= Nm::new(100), "y mismatch: {got_y_nm} vs {expected_y_nm}");
     }
 
     #[test]
@@ -2080,7 +2080,7 @@ mod tests {
         // this crate's other tests already rely on, rather than
         // re-deriving the exact stub-tip offset by hand.
         let r1_at = child_sch.symbols[0].at;
-        let pin1_tip = Point { x: r1_at.x, y: r1_at.y - Nm::from_raw_shim(3810) };
+        let pin1_tip = Point { x: r1_at.x, y: r1_at.y - Nm::new(3810) };
         child_sch.labels.push(eda_model::ir::NetLabel { id: String::new(), net: "AD0".into(), at: pin1_tip, kind: LabelKind::Hierarchical { shape: LabelShape::Passive } });
 
         let root_sch = SchematicSection {
@@ -2096,9 +2096,9 @@ mod tests {
                 id: String::new(),
                 name: "child".into(),
                 file: "child.kicad_sch".into(),
-                at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) },
-                size: (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(20_000_000)),
-                pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(30_000_000) } }],
+                at: Point { x: Nm::from_mm(10.0), y: Nm::from_mm(10.0) },
+                size: (Nm::from_mm(20.0), Nm::from_mm(20.0)),
+                pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: Nm::from_mm(15.0), y: Nm::from_mm(30.0) } }],
                 page: String::new(),
             }],
             instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),

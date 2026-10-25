@@ -72,7 +72,8 @@ pub fn pad_clusters(design: &Design, model: &ConstraintModel, wanted: &[(String,
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::mm;
+    
     use super::*;
     use crate::tests_support::{pad_center, two_pad_model};
     use eda_model::ir::{Point, Track, Via};
@@ -84,10 +85,10 @@ mod tests {
         let mid = Point { x: (a.x + b.x) / 2, y: a.y };
         let rt = design.routing.as_mut().unwrap();
         // R1.1 - mid - R2.1 on F.Cu, a via at the middle, and a track of another net that crosses nothing.
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, mid], arc_mid_offset: None });
-        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![mid, b], arc_mid_offset: None });
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: mid, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.tracks.push(Track { id: "far".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: a.x, y: a.y + Nm::from_raw_shim(5_000_000) }, Point { x: a.x + Nm::from_raw_shim(1_000_000), y: a.y + Nm::from_raw_shim(5_000_000) }], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![a, mid], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![mid, b], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: mid, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "far".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: a.x, y: a.y + mm(5.0) }, Point { x: a.x + mm(1.0), y: a.y + mm(5.0) }], arc_mid_offset: None });
         let clusters = pad_clusters(&design, &model, &[("R1".into(), "1".into(), 1)]);
         let c = &clusters[0];
         assert_eq!(c.tracks, ["t1".to_string(), "t2".to_string()].into(), "the tracks that reach the pad, and the one beyond the via, not the one that touches nothing");

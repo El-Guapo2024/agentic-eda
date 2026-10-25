@@ -120,15 +120,15 @@ pub struct Gfx {
 impl Gfx {
     /// The shape of the item in micrometre-free `ir` terms: the coordinates are nanometres (the unit does not matter to the code that chains them).
     pub fn to_ir(&self) -> Shape {
-        let p = |v: &V| Point { x: Nm::from_raw_shim(v.x), y: Nm::from_raw_shim(v.y) };
+        let p = |v: &V| Point { x: Nm::new(v.x), y: Nm::new(v.y) };
         let (layer, stroke_width, filled) = (self.layer.clone(), self.width, self.filled);
         match &self.shape {
-            GfxShape::Segment(a, b) => Shape::Segment { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: p(a), end: p(b) },
-            GfxShape::Circle(c, e) => Shape::Circle { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, center: p(c), end: p(e) },
-            GfxShape::Rect(a, b) => Shape::Rect { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: p(a), end: p(b) },
-            GfxShape::Arc(a, m, b) => Shape::Arc { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: p(a), mid: p(m), end: p(b) },
-            GfxShape::Poly(pts) => Shape::Polygon { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, pts: pts.iter().map(p).collect() },
-            GfxShape::Bezier([a, c1, c2, b]) => Shape::Bezier { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: p(a), c1: p(c1), c2: p(c2), end: p(b) },
+            GfxShape::Segment(a, b) => Shape::Segment { id: String::new(), layer, stroke_width: Nm::new(stroke_width), filled, start: p(a), end: p(b) },
+            GfxShape::Circle(c, e) => Shape::Circle { id: String::new(), layer, stroke_width: Nm::new(stroke_width), filled, center: p(c), end: p(e) },
+            GfxShape::Rect(a, b) => Shape::Rect { id: String::new(), layer, stroke_width: Nm::new(stroke_width), filled, start: p(a), end: p(b) },
+            GfxShape::Arc(a, m, b) => Shape::Arc { id: String::new(), layer, stroke_width: Nm::new(stroke_width), filled, start: p(a), mid: p(m), end: p(b) },
+            GfxShape::Poly(pts) => Shape::Polygon { id: String::new(), layer, stroke_width: Nm::new(stroke_width), filled, pts: pts.iter().map(p).collect() },
+            GfxShape::Bezier([a, c1, c2, b]) => Shape::Bezier { id: String::new(), layer, stroke_width: Nm::new(stroke_width), filled, start: p(a), c1: p(c1), c2: p(c2), end: p(b) },
         }
     }
 

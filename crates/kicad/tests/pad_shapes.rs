@@ -4,6 +4,7 @@
 //! own outline. The first group needs no external tool; the last test (`EDA_SLOW_TESTS=1`) asks kicad-cli to plot the copper of the
 //! original and of our export and compares the two.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -93,7 +94,7 @@ fn a_board_with_trapezoid_chamfered_and_custom_pads_keeps_every_one_of_them() {
     assert_eq!(pads.len(), 4);
 
     let trap = pad(pads, "1");
-    assert_eq!((trap.shape, trap.size, trap.ext.trapezoid_delta), (PadShape::Trapezoid, (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(1_000_000)), Some((Nm::from_raw_shim(400_000), Nm::ZERO))));
+    assert_eq!((trap.shape, trap.size, trap.ext.trapezoid_delta), (PadShape::Trapezoid, (mm(2.0), mm(1.0)), Some((mm(0.4), Nm::ZERO))));
 
     let chamfered = pad(pads, "2");
     assert_eq!((chamfered.shape, chamfered.roundrect_ratio, chamfered.ext.chamfer_ratio), (PadShape::ChamferedRect, Some(0.2), Some(0.25)));
@@ -116,7 +117,7 @@ fn a_board_with_trapezoid_chamfered_and_custom_pads_keeps_every_one_of_them() {
     assert!(c.primitives[0].shape.is_filled() && !c.primitives[3].shape.is_filled());
 
     let offset = pad(pads, "4");
-    assert_eq!((offset.shape, offset.ext.offset, offset.drill), (PadShape::Oval, Some((Nm::from_raw_shim(300_000), Nm::ZERO)), Some(Nm::from_raw_shim(700_000))));
+    assert_eq!((offset.shape, offset.ext.offset, offset.drill), (PadShape::Oval, Some((mm(0.3), Nm::ZERO)), Some(mm(0.7))));
 
     // It writes them the way KiCad does ...
     let text = export(&design, &model);
@@ -172,9 +173,9 @@ fn a_custom_pad_on_the_back_covers_the_mirror_image_of_the_one_on_the_front() {
         let back = board.pads.iter().find(|p| p.id == format!("Q2.{number}")).expect("back pad");
         let (f, b) = (front.copper.bbox(Nm::ZERO), back.copper.bbox(Nm::ZERO));
         // Mirrored about x = 20: x -> 40 - x.
-        let mirrored = (Nm::from_raw_shim(40_000_000) - f.2, f.1, Nm::from_raw_shim(40_000_000) - f.0, f.3);
-        let tol = 2000;
-        assert!((mirrored.0 - b.0).abs() <= Nm::from_raw_shim(tol) && (mirrored.1 - b.1).abs() <= Nm::from_raw_shim(tol) && (mirrored.2 - b.2).abs() <= Nm::from_raw_shim(tol) && (mirrored.3 - b.3).abs() <= Nm::from_raw_shim(tol), "pad {number}: {f:?} mirrored {mirrored:?} vs {b:?}");
+        let mirrored = (mm(40.0) - f.2, f.1, mm(40.0) - f.0, f.3);
+        let tol = Nm::new(2000);
+        assert!((mirrored.0 - b.0).abs() <= tol && (mirrored.1 - b.1).abs() <= tol && (mirrored.2 - b.2).abs() <= tol && (mirrored.3 - b.3).abs() <= tol, "pad {number}: {f:?} mirrored {mirrored:?} vs {b:?}");
     }
 }
 
@@ -241,7 +242,7 @@ fn pad_areas_mm2(text: &str) -> Vec<(String, f64)> {
         let footprint = model.footprint_of(part).expect("a footprint");
         for pad in &footprint.pads {
             let centre = eda_model::footprint::to_board(fp, pad.at);
-            let area = eda_drc::pad_shape::pad_polygons(fp, pad, centre, Nm::from_raw_shim(5_000)).area() / 1e12;
+            let area = eda_drc::pad_shape::pad_polygons(fp, pad, centre, Nm::new(5_000)).area() / 1e12;
             out.push((format!("{}.{}", fp.id, pad.number), area));
         }
     }
@@ -489,8 +490,8 @@ fn kicad_cli_drc_measures_the_clearance_to_these_pads_as_the_drc_here_does() {
         let (design, model, _) = import_kicad_pcb(&text).expect("imports");
         let board = eda_drc::board::build(&design, &model);
         let copper = &board.pads[0].copper;
-        let nm = |v: f64| (v * 1e6).round() as i64;
-        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: Nm::from_raw_shim(nm(a.0)), y: Nm::from_raw_shim(nm(a.1)) }, b: eda_model::ir::Point { x: Nm::from_raw_shim(nm(b.0)), y: Nm::from_raw_shim(nm(b.1)) }, r: Nm::from_raw_shim(100_000) };
+        let nm = |v: f64| Nm::kiround(v * 1e6);
+        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: nm(a.0), y: nm(a.1) }, b: eda_model::ir::Point { x: nm(b.0), y: nm(b.1) }, r: mm(0.1) };
         let ours = copper.gap_to(&track) / 1e6;
         eprintln!("{name}: kicad-cli {theirs:.4} mm, here {ours:.4} mm");
         assert!((ours - theirs).abs() < 0.002, "{name}: kicad-cli's DRC says {theirs} mm of air, the DRC here {ours} mm");

@@ -153,13 +153,13 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
 /// Returns `None` when the track is too short, too wide, or the anchor
 /// has no usable radius to build a tangent from -- a skip, not an error.
 fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_width: Nm, settings: &TeardropSettings) -> Option<Vec<Point>> {
-    let r = radius.raw_shim() as f64;
-    let hw = track_width.raw_shim() as f64 / 2.0;
+    let r = radius.as_f64();
+    let hw = track_width.as_f64() / 2.0;
     if r <= 0.0 || hw <= 0.0 || near != center {
         return None;
     }
 
-    let (dx, dy) = ((far.x - near.x).raw_shim() as f64, (far.y - near.y).raw_shim() as f64);
+    let (dx, dy) = ((far.x - near.x).as_f64(), (far.y - near.y).as_f64());
     let track_len = (dx * dx + dy * dy).sqrt();
     if track_len < 1.0 {
         return None;
@@ -170,13 +170,13 @@ fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_wi
     // `m_WidthtoSizeFilterRatio`: skip a track too wide, relative to the
     // anchor, to be worth a teardrop at all.
     let anchor_diameter = 2.0 * r;
-    if track_width.raw_shim() as f64 > anchor_diameter * settings.width_to_size_filter_ratio {
+    if track_width.as_f64() > anchor_diameter * settings.width_to_size_filter_ratio {
         return None;
     }
 
     let mut target_len = anchor_diameter * settings.best_length_ratio;
     if settings.max_len_nm > Nm::ZERO {
-        target_len = target_len.min(settings.max_len_nm.raw_shim() as f64);
+        target_len = target_len.min(settings.max_len_nm.as_f64());
     }
     // Never reach past the track's own far end -- the single-segment
     // scope this port has (see module doc); leave a hairline margin so
@@ -188,14 +188,14 @@ fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_wi
 
     let mut half_width_pad_side = r * settings.best_width_ratio.clamp(0.0, 1.0);
     if settings.max_width_nm > Nm::ZERO {
-        half_width_pad_side = half_width_pad_side.min(settings.max_width_nm.raw_shim() as f64 / 2.0);
+        half_width_pad_side = half_width_pad_side.min(settings.max_width_nm.as_f64() / 2.0);
     }
     half_width_pad_side = half_width_pad_side.min(r);
 
-    let round = |x: f64| Nm::from_raw_shim(x.round() as i64);
+    let round = |x: f64| Nm::kiround(x);
     let pt = |bx: f64, by: f64, ox: f64, oy: f64| Point { x: round(bx + ox), y: round(by + oy) };
 
-    let (px, py) = (near.x.raw_shim() as f64 + dir_x * target_len, near.y.raw_shim() as f64 + dir_y * target_len);
+    let (px, py) = (near.x.as_f64() + dir_x * target_len, near.y.as_f64() + dir_y * target_len);
     let a = pt(px, py, perp_x * hw, perp_y * hw);
     let b = pt(px, py, -perp_x * hw, -perp_y * hw);
 
@@ -203,13 +203,13 @@ fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_wi
     // at the chord half-width `half_width_pad_side`, on the hemisphere
     // facing the track.
     let axial = (r * r - half_width_pad_side * half_width_pad_side).max(0.0).sqrt();
-    let (fx, fy) = (near.x.raw_shim() as f64 + dir_x * axial, near.y.raw_shim() as f64 + dir_y * axial);
+    let (fx, fy) = (near.x.as_f64() + dir_x * axial, near.y.as_f64() + dir_y * axial);
     let c = pt(fx, fy, perp_x * half_width_pad_side, perp_y * half_width_pad_side);
     let e = pt(fx, fy, -perp_x * half_width_pad_side, -perp_y * half_width_pad_side);
 
     // D: the anchor's own back point, opposite the track direction --
     // guarantees the anchor's center sits inside the closed pentagon.
-    let d = pt(near.x.raw_shim() as f64, near.y.raw_shim() as f64, -dir_x * r, -dir_y * r);
+    let d = pt(near.x.as_f64(), near.y.as_f64(), -dir_x * r, -dir_y * r);
 
     Some(vec![a, c, d, e, b])
 }
@@ -257,6 +257,7 @@ pub fn generate_teardrops(design: &Design, model: &ConstraintModel, settings: &T
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::tests_support::{pad_center, two_pad_model};
     use eda_model::ir::{Track, Via};
@@ -270,8 +271,8 @@ mod tests {
     fn disabled_settings_produce_nothing() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, Point { x: a.x + Nm::from_raw_shim(5_000_000), y: a.y }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![a, Point { x: a.x + mm(5.0), y: a.y }], arc_mid_offset: None });
         assert!(generate_teardrops(&design, &model, &TeardropSettings::default()).is_empty());
     }
 
@@ -279,10 +280,10 @@ mod tests {
     fn a_via_with_a_long_enough_track_gets_a_pentagon_teardrop() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let via_at = Point { x: a.x + Nm::from_raw_shim(3_000_000), y: a.y };
+        let via_at = Point { x: a.x + mm(3.0), y: a.y };
         let rt = design.routing.as_mut().unwrap();
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![via_at, Point { x: via_at.x + Nm::from_raw_shim(5_000_000), y: via_at.y }], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, Point { x: via_at.x + mm(5.0), y: via_at.y }], arc_mid_offset: None });
 
         let out = generate_teardrops(&design, &model, &enabled_settings());
         assert_eq!(out.len(), 1, "{out:?}");
@@ -301,12 +302,12 @@ mod tests {
     fn a_track_too_short_for_the_requested_length_is_skipped() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let via_at = Point { x: a.x + Nm::from_raw_shim(3_000_000), y: a.y };
+        let via_at = Point { x: a.x + mm(3.0), y: a.y };
         let rt = design.routing.as_mut().unwrap();
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         // Via diameter 800 * best_length_ratio 0.5 = 400um requested length,
         // but this track is only 50um long -- must be skipped, not clipped.
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![via_at, Point { x: via_at.x + Nm::from_raw_shim(50_000), y: via_at.y }], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, Point { x: via_at.x + mm(0.05), y: via_at.y }], arc_mid_offset: None });
 
         assert!(generate_teardrops(&design, &model, &enabled_settings()).is_empty());
     }
@@ -315,10 +316,10 @@ mod tests {
     fn a_track_on_a_different_net_than_the_via_is_ignored() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let via_at = Point { x: a.x + Nm::from_raw_shim(3_000_000), y: a.y };
+        let via_at = Point { x: a.x + mm(3.0), y: a.y };
         let rt = design.routing.as_mut().unwrap();
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.tracks.push(Track { id: "t1".into(), net: "OTHER".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![via_at, Point { x: via_at.x + Nm::from_raw_shim(5_000_000), y: via_at.y }], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "OTHER".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, Point { x: via_at.x + mm(5.0), y: via_at.y }], arc_mid_offset: None });
         assert!(generate_teardrops(&design, &model, &enabled_settings()).is_empty());
     }
 
@@ -326,10 +327,10 @@ mod tests {
     fn target_vias_off_skips_vias_entirely() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let via_at = Point { x: a.x + Nm::from_raw_shim(3_000_000), y: a.y };
+        let via_at = Point { x: a.x + mm(3.0), y: a.y };
         let rt = design.routing.as_mut().unwrap();
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![via_at, Point { x: via_at.x + Nm::from_raw_shim(5_000_000), y: via_at.y }], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, Point { x: via_at.x + mm(5.0), y: via_at.y }], arc_mid_offset: None });
         let settings = TeardropSettings { enabled: true, target_vias: false, ..Default::default() };
         assert!(generate_teardrops(&design, &model, &settings).is_empty());
     }
@@ -339,7 +340,7 @@ mod tests {
         let (mut design, mut model) = two_pad_model();
         model.footprints.push(Footprint {
             name: "THPAD".into(),
-            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(Nm::from_raw_shim(500_000)), drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.5)), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
@@ -349,7 +350,7 @@ mod tests {
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());
         let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, Point { x: a.x, y: a.y + Nm::from_raw_shim(5_000_000) }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: mm(0.2), pts: vec![a, Point { x: a.x, y: a.y + mm(5.0) }], arc_mid_offset: None });
 
         let out = generate_teardrops(&design, &model, &enabled_settings());
         assert_eq!(out.len(), 1, "{out:?}");
@@ -362,7 +363,7 @@ mod tests {
         // anchors only (see module doc).
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(150_000), pts: vec![a, Point { x: a.x + Nm::from_raw_shim(5_000_000), y: a.y }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.15), pts: vec![a, Point { x: a.x + mm(5.0), y: a.y }], arc_mid_offset: None });
         assert!(generate_teardrops(&design, &model, &enabled_settings()).is_empty());
     }
 
@@ -373,11 +374,11 @@ mod tests {
         let n = poly.len();
         let mut j = n - 1;
         for i in 0..n {
-            let (xi, yi) = (poly[i].x.raw_shim() as f64, poly[i].y.raw_shim() as f64);
-            let (xj, yj) = (poly[j].x.raw_shim() as f64, poly[j].y.raw_shim() as f64);
-            if (yi > p.y.raw_shim() as f64) != (yj > p.y.raw_shim() as f64) {
-                let x_cross = xi + (p.y.raw_shim() as f64 - yi) / (yj - yi) * (xj - xi);
-                if (p.x.raw_shim() as f64) < x_cross {
+            let (xi, yi) = (poly[i].x.as_f64(), poly[i].y.as_f64());
+            let (xj, yj) = (poly[j].x.as_f64(), poly[j].y.as_f64());
+            if (yi > p.y.as_f64()) != (yj > p.y.as_f64()) {
+                let x_cross = xi + (p.y.as_f64() - yi) / (yj - yi) * (xj - xi);
+                if (p.x.as_f64()) < x_cross {
                     inside = !inside;
                 }
             }

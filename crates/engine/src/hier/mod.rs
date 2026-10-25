@@ -107,10 +107,10 @@ pub(super) fn flag_nets(ctx: &Ctx) -> Vec<(String, Vec<String>)> {
 }
 
 /// Move every item of a section by `(dx, dy)`.
-pub fn translate_section(sch: &mut SchematicSection, dx: i64, dy: i64) {
+pub fn translate_section(sch: &mut SchematicSection, dx: Nm, dy: Nm) {
     let shift = |p: &mut eda_model::ir::Point| {
-        p.x += Nm::from_raw_shim(dx);
-        p.y += Nm::from_raw_shim(dy);
+        p.x += dx;
+        p.y += dy;
     };
     sch.symbols.iter_mut().for_each(|s| shift(&mut s.at));
     sch.wires.iter_mut().flat_map(|w| w.pts.iter_mut()).for_each(shift);
@@ -138,7 +138,7 @@ pub fn fit_flat(sch: &mut SchematicSection, model: &ConstraintModel) {
     let u = paper.usable();
     let dx = u.x0 + snap_down((u.w() - w) / 2) - snap_down(bb.x0);
     let dy = u.y0 - snap_down(bb.y0);
-    translate_section(sch, dx, dy);
+    translate_section(sch, Nm::new(dx), Nm::new(dy));
     let tb = sch.title_block.get_or_insert_with(TitleBlock::default);
     tb.paper = paper.name.to_string();
 }
@@ -163,8 +163,8 @@ pub fn flat_extent(sch: &SchematicSection, model: &ConstraintModel) -> Option<ki
         let package = part.package.clone().unwrap_or_default();
         let mut p = Placed::new(part, &lib_id, resolved, &s.value, &package);
         p.flip = s.rot == 180_000;
-        p.x = if p.flip { (s.at.x - Nm::from_raw_shim(p.w())).raw_shim() } else { s.at.x.raw_shim() };
-        p.y = if p.flip { (s.at.y - Nm::from_raw_shim(p.h())).raw_shim() } else { s.at.y.raw_shim() };
+        p.x = if p.flip { s.at.x - p.w() } else { s.at.x };
+        p.y = if p.flip { s.at.y - p.h() } else { s.at.y };
         rects.push(p.keepout_in(sch));
     }
     for l in &sch.labels {
@@ -179,7 +179,7 @@ pub fn flat_extent(sch: &SchematicSection, model: &ConstraintModel) -> Option<ki
     }
     for w in &sch.wires {
         for p in &w.pts {
-            rects.push(Rect { x0: p.x.raw_shim(), y0: p.y.raw_shim(), x1: p.x.raw_shim(), y1: p.y.raw_shim() });
+            rects.push(Rect::at(*p));
         }
     }
     union_all(rects)

@@ -142,6 +142,7 @@ fn is_locked(design: &Design, id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use crate::cleanup::{compute_cleanup_filtered, CleanupKind, CleanupOptions, CleanupReport};
@@ -150,12 +151,12 @@ mod tests {
     use eda_model::ir::{DrawingsSection, Group, Point, Track, Via};
     use eda_model::{Net, NetClass};
 
-    fn track(id: &str, net: &str, layer: &str, width: i64, pts: Vec<Point>) -> Track {
-        Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: Nm::from_raw_shim(width), pts, arc_mid_offset: None }
+    fn track(id: &str, net: &str, layer: &str, width: Nm, pts: Vec<Point>) -> Track {
+        Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width, pts, arc_mid_offset: None }
     }
 
     fn via(id: &str, net: &str, at: Point) -> Via {
-        Via { id: id.into(), net: net.into(), at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+        Via { id: id.into(), net: net.into(), at, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     fn class(name: &str, nets: &[&str]) -> NetClass {
@@ -185,8 +186,8 @@ mod tests {
         let a = pad_center(&design, &model, "R1", "1");
         let b = pad_center(&design, &model, "R2", "1");
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(track("z1", "N1", "F.Cu", 200_000, vec![a, a]));
-        rt.tracks.push(track("z2", "N2", "B.Cu", 200_000, vec![b, b]));
+        rt.tracks.push(track("z1", "N1", "F.Cu", mm(0.2), vec![a, a]));
+        rt.tracks.push(track("z2", "N2", "B.Cu", mm(0.2), vec![b, b]));
         rt.vias.push(via("v1", "N1", a));
         rt.vias.push(via("v2", "N1", a));
         rt.vias.push(via("w1", "N2", b));
@@ -300,10 +301,10 @@ mod tests {
     fn dangling_tracks_and_vias_the_filter_skips_stay() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        let up = |p: Point| Point { x: p.x, y: p.y + Nm::from_raw_shim(10_000_000) };
+        let up = |p: Point| Point { x: p.x, y: p.y + mm(10.0) };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(track("stub1", "N1", "F.Cu", 200_000, vec![a, up(a)]));
-        rt.tracks.push(track("stub2", "N1", "F.Cu", 200_000, vec![b, up(b)]));
+        rt.tracks.push(track("stub1", "N1", "F.Cu", mm(0.2), vec![a, up(a)]));
+        rt.tracks.push(track("stub2", "N1", "F.Cu", mm(0.2), vec![b, up(b)]));
         let opts = CleanupOptions { delete_dangling_tracks: true, ..Default::default() };
         assert_eq!(cleanup(&design, &model, opts, &CleanupFilter::default()).remove_track_ids(), ids(&["stub1", "stub2"]));
         assert_eq!(cleanup(&design, &model, opts, &only(&["stub2"])).remove_track_ids(), ids(&["stub2"]));
@@ -318,9 +319,9 @@ mod tests {
     fn a_dangling_via_the_filter_skips_stays() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let via_at = Point { x: a.x, y: a.y + Nm::from_raw_shim(3_000_000) };
+        let via_at = Point { x: a.x, y: a.y + mm(3.0) };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(track("t1", "N1", "F.Cu", 200_000, vec![a, via_at]));
+        rt.tracks.push(track("t1", "N1", "F.Cu", mm(0.2), vec![a, via_at]));
         rt.vias.push(via("v1", "N1", via_at));
         let opts = CleanupOptions { delete_dangling_vias: true, ..Default::default() };
         assert_eq!(cleanup(&design, &model, opts, &CleanupFilter::default()).remove_via_ids(), ids(&["v1"]));
@@ -336,10 +337,10 @@ mod tests {
         model.nets.push(Net { name: "N2".into(), pins: vec!["R2.1".into()] });
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(track("bridge", "N1", "F.Cu", 200_000, vec![a, b]));
+        rt.tracks.push(track("bridge", "N1", "F.Cu", mm(0.2), vec![a, b]));
         rt.vias.push(via("sv", "N1", b));
-        rt.tracks.push(track("inpad1", "N1", "F.Cu", 50_000, vec![a, Point { x: a.x + Nm::from_raw_shim(5), y: a.y }]));
-        rt.tracks.push(track("inpad2", "N2", "F.Cu", 50_000, vec![b, Point { x: b.x + Nm::from_raw_shim(5), y: b.y }]));
+        rt.tracks.push(track("inpad1", "N1", "F.Cu", mm(0.05), vec![a, Point { x: a.x + Nm::new(5), y: a.y }]));
+        rt.tracks.push(track("inpad2", "N2", "F.Cu", mm(0.05), vec![b, Point { x: b.x + Nm::new(5), y: b.y }]));
 
         let shorts = CleanupOptions { delete_shorting: true, ..Default::default() };
         let all = cleanup(&design, &model, shorts, &CleanupFilter::default());
@@ -362,8 +363,8 @@ mod tests {
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         let mid = Point { x: (a.x + b.x) / 2, y: a.y };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(track("t1", "N1", "F.Cu", 200_000, vec![a, mid]));
-        rt.tracks.push(track("t2", "N1", "F.Cu", 200_000, vec![mid, b]));
+        rt.tracks.push(track("t1", "N1", "F.Cu", mm(0.2), vec![a, mid]));
+        rt.tracks.push(track("t2", "N1", "F.Cu", mm(0.2), vec![mid, b]));
         let opts = CleanupOptions { merge_segments: true, ..Default::default() };
         let merges = |f: &CleanupFilter| cleanup(&design, &model, opts, f).changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).count();
         assert_eq!(merges(&CleanupFilter::default()), 1);

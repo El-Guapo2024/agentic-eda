@@ -33,7 +33,7 @@ use crate::sexpr::{self, Sexpr};
 use crate::{duid_for, fmt_mm_f, mm, sexpr_str};
 
 /// `DEFAULT_LINE_WIDTH` (`board_design_settings.h`), 0.1 mm: what a stroke of no width that is not filled is given (`parsePCB_SHAPE`).
-const DEFAULT_LINE_WIDTH_NM: Nm = Nm::from_raw_shim(100_000);
+const DEFAULT_LINE_WIDTH_NM: Nm = Nm::new(100_000);
 
 const SHAPE_TAGS: [&str; 6] = ["fp_line", "fp_arc", "fp_circle", "fp_rect", "fp_poly", "fp_curve"];
 
@@ -89,7 +89,7 @@ fn pts_of(item: &[Sexpr]) -> Vec<Point> {
             Some("arc") => {
                 let get = |name: &str| sexpr::find(e, name).and_then(xy_point);
                 if let (Some(s), Some(m), Some(en)) = (get("start"), get("mid"), get("end")) {
-                    let line = GeoArc::through(s, m, en).polyline(eda_model::outline::MAX_ERROR_NM.raw_shim() as f64);
+                    let line = GeoArc::through(s, m, en).polyline(eda_model::outline::MAX_ERROR_NM.as_f64());
                     for p in line {
                         if out.last() != Some(&p) {
                             out.push(p);
@@ -247,11 +247,11 @@ fn fitted_art(lib: &Footprint, builtin: &Footprint) -> eda_model::fp_art::FpArt 
     // (not the library's courtyard: the built-in footprint has its own, round its own pads)
     let lib = Footprint { art: eda_model::fp_art::FpArt { courtyard: vec![], ..lib.art.clone() }, ..lib.clone() };
     let lib = &lib;
-    let pads = |f: &Footprint| -> Vec<(String, (f64, f64))> { f.pads.iter().map(|p| (p.number.clone(), (p.at.0.raw_shim() as f64, p.at.1.raw_shim() as f64))).collect() };
+    let pads = |f: &Footprint| -> Vec<(String, (f64, f64))> { f.pads.iter().map(|p| (p.number.clone(), (p.at.0.as_f64(), p.at.1.as_f64()))).collect() };
     match crate::fit_pads(&pads(lib), &pads(builtin)) {
         None => lib.art.clone(),
         Some(fit) => {
-            let by = FootprintInstance { id: String::new(), at: Point { x: Nm::from_raw_shim(fit.dx_nm.round() as i64), y: Nm::from_raw_shim(fit.dy_nm.round() as i64) }, rot: (fit.rot_deg * 1000.0).round().rem_euclid(360_000.0) as Millideg, side: Side::Top, label: Default::default() };
+            let by = FootprintInstance { id: String::new(), at: Point { x: Nm::kiround(fit.dx_nm), y: Nm::kiround(fit.dy_nm) }, rot: (fit.rot_deg * 1000.0).round().rem_euclid(360_000.0) as Millideg, side: Side::Top, label: Default::default() };
             lib.art.moved(&by)
         }
     }
@@ -267,7 +267,7 @@ fn same_frame(lib: &Footprint, builtin: &Footprint) -> bool {
     !builtin.pads.is_empty()
         && numbers(lib) == numbers(builtin)
         && builtin.pads.iter().filter(|p| !p.number.is_empty()).all(|q| {
-            lib.pads.iter().any(|p| p.number == q.number && ((p.at.0 - q.at.0).raw_shim() as f64).hypot((p.at.1 - q.at.1).raw_shim() as f64) <= 100_000.0)
+            lib.pads.iter().any(|p| p.number == q.number && ((p.at.0 - q.at.0).as_f64()).hypot((p.at.1 - q.at.1).as_f64()) <= 100_000.0)
         })
 }
 
@@ -502,16 +502,16 @@ mod tests {
         assert_eq!(art.texts.iter().map(|t| t.layout.visible).collect::<Vec<_>>(), [true, true, false]);
 
         let by = |i: usize| &art.shapes[i];
-        assert!(matches!(&by(0).shape, Shape::Segment { start, end, stroke_width, layer, .. } if *stroke_width == Nm::from_raw_shim(120_000) && *start == p(Nm::from_raw_shim(-2_000_000), Nm::from_raw_shim(-1_500_000)) && *end == p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(-1_500_000)) && layer == "F.SilkS"));
+        assert!(matches!(&by(0).shape, Shape::Segment { start, end, stroke_width, layer, .. } if *stroke_width == Nm::from_mm(0.12) && *start == p(Nm::from_mm(-2.0), Nm::from_mm(-1.5)) && *end == p(Nm::from_mm(2.0), Nm::from_mm(-1.5)) && layer == "F.SilkS"));
         assert_eq!((by(1).style, matches!(by(1).shape, Shape::Arc { .. })), (LineStyle::Dash, true));
-        assert!(matches!(&by(2).shape, Shape::Circle { filled: true, center, end, layer, .. } if *center == p(Nm::ZERO, Nm::ZERO) && *end == p(Nm::from_raw_shim(500_000), Nm::ZERO) && layer == "F.Fab"));
+        assert!(matches!(&by(2).shape, Shape::Circle { filled: true, center, end, layer, .. } if *center == p(Nm::ZERO, Nm::ZERO) && *end == p(Nm::from_mm(0.5), Nm::ZERO) && layer == "F.Fab"));
         assert!(matches!(&by(3).shape, Shape::Rect { filled: false, .. }));
-        assert_eq!((by(3).radius, by(3).style), (Nm::from_raw_shim(200_000), LineStyle::Unset), "a rectangle's corner radius and the file's own `default` stroke type");
+        assert_eq!((by(3).radius, by(3).style), (Nm::from_mm(0.2), LineStyle::Unset), "a rectangle's corner radius and the file's own `default` stroke type");
         // A polygon of no width is allowed because it is filled.
         assert!(matches!(&by(4).shape, Shape::Polygon { filled: true, stroke_width: Nm::ZERO, pts, .. } if pts.len() == 3));
-        assert!(matches!(&by(5).shape, Shape::Bezier { c1, c2, .. } if *c1 == p(Nm::from_raw_shim(100_000), Nm::from_raw_shim(200_000)) && *c2 == p(Nm::from_raw_shim(300_000), Nm::from_raw_shim(200_000))));
+        assert!(matches!(&by(5).shape, Shape::Bezier { c1, c2, .. } if *c1 == p(Nm::from_mm(0.1), Nm::from_mm(0.2)) && *c2 == p(Nm::from_mm(0.3), Nm::from_mm(0.2))));
         assert_eq!((by(6).hatch, by(6).shape.is_filled(), by(6).layer()), (Some(Hatch::CrossHatch), false, "Dwgs.User"));
-        assert_eq!((by(7).layers.clone(), by(7).mask_margin), (vec!["F.Cu".to_string(), "F.Mask".to_string()], Some(Nm::from_raw_shim(50_000))));
+        assert_eq!((by(7).layers.clone(), by(7).mask_margin), (vec!["F.Cu".to_string(), "F.Mask".to_string()], Some(Nm::from_mm(0.05))));
     }
 
     #[test]
@@ -520,9 +520,9 @@ mod tests {
         let t = &art.texts[0];
         assert_eq!(t.text, "${REFERENCE}");
         let l = &t.layout;
-        assert_eq!((l.at, l.angle, l.layer.as_str()), (p(Nm::ZERO, Nm::from_raw_shim(500_000)), 90_000, "F.Fab"));
+        assert_eq!((l.at, l.angle, l.layer.as_str()), (p(Nm::ZERO, Nm::from_mm(0.5)), 90_000, "F.Fab"));
         // `(size HEIGHT WIDTH)` is read as (width, height)
-        assert_eq!((l.size, l.thickness, l.bold, l.italic, l.halign, l.valign, l.mirror, l.keep_upright), ((Nm::from_raw_shim(800_000), Nm::from_raw_shim(500_000)), Nm::from_raw_shim(75_000), true, true, -1, 1, false, true));
+        assert_eq!((l.size, l.thickness, l.bold, l.italic, l.halign, l.valign, l.mirror, l.keep_upright), ((Nm::from_mm(0.8), Nm::from_mm(0.5)), Nm::from_mm(0.075), true, true, -1, 1, false, true));
         let u = &art.texts[1];
         assert_eq!(u.text, "two\nlines");
         assert_eq!((u.layout.layer.as_str(), u.layout.knockout, u.layout.keep_upright, u.layout.mirror), ("B.SilkS", true, false, true));
@@ -574,9 +574,9 @@ mod tests {
                 (fp_text user "T" (at -1 2 270) (layer "B.Fab") (effects (font (size 1 1) (thickness 0.15)) (justify mirror))))"#,
         );
         let art = read_art(&source, Side::Bottom, 0);
-        assert!(matches!(&art.shapes[0].shape, Shape::Segment { start, end, layer, .. } if *start == p(Nm::from_raw_shim(-2_000_000), Nm::from_raw_shim(-1_500_000)) && *end == p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(-1_500_000)) && layer == "F.SilkS"));
+        assert!(matches!(&art.shapes[0].shape, Shape::Segment { start, end, layer, .. } if *start == p(Nm::from_mm(-2.0), Nm::from_mm(-1.5)) && *end == p(Nm::from_mm(2.0), Nm::from_mm(-1.5)) && layer == "F.SilkS"));
         let t = &art.texts[0].layout;
-        assert_eq!((t.at, t.layer.as_str(), t.mirror), (p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000)), "F.Fab", false));
+        assert_eq!((t.at, t.layer.as_str(), t.mirror), (p(Nm::from_mm(1.0), Nm::from_mm(2.0)), "F.Fab", false));
         assert_eq!(t.angle, 90_000);
     }
 
@@ -594,7 +594,7 @@ mod tests {
             0,
         );
         let Shape::Arc { start, mid, end, stroke_width, .. } = &art.shapes[0].shape else { panic!("an arc") };
-        assert_eq!((*start, *mid, *end, *stroke_width), (p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(18_535_534), Nm::from_raw_shim(8_535_534)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(10_000_000)), Nm::from_raw_shim(150_000)));
+        assert_eq!((*start, *mid, *end, *stroke_width), (p(Nm::from_mm(20.0), Nm::from_mm(5.0)), p(Nm::new(18_535_534), Nm::new(8_535_534)), p(Nm::from_mm(15.0), Nm::from_mm(10.0)), Nm::from_mm(0.15)));
         // a circle of no width and a polygon with no `fill` token are filled
         assert!(art.shapes[1].shape.is_filled() && art.shapes[2].shape.is_filled());
         assert_eq!(art.texts[0].text, "${REFERENCE} ${VALUE}");
@@ -614,9 +614,9 @@ mod tests {
         let Shape::Polygon { pts, stroke_width, .. } = &art.shapes[0].shape else { panic!("a polygon") };
         assert!(pts.len() > 4, "the arc has become several points: {pts:?}");
         assert_eq!(pts.first(), Some(&p(Nm::ZERO, Nm::ZERO)));
-        assert_eq!(pts.last(), Some(&p(Nm::ZERO, Nm::from_raw_shim(2_000_000))));
-        assert_eq!(*stroke_width, Nm::from_raw_shim(100_000), "not filled, so the width is the default");
-        assert_eq!(art.shapes[1].shape.stroke_width(), Nm::from_raw_shim(100_000));
+        assert_eq!(pts.last(), Some(&p(Nm::ZERO, Nm::from_mm(2.0))));
+        assert_eq!(*stroke_width, Nm::from_mm(0.1), "not filled, so the width is the default");
+        assert_eq!(art.shapes[1].shape.stroke_width(), Nm::from_mm(0.1));
     }
 
     #[test]

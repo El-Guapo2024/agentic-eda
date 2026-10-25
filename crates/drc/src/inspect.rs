@@ -279,7 +279,7 @@ pub fn inspect_clearance(rb: &RuleBoard, item_a: Rc<RuleItem>, item_b: Rc<RuleIt
                 r.line("");
                 r.line("");
                 cx.header3("Zone clearance resolution for:", &a, &b, &layer, &mut r);
-                let mut clearance = a.local_clearance.as_ref().map(|c| c.0).unwrap_or(0);
+                let mut clearance = a.local_clearance.as_ref().map(|c| c.0.get()).unwrap_or(0);
                 r.line("");
                 r.line(format!("Zone clearance: {}.", cx.sfv(clearance)));
                 let (c, rep) = cx.eval(CType::PhysicalClearance, Some(&b), Some(&a), Some(&layer), &mut r);
@@ -670,7 +670,7 @@ pub fn inspect_constraints(rb: &RuleBoard, item: Rc<RuleItem>, units: Units) -> 
         });
     }
 
-    if (item.class == Class::Pad && item.drill > 0) || item.class == Class::Via {
+    if (item.class == Class::Pad && item.drill > eda_model::units::Nm::ZERO) || item.class == Class::Via {
         push_page("Hole Size", &mut |r| {
             cx.header1("Hole size resolution for:", &item, r);
             let (c, rep) = cx.eval(CType::HoleSize, Some(&item), None, None, r);

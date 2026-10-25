@@ -10,7 +10,7 @@
 //! The arithmetic is KiCad's, in schematic internal units (0.1 um) with C++'s truncating division, so a field lands where KiCad
 //! would put it.
 
-use eda_model::units::Nm;
+use eda_model::units::{mm, Nm};
 use eda_model::ir::{field_key, FieldPlacement, Point, PowerSymbol, SchematicSection, SheetInstance, SymbolInstance, TextJustify, TextVAlign};
 use eda_model::kicad_font::{default_pen_iu, kiround, text_box_iu, HJustify, VJustify, DEFAULT_TEXT_SIZE_IU};
 use eda_model::kicad_geom::{pin_bbox, PinOrient, Rect, TextStyle};
@@ -26,7 +26,7 @@ pub struct FieldSpec {
     pub text: String,
     pub visible: bool,
     /// The text's size, nanometres; 0 is the default, 50 mil.
-    pub size_nm: i64,
+    pub size_nm: Nm,
     pub bold: bool,
     pub italic: bool,
     pub name_shown: bool,
@@ -36,13 +36,13 @@ pub struct FieldSpec {
 
 impl FieldSpec {
     pub fn new(name: &str, text: String, visible: bool) -> FieldSpec {
-        FieldSpec { name: name.to_string(), text, visible, size_nm: 0, bold: false, italic: false, name_shown: false, can_autoplace: true }
+        FieldSpec { name: name.to_string(), text, visible, size_nm: Nm::ZERO, bold: false, italic: false, name_shown: false, can_autoplace: true }
     }
 
     /// The same field as a stored placement sets it: visibility, size, bold, italic, shown name and whether it may be autoplaced.
     pub fn styled_by(mut self, p: &FieldPlacement) -> FieldSpec {
         self.visible = p.visible;
-        self.size_nm = p.size_nm.raw_shim();
+        self.size_nm = p.size_nm;
         self.bold = p.bold;
         self.italic = p.italic;
         self.name_shown = p.name_shown;
@@ -197,7 +197,7 @@ pub fn to_vj(v: TextVAlign) -> VJustify {
 /// A placement in the item's own frame on the sheet: `at` is the item's origin, `rot`/`mirrored` how it is turned, `width` the box a
 /// mirror is about (0 for an item with its origin at its anchor).
 pub fn page_field(at: Point, rot: u32, mirrored: bool, width: f64, p: &FieldPlacement, text: &str) -> PageField {
-    let (ox, oy) = bake(rot, mirrored, width, p.dx.raw_shim() as f64, p.dy.raw_shim() as f64);
+    let (ox, oy) = bake(rot, mirrored, width, p.dx.as_f64(), p.dy.as_f64());
     let m = Lin::of_symbol(rot, mirrored).mul(Lin::text_turn(p.angle == 90_000));
     let vertical = m.apply((1, 0)).0 == 0;
     let d_page = m.apply(just_dir(p.h, p.v));
@@ -207,12 +207,12 @@ pub fn page_field(at: Point, rot: u32, mirrored: bool, width: f64, p: &FieldPlac
     PageField {
         name: p.name.clone(),
         text: text.to_string(),
-        at: (at.x.raw_shim() as f64 + ox, at.y.raw_shim() as f64 + oy),
+        at: (at.x.as_f64() + ox, at.y.as_f64() + oy),
         vertical,
         h: to_hj(h),
         v: to_vj(v),
         visible: p.visible,
-        size_nm: p.text_size_nm().raw_shim() as f64,
+        size_nm: p.text_size_nm().as_f64(),
         bold: p.bold,
         italic: p.italic,
         name_shown: p.name_shown,
@@ -232,7 +232,7 @@ pub fn local_placement(at: Point, rot: u32, mirrored: bool, width: f64, name: &s
 /// placement are the caller's to fill.
 #[allow(clippy::too_many_arguments)]
 pub fn local_placement_on_page(at: Point, rot: u32, mirrored: bool, width: f64, name: &str, anchor: (f64, f64), page_vertical: bool, h: TextJustify, v: TextVAlign, visible: bool) -> FieldPlacement {
-    let (lx, ly) = unbake(rot, mirrored, width, anchor.0 - at.x.raw_shim() as f64, anchor.1 - at.y.raw_shim() as f64);
+    let (lx, ly) = unbake(rot, mirrored, width, anchor.0 - at.x.as_f64(), anchor.1 - at.y.as_f64());
     let l = Lin::of_symbol(rot, mirrored);
     // the stored angle that, with the symbol's own turn, shows the text as asked (KiCad's autoplace stores the one that shows it horizontally)
     let stored_vertical = page_vertical != l.swaps_axes();
@@ -242,7 +242,7 @@ pub fn local_placement_on_page(at: Point, rot: u32, mirrored: bool, width: f64, 
     let d_page = if page_vertical { (d_text.1, -d_text.0) } else { d_text };
     let d_local = m.transpose().apply(d_page);
     let (lh, lv) = dir_just(d_local);
-    FieldPlacement { name: name.to_string(), dx: Nm::from_raw_shim(lx.round() as i64), dy: Nm::from_raw_shim(ly.round() as i64), angle: if stored_vertical { 90_000 } else { 0 }, h: lh, v: lv, visible, ..FieldPlacement::at_origin(name) }
+    FieldPlacement { name: name.to_string(), dx: Nm::kiround(lx), dy: Nm::kiround(ly), angle: if stored_vertical { 90_000 } else { 0 }, h: lh, v: lv, visible, ..FieldPlacement::at_origin(name) }
 }
 
 // ------------------------------------------------------------------------------------------------------ specs
@@ -356,7 +356,7 @@ pub struct Surroundings {
 pub struct Collider {
     pub rect: crate::hier::kit::Rect,
     /// Set for a wire or a bus: the y of its two ends, nanometres (`SCH_LINE::GetStartPoint().y`, `GetEndPoint().y`).
-    pub wire: Option<(i64, i64)>,
+    pub wire: Option<(Nm, Nm)>,
 }
 
 /// `AUTOPLACER::COLLISION`.
@@ -408,7 +408,7 @@ struct Measured {
 }
 
 fn measure(f: &FieldSpec) -> Measured {
-    let size_iu = if f.size_nm > 0 { f.size_nm / eda_model::units::SCH_IU_NM } else { DEFAULT_TEXT_SIZE_IU };
+    let size_iu = if f.size_nm > Nm::ZERO { f.size_nm.get() / eda_model::units::SCH_IU_NM } else { DEFAULT_TEXT_SIZE_IU };
     let pen_iu = if f.bold { kiround(size_iu as f64 / 5.0) } else { default_pen_iu(size_iu) };
     Measured { text: f.shown_text(), size_iu, pen_iu }
 }
@@ -431,7 +431,7 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
     let fbox_w = sizes.iter().map(|s| s.0).max().unwrap_or(0);
     let fbox_h: i64 = sizes.iter().map(|s| round_n(s.1, GRID_IU, true)).sum();
 
-    let body = geom.body.unwrap_or(Rect::point((at.x.raw_shim() as f64, at.y.raw_shim() as f64)));
+    let body = geom.body.unwrap_or(Rect::point((at.x.as_f64(), at.y.as_f64())));
     let (bx, by, bw, bh) = (iu(body.x0), iu(body.y0), iu(body.w()), iu(body.h()));
     let center = (bx + bw / 2, by + bh / 2);
 
@@ -554,7 +554,7 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
                         fits = false;
                         break;
                     }
-                    let this = (3 * WIRE_V_SPACING / 2) - ((y0 / eda_model::units::SCH_IU_NM) % WIRE_V_SPACING);
+                    let this = (3 * WIRE_V_SPACING / 2) - ((y0.get() / eda_model::units::SCH_IU_NM) % WIRE_V_SPACING);
                     if offset == 0 {
                         offset = this;
                     } else if offset != this {
@@ -630,7 +630,7 @@ fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], ke
     let h_mirrored = (rot, mirrored) == (180_000, true);
     let placed = autoplace_page(geom, sym.at, h_mirrored, &movable, force, manual);
     let style = |mut p: FieldPlacement, spec: &FieldSpec| {
-        p.size_nm = Nm::from_raw_shim(spec.size_nm);
+        p.size_nm = spec.size_nm;
         p.bold = spec.bold;
         p.italic = spec.italic;
         p.name_shown = spec.name_shown;
@@ -744,19 +744,19 @@ pub fn power_value_placement(ps: &PowerSymbol, lib_id: &str) -> FieldPlacement {
     let glyph = Lin::of_symbol(ps.rot, false).apply((0, if ground_like { 1 } else { -1 }));
     if glyph.0 != 0 && !flag {
         let reach = glyph_reach(lib_id) + 640_000.0;
-        let anchor = (ps.at.x.raw_shim() as f64 + glyph.0 as f64 * reach, ps.at.y.raw_shim() as f64);
+        let anchor = (ps.at.x.as_f64() + glyph.0 as f64 * reach, ps.at.y.as_f64());
         let h = if glyph.0 > 0 { TextJustify::Left } else { TextJustify::Right };
         return local_placement(ps.at, ps.rot, false, 0.0, "Value", anchor, h, TextVAlign::Center, true);
     }
     let dy = if ground_like {
-        3_810_000
+        mm(3.81)
     } else if flag {
-        -3_810_000
+        mm(-3.81)
     } else {
-        -3_556_000
+        mm(-3.556)
     };
     // a flag's own name says nothing about the net, and it is wider than the room beside the symbol it stands on
-    FieldPlacement { dy: Nm::from_raw_shim(dy), visible: !flag, ..FieldPlacement::at_origin("Value") }
+    FieldPlacement { dy, visible: !flag, ..FieldPlacement::at_origin("Value") }
 }
 
 /// The placements of a power symbol's fields in its own frame (origin at its pin), with the text each shows: the Reference, hidden, and
@@ -782,8 +782,8 @@ pub fn sheet_placements(sheet: &SheetInstance) -> Vec<FieldPlacement> {
     let name_margin = ((border + (DEFAULT_TEXT_SIZE_IU as f64 * 0.5).round() as i64) * eda_model::units::SCH_IU_NM) as f64;
     let file_margin = ((border + (DEFAULT_TEXT_SIZE_IU as f64 * 0.4).round() as i64) * eda_model::units::SCH_IU_NM) as f64;
     vec![
-        FieldPlacement { dy: Nm::from_raw_shim(-(name_margin.round() as i64)), h: TextJustify::Left, v: TextVAlign::Bottom, ..FieldPlacement::at_origin("Sheetname") },
-        FieldPlacement { dy: sheet.size.1 + Nm::from_raw_shim(file_margin.round() as i64), h: TextJustify::Left, v: TextVAlign::Top, ..FieldPlacement::at_origin("Sheetfile") },
+        FieldPlacement { dy: -Nm::kiround(name_margin), h: TextJustify::Left, v: TextVAlign::Bottom, ..FieldPlacement::at_origin("Sheetname") },
+        FieldPlacement { dy: sheet.size.1 + Nm::kiround(file_margin), h: TextJustify::Left, v: TextVAlign::Top, ..FieldPlacement::at_origin("Sheetfile") },
     ]
 }
 

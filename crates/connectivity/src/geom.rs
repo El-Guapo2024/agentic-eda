@@ -25,7 +25,7 @@ use crate::items::ItemShape;
 
 /// Euclidean distance -- KiCad's `VECTOR2I::Distance`/`CN_ANCHOR::Dist`.
 pub fn dist(a: Point, b: Point) -> f64 {
-    (((a.x - b.x).raw_shim() as f64).powi(2) + ((a.y - b.y).raw_shim() as f64).powi(2)).sqrt()
+    ((a.x - b.x).as_f64().powi(2) + (a.y - b.y).as_f64().powi(2)).sqrt()
 }
 
 /// The point on segment `a..b` closest to `p`.
@@ -42,9 +42,9 @@ pub fn closest_point_on_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> 
 
 /// Distance from `p` to the closest point of segment `a..b`.
 pub fn point_seg_distance(p: Point, a: Point, b: Point) -> f64 {
-    let pf = (p.x.raw_shim() as f64, p.y.raw_shim() as f64);
-    let af = (a.x.raw_shim() as f64, a.y.raw_shim() as f64);
-    let bf = (b.x.raw_shim() as f64, b.y.raw_shim() as f64);
+    let pf = (p.x.as_f64(), p.y.as_f64());
+    let af = (a.x.as_f64(), a.y.as_f64());
+    let bf = (b.x.as_f64(), b.y.as_f64());
     let c = closest_point_on_segment(pf, af, bf);
     ((pf.0 - c.0).powi(2) + (pf.1 - c.1).powi(2)).sqrt()
 }
@@ -86,7 +86,7 @@ pub fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f
 
 /// Minimum distance between two finite segments (0 if they touch or cross).
 pub fn seg_seg_distance(a1: Point, a2: Point, b1: Point, b2: Point) -> f64 {
-    let (a1f, a2f, b1f, b2f) = ((a1.x.raw_shim() as f64, a1.y.raw_shim() as f64), (a2.x.raw_shim() as f64, a2.y.raw_shim() as f64), (b1.x.raw_shim() as f64, b1.y.raw_shim() as f64), (b2.x.raw_shim() as f64, b2.y.raw_shim() as f64));
+    let (a1f, a2f, b1f, b2f) = ((a1.x.as_f64(), a1.y.as_f64()), (a2.x.as_f64(), a2.y.as_f64()), (b1.x.as_f64(), b1.y.as_f64()), (b2.x.as_f64(), b2.y.as_f64()));
     if segments_intersect(a1f, a2f, b1f, b2f) {
         return 0.0;
     }
@@ -100,13 +100,13 @@ pub fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     if poly.len() < 3 {
         return false;
     }
-    let (px, py) = (p.x.raw_shim() as f64, p.y.raw_shim() as f64);
+    let (px, py) = (p.x.as_f64(), p.y.as_f64());
     let mut inside = false;
     let n = poly.len();
     let mut j = n - 1;
     for i in 0..n {
-        let (xi, yi) = (poly[i].x.raw_shim() as f64, poly[i].y.raw_shim() as f64);
-        let (xj, yj) = (poly[j].x.raw_shim() as f64, poly[j].y.raw_shim() as f64);
+        let (xi, yi) = (poly[i].x.as_f64(), poly[i].y.as_f64());
+        let (xj, yj) = (poly[j].x.as_f64(), poly[j].y.as_f64());
         if (yi > py) != (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi {
             inside = !inside;
         }
@@ -131,7 +131,7 @@ pub fn polygons_overlap(a: &[Point], b: &[Point]) -> bool {
         let (a1, a2) = (a[i], a[(i + 1) % a.len()]);
         for j in 0..b.len() {
             let (b1, b2) = (b[j], b[(j + 1) % b.len()]);
-            if segments_intersect((a1.x.raw_shim() as f64, a1.y.raw_shim() as f64), (a2.x.raw_shim() as f64, a2.y.raw_shim() as f64), (b1.x.raw_shim() as f64, b1.y.raw_shim() as f64), (b2.x.raw_shim() as f64, b2.y.raw_shim() as f64)) {
+            if segments_intersect((a1.x.as_f64(), a1.y.as_f64()), (a2.x.as_f64(), a2.y.as_f64()), (b1.x.as_f64(), b1.y.as_f64()), (b2.x.as_f64(), b2.y.as_f64())) {
                 return true;
             }
         }
@@ -145,7 +145,7 @@ pub fn polygons_overlap(a: &[Point], b: &[Point]) -> bool {
 /// to the exact circle-circle/circle-point distance.
 fn effective_corner_radius(p: &PlacedPad) -> f64 {
     if p.is_round() {
-        (p.size.0.min(p.size.1)).raw_shim() as f64 / 2.0
+        (p.size.0.min(p.size.1)).as_f64() / 2.0
     } else {
         p.corner_radius()
     }
@@ -160,10 +160,10 @@ fn effective_corner_radius(p: &PlacedPad) -> f64 {
 /// roundrects meeting near a corner.
 pub fn pad_pad_distance(a: &PlacedPad, b: &PlacedPad) -> f64 {
     let (ra, rb) = (effective_corner_radius(a), effective_corner_radius(b));
-    let (ahw, ahh) = ((a.size.0.raw_shim() as f64 / 2.0 - ra).max(0.0), (a.size.1.raw_shim() as f64 / 2.0 - ra).max(0.0));
-    let (bhw, bhh) = ((b.size.0.raw_shim() as f64 / 2.0 - rb).max(0.0), (b.size.1.raw_shim() as f64 / 2.0 - rb).max(0.0));
-    let dx = ((b.center.x - a.center.x).raw_shim() as f64).abs();
-    let dy = ((b.center.y - a.center.y).raw_shim() as f64).abs();
+    let (ahw, ahh) = ((a.size.0.as_f64() / 2.0 - ra).max(0.0), (a.size.1.as_f64() / 2.0 - ra).max(0.0));
+    let (bhw, bhh) = ((b.size.0.as_f64() / 2.0 - rb).max(0.0), (b.size.1.as_f64() / 2.0 - rb).max(0.0));
+    let dx = (b.center.x - a.center.x).as_f64().abs();
+    let dy = (b.center.y - a.center.y).as_f64().abs();
     let (ox, oy) = ((dx - ahw - bhw).max(0.0), (dy - ahh - bhh).max(0.0));
     let outside = (ox * ox + oy * oy).sqrt();
     let inset_sep = if outside > 0.0 { outside } else { (dx - ahw - bhw).max(dy - ahh - bhh) };
@@ -176,8 +176,8 @@ pub fn pad_pieces(pad: &PlacedPad) -> Vec<PadPiece> {
     if !pad.pieces.is_empty() {
         return pad.pieces.clone();
     }
-    let (cx, cy) = (pad.center.x.raw_shim() as f64, pad.center.y.raw_shim() as f64);
-    let (hx, hy) = (pad.size.0.raw_shim() as f64 / 2.0, pad.size.1.raw_shim() as f64 / 2.0);
+    let (cx, cy) = (pad.center.x.as_f64(), pad.center.y.as_f64());
+    let (hx, hy) = (pad.size.0.as_f64() / 2.0, pad.size.1.as_f64() / 2.0);
     let rect = |hx: f64, hy: f64| PadPiece::Polygon(vec![(cx - hx, cy - hy), (cx + hx, cy - hy), (cx + hx, cy + hy), (cx - hx, cy + hy)]);
     match pad.shape {
         PadShape::Circle => vec![PadPiece::Circle { c: (cx, cy), r: hx.min(hy) }],
@@ -292,12 +292,12 @@ pub fn touches(a: &ItemShape, a_anchors: &[Point], b: &ItemShape, b_anchors: &[P
         (ItemShape::Pad(pa), ItemShape::Pad(pb)) => pad_pad_distance(pa, pb) <= 0.0,
 
         (ItemShape::Pad(pad), ItemShape::Segment { a, b, half_width }) | (ItemShape::Segment { a, b, half_width }, ItemShape::Pad(pad)) if !pad.pieces.is_empty() => {
-            let seg = PadPiece::Stadium { a: (a.x.raw_shim() as f64, a.y.raw_shim() as f64), b: (b.x.raw_shim() as f64, b.y.raw_shim() as f64), r: *half_width };
+            let seg = PadPiece::Stadium { a: (a.x.as_f64(), a.y.as_f64()), b: (b.x.as_f64(), b.y.as_f64()), r: *half_width };
             pieces_distance(&pad.pieces, std::slice::from_ref(&seg)) <= 0.0
         }
         (ItemShape::Pad(pad), ItemShape::Segment { a, b, half_width }) | (ItemShape::Segment { a, b, half_width }, ItemShape::Pad(pad)) => {
-            let c = closest_point_on_segment((pad.center.x.raw_shim() as f64, pad.center.y.raw_shim() as f64), (a.x.raw_shim() as f64, a.y.raw_shim() as f64), (b.x.raw_shim() as f64, b.y.raw_shim() as f64));
-            let cp = Point { x: Nm::from_raw_shim(c.0.round() as i64), y: Nm::from_raw_shim(c.1.round() as i64) };
+            let c = closest_point_on_segment((pad.center.x.as_f64(), pad.center.y.as_f64()), (a.x.as_f64(), a.y.as_f64()), (b.x.as_f64(), b.y.as_f64()));
+            let cp = Point { x: Nm::kiround(c.0), y: Nm::kiround(c.1) };
             pad.signed_distance(cp) <= *half_width || pad.signed_distance(*a) <= *half_width || pad.signed_distance(*b) <= *half_width
         }
 
@@ -344,7 +344,7 @@ fn zone_item_touch(poly: &[Point], item: &ItemShape, anchors: &[Point]) -> bool 
             point_in_polygon(*a, poly) || point_in_polygon(*b, poly) || (0..n).any(|i| seg_seg_distance(*a, *b, poly[i], poly[(i + 1) % n]) <= *half_width)
         }
         ItemShape::Pad(pad) if !pad.pieces.is_empty() => {
-            let edges: Vec<PadPiece> = (0..n).map(|i| PadPiece::Stadium { a: (poly[i].x.raw_shim() as f64, poly[i].y.raw_shim() as f64), b: (poly[(i + 1) % n].x.raw_shim() as f64, poly[(i + 1) % n].y.raw_shim() as f64), r: 0.0 }).collect();
+            let edges: Vec<PadPiece> = (0..n).map(|i| PadPiece::Stadium { a: (poly[i].x.as_f64(), poly[i].y.as_f64()), b: (poly[(i + 1) % n].x.as_f64(), poly[(i + 1) % n].y.as_f64()), r: 0.0 }).collect();
             point_in_polygon(pad.center, poly) || pieces_distance(&pad.pieces, &edges) <= 0.0
         }
         ItemShape::Pad(pad) => {
@@ -352,8 +352,8 @@ fn zone_item_touch(poly: &[Point], item: &ItemShape, anchors: &[Point]) -> bool 
                 || poly.iter().any(|&v| pad.signed_distance(v) <= 0.0)
                 || (0..n).any(|i| {
                     let (p0, p1) = (poly[i], poly[(i + 1) % n]);
-                    let c = closest_point_on_segment((pad.center.x.raw_shim() as f64, pad.center.y.raw_shim() as f64), (p0.x.raw_shim() as f64, p0.y.raw_shim() as f64), (p1.x.raw_shim() as f64, p1.y.raw_shim() as f64));
-                    pad.signed_distance(Point { x: Nm::from_raw_shim(c.0.round() as i64), y: Nm::from_raw_shim(c.1.round() as i64) }) <= 0.0
+                    let c = closest_point_on_segment((pad.center.x.as_f64(), pad.center.y.as_f64()), (p0.x.as_f64(), p0.y.as_f64()), (p1.x.as_f64(), p1.y.as_f64()));
+                    pad.signed_distance(Point { x: Nm::kiround(c.0), y: Nm::kiround(c.1) }) <= 0.0
                 })
         }
     }
@@ -361,22 +361,23 @@ fn zone_item_touch(poly: &[Point], item: &ItemShape, anchors: &[Point]) -> bool 
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
     fn a_segment_crossing_a_zone_without_an_anchor_inside_touches_it() {
-        let sq = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000) }];
-        let seg = ItemShape::Segment { a: Point { x: Nm::from_raw_shim(-50_000), y: Nm::from_raw_shim(50_000) }, b: Point { x: Nm::from_raw_shim(150_000), y: Nm::from_raw_shim(50_000) }, half_width: 5000.0 };
-        assert!(touches(&ItemShape::Zone { outline: sq.to_vec() }, &[], &seg, &[Point { x: Nm::from_raw_shim(-50_000), y: Nm::from_raw_shim(50_000) }, Point { x: Nm::from_raw_shim(150_000), y: Nm::from_raw_shim(50_000) }]));
-        let far = ItemShape::Segment { a: Point { x: Nm::from_raw_shim(-50_000), y: Nm::from_raw_shim(150_000) }, b: Point { x: Nm::from_raw_shim(150_000), y: Nm::from_raw_shim(150_000) }, half_width: 5000.0 };
+        let sq = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }, Point { x: Nm::ZERO, y: mm(0.1) }];
+        let seg = ItemShape::Segment { a: Point { x: mm(-0.05), y: mm(0.05) }, b: Point { x: mm(0.15), y: mm(0.05) }, half_width: 5000.0 };
+        assert!(touches(&ItemShape::Zone { outline: sq.to_vec() }, &[], &seg, &[Point { x: mm(-0.05), y: mm(0.05) }, Point { x: mm(0.15), y: mm(0.05) }]));
+        let far = ItemShape::Segment { a: Point { x: mm(-0.05), y: mm(0.15) }, b: Point { x: mm(0.15), y: mm(0.15) }, half_width: 5000.0 };
         assert!(!touches(&ItemShape::Zone { outline: sq.to_vec() }, &[], &far, &[]));
     }
 
     #[test]
     fn a_point_on_the_zone_edge_within_accuracy_hits() {
-        let sq = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000) }];
-        assert!(zone_hits_point(&sq, Point { x: Nm::from_raw_shim(50_000), y: Nm::from_raw_shim(103_000) }, 5000.0));
-        assert!(!zone_hits_point(&sq, Point { x: Nm::from_raw_shim(50_000), y: Nm::from_raw_shim(110_000) }, 5000.0));
+        let sq = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }, Point { x: Nm::ZERO, y: mm(0.1) }];
+        assert!(zone_hits_point(&sq, Point { x: mm(0.05), y: mm(0.103) }, 5000.0));
+        assert!(!zone_hits_point(&sq, Point { x: mm(0.05), y: mm(0.11) }, 5000.0));
     }
 
     /// A pad given as pieces (a 45-degree rectangle) touches a track that crosses its copper, not one that only crosses the corner of its box.
@@ -386,38 +387,38 @@ mod tests {
         // 1000 x 400 turned 45 degrees about (0, 0): its long axis is the diagonal y = x.
         let corner = |u: f64, v: f64| (u * s - v * s, u * s + v * s);
         let poly = PadPiece::Polygon(vec![corner(-500_000.0, -200_000.0), corner(500_000.0, -200_000.0), corner(500_000.0, 200_000.0), corner(-500_000.0, 200_000.0)]);
-        let pad = PlacedPad { number: "1".into(), center: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::from_raw_shim(990_000), Nm::from_raw_shim(990_000)), through_hole: false, shape: eda_model::footprint::PadShape::Rect, roundrect_ratio: None, pieces: vec![poly] };
+        let pad = PlacedPad { number: "1".into(), center: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (mm(0.99), mm(0.99)), through_hole: false, shape: eda_model::footprint::PadShape::Rect, roundrect_ratio: None, pieces: vec![poly] };
         let seg = |x0: Nm, y0: Nm, x1: Nm, y1: Nm| ItemShape::Segment { a: Point { x: x0, y: y0 }, b: Point { x: x1, y: y1 }, half_width: 25_000.0 };
         // Across the box's corner at (450, -450), 0.45 mm off the long axis: no copper there.
-        assert!(!touches(&ItemShape::Pad(pad.clone()), &[], &seg(Nm::from_raw_shim(300_000), Nm::from_raw_shim(-480_000), Nm::from_raw_shim(480_000), Nm::from_raw_shim(-300_000)), &[]));
+        assert!(!touches(&ItemShape::Pad(pad.clone()), &[], &seg(mm(0.3), mm(-0.48), mm(0.48), mm(-0.3)), &[]));
         // Across the far end of the long axis.
-        assert!(touches(&ItemShape::Pad(pad), &[], &seg(Nm::from_raw_shim(200_000), Nm::from_raw_shim(480_000), Nm::from_raw_shim(480_000), Nm::from_raw_shim(200_000)), &[]));
+        assert!(touches(&ItemShape::Pad(pad), &[], &seg(mm(0.2), mm(0.48), mm(0.48), mm(0.2)), &[]));
     }
 
     #[test]
     fn point_in_square() {
-        let square = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000) }];
-        assert!(point_in_polygon(Point { x: Nm::from_raw_shim(50_000), y: Nm::from_raw_shim(50_000) }, &square));
-        assert!(!point_in_polygon(Point { x: Nm::from_raw_shim(150_000), y: Nm::from_raw_shim(50_000) }, &square));
+        let square = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }, Point { x: Nm::ZERO, y: mm(0.1) }];
+        assert!(point_in_polygon(Point { x: mm(0.05), y: mm(0.05) }, &square));
+        assert!(!point_in_polygon(Point { x: mm(0.15), y: mm(0.05) }, &square));
     }
 
     #[test]
     fn crossing_segments_have_zero_distance() {
-        let d = seg_seg_distance(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000) }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO });
+        let d = seg_seg_distance(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }, Point { x: Nm::ZERO, y: mm(0.1) }, Point { x: mm(0.1), y: Nm::ZERO });
         assert_eq!(d, 0.0);
     }
 
     #[test]
     fn parallel_segments_measure_perpendicular_gap() {
-        let d = seg_seg_distance(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(50_000) }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(50_000) });
+        let d = seg_seg_distance(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(0.05) }, Point { x: mm(0.1), y: mm(0.05) });
         assert!((d - 50_000.0).abs() < 1e-6);
     }
 
     #[test]
     fn circle_pads_measure_center_distance_minus_radii() {
         let pad = |x: Nm, y: Nm, d: Nm| PlacedPad { number: "1".into(), center: Point { x, y }, size: (d, d), through_hole: false, shape: eda_model::footprint::PadShape::Circle, roundrect_ratio: None, pieces: Vec::new() };
-        let a = pad(Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(1_000_000));
-        let b = pad(Nm::from_raw_shim(3_000_000), Nm::ZERO, Nm::from_raw_shim(1_000_000));
+        let a = pad(Nm::ZERO, Nm::ZERO, mm(1.0));
+        let b = pad(mm(3.0), Nm::ZERO, mm(1.0));
         // centers 3000 apart, radii 500 each -> gap 2000.
         assert!((pad_pad_distance(&a, &b) - 2_000_000.0).abs() < 1e-6);
     }
@@ -431,7 +432,7 @@ pub fn polygon_area(pts: &[Point]) -> f64 {
     let mut sum = 0.0;
     for i in 0..pts.len() {
         let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
-        sum += ((a.x).raw_shim() as f64) * ((b.y).raw_shim() as f64) - ((b.x).raw_shim() as f64) * ((a.y).raw_shim() as f64);
+        sum += a.x.as_f64() * b.y.as_f64() - b.x.as_f64() * a.y.as_f64();
     }
     (sum / 2.0).abs()
 }

@@ -349,9 +349,9 @@ mod tests {
 
     #[test]
     fn a_property_is_written_the_way_kicad_formats_a_field() {
-        let mut l = FieldLayout::new(Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(-2_000_000) }, "F.SilkS");
-        l.size = (Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(800_000));
-        l.thickness = Nm::from_raw_shim(150_000);
+        let mut l = FieldLayout::new(Point { x: Nm::from_mm(1.0), y: Nm::from_mm(-2.0) }, "F.SilkS");
+        l.size = (Nm::from_mm(1.2), Nm::from_mm(0.8));
+        l.thickness = Nm::from_mm(0.15);
         l.bold = true;
         l.halign = -1;
         l.valign = 1;
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn a_bottom_side_field_is_written_unmirrored_in_the_file_frame_and_mirrored_in_its_effects() {
-        let mut l = FieldLayout::new(Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, "B.SilkS");
+        let mut l = FieldLayout::new(Point { x: Nm::from_mm(1.0), y: Nm::ZERO }, "B.SilkS");
         l.angle = 90_000;
         let mut out = String::new();
         write_property(&mut out, "Value", "10k", &l, Side::Bottom, 0, "u-2");
@@ -377,10 +377,10 @@ mod tests {
     #[test]
     fn what_is_written_reads_back_to_the_same_layout() {
         for (side, rot) in [(Side::Top, 0), (Side::Top, 90_000), (Side::Bottom, 0), (Side::Bottom, 270_000)] {
-            let mut l = FieldLayout::new(Point { x: Nm::from_raw_shim(1_234_000), y: Nm::from_raw_shim(-2_345_000) }, if side == Side::Bottom { "B.SilkS" } else { "F.SilkS" });
+            let mut l = FieldLayout::new(Point { x: Nm::from_mm(1.234), y: Nm::from_mm(-2.345) }, if side == Side::Bottom { "B.SilkS" } else { "F.SilkS" });
             l.angle = 45_000;
-            l.size = (Nm::from_raw_shim(1_100_000), Nm::from_raw_shim(900_000));
-            l.thickness = Nm::from_raw_shim(120_000);
+            l.size = (Nm::from_mm(1.1), Nm::from_mm(0.9));
+            l.thickness = Nm::from_mm(0.12);
             l.italic = true;
             l.halign = 1;
             l.valign = -1;
@@ -448,7 +448,7 @@ mod tests {
                 (fp_text value "1u" (at 0 2 0) (layer "F.Fab") hide (effects (font (size 1 1) (thickness 0.15)))))"#,
         );
         let e = parse_footprint_edit(&node, "C3", Some("1u"), Side::Top, 0);
-        assert_eq!(e.reference.as_ref().unwrap().at, Point { x: Nm::ZERO, y: Nm::from_raw_shim(-2_000_000) });
+        assert_eq!(e.reference.as_ref().unwrap().at, Point { x: Nm::ZERO, y: Nm::from_mm(-2.0) });
         assert!(!e.value.as_ref().unwrap().visible, "the bare `hide` of the old files");
         assert!(e.attrs.is_none(), "no (attr ..) is no attributes edit");
     }
@@ -468,16 +468,16 @@ mod tests {
     #[test]
     fn a_pads_margins_are_written_and_read_back_and_its_offset_is_read_on_either_side() {
         let mut e = PadEdit::none("1", 1);
-        e.offset = Some(Point { x: Nm::from_raw_shim(300_000), y: Nm::from_raw_shim(-100_000) });
-        e.solder_mask_margin = Some(Nm::from_raw_shim(50_000));
-        e.solder_paste_margin = Some(Nm::from_raw_shim(-30_000));
+        e.offset = Some(Point { x: Nm::from_mm(0.3), y: Nm::from_mm(-0.1) });
+        e.solder_mask_margin = Some(Nm::from_mm(0.05));
+        e.solder_paste_margin = Some(Nm::from_mm(-0.03));
         e.solder_paste_margin_ratio = Some(-0.1);
         let t = pad_text(Some(&e));
         assert_eq!(t.margins, " (solder_mask_margin 0.05) (solder_paste_margin -0.03) (solder_paste_margin_ratio -0.1)");
         for side in [Side::Top, Side::Bottom] {
             // The offset in the file's frame: x negated on the bottom side, where the whole frame is mirrored.
-            let ox = if side == Side::Bottom { -300_000 } else { 300_000 };
-            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(Nm::from_raw_shim(ox)), mm(Nm::from_raw_shim(-100_000)), t.margins));
+            let ox = if side == Side::Bottom { Nm::from_mm(-0.3) } else { Nm::from_mm(0.3) };
+            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(Nm::from_mm(-0.1)), t.margins));
             let back = parse_pad_extras(&node, side, 20241229);
             assert_eq!((back.offset, back.solder_mask_margin, back.solder_paste_margin, back.solder_paste_margin_ratio), (e.offset, e.solder_mask_margin, e.solder_paste_margin, e.solder_paste_margin_ratio), "{side:?}");
         }

@@ -5,7 +5,7 @@ use eda_model::ir::{Design, LabelKind, Point, SchematicSection};
 use eda_model::modules::infer_modules;
 use eda_model::{resolve_lib_id, ConstraintModel, PinKind};
 
-use super::kit::{label_rect, paper_named, power_rect, sheet_pin_rect, text_rect, Paper, Placed, Rect, G};
+use super::kit::{label_rect, paper_named, power_rect, sheet_pin_rect, text_rect, Paper, Placed, Rect, G_NM};
 use super::{derive_hierarchy, Keep};
 use crate::nets::{trace_nets, ScreenIn};
 use crate::{derive_schematic_modules, EngineOptions};
@@ -132,11 +132,11 @@ fn drawn(model: &ConstraintModel, sch: &SchematicSection) -> Vec<Drawn> {
         let mut p = Placed::new(part, &s.lib_id, resolved, &s.value, &package);
         p.flip = s.rot == 180_000;
         if p.flip {
-            p.x = (s.at.x - Nm::from_raw_shim(p.w())).raw_shim();
-            p.y = (s.at.y - Nm::from_raw_shim(p.h())).raw_shim();
+            p.x = s.at.x - p.w();
+            p.y = s.at.y - p.h();
         } else {
-            p.x = s.at.x.raw_shim();
-            p.y = s.at.y.raw_shim();
+            p.x = s.at.x;
+            p.y = s.at.y;
         }
         out.push(Drawn { owner: s.id.clone(), what: format!("symbol {}", s.id), rect: p.keepout_in(sch) });
     }
@@ -161,7 +161,7 @@ fn drawn(model: &ConstraintModel, sch: &SchematicSection) -> Vec<Drawn> {
         out.push(Drawn { owner: if owner.is_empty() { format!("label {} {:?}", l.net, l.at) } else { owner }, what: format!("label {} at {:?}", l.net, l.at), rect: label_rect(l.at, dir, &l.net, hier) });
     }
     for s in &sch.sheets {
-        let b = Rect::new(s.at.x.raw_shim(), s.at.y.raw_shim(), (s.at.x + s.size.0).raw_shim(), (s.at.y + s.size.1).raw_shim());
+        let b = Rect::sized(s.at, s.size.0, s.size.1);
         out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("sheet {}", s.name), rect: b });
         for f in crate::fields::sheet_fields(sch, s) {
             out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("{} {}", f.name, f.text), rect: text_rect(&f.text, f.at, f.h, f.v, f.vertical) });
@@ -187,9 +187,9 @@ pub(super) fn assert_tidy(model: &ConstraintModel, d: &Design, what: &str) {
         }
         for w in &sch.wires {
             for p in &w.pts {
-                assert!(usable.contains(&Rect { x0: p.x.raw_shim(), y0: p.y.raw_shim(), x1: p.x.raw_shim(), y1: p.y.raw_shim() }), "{what} {file:?}: wire point {p:?} outside {usable:?}");
-                assert_eq!(p.x % Nm::from_raw_shim(G), Nm::ZERO, "{what} {file:?}: wire point {p:?} is off the grid");
-                assert_eq!(p.y % Nm::from_raw_shim(G), Nm::ZERO, "{what} {file:?}: wire point {p:?} is off the grid");
+                assert!(usable.contains(&Rect::at(*p)), "{what} {file:?}: wire point {p:?} outside {usable:?}");
+                assert_eq!(p.x % G_NM, Nm::ZERO, "{what} {file:?}: wire point {p:?} is off the grid");
+                assert_eq!(p.y % G_NM, Nm::ZERO, "{what} {file:?}: wire point {p:?} is off the grid");
             }
         }
         for (i, a) in items.iter().enumerate() {
@@ -201,8 +201,8 @@ pub(super) fn assert_tidy(model: &ConstraintModel, d: &Design, what: &str) {
             }
         }
         for s in &sch.symbols {
-            assert_eq!(s.at.x % Nm::from_raw_shim(G), Nm::ZERO, "{what} {file:?}: {} is off the grid", s.id);
-            assert_eq!(s.at.y % Nm::from_raw_shim(G), Nm::ZERO, "{what} {file:?}: {} is off the grid", s.id);
+            assert_eq!(s.at.x % G_NM, Nm::ZERO, "{what} {file:?}: {} is off the grid", s.id);
+            assert_eq!(s.at.y % G_NM, Nm::ZERO, "{what} {file:?}: {} is off the grid", s.id);
         }
     }
 }
@@ -258,7 +258,7 @@ fn pins_side_by_side_on_one_rail_share_a_power_symbol_beyond_the_parts_texts() {
     let vdd = on_u1("VDD")[0];
     let tips: Vec<Nm> = mcu.wires.iter().filter(|w| w.pins.iter().any(|p| p == "U1.1" || p == "U1.14")).map(|w| w.pts[0].y).collect();
     assert_eq!(tips.len(), 2, "each of the two pins has its own stub");
-    assert_eq!(vdd.at.y, Nm::from_raw_shim((tips[0] - Nm::from_raw_shim(3 * 1_270_000)).raw_shim()), "the symbol is three cells above the tips (the supply pair is on top of the part)");
+    assert_eq!(vdd.at.y, tips[0] - G_NM * 3, "the symbol is three cells above the tips (the supply pair is on top of the part)");
     // The two stubs are joined across their ends, and both pins are on the supply net through that join.
     let join = mcu.wires.iter().find(|w| w.pins.is_empty() && w.net == "VDD" && w.pts.iter().any(|p| *p == vdd.at)).expect("a wire joins the two stubs at the symbol");
     assert_eq!(join.pts.len(), 2);
@@ -318,12 +318,12 @@ fn the_flat_derivation_sits_inside_the_frame_on_a_paper_that_holds_it() {
         }
         for w in &sch.wires {
             for p in &w.pts {
-                assert!(usable.contains(&Rect { x0: p.x.raw_shim(), y0: p.y.raw_shim(), x1: p.x.raw_shim(), y1: p.y.raw_shim() }), "{file}: wire point {p:?}");
+                assert!(usable.contains(&Rect::at(*p)), "{file}: wire point {p:?}");
             }
         }
         // The grid is kept: every symbol and every wire point is still a multiple of 1.27 mm.
         for s in &sch.symbols {
-            assert!(s.at.x % Nm::from_raw_shim(G) == Nm::ZERO && s.at.y % Nm::from_raw_shim(G) == Nm::ZERO, "{file}: {} at {:?}", s.id, s.at);
+            assert!(s.at.x % G_NM == Nm::ZERO && s.at.y % G_NM == Nm::ZERO, "{file}: {} at {:?}", s.id, s.at);
         }
     }
 }

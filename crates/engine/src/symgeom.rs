@@ -124,7 +124,7 @@ impl SymbolGeom {
         let on_unit = |u: u32| u == 0 || u == unit;
         let page = |x_mm: f64, y_mm_up: f64| -> (f64, f64) {
             let (dx, dy) = bake(rot, mirrored, width, x_mm * 1e6, -y_mm_up * 1e6);
-            (at.x.raw_shim() as f64 + dx, at.y.raw_shim() as f64 + dy)
+            (at.x.as_f64() + dx, at.y.as_f64() + dy)
         };
         let mut body: Option<Rect> = None;
         for g in cs.graphics.iter().filter(|g| on_unit(g.unit())) {
@@ -180,7 +180,8 @@ impl SymbolGeom {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::mm;
+    
     use super::*;
     use eda_model::{Pin, PinKind};
 
@@ -218,7 +219,7 @@ mod tests {
     #[test]
     fn a_standing_resistor_has_its_pins_above_and_below_a_box_between_them() {
         let r = eda_model::symbol::builtin("Device:R");
-        let at = Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(50_800_000) };
+        let at = Point { x: mm(50.8), y: mm(50.8) };
         let g = SymbolGeom::of(&instance(at, 0, false), &two_pin("R1"), r.as_ref());
         assert_eq!(g.pins.len(), 2);
         let (top, bottom) = (&g.pins[0], &g.pins[1]);
@@ -230,7 +231,7 @@ mod tests {
         let body = g.body.expect("the body");
         assert!((body.w() - 2_286_000.0).abs() < 1.0 && (body.h() - 5_334_000.0).abs() < 1.0, "{body:?}");
         // turned half a turn, pin 1 is at the bottom
-        let g2 = SymbolGeom::of(&instance(Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(50_800_000 + 7_620_000) }, 180_000, false), &two_pin("R1"), r.as_ref());
+        let g2 = SymbolGeom::of(&instance(Point { x: mm(50.8), y: mm(50.8) + mm(7.62) }, 180_000, false), &two_pin("R1"), r.as_ref());
         assert!(g2.pins[0].tip.1 > g2.pins[1].tip.1);
         assert_eq!(g2.pins[0].orient, PinOrient::Up);
     }

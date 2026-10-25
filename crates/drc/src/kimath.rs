@@ -44,8 +44,8 @@ pub fn isqrt(x: i128) -> i64 {
     r
 }
 
-fn sq(x: i64) -> i128 {
-    (x as i128) * (x as i128)
+fn sq(x: Nm) -> i128 {
+    (x.get() as i128) * (x.get() as i128)
 }
 
 /// A line segment `A -> B`, exactly KiCad's `SEG` (a degenerate segment,
@@ -68,15 +68,15 @@ impl Seg {
 
     /// Squared distance to a point -- ported from `SEG::SquaredDistance(const VECTOR2I&)`.
     pub fn sq_distance_to_point(&self, p: Point) -> i128 {
-        let ab = ((self.b.x - self.a.x).raw_shim() as i128, (self.b.y - self.a.y).raw_shim() as i128);
-        let ap = ((p.x - self.a.x).raw_shim() as i128, (p.y - self.a.y).raw_shim() as i128);
+        let ab = ((self.b.x - self.a.x).get() as i128, (self.b.y - self.a.y).get() as i128);
+        let ap = ((p.x - self.a.x).get() as i128, (p.y - self.a.y).get() as i128);
         let e = ap.0 * ab.0 + ap.1 * ab.1;
         if e <= 0 {
             return ap.0 * ap.0 + ap.1 * ap.1;
         }
         let f = ab.0 * ab.0 + ab.1 * ab.1;
         if e >= f {
-            let bp = ((p.x - self.b.x).raw_shim() as i128, (p.y - self.b.y).raw_shim() as i128);
+            let bp = ((p.x - self.b.x).get() as i128, (p.y - self.b.y).get() as i128);
             return bp.0 * bp.0 + bp.1 * bp.1;
         }
         let ap_sq = ap.0 * ap.0 + ap.1 * ap.1;
@@ -89,12 +89,12 @@ impl Seg {
 
     /// Nearest point on the segment to `p` -- ported from `SEG::NearestPoint(const VECTOR2I&)`.
     pub fn nearest_point(&self, p: Point) -> Point {
-        let d = ((self.b.x - self.a.x).raw_shim() as i128, (self.b.y - self.a.y).raw_shim() as i128);
+        let d = ((self.b.x - self.a.x).get() as i128, (self.b.y - self.a.y).get() as i128);
         let l_sq = d.0 * d.0 + d.1 * d.1;
         if l_sq == 0 {
             return self.a;
         }
-        let pa = ((p.x - self.a.x).raw_shim() as i128, (p.y - self.a.y).raw_shim() as i128);
+        let pa = ((p.x - self.a.x).get() as i128, (p.y - self.a.y).get() as i128);
         let t = d.0 * pa.0 + d.1 * pa.1;
         if t < 0 {
             return self.a;
@@ -103,7 +103,7 @@ impl Seg {
         }
         let xp = (t * d.0) / l_sq;
         let yp = (t * d.1) / l_sq;
-        Point { x: self.a.x + Nm::from_raw_shim(xp as i64), y: self.a.y + Nm::from_raw_shim(yp as i64) }
+        Point { x: self.a.x + Nm::new(xp as i64), y: self.a.y + Nm::new(yp as i64) }
     }
 
     /// Squared distance to another segment -- ported from `SEG::SquaredDistance(const SEG&)`:
@@ -131,8 +131,8 @@ impl Seg {
     /// collinear overlap, a rare case for tracks, is reported as no
     /// intersection here -- see the module doc's fidelity notes).
     pub fn intersect(&self, other: &Seg) -> Option<Point> {
-        let (ax, ay, bx, by) = (self.a.x.raw_shim() as i128, self.a.y.raw_shim() as i128, self.b.x.raw_shim() as i128, self.b.y.raw_shim() as i128);
-        let (cx, cy, dx, dy) = (other.a.x.raw_shim() as i128, other.a.y.raw_shim() as i128, other.b.x.raw_shim() as i128, other.b.y.raw_shim() as i128);
+        let (ax, ay, bx, by) = (self.a.x.get() as i128, self.a.y.get() as i128, self.b.x.get() as i128, self.b.y.get() as i128);
+        let (cx, cy, dx, dy) = (other.a.x.get() as i128, other.a.y.get() as i128, other.b.x.get() as i128, other.b.y.get() as i128);
         // Bounding-box rejection first (cheap, and matches SEG::intersects).
         if bx.max(ax) < cx.min(dx) || dx.max(cx) < ax.min(bx) || by.max(ay) < cy.min(dy) || dy.max(cy) < ay.min(by) {
             return None;
@@ -183,7 +183,7 @@ impl Seg {
         };
         let px = cx + rescale(param1, dir2x, det);
         let py = cy + rescale(param1, dir2y, det);
-        Some(Point { x: Nm::from_raw_shim(px as i64), y: Nm::from_raw_shim(py as i64) })
+        Some(Point { x: Nm::new(px as i64), y: Nm::new(py as i64) })
     }
 }
 
@@ -254,8 +254,8 @@ impl Core {
             // d = rescale(diff.x, (pt.y - p1.y), diff.y), matching KiCad's
             // integer rescale (proportional, rounds toward zero as `/` does).
             let diff = (p2.x - p1.x, p2.y - p1.y);
-            let d = (diff.0.raw_shim() as i128 * (p.y - p1.y).raw_shim() as i128) / diff.1.raw_shim() as i128;
-            if (p1.y >= p.y) != (p2.y >= p.y) && ((p.x - p1.x).raw_shim() as i128) < d {
+            let d = (diff.0.get() as i128 * (p.y - p1.y).get() as i128) / diff.1.get() as i128;
+            if (p1.y >= p.y) != (p2.y >= p.y) && ((p.x - p1.x).get() as i128) < d {
                 inside = !inside;
             }
         }
@@ -412,9 +412,9 @@ impl Shape {
             return pairwise(self, other).map(|(a, b)| a.clearance_to(b)).min_by_key(|(d, _)| *d).expect("a compound has parts");
         }
         let Some((best_sq, best_pt)) = self.core_sq_distance(other) else { return (Nm::ZERO, self.core().probe_point()) };
-        let core_dist = isqrt(best_sq);
-        let actual = (core_dist - self.radius().raw_shim() - other.radius().raw_shim()).max(0);
-        (Nm::from_raw_shim(actual), best_pt)
+        let core_dist = Nm::new(isqrt(best_sq));
+        let actual = (core_dist - self.radius() - other.radius()).max(Nm::ZERO);
+        (actual, best_pt)
     }
 
     /// The exact gap to `other`, in nm and not rounded: 0 when the shapes touch or overlap, otherwise the distance between
@@ -427,7 +427,7 @@ impl Shape {
         }
         match self.core_sq_distance(other) {
             None => 0.0,
-            Some((best_sq, _)) => ((best_sq as f64).sqrt() - (self.radius() + other.radius()).raw_shim() as f64).max(0.0),
+            Some((best_sq, _)) => ((best_sq as f64).sqrt() - (self.radius() + other.radius()).as_f64()).max(0.0),
         }
     }
 
@@ -448,11 +448,11 @@ impl Shape {
         // integer root first would round a 199.6 µm gap down to 199 and
         // flag it against a 200 µm clearance.
         let Some((best_sq, best_pt)) = self.core_sq_distance(other) else { return Some((Nm::ZERO, self.core().probe_point())) };
-        let reach = (self.radius() + other.radius()).raw_shim() as i128;
-        let need = reach + (clearance.max(Nm::ZERO)).raw_shim() as i128;
+        let reach = (self.radius() + other.radius()).get() as i128;
+        let need = reach + (clearance.max(Nm::ZERO)).get() as i128;
         if best_sq <= reach * reach || best_sq < need * need {
-            let actual = (isqrt(best_sq) - self.radius().raw_shim() - other.radius().raw_shim()).max(0);
-            Some((Nm::from_raw_shim(actual), best_pt))
+            let actual = (Nm::new(isqrt(best_sq)) - self.radius() - other.radius()).max(Nm::ZERO);
+            Some((actual, best_pt))
         } else {
             None
         }
@@ -507,19 +507,20 @@ pub fn distance_to_open_segments(shape: &Shape, edges: &[Seg]) -> (Nm, Point) {
             }
         }
     }
-    let actual = (isqrt(best_sq) - shape.radius().raw_shim()).max(0);
-    (Nm::from_raw_shim(actual), best_pt)
+    let actual = (Nm::new(isqrt(best_sq)) - shape.radius()).max(Nm::ZERO);
+    (actual, best_pt)
 }
 
 /// Euclidean distance between two points, rounded to the nearest micron --
 /// used where KiCad reports `(a - b).EuclideanNorm()` directly (hole-to-hole
 /// centre distance, annular width).
 pub fn dist(a: Point, b: Point) -> Nm {
-    Nm::from_raw_shim(isqrt(sq((a.x - b.x).raw_shim()) + sq((b.y - a.y).raw_shim()).max(sq((a.y - b.y).raw_shim()))))
+    Nm::new(isqrt(sq(a.x - b.x) + sq(b.y - a.y).max(sq(a.y - b.y))))
 }
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     fn p(x: Nm, y: Nm) -> Point {
@@ -528,18 +529,18 @@ mod tests {
 
     #[test]
     fn circle_circle_gap() {
-        let a = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::from_raw_shim(500) };
-        let b = Shape::Circle { c: p(Nm::from_raw_shim(2000), Nm::ZERO), r: Nm::from_raw_shim(500) };
+        let a = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::new(500) };
+        let b = Shape::Circle { c: p(Nm::new(2000), Nm::ZERO), r: Nm::new(500) };
         let (actual, _) = a.clearance_to(&b);
-        assert_eq!(actual, Nm::from_raw_shim(1000));
-        assert!(a.collides(&b, Nm::from_raw_shim(1001)).is_some());
-        assert!(a.collides(&b, Nm::from_raw_shim(1000)).is_none());
+        assert_eq!(actual, Nm::new(1000));
+        assert!(a.collides(&b, Nm::new(1001)).is_some());
+        assert!(a.collides(&b, Nm::new(1000)).is_none());
     }
 
     #[test]
     fn overlapping_circles_are_zero() {
-        let a = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::from_raw_shim(500) };
-        let b = Shape::Circle { c: p(Nm::from_raw_shim(100), Nm::ZERO), r: Nm::from_raw_shim(500) };
+        let a = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::new(500) };
+        let b = Shape::Circle { c: p(Nm::new(100), Nm::ZERO), r: Nm::new(500) };
         let (actual, _) = a.clearance_to(&b);
         assert_eq!(actual, Nm::ZERO);
         // Touching (clearance 0) must still be a collision.
@@ -548,16 +549,16 @@ mod tests {
 
     #[test]
     fn seg_seg_parallel_distance() {
-        let a = Seg::new(p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1000), Nm::ZERO));
-        let b = Seg::new(p(Nm::ZERO, Nm::from_raw_shim(300)), p(Nm::from_raw_shim(1000), Nm::from_raw_shim(300)));
+        let a = Seg::new(p(Nm::ZERO, Nm::ZERO), p(Nm::new(1000), Nm::ZERO));
+        let b = Seg::new(p(Nm::ZERO, Nm::new(300)), p(Nm::new(1000), Nm::new(300)));
         assert_eq!(isqrt(a.sq_distance_to_seg(&b)), 300);
     }
 
     #[test]
     fn seg_seg_crossing_is_zero() {
-        let a = Seg::new(p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)));
-        let b = Seg::new(p(Nm::ZERO, Nm::from_raw_shim(1000)), p(Nm::from_raw_shim(1000), Nm::ZERO));
-        assert_eq!(a.intersect(&b), Some(p(Nm::from_raw_shim(500), Nm::from_raw_shim(500))));
+        let a = Seg::new(p(Nm::ZERO, Nm::ZERO), p(Nm::new(1000), Nm::new(1000)));
+        let b = Seg::new(p(Nm::ZERO, Nm::new(1000)), p(Nm::new(1000), Nm::ZERO));
+        assert_eq!(a.intersect(&b), Some(p(Nm::new(500), Nm::new(500))));
         assert_eq!(a.sq_distance_to_seg(&b), 0);
     }
 
@@ -571,26 +572,26 @@ mod tests {
     /// returned point, not just `is_some()`).
     #[test]
     fn asymmetric_crossing_point_is_on_both_segments() {
-        let horizontal = Seg::new(p(Nm::from_raw_shim(-2475), Nm::from_raw_shim(-1905)), p(Nm::from_raw_shim(8665), Nm::from_raw_shim(-1905)));
-        let vertical = Seg::new(p(Nm::from_raw_shim(1200), Nm::from_raw_shim(-1569)), p(Nm::from_raw_shim(1200), Nm::from_raw_shim(-2241)));
+        let horizontal = Seg::new(p(Nm::new(-2475), Nm::new(-1905)), p(Nm::new(8665), Nm::new(-1905)));
+        let vertical = Seg::new(p(Nm::new(1200), Nm::new(-1569)), p(Nm::new(1200), Nm::new(-2241)));
         let hit = horizontal.intersect(&vertical).expect("segments cross");
-        assert_eq!(hit, p(Nm::from_raw_shim(1200), Nm::from_raw_shim(-1905)));
+        assert_eq!(hit, p(Nm::new(1200), Nm::new(-1905)));
 
-        let other_vertical = Seg::new(p(Nm::from_raw_shim(3750), Nm::from_raw_shim(-2241)), p(Nm::from_raw_shim(3750), Nm::from_raw_shim(-1569)));
-        assert_eq!(horizontal.intersect(&other_vertical), Some(p(Nm::from_raw_shim(3750), Nm::from_raw_shim(-1905))));
+        let other_vertical = Seg::new(p(Nm::new(3750), Nm::new(-2241)), p(Nm::new(3750), Nm::new(-1569)));
+        assert_eq!(horizontal.intersect(&other_vertical), Some(p(Nm::new(3750), Nm::new(-1905))));
     }
 
     #[test]
     fn point_in_polygon_square() {
-        let core = Core::Polygon(vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1000), Nm::ZERO), p(Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), p(Nm::ZERO, Nm::from_raw_shim(1000))]);
-        assert!(core.contains_point(p(Nm::from_raw_shim(500), Nm::from_raw_shim(500))));
-        assert!(!core.contains_point(p(Nm::from_raw_shim(1500), Nm::from_raw_shim(500))));
+        let core = Core::Polygon(vec![p(Nm::ZERO, Nm::ZERO), p(Nm::new(1000), Nm::ZERO), p(Nm::new(1000), Nm::new(1000)), p(Nm::ZERO, Nm::new(1000))]);
+        assert!(core.contains_point(p(Nm::new(500), Nm::new(500))));
+        assert!(!core.contains_point(p(Nm::new(1500), Nm::new(500))));
     }
 
     #[test]
     fn pad_fully_inside_zone_is_zero_clearance() {
-        let zone = Shape::Polygon { pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::from_raw_shim(10_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000))] };
-        let pad = Shape::Rect { x0: Nm::from_raw_shim(4000), y0: Nm::from_raw_shim(4000), x1: Nm::from_raw_shim(5000), y1: Nm::from_raw_shim(5000) };
+        let zone = Shape::Polygon { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(0.01), Nm::ZERO), p(mm(0.01), mm(0.01)), p(Nm::ZERO, mm(0.01))] };
+        let pad = Shape::Rect { x0: Nm::new(4000), y0: Nm::new(4000), x1: Nm::new(5000), y1: Nm::new(5000) };
         let (actual, _) = zone.clearance_to(&pad);
         assert_eq!(actual, Nm::ZERO);
     }
@@ -599,38 +600,38 @@ mod tests {
     fn stadium_matches_kicad_shape_segment_collide() {
         // Two parallel tracks, width 200 each, centrelines 500 apart:
         // copper-to-copper gap = 500 - 100 - 100 = 300.
-        let t1 = Shape::Stadium { a: p(Nm::ZERO, Nm::ZERO), b: p(Nm::from_raw_shim(5000), Nm::ZERO), r: Nm::from_raw_shim(100) };
-        let t2 = Shape::Stadium { a: p(Nm::ZERO, Nm::from_raw_shim(500)), b: p(Nm::from_raw_shim(5000), Nm::from_raw_shim(500)), r: Nm::from_raw_shim(100) };
+        let t1 = Shape::Stadium { a: p(Nm::ZERO, Nm::ZERO), b: p(Nm::new(5000), Nm::ZERO), r: Nm::new(100) };
+        let t2 = Shape::Stadium { a: p(Nm::ZERO, Nm::new(500)), b: p(Nm::new(5000), Nm::new(500)), r: Nm::new(100) };
         let (actual, _) = t1.clearance_to(&t2);
-        assert_eq!(actual, Nm::from_raw_shim(300));
+        assert_eq!(actual, Nm::new(300));
     }
 
     #[test]
     fn gap_to_keeps_the_fraction_clearance_to_floors() {
         // Two circles of radius 500 whose centres are 1414.21 um apart (1000 um over, 1000 um across): 414.21 um of air.
-        let a = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::from_raw_shim(500) };
-        let b = Shape::Circle { c: p(Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), r: Nm::from_raw_shim(500) };
+        let a = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::new(500) };
+        let b = Shape::Circle { c: p(Nm::new(1000), Nm::new(1000)), r: Nm::new(500) };
         let (floored, _) = a.clearance_to(&b);
-        assert_eq!(floored, Nm::from_raw_shim(414));
+        assert_eq!(floored, Nm::new(414));
         assert!((a.gap_to(&b) - 414.21).abs() < 0.01, "{}", a.gap_to(&b));
         // A track past a round pad: the pad's centre is 800 um off the track's centreline, 200 um of air.
-        let pad = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::from_raw_shim(500) };
-        let track = Shape::Stadium { a: p(Nm::from_raw_shim(-5000), Nm::from_raw_shim(800)), b: p(Nm::from_raw_shim(5000), Nm::from_raw_shim(800)), r: Nm::from_raw_shim(100) };
+        let pad = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::new(500) };
+        let track = Shape::Stadium { a: p(Nm::new(-5000), Nm::new(800)), b: p(Nm::new(5000), Nm::new(800)), r: Nm::new(100) };
         assert_eq!(pad.gap_to(&track), 200.0);
-        assert!(pad.gap_to(&track) < 200.5 && pad.collides(&track, Nm::from_raw_shim(201)).is_some() && pad.collides(&track, Nm::from_raw_shim(200)).is_none());
+        assert!(pad.gap_to(&track) < 200.5 && pad.collides(&track, Nm::new(201)).is_some() && pad.collides(&track, Nm::new(200)).is_none());
     }
 
     #[test]
     fn gap_to_is_zero_when_shapes_touch_overlap_or_contain_each_other() {
-        let zone = Shape::Polygon { pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::from_raw_shim(10_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000))] };
-        let inside = Shape::Rect { x0: Nm::from_raw_shim(4000), y0: Nm::from_raw_shim(4000), x1: Nm::from_raw_shim(5000), y1: Nm::from_raw_shim(5000) };
+        let zone = Shape::Polygon { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(0.01), Nm::ZERO), p(mm(0.01), mm(0.01)), p(Nm::ZERO, mm(0.01))] };
+        let inside = Shape::Rect { x0: Nm::new(4000), y0: Nm::new(4000), x1: Nm::new(5000), y1: Nm::new(5000) };
         assert_eq!(zone.gap_to(&inside), 0.0, "contained");
         assert_eq!(inside.gap_to(&zone), 0.0);
-        let a = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::from_raw_shim(500) };
-        assert_eq!(a.gap_to(&Shape::Circle { c: p(Nm::from_raw_shim(100), Nm::ZERO), r: Nm::from_raw_shim(500) }), 0.0, "overlapping");
-        assert_eq!(a.gap_to(&Shape::Circle { c: p(Nm::from_raw_shim(1000), Nm::ZERO), r: Nm::from_raw_shim(500) }), 0.0, "touching");
-        let rr = Shape::RoundRect { x0: Nm::from_raw_shim(-1000), y0: Nm::from_raw_shim(-1000), x1: Nm::from_raw_shim(1000), y1: Nm::from_raw_shim(1000), r: Nm::from_raw_shim(500) };
-        let probe = Shape::Circle { c: p(Nm::from_raw_shim(2000), Nm::from_raw_shim(2000)), r: Nm::ZERO };
+        let a = Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::new(500) };
+        assert_eq!(a.gap_to(&Shape::Circle { c: p(Nm::new(100), Nm::ZERO), r: Nm::new(500) }), 0.0, "overlapping");
+        assert_eq!(a.gap_to(&Shape::Circle { c: p(Nm::new(1000), Nm::ZERO), r: Nm::new(500) }), 0.0, "touching");
+        let rr = Shape::RoundRect { x0: Nm::new(-1000), y0: Nm::new(-1000), x1: Nm::new(1000), y1: Nm::new(1000), r: Nm::new(500) };
+        let probe = Shape::Circle { c: p(Nm::new(2000), Nm::new(2000)), r: Nm::ZERO };
         assert!((rr.gap_to(&probe) - 1621.3).abs() < 0.1, "a round corner is farther than a square one: {}", rr.gap_to(&probe));
     }
 
@@ -639,12 +640,12 @@ mod tests {
         // A 2000x2000 roundrect, corner ratio 0.25 -> r=500, probed from a
         // point straight off one corner: distance must be the diagonal
         // distance to the inset-corner centre, minus r.
-        let rr = Shape::RoundRect { x0: Nm::from_raw_shim(-1000), y0: Nm::from_raw_shim(-1000), x1: Nm::from_raw_shim(1000), y1: Nm::from_raw_shim(1000), r: Nm::from_raw_shim(500) };
-        let probe = Shape::Circle { c: p(Nm::from_raw_shim(2000), Nm::from_raw_shim(2000)), r: Nm::ZERO };
+        let rr = Shape::RoundRect { x0: Nm::new(-1000), y0: Nm::new(-1000), x1: Nm::new(1000), y1: Nm::new(1000), r: Nm::new(500) };
+        let probe = Shape::Circle { c: p(Nm::new(2000), Nm::new(2000)), r: Nm::ZERO };
         let (actual, _) = rr.clearance_to(&probe);
         // Inset corner centre at (500,500); distance from (2000,2000) is
         // 1500*sqrt(2) ~= 2121; minus r(500) ~= 1621.
-        assert!((actual - Nm::from_raw_shim(1621)).abs() <= Nm::from_raw_shim(1), "actual={actual}");
+        assert!((actual - Nm::new(1621)).abs() <= Nm::new(1), "actual={actual}");
     }
 }
 
@@ -658,36 +659,36 @@ mod compound_tests {
 
     /// A custom pad's compound: a 1 mm round anchor and a 200 um stroke 2 mm long to the right of it.
     fn pad() -> Shape {
-        Shape::Compound { parts: vec![Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::from_raw_shim(500) }, Shape::Stadium { a: p(Nm::ZERO, Nm::ZERO), b: p(Nm::from_raw_shim(2000), Nm::ZERO), r: Nm::from_raw_shim(100) }] }
+        Shape::Compound { parts: vec![Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::new(500) }, Shape::Stadium { a: p(Nm::ZERO, Nm::ZERO), b: p(Nm::new(2000), Nm::ZERO), r: Nm::new(100) }] }
     }
 
     #[test]
     fn a_compound_is_as_far_from_a_shape_as_its_nearest_part() {
-        let near_the_arm = Shape::Circle { c: p(Nm::from_raw_shim(2500), Nm::ZERO), r: Nm::from_raw_shim(100) };
+        let near_the_arm = Shape::Circle { c: p(Nm::new(2500), Nm::ZERO), r: Nm::new(100) };
         // The arm ends at x = 2100: 2500 - 100 - 2100 = 300 of air, though the anchor alone would read 1900.
-        assert_eq!(pad().clearance_to(&near_the_arm).0, Nm::from_raw_shim(300));
+        assert_eq!(pad().clearance_to(&near_the_arm).0, Nm::new(300));
         assert!((pad().gap_to(&near_the_arm) - 300.0).abs() < 1e-9);
-        assert_eq!(near_the_arm.clearance_to(&pad()).0, Nm::from_raw_shim(300), "either way round");
-        assert!(pad().collides(&near_the_arm, Nm::from_raw_shim(301)).is_some() && pad().collides(&near_the_arm, Nm::from_raw_shim(300)).is_none());
+        assert_eq!(near_the_arm.clearance_to(&pad()).0, Nm::new(300), "either way round");
+        assert!(pad().collides(&near_the_arm, Nm::new(301)).is_some() && pad().collides(&near_the_arm, Nm::new(300)).is_none());
         // Touching any part is touching the pad.
-        let on_the_anchor = Shape::Circle { c: p(Nm::ZERO, Nm::from_raw_shim(400)), r: Nm::from_raw_shim(100) };
+        let on_the_anchor = Shape::Circle { c: p(Nm::ZERO, Nm::new(400)), r: Nm::new(100) };
         assert_eq!(pad().clearance_to(&on_the_anchor).0, Nm::ZERO);
         assert!(pad().collides(&on_the_anchor, Nm::ZERO).is_some());
     }
 
     #[test]
     fn a_compounds_box_holds_every_part_and_each_part_keeps_its_own_radius() {
-        assert_eq!(pad().bbox(Nm::ZERO), (Nm::from_raw_shim(-500), Nm::from_raw_shim(-500), Nm::from_raw_shim(2100), Nm::from_raw_shim(500)));
-        assert_eq!(pad().bbox(Nm::from_raw_shim(50)), (Nm::from_raw_shim(-550), Nm::from_raw_shim(-550), Nm::from_raw_shim(2150), Nm::from_raw_shim(550)));
-        assert_eq!(pad().radius(), Nm::from_raw_shim(500), "the widest part: what a box has to be inflated by");
+        assert_eq!(pad().bbox(Nm::ZERO), (Nm::new(-500), Nm::new(-500), Nm::new(2100), Nm::new(500)));
+        assert_eq!(pad().bbox(Nm::new(50)), (Nm::new(-550), Nm::new(-550), Nm::new(2150), Nm::new(550)));
+        assert_eq!(pad().radius(), Nm::new(500), "the widest part: what a box has to be inflated by");
         assert_eq!(pad().parts().len(), 2);
-        assert_eq!(Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::from_raw_shim(5) }.parts().len(), 1, "a plain shape is its own only part");
+        assert_eq!(Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: Nm::new(5) }.parts().len(), 1, "a plain shape is its own only part");
     }
 
     #[test]
     fn the_distance_to_an_edge_is_measured_from_every_part() {
         // A board edge 2.3 mm to the right of the pad's anchor: the arm's tip is 200 from it, though the anchor is 1800.
-        let edge = [Seg::new(p(Nm::from_raw_shim(2300), Nm::from_raw_shim(-1000)), p(Nm::from_raw_shim(2300), Nm::from_raw_shim(1000)))];
-        assert_eq!(distance_to_open_segments(&pad(), &edge).0, Nm::from_raw_shim(200));
+        let edge = [Seg::new(p(Nm::new(2300), Nm::new(-1000)), p(Nm::new(2300), Nm::new(1000)))];
+        assert_eq!(distance_to_open_segments(&pad(), &edge).0, Nm::new(200));
     }
 }

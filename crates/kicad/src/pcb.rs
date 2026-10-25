@@ -474,7 +474,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             write_dimension(
                 &mut out,
                 d,
-                &DimensionArgs { uuid: &uuid, text_uuid: &text_uuid, locked: is_locked(&d.id), text: &geom.text, text_at: (geom.text_at.x.raw_shim(), geom.text_at.y.raw_shim()), text_angle_millideg: geom.text_angle },
+                &DimensionArgs { uuid: &uuid, text_uuid: &text_uuid, locked: is_locked(&d.id), text: &geom.text, text_at: (geom.text_at.x, geom.text_at.y), text_angle_millideg: geom.text_angle },
             );
         }
     }
@@ -1575,7 +1575,7 @@ const MAGIC_TEARDROP_ZONE_ID: u32 = 30000;
 fn teardrop_priorities(zones: &[Zone]) -> std::collections::HashMap<&str, u32> {
     let area = |z: &Zone| {
         let n = z.outline.len();
-        (0..n).map(|i| z.outline[i].x.raw_shim() as f64 * z.outline[(i + 1) % n].y.raw_shim() as f64 - z.outline[(i + 1) % n].x.raw_shim() as f64 * z.outline[i].y.raw_shim() as f64).sum::<f64>().abs() / 2.0
+        (0..n).map(|i| z.outline[i].x.as_f64() * z.outline[(i + 1) % n].y.as_f64() - z.outline[(i + 1) % n].x.as_f64() * z.outline[i].y.as_f64()).sum::<f64>().abs() / 2.0
     };
     let layer_rank = |z: &Zone| eda_model::layers::pcb_layer_id(&z.layer).unwrap_or(u32::MAX);
     let mut created: Vec<&Zone> = zones.iter().filter(|z| z.teardrop && z.priority == 0 && !z.id.is_empty()).collect();
@@ -1727,16 +1727,16 @@ mod tests {
     fn a_board_with_teardrops_keeps_them_through_kicad_clis_refill() {
         let (mut design, model) = fixture();
         assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(legacy_teardrops no)"));
-        let tri = |id: &str, size: i64, priority: u32| Zone {
+        let tri = |id: &str, size: Nm, priority: u32| Zone {
             id: id.into(),
             net: "GND".into(),
             layer: "F.Cu".into(),
-            outline: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(1_000_000 + size), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000 + size) }],
+            outline: vec![Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(1.0) + size, y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) + size }],
             teardrop: true,
             priority,
             ..Default::default()
         };
-        design.routing.as_mut().unwrap().zones = vec![tri("small", 500_000, 0), tri("big", 900_000, 0), tri("kicads", 700_000, 30000)];
+        design.routing.as_mut().unwrap().zones = vec![tri("small", Nm::from_mm(0.5), 0), tri("big", Nm::from_mm(0.9), 0), tri("kicads", Nm::from_mm(0.7), 30000)];
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(legacy_teardrops yes)"), "{out}");
         let priorities: Vec<u32> = out.split("(zone").skip(1).filter_map(|z| z.split("(priority ").nth(1)).map(|p| p.split(')').next().unwrap().parse().unwrap()).collect();
@@ -1757,13 +1757,13 @@ mod tests {
         let placement = PlacementSection {
             outline: vec![
                 Point { x: Nm::ZERO, y: Nm::ZERO },
-                Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO },
-                Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) },
-                Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) },
+                Point { x: Nm::from_mm(20.0), y: Nm::ZERO },
+                Point { x: Nm::from_mm(20.0), y: Nm::from_mm(20.0) },
+                Point { x: Nm::ZERO, y: Nm::from_mm(20.0) },
             ],
             footprints: vec![
-                FootprintInstance { id: "U1".into(), at: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "C1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, rot: 90_000, side: Side::Bottom, label: Default::default() },
+                FootprintInstance { id: "U1".into(), at: Point { x: Nm::from_mm(5.0), y: Nm::from_mm(5.0) }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "C1".into(), at: Point { x: Nm::from_mm(10.0), y: Nm::from_mm(10.0) }, rot: 90_000, side: Side::Bottom, label: Default::default() },
             ],
             modules: Vec::new(),
         };
@@ -1774,7 +1774,7 @@ mod tests {
             schematic: None, nets: None,
             placement: Some(placement),
             routing: Some(RoutingSection {
-                tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) }], arc_mid_offset: None }],
+                tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_mm(0.2), pts: vec![Point { x: Nm::from_mm(5.0), y: Nm::from_mm(5.0) }, Point { x: Nm::from_mm(10.0), y: Nm::from_mm(5.0) }], arc_mid_offset: None }],
                 vias: vec![],
                 zones: vec![],
                 track_width_presets: vec![],
@@ -1794,11 +1794,11 @@ mod tests {
     fn the_drill_origin_is_written_as_the_aux_axis_origin_and_read_back_by_the_importer() {
         let (mut design, model) = fixture();
         assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(aux_axis_origin 0 0)"), "none set: KiCad's default");
-        design.drawings = Some(eda_model::ir::DrawingsSection { aux_origin: Some(Point { x: Nm::from_raw_shim(12_500_000), y: Nm::from_raw_shim(-3_000_000) }), ..Default::default() });
+        design.drawings = Some(eda_model::ir::DrawingsSection { aux_origin: Some(Point { x: Nm::from_mm(12.5), y: Nm::from_mm(-3.0) }), ..Default::default() });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(aux_axis_origin 12.5 -3"), "{out}");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back.drawings.and_then(|d| d.aux_origin), Some(Point { x: Nm::from_raw_shim(12_500_000), y: Nm::from_raw_shim(-3_000_000) }), "an imported board keeps its drill/place file origin");
+        assert_eq!(back.drawings.and_then(|d| d.aux_origin), Some(Point { x: Nm::from_mm(12.5), y: Nm::from_mm(-3.0) }), "an imported board keeps its drill/place file origin");
         // A board saved with the default origin imports with none set (no empty drawings section is invented for it).
         let (plain, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&fixture().0, &model, &meta()).unwrap()).unwrap();
         assert!(plain.drawings.and_then(|d| d.aux_origin).is_none());
@@ -1808,12 +1808,12 @@ mod tests {
     fn the_grid_origin_is_written_and_read_back_by_the_importer() {
         let (mut design, model) = fixture();
         assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(grid_origin 0 0)"), "none set: KiCad's default");
-        design.drawings = Some(eda_model::ir::DrawingsSection { grid_origin: Some(Point { x: Nm::from_raw_shim(13_370_000), y: Nm::from_raw_shim(-8_100_000) }), ..Default::default() });
+        design.drawings = Some(eda_model::ir::DrawingsSection { grid_origin: Some(Point { x: Nm::from_mm(13.37), y: Nm::from_mm(-8.1) }), ..Default::default() });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(grid_origin 13.37 -8.1)"), "{out}");
         assert!(out.contains("(aux_axis_origin 0 0)"), "the drill/place file origin is its own setting");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back.drawings.as_ref().and_then(|d| d.grid_origin), Some(Point { x: Nm::from_raw_shim(13_370_000), y: Nm::from_raw_shim(-8_100_000) }));
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.grid_origin), Some(Point { x: Nm::from_mm(13.37), y: Nm::from_mm(-8.1) }));
         assert_eq!(back.drawings.and_then(|d| d.aux_origin), None);
         let (plain, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&fixture().0, &model, &meta()).unwrap()).unwrap();
         assert!(plain.drawings.and_then(|d| d.grid_origin).is_none(), "the default origin is not kept");
@@ -1837,10 +1837,10 @@ mod tests {
         assert_eq!(drawings.page, Some(eda_model::page::PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None }));
         assert_eq!(drawings.title_block, Some(eda_model::ir::TitleBlock { title: "Blinky".into(), rev: "B".into(), comments: vec!["one".into()], ..Default::default() }));
         // A user size goes out in mm and comes back as the same size.
-        design.drawings.as_mut().unwrap().page = Some(eda_model::page::PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((Nm::from_raw_shim(300_000_000), Nm::from_raw_shim(200_500_000))) });
+        design.drawings.as_mut().unwrap().page = Some(eda_model::page::PageSettings { paper: "User".into(), portrait: false, user_size_nm: Some((Nm::from_mm(300.0), Nm::from_mm(200.5))) });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(paper \"User\" 300 200.5)"), "{out}");
-        assert_eq!(crate::import_kicad_pcb(&out).unwrap().0.drawings.unwrap().page.unwrap().user_size_nm, Some((Nm::from_raw_shim(300_000_000), Nm::from_raw_shim(200_500_000))));
+        assert_eq!(crate::import_kicad_pcb(&out).unwrap().0.drawings.unwrap().page.unwrap().user_size_nm, Some((Nm::from_mm(300.0), Nm::from_mm(200.5))));
         // A board saved with the defaults imports with none of them (no empty drawings section is invented for it).
         let (default_back, _, _) = crate::import_kicad_pcb(&plain).unwrap();
         assert!(default_back.drawings.is_none() || default_back.drawings.as_ref().is_some_and(|d| d.page.is_none() && d.title_block.is_none()));
@@ -1864,19 +1864,19 @@ mod tests {
     fn the_fields_attributes_and_pad_edits_of_a_footprint_are_written_and_read_back_by_the_importer() {
         use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintEdit, FootprintKind, PadEdit, UserField};
         let (mut design, mut model) = fixture();
-        let mut reference = FieldLayout::new(Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(-2_500_000) }, "F.Fab");
-        reference.size = (Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(900_000));
-        reference.thickness = Nm::from_raw_shim(180_000);
+        let mut reference = FieldLayout::new(Point { x: Nm::from_mm(1.5), y: Nm::from_mm(-2.5) }, "F.Fab");
+        reference.size = (Nm::from_mm(1.2), Nm::from_mm(0.9));
+        reference.thickness = Nm::from_mm(0.18);
         reference.angle = 90_000;
         reference.halign = -1;
         reference.italic = true;
-        let mut value = FieldLayout::new(Point { x: Nm::from_raw_shim(-1_000_000), y: Nm::from_raw_shim(3_000_000) }, "F.SilkS");
+        let mut value = FieldLayout::new(Point { x: Nm::from_mm(-1.0), y: Nm::from_mm(3.0) }, "F.SilkS");
         value.visible = false;
-        let mut vendor = FieldLayout::new(Point { x: Nm::ZERO, y: Nm::from_raw_shim(4_000_000) }, "F.Fab");
+        let mut vendor = FieldLayout::new(Point { x: Nm::ZERO, y: Nm::from_mm(4.0) }, "F.Fab");
         vendor.visible = false;
         let mut pad1 = PadEdit::none("1", 1);
-        pad1.offset = Some(Point { x: Nm::from_raw_shim(200_000), y: Nm::from_raw_shim(100_000) });
-        pad1.solder_mask_margin = Some(Nm::from_raw_shim(40_000));
+        pad1.offset = Some(Point { x: Nm::from_mm(0.2), y: Nm::from_mm(0.1) });
+        pad1.solder_mask_margin = Some(Nm::from_mm(0.04));
         let mut u1 = FootprintEdit::new("U1");
         u1.reference = Some(reference.clone());
         u1.value = Some(value.clone());
@@ -1949,7 +1949,7 @@ mod tests {
         use eda_model::fp_edit::{FieldLayout, FootprintEdit};
         let (mut design, model) = fixture();
         // C1 sits on the bottom, turned 90: its field's angle and position cross the mirror and the turn and come back the same.
-        let mut l = FieldLayout::new(Point { x: Nm::from_raw_shim(800_000), y: Nm::from_raw_shim(-1_900_000) }, "B.SilkS");
+        let mut l = FieldLayout::new(Point { x: Nm::from_mm(0.8), y: Nm::from_mm(-1.9) }, "B.SilkS");
         l.angle = 30_000;
         let mut c1 = FootprintEdit::new("C1");
         c1.reference = Some(l.clone());
@@ -2024,7 +2024,7 @@ mod tests {
 
         design.drawings = Some(DrawingsSection {
             drc_exclusions: vec![
-                DrcExclusion { check: "annular_width".into(), items: vec!["via-uuid".into()], ids: vec!["v1".into()], positions_nm: vec![[Nm::from_raw_shim(12_459_000), Nm::from_raw_shim(18_390_000)]], comment: "tight on purpose".into() },
+                DrcExclusion { check: "annular_width".into(), items: vec!["via-uuid".into()], ids: vec!["v1".into()], positions_nm: vec![[Nm::from_mm(12.459), Nm::from_mm(18.39)]], comment: "tight on purpose".into() },
                 DrcExclusion { check: "clearance".into(), items: vec!["a".into(), "b".into()], ids: vec![], positions_nm: vec![], comment: String::new() },
             ],
             ..Default::default()
@@ -2036,7 +2036,7 @@ mod tests {
                     check: "footprint_link_issues".into(),
                     location: "R1".into(),
                     comment: "bare footprint on purpose".into(),
-                    marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [Nm::from_raw_shim(113_030_000), Nm::from_raw_shim(100_330_000)], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() }),
+                    marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [Nm::from_mm(113.03), Nm::from_mm(100.33)], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() }),
                 },
                 eda_model::ir::ErcExclusion { check: "wire_dangling".into(), location: "W1".into(), ..Default::default() },
             ],
@@ -2106,8 +2106,8 @@ mod tests {
         design.drawings = Some(eda_model::ir::DrawingsSection {
             zone_overrides: vec![FootprintZoneOverrides {
                 id: "U1".into(),
-                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_raw_shim(800_000)) }),
-                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(Nm::from_raw_shim(600_000)), zone_connection: Some(PadConnection::Full), thermal_gap: Some(Nm::from_raw_shim(400_000)), thermal_spoke_width: Some(Nm::from_raw_shim(300_000)), thermal_spoke_angle_mdeg: Some(45_000) }],
+                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_mm(0.8)) }),
+                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(Nm::from_mm(0.6)), zone_connection: Some(PadConnection::Full), thermal_gap: Some(Nm::from_mm(0.4)), thermal_spoke_width: Some(Nm::from_mm(0.3)), thermal_spoke_angle_mdeg: Some(45_000) }],
             }],
             ..Default::default()
         });
@@ -2117,9 +2117,9 @@ mod tests {
         }
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let extra = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").unwrap();
-        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(Nm::from_raw_shim(800_000))));
+        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(Nm::from_mm(0.8))));
         let p1 = &extra.pads[0];
-        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(Nm::from_raw_shim(400_000)), Some(Nm::from_raw_shim(300_000)), Some(45_000), Some(Nm::from_raw_shim(600_000))));
+        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(Nm::from_mm(0.4)), Some(Nm::from_mm(0.3)), Some(45_000), Some(Nm::from_mm(0.6))));
         assert_eq!(extra.pads[1].zone_connection, None, "the other pads inherit");
     }
 
@@ -2133,8 +2133,8 @@ mod tests {
         use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
         let (mut design, mut model) = fixture();
         let mut pad1 = PadEdit::none("1", 1);
-        pad1.offset = Some(Point { x: Nm::from_raw_shim(200_000), y: Nm::from_raw_shim(100_000) });
-        pad1.solder_mask_margin = Some(Nm::from_raw_shim(40_000));
+        pad1.offset = Some(Point { x: Nm::from_mm(0.2), y: Nm::from_mm(0.1) });
+        pad1.solder_mask_margin = Some(Nm::from_mm(0.04));
         pad1.solder_paste_margin_ratio = Some(-0.1);
         let mut u1 = FootprintEdit::new("U1");
         u1.attrs = Some(FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() });
@@ -2145,8 +2145,8 @@ mod tests {
             footprint_edits: vec![u1],
             zone_overrides: vec![FootprintZoneOverrides {
                 id: "U1".into(),
-                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_raw_shim(800_000)) }),
-                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(Nm::from_raw_shim(600_000)), zone_connection: Some(PadConnection::Full), thermal_gap: Some(Nm::from_raw_shim(400_000)), thermal_spoke_width: Some(Nm::from_raw_shim(300_000)), thermal_spoke_angle_mdeg: Some(45_000) }],
+                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_mm(0.8)) }),
+                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(Nm::from_mm(0.6)), zone_connection: Some(PadConnection::Full), thermal_gap: Some(Nm::from_mm(0.4)), thermal_spoke_width: Some(Nm::from_mm(0.3)), thermal_spoke_angle_mdeg: Some(45_000) }],
             }],
             ..Default::default()
         });
@@ -2168,9 +2168,9 @@ mod tests {
         assert_eq!(dr.footprint_edits.iter().find(|e| e.id == "U1").and_then(|e| e.pad("1", 1)), Some(&pad1));
         // The zone half: what the importer keeps of the zone facts.
         let extra = dr.footprint_extras.iter().find(|e| e.id == "U1").expect("U1's imported facts");
-        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(Nm::from_raw_shim(800_000))));
+        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(Nm::from_mm(0.8))));
         let p1 = &extra.pads[0];
-        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(Nm::from_raw_shim(400_000)), Some(Nm::from_raw_shim(300_000)), Some(45_000), Some(Nm::from_raw_shim(600_000))));
+        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(Nm::from_mm(0.4)), Some(Nm::from_mm(0.3)), Some(45_000), Some(Nm::from_mm(0.6))));
     }
 
     #[test]
@@ -2190,16 +2190,16 @@ mod tests {
         let (mut design, model) = fixture();
         design.drawings = Some(eda_model::ir::DrawingsSection {
             shapes: vec![
-                Shape::Segment { id: "s1".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO } },
-                Shape::Rect { id: "s2".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: true, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) } },
-                Shape::Circle { id: "s3".into(), layer: "B.SilkS".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, end: Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(5_000_000) } },
-                Shape::Polygon { id: "s4".into(), layer: "F.CrtYd".into(), stroke_width: Nm::from_raw_shim(50_000), filled: true, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }] },
-                Shape::Arc { id: "s5".into(), layer: "Cmts.User".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, mid: Point { x: Nm::from_raw_shim(707_000), y: Nm::from_raw_shim(707_000) }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) } },
-                Shape::Bezier { id: "s6".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(120_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, c1: Point { x: Nm::ZERO, y: Nm::from_raw_shim(2_000_000) }, c2: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }, end: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO } },
+                Shape::Segment { id: "s1".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_mm(1.0), y: Nm::ZERO } },
+                Shape::Rect { id: "s2".into(), layer: "F.Fab".into(), stroke_width: Nm::from_mm(0.1), filled: true, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_mm(2.0), y: Nm::from_mm(2.0) } },
+                Shape::Circle { id: "s3".into(), layer: "B.SilkS".into(), stroke_width: Nm::from_mm(0.1), filled: false, center: Point { x: Nm::from_mm(5.0), y: Nm::from_mm(5.0) }, end: Point { x: Nm::from_mm(6.0), y: Nm::from_mm(5.0) } },
+                Shape::Polygon { id: "s4".into(), layer: "F.CrtYd".into(), stroke_width: Nm::from_mm(0.05), filled: true, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_mm(1.0), y: Nm::ZERO }, Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) }] },
+                Shape::Arc { id: "s5".into(), layer: "Cmts.User".into(), stroke_width: Nm::from_mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, mid: Point { x: Nm::from_mm(0.707), y: Nm::from_mm(0.707) }, end: Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) } },
+                Shape::Bezier { id: "s6".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_mm(0.12), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, c1: Point { x: Nm::ZERO, y: Nm::from_mm(2.0) }, c2: Point { x: Nm::from_mm(3.0), y: Nm::from_mm(2.0) }, end: Point { x: Nm::from_mm(3.0), y: Nm::ZERO } },
             ],
             texts: vec![
-                Text { id: "t1".into(), content: "REV A".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, angle: 90_000, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Left, mirror: true },
-                Text { id: "t2".into(), content: "centred".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false },
+                Text { id: "t1".into(), content: "REV A".into(), at: Point { x: Nm::from_mm(1.0), y: Nm::from_mm(2.0) }, angle: 90_000, layer: "F.SilkS".into(), size_nm: Nm::from_mm(1.0), stroke_width: Nm::from_mm(0.15), justify: TextJustify::Left, mirror: true },
+                Text { id: "t2".into(), content: "centred".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Fab".into(), size_nm: Nm::from_mm(1.0), stroke_width: Nm::from_mm(0.15), justify: TextJustify::Center, mirror: false },
             ],
             ..Default::default()
         });
@@ -2248,8 +2248,8 @@ mod tests {
             layer: "B.Cu".into(),
             outline: vec![
                 Point { x: Nm::ZERO, y: Nm::ZERO },
-                Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO },
-                Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) },
+                Point { x: Nm::from_mm(20.0), y: Nm::ZERO },
+                Point { x: Nm::from_mm(20.0), y: Nm::from_mm(20.0) },
             ],
             ..Default::default()
         }];
@@ -2267,7 +2267,7 @@ mod tests {
             id: "ra1".into(),
             net: String::new(),
             layer: "F.Cu".into(),
-            outline: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(8_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(8_000_000) }],
+            outline: vec![Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(8.0), y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(8.0), y: Nm::from_mm(8.0) }, Point { x: Nm::from_mm(1.0), y: Nm::from_mm(8.0) }],
             is_rule_area: true,
             keepout_tracks: true,
             keepout_vias: true,
@@ -2312,11 +2312,11 @@ mod tests {
         let (mut design, model) = fixture();
         let hole = eda_model::Pad {
             number: String::new(),
-            at: (Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(-2_000_000)),
-            size: (Nm::from_raw_shim(3_400_000), Nm::from_raw_shim(3_400_000)),
+            at: (Nm::from_mm(1.5), Nm::from_mm(-2.0)),
+            size: (Nm::from_mm(3.4), Nm::from_mm(3.4)),
             shape: eda_model::PadShape::Circle,
             kind: PadKind::NonPlatedHole,
-            drill: Some(Nm::from_raw_shim(3_200_000)),
+            drill: Some(Nm::from_mm(3.2)),
             drill_slot: None,
             rot: 0,
             roundrect_ratio: None,
@@ -2325,7 +2325,7 @@ mod tests {
         };
         let extra = eda_model::ir::FootprintExtra {
             id: "U1".into(),
-            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(Nm::from_raw_shim(1_200_000)) }],
+            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(Nm::from_mm(1.2)) }],
             net_tie_pad_groups: vec!["1, 2".into(), "3".into()],
             ..Default::default()
         };
@@ -2343,7 +2343,7 @@ mod tests {
         let e = back.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == "U1")).expect("U1's extras");
         assert_eq!(e.net_tie_pad_groups, vec!["1, 2".to_string(), "3".to_string()]);
         assert_eq!(e.holes.len(), 1, "the hole comes back as the footprint's own, not as a pad with copper");
-        assert_eq!((e.holes[0].pad.at, e.holes[0].pad.drill, e.holes[0].clearance), (hole.at, Some(Nm::from_raw_shim(3_200_000)), Some(Nm::from_raw_shim(1_200_000))));
+        assert_eq!((e.holes[0].pad.at, e.holes[0].pad.drill, e.holes[0].clearance), (hole.at, Some(Nm::from_mm(3.2)), Some(Nm::from_mm(1.2))));
         // A footprint with neither writes neither.
         let plain = export_kicad_pcb(&fixture().0, &model, &meta()).unwrap();
         assert!(!plain.contains("np_thru_hole") && !plain.contains("net_tie_pad_groups"));
@@ -2355,7 +2355,7 @@ mod tests {
     fn a_zone_is_written_with_kicad_clis_fill_while_it_is_the_zone_that_was_filled_and_unfilled_after() {
         use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
         let (mut design, model) = fixture();
-        let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(10_000_000)), ..Default::default() };
+        let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(10.0)), ..Default::default() };
         design.routing.as_mut().unwrap().zones = vec![zone.clone()];
         let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000, 2_000_000], [8_123_456, 2_000_000], [8_123_456, 7_654_321], [2_000_000, 7_654_321]] };
         let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]) };
@@ -2375,10 +2375,10 @@ mod tests {
         assert_eq!(first_zone(&plain).matches("(filled_polygon").count(), 0);
 
         // Edits elsewhere on the board leave the fill where it is (KiCad with auto-refill off); an edit to the zone itself empties it.
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(9_000_000) }, Point { x: Nm::from_raw_shim(9_000_000), y: Nm::from_raw_shim(9_000_000) }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_mm(0.2), pts: vec![Point { x: Nm::from_mm(2.0), y: Nm::from_mm(9.0) }, Point { x: Nm::from_mm(9.0), y: Nm::from_mm(9.0) }], arc_mid_offset: None });
         let after_a_track = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
         assert_eq!(first_zone(&after_a_track).matches("(filled_polygon").count(), 2, "a track added since is no reason to take the copper away");
-        design.routing.as_mut().unwrap().zones[0].min_thickness += Nm::from_raw_shim(10_000);
+        design.routing.as_mut().unwrap().zones[0].min_thickness += Nm::from_mm(0.01);
         let edited = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
         assert_eq!(first_zone(&edited).matches("(filled_polygon").count(), 0, "a zone edited since its fill is written without it");
     }
@@ -2393,18 +2393,18 @@ mod tests {
             id: "zp".into(),
             net: "GND".into(),
             layer: "B.Cu".into(),
-            outline: square(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(10_000_000)),
-            clearance: Nm::from_raw_shim(300_000),
-            min_thickness: Nm::from_raw_shim(150_000),
-            thermal_gap: Nm::from_raw_shim(420_000),
-            thermal_spoke_width: Nm::from_raw_shim(350_000),
+            outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(10.0)),
+            clearance: Nm::from_mm(0.3),
+            min_thickness: Nm::from_mm(0.15),
+            thermal_gap: Nm::from_mm(0.42),
+            thermal_spoke_width: Nm::from_mm(0.35),
             pad_connection: eda_model::ir::PadConnection::Full,
             priority: 3,
             island_removal_mode: eda_model::ir::IslandRemovalMode::Area,
             min_island_area: 2_500_000_000_000,
             fill_mode: eda_model::ir::FillMode::HatchPattern,
-            hatch_thickness: Nm::from_raw_shim(400_000),
-            hatch_gap: Nm::from_raw_shim(900_000),
+            hatch_thickness: Nm::from_mm(0.4),
+            hatch_gap: Nm::from_mm(0.9),
             hatch_orientation_mdeg: 45_000,
             hatch_smoothing_level: 2,
             hatch_smoothing_value: 0.25,
@@ -2413,10 +2413,10 @@ mod tests {
             name: "GND plane".into(),
             border_style: eda_model::ir::ZoneBorderStyle::Full,
             smoothing: eda_model::ir::ZoneSmoothing::Fillet,
-            corner_radius: Nm::from_raw_shim(600_000),
+            corner_radius: Nm::from_mm(0.6),
             ..Default::default()
         };
-        let mut thermal = Zone { id: "zt".into(), net: "VIN".into(), layer: "F.Cu".into(), outline: square(Nm::from_raw_shim(12_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(6_000_000)), ..Default::default() };
+        let mut thermal = Zone { id: "zt".into(), net: "VIN".into(), layer: "F.Cu".into(), outline: square(Nm::from_mm(12.0), Nm::from_mm(1.0), Nm::from_mm(6.0)), ..Default::default() };
         thermal.pad_connection = eda_model::ir::PadConnection::ThtThermal;
         design.routing.as_mut().unwrap().zones = vec![pour.clone(), thermal.clone()];
         design.drawings = Some(eda_model::ir::DrawingsSection { locked_ids: vec!["zp".into()], ..Default::default() });
@@ -2462,7 +2462,7 @@ mod tests {
     #[test]
     fn a_zone_on_two_copper_layers_is_one_zone_with_a_fill_on_each_layer_and_reads_back_as_one() {
         let (mut design, model) = fixture();
-        let mut pour = Zone { id: "zl".into(), net: "GND".into(), outline: square(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(10_000_000)), ..Default::default() };
+        let mut pour = Zone { id: "zl".into(), net: "GND".into(), outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(10.0)), ..Default::default() };
         pour.set_layer_set(&["B.Cu", "F.Cu"]);
         assert_eq!((pour.layer.as_str(), pour.layers.clone()), ("F.Cu", vec!["F.Cu".to_string(), "B.Cu".to_string()]), "the set is kept in UI order, the front first");
         design.routing.as_mut().unwrap().zones = vec![pour.clone()];
@@ -2489,8 +2489,8 @@ mod tests {
     #[test]
     fn a_non_copper_zone_has_no_net_is_written_with_its_wildcard_and_reads_back_with_its_layers() {
         let (mut design, model) = fixture();
-        let silk = Zone { id: "zs".into(), net: "GND".into(), layer: "F.SilkS".into(), outline: square(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(6_000_000)), ..Default::default() };
-        let mut mask = Zone { id: "zm".into(), outline: square(Nm::from_raw_shim(8_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(6_000_000)), ..Default::default() };
+        let silk = Zone { id: "zs".into(), net: "GND".into(), layer: "F.SilkS".into(), outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(6.0)), ..Default::default() };
+        let mut mask = Zone { id: "zm".into(), outline: square(Nm::from_mm(8.0), Nm::from_mm(1.0), Nm::from_mm(6.0)), ..Default::default() };
         mask.set_layer_set(&["B.Mask", "F.Mask"]);
         design.routing.as_mut().unwrap().zones = vec![silk, mask];
         let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad_fills_of(&design))).unwrap();
@@ -2514,11 +2514,11 @@ mod tests {
         // The other spellings of a layer set: `F&B.Cu` and `*.Cu` on this two-layer board, and a copper layer the board does not have is left out.
         let wild = out.replace("(layers \"*.Mask\")", "(layers \"F&B.Cu\" \"In1.Cu\")");
         let (back, _, _) = crate::import_kicad_pcb(&wild).unwrap();
-        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.id == "zm" || z.outline[0].x == Nm::from_raw_shim(8_000_000)).unwrap().clone();
+        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.id == "zm" || z.outline[0].x == Nm::from_mm(8.0)).unwrap().clone();
         assert_eq!(zone.layer_set(), vec!["F.Cu", "B.Cu"], "In1.Cu is not a layer of this board");
         let all = out.replace("(layers \"*.Mask\")", "(layers \"*.Cu\")");
         let (back, _, _) = crate::import_kicad_pcb(&all).unwrap();
-        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.outline[0].x == Nm::from_raw_shim(8_000_000)).unwrap().clone();
+        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.outline[0].x == Nm::from_mm(8.0)).unwrap().clone();
         assert_eq!(zone.layer_set(), vec!["F.Cu", "B.Cu"]);
     }
 
@@ -2528,7 +2528,7 @@ mod tests {
     fn a_zone_on_a_four_layer_stack_keeps_its_layers_in_both_orders() {
         let (mut design, mut model) = fixture();
         model.board.layers = eda_model::rules::copper_layer_names(4);
-        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(10_000_000)), ..Default::default() };
+        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(10.0)), ..Default::default() };
         pour.set_layer_set(&["In2.Cu", "B.Cu", "F.Cu", "In1.Cu"]);
         assert_eq!(pour.layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
         design.routing.as_mut().unwrap().zones = vec![pour];
@@ -2547,7 +2547,7 @@ mod tests {
     #[test]
     fn a_rule_area_keeps_its_technical_layers_and_the_file_leaves_out_the_ones_the_board_has_off() {
         let (mut design, mut model) = fixture();
-        let mut keepout = Zone { id: "ka".into(), outline: square(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(6_000_000)), is_rule_area: true, keepout_copper_pour: true, ..Default::default() };
+        let mut keepout = Zone { id: "ka".into(), outline: square(Nm::from_mm(1.0), Nm::from_mm(1.0), Nm::from_mm(6.0)), is_rule_area: true, keepout_copper_pour: true, ..Default::default() };
         keepout.set_layer_set(&["F.Cu", "B.Cu", "F.SilkS", "F.Mask"]);
         design.routing.as_mut().unwrap().zones = vec![keepout.clone()];
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2564,7 +2564,7 @@ mod tests {
     fn an_arc_track_is_written_as_one_arc_and_read_back_as_one() {
         use eda_model::ir::Point;
         let (mut design, model) = fixture();
-        let arc = Track::new_arc("VIN".into(), "F.Cu".into(), Nm::from_raw_shim(250_000), Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(2_000_000) });
+        let arc = Track::new_arc("VIN".into(), "F.Cu".into(), Nm::from_mm(0.25), Point { x: Nm::from_mm(2.0), y: Nm::from_mm(2.0) }, Point { x: Nm::from_mm(4.0), y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(6.0), y: Nm::from_mm(2.0) });
         assert!(arc.pts.len() > 3, "the polyline is the tessellation");
         design.routing.as_mut().unwrap().tracks.push(arc);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2574,14 +2574,14 @@ mod tests {
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let tracks = &back.routing.unwrap().tracks;
         let arcs: Vec<_> = tracks.iter().filter_map(|t| t.arc()).collect();
-        assert_eq!(arcs, vec![(Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(2_000_000) })]);
+        assert_eq!(arcs, vec![(Point { x: Nm::from_mm(2.0), y: Nm::from_mm(2.0) }, Point { x: Nm::from_mm(4.0), y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(6.0), y: Nm::from_mm(2.0) })]);
     }
 
     #[test]
     fn a_track_that_was_reshaped_after_it_was_an_arc_is_written_as_segments() {
         use eda_model::ir::Point;
         let (mut design, model) = fixture();
-        let mut arc = Track::new_arc("VIN".into(), "F.Cu".into(), Nm::from_raw_shim(250_000), Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(2_000_000) });
+        let mut arc = Track::new_arc("VIN".into(), "F.Cu".into(), Nm::from_mm(0.25), Point { x: Nm::from_mm(2.0), y: Nm::from_mm(2.0) }, Point { x: Nm::from_mm(4.0), y: Nm::from_mm(1.0) }, Point { x: Nm::from_mm(6.0), y: Nm::from_mm(2.0) });
         arc.pts.truncate(5); // an edit that cut the curve short: no longer the tessellation of its arc
         design.routing.as_mut().unwrap().tracks.push(arc);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2595,19 +2595,19 @@ mod tests {
         use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern};
         let (mut design, model) = fixture();
         // The meander: a polyline of three points (two segments) beside the board's plain track.
-        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(6_000_000) }, Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(6_000_000) }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_mm(0.2), pts: vec![Point { x: Nm::from_mm(10.0), y: Nm::from_mm(5.0) }, Point { x: Nm::from_mm(10.0), y: Nm::from_mm(6.0) }, Point { x: Nm::from_mm(11.0), y: Nm::from_mm(6.0) }], arc_mid_offset: None });
         design.assign_missing_ids();
         let ids: Vec<String> = design.routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
         let pattern = TuningPattern {
             id: String::new(),
             mode: TuningMode::Single,
             layer: "F.Cu".into(),
-            origin: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) },
-            end: Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(6_000_000) },
+            origin: Point { x: Nm::from_mm(10.0), y: Nm::from_mm(5.0) },
+            end: Point { x: Nm::from_mm(11.0), y: Nm::from_mm(6.0) },
             initial_side: PatternSide::Left,
-            min_amplitude: Nm::from_raw_shim(200_000),
-            max_amplitude: Nm::from_raw_shim(1_000_000),
-            spacing: Nm::from_raw_shim(600_000),
+            min_amplitude: Nm::from_mm(0.2),
+            max_amplitude: Nm::from_mm(1.0),
+            spacing: Nm::from_mm(0.6),
             corner_radius_percent: 80,
             rounded: true,
             single_sided: false,
@@ -2617,11 +2617,11 @@ mod tests {
             is_time_domain: false,
             target_delay: TargetRange::delay_unconstrained(),
             target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
-            base_line: vec![Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(6_000_000) }],
+            base_line: vec![Point { x: Nm::from_mm(10.0), y: Nm::from_mm(5.0) }, Point { x: Nm::from_mm(11.0), y: Nm::from_mm(6.0) }],
             base_line_coupled: vec![],
-            last_track_width: Nm::from_raw_shim(200_000),
+            last_track_width: Nm::from_mm(0.2),
             last_diff_pair_gap: Nm::ZERO,
-            last_tuning_length: Nm::from_raw_shim(1_414_213_000),
+            last_tuning_length: Nm::from_mm(1414.213),
             last_tuning_delay: 0,
             last_netname: "VIN".into(),
             last_status: "too_short".into(),
@@ -2648,7 +2648,7 @@ mod tests {
         for m in &got.member_ids {
             let t = tracks.iter().find(|t| &t.id == m).expect("a member is a track of the board");
             assert_eq!(t.pts.len(), 2);
-            assert!(t.pts.iter().all(|p| p.x >= Nm::from_raw_shim(10_000_000) && p.y >= Nm::from_raw_shim(5_000_000)), "the polyline's segments, not the plain track: {t:?}");
+            assert!(t.pts.iter().all(|p| p.x >= Nm::from_mm(10.0) && p.y >= Nm::from_mm(5.0)), "the polyline's segments, not the plain track: {t:?}");
         }
         let mut want = pattern;
         want.id = got.id.clone();
@@ -2701,10 +2701,10 @@ mod tests {
     fn locked_items_are_written_locked_and_come_back_locked() {
         use eda_model::ir::Point;
         let (mut design, model) = fixture();
-        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(8_000_000) }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: Nm::from_mm(8.0), y: Nm::from_mm(8.0) }, drill: Nm::from_mm(0.3), diameter: Nm::from_mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         design.drawings = Some(eda_model::ir::DrawingsSection {
-            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO } }],
-            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false }],
+            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_mm(1.0), y: Nm::ZERO } }],
+            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::from_mm(1.0), y: Nm::from_mm(2.0) }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_mm(1.0), stroke_width: Nm::from_mm(0.15), justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         });
         design.assign_missing_ids();
@@ -2748,20 +2748,20 @@ mod tests {
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
             text_angle: 0,
-            text_size_nm: Nm::from_raw_shim(1_200_000),
-            stroke_width: Nm::from_raw_shim(150_000),
-            arrow_length: Nm::from_raw_shim(1_270_000),
-            extension_offset: Nm::from_raw_shim(500_000),
-            extension_height: Nm::from_raw_shim(580_000),
+            text_size_nm: Nm::from_mm(1.2),
+            stroke_width: Nm::from_mm(0.15),
+            arrow_length: Nm::from_mm(1.27),
+            extension_offset: Nm::from_mm(0.5),
+            extension_height: Nm::from_mm(0.58),
             arrow_direction: ArrowDirection::Inward,
-            text_thickness_nm: Some(Nm::from_raw_shim(180_000)),
+            text_thickness_nm: Some(Nm::from_mm(0.18)),
         };
         let mut dims = vec![
-            dim(DimensionKind::Aligned { height: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(12_000_000) }, Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(12_000_000) }),
-            dim(DimensionKind::Orthogonal { height: Nm::from_raw_shim(1_500_000), horizontal: false }, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(14_000_000) }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(18_000_000) }),
-            dim(DimensionKind::Radial { leader_length: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(15_000_000) }, Point { x: Nm::from_raw_shim(17_000_000), y: Nm::from_raw_shim(15_000_000) }),
-            dim(DimensionKind::Leader, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(8_000_000) }),
-            dim(DimensionKind::Center, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(5_000_000) }),
+            dim(DimensionKind::Aligned { height: Nm::from_mm(2.0) }, Point { x: Nm::from_mm(2.0), y: Nm::from_mm(12.0) }, Point { x: Nm::from_mm(12.0), y: Nm::from_mm(12.0) }),
+            dim(DimensionKind::Orthogonal { height: Nm::from_mm(1.5), horizontal: false }, Point { x: Nm::from_mm(2.0), y: Nm::from_mm(14.0) }, Point { x: Nm::from_mm(6.0), y: Nm::from_mm(18.0) }),
+            dim(DimensionKind::Radial { leader_length: Nm::from_mm(3.0) }, Point { x: Nm::from_mm(15.0), y: Nm::from_mm(15.0) }, Point { x: Nm::from_mm(17.0), y: Nm::from_mm(15.0) }),
+            dim(DimensionKind::Leader, Point { x: Nm::from_mm(10.0), y: Nm::from_mm(10.0) }, Point { x: Nm::from_mm(12.0), y: Nm::from_mm(8.0) }),
+            dim(DimensionKind::Center, Point { x: Nm::from_mm(5.0), y: Nm::from_mm(5.0) }, Point { x: Nm::from_mm(6.0), y: Nm::from_mm(5.0) }),
         ];
         dims[0].override_text = Some("ten".into());
         dims[1].units = DimensionUnits::Mil;
@@ -2819,8 +2819,8 @@ mod tests {
     fn groups_are_written_with_their_members_uuids_and_read_back_with_their_ids() {
         use eda_model::ir::{Group, Point};
         let (mut design, model) = fixture();
-        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(8_000_000) }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(6_000_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(6_000_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(9_000_000) }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: Nm::from_mm(8.0), y: Nm::from_mm(8.0) }, drill: Nm::from_mm(0.3), diameter: Nm::from_mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_mm(0.2), pts: vec![Point { x: Nm::from_mm(1.0), y: Nm::from_mm(6.0) }, Point { x: Nm::from_mm(5.0), y: Nm::from_mm(6.0) }, Point { x: Nm::from_mm(5.0), y: Nm::from_mm(9.0) }], arc_mid_offset: None });
         design.assign_missing_ids();
         let rt = design.routing.as_ref().unwrap();
         let (via_id, long_track) = (rt.vias[0].id.clone(), rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone());
@@ -2853,8 +2853,8 @@ mod tests {
         use eda_model::ir::{DrawingsSection, Group, Point};
         let (mut design, model) = fixture();
         let rt = design.routing.as_mut().unwrap();
-        rt.vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(8_000_000) }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.vias.push(Via { id: String::new(), net: "GND".into(), at: Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(12_000_000) }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: Nm::from_mm(8.0), y: Nm::from_mm(8.0) }, drill: Nm::from_mm(0.3), diameter: Nm::from_mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "GND".into(), at: Point { x: Nm::from_mm(12.0), y: Nm::from_mm(12.0) }, drill: Nm::from_mm(0.3), diameter: Nm::from_mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         design.assign_missing_ids();
         let rt = design.routing.as_ref().unwrap();
         let (track_id, via_a, via_b) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.vias[1].id.clone());
@@ -2898,7 +2898,7 @@ mod tests {
             id: "td1".into(),
             net: "VIN".into(),
             layer: "F.Cu".into(),
-            outline: vec![eda_model::ir::Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(4_000_000) }, eda_model::ir::Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(4_300_000) }, eda_model::ir::Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_300_000) }],
+            outline: vec![eda_model::ir::Point { x: Nm::from_mm(4.0), y: Nm::from_mm(4.0) }, eda_model::ir::Point { x: Nm::from_mm(5.0), y: Nm::from_mm(4.3) }, eda_model::ir::Point { x: Nm::from_mm(5.0), y: Nm::from_mm(5.3) }],
             teardrop: true,
             ..Default::default()
         }];
@@ -2921,13 +2921,13 @@ mod tests {
         let rule_area = |id: &str, parent: Option<&str>, at: Nm| Zone {
             id: id.into(),
             layer: "F.Cu".into(),
-            outline: square(at, at, Nm::from_raw_shim(2_000_000)),
+            outline: square(at, at, Nm::from_mm(2.0)),
             is_rule_area: true,
             keepout_pads: true,
             parent_footprint: parent.map(String::from),
             ..Default::default()
         };
-        design.routing.as_mut().unwrap().zones = vec![rule_area("own", Some("U1"), Nm::from_raw_shim(4_000_000)), rule_area("free", None, Nm::from_raw_shim(12_000_000))];
+        design.routing.as_mut().unwrap().zones = vec![rule_area("own", Some("U1"), Nm::from_mm(4.0)), rule_area("free", None, Nm::from_mm(12.0))];
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("\t(zone").count(), 2, "both zones are written once");
         // Footprints come first (C1, then U1, which owns the zone at 4,4), then the tracks, then board-level zones.
@@ -2945,7 +2945,7 @@ mod tests {
     #[test]
     fn a_board_with_stated_constraints_writes_them_exactly_and_one_without_keeps_its_lowered_floors() {
         let (_, mut model) = fixture();
-        model.board.net_classes.push(eda_model::NetClass { name: "escape".into(), nets: vec!["VIN".into()], track_width: Some(Nm::from_raw_shim(150_000)), clearance: Some(Nm::from_raw_shim(150_000)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        model.board.net_classes.push(eda_model::NetClass { name: "escape".into(), nets: vec!["VIN".into()], track_width: Some(Nm::from_mm(0.15)), clearance: Some(Nm::from_mm(0.15)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         // An intent states no minimums: the floors follow the narrowest class, so the escape routing is not a violation of rules nobody wrote.
         let legacy: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
         let rules = &legacy["board"]["design_settings"]["rules"];
@@ -2954,12 +2954,12 @@ mod tests {
 
         // Stated minimums (Board Setup's Constraints, or the project the board came from) are written as they are.
         model.board.constraints_explicit = true;
-        model.board.track_width_min_nm = Nm::from_raw_shim(250_000);
-        model.board.min_clearance_nm = Nm::from_raw_shim(300_000);
-        model.board.copper_edge_clearance_nm = Some(Nm::from_raw_shim(350_000));
-        model.board.annular_width_min_nm = Nm::from_raw_shim(130_000);
-        model.board.min_silk_text_height_nm = Nm::from_raw_shim(1_000_000);
-        model.board.solder_mask.to_copper_clearance_nm = Nm::from_raw_shim(40_000);
+        model.board.track_width_min_nm = Nm::from_mm(0.25);
+        model.board.min_clearance_nm = Nm::from_mm(0.3);
+        model.board.copper_edge_clearance_nm = Some(Nm::from_mm(0.35));
+        model.board.annular_width_min_nm = Nm::from_mm(0.13);
+        model.board.min_silk_text_height_nm = Nm::from_mm(1.0);
+        model.board.solder_mask.to_copper_clearance_nm = Nm::from_mm(0.04);
         let exact: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
         let rules = &exact["board"]["design_settings"]["rules"];
         assert_eq!(rules["min_track_width"], 0.25, "the stated floor, not the narrowest class");
@@ -2976,15 +2976,15 @@ mod tests {
         let mut back = ConstraintModel::default();
         crate::merge_project_design_rules(&mut back, &export_kicad_pro(&model));
         assert!(back.board.constraints_explicit);
-        assert_eq!((back.board.track_width_min_nm, back.board.min_clearance_nm, back.board.copper_edge_clearance_nm, back.board.annular_width_min_nm), (Nm::from_raw_shim(250_000), Nm::from_raw_shim(300_000), Some(Nm::from_raw_shim(350_000)), Nm::from_raw_shim(130_000)));
-        assert_eq!((back.board.max_error_nm, back.board.min_resolved_spokes, back.board.min_silk_text_height_nm), (Nm::from_raw_shim(5000), 2, Nm::from_raw_shim(1_000_000)));
+        assert_eq!((back.board.track_width_min_nm, back.board.min_clearance_nm, back.board.copper_edge_clearance_nm, back.board.annular_width_min_nm), (Nm::from_mm(0.25), Nm::from_mm(0.3), Some(Nm::from_mm(0.35)), Nm::from_mm(0.13)));
+        assert_eq!((back.board.max_error_nm, back.board.min_resolved_spokes, back.board.min_silk_text_height_nm), (Nm::new(5000), 2, Nm::from_mm(1.0)));
     }
 
     #[test]
     fn solder_mask_paste_the_stackup_and_the_board_thickness_are_written_and_read_back() {
         let (design, mut model) = fixture();
-        model.board.solder_mask = eda_model::SolderMaskRules { expansion_nm: Nm::from_raw_shim(50_000), min_width_nm: Nm::from_raw_shim(120_000), to_copper_clearance_nm: Nm::ZERO, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true, paste_margin_nm: Nm::from_raw_shim(-40_000), paste_margin_ratio: -0.05 };
-        let stackup = eda_model::rules::default_stackup(4000, Nm::from_raw_shim(1_600_000));
+        model.board.solder_mask = eda_model::SolderMaskRules { expansion_nm: Nm::from_mm(0.05), min_width_nm: Nm::from_mm(0.12), to_copper_clearance_nm: Nm::ZERO, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true, paste_margin_nm: Nm::from_mm(-0.04), paste_margin_ratio: -0.05 };
+        let stackup = eda_model::rules::default_stackup(4000, Nm::from_mm(1.6));
         model.board.board_thickness_nm = eda_model::rules::stackup_thickness_nm(&stackup);
         model.stackup = Some(stackup.clone());
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -3020,7 +3020,7 @@ mod tests {
     #[test]
     fn the_colours_of_the_stackup_are_written_and_read_back() {
         let (design, mut model) = fixture();
-        let mut stackup = eda_model::rules::default_stackup(2000, Nm::from_raw_shim(1_600_000));
+        let mut stackup = eda_model::rules::default_stackup(2000, Nm::from_mm(1.6));
         for (name, color) in [("F.Mask", "Red"), ("F.SilkS", "#FFEE00"), ("dielectric 1", "FR4 natural"), ("F.Cu", "Green"), ("F.Paste", "Silver"), ("B.Mask", "Not specified")] {
             stackup.layers.iter_mut().find(|l| l.name == name).unwrap().color = Some(color.into());
         }
@@ -3049,13 +3049,13 @@ mod tests {
     #[test]
     fn a_net_class_writes_its_microvia_and_pair_sizes_and_they_read_back() {
         let (design, mut model) = fixture();
-        model.board.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["VIN".into()], track_width: Some(Nm::from_raw_shim(200_000)), clearance: Some(Nm::from_raw_shim(200_000)), via_diameter: None, via_drill: None, microvia_diameter: Some(Nm::from_raw_shim(250_000)), microvia_drill: Some(Nm::from_raw_shim(110_000)), diff_pair_width: Some(Nm::from_raw_shim(120_000)), diff_pair_gap: Some(Nm::from_raw_shim(150_000)), diff_pair_via_gap: None, priority: 0 });
+        model.board.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["VIN".into()], track_width: Some(Nm::from_mm(0.2)), clearance: Some(Nm::from_mm(0.2)), via_diameter: None, via_drill: None, microvia_diameter: Some(Nm::from_mm(0.25)), microvia_drill: Some(Nm::from_mm(0.11)), diff_pair_width: Some(Nm::from_mm(0.12)), diff_pair_gap: Some(Nm::from_mm(0.15)), diff_pair_via_gap: None, priority: 0 });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert!(out.contains("(uvia_dia 0.25)") && out.contains("(uvia_drill 0.11)") && out.contains("(diff_pair_width 0.12)") && out.contains("(diff_pair_gap 0.15)"), "{out}");
         assert_eq!(out.matches("(uvia_dia 0.3)").count(), 1, "the Default class keeps KiCad's own microvia");
         let (_, back, _) = crate::import_kicad_pcb(&out).unwrap();
         let usb = back.board.net_classes.iter().find(|c| c.name == "usb").expect("the class comes back");
-        assert_eq!((usb.microvia_diameter, usb.microvia_drill, usb.diff_pair_width, usb.diff_pair_gap), (Some(Nm::from_raw_shim(250_000)), Some(Nm::from_raw_shim(110_000)), Some(Nm::from_raw_shim(120_000)), Some(Nm::from_raw_shim(150_000))));
+        assert_eq!((usb.microvia_diameter, usb.microvia_drill, usb.diff_pair_width, usb.diff_pair_gap), (Some(Nm::from_mm(0.25)), Some(Nm::from_mm(0.11)), Some(Nm::from_mm(0.12)), Some(Nm::from_mm(0.15))));
     }
 
     #[test]
@@ -3064,8 +3064,8 @@ mod tests {
         // the net check exists to catch, so it must not fail the export of the whole board.
         let (mut design, model) = fixture();
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: String::new(), net: String::new(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, eda_model::ir::Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(1_000_000) }], arc_mid_offset: None });
-        rt.zones = vec![Zone { id: "z0".into(), net: String::new(), layer: "F.Cu".into(), outline: square(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(3_000_000)), ..Default::default() }];
+        rt.tracks.push(Track { id: String::new(), net: String::new(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_mm(0.2), pts: vec![eda_model::ir::Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) }, eda_model::ir::Point { x: Nm::from_mm(2.0), y: Nm::from_mm(1.0) }], arc_mid_offset: None });
+        rt.zones = vec![Zone { id: "z0".into(), net: String::new(), layer: "F.Cu".into(), outline: square(Nm::from_mm(10.0), Nm::from_mm(10.0), Nm::from_mm(3.0)), ..Default::default() }];
         let out = export_kicad_pcb(&design, &model, &meta()).expect("netless copper exports");
         assert!(out.contains("(width 0.2) (layer \"F.Cu\") (net 0)"), "{out}");
         assert!(!first_zone(&out).contains("(net "), "{}", first_zone(&out));
@@ -3121,7 +3121,7 @@ mod tests {
         model.parts.push(part("U2", "SOT-23", vec![pin("1", PinKind::Signal), pin("2", PinKind::Signal), pin("3", PinKind::Signal)]));
         design.placement.as_mut().unwrap().footprints.push(FootprintInstance {
             id: "U2".into(),
-            at: Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(5_000_000) },
+            at: Point { x: Nm::from_mm(15.0), y: Nm::from_mm(5.0) },
             rot: 90_000,
             side: Side::Bottom,
             label: Default::default(),
@@ -3133,7 +3133,7 @@ mod tests {
             for pad in eda_model::footprint::placed_pads(&model, part, fp).unwrap() {
                 let key = format!("{}.{}", fp.id, pad.number);
                 let (x, y) = kicad[&key];
-                let (ex, ey) = (pad.center.x.raw_shim() as f64 / 1e6, pad.center.y.raw_shim() as f64 / 1e6);
+                let (ex, ey) = (pad.center.x.mm(), pad.center.y.mm());
                 assert!(
                     (x - ex).abs() < 1e-6 && (y - ey).abs() < 1e-6,
                     "{key} ({:?}, rot {}): KiCad puts it at ({x:.3}, {y:.3}), the engine routed to ({ex:.3}, {ey:.3})",
@@ -3242,7 +3242,7 @@ mod tests {
         let (mut design, model) = fixture();
         let content = "Actionneur\nPiezo \"New\" Amp\\V02\r\nline 3";
         design.drawings = Some(eda_model::ir::DrawingsSection {
-            texts: vec![Text { id: "t1".into(), content: content.into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false }],
+            texts: vec![Text { id: "t1".into(), content: content.into(), at: Point { x: Nm::from_mm(1.0), y: Nm::from_mm(2.0) }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_mm(1.0), stroke_width: Nm::from_mm(0.15), justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         });
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -3285,19 +3285,19 @@ mod tests {
         let extra = |content: &str| dr.text_extra(&by_text(content).id).cloned();
         // The square, centred, regular text with a stroke width is the model's own default and keeps no extras.
         assert_eq!(extra("plain"), None);
-        assert_eq!((by_text("plain").size_nm, by_text("plain").stroke_width), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(150_000)));
+        assert_eq!((by_text("plain").size_nm, by_text("plain").stroke_width), (Nm::from_mm(1.0), Nm::from_mm(0.15)));
 
         let labels = extra("High_current netclass:").expect("bold, bottom");
         assert!(labels.bold && !labels.italic && labels.valign == eda_model::ir::TextVAlign::Bottom && labels.width_nm.is_none() && !labels.auto_thickness, "{labels:?}");
-        assert_eq!((by_text("High_current netclass:").justify, by_text("High_current netclass:").stroke_width), (TextJustify::Left, Nm::from_raw_shim(40_000)));
+        assert_eq!((by_text("High_current netclass:").justify, by_text("High_current netclass:").stroke_width), (TextJustify::Left, Nm::from_mm(0.04)));
 
         let wide = extra("Actionneur").expect("italic, narrow");
-        assert_eq!((wide.width_nm, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(Nm::from_raw_shim(1_524_000)), true, true, 1500, Some("Arial"), eda_model::ir::TextVAlign::Top));
-        assert_eq!((by_text("Actionneur").size_nm, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (Nm::from_raw_shim(2_032_000), Nm::from_raw_shim(304_800), TextJustify::Right, true));
+        assert_eq!((wide.width_nm, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(Nm::from_mm(1.524)), true, true, 1500, Some("Arial"), eda_model::ir::TextVAlign::Top));
+        assert_eq!((by_text("Actionneur").size_nm, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (Nm::from_mm(2.032), Nm::new(304_800), TextJustify::Right, true));
 
         // No thickness in the file: KiCad's automatic stroke width (an eighth of the glyph width), and none is written back.
         let auto = extra("auto").expect("auto thickness");
-        assert_eq!((auto.auto_thickness, auto.width_nm, by_text("auto").size_nm, by_text("auto").stroke_width), (true, Some(Nm::from_raw_shim(1_600_000)), Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(200_000)));
+        assert_eq!((auto.auto_thickness, auto.width_nm, by_text("auto").size_nm, by_text("auto").stroke_width), (true, Some(Nm::from_mm(1.6)), Nm::from_mm(1.2), Nm::from_mm(0.2)));
 
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let block = |content: &str| -> String {
@@ -3414,13 +3414,13 @@ mod tests {
         };
         let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.2032"; 4])).unwrap();
         assert_eq!(notes.outline_source, "lines");
-        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(Nm::from_raw_shim(203_200)));
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(Nm::new(203_200)));
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let lines: Vec<&str> = out.lines().filter(|l| l.contains("\"Edge.Cuts\")") && l.contains("(gr_line")).collect();
         assert_eq!(lines.len(), 4, "{out}");
         assert!(lines.iter().all(|l| l.contains("(stroke (width 0.2032) (type default))")), "{lines:?}");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
-        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(Nm::from_raw_shim(203_200)));
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_nm), Some(Nm::new(203_200)));
 
         // An outline made here says no width, and is written as it always was.
         let (made, made_model) = fixture();
@@ -3518,9 +3518,9 @@ mod tests {
         assert_eq!(dr.board_items.text_boxes.len(), 2);
         assert!(dr.board_items.text_boxes.iter().all(|t| t.id.starts_with("tbx_")), "ids of ours");
         let rev = dr.board_items.text_boxes.iter().find(|t| t.text.starts_with("Rev A")).unwrap();
-        assert_eq!((rev.start, rev.end, rev.layer.as_str()), (Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(30_000_000) }, "F.SilkS"));
-        assert_eq!((rev.margin_left_nm, rev.margin_top_nm, rev.margin_right_nm, rev.margin_bottom_nm), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_500_000)));
-        assert_eq!((rev.size_nm, rev.width_nm, rev.bold, rev.knockout, rev.border), (Nm::from_raw_shim(1_000_000), Some(Nm::from_raw_shim(1_200_000)), true, true, true));
+        assert_eq!((rev.start, rev.end, rev.layer.as_str()), (Point { x: Nm::from_mm(20.0), y: Nm::from_mm(20.0) }, Point { x: Nm::from_mm(40.0), y: Nm::from_mm(30.0) }, "F.SilkS"));
+        assert_eq!((rev.margin_left_nm, rev.margin_top_nm, rev.margin_right_nm, rev.margin_bottom_nm), (Nm::from_mm(1.0), Nm::from_mm(1.5), Nm::from_mm(2.0), Nm::from_mm(2.5)));
+        assert_eq!((rev.size_nm, rev.width_nm, rev.bold, rev.knockout, rev.border), (Nm::from_mm(1.0), Some(Nm::from_mm(1.2)), true, true, true));
         let turned = dr.board_items.text_boxes.iter().find(|t| t.text == "turned").unwrap();
         assert_eq!((turned.pts.len(), turned.angle, turned.border, turned.mirror), (4, 45_000, false, true));
         assert!(dr.locked_ids.contains(&turned.id), "a locked text box comes back locked");
@@ -3563,14 +3563,14 @@ mod tests {
         assert_eq!(dr.barcodes.len(), 3);
         assert!(dr.barcodes.iter().all(|b| b.id.starts_with("bar_")), "{:?}", dr.barcodes.iter().map(|b| &b.id).collect::<Vec<_>>());
         let qr = dr.barcodes.iter().find(|b| b.text == "acode").unwrap();
-        assert_eq!((qr.at, qr.angle, qr.layer.as_str(), qr.width_nm, qr.height_nm, qr.text_height_nm), (Point { x: Nm::from_raw_shim(258_500_000), y: Nm::from_raw_shim(141_500_000) }, 90_000, "F.Cu", Nm::from_raw_shim(42_000_000), Nm::from_raw_shim(44_000_000), Nm::from_raw_shim(3_000_000)));
+        assert_eq!((qr.at, qr.angle, qr.layer.as_str(), qr.width_nm, qr.height_nm, qr.text_height_nm), (Point { x: Nm::from_mm(258.5), y: Nm::from_mm(141.5) }, 90_000, "F.Cu", Nm::from_mm(42.0), Nm::from_mm(44.0), Nm::from_mm(3.0)));
         assert_eq!((qr.kind, qr.ecc, qr.show_text, qr.knockout), (eda_model::barcode::BarcodeKind::Qr, eda_model::barcode::EccLevel::M, true, false));
         let dm = dr.barcodes.iter().find(|b| b.text == "differentcode").unwrap();
-        assert_eq!((dm.kind, dm.show_text, dm.knockout, dm.margin_x_nm, dm.margin_y_nm), (eda_model::barcode::BarcodeKind::DataMatrix, false, true, Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000)));
+        assert_eq!((dm.kind, dm.show_text, dm.knockout, dm.margin_x_nm, dm.margin_y_nm), (eda_model::barcode::BarcodeKind::DataMatrix, false, true, Nm::from_mm(1.0), Nm::from_mm(2.0)));
         assert!(dr.locked_ids.contains(&dm.id), "a locked barcode comes back locked");
         // What the file left out is PCB_BARCODE's own: 40 mm square, the text printed.
         let plain = dr.barcodes.iter().find(|b| b.text == "123").unwrap();
-        assert_eq!((plain.width_nm, plain.height_nm, plain.show_text, plain.kind), (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(40_000_000), true, eda_model::barcode::BarcodeKind::Code128));
+        assert_eq!((plain.width_nm, plain.height_nm, plain.show_text, plain.kind), (Nm::from_mm(40.0), Nm::from_mm(40.0), true, eda_model::barcode::BarcodeKind::Code128));
 
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let line = |text: &str| out.lines().find(|l| l.contains("(barcode") && l.contains(&format!("(text \"{text}\")"))).unwrap_or_else(|| panic!("{text} in {out}")).trim().to_string();

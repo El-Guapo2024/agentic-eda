@@ -9,6 +9,7 @@
 //! What the file does not say a sheet takes from KiCad's constructors: a stroke that is not written is the default width, a cell with no `(margins ..)` the legacy
 //! margin, a cell with no `(effects ..)` 50 mil text, left and top.
 
+use eda_model::units::mm;
 use std::fmt::Write as _;
 
 use eda_model::ir::{Point, SchematicSection, Nm};
@@ -20,7 +21,7 @@ use crate::sexpr::{self, Sexpr};
 use crate::{duid_for, fmt_mm_f, sch_mm, sch_mm_to_nm, note_uuid, sexpr_str};
 
 /// The width of a stroke the file does not write: `DEFAULT_LINE_WIDTH_MILS` (6 mils), which the constructor of the table gives it.
-const DEFAULT_STROKE_NM: Nm = Nm::from_raw_shim(152_400);
+const DEFAULT_STROKE_NM: Nm = Nm::new(152_400);
 
 /// A table read from a sheet, with what a `(group ..)` and a lock need to know of it.
 pub(crate) struct ReadTable {
@@ -76,7 +77,7 @@ fn read_cell(item: &[Sexpr]) -> Option<(TableCell, FileCell)> {
     };
     let angle = ((angle_deg * 1000.0).round() as i64).rem_euclid(360_000) as u32;
     // The text of a text box is left and top until `(effects ..)` says otherwise; `(effects ..)` with no `(justify ..)` is centred both ways.
-    let style = if sexpr::find(item, "effects").is_some() { read_effects(item) } else { TableText::sch_default(Nm::from_raw_shim(1_270_000)) };
+    let style = if sexpr::find(item, "effects").is_some() { read_effects(item) } else { TableText::sch_default(mm(1.27)) };
     let margins = match sexpr::find(item, "margins") {
         Some(m) => [um(sexpr::num(m, 1).unwrap_or(0.0)), um(sexpr::num(m, 2).unwrap_or(0.0)), um(sexpr::num(m, 3).unwrap_or(0.0)), um(sexpr::num(m, 4).unwrap_or(0.0))],
         None => [TableCell::legacy_margin_nm(&style, DEFAULT_STROKE_NM); 4],
@@ -372,8 +373,8 @@ mod tests {
     fn the_table_kicad_wrote_reads_as_a_grid_with_its_cells() {
         let r = read_first(KICAD_TABLE);
         let t = &r.table;
-        assert_eq!((t.col_count(), t.row_count(), t.at, t.angle), (2, 2, Point { x: Nm::from_raw_shim(122_555_000), y: Nm::from_raw_shim(29_210_000) }, 0));
-        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![Nm::from_raw_shim(26_670_000), Nm::from_raw_shim(21_590_000)], vec![Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(2_540_000)]));
+        assert_eq!((t.col_count(), t.row_count(), t.at, t.angle), (2, 2, Point { x: mm(122.555), y: mm(29.21) }, 0));
+        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![mm(26.67), mm(21.59)], vec![mm(2.54), mm(2.54)]));
         assert_eq!(t.texts(), vec![vec!["LED pin (by VectorIndex)", "Expected net"], vec!["LEDs0", "CON_A_1"]]);
         assert_eq!(r.uuid.as_deref(), Some("df0f6b4f-dec6-4a60-8f35-956cd22f196e"));
         assert!(!r.locked);
@@ -381,12 +382,12 @@ mod tests {
         assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_nm), (true, true, Nm::ZERO));
         let c = &t.cells[0];
         // 1.27 mm text, left and top, the margin 0.9525 mm, no fill, in simulation
-        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.h_align, c.style.v_align, c.fill, c.exclude_from_sim), (Nm::from_raw_shim(1_270_000), Nm::from_raw_shim(1_270_000), eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, SchFill::None, false));
-        assert!(c.margins.iter().all(|m| *m == Nm::from_raw_shim(952_500)), "{:?}", c.margins);
+        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.h_align, c.style.v_align, c.fill, c.exclude_from_sim), (mm(1.27), mm(1.27), eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, SchFill::None, false));
+        assert!(c.margins.iter().all(|m| *m == Nm::new(952_500)), "{:?}", c.margins);
         assert_eq!(c.uuid, "b8109563-e2fa-4fb6-9110-83137bb1a864");
         // the cells are where the file put them
         for (i, (row, col)) in [(0, 0), (0, 1), (1, 0), (1, 1)].into_iter().enumerate() {
-            let want = [Point { x: Nm::from_raw_shim(122_555_000), y: Nm::from_raw_shim(29_210_000) }, Point { x: Nm::from_raw_shim(149_225_000), y: Nm::from_raw_shim(29_210_000) }, Point { x: Nm::from_raw_shim(122_555_000), y: Nm::from_raw_shim(31_750_000) }, Point { x: Nm::from_raw_shim(149_225_000), y: Nm::from_raw_shim(31_750_000) }][i];
+            let want = [Point { x: mm(122.555), y: mm(29.21) }, Point { x: mm(149.225), y: mm(29.21) }, Point { x: mm(122.555), y: mm(31.75) }, Point { x: mm(149.225), y: mm(31.75) }][i];
             assert_eq!(t.cell_corners(row, col)[0], want);
         }
     }
@@ -413,7 +414,7 @@ mod tests {
 
     #[test]
     fn a_table_that_stands_keeps_its_attitude_and_its_cells_places() {
-        let mut t = Table::new_sch_grid(Point { x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(80_000_000) }, 2, 2, Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(1_270_000));
+        let mut t = Table::new_sch_grid(Point { x: mm(50.0), y: mm(80.0) }, 2, 2, mm(20.0), mm(5.0), mm(1.27));
         t.angle = 90_000;
         t.cells[0].text = "a \"quoted\"\nline".into();
         t.cells[1].col_span = 1;
@@ -435,10 +436,10 @@ mod tests {
 		(cells (table_cell "x" (at 1 2 0) (size 10 4) (span 1 1))))
 )"#;
         let t = read_first(text).table;
-        assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (Nm::from_raw_shim(152_400), Nm::from_raw_shim(152_400)));
-        assert_eq!((t.cells[0].style.h_align, t.cells[0].style.v_align, t.cells[0].style.height_nm), (eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, Nm::from_raw_shim(1_270_000)));
+        assert_eq!((t.border.stroke.width_nm, t.separators.stroke.width_nm), (Nm::new(152_400), Nm::new(152_400)));
+        assert_eq!((t.cells[0].style.h_align, t.cells[0].style.v_align, t.cells[0].style.height_nm), (eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top, mm(1.27)));
         // no margins: the legacy margin of the cell (the stroke's half and three quarters of 1.27 mm)
-        assert!(t.cells[0].margins.iter().all(|m| *m == Nm::from_raw_shim(76_200 + 952_500)), "{:?}", t.cells[0].margins);
+        assert!(t.cells[0].margins.iter().all(|m| *m == Nm::new(76_200 + 952_500)), "{:?}", t.cells[0].margins);
         // and nothing is written for the strokes of a table that draws none
         let mut out = String::new();
         write(&mut out, &t, false);

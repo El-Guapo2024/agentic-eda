@@ -64,7 +64,7 @@ fn map_pt(p: &Pt, res: &UnitRes) -> V {
 
 /// A point of the session, mapped (nanometres), as the design holds it.
 fn pt(v: V) -> Point {
-    Point { x: Nm::from_raw_shim(v.x), y: Nm::from_raw_shim(v.y) }
+    Point { x: Nm::new(v.x), y: Nm::new(v.y) }
 }
 
 /// `CalcArcMid( aStart, aEnd, aCenter, aMinArcAngle = true )`: the middle of the shorter arc from `start` to `end` about `center`.
@@ -100,7 +100,7 @@ impl Db<'_> {
         let start = pt(map_pt(&path.points[i], res));
         let end = pt(map_pt(&path.points[i + 1], res));
         let width = scale(path.aperture_width, res);
-        let track = Track { id: String::new(), net: net.to_string(), pins: vec![], layer: self.kicad_layers[ndx].clone(), width: Nm::from_raw_shim(width), pts: vec![start, end], arc_mid_offset: None };
+        let track = Track { id: String::new(), net: net.to_string(), pins: vec![], layer: self.kicad_layers[ndx].clone(), width: Nm::new(width), pts: vec![start, end], arc_mid_offset: None };
         // Specctra has 4 types, none exactly KiCad's locked option: `fix` is taken as locked.
         Ok((track, wire.wire_type == Some(WireType::Fix)))
     }
@@ -112,7 +112,7 @@ impl Db<'_> {
         let end = map_pt(&qarc.vertex[1], res);
         let mid = calc_arc_mid(start, end, map_pt(&qarc.vertex[2], res));
         let width = scale(qarc.aperture_width, res);
-        let track = Track::new_arc(net.to_string(), self.kicad_layers[ndx].clone(), Nm::from_raw_shim(width), pt(start), pt(mid), pt(end));
+        let track = Track::new_arc(net.to_string(), self.kicad_layers[ndx].clone(), Nm::new(width), pt(start), pt(mid), pt(end));
         Ok((track, wire.wire_type == Some(WireType::Fix)))
     }
 
@@ -182,7 +182,7 @@ impl Db<'_> {
             (kind, via_diam, self.kicad_layers[a].clone(), self.kicad_layers[b].clone())
         };
         let drill = if drill_diam_iu > 0 { drill_diam_iu } else { drill_of_net };
-        let via = Via { id: String::new(), net: net.to_string(), at: pos, drill: Nm::from_raw_shim(drill), diameter: Nm::from_raw_shim(diameter), from_layer, to_layer };
+        let via = Via { id: String::new(), net: net.to_string(), at: pos, drill: Nm::new(drill), diameter: Nm::new(diameter), from_layer, to_layer };
         Ok(SessionVia { via, kind, locked: wire_via.via_type == Some(WireType::Fix) })
     }
 }
@@ -263,7 +263,7 @@ pub fn from_session(text: &str, source: &str, design: &Design, model: &Constrain
     let pcb_text = crate::export_kicad_pcb(design, model, &meta).map_err(|e| e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; "))?;
     let board = BoardView::parse(&pcb_text)?;
     let b = &model.board;
-    let mut out = from_session_db(&session, &board, b.via_drill.raw_shim(), &|net: &str| (b.via_drill_of(net)).raw_shim())?;
+    let mut out = from_session_db(&session, &board, b.via_drill.get(), &|net: &str| b.via_drill_of(net).get())?;
     // A footprint on the back made here is in the board file turned half a turn in its own frame and back in its orientation (`pcb::write_footprint`, KiCad's
     // frame): the orientation the session gives is the file's, half a turn from the design's.
     // (a footprint read in the file's frame, by a reader of before `FootprintExtra::library_frame`, is written as it was read)

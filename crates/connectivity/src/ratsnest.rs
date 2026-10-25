@@ -23,7 +23,6 @@
 //! to the same outline anyway; skipped for now rather than optimizing the
 //! look of an already-approximate shape.
 
-use eda_model::units::Nm;
 use std::collections::BTreeMap;
 
 use eda_model::ir::Point;
@@ -58,7 +57,7 @@ impl RatsnestEdge {
 }
 
 fn dist(a: Point, b: Point) -> f64 {
-    (((a.x - b.x).raw_shim() as f64).powi(2) + ((a.y - b.y).raw_shim() as f64).powi(2)).sqrt()
+    ((a.x - b.x).as_f64().powi(2) + (a.y - b.y).as_f64().powi(2)).sqrt()
 }
 
 /// The ratsnest for every net: KiCad's `CONNECTIVITY_DATA::updateRatsnest`
@@ -198,7 +197,7 @@ fn triangulate_nodes(nodes: &[NodeInfo]) -> Vec<(usize, usize, f64)> {
         let v0 = (nodes[reps[1]].pos.x - p0.x, nodes[reps[1]].pos.y - p0.y);
         reps[2..].iter().all(|&r| {
             let v1 = (nodes[r].pos.x - p0.x, nodes[r].pos.y - p0.y);
-            v0.0 * v1.1.raw_shim() - v0.1 * v1.0.raw_shim() == Nm::ZERO
+            v0.0.get() * v1.1.get() - v0.1.get() * v1.0.get() == 0
         })
     };
 
@@ -209,7 +208,7 @@ fn triangulate_nodes(nodes: &[NodeInfo]) -> Vec<(usize, usize, f64)> {
             add_edge(&mut out, w[0], w[1]);
         }
     } else {
-        let coords: Vec<f64> = reps.iter().flat_map(|&r| [nodes[r].pos.x.raw_shim() as f64, nodes[r].pos.y.raw_shim() as f64]).collect();
+        let coords: Vec<f64> = reps.iter().flat_map(|&r| [nodes[r].pos.x.as_f64(), nodes[r].pos.y.as_f64()]).collect();
         let tri = Triangulation::new(&coords);
         let t = &tri.triangles;
         for k in (0..t.len()).step_by(3) {
@@ -295,6 +294,7 @@ impl DisjointSet {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::algo::{build_graph, search_clusters};
     use eda_drc::zone_copper::ZoneCopper;
@@ -319,7 +319,7 @@ mod tests {
         // valid triangulation produced the candidate edges.
         model.parts.push(eda_model::Part { reference: "R3".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), symbol: None, datasheet: None, pins: vec![eda_model::Pin { number: "1".into(), name: None, kind: eda_model::PinKind::Passive }], body_nm: None, edge: None });
         model.nets[0].pins.push("R3.1".into());
-        design.placement.as_mut().unwrap().footprints.push(eda_model::ir::FootprintInstance { id: "R3".into(), at: eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(15_000_000) }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() });
+        design.placement.as_mut().unwrap().footprints.push(eda_model::ir::FootprintInstance { id: "R3".into(), at: eda_model::ir::Point { x: mm(10.0), y: mm(15.0) }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() });
 
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
@@ -332,7 +332,7 @@ mod tests {
     fn a_track_on_the_net_removes_its_ratsnest_edge() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, b], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![a, b], arc_mid_offset: None });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 1);

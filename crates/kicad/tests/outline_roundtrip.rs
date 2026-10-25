@@ -3,6 +3,7 @@
 //! malformed outline stays malformed. The first group needs no external tool; the last one (`EDA_SLOW_TESTS=1`) asks kicad-cli: the
 //! Edge.Cuts it plots are the same before and after, and it still reports the outline it should.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -11,8 +12,8 @@ use eda_kicad::{export_kicad_pcb, import_kicad_pcb, ExportMeta};
 use eda_model::ir::{Design, Point, Shape};
 use eda_model::ConstraintModel;
 
-fn p(x: i64, y: i64) -> Point {
-    Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+fn p(x: Nm, y: Nm) -> Point {
+    Point { x, y }
 }
 
 const HEADER: &str = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
@@ -86,13 +87,13 @@ fn arcs_circles_rectangles_and_curves_are_kept_as_the_shapes_they_are() {
     assert_eq!(model.board.outline_closed, Some(true));
 
     // The arc is the file's arc, three points and all: its middle point survives to the micrometre.
-    let arc = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Arc { start, .. } if *start == p(35_000_000, 0))).expect("the top-right arc");
-    assert_eq!(arc.points(), vec![p(35_000_000, 0), p(38_535_534, 1_464_466), p(40_000_000, 5_000_000)]);
+    let arc = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Arc { start, .. } if *start == p(mm(35.0), Nm::ZERO))).expect("the top-right arc");
+    assert_eq!(arc.points(), vec![p(mm(35.0), Nm::ZERO), p(Nm::new(38_535_534), Nm::new(1_464_466)), p(mm(40.0), mm(5.0))]);
 
     // `placement.outline` is the summary of what they make: the round corners are many points, not the 8 of the chord outline.
     let outline = &design.placement.as_ref().expect("placement").outline;
     assert!(outline.len() > 60, "{} points", outline.len());
-    assert!(outline.iter().all(|q| (Nm::ZERO..=Nm::from_raw_shim(40_000_000)).contains(&q.x) && (Nm::ZERO..=Nm::from_raw_shim(30_000_000)).contains(&q.y)));
+    assert!(outline.iter().all(|q| (Nm::ZERO..=mm(40.0)).contains(&q.x) && (Nm::ZERO..=mm(30.0)).contains(&q.y)));
     assert_eq!(model.board.outline.as_ref(), Some(outline));
 }
 
@@ -171,7 +172,7 @@ fn an_outline_that_does_not_close_stays_open_and_is_reported() {
     // The summary is KiCad's inferred rectangle round the edges.
     let outline = &design.placement.as_ref().expect("placement").outline;
     assert_eq!(outline.len(), 4);
-    assert_eq!((outline.iter().map(|q| q.x).min(), outline.iter().map(|q| q.x).max()), (Some(Nm::ZERO), Some(Nm::from_raw_shim(10_000_000))));
+    assert_eq!((outline.iter().map(|q| q.x).min(), outline.iter().map(|q| q.x).max()), (Some(Nm::ZERO), Some(mm(10.0))));
 }
 
 #[test]
@@ -201,8 +202,8 @@ fn a_footprints_edge_cuts_stay_in_the_footprint_and_are_placed_in_board_space() 
     // Turned 90 degrees about (20, 15), the slot lies along y: the line (-3,-1)-(3,-1) is at x = 20 + 1 (KiCad turns clockwise on screen).
     let line = placed.into_iter().find(|s| matches!(s, Shape::Segment { .. })).expect("a line");
     let pts = line.points();
-    assert!(pts.iter().all(|q| q.x == Nm::from_raw_shim(19_000_000) || q.x == Nm::from_raw_shim(21_000_000)), "{pts:?}");
-    assert!(pts.iter().all(|q| q.y == Nm::from_raw_shim(12_000_000) || q.y == Nm::from_raw_shim(18_000_000)), "{pts:?}");
+    assert!(pts.iter().all(|q| q.x == mm(19.0) || q.x == mm(21.0)), "{pts:?}");
+    assert!(pts.iter().all(|q| q.y == mm(12.0) || q.y == mm(18.0)), "{pts:?}");
 }
 
 #[test]
@@ -220,8 +221,8 @@ fn a_board_from_before_kicad_7_closes_its_outline_through_its_centre_start_angle
     assert!(!notes.outline_open && notes.outline_errors.is_empty(), "{:?}", notes.outline_errors);
     assert_eq!(model.board.outline_closed, Some(true));
     let arc = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Arc { .. })).expect("the arc");
-    assert_eq!(arc.points(), vec![p(20_000_000, 5_000_000), p(18_535_534, 8_535_534), p(15_000_000, 10_000_000)]);
-    assert_eq!(arc.stroke_width(), Nm::from_raw_shim(100_000), "the legacy (width ..) is the stroke width");
+    assert_eq!(arc.points(), vec![p(mm(20.0), mm(5.0)), p(Nm::new(18_535_534), Nm::new(8_535_534)), p(mm(15.0), mm(10.0))]);
+    assert_eq!(arc.stroke_width(), mm(0.1), "the legacy (width ..) is the stroke width");
     // The exported file writes it in today's grammar and it reads back as the same arc.
     let text = export(&design, &model);
     assert!(text.contains("(gr_arc (start 20 5) (mid 18.535534 8.535534) (end 15 10)"), "{text}");

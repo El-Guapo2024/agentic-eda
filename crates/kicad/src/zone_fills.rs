@@ -177,11 +177,11 @@ fn fill_is_of(entry: &ZoneEntry, zone: &Zone) -> bool {
 
 /// `zone` with its lengths in micrometres (its area in square micrometres), as a design of version 1 held it; `None` when a length is not a whole micrometre.
 fn micrometre_zone(zone: &Zone) -> Option<Zone> {
-    let um = |v: i64| (v % 1000 == 0).then_some(v / 1000);
+    let um = |v: Nm| (v.get() % eda_model::units::NM_PER_UM == 0).then(|| Nm::new(v.get() / eda_model::units::NM_PER_UM));
     let mut z = zone.clone();
-    z.outline = zone.outline.iter().map(|p| Some(eda_model::ir::Point { x: Nm::from_raw_shim(um(p.x.raw_shim())?), y: Nm::from_raw_shim(um(p.y.raw_shim())?) })).collect::<Option<_>>()?;
+    z.outline = zone.outline.iter().map(|p| Some(eda_model::ir::Point { x: um(p.x)?, y: um(p.y)? })).collect::<Option<_>>()?;
     for v in [&mut z.clearance, &mut z.min_thickness, &mut z.thermal_gap, &mut z.thermal_spoke_width, &mut z.hatch_thickness, &mut z.hatch_gap, &mut z.corner_radius] {
-        *v = Nm::from_raw_shim(um((*v).raw_shim())?);
+        *v = um(*v)?;
     }
     z.min_island_area = (zone.min_island_area % 1_000_000 == 0).then_some(zone.min_island_area / 1_000_000)?;
     Some(z)
@@ -304,7 +304,7 @@ fn outline_keys(design: &Design, pick: impl Fn(&Zone) -> bool) -> HashMap<String
     let mut out = HashMap::new();
     for z in design.routing.as_ref().map_or(&[][..], |r| r.zones.as_slice()).iter().filter(|z| !z.id.is_empty() && pick(z)) {
         for layer in z.layer_set() {
-            out.entry(outline_key(layer, z.outline.iter().map(|p| [p.x.raw_shim(), p.y.raw_shim()]))).or_insert_with(|| z.id.clone());
+            out.entry(outline_key(layer, z.outline.iter().map(|p| [p.x.get(), p.y.get()]))).or_insert_with(|| z.id.clone());
         }
     }
     out
@@ -702,6 +702,7 @@ pub fn fmt_nm(v: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Point, PlacementSection, Provenance, RoutingSection};
@@ -741,7 +742,7 @@ mod tests {
 )"#;
 
     fn zone(id: &str, uuid: &str) -> Zone {
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }], ..Default::default() }
     }
 
     /// P13-1: a teardrop KiCad saved has no uuid (`format( const ZONE* )`); its fills are filed under its layer and outline, and the import finds them by the outline
@@ -845,7 +846,7 @@ mod tests {
 
         // An edit elsewhere on the board changes nothing about the zone; an edit to the zone itself empties it.
         let mut moved = z.clone();
-        moved.outline[2] = Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(10_000_000) };
+        moved.outline[2] = Point { x: mm(11.0), y: mm(10.0) };
         assert!(fills.current(&moved).is_none() && fills.rings(&moved, "F.Cu").is_empty());
         let d2 = design(vec![moved.clone()]);
         assert_eq!(fills.tally(&d2), (0, 1), "one zone out of date");
@@ -855,7 +856,7 @@ mod tests {
         renamed.uuid = "other".into();
         assert!(fills.current(&renamed).is_some(), "a name is no part of what a fill is a fill of");
         let mut thicker = z.clone();
-        thicker.min_thickness += Nm::from_raw_shim(10);
+        thicker.min_thickness += Nm::new(10);
         assert!(fills.current(&thicker).is_none(), "a setting is");
         let mut other_net = z.clone();
         other_net.net = "VCC".into();

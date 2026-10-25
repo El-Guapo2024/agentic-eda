@@ -2,6 +2,7 @@
 //! board-space items every test provider works from -- the same role
 //! KiCad's own `BOARD` class plays for `DRC_ENGINE`. Built once per run.
 
+use eda_model::units::mm;
 use crate::kimath::Shape;
 use eda_model::footprint::placed_courtyard;
 use eda_model::ir::{Design, LabelSide, PadZoneFacts, Point, Shape as IrShape, Side, Text, Nm};
@@ -90,11 +91,11 @@ pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
             }
             if *stroke_width > Nm::ZERO || !*filled {
                 // `SHAPE_ARC( center, end, ANGLE_360, width )`
-                let n = if r.raw_shim() as f64 > ARC_HIGH_DEF { ((std::f64::consts::PI / (1.0 - ARC_HIGH_DEF / r.raw_shim() as f64).acos()).ceil() as usize).clamp(8, 4096) } else { 8 };
+                let n = if r.as_f64() > ARC_HIGH_DEF { ((std::f64::consts::PI / (1.0 - ARC_HIGH_DEF / r.as_f64()).acos()).ceil() as usize).clamp(8, 4096) } else { 8 };
                 let pts: Vec<Point> = (0..n)
                     .map(|i| {
                         let a = std::f64::consts::TAU * i as f64 / n as f64;
-                        Point { x: center.x + Nm::from_raw_shim((r.raw_shim() as f64 * a.cos()).round() as i64), y: center.y + Nm::from_raw_shim((r.raw_shim() as f64 * a.sin()).round() as i64) }
+                        Point { x: center.x + Nm::kiround(r.as_f64() * a.cos()), y: center.y + Nm::kiround(r.as_f64() * a.sin()) }
                     })
                     .collect();
                 out.extend(stroke(ring(&pts), *stroke_width));
@@ -357,8 +358,8 @@ pub struct DrcBoard {
 fn rotated_extent_by(rot_millideg: i64, size: (Nm, Nm)) -> (Nm, Nm) {
     let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    let (w, h) = (size.0.raw_shim() as f64, size.1.raw_shim() as f64);
-    (Nm::from_raw_shim((w * cos.abs() + h * sin.abs()).round() as i64), Nm::from_raw_shim((w * sin.abs() + h * cos.abs()).round() as i64))
+    let (w, h) = (size.0.as_f64(), size.1.as_f64());
+    (Nm::kiround(w * cos.abs() + h * sin.abs()), Nm::kiround(w * sin.abs() + h * cos.abs()))
 }
 
 /// The copper shape of a `size`-sized pad of `shape` centred at `center` --
@@ -373,7 +374,7 @@ fn shape_of(center: Point, size: (Nm, Nm), shape: PadShape, roundrect_ratio: Opt
         // A trapezoid, a chamfered rectangle and a custom pad are built from their pieces (`pad_shape::pad_copper`); the box is the stand-in.
         PadShape::Rect | PadShape::Trapezoid | PadShape::ChamferedRect | PadShape::Custom => Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 },
         PadShape::RoundRect => {
-            let r = Nm::from_raw_shim((roundrect_ratio.unwrap_or(0.25) * (w.min(h)).raw_shim() as f64).round() as i64);
+            let r = Nm::kiround(roundrect_ratio.unwrap_or(0.25) * (w.min(h)).as_f64());
             Shape::RoundRect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2, r }
         }
         PadShape::Oval => {
@@ -415,12 +416,12 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     // position* (so this item sits where the real label really is): 0.3 mm
     // per character of half-width for the Left/Right offset, a 0.7 mm gap
     // above/below the courtyard (0.2 mm beside it).
-    let half_w_offset = Nm::from_raw_shim(300_000) * fp.id.chars().count() as i64;
+    let half_w_offset = mm(0.3) * fp.id.chars().count() as i64;
     let local = match fp.label {
-        LabelSide::Above => (Nm::ZERO, -(hh + Nm::from_raw_shim(700_000))),
-        LabelSide::Below => (Nm::ZERO, hh + Nm::from_raw_shim(700_000)),
-        LabelSide::Left => (-(hw + Nm::from_raw_shim(200_000) + half_w_offset), Nm::ZERO),
-        LabelSide::Right => (hw + Nm::from_raw_shim(200_000) + half_w_offset, Nm::ZERO),
+        LabelSide::Above => (Nm::ZERO, -(hh + mm(0.7))),
+        LabelSide::Below => (Nm::ZERO, hh + mm(0.7)),
+        LabelSide::Left => (-(hw + mm(0.2) + half_w_offset), Nm::ZERO),
+        LabelSide::Right => (hw + mm(0.2) + half_w_offset, Nm::ZERO),
     };
     let center = pad_center(fp, local);
     // The label's own *rendered* extent, for collision purposes, is a
@@ -457,15 +458,15 @@ fn pad_frame_to_board(fp: &eda_model::ir::FootprintInstance, pad_rot_mdeg: i64, 
 /// the axis-aligned box around it, which over-reports clearance and
 /// shorts between neighbouring pads of a 45-degree footprint.
 fn rotated_pad_shape(fp: &eda_model::ir::FootprintInstance, pad: &Pad, center: Point) -> Shape {
-    let (w, h) = (pad.size.0.raw_shim() as f64, pad.size.1.raw_shim() as f64);
+    let (w, h) = (pad.size.0.as_f64(), pad.size.1.as_f64());
     let to_pt = |v: (f64, f64)| {
         let (dx, dy) = pad_frame_to_board(fp, pad.rot as i64, v);
-        Point { x: center.x + Nm::from_raw_shim(dx.round() as i64), y: center.y + Nm::from_raw_shim(dy.round() as i64) }
+        Point { x: center.x + Nm::kiround(dx), y: center.y + Nm::kiround(dy) }
     };
     match pad.shape {
         PadShape::Circle => Shape::Circle { c: center, r: pad.size.0.max(pad.size.1) / 2 },
         PadShape::Oval => {
-            let r = Nm::from_raw_shim((w.min(h) / 2.0).round() as i64);
+            let r = Nm::kiround(w.min(h) / 2.0);
             let f = (w.max(h) - w.min(h)) / 2.0;
             let axis = if w >= h { (f, 0.0) } else { (0.0, f) };
             Shape::Stadium { a: to_pt((-axis.0, -axis.1)), b: to_pt(axis), r }
@@ -773,13 +774,13 @@ pub fn arc_polyline(start: Point, mid: Point, end: Point, max_error: f64) -> Vec
     if probe.len() < 3 {
         return probe;
     }
-    let (sx, sy, mx, my, ex, ey) = (start.x.raw_shim() as f64, start.y.raw_shim() as f64, mid.x.raw_shim() as f64, mid.y.raw_shim() as f64, end.x.raw_shim() as f64, end.y.raw_shim() as f64);
+    let (sx, sy, mx, my, ex, ey) = (start.x.as_f64(), start.y.as_f64(), mid.x.as_f64(), mid.y.as_f64(), end.x.as_f64(), end.y.as_f64());
     let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
     let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
     let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
     let r = (sx - ux).hypot(sy - uy);
     // Sweep from the two-segment probe's own direction choice.
-    let ang = |p: Point| (p.y.raw_shim() as f64 - uy).atan2(p.x.raw_shim() as f64 - ux);
+    let ang = |p: Point| (p.y.as_f64() - uy).atan2(p.x.as_f64() - ux);
     let half = (ang(probe[1]) - ang(start)).rem_euclid(std::f64::consts::TAU);
     let half = if half > std::f64::consts::PI { std::f64::consts::TAU - half } else { half };
     let sweep = 2.0 * half;

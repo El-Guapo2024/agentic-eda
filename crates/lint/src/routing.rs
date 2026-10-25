@@ -42,12 +42,13 @@ pub fn check(design: &Design, model: &ConstraintModel) -> Vec<Finding> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{PlacementSection, Provenance, RoutingSection, Track};
 
-    fn design(width: i64) -> Design {
-        let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(width), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }], arc_mid_offset: None };
+    fn design(width: Nm) -> Design {
+        let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.0), y: mm(1.0) }], arc_mid_offset: None };
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: eda_model::ir::SCHEMA_VERSION,
@@ -59,15 +60,15 @@ mod tests {
         }
     }
 
-    fn model_with_class(width: i64) -> ConstraintModel {
+    fn model_with_class(width: Nm) -> ConstraintModel {
         let mut m = ConstraintModel::default();
-        m.board.net_classes.push(eda_model::NetClass { name: "power".into(), nets: vec!["A".into()], track_width: Some(Nm::from_raw_shim(width)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        m.board.net_classes.push(eda_model::NetClass { name: "power".into(), nets: vec!["A".into()], track_width: Some(width), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         m
     }
 
     #[test]
     fn a_track_narrower_than_its_class_reports_once_per_segment() {
-        let v = check(&design(200_000), &model_with_class(400_000));
+        let v = check(&design(mm(0.2)), &model_with_class(mm(0.4)));
         assert_eq!(v.len(), 2, "{v:#?}");
         assert_eq!(v[0].check, "routing_track_width");
         assert_eq!(v[0].items[0].id, "t1#0");
@@ -77,6 +78,6 @@ mod tests {
 
     #[test]
     fn a_track_at_its_class_width_is_clean() {
-        assert!(check(&design(400_000), &model_with_class(400_000)).is_empty());
+        assert!(check(&design(mm(0.4)), &model_with_class(mm(0.4))).is_empty());
     }
 }

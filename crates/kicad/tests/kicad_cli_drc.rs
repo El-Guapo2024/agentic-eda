@@ -3,6 +3,7 @@
 //! `.kicad_pcb`, and runs `kicad-cli pcb drc` on the result. Only runs when
 //! `kicad-cli` is present. `#[ignore]` by default — run with
 //! `cargo test -p eda-kicad --test kicad_cli_drc -- --ignored --nocapture`.
+use eda_model::units::mm;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -190,11 +191,11 @@ fn kicad_cli_drc_bottom_side_pads() {
     };
     let at = |id: &str, x: Nm, y: Nm, rot, side| FootprintInstance { id: id.into(), at: Point { x, y }, rot, side, label: Default::default() };
     let footprints = vec![
-        at("U1", Nm::from_raw_shim(6_000_000), Nm::from_raw_shim(6_000_000), 0, Side::Bottom),
-        at("U2", Nm::from_raw_shim(14_000_000), Nm::from_raw_shim(6_000_000), 90_000, Side::Bottom),
-        at("U3", Nm::from_raw_shim(22_000_000), Nm::from_raw_shim(6_000_000), 90_000, Side::Top),
-        at("R1", Nm::from_raw_shim(6_000_000), Nm::from_raw_shim(14_000_000), 0, Side::Bottom),
-        at("J1", Nm::from_raw_shim(6_000_000), Nm::from_raw_shim(18_000_000), 0, Side::Top),
+        at("U1", mm(6.0), mm(6.0), 0, Side::Bottom),
+        at("U2", mm(14.0), mm(6.0), 90_000, Side::Bottom),
+        at("U3", mm(22.0), mm(6.0), 90_000, Side::Top),
+        at("R1", mm(6.0), mm(14.0), 0, Side::Bottom),
+        at("J1", mm(6.0), mm(18.0), 0, Side::Top),
     ];
 
     let instance = |pin: &str| footprints.iter().find(|f| pin.split_once('.').unwrap().0 == f.id).unwrap();
@@ -205,8 +206,8 @@ fn kicad_cli_drc_bottom_side_pads() {
     };
     // The premise: the engine mirrors a bottom part (U1's pin 1 is at
     // local x < 0) and leaves a top one alone.
-    assert!(pad_at("U1.1").x > Nm::from_raw_shim(6_000_000) && pad_at("R1.1").x > Nm::from_raw_shim(6_000_000), "the engine no longer mirrors bottom-side parts");
-    assert!(pad_at("U3.1").y < Nm::from_raw_shim(6_000_000), "the engine mirrors a top-side part");
+    assert!(pad_at("U1.1").x > mm(6.0) && pad_at("R1.1").x > mm(6.0), "the engine no longer mirrors bottom-side parts");
+    assert!(pad_at("U3.1").y < mm(6.0), "the engine mirrors a top-side part");
 
     let tracks: Vec<Track> = model
         .nets
@@ -222,7 +223,7 @@ fn kicad_cli_drc_bottom_side_pads() {
             arc_mid_offset: None,
         })
         .collect();
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(28_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(28_000_000), y: Nm::from_raw_shim(22_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(22_000_000) }];
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(28.0), y: Nm::ZERO }, Point { x: mm(28.0), y: mm(22.0) }, Point { x: Nm::ZERO, y: mm(22.0) }];
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         schema: eda_model::ir::SCHEMA_VERSION,
@@ -264,34 +265,34 @@ fn kicad_cli_drc_shapes_and_text() {
 
     let mut drawings = eda_model::ir::DrawingsSection {
         shapes: vec![
-            eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, end: Point { x: Nm::from_raw_shim(9_000_000), y: Nm::from_raw_shim(1_000_000) } },
+            eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: mm(1.0), y: mm(1.0) }, end: Point { x: mm(9.0), y: mm(1.0) } },
             eda_model::ir::Shape::Arc {
                 id: String::new(),
                 layer: "Cmts.User".into(),
-                stroke_width: Nm::from_raw_shim(100_000),
+                stroke_width: mm(0.1),
                 filled: false,
-                start: Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(5_000_000) },
-                mid: Point { x: Nm::from_raw_shim(12_071_068), y: Nm::from_raw_shim(12_071_068) },
-                end: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(15_000_000) },
+                start: Point { x: mm(15.0), y: mm(5.0) },
+                mid: Point { x: Nm::new(12_071_068), y: Nm::new(12_071_068) },
+                end: Point { x: mm(5.0), y: mm(15.0) },
             },
-            eda_model::ir::Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: true, start: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, end: Point { x: Nm::from_raw_shim(9_000_000), y: Nm::from_raw_shim(9_000_000) } },
-            eda_model::ir::Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: Nm::from_raw_shim(120_000), filled: false, center: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, end: Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(10_000_000) } },
+            eda_model::ir::Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: true, start: Point { x: mm(1.0), y: mm(1.0) }, end: Point { x: mm(9.0), y: mm(9.0) } },
+            eda_model::ir::Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: mm(0.12), filled: false, center: Point { x: mm(10.0), y: mm(10.0) }, end: Point { x: mm(12.0), y: mm(10.0) } },
             eda_model::ir::Shape::Polygon {
                 id: String::new(),
                 layer: "F.CrtYd".into(),
-                stroke_width: Nm::from_raw_shim(50_000),
+                stroke_width: mm(0.05),
                 filled: true,
-                pts: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(4_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(4_000_000) }],
+                pts: vec![Point { x: mm(1.0), y: mm(1.0) }, Point { x: mm(4.0), y: mm(1.0) }, Point { x: mm(4.0), y: mm(4.0) }, Point { x: mm(1.0), y: mm(4.0) }],
             },
         ],
         texts: vec![eda_model::ir::Text {
             id: String::new(),
             content: "REV A".into(),
-            at: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(18_000_000) },
+            at: Point { x: mm(5.0), y: mm(18.0) },
             angle: 0,
             layer: "F.SilkS".into(),
-            size_nm: Nm::from_raw_shim(1_000_000),
-            stroke_width: Nm::from_raw_shim(150_000),
+            size_nm: mm(1.0),
+            stroke_width: mm(0.15),
             justify: eda_model::ir::TextJustify::Center,
             mirror: false,
         }],
@@ -305,7 +306,7 @@ fn kicad_cli_drc_shapes_and_text() {
         provenance: Provenance { engine_version: "0".into(), intent_hash: "shapes_text_drc".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection {
-            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }],
+            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }],
             footprints: vec![],
             modules: Vec::new(),
         }),
@@ -390,10 +391,10 @@ fn kicad_cli_drc_real_footprints() {
         ..Default::default()
     };
 
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(30_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(30_000_000) }];
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(40.0), y: Nm::ZERO }, Point { x: mm(40.0), y: mm(30.0) }, Point { x: Nm::ZERO, y: mm(30.0) }];
     let footprints = vec![
-        FootprintInstance { id: "J1".into(), at: Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(8_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-        FootprintInstance { id: "SW1".into(), at: Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(20_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+        FootprintInstance { id: "J1".into(), at: Point { x: mm(12.0), y: mm(8.0) }, rot: 0, side: Side::Top, label: Default::default() },
+        FootprintInstance { id: "SW1".into(), at: Point { x: mm(30.0), y: mm(20.0) }, rot: 0, side: Side::Top, label: Default::default() },
     ];
     let design = Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
@@ -431,16 +432,16 @@ fn kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers() {
     };
     let net = |name: &str| Net { name: name.into(), pins: vec![] };
     let model = ConstraintModel { nets: vec![net("A"), net("B")], ..Default::default() };
-    let track = |net: &str, y: Nm| Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(250_000), pts: vec![Point { x: Nm::from_raw_shim(2_000_000), y }, Point { x: Nm::from_raw_shim(12_000_000), y }], arc_mid_offset: None };
+    let track = |net: &str, y: Nm| Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.25), pts: vec![Point { x: mm(2.0), y }, Point { x: mm(12.0), y }], arc_mid_offset: None };
     let mut routing = RoutingSection {
         // One track through the keepout, one well clear of it.
-        tracks: vec![track("A", Nm::from_raw_shim(5_000_000)), track("B", Nm::from_raw_shim(15_000_000))],
+        tracks: vec![track("A", mm(5.0)), track("B", mm(15.0))],
         vias: vec![],
         zones: vec![eda_model::ir::Zone {
             id: String::new(),
             net: String::new(),
             layer: "F.Cu".into(),
-            outline: vec![Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(8_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(8_000_000) }],
+            outline: vec![Point { x: mm(4.0), y: mm(3.0) }, Point { x: mm(10.0), y: mm(3.0) }, Point { x: mm(10.0), y: mm(8.0) }, Point { x: mm(4.0), y: mm(8.0) }],
             is_rule_area: true,
             keepout_tracks: true,
             ..Default::default()
@@ -455,7 +456,7 @@ fn kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers() {
         schema: eda_model::ir::SCHEMA_VERSION,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "rule_area".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
-        placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }], footprints: vec![], modules: Vec::new() }),
+        placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }], footprints: vec![], modules: Vec::new() }),
         routing: Some(routing),
         drawings: None,
     };

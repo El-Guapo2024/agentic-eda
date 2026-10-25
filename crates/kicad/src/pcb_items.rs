@@ -176,7 +176,7 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     if island_mode == IslandRemovalMode::Area {
         // `GetMinIslandArea() / IU_PER_MM`: nm^2 over nm per mm, which is the number of mm^2 once printed as a length.
         // `formatInternalUnits( GetMinIslandArea() / pcbIUScale.IU_PER_MM )`: the nm^2 over 1e6, cut to an integer, written as millimetres (mm^2)
-        write!(out, " (island_area_min {})", mm(Nm::from_raw_shim((z.min_island_area as f64 / 1e6) as i64))).unwrap();
+        write!(out, " (island_area_min {})", mm(Nm::new((z.min_island_area as f64 / 1e6) as i64))).unwrap();
     }
     if hatch_fill {
         write!(out, " (hatch_thickness {}) (hatch_gap {}) (hatch_orientation {})", mm(z.hatch_thickness), mm(z.hatch_gap), fmt_mm_f(z.hatch_orientation_mdeg as f64 / 1000.0)).unwrap();
@@ -248,7 +248,7 @@ pub(crate) struct DimensionArgs<'a> {
     /// The text KiCad shows and where: `eda_connectivity::dimension::compute_dimension_geometry`,
     /// the one place that geometry is worked out (KiCad recomputes both on load, `dim->Update()`).
     pub text: &'a str,
-    pub text_at: (i64, i64),
+    pub text_at: (Nm, Nm),
     pub text_angle_millideg: u32,
 }
 
@@ -330,13 +330,13 @@ pub(crate) fn write_dimension(out: &mut String, d: &Dimension, a: &DimensionArgs
         // Text on a back layer is read from below, so it is written mirrored.
         let mirror = if d.layer.starts_with("B.") { " (justify mirror)" } else { "" };
         let size = mm(d.text_size_nm);
-        let thickness = mm(d.text_thickness_nm.unwrap_or_else(|| Nm::from_raw_shim((d.text_size_nm.raw_shim() as f64 * 0.15).round() as i64)));
+        let thickness = mm(d.text_thickness_nm.unwrap_or_else(|| Nm::kiround(d.text_size_nm.as_f64() * 0.15)));
         writeln!(
             out,
             "\t\t(gr_text {} (at {} {} {}) (layer {}) (uuid \"{}\")\n\t\t\t(effects (font (size {size} {size}) (thickness {thickness})){mirror})\n\t\t)",
             sexpr_str(a.text),
-            mm(Nm::from_raw_shim(a.text_at.0)),
-            mm(Nm::from_raw_shim(a.text_at.1)),
+            mm(a.text_at.0),
+            mm(a.text_at.1),
             fmt_mm_f(a.text_angle_millideg as f64 / 1000.0),
             sexpr_str(&d.layer),
             a.text_uuid

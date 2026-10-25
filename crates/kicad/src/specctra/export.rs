@@ -701,13 +701,13 @@ impl<'a> Db<'a> {
     /// `FOOTPRINT::GetCourtyard( F_CrtYd )` and the back one, put together and simplified: the contours (outline, then holes, of each polygon) the courtyard is.
     fn courtyard(&self, fp: &Fp) -> Vec<Vec<V>> {
         let max_error = 5000i64; // pcbIUScale.mmToIU( 0.005 )
-        let chaining_epsilon = 20_000i64; // pcbIUScale.mmToIU( 0.02 )
+        let chaining_epsilon = Nm::from_mm(0.02); // pcbIUScale.mmToIU( 0.02 )
         let side = |layer: &str| -> ShapePolySet {
             let shapes: Vec<eda_model::ir::Shape> = fp.gfx.iter().filter(|g| g.layer == layer).map(Gfx::to_ir).collect();
             if shapes.is_empty() {
                 return ShapePolySet::new();
             }
-            let (mut polys, ok, _) = eda_drc::outline::convert_outline_to_polygon(&shapes, max_error as f64, Nm::from_raw_shim(chaining_epsilon), true);
+            let (mut polys, ok, _) = eda_drc::outline::convert_outline_to_polygon(&shapes, max_error as f64, chaining_epsilon, true);
             if !ok {
                 return ShapePolySet::new();
             }
@@ -940,8 +940,8 @@ fn shape_polygons(g: &Gfx, error: i64) -> Vec<Vec<V>> {
             }
         }
         GfxShape::Bezier([a, c1, c2, b]) => {
-            let p = |v: &V| eda_model::ir::Point { x: Nm::from_raw_shim(v.x), y: Nm::from_raw_shim(v.y) };
-            let poly: Vec<V> = eda_model::bezier::bezier_polyline(p(a), p(c1), p(c2), p(b), Nm::from_raw_shim(error)).into_iter().map(|q| V::new(q.x.raw_shim(), q.y.raw_shim())).collect();
+            let p = |v: &V| eda_model::ir::Point { x: Nm::new(v.x), y: Nm::new(v.y) };
+            let poly: Vec<V> = eda_model::bezier::bezier_polyline(p(a), p(c1), p(c2), p(b), Nm::new(error)).into_iter().map(|q| V::new(q.x.get(), q.y.get())).collect();
             for w in poly.windows(2) {
                 out.push(oval_polygon(w[0], w[1], width, error, loc));
             }

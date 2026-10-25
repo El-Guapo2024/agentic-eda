@@ -23,10 +23,10 @@ pub(crate) fn read(item: &[Sexpr]) -> GridItem {
                 Some("at") => g.at = Point { x: um(l, 1), y: um(l, 2) },
                 Some("spacing") => match g.kind {
                     GridKind::Polar => {
-                        g.spacing.x = um(l, 1).max(Nm::from_raw_shim(1));
+                        g.spacing.x = um(l, 1).max(Nm::new(1));
                         g.phi_spacing_deg = sexpr::num(l, 2).unwrap_or(0.0).abs().max(0.001);
                     }
-                    GridKind::Cartesian => g.spacing = Point { x: um(l, 1).max(Nm::from_raw_shim(1)), y: um(l, 2).max(Nm::from_raw_shim(1)) },
+                    GridKind::Cartesian => g.spacing = Point { x: um(l, 1).max(Nm::new(1)), y: um(l, 2).max(Nm::new(1)) },
                 },
                 Some("extent") => match g.kind {
                     GridKind::Polar => {
@@ -118,13 +118,13 @@ mod tests {
         let mut refs = Vec::new();
         let grids = read_all(tree.as_list().unwrap(), &mut refs);
         let g = &grids[0];
-        assert_eq!((g.kind, g.at, g.extent, g.spacing, g.angle, g.priority, g.tick_interval), (GridKind::Cartesian, Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(50_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(2_500_000) }, Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(250_000) }, 30.0, 3, 5));
+        assert_eq!((g.kind, g.at, g.extent, g.spacing, g.angle, g.priority, g.tick_interval), (GridKind::Cartesian, Point { x: Nm::from_mm(100.0), y: Nm::from_mm(50.0) }, Point { x: Nm::from_mm(4.0), y: Nm::from_mm(2.5) }, Point { x: Nm::from_mm(0.5), y: Nm::from_mm(0.25) }, 30.0, 3, 5));
         assert_eq!(g.affects, GridAffects { cursor: true, routing: false, placement: true });
         assert_eq!(g.custom_properties, vec![("role".to_string(), "via field".to_string())]);
         assert!(refs[0].locked);
         let p = &grids[1];
-        assert_eq!((p.kind, p.extent.x, p.phi_extent_deg, p.spacing.x, p.phi_spacing_deg), (GridKind::Polar, Nm::from_raw_shim(10_000_000), 90.0, Nm::from_raw_shim(1_000_000), 15.0));
-        assert_eq!((grids[2].priority, grids[2].extent, grids[2].spacing), (1, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }), "priority 0 is 1, and the rest the constructor's");
+        assert_eq!((p.kind, p.extent.x, p.phi_extent_deg, p.spacing.x, p.phi_spacing_deg), (GridKind::Polar, Nm::from_mm(10.0), 90.0, Nm::from_mm(1.0), 15.0));
+        assert_eq!((grids[2].priority, grids[2].extent, grids[2].spacing), (1, Point { x: Nm::from_mm(5.0), y: Nm::from_mm(5.0) }, Point { x: Nm::from_mm(1.0), y: Nm::from_mm(1.0) }), "priority 0 is 1, and the rest the constructor's");
 
         let mut text = String::new();
         let uuid = write(&mut text, g, true);

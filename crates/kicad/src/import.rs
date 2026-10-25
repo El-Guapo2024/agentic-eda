@@ -58,6 +58,7 @@
 //!   the stackup, net ties, 3D model references and footprint-local
 //!   graphics and text are read.
 
+use eda_model::units::mm;
 use std::collections::BTreeMap;
 
 use eda_model::units::Nm;
@@ -698,8 +699,8 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
                                 signal_layer: layer_of(r, "signal_layer")?,
                                 top_reference_layer: layer_of(r, "top_reference_layer"),
                                 bottom_reference_layer: layer_of(r, "bottom_reference_layer"),
-                                width_nm: Nm::from_raw_shim(int(r, "width")),
-                                diff_pair_gap_nm: Nm::from_raw_shim(int(r, "diff_pair_gap")),
+                                width_nm: Nm::new(int(r, "width")),
+                                diff_pair_gap_nm: Nm::new(int(r, "diff_pair_gap")),
                                 delay_as_per_mm: int(r, "delay"),
                             })
                         })
@@ -754,8 +755,8 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
 /// (what the writer gives a class that sets none) reads back as unset, so a board that never set one round-trips unchanged.
 fn default_class_extras(nc: &[Sexpr]) -> Option<NetClass> {
     let nm = |key: &str| sexpr::find(nc, key).and_then(|f| sexpr::num(f, 1)).map(mm_to_nm);
-    let microvia_diameter = nm("uvia_dia").filter(|v| *v != Nm::from_raw_shim(300_000));
-    let microvia_drill = nm("uvia_drill").filter(|v| *v != Nm::from_raw_shim(100_000));
+    let microvia_diameter = nm("uvia_dia").filter(|v| *v != mm(0.3));
+    let microvia_drill = nm("uvia_drill").filter(|v| *v != mm(0.1));
     let (diff_pair_width, diff_pair_gap) = (nm("diff_pair_width"), nm("diff_pair_gap"));
     if microvia_diameter.is_none() && microvia_drill.is_none() && diff_pair_width.is_none() && diff_pair_gap.is_none() {
         return None;
@@ -1142,7 +1143,7 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
         b.min_groove_width_nm = v;
     }
     if let Some(v) = mm("max_error") {
-        b.max_error_nm = v.max(Nm::from_raw_shim(1));
+        b.max_error_nm = v.max(Nm::new(1));
     }
     if let Some(v) = rules.get("min_resolved_spokes").and_then(|v| v.as_u64()) {
         b.min_resolved_spokes = v.min(99) as u32;
@@ -1449,8 +1450,8 @@ pub(crate) fn footprint_courtyard_outlines(fp: &[Sexpr], side: Side) -> Vec<Vec<
     }
     for item in sexpr::find_all(fp, "fp_circle").filter(|it| is_crtyd(it)) {
         let (Some(c), Some(e)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
-        let r = ((e.x - c.x).raw_shim() as f64).hypot((e.y - c.y).raw_shim() as f64);
-        outlines.push((0..32).map(|i| { let t = i as f64 * std::f64::consts::TAU / 32.0; Point { x: c.x + Nm::from_raw_shim((r * t.cos()).round() as i64), y: c.y + Nm::from_raw_shim((r * t.sin()).round() as i64) } }).collect());
+        let r = ((e.x - c.x).as_f64()).hypot((e.y - c.y).as_f64());
+        outlines.push((0..32).map(|i| { let t = i as f64 * std::f64::consts::TAU / 32.0; Point { x: c.x + Nm::kiround(r * t.cos()), y: c.y + Nm::kiround(r * t.sin()) } }).collect());
     }
     let mut edges: Vec<(Point, Point)> = Vec::new();
     for item in sexpr::find_all(fp, "fp_line").filter(|it| is_crtyd(it)) {
@@ -1512,8 +1513,8 @@ fn footprint_courtyard_half(fp: &[Sexpr], side: Side) -> Option<(Nm, Nm)> {
     }
     for item in sexpr::find_all(fp, "fp_circle").filter(|it| is_crtyd(it)) {
         let (Some(c), Some(e)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
-        let r = (((e.x - c.x).raw_shim() as f64).powi(2) + ((e.y - c.y).raw_shim() as f64).powi(2)).sqrt().round() as i64;
-        pts.extend([Point { x: c.x - Nm::from_raw_shim(r), y: c.y }, Point { x: c.x + Nm::from_raw_shim(r), y: c.y }, Point { x: c.x, y: c.y - Nm::from_raw_shim(r) }, Point { x: c.x, y: c.y + Nm::from_raw_shim(r) }]);
+        let r = Nm::kiround(((e.x - c.x).as_f64().powi(2) + (e.y - c.y).as_f64().powi(2)).sqrt());
+        pts.extend([Point { x: c.x - r, y: c.y }, Point { x: c.x + r, y: c.y }, Point { x: c.x, y: c.y - r }, Point { x: c.x, y: c.y + r }]);
     }
     if pts.is_empty() {
         return None;
@@ -1867,8 +1868,8 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
 fn rotated_extent(rot_millideg: i64, size: (Nm, Nm)) -> (Nm, Nm) {
     let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    let (w, h) = (size.0.raw_shim() as f64, size.1.raw_shim() as f64);
-    (Nm::from_raw_shim((w * cos.abs() + h * sin.abs()).round() as i64), Nm::from_raw_shim((w * sin.abs() + h * cos.abs()).round() as i64))
+    let (w, h) = (size.0.as_f64(), size.1.as_f64());
+    (Nm::kiround(w * cos.abs() + h * sin.abs()), Nm::kiround(w * sin.abs() + h * cos.abs()))
 }
 
 /// A non-plated hole whose `(layers ..)` name no copper layer (the mounting holes and plugs of `*.Mask`-only pads): no pad copper, but a drilled hole that zones keep clear of
@@ -2019,7 +2020,7 @@ fn parse_text_on(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_u
     let unlocked = unlocked_legacy || sexpr::find(item, "unlocked").is_some_and(|u| sexpr::txt(u, 1).map_or(true, |v| v == "yes"));
     let effects = sexpr::find(item, "effects");
     let font = effects.and_then(|e| sexpr::find(e, "font"));
-    let size = font.and_then(|f| sexpr::find(f, "size")).map(|s| (mm_to_nm(sexpr::num(s, 1).unwrap_or(1.0)), mm_to_nm(sexpr::num(s, 2).unwrap_or(1.0)))).unwrap_or((Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)));
+    let size = font.and_then(|f| sexpr::find(f, "size")).map(|s| (mm_to_nm(sexpr::num(s, 1).unwrap_or(1.0)), mm_to_nm(sexpr::num(s, 2).unwrap_or(1.0)))).unwrap_or((mm(1.0), mm(1.0)));
     let thickness = font.and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(mm_to_nm).unwrap_or(Nm::ZERO);
     let bold = font.is_some_and(|f| f.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "bold")) || sexpr::find(f, "bold").is_some_and(|b| sexpr::txt(b, 1).map_or(true, |v| v == "yes")));
     let (mut halign, mut valign, mut mirror) = (0i8, 0i8, false);
@@ -2060,7 +2061,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let net = net_ref(sexpr::find(seg, "net"), net_names);
         // Net 0 (no net) stays as an empty `net`: KiCad still checks a
         // netless track (clearance, shorting, dangling) like any other.
-        let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::from_raw_shim(200_000));
+        let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(mm(0.2));
         let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e], arc_mid_offset: None });
         refs.tracks.push(ItemRef::of(seg));
@@ -2073,7 +2074,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
             continue;
         };
         let net = net_ref(sexpr::find(arc, "net"), net_names);
-        let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::from_raw_shim(200_000));
+        let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(mm(0.2));
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         notes.track_arcs_kept += 1;
         tracks.push(Track::new_arc(net, layer, width, s, m, e));
@@ -2087,8 +2088,8 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
     for via in sexpr::find_all(root, "via") {
         let Some(at) = sexpr::find(via, "at").and_then(xy_point) else { continue };
         let net = net_ref(sexpr::find(via, "net"), net_names);
-        let dia = sexpr::find(via, "size").and_then(|s| sexpr::num(s, 1)).map(mm_to_nm).unwrap_or(Nm::from_raw_shim(600_000));
-        let drill = sexpr::find(via, "drill").and_then(|d| sexpr::num(d, 1)).map(mm_to_nm).unwrap_or(Nm::from_raw_shim(300_000));
+        let dia = sexpr::find(via, "size").and_then(|s| sexpr::num(s, 1)).map(mm_to_nm).unwrap_or(mm(0.6));
+        let drill = sexpr::find(via, "drill").and_then(|d| sexpr::num(d, 1)).map(mm_to_nm).unwrap_or(mm(0.3));
         let (from_layer, to_layer) = sexpr::find(via, "layers")
             .map(|l| (sexpr::txt(l, 1).unwrap_or("F.Cu").to_string(), sexpr::txt(l, 2).unwrap_or("B.Cu").to_string()))
             .unwrap_or_else(|| ("F.Cu".into(), "B.Cu".into()));
@@ -2157,8 +2158,8 @@ fn import_drawings(root: &[Sexpr], net_names: &BTreeMap<i64, String>, refs: &mut
 }
 
 /// An item's `(stroke (width ..))`, or the `(width ..)` of the files before it (KiCad 6 and older), micrometres.
-fn stroke_width_of(item: &[Sexpr]) -> i64 {
-    (sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::ZERO)).raw_shim()
+fn stroke_width_of(item: &[Sexpr]) -> Nm {
+    sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::ZERO)
 }
 
 /// The arc of a file written before `LEGACY_ARC_FORMATTING` (20210925), `(start CENTER) (end ARC_START) (angle A)` in degrees, as the
@@ -2167,8 +2168,8 @@ fn stroke_width_of(item: &[Sexpr]) -> i64 {
 pub(crate) fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point, Point, Point) {
     let turn = |deg: f64| -> Point {
         let (s, c) = deg.to_radians().sin_cos();
-        let (dx, dy) = ((start.x - center.x).raw_shim() as f64, (start.y - center.y).raw_shim() as f64);
-        Point { x: center.x + Nm::from_raw_shim((dx * c - dy * s).round() as i64), y: center.y + Nm::from_raw_shim((dx * s + dy * c).round() as i64) }
+        let (dx, dy) = ((start.x - center.x).as_f64(), (start.y - center.y).as_f64());
+        Point { x: center.x + Nm::kiround(dx * c - dy * s), y: center.y + Nm::kiround(dx * s + dy * c) }
     };
     (start, turn(angle_deg / 2.0), turn(angle_deg))
 }
@@ -2190,25 +2191,25 @@ pub(crate) fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Poi
     let pt = |name: &str| sexpr::find(item, name).and_then(xy_point).map(&at);
     let (layer, stroke_width, filled) = (layer_of(item), stroke_width_of(item), filled_of(item));
     Some(match tag {
-        "gr_line" => Shape::Segment { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: pt("start")?, end: pt("end")? },
+        "gr_line" => Shape::Segment { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
         "gr_arc" => match sexpr::find(item, "angle").and_then(|a| sexpr::num(a, 1)).filter(|_| sexpr::find(item, "mid").is_none()) {
             // The legacy grammar: `start` is the centre and `end` the start of the arc.
             Some(angle) => {
                 let (start, mid, end) = legacy_arc(pt("start")?, pt("end")?, angle);
-                Shape::Arc { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start, mid, end }
+                Shape::Arc { id: String::new(), layer, stroke_width, filled, start, mid, end }
             }
-            None => Shape::Arc { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: pt("start")?, mid: pt("mid")?, end: pt("end")? },
+            None => Shape::Arc { id: String::new(), layer, stroke_width, filled, start: pt("start")?, mid: pt("mid")?, end: pt("end")? },
         },
-        "gr_rect" => Shape::Rect { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: pt("start")?, end: pt("end")? },
-        "gr_circle" => Shape::Circle { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, center: pt("center")?, end: pt("end")? },
-        "gr_poly" => Shape::Polygon { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, pts: poly_points(item)?.into_iter().map(&at).collect() },
+        "gr_rect" => Shape::Rect { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
+        "gr_circle" => Shape::Circle { id: String::new(), layer, stroke_width, filled, center: pt("center")?, end: pt("end")? },
+        "gr_poly" => Shape::Polygon { id: String::new(), layer, stroke_width, filled, pts: poly_points(item)?.into_iter().map(&at).collect() },
         // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`), never filled. The four points as they are (`parsePCB_SHAPE`,
         // `case T_pts` then `SetStart`, `SetBezierC1`, `SetBezierC2`, `SetEnd`): a control point on an end point, which KiCad's curve tool leaves until it is dragged, is no
         // repeated point to drop as in a polygon.
         "gr_curve" => {
             let pts: Vec<Point> = sexpr::find(item, "pts")?.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l) == Some("xy")).filter_map(xy_point).map(&at).collect();
             let [start, c1, c2, end] = pts[..] else { return None };
-            Shape::Bezier { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled: false, start, c1, c2, end }
+            Shape::Bezier { id: String::new(), layer, stroke_width, filled: false, start, c1, c2, end }
         }
         _ => return None,
     })
@@ -2236,12 +2237,12 @@ fn import_outline(shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNo
         return (Vec::new(), false, None);
     }
 
-    let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_NM.raw_shim() as f64, edge::CHAINING_EPSILON_NM, true);
+    let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_NM.as_f64(), edge::CHAINING_EPSILON_NM, true);
     let one_loop = chained && polys.outline_count() == 1 && !polys.has_holes();
     let line_widths: std::collections::BTreeSet<Nm> = items.iter().filter_map(|s| if let Shape::Segment { stroke_width, .. } = s { Some(*stroke_width) } else { None }).collect();
     if one_loop && items.iter().all(|s| matches!(s, Shape::Segment { .. })) && line_widths.len() == 1 {
         // The loop, in the order its sides chain; the sides themselves are not kept.
-        let ring: Vec<Point> = polys.outline(0).iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect();
+        let ring: Vec<Point> = polys.outline(0).iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect();
         let keep: Vec<bool> = shapes.iter().map(|s| !edge::is_edge_cuts(s)).collect();
         let mut k = keep.iter();
         shapes.retain(|_| *k.next().expect("one flag per shape"));
@@ -2385,7 +2386,7 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             }
             // `parseBoardUnits( T_island_area_min ) * pcbIUScale.IU_PER_MM`: mm^2 in the file, nm^2 here.
             if let Some(v) = raw("island_area_min") {
-                zone.min_island_area = (mm_to_nm(v) * eda_model::units::NM_PER_MM).raw_shim();
+                zone.min_island_area = mm_to_nm(v).get() * eda_model::units::NM_PER_MM;
             }
             // `(smoothing none|chamfer|fillet)` and `(radius r)`; both are ignored for a rule area (`parseZONE`).
             let smoothing = sexpr::find(f, "smoothing").and_then(|v| sexpr::txt(v, 1));
@@ -2477,7 +2478,7 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
                 let (start, mid, end) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "mid").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point));
                 match (start, mid, end) {
                     (Some(s), Some(m), Some(e)) => {
-                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_NM.raw_shim() as f64) {
+                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_NM.as_f64()) {
                             push(pt, &mut out);
                         }
                     }
@@ -2497,6 +2498,7 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use eda_model::ir::TextJustify;
 
@@ -2545,7 +2547,7 @@ mod tests {
         assert_eq!(new.solder_mask_margin, Some(Nm::ZERO), "{new:?}");
         assert_eq!(new.tokens, ["(solder_paste_margin 0)", "(solder_paste_margin_ratio 0)"]);
         let nonzero = extra(&board("20240108", "(solder_mask_margin 0.02) (solder_paste_margin -0.01)"));
-        assert_eq!((nonzero.solder_mask_margin, nonzero.tokens), (Some(Nm::from_raw_shim(20_000)), vec!["(solder_paste_margin -0.01)".to_string()]));
+        assert_eq!((nonzero.solder_mask_margin, nonzero.tokens), (Some(mm(0.02)), vec!["(solder_paste_margin -0.01)".to_string()]));
     }
 
     /// A polygon's `(arc (start ..) (mid ..) (end ..))` is the arc, flattened as KiCad flattens it (5 micrometres from the curve), and no longer the chord between its
@@ -2569,13 +2571,13 @@ mod tests {
         assert!(pts.len() > 16, "{} points", pts.len());
         // Every point sits on one of the four circles, within the 5 micrometres (5000 nm) the flattening is held to, and the ends of the arcs are exact.
         let centres = [(5_000_000.0, 1_000_000.0), (5_000_000.0, 3_000_000.0), (1_000_000.0, 3_000_000.0), (1_000_000.0, 1_000_000.0)];
-        let on_arc = |p: &Point| centres.iter().any(|c| ((p.x.raw_shim() as f64 - c.0).hypot(p.y.raw_shim() as f64 - c.1) - 1_000_000.0).abs() <= 5_000.0);
+        let on_arc = |p: &Point| centres.iter().any(|c| ((p.x.as_f64() - c.0).hypot(p.y.as_f64() - c.1) - 1_000_000.0).abs() <= 5_000.0);
         assert!(pts.iter().all(on_arc), "{pts:?}");
-        for exact in [Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(4_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(4_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] {
+        for exact in [Point { x: mm(5.0), y: Nm::ZERO }, Point { x: mm(6.0), y: mm(1.0) }, Point { x: mm(6.0), y: mm(3.0) }, Point { x: mm(5.0), y: mm(4.0) }, Point { x: mm(1.0), y: mm(4.0) }, Point { x: Nm::ZERO, y: mm(3.0) }, Point { x: Nm::ZERO, y: mm(1.0) }, Point { x: mm(1.0), y: Nm::ZERO }] {
             assert!(pts.contains(&exact), "{exact:?} in {pts:?}");
         }
         // The area is the rounded rectangle's, 24 - (4 - pi) = 23.14 mm^2; the chords of the four arcs would leave 22.
-        let area: f64 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x.raw_shim() as f64 * b.y.raw_shim() as f64 - b.x.raw_shim() as f64 * a.y.raw_shim() as f64 }).sum::<f64>().abs() / 2.0 / 1.0e12;
+        let area: f64 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x.as_f64() * b.y.as_f64() - b.x.as_f64() * a.y.as_f64() }).sum::<f64>().abs() / 2.0 / 1.0e12;
         assert!((area - (24.0 - (4.0 - std::f64::consts::PI))).abs() < 0.01, "area {area}");
         // An arc with no middle is its chord, as before.
         let broken = crate::sexpr::parse("(gr_poly (pts (xy 0 0) (arc (start 1 0) (end 1 1)) (xy 0 1)))").unwrap();
@@ -2587,10 +2589,10 @@ mod tests {
     #[test]
     fn a_legacy_arc_is_three_points_turned_about_its_centre() {
         let p = |x, y| Point { x, y };
-        assert_eq!(legacy_arc(p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000)), 90.0), (p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(18_535_534), Nm::from_raw_shim(8_535_534)), p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(10_000_000))));
-        assert_eq!(legacy_arc(p(Nm::from_raw_shim(15_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000)), -90.0), (p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(18_535_534), Nm::from_raw_shim(1_464_466)), p(Nm::from_raw_shim(15_000_000), Nm::ZERO)));
+        assert_eq!(legacy_arc(p(mm(15.0), mm(5.0)), p(mm(20.0), mm(5.0)), 90.0), (p(mm(20.0), mm(5.0)), p(Nm::new(18_535_534), Nm::new(8_535_534)), p(mm(15.0), mm(10.0))));
+        assert_eq!(legacy_arc(p(mm(15.0), mm(5.0)), p(mm(20.0), mm(5.0)), -90.0), (p(mm(20.0), mm(5.0)), p(Nm::new(18_535_534), Nm::new(1_464_466)), p(mm(15.0), Nm::ZERO)));
         // A half turn goes through the far side of the circle: the middle is a quarter turn on.
-        assert_eq!(legacy_arc(p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1_000_000), Nm::ZERO), 180.0), (p(Nm::from_raw_shim(1_000_000), Nm::ZERO), p(Nm::ZERO, Nm::from_raw_shim(1_000_000)), p(Nm::from_raw_shim(-1_000_000), Nm::ZERO)));
+        assert_eq!(legacy_arc(p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO), 180.0), (p(mm(1.0), Nm::ZERO), p(Nm::ZERO, mm(1.0)), p(mm(-1.0), Nm::ZERO)));
     }
 
     #[test]
@@ -2627,11 +2629,11 @@ mod tests {
         let pad = parse_pad_geometry(pad_sexpr.as_list().unwrap(), Side::Bottom, fp_rot, &mut notes).expect("pad parses");
         // Pre-mirror local frame (what `to_board` expects to mirror itself):
         // negating the file's raw -0.5975mm gives +597.5um -> rounds to 598.
-        assert_eq!(pad.at, (Nm::from_raw_shim(597_500), Nm::ZERO), "importer must undo the file's own back-side mirror, not pass x through as-is");
+        assert_eq!(pad.at, (Nm::new(597_500), Nm::ZERO), "importer must undo the file's own back-side mirror, not pass x through as-is");
 
-        let fp = FootprintInstance { id: "R34".into(), at: Point { x: Nm::from_raw_shim(114_800_000), y: Nm::from_raw_shim(137_800_000) }, rot: fp_rot, side: Side::Bottom, label: Default::default() };
+        let fp = FootprintInstance { id: "R34".into(), at: Point { x: mm(114.8), y: mm(137.8) }, rot: fp_rot, side: Side::Bottom, label: Default::default() };
         let board_pos = eda_model::footprint::to_board(&fp, pad.at);
-        assert_eq!(board_pos, Point { x: Nm::from_raw_shim(114_800_000), y: Nm::from_raw_shim(138_397_500) }, "must match kicad-cli's own reported absolute pad position (114.8, 138.3975mm), not the other pad's position 1.196mm away");
+        assert_eq!(board_pos, Point { x: mm(114.8), y: Nm::new(138_397_500) }, "must match kicad-cli's own reported absolute pad position (114.8, 138.3975mm), not the other pad's position 1.196mm away");
     }
 
     /// GAPS.md #3's second over-firing source: `courtyards_overlap` was a
@@ -2658,7 +2660,7 @@ mod tests {
         // Top side: no mirror, so the asymmetric +x reach (2mm) and the -x
         // reach (0.5mm) land exactly where they're written.
         let (hw, hh) = footprint_courtyard_half(body, Side::Top).expect("courtyard found");
-        assert_eq!((hw, hh), (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(500_000)), "symmetric half-extent must enclose the farthest point on each axis: max(|{{-500,2000}}|)=2000, max(|{{-500,500}}|)=500");
+        assert_eq!((hw, hh), (mm(2.0), mm(0.5)), "symmetric half-extent must enclose the farthest point on each axis: max(|{{-500,2000}}|)=2000, max(|{{-500,500}}|)=500");
 
         // Back side: the same raw numbers must be un-mirrored (x negated)
         // before taking the half-extent, exactly like a pad's `at` -- the
@@ -2669,7 +2671,7 @@ mod tests {
         // check while leaving the *centre* wrong for a caller that (unlike
         // this one) cares about which side the shroud is on.
         let (hw_b, hh_b) = footprint_courtyard_half(body, Side::Bottom).expect("courtyard found");
-        assert_eq!((hw_b, hh_b), (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(500_000)));
+        assert_eq!((hw_b, hh_b), (mm(2.0), mm(0.5)));
     }
 
     #[test]
@@ -2692,8 +2694,8 @@ mod tests {
     #[test]
     fn dedup_footprint_key_gives_mixed_side_instances_of_one_lib_id_separate_slots() {
         let mut explicit: BTreeMap<String, Footprint> = BTreeMap::new();
-        let top_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::from_raw_shim(-598_000), Nm::ZERO), size: (Nm::from_raw_shim(715_000), Nm::from_raw_shim(640_000)), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
-        let bottom_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::from_raw_shim(598_000), Nm::ZERO), size: (Nm::from_raw_shim(715_000), Nm::from_raw_shim(640_000)), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let top_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (mm(-0.598), Nm::ZERO), size: (mm(0.715), mm(0.64)), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let bottom_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (mm(0.598), Nm::ZERO), size: (mm(0.715), mm(0.64)), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
 
         let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
         let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[], &Default::default());
@@ -2743,9 +2745,9 @@ mod tests {
 
     #[test]
     fn tessellated_arc_keeps_exact_endpoints() {
-        let start = Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO };
-        let mid = Point { x: Nm::from_raw_shim(7_071_000), y: Nm::from_raw_shim(7_071_000) };
-        let end = Point { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) };
+        let start = Point { x: mm(10.0), y: Nm::ZERO };
+        let mid = Point { x: mm(7.071), y: mm(7.071) };
+        let end = Point { x: Nm::ZERO, y: mm(10.0) };
         let pts = eda_model::ir::tessellate_arc(start, mid, end, eda_model::ir::TRACK_ARC_SEGMENTS);
         assert_eq!(*pts.first().unwrap(), start);
         assert_eq!(*pts.last().unwrap(), end);
@@ -2775,10 +2777,10 @@ mod tests {
         assert_eq!(classes.len(), 2, "{classes:?}");
         assert_eq!(classes[0].name, "1kV");
         assert_eq!(classes[0].nets, vec!["/1kV".to_string()]);
-        assert_eq!(classes[0].clearance, Some(Nm::from_raw_shim(2_400_000)));
-        assert_eq!(classes[0].track_width, Some(Nm::from_raw_shim(500_000)));
-        assert_eq!(classes[0].via_diameter, Some(Nm::from_raw_shim(1_000_000)));
-        assert_eq!(classes[0].via_drill, Some(Nm::from_raw_shim(500_000)));
+        assert_eq!(classes[0].clearance, Some(mm(2.4)));
+        assert_eq!(classes[0].track_width, Some(mm(0.5)));
+        assert_eq!(classes[0].via_diameter, Some(mm(1.0)));
+        assert_eq!(classes[0].via_drill, Some(mm(0.5)));
         assert_eq!(classes[1].name, "500V");
         assert_eq!(classes[1].nets, vec!["/500Vpp".to_string(), "/500Vpn".to_string()], "a class can own more than one pattern");
     }
@@ -2798,10 +2800,10 @@ mod tests {
         let mut model = eda_model::ConstraintModel::default();
         let before = model.board.clearance;
         merge_project_net_classes(&mut model, SAMPLE_PROJECT_JSON);
-        assert_eq!(model.board.clearance, Nm::from_raw_shim(150_000), "Default class's 0.15mm clearance, not this crate's own placeholder default ({before})");
-        assert_eq!(model.board.track_width, Nm::from_raw_shim(250_000));
-        assert_eq!(model.board.via_diameter, Nm::from_raw_shim(600_000));
-        assert_eq!(model.board.via_drill, Nm::from_raw_shim(300_000));
+        assert_eq!(model.board.clearance, mm(0.15), "Default class's 0.15mm clearance, not this crate's own placeholder default ({before})");
+        assert_eq!(model.board.track_width, mm(0.25));
+        assert_eq!(model.board.via_diameter, mm(0.6));
+        assert_eq!(model.board.via_drill, mm(0.3));
     }
 
     /// The nets a schematic's net class labels assign are in the project as `netclass_assignments` (net name -> class names), beside the patterns: a net is in the classes of both
@@ -2828,7 +2830,7 @@ mod tests {
         let mut model = eda_model::ConstraintModel::default();
         merge_project_net_classes(&mut model, project);
         assert_eq!(model.board.matching_classes("Net-(R1-Pad2)").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["CLASS1", "ONLYALABEL"]);
-        assert_eq!(model.board.clearance, Nm::from_raw_shim(200_000));
+        assert_eq!(model.board.clearance, mm(0.2));
     }
 
     #[test]
@@ -2869,16 +2871,16 @@ mod tests {
     fn merge_project_design_rules_reads_the_board_wide_minimums() {
         let mut model = eda_model::ConstraintModel::default();
         merge_project_design_rules(&mut model, SAMPLE_DESIGN_RULES_JSON);
-        assert_eq!(model.board.track_width_min_nm, Nm::from_raw_shim(101_600), "0.1016 mm is 101600 nm");
+        assert_eq!(model.board.track_width_min_nm, Nm::new(101_600), "0.1016 mm is 101600 nm");
         assert_eq!(model.board.min_clearance_nm, Nm::ZERO);
-        assert_eq!(model.board.via_diameter_min_nm, Nm::from_raw_shim(450_000));
-        assert_eq!(model.board.via_drill_min_nm, Nm::from_raw_shim(200_000));
-        assert_eq!(model.board.hole_to_hole_min_nm, Nm::from_raw_shim(250_000));
-        assert_eq!(model.board.hole_clearance_nm, Nm::from_raw_shim(254_000));
-        assert_eq!(model.board.annular_width_min_nm, Nm::from_raw_shim(125_000));
-        assert_eq!(model.board.silk_clearance_nm, Nm::from_raw_shim(150_000));
-        assert_eq!(model.board.min_silk_text_height_nm, Nm::from_raw_shim(800_000));
-        assert_eq!(model.board.min_silk_text_thickness_nm, Nm::from_raw_shim(120_000));
+        assert_eq!(model.board.via_diameter_min_nm, mm(0.45));
+        assert_eq!(model.board.via_drill_min_nm, mm(0.2));
+        assert_eq!(model.board.hole_to_hole_min_nm, mm(0.25));
+        assert_eq!(model.board.hole_clearance_nm, mm(0.254));
+        assert_eq!(model.board.annular_width_min_nm, mm(0.125));
+        assert_eq!(model.board.silk_clearance_nm, mm(0.15));
+        assert_eq!(model.board.min_silk_text_height_nm, mm(0.8));
+        assert_eq!(model.board.min_silk_text_thickness_nm, mm(0.12));
     }
 
     #[test]
@@ -2908,12 +2910,12 @@ mod tests {
             (net 0 "")
         )"#;
         let (_design, model, _notes) = import_kicad_pcb(text).expect("parses");
-        assert_eq!(model.board.track_width_min_nm, Nm::from_raw_shim(150_000));
-        assert_eq!(model.board.min_clearance_nm, Nm::from_raw_shim(100_000));
-        assert_eq!(model.board.via_diameter_min_nm, Nm::from_raw_shim(400_000));
-        assert_eq!(model.board.via_drill_min_nm, Nm::from_raw_shim(250_000), "falls back to the legacy via_min_drill token when through_hole_min is absent");
-        assert_eq!(model.board.hole_to_hole_min_nm, Nm::from_raw_shim(200_000));
-        assert_eq!(model.board.annular_width_min_nm, Nm::from_raw_shim(90_000));
+        assert_eq!(model.board.track_width_min_nm, mm(0.15));
+        assert_eq!(model.board.min_clearance_nm, mm(0.1));
+        assert_eq!(model.board.via_diameter_min_nm, mm(0.4));
+        assert_eq!(model.board.via_drill_min_nm, mm(0.25), "falls back to the legacy via_min_drill token when through_hole_min is absent");
+        assert_eq!(model.board.hole_to_hole_min_nm, mm(0.2));
+        assert_eq!(model.board.annular_width_min_nm, mm(0.09));
     }
 
     #[test]
@@ -2933,8 +2935,8 @@ mod tests {
         )"#;
         let (design, model, notes) = import_kicad_pcb(text).expect("parses");
         assert_eq!(model.board.layers, vec!["F.Cu".to_string(), "B.Cu".to_string()]);
-        assert_eq!(model.board.track_width, Nm::from_raw_shim(250_000));
-        assert_eq!(model.board.clearance, Nm::from_raw_shim(200_000));
+        assert_eq!(model.board.track_width, mm(0.25));
+        assert_eq!(model.board.clearance, mm(0.2));
         assert_eq!(model.parts.len(), 1);
         assert_eq!(model.parts[0].reference, "R1");
         assert_eq!(model.footprints.len(), 1);
@@ -2943,7 +2945,7 @@ mod tests {
         assert_eq!(model.nets[0].pins, vec!["R1.1".to_string(), "R1.2".to_string()]);
         let pl = design.placement.unwrap();
         assert_eq!(pl.footprints.len(), 1);
-        assert_eq!(pl.footprints[0].at, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) });
+        assert_eq!(pl.footprints[0].at, Point { x: mm(10.0), y: mm(10.0) });
         assert_eq!(pl.outline.len(), 4);
         assert_eq!(notes.outline_source, "lines");
         assert!(!notes.outline_open);
@@ -2977,9 +2979,9 @@ mod tests {
         let seg = dr.shapes.iter().find(|s| s.layer() == "F.SilkS" && matches!(s, Shape::Segment { .. })).expect("segment on F.SilkS");
         assert!(!seg.id().is_empty());
         let Shape::Segment { stroke_width, start, end, .. } = seg else { unreachable!() };
-        assert_eq!(*stroke_width, Nm::from_raw_shim(150_000));
-        assert_eq!(*start, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) });
-        assert_eq!(*end, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(1_000_000) });
+        assert_eq!(*stroke_width, mm(0.15));
+        assert_eq!(*start, Point { x: mm(1.0), y: mm(1.0) });
+        assert_eq!(*end, Point { x: mm(5.0), y: mm(1.0) });
 
         let rect = dr.shapes.iter().find(|s| s.layer() == "F.Fab").expect("rect on F.Fab");
         assert!(matches!(rect, Shape::Rect { filled: true, .. }), "{rect:?}");
@@ -2996,11 +2998,11 @@ mod tests {
         let t = &dr.texts[0];
         assert!(!t.id.is_empty());
         assert_eq!(t.content, "REV A");
-        assert_eq!(t.at, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(3_000_000) });
+        assert_eq!(t.at, Point { x: mm(3.0), y: mm(3.0) });
         assert_eq!(t.angle, 90_000);
         assert_eq!(t.layer, "F.SilkS");
-        assert_eq!(t.size_nm, Nm::from_raw_shim(1_000_000));
-        assert_eq!(t.stroke_width, Nm::from_raw_shim(150_000));
+        assert_eq!(t.size_nm, mm(1.0));
+        assert_eq!(t.stroke_width, mm(0.15));
         assert_eq!(t.justify, TextJustify::Left);
         assert!(t.mirror);
     }
@@ -3021,8 +3023,8 @@ mod tests {
         assert_eq!(dr.shapes.len(), 1);
         let Shape::Bezier { layer, stroke_width, start, c1, c2, end, .. } = &dr.shapes[0] else { panic!("{:?}", dr.shapes[0]) };
         assert_eq!(layer, "F.SilkS");
-        assert_eq!(*stroke_width, Nm::from_raw_shim(150_000));
-        assert_eq!((*start, *c1, *c2, *end), (Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(1_000_000) }));
+        assert_eq!(*stroke_width, mm(0.15));
+        assert_eq!((*start, *c1, *c2, *end), (Point { x: mm(1.0), y: mm(1.0) }, Point { x: mm(1.0), y: mm(3.0) }, Point { x: mm(4.0), y: mm(3.0) }, Point { x: mm(4.0), y: mm(1.0) }));
     }
 
     /// `(setup (pad_to_mask_clearance ..) (solder_mask_min_width ..)
@@ -3041,7 +3043,7 @@ mod tests {
         };
         let (_, model, _) = import_kicad_pcb(&text("(tenting (front yes) (back no))")).expect("parses");
         let m = &model.board.solder_mask;
-        assert_eq!((m.expansion_nm, m.min_width_nm), (Nm::from_raw_shim(50_000), Nm::from_raw_shim(100_000)));
+        assert_eq!((m.expansion_nm, m.min_width_nm), (mm(0.05), mm(0.1)));
         assert!(m.allow_bridges_in_footprints);
         assert!(m.tent_vias_front && !m.tent_vias_back);
 
@@ -3054,7 +3056,7 @@ mod tests {
 
         let (_, mut with_pro, _) = import_kicad_pcb(&text("(tenting (front yes) (back yes))")).expect("parses");
         merge_project_design_rules(&mut with_pro, r#"{"board":{"design_settings":{"rules":{"solder_mask_to_copper_clearance":0.07}}}}"#);
-        assert_eq!(with_pro.board.solder_mask.to_copper_clearance_nm, Nm::from_raw_shim(70_000));
+        assert_eq!(with_pro.board.solder_mask.to_copper_clearance_nm, mm(0.07));
     }
 
     /// Per-pad layer sets and mask margins, footprint margin / allow-bridges /
@@ -3086,11 +3088,11 @@ mod tests {
         let inst = design.placement.as_ref().expect("placement").footprints.iter().find(|f| f.id == "U1").expect("U1").clone();
         let dr = design.drawings.expect("drawings");
         let fp = dr.footprint_extras.iter().find(|e| e.id == "U1").expect("extra for U1");
-        assert_eq!(fp.solder_mask_margin, Some(Nm::from_raw_shim(30_000)));
+        assert_eq!(fp.solder_mask_margin, Some(mm(0.03)));
         assert!(fp.allow_soldermask_bridges);
         assert_eq!(fp.net_tie_pad_groups, vec!["1, 2".to_string()]);
         assert_eq!(fp.pads.len(), 2);
-        assert_eq!(fp.pads[0].solder_mask_margin, Some(Nm::from_raw_shim(20_000)));
+        assert_eq!(fp.pads[0].solder_mask_margin, Some(mm(0.02)));
         assert_eq!(fp.pads[0].layers, vec!["F.Cu".to_string(), "F.Mask".to_string(), "F.SilkS".to_string()]);
         assert_eq!(fp.pads[1].layers, vec!["B.Cu".to_string(), "B.Mask".to_string(), "F.Cu".to_string(), "F.Mask".to_string()]);
         assert_eq!(fp.pads[1].solder_mask_margin, None);
@@ -3101,10 +3103,10 @@ mod tests {
         let art = &model.footprints.iter().find(|f| f.name == "lib:fp").expect("the footprint").art;
         assert_eq!(art.shapes.len(), 3);
         let silk = art.shapes.iter().find(|g| g.shape.layer() == "F.SilkS").expect("silk line");
-        assert_eq!(silk.shape.points(), vec![Point { x: Nm::from_raw_shim(-1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }]);
-        assert_eq!(silk.shape.stroke_width(), Nm::from_raw_shim(120_000));
+        assert_eq!(silk.shape.points(), vec![Point { x: mm(-1.0), y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }]);
+        assert_eq!(silk.shape.stroke_width(), mm(0.12));
         // Placed rotated 90 deg (file angle 90 = counter-clockwise) about (10, 20): local (-1, 0) -> (10, 21).
-        assert_eq!(silk.placed(&inst).shape.points(), vec![Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(21_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(19_000_000) }]);
+        assert_eq!(silk.placed(&inst).shape.points(), vec![Point { x: mm(10.0), y: mm(21.0) }, Point { x: mm(10.0), y: mm(19.0) }]);
         let mask = art.shapes.iter().find(|g| g.shape.layer() == "F.Mask").expect("mask rect");
         assert!(matches!(&mask.shape, Shape::Rect { filled: true, .. } | Shape::Polygon { filled: true, .. }), "{:?}", mask.shape);
         assert!(art.shapes.iter().any(|g| g.shape.layer() == "F.Fab"));
@@ -3114,7 +3116,7 @@ mod tests {
 
         // Via tenting: an explicit `no` is kept, `none` inherits (no entry).
         assert_eq!(dr.via_tenting.len(), 1);
-        assert_eq!((dr.via_tenting[0].at, dr.via_tenting[0].front, dr.via_tenting[0].back), (Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Some(false), None));
+        assert_eq!((dr.via_tenting[0].at, dr.via_tenting[0].front, dr.via_tenting[0].back), (Point { x: mm(5.0), y: mm(5.0) }, Some(false), None));
     }
 
     /// Footprint text and `gr_text` on silk: the footprint's Reference and Value are its fields (hidden one hidden, back-side anchor
@@ -3141,11 +3143,11 @@ mod tests {
         let t = edit.value.as_ref().expect("Value");
         assert_eq!((t.layer.as_str(), t.visible, t.mirror, t.keep_upright, t.board_angle(&inst)), ("B.SilkS", true, true, true, 180_000));
         // Back footprint: the file's local x is already mirrored, so +3.7 lands to the right.
-        assert_eq!(t.board_position(&inst), Point { x: Nm::from_raw_shim(13_700_000), y: Nm::from_raw_shim(10_000_000) });
+        assert_eq!(t.board_position(&inst), Point { x: mm(13.7), y: mm(10.0) });
         assert_eq!(dr.silk_texts.len(), 1);
         let g = &dr.silk_texts[0];
         assert_eq!(g.text, "REV v2\nline2");
-        assert_eq!((g.size, g.thickness, g.halign, g.valign, g.keep_upright, g.bold), ((Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(1_200_000)), Nm::from_raw_shim(200_000), -1, 1, false, true));
+        assert_eq!((g.size, g.thickness, g.halign, g.valign, g.keep_upright, g.bold), ((mm(1.5), mm(1.2)), mm(0.2), -1, 1, false, true));
         assert_eq!(g.angle_file_mdeg, 90_000);
     }
     /// A KiCad 10 file lists no nets at the top and names a net where it is used (`PCB_IO_KICAD_SEXPR_PARSER::parseNet`): the net of a pad, a track, a via or a zone is the

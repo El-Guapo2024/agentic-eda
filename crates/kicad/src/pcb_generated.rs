@@ -62,9 +62,9 @@ pub(crate) fn line_prop(out: &mut String, key: &str, pts: &[Point]) {
 }
 
 fn range_props(out: &mut String, key: &str, r: &TargetRange) {
-    writeln!(out, "\t\t({key} {})", mm(Nm::from_raw_shim(r.opt))).unwrap();
-    writeln!(out, "\t\t({key}_max {})", mm(Nm::from_raw_shim(r.max))).unwrap();
-    writeln!(out, "\t\t({key}_min {})", mm(Nm::from_raw_shim(r.min))).unwrap();
+    writeln!(out, "\t\t({key} {})", mm(Nm::new(r.opt))).unwrap();
+    writeln!(out, "\t\t({key}_max {})", mm(Nm::new(r.max))).unwrap();
+    writeln!(out, "\t\t({key}_min {})", mm(Nm::new(r.min))).unwrap();
 }
 
 /// A time as the file keeps it: `set_iu` writes the internal unit (an attosecond) over a million, as a length is written over a million nanometres -- picoseconds.
@@ -109,7 +109,7 @@ pub(crate) fn write_generated(out: &mut String, patterns: &[TuningPattern], writ
         writeln!(out, "\t\t(last_netname {})", sexpr_str(&p.last_netname)).unwrap();
         writeln!(out, "\t\t(last_status {})", sexpr_str(if p.last_status.is_empty() { "tuned" } else { &p.last_status })).unwrap();
         writeln!(out, "\t\t(last_track_width {})", mm(p.last_track_width)).unwrap();
-        writeln!(out, "\t\t(last_tuning_length {})", fmt_g10(p.last_tuning_length.raw_shim() as f64 / 1_000_000.0)).unwrap();
+        writeln!(out, "\t\t(last_tuning_length {})", fmt_g10(p.last_tuning_length.mm())).unwrap();
         writeln!(out, "\t\t(max_amplitude {})", mm(p.max_amplitude)).unwrap();
         writeln!(out, "\t\t(min_amplitude {})", mm(p.min_amplitude)).unwrap();
         writeln!(out, "\t\t(min_spacing {})", mm(p.spacing)).unwrap();
@@ -184,13 +184,13 @@ pub(crate) fn prop_line(list: &[Sexpr], key: &str) -> Vec<Point> {
 
 fn prop_range(list: &[Sexpr], key: &str, default: TargetRange) -> TargetRange {
     // `SetTargetLength( val )` gives a target its default tolerance, then the file's own minimum and maximum replace it
-    let opt = prop_nm(list, key).unwrap_or(Nm::from_raw_shim(default.opt));
+    let opt = prop_nm(list, key).unwrap_or(Nm::new(default.opt));
     let mut r = if opt == LENGTH_UNCONSTRAINED_NM { TargetRange::unconstrained() } else { TargetRange::around(opt) };
     if let Some(min) = prop_nm(list, &format!("{key}_min")) {
-        r.min = min.raw_shim();
+        r.min = min.get();
     }
     if let Some(max) = prop_nm(list, &format!("{key}_max")) {
-        r.max = max.raw_shim();
+        r.max = max.get();
     }
     r
 }
@@ -239,9 +239,9 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             origin,
             end,
             initial_side: prop_str(g, "initial_side").and_then(PatternSide::from_token).unwrap_or(PatternSide::Left),
-            min_amplitude: prop_nm(g, "min_amplitude").unwrap_or(Nm::from_raw_shim(200_000)),
-            max_amplitude: prop_nm(g, "max_amplitude").unwrap_or(Nm::from_raw_shim(1_000_000)),
-            spacing: prop_nm(g, "min_spacing").unwrap_or(Nm::from_raw_shim(600_000)),
+            min_amplitude: prop_nm(g, "min_amplitude").unwrap_or(Nm::from_mm(0.2)),
+            max_amplitude: prop_nm(g, "max_amplitude").unwrap_or(Nm::from_mm(1.0)),
+            spacing: prop_nm(g, "min_spacing").unwrap_or(Nm::from_mm(0.6)),
             corner_radius_percent: prop_num(g, "corner_radius_percent").map(|v| v.round().clamp(0.0, 100.0) as u32).unwrap_or(80),
             rounded: prop_bool(g, "rounded").unwrap_or(true),
             single_sided: prop_bool(g, "single_sided").unwrap_or(false),
@@ -256,7 +256,7 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             base_line_coupled: prop_line(g, "base_line_coupled"),
             last_track_width: prop_nm(g, "last_track_width").unwrap_or(Nm::ZERO),
             last_diff_pair_gap: prop_nm(g, "last_diff_pair_gap").unwrap_or(Nm::ZERO),
-            last_tuning_length: Nm::from_raw_shim(prop_num(g, "last_tuning_length").map(|mm| (mm * 1_000_000.0).round() as i64).unwrap_or(0)),
+            last_tuning_length: prop_num(g, "last_tuning_length").map(|mm| Nm::kiround(mm * 1_000_000.0)).unwrap_or(Nm::ZERO),
             last_tuning_delay: 0,
             last_netname: prop_str(g, "last_netname").unwrap_or("").to_string(),
             last_status: prop_str(g, "last_status").unwrap_or("tuned").to_string(),
@@ -283,8 +283,8 @@ pub(crate) fn attach_patterns(design: &mut Design, root: &[Sexpr], refs: &crate:
 mod tests {
     use super::*;
 
-    fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+    fn p(x: Nm, y: Nm) -> Point {
+        Point { x, y }
     }
 
     fn pattern() -> TuningPattern {
@@ -292,12 +292,12 @@ mod tests {
             id: "tun_1".into(),
             mode: TuningMode::DiffPair,
             layer: "F.Cu".into(),
-            origin: p(115_571_000, 50_140_000),
-            end: p(123_137_000, 50_140_000),
+            origin: p(Nm::from_mm(115.571), Nm::from_mm(50.14)),
+            end: p(Nm::from_mm(123.137), Nm::from_mm(50.14)),
             initial_side: PatternSide::Right,
-            min_amplitude: Nm::from_raw_shim(200_000),
-            max_amplitude: Nm::from_raw_shim(1_500_000),
-            spacing: Nm::from_raw_shim(1_000_000),
+            min_amplitude: Nm::from_mm(0.2),
+            max_amplitude: Nm::from_mm(1.5),
+            spacing: Nm::from_mm(1.0),
             corner_radius_percent: 100,
             rounded: false,
             single_sided: true,
@@ -307,11 +307,11 @@ mod tests {
             is_time_domain: false,
             target_delay: TargetRange::delay_unconstrained(),
             target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
-            base_line: vec![p(115_571_000, 50_140_000), p(123_137_000, 50_140_000)],
-            base_line_coupled: vec![p(115_571_000, 50_540_000), p(123_137_000, 50_540_000)],
-            last_track_width: Nm::from_raw_shim(200_000),
-            last_diff_pair_gap: Nm::from_raw_shim(180_000),
-            last_tuning_length: Nm::from_raw_shim(99_987_654),
+            base_line: vec![p(Nm::from_mm(115.571), Nm::from_mm(50.14)), p(Nm::from_mm(123.137), Nm::from_mm(50.14))],
+            base_line_coupled: vec![p(Nm::from_mm(115.571), Nm::from_mm(50.54)), p(Nm::from_mm(123.137), Nm::from_mm(50.54))],
+            last_track_width: Nm::from_mm(0.2),
+            last_diff_pair_gap: Nm::from_mm(0.18),
+            last_tuning_length: Nm::new(99_987_654),
             last_tuning_delay: 0,
             last_netname: "USB_P".into(),
             last_status: "too_short".into(),
@@ -375,9 +375,9 @@ mod tests {
         let back = import_patterns(tree.as_list().unwrap(), &ids);
         assert_eq!(back.len(), 1);
         let t = &back[0];
-        assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(600_000), 100), "min_amplitude takes MEANDER_SETTINGS' default");
+        assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", Nm::from_mm(2.0), Nm::from_mm(0.2), Nm::from_mm(0.6), 100), "min_amplitude takes MEANDER_SETTINGS' default");
         assert_eq!((t.target_length, t.last_status.as_str(), t.base_line.len(), t.member_ids.len()), (TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 }, "too_short", 2, 2));
-        assert_eq!((t.origin, t.end), (p(115_571_487, 50_140_000), p(123_137_350, 50_140_000)));
+        assert_eq!((t.origin, t.end), (p(Nm::new(115_571_487), Nm::from_mm(50.14)), p(Nm::new(123_137_350), Nm::from_mm(50.14))));
         // a pattern with no member of the board is a ghost
         assert!(import_patterns(tree.as_list().unwrap(), &BTreeMap::new()).is_empty());
     }

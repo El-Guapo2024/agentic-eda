@@ -1477,6 +1477,7 @@ pub fn evaluate_number(text: &str, unitless: bool) -> Result<(i64, Unit), Compil
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::Point;
@@ -1505,7 +1506,7 @@ mod tests {
         it.set("Orientation", Prop::Double(90.0));
         it.footprint = Some(Rc::new(FootprintFacts { reference: "U1".into(), fpid: "Package:QFN".into(), fields: vec![("Value".into(), "MCU".into()), ("Supplier".into(), "ACME".into())], ..Default::default() }));
         it.plated = false;
-        it.position = Point { x: Nm::from_raw_shim(12_000_000), y: Nm::ZERO };
+        it.position = Point { x: mm(12.0), y: Nm::ZERO };
         Rc::new(it)
     }
 

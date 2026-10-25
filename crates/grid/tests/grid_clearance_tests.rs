@@ -9,6 +9,7 @@
 //! derived from that `kind`, so the cell advertised the pad rasterisation's
 //! half-cell extent (63 µm) instead of the track's real 100 µm.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_model::ir::Point;
 use eda_grid::grid::{Grid, Occ};
@@ -18,11 +19,11 @@ use eda_grid::grid::{Grid, Occ};
 fn hub_grid() -> Grid {
     let outline = vec![
         Point { x: Nm::ZERO, y: Nm::ZERO },
-        Point { x: Nm::from_raw_shim(40_000_000), y: Nm::ZERO },
-        Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(40_000_000) },
-        Point { x: Nm::ZERO, y: Nm::from_raw_shim(40_000_000) },
+        Point { x: mm(40.0), y: Nm::ZERO },
+        Point { x: mm(40.0), y: mm(40.0) },
+        Point { x: Nm::ZERO, y: mm(40.0) },
     ];
-    let mut g = Grid::with_widths(outline, Nm::from_raw_shim(127_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(600_000), 2);
+    let mut g = Grid::with_widths(outline, mm(0.127), mm(0.2), mm(0.2), mm(0.6), 2);
     // Every net these tests ask about has to exist on the board first.
     // `route_partial` rasterises every pad of every net before it asks the
     // grid a single passability question, so a net the grid has never seen

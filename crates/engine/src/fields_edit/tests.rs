@@ -1,3 +1,4 @@
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use super::*;
 use eda_model::{Part, Pin, PinKind};
@@ -43,7 +44,7 @@ fn a_page_position_is_stored_so_that_it_reads_back_at_the_same_place_for_every_t
     let m = model();
     for rot in [0, 90_000, 180_000, 270_000] {
         for mirrored in [false, true] {
-            let sch = sheet_of(resistor(Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(50_800_000) }, rot, mirrored));
+            let sch = sheet_of(resistor(Point { x: mm(50.8), y: mm(50.8) }, rot, mirrored));
             let ctx = OwnerCtx::new(&sch, &m, "R1").expect("the symbol");
             let old = ctx.current(&sch)[1].clone();
             for vertical in [false, true] {
@@ -65,12 +66,12 @@ fn a_page_offset_moves_the_stored_position_by_the_offset_taken_back_through_the_
     let m = model();
     for rot in [0, 90_000, 180_000, 270_000] {
         for mirrored in [false, true] {
-            let sch = sheet_of(resistor(Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(50_800_000) }, rot, mirrored));
+            let sch = sheet_of(resistor(Point { x: mm(50.8), y: mm(50.8) }, rot, mirrored));
             let ctx = OwnerCtx::new(&sch, &m, "R1").expect("the symbol");
             let old = ctx.current(&sch)[0].clone();
             let before = ctx.page(&old, "R1").at;
             let (dx, dy) = ctx.local_delta(2_540_000, -1_270_000);
-            let moved = FieldPlacement { dx: old.dx + Nm::from_raw_shim(dx), dy: old.dy + Nm::from_raw_shim(dy), ..old.clone() };
+            let moved = FieldPlacement { dx: old.dx + Nm::new(dx), dy: old.dy + Nm::new(dy), ..old.clone() };
             let after = ctx.page(&moved, "R1").at;
             assert!((after.0 - before.0 - 2_540_000.0).abs() < 1.0 && (after.1 - before.1 + 1_270_000.0).abs() < 1.0, "rot {rot} mirrored {mirrored}: {before:?} -> {after:?}");
         }
@@ -80,8 +81,8 @@ fn a_page_offset_moves_the_stored_position_by_the_offset_taken_back_through_the_
 #[test]
 fn power_symbols_and_sheets_have_fields_of_their_own() {
     let mut sch = SchematicSection::default();
-    sch.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, rot: 0, net: "GND".into(), pin: "U1.2".into() });
-    sch.sheets.push(SheetInstance { id: "s1".into(), name: "MCU".into(), file: "mcu.kicad_sch".into(), at: Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(80_000_000) }, size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(30_000_000)), pins: vec![], page: String::new() });
+    sch.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot: 0, net: "GND".into(), pin: "U1.2".into() });
+    sch.sheets.push(SheetInstance { id: "s1".into(), name: "MCU".into(), file: "mcu.kicad_sch".into(), at: Point { x: mm(100.0), y: mm(80.0) }, size: (mm(40.0), mm(30.0)), pins: vec![], page: String::new() });
     let m = model();
     let power = OwnerCtx::new(&sch, &m, "#PWR01").expect("the power symbol");
     assert_eq!(power.kind, OwnerKind::Power);
@@ -96,7 +97,7 @@ fn power_symbols_and_sheets_have_fields_of_their_own() {
 
 #[test]
 fn a_schematic_read_from_a_kicad_file_has_no_fields_to_edit() {
-    let mut sch = sheet_of(resistor(Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(50_800_000) }, 0, false));
+    let mut sch = sheet_of(resistor(Point { x: mm(50.8), y: mm(50.8) }, 0, false));
     sch.imported_from_kicad = true;
     assert!(OwnerCtx::new(&sch, &model(), "R1").is_none());
 }
@@ -104,7 +105,7 @@ fn a_schematic_read_from_a_kicad_file_has_no_fields_to_edit() {
 #[test]
 fn the_manual_autoplace_keeps_the_fields_off_a_wire_that_runs_where_the_automatic_one_puts_them() {
     let m = model();
-    let mut sch = sheet_of(resistor(Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(50_800_000) }, 0, false));
+    let mut sch = sheet_of(resistor(Point { x: mm(50.8), y: mm(50.8) }, 0, false));
     let ctx = OwnerCtx::new(&sch, &m, "R1").expect("the symbol");
     let auto = ctx.autoplace(&sch, &m, AutoplaceAlgo::Manual);
     // nothing around: the same place as the automatic mode
@@ -112,7 +113,7 @@ fn the_manual_autoplace_keeps_the_fields_off_a_wire_that_runs_where_the_automati
     let on_right = ctx.page(&auto[0], "R1").at;
     assert!(on_right.0 > 53_000_000.0, "{on_right:?}");
     // a wire across the right side
-    sch.wires.push(eda_model::ir::Wire { id: "w".into(), net: "N".into(), pins: vec![], pts: vec![Point { x: Nm::from_raw_shim(56_000_000), y: Nm::from_raw_shim(40_000_000) }, Point { x: Nm::from_raw_shim(56_000_000), y: Nm::from_raw_shim(70_000_000) }], bus: false });
+    sch.wires.push(eda_model::ir::Wire { id: "w".into(), net: "N".into(), pins: vec![], pts: vec![Point { x: mm(56.0), y: mm(40.0) }, Point { x: mm(56.0), y: mm(70.0) }], bus: false });
     let ctx = OwnerCtx::new(&sch, &m, "R1").expect("the symbol");
     let moved = ctx.autoplace(&sch, &m, AutoplaceAlgo::Manual);
     let at = ctx.page(&moved[0], "R1").at;
