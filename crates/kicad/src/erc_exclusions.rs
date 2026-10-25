@@ -206,6 +206,16 @@ pub fn marker(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sh
     Some(ErcMarker { error_type: error_type.to_string(), at_nm: [at.x_nm, at.y_nm], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
 }
 
+/// Whether an exclusion's marker and a finding's are of one sheet (`SCH_MARKER::GetSheetSpecificPath`): the same sheet path, or either not known (an
+/// exclusion of a check whose marker this module does not know, or one waived before its marker was kept) -- then the `(check, location)` key alone
+/// decides, as it always did.
+pub fn same_sheet(a: Option<&ErcMarker>, b: Option<&ErcMarker>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.sheet == b.sheet,
+        _ => true,
+    }
+}
+
 /// A sheet path as protobuf JSON (`kiapi.common.types.SheetPath`).
 fn sheet_path_json(path: &[String]) -> Value {
     json!({ "path": path.iter().map(|u| json!({ "value": u })).collect::<Vec<_>>() })
@@ -248,6 +258,110 @@ pub fn project_entries(exclusions: &[ErcExclusion]) -> Vec<Value> {
         seen.push(marker);
         out.push(entry(marker, &e.comment));
     }
+    out
+}
+
+/// `KIID::niluuid`, which a marker with one item may name as its second.
+const NIL_UUID: &str = "00000000-0000-0000-0000-000000000000";
+
+/// The check's settings key of a kind of finding (`kiapi.schematic.ErcErrorType`), the reverse of [`error_type`].
+fn check_of(error_type: &str) -> Option<&'static str> {
+    if error_type == "ERCET_PIN_TO_PIN_WARNING" || error_type == "ERCET_PIN_TO_PIN_ERROR" {
+        return Some("pin_to_pin");
+    }
+    ERROR_TYPES.iter().find(|(_, t)| *t == error_type).map(|(k, _)| *k)
+}
+
+/// The exclusions of a project's `erc.erc_exclusions` as the file names them: the record (`kiapi.schematic.ErcExclusion` as protobuf JSON, `ERC_EXCLUSION`'s
+/// `from_json`: the field names as the proto has them, which KiCad writes (`preserve_proto_field_names`), or in camel case, which `JsonStringToMessage` takes too),
+/// or the marker's text of a project at schema 0 (`SCH_MARKER::SerializeToString`, `key|x|y|main|aux|sheet|main sheet|aux sheet`, the position in schematic
+/// units of 100 nm, alone or as `[ "<text>", "<comment>" ]`: `ERC_SETTINGS::migrateSchema0to1`, `ERC_EXCLUSION::FromLegacyStrings`). The marker's item uuids
+/// and sheet paths are the file's; a text item's own (`generic_*`, `unresolved_variable`: a parent's uuid and a text) is left out, and so is a kind of finding
+/// this module does not name. Which form is read is the section's schema, as KiCad's loader has it: the texts at 0 (`migrateSchema0to1` turns them into records, the
+/// records alongside are not read), the records at any other version or none (`entry.is_object()`, a text dropped).
+pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
+    let Ok(pro) = serde_json::from_str::<Value>(pro_text) else { return Vec::new() };
+    let Some(entries) = pro.pointer("/erc/erc_exclusions").and_then(Value::as_array) else { return Vec::new() };
+    let legacy = pro.pointer("/erc/meta/version").and_then(Value::as_i64) == Some(0);
+    let field = |v: &Value, a: &str, b: &str| v.get(a).or_else(|| v.get(b)).cloned().unwrap_or(Value::Null);
+    let path = |v: Value| -> Vec<String> { v.get("path").and_then(Value::as_array).map(|a| a.iter().filter_map(|u| u.get("value").and_then(Value::as_str)).map(String::from).collect()).unwrap_or_default() };
+    let text_path = |t: &str| -> Vec<String> { t.split('/').map(str::trim).filter(|u| !u.is_empty()).map(String::from).collect() };
+    let from_text = |text: &str, comment: &str| -> Option<(ErcMarker, String)> {
+        let props: Vec<&str> = text.split('|').collect();
+        if props.len() != 5 && props.len() != 8 {
+            return None;
+        }
+        let check = *props.first()?;
+        if matches!(check, "generic-warning" | "generic-error" | "unresolved_variable") {
+            return None;
+        }
+        // `ERC_ITEM::Create( key )` takes the first item type of the key: `pin_to_pin` is the warning (`pinTableWarning` comes before the error)
+        let error_type = error_type(check, "warning")?;
+        let iu = |i: usize| props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0) * 100;
+        let items = [3, 4].iter().filter_map(|&i| props.get(i).map(|s| s.trim())).filter(|u| !u.is_empty() && *u != NIL_UUID).map(String::from).collect();
+        let p = |i: usize| props.get(i).map(|t| text_path(t)).unwrap_or_default();
+        Some((ErcMarker { error_type: error_type.to_string(), at_nm: [iu(1), iu(2)], items, sheet: p(5), main_sheet: p(6), aux_sheet: p(7) }, comment.to_string()))
+    };
+    entries
+        .iter()
+        .filter_map(|e| match e {
+            Value::Object(_) if !legacy => {
+                let m = e.get("marker")?;
+                let error_type = field(m, "error_type", "errorType").as_str()?.to_string();
+                check_of(&error_type)?;
+                let pos = field(m, "position", "position");
+                // protobuf JSON prints a 64-bit integer as a string; a number is taken too
+                let nm = |v: Value| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0);
+                let items = m.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(|i| i.get("value").and_then(Value::as_str)).filter(|u| *u != NIL_UUID).map(String::from).collect()).unwrap_or_default();
+                let marker = ErcMarker {
+                    error_type,
+                    at_nm: [nm(field(&pos, "x_nm", "xNm")), nm(field(&pos, "y_nm", "yNm"))],
+                    items,
+                    sheet: path(field(m, "sheet_specific_path", "sheetSpecificPath")),
+                    main_sheet: path(field(m, "main_item_sheet_path", "mainItemSheetPath")),
+                    aux_sheet: path(field(m, "aux_item_sheet_path", "auxItemSheetPath")),
+                };
+                Some((marker, e.get("comment").and_then(Value::as_str).unwrap_or("").to_string()))
+            }
+            Value::Array(pair) if legacy => from_text(pair.first()?.as_str()?, pair.get(1).and_then(Value::as_str).unwrap_or("")),
+            Value::String(text) if legacy => from_text(text, ""),
+            _ => None,
+        })
+        .filter(|(m, _)| !m.items.is_empty())
+        .collect()
+}
+
+/// A `.kicad_sch` text's own `(uuid ..)`: the root sheet's, which the sheet paths of a project's markers start with.
+pub fn file_uuid(text: &str) -> Option<String> {
+    let tree = crate::sexpr::parse(text).ok()?;
+    crate::sexpr::find(tree.as_list()?, "uuid").and_then(|u| crate::sexpr::txt(u, 1)).map(String::from)
+}
+
+/// A KiCad project's own ERC exclusions as the design's (`SchematicSection::erc_exclusions`), for a schematic imported from that project. Each item the marker
+/// names by its uuid in the file is found by the id the import gave it (`file_ids`, `SchImportNotes::item_ids`), and then by the uuid the derived schematic gives it
+/// (`derived`, the map `export_kicad_sch_tree_mapped` returns); the sheet paths go the same way, the file's root sheet (`file_root`) being the derived one's
+/// (`derived_root`) and every other sheet keeping its uuid (a sheet read from a file is written with the file's, `crate::sheet_uuid`). The exclusion's location is the id of the marker's main item, as the studio's report keys
+/// it. One with an item the import does not have is left out, as the DRC's are (KiCad keeps such a record as a marker of its own).
+pub fn from_project(pro_text: &str, file_ids: &std::collections::BTreeMap<String, String>, derived: &std::collections::HashMap<String, String>, file_root: &str, derived_root: &str) -> Vec<ErcExclusion> {
+    let mut uuid_of: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    let mut by_uuid: Vec<(&String, &String)> = derived.iter().collect();
+    by_uuid.sort();
+    for (uuid, id) in by_uuid {
+        uuid_of.entry(id.as_str()).or_insert(uuid.as_str());
+    }
+    let sheet = |p: &[String]| -> Vec<String> { p.iter().map(|u| if u == file_root { derived_root.to_string() } else { u.clone() }).collect() };
+    let mut out: Vec<ErcExclusion> = Vec::new();
+    for (m, comment) in read_project(pro_text) {
+        let Some(ids) = m.items.iter().map(|u| file_ids.get(u).cloned()).collect::<Option<Vec<String>>>() else { continue };
+        let Some(items) = ids.iter().map(|id| uuid_of.get(id.as_str()).map(|u| u.to_string())).collect::<Option<Vec<String>>>() else { continue };
+        let Some(check) = check_of(&m.error_type) else { continue };
+        let marker = ErcMarker { items, sheet: sheet(&m.sheet), main_sheet: sheet(&m.main_sheet), aux_sheet: sheet(&m.aux_sheet), ..m };
+        let e = ErcExclusion { check: check.to_string(), location: ids[0].clone(), comment, marker: Some(marker) };
+        if !out.iter().any(|o| o.check == e.check && o.location == e.location && o.marker == e.marker) {
+            out.push(e);
+        }
+    }
+    out.sort();
     out
 }
 
@@ -388,5 +502,32 @@ mod tests {
         assert!(list[0].get("comment").is_none());
         assert_eq!((list[1]["marker"]["items"][0]["value"].as_str(), list[1]["comment"].as_str()), (Some("r2"), Some("bare footprint on purpose")));
         assert!(project_entries(&[]).is_empty());
+    }
+
+    /// p13-p16 F6 (the ERC half): a project's own exclusions, as KiCad 10 writes them (records, the proto's field names) and as KiCad 8 and 9 did (texts at
+    /// schema 0, positions in 100 nm), come in with their items and sheets named as the derived schematic names them; one whose item the import lacks is left out.
+    #[test]
+    fn a_projects_erc_exclusions_are_read_and_named_as_the_derived_schematic_names_them() {
+        let records = json!({ "erc": { "meta": { "version": 1 }, "erc_exclusions": [
+            { "marker": { "error_type": "ERCET_PIN_NOT_CONNECTED", "position": { "x_nm": "1000", "y_nm": 2000 }, "items": [{ "value": "f-pin" }],
+                          "sheet_specific_path": { "path": [{ "value": "f-root" }, { "value": "s1" }] }, "main_item_sheet_path": { "path": [{ "value": "f-root" }, { "value": "s1" }] } },
+              "comment": "kept" },
+            { "marker": { "errorType": "ERCET_PIN_TO_PIN_WARNING", "position": { "xNm": "5", "yNm": "6" }, "items": [{ "value": "f-pin" }, { "value": "f-gone" }] } },
+            "pin_not_connected|1|2|f-pin|00000000-0000-0000-0000-000000000000|||"
+        ] } })
+        .to_string();
+        let file_ids: std::collections::BTreeMap<String, String> = [("f-pin".to_string(), "U1.1".to_string())].into();
+        let derived: std::collections::HashMap<String, String> = [("d-pin".to_string(), "U1.1".to_string())].into();
+        let got = from_project(&records, &file_ids, &derived, "f-root", "d-root");
+        let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1000, 2000], items: only(&["d-pin"]), sheet: only(&["d-root", "s1"]), main_sheet: only(&["d-root", "s1"]), aux_sheet: vec![] };
+        assert_eq!(got, vec![excl("pin_not_connected", "U1.1", Some(marker), "kept")], "the record whose second item is not in the import is left out, and the text is not read at schema 1");
+        // schema 0: the texts, and not the records
+        let legacy = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": [["pin_not_connected|13335|8128|f-pin|00000000-0000-0000-0000-000000000000|||", "comment1"], "generic-warning|1|1|f-pin|some text|||", "bad|1"] } }).to_string();
+        let got = from_project(&legacy, &file_ids, &derived, "f-root", "d-root");
+        let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1_333_500, 812_800], items: only(&["d-pin"]), ..Default::default() };
+        assert_eq!(got, vec![excl("pin_not_connected", "U1.1", Some(marker), "comment1")]);
+        let pin_to_pin = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": ["pin_to_pin|1|1|f-pin|00000000-0000-0000-0000-000000000000|||"] } }).to_string();
+        assert_eq!(read_project(&pin_to_pin)[0].0.error_type, "ERCET_PIN_TO_PIN_WARNING", "a legacy pin_to_pin text is the warning");
+        assert_eq!(file_uuid("(kicad_sch (version 20250114) (uuid \"ab-cd\"))").as_deref(), Some("ab-cd"));
     }
 }

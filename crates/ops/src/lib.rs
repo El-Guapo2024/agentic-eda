@@ -1378,8 +1378,14 @@ pub enum Cmd {
     /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"; Delete
     /// Marker on an excluded marker, which is what makes KiCad forget it --
     /// `RecordERCExclusions` records the markers that are left):
-    /// refused if no exclusion with this exact key exists.
-    DeleteErcExclusion { check: String, location: String },
+    /// refused if no exclusion with this exact key exists. `sheet`, the sheet path of the finding's marker (`ErcMarker::sheet`), when given keeps the
+    /// exclusions of the other placements of a screen two sheets show (their items have one id, and their markers each their own sheet).
+    DeleteErcExclusion {
+        check: String,
+        location: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sheet: Option<Vec<String>>,
+    },
     /// Schematic Setup > Formatting > Connection grid spacing (`panel_setup_formatting.cpp`): the grid, in mils, that ERC expects wire ends and pins on
     /// (`SCHEMATIC_SETTINGS::m_ConnectionGridSize`). From `MIN_CONNECTION_GRID_MILS` (25) to 10000; 50, KiCad's default, is stored as none.
     SetConnectionGrid { mils: u32 },
@@ -2973,7 +2979,7 @@ impl<'a> Board<'a> {
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
             Cmd::AddErcExclusion { check, location, comment, marker } => self.add_erc_exclusion(check, location, comment, marker),
-            Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
+            Cmd::DeleteErcExclusion { check, location, sheet } => self.delete_erc_exclusion(check, location, sheet.as_deref()),
             Cmd::ClearErcExclusions => self.clear_erc_exclusions(),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
             Cmd::DeleteLabel { id } => self.delete_label(id),
@@ -4932,7 +4938,8 @@ impl<'a> Board<'a> {
         }
         // The list belongs to the schematic as a whole, the root's: a sheet the editor is on does not keep one of its own.
         let sch = self.design.schematic.get_or_insert_with(empty_schematic_section);
-        match sch.erc_exclusions.iter_mut().find(|e| e.check == check && e.location == location) {
+        // one per placement of a shared screen: its own sheet in its marker (`eda_kicad::erc_exclusions::same_sheet`)
+        match sch.erc_exclusions.iter_mut().find(|e| e.check == check && e.location == location && eda_kicad::erc_exclusions::same_sheet(e.marker.as_ref(), marker.as_ref())) {
             // Already waived: the comment is the new one (an empty one clears it), the marker the new one when there is one.
             Some(slot) => {
                 slot.comment = comment.into();
@@ -4946,10 +4953,14 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn delete_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
+    fn delete_erc_exclusion(&mut self, check: &str, location: &str, sheet: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
         let sch = self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])?;
         let before = sch.erc_exclusions.len();
-        sch.erc_exclusions.retain(|e| !(e.check == check && e.location == location));
+        let of_sheet = |e: &ErcExclusion| match (sheet, &e.marker) {
+            (Some(want), Some(m)) => m.sheet == want,
+            _ => true,
+        };
+        sch.erc_exclusions.retain(|e| !(e.check == check && e.location == location && of_sheet(e)));
         if sch.erc_exclusions.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_erc_exclusion", location, "no exclusion with this check+location exists")]);
         }

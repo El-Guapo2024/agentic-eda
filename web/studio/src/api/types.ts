@@ -1854,7 +1854,8 @@ export type Cmd =
   | { op: "increment_annotations"; start: string; increment: number }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
   | { op: "add_erc_exclusion"; check: string; location: string; comment?: string; marker?: ErcMarker }
-  | { op: "delete_erc_exclusion"; check: string; location: string }
+  /** `sheet`: the sheet path of the finding's marker, so that deleting one placement's exclusion leaves the other placements' of a shared screen. */
+  | { op: "delete_erc_exclusion"; check: string; location: string; sheet?: string[] }
   | { op: "clear_erc_exclusions" }
   | { op: "set_connection_grid"; mils: number }
   | { op: "set_intersheet_refs"; settings: IntersheetRefs }

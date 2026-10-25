@@ -366,7 +366,9 @@ fn is_filled(item: &[Sexpr]) -> bool {
     sexpr::find(item, "fill").and_then(|f| sexpr::find(f, "type")).and_then(|t| sexpr::txt(t, 1)).map(|t| t != "none").unwrap_or(false)
 }
 
-/// `(pin <etype> <shape> (at x y angle) (length L) (name "N" ...) (number "N" ...))`.
+/// `(pin <etype> <shape> (at x y angle) (length L) (name "N" ...) (number "N" ...))`, of `unit`: the sub-block's own, 0 for a pin of `Name_0_<style>`, which is
+/// common to every unit (`LIB_SYMBOL::GetGraphicalPins`), as `SCH_IO_KICAD_SEXPR_PARSER::parseSymbol` gives it. `(hide yes)`, or the bare `hide` of a 2020 file,
+/// makes it invisible (`parseSymbolPin`, `T_hide`).
 fn parse_pin(item: &[Sexpr], unit: u32) -> Option<LibPin> {
     let electrical_type = sexpr::txt(item, 1)?.to_string();
     let shape = sexpr::txt(item, 2).unwrap_or("line").to_string();
@@ -378,7 +380,7 @@ fn parse_pin(item: &[Sexpr], unit: u32) -> Option<LibPin> {
     let name = sexpr::find(item, "name").and_then(|n| sexpr::txt(n, 1)).unwrap_or("~").to_string();
     let number = sexpr::find(item, "number").and_then(|n| sexpr::txt(n, 1)).unwrap_or("").to_string();
     let name = if name == "~" { String::new() } else { name };
-    Some(LibPin { number, name, electrical_type, shape, at: SPoint::new(x, y), angle_deg, length_mm, unit: unit.max(1) })
+    Some(LibPin { number, name, electrical_type, shape, at: SPoint::new(x, y), angle_deg, length_mm, unit, hidden: crate::symbol_import::hidden(item) })
 }
 
 /// For every part in `model` whose resolved `lib_id`
@@ -934,6 +936,19 @@ mod tests {
         let pins_of_unit = |pins: &[LibPin], u: u32| pins.iter().filter(|p| p.unit == u).count();
         assert_eq!(pins_of_unit(&ls00.pins, 1), 3);
         assert_eq!(pins_of_unit(&alt.pins, 1), 3);
+    }
+
+    /// A pin of a `Name_0_<style>` block is common to every unit (`LIB_SYMBOL::GetGraphicalPins`: "when m_unit == 0, the item is common to all units"), so it stays
+    /// unit 0 and `GetUnitPinInfo` lists it in each unit: `Device:D_Dual_CommonAnode_AKK_Split`'s common anode (pin 1) is in A with K1 and in B with K2.
+    #[test]
+    fn a_common_pin_of_a_multi_unit_symbol_is_in_every_unit() {
+        let root = default_symbol_library_root();
+        let Some(path) = find_symbol_library_file(&root, "Device") else { return };
+        let table = load_library_table(&path).unwrap();
+        let sym = table.get("D_Dual_CommonAnode_AKK_Split").expect("D_Dual_CommonAnode_AKK_Split present");
+        assert_eq!(sym.pins.iter().find(|p| p.number == "1").map(|p| p.unit), Some(0), "the common anode is drawn in `_0_1`");
+        let units: Vec<Vec<String>> = eda_model::fp_units::unit_pin_info(sym).into_iter().map(|u| u.pins).collect();
+        assert_eq!(units, vec![vec!["1".to_string(), "2".to_string()], vec!["1".to_string(), "3".to_string()]]);
     }
 
     /// The box of the pins of unit 1: what `eda_engine::geometry::real_symbol_bbox` takes the edges of a side with pins from.

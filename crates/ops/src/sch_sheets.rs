@@ -178,20 +178,7 @@ impl<'a> Board<'a> {
         wanted.dedup();
         let LibMerge { lib_name, engine_of, publish } = self.merge_lib_symbols(&wanted, inc.lib_symbols);
         for (_, sec) in copies.iter_mut() {
-            // A screen read from a file places a symbol by its library origin (KiCad's frame); the sheets of this design place one by the corner of its box
-            // (what the writer bakes the symbol against): the symbol is moved there, so that its pins stay where the file has them.
-            if sec.imported_from_kicad {
-                let body_styles = sec.extras.body_styles.clone();
-                for s in sec.symbols.iter_mut() {
-                    let Some(engine) = engine_of.get(&s.lib_id) else { continue };
-                    let style = body_styles.get(&eda_model::ir::field_key(&s.id, s.unit)).copied().unwrap_or(1);
-                    let drawn = if style > 1 && engine.has_alternate_body() { engine.in_style(style).into_owned() } else { engine.clone() };
-                    let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, s.unit);
-                    let (ox, oy) = eda_model::sch_clipboard::place_offset_nm(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
-                    s.at = Point { x: s.at.x - ox, y: s.at.y - oy };
-                }
-                sec.imported_from_kicad = false;
-            }
+            place_by_box_corner(sec, &engine_of);
             sec.symbols.iter_mut().for_each(|s| {
                 if let Some(n) = lib_name.get(&s.lib_id) {
                     s.lib_id = n.clone();
@@ -614,6 +601,7 @@ impl<'a> Board<'a> {
                     self.group_placed(&[id], how)?;
                 }
             }
+            self.take_bus_aliases(content);
             return Ok(());
         }
         // the contents of the file go on the sheet in view, as a paste of the file's screen carried to `at`
@@ -637,6 +625,38 @@ impl<'a> Board<'a> {
                 self.annotate_apply(&renames, false);
             }
         }
+        self.take_bus_aliases(content);
         Ok(())
     }
+
+    /// The bus aliases of a sheet file taken in: into the design's list (`parseBusAlias` adds a file's to the schematic it loads into), one of a name the
+    /// design has not got yet. **Differs**: so do the aliases of the file's own project (`.kicad_pro`), which `LoadSheetFromFile` does not read, so that
+    /// the sheet's buses keep their members.
+    fn take_bus_aliases(&mut self, content: &SheetFile) {
+        for alias in &content.bus_aliases {
+            if !self.design.bus_aliases.iter().any(|a| a.name == alias.name) {
+                self.design.bus_aliases.push(alias.clone());
+            }
+        }
+    }
+}
+
+/// A screen read from a file places a symbol by its library origin (KiCad's frame, `imported_from_kicad`); the sheets of this design place one by the corner
+/// of its box (what the `.kicad_sch` writer bakes the symbol against): each symbol is moved there, so that its pins stay where the file has them, and the
+/// screen is in the design's frame after. `engine_of` is the engine's symbol of each `lib_id` the screen names (`LibMerge::engine_of`), by the name the
+/// screen gives it. A screen already in the design's frame is left alone.
+pub(crate) fn place_by_box_corner(sec: &mut SchematicSection, engine_of: &BTreeMap<String, eda_model::LibSymbol>) {
+    if !sec.imported_from_kicad {
+        return;
+    }
+    let body_styles = sec.extras.body_styles.clone();
+    for s in sec.symbols.iter_mut() {
+        let Some(engine) = engine_of.get(&s.lib_id) else { continue };
+        let style = body_styles.get(&eda_model::ir::field_key(&s.id, s.unit)).copied().unwrap_or(1);
+        let drawn = if style > 1 && engine.has_alternate_body() { engine.in_style(style).into_owned() } else { engine.clone() };
+        let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, s.unit);
+        let (ox, oy) = eda_model::sch_clipboard::place_offset_nm(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
+        s.at = Point { x: s.at.x - ox, y: s.at.y - oy };
+    }
+    sec.imported_from_kicad = false;
 }

@@ -15,7 +15,7 @@ use std::process::Command;
 const META: ExportMeta<'static> = ExportMeta { date: "2026-10-08", title: "body style" };
 
 fn pin(number: &str, name: &str, etype: &str, x: f64, y: f64, angle: f64) -> LibPin {
-    LibPin { number: number.into(), name: name.into(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: angle, length_mm: 2.54, unit: 1 }
+    LibPin { number: number.into(), name: name.into(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: angle, length_mm: 2.54, unit: 1, hidden: false }
 }
 
 fn body(half_width: f64) -> SymbolGraphic {

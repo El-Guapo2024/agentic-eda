@@ -333,6 +333,8 @@ On `netlists/video` this gives exactly the "20 of 371" of the slow test. On `bus
 
 ### S1. Two buses on one sheet that share a member name are not joined (high)
 
+**Fixed** on task-fix-d-sch-connectivity: 4f07d67a (the virtual member nets; a bus a sheet pin alone names joins them as their neighbour only when `processSubGraphs` promotes it -- not beside another vector of its prefix, as in the test proposed above, where U2.1 stays apart). bus_connection, issue17771 and netlists/video trace as kicad-cli reads them.
+
 **What differs.** In KiCad, every **bus label** on a sheet makes one virtual net subgraph per net member, named by the member's full local name (`test.x`, `DQ0`). It is a strong driver. Two such virtual subgraphs with the same name on one sheet merge, and that merged net then has two bus parents. A later pass renames the matching member of every parent bus to one final name, and then renames every subgraph that still carries the old name. The result: two buses that never touch, on one sheet, are one net per shared member name, with no wire or net label needed.
 
 Our tracer makes "one node per member of a bus and of every bus joined to it" (`crates/engine/src/nets.rs:427-482`, the node pushed at `:450` and joined at `:474-478`). A member node is joined only to (a) the members of buses that are already one bus, through wires, local bus labels of the same name, or the hierarchy, and (b) real nets on the sheet whose label or global name equals the member name (`local` / `global_here`, `:475`). Two separate buses that share a member name get two member nodes, and nothing unites them. The case only works when a real net carrying that name happens to sit on the sheet (`issue17771`'s explicit `W.X.Y.Z1` label is why Z1 matches and Z2 does not).
@@ -406,6 +408,8 @@ The netlist groups subgraphs by `{ GetNetName(), NetCode() }` (`connection_graph
 
 ### S2. Hidden power-input pins of ordinary symbols do not connect by name (high)
 
+**Fixed** on task-fix-d-sch-connectivity: b0e12cae and 132bd8da (the derived file keeps `(hide yes)`). One correction: a hidden power pin that is wired is not skipped -- kicad-cli puts it, and what it is wired to, on the net of its name (`GetDriverPriority` gives it `GLOBAL_POWER_PIN` wherever it is; the `continue` only skips making its own subgraph), so the second case of the proposed test is the other way round.
+
 **What differs.** In KiCad, a `power_in` pin that is **invisible**, on a symbol that is not a power symbol, is a global power pin. That is the "legacy" implicit power connection of 74xx, RAM and FPGA symbols. Its net is named by the pin's name, and it joins every other net of that name in the design. It is skipped only when something is wired to it.
 
 Our tracer gives a symbol pin only the `PIN` priority with no name (`crates/engine/src/nets.rs:314-320`). Global power names come only from power symbols (`:338-347`, `Naming::global_power`). Pin visibility is not even in the model the tracer reads: `eda_model::symbol::LibPin` (`crates/model/src/symbol.rs:133`) has no `hidden` field, and `crates/kicad/src/symbol_lib.rs:370::parse_pin` reads none. The design's `symbol_library` does keep it (`LibrarySymbolPin::hidden`: video's has 91 hidden `power_in` pins), but `trace_design` (`crates/cli/src/board.rs:472`) builds pins from `model`.
@@ -453,6 +457,8 @@ Test to write, in `crates/cli/src/sch_hierarchy_tests.rs`: `a_hidden_power_input
 
 ### S3. A power symbol's value is not resolved per placement: `${#}` shorts nets together (high)
 
+**Fixed** on task-fix-d-sch-connectivity: 775ec4d1 (every sheet-level variable; a project variable is not resolved for the net).
+
 **What differs.** KiCad names a global power pin's net by the symbol's Value with text variables resolved **for that sheet path**: `GetValue( true, &sheet, false )` (`connection_graph.cpp:1882`, quoted in S2). That goes through `SCH_FIELD::GetShownText( aPath )` (`sch_symbol.cpp::GetValue`, 1452-1458), and `${#}` is the page number of the path (`sch_sheet.cpp::SCH_SHEET::ResolveTextVar`, 404-407):
 ```cpp
 if( token->IsSameAs( wxT( "#" ) ) )
@@ -472,6 +478,8 @@ Test to write, in `crates/engine/src/nets.rs` or `sch_hierarchy_tests.rs`: `a_po
 **Unit-sensitive:** no.
 
 ### S4. Bus aliases are lost on import: `SheetFile` has no aliases, and a KiCad 10 project's aliases (`.kicad_pro`) are never read (high)
+
+**Fixed** on task-fix-d-sch-connectivity: 7c28c84b.
 
 **What differs.**
 - (a) `eda_kicad::load_sheet_file` (`crates/kicad/src/sheet_file.rs:28-52`) reads the tree with `import_kicad_sch_tree_with`, which does collect `design.bus_aliases` (`sch_import.rs:452-459`, `:760-763`), and then throws them away. `SheetFile` (`crates/model/src/sheet_file.rs:14-25`) has no alias field. Every route that goes through it reaches the tracer with no alias, so any bus written with `{ALIAS}` has no members and joins nothing. Those routes are `eda import-kicad x.kicad_sch` and File > Import > Non-KiCad Schematic (`Cmd::ReplaceSchematic`, `crates/ops/src/import_foreign.rs:57-105`, which keeps the *old* design's aliases), and `Cmd::ImportSheet` (Import Sheet, a schematic drop, a design block: `crates/ops/src/lib.rs:1261`).
@@ -497,7 +505,7 @@ Test to write, in `crates/engine/src/nets.rs` or `sch_hierarchy_tests.rs`: `a_po
 ### Also noticed (outside the asked scope; for the record)
 
 - Names: ours leaves the sheet path off a root local label's net (`ACCES_RAM-` where KiCad says `/ACCES_RAM-`; 278 of video's nets differ only so). This is deliberate and documented (`nets.rs:514`, PARITY-sch row "Nets across sheets"). It matters only where a name has to equal KiCad's (a `.kicad_pcb` net name after Update PCB). Low.
-- `PARITY-sch.md:543` ("Not ported: buses are traced as plain wires, a screen placed by two sheet symbols is traced once") is stale since sections 38 and 39. Low (doc).
+- `PARITY-sch.md:543` ("Not ported: buses are traced as plain wires, a screen placed by two sheet symbols is traced once") is stale since sections 38 and 39. Low (doc). **Fixed** on task-fix-d-sch-connectivity.
 
 ### Summary rows
 

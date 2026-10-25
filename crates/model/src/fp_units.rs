@@ -126,7 +126,7 @@ mod tests {
     use crate::symbol::{LibPin, SPoint};
 
     fn pin(number: &str, unit: u32, x: f64, y: f64) -> LibPin {
-        LibPin { number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: 0.0, length_mm: 2.54, unit }
+        LibPin { number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: 0.0, length_mm: 2.54, unit, hidden: false }
     }
 
     fn symbol(unit_count: u32, pins: Vec<LibPin>) -> LibSymbol {

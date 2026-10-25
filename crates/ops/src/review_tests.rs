@@ -233,12 +233,30 @@ fn an_erc_finding_with_no_location_cannot_be_excluded_and_deleting_needs_the_exa
     assert!(erc_waived(&b).is_empty());
 
     b.apply(&add_erc("wire_dangling", "w1", "x", marker("ERCET_WIRE_DANGLING", 1, "w"))).unwrap();
-    let e = b.apply(&Cmd::DeleteErcExclusion { check: "wire_dangling".into(), location: "w9".into() }).unwrap_err();
+    let e = b.apply(&Cmd::DeleteErcExclusion { check: "wire_dangling".into(), location: "w9".into(), sheet: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_erc_exclusion");
     assert_eq!(erc_waived(&b).len(), 1);
     // Deleting takes the comment and the marker text with it: KiCad forgets an excluded marker that was deleted, and so does the project.
-    b.apply(&Cmd::DeleteErcExclusion { check: "wire_dangling".into(), location: "w1".into() }).unwrap();
+    b.apply(&Cmd::DeleteErcExclusion { check: "wire_dangling".into(), location: "w1".into(), sheet: None }).unwrap();
     assert!(erc_waived(&b).is_empty());
+}
+
+/// p13-p16 F5: the findings of the two placements of a shared screen have one `(check, location)` and two sheets; each placement's exclusion is its own,
+/// and deleting one (Delete Marker sends the marker's sheet) leaves the other.
+#[test]
+fn an_erc_exclusion_on_one_placement_leaves_the_other() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let on = |sheet: &str| marker("ERCET_PIN_NOT_CONNECTED", 1, "u").map(|mk| eda_model::ir::ErcMarker { sheet: vec!["root".into(), sheet.into()], main_sheet: vec!["root".into(), sheet.into()], ..mk });
+    b.apply(&add_erc("pin_not_connected", "R1.2", "first", on("s1"))).unwrap();
+    b.apply(&add_erc("pin_not_connected", "R1.2", "second", on("s2"))).unwrap();
+    assert_eq!(erc_waived(&b).iter().map(|e| e.comment.as_str()).collect::<Vec<_>>(), ["first", "second"], "one exclusion per placement");
+    b.apply(&add_erc("pin_not_connected", "R1.2", "first, reviewed", on("s1"))).unwrap();
+    assert_eq!(erc_waived(&b).len(), 2, "the same placement again edits its own");
+    b.apply(&Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.2".into(), sheet: Some(vec!["root".into(), "s2".into()]) }).unwrap();
+    assert_eq!(erc_waived(&b).iter().map(|e| e.comment.as_str()).collect::<Vec<_>>(), ["first, reviewed"]);
+    let e = b.apply(&Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.2".into(), sheet: Some(vec!["root".into(), "s2".into()]) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_erc_exclusion");
 }
 
 #[test]

@@ -233,7 +233,7 @@ fn gate_swaps_are_refused_for_a_footprint_with_no_gates_pads_of_two_footprints_a
 fn the_units_of_a_footprint_come_from_its_symbol_when_the_board_gave_it_none() {
     use eda_model::symbol::{LibPin, SPoint};
     let mut m = model();
-    let lib_pin = |n: &str, unit: u32, y: f64| LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit };
+    let lib_pin = |n: &str, unit: u32, y: f64| LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit, hidden: false };
     let mut sym = eda_model::symbol::builtin("Device:R").unwrap();
     sym.lib_id = "Test:Dual".into();
     sym.unit_count = 2;

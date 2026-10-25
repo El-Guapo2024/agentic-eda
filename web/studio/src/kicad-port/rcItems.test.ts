@@ -25,6 +25,7 @@ import {
   patchDrcSeverity,
   patchErcDeleteAll,
   patchErcDeleteMarker,
+  ercKey,
   patchErcExcluded,
   patchErcSeverity,
   rcKind,
@@ -234,6 +235,16 @@ test("the schematic report takes a severity change the same way and keeps its ex
   assert.deepEqual(off.violations.map((x) => x.check), ["label_dangling"]);
   assert.deepEqual(off.counts, { label_dangling: 1 });
   assert.deepEqual(off.ignored_checks, [{ key: "pin_not_connected", description: "Pin not connected" }]);
+});
+
+test("the two placements of a shared screen have one location and their own sheets: waiving one leaves the other (p13-p16 F5)", () => {
+  const on = (sheet: string): ErcViolation => ({ check: "pin_not_connected", severity: "error", location: "R1.2", hint: null, base_severity: "error", marker: { error_type: "ERCET_PIN_NOT_CONNECTED", at_nm: [1, 2], items: ["u"], sheet: ["root", sheet], main_sheet: ["root", sheet] } });
+  const report: ErcReport = { violations: [on("s1"), on("s2")], counts: { pin_not_connected: 2 }, ignored_checks: [] };
+  const key = ercKey(report.violations[1]!);
+  assert.deepEqual(key, { check: "pin_not_connected", location: "R1.2", sheet: ["root", "s2"] });
+  assert.deepEqual(patchErcExcluded(report, [key!], true).violations.map((x) => x.severity), ["error", "excluded"]);
+  // a key with no sheet (a marker the report did not give) is the (check, location) alone
+  assert.deepEqual(patchErcExcluded(report, [{ check: "pin_not_connected", location: "R1.2" }], true).violations.map((x) => x.severity), ["excluded", "excluded"]);
 });
 
 test("waiving a finding patches the schematic report on screen: severity, comment and counts, and restoring gives the severity back", () => {

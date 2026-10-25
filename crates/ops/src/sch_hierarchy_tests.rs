@@ -210,7 +210,7 @@ fn a_file() -> SheetFile {
     root.imported_from_kicad = true;
     let mut sub = section(vec![r("R7", 10_000)], vec![]);
     sub.imported_from_kicad = true;
-    SheetFile { root, screens: [("sub.kicad_sch".to_string(), sub)].into_iter().collect(), lib_symbols: lib(&["Device:R", "Device:C"]), notes: vec![] }
+    SheetFile { root, screens: [("sub.kicad_sch".to_string(), sub)].into_iter().collect(), lib_symbols: lib(&["Device:R", "Device:C"]), notes: vec![], ..Default::default() }
 }
 
 fn import(content: Option<SheetFile>, as_sheet: bool, keep: bool) -> Cmd {
@@ -255,6 +255,23 @@ fn import_sheet_puts_a_copy_of_the_file_in_as_a_sheet_and_numbers_its_symbols_an
     // the same name again is refused, and so is a file that was never read
     assert_eq!(b.apply(&import(Some(a_file()), true, false)).unwrap_err()[0].check, "ops_sheet_name_taken");
     assert_eq!(b.apply(&import(None, true, false)).unwrap_err()[0].check, "ops_sheet_file_not_read");
+}
+
+/// p12 S4: the file's bus aliases come with it, as a sheet or as contents, one of a name the design has already keeping the design's.
+#[test]
+fn import_sheet_takes_the_files_bus_aliases() {
+    let m = ConstraintModel::default();
+    let alias = |name: &str, members: &[&str]| eda_model::ir::BusAlias { name: name.into(), members: members.iter().map(|x| x.to_string()).collect() };
+    let mut file = a_file();
+    file.bus_aliases = vec![alias("a_xyz", &["x", "y", "z"]), alias("USB", &["D+"])];
+    for as_sheet in [true, false] {
+        let mut design = power_design();
+        design.bus_aliases = vec![alias("USB", &["DP", "DM"])];
+        let mut b = Board::new(design, &m, 100_000, 300_000);
+        b.apply(&import(Some(file.clone()), as_sheet, false)).unwrap();
+        let got: Vec<(String, Vec<String>)> = b.design().bus_aliases.iter().map(|a| (a.name.clone(), a.members.clone())).collect();
+        assert_eq!(got, vec![("USB".to_string(), vec!["DP".to_string(), "DM".into()]), ("a_xyz".to_string(), vec!["x".to_string(), "y".into(), "z".into()])], "as a sheet: {as_sheet}");
+    }
 }
 
 #[test]
