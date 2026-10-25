@@ -24,14 +24,14 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct BoardNumbers {
     /// `brd_stat_data.boardThickness`.
-    pub thickness_nm: i64,
+    pub thickness_nm: Nm,
     /// The width and height of `GetBoardPolygonOutlines`' bounding box ("Board overall dimensions").
-    pub width_nm: i64,
-    pub height_nm: i64,
+    pub width_nm: Nm,
+    pub height_nm: Nm,
     /// `minTrackWidth`, `minClearanceTrackToTrack`, `minDrillSize`: an unset minimum is KiCad's own `INT_MAX` nanometres.
-    pub min_track_nm: i64,
-    pub min_clearance_nm: i64,
-    pub min_drill_nm: i64,
+    pub min_track_nm: Nm,
+    pub min_clearance_nm: Nm,
+    pub min_drill_nm: Nm,
     /// `GetPadWithCastellatedAttrCount()` and `GetPadWithPressFitAttrCount()`.
     #[serde(default)]
     pub castellated_pads: u32,
@@ -51,13 +51,13 @@ fn sci3(v: f64) -> String {
 
 /// `EDA_UNIT_UTILS::UI::MessageTextFromValue` for a length of the board (`pcbIUScale`): the lower-precision text the info dialogs show -- four decimals in millimetres and
 /// inches, two in mils -- in scientific notation when that would show only zeros, with the unit's label (`mm`, `mils`, `in`) when asked.
-pub fn message_text_from_value(value_nm: i64, units: Units, add_label: bool) -> String {
+pub fn message_text_from_value(value_nm: Nm, units: Units, add_label: bool) -> String {
     let (iu_per_unit, decimals, label) = match units {
         Units::Mm => (1_000_000.0, 4usize, " mm"),
         Units::Mils => (25_400.0, 2, " mils"),
         Units::Inch => (25_400_000.0, 4, " in"),
     };
-    let value = value_nm as f64 / iu_per_unit;
+    let value = value_nm.as_f64() / iu_per_unit;
     let mut text = format!("{value:.decimals$}");
     if value != 0.0 && !text.chars().any(|c| ('1'..='9').contains(&c)) {
         text = sci3(value);
@@ -286,7 +286,7 @@ const NOT_SPECIFIED: &str = "Not specified";
 /// The stackup item as `BOARD_STACKUP_ITEM( type )` starts and the file then fills in: what a layer that says nothing of a parameter has.
 struct Item {
     material: String,
-    thickness_nm: i64,
+    thickness_nm: Nm,
     color: String,
     epsilon_r: f64,
     loss_tangent: f64,
@@ -303,7 +303,7 @@ fn item_of(l: &StackupLayer, kind: ItemType) -> Item {
     };
     Item {
         material: l.material.clone().unwrap_or_else(|| material.to_string()),
-        thickness_nm: (l.thickness_mm.unwrap_or(thickness_mm) * 1_000_000.0).round() as i64,
+        thickness_nm: Nm::kiround(l.thickness_mm.unwrap_or(thickness_mm) * 1_000_000.0),
         color: if matches!(kind, ItemType::Copper | ItemType::SolderPaste) { String::new() } else { l.color.clone().unwrap_or_else(|| color.to_string()) },
         epsilon_r: l.epsilon_r.unwrap_or(epsilon),
         loss_tangent: l.loss_tangent.unwrap_or(loss),
@@ -331,7 +331,7 @@ pub fn stackup_table(layer: &str, stackup: &Stackup, units: Units) -> Table {
             l.name.clone()
         };
         // `IsThicknessEditable`: copper, dielectric and solder mask; a silkscreen or a paste layer has no thickness to give.
-        let thickness = if matches!(kind, ItemType::Copper | ItemType::Dielectric | ItemType::SolderMask) { string_from_value(item.thickness_nm as f64, units, true) } else { NOT_SPECIFIED.to_string() };
+        let thickness = if matches!(kind, ItemType::Copper | ItemType::Dielectric | ItemType::SolderMask) { string_from_value(item.thickness_nm.as_f64(), units, true) } else { NOT_SPECIFIED.to_string() };
         cells.push(cell(&name, 1.5, 0.2, false));
         cells.push(cell(&initial_caps(&type_name(l)), 1.5, 0.2, false));
         cells.push(cell(&item.material, 1.5, 0.2, false));
@@ -366,7 +366,7 @@ pub fn characteristics_table(layer: &str, copper_layers: usize, stackup: &Stacku
         cells.push(cell(value, 1.5, 0.2, false));
     };
     let yes_no = |b: bool| if b { "Yes" } else { "No" };
-    let msg = |v: i64| message_text_from_value(v, units, true);
+    let msg = |v: Nm| message_text_from_value(v, units, true);
 
     pair("Copper layer count: ", &unitless_text(copper_layers as f64));
     pair("Board thickness: ", &msg(n.thickness_nm));
@@ -414,10 +414,10 @@ mod tests {
 
     #[test]
     fn numbers_are_written_as_the_units_providers_write_them() {
-        assert_eq!(message_text_from_value(1_600_000, Units::Mm, true), "1.6000 mm");
-        assert_eq!(message_text_from_value(1_600_000, Units::Mils, true), "62.99 mils");
-        assert_eq!(message_text_from_value(1_600_000, Units::Inch, false), "0.0630");
-        assert_eq!(message_text_from_value(4, Units::Mm, true), "4.000e-06 mm", "four decimals of 4 nm are all zeros");
+        assert_eq!(message_text_from_value(mm(1.6), Units::Mm, true), "1.6000 mm");
+        assert_eq!(message_text_from_value(mm(1.6), Units::Mils, true), "62.99 mils");
+        assert_eq!(message_text_from_value(mm(1.6), Units::Inch, false), "0.0630");
+        assert_eq!(message_text_from_value(Nm::new(4), Units::Mm, true), "4.000e-06 mm", "four decimals of 4 nm are all zeros");
         assert_eq!(unitless_text(4.5), "4.5");
         assert_eq!(unitless_text(0.0), "0");
         assert_eq!(unitless_text(0.02), "0.02");
@@ -509,7 +509,7 @@ mod tests {
     }
 
     fn numbers() -> BoardNumbers {
-        BoardNumbers { thickness_nm: 1_600_000, width_nm: 26_385_000, height_nm: 25_181_000, min_track_nm: 200_000, min_clearance_nm: 203_000, min_drill_nm: 300_000, castellated_pads: 0, press_fit_pads: 3 }
+        BoardNumbers { thickness_nm: mm(1.6), width_nm: mm(26.385), height_nm: mm(25.181), min_track_nm: mm(0.2), min_clearance_nm: mm(0.203), min_drill_nm: mm(0.3), castellated_pads: 0, press_fit_pads: 3 }
     }
 
     #[test]

@@ -197,7 +197,7 @@ fn draw_table_makes_a_grid_with_kicads_cell_defaults_and_what_its_dialog_set() {
 }
 
 fn numbers() -> crate::pcb_table_builders::BoardNumbers {
-    crate::pcb_table_builders::BoardNumbers { thickness_nm: 1_600_000, width_nm: 80_000_000, height_nm: 60_000_000, min_track_nm: 150_000, min_clearance_nm: 180_000, min_drill_nm: 300_000, castellated_pads: 2, press_fit_pads: 0 }
+    crate::pcb_table_builders::BoardNumbers { thickness_nm: mm(1.6), width_nm: mm(80.0), height_nm: mm(60.0), min_track_nm: mm(0.15), min_clearance_nm: mm(0.18), min_drill_nm: mm(0.3), castellated_pads: 2, press_fit_pads: 0 }
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn the_place_verbs_read_from_and_write_to_the_json_the_studio_sends() {
     let text = r#"{"op":"table","verb":"place_characteristics","layer":"Dwgs.User","at":{"x":0,"y":0},"numbers":{"thickness_nm":1600000,"width_nm":1,"height_nm":2,"min_track_nm":3,"min_clearance_nm":4,"min_drill_nm":5,"castellated_pads":1}}"#;
     let value: serde_json::Value = serde_json::from_str(text).unwrap();
     let cmd: Cmd = serde_json::from_value(value).unwrap();
-    assert!(matches!(&cmd, Cmd::Table(TableCmd::PlaceCharacteristics { units: None, numbers, .. }) if numbers.castellated_pads == 1 && numbers.press_fit_pads == 0 && numbers.min_drill_nm == 5));
+    assert!(matches!(&cmd, Cmd::Table(TableCmd::PlaceCharacteristics { units: None, numbers, .. }) if numbers.castellated_pads == 1 && numbers.press_fit_pads == 0 && numbers.min_drill_nm == Nm::new(5)));
 }
 
 #[test]

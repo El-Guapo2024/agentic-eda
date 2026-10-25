@@ -445,16 +445,16 @@ pub fn format_length(nm: Nm, units: TableUnits, precision: i32) -> String {
 const NO_VALUE: &str = "\u{2014}";
 
 /// `BOARD_STACKUP::GetLayerDistance`: the thickness between two copper layers, half of an inner one at either end, nm.
-fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: &str) -> i64 {
+fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: &str) -> Nm {
     if first == second {
-        return 0;
+        return Nm::ZERO;
     }
     let pos = |n: &str| copper.iter().position(|c| c == n).unwrap_or(0);
     let (a, b) = if pos(second) < pos(first) { (second, first) } else { (first, second) };
     let is_copper = |l: &eda_model::StackupLayer| l.kind.as_deref() == Some("copper") || (l.kind.is_none() && l.name.ends_with(".Cu"));
     let is_dielectric = |l: &eda_model::StackupLayer| matches!(l.kind.as_deref(), Some("core") | Some("prepreg") | Some("dielectric"));
     let inner = |n: &str| n != "F.Cu" && n != "B.Cu";
-    let (mut total, mut start, mut half) = (0i64, false, false);
+    let (mut total, mut start, mut half) = (Nm::ZERO, false, false);
     for l in &stackup.layers {
         let layer = is_copper(l).then_some(l.name.as_str());
         if layer.is_none() && !is_dielectric(l) {
@@ -469,7 +469,7 @@ fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: 
         if layer == Some(b) && inner(b) {
             half = true;
         }
-        let t = (l.thickness_mm.unwrap_or(0.0) * 1_000_000.0).round() as i64;
+        let t = Nm::kiround(l.thickness_mm.unwrap_or(0.0) * 1_000_000.0);
         total += if half { t / 2 } else { t };
         half = false;
         if layer == Some(b) {
@@ -547,8 +547,8 @@ pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, char
                 DrillChartColumnId::AspectRatio => {
                     let depth = layer_distance_nm(stackup, &copper, &f.top, &f.bottom);
                     let d = f.diameter;
-                    if depth > 0 && d > Nm::ZERO {
-                        format!("{:.1}:1", depth as f64 / d.as_f64())
+                    if depth > Nm::ZERO && d > Nm::ZERO {
+                        format!("{:.1}:1", depth.ratio(d))
                     } else {
                         NO_VALUE.into()
                     }
