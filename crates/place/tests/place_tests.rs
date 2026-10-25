@@ -1,3 +1,4 @@
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_model::ir::{Design, Point, Provenance};
 use eda_model::{CheckStatus, ConstraintModel, Net, Part, Pin, PinKind, PlacementRule};
@@ -72,7 +73,7 @@ fn ldo_board_places_gate_clean() {
 #[test]
 fn respects_explicit_outline() {
     let m = ldo_model();
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(32_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(32_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }];
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(32.0), y: Nm::ZERO }, Point { x: mm(32.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }];
     let opts = PlaceOptions { outline: Some(outline.clone()), ..Default::default() };
     let out = place(&design(), &m, &opts).expect("places");
     assert_eq!(out.placement.as_ref().unwrap().outline, outline);
@@ -107,7 +108,7 @@ fn missing_footprint_fails_loudly() {
 #[test]
 fn too_small_board_fails_not_panics() {
     let m = ldo_model();
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(4_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(4_000_000) }];
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(4.0), y: Nm::ZERO }, Point { x: mm(4.0), y: mm(4.0) }, Point { x: Nm::ZERO, y: mm(4.0) }];
     let err = place(&design(), &m, &PlaceOptions { outline: Some(outline), moves_per_part: 200, ..Default::default() }).unwrap_err();
     assert!(err.iter().any(|c| c.check == "place_legalize"));
 }

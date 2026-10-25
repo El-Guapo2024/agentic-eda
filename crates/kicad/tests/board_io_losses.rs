@@ -2,6 +2,7 @@
 //! `import_kicad_pcb`, writes it back with `export_kicad_pcb` and checks that the item is in the design and in the file as KiCad's parser and writer have it
 //! (`pcb_io_kicad_sexpr_parser.cpp`, `pcb_io_kicad_sexpr.cpp`).
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_kicad::{export_kicad_pcb, import_kicad_pcb, ExportMeta};
 use eda_model::ir::{Design, Point};
@@ -227,7 +228,7 @@ fn a_footprints_edge_cuts_are_written_inside_the_footprint_and_cut_the_outline()
     };
     // A: the notch across the top edge, its pad on the board.
     let (design, model, _) = import_kicad_pcb(&board("25 0")).expect("parses");
-    assert!(design.drawings.as_ref().map_or(true, |d| d.shapes.iter().all(|s| s.layer() != "Edge.Cuts" || matches!(s, eda_model::ir::Shape::Rect { .. }) && s.stroke_width() == Nm::from_raw_shim(50_000))), "no footprint edge became a board shape");
+    assert!(design.drawings.as_ref().map_or(true, |d| d.shapes.iter().all(|s| s.layer() != "Edge.Cuts" || matches!(s, eda_model::ir::Shape::Rect { .. }) && s.stroke_width() == mm(0.05))), "no footprint edge became a board shape");
     let out = export(&design, &model);
     let fp = blocks(&out, "footprint")[0];
     assert!(fp.contains("(fp_rect (start -3 -2) (end 3 2)") && fp.contains("(layer \"Edge.Cuts\")"), "{fp}");
@@ -310,7 +311,7 @@ fn importing_a_project_keeps_its_drc_exclusions() {
     assert_eq!(checks, vec!["annular_width", "clearance", "track_width", "via_dangling"], "the one naming an item the board lacks is left out");
     let width = waived.iter().find(|e| e.check == "track_width").unwrap();
     let track_id = &design.routing.as_ref().unwrap().tracks[0].id;
-    assert_eq!((&width.ids, width.positions_nm.clone(), width.comment.as_str()), (&vec![track_id.clone()], vec![[Nm::from_raw_shim(9_000_000), Nm::from_raw_shim(12_000_000)]], "thin on purpose"));
+    assert_eq!((&width.ids, width.positions_nm.clone(), width.comment.as_str()), (&vec![track_id.clone()], vec![[mm(9.0), mm(12.0)]], "thin on purpose"));
     assert!(out.contains(&format!("(uuid \"{}\")", width.items[0])), "the item is named as the derived board names it");
     let clearance = waived.iter().find(|e| e.check == "clearance").unwrap();
     assert_eq!(clearance.ids, vec![track_id.clone(), "R1.2".to_string()]);

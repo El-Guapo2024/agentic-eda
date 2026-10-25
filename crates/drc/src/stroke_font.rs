@@ -286,7 +286,7 @@ pub struct TextLayout<'a> {
 /// are inflated by.
 pub fn effective_pen_width(thickness: Nm, size: (Nm, Nm), bold: bool) -> Nm {
     let mut pen = thickness;
-    if pen <= Nm::from_raw_shim(1) {
+    if pen <= Nm::new(1) {
         let w = size.0.raw_shim() as f64;
         pen = if bold { Nm::from_raw_shim((w / 5.0).round() as i64) } else { Nm::from_raw_shim((w / 8.0).round() as i64) };
     }
@@ -460,6 +460,7 @@ pub fn kicad_text_segments(t: &TextLayout) -> Vec<Seg> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
@@ -472,22 +473,22 @@ mod tests {
 
     #[test]
     fn space_advances_the_cursor_without_ink() {
-        let segs = layout_strokes("  ", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(1000), 0, false, TextJustify::Left);
+        let segs = layout_strokes("  ", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::new(1000), 0, false, TextJustify::Left);
         assert!(segs.is_none());
     }
 
     #[test]
     fn unrotated_left_justified_text_starts_at_the_anchor() {
-        let segs = layout_strokes("I", Point { x: Nm::from_raw_shim(5000), y: Nm::from_raw_shim(5000) }, Nm::from_raw_shim(1000), 0, false, TextJustify::Left).unwrap();
+        let segs = layout_strokes("I", Point { x: Nm::new(5000), y: Nm::new(5000) }, Nm::new(1000), 0, false, TextJustify::Left).unwrap();
         // Every point must be at or to the right of the anchor for a
         // left-justified, unrotated, unmirrored glyph.
-        assert!(segs.iter().all(|s| s.a.x >= Nm::from_raw_shim(5000) && s.b.x >= Nm::from_raw_shim(5000)), "{segs:?}");
+        assert!(segs.iter().all(|s| s.a.x >= Nm::new(5000) && s.b.x >= Nm::new(5000)), "{segs:?}");
     }
 
     #[test]
     fn center_justify_straddles_the_anchor() {
-        let left = layout_strokes("HI", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(1000), 0, false, TextJustify::Left).unwrap();
-        let center = layout_strokes("HI", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(1000), 0, false, TextJustify::Center).unwrap();
+        let left = layout_strokes("HI", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::new(1000), 0, false, TextJustify::Left).unwrap();
+        let center = layout_strokes("HI", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::new(1000), 0, false, TextJustify::Center).unwrap();
         let left_span = left.iter().map(|s| s.a.x.max(s.b.x)).max().unwrap();
         let center_span = center.iter().map(|s| s.a.x.max(s.b.x)).max().unwrap();
         assert!(center_span < left_span);
@@ -495,15 +496,15 @@ mod tests {
 
     #[test]
     fn unknown_codepoint_falls_back_to_question_mark() {
-        let a = layout_strokes("\u{1F600}", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(1000), 0, false, TextJustify::Left);
-        let b = layout_strokes("?", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(1000), 0, false, TextJustify::Left);
+        let a = layout_strokes("\u{1F600}", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::new(1000), 0, false, TextJustify::Left);
+        let b = layout_strokes("?", Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::new(1000), 0, false, TextJustify::Left);
         assert_eq!(a.map(|s| s.len()), b.map(|s| s.len()));
     }
 
     #[test]
     fn overbar_markup_drops_the_braces_and_adds_a_bar() {
-        let plain = kicad_text_segments(&TextLayout { text: "AB", pos: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), thickness: Nm::from_raw_shim(150), angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
-        let barred = kicad_text_segments(&TextLayout { text: "~{AB}", pos: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), thickness: Nm::from_raw_shim(150), angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
+        let plain = kicad_text_segments(&TextLayout { text: "AB", pos: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::new(1000), Nm::new(1000)), thickness: Nm::new(150), angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
+        let barred = kicad_text_segments(&TextLayout { text: "~{AB}", pos: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::new(1000), Nm::new(1000)), thickness: Nm::new(150), angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
         // Same glyph strokes plus exactly one horizontal bar above them.
         assert_eq!(barred.len(), plain.len() + 1);
         let bar = barred.last().unwrap();
@@ -513,8 +514,8 @@ mod tests {
 
     #[test]
     fn centred_text_is_centred_on_its_anchor() {
-        let segs = kicad_text_segments(&TextLayout { text: "HELLO", pos: Point { x: Nm::from_raw_shim(10_000), y: Nm::from_raw_shim(20_000) }, size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), thickness: Nm::from_raw_shim(150), angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
+        let segs = kicad_text_segments(&TextLayout { text: "HELLO", pos: Point { x: mm(0.01), y: mm(0.02) }, size: (Nm::new(1000), Nm::new(1000)), thickness: Nm::new(150), angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
         let (x0, x1) = (segs.iter().map(|s| s.a.x.min(s.b.x)).min().unwrap(), segs.iter().map(|s| s.a.x.max(s.b.x)).max().unwrap());
-        assert!(((x0 + x1) / 2 - Nm::from_raw_shim(10_000)).abs() < Nm::from_raw_shim(400), "{x0} {x1}");
+        assert!(((x0 + x1) / 2 - mm(0.01)).abs() < Nm::new(400), "{x0} {x1}");
     }
 }

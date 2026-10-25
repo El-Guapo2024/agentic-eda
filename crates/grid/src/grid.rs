@@ -40,7 +40,7 @@ const MULTI: u32 = u32::MAX - 1;
 /// KiCad's default board-setup copper-to-edge clearance, enforced by
 /// `kicad-cli pcb drc` against Edge.Cuts.
 /// Default copper-to-edge clearance (see `RoutingTuning::edge_clearance_nm`).
-pub const EDGE_CLEARANCE_NM: Nm = Nm::from_raw_shim(500_000);
+pub const EDGE_CLEARANCE_NM: Nm = Nm::new(500_000);
 
 fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
     let (ax, ay, bx, by, px, py) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, p.x.raw_shim() as f64, p.y.raw_shim() as f64);
@@ -164,7 +164,7 @@ impl Grid {
         let cells_x = ((max_x - min_x) / grid_nm).max(0) + 1;
         let cells_y = ((max_y - min_y) / grid_nm).max(0) + 1;
         // Widest separation any pair can need: via-to-via.
-        let clearance_cells = ((clearance_nm + via_diameter + grid_nm - Nm::from_raw_shim(1)) / grid_nm).max(1) - 1;
+        let clearance_cells = ((clearance_nm + via_diameter + grid_nm - Nm::new(1)) / grid_nm).max(1) - 1;
 
         let mut g = Grid {
             tuning: RoutingTuning::default(),
@@ -278,7 +278,7 @@ impl Grid {
     /// `b_half_nm`.
     fn sep_cells_for(&self, query_half_nm: Nm, b_half_nm: Nm) -> i64 {
         let um = self.clearance_nm + query_half_nm + b_half_nm;
-        (um + self.grid_nm - Nm::from_raw_shim(1)) / self.grid_nm
+        (um + self.grid_nm - Nm::new(1)) / self.grid_nm
     }
 
     /// Exact separation stamping for one pad's copper on `layer`: every
@@ -566,7 +566,7 @@ impl Grid {
     /// cell (the pad edge lies up to half a cell past its outermost cell
     /// centre), in cells.
     pub fn via_pad_radius_cells(&self) -> i64 {
-        (self.via_half_nm + self.grid_nm / 2 + self.grid_nm - Nm::from_raw_shim(1)) / self.grid_nm
+        (self.via_half_nm + self.grid_nm / 2 + self.grid_nm - Nm::new(1)) / self.grid_nm
     }
 
     /// Debug: why a cell is impassable for a track of `net`: ` ` outside,
@@ -694,7 +694,7 @@ impl Grid {
 
     fn min_sep_cells_half(&self, a: Occ, b_half_nm: Nm) -> i64 {
         let um = self.clearance_nm + self.half_extent(a) + b_half_nm;
-        (um + self.grid_nm - Nm::from_raw_shim(1)) / self.grid_nm
+        (um + self.grid_nm - Nm::new(1)) / self.grid_nm
     }
 
     /// True if (cx,cy,layer) is usable for a track of `net`.

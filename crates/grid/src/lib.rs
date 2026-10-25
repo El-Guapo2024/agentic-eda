@@ -10,6 +10,7 @@ pub mod grid;
 pub mod pads;
 pub mod pour;
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_model::ir::{Design, Point, Track, Via};
 use eda_model::{CheckResult, ConstraintModel};
@@ -289,7 +290,7 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     // established performance.
     let min_pad_gap = smallest_same_footprint_gap(&pads);
     let mut eff_rules = rules.clone();
-    if rules.grid > Nm::from_raw_shim(130_000) && min_pad_gap < rules.grid.raw_shim() {
+    if rules.grid > mm(0.13) && min_pad_gap < rules.grid.raw_shim() {
         eff_rules.grid = rules.grid / 2;
     }
     if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {

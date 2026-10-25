@@ -702,6 +702,7 @@ pub fn fmt_nm(v: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Point, PlacementSection, Provenance, RoutingSection};
@@ -741,7 +742,7 @@ mod tests {
 )"#;
 
     fn zone(id: &str, uuid: &str) -> Zone {
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }], ..Default::default() }
     }
 
     /// P13-1: a teardrop KiCad saved has no uuid (`format( const ZONE* )`); its fills are filed under its layer and outline, and the import finds them by the outline
@@ -845,7 +846,7 @@ mod tests {
 
         // An edit elsewhere on the board changes nothing about the zone; an edit to the zone itself empties it.
         let mut moved = z.clone();
-        moved.outline[2] = Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(10_000_000) };
+        moved.outline[2] = Point { x: mm(11.0), y: mm(10.0) };
         assert!(fills.current(&moved).is_none() && fills.rings(&moved, "F.Cu").is_empty());
         let d2 = design(vec![moved.clone()]);
         assert_eq!(fills.tally(&d2), (0, 1), "one zone out of date");
@@ -855,7 +856,7 @@ mod tests {
         renamed.uuid = "other".into();
         assert!(fills.current(&renamed).is_some(), "a name is no part of what a fill is a fill of");
         let mut thicker = z.clone();
-        thicker.min_thickness += Nm::from_raw_shim(10);
+        thicker.min_thickness += Nm::new(10);
         assert!(fills.current(&thicker).is_none(), "a setting is");
         let mut other_net = z.clone();
         other_net.net = "VCC".into();

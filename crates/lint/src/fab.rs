@@ -75,6 +75,7 @@ pub fn check(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{FootprintInstance, PlacementSection, Point, Provenance, Side};
@@ -97,11 +98,11 @@ mod tests {
     fn fixture() -> (Design, ConstraintModel) {
         let model = ConstraintModel { parts: vec![part("R1", Some("RC0402")), part("R10", Some("RC0402")), part("R2", Some("RC0402"))], ..Default::default() };
         let placement = PlacementSection {
-            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }],
+            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }],
             footprints: vec![
-                FootprintInstance { id: "R1".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, rot: 90_000, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "R10".into(), at: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(4_000_000) }, rot: 0, side: Side::Bottom, label: Default::default() },
-                FootprintInstance { id: "R2".into(), at: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(6_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "R1".into(), at: Point { x: mm(1.0), y: mm(2.0) }, rot: 90_000, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "R10".into(), at: Point { x: mm(3.0), y: mm(4.0) }, rot: 0, side: Side::Bottom, label: Default::default() },
+                FootprintInstance { id: "R2".into(), at: Point { x: mm(5.0), y: mm(6.0) }, rot: 0, side: Side::Top, label: Default::default() },
             ],
             modules: Vec::new(),
         };

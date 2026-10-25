@@ -168,6 +168,7 @@ pub fn flashed_layers(design: &Design, model: &ConstraintModel) -> Flashed {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use crate::tests_support::{pad_center, two_pad_model};
@@ -178,7 +179,7 @@ mod tests {
     fn through_hole_board(mode: UnconnectedLayers) -> (Design, ConstraintModel) {
         let (design, mut model) = two_pad_model();
         model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (Nm::from_raw_shim(1_200_000), Nm::from_raw_shim(1_200_000)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(Nm::from_raw_shim(400_000)), drill_slot: None, rot: 0, roundrect_ratio: None };
+        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (mm(1.2), mm(1.2)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.4)), drill_slot: None, rot: 0, roundrect_ratio: None };
         let mut fp = Footprint { name: "0603".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         fp.pads[0].ext.stack.unconnected = mode;
         model.footprints = vec![fp];
@@ -202,14 +203,14 @@ mod tests {
         assert!(flashed.pads.contains_key("R2.1"), "the footprint is the same for R2");
         assert!(!flashed.pads.contains_key("R1.2"), "pad 2 keeps all its layers");
         // A track of the net that ends on the pad on In1.Cu keeps that layer.
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "In1.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![at, Point { x: at.x, y: at.y + Nm::from_raw_shim(2_000_000) }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "In1.Cu".into(), width: mm(0.2), pts: vec![at, Point { x: at.x, y: at.y + mm(2.0) }], arc_mid_offset: None });
         assert_eq!(flashed_layers(&design, &model).pads["R1.1"], ["F.Cu", "In1.Cu", "B.Cu"]);
         // A track of another net there does not.
         design.routing.as_mut().unwrap().tracks[0].net = "N2".into();
         assert_eq!(flashed_layers(&design, &model).pads["R1.1"], ["F.Cu", "B.Cu"]);
         // A via of the net on the pad, from the front to In2.Cu, keeps the layers it spans.
         design.routing.as_mut().unwrap().tracks.clear();
-        design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "In2.Cu".into() });
+        design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "In2.Cu".into() });
         assert_eq!(flashed_layers(&design, &model).pads["R1.1"], ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
     }
 
@@ -227,7 +228,7 @@ mod tests {
         // R2 on top of R1: the first pads touch, on the same net, on every layer.
         let at = pad_center(&design, &model, "R1", "1");
         let r2 = design.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "R2").unwrap();
-        r2.at = Point { x: at.x + Nm::from_raw_shim(800_000), y: at.y };
+        r2.at = Point { x: at.x + mm(0.8), y: at.y };
         let flashed = flashed_layers(&design, &model);
         assert!(flashed.pads["R1.1"].is_empty() && flashed.pads["R2.1"].is_empty(), "{flashed:?}");
         // Were R2's pad to keep all its layers, it would be the one that makes R1's flash on all of them.

@@ -131,7 +131,7 @@ fn read_primitives(prims: &[Sexpr], side: Side) -> Vec<PadPrimitive> {
                 shape.set_filled(true);
             }
             if shape.stroke_width() <= Nm::ZERO && !shape.is_filled() {
-                shape.set_stroke_width(Nm::from_raw_shim(100_000));
+                shape.set_stroke_width(Nm::from_mm(0.1));
             }
         }
         out.push(PadPrimitive { shape, proxy });
@@ -258,11 +258,11 @@ mod tests {
     fn a_trapezoid_reads_its_delta_and_writes_it_back() {
         let node = pad_node("(pad \"1\" smd trapezoid (at 0 0) (size 2 1) (rect_delta 0.4 0) (layers \"F.Cu\"))");
         let r = read_pad_shape(&node, Side::Top);
-        assert_eq!((r.shape, r.ext.trapezoid_delta), (PadShape::Trapezoid, Some((Nm::from_raw_shim(400_000), Nm::ZERO))));
+        assert_eq!((r.shape, r.ext.trapezoid_delta), (PadShape::Trapezoid, Some((Nm::from_mm(0.4), Nm::ZERO))));
         assert_eq!(write_pad_shape(r.shape, r.roundrect_ratio, &r.ext, Side::Top).delta, " (rect_delta 0.4 0)");
         // Seen from the bottom the file's frame is mirrored: the x delta changes sign each way.
         let b = read_pad_shape(&node, Side::Bottom);
-        assert_eq!(b.ext.trapezoid_delta, Some((Nm::from_raw_shim(-400_000), Nm::ZERO)));
+        assert_eq!(b.ext.trapezoid_delta, Some((Nm::from_mm(-0.4), Nm::ZERO)));
         assert_eq!(write_pad_shape(b.shape, b.roundrect_ratio, &b.ext, Side::Bottom).delta, " (rect_delta 0.4 0)");
     }
 
@@ -293,7 +293,7 @@ mod tests {
         let custom = r.ext.custom.clone().unwrap();
         assert_eq!((custom.anchor, custom.zone, custom.primitives.len()), (PadAnchor::Rect, CustomZoneMode::ConvexHull, 6));
         assert_eq!(custom.primitives.iter().filter(|p| p.proxy).count(), 2, "gr_bbox and gr_vector are proxy items");
-        assert!(matches!(custom.primitives[0].shape, Shape::Circle { stroke_width, filled: false, center, .. } if stroke_width == Nm::from_raw_shim(2_200_000) && center == Point { x: Nm::from_raw_shim(-2_975_000), y: Nm::ZERO }));
+        assert!(matches!(custom.primitives[0].shape, Shape::Circle { stroke_width, filled: false, center, .. } if stroke_width == Nm::from_mm(2.2) && center == Point { x: Nm::from_mm(-2.975), y: Nm::ZERO }));
         // The text it writes reads back to the same shape, on either side.
         for side in [Side::Top, Side::Bottom] {
             let r = read_pad_shape(&node, side);
@@ -309,9 +309,9 @@ mod tests {
     #[test]
     fn the_shape_offset_is_read_from_inside_the_drill_and_mirrored_on_the_bottom() {
         let node = pad_node("(pad \"1\" thru_hole rect (at 0 0) (size 2 1) (drill 0.8 (offset 0.5 -0.25)) (layers \"*.Cu\"))");
-        assert_eq!(read_offset(&node, Side::Top), Some((Nm::from_raw_shim(500_000), Nm::from_raw_shim(-250_000))));
-        assert_eq!(read_offset(&node, Side::Bottom), Some((Nm::from_raw_shim(-500_000), Nm::from_raw_shim(-250_000))));
+        assert_eq!(read_offset(&node, Side::Top), Some((Nm::from_mm(0.5), Nm::from_mm(-0.25))));
+        assert_eq!(read_offset(&node, Side::Bottom), Some((Nm::from_mm(-0.5), Nm::from_mm(-0.25))));
         assert_eq!(read_offset(&pad_node("(pad \"1\" smd rect (at 0 0) (size 2 1))"), Side::Top), None);
-        assert_eq!(first_xy(&pad_node("(pts (xy 1 2))")), Some(Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }));
+        assert_eq!(first_xy(&pad_node("(pts (xy 1 2))")), Some(Point { x: Nm::from_mm(1.0), y: Nm::from_mm(2.0) }));
     }
 }

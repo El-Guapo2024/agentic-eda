@@ -12,6 +12,7 @@
 //! junction. A net with no such place either stays without a label (KiCad then names it after its best pin). A net that a label, a power symbol or a sheet pin names on the sheet already, and a name
 //! that is KiCad's default name of a net (`Net-(..)`, `unconnected-(..)`), get none.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use std::collections::BTreeSet;
 
@@ -53,7 +54,7 @@ fn obstacles(sch: &SchematicSection, model: &ConstraintModel, net: &str) -> Vec<
     for w in sch.wires.iter().filter(|w| w.net != net) {
         for pair in w.pts.windows(2) {
             let (a, b) = (pair[0], pair[1]);
-            out.push(Rect::new((a.x.min(b.x) - Nm::from_raw_shim(100_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(100_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(100_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(100_000)).raw_shim()));
+            out.push(Rect::new((a.x.min(b.x) - mm(0.1)).raw_shim(), (a.y.min(b.y) - mm(0.1)).raw_shim(), (a.x.max(b.x) + mm(0.1)).raw_shim(), (a.y.max(b.y) + mm(0.1)).raw_shim()));
         }
     }
     out
@@ -89,7 +90,7 @@ fn taken(sch: &SchematicSection, points: &BTreeSet<Point>, net: &str, p: Point) 
 
 /// The box of a wire run from `a` to `b`, as [`crate::obstacles`] measures a wire.
 fn thin(a: Point, b: Point) -> Rect {
-    Rect::new((a.x.min(b.x) - Nm::from_raw_shim(100_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(100_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(100_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(100_000)).raw_shim())
+    Rect::new((a.x.min(b.x) - mm(0.1)).raw_shim(), (a.y.min(b.y) - mm(0.1)).raw_shim(), (a.x.max(b.x) + mm(0.1)).raw_shim(), (a.y.max(b.y) + mm(0.1)).raw_shim())
 }
 
 /// Where a net's label goes: on its wire (`stub: None`), or at the end of a short stub drawn off its wire at `at` (the wire is broken there, with a
@@ -141,7 +142,7 @@ fn place_for(sch: &SchematicSection, model: &ConstraintModel, net: &str, usable:
                         continue;
                     }
                     // the junction at the stub's foot keeps clear too
-                    let junction = Rect::new((p.x - Nm::from_raw_shim(500_000)).raw_shim(), (p.y - Nm::from_raw_shim(500_000)).raw_shim(), (p.x + Nm::from_raw_shim(500_000)).raw_shim(), (p.y + Nm::from_raw_shim(500_000)).raw_shim());
+                    let junction = Rect::new((p.x - mm(0.5)).raw_shim(), (p.y - mm(0.5)).raw_shim(), (p.x + mm(0.5)).raw_shim(), (p.y + mm(0.5)).raw_shim());
                     if clear(&thin(p, end)) && clear(&junction) && label_clear(end, &label_rect(end, d, net, false)) {
                         return Some(Place { at: end, stub: Some(p) });
                     }

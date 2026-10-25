@@ -377,6 +377,7 @@ pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintMode
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::Provenance;
@@ -405,7 +406,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(15_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(15_000_000) }];
+        let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(15.0) }, Point { x: Nm::ZERO, y: mm(15.0) }];
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: eda_model::ir::SCHEMA_VERSION,
@@ -414,9 +415,9 @@ mod tests {
             placement: Some(PlacementSection {
                 outline,
                 footprints: vec![
-                    FootprintInstance { id: "U1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(7_500_000) }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "C1".into(), at: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(3_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "R1".into(), at: Point { x: Nm::from_raw_shim(17_000_000), y: Nm::from_raw_shim(12_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U1".into(), at: Point { x: mm(10.0), y: mm(7.5) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "C1".into(), at: Point { x: mm(3.0), y: mm(3.0) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: mm(17.0), y: mm(12.0) }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: Vec::new(),
             }),
@@ -481,7 +482,7 @@ mod tests {
         let back = from_bookshelf_pl(&bs.pl, &d, &m, 100_000).unwrap();
         for f in &back.placement.as_ref().unwrap().footprints {
             let orig = d.placement.as_ref().unwrap().footprints.iter().find(|o| o.id == f.id).unwrap();
-            assert!((f.at.x - orig.at.x).abs() <= Nm::from_raw_shim(100_000) && (f.at.y - orig.at.y).abs() <= Nm::from_raw_shim(100_000), "{}: {:?} vs {:?}", f.id, f.at, orig.at);
+            assert!((f.at.x - orig.at.x).abs() <= mm(0.1) && (f.at.y - orig.at.y).abs() <= mm(0.1), "{}: {:?} vs {:?}", f.id, f.at, orig.at);
         }
     }
 

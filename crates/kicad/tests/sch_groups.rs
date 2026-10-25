@@ -4,7 +4,7 @@
 //! The pure-Rust tests are our writer and reader (and the clipboard's). The slow one hands the file to kicad-cli (`EDA_SLOW_TESTS=1`, and it skips when there is none):
 //! it loads a file with nested groups, runs its ERC, and its own writer (`sch upgrade`) keeps the groups only when it found every member by the uuid we gave.
 
-use eda_model::units::Nm;
+use eda_model::units::mm;
 use eda_kicad::{export_kicad_sch, export_kicad_sch_mapped, import_kicad_sch, parse_clipboard, write_clipboard, CopyInput, ExportMeta};
 use eda_model::ir::{Design, Group, LabelKind, NetLabel, Point, Provenance, SchematicSection, SchematicText, SymbolInstance, Wire};
 use eda_model::symbol::{LibPin, LibSymbol, SPoint, SymbolGraphic};
@@ -52,19 +52,19 @@ fn design_with(sch: SchematicSection) -> Design {
 /// The gate with a wire from each pin out to a label (`NET_A`, `NET_B`, `NET_Y`), a text, and these groups: `inner = {w_NET_A, l_NET_A}` named "net A",
 /// `outer = {inner, U1}` named "gate" and `other = {l_NET_B, l_NET_Y, txt_note}` named "the rest".
 fn grouped(m: &ConstraintModel) -> SchematicSection {
-    let sym = SymbolInstance { id: "U1".into(), at: Point { x: Nm::from_raw_shim(76_200_000), y: Nm::from_raw_shim(76_200_000) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sym = SymbolInstance { id: "U1".into(), at: Point { x: mm(76.2), y: mm(76.2) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
     let mut sch = SchematicSection { symbols: vec![sym.clone()], ..Default::default() };
     let part = m.part("U1").unwrap();
     for (number, tip) in eda_engine::placed::pin_points(&sym, part, m.real_symbol_of(&sym.lib_id, part).as_ref()) {
         let left = number != "3";
-        let end = Point { x: tip.x + if left { Nm::from_raw_shim(-12_700_000) } else { Nm::from_raw_shim(12_700_000) }, y: tip.y };
+        let end = Point { x: tip.x + if left { mm(-12.7) } else { mm(12.7) }, y: tip.y };
         let net = format!("NET_{}", ["A", "B", "Y"][number.parse::<usize>().unwrap() - 1]);
         // the wire of net A bends once: two segments in the file, one wire here
-        let pts = if net == "NET_A" { vec![tip, Point { x: end.x + Nm::from_raw_shim(5_080_000), y: tip.y }, end] } else { vec![tip, end] };
+        let pts = if net == "NET_A" { vec![tip, Point { x: end.x + mm(5.08), y: tip.y }, end] } else { vec![tip, end] };
         sch.wires.push(Wire { id: format!("w_{net}"), net: net.clone(), pins: vec![], pts, bus: false });
         sch.labels.push(NetLabel { id: format!("l_{net}"), net, at: end, kind: LabelKind::Local });
     }
-    sch.texts.push(SchematicText { id: "txt_note".into(), content: "a note".into(), at: Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(40_000_000) }, angle: 0, size_nm: Nm::from_raw_shim(1_270_000) });
+    sch.texts.push(SchematicText { id: "txt_note".into(), content: "a note".into(), at: Point { x: mm(30.0), y: mm(40.0) }, angle: 0, size_nm: mm(1.27) });
     let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|s| s.to_string()).collect(), design_block: String::new() };
     sch.extras.groups = vec![group("grp_inner", "net A", &["w_NET_A", "l_NET_A"]), group("grp_outer", "gate", &["grp_inner", "U1"]), group("grp_other", "the rest", &["l_NET_B", "l_NET_Y", "txt_note"])];
     sch
@@ -414,7 +414,7 @@ fn kicad_draws_a_placed_user_field_where_we_put_it_in_a_sheet_with_nested_groups
     let user = sch.user_fields.entry("U1".into()).or_default();
     user.insert("MPN".into(), "74LVC1G08".into());
     user.insert("Manufacturer".into(), "TexasInstruments".into());
-    sch.field_layout.insert("U1".into(), vec![eda_model::ir::FieldPlacement { dx: Nm::from_raw_shim(12_700_000), dy: Nm::from_raw_shim(-20_320_000), visible: true, h: eda_model::ir::TextJustify::Left, ..eda_model::ir::FieldPlacement::at_origin("MPN") }]);
+    sch.field_layout.insert("U1".into(), vec![eda_model::ir::FieldPlacement { dx: mm(12.7), dy: mm(-20.32), visible: true, h: eda_model::ir::TextJustify::Left, ..eda_model::ir::FieldPlacement::at_origin("MPN") }]);
     let file_text = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
     let (ax, ay) = (76.2 + 12.7, 76.2 - 20.32);
     assert!(file_text.contains(&format!("(property \"MPN\" \"74LVC1G08\" (at {ax} {ay} 0)")), "our file puts the field at {ax} {ay}:\n{}", file_text.lines().filter(|l| l.contains("MPN")).collect::<Vec<_>>().join("\n"));

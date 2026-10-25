@@ -172,6 +172,7 @@ pub fn search_clusters(graph: &ConnGraph) -> Vec<Cluster> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use crate::items::ItemRef;
@@ -192,7 +193,7 @@ mod tests {
     fn a_track_between_them_merges_into_one_cluster() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, b], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![a, b], arc_mid_offset: None });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 1);
@@ -204,24 +205,24 @@ mod tests {
         use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
         use eda_model::{BoardRules, Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
         let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
-        let mut pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1_600_000), Nm::from_raw_shim(1_600_000)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(Nm::from_raw_shim(800_000)), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
-        pad.ext.stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(PadShape::Rect, (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(3_000_000)))), back: Some(PadLayerShape::plain(PadShape::Oval, (Nm::from_raw_shim(2_400_000), Nm::from_raw_shim(1_000_000)))), ..Default::default() };
+        let mut pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.6), mm(1.6)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.8)), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        pad.ext.stack = PadStack { mode: PadStackMode::FrontInnerBack, inner: Some(PadLayerShape::plain(PadShape::Rect, (mm(3.0), mm(3.0)))), back: Some(PadLayerShape::plain(PadShape::Oval, (mm(2.4), mm(1.0)))), ..Default::default() };
         let model = eda_model::ConstraintModel {
             parts: vec![part],
             nets: vec![Net { name: "N".into(), pins: vec!["J1.1".into()] }],
-            footprints: vec![Footprint { name: "TH1".into(), pads: vec![pad], courtyard: Some((Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_000_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }],
+            footprints: vec![Footprint { name: "TH1".into(), pads: vec![pad], courtyard: Some((mm(2.0), mm(2.0))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }],
             board: BoardRules { layers: vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()], ..Default::default() },
             ..Default::default()
         };
         let (mut design, _) = two_pad_model();
-        design.placement.as_mut().unwrap().footprints = vec![eda_model::ir::FootprintInstance { id: "J1".into(), at: eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, rot: 0, side, label: Default::default() }];
+        design.placement.as_mut().unwrap().footprints = vec![eda_model::ir::FootprintInstance { id: "J1".into(), at: eda_model::ir::Point { x: mm(10.0), y: mm(10.0) }, rot: 0, side, label: Default::default() }];
         (design, model)
     }
 
     /// The track on `layer` whose end is at (10000 + dx, 10000), and what the pad's pieces and the track have to say about one another.
     fn track_touches_the_pad(layer: &str, dx: i64, side: eda_model::ir::Side) -> (usize, bool) {
         let (mut design, model) = padstack_model(side);
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: layer.into(), width: Nm::from_raw_shim(200_000), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000 + dx), y: Nm::from_raw_shim(10_000_000) }, eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000 + dx + 3_000_000), y: Nm::from_raw_shim(10_000_000) }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000 + dx), y: mm(10.0) }, eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000 + dx + 3_000_000), y: mm(10.0) }], arc_mid_offset: None });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let pads: Vec<usize> = graph.items.iter().enumerate().filter(|(_, i)| matches!(i.item, ItemRef::Pad { .. })).map(|(i, _)| i).collect();
         let track = graph.items.iter().position(|i| matches!(i.item, ItemRef::TrackSeg { .. })).unwrap();
@@ -248,7 +249,7 @@ mod tests {
         let (mut design, model) = padstack_model(eda_model::ir::Side::Top);
         // A track on In1 ends in the inner square and a second one on B.Cu ends in the oval: the pad joins them.
         for (id, layer, x) in [("t1", "In1.Cu", 11_200_000), ("t2", "B.Cu", 11_150_000)] {
-            design.routing.as_mut().unwrap().tracks.push(Track { id: id.into(), net: "N".into(), pins: vec![], layer: layer.into(), width: Nm::from_raw_shim(200_000), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(10_000_000) }, eda_model::ir::Point { x: Nm::from_raw_shim(x + 3_000_000), y: Nm::from_raw_shim(10_000_000) }], arc_mid_offset: None });
+            design.routing.as_mut().unwrap().tracks.push(Track { id: id.into(), net: "N".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(x), y: mm(10.0) }, eda_model::ir::Point { x: Nm::from_raw_shim(x + 3_000_000), y: mm(10.0) }], arc_mid_offset: None });
         }
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
@@ -262,7 +263,7 @@ mod tests {
         use eda_model::ir::{Point, Via};
         use eda_model::{Footprint, Pad, PadKind, PadShape};
         let (mut design, mut model) = two_pad_model();
-        let pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(400_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(0.4)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
         model.footprints.push(Footprint { name: "SKEW".into(), pads: vec![pad], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() });
         model.parts[0].footprint = Some("SKEW".into());
         model.parts[0].package = Some("SKEW".into());
@@ -272,7 +273,7 @@ mod tests {
         // Along one diagonal is the pad's long axis (inside its copper), along the other 0.49 mm off it (outside the 0.2 mm half width); both in the box.
         let rt = design.routing.as_mut().unwrap();
         for (id, dx, dy) in [("v1", 350_000, 350_000), ("v2", 350_000, -350_000)] {
-            rt.vias.push(Via { id: id.into(), net: "N1".into(), at: Point { x: c.x + Nm::from_raw_shim(dx), y: c.y + Nm::from_raw_shim(dy) }, drill: Nm::from_raw_shim(100_000), diameter: Nm::from_raw_shim(200_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+            rt.vias.push(Via { id: id.into(), net: "N1".into(), at: Point { x: c.x + Nm::from_raw_shim(dx), y: c.y + Nm::from_raw_shim(dy) }, drill: mm(0.1), diameter: mm(0.2), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         }
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let pad_idx = graph.items.iter().position(|i| matches!(&i.item, ItemRef::Pad { reference, .. } if reference == "R1")).unwrap();
@@ -291,12 +292,12 @@ mod tests {
         use eda_model::padstack::UnconnectedLayers;
         let (mut design, mut model) = two_pad_model();
         model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
-        let at = Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(15_000_000) };
+        let at = Point { x: mm(10.0), y: mm(15.0) };
         let rt = design.routing.as_mut().unwrap();
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at, drill: Nm::from_raw_shim(400_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at, drill: mm(0.4), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         // In1: an end 0.3 mm from the centre, on the 0.4 mm ring but off the 0.2 mm hole (half width 0.05 mm). In2: an end 0.2 mm from it, at the hole.
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "In1.Cu".into(), width: Nm::from_raw_shim(100_000), pts: vec![Point { x: at.x + Nm::from_raw_shim(300_000), y: at.y }, Point { x: at.x + Nm::from_raw_shim(3_000_000), y: at.y }], arc_mid_offset: None });
-        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "In2.Cu".into(), width: Nm::from_raw_shim(100_000), pts: vec![Point { x: at.x - Nm::from_raw_shim(200_000), y: at.y }, Point { x: at.x - Nm::from_raw_shim(3_000_000), y: at.y }], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "In1.Cu".into(), width: mm(0.1), pts: vec![Point { x: at.x + mm(0.3), y: at.y }, Point { x: at.x + mm(3.0), y: at.y }], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "In2.Cu".into(), width: mm(0.1), pts: vec![Point { x: at.x - mm(0.2), y: at.y }, Point { x: at.x - mm(3.0), y: at.y }], arc_mid_offset: None });
         let touching = |design: &eda_model::ir::Design| -> Vec<String> {
             let graph = build_graph(design, &model, &ZoneCopper::default());
             let via = graph.items.iter().position(|i| matches!(i.item, ItemRef::Via { .. })).unwrap();

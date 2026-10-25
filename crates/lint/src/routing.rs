@@ -42,12 +42,13 @@ pub fn check(design: &Design, model: &ConstraintModel) -> Vec<Finding> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{PlacementSection, Provenance, RoutingSection, Track};
 
     fn design(width: i64) -> Design {
-        let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(width), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }], arc_mid_offset: None };
+        let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(width), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.0), y: mm(1.0) }], arc_mid_offset: None };
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: eda_model::ir::SCHEMA_VERSION,

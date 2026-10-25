@@ -415,6 +415,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Point, SchematicSection, SymbolInstance, Provenance};
@@ -464,8 +465,8 @@ mod tests {
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
                 symbols: vec![
-                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: mm(1.0), y: mm(2.0) }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: mm(3.0), y: mm(2.0) }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 ],
                 wires: vec![],
                 labels: vec![],
@@ -585,7 +586,7 @@ mod tests {
             id: String::new(),
             net: "VIN".into(),
             pins: vec![],
-            pts: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }],
+            pts: vec![Point { x: mm(1.0), y: mm(2.0) }, Point { x: mm(3.0), y: mm(2.0) }],
             bus: false,
         });
         let v = to_circuit_json(&d, &m).unwrap();
@@ -609,8 +610,8 @@ mod tests {
                 pads: vec![
                     eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "1".into(),
-                        at: (Nm::from_raw_shim(-800_000), Nm::ZERO),
-                        size: (Nm::from_raw_shim(900_000), Nm::from_raw_shim(900_000)),
+                        at: (mm(-0.8), Nm::ZERO),
+                        size: (mm(0.9), mm(0.9)),
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
@@ -620,8 +621,8 @@ mod tests {
                     },
                     eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "2".into(),
-                        at: (Nm::from_raw_shim(800_000), Nm::ZERO),
-                        size: (Nm::from_raw_shim(900_000), Nm::from_raw_shim(900_000)),
+                        at: (mm(0.8), Nm::ZERO),
+                        size: (mm(0.9), mm(0.9)),
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
@@ -640,10 +641,10 @@ mod tests {
         };
         let mut d = design();
         d.placement = Some(PlacementSection {
-            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }],
+            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }],
             footprints: vec![eda_model::ir::FootprintInstance {
                 id: "R1".into(),
-                at: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) },
+                at: Point { x: mm(5.0), y: mm(5.0) },
                 rot: 0,
                 side: Side::Top, label: Default::default()
             }],

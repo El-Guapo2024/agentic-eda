@@ -5,6 +5,7 @@
 //!
 //! The slow test (`EDA_SLOW_TESTS=1`, and it skips when there is no kicad-cli) has KiCad read the clipboard text and derive the nets.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_kicad::{export_kicad_sch, import_kicad_sch, parse_clipboard, write_clipboard, CopyInput, ExportMeta};
 use eda_model::ir::{Design, LabelKind, NetLabel, Point, Provenance, SchematicSection, SymbolInstance, Wire};
@@ -79,7 +80,7 @@ fn design_with(sch: SchematicSection) -> Design {
 fn sheet(m: &ConstraintModel, rot: u32, swapped: bool) -> SchematicSection {
     let sym = SymbolInstance {
         id: "U1".into(),
-        at: Point { x: Nm::from_raw_shim(76_200_000), y: Nm::from_raw_shim(76_200_000) },
+        at: Point { x: mm(76.2), y: mm(76.2) },
         rot,
         mirrored: false,
         mirror_y: false,

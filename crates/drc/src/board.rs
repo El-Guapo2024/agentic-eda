@@ -2,6 +2,7 @@
 //! board-space items every test provider works from -- the same role
 //! KiCad's own `BOARD` class plays for `DRC_ENGINE`. Built once per run.
 
+use eda_model::units::mm;
 use crate::kimath::Shape;
 use eda_model::footprint::placed_courtyard;
 use eda_model::ir::{Design, LabelSide, PadZoneFacts, Point, Shape as IrShape, Side, Text, Nm};
@@ -415,12 +416,12 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     // position* (so this item sits where the real label really is): 0.3 mm
     // per character of half-width for the Left/Right offset, a 0.7 mm gap
     // above/below the courtyard (0.2 mm beside it).
-    let half_w_offset = Nm::from_raw_shim(300_000) * fp.id.chars().count() as i64;
+    let half_w_offset = mm(0.3) * fp.id.chars().count() as i64;
     let local = match fp.label {
-        LabelSide::Above => (Nm::ZERO, -(hh + Nm::from_raw_shim(700_000))),
-        LabelSide::Below => (Nm::ZERO, hh + Nm::from_raw_shim(700_000)),
-        LabelSide::Left => (-(hw + Nm::from_raw_shim(200_000) + half_w_offset), Nm::ZERO),
-        LabelSide::Right => (hw + Nm::from_raw_shim(200_000) + half_w_offset, Nm::ZERO),
+        LabelSide::Above => (Nm::ZERO, -(hh + mm(0.7))),
+        LabelSide::Below => (Nm::ZERO, hh + mm(0.7)),
+        LabelSide::Left => (-(hw + mm(0.2) + half_w_offset), Nm::ZERO),
+        LabelSide::Right => (hw + mm(0.2) + half_w_offset, Nm::ZERO),
     };
     let center = pad_center(fp, local);
     // The label's own *rendered* extent, for collision purposes, is a

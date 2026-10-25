@@ -2,7 +2,7 @@
 //! (`eda_model::lib_keep`; P17 review). Each case is a divergence the round trip of KiCad's installed libraries found
 //! (`tests/library_roundtrip.rs`, slow tier): before it was fixed, the editors' write of the item lost what the case checks.
 
-use eda_model::units::Nm;
+use eda_model::units::mm;
 use eda_kicad::{export_kicad_mod, export_kicad_sym_library, parse_library_footprint, parse_library_symbols};
 
 fn one_symbol(text: &str) -> eda_model::ir::LibrarySymbol {
@@ -135,7 +135,7 @@ fn a_footprints_edge_connector_pad_fabrication_property_and_pad_margins_are_writ
     // a `connect` pad was read as an SMD pad and written `smd`
     assert!(p1.kicad.connector);
     assert_eq!(p1.kicad.property.as_deref(), Some("pad_prop_testpoint"));
-    assert_eq!(p1.kicad.solder_mask_margin, Some(Nm::from_raw_shim(50_000)));
+    assert_eq!(p1.kicad.solder_mask_margin, Some(mm(0.05)));
     let text = export_kicad_mod(&fp);
     assert!(text.contains("(pad \"1\" connect rect"), "{text}");
     assert!(text.contains("(property pad_prop_testpoint) (solder_mask_margin 0.05)"), "{text}");

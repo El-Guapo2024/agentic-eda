@@ -239,9 +239,9 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             origin,
             end,
             initial_side: prop_str(g, "initial_side").and_then(PatternSide::from_token).unwrap_or(PatternSide::Left),
-            min_amplitude: prop_nm(g, "min_amplitude").unwrap_or(Nm::from_raw_shim(200_000)),
-            max_amplitude: prop_nm(g, "max_amplitude").unwrap_or(Nm::from_raw_shim(1_000_000)),
-            spacing: prop_nm(g, "min_spacing").unwrap_or(Nm::from_raw_shim(600_000)),
+            min_amplitude: prop_nm(g, "min_amplitude").unwrap_or(Nm::from_mm(0.2)),
+            max_amplitude: prop_nm(g, "max_amplitude").unwrap_or(Nm::from_mm(1.0)),
+            spacing: prop_nm(g, "min_spacing").unwrap_or(Nm::from_mm(0.6)),
             corner_radius_percent: prop_num(g, "corner_radius_percent").map(|v| v.round().clamp(0.0, 100.0) as u32).unwrap_or(80),
             rounded: prop_bool(g, "rounded").unwrap_or(true),
             single_sided: prop_bool(g, "single_sided").unwrap_or(false),
@@ -295,9 +295,9 @@ mod tests {
             origin: p(115_571_000, 50_140_000),
             end: p(123_137_000, 50_140_000),
             initial_side: PatternSide::Right,
-            min_amplitude: Nm::from_raw_shim(200_000),
-            max_amplitude: Nm::from_raw_shim(1_500_000),
-            spacing: Nm::from_raw_shim(1_000_000),
+            min_amplitude: Nm::from_mm(0.2),
+            max_amplitude: Nm::from_mm(1.5),
+            spacing: Nm::from_mm(1.0),
             corner_radius_percent: 100,
             rounded: false,
             single_sided: true,
@@ -309,9 +309,9 @@ mod tests {
             target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             base_line: vec![p(115_571_000, 50_140_000), p(123_137_000, 50_140_000)],
             base_line_coupled: vec![p(115_571_000, 50_540_000), p(123_137_000, 50_540_000)],
-            last_track_width: Nm::from_raw_shim(200_000),
-            last_diff_pair_gap: Nm::from_raw_shim(180_000),
-            last_tuning_length: Nm::from_raw_shim(99_987_654),
+            last_track_width: Nm::from_mm(0.2),
+            last_diff_pair_gap: Nm::from_mm(0.18),
+            last_tuning_length: Nm::new(99_987_654),
             last_tuning_delay: 0,
             last_netname: "USB_P".into(),
             last_status: "too_short".into(),
@@ -375,7 +375,7 @@ mod tests {
         let back = import_patterns(tree.as_list().unwrap(), &ids);
         assert_eq!(back.len(), 1);
         let t = &back[0];
-        assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(600_000), 100), "min_amplitude takes MEANDER_SETTINGS' default");
+        assert_eq!((t.mode, t.layer.as_str(), t.max_amplitude, t.min_amplitude, t.spacing, t.corner_radius_percent), (TuningMode::Single, "F.Cu", Nm::from_mm(2.0), Nm::from_mm(0.2), Nm::from_mm(0.6), 100), "min_amplitude takes MEANDER_SETTINGS' default");
         assert_eq!((t.target_length, t.last_status.as_str(), t.base_line.len(), t.member_ids.len()), (TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 }, "too_short", 2, 2));
         assert_eq!((t.origin, t.end), (p(115_571_487, 50_140_000), p(123_137_350, 50_140_000)));
         // a pattern with no member of the board is a ghost

@@ -371,13 +371,14 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::tests_support::two_pad_model;
 
     #[test]
     fn builds_one_item_per_pad_and_per_track_segment() {
         let (mut design, model) = two_pad_model();
-        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }], arc_mid_offset: None });
         let items = build_items(&design, &model, &ZoneCopper::default());
         let pads = items.iter().filter(|i| matches!(i.item, ItemRef::Pad { .. })).count();
         let segs = items.iter().filter(|i| matches!(i.item, ItemRef::TrackSeg { .. })).count();
@@ -390,7 +391,7 @@ mod tests {
         let (design, mut model) = two_pad_model();
         model.footprints.push(eda_model::Footprint {
             name: "THPAD".into(),
-            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(Nm::from_raw_shim(500_000)), drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.5)), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],

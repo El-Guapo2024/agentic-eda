@@ -168,10 +168,10 @@ mod tests {
         let g = sexpr::find(tree.as_list().unwrap(), "generated").unwrap();
         let ids: BTreeMap<String, String> = [("04288bcc-34bb-42f3-875a-f6ee14bb69e9".to_string(), "via_a".to_string())].into_iter().collect();
         let v = read(g, &ids);
-        assert_eq!((v.layout, v.mode, v.net.as_str(), v.pitch_nm, v.seed, v.origin_offset), (StitchLayout::Staggered, StitchMode::Stitch, "GND", Nm::from_raw_shim(1_000_000), 7, Point { x: Nm::from_raw_shim(250_000), y: Nm::ZERO }));
+        assert_eq!((v.layout, v.mode, v.net.as_str(), v.pitch_nm, v.seed, v.origin_offset), (StitchLayout::Staggered, StitchMode::Stitch, "GND", Nm::from_mm(1.0), 7, Point { x: Nm::from_mm(0.25), y: Nm::ZERO }));
         assert_eq!(v.outline.len(), 4);
         assert_eq!(v.excluded_cells, vec![(3, 4), (-1, 2)]);
-        assert_eq!((v.via.size_nm, v.via.drill_nm, v.via.from_layer.as_str()), (Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), "F.Cu"));
+        assert_eq!((v.via.size_nm, v.via.drill_nm, v.via.from_layer.as_str()), (Nm::from_mm(0.6), Nm::from_mm(0.3), "F.Cu"));
         assert_eq!(v.member_ids, vec!["via_a".to_string()], "a member that is not a via of the board is not one");
 
         let written: BTreeMap<String, Vec<String>> = [("via_a".to_string(), vec!["u-1".to_string()])].into_iter().collect();
@@ -182,11 +182,11 @@ mod tests {
         assert!(at.windows(2).all(|w| w[0] < w[1]), "{out}");
         assert!(out.contains("(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"b3482f35-c371-4e19-8d52-5caeb32238dd\"))"), "{out}");
         // An edited template keeps the rest of the file's via.
-        let edited = ViaTemplate { size_nm: Nm::from_raw_shim(800_000), drill_nm: Nm::from_raw_shim(400_000), ..v.via.clone() };
+        let edited = ViaTemplate { size_nm: Nm::from_mm(0.8), drill_nm: Nm::from_mm(0.4), ..v.via.clone() };
         assert!(template_text(&edited, "x").contains("(size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (free yes)"));
         // and a new span is the template's too (the dialog's From / To).
         let blind = ViaTemplate { from_layer: "F.Cu".into(), to_layer: "In1.Cu".into(), ..v.via.clone() };
         assert!(template_text(&blind, "x").contains("(layers \"F.Cu\" \"In1.Cu\") (free yes)"), "{}", template_text(&blind, "x"));
-        assert_eq!(template_text(&ViaTemplate { size_nm: Nm::from_raw_shim(600_000), drill_nm: Nm::from_raw_shim(300_000), ..Default::default() }, "t"), "(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"t\"))");
+        assert_eq!(template_text(&ViaTemplate { size_nm: Nm::from_mm(0.6), drill_nm: Nm::from_mm(0.3), ..Default::default() }, "t"), "(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"t\"))");
     }
 }

@@ -426,7 +426,7 @@ mod tests {
         let dimension = Dimension {
             id: "dim_a".into(),
             layer: "Dwgs.User".into(),
-            kind: DimensionKind::Aligned { height: Nm::from_raw_shim(2_000_000) },
+            kind: DimensionKind::Aligned { height: Nm::from_mm(2.0) },
             start: p(30_000_000, 30_000_000),
             end: p(40_000_000, 30_000_000),
             prefix: String::new(),
@@ -439,11 +439,11 @@ mod tests {
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
             text_angle: 0,
-            text_size_nm: Nm::from_raw_shim(1_000_000),
-            stroke_width: Nm::from_raw_shim(150_000),
-            arrow_length: Nm::from_raw_shim(1_000_000),
-            extension_offset: Nm::from_raw_shim(300_000),
-            extension_height: Nm::from_raw_shim(500_000),
+            text_size_nm: Nm::from_mm(1.0),
+            stroke_width: Nm::from_mm(0.15),
+            arrow_length: Nm::from_mm(1.0),
+            extension_offset: Nm::from_mm(0.3),
+            extension_height: Nm::from_mm(0.5),
             arrow_direction: ArrowDirection::Inward,
             text_thickness_nm: None,
         };
@@ -466,18 +466,18 @@ mod tests {
             }),
             routing: Some(RoutingSection {
                 tracks: vec![
-                    Track { id: "trk_a".into(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(250_000), pts: vec![p(100_000_000, 100_000_000), p(110_000_000, 100_000_000), p(110_000_000, 105_000_000)], arc_mid_offset: None },
-                    Track::new_arc("GND".into(), "B.Cu".into(), Nm::from_raw_shim(300_000), p(100_000_000, 110_000_000), p(105_000_000, 105_000_000), p(110_000_000, 110_000_000)),
+                    Track { id: "trk_a".into(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_mm(0.25), pts: vec![p(100_000_000, 100_000_000), p(110_000_000, 100_000_000), p(110_000_000, 105_000_000)], arc_mid_offset: None },
+                    Track::new_arc("GND".into(), "B.Cu".into(), Nm::from_mm(0.3), p(100_000_000, 110_000_000), p(105_000_000, 105_000_000), p(110_000_000, 110_000_000)),
                 ],
-                vias: vec![Via { id: "via_a".into(), net: "VIN".into(), at: p(110_000_000, 105_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+                vias: vec![Via { id: "via_a".into(), net: "VIN".into(), at: p(110_000_000, 105_000_000), drill: Nm::from_mm(0.3), diameter: Nm::from_mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
                 zones: vec![Zone { id: "zone_a".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![p(90_000_000, 90_000_000), p(95_000_000, 90_000_000), p(95_000_000, 95_000_000), p(90_000_000, 95_000_000)], ..Default::default() }],
                 track_width_presets: vec![],
                 via_presets: vec![],
                 teardrop_settings: Default::default(),
             }),
             drawings: Some(DrawingsSection {
-                shapes: vec![Shape::Segment { id: "shp_a".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: p(100_000_000, 130_000_000), end: p(110_000_000, 130_000_000) }],
-                texts: vec![Text { id: "txt_a".into(), content: "hello".into(), at: p(100_000_000, 140_000_000), angle: 90_000, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Left, mirror: false }],
+                shapes: vec![Shape::Segment { id: "shp_a".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_mm(0.15), filled: false, start: p(100_000_000, 130_000_000), end: p(110_000_000, 130_000_000) }],
+                texts: vec![Text { id: "txt_a".into(), content: "hello".into(), at: p(100_000_000, 140_000_000), angle: 90_000, layer: "F.SilkS".into(), size_nm: Nm::from_mm(1.0), stroke_width: Nm::from_mm(0.15), justify: TextJustify::Left, mirror: false }],
                 dimensions: vec![dimension],
                 groups: vec![Group { id: "grp_a".into(), name: "block".into(), member_ids: vec!["shp_a".into(), "txt_a".into(), "zone_a".into()], design_block: String::new() }],
                 locked_ids: vec!["trk_a".into()],
@@ -503,11 +503,11 @@ mod tests {
         let (mut design, model) = fixture();
         let z = &mut design.routing.as_mut().unwrap().zones[0];
         z.smoothing = ZoneSmoothing::Fillet;
-        z.corner_radius = Nm::from_raw_shim(2_000_000);
+        z.corner_radius = Nm::from_mm(2.0);
         let text = export_pcb_clipboard(&design, &model, &ids(&["zone_a"]), p(0, 0)).unwrap();
         assert!(text.contains("(smoothing fillet)") && text.contains("(radius 2)"), "{text}");
         let clip = parse_pcb_clipboard(&text).unwrap();
-        assert_eq!((clip.zones[0].smoothing, clip.zones[0].corner_radius), (ZoneSmoothing::Fillet, Nm::from_raw_shim(2_000_000)));
+        assert_eq!((clip.zones[0].smoothing, clip.zones[0].corner_radius), (ZoneSmoothing::Fillet, Nm::from_mm(2.0)));
     }
 
     #[test]
@@ -516,8 +516,8 @@ mod tests {
         let (mut design, model) = fixture();
         design.drawings.as_mut().unwrap().zone_overrides.push(eda_model::ir::FootprintZoneOverrides {
             id: "C1".into(),
-            footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_raw_shim(900_000)) }),
-            pads: vec![PadZoneOverride { number: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(Nm::from_raw_shim(400_000)), thermal_spoke_width: Some(Nm::from_raw_shim(300_000)), thermal_spoke_angle_mdeg: Some(30_000), clearance: Some(Nm::from_raw_shim(600_000)) }],
+            footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_mm(0.9)) }),
+            pads: vec![PadZoneOverride { number: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(Nm::from_mm(0.4)), thermal_spoke_width: Some(Nm::from_mm(0.3)), thermal_spoke_angle_mdeg: Some(30_000), clearance: Some(Nm::from_mm(0.6)) }],
         });
         // A footprint on its own, and the same one inside a board fragment: the text says the same, and the paste reads it back.
         for names in [ids(&["C1"]), ids(&["C1", "zone_a"])] {
@@ -526,9 +526,9 @@ mod tests {
             assert!(text.contains("(zone_connect 2)") && text.contains("(thermal_gap 0.4)") && text.contains("(thermal_bridge_width 0.3)") && text.contains("(thermal_bridge_angle 30)"), "the pad's: {text}");
             let clip = parse_pcb_clipboard(&text).unwrap();
             let edit = clip.footprints[0].zone_overrides.as_ref().expect("the paste reads them back");
-            assert_eq!(edit.footprint, Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_raw_shim(900_000)) }));
+            assert_eq!(edit.footprint, Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_mm(0.9)) }));
             assert_eq!(edit.pads.len(), 1, "{:?}", edit.pads);
-            assert_eq!((edit.pads[0].number.as_str(), edit.pads[0].zone_connection, edit.pads[0].thermal_gap, edit.pads[0].thermal_spoke_width, edit.pads[0].thermal_spoke_angle_mdeg, edit.pads[0].clearance), ("2", Some(PadConnection::Full), Some(Nm::from_raw_shim(400_000)), Some(Nm::from_raw_shim(300_000)), Some(30_000), Some(Nm::from_raw_shim(600_000))));
+            assert_eq!((edit.pads[0].number.as_str(), edit.pads[0].zone_connection, edit.pads[0].thermal_gap, edit.pads[0].thermal_spoke_width, edit.pads[0].thermal_spoke_angle_mdeg, edit.pads[0].clearance), ("2", Some(PadConnection::Full), Some(Nm::from_mm(0.4)), Some(Nm::from_mm(0.3)), Some(30_000), Some(Nm::from_mm(0.6))));
         }
         // C2 sets nothing, and its copy says so.
         let clip = parse_pcb_clipboard(&export_pcb_clipboard(&design, &model, &ids(&["C2"]), p(0, 0)).unwrap()).unwrap();

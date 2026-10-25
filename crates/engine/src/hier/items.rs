@@ -1,5 +1,6 @@
 //! What a layout emits: the drawn items of one block or one sheet, with the rectangles they occupy.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use std::collections::BTreeMap;
 
@@ -206,7 +207,7 @@ pub struct Items {
 
 /// The box of a wire from `a` to `b`: the line and a hair either side.
 fn wire_rect(a: Point, b: Point) -> Rect {
-    Rect::new((a.x.min(b.x) - Nm::from_raw_shim(200_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(200_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(200_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(200_000)).raw_shim())
+    Rect::new((a.x.min(b.x) - mm(0.2)).raw_shim(), (a.y.min(b.y) - mm(0.2)).raw_shim(), (a.x.max(b.x) + mm(0.2)).raw_shim(), (a.y.max(b.y) + mm(0.2)).raw_shim())
 }
 
 fn shift(p: &mut Point, dx: i64, dy: i64) {
@@ -371,7 +372,7 @@ impl Items {
 
     /// Remember the wire from `tip` to `end` and the box of what it ends in.
     fn hang(&mut self, tip: Point, end: Point, item: Rect) {
-        let wire = Rect::new((tip.x.min(end.x) - Nm::from_raw_shim(200_000)).raw_shim(), (tip.y.min(end.y) - Nm::from_raw_shim(200_000)).raw_shim(), (tip.x.max(end.x) + Nm::from_raw_shim(200_000)).raw_shim(), (tip.y.max(end.y) + Nm::from_raw_shim(200_000)).raw_shim());
+        let wire = Rect::new((tip.x.min(end.x) - mm(0.2)).raw_shim(), (tip.y.min(end.y) - mm(0.2)).raw_shim(), (tip.x.max(end.x) + mm(0.2)).raw_shim(), (tip.y.max(end.y) + mm(0.2)).raw_shim());
         self.rects.push(wire);
         self.hung.push(wire);
         self.rects.push(item);
@@ -399,7 +400,7 @@ impl Items {
         self.failures += usize::from(!found);
         self.wire(net, vec![pin_ref.to_string()], pts.clone());
         for pair in pts.windows(2) {
-            let wire = Rect::new((pair[0].x.min(pair[1].x) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.min(pair[1].y) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].x.max(pair[1].x) + Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.max(pair[1].y) + Nm::from_raw_shim(200_000)).raw_shim());
+            let wire = Rect::new((pair[0].x.min(pair[1].x) - mm(0.2)).raw_shim(), (pair[0].y.min(pair[1].y) - mm(0.2)).raw_shim(), (pair[0].x.max(pair[1].x) + mm(0.2)).raw_shim(), (pair[0].y.max(pair[1].y) + mm(0.2)).raw_shim());
             self.rects.push(wire);
             self.hung.push(wire);
         }
@@ -452,12 +453,12 @@ impl Items {
                 let ends = ends_at(cells);
                 for (i, p) in run.iter().enumerate() {
                     self.wire(&net, vec![p.pin_ref.clone()], vec![p.tip, ends[i]]);
-                    let w = Rect::new((p.tip.x.min(ends[i].x) - Nm::from_raw_shim(200_000)).raw_shim(), (p.tip.y.min(ends[i].y) - Nm::from_raw_shim(200_000)).raw_shim(), (p.tip.x.max(ends[i].x) + Nm::from_raw_shim(200_000)).raw_shim(), (p.tip.y.max(ends[i].y) + Nm::from_raw_shim(200_000)).raw_shim());
+                    let w = Rect::new((p.tip.x.min(ends[i].x) - mm(0.2)).raw_shim(), (p.tip.y.min(ends[i].y) - mm(0.2)).raw_shim(), (p.tip.x.max(ends[i].x) + mm(0.2)).raw_shim(), (p.tip.y.max(ends[i].y) + mm(0.2)).raw_shim());
                     self.rects.push(w);
                     self.hung.push(w);
                     if i + 1 < run.len() {
                         self.wire(&net, Vec::new(), vec![ends[i], ends[i + 1]]);
-                        let j = Rect::new((ends[i].x.min(ends[i + 1].x) - Nm::from_raw_shim(200_000)).raw_shim(), (ends[i].y.min(ends[i + 1].y) - Nm::from_raw_shim(200_000)).raw_shim(), (ends[i].x.max(ends[i + 1].x) + Nm::from_raw_shim(200_000)).raw_shim(), (ends[i].y.max(ends[i + 1].y) + Nm::from_raw_shim(200_000)).raw_shim());
+                        let j = Rect::new((ends[i].x.min(ends[i + 1].x) - mm(0.2)).raw_shim(), (ends[i].y.min(ends[i + 1].y) - mm(0.2)).raw_shim(), (ends[i].x.max(ends[i + 1].x) + mm(0.2)).raw_shim(), (ends[i].y.max(ends[i + 1].y) + mm(0.2)).raw_shim());
                         self.rects.push(j);
                         self.hung.push(j);
                     }
@@ -477,7 +478,7 @@ impl Items {
         let kind = if hierarchical { LabelKind::Hierarchical { shape: LabelShape::Bidirectional } } else { LabelKind::Local };
         self.labels.push(NetLabel { id: String::new(), net: net.to_string(), at: end, kind });
         for pair in pts.windows(2) {
-            let wire = Rect::new((pair[0].x.min(pair[1].x) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.min(pair[1].y) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].x.max(pair[1].x) + Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.max(pair[1].y) + Nm::from_raw_shim(200_000)).raw_shim());
+            let wire = Rect::new((pair[0].x.min(pair[1].x) - mm(0.2)).raw_shim(), (pair[0].y.min(pair[1].y) - mm(0.2)).raw_shim(), (pair[0].x.max(pair[1].x) + mm(0.2)).raw_shim(), (pair[0].y.max(pair[1].y) + mm(0.2)).raw_shim());
             self.rects.push(wire);
             self.hung.push(wire);
         }
@@ -517,13 +518,13 @@ impl Items {
         }
         for ((pin_ref, tip), e) in pins.iter().zip(&ends) {
             self.wire(net, vec![pin_ref.clone()], vec![*tip, *e]);
-            let w = Rect::new((tip.x.min(e.x) - Nm::from_raw_shim(200_000)).raw_shim(), (tip.y.min(e.y) - Nm::from_raw_shim(200_000)).raw_shim(), (tip.x.max(e.x) + Nm::from_raw_shim(200_000)).raw_shim(), (tip.y.max(e.y) + Nm::from_raw_shim(200_000)).raw_shim());
+            let w = Rect::new((tip.x.min(e.x) - mm(0.2)).raw_shim(), (tip.y.min(e.y) - mm(0.2)).raw_shim(), (tip.x.max(e.x) + mm(0.2)).raw_shim(), (tip.y.max(e.y) + mm(0.2)).raw_shim());
             self.rects.push(w);
             self.hung.push(w);
         }
         for pair in join.windows(2) {
             self.wire(net, Vec::new(), vec![pair[0], pair[1]]);
-            let w = Rect::new((pair[0].x.min(pair[1].x) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.min(pair[1].y) - Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].x.max(pair[1].x) + Nm::from_raw_shim(200_000)).raw_shim(), (pair[0].y.max(pair[1].y) + Nm::from_raw_shim(200_000)).raw_shim());
+            let w = Rect::new((pair[0].x.min(pair[1].x) - mm(0.2)).raw_shim(), (pair[0].y.min(pair[1].y) - mm(0.2)).raw_shim(), (pair[0].x.max(pair[1].x) + mm(0.2)).raw_shim(), (pair[0].y.max(pair[1].y) + mm(0.2)).raw_shim());
             self.rects.push(w);
             self.hung.push(w);
         }

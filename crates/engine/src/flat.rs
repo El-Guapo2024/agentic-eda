@@ -6,6 +6,7 @@
 //! share a symbol; a `PWR_FLAG` stands on the pin's end and the symbol or label that shares the pin is three cells off, clear of it. What
 //! hangs on a pin steers clear of the other parts, the wires already routed and what hangs on the other pins, by a longer stub.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -68,7 +69,7 @@ fn flag_anchors(model: &ConstraintModel, parts_by_ref: &HashMap<&str, &Part>, po
 }
 
 fn thin(a: Point, b: Point) -> Rect {
-    Rect::new((a.x.min(b.x) - Nm::from_raw_shim(100_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(100_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(100_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(100_000)).raw_shim())
+    Rect::new((a.x.min(b.x) - mm(0.1)).raw_shim(), (a.y.min(b.y) - mm(0.1)).raw_shim(), (a.x.max(b.x) + mm(0.1)).raw_shim(), (a.y.max(b.y) + mm(0.1)).raw_shim())
 }
 
 /// Draw the rails and the labelled nets of a flat schematic: returns the labels and the power symbols (power symbols numbered `#PWR..`, the

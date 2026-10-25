@@ -277,8 +277,8 @@ pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>, u
         let (x0, y0, x1, y1) = real_symbol_bbox(sym, unit);
         let width_nm = eda_model::units::sch_from_mm((x1 - x0).max(0.0));
         let height_nm = eda_model::units::sch_from_mm((y1 - y0).max(0.0));
-        let width = ((width_nm.max(Nm::from_raw_shim(1)) + Nm::from_raw_shim(GRID) - Nm::from_raw_shim(1)) / GRID) * GRID;
-        let height = ((height_nm.max(Nm::from_raw_shim(1)) + Nm::from_raw_shim(GRID) - Nm::from_raw_shim(1)) / GRID) * GRID;
+        let width = ((width_nm.max(Nm::new(1)) + Nm::from_raw_shim(GRID) - Nm::new(1)) / GRID) * GRID;
+        let height = ((height_nm.max(Nm::new(1)) + Nm::from_raw_shim(GRID) - Nm::new(1)) / GRID) * GRID;
         // NOT floored to the old synthetic minimum, deliberately: a real
         // symbol's box edges on a side with a real pin are load-bearing
         // for `Node::stub_tip` (its Bottom/Right ports measure from

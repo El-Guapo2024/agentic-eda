@@ -5,6 +5,7 @@
 //!
 //! The slow test (`EDA_SLOW_TESTS=1`, and it skips when there is no kicad-cli) has kicad-cli read the file and derive the nets.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_kicad::{export_kicad_sch, ExportMeta};
 use eda_model::ir::{Design, LabelKind, NetLabel, Point, Provenance, SchematicSection, SymbolInstance, Wire};
@@ -82,7 +83,7 @@ fn sheet(m: &ConstraintModel) -> SchematicSection {
     for (i, (reference, rot, mirrored, mirror_y)) in [("U1", 0, false, false), ("U2", 90_000, false, false), ("U3", 0, true, false), ("U4", 0, false, true), ("U5", 90_000, true, false), ("U6", 270_000, false, true)].into_iter().enumerate() {
         let sym = SymbolInstance {
             id: reference.into(),
-            at: Point { x: Nm::from_raw_shim(50_800_000 + 50_800_000 * i as i64), y: Nm::from_raw_shim(76_200_000) },
+            at: Point { x: Nm::from_raw_shim(50_800_000 + 50_800_000 * i as i64), y: mm(76.2) },
             rot,
             mirrored,
             mirror_y,

@@ -241,7 +241,7 @@ mod tests {
         let _ = &model;
         let resolved_r = eda_model::symbol::builtin("Device:R");
         for (part, lib_id, resolved) in [(&u1, "eda:U1", None), (&r1, "Device:R", resolved_r.as_ref())] {
-            let at = Point { x: Nm::from_raw_shim(12_700_000), y: Nm::from_raw_shim(25_400_000) };
+            let at = Point { x: Nm::from_mm(12.7), y: Nm::from_mm(25.4) };
             let sym = instance(&part.reference, lib_id, at, 0);
             let pts = pin_points(&sym, part, resolved);
             let drawn = corner_symbol(lib_id, part, resolved, 1);
@@ -260,7 +260,7 @@ mod tests {
         let r1 = part("R1", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)]);
         let resolved = eda_model::symbol::builtin("Device:R");
         let b = part_box(&r1, resolved.as_ref(), 1);
-        let at = Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) };
+        let at = Point { x: Nm::from_mm(10.0), y: Nm::from_mm(10.0) };
         let up = pin_points(&instance("R1", "Device:R", at, 0), &r1, resolved.as_ref());
         // Turned half a turn about the corner, the box hangs up-left of `at`: put `at` at its far corner to compare.
         let flipped_at = Point { x: at.x + Nm::from_raw_shim(b.width()), y: at.y + Nm::from_raw_shim(b.height()) };

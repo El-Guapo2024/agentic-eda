@@ -23,6 +23,7 @@
 //!
 //! Units are nanometres, like the rest of this workspace and KiCad's.
 
+use eda_model::units::mm;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use eda_clipper2::Point64;
@@ -367,7 +368,7 @@ struct Endpoints {
 
 impl Endpoints {
     fn new(shapes: &[Shape], epsilon: Nm) -> Endpoints {
-        let cell = epsilon.max(Nm::from_raw_shim(1));
+        let cell = epsilon.max(Nm::new(1));
         let mut pts = Vec::new();
         for (i, s) in shapes.iter().enumerate() {
             if let Some((a, b)) = ends(s) {
@@ -385,7 +386,7 @@ impl Endpoints {
     /// `knnSearch( 2 )` restricted to what `findNext` can accept: the end points within `epsilon` of `p`, nearest first, at most two.
     fn two_within(&self, p: Point, epsilon: Nm) -> Vec<(i128, usize)> {
         let (cx, cy) = (p.x.div_euclid(self.cell), p.y.div_euclid(self.cell));
-        let span = (epsilon + self.cell - Nm::from_raw_shim(1)) / self.cell;
+        let span = (epsilon + self.cell - Nm::new(1)) / self.cell;
         let mut found: Vec<(i128, usize, usize)> = Vec::new();
         for gx in cx - span..=cx + span {
             for gy in cy - span..=cy + span {
@@ -883,7 +884,7 @@ pub fn build_board_polygon_outlines(shapes: &[Shape], max_error: f64, chaining_e
     if (!out.valid || out.polys.outline_count() == 0) && infer {
         if let Some((lo, hi)) = edge::bounding_box(shapes, max_error) {
             // A rectangle of no area is given a minimal size: one millimetre.
-            let (lo, hi) = if hi.x == lo.x || hi.y == lo.y { (Point { x: lo.x - Nm::from_raw_shim(1_000_000), y: lo.y - Nm::from_raw_shim(1_000_000) }, Point { x: hi.x + Nm::from_raw_shim(1_000_000), y: hi.y + Nm::from_raw_shim(1_000_000) }) } else { (lo, hi) };
+            let (lo, hi) = if hi.x == lo.x || hi.y == lo.y { (Point { x: lo.x - mm(1.0), y: lo.y - mm(1.0) }, Point { x: hi.x + mm(1.0), y: hi.y + mm(1.0) }) } else { (lo, hi) };
             out.polys.remove_all_contours();
             out.polys.add_outline(to_line_chain(&[lo, Point { x: lo.x, y: hi.y }, hi, Point { x: hi.x, y: lo.y }]));
             out.inferred = true;
@@ -1229,6 +1230,7 @@ pub fn check_edge_cuts(shapes: &[Shape]) -> Vec<OutlineError> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use eda_model::outline::EDGE_CUTS;
 
@@ -1237,19 +1239,19 @@ mod tests {
     }
 
     fn line(id: &str, a: Point, b: Point) -> Shape {
-        Shape::Segment { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, end: b }
+        Shape::Segment { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: mm(0.05), filled: false, start: a, end: b }
     }
 
     fn arc(id: &str, a: Point, m: Point, b: Point) -> Shape {
-        Shape::Arc { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, mid: m, end: b }
+        Shape::Arc { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: mm(0.05), filled: false, start: a, mid: m, end: b }
     }
 
     fn circle(id: &str, c: Point, rim: Point) -> Shape {
-        Shape::Circle { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, center: c, end: rim }
+        Shape::Circle { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: mm(0.05), filled: false, center: c, end: rim }
     }
 
     fn rect(id: &str, a: Point, b: Point) -> Shape {
-        Shape::Rect { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, end: b }
+        Shape::Rect { id: id.into(), layer: EDGE_CUTS.into(), stroke_width: mm(0.05), filled: false, start: a, end: b }
     }
 
     /// 40 x 30 mm with 5 mm rounded corners: four lines and four quarter arcs, in file order, not chained order.
@@ -1378,7 +1380,7 @@ mod tests {
     fn two_outlines_are_refused_where_disjoint_ones_are_not_allowed() {
         // The footprint pass of `BuildBoardPolygonOutlines` and any caller of `ConvertOutlineToPolygon` that wants one board.
         let items = vec![rect("left", p(0, 0), p(10_000_000, 10_000_000)), rect("right", p(20_000_000, 0), p(30_000_000, 10_000_000))];
-        let (_, ok, errors) = convert_outline_to_polygon(&items, 5000.0, Nm::from_raw_shim(10_000), false);
+        let (_, ok, errors) = convert_outline_to_polygon(&items, 5000.0, mm(0.01), false);
         assert!(!ok);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].message, "(multiple board outlines not supported)");
@@ -1492,14 +1494,14 @@ mod tests {
 
     #[test]
     fn a_polygon_is_a_contour_by_itself_and_so_is_a_curve_chain() {
-        let poly = Shape::Polygon { id: "poly".into(), layer: EDGE_CUTS.into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, pts: vec![p(0, 0), p(20_000_000, 0), p(20_000_000, 20_000_000), p(0, 20_000_000)] };
+        let poly = Shape::Polygon { id: "poly".into(), layer: EDGE_CUTS.into(), stroke_width: mm(0.05), filled: false, pts: vec![p(0, 0), p(20_000_000, 0), p(20_000_000, 20_000_000), p(0, 20_000_000)] };
         let out = board_outline_of(&[poly], false);
         assert!(out.valid);
         assert_eq!(out.polys.area(), 400_000_000_000_000.0);
         // Two Bezier halves of a lens, end to end.
         let lens = vec![
-            Shape::Bezier { id: "up".into(), layer: EDGE_CUTS.into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: p(0, 0), c1: p(0, -8_000_000), c2: p(20_000_000, -8_000_000), end: p(20_000_000, 0) },
-            Shape::Bezier { id: "dn".into(), layer: EDGE_CUTS.into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: p(20_000_000, 0), c1: p(20_000_000, 8_000_000), c2: p(0, 8_000_000), end: p(0, 0) },
+            Shape::Bezier { id: "up".into(), layer: EDGE_CUTS.into(), stroke_width: mm(0.05), filled: false, start: p(0, 0), c1: p(0, -8_000_000), c2: p(20_000_000, -8_000_000), end: p(20_000_000, 0) },
+            Shape::Bezier { id: "dn".into(), layer: EDGE_CUTS.into(), stroke_width: mm(0.05), filled: false, start: p(20_000_000, 0), c1: p(20_000_000, 8_000_000), c2: p(0, 8_000_000), end: p(0, 0) },
         ];
         let out = board_outline_of(&lens, false);
         assert!(out.valid && out.errors.is_empty(), "{:?}", out.errors);
@@ -1548,7 +1550,7 @@ mod tests {
         assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 1));
         refresh_outline_summary(&mut d, None);
         let summary = &d.placement.as_ref().expect("placement").outline;
-        assert!(summary.len() > 60 && summary.iter().all(|q| (Nm::ZERO..=Nm::from_raw_shim(40_000_000)).contains(&q.x) && (Nm::ZERO..=Nm::from_raw_shim(30_000_000)).contains(&q.y)), "{} points", summary.len());
+        assert!(summary.len() > 60 && summary.iter().all(|q| (Nm::ZERO..=mm(40.0)).contains(&q.x) && (Nm::ZERO..=mm(30.0)).contains(&q.y)), "{} points", summary.len());
     }
 
     /// The same cases on every run.
@@ -1583,12 +1585,12 @@ mod tests {
                 let (id, layer) = (format!("s{i}"), EDGE_CUTS.to_string());
                 let (a, b, c) = (r.point(span, grid), r.point(span, grid), r.point(span, grid));
                 shapes.push(match r.range(0, 6) {
-                    0 | 1 => Shape::Segment { id, layer, stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, end: b },
-                    2 => Shape::Arc { id, layer, stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, mid: b, end: c },
-                    3 => Shape::Circle { id, layer, stroke_width: Nm::from_raw_shim(50_000), filled: r.range(0, 1) == 1, center: a, end: b },
-                    4 => Shape::Rect { id, layer, stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, end: b },
-                    5 => Shape::Polygon { id, layer, stroke_width: Nm::from_raw_shim(50_000), filled: false, pts: vec![a, b, c] },
-                    _ => Shape::Bezier { id, layer, stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, c1: b, c2: c, end: r.point(span, grid) },
+                    0 | 1 => Shape::Segment { id, layer, stroke_width: mm(0.05), filled: false, start: a, end: b },
+                    2 => Shape::Arc { id, layer, stroke_width: mm(0.05), filled: false, start: a, mid: b, end: c },
+                    3 => Shape::Circle { id, layer, stroke_width: mm(0.05), filled: r.range(0, 1) == 1, center: a, end: b },
+                    4 => Shape::Rect { id, layer, stroke_width: mm(0.05), filled: false, start: a, end: b },
+                    5 => Shape::Polygon { id, layer, stroke_width: mm(0.05), filled: false, pts: vec![a, b, c] },
+                    _ => Shape::Bezier { id, layer, stroke_width: mm(0.05), filled: false, start: a, c1: b, c2: c, end: r.point(span, grid) },
                 });
             }
             if case % 5 == 0 {

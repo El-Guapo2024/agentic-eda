@@ -361,22 +361,23 @@ fn zone_item_touch(poly: &[Point], item: &ItemShape, anchors: &[Point]) -> bool 
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
     fn a_segment_crossing_a_zone_without_an_anchor_inside_touches_it() {
-        let sq = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000) }];
-        let seg = ItemShape::Segment { a: Point { x: Nm::from_raw_shim(-50_000), y: Nm::from_raw_shim(50_000) }, b: Point { x: Nm::from_raw_shim(150_000), y: Nm::from_raw_shim(50_000) }, half_width: 5000.0 };
-        assert!(touches(&ItemShape::Zone { outline: sq.to_vec() }, &[], &seg, &[Point { x: Nm::from_raw_shim(-50_000), y: Nm::from_raw_shim(50_000) }, Point { x: Nm::from_raw_shim(150_000), y: Nm::from_raw_shim(50_000) }]));
-        let far = ItemShape::Segment { a: Point { x: Nm::from_raw_shim(-50_000), y: Nm::from_raw_shim(150_000) }, b: Point { x: Nm::from_raw_shim(150_000), y: Nm::from_raw_shim(150_000) }, half_width: 5000.0 };
+        let sq = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }, Point { x: Nm::ZERO, y: mm(0.1) }];
+        let seg = ItemShape::Segment { a: Point { x: mm(-0.05), y: mm(0.05) }, b: Point { x: mm(0.15), y: mm(0.05) }, half_width: 5000.0 };
+        assert!(touches(&ItemShape::Zone { outline: sq.to_vec() }, &[], &seg, &[Point { x: mm(-0.05), y: mm(0.05) }, Point { x: mm(0.15), y: mm(0.05) }]));
+        let far = ItemShape::Segment { a: Point { x: mm(-0.05), y: mm(0.15) }, b: Point { x: mm(0.15), y: mm(0.15) }, half_width: 5000.0 };
         assert!(!touches(&ItemShape::Zone { outline: sq.to_vec() }, &[], &far, &[]));
     }
 
     #[test]
     fn a_point_on_the_zone_edge_within_accuracy_hits() {
-        let sq = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000) }];
-        assert!(zone_hits_point(&sq, Point { x: Nm::from_raw_shim(50_000), y: Nm::from_raw_shim(103_000) }, 5000.0));
-        assert!(!zone_hits_point(&sq, Point { x: Nm::from_raw_shim(50_000), y: Nm::from_raw_shim(110_000) }, 5000.0));
+        let sq = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }, Point { x: Nm::ZERO, y: mm(0.1) }];
+        assert!(zone_hits_point(&sq, Point { x: mm(0.05), y: mm(0.103) }, 5000.0));
+        assert!(!zone_hits_point(&sq, Point { x: mm(0.05), y: mm(0.11) }, 5000.0));
     }
 
     /// A pad given as pieces (a 45-degree rectangle) touches a track that crosses its copper, not one that only crosses the corner of its box.
@@ -386,38 +387,38 @@ mod tests {
         // 1000 x 400 turned 45 degrees about (0, 0): its long axis is the diagonal y = x.
         let corner = |u: f64, v: f64| (u * s - v * s, u * s + v * s);
         let poly = PadPiece::Polygon(vec![corner(-500_000.0, -200_000.0), corner(500_000.0, -200_000.0), corner(500_000.0, 200_000.0), corner(-500_000.0, 200_000.0)]);
-        let pad = PlacedPad { number: "1".into(), center: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::from_raw_shim(990_000), Nm::from_raw_shim(990_000)), through_hole: false, shape: eda_model::footprint::PadShape::Rect, roundrect_ratio: None, pieces: vec![poly] };
+        let pad = PlacedPad { number: "1".into(), center: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (mm(0.99), mm(0.99)), through_hole: false, shape: eda_model::footprint::PadShape::Rect, roundrect_ratio: None, pieces: vec![poly] };
         let seg = |x0: Nm, y0: Nm, x1: Nm, y1: Nm| ItemShape::Segment { a: Point { x: x0, y: y0 }, b: Point { x: x1, y: y1 }, half_width: 25_000.0 };
         // Across the box's corner at (450, -450), 0.45 mm off the long axis: no copper there.
-        assert!(!touches(&ItemShape::Pad(pad.clone()), &[], &seg(Nm::from_raw_shim(300_000), Nm::from_raw_shim(-480_000), Nm::from_raw_shim(480_000), Nm::from_raw_shim(-300_000)), &[]));
+        assert!(!touches(&ItemShape::Pad(pad.clone()), &[], &seg(mm(0.3), mm(-0.48), mm(0.48), mm(-0.3)), &[]));
         // Across the far end of the long axis.
-        assert!(touches(&ItemShape::Pad(pad), &[], &seg(Nm::from_raw_shim(200_000), Nm::from_raw_shim(480_000), Nm::from_raw_shim(480_000), Nm::from_raw_shim(200_000)), &[]));
+        assert!(touches(&ItemShape::Pad(pad), &[], &seg(mm(0.2), mm(0.48), mm(0.48), mm(0.2)), &[]));
     }
 
     #[test]
     fn point_in_square() {
-        let square = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000) }];
-        assert!(point_in_polygon(Point { x: Nm::from_raw_shim(50_000), y: Nm::from_raw_shim(50_000) }, &square));
-        assert!(!point_in_polygon(Point { x: Nm::from_raw_shim(150_000), y: Nm::from_raw_shim(50_000) }, &square));
+        let square = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }, Point { x: Nm::ZERO, y: mm(0.1) }];
+        assert!(point_in_polygon(Point { x: mm(0.05), y: mm(0.05) }, &square));
+        assert!(!point_in_polygon(Point { x: mm(0.15), y: mm(0.05) }, &square));
     }
 
     #[test]
     fn crossing_segments_have_zero_distance() {
-        let d = seg_seg_distance(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000) }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO });
+        let d = seg_seg_distance(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: mm(0.1) }, Point { x: Nm::ZERO, y: mm(0.1) }, Point { x: mm(0.1), y: Nm::ZERO });
         assert_eq!(d, 0.0);
     }
 
     #[test]
     fn parallel_segments_measure_perpendicular_gap() {
-        let d = seg_seg_distance(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(50_000) }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(50_000) });
+        let d = seg_seg_distance(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.1), y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(0.05) }, Point { x: mm(0.1), y: mm(0.05) });
         assert!((d - 50_000.0).abs() < 1e-6);
     }
 
     #[test]
     fn circle_pads_measure_center_distance_minus_radii() {
         let pad = |x: Nm, y: Nm, d: Nm| PlacedPad { number: "1".into(), center: Point { x, y }, size: (d, d), through_hole: false, shape: eda_model::footprint::PadShape::Circle, roundrect_ratio: None, pieces: Vec::new() };
-        let a = pad(Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(1_000_000));
-        let b = pad(Nm::from_raw_shim(3_000_000), Nm::ZERO, Nm::from_raw_shim(1_000_000));
+        let a = pad(Nm::ZERO, Nm::ZERO, mm(1.0));
+        let b = pad(mm(3.0), Nm::ZERO, mm(1.0));
         // centers 3000 apart, radii 500 each -> gap 2000.
         assert!((pad_pad_distance(&a, &b) - 2_000_000.0).abs() < 1e-6);
     }

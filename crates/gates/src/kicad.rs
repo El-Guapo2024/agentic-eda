@@ -139,6 +139,7 @@ pub fn check(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_kicad_engine::Item;
@@ -246,10 +247,10 @@ mod tests {
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(40_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(40_000_000) }],
+                outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(40.0), y: Nm::ZERO }, Point { x: mm(40.0), y: mm(40.0) }, Point { x: Nm::ZERO, y: mm(40.0) }],
                 footprints: vec![
-                    FootprintInstance { id: "R1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "R2".into(), at: Point { x: Nm::from_raw_shim(second_x), y: Nm::from_raw_shim(20_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: mm(10.0), y: mm(20.0) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R2".into(), at: Point { x: Nm::from_raw_shim(second_x), y: mm(20.0) }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: vec![],
             }),

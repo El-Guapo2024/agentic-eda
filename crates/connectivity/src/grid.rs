@@ -75,7 +75,7 @@ impl Grid {
             x1 = x1.max(b.2);
             y1 = y1.max(b.3);
         }
-        let area = ((x1 - x0).max(Nm::from_raw_shim(1)).raw_shim() as f64) * ((y1 - y0).max(Nm::from_raw_shim(1)).raw_shim() as f64);
+        let area = ((x1 - x0).max(Nm::new(1)).raw_shim() as f64) * ((y1 - y0).max(Nm::new(1)).raw_shim() as f64);
         let target = (area / boxes.len().max(1) as f64).sqrt();
         (target as i64).max(MIN_CELL_NM)
     }
@@ -83,13 +83,14 @@ impl Grid {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
     fn finds_overlapping_boxes_across_cell_boundaries() {
-        let boxes = vec![(Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(100_000), Nm::from_raw_shim(100_000)), (Nm::from_raw_shim(90_000), Nm::from_raw_shim(90_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(200_000)), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_100_000), Nm::from_raw_shim(10_100_000))];
+        let boxes = vec![(Nm::ZERO, Nm::ZERO, mm(0.1), mm(0.1)), (mm(0.09), mm(0.09), mm(0.2), mm(0.2)), (mm(10.0), mm(10.0), mm(10.1), mm(10.1))];
         let grid = Grid::build(&boxes);
-        let hits = grid.query((Nm::from_raw_shim(50_000), Nm::from_raw_shim(50_000), Nm::from_raw_shim(95_000), Nm::from_raw_shim(95_000)));
+        let hits = grid.query((mm(0.05), mm(0.05), mm(0.095), mm(0.095)));
         assert!(hits.contains(&0));
         assert!(hits.contains(&1));
         assert!(!hits.contains(&2));
@@ -97,9 +98,9 @@ mod tests {
 
     #[test]
     fn query_dedupes_items_spanning_many_cells() {
-        let boxes = vec![(Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(50_000_000))];
+        let boxes = vec![(Nm::ZERO, Nm::ZERO, mm(50.0), mm(50.0))];
         let grid = Grid::build(&boxes);
-        let hits = grid.query((Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(50_000_000)));
+        let hits = grid.query((Nm::ZERO, Nm::ZERO, mm(50.0), mm(50.0)));
         assert_eq!(hits, vec![0]);
     }
 }

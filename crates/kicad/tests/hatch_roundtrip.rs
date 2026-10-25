@@ -2,6 +2,7 @@
 //! rectangle, a circle and a polygon are read into the board's `shape_styles` and written back as the same tokens, and come back unchanged; a solid or an empty fill is not a
 //! hatch; the clipboard has the hatch; the shape's own id names its style so it follows the shape through an edit.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_kicad::{export_kicad_pcb, export_pcb_clipboard, import_kicad_pcb, ExportMeta};
 use eda_model::ir::{Design, Point, Shape};
@@ -51,7 +52,7 @@ fn the_three_hatches_are_read_and_a_solid_or_empty_fill_is_not_one() {
     // A hatched shape is not "filled": the fill the IR has is the solid one.
     let hatched = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: Nm::ZERO, y: Nm::ZERO })).unwrap();
     assert!(!hatched.is_filled());
-    let solid = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) })).unwrap();
+    let solid = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: Nm::ZERO, y: mm(20.0) })).unwrap();
     assert!(solid.is_filled());
     // The styles are named by the ids the shapes have.
     for st in &dr.board_items.shape_styles {
@@ -88,7 +89,7 @@ fn the_writer_has_the_token_of_each_hatch_and_it_reads_back_the_same() {
 fn a_hatch_the_design_has_is_written_even_when_it_was_set_by_a_verb_and_not_read() {
     let (mut design, model, _) = import_kicad_pcb(&board(ITEMS)).expect("imports");
     let dr = design.drawings.as_mut().unwrap();
-    let plain = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) })).unwrap().id().to_string();
+    let plain = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: mm(20.0), y: mm(20.0) })).unwrap().id().to_string();
     dr.board_items.set_hatch(&plain, Some(HatchKind::ReverseHatch));
     let text = export(&design, &model);
     assert_eq!(text.matches("(fill reverse_hatch)").count(), 2);
@@ -96,7 +97,7 @@ fn a_hatch_the_design_has_is_written_even_when_it_was_set_by_a_verb_and_not_read
     // A solid fill wins if both are somehow there.
     let solid = {
         let dr = design.drawings.as_mut().unwrap();
-        let id = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) })).unwrap().id().to_string();
+        let id = dr.shapes.iter().find(|s| s.points().first() == Some(&Point { x: Nm::ZERO, y: mm(20.0) })).unwrap().id().to_string();
         dr.board_items.set_hatch(&id, Some(HatchKind::Hatch));
         id
     };
@@ -124,7 +125,7 @@ fn the_style_of_a_shape_that_is_gone_is_dropped_before_another_takes_its_id() {
     dr.shapes.retain(|s| s.id() != gone);
     assert!(dr.board_items.hatch_of(&gone).is_some(), "still there until ids are assigned");
     // The same shape added again gets the same id (the id is a hash of the geometry) -- and must not come back hatched.
-    dr.shapes.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) } });
+    dr.shapes.push(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(10.0), y: mm(10.0) } });
     dr.assign_missing_ids();
     assert_eq!(dr.board_items.hatch_of(&gone), None);
     assert_eq!(dr.board_items.shape_styles.len(), 2);

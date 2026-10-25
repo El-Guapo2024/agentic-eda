@@ -893,6 +893,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
@@ -941,7 +942,7 @@ mod tests {
     #[test]
     fn cells_and_positions_follow_the_anchor_and_the_stagger() {
         let mut v = ViaStitch::new(vec![]);
-        v.origin_offset = Point { x: Nm::from_raw_shim(250_000), y: Nm::ZERO };
+        v.origin_offset = Point { x: mm(0.25), y: Nm::ZERO };
         let pitch = 1_000_000;
         assert_eq!(position_for_cell(&v, pitch, (3, 2)), (3_250_000, 2_000_000));
         assert_eq!(cell_for_position(&v, pitch, (3_250_000, 2_000_000)), (3, 2));
@@ -951,7 +952,7 @@ mod tests {
         // A via dragged to (10.1, 5.3) mm on a plain grid anchors it at (0.1, 0.3).
         let mut plain = ViaStitch::new(vec![]);
         plain.member_ids = vec!["a".into()];
-        assert_eq!(detect_origin_offset(&plain, pitch, &[(10_100_000, 5_300_000)]), Some(Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(300_000) }));
+        assert_eq!(detect_origin_offset(&plain, pitch, &[(10_100_000, 5_300_000)]), Some(Point { x: mm(0.1), y: mm(0.3) }));
         assert_eq!(detect_origin_offset(&plain, pitch, &[(10_000_000, 5_000_000)]), None, "on its cell");
     }
 }

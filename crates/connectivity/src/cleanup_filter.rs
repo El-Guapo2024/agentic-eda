@@ -142,6 +142,7 @@ fn is_locked(design: &Design, id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use crate::cleanup::{compute_cleanup_filtered, CleanupKind, CleanupOptions, CleanupReport};
@@ -155,7 +156,7 @@ mod tests {
     }
 
     fn via(id: &str, net: &str, at: Point) -> Via {
-        Via { id: id.into(), net: net.into(), at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+        Via { id: id.into(), net: net.into(), at, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     fn class(name: &str, nets: &[&str]) -> NetClass {
@@ -300,7 +301,7 @@ mod tests {
     fn dangling_tracks_and_vias_the_filter_skips_stay() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        let up = |p: Point| Point { x: p.x, y: p.y + Nm::from_raw_shim(10_000_000) };
+        let up = |p: Point| Point { x: p.x, y: p.y + mm(10.0) };
         let rt = design.routing.as_mut().unwrap();
         rt.tracks.push(track("stub1", "N1", "F.Cu", 200_000, vec![a, up(a)]));
         rt.tracks.push(track("stub2", "N1", "F.Cu", 200_000, vec![b, up(b)]));
@@ -318,7 +319,7 @@ mod tests {
     fn a_dangling_via_the_filter_skips_stays() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let via_at = Point { x: a.x, y: a.y + Nm::from_raw_shim(3_000_000) };
+        let via_at = Point { x: a.x, y: a.y + mm(3.0) };
         let rt = design.routing.as_mut().unwrap();
         rt.tracks.push(track("t1", "N1", "F.Cu", 200_000, vec![a, via_at]));
         rt.vias.push(via("v1", "N1", via_at));
@@ -338,8 +339,8 @@ mod tests {
         let rt = design.routing.as_mut().unwrap();
         rt.tracks.push(track("bridge", "N1", "F.Cu", 200_000, vec![a, b]));
         rt.vias.push(via("sv", "N1", b));
-        rt.tracks.push(track("inpad1", "N1", "F.Cu", 50_000, vec![a, Point { x: a.x + Nm::from_raw_shim(5), y: a.y }]));
-        rt.tracks.push(track("inpad2", "N2", "F.Cu", 50_000, vec![b, Point { x: b.x + Nm::from_raw_shim(5), y: b.y }]));
+        rt.tracks.push(track("inpad1", "N1", "F.Cu", 50_000, vec![a, Point { x: a.x + Nm::new(5), y: a.y }]));
+        rt.tracks.push(track("inpad2", "N2", "F.Cu", 50_000, vec![b, Point { x: b.x + Nm::new(5), y: b.y }]));
 
         let shorts = CleanupOptions { delete_shorting: true, ..Default::default() };
         let all = cleanup(&design, &model, shorts, &CleanupFilter::default());

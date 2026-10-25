@@ -108,6 +108,7 @@ fn narrow(model: &ConstraintModel, placed: &BTreeSet<&str>) -> ConstraintModel {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{FootprintInstance, LabelSide, PlacementSection, Point, Provenance, Side};
@@ -158,9 +159,9 @@ mod tests {
             placement: Some(PlacementSection {
                 outline: vec![
                     Point { x: Nm::ZERO, y: Nm::ZERO },
-                    Point { x: Nm::from_raw_shim(100_000_000), y: Nm::ZERO },
-                    Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(100_000_000) },
-                    Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000_000) },
+                    Point { x: mm(100.0), y: Nm::ZERO },
+                    Point { x: mm(100.0), y: mm(100.0) },
+                    Point { x: Nm::ZERO, y: mm(100.0) },
                 ],
                 footprints: fps,
                 modules: Vec::new(),

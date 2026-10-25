@@ -5,6 +5,7 @@
 //! * Slow (`EDA_SLOW_TESTS=1`): kicad-cli loads the file and writes it again itself (`sch upgrade --force`), and what it kept of each label's fields is what
 //!   we wrote.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_engine::{derive_schematic, EngineOptions};
 use eda_kicad::{export_kicad_sch, import_kicad_sch, ExportMeta};
@@ -41,7 +42,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     let sch = design.schematic.as_mut().unwrap();
     for (i, (kind, spin, fields)) in cases().into_iter().enumerate() {
         let id = format!("lbl_fields_{i}");
-        sch.labels.push(NetLabel { id: id.clone(), net: format!("FLD{i}"), at: Point { x: Nm::from_raw_shim(200_000_000), y: Nm::from_raw_shim(20_000_000 + 20_320_000 * i as i64) }, kind });
+        sch.labels.push(NetLabel { id: id.clone(), net: format!("FLD{i}"), at: Point { x: mm(200.0), y: Nm::from_raw_shim(20_000_000 + 20_320_000 * i as i64) }, kind });
         sch.extras.label_spins.insert(id.clone(), spin);
         if !fields.is_empty() {
             sch.extras.label_fields.insert(id, fields);

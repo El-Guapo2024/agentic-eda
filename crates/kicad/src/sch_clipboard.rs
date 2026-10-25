@@ -684,6 +684,7 @@ pub fn fragment_as_sheet_file(fragment: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
 
@@ -873,9 +874,9 @@ mod tests {
         let r = &f.section.symbols[0];
         assert_eq!((r.id.as_str(), r.lib_id.as_str(), r.value.as_str(), r.unit), ("R1", "Device:R", "10k", 1));
         assert_eq!(r.footprint, "Resistor_SMD:R_0603_1608Metric");
-        assert_eq!((r.at.x, r.at.y, r.rot), (Nm::from_raw_shim(100_330_000), Nm::from_raw_shim(50_800_000), 90_000), "KiCad's own origin and angle");
+        assert_eq!((r.at.x, r.at.y, r.rot), (mm(100.33), mm(50.8), 90_000), "KiCad's own origin and angle");
         assert_eq!(f.section.wires.len(), 1);
-        assert_eq!((f.section.wires[0].pts[0].x, f.section.wires[0].pts[1].x), (Nm::from_raw_shim(100_330_000), Nm::from_raw_shim(120_650_000)));
+        assert_eq!((f.section.wires[0].pts[0].x, f.section.wires[0].pts[1].x), (mm(100.33), mm(120.65)));
         assert_eq!(f.section.junctions.len(), 1);
         assert_eq!(f.section.labels.len(), 1);
         assert_eq!(f.section.labels[0].net, "SDA");
@@ -895,12 +896,12 @@ mod tests {
         let f = parse_clipboard(&text).unwrap();
         let mut polylines: Vec<Vec<(Nm, Nm)>> = f.section.wires.iter().map(|w| w.pts.iter().map(|p| (p.x, p.y)).collect()).collect();
         polylines.sort();
-        assert_eq!(polylines, vec![vec![(Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(10_000_000), Nm::ZERO), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000))], vec![(Nm::from_raw_shim(30_000_000), Nm::ZERO), (Nm::from_raw_shim(40_000_000), Nm::ZERO)], vec![(Nm::from_raw_shim(40_000_000), Nm::ZERO), (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(9_000_000))]]);
+        assert_eq!(polylines, vec![vec![(Nm::ZERO, Nm::ZERO), (mm(10.0), Nm::ZERO), (mm(10.0), mm(5.0))], vec![(mm(30.0), Nm::ZERO), (mm(40.0), Nm::ZERO)], vec![(mm(40.0), Nm::ZERO), (mm(40.0), mm(9.0))]]);
         // Written in the other order the polyline is the same, from whichever end its first written segment starts.
         let backwards = [wire((10.0, 0.0), (10.0, 5.0)), wire((0.0, 0.0), (10.0, 0.0))].concat();
         let f = parse_clipboard(&backwards).unwrap();
         assert_eq!(f.section.wires.len(), 1);
-        assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(10_000_000), Nm::ZERO), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000))]);
+        assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(Nm::ZERO, Nm::ZERO), (mm(10.0), Nm::ZERO), (mm(10.0), mm(5.0))]);
     }
 
     /// An image copied in KiCad is `(image ..)` in the fragment, and pastes as an image (it used to be left out with "images are not pasted").
@@ -911,7 +912,7 @@ mod tests {
         let f = parse_clipboard(&text).expect("a fragment with an image parses");
         assert!(f.notes.iter().all(|n| !n.contains("images")), "{:?}", f.notes);
         let images: Vec<_> = f.section.extras.graphics.iter().filter_map(|g| if let eda_model::sch_extras::SchGraphicKind::Image { at, scale_ppm, data } = &g.shape { Some((*at, *scale_ppm, data.clone())) } else { None }).collect();
-        assert_eq!(images, vec![(Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(38_100_000) }, 2_000_000, data)]);
+        assert_eq!(images, vec![(Point { x: mm(50.8), y: mm(38.1) }, 2_000_000, data)]);
     }
 
     #[test]

@@ -28,6 +28,7 @@
 //! `CheckResult` failures, never a silently broken placement. An auto
 //! outline (none given) is finally shrunk to the placed cluster.
 
+use eda_model::units::mm;
 use eda_model::footprint::{placed_pads, rotated_extent};
 use eda_model::ir::{LabelSide, Design, FootprintInstance, PlacementSection, Point, Side, Nm};
 use eda_model::{CheckResult, ConstraintModel, PlacementRule};
@@ -60,7 +61,7 @@ pub struct PlaceOptions {
 
 impl Default for PlaceOptions {
     fn default() -> Self {
-        PlaceOptions { seed: 0, snap: Nm::from_raw_shim(100_000), moves_per_part: 4000, outline: None, spacing: Nm::from_raw_shim(600_000), fit_floor: 0.0, floorplan: None }
+        PlaceOptions { seed: 0, snap: mm(0.1), moves_per_part: 4000, outline: None, spacing: mm(0.6), fit_floor: 0.0, floorplan: None }
     }
 }
 
@@ -153,8 +154,8 @@ fn boxed_pads(pads: &[(String, (Nm, Nm))], pitch_max: Nm) -> Vec<usize> {
         for (j, (_, (ox, oy))) in pads.iter().enumerate() {
             if j == k { continue }
             let (dx, dy) = (*ox - *x, *oy - *y);
-            if dy.abs() < Nm::from_raw_shim(250_000) && dx != Nm::ZERO && dx.abs() <= pitch_max { if dx < Nm::ZERO { left = true } else { right = true } }
-            if dx.abs() < Nm::from_raw_shim(250_000) && dy != Nm::ZERO && dy.abs() <= pitch_max { if dy < Nm::ZERO { up = true } else { down = true } }
+            if dy.abs() < mm(0.25) && dx != Nm::ZERO && dx.abs() <= pitch_max { if dx < Nm::ZERO { left = true } else { right = true } }
+            if dx.abs() < mm(0.25) && dy != Nm::ZERO && dy.abs() <= pitch_max { if dy < Nm::ZERO { up = true } else { down = true } }
         }
         if (left && right) || (up && down) { out.push(k) }
     }
@@ -435,7 +436,7 @@ impl Problem<'_> {
         if x0 == Nm::from_raw_shim(i64::MAX) {
             return;
         }
-        let (w, h) = ((x1 - x0).max(Nm::from_raw_shim(1)), (y1 - y0).max(Nm::from_raw_shim(1)));
+        let (w, h) = ((x1 - x0).max(Nm::new(1)), (y1 - y0).max(Nm::new(1)));
         let area = w.raw_shim() as f64 * h.raw_shim() as f64;
         let hpwl = (w + h).raw_shim() as f64;
         let bin = self.bin_nm;
@@ -477,7 +478,7 @@ impl Problem<'_> {
     /// overlap. `esc` is a short probe, one clearance + a hair, along each
     /// axis from the pad centre.
     fn escape_cost(&self, i: usize, poses: &[Pose]) -> f64 {
-        let esc = self.model.board.clearance + self.spacing + Nm::from_raw_shim(200_000);
+        let esc = self.model.board.clearance + self.spacing + mm(0.2);
         let mut cost = 0.0;
         for k in 0..self.items[i].pads.len() {
             let p = self.pad_center(i, k, poses[i]);
@@ -823,7 +824,7 @@ fn decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
 }
 
 fn snap_up(v: Nm, s: Nm) -> Nm {
-    if s <= Nm::from_raw_shim(1) {
+    if s <= Nm::new(1) {
         v
     } else {
         v.div_euclid(s) * s + if v.rem_euclid(s) == Nm::ZERO { Nm::ZERO } else { s }
@@ -831,7 +832,7 @@ fn snap_up(v: Nm, s: Nm) -> Nm {
 }
 
 fn snap_down(v: Nm, s: Nm) -> Nm {
-    if s <= Nm::from_raw_shim(1) {
+    if s <= Nm::new(1) {
         v
     } else {
         v.div_euclid(s) * s
@@ -839,7 +840,7 @@ fn snap_down(v: Nm, s: Nm) -> Nm {
 }
 
 fn snap(v: Nm, s: Nm) -> Nm {
-    if s <= Nm::from_raw_shim(1) {
+    if s <= Nm::new(1) {
         v
     } else {
         Nm::from_raw_shim((v.raw_shim() as f64 / s.raw_shim() as f64).round() as i64) * s.raw_shim()
@@ -859,7 +860,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
                 let (hw, hh) = fp.courtyard_half();
                 let half = (hw + opts.spacing, hh + opts.spacing);
                 let pad_inset = fp.pads.iter().map(|p| (half.0 - p.at.0.abs() - p.size.0 / 2).min(half.1 - p.at.1.abs() - p.size.1 / 2)).min().unwrap_or(Nm::ZERO);
-                let boxed = boxed_pads(&pads, Nm::from_raw_shim(1_300_000));
+                let boxed = boxed_pads(&pads, mm(1.3));
                 items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half, pads, pad_inset, boxed });
             }
             None => fails.push(CheckResult::fail(
@@ -977,7 +978,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
             // Auto square: 2.5x the summed courtyard area, rounded up to mm.
             let area: f64 = items.iter().map(|it| (it.half.0 * 2).raw_shim() as f64 * (it.half.1 * 2).raw_shim() as f64).sum();
             let side = Nm::from_raw_shim(((area * 2.5).sqrt() / 1e6).ceil() as i64) * 1_000_000;
-            let side = side.max(items.iter().map(|it| it.half.0.max(it.half.1) * 2 + Nm::from_raw_shim(1_000_000)).max().unwrap_or(Nm::from_raw_shim(1_000_000)));
+            let side = side.max(items.iter().map(|it| it.half.0.max(it.half.1) * 2 + mm(1.0)).max().unwrap_or(mm(1.0)));
             vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: side, y: Nm::ZERO }, Point { x: side, y: side }, Point { x: Nm::ZERO, y: side }]
         }
     };
@@ -1003,8 +1004,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     // IC rows open onto the board and only need a track lane.
     let escape_lane_small = (model.board.via_diameter + 2 * model.board.clearance + model.board.track_width - opts.spacing).max(Nm::ZERO);
 
-    let bin_nm: Nm = Nm::from_raw_shim(2_000_000);
-    let pitch = (model.board.track_width + model.board.clearance).max(Nm::from_raw_shim(1));
+    let bin_nm: Nm = mm(2.0);
+    let pitch = (model.board.track_width + model.board.clearance).max(Nm::new(1));
     let congest_capacity = model.board.layers.len() as f64 * bin_nm.raw_shim() as f64 / pitch.raw_shim() as f64;
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
@@ -1241,18 +1242,18 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
                 let x = match side {
                     0 => pb.bbox.0 + w / 2,
                     1 => pb.bbox.2 - w / 2,
-                    _ => Nm::from_raw_shim(rng.range((pb.bbox.0 + w / 2).raw_shim(), ((pb.bbox.2 - w / 2).max(pb.bbox.0 + w / 2) + Nm::from_raw_shim(1)).raw_shim())),
+                    _ => Nm::from_raw_shim(rng.range((pb.bbox.0 + w / 2).raw_shim(), ((pb.bbox.2 - w / 2).max(pb.bbox.0 + w / 2) + Nm::new(1)).raw_shim())),
                 };
                 let y = match side {
                     2 => pb.bbox.1 + h / 2,
                     3 => pb.bbox.3 - h / 2,
-                    _ => Nm::from_raw_shim(rng.range((pb.bbox.1 + h / 2).raw_shim(), ((pb.bbox.3 - h / 2).max(pb.bbox.1 + h / 2) + Nm::from_raw_shim(1)).raw_shim())),
+                    _ => Nm::from_raw_shim(rng.range((pb.bbox.1 + h / 2).raw_shim(), ((pb.bbox.3 - h / 2).max(pb.bbox.1 + h / 2) + Nm::new(1)).raw_shim())),
                 };
                 poses[i] = Pose { x: snap(x, opts.snap), y: snap(y, opts.snap), rot, label: LabelSide::Above };
             } else {
                 poses[i] = Pose {
-                    x: snap(Nm::from_raw_shim(rng.range(pb.bbox.0.raw_shim(), (pb.bbox.2 + Nm::from_raw_shim(1)).raw_shim())), opts.snap),
-                    y: snap(Nm::from_raw_shim(rng.range(pb.bbox.1.raw_shim(), (pb.bbox.3 + Nm::from_raw_shim(1)).raw_shim())), opts.snap),
+                    x: snap(Nm::from_raw_shim(rng.range(pb.bbox.0.raw_shim(), (pb.bbox.2 + Nm::new(1)).raw_shim())), opts.snap),
+                    y: snap(Nm::from_raw_shim(rng.range(pb.bbox.1.raw_shim(), (pb.bbox.3 + Nm::new(1)).raw_shim())), opts.snap),
                     rot: old_i.rot,
                 label: LabelSide::Above,
             };
@@ -1422,7 +1423,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_nm: Nm) {
 
 /// Margin, nm, from the placed cluster's true courtyards to an auto-sized
 /// board edge (routing channel + mechanical clearance).
-const AUTO_OUTLINE_MARGIN: Nm = Nm::from_raw_shim(2_000_000);
+const AUTO_OUTLINE_MARGIN: Nm = Nm::new(2_000_000);
 
 /// Shrink an auto-sized outline to the placed cluster: the board becomes
 /// the union of true courtyards plus `AUTO_OUTLINE_MARGIN`, except on a
@@ -1460,18 +1461,18 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Nm, Nm, Nm,
     // clears the edge, and is not rounded further out (gate
     // `placement_edge_connector`: ≤ 1.5 mm); the opposite side absorbs
     // the rounding so the board dimension still comes out on the grid.
-    const HELD: Nm = Nm::from_raw_shim(1_200_000);
-    const GRID: Nm = Nm::from_raw_shim(500_000);
+    const HELD: Nm = Nm::new(1_200_000);
+    const GRID: Nm = Nm::new(500_000);
     let span_of = |lo: Nm, hi: Nm, held_lo: bool, held_hi: bool| -> (Nm, Nm) {
         let margin = AUTO_OUTLINE_MARGIN.min((hi - lo) / 4);
         match (held_lo, held_hi) {
-            (true, true) => (snap_down(lo - HELD, Nm::from_raw_shim(100_000)), snap_up(hi + HELD, Nm::from_raw_shim(100_000))),
+            (true, true) => (snap_down(lo - HELD, mm(0.1)), snap_up(hi + HELD, mm(0.1))),
             (true, false) => {
-                let b0 = snap_down(lo - HELD, Nm::from_raw_shim(100_000));
+                let b0 = snap_down(lo - HELD, mm(0.1));
                 (b0, b0 + snap_up(hi + margin - b0, GRID))
             }
             (false, true) => {
-                let b1 = snap_up(hi + HELD, Nm::from_raw_shim(100_000));
+                let b1 = snap_up(hi + HELD, mm(0.1));
                 (b1 - snap_up(b1 - (lo - margin), GRID), b1)
             }
             (false, false) => (snap_down(lo - margin, GRID), snap_up(hi + margin, GRID)),
@@ -1770,7 +1771,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
             o.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO),
             o.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO),
         );
-        let fp = eda_model::floorplan::plan(model, bb, opts.snap.max(Nm::from_raw_shim(100_000)), opts.seed)
+        let fp = eda_model::floorplan::plan(model, bb, opts.snap.max(mm(0.1)), opts.seed)
             .map_err(|e| vec![CheckResult::fail("floorplan_arrange", "modules", e)])?;
         planned = PlaceOptions { floorplan: Some(fp), ..opts.clone() };
         &planned

@@ -4,6 +4,7 @@
 //! `kicad_cli_drc.rs`; run with
 //! `cargo test -p eda-kicad --test kicad_cli_import -- --ignored --nocapture`).
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -149,15 +150,15 @@ fn round_trips_shapes_and_text() {
 
     let mut drawings = DrawingsSection {
         shapes: vec![
-            Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO } },
-            Shape::Arc { id: String::new(), layer: "Cmts.User".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, mid: Point { x: Nm::from_raw_shim(7_071_068), y: Nm::from_raw_shim(7_071_068) }, end: Point { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) } },
-            Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: true, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(4_000_000) } },
-            Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: Nm::from_raw_shim(120_000), filled: false, center: Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, end: Point { x: Nm::from_raw_shim(23_000_000), y: Nm::from_raw_shim(20_000_000) } },
-            Shape::Polygon { id: String::new(), layer: "F.CrtYd".into(), stroke_width: Nm::from_raw_shim(50_000), filled: true, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(3_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(3_000_000) }] },
+            Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(5.0), y: Nm::ZERO } },
+            Shape::Arc { id: String::new(), layer: "Cmts.User".into(), stroke_width: mm(0.1), filled: false, start: Point { x: mm(10.0), y: Nm::ZERO }, mid: Point { x: Nm::new(7_071_068), y: Nm::new(7_071_068) }, end: Point { x: Nm::ZERO, y: mm(10.0) } },
+            Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: true, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(8.0), y: mm(4.0) } },
+            Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: mm(0.12), filled: false, center: Point { x: mm(20.0), y: mm(20.0) }, end: Point { x: mm(23.0), y: mm(20.0) } },
+            Shape::Polygon { id: String::new(), layer: "F.CrtYd".into(), stroke_width: mm(0.05), filled: true, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: Nm::ZERO }, Point { x: mm(3.0), y: mm(3.0) }, Point { x: Nm::ZERO, y: mm(3.0) }] },
         ],
         texts: vec![
-            Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, angle: 90_000, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Left, mirror: true },
-            Text { id: String::new(), content: "made in eda".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(800_000), stroke_width: Nm::from_raw_shim(120_000), justify: TextJustify::Center, mirror: false },
+            Text { id: String::new(), content: "REV A".into(), at: Point { x: mm(1.0), y: mm(2.0) }, angle: 90_000, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Left, mirror: true },
+            Text { id: String::new(), content: "made in eda".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Fab".into(), size_nm: mm(0.8), stroke_width: mm(0.12), justify: TextJustify::Center, mirror: false },
         ],
         ..Default::default()
     };
@@ -169,7 +170,7 @@ fn round_trips_shapes_and_text() {
         provenance: Provenance { engine_version: "0".into(), intent_hash: "drawings_rt".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection {
-            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(30_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(30_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(30_000_000) }],
+            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(30.0), y: Nm::ZERO }, Point { x: mm(30.0), y: mm(30.0) }, Point { x: Nm::ZERO, y: mm(30.0) }],
             footprints: vec![],
             modules: vec![],
         }),
@@ -403,7 +404,7 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
 
     // The routing section: an arc track, a teardrop, a keepout, a pour with settings of its own.
     let routing = board.routing.as_mut().unwrap();
-    routing.tracks.push(Track::new_arc(net.clone(), "F.Cu".into(), Nm::from_raw_shim(250_000), at(1_000_000, 1_000_000), at(2_000_000, 500_000), at(3_000_000, 1_000_000)));
+    routing.tracks.push(Track::new_arc(net.clone(), "F.Cu".into(), mm(0.25), at(1_000_000, 1_000_000), at(2_000_000, 500_000), at(3_000_000, 1_000_000)));
     routing.zones.push(Zone { net: net.clone(), layer: "F.Cu".into(), outline: vec![at(1_000_000, 3_000_000), at(2_000_000, 3_300_000), at(2_000_000, 4_300_000)], teardrop: true, ..Default::default() });
     routing.zones.push(Zone { layer: "F.Cu".into(), outline: vec![at(4_000_000, 1_000_000), at(7_000_000, 1_000_000), at(7_000_000, 3_000_000), at(4_000_000, 3_000_000)], is_rule_area: true, keepout_tracks: true, keepout_vias: true, ..Default::default() });
     routing.zones.push(Zone {
@@ -412,8 +413,8 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
         outline: vec![at(1_000_000, 5_000_000), at(6_000_000, 5_000_000), at(6_000_000, 8_000_000), at(1_000_000, 8_000_000)],
         name: "pour".into(),
         priority: 3,
-        clearance: Nm::from_raw_shim(300_000),
-        min_thickness: Nm::from_raw_shim(180_000),
+        clearance: mm(0.3),
+        min_thickness: mm(0.18),
         ..Default::default()
     });
 
@@ -421,7 +422,7 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
     let dimension = Dimension {
         id: String::new(),
         layer: "Dwgs.User".into(),
-        kind: DimensionKind::Aligned { height: Nm::from_raw_shim(2_000_000) },
+        kind: DimensionKind::Aligned { height: mm(2.0) },
         start: at(0, 9_000_000),
         end: at(8_000_000, 9_000_000),
         prefix: "L=".into(),
@@ -434,13 +435,13 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
         text_position: DimensionTextPosition::Outside,
         keep_text_aligned: true,
         text_angle: 0,
-        text_size_nm: Nm::from_raw_shim(1_200_000),
-        stroke_width: Nm::from_raw_shim(150_000),
-        arrow_length: Nm::from_raw_shim(1_270_000),
-        extension_offset: Nm::from_raw_shim(500_000),
-        extension_height: Nm::from_raw_shim(580_000),
+        text_size_nm: mm(1.2),
+        stroke_width: mm(0.15),
+        arrow_length: mm(1.27),
+        extension_offset: mm(0.5),
+        extension_height: mm(0.58),
         arrow_direction: ArrowDirection::Inward,
-        text_thickness_nm: Some(Nm::from_raw_shim(180_000)),
+        text_thickness_nm: Some(mm(0.18)),
     };
     board.drawings = Some(eda_model::ir::DrawingsSection { dimensions: vec![dimension.clone()], ..Default::default() });
     board.assign_missing_ids();
@@ -494,7 +495,7 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
     let keepout = rt.zones.iter().find(|z| z.is_rule_area).expect("the keepout");
     assert!(keepout.keepout_tracks && keepout.keepout_vias && !keepout.keepout_pads, "the keepout's own flags: {keepout:?}");
     let pour = rt.zones.iter().find(|z| z.name == "pour").expect("the pour keeps its name");
-    assert_eq!((pour.priority, pour.clearance, pour.min_thickness, pour.layer.as_str()), (3, Nm::from_raw_shim(300_000), Nm::from_raw_shim(180_000), "B.Cu"), "the pour's own settings");
+    assert_eq!((pour.priority, pour.clearance, pour.min_thickness, pour.layer.as_str()), (3, mm(0.3), mm(0.18), "B.Cu"), "the pour's own settings");
     println!("KiCad loaded and re-saved {} bytes of our board; arc, dimension, group, locks, teardrop, keepout and pour all came back", theirs.len());
 }
 

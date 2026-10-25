@@ -1398,14 +1398,15 @@ fn drop_pad_loops(mut tracks: Vec<Track>, vias: &[IrVia], pads: &[GatePad]) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_model::units::mm;
     use eda_model::footprint::PadShape as ModelPadShape;
 
     fn pad(x: i64, y: i64, shape: ModelPadShape) -> PlacedPad {
-        PlacedPad { number: "1".into(), center: IrPoint { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
+        PlacedPad { number: "1".into(), center: IrPoint { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, size: (mm(1.0), mm(1.0)), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
     }
 
     fn track(pts: &[(i64, i64)]) -> Track {
-        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: pts.iter().map(|&(x, y)| IrPoint { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }).collect(), arc_mid_offset: None }
+        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: mm(0.2), pts: pts.iter().map(|&(x, y)| IrPoint { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }).collect(), arc_mid_offset: None }
     }
 
     fn gate_pads(pads: &[PlacedPad]) -> Vec<GatePad<'_>> {
@@ -1434,10 +1435,10 @@ mod tests {
         let tracks = vec![track(&[(0, 0), (0, 2_000_000)]), track(&[(0, 2_000_000), (300_000, 2_000_000), (300_000, 300_000)]), track(&[(300_000, 300_000), (5_000_000, 0)])];
         let kept = drop_pad_loops(tracks, &[], &gate_pads(&pads));
         assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].pts[0], IrPoint { x: Nm::from_raw_shim(300_000), y: Nm::from_raw_shim(300_000) });
+        assert_eq!(kept[0].pts[0], IrPoint { x: mm(0.3), y: mm(0.3) });
         // A via on the way keeps the run: it may lead elsewhere.
         let tracks = vec![track(&[(0, 0), (0, 2_000_000)]), track(&[(0, 2_000_000), (300_000, 300_000)])];
-        let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: Nm::ZERO, y: Nm::from_raw_shim(2_000_000) }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: Nm::ZERO, y: mm(2.0) }, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
         assert_eq!(drop_pad_loops(tracks, &[via], &gate_pads(&pads)).len(), 2);
     }
 
@@ -1454,7 +1455,7 @@ mod tests {
 
         let pad1 = Footprint {
             name: "PAD1".into(),
-            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
@@ -1483,18 +1484,18 @@ mod tests {
             ],
             footprints: vec![pad1],
             board: BoardRules {
-                clearance: Nm::from_raw_shim(200_000),
-                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(Nm::from_raw_shim(150_000)), clearance: Some(Nm::from_raw_shim(150_000)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
+                clearance: mm(0.2),
+                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(mm(0.15)), clearance: Some(mm(0.15)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
                 ..BoardRules::default()
             },
             ..Default::default()
         };
         let placement = PlacementSection {
-            outline: vec![IrPoint { x: Nm::ZERO, y: Nm::ZERO }, IrPoint { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, IrPoint { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, IrPoint { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) }],
+            outline: vec![IrPoint { x: Nm::ZERO, y: Nm::ZERO }, IrPoint { x: mm(10.0), y: Nm::ZERO }, IrPoint { x: mm(10.0), y: mm(10.0) }, IrPoint { x: Nm::ZERO, y: mm(10.0) }],
             footprints: vec![
-                FootprintInstance { id: "P1".into(), at: IrPoint { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "P2".into(), at: IrPoint { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(1_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "P3".into(), at: IrPoint { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(1_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P1".into(), at: IrPoint { x: mm(1.0), y: mm(1.0) }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P2".into(), at: IrPoint { x: mm(3.0), y: mm(1.0) }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P3".into(), at: IrPoint { x: mm(5.0), y: mm(1.0) }, rot: 0, side: Side::Top, label: Default::default() },
             ],
             modules: Vec::new(),
         };

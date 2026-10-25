@@ -1077,7 +1077,8 @@ fn xml_escape(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::mm;
+    
     use super::*;
     use eda_engine::{derive_schematic, EngineOptions};
     use eda_model::{Net, Pin, PinKind};
@@ -1281,7 +1282,7 @@ mod tests {
         let mut d = ldo_design();
         let ldo = d.schematic.take().unwrap();
         let root = SchematicSection {
-            sheets: vec![SheetInstance { id: "s1".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, size: (Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)), pins: vec![], page: String::new() }],
+            sheets: vec![SheetInstance { id: "s1".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: Point { x: mm(20.0), y: mm(20.0) }, size: (mm(30.0), mm(20.0)), pins: vec![], page: String::new() }],
             ..Default::default()
         };
         d.schematic = Some(root);

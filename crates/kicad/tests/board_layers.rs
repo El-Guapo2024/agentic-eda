@@ -2,6 +2,7 @@
 //! their types (`PCB_IO_KICAD_SEXPR_PARSER::parseLayers`) -- come in as `eda_model::layers::LayerSetup`, go back out as `formatBoardLayers` writes them, and a board that never
 //! had the page written is the board KiCad starts: every standard technical layer. No external tool is needed here; the proof against kicad-cli is in `eda-cli`'s board tests.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_kicad::{export_kicad_pcb, import_kicad_pcb, ExportMeta};
 use eda_model::ir::{Design, DrawingsSection, Shape, Point};
@@ -104,7 +105,7 @@ fn a_board_nobody_set_up_is_the_board_kicad_starts() {
 
     let mut m = ConstraintModel::default();
     m.board.layers = vec!["F.Cu".into(), "B.Cu".into()];
-    let d = eda_model::ir::Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: None, nets: None, placement: Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000), y: Nm::from_raw_shim(10_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(10_000) }], footprints: vec![], modules: vec![] }), routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None };
+    let d = eda_model::ir::Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: None, nets: None, placement: Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.01), y: Nm::ZERO }, Point { x: mm(0.01), y: mm(0.01) }, Point { x: Nm::ZERO, y: mm(0.01) }], footprints: vec![], modules: vec![] }), routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None };
     let layers = layers_section(&export(&d, &m));
     assert_eq!(layers.len(), 2 + 18, "a board with no page is the 18 technical layers KiCad starts a board with");
     assert!(layers.iter().any(|l| l == "(40 \"Dwgs.User\" user \"User.Drawings\")") && layers.iter().any(|l| l == "(45 \"Margin\" user)"));

@@ -1,5 +1,6 @@
 //! Tests of the Specctra port: the writer held to the DSN file KiCad itself wrote, the parser held to the errors KiCad gives.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use super::model::*;
 use super::parse::{load_pcb, load_session};
@@ -74,10 +75,10 @@ pub(super) fn sample_board() -> (Design, ConstraintModel) {
         ..Default::default()
     };
     let placement = PlacementSection {
-        outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }],
+        outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }],
         footprints: vec![
-            FootprintInstance { id: "U1".into(), at: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-            FootprintInstance { id: "C1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, rot: 90_000, side: Side::Bottom, label: Default::default() },
+            FootprintInstance { id: "U1".into(), at: Point { x: mm(5.0), y: mm(5.0) }, rot: 0, side: Side::Top, label: Default::default() },
+            FootprintInstance { id: "C1".into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot: 90_000, side: Side::Bottom, label: Default::default() },
         ],
         modules: Vec::new(),
     };
@@ -92,9 +93,9 @@ pub(super) fn sample_board() -> (Design, ConstraintModel) {
         nets: None,
         placement: Some(placement),
         routing: Some(RoutingSection {
-            tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(8_000_000) }], arc_mid_offset: None }],
-            vias: vec![Via { id: String::new(), net: "VIN".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(8_000_000) }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
-            zones: vec![Zone { net: "GND".into(), layer: "B.Cu".into(), outline: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(19_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(19_000_000), y: Nm::from_raw_shim(19_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(19_000_000) }], ..Zone::default() }],
+            tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(5.0), y: mm(5.0) }, Point { x: mm(10.0), y: mm(5.0) }, Point { x: mm(10.0), y: mm(8.0) }], arc_mid_offset: None }],
+            vias: vec![Via { id: String::new(), net: "VIN".into(), at: Point { x: mm(10.0), y: mm(8.0) }, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
+            zones: vec![Zone { net: "GND".into(), layer: "B.Cu".into(), outline: vec![Point { x: mm(1.0), y: mm(1.0) }, Point { x: mm(19.0), y: mm(1.0) }, Point { x: mm(19.0), y: mm(19.0) }, Point { x: mm(1.0), y: mm(19.0) }], ..Zone::default() }],
             track_width_presets: vec![],
             via_presets: vec![],
             teardrop_settings: Default::default(),
@@ -280,16 +281,16 @@ fn a_session_brings_back_the_routing_and_the_placement_the_dsn_had() {
     let segs: Vec<(Point, Point, Nm, &str, &str)> = got.tracks.iter().map(|(t, _)| (t.pts[0], t.pts[1], t.width, t.layer.as_str(), t.net.as_str())).collect();
     assert_eq!(
         segs,
-        vec![(Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) }, Nm::from_raw_shim(200_000), "F.Cu", "VIN"), (Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(8_000_000) }, Nm::from_raw_shim(200_000), "F.Cu", "VIN")]
+        vec![(Point { x: mm(5.0), y: mm(5.0) }, Point { x: mm(10.0), y: mm(5.0) }, mm(0.2), "F.Cu", "VIN"), (Point { x: mm(10.0), y: mm(5.0) }, Point { x: mm(10.0), y: mm(8.0) }, mm(0.2), "F.Cu", "VIN")]
     );
     assert!(got.tracks.iter().all(|(_, locked)| !locked));
     assert_eq!(got.vias.len(), 1);
     let v = &got.vias[0];
-    assert_eq!((v.via.at, v.via.diameter, v.via.drill, v.via.from_layer.as_str(), v.via.to_layer.as_str(), v.via.net.as_str()), (Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(8_000_000) }, Nm::from_raw_shim(600_000), Nm::from_raw_shim(300_000), "F.Cu", "B.Cu", "VIN"));
+    assert_eq!((v.via.at, v.via.diameter, v.via.drill, v.via.from_layer.as_str(), v.via.to_layer.as_str(), v.via.net.as_str()), (Point { x: mm(10.0), y: mm(8.0) }, mm(0.6), mm(0.3), "F.Cu", "B.Cu", "VIN"));
     assert_eq!(v.kind, ViaKind::Through);
     let mut places: Vec<_> = got.placements.iter().map(|p| (p.reference.as_str(), p.at, p.rot, p.side)).collect();
     places.sort_by(|a, b| a.0.cmp(b.0));
-    assert_eq!(places, vec![("C1", Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, 90_000, Side::Bottom), ("U1", Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, 0, Side::Top)]);
+    assert_eq!(places, vec![("C1", Point { x: mm(10.0), y: mm(10.0) }, 90_000, Side::Bottom), ("U1", Point { x: mm(5.0), y: mm(5.0) }, 0, Side::Top)]);
 }
 
 fn session_with(routes: &str) -> String {
@@ -304,10 +305,10 @@ fn a_session_is_read_in_its_own_resolution() {
     let ses = session_with("(net VIN (wire (path F.Cu 10 0 0 100 -50) (type fix)) (via V:400_um 100 -50)) (net NOPE (wire (path B.Cu 8 0 0 0 100)))");
     let got = from_session(&ses, "s.ses", &design, &model).unwrap();
     let (t, locked) = &got.tracks[0];
-    assert_eq!((t.pts[0], t.pts[1], t.width, *locked), (Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(2_540_000), y: Nm::from_raw_shim(1_270_000) }, Nm::from_raw_shim(254_000), true));
+    assert_eq!((t.pts[0], t.pts[1], t.width, *locked), (Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(2.54), y: mm(1.27) }, mm(0.254), true));
     assert_eq!(got.tracks[1].0.net, "", "a net the board has not got is no net");
     let v = &got.vias[0].via;
-    assert_eq!((v.at, v.diameter, v.drill), (Point { x: Nm::from_raw_shim(2_540_000), y: Nm::from_raw_shim(1_270_000) }, Nm::from_raw_shim(609_600), Nm::from_raw_shim(400_000)));
+    assert_eq!((v.at, v.diameter, v.drill), (Point { x: mm(2.54), y: mm(1.27) }, Nm::new(609_600), mm(0.4)));
 }
 
 /// `makeARC`: a quarter arc about its third vertex, the middle on the short way round.
@@ -317,7 +318,7 @@ fn a_qarc_is_an_arc_through_its_middle() {
     let ses = session_with("(net VIN (wire (qarc F.Cu 10 0 0 100 -100 100 0)))");
     let got = from_session(&ses, "s.ses", &design, &model).unwrap();
     let (start, mid, end) = got.tracks[0].0.arc().expect("an arc");
-    assert_eq!((start, end), (Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(2_540_000), y: Nm::from_raw_shim(2_540_000) }));
+    assert_eq!((start, end), (Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(2.54), y: mm(2.54) }));
     // The centre is (2540000, 0) on the board: the middle of the quarter is at 45 degrees from it, towards the origin's side.
     let r = 2_540_000.0_f64;
     assert!(((mid.x.raw_shim() as f64) - (r - r / 2f64.sqrt())).abs() <= 1.0 && ((mid.y.raw_shim() as f64) - r / 2f64.sqrt()).abs() <= 1.0, "{mid:?}");
@@ -348,9 +349,9 @@ fn a_via_drill_equal_to_the_default_is_the_nets_own() {
     let board = BoardView::parse(&pcb_text).unwrap();
     let session = super::parse::load_session(&session_with("(net VIN (via V:400_um 0 0))"), "s.ses").unwrap();
     let got = from_session_db(&session, &board, 400_000, &|net| if net == "VIN" { 350_000 } else { 0 }).unwrap();
-    assert_eq!(got.vias[0].via.drill, Nm::from_raw_shim(350_000));
+    assert_eq!(got.vias[0].via.drill, mm(0.35));
     let got = from_session_db(&session, &board, 300_000, &|_| 0).unwrap();
-    assert_eq!(got.vias[0].via.drill, Nm::from_raw_shim(400_000));
+    assert_eq!(got.vias[0].via.drill, mm(0.4));
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------- held to kicad-cli
@@ -374,8 +375,8 @@ fn block<'a>(text: &'a str, head: &str) -> &'a str {
 /// `FromBOARD` on the hand-made board, read as KiCad reads it: the Default class at KiCad's defaults, the outline its Edge.Cuts rectangle.
 fn parity_export() -> String {
     let mut board = BoardView::parse(PARITY_PCB).unwrap();
-    let edge = eda_model::ir::Shape::Rect { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(80_000_000), y: Nm::from_raw_shim(40_000_000) } };
-    let mut outline = eda_drc::outline::build_board_polygon_outlines(&[edge], 5_000.0, Nm::from_raw_shim(10_000), true);
+    let edge = eda_model::ir::Shape::Rect { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(80.0), y: mm(40.0) } };
+    let mut outline = eda_drc::outline::build_board_polygon_outlines(&[edge], 5_000.0, mm(0.01), true);
     outline.polys.simplify();
     let default_class = super::export::ClassFacts { name: "Default".into(), track_width: 200_000, clearance: 200_000, via_diameter: 600_000, via_drill: 300_000 };
     let class_of = |_: &str| default_class.clone();
@@ -467,9 +468,9 @@ fn the_placement_and_network_of_the_hand_made_board_are_kicads() {
 fn a_round_cutout_is_kicads_polygon_to_the_nanometre() {
     let (mut design, model) = sample_board();
     // the sample board's outline is a 20 mm square here, so that the 1.5 mm hole at (15, 15) mm is inside it
-    design.placement.as_mut().unwrap().outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }];
+    design.placement.as_mut().unwrap().outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }];
     design.drawings = Some(eda_model::ir::DrawingsSection {
-        shapes: vec![eda_model::ir::Shape::Circle { id: "shp_hole".into(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, center: Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(15_000_000) }, end: Point { x: Nm::from_raw_shim(16_500_000), y: Nm::from_raw_shim(15_000_000) } }],
+        shapes: vec![eda_model::ir::Shape::Circle { id: "shp_hole".into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, center: Point { x: mm(15.0), y: mm(15.0) }, end: Point { x: mm(16.5), y: mm(15.0) } }],
         ..Default::default()
     });
     let out = super::export_dsn(&design, &model, "t.dsn").unwrap();

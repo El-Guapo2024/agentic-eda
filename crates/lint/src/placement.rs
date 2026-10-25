@@ -194,7 +194,7 @@ fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Nm, Nm, Nm, Nm), fit_targ
         courtyards.values().map(|r| r.2).max().unwrap(),
         courtyards.values().map(|r| r.3).max().unwrap(),
     );
-    let (w, h) = (((bb.2 - bb.0).max(Nm::from_raw_shim(1))).raw_shim() as f64, ((bb.3 - bb.1).max(Nm::from_raw_shim(1))).raw_shim() as f64);
+    let (w, h) = (((bb.2 - bb.0).max(Nm::new(1))).raw_shim() as f64, ((bb.3 - bb.1).max(Nm::new(1))).raw_shim() as f64);
     let (l, r, t, b) = ((u.0 - bb.0).raw_shim() as f64, (bb.2 - u.2).raw_shim() as f64, (u.1 - bb.1).raw_shim() as f64, (bb.3 - u.3).raw_shim() as f64);
     let (imb_x, imb_y) = ((l - r).abs() / w, (t - b).abs() / h);
     let (span_x, span_y) = ((u.2 - u.0).raw_shim() as f64 / w, (u.3 - u.1).raw_shim() as f64 / h);
@@ -356,6 +356,7 @@ fn stub_crossings(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel,
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use eda_model::ir::{FootprintInstance, PlacementSection, Provenance, Side};
     use eda_model::{Part, Pin, PinKind};
@@ -374,7 +375,7 @@ mod tests {
             schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
-            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(50_000_000) }], footprints, modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(50.0), y: Nm::ZERO }, Point { x: mm(50.0), y: mm(50.0) }, Point { x: Nm::ZERO, y: mm(50.0) }], footprints, modules: vec![] }),
             routing: None,
             drawings: None,
         }
@@ -387,7 +388,7 @@ mod tests {
             placement_rules: vec![PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 3.0, reason: None }],
             ..Default::default()
         };
-        let d = design(vec![fp("U1", Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)), fp("C1", Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000))]); // 15mm apart, way over 3mm
+        let d = design(vec![fp("U1", mm(5.0), mm(5.0)), fp("C1", mm(20.0), mm(5.0))]); // 15mm apart, way over 3mm
         let v = check(&d, &model);
         let hit = v.iter().find(|x| x.check == "placement_proximity").expect("proximity violation");
         let fix = hit.fix.as_ref().expect("fix hint");
@@ -403,7 +404,7 @@ mod tests {
             placement_rules: vec![PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 30.0, reason: None }],
             ..Default::default()
         };
-        let d = design(vec![fp("U1", Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)), fp("C1", Nm::from_raw_shim(6_000_000), Nm::from_raw_shim(5_000_000))]);
+        let d = design(vec![fp("U1", mm(5.0), mm(5.0)), fp("C1", mm(6.0), mm(5.0))]);
         let v = check(&d, &model);
         assert!(v.iter().all(|x| x.check != "placement_proximity"), "{v:#?}");
     }

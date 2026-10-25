@@ -2080,7 +2080,7 @@ mod tests {
         // this crate's other tests already rely on, rather than
         // re-deriving the exact stub-tip offset by hand.
         let r1_at = child_sch.symbols[0].at;
-        let pin1_tip = Point { x: r1_at.x, y: r1_at.y - Nm::from_raw_shim(3810) };
+        let pin1_tip = Point { x: r1_at.x, y: r1_at.y - Nm::new(3810) };
         child_sch.labels.push(eda_model::ir::NetLabel { id: String::new(), net: "AD0".into(), at: pin1_tip, kind: LabelKind::Hierarchical { shape: LabelShape::Passive } });
 
         let root_sch = SchematicSection {
@@ -2096,9 +2096,9 @@ mod tests {
                 id: String::new(),
                 name: "child".into(),
                 file: "child.kicad_sch".into(),
-                at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) },
-                size: (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(20_000_000)),
-                pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(30_000_000) } }],
+                at: Point { x: Nm::from_mm(10.0), y: Nm::from_mm(10.0) },
+                size: (Nm::from_mm(20.0), Nm::from_mm(20.0)),
+                pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: Nm::from_mm(15.0), y: Nm::from_mm(30.0) } }],
                 page: String::new(),
             }],
             instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),

@@ -72,10 +72,10 @@ mod tests {
         let images = read_all(tree.as_list().unwrap(), &mut refs);
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].layer, "Cmts.User");
-        assert_eq!(images[0].at, Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(50_000_000) });
+        assert_eq!(images[0].at, Point { x: Nm::from_mm(100.0), y: Nm::from_mm(50.0) });
         assert_eq!(images[0].scale_ppm, 500_000);
         assert_eq!(images[0].data, data, "the data comes back as one text");
-        assert_eq!(images[0].size_nm(), (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(2_000_000)), "60 x 40 px at 254 ppi at half scale");
+        assert_eq!(images[0].size_nm(), (Nm::from_mm(3.0), Nm::from_mm(2.0)), "60 x 40 px at 254 ppi at half scale");
         assert!(refs[0].locked);
         assert_eq!(refs[0].uuid.as_deref(), Some("11111111-1111-1111-1111-111111111111"));
     }

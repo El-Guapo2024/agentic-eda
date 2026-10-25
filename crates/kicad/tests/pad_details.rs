@@ -221,7 +221,7 @@ fn model_boxes(design: &Design, model: &ConstraintModel, layer: &str) -> Vec<[f6
                 if !group.layers.iter().any(|l| l == layer) {
                     continue;
                 }
-                let polys = eda_drc::pad_shape::pad_polygons(fp, &group.shape.lay_on(pad), centre, Nm::from_raw_shim(5_000));
+                let polys = eda_drc::pad_shape::pad_polygons(fp, &group.shape.lay_on(pad), centre, Nm::new(5_000));
                 if polys.is_empty() || polys.area() <= 0.0 {
                     continue;
                 }

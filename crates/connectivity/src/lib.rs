@@ -80,6 +80,7 @@ pub fn analyze(design: &Design, model: &ConstraintModel, copper: &ZoneCopper) ->
 /// `items.rs`, `algo.rs`, ...) -- not part of the public API.
 #[cfg(test)]
 pub(crate) mod tests_support {
+    use eda_model::units::mm;
     use eda_model::ir::*;
     use eda_model::{BoardRules, ConstraintModel, Net, Part, Pin, PinKind};
 
@@ -99,10 +100,10 @@ pub(crate) mod tests_support {
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }],
+                outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }],
                 footprints: vec![
-                    FootprintInstance { id: "R1".into(), at: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "R2".into(), at: Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(5_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: mm(5.0), y: mm(5.0) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R2".into(), at: Point { x: mm(15.0), y: mm(5.0) }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: vec![],
             }),
@@ -126,7 +127,8 @@ pub(crate) mod tests_support {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::Nm;
+    use eda_model::units::mm;
+    
     use super::tests_support::{pad_center, two_pad_model};
     use super::*;
     use eda_model::ir::Track;
@@ -155,7 +157,7 @@ mod tests {
     fn a_routed_track_between_the_same_two_pads_clears_the_ratsnest() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, b], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()], layer: "F.Cu".into(), width: mm(0.2), pts: vec![a, b], arc_mid_offset: None });
         let report = analyze(&design, &model, &ZoneCopper::default());
         assert!(report.ratsnest.is_empty(), "{:?}", report.ratsnest.iter().map(|e| &e.net).collect::<Vec<_>>());
         assert!(report.dangling.is_empty());

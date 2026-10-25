@@ -470,6 +470,7 @@ pub fn hatch_polygons(design: &Design, model: Option<&ConstraintModel>, shape: &
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use eda_model::ir::{DrawingsSection, PlacementSection, Provenance, TextJustify};
 
@@ -496,14 +497,14 @@ mod tests {
     #[test]
     fn a_hatched_rectangle_has_lines_ten_widths_apart_across_it() {
         // 10 mm by 10 mm, a 0.2 mm line: spacing 2 mm, slope -1 lines at a = 0, 2, 4 .. mm -- 9 chords of x + y = a, a from 2 mm to 18 mm.
-        let r = rect("F.Fab", Nm::from_raw_shim(200_000), Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000), "shp_a");
+        let r = rect("F.Fab", mm(0.2), Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0), "shp_a");
         let d = design_with(vec![r.clone()]);
         let h = hatching(&d, None, &r, HatchKind::Hatch);
-        assert_eq!(h.width, Nm::from_raw_shim(200_000));
+        assert_eq!(h.width, mm(0.2));
         assert_eq!(h.lines.len(), 9, "{:?}", h.lines);
         for (a, b) in &h.lines {
             assert_eq!(a.x + a.y, b.x + b.y, "slope -1 keeps x + y");
-            assert_eq!((a.x + a.y) % Nm::from_raw_shim(2_000_000), Nm::ZERO, "the lines are on multiples of the spacing");
+            assert_eq!((a.x + a.y) % mm(2.0), Nm::ZERO, "the lines are on multiples of the spacing");
         }
         // Reverse hatch the other way, cross-hatch both.
         let rev = hatching(&d, None, &r, HatchKind::ReverseHatch);
@@ -514,26 +515,26 @@ mod tests {
     #[test]
     fn the_spacing_is_cut_down_to_a_hundredth_of_the_longer_side() {
         // A 100 mm square with a 0.1 mm line: spacing would be 1 mm (100 lines); a 200 mm one would be 200, so 2 mm.
-        let r = rect("F.Fab", Nm::from_raw_shim(100_000), Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(200_000_000), Nm::from_raw_shim(200_000_000), "shp_a");
+        let r = rect("F.Fab", mm(0.1), Nm::ZERO, Nm::ZERO, mm(200.0), mm(200.0), "shp_a");
         let d = design_with(vec![r.clone()]);
         let h = hatching(&d, None, &r, HatchKind::Hatch);
         // On 2 mm steps: the chords of x + y = 2k mm.
-        assert!(h.lines.iter().all(|(a, _)| (a.x + a.y) % Nm::from_raw_shim(2_000_000) == Nm::ZERO));
+        assert!(h.lines.iter().all(|(a, _)| (a.x + a.y) % mm(2.0) == Nm::ZERO));
         assert!(h.lines.len() > 150 && h.lines.len() < 210, "{}", h.lines.len());
     }
 
     #[test]
     fn a_shape_without_a_line_width_or_an_inside_has_no_lines() {
-        let r = rect("F.Fab", Nm::ZERO, Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000), "shp_a");
+        let r = rect("F.Fab", Nm::ZERO, Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0), "shp_a");
         let d = design_with(vec![r.clone()]);
         assert!(hatching(&d, None, &r, HatchKind::Hatch).lines.is_empty());
-        let seg = Shape::Segment { id: "shp_s".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO } };
+        let seg = Shape::Segment { id: "shp_s".into(), layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(10.0), y: Nm::ZERO } };
         assert!(hatching(&design_with(vec![seg.clone()]), None, &seg, HatchKind::Hatch).lines.is_empty());
     }
 
     #[test]
     fn a_circle_and_a_polygon_are_hatched_inside() {
-        let c = Shape::Circle { id: "shp_c".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, center: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO } };
+        let c = Shape::Circle { id: "shp_c".into(), layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false, center: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(5.0), y: Nm::ZERO } };
         let d = design_with(vec![c.clone()]);
         let h = hatching(&d, None, &c, HatchKind::Hatch);
         assert!(h.lines.len() >= 4);
@@ -542,17 +543,17 @@ mod tests {
                 assert!(((p.x * p.x.raw_shim() + p.y * p.y.raw_shim()).raw_shim() as f64).sqrt() <= 5_001_000.0, "{p:?}");
             }
         }
-        let tri = Shape::Polygon { id: "shp_p".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) }] };
+        let tri = Shape::Polygon { id: "shp_p".into(), layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(10.0) }] };
         let h = hatching(&design_with(vec![tri.clone()]), None, &tri, HatchKind::ReverseHatch);
         assert!(!h.lines.is_empty());
-        assert!(h.lines.iter().all(|(a, b)| a.x + a.y <= Nm::from_raw_shim(10_001_000) && b.x + b.y <= Nm::from_raw_shim(10_001_000)));
+        assert!(h.lines.iter().all(|(a, b)| a.x + a.y <= mm(10.001) && b.x + b.y <= mm(10.001)));
     }
 
     #[test]
     fn another_shape_on_the_layer_knocks_the_lines_out_and_one_on_another_layer_does_not() {
-        let r = rect("F.Fab", Nm::from_raw_shim(200_000), Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(20_000_000), "shp_a");
+        let r = rect("F.Fab", mm(0.2), Nm::ZERO, Nm::ZERO, mm(20.0), mm(20.0), "shp_a");
         // A line right across, 1 mm wide: it and half the spacing (1 mm) either side are free of hatching.
-        let bar = |layer: &str, id: &str| Shape::Segment { id: id.into(), layer: layer.into(), stroke_width: Nm::from_raw_shim(1_000_000), filled: false, start: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(-1_000_000) }, end: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(21_000_000) } };
+        let bar = |layer: &str, id: &str| Shape::Segment { id: id.into(), layer: layer.into(), stroke_width: mm(1.0), filled: false, start: Point { x: mm(10.0), y: mm(-1.0) }, end: Point { x: mm(10.0), y: mm(21.0) } };
         let alone = hatching(&design_with(vec![r.clone()]), None, &r, HatchKind::Hatch);
         let with_bar = hatching(&design_with(vec![r.clone(), bar("F.Fab", "shp_b")]), None, &r, HatchKind::Hatch);
         let with_other_layer = hatching(&design_with(vec![r.clone(), bar("F.SilkS", "shp_c")]), None, &r, HatchKind::Hatch);
@@ -561,23 +562,23 @@ mod tests {
         // The bar is 1 mm wide, half the spacing (1 mm) is kept free either side: nothing of a line is between x = 8.5 mm and 11.5 mm but ... the lines stop at its edge.
         for (a, b) in &with_bar.lines {
             for p in [a, b] {
-                assert!(p.x <= Nm::from_raw_shim(8_500_000 + 3_000) || p.x >= Nm::from_raw_shim(11_500_000 - 3_000) || p.x <= Nm::from_raw_shim(3_000) || p.x >= Nm::from_raw_shim(20_000_000 - 3_000), "{p:?}");
+                assert!(p.x <= Nm::from_raw_shim(8_500_000 + 3_000) || p.x >= Nm::from_raw_shim(11_500_000 - 3_000) || p.x <= Nm::new(3_000) || p.x >= Nm::from_raw_shim(20_000_000 - 3_000), "{p:?}");
             }
         }
     }
 
     #[test]
     fn a_text_on_the_layer_knocks_a_box_out() {
-        let r = rect("F.Fab", Nm::from_raw_shim(200_000), Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(20_000_000), "shp_a");
+        let r = rect("F.Fab", mm(0.2), Nm::ZERO, Nm::ZERO, mm(20.0), mm(20.0), "shp_a");
         let mut d = design_with(vec![r.clone()]);
-        d.drawings.as_mut().unwrap().texts.push(Text { id: "txt_a".into(), content: "HELLO".into(), at: Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(10_000_000) }, angle: 0, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(2_000_000), stroke_width: Nm::from_raw_shim(200_000), justify: TextJustify::Left, mirror: false });
+        d.drawings.as_mut().unwrap().texts.push(Text { id: "txt_a".into(), content: "HELLO".into(), at: Point { x: mm(6.0), y: mm(10.0) }, angle: 0, layer: "F.Fab".into(), size_nm: mm(2.0), stroke_width: mm(0.2), justify: TextJustify::Left, mirror: false });
         let with_text = hatching(&d, None, &r, HatchKind::Hatch);
         let alone = hatching(&design_with(vec![r.clone()]), None, &r, HatchKind::Hatch);
         assert!(with_text.lines.len() > alone.lines.len());
     }
 
     fn spec_at(angle_mdeg: i64) -> TextSpec<'static> {
-        TextSpec { text: "HELLO", pos: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, size: (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_000_000)), thickness: Nm::from_raw_shim(200_000), draw_angle_mdeg: angle_mdeg, mirror: false, halign: -1, valign: 0, bold: false }
+        TextSpec { text: "HELLO", pos: Point { x: mm(10.0), y: mm(10.0) }, size: (mm(2.0), mm(2.0)), thickness: mm(0.2), draw_angle_mdeg: angle_mdeg, mirror: false, halign: -1, valign: 0, bold: false }
     }
 
     fn extent(hull: &LineChain) -> (i64, i64) {
@@ -604,21 +605,21 @@ mod tests {
     fn a_footprint_field_on_the_layer_knocks_the_lines_out() {
         use eda_model::footprint::{Footprint as Fp, Pad, PadKind, PadShape};
         use eda_model::{ConstraintModel, Part};
-        let fp = Fp { name: "2PAD".into(), pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::from_raw_shim(-1_000_000), Nm::ZERO), size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }], courtyard: Some((Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(1_000_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let fp = Fp { name: "2PAD".into(), pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (mm(-1.0), Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }], courtyard: Some((mm(2.0), mm(1.0))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("VALUE".into()), package: Some("2PAD".into()), footprint: Some("2PAD".into()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel { parts: vec![part], footprints: vec![fp], ..Default::default() };
-        let r = rect("F.Fab", Nm::from_raw_shim(200_000), Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(20_000_000), "shp_a");
+        let r = rect("F.Fab", mm(0.2), Nm::ZERO, Nm::ZERO, mm(20.0), mm(20.0), "shp_a");
         let mut d = design_with(vec![r.clone()]);
         d.placement = Some(eda_model::ir::PlacementSection {
             outline: vec![],
-            footprints: vec![FootprintInstance { id: "U1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, rot: 0, side: Side::Top, label: Default::default() }],
+            footprints: vec![FootprintInstance { id: "U1".into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot: 0, side: Side::Top, label: Default::default() }],
             modules: vec![],
         });
         let without = hatching(&d, None, &r, HatchKind::Hatch);
         let with = hatching(&d, Some(&model), &r, HatchKind::Hatch);
         assert!(with.lines.len() > without.lines.len(), "the Value field of U1 is on F.Fab and cuts the lines it is over: {} against {}", with.lines.len(), without.lines.len());
         // On a layer none of its fields is on, the footprint cuts nothing.
-        let silk = rect("F.CrtYd", Nm::from_raw_shim(200_000), Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(20_000_000), "shp_s");
+        let silk = rect("F.CrtYd", mm(0.2), Nm::ZERO, Nm::ZERO, mm(20.0), mm(20.0), "shp_s");
         let mut d2 = design_with(vec![silk.clone()]);
         d2.placement = d.placement.clone();
         assert_eq!(hatching(&d2, Some(&model), &silk, HatchKind::Hatch).lines.len() > hatching(&d2, None, &silk, HatchKind::Hatch).lines.len(), true, "but its courtyard cuts a courtyard layer's hatching");
@@ -626,7 +627,7 @@ mod tests {
 
     #[test]
     fn the_plot_has_a_stadium_per_line_for_a_hatch() {
-        let r = rect("F.Fab", Nm::from_raw_shim(200_000), Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000), "shp_a");
+        let r = rect("F.Fab", mm(0.2), Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0), "shp_a");
         let d = design_with(vec![r.clone()]);
         let lines = hatching(&d, None, &r, HatchKind::Hatch).lines;
         let polys = hatch_polygons(&d, None, &r, HatchKind::Hatch);
@@ -635,7 +636,7 @@ mod tests {
 
     #[test]
     fn the_plot_of_a_cross_hatch_is_the_shape_with_holes_in_a_grid() {
-        let r = rect("F.Fab", Nm::from_raw_shim(200_000), Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000), "shp_a");
+        let r = rect("F.Fab", mm(0.2), Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0), "shp_a");
         let d = design_with(vec![r.clone()]);
         let polys = hatch_polygons(&d, None, &r, HatchKind::CrossHatch);
         assert!(!polys.is_empty());
