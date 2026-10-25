@@ -36,7 +36,7 @@ fn rules() -> eda_model::BoardRules {
 
 /// A quarter circle of radius 4 mm about (0, 0), from (4000, 0) to (0, 4000).
 fn quarter() -> ArcPts {
-    let h = Nm::from_raw_shim((4_000_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as i64);
+    let h = Nm::kiround(4_000_000.0 * std::f64::consts::FRAC_1_SQRT_2);
     ArcPts::new(p(mm(4.0), Nm::ZERO), p(h, h), p(Nm::ZERO, mm(4.0)))
 }
 
@@ -147,7 +147,7 @@ fn an_arc_collides_with_a_track_across_it_and_not_with_one_beyond_the_clearance(
     assert!(!node.all_colliding(&across, &net_of("SIG"), eda_pns::layer::LayerRange::single(0), &rules, &[]).is_empty());
     // a SIG track 4 mm - 100 - 100 - 200 = 3600 from the centre, at the clearance of the arc's near edge: the arc's stroke is 3900..4100
     let radius_at = |r: f64| {
-        let h = Nm::from_raw_shim((r * std::f64::consts::FRAC_1_SQRT_2).round() as i64);
+        let h = Nm::kiround(r * std::f64::consts::FRAC_1_SQRT_2);
         Shape::Circle { c: p(h, h), r: mm(0.1) }
     };
     // 3900 - 200 (clearance) - 100 (the circle) = 3600: touching the clearance is not a collision, 30 um inside it is
@@ -237,7 +237,7 @@ fn straight(id: &str, net: &str, pts: &[Point]) -> Track {
 /// A quarter arc of radius 3 mm bulging toward +x +y: centre (-1000, -1000), from (2000, -1000) to (-1000, 2000).
 fn gnd_arc() -> ArcPts {
     let r = 3_000_000.0;
-    let h = Nm::from_raw_shim((r * std::f64::consts::FRAC_1_SQRT_2).round() as i64);
+    let h = Nm::kiround(r * std::f64::consts::FRAC_1_SQRT_2);
     ArcPts::new(p(mm(2.0), mm(-1.0)), p(mm(-1.0) + h, mm(-1.0) + h), p(mm(-1.0), mm(2.0)))
 }
 
@@ -264,7 +264,7 @@ fn a_route_started_in_the_middle_of_an_arc_track_cuts_it_there() {
     let on = arc.nearest_point(p(mm(1.5), mm(1.5)));
     router.start(on, "F.Cu", mm(0.2)).expect("an arc track of the net can start a route");
     // head for R2.1 (the pad at x = 9000 - 825)
-    let target = p(Nm::from_raw_shim(9_000_000 - 825_000), Nm::ZERO);
+    let target = p(mm(9.0) - mm(0.825), Nm::ZERO);
     let commit = router.finish(target).expect("the route commits");
     let (arcs, others) = tracks_of(&commit);
     assert_eq!(commit.remove_track_ids, vec!["trk_arc".to_string()], "the arc track is replaced");
@@ -276,12 +276,12 @@ fn a_route_started_in_the_middle_of_an_arc_track_cuts_it_there() {
 
 #[test]
 fn a_route_that_ends_on_an_arc_track_of_its_net_cuts_it_there() {
-    let arc = ArcPts::new(p(mm(2.0), mm(1.0)), p(Nm::from_raw_shim(-1_000_000 + 2_121_000), Nm::from_raw_shim(1_000_000 - 2_121_000 + 2_000_000)), p(mm(-1.0), mm(2.0)));
+    let arc = ArcPts::new(p(mm(2.0), mm(1.0)), p(mm(-1.0) + mm(2.121), mm(1.0) - mm(2.121) + mm(2.0)), p(mm(-1.0), mm(2.0)));
     let _ = arc;
     let a = gnd_arc();
     let (design, model) = board_with(vec![arc_track("trk_arc", "SIG", a)]);
     let mut router = Router::new(&design, &model);
-    router.start(p(Nm::from_raw_shim(-9_000_000 - 825_000), Nm::ZERO), "F.Cu", mm(0.2)).expect("starts on R1.1");
+    router.start(p(mm(-9.0) - mm(0.825), Nm::ZERO), "F.Cu", mm(0.2)).expect("starts on R1.1");
     let on = a.nearest_point(p(mm(0.3), mm(1.8)));
     let preview = router.preview(on).expect("a route is in progress");
     assert_eq!(preview.snapped_end, Some(on), "the end snaps onto the arc");
@@ -296,9 +296,9 @@ fn a_route_in_walk_around_mode_goes_round_an_arc_it_would_cross() {
     let (design, model) = board_with(vec![arc_track("trk_arc", "GND", gnd_arc())]);
     let mut router = Router::new(&design, &model);
     router.settings.mode = Mode::Walkaround;
-    router.start(p(Nm::from_raw_shim(-9_000_000 - 825_000), Nm::ZERO), "F.Cu", mm(0.2)).expect("starts on R1.1");
+    router.start(p(mm(-9.0) - mm(0.825), Nm::ZERO), "F.Cu", mm(0.2)).expect("starts on R1.1");
     // straight at R2.1: the line y = 0 crosses the arc (x from 1000 up, near y = 0)
-    let target = p(Nm::from_raw_shim(9_000_000 - 825_000), Nm::ZERO);
+    let target = p(mm(9.0) - mm(0.825), Nm::ZERO);
     let preview = router.preview(target).expect("in progress");
     assert!(!preview.colliding, "walked round the arc");
     let rules = rules();
@@ -360,7 +360,7 @@ fn a_route_in_shove_mode_pushes_an_arc_track_out_of_its_way_and_the_commit_write
 fn a_shove_that_walks_the_straight_part_of_a_line_round_a_pusher_leaves_its_arc_an_arc() {
     // GND: a long straight run along y = 0, a quarter arc turning away at its end, a run on. The SIG pusher is a short vertical stroke
     // that ends under the run, far from the arc: the run is walked round the pusher's end, the arc is not reached.
-    let arc = ArcPts::new(p(mm(2.0), Nm::ZERO), p(Nm::from_raw_shim(2_000_000 + 1_414_000), Nm::from_raw_shim(2_000_000 - 1_414_000)), p(mm(4.0), mm(2.0)));
+    let arc = ArcPts::new(p(mm(2.0), Nm::ZERO), p(mm(2.0) + mm(1.414), mm(2.0) - mm(1.414)), p(mm(4.0), mm(2.0)));
     let mut node = Node::new();
     node.add(seg_item("GND", p(mm(-8.0), Nm::ZERO), arc.start, "t_run"));
     node.add(arc_item("GND", arc, "t_arc"));
@@ -382,7 +382,7 @@ fn a_shove_that_walks_the_straight_part_of_a_line_round_a_pusher_leaves_its_arc_
 /// the shove did not reach is put back as an arc track -- the very arc, not a polyline of its chords.
 #[test]
 fn a_route_that_shoves_a_line_with_an_arc_puts_the_arc_it_did_not_reach_back_as_an_arc_track() {
-    let arc = ArcPts::new(p(mm(2.0), Nm::ZERO), p(Nm::from_raw_shim(2_000_000 + 1_414_000), Nm::from_raw_shim(2_000_000 - 1_414_000)), p(mm(4.0), mm(2.0)));
+    let arc = ArcPts::new(p(mm(2.0), Nm::ZERO), p(mm(2.0) + mm(1.414), mm(2.0) - mm(1.414)), p(mm(4.0), mm(2.0)));
     let tracks = vec![
         straight("t_run", "GND", &[p(mm(-8.0), Nm::ZERO), arc.start]),
         arc_track("t_arc", "GND", arc),

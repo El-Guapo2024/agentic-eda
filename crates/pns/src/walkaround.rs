@@ -196,8 +196,8 @@ impl WalkOutcome {
 }
 
 /// `SHAPE_LINE_CHAIN::Length()`: the sum of the segments' rounded lengths.
-pub(crate) fn chain_length(pts: &[Point]) -> i64 {
-    pts.windows(2).map(|w| dist_f(w[0], w[1]).round() as i64).sum()
+pub(crate) fn chain_length(pts: &[Point]) -> Nm {
+    pts.windows(2).map(|w| Nm::kiround(dist_f(w[0], w[1]))).sum()
 }
 
 /// The faithful `PNS::WALKAROUND` (`pns_walkaround.cpp`): hug the nearest
@@ -401,7 +401,7 @@ impl<'a> Walker<'a> {
 
     /// `WALKAROUND::Route( aInitialPath )`.
     pub fn route(&mut self, net: &Net, layer: i32, width: Nm, initial: &[Point]) -> WalkOutcome {
-        self.initial_length = chain_length(initial) as f64;
+        self.initial_length = chain_length(initial).as_f64();
         self.iteration = 0;
         self.processed.clear();
         let mut out = WalkOutcome { status: [WalkStatus::InProgress; 3], lines: [initial.to_vec(), initial.to_vec(), initial.to_vec()] };
@@ -412,7 +412,7 @@ impl<'a> Walker<'a> {
                 if !self.policies[pol] {
                     continue;
                 }
-                let length_factor = if self.initial_length > 0.0 { chain_length(&out.lines[pol]) as f64 / self.initial_length } else { 0.0 };
+                let length_factor = if self.initial_length > 0.0 { chain_length(&out.lines[pol]).as_f64() / self.initial_length } else { 0.0 };
                 if self.length_limit_on && out.status[pol] != WalkStatus::Done && length_factor > self.length_expansion_factor {
                     out.status[pol] = WalkStatus::AlmostDone;
                 }
@@ -444,7 +444,7 @@ impl<'a> Walker<'a> {
 /// `LINE_PLACER::clipAndCheckCollisions`: split `chain` at `p` (a point on it, to a micron), keep the part up to there, and
 /// accept it when it is no shorter than `*threshold` and collides with nothing (`CheckColliding( LINE( m_head, l2 ) )`);
 /// an accepted slice raises `*threshold` to its own length.
-fn clip_and_check(p: Point, chain: &[Point], threshold: &mut i64, out: &mut Vec<Point>, collides: &dyn Fn(&[Point]) -> bool) -> bool {
+fn clip_and_check(p: Point, chain: &[Point], threshold: &mut Nm, out: &mut Vec<Point>, collides: &dyn Fn(&[Point]) -> bool) -> bool {
     // `SHAPE_LINE_CHAIN::Split`: an existing vertex, else the segment nearest `p` (within a micron)
     let slice: Vec<Point> = if let Some(i) = chain.iter().position(|&q| q == p) {
         chain[..=i].to_vec()
@@ -476,10 +476,10 @@ fn cursor_dist_minimum(chain: &[Point], cursor: Point, length_threshold: f64, co
     if chain.is_empty() {
         return None;
     }
-    let norm = |a: Point, b: Point| dist_f(a, b).round() as i64;
+    let norm = |a: Point, b: Point| Nm::kiround(dist_f(a, b));
     let mut last_p = *chain.last()?;
-    let mut accumulated = 0i64;
-    let mut cands: Vec<(i64, Point)> = Vec::new();
+    let mut accumulated = Nm::ZERO;
+    let mut cands: Vec<(Nm, Point)> = Vec::new();
     for w in chain.windows(2) {
         let seg = Seg::new(w[0], w[1]);
         cands.push((norm(cursor, seg.a), seg.a));
@@ -488,7 +488,7 @@ fn cursor_dist_minimum(chain: &[Point], cursor: Point, length_threshold: f64, co
             cands.push((norm(pn, cursor), pn));
         }
         accumulated += norm(seg.a, seg.b);
-        if accumulated as f64 > length_threshold {
+        if accumulated.as_f64() > length_threshold {
             last_p = seg.b;
             break;
         }
@@ -497,11 +497,11 @@ fn cursor_dist_minimum(chain: &[Point], cursor: Point, length_threshold: f64, co
     // `minPGlob`: the first of the nearest (the local minimum is computed in KiCad and then discarded)
     let preferred = cands.iter().enumerate().min_by_key(|&(i, &(d, _))| (d, i)).map(|(_, &(_, p))| p)?;
     let mut out = Vec::new();
-    let mut threshold = 0;
+    let mut threshold = Nm::ZERO;
     if clip_and_check(preferred, chain, &mut threshold, &mut out, collides) {
         return Some(out);
     }
-    threshold = 0;
+    threshold = Nm::ZERO;
     let mut ok = false;
     for &(_, p) in &cands {
         ok |= clip_and_check(p, chain, &mut threshold, &mut out, collides);
@@ -553,7 +553,7 @@ pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, mask: u
     w.set_allowed_policies(&[WalkPolicy::Ccw, WalkPolicy::Cw]);
     let wr = w.route(net, layer, width, head);
 
-    let initial_length = chain_length(head) as f64;
+    let initial_length = chain_length(head).as_f64();
     let hug_len = initial_length * hug_threshold;
     let hug_len_complete = 2.0 * hug_len;
 
@@ -561,7 +561,7 @@ pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, mask: u
     let pols = [WalkPolicy::Cw, WalkPolicy::Ccw];
     let mut lines: [Vec<Point>; 2] = [wr.line_of(WalkPolicy::Cw).to_vec(), wr.line_of(WalkPolicy::Ccw).to_vec()];
     let mut arcs: [Vec<crate::arcs::ArcPts>; 2] = [head_line.arcs.clone(), head_line.arcs.clone()];
-    let mut len = [i64::MAX; 2];
+    let mut len = [Nm::MAX; 2];
     let mut best: Option<usize> = None;
     for (i, pol) in pols.iter().enumerate() {
         let status = wr.status_of(*pol);
@@ -582,7 +582,7 @@ pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, mask: u
     }
     let best_length = len[0].min(len[1]);
     if let Some(b) = best {
-        if (best_length as f64) < hug_len_complete {
+        if best_length.as_f64() < hug_len_complete {
             return Some(finish(lines[b].clone(), arcs[b].clone()));
         }
     }
@@ -590,14 +590,14 @@ pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, mask: u
     // too long a detour: hug the obstacle to the point nearest the cursor
     let collides = |pts: &[Point]| path_collides(node, rules, net, layer, width, pts, exclude);
     let mut hugged: [Option<Vec<Point>>; 2] = [None, None];
-    let mut dists = [i64::MAX; 2];
+    let mut dists = [Nm::MAX; 2];
     for (i, pol) in pols.iter().enumerate() {
         if wr.status_of(*pol) == WalkStatus::Stuck {
             continue;
         }
         hugged[i] = cursor_dist_minimum(&lines[i], cursor, hug_len, &collides);
         if let Some(l) = &hugged[i] {
-            dists[i] = l.last().map_or(i64::MAX, |&p| dist_f(cursor, p).round() as i64);
+            dists[i] = l.last().map_or(Nm::MAX, |&p| Nm::kiround(dist_f(cursor, p)));
         }
     }
     let pick = if dists[0] < dists[1] && hugged[0].is_some() { 0 } else { 1 };
@@ -636,7 +636,7 @@ mod tests {
             net: None,
             layers: LayerRange::new(0, 1),
             pos: Point { x: mm(2.475), y: mm(-1.905) },
-            shape: Shape::RoundRect { x0: Nm::from_raw_shim(2_475_000 - 975_000), y0: Nm::from_raw_shim(-1_905_000 - 300_000), x1: Nm::from_raw_shim(2_475_000 + 975_000), y1: Nm::from_raw_shim(-1_905_000 + 300_000), r: mm(0.15) },
+            shape: Shape::RoundRect { x0: mm(2.475 - 0.975), y0: mm(-1.905 - 0.3), x1: mm(2.475 + 0.975), y1: mm(-1.905 + 0.3), r: mm(0.15) },
             source: "U1.8".into(),
             edge: false,
         }));

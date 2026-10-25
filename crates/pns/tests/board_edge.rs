@@ -172,8 +172,8 @@ fn a_route_whose_shove_would_cross_the_edge_clearance_is_not_a_shove_in_the_stud
     assert!(gap_to_outline(&moved, mm(0.2)) >= 499_500.0, "{moved:?}");
 
     // Further than the clearance allows, whatever the router calls fine keeps clear of the edge.
-    for tip in [900_000, 800_000, 600_000, 400_000] {
-        let pv = router.preview(p(mm(10.0), Nm::from_raw_shim(tip))).expect("a session");
+    for tip in [mm(0.9), mm(0.8), mm(0.6), mm(0.4)] {
+        let pv = router.preview(p(mm(10.0), tip)).expect("a session");
         let moved: Vec<Point> = pv.displaced_lines.iter().flat_map(|d| d.line.pts.clone()).collect();
         if !moved.is_empty() {
             assert!(gap_to_outline(&moved, mm(0.2)) >= 499_500.0, "tip {tip}: a pushed track is {} nm from the edge: {moved:?}", gap_to_outline(&moved, mm(0.2)));
@@ -199,7 +199,7 @@ fn a_head_that_would_end_inside_the_clearance_is_marked_and_a_pad_free_one_is_no
 fn board_with_an_arc_and_a_hole() -> (Design, ConstraintModel) {
     let edge = |s: Shape| s;
     let line = |a: Point, b: Point| edge(Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, start: a, end: b });
-    let (mid_x, mid_y) = (mm(15.0) + Nm::from_raw_shim((5_000_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as i64), mm(15.0) + Nm::from_raw_shim((5_000_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as i64));
+    let (mid_x, mid_y) = (mm(15.0) + Nm::kiround(5_000_000.0 * std::f64::consts::FRAC_1_SQRT_2), mm(15.0) + Nm::kiround(5_000_000.0 * std::f64::consts::FRAC_1_SQRT_2));
     let shapes = vec![
         line(p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO)),
         line(p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(15.0))),
@@ -240,7 +240,7 @@ fn an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge() {
     let near_corner = |gap: Nm| {
         // On the diagonal, `gap` inside the arc's 5 mm radius round (15, 15).
         let r = 5_000_000.0 - gap.as_f64() - 100_000.0;
-        let c = p(mm(15.0) + Nm::from_raw_shim((r * std::f64::consts::FRAC_1_SQRT_2) as i64), mm(15.0) + Nm::from_raw_shim((r * std::f64::consts::FRAC_1_SQRT_2) as i64));
+        let c = p(mm(15.0) + Nm::new((r * std::f64::consts::FRAC_1_SQRT_2) as i64), mm(15.0) + Nm::new((r * std::f64::consts::FRAC_1_SQRT_2) as i64));
         let shape = Shape2::Stadium { a: c, b: c, r: mm(0.1) };
         !node.all_colliding(&shape, &net_of("SIG"), LayerRange::single(layers.index_of("F.Cu").unwrap()), &model.board, &[]).is_empty()
     };

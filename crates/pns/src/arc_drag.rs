@@ -49,7 +49,7 @@ fn norm(a: V) -> f64 {
 }
 
 fn round(a: V) -> Point {
-    Point { x: Nm::from_raw_shim(a.0.round() as i64), y: Nm::from_raw_shim(a.1.round() as i64) }
+    Point { x: Nm::kiround(a.0), y: Nm::kiround(a.1) }
 }
 
 /// A segment of two real points (`SEG`), used as the line through them.

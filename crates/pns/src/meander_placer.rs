@@ -502,7 +502,7 @@ pub fn chain_of(line: &Line) -> ShapeLineChain {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::mm;
+    use eda_model::units::{mm, um};
     use super::*;
     use crate::item::{net_of, Segment, Solid};
     use crate::tuning_path::LengthEnv;
@@ -623,7 +623,7 @@ mod tests {
         assert!((placer.tuning_length_result() - 44_000_000).abs() < 100_000);
         // nothing on the GND side of the line beyond what fits: every vertex at least (200 + 200 + 100) um from the GND track's axis
         for q in t.points() {
-            assert!(mm(1.2) - q.y >= Nm::from_raw_shim(200_000 + 100_000 + 200_000 - 1_000), "{q:?} is too close to the GND track");
+            assert!(mm(1.2) - q.y >= mm(0.2) + mm(0.1) + mm(0.2) - um(1.0), "{q:?} is too close to the GND track");
         }
         assert!(t.points().iter().any(|q| q.y < Nm::ZERO), "the meanders went to the free side");
     }

@@ -144,7 +144,7 @@ pub fn find_dp_primitive_pair(node: &Node, item_id: ItemId) -> Result<FoundPair,
     let ref_anchor = dangling_anchor(node, item).ok_or_else(|| NOT_AT_THE_END.to_string())?;
 
     // `AllItemsInNet( coupledNet )`, nearest first; a tie goes to the lower id so that the result does not depend on the table's order
-    let mut best: Option<(i64, ItemId, Point)> = None;
+    let mut best: Option<(Nm, ItemId, Point)> = None;
     for (id, other) in node.iter() {
         if !same_net(other.net(), &coupled_net) || other.kind() != item.kind() {
             continue;
@@ -154,8 +154,8 @@ pub fn find_dp_primitive_pair(node: &Node, item_id: ItemId) -> Result<FoundPair,
             continue; // `shapeMatches`
         }
         let dist = vnorm(vsub(anchor, ref_anchor));
-        if best.is_none_or(|(d, bid, _)| (dist, id) < (Nm::from_raw_shim(d), bid)) {
-            best = Some((dist.raw_shim(), id, anchor));
+        if best.is_none_or(|(d, bid, _)| (dist, id) < (d, bid)) {
+            best = Some((dist, id, anchor));
         }
     }
     let Some((_, other_id, other_anchor)) = best else {
@@ -485,9 +485,9 @@ impl DiffPairPlacer {
         const MAX_ITER: usize = 40;
         let mut iter = 0;
         let mut collided = false;
-        let mut force: (i64, i64) = (0, 0);
+        let mut force: crate::diff_pair::Vec2 = (Nm::ZERO, Nm::ZERO);
         let mut handled: HashSet<ItemId> = HashSet::new();
-        let norm_sq = |v: (i64, i64)| v.0 as i128 * v.0 as i128 + v.1 as i128 * v.1 as i128;
+        let norm_sq = |v: crate::diff_pair::Vec2| v.0.area(v.0) + v.1.area(v.1);
         while iter < MAX_ITER {
             let circle = Shape::Circle { c: virt.pos, r: virt.diameter / 2 };
             let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false };
@@ -499,7 +499,7 @@ impl DiffPairPlacer {
             }
             let Some(item) = self.world.get(obs.id) else { break };
             let clearance = Node::clearance_to(rules, &self.net_p, item);
-            let mut layer_force = (0i64, 0i64);
+            let mut layer_force = (Nm::ZERO, Nm::ZERO);
             collided = false;
             // `RelevantShapeLayers`: the layers both occupy (shapes are the same on every layer here)
             if item.layers().overlaps(&virt.layers) {
@@ -512,13 +512,13 @@ impl DiffPairPlacer {
                 }
             }
             if collided {
-                virt.pos = Point { x: virt.pos.x + Nm::from_raw_shim(force.0), y: virt.pos.y + Nm::from_raw_shim(force.1) };
+                virt.pos = Point { x: virt.pos.x + force.0, y: virt.pos.y + force.1 };
             }
             handled.insert(obs.id);
             iter += 1;
         }
         let succeeded = !collided || iter != MAX_ITER;
-        succeeded.then_some(Point { x: p.x + Nm::from_raw_shim(force.0), y: p.y + Nm::from_raw_shim(force.1) })
+        succeeded.then_some(Point { x: p.x + force.0, y: p.y + force.1 })
     }
 
     /// `DIFF_PAIR_PLACER::routeHead`: fit the gateways of where the pair is coming from to those of where it is going -- the coupled

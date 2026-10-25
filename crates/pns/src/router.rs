@@ -31,7 +31,7 @@ use std::collections::HashMap;
 
 /// `ANCHOR_SNAP_NM`-equivalent used for picking a *start* item -- see
 /// `line_placer::SNAP_NM` for the same radius used at the route's end.
-const START_SNAP_NM: Nm = Nm::from_raw_shim(500_000);
+const START_SNAP_NM: Nm = Nm::new(500_000);
 
 /// A track cut in two where a route starts or ends in the middle of one (`SplitAdjacentSegments`, `SplitAdjacentArcs`): the commit gives the IR
 /// track `track` a vertex at `at`, or, for an arc track, cuts it into two arc tracks there.
@@ -271,10 +271,10 @@ impl Router {
             match self.world.get(id) {
                 Some(Item::Segment(s)) => {
                     let seg = eda_drc::kimath::Seg::new(s.a, s.b);
-                    let on = if seg.sq_distance_to_point(at) <= (EXACT_NM * EXACT_NM.raw_shim()).get() as i128 { at } else { seg.nearest_point(at) };
+                    let on = if seg.sq_distance_to_point(at) <= EXACT_NM.area(EXACT_NM) { at } else { seg.nearest_point(at) };
                     let half = s.width / 2;
                     let (da, db) = (crate::seg_ops::length(at, s.a), crate::seg_ops::length(at, s.b));
-                    if da < half.raw_shim() || db < half.raw_shim() {
+                    if da < half || db < half {
                         return Some(StartPick { item: id, pos: if da < db { s.a } else { s.b }, split: None });
                     }
                     if s.source_track.is_some() {
@@ -286,7 +286,7 @@ impl Router {
                     // (`AlignToArc`), where `SplitAdjacentArcs` cuts it
                     let half = a.width / 2;
                     let (da, db) = (crate::seg_ops::length(at, a.start()), crate::seg_ops::length(at, a.end()));
-                    if da < half.raw_shim() || db < half.raw_shim() {
+                    if da < half || db < half {
                         return Some(StartPick { item: id, pos: if da < db { a.start() } else { a.end() }, split: None });
                     }
                     if a.source_track.is_some() {
@@ -412,7 +412,7 @@ impl Router {
             node.add_line(run, None, false);
         }
         for (v, _) in &placer.fixed_vias {
-            node.add(Item::Via(crate::item::Via { diameter: v.diameter.max(Nm::from_raw_shim(1)), drill: v.drill.max(Nm::from_raw_shim(1)), ..v.clone() }));
+            node.add(Item::Via(crate::item::Via { diameter: v.diameter.max(Nm::new(1)), drill: v.drill.max(Nm::new(1)), ..v.clone() }));
         }
         let current_end = head.last().unwrap_or_else(|| placer.fixed_start());
         let (from, layers) = if head.segment_count() > 0 {
@@ -665,7 +665,7 @@ impl Router {
                 if pts.contains(&p) {
                     continue;
                 }
-                if let Some(k) = (0..pts.len() - 1).find(|&k| eda_drc::kimath::Seg::new(pts[k], pts[k + 1]).sq_distance_to_point(p) <= (EXACT_NM * EXACT_NM.raw_shim()).get() as i128) {
+                if let Some(k) = (0..pts.len() - 1).find(|&k| eda_drc::kimath::Seg::new(pts[k], pts[k + 1]).sq_distance_to_point(p) <= EXACT_NM.area(EXACT_NM)) {
                     pts.insert(k + 1, p);
                 }
             }
@@ -758,8 +758,8 @@ impl Router {
                     id: String::new(),
                     net: net_name.clone(),
                     at: v.pos,
-                    drill: v.drill.max(Nm::from_raw_shim(1)),
-                    diameter: v.diameter.max(Nm::from_raw_shim(1)),
+                    drill: v.drill.max(Nm::new(1)),
+                    diameter: v.diameter.max(Nm::new(1)),
                     from_layer: self.layer_name(v.layers.start()).to_string(),
                     to_layer: self.layer_name(v.layers.end()).to_string(),
                 });
@@ -1147,7 +1147,7 @@ impl Router {
             }
             if let Some((a, b)) = &leg.vias {
                 for v in [a, b] {
-                    commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: v.pos, drill: v.drill.max(Nm::from_raw_shim(1)), diameter: v.diameter.max(Nm::from_raw_shim(1)), from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+                    commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: v.pos, drill: v.drill.max(Nm::new(1)), diameter: v.diameter.max(Nm::new(1)), from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
                 }
             }
         }
@@ -1579,7 +1579,7 @@ mod tests {
         router.preview(cursor);
         let commit = router.attempt_finish(cursor).expect("R2.1 is free to reach");
         let end = commit.tracks.last().and_then(|t| t.pts.last().copied());
-        assert_eq!(end, Some(Point { x: Nm::from_raw_shim(6_000_000 - 825_000), y: Nm::ZERO }), "ends on R2.1: {commit:?}");
+        assert_eq!(end, Some(Point { x: mm(6.0) - mm(0.825), y: Nm::ZERO }), "ends on R2.1: {commit:?}");
         assert!(!router.is_routing());
         // a wall the walk cannot get round: the route goes on, and the cursor goes to where the head got
         let (mut design, model) = two_pad_board();

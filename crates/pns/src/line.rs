@@ -305,7 +305,7 @@ impl Line {
         let seg_count = self.segment_count() as isize;
         let s_start = (index as isize - 2).max(0);
         let s_end = (index as isize + 2).min(seg_count - 1);
-        let (mut best_dist, mut best_snap) = (i64::MAX, p);
+        let (mut best_dist, mut best_snap) = (Nm::MAX, p);
         for i in s_start..=s_end {
             let a = self.seg_at(i as usize);
             for j in s_start..i {
@@ -315,7 +315,7 @@ impl Line {
                 }
                 if let Some(ip) = seg_ops::intersect_lines(a, b) {
                     let dist = seg_ops::length(ip, p);
-                    if dist < snap.raw_shim() && dist < best_dist {
+                    if dist < snap && dist < best_dist {
                         best_dist = dist;
                         best_snap = ip;
                     }
@@ -336,7 +336,7 @@ impl Line {
         let seg_count = path.len() as isize - 1;
         let drag_dir = Direction45::from_seg(seg(index).0, seg(index).1);
         let mut snap_p = [p, p];
-        let mut snap_d: [i64; 2] = [-1, -1];
+        let mut snap_d: [Nm; 2] = [Nm::new(-1), Nm::new(-1)];
         if index >= 2 {
             let s = seg(index - 2);
             if Direction45::from_seg(s.0, s.1) == drag_dir {
@@ -351,9 +351,9 @@ impl Line {
             }
             snap_p[1] = s.0;
         }
-        let (mut best, mut min_dist) = (p, i64::MAX);
+        let (mut best, mut min_dist) = (p, Nm::MAX);
         for i in 0..2 {
-            if snap_d[i] >= 0 && snap_d[i] < min_dist && snap_d[i] <= snap.raw_shim() {
+            if snap_d[i] >= Nm::ZERO && snap_d[i] < min_dist && snap_d[i] <= snap {
                 min_dist = snap_d[i];
                 best = snap_p[i];
             }
@@ -417,7 +417,7 @@ impl Line {
         let dragged = seg(&path, idx);
         let ray = |from: Point, d: Direction45| -> Seg2 {
             let (dx, dy) = d.unit();
-            (from, Point { x: from.x + Nm::from_raw_shim(dx), y: from.y + Nm::from_raw_shim(dy) })
+            (from, Point { x: from.x + Nm::new(dx), y: from.y + Nm::new(dy) })
         };
 
         let (guide_a, guide_b): ([Seg2; 2], [Seg2; 2]);
@@ -439,13 +439,13 @@ impl Line {
         }
 
         let s_current = ray(target, drag_dir);
-        let length_of = |pts: &[Point]| -> i64 { pts.windows(2).map(|w| seg_ops::length(w[0], w[1])).sum() };
+        let length_of = |pts: &[Point]| -> Nm { pts.windows(2).map(|w| seg_ops::length(w[0], w[1])).sum() };
         let append = |pts: &mut Vec<Point>, q: Point| {
             if pts.last() != Some(&q) {
                 pts.push(q);
             }
         };
-        let (mut best_len, mut best): (i64, Vec<Point>) = (i64::MAX, Vec::new());
+        let (mut best_len, mut best): (Nm, Vec<Point>) = (Nm::MAX, Vec::new());
         for ga in &guide_a {
             for gb in &guide_b {
                 let (Some(ip1), Some(ip2)) = (seg_ops::intersect_lines(s_current, *ga), seg_ops::intersect_lines(s_current, *gb)) else { continue };
@@ -560,7 +560,7 @@ impl Line {
             let mut k = i;
             if !uniq[i].1 && !uniq[i + 1].1 {
                 while k + 2 < np
-                    && (crate::seg_ops::line_distance((p0, uniq[k + 2].0), uniq[k + 1].0) <= 1 || crate::seg_ops::collinear((p0, uniq[k + 2].0), (p0, uniq[k + 1].0)))
+                    && (crate::seg_ops::line_distance((p0, uniq[k + 2].0), uniq[k + 1].0) <= Nm::new(1) || crate::seg_ops::collinear((p0, uniq[k + 2].0), (p0, uniq[k + 1].0)))
                 {
                     k += 1;
                 }
@@ -808,9 +808,9 @@ mod tests {
             let mut l = Line::from_points(None, 0, Nm::new(200), pts);
             let to = p(cursor.0, cursor.1);
             if *kind == 'S' {
-                l.drag_segment45(to, *index, Nm::from_raw_shim(*snap));
+                l.drag_segment45(to, *index, Nm::new(*snap));
             } else {
-                l.drag_corner45_snapped(to, *index, Nm::from_raw_shim(*snap));
+                l.drag_corner45_snapped(to, *index, Nm::new(*snap));
             }
             let want: Vec<Point> = want.iter().map(|&(x, y)| p(x, y)).collect();
             assert_eq!(l.pts, want, "{kind} snap {snap} index {index} to {cursor:?} on {line:?}");

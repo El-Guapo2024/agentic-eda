@@ -390,8 +390,13 @@ mod tests {
     use super::*;
     use crate::hull::make_clockwise;
 
+    /// A point at `(x, y)` nanometres.
+    fn p(x: i64, y: i64) -> Point {
+        Point { x: Nm::new(x), y: Nm::new(y) }
+    }
+
     fn square(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<Point> {
-        make_clockwise(vec![Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y0) }, Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) }, Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y1) }])
+        make_clockwise(vec![p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)])
     }
 
     /// D3 repro from docs/parity/CODE-COMPARE-router.md: the exit crossing
@@ -422,10 +427,10 @@ mod tests {
             let k = 0.4142f64;
             let ro = (r as f64 * k) as i64;
             let hull = make_clockwise(vec![
-                Point { x: Nm::from_raw_shim(cx + ro), y: Nm::from_raw_shim(cy - r) }, Point { x: Nm::from_raw_shim(cx + r), y: Nm::from_raw_shim(cy - ro) }, Point { x: Nm::from_raw_shim(cx + r), y: Nm::from_raw_shim(cy + ro) }, Point { x: Nm::from_raw_shim(cx + ro), y: Nm::from_raw_shim(cy + r) },
-                Point { x: Nm::from_raw_shim(cx - ro), y: Nm::from_raw_shim(cy + r) }, Point { x: Nm::from_raw_shim(cx - r), y: Nm::from_raw_shim(cy + ro) }, Point { x: Nm::from_raw_shim(cx - r), y: Nm::from_raw_shim(cy - ro) }, Point { x: Nm::from_raw_shim(cx - ro), y: Nm::from_raw_shim(cy - r) },
+                p(cx + ro, cy - r), p(cx + r, cy - ro), p(cx + r, cy + ro), p(cx + ro, cy + r),
+                p(cx - ro, cy + r), p(cx - r, cy + ro), p(cx - r, cy - ro), p(cx - ro, cy - r),
             ]);
-            let line = [Point { x: Nm::from_raw_shim(rnd(3000)), y: Nm::from_raw_shim(rnd(10000)) }, Point { x: Nm::from_raw_shim(7000 + rnd(3000)), y: Nm::from_raw_shim(rnd(10000)) }];
+            let line = [p(rnd(3000), rnd(10000)), p(7000 + rnd(3000), rnd(10000))];
             for cw in [true, false] {
                 let Some(path) = walkaround(&line, &hull, cw) else { continue };
                 for w in path.windows(2) {
@@ -473,7 +478,7 @@ mod tests {
 
     #[test]
     fn walks_both_ways_around_a_roundrect_pad_hull() {
-        let shape = eda_drc::kimath::Shape::RoundRect { x0: Nm::from_raw_shim(2475 - 975), y0: Nm::from_raw_shim(-1905 - 300), x1: Nm::from_raw_shim(2475 + 975), y1: Nm::from_raw_shim(-1905 + 300), r: Nm::new(150) };
+        let shape = eda_drc::kimath::Shape::RoundRect { x0: Nm::new(2475 - 975), y0: Nm::new(-1905 - 300), x1: Nm::new(2475 + 975), y1: Nm::new(-1905 + 300), r: Nm::new(150) };
         let hull = crate::hull::primitive_hull(&shape, Nm::new(200), Nm::new(200));
         let line = [Point { x: Nm::new(-2475), y: Nm::new(-1905) }, Point { x: Nm::new(8665), y: Nm::new(-1905) }, Point { x: Nm::new(12_475), y: Nm::new(1905) }];
         assert_eq!(hull_intersection(&hull, &line).len(), 2);

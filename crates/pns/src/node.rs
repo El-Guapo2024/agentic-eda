@@ -32,10 +32,10 @@
 //! `pns_node.cpp` directly.
 
 /// See `all_colliding`: `m_clearanceEpsilon`, the board's `GetDRCEpsilon()` (0.0005 mm) (`pns_kicad_iface.cpp`).
-pub const CLEARANCE_EPSILON: Nm = Nm::from_raw_shim(500);
+pub const CLEARANCE_EPSILON: Nm = Nm::new(500);
 
 /// How far from a point [`Node::segment_at`] looks for a segment: half the widest track it can find (5 mm of copper).
-const SEGMENT_AT_REACH: Nm = Nm::from_raw_shim(2_500_000);
+const SEGMENT_AT_REACH: Nm = Nm::new(2_500_000);
 
 /// `NODE::AssembleLine`'s `MaxVerts` (1024 * 16): hard cap on a followed line.
 const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
@@ -156,7 +156,7 @@ impl Clone for Node {
 /// Cell size for the broad-phase grid: a few mm, coarse enough that a
 /// typical query touches a handful of cells regardless of board size (the
 /// same reasoning as `eda_drc::rtree::DrcRTree::new`'s doc comment).
-const INDEX_CELL_NM: Nm = Nm::from_raw_shim(5_000_000); // 5 mm
+const INDEX_CELL_NM: Nm = Nm::new(5_000_000); // 5 mm
 
 impl Node {
     pub fn new() -> Self {
@@ -231,7 +231,7 @@ impl Node {
             // `int n_seg = 0;` -- never incremented in KiCad's loop
             let n_seg = 0;
             let (mut n_solid, mut n_vias) = (0, 0);
-            let (mut prev_w, mut max_w, mut is_width_change) = (-1, Nm::from_raw_shim(-1), false);
+            let (mut prev_w, mut max_w, mut is_width_change) = (Nm::new(-1), Nm::new(-1), false);
             let mut locked_seg: Option<&crate::item::Segment> = None;
             let mut is_locked = false;
             let mut pos: Option<Point> = None;
@@ -243,11 +243,11 @@ impl Node {
                     Some(Item::Segment(s)) => {
                         let w = s.width;
                         // `if( prev_w < 0 ) prev_w = w; else if( w != prev_w ) is_width_change = true;`
-                        if prev_w >= 0 && w != Nm::from_raw_shim(prev_w) {
+                        if prev_w >= Nm::ZERO && w != prev_w {
                             is_width_change = true;
                         }
                         max_w = max_w.max(w);
-                        prev_w = w.raw_shim();
+                        prev_w = w;
                         is_locked = s.locked;
                         locked_seg = Some(s);
                         net = Some(s.net.clone());
@@ -867,7 +867,7 @@ impl Node {
                 connected.extend(j.links.iter().copied());
             }
         }
-        let mut best: Option<(i64, ItemId, Point)> = None;
+        let mut best: Option<(Nm, ItemId, Point)> = None;
         let mut ids: Vec<ItemId> = self.items.iter().filter(|(id, it)| same_net_exact(it.net(), net) && !connected.contains(id) && !it.is_virtual() && !matches!(it, Item::Solid(s) if !s.routable())).map(|(&id, _)| id).collect();
         ids.sort_unstable();
         for id in ids {

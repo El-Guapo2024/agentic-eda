@@ -83,12 +83,12 @@ use std::collections::BTreeMap;
 /// Matches the existing single-segment router's own snap radius
 /// (`web/studio/src/components/canvas/routing.ts`'s `findRouteAnchor`
 /// caller), so the two tools feel consistent.
-pub const SNAP_NM: Nm = Nm::from_raw_shim(500_000);
+pub const SNAP_NM: Nm = Nm::new(500_000);
 
 /// How far off a point may be and still be the point: the studio's own snapping (`PcbSnap.routePoint`) has put the cursor exactly on a
 /// pad, a via, a track end or a track's centre line, and the rounding of the browser's coordinates moves it at most this much (the 2 um
 /// the studio's micrometre coordinates once allowed).
-pub const EXACT_NM: Nm = Nm::from_raw_shim(2_000);
+pub const EXACT_NM: Nm = Nm::new(2_000);
 
 #[derive(Debug, Clone)]
 pub struct Preview {
@@ -470,9 +470,9 @@ impl LinePlacer {
         }
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers(to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, is_virtual: false };
         let start = self.fixed_start();
-        let lead = ((at.x - start.x).raw_shim(), (at.y - start.y).raw_shim());
+        let lead = (at.x - start.x, at.y - start.y);
         match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
-            Some(force) => Point { x: at.x + Nm::from_raw_shim(force.0), y: at.y + Nm::from_raw_shim(force.1) },
+            Some(force) => Point { x: at.x + force.0, y: at.y + force.1 },
             None => at,
         }
     }
@@ -1172,7 +1172,7 @@ mod tests {
         assert_eq!(pv.displaced_lines.len(), 1, "the track under the via is pushed aside: {:?}", pv.displaced_lines);
         // the track bulges round the via: abreast of it, it is the via's edge (4300) + the clearance (200) + the track's half width (100) away
         let bulge: Vec<_> = pv.displaced_lines[0].line.pts.iter().filter(|q| q.y.abs() <= mm(0.3)).collect();
-        assert!(!bulge.is_empty() && bulge.iter().all(|q| q.x >= Nm::from_raw_shim(4_600_000 - 1)), "{:?}", pv.displaced_lines[0].line.pts);
+        assert!(!bulge.is_empty() && bulge.iter().all(|q| q.x >= mm(4.6) - Nm::new(1)), "{:?}", pv.displaced_lines[0].line.pts);
         // Highlight collisions only reports it: the same via collides with the track on the other layer
         let mark = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         let pv = placer.preview(&node, &rules, &mark, Point { x: mm(4.0), y: Nm::ZERO });
@@ -1192,7 +1192,7 @@ mod tests {
         let pv = placer.preview(&locked, &rules, &shove, Point { x: mm(4.0), y: Nm::ZERO });
         assert!(pv.displaced_lines.is_empty() && !pv.colliding, "a locked track is not shoved, the via is pushed off it: {pv:?}");
         let (at, _, _) = pv.via.unwrap();
-        assert!(at.x <= Nm::from_raw_shim(4_450_000 - 100_000 - 200_000 - 300_000) && pv.head.last() == Some(at), "{pv:?}");
+        assert!(at.x <= mm(4.45) - mm(0.1) - mm(0.2) - mm(0.3) && pv.head.last() == Some(at), "{pv:?}");
     }
 
     /// The click that places the via (`switch_layer`) takes the shoved track along into the commit, and the next run starts on the via.
@@ -1213,7 +1213,7 @@ mod tests {
         let displaced: Vec<_> = placer.displaced_tracks().collect();
         assert_eq!(displaced.len(), 1);
         assert_eq!(displaced[0].0, "trkG");
-        assert!(displaced[0].1.iter().all(|l| l.pts.iter().filter(|q| q.y.abs() <= mm(0.3)).all(|q| q.x >= Nm::from_raw_shim(4_600_000 - 1))), "{displaced:?}");
+        assert!(displaced[0].1.iter().all(|l| l.pts.iter().filter(|q| q.y.abs() <= mm(0.3)).all(|q| q.x >= mm(4.6) - Nm::new(1))), "{displaced:?}");
         assert!(!placer.placing_via && placer.via_to_layer.is_none());
     }
 
@@ -1260,9 +1260,9 @@ mod tests {
         let reach = |pv: &Preview| pv.displaced_lines.iter().flat_map(|d| d.line.pts.iter()).map(|q| q.x).max().unwrap_or(mm(2.5));
         let pushed = placer.preview(&node, &rules, &settings, Point { x: mm(5.0), y: Nm::ZERO });
         assert_eq!(pushed.displaced_lines.len(), 1);
-        assert!(reach(&pushed) >= Nm::from_raw_shim(5_000_000 + 100_000 + 200_000 + 100_000 - 1), "{:?}", pushed.displaced_lines);
+        assert!(reach(&pushed) >= mm(5.0) + mm(0.1) + mm(0.2) + mm(0.1) - Nm::new(1), "{:?}", pushed.displaced_lines);
         let further = placer.preview(&node, &rules, &settings, Point { x: mm(6.0), y: Nm::ZERO });
-        assert!(reach(&further) >= Nm::from_raw_shim(6_000_000 + 400_000 - 1), "{:?}", further.displaced_lines);
+        assert!(reach(&further) >= mm(6.0) + mm(0.4) - Nm::new(1), "{:?}", further.displaced_lines);
         assert_eq!(placer.springback.borrow().len(), 3, "a frame per move that shoved");
         // drawn back off the track: every frame it no longer presses on is popped, down to the first
         let back = placer.preview(&node, &rules, &settings, Point { x: mm(1.5), y: Nm::ZERO });
@@ -1342,15 +1342,16 @@ mod tests {
         node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(3.0), y: mm(-0.7) }, b: Point { x: mm(7.0), y: mm(-0.7) }, width: mm(0.2), source_track: Some(("B".into(), 0)), locked: false }));
         let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
         let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
-        for (moves, fix) in [(vec![(500_000, 0), (5_000_000, 0)], (10_000_000, 0)), (vec![(10_000_000, -1_000_000)], (10_000_000, -3_000_000)), (vec![(9_000_000, -3_000_000)], (5_000_000, -3_000_000))] {
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        for (moves, fix) in [(vec![at(0.5, 0.0), at(5.0, 0.0)], at(10.0, 0.0)), (vec![at(10.0, -1.0)], at(10.0, -3.0)), (vec![at(9.0, -3.0)], at(5.0, -3.0))] {
             for m in moves {
-                placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(m.0), y: Nm::from_raw_shim(m.1) });
+                placer.preview(&node, &rules, &settings, m);
             }
-            assert_eq!(placer.fix(&node, &rules, &settings, Point { x: Nm::from_raw_shim(fix.0), y: Nm::from_raw_shim(fix.1) }), FixOutcome::Fixed { real_end: false });
+            assert_eq!(placer.fix(&node, &rules, &settings, fix), FixOutcome::Fixed { real_end: false });
         }
         let mut last = None;
-        for y in [-2_500_000, -2_000_000, -1_500_000, -1_200_000, -1_000_000, -900_000, -800_000, -700_000, -650_000] {
-            last = Some(placer.preview(&node, &rules, &settings, Point { x: mm(5.0), y: Nm::from_raw_shim(y) }));
+        for y in [-2.5, -2.0, -1.5, -1.2, -1.0, -0.9, -0.8, -0.7, -0.65] {
+            last = Some(placer.preview(&node, &rules, &settings, at(5.0, y)));
         }
         let pv = last.unwrap();
         assert!(!pv.colliding);
@@ -1456,10 +1457,10 @@ mod tests {
             let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
             let mut head = Vec::new();
             for i in 1..=12 {
-                head = placer.preview(&node, &rules, settings, if up_first { Point { x: Nm::from_raw_shim(500_000 * i), y: Nm::from_raw_shim(-500_000 * i) } } else { Point { x: Nm::from_raw_shim(500_000 * i), y: Nm::ZERO } }).head.pts;
+                head = placer.preview(&node, &rules, settings, if up_first { Point { x: mm(0.5) * i, y: mm(-0.5) * i } } else { Point { x: mm(0.5) * i, y: Nm::ZERO } }).head.pts;
             }
             for i in 1..=12 {
-                head = placer.preview(&node, &rules, settings, if up_first { Point { x: Nm::from_raw_shim(6_000_000 + 500_000 * i), y: mm(-6.0) } } else { Point { x: Nm::from_raw_shim(6_000_000 + 500_000 * i), y: Nm::from_raw_shim(-500_000 * i) } }).head.pts;
+                head = placer.preview(&node, &rules, settings, if up_first { Point { x: mm(6.0) + mm(0.5) * i, y: mm(-6.0) } } else { Point { x: mm(6.0) + mm(0.5) * i, y: mm(-0.5) * i } }).head.pts;
             }
             assert_eq!(head.len(), 3, "{head:?}");
             Direction45::from_seg(head[0], head[1])
@@ -1514,7 +1515,7 @@ mod tests {
         assert!(Direction45::from_seg(flipped[0], flipped[1]).is_diagonal(), "E flipped is the next octant: diagonal first, {flipped:?}");
         // however the mouse moves, the flip holds
         for i in 1..=10 {
-            let moved = placer.preview(&node, &rules, &settings, Point { x: Nm::from_raw_shim(6_000_000 + 500_000 * i), y: Nm::from_raw_shim(-2_000_000 - 700_000 * i) }).head.pts;
+            let moved = placer.preview(&node, &rules, &settings, Point { x: mm(6.0) + mm(0.5) * i, y: mm(-2.0) - mm(0.7) * i }).head.pts;
             assert!(Direction45::from_seg(moved[0], moved[1]).is_diagonal(), "{moved:?}");
         }
         // a fix: the next leg starts in the direction the last one ended in, and the flip is forgotten (`m_mouseTrailTracer.Clear()`)

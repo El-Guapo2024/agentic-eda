@@ -111,7 +111,7 @@ pub fn intersect_lines(s: Seg2, o: Seg2) -> Option<Point> {
 }
 
 /// `SEG::LineDistance( aP )`: the distance from `p` to the infinite line through the segment, rounded down.
-pub fn line_distance(s: Seg2, p: Point) -> i64 {
+pub fn line_distance(s: Seg2, p: Point) -> Nm {
     let (a, b) = s;
     let pp = a.y.get() as i128 - b.y.get() as i128;
     let q = b.x.get() as i128 - a.x.get() as i128;
@@ -119,7 +119,7 @@ pub fn line_distance(s: Seg2, p: Point) -> i64 {
     let l = pp * pp + q * q;
     let det = pp * p.x.get() as i128 + q * p.y.get() as i128 + r;
     let dist_sq = if l > 0 { rescale(det, det, l) } else { 0 };
-    eda_drc::kimath::isqrt(dist_sq)
+    Nm::new(eda_drc::kimath::isqrt(dist_sq))
 }
 
 /// `SEG::Contains( aP )`: within `SquaredDistance <= 3` of the segment.
@@ -154,16 +154,16 @@ pub fn overlaps(s: Seg2, o: Seg2) -> bool {
 }
 
 /// `SEG::Length()`: `VECTOR2I::EuclideanNorm`, rounded to the nearest unit.
-pub fn length(a: Point, b: Point) -> i64 {
+pub fn length(a: Point, b: Point) -> Nm {
     let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
     if dx == dy {
-        (dx.as_f64() * std::f64::consts::SQRT_2).round() as i64
+        Nm::kiround(dx.as_f64() * std::f64::consts::SQRT_2)
     } else if dx == Nm::ZERO {
-        dy.raw_shim()
+        dy
     } else if dy == Nm::ZERO {
-        dx.raw_shim()
+        dx
     } else {
-        ((dx).as_f64()).hypot(dy.as_f64()).round() as i64
+        Nm::kiround(dx.as_f64().hypot(dy.as_f64()))
     }
 }
 
@@ -205,9 +205,9 @@ mod tests {
 
     #[test]
     fn line_distance_is_to_the_infinite_line() {
-        assert_eq!(line_distance((p(0, 0), p(10, 0)), p(500, 7)), 7);
-        assert_eq!(line_distance((p(0, 0), p(10, 10)), p(10, 0)), 7); // 10 / sqrt 2, rounded down
-        assert_eq!(line_distance((p(3, 3), p(3, 3)), p(9, 9)), 0, "a point has no line");
+        assert_eq!(line_distance((p(0, 0), p(10, 0)), p(500, 7)), Nm::new(7));
+        assert_eq!(line_distance((p(0, 0), p(10, 10)), p(10, 0)), Nm::new(7)); // 10 / sqrt 2, rounded down
+        assert_eq!(line_distance((p(3, 3), p(3, 3)), p(9, 9)), Nm::ZERO, "a point has no line");
     }
 
     #[test]
@@ -225,8 +225,8 @@ mod tests {
 
     #[test]
     fn length_is_rounded_like_euclidean_norm() {
-        assert_eq!(length(p(0, 0), p(10, 10)), 14);
-        assert_eq!(length(p(0, 0), p(3, 4)), 5);
-        assert_eq!(length(p(0, 0), p(0, -9)), 9);
+        assert_eq!(length(p(0, 0), p(10, 10)), Nm::new(14));
+        assert_eq!(length(p(0, 0), p(3, 4)), Nm::new(5));
+        assert_eq!(length(p(0, 0), p(0, -9)), Nm::new(9));
     }
 }

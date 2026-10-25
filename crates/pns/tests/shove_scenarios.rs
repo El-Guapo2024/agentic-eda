@@ -157,8 +157,8 @@ fn a_head_that_runs_into_a_pad_is_walked_around_it() {
 fn a_track_shoved_past_a_pad_row_is_walked_around_the_pads() {
     let mut node = Node::new();
     track(&mut node, "GND", "t1", &[p(Nm::ZERO, mm(0.5)), p(mm(6.0), mm(0.5))], mm(0.2));
-    for (i, x) in [1_000_000, 1_800_000, 2_600_000, 3_400_000, 4_200_000, 5_000_000].iter().enumerate() {
-        node.add(pad("VCC", &format!("U1.{i}"), p(Nm::from_raw_shim(*x), mm(1.3)), mm(0.3)));
+    for (i, x) in [mm(1.0), mm(1.8), mm(2.6), mm(3.4), mm(4.2), mm(5.0)].iter().enumerate() {
+        node.add(pad("VCC", &format!("U1.{i}"), p(*x, mm(1.3)), mm(0.3)));
     }
     // 150 above the track's centre line: pushing the track up 250 would put it 147 from the pads
     let raw = vec![p(Nm::ZERO, mm(0.35)), p(mm(6.0), mm(0.35))];

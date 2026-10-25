@@ -6,7 +6,7 @@
 //!
 //! Skipped (prints a line, passes) when the QA corpus is not on this machine: `KICAD_QA_DATA`, default `~/ws/kicad-src-8303b2ad/qa/data`.
 
-use eda_model::units::mm;
+use eda_model::units::{mm, um};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Design, Point, Track, Nm};
 use eda_model::{ConstraintModel, NetClass};
@@ -348,8 +348,8 @@ fn whatever_the_cursor_does_an_accepted_pair_leaves_the_board_clean_and_keeps_it
     };
     let mut rng = Rng(0x2545_F491_4F6C_DD1D);
     let mut totals = (0, 0, 0);
-    for (start, x0, y0, w, h) in [(J1_SIDE.0, 104_000_000, 86_000_000, 14_000_000, 22_000_000), (p(mm(124.7), mm(95.9)), 125_500_000, 86_000_000, 14_000_000, 22_000_000)] {
-        let cursors: Vec<Point> = (0..30).map(|_| p(Nm::from_raw_shim(x0 + rng.below(w / 1000) * 1000), Nm::from_raw_shim(y0 + rng.below(h / 1000) * 1000))).collect();
+    for (start, x0, y0, w, h) in [(J1_SIDE.0, mm(104.0), mm(86.0), mm(14.0), mm(22.0)), (p(mm(124.7), mm(95.9)), mm(125.5), mm(86.0), mm(14.0), mm(22.0))] {
+        let cursors: Vec<Point> = (0..30).map(|_| p(x0 + um(1.0) * rng.below(w / um(1.0)), y0 + um(1.0) * rng.below(h / um(1.0)))).collect();
         let (t, a, s) = sweep(&design, &model, start, &[Mode::Walkaround, Mode::Shove, Mode::MarkObstacles], &cursors);
         totals = (totals.0 + t, totals.1 + a, totals.2 + s);
     }

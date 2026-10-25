@@ -12,7 +12,7 @@
 //! nanometre. Each prints how many segments it reproduces exactly and within `TOL`, and the ones it
 //! misses.
 
-use eda_model::units::mm;
+use eda_model::units::{mm, um};
 use eda_model::ir::{Point, Nm};
 use eda_pns::from_ir::build_node;
 use eda_pns::item::{Item, ItemId};
@@ -48,7 +48,7 @@ fn hits(case: &str, expected: &[(String, Point, Point)], ours: &[(String, Point,
 }
 
 fn nm(v: &serde_json::Value) -> Nm {
-    Nm::from_raw_shim(v.as_i64().unwrap_or_else(|| (Nm::from_raw_shim(v.as_f64().unwrap().round() as i64)).raw_shim()))
+    v.as_i64().map(Nm::new).unwrap_or_else(|| Nm::kiround(v.as_f64().unwrap()))
 }
 
 fn pt(v: &serde_json::Value) -> Point {
@@ -586,7 +586,7 @@ fn random_shove_routes_never_leave_a_new_violation() {
         let (mut accepted, mut shoved) = (0, 0);
         for k in 0..50 {
             let (start, _) = anchors[rng.below(anchors.len() as i64) as usize].clone();
-            let target = Point { x: start.x + Nm::from_raw_shim(rng.below(24_000) * 1000) - mm(12.0), y: start.y + Nm::from_raw_shim(rng.below(24_000) * 1000) - mm(12.0) };
+            let target = Point { x: start.x + um(1.0) * rng.below(24_000) - mm(12.0), y: start.y + um(1.0) * rng.below(24_000) - mm(12.0) };
             router.start(start, "F.Cu", mm(0.25)).expect("starts on a pad");
             let pv = router.preview(target).unwrap();
             if pv.colliding {
@@ -625,7 +625,7 @@ fn random_corner_drags_never_leave_a_new_violation() {
         for k in 0..50 {
             let (id, at) = tracks[rng.below(tracks.len() as i64) as usize];
             let Some(d) = Dragger::start_with(&node, at, id, false) else { continue };
-            let to = Point { x: at.x + Nm::from_raw_shim(rng.below(6_000) * 1000) - mm(3.0), y: at.y + Nm::from_raw_shim(rng.below(6_000) * 1000) - mm(3.0) };
+            let to = Point { x: at.x + um(1.0) * rng.below(6_000) - mm(3.0), y: at.y + um(1.0) * rng.below(6_000) - mm(3.0) };
             let pv = d.preview(&node, &model.board, &settings, to);
             if pv.colliding {
                 continue;
@@ -670,7 +670,7 @@ fn random_segment_and_corner_drags_never_leave_a_new_violation() {
                 // the priming move at the grab point, then a few cursor positions
                 let mut shown = d.drag(&node, &model.board, &settings, at);
                 for _ in 0..3 {
-                    let to = Point { x: at.x + Nm::from_raw_shim(rng.below(5_000) * 1000) - mm(2.5), y: at.y + Nm::from_raw_shim(rng.below(5_000) * 1000) - mm(2.5) };
+                    let to = Point { x: at.x + um(1.0) * rng.below(5_000) - mm(2.5), y: at.y + um(1.0) * rng.below(5_000) - mm(2.5) };
                     shown = d.drag(&node, &model.board, &settings, to);
                     restored += usize::from(shown.restored);
                 }
@@ -707,7 +707,7 @@ fn random_via_drags_never_leave_a_new_violation() {
             for k in 0..60 {
                 let (id, at) = vias[rng.below(vias.len() as i64) as usize];
                 let Some(d) = Dragger::start_with(&node, at, id, false) else { continue };
-                let to = Point { x: at.x + Nm::from_raw_shim(rng.below(4_000) * 1000) - mm(2.0), y: at.y + Nm::from_raw_shim(rng.below(4_000) * 1000) - mm(2.0) };
+                let to = Point { x: at.x + um(1.0) * rng.below(4_000) - mm(2.0), y: at.y + um(1.0) * rng.below(4_000) - mm(2.0) };
                 let pv = d.preview(&node, &model.board, &settings, to);
                 if pv.colliding {
                     continue;

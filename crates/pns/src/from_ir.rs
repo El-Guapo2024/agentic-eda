@@ -172,7 +172,7 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
 }
 
 /// `GetMaxError()` of a board this IR does not say otherwise of: `ARC_HIGH_DEF`, 0.005 mm.
-const TEXT_MAX_ERROR_NM: eda_model::ir::Nm = Nm::from_raw_shim(5_000);
+const TEXT_MAX_ERROR_NM: eda_model::ir::Nm = Nm::new(5_000);
 
 /// The board's copper text as router obstacles: `PNS_KICAD_IFACE_BASE::syncTextItem` for each `PCB_TEXT` on a copper layer
 /// (`syncGraphicalItem`'s `PCB_TEXT_T` case) -- a `SOLID` on that one layer, with no net, not routable ([`Solid::is_text`]), whose shape is
@@ -226,7 +226,7 @@ fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm, at: P
         .into_iter()
         .map(|c| {
             let q = turn(c, sin);
-            Point { x: at.x + Nm::from_raw_shim(q.0.round() as i64), y: at.y + Nm::from_raw_shim(q.1.round() as i64) }
+            Point { x: at.x + Nm::kiround(q.0), y: at.y + Nm::kiround(q.1) }
         })
         .collect()
 }

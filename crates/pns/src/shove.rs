@@ -139,7 +139,12 @@ const HEAD_RANK: i32 = 100_000;
 /// `c_ENDPOINT_ON_HULL_THRESHOLD` (1000 nm).
 const ENDPOINT_ON_HULL_THRESHOLD: f64 = 1000.0;
 /// `cHullFailureExpansionFactor` (1000 nm).
-const HULL_FAILURE_EXPANSION: Nm = Nm::from_raw_shim(1000);
+const HULL_FAILURE_EXPANSION: Nm = Nm::new(1000);
+
+/// A displacement, `VECTOR2I` (the forces and minimum translation vectors below).
+type Force = crate::diff_pair::Vec2;
+/// No displacement.
+const NO_FORCE: Force = (Nm::ZERO, Nm::ZERO);
 
 // ----------------------------------------------------------------------------
 // geometry helpers
@@ -162,7 +167,8 @@ fn self_intersecting(pts: &[Point]) -> bool {
     }
     for s1 in 0..seg_count {
         let (a1, b1) = (pts[s1], pts[s1 + 1]);
-        let (min_x, max_x, min_y, max_y) = (a1.x.min(b1.x) - Nm::from_raw_shim(2), a1.x.max(b1.x) + Nm::from_raw_shim(2), a1.y.min(b1.y) - Nm::from_raw_shim(2), a1.y.max(b1.y) + Nm::from_raw_shim(2));
+        let slack = Nm::new(2);
+        let (min_x, max_x, min_y, max_y) = (a1.x.min(b1.x) - slack, a1.x.max(b1.x) + slack, a1.y.min(b1.y) - slack, a1.y.max(b1.y) + slack);
         for s2 in (s1 + 1)..seg_count {
             let (a2, b2) = (pts[s2], pts[s2 + 1]);
             if max_x < a2.x.min(b2.x) || a2.x.max(b2.x) < min_x || max_y < a2.y.min(b2.y) || a2.y.max(b2.y) < min_y {
@@ -180,13 +186,13 @@ fn self_intersecting(pts: &[Point]) -> bool {
 fn hull_nearest(hull: &[Point], p: Point) -> Point {
     (0..hull.len())
         .map(|i| Seg::new(hull[i], hull[(i + 1) % hull.len()]).nearest_point(p))
-        .min_by_key(|q| (q.x - p.x).raw_shim().pow(2) + (q.y - p.y).raw_shim().pow(2))
+        .min_by_key(|q| (q.x - p.x).area(q.x - p.x) + (q.y - p.y).area(q.y - p.y))
         .unwrap_or(p)
 }
 
 /// `VECTOR2I::EuclideanNorm()` of `b - a`: the rounded length.
-fn norm(a: Point, b: Point) -> i64 {
-    (((b.x - a.x).as_f64()).powi(2) + ((b.y - a.y).as_f64()).powi(2)).sqrt().round() as i64
+fn norm(a: Point, b: Point) -> Nm {
+    Nm::kiround(((b.x - a.x).as_f64().powi(2) + (b.y - a.y).as_f64().powi(2)).sqrt())
 }
 
 fn merge_area(a: Option<Area>, b: Area) -> Option<Area> {
@@ -258,19 +264,18 @@ fn via_changed_area(a: &Via, b: &Via) -> Option<Area> {
 /// `pushoutForce( SHAPE_CIRCLE, SEG, clearance )` (`shape_collisions.cpp:158`):
 /// the displacement that takes a circle out of `seg`'s clearance, found by
 /// trying a growing correction until the circle really clears.
-fn pushout_force(c: Point, r: Nm, seg: Seg, clearance: Nm) -> (i64, i64) {
+fn pushout_force(c: Point, r: Nm, seg: Seg, clearance: Nm) -> Force {
     let nearest = seg.nearest_point(c);
     let dist = norm(nearest, c);
     let min_dist = clearance + r;
-    if dist >= min_dist.raw_shim() {
-        return (0, 0);
+    if dist >= min_dist {
+        return NO_FORCE;
     }
-    let mut f = (0, 0);
+    let mut f = NO_FORCE;
     for corr in 0..5 {
-        let r = crate::hull::resize(c.x - nearest.x, c.y - nearest.y, min_dist - Nm::from_raw_shim(dist) + Nm::from_raw_shim(corr));
-        f = (r.0.raw_shim(), r.1.raw_shim());
-        let moved = Point { x: c.x + Nm::from_raw_shim(f.0), y: c.y + Nm::from_raw_shim(f.1) };
-        if isqrt(seg.sq_distance_to_point(moved)) >= min_dist.raw_shim() {
+        f = crate::hull::resize(c.x - nearest.x, c.y - nearest.y, min_dist - dist + Nm::new(corr));
+        let moved = Point { x: c.x + f.0, y: c.y + f.1 };
+        if Nm::new(isqrt(seg.sq_distance_to_point(moved))) >= min_dist {
             break;
         }
     }
@@ -281,7 +286,7 @@ fn pushout_force(c: Point, r: Nm, seg: Seg, clearance: Nm) -> (i64, i64) {
 /// open chain (`shape_collisions.cpp:182`): `Some(mtv)` when the circle is
 /// within `clearance` of the chain, `mtv` being the sum of the push-outs of
 /// the circle out of each segment in turn.
-fn circle_chain_mtv(c: Point, r: Nm, chain: &[Point], clearance: Nm) -> Option<(i64, i64)> {
+fn circle_chain_mtv(c: Point, r: Nm, chain: &[Point], clearance: Nm) -> Option<Force> {
     let reach = (r.get() as i128 + clearance.get() as i128).max(0);
     let hit = chain.windows(2).any(|w| {
         let d = Seg::new(w[0], w[1]).sq_distance_to_point(c);
@@ -290,10 +295,10 @@ fn circle_chain_mtv(c: Point, r: Nm, chain: &[Point], clearance: Nm) -> Option<(
     if !hit {
         return None;
     }
-    let (mut moved, mut total) = (c, (0i64, 0i64));
+    let (mut moved, mut total) = (c, NO_FORCE);
     for w in chain.windows(2) {
         let f = pushout_force(moved, r, Seg::new(w[0], w[1]), clearance);
-        moved = Point { x: moved.x + Nm::from_raw_shim(f.0), y: moved.y + Nm::from_raw_shim(f.1) };
+        moved = Point { x: moved.x + f.0, y: moved.y + f.1 };
         total = (total.0 + f.0, total.1 + f.1);
     }
     Some(total)
@@ -302,14 +307,13 @@ fn circle_chain_mtv(c: Point, r: Nm, chain: &[Point], clearance: Nm) -> Option<(
 /// `Collide( SHAPE_CIRCLE, SHAPE_CIRCLE, clearance, .., &mtv )` (`:43`): the
 /// vector from `a` to `b` resized to what is missing, plus the "apparent
 /// rounding error" 3.
-fn circle_circle_mtv(a: Point, ra: Nm, b: Point, rb: Nm, clearance: Nm) -> Option<(i64, i64)> {
+fn circle_circle_mtv(a: Point, ra: Nm, b: Point, rb: Nm, clearance: Nm) -> Option<Force> {
     let min_dist = clearance + ra + rb;
     let (dx, dy) = ((b.x - a.x).get() as i128, (b.y - a.y).get() as i128);
     let dist_sq = dx * dx + dy * dy;
-    if dist_sq == 0 || dist_sq < ((min_dist).get() as i128) * ((min_dist).get() as i128) {
-        let len = Nm::from_raw_shim((min_dist.as_f64() - (dist_sq as f64).sqrt() + 3.0) as i64);
-        let m = crate::hull::resize(b.x - a.x, b.y - a.y, len);
-        return Some((m.0.raw_shim(), m.1.raw_shim()));
+    if dist_sq == 0 || dist_sq < min_dist.area(min_dist) {
+        let len = Nm::new((min_dist.as_f64() - (dist_sq as f64).sqrt() + 3.0) as i64);
+        return Some(crate::hull::resize(b.x - a.x, b.y - a.y, len));
     }
     None
 }
@@ -317,10 +321,10 @@ fn circle_circle_mtv(a: Point, ra: Nm, b: Point, rb: Nm, clearance: Nm) -> Optio
 /// `Collide( SHAPE_RECT, SHAPE_CIRCLE, clearance, .., &mtv )` (`:70`), applied
 /// to whatever shape a pad has: away from the pad's nearest boundary point
 /// (towards the inside's far side when the via is inside it).
-fn solid_via_mtv(shape: &Shape, c: Point, r: Nm, clearance: Nm) -> Option<(i64, i64)> {
+fn solid_via_mtv(shape: &Shape, c: Point, r: Nm, clearance: Nm) -> Option<Force> {
     // A compound (a custom pad): the via has to clear every part it is too close to, so the longest push-out is the one.
     if let Shape::Compound { parts } = shape {
-        return parts.iter().filter_map(|p| solid_via_mtv(p, c, r, clearance)).max_by_key(|m| m.0 * m.0 + m.1 * m.1);
+        return parts.iter().filter_map(|p| solid_via_mtv(p, c, r, clearance)).max_by_key(|m| m.0.area(m.0) + m.1.area(m.1));
     }
     // A round pad is a `SHAPE_CIRCLE` and an oval one a `SHAPE_SEGMENT` in KiCad, which have their own pushouts: the circle
     // away from the pad's centre, the segment away from its axis. (The rectangle code below pushes toward a circle's
@@ -342,14 +346,13 @@ fn solid_via_mtv(shape: &Shape, c: Point, r: Nm, clearance: Nm) -> Option<(i64, 
     let inside = best > 0 && shape.collides(&Shape::Circle { c, r: Nm::ZERO }, Nm::ZERO).is_some();
     let dist = (best as f64).sqrt() + shape.radius().as_f64() * if inside { -1.0 } else { 0.0 };
     let min_dist = clearance.as_f64() + r.as_f64();
-    let (delta, len) = if inside { ((nearest.x - c.x, nearest.y - c.y), Nm::from_raw_shim(((min_dist + 1.0 + dist).abs() + 1.0) as i64)) } else { ((c.x - nearest.x, c.y - nearest.y), Nm::from_raw_shim(((min_dist + 1.0 - dist).abs() + 1.0) as i64)) };
-    let m = crate::hull::resize(delta.0, delta.1, len);
-    Some((m.0.raw_shim(), m.1.raw_shim()))
+    let (delta, len) = if inside { ((nearest.x - c.x, nearest.y - c.y), Nm::new(((min_dist + 1.0 + dist).abs() + 1.0) as i64)) } else { ((c.x - nearest.x, c.y - nearest.y), Nm::new(((min_dist + 1.0 - dist).abs() + 1.0) as i64)) };
+    Some(crate::hull::resize(delta.0, delta.1, len))
 }
 
 /// `SHAPE::Collide( circle, aClearance, &mtv )` of one obstacle against the circle of radius `r` at `pos`: the displacement that takes
 /// the circle out of the obstacle's clearance, `None` when it is not in it.
-pub(crate) fn item_circle_mtv(other: &Item, pos: Point, r: Nm, clearance: Nm) -> Option<(i64, i64)> {
+pub(crate) fn item_circle_mtv(other: &Item, pos: Point, r: Nm, clearance: Nm) -> Option<Force> {
     match other {
         Item::Solid(s) => solid_via_mtv(&s.shape, pos, r, clearance),
         Item::Segment(sg) => circle_chain_mtv(pos, r, &[sg.a, sg.b], clearance + sg.width / 2),
@@ -361,8 +364,8 @@ pub(crate) fn item_circle_mtv(other: &Item, pos: Point, r: Nm, clearance: Nm) ->
 
 /// `VIA::PushoutForce( aNode, aOther, aForce )`: the displacement that takes a via at `pos` out of one obstacle, at the full
 /// clearance (no epsilon). `(0, 0)` when the via is not in it, or the obstacle's MTV is zero.
-fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> (i64, i64) {
-    item_circle_mtv(other, pos, via.diameter / 2, Node::clearance_to(rules, &via.net, other)).unwrap_or((0, 0))
+fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> Force {
+    item_circle_mtv(other, pos, via.diameter / 2, Node::clearance_to(rules, &via.net, other)).unwrap_or(NO_FORCE)
 }
 
 /// `VIA::PushoutForce( aNode, aDirection, aForce, aCollisionMask, aMaxIterations )`: push the via out of whatever of
@@ -373,13 +376,13 @@ fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> 
 /// `const` and its result is thrown away (8303b2ad and 25ec2335 alike), so the step is the full MTV here too (findings p5 F1-3).
 /// `max_iterations` is `ROUTING_SETTINGS::ViaForcePropIterationLimit`. `None` when it does not come free within that many
 /// steps, or an obstacle's MTV is zero ("force propagation has failed").
-pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, direction: (i64, i64), mask: u8, max_iterations: i32, exclude: &[ItemId]) -> Option<(i64, i64)> {
+pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, direction: Force, mask: u8, max_iterations: i32, exclude: &[ItemId]) -> Option<Force> {
     // `VIA::PushoutForce` asks `CheckColliding( this )`, and a virtual via collides with nothing
     if via.is_virtual {
-        return Some((0, 0));
+        return Some(NO_FORCE);
     }
     let threshold = via.diameter / 4;
-    let (mut pos, mut total) = (via.pos, (0i64, 0i64));
+    let (mut pos, mut total) = (via.pos, NO_FORCE);
     let mut iter = 0;
     while iter < max_iterations {
         let circle = Shape::Circle { c: pos, r: via.diameter / 2 };
@@ -387,18 +390,13 @@ pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, dire
         let obstacles = node.colliding_with(&circle, &via.net, via.layers, rules, exclude, opts);
         let Some(first) = obstacles.first() else { break };
         let force = via_pushout_from(rules, via, pos, node.get(first.id)?);
-        if force == (0, 0) {
+        if force == NO_FORCE {
             return None;
         }
-        let magnitude = ((force.0 as f64).powi(2) + (force.1 as f64).powi(2)).sqrt();
-        let step = if iter > max_iterations / 2 && magnitude > threshold.as_f64() {
-            let l = crate::hull::resize(Nm::from_raw_shim(direction.0), Nm::from_raw_shim(direction.1), threshold);
-            (l.0.raw_shim(), l.1.raw_shim())
-        } else {
-            force
-        };
+        let magnitude = (force.0.as_f64().powi(2) + force.1.as_f64().powi(2)).sqrt();
+        let step = if iter > max_iterations / 2 && magnitude > threshold.as_f64() { crate::hull::resize(direction.0, direction.1, threshold) } else { force };
         total = (total.0 + step.0, total.1 + step.1);
-        pos = Point { x: pos.x + Nm::from_raw_shim(step.0), y: pos.y + Nm::from_raw_shim(step.1) };
+        pos = Point { x: pos.x + step.0, y: pos.y + step.1 };
         iter += 1;
     }
     if iter == max_iterations {
@@ -560,7 +558,7 @@ impl<'a> Shove<'a> {
     /// we need to allow for no collision when exactly at the clearance distance" (`shapeH->Collide( shapeI, clearance + lineWidthH +
     /// lineWidthI - 1 )`). A line walked round a hull whose vertices were rounded inwards is then not taken for a collision.
     fn collide_clearance(&self, a: &Net, b: &Net) -> Nm {
-        self.clearance(a, b) - Nm::from_raw_shim(1)
+        self.clearance(a, b) - Nm::new(1)
     }
 
     /// `SHOVE::getClearance`: what a hull is built at -- the forced clearance if there is one, else the rules'. (A *collision* between
@@ -1160,7 +1158,7 @@ impl<'a> Shove<'a> {
     /// out of the pusher's clearance, epsilon-free, then `pushOrShoveVia`.
     fn on_colliding_via(&mut self, cur: Pusher, via_id: ItemId, info: &ObstacleInfo, next_rank: i32) -> Status {
         let Some(Item::Via(obstacle_via)) = self.node.get(via_id).cloned() else { return Status::Incomplete };
-        let (mut mtv, mut collided) = ((0i64, 0i64), false);
+        let (mut mtv, mut collided) = (NO_FORCE, false);
         match &cur {
             Pusher::Line(line) => {
                 let clearance = self.get_clearance(&line.line.net, &obstacle_via.net);
@@ -1172,7 +1170,7 @@ impl<'a> Shove<'a> {
                 // "Check the via if present. Via takes priority."
                 let via_mtv = line.via.as_ref().and_then(|lv| circle_circle_mtv(lv.data.pos, lv.data.diameter / 2, vtmp.pos, vtmp.diameter / 2, self.get_clearance(&lv.data.net, &vtmp.net)));
                 collided = line_mtv.is_some() || via_mtv.is_some();
-                mtv = via_mtv.or(line_mtv).unwrap_or((0, 0));
+                mtv = via_mtv.or(line_mtv).unwrap_or(NO_FORCE);
             }
             Pusher::Item(id) => {
                 if let Some(solid @ Item::Solid(s)) = self.node.get(*id) {
@@ -1184,7 +1182,7 @@ impl<'a> Shove<'a> {
                 }
             }
         }
-        if collided && mtv == (0, 0) {
+        if collided && mtv == NO_FORCE {
             mtv = self.degenerate_push(&cur, &obstacle_via);
         }
         self.push_or_shove_via(via_id, mtv, next_rank, false)
@@ -1193,30 +1191,29 @@ impl<'a> Shove<'a> {
     /// Where a via whose centre sits exactly on the pusher goes: KiCad's MTV is
     /// zero there (and the shove runs into its iteration limit); push it along
     /// the normal of the nearest pusher segment instead, far enough to clear.
-    fn degenerate_push(&self, cur: &Pusher, via: &Via) -> (i64, i64) {
+    fn degenerate_push(&self, cur: &Pusher, via: &Via) -> Force {
         let (dir, reach) = match cur {
             Pusher::Line(line) => {
                 let clearance = self.clearance(&line.line.net, &via.net);
                 let seg = line.line.segs().min_by_key(|&(a, b)| Seg::new(a, b).sq_distance_to_point(via.pos));
-                let dir = seg.map(|(a, b)| (-(b.y - a.y), b.x - a.x)).filter(|d| *d != (Nm::ZERO, Nm::ZERO)).unwrap_or((Nm::ZERO, Nm::from_raw_shim(1)));
-                (dir, clearance + line.line.width / 2 + via.diameter / 2 + Nm::from_raw_shim(1))
+                let dir = seg.map(|(a, b)| (-(b.y - a.y), b.x - a.x)).filter(|d| *d != NO_FORCE).unwrap_or((Nm::ZERO, Nm::new(1)));
+                (dir, clearance + line.line.width / 2 + via.diameter / 2 + Nm::new(1))
             }
-            Pusher::Item(_) => ((Nm::ZERO, Nm::from_raw_shim(1)), via.diameter + Nm::from_raw_shim(1)),
+            Pusher::Item(_) => ((Nm::ZERO, Nm::new(1)), via.diameter + Nm::new(1)),
         };
-        let m = crate::hull::resize(dir.0, dir.1, reach);
-        (m.0.raw_shim(), m.1.raw_shim())
+        crate::hull::resize(dir.0, dir.1, reach)
     }
 
     /// `SHOVE::pushOrShoveVia`: move the via by `force` (further, if that spot
     /// is taken by a joint), drag the ends of the tracks attached to it along
     /// with a 45-degree re-solve, and put the moved lines on the stack.
-    fn push_or_shove_via(&mut self, via_id: ItemId, force: (i64, i64), new_rank: i32, dont_unwind: bool) -> Status {
+    fn push_or_shove_via(&mut self, via_id: ItemId, force: Force, new_rank: i32, dont_unwind: bool) -> Status {
         let Some(Item::Via(via)) = self.node.get(via_id).cloned() else { return Status::Incomplete };
         let p0 = via.pos;
-        if force == (0, 0) {
+        if force == NO_FORCE {
             return Status::Ok; // nothing to do...
         }
-        let mut p0_pushed = Point { x: p0.x + Nm::from_raw_shim(force.0), y: p0.y + Nm::from_raw_shim(force.1) };
+        let mut p0_pushed = Point { x: p0.x + force.0, y: p0.y + force.1 };
         let Some(joint) = self.node.joint_at(p0, &via.net) else { return Status::Incomplete };
         let fan_ids: Vec<ItemId> = joint.links.clone();
         if !self.settings.shove_vias || via.locked {
@@ -1228,7 +1225,7 @@ impl<'a> Shove<'a> {
             return Status::Incomplete;
         }
         // "make sure pushed via does not overlap with any existing joint"
-        let step = crate::hull::resize(Nm::from_raw_shim(force.0), Nm::from_raw_shim(force.1), Nm::from_raw_shim(2));
+        let step = crate::hull::resize(force.0, force.1, Nm::new(2));
         for _ in 0..10_000 {
             if self.node.joint_at(p0_pushed, &via.net).is_none() {
                 break;
@@ -1393,7 +1390,7 @@ impl<'a> Shove<'a> {
                 }
                 obs.max_fanout_width = Nm::ZERO;
                 if maxw > Nm::ZERO && maxw >= v.diameter {
-                    obs.max_fanout_width = maxw + Nm::from_raw_shim(1);
+                    obs.max_fanout_width = maxw + Nm::new(1);
                     return true;
                 }
                 false
@@ -1411,7 +1408,7 @@ impl<'a> Shove<'a> {
                     if self.via_vs_line(&vtest, cur) {
                         obs.id = via_id;
                         obs.kind = Kind::Via;
-                        obs.max_fanout_width = width + Nm::from_raw_shim(1);
+                        obs.max_fanout_width = width + Nm::new(1);
                         return true;
                     }
                 }
@@ -1676,7 +1673,7 @@ impl<'a> Shove<'a> {
             Some(Item::Via(v)) => v.clone(),
             _ => return None,
         };
-        let delta = ((to.x - via.pos.x).raw_shim(), (to.y - via.pos.y).raw_shim());
+        let delta = (to.x - via.pos.x, to.y - via.pos.y);
         if self.push_or_shove_via(via_id, delta, 0, true) != Status::Ok {
             return None;
         }
@@ -1903,10 +1900,10 @@ mod tests {
         let via_id = node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("vA".into()), locked: false, is_virtual: false }));
         let (rules, settings) = (rules(), RoutingSettings::default());
         let mut free = Shove::new(&node, &rules, &settings);
-        assert_eq!(free.push_or_shove_via(via_id, (500_000, 0), 0, false), Status::Ok, "a free via is pushed");
+        assert_eq!(free.push_or_shove_via(via_id, (mm(0.5), Nm::ZERO), 0, false), Status::Ok, "a free via is pushed");
         node.lock_joint(Point { x: Nm::ZERO, y: Nm::ZERO }, &net_of("A"));
         let mut locked = Shove::new(&node, &rules, &settings);
-        assert_eq!(locked.push_or_shove_via(via_id, (500_000, 0), 0, false), Status::Incomplete, "the route's start via stays");
+        assert_eq!(locked.push_or_shove_via(via_id, (mm(0.5), Nm::ZERO), 0, false), Status::Incomplete, "the route's start via stays");
     }
 
     /// findings p5 F1-1: an F.Cu head ending in a through via meets a B.Cu track through its via only. KiCad's `ShoveObstacleLine` shoves

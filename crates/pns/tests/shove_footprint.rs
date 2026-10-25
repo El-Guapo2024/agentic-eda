@@ -3,7 +3,7 @@
 //! Before the solids pre-pass and `onCollidingSolid` any pad within reach made
 //! the shove give up and the placer fall back to walking around everything.
 
-use eda_model::units::mm;
+use eda_model::units::{mm, um};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Nm};
 use eda_model::{ConstraintModel, Net as IrNet, Part, Pin, PinKind};
@@ -80,11 +80,11 @@ fn a_track_beside_the_pads_is_pushed_as_far_as_the_pads_allow() {
     // clear of the head (200 + 100 + 100 from its centre line) and of every pad (200 + 100 from the edge)
     let drc = eda_drc::board::build(&design, &model);
     for p in &moved.pts {
-        assert!(p.x >= Nm::from_raw_shim(-4_200_000 + 400_000 - 2000), "still too close to the head: {p:?}");
+        assert!(p.x >= mm(-4.2) + mm(0.4) - um(2.0), "still too close to the head: {p:?}");
     }
     for (a, b) in moved.segs() {
         for pad in &drc.pads {
-            assert!(Shape::Stadium { a, b, r: mm(0.1) }.collides(&pad.copper, Nm::from_raw_shim(200_000 - 1)).is_none(), "the pushed track touches pad {}", pad.id);
+            assert!(Shape::Stadium { a, b, r: mm(0.1) }.collides(&pad.copper, mm(0.2) - Nm::new(1)).is_none(), "the pushed track touches pad {}", pad.id);
         }
     }
 }
@@ -106,7 +106,7 @@ fn pads_that_stop_the_track_push_the_head_back_in_turn() {
     assert!(moved.pts.iter().any(|p| p.x > mm(-3.7) && p.x < mm(-3.5)) && moved.pts.iter().any(|p| p.x <= mm(-3.75)), "the track follows the pads' edge: {:?}", moved.pts);
 
     let drc = eda_drc::board::build(&design, &model);
-    let clear = |a: Point, b: Point, w: Nm, other: &Shape| Shape::Stadium { a, b, r: w / 2 }.collides(other, Nm::from_raw_shim(200_000 - 1)).is_none();
+    let clear = |a: Point, b: Point, w: Nm, other: &Shape| Shape::Stadium { a, b, r: w / 2 }.collides(other, mm(0.2) - Nm::new(1)).is_none();
     for (a, b) in pv.head.segs().map(|s| (s.0, s.1)).chain(moved.segs()) {
         for pad in &drc.pads {
             assert!(clear(a, b, mm(0.2), &pad.copper), "leg {a:?}-{b:?} touches pad {}", pad.id);

@@ -1260,15 +1260,15 @@ mod tests {
         assert_eq!(*kinds.last().unwrap(), MeanderType::Corner);
         assert!(kinds.iter().filter(|&&k| k == MeanderType::Start).count() == 1 && kinds.contains(&MeanderType::Turn) && kinds.contains(&MeanderType::Finish), "{kinds:?}");
         // the shapes follow each other along the baseline without overlapping
-        let mut at = 0;
+        let mut at = Nm::ZERO;
         for m in line.meanders() {
             if matches!(m.kind(), MeanderType::Corner) {
                 continue;
             }
-            assert!(m.base_segment().a.x >= Nm::from_raw_shim(at), "{:?} starts before the last one ended at {at}", m.base_segment());
-            at = m.base_segment().b.x.raw_shim();
+            assert!(m.base_segment().a.x >= at, "{:?} starts before the last one ended at {at}", m.base_segment());
+            at = m.base_segment().b.x;
         }
-        assert!(at <= 30_000_000);
+        assert!(at <= mm(30.0));
         // it is a clear line: no two meanders of it come closer than the spacing
         let mut chain = ShapeLineChain::new();
         for m in line.meanders() {

@@ -342,7 +342,7 @@ impl Dragger {
             let mut colliding = !self.via_virtual && node.first_colliding(&shape, &self.net, self.via_layers, rules, &exclude).is_some();
             for l in &fanout {
                 colliding |= l.segs().any(|(a, b)| {
-                    let shape = Shape::Stadium { a, b, r: l.width.max(Nm::from_raw_shim(1)) / 2 };
+                    let shape = Shape::Stadium { a, b, r: l.width.max(Nm::new(1)) / 2 };
                     node.first_colliding(&shape, &l.net, LayerRange::single(l.layer), rules, &exclude).is_some()
                 });
             }
@@ -351,7 +351,7 @@ impl Dragger {
         let line = self.dragged_line(to, self.snap_threshold(settings, false), self.free_angle);
         let layers = LayerRange::single(self.layer);
         let colliding = line.pts.windows(2).any(|w| {
-            let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width.max(Nm::from_raw_shim(1)) / 2 };
+            let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width.max(Nm::new(1)) / 2 };
             node.first_colliding(&shape, &self.net, layers, rules, &exclude).is_some()
         });
         DragPreview { pts: line.pts, arcs: line.arcs, colliding, ..DragPreview::default() }
@@ -367,14 +367,14 @@ impl Dragger {
         let exclude = self.exclude();
         let dragged = self.dragged_line(to, self.snap_threshold(settings, false), false);
         let pts = dragged.pts.clone();
-        let colliding = path_collides(node, rules, &self.net, self.layer, self.width.max(Nm::from_raw_shim(1)), &pts, &exclude);
+        let colliding = path_collides(node, rules, &self.net, self.layer, self.width.max(Nm::new(1)), &pts, &exclude);
         // an arc is not walked round anything: the arc drag either fits where the cursor puts it or is refused
         let walked = if !colliding {
             Some(pts)
         } else if self.kind == DragKind::Arc {
             None
         } else {
-            try_walkaround(node, rules, settings, &self.net, self.layer, self.width.max(Nm::from_raw_shim(1)), &pts, &dragged.arcs)
+            try_walkaround(node, rules, settings, &self.net, self.layer, self.width.max(Nm::new(1)), &pts, &dragged.arcs)
         };
         let walked = walked.filter(|w| w.len() >= 2)?;
         // `optimizeAndUpdateDraggedLine( draggedWalk, origLine, aP )` (the lines of an arc drag are left as they are: DM_ARC is not a PNS drag)
@@ -419,7 +419,7 @@ impl Dragger {
         let dragged = self.dragged_line(to, self.snap_threshold(settings, true), false);
         // `m_mode == DM_CORNER && m_draggedSegmentIndex == 0`: the head is dragged by its first vertex, so its last point is the pusher
         let reversed = self.kind == DragKind::Corner && self.grabbed_index == 0;
-        let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &dragged.pts, &dragged.arcs, &self.net, self.layer, self.width.max(Nm::from_raw_shim(1)), rules, settings, reversed)?;
+        let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &dragged.pts, &dragged.arcs, &self.net, self.layer, self.width.max(Nm::new(1)), rules, settings, reversed)?;
         // `optimizeAndUpdateDraggedLine( draggedPostShove, m_draggedLine, aP )`, against the world the shove left (`m_lastNode = m_shove->CurrentNode()->Branch()`)
         let shoved = Line { pts: outcome.head.clone(), arcs: dragged.arcs.clone(), ..dragged };
         let shoved = if self.kind == DragKind::Arc { shoved } else { self.optimize_and_update_dragged_line(&outcome.world, rules, settings, &shoved, &self.original, to) };
@@ -554,13 +554,13 @@ impl Dragger {
     fn drag_via_walkaround(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         let exclude = self.exclude();
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, is_virtual: false };
-        let lead = ((self.via_pos.x - to.x).raw_shim(), (self.via_pos.y - to.y).raw_shim());
+        let lead = (self.via_pos.x - to.x, self.via_pos.y - to.y);
         let Some(force) = shove::via_pushout_force(node, rules, &via, lead, crate::node::kind_mask::ANY, settings.via_force_prop_iteration_limit, &exclude) else {
             // can't force-propagate the via? bummer...
             let fanout = self.via_candidate(node, to);
             return DragPreview { pts: vec![to], colliding: true, fanout, ..DragPreview::default() };
         };
-        let target = Point { x: to.x + Nm::from_raw_shim(force.0), y: to.y + Nm::from_raw_shim(force.1) };
+        let target = Point { x: to.x + force.0, y: to.y + force.1 };
         let mut colliding = false;
         let mut fanout = Vec::new();
         for original in self.attached_lines(node) {
@@ -569,8 +569,8 @@ impl Dragger {
                 dragged.drag_corner45(target, at);
                 dragged.simplify();
             }
-            if dragged.point_count() >= 2 && path_collides(node, rules, &dragged.net, dragged.layer, dragged.width.max(Nm::from_raw_shim(1)), &dragged.pts, &exclude) {
-                match try_walkaround(node, rules, settings, &dragged.net, dragged.layer, dragged.width.max(Nm::from_raw_shim(1)), &dragged.pts, &dragged.arcs) {
+            if dragged.point_count() >= 2 && path_collides(node, rules, &dragged.net, dragged.layer, dragged.width.max(Nm::new(1)), &dragged.pts, &exclude) {
+                match try_walkaround(node, rules, settings, &dragged.net, dragged.layer, dragged.width.max(Nm::new(1)), &dragged.pts, &dragged.arcs) {
                     Some(walked) => {
                         dragged.pts = walked;
                         // `optimizeAndUpdateDraggedLine( walkLine, origLine, aP )`

@@ -20,7 +20,7 @@ pub struct MouseTrailTracer {
     /// `m_trail`: an open chain, nanometres.
     trail: Vec<Point>,
     /// `m_tolerance`, nanometres.
-    tolerance: i64,
+    tolerance: Nm,
     /// `m_direction`.
     direction: Direction45,
     /// `m_lastSegDirection`.
@@ -36,7 +36,7 @@ pub struct MouseTrailTracer {
 impl Default for MouseTrailTracer {
     /// `MOUSE_TRAIL_TRACER::MOUSE_TRAIL_TRACER`: tolerance 0, mouse enabled, `Clear()`; both directions `UNDEFINED`.
     fn default() -> Self {
-        MouseTrailTracer { trail: Vec::new(), tolerance: 0, direction: Direction45::Undefined, last_seg_direction: Direction45::Undefined, forced: false, disable_mouse: false, manually_forced: false }
+        MouseTrailTracer { trail: Vec::new(), tolerance: Nm::ZERO, direction: Direction45::Undefined, last_seg_direction: Direction45::Undefined, forced: false, disable_mouse: false, manually_forced: false }
     }
 }
 
@@ -54,7 +54,7 @@ impl MouseTrailTracer {
 
     /// `SetTolerance`: the track width.
     pub fn set_tolerance(&mut self, tolerance: Nm) {
-        self.tolerance = tolerance.raw_shim();
+        self.tolerance = tolerance;
     }
 
     /// `SetDefaultDirections( aInitDirection, aLastSegDir )`.
@@ -100,7 +100,7 @@ impl MouseTrailTracer {
         } else {
             let s_new = Seg::new(*self.trail.last().unwrap(), p);
             if segment_count(&self.trail) > 2 {
-                let limit = i128::from(self.tolerance) * i128::from(self.tolerance);
+                let limit = self.tolerance.area(self.tolerance);
                 for i in 0..segment_count(&self.trail) - 2 {
                     let s_trail = Seg::new(self.trail[i], self.trail[i + 1]);
                     if s_trail.sq_distance_to_seg(&s_new) <= limit {
@@ -165,7 +165,7 @@ impl MouseTrailTracer {
 
         // heuristic to detect that the user dragged back the cursor to the beginning of the trace: in this case, we cancel any forced posture and
         // restart the trail
-        if self.forced && ref_length < (UNLOCK_DISTANCE_FACTOR * self.tolerance) as f64 {
+        if self.forced && ref_length < (UNLOCK_DISTANCE_FACTOR * self.tolerance).as_f64() {
             self.forced = false;
             self.trail.clear();
             self.trail.push(p0);
@@ -174,8 +174,8 @@ impl MouseTrailTracer {
         let mut area_ok = false;
 
         // Check the actual trail area against the cutoff. This prevents flutter when the trail is very close to a straight line.
-        if !self.forced && ref_length > MIN_AREA_CUTOFF_DISTANCE_FACTOR * self.tolerance as f64 {
-            let area_cutoff = self.tolerance as f64 * ref_length;
+        if !self.forced && ref_length > MIN_AREA_CUTOFF_DISTANCE_FACTOR * self.tolerance.as_f64() {
+            let area_cutoff = self.tolerance.as_f64() * ref_length;
             // `SHAPE_LINE_CHAIN trail( m_trail ); trail.SetClosed( true ); trail.Area()`
             if area(&self.trail) > area_cutoff {
                 area_ok = true;
@@ -230,7 +230,7 @@ impl MouseTrailTracer {
         }
 
         // If we get far away from the initial point, lock in the current solution to prevent flutter
-        if !self.forced && ref_length > (LOCK_DISTANCE_FACTOR * self.tolerance) as f64 {
+        if !self.forced && ref_length > (LOCK_DISTANCE_FACTOR * self.tolerance).as_f64() {
             self.forced = true;
         }
 
@@ -454,20 +454,20 @@ mod tests {
         let mut t = tracer(mm(0.2), Direction45::E);
         let mut d = Direction45::E;
         for i in 1..=12 {
-            d = move_to(&mut t, p(Nm::from_raw_shim(500_000 * i), Nm::from_raw_shim(-500_000 * i)));
+            d = move_to(&mut t, p(mm(0.5) * i, mm(-0.5) * i));
         }
         for i in 1..=12 {
-            d = move_to(&mut t, p(Nm::from_raw_shim(6_000_000 + 500_000 * i), mm(-6.0)));
+            d = move_to(&mut t, p(mm(6.0) + mm(0.5) * i, mm(-6.0)));
         }
         assert!(d.is_diagonal(), "diagonal first: {d:?}");
 
         // flat first, then the diagonal
         let mut t = tracer(mm(0.2), Direction45::NE);
         for i in 1..=12 {
-            d = move_to(&mut t, p(Nm::from_raw_shim(500_000 * i), Nm::ZERO));
+            d = move_to(&mut t, p(mm(0.5) * i, Nm::ZERO));
         }
         for i in 1..=12 {
-            d = move_to(&mut t, p(Nm::from_raw_shim(6_000_000 + 500_000 * i), Nm::from_raw_shim(-500_000 * i)));
+            d = move_to(&mut t, p(mm(6.0) + mm(0.5) * i, mm(-0.5) * i));
         }
         assert!(!d.is_diagonal(), "straight first: {d:?}");
     }
@@ -479,7 +479,7 @@ mod tests {
         assert!(t.is_manually_forced());
         assert_eq!(t.direction(), Direction45::SE);
         for i in 1..=20 {
-            assert_eq!(move_to(&mut t, p(Nm::from_raw_shim(500_000 * i), Nm::from_raw_shim(-500_000 * i))), Direction45::SE);
+            assert_eq!(move_to(&mut t, p(mm(0.5) * i, mm(-0.5) * i)), Direction45::SE);
         }
         t.clear();
         assert!(!t.is_manually_forced());
@@ -490,7 +490,7 @@ mod tests {
         let mut t = tracer(mm(0.2), Direction45::E);
         t.set_mouse_disabled(true);
         for i in 1..=20 {
-            assert_eq!(move_to(&mut t, p(Nm::from_raw_shim(500_000 * i), Nm::from_raw_shim(-500_000 * i))), Direction45::E);
+            assert_eq!(move_to(&mut t, p(mm(0.5) * i, mm(-0.5) * i)), Direction45::E);
         }
     }
 
@@ -498,7 +498,7 @@ mod tests {
     fn a_posture_locked_by_distance_is_unlocked_when_the_cursor_comes_back_to_the_start() {
         let mut t = tracer(mm(0.2), Direction45::E);
         for i in 1..=30 {
-            move_to(&mut t, p(Nm::from_raw_shim(400_000 * i), Nm::from_raw_shim(-400_000 * i)));
+            move_to(&mut t, p(mm(0.4) * i, mm(-0.4) * i));
         }
         assert!(t.forced, "30 tolerances from the start locks the solution in");
         // back to within 10 tolerances of the start: unlocked, the trail restarts from the start point

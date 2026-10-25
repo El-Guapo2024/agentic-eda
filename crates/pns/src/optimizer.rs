@@ -157,7 +157,7 @@ pub(crate) fn intersect_lines(a1: eda_model::ir::Point, a2: eda_model::ir::Point
     let t = dir2x * offy - dir2y * offx; // dir2.Cross(offset); point = a1 + (t/det)*dir1
     let px = a1.x.get() as i128 + (dir1x * t) / det;
     let py = a1.y.get() as i128 + (dir1y * t) / det;
-    Some(eda_model::ir::Point { x: Nm::from_raw_shim(px as i64), y: Nm::from_raw_shim(py as i64) })
+    Some(eda_model::ir::Point { x: Nm::new(px as i64), y: Nm::new(py as i64) })
 }
 
 /// `OPTIMIZER::mergeObtuse`: see this module's own doc comment for how
@@ -484,8 +484,8 @@ fn count_forbidden_corners(pts: &[eda_model::ir::Point]) -> usize {
     dirs.windows(2).filter(|w| forbidden(w[0].angle_to(&w[1]))).count()
 }
 
-fn chain_len(pts: &[eda_model::ir::Point]) -> i64 {
-    pts.windows(2).map(|w| (((w[1].x - w[0].x).as_f64()).hypot((w[1].y - w[0].y).as_f64())) as i64).sum()
+fn chain_len(pts: &[eda_model::ir::Point]) -> Nm {
+    pts.windows(2).map(|w| Nm::new((w[1].x - w[0].x).as_f64().hypot((w[1].y - w[0].y).as_f64()) as i64)).sum()
 }
 
 /// `SHAPE_LINE_CHAIN::Append( chain )`: skip a duplicate joining point.
@@ -546,14 +546,14 @@ fn breakouts(width: Nm, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Poin
             .map(|i| {
                 let a = i as f64 * std::f64::consts::FRAC_PI_4;
                 let l = r.as_f64() * std::f64::consts::SQRT_2;
-                vec![c, Point { x: c.x + Nm::from_raw_shim((l * a.cos()).round() as i64), y: c.y + Nm::from_raw_shim((l * a.sin()).round() as i64) }]
+                vec![c, Point { x: c.x + Nm::kiround(l * a.cos()), y: c.y + Nm::kiround(l * a.sin()) }]
             })
             .collect(),
         Shape::Polygon { ref pts } => custom_breakouts(solid.pos, pts),
         Shape::RoundRect { x0, y0, x1, y1, r } => {
             let c = ((x0 + x1).as_f64() / 2.0, (y0 + y1).as_f64() / 2.0);
             let outline = eda_model::pad_geom::chamfered_rect_polygon((x1 - x0, y1 - y0), r, 0.0, eda_model::ir::ChamferCorners::default(), eda_model::outline::MAX_ERROR_NM.as_f64());
-            let pts: Vec<Point> = outline.iter().map(|&(x, y)| Point { x: Nm::from_raw_shim((c.0 + x).round() as i64), y: Nm::from_raw_shim((c.1 + y).round() as i64) }).collect();
+            let pts: Vec<Point> = outline.iter().map(|&(x, y)| Point { x: Nm::kiround(c.0 + x), y: Nm::kiround(c.1 + y) }).collect();
             custom_breakouts(solid.pos, &pts)
         }
         _ => Vec::new(),
@@ -566,12 +566,12 @@ fn custom_breakouts(p0: eda_model::ir::Point, pts: &[eda_model::ir::Point]) -> V
     use eda_model::ir::Point;
     let (x0, x1) = (pts.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO), pts.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO));
     let (y0, y1) = (pts.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO), pts.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO));
-    let length = (x1 - x0).max(y1 - y0) / 2 + Nm::from_raw_shim(5);
+    let length = (x1 - x0).max(y1 - y0) / 2 + Nm::new(5);
     let n = pts.len();
     (0..8)
         .filter_map(|i| {
             let a = i as f64 * std::f64::consts::FRAC_PI_4;
-            let v0 = Point { x: p0.x + Nm::from_raw_shim((length.as_f64() * a.cos()).round() as i64), y: p0.y + Nm::from_raw_shim((length.as_f64() * a.sin()).round() as i64) };
+            let v0 = Point { x: p0.x + Nm::kiround(length.as_f64() * a.cos()), y: p0.y + Nm::kiround(length.as_f64() * a.sin()) };
             let ray = eda_drc::kimath::Seg::new(p0, v0);
             (0..n).find_map(|k| ray.intersect(&eda_drc::kimath::Seg::new(pts[k], pts[(k + 1) % n]))).map(|hit| vec![p0, hit])
         })
@@ -598,7 +598,7 @@ fn smart_pads_single(line: &mut Line, pad: &crate::item::Item, at_end: bool, end
         pts.reverse();
     }
     let p_end = end_vertex.min(3.min(pts.len().saturating_sub(1)));
-    let mut variants: Vec<(usize, i64, Vec<eda_model::ir::Point>)> = Vec::new();
+    let mut variants: Vec<(usize, Nm, Vec<eda_model::ir::Point>)> = Vec::new();
     for p in 1..=p_end {
         let seg = Shape::Stadium { a: pts[0], b: pts[p], r: line.width / 2 };
         if solid.shape.collides(&seg, Nm::ZERO).is_none() {
@@ -633,7 +633,7 @@ fn smart_pads_single(line: &mut Line, pad: &crate::item::Item, at_end: bool, end
         }
     }
     let mut min_cost = corner_cost(&line.pts);
-    let mut max_len = 0i64;
+    let mut max_len = Nm::ZERO;
     let mut best: Option<(usize, Vec<eda_model::ir::Point>)> = None;
     for (p, len, v) in variants {
         let cost = corner_cost(&v);
@@ -685,7 +685,7 @@ fn fanout_cleanup(line: &mut Line, node: &Node, rules: &BoardRules, exclude: &[I
         return false;
     }
     let end_match = find_pad_or_via(node, line.layer, &line.net, p_end).is_some() || line.via_at_end.is_some();
-    if !(end_match && chain_len(&line.pts) < (line.width * 10).raw_shim()) {
+    if !(end_match && chain_len(&line.pts) < line.width * 10) {
         return false;
     }
     for diag in [false, true] {
@@ -710,7 +710,7 @@ fn find_coupled_vertices(vertex: eda_model::ir::Point, orig_seg: crate::seg_ops:
     for (i, s) in coupled.windows(2).enumerate() {
         let seg = (s[0], s[1]);
         let proj_over_coupled = line_project(seg, vertex);
-        if approx_parallel(seg, orig_seg, Nm::from_raw_shim(1)) {
+        if approx_parallel(seg, orig_seg, Nm::new(1)) {
             let dist = vnorm(vsub(proj_over_coupled, vertex)) - pair.width;
             if pair.gap_constraint.matches(dist) {
                 out.push(i);
@@ -827,7 +827,7 @@ fn coupled_bypass(cache: &HitCache, base: (&ChainHits, &ChainHits), pair: &crate
     let starts = find_coupled_vertices(ref_bypass[0], (ref_bypass[0], ref_bypass[1]), coupled, pair);
     let dir = Direction45::from_seg(ref_bypass[0], ref_bypass[1]);
     // (coupled length, position in KiCad's order, the coupled line with the bypass in it)
-    let mut candidates: Vec<(i64, usize, Vec<eda_model::ir::Point>)> = Vec::new();
+    let mut candidates: Vec<(Nm, usize, Vec<eda_model::ir::Point>)> = Vec::new();
     for &si in &starts {
         for j in 1..coupled.len().saturating_sub(1) {
             if si.abs_diff(j) <= 1 {
@@ -862,8 +862,8 @@ fn merge_dp_step(cache: &HitCache, pair: &mut crate::diff_pair::DiffPair, try_p:
     // `CoupledLength( aRef, aCoupled )` is a sum over every segment of the reference with every segment of the coupled line. Each
     // candidate replaces a stretch of the reference, so its coupled length is the total less the replaced segments' share plus the
     // bypass's: the shares are worked out once here, not for every candidate (a walk round a pad cluster leaves tens of segments).
-    let share = |a: crate::seg_ops::Seg2| coupled_path.windows(2).map(|w| pair.coupled_length_of_segs(a, (w[0], w[1]))).sum::<i64>();
-    let mut prefix = vec![0i64];
+    let share = |a: crate::seg_ops::Seg2| coupled_path.windows(2).map(|w| pair.coupled_length_of_segs(a, (w[0], w[1]))).sum::<Nm>();
+    let mut prefix = vec![Nm::ZERO];
     for w in current_path.windows(2) {
         prefix.push(prefix.last().unwrap() + share((w[0], w[1])));
     }
@@ -878,21 +878,21 @@ fn merge_dp_step(cache: &HitCache, pair: &mut crate::diff_pair::DiffPair, try_p:
             let mut new_ref = current_path.clone();
             crate::line::replace_points(&mut new_ref, n, n + step, bypass.clone());
             // segments 0..n and n+step+1.. of the reference are as they were; the bypass is new
-            let coupled_uni = prefix[n] + (clen_pre - prefix[n + step + 1]) + bypass.windows(2).map(|w| share((w[0], w[1]))).sum::<i64>();
+            let coupled_uni = prefix[n] + (clen_pre - prefix[n + step + 1]) + bypass.windows(2).map(|w| share((w[0], w[1]))).sum::<Nm>();
             if cfg!(test) {
                 assert_eq!(coupled_uni, pair.coupled_length_of(&new_ref, &coupled_path), "the coupled length of a candidate is the total less what it replaced plus what it adds");
             }
             let delta_uni = coupled_uni - clen_pre + budget;
             if let Some(new_coup) = coupled_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &bypass, &coupled_path) {
                 let delta_coupled = pair.coupled_length_of(&new_ref, &new_coup) - clen_pre + budget;
-                if delta_coupled >= 0 {
+                if delta_coupled >= Nm::ZERO {
                     let (mut r, mut c) = (Line::from_points(None, 0, Nm::ZERO, new_ref), Line::from_points(None, 0, Nm::ZERO, new_coup));
                     r.simplify2(); // `newRef.Simplify2()`
                     c.simplify2();
                     pair.set_shape(r.pts, c.pts, !try_p);
                     return true;
                 }
-            } else if delta_uni >= 0 && verify_dp_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &coupled_path) {
+            } else if delta_uni >= Nm::ZERO && verify_dp_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &coupled_path) {
                 let (mut r, mut c) = (Line::from_points(None, 0, Nm::ZERO, new_ref), Line::from_points(None, 0, Nm::ZERO, coupled_path.clone()));
                 r.simplify2();
                 c.simplify2();
@@ -1215,8 +1215,8 @@ mod tests {
         use crate::item::{Item, Segment, Solid};
         use crate::layer::LayerRange;
         let mut node = Node::new();
-        for (x, y) in [(2_000_000, 400_000), (6_000_000, -700_000), (9_000_000, 900_000)] {
-            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, shape: Shape::Circle { c: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, r: mm(0.3) }, source: "U1.1".into(), edge: false }));
+        for (x, y) in [(mm(2.0), mm(0.4)), (mm(6.0), mm(-0.7)), (mm(9.0), mm(0.9))] {
+            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x, y }, shape: Shape::Circle { c: Point { x, y }, r: mm(0.3) }, source: "U1.1".into(), edge: false }));
         }
         node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(4.0), y: mm(-2.0) }, b: Point { x: mm(4.0), y: mm(-0.75) }, width: mm(0.2), source_track: None, locked: false }));
         let mut dp = crate::diff_pair::DiffPair::default();
@@ -1224,8 +1224,8 @@ mod tests {
         dp.width = mm(0.2);
         dp.set_gap(mm(0.25));
         let centre = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.5), y: mm(-0.5) }, Point { x: mm(2.5), y: mm(-0.5) }, Point { x: mm(3.0), y: Nm::ZERO }, Point { x: mm(4.5), y: Nm::ZERO }, Point { x: mm(5.0), y: mm(0.5) }, Point { x: mm(7.0), y: mm(0.5) }, Point { x: mm(7.5), y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }];
-        dp.p = crate::diff_pair::offset_polyline(&centre, 225_000);
-        dp.n = crate::diff_pair::offset_polyline(&centre, -225_000);
+        dp.p = crate::diff_pair::offset_polyline(&centre, mm(0.225));
+        dp.n = crate::diff_pair::offset_polyline(&centre, mm(-0.225));
         (node, dp)
     }
 
@@ -1251,7 +1251,7 @@ mod tests {
             let mut cand = dp.p.clone();
             let a = next(cand.len() as i64 - 2) as usize;
             let b = a + 1 + next((cand.len() - a - 1) as i64) as usize;
-            let extra: Vec<Point> = (0..next(4)).map(|_| Point { x: Nm::from_raw_shim(next(10_000_000)), y: Nm::from_raw_shim(next(2_000_000) - 1_000_000) }).collect();
+            let extra: Vec<Point> = (0..next(4)).map(|_| Point { x: Nm::new(next(10_000_000)), y: Nm::new(next(2_000_000)) - mm(1.0) }).collect();
             cand.splice(a + 1..b, extra);
             let want = direct(&cand);
             assert_eq!(cache.hits_with_base(&base, &PairLine { pts: &cand, ..dp.p_pair_line() }), want, "candidate {cand:?}");
@@ -1281,8 +1281,8 @@ mod tests {
         // the two diagonals and the flat stretch between them became one diagonal, on both lines
         assert!(dp.p.len() < before.p.len() && dp.n.len() < before.n.len(), "{dp:?}");
         // never longer (a micrometre of rounding aside), clear of the world, clear of each other
-        assert!(crate::diff_pair::chain_length(&dp.p) <= crate::diff_pair::chain_length(&before.p) + 1);
-        assert!(crate::diff_pair::chain_length(&dp.n) <= crate::diff_pair::chain_length(&before.n) + 1);
+        assert!(crate::diff_pair::chain_length(&dp.p) <= crate::diff_pair::chain_length(&before.p) + Nm::new(1));
+        assert!(crate::diff_pair::chain_length(&dp.n) <= crate::diff_pair::chain_length(&before.n) + Nm::new(1));
         assert!(!dp.p_pair_line().hits_line(&dp.n_pair_line(), &rules), "{dp:?}");
         assert!(!world_hit(&dp), "{dp:?}");
         // and no less coupled than it was: `mergeDpStep` only accepts a merge that keeps the coupled length

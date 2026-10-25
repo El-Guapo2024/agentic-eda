@@ -27,7 +27,7 @@ pub struct Index {
 
 impl Index {
     pub fn new(cell_size: Nm) -> Self {
-        Index { cell_size: cell_size.max(Nm::from_raw_shim(1)), cells: HashMap::new(), boxes: HashMap::new() }
+        Index { cell_size: cell_size.max(Nm::new(1)), cells: HashMap::new(), boxes: HashMap::new() }
     }
 
     fn cell_of(&self, x: Nm, y: Nm) -> CellKey {
