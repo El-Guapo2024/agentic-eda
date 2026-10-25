@@ -13,6 +13,7 @@ use eda_model::ir::{field_key, FieldPlacement, Point, PowerSymbol, SchematicSect
 use eda_model::kicad_font::{HJustify, VJustify};
 use eda_model::sch_extras::AutoplaceAlgo;
 use eda_model::ConstraintModel;
+use eda_model::units::Nm;
 
 use crate::fields::{self, Collider, FieldSpec, PageField, Surroundings};
 use crate::hier::kit::{self, Rect};
@@ -124,17 +125,18 @@ impl OwnerCtx {
         fields::page_field(self.at, self.rot, self.mirrored, self.width, p, text)
     }
 
-    /// `SCH_FIELD::SetPosition`: where on the sheet `page` is, as a stored position (nanometres from the item's origin, in its unturned frame).
-    pub fn local_pos(&self, page: (f64, f64)) -> (i64, i64) {
+    /// `SCH_FIELD::SetPosition`: where on the sheet `page` (floating-point nanometres) is, as a stored position (from the item's origin, in its
+    /// unturned frame).
+    pub fn local_pos(&self, page: (f64, f64)) -> (Nm, Nm) {
         let (x, y) = unbake(self.rot, self.mirrored, self.width, page.0 - self.at.x.as_f64(), page.1 - self.at.y.as_f64());
-        (x.round() as i64, y.round() as i64)
+        (Nm::kiround(x), Nm::kiround(y))
     }
 
     /// A page offset as the offset of a field's stored position (`SCH_MOVE_TOOL::moveItem`: the offset taken through the inverse of the symbol's
     /// transform).
-    pub fn local_delta(&self, dx: i64, dy: i64) -> (i64, i64) {
-        let (x, y) = unbake(self.rot, self.mirrored, 0.0, dx as f64, dy as f64);
-        (x.round() as i64, y.round() as i64)
+    pub fn local_delta(&self, dx: Nm, dy: Nm) -> (Nm, Nm) {
+        let (x, y) = unbake(self.rot, self.mirrored, 0.0, dx.as_f64(), dy.as_f64());
+        (Nm::kiround(x), Nm::kiround(y))
     }
 
     /// `SCH_FIELD::SetPosition` and the angle and justification that read as asked once the symbol's transform has turned them: the field `old` with
@@ -223,7 +225,7 @@ impl OwnerCtx {
 fn drawable_area(sch: &SchematicSection) -> Option<Rect> {
     let paper = sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or("");
     let (w, h) = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), paper).size_nm().ok()?;
-    Some(Rect { x0: kit::FRAME_OUTER, y0: kit::FRAME_OUTER, x1: w.get() - kit::FRAME_OUTER, y1: h.get() - kit::FRAME_OUTER })
+    Some(Rect { x0: kit::FRAME_OUTER, y0: kit::FRAME_OUTER, x1: w - kit::FRAME_OUTER, y1: h - kit::FRAME_OUTER })
 }
 
 /// Everything drawn on the sheet but the item `exclude_key`'s own fields, as the manual Autoplace Fields keeps clear of it

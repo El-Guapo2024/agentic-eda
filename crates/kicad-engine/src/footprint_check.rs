@@ -293,8 +293,8 @@ pub struct FootprintCheck {
 pub fn marker_at(v: &Violation) -> (Nm, Nm) {
     match v.items.as_slice() {
         [] => (Nm::ZERO, Nm::ZERO),
-        [a] => (Nm::new(a.pos.0), Nm::new(a.pos.1)),
-        [a, b, ..] => (Nm::new((a.pos.0 + b.pos.0) / 2), Nm::new((a.pos.1 + b.pos.1) / 2)),
+        [a] => (a.pos.x, a.pos.y),
+        [a, b, ..] => ((a.pos.x + b.pos.x) / 2, (a.pos.y + b.pos.y) / 2),
     }
 }
 
@@ -311,7 +311,7 @@ impl FootprintCheck {
                     "description": v.description,
                     "severity": v.severity,
                     "at": [at.0, at.1],
-                    "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id })).collect::<Vec<_>>(),
+                    "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.x, i.pos.y], "id": i.id })).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn marker_positions_follow_the_items() {
-        let item = |x: Nm, y: Nm| super::super::Item { description: "d".into(), pos: (x.get(), y.get()), id: None, uuid: String::new() };
+        let item = |x: Nm, y: Nm| super::super::Item { description: "d".into(), pos: eda_model::ir::Point { x, y }, id: None, uuid: String::new() };
         let mut v = Violation { kind: "shorting_items".into(), ..Default::default() };
         assert_eq!(marker_at(&v), (Nm::ZERO, Nm::ZERO));
         v.items = vec![item(mm(1.0), mm(2.0))];

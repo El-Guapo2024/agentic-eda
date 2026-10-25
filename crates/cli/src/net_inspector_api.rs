@@ -203,7 +203,7 @@ fn merge_lines(lines: &mut [LineItem]) {
 /// `CalculateLengthDetails` of the items of `net` on `board` (see the module doc). `copper` is the board's copper layers in stack order,
 /// `die` the pad-to-die length of each pad of `board.pads` (0 where none), `height` the stackup height between two copper layers when the
 /// board uses it in its lengths (`None` when it does not).
-pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die: &[Nm], height: Option<&dyn Fn(&str, &str) -> i64>) -> LengthStats {
+pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die: &[Nm], height: Option<&dyn Fn(&str, &str) -> Nm>) -> LengthStats {
     let on = |n: &Option<String>| n.as_deref() == Some(net);
     let pads: Vec<usize> = board.pads.iter().enumerate().filter(|(_, p)| on(&p.net)).map(|(i, _)| i).collect();
     let mut lines: Vec<LineItem> = board
@@ -213,7 +213,7 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
         .map(|t| {
             let mut line = ShapeLineChain::new();
             match t.arc_mid {
-                Some(mid) => line.append_arc(&ShapeArc::new(t.a, mid, t.b, 0)),
+                Some(mid) => line.append_arc(&ShapeArc::new(t.a, mid, t.b, Nm::ZERO)),
                 None => {
                     line.append_point(t.a);
                     line.append_point(t.b);
@@ -298,13 +298,13 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
 
     let mut stats = LengthStats { items: pads.len() + lines.len() + vias.len(), ..LengthStats::default() };
     for l in lines.iter().filter(|l| l.status != Merge::Retired) {
-        let length = Nm::new(l.line.length());
+        let length = l.line.length();
         stats.track_length += length;
         *stats.layer_lengths.entry(l.layer.clone()).or_default() += length;
     }
     if let Some(height) = height {
         for v in &vias {
-            stats.via_length += Nm::new(height(&v.layers.0, &v.layers.1));
+            stats.via_length += height(&v.layers.0, &v.layers.1);
             stats.num_vias += 1;
         }
     }
@@ -365,8 +365,8 @@ pub(crate) fn rows(design: &Design, model: &ConstraintModel) -> Vec<Value> {
     let copper = model.board.layers.clone();
     let die = die_lengths(design, model, &board);
     let stackup = model.stackup.clone().unwrap_or_else(|| eda_model::rules::default_stackup(copper.len(), model.board.board_thickness_nm));
-    let height_fn = |a: &str, b: &str| eda_pns::tuning_path::stackup_distance_nm(&stackup, &copper, a, b);
-    let height: Option<&dyn Fn(&str, &str) -> i64> = if model.board.use_height_for_length_calcs { Some(&height_fn) } else { None };
+    let height_fn = |a: &str, b: &str| eda_pns::tuning_path::stackup_distance(&stackup, &copper, a, b);
+    let height: Option<&dyn Fn(&str, &str) -> Nm> = if model.board.use_height_for_length_calcs { Some(&height_fn) } else { None };
     // `BOARD::GetNetInfo()`: every net the board has -- the model's, and any a track, via or zone names that the model has not.
     let mut nets: BTreeSet<String> = model.nets.iter().map(|n| n.name.clone()).collect();
     if let Some(rt) = &design.routing {

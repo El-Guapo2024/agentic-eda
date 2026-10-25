@@ -607,14 +607,8 @@ pub struct ShapeArc {
 }
 
 impl ShapeArc {
-    /// `SHAPE_ARC( aArcStart, aArcMid, aArcEnd, aWidth )`, the width a count of nanometres: the studio's (`crates/cli`) signature until
-    /// the length type's wave 3, when it becomes [`ShapeArc::new_nm`]'s.
-    pub fn new(start: Point, mid: Point, end: Point, width: i64) -> ShapeArc {
-        ShapeArc::new_nm(start, mid, end, Nm::new(width))
-    }
-
     /// `SHAPE_ARC( aArcStart, aArcMid, aArcEnd, aWidth )`.
-    pub fn new_nm(start: Point, mid: Point, end: Point, width: Nm) -> ShapeArc {
+    pub fn new(start: Point, mid: Point, end: Point, width: Nm) -> ShapeArc {
         let mut a = ShapeArc { start, mid, end, width, center: Point::default(), radius: 0.0 };
         a.update_values();
         a
@@ -624,7 +618,7 @@ impl ShapeArc {
     pub fn from_start_end_angle(start: Point, end: Point, angle_deg: f64, width: Nm) -> ShapeArc {
         let center = calc_arc_center_by_angle(V2::of(start), V2::of(end), angle_deg).trunc();
         let mid = rotate_about(start, center, -angle_deg / 2.0);
-        ShapeArc::new_nm(start, mid, end, width)
+        ShapeArc::new(start, mid, end, width)
     }
 
     /// `SHAPE_ARC::ConstructFromStartEndCenter`.
@@ -636,7 +630,7 @@ impl ShapeArc {
         let mut angle = end_angle - start_angle;
         angle = if clockwise { normalize(angle) - 360.0 } else { normalize(angle) };
         let mid = rotate_about(start, center, -angle / 2.0);
-        ShapeArc::new_nm(start, mid, end, Nm::ZERO)
+        ShapeArc::new(start, mid, end, Nm::ZERO)
     }
 
     fn update_values(&mut self) {

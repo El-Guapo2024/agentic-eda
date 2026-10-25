@@ -17,6 +17,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## What landed (2026-10-14 to 10-24)
 
+- 2026-10-25: **the length type, wave 3**: the cross-crate items typed, the shims deleted, `docs/NANOMETRES.md` finished (the whole API, the integer kernels kept on purpose, every unit bug of the three waves); parity raw outputs refreshed. **The length type is done.** Follow-up (parity): KiCad's schematic graphics import approximates a spline with `aStroke.GetWidth() / 2` (`setupSplineOrLine`), ours always with `ARC_HIGH_DEF` (`eda_kicad::graphics_import::spline_or_line`).
 - 2026-10-25: **the length type, wave 2** (`53d856b7` ops, `044a5b46` pns, `027cfd87` cli group, `3bb23b95` core crates): every shim removed; same_design 138/138. Bugs caught: import-kicad's empty board was 0.1 x 0.08 mm (now 100 x 80), render's mirrored-symbol bounds ~15 km off (mm/nm mix), lint's um/nm message, the mouse-trail oracle test at 1/1000 scale, the undo tests' sheet at 0.09 mm.
 - 2026-10-25: **the length type, wave 1** (`7745bb56`): `Nm` is a newtype (see `docs/NANOMETRES.md` "The length type"); the model converted, other crates through `raw_shim` markers; no behaviour change (`tools/same_design.sh`: 138 cases identical). Caught three micrometre leftovers: the no-connect obstacle, the custom-pad max error, DRC's reference silk box.
 - 2026-10-25: **fix batch D, schematic connectivity**: buses sharing a member name, hidden power pins, `${#}` per placement, bus aliases, unit-0 pins, ERC exclusions per shared-sheet placement and on import; an imported KiCad schematic is no longer left in KiCad's frame. 22 QA hierarchies trace as kicad-cli reads them. Open: F5 keyed on a second item, project `${VAR}` in power values.
@@ -66,7 +67,6 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-nm3-pub` (`~/work/agentic-eda-exports`) | Length type wave 3: type the cross-crate pub items wave 2 kept on i64, delete the shim methods, NANOMETRES.md, refresh the stale parity raw outputs | started 2026-10-25 | all |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -117,7 +117,7 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
 
 ## Known pitfalls
 
-- `tune_edit::tests::the_tuner_on_the_boards_of_kicads_own_qa_never_makes_what_the_board_would_refuse` (eda-cli slow) failed once under a loaded full slow run ("cannot be tuned again") and passes alone on main and on R6: load-sensitive, look into it if it recurs.
+- `tune_edit::tests::the_tuner_on_the_boards_of_kicads_own_qa_never_makes_what_the_board_would_refuse` (eda-cli slow) failed once under load before wave 3 fixed its target (it aimed every track at ~3 mm, a nanometre leftover); it now tunes 34 tracks properly. If it fails again, look at it fresh.
 
 - **kicad-cli versions:**
   - The Mac ran 10.99.0-5334; the box has nightly 20261021 (25ec2335f2).

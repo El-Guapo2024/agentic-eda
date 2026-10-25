@@ -67,7 +67,7 @@ fn empty_design() -> Design {
 fn import(text: String, fix: Option<Nm>) -> (Design, ConstraintModel) {
     let model = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &model, mm(0.1), mm(0.3));
-    let req = ImportGraphics { format: GraphicsFormat::Dxf, text, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: mm(0.1), group: false, fix_tolerance_nm: fix, replace_outline: false };
+    let req = ImportGraphics { format: GraphicsFormat::Dxf, text, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: Nm::ZERO, offset_y_nm: Nm::ZERO, line_width_nm: mm(0.1), group: false, fix_tolerance_nm: fix, replace_outline: false };
     b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
     (b.design().clone(), model)
 }
@@ -183,7 +183,7 @@ fn an_svg_outline_is_a_closed_outline_to_kicad_cli_too() {
     let model = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &model, mm(0.1), mm(0.3));
     let svg = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_rect.svg", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: mm(0.1), group: false, fix_tolerance_nm: None, replace_outline: false };
+    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: Nm::ZERO, offset_y_nm: Nm::ZERO, line_width_nm: mm(0.1), group: false, fix_tolerance_nm: None, replace_outline: false };
     b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
     let dir = scratch("svg");
     let pcb = write_board(&dir, b.design(), &model);

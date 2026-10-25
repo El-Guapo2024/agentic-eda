@@ -12,7 +12,7 @@ fn fixture(name: &str) -> String {
 }
 
 fn req(text: String, layer: &str) -> ImportGraphics {
-    ImportGraphics { format: GraphicsFormat::Dxf, text, layer: layer.into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: mm(0.2), group: false, fix_tolerance_nm: None, replace_outline: false }
+    ImportGraphics { format: GraphicsFormat::Dxf, text, layer: layer.into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: Nm::ZERO, offset_y_nm: Nm::ZERO, line_width_nm: mm(0.2), group: false, fix_tolerance_nm: None, replace_outline: false }
 }
 
 /// The shapes an import added to the fixture board (it has three of its own).
@@ -83,8 +83,8 @@ fn the_origin_moves_the_whole_picture_after_the_scale() {
     let mut r = req(fixture("no_units.dxf"), "Cmts.User");
     r.scale = 2.0;
     r.dxf_units = "mm".into();
-    r.offset_x_nm = 10_000_000; // 10 mm
-    r.offset_y_nm = -5_000_000;
+    r.offset_x_nm = mm(10.0);
+    r.offset_y_nm = mm(-5.0);
     b.apply(&Cmd::ImportGraphics(req_copy(&r))).unwrap();
     let new = added(&b);
     let xs: Vec<Nm> = new.iter().flat_map(|s| s.points().into_iter().map(|p| p.x)).collect();
@@ -285,8 +285,8 @@ fn an_svg_scale_and_origin_work_as_a_dxfs_do() {
     let mut b = board(&m);
     let mut r = svg_req("board_outline_rect.svg", "Cmts.User");
     r.scale = 0.5;
-    r.offset_x_nm = 10_000_000;
-    r.offset_y_nm = 20_000_000;
+    r.offset_x_nm = mm(10.0);
+    r.offset_y_nm = mm(20.0);
     b.apply(&Cmd::ImportGraphics(r)).unwrap();
     let Shape::Polygon { stroke_width, pts, .. } = &added(&b)[0] else { panic!() };
     assert_eq!(*stroke_width, mm(0.05), "0.1 mm halved");
@@ -335,7 +335,7 @@ fn the_command_reads_from_and_writes_to_the_json_the_studio_sends() {
     // Everything but the format, the text and the layer defaults.
     let minimal = serde_json::json!({ "op": "import_graphics", "format": "svg", "text": "<svg/>", "layer": "F.SilkS" });
     let Cmd::ImportGraphics(r) = serde_json::from_value::<Cmd>(minimal).unwrap() else { panic!() };
-    assert_eq!((r.format, r.scale, r.offset_x_nm, r.line_width_nm, r.group, r.fix_tolerance_nm, r.replace_outline), (GraphicsFormat::Svg, 1.0, 0, mm(0.2), false, None, false));
+    assert_eq!((r.format, r.scale, r.offset_x_nm, r.line_width_nm, r.group, r.fix_tolerance_nm, r.replace_outline), (GraphicsFormat::Svg, 1.0, Nm::ZERO, mm(0.2), false, None, false));
     assert_eq!(GraphicsFormat::from_extension("a/b/Board.DXF"), Some(GraphicsFormat::Dxf));
     assert_eq!(GraphicsFormat::from_extension("logo.svg"), Some(GraphicsFormat::Svg));
     assert_eq!(GraphicsFormat::from_extension("board.kicad_pcb"), None);

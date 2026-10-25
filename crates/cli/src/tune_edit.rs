@@ -18,6 +18,7 @@ use eda_drc::rule_item::{Class, RuleItem};
 use eda_model::ir::{tessellate_arc, Design, Point, Track, Nm};
 use eda_model::setup_pages::{CornerStyle, MeanderSettings as PageSettings};
 use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, LENGTH_UNCONSTRAINED_NM};
+use eda_model::units::um;
 use eda_model::{BoardRules, ConstraintModel};
 use eda_ops::{Board, Cmd};
 use eda_pns::chain::ShapeLineChain;
@@ -246,9 +247,9 @@ pub fn apply_settings(p: &mut TuningPattern, v: &Value) {
 /// `PNS::MEANDER_SETTINGS` (nanometres) for a pattern.
 pub fn meander_settings(p: &TuningPattern) -> MeanderSettings {
     let mut s = MeanderSettings::default();
-    s.min_amplitude = p.min_amplitude.get();
-    s.max_amplitude = p.max_amplitude.get();
-    s.spacing = p.spacing.get();
+    s.min_amplitude = p.min_amplitude;
+    s.max_amplitude = p.max_amplitude;
+    s.spacing = p.spacing;
     s.corner_radius_percentage = p.corner_radius_percent as i64;
     s.corner_style = if p.rounded { MeanderStyle::Round } else { MeanderStyle::Chamfer };
     s.single_sided = p.single_sided;
@@ -291,8 +292,8 @@ pub fn meander_settings(p: &TuningPattern) -> MeanderSettings {
 
 /// What the placer changed of a pattern's settings (the amplitude and spacing keys, a flipped initial side), back into the pattern.
 fn sync_back(p: &mut TuningPattern, s: &MeanderSettings) {
-    p.max_amplitude = Nm::new(s.max_amplitude);
-    p.spacing = Nm::new(s.spacing);
+    p.max_amplitude = s.max_amplitude;
+    p.spacing = s.spacing;
     p.initial_side = match s.initial_side {
         MeanderSide::Left => PatternSide::Left,
         MeanderSide::Default => PatternSide::Default,
@@ -366,18 +367,17 @@ pub fn constraint_for(rules: &BoardRules, kind: TuningMode, net: &str, partner: 
 /// What the status box beside the cursor shows (`TUNING_STATUS_VIEW_ITEM`): the length (or the skew), the range it should be in, and whether it is.
 #[derive(Debug, Clone)]
 pub struct Readout {
-    /// Nanometres.
-    pub current: i64,
+    pub current: Nm,
     /// `current length` or `current skew`.
     pub label: &'static str,
-    /// The range (`min`, `opt`, `max`) the status is judged against, nanometres; `None` for a pattern with no target (the box shows `---`).
-    pub target: Option<(i64, i64, i64)>,
+    /// The range (`min`, `opt`, `max`) the status is judged against; `None` for a pattern with no target (the box shows `---`).
+    pub target: Option<(Nm, Nm, Nm)>,
     pub status: TuningStatus,
     /// The custom rule the target comes from.
     pub constraint: Option<String>,
     pub partner: Option<String>,
-    /// The length of each net of a pair (P, N), nanometres.
-    pub nets: Option<(i64, i64)>,
+    /// The length of each net of a pair (P, N).
+    pub nets: Option<(Nm, Nm)>,
     /// A time domain pattern's delay and its target (`current delay`), attoseconds; the status is still the length's, as KiCad judges it.
     pub delay: Option<DelayReadout>,
 }
@@ -395,7 +395,7 @@ pub struct DelayReadout {
 
 impl Readout {
     pub fn json(&self) -> Value {
-        let mm = |nm: i64| nm as f64 / 1e6;
+        let mm = |nm: Nm| nm.mm();
         let ps = |a: i64| a as f64 / 1e6;
         json!({
             "time_domain": self.delay.is_some(),
@@ -421,7 +421,12 @@ impl Readout {
     }
 }
 
-fn judge(len: i64, t: Option<(i64, i64, i64)>) -> TuningStatus {
+/// A `MINOPTMAX` of lengths (a count of nanometres each, [`MinOptMax`]) as lengths.
+fn nm_range(m: &MinOptMax) -> (Nm, Nm, Nm) {
+    (Nm::new(m.min()), Nm::new(m.opt()), Nm::new(m.max()))
+}
+
+fn judge(len: Nm, t: Option<(Nm, Nm, Nm)>) -> TuningStatus {
     match t {
         Some((min, _, max)) if len > max => {
             let _ = min;
@@ -468,7 +473,7 @@ pub fn hover(scene: &Scene, kind: TuningMode, pk: &Pick, settings: &Value) -> Re
         }
         TuningMode::DiffPair => {
             let pair = assemble_diff_pair(&scene.world, pk.item).ok_or(NO_PAIR)?;
-            let len = |l: &Line| l.segment_ids.first().and_then(|id| assemble_tuning_path(&scene.world, *id)).map(|p| p.length(&scene.world, &scene.env)).unwrap_or(0);
+            let len = |l: &Line| l.segment_ids.first().and_then(|id| assemble_tuning_path(&scene.world, *id)).map(|p| p.length(&scene.world, &scene.env)).unwrap_or(Nm::ZERO);
             let (p, n) = (len(&pair.p), len(&pair.n));
             let delay = pair.p.segment_ids.first().map_or(0, |id| path_delay(*id)).max(pair.n.segment_ids.first().map_or(0, |id| path_delay(*id)));
             (p.max(n), Some((p, n)), "current length", delay)
@@ -480,8 +485,8 @@ pub fn hover(scene: &Scene, kind: TuningMode, pk: &Pick, settings: &Value) -> Re
     };
     let ms = meander_settings(&pattern);
     let target = match kind {
-        TuningMode::DiffPairSkew => Some((ms.target_skew.min(), ms.target_skew.opt(), ms.target_skew.max())),
-        _ => target_of(&pattern).map(|_| (ms.target_length.min(), ms.target_length.opt(), ms.target_length.max())),
+        TuningMode::DiffPairSkew => Some(nm_range(&ms.target_skew)),
+        _ => target_of(&pattern).map(|_| nm_range(&ms.target_length)),
     };
     let delay = pattern.is_time_domain.then(|| DelayReadout {
         current: delay,
@@ -546,7 +551,7 @@ pub struct Tuner {
     pub net: String,
     /// The pair's line the clicked track is on is P (for `UpdateSideFromEnd`'s centreline).
     own_is_p: bool,
-    skew_coupled: Option<i64>,
+    skew_coupled: Option<Nm>,
     /// The last cursor position the placer was moved to, and what it made of it.
     last: Option<(Point, Moved)>,
 }
@@ -705,8 +710,7 @@ impl Tuner {
                 // the skew tuner's status box shows the skew against the skew's own range (`GetPreviewItems`: `statusItem->SetMinMax(
                 // m_settings.m_targetSkew.Min(), m_settings.m_targetSkew.Max() )`), not the partner's length plus it (findings p5 F4-3)
                 let t = if self.skew_coupled.is_some() {
-                    let ts = p.settings().target_skew;
-                    (ts.min(), ts.opt(), ts.max())
+                    nm_range(&p.settings().target_skew)
                 } else {
                     p.target()
                 };
@@ -730,7 +734,7 @@ impl Tuner {
                 let s = p.settings();
                 let (a, b) = p.net_lengths();
                 let cut = if self.own_is_p { (t.raw_p.clone(), Some(t.raw_n.clone())) } else { (t.raw_n.clone(), Some(t.raw_p.clone())) };
-                (moved, edits, p.tuning_length_result(), p.tuning_status(), Some((s.target_length.min(), s.target_length.opt(), s.target_length.max())), Some((a, b)), Some(cut), p.tuning_delay_result())
+                (moved, edits, p.tuning_length_result(), p.tuning_status(), Some(nm_range(&s.target_length)), Some((a, b)), Some(cut), p.tuning_delay_result())
             }
         };
         let s = self.settings().clone();
@@ -763,7 +767,7 @@ impl Tuner {
     }
 
     /// The pattern's record of the cut it was made on (`m_origin`, `m_end`, `m_baseLine`, `m_baseLineCoupled`) and of the result (`m_tuningLength`, `m_tuningStatus`).
-    fn record_cut(&mut self, primary: &ShapeLineChain, coupled: Option<&ShapeLineChain>, length: i64, status: TuningStatus) {
+    fn record_cut(&mut self, primary: &ShapeLineChain, coupled: Option<&ShapeLineChain>, length: Nm, status: TuningStatus) {
         let pts = |c: &ShapeLineChain| c.points().to_vec();
         if primary.point_count() >= 2 {
             self.pattern.base_line = pts(primary);
@@ -776,9 +780,9 @@ impl Tuner {
         };
         if let Placer::Pair(p) = &self.placer {
             self.pattern.last_track_width = p.pair().width;
-            self.pattern.last_diff_pair_gap = Nm::new(p.pair().gap.max(0));
+            self.pattern.last_diff_pair_gap = p.pair().gap.max(Nm::ZERO);
         }
-        self.pattern.last_tuning_length = Nm::new(length);
+        self.pattern.last_tuning_length = length;
         self.pattern.last_status = status.name().to_string();
     }
 
@@ -894,7 +898,7 @@ fn line_of_baseline(scene: &Scene, baseline: &[Point], layer: &str) -> Option<Li
         let Some(item) = segment_near(scene, at, layer, baseline) else { continue };
         let Some(line) = scene.world.assemble_line_with(item, eda_pns::tuning_path::assemble_opts()) else { continue };
         let chain = chain_of(&line);
-        if chain.point_on_edge(first, 1_000) && chain.point_on_edge(last, 1_000) {
+        if chain.point_on_edge(first, um(1.0)) && chain.point_on_edge(last, um(1.0)) {
             return Some(line);
         }
     }
@@ -1278,7 +1282,7 @@ mod tests {
         apply_settings(&mut p, &json!({ "target_length": null }));
         assert!(p.target_length.is_unconstrained());
         let ms = meander_settings(&p);
-        assert_eq!((ms.max_amplitude, ms.spacing, ms.corner_style, ms.keep_endpoints), (1_500_000, 800_000, MeanderStyle::Chamfer, true));
+        assert_eq!((ms.max_amplitude, ms.spacing, ms.corner_style, ms.keep_endpoints), (mm(1.5), mm(0.8), MeanderStyle::Chamfer, true));
         assert_eq!(ms.target_length.opt(), LENGTH_UNCONSTRAINED);
     }
 
@@ -1311,7 +1315,7 @@ mod tests {
                 _ => None,
             });
             if let Some(seg) = seg {
-                let len = assemble_tuning_path(&after.world, seg).map(|t| t.length(&after.world, &after.env)).unwrap_or(0) as f64 / 1e6;
+                let len = assemble_tuning_path(&after.world, seg).map(|t| t.length(&after.world, &after.env)).unwrap_or(Nm::ZERO).mm();
                 assert!((len - mm).abs() < 0.06, "pattern {}: the net is {len:.4} mm on the board, the placer said {mm:.4}", p.id);
             }
             tuned_again += 1;
@@ -1335,7 +1339,7 @@ mod tests {
             });
             let Some(seg) = seg else { panic!("no track on {net}") };
             let path = assemble_tuning_path(&scene.world, seg).unwrap();
-            let ours = path.length(&scene.world, &scene.env) as f64 / 1e6;
+            let ours = path.length(&scene.world, &scene.env).mm();
             assert!((ours - kicad).abs() < 0.003, "{net}: kicad-cli says {kicad:.4} mm, the tuner measures {ours:.4} ({} items)", path.items.len());
         }
     }
@@ -1379,7 +1383,7 @@ mod tests {
                     tried += 1;
                     // its length (or skew) now, and the target 3 mm longer
                     let Ok(h) = hover(&scene, kind, &pk, &Value::Null) else { continue };
-                    let target_nm = h.readout.current / 1_000_000 + 3_000_000;
+                    let target_nm = h.readout.current + mm(3.0);
                     let settings = if kind == TuningMode::DiffPairSkew { json!({}) } else { json!({ "target_length": target_nm }) };
                     let Ok(mut t) = Tuner::start(scene.clone(), kind, &pk, pk.at, &settings) else { continue };
                     started += 1;
@@ -1387,27 +1391,28 @@ mod tests {
                     let to = if next(2000) == 0 { b } else { a };
                     let cursor = Point { x: to.x + Nm::new(next(400_000) as i64) - mm(0.2), y: to.y + Nm::new(next(400_000) as i64) - mm(0.2) };
                     let Ok(moved) = t.mv(cursor, true) else { continue };
-                    let (was_moved, status, current) = (moved.moved && !moved.edits.is_empty(), moved.readout.status, moved.readout.current as f64 / 1e6);
+                    let (was_moved, status, current) = (moved.moved && !moved.edits.is_empty(), moved.readout.status, moved.readout.current.mm());
                     let Ok(cmd) = t.command() else { continue };
                     let after = apply_cmd(&scene, &cmd).unwrap_or_else(|e| panic!("{name}: the board refuses what the {kind:?} tuner made on {}: {e}", pk.net));
                     committed += 1;
                     if kind == TuningMode::Single && was_moved && status == TuningStatus::Tuned {
                         let scene2 = Scene::of(after, scene.model.clone());
-                        let member = scene2.design.drawings.as_ref().and_then(|d| d.tuning_patterns.last()).and_then(|p| p.member_ids.first().cloned()).expect("the new pattern has members");
+                        // a straight member of the pattern (its first may be an arc of a rounded meander)
+                        let members = scene2.design.drawings.as_ref().and_then(|d| d.tuning_patterns.last()).map(|p| p.member_ids.clone()).filter(|m| !m.is_empty()).expect("the new pattern has members");
                         let seg = scene2.world.iter().find_map(|(id, it)| match it {
-                            Item::Segment(s) if s.source_track.as_ref().is_some_and(|(tid, _)| *tid == member) => Some(id),
+                            Item::Segment(s) if s.source_track.as_ref().is_some_and(|(tid, _)| members.contains(tid)) => Some(id),
                             _ => None,
                         });
                         if let Some(seg) = seg {
                             let path = assemble_tuning_path(&scene2.world, seg).expect("a path");
-                            let len = path.length(&scene2.world, &scene2.env) as f64 / 1e6;
+                            let len = path.length(&scene2.world, &scene2.env).mm();
                             // a meander that ran into a pad or a via of its own net is measured as KiCad's length calculation does (`clipLineToPad`: what is in the pad is the straight way out), which
                             // the placer, like KiCad's, does not take into account: those are counted and left out
                             let (mut raw, mut clipped) = (0.0f64, 0.0f64);
                             for it in &path.items {
                                 if let eda_pns::tuning_path::PathItem::Line { line, clipped: c } = it {
                                     raw += line.pts.windows(2).map(|w| ((w[1].x - w[0].x).as_f64()).hypot((w[1].y - w[0].y).as_f64())).sum::<f64>() / 1e6;
-                                    clipped += c.length() as f64 / 1e6;
+                                    clipped += c.length().mm();
                                 }
                             }
                             if raw - clipped > 0.005 {
@@ -1424,8 +1429,8 @@ mod tests {
                                     _ => None,
                                 });
                                 if let Some(back) = back {
-                                    let blen = assemble_tuning_path(&scene3.world, back).map(|p| p.length(&scene3.world, &scene3.env)).unwrap_or(0) as f64 / 1e6;
-                                    let was = h.readout.current as f64 / 1e6;
+                                    let blen = assemble_tuning_path(&scene3.world, back).map(|p| p.length(&scene3.world, &scene3.env)).unwrap_or(Nm::ZERO).mm();
+                                    let was = h.readout.current.mm();
                                     assert!((blen - was).abs() < 0.01, "{name}: net {} is {blen:.4} mm once its pattern is removed, it was {was:.4}", pk.net);
                                 }
                                 let again = retune_cmds(&scene2, &pat, &Value::Null).unwrap_or_else(|e| panic!("{name}: {} cannot be tuned again: {e}", pk.net));
@@ -1439,6 +1444,6 @@ mod tests {
             }
         }
         eprintln!("tried {tried}, started {started}, committed {committed}, tuned and measured {measured} (left out, a meander in a pad: {in_pad})");
-        assert!(started > 20 && committed > 10, "the test is not testing much: {started} started, {committed} committed");
+        assert!(started > 20 && committed > 10 && measured > 10, "the test is not testing much: {started} started, {committed} committed, {measured} measured");
     }
 }

@@ -49,44 +49,45 @@ pub struct StitchPlan {
 
 // ------------------------------------------------------------------------------------------------------------------------- grid cells
 
-/// `cellForPosition`: the cell of a board position (nanometres) on the stitching's grid, or the position itself where the layout has no grid.
-pub fn cell_for_position(v: &ViaStitch, pitch: i64, pos: (i64, i64)) -> (i64, i64) {
+/// `cellForPosition`: the cell of a board position on the stitching's grid, or, where the layout has no grid, the position itself as the key
+/// (its count of nanometres on each axis).
+pub fn cell_for_position(v: &ViaStitch, pitch: Nm, pos: Point) -> (i64, i64) {
     if !v.uses_grid_cells() {
-        return pos;
+        return (pos.x.get(), pos.y.get());
     }
-    let pitch = if pitch > 0 { pitch } else { 1 };
+    let pitch = if pitch > Nm::ZERO { pitch.get() } else { 1 };
     // `roundDiv`: half away from zero, in integers.
     let round_div = |a: i64, b: i64| if a >= 0 { (a + b / 2) / b } else { -((-a + b / 2) / b) };
-    let (ox, oy) = (v.origin_offset.x, v.origin_offset.y);
-    let row = round_div(pos.1 - oy.get(), pitch);
+    let row = round_div((pos.y - v.origin_offset.y).get(), pitch);
     let shift = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
-    let col = round_div(pos.0 - ox.get() - shift, pitch);
+    let col = round_div((pos.x - v.origin_offset.x).get() - shift, pitch);
     (col, row)
 }
 
-/// `positionForCell`: the board position (nanometres) of a cell, the odd rows of a staggered grid shifted by half a pitch.
-pub fn position_for_cell(v: &ViaStitch, pitch: i64, cell: (i64, i64)) -> (i64, i64) {
+/// `positionForCell`: the board position of a cell, the odd rows of a staggered grid shifted by half a pitch (where the layout has no grid, the
+/// key is the position: [`cell_for_position`]).
+pub fn position_for_cell(v: &ViaStitch, pitch: Nm, cell: (i64, i64)) -> Point {
     if !v.uses_grid_cells() {
-        return cell;
+        return Point { x: Nm::new(cell.0), y: Nm::new(cell.1) };
     }
-    let shift = if v.layout == StitchLayout::Staggered && (cell.1 % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
-    (cell.0 * pitch + v.origin_offset.x.get() + shift, cell.1 * pitch + v.origin_offset.y.get())
+    let shift = if v.layout == StitchLayout::Staggered && (cell.1 % 2 + 2) % 2 != 0 { pitch / 2 } else { Nm::ZERO };
+    Point { x: pitch * cell.0 + v.origin_offset.x + shift, y: pitch * cell.1 + v.origin_offset.y }
 }
 
 /// `Update`'s "Try to detect origin offset change due to moved via": on a grid the vias were made on (`childrenAreOnThisGrid`), the first member via off its cell defines
-/// the new anchor -- the half-pitch shift of a staggered odd row taken out first. `members` are the member vias' positions in nanometres, in the generator's order.
-pub fn detect_origin_offset(v: &ViaStitch, pitch: i64, members: &[(i64, i64)]) -> Option<Point> {
-    if !v.uses_grid_cells() || pitch <= 0 {
+/// the new anchor -- the half-pitch shift of a staggered odd row taken out first. `members` are the member vias' positions, in the generator's order.
+pub fn detect_origin_offset(v: &ViaStitch, pitch: Nm, members: &[Point]) -> Option<Point> {
+    if !v.uses_grid_cells() || pitch <= Nm::ZERO {
         return None;
     }
     for &p in members {
         let expected = position_for_cell(v, pitch, cell_for_position(v, pitch, p));
         if expected != p {
-            let offset_y = ((p.1 % pitch) + pitch) % pitch;
-            let row = (p.1 - offset_y) / pitch;
-            let shift = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
-            let offset_x = (((p.0 - shift) % pitch) + pitch) % pitch;
-            return Some(Point { x: Nm::new(offset_x), y: Nm::new(offset_y) });
+            let offset_y = ((p.y % pitch) + pitch) % pitch;
+            let row = (p.y - offset_y) / pitch;
+            let shift = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { Nm::ZERO };
+            let offset_x = (((p.x - shift) % pitch) + pitch) % pitch;
+            return Some(Point { x: offset_x, y: offset_y });
         }
     }
     None
@@ -488,7 +489,7 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
         .find(|s| s.id == v.id)
         .is_some_and(|s| (s.layout, s.mode, effective_pitch(s)) == (v.layout, v.mode, v.pitch_nm));
     // The anchor a moved via defines (the vias are on the grid of this layout and pitch: their cells are what the stitching's own settings make them).
-    let members: Vec<(i64, i64)> = if !on_this_grid {
+    let members: Vec<Point> = if !on_this_grid {
         Vec::new()
     } else {
         inputs
@@ -496,10 +497,10 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
         .routing
         .iter()
         .flat_map(|rt| v.member_ids.iter().filter_map(move |id| rt.vias.iter().find(|x| &x.id == id)))
-        .map(|x| (x.at.x.get(), x.at.y.get()))
+        .map(|x| x.at)
         .collect()
     };
-    if let Some(offset) = detect_origin_offset(&v, pitch.get(), &members) {
+    if let Some(offset) = detect_origin_offset(&v, pitch, &members) {
         v.origin_offset = offset;
     }
     if v.outline.len() < 3 {
@@ -526,9 +527,8 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
         .into_iter()
         .filter(|c| !excluded(*c))
         .map(|c| {
-            let (x, y) = position_for_cell(&v, pitch.get(), c);
             // The design keeps nanometres: the position rounded to one -- and where the layout has no grid, the position is the via's key, as rounded.
-            let at = Point { x: Nm::new(x), y: Nm::new(y) };
+            let at = position_for_cell(&v, pitch, c);
             (if v.uses_grid_cells() { c } else { (at.x.get(), at.y.get()) }, at)
         })
         .collect();
@@ -945,17 +945,18 @@ mod tests {
     fn cells_and_positions_follow_the_anchor_and_the_stagger() {
         let mut v = ViaStitch::new(vec![]);
         v.origin_offset = Point { x: mm(0.25), y: Nm::ZERO };
-        let pitch = 1_000_000;
-        assert_eq!(position_for_cell(&v, pitch, (3, 2)), (3_250_000, 2_000_000));
-        assert_eq!(cell_for_position(&v, pitch, (3_250_000, 2_000_000)), (3, 2));
+        let pitch = mm(1.0);
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        assert_eq!(position_for_cell(&v, pitch, (3, 2)), at(3.25, 2.0));
+        assert_eq!(cell_for_position(&v, pitch, at(3.25, 2.0)), (3, 2));
         v.layout = StitchLayout::Staggered;
-        assert_eq!(position_for_cell(&v, pitch, (3, 1)), (3_750_000, 1_000_000), "an odd row is half a pitch over");
-        assert_eq!(cell_for_position(&v, pitch, (3_750_000, 1_000_000)), (3, 1));
+        assert_eq!(position_for_cell(&v, pitch, (3, 1)), at(3.75, 1.0), "an odd row is half a pitch over");
+        assert_eq!(cell_for_position(&v, pitch, at(3.75, 1.0)), (3, 1));
         // A via dragged to (10.1, 5.3) mm on a plain grid anchors it at (0.1, 0.3).
         let mut plain = ViaStitch::new(vec![]);
         plain.member_ids = vec!["a".into()];
-        assert_eq!(detect_origin_offset(&plain, pitch, &[(10_100_000, 5_300_000)]), Some(Point { x: mm(0.1), y: mm(0.3) }));
-        assert_eq!(detect_origin_offset(&plain, pitch, &[(10_000_000, 5_000_000)]), None, "on its cell");
+        assert_eq!(detect_origin_offset(&plain, pitch, &[at(10.1, 5.3)]), Some(Point { x: mm(0.1), y: mm(0.3) }));
+        assert_eq!(detect_origin_offset(&plain, pitch, &[at(10.0, 5.0)]), None, "on its cell");
     }
 }
 

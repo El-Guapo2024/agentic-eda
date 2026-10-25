@@ -9,6 +9,7 @@
 //! Reply: `{ok: true, rings: [[[x, y], ..], ..], consumed: [..]}`.
 
 use crate::board;
+use eda_model::units::Nm;
 use eda_ops::convert::{polys_from_items, ConvertStrategy};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -24,7 +25,7 @@ pub fn polys(dir: &Path, body: &[u8]) -> Value {
         return err("no items given");
     }
     let strategy = req.get("strategy").and_then(|v| serde_json::from_value::<ConvertStrategy>(v.clone()).ok()).unwrap_or(ConvertStrategy::Centerline);
-    let gap = req.get("gap").and_then(Value::as_i64).unwrap_or(0);
+    let gap = Nm::new(req.get("gap").and_then(Value::as_i64).unwrap_or(0));
     let (_, design, _) = match board::load(dir) {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),

@@ -87,7 +87,7 @@ pub fn of_section_but_wires(sch: &SchematicSection, model: &ConstraintModel) -> 
         out.push(Obstacle { owner: String::new(), rect: nc_rect(n.at) });
     }
     for j in &sch.junctions {
-        out.push(Obstacle { owner: String::new(), rect: Rect::at(j.at).inflate(mm(0.4).get()) });
+        out.push(Obstacle { owner: String::new(), rect: Rect::at(j.at).inflate(mm(0.4)) });
     }
     out
 }

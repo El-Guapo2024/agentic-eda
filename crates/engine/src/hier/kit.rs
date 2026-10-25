@@ -22,56 +22,56 @@ pub const G: i64 = GRID;
 /// One grid cell as a length.
 pub const G_NM: Nm = crate::geometry::GRID_NM;
 
-pub fn snap_up(v: i64) -> i64 {
-    v.div_euclid(G) * G + if v.rem_euclid(G) == 0 { 0 } else { G }
+pub fn snap_up(v: Nm) -> Nm {
+    G_NM * v.div_euclid(G_NM) + if v.rem_euclid(G_NM) == Nm::ZERO { Nm::ZERO } else { G_NM }
 }
 
-pub fn snap_down(v: i64) -> i64 {
-    v.div_euclid(G) * G
+pub fn snap_down(v: Nm) -> Nm {
+    G_NM * v.div_euclid(G_NM)
 }
 
-/// An axis-aligned rectangle, nanometres, `x0 <= x1`, `y0 <= y1`.
+/// An axis-aligned rectangle, `x0 <= x1`, `y0 <= y1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
-    pub x0: i64,
-    pub y0: i64,
-    pub x1: i64,
-    pub y1: i64,
+    pub x0: Nm,
+    pub y0: Nm,
+    pub x1: Nm,
+    pub y1: Nm,
 }
 
 impl Rect {
-    pub fn new(ax: i64, ay: i64, bx: i64, by: i64) -> Rect {
+    pub fn new(ax: Nm, ay: Nm, bx: Nm, by: Nm) -> Rect {
         Rect { x0: ax.min(bx), y0: ay.min(by), x1: ax.max(bx), y1: ay.max(by) }
     }
     /// The box with corners `a` and `b` (in either order).
     pub fn of(a: Point, b: Point) -> Rect {
-        Rect::new(a.x.get(), a.y.get(), b.x.get(), b.y.get())
+        Rect::new(a.x, a.y, b.x, b.y)
     }
     /// The box of `w` by `h` whose corner is `at`.
     pub fn sized(at: Point, w: Nm, h: Nm) -> Rect {
-        Rect::new(at.x.get(), at.y.get(), (at.x + w).get(), (at.y + h).get())
+        Rect::new(at.x, at.y, at.x + w, at.y + h)
     }
     /// The empty box at `p`.
     pub fn at(p: Point) -> Rect {
-        Rect { x0: p.x.get(), y0: p.y.get(), x1: p.x.get(), y1: p.y.get() }
+        Rect { x0: p.x, y0: p.y, x1: p.x, y1: p.y }
     }
     /// The box with corners `a` and `b`, grown by `m` on every side.
     pub fn around(a: Point, b: Point, m: Nm) -> Rect {
-        Rect::of(a, b).inflate(m.get())
+        Rect::of(a, b).inflate(m)
     }
-    pub fn w(&self) -> i64 {
+    pub fn w(&self) -> Nm {
         self.x1 - self.x0
     }
-    pub fn h(&self) -> i64 {
+    pub fn h(&self) -> Nm {
         self.y1 - self.y0
     }
     pub fn union(self, o: Rect) -> Rect {
         Rect { x0: self.x0.min(o.x0), y0: self.y0.min(o.y0), x1: self.x1.max(o.x1), y1: self.y1.max(o.y1) }
     }
-    pub fn inflate(self, m: i64) -> Rect {
+    pub fn inflate(self, m: Nm) -> Rect {
         Rect { x0: self.x0 - m, y0: self.y0 - m, x1: self.x1 + m, y1: self.y1 + m }
     }
-    pub fn translate(self, dx: i64, dy: i64) -> Rect {
+    pub fn translate(self, dx: Nm, dy: Nm) -> Rect {
         Rect { x0: self.x0 + dx, y0: self.y0 + dy, x1: self.x1 + dx, y1: self.y1 + dy }
     }
     /// Interiors intersect (rectangles that only touch do not overlap).
@@ -90,14 +90,14 @@ pub fn union_all(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
 // ------------------------------------------------------------------------------------------------------- text
 
 /// Every schematic text is 50 mils.
-pub const TEXT_FONT: i64 = 1_270_000;
-pub const SHEET_NAME_FONT: i64 = TEXT_FONT;
-pub const SHEET_FILE_FONT: i64 = TEXT_FONT;
-pub const SHEET_PIN_FONT: i64 = TEXT_FONT;
+pub const TEXT_FONT: Nm = Nm::new(1_270_000);
+pub const SHEET_NAME_FONT: Nm = TEXT_FONT;
+pub const SHEET_FILE_FONT: Nm = TEXT_FONT;
+pub const SHEET_PIN_FONT: Nm = TEXT_FONT;
 
 /// KiCad's box (floating point) as a whole-nanometre one that holds it.
 pub fn outward(r: kg::Rect) -> Rect {
-    Rect { x0: r.x0.floor() as i64, y0: r.y0.floor() as i64, x1: r.x1.ceil() as i64, y1: r.y1.ceil() as i64 }
+    Rect { x0: Nm::new(r.x0.floor() as i64), y0: Nm::new(r.y0.floor() as i64), x1: Nm::new(r.x1.ceil() as i64), y1: Nm::new(r.y1.ceil() as i64) }
 }
 
 fn fpt(p: Point) -> (f64, f64) {
@@ -115,26 +115,26 @@ pub fn text_rect_styled(text: &str, anchor: (f64, f64), style: &TextStyle, verti
 }
 
 /// The width of a text's box, pen included: `GetTextBox`'s width.
-pub fn text_w(_font: i64, s: &str) -> i64 {
+pub fn text_w(_font: Nm, s: &str) -> Nm {
     text_rect(s, (0.0, 0.0), HJustify::Left, VJustify::Center, false).w()
 }
 
 // ------------------------------------------------------------------------------------------------------ frame
 
-/// A paper size: KiCad's names, landscape, nanometres.
+/// A paper size: KiCad's names, landscape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Paper {
     pub name: &'static str,
-    pub w: i64,
-    pub h: i64,
+    pub w: Nm,
+    pub h: Nm,
 }
 
 pub const PAPERS: [Paper; 5] = [
-    Paper { name: "A4", w: 297_000_000, h: 210_000_000 },
-    Paper { name: "A3", w: 420_000_000, h: 297_000_000 },
-    Paper { name: "A2", w: 594_000_000, h: 420_000_000 },
-    Paper { name: "A1", w: 841_000_000, h: 594_000_000 },
-    Paper { name: "A0", w: 1_189_000_000, h: 841_000_000 },
+    Paper { name: "A4", w: Nm::new(297_000_000), h: Nm::new(210_000_000) },
+    Paper { name: "A3", w: Nm::new(420_000_000), h: Nm::new(297_000_000) },
+    Paper { name: "A2", w: Nm::new(594_000_000), h: Nm::new(420_000_000) },
+    Paper { name: "A1", w: Nm::new(841_000_000), h: Nm::new(594_000_000) },
+    Paper { name: "A0", w: Nm::new(1_189_000_000), h: Nm::new(841_000_000) },
 ];
 
 pub fn paper_named(name: &str) -> Paper {
@@ -143,12 +143,12 @@ pub fn paper_named(name: &str) -> Paper {
 
 /// KiCad's default drawing sheet: a frame 10 mm in from the paper, a second line 2 mm inside it, and the title block flush with
 /// the inner frame's bottom-right corner (108 x 32 mm).
-pub const FRAME_OUTER: i64 = 10_000_000;
-pub const FRAME_INNER: i64 = 12_000_000;
-pub const TITLE_W: i64 = 108_000_000;
-pub const TITLE_H: i64 = 32_000_000;
+pub const FRAME_OUTER: Nm = Nm::new(10_000_000);
+pub const FRAME_INNER: Nm = Nm::new(12_000_000);
+pub const TITLE_W: Nm = Nm::new(108_000_000);
+pub const TITLE_H: Nm = Nm::new(32_000_000);
 /// Clear space kept between anything drawn and the inner frame line or the title block.
-pub const FRAME_CLEAR: i64 = 5_000_000;
+pub const FRAME_CLEAR: Nm = Nm::new(5_000_000);
 
 impl Paper {
     /// Where content may go: inside the inner frame with `FRAME_CLEAR` to spare, above the title block, on the grid.
@@ -167,7 +167,7 @@ impl Paper {
 }
 
 /// The smallest paper whose usable area holds `content` (width x height); the largest when none does.
-pub fn smallest_paper(w: i64, h: i64) -> Paper {
+pub fn smallest_paper(w: Nm, h: Nm) -> Paper {
     PAPERS.iter().copied().find(|p| p.usable().w() >= w && p.usable().h() >= h).unwrap_or(PAPERS[PAPERS.len() - 1])
 }
 
@@ -277,7 +277,7 @@ impl Placed {
     }
 
     pub fn box_rect(&self) -> Rect {
-        Rect { x0: self.x.get(), y0: self.y.get(), x1: (self.x + self.w()).get(), y1: (self.y + self.h()).get() }
+        Rect { x0: self.x, y0: self.y, x1: self.x + self.w(), y1: self.y + self.h() }
     }
 
     /// This symbol as an instance on the sheet, for measuring.
@@ -417,12 +417,13 @@ const NC_HALF_NM: Nm = Nm::new(609_600);
 
 /// A no-connect flag: the cross's own square, `SCH_NO_CONNECT`'s size about its position (KiCad's `GetBoundingBox` adds half the pen).
 pub fn nc_rect(at: Point) -> Rect {
-    Rect::at(at).inflate(NC_HALF_NM.get())
+    Rect::at(at).inflate(NC_HALF_NM)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_model::units::{mil, mm};
     use crate::geometry::STUB;
     use eda_model::{Pin, PinKind};
 
@@ -431,8 +432,8 @@ mod tests {
     fn a_no_connect_flag_is_48_mil_across() {
         let at = Point { x: Nm::new(10_160_000), y: Nm::new(5_080_000) };
         let r = nc_rect(at);
-        assert_eq!((r.x1 - r.x0, r.y1 - r.y0), (1_219_200, 1_219_200));
-        assert_eq!((r.x0 + r.x1, r.y0 + r.y1), (2 * at.x.get(), 2 * at.y.get()), "centred on the flag");
+        assert_eq!((r.x1 - r.x0, r.y1 - r.y0), (mil(48.0), mil(48.0)));
+        assert_eq!((r.x0 + r.x1, r.y0 + r.y1), (at.x * 2, at.y * 2), "centred on the flag");
     }
 
     fn two_pin(reference: &str, value: &str) -> Part {
@@ -456,13 +457,13 @@ mod tests {
         for p in PAPERS {
             let u = p.usable();
             for v in [u.x0, u.y0, u.x1, u.y1] {
-                assert_eq!(v % G, 0, "{} {u:?}", p.name);
+                assert_eq!(v % G_NM, Nm::ZERO, "{} {u:?}", p.name);
             }
             assert!(p.inner_frame().contains(&u));
-            assert!(u.x1 - u.x0 > 100_000_000 && u.y1 - u.y0 > 80_000_000, "{} {u:?}", p.name);
+            assert!(u.x1 - u.x0 > mm(100.0) && u.y1 - u.y0 > mm(80.0), "{} {u:?}", p.name);
         }
-        assert_eq!(smallest_paper(200_000_000, 100_000_000).name, "A4");
-        assert_eq!(smallest_paper(300_000_000, 100_000_000).name, "A3");
+        assert_eq!(smallest_paper(mm(200.0), mm(100.0)).name, "A4");
+        assert_eq!(smallest_paper(mm(300.0), mm(100.0)).name, "A3");
     }
 
     #[test]
@@ -493,9 +494,10 @@ mod tests {
 
     #[test]
     fn rect_overlap_is_strict() {
-        let a = Rect::new(0, 0, 10, 10);
-        assert!(!a.overlaps(&Rect::new(10, 0, 20, 10)), "touching edges do not overlap");
-        assert!(a.overlaps(&Rect::new(9, 9, 20, 20)));
-        assert!(a.contains(&Rect::new(1, 1, 9, 9)));
+        let r = |x0: i64, y0: i64, x1: i64, y1: i64| Rect::new(Nm::new(x0), Nm::new(y0), Nm::new(x1), Nm::new(y1));
+        let a = r(0, 0, 10, 10);
+        assert!(!a.overlaps(&r(10, 0, 20, 10)), "touching edges do not overlap");
+        assert!(a.overlaps(&r(9, 9, 20, 20)));
+        assert!(a.contains(&r(1, 1, 9, 9)));
     }
 }

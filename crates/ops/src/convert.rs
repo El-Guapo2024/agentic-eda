@@ -383,7 +383,7 @@ fn open_graphic_polys(items: &[(String, Item)], flagged: &mut Vec<String>, set: 
 
 /// `CONVERT_TOOL::CreatePolys`' `getPolys` over `ids` (selection order). `gap` is the already-resolved hull gap (`m_Gap`, plus half the line
 /// width when positive -- the caller adds it, as `resolvedSettings` does).
-pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrategy, gap: i64) -> ConvertedPolys {
+pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrategy, gap: Nm) -> ConvertedPolys {
     let items = find_items(design, ids);
     let mut set = ShapePolySet::new();
     let mut consumed: Vec<String> = Vec::new();
@@ -408,8 +408,8 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
         // makePolysFromOpenGraphics( items, 0 ), then `Simplify()` and `Inflate( gap, ROUND_ALL_CORNERS )`.
         open_graphic_polys(&items, &mut consumed, &mut set);
         set.simplify();
-        if gap != 0 {
-            set.inflate(gap, CornerStrategy::RoundAllCorners, MAX_ERROR_NM, false);
+        if gap != Nm::ZERO {
+            set.inflate(gap.get(), CornerStrategy::RoundAllCorners, MAX_ERROR_NM, false);
         }
     } else {
         let mut chainer = Chainer::new(edges_of(&items));
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn a_rectangle_is_its_own_outline() {
         let d = design(vec![rect(Nm::ZERO, Nm::ZERO, mm(10.0), mm(5.0), mm(0.2))]);
-        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.rings[0].len(), 4);
         assert!((area(&r.rings[0]) - 50_000_000_000_000.0).abs() < 1e6);
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn a_circle_becomes_a_polygon_on_the_circle() {
         let d = design(vec![Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, center: Point { x: mm(1.0), y: mm(2.0) }, end: Point { x: mm(6.0), y: mm(2.0) } }]);
-        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO);
         assert_eq!(r.rings.len(), 1);
         assert!(r.rings[0].len() >= 16);
         for p in &r.rings[0] {
@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn four_segments_chain_into_a_square() {
         let d = design(vec![seg((Nm::ZERO, Nm::ZERO), (mm(4.0), Nm::ZERO), mm(0.15)), seg((mm(4.0), Nm::ZERO), (mm(4.0), mm(3.0)), mm(0.15)), seg((mm(4.0), mm(3.0)), (Nm::ZERO, mm(3.0)), mm(0.15)), seg((Nm::ZERO, mm(3.0)), (Nm::ZERO, Nm::ZERO), mm(0.15))]);
-        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO);
         assert_eq!(r.rings.len(), 1, "{:?}", r.rings);
         assert_eq!(r.rings[0].len(), 4);
         assert!((area(&r.rings[0]) - 12_000_000_000_000.0).abs() < 1e6);
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn segments_given_in_any_order_still_chain() {
         let d = design(vec![seg((mm(4.0), mm(3.0)), (Nm::ZERO, mm(3.0)), mm(0.15)), seg((Nm::ZERO, Nm::ZERO), (mm(4.0), Nm::ZERO), mm(0.15)), seg((Nm::ZERO, mm(3.0)), (Nm::ZERO, Nm::ZERO), mm(0.15)), seg((mm(4.0), Nm::ZERO), (mm(4.0), mm(3.0)), mm(0.15))]);
-        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO);
         assert_eq!(r.rings.len(), 1);
         assert!((area(&r.rings[0]) - 12_000_000_000_000.0).abs() < 1e6);
     }
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn an_open_chain_makes_nothing_and_consumes_nothing() {
         let d = design(vec![seg((Nm::ZERO, Nm::ZERO), (mm(4.0), Nm::ZERO), mm(0.15)), seg((mm(4.0), Nm::ZERO), (mm(4.0), mm(3.0)), mm(0.15))]);
-        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO);
         assert!(r.rings.is_empty());
         assert!(r.consumed.is_empty());
     }
@@ -541,7 +541,7 @@ mod tests {
         let arc = Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: mm(-5.0), y: Nm::ZERO }, mid: Point { x: Nm::ZERO, y: mm(-5.0) }, end: Point { x: mm(5.0), y: Nm::ZERO } };
         let chord = seg((mm(5.0), Nm::ZERO), (mm(-5.0), Nm::ZERO), mm(0.15));
         let d = design(vec![arc, chord]);
-        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, Nm::ZERO);
         assert_eq!(r.rings.len(), 1);
         assert!(r.rings[0].len() > 12, "{} points", r.rings[0].len());
         let half = std::f64::consts::PI * 25_000_000_000_000.0 / 2.0;
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn the_hull_of_two_crossing_lines_is_one_polygon_with_their_width() {
         let d = design(vec![seg((Nm::ZERO, Nm::ZERO), (mm(10.0), Nm::ZERO), mm(1.0)), seg((mm(5.0), mm(-5.0)), (mm(5.0), mm(5.0)), mm(1.0))]);
-        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 0);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, Nm::ZERO);
         assert_eq!(r.rings.len(), 1);
         // a plus sign: 2 bars of (10000+1000) x 1000 and (10000+1000) x 1000 overlapping in 1000 x 1000, round caps trim the ends
         let expected = 2.0 * (10_000_000.0 * 1_000_000.0 + std::f64::consts::PI * 500_000.0 * 500_000.0) - 1_000_000_000_000.0;
@@ -563,15 +563,15 @@ mod tests {
     #[test]
     fn the_hull_gap_grows_the_polygon() {
         let d = design(vec![seg((Nm::ZERO, Nm::ZERO), (mm(10.0), Nm::ZERO), mm(1.0))]);
-        let plain = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 0);
-        let grown = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 500_000);
+        let plain = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, Nm::ZERO);
+        let grown = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, mm(0.5));
         assert!(area(&grown.rings[0]) > area(&plain.rings[0]) * 1.5);
     }
 
     #[test]
     fn the_hull_of_an_outline_rectangle_is_a_ring_bridged_into_one_polygon() {
         let d = design(vec![rect(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0), mm(0.2))]);
-        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, 0);
+        let r = polys_from_items(&d, &ids(&d), ConvertStrategy::BoundingHull, Nm::ZERO);
         assert_eq!(r.rings.len(), 1);
         // (10200^2 - 9800^2) minus the rounded outer corners
         let expected = 10_200_000.0_f64.powi(2) - 9_800_000.0_f64.powi(2);
@@ -585,7 +585,7 @@ mod tests {
         let rt = d.routing.as_mut().unwrap();
         rt.tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.5), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(4.0), y: Nm::ZERO }], arc_mid_offset: None });
         rt.vias.push(Via { id: "v1".into(), net: "N".into(), at: Point { x: mm(4.0), y: Nm::ZERO }, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        let r = polys_from_items(&d, &["t1".to_string(), "v1".to_string()], ConvertStrategy::BoundingHull, 0);
+        let r = polys_from_items(&d, &["t1".to_string(), "v1".to_string()], ConvertStrategy::BoundingHull, Nm::ZERO);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.consumed, vec!["t1".to_string(), "v1".to_string()]);
     }
@@ -595,7 +595,7 @@ mod tests {
         let mut d = design(vec![]);
         let rt = d.routing.as_mut().unwrap();
         rt.zones.push(Zone { id: "z1".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: Nm::ZERO }, Point { x: mm(3.0), y: mm(3.0) }], ..Default::default() });
-        let r = polys_from_items(&d, &["z1".to_string()], ConvertStrategy::Centerline, 0);
+        let r = polys_from_items(&d, &["z1".to_string()], ConvertStrategy::Centerline, Nm::ZERO);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.rings[0].len(), 3);
         assert_eq!(r.consumed, vec!["z1".to_string()]);
@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn unknown_ids_are_ignored() {
         let d = design(vec![rect(Nm::ZERO, Nm::ZERO, mm(0.1), mm(0.1), mm(0.01))]);
-        let r = polys_from_items(&d, &["nope".to_string()], ConvertStrategy::Centerline, 0);
+        let r = polys_from_items(&d, &["nope".to_string()], ConvertStrategy::Centerline, Nm::ZERO);
         assert!(r.rings.is_empty() && r.consumed.is_empty());
     }
 }

@@ -97,7 +97,7 @@ impl TuningPath {
         let mut total: i64 = 0;
         for (idx, it) in self.items.iter().enumerate() {
             match it {
-                PathItem::Line { line, clipped } => total += params.track_delay(&name(line.layer), clipped.length_nm()),
+                PathItem::Line { line, clipped } => total += params.track_delay(&name(line.layer), clipped.length()),
                 PathItem::Via(vid) if env.rules.use_height_for_length_calcs && idx > 0 && idx + 1 < self.items.len() => {
                     let layer_of = |i: &PathItem| if let PathItem::Line { line, .. } = i { Some(line.layer) } else { None };
                     if let (Some(a), Some(b)) = (layer_of(&self.items[idx - 1]), layer_of(&self.items[idx + 1])) {

@@ -334,8 +334,8 @@ fn arc_to_segment_count(radius: i64, error_max: i64, arc_degrees: f64) -> i64 {
 /// What `BuildCornersList_S_Shape` answers when it cannot make the coil.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SShape {
-    /// The corners, in nanometres, from the start point to the end point.
-    Corners(Vec<(i64, i64)>),
+    /// The corners, from the start point to the end point.
+    Corners(Vec<Point>),
     TooLong,
     TooShort,
     NoRepresentation,
@@ -357,8 +357,10 @@ fn gen_arc(out: &mut Vec<P>, start: P, centre: P, arc_degrees: f64) {
 }
 
 /// `BuildCornersList_S_Shape` (`microwave_inductor.cpp`): the corners of an S-shaped coil of `length` between `start` and `end`, drawn `width` wide -- all in nanometres. The coil is
-/// worked out for a vertical one (strands along x, the two stubs on y) and turned to where the two points are.
-pub fn build_corners_s_shape(start: (i64, i64), end: (i64, i64), length: i64, width: i64) -> SShape {
+/// worked out for a vertical one (strands along x, the two stubs on y) and turned to where the two points are. The arithmetic is KiCad's `VECTOR2I`
+/// and `int` steps on whole nanometres ([`P`]), the lengths typed at the edge.
+pub fn build_corners_s_shape(start: Point, end: Point, length: Nm, width: Nm) -> SShape {
+    let (start, end, length, width) = (p_of(start), p_of(end), length.get(), width.get());
     // The scale factor that adjusts the arc length for the arcs being chords.
     const ADJUST_SIZE: f64 = 0.988;
     let pt = (end.0 - start.0, end.1 - start.1);
@@ -461,7 +463,7 @@ pub fn build_corners_s_shape(start: (i64, i64), end: (i64, i64), length: i64, wi
         *p = rotate_point_about(*p, start, angle);
     }
     buffer.push(end);
-    SShape::Corners(buffer)
+    SShape::Corners(buffer.into_iter().map(point_nm).collect())
 }
 
 // ------------------------------------------------------------------------------------------------------------------ the shape description file
@@ -819,7 +821,7 @@ fn build_function_shape(defaults: &TextGraphicsDefaults, file: &str, kind: Shape
 
 /// What `createMicrowaveInductor` asks of the length once the first dialog has answered, before it asks the value: the corners of the coil in nanometres, or the words of the info bar that
 /// says why not (`aErrorMessage`). The studio asks it before the "Component value:" prompt, as KiCad's order of dialogs does (`Cmd::Microwave` re-asks it, so a replay needs no prompt).
-pub fn inductor_corners(start: Point, end: Point, length_nm: Nm, width_nm: Nm) -> Result<Vec<(i64, i64)>, String> {
+pub fn inductor_corners(start: Point, end: Point, length_nm: Nm, width_nm: Nm) -> Result<Vec<Point>, String> {
     if width_nm <= Nm::ZERO {
         return Err("the track width must be greater than zero".to_string());
     }
@@ -831,7 +833,7 @@ pub fn inductor_corners(start: Point, end: Point, length_nm: Nm, width_nm: Nm) -
     if length_nm.get() < min_len {
         return Err("Requested length < minimum length".to_string());
     }
-    match build_corners_s_shape(s, e, length_nm.get(), width_nm.get()) {
+    match build_corners_s_shape(start, end, length_nm, width_nm) {
         SShape::Corners(c) => Ok(c),
         SShape::TooLong => Err("Requested length too large".to_string()),
         SShape::TooShort => Err("Requested length too small".to_string()),
@@ -858,7 +860,7 @@ fn build_inductor(defaults: &TextGraphicsDefaults, start: Point, end: Point, len
     let mut built = create_base_footprint(defaults, INDUCTOR_NAME, name, Nm::ZERO, 0, width_nm);
     let local = |p: P| point_nm((p.0 - e.0, p.1 - e.1));
     for w in corners.windows(2) {
-        built.footprint.graphics.push(Shape::Segment { id: String::new(), layer: "F.Cu".to_string(), stroke_width: width_nm, filled: false, start: local(w[0]), end: local(w[1]) });
+        built.footprint.graphics.push(Shape::Segment { id: String::new(), layer: "F.Cu".to_string(), stroke_width: width_nm, filled: false, start: local(p_of(w[0])), end: local(p_of(w[1])) });
     }
     // A pad on each end of the coil: round, the width of the track, numbered 1 at the end point (the anchor) and 2 at the start.
     let round_pad = |number: &str, at: Point| LibraryPad {

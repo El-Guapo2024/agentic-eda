@@ -19,11 +19,11 @@ fn dxf(entities: &str) -> String {
 }
 
 fn sch_req(format: GraphicsFormat, text: String) -> ImportSchGraphics {
-    ImportSchGraphics { format, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::ZERO }
+    ImportSchGraphics { format, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: Nm::ZERO, offset_y_nm: Nm::ZERO, line_width_nm: Nm::ZERO }
 }
 
 fn sym_req(text: String) -> ImportSymbolGraphics {
-    ImportSymbolGraphics { lib_id: "Test:Sym".into(), unit: 1, body_style: 1, format: GraphicsFormat::Dxf, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::ZERO }
+    ImportSymbolGraphics { lib_id: "Test:Sym".into(), unit: 1, body_style: 1, format: GraphicsFormat::Dxf, text, dxf_units: String::new(), scale: 1.0, offset_x_nm: Nm::ZERO, offset_y_nm: Nm::ZERO, line_width_nm: Nm::ZERO }
 }
 
 fn sch<'a>(b: &'a Board<'_>) -> &'a eda_model::ir::SchematicSection {
@@ -86,8 +86,8 @@ fn the_scale_the_offset_and_the_default_line_width_are_the_dialogs() {
     r.dxf_units = "mm".into();
     r.scale = 2.0;
     r.line_width_nm = mm(0.15);
-    r.offset_x_nm = 10_000_000;
-    r.offset_y_nm = -5_000_000;
+    r.offset_x_nm = mm(10.0);
+    r.offset_y_nm = mm(-5.0);
     b.apply(&Cmd::ImportSchGraphics(r)).unwrap();
     let s = sch(&b);
     assert_eq!(s.lines.len(), 4);
@@ -190,10 +190,10 @@ fn the_commands_are_the_editors_own_and_read_from_json() {
     assert!(!c.edits_connectivity(), "drawn lines are not wires");
     assert_eq!(Cmd::ImportSymbolGraphics(sym_req("x".into())).domain(), Domain::SymbolEditor);
     let json = serde_json::json!({ "op": "import_sch_graphics", "format": "svg", "text": "<svg/>" });
-    assert_eq!(serde_json::from_value::<Cmd>(json).unwrap(), Cmd::ImportSchGraphics(ImportSchGraphics { format: GraphicsFormat::Svg, text: "<svg/>".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_nm: Nm::ZERO }));
+    assert_eq!(serde_json::from_value::<Cmd>(json).unwrap(), Cmd::ImportSchGraphics(ImportSchGraphics { format: GraphicsFormat::Svg, text: "<svg/>".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: Nm::ZERO, offset_y_nm: Nm::ZERO, line_width_nm: Nm::ZERO }));
     let json = serde_json::json!({ "op": "import_symbol_graphics", "lib_id": "Test:Sym", "unit": 2, "format": "dxf", "text": "x", "scale": 0.5, "offset_x_nm": -1500000 });
     let Cmd::ImportSymbolGraphics(r) = serde_json::from_value::<Cmd>(json).unwrap() else { panic!() };
-    assert_eq!((r.unit, r.body_style, r.scale, r.offset_x_nm, r.offset_y_nm), (2, 1, 0.5, -1_500_000, 0));
+    assert_eq!((r.unit, r.body_style, r.scale, r.offset_x_nm, r.offset_y_nm), (2, 1, 0.5, mm(-1.5), Nm::ZERO));
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------ the symbol
@@ -234,8 +234,8 @@ fn the_unit_the_body_style_the_scale_and_the_offset_are_the_dialogs() {
     r.unit = 2;
     r.body_style = 2;
     r.scale = 0.5;
-    r.offset_x_nm = 10_000_000;
-    r.offset_y_nm = 5_000_000;
+    r.offset_x_nm = mm(10.0);
+    r.offset_y_nm = mm(5.0);
     b.apply(&Cmd::ImportSymbolGraphics(r)).unwrap();
     let mut circles: Vec<(f64, f64, f64)> = symbol_graphics(&b)
         .into_iter()

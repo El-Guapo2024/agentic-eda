@@ -19,6 +19,7 @@
 //! (`std::numeric_limits<int>::max()` nanometres, 2147 mm) are kept in nanometres here too ([`KICAD_IU_PER_MM`]): a graphic a
 //! KiCad could not hold is refused with KiCad's message.
 
+use eda_model::ir::Point;
 use eda_model::units::Nm;
 use serde::Serialize;
 use std::ops::{Add, Mul, Sub};
@@ -420,7 +421,9 @@ pub struct Mapper {
     pub offset_mm: V2,
     /// `GetLineWidthMM`: the width a stroke of no width takes, in millimetres (before the scale).
     pub line_width_mm: f64,
-    /// The editor's units per millimetre (`m_millimeterToIu`): 1000 for the design's micrometres.
+    /// The editor's units per millimetre (`m_millimeterToIu`): [`eda_model::units::PCB_IU_PER_MM`] for the board's and the schematic's
+    /// nanometres, 10000 for a library symbol's schematic units (100 nm, [`eda_model::units::SCH_IU_NM`]). [`Mapper::coord`] and
+    /// [`Mapper::line_width`] answer in that unit, so they are counts (`i64`), not lengths.
     pub iu_per_mm: f64,
 }
 
@@ -553,18 +556,19 @@ fn approx_collinear(a: ((i64, i64), (i64, i64)), b: ((i64, i64), (i64, i64))) ->
 
 /// `GRAPHICS_IMPORTER::setupSplineOrLine`: a curve whose control points lie on its chord, or that flattens to nothing but its two
 /// end points at [`ARC_HIGH_DEF_NM`], is a segment; a segment shorter than 20 nm is dropped. The points are nanometres.
-pub fn spline_or_line(start: (i64, i64), c1: (i64, i64), c2: (i64, i64), end: (i64, i64)) -> SplineOrLine {
-    let s_e = (start, end);
-    let mut degenerate = approx_collinear(s_e, (start, c1)) && approx_collinear(s_e, (end, c2));
+pub fn spline_or_line(start: Point, c1: Point, c2: Point, end: Point) -> SplineOrLine {
+    // `ApproxCollinear` is KiCad's integer arithmetic on the points' counts of nanometres
+    let t = |p: Point| (p.x.get(), p.y.get());
+    let s_e = (t(start), t(end));
+    let mut degenerate = approx_collinear(s_e, (t(start), t(c1))) && approx_collinear(s_e, (t(end), t(c2)));
     if !degenerate {
-        let p = |t: (i64, i64)| eda_model::ir::Point { x: Nm::new(t.0), y: Nm::new(t.1) };
-        degenerate = eda_model::bezier::bezier_polyline(p(start), p(c1), p(c2), p(end), ARC_HIGH_DEF_NM).len() <= 2;
+        degenerate = eda_model::bezier::bezier_polyline(start, c1, c2, end, ARC_HIGH_DEF_NM).len() <= 2;
     }
     if degenerate {
         // "segment smaller than MIN_SEG_LEN_ACCEPTABLE_NM nanometers are skipped"
-        const MIN_SEG_LEN_ACCEPTABLE_NM: i64 = 20;
+        const MIN_SEG_LEN_ACCEPTABLE_NM: Nm = Nm::new(20);
         // `SEG::Length()`: `EuclideanNorm()`, rounded to an integer
-        if eda_model::units::kiround(((end.0 - start.0) as f64).hypot((end.1 - start.1) as f64)) < MIN_SEG_LEN_ACCEPTABLE_NM {
+        if Nm::kiround((end.x - start.x).as_f64().hypot((end.y - start.y).as_f64())) < MIN_SEG_LEN_ACCEPTABLE_NM {
             SplineOrLine::Skip
         } else {
             SplineOrLine::Line
@@ -577,6 +581,7 @@ pub fn spline_or_line(start: (i64, i64), c1: (i64, i64), c2: (i64, i64), end: (i
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_model::units::mm;
 
     fn mapper() -> Mapper {
         Mapper { scale: 1.0, offset_mm: V2::new(0.0, 0.0), line_width_mm: 0.2, iu_per_mm: 1000.0 }
@@ -635,9 +640,11 @@ mod tests {
 
     #[test]
     fn a_curve_on_its_chord_is_a_line_and_a_bent_one_is_a_curve() {
-        assert_eq!(spline_or_line((0, 0), (1_000_000, 0), (2_000_000, 0), (3_000_000, 0)), SplineOrLine::Line);
-        assert_eq!(spline_or_line((0, 0), (0, 1_000_000), (3_000_000, 1_000_000), (3_000_000, 0)), SplineOrLine::Curve);
-        assert_eq!(spline_or_line((5000, 5000), (5000, 5000), (5000, 5000), (5000, 5000)), SplineOrLine::Skip);
+        let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        assert_eq!(spline_or_line(p(0.0, 0.0), p(1.0, 0.0), p(2.0, 0.0), p(3.0, 0.0)), SplineOrLine::Line);
+        assert_eq!(spline_or_line(p(0.0, 0.0), p(0.0, 1.0), p(3.0, 1.0), p(3.0, 0.0)), SplineOrLine::Curve);
+        let q = p(0.005, 0.005);
+        assert_eq!(spline_or_line(q, q, q, q), SplineOrLine::Skip);
     }
 
     #[test]

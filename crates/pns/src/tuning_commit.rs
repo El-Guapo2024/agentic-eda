@@ -171,8 +171,8 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
     let (v_lo, v_hi) = (origin.c_point(lo), origin.c_point(hi + 1));
 
     // The touched run's two ends: the one on the side of the pattern's start is the one `pre` reaches back to.
-    let lo_in_pre = t.pre.point_on_edge_nm(v_lo, SNAP_NM);
-    let hi_in_pre = t.pre.point_on_edge_nm(v_hi, SNAP_NM);
+    let lo_in_pre = t.pre.point_on_edge(v_lo, SNAP_NM);
+    let hi_in_pre = t.pre.point_on_edge(v_hi, SNAP_NM);
     let (first, last) = match (lo_in_pre, hi_in_pre) {
         (true, false) => (v_lo, v_hi),
         (false, true) => (v_hi, v_lo),

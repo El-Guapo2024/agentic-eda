@@ -315,7 +315,7 @@ fn arc_from_center(center: Point, start: Point, angle_deg: f64) -> ShapeArc {
         let v = rotate_d(V2::new((start.x - center.x).as_f64(), (start.y - center.y).as_f64()), deg);
         Point { x: center.x + ki_round_nm(v.x), y: center.y + ki_round_nm(v.y) }
     };
-    ShapeArc::new_nm(start, turn(-angle_deg / 2.0), turn(-angle_deg), Nm::ZERO)
+    ShapeArc::new(start, turn(-angle_deg / 2.0), turn(-angle_deg), Nm::ZERO)
 }
 
 /// The `SHAPE_LINE_CHAIN` `BuildInitialTrace` appends to; [`Self::finish`] hands it back as a [`Trace`].

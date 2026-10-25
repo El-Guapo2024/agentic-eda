@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-24T04:08:11.165009+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-25T13:27:39.295176+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -27,7 +27,7 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 
 ## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
 
-_Measured 2026-10-24._
+_Measured 2026-10-25._
 
 Boards evaluated: 186 (of 188 attempted).
 
@@ -53,7 +53,7 @@ boards); the floor was reset to that, then raised with the fixes of `task-connec
 
 ### Boards that errored (2)
 
-- unroutable_tiny_outline [example]: place: [CheckResult { check: "place_legalize", status: Fail, location: Some("design"), hint: Some("could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C1"), hint: Some("14235675000000 nm² outside its bound (keepout (-3050000, 75500, 50000, 4674500), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C2"), hint: Some("14836840000000 nm² outside its bound (keepout (325500, -3050000, 4874500, 220000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("U1"), hint: Some("78455000000000 nm² outside its bound (keepout (200000, 350000, 10200000, 8200000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }]
+- unroutable_tiny_outline [example]: place: [CheckResult { check: "place_legalize", status: Fail, location: Some("design"), hint: Some("could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C1"), hint: Some("15073200000000 nm² outside its bound (keepout (120000, -4800000, 3280000, -30000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C2"), hint: Some("14763000000000 nm² outside its bound (keepout (400000, 470000, 5000000, 3680000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("U1"), hint: Some("84475000000000 nm² outside its bound (keepout (-9900000, 250000, 100000, 8700000), bound (0, 0, 500000, 500000); non-connectors keep the edge margin)"), detail: None }]
 - plugins/fakeboard.kicad_pcb [qa]: import_kicad_pcb failed: [CheckResult { check: "kicad_import.parse", status: Fail, location: Some("file"), hint: Some("not a valid s-expression file: expected '(' at byte 0"), detail: None }]
 
 ### The boards (188)
@@ -302,7 +302,7 @@ Import failures (1):
 
 ### Re-export fidelity on 12 real QA boards (import -> our export -> kicad-cli DRC, vs kicad-cli DRC on the original)
 
-_Measured 2026-10-24._
+_Measured 2026-10-25._
 
 | board | original parses | re-export parses | identical violation-type counts | findings that differ (type, items, place) | where kicad-cli's counts differ (type: original -> re-export) |
 |---|---|---|---|---:|---|

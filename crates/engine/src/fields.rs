@@ -373,7 +373,7 @@ type IuBox = [i64; 4];
 
 fn iu_box(r: crate::hier::kit::Rect) -> IuBox {
     let iu = eda_model::units::SCH_IU_NM;
-    [r.x0 / iu, r.y0 / iu, r.x1 / iu, r.y1 / iu]
+    [r.x0.get() / iu, r.y0.get() / iu, r.x1.get() / iu, r.y1.get() / iu]
 }
 
 /// `BOX2I::Intersects`: the boxes share some area.
@@ -717,7 +717,7 @@ pub fn stored_visible_fields(sch: &SchematicSection, sym: &SymbolInstance, part:
 /// The box a shown field's text takes on the sheet, in millimetres.
 pub fn field_box_mm(f: &PageField) -> crate::geometry::TextBox {
     let r = field_rect(f);
-    crate::geometry::TextBox { x0: r.x0 as f64 / 1e6, y0: r.y0 as f64 / 1e6, x1: r.x1 as f64 / 1e6, y1: r.y1 as f64 / 1e6 }
+    crate::geometry::TextBox { x0: r.x0.mm(), y0: r.y0.mm(), x1: r.x1.mm(), y1: r.y1.mm() }
 }
 
 /// The box a field's text takes on the sheet as eeschema measures it (`SCH_FIELD::GetBoundingBox`), whole nanometres: the text as it is shown, in its own
@@ -801,11 +801,11 @@ pub fn sheet_fields(sch: &SchematicSection, sheet: &SheetInstance) -> Vec<PageFi
 
 /// How much of `a` lies inside `b` (square nanometres), the edges trimmed by a hair so boxes that only touch are not counted.
 fn overlap_area(a: crate::hier::kit::Rect, b: crate::hier::kit::Rect) -> i128 {
-    const HAIR: i64 = 30_000;
+    const HAIR: Nm = Nm::new(30_000);
     let w = (a.x1 - HAIR).min(b.x1 - HAIR) - (a.x0 + HAIR).max(b.x0 + HAIR);
     let h = (a.y1 - HAIR).min(b.y1 - HAIR) - (a.y0 + HAIR).max(b.y0 + HAIR);
-    if w > 0 && h > 0 {
-        w as i128 * h as i128
+    if w > Nm::ZERO && h > Nm::ZERO {
+        w.area(h)
     } else {
         0
     }

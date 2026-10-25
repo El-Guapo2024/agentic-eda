@@ -105,9 +105,9 @@ impl MeanderSide {
 /// `MEANDER_SETTINGS` (the net class it carries is the tuner's to look up: [`crate::tuning_path::LengthEnv::delay_params`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeanderSettings {
-    pub min_amplitude: i64,
-    pub max_amplitude: i64,
-    pub spacing: i64,
+    pub min_amplitude: Nm,
+    pub max_amplitude: Nm,
+    pub spacing: Nm,
     /// "Amplitude/spacing adjustment step".
     pub step: Nm,
     pub len_pad_to_die: Nm,
@@ -132,9 +132,9 @@ impl Default for MeanderSettings {
     /// `MEANDER_SETTINGS::MEANDER_SETTINGS()`.
     fn default() -> Self {
         let mut s = MeanderSettings {
-            min_amplitude: 200_000,
-            max_amplitude: 1_000_000,
-            spacing: 600_000,
+            min_amplitude: mm(0.2),
+            max_amplitude: mm(1.0),
+            spacing: mm(0.6),
             step: mm(0.05),
             len_pad_to_die: Nm::ZERO,
             target_length: MinOptMax::default(),
@@ -428,7 +428,7 @@ impl MeanderShape {
 
     /// `MinAmplitude`.
     pub fn min_amplitude(&self) -> Nm {
-        let mut min_amplitude = Nm::new(self.settings.min_amplitude);
+        let mut min_amplitude = self.settings.min_amplitude;
         if self.settings.corner_style == MeanderStyle::Round {
             min_amplitude = min_amplitude.max(self.baseline_offset.abs() + self.width);
         } else {
@@ -442,10 +442,10 @@ impl MeanderShape {
     /// `spacing`.
     pub fn spacing(&self) -> Nm {
         if !self.dual {
-            (self.width + self.clearance).max(Nm::new(self.settings.spacing))
+            (self.width + self.clearance).max(self.settings.spacing)
         } else {
             let sp = self.width + self.clearance + 2 * self.baseline_offset.abs();
-            sp.max(Nm::new(self.settings.spacing))
+            sp.max(self.settings.spacing)
         }
     }
 
@@ -698,7 +698,7 @@ impl MeanderShape {
         }
 
         let min_ampl = self.min_amplitude();
-        let max_ampl = Nm::new(self.settings.max_amplitude).max(min_ampl);
+        let max_ampl = self.settings.max_amplitude.max(min_ampl);
         // "Calculate minimum acceptable corner radius for visible rounding": at least half the track width (issue #8629).
         let min_corner_radius = self.width / 2;
 
@@ -770,7 +770,7 @@ impl MeanderShape {
 
     /// `CurrentLength`.
     pub fn current_length(&self) -> Nm {
-        self.c_line(0).length_nm()
+        self.c_line(0).length()
     }
 
     /// `MinTunableLength`: the length of the shape at its minimum amplitude.
@@ -1150,7 +1150,7 @@ mod tests {
         }
         fn check_fit(&mut self, shape: &MeanderShape, existing: &[MeanderShape]) -> bool {
             self.fits += 1;
-            let clearance = shape.width() + Nm::new(self.settings.spacing);
+            let clearance = shape.width() + self.settings.spacing;
             MeanderedLine::check_self_intersections(existing, shape, clearance)
         }
     }
@@ -1166,7 +1166,7 @@ mod tests {
     #[test]
     fn the_settings_start_as_kicads_and_a_target_gets_its_default_tolerance() {
         let s = MeanderSettings::default();
-        assert_eq!((s.min_amplitude, s.max_amplitude, s.spacing, s.step), (200_000, 1_000_000, 600_000, mm(0.05)));
+        assert_eq!((s.min_amplitude, s.max_amplitude, s.spacing, s.step), (mm(0.2), mm(1.0), mm(0.6), mm(0.05)));
         assert_eq!((s.corner_style, s.corner_radius_percentage, s.single_sided, s.initial_side), (MeanderStyle::Round, 80, false, MeanderSide::Left));
         assert_eq!((s.target_length.min(), s.target_length.opt(), s.target_length.max()), (0, LENGTH_UNCONSTRAINED, LENGTH_UNCONSTRAINED));
         assert_eq!(s.target_skew.opt(), 0);
@@ -1199,7 +1199,7 @@ mod tests {
         assert!(right.fit(&mut env, &[], MeanderType::Single, base, p(0, 0), true));
         let ys: Vec<Nm> = right.c_line(0).points().iter().map(|q| q.y).collect();
         assert_eq!((*ys.iter().min().unwrap(), *ys.iter().max().unwrap()), (mm(-1.0), Nm::ZERO));
-        assert_eq!(right.c_line(0).length_nm(), m.c_line(0).length_nm());
+        assert_eq!(right.c_line(0).length(), m.c_line(0).length());
         assert_eq!(m.baseline_length(), m.end().x);
     }
 
@@ -1243,7 +1243,7 @@ mod tests {
         assert!(m.fit(&mut env, &[], MeanderType::Single, Seg::new(p(0, 0), p(20_000_000, 0)), p(0, 0), false));
         assert_eq!(m.amplitude(), mm(0.4), "1 mm, 0.95, ... down to the first step that fits");
         let mut env = Narrow(free());
-        env.0.settings.min_amplitude = 500_000;
+        env.0.settings.min_amplitude = mm(0.5);
         let mut m = MeanderShape::new(&env, mm(0.2), false);
         assert!(!m.fit(&mut env, &[], MeanderType::Single, Seg::new(p(0, 0), p(20_000_000, 0)), p(0, 0), false), "nothing fits above the minimum");
     }
@@ -1274,7 +1274,7 @@ mod tests {
         for m in line.meanders() {
             chain.append_chain(m.c_line(0));
         }
-        assert!(chain.length_nm() > mm(30.0) + mm(10.0), "{}", chain.length_nm());
+        assert!(chain.length() > mm(30.0) + mm(10.0), "{}", chain.length());
     }
 
     #[test]
@@ -1311,7 +1311,7 @@ mod tests {
         for (length, elongation) in [(mm(30.0), mm(3.0)), (mm(30.0), mm(12.0)), (mm(20.0), mm(1.5)), (mm(50.0), mm(25.0))] {
             let mut env = free();
             let (_, chain) = tuned_line(&mut env, length, elongation);
-            let got = chain.length_nm() - length;
+            let got = chain.length() - length;
             assert!((got - elongation).abs() < um(2.0), "asked {elongation} of elongation on {length}, got {got}");
         }
     }
@@ -1321,14 +1321,14 @@ mod tests {
         let mut env = free();
         let (line, chain) = tuned_line(&mut env, mm(30.0), Nm::new(100));
         assert!(line.meanders().iter().all(|m| matches!(m.kind(), MeanderType::Corner | MeanderType::Empty)));
-        assert_eq!(chain.length_nm(), mm(30.0));
+        assert_eq!(chain.length(), mm(30.0));
     }
 
     #[test]
     fn an_elongation_more_than_the_room_gives_stays_at_the_longest_the_room_allows() {
         let mut env = free();
         let (_, chain) = tuned_line(&mut env, mm(10.0), mm(80.0));
-        let gain = chain.length_nm() - mm(10.0);
+        let gain = chain.length() - mm(10.0);
         assert!(gain > mm(5.0) && gain < mm(80.0), "{gain}");
     }
 }
