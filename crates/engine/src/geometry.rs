@@ -868,7 +868,7 @@ pub fn resolve_text_y_obs(
 /// permanent warning. Returns `(jog_x, bend_y, baseline_y)`, all absolute mm;
 /// the leader line runs pin -> (pin_x, bend_y) -> (jog_x, bend_y) when
 /// `jog_x != pin_x`, and the glyph/text are drawn at `jog_x`.
-pub fn resolve_label_pos(pin_x_nm: i64, pin_y_nm: i64, bend_dy: f64, ty_dy: f64, text: &str, font_mm: f64, obstacles: &[TextBox]) -> (f64, f64, f64) {
+pub fn resolve_label_pos(pin_x_nm: Nm, pin_y_nm: Nm, bend_dy: f64, ty_dy: f64, text: &str, font_mm: f64, obstacles: &[TextBox]) -> (f64, f64, f64) {
     resolve_label_pos_obs(pin_x_nm, pin_y_nm, bend_dy, ty_dy, text, font_mm, obstacles, &[], &[])
 }
 
@@ -920,8 +920,8 @@ pub fn label_obstacle(b: TextBox) -> TextBox {
 }
 
 pub fn resolve_label_pos_obs(
-    pin_x_nm: i64,
-    pin_y_nm: i64,
+    pin_x_nm: Nm,
+    pin_y_nm: Nm,
     bend_dy: f64,
     ty_dy: f64,
     text: &str,
@@ -941,8 +941,8 @@ pub fn resolve_label_pos_obs(
 /// `pad_x`/`pad_y` of 0.0 recovers exactly [`resolve_label_pos_obs`]'s
 /// behavior (used by Ground/Power, which draw a plain symbol with no nose).
 pub fn resolve_label_pos_obs_padded(
-    pin_x_nm: i64,
-    pin_y_nm: i64,
+    pin_x_nm: Nm,
+    pin_y_nm: Nm,
     bend_dy: f64,
     ty_dy: f64,
     text: &str,
@@ -953,8 +953,8 @@ pub fn resolve_label_pos_obs_padded(
     boxes: &[TextBox],
     wires: &[Wire],
 ) -> (f64, f64, f64) {
-    let x = pin_x_nm as f64 / 1e6;
-    let y = pin_y_nm as f64 / 1e6;
+    let x = pin_x_nm.mm();
+    let y = pin_y_nm.mm();
     let bend_y = y + bend_dy;
     let base_ty = y + ty_dy;
     let step = 1.8;
@@ -1112,8 +1112,8 @@ pub fn side_of_boundary_point(boxes: &[TextBox], x: f64, y: f64, eps: f64) -> Op
 /// Returns `(bend_x, bend_y, text_x, text_y)`, all absolute mm.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_label_pos_side(
-    pin_x_nm: i64,
-    pin_y_nm: i64,
+    pin_x_nm: Nm,
+    pin_y_nm: Nm,
     side: Side,
     bend_dist: f64,
     text_dist: f64,
@@ -1125,8 +1125,8 @@ pub fn resolve_label_pos_side(
     boxes: &[TextBox],
     wires: &[Wire],
 ) -> (f64, f64, f64, f64) {
-    let x = pin_x_nm as f64 / 1e6;
-    let y = pin_y_nm as f64 / 1e6;
+    let x = pin_x_nm.mm();
+    let y = pin_y_nm.mm();
     let (out_ax, out_ay) = match side {
         Side::Top => (0.0, -1.0),
         Side::Bottom => (0.0, 1.0),
@@ -1258,25 +1258,25 @@ pub enum ResolvedNetLabel {
 /// this logic always have, so a later label in the same sheet still repels
 /// this one by the same margin.
 pub fn resolve_net_label(
-    pin_x_nm: i64,
-    pin_y_nm: i64,
+    pin_x: Nm,
+    pin_y: Nm,
     net: &str,
     font_mm: f64,
     obstacles: &mut Vec<TextBox>,
     boxes: &[TextBox],
     wires: &[Wire],
 ) -> (ResolvedNetLabel, TextBox) {
-    let x = pin_x_nm as f64 / 1e6;
-    let y = pin_y_nm as f64 / 1e6;
+    let x = pin_x.mm();
+    let y = pin_y.mm();
     match net_label_kind(net) {
         NetLabelKind::Ground => {
-            let (jog_x, drop, ty) = resolve_label_pos_obs(pin_x_nm, pin_y_nm, 0.5, 0.5 + 0.5 + 0.8, net, font_mm, obstacles, boxes, wires);
+            let (jog_x, drop, ty) = resolve_label_pos_obs(pin_x, pin_y, 0.5, 0.5 + 0.5 + 0.8, net, font_mm, obstacles, boxes, wires);
             let ink = text_bbox(jog_x, ty, net, font_mm, HAnchor::Middle);
             obstacles.push(label_obstacle(ink));
             (ResolvedNetLabel::Ground { x, y, drop, jog_x, ty }, ink)
         }
         NetLabelKind::Power => {
-            let (jog_x, stem_top, ty) = resolve_label_pos_obs(pin_x_nm, pin_y_nm, -1.6, -1.6 - 0.4, net, font_mm, obstacles, boxes, wires);
+            let (jog_x, stem_top, ty) = resolve_label_pos_obs(pin_x, pin_y, -1.6, -1.6 - 0.4, net, font_mm, obstacles, boxes, wires);
             let ink = text_bbox(jog_x, ty, net, font_mm, HAnchor::Middle);
             obstacles.push(label_obstacle(ink));
             (ResolvedNetLabel::Power { x, y, stem_top, jog_x, ty }, ink)
@@ -1284,7 +1284,7 @@ pub fn resolve_net_label(
         NetLabelKind::Flag => {
             let side = side_of_boundary_point(boxes, x, y, 1e-3).unwrap_or(Side::Bottom);
             let (bend_x, bend_y, jog_x, ty) =
-                resolve_label_pos_side(pin_x_nm, pin_y_nm, side, 1.5, 1.8, net, font_mm, TAG_PAD_MM + TAG_NOSE_MM, TAG_PAD_MM, obstacles, boxes, wires);
+                resolve_label_pos_side(pin_x, pin_y, side, 1.5, 1.8, net, font_mm, TAG_PAD_MM + TAG_NOSE_MM, TAG_PAD_MM, obstacles, boxes, wires);
             let anchor = match side {
                 Side::Top | Side::Bottom => HAnchor::Middle,
                 Side::Left => HAnchor::End,
