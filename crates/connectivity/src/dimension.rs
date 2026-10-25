@@ -70,7 +70,7 @@ fn add(a: Point, b: Point) -> Point {
     Point { x: a.x + b.x, y: a.y + b.y }
 }
 fn norm(p: Point) -> f64 {
-    ((p.x).raw_shim() as f64).hypot(p.y.raw_shim() as f64)
+    p.x.as_f64().hypot(p.y.as_f64())
 }
 /// `v` rescaled to length `len` (sign of `len` flips the direction),
 /// preserving direction otherwise. The zero vector has no direction, so
@@ -80,8 +80,8 @@ fn resize(v: Point, len: Nm) -> Point {
     if n < 1.0 {
         return Point { x: Nm::ZERO, y: Nm::ZERO };
     }
-    let scale = len.raw_shim() as f64 / n;
-    Point { x: Nm::from_raw_shim((v.x.raw_shim() as f64 * scale).round() as i64), y: Nm::from_raw_shim((v.y.raw_shim() as f64 * scale).round() as i64) }
+    let scale = len.as_f64() / n;
+    Point { x: Nm::kiround(v.x.as_f64() * scale), y: Nm::kiround(v.y.as_f64() * scale) }
 }
 /// The perpendicular of `v`, rotated 90 degrees clockwise (this crate's
 /// own Y-down convention -- see this module's header).
@@ -91,12 +91,12 @@ fn perp(v: Point) -> Point {
 /// Angle of `v` from the +X axis, clockwise-positive in Y-down screen
 /// coordinates (`atan2`'s own natural direction once Y grows downward).
 fn angle_of(v: Point) -> i64 {
-    ((v.y).raw_shim() as f64).atan2(v.x.raw_shim() as f64).to_degrees().round() as i64 * 1000
+    v.y.as_f64().atan2(v.x.as_f64()).to_degrees().round() as i64 * 1000
 }
 fn rotate(p: Point, angle_millideg: i64) -> Point {
     let rad = (angle_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    Point { x: Nm::from_raw_shim((p.x.raw_shim() as f64 * cos - p.y.raw_shim() as f64 * sin).round() as i64), y: Nm::from_raw_shim((p.x.raw_shim() as f64 * sin + p.y.raw_shim() as f64 * cos).round() as i64) }
+    Point { x: Nm::kiround(p.x.as_f64() * cos - p.y.as_f64() * sin), y: Nm::kiround(p.x.as_f64() * sin + p.y.as_f64() * cos) }
 }
 fn rotate_about(p: Point, pivot: Point, angle_millideg: i64) -> Point {
     add(rotate(sub(p, pivot), angle_millideg), pivot)
@@ -151,7 +151,7 @@ fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
     let (value, unit_suffix) = match units {
         DimensionUnits::Mm => (eda_model::units::to_mm(measured_value_nm), "mm"),
         DimensionUnits::Mil => (eda_model::units::to_mils(measured_value_nm), "mil"),
-        DimensionUnits::Inch => (measured_value_nm.raw_shim() as f64 / eda_model::units::NM_PER_INCH as f64, "in"),
+        DimensionUnits::Inch => (measured_value_nm.as_f64() / eda_model::units::NM_PER_INCH as f64, "in"),
         DimensionUnits::Automatic => unreachable!("resolved above"),
     };
 
@@ -189,7 +189,7 @@ fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
 /// Estimated half-width (nm) of `text` set at `size_nm` -- see this
 /// module's own header on why this, and not real font metrics.
 fn half_width(text: &str, size_nm: Nm) -> Nm {
-    Nm::from_raw_shim(((text.chars().count() as f64 * CHAR_WIDTH_FACTOR * size_nm.raw_shim() as f64) / 2.0).round() as i64)
+    Nm::kiround((text.chars().count() as f64 * CHAR_WIDTH_FACTOR * size_nm.as_f64()) / 2.0)
 }
 
 /// Split `seg` (a crossbar or leader-to-text line) around `text_at`,
@@ -205,22 +205,22 @@ fn knockout(a: Point, b: Point, text_at: Point, text: &str, text_size_nm: Nm) ->
     if len < 1.0 || text.is_empty() {
         return vec![(a, b)];
     }
-    let t = ((text_at.x - a.x).raw_shim() as f64 * dir.x.raw_shim() as f64 + (text_at.y - a.y).raw_shim() as f64 * dir.y.raw_shim() as f64) / (len * len);
-    let proj = Point { x: a.x + Nm::from_raw_shim((dir.x.raw_shim() as f64 * t).round() as i64), y: a.y + Nm::from_raw_shim((dir.y.raw_shim() as f64 * t).round() as i64) };
+    let t = ((text_at.x - a.x).as_f64() * dir.x.as_f64() + (text_at.y - a.y).as_f64() * dir.y.as_f64()) / (len * len);
+    let proj = Point { x: a.x + Nm::kiround(dir.x.as_f64() * t), y: a.y + Nm::kiround(dir.y.as_f64() * t) };
     // Perpendicular distance from text_at to the line -- only knock out
     // a gap when the text is genuinely sitting close to the line, not
     // merely somewhere near its extent (an outside-positioned text's
     // perpendicular offset is a full text height or more away).
     let perp_dist = norm(sub(text_at, proj));
-    if perp_dist > text_size_nm.raw_shim() as f64 {
+    if perp_dist > text_size_nm.as_f64() {
         return vec![(a, b)];
     }
     let hw = half_width(text, text_size_nm).max(Nm::new(1));
-    let gap_start = Nm::from_raw_shim((t * len).round() as i64) - hw;
-    let gap_end = Nm::from_raw_shim((t * len).round() as i64) + hw;
-    if gap_start <= Nm::ZERO || gap_end >= Nm::from_raw_shim(len.round() as i64) {
+    let gap_start = Nm::kiround(t * len) - hw;
+    let gap_end = Nm::kiround(t * len) + hw;
+    if gap_start <= Nm::ZERO || gap_end >= Nm::kiround(len) {
         // The gap swallows (or nearly swallows) the whole segment -- draw nothing.
-        if gap_start <= Nm::ZERO && gap_end >= Nm::from_raw_shim(len.round() as i64) {
+        if gap_start <= Nm::ZERO && gap_end >= Nm::kiround(len) {
             return vec![];
         }
     }
@@ -228,7 +228,7 @@ fn knockout(a: Point, b: Point, text_at: Point, text: &str, text_size_nm: Nm) ->
     if gap_start > Nm::ZERO {
         out.push((a, add(a, resize(dir, gap_start))));
     }
-    if gap_end < Nm::from_raw_shim(len.round() as i64) {
+    if gap_end < Nm::kiround(len) {
         out.push((add(a, resize(dir, gap_end)), b));
     }
     out
@@ -276,7 +276,7 @@ fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_positi
 
 fn aligned(dim: &Dimension, height: Nm) -> DimensionGeometry {
     let dimension = sub(dim.end, dim.start);
-    let measured_value_nm = Nm::from_raw_shim(norm(dimension).round() as i64);
+    let measured_value_nm = Nm::kiround(norm(dimension));
 
     let extension = if height > Nm::ZERO { perp(dimension) } else { Point { x: dimension.y, y: -dimension.x } };
 
@@ -328,7 +328,7 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
     let crossbar_end = if horizontal { Point { x: dim.end.x, y: crossbar_start.y } } else { Point { x: crossbar_start.x, y: dim.end.y } };
 
     let extension2 = if horizontal { Point { x: Nm::ZERO, y: dim.end.y - crossbar_end.y } } else { Point { x: dim.end.x - crossbar_end.x, y: Nm::ZERO } };
-    let ext2_len = Nm::from_raw_shim(norm(extension2).round() as i64) - dim.extension_offset + dim.extension_height;
+    let ext2_len = Nm::kiround(norm(extension2)) - dim.extension_offset + dim.extension_height;
     let ext2_start = sub(crossbar_end, resize(extension2, dim.extension_height));
     let ext2_end = add(ext2_start, resize(extension2, ext2_len));
 
@@ -377,7 +377,7 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
 fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
     let center = dim.start;
     let radius_vec = sub(dim.end, center);
-    let measured_value_nm = Nm::from_raw_shim(norm(radius_vec).round() as i64);
+    let measured_value_nm = Nm::kiround(norm(radius_vec));
 
     // The small `+` mark at the centre -- fixed size (arrow_length), not
     // `end - start`, see PCB_DIM_RADIAL::updateGeometry's own
@@ -414,7 +414,7 @@ fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
 
 fn leader(dim: &Dimension) -> DimensionGeometry {
     let first_line = sub(dim.end, dim.start);
-    let measured_value_nm = Nm::from_raw_shim(norm(first_line).round() as i64);
+    let measured_value_nm = Nm::kiround(norm(first_line));
     let start = add(dim.start, resize(first_line, dim.extension_offset));
 
     let text = format_value(dim, measured_value_nm);
@@ -523,8 +523,8 @@ mod tests {
         // own far endpoint) for a positive height with this crate's
         // perp() convention -- whichever sign, it must be consistent and
         // off the feature line (y != 0).
-        let crossbar_y: i64 = (g.lines.iter().map(|(a, b)| if a.y == b.y && a.y != Nm::ZERO { Some(a.y) } else { None }).find_map(|v| v).expect("a horizontal crossbar segment")).raw_shim();
-        assert_ne!(crossbar_y, 0);
+        let crossbar_y: Nm = g.lines.iter().map(|(a, b)| if a.y == b.y && a.y != Nm::ZERO { Some(a.y) } else { None }).find_map(|v| v).expect("a horizontal crossbar segment");
+        assert_ne!(crossbar_y, Nm::ZERO);
     }
 
     #[test]

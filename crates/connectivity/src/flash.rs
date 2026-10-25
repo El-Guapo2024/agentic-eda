@@ -179,8 +179,8 @@ mod tests {
     fn through_hole_board(mode: UnconnectedLayers) -> (Design, ConstraintModel) {
         let (design, mut model) = two_pad_model();
         model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (mm(1.2), mm(1.2)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.4)), drill_slot: None, rot: 0, roundrect_ratio: None };
-        let mut fp = Footprint { name: "0603".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, x: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, Nm::ZERO), size: (mm(1.2), mm(1.2)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.4)), drill_slot: None, rot: 0, roundrect_ratio: None };
+        let mut fp = Footprint { name: "0603".into(), pads: vec![pad("1", mm(-0.8)), pad("2", mm(0.8))], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         fp.pads[0].ext.stack.unconnected = mode;
         model.footprints = vec![fp];
         (design, model)

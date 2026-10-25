@@ -153,13 +153,13 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
 /// Returns `None` when the track is too short, too wide, or the anchor
 /// has no usable radius to build a tangent from -- a skip, not an error.
 fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_width: Nm, settings: &TeardropSettings) -> Option<Vec<Point>> {
-    let r = radius.raw_shim() as f64;
-    let hw = track_width.raw_shim() as f64 / 2.0;
+    let r = radius.as_f64();
+    let hw = track_width.as_f64() / 2.0;
     if r <= 0.0 || hw <= 0.0 || near != center {
         return None;
     }
 
-    let (dx, dy) = ((far.x - near.x).raw_shim() as f64, (far.y - near.y).raw_shim() as f64);
+    let (dx, dy) = ((far.x - near.x).as_f64(), (far.y - near.y).as_f64());
     let track_len = (dx * dx + dy * dy).sqrt();
     if track_len < 1.0 {
         return None;
@@ -170,13 +170,13 @@ fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_wi
     // `m_WidthtoSizeFilterRatio`: skip a track too wide, relative to the
     // anchor, to be worth a teardrop at all.
     let anchor_diameter = 2.0 * r;
-    if track_width.raw_shim() as f64 > anchor_diameter * settings.width_to_size_filter_ratio {
+    if track_width.as_f64() > anchor_diameter * settings.width_to_size_filter_ratio {
         return None;
     }
 
     let mut target_len = anchor_diameter * settings.best_length_ratio;
     if settings.max_len_nm > Nm::ZERO {
-        target_len = target_len.min(settings.max_len_nm.raw_shim() as f64);
+        target_len = target_len.min(settings.max_len_nm.as_f64());
     }
     // Never reach past the track's own far end -- the single-segment
     // scope this port has (see module doc); leave a hairline margin so
@@ -188,14 +188,14 @@ fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_wi
 
     let mut half_width_pad_side = r * settings.best_width_ratio.clamp(0.0, 1.0);
     if settings.max_width_nm > Nm::ZERO {
-        half_width_pad_side = half_width_pad_side.min(settings.max_width_nm.raw_shim() as f64 / 2.0);
+        half_width_pad_side = half_width_pad_side.min(settings.max_width_nm.as_f64() / 2.0);
     }
     half_width_pad_side = half_width_pad_side.min(r);
 
-    let round = |x: f64| Nm::from_raw_shim(x.round() as i64);
+    let round = |x: f64| Nm::kiround(x);
     let pt = |bx: f64, by: f64, ox: f64, oy: f64| Point { x: round(bx + ox), y: round(by + oy) };
 
-    let (px, py) = (near.x.raw_shim() as f64 + dir_x * target_len, near.y.raw_shim() as f64 + dir_y * target_len);
+    let (px, py) = (near.x.as_f64() + dir_x * target_len, near.y.as_f64() + dir_y * target_len);
     let a = pt(px, py, perp_x * hw, perp_y * hw);
     let b = pt(px, py, -perp_x * hw, -perp_y * hw);
 
@@ -203,13 +203,13 @@ fn teardrop_polygon(center: Point, radius: Nm, near: Point, far: Point, track_wi
     // at the chord half-width `half_width_pad_side`, on the hemisphere
     // facing the track.
     let axial = (r * r - half_width_pad_side * half_width_pad_side).max(0.0).sqrt();
-    let (fx, fy) = (near.x.raw_shim() as f64 + dir_x * axial, near.y.raw_shim() as f64 + dir_y * axial);
+    let (fx, fy) = (near.x.as_f64() + dir_x * axial, near.y.as_f64() + dir_y * axial);
     let c = pt(fx, fy, perp_x * half_width_pad_side, perp_y * half_width_pad_side);
     let e = pt(fx, fy, -perp_x * half_width_pad_side, -perp_y * half_width_pad_side);
 
     // D: the anchor's own back point, opposite the track direction --
     // guarantees the anchor's center sits inside the closed pentagon.
-    let d = pt(near.x.raw_shim() as f64, near.y.raw_shim() as f64, -dir_x * r, -dir_y * r);
+    let d = pt(near.x.as_f64(), near.y.as_f64(), -dir_x * r, -dir_y * r);
 
     Some(vec![a, c, d, e, b])
 }
@@ -374,11 +374,11 @@ mod tests {
         let n = poly.len();
         let mut j = n - 1;
         for i in 0..n {
-            let (xi, yi) = (poly[i].x.raw_shim() as f64, poly[i].y.raw_shim() as f64);
-            let (xj, yj) = (poly[j].x.raw_shim() as f64, poly[j].y.raw_shim() as f64);
-            if (yi > p.y.raw_shim() as f64) != (yj > p.y.raw_shim() as f64) {
-                let x_cross = xi + (p.y.raw_shim() as f64 - yi) / (yj - yi) * (xj - xi);
-                if (p.x.raw_shim() as f64) < x_cross {
+            let (xi, yi) = (poly[i].x.as_f64(), poly[i].y.as_f64());
+            let (xj, yj) = (poly[j].x.as_f64(), poly[j].y.as_f64());
+            if (yi > p.y.as_f64()) != (yj > p.y.as_f64()) {
+                let x_cross = xi + (p.y.as_f64() - yi) / (yj - yi) * (xj - xi);
+                if (p.x.as_f64()) < x_cross {
                     inside = !inside;
                 }
             }

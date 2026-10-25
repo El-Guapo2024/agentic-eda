@@ -219,10 +219,10 @@ mod tests {
         (design, model)
     }
 
-    /// The track on `layer` whose end is at (10000 + dx, 10000), and what the pad's pieces and the track have to say about one another.
-    fn track_touches_the_pad(layer: &str, dx: i64, side: eda_model::ir::Side) -> (usize, bool) {
+    /// The track on `layer` whose end is at (10 mm + dx, 10 mm), and what the pad's pieces and the track have to say about one another.
+    fn track_touches_the_pad(layer: &str, dx: Nm, side: eda_model::ir::Side) -> (usize, bool) {
         let (mut design, model) = padstack_model(side);
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000 + dx), y: mm(10.0) }, eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000 + dx + 3_000_000), y: mm(10.0) }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![eda_model::ir::Point { x: mm(10.0) + dx, y: mm(10.0) }, eda_model::ir::Point { x: mm(10.0) + dx + mm(3.0), y: mm(10.0) }], arc_mid_offset: None });
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let pads: Vec<usize> = graph.items.iter().enumerate().filter(|(_, i)| matches!(i.item, ItemRef::Pad { .. })).map(|(i, _)| i).collect();
         let track = graph.items.iter().position(|i| matches!(i.item, ItemRef::TrackSeg { .. })).unwrap();
@@ -233,23 +233,23 @@ mod tests {
     fn a_track_connects_to_a_padstack_pad_where_the_copper_of_its_layer_is() {
         use eda_model::ir::Side;
         // 1.2 mm from the centre: outside the 0.8 mm circle of the front, inside the 1.5 mm half side of the inner square, outside the oval's 1.2 mm half length by nothing.
-        let (pieces, on_inner) = track_touches_the_pad("In1.Cu", 1_200_000, Side::Top);
+        let (pieces, on_inner) = track_touches_the_pad("In1.Cu", mm(1.2), Side::Top);
         assert_eq!(pieces, 3, "an item for the front, one for the inner layers and one for the back");
         assert!(on_inner, "the inner square reaches the track's end");
-        assert!(!track_touches_the_pad("F.Cu", 1_200_000, Side::Top).1, "the front circle does not");
-        assert!(track_touches_the_pad("B.Cu", 1_150_000, Side::Top).1, "the back oval is 2.4 mm long: it reaches 1.15 mm");
-        assert!(!track_touches_the_pad("B.Cu", 1_500_000, Side::Top).1, "a track end within its half width of the copper connects, farther does not");
+        assert!(!track_touches_the_pad("F.Cu", mm(1.2), Side::Top).1, "the front circle does not");
+        assert!(track_touches_the_pad("B.Cu", mm(1.15), Side::Top).1, "the back oval is 2.4 mm long: it reaches 1.15 mm");
+        assert!(!track_touches_the_pad("B.Cu", mm(1.5), Side::Top).1, "a track end within its half width of the copper connects, farther does not");
         // A bottom-side footprint has the oval on the board's front.
-        assert!(track_touches_the_pad("F.Cu", 1_150_000, Side::Bottom).1);
-        assert!(!track_touches_the_pad("B.Cu", 1_150_000, Side::Bottom).1);
+        assert!(track_touches_the_pad("F.Cu", mm(1.15), Side::Bottom).1);
+        assert!(!track_touches_the_pad("B.Cu", mm(1.15), Side::Bottom).1);
     }
 
     #[test]
     fn the_pieces_of_one_padstack_pad_are_one_pad_to_the_clusters() {
         let (mut design, model) = padstack_model(eda_model::ir::Side::Top);
         // A track on In1 ends in the inner square and a second one on B.Cu ends in the oval: the pad joins them.
-        for (id, layer, x) in [("t1", "In1.Cu", 11_200_000), ("t2", "B.Cu", 11_150_000)] {
-            design.routing.as_mut().unwrap().tracks.push(Track { id: id.into(), net: "N".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(x), y: mm(10.0) }, eda_model::ir::Point { x: Nm::from_raw_shim(x + 3_000_000), y: mm(10.0) }], arc_mid_offset: None });
+        for (id, layer, x) in [("t1", "In1.Cu", mm(11.2)), ("t2", "B.Cu", mm(11.15))] {
+            design.routing.as_mut().unwrap().tracks.push(Track { id: id.into(), net: "N".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![eda_model::ir::Point { x, y: mm(10.0) }, eda_model::ir::Point { x: x + mm(3.0), y: mm(10.0) }], arc_mid_offset: None });
         }
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
@@ -272,8 +272,8 @@ mod tests {
         let c = fp.at;
         // Along one diagonal is the pad's long axis (inside its copper), along the other 0.49 mm off it (outside the 0.2 mm half width); both in the box.
         let rt = design.routing.as_mut().unwrap();
-        for (id, dx, dy) in [("v1", 350_000, 350_000), ("v2", 350_000, -350_000)] {
-            rt.vias.push(Via { id: id.into(), net: "N1".into(), at: Point { x: c.x + Nm::from_raw_shim(dx), y: c.y + Nm::from_raw_shim(dy) }, drill: mm(0.1), diameter: mm(0.2), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        for (id, dx, dy) in [("v1", mm(0.35), mm(0.35)), ("v2", mm(0.35), mm(-0.35))] {
+            rt.vias.push(Via { id: id.into(), net: "N1".into(), at: Point { x: c.x + dx, y: c.y + dy }, drill: mm(0.1), diameter: mm(0.2), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         }
         let graph = build_graph(&design, &model, &ZoneCopper::default());
         let pad_idx = graph.items.iter().position(|i| matches!(&i.item, ItemRef::Pad { reference, .. } if reference == "R1")).unwrap();

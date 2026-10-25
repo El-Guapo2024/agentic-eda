@@ -23,7 +23,7 @@ use eda_model::ir::Nm;
 type CellKey = (i64, i64);
 
 pub struct Grid {
-    cell_size: i64,
+    cell_size: Nm,
     cells: std::collections::HashMap<CellKey, Vec<usize>>,
 }
 
@@ -54,8 +54,8 @@ impl Grid {
         out
     }
 
-    fn cells_of(b: (Nm, Nm, Nm, Nm), cell_size: i64) -> impl Iterator<Item = CellKey> {
-        let (x0, y0, x1, y1) = (b.0.div_euclid(Nm::from_raw_shim(cell_size)), b.1.div_euclid(Nm::from_raw_shim(cell_size)), b.2.div_euclid(Nm::from_raw_shim(cell_size)), b.3.div_euclid(Nm::from_raw_shim(cell_size)));
+    fn cells_of(b: (Nm, Nm, Nm, Nm), cell_size: Nm) -> impl Iterator<Item = CellKey> {
+        let (x0, y0, x1, y1) = (b.0.div_euclid(cell_size), b.1.div_euclid(cell_size), b.2.div_euclid(cell_size), b.3.div_euclid(cell_size));
         (x0..=x1).flat_map(move |cx| (y0..=y1).map(move |cy| (cx, cy)))
     }
 
@@ -63,8 +63,8 @@ impl Grid {
     /// the overall bounding box's diagonal-ish scale divided by
     /// `sqrt(item count)`, clamped to a sane minimum (0.5 mm) so a board
     /// with one giant item and many tiny ones doesn't collapse to one cell.
-    fn pick_cell_size(boxes: &[(Nm, Nm, Nm, Nm)]) -> i64 {
-        const MIN_CELL_NM: i64 = 500_000;
+    fn pick_cell_size(boxes: &[(Nm, Nm, Nm, Nm)]) -> Nm {
+        const MIN_CELL_NM: Nm = Nm::new(500_000);
         if boxes.is_empty() {
             return MIN_CELL_NM;
         }
@@ -75,9 +75,9 @@ impl Grid {
             x1 = x1.max(b.2);
             y1 = y1.max(b.3);
         }
-        let area = ((x1 - x0).max(Nm::new(1)).raw_shim() as f64) * ((y1 - y0).max(Nm::new(1)).raw_shim() as f64);
+        let area = (x1 - x0).max(Nm::new(1)).as_f64() * (y1 - y0).max(Nm::new(1)).as_f64();
         let target = (area / boxes.len().max(1) as f64).sqrt();
-        (target as i64).max(MIN_CELL_NM)
+        Nm::new(target as i64).max(MIN_CELL_NM)
     }
 }
 

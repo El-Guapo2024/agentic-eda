@@ -160,10 +160,10 @@ fn our_counts(design: &Design, model: &ConstraintModel) -> Counts {
         for e in &report.ratsnest {
             println!("  ours unconnected {} {:?} {:?} -> {:?} {:?}", e.net, e.from_item, e.from, e.to_item, e.to);
         }
-        // `EDA_PARITY_CONN_PROBE=<x>,<y>` (micrometres): every item whose box holds the point, with what it touches.
-        if let Some((x, y)) = std::env::var("EDA_PARITY_CONN_PROBE").ok().and_then(|v| v.split_once(',').and_then(|(x, y)| Some((x.trim().parse::<i64>().ok()?, y.trim().parse::<i64>().ok()?)))) {
+        // `EDA_PARITY_CONN_PROBE=<x>,<y>` (nanometres): every item whose box holds the point, with what it touches.
+        if let Some((x, y)) = std::env::var("EDA_PARITY_CONN_PROBE").ok().and_then(|v| v.split_once(',').and_then(|(x, y)| Some((x.trim().parse::<Nm>().ok()?, y.trim().parse::<Nm>().ok()?)))) {
             let g = &report.graph.items;
-            for it in g.iter().filter(|i| i.bbox.0 <= Nm::from_raw_shim(x) && x <= i.bbox.2.raw_shim() && i.bbox.1 <= Nm::from_raw_shim(y) && y <= i.bbox.3.raw_shim()) {
+            for it in g.iter().filter(|i| i.bbox.0 <= x && x <= i.bbox.2 && i.bbox.1 <= y && y <= i.bbox.3) {
                 let touching: Vec<String> = it.connected.iter().map(|&c| format!("{:?}[{}..{}]{}", g[c].item, g[c].layer_lo, g[c].layer_hi, g[c].net)).collect();
                 println!("  probe {:?}[{}..{}]{} touching {:?}", it.item, it.layer_lo, it.layer_hi, it.net, touching);
             }

@@ -23,7 +23,6 @@
 //! to the same outline anyway; skipped for now rather than optimizing the
 //! look of an already-approximate shape.
 
-use eda_model::units::Nm;
 use std::collections::BTreeMap;
 
 use eda_model::ir::Point;
@@ -58,7 +57,7 @@ impl RatsnestEdge {
 }
 
 fn dist(a: Point, b: Point) -> f64 {
-    (((a.x - b.x).raw_shim() as f64).powi(2) + ((a.y - b.y).raw_shim() as f64).powi(2)).sqrt()
+    ((a.x - b.x).as_f64().powi(2) + (a.y - b.y).as_f64().powi(2)).sqrt()
 }
 
 /// The ratsnest for every net: KiCad's `CONNECTIVITY_DATA::updateRatsnest`
@@ -198,7 +197,7 @@ fn triangulate_nodes(nodes: &[NodeInfo]) -> Vec<(usize, usize, f64)> {
         let v0 = (nodes[reps[1]].pos.x - p0.x, nodes[reps[1]].pos.y - p0.y);
         reps[2..].iter().all(|&r| {
             let v1 = (nodes[r].pos.x - p0.x, nodes[r].pos.y - p0.y);
-            v0.0 * v1.1.raw_shim() - v0.1 * v1.0.raw_shim() == Nm::ZERO
+            v0.0.get() * v1.1.get() - v0.1.get() * v1.0.get() == 0
         })
     };
 
@@ -209,7 +208,7 @@ fn triangulate_nodes(nodes: &[NodeInfo]) -> Vec<(usize, usize, f64)> {
             add_edge(&mut out, w[0], w[1]);
         }
     } else {
-        let coords: Vec<f64> = reps.iter().flat_map(|&r| [nodes[r].pos.x.raw_shim() as f64, nodes[r].pos.y.raw_shim() as f64]).collect();
+        let coords: Vec<f64> = reps.iter().flat_map(|&r| [nodes[r].pos.x.as_f64(), nodes[r].pos.y.as_f64()]).collect();
         let tri = Triangulation::new(&coords);
         let t = &tri.triangles;
         for k in (0..t.len()).step_by(3) {

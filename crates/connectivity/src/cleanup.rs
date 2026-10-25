@@ -48,7 +48,6 @@
 //!   merge" is the safe direction for a check that only ever *skips* a
 //!   merge.
 
-use eda_model::units::Nm;
 use std::collections::BTreeSet;
 
 use eda_drc::zone_copper::ZoneCopper;
@@ -399,7 +398,7 @@ fn remove_dangling(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, 
 }
 
 fn collinear(a: Point, b: Point, c: Point) -> bool {
-    let cross = (b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128;
+    let cross = (b.x - a.x).area(c.y - a.y) - (b.y - a.y).area(c.x - a.x);
     cross == 0
 }
 
@@ -467,7 +466,7 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
                 // them pointing back the way it came.
                 let d1 = (shared.x - far_i.x, shared.y - far_i.y);
                 let d2 = (far_j.x - shared.x, far_j.y - shared.y);
-                if d1.0 * d2.0.raw_shim() + d1.1 * d2.1.raw_shim() <= Nm::ZERO {
+                if d1.0.get() * d2.0.get() + d1.1.get() * d2.1.get() <= 0 {
                     continue;
                 }
                 if is_node(shared, &tracks[i].layer, (tracks[i].id.as_str(), tracks[j].id.as_str()), tracks, vias, pads, zones) {
@@ -544,6 +543,7 @@ pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, copper
 mod tests {
     use eda_model::units::mm;
     use super::*;
+    use eda_model::units::Nm;
     use crate::tests_support::{pad_center, two_pad_model};
     use eda_model::ir::{FootprintInstance, Side};
 
