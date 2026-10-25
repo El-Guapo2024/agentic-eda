@@ -543,7 +543,7 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
                 .collect::<Vec<_>>()
         })
         .collect();
-    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power) };
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
     trace_design(design, model, &naming)
 }
 
@@ -557,6 +557,10 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
 pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
     // the sheets of the hierarchy: a screen no sheet shows any more (its sheet was deleted) is not part of the schematic, its pins are on no net
     let entries = eda_model::sheet_list::walk(design);
+    // what a power symbol's `${..}` read: the sheets, their pages and title blocks (only when some power symbol's value has a variable)
+    let has_vars = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.power_symbols.iter()).any(|p| eda_model::text_vars::has_text_vars(&p.net));
+    let hierarchy = has_vars.then(|| PowerValueView::of(design));
+    let design_view = hierarchy.as_ref();
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
     // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
     // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
@@ -593,8 +597,25 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         }
         pin_world
     };
+    // `SCH_PIN::IsGlobalPower`'s legacy rule: an invisible power input of a symbol that is not a power symbol names its net by its pin name
+    let power_pins_of = |sch: &eda_model::ir::SchematicSection| -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        for sym in &sch.symbols {
+            let Some(lib) = resolve_lib_symbol(&sym.lib_id, model) else { continue };
+            if lib.power {
+                continue;
+            }
+            let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
+            for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == sym.unit) && p.hidden && p.electrical_type == "power_in") {
+                // escaped as a net name by the tracer (`GetDefaultNetName`: `EscapeString( pin name, CTX_NETNAME )`, `Driver::new`)
+                out.insert(format!("{}.{}", sym.id, p.number), p.name.clone());
+            }
+        }
+        out
+    };
     let mut contents = design.sheet_contents.take();
     let root_pins = pins_of(&root);
+    let mut power_pins = power_pins_of(&root);
     // (path, file, pins, the first placement of its file); a later placement of a file traces a copy of the screen
     let mut plan: Vec<(Vec<String>, String, std::collections::BTreeMap<String, Point>, bool)> = Vec::new();
     let mut copies: Vec<eda_model::ir::SchematicSection> = Vec::new();
@@ -603,6 +624,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         for e in entries.iter().skip(1) {
             let Some(sec) = contents.as_ref().and_then(|c| c.get(&e.file)) else { continue };
             let pins = pins_under_placement(pins_of(sec), sec, e.path.last().map(String::as_str));
+            power_pins.extend(pins_under_placement(power_pins_of(sec), sec, e.path.last().map(String::as_str)));
             let first = seen.insert(e.file.as_str());
             if !first {
                 copies.push(sec.clone());
@@ -620,15 +642,65 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
                 screens.push(eda_engine::nets::ScreenIn { path, sch, file, pins });
             }
         }
-        eda_engine::nets::trace_nets_with(&mut screens, naming)
+        let resolve = |path: &[String], raw: &str| power_value_under(design_view, path, raw);
+        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), power_value: naming.power_value.or(Some(&resolve)), ..*naming };
+        eda_engine::nets::trace_nets_with(&mut screens, &naming)
     };
     design.schematic = Some(root);
     design.sheet_contents = contents;
     traced
 }
 
+/// The hierarchy as a power symbol's Value reads its text variables: each placement's path with its page, the sheets' fields and the screens' title blocks.
+struct PowerValueView {
+    /// placement path -> (page, the levels from the root down: (Sheetname, Sheetfile) and the title block of the screen it shows)
+    placements: std::collections::BTreeMap<Vec<String>, (String, Vec<eda_model::text_vars::SchSheetLevel>, String)>,
+    page_count: usize,
+}
+
+impl PowerValueView {
+    fn of(design: &eda_model::ir::Design) -> PowerValueView {
+        use eda_model::text_vars::{SchSheetLevel, TitleBlockVars};
+        let tb = |s: Option<&eda_model::ir::SchematicSection>| s.and_then(|s| s.title_block.as_ref()).map(TitleBlockVars::of);
+        let entries = eda_model::sheet_list::walk(design);
+        let mut placements = std::collections::BTreeMap::new();
+        for e in &entries {
+            let mut levels = vec![SchSheetLevel { fields: vec![], title_block: tb(design.schematic.as_ref()) }];
+            let mut here = design.schematic.as_ref();
+            let mut name = String::new();
+            for id in &e.path {
+                let placement = here.and_then(|s| s.sheets.iter().find(|p| &p.id == id));
+                let content = placement.and_then(|p| design.sheet_contents.as_ref().and_then(|c| c.get(&p.file)));
+                name = placement.map(|p| p.name.clone()).unwrap_or_default();
+                levels.push(SchSheetLevel { fields: vec![("Sheetname".into(), name.clone()), ("Sheetfile".into(), placement.map(|p| p.file.clone()).unwrap_or_default())], title_block: tb(content) });
+                here = content;
+            }
+            placements.insert(e.path.clone(), (e.effective_page(), levels, name));
+        }
+        PowerValueView { placements, page_count: entries.len() }
+    }
+}
+
+/// `SCH_SYMBOL::GetValue( &sheet, FOR_NETNAME )` of a power symbol: its Value's text variables resolved for the placement `path` (`SCH_FIELD::GetShownText`, the
+/// sheet's `ResolveTextVar` up the path, `${#}` its page). **Differs**: the project's own variables are not known here (the tracer has no board folder), so a
+/// `${VAR}` of the project is left as it is written.
+fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) -> String {
+    let Some((page, levels, name)) = view.and_then(|v| v.placements.get(path)) else { return raw.to_string() };
+    let sheet = eda_model::text_vars::SchSheet {
+        levels: levels.clone(),
+        page: page.clone(),
+        page_count: view.map_or(1, |v| v.page_count),
+        sheet_name: if path.is_empty() { "Root".to_string() } else { name.clone() },
+        // `PathHumanReadable`: `/` and each sheet's name with a `/`
+        sheet_path: std::iter::once("/".to_string()).chain(levels.iter().skip(1).filter_map(|l| l.fields.first()).map(|(_, n)| format!("{n}/"))).collect(),
+        ..Default::default()
+    };
+    // escaped as a net name by the tracer (`GetDefaultNetName`: `EscapeString( GetValue( &aPath, FOR_NETNAME ), CTX_NETNAME )`, `Driver::new`)
+    sheet.field_shown(levels.len().saturating_sub(1), None, raw, 0)
+}
+
 /// `pins` ("REF.PIN" -> point) of `sec` under the references the placement `placement` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
-fn pins_under_placement(pins: std::collections::BTreeMap<String, Point>, sec: &eda_model::ir::SchematicSection, placement: Option<&str>) -> std::collections::BTreeMap<String, Point> {
+fn pins_under_placement<V>(pins: std::collections::BTreeMap<String, V>, sec: &eda_model::ir::SchematicSection, placement: Option<&str>) -> std::collections::BTreeMap<String, V> {
     let renamed: std::collections::BTreeMap<&str, String> = sec
         .symbols
         .iter()
@@ -1648,7 +1720,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Table(c) => c.describe(),
         Cmd::SchTable(c) => format!("schematic {}", c.describe()),
         Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
-        Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
+        Cmd::DeleteErcExclusion { check, location, .. } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
         Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
         Cmd::SetIntersheetRefs { settings } => format!("schematic intersheet-refs {}", if settings.show { "shown" } else { "hidden" }),
@@ -3718,7 +3790,7 @@ pub(crate) mod tests {
         let lib = eda_model::LibSymbol {
             lib_id: "TEST:R".into(),
             graphics: vec![],
-            pins: vec![eda_model::LibPin { number: "1".into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, length_mm: 2.54, unit: 1 }],
+            pins: vec![eda_model::LibPin { number: "1".into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, length_mm: 2.54, unit: 1, hidden: false }],
             power: false,
             in_bom: true,
             on_board: true,
@@ -4066,10 +4138,10 @@ pub(crate) mod tests {
         );
 
         assert!(
-            step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R404.1".into() }, false, "test").is_err(),
+            step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R404.1".into(), sheet: None }, false, "test").is_err(),
             "nothing excluded under this key"
         );
-        step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), sheet: None }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
         assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), ..Default::default() }]);
@@ -6044,7 +6116,7 @@ pub(crate) mod tests {
     fn setup_pin_swap_board(dir: &Path) {
         let pin = |n: &str| Pin { number: n.into(), name: None, kind: PinKind::Passive };
         let part = |r: &str, pins: &[&str], symbol: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, symbol: Some(symbol.into()), pins: pins.iter().map(|n| pin(n)).collect(), body_nm: None, datasheet: None, edge: None };
-        let lib_pin = |n: &str, y: f64, unit: u32| eda_model::LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit };
+        let lib_pin = |n: &str, y: f64, unit: u32| eda_model::LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit, hidden: false };
         let lib = |id: &str, units: u32, pins: Vec<eda_model::LibPin>| eda_model::LibSymbol {
             lib_id: id.into(),
             graphics: vec![],

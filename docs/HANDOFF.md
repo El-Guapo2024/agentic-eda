@@ -63,6 +63,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-fix-d-sch-connectivity` (`~/work/agentic-eda-router`) | Batch D: schematic connectivity (p12 S1-S4, P25-2, p13-p16 F5 and F6's ERC half), PARITY-sch section 41 | all seven fixed and pushed, slow kicad-cli proofs pass; nets.rs edits small and separate (S1, S2, S3) | main merged after batch A (the new drivers through `Driver::new`, so A's names and escaping) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

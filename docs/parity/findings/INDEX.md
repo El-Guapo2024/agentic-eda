@@ -42,12 +42,14 @@ Opening a studio project in KiCad and running Update PCB (F8) renames every net 
 - p13-p16 P13-1: Fill All, and every refill before DRC or a plot, wipes every teardrop's fill, so Gerbers lose the copper. Causes: `(legacy_teardrops no)`, no pad/via teardrop parameters, and uuid-less rebuilt teardrops.
 
 ### D. Schematic connectivity (`crates/engine/src/nets.rs`, `crates/kicad/src/symbol_lib.rs`, `sch_import.rs`)
-- p12 S1: two buses that share a member name are not joined (`bus_connection`, `issue17771`, 18 of the 20 `video` nets).
-- p12 S2: hidden `power_in` pins of ordinary symbols are not global power.
-- p12 S3: `${#}` is not resolved per placement, which shorts nets together.
-- p12 S4: bus aliases are dropped on import and from `.kicad_pro`.
-- p22-p25 P25-2: pins common to all units (unit 0) are kept only in unit A.
-- p13-p16 F5 (P15): the ERC exclusion key merges a shared sheet's placements.
+- p12 S1: two buses that share a member name are not joined (`bus_connection`, `issue17771`, 18 of the 20 `video` nets). **Fixed on `task-fix-d-sch-connectivity`.**
+- p12 S2: hidden `power_in` pins of ordinary symbols are not global power. **Fixed on `task-fix-d-sch-connectivity`.**
+- p12 S3: `${#}` is not resolved per placement, which shorts nets together. **Fixed on `task-fix-d-sch-connectivity`.**
+- p12 S4: bus aliases are dropped on import and from `.kicad_pro`. **Fixed on `task-fix-d-sch-connectivity`.**
+- p22-p25 P25-2: pins common to all units (unit 0) are kept only in unit A. **Fixed on `task-fix-d-sch-connectivity`.**
+- p13-p16 F5 (P15): the ERC exclusion key merges a shared sheet's placements. **Fixed on `task-fix-d-sch-connectivity`.**
+- p13-p16 F6, the ERC half (a project's own ERC exclusions dropped on import). **Fixed on `task-fix-d-sch-connectivity`** (`eda import-kicad x.kicad_sch`).
+- Found while fixing: the schematic `eda import-kicad x.kicad_sch` derives drew each library symbol in its corner frame at the file's origin, so in kicad-cli its pins were off the file's wires (QA `bus_connection`: every pin unconnected; on main too). **Fixed on `task-fix-d-sch-connectivity`** (`ReplaceSchematic` takes the screens into the design's frame, as Import Sheet does).
 
 ### E. Router (`crates/pns`)
 **Fixed on `task-fix-e-router` (2026-10-24):** all seven highs and the test infrastructure; 18 of the 21 mediums (F1-5 was fixed by the nanometre merge; F2-11 deferred, KiCad's grab radius is the grid size, which the router is not told; F4-2, arcs in the pair code, deferred); 13 of the 19 lows (some in part). The seven 8303b2ad router sessions now replay to the nanometre. Status per finding in `p5-router.md`.

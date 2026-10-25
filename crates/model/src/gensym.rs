@@ -156,7 +156,7 @@ pub fn generate(part: &Part, lib_id: &str) -> LibSymbol {
     let mut pins: Vec<LibPin> = Vec::with_capacity(part.pins.len());
     let mut push = |i: usize, x: f64, y: f64, angle: f64| {
         let p = &part.pins[i];
-        pins.push(LibPin { number: p.number.clone(), name: name(i), electrical_type: electrical_type(p).to_string(), shape: "line".to_string(), at: SPoint::new(x, y), angle_deg: angle, length_mm: PIN_LENGTH_MM, unit: 1 });
+        pins.push(LibPin { number: p.number.clone(), name: name(i), electrical_type: electrical_type(p).to_string(), shape: "line".to_string(), at: SPoint::new(x, y), angle_deg: angle, length_mm: PIN_LENGTH_MM, unit: 1, hidden: false });
     };
     for (k, &i) in sides.left.iter().enumerate() {
         push(i, -hw - PIN_LENGTH_MM, hh - top_band - PIN_PITCH_MM * (k as f64 + 1.0), 0.0);

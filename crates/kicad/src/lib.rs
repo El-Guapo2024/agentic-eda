@@ -1368,9 +1368,11 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             let pin = pin_wearing_place_of(part, swap_map, pin);
             let etype = resolve_pin_electrical_type(pin, resolved);
             let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
+            // an invisible pin stays one: KiCad's legacy global power pins are the invisible power inputs (`SCH_PIN::IsGlobalPower`)
+            let hide = if resolved.and_then(|s| s.pin_by_number(&pin.number)).is_some_and(|rp| rp.hidden) { " (hide yes)" } else { "" };
             writeln!(
                 out,
-                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {}){hide}\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
                 fmt_mm_f(bx),
                 fmt_mm_f(by),
                 fmt_mm_f(angle),

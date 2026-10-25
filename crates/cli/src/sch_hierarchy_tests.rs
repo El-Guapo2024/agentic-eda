@@ -359,6 +359,7 @@ fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
         angle_deg: if left { 0.0 } else { 180.0 },
         length_mm: 2.54,
         unit,
+        hidden: false,
     };
     let sym = LibSymbol {
         lib_id: "Test:Dual3".into(),
@@ -994,8 +995,14 @@ fn annotate_of_a_design_with_a_shared_screen_leaves_no_duplicate() {
 
 /// A KiCad project whose root shows `ldo.kicad_sch` twice, written beside the board as `<file>` (the root) and `ldo.kicad_sch`.
 fn write_twice_placed_tree(dir: &Path, file: &str) {
+    write_twice_placed_tree_with(dir, file, |_| {});
+}
+
+/// [`write_twice_placed_tree`] with the shown screen changed by `edit` first.
+fn write_twice_placed_tree_with(dir: &Path, file: &str, edit: impl Fn(&mut eda_model::ir::SchematicSection)) {
     let (_, model) = example("ldo.yaml");
-    let child = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    let mut child = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    edit(child.schematic.as_mut().unwrap());
     let mut design = child.clone();
     let mut root = eda_model::ir::SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], ..child.schematic.clone().unwrap() };
     root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: 20_000_000 + 60_000_000 * i as i64, y: 20_000_000 }, size: (40_000_000, 20_000_000), pins: vec![], page: String::new() }).collect();
@@ -1059,6 +1066,44 @@ fn slow_an_imported_tree_that_shows_a_screen_twice_is_a_net_per_placement_in_kic
     assert_eq!(ours, kicad, "a net per placement, as kicad-cli reads the derived files");
 }
 
+/// p13-p16 F5: the two placements of a shared screen give one finding each, with one `(check, location)` (the screen has one id per item) and their own
+/// marker sheets. Excluding one placement's leaves the other an error -- in kicad-cli, which matches the marker, and in the studio's report -- and deleting
+/// that exclusion by its sheet leaves nothing excluded.
+#[test]
+fn slow_an_erc_exclusion_on_one_placement_leaves_the_other() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = mcu30_board("slow_twice_erc_exclusion");
+    // the screen without its wires: its pins are not connected, on each placement
+    write_twice_placed_tree_with(&dir, "twice.kicad_sch", |sch| sch.wires.clear());
+    step(&dir, import_cmd("twice.kicad_sch", true, false), false, "test").unwrap();
+    let report = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let vs = report["violations"].as_array().unwrap().clone();
+    let sheet_of = |v: &serde_json::Value| v["marker"]["sheet"].clone();
+    // a finding whose (check, location) another finding of another sheet has
+    let pair = vs
+        .iter()
+        .find_map(|a| {
+            let b = vs.iter().find(|b| b["check"] == a["check"] && b["location"] == a["location"] && !a["location"].as_str().unwrap_or("").is_empty() && a["marker"].is_object() && b["marker"].is_object() && sheet_of(a) != sheet_of(b))?;
+            Some((a.clone(), b.clone()))
+        })
+        .unwrap_or_else(|| panic!("a finding on both placements: {report:#}"));
+    let (a, b) = pair;
+    let (check, location) = (a["check"].as_str().unwrap().to_string(), a["location"].as_str().unwrap().to_string());
+    let marker: eda_model::ir::ErcMarker = serde_json::from_value(a["marker"].clone()).unwrap();
+    step(&dir, Cmd::AddErcExclusion { check: check.clone(), location: location.clone(), comment: "one placement".into(), marker: Some(marker.clone()) }, false, "test").unwrap();
+    let after = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let find = |r: &serde_json::Value, of: &serde_json::Value| r["violations"].as_array().unwrap().iter().find(|v| v["check"] == check && v["location"] == location && sheet_of(v) == sheet_of(of)).cloned().unwrap_or_else(|| panic!("{check} {location} on {} in {r:#}", sheet_of(of)));
+    let (wa, wb) = (find(&after, &a), find(&after, &b));
+    assert_eq!((wa["severity"].as_str(), wa["kicad_matched"].as_bool()), (Some("excluded"), Some(true)), "the one excluded, by kicad-cli too: {wa:#}");
+    assert_eq!(wb["severity"], b["severity"], "the other placement's is what it was: {wb:#}");
+    assert_eq!(wb["kicad_matched"], false);
+    step(&dir, Cmd::DeleteErcExclusion { check: check.clone(), location: location.clone(), sheet: Some(marker.sheet.clone()) }, false, "test").unwrap();
+    let again = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    assert_eq!((find(&again, &a)["severity"].clone(), find(&again, &b)["severity"].clone()), (a["severity"].clone(), b["severity"].clone()));
+}
+
 // ---------------------------------------------------------------------------------------- KiCad's QA projects: the studio's nets against kicad-cli's
 
 /// kicad-cli's netlist of the schematic `root` (`kicad-cli sch export netlist --format kicadxml`): the pins of each net, `REF.PIN` sorted, power
@@ -1091,6 +1136,109 @@ fn kicad_cli_net_groups(root: &Path) -> Vec<Vec<String>> {
     groups
 }
 
+/// `design` traced as the studio traces a board (`board::trace_design`, with the design's bus aliases and the library's power inputs).
+fn traced_as_the_studio(design: &eda_model::ir::Design, model: &ConstraintModel) -> Vec<eda_engine::nets::TracedNet> {
+    crate::board::trace_kicad_names(&mut design.clone(), model)
+}
+
+/// p12 S2: an invisible power input of a symbol that is not a power symbol is a global power pin named by its pin (`SCH_PIN::IsGlobalPower`'s legacy
+/// rule), so U1's and U2's hidden `VCC` pins are on the net of the power symbol `VCC` -- U2's though a wire takes it to R2.2 (`GetDriverPriority` gives
+/// the pin `GLOBAL_POWER_PIN` wired or not, so R2.2 is on `VCC` too). A visible power input (pin 3) is an ordinary pin. kicad-cli's netlist of the
+/// file, when it is there, is the same.
+#[test]
+fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
+    let work = scratch("hidden_power_pins");
+    let root = work.join("hidden_power_pins.kicad_sch");
+    std::fs::write(&root, include_str!("../tests/fixtures/hidden_power_pins.kicad_sch")).unwrap();
+    let (design, model, _) = eda_kicad::import_kicad_sch_tree(&root).unwrap();
+    let nets = traced_as_the_studio(&design, &model);
+    let net = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap_or_else(|| panic!("{pin} in {nets:?}")).clone();
+    assert_eq!((net("U1.2").name.as_str(), net("U1.2").pins.clone()), ("VCC", vec!["R1.1".to_string(), "R2.2".into(), "U1.2".into(), "U2.2".into()]), "{nets:?}");
+    assert_eq!(net("U1.3").pins, vec!["U1.3".to_string()], "a visible power input is an ordinary pin: {nets:?}");
+    // the derived schematic keeps the pin invisible, so kicad-cli reads it as the same global power pin
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-24", title: "t" }, "root.kicad_sch").unwrap();
+    assert_eq!(files[0].1.matches(") (hide yes)\n\t\t\t\t\t(name \"VCC\"").count(), 1, "pin 2 of T:U, written once: {}", files[0].1);
+    if kicad_cli_ready() {
+        let mut ours: Vec<Vec<String>> = nets.iter().map(|n| n.pins.iter().filter(|p| !p.starts_with('#')).cloned().collect::<Vec<_>>()).filter(|p| p.len() >= 2).collect();
+        ours.sort();
+        let kicad: Vec<Vec<String>> = kicad_cli_net_groups(&root).into_iter().filter(|g| g.len() >= 2).collect();
+        assert_eq!(ours, kicad, "kicad-cli's netlist of the file");
+    }
+}
+
+/// p13-p16 F6, the ERC half: a KiCad project's own ERC exclusions come in with `eda import-kicad`, named as the derived schematic names its items, and
+/// kicad-cli still waives the violation on the studio's run. The record is the one KiCad 10 writes for kicad-cli's own marker of U1's unconnected pin 1 (and
+/// kicad-cli reads it as excluded on the original project first).
+#[test]
+fn slow_a_kicad_projects_erc_exclusions_come_in_with_the_schematic() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let work = scratch("project_erc_exclusions");
+    let root = work.join("p.kicad_sch");
+    std::fs::write(&root, include_str!("../tests/fixtures/hidden_power_pins.kicad_sch")).unwrap();
+    let erc = |root: &Path| -> serde_json::Value {
+        let out = root.with_extension("erc.json");
+        let _ = std::fs::remove_file(&out);
+        std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&out).arg(root).output().unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap()
+    };
+    let report = erc(&root);
+    let sheet = report["sheets"][0]["uuid_path"].as_str().unwrap().to_string();
+    let v = report["sheets"][0]["violations"].as_array().unwrap().iter().find(|v| v["type"] == "pin_not_connected" && v["items"][0]["description"].as_str().unwrap_or("").contains("U1")).cloned().expect("U1's pin 1 is not connected");
+    let nm = |mm: &serde_json::Value| ((mm.as_f64().unwrap() * 1e6).round() as i64).to_string();
+    let path = json!({ "path": sheet.split('/').filter(|u| !u.is_empty()).map(|u| json!({ "value": u })).collect::<Vec<_>>() });
+    let record = json!({ "marker": { "error_type": "ERCET_PIN_NOT_CONNECTED", "position": { "x_nm": nm(&v["items"][0]["pos"]["x"]), "y_nm": nm(&v["items"][0]["pos"]["y"]) }, "items": [{ "value": v["items"][0]["uuid"] }], "sheet_specific_path": path, "main_item_sheet_path": path }, "comment": "left open" });
+    std::fs::write(root.with_extension("kicad_pro"), json!({ "meta": { "filename": "p.kicad_pro", "version": 3 }, "erc": { "meta": { "version": 1 }, "erc_exclusions": [record] } }).to_string()).unwrap();
+    let again = erc(&root);
+    let excluded = |r: &serde_json::Value| -> Vec<String> { r["sheets"].as_array().unwrap().iter().flat_map(|s| s["violations"].as_array().unwrap().iter()).filter(|v| v["excluded"] == true).map(|v| format!("{} {}", v["type"].as_str().unwrap(), v["comment"].as_str().unwrap_or(""))).collect() };
+    assert_eq!(excluded(&again), vec!["pin_not_connected left open".to_string()], "the record is KiCad's: kicad-cli waives it on the original");
+
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let waived = &design.schematic.as_ref().unwrap().erc_exclusions;
+    assert_eq!(waived.iter().map(|e| (e.check.as_str(), e.location.as_str(), e.comment.as_str())).collect::<Vec<_>>(), [("pin_not_connected", "U1.1", "left open")]);
+    let studio = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let u1 = studio["violations"].as_array().unwrap().iter().find(|v| v["check"] == "pin_not_connected" && v["location"] == "U1.1").cloned().unwrap_or_else(|| panic!("{studio:#}"));
+    assert_eq!((u1["severity"].as_str(), u1["comment"].as_str()), (Some("excluded"), Some("left open")), "{u1:#}");
+    // the marker is the derived schematic's: its item and its sheet
+    let kept = waived[0].marker.clone().unwrap();
+    assert_eq!((json!(kept.items), json!(kept.sheet), json!(kept.main_sheet)), (u1["marker"]["items"].clone(), u1["marker"]["sheet"].clone(), u1["marker"]["main_sheet"].clone()), "{u1:#}");
+    // and its position the file's, which is the derived one: kicad-cli matches the record on the studio's run
+    assert_eq!((json!(kept.at_nm), u1["kicad_matched"].clone()), (u1["marker"]["at_nm"].clone(), json!(true)), "{u1:#}");
+}
+
+/// `eda import-kicad` of a KiCad project's schematic (QA `bus_connection`, three sheets and bus aliases) derives a schematic kicad-cli reads as it reads the
+/// original: no unconnected pin the original has not, and the same nets. (The screens were kept in KiCad's frame, a symbol at its library origin, which the
+/// writer bakes against the corner of its box: every pin was off the file's wires.)
+#[test]
+fn slow_an_imported_kicad_schematic_derives_one_kicad_cli_reads_as_the_original() {
+    if !kicad_cli_ready() || std::env::var_os("KICAD_SRC_DIR").is_none() {
+        return;
+    }
+    let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from).unwrap().join("qa/data/eeschema/netlists/bus_connection");
+    let work = scratch("import_bus_connection");
+    for e in std::fs::read_dir(&src).unwrap().flatten().filter(|e| e.path().is_file()) {
+        std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
+    }
+    let root = work.join("bus_connection.kicad_sch");
+    let unconnected = |report: &serde_json::Value| -> std::collections::BTreeSet<String> {
+        report["sheets"].as_array().unwrap().iter().flat_map(|s| s["violations"].as_array().unwrap().iter()).filter(|v| v["type"] == "pin_not_connected").filter_map(|v| v["items"][0]["description"].as_str().map(String::from)).collect()
+    };
+    let out = work.join("erc.json");
+    std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&out).arg(&root).output().unwrap();
+    let original = unconnected(&serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap());
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let derived_report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("erc.json")).unwrap()).unwrap();
+    let derived = unconnected(&derived_report);
+    assert!(derived.is_subset(&original), "unconnected only in the derived file: {:?}", derived.difference(&original).collect::<Vec<_>>());
+    let kicad_nets = |r: &Path| -> Vec<Vec<String>> { kicad_cli_net_groups(r).into_iter().filter(|g| g.len() >= 2).collect() };
+    assert_eq!(kicad_nets(&dir.join(".kicad").join("board.kicad_sch")), kicad_nets(&root), "kicad-cli's nets of the derived file are the original's");
+}
+
 /// The QA project `rel` read by our reader as it is (no Import Sheet: the symbols at their library origin) and traced as the studio traces a board
 /// (`board::trace_design`), beside kicad-cli's netlist of KiCad's own file: (ours, KiCad's), nets of two pins or more.
 fn qa_traced(rel: &str) -> Option<(Vec<Vec<String>>, Vec<Vec<String>>)> {
@@ -1103,12 +1251,7 @@ fn qa_traced(rel: &str) -> Option<(Vec<Vec<String>>, Vec<Vec<String>>)> {
     let kicad = kicad_cli_net_groups(&root);
     let (mut design, mut model, _) = eda_kicad::import_kicad_sch_tree(&root).ok()?;
     crate::board::reconcile_schematic(&mut design, &mut model, None);
-    let pin_names = std::collections::BTreeMap::new();
-    let aliases = design.bus_aliases.clone();
-    let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
-    let global_power = |lib_id: &str| -> Option<bool> { model.symbol_of(lib_id).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
-    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
-    let mut ours: Vec<Vec<String>> = crate::board::trace_design(&mut design.clone(), &model, &naming).into_iter().map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).collect::<Vec<_>>()).filter(|p: &Vec<String>| p.len() >= 2).collect();
+    let mut ours: Vec<Vec<String>> = traced_as_the_studio(&design, &model).into_iter().map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).collect::<Vec<_>>()).filter(|p: &Vec<String>| p.len() >= 2).collect();
     for g in ours.iter_mut() {
         g.sort();
     }
@@ -1137,16 +1280,16 @@ const QA_TRACED_ALIKE: &[&str] = &[
     "issue18092/issue18092.kicad_sch",
     "issue13112.kicad_sch",
     "issue12814.kicad_sch",
+    "ERC_dynamic_power_symbol_test.kicad_sch",
+    "netlists/bus_connection/bus_connection.kicad_sch",
+    "issue17771/issue1771.kicad_sch",
+    "netlists/video/video.kicad_sch",
 ];
 
 /// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
 const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
     ("issue10926_1.kicad_sch", "a screen shown twice inside a screen shown twice: one override per immediate parent"),
     ("netlists/hierarchy_aliases/hierarchy_aliases.kicad_sch", "a screen shown twice inside a screen shown twice"),
-    ("netlists/bus_connection/bus_connection.kicad_sch", "two buses on one sheet joined only by a member name they share"),
-    ("issue17771/issue1771.kicad_sch", "two buses on one sheet joined only by a member name they share"),
-    ("ERC_dynamic_power_symbol_test.kicad_sch", "a power symbol's ${#} is not resolved per placement"),
-    ("netlists/video/video.kicad_sch", "not looked into"),
 ];
 
 #[test]

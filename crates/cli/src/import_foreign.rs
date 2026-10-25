@@ -181,6 +181,7 @@ pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
     let mut screens: BTreeMap<String, SchematicSection> = BTreeMap::new();
     let mut lib_symbols: Vec<eda_model::ir::LibrarySymbol> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+    let mut bus_aliases: Vec<eda_model::ir::BusAlias> = Vec::new();
     // The screens each file places by their own name: a project sheet with one of these names is one of them, not a top-level sheet of its own.
     let inner: Vec<String> = parts.iter().flat_map(|(_, f)| f.screens.keys().map(|k| k.trim_end_matches(".kicad_sch").to_ascii_lowercase())).collect();
     let (mut x, mut y, mut page) = (1_i64, 1_i64, 2);
@@ -225,9 +226,14 @@ pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
             }
         }
         notes.extend(file.notes);
+        for alias in file.bus_aliases {
+            if !bus_aliases.iter().any(|a| a.name == alias.name) {
+                bus_aliases.push(alias);
+            }
+        }
     }
     root.assign_missing_ids();
-    SheetFile { root, screens, lib_symbols, notes }
+    SheetFile { root, screens, lib_symbols, bus_aliases, notes }
 }
 
 /// A name as a file name stem: the characters every file system takes.
@@ -357,7 +363,7 @@ mod tests {
             root.sheets.push(SheetInstance { id: String::new(), name: "Inner".into(), file: inner.into(), at: Point { x: 1, y: 1 }, size: (1, 1), pins: vec![], page: String::new() });
             screens.insert(inner.to_string(), SchematicSection { imported_from_kicad: true, ..Default::default() });
         }
-        SheetFile { root, screens, lib_symbols: vec![], notes: vec![] }
+        SheetFile { root, screens, lib_symbols: vec![], notes: vec![], ..Default::default() }
     }
 
     #[test]

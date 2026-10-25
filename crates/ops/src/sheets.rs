@@ -379,6 +379,7 @@ mod tests {
             angle_deg: if left { 0.0 } else { 180.0 },
             length_mm: 2.54,
             unit,
+            hidden: false,
         };
         let sym = LibSymbol {
             lib_id: "Test:Dual3".into(),

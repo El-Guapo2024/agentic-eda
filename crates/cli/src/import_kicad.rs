@@ -342,6 +342,9 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
         // A fresh board has no history: what the import did is the board, not an edit of it.
         let _ = std::fs::remove_dir_all(out.join(".history"));
         eprintln!("import-kicad: schematic: {summary}");
+        if args.input.to_ascii_lowercase().ends_with(".kicad_sch") {
+            keep_project_erc_exclusions(out, Path::new(&args.input))?;
+        }
     }
 
     if let Some(report) = &args.report {
@@ -359,6 +362,31 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     }
     eprintln!("wrote {}", out.join("design.json").display());
     Ok(())
+}
+
+/// The project's own ERC exclusions (`erc.erc_exclusions` of the `.kicad_pro` beside `root`, `ERC_SETTINGS::m_ErcExclusions`), their items and sheets named as the
+/// derived schematic names them, so kicad-cli still waives them (`eda_kicad::erc_exclusions::from_project`).
+fn keep_project_erc_exclusions(out: &Path, root: &Path) -> Result<(), Vec<CheckResult>> {
+    let Ok(pro_text) = std::fs::read_to_string(root.with_extension("kicad_pro")) else { return Ok(()) };
+    if eda_kicad::erc_exclusions::read_project(&pro_text).is_empty() {
+        return Ok(());
+    }
+    // the ids the import gave the file's items (the same reading `load_sheet_file` made), and the file's root sheet
+    let (_, _, notes) = eda_kicad::import_kicad_sch_tree_with(root, &eda_kicad::ImportOptions { unique_references: true })?;
+    let uuid_of = eda_kicad::erc_exclusions::file_uuid;
+    let file_root = std::fs::read_to_string(root).ok().and_then(|t| uuid_of(&t)).unwrap_or_default();
+    let (_, mut design, model) = crate::board::load(out)?;
+    let (files, derived) = eda_kicad::export_kicad_sch_tree_mapped(&design, &model, &eda_kicad::ExportMeta { date: "", title: "" }, "root.kicad_sch")?;
+    let derived_root = files.iter().find(|(f, _)| f == "root.kicad_sch").and_then(|(_, t)| uuid_of(t)).unwrap_or_default();
+    let waived = eda_kicad::erc_exclusions::from_project(&pro_text, &notes.item_ids, &derived, &file_root, &derived_root);
+    if waived.is_empty() {
+        return Ok(());
+    }
+    eprintln!("  {} ERC exclusion(s) of the project kept", waived.len());
+    if let Some(sch) = design.schematic.as_mut() {
+        sch.erc_exclusions = waived;
+    }
+    crate::board::save(out, &design)
 }
 
 /// A board with an outline and nothing on it, for a schematic that has no board: the 100 by 80 mm a new project starts with.

@@ -5,7 +5,7 @@
 //! `eda_ops::Cmd::ImportSheet` carries one, and the server fills it in from the path the user chose, so the verb itself reads no file
 //! (a command has to replay and undo the same anywhere).
 
-use crate::ir::{LibrarySymbol, SchematicSection};
+use crate::ir::{BusAlias, LibrarySymbol, SchematicSection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -20,6 +20,10 @@ pub struct SheetFile {
     /// The definitions of the library symbols the file's symbols name, from the `(lib_symbols ...)` of each file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lib_symbols: Vec<LibrarySymbol>,
+    /// The bus aliases the file's buses are written with: the `(bus_alias ..)` of every file of the tree, and those of the project beside it
+    /// (`<root>.kicad_pro`'s `schematic.bus_aliases`, where KiCad 10 keeps them). Without them a bus named by an alias has no members.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bus_aliases: Vec<BusAlias>,
     /// What the reader could not carry across, one line each ("2 symbols had no library definition ... and were left out").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,

@@ -432,17 +432,33 @@ export function patchDrcSeverity(report: DrcReport, check: string, severity: Rul
 
 // ------------------------------------------------------------------------------------------------------------ ERC exclusions
 
-/** The `(check, location)` key `add_erc_exclusion` takes for a finding; null for one with nothing to key on. */
-export function ercKey(v: Pick<ErcViolation, "check" | "location">): { check: string; location: string } | null {
-  return v.location ? { check: v.check, location: v.location } : null;
+/** An ERC exclusion's key: `(check, location)`, and the sheet path of the finding's marker when it has one (`ErcMarker.sheet`). */
+export type ErcKey = { check: string; location: string; sheet?: string[] };
+
+/**
+ * The key `add_erc_exclusion` takes for a finding; null for one with nothing to key on. A screen two sheets show has one id per item, so its placements'
+ * findings share `(check, location)`: the marker's sheet (`SetSheetSpecificPath`) tells them apart.
+ */
+export function ercKey(v: Pick<ErcViolation, "check" | "location"> & { marker?: ErcViolation["marker"] }): ErcKey | null {
+  if (!v.location) return null;
+  const sheet = v.marker?.sheet;
+  return sheet && sheet.length > 0 ? { check: v.check, location: v.location, sheet } : { check: v.check, location: v.location };
+}
+
+/** Whether a finding is the one `k` keys: its check and location, and its marker's sheet when the key has one. */
+function ercKeyHits(k: ErcKey, v: ErcViolation): boolean {
+  if (v.location === null || k.check !== v.check || k.location !== v.location) return false;
+  if (!k.sheet) return true;
+  const sheet = v.marker?.sheet ?? [];
+  return sheet.length === 0 || (sheet.length === k.sheet.length && sheet.every((u, i) => u === k.sheet![i]));
 }
 
 /**
  * The report after waiving (or restoring) findings, without running kicad-cli again: [`patchDrcExcluded`]'s ERC twin. `comment` is the exclusion's
  * (`SCH_MARKER::GetComment`). The counts leave the waived ones out. Whether kicad-cli matched the new exclusion is not known until the next run.
  */
-export function patchErcExcluded(report: ErcReport, keys: ReadonlyArray<{ check: string; location: string }>, excluded: boolean, comment = ""): ErcReport {
-  const hit = (v: ErcViolation) => v.location !== null && keys.some((k) => k.check === v.check && k.location === v.location);
+export function patchErcExcluded(report: ErcReport, keys: ReadonlyArray<ErcKey>, excluded: boolean, comment = ""): ErcReport {
+  const hit = (v: ErcViolation) => keys.some((k) => ercKeyHits(k, v));
   const violations = report.violations.map((v) => {
     if (!hit(v)) return v;
     const { kicad_matched: _unknown, ...rest } = v;

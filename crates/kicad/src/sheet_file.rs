@@ -49,7 +49,7 @@ pub fn load_sheet_file(path: &Path) -> Result<SheetFile, Vec<CheckResult>> {
     for m in missing {
         notes.push(m);
     }
-    Ok(SheetFile { root, screens, lib_symbols, notes })
+    Ok(SheetFile { root, screens, lib_symbols, bus_aliases: design.bus_aliases, notes })
 }
 
 /// The files the sheets of a schematic text place, as the text names them (the `Sheetfile` of each `(sheet ..)`: a path relative to the folder of the file that places them, in the
@@ -134,6 +134,37 @@ mod tests {
         assert!(file.library_nicknames().contains(&"Device".to_string()));
         assert!(file.root.imported_from_kicad && file.screens.values().all(|s| s.imported_from_kicad), "the screens are in KiCad's frame until the design takes them in");
         assert!(file.notes.is_empty(), "{:?}", file.notes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// p12 S4 (a): the bus aliases come with the file (`eda import-kicad`, Import Sheet and File > Import > Non-KiCad Schematic read through it): KiCad's
+    /// QA `bus_connection` declares three in its root, and they are moved to its `.kicad_pro` as KiCad 10 keeps them, they still come.
+    #[test]
+    fn a_sheet_files_bus_aliases_come_with_it() {
+        let data = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
+        let src = data.join("eeschema/netlists/bus_connection");
+        if !src.exists() {
+            eprintln!("QA corpus not found at {}; skipping", src.display());
+            return;
+        }
+        let names = |f: &SheetFile| -> Vec<String> {
+            let mut n: Vec<String> = f.bus_aliases.iter().map(|a| format!("{}={}", a.name, a.members.join(" "))).collect();
+            n.sort();
+            n
+        };
+        let want = vec!["a_xyz=x y z".to_string(), "b_x=x".into(), "b_yz=y z".into()];
+        assert_eq!(names(&load_sheet_file(&src.join("bus_connection.kicad_sch")).unwrap()), want);
+        // the same aliases in the project instead of the file
+        let dir = std::env::temp_dir().join(format!("eda_kicad_sheet_file_{}_aliases", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for e in std::fs::read_dir(&src).unwrap().flatten() {
+            let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+            let kept: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("(bus_alias")).collect();
+            std::fs::write(dir.join(e.file_name()), kept.join("\n")).unwrap();
+        }
+        std::fs::write(dir.join("bus_connection.kicad_pro"), r#"{ "schematic": { "bus_aliases": { "a_xyz": ["x", "y", "z"], "b_x": ["x"], "b_yz": ["y", "z"] } } }"#).unwrap();
+        assert_eq!(names(&load_sheet_file(&dir.join("bus_connection.kicad_sch")).unwrap()), want);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

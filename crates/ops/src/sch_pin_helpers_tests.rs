@@ -32,7 +32,7 @@ fn p(x: Nm, y: Nm) -> Point {
 }
 
 fn lib_pin(number: &str, name: &str, etype: &str, x: f64, y: f64, angle: f64) -> LibPin {
-    LibPin { number: number.into(), name: name.into(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: angle, length_mm: 2.54, unit: 1 }
+    LibPin { number: number.into(), name: name.into(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg: angle, length_mm: 2.54, unit: 1, hidden: false }
 }
 
 fn lib(lib_id: &str, pins: Vec<LibPin>) -> LibSymbol {
