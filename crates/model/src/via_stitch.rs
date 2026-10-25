@@ -68,10 +68,10 @@ impl StitchMode {
 }
 
 fn is_zero_nm(v: &Nm) -> bool {
-    *v == 0
+    *v == Nm::ZERO
 }
 fn is_zero_point(p: &Point) -> bool {
-    p.x == 0 && p.y == 0
+    p.x == Nm::ZERO && p.y == Nm::ZERO
 }
 fn is_zero_u32(v: &u32) -> bool {
     *v == 0
@@ -96,7 +96,7 @@ pub struct ViaTemplate {
 
 impl Default for ViaTemplate {
     fn default() -> Self {
-        ViaTemplate { size_nm: 0, drill_nm: 0, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() }
+        ViaTemplate { size_nm: Nm::ZERO, drill_nm: Nm::ZERO, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() }
     }
 }
 
@@ -169,12 +169,12 @@ impl ViaStitch {
             layer: d_layer(),
             name: d_name(),
             outline,
-            pitch_nm: 0,
+            pitch_nm: Nm::ZERO,
             layout: StitchLayout::Plain,
             mode: StitchMode::Stitch,
             seed: 0,
-            origin_offset: Point { x: 0, y: 0 },
-            origin: Point { x: 0, y: 0 },
+            origin_offset: Point { x: Nm::ZERO, y: Nm::ZERO },
+            origin: Point { x: Nm::ZERO, y: Nm::ZERO },
             net: String::new(),
             guarded_net: String::new(),
             excluded_cells: Vec::new(),
@@ -196,7 +196,7 @@ impl ViaStitch {
 
     /// The outline's box `[x0, y0, x1, y1]` (`GetBoundingBox`: `m_outline.BBox()`).
     pub fn bounds(&self) -> [Nm; 4] {
-        let mut b = [i64::MAX, i64::MAX, i64::MIN, i64::MIN];
+        let mut b = [Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN];
         for p in &self.outline {
             b = [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)];
         }
@@ -206,23 +206,23 @@ impl ViaStitch {
 
 /// `defaultViaSize`: the board's current via size, 0.6 mm when it has none.
 pub fn default_via_size(current: Nm) -> Nm {
-    if current > 0 {
+    if current > Nm::ZERO {
         current
     } else {
-        600_000
+        Nm::new(600_000)
     }
 }
 
 /// `defaultViaDrill`: the board's current via drill, 0.3 mm when it has none.
 pub fn default_via_drill(current: Nm) -> Nm {
-    if current > 0 {
+    if current > Nm::ZERO {
         current
     } else {
-        300_000
+        Nm::new(300_000)
     }
 }
 
 /// `defaultPitch`: twice the via, and at least 2 mm.
 pub fn default_pitch(via_size: Nm) -> Nm {
-    (via_size * 2).max(2_000_000)
+    (via_size * 2).max(Nm::new(2_000_000))
 }

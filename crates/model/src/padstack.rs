@@ -212,8 +212,8 @@ impl PadLayerShape {
         if self.shape != PadShape::Trapezoid {
             self.trapezoid_delta = None;
         }
-        self.trapezoid_delta = self.trapezoid_delta.filter(|d| *d != (0, 0));
-        self.offset = self.offset.filter(|o| *o != (0, 0));
+        self.trapezoid_delta = self.trapezoid_delta.filter(|d| *d != (Nm::ZERO, Nm::ZERO));
+        self.offset = self.offset.filter(|o| *o != (Nm::ZERO, Nm::ZERO));
         if self.shape == PadShape::Custom {
             if self.custom.is_none() {
                 self.custom = Some(PadCustom::default());
@@ -440,15 +440,15 @@ mod tests {
     }
 
     fn pad(kind: PadKind) -> Pad {
-        Pad { number: "1".into(), at: (0, 0), size: (1_600_000, 1_600_000), shape: PadShape::Circle, kind, drill: Some(800_000), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
+        Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::new(1_600_000), Nm::new(1_600_000)), shape: PadShape::Circle, kind, drill: Some(Nm::new(800_000)), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
     }
 
     fn oval() -> PadLayerShape {
-        PadLayerShape::plain(PadShape::Oval, (2_000_000, 1_000_000))
+        PadLayerShape::plain(PadShape::Oval, (Nm::new(2_000_000), Nm::new(1_000_000)))
     }
 
     fn rect() -> PadLayerShape {
-        PadLayerShape::plain(PadShape::Rect, (1_200_000, 1_200_000))
+        PadLayerShape::plain(PadShape::Rect, (Nm::new(1_200_000), Nm::new(1_200_000)))
     }
 
     fn groups(p: &Pad, side: Side, n: usize) -> Vec<(Vec<String>, PadShape)> {
@@ -553,16 +553,16 @@ mod tests {
     #[test]
     fn a_layer_shape_lays_on_a_pad_and_normalizes_as_a_pad_edit_does() {
         let p = pad(PadKind::ThroughHole);
-        let mut s = PadLayerShape::plain(PadShape::RoundRect, (2_000_000, 1_000_000));
+        let mut s = PadLayerShape::plain(PadShape::RoundRect, (Nm::new(2_000_000), Nm::new(1_000_000)));
         s.normalize();
         assert_eq!(s.roundrect_ratio, Some(0.25));
         let laid = s.lay_on(&p);
-        assert_eq!((laid.shape, laid.size, laid.has_stack()), (PadShape::RoundRect, (2_000_000, 1_000_000), false));
-        let mut c = PadLayerShape::plain(PadShape::Circle, (1_000_000, 600_000));
+        assert_eq!((laid.shape, laid.size, laid.has_stack()), (PadShape::RoundRect, (Nm::new(2_000_000), Nm::new(1_000_000)), false));
+        let mut c = PadLayerShape::plain(PadShape::Circle, (Nm::new(1_000_000), Nm::new(600_000)));
         c.normalize();
-        assert_eq!(c.size, (1_000_000, 1_000_000), "a circle is square");
-        let mut t = PadLayerShape::plain(PadShape::Rect, (1_000_000, 600_000));
-        t.trapezoid_delta = Some((0, 100_000));
+        assert_eq!(c.size, (Nm::new(1_000_000), Nm::new(1_000_000)), "a circle is square");
+        let mut t = PadLayerShape::plain(PadShape::Rect, (Nm::new(1_000_000), Nm::new(600_000)));
+        t.trapezoid_delta = Some((Nm::ZERO, Nm::new(100_000)));
         t.chamfer_ratio = Some(0.3);
         t.normalize();
         assert_eq!((t.trapezoid_delta, t.chamfer_ratio), (None, None));

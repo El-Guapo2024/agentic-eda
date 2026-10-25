@@ -6,18 +6,18 @@ use eda_clipper2::{Point64, PI};
 use eda_shape_poly_set::{LineChain, ShapePolySet};
 
 fn p64(p: eda_model::ir::Point) -> Point64 {
-    Point64::new(p.x, p.y)
+    Point64::new(p.x.raw_shim(), p.y.raw_shim())
 }
 
 /// Every outline the shape is made of: the shape's own for a simple one, a stadium per segment of a stroke, the outlines of each part of a compound. Their union is the shape.
 pub fn exact_polygons(shape: &Shape, max_error: i64) -> Vec<LineChain> {
     match shape {
-        Shape::Strokes { segs, r } => segs.iter().map(|s| stadium_polygon(p64(s.a), p64(s.b), *r, max_error)).collect(),
+        Shape::Strokes { segs, r } => segs.iter().map(|s| stadium_polygon(p64(s.a), p64(s.b), (*r).raw_shim(), max_error)).collect(),
         Shape::Compound { parts } => parts.iter().flat_map(|p| exact_polygons(p, max_error)).collect(),
-        Shape::Circle { c, r } => vec![circle_polygon(p64(*c), *r, max_error)],
-        Shape::Rect { x0, y0, x1, y1 } => vec![vec![Point64::new(*x0, *y0), Point64::new(*x1, *y0), Point64::new(*x1, *y1), Point64::new(*x0, *y1)]],
-        Shape::RoundRect { x0, y0, x1, y1, r } => vec![round_rect_polygon(*x0, *y0, *x1, *y1, *r, max_error)],
-        Shape::Stadium { a, b, r } => vec![stadium_polygon(p64(*a), p64(*b), *r, max_error)],
+        Shape::Circle { c, r } => vec![circle_polygon(p64(*c), (*r).raw_shim(), max_error)],
+        Shape::Rect { x0, y0, x1, y1 } => vec![vec![Point64::new((*x0).raw_shim(), (*y0).raw_shim()), Point64::new((*x1).raw_shim(), (*y0).raw_shim()), Point64::new((*x1).raw_shim(), (*y1).raw_shim()), Point64::new((*x0).raw_shim(), (*y1).raw_shim())]],
+        Shape::RoundRect { x0, y0, x1, y1, r } => vec![round_rect_polygon((*x0).raw_shim(), (*y0).raw_shim(), (*x1).raw_shim(), (*y1).raw_shim(), (*r).raw_shim(), max_error)],
+        Shape::Stadium { a, b, r } => vec![stadium_polygon(p64(*a), p64(*b), (*r).raw_shim(), max_error)],
         Shape::Polygon { pts } if pts.is_empty() => Vec::new(),
         Shape::Polygon { pts } => vec![pts.iter().map(|&p| p64(p)).collect()],
     }

@@ -4,6 +4,7 @@
 //! group needs no external tool. The last ones (`EDA_SLOW_TESTS=1`) ask kicad-cli: the silkscreen and fab layers it plots are the same before
 //! and after a round trip -- on one of KiCad's own QA boards and on a board this studio made from one of its examples.
 
+use eda_model::units::Nm;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -88,8 +89,8 @@ fn a_boards_footprint_graphics_are_part_of_its_footprint_and_come_back_out() {
         Shape::Segment { start, end, .. } => (start.x, start.y, end.x, end.y),
         other => panic!("{other:?}"),
     };
-    assert_eq!(line(top), (-1_000_000, -2_000_000, 1_000_000, -2_000_000));
-    assert_eq!(line(bottom), (-1_000_000, 2_000_000, 1_000_000, 2_000_000));
+    assert_eq!(line(top), (Nm::from_raw_shim(-1_000_000), Nm::from_raw_shim(-2_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(-2_000_000)));
+    assert_eq!(line(bottom), (Nm::from_raw_shim(-1_000_000), Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000)));
     assert_eq!((top.texts[0].layout.at.x, top.texts[0].layout.at.y), (bottom.texts[0].layout.at.x, -bottom.texts[0].layout.at.y));
 
     let text = export(&design, &model);
@@ -191,7 +192,7 @@ fn a_library_footprint_placed_by_the_studio_carries_its_silkscreen_to_the_board(
     )
     .expect("parses");
     assert_eq!((fp.art.shapes.len(), fp.art.texts.len()), (2, 1), "the courtyard is not art: {:#?}", fp.art);
-    assert_eq!(fp.art.bbox_on("F.Fab"), Some((-850_000, -450_000, 850_000, 450_000)), "the fab body, the stroke included");
+    assert_eq!(fp.art.bbox_on("F.Fab"), Some((Nm::from_raw_shim(-850_000), Nm::from_raw_shim(-450_000), Nm::from_raw_shim(850_000), Nm::from_raw_shim(450_000))), "the fab body, the stroke included");
 }
 
 fn repo_root() -> PathBuf {

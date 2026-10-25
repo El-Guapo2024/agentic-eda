@@ -1,5 +1,6 @@
 //! Carried placements (`crates/cli/src/carry.rs`): Duplicate and Paste and the drop that ends them are one undo step, and a cancelled carry leaves nothing.
 
+use eda_model::units::Nm;
 use super::super::tests::{scratch, setup};
 use super::super::{load, redo, step, step_carrying, undo, Strictness};
 use super::{cancel, commit, is_carrying, Carry};
@@ -28,7 +29,7 @@ fn duplicate_u1() -> Cmd {
 }
 
 fn add_text(dir: &Path) {
-    let text = eda_model::ir::Text { id: String::new(), content: "T".into(), at: Point { x: 1_000_000, y: 1_000_000 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: eda_model::ir::TextJustify::Center, mirror: false };
+    let text = eda_model::ir::Text { id: String::new(), content: "T".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: eda_model::ir::TextJustify::Center, mirror: false };
     step(dir, Cmd::AddText { text }, false, "test").unwrap();
 }
 
@@ -44,16 +45,16 @@ fn a_duplicate_and_the_drop_that_ends_it_are_one_undo_step() {
     assert!(is_carrying(&dir));
     assert_eq!(footprints(&dir).len(), 3, "the copy is on the board while it is carried");
 
-    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 3_000_000, dy: 4_000_000 }).unwrap();
+    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: Nm::from_raw_shim(3_000_000), dy: Nm::from_raw_shim(4_000_000) }).unwrap();
     assert!(!is_carrying(&dir), "the drop ends the carry");
-    assert_eq!(footprints(&dir).iter().find(|(id, _)| id == "U3").unwrap().1, Point { x: 8_000_000, y: 9_000_000 }, "the copy is where it was dropped");
+    assert_eq!(footprints(&dir).iter().find(|(id, _)| id == "U3").unwrap().1, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(9_000_000) }, "the copy is where it was dropped");
 
     undo_pcb(&dir).unwrap();
     assert_eq!(footprints(&dir).len(), 2, "one undo takes the copy and its move away together");
     assert!(undo_pcb(&dir).is_err(), "and that was the only step: nothing is left to undo");
 
     redo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    assert_eq!(footprints(&dir).iter().find(|(id, _)| id == "U3").unwrap().1, Point { x: 8_000_000, y: 9_000_000 }, "one redo brings both back");
+    assert_eq!(footprints(&dir).iter().find(|(id, _)| id == "U3").unwrap().1, Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(9_000_000) }, "one redo brings both back");
     assert!(redo(&dir, "test", Some(Domain::Pcb)).is_err());
 }
 
@@ -126,10 +127,10 @@ fn a_drop_that_changes_nothing_ends_the_carry_and_the_duplicate_stands_as_one_st
 fn a_drop_with_nothing_carried_is_an_ordinary_step() {
     let dir = scratch("carry_drop_alone");
     setup(&dir);
-    drop_with(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: 1_000_000, dy: 0 }).unwrap();
-    assert_eq!(footprints(&dir)[0].1, Point { x: 6_000_000, y: 5_000_000 });
+    drop_with(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO }).unwrap();
+    assert_eq!(footprints(&dir)[0].1, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(5_000_000) });
     undo_pcb(&dir).unwrap();
-    assert_eq!(footprints(&dir)[0].1, Point { x: 5_000_000, y: 5_000_000 });
+    assert_eq!(footprints(&dir)[0].1, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) });
 }
 
 #[test]
@@ -137,9 +138,9 @@ fn a_refused_drop_leaves_the_carry_open_to_be_dropped_again_or_cancelled() {
     let dir = scratch("carry_refused_drop");
     setup(&dir);
     begin(&dir, duplicate_u1());
-    assert!(drop_with(&dir, Cmd::MoveItems { ids: vec!["nope".into()], dx: 1, dy: 1 }).is_err());
+    assert!(drop_with(&dir, Cmd::MoveItems { ids: vec!["nope".into()], dx: Nm::from_raw_shim(1), dy: Nm::from_raw_shim(1) }).is_err());
     assert!(is_carrying(&dir), "the carry is still open");
-    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 2_000_000, dy: 0 }).unwrap();
+    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: Nm::from_raw_shim(2_000_000), dy: Nm::ZERO }).unwrap();
     undo_pcb(&dir).unwrap();
     assert_eq!(footprints(&dir).len(), 2, "and the retried drop is still one step with the duplicate");
 }
@@ -151,13 +152,13 @@ fn a_paste_and_its_drop_are_one_step_too_and_cancelling_removes_what_the_paste_b
     let reply = crate::clipboard_api::copy(&dir, serde_json::json!({ "ids": ["U1", "U2"], "reference": { "x": 0, "y": 0 } }).to_string().as_bytes());
     let text = reply["text"].as_str().unwrap().to_string();
 
-    begin(&dir, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 10_000_000, y: 12_000_000 } });
+    begin(&dir, Cmd::PasteClipboard { text: text.clone(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(12_000_000) } });
     assert_eq!(footprints(&dir).len(), 4);
     cancel(&dir, "test").unwrap();
     assert_eq!(footprints(&dir).len(), 2, "Escape takes the pasted footprints away");
 
-    begin(&dir, Cmd::PasteClipboard { text, at: Point { x: 10_000_000, y: 12_000_000 } });
-    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into(), "U4".into()], dx: 500_000, dy: 0 }).unwrap();
+    begin(&dir, Cmd::PasteClipboard { text, at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(12_000_000) } });
+    drop_with(&dir, Cmd::MoveItems { ids: vec!["U3".into(), "U4".into()], dx: Nm::from_raw_shim(500_000), dy: Nm::ZERO }).unwrap();
     assert_eq!(footprints(&dir).len(), 4);
     undo_pcb(&dir).unwrap();
     assert_eq!(footprints(&dir).len(), 2, "the paste and the drop are undone together");
@@ -172,9 +173,9 @@ fn move_individually_is_one_undo_step_and_cancelling_reverts_every_drop() {
     add_text(&dir);
     let at0 = footprints(&dir);
     let hold_with = |cmd: Cmd| step_carrying(&dir, cmd, Strictness::Off, "test", Some(Carry::Hold)).unwrap();
-    hold_with(Cmd::MoveItems { ids: vec!["U1".into()], dx: 1_000_000, dy: 0 });
+    hold_with(Cmd::MoveItems { ids: vec!["U1".into()], dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO });
     assert!(is_carrying(&dir), "the first drop opens the step");
-    hold_with(Cmd::MoveItems { ids: vec!["U2".into()], dx: 0, dy: 1_000_000 });
+    hold_with(Cmd::MoveItems { ids: vec!["U2".into()], dx: Nm::ZERO, dy: Nm::from_raw_shim(1_000_000) });
     assert!(is_carrying(&dir), "the next drop joins it");
     commit(&dir).unwrap();
     assert_ne!(footprints(&dir), at0);
@@ -183,8 +184,8 @@ fn move_individually_is_one_undo_step_and_cancelling_reverts_every_drop() {
     assert_eq!(texts(&dir), 1, "and leaves the step before alone");
 
     // Escape after two drops: both go back, no undo entry, no redo entry
-    hold_with(Cmd::MoveItems { ids: vec!["U1".into()], dx: 1_000_000, dy: 0 });
-    hold_with(Cmd::MoveItems { ids: vec!["U2".into()], dx: 0, dy: 1_000_000 });
+    hold_with(Cmd::MoveItems { ids: vec!["U1".into()], dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO });
+    hold_with(Cmd::MoveItems { ids: vec!["U2".into()], dx: Nm::ZERO, dy: Nm::from_raw_shim(1_000_000) });
     cancel(&dir, "test").unwrap();
     assert_eq!(footprints(&dir), at0);
     assert!(redo(&dir, "test", Some(Domain::Pcb)).is_ok(), "the redo stack is as it was: the undone move-individually");

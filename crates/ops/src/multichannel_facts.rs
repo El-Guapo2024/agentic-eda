@@ -220,7 +220,7 @@ fn courtyard_half_stroke(extra: Option<&FootprintExtra>) -> Nm {
             item[at..at + end].trim().parse::<f64>().ok()
         })
         .fold(0.0_f64, f64::max);
-    let width_nm = if widest > 0.0 { eda_model::units::from_mm(widest) } else { 50_000 };
+    let width_nm = if widest > 0.0 { eda_model::units::from_mm(widest) } else { Nm::from_raw_shim(50_000) };
     width_nm / 2
 }
 
@@ -338,7 +338,7 @@ impl Board<'_> {
     /// `FOOTPRINT::GetBoundingBox( false )`: see the module doc.
     fn mc_footprint_box(&self, pose: &FootprintInstance, part: &Part, footprint: Option<&Footprint>, extra: Option<&FootprintExtra>) -> Box4 {
         let r = 250_000;
-        let mut b: Box4 = (pose.at.x - r, pose.at.y - r, pose.at.x + r, pose.at.y + r);
+        let mut b: Box4 = (pose.at.x - Nm::from_raw_shim(r), pose.at.y - Nm::from_raw_shim(r), pose.at.x + Nm::from_raw_shim(r), pose.at.y + Nm::from_raw_shim(r));
         let Some(footprint) = footprint else { return b };
         if let Some(pads) = placed_pads(self.model, part, pose) {
             for p in pads {
@@ -430,7 +430,7 @@ impl McBoard {
 
 /// A point rotated by `angle` (clockwise millidegrees) about the origin, as `Xform::Rotate` does.
 pub(crate) fn rotate_about_origin(p: Point, angle: i64) -> Point {
-    super::rotate_point_about(p, Point { x: 0, y: 0 }, angle)
+    super::rotate_point_about(p, Point { x: Nm::ZERO, y: Nm::ZERO }, angle)
 }
 
 /// A footprint of a design block's board file as the tool reads it (`dbRA.m_components`): its pose, its pads and their nets in the block's own names.
@@ -453,7 +453,7 @@ pub(crate) fn block_footprint(f: &eda_kicad::ClipFootprint) -> McFootprint {
         groups_up: Vec::new(),
         locked: false,
         symbol: None,
-        bbox: (f.at.x - 250_000, f.at.y - 250_000, f.at.x + 250_000, f.at.y + 250_000),
+        bbox: (f.at.x - Nm::from_raw_shim(250_000), f.at.y - Nm::from_raw_shim(250_000), f.at.x + Nm::from_raw_shim(250_000), f.at.y + Nm::from_raw_shim(250_000)),
         reference_layout,
         value_layout,
         user_fields: f.edit.as_ref().map(|e| e.fields.clone()).unwrap_or_default(),

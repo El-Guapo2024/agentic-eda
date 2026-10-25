@@ -4,6 +4,7 @@
 //! to recompute the same box sizes and pin positions when drawing a
 //! `Design` — keeping the two in lock-step without duplicating the rules.
 
+use eda_model::units::Nm;
 use eda_layout::{Node, Point, Port, Side};
 use eda_model::ir::Wire;
 use eda_model::{Part, PinKind};
@@ -276,8 +277,8 @@ pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>, u
         let (x0, y0, x1, y1) = real_symbol_bbox(sym, unit);
         let width_nm = eda_model::units::sch_from_mm((x1 - x0).max(0.0));
         let height_nm = eda_model::units::sch_from_mm((y1 - y0).max(0.0));
-        let width = ((width_nm.max(1) + GRID - 1) / GRID) * GRID;
-        let height = ((height_nm.max(1) + GRID - 1) / GRID) * GRID;
+        let width = ((width_nm.max(Nm::from_raw_shim(1)) + Nm::from_raw_shim(GRID) - Nm::from_raw_shim(1)) / GRID) * GRID;
+        let height = ((height_nm.max(Nm::from_raw_shim(1)) + Nm::from_raw_shim(GRID) - Nm::from_raw_shim(1)) / GRID) * GRID;
         // NOT floored to the old synthetic minimum, deliberately: a real
         // symbol's box edges on a side with a real pin are load-bearing
         // for `Node::stub_tip` (its Bottom/Right ports measure from
@@ -289,7 +290,7 @@ pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>, u
         // for a less cramped box (`ref_slot_local`/`value_slot_local`) is
         // handled there instead, without touching the box real geometry
         // everything else relies on.
-        return (width, height);
+        return (width.raw_shim(), height.raw_shim());
     }
     let pin_count = part.pins.len();
     let extra = pin_count.saturating_sub(4);
@@ -535,8 +536,8 @@ fn build_ports_from_real_symbol(part: &Part, sym: &eda_model::symbol::LibSymbol,
             Side::Top | Side::Bottom => body_x - x0,
             Side::Left | Side::Right => y1 - body_y,
         };
-        let offset = eda_model::units::sch_from_mm(offset_mm).max(0);
-        placed.push(Placed { pin_i: i, side, offset });
+        let offset = eda_model::units::sch_from_mm(offset_mm).max(Nm::ZERO);
+        placed.push(Placed { pin_i: i, side, offset: offset.raw_shim() });
     }
 
     let mut ports = Vec::new();
@@ -783,8 +784,8 @@ pub fn resolve_value_pos_obs(sym_x: f64, sym_y: f64, base_x_local: f64, base_y_l
             let y_local = base_y_local + (yi as f64) * 1.6;
             let bbox = text_bbox(sym_x + x_local, sym_y + y_local, text, font_mm, HAnchor::Start);
             let clear_wires = wires.iter().flat_map(|w| w.pts.windows(2)).all(|seg| {
-                let (ax, ay) = (seg[0].x as f64 / 1e6, seg[0].y as f64 / 1e6);
-                let (bx, by) = (seg[1].x as f64 / 1e6, seg[1].y as f64 / 1e6);
+                let (ax, ay) = (seg[0].x.raw_shim() as f64 / 1e6, seg[0].y.raw_shim() as f64 / 1e6);
+                let (bx, by) = (seg[1].x.raw_shim() as f64 / 1e6, seg[1].y.raw_shim() as f64 / 1e6);
                 !segment_crosses_box(ax, ay, bx, by, &bbox)
             });
             let clear_obs = obstacles.iter().all(|o| !bbox.overlaps(o));
@@ -839,8 +840,8 @@ pub fn resolve_text_y_obs(
         let y_local = base_y_local + (i as f64) * step;
         let bbox = text_bbox(sym_x + x_local, sym_y + y_local, text, font_mm, anchor);
         let clear_wires = wires.iter().flat_map(|w| w.pts.windows(2)).all(|seg| {
-            let (ax, ay) = (seg[0].x as f64 / 1e6, seg[0].y as f64 / 1e6);
-            let (bx, by) = (seg[1].x as f64 / 1e6, seg[1].y as f64 / 1e6);
+            let (ax, ay) = (seg[0].x.raw_shim() as f64 / 1e6, seg[0].y.raw_shim() as f64 / 1e6);
+            let (bx, by) = (seg[1].x.raw_shim() as f64 / 1e6, seg[1].y.raw_shim() as f64 / 1e6);
             !segment_crosses_box(ax, ay, bx, by, &bbox)
         });
         let clear_obs = obstacles.iter().all(|o| !bbox.overlaps(o));
@@ -989,8 +990,8 @@ pub fn resolve_label_pos_obs_padded(
         }
         let clear_obs = obstacles.iter().all(|o| !bbox.overlaps(o));
         let clear_wires = wires.iter().flat_map(|w| w.pts.windows(2)).all(|seg| {
-            let (ax, ay) = (seg[0].x as f64 / 1e6, seg[0].y as f64 / 1e6);
-            let (bx, by) = (seg[1].x as f64 / 1e6, seg[1].y as f64 / 1e6);
+            let (ax, ay) = (seg[0].x.raw_shim() as f64 / 1e6, seg[0].y.raw_shim() as f64 / 1e6);
+            let (bx, by) = (seg[1].x.raw_shim() as f64 / 1e6, seg[1].y.raw_shim() as f64 / 1e6);
             !segment_crosses_box(ax, ay, bx, by, &bbox)
         });
         if clear_obs && clear_wires { Some(bbox) } else { None }
@@ -1161,8 +1162,8 @@ pub fn resolve_label_pos_side(
         }
         let clear_obs = obstacles.iter().all(|o| !bbox.overlaps(o));
         let clear_wires = wires.iter().flat_map(|w| w.pts.windows(2)).all(|seg| {
-            let (ax, ay) = (seg[0].x as f64 / 1e6, seg[0].y as f64 / 1e6);
-            let (bx, by) = (seg[1].x as f64 / 1e6, seg[1].y as f64 / 1e6);
+            let (ax, ay) = (seg[0].x.raw_shim() as f64 / 1e6, seg[0].y.raw_shim() as f64 / 1e6);
+            let (bx, by) = (seg[1].x.raw_shim() as f64 / 1e6, seg[1].y.raw_shim() as f64 / 1e6);
             !segment_crosses_box(ax, ay, bx, by, &bbox)
         });
         if clear_obs && clear_wires { Some(bbox) } else { None }
@@ -1391,7 +1392,7 @@ pub fn nc_pin_local_points(part: &Part, width: i64, height: i64, resolved: Optio
             }
             let x = eda_model::units::sch_from_mm(real_pin.at.x - x0);
             let y = eda_model::units::sch_from_mm(y1 - real_pin.at.y);
-            out.push((i, Point { x, y }));
+            out.push((i, Point { x: x.raw_shim(), y: y.raw_shim() }));
         }
         return out;
     }

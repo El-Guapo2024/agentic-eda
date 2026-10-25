@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The schematic's connection grid, 50 mil (`GRID_CONNECTABLE`).
-pub const GRID_NM: Nm = 1_270_000;
+pub const GRID_NM: Nm = Nm::from_raw_shim(1_270_000);
 
 fn d_true() -> bool {
     true
@@ -216,7 +216,7 @@ pub(crate) fn run_with_overlay(sch: &SchematicSection, model: &ConstraintModel, 
 }
 
 fn grid_of(g: Nm) -> Nm {
-    if g > 0 {
+    if g > Nm::ZERO {
         g
     } else {
         GRID_NM
@@ -463,8 +463,8 @@ pub enum Turn {
 
 /// `GetNearestHalfGridPosition`.
 fn half_grid(p: Point, grid: Nm) -> Point {
-    let half = (grid as f64) / 2.0;
-    let snap = |v: Nm| ((v as f64 / half).round() * half).round() as Nm;
+    let half = (grid.raw_shim() as f64) / 2.0;
+    let snap = |v: Nm| Nm::from_raw_shim(((v.raw_shim() as f64 / half).round() * half).round() as i64);
     Point { x: snap(p.x), y: snap(p.y) }
 }
 
@@ -479,11 +479,11 @@ fn selection_center(scene: &Scene, items: &[Item], fields: &[FieldSel]) -> Point
     // a field is no text for this (`SCH_FIELD_T` is not `SCH_TEXT_T`): its box counts
     if fields.is_empty() && items.iter().all(text_like) {
         let n = items.len().max(1) as i64;
-        let (sx, sy) = items.iter().fold((0, 0), |(x, y), it| {
+        let (sx, sy) = items.iter().fold((Nm::ZERO, Nm::ZERO), |(x, y), it| {
             let p = scene.position(*it);
             (x + p.x, y + p.y)
         });
-        return Point { x: sx / n, y: sy / n };
+        return Point { x: Nm::from_raw_shim((sx / n).raw_shim()), y: Nm::from_raw_shim((sy / n).raw_shim()) };
     }
     let mut lo: Option<Point> = None;
     let mut hi: Option<Point> = None;
@@ -587,7 +587,7 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Nm,
             }
             let back = half_grid(group_center(scene, &all), grid);
             let shift = Point { x: pivot.x - back.x, y: pivot.y - back.y };
-            if shift != (Point { x: 0, y: 0 }) {
+            if shift != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                 for &it in &all {
                     scene.move_item(it, shift);
                 }
@@ -1013,11 +1013,11 @@ fn rotate_sheet(sheet: &mut SheetInstance, old: &SheetInstance, c: Point, ccw: b
     let mut at = rotate_point(old.at, c, ccw);
     let size = rotate_vec(Point { x: old.size.0, y: old.size.1 }, ccw);
     let (mut w, mut h) = (size.x, size.y);
-    if w < 0 {
+    if w < Nm::ZERO {
         at.x += w;
         w = -w;
     }
-    if h < 0 {
+    if h < Nm::ZERO {
         at.y += h;
         h = -h;
     }
@@ -1157,7 +1157,7 @@ fn mirror_graphic(g: &mut SchGraphic, c: Point, vertical: bool) {
 
 /// `GRID_HELPER::AlignGrid`.
 fn align_grid(p: Point, grid: Nm) -> Point {
-    let snap = |v: Nm| ((v as f64 / grid as f64).round() as Nm) * grid;
+    let snap = |v: Nm| (Nm::from_raw_shim((v.raw_shim() as f64 / grid.raw_shim() as f64).round() as i64)) * grid.raw_shim();
     Point { x: snap(p.x), y: snap(p.y) }
 }
 
@@ -1176,7 +1176,7 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
                     let mut drag_items = vec![it];
                     scene.get_connected_drag_items(&mut st, it, p, &mut drag_items);
                     let delta = diff(align_grid(p, grid), p);
-                    if delta != (Point { x: 0, y: 0 }) {
+                    if delta != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                         let unique: BTreeSet<Item> = drag_items.into_iter().collect();
                         for d in unique {
                             scene.move_item_drag(&st, d, delta);
@@ -1188,7 +1188,7 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
             Item::Text(_) | Item::NoteLine(_) | Item::Graphic(_) if !scene.is_connectable(it) => {
                 let p = scene.position(it);
                 let delta = diff(align_grid(p, grid), p);
-                if delta != (Point { x: 0, y: 0 }) {
+                if delta != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                     scene.move_item(it, delta);
                 }
             }
@@ -1205,7 +1205,7 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
                     scene.get_connected_drag_items(&mut st, Item::SheetPin(i, pi), pin.at, &mut list);
                     pin_drag.push((pi, pin.at, list));
                 }
-                if tl_delta != (Point { x: 0, y: 0 }) || br_delta != (Point { x: 0, y: 0 }) {
+                if tl_delta != (Point { x: Nm::ZERO, y: Nm::ZERO }) || br_delta != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                     scene.move_item(Item::Sheet(i), tl_delta);
                     let sh = &mut scene.sch.sheets[i];
                     sh.size = (sh.size.0 - tl_delta.x + br_delta.x, sh.size.1 - tl_delta.y + br_delta.y);
@@ -1215,7 +1215,7 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
                     let target = if list.is_empty() { align_grid(pos, grid) } else { Point { x: pos.x, y: original.y } };
                     scene.sch.sheets[i].pins[pi].at = constrain_on_edge(&scene.sch.sheets[i], target, false, pos);
                     let total = diff(scene.sch.sheets[i].pins[pi].at, original);
-                    if total != (Point { x: 0, y: 0 }) {
+                    if total != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                         for d in list {
                             if !matches!(d, Item::Sheet(_)) {
                                 scene.move_item_drag(&st, d, total);
@@ -1231,7 +1231,7 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
                     scene.get_connected_drag_items(&mut st, other, p, &mut drag_items);
                 }
                 let mut shifts: BTreeMap<(Nm, Nm), usize> = BTreeMap::new();
-                let mut most_common = Point { x: 0, y: 0 };
+                let mut most_common = Point { x: Nm::ZERO, y: Nm::ZERO };
                 let mut max = 0usize;
                 for &p in &conns {
                     let g = diff(align_grid(p, grid), p);
@@ -1246,7 +1246,7 @@ fn align_to_grid(scene: &mut Scene, grid: Nm) {
                     let p = scene.position(other);
                     most_common = diff(align_grid(p, grid), p);
                 }
-                if most_common != (Point { x: 0, y: 0 }) {
+                if most_common != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                     scene.move_item(other, most_common);
                     let unique: BTreeSet<Item> = drag_items.into_iter().collect();
                     for d in unique {
@@ -1282,7 +1282,7 @@ fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<Che
         }
         for it in items {
             let delta = Point { x: m.dx, y: m.dy };
-            if delta == (Point { x: 0, y: 0 }) {
+            if delta == (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                 continue;
             }
             // `adjustDeltaForGrid`: only for items on the connection grid
@@ -1293,7 +1293,7 @@ fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<Che
             } else {
                 delta
             };
-            if delta == (Point { x: 0, y: 0 }) {
+            if delta == (Point { x: Nm::ZERO, y: Nm::ZERO }) {
                 continue;
             }
             any = true;

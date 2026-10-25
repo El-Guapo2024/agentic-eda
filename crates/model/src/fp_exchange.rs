@@ -39,7 +39,7 @@ impl PadAlignment {
         let rad = (pose.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
         let (sin, cos) = rad.sin_cos();
         let (tx, ty) = self.translation;
-        let at = Point { x: pose.at.x + (tx * cos - ty * sin).round() as Nm, y: pose.at.y + (tx * sin + ty * cos).round() as Nm };
+        let at = Point { x: pose.at.x + Nm::kiround(tx * cos - ty * sin), y: pose.at.y + Nm::kiround(tx * sin + ty * cos) };
         FootprintInstance { at, rot: (pose.rot as i64 - self.rotation_ccw).rem_euclid(360_000) as Millideg, ..pose.clone() }
     }
 }
@@ -51,7 +51,7 @@ fn uniquely_numbered_pads(fp: &Footprint, side: Side) -> BTreeMap<&str, (f64, f6
         *seen.entry(p.number.as_str()).or_default() += 1;
     }
     let mirror = if side == Side::Bottom { -1.0 } else { 1.0 };
-    fp.pads.iter().filter(|p| seen[p.number.as_str()] == 1).map(|p| (p.number.as_str(), (p.at.0 as f64 * mirror, p.at.1 as f64))).collect()
+    fp.pads.iter().filter(|p| seen[p.number.as_str()] == 1).map(|p| (p.number.as_str(), (p.at.0.as_f64() * mirror, p.at.1.as_f64()))).collect()
 }
 
 /// `Snap90Degrees`: the angle, normalized to `[0, 360)`, taken to the nearest of 0, 90, 180 and 270 (315 and over go to 0).
@@ -267,7 +267,7 @@ mod tests {
     use crate::ir::LabelSide;
 
     fn pad(number: &str, x: Nm, y: Nm) -> Pad {
-        Pad { number: number.into(), at: (x, y), size: (600_000, 600_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
+        Pad { number: number.into(), at: (x, y), size: (Nm::new(600_000), Nm::new(600_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
     }
 
     fn fp(pads: Vec<Pad>) -> Footprint {
@@ -287,10 +287,10 @@ mod tests {
     #[test]
     fn a_new_footprint_with_another_origin_is_moved_so_its_pads_stay_where_they_were() {
         // the old footprint has its origin at the middle of the two pads; the new one has it on pad 1
-        let old = fp(vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)]);
-        let new = fp(vec![pad("1", 0, 0), pad("2", 2_000_000, 0)]);
+        let old = fp(vec![pad("1", Nm::new(-1_000_000), Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO)]);
+        let new = fp(vec![pad("1", Nm::ZERO, Nm::ZERO), pad("2", Nm::new(2_000_000), Nm::ZERO)]);
         for (rot, side) in [(0, Side::Top), (90_000, Side::Top), (270_000, Side::Top), (0, Side::Bottom), (90_000, Side::Bottom), (180_000, Side::Bottom)] {
-            let was = pose(10_000_000, 20_000_000, rot, side);
+            let was = pose(Nm::new(10_000_000), Nm::new(20_000_000), rot, side);
             let shift = pad_alignment(&old, &new, side).expect("two pads to go by");
             assert_eq!(shift.rotation_ccw, 0);
             let now = shift.apply(&was);
@@ -303,17 +303,17 @@ mod tests {
     #[test]
     fn a_new_footprint_drawn_turned_a_quarter_is_turned_back_and_its_pads_land_on_the_old_ones() {
         // old: a horizontal pair; new: the same pair drawn vertically (a part library that has its 2-pin parts upright)
-        let old = fp(vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)]);
-        let new = fp(vec![pad("1", 0, -1_000_000), pad("2", 0, 1_000_000)]);
+        let old = fp(vec![pad("1", Nm::new(-1_000_000), Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO)]);
+        let new = fp(vec![pad("1", Nm::ZERO, Nm::new(-1_000_000)), pad("2", Nm::ZERO, Nm::new(1_000_000))]);
         for side in [Side::Top, Side::Bottom] {
             for rot in [0, 90_000, 135_000] {
-                let was = pose(5_000_000, 7_000_000, rot, side);
+                let was = pose(Nm::new(5_000_000), Nm::new(7_000_000), rot, side);
                 let shift = pad_alignment(&old, &new, side).unwrap();
                 assert_eq!(shift.rotation_ccw.rem_euclid(180_000), 90_000, "a quarter turn one way or the other: {shift:?}");
                 let now = shift.apply(&was);
                 for number in ["1", "2"] {
                     let (a, b) = (on_board(&new, number, &now), on_board(&old, number, &was));
-                    assert!((a.x - b.x).abs() <= 2 && (a.y - b.y).abs() <= 2, "pad {number} {side:?} {rot}: {a:?} vs {b:?}");
+                    assert!((a.x - b.x).abs() <= Nm::new(2) && (a.y - b.y).abs() <= Nm::new(2), "pad {number} {side:?} {rot}: {a:?} vs {b:?}");
                 }
             }
         }
@@ -322,27 +322,27 @@ mod tests {
     #[test]
     fn a_pad_that_is_not_alone_with_its_number_is_not_a_point_to_go_by() {
         // pad "1" twice in the old footprint: only "2" and "3" are points, and they are enough
-        let old = fp(vec![pad("1", -3_000_000, 0), pad("1", -2_000_000, 0), pad("2", 0, 0), pad("3", 2_000_000, 0)]);
-        let new = fp(vec![pad("1", 100_000, 100_000), pad("2", 1_000_000, 0), pad("3", 3_000_000, 0)]);
+        let old = fp(vec![pad("1", Nm::new(-3_000_000), Nm::ZERO), pad("1", Nm::new(-2_000_000), Nm::ZERO), pad("2", Nm::ZERO, Nm::ZERO), pad("3", Nm::new(2_000_000), Nm::ZERO)]);
+        let new = fp(vec![pad("1", Nm::new(100_000), Nm::new(100_000)), pad("2", Nm::new(1_000_000), Nm::ZERO), pad("3", Nm::new(3_000_000), Nm::ZERO)]);
         let shift = pad_alignment(&old, &new, Side::Top).unwrap();
         assert_eq!(shift.translation, (-1_000_000.0, 0.0));
         // nothing in common, or one point alone: nothing to turn by
-        assert!(pad_alignment(&fp(vec![pad("1", 0, 0)]), &fp(vec![pad("A", 5000, 5000)]), Side::Top).is_none());
-        assert!(pad_alignment(&fp(vec![pad("1", 0, 0)]), &fp(vec![pad("1", 5000, 5000)]), Side::Top).is_none(), "a single point has no baseline");
+        assert!(pad_alignment(&fp(vec![pad("1", Nm::ZERO, Nm::ZERO)]), &fp(vec![pad("A", Nm::new(5000), Nm::new(5000))]), Side::Top).is_none());
+        assert!(pad_alignment(&fp(vec![pad("1", Nm::ZERO, Nm::ZERO)]), &fp(vec![pad("1", Nm::new(5000), Nm::new(5000))]), Side::Top).is_none(), "a single point has no baseline");
     }
 
     #[test]
     fn the_pads_that_still_match_decide_when_they_are_most_and_the_mean_decides_when_they_are_not() {
         // four pads, three of them where they were: the outlier is ignored
-        let old = fp(vec![pad("1", 0, 0), pad("2", 1_000_000, 0), pad("3", 2_000_000, 0), pad("4", 3_000_000, 0)]);
-        let moved = fp(vec![pad("1", 0, 0), pad("2", 1_000_000, 0), pad("3", 2_000_000, 0), pad("4", 3_600_000, 0)]);
+        let old = fp(vec![pad("1", Nm::ZERO, Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO), pad("3", Nm::new(2_000_000), Nm::ZERO), pad("4", Nm::new(3_000_000), Nm::ZERO)]);
+        let moved = fp(vec![pad("1", Nm::ZERO, Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO), pad("3", Nm::new(2_000_000), Nm::ZERO), pad("4", Nm::new(3_600_000), Nm::ZERO)]);
         assert_eq!(pad_alignment(&old, &moved, Side::Top).unwrap().translation, (0.0, 0.0), "3 of 4 coincide");
         // a DIP widened by 2 mm: two of four coincide, which is not more than half ("that can happen if you widen a DIP"): the mean displacement
-        let dip = fp(vec![pad("1", -1_000_000, -1_000_000), pad("2", -1_000_000, 1_000_000), pad("3", 1_000_000, 1_000_000), pad("4", 1_000_000, -1_000_000)]);
-        let wide = fp(vec![pad("1", -1_000_000, -1_000_000), pad("2", -1_000_000, 1_000_000), pad("3", 3_000_000, 1_000_000), pad("4", 3_000_000, -1_000_000)]);
+        let dip = fp(vec![pad("1", Nm::new(-1_000_000), Nm::new(-1_000_000)), pad("2", Nm::new(-1_000_000), Nm::new(1_000_000)), pad("3", Nm::new(1_000_000), Nm::new(1_000_000)), pad("4", Nm::new(1_000_000), Nm::new(-1_000_000))]);
+        let wide = fp(vec![pad("1", Nm::new(-1_000_000), Nm::new(-1_000_000)), pad("2", Nm::new(-1_000_000), Nm::new(1_000_000)), pad("3", Nm::new(3_000_000), Nm::new(1_000_000)), pad("4", Nm::new(3_000_000), Nm::new(-1_000_000))]);
         assert_eq!(pad_alignment(&dip, &wide, Side::Top).unwrap().translation, (-1_000_000.0, 0.0), "(0 + 0 - 2000 - 2000) / 4");
         // pads spread out by a fifth: no shift keeps more than one, the mean is (-200 - 400 - 600) / 4
-        let spread = fp(vec![pad("1", 0, 0), pad("2", 1_200_000, 0), pad("3", 2_400_000, 0), pad("4", 3_600_000, 0)]);
+        let spread = fp(vec![pad("1", Nm::ZERO, Nm::ZERO), pad("2", Nm::new(1_200_000), Nm::ZERO), pad("3", Nm::new(2_400_000), Nm::ZERO), pad("4", Nm::new(3_600_000), Nm::ZERO)]);
         assert_eq!(pad_alignment(&old, &spread, Side::Top).unwrap().translation, (-300_000.0, 0.0));
     }
 
@@ -359,13 +359,13 @@ mod tests {
     }
 
     fn text(s: &str, x: Nm) -> FpText {
-        FpText::new(s, Point { x, y: 0 }, "F.Fab")
+        FpText::new(s, Point { x, y: Nm::ZERO }, "F.Fab")
     }
 
     #[test]
     fn texts_are_matched_best_first_and_none_twice() {
-        let old = vec![text("${REFERENCE}", 0), text("note", 5_000_000), text("zzz", 0)];
-        let new = vec![text("note", 5_000_000), text("${REFERENCE}", 0)];
+        let old = vec![text("${REFERENCE}", Nm::ZERO), text("note", Nm::new(5_000_000)), text("zzz", Nm::ZERO)];
+        let new = vec![text("note", Nm::new(5_000_000)), text("${REFERENCE}", Nm::ZERO)];
         let mut pairs = match_texts(&old, &new);
         pairs.sort();
         assert_eq!(pairs, [(0, 1), (1, 0)], "'zzz' scores nothing against either and stays alone");
@@ -373,31 +373,31 @@ mod tests {
 
     #[test]
     fn a_text_the_options_leave_alone_stays_where_it_was_on_the_board() {
-        let (old_pose, new_pose) = (pose(10_000_000, 10_000_000, 0, Side::Top), pose(10_500_000, 10_000_000, 90_000, Side::Top));
-        let mut old = text("hello", 1_000_000);
-        old.layout.size = (800_000, 800_000);
+        let (old_pose, new_pose) = (pose(Nm::new(10_000_000), Nm::new(10_000_000), 0, Side::Top), pose(Nm::new(10_500_000), Nm::new(10_000_000), 90_000, Side::Top));
+        let mut old = text("hello", Nm::new(1_000_000));
+        old.layout.size = (Nm::new(800_000), Nm::new(800_000));
         old.layout.layer = "F.SilkS".into();
-        let mut new = text("hi", 0);
+        let mut new = text("hi", Nm::ZERO);
         carry_text(&old, &mut new, &old_pose, &new_pose, &TextReset { layers: true, effects: true, positions: false, content: true });
         assert_eq!(new.text, "hi", "content reset: the new footprint's");
-        assert_eq!(new.layout.size, (1_000_000, 1_000_000), "effects reset");
+        assert_eq!(new.layout.size, (Nm::new(1_000_000), Nm::new(1_000_000)), "effects reset");
         assert_eq!(new.layout.layer, "F.Fab", "layers reset");
         assert_eq!(new.layout.board_position(&new_pose), old.layout.board_position(&old_pose), "the position is the old one on the board");
         assert_eq!(new.layout.board_angle(&new_pose), old.layout.board_angle(&old_pose));
         // nothing reset: everything is the old text's
-        let mut new = text("hi", 0);
+        let mut new = text("hi", Nm::ZERO);
         carry_text(&old, &mut new, &old_pose, &new_pose, &TextReset { layers: false, effects: false, positions: false, content: false });
-        assert_eq!((new.text.as_str(), new.layout.size, new.layout.layer.as_str()), ("hello", (800_000, 800_000), "F.SilkS"));
+        assert_eq!((new.text.as_str(), new.layout.size, new.layout.layer.as_str()), ("hello", (Nm::new(800_000), Nm::new(800_000)), "F.SilkS"));
         // position reset: the new footprint's own place
-        let mut new = text("hi", 123_000);
+        let mut new = text("hi", Nm::new(123_000));
         carry_text(&old, &mut new, &old_pose, &new_pose, &TextReset { layers: true, effects: true, positions: true, content: true });
-        assert_eq!(new.layout.at, Point { x: 123_000, y: 0 });
+        assert_eq!(new.layout.at, Point { x: Nm::new(123_000), y: Nm::ZERO });
     }
 
     #[test]
     fn a_text_nothing_matches_is_kept_where_it_was_on_the_board() {
-        let (old_pose, new_pose) = (pose(10_000_000, 10_000_000, 0, Side::Top), pose(12_000_000, 9_000_000, 180_000, Side::Top));
-        let old = text("keep me", 1_000_000);
+        let (old_pose, new_pose) = (pose(Nm::new(10_000_000), Nm::new(10_000_000), 0, Side::Top), pose(Nm::new(12_000_000), Nm::new(9_000_000), 180_000, Side::Top));
+        let old = text("keep me", Nm::new(1_000_000));
         let kept = keep_text(&old, &old_pose, &new_pose);
         assert_eq!(kept.layout.board_position(&new_pose), old.layout.board_position(&old_pose));
         assert_eq!(kept.text, "keep me");

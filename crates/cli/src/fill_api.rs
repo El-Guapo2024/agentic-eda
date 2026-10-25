@@ -52,10 +52,10 @@ pub(crate) fn refill(dir: &Path, only: Option<Vec<String>>) -> Value {
 /// (`eda_drc::via_stitch::plan` over the new fills) in one step when their vias move. True when a stitching's vias changed.
 fn regenerate_stitchings(dir: &Path, only: Option<&[String]>) -> bool {
     let Ok((_, design, model)) = board::load(dir) else { return false };
-    let bbox = |pts: &[eda_model::ir::Point]| pts.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(a, b, c, d), p| (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y)));
+    let bbox = |pts: &[eda_model::ir::Point]| pts.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(a, b, c, d), p| (a.min(p.x.raw_shim()), b.min(p.y.raw_shim()), c.max(p.x.raw_shim()), d.max(p.y.raw_shim())));
     let meets = |a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)| a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3;
     let zones: Vec<&eda_model::ir::Zone> = design.routing.iter().flat_map(|r| r.zones.iter()).filter(|z| zone_fills::fillable(z) && only.is_none_or(|ids| ids.contains(&z.id))).collect();
-    let vias = |ids: &[String]| -> std::collections::BTreeSet<(i64, i64)> { design.routing.iter().flat_map(|r| r.vias.iter()).filter(|v| ids.contains(&v.id)).map(|v| (v.at.x, v.at.y)).collect() };
+    let vias = |ids: &[String]| -> std::collections::BTreeSet<(i64, i64)> { design.routing.iter().flat_map(|r| r.vias.iter()).filter(|v| ids.contains(&v.id)).map(|v| (v.at.x.raw_shim(), v.at.y.raw_shim())).collect() };
     let mut cmds = Vec::new();
     for v in design.drawings.iter().flat_map(|d| d.board_items.via_stitches.iter()) {
         if v.net.is_empty() || v.outline.len() < 3 {
@@ -66,7 +66,7 @@ fn regenerate_stitchings(dir: &Path, only: Option<&[String]>) -> bool {
             continue;
         }
         let p = crate::via_stitch_api::plan(dir, &design, &model, v);
-        if p.vias.iter().map(|(_, at)| (at.x, at.y)).collect::<std::collections::BTreeSet<_>>() == vias(&v.member_ids) {
+        if p.vias.iter().map(|(_, at)| (at.x.raw_shim(), at.y.raw_shim())).collect::<std::collections::BTreeSet<_>>() == vias(&v.member_ids) {
             continue;
         }
         let planned = p.vias.into_iter().map(|(cell, at)| eda_ops::pcb_items::PlannedVia { cell, at }).collect();
@@ -217,6 +217,7 @@ pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckRes
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_kicad::zone_fills::{zone_signature, KicadRing, ZoneEntry};
     use eda_model::ir::{PlacementSection, Point, Provenance, RoutingSection, Zone};
@@ -226,7 +227,7 @@ mod tests {
 
     fn square(id: &str, uuid: &str, layer: &str, x: i64) -> Zone {
         let p = |x, y| Point { x, y };
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(x, 0), p(x + 10_000_000, 0), p(x + 10_000_000, 10_000_000), p(x, 10_000_000)], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(Nm::from_raw_shim(x), Nm::ZERO), p(Nm::from_raw_shim(x + 10_000_000), Nm::ZERO), p(Nm::from_raw_shim(x + 10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(x), Nm::from_raw_shim(10_000_000))], ..Default::default() }
     }
 
     /// A board directory with an intent of two nets, no part, and `zones`.
@@ -247,7 +248,7 @@ mod tests {
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
-            placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 40_000_000, y: 0 }, Point { x: 40_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }], footprints: vec![], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }], footprints: vec![], modules: vec![] }),
             routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
             footprint_library: None,
@@ -313,7 +314,7 @@ mod tests {
 
         // Zone A is edited: its fill is no longer its own.
         let mut edited = a.clone();
-        edited.min_thickness += 10_000;
+        edited.min_thickness += Nm::from_raw_shim(10_000);
         write_zones(&dir, vec![edited, b, keepout, line]);
         let r = report(&dir, false).unwrap();
         assert_eq!(by_id(&r, "za")["filled"], false);

@@ -12,6 +12,7 @@
 //! junction. A net with no such place either stays without a label (KiCad then names it after its best pin). A net that a label, a power symbol or a sheet pin names on the sheet already, and a name
 //! that is KiCad's default name of a net (`Net-(..)`, `unconnected-(..)`), get none.
 
+use eda_model::units::Nm;
 use std::collections::BTreeSet;
 
 use eda_model::ir::{Design, LabelKind, NetLabel, Point, SchematicSection};
@@ -41,7 +42,7 @@ fn obstacles(sch: &SchematicSection, model: &ConstraintModel, net: &str) -> Vec<
         }
     }
     for s in &sch.sheets {
-        out.push(Rect::new(s.at.x, s.at.y, s.at.x + s.size.0, s.at.y + s.size.1));
+        out.push(Rect::new(s.at.x.raw_shim(), s.at.y.raw_shim(), (s.at.x + s.size.0).raw_shim(), (s.at.y + s.size.1).raw_shim()));
         for f in crate::fields::sheet_fields(sch, s) {
             out.push(crate::fields::field_rect(&f));
         }
@@ -52,7 +53,7 @@ fn obstacles(sch: &SchematicSection, model: &ConstraintModel, net: &str) -> Vec<
     for w in sch.wires.iter().filter(|w| w.net != net) {
         for pair in w.pts.windows(2) {
             let (a, b) = (pair[0], pair[1]);
-            out.push(Rect::new(a.x.min(b.x) - 100_000, a.y.min(b.y) - 100_000, a.x.max(b.x) + 100_000, a.y.max(b.y) + 100_000));
+            out.push(Rect::new((a.x.min(b.x) - Nm::from_raw_shim(100_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(100_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(100_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(100_000)).raw_shim()));
         }
     }
     out
@@ -88,7 +89,7 @@ fn taken(sch: &SchematicSection, points: &BTreeSet<Point>, net: &str, p: Point) 
 
 /// The box of a wire run from `a` to `b`, as [`crate::obstacles`] measures a wire.
 fn thin(a: Point, b: Point) -> Rect {
-    Rect::new(a.x.min(b.x) - 100_000, a.y.min(b.y) - 100_000, a.x.max(b.x) + 100_000, a.y.max(b.y) + 100_000)
+    Rect::new((a.x.min(b.x) - Nm::from_raw_shim(100_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(100_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(100_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(100_000)).raw_shim())
 }
 
 /// Where a net's label goes: on its wire (`stub: None`), or at the end of a short stub drawn off its wire at `at` (the wire is broken there, with a
@@ -117,8 +118,8 @@ fn place_for(sch: &SchematicSection, model: &ConstraintModel, net: &str, usable:
         let horizontal = a.y == b.y;
         let (lo, hi) = if horizontal { (a.x, b.x) } else { (a.y, b.y) };
         let mid = (lo + hi) / 2;
-        let mut ks: Vec<i64> = ((lo / G + 1)..=((hi - 1) / G)).map(|k| k * G).filter(|v| *v > lo && *v < hi).collect();
-        ks.sort_by_key(|v| ((v - mid).abs(), *v));
+        let mut ks: Vec<Nm> = ((lo.raw_shim() / G + 1)..=((hi.raw_shim() - 1) / G)).map(|k| Nm::from_raw_shim(k * G)).filter(|v| *v > lo && *v < hi).collect();
+        ks.sort_by_key(|v| ((*v - mid).abs(), *v));
         ks.into_iter().map(|v| if horizontal { Point { x: v, y: a.y } } else { Point { x: a.x, y: v } }).filter(|p| !taken(sch, &points, net, *p)).collect()
     };
     for run in runs.iter().filter(|(a, b)| a.y == b.y) {
@@ -133,14 +134,14 @@ fn place_for(sch: &SchematicSection, model: &ConstraintModel, net: &str, usable:
             let dirs: [(i64, i64); 2] = if run.0.y == run.1.y { [(0, -1), (0, 1)] } else { [(1, 0), (-1, 0)] };
             for p in inside(*run) {
                 for d in dirs {
-                    let end = Point { x: p.x + d.0 * k * G, y: p.y + d.1 * k * G };
+                    let end = Point { x: p.x + Nm::from_raw_shim(d.0 * k * G), y: p.y + Nm::from_raw_shim(d.1 * k * G) };
                     // nothing connects anywhere along the stub but at its foot, and its end is on no wire
-                    let along = (1..=k).map(|j| Point { x: p.x + d.0 * j * G, y: p.y + d.1 * j * G });
+                    let along = (1..=k).map(|j| Point { x: p.x + Nm::from_raw_shim(d.0 * j * G), y: p.y + Nm::from_raw_shim(d.1 * j * G) });
                     if along.into_iter().any(|q| taken(sch, &points, net, q)) || sch.wires.iter().any(|w| w.pts.windows(2).any(|s| crate::nets::on_segment(end, s[0], s[1]))) {
                         continue;
                     }
                     // the junction at the stub's foot keeps clear too
-                    let junction = Rect::new(p.x - 500_000, p.y - 500_000, p.x + 500_000, p.y + 500_000);
+                    let junction = Rect::new((p.x - Nm::from_raw_shim(500_000)).raw_shim(), (p.y - Nm::from_raw_shim(500_000)).raw_shim(), (p.x + Nm::from_raw_shim(500_000)).raw_shim(), (p.y + Nm::from_raw_shim(500_000)).raw_shim());
                     if clear(&thin(p, end)) && clear(&junction) && label_clear(end, &label_rect(end, d, net, false)) {
                         return Some(Place { at: end, stub: Some(p) });
                     }

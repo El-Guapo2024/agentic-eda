@@ -149,8 +149,8 @@ impl Default for DrillSymbolProfile {
             name: String::new(),
             group_by: vec![DrillGroupKey::Size, DrillGroupKey::Slot, DrillGroupKey::Plating, DrillGroupKey::Span, DrillGroupKey::Operation, DrillGroupKey::PostMachining],
             mark_policy: DrillMarkPolicy::ShapesThenLetters,
-            size_nm: 1_500_000,
-            width_nm: 150_000,
+            size_nm: Nm::new(1_500_000),
+            width_nm: Nm::new(150_000),
             freeze_assignments: true,
             assignments: BTreeMap::new(),
         }
@@ -300,7 +300,7 @@ impl DrillChartColumn {
     /// `GENERATED_TABLE_SCHEMA::DefaultColumn`.
     pub fn default_of(id: DrillChartColumnId) -> Self {
         let (_, heading, align, _, _) = id.def();
-        DrillChartColumn { id, heading: heading.to_string(), align, width_nm: 0 }
+        DrillChartColumn { id, heading: heading.to_string(), align, width_nm: Nm::ZERO }
     }
 
     /// `GENERATED_TABLE_SCHEMA::Defaults`: the columns a new chart has.
@@ -435,7 +435,7 @@ pub struct DrillMap {
 impl DrillMap {
     /// `PCB_DRILL_MAP( board )`: on `layer`, no offset, the profile's mark size, every span, slots outlined, no guide cross.
     pub fn new(layer: &str, size_nm: Nm) -> Self {
-        DrillMap { id: String::new(), layer: layer.to_string(), offset: Point { x: 0, y: 0 }, size_nm, span: None, outline_slots: true, guide_cross: false, custom_properties: vec![] }
+        DrillMap { id: String::new(), layer: layer.to_string(), offset: Point { x: Nm::ZERO, y: Nm::ZERO }, size_nm, span: None, outline_slots: true, guide_cross: false, custom_properties: vec![] }
     }
 
     pub fn id_seed(&self) -> String {

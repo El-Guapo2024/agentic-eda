@@ -23,7 +23,7 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 fn is_zero_nm(n: &Nm) -> bool {
-    *n == 0
+    *n == Nm::ZERO
 }
 fn is_zero_angle(a: &Millideg) -> bool {
     *a == 0
@@ -34,12 +34,12 @@ fn is_zero_i64(n: &i64) -> bool {
 
 /// `EDA_TEXT::GetPenSizeForNormal` / `GetPenSizeForBold` (`common/eda_text.cpp`) for a glyph `width_nm` wide: an eighth and a fifth of it.
 pub fn auto_pen_nm(width_nm: Nm, bold: bool) -> Nm {
-    (width_nm as f64 / if bold { 5.0 } else { 8.0 }).round() as Nm
+    Nm::kiround(width_nm.as_f64() / if bold { 5.0 } else { 8.0 })
 }
 
 /// `PCB_TEXTBOX::GetLegacyTextMargin`: the margin of a box the file gave none (and a new box starts with), half the border width and three quarters of the text height.
 pub fn legacy_text_margin_nm(stroke_width_nm: Nm, text_height_nm: Nm) -> Nm {
-    (stroke_width_nm as f64 / 2.0).round() as Nm + (text_height_nm as f64 * 0.75).round() as Nm
+    Nm::kiround(stroke_width_nm.as_f64() / 2.0) + Nm::kiround(text_height_nm.as_f64() * 0.75)
 }
 
 /// A text box: wrapped text in a rectangle, with a border (`PCB_TEXTBOX`, `(gr_text_box ..)`).
@@ -143,7 +143,7 @@ impl TextBox {
             knockout: false,
             size_nm,
             width_nm: None,
-            thickness_nm: 0,
+            thickness_nm: Nm::ZERO,
             halign: TextJustify::Left,
             valign: TextVAlign::Top,
             mirror: layer.starts_with("B."),
@@ -166,7 +166,7 @@ impl TextBox {
 
     /// The pen width the text is drawn with (`EDA_TEXT::GetEffectiveTextPenWidth`): the file's, else the automatic one for the smaller glyph side.
     pub fn effective_pen_nm(&self) -> Nm {
-        if self.thickness_nm > 0 {
+        if self.thickness_nm > Nm::ZERO {
             self.thickness_nm
         } else {
             auto_pen_nm(self.text_width_nm().min(self.size_nm), self.bold)
@@ -248,7 +248,7 @@ impl RefImage {
 
     /// The size the image has on the board, nm (`BITMAP_BASE::GetSize`); zero for data that is not an image.
     pub fn size_nm(&self) -> (Nm, Nm) {
-        self.header().map_or((0, 0), |h| crate::image_info::size_nm(&h, self.scale_ppm))
+        self.header().map_or((Nm::ZERO, Nm::ZERO), |h| crate::image_info::size_nm(&h, self.scale_ppm))
     }
 
     /// The box the image covers, `[x0, y0, x1, y1]` (`REFERENCE_IMAGE::GetBoundingBox`: `BOX2I::ByCenter( m_pos, size )`).
@@ -259,7 +259,7 @@ impl RefImage {
 }
 
 /// `DEFAULT_PT_SIZE_MM` of `pcbnew/pcb_point.cpp`: the size of a point the Place Point tool makes.
-pub const DEFAULT_POINT_SIZE_NM: Nm = 1_000_000;
+pub const DEFAULT_POINT_SIZE_NM: Nm = Nm::new(1_000_000);
 
 fn d_point_size() -> Nm {
     DEFAULT_POINT_SIZE_NM
@@ -352,18 +352,18 @@ pub struct ShapeStyle {
 }
 
 fn is_zero(v: &crate::ir::Nm) -> bool {
-    *v == 0
+    *v == Nm::ZERO
 }
 
 impl ShapeStyle {
     /// The style of `id` that says nothing.
     pub fn empty(id: &str) -> ShapeStyle {
-        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: 0 }
+        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: Nm::ZERO }
     }
 
     /// Says nothing beyond the shape itself: not kept.
     pub fn is_empty(&self) -> bool {
-        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == 0
+        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == Nm::ZERO
     }
 }
 
@@ -463,12 +463,12 @@ impl BoardItems {
 
     /// The corner radius of the rectangle `shape_id` (0: sharp, or not a rectangle).
     pub fn corner_radius_of(&self, shape_id: &str) -> crate::ir::Nm {
-        self.style_of(shape_id).map(|st| st.corner_radius).unwrap_or(0)
+        self.style_of(shape_id).map(|st| st.corner_radius).unwrap_or(Nm::ZERO)
     }
 
     /// Round the corners of the rectangle `shape_id` by `radius` (0: sharp).
     pub fn set_corner_radius(&mut self, shape_id: &str, radius: crate::ir::Nm) {
-        self.edit_style(shape_id, |st| st.corner_radius = radius.max(0));
+        self.edit_style(shape_id, |st| st.corner_radius = radius.max(Nm::ZERO));
     }
 
     /// The net of the shape `shape_id`, if it is on one.
@@ -559,36 +559,36 @@ mod tests {
     #[test]
     fn a_new_text_box_has_the_margin_of_its_layer_defaults() {
         // 0.12 mm border, 1 mm text: 60 + 750.
-        let b = TextBox::new("F.SilkS", Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 5_000_000 }, 1_000_000, 120_000);
-        assert_eq!((b.margin_left_nm, b.margin_top_nm, b.margin_right_nm, b.margin_bottom_nm), (810_000, 810_000, 810_000, 810_000));
+        let b = TextBox::new("F.SilkS", Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(10_000_000), y: Nm::new(5_000_000) }, Nm::new(1_000_000), Nm::new(120_000));
+        assert_eq!((b.margin_left_nm, b.margin_top_nm, b.margin_right_nm, b.margin_bottom_nm), (Nm::new(810_000), Nm::new(810_000), Nm::new(810_000), Nm::new(810_000)));
         assert_eq!((b.halign, b.valign, b.mirror, b.border), (TextJustify::Left, TextVAlign::Top, false, true));
-        assert!(TextBox::new("B.SilkS", Point::default(), Point::default(), 1_000_000, 120_000).mirror, "text on a back layer is mirrored");
+        assert!(TextBox::new("B.SilkS", Point::default(), Point::default(), Nm::new(1_000_000), Nm::new(120_000)).mirror, "text on a back layer is mirrored");
     }
 
     #[test]
     fn the_pen_is_the_files_or_an_eighth_of_the_smaller_glyph_side() {
-        let mut b = TextBox::new("F.SilkS", Point::default(), Point::default(), 1_000_000, 120_000);
-        assert_eq!(b.effective_pen_nm(), 125_000);
+        let mut b = TextBox::new("F.SilkS", Point::default(), Point::default(), Nm::new(1_000_000), Nm::new(120_000));
+        assert_eq!(b.effective_pen_nm(), Nm::new(125_000));
         b.bold = true;
-        assert_eq!(b.effective_pen_nm(), 200_000);
-        b.width_nm = Some(800_000);
-        assert_eq!(b.effective_pen_nm(), 160_000);
-        b.thickness_nm = 150_000;
-        assert_eq!(b.effective_pen_nm(), 150_000);
+        assert_eq!(b.effective_pen_nm(), Nm::new(200_000));
+        b.width_nm = Some(Nm::new(800_000));
+        assert_eq!(b.effective_pen_nm(), Nm::new(160_000));
+        b.thickness_nm = Nm::new(150_000);
+        assert_eq!(b.effective_pen_nm(), Nm::new(150_000));
     }
 
     #[test]
     fn a_reference_image_covers_its_pixels_at_their_definition_times_the_scale_around_its_centre() {
         let png = crate::image_info::base64_encode(&crate::image_info::solid_png(60, 40, [9, 9, 9], 254));
-        let mut img = RefImage::new("Cmts.User", Point { x: 10_000_000, y: 20_000_000 }, &png);
+        let mut img = RefImage::new("Cmts.User", Point { x: Nm::new(10_000_000), y: Nm::new(20_000_000) }, &png);
         // 60 x 40 px at 254 ppi: 6 mm x 4 mm
-        assert_eq!(img.size_nm(), (6_000_000, 4_000_000));
-        assert_eq!(img.bounds(), [7_000_000, 18_000_000, 13_000_000, 22_000_000]);
+        assert_eq!(img.size_nm(), (Nm::new(6_000_000), Nm::new(4_000_000)));
+        assert_eq!(img.bounds(), [Nm::new(7_000_000), Nm::new(18_000_000), Nm::new(13_000_000), Nm::new(22_000_000)]);
         img.scale_ppm = 2_500_000;
-        assert_eq!(img.bounds(), [2_500_000, 15_000_000, 17_500_000, 25_000_000]);
+        assert_eq!(img.bounds(), [Nm::new(2_500_000), Nm::new(15_000_000), Nm::new(17_500_000), Nm::new(25_000_000)]);
         // data that is no image has no size
         img.data = "AAAA".into();
-        assert_eq!(img.size_nm(), (0, 0));
+        assert_eq!(img.size_nm(), (Nm::ZERO, Nm::ZERO));
         assert!(RefImage::new("F.Cu", Point::default(), "AB\nCD ").data == "ABCD", "white space is taken out of the data");
     }
 
@@ -596,8 +596,8 @@ mod tests {
     fn images_get_ids_of_their_own_kind_and_the_scale_one_is_not_written() {
         let png = crate::image_info::base64_encode(&crate::image_info::solid_png(20, 20, [1, 1, 1], 300));
         let mut items = BoardItems::default();
-        items.images.push(RefImage::new("Cmts.User", Point { x: 1, y: 2 }, &png));
-        items.images.push(RefImage::new("Cmts.User", Point { x: 1, y: 2 }, &png));
+        items.images.push(RefImage::new("Cmts.User", Point { x: Nm::new(1), y: Nm::new(2) }, &png));
+        items.images.push(RefImage::new("Cmts.User", Point { x: Nm::new(1), y: Nm::new(2) }, &png));
         assert!(!items.is_empty());
         let mut existing = std::collections::BTreeSet::new();
         items.assign_missing_ids(&mut existing);
@@ -619,8 +619,8 @@ mod tests {
 
     #[test]
     fn a_point_is_a_mark_of_a_size_on_a_layer_with_no_lock_of_its_own() {
-        let p = PcbPoint::new("F.SilkS", Point { x: 10_000_000, y: 20_000_000 });
-        assert_eq!((p.size_nm, p.bounds()), (1_000_000, [9_500_000, 19_500_000, 10_500_000, 20_500_000]), "the default is 1 mm and the box is centred on the point");
+        let p = PcbPoint::new("F.SilkS", Point { x: Nm::new(10_000_000), y: Nm::new(20_000_000) });
+        assert_eq!((p.size_nm, p.bounds()), (Nm::new(1_000_000), [Nm::new(9_500_000), Nm::new(19_500_000), Nm::new(10_500_000), Nm::new(20_500_000)]), "the default is 1 mm and the box is centred on the point");
         let mut items = BoardItems::default();
         items.points.push(p.clone());
         items.points.push(p);
@@ -635,14 +635,14 @@ mod tests {
         assert_eq!(back, items);
         // a size left out is the default
         let p: PcbPoint = serde_json::from_str(r#"{"layer": "F.Cu", "at": {"x": 1, "y": 2}}"#).unwrap();
-        assert_eq!(p.size_nm, 1_000_000);
+        assert_eq!(p.size_nm, Nm::new(1_000_000));
     }
 
     #[test]
     fn items_serialize_to_nothing_when_there_are_none_and_ids_are_deterministic() {
         let mut items = BoardItems::default();
         assert_eq!(serde_json::to_string(&items).unwrap(), "{}");
-        let mut t = TextBox::new("F.SilkS", Point { x: 1000, y: 2000 }, Point { x: 3000, y: 4000 }, 1_000_000, 120_000);
+        let mut t = TextBox::new("F.SilkS", Point { x: Nm::new(1000), y: Nm::new(2000) }, Point { x: Nm::new(3000), y: Nm::new(4000) }, Nm::new(1_000_000), Nm::new(120_000));
         t.text = "hello".into();
         items.text_boxes.push(t.clone());
         items.text_boxes.push(t);

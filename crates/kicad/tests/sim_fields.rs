@@ -2,6 +2,7 @@
 //! symbol's `Sim.*` fields (KiCad copies every field of a library symbol onto a symbol it places, and `SIM_LIB_MGR::CreateModel` reads them off
 //! the placed symbol), and the derived project carries the simulator's settings as `schematic.ngspice`.
 
+use eda_model::units::Nm;
 use eda_kicad::{export_kicad_pro_for, export_kicad_sch, sim_fields_of, ExportMeta};
 use eda_model::ir::{Design, Point, Provenance, SchematicSection, SymbolInstance};
 use eda_model::sch_extras::NgspiceSettings;
@@ -57,7 +58,7 @@ fn design(sch: SchematicSection) -> Design {
 fn sheet() -> SchematicSection {
     let sym = SymbolInstance {
         id: "V1".into(),
-        at: Point { x: 50_800_000, y: 50_800_000 },
+        at: Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(50_800_000) },
         rot: 0,
         mirrored: false,
         mirror_y: false,

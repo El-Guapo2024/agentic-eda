@@ -95,7 +95,7 @@ impl<'m> Scene<'m> {
         let i = ctx.specs.iter().position(|s| s.name == f.name)?;
         let pf = ctx.page(&ctx.current(&self.sch)[i], &ctx.specs[i].text);
         let r = eda_engine::fields::field_rect(&pf);
-        Some((Point { x: r.x0, y: r.y0 }, Point { x: r.x1, y: r.y1 }))
+        Some((Point { x: Nm::from_raw_shim(r.x0), y: Nm::from_raw_shim(r.y0) }, Point { x: Nm::from_raw_shim(r.x1), y: Nm::from_raw_shim(r.y1) }))
     }
 
     /// Run `edit` on the placement of `f` (every field of its item is stored: a field moved on its own is the first to leave the live placement), then
@@ -113,9 +113,9 @@ impl<'m> Scene<'m> {
     /// `SCH_MOVE_TOOL::moveItem` on a field: the offset, taken back through the transform of the symbol that has it.
     pub(crate) fn move_field(&mut self, f: &FieldSel, delta: Point) {
         self.edit_placement(f, |ctx, _, p| {
-            let (dx, dy) = ctx.local_delta(delta.x, delta.y);
-            p.dx += dx;
-            p.dy += dy;
+            let (dx, dy) = ctx.local_delta(delta.x.raw_shim(), delta.y.raw_shim());
+            p.dx += Nm::from_raw_shim(dx);
+            p.dy += Nm::from_raw_shim(dy);
         });
     }
 
@@ -143,11 +143,11 @@ impl<'m> Scene<'m> {
                 }
                 p.angle = 90_000;
             }
-            let at = Point { x: anchor.0.round() as i64, y: anchor.1.round() as i64 };
+            let at = Point { x: Nm::from_raw_shim(anchor.0.round() as i64), y: Nm::from_raw_shim(anchor.1.round() as i64) };
             let to = rotate_point(at, center, ccw);
-            let (lx, ly) = ctx.local_pos((to.x as f64, to.y as f64));
-            p.dx = lx;
-            p.dy = ly;
+            let (lx, ly) = ctx.local_pos((to.x.raw_shim() as f64, to.y.raw_shim() as f64));
+            p.dx = Nm::from_raw_shim(lx);
+            p.dy = Nm::from_raw_shim(ly);
         });
     }
 
@@ -223,8 +223,8 @@ pub(crate) struct FieldEdit {
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear; it can be difficult to correct if you can't select it".
-const TEXT_SIZE_MIN_NM: Nm = 10_000;
-const TEXT_SIZE_MAX_NM: Nm = 1_000_000_000;
+const TEXT_SIZE_MIN_NM: Nm = Nm::from_raw_shim(10_000);
+const TEXT_SIZE_MAX_NM: Nm = Nm::from_raw_shim(1_000_000_000);
 
 impl<'a> Board<'a> {
     /// Field Properties: see [`SchCmd::EditField`](crate::sch_edit::SchCmd::EditField).
@@ -264,13 +264,13 @@ impl<'a> Board<'a> {
         let mut placements = ctx.current(sch);
         let old = placements[index].clone();
         let now = ctx.page(&old, &ctx.specs[index].text);
-        let anchor = edit.at.map(|p| (p.x as f64, p.y as f64)).unwrap_or(now.at);
+        let anchor = edit.at.map(|p| (p.x.raw_shim() as f64, p.y.raw_shim() as f64)).unwrap_or(now.at);
         let vertical = edit.vertical.unwrap_or(now.vertical);
         let h = edit.h.map(hjustify).unwrap_or(now.h);
         let v = edit.v.map(vjustify).unwrap_or(now.v);
         let mut p = ctx.placed_at(&old, anchor, vertical, h, v);
         if let Some(s) = edit.size_nm {
-            p.size_nm = if s == eda_model::ir::DEFAULT_FIELD_SIZE_NM { 0 } else { s };
+            p.size_nm = if s == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { s };
         }
         p.bold = edit.bold.unwrap_or(old.bold);
         p.italic = edit.italic.unwrap_or(old.italic);

@@ -1,6 +1,7 @@
 //! The board items of `eda_model::pcb_items` as the studio's state sends them (`GET /api/state`, `drawings`): the display shape of
 //! `web/studio/src/api/types.ts` (`BoardTextBox`, ..), points as `[x, y]` pairs and the text with its `${VARIABLES}` expanded as `shown` where that differs.
 
+use eda_model::units::Nm;
 use eda_model::ir::{DrawingsSection, TextJustify, TextVAlign};
 use eda_model::image_info::{content_hash, DEFAULT_PPI};
 use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
@@ -48,7 +49,7 @@ pub(crate) fn text_box_json(t: &TextBox, tv: &PcbShown) -> Value {
         "size": t.size_nm,
         "width": t.text_width_nm(),
         "thickness": t.effective_pen_nm(),
-        "thickness_auto": t.thickness_nm == 0,
+        "thickness_auto": t.thickness_nm == Nm::ZERO,
         "halign": halign(t.halign),
         "valign": valign(t.valign),
         "mirror": t.mirror,
@@ -193,7 +194,7 @@ fn endings_json(json: &mut Value, shape: &eda_model::ir::Shape, items: &eda_mode
         json["net"] = json!(net);
     }
     // A rectangle's corner radius (`EDA_SHAPE::GetCornerRadius`), drawn rounded.
-    if st.corner_radius > 0 && matches!(shape, eda_model::ir::Shape::Rect { .. }) {
+    if st.corner_radius > Nm::ZERO && matches!(shape, eda_model::ir::Shape::Rect { .. }) {
         json["corner_radius"] = json!(st.corner_radius);
     }
 }

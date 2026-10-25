@@ -17,12 +17,13 @@
 //! and `pcb_port` centers are approximated at the owning component's center.
 //! Real per-pin offsets are a candidate IR/model addition (see crate docs).
 
+use eda_model::units::Nm;
 use eda_model::ir::Design;
 use eda_model::{CheckResult, ConstraintModel, Part};
 use serde_json::{json, Value};
 
 fn um_to_mm(nm: i64) -> f64 {
-    eda_model::units::to_mm(nm)
+    eda_model::units::to_mm(Nm::from_raw_shim(nm))
 }
 
 /// Map our KiCad-style stackup layer names ("F.Cu", "B.Cu", "In1.Cu", ...)
@@ -167,7 +168,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                 "type": "schematic_component",
                 "schematic_component_id": comp_id,
                 "source_component_id": component_id_of.get(sym.id.as_str()).cloned().unwrap_or_default(),
-                "center": { "x": um_to_mm(sym.at.x), "y": um_to_mm(sym.at.y) },
+                "center": { "x": um_to_mm(sym.at.x.raw_shim()), "y": um_to_mm(sym.at.y.raw_shim()) },
                 "size": { "width": 1.0, "height": 1.0 },
                 "rotation": sym.rot,
                 "mirrored": sym.mirrored,
@@ -182,7 +183,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                         "schematic_port_id": format!("schematic_port_{i}_{j}"),
                         "source_port_id": port_id_of.get(&key).cloned().unwrap_or_default(),
                         "schematic_component_id": comp_id,
-                        "center": { "x": um_to_mm(sym.at.x), "y": um_to_mm(sym.at.y) },
+                        "center": { "x": um_to_mm(sym.at.x.raw_shim()), "y": um_to_mm(sym.at.y.raw_shim()) },
                     }));
                 }
             }
@@ -199,8 +200,8 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                 .windows(2)
                 .map(|w| {
                     json!({
-                        "from": { "x": um_to_mm(w[0].x), "y": um_to_mm(w[0].y) },
-                        "to": { "x": um_to_mm(w[1].x), "y": um_to_mm(w[1].y) },
+                        "from": { "x": um_to_mm(w[0].x.raw_shim()), "y": um_to_mm(w[0].y.raw_shim()) },
+                        "to": { "x": um_to_mm(w[1].x.raw_shim()), "y": um_to_mm(w[1].y.raw_shim()) },
                     })
                 })
                 .collect();
@@ -256,26 +257,26 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                 for pad in &footprint.pads {
                     let hw = pad.size.0 / 2;
                     let hh = pad.size.1 / 2;
-                    min_x = min_x.min(pad.at.0 - hw);
-                    max_x = max_x.max(pad.at.0 + hw);
-                    min_y = min_y.min(pad.at.1 - hh);
-                    max_y = max_y.max(pad.at.1 + hh);
+                    min_x = min_x.min((pad.at.0 - hw).raw_shim());
+                    max_x = max_x.max((pad.at.0 + hw).raw_shim());
+                    min_y = min_y.min((pad.at.1 - hh).raw_shim());
+                    max_y = max_y.max((pad.at.1 + hh).raw_shim());
                 }
                 if min_x > max_x {
-                    (0, 0)
+                    (Nm::ZERO, Nm::ZERO)
                 } else {
-                    (max_x - min_x, max_y - min_y)
+                    (Nm::from_raw_shim(max_x - min_x), Nm::from_raw_shim(max_y - min_y))
                 }
             });
             elements.push(json!({
                 "type": "pcb_component",
                 "pcb_component_id": pcb_comp_id,
                 "source_component_id": component_id_of.get(fp.id.as_str()).cloned().unwrap_or_default(),
-                "center": { "x": um_to_mm(fp.at.x), "y": um_to_mm(fp.at.y) },
+                "center": { "x": um_to_mm(fp.at.x.raw_shim()), "y": um_to_mm(fp.at.y.raw_shim()) },
                 "rotation": fp.rot,
                 "layer": layer,
-                "width": um_to_mm(width_nm),
-                "height": um_to_mm(height_nm),
+                "width": um_to_mm(width_nm.raw_shim()),
+                "height": um_to_mm(height_nm.raw_shim()),
             }));
             let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
             let (sin, cos) = rad.sin_cos();
@@ -289,11 +290,11 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                     continue;
                 }
                 let key = format!("{}.{}", fp.id, pad.number);
-                let lx = pad.at.0 as f64 * mirror;
-                let ly = pad.at.1 as f64;
-                let x = fp.at.x as f64 + lx * cos - ly * sin;
-                let y = fp.at.y as f64 + lx * sin + ly * cos;
-                let (w, h) = (pad.size.0 as f64, pad.size.1 as f64);
+                let lx = pad.at.0.raw_shim() as f64 * mirror;
+                let ly = pad.at.1.raw_shim() as f64;
+                let x = fp.at.x.raw_shim() as f64 + lx * cos - ly * sin;
+                let y = fp.at.y.raw_shim() as f64 + lx * sin + ly * cos;
+                let (w, h) = (pad.size.0.raw_shim() as f64, pad.size.1.raw_shim() as f64);
                 let bw = w * cos.abs() + h * sin.abs();
                 let bh = w * sin.abs() + h * cos.abs();
                 let source_port_id = port_id_of.get(&key).cloned().unwrap_or_default();
@@ -328,7 +329,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                         "y": um_to_mm(y.round() as i64),
                         "shape": "circle",
                         "outer_diameter": um_to_mm(bw.round() as i64),
-                        "hole_diameter": um_to_mm(hole_diameter),
+                        "hole_diameter": um_to_mm(hole_diameter.raw_shim()),
                         "layers": ["top", "bottom"],
                     }));
                 } else if shape == "circle" {
@@ -374,9 +375,9 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                 "pcb_trace_id": format!("pcb_trace_{i}"),
                 "route": track.pts.iter().map(|p| json!({
                     "route_type": "wire",
-                    "x": um_to_mm(p.x),
-                    "y": um_to_mm(p.y),
-                    "width": um_to_mm(track.width),
+                    "x": um_to_mm(p.x.raw_shim()),
+                    "y": um_to_mm(p.y.raw_shim()),
+                    "width": um_to_mm(track.width.raw_shim()),
                     "layer": layer_ref(&track.layer),
                 })).collect::<Vec<_>>(),
             });
@@ -396,10 +397,10 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
             let mut obj = json!({
                 "type": "pcb_via",
                 "pcb_via_id": format!("pcb_via_{i}"),
-                "x": um_to_mm(via.at.x),
-                "y": um_to_mm(via.at.y),
-                "outer_diameter": um_to_mm(via.diameter),
-                "hole_diameter": um_to_mm(via.drill),
+                "x": um_to_mm(via.at.x.raw_shim()),
+                "y": um_to_mm(via.at.y.raw_shim()),
+                "outer_diameter": um_to_mm(via.diameter.raw_shim()),
+                "hole_diameter": um_to_mm(via.drill.raw_shim()),
                 "layers": [layer_ref(&via.from_layer), layer_ref(&via.to_layer)],
             });
             if let Some(id) = source_trace_id {
@@ -414,6 +415,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Point, SchematicSection, SymbolInstance, Provenance};
     use eda_model::{Net, Pin, PinKind};
@@ -462,8 +464,8 @@ mod tests {
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
                 symbols: vec![
-                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: 1_000_000, y: 2_000_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: 3_000_000, y: 2_000_000 }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 ],
                 wires: vec![],
                 labels: vec![],
@@ -583,7 +585,7 @@ mod tests {
             id: String::new(),
             net: "VIN".into(),
             pins: vec![],
-            pts: vec![Point { x: 1_000_000, y: 2_000_000 }, Point { x: 3_000_000, y: 2_000_000 }],
+            pts: vec![Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }],
             bus: false,
         });
         let v = to_circuit_json(&d, &m).unwrap();
@@ -607,8 +609,8 @@ mod tests {
                 pads: vec![
                     eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "1".into(),
-                        at: (-800_000, 0),
-                        size: (900_000, 900_000),
+                        at: (Nm::from_raw_shim(-800_000), Nm::ZERO),
+                        size: (Nm::from_raw_shim(900_000), Nm::from_raw_shim(900_000)),
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
@@ -618,8 +620,8 @@ mod tests {
                     },
                     eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "2".into(),
-                        at: (800_000, 0),
-                        size: (900_000, 900_000),
+                        at: (Nm::from_raw_shim(800_000), Nm::ZERO),
+                        size: (Nm::from_raw_shim(900_000), Nm::from_raw_shim(900_000)),
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
@@ -638,10 +640,10 @@ mod tests {
         };
         let mut d = design();
         d.placement = Some(PlacementSection {
-            outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 10_000_000 }],
+            outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }],
             footprints: vec![eda_model::ir::FootprintInstance {
                 id: "R1".into(),
-                at: Point { x: 5_000_000, y: 5_000_000 },
+                at: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) },
                 rot: 0,
                 side: Side::Top, label: Default::default()
             }],

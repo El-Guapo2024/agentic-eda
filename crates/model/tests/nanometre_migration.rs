@@ -6,6 +6,7 @@
 //! with its lengths multiplied by 1000 -- what is a length is said here, by key, independently of the `crate::units::de` annotations the reader uses, so
 //! a length field the reader missed (or a count, an angle or a ratio it scaled) fails the comparison.
 
+use eda_model::units::Nm;
 use eda_model::ir::{Design, SCHEMA_VERSION};
 use eda_model::ConstraintModel;
 use serde_json::{json, Map, Value};
@@ -266,7 +267,7 @@ fn the_studios_own_overlays_come_back_from_micrometres() {
     });
     let mut design: Design = serde_json::from_value(v2.clone()).expect("the version 2 overlays read");
     // the one default here that micrometres cannot hold (KiCad's 1.27 mm x sin 27.5 degrees, 0.586421 mm)
-    design.drawings.as_mut().unwrap().dimension_settings.extension_height = 586_000;
+    design.drawings.as_mut().unwrap().dimension_settings.extension_height = Nm::new(586_000);
     let written = serde_json::to_value(&design).unwrap();
     // back to micrometres, by the rule `expected` multiplies by
     fn to_um(v: &Value, path: &[String]) -> Value {
@@ -307,9 +308,9 @@ fn the_studios_own_overlays_come_back_from_micrometres() {
     assert!(want == written, "and is what the fixtures' rule says: {:?}", first_difference(&want, &written, ""));
     // spot checks of what is not a length
     let pattern = &migrated.drawings.as_ref().unwrap().tuning_patterns[0];
-    assert_eq!((pattern.target_length.opt, pattern.target_delay.opt, pattern.last_tuning_length), (50_000_000, 120_000_000, 49_999_999));
+    assert_eq!((pattern.target_length.opt, pattern.target_delay.opt, pattern.last_tuning_length), (50_000_000, 120_000_000, Nm::new(49_999_999)));
     let table = &migrated.drawings.as_ref().unwrap().tables[0];
-    assert_eq!((table.border.stroke.width_nm, table.cells[0].style.line_spacing_permille, table.angle), (-1, 1200, 90_000));
+    assert_eq!((table.border.stroke.width_nm, table.cells[0].style.line_spacing_permille, table.angle), (Nm::new(-1), 1200, 90_000));
 }
 
 #[test]
@@ -327,31 +328,31 @@ fn a_design_read_twice_is_not_scaled_twice() {
 #[test]
 fn a_design_without_a_version_is_a_micrometre_one() {
     let d: Design = serde_json::from_str(r#"{"provenance":{"engine_version":"x","intent_hash":"","seed":0},"placement":{"outline":[{"x":1,"y":-2}],"footprints":[]}}"#).unwrap();
-    assert_eq!(d.placement.unwrap().outline[0], eda_model::ir::Point { x: 1000, y: -2000 });
+    assert_eq!(d.placement.unwrap().outline[0], eda_model::ir::Point { x: Nm::new(1000), y: Nm::new(-2000) });
     assert_eq!(d.schema, SCHEMA_VERSION);
 }
 
 #[test]
 fn a_new_design_is_read_as_it_is() {
     let d: Design = serde_json::from_str(r#"{"schema":2,"provenance":{"engine_version":"x","intent_hash":"","seed":0},"placement":{"outline":[{"x":1,"y":-2}],"footprints":[]}}"#).unwrap();
-    assert_eq!(d.placement.unwrap().outline[0], eda_model::ir::Point { x: 1, y: -2 });
+    assert_eq!(d.placement.unwrap().outline[0], eda_model::ir::Point { x: Nm::new(1), y: Nm::new(-2) });
     // a version 2 document whose version is not its first key (one built through a `serde_json::Value`, whose keys are sorted): what comes before it
     // is held until the version is known
     let late: Design = serde_json::from_str(r#"{"placement":{"outline":[{"x":1,"y":-2}],"footprints":[]},"provenance":{"engine_version":"x","intent_hash":"","seed":0},"schema":2}"#).unwrap();
-    assert_eq!(late.placement.unwrap().outline[0], eda_model::ir::Point { x: 1, y: -2 });
+    assert_eq!(late.placement.unwrap().outline[0], eda_model::ir::Point { x: Nm::new(1), y: Nm::new(-2) });
     let late: Design = serde_json::from_str(r#"{"placement":{"outline":[{"x":1,"y":-2}],"footprints":[]},"provenance":{"engine_version":"x","intent_hash":"","seed":0},"schema":1}"#).unwrap();
-    assert_eq!(late.placement.as_ref().unwrap().outline[0], eda_model::ir::Point { x: 1000, y: -2000 });
+    assert_eq!(late.placement.as_ref().unwrap().outline[0], eda_model::ir::Point { x: Nm::new(1000), y: Nm::new(-2000) });
     let round: Design = serde_json::from_value(serde_json::to_value(&late).unwrap()).unwrap();
-    assert_eq!(round.placement.unwrap().outline[0], eda_model::ir::Point { x: 1000, y: -2000 }, "through a sorted `Value` and back, not scaled again");
+    assert_eq!(round.placement.unwrap().outline[0], eda_model::ir::Point { x: Nm::new(1000), y: Nm::new(-2000) }, "through a sorted `Value` and back, not scaled again");
 }
 
 #[test]
 fn an_intent_without_a_version_is_micrometres_every_time_it_is_read() {
     let model: ConstraintModel = serde_yaml::from_str(include_str!("../../../examples/mcu_board_30plus.yaml")).unwrap();
-    assert_eq!((model.board.grid, model.board.track_width, model.board.clearance), (254_000, 200_000, 200_000), "the defaults, already nanometres");
+    assert_eq!((model.board.grid, model.board.track_width, model.board.clearance), (Nm::new(254_000), Nm::new(200_000), Nm::new(200_000)), "the defaults, already nanometres");
     let model: ConstraintModel = serde_yaml::from_str(include_str!("../../../examples/dense_small_outline.yaml")).unwrap();
-    assert_eq!((model.board.track_width, model.board.clearance), (200_000, 200_000), "written 200 (um) in the file");
-    assert!(model.board.outline.as_ref().is_some_and(|o| o.iter().all(|p| p.x % 1000 == 0 && p.y % 1000 == 0) && o.iter().any(|p| p.x >= 1_000_000)));
+    assert_eq!((model.board.track_width, model.board.clearance), (Nm::new(200_000), Nm::new(200_000)), "written 200 (um) in the file");
+    assert!(model.board.outline.as_ref().is_some_and(|o| o.iter().all(|p| p.x % Nm::new(1000) == Nm::ZERO && p.y % Nm::new(1000) == Nm::ZERO) && o.iter().any(|p| p.x >= Nm::new(1_000_000))));
     // an intent is not buffered (a YAML number has to stay text for a field that is text): its version has to come first, as the code writes it
     let late = serde_yaml::from_str::<ConstraintModel>("board:\n  track_width: 200000\nschema: 2\n").unwrap_err().to_string();
     assert!(late.contains("first key"), "{late}");
@@ -410,7 +411,8 @@ fn every_length_field_of_a_serialized_type_reads_through_the_unit_scale() {
                 if is_field && is_length && !t.contains('{') {
                     let attrs: String = lines[..i].iter().rev().take_while(|l| l.trim().starts_with('#') || l.trim().starts_with("//")).map(|l| l.trim()).collect();
                     checked += 1;
-                    if !attrs.contains("crate::units::de") {
+                    // a field that held nanometres even in the micrometre IR says so, and is not scaled
+                    if !attrs.contains("crate::units::de") && !attrs.contains("nanometres since schema 1") {
                         missing.push(format!("{}:{}: {t}", path.file_name().unwrap().to_string_lossy(), i + 1));
                     }
                 } else if is_length && t.contains('{') && t.contains('}') {

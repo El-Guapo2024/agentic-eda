@@ -27,6 +27,7 @@
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use crate::board;
     use eda_model::ir::Design;
     use eda_model::{CheckStatus, ConstraintModel};
@@ -183,13 +184,13 @@ mod tests {
         let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
         let text = std::fs::read_to_string(root.join("pcbnew/pns_regressions/boards/dp_test.kicad_pcb")).ok()?;
         let (mut design, mut model, _) = eda_kicad::import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import: {e:?}"));
-        model.board.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["/D+".into(), "/D-".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(200_000), diff_pair_gap: Some(250_000), diff_pair_via_gap: Some(250_000), priority: 0 });
+        model.board.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["/D+".into(), "/D-".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(Nm::from_raw_shim(200_000)), diff_pair_gap: Some(Nm::from_raw_shim(250_000)), diff_pair_via_gap: Some(Nm::from_raw_shim(250_000)), priority: 0 });
         // coupled stretches of the pair may not come closer than 0.24 mm (the pair's gap, less the rounding of a micrometre grid)
         model.board.custom_rules_text = Some("(version 1)\n(rule \"pair gap\"\n  (condition \"A.inDiffPair('/D')\")\n  (constraint diff_pair_gap (min 0.24mm)))\n".into());
         let p = |x, y| eda_model::ir::Point { x, y };
         let rt = design.routing.as_mut().unwrap();
-        for (id, pts) in [("gnd_east", vec![p(128_000_000, 90_000_000), p(128_000_000, 93_000_000), p(130_000_000, 95_000_000), p(130_000_000, 100_000_000)]), ("gnd_north", vec![p(109_000_000, 92_500_000), p(114_000_000, 91_500_000), p(119_000_000, 91_500_000), p(121_000_000, 89_500_000)])] {
-            rt.tracks.push(eda_model::ir::Track { id: id.into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts, arc_mid_offset: None });
+        for (id, pts) in [("gnd_east", vec![p(Nm::from_raw_shim(128_000_000), Nm::from_raw_shim(90_000_000)), p(Nm::from_raw_shim(128_000_000), Nm::from_raw_shim(93_000_000)), p(Nm::from_raw_shim(130_000_000), Nm::from_raw_shim(95_000_000)), p(Nm::from_raw_shim(130_000_000), Nm::from_raw_shim(100_000_000))]), ("gnd_north", vec![p(Nm::from_raw_shim(109_000_000), Nm::from_raw_shim(92_500_000)), p(Nm::from_raw_shim(114_000_000), Nm::from_raw_shim(91_500_000)), p(Nm::from_raw_shim(119_000_000), Nm::from_raw_shim(91_500_000)), p(Nm::from_raw_shim(121_000_000), Nm::from_raw_shim(89_500_000))])] {
+            rt.tracks.push(eda_model::ir::Track { id: id.into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts, arc_mid_offset: None });
         }
         design.assign_missing_ids();
         Some((design, model))
@@ -214,10 +215,10 @@ mod tests {
         // (the pad or track end the pair starts on, the cursor it goes to, the mode)
         let p = |x, y| eda_model::ir::Point { x, y };
         let runs = [
-            (p(124_700_000, 95_900_000), p(135_000_000, 95_265_000), eda_pns::settings::Mode::Walkaround),
-            (p(124_700_000, 95_900_000), p(135_000_000, 99_000_000), eda_pns::settings::Mode::Shove),
-            (p(124_700_000, 95_900_000), p(133_000_000, 91_000_000), eda_pns::settings::Mode::Shove),
-            (p(118_950_000, 95_075_000), p(118_050_000, 95_300_000), eda_pns::settings::Mode::Walkaround),
+            (p(Nm::from_raw_shim(124_700_000), Nm::from_raw_shim(95_900_000)), p(Nm::from_raw_shim(135_000_000), Nm::from_raw_shim(95_265_000)), eda_pns::settings::Mode::Walkaround),
+            (p(Nm::from_raw_shim(124_700_000), Nm::from_raw_shim(95_900_000)), p(Nm::from_raw_shim(135_000_000), Nm::from_raw_shim(99_000_000)), eda_pns::settings::Mode::Shove),
+            (p(Nm::from_raw_shim(124_700_000), Nm::from_raw_shim(95_900_000)), p(Nm::from_raw_shim(133_000_000), Nm::from_raw_shim(91_000_000)), eda_pns::settings::Mode::Shove),
+            (p(Nm::from_raw_shim(118_950_000), Nm::from_raw_shim(95_075_000)), p(Nm::from_raw_shim(118_050_000), Nm::from_raw_shim(95_300_000)), eda_pns::settings::Mode::Walkaround),
         ];
         for (start, at, mode) in runs {
             let mut router = eda_pns::router::Router::new(&design, &model);
@@ -321,8 +322,8 @@ mod tests {
             let (_, design, model) = board::load(&dir).unwrap();
             let mut router = eda_pns::router::Router::new(&design, &model);
             router.settings.mode = eda_pns::settings::Mode::Shove;
-            router.start(eda_model::ir::Point { x: 9_875_000, y: 7_200_000 }, "F.Cu", 200_000).expect("D8.1 starts a route");
-            let at = eda_model::ir::Point { x: 9_875_000, y: tip_y };
+            router.start(eda_model::ir::Point { x: Nm::from_raw_shim(9_875_000), y: Nm::from_raw_shim(7_200_000) }, "F.Cu", Nm::from_raw_shim(200_000)).expect("D8.1 starts a route");
+            let at = eda_model::ir::Point { x: Nm::from_raw_shim(9_875_000), y: Nm::from_raw_shim(tip_y) };
             let Some(commit) = router.finish(at) else {
                 eprintln!("tip {tip_y}: the router refuses it");
                 continue;
@@ -405,7 +406,7 @@ mod tests {
             return;
         }
         let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width"];
-        let dist = |a: eda_model::ir::Point, b: eda_model::ir::Point| (((a.x - b.x) as f64).powi(2) + ((a.y - b.y) as f64).powi(2)).sqrt();
+        let dist = |a: eda_model::ir::Point, b: eda_model::ir::Point| (((a.x - b.x).raw_shim() as f64).powi(2) + ((a.y - b.y).raw_shim() as f64).powi(2)).sqrt();
         let mut judged = 0;
         for name in ["issue12609", "issue8407"] {
             let Some((design, model)) = arc_board(name) else {
@@ -465,7 +466,7 @@ mod tests {
                     if let Some((pad, _, _)) = from {
                         tries[0] += 1;
                         let d = dist(*pad, arc.mid);
-                        let target = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x - pad.x) as f64 / d) * 150_000.0).round() as i64, y: arc.mid.y + (((arc.mid.y - pad.y) as f64 / d) * 150_000.0).round() as i64 };
+                        let target = eda_model::ir::Point { x: arc.mid.x + Nm::from_raw_shim((((arc.mid.x - pad.x).raw_shim() as f64 / d) * 150_000.0).round() as i64), y: arc.mid.y + Nm::from_raw_shim((((arc.mid.y - pad.y).raw_shim() as f64 / d) * 150_000.0).round() as i64) };
                         let mut router = Router::new(&design, &model);
                         router.settings.mode = Mode::Shove;
                         if router.start(*pad, &layer_name, model.board.track_width).is_ok() && router.preview(target).is_some_and(|pv| !pv.colliding) {
@@ -502,7 +503,7 @@ mod tests {
                 if dragged < 2 && tries[2] < 16 {
                     tries[2] += 1;
                     let (c, r) = (arc.center_f(), arc.radius());
-                    let to = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x as f64 - c.0) / r) * 400_000.0).round() as i64, y: arc.mid.y + (((arc.mid.y as f64 - c.1) / r) * 400_000.0).round() as i64 };
+                    let to = eda_model::ir::Point { x: arc.mid.x + Nm::from_raw_shim((((arc.mid.x.raw_shim() as f64 - c.0) / r) * 400_000.0).round() as i64), y: arc.mid.y + Nm::from_raw_shim((((arc.mid.y.raw_shim() as f64 - c.1) / r) * 400_000.0).round() as i64) };
                     let mut router = Router::new(&design, &model);
                     router.settings.mode = Mode::Shove;
                     if router.drag_start(arc.mid, &layer_name).is_ok() && matches!(router.drag_kind(), Some(DragKind::Arc)) && router.drag_preview(to).is_some_and(|pv| !pv.colliding) {
@@ -561,13 +562,13 @@ mod tests {
         let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data")).join("pcbnew/pns_regressions/issue22749-shove-weird-drag-track-end");
         if let Ok(text) = std::fs::read_to_string(root.join("pns.log")) {
             let log: serde_json::Value = serde_json::from_str(&text).unwrap();
-            let pt = |v: &serde_json::Value| Point { x: v["x"].as_f64().unwrap().round() as i64, y: v["y"].as_f64().unwrap().round() as i64 };
+            let pt = |v: &serde_json::Value| Point { x: Nm::from_raw_shim(v["x"].as_f64().unwrap().round() as i64), y: Nm::from_raw_shim(v["y"].as_f64().unwrap().round() as i64) };
             let events = log["events"].as_array().unwrap();
             let mut router = Router::new(&design, &model);
             router.settings.mode = Mode::Shove;
             let start = pt(&events[0]["position"]);
             let (node, _) = eda_pns::from_ir::build_node(&design, &model);
-            let net = node.nearest_anchor(start, eda_pns::layer::LayerRange::single(1), 500_000, None).and_then(|(id, _)| node.get(id).and_then(|i| i.net().clone())).expect("a track end with a net");
+            let net = node.nearest_anchor(start, eda_pns::layer::LayerRange::single(1), Nm::from_raw_shim(500_000), None).and_then(|(id, _)| node.get(id).and_then(|i| i.net().clone())).expect("a track end with a net");
             router.start(start, "B.Cu", model.board.width_of(&net)).expect("starts on the track end");
             for e in &events[1..] {
                 router.preview(pt(&e["position"]));
@@ -594,7 +595,7 @@ mod tests {
                 break;
             }
             let layer_name = layers.name_of(*layer).to_string();
-            let at = |dx: i64, dy: i64| Point { x: pad.x + dx, y: pad.y + dy };
+            let at = |dx: i64, dy: i64| Point { x: pad.x + Nm::from_raw_shim(dx), y: pad.y + Nm::from_raw_shim(dy) };
             let mut router = Router::new(&design, &model);
             router.settings.mode = Mode::Shove;
             router.settings.fix_all_segments = true;
@@ -686,9 +687,9 @@ mod tests {
                     if router.start(*pad, "F.Cu", model.board.track_width).is_err() {
                         continue;
                     }
-                    let (mid, end) = (Point { x: pad.x + 3_000_000, y: pad.y - 1_300_000 }, Point { x: pad.x + 4_300_000, y: pad.y - 4_500_000 });
+                    let (mid, end) = (Point { x: pad.x + Nm::from_raw_shim(3_000_000), y: pad.y - Nm::from_raw_shim(1_300_000) }, Point { x: pad.x + Nm::from_raw_shim(4_300_000), y: pad.y - Nm::from_raw_shim(4_500_000) });
                     for k in 1..=4 {
-                        router.preview(Point { x: pad.x + 750_000 * k, y: pad.y - 325_000 * k });
+                        router.preview(Point { x: pad.x + Nm::from_raw_shim(750_000) * k, y: pad.y - Nm::from_raw_shim(325_000) * k });
                     }
                     if !router.preview(mid).is_some_and(|pv| !pv.colliding) || !matches!(router.fix(mid), Some(eda_pns::line_placer::FixOutcome::Fixed { real_end: false })) {
                         continue;
@@ -757,8 +758,8 @@ mod tests {
                     let has = node.joint_at(end, &s.net).is_some_and(|j| j.links.iter().any(|&id| node.get(id).is_some_and(Item::is_virtual)));
                     if has && !junctions.iter().any(|(p, _, _)| *p == end) {
                         // the grab point: on the segment, a micrometre (1000 nm) from the end
-                        let len = (((other.x - end.x) as f64).hypot((other.y - end.y) as f64)).max(1.0) / 1000.0;
-                        let at = Point { x: end.x + ((other.x - end.x) as f64 / len).round() as i64, y: end.y + ((other.y - end.y) as f64 / len).round() as i64 };
+                        let len = (((other.x - end.x).raw_shim() as f64).hypot((other.y - end.y).raw_shim() as f64)).max(1.0) / 1000.0;
+                        let at = Point { x: end.x + Nm::from_raw_shim(((other.x - end.x).raw_shim() as f64 / len).round() as i64), y: end.y + Nm::from_raw_shim(((other.y - end.y).raw_shim() as f64 / len).round() as i64) };
                         junctions.push((end, s.layer, at));
                     }
                 }
@@ -776,7 +777,7 @@ mod tests {
                 if router.drag_start(*at, layers.name_of(*layer)).is_err() || !router.drag_virtual_via() {
                     continue;
                 }
-                let to = Point { x: end.x + 300_000, y: end.y + 300_000 };
+                let to = Point { x: end.x + Nm::from_raw_shim(300_000), y: end.y + Nm::from_raw_shim(300_000) };
                 if !router.drag_preview(to).is_some_and(|pv| !pv.colliding) {
                     continue;
                 }
@@ -822,19 +823,19 @@ mod tests {
         model.board.layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"].iter().map(|l| l.to_string()).collect();
         // a build-up stackup: prepreg under each outer layer, the core in the middle -- a microvia goes through one prepreg (kicad-cli's
         // `microvia_crosses_core`, a check newer than 8303b2ad, refuses one through a core, and KiCad's default stackup has a core under F.Cu and B.Cu)
-        let mut stackup = eda_model::rules::default_stackup(4, 1_600_000);
+        let mut stackup = eda_model::rules::default_stackup(4, Nm::from_raw_shim(1_600_000));
         for l in stackup.layers.iter_mut().filter(|l| matches!(l.kind.as_deref(), Some("core" | "prepreg"))) {
             l.kind = Some(if l.name == "dielectric 2" { "core" } else { "prepreg" }.into());
         }
         model.stackup = Some(stackup);
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
-        let stub = |id: &str, net: &str, layer: &str, a: Point, b: Point| Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: 250_000, pts: vec![a, b], arc_mid_offset: None };
+        let stub = |id: &str, net: &str, layer: &str, a: Point, b: Point| Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: Nm::from_raw_shim(250_000), pts: vec![a, b], arc_mid_offset: None };
         let tracks = vec![
-            stub("sig_f", "SIG", "F.Cu", p(2_000_000, 6_000_000), p(4_000_000, 6_000_000)),
-            stub("sig_in1", "SIG", "In1.Cu", p(16_000_000, 6_000_000), p(18_000_000, 6_000_000)),
-            stub("gnd_b", "GND", "B.Cu", p(2_000_000, 14_000_000), p(4_000_000, 14_000_000)),
-            stub("gnd_in2", "GND", "In2.Cu", p(16_000_000, 14_000_000), p(18_000_000, 14_000_000)),
+            stub("sig_f", "SIG", "F.Cu", p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(6_000_000)), p(Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(6_000_000))),
+            stub("sig_in1", "SIG", "In1.Cu", p(Nm::from_raw_shim(16_000_000), Nm::from_raw_shim(6_000_000)), p(Nm::from_raw_shim(18_000_000), Nm::from_raw_shim(6_000_000))),
+            stub("gnd_b", "GND", "B.Cu", p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(14_000_000)), p(Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(14_000_000))),
+            stub("gnd_in2", "GND", "In2.Cu", p(Nm::from_raw_shim(16_000_000), Nm::from_raw_shim(14_000_000)), p(Nm::from_raw_shim(18_000_000), Nm::from_raw_shim(14_000_000))),
         ];
         let design = Design {
             footprint_library: None,
@@ -845,7 +846,7 @@ mod tests {
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
             nets: None,
-            placement: Some(PlacementSection { outline: vec![p(0, 0), p(20_000_000, 0), p(20_000_000, 20_000_000), p(0, 20_000_000)], footprints: vec![], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(20_000_000), Nm::ZERO), p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(20_000_000)), p(Nm::ZERO, Nm::from_raw_shim(20_000_000))], footprints: vec![], modules: vec![] }),
             routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
@@ -855,8 +856,8 @@ mod tests {
         let body = |v: serde_json::Value| v.to_string().into_bytes();
         // (from, layer, the via's type, its span, the layer the route goes on on, its size, the far stub)
         let routes = [
-            (p(4_000_000, 6_000_000), "F.Cu", "blind", ["F.Cu", "In1.Cu"], "In1.Cu", (model.board.via_diameter, model.board.via_drill), p(16_000_000, 6_000_000)),
-            (p(4_000_000, 14_000_000), "B.Cu", "micro", ["In2.Cu", "B.Cu"], "In2.Cu", (300_000, 100_000), p(16_000_000, 14_000_000)),
+            (p(Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(6_000_000)), "F.Cu", "blind", ["F.Cu", "In1.Cu"], "In1.Cu", (model.board.via_diameter, model.board.via_drill), p(Nm::from_raw_shim(16_000_000), Nm::from_raw_shim(6_000_000))),
+            (p(Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(14_000_000)), "B.Cu", "micro", ["In2.Cu", "B.Cu"], "In2.Cu", (Nm::from_raw_shim(300_000), Nm::from_raw_shim(100_000)), p(Nm::from_raw_shim(16_000_000), Nm::from_raw_shim(14_000_000))),
         ];
         for (from, layer, kind, span, to_layer, (diameter, drill), to) in routes {
             let cell: crate::route_api::RouteCell = std::sync::Mutex::new(None);

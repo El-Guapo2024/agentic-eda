@@ -330,7 +330,7 @@ fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
 fn sheet_box_mm(c: &CopiedSymbol<'_>) -> (f64, f64, f64, f64) {
     let (x0, y0, x1, y1) = eda_engine::geometry::real_symbol_bbox(&c.drawn(), c.sym.unit);
     let angle = c.sym.rot as f64 / 1000.0;
-    let (ox, oy) = (c.origin.x as f64 / 1e6, c.origin.y as f64 / 1e6);
+    let (ox, oy) = (c.origin.x.raw_shim() as f64 / 1e6, c.origin.y.raw_shim() as f64 / 1e6);
     let pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|p| {
         let (dx, dy) = place_offset_mm(angle, c.sym.mirrored, c.sym.mirror_y, p);
         (ox + dx, oy + dy)
@@ -345,7 +345,7 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, l
     let sym = c.sym;
     let part = input.model.part(&sym.id);
     let yes = |b: bool| if b { "yes" } else { "no" };
-    let (ox, oy) = (c.origin.x as f64 / 1e6, c.origin.y as f64 / 1e6);
+    let (ox, oy) = (c.origin.x.raw_shim() as f64 / 1e6, c.origin.y.raw_shim() as f64 / 1e6);
     let _ = writeln!(out, "\t(symbol");
     // a symbol whose pins Swap Pins moved names its own copy of the library symbol (`SCH_SCREEN::Append`)
     if let Some(name) = lib_name {
@@ -411,7 +411,7 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let angle = p.rot as f64 / 1000.0;
     let pin_local = engine.pins.first().map(|pin| (pin.at.x, pin.at.y)).unwrap_or((0.0, 0.0));
     let (dx, dy) = place_offset_mm(angle, false, false, pin_local);
-    let (ox, oy) = (p.at.x as f64 / 1e6 - dx, p.at.y as f64 / 1e6 - dy);
+    let (ox, oy) = (p.at.x.raw_shim() as f64 / 1e6 - dx, p.at.y.raw_shim() as f64 / 1e6 - dy);
     let _ = writeln!(out, "\t(symbol");
     let _ = writeln!(out, "\t\t(lib_id {})", sexpr_str(&p.lib_id));
     let _ = writeln!(out, "\t\t(at {} {} {})", fmt_mm_f(ox), fmt_mm_f(oy), fmt_mm_f(angle));
@@ -684,6 +684,7 @@ pub fn fragment_as_sheet_file(fragment: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     /// A fragment the way real KiCad writes one for a resistor, a wire and a label (`SCH_IO_KICAD_SEXPR::Format( SCH_SELECTION* )`).
@@ -872,9 +873,9 @@ mod tests {
         let r = &f.section.symbols[0];
         assert_eq!((r.id.as_str(), r.lib_id.as_str(), r.value.as_str(), r.unit), ("R1", "Device:R", "10k", 1));
         assert_eq!(r.footprint, "Resistor_SMD:R_0603_1608Metric");
-        assert_eq!((r.at.x, r.at.y, r.rot), (100_330_000, 50_800_000, 90_000), "KiCad's own origin and angle");
+        assert_eq!((r.at.x, r.at.y, r.rot), (Nm::from_raw_shim(100_330_000), Nm::from_raw_shim(50_800_000), 90_000), "KiCad's own origin and angle");
         assert_eq!(f.section.wires.len(), 1);
-        assert_eq!((f.section.wires[0].pts[0].x, f.section.wires[0].pts[1].x), (100_330_000, 120_650_000));
+        assert_eq!((f.section.wires[0].pts[0].x, f.section.wires[0].pts[1].x), (Nm::from_raw_shim(100_330_000), Nm::from_raw_shim(120_650_000)));
         assert_eq!(f.section.junctions.len(), 1);
         assert_eq!(f.section.labels.len(), 1);
         assert_eq!(f.section.labels[0].net, "SDA");
@@ -892,14 +893,14 @@ mod tests {
         // A three-point polyline written as two wires in order; a lone wire; two wires that meet at a point with a junction on it.
         let text = [wire((0.0, 0.0), (10.0, 0.0)), wire((10.0, 0.0), (10.0, 5.0)), wire((30.0, 0.0), (40.0, 0.0)), wire((40.0, 0.0), (40.0, 9.0)), "(junction (at 40 0) (diameter 0) (color 0 0 0 0) (uuid \"6a2e1b0c-5a3a-4a41-9d7e-0d5e5c2e0005\"))\n".to_string()].concat();
         let f = parse_clipboard(&text).unwrap();
-        let mut polylines: Vec<Vec<(i64, i64)>> = f.section.wires.iter().map(|w| w.pts.iter().map(|p| (p.x, p.y)).collect()).collect();
+        let mut polylines: Vec<Vec<(Nm, Nm)>> = f.section.wires.iter().map(|w| w.pts.iter().map(|p| (p.x, p.y)).collect()).collect();
         polylines.sort();
-        assert_eq!(polylines, vec![vec![(0, 0), (10_000_000, 0), (10_000_000, 5_000_000)], vec![(30_000_000, 0), (40_000_000, 0)], vec![(40_000_000, 0), (40_000_000, 9_000_000)]]);
+        assert_eq!(polylines, vec![vec![(Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(10_000_000), Nm::ZERO), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000))], vec![(Nm::from_raw_shim(30_000_000), Nm::ZERO), (Nm::from_raw_shim(40_000_000), Nm::ZERO)], vec![(Nm::from_raw_shim(40_000_000), Nm::ZERO), (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(9_000_000))]]);
         // Written in the other order the polyline is the same, from whichever end its first written segment starts.
         let backwards = [wire((10.0, 0.0), (10.0, 5.0)), wire((0.0, 0.0), (10.0, 0.0))].concat();
         let f = parse_clipboard(&backwards).unwrap();
         assert_eq!(f.section.wires.len(), 1);
-        assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(0, 0), (10_000_000, 0), (10_000_000, 5_000_000)]);
+        assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(Nm::ZERO, Nm::ZERO), (Nm::from_raw_shim(10_000_000), Nm::ZERO), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000))]);
     }
 
     /// An image copied in KiCad is `(image ..)` in the fragment, and pastes as an image (it used to be left out with "images are not pasted").
@@ -910,7 +911,7 @@ mod tests {
         let f = parse_clipboard(&text).expect("a fragment with an image parses");
         assert!(f.notes.iter().all(|n| !n.contains("images")), "{:?}", f.notes);
         let images: Vec<_> = f.section.extras.graphics.iter().filter_map(|g| if let eda_model::sch_extras::SchGraphicKind::Image { at, scale_ppm, data } = &g.shape { Some((*at, *scale_ppm, data.clone())) } else { None }).collect();
-        assert_eq!(images, vec![(Point { x: 50_800_000, y: 38_100_000 }, 2_000_000, data)]);
+        assert_eq!(images, vec![(Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(38_100_000) }, 2_000_000, data)]);
     }
 
     #[test]

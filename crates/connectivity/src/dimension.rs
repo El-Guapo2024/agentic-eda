@@ -70,7 +70,7 @@ fn add(a: Point, b: Point) -> Point {
     Point { x: a.x + b.x, y: a.y + b.y }
 }
 fn norm(p: Point) -> f64 {
-    (p.x as f64).hypot(p.y as f64)
+    ((p.x).raw_shim() as f64).hypot(p.y.raw_shim() as f64)
 }
 /// `v` rescaled to length `len` (sign of `len` flips the direction),
 /// preserving direction otherwise. The zero vector has no direction, so
@@ -78,10 +78,10 @@ fn norm(p: Point) -> f64 {
 fn resize(v: Point, len: Nm) -> Point {
     let n = norm(v);
     if n < 1.0 {
-        return Point { x: 0, y: 0 };
+        return Point { x: Nm::ZERO, y: Nm::ZERO };
     }
-    let scale = len as f64 / n;
-    Point { x: (v.x as f64 * scale).round() as Nm, y: (v.y as f64 * scale).round() as Nm }
+    let scale = len.raw_shim() as f64 / n;
+    Point { x: Nm::from_raw_shim((v.x.raw_shim() as f64 * scale).round() as i64), y: Nm::from_raw_shim((v.y.raw_shim() as f64 * scale).round() as i64) }
 }
 /// The perpendicular of `v`, rotated 90 degrees clockwise (this crate's
 /// own Y-down convention -- see this module's header).
@@ -91,12 +91,12 @@ fn perp(v: Point) -> Point {
 /// Angle of `v` from the +X axis, clockwise-positive in Y-down screen
 /// coordinates (`atan2`'s own natural direction once Y grows downward).
 fn angle_of(v: Point) -> i64 {
-    (v.y as f64).atan2(v.x as f64).to_degrees().round() as i64 * 1000
+    ((v.y).raw_shim() as f64).atan2(v.x.raw_shim() as f64).to_degrees().round() as i64 * 1000
 }
 fn rotate(p: Point, angle_millideg: i64) -> Point {
     let rad = (angle_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    Point { x: (p.x as f64 * cos - p.y as f64 * sin).round() as Nm, y: (p.x as f64 * sin + p.y as f64 * cos).round() as Nm }
+    Point { x: Nm::from_raw_shim((p.x.raw_shim() as f64 * cos - p.y.raw_shim() as f64 * sin).round() as i64), y: Nm::from_raw_shim((p.x.raw_shim() as f64 * sin + p.y.raw_shim() as f64 * cos).round() as i64) }
 }
 fn rotate_about(p: Point, pivot: Point, angle_millideg: i64) -> Point {
     add(rotate(sub(p, pivot), angle_millideg), pivot)
@@ -110,13 +110,13 @@ fn rotate_about(p: Point, pivot: Point, angle_millideg: i64) -> Point {
 /// style visible stub, `drawAnArrow`'s own `aLength` tail argument).
 fn arrowhead(tip: Point, toward_angle_millideg: i64, length: Nm, tail: Nm) -> Vec<(Point, Point)> {
     let mut lines = Vec::with_capacity(3);
-    if tail != 0 {
-        let t = rotate(Point { x: tail, y: 0 }, toward_angle_millideg + 180_000);
+    if tail != Nm::ZERO {
+        let t = rotate(Point { x: tail, y: Nm::ZERO }, toward_angle_millideg + 180_000);
         lines.push((tip, add(tip, t)));
     }
     let back = toward_angle_millideg + 180_000;
-    let b1 = rotate(Point { x: length, y: 0 }, back + ARROW_HALF_ANGLE_MILLIDEG);
-    let b2 = rotate(Point { x: length, y: 0 }, back - ARROW_HALF_ANGLE_MILLIDEG);
+    let b1 = rotate(Point { x: length, y: Nm::ZERO }, back + ARROW_HALF_ANGLE_MILLIDEG);
+    let b2 = rotate(Point { x: length, y: Nm::ZERO }, back - ARROW_HALF_ANGLE_MILLIDEG);
     lines.push((tip, add(tip, b1)));
     lines.push((tip, add(tip, b2)));
     lines
@@ -151,7 +151,7 @@ fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
     let (value, unit_suffix) = match units {
         DimensionUnits::Mm => (eda_model::units::to_mm(measured_value_nm), "mm"),
         DimensionUnits::Mil => (eda_model::units::to_mils(measured_value_nm), "mil"),
-        DimensionUnits::Inch => (measured_value_nm as f64 / eda_model::units::NM_PER_INCH as f64, "in"),
+        DimensionUnits::Inch => (measured_value_nm.raw_shim() as f64 / eda_model::units::NM_PER_INCH as f64, "in"),
         DimensionUnits::Automatic => unreachable!("resolved above"),
     };
 
@@ -189,7 +189,7 @@ fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
 /// Estimated half-width (nm) of `text` set at `size_nm` -- see this
 /// module's own header on why this, and not real font metrics.
 fn half_width(text: &str, size_nm: Nm) -> Nm {
-    ((text.chars().count() as f64 * CHAR_WIDTH_FACTOR * size_nm as f64) / 2.0).round() as Nm
+    Nm::from_raw_shim(((text.chars().count() as f64 * CHAR_WIDTH_FACTOR * size_nm.raw_shim() as f64) / 2.0).round() as i64)
 }
 
 /// Split `seg` (a crossbar or leader-to-text line) around `text_at`,
@@ -205,30 +205,30 @@ fn knockout(a: Point, b: Point, text_at: Point, text: &str, text_size_nm: Nm) ->
     if len < 1.0 || text.is_empty() {
         return vec![(a, b)];
     }
-    let t = ((text_at.x - a.x) as f64 * dir.x as f64 + (text_at.y - a.y) as f64 * dir.y as f64) / (len * len);
-    let proj = Point { x: a.x + (dir.x as f64 * t).round() as Nm, y: a.y + (dir.y as f64 * t).round() as Nm };
+    let t = ((text_at.x - a.x).raw_shim() as f64 * dir.x.raw_shim() as f64 + (text_at.y - a.y).raw_shim() as f64 * dir.y.raw_shim() as f64) / (len * len);
+    let proj = Point { x: a.x + Nm::from_raw_shim((dir.x.raw_shim() as f64 * t).round() as i64), y: a.y + Nm::from_raw_shim((dir.y.raw_shim() as f64 * t).round() as i64) };
     // Perpendicular distance from text_at to the line -- only knock out
     // a gap when the text is genuinely sitting close to the line, not
     // merely somewhere near its extent (an outside-positioned text's
     // perpendicular offset is a full text height or more away).
     let perp_dist = norm(sub(text_at, proj));
-    if perp_dist > text_size_nm as f64 {
+    if perp_dist > text_size_nm.raw_shim() as f64 {
         return vec![(a, b)];
     }
-    let hw = half_width(text, text_size_nm).max(1);
-    let gap_start = (t * len).round() as Nm - hw;
-    let gap_end = (t * len).round() as Nm + hw;
-    if gap_start <= 0 || gap_end >= len.round() as Nm {
+    let hw = half_width(text, text_size_nm).max(Nm::from_raw_shim(1));
+    let gap_start = Nm::from_raw_shim((t * len).round() as i64) - hw;
+    let gap_end = Nm::from_raw_shim((t * len).round() as i64) + hw;
+    if gap_start <= Nm::ZERO || gap_end >= Nm::from_raw_shim(len.round() as i64) {
         // The gap swallows (or nearly swallows) the whole segment -- draw nothing.
-        if gap_start <= 0 && gap_end >= len.round() as Nm {
+        if gap_start <= Nm::ZERO && gap_end >= Nm::from_raw_shim(len.round() as i64) {
             return vec![];
         }
     }
     let mut out = Vec::new();
-    if gap_start > 0 {
+    if gap_start > Nm::ZERO {
         out.push((a, add(a, resize(dir, gap_start))));
     }
-    if gap_end < len.round() as Nm {
+    if gap_end < Nm::from_raw_shim(len.round() as i64) {
         out.push((add(a, resize(dir, gap_end)), b));
     }
     out
@@ -245,13 +245,13 @@ fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_positi
         DimensionTextPosition::Inline => center,
         DimensionTextPosition::Outside => {
             let offset_distance = stroke_width + text_size_nm;
-            let rotation = if half.x == 0 {
-                if half.y > 0 {
+            let rotation = if half.x == Nm::ZERO {
+                if half.y > Nm::ZERO {
                     -90_000
                 } else {
                     90_000
                 }
-            } else if half.x < 0 {
+            } else if half.x < Nm::ZERO {
                 -90_000
             } else {
                 90_000
@@ -276,9 +276,9 @@ fn aligned_text_position(crossbar_start: Point, crossbar_end: Point, text_positi
 
 fn aligned(dim: &Dimension, height: Nm) -> DimensionGeometry {
     let dimension = sub(dim.end, dim.start);
-    let measured_value_nm = norm(dimension).round() as Nm;
+    let measured_value_nm = Nm::from_raw_shim(norm(dimension).round() as i64);
 
-    let extension = if height > 0 { perp(dimension) } else { Point { x: dimension.y, y: -dimension.x } };
+    let extension = if height > Nm::ZERO { perp(dimension) } else { Point { x: dimension.y, y: -dimension.x } };
 
     let extension_len = height.abs() - dim.extension_offset + dim.extension_height;
     let ext1_start = add(dim.start, resize(extension, dim.extension_offset));
@@ -304,8 +304,8 @@ fn aligned(dim: &Dimension, height: Nm) -> DimensionGeometry {
             lines.extend(arrowhead(crossbar_end, dim_angle, dim.arrow_length, dim.arrow_length * INWARD_TAIL_RATIO));
         }
         ArrowDirection::Outward => {
-            lines.extend(arrowhead(crossbar_start, dim_angle + 180_000, dim.arrow_length, 0));
-            lines.extend(arrowhead(crossbar_end, dim_angle, dim.arrow_length, 0));
+            lines.extend(arrowhead(crossbar_start, dim_angle + 180_000, dim.arrow_length, Nm::ZERO));
+            lines.extend(arrowhead(crossbar_end, dim_angle, dim.arrow_length, Nm::ZERO));
         }
     }
 
@@ -318,7 +318,7 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
     let measurement = if horizontal { dim.end.x - dim.start.x } else { dim.end.y - dim.start.y };
     let measured_value_nm = measurement.abs();
 
-    let extension = if horizontal { Point { x: 0, y: height } } else { Point { x: height, y: 0 } };
+    let extension = if horizontal { Point { x: Nm::ZERO, y: height } } else { Point { x: height, y: Nm::ZERO } };
     let ext1_len = height.abs() - dim.extension_offset + dim.extension_height;
     let ext1_start = add(dim.start, resize(extension, dim.extension_offset));
     let ext1_end = add(ext1_start, resize(extension, ext1_len));
@@ -327,8 +327,8 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
     let crossbar_start = add(dim.start, cross_offset);
     let crossbar_end = if horizontal { Point { x: dim.end.x, y: crossbar_start.y } } else { Point { x: crossbar_start.x, y: dim.end.y } };
 
-    let extension2 = if horizontal { Point { x: 0, y: dim.end.y - crossbar_end.y } } else { Point { x: dim.end.x - crossbar_end.x, y: 0 } };
-    let ext2_len = norm(extension2).round() as Nm - dim.extension_offset + dim.extension_height;
+    let extension2 = if horizontal { Point { x: Nm::ZERO, y: dim.end.y - crossbar_end.y } } else { Point { x: dim.end.x - crossbar_end.x, y: Nm::ZERO } };
+    let ext2_len = Nm::from_raw_shim(norm(extension2).round() as i64) - dim.extension_offset + dim.extension_height;
     let ext2_start = sub(crossbar_end, resize(extension2, dim.extension_height));
     let ext2_end = add(ext2_start, resize(extension2, ext2_len));
 
@@ -338,7 +338,7 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
         DimensionTextPosition::Inline => crossbar_center,
         DimensionTextPosition::Outside => {
             let offset_distance = dim.stroke_width + dim.text_size_nm;
-            let offset = if horizontal { Point { x: 0, y: -offset_distance } } else { Point { x: -offset_distance, y: 0 } };
+            let offset = if horizontal { Point { x: Nm::ZERO, y: -offset_distance } } else { Point { x: -offset_distance, y: Nm::ZERO } };
             add(crossbar_start, add(half, offset))
         }
     };
@@ -364,8 +364,8 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
             lines.extend(arrowhead(crossbar_end, crossbar_angle, dim.arrow_length, dim.arrow_length * INWARD_TAIL_RATIO));
         }
         ArrowDirection::Outward => {
-            lines.extend(arrowhead(crossbar_start, crossbar_angle + 180_000, dim.arrow_length, 0));
-            lines.extend(arrowhead(crossbar_end, crossbar_angle, dim.arrow_length, 0));
+            lines.extend(arrowhead(crossbar_start, crossbar_angle + 180_000, dim.arrow_length, Nm::ZERO));
+            lines.extend(arrowhead(crossbar_end, crossbar_angle, dim.arrow_length, Nm::ZERO));
         }
     }
 
@@ -377,18 +377,18 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
 fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
     let center = dim.start;
     let radius_vec = sub(dim.end, center);
-    let measured_value_nm = norm(radius_vec).round() as Nm;
+    let measured_value_nm = Nm::from_raw_shim(norm(radius_vec).round() as i64);
 
     // The small `+` mark at the centre -- fixed size (arrow_length), not
     // `end - start`, see PCB_DIM_RADIAL::updateGeometry's own
     // `centerArm(0, m_arrowLength)`.
-    let arm = Point { x: 0, y: dim.arrow_length };
+    let arm = Point { x: Nm::ZERO, y: dim.arrow_length };
     let mut lines = vec![(sub(center, arm), add(center, arm))];
     let arm2 = rotate(arm, -90_000);
     lines.push((sub(center, arm2), add(center, arm2)));
 
     let knee = add(dim.end, resize(radius_vec, leader_length));
-    let text_at = add(knee, resize(radius_vec, dim.text_size_nm.max(1)));
+    let text_at = add(knee, resize(radius_vec, dim.text_size_nm.max(Nm::from_raw_shim(1))));
     let text_angle = (if dim.keep_text_aligned {
         let mut a = (-angle_of(sub(text_at, knee))).rem_euclid(360_000);
         if a > 90_000 && a <= 270_000 {
@@ -405,7 +405,7 @@ fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
     lines.extend(knockout(knee, text_at, text_at, &text, dim.text_size_nm));
 
     let radial_angle = angle_of(radius_vec);
-    lines.extend(arrowhead(dim.end, radial_angle, dim.arrow_length, 0));
+    lines.extend(arrowhead(dim.end, radial_angle, dim.arrow_length, Nm::ZERO));
 
     DimensionGeometry { lines, text_at, text_angle, measured_value_nm, text }
 }
@@ -414,7 +414,7 @@ fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
 
 fn leader(dim: &Dimension) -> DimensionGeometry {
     let first_line = sub(dim.end, dim.start);
-    let measured_value_nm = norm(first_line).round() as Nm;
+    let measured_value_nm = Nm::from_raw_shim(norm(first_line).round() as i64);
     let start = add(dim.start, resize(first_line, dim.extension_offset));
 
     let text = format_value(dim, measured_value_nm);
@@ -423,11 +423,11 @@ fn leader(dim: &Dimension) -> DimensionGeometry {
     // is independently settable); this port places it automatically,
     // same "no manual sub-element dragging" scope PARITY-pcb.md already
     // notes elsewhere.
-    let text_at = add(dim.end, resize(first_line, dim.text_size_nm.max(1) * 2));
+    let text_at = add(dim.end, resize(first_line, dim.text_size_nm.max(Nm::from_raw_shim(1)) * 2));
     let text_angle = (if dim.keep_text_aligned { 0 } else { dim.text_angle as i64 }).rem_euclid(360_000) as Millideg;
 
     let mut lines = knockout(start, dim.end, text_at, &text, dim.text_size_nm);
-    lines.extend(arrowhead(start, angle_of(first_line), dim.arrow_length, 0));
+    lines.extend(arrowhead(start, angle_of(first_line), dim.arrow_length, Nm::ZERO));
     if !text.is_empty() {
         lines.extend(knockout(dim.end, text_at, text_at, &text, dim.text_size_nm));
     }
@@ -442,7 +442,7 @@ fn center(dim: &Dimension) -> DimensionGeometry {
     let arm = sub(dim.end, dim.start);
     let lines = vec![(sub(center_pt, arm), add(center_pt, arm)), (sub(center_pt, rotate(arm, -90_000)), add(center_pt, rotate(arm, -90_000)))];
 
-    DimensionGeometry { lines, text_at: center_pt, text_angle: 0, measured_value_nm: 0, text: String::new() }
+    DimensionGeometry { lines, text_at: center_pt, text_angle: 0, measured_value_nm: Nm::ZERO, text: String::new() }
 }
 
 fn rotate_point_set(pts: &mut [Point], pivot: Point, angle_millideg: i64) {
@@ -493,11 +493,11 @@ mod tests {
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
             text_angle: 0,
-            text_size_nm: 1_000_000,
-            stroke_width: 150_000,
-            arrow_length: 1_000_000,
-            extension_offset: 200_000,
-            extension_height: 500_000,
+            text_size_nm: Nm::from_raw_shim(1_000_000),
+            stroke_width: Nm::from_raw_shim(150_000),
+            arrow_length: Nm::from_raw_shim(1_000_000),
+            extension_offset: Nm::from_raw_shim(200_000),
+            extension_height: Nm::from_raw_shim(500_000),
             arrow_direction: ArrowDirection::Outward,
             text_thickness_nm: None,
         }
@@ -505,15 +505,15 @@ mod tests {
 
     #[test]
     fn aligned_measures_the_euclidean_distance() {
-        let dim = base_dim(DimensionKind::Aligned { height: 2_000_000 }, Point { x: 0, y: 0 }, Point { x: 3_000_000, y: 4_000_000 });
+        let dim = base_dim(DimensionKind::Aligned { height: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(4_000_000) });
         let g = compute_dimension_geometry(&dim);
-        assert_eq!(g.measured_value_nm, 5_000_000); // 3-4-5 triangle
+        assert_eq!(g.measured_value_nm, Nm::from_raw_shim(5_000_000)); // 3-4-5 triangle
         assert_eq!(g.text, "5");
     }
 
     #[test]
     fn aligned_horizontal_line_puts_the_crossbar_above_for_positive_height() {
-        let dim = base_dim(DimensionKind::Aligned { height: 1_000_000 }, Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 });
+        let dim = base_dim(DimensionKind::Aligned { height: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO });
         let g = compute_dimension_geometry(&dim);
         // Two extension lines plus a crossbar (possibly split) plus two
         // 2-segment arrowheads -- at least 2 + 1 + 4 = 7 lines.
@@ -522,48 +522,48 @@ mod tests {
         // own far endpoint) for a positive height with this crate's
         // perp() convention -- whichever sign, it must be consistent and
         // off the feature line (y != 0).
-        let crossbar_y: i64 = g.lines.iter().map(|(a, b)| if a.y == b.y && a.y != 0 { Some(a.y) } else { None }).find_map(|v| v).expect("a horizontal crossbar segment");
+        let crossbar_y: i64 = (g.lines.iter().map(|(a, b)| if a.y == b.y && a.y != Nm::ZERO { Some(a.y) } else { None }).find_map(|v| v).expect("a horizontal crossbar segment")).raw_shim();
         assert_ne!(crossbar_y, 0);
     }
 
     #[test]
     fn aligned_negative_height_puts_the_crossbar_on_the_other_side() {
-        let pos = compute_dimension_geometry(&base_dim(DimensionKind::Aligned { height: 1_000_000 }, Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 }));
-        let neg = compute_dimension_geometry(&base_dim(DimensionKind::Aligned { height: -1_000_000 }, Point { x: 0, y: 0 }, Point { x: 10_000_000, y: 0 }));
-        let find_y = |g: &DimensionGeometry| g.lines.iter().find_map(|(a, b)| if a.y == b.y && a.y != 0 { Some(a.y) } else { None }).unwrap();
+        let pos = compute_dimension_geometry(&base_dim(DimensionKind::Aligned { height: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }));
+        let neg = compute_dimension_geometry(&base_dim(DimensionKind::Aligned { height: Nm::from_raw_shim(-1_000_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }));
+        let find_y = |g: &DimensionGeometry| g.lines.iter().find_map(|(a, b)| if a.y == b.y && a.y != Nm::ZERO { Some(a.y) } else { None }).unwrap();
         assert_eq!(find_y(&pos), -find_y(&neg));
     }
 
     #[test]
     fn orthogonal_horizontal_ignores_the_y_delta_in_its_measurement() {
-        let dim = base_dim(DimensionKind::Orthogonal { height: 1_000_000, horizontal: true }, Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 9_999_000 });
+        let dim = base_dim(DimensionKind::Orthogonal { height: Nm::from_raw_shim(1_000_000), horizontal: true }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(9_999_000) });
         let g = compute_dimension_geometry(&dim);
-        assert_eq!(g.measured_value_nm, 5_000_000);
+        assert_eq!(g.measured_value_nm, Nm::from_raw_shim(5_000_000));
     }
 
     #[test]
     fn orthogonal_vertical_ignores_the_x_delta() {
-        let dim = base_dim(DimensionKind::Orthogonal { height: 1_000_000, horizontal: false }, Point { x: 0, y: 0 }, Point { x: 9_999_000, y: 7_000_000 });
+        let dim = base_dim(DimensionKind::Orthogonal { height: Nm::from_raw_shim(1_000_000), horizontal: false }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(9_999_000), y: Nm::from_raw_shim(7_000_000) });
         let g = compute_dimension_geometry(&dim);
-        assert_eq!(g.measured_value_nm, 7_000_000);
+        assert_eq!(g.measured_value_nm, Nm::from_raw_shim(7_000_000));
     }
 
     #[test]
     fn radial_measures_the_radius_and_draws_a_center_cross() {
-        let dim = base_dim(DimensionKind::Radial { leader_length: 500_000 }, Point { x: 0, y: 0 }, Point { x: 2_000_000, y: 0 });
+        let dim = base_dim(DimensionKind::Radial { leader_length: Nm::from_raw_shim(500_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO });
         let g = compute_dimension_geometry(&dim);
-        assert_eq!(g.measured_value_nm, 2_000_000);
+        assert_eq!(g.measured_value_nm, Nm::from_raw_shim(2_000_000));
         // The centre cross is the two segments straddling (0,0) with the
         // fixed arrow_length arm -- both must be present regardless of
         // the radius.
-        let straddles_origin = |a: Point, b: Point| a.x == -b.x && a.y == -b.y && (a.x != 0 || a.y != 0);
+        let straddles_origin = |a: Point, b: Point| a.x == -b.x && a.y == -b.y && (a.x != Nm::ZERO || a.y != Nm::ZERO);
         let cross_arms = g.lines.iter().filter(|(a, b)| straddles_origin(*a, *b)).count();
         assert_eq!(cross_arms, 2, "both arms of the centre cross must be present");
     }
 
     #[test]
     fn leader_places_an_arrow_at_start_and_a_line_toward_the_text() {
-        let mut dim = base_dim(DimensionKind::Leader, Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 0 });
+        let mut dim = base_dim(DimensionKind::Leader, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO });
         dim.override_text = Some("note".into());
         let g = compute_dimension_geometry(&dim);
         assert_eq!(g.text, "note");
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn center_mark_has_no_text_and_two_perpendicular_arms() {
-        let dim = base_dim(DimensionKind::Center, Point { x: 1_000_000, y: 1_000_000 }, Point { x: 1_500_000, y: 1_000_000 });
+        let dim = base_dim(DimensionKind::Center, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(1_000_000) });
         let g = compute_dimension_geometry(&dim);
         assert_eq!(g.text, "");
         assert_eq!(g.lines.len(), 2);
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn override_text_replaces_the_computed_number_but_keeps_prefix_and_suffix() {
-        let mut dim = base_dim(DimensionKind::Aligned { height: 1_000_000 }, Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 });
+        let mut dim = base_dim(DimensionKind::Aligned { height: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
         dim.prefix = "W=".into();
         dim.suffix = "!".into();
         dim.override_text = Some("TBD".into());
@@ -595,14 +595,14 @@ mod tests {
 
     #[test]
     fn suppressing_trailing_zeros_drops_a_bare_decimal_point_too() {
-        let dim = base_dim(DimensionKind::Aligned { height: 1_000_000 }, Point { x: 0, y: 0 }, Point { x: 2_000_000, y: 0 });
+        let dim = base_dim(DimensionKind::Aligned { height: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO });
         let g = compute_dimension_geometry(&dim);
         assert_eq!(g.text, "2");
     }
 
     #[test]
     fn units_format_adds_the_right_suffix() {
-        let mut dim = base_dim(DimensionKind::Aligned { height: 1_000_000 }, Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 });
+        let mut dim = base_dim(DimensionKind::Aligned { height: Nm::from_raw_shim(1_000_000) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
         dim.units_format = DimensionUnitsFormat::BareSuffix;
         let g = compute_dimension_geometry(&dim);
         assert_eq!(g.text, "1 mm");
@@ -613,16 +613,16 @@ mod tests {
 
     #[test]
     fn translate_moves_both_feature_points() {
-        let mut dim = base_dim(DimensionKind::Leader, Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 });
-        translate_dimension(&mut dim, 500_000, -200_000);
-        assert_eq!(dim.start, Point { x: 500_000, y: -200_000 });
-        assert_eq!(dim.end, Point { x: 1_500_000, y: -200_000 });
+        let mut dim = base_dim(DimensionKind::Leader, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
+        translate_dimension(&mut dim, Nm::from_raw_shim(500_000), Nm::from_raw_shim(-200_000));
+        assert_eq!(dim.start, Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(-200_000) });
+        assert_eq!(dim.end, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(-200_000) });
     }
 
     #[test]
     fn rotate_about_pivot_moves_a_point_90_degrees_clockwise() {
-        let mut dim = base_dim(DimensionKind::Leader, Point { x: 1_000_000, y: 0 }, Point { x: 1_000_000, y: 0 });
-        rotate_dimension(&mut dim, Point { x: 0, y: 0 }, 90_000);
-        assert_eq!(dim.start, Point { x: 0, y: 1_000_000 });
+        let mut dim = base_dim(DimensionKind::Leader, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
+        rotate_dimension(&mut dim, Point { x: Nm::ZERO, y: Nm::ZERO }, 90_000);
+        assert_eq!(dim.start, Point { x: Nm::ZERO, y: Nm::from_raw_shim(1_000_000) });
     }
 }

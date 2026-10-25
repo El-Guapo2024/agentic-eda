@@ -8,6 +8,7 @@
 //! A track of a pattern that is deleted by another verb leaves the pattern's members, and a pattern that is left with none is not kept
 //! (`PCB_IO_KICAD_SEXPR::format( PCB_GENERATOR )` does not write a tuning pattern without members; "ghost tuning patterns").
 
+use eda_model::units::Nm;
 use super::Board;
 use eda_model::ir::Track;
 use eda_model::tuning::TuningPattern;
@@ -26,7 +27,7 @@ impl Board<'_> {
         for t in &tracks {
             self.known_net(&t.net)?;
             self.known_layer(&t.layer)?;
-            if t.width <= 0 || t.pts.len() < 2 {
+            if t.width <= Nm::ZERO || t.pts.len() < 2 {
                 return Err(bad(&t.net, "a track of a tuning needs a positive width and at least two points"));
             }
         }

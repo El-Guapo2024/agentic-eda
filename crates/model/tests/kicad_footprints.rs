@@ -5,6 +5,7 @@
 use eda_model::footprint::{builtin, builtin_names, Footprint, Pad, PadShape, PadKind};
 use std::collections::BTreeMap;
 use std::path::Path;
+use eda_model::units::Nm;
 
 const KICAD_FP_DIR: &str = "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints";
 
@@ -73,7 +74,7 @@ fn extract_pair(block: &str, tag: &str) -> Option<(f64, f64)> {
     }
 }
 
-fn mm_to_nm(v: f64) -> i64 {
+fn mm_to_nm(v: f64) -> Nm {
     eda_model::units::from_mm(v)
 }
 
@@ -114,7 +115,7 @@ struct Deviation {
 
 /// Compare a builtin footprint against real pads (already in nm, keyed by
 /// pad number). Returns per-pad deviations for pads present in both.
-fn compare(fp: &Footprint, real: &BTreeMap<String, (i64, i64, i64, i64)>) -> (Vec<Deviation>, Vec<String>) {
+fn compare(fp: &Footprint, real: &BTreeMap<String, (Nm, Nm, Nm, Nm)>) -> (Vec<Deviation>, Vec<String>) {
     let mut devs = Vec::new();
     let mut missing = Vec::new();
     let real_nums: std::collections::BTreeSet<&String> = real.keys().collect();
@@ -126,10 +127,10 @@ fn compare(fp: &Footprint, real: &BTreeMap<String, (i64, i64, i64, i64)>) -> (Ve
         if let Some(&(rx, ry, rw, rh)) = real.get(&p.number) {
             devs.push(Deviation {
                 pad: p.number.clone(),
-                dx: p.at.0 - rx,
-                dy: p.at.1 - ry,
-                dw: p.size.0 - rw,
-                dh: p.size.1 - rh,
+                dx: (p.at.0 - Nm::new(rx.get())).get(),
+                dy: (p.at.1 - Nm::new(ry.get())).get(),
+                dw: (p.size.0 - Nm::new(rw.get())).get(),
+                dh: (p.size.1 - Nm::new(rh.get())).get(),
             });
         }
     }
@@ -138,7 +139,7 @@ fn compare(fp: &Footprint, real: &BTreeMap<String, (i64, i64, i64, i64)>) -> (Ve
 
 fn assert_within_tolerance(key: &str, fp: &Footprint, real_path: &str) {
     let real_pads = dedupe(load_pads(real_path));
-    let real: BTreeMap<String, (i64, i64, i64, i64)> = real_pads
+    let real: BTreeMap<String, (Nm, Nm, Nm, Nm)> = real_pads
         .into_iter()
         .map(|(num, p)| (num, (mm_to_nm(p.at.0), mm_to_nm(p.at.1), mm_to_nm(p.size.0), mm_to_nm(p.size.1))))
         .collect();
@@ -182,11 +183,11 @@ fn assert_pin_header_within_tolerance(n: usize, fp: &Footprint, real_path: &str)
         let real_pitch_nm = mm_to_nm(ys[1] - ys[0]);
 
         // Builtin pitch along x.
-        let mut xs: Vec<i64> = fp.pads.iter().map(|p| p.at.0).collect();
+        let mut xs: Vec<Nm> = fp.pads.iter().map(|p| p.at.0).collect();
         xs.sort();
         let builtin_pitch_nm = xs[1] - xs[0];
 
-        assert!((builtin_pitch_nm - real_pitch_nm).abs() <= 50_000, "PINHEADER-{n}: pitch {builtin_pitch_nm} vs real {real_pitch_nm}");
+        assert!((builtin_pitch_nm - real_pitch_nm).abs() <= Nm::new(50_000), "PINHEADER-{n}: pitch {builtin_pitch_nm} vs real {real_pitch_nm}");
     }
 
     // Pad size (all pads share the same footprint in the real file) and
@@ -194,8 +195,8 @@ fn assert_pin_header_within_tolerance(n: usize, fp: &Footprint, real_path: &str)
     let r = &real_pads[0];
     let real_size = (mm_to_nm(r.size.0), mm_to_nm(r.size.1));
     for p in &fp.pads {
-        assert!((p.size.0 - real_size.0).abs() <= 100_000, "PINHEADER-{n}: pad {} width {} vs real {}", p.number, p.size.0, real_size.0);
-        assert!((p.size.1 - real_size.1).abs() <= 100_000, "PINHEADER-{n}: pad {} height {} vs real {}", p.number, p.size.1, real_size.1);
+        assert!((p.size.0 - real_size.0).abs() <= Nm::new(100_000), "PINHEADER-{n}: pad {} width {} vs real {}", p.number, p.size.0, real_size.0);
+        assert!((p.size.1 - real_size.1).abs() <= Nm::new(100_000), "PINHEADER-{n}: pad {} height {} vs real {}", p.number, p.size.1, real_size.1);
         assert_eq!(p.kind, PadKind::ThroughHole, "PINHEADER-{n}: pad {} should be through-hole", p.number);
     }
     // Pin 1 rectangular, rest round/oval — matches the source convention.

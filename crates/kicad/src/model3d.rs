@@ -91,7 +91,7 @@ pub fn installed_footprint_in(root: &std::path::Path, id: &str) -> Option<Arc<In
         } else {
             ModelKind::Virtual
         };
-        let pads = parsed.footprint.pads.iter().map(|p| (p.number.clone(), (p.at.x as f64, p.at.y as f64))).collect();
+        let pads = parsed.footprint.pads.iter().map(|p| (p.number.clone(), (p.at.x.raw_shim() as f64, p.at.y.raw_shim() as f64))).collect();
         Some(Arc::new(InstalledFootprint { models: footprint_models(&text), pads, kind }))
     })();
     installed_cache().lock().unwrap_or_else(PoisonError::into_inner).insert(key, found.clone());
@@ -250,7 +250,7 @@ pub fn default_part_models_in(root: &std::path::Path, model: &ConstraintModel, p
     let installed = named_installed.or_else(|| generic.as_ref().and_then(|g| installed_footprint_in(root, &g.id())));
     match installed {
         Some(inst) if !inst.models.is_empty() => {
-            let part_pads: Vec<(String, (f64, f64))> = footprint.pads.iter().map(|p| (p.number.clone(), (p.at.0 as f64, p.at.1 as f64))).collect();
+            let part_pads: Vec<(String, (f64, f64))> = footprint.pads.iter().map(|p| (p.number.clone(), (p.at.0.raw_shim() as f64, p.at.1.raw_shim() as f64))).collect();
             let fit = fit_pads(&inst.pads, &part_pads);
             let models = inst.models.iter().map(|m| fit.map_or_else(|| m.clone(), |f| f.apply(m))).collect();
             Some(PartModels { models, kind: inst.kind })

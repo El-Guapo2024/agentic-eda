@@ -22,11 +22,11 @@ pub const EDGE_CUTS: &str = "Edge.Cuts";
 
 /// `DEFAULT_CHAINING_EPSILON_MM` (`pcbnew/board.h`): 0.01 mm, the largest gap between one item's end and the next one's start
 /// that `ConvertOutlineToPolygon` still chains (`BOARD::GetOutlinesChainingEpsilon`).
-pub const CHAINING_EPSILON_NM: Nm = 10_000;
+pub const CHAINING_EPSILON_NM: Nm = Nm::new(10_000);
 
 /// `BOARD_DESIGN_SETTINGS::m_MaxError`, which is `ARC_HIGH_DEF` (0.005 mm) for a board that does not set it: the largest
 /// distance between a curve and the polygon that stands for it.
-pub const MAX_ERROR_NM: Nm = 5_000;
+pub const MAX_ERROR_NM: Nm = Nm::new(5_000);
 
 /// The id the segments of the polygon `placement.outline` carry as Edge.Cuts items: the one the writer maps their uuids to, so a
 /// kicad-cli report that names an outline segment is pointed back at the board outline.
@@ -57,7 +57,7 @@ pub fn edge_cuts_shapes(design: &Design) -> Vec<Shape> {
             let n = pl.outline.len();
             if n >= 2 {
                 for i in 0..n {
-                    items.push(Shape::Segment { id: POLYGON_OUTLINE_ID.into(), layer: EDGE_CUTS.into(), stroke_width: 0, filled: false, start: pl.outline[i], end: pl.outline[(i + 1) % n] });
+                    items.push(Shape::Segment { id: POLYGON_OUTLINE_ID.into(), layer: EDGE_CUTS.into(), stroke_width: Nm::ZERO, filled: false, start: pl.outline[i], end: pl.outline[(i + 1) % n] });
                 }
             }
         }
@@ -73,12 +73,12 @@ pub fn edge_cuts_shapes(design: &Design) -> Vec<Shape> {
 /// `convert_shape_list_to_polygon.cpp::processClosedShape` makes it (`case SHAPE_T::RECTANGLE: if( aShape->GetCornerRadius() > 0 )`:
 /// `ROUNDRECT( .. ).TransformToPolygon( poly, aShape->GetMaxError() )`, appended as the contour); every other shape as it is.
 pub fn edge_cuts_outline_shapes(design: &Design) -> Vec<Shape> {
-    let radius_of = |id: &str| design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(id)).unwrap_or(0);
+    let radius_of = |id: &str| design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(id)).unwrap_or(Nm::ZERO);
     edge_cuts_shapes(design)
         .into_iter()
         .map(|s| match &s {
-            Shape::Rect { id, layer, stroke_width, filled, start, end } if radius_of(id) > 0 => {
-                Shape::Polygon { id: id.clone(), layer: layer.clone(), stroke_width: *stroke_width, filled: *filled, pts: rounded_rect_ring(*start, *end, radius_of(id), MAX_ERROR_NM as f64) }
+            Shape::Rect { id, layer, stroke_width, filled, start, end } if radius_of(id) > Nm::ZERO => {
+                Shape::Polygon { id: id.clone(), layer: layer.clone(), stroke_width: *stroke_width, filled: *filled, pts: rounded_rect_ring(*start, *end, radius_of(id), MAX_ERROR_NM.as_f64()) }
             }
             _ => s,
         })
@@ -90,11 +90,11 @@ pub fn edge_cuts_outline_shapes(design: &Design) -> Vec<Shape> {
 /// as arcs (`case SHAPE_T::RECTANGLE: if( m_cornerRadius > 0 )`: the `ROUNDRECT` outline, a `SHAPE_ARC` for each arc of it and a `SHAPE_SEGMENT` for each other
 /// segment), not the flattened polygon the outline is built from ([`edge_cuts_outline_shapes`]); every other shape as it is.
 pub fn edge_cuts_effective_shapes(design: &Design) -> Vec<Shape> {
-    let radius_of = |id: &str| design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(id)).unwrap_or(0);
+    let radius_of = |id: &str| design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(id)).unwrap_or(Nm::ZERO);
     let mut out = Vec::new();
     for s in edge_cuts_shapes(design) {
         match &s {
-            Shape::Rect { id, layer, stroke_width, start, end, .. } if radius_of(id) > 0 => out.extend(rounded_rect_sides(id, layer, *stroke_width, *start, *end, radius_of(id))),
+            Shape::Rect { id, layer, stroke_width, start, end, .. } if radius_of(id) > Nm::ZERO => out.extend(rounded_rect_sides(id, layer, *stroke_width, *start, *end, radius_of(id))),
             _ => out.push(s),
         }
     }
@@ -105,8 +105,8 @@ pub fn edge_cuts_effective_shapes(design: &Design) -> Vec<Shape> {
 /// the right of the top-left corner, as `ROUNDRECT::TransformToPolygon` lays its outline out; a side of no length is left out.
 pub fn rounded_rect_sides(id: &str, layer: &str, stroke_width: Nm, a: Point, b: Point, radius: Nm) -> Vec<Shape> {
     let (x0, y0, x1, y1) = (a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
-    let r = radius.min((x1 - x0).min(y1 - y0) / 2).max(0);
-    let d = (r as f64 * std::f64::consts::FRAC_1_SQRT_2).round() as Nm;
+    let r = radius.min((x1 - x0).min(y1 - y0) / 2).max(Nm::ZERO);
+    let d = Nm::kiround(r.as_f64() * std::f64::consts::FRAC_1_SQRT_2);
     let p = |x: Nm, y: Nm| Point { x, y };
     let seg = |s: Point, e: Point| Shape::Segment { id: id.to_string(), layer: layer.to_string(), stroke_width, filled: false, start: s, end: e };
     let arc = |s: Point, m: Point, e: Point| Shape::Arc { id: id.to_string(), layer: layer.to_string(), stroke_width, filled: false, start: s, mid: m, end: e };
@@ -117,19 +117,19 @@ pub fn rounded_rect_sides(id: &str, layer: &str, stroke_width: Nm, a: Point, b: 
         }
     };
     side(p(x0 + r, y0), p(x1 - r, y0), &mut out);
-    if r > 0 {
+    if r > Nm::ZERO {
         out.push(arc(p(x1 - r, y0), p(x1 - r + d, y0 + r - d), p(x1, y0 + r)));
     }
     side(p(x1, y0 + r), p(x1, y1 - r), &mut out);
-    if r > 0 {
+    if r > Nm::ZERO {
         out.push(arc(p(x1, y1 - r), p(x1 - r + d, y1 - r + d), p(x1 - r, y1)));
     }
     side(p(x1 - r, y1), p(x0 + r, y1), &mut out);
-    if r > 0 {
+    if r > Nm::ZERO {
         out.push(arc(p(x0 + r, y1), p(x0 + r - d, y1 - r + d), p(x0, y1 - r)));
     }
     side(p(x0, y1 - r), p(x0, y0 + r), &mut out);
-    if r > 0 {
+    if r > Nm::ZERO {
         out.push(arc(p(x0, y0 + r), p(x0 + r - d, y0 + r - d), p(x0 + r, y0)));
     }
     out
@@ -140,12 +140,12 @@ pub fn rounded_rect_sides(id: &str, layer: &str, stroke_width: Nm, a: Point, b: 
 /// ("Roundrects won't have a gazillion points, so we use a higher definition than the typical maxError"). A radius of half both sides is the circle.
 pub fn rounded_rect_ring(a: Point, b: Point, radius: Nm, max_error: f64) -> Vec<Point> {
     let (x0, y0, x1, y1) = (a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
-    let r = radius.min((x1 - x0).min(y1 - y0) / 2).max(0);
-    if r == 0 {
+    let r = radius.min((x1 - x0).min(y1 - y0) / 2).max(Nm::ZERO);
+    if r == Nm::ZERO {
         return vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }];
     }
     let err = max_error / 5.0;
-    let d = (r as f64 * std::f64::consts::FRAC_1_SQRT_2).round() as Nm;
+    let d = Nm::kiround(r.as_f64() * std::f64::consts::FRAC_1_SQRT_2);
     let p = |x: Nm, y: Nm| Point { x, y };
     // (start, mid, end) of each corner, clockwise: NE, SE, SW, NW (`MakeCornerArcCw90`).
     let corners = [
@@ -185,7 +185,7 @@ fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 /// Distance from `p` to the segment `a`-`b` (`SEG::Distance( VECTOR2I )`).
 fn point_segment_distance(p: Point, a: Point, b: Point) -> f64 {
-    let (px, py, ax, ay, bx, by) = (p.x as f64, p.y as f64, a.x as f64, a.y as f64, b.x as f64, b.y as f64);
+    let (px, py, ax, ay, bx, by) = (p.x.as_f64(), p.y.as_f64(), a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64());
     let (dx, dy) = (bx - ax, by - ay);
     let len2 = dx * dx + dy * dy;
     if len2 == 0.0 {
@@ -233,7 +233,7 @@ impl Arc {
     /// `SHAPE_ARC( aArcStart, aArcMid, aArcEnd, 0 )`: `update_values` finds the centre from the three points (`CalcArcCenter`).
     pub fn through(start: Point, mid: Point, end: Point) -> Arc {
         let center = calc_arc_center(start, mid, end);
-        let radius = center.map_or(f64::INFINITY, |c| dist((start.x as f64, start.y as f64), c));
+        let radius = center.map_or(f64::INFINITY, |c| dist((start.x.as_f64(), start.y.as_f64()), c));
         Arc { start, mid, end, center, radius }
     }
 
@@ -255,15 +255,15 @@ impl Arc {
 
     /// `SHAPE_ARC::IsCCW`.
     pub fn is_ccw(&self) -> bool {
-        let (v1x, v1y) = ((self.end.x - self.mid.x) as i128, (self.end.y - self.mid.y) as i128);
-        let (v2x, v2y) = ((self.start.x - self.mid.x) as i128, (self.start.y - self.mid.y) as i128);
+        let (v1x, v1y) = ((self.end.x - self.mid.x).get() as i128, (self.end.y - self.mid.y).get() as i128);
+        let (v2x, v2y) = ((self.start.x - self.mid.x).get() as i128, (self.start.y - self.mid.y).get() as i128);
         v1x * v2y - v1y * v2x > 0
     }
 
     /// `SHAPE_ARC::GetStartAngle`: radians, `[0, 2 pi)`.
     pub fn start_angle(&self) -> f64 {
         let Some(c) = self.center else { return 0.0 };
-        (self.start.y as f64 - c.1).atan2(self.start.x as f64 - c.0).rem_euclid(std::f64::consts::TAU)
+        (self.start.y.as_f64() - c.1).atan2(self.start.x.as_f64() - c.0).rem_euclid(std::f64::consts::TAU)
     }
 
     /// `SHAPE_ARC::GetCentralAngle`: radians, positive for a counter-clockwise arc and negative for a clockwise one; a full turn
@@ -273,8 +273,8 @@ impl Arc {
         if self.start == self.end {
             return std::f64::consts::TAU;
         }
-        let a_end = (self.end.y as f64 - c.1).atan2(self.end.x as f64 - c.0);
-        let a_start = (self.start.y as f64 - c.1).atan2(self.start.x as f64 - c.0);
+        let a_end = (self.end.y.as_f64() - c.1).atan2(self.end.x.as_f64() - c.0);
+        let a_start = (self.start.y.as_f64() - c.1).atan2(self.start.x.as_f64() - c.0);
         let mut angle = a_end - a_start;
         // The middle point says which of the two arcs between the ends is meant.
         if self.is_ccw() {
@@ -316,7 +316,7 @@ impl Arc {
         let mut i = 1;
         while i < n2 {
             let a = sa + ca * i as f64 / n2 as f64;
-            pts.push(Point { x: (c.0 + r * a.cos()).round() as Nm, y: (c.1 + r * a.sin()).round() as Nm });
+            pts.push(Point { x: Nm::kiround(c.0 + r * a.cos()), y: Nm::kiround(c.1 + r * a.sin()) });
             i += 2;
         }
         pts.push(self.end);
@@ -327,7 +327,7 @@ impl Arc {
 /// `CalcArcCenter( aStart, aMid, aEnd )`: the centre of the circle through three points. `start == end` is a whole circle whose
 /// middle point is the far side of it; collinear points have no centre.
 fn calc_arc_center(start: Point, mid: Point, end: Point) -> Option<(f64, f64)> {
-    let (sx, sy, mx, my, ex, ey) = (start.x as f64, start.y as f64, mid.x as f64, mid.y as f64, end.x as f64, end.y as f64);
+    let (sx, sy, mx, my, ex, ey) = (start.x.as_f64(), start.y.as_f64(), mid.x.as_f64(), mid.y.as_f64(), end.x.as_f64(), end.y.as_f64());
     if start == end {
         return Some(((sx + mx) / 2.0, (sy + my) / 2.0));
     }
@@ -353,7 +353,7 @@ pub struct Chain {
 
 /// The radius `PCB_SHAPE::GetRadius` gives a circle: the distance from its centre to the point on its circumference, rounded.
 pub fn circle_radius(center: Point, rim: Point) -> Nm {
-    ((rim.x - center.x) as f64).hypot((rim.y - center.y) as f64).round() as Nm
+    Nm::new(((rim.x - center.x).as_f64()).hypot((rim.y - center.y).as_f64()).round() as i64)
 }
 
 /// The closed contour `processClosedShape` makes of a circle: `SHAPE_ARC( center, start, ANGLE_360 )` polygonized at `max_error`,
@@ -381,7 +381,7 @@ pub fn shape_chains(shape: &Shape, max_error: f64) -> Vec<Chain> {
         Shape::Rect { start, end, .. } => vec![Chain { pts: rect_corners(*start, *end).to_vec(), closed: true }],
         Shape::Circle { center, end, .. } => vec![Chain { pts: circle_contour(*center, *end, max_error), closed: true }],
         Shape::Polygon { pts, .. } => vec![Chain { pts: pts.clone(), closed: true }],
-        Shape::Bezier { start, c1, c2, end, .. } => vec![Chain { pts: bezier::bezier_polyline(*start, *c1, *c2, *end, max_error.round() as Nm), closed: false }],
+        Shape::Bezier { start, c1, c2, end, .. } => vec![Chain { pts: bezier::bezier_polyline(*start, *c1, *c2, *end, Nm::kiround(max_error)), closed: false }],
     }
 }
 
@@ -411,18 +411,18 @@ mod tests {
     /// A rounded rectangle's effective shapes (`MakeEffectiveShapes`): four sides and four corner arcs, in `ROUNDRECT`'s order, joined end to end.
     #[test]
     fn a_rounded_rectangle_is_four_sides_and_four_corner_arcs() {
-        let s = rounded_rect_sides("r", EDGE_CUTS, 50_000, Point { x: 0, y: 0 }, Point { x: 50_000_000, y: 40_000_000 }, 5_000_000);
+        let s = rounded_rect_sides("r", EDGE_CUTS, Nm::new(50_000), Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(50_000_000), y: Nm::new(40_000_000) }, Nm::new(5_000_000));
         assert_eq!(s.len(), 8);
-        assert!(matches!(s[0], Shape::Segment { start, end, .. } if start == Point { x: 5_000_000, y: 0 } && end == Point { x: 45_000_000, y: 0 }));
-        assert!(matches!(s[1], Shape::Arc { start, end, .. } if start == Point { x: 45_000_000, y: 0 } && end == Point { x: 50_000_000, y: 5_000_000 }));
+        assert!(matches!(s[0], Shape::Segment { start, end, .. } if start == Point { x: Nm::new(5_000_000), y: Nm::ZERO } && end == Point { x: Nm::new(45_000_000), y: Nm::ZERO }));
+        assert!(matches!(s[1], Shape::Arc { start, end, .. } if start == Point { x: Nm::new(45_000_000), y: Nm::ZERO } && end == Point { x: Nm::new(50_000_000), y: Nm::new(5_000_000) }));
         let ends: Vec<(Point, Point)> = s.iter().map(|x| { let p = x.points(); (p[0], *p.last().unwrap()) }).collect();
         assert!((0..8).all(|i| ends[i].1 == ends[(i + 1) % 8].0), "{ends:?}");
         // A radius of half the smaller side: no side along it.
-        assert_eq!(rounded_rect_sides("r", EDGE_CUTS, 0, Point { x: 0, y: 0 }, Point { x: 10, y: 4 }, 9).len(), 6);
+        assert_eq!(rounded_rect_sides("r", EDGE_CUTS, Nm::ZERO, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(10), y: Nm::new(4) }, Nm::new(9)).len(), 6);
     }
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn quarter() -> Arc {
@@ -456,12 +456,12 @@ mod tests {
         let half = circle_to_end_segment_delta_radius(quarter().radius(), seg360) / 2.0;
         for q in &pts[1..pts.len() - 1] {
             let c = quarter().center().expect("a centre");
-            let r = (q.x as f64 - c.0).hypot(q.y as f64 - c.1);
+            let r = (q.x.as_f64() - c.0).hypot(q.y.as_f64() - c.1);
             assert!((r - quarter().radius() - half).abs() < 1.0, "{q:?} is at {r}");
         }
         // And every chord stays within `max_error` of it.
         for w in pts.windows(2) {
-            let mid = ((w[0].x + w[1].x) as f64 / 2.0, (w[0].y + w[1].y) as f64 / 2.0);
+            let mid = ((w[0].x + w[1].x).as_f64() / 2.0, (w[0].y + w[1].y).as_f64() / 2.0);
             let off = (mid.0.hypot(mid.1) - 10_000_000.0).abs();
             assert!(off <= 5_000.0 + 1.0, "chord {w:?} is {off} off");
         }
@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(ring[0], p(3_000_000, 2_000_000));
         assert_eq!(ring.len(), arc_to_segment_count(2_000_000.0, 5_000.0, std::f64::consts::TAU) as usize + 1);
         assert!(ring.windows(2).all(|w| w[0] != w[1]));
-        let area: f64 = (0..ring.len()).map(|i| (ring[i].x as f64) * (ring[(i + 1) % ring.len()].y as f64) - (ring[(i + 1) % ring.len()].x as f64) * (ring[i].y as f64)).sum::<f64>() / 2.0;
+        let area: f64 = (0..ring.len()).map(|i| ((ring[i].x).as_f64()) * ((ring[(i + 1) % ring.len()].y).as_f64()) - ((ring[(i + 1) % ring.len()].x).as_f64()) * ((ring[i].y).as_f64())).sum::<f64>() / 2.0;
         let circle = std::f64::consts::PI * 2_000_000.0 * 2_000_000.0;
         assert!((area.abs() - circle).abs() / circle < 0.005, "area {area} against {circle}");
     }

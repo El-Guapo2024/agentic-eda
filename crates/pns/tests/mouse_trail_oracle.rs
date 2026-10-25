@@ -10,6 +10,7 @@
 //!   `EDA_PNS_ORACLE_TRAIL=/path/to/oracle_trail cargo test -p eda-pns --test mouse_trail_oracle` (skipped without it). `EDA_PNS_ORACLE_CASES` scales the number
 //!   of cases (default 400). `KICAD_SRC_DIR=<checkout of KiCad 8303b2ad> crates/pns/oracle/build.sh` builds it (a minute or two, clang++, no downloads).
 
+use eda_model::units::Nm;
 use eda_model::ir::Point;
 use eda_pns::direction45::Direction45;
 use eda_pns::mouse_trail::MouseTrailTracer;
@@ -19,7 +20,7 @@ use std::process::{Command, Stdio};
 const NM: i64 = 1000;
 
 fn p(x: i64, y: i64) -> Point {
-    Point { x, y }
+    Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
 }
 
 /// KiCad's number of a direction: `DIRECTION_45::Directions`, `UNDEFINED` -1.
@@ -55,7 +56,7 @@ fn evaluate(case: &str) -> String {
     let mut t = MouseTrailTracer::new();
     t.clear();
     t.add_trail_point(p(0, 0));
-    t.set_tolerance(um(tolerance_nm));
+    t.set_tolerance(Nm::from_raw_shim(um(tolerance_nm)));
     t.set_default_directions(direction(init), direction(last));
     t.set_mouse_disabled(disabled != 0);
     let mut out = String::from("ok");
@@ -82,7 +83,7 @@ fn evaluate(case: &str) -> String {
                 let (ri, rl) = (rest[k + 3].parse().unwrap(), rest[k + 4].parse().unwrap());
                 k += 5;
                 t.clear();
-                t.set_tolerance(um(tolerance_nm));
+                t.set_tolerance(Nm::from_raw_shim(um(tolerance_nm)));
                 t.add_trail_point(at);
                 t.set_default_directions(direction(ri), direction(rl));
                 out += " R";

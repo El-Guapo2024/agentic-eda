@@ -593,23 +593,23 @@ impl Settings {
         let mut enabled: BTreeSet<String> = r.layers.iter().cloned().collect();
         enabled.extend(r.layer_setup.enabled.iter().cloned());
         Settings {
-            track_min_width: r.track_width_min_nm,
-            min_conn: r.min_connection_nm,
-            min_through_drill: r.via_drill_min_nm,
-            via_min_annular_width: r.annular_width_min_nm,
-            via_min_size: r.via_diameter_min_nm,
-            hole_to_hole_min: r.hole_to_hole_min_nm,
+            track_min_width: r.track_width_min_nm.raw_shim(),
+            min_conn: r.min_connection_nm.raw_shim(),
+            min_through_drill: r.via_drill_min_nm.raw_shim(),
+            via_min_annular_width: r.annular_width_min_nm.raw_shim(),
+            via_min_size: r.via_diameter_min_nm.raw_shim(),
+            hole_to_hole_min: r.hole_to_hole_min_nm.raw_shim(),
             min_resolved_spokes: r.min_resolved_spokes as i64,
-            silk_clearance: r.silk_clearance_nm,
-            min_silk_text_height: r.min_silk_text_height_nm,
-            min_silk_text_thickness: r.min_silk_text_thickness_nm,
-            hole_clearance: r.hole_clearance_nm,
-            copper_edge_clearance: edge_clearance_min(r),
-            micro_vias_min_drill: r.microvia_drill_min_nm,
-            micro_vias_min_size: r.microvia_diameter_min_nm,
-            min_clearance: r.min_clearance_nm,
-            solder_mask_expansion: r.solder_mask.expansion_nm,
-            solder_paste_margin: r.solder_mask.paste_margin_nm,
+            silk_clearance: r.silk_clearance_nm.raw_shim(),
+            min_silk_text_height: r.min_silk_text_height_nm.raw_shim(),
+            min_silk_text_thickness: r.min_silk_text_thickness_nm.raw_shim(),
+            hole_clearance: r.hole_clearance_nm.raw_shim(),
+            copper_edge_clearance: (edge_clearance_min(r)).raw_shim(),
+            micro_vias_min_drill: r.microvia_drill_min_nm.raw_shim(),
+            micro_vias_min_size: r.microvia_diameter_min_nm.raw_shim(),
+            min_clearance: r.min_clearance_nm.raw_shim(),
+            solder_mask_expansion: r.solder_mask.expansion_nm.raw_shim(),
+            solder_paste_margin: r.solder_mask.paste_margin_nm.raw_shim(),
             solder_paste_margin_ratio: r.solder_mask.paste_margin_ratio,
             enabled_layers: enabled,
         }
@@ -660,27 +660,27 @@ pub fn class_views(rules: &BoardRules, nets: &[String]) -> Vec<ClassView> {
     });
     let default_view = ClassView {
         name: "Default".into(),
-        clearance: Some((rules.clearance, "Default".into())),
-        track_width: Some((rules.track_width, "Default".into())),
-        via_diameter: Some((rules.via_diameter, "Default".into())),
-        via_drill: Some((rules.via_drill, "Default".into())),
-        uvia_diameter: Some((def.microvia_diameter.unwrap_or(300_000), "Default".into())),
-        uvia_drill: Some((def.microvia_drill.unwrap_or(100_000), "Default".into())),
-        diff_pair_width: Some((def.diff_pair_width.unwrap_or(200_000), "Default".into())),
-        diff_pair_gap: Some((def.diff_pair_gap.unwrap_or(250_000), "Default".into())),
+        clearance: Some((rules.clearance.raw_shim(), "Default".into())),
+        track_width: Some((rules.track_width.raw_shim(), "Default".into())),
+        via_diameter: Some((rules.via_diameter.raw_shim(), "Default".into())),
+        via_drill: Some((rules.via_drill.raw_shim(), "Default".into())),
+        uvia_diameter: Some(((def.microvia_diameter.unwrap_or(Nm::from_raw_shim(300_000))).raw_shim(), "Default".into())),
+        uvia_drill: Some(((def.microvia_drill.unwrap_or(Nm::from_raw_shim(100_000))).raw_shim(), "Default".into())),
+        diff_pair_width: Some(((def.diff_pair_width.unwrap_or(Nm::from_raw_shim(200_000))).raw_shim(), "Default".into())),
+        diff_pair_gap: Some(((def.diff_pair_gap.unwrap_or(Nm::from_raw_shim(250_000))).raw_shim(), "Default".into())),
     };
     // A setting of the Default class, for a composite class that gets it from there.
     let setting = |cl: &ClassView, get: &dyn Fn(&ClassView) -> &Option<(i64, String)>| -> Option<(i64, String)> { get(cl).clone() };
     let own = |c: &eda_model::NetClass| ClassView {
         name: c.name.clone(),
-        clearance: c.clearance.map(|v| (v, c.name.clone())),
-        track_width: c.track_width.map(|v| (v, c.name.clone())),
-        diff_pair_width: c.diff_pair_width.map(|v| (v, c.name.clone())),
-        diff_pair_gap: c.diff_pair_gap.map(|v| (v, c.name.clone())),
-        via_diameter: c.via_diameter.map(|v| (v, c.name.clone())),
-        via_drill: c.via_drill.map(|v| (v, c.name.clone())),
-        uvia_diameter: c.microvia_diameter.map(|v| (v, c.name.clone())),
-        uvia_drill: c.microvia_drill.map(|v| (v, c.name.clone())),
+        clearance: c.clearance.map(|v| (v.raw_shim(), c.name.clone())),
+        track_width: c.track_width.map(|v| (v.raw_shim(), c.name.clone())),
+        diff_pair_width: c.diff_pair_width.map(|v| (v.raw_shim(), c.name.clone())),
+        diff_pair_gap: c.diff_pair_gap.map(|v| (v.raw_shim(), c.name.clone())),
+        via_diameter: c.via_diameter.map(|v| (v.raw_shim(), c.name.clone())),
+        via_drill: c.via_drill.map(|v| (v.raw_shim(), c.name.clone())),
+        uvia_diameter: c.microvia_diameter.map(|v| (v.raw_shim(), c.name.clone())),
+        uvia_drill: c.microvia_drill.map(|v| (v.raw_shim(), c.name.clone())),
     };
     let mut plain: Vec<&eda_model::NetClass> = rules.net_classes.iter().collect();
     plain.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1749,7 +1749,7 @@ mod tests {
 
     fn rules_with_classes() -> BoardRules {
         BoardRules {
-            net_classes: vec![NetClass { name: "power".into(), nets: vec!["VIN".into()], track_width: None, clearance: Some(500_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
+            net_classes: vec![NetClass { name: "power".into(), nets: vec!["VIN".into()], track_width: None, clearance: Some(Nm::from_raw_shim(500_000)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
             ..BoardRules::default()
         }
     }
@@ -1757,7 +1757,7 @@ mod tests {
     #[test]
     fn clearance_is_the_larger_of_the_two_nets_classes() {
         let r = rules_with_classes();
-        assert_eq!(clearance(&r, Some("VIN"), Some("GND")), 500_000, "VIN's 500um class beats GND's board default");
+        assert_eq!(clearance(&r, Some("VIN"), Some("GND")), Nm::from_raw_shim(500_000), "VIN's 500um class beats GND's board default");
         assert_eq!(clearance(&r, Some("GND"), Some("SIG")), r.clearance, "neither net has a class override");
     }
 
@@ -1776,23 +1776,23 @@ mod tests {
     /// minimum against a `0.1524mm` "Default" net class nominal width.
     #[test]
     fn track_width_min_ignores_the_netclass_nominal_width() {
-        let r = BoardRules { track_width: 1_524_000, track_width_min_nm: 1_016_000, ..BoardRules::default() };
-        assert_eq!(track_width_min(&r), 1_016_000, "the board's real floor, not the net class's much larger nominal width");
+        let r = BoardRules { track_width: Nm::from_raw_shim(1_524_000), track_width_min_nm: Nm::from_raw_shim(1_016_000), ..BoardRules::default() };
+        assert_eq!(track_width_min(&r), Nm::from_raw_shim(1_016_000), "the board's real floor, not the net class's much larger nominal width");
     }
 
     #[test]
     fn via_and_hole_minimums_ignore_the_netclass_nominal_values() {
-        let r = BoardRules { via_diameter: 9_999_000, via_diameter_min_nm: 450_000, via_drill: 9_999_000, via_drill_min_nm: 200_000, ..BoardRules::default() };
-        assert_eq!(via_diameter_min(&r), 450_000);
-        assert_eq!(hole_size_min(&r), 200_000);
+        let r = BoardRules { via_diameter: Nm::from_raw_shim(9_999_000), via_diameter_min_nm: Nm::from_raw_shim(450_000), via_drill: Nm::from_raw_shim(9_999_000), via_drill_min_nm: Nm::from_raw_shim(200_000), ..BoardRules::default() };
+        assert_eq!(via_diameter_min(&r), Nm::from_raw_shim(450_000));
+        assert_eq!(hole_size_min(&r), Nm::from_raw_shim(200_000));
     }
 
     #[test]
     fn board_minimum_clearance_floors_the_netclass_value() {
-        let r = BoardRules { clearance: 100_000, min_clearance_nm: 150_000, ..BoardRules::default() };
-        assert_eq!(clearance(&r, Some("A"), Some("B")), 150_000, "board floor beats a smaller netclass/default value");
-        let r2 = BoardRules { clearance: 300_000, min_clearance_nm: 150_000, ..BoardRules::default() };
-        assert_eq!(clearance(&r2, Some("A"), Some("B")), 300_000, "netclass value already clears the floor");
+        let r = BoardRules { clearance: Nm::from_raw_shim(100_000), min_clearance_nm: Nm::from_raw_shim(150_000), ..BoardRules::default() };
+        assert_eq!(clearance(&r, Some("A"), Some("B")), Nm::from_raw_shim(150_000), "board floor beats a smaller netclass/default value");
+        let r2 = BoardRules { clearance: Nm::from_raw_shim(300_000), min_clearance_nm: Nm::from_raw_shim(150_000), ..BoardRules::default() };
+        assert_eq!(clearance(&r2, Some("A"), Some("B")), Nm::from_raw_shim(300_000), "netclass value already clears the floor");
     }
 
     #[test]
@@ -1851,8 +1851,8 @@ mod tests {
 
     fn rules_hv() -> BoardRules {
         BoardRules {
-            clearance: 200_000,
-            net_classes: vec![NetClass { name: "HV".into(), nets: vec!["VBUS".into()], track_width: None, clearance: Some(500_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
+            clearance: Nm::from_raw_shim(200_000),
+            net_classes: vec![NetClass { name: "HV".into(), nets: vec!["VBUS".into()], track_width: None, clearance: Some(Nm::from_raw_shim(500_000)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
             ..BoardRules::default()
         }
     }
@@ -1868,7 +1868,7 @@ mod tests {
         assert_eq!(c.value.min, Some(500_000), "the HV class (500 um) beats the Default class (200 um) the other net is in");
         assert_eq!(eng.constraint_name(&c), "netclass 'HV'");
         // the same, as the netclass fast path of `crate::constraints::clearance` has it
-        assert_eq!((clearance(&rules, Some("VBUS"), Some("GND"))), c.value.min());
+        assert_eq!((clearance(&rules, Some("VBUS"), Some("GND"))), Nm::from_raw_shim(c.value.min()));
         let text = report.lines.join("\n");
         // (the names are escaped for the HTML report box: `EscapeHTML( c->constraint.GetName() )`)
         assert!(text.contains("Checking netclass &apos;Default&apos; clearance: 0.2000 mm."), "{text}");
@@ -1935,7 +1935,7 @@ mod tests {
         assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(150_000), "pad".to_string()));
         assert!(report.lines.join("\n").contains("Local override on Pad 1 [GND] of J1 on F.Cu; clearance: 0.1500 mm."));
         // the board's minimum clearance still has the last word
-        rules.min_clearance_nm = 300_000;
+        rules.min_clearance_nm = Nm::from_raw_shim(300_000);
         let (eng, _) = engine(&rules, &["VBUS", "GND"], None, &[]);
         let c = eng.eval_rules(CType::Clearance, Some(&p), Some(&other), Some("F.Cu"), None);
         assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(300_000), "board minimum".to_string()));
@@ -1989,8 +1989,8 @@ mod tests {
     #[test]
     fn track_width_has_the_board_floor_and_the_class_optimum() {
         let mut rules = rules_hv();
-        rules.track_width_min_nm = 150_000;
-        rules.net_classes[0].track_width = Some(400_000);
+        rules.track_width_min_nm = Nm::from_raw_shim(150_000);
+        rules.net_classes[0].track_width = Some(Nm::from_raw_shim(400_000));
         let (eng, _) = engine(&rules, &["VBUS", "GND"], None, &[]);
         let t = track("VBUS", "F.Cu", 400_000);
         let mut report = Report::default();
@@ -2012,11 +2012,11 @@ mod tests {
         let (mut eng, _) = engine(&rules, &["A"], None, &[ko]);
         // the engine's env must know the area
         let mut area_env = Env::simple(&["F.Cu", "B.Cu"]);
-        area_env.areas = vec![Rc::new(crate::rule_item::AreaFacts { id: "ko1".into(), name: "no tracks".into(), layers: vec!["F.Cu".into()], outline: vec![eda_model::ir::Point { x: 0, y: 0 }, eda_model::ir::Point { x: 10_000_000, y: 0 }, eda_model::ir::Point { x: 10_000_000, y: 10_000_000 }, eda_model::ir::Point { x: 0, y: 10_000_000 }], holes: Vec::new(), parent_footprint: None })];
+        area_env.areas = vec![Rc::new(crate::rule_item::AreaFacts { id: "ko1".into(), name: "no tracks".into(), layers: vec!["F.Cu".into()], outline: vec![eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, eda_model::ir::Point { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) }], holes: Vec::new(), parent_footprint: None })];
         eng.env = Rc::new(area_env);
         eng.compile_implicit();
         let mut t = (*track("A", "F.Cu", 200_000)).clone();
-        t.shapes = vec![crate::kimath::Shape::Stadium { a: eda_model::ir::Point { x: 1_000_000, y: 1_000_000 }, b: eda_model::ir::Point { x: 5_000_000, y: 1_000_000 }, r: 100_000 }];
+        t.shapes = vec![crate::kimath::Shape::Stadium { a: eda_model::ir::Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, b: eda_model::ir::Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(1_000_000) }, r: Nm::from_raw_shim(100_000) }];
         let t = Rc::new(t);
         let mut report = Report::default();
         let c = eng.eval_rules(CType::Disallow, Some(&t), None, Some("F.Cu"), Some(&mut report));
@@ -2147,7 +2147,7 @@ mod tests {
         assert_eq!(width("N2"), (Some(127_000), "rule 'rule_3'".to_string()));
         assert_eq!(width("OTHER"), (Some(127_000), "rule 'rule_3'".to_string()));
         // a class that sets every setting itself is not in the Default class: rule_1 is its rule
-        let full = NetClass { name: "FULL".into(), nets: vec!["N4".into()], track_width: Some(300_000), clearance: Some(250_000), via_diameter: Some(600_000), via_drill: Some(300_000), microvia_diameter: Some(300_000), microvia_drill: Some(100_000), diff_pair_width: Some(200_000), diff_pair_gap: Some(250_000), diff_pair_via_gap: Some(250_000), priority: 0 };
+        let full = NetClass { name: "FULL".into(), nets: vec!["N4".into()], track_width: Some(Nm::from_raw_shim(300_000)), clearance: Some(Nm::from_raw_shim(250_000)), via_diameter: Some(Nm::from_raw_shim(600_000)), via_drill: Some(Nm::from_raw_shim(300_000)), microvia_diameter: Some(Nm::from_raw_shim(300_000)), microvia_drill: Some(Nm::from_raw_shim(100_000)), diff_pair_width: Some(Nm::from_raw_shim(200_000)), diff_pair_gap: Some(Nm::from_raw_shim(250_000)), diff_pair_via_gap: Some(Nm::from_raw_shim(250_000)), priority: 0 };
         let two = BoardRules { net_classes: vec![full, mk("CLASS2", &["N2"])], ..BoardRules::default() };
         let (eng2, _) = engine(&two, &["N2", "N4"], Some(&dru), &[]);
         let t4 = track("N4", "F.Cu", 200_000);

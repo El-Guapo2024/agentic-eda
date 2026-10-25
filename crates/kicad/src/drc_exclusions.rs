@@ -21,6 +21,7 @@
 //! marker sits at an item's position -- a via, a pad, a footprint, the start of an unconnected pair -- or in the middle of a track, that
 //! is the whole story. Where it sits somewhere else the exclusion holds in the studio's own report and not in kicad-cli's.
 
+use eda_model::units::Nm;
 use eda_model::ir::DrcExclusion;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -111,7 +112,7 @@ const LAYERED: &[&str] = &["copper_sliver", "starved_thermal", "generic_warning"
 pub fn markers(e: &DrcExclusion) -> Vec<Value> {
     let Some(error_type) = error_type(&e.check).filter(|_| !LAYERED.contains(&e.check.as_str())) else { return Vec::new() };
     let items: Vec<Value> = e.items.iter().map(|u| json!({ "value": u })).collect();
-    let mut positions: Vec<[i64; 2]> = e.positions_nm.clone();
+    let mut positions: Vec<[i64; 2]> = e.positions_nm.iter().map(|p| [p[0].raw_shim(), p[1].raw_shim()]).collect();
     positions.sort_unstable();
     positions.dedup();
     positions
@@ -126,7 +127,7 @@ pub fn markers(e: &DrcExclusion) -> Vec<Value> {
 /// The `drc_exclusions` array of the project's `board.design_settings`: `{ marker, comment }` for each marker of each exclusion
 /// (`kiapi.board.DrcExclusion` as protobuf JSON), in a fixed order -- by check, then position, then items.
 pub fn project_entries(exclusions: &[DrcExclusion]) -> Vec<Value> {
-    let mut entries: BTreeMap<(String, [i64; 2], Vec<String>), Value> = BTreeMap::new();
+    let mut entries: BTreeMap<(String, [Nm; 2], Vec<String>), Value> = BTreeMap::new();
     for e in exclusions {
         let mut positions = e.positions_nm.clone();
         positions.sort_unstable();
@@ -223,7 +224,7 @@ pub fn from_project(pro_text: &str, item_ids: &BTreeMap<String, String>, derived
         let Some(ids) = l.items.iter().map(|u| item_ids.get(u).cloned()).collect::<Option<Vec<String>>>() else { continue };
         let Some(items) = ids.iter().map(|id| uuid_of.get(id.as_str()).map(|u| u.to_string())).collect::<Option<Vec<String>>>() else { continue };
         let e = out.entry((l.check.clone(), items.clone())).or_insert_with(|| DrcExclusion { check: l.check.clone(), items, ids, positions_nm: Vec::new(), comment: l.comment.clone() });
-        e.positions_nm.push(l.at);
+        e.positions_nm.push([Nm::from_raw_shim(l.at[0]), Nm::from_raw_shim(l.at[1])]);
         if e.comment.is_empty() {
             e.comment = l.comment;
         }
@@ -233,10 +234,11 @@ pub fn from_project(pro_text: &str, item_ids: &BTreeMap<String, String>, derived
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     fn waived(check: &str, items: &[&str], positions: &[[i64; 2]], comment: &str) -> DrcExclusion {
-        DrcExclusion { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), ids: vec![], positions_nm: positions.to_vec(), comment: comment.into() }
+        DrcExclusion { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), ids: vec![], positions_nm: positions.iter().map(|p| [Nm::from_raw_shim(p[0]), Nm::from_raw_shim(p[1])]).collect(), comment: comment.into() }
     }
 
     #[test]

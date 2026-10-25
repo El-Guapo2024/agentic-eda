@@ -210,30 +210,30 @@ fn get_cubic_poly(c: Cubic, out: &mut Vec<V>, max_error: f64) {
 /// (start first, end last) within `max_error` (board units -- nanometres here) of the
 /// true curve. `max_error <= 0` falls back to 10, as the C++ does.
 pub fn bezier_polyline(start: Point, c1: Point, c2: Point, end: Point, max_error: Nm) -> Vec<Point> {
-    let err = if max_error <= 0 { 10.0 } else { max_error as f64 };
-    let v = |p: Point| (p.x as f64, p.y as f64);
+    let err = if max_error <= Nm::ZERO { 10.0 } else { max_error.as_f64() };
+    let v = |p: Point| (p.x.as_f64(), p.y.as_f64());
     let mut out: Vec<V> = Vec::new();
     get_cubic_poly([v(start), v(c1), v(c2), v(end)], &mut out, err);
-    out.into_iter().map(|p| Point { x: ki_round(p.0), y: ki_round(p.1) }).collect()
+    out.into_iter().map(|p| Point { x: Nm::new(ki_round(p.0)), y: Nm::new(ki_round(p.1)) }).collect()
 }
 
 /// `EDA_SHAPE::getMaxError()` for the board: `BOARD_DESIGN_SETTINGS::m_MaxError`
 /// defaults to 0.005 mm (`pcbIUScale.mmToIU( 0.005 )`), i.e. 5 um.
-pub const BEZIER_MAX_ERROR_NM: Nm = 5_000;
+pub const BEZIER_MAX_ERROR_NM: Nm = Nm::new(5_000);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn dist_to_polyline(q: (f64, f64), poly: &[Point]) -> f64 {
         let mut best = f64::INFINITY;
         for w in poly.windows(2) {
-            let (ax, ay) = (w[0].x as f64, w[0].y as f64);
-            let (bx, by) = (w[1].x as f64, w[1].y as f64);
+            let (ax, ay) = (w[0].x.as_f64(), w[0].y.as_f64());
+            let (bx, by) = (w[1].x.as_f64(), w[1].y.as_f64());
             let (dx, dy) = (bx - ax, by - ay);
             let len2 = dx * dx + dy * dy;
             let t = if len2 == 0.0 { 0.0 } else { (((q.0 - ax) * dx + (q.1 - ay) * dy) / len2).clamp(0.0, 1.0) };
@@ -245,19 +245,19 @@ mod tests {
     fn at(s: Point, c1: Point, c2: Point, e: Point, t: f64) -> (f64, f64) {
         let omt = 1.0 - t;
         let (a, b, c, d) = (omt * omt * omt, 3.0 * t * omt * omt, 3.0 * t * t * omt, t * t * t);
-        (a * s.x as f64 + b * c1.x as f64 + c * c2.x as f64 + d * e.x as f64, a * s.y as f64 + b * c1.y as f64 + c * c2.y as f64 + d * e.y as f64)
+        (a * s.x.as_f64() + b * c1.x.as_f64() + c * c2.x.as_f64() + d * e.x.as_f64(), a * s.y.as_f64() + b * c1.y.as_f64() + c * c2.y.as_f64() + d * e.y.as_f64())
     }
 
     #[test]
     fn a_straight_curve_flattens_to_its_end_points() {
-        assert_eq!(bezier_polyline(p(0, 0), p(100, 0), p(200, 0), p(300, 0), 5), vec![p(0, 0), p(300, 0)]);
+        assert_eq!(bezier_polyline(p(0, 0), p(100, 0), p(200, 0), p(300, 0), Nm::new(5)), vec![p(0, 0), p(300, 0)]);
     }
 
     #[test]
     fn a_rounded_curve_stays_within_max_error_and_keeps_its_ends() {
         let (s, c1, c2, e) = (p(0, 0), p(0, 10_000), p(10_000, 10_000), p(10_000, 0));
         for max_error in [5, 50, 500] {
-            let poly = bezier_polyline(s, c1, c2, e, max_error);
+            let poly = bezier_polyline(s, c1, c2, e, Nm::new(max_error));
             assert_eq!(poly.first(), Some(&s));
             assert_eq!(poly.last(), Some(&e));
             for i in 0..=200 {
@@ -265,13 +265,13 @@ mod tests {
                 assert!(d <= max_error as f64 + 1.5, "max_error {max_error}: sample {i} is {d:.2} from the polyline");
             }
         }
-        assert!(bezier_polyline(s, c1, c2, e, 5).len() > bezier_polyline(s, c1, c2, e, 500).len());
+        assert!(bezier_polyline(s, c1, c2, e, Nm::new(5)).len() > bezier_polyline(s, c1, c2, e, Nm::new(500)).len());
     }
 
     #[test]
     fn an_s_curve_with_inflection_points_is_within_tolerance() {
         let (s, c1, c2, e) = (p(0, 0), p(8_000, 12_000), p(2_000, -12_000), p(10_000, 0));
-        let poly = bezier_polyline(s, c1, c2, e, 20);
+        let poly = bezier_polyline(s, c1, c2, e, Nm::new(20));
         assert_eq!(poly.first(), Some(&s));
         assert_eq!(poly.last(), Some(&e));
         for i in 0..=400 {
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn a_closed_loop_still_produces_a_real_polyline() {
-        let poly = bezier_polyline(p(0, 0), p(5_000, 5_000), p(-5_000, 5_000), p(0, 0), 10);
+        let poly = bezier_polyline(p(0, 0), p(5_000, 5_000), p(-5_000, 5_000), p(0, 0), Nm::new(10));
         assert!(poly.len() > 4);
         assert_eq!(poly.first(), Some(&p(0, 0)));
         assert_eq!(poly.last(), Some(&p(0, 0)));
@@ -290,6 +290,6 @@ mod tests {
 
     #[test]
     fn a_non_positive_max_error_falls_back_to_ten() {
-        assert_eq!(bezier_polyline(p(0, 0), p(0, 4_000), p(4_000, 4_000), p(4_000, 0), 0), bezier_polyline(p(0, 0), p(0, 4_000), p(4_000, 4_000), p(4_000, 0), 10));
+        assert_eq!(bezier_polyline(p(0, 0), p(0, 4_000), p(4_000, 4_000), p(4_000, 0), Nm::ZERO), bezier_polyline(p(0, 0), p(0, 4_000), p(4_000, 4_000), p(4_000, 0), Nm::new(10)));
     }
 }

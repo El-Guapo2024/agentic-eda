@@ -7,6 +7,7 @@
 //! Anything else -- a net between three modules, two in one column, an order that will not line up -- is a short wire to a local
 //! label at each pin: the same name joins them. A wire is only drawn if nothing else in its way would be touched.
 
+use eda_model::units::Nm;
 use std::collections::{BTreeMap, BTreeSet};
 
 use eda_layout::Side;
@@ -123,8 +124,8 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
         left.sort_by(order);
         right.sort_by(order);
         // each pin's flag and name, read into the sheet from its own edge
-        let lmax = left.iter().map(|p| sheet_pin_rect(Point { x: 0, y: 0 }, true, &p.net).w()).max().unwrap_or(0);
-        let rmax = right.iter().map(|p| sheet_pin_rect(Point { x: 0, y: 0 }, false, &p.net).w()).max().unwrap_or(0);
+        let lmax = left.iter().map(|p| sheet_pin_rect(Point { x: Nm::ZERO, y: Nm::ZERO }, true, &p.net).w()).max().unwrap_or(0);
+        let rmax = right.iter().map(|p| sheet_pin_rect(Point { x: Nm::ZERO, y: Nm::ZERO }, false, &p.net).w()).max().unwrap_or(0);
         let rows = left.len().max(right.len());
         let h = if rows == 0 { 8 * G } else { snap_up(SheetBox::pin_y(rows - 1) + 3 * G).max(8 * G) };
         let name_w = text_w(SHEET_NAME_FONT, &modules[m].name).max(text_w(SHEET_FILE_FONT, &files[m]));
@@ -134,7 +135,7 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
     }
 
     // ---- horizontal: columns left to right, the gap wide enough for the labels of both sides ----
-    let label_len = |net: &str| 2 * G + label_rect(Point { x: 0, y: 0 }, (1, 0), net, false).w();
+    let label_len = |net: &str| 2 * G + label_rect(Point { x: Nm::ZERO, y: Nm::ZERO }, (1, 0), net, false).w();
     let mut col_w = vec![0i64; ncols];
     let mut right_ext = vec![0i64; ncols];
     let mut left_ext = vec![0i64; ncols];
@@ -200,24 +201,24 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
     let mut sheets: Vec<SheetInstance> = Vec::new();
     let mut pin_at: BTreeMap<(usize, String), Point> = BTreeMap::new();
     for m in 0..n {
-        let at = Point { x: col_x[col[m]], y: y_of[m] };
+        let at = Point { x: Nm::from_raw_shim(col_x[col[m]]), y: Nm::from_raw_shim(y_of[m]) };
         let b = &boxes[m];
         let mut pins: Vec<SheetPin> = Vec::new();
         for (i, p) in b.left.iter().enumerate() {
-            let pt = Point { x: at.x, y: at.y + SheetBox::pin_y(i) };
+            let pt = Point { x: at.x, y: at.y + Nm::from_raw_shim(SheetBox::pin_y(i)) };
             pin_at.insert((m, p.net.clone()), pt);
             pins.push(SheetPin { id: String::new(), name: p.net.clone(), shape: LabelShape::Bidirectional, at: pt });
             items.rects.push(sheet_pin_rect(pt, true, &p.net));
         }
         for (i, p) in b.right.iter().enumerate() {
-            let pt = Point { x: at.x + b.w, y: at.y + SheetBox::pin_y(i) };
+            let pt = Point { x: at.x + Nm::from_raw_shim(b.w), y: at.y + Nm::from_raw_shim(SheetBox::pin_y(i)) };
             pin_at.insert((m, p.net.clone()), pt);
             pins.push(SheetPin { id: String::new(), name: p.net.clone(), shape: LabelShape::Bidirectional, at: pt });
             items.rects.push(sheet_pin_rect(pt, false, &p.net));
         }
-        let sheet = SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (b.w, b.h), pins, page: String::new() };
+        let sheet = SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (Nm::from_raw_shim(b.w), Nm::from_raw_shim(b.h)), pins, page: String::new() };
         // the symbol, its name above and its file below, where KiCad's Autoplace Fields puts them
-        let mut r = Rect::new(at.x, at.y, at.x + b.w, at.y + b.h);
+        let mut r = Rect::new(at.x.raw_shim(), at.y.raw_shim(), (at.x + Nm::from_raw_shim(b.w)).raw_shim(), (at.y + Nm::from_raw_shim(b.h)).raw_shim());
         for f in crate::fields::sheet_fields(&eda_model::ir::SchematicSection::default(), &sheet) {
             r = r.union(text_rect(&f.text, f.at, f.h, f.v, f.vertical));
         }
@@ -242,7 +243,7 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
             let k = lane_of_gap.entry(col[a]).or_insert(0);
             let lane = gap_start + 4 * G + *k;
             *k += 2 * G;
-            vec![pa, Point { x: lane, y: pa.y }, Point { x: lane, y: pb.y }, pb]
+            vec![pa, Point { x: Nm::from_raw_shim(lane), y: pa.y }, Point { x: Nm::from_raw_shim(lane), y: pb.y }, pb]
         };
         routes.insert(net.clone(), pts);
     }
@@ -291,7 +292,7 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
                 }
                 let pt = pin_at[&(m, p.net.clone())];
                 let dir = if side == Side::Left { (-1, 0) } else { (1, 0) };
-                let end = Point { x: pt.x + dir.0 * 2 * G, y: pt.y };
+                let end = Point { x: pt.x + Nm::from_raw_shim(dir.0 * 2 * G), y: pt.y };
                 items.wires.push(Wire { id: String::new(), net: p.net.clone(), pins: Vec::new(), pts: vec![pt, end], bus: false });
                 items.labels.push(NetLabel { id: String::new(), net: p.net.clone(), at: end, kind: LabelKind::Local });
                 items.rects.push(label_rect(end, dir, &p.net, false));
@@ -303,7 +304,7 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
     let e = items.extent().unwrap_or(Rect::new(0, 0, 0, 0));
     let mut ext = e;
     for s in &sheets {
-        ext = ext.union(Rect::new(s.at.x, s.at.y, s.at.x + s.size.0, s.at.y + s.size.1));
+        ext = ext.union(Rect::new(s.at.x.raw_shim(), s.at.y.raw_shim(), (s.at.x + s.size.0).raw_shim(), (s.at.y + s.size.1).raw_shim()));
     }
     let (w, h) = (snap_up(ext.x1) - snap_down(ext.x0), snap_up(ext.y1) - snap_down(ext.y0));
     let paper = smallest_paper(w, h);
@@ -312,11 +313,11 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
     let dy = u.y0 + snap_down((u.h() - h) / 2) - snap_down(ext.y0);
     items.translate(dx, dy);
     for s in &mut sheets {
-        s.at.x += dx;
-        s.at.y += dy;
+        s.at.x += Nm::from_raw_shim(dx);
+        s.at.y += Nm::from_raw_shim(dy);
         for p in &mut s.pins {
-            p.at.x += dx;
-            p.at.y += dy;
+            p.at.x += Nm::from_raw_shim(dx);
+            p.at.y += Nm::from_raw_shim(dy);
         }
     }
     let _ = segments;

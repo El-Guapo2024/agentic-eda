@@ -93,14 +93,14 @@ impl Seg {
         self.a == self.b
     }
     pub(crate) fn length(&self) -> f64 {
-        ((self.b.x - self.a.x) as f64).hypot((self.b.y - self.a.y) as f64)
+        ((self.b.x - self.a.x).raw_shim() as f64).hypot((self.b.y - self.a.y).raw_shim() as f64)
     }
     /// `SCH_LINE::Angle` as a direction (a null line points along +x, which is what `EDA_ANGLE( 0 vector )` is).
     pub(crate) fn dir(&self) -> (i64, i64) {
         if self.is_null() {
             (1, 0)
         } else {
-            (self.b.x - self.a.x, self.b.y - self.a.y)
+            ((self.b.x - self.a.x).raw_shim(), (self.b.y - self.a.y).raw_shim())
         }
     }
     pub(crate) fn midpoint(&self) -> Point {
@@ -136,7 +136,7 @@ pub(crate) fn on_segment(a: Point, b: Point, p: Point) -> bool {
     if a == b {
         return p == a;
     }
-    let cross = (b.x - a.x) as i128 * (p.y - a.y) as i128 - (b.y - a.y) as i128 * (p.x - a.x) as i128;
+    let cross = (b.x - a.x).raw_shim() as i128 * (p.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (p.x - a.x).raw_shim() as i128;
     cross == 0 && p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y)
 }
 
@@ -262,8 +262,8 @@ pub(crate) struct PointInfo {
 /// pins fill.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SymbolShape {
-    pub pins: Vec<(String, (i64, i64))>,
-    pub bbox: Option<(i64, i64, i64, i64)>,
+    pub pins: Vec<(String, (Nm, Nm))>,
+    pub bbox: Option<(Nm, Nm, Nm, Nm)>,
     /// For each pin, in the same order, the way its line runs from its connection point towards the symbol's body (`PIN_ORIENTATION`), as a unit step on the
     /// sheet's axes (y down) before the orientation. Empty for a shape that knows no pin direction.
     pub dirs: Vec<(i64, i64)>,
@@ -386,8 +386,8 @@ impl<'m> Scene<'m> {
         let s = &self.sch.symbols[i];
         let m = Matrix::of(s.rot, s.mirrored, s.mirror_y);
         self.shapes[i].pins.iter().map(|(_, (x, y))| {
-            let (px, py) = m.apply(*x, *y);
-            Point { x: s.at.x + px, y: s.at.y + py }
+            let (px, py) = m.apply((*x).raw_shim(), (*y).raw_shim());
+            Point { x: s.at.x + Nm::from_raw_shim(px), y: s.at.y + Nm::from_raw_shim(py) }
         }).collect()
     }
 
@@ -396,8 +396,8 @@ impl<'m> Scene<'m> {
         let s = &self.sch.symbols[i];
         let m = Matrix::of(s.rot, s.mirrored, s.mirror_y);
         self.shapes[i].pins.iter().map(|(n, (x, y))| {
-            let (px, py) = m.apply(*x, *y);
-            (n.clone(), Point { x: s.at.x + px, y: s.at.y + py })
+            let (px, py) = m.apply((*x).raw_shim(), (*y).raw_shim());
+            (n.clone(), Point { x: s.at.x + Nm::from_raw_shim(px), y: s.at.y + Nm::from_raw_shim(py) })
         }).collect()
     }
 
@@ -489,8 +489,8 @@ impl<'m> Scene<'m> {
             Item::Seg(i) => Some((Point { x: self.segs[i].a.x.min(self.segs[i].b.x), y: self.segs[i].a.y.min(self.segs[i].b.y) }, Point { x: self.segs[i].a.x.max(self.segs[i].b.x), y: self.segs[i].a.y.max(self.segs[i].b.y) })),
             Item::NoteLine(i) => points_box(&self.sch.lines[i].pts),
             // `DEFAULT_JUNCTION_DIAMETER` 36 mil, `DEFAULT_NOCONNECT_SIZE` 48 mil: the same boxes the studio draws and picks by.
-            Item::Junction(i) => around(self.sch.junctions[i].at, 457_200),
-            Item::NoConnect(i) => around(self.sch.no_connects[i].at, 609_600),
+            Item::Junction(i) => around(self.sch.junctions[i].at, Nm::from_raw_shim(457_200)),
+            Item::NoConnect(i) => around(self.sch.no_connects[i].at, Nm::from_raw_shim(609_600)),
             Item::BusEntry(i) => {
                 let b = &self.sch.bus_entries[i];
                 points_box(&[b.at, Point { x: b.at.x + b.size.x, y: b.at.y + b.size.y }])
@@ -920,7 +920,7 @@ pub(crate) fn is_bus_label(text: &str) -> bool {
 
 /// `SCH_LINE::GetAngleFrom`: the direction from `p` towards `other`, in whole degrees.
 fn angle_from(p: Point, other: Point) -> i32 {
-    let (dx, dy) = ((other.x - p.x) as f64, (other.y - p.y) as f64);
+    let (dx, dy) = ((other.x - p.x).raw_shim() as f64, (other.y - p.y).raw_shim() as f64);
     dy.atan2(dx).to_degrees().round() as i32
 }
 
@@ -942,9 +942,9 @@ pub(crate) fn merge_ends(a1: Point, b1: Point, a2: Point, b2: Point) -> Option<(
     } else if ls.x == le.x && os.x == oe.x {
         ls.x == os.x
     } else {
-        let dx = (le.x - ls.x) as i128;
-        let dy = (le.y - ls.y) as i128;
-        (os.y - ls.y) as i128 * dx == (os.x - ls.x) as i128 * dy && (oe.y - ls.y) as i128 * dx == (oe.x - ls.x) as i128 * dy
+        let dx = (le.x - ls.x).raw_shim() as i128;
+        let dy = (le.y - ls.y).raw_shim() as i128;
+        (os.y - ls.y).raw_shim() as i128 * dx == (os.x - ls.x).raw_shim() as i128 * dy && (oe.y - ls.y).raw_shim() as i128 * dx == (oe.x - ls.x).raw_shim() as i128 * dy
     };
     if !colinear {
         return None;
@@ -984,14 +984,14 @@ pub(crate) fn graphic_bounds_for_test(g: &SchGraphic) -> Option<(Point, Point)> 
 fn graphic_box(g: &SchGraphic) -> Option<(Point, Point)> {
     match &g.shape {
         SchGraphicKind::Rectangle { start, end, .. } | SchGraphicKind::TextBox { start, end, .. } => points_box(&[*start, *end]),
-        SchGraphicKind::Circle { center, radius_nm } => Some((Point { x: center.x - radius_nm, y: center.y - radius_nm }, Point { x: center.x + radius_nm, y: center.y + radius_nm })),
+        SchGraphicKind::Circle { center, radius_nm } => Some((Point { x: center.x - *radius_nm, y: center.y - *radius_nm }, Point { x: center.x + *radius_nm, y: center.y + *radius_nm })),
         SchGraphicKind::Arc { start, mid, end } => points_box(&[*start, *mid, *end]),
         SchGraphicKind::Bezier { start, c1, c2, end } => points_box(&[*start, *c1, *c2, *end]),
         SchGraphicKind::Polygon { pts } | SchGraphicKind::RuleArea { pts, .. } => points_box(pts),
         SchGraphicKind::Directive { at, .. } => Some((*at, *at)),
         // `REFERENCE_IMAGE::GetBoundingBox`: `BOX2I::ByCenter( m_pos, size )`
         SchGraphicKind::Image { at, scale_ppm, data } => {
-            let (w, h) = eda_model::image_info::header_of_base64(data).map_or((0, 0), |hd| eda_model::image_info::size_nm(&hd, *scale_ppm));
+            let (w, h) = eda_model::image_info::header_of_base64(data).map_or((Nm::ZERO, Nm::ZERO), |hd| eda_model::image_info::size_nm(&hd, *scale_ppm));
             Some((Point { x: at.x - w / 2, y: at.y - h / 2 }, Point { x: at.x - w / 2 + w, y: at.y - h / 2 + h }))
         }
     }
@@ -1001,8 +1001,8 @@ fn graphic_box(g: &SchGraphic) -> Option<(Point, Point)> {
 fn shape_box(shape: &SymbolShape, m: Matrix, at: Point) -> Option<(Point, Point)> {
     let (x0, y0, x1, y1) = shape.bbox?;
     let pts: Vec<Point> = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].iter().map(|&(x, y)| {
-        let (px, py) = m.apply(x, y);
-        Point { x: at.x + px, y: at.y + py }
+        let (px, py) = m.apply(x.raw_shim(), y.raw_shim());
+        Point { x: at.x + Nm::from_raw_shim(px), y: at.y + Nm::from_raw_shim(py) }
     }).collect();
     points_box(&pts)
 }
@@ -1042,7 +1042,7 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
         // a pin takes the other's place with its direction (`SwapPinGeometry` swaps position, orientation and length)
         let dirs = std::mem::take(&mut shape.dirs);
         let dir_of = |k: usize| dirs.get(k).copied().unwrap_or((0, 0));
-        let paired: Vec<(String, ((i64, i64), (i64, i64)))> = std::mem::take(&mut shape.pins).into_iter().enumerate().map(|(k, (n, at))| (n, (at, dir_of(k)))).collect();
+        let paired: Vec<(String, ((Nm, Nm), (i64, i64)))> = std::mem::take(&mut shape.pins).into_iter().enumerate().map(|(k, (n, at))| (n, (at, dir_of(k)))).collect();
         let paired = eda_model::sch_extras::permute_pins(paired, swaps);
         shape.pins = paired.iter().map(|(n, (at, _))| (n.clone(), *at)).collect();
         if !dirs.is_empty() {
@@ -1055,7 +1055,7 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
 fn power_shape(model: &ConstraintModel, p: &eda_model::ir::PowerSymbol) -> SymbolShape {
     match model.symbol_of(&p.lib_id) {
         Some(lib) => lib_shape(&lib, 1),
-        None => SymbolShape { pins: vec![(String::new(), (0, 0))], bbox: Some((-300_000, -300_000, 300_000, 300_000)), dirs: Vec::new() },
+        None => SymbolShape { pins: vec![(String::new(), (Nm::ZERO, Nm::ZERO))], bbox: Some((Nm::from_raw_shim(-300_000), Nm::from_raw_shim(-300_000), Nm::from_raw_shim(300_000), Nm::from_raw_shim(300_000))), dirs: Vec::new() },
     }
 }
 
@@ -1065,7 +1065,7 @@ fn lib_shape(lib: &LibSymbol, unit: u32) -> SymbolShape {
     let um = |x: f64, y: f64| (eda_model::units::sch_from_mm(x), eda_model::units::sch_from_mm(-y));
     let mut pins = Vec::new();
     let mut dirs = Vec::new();
-    let mut pts: Vec<(i64, i64)> = Vec::new();
+    let mut pts: Vec<(Nm, Nm)> = Vec::new();
     for p in lib.pins.iter().filter(|p| on_unit(p.unit)) {
         let tip = um(p.at.x, p.at.y);
         pins.push((p.number.clone(), tip));
@@ -1101,7 +1101,7 @@ fn lib_shape(lib: &LibSymbol, unit: u32) -> SymbolShape {
             SymbolGraphic::Text { .. } => {}
         }
     }
-    let bbox = pts.iter().fold(None, |acc: Option<(i64, i64, i64, i64)>, &(x, y)| match acc {
+    let bbox = pts.iter().fold(None, |acc: Option<(Nm, Nm, Nm, Nm)>, &(x, y)| match acc {
         None => Some((x, y, x, y)),
         Some((x0, y0, x1, y1)) => Some((x0.min(x), y0.min(y), x1.max(x), y1.max(y))),
     });
@@ -1112,7 +1112,7 @@ fn lib_shape(lib: &LibSymbol, unit: u32) -> SymbolShape {
 /// that way). A label no wire ends at reads to the right.
 pub(crate) fn inferred_spin(segs: &[Seg], at: Point) -> LabelSpin {
     let tol = 50_000;
-    let near = |p: Point| (p.x - at.x).abs() <= tol && (p.y - at.y).abs() <= tol;
+    let near = |p: Point| (p.x - at.x).abs() <= Nm::from_raw_shim(tol) && (p.y - at.y).abs() <= Nm::from_raw_shim(tol);
     for s in segs.iter().filter(|s| !s.dead) {
         let hit = if near(s.b) {
             Some((s.b.x - s.a.x, s.b.y - s.a.y))
@@ -1123,12 +1123,12 @@ pub(crate) fn inferred_spin(segs: &[Seg], at: Point) -> LabelSpin {
         };
         if let Some((dx, dy)) = hit {
             return if dx.abs() >= dy.abs() {
-                if dx >= 0 {
+                if dx >= Nm::ZERO {
                     LabelSpin::Right
                 } else {
                     LabelSpin::Left
                 }
-            } else if dy >= 0 {
+            } else if dy >= Nm::ZERO {
                 LabelSpin::Bottom
             } else {
                 LabelSpin::Up

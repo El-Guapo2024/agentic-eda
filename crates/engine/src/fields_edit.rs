@@ -9,6 +9,7 @@
 //! A field is named by an id the studio selects it by, `fld:<owner key>:<field name>`; the owner key is the key of
 //! `SchematicSection::field_layout` (a symbol's reference, `#<unit>` after it for any unit but the first, a power symbol's or a sheet's id).
 
+use eda_model::units::Nm;
 use eda_model::ir::{field_key, FieldPlacement, Point, PowerSymbol, SchematicSection, SheetInstance, SymbolInstance, TextJustify, TextVAlign};
 use eda_model::kicad_font::{HJustify, VJustify};
 use eda_model::sch_extras::AutoplaceAlgo;
@@ -126,7 +127,7 @@ impl OwnerCtx {
 
     /// `SCH_FIELD::SetPosition`: where on the sheet `page` is, as a stored position (nanometres from the item's origin, in its unturned frame).
     pub fn local_pos(&self, page: (f64, f64)) -> (i64, i64) {
-        let (x, y) = unbake(self.rot, self.mirrored, self.width, page.0 - self.at.x as f64, page.1 - self.at.y as f64);
+        let (x, y) = unbake(self.rot, self.mirrored, self.width, page.0 - self.at.x.raw_shim() as f64, page.1 - self.at.y.raw_shim() as f64);
         (x.round() as i64, y.round() as i64)
     }
 
@@ -223,7 +224,7 @@ impl OwnerCtx {
 fn drawable_area(sch: &SchematicSection) -> Option<Rect> {
     let paper = sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or("");
     let (w, h) = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), paper).size_nm().ok()?;
-    Some(Rect { x0: kit::FRAME_OUTER, y0: kit::FRAME_OUTER, x1: w - kit::FRAME_OUTER, y1: h - kit::FRAME_OUTER })
+    Some(Rect { x0: kit::FRAME_OUTER, y0: kit::FRAME_OUTER, x1: (w - Nm::from_raw_shim(kit::FRAME_OUTER)).raw_shim(), y1: (h - Nm::from_raw_shim(kit::FRAME_OUTER)).raw_shim() })
 }
 
 /// Everything drawn on the sheet but the item `exclude_key`'s own fields, as the manual Autoplace Fields keeps clear of it
@@ -247,17 +248,17 @@ pub fn surroundings(sch: &SchematicSection, model: &ConstraintModel, exclude_key
     for w in &sch.wires {
         for pair in w.pts.windows(2) {
             let (a, b) = (pair[0], pair[1]);
-            colliders.push(Collider { rect: Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)), wire: Some((a.y, b.y)) });
+            colliders.push(Collider { rect: Rect::new((a.x.min(b.x)).raw_shim(), (a.y.min(b.y)).raw_shim(), (a.x.max(b.x)).raw_shim(), (a.y.max(b.y)).raw_shim()), wire: Some((a.y.raw_shim(), b.y.raw_shim())) });
         }
     }
     for t in &sch.texts {
         let size_iu = t.size_nm / eda_model::units::SCH_IU_NM;
-        let style = eda_model::kicad_geom::TextStyle { size_iu, thickness_iu: 0, h: HJustify::Left, v: VJustify::Center };
+        let style = eda_model::kicad_geom::TextStyle { size_iu: size_iu.raw_shim(), thickness_iu: 0, h: HJustify::Left, v: VJustify::Center };
         let vertical = (t.angle / 90_000) % 2 == 1;
-        colliders.push(Collider { rect: kit::text_rect_styled(&t.content, (t.at.x as f64, t.at.y as f64), &style, vertical), wire: None });
+        colliders.push(Collider { rect: kit::text_rect_styled(&t.content, (t.at.x.raw_shim() as f64, t.at.y.raw_shim() as f64), &style, vertical), wire: None });
     }
     for s in &sch.sheets {
-        colliders.push(Collider { rect: Rect::new(s.at.x, s.at.y, s.at.x + s.size.0, s.at.y + s.size.1), wire: None });
+        colliders.push(Collider { rect: Rect::new(s.at.x.raw_shim(), s.at.y.raw_shim(), (s.at.x + s.size.0).raw_shim(), (s.at.y + s.size.1).raw_shim()), wire: None });
         if s.id != exclude_key {
             for f in fields::sheet_fields(sch, s) {
                 if f.visible && !f.text.is_empty() {

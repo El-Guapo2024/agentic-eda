@@ -83,13 +83,13 @@ fn part_area(model: &ConstraintModel, id: &str) -> Option<f64> {
     // magnitude more area than the part itself, so a block sized from bare
     // courtyards is nowhere near big enough to hold what goes in it.
     let s = model.solver.place_spacing_nm;
-    Some(((w + 2 * s) as f64) * ((h + 2 * s + MODULE_LABEL_BAND_NM) as f64))
+    Some(((w + 2 * s).as_f64()) * ((h + 2 * s + MODULE_LABEL_BAND_NM).as_f64()))
 }
 
 /// Courtyard extent of one part at rotation 0, nm.
 fn part_extent(model: &ConstraintModel, id: &str) -> Option<(Nm, Nm)> {
     let part = model.part(id)?;
-    let fp = FootprintInstance { id: id.to_string(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: Default::default() };
+    let fp = FootprintInstance { id: id.to_string(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: Default::default() };
     let c = placed_courtyard(model, part, &fp)?;
     Some((c.2 - c.0, c.3 - c.1))
 }
@@ -186,7 +186,7 @@ pub fn partition(model: &ConstraintModel) -> (Vec<Module>, Vec<String>) {
                 .cloned()
                 .unwrap_or_default();
             let edge = refs.iter().filter_map(|r| model.part(r)).any(is_edge_connector);
-            let largest = refs.iter().filter_map(|r| part_extent(model, r)).fold((0, 0), |a, b| (a.0.max(b.0), a.1.max(b.1)));
+            let largest = refs.iter().filter_map(|r| part_extent(model, r)).fold((Nm::ZERO, Nm::ZERO), |a, b| (a.0.max(b.0), a.1.max(b.1)));
             Module { name: format!("mod_{lead}"), refs, area, edge, largest }
         })
         .collect();
@@ -238,8 +238,8 @@ fn size_for(area: f64, largest: (Nm, Nm), board_aspect: f64, snap: Nm, margin: N
     let h = (need / board_aspect).sqrt().max(1e6);
     let w = (need / h).max(1e6);
     let up = |v: f64| -> Nm {
-        let s = snap.max(1);
-        ((v as Nm + s - 1) / s) * s
+        let s = snap.max(Nm::new(1));
+        ((Nm::new(v as i64) + s - Nm::new(1)) / s) * s
     };
     // The block must hold its biggest part, plus a margin for the
     // courtyard spacing and its refdes label. Per axis, not squared off: a
@@ -251,7 +251,7 @@ fn size_for(area: f64, largest: (Nm, Nm), board_aspect: f64, snap: Nm, margin: N
 /// Refdes label band, nm, above a courtyard. The placer keeps parts apart
 /// by courtyard *plus* this band, so a block sized to bare courtyards is
 /// always a little too small for what the placer actually packs.
-pub const MODULE_LABEL_BAND_NM: Nm = 1_200_000;
+pub const MODULE_LABEL_BAND_NM: Nm = Nm::new(1_200_000);
 
 /// A tiny xorshift, kept local so the floorplan reproduces from its seed
 /// without pulling the placer's RNG into the model crate.
@@ -269,13 +269,13 @@ impl Rng {
 }
 
 fn rect_overlap(a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)) -> f64 {
-    let dx = (a.2.min(b.2) - a.0.max(b.0)).max(0) as f64;
-    let dy = (a.3.min(b.3) - a.1.max(b.1)).max(0) as f64;
+    let dx = ((a.2.min(b.2) - a.0.max(b.0)).max(Nm::ZERO)).as_f64();
+    let dy = ((a.3.min(b.3) - a.1.max(b.1)).max(Nm::ZERO)).as_f64();
     dx * dy
 }
 
 fn centre(r: (Nm, Nm, Nm, Nm)) -> (f64, f64) {
-    (((r.0 + r.2) as f64) / 2.0, ((r.1 + r.3) as f64) / 2.0)
+    (((r.0 + r.2).as_f64()) / 2.0, ((r.1 + r.3).as_f64()) / 2.0)
 }
 
 /// Cost of a module arrangement: cut nets pulled short, blocks kept from
@@ -295,13 +295,13 @@ fn arrangement_cost(rects: &[(Nm, Nm, Nm, Nm)], w: &BTreeMap<(usize, usize), f64
             c += 40.0 * rect_overlap(rects[i], rects[j]).sqrt();
         }
         let r = rects[i];
-        let out = (bb.0 - r.0).max(0) + (r.2 - bb.2).max(0) + (bb.1 - r.1).max(0) + (r.3 - bb.3).max(0);
-        c += 200.0 * out as f64;
+        let out = (bb.0 - r.0).max(Nm::ZERO) + (r.2 - bb.2).max(Nm::ZERO) + (bb.1 - r.1).max(Nm::ZERO) + (r.3 - bb.3).max(Nm::ZERO);
+        c += 200.0 * out.as_f64();
         if edge[i] {
             // Distance from the block to the nearest board edge. Weighted
             // above the cut-net pull that would otherwise hold it inboard.
-            let gap = (r.0 - bb.0).min(bb.2 - r.2).min(r.1 - bb.1).min(bb.3 - r.3).max(0);
-            c += 30.0 * gap as f64;
+            let gap = (r.0 - bb.0).min(bb.2 - r.2).min(r.1 - bb.1).min(bb.3 - r.3).max(Nm::ZERO);
+            c += 30.0 * gap.as_f64();
         }
     }
     c
@@ -348,8 +348,8 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Nm, Nm, Nm, Nm)
     if modules.is_empty() {
         return Ok(Floorplan::default());
     }
-    let bw = (bb.2 - bb.0) as f64;
-    let bh = (bb.3 - bb.1) as f64;
+    let bw = (bb.2 - bb.0).as_f64();
+    let bh = (bb.3 - bb.1).as_f64();
     let aspect = if bh > 0.0 { bw / bh } else { 1.0 };
     let sizes: Vec<(Nm, Nm)> =     {
         // The placer separates parts by courtyard plus its own spacing and
@@ -357,7 +357,7 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Nm, Nm, Nm, Nm)
         let margin = 2 * model.solver.place_spacing_nm + MODULE_LABEL_BAND_NM;
         modules.iter().map(|m| size_for(m.area, m.largest, aspect, snap, margin)).collect()
     };
-    let need: f64 = sizes.iter().map(|s| (s.0 as f64) * (s.1 as f64)).sum();
+    let need: f64 = sizes.iter().map(|s| ((s.0).as_f64()) * ((s.1).as_f64())).sum();
     if need > bw * bh {
         return Err(format!(
             "modules need {:.0} mm\u{b2} of board at {:.0}% fill but the board is {:.0} mm\u{b2}: give the parts more board, or fewer modules",
@@ -374,12 +374,12 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Nm, Nm, Nm, Nm)
     for &(w, h) in &sizes {
         if cx + w > bb.2 && cx > bb.0 {
             cx = bb.0;
-            cy += row_h;
+            cy += Nm::new(row_h);
             row_h = 0;
         }
         rects.push((cx, cy, cx + w, cy + h));
         cx += w;
-        row_h = row_h.max(h);
+        row_h = row_h.max(h.get());
     }
     let weights = cut_weights(model, modules);
     let edge: Vec<bool> = modules.iter().map(|m| m.edge).collect();
@@ -398,7 +398,7 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Nm, Nm, Nm, Nm)
     let mut cost = arrangement_cost(&rects, &weights, bb, &edge);
     let n = modules.len();
     let steps = 6000 * n;
-    let span = ((bw.max(bh)) / 3.0) as Nm;
+    let span = Nm::new(((bw.max(bh)) / 3.0) as i64);
     for step in 0..steps {
         let t = 1.0 - (step as f64) / (steps as f64);
         let temp = 0.25 * t * t * cost.max(1.0) / (n as f64);
@@ -425,9 +425,9 @@ pub fn arrange(model: &ConstraintModel, modules: &[Module], bb: (Nm, Nm, Nm, Nm)
             rects[i] = (aj.0, aj.1, aj.0 + (ai.2 - ai.0), aj.1 + (ai.3 - ai.1));
             rects[j] = (ai.0, ai.1, ai.0 + (aj.2 - aj.0), ai.1 + (aj.3 - aj.1));
         } else {
-            let reach = (span as f64 * (0.15 + 0.85 * t)) as Nm;
-            let dx = (rng.below((2 * reach.max(snap)) as usize + 1) as Nm - reach.max(snap)) / snap.max(1) * snap.max(1);
-            let dy = (rng.below((2 * reach.max(snap)) as usize + 1) as Nm - reach.max(snap)) / snap.max(1) * snap.max(1);
+            let reach = Nm::new((span.as_f64() * (0.15 + 0.85 * t)) as i64);
+            let dx = (Nm::new(rng.below((2 * reach.max(snap)).get() as usize + 1) as i64) - reach.max(snap)) / snap.max(Nm::new(1)) * snap.max(Nm::new(1));
+            let dy = (Nm::new(rng.below((2 * reach.max(snap)).get() as usize + 1) as i64) - reach.max(snap)) / snap.max(Nm::new(1)) * snap.max(Nm::new(1));
             let r = rects[i];
             rects[i] = (r.0 + dx, r.1 + dy, r.2 + dx, r.3 + dy);
         }

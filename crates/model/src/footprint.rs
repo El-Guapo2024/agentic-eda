@@ -52,7 +52,7 @@ impl PlacedPad {
     /// of the shorter side), 0 for plain rectangles.
     pub fn corner_radius(&self) -> f64 {
         match self.shape {
-            PadShape::RoundRect => self.roundrect_ratio.unwrap_or(0.25) * self.size.0.min(self.size.1) as f64,
+            PadShape::RoundRect => self.roundrect_ratio.unwrap_or(0.25) * (self.size.0.min(self.size.1)).as_f64(),
             _ => 0.0,
         }
     }
@@ -62,10 +62,10 @@ impl PlacedPad {
     /// scaled by the shorter radius (conservative).
     pub fn signed_distance(&self, p: Point) -> f64 {
         if !self.pieces.is_empty() {
-            return self.pieces.iter().map(|q| q.signed_distance((p.x as f64, p.y as f64))).fold(f64::INFINITY, f64::min);
+            return self.pieces.iter().map(|q| q.signed_distance((p.x.as_f64(), p.y.as_f64()))).fold(f64::INFINITY, f64::min);
         }
-        let (hw, hh) = (self.size.0 as f64 / 2.0, self.size.1 as f64 / 2.0);
-        let (dx, dy) = ((p.x - self.center.x) as f64, (p.y - self.center.y) as f64);
+        let (hw, hh) = (self.size.0.as_f64() / 2.0, self.size.1.as_f64() / 2.0);
+        let (dx, dy) = ((p.x - self.center.x).as_f64(), (p.y - self.center.y).as_f64());
         if self.is_round() {
             let rmin = hw.min(hh);
             let e = ((dx / hw).powi(2) + (dy / hh).powi(2)).sqrt();
@@ -92,8 +92,8 @@ impl PlacedPad {
     /// `routing_clearance` gate measures the exact outline
     /// (`eda_drc::board::placed_pad_copper`), not this rectangle.
     pub fn rect_distance(&self, p: Point) -> f64 {
-        let (hw, hh) = (self.size.0 as f64 / 2.0, self.size.1 as f64 / 2.0);
-        let (dx, dy) = (((p.x - self.center.x) as f64).abs(), ((p.y - self.center.y) as f64).abs());
+        let (hw, hh) = (self.size.0.as_f64() / 2.0, self.size.1.as_f64() / 2.0);
+        let (dx, dy) = (((p.x - self.center.x).as_f64()).abs(), ((p.y - self.center.y).as_f64()).abs());
         let (ox, oy) = ((dx - hw).max(0.0), (dy - hh).max(0.0));
         let outside = (ox * ox + oy * oy).sqrt();
         if outside > 0.0 { outside } else { (dx - hw).max(dy - hh) }
@@ -117,9 +117,9 @@ pub fn to_board(fp: &FootprintInstance, local: (Nm, Nm)) -> Point {
     let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
     let mirror = if fp.side == Side::Bottom { -1.0 } else { 1.0 };
-    let lx = local.0 as f64 * mirror;
-    let ly = local.1 as f64;
-    Point { x: fp.at.x + (lx * cos - ly * sin).round() as Nm, y: fp.at.y + (lx * sin + ly * cos).round() as Nm }
+    let lx = local.0.as_f64() * mirror;
+    let ly = local.1.as_f64();
+    Point { x: fp.at.x + Nm::kiround(lx * cos - ly * sin), y: fp.at.y + Nm::kiround(lx * sin + ly * cos) }
 }
 
 /// Axis-aligned extents of a local (w, h) box rotated by `rot_millideg`.
@@ -127,8 +127,8 @@ pub fn to_board(fp: &FootprintInstance, local: (Nm, Nm)) -> Point {
 fn rotated_extent_by(rot_millideg: i64, size: (Nm, Nm)) -> (Nm, Nm) {
     let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
-    let (w, h) = (size.0 as f64, size.1 as f64);
-    ((w * cos.abs() + h * sin.abs()).round() as Nm, (w * sin.abs() + h * cos.abs()).round() as Nm)
+    let (w, h) = (size.0.as_f64(), size.1.as_f64());
+    (Nm::kiround(w * cos.abs() + h * sin.abs()), Nm::kiround(w * sin.abs() + h * cos.abs()))
 }
 
 /// Axis-aligned board-space extents of a local (w, h) box under `fp`'s
@@ -159,7 +159,7 @@ pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance)
 /// consumer that knows nothing of layers keeps clear of all of it; the ones that do use [`Pad::shape_groups`] and this function for each layer's shape.
 pub fn placed_pad_of(fp: &FootprintInstance, p: &Pad) -> PlacedPad {
     if p.has_stack() {
-        let mut size = (0, 0);
+        let mut size = (Nm::ZERO, Nm::ZERO);
         let mut pieces = Vec::new();
         for shape in p.unique_shapes() {
             let v = shape.lay_on(p);
@@ -191,8 +191,8 @@ fn placed_extent(fp: &FootprintInstance, p: &Pad) -> (Nm, Nm) {
     }
     let centre = to_board(fp, p.at);
     let Some((x0, y0, x1, y1)) = crate::pad_geom::pieces_bbox(&pieces) else { return rotated_extent_by(fp.rot as i64 + p.rot as i64, p.size) };
-    let (cx, cy) = (centre.x as f64, centre.y as f64);
-    (2 * (x1 - cx).max(cx - x0).ceil() as Nm, 2 * (y1 - cy).max(cy - y0).ceil() as Nm)
+    let (cx, cy) = (centre.x.as_f64(), centre.y.as_f64());
+    (2 * Nm::new((x1 - cx).max(cx - x0).ceil() as i64), 2 * Nm::new((y1 - cy).max(cy - y0).ceil() as i64))
 }
 
 /// The copper of pad `p` of `fp` in board space as pieces ([`crate::pad_geom::pad_pieces`]) when its shape and size do not give it (a
@@ -219,11 +219,11 @@ pub fn refdes_font_nm(outline: &[Point]) -> Nm {
         y1 = y1.max(p.y);
     }
     if outline.is_empty() {
-        return 600_000;
+        return Nm::new(600_000);
     }
     let m = 2_000_000;
-    let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
-    (vw.min(vh) / 40).clamp(600_000, 1_000_000)
+    let (vw, vh) = (x1 - x0 + Nm::new(2 * m), y1 - y0 + Nm::new(2 * m));
+    (vw.min(vh) / 40).clamp(Nm::new(600_000), Nm::new(1_000_000))
 }
 
 /// Refdes label box for a placed courtyard `(x0, y0, x1, y1)`: the text
@@ -240,17 +240,17 @@ pub fn refdes_box_for(courtyard: (Nm, Nm, Nm, Nm), refdes: &str, font_nm: Nm, bo
 /// the board top; `Below` is always below.
 pub fn refdes_box_side(courtyard: (Nm, Nm, Nm, Nm), refdes: &str, font_nm: Nm, board_top: Nm, side: LabelSide) -> (Nm, Nm, Nm, Nm) {
     let (cx0, cy0, cx1, cy1) = courtyard;
-    let half_w = (font_nm * 6 / 10) * refdes.chars().count() as Nm / 2;
+    let half_w = (font_nm * 6 / 10) * refdes.chars().count() as i64 / 2;
     let cx = (cx0 + cx1) / 2;
     let (asc, desc) = (font_nm * 3 / 4, font_nm / 5);
-    let above = cy0 - 200_000 - asc;
+    let above = cy0 - Nm::new(200_000) - asc;
     match side {
         LabelSide::Above if above >= board_top => {
-            let baseline = cy0 - 200_000;
+            let baseline = cy0 - Nm::new(200_000);
             (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
         }
         LabelSide::Above | LabelSide::Below => {
-            let baseline = cy1 + 200_000 + asc;
+            let baseline = cy1 + Nm::new(200_000) + asc;
             (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
         }
         LabelSide::Left | LabelSide::Right => {
@@ -258,7 +258,7 @@ pub fn refdes_box_side(courtyard: (Nm, Nm, Nm, Nm), refdes: &str, font_nm: Nm, b
             // centred on the part.
             let cy = (cy0 + cy1) / 2;
             let baseline = cy + asc / 2;
-            let (x0, x1) = if side == LabelSide::Left { (cx0 - 200_000 - 2 * half_w, cx0 - 200_000) } else { (cx1 + 200_000, cx1 + 200_000 + 2 * half_w) };
+            let (x0, x1) = if side == LabelSide::Left { (cx0 - Nm::new(200_000) - 2 * half_w, cx0 - Nm::new(200_000)) } else { (cx1 + Nm::new(200_000), cx1 + Nm::new(200_000) + 2 * half_w) };
             (x0, baseline - asc, x1, baseline + desc)
         }
     }
@@ -524,7 +524,7 @@ impl Footprint {
             bad("pads", "footprint has no pads; nothing connects it to the board".into());
         }
         for p in &self.pads {
-            if p.size.0 <= 0 || p.size.1 <= 0 {
+            if p.size.0 <= Nm::ZERO || p.size.1 <= Nm::ZERO {
                 bad(&format!("pad {}", p.number), format!("pad is {} x {} nm", p.size.0, p.size.1));
             }
             // Each copper layer's own shape (`PAD::CheckPad` runs `doCheckPad` for every unique layer of the padstack).
@@ -566,12 +566,12 @@ impl Footprint {
                         "a through-hole or non-plated pad with no drill is not a hole; the hole is a dimension of the lead or fastener, not something an exporter can derive from the copper".into(),
                     ),
                     (Some(_), Some(_)) => bad(&format!("pad {}", p.number), "a pad cannot have both a round drill and a slot drill".into()),
-                    (Some(d), None) if d <= 0 => bad(&format!("pad {}", p.number), format!("drills a {d} nm hole")),
+                    (Some(d), None) if d <= Nm::ZERO => bad(&format!("pad {}", p.number), format!("drills a {d} nm hole")),
                     (Some(d), None) if plated && d >= p.size.0.min(p.size.1) => bad(
                         &format!("pad {}", p.number),
                         format!("drill {d} nm is not smaller than the {} x {} nm pad, so there is no annular ring", p.size.0, p.size.1),
                     ),
-                    (None, Some((w, h))) if w <= 0 || h <= 0 => bad(&format!("pad {}", p.number), format!("slot drill is {w} x {h} nm")),
+                    (None, Some((w, h))) if w <= Nm::ZERO || h <= Nm::ZERO => bad(&format!("pad {}", p.number), format!("slot drill is {w} x {h} nm")),
                     (None, Some((w, h))) if plated && (w >= p.size.0 || h >= p.size.1) => bad(
                         &format!("pad {}", p.number),
                         format!("slot drill {w} x {h} nm is not smaller than the {} x {} nm pad, so there is no annular ring", p.size.0, p.size.1),
@@ -581,7 +581,7 @@ impl Footprint {
             }
         }
         if let Some((w, h)) = self.courtyard {
-            if w <= 0 || h <= 0 {
+            if w <= Nm::ZERO || h <= Nm::ZERO {
                 bad("courtyard", format!("courtyard half-extents are {w} x {h} nm"));
             }
         }
@@ -717,7 +717,7 @@ impl Footprint {
                 // A trapezoid, a custom pad or copper off the pad's position reaches where its outline does, not where its size says.
                 let (x0, y0, x1, y1) = if p.has_complex_outline() || p.ext.offset.is_some() {
                     let (x0, y0, x1, y1) = p.local_bbox();
-                    (p.at.0 + x0.floor() as Nm, p.at.1 + y0.floor() as Nm, p.at.0 + x1.ceil() as Nm, p.at.1 + y1.ceil() as Nm)
+                    (p.at.0 + Nm::new(x0.floor() as i64), p.at.1 + Nm::new(y0.floor() as i64), p.at.0 + Nm::new(x1.ceil() as i64), p.at.1 + Nm::new(y1.ceil() as i64))
                 } else {
                     (p.at.0 - p.size.0 / 2, p.at.1 - p.size.1 / 2, p.at.0 + p.size.0 / 2, p.at.1 + p.size.1 / 2)
                 };
@@ -728,7 +728,7 @@ impl Footprint {
             }
         }
         if self.pads.is_empty() {
-            (0, 0, 0, 0)
+            (Nm::ZERO, Nm::ZERO, Nm::ZERO, Nm::ZERO)
         } else {
             b
         }
@@ -742,9 +742,9 @@ impl Footprint {
             return c;
         }
         let (x0, y0, x1, y1) = self.pad_bbox();
-        let hw = x0.abs().max(x1.abs()) + 250_000;
-        let hh = y0.abs().max(y1.abs()) + 250_000;
-        (hw.max(250_000), hh.max(250_000))
+        let hw = x0.abs().max(x1.abs()) + Nm::new(250_000);
+        let hh = y0.abs().max(y1.abs()) + Nm::new(250_000);
+        (hw.max(Nm::new(250_000)), hh.max(Nm::new(250_000)))
     }
 }
 
@@ -793,8 +793,8 @@ fn two_pad(name: &str, pitch: Nm, pw: Nm, ph: Nm) -> Footprint {
     Footprint {
         name: name.into(),
         pads: vec![
-            Pad::simple("1", (-half, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
-            Pad::simple("2", (half, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
+            Pad::simple("1", (-half, Nm::ZERO), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
+            Pad::simple("2", (half, Nm::ZERO), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
         ],
         courtyard: None,
         model: None,
@@ -811,22 +811,22 @@ fn two_pad(name: &str, pitch: Nm, pw: Nm, ph: Nm) -> Footprint {
 /// KiCad's standard SOIC/TSSOP footprint numbering.
 fn dual_row(name: &str, n: usize, pitch: Nm, col_x: Nm, pw: Nm, ph: Nm) -> Footprint {
     let per_col = n / 2;
-    let y0 = -((per_col as Nm - 1) * pitch) / 2;
+    let y0 = -((per_col as i64 - 1) * pitch) / 2;
     let mut pads = Vec::with_capacity(n);
     for i in 0..per_col {
-        pads.push(Pad::simple((i + 1).to_string(), (-col_x, y0 + i as Nm * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
+        pads.push(Pad::simple((i + 1).to_string(), (-col_x, y0 + i as i64 * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
     }
     for i in 0..per_col {
-        pads.push(Pad::simple((per_col + i + 1).to_string(), (col_x, y0 + (per_col - 1 - i) as Nm * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
+        pads.push(Pad::simple((per_col + i + 1).to_string(), (col_x, y0 + (per_col - 1 - i) as i64 * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
     }
     Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
 /// Single-row 2.54 mm through-hole header, `n` pins along +x, centred.
 fn pin_header(name: &str, n: usize) -> Footprint {
-    let x0 = -((n as Nm - 1) * 2_540_000) / 2;
+    let x0 = -((n as i64 - 1) * Nm::new(2_540_000)) / 2;
     let pads = (0..n)
-        .map(|i| Pad::simple((i + 1).to_string(), (x0 + i as Nm * 2_540_000, 0), (1_700_000, 1_700_000), if i == 0 { PadShape::Rect } else { PadShape::Circle }, PadKind::ThroughHole, Some(1_000_000)))
+        .map(|i| Pad::simple((i + 1).to_string(), (x0 + i as i64 * Nm::new(2_540_000), Nm::ZERO), (Nm::new(1_700_000), Nm::new(1_700_000)), if i == 0 { PadShape::Rect } else { PadShape::Circle }, PadKind::ThroughHole, Some(Nm::new(1_000_000))))
         .collect();
     Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
@@ -850,23 +850,23 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         // Two-pad passives: pitch/size taken from KiCad's Resistor_SMD.pretty
         // (canonical for the shared two-pad shape; nearly identical to
         // Capacitor_SMD).
-        "0201" => two_pad(&key, 640_000, 460_000, 400_000),
-        "0402" => two_pad(&key, 1_020_000, 540_000, 640_000),
-        "0603" => two_pad(&key, 1_650_000, 800_000, 950_000),
-        "0805" => two_pad(&key, 1_825_000, 1_025_000, 1_400_000),
-        "1206" => two_pad(&key, 2_925_000, 1_125_000, 1_750_000),
-        "1210" => two_pad(&key, 2_925_000, 1_125_000, 2_650_000),
-        "SOD-123" => two_pad(&key, 3_300_000, 900_000, 1_200_000),
-        "SOD-323" => two_pad(&key, 2_100_000, 600_000, 450_000),
-        "SMA" => two_pad(&key, 4_000_000, 2_500_000, 1_800_000),
+        "0201" => two_pad(&key, Nm::new(640_000), Nm::new(460_000), Nm::new(400_000)),
+        "0402" => two_pad(&key, Nm::new(1_020_000), Nm::new(540_000), Nm::new(640_000)),
+        "0603" => two_pad(&key, Nm::new(1_650_000), Nm::new(800_000), Nm::new(950_000)),
+        "0805" => two_pad(&key, Nm::new(1_825_000), Nm::new(1_025_000), Nm::new(1_400_000)),
+        "1206" => two_pad(&key, Nm::new(2_925_000), Nm::new(1_125_000), Nm::new(1_750_000)),
+        "1210" => two_pad(&key, Nm::new(2_925_000), Nm::new(1_125_000), Nm::new(2_650_000)),
+        "SOD-123" => two_pad(&key, Nm::new(3_300_000), Nm::new(900_000), Nm::new(1_200_000)),
+        "SOD-323" => two_pad(&key, Nm::new(2_100_000), Nm::new(600_000), Nm::new(450_000)),
+        "SMA" => two_pad(&key, Nm::new(4_000_000), Nm::new(2_500_000), Nm::new(1_800_000)),
         // Package_TO_SOT_SMD.pretty/SOT-23.kicad_mod: pins 1,2 on the left
         // column (top/bottom), pin 3 alone on the right column (middle).
         "SOT-23" | "SOT-23-3" => Footprint {
             name: "SOT-23".into(),
             pads: vec![
-                Pad::simple("1", (-938_000, -950_000), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
-                Pad::simple("2", (-938_000, 950_000), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
-                Pad::simple("3", (938_000, 0), (1_475_000, 600_000), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("1", (Nm::new(-938_000), Nm::new(-950_000)), (Nm::new(1_475_000), Nm::new(600_000)), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("2", (Nm::new(-938_000), Nm::new(950_000)), (Nm::new(1_475_000), Nm::new(600_000)), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("3", (Nm::new(938_000), Nm::ZERO), (Nm::new(1_475_000), Nm::new(600_000)), PadShape::RoundRect, PadKind::Smd, None),
             ],
             courtyard: None,
             model: None,
@@ -880,7 +880,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         // the right-middle pad — dropped and pin 6 renumbered to 5).
         "SOT-23-5" | "SOT-23-6" => {
             let n = if key == "SOT-23-5" { 5 } else { 6 };
-            let mut fp = dual_row(&key, 6, 950_000, 1_138_000, 1_325_000, 600_000);
+            let mut fp = dual_row(&key, 6, Nm::new(950_000), Nm::new(1_138_000), Nm::new(1_325_000), Nm::new(600_000));
             if n == 5 {
                 fp.pads.retain(|p| p.number != "5");
                 for p in fp.pads.iter_mut() {
@@ -900,9 +900,9 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         "SOT-223" => Footprint {
             name: key.clone(),
             pads: vec![
-                Pad::simple("1", (-3_150_000, -2_300_000), (2_000_000, 1_500_000), PadShape::RoundRect, PadKind::Smd, None),
-                Pad::simple("2", (3_150_000, 0), (2_000_000, 3_800_000), PadShape::RoundRect, PadKind::Smd, None),
-                Pad::simple("3", (-3_150_000, 2_300_000), (2_000_000, 1_500_000), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("1", (Nm::new(-3_150_000), Nm::new(-2_300_000)), (Nm::new(2_000_000), Nm::new(1_500_000)), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("2", (Nm::new(3_150_000), Nm::ZERO), (Nm::new(2_000_000), Nm::new(3_800_000)), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("3", (Nm::new(-3_150_000), Nm::new(2_300_000)), (Nm::new(2_000_000), Nm::new(1_500_000)), PadShape::RoundRect, PadKind::Smd, None),
             ],
             courtyard: None,
             model: None,
@@ -911,17 +911,17 @@ pub fn builtin(name: &str) -> Option<Footprint> {
             art: Default::default(),
         },
         // Package_SO.pretty SOIC-8/14/16_3.9x*mm_P1.27mm.
-        "SOIC-8" => dual_row(&key, 8, 1_270_000, 2_475_000, 1_950_000, 600_000),
-        "SOIC-14" => dual_row(&key, 14, 1_270_000, 2_475_000, 1_950_000, 600_000),
-        "SOIC-16" => dual_row(&key, 16, 1_270_000, 2_475_000, 1_950_000, 600_000),
+        "SOIC-8" => dual_row(&key, 8, Nm::new(1_270_000), Nm::new(2_475_000), Nm::new(1_950_000), Nm::new(600_000)),
+        "SOIC-14" => dual_row(&key, 14, Nm::new(1_270_000), Nm::new(2_475_000), Nm::new(1_950_000), Nm::new(600_000)),
+        "SOIC-16" => dual_row(&key, 16, Nm::new(1_270_000), Nm::new(2_475_000), Nm::new(1_950_000), Nm::new(600_000)),
         // Package_SO.pretty TSSOP-*_4.4x*mm_P0.65mm.
-        "TSSOP-8" => dual_row(&key, 8, 650_000, 2_863_000, 1_475_000, 400_000),
-        "TSSOP-14" => dual_row(&key, 14, 650_000, 2_863_000, 1_475_000, 400_000),
-        "TSSOP-16" => dual_row(&key, 16, 650_000, 2_863_000, 1_475_000, 400_000),
-        "TSSOP-20" => dual_row(&key, 20, 650_000, 2_863_000, 1_475_000, 400_000),
+        "TSSOP-8" => dual_row(&key, 8, Nm::new(650_000), Nm::new(2_863_000), Nm::new(1_475_000), Nm::new(400_000)),
+        "TSSOP-14" => dual_row(&key, 14, Nm::new(650_000), Nm::new(2_863_000), Nm::new(1_475_000), Nm::new(400_000)),
+        "TSSOP-16" => dual_row(&key, 16, Nm::new(650_000), Nm::new(2_863_000), Nm::new(1_475_000), Nm::new(400_000)),
+        "TSSOP-20" => dual_row(&key, 20, Nm::new(650_000), Nm::new(2_863_000), Nm::new(1_475_000), Nm::new(400_000)),
         // Package_SO.pretty MSOP-8_3x3mm_P0.65mm / MSOP-10_3x3mm_P0.5mm.
-        "MSOP-8" => dual_row(&key, 8, 650_000, 2_113_000, 1_625_000, 400_000),
-        "MSOP-10" => dual_row(&key, 10, 500_000, 2_100_000, 1_500_000, 350_000),
+        "MSOP-8" => dual_row(&key, 8, Nm::new(650_000), Nm::new(2_113_000), Nm::new(1_625_000), Nm::new(400_000)),
+        "MSOP-10" => dual_row(&key, 10, Nm::new(500_000), Nm::new(2_100_000), Nm::new(1_500_000), Nm::new(350_000)),
         _ => {
             // Generic headers: "PINHEADER-N" / "PIN_HEADER_1X04" / "1X04".
             let digits: String = key.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
@@ -1174,8 +1174,8 @@ mod tests {
     fn courtyard_derives_from_pads() {
         let fp = builtin("0603").unwrap();
         let (hw, hh) = fp.courtyard_half();
-        assert_eq!(hw, 1_650_000 / 2 + 800_000 / 2 + 250_000);
-        assert_eq!(hh, 950_000 / 2 + 250_000);
+        assert_eq!(hw, Nm::new(1_650_000 / 2 + 800_000 / 2 + 250_000));
+        assert_eq!(hh, Nm::new(950_000 / 2 + 250_000));
         let hdr = builtin("PINHEADER-4").unwrap();
         let (x0, _, x1, _) = hdr.pad_bbox();
         assert_eq!(x0, -x1, "headers are centred");
@@ -1198,23 +1198,23 @@ mod tests {
     }
 
     fn fp_instance(rot: crate::ir::Millideg, side: Side) -> FootprintInstance {
-        FootprintInstance { id: "U1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot, side, label: Default::default() }
+        FootprintInstance { id: "U1".into(), at: Point { x: Nm::new(10_000_000), y: Nm::new(10_000_000) }, rot, side, label: Default::default() }
     }
 
     /// `FOOTPRINT::GetBoundingBox` merges the courtyard drawings as they are: a `PinHeader_1x04_P2.54mm_Vertical` (origin at pin 1, courtyard
     /// y from -1.77 to 9.39 mm) has a box from -1.77 mm, not the symmetric -9.39 mm the placer's box is.
     #[test]
     fn an_off_centre_courtyard_gives_kicads_box_not_a_symmetric_one() {
-        let ring = vec![(-1_770_000, -1_770_000), (1_770_000, -1_770_000), (1_770_000, 9_390_000), (-1_770_000, 9_390_000)];
-        let header = Footprint { name: "HDR".into(), pads: vec![Pad::simple("1", (0, 0), (1_700_000, 1_700_000), PadShape::Rect, PadKind::ThroughHole, None)], courtyard: Some((1_770_000, 9_390_000)), model: None, courtyard_outlines: vec![ring], models3d: vec![], art: Default::default() };
+        let ring = vec![(Nm::new(-1_770_000), Nm::new(-1_770_000)), (Nm::new(1_770_000), Nm::new(-1_770_000)), (Nm::new(1_770_000), Nm::new(9_390_000)), (Nm::new(-1_770_000), Nm::new(9_390_000))];
+        let header = Footprint { name: "HDR".into(), pads: vec![Pad::simple("1", (Nm::ZERO, Nm::ZERO), (Nm::new(1_700_000), Nm::new(1_700_000)), PadShape::Rect, PadKind::ThroughHole, None)], courtyard: Some((Nm::new(1_770_000), Nm::new(9_390_000))), model: None, courtyard_outlines: vec![ring], models3d: vec![], art: Default::default() };
         let (model, part) = part_with("HDR", header);
-        let (x, y) = (10_000_000, 10_000_000);
-        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(0, Side::Top)), Some((x - 1_770_000, y - 1_770_000, x + 1_770_000, y + 9_390_000)));
+        let (x, y) = (Nm::new(10_000_000), Nm::new(10_000_000));
+        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(0, Side::Top)), Some((x - Nm::new(1_770_000), y - Nm::new(1_770_000), x + Nm::new(1_770_000), y + Nm::new(9_390_000))));
         // turned a quarter (clockwise on the screen, `to_board`), the long side points left
-        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(90_000, Side::Top)), Some((x - 9_390_000, y - 1_770_000, x + 1_770_000, y + 1_770_000)));
+        assert_eq!(placed_courtyard_box(&model, &part, &fp_instance(90_000, Side::Top)), Some((x - Nm::new(9_390_000), y - Nm::new(1_770_000), x + Nm::new(1_770_000), y + Nm::new(1_770_000))));
         // the placer's box (the importer's symmetric enclosure) stays symmetric
         let sym = placed_courtyard(&model, &part, &fp_instance(0, Side::Top)).unwrap();
-        assert_eq!(sym.1, y - 9_390_000);
+        assert_eq!(sym.1, y - Nm::new(9_390_000));
     }
 
     #[test]
@@ -1223,7 +1223,7 @@ mod tests {
         // footprint, must present the same board-space extent as an
         // unrotated pad inside a footprint rotated 90 degrees: rotation
         // composes additively regardless of which side contributes it.
-        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2_000_000, 800_000), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (Nm::ZERO, Nm::ZERO), (Nm::new(2_000_000), Nm::new(800_000)), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         fp.pads[0].rot = 90_000;
         let (model, part) = part_with("T", fp.clone());
         let via_pad_rot = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -1232,7 +1232,7 @@ mod tests {
         let (model2, part2) = part_with("T", fp);
         let via_fp_rot = placed_pads(&model2, &part2, &fp_instance(90_000, Side::Top)).unwrap();
 
-        assert_eq!(via_pad_rot[0].size, (800_000, 2_000_000));
+        assert_eq!(via_pad_rot[0].size, (Nm::new(800_000), Nm::new(2_000_000)));
         assert_eq!(via_pad_rot[0].size, via_fp_rot[0].size, "a pad's own rotation and its footprint's must compose the same way");
     }
 
@@ -1244,10 +1244,10 @@ mod tests {
         let shield = Footprint {
             name: "CONN".into(),
             pads: vec![
-                Pad::simple("SH", (-4_000_000, -3_000_000), (1_000_000, 2_000_000), PadShape::Oval, PadKind::ThroughHole, None),
-                Pad::simple("SH", (-4_000_000, 1_000_000), (1_000_000, 1_500_000), PadShape::Oval, PadKind::ThroughHole, None),
-                Pad::simple("SH", (4_000_000, -3_000_000), (1_000_000, 2_000_000), PadShape::Oval, PadKind::ThroughHole, None),
-                Pad::simple("SH", (4_000_000, 1_000_000), (1_000_000, 1_500_000), PadShape::Oval, PadKind::ThroughHole, None),
+                Pad::simple("SH", (Nm::new(-4_000_000), Nm::new(-3_000_000)), (Nm::new(1_000_000), Nm::new(2_000_000)), PadShape::Oval, PadKind::ThroughHole, None),
+                Pad::simple("SH", (Nm::new(-4_000_000), Nm::new(1_000_000)), (Nm::new(1_000_000), Nm::new(1_500_000)), PadShape::Oval, PadKind::ThroughHole, None),
+                Pad::simple("SH", (Nm::new(4_000_000), Nm::new(-3_000_000)), (Nm::new(1_000_000), Nm::new(2_000_000)), PadShape::Oval, PadKind::ThroughHole, None),
+                Pad::simple("SH", (Nm::new(4_000_000), Nm::new(1_000_000)), (Nm::new(1_000_000), Nm::new(1_500_000)), PadShape::Oval, PadKind::ThroughHole, None),
             ],
             courtyard: None,
             model: None,
@@ -1268,7 +1268,7 @@ mod tests {
         let fp = Footprint {
             name: "T".into(),
             pads: vec![{
-                let mut p = Pad::simple("1", (0, 0), (1_000_000, 2_000_000), PadShape::RoundRect, PadKind::Smd, None);
+                let mut p = Pad::simple("1", (Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::new(2_000_000)), PadShape::RoundRect, PadKind::Smd, None);
                 p.roundrect_ratio = Some(0.4);
                 p
             }],
@@ -1309,9 +1309,9 @@ pub fn is_edge_connector(part: &Part) -> bool {
 /// usable flags.
 pub fn usable_edges(r: (Nm, Nm, Nm, Nm)) -> (bool, bool, bool, bool) {
     let (w, h) = (r.2 - r.0, r.3 - r.1);
-    if w as f64 > 1.3 * h as f64 {
+    if w.as_f64() > 1.3 * h.as_f64() {
         (false, false, true, true)
-    } else if h as f64 > 1.3 * w as f64 {
+    } else if h.as_f64() > 1.3 * w.as_f64() {
         (true, true, false, false)
     } else {
         (true, true, true, true)

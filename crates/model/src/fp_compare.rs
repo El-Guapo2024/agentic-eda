@@ -116,7 +116,7 @@ fn shape_key(s: &FpShape) -> (String, u8, Vec<(Nm, Nm)>, Nm) {
         Shape::Arc { start, mid, end, .. } => vec![*start, *end, *mid],
         Shape::Circle { center, end, .. } => vec![*center, *end],
         Shape::Polygon { pts, .. } => {
-            let mut v = vec![Point { x: pts.len() as Nm, y: 0 }];
+            let mut v = vec![Point { x: Nm::new(pts.len() as i64), y: Nm::ZERO }];
             v.extend(pts.iter().copied());
             v
         }
@@ -126,7 +126,7 @@ fn shape_key(s: &FpShape) -> (String, u8, Vec<(Nm, Nm)>, Nm) {
 }
 
 /// `EPSILON` of `drc_test_provider_library_parity.cpp`: two points closer than this on both axes are one (`TEST_PT`), nanometres.
-const EPSILON: Nm = 10;
+const EPSILON: Nm = Nm::new(10);
 
 /// `TEST_PT( a, b )`: the points are more than [`EPSILON`] apart on an axis.
 fn pt_differs(a: (Nm, Nm), b: (Nm, Nm)) -> bool {
@@ -160,7 +160,7 @@ fn shape_differs(a: &FpShape, b: &FpShape) -> bool {
         (Shape::Segment { start: s1, end: e1, .. }, Shape::Segment { start: s2, end: e2, .. }) => point_differs(s1, s2) || point_differs(e1, e2),
         (Shape::Circle { center: c1, end: e1, .. }, Shape::Circle { center: c2, end: e2, .. }) => point_differs(c1, c2) || point_differs(e1, e2),
         // "Arc center is calculated and so may have round-off errors": the middle may be `pcbIUScale.mmToIU( 0.0005 )` apart
-        (Shape::Arc { start: s1, mid: m1, end: e1, .. }, Shape::Arc { start: s2, mid: m2, end: e2, .. }) => point_differs(s1, s2) || point_differs(e1, e2) || ((m1.x - m2.x) as f64).hypot((m1.y - m2.y) as f64) > 500.0,
+        (Shape::Arc { start: s1, mid: m1, end: e1, .. }, Shape::Arc { start: s2, mid: m2, end: e2, .. }) => point_differs(s1, s2) || point_differs(e1, e2) || ((m1.x - m2.x).as_f64()).hypot((m1.y - m2.y).as_f64()) > 500.0,
         (Shape::Bezier { start: s1, c1: a1, c2: b1, end: e1, .. }, Shape::Bezier { start: s2, c1: a2, c2: b2, end: e2, .. }) => point_differs(s1, s2) || point_differs(e1, e2) || point_differs(a1, a2) || point_differs(b1, b2),
         (Shape::Polygon { pts: p1, .. }, Shape::Polygon { pts: p2, .. }) => !same_outline(p1, p2),
         _ => true,
@@ -239,7 +239,7 @@ fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
         if sa.size != sl.size {
             out.push(format!("{name} size differs on layer {layer}."));
         }
-        if sa.trapezoid_delta.unwrap_or((0, 0)) != sl.trapezoid_delta.unwrap_or((0, 0)) {
+        if sa.trapezoid_delta.unwrap_or((Nm::ZERO, Nm::ZERO)) != sl.trapezoid_delta.unwrap_or((Nm::ZERO, Nm::ZERO)) {
             out.push(format!("{name} trapezoid delta differs on layer {layer}."));
         }
         if matches!(sa.shape, PadShape::RoundRect | PadShape::ChamferedRect) && !close(sa.roundrect_ratio.unwrap_or(0.25), sl.roundrect_ratio.unwrap_or(0.25)) {
@@ -253,7 +253,7 @@ fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
                 out.push(format!("{name} chamfered corners differ on layer {layer}."));
             }
         }
-        if pt_differs(sa.offset.unwrap_or((0, 0)), sl.offset.unwrap_or((0, 0))) {
+        if pt_differs(sa.offset.unwrap_or((Nm::ZERO, Nm::ZERO)), sl.offset.unwrap_or((Nm::ZERO, Nm::ZERO))) {
             out.push(format!("{name} shape offset from hole differs on layer {layer}."));
         }
     }
@@ -389,15 +389,15 @@ mod tests {
     use crate::fp_art::FpArt;
 
     fn pad(number: &str, x: Nm, y: Nm) -> Pad {
-        Pad { number: number.into(), at: (x, y), size: (900_000, 900_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
+        Pad { number: number.into(), at: (x, y), size: (Nm::new(900_000), Nm::new(900_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
     }
 
     fn line(layer: &str, a: (Nm, Nm), b: (Nm, Nm)) -> FpShape {
-        FpShape::new(Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 120_000, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } })
+        FpShape::new(Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: Nm::new(120_000), filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } })
     }
 
     fn fp(pads: Vec<Pad>, shapes: Vec<FpShape>) -> Footprint {
-        Footprint { name: "X".into(), pads, art: FpArt { shapes, texts: vec![], courtyard: vec![] }, courtyard: Some((1_700_000, 800_000)), ..Default::default() }
+        Footprint { name: "X".into(), pads, art: FpArt { shapes, texts: vec![], courtyard: vec![] }, courtyard: Some((Nm::new(1_700_000), Nm::new(800_000))), ..Default::default() }
     }
 
     fn facts(f: &Footprint) -> InstanceFacts<'_> {
@@ -406,22 +406,22 @@ mod tests {
 
     #[test]
     fn a_footprint_equal_to_its_library_copy_needs_no_update() {
-        let lib = fp(vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], vec![line("F.SilkS", (-500_000, -700_000), (500_000, -700_000))]);
+        let lib = fp(vec![pad("1", Nm::new(-1_000_000), Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO)], vec![line("F.SilkS", (Nm::new(-500_000), Nm::new(-700_000)), (Nm::new(500_000), Nm::new(-700_000)))]);
         assert!(footprint_differences(&facts(&lib.clone()), &lib).is_empty());
         assert!(!needs_update(&facts(&lib.clone()), &lib));
     }
 
     #[test]
     fn the_lines_follow_kicads_order_and_wording() {
-        let lib = fp(vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], vec![line("F.SilkS", (-500_000, -700_000), (500_000, -700_000))]);
+        let lib = fp(vec![pad("1", Nm::new(-1_000_000), Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO)], vec![line("F.SilkS", (Nm::new(-500_000), Nm::new(-700_000)), (Nm::new(500_000), Nm::new(-700_000)))]);
         let mut board = lib.clone();
-        board.pads[1].size = (1_100_000, 900_000);
-        board.pads[0].at = (-1_200_000, 0);
-        board.art.shapes[0] = line("F.SilkS", (-500_000, -700_000), (600_000, -700_000));
+        board.pads[1].size = (Nm::new(1_100_000), Nm::new(900_000));
+        board.pads[0].at = (Nm::new(-1_200_000), Nm::ZERO);
+        board.art.shapes[0] = line("F.SilkS", (Nm::new(-500_000), Nm::new(-700_000)), (Nm::new(600_000), Nm::new(-700_000)));
         let mut f = facts(&board);
         f.attrs.dnp = true;
-        f.overrides.clearance = Some(250_000);
-        f.pad_overrides.push(PadOverrides { number: "2".into(), clearance: Some(300_000), ..Default::default() });
+        f.overrides.clearance = Some(Nm::new(250_000));
+        f.pad_overrides.push(PadOverrides { number: "2".into(), clearance: Some(Nm::new(300_000)), ..Default::default() });
         let lines = footprint_differences(&f, &lib);
         assert_eq!(
             lines,
@@ -438,19 +438,19 @@ mod tests {
 
     #[test]
     fn a_count_that_differs_is_one_line_and_the_items_are_not_paired() {
-        let lib = fp(vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], vec![]);
+        let lib = fp(vec![pad("1", Nm::new(-1_000_000), Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO)], vec![]);
         let mut board = lib.clone();
-        board.pads.push(pad("3", 0, 1_000_000));
-        board.art.shapes.push(line("F.Fab", (0, 0), (1000, 1000)));
+        board.pads.push(pad("3", Nm::ZERO, Nm::new(1_000_000)));
+        board.art.shapes.push(line("F.Fab", (Nm::ZERO, Nm::ZERO), (Nm::new(1000), Nm::new(1000))));
         assert_eq!(footprint_differences(&facts(&board), &lib), ["Graphic item count differs.", "Pad count differs."]);
     }
 
     #[test]
     fn the_footprint_type_is_the_one_the_pads_give_and_a_hole_makes_it_through_hole() {
-        let lib = fp(vec![pad("1", 0, 0)], vec![]);
+        let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
         let mut th = lib.clone();
         th.pads[0].kind = PadKind::ThroughHole;
-        th.pads[0].drill = Some(800_000);
+        th.pads[0].drill = Some(Nm::new(800_000));
         let lines = footprint_differences(&facts(&th), &lib);
         assert!(lines.contains(&"Footprint types differ.".to_string()), "{lines:?}");
         assert!(lines.contains(&"Pad 1 pad type differs.".to_string()) && lines.contains(&"Pad 1 drill shape differs.".to_string()) && lines.contains(&"Pad 1 drill size differs.".to_string()), "{lines:?}");
@@ -458,29 +458,29 @@ mod tests {
 
     #[test]
     fn a_polygon_started_at_another_vertex_and_a_rectangle_drawn_the_other_way_are_the_same() {
-        let square = |pts: &[(Nm, Nm)]| FpShape::new(Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100_000, filled: false, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() });
-        let rect = |a: (Nm, Nm), b: (Nm, Nm)| FpShape::new(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } });
-        let lib = fp(vec![pad("1", 0, 0)], vec![square(&[(0, 0), (10_000, 0), (10_000, 10_000), (0, 10_000)]), rect((0, 0), (10_000, 10_000))]);
+        let square = |pts: &[(Nm, Nm)]| FpShape::new(Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::new(100_000), filled: false, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() });
+        let rect = |a: (Nm, Nm), b: (Nm, Nm)| FpShape::new(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::new(100_000), filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } });
+        let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![square(&[(Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::ZERO), (Nm::new(10_000), Nm::new(10_000)), (Nm::ZERO, Nm::new(10_000))]), rect((Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::new(10_000)))]);
         let mut board = lib.clone();
-        board.art.shapes = vec![square(&[(10_000, 10_000), (0, 10_000), (0, 0), (10_000, 0)]), rect((10_000, 10_000), (0, 0))];
+        board.art.shapes = vec![square(&[(Nm::new(10_000), Nm::new(10_000)), (Nm::ZERO, Nm::new(10_000)), (Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::ZERO)]), rect((Nm::new(10_000), Nm::new(10_000)), (Nm::ZERO, Nm::ZERO))];
         assert!(footprint_differences(&facts(&board), &lib).is_empty());
-        board.art.shapes[0] = square(&[(0, 0), (10_000, 0), (10_000, 11_000), (0, 10_000)]);
+        board.art.shapes[0] = square(&[(Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::ZERO), (Nm::new(10_000), Nm::new(11_000)), (Nm::ZERO, Nm::new(10_000))]);
         assert_eq!(footprint_differences(&facts(&board), &lib), ["Polygon on F.SilkS differs."]);
     }
 
     #[test]
     fn a_stroke_only_counts_on_copper() {
-        let lib = fp(vec![pad("1", 0, 0)], vec![line("F.SilkS", (0, 0), (1000, 1000)), line("F.Cu", (0, 0), (5000, 5000))]);
+        let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![line("F.SilkS", (Nm::ZERO, Nm::ZERO), (Nm::new(1000), Nm::new(1000))), line("F.Cu", (Nm::ZERO, Nm::ZERO), (Nm::new(5000), Nm::new(5000)))]);
         let mut board = lib.clone();
-        board.art.shapes[0].shape.set_stroke_width(300_000);
+        board.art.shapes[0].shape.set_stroke_width(Nm::new(300_000));
         assert!(footprint_differences(&facts(&board), &lib).is_empty(), "a silkscreen line may be thicker");
-        board.art.shapes[1].shape.set_stroke_width(300_000);
+        board.art.shapes[1].shape.set_stroke_width(Nm::new(300_000));
         assert_eq!(footprint_differences(&facts(&board), &lib), ["Line on F.Cu differs."]);
     }
 
     #[test]
     fn pads_are_paired_by_number_the_way_a_person_counts() {
-        let lib = fp(vec![pad("2", 0, 0), pad("10", 1_000_000, 0), pad("1", -1_000_000, 0)], vec![]);
+        let lib = fp(vec![pad("2", Nm::ZERO, Nm::ZERO), pad("10", Nm::new(1_000_000), Nm::ZERO), pad("1", Nm::new(-1_000_000), Nm::ZERO)], vec![]);
         let mut board = lib.clone();
         board.pads.reverse();
         assert!(footprint_differences(&facts(&board), &lib).is_empty());
@@ -491,9 +491,9 @@ mod tests {
 
     #[test]
     fn the_courtyard_is_compared_too() {
-        let lib = fp(vec![pad("1", 0, 0)], vec![]);
+        let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
         let mut board = lib.clone();
-        board.courtyard = Some((1_800_000, 800_000));
+        board.courtyard = Some((Nm::new(1_800_000), Nm::new(800_000)));
         assert_eq!(footprint_differences(&facts(&board), &lib), ["Courtyard differs."]);
     }
 }

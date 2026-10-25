@@ -1,6 +1,7 @@
 //! The details of the PCB edit tools that kicad-cli judges (GAPS.md package P6): the file we write after Paste Special is one kicad-cli loads, and the
 //! references it reads in it are the ones Paste Special gave.
 
+use eda_model::units::Nm;
 use super::tests::{drc_counts, scratch, setup};
 use super::{load, step, undo};
 use eda_model::ir::Point;
@@ -36,7 +37,7 @@ fn kicad_cli_reads_the_references_a_paste_gave_and_the_board_after_paste_special
     }
     let dir = scratch("paste_special_kicad_cli");
     setup(&dir);
-    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 2_000_000, y: 12_000_000 }, Point { x: 12_000_000, y: 12_000_000 }] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(12_000_000) }, Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(12_000_000) }] }, false, "test").unwrap();
     // One row per footprint: the reference is the row's first column (the value, which the fixture sets to the reference, is the second).
     let count = |text: &str, reference: &str| text.lines().filter(|l| l.starts_with(&format!("\"{reference}\","))).count();
 
@@ -45,14 +46,14 @@ fn kicad_cli_reads_the_references_a_paste_gave_and_the_board_after_paste_special
     let text = copy_of(&dir, &["U1", "U2"]);
 
     // A plain Paste: the references of the copy stay U1 and U2 (KiCad's `KEEP_ANNOTATIONS`).
-    step(&dir, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 10_000_000, y: 14_000_000 } }, false, "test").unwrap();
+    step(&dir, Cmd::PasteClipboard { text: text.clone(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(14_000_000) } }, false, "test").unwrap();
     let kept = positions(&dir);
     assert_eq!((count(&kept, "U1"), count(&kept, "U2")), (2, 2), "kicad-cli sees two U1 and two U2 after the paste:\n{kept}");
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!(count(&positions(&dir), "U1"), 1, "Undo takes the paste away");
 
     // Paste Special, references cleared and nets cleared.
-    step(&dir, Cmd::PasteSpecial { text: text.clone(), at: Point { x: 10_000_000, y: 14_000_000 }, mode: PasteMode::Remove, clear_nets: true }, false, "test").unwrap();
+    step(&dir, Cmd::PasteSpecial { text: text.clone(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(14_000_000) }, mode: PasteMode::Remove, clear_nets: true }, false, "test").unwrap();
     let cleared = positions(&dir);
     assert_eq!(count(&cleared, "REF**"), 2, "both pasted footprints read REF** to kicad-cli:\n{cleared}");
     assert_eq!((count(&cleared, "U1"), count(&cleared, "U2")), (1, 1), "and the board's own are as they were");
@@ -64,7 +65,7 @@ fn kicad_cli_reads_the_references_a_paste_gave_and_the_board_after_paste_special
 
     // Unique references: kicad-cli lists U3 and U4.
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-    step(&dir, Cmd::PasteSpecial { text, at: Point { x: 10_000_000, y: 14_000_000 }, mode: PasteMode::Unique, clear_nets: false }, false, "test").unwrap();
+    step(&dir, Cmd::PasteSpecial { text, at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(14_000_000) }, mode: PasteMode::Unique, clear_nets: false }, false, "test").unwrap();
     let unique = positions(&dir);
     assert_eq!((count(&unique, "U3"), count(&unique, "U4")), (1, 1), "{unique}");
 }
@@ -73,8 +74,8 @@ fn kicad_cli_reads_the_references_a_paste_gave_and_the_board_after_paste_special
 
 /// Two dangling stubs on the two-part board of `setup`, one per net: GND from U1.1 and VCC from U1.2 run up to nothing. Returns their ids (GND's, VCC's).
 fn two_stubs(dir: &Path) -> (String, String) {
-    step(dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 4_000_000, y: 5_000_000 }, Point { x: 4_000_000, y: 9_000_000 }] }, false, "test").unwrap();
-    step(dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 6_000_000, y: 5_000_000 }, Point { x: 6_000_000, y: 9_000_000 }] }, false, "test").unwrap();
+    step(dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(9_000_000) }] }, false, "test").unwrap();
+    step(dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(9_000_000) }] }, false, "test").unwrap();
     let (_, design, _) = load(dir).unwrap();
     let tracks = &design.routing.as_ref().unwrap().tracks;
     let id_of = |net: &str| tracks.iter().find(|t| t.net == net).unwrap_or_else(|| panic!("no {net} track")).id.clone();

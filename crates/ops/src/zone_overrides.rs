@@ -24,7 +24,7 @@ impl Board<'_> {
     /// `Cmd::SetFootprintZoneConnection`.
     pub(crate) fn set_footprint_zone_connection(&mut self, part: &str, zone_connection: Option<PadConnection>, clearance: Option<Nm>) -> Result<(), Vec<CheckResult>> {
         self.require_placed(part)?;
-        if clearance.is_some_and(|c| c < 0) {
+        if clearance.is_some_and(|c| c < Nm::ZERO) {
             return Err(vec![CheckResult::fail("ops_bad_clearance", part, "a clearance override cannot be negative")]);
         }
         self.zone_edit_of(part).footprint = Some(FootprintZoneFacts { zone_connection, clearance });
@@ -40,7 +40,7 @@ impl Board<'_> {
             return Err(vec![CheckResult::fail("ops_unknown_pad", format!("{part}.{pad}"), "this footprint has no pad with that number")]);
         }
         for (what, v) in [("relief gap", over.thermal_gap), ("spoke width", over.thermal_spoke_width), ("clearance", over.clearance)] {
-            if v.is_some_and(|v| v < 0) {
+            if v.is_some_and(|v| v < Nm::ZERO) {
                 return Err(vec![CheckResult::fail("ops_bad_pad_override", format!("{part}.{pad}"), format!("the {what} override cannot be negative"))]);
             }
         }
@@ -91,7 +91,7 @@ mod tests {
             nets: None,
             routing: None,
             placement: Some(PlacementSection {
-                outline: vec![Point { x: 0, y: 0 }, Point { x: 50_000_000, y: 0 }, Point { x: 50_000_000, y: 50_000_000 }, Point { x: 0, y: 50_000_000 }],
+                outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(50_000_000) }],
                 footprints: Vec::new(),
                 modules: Vec::new(),
             }),
@@ -102,7 +102,7 @@ mod tests {
     fn placed() -> (ConstraintModel, Design) {
         let m = ConstraintModel { parts: vec![part("C1", "0402")], ..Default::default() };
         let mut d = design();
-        d.placement.as_mut().unwrap().footprints.push(FootprintInstance { id: "C1".into(), at: Point { x: 10_000_000, y: 10_000_000 }, rot: 0, side: Side::Top, label: Default::default() });
+        d.placement.as_mut().unwrap().footprints.push(FootprintInstance { id: "C1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, rot: 0, side: Side::Top, label: Default::default() });
         (m, d)
     }
 
@@ -113,15 +113,15 @@ mod tests {
     #[test]
     fn a_pad_override_is_stored_and_resolved_for_the_filler() {
         let (m, d) = placed();
-        let mut b = Board::new(d, &m, 100_000, 300_000);
+        let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
         b.apply(&Cmd::SetPadZoneOverrides {
             part: "C1".into(),
             pad: "1".into(),
             zone_connection: Some(PadConnection::Full),
-            thermal_gap: Some(400),
-            thermal_spoke_width: Some(300),
+            thermal_gap: Some(Nm::from_raw_shim(400)),
+            thermal_spoke_width: Some(Nm::from_raw_shim(300)),
             thermal_spoke_angle_mdeg: Some(405_000),
-            clearance: Some(600),
+            clearance: Some(Nm::from_raw_shim(600)),
         })
         .unwrap();
         let edit = pad_edit(&b);
@@ -129,7 +129,7 @@ mod tests {
         assert_eq!(edit[0].zone_connection, Some(PadConnection::Full));
         assert_eq!(edit[0].thermal_spoke_angle_mdeg, Some(45_000), "an angle is kept within one turn");
         let facts = b.design().pad_zone_facts("C1", "0402", 0, 2, "1");
-        assert_eq!((facts.connection, facts.thermal_gap, facts.thermal_spoke_width, facts.clearance()), (Some(PadConnection::Full), Some(400), Some(300), Some(600)));
+        assert_eq!((facts.connection, facts.thermal_gap, facts.thermal_spoke_width, facts.clearance()), (Some(PadConnection::Full), Some(Nm::from_raw_shim(400)), Some(Nm::from_raw_shim(300)), Some(Nm::from_raw_shim(600))));
         // pad 2 was not touched
         assert_eq!(b.design().pad_zone_facts("C1", "0402", 1, 2, "2"), Default::default());
     }
@@ -137,14 +137,14 @@ mod tests {
     #[test]
     fn the_footprints_own_connection_is_inherited_by_pads_that_do_not_set_one() {
         let (m, d) = placed();
-        let mut b = Board::new(d, &m, 100_000, 300_000);
-        b.apply(&Cmd::SetFootprintZoneConnection { part: "C1".into(), zone_connection: Some(PadConnection::None), clearance: Some(900) }).unwrap();
+        let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        b.apply(&Cmd::SetFootprintZoneConnection { part: "C1".into(), zone_connection: Some(PadConnection::None), clearance: Some(Nm::from_raw_shim(900)) }).unwrap();
         let facts = b.design().pad_zone_facts("C1", "0402", 0, 2, "1");
-        assert_eq!((facts.footprint_connection, facts.clearance()), (Some(PadConnection::None), Some(900)), "the footprint's facts reach its pads");
+        assert_eq!((facts.footprint_connection, facts.clearance()), (Some(PadConnection::None), Some(Nm::from_raw_shim(900))), "the footprint's facts reach its pads");
         // a pad's own clearance beats the footprint's
-        b.apply(&Cmd::SetPadZoneOverrides { part: "C1".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(250) }).unwrap();
-        assert_eq!(b.design().pad_zone_facts("C1", "0402", 0, 2, "1").clearance(), Some(250));
-        assert_eq!(b.design().pad_zone_facts("C1", "0402", 1, 2, "2").clearance(), Some(900));
+        b.apply(&Cmd::SetPadZoneOverrides { part: "C1".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(Nm::from_raw_shim(250)) }).unwrap();
+        assert_eq!(b.design().pad_zone_facts("C1", "0402", 0, 2, "1").clearance(), Some(Nm::from_raw_shim(250)));
+        assert_eq!(b.design().pad_zone_facts("C1", "0402", 1, 2, "2").clearance(), Some(Nm::from_raw_shim(900)));
     }
 
     #[test]
@@ -159,7 +159,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let mut b = Board::new(d, &m, 100_000, 300_000);
+        let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
         assert_eq!(b.design().pad_zone_facts("C1", "0402", 0, 2, "1").connection, Some(PadConnection::Full));
         let set = |c: Option<PadConnection>| Cmd::SetPadZoneOverrides { part: "C1".into(), pad: "1".into(), zone_connection: c, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
         b.apply(&set(Some(PadConnection::Thermal))).unwrap();
@@ -172,10 +172,10 @@ mod tests {
     #[test]
     fn a_pad_that_does_not_exist_or_a_negative_value_is_refused() {
         let (m, d) = placed();
-        let mut b = Board::new(d, &m, 100_000, 300_000);
+        let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
         let cmd = |pad: &str, gap: Option<Nm>| Cmd::SetPadZoneOverrides { part: "C1".into(), pad: pad.into(), zone_connection: None, thermal_gap: gap, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
         assert_eq!(b.apply(&cmd("9", None)).unwrap_err()[0].check, "ops_unknown_pad");
-        assert_eq!(b.apply(&cmd("1", Some(-5))).unwrap_err()[0].check, "ops_bad_pad_override");
+        assert_eq!(b.apply(&cmd("1", Some(Nm::from_raw_shim(-5)))).unwrap_err()[0].check, "ops_bad_pad_override");
         assert!(b.design().drawings.is_none() || pad_edit(&b).is_empty(), "a refused edit changes nothing");
         let e = b.apply(&Cmd::SetFootprintZoneConnection { part: "U9".into(), zone_connection: None, clearance: None }).unwrap_err();
         assert_eq!(e[0].check, "ops_not_placed");
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn the_commands_read_the_json_the_studio_sends() {
         let c: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_pad_zone_overrides", "part": "C1", "pad": "1", "zone_connection": "Full", "thermal_gap": 400 })).unwrap();
-        assert!(matches!(c, Cmd::SetPadZoneOverrides { zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: None, .. }));
+        assert!(matches!(c, Cmd::SetPadZoneOverrides { zone_connection: Some(PadConnection::Full), thermal_gap: Some(g), thermal_spoke_width: None, .. } if g == Nm::from_raw_shim(400)));
         let c: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_footprint_zone_connection", "part": "C1", "zone_connection": null })).unwrap();
         assert!(matches!(c, Cmd::SetFootprintZoneConnection { zone_connection: None, clearance: None, .. }));
     }

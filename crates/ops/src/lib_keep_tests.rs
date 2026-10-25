@@ -11,7 +11,7 @@ fn design() -> Design {
 }
 
 fn board(m: &ConstraintModel) -> Board<'_> {
-    Board::new(design(), m, 100_000, 300_000)
+    Board::new(design(), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))
 }
 
 fn props(lib_id: &str, power: bool, unit_count: u32, units_locked: Option<bool>, power_local: Option<bool>) -> Cmd {
@@ -87,15 +87,15 @@ fn paste_pad_properties_takes_the_masters_attribute_property_and_margins_but_not
     // `PAD::ImportSettingsFrom`: `SetAttribute`, `SetProperty`, `SetPadstack` (margins, tenting); "I am not sure the m_LengthPadToDie should be imported" (#if 0)
     let fp = {
         let mut fp = LibraryFootprint::new_empty("Lib:F");
-        let mut master = smd_pad("1", 0);
+        let mut master = smd_pad("1", Nm::ZERO);
         master.kicad = LibraryPadKeep {
             connector: true,
             property: Some("pad_prop_testpoint".into()),
-            solder_mask_margin: Some(50_000),
+            solder_mask_margin: Some(Nm::from_raw_shim(50_000)),
             tokens: vec!["(die_length 1.2)".into(), "(tenting front)".into()],
             ..Default::default()
         };
-        let mut other = smd_pad("2", 2_000_000);
+        let mut other = smd_pad("2", Nm::from_raw_shim(2_000_000));
         other.kicad.tokens = vec!["(die_length 3)".into()];
         fp.pads = vec![master, other];
         fp.assign_missing_ids();
@@ -105,7 +105,7 @@ fn paste_pad_properties_takes_the_masters_attribute_property_and_margins_but_not
     library_editors::import_pad_settings(&mut dst, &fp.pads[0]);
     assert!(dst.kicad.connector);
     assert_eq!(dst.kicad.property.as_deref(), Some("pad_prop_testpoint"));
-    assert_eq!(dst.kicad.solder_mask_margin, Some(50_000));
+    assert_eq!(dst.kicad.solder_mask_margin, Some(Nm::from_raw_shim(50_000)));
     assert_eq!(dst.kicad.tokens, vec!["(die_length 3)".to_string(), "(tenting front)".to_string()], "its own pin-to-die length, the master's tenting");
 }
 

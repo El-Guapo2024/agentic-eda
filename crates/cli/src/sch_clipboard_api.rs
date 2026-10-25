@@ -10,6 +10,7 @@
 //!    point of the fragment the cursor holds (`SCH_SELECTION::GetTopLeftItem`, or, for Duplicate, the connection point nearest the cursor).
 //!    Text that is not a schematic fragment comes back as `kind: "text"`: a single text item, as KiCad pastes it.
 
+use eda_model::units::Nm;
 use crate::board;
 use eda_model::ir::{Design, Point, SchematicSection, SchematicText};
 use std::collections::BTreeMap;
@@ -103,7 +104,7 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
 fn text_fragment(text: &str) -> SchFragment {
     let content = text.lines().map(str::trim_end).collect::<Vec<_>>().join(" ");
     let mut f = SchFragment::default();
-    f.section.texts.push(SchematicText { id: String::new(), content, at: Point { x: 0, y: 0 }, angle: 0, size_nm: 1_270_000 });
+    f.section.texts.push(SchematicText { id: String::new(), content, at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, size_nm: Nm::from_raw_shim(1_270_000) });
     f
 }
 
@@ -135,7 +136,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
     let sheet = req.get("sheet").and_then(Value::as_str).unwrap_or("").to_string();
     let mode: PasteMode = req.get("mode").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
     let duplicate = req.get("duplicate").and_then(Value::as_bool).unwrap_or(false);
-    let cursor = req.get("cursor").and_then(Value::as_array).and_then(|c| Some(Point { x: c.first()?.as_i64()?, y: c.get(1)?.as_i64()? }));
+    let cursor = req.get("cursor").and_then(Value::as_array).and_then(|c| Some(Point { x: Nm::from_raw_shim(c.first()?.as_i64()?), y: Nm::from_raw_shim(c.get(1)?.as_i64()?) }));
 
     let (kind, mut fragment) = match eda_kicad::parse_clipboard(text) {
         Ok(f) => ("fragment", f),
@@ -153,10 +154,10 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
         Err(e) => return e,
     };
     let before = crate::studio::schematic_json_of(&design, &model, &sheet);
-    let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: 0, dy: 0, mode };
+    let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: Nm::ZERO, mode };
     let cmd = if sheet.is_empty() { paste } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(paste) } };
     let drawn_before = design.clone();
-    let mut tried = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
+    let mut tried = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
     if let Err(e) = tried.apply(&cmd) {
         return err(board::reasons(&e));
     }
@@ -206,6 +207,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::{Net, Part, Pin, PinKind};
     use eda_ops::Domain;
@@ -247,7 +249,7 @@ mod tests {
         std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
         let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "hash")).unwrap();
         // A board always has a placement section; this one has no part on the PCB yet.
-        design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 20_000_000 }, Point { x: 0, y: 20_000_000 }], footprints: vec![], modules: vec![] });
+        design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }], footprints: vec![], modules: vec![] });
         board::save(dir, &design).unwrap();
         let meta = board::Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
@@ -269,8 +271,8 @@ mod tests {
     }
 
     /// Wires as polylines of points (moved by `(dx, dy)`), with whether each is a bus, in a fixed order.
-    fn polylines(wires: &[eda_model::ir::Wire], dx: i64, dy: i64) -> Vec<(bool, Vec<(i64, i64)>)> {
-        let mut out: Vec<_> = wires.iter().map(|w| (w.bus, w.pts.iter().map(|p| (p.x + dx, p.y + dy)).collect())).collect();
+    fn polylines(wires: &[eda_model::ir::Wire], dx: i64, dy: i64) -> Vec<(bool, Vec<(Nm, Nm)>)> {
+        let mut out: Vec<_> = wires.iter().map(|w| (w.bus, w.pts.iter().map(|p| (p.x + Nm::from_raw_shim(dx), p.y + Nm::from_raw_shim(dy))).collect())).collect();
         out.sort();
         out
     }
@@ -315,7 +317,7 @@ mod tests {
         // The copy of each symbol is the symbol: same library symbol, value, footprint, orientation, flags.
         for old in &orig.symbols {
             let new = sch.symbols.iter().find(|s| !orig.symbols.iter().any(|o| o.id == s.id) && s.value == old.value && s.footprint == old.footprint && s.rot == old.rot && s.mirrored == old.mirrored).unwrap_or_else(|| panic!("no copy of {}", old.id));
-            assert_eq!((new.at.x - old.at.x, new.at.y - old.at.y), (dx, dy), "{} moved by the paste's offset", old.id);
+            assert_eq!(((new.at.x - old.at.x).raw_shim(), (new.at.y - old.at.y).raw_shim()), (dx, dy), "{} moved by the paste's offset", old.id);
             if eda_model::symbol::is_synthetic_lib_id(&old.lib_id) {
                 assert_eq!(new.lib_id, "clipboard:U1", "a generated symbol (`eda:` or `gen:`) is a library symbol of its own in the copy");
             } else {
@@ -329,7 +331,7 @@ mod tests {
         assert_eq!(sch.no_connects.len(), orig.no_connects.len() * 2);
         // Every power symbol and flag has its copy, of the same library symbol and net, on the same spot moved by the offset (a ground and its
         // PWR_FLAG share a pin, so spots repeat).
-        let key = |p: &eda_model::ir::PowerSymbol, dx: i64, dy: i64| (p.lib_id.clone(), p.net.clone(), p.at.x + dx, p.at.y + dy, p.rot);
+        let key = |p: &eda_model::ir::PowerSymbol, dx: i64, dy: i64| (p.lib_id.clone(), p.net.clone(), p.at.x + Nm::from_raw_shim(dx), p.at.y + Nm::from_raw_shim(dy), p.rot);
         let mut have: Vec<_> = sch.power_symbols.iter().map(|p| key(p, 0, 0)).collect();
         let mut want: Vec<_> = orig.power_symbols.iter().map(|p| key(p, 0, 0)).chain(orig.power_symbols.iter().map(|p| key(p, dx, dy))).collect();
         have.sort();
@@ -364,14 +366,14 @@ mod tests {
         assert_eq!(post(parse, &dir, json!({ "text": "  " }))["ok"], false);
 
         // A paste onto a second sheet numbers against the first one too.
-        board::step(&dir, Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: Point { x: 200_000_000, y: 20_000_000 }, size: (30_000_000, 20_000_000) }, false, "test").unwrap();
+        board::step(&dir, Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: Point { x: Nm::from_raw_shim(200_000_000), y: Nm::from_raw_shim(20_000_000) }, size: (Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)) }, false, "test").unwrap();
         let (_, d, _) = board::load(&dir).unwrap();
         let sheet = d.schematic.as_ref().unwrap().sheets[0].id.clone();
         let copy = post(copy, &dir, json!({ "ids": ["R1", "C1"] }));
         assert_eq!(copy["ok"], true, "{copy}");
         let parsed = post(parse, &dir, json!({ "text": copy["text"], "sheet": sheet }));
         assert_eq!(parsed["ok"], true, "{parsed}");
-        let cmd = Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(Cmd::PasteSch { fragment: serde_json::from_value(parsed["fragment"].clone()).unwrap(), dx: 0, dy: 0, mode: PasteMode::Unique }) };
+        let cmd = Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(Cmd::PasteSch { fragment: serde_json::from_value(parsed["fragment"].clone()).unwrap(), dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique }) };
         board::step(&dir, cmd, false, "test").unwrap();
         let (_, d, _) = board::load(&dir).unwrap();
         let child = d.sheet_contents.as_ref().unwrap().get("child.kicad_sch").unwrap();

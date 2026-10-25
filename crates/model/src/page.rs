@@ -13,30 +13,30 @@ use serde::{Deserialize, Serialize};
 /// The formats of `PAGE_INFO::standardPageSizes` a document can be set to, with their landscape size
 /// `(name, width, height)`. (`GERBER`, the 32000 mil square the Gerber viewer uses, is not offered.)
 pub const PAGE_FORMATS: &[(&str, Nm, Nm)] = &[
-    ("A5", 210_000_000, 148_000_000),
-    ("A4", 297_000_000, 210_000_000),
-    ("A3", 420_000_000, 297_000_000),
-    ("A2", 594_000_000, 420_000_000),
-    ("A1", 841_000_000, 594_000_000),
-    ("A0", 1_189_000_000, 841_000_000),
-    ("A", 279_400_000, 215_900_000),
-    ("B", 431_800_000, 279_400_000),
-    ("C", 558_800_000, 431_800_000),
-    ("D", 863_600_000, 558_800_000),
-    ("E", 1_117_600_000, 863_600_000),
-    ("USLetter", 279_400_000, 215_900_000),
-    ("USLegal", 355_600_000, 215_900_000),
-    ("USLedger", 431_800_000, 279_400_000),
+    ("A5", Nm::new(210_000_000), Nm::new(148_000_000)),
+    ("A4", Nm::new(297_000_000), Nm::new(210_000_000)),
+    ("A3", Nm::new(420_000_000), Nm::new(297_000_000)),
+    ("A2", Nm::new(594_000_000), Nm::new(420_000_000)),
+    ("A1", Nm::new(841_000_000), Nm::new(594_000_000)),
+    ("A0", Nm::new(1_189_000_000), Nm::new(841_000_000)),
+    ("A", Nm::new(279_400_000), Nm::new(215_900_000)),
+    ("B", Nm::new(431_800_000), Nm::new(279_400_000)),
+    ("C", Nm::new(558_800_000), Nm::new(431_800_000)),
+    ("D", Nm::new(863_600_000), Nm::new(558_800_000)),
+    ("E", Nm::new(1_117_600_000), Nm::new(863_600_000)),
+    ("USLetter", Nm::new(279_400_000), Nm::new(215_900_000)),
+    ("USLegal", Nm::new(355_600_000), Nm::new(215_900_000)),
+    ("USLedger", Nm::new(431_800_000), Nm::new(279_400_000)),
 ];
 
 /// `PAGE_SIZE_TYPE::User`: a custom size, given as its own width and height.
 pub const USER_PAPER: &str = "User";
 /// `MIN_PAGE_SIZE_MILS` (1000 mils).
-pub const MIN_PAGE_SIZE_NM: Nm = 25_400_000;
+pub const MIN_PAGE_SIZE_NM: Nm = Nm::new(25_400_000);
 /// `MAX_PAGE_SIZE_PCBNEW_MILS` (48000 mils): the largest user size of a board.
-pub const MAX_PAGE_SIZE_PCBNEW_NM: Nm = 1_219_200_000;
+pub const MAX_PAGE_SIZE_PCBNEW_NM: Nm = Nm::new(1_219_200_000);
 /// `MAX_PAGE_SIZE_EESCHEMA_MILS` (120000 mils): the largest user size of a schematic.
-pub const MAX_PAGE_SIZE_EESCHEMA_NM: Nm = 3_048_000_000;
+pub const MAX_PAGE_SIZE_EESCHEMA_NM: Nm = Nm::new(3_048_000_000);
 
 /// A document's paper: `PAGE_INFO` reduced to what it saves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,9 +164,9 @@ mod tests {
     #[test]
     fn standard_sizes_are_landscape_and_turn_over_for_portrait() {
         let a4 = PageSettings::default();
-        assert_eq!(a4.size_nm().unwrap(), (297_000_000, 210_000_000));
-        assert_eq!(PageSettings { portrait: true, ..a4.clone() }.size_nm().unwrap(), (210_000_000, 297_000_000));
-        assert_eq!(PageSettings { paper: "USLetter".into(), ..a4.clone() }.size_nm().unwrap(), (279_400_000, 215_900_000));
+        assert_eq!(a4.size_nm().unwrap(), (Nm::new(297_000_000), Nm::new(210_000_000)));
+        assert_eq!(PageSettings { portrait: true, ..a4.clone() }.size_nm().unwrap(), (Nm::new(210_000_000), Nm::new(297_000_000)));
+        assert_eq!(PageSettings { paper: "USLetter".into(), ..a4.clone() }.size_nm().unwrap(), (Nm::new(279_400_000), Nm::new(215_900_000)));
         assert!(PageSettings { paper: "A9".into(), ..a4 }.size_nm().is_err());
     }
 
@@ -180,12 +180,12 @@ mod tests {
     #[test]
     fn a_user_size_is_checked_against_the_editors_limits() {
         let user = |w: Nm, h: Nm| PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((w, h)) };
-        assert!(user(300_000_000, 200_000_000).validate(MAX_PAGE_SIZE_PCBNEW_NM).is_ok());
-        assert!(user(25_000_000, 200_000_000).validate(MAX_PAGE_SIZE_PCBNEW_NM).is_err(), "under 1000 mils");
-        assert!(user(1_300_000_000, 200_000_000).validate(MAX_PAGE_SIZE_PCBNEW_NM).is_err(), "over 48000 mils on a board");
-        assert!(user(1_300_000_000, 200_000_000).validate(MAX_PAGE_SIZE_EESCHEMA_NM).is_ok(), "but fine on a schematic");
+        assert!(user(Nm::new(300_000_000), Nm::new(200_000_000)).validate(MAX_PAGE_SIZE_PCBNEW_NM).is_ok());
+        assert!(user(Nm::new(25_000_000), Nm::new(200_000_000)).validate(MAX_PAGE_SIZE_PCBNEW_NM).is_err(), "under 1000 mils");
+        assert!(user(Nm::new(1_300_000_000), Nm::new(200_000_000)).validate(MAX_PAGE_SIZE_PCBNEW_NM).is_err(), "over 48000 mils on a board");
+        assert!(user(Nm::new(1_300_000_000), Nm::new(200_000_000)).validate(MAX_PAGE_SIZE_EESCHEMA_NM).is_ok(), "but fine on a schematic");
         assert!(PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: None }.validate(MAX_PAGE_SIZE_PCBNEW_NM).is_err());
-        assert!(PageSettings { paper: "A4".into(), portrait: false, user_size_nm: Some((1000, 1000)) }.validate(MAX_PAGE_SIZE_PCBNEW_NM).is_err());
+        assert!(PageSettings { paper: "A4".into(), portrait: false, user_size_nm: Some((Nm::new(1000), Nm::new(1000))) }.validate(MAX_PAGE_SIZE_PCBNEW_NM).is_err());
         assert!(PageSettings::default().validate(MAX_PAGE_SIZE_PCBNEW_NM).is_ok());
     }
 
@@ -193,7 +193,7 @@ mod tests {
     fn the_paper_element_is_what_page_info_format_writes() {
         assert_eq!(PageSettings::default().to_sexpr(), "(paper \"A4\")");
         assert_eq!(PageSettings { portrait: true, ..Default::default() }.to_sexpr(), "(paper \"A4\" portrait)");
-        assert_eq!(PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((300_000_000, 200_500_000)) }.to_sexpr(), "(paper \"User\" 300 200.5)");
+        assert_eq!(PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((Nm::new(300_000_000), Nm::new(200_500_000))) }.to_sexpr(), "(paper \"User\" 300 200.5)");
     }
 
     #[test]
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(PageSettings::default().sheet_parts(), (String::new(), None), "plain A4 is stored as nothing");
         let portrait = PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None };
         assert_eq!(portrait.sheet_parts(), ("A3".to_string(), Some(portrait.clone())));
-        let user = PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((300_000_000, 200_000_000)) };
+        let user = PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((Nm::new(300_000_000), Nm::new(200_000_000))) };
         assert_eq!(user.sheet_parts(), (USER_PAPER.to_string(), Some(user.clone())));
         // and reads back
         assert_eq!(PageSettings::of_sheet(None, "A3"), a3);
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn the_paper_element_reads_back() {
         assert_eq!(PageSettings::from_args("A3", None, true), Some(PageSettings { paper: "A3".into(), portrait: true, user_size_nm: None }));
-        assert_eq!(PageSettings::from_args("User", Some((300.0, 200.5)), false), Some(PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((300_000_000, 200_500_000)) }));
+        assert_eq!(PageSettings::from_args("User", Some((300.0, 200.5)), false), Some(PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_nm: Some((Nm::new(300_000_000), Nm::new(200_500_000))) }));
         assert_eq!(PageSettings::from_args("User", None, false), None);
         assert_eq!(PageSettings::from_args("Z9", None, false), None);
         assert_eq!(PageSettings::from_args("usletter", None, false).map(|p| p.paper), Some("USLetter".to_string()));

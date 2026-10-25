@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].name, "ReduceClearanceSameClass");
         assert_eq!(rules[0].constraint_type, "clearance");
-        assert_eq!(rules[0].min, Some(200_000));
+        assert_eq!(rules[0].min, Some(Nm::from_raw_shim(200_000)));
         assert_eq!(rules[0].condition.as_deref(), Some("A.NetClass == B.NetClass"));
     }
 
@@ -210,11 +210,11 @@ mod tests {
 
     #[test]
     fn length_units() {
-        assert_eq!(parse_length("0.2mm"), Some(200_000));
-        assert_eq!(parse_length("1mm"), Some(1_000_000));
-        assert_eq!(parse_length("20"), Some(20_000_000), "bare number defaults to mm");
-        assert_eq!(parse_length("1in"), Some(25_400_000));
-        assert_eq!(parse_length("4mil"), Some(101_600));
+        assert_eq!(parse_length("0.2mm"), Some(Nm::from_raw_shim(200_000)));
+        assert_eq!(parse_length("1mm"), Some(Nm::from_raw_shim(1_000_000)));
+        assert_eq!(parse_length("20"), Some(Nm::from_raw_shim(20_000_000)), "bare number defaults to mm");
+        assert_eq!(parse_length("1in"), Some(Nm::from_raw_shim(25_400_000)));
+        assert_eq!(parse_length("4mil"), Some(Nm::from_raw_shim(101_600)));
         assert_eq!(parse_length("1furlong"), None, "unrecognized unit must not be guessed at");
     }
 }

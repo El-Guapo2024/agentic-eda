@@ -40,7 +40,7 @@ struct RunOutcome {
     stage: Stage,
     fail_checks: Vec<String>,
     crossing_hint: Option<String>,
-    hpwl_nm: Option<i64>,
+    hpwl_nm: Option<eda_model::units::Nm>,
     tracks: Option<usize>,
     vias: Option<usize>,
     design_bytes: Option<Vec<u8>>,

@@ -92,7 +92,7 @@ impl crate::units::Lengths for TargetRange {
 }
 
 /// `MEANDER_SETTINGS::LENGTH_UNCONSTRAINED` (`1000000 * pcbIUScale.IU_PER_MM`): a million millimetres, what a pattern with no length target holds.
-pub const LENGTH_UNCONSTRAINED_NM: Nm = 1_000_000 * crate::units::NM_PER_MM;
+pub const LENGTH_UNCONSTRAINED_NM: Nm = Nm::new(1_000_000 * crate::units::NM_PER_MM);
 
 /// `MEANDER_SETTINGS::DELAY_UNCONSTRAINED`, attoseconds: a million picoseconds, what a pattern with no delay target holds.
 pub const DELAY_UNCONSTRAINED_AS: i64 = 1_000_000 * 1_000_000;
@@ -118,16 +118,16 @@ impl TargetRange {
 
     /// No target: any length is tuned.
     pub fn unconstrained() -> TargetRange {
-        TargetRange { min: 0, opt: LENGTH_UNCONSTRAINED_NM, max: LENGTH_UNCONSTRAINED_NM }
+        TargetRange { min: 0, opt: LENGTH_UNCONSTRAINED_NM.get(), max: LENGTH_UNCONSTRAINED_NM.get() }
     }
 
     pub fn is_unconstrained(&self) -> bool {
-        self.opt == LENGTH_UNCONSTRAINED_NM
+        self.opt == LENGTH_UNCONSTRAINED_NM.get()
     }
 
     /// `SetTargetLength( aOpt )`: the target with the default tolerance (`DEFAULT_LENGTH_TOLERANCE`, 0.1 mm) either side of it.
     pub fn around(opt: Nm) -> TargetRange {
-        TargetRange { min: opt - 100_000, opt, max: opt + 100_000 }
+        TargetRange { min: (opt - Nm::new(100_000)).get(), opt: opt.get(), max: (opt + Nm::new(100_000)).get() }
     }
 }
 
@@ -235,8 +235,9 @@ pub struct TuningPattern {
     #[serde(deserialize_with = "crate::units::de")]
     pub last_diff_pair_gap: Nm,
     /// `m_tuningLength`, nanometres: the length (or skew) the tuner reported last.
+    // nanometres since schema 1: an old document has it right, not scaled
     #[serde(default)]
-    pub last_tuning_length: i64,
+    pub last_tuning_length: Nm,
     /// The delay (or skew as a delay) the tuner reported last, attoseconds, of a time domain pattern. (KiCad keeps only the length, and formats it as a time in the
     /// pattern's row of the Generators Manager; the board file does not have this.)
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -269,7 +270,7 @@ impl TuningPattern {
         if self.is_time_domain {
             return format!("{} ({status})", fmt_ps(self.last_tuning_delay as f64 / 1_000_000.0));
         }
-        format!("{} ({status})", fmt_mm(self.last_tuning_length as f64 / 1_000_000.0))
+        format!("{} ({status})", fmt_mm(self.last_tuning_length.as_f64() / 1_000_000.0))
     }
 }
 
@@ -296,26 +297,26 @@ mod tests {
             id: "tun_1".into(),
             mode: TuningMode::DiffPairSkew,
             layer: "F.Cu".into(),
-            origin: Point { x: 1_000_000, y: 2_000_000 },
-            end: Point { x: 9_000_000, y: 2_000_000 },
+            origin: Point { x: Nm::new(1_000_000), y: Nm::new(2_000_000) },
+            end: Point { x: Nm::new(9_000_000), y: Nm::new(2_000_000) },
             initial_side: PatternSide::Right,
-            min_amplitude: 200_000,
-            max_amplitude: 1_000_000,
-            spacing: 600_000,
+            min_amplitude: Nm::new(200_000),
+            max_amplitude: Nm::new(1_000_000),
+            spacing: Nm::new(600_000),
             corner_radius_percent: 100,
             rounded: false,
             single_sided: true,
             override_custom_rules: true,
-            target_length: TargetRange::around(50_000_000),
+            target_length: TargetRange::around(Nm::new(50_000_000)),
             target_skew: TargetRange { min: -50_000, opt: 0, max: 50_000 },
             is_time_domain: true,
             target_delay: TargetRange::delay_around(120_000_000),
             target_skew_delay: TargetRange { min: -1_000_000, opt: 0, max: 1_000_000 },
-            base_line: vec![Point { x: 1_000_000, y: 2_000_000 }, Point { x: 9_000_000, y: 2_000_000 }],
-            base_line_coupled: vec![Point { x: 1_000_000, y: 2_400_000 }, Point { x: 9_000_000, y: 2_400_000 }],
-            last_track_width: 200_000,
-            last_diff_pair_gap: 200_000,
-            last_tuning_length: 49_999_999,
+            base_line: vec![Point { x: Nm::new(1_000_000), y: Nm::new(2_000_000) }, Point { x: Nm::new(9_000_000), y: Nm::new(2_000_000) }],
+            base_line_coupled: vec![Point { x: Nm::new(1_000_000), y: Nm::new(2_400_000) }, Point { x: Nm::new(9_000_000), y: Nm::new(2_400_000) }],
+            last_track_width: Nm::new(200_000),
+            last_diff_pair_gap: Nm::new(200_000),
+            last_tuning_length: Nm::new(49_999_999),
             last_tuning_delay: 300_050_000,
             last_netname: "D+".into(),
             last_status: "tuned".into(),
@@ -349,11 +350,11 @@ mod tests {
 
     #[test]
     fn the_target_helpers_follow_set_target_length() {
-        assert_eq!(TargetRange::around(100_000_000), TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 });
+        assert_eq!(TargetRange::around(Nm::new(100_000_000)), TargetRange { min: 99_900_000, opt: 100_000_000, max: 100_100_000 });
         assert!(TargetRange::unconstrained().is_unconstrained());
         let mut p = pattern();
         p.is_time_domain = false;
-        p.last_tuning_length = 75_980_000;
+        p.last_tuning_length = Nm::new(75_980_000);
         p.last_status = "too_short".into();
         assert_eq!(p.tuning_info(), "75.98 mm (too short)");
         // a time domain pattern's row is its delay, in picoseconds

@@ -9,6 +9,7 @@
 //! `{ "ok": true, "items": n, "counts": { "line": n, ... }, "messages": [{ "text", "count" }], "bbox_nm": [x0, y0, x1, y1] | null,
 //! "width_mm", "height_mm", "unit": "mm" }` or `{ "ok": false, "message": "..." }`.
 
+use eda_model::units::Nm;
 use eda_kicad::graphics_import::ImportedShape;
 use eda_ops::{graphics_board_items, ImportGraphics};
 use serde_json::{json, Value};
@@ -59,17 +60,17 @@ pub fn read(body: &[u8]) -> Value {
     };
     for s in &items.shapes {
         for p in s.points() {
-            grow(p.x, p.y);
+            grow(p.x.raw_shim(), p.y.raw_shim());
         }
         // A circle's box is its centre's, one radius out.
         if let eda_model::ir::Shape::Circle { center, end, .. } = s {
-            let r = (((end.x - center.x) as f64).hypot((end.y - center.y) as f64)).round() as i64;
-            grow(center.x - r, center.y - r);
-            grow(center.x + r, center.y + r);
+            let r = (((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64;
+            grow((center.x - Nm::from_raw_shim(r)).raw_shim(), (center.y - Nm::from_raw_shim(r)).raw_shim());
+            grow((center.x + Nm::from_raw_shim(r)).raw_shim(), (center.y + Nm::from_raw_shim(r)).raw_shim());
         }
     }
     for t in &items.texts {
-        grow(t.at.x, t.at.y);
+        grow(t.at.x.raw_shim(), t.at.y.raw_shim());
     }
     let mut messages: Vec<(String, usize)> = imported.message_counts();
     for m in &items.messages {

@@ -22,6 +22,7 @@
 //! The verbs do not read libraries (a command has to replay and undo the same on a machine without them): `library` carries the library copy of each footprint the command
 //! needs, filled in by the studio's server (`crates/cli/src/library_place.rs`).
 
+use eda_model::units::Nm;
 use super::{Board, Cmd};
 use eda_model::footprint::Footprint;
 use eda_model::fp_assign::FootprintAssignment;
@@ -258,7 +259,7 @@ impl Board<'_> {
     /// One footprint (`ExchangeFootprint`): `old` is the footprint the part is on as the board has it (pad edits laid on), `new` the one it is put on.
     fn exchange_one(&mut self, reference: &str, name: &str, old: &Footprint, mut new: Footprint, options: &ExchangeOptions, change: bool) {
         let placed_pose = self.pose_of(reference).cloned();
-        let old_pose = placed_pose.clone().unwrap_or_else(|| FootprintInstance { id: reference.to_string(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::default() });
+        let old_pose = placed_pose.clone().unwrap_or_else(|| FootprintInstance { id: reference.to_string(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::default() });
 
         // "Update/reset 3D models": off keeps the models of the footprint on the board
         if !options.reset_3d_models {

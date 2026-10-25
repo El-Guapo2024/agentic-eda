@@ -50,7 +50,7 @@ fn d_one() -> f64 {
 }
 
 fn d_dxf_width() -> Nm {
-    200_000
+    Nm::from_raw_shim(200_000)
 }
 
 /// `Cmd::ImportGraphics`: what the Import Graphics dialog (`DIALOG_IMPORT_GRAPHICS`) hands `PlaceImportedGraphics`.
@@ -121,15 +121,15 @@ pub struct BoardItems {
 }
 
 fn point(p: (i64, i64)) -> Point {
-    Point { x: p.0, y: p.1 }
+    Point { x: Nm::from_raw_shim(p.0), y: Nm::from_raw_shim(p.1) }
 }
 
 /// `MapStrokeParams`: a stroke of -1 is none (a width of nothing on the board), any other is mapped.
 fn stroke_width(mapper: &Mapper, s: &Stroke) -> Nm {
     if s.width == -1.0 {
-        0
+        Nm::ZERO
     } else {
-        mapper.line_width(s.width)
+        Nm::from_raw_shim(mapper.line_width(s.width))
     }
 }
 
@@ -186,8 +186,8 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                 }
             }
             ImportedShape::Text { origin, text, height, thickness, orientation_deg, h, v, .. } => {
-                let size = (height * m.scaling_factor()).round() as Nm;
-                if size <= 0 || text.is_empty() {
+                let size = Nm::from_raw_shim((height * m.scaling_factor()).round() as i64);
+                if size <= Nm::ZERO || text.is_empty() {
                     continue;
                 }
                 let at = m.coord(*origin);
@@ -196,11 +196,11 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                 let a = orientation_deg.to_radians();
                 let up = (-a.sin(), -a.cos());
                 let shift = match v {
-                    VJustify::Bottom => size as f64 / 2.0,
-                    VJustify::Top => -(size as f64) / 2.0,
+                    VJustify::Bottom => size.raw_shim() as f64 / 2.0,
+                    VJustify::Top => -(size.raw_shim() as f64) / 2.0,
                     VJustify::Center => 0.0,
                 };
-                let at = Point { x: at.0 + (up.0 * shift).round() as i64, y: at.1 + (up.1 * shift).round() as i64 };
+                let at = Point { x: Nm::from_raw_shim(at.0 + (up.0 * shift).round() as i64), y: Nm::from_raw_shim(at.1 + (up.1 * shift).round() as i64) };
                 let mut mdeg = (orientation_deg * 1000.0).round() as i64 % 360_000;
                 if mdeg < 0 {
                     mdeg += 360_000;
@@ -210,7 +210,7 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                     HJustify::Center => TextJustify::Center,
                     HJustify::Right => TextJustify::Right,
                 };
-                out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_nm: size, stroke_width: m.line_width(*thickness).max(1), justify, mirror: false });
+                out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_nm: size, stroke_width: Nm::from_raw_shim(m.line_width(*thickness).max(1)), justify, mirror: false });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
                 let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));
@@ -260,7 +260,7 @@ impl Board<'_> {
             return fail("ops_empty_import", why);
         }
         if let Some(tol) = req.fix_tolerance_nm {
-            crate::fix_shapes::connect_board_shapes(&mut items.shapes, tol.max(0));
+            crate::fix_shapes::connect_board_shapes(&mut items.shapes, tol.max(Nm::ZERO));
         }
         let on_edge = req.layer == EDGE_CUTS;
         let flips_outline = req.replace_outline && on_edge && !items.shapes.is_empty() && !eda_model::outline::outline_is_shapes(&self.design);

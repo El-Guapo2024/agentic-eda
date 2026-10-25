@@ -5,6 +5,7 @@
 //!
 //! The slow test (`EDA_SLOW_TESTS=1`, and it skips when there is no kicad-cli) has KiCad read the clipboard text and derive the nets.
 
+use eda_model::units::Nm;
 use eda_kicad::{export_kicad_sch, import_kicad_sch, parse_clipboard, write_clipboard, CopyInput, ExportMeta};
 use eda_model::ir::{Design, LabelKind, NetLabel, Point, Provenance, SchematicSection, SymbolInstance, Wire};
 use eda_model::symbol::{LibPin, LibSymbol, SPoint, SymbolGraphic};
@@ -78,7 +79,7 @@ fn design_with(sch: SchematicSection) -> Design {
 fn sheet(m: &ConstraintModel, rot: u32, swapped: bool) -> SchematicSection {
     let sym = SymbolInstance {
         id: "U1".into(),
-        at: Point { x: 76_200_000, y: 76_200_000 },
+        at: Point { x: Nm::from_raw_shim(76_200_000), y: Nm::from_raw_shim(76_200_000) },
         rot,
         mirrored: false,
         mirror_y: false,
@@ -100,7 +101,7 @@ fn sheet(m: &ConstraintModel, rot: u32, swapped: bool) -> SchematicSection {
     for (number, tip) in eda_engine::placed::pin_points(&sym, part, lib.as_ref()) {
         let net = format!("NET_{}", ["A", "B", "Y"][number.parse::<usize>().unwrap() - 1]);
         let toward_body = geom.pins.iter().find(|g| g.number == number).map(|g| g.orient.dir()).expect("the pin has a geometry");
-        let end = Point { x: tip.x - (toward_body.0 * 12_700_000.0).round() as i64, y: tip.y - (toward_body.1 * 12_700_000.0).round() as i64 };
+        let end = Point { x: tip.x - Nm::from_raw_shim((toward_body.0 * 12_700_000.0).round() as i64), y: tip.y - Nm::from_raw_shim((toward_body.1 * 12_700_000.0).round() as i64) };
         sch.wires.push(Wire { id: format!("w_{net}"), net: net.clone(), pins: vec![], pts: vec![tip, end], bus: false });
         sch.labels.push(NetLabel { id: format!("l_{net}"), net, at: end, kind: LabelKind::Local });
     }

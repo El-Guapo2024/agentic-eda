@@ -232,3 +232,107 @@ Two tolerances stay or got looser, each for a reason:
 4. `tools/parity_report.py`: re-export 12/12, connectivity 98.9% (552/558), and the floor raised to it.
 5. `tools/run-all-checks.sh -j 3`: 42/42.
 6. The migration test (`crates/cli/tests/nanometre_migration.rs`, `crates/model/tests/nanometre_migration.rs`): passes, fast and slow.
+
+## The length type (task-length-newtype, 2026-10-24)
+
+The user's decision of 2026-10-24: lengths are a type of their own, so the compiler catches unit mixing. A tuner default board thickness written
+`1_600` (1.6 µm) for `1_600_000` was the bug of this kind that prompted it: with `Nm = i64` nothing stopped a millimetre float, a micrometre literal
+or a count from being taken for a length.
+
+### `eda_model::units::Nm`
+
+`#[repr(transparent)]` over `i64`, `#[serde(transparent)]`: `design.json`, the intents, the API's JSON and `schema` 2 are the bytes they were, and the
+schema-1 x1000 migration (`units::de`, `Lengths`) reads into it as it read into the `i64`.
+
+| | |
+|---|---|
+| build | `Nm::new(i64)` (a count of nanometres, `const`), `Nm::from_mm(f64)` (KiCad's `parseBoardUnits`: `KiROUND` of the clamp to `INT_LIMIT`), `Nm::kiround(f64)` (a length computed in floating-point nanometres), `units::mm(f64)` / `um(f64)` / `mil(f64)` (a typed or test value, rounded half away from zero, no clamp), `Nm::ZERO`, `Nm::MAX`, `Nm::MIN` |
+| read | `nm.get()` (the count), `nm.mm()`, `nm.um()`, `nm.mils()`, `nm.as_f64()` (nanometres as a float, for geometry), `a.ratio(b)` (`a / b` as a float), `a.area(b)` (nm^2 as an `i128`) |
+| arithmetic | `Nm ± Nm` (also by reference), `-Nm`, `Nm * i64`, `i64 * Nm`, `Nm / i64`, `Nm % Nm`, `Nm / Nm -> i64` (a count, truncated), `+=`, `-=`, `*= i64`, `/= i64`, `Sum`, `abs`, `signum -> i64`, `min` / `max` / `clamp` (`Ord`), `rem_euclid(Nm) -> Nm`, `div_euclid(Nm) -> i64`, `checked_add` / `_sub`, `saturating_add` / `_sub`, `scale(f64)` (`KiROUND( v * k )`), `sch_round()` |
+| not there | `Nm * Nm` (an area is not a length: `area`), `Nm + i64`, `as` casts, `From<i64>` (no silent conversion either way) |
+| printed | `Debug` and `Display` print the bare count, as the `i64` did (messages, `{:?}` keys and snapshots are unchanged); `FromStr` parses a count; `serde_json::Value::from(nm)` is the count |
+
+The ratios `NM_PER_MM`, `NM_PER_UM`, `NM_PER_MIL`, `NM_PER_INCH`, `SCH_IU_NM` stay `i64`: they are counts per unit, not lengths.
+
+### Wave 1: the IR, and shims everywhere else
+
+`crates/model` is converted: `Point`, every length field of the IR (footprints, rules, stackup, outlines, groups, tables, tuning, the overlays),
+and the model's own helpers (`table_text`, `reannotate`, `annotate`'s positions, the floorplan, the board trim). Length fields that were bare `i64`
+became `Nm`: `ErcMarker::at_nm`, `DrcExclusion::positions_nm`, `TuningPattern::last_tuning_length`, `ReannotateInput` / `Listed` / `Bad` `x`,
+`y`, `annotate::Entry::pos`. Three of those held nanometres even in the micrometre IR and were never scaled by the migration, rightly; the source test
+of `tests/nanometre_migration.rs` now takes a field marked `// nanometres since schema 1` as one that is not scaled. What stays `i64` on purpose:
+`TargetRange` (nanometres or attoseconds, by the pattern's domain), `kicad_font` / `kicad_geom` (KiCad's schematic IU, 100 nm), areas
+(`min_island_area`, nm^2), counts and angles.
+
+The other crates compile through **shims**, kept in each crate's own files so the crates can be converted one by one:
+
+- `nm.raw_shim()`: the same as `nm.get()`, where a length meets code that still holds lengths as `i64`;
+- `Nm::from_raw_shim(v)`: the same as `Nm::new(v)`, where an `i64` (a literal, a value from code not converted yet) becomes a length.
+
+Both are `#[doc(hidden)]` and named for `grep -rn raw_shim crates/<crate>`. A literal `0` became `Nm::ZERO` and a type annotation that held an IR
+length became `Nm` where that was the smaller change; neither is a shim. Wave 2 replaces every shim with the typed form: a literal with `mm(..)`,
+`Nm::from_mm`, or a typed constant (`const X: Nm = Nm::new(..)`), and an `i64` local, field, parameter or return type that holds a length with `Nm`.
+Kernels on raw integers (clipper2, shape-poly-set, the Specctra `V`, the router's force vectors) keep their `i64` and convert at their boundary with
+`get` / `new`. The counts per crate at the end of wave 1 are in the table below (`.raw_shim()` / `from_raw_shim(`).
+
+Shims at the end of wave 1 (`grep -c`; "test" is a `tests/` file, a `*_tests.rs` / `tests.rs` file or a `#[cfg(test)]` module at the end of a
+file; nearly all the test ones are literals in `Nm::from_raw_shim(..)`):
+
+| crate | code `.raw_shim()` | code `from_raw_shim(` | test `.raw_shim()` | test `from_raw_shim(` | total |
+|---|---:|---:|---:|---:|---:|
+| ops | 237 | 169 | 67 | 4908 | 5381 |
+| pns | 368 | 202 | 113 | 2816 | 3499 |
+| cli | 191 | 134 | 66 | 1437 | 1828 |
+| kicad | 71 | 117 | 38 | 1317 | 1543 |
+| drc | 333 | 131 | 3 | 364 | 831 |
+| connectivity | 114 | 35 | 15 | 279 | 443 |
+| engine | 135 | 123 | 30 | 117 | 405 |
+| gates | 45 | 8 | 0 | 270 | 323 |
+| lint | 76 | 11 | 0 | 92 | 179 |
+| place | 63 | 54 | 0 | 14 | 131 |
+| kicad-engine | 2 | 7 | 9 | 81 | 99 |
+| freeroute | 45 | 6 | 0 | 27 | 78 |
+| interchange | 38 | 7 | 0 | 30 | 75 |
+| cypress | 28 | 25 | 0 | 0 | 53 |
+| render | 30 | 2 | 6 | 4 | 42 |
+| grid | 17 | 10 | 0 | 8 | 35 |
+| eda | 0 | 0 | 0 | 18 | 18 |
+| intent | 0 | 0 | 6 | 10 | 16 |
+| judge | 4 | 0 | 0 | 0 | 4 |
+| **total** | 1797 | 1041 | 353 | 11792 | 14983 |
+
+The shims were put in mechanically (a script driven by the compiler's diagnostics, then the rest by hand), so many read badly
+(`Nm::from_raw_shim((a - b).raw_shim())`); wave 2 should rewrite an expression, not just drop the markers.
+
+### Bugs the shims showed
+
+A length literal is a shim outside `crates/model`, so each micrometre left over from the IR's micrometre days shows up as a small
+`Nm::from_raw_shim(..)`. Three were real, each fixed in a commit of its own with a test (after the no-change proofs):
+
+- `crates/engine/src/hier/kit.rs::nc_rect`: a no-connect flag's obstacle was +-610 nm (the micrometre 610); now KiCad's 48 mil square.
+- `crates/cli/src/fp_json.rs`: a complex pad's outline for the studio at a max error of 5 nm (the micrometre 5), ~2800 vertices for one custom
+  pad's ring; now `ARC_HIGH_DEF`.
+- `crates/drc/src/board.rs::exported_refdes_shape`: the reference's silk box was 220 nm a character by 500 nm (the anchor's constants beside it
+  had been converted); now 0.22 mm by 0.5 mm.
+
+Left as they are (no unit question, or arbitrary): `ops/src/pcb_items.rs` pads a text box of fewer than four points with corners 10 nm apart
+(10 µm before); the tests' self-consistent small coordinates.
+
+### Proof of no behaviour change
+
+Every shim and every conversion is the identity on the bits, and every operator of `Nm` is the `i64` operator: a program that compiles computes the
+same numbers. Checked by: every test passes with its assertions unchanged (only the types and constructors of test literals changed);
+`tools/same_design.sh <main's eda> <this eda>` (every example through `eda pipeline` at seed 0 and every KiCad QA board through `eda import-kicad`,
+every file compared with `cmp`); `tools/parity_report.py` re-export and connectivity as on main; `tools/run-all-checks.sh`.
+
+### Gates (2026-10-25, on the box)
+
+1. `cargo check --workspace --tests --keep-going`: no warnings.
+2. `tools/check.sh fast`: on the refactor (`c333fc24`) `rust (debug): 3737 passed, 0 failed, 25 ignored`; on the branch with the three fixes
+   `rust (debug): 3740 passed, 0 failed, 25 ignored`; `web: typecheck ok, 2466 unit tests passed`.
+3. `tools/same_design.sh <main 5874839b's eda> <this eda>` (release, on the refactor): `same_design: 138 same, 0 different (8 of the same runs
+   failed in both)` (13 pipelines, 125 KiCad QA imports; the 8 fail the same way on both).
+4. `tools/parity_report.py` (`EDA_PARITY_PARTS=reexport`), run on main and on the refactor: `docs/parity/raw/connectivity.json` and
+   `roundtrip.json` identical but for the date; re-export 12/12, connectivity 552/558 (98.9%).
+5. `tools/run-all-checks.sh -j 2 --ports 8822-8823`: 43 passed, 1 failed of 44 (`import-foreign`: `KICAD_SRC_DIR` was not set), and
+   `import-foreign` alone with it set: 1 passed of 1. So 44/44.

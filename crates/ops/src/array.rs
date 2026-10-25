@@ -168,10 +168,10 @@ impl ArrayGeometry {
                 if nx < 1 || ny < 1 {
                     return Err("a grid array needs at least one row and one column".into());
                 }
-                if nx > 1 && dx == 0 {
+                if nx > 1 && dx == Nm::ZERO {
                     return Err(format!("horizontal delta of zero with {nx} objects"));
                 }
-                if ny > 1 && dy == 0 {
+                if ny > 1 && dy == Nm::ZERO {
                     return Err(format!("vertical delta of zero with {ny} objects"));
                 }
             }
@@ -201,13 +201,13 @@ pub(crate) fn shape_position(s: &Shape) -> Point {
 
 /// The centre of the circle through three points; `None` when they are in a line.
 fn arc_centre(a: Point, b: Point, c: Point) -> Option<Point> {
-    let (ax, ay, bx, by, cx, cy) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, c.x as f64, c.y as f64);
+    let (ax, ay, bx, by, cx, cy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, b.x.raw_shim() as f64, b.y.raw_shim() as f64, c.x.raw_shim() as f64, c.y.raw_shim() as f64);
     let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
     if d.abs() < 1e-9 {
         return None;
     }
     let (a2, b2, c2) = (ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy);
-    Some(Point { x: ((a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d).round() as Nm, y: ((a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d).round() as Nm })
+    Some(Point { x: Nm::from_raw_shim(((a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d).round() as i64), y: Nm::from_raw_shim(((a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d).round() as i64) })
 }
 
 /// The centre of the box the points span (`PCB_GROUP::GetPosition` is the middle of its bounding box).
@@ -302,7 +302,7 @@ impl Board<'_> {
     fn transform_on_board(&mut self, id: &str, geometry: &ArrayGeometry, index: i64) -> Result<(), Vec<CheckResult>> {
         let Some(pos) = self.item_position(id) else { return Ok(()) };
         let (offset, turn) = geometry.transform(index, pos);
-        if offset != (Point { x: 0, y: 0 }) {
+        if offset != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
             self.transform_items("array", std::slice::from_ref(&id.to_string()), Xform::Move { dx: offset.x, dy: offset.y })?;
         }
         if turn != 0 {

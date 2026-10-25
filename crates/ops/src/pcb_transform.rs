@@ -66,7 +66,7 @@ impl Xform {
     fn vector(self, v: Point) -> Point {
         match self {
             Xform::Move { .. } => v,
-            Xform::Rotate { angle, .. } => rotate_point_about(v, Point { x: 0, y: 0 }, angle),
+            Xform::Rotate { angle, .. } => rotate_point_about(v, Point { x: Nm::ZERO, y: Nm::ZERO }, angle),
             Xform::Flip { dir: FlipDirection::LeftRight, .. } => Point { x: -v.x, y: v.y },
             Xform::Flip { dir: FlipDirection::TopBottom, .. } => Point { x: v.x, y: -v.y },
         }

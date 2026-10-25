@@ -6,6 +6,7 @@
 //! stroke font's widths, `crate::fields` for where Autoplace Fields puts the fields), the same ones the overlap checker
 //! (`eda_kicad::sch_overlap`) holds the written `.kicad_sch` files to. Everything is nanometres, rounded outward to whole ones.
 
+use eda_model::units::Nm;
 use eda_layout::{Point as LPoint, Side};
 use eda_model::ir::{Point, PowerSymbol, SymbolInstance};
 use eda_model::kicad_font::{HJustify, VJustify};
@@ -81,7 +82,7 @@ pub fn outward(r: kg::Rect) -> Rect {
 }
 
 fn fpt(p: Point) -> (f64, f64) {
-    (p.x as f64, p.y as f64)
+    (p.x.raw_shim() as f64, p.y.raw_shim() as f64)
 }
 
 /// `EDA_TEXT::GetTextBox` of one line of 1.27 mm text at `anchor`, justified `h`/`v`, turned a quarter when `vertical`.
@@ -215,9 +216,9 @@ impl Placed {
     /// `SymbolInstance::at` for the current pose.
     pub fn at(&self) -> Point {
         if self.flip {
-            Point { x: self.x + self.w(), y: self.y + self.h() }
+            Point { x: Nm::from_raw_shim(self.x + self.w()), y: Nm::from_raw_shim(self.y + self.h()) }
         } else {
-            Point { x: self.x, y: self.y }
+            Point { x: Nm::from_raw_shim(self.x), y: Nm::from_raw_shim(self.y) }
         }
     }
 
@@ -240,9 +241,9 @@ impl Placed {
         let l = self.b.node.stub_tip(LPoint { x: 0, y: 0 }, pi);
         let side = self.b.node.ports[pi].side;
         if self.flip {
-            Some((Point { x: self.x + self.w() - l.x, y: self.y + self.h() - l.y }, flip_side(side)))
+            Some((Point { x: Nm::from_raw_shim(self.x + self.w() - l.x), y: Nm::from_raw_shim(self.y + self.h() - l.y) }, flip_side(side)))
         } else {
-            Some((Point { x: self.x + l.x, y: self.y + l.y }, side))
+            Some((Point { x: Nm::from_raw_shim(self.x + l.x), y: Nm::from_raw_shim(self.y + l.y) }, side))
         }
     }
 
@@ -251,8 +252,8 @@ impl Placed {
         self.x = 0;
         self.y = 0;
         if let Some((t, _)) = self.tip(pin_number) {
-            self.x = target.x - t.x;
-            self.y = target.y - t.y;
+            self.x = (target.x - t.x).raw_shim();
+            self.y = (target.y - t.y).raw_shim();
         }
     }
 
@@ -391,9 +392,13 @@ pub fn sheet_pin_rect(pin: Point, left: bool, name: &str) -> Rect {
     outward(kg::hier_label_rect(&TextStyle::new(h, VJustify::Center), name, fpt(pin), spin))
 }
 
-/// A no-connect flag.
+/// Half the side of a no-connect flag: `m_size = schIUScale.MilsToIU( DEFAULT_NOCONNECT_SIZE )` (48 mil, `eeschema/default_values.h`), halved.
+/// (It was written `610` when the IR was micrometres, 0.61 mm, and was left at 610 nm by the move to nanometres.)
+const NC_HALF_NM: Nm = Nm::new(609_600);
+
+/// A no-connect flag: the cross's own square, `SCH_NO_CONNECT`'s size about its position (KiCad's `GetBoundingBox` adds half the pen).
 pub fn nc_rect(at: Point) -> Rect {
-    Rect { x0: at.x - 610, y0: at.y - 610, x1: at.x + 610, y1: at.y + 610 }
+    Rect { x0: (at.x - NC_HALF_NM).raw_shim(), y0: (at.y - NC_HALF_NM).raw_shim(), x1: (at.x + NC_HALF_NM).raw_shim(), y1: (at.y + NC_HALF_NM).raw_shim() }
 }
 
 #[cfg(test)]
@@ -401,6 +406,15 @@ mod tests {
     use super::*;
     use crate::geometry::STUB;
     use eda_model::{Pin, PinKind};
+
+    /// The flag is KiCad's 48 mil square, not a thousandth of it (the micrometre `610` read as nanometres).
+    #[test]
+    fn a_no_connect_flag_is_48_mil_across() {
+        let at = Point { x: Nm::new(10_160_000), y: Nm::new(5_080_000) };
+        let r = nc_rect(at);
+        assert_eq!((r.x1 - r.x0, r.y1 - r.y0), (1_219_200, 1_219_200));
+        assert_eq!((r.x0 + r.x1, r.y0 + r.y1), (2 * at.x.get(), 2 * at.y.get()), "centred on the flag");
+    }
 
     fn two_pin(reference: &str, value: &str) -> Part {
         Part {
@@ -440,22 +454,22 @@ mod tests {
         r.y = 10 * G;
         let (top, side) = r.tip("1").unwrap();
         assert_eq!(side, Side::Top);
-        assert_eq!(top.y, r.y - STUB);
+        assert_eq!(top.y, Nm::from_raw_shim(r.y - STUB));
         let (bottom, _) = r.tip("2").unwrap();
-        assert_eq!(bottom.y, r.y + r.h() + STUB);
+        assert_eq!(bottom.y, Nm::from_raw_shim(r.y + r.h() + STUB));
         let fields = r.field_rects();
         assert!(fields.iter().all(|f| f.x0 >= r.body_rect().x1), "fields sit to the right of the body: {fields:?}");
         // Turned half a turn, pin 2 is the top one, in the same column.
         r.flip = true;
         let (top2, _) = r.tip("2").unwrap();
         let (bottom1, _) = r.tip("1").unwrap();
-        assert_eq!(top2.y, r.y - STUB);
-        assert_eq!(bottom1.y, r.y + r.h() + STUB);
+        assert_eq!(top2.y, Nm::from_raw_shim(r.y - STUB));
+        assert_eq!(bottom1.y, Nm::from_raw_shim(r.y + r.h() + STUB));
         assert_eq!(top2.x, top.x);
-        assert_eq!(r.at().x, r.x + r.w());
+        assert_eq!(r.at().x, Nm::from_raw_shim(r.x + r.w()));
         // place_tip puts a chosen tip where asked.
-        r.place_tip("2", Point { x: 5 * G, y: 7 * G });
-        assert_eq!(r.tip("2").unwrap().0, Point { x: 5 * G, y: 7 * G });
+        r.place_tip("2", Point { x: Nm::from_raw_shim(5 * G), y: Nm::from_raw_shim(7 * G) });
+        assert_eq!(r.tip("2").unwrap().0, Point { x: Nm::from_raw_shim(5 * G), y: Nm::from_raw_shim(7 * G) });
     }
 
     #[test]

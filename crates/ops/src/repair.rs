@@ -29,6 +29,7 @@
 //! gates decide, exactly as they do for placement. A proposed move that
 //! makes things worse costs a fork and is discarded.
 
+use eda_model::units::Nm;
 use crate::{Board, Cmd, Dir};
 use eda_model::{CheckResult, ConstraintModel};
 use std::collections::BTreeSet;
@@ -112,8 +113,8 @@ fn distances(board: &Board, model: &ConstraintModel, a: &str, b: &str) -> Option
     let pl = d.placement.as_ref()?;
     let fa = pl.footprints.iter().find(|f| f.id == a)?;
     let fb = pl.footprints.iter().find(|f| f.id == b)?;
-    let dx = (fa.at.x - fb.at.x) as f64;
-    let dy = (fa.at.y - fb.at.y) as f64;
+    let dx = (fa.at.x - fb.at.x).raw_shim() as f64;
+    let dy = (fa.at.y - fb.at.y).raw_shim() as f64;
     let apart = (dx * dx + dy * dy).sqrt() as i64;
     // The tightest proximity rule naming this pair, in µm.
     let allowed = model
@@ -128,8 +129,8 @@ fn distances(board: &Board, model: &ConstraintModel, a: &str, b: &str) -> Option
             _ => None,
         })
         .min()
-        .unwrap_or(apart);
-    Some((apart, allowed))
+        .unwrap_or(Nm::from_raw_shim(apart));
+    Some((apart, allowed.raw_shim()))
 }
 
 /// What a repair move must not make worse: courtyards overlapping on one
@@ -149,7 +150,7 @@ fn faults(board: &Board) -> usize {
 pub(crate) fn courtyard_overlaps(board: &Board) -> usize {
     let model = board.model();
     let Some(pl) = board.design().placement.as_ref() else { return 0 };
-    let rects: Vec<(eda_model::ir::Side, (i64, i64, i64, i64))> = pl
+    let rects: Vec<(eda_model::ir::Side, (Nm, Nm, Nm, Nm))> = pl
         .footprints
         .iter()
         .filter_map(|fp| Some((fp.side, eda_model::footprint::placed_courtyard(model, model.part(&fp.id)?, fp)?)))
@@ -209,7 +210,7 @@ fn offset(board: &Board, mover: &str, toward: &str) -> Option<(i64, i64)> {
     let pl = d.placement.as_ref()?;
     let m = pl.footprints.iter().find(|f| f.id == mover)?;
     let t = pl.footprints.iter().find(|f| f.id == toward)?;
-    Some((m.at.x - t.at.x, m.at.y - t.at.y))
+    Some(((m.at.x - t.at.x).raw_shim(), (m.at.y - t.at.y).raw_shim()))
 }
 
 /// Repair what can be repaired, returning how many failures were closed.
@@ -227,9 +228,9 @@ pub fn repair(board: &mut Board, model: &ConstraintModel, max_steps: u32) -> usi
                     fix.mover,
                     fix.toward,
                     fix.check,
-                    eda_model::units::to_mm(fix.apart_nm),
-                    eda_model::units::to_mm(fix.allowed_nm),
-                    eda_model::units::to_mm(fix.close_nm())
+                    eda_model::units::to_mm(Nm::from_raw_shim(fix.apart_nm)),
+                    eda_model::units::to_mm(Nm::from_raw_shim(fix.allowed_nm)),
+                    eda_model::units::to_mm(Nm::from_raw_shim(fix.close_nm()))
                 );
             }
             let was = board.failures();
@@ -299,7 +300,7 @@ fn replace(board: &mut Board, model: &ConstraintModel, fix: &Fix) -> bool {
             .iter()
             .map(|f| f.id.clone())
             .filter(|k| k != mover && *k != fix.toward && !pin.contains(k))
-            .filter(|k| rect(k).is_some_and(|r| r.0 - reach < t.2 && t.0 < r.2 + reach && r.1 - reach < t.3 && t.1 < r.3 + reach))
+            .filter(|k| rect(k).is_some_and(|r| r.0 - Nm::from_raw_shim(reach) < t.2 && t.0 < r.2 + Nm::from_raw_shim(reach) && r.1 - Nm::from_raw_shim(reach) < t.3 && t.1 < r.3 + Nm::from_raw_shim(reach)))
             .collect();
         for k in near {
             let mut moves = Vec::new();
@@ -418,7 +419,7 @@ fn reorder_chains(board: &mut Board, model: &ConstraintModel) -> bool {
     let pin_at = |fp: &eda_model::ir::FootprintInstance, number: &str| -> Option<(f64, f64)> {
         let pads = eda_model::footprint::placed_pads(model, model.part(&fp.id)?, fp)?;
         let on: Vec<_> = pads.iter().filter(|p| p.number == number).collect();
-        (!on.is_empty()).then(|| (on.iter().map(|p| p.center.x as f64).sum::<f64>() / on.len() as f64, on.iter().map(|p| p.center.y as f64).sum::<f64>() / on.len() as f64))
+        (!on.is_empty()).then(|| (on.iter().map(|p| p.center.x.raw_shim() as f64).sum::<f64>() / on.len() as f64, on.iter().map(|p| p.center.y.raw_shim() as f64).sum::<f64>() / on.len() as f64))
     };
     let shape = |c: &Chain| -> Vec<String> { c.parts.iter().map(|(p, _)| model.part(p).map(crate::footprint_name_of).unwrap_or_default()).collect() };
     // the groups: one head, one shape, every part placed
@@ -439,7 +440,7 @@ fn reorder_chains(board: &mut Board, model: &ConstraintModel) -> bool {
             continue;
         }
         let Some(hfp) = fp_of(head) else { continue };
-        let centre = (hfp.at.x as f64, hfp.at.y as f64);
+        let centre = (hfp.at.x.raw_shim() as f64, hfp.at.y.raw_shim() as f64);
         let angle = |p: (f64, f64)| (p.1 - centre.1).atan2(p.0 - centre.0);
         // the chains in the order of their pins round the head, and their places in the order round it
         let mut by_pin: Vec<(f64, &Chain)> = group.iter().filter_map(|c| Some((angle(pin_at(&hfp, &c.head_pin)?), *c))).collect();
@@ -448,7 +449,7 @@ fn reorder_chains(board: &mut Board, model: &ConstraintModel) -> bool {
         }
         by_pin.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.parts[0].0.cmp(&b.1.parts[0].0)));
         let mut slots: Vec<(f64, Vec<eda_model::ir::FootprintInstance>)> =
-            group.iter().map(|c| { let fps: Vec<_> = c.parts.iter().filter_map(|(p, _)| fp_of(p)).collect(); (angle((fps[0].at.x as f64, fps[0].at.y as f64)), fps) }).collect();
+            group.iter().map(|c| { let fps: Vec<_> = c.parts.iter().filter_map(|(p, _)| fp_of(p)).collect(); (angle((fps[0].at.x.raw_shim() as f64, fps[0].at.y.raw_shim() as f64)), fps) }).collect();
         slots.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1[0].id.cmp(&b.1[0].id)));
         let n = by_pin.len();
         for shift in 0..n {
@@ -607,6 +608,7 @@ pub fn unactionable(board: &Board) -> Vec<CheckResult> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Design, PlacementSection, Point, Provenance};
     use eda_model::{Net, Part, Pin, PinKind};
@@ -653,13 +655,13 @@ mod tests {
             schematic: None,
             nets: None,
             routing: None,
-            placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: o, y: 0 }, Point { x: o, y: o }, Point { x: 0, y: o }], footprints: vec![], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(o), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(o), y: Nm::from_raw_shim(o) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(o) }], footprints: vec![], modules: vec![] }),
             drawings: None,
         }
     }
 
     fn y_of(b: &Board, r: &str) -> i64 {
-        b.design().placement.as_ref().unwrap().footprints.iter().find(|f| f.id == r).unwrap().at.y
+        (b.design().placement.as_ref().unwrap().footprints.iter().find(|f| f.id == r).unwrap().at.y).raw_shim()
     }
 
     /// The chains down the left side in the reverse of their pins' order (R3 at the top, R1 at the bottom): every pair of PA stubs crosses, and one
@@ -667,11 +669,11 @@ mod tests {
     #[test]
     fn chains_hung_out_of_their_pins_order_are_put_in_it() {
         let m = model();
-        let mut b = Board::new(design(), &m, 100_000, 300_000);
-        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 50_000_000, y: 50_000_000 }).unwrap();
+        let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }).unwrap();
         for (i, y) in [(3, 47_000_000), (2, 49_500_000), (1, 52_000_000)] {
-            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: 44_500_000, y }).unwrap();
-            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: 41_500_000, y }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: Nm::from_raw_shim(44_500_000), y: Nm::from_raw_shim(y) }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: Nm::from_raw_shim(41_500_000), y: Nm::from_raw_shim(y) }).unwrap();
         }
         let (_, before) = crossing_pairs(&b);
         assert_eq!(before.len(), 3, "{before:?}");
@@ -688,11 +690,11 @@ mod tests {
     #[test]
     fn chains_in_their_pins_order_stay() {
         let m = model();
-        let mut b = Board::new(design(), &m, 100_000, 300_000);
-        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 50_000_000, y: 50_000_000 }).unwrap();
+        let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }).unwrap();
         for (i, y) in [(1, 47_000_000), (2, 49_500_000), (3, 52_000_000)] {
-            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: 44_500_000, y }).unwrap();
-            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: 41_500_000, y }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: Nm::from_raw_shim(44_500_000), y: Nm::from_raw_shim(y) }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: Nm::from_raw_shim(41_500_000), y: Nm::from_raw_shim(y) }).unwrap();
         }
         let was = b.design().placement.clone();
         assert!(!reorder_chains(&mut b, &m));

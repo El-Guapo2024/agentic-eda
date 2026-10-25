@@ -8,6 +8,7 @@
 //! names join them across sheets, as in any KiCad design. One `PWR_FLAG` per rail that needs a source goes on the first sheet that
 //! has a pin on it.
 
+use eda_model::units::Nm;
 use std::collections::{BTreeMap, BTreeSet};
 
 use eda_model::ir::{Design, PowerSymbol, Provenance, SchematicSection, TitleBlock};
@@ -108,8 +109,8 @@ pub(super) fn flag_nets(ctx: &Ctx) -> Vec<(String, Vec<String>)> {
 /// Move every item of a section by `(dx, dy)`.
 pub fn translate_section(sch: &mut SchematicSection, dx: i64, dy: i64) {
     let shift = |p: &mut eda_model::ir::Point| {
-        p.x += dx;
-        p.y += dy;
+        p.x += Nm::from_raw_shim(dx);
+        p.y += Nm::from_raw_shim(dy);
     };
     sch.symbols.iter_mut().for_each(|s| shift(&mut s.at));
     sch.wires.iter_mut().flat_map(|w| w.pts.iter_mut()).for_each(shift);
@@ -162,8 +163,8 @@ pub fn flat_extent(sch: &SchematicSection, model: &ConstraintModel) -> Option<ki
         let package = part.package.clone().unwrap_or_default();
         let mut p = Placed::new(part, &lib_id, resolved, &s.value, &package);
         p.flip = s.rot == 180_000;
-        p.x = if p.flip { s.at.x - p.w() } else { s.at.x };
-        p.y = if p.flip { s.at.y - p.h() } else { s.at.y };
+        p.x = if p.flip { (s.at.x - Nm::from_raw_shim(p.w())).raw_shim() } else { s.at.x.raw_shim() };
+        p.y = if p.flip { (s.at.y - Nm::from_raw_shim(p.h())).raw_shim() } else { s.at.y.raw_shim() };
         rects.push(p.keepout_in(sch));
     }
     for l in &sch.labels {
@@ -178,7 +179,7 @@ pub fn flat_extent(sch: &SchematicSection, model: &ConstraintModel) -> Option<ki
     }
     for w in &sch.wires {
         for p in &w.pts {
-            rects.push(Rect { x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+            rects.push(Rect { x0: p.x.raw_shim(), y0: p.y.raw_shim(), x1: p.x.raw_shim(), y1: p.y.raw_shim() });
         }
     }
     union_all(rects)

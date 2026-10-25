@@ -130,13 +130,13 @@ fn conditionally_flashed(mode: UnconnectedLayers, lo: i32, hi: i32) -> Vec<i32> 
 fn pad_hole(fp: &eda_model::ir::FootprintInstance, source: &eda_model::footprint::Pad, center: Point) -> Option<ItemShape> {
     if let Some((w, h)) = source.drill_slot {
         let frame = eda_model::pad_geom::PadFrame::of(fp, source, center);
-        let half = (w.max(h) - w.min(h)) as f64 / 2.0;
+        let half = (w.max(h) - w.min(h)).raw_shim() as f64 / 2.0;
         let (a, b) = if w >= h { ((-half, 0.0), (half, 0.0)) } else { ((0.0, -half), (0.0, half)) };
         let (a, b) = (frame.to_board(a), frame.to_board(b));
-        let pt = |q: (f64, f64)| Point { x: q.0.round() as Nm, y: q.1.round() as Nm };
-        return Some(ItemShape::Segment { a: pt(a), b: pt(b), half_width: w.min(h) as f64 / 2.0 });
+        let pt = |q: (f64, f64)| Point { x: Nm::from_raw_shim(q.0.round() as i64), y: Nm::from_raw_shim(q.1.round() as i64) };
+        return Some(ItemShape::Segment { a: pt(a), b: pt(b), half_width: (w.min(h)).raw_shim() as f64 / 2.0 });
     }
-    source.drill.map(|d| ItemShape::Via { center, radius: d as f64 / 2.0 })
+    source.drill.map(|d| ItemShape::Via { center, radius: d.raw_shim() as f64 / 2.0 })
 }
 
 /// [`CnItem::never_flashed`] of a plated through-hole pad (its drill from the first copper layer to the last).
@@ -276,8 +276,8 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
     if let Some(rt) = &design.routing {
         for t in &rt.tracks {
             let layer = layer_index(layers, &t.layer);
-            let half_width = t.width as f64 / 2.0;
-            let margin = (half_width.ceil() as Nm).max(0);
+            let half_width = t.width.raw_shim() as f64 / 2.0;
+            let margin = Nm::from_raw_shim(half_width.ceil() as i64).max(Nm::ZERO);
             // An arc is one item (`CN_LIST::Add( PCB_ARC* )`: `AddAnchor( GetStart() )`, `AddAnchor( GetEnd() )`), not the pieces of its tessellation:
             // a piece in the middle is no end of anything, and the importer's rounding of a small arc to nanometres repeats points of it.
             if t.arc().is_some() {
@@ -322,12 +322,12 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                 let (a, b) = (layer_index(layers, &v.from_layer), layer_index(layers, &v.to_layer));
                 (a.min(b), a.max(b))
             };
-            let radius = v.diameter as f64 / 2.0;
-            let margin = (v.diameter / 2).max(0);
+            let radius = v.diameter.raw_shim() as f64 / 2.0;
+            let margin = (v.diameter / 2).max(Nm::ZERO);
             let bbox = (v.at.x - margin, v.at.y - margin, v.at.x + margin, v.at.y + margin);
             let mode = design.drawings.as_ref().and_then(|d| d.via_extras.iter().find(|x| x.id == v.id)).map(|x| x.unconnected_layers()).unwrap_or_default();
             let flashed_off = conditionally_flashed(mode, lo, hi);
-            let never_flashed = (!flashed_off.is_empty()).then(|| (flashed_off, ItemShape::Via { center: v.at, radius: v.drill as f64 / 2.0 }));
+            let never_flashed = (!flashed_off.is_empty()).then(|| (flashed_off, ItemShape::Via { center: v.at, radius: v.drill.raw_shim() as f64 / 2.0 }));
             items.push(CnItem { item: ItemRef::Via { via_id: v.id.clone() }, net: v.net.clone(), can_change_net: true, layer_lo: lo, layer_hi: hi, anchors: vec![v.at], shape: ItemShape::Via { center: v.at, radius }, bbox, connected: Vec::new(), pad_piece_of: None, never_flashed });
         }
 
@@ -338,7 +338,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                     let layer = layer_index(layers, layer_name);
                     // No fill for the zone on this layer: no copper there yet.
                     let fragments: Vec<Vec<Point>> = match copper.get(&z.id, layer_name) {
-                        Some(fill) => fill.polys.iter().filter_map(|poly| poly.first()).map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect()).collect(),
+                        Some(fill) => fill.polys.iter().filter_map(|poly| poly.first()).map(|chain| chain.iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect()).collect(),
                         None => Vec::new(),
                     };
 
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn builds_one_item_per_pad_and_per_track_segment() {
         let (mut design, model) = two_pad_model();
-        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![Point { x: 0, y: 0 }, Point { x: 100_000, y: 0 }, Point { x: 100_000, y: 100_000 }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(100_000) }], arc_mid_offset: None });
         let items = build_items(&design, &model, &ZoneCopper::default());
         let pads = items.iter().filter(|i| matches!(i.item, ItemRef::Pad { .. })).count();
         let segs = items.iter().filter(|i| matches!(i.item, ItemRef::TrackSeg { .. })).count();
@@ -390,7 +390,7 @@ mod tests {
         let (design, mut model) = two_pad_model();
         model.footprints.push(eda_model::Footprint {
             name: "THPAD".into(),
-            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1_000_000, 1_000_000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500_000), drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(Nm::from_raw_shim(500_000)), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],

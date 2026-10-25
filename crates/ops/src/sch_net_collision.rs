@@ -16,6 +16,7 @@
 //!
 //! The monitor is read in the same code path as the move (`sch_move::run_with_overlay`), so the overlay the studio shows is the one that goes with the preview it shows.
 
+use eda_model::units::Nm;
 use crate::sch_drag::Drag;
 use crate::sch_scene::{on_segment, Item, Scene};
 use eda_model::ir::Point;
@@ -326,16 +327,16 @@ impl Monitor {
 fn pen_width_nm(scene: &Scene, it: Item) -> f64 {
     match it {
         Item::Seg(i) => {
-            let stroke = scene.segs[i].from.and_then(|(wi, _)| scene.sch.extras.strokes.get(&scene.meta[wi].id)).map(|s| s.width_nm).filter(|w| *w > 0);
+            let stroke = scene.segs[i].from.and_then(|(wi, _)| scene.sch.extras.strokes.get(&scene.meta[wi].id)).map(|s| s.width_nm).filter(|w| *w > Nm::ZERO);
             match stroke {
-                Some(w) => w as f64,
+                Some(w) => w.raw_shim() as f64,
                 None if scene.segs[i].bus => 304_800.0,
                 None => 152_400.0,
             }
         }
         Item::Label(i) => {
-            let size = scene.sch.extras.label_looks.get(&scene.sch.labels[i].id).map_or(0, |l| l.text_size_nm());
-            (if size > 0 { size } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }) as f64 / 8.0
+            let size = scene.sch.extras.label_looks.get(&scene.sch.labels[i].id).map_or(Nm::ZERO, |l| l.text_size_nm());
+            (if size > Nm::ZERO { size } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }).raw_shim() as f64 / 8.0
         }
         _ => 0.0,
     }

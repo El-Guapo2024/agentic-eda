@@ -6,6 +6,7 @@
 //!
 //! The functions have the names of the C++ ones: `makePADSTACK`, `makeIMAGE`, `makeVia`, `fillBOUNDARY`, `exportNETCLASS`.
 
+use eda_model::units::Nm;
 use super::board::*;
 use super::geom::*;
 use super::model::*;
@@ -706,7 +707,7 @@ impl<'a> Db<'a> {
             if shapes.is_empty() {
                 return ShapePolySet::new();
             }
-            let (mut polys, ok, _) = eda_drc::outline::convert_outline_to_polygon(&shapes, max_error as f64, chaining_epsilon, true);
+            let (mut polys, ok, _) = eda_drc::outline::convert_outline_to_polygon(&shapes, max_error as f64, Nm::from_raw_shim(chaining_epsilon), true);
             if !ok {
                 return ShapePolySet::new();
             }
@@ -939,8 +940,8 @@ fn shape_polygons(g: &Gfx, error: i64) -> Vec<Vec<V>> {
             }
         }
         GfxShape::Bezier([a, c1, c2, b]) => {
-            let p = |v: &V| eda_model::ir::Point { x: v.x, y: v.y };
-            let poly: Vec<V> = eda_model::bezier::bezier_polyline(p(a), p(c1), p(c2), p(b), error).into_iter().map(|q| V::new(q.x, q.y)).collect();
+            let p = |v: &V| eda_model::ir::Point { x: Nm::from_raw_shim(v.x), y: Nm::from_raw_shim(v.y) };
+            let poly: Vec<V> = eda_model::bezier::bezier_polyline(p(a), p(c1), p(c2), p(b), Nm::from_raw_shim(error)).into_iter().map(|q| V::new(q.x.raw_shim(), q.y.raw_shim())).collect();
             for w in poly.windows(2) {
                 out.push(oval_polygon(w[0], w[1], width, error, loc));
             }

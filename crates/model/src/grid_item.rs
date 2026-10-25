@@ -129,8 +129,8 @@ impl GridItem {
             id: String::new(),
             kind: GridKind::Cartesian,
             at,
-            extent: Point { x: 5_000_000, y: 5_000_000 },
-            spacing: Point { x: 1_000_000, y: 1_000_000 },
+            extent: Point { x: Nm::new(5_000_000), y: Nm::new(5_000_000) },
+            spacing: Point { x: Nm::new(1_000_000), y: Nm::new(1_000_000) },
             angle: 0.0,
             phi_extent_deg: 360.0,
             phi_spacing_deg: 10.0,
@@ -145,7 +145,7 @@ impl GridItem {
     /// `SetAssignedPriority`: 0 is 1; `SetOrientation`: normalised).
     pub fn normalized(mut self) -> GridItem {
         self.extent = Point { x: self.extent.x.abs(), y: self.extent.y.abs() };
-        self.spacing = Point { x: self.spacing.x.max(1), y: self.spacing.y.max(1) };
+        self.spacing = Point { x: self.spacing.x.max(Nm::new(1)), y: self.spacing.y.max(Nm::new(1)) };
         self.phi_extent_deg = self.phi_extent_deg.abs().max(0.001);
         self.phi_spacing_deg = self.phi_spacing_deg.abs().max(0.001);
         if self.priority == 0 {
@@ -162,7 +162,7 @@ impl GridItem {
     /// `PCB_GRID_ITEM::buildOutlineWorld`'s box (`GetBoundingBox`): the rectangle or the wedge turned by the orientation, `[x0, y0, x1, y1]`.
     pub fn bounds(&self) -> [Nm; 4] {
         let pts = self.outline();
-        let mut b = [i64::MAX, i64::MAX, i64::MIN, i64::MIN];
+        let mut b = [Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN];
         for p in pts {
             b = [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)];
         }
@@ -174,14 +174,14 @@ impl GridItem {
     pub fn outline(&self) -> Vec<Point> {
         let (s, c) = self.angle.to_radians().sin_cos();
         // `RotatePoint( local, angle )`: x' = x cos + y sin, y' = y cos - x sin.
-        let world = |x: f64, y: f64| Point { x: self.at.x + (x * c + y * s).round() as i64, y: self.at.y + (y * c - x * s).round() as i64 };
+        let world = |x: f64, y: f64| Point { x: self.at.x + Nm::kiround(x * c + y * s), y: self.at.y + Nm::kiround(y * c - x * s) };
         match self.kind {
             GridKind::Cartesian => {
-                let (ex, ey) = (self.extent.x as f64, self.extent.y as f64);
+                let (ex, ey) = (self.extent.x.as_f64(), self.extent.y.as_f64());
                 vec![world(-ex, -ey), world(ex, -ey), world(ex, ey), world(-ex, ey)]
             }
             GridKind::Polar => {
-                let r = self.extent.x as f64;
+                let r = self.extent.x.as_f64();
                 let phi_max = self.phi_extent_deg.to_radians();
                 let mut out = Vec::new();
                 if phi_max + 1e-9 < 2.0 * std::f64::consts::PI {
@@ -199,8 +199,8 @@ impl GridItem {
     /// `PCB_GRID_ITEM::Rotate`: the centre turned about `centre` by `deg` (positive counter-clockwise on the screen, `RotatePoint`), the orientation by the same.
     pub fn rotate(&mut self, centre: Point, deg: f64) {
         let (s, c) = deg.to_radians().sin_cos();
-        let (dx, dy) = ((self.at.x - centre.x) as f64, (self.at.y - centre.y) as f64);
-        self.at = Point { x: centre.x + (dx * c + dy * s).round() as i64, y: centre.y + (dy * c - dx * s).round() as i64 };
+        let (dx, dy) = ((self.at.x - centre.x).as_f64(), (self.at.y - centre.y).as_f64());
+        self.at = Point { x: centre.x + Nm::kiround(dx * c + dy * s), y: centre.y + Nm::kiround(dy * c - dx * s) };
         self.angle = normalize_deg(self.angle + deg);
     }
 
@@ -222,28 +222,28 @@ mod tests {
 
     #[test]
     fn the_setters_keep_what_kicad_keeps() {
-        let g = GridItem { extent: Point { x: -3_000_000, y: 2_000_000 }, spacing: Point { x: 0, y: -5000 }, phi_extent_deg: -0.0, phi_spacing_deg: 15.0, priority: 0, angle: -90.0, ..GridItem::new(Point { x: 0, y: 0 }) }.normalized();
-        assert_eq!((g.extent, g.spacing, g.priority, g.angle), (Point { x: 3_000_000, y: 2_000_000 }, Point { x: 1, y: 1 }, 1, 270.0));
+        let g = GridItem { extent: Point { x: Nm::new(-3_000_000), y: Nm::new(2_000_000) }, spacing: Point { x: Nm::ZERO, y: Nm::new(-5000) }, phi_extent_deg: -0.0, phi_spacing_deg: 15.0, priority: 0, angle: -90.0, ..GridItem::new(Point { x: Nm::ZERO, y: Nm::ZERO }) }.normalized();
+        assert_eq!((g.extent, g.spacing, g.priority, g.angle), (Point { x: Nm::new(3_000_000), y: Nm::new(2_000_000) }, Point { x: Nm::new(1), y: Nm::new(1) }, 1, 270.0));
         assert_eq!((g.phi_extent_deg, g.phi_spacing_deg), (0.001, 15.0));
     }
 
     #[test]
     fn a_turn_and_a_flip_move_the_centre_and_the_orientation_as_pcb_grid_item_does() {
-        let mut g = GridItem::new(Point { x: 10_000_000, y: 0 });
-        g.rotate(Point { x: 0, y: 0 }, 90.0);
-        assert_eq!((g.at, g.angle), (Point { x: 0, y: -10_000_000 }, 90.0), "counter-clockwise on the screen is up");
-        g.flip(Point { x: 0, y: 0 }, true);
+        let mut g = GridItem::new(Point { x: Nm::new(10_000_000), y: Nm::ZERO });
+        g.rotate(Point { x: Nm::ZERO, y: Nm::ZERO }, 90.0);
+        assert_eq!((g.at, g.angle), (Point { x: Nm::ZERO, y: Nm::new(-10_000_000) }, 90.0), "counter-clockwise on the screen is up");
+        g.flip(Point { x: Nm::ZERO, y: Nm::ZERO }, true);
         assert_eq!(g.angle, 90.0, "180 - 90");
-        g.flip(Point { x: 0, y: 0 }, false);
-        assert_eq!((g.at, g.angle), (Point { x: 0, y: 10_000_000 }, 270.0));
+        g.flip(Point { x: Nm::ZERO, y: Nm::ZERO }, false);
+        assert_eq!((g.at, g.angle), (Point { x: Nm::ZERO, y: Nm::new(10_000_000) }, 270.0));
     }
 
     #[test]
     fn the_outline_is_the_box_or_the_wedge() {
-        let g = GridItem::new(Point { x: 0, y: 0 });
-        assert_eq!(g.bounds(), [-5_000_000, -5_000_000, 5_000_000, 5_000_000]);
-        let wedge = GridItem { kind: GridKind::Polar, extent: Point { x: 4_000_000, y: 0 }, phi_extent_deg: 90.0, ..GridItem::new(Point { x: 0, y: 0 }) };
+        let g = GridItem::new(Point { x: Nm::ZERO, y: Nm::ZERO });
+        assert_eq!(g.bounds(), [Nm::new(-5_000_000), Nm::new(-5_000_000), Nm::new(5_000_000), Nm::new(5_000_000)]);
+        let wedge = GridItem { kind: GridKind::Polar, extent: Point { x: Nm::new(4_000_000), y: Nm::ZERO }, phi_extent_deg: 90.0, ..GridItem::new(Point { x: Nm::ZERO, y: Nm::ZERO }) };
         assert_eq!(wedge.outline().len(), 34, "the apex and 33 arc points");
-        assert_eq!(wedge.bounds(), [0, 0, 4_000_000, 4_000_000]);
+        assert_eq!(wedge.bounds(), [Nm::ZERO, Nm::ZERO, Nm::new(4_000_000), Nm::new(4_000_000)]);
     }
 }

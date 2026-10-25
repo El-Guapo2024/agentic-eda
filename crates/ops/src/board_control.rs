@@ -22,6 +22,7 @@
 //!    and a net an item uses but the netlist lacks is added back
 //!    ("Orphaned net re-parented"). The report lines are KiCad's.
 
+use eda_model::units::Nm;
 use eda_clipper2::Point64;
 use eda_model::ir::{Design, Point, Zone};
 use eda_model::{CheckResult, Net};
@@ -35,7 +36,7 @@ fn fail(check: &str, location: &str, hint: &str) -> Vec<CheckResult> {
 // ------------------------------------------------------------------ geometry
 
 fn orient(a: Point, b: Point, c: Point) -> i128 {
-    (b.x as i128 - a.x as i128) * (c.y as i128 - a.y as i128) - (b.y as i128 - a.y as i128) * (c.x as i128 - a.x as i128)
+    (b.x.raw_shim() as i128 - a.x.raw_shim() as i128) * (c.y.raw_shim() as i128 - a.y.raw_shim() as i128) - (b.y.raw_shim() as i128 - a.y.raw_shim() as i128) * (c.x.raw_shim() as i128 - a.x.raw_shim() as i128)
 }
 
 fn on_segment(a: Point, b: Point, p: Point) -> bool {
@@ -72,7 +73,7 @@ fn ring_contains(ring: &[Point], p: Point) -> bool {
 }
 
 fn bbox(ring: &[Point]) -> (i64, i64, i64, i64) {
-    ring.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(x0, y0, x1, y1), p| (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)))
+    ring.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(x0, y0, x1, y1), p| (x0.min(p.x.raw_shim()), y0.min(p.y.raw_shim()), x1.max(p.x.raw_shim()), y1.max(p.y.raw_shim())))
 }
 
 fn bboxes_meet(a: &[Point], b: &[Point]) -> bool {
@@ -124,7 +125,7 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
     }
 
     // `ZONE::Outline()`: the outline and its holes.
-    let chain = |r: &[Point]| r.iter().map(|p| Point64::new(p.x, p.y)).collect::<Vec<_>>();
+    let chain = |r: &[Point]| r.iter().map(|p| Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect::<Vec<_>>();
     let poly = |z: &Zone| {
         let mut set = ShapePolySet::from_outline(chain(&z.outline));
         for hole in z.holes.iter().filter(|h| h.len() >= 3) {
@@ -142,8 +143,8 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
         return Err(fail("ops_zone_merge", &zones[first].id, "Zones have insufficient overlap for merging."));
     }
     // Not fractured: the merged zone keeps its holes (`aOriginZone->Outline()->Simplify()` and no more).
-    let ring: Vec<Point> = union.outline(0).iter().map(|p| Point { x: p.x, y: p.y }).collect();
-    let holes: Vec<Vec<Point>> = union.polys[0][1..].iter().filter(|h| h.len() >= 3).map(|h| h.iter().map(|p| Point { x: p.x, y: p.y }).collect()).collect();
+    let ring: Vec<Point> = union.outline(0).iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect();
+    let holes: Vec<Vec<Point>> = union.polys[0][1..].iter().filter(|h| h.len() >= 3).map(|h| h.iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect()).collect();
     if ring.len() < 3 {
         return Err(fail("ops_zone_merge", &zones[first].id, "Zones have insufficient overlap for merging."));
     }
@@ -307,7 +308,7 @@ pub fn set_zone_priority(design: &mut Design, id: &str, to: ZonePriorityMove) ->
 
 /// `DoSetDrillOrigin`: the drill/place file origin; `None` resets it to (0, 0), `DrillOrigin`'s reset branch.
 pub fn set_aux_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
-    let at = at.filter(|p| p.x != 0 || p.y != 0);
+    let at = at.filter(|p| p.x != Nm::ZERO || p.y != Nm::ZERO);
     let current = design.drawings.as_ref().and_then(|d| d.aux_origin);
     if current == at {
         return Err(fail("ops_aux_origin", "aux_origin", if at.is_some() { "the drill/place file origin is already there" } else { "the drill/place file origin is already at (0, 0)" }));
@@ -318,7 +319,7 @@ pub fn set_aux_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<
 
 /// `PCB_CONTROL::DoSetGridOrigin`: the point the editing grid is anchored at; `None` (or (0, 0)) is `GridResetOrigin`'s reset.
 pub fn set_grid_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
-    let at = at.filter(|p| p.x != 0 || p.y != 0);
+    let at = at.filter(|p| p.x != Nm::ZERO || p.y != Nm::ZERO);
     let current = design.drawings.as_ref().and_then(|d| d.grid_origin);
     if current == at {
         return Err(fail("ops_grid_origin", "grid_origin", if at.is_some() { "the grid origin is already there" } else { "the grid origin is already at (0, 0)" }));
@@ -413,10 +414,11 @@ pub fn repair_board(design: &mut Design, nets: &[Net]) -> RepairReport {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     fn pt(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     fn square(id: &str, layer: &str, net: &str, x: i64, y: i64, side: i64, priority: u32) -> Zone {
@@ -482,7 +484,7 @@ mod tests {
         let (x0, y0, x1, y1) = bbox(&merged.outline);
         assert_eq!((x0, y0, x1, y1), (0, 0, 15_000, 10_000), "the union of the two squares");
         let area = {
-            let mut s = ShapePolySet::from_outline(merged.outline.iter().map(|p| Point64::new(p.x, p.y)).collect());
+            let mut s = ShapePolySet::from_outline(merged.outline.iter().map(|p| Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect());
             s.simplify();
             s.area()
         };
@@ -525,7 +527,7 @@ mod tests {
     }
 
     fn ring_area(ring: &[Point]) -> f64 {
-        let twice: i128 = (0..ring.len()).map(|i| (ring[i].x as i128 * ring[(i + 1) % ring.len()].y as i128) - (ring[(i + 1) % ring.len()].x as i128 * ring[i].y as i128)).sum();
+        let twice: i128 = (0..ring.len()).map(|i| (ring[i].x.raw_shim() as i128 * ring[(i + 1) % ring.len()].y.raw_shim() as i128) - (ring[(i + 1) % ring.len()].x.raw_shim() as i128 * ring[i].y.raw_shim() as i128)).sum();
         (twice as f64 / 2.0).abs()
     }
 
@@ -670,7 +672,7 @@ mod tests {
         let model = eda_model::ConstraintModel::default();
         let mut d = design(vec![square("a", "F.Cu", "", 0, 0, 10_000, 1), square("b", "F.Cu", "", 5_000, 0, 10_000, 4), square("ghost", "F.Cu", "NOPE", 90_000, 0, 1_000, 0)]);
         d.placement = Some(serde_json::from_value(serde_json::json!({ "outline": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": 1, "y": 1 }], "footprints": [] })).unwrap());
-        let mut board = Board::new(d, &model, 100_000, 300_000);
+        let mut board = Board::new(d, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
         let cmd = |j: serde_json::Value| serde_json::from_value::<Cmd>(j).unwrap();
         board.apply(&cmd(serde_json::json!({ "op": "set_zone_priority", "id": "a", "to": "raise" }))).unwrap();
         assert_eq!(priorities(board.design())[0], ("a".to_string(), 5));
@@ -686,7 +688,7 @@ mod tests {
         // The next load reads the board's own netlist back (`board::load` lets `design.nets` replace the intent's).
         let design = board.into_design();
         let model = eda_model::ConstraintModel { nets: design.nets.clone().unwrap(), ..Default::default() };
-        let again = Board::new(design, &model, 100_000, 300_000).apply(&Cmd::RepairBoard).unwrap_err();
+        let again = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000)).apply(&Cmd::RepairBoard).unwrap_err();
         assert_eq!(again[0].hint.as_deref(), Some("No board problems found."));
     }
 

@@ -5,6 +5,7 @@
 //! The slow proof against kicad-cli (nested groups and a placed user field in one sheet: the ERC runs and the SVG draws the field where we put it) is in
 //! `sch_groups.rs`. The last test is the text look of a hierarchical sheet pin (`SchExtras::sheet_pin_looks`: its size, bold and italic), written and read the same way.
 
+use eda_model::units::Nm;
 use eda_kicad::{export_kicad_sch, import_kicad_sch, ExportMeta};
 use eda_model::ir::{Design, FieldPlacement, Point, Provenance, SchematicSection, SymbolInstance, TextJustify, TextVAlign};
 use eda_model::symbol::{LibPin, LibSymbol, SPoint, SymbolGraphic};
@@ -75,7 +76,7 @@ fn design_with(sch: SchematicSection) -> Design {
 fn sheet(rot: u32, mirrored: bool) -> SchematicSection {
     let sym = SymbolInstance {
         id: "U1".into(),
-        at: Point { x: 76_200_000, y: 76_200_000 },
+        at: Point { x: Nm::from_raw_shim(76_200_000), y: Nm::from_raw_shim(76_200_000) },
         rot,
         mirrored,
         mirror_y: false,
@@ -95,7 +96,7 @@ fn sheet(rot: u32, mirrored: bool) -> SchematicSection {
     user.insert("Manufacturer".into(), "TI".into());
     sch.field_layout.insert(
         "U1".into(),
-        vec![FieldPlacement { dx: 12_700_000, dy: -15_240_000, h: TextJustify::Left, v: TextVAlign::Center, visible: true, size_nm: 2_000_000, bold: true, italic: true, name_shown: true, ..FieldPlacement::at_origin("MPN") }],
+        vec![FieldPlacement { dx: Nm::from_raw_shim(12_700_000), dy: Nm::from_raw_shim(-15_240_000), h: TextJustify::Left, v: TextVAlign::Center, visible: true, size_nm: Nm::from_raw_shim(2_000_000), bold: true, italic: true, name_shown: true, ..FieldPlacement::at_origin("MPN") }],
     );
     sch
 }
@@ -165,9 +166,9 @@ fn a_file_with_user_fields_reads_back_with_their_texts_their_looks_and_their_pla
     assert_eq!(sch.user_fields["U1"].len(), 2, "the four standard fields are not user fields");
     let placed = &sch.field_layout["U1"];
     let mpn = placed.iter().find(|p| p.name == "MPN").expect("the place of MPN");
-    assert_eq!((mpn.dx, mpn.dy), (12_700_000, -15_240_000));
+    assert_eq!((mpn.dx, mpn.dy), (Nm::from_raw_shim(12_700_000), Nm::from_raw_shim(-15_240_000)));
     assert!(mpn.visible && mpn.bold && mpn.italic && mpn.name_shown && !mpn.no_autoplace);
-    assert_eq!((mpn.h, mpn.v, mpn.size_nm, mpn.angle), (TextJustify::Left, TextVAlign::Center, 2_000_000, 0));
+    assert_eq!((mpn.h, mpn.v, mpn.size_nm, mpn.angle), (TextJustify::Left, TextVAlign::Center, Nm::from_raw_shim(2_000_000), 0));
     let maker = placed.iter().find(|p| p.name == "Manufacturer").expect("the place of Manufacturer");
     assert!(!maker.visible);
     assert!(placed.iter().all(|p| p.name == "MPN" || p.name == "Manufacturer"), "only the user fields keep a place on a sheet read from a file");
@@ -235,8 +236,8 @@ fn the_properties_beyond_the_standard_ones_are_the_user_fields_of_a_file_made_by
     assert!(!get("Sim.Device").visible, "(hide yes) in the property, as KiCad 9 writes it");
     assert!(!get("Empty").visible, "a bare `hide` in the effects");
     let note = get("Internal note");
-    assert!(note.visible && note.size_nm == 1_016_000);
-    assert_eq!((note.dx, note.dy), (4_000_000, -4_000_000), "from the symbol's origin");
+    assert!(note.visible && note.size_nm == Nm::from_raw_shim(1_016_000));
+    assert_eq!((note.dx, note.dy), (Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(-4_000_000)), "from the symbol's origin");
     assert_eq!(note.angle, 90_000, "a vertical text");
     assert_eq!((note.h, note.v), (TextJustify::Right, TextVAlign::Bottom));
 }
@@ -264,15 +265,15 @@ fn a_sheet_pins_text_look_is_written_and_read_back() {
         id: "11111111-1111-4111-8111-111111111111".into(),
         name: "Sub".into(),
         file: "sub.kicad_sch".into(),
-        at: Point { x: 100_000_000, y: 50_000_000 },
-        size: (40_000_000, 30_000_000),
+        at: Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(50_000_000) },
+        size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(30_000_000)),
         pins: vec![
-            SheetPin { id: "22222222-2222-4222-8222-222222222222".into(), name: "CLK".into(), shape: LabelShape::Input, at: Point { x: 100_000_000, y: 60_000_000 } },
-            SheetPin { id: "33333333-3333-4333-8333-333333333333".into(), name: "DATA".into(), shape: LabelShape::Output, at: Point { x: 140_000_000, y: 70_000_000 } },
+            SheetPin { id: "22222222-2222-4222-8222-222222222222".into(), name: "CLK".into(), shape: LabelShape::Input, at: Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(60_000_000) } },
+            SheetPin { id: "33333333-3333-4333-8333-333333333333".into(), name: "DATA".into(), shape: LabelShape::Output, at: Point { x: Nm::from_raw_shim(140_000_000), y: Nm::from_raw_shim(70_000_000) } },
         ],
         page: String::new(),
     });
-    sch.extras.sheet_pin_looks.insert("22222222-2222-4222-8222-222222222222".into(), LabelLook { size_nm: 2_000_000, bold: true, italic: true, auto_rotate: false });
+    sch.extras.sheet_pin_looks.insert("22222222-2222-4222-8222-222222222222".into(), LabelLook { size_nm: Nm::from_raw_shim(2_000_000), bold: true, italic: true, auto_rotate: false });
     let text = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
     // the font of the pin says its size, bold and italic; the other pin has the default text
     let pin = |name: &str| {
@@ -287,5 +288,5 @@ fn a_sheet_pins_text_look_is_written_and_read_back() {
     let looks = &back.extras.sheet_pin_looks;
     assert_eq!(looks.len(), 1, "only a pin that is set differently has an entry: {looks:?}");
     let look = looks.get("22222222-2222-4222-8222-222222222222").copied().expect("the look of CLK");
-    assert_eq!((look.size_nm, look.bold, look.italic), (2_000_000, true, true));
+    assert_eq!((look.size_nm, look.bold, look.italic), (Nm::from_raw_shim(2_000_000), true, true));
 }

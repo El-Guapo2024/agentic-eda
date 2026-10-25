@@ -1,3 +1,4 @@
+use eda_model::units::Nm;
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, Side};
 use eda_model::footprint::{Footprint, Pad, PadKind, PadShape};
 use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
@@ -28,7 +29,7 @@ fn lin(n: usize) -> Footprint {
     Footprint {
         name: format!("LIN{n}"),
         pads: (0..n)
-            .map(|i| Pad { opposite_side: false, ext: Default::default(), number: (i + 1).to_string(), at: (i as i64 * 1_000_000, 0), size: (500_000, 500_000), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None })
+            .map(|i| Pad { opposite_side: false, ext: Default::default(), number: (i + 1).to_string(), at: (Nm::from_raw_shim(i as i64 * 1_000_000), Nm::ZERO), size: (Nm::from_raw_shim(500_000), Nm::from_raw_shim(500_000)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None })
             .collect(),
         courtyard: None,
         model: None,
@@ -51,11 +52,11 @@ fn lin_th(n: usize) -> Footprint {
         pads: (0..n)
             .map(|i| Pad { opposite_side: false, ext: Default::default(),
                 number: (i + 1).to_string(),
-                at: (i as i64 * 1_000_000, 0),
-                size: (800_000, 800_000),
+                at: (Nm::from_raw_shim(i as i64 * 1_000_000), Nm::ZERO),
+                size: (Nm::from_raw_shim(800_000), Nm::from_raw_shim(800_000)),
                 shape: PadShape::Circle,
                 kind: PadKind::ThroughHole,
-                drill: Some(400_000),
+                drill: Some(Nm::from_raw_shim(400_000)),
                 drill_slot: None,
                 rot: 0,
                 roundrect_ratio: None,
@@ -86,11 +87,11 @@ fn part_th(reference: &str, npins: usize) -> Part {
 }
 
 fn fp(id: &str, x: i64, y: i64) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side: Side::Top, label: Default::default() }
+    FootprintInstance { id: id.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, rot: 0, side: Side::Top, label: Default::default() }
 }
 
 fn fp_side(id: &str, x: i64, y: i64, side: Side) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side, label: Default::default() }
+    FootprintInstance { id: id.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, rot: 0, side, label: Default::default() }
 }
 
 fn design(outline: Vec<Point>, footprints: Vec<FootprintInstance>) -> Design {
@@ -107,10 +108,10 @@ fn design(outline: Vec<Point>, footprints: Vec<FootprintInstance>) -> Design {
 
 fn rect(w: i64, h: i64) -> Vec<Point> {
     vec![
-        Point { x: 0, y: 0 },
-        Point { x: w, y: 0 },
-        Point { x: w, y: h },
-        Point { x: 0, y: h },
+        Point { x: Nm::ZERO, y: Nm::ZERO },
+        Point { x: Nm::from_raw_shim(w), y: Nm::ZERO },
+        Point { x: Nm::from_raw_shim(w), y: Nm::from_raw_shim(h) },
+        Point { x: Nm::ZERO, y: Nm::from_raw_shim(h) },
     ]
 }
 
@@ -247,7 +248,7 @@ fn pass_through_bait_never_uses_a_pad_as_a_stepping_stone() {
     let out = route(&d, &m, &rules, 1).expect("should route");
     let r = out.routing.as_ref().unwrap();
     // The bait works: the N net does route below the wall, past P3.
-    assert!(r.tracks.iter().any(|t| t.net == "N" && t.pts.iter().any(|p| p.y > 9_400_000)), "expected a path under the wall: {:?}", r.tracks);
+    assert!(r.tracks.iter().any(|t| t.net == "N" && t.pts.iter().any(|p| p.y > Nm::from_raw_shim(9_400_000))), "expected a path under the wall: {:?}", r.tracks);
     // The real gate (pad-mediated connectivity + workmanship).
     assert_gate_clean(&out, &m);
 }
@@ -511,7 +512,7 @@ fn a_pour_on_a_layer_outside_the_stackup_is_a_hard_fail() {
 /// offset that is no multiple of anything.
 fn fixture_offset_outline() -> (Design, ConstraintModel) {
     let (ox, oy) = (1_325_000, 700_000);
-    let outline = rect(20_000_000, 10_000_000).into_iter().map(|p| Point { x: p.x + ox, y: p.y + oy }).collect();
+    let outline = rect(20_000_000, 10_000_000).into_iter().map(|p| Point { x: p.x + Nm::from_raw_shim(ox), y: p.y + Nm::from_raw_shim(oy) }).collect();
     let d = design(outline, vec![fp("U1", ox + 2_000_000, oy + 5_000_000), fp("U2", ox + 15_000_000, oy + 5_000_000)]);
     let m = model(vec![part("U1", 2), part("U2", 2)], vec![
             Net { name: "NET1".into(), pins: vec!["U1.1".into(), "U2.1".into()] },

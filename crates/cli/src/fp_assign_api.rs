@@ -10,6 +10,7 @@
 //!  * `POST /api/reannotate_plan`: `DIALOG_BOARD_REANNOTATE::ReannotateBoard`'s plan, before anything is written: the front and back lists in their order, the prefixes, the change log and what is
 //!    wrong with it (`eda_model::reannotate`). The change itself is `Cmd::ReannotateBoard`.
 
+use eda_model::units::Nm;
 use crate::board;
 use crate::library_index::Kind;
 use eda_model::Footprint;
@@ -84,7 +85,7 @@ fn footprint_drawing(fp: &Footprint) -> Value {
         .iter()
         .map(|p| json!({ "num": p.number, "x": p.at.0, "y": p.at.1, "w": p.size.0, "h": p.size.1, "shape": crate::fp_json::shape_name(p.shape), "rot": p.rot as f64 / 1000.0, "ratio": p.roundrect_ratio, "drill": p.drill, "slot": p.drill_slot.map(|(w, h)| json!([w, h])), "th": p.kind != eda_model::PadKind::Smd }))
         .collect();
-    let courtyard: Vec<Vec<[i64; 2]>> = if fp.courtyard_outlines.is_empty() {
+    let courtyard: Vec<Vec<[Nm; 2]>> = if fp.courtyard_outlines.is_empty() {
         fp.courtyard.map(|(hw, hh)| vec![vec![[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]]).unwrap_or_default()
     } else {
         fp.courtyard_outlines.iter().map(|o| o.iter().map(|&(x, y)| [x, y]).collect()).collect()
@@ -145,6 +146,6 @@ pub fn reannotate_plan(dir: &Path, body: &[u8]) -> Value {
         Ok(loaded) => loaded,
         Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
     };
-    let plan = eda_ops::Board::new(design, &model, meta.snap_nm, meta.spacing_nm).reannotate_plan(&options, &selection);
+    let plan = eda_ops::Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm)).reannotate_plan(&options, &selection);
     json!({ "ok": true, "valid": plan.ok(), "plan": plan })
 }

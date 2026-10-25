@@ -25,12 +25,12 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 }
 
 /// `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM` (`include/eda_text.h`), nm.
-const TEXT_MIN_NM: Nm = 1_000;
-const TEXT_MAX_NM: Nm = 250_000_000;
+const TEXT_MIN_NM: Nm = Nm::from_raw_shim(1_000);
+const TEXT_MAX_NM: Nm = Nm::from_raw_shim(250_000_000);
 
 /// `ClampTextPenSize`: the thickest pen a text of this size takes (a quarter of its smaller side).
 fn max_pen(size: (Nm, Nm)) -> Nm {
-    (size.0.abs().min(size.1.abs()) as f64 * 0.25).round() as Nm
+    Nm::from_raw_shim(((size.0.abs().min(size.1.abs())).raw_shim() as f64 * 0.25).round() as i64)
 }
 
 impl Board<'_> {
@@ -46,7 +46,7 @@ impl Board<'_> {
                 return Err(fail("ops_bad_field", what, format!("Text {axis} must be at most {} mm.", eda_model::units::to_mm(TEXT_MAX_NM))));
             }
         }
-        if l.thickness < 0 {
+        if l.thickness < Nm::ZERO {
             return Err(fail("ops_bad_field", what, "Text thickness cannot be negative."));
         }
         if l.thickness > max_pen(l.size) {
@@ -189,17 +189,17 @@ impl Board<'_> {
             return Err(fail("ops_unknown_pad", &pad_ref, format!("{part} has no pad {}{}", edit.number, if nth > 1 { format!(" (#{nth})") } else { String::new() })));
         };
         if let Some((w, h)) = edit.size {
-            if w <= 0 || h <= 0 {
+            if w <= Nm::ZERO || h <= Nm::ZERO {
                 return Err(fail("ops_bad_pad", &pad_ref, "Pad size must be greater than zero."));
             }
         }
         if let Some(d) = edit.drill {
-            if d <= 0 {
+            if d <= Nm::ZERO {
                 return Err(fail("ops_bad_pad", &pad_ref, "Hole size must be greater than zero."));
             }
         }
         if let Some((w, h)) = edit.drill_slot {
-            if w <= 0 || h <= 0 {
+            if w <= Nm::ZERO || h <= Nm::ZERO {
                 return Err(fail("ops_bad_pad", &pad_ref, "Hole size must be greater than zero."));
             }
         }
@@ -227,7 +227,7 @@ impl Board<'_> {
         // The same of every layer of the padstack, and the shapes the layers may have (`PAD::CheckPad` runs for each unique layer).
         if let Some(stack) = &edit.stack {
             for (role, shape) in stack.inner.iter().map(|s| ("the inner layers".to_string(), s)).chain(stack.back.iter().map(|s| ("the back layer".to_string(), s))).chain(stack.layers.iter().map(|(k, s)| (k.clone(), s))) {
-                if shape.size.0 < 0 || shape.size.1 < 0 {
+                if shape.size.0 < Nm::ZERO || shape.size.1 < Nm::ZERO {
                     return Err(fail("ops_bad_pad", &pad_ref, format!("Pad size on {role} must not be negative.")));
                 }
                 if let Some(c) = &shape.custom {
@@ -389,13 +389,13 @@ fn primitive_problem(prim: &eda_model::footprint::PadPrimitive) -> Option<String
         Shape::Circle { center, end, .. } if center == end => Some("a circle needs a radius".into()),
         Shape::Segment { start, end, .. } if start == end => Some("a line needs a length".into()),
         Shape::Arc { start, mid, end, .. } if start == end || mid == start || mid == end => Some("an arc needs three different points".into()),
-        s if !prim.proxy && s.stroke_width() < 0 => Some("the line width cannot be negative".into()),
+        s if !prim.proxy && s.stroke_width() < Nm::ZERO => Some("the line width cannot be negative".into()),
         _ => None,
     }
 }
 
 /// How many separate pieces of copper a custom pad is: its anchor and basic shapes merged (`PAD::MergePrimitivesAsPolygon`).
 fn custom_outline_count(pad: &eda_model::Pad) -> usize {
-    let fp = eda_model::ir::FootprintInstance { id: String::new(), at: eda_model::ir::Point { x: 0, y: 0 }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() };
-    eda_drc::pad_shape::pad_polygons(&fp, pad, eda_model::ir::Point { x: 0, y: 0 }, 5_000).polys.len()
+    let fp = eda_model::ir::FootprintInstance { id: String::new(), at: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() };
+    eda_drc::pad_shape::pad_polygons(&fp, pad, eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(5_000)).polys.len()
 }

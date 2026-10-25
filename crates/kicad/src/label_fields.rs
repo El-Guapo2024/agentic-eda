@@ -7,6 +7,7 @@
 //! The fields are placed by `AutoplaceFields`, as KiCad places a label's fields while they are autoplaced; a field moved by hand in KiCad is read back to
 //! that place. The Sheet References are shown or hidden by Schematic Setup (`m_IntersheetRefsShow`, `RecomputeIntersheetRefs`), whatever the file says.
 
+use eda_model::units::Nm;
 use crate::sexpr::{self, Sexpr};
 use eda_model::ir::{LabelKind, NetLabel, Point, SchematicSection};
 use eda_model::kicad_font::HJustify;
@@ -54,9 +55,9 @@ pub fn label_fields_placed(sch: &SchematicSection, l: &NetLabel, show_intersheet
     fields.extend(own.iter().cloned().map(|f| (f, false)));
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
     let size_iu = look.text_size_nm() / eda_model::units::SCH_IU_NM;
-    let fx = TextStyle { size_iu, thickness_iu: if look.bold { eda_model::kicad_font::kiround(size_iu as f64 / 5.0) } else { 0 }, h: HJustify::Left, v: eda_model::kicad_font::VJustify::Center };
+    let fx = TextStyle { size_iu: size_iu.raw_shim(), thickness_iu: if look.bold { eda_model::kicad_font::kiround(size_iu.raw_shim() as f64 / 5.0) } else { 0 }, h: HJustify::Left, v: eda_model::kicad_font::VJustify::Center };
     let spin = spin_of(crate::label_spin_of(sch, l));
-    let at = (l.at.x as f64, l.at.y as f64);
+    let at = (l.at.x.raw_shim() as f64, l.at.y.raw_shim() as f64);
     let body = match &l.kind {
         LabelKind::Global { shape } => kicad_geom::global_label_rect(&fx, &l.net, at, spin, *shape),
         LabelKind::Hierarchical { .. } => kicad_geom::hier_label_rect(&fx, &l.net, at, spin),
@@ -71,7 +72,7 @@ pub fn label_fields_placed(sch: &SchematicSection, l: &NetLabel, show_intersheet
     fields
         .into_iter()
         .zip(places)
-        .map(|((f, isr), p)| PlacedLabelField { name: f.name, text: f.text, visible: f.visible, italic: f.italic, intersheet_refs: isr, at: Point { x: p.at.0.round() as i64, y: p.at.1.round() as i64 }, vertical: p.vertical, h: p.h })
+        .map(|((f, isr), p)| PlacedLabelField { name: f.name, text: f.text, visible: f.visible, italic: f.italic, intersheet_refs: isr, at: Point { x: Nm::from_raw_shim(p.at.0.round() as i64), y: Nm::from_raw_shim(p.at.1.round() as i64) }, vertical: p.vertical, h: p.h })
         .collect()
 }
 

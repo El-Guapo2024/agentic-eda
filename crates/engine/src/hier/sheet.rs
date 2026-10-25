@@ -6,6 +6,7 @@
 //! between two parts that are neighbours in a chain, or a short wire out to a label of the same name -- so a net can never touch
 //! another net by accident, and the tracer in `nets.rs` reads back exactly what was meant.
 
+use eda_model::units::Nm;
 use eda_layout::Side;
 use eda_model::ir::Point;
 use eda_model::modules::{is_anchor_part, natural_cmp, FunctionalModule, ModuleKind};
@@ -328,11 +329,11 @@ fn chain_block(ctx: &Ctx, view: &View, links: &[ChainLink]) -> Block {
         let vertical = matches!(entry_side, Side::Top | Side::Bottom);
         p.flip = if vertical { entry_side != Side::Top } else { entry_side != Side::Left };
         let base = match &prev {
-            None => Point { x: 0, y: 0 },
+            None => Point { x: Nm::ZERO, y: Nm::ZERO },
             Some((e, pv, _)) => match (*pv, vertical) {
-                (true, true) => Point { x: e.x, y: e.y + g },
-                (false, false) => Point { x: e.x + g, y: e.y },
-                _ => Point { x: e.x + g, y: e.y + g },
+                (true, true) => Point { x: e.x, y: e.y + Nm::from_raw_shim(g) },
+                (false, false) => Point { x: e.x + Nm::from_raw_shim(g), y: e.y },
+                _ => Point { x: e.x + Nm::from_raw_shim(g), y: e.y + Nm::from_raw_shim(g) },
             },
         };
         let (vv, hh) = match &prev {
@@ -341,7 +342,7 @@ fn chain_block(ctx: &Ctx, view: &View, links: &[ChainLink]) -> Block {
         };
         let mut target = base;
         for (ex, ey) in nudges(vv, hh) {
-            target = Point { x: base.x + ex, y: base.y + ey };
+            target = Point { x: base.x + Nm::from_raw_shim(ex), y: base.y + Nm::from_raw_shim(ey) };
             p.place_tip(&link.entry, target);
             let ko = p.keepout();
             if placed_all.iter().all(|q| !q.keepout().inflate(G / 2).overlaps(&ko)) {

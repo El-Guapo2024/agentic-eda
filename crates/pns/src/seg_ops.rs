@@ -6,6 +6,7 @@
 //! Segments are `(a, b)` point pairs; all arithmetic is exact on `i128` and rounds where
 //! KiCad's `rescale` / `KiROUND` do, so a result matches KiCad's at this IR's micrometre grid.
 
+use eda_model::units::Nm;
 use eda_model::ir::Point;
 
 /// A segment, `SEG( A, B )`.
@@ -27,7 +28,7 @@ fn cross(a: (i128, i128), b: (i128, i128)) -> i128 {
 }
 
 fn vec_of(a: Point, b: Point) -> (i128, i128) {
-    ((b.x - a.x) as i128, (b.y - a.y) as i128)
+    ((b.x - a.x).raw_shim() as i128, (b.y - a.y).raw_shim() as i128)
 }
 
 /// `SEG::checkCollinearOverlap`: where two collinear segments overlap, the midpoint of the overlap.
@@ -50,7 +51,7 @@ fn collinear_overlap(s: Seg2, o: Seg2, use_x_axis: bool, ignore_endpoints: bool)
         }
     }
     let proj = (overlap_start + overlap_end) / 2;
-    let other = if s1_end != s1_start { c1_start + rescale((proj - s1_start) as i128, (c1_end - c1_start) as i128, (s1_end - s1_start) as i128) as i64 } else { c1_start };
+    let other = if s1_end != s1_start { c1_start + Nm::from_raw_shim(rescale((proj - s1_start).raw_shim() as i128, (c1_end - c1_start).raw_shim() as i128, (s1_end - s1_start).raw_shim() as i128) as i64) } else { c1_start };
     Some(if use_x_axis { Point { x: proj, y: other } } else { Point { x: other, y: proj } })
 }
 
@@ -96,7 +97,7 @@ pub fn intersect(s: Seg2, o: Seg2, ignore_endpoints: bool, lines: bool) -> Optio
             return None;
         }
     }
-    Some(Point { x: c.x + rescale(param1, dir2.0, determinant) as i64, y: c.y + rescale(param1, dir2.1, determinant) as i64 })
+    Some(Point { x: c.x + Nm::from_raw_shim(rescale(param1, dir2.0, determinant) as i64), y: c.y + Nm::from_raw_shim(rescale(param1, dir2.1, determinant) as i64) })
 }
 
 /// `SEG::Intersect( aSeg )`: the segments' crossing point, endpoints included.
@@ -112,11 +113,11 @@ pub fn intersect_lines(s: Seg2, o: Seg2) -> Option<Point> {
 /// `SEG::LineDistance( aP )`: the distance from `p` to the infinite line through the segment, rounded down.
 pub fn line_distance(s: Seg2, p: Point) -> i64 {
     let (a, b) = s;
-    let pp = a.y as i128 - b.y as i128;
-    let q = b.x as i128 - a.x as i128;
-    let r = -pp * a.x as i128 - q * a.y as i128;
+    let pp = a.y.raw_shim() as i128 - b.y.raw_shim() as i128;
+    let q = b.x.raw_shim() as i128 - a.x.raw_shim() as i128;
+    let r = -pp * a.x.raw_shim() as i128 - q * a.y.raw_shim() as i128;
     let l = pp * pp + q * q;
-    let det = pp * p.x as i128 + q * p.y as i128 + r;
+    let det = pp * p.x.raw_shim() as i128 + q * p.y.raw_shim() as i128 + r;
     let dist_sq = if l > 0 { rescale(det, det, l) } else { 0 };
     eda_drc::kimath::isqrt(dist_sq)
 }
@@ -129,11 +130,11 @@ pub fn contains(s: Seg2, p: Point) -> bool {
 /// `SEG::Collinear( aSeg )`: both ends of `o` are (to the cross product's `<= 1`) on the line through `s`.
 pub fn collinear(s: Seg2, o: Seg2) -> bool {
     let (a, b) = s;
-    let qa = a.y as i128 - b.y as i128;
-    let qb = b.x as i128 - a.x as i128;
-    let qc = -qa * a.x as i128 - qb * a.y as i128;
-    let d1 = (o.0.x as i128 * qa + o.0.y as i128 * qb + qc).abs();
-    let d2 = (o.1.x as i128 * qa + o.1.y as i128 * qb + qc).abs();
+    let qa = a.y.raw_shim() as i128 - b.y.raw_shim() as i128;
+    let qb = b.x.raw_shim() as i128 - a.x.raw_shim() as i128;
+    let qc = -qa * a.x.raw_shim() as i128 - qb * a.y.raw_shim() as i128;
+    let d1 = (o.0.x.raw_shim() as i128 * qa + o.0.y.raw_shim() as i128 * qb + qc).abs();
+    let d2 = (o.1.x.raw_shim() as i128 * qa + o.1.y.raw_shim() as i128 * qb + qc).abs();
     d1 <= 1 && d2 <= 1
 }
 
@@ -156,13 +157,13 @@ pub fn overlaps(s: Seg2, o: Seg2) -> bool {
 pub fn length(a: Point, b: Point) -> i64 {
     let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
     if dx == dy {
-        (dx as f64 * std::f64::consts::SQRT_2).round() as i64
-    } else if dx == 0 {
-        dy
-    } else if dy == 0 {
-        dx
+        (dx.raw_shim() as f64 * std::f64::consts::SQRT_2).round() as i64
+    } else if dx == Nm::ZERO {
+        dy.raw_shim()
+    } else if dy == Nm::ZERO {
+        dx.raw_shim()
     } else {
-        (dx as f64).hypot(dy as f64).round() as i64
+        ((dx).raw_shim() as f64).hypot(dy.raw_shim() as f64).round() as i64
     }
 }
 
@@ -171,7 +172,7 @@ mod tests {
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     #[test]

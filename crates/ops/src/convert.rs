@@ -16,6 +16,7 @@
 //! Not ported: text and pads as sources (the studio has no font outlines, and pads are not selectable
 //! items), a rounded rectangle's corner radius (the IR rectangle has none).
 
+use eda_model::units::Nm;
 use eda_clipper2::Point64;
 use eda_model::ir::{tessellate_arc, Design, Point, Shape, Track, Via, Zone};
 use eda_shape_poly_set::{get_arc_to_segment_count, CornerStrategy, ShapePolySet};
@@ -48,11 +49,11 @@ pub struct ConvertedPolys {
 const MAX_ERROR_NM: i32 = 5_000;
 
 fn pt64(p: Point) -> Point64 {
-    Point64::new(p.x, p.y)
+    Point64::new(p.x.raw_shim(), p.y.raw_shim())
 }
 
 fn pt(p: &Point64) -> Point {
-    Point { x: p.x, y: p.y }
+    Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }
 }
 
 fn norm(a: f64) -> f64 {
@@ -62,7 +63,7 @@ fn norm(a: f64) -> f64 {
 /// An arc's polyline within [`MAX_ERROR_NM`] of the curve (`SHAPE_ARC::ConvertToPolyline`): the sweep through `mid`, split by
 /// `GetArcToSegmentCount( radius, error )` per full turn; endpoints exact. Collinear points give the chord.
 pub fn arc_points(start: Point, mid: Point, end: Point) -> Vec<Point> {
-    let (sx, sy, mx, my, ex, ey) = (start.x as f64, start.y as f64, mid.x as f64, mid.y as f64, end.x as f64, end.y as f64);
+    let (sx, sy, mx, my, ex, ey) = (start.x.raw_shim() as f64, start.y.raw_shim() as f64, mid.x.raw_shim() as f64, mid.y.raw_shim() as f64, end.x.raw_shim() as f64, end.y.raw_shim() as f64);
     let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
     if d.abs() < 1e-6 {
         return vec![start, end];
@@ -87,7 +88,7 @@ fn circle_ring(center: Point, r: i64) -> Vec<Point64> {
     (0..n)
         .map(|k| {
             let a = std::f64::consts::TAU * k as f64 / n as f64;
-            Point64::new((center.x as f64 + r as f64 * a.cos()).round() as i64, (center.y as f64 + r as f64 * a.sin()).round() as i64)
+            Point64::new((center.x.raw_shim() as f64 + r as f64 * a.cos()).round() as i64, (center.y.raw_shim() as f64 + r as f64 * a.sin()).round() as i64)
         })
         .collect()
 }
@@ -95,7 +96,7 @@ fn circle_ring(center: Point, r: i64) -> Vec<Point64> {
 /// A stadium (`TransformOvalToPolygon`): the segment `a`-`b` with round caps of radius `r`.
 fn stadium_ring(a: Point, b: Point, r: i64) -> Vec<Point64> {
     let r = r.max(1);
-    let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+    let (dx, dy) = ((b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
     if dx.hypot(dy) < 1.0 {
         return circle_ring(a, r);
     }
@@ -105,7 +106,7 @@ fn stadium_ring(a: Point, b: Point, r: i64) -> Vec<Point64> {
         (0..=half)
             .map(|i| {
                 let t = from + std::f64::consts::PI * i as f64 / half as f64;
-                Point64::new((c.x as f64 + r as f64 * t.cos()).round() as i64, (c.y as f64 + r as f64 * t.sin()).round() as i64)
+                Point64::new((c.x.raw_shim() as f64 + r as f64 * t.cos()).round() as i64, (c.y.raw_shim() as f64 + r as f64 * t.sin()).round() as i64)
             })
             .collect()
     };
@@ -184,19 +185,19 @@ fn find_items<'a>(design: &'a Design, ids: &[String]) -> Vec<(String, Item<'a>)>
 fn closed_ring(item: &Item, strategy: ConvertStrategy) -> Option<(Vec<Point64>, i64, bool)> {
     match item {
         Item::Shape(Shape::Rect { start, end, stroke_width, filled, .. }) => {
-            let ring = vec![pt64(*start), Point64::new(end.x, start.y), pt64(*end), Point64::new(start.x, end.y)];
-            Some((ring, *stroke_width, *filled))
+            let ring = vec![pt64(*start), Point64::new(end.x.raw_shim(), start.y.raw_shim()), pt64(*end), Point64::new(start.x.raw_shim(), end.y.raw_shim())];
+            Some((ring, (*stroke_width).raw_shim(), *filled))
         }
         Item::Shape(Shape::Circle { center, end, stroke_width, filled, .. }) => {
-            let r = ((end.x - center.x) as f64).hypot((end.y - center.y) as f64).round() as i64;
+            let r = ((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64).round() as i64;
             if r <= 0 {
                 return None;
             }
             // `CIRCLE && aStrategy != BOUNDING_HULL`: the circle as two arcs; the hull takes the shape's polygon like any other.
             let _ = strategy;
-            Some((circle_ring(*center, r), *stroke_width, *filled))
+            Some((circle_ring(*center, r), (*stroke_width).raw_shim(), *filled))
         }
-        Item::Shape(Shape::Polygon { pts, stroke_width, filled, .. }) if pts.len() >= 3 => Some((pts.iter().map(|p| pt64(*p)).collect(), *stroke_width, *filled)),
+        Item::Shape(Shape::Polygon { pts, stroke_width, filled, .. }) if pts.len() >= 3 => Some((pts.iter().map(|p| pt64(*p)).collect(), (*stroke_width).raw_shim(), *filled)),
         Item::Zone(z) if z.outline.len() >= 3 => Some((z.outline.iter().map(|p| pt64(*p)).collect(), 0, true)),
         _ => None,
     }
@@ -261,7 +262,7 @@ struct Chainer {
 }
 
 fn key(p: Point) -> (i64, i64) {
-    (p.x, p.y)
+    (p.x.raw_shim(), p.y.raw_shim())
 }
 
 impl Chainer {
@@ -360,15 +361,15 @@ fn open_graphic_polys(items: &[(String, Item)], flagged: &mut Vec<String>, set: 
             continue;
         }
         let stroked = match item {
-            Item::Shape(Shape::Segment { start, end, stroke_width, .. }) => Some(stroke(&[*start, *end], *stroke_width)),
-            Item::Shape(Shape::Arc { start, mid, end, stroke_width, .. }) => Some(stroke(&arc_points(*start, *mid, *end), *stroke_width)),
-            Item::Shape(s @ Shape::Bezier { stroke_width, .. }) => s.bezier_points().map(|p| stroke(&p, *stroke_width)),
+            Item::Shape(Shape::Segment { start, end, stroke_width, .. }) => Some(stroke(&[*start, *end], (*stroke_width).raw_shim())),
+            Item::Shape(Shape::Arc { start, mid, end, stroke_width, .. }) => Some(stroke(&arc_points(*start, *mid, *end), (*stroke_width).raw_shim())),
+            Item::Shape(s @ Shape::Bezier { stroke_width, .. }) => s.bezier_points().map(|p| stroke(&p, (*stroke_width).raw_shim())),
             Item::Track(t) => Some(match t.arc() {
-                Some((a, m, b)) => stroke(&arc_points(a, m, b), t.width),
-                None => stroke(&t.pts, t.width),
+                Some((a, m, b)) => stroke(&arc_points(a, m, b), t.width.raw_shim()),
+                None => stroke(&t.pts, t.width.raw_shim()),
             }),
             // `PCB_VIA::TransformShapeToPolygon( UNDEFINED_LAYER )`: the via's diameter.
-            Item::Via(v) => Some(ShapePolySet::from_outline(circle_ring(v.at, (v.diameter / 2).max(1)))),
+            Item::Via(v) => Some(ShapePolySet::from_outline(circle_ring(v.at, ((v.diameter / 2).max(Nm::from_raw_shim(1))).raw_shim()))),
             _ => None,
         };
         if let Some(poly) = stroked {
@@ -440,6 +441,7 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{DrawingsSection, PlacementSection, Provenance, RoutingSection};
 
@@ -462,11 +464,11 @@ mod tests {
     }
 
     fn seg(a: (i64, i64), b: (i64, i64), w: i64) -> Shape {
-        Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: w, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }
+        Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(w), filled: false, start: Point { x: Nm::from_raw_shim(a.0), y: Nm::from_raw_shim(a.1) }, end: Point { x: Nm::from_raw_shim(b.0), y: Nm::from_raw_shim(b.1) } }
     }
 
     fn rect(x0: i64, y0: i64, x1: i64, y1: i64, w: i64) -> Shape {
-        Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: w, filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
+        Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(w), filled: false, start: Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) } }
     }
 
     fn ids(d: &Design) -> Vec<String> {
@@ -477,7 +479,7 @@ mod tests {
         let mut a = 0.0;
         for i in 0..ring.len() {
             let (p, q) = (ring[i], ring[(i + 1) % ring.len()]);
-            a += (p.x * q.y - q.x * p.y) as f64;
+            a += (p.x * q.y.raw_shim() - q.x * p.y.raw_shim()).raw_shim() as f64;
         }
         a.abs() / 2.0
     }
@@ -494,12 +496,12 @@ mod tests {
 
     #[test]
     fn a_circle_becomes_a_polygon_on_the_circle() {
-        let d = design(vec![Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, center: Point { x: 1_000_000, y: 2_000_000 }, end: Point { x: 6_000_000, y: 2_000_000 } }]);
+        let d = design(vec![Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, end: Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(2_000_000) } }]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
         assert!(r.rings[0].len() >= 16);
         for p in &r.rings[0] {
-            let dist = ((p.x - 1_000_000) as f64).hypot((p.y - 2_000_000) as f64);
+            let dist = ((p.x - Nm::from_raw_shim(1_000_000)).raw_shim() as f64).hypot((p.y - Nm::from_raw_shim(2_000_000)).raw_shim() as f64);
             assert!((dist - 5_000_000.0).abs() < 2_000.0, "{dist}");
         }
         let full = std::f64::consts::PI * 25_000_000_000_000.0;
@@ -535,7 +537,7 @@ mod tests {
 
     #[test]
     fn an_arc_and_its_chord_close_a_half_disc() {
-        let arc = Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: -5_000_000, y: 0 }, mid: Point { x: 0, y: -5_000_000 }, end: Point { x: 5_000_000, y: 0 } };
+        let arc = Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::from_raw_shim(-5_000_000), y: Nm::ZERO }, mid: Point { x: Nm::ZERO, y: Nm::from_raw_shim(-5_000_000) }, end: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO } };
         let chord = seg((5_000_000, 0), (-5_000_000, 0), 150_000);
         let d = design(vec![arc, chord]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
@@ -580,8 +582,8 @@ mod tests {
     fn tracks_and_vias_join_the_hull() {
         let mut d = design(vec![]);
         let rt = d.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: "F.Cu".into(), width: 500_000, pts: vec![Point { x: 0, y: 0 }, Point { x: 4_000_000, y: 0 }], arc_mid_offset: None });
-        rt.vias.push(Via { id: "v1".into(), net: "N".into(), at: Point { x: 4_000_000, y: 0 }, drill: 300_000, diameter: 800_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(500_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N".into(), at: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let r = polys_from_items(&d, &["t1".to_string(), "v1".to_string()], ConvertStrategy::BoundingHull, 0);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.consumed, vec!["t1".to_string(), "v1".to_string()]);
@@ -591,7 +593,7 @@ mod tests {
     fn a_zone_outline_is_taken_as_it_is() {
         let mut d = design(vec![]);
         let rt = d.routing.as_mut().unwrap();
-        rt.zones.push(Zone { id: "z1".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 3_000_000, y: 0 }, Point { x: 3_000_000, y: 3_000_000 }], ..Default::default() });
+        rt.zones.push(Zone { id: "z1".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(3_000_000) }], ..Default::default() });
         let r = polys_from_items(&d, &["z1".to_string()], ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.rings[0].len(), 3);

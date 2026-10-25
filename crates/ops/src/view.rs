@@ -31,6 +31,7 @@
 //! encoding provably cannot express, that is the moment to add one --
 //! measured, not assumed.
 
+use eda_model::units::Nm;
 use crate::Board;
 use eda_model::{CheckResult, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -85,9 +86,9 @@ fn regions(board: &Board, model: &ConstraintModel) -> Result<Value, Vec<CheckRes
         let c = eda_model::footprint::placed_courtyard(model, part, f).ok_or_else(|| {
             vec![CheckResult::fail("view_no_courtyard", &f.id, "this part resolves to no footprint, so its area is unknown")]
         })?;
-        let col = (((f.at.x - x0) / w).clamp(0, 2)) as usize;
-        let row = (((f.at.y - y0) / h).clamp(0, 2)) as usize;
-        area[row][col] += ((c.2 - c.0) as f64) * ((c.3 - c.1) as f64);
+        let col = (((f.at.x - Nm::from_raw_shim(x0)) / w).clamp(Nm::ZERO, Nm::from_raw_shim(2))).raw_shim() as usize;
+        let row = (((f.at.y - Nm::from_raw_shim(y0)) / h).clamp(Nm::ZERO, Nm::from_raw_shim(2))).raw_shim() as usize;
+        area[row][col] += ((c.2 - c.0).raw_shim() as f64) * ((c.3 - c.1).raw_shim() as f64);
         held[row][col].insert(f.id.clone());
     }
     let cell = (w as f64) * (h as f64);
@@ -114,10 +115,10 @@ fn outline_bounds(outline: &[eda_model::ir::Point]) -> Result<(i64, i64, i64, i6
         )]);
     }
     Ok((
-        outline.iter().map(|p| p.x).min().expect("outline is non-empty"),
-        outline.iter().map(|p| p.y).min().expect("outline is non-empty"),
-        outline.iter().map(|p| p.x).max().expect("outline is non-empty"),
-        outline.iter().map(|p| p.y).max().expect("outline is non-empty"),
+        (outline.iter().map(|p| p.x).min().expect("outline is non-empty")).raw_shim(),
+        (outline.iter().map(|p| p.y).min().expect("outline is non-empty")).raw_shim(),
+        (outline.iter().map(|p| p.x).max().expect("outline is non-empty")).raw_shim(),
+        (outline.iter().map(|p| p.y).max().expect("outline is non-empty")).raw_shim(),
     ))
 }
 
@@ -196,7 +197,7 @@ pub fn view(board: &Board, model: &ConstraintModel) -> Result<Value, Vec<CheckRe
                 .filter(|o| o.id != *r)
                 .map(|o| {
                     let (dx, dy) = (o.at.x - fp.at.x, o.at.y - fp.at.y);
-                    (((dx * dx + dy * dy) as f64).sqrt() as i64, o)
+                    (((dx * dx.raw_shim() + dy * dy.raw_shim()).raw_shim() as f64).sqrt() as i64, o)
                 })
                 .collect();
             cand.sort_by_key(|(d, _)| *d);
@@ -212,7 +213,7 @@ pub fn view(board: &Board, model: &ConstraintModel) -> Result<Value, Vec<CheckRe
                     .collect();
                 near.push(json!({
                     "part": o.id,
-                    "bearing": bearing(o.at.x - fp.at.x, o.at.y - fp.at.y),
+                    "bearing": bearing((o.at.x - fp.at.x).raw_shim(), (o.at.y - fp.at.y).raw_shim()),
                     "distance_mm": mm(dist),
                     "same_block": block_of.get(&o.id) == block_of.get(r),
                     "shared_nets": shared,

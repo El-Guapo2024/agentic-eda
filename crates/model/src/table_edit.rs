@@ -13,12 +13,12 @@ use serde::{Deserialize, Serialize};
 
 /// `GetPenSizeForNormal`: an eighth of the glyph, `KiROUND`ed.
 pub fn pen_for_normal(size: Nm) -> Nm {
-    (size as f64 / 8.0).round() as Nm
+    Nm::kiround(size.as_f64() / 8.0)
 }
 
 /// `GetPenSizeForBold`: a fifth of the glyph.
 pub fn pen_for_bold(size: Nm) -> Nm {
-    (size as f64 / 5.0).round() as Nm
+    Nm::kiround(size.as_f64() / 5.0)
 }
 
 impl TableText {
@@ -235,13 +235,13 @@ pub fn patch_table(t: &mut Table, p: &TablePatch) -> Result<(), String> {
     if let Some(b) = p.border {
         t.border.external = b.external;
         t.border.header = b.header;
-        t.border.stroke.width_nm = if b.external || b.header { b.width_nm.max(0) } else { -1 };
+        t.border.stroke.width_nm = if b.external || b.header { b.width_nm.max(Nm::ZERO) } else { Nm::new(-1) };
         t.border.stroke.style = style_or_solid(b.style);
     }
     if let Some(s) = p.separators {
         t.separators.rows = s.rows;
         t.separators.cols = s.cols;
-        t.separators.stroke.width_nm = if s.rows || s.cols { s.width_nm.max(0) } else { -1 };
+        t.separators.stroke.width_nm = if s.rows || s.cols { s.width_nm.max(Nm::ZERO) } else { Nm::new(-1) };
         t.separators.stroke.style = style_or_solid(s.style);
     }
     if let Some(props) = &p.props {
@@ -283,7 +283,7 @@ pub fn edit_cells(t: &mut Table, cells: &[(usize, usize)], e: &CellEdit) -> Resu
                 st.height_nm = h;
             }
             if let Some(th) = e.thickness_nm {
-                st.thickness_nm = th.max(0);
+                st.thickness_nm = th.max(Nm::ZERO);
             }
             if let Some(h) = e.h_align {
                 st.h_align = h;
@@ -308,12 +308,12 @@ pub fn edit_cells(t: &mut Table, cells: &[(usize, usize)], e: &CellEdit) -> Resu
         }
         if let Some(w) = e.col_width_nm {
             if let Some(slot) = t.col_widths.get_mut(col) {
-                *slot = w.max(0);
+                *slot = w.max(Nm::ZERO);
             }
         }
         if let Some(h) = e.row_height_nm {
             if let Some(slot) = t.row_heights.get_mut(row) {
-                *slot = h.max(0);
+                *slot = h.max(Nm::ZERO);
             }
         }
     }
@@ -334,39 +334,39 @@ mod tests {
             id: "tbl_t".into(),
             uuid: String::new(),
             layer: "F.SilkS".into(),
-            at: Point { x: 0, y: 0 },
+            at: Point { x: Nm::ZERO, y: Nm::ZERO },
             angle: 0,
-            col_widths: vec![10_000_000, 20_000_000],
-            row_heights: vec![5_000_000, 6_000_000],
+            col_widths: vec![Nm::new(10_000_000), Nm::new(20_000_000)],
+            row_heights: vec![Nm::new(5_000_000), Nm::new(6_000_000)],
             cells,
-            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(100_000) },
-            separators: TableSeparators { rows: true, cols: true, stroke: TableStroke::solid(100_000) },
+            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(Nm::new(100_000)) },
+            separators: TableSeparators { rows: true, cols: true, stroke: TableStroke::solid(Nm::new(100_000)) },
         }
     }
 
     #[test]
     fn the_borders_dialog_sets_a_width_only_while_a_border_is_on() {
         let mut t = table();
-        patch_table(&mut t, &TablePatch { border: Some(BorderEdit { external: false, header: false, width_nm: 300_000, style: TableLineStyle::Dash }), ..TablePatch::default() }).unwrap();
-        assert_eq!((t.border.external, t.border.header, t.border.stroke.width_nm, t.border.stroke.style), (false, false, -1, TableLineStyle::Dash));
-        patch_table(&mut t, &TablePatch { border: Some(BorderEdit { external: true, header: false, width_nm: -5, style: TableLineStyle::Default }), ..TablePatch::default() }).unwrap();
-        assert_eq!((t.border.stroke.width_nm, t.border.stroke.style), (0, TableLineStyle::Solid), "a negative width is 0 and the default style shows as solid");
-        patch_table(&mut t, &TablePatch { separators: Some(SeparatorsEdit { rows: false, cols: true, width_nm: 150_000, style: TableLineStyle::Dot }), ..TablePatch::default() }).unwrap();
-        assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_nm), (false, true, 150_000));
+        patch_table(&mut t, &TablePatch { border: Some(BorderEdit { external: false, header: false, width_nm: Nm::new(300_000), style: TableLineStyle::Dash }), ..TablePatch::default() }).unwrap();
+        assert_eq!((t.border.external, t.border.header, t.border.stroke.width_nm, t.border.stroke.style), (false, false, Nm::new(-1), TableLineStyle::Dash));
+        patch_table(&mut t, &TablePatch { border: Some(BorderEdit { external: true, header: false, width_nm: Nm::new(-5), style: TableLineStyle::Default }), ..TablePatch::default() }).unwrap();
+        assert_eq!((t.border.stroke.width_nm, t.border.stroke.style), (Nm::ZERO, TableLineStyle::Solid), "a negative width is 0 and the default style shows as solid");
+        patch_table(&mut t, &TablePatch { separators: Some(SeparatorsEdit { rows: false, cols: true, width_nm: Nm::new(150_000), style: TableLineStyle::Dot }), ..TablePatch::default() }).unwrap();
+        assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_nm), (false, true, Nm::new(150_000)));
     }
 
     #[test]
     fn a_properties_row_changes_one_field_of_a_stroke_and_leaves_the_rest() {
         let mut t = table();
-        t.border.stroke.width_nm = -1;
+        t.border.stroke.width_nm = Nm::new(-1);
         // `SetStrokeExternal` alone: the width stays -1 (nothing draws until the width is set too), the dialog's rule does not apply.
         patch_table(&mut t, &TablePatch { props: Some(StrokeProps { external: Some(false), ..StrokeProps::default() }), ..TablePatch::default() }).unwrap();
-        assert_eq!((t.border.external, t.border.header, t.border.stroke.width_nm), (false, true, -1));
+        assert_eq!((t.border.external, t.border.header, t.border.stroke.width_nm), (false, true, Nm::new(-1)));
         let red = TableColor { r: 255, g: 0, b: 0, a: 255 };
-        let props = StrokeProps { border_width_nm: Some(250_000), border_style: Some(TableLineStyle::Dot), border_color: Some(red), cols: Some(false), separators_width_nm: Some(80_000), ..StrokeProps::default() };
+        let props = StrokeProps { border_width_nm: Some(Nm::new(250_000)), border_style: Some(TableLineStyle::Dot), border_color: Some(red), cols: Some(false), separators_width_nm: Some(Nm::new(80_000)), ..StrokeProps::default() };
         patch_table(&mut t, &TablePatch { props: Some(props), ..TablePatch::default() }).unwrap();
-        assert_eq!((t.border.stroke.width_nm, t.border.stroke.style, t.border.stroke.color), (250_000, TableLineStyle::Dot, Some(red)));
-        assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_nm, t.separators.stroke.style), (true, false, 80_000, TableLineStyle::Solid));
+        assert_eq!((t.border.stroke.width_nm, t.border.stroke.style, t.border.stroke.color), (Nm::new(250_000), TableLineStyle::Dot, Some(red)));
+        assert_eq!((t.separators.rows, t.separators.cols, t.separators.stroke.width_nm, t.separators.stroke.style), (true, false, Nm::new(80_000), TableLineStyle::Solid));
         // An unspecified colour (no alpha) clears it.
         let clear = StrokeProps { border_color: Some(TableColor { r: 0, g: 0, b: 0, a: 0 }), ..StrokeProps::default() };
         patch_table(&mut t, &TablePatch { props: Some(clear), ..TablePatch::default() }).unwrap();
@@ -386,13 +386,13 @@ mod tests {
     #[test]
     fn a_cell_edit_changes_what_it_names_and_the_column_and_row_of_each_cell() {
         let mut t = table();
-        let e = CellEdit { text: Some("x\r\ny".into()), width_nm: Some(2_000_000), height_nm: Some(2_000_000), thickness_nm: Some(0), h_align: Some(TextJustify::Right), v_align: Some(TextVAlign::Top), margins: [Some(500_000), None, None, Some(700_000)], col_width_nm: Some(12_000_000), row_height_nm: Some(4_000_000), ..CellEdit::default() };
+        let e = CellEdit { text: Some("x\r\ny".into()), width_nm: Some(Nm::new(2_000_000)), height_nm: Some(Nm::new(2_000_000)), thickness_nm: Some(Nm::ZERO), h_align: Some(TextJustify::Right), v_align: Some(TextVAlign::Top), margins: [Some(Nm::new(500_000)), None, None, Some(Nm::new(700_000))], col_width_nm: Some(Nm::new(12_000_000)), row_height_nm: Some(Nm::new(4_000_000)), ..CellEdit::default() };
         edit_cells(&mut t, &[(1, 1)], &e).unwrap();
         let c = t.cell(1, 1).unwrap();
         assert_eq!(c.text, "x\ny");
-        assert_eq!((c.style.width_nm, c.style.height_nm, c.style.thickness_nm, c.style.h_align, c.style.v_align), (2_000_000, 2_000_000, 0, TextJustify::Right, TextVAlign::Top));
-        assert_eq!(c.margins, [500_000, 1_002_500, 1_002_500, 700_000], "margins not named stay");
-        assert_eq!((t.col_widths[1], t.row_heights[1]), (12_000_000, 4_000_000));
+        assert_eq!((c.style.width_nm, c.style.height_nm, c.style.thickness_nm, c.style.h_align, c.style.v_align), (Nm::new(2_000_000), Nm::new(2_000_000), Nm::ZERO, TextJustify::Right, TextVAlign::Top));
+        assert_eq!(c.margins, [Nm::new(500_000), Nm::new(1_002_500), Nm::new(1_002_500), Nm::new(700_000)], "margins not named stay");
+        assert_eq!((t.col_widths[1], t.row_heights[1]), (Nm::new(12_000_000), Nm::new(4_000_000)));
         // the other cells are as they were
         assert_eq!(t.cell(0, 0).unwrap().style, TableText::pcb_default());
         assert!(edit_cells(&mut t, &[(5, 5)], &e).is_err());
@@ -403,10 +403,10 @@ mod tests {
     fn making_a_cells_text_bold_takes_the_bold_pen_and_unmaking_it_the_normal_one() {
         let mut st = TableText::pcb_default();
         st.set_bold(true);
-        assert_eq!((st.bold, st.thickness_nm), (true, 254_000), "a fifth of 1.27 mm");
+        assert_eq!((st.bold, st.thickness_nm), (true, Nm::new(254_000)), "a fifth of 1.27 mm");
         st.set_bold(false);
-        assert_eq!((st.bold, st.thickness_nm), (false, 158_750), "an eighth");
+        assert_eq!((st.bold, st.thickness_nm), (false, Nm::new(158_750)), "an eighth");
         st.set_bold(false);
-        assert_eq!(st.thickness_nm, 158_750, "no change when it already was not bold");
+        assert_eq!(st.thickness_nm, Nm::new(158_750), "no change when it already was not bold");
     }
 }

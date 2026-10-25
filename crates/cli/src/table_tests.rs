@@ -2,6 +2,7 @@
 //! and Add Board Characteristics build are plotted by kicad-cli (`pcb export svg`) the way we laid them out -- the text of every cell on a line of its own, no cell
 //! broken by KiCad's line breaking, and the lines of the border and the separators where `PCB_TABLE::DrawBorders` puts them.
 
+use eda_model::units::Nm;
 use super::tests::{scratch, setup};
 use super::{load, step};
 use eda_model::ir::Point;
@@ -90,7 +91,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
     }
     let dir = scratch("tables_plot");
     setup(&dir);
-    step(&dir, Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: Point { x: 2_000_000, y: 2_000_000 }, units: None }), false, "test").unwrap();
+    step(&dir, Cmd::Table(TableCmd::PlaceStackup { layer: "Dwgs.User".into(), at: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, units: None }), false, "test").unwrap();
     let characteristics: Cmd = serde_json::from_value(serde_json::json!({
         "op": "table", "verb": "place_characteristics", "layer": "Cmts.User", "at": { "x": 2_000_000, "y": 100_000_000 }, "units": "mm",
         "numbers": { "thickness_nm": 1_600_000, "width_nm": 20_000_000, "height_nm": 20_000_000, "min_track_nm": 200_000, "min_clearance_nm": 200_000, "min_drill_nm": 300_000, "castellated_pads": 0, "press_fit_pads": 2 }
@@ -114,7 +115,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
         .map(|l| {
             let (a, b) = ((l.a.x, l.a.y), (l.b.x, l.b.y));
             let (a, b) = if a <= b { (a, b) } else { (b, a) };
-            [a.0, a.1, b.0, b.1]
+            [a.0.raw_shim(), a.1.raw_shim(), b.0.raw_shim(), b.1.raw_shim()]
         })
         .collect();
     assert!(!expected.is_empty());
@@ -138,7 +139,7 @@ fn kicad_cli_plots_the_stackup_and_characteristics_tables_the_way_they_were_laid
 fn the_move_preview_carries_a_held_sheet_table_where_it_would_be() {
     let dir = scratch("sch_table_preview");
     setup(&dir);
-    let mut t = Table::new_sch_grid(Point { x: 20_000_000, y: 30_000_000 }, 2, 2, 20_000_000, 5_000_000, 1_270_000);
+    let mut t = Table::new_sch_grid(Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(30_000_000) }, 2, 2, Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(1_270_000));
     t.cells[0].text = "TITLE ${ROW}".into();
     step(&dir, Cmd::SchTable(TableCmd::Add { table: t }), false, "test").unwrap();
     let (_, design, _) = load(&dir).expect("the board loads");

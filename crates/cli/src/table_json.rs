@@ -114,13 +114,14 @@ fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: boo
         "border": { "external": t.border.external, "header": t.border.header, "stroke": stroke_json(&t.border.stroke) },
         "separators": { "rows": t.separators.rows, "cols": t.separators.cols, "stroke": stroke_json(&t.separators.stroke) },
         "bbox": [bbox.x0, bbox.y0, bbox.x1, bbox.y1],
-        "borders": t.borders().iter().map(|l| json!({ "a": pt(l.a), "b": pt(l.b), "width": border_width(l.stroke.width_nm), "style": style_token(l.stroke.drawn_style()), "color": color_json(l.stroke.color) })).collect::<Vec<_>>(),
+        "borders": t.borders().iter().map(|l| json!({ "a": pt(l.a), "b": pt(l.b), "width": border_width(l.stroke.width_nm.raw_shim()), "style": style_token(l.stroke.drawn_style()), "color": color_json(l.stroke.color) })).collect::<Vec<_>>(),
         "cells": cells,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::Point;
     use eda_model::table::{TableBorder, TableCell, TableSeparators};
@@ -133,12 +134,12 @@ mod tests {
             id: "tbl_x".into(),
             uuid: String::new(),
             layer: "F.SilkS".into(),
-            at: Point { x: 1_000_000, y: 2_000_000 },
+            at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) },
             angle: 0,
-            col_widths: vec![20_000_000],
-            row_heights: vec![6_000_000],
+            col_widths: vec![Nm::from_raw_shim(20_000_000)],
+            row_heights: vec![Nm::from_raw_shim(6_000_000)],
             cells: vec![cell],
-            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(100_000) },
+            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(Nm::from_raw_shim(100_000)) },
             separators: TableSeparators::default(),
         };
         let v = table_json(&t, &PcbBoard::default());
@@ -154,7 +155,7 @@ mod tests {
 
     #[test]
     fn a_sheets_table_counts_from_zero_resolves_the_sheets_variables_and_draws_a_stroke_of_width_zero_at_the_default_width() {
-        let mut t = Table::new_sch_grid(Point { x: 10_000_000, y: 20_000_000 }, 2, 1, 30_000_000, 5_000_000, 1_270_000);
+        let mut t = Table::new_sch_grid(Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) }, 2, 1, Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(1_270_000));
         t.cells[0].text = "${ADDR} ${ROW}/${COL}".into();
         t.cells[1].text = "${TITLE}".into();
         t.cells[1].fill = eda_model::sch_extras::SchFill::Color;

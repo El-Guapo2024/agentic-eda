@@ -10,6 +10,7 @@
 use eda_engine::{derive_schematic, EngineOptions};
 use eda_kicad::{import_kicad_sch, parse_clipboard, write_clipboard, CopyInput};
 use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
+use eda_model::units::Nm;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -242,7 +243,7 @@ fn forms_taken_from_real_kicad_files_read_as_the_file_does() {
         );
         // The wires: segments that meet at a plain bend come back as one polyline, so compare them as the segments they are.
         let segments = |wires: &[eda_model::ir::Wire]| {
-            let mut out: Vec<(bool, (i64, i64), (i64, i64))> = wires
+            let mut out: Vec<(bool, (Nm, Nm), (Nm, Nm))> = wires
                 .iter()
                 .flat_map(|w| w.pts.windows(2).map(|p| (w.bus, (p[0].x, p[0].y), (p[1].x, p[1].y))).collect::<Vec<_>>())
                 .map(|(bus, a, b)| if a <= b { (bus, a, b) } else { (bus, b, a) })

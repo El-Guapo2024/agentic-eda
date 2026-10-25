@@ -160,7 +160,7 @@ fn is_solid(s: &LineStyle) -> bool {
     *s == LineStyle::Solid
 }
 fn is_zero(v: &Nm) -> bool {
-    *v == 0
+    *v == Nm::ZERO
 }
 
 /// One `PCB_SHAPE` of a footprint. The geometry, the layer, the stroke width and the solid fill are a [`Shape`] (its `id` is not used: art
@@ -196,7 +196,7 @@ pub struct FpShape {
 impl FpShape {
     /// A solid-stroked shape with nothing else about it.
     pub fn new(shape: Shape) -> Self {
-        FpShape { shape, style: LineStyle::Solid, hatch: None, radius: 0, layers: Vec::new(), mask_margin: None, endings: Default::default() }
+        FpShape { shape, style: LineStyle::Solid, hatch: None, radius: Nm::ZERO, layers: Vec::new(), mask_margin: None, endings: Default::default() }
     }
 
     pub fn layer(&self) -> &str {
@@ -237,7 +237,7 @@ impl FpShape {
                 Shape::Bezier { id: id.clone(), layer: layer_on_side(layer, fp.side), stroke_width: *stroke_width, filled: *filled, start: at(*start), c1: at(*c1), c2: at(*c2), end: at(*end) }
             }
             Shape::Rect { id, layer, stroke_width, filled, start, end } => {
-                if self.radius > 0 {
+                if self.radius > Nm::ZERO {
                     Shape::Polygon { id: id.clone(), layer: layer_on_side(layer, fp.side), stroke_width: *stroke_width, filled: *filled, pts: rounded_rect_points(*start, *end, self.radius).into_iter().map(at).collect() }
                 } else if square_turn {
                     Shape::Rect { id: id.clone(), layer: layer_on_side(layer, fp.side), stroke_width: *stroke_width, filled: *filled, start: at(*start), end: at(*end) }
@@ -246,17 +246,17 @@ impl FpShape {
                 }
             }
         };
-        FpShape { shape, style: self.style, hatch: self.hatch, radius: if matches!(self.shape, Shape::Rect { .. }) && self.radius > 0 { 0 } else { self.radius }, layers: self.layers.iter().map(|l| layer_on_side(l, fp.side)).collect(), mask_margin: self.mask_margin, endings: self.endings }
+        FpShape { shape, style: self.style, hatch: self.hatch, radius: if matches!(self.shape, Shape::Rect { .. }) && self.radius > Nm::ZERO { Nm::ZERO } else { self.radius }, layers: self.layers.iter().map(|l| layer_on_side(l, fp.side)).collect(), mask_margin: self.mask_margin, endings: self.endings }
     }
 
     /// The box `(x0, y0, x1, y1)` the geometry spans in its own frame, grown by half the stroke width (`EDA_SHAPE::getBoundingBox`); an arc, a circle
     /// and a Bezier curve by the curve itself, cut to a 5 micrometre error.
     pub fn bbox(&self) -> Option<(Nm, Nm, Nm, Nm)> {
         if let Shape::Circle { center, end, stroke_width, .. } = &self.shape {
-            let reach = (((end.x - center.x) as f64).hypot((end.y - center.y) as f64)).round() as Nm + stroke_width / 2;
+            let reach = Nm::kiround(((end.x - center.x).as_f64()).hypot((end.y - center.y).as_f64())) + *stroke_width / 2;
             return Some((center.x - reach, center.y - reach, center.x + reach, center.y + reach));
         }
-        crate::outline::bounding_box(std::slice::from_ref(&self.shape), crate::outline::MAX_ERROR_NM as f64).map(|(a, b)| (a.x, a.y, b.x, b.y))
+        crate::outline::bounding_box(std::slice::from_ref(&self.shape), crate::outline::MAX_ERROR_NM.as_f64()).map(|(a, b)| (a.x, a.y, b.x, b.y))
     }
 }
 
@@ -264,7 +264,7 @@ impl FpShape {
     /// [`FpShape::bbox`] of the geometry alone, the stroke not counted: the box a body is sized from (a fab line is 0.1 mm and the part is not that much bigger).
     pub fn geometry_bbox(&self) -> Option<(Nm, Nm, Nm, Nm)> {
         let mut bare = self.clone();
-        bare.shape.set_stroke_width(0);
+        bare.shape.set_stroke_width(Nm::ZERO);
         bare.bbox()
     }
 }
@@ -280,19 +280,19 @@ pub fn rect_corners(a: Point, b: Point) -> [Point; 4] {
 /// radius is limited to half the shorter side.
 pub fn rounded_rect_points(a: Point, b: Point, radius: Nm) -> Vec<Point> {
     let [tl, tr, br, bl] = rect_corners(a, b);
-    let r = radius.min((tr.x - tl.x) / 2).min((bl.y - tl.y) / 2).max(0);
-    if r == 0 {
+    let r = radius.min((tr.x - tl.x) / 2).min((bl.y - tl.y) / 2).max(Nm::ZERO);
+    if r == Nm::ZERO {
         return vec![tl, tr, br, bl];
     }
     let err = 5_000.0_f64;
-    let per_quarter = ((std::f64::consts::FRAC_PI_2 / (1.0 - (err / r as f64).min(1.0)).acos()).ceil() as usize).clamp(2, 64);
+    let per_quarter = ((std::f64::consts::FRAC_PI_2 / (1.0 - (err / r.as_f64()).min(1.0)).acos()).ceil() as usize).clamp(2, 64);
     let mut out = Vec::new();
     // Corner centres and the angle each quarter starts at (screen angles, y down): top-left starts at 180 degrees and goes clockwise.
     let corners = [(Point { x: tl.x + r, y: tl.y + r }, 180.0_f64), (Point { x: tr.x - r, y: tr.y + r }, 270.0), (Point { x: br.x - r, y: br.y - r }, 0.0), (Point { x: bl.x + r, y: bl.y - r }, 90.0)];
     for (c, start) in corners {
         for i in 0..=per_quarter {
             let a = (start + 90.0 * i as f64 / per_quarter as f64).to_radians();
-            out.push(Point { x: c.x + (r as f64 * a.cos()).round() as Nm, y: c.y + (r as f64 * a.sin()).round() as Nm });
+            out.push(Point { x: c.x + Nm::kiround(r.as_f64() * a.cos()), y: c.y + Nm::kiround(r.as_f64() * a.sin()) });
         }
     }
     out.dedup();
@@ -546,11 +546,11 @@ mod tests {
     }
 
     fn fp(side: Side, rot: Millideg) -> FootprintInstance {
-        FootprintInstance { id: "R1".into(), at: p(10_000_000, 20_000_000), rot, side, label: Default::default() }
+        FootprintInstance { id: "R1".into(), at: p(Nm::new(10_000_000), Nm::new(20_000_000)), rot, side, label: Default::default() }
     }
 
     fn line(layer: &str, a: Point, b: Point) -> FpShape {
-        FpShape::new(Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 120_000, filled: false, start: a, end: b })
+        FpShape::new(Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: Nm::new(120_000), filled: false, start: a, end: b })
     }
 
     #[test]
@@ -572,60 +572,60 @@ mod tests {
 
     #[test]
     fn a_shape_follows_its_footprints_pose() {
-        let s = line("F.SilkS", p(1_000_000, 0), p(2_000_000, 500_000));
+        let s = line("F.SilkS", p(Nm::new(1_000_000), Nm::ZERO), p(Nm::new(2_000_000), Nm::new(500_000)));
         // Top side, turned a quarter clockwise on the screen: (x, y) -> (-y, x) about the origin, then moved.
         let placed = s.placed(&fp(Side::Top, 90_000));
-        assert_eq!(placed.shape.points(), vec![p(10_000_000, 21_000_000), p(9_500_000, 22_000_000)]);
+        assert_eq!(placed.shape.points(), vec![p(Nm::new(10_000_000), Nm::new(21_000_000)), p(Nm::new(9_500_000), Nm::new(22_000_000))]);
         assert_eq!(placed.layer(), "F.SilkS");
         // Bottom side: x is mirrored first, and the silkscreen is the other side's.
         let placed = s.placed(&fp(Side::Bottom, 0));
-        assert_eq!(placed.shape.points(), vec![p(9_000_000, 20_000_000), p(8_000_000, 20_500_000)]);
+        assert_eq!(placed.shape.points(), vec![p(Nm::new(9_000_000), Nm::new(20_000_000)), p(Nm::new(8_000_000), Nm::new(20_500_000))]);
         assert_eq!(placed.layer(), "B.SilkS");
         // Not a silkscreen: the user layer does not change sides.
-        assert_eq!(line("Dwgs.User", p(0, 0), p(1, 1)).placed(&fp(Side::Bottom, 0)).layer(), "Dwgs.User");
+        assert_eq!(line("Dwgs.User", p(Nm::ZERO, Nm::ZERO), p(Nm::new(1), Nm::new(1))).placed(&fp(Side::Bottom, 0)).layer(), "Dwgs.User");
     }
 
     #[test]
     fn a_rectangle_stays_a_rectangle_under_a_square_turn_and_is_a_polygon_otherwise() {
-        let r = FpShape::new(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, start: p(-1_000_000, -500_000), end: p(1_000_000, 500_000) });
+        let r = FpShape::new(Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::new(100_000), filled: false, start: p(Nm::new(-1_000_000), Nm::new(-500_000)), end: p(Nm::new(1_000_000), Nm::new(500_000)) });
         assert!(matches!(r.placed(&fp(Side::Top, 90_000)).shape, Shape::Rect { .. }));
         assert!(matches!(r.placed(&fp(Side::Bottom, 180_000)).shape, Shape::Rect { .. }));
         let tilted = r.placed(&fp(Side::Top, 45_000));
         let Shape::Polygon { pts, .. } = &tilted.shape else { panic!("a tilted rectangle is a polygon: {:?}", tilted.shape) };
         assert_eq!(pts.len(), 4);
         // a rounded one is a polygon at any angle, with more than its four corners
-        let rounded = FpShape { radius: 300_000, ..r.clone() };
+        let rounded = FpShape { radius: Nm::new(300_000), ..r.clone() };
         let Shape::Polygon { pts, .. } = rounded.placed(&fp(Side::Top, 0)).shape else { panic!("a rounded rectangle is a polygon") };
         assert!(pts.len() > 8, "{} points", pts.len());
-        assert!(pts.iter().all(|q| (9_000_000..=11_000_000).contains(&q.x) && (19_500_000..=20_500_000).contains(&q.y)));
+        assert!(pts.iter().all(|q| (Nm::new(9_000_000)..=Nm::new(11_000_000)).contains(&q.x) && (Nm::new(19_500_000)..=Nm::new(20_500_000)).contains(&q.y)));
     }
 
     #[test]
     fn bounding_boxes_include_the_stroke_and_follow_curves() {
-        let l = line("F.Fab", p(-1_000_000, -500_000), p(1_000_000, 500_000));
-        assert_eq!(l.bbox(), Some((-1_060_000, -560_000, 1_060_000, 560_000)));
-        let c = FpShape::new(Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: 100_000, filled: false, center: p(0, 0), end: p(1_000_000, 0) });
-        assert_eq!(c.bbox(), Some((-1_050_000, -1_050_000, 1_050_000, 1_050_000)));
+        let l = line("F.Fab", p(Nm::new(-1_000_000), Nm::new(-500_000)), p(Nm::new(1_000_000), Nm::new(500_000)));
+        assert_eq!(l.bbox(), Some((Nm::new(-1_060_000), Nm::new(-560_000), Nm::new(1_060_000), Nm::new(560_000))));
+        let c = FpShape::new(Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::new(100_000), filled: false, center: p(Nm::ZERO, Nm::ZERO), end: p(Nm::new(1_000_000), Nm::ZERO) });
+        assert_eq!(c.bbox(), Some((Nm::new(-1_050_000), Nm::new(-1_050_000), Nm::new(1_050_000), Nm::new(1_050_000))));
         let mut art = FpArt::default();
         art.shapes.push(l);
-        art.shapes.push(line("F.SilkS", p(5_000_000, 5_000_000), p(6_000_000, 6_000_000)));
-        assert_eq!(art.bbox_on("F.Fab"), Some((-1_060_000, -560_000, 1_060_000, 560_000)));
+        art.shapes.push(line("F.SilkS", p(Nm::new(5_000_000), Nm::new(5_000_000)), p(Nm::new(6_000_000), Nm::new(6_000_000))));
+        assert_eq!(art.bbox_on("F.Fab"), Some((Nm::new(-1_060_000), Nm::new(-560_000), Nm::new(1_060_000), Nm::new(560_000))));
         assert_eq!(art.bbox_on("B.Fab"), None);
     }
 
     #[test]
     fn a_text_turns_with_its_footprint_and_flips_with_it() {
-        let mut t = FpText::new("hello", p(1_000_000, 0), "F.SilkS");
+        let mut t = FpText::new("hello", p(Nm::new(1_000_000), Nm::ZERO), "F.SilkS");
         t.layout.angle = 30_000;
         let vars = TextVars { reference: "R1", value: "10k", footprint: "Resistor_SMD:R_0603" };
         // top side, turned 90 degrees clockwise on the screen: KiCad's counter-clockwise angle drops by 90
         let top = t.placed(&fp(Side::Top, 90_000), &vars);
-        assert_eq!((top.at, top.angle, top.layer.as_str(), top.mirror), (p(10_000_000, 21_000_000), 300_000, "F.SilkS", false));
+        assert_eq!((top.at, top.angle, top.layer.as_str(), top.mirror), (p(Nm::new(10_000_000), Nm::new(21_000_000)), 300_000, "F.SilkS", false));
         // bottom side: the sense of the angle turns over, the layer goes to the back and the text is mirrored (`PCB_TEXT::Flip`)
         let bottom = t.placed(&fp(Side::Bottom, 0), &vars);
-        assert_eq!((bottom.at, bottom.angle, bottom.layer.as_str(), bottom.mirror), (p(9_000_000, 20_000_000), 330_000, "B.SilkS", true));
+        assert_eq!((bottom.at, bottom.angle, bottom.layer.as_str(), bottom.mirror), (p(Nm::new(9_000_000), Nm::new(20_000_000)), 330_000, "B.SilkS", true));
         // a text on a user layer is not mirrored by the flip
-        let mut u = FpText::new("note", p(0, 0), "Dwgs.User");
+        let mut u = FpText::new("note", p(Nm::ZERO, Nm::ZERO), "Dwgs.User");
         u.layout.mirror = false;
         let placed = u.placed(&fp(Side::Bottom, 0), &vars);
         assert_eq!((placed.layer.as_str(), placed.mirror), ("Dwgs.User", false));
@@ -656,19 +656,19 @@ mod tests {
     #[test]
     fn the_editors_graphics_and_texts_become_art_and_come_back() {
         let graphics = vec![
-            Shape::Segment { id: "fpg_1".into(), layer: "F.SilkS".into(), stroke_width: 120_000, filled: false, start: p(0, 0), end: p(1_000_000, 0) },
+            Shape::Segment { id: "fpg_1".into(), layer: "F.SilkS".into(), stroke_width: Nm::new(120_000), filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(Nm::new(1_000_000), Nm::ZERO) },
             // a courtyard line is the footprint's courtyard, not art
-            Shape::Segment { id: "fpg_2".into(), layer: "F.CrtYd".into(), stroke_width: 50_000, filled: false, start: p(0, 0), end: p(1_000_000, 1_000_000) },
+            Shape::Segment { id: "fpg_2".into(), layer: "F.CrtYd".into(), stroke_width: Nm::new(50_000), filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(Nm::new(1_000_000), Nm::new(1_000_000)) },
         ];
-        let texts = vec![Text { id: "fpt_1".into(), content: "${REFERENCE}".into(), at: p(0, 500_000), angle: 90_000, layer: "F.Fab".into(), size_nm: 800_000, stroke_width: 120_000, justify: TextJustify::Left, mirror: false }];
+        let texts = vec![Text { id: "fpt_1".into(), content: "${REFERENCE}".into(), at: p(Nm::ZERO, Nm::new(500_000)), angle: 90_000, layer: "F.Fab".into(), size_nm: Nm::new(800_000), stroke_width: Nm::new(120_000), justify: TextJustify::Left, mirror: false }];
         let art = FpArt::from_library(&graphics, &texts);
         assert_eq!((art.shapes.len(), art.texts.len()), (1, 1));
         assert_eq!(art.shapes[0].shape.id(), "", "art items are not addressed");
-        assert_eq!((art.texts[0].layout.halign, art.texts[0].layout.size), (-1, (800_000, 800_000)));
+        assert_eq!((art.texts[0].layout.halign, art.texts[0].layout.size), (-1, (Nm::new(800_000), Nm::new(800_000))));
         assert!(art.texts[0].layout.keep_upright);
         let (g, t) = art.to_library();
         assert_eq!(g.len(), 1);
-        assert_eq!((t[0].content.as_str(), t[0].angle, t[0].size_nm, t[0].justify), ("${REFERENCE}", 90_000, 800_000, TextJustify::Left));
+        assert_eq!((t[0].content.as_str(), t[0].angle, t[0].size_nm, t[0].justify), ("${REFERENCE}", 90_000, Nm::new(800_000), TextJustify::Left));
     }
 
     #[test]
@@ -676,8 +676,8 @@ mod tests {
         let json = serde_json::to_string(&FpArt::default()).unwrap();
         assert_eq!(json, "{}");
         let mut art = FpArt::default();
-        art.shapes.push(FpShape { style: LineStyle::Dash, hatch: Some(Hatch::CrossHatch), layers: vec!["F.Cu".into(), "F.Mask".into()], ..line("F.Cu", p(0, 0), p(1, 1)) });
-        art.texts.push(FpText { face: Some("Arial".into()), line_spacing_permille: 1200, ..FpText::new("x", p(0, 0), "F.SilkS") });
+        art.shapes.push(FpShape { style: LineStyle::Dash, hatch: Some(Hatch::CrossHatch), layers: vec!["F.Cu".into(), "F.Mask".into()], ..line("F.Cu", p(Nm::ZERO, Nm::ZERO), p(Nm::new(1), Nm::new(1))) });
+        art.texts.push(FpText { face: Some("Arial".into()), line_spacing_permille: 1200, ..FpText::new("x", p(Nm::ZERO, Nm::ZERO), "F.SilkS") });
         let back: FpArt = serde_json::from_str(&serde_json::to_string(&art).unwrap()).unwrap();
         assert_eq!(back, art);
         // and yaml, which an imported board's intent is written in
@@ -689,8 +689,8 @@ mod tests {
     #[test]
     fn a_hidden_text_is_not_a_library_text() {
         let mut art = FpArt::default();
-        art.texts.push(FpText::new("shown", p(0, 0), "F.SilkS"));
-        let mut hidden = FpText::new("hidden", p(0, 500), "F.Fab");
+        art.texts.push(FpText::new("shown", p(Nm::ZERO, Nm::ZERO), "F.SilkS"));
+        let mut hidden = FpText::new("hidden", p(Nm::ZERO, Nm::new(500)), "F.Fab");
         hidden.layout.visible = false;
         art.texts.push(hidden);
         let (_, texts) = art.to_library();

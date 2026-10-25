@@ -80,7 +80,7 @@ pub(crate) fn read_effects(item: &[Sexpr]) -> TableText {
             t.width_nm = um(sexpr::num(s, 2).unwrap_or(1.27));
             found_size = true;
         }
-        t.thickness_nm = sexpr::find(font, "thickness").and_then(|x| sexpr::num(x, 1)).map(um).unwrap_or(0);
+        t.thickness_nm = sexpr::find(font, "thickness").and_then(|x| sexpr::num(x, 1)).map(um).unwrap_or(Nm::ZERO);
         t.bold = flag(font, "bold").unwrap_or(false);
         t.italic = flag(font, "italic").unwrap_or(false);
         t.face = sexpr::find(font, "face").and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(str::to_string);
@@ -89,8 +89,8 @@ pub(crate) fn read_effects(item: &[Sexpr]) -> TableText {
     }
     if !found_size {
         // "Text size was not specified in file, force legacy default units: 60 mils is 1.524 mm".
-        t.height_nm = 1_524_000;
-        t.width_nm = 1_524_000;
+        t.height_nm = Nm::from_raw_shim(1_524_000);
+        t.width_nm = Nm::from_raw_shim(1_524_000);
     }
     if let Some(j) = sexpr::find(e, "justify") {
         for tok in j.iter().skip(1).filter_map(Sexpr::text) {
@@ -117,7 +117,7 @@ pub(crate) fn effects_str(t: &TableText) -> String {
     if t.line_spacing_permille != 0 && t.line_spacing_permille != 1000 {
         let _ = write!(s, " (line_spacing {})", fmt_mm_f(t.line_spacing_permille as f64 / 1000.0));
     }
-    if t.thickness_nm != 0 {
+    if t.thickness_nm != Nm::ZERO {
         let _ = write!(s, " (thickness {})", mm(t.thickness_nm));
     }
     if t.bold {
@@ -185,7 +185,7 @@ fn read_cell(item: &[Sexpr]) -> Option<(TableCell, FileCell)> {
     let margins = match sexpr::find(item, "margins") {
         Some(m) => [um(sexpr::num(m, 1).unwrap_or(0.0)), um(sexpr::num(m, 2).unwrap_or(0.0)), um(sexpr::num(m, 3).unwrap_or(0.0)), um(sexpr::num(m, 4).unwrap_or(0.0))],
         // `GetLegacyTextMargin` with the stroke of a cell read from a file (width -1 nm, which is no micrometre at all): three quarters of the height.
-        None => [TableCell::legacy_margin_nm(&style, 0); 4],
+        None => [TableCell::legacy_margin_nm(&style, Nm::ZERO); 4],
     };
     let (col_span, row_span) = match sexpr::find(item, "span") {
         Some(s) => (sexpr::num(s, 1).unwrap_or(1.0).max(0.0) as u32, sexpr::num(s, 2).unwrap_or(1.0).max(0.0) as u32),
@@ -227,7 +227,7 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Table> {
     let rows = cells.len() / cols;
     let widths = |name: &str, n: usize| -> Vec<Nm> {
         let mut v: Vec<Nm> = sexpr::find(item, name).map(|l| l.iter().skip(1).filter_map(|x| x.text()?.parse::<f64>().ok()).map(um).collect()).unwrap_or_default();
-        v.resize(n, 0);
+        v.resize(n, Nm::ZERO);
         v
     };
     let mut border = TableBorder::default();
@@ -235,7 +235,7 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Table> {
         border.external = flag(b, "external").unwrap_or(border.external);
         border.header = flag(b, "header").unwrap_or(border.header);
         if let Some(s) = sexpr::find(b, "stroke") {
-            border.stroke = read_stroke(s, TableStroke::solid(-1));
+            border.stroke = read_stroke(s, TableStroke::solid(Nm::from_raw_shim(-1)));
         }
     }
     let mut separators = TableSeparators::default();
@@ -243,7 +243,7 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Table> {
         separators.rows = flag(s, "rows").unwrap_or(separators.rows);
         separators.cols = flag(s, "cols").unwrap_or(separators.cols);
         if let Some(st) = sexpr::find(s, "stroke") {
-            separators.stroke = read_stroke(st, TableStroke::solid(-1));
+            separators.stroke = read_stroke(st, TableStroke::solid(Nm::from_raw_shim(-1)));
         }
     }
     let angle = placed[0].angle;
@@ -266,7 +266,7 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Table> {
             return None;
         }
         let want = table.cell_corners(row, col);
-        if want.iter().zip(file.corners.iter()).any(|(a, b)| (a.x - b.x).abs() > 2 || (a.y - b.y).abs() > 2) {
+        if want.iter().zip(file.corners.iter()).any(|(a, b)| (a.x - b.x).abs() > Nm::from_raw_shim(2) || (a.y - b.y).abs() > Nm::from_raw_shim(2)) {
             return None;
         }
     }
@@ -404,20 +404,20 @@ mod tests {
     fn a_table_as_kicad_writes_it_is_read_with_its_grid_its_strokes_and_its_cells_looks() {
         let t = read_text(&table_text("", &flat_cells())).expect("a table");
         assert_eq!((t.col_count(), t.row_count()), (2, 2));
-        assert_eq!(t.at, Point { x: 10_000_000, y: 20_000_000 });
-        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![10_000_000, 20_000_000], vec![5_000_000, 6_000_000]));
+        assert_eq!(t.at, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) });
+        assert_eq!((t.col_widths.clone(), t.row_heights.clone()), (vec![Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000)], vec![Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(6_000_000)]));
         assert_eq!(t.layer, "F.SilkS");
         assert_eq!(t.uuid, "11111111-1111-1111-1111-111111111111");
         assert!(t.border.external && t.border.header && !t.separators.cols && t.separators.rows);
-        assert_eq!(t.border.stroke, TableStroke::solid(100_000));
-        assert_eq!(t.separators.stroke.width_nm, 50_000);
+        assert_eq!(t.border.stroke, TableStroke::solid(Nm::from_raw_shim(100_000)));
+        assert_eq!(t.separators.stroke.width_nm, Nm::from_raw_shim(50_000));
         assert_eq!(t.separators.stroke.style, TableLineStyle::Dash);
         assert_eq!(t.separators.stroke.color, Some(SchColor { r: 255, g: 0, b: 0, a: 255 }));
         let c = t.cell(1, 1).unwrap();
         assert_eq!(c.text, "D");
-        assert_eq!(c.margins, [1_000_000; 4]);
-        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.thickness_nm, c.style.bold, c.style.h_align, c.style.v_align), (1_500_000, 1_500_000, 200_000, true, TextJustify::Left, TextVAlign::Top));
-        assert_eq!(t.cell_corners(1, 1)[2], Point { x: 40_000_000, y: 31_000_000 });
+        assert_eq!(c.margins, [Nm::from_raw_shim(1_000_000); 4]);
+        assert_eq!((c.style.height_nm, c.style.width_nm, c.style.thickness_nm, c.style.bold, c.style.h_align, c.style.v_align), (Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(200_000), true, TextJustify::Left, TextVAlign::Top));
+        assert_eq!(t.cell_corners(1, 1)[2], Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(31_000_000) });
     }
 
     #[test]
@@ -442,7 +442,7 @@ mod tests {
     fn a_table_turned_a_quarter_keeps_its_first_corner_and_writes_start_and_end_as_kicad_does() {
         // The grid of `flat_cells` turned 90 degrees about (10, 20): cell (0,0) is 5 mm wide on the screen and 10 mm tall, going up from (10, 20).
         let mut t = read_text(&table_text("", &flat_cells())).unwrap();
-        t.rotate(Point { x: 10_000_000, y: 20_000_000 }, 90_000);
+        t.rotate(Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) }, 90_000);
         t.id = "tbl_q".into();
         let mut text = String::new();
         write(&mut text, &t, false);
@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn a_table_turned_by_any_other_angle_is_a_polygon_per_cell() {
         let mut t = read_text(&table_text("", &flat_cells())).unwrap();
-        t.rotate(Point { x: 10_000_000, y: 20_000_000 }, 30_000);
+        t.rotate(Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) }, 30_000);
         t.id = "tbl_r".into();
         let mut text = String::new();
         write(&mut text, &t, false);
@@ -474,7 +474,7 @@ mod tests {
         for r in 0..2 {
             for c in 0..2 {
                 for (a, b) in again.cell_corners(r, c).iter().zip(t.cell_corners(r, c).iter()) {
-                    assert!((a.x - b.x).abs() <= 2000 && (a.y - b.y).abs() <= 2000, "{a:?} {b:?}");
+                    assert!((a.x - b.x).abs() <= Nm::from_raw_shim(2000) && (a.y - b.y).abs() <= Nm::from_raw_shim(2000), "{a:?} {b:?}");
                 }
             }
         }
@@ -489,9 +489,9 @@ mod tests {
         assert_eq!((c.style.h_align, c.style.v_align), (TextJustify::Center, TextVAlign::Center));
         // the border and separators the file does not mention: both on, the stroke of a table that has none
         assert!(t.border.external && t.border.header && t.separators.rows && t.separators.cols);
-        assert_eq!(t.border.stroke.width_nm, -1);
+        assert_eq!(t.border.stroke.width_nm, Nm::from_raw_shim(-1));
         // a cell read from a file has the stroke -1 of `parseTextBoxContent`: -1 nm and three quarters of the 2 mm height
-        assert_eq!(c.margins, [1_500_000; 4]);
+        assert_eq!(c.margins, [Nm::from_raw_shim(1_500_000); 4]);
     }
 
     #[test]
@@ -545,16 +545,16 @@ mod tests {
     /// as the same cell; a margin set to the micrometre stays what it is.
     #[test]
     fn a_new_cells_legacy_margin_is_written_to_the_nanometre() {
-        let mut t = Table::new_grid("F.SilkS", eda_model::ir::Point { x: 0, y: 0 }, 2, 1, 10_000_000, 5_000_000, 100_000);
+        let mut t = Table::new_grid("F.SilkS", eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, 2, 1, Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(100_000));
         t.id = "tbl_l".into();
-        t.cells = vec![TableCell::pcb_new(false), TableCell { margins: [500_000; 4], ..TableCell::pcb_new(false) }];
-        assert_eq!(t.cells[0].margins, [1_002_500; 4]);
+        t.cells = vec![TableCell::pcb_new(false), TableCell { margins: [Nm::from_raw_shim(500_000); 4], ..TableCell::pcb_new(false) }];
+        assert_eq!(t.cells[0].margins, [Nm::from_raw_shim(1_002_500); 4]);
         let mut out = String::new();
         write(&mut out, &t, false);
         assert!(out.contains("(margins 1.0025 1.0025 1.0025 1.0025)"), "{out}");
         assert!(out.contains("(margins 0.5 0.5 0.5 0.5)"), "{out}");
         let back = read_text(&out).expect("a table");
-        assert_eq!((back.cells[0].margins, back.cells[0].margin_nm(0)), ([1_002_500; 4], 1_002_500));
+        assert_eq!((back.cells[0].margins, back.cells[0].margin_nm(0)), ([Nm::from_raw_shim(1_002_500); 4], Nm::from_raw_shim(1_002_500)));
     }
 
     #[test]
@@ -566,7 +566,7 @@ mod tests {
         let text = format!(r#"(table (column_count 2) (layer "F.SilkS") (column_widths 10 20) (row_heights 5 6) (cells {cells}))"#);
         let t = read_text(&text).expect("a table");
         assert_eq!((t.cell(0, 0).unwrap().col_span, t.cell(0, 1).unwrap().col_span), (2, 0));
-        assert_eq!(t.cell_local_rect(0, 0), (0, 0, 30_000_000, 5_000_000));
+        assert_eq!(t.cell_local_rect(0, 0), (Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(5_000_000)));
         let mut out = String::new();
         let mut t = t;
         t.id = "tbl_m".into();

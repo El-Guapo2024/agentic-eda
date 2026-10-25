@@ -16,6 +16,7 @@
 //! * `.pl` positions are the node's lower-left corner (Bookshelf), while
 //!   our IR stores centres — converted both ways.
 
+use eda_model::units::Nm;
 use eda_model::footprint::{keepout_for, keepout_side, placed_courtyard, to_board};
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Side};
 use eda_model::{CheckResult, ConstraintModel};
@@ -105,8 +106,8 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
     let max_x = outline.iter().map(|p| p.x).max().unwrap();
     let max_y = outline.iter().map(|p| p.y).max().unwrap();
     // Board rounds DOWN so every legal Cypress position lies inside the outline.
-    let bw = ((max_x - min_x) / unit).max(1);
-    let bh = ((max_y - min_y) / unit).max(1);
+    let bw = ((max_x - min_x).raw_shim() / unit).max(1);
+    let bh = ((max_y - min_y).raw_shim() / unit).max(1);
     let font = model.board.refdes_font(&outline);
 
     let placed: BTreeMap<&str, &FootprintInstance> =
@@ -149,20 +150,20 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
         // beside it (gate `placement_refdes_clear`), so Cypress reserves
         // label space and no neighbour's pad ends up under a label. The
         // node centre is offset (ox, oy) from the part centre.
-        let ko = keepout_side((-hw_r, -hh_r, hw_r, hh_r), &part.reference, font, i64::MIN, label);
+        let ko = keepout_side((-hw_r, -hh_r, hw_r, hh_r), &part.reference, font, Nm::from_raw_shim(i64::MIN), label);
         let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
         // Sizes round UP: Cypress packs nodes flush on its integer grid, so a
         // rounded-down courtyard would overlap its neighbour at nm precision.
-        let w = div_ceil(ko.2 - ko.0, unit).max(1);
-        let h = div_ceil(ko.3 - ko.1, unit).max(1);
+        let w = div_ceil((ko.2 - ko.0).raw_shim(), unit).max(1);
+        let h = div_ceil((ko.3 - ko.1).raw_shim(), unit).max(1);
         writeln!(nodes, "{} {} {}{}", part.reference, w, h, if is_fixed { " terminal" } else { "" }).unwrap();
-        let origin = FootprintInstance { id: String::new(), at: Point { x: 0, y: 0 }, rot, side: Side::Top, label };
+        let origin = FootprintInstance { id: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot, side: Side::Top, label };
         let offs: BTreeMap<String, (i64, i64)> = fp
             .pads
             .iter()
             .map(|p| {
                 let b = to_board(&origin, p.at);
-                (p.number.clone(), (div_round(b.x - ox, unit), div_round(b.y - oy, unit)))
+                (p.number.clone(), (div_round((b.x - ox).raw_shim(), unit), div_round((b.y - oy).raw_shim(), unit)))
             })
             .collect();
         pad_offsets.insert(part.reference.clone(), offs);
@@ -171,8 +172,8 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
             Some(f) => (f.at.x - min_x + ox, f.at.y - min_y + oy),
             None => ((max_x - min_x) / 2, (max_y - min_y) / 2),
         };
-        let llx = div_round(cx, unit) - w / 2;
-        let lly = div_round(cy, unit) - h / 2;
+        let llx = div_round(cx.raw_shim(), unit) - w / 2;
+        let lly = div_round(cy.raw_shim(), unit) - h / 2;
         centers_units.insert(part.reference.clone(), (llx + w / 2, lly + h / 2));
         let orient = match rot { 90_000 => "W", 180_000 => "S", 270_000 => "E", _ => "N" };
         writeln!(pl, "{} {} {} : {orient}{}", part.reference, llx.max(0), lly.max(0), if is_fixed { " /FIXED" } else { "" }).unwrap();
@@ -346,10 +347,10 @@ pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintMode
         // undo the node-centre offset to recover the part centre. A fixed
         // part was exported with its own label side; movable ones upright.
         let label = if fixed.contains(name) { prior.get(name).map(|f| f.label).unwrap_or_default() } else { LabelSide::Above };
-        let ko = keepout_side((-w / 2, -h / 2, w / 2, h / 2), name, font, i64::MIN, label);
+        let ko = keepout_side((-w / 2, -h / 2, w / 2, h / 2), name, font, Nm::from_raw_shim(i64::MIN), label);
         let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
-        let cx = min_x + (x * unit as f64).round() as i64 + (ko.2 - ko.0) / 2 - ox;
-        let cy = min_y + (y * unit as f64).round() as i64 + (ko.3 - ko.1) / 2 - oy;
+        let cx = min_x + Nm::from_raw_shim((x * unit as f64).round() as i64) + (ko.2 - ko.0) / 2 - ox;
+        let cy = min_y + Nm::from_raw_shim((y * unit as f64).round() as i64) + (ko.3 - ko.1) / 2 - oy;
         footprints.push(FootprintInstance {
             id: name.to_string(),
             at: Point { x: cx, y: cy },
@@ -376,6 +377,7 @@ pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintMode
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::Provenance;
     use eda_model::{Net, Part, Pin, PinKind};
@@ -403,7 +405,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let outline = vec![Point { x: 0, y: 0 }, Point { x: 20_000_000, y: 0 }, Point { x: 20_000_000, y: 15_000_000 }, Point { x: 0, y: 15_000_000 }];
+        let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(15_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(15_000_000) }];
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: eda_model::ir::SCHEMA_VERSION,
@@ -412,9 +414,9 @@ mod tests {
             placement: Some(PlacementSection {
                 outline,
                 footprints: vec![
-                    FootprintInstance { id: "U1".into(), at: Point { x: 10_000_000, y: 7_500_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "C1".into(), at: Point { x: 3_000_000, y: 3_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "R1".into(), at: Point { x: 17_000_000, y: 12_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U1".into(), at: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(7_500_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "C1".into(), at: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(3_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: Nm::from_raw_shim(17_000_000), y: Nm::from_raw_shim(12_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: Vec::new(),
             }),
@@ -479,7 +481,7 @@ mod tests {
         let back = from_bookshelf_pl(&bs.pl, &d, &m, 100_000).unwrap();
         for f in &back.placement.as_ref().unwrap().footprints {
             let orig = d.placement.as_ref().unwrap().footprints.iter().find(|o| o.id == f.id).unwrap();
-            assert!((f.at.x - orig.at.x).abs() <= 100_000 && (f.at.y - orig.at.y).abs() <= 100_000, "{}: {:?} vs {:?}", f.id, f.at, orig.at);
+            assert!((f.at.x - orig.at.x).abs() <= Nm::from_raw_shim(100_000) && (f.at.y - orig.at.y).abs() <= Nm::from_raw_shim(100_000), "{}: {:?} vs {:?}", f.id, f.at, orig.at);
         }
     }
 

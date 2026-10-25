@@ -48,6 +48,7 @@
 //!   merge" is the safe direction for a check that only ever *skips* a
 //!   merge.
 
+use eda_model::units::Nm;
 use std::collections::BTreeSet;
 
 use eda_drc::zone_copper::ZoneCopper;
@@ -398,7 +399,7 @@ fn remove_dangling(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, 
 }
 
 fn collinear(a: Point, b: Point, c: Point) -> bool {
-    let cross = (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128;
+    let cross = (b.x - a.x).raw_shim() as i128 * (c.y - a.y).raw_shim() as i128 - (b.y - a.y).raw_shim() as i128 * (c.x - a.x).raw_shim() as i128;
     cross == 0
 }
 
@@ -466,7 +467,7 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
                 // them pointing back the way it came.
                 let d1 = (shared.x - far_i.x, shared.y - far_i.y);
                 let d2 = (far_j.x - shared.x, far_j.y - shared.y);
-                if d1.0 * d2.0 + d1.1 * d2.1 <= 0 {
+                if d1.0 * d2.0.raw_shim() + d1.1 * d2.1.raw_shim() <= Nm::ZERO {
                     continue;
                 }
                 if is_node(shared, &tracks[i].layer, (tracks[i].id.as_str(), tracks[j].id.as_str()), tracks, vias, pads, zones) {
@@ -549,7 +550,7 @@ mod tests {
     fn a_zero_length_track_is_removed_when_merge_is_on() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, a], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, a], arc_mid_offset: None });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { merge_segments: true, ..Default::default() });
         assert_eq!(report.remove_track_ids(), vec!["t1".to_string()]);
         assert!(matches!(report.changes[0].kind, CleanupKind::ZeroLengthTrack));
@@ -559,7 +560,7 @@ mod tests {
     fn nothing_changes_with_every_option_off() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, a], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, a], arc_mid_offset: None });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions::default());
         assert!(report.changes.is_empty(), "{:?}", report.changes.iter().map(|c| c.kind).collect::<Vec<_>>());
     }
@@ -569,8 +570,8 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, b], arc_mid_offset: None });
-        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![b, a], arc_mid_offset: None }); // reverse order, still a dup
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, b], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![b, a], arc_mid_offset: None }); // reverse order, still a dup
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions::default());
         assert_eq!(report.remove_track_ids(), vec!["t2".to_string()]);
         assert!(matches!(report.changes[0].kind, CleanupKind::DuplicateTrack));
@@ -581,8 +582,8 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
         let rt = design.routing.as_mut().unwrap();
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.vias.push(Via { id: "v2".into(), net: "N1".into(), at: a, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: "v2".into(), net: "N1".into(), at: a, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_redundant_vias: true, ..Default::default() });
         assert_eq!(report.remove_via_ids(), vec!["v2".to_string()]);
     }
@@ -592,7 +593,7 @@ mod tests {
         let (mut design, mut model) = two_pad_model();
         model.footprints.push(eda_model::Footprint {
             name: "THPAD".into(),
-            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1_000_000, 1_000_000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500_000), drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(Nm::from_raw_shim(500_000)), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
@@ -602,7 +603,7 @@ mod tests {
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());
         let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_redundant_vias: true, ..Default::default() });
         assert_eq!(report.remove_via_ids(), vec!["v1".to_string()]);
     }
@@ -612,7 +613,7 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
         // A tiny stub that never leaves R1's own pad.
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 50_000, pts: vec![a, Point { x: a.x + 5, y: a.y }], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(50_000), pts: vec![a, Point { x: a.x + Nm::from_raw_shim(5), y: a.y }], arc_mid_offset: None });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_tracks_in_pads: true, ..Default::default() });
         assert_eq!(report.remove_track_ids(), vec!["t1".to_string()]);
         assert!(matches!(report.changes[0].kind, CleanupKind::TrackInPad));
@@ -626,7 +627,7 @@ mod tests {
         model.nets[0].pins = vec!["R1.1".into()];
         model.nets.push(eda_model::Net { name: "N2".into(), pins: vec!["R2.1".into()] });
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, b], arc_mid_offset: None });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, b], arc_mid_offset: None });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_shorting: true, ..Default::default() });
         assert_eq!(report.remove_track_ids(), vec!["t1".to_string()]);
         assert!(matches!(report.changes[0].kind, CleanupKind::ShortingTrack));
@@ -636,8 +637,8 @@ mod tests {
     fn a_dangling_stub_is_removed_when_asked() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let free_end = Point { x: a.x, y: a.y + 10_000_000 };
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, free_end], arc_mid_offset: None });
+        let free_end = Point { x: a.x, y: a.y + Nm::from_raw_shim(10_000_000) };
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, free_end], arc_mid_offset: None });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_dangling_tracks: true, ..Default::default() });
         assert_eq!(report.remove_track_ids(), vec!["t1".to_string()]);
         assert!(matches!(report.changes[0].kind, CleanupKind::DanglingTrack));
@@ -650,8 +651,8 @@ mod tests {
         let mid = Point { x: (a.x + b.x) / 2, y: a.y };
         assert_eq!(a.y, b.y, "fixture pads must be level for this collinearity test");
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, mid], arc_mid_offset: None });
-        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![mid, b], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, mid], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![mid, b], arc_mid_offset: None });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { merge_segments: true, ..Default::default() });
         let merge = report.changes.iter().find(|c| matches!(c.kind, CleanupKind::MergedTracks)).expect("a merge change");
         assert_eq!(merge.remove_track_ids.len(), 2);
@@ -664,13 +665,13 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         let mid = Point { x: (a.x + b.x) / 2, y: a.y };
-        let off = Point { x: mid.x, y: mid.y + 5_000_000 };
+        let off = Point { x: mid.x, y: mid.y + Nm::from_raw_shim(5_000_000) };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, mid], arc_mid_offset: None });
-        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![mid, b], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, mid], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![mid, b], arc_mid_offset: None });
         // A third leg stubbing off the same joint -- a real node, must
         // not be silently absorbed by the merge.
-        rt.tracks.push(Track { id: "t3".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![mid, off], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t3".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![mid, off], arc_mid_offset: None });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { merge_segments: true, ..Default::default() });
         assert!(report.changes.iter().all(|c| !matches!(c.kind, CleanupKind::MergedTracks)), "{:?}", report.changes.iter().map(|c| c.kind).collect::<Vec<_>>());
     }
@@ -679,10 +680,10 @@ mod tests {
     fn a_via_drops_a_dangling_via_connected_to_only_one_layer() {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        let via_at = Point { x: a.x, y: a.y + 3_000_000 };
+        let via_at = Point { x: a.x, y: a.y + Nm::from_raw_shim(3_000_000) };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200_000, pts: vec![a, via_at], arc_mid_offset: None });
-        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![a, via_at], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { delete_dangling_vias: true, ..Default::default() });
         assert_eq!(report.remove_via_ids(), vec!["v1".to_string()]);
         assert!(matches!(report.changes[0].kind, CleanupKind::DanglingVia));
@@ -700,6 +701,6 @@ mod tests {
     fn unused_import_guard() {
         // Keep FootprintInstance/Side imports honest if a future edit
         // trims the fixtures above; cheap sentinel, not a real assertion.
-        let _ = FootprintInstance { id: "x".into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: Default::default() };
+        let _ = FootprintInstance { id: "x".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: Default::default() };
     }
 }

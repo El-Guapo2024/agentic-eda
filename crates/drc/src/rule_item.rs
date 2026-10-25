@@ -4,6 +4,7 @@
 //!
 //! Lengths are nanometres here, as in KiCad and the studio: `A.Width > 0.25mm` compares nanometres.
 
+use eda_model::units::Nm;
 use crate::kimath::Shape;
 use eda_model::ir::Point;
 use std::collections::HashMap;
@@ -183,7 +184,7 @@ impl RuleItem {
             groups: Vec::new(),
             shapes: Vec::new(),
             hole: None,
-            position: Point { x: 0, y: 0 },
+            position: Point { x: Nm::ZERO, y: Nm::ZERO },
             description: String::new(),
             rule_area: false,
             overrides: Overrides::default(),

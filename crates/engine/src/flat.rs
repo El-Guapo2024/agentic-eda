@@ -6,6 +6,7 @@
 //! share a symbol; a `PWR_FLAG` stands on the pin's end and the symbol or label that shares the pin is three cells off, clear of it. What
 //! hangs on a pin steers clear of the other parts, the wires already routed and what hangs on the other pins, by a longer stub.
 
+use eda_model::units::Nm;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use eda_model::ir::{NetLabel, NoConnect, Point, PowerSymbol, Wire};
@@ -53,7 +54,7 @@ fn flag_anchors(model: &ConstraintModel, parts_by_ref: &HashMap<&str, &Part>, po
                         return true;
                     }
                     let Some(n) = next else { return true };
-                    (n.x - tip.x).signum() == dx && (n.y - tip.y).signum() == dy && (n.x - tip.x).abs() + (n.y - tip.y).abs() >= 3 * G
+                    (n.x - tip.x).signum() == dx && (n.y - tip.y).signum() == dy && (n.x - tip.x).abs() + (n.y - tip.y).abs() >= Nm::from_raw_shim(3 * G)
                 };
                 leaves(first.unwrap_or(tip), w.pts.get(1)) && leaves(last.unwrap_or(tip), w.pts.len().checked_sub(2).and_then(|i| w.pts.get(i)))
             })
@@ -67,7 +68,7 @@ fn flag_anchors(model: &ConstraintModel, parts_by_ref: &HashMap<&str, &Part>, po
 }
 
 fn thin(a: Point, b: Point) -> Rect {
-    Rect::new(a.x.min(b.x) - 100_000, a.y.min(b.y) - 100_000, a.x.max(b.x) + 100_000, a.y.max(b.y) + 100_000)
+    Rect::new((a.x.min(b.x) - Nm::from_raw_shim(100_000)).raw_shim(), (a.y.min(b.y) - Nm::from_raw_shim(100_000)).raw_shim(), (a.x.max(b.x) + Nm::from_raw_shim(100_000)).raw_shim(), (a.y.max(b.y) + Nm::from_raw_shim(100_000)).raw_shim())
 }
 
 /// Draw the rails and the labelled nets of a flat schematic: returns the labels and the power symbols (power symbols numbered `#PWR..`, the
@@ -192,7 +193,7 @@ pub fn hang_nets(
                 if tips.is_empty() {
                     continue;
                 }
-                let stub_len: i64 = tips.windows(2).map(|w| (w[0].1.x - w[1].1.x).abs() + (w[0].1.y - w[1].1.y).abs()).sum();
+                let stub_len: i64 = tips.windows(2).map(|w| ((w[0].1.x - w[1].1.x).abs() + (w[0].1.y - w[1].1.y).abs()).raw_shim()).sum();
                 let stub_bends = tips.len().saturating_sub(2);
                 if tips.len() == 1 || stub_len > MAX_MERGED_STUB_LEN_NM || stub_bends > MAX_MERGED_STUB_BENDS {
                     // a single pin, or a run too wide to read as one local jumper: a label at each, no wire between them

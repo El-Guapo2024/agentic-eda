@@ -8,6 +8,7 @@
 //! * `POST /api/multichannel/compat` with `{ "reference": <zone id> }` -- `CheckRACompatibility`: the reference area matched against every other placement rule area.
 //!   `{ "ok": true, "id", "name", "components": [..], "targets": [{ "id", "name", "ok", "message", "reasons", "components", "pairs" }] }`.
 
+use eda_model::units::Nm;
 use crate::board;
 use eda_ops::Board;
 use serde_json::{json, Value};
@@ -16,7 +17,7 @@ use std::path::Path;
 fn with_board(dir: &Path, f: impl FnOnce(&Board<'_>) -> Value) -> Value {
     match board::load(dir) {
         Ok((meta, design, model)) => {
-            let b = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
+            let b = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
             f(&b)
         }
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),

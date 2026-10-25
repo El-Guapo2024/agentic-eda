@@ -81,7 +81,7 @@ impl PlacementArea {
 pub type Box4 = (Nm, Nm, Nm, Nm);
 
 fn cross(o: Point, a: Point, b: Point) -> i128 {
-    (a.x - o.x) as i128 * (b.y - o.y) as i128 - (a.y - o.y) as i128 * (b.x - o.x) as i128
+    (a.x - o.x).get() as i128 * (b.y - o.y).get() as i128 - (a.y - o.y).get() as i128 * (b.x - o.x).get() as i128
 }
 
 /// `KIGEOM::CollectBoxCorners`: left-top, right-top, right-bottom, left-bottom.
@@ -136,7 +136,7 @@ fn point_on_segment(p: Point, a: Point, b: Point) -> bool {
     }
     // `SEG::SquaredDistance( p ) < 1` for an integer point: the point is on the line to within one unit of squared distance.
     let c = cross(a, b, p);
-    let len2 = (b.x - a.x) as i128 * (b.x - a.x) as i128 + (b.y - a.y) as i128 * (b.y - a.y) as i128;
+    let len2 = (b.x - a.x).get() as i128 * (b.x - a.x).get() as i128 + (b.y - a.y).get() as i128 * (b.y - a.y).get() as i128;
     c * c < len2
 }
 
@@ -233,11 +233,11 @@ pub fn point_inside(chain: &[Point], pt: Point) -> bool {
     for i in 0..n {
         let (p1, p2) = (chain[i], chain[(i + 1) % n]);
         let (dx, dy) = (p2.x - p1.x, p2.y - p1.y);
-        if dy == 0 {
+        if dy == Nm::ZERO {
             continue;
         }
-        let d = rescale(dx, pt.y - p1.y, dy);
-        if ((p1.y >= pt.y) != (p2.y >= pt.y)) && (pt.x - p1.x < d) {
+        let d = rescale(dx.get(), (pt.y - p1.y).get(), dy.get());
+        if ((p1.y >= pt.y) != (p2.y >= pt.y)) && (pt.x - p1.x < Nm::new(d)) {
             inside = !inside;
         }
     }
@@ -255,15 +255,15 @@ mod tests {
     #[test]
     fn the_hull_of_a_box_is_its_four_corners_clockwise_on_the_screen() {
         let mut c = Vec::new();
-        collect_box_corners((0, 0, 10, 5), &mut c);
-        assert_eq!(convex_hull(&c), vec![pt(0, 0), pt(10, 0), pt(10, 5), pt(0, 5)]);
-        assert!(convex_hull(&[pt(1, 1)]).is_empty());
+        collect_box_corners((Nm::ZERO, Nm::ZERO, Nm::new(10), Nm::new(5)), &mut c);
+        assert_eq!(convex_hull(&c), vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::new(5)), pt(Nm::ZERO, Nm::new(5))]);
+        assert!(convex_hull(&[pt(Nm::new(1), Nm::new(1))]).is_empty());
     }
 
     #[test]
     fn a_box_rectifies_to_itself() {
-        let o = rule_area_outline(&[(0, 0, 10_000, 5_000)], 100);
-        assert_eq!(o, vec![pt(-100, -100), pt(10_100, -100), pt(10_100, 5_100), pt(-100, 5_100)]);
+        let o = rule_area_outline(&[(Nm::ZERO, Nm::ZERO, Nm::new(10_000), Nm::new(5_000))], Nm::new(100));
+        assert_eq!(o, vec![pt(Nm::new(-100), Nm::new(-100)), pt(Nm::new(10_100), Nm::new(-100)), pt(Nm::new(10_100), Nm::new(5_100)), pt(Nm::new(-100), Nm::new(5_100))]);
     }
 
     /// The polygon KiCad made for `i2c_thingy_ch0` of `qa/data/pcbnew/issue21739/topology_mismatch.kicad_pcb`, from the boxes of its resistor and its amplifier
@@ -271,25 +271,25 @@ mod tests {
     /// between the two parts and all.
     #[test]
     fn two_boxes_make_the_l_shaped_area_kicad_makes() {
-        let resistor = (112_245, 87_570, 113_755, 90_580);
-        let amplifier = (114_775, 88_175, 122_225, 97_425);
-        let outline = rule_area_outline(&[resistor, amplifier], 100);
+        let resistor = (Nm::new(112_245), Nm::new(87_570), Nm::new(113_755), Nm::new(90_580));
+        let amplifier = (Nm::new(114_775), Nm::new(88_175), Nm::new(122_225), Nm::new(97_425));
+        let outline = rule_area_outline(&[resistor, amplifier], Nm::new(100));
         assert_eq!(
             outline,
-            vec![pt(112_145, 87_470), pt(113_855, 87_470), pt(113_855, 88_075), pt(122_325, 88_075), pt(122_325, 97_525), pt(114_675, 97_525), pt(114_675, 90_680), pt(112_145, 90_680)]
+            vec![pt(Nm::new(112_145), Nm::new(87_470)), pt(Nm::new(113_855), Nm::new(87_470)), pt(Nm::new(113_855), Nm::new(88_075)), pt(Nm::new(122_325), Nm::new(88_075)), pt(Nm::new(122_325), Nm::new(97_525)), pt(Nm::new(114_675), Nm::new(97_525)), pt(Nm::new(114_675), Nm::new(90_680)), pt(Nm::new(112_145), Nm::new(90_680))]
         );
     }
 
     #[test]
     fn the_centre_is_the_middle_of_the_box() {
-        assert_eq!(outline_centre(&[pt(0, 0), pt(10, 0), pt(10, 7), pt(0, 7)]), Some(pt(5, 3)));
+        assert_eq!(outline_centre(&[pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::new(7)), pt(Nm::ZERO, Nm::new(7))]), Some(pt(Nm::new(5), Nm::new(3))));
         assert_eq!(outline_centre(&[]), None);
     }
 
     #[test]
     fn simplify_drops_repeats_and_points_on_a_straight_run() {
-        let pts = [pt(0, 0), pt(0, 0), pt(5, 0), pt(10, 0), pt(10, 10), pt(10, 10), pt(0, 10)];
-        assert_eq!(simplify_closed(&pts), vec![pt(0, 0), pt(10, 0), pt(10, 10), pt(0, 10)]);
+        let pts = [pt(Nm::ZERO, Nm::ZERO), pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(5), Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::new(10)), pt(Nm::new(10), Nm::new(10)), pt(Nm::ZERO, Nm::new(10))];
+        assert_eq!(simplify_closed(&pts), vec![pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::new(10)), pt(Nm::ZERO, Nm::new(10))]);
     }
 
     #[test]
@@ -304,8 +304,8 @@ mod tests {
 
     #[test]
     fn point_inside_is_the_even_odd_test() {
-        let sq = [pt(0, 0), pt(10, 0), pt(10, 10), pt(0, 10)];
-        assert!(point_inside(&sq, pt(5, 5)));
-        assert!(!point_inside(&sq, pt(15, 5)));
+        let sq = [pt(Nm::ZERO, Nm::ZERO), pt(Nm::new(10), Nm::ZERO), pt(Nm::new(10), Nm::new(10)), pt(Nm::ZERO, Nm::new(10))];
+        assert!(point_inside(&sq, pt(Nm::new(5), Nm::new(5))));
+        assert!(!point_inside(&sq, pt(Nm::new(15), Nm::new(5))));
     }
 }

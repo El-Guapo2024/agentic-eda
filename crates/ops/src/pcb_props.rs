@@ -13,6 +13,7 @@
 //!   [`Cmd::ReplaceShape`](crate::Cmd::ReplaceShape) -- the shape with its new geometry, in place, keeping its id and its lock (the
 //!   studio plans the geometry the way those setters do, `kicad-port/pcbProperties.ts`).
 
+use eda_model::units::Nm;
 use super::Board;
 use eda_model::ir::{tessellate_arc, Point, Shape, Track, TRACK_ARC_SEGMENTS};
 use eda_model::CheckResult;
@@ -96,7 +97,7 @@ impl Board<'_> {
         if shape.layer().is_empty() {
             return Err(fail("ops_bad_shape", id, "a shape needs a layer"));
         }
-        if shape.stroke_width() < 0 {
+        if shape.stroke_width() < Nm::ZERO {
             return Err(fail("ops_bad_shape", id, "line width cannot be negative"));
         }
         match &shape {

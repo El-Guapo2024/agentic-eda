@@ -4,6 +4,7 @@
 //! The box's looks are an `(effects ..)` like any text's, read and written by the code of [`crate::board_text_io`] (a text box is a `Text` and a `TextExtra` to it).
 //! A footprint's own `(fp_text_box ..)` is not read here: it is part of the footprint (`FootprintExtra::tokens`).
 
+use eda_model::units::Nm;
 use std::fmt::Write as _;
 
 use eda_model::ir::{Point, Text, TextJustify, TextVAlign};
@@ -53,19 +54,19 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
 
     // `(stroke (width W) (type T) [(color r g b a)])`: a box with no stroke token has `STROKE_PARAMS( -1, SOLID )`.
     let stroke = sexpr::find(item, "stroke");
-    let width = stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(NO_STROKE);
+    let width = stroke.and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(Nm::from_raw_shim(NO_STROKE));
     let line_style = stroke.and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1)).map(LineStyle::from_token).unwrap_or(LineStyle::Solid);
     let stroke_color = stroke.and_then(|s| sexpr::find(s, "color")).map(|c| c.iter().skip(1).filter_map(Sexpr::text).collect::<Vec<_>>().join(" ")).filter(|c| !c.is_empty());
     // `if( m_requiredVersion < 20230825 ) aTextBox->SetBorderEnabled( stroke.GetWidth() >= 0 );`
-    let border = if version < FIRST_BORDER_FLAG { width >= 0 } else { yes(item, "border").unwrap_or(true) };
+    let border = if version < FIRST_BORDER_FLAG { width >= Nm::ZERO } else { yes(item, "border").unwrap_or(true) };
     // `PCB_SHAPE::GetWidth`: "negative stroke-widths are only used in EEschema".
-    let stroke_width_nm = width.max(0);
+    let stroke_width_nm = width.max(Nm::ZERO);
 
     // The looks: `parseEDA_TEXT` starts a box from centre and centre when it has `(effects ..)`; without them the box is left and centre (`PCB_TEXTBOX::PCB_TEXTBOX`).
     let has_effects = sexpr::find(item, "effects").is_some();
     let style = crate::board_text_io::read_style(item);
     let has_size = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).is_some();
-    let size_nm = if has_size { style.size_nm } else { LEGACY_TEXT_SIZE_NM };
+    let size_nm = if has_size { style.size_nm } else { Nm::from_raw_shim(LEGACY_TEXT_SIZE_NM) };
 
     let layer = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Dwgs.User").to_string();
     let angle = ((sexpr::find(item, "angle").and_then(|a| sexpr::num(a, 1)).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
@@ -77,10 +78,10 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
         end,
         pts,
         angle,
-        margin_left_nm: 0,
-        margin_top_nm: 0,
-        margin_right_nm: 0,
-        margin_bottom_nm: 0,
+        margin_left_nm: Nm::ZERO,
+        margin_top_nm: Nm::ZERO,
+        margin_right_nm: Nm::ZERO,
+        margin_bottom_nm: Nm::ZERO,
         border,
         stroke_width_nm,
         line_style,
@@ -88,7 +89,7 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
         knockout: yes(item, "knockout").unwrap_or(false),
         size_nm,
         width_nm: style.extra.width_nm.filter(|_| has_size),
-        thickness_nm: if style.extra.auto_thickness { 0 } else { style.stroke_width },
+        thickness_nm: if style.extra.auto_thickness { Nm::ZERO } else { style.stroke_width },
         halign: if has_effects { style.justify } else { TextJustify::Left },
         valign: if has_effects { style.extra.valign } else { TextVAlign::Center },
         mirror: style.mirror,
@@ -100,7 +101,7 @@ pub(crate) fn read(item: &[Sexpr], version: i64) -> Option<TextBox> {
     // `(margins L T R B)`, or `GetLegacyTextMargin` for all four.
     match sexpr::find(item, "margins") {
         Some(m) => {
-            let n = |i| sexpr::num(m, i).map_or(0, mm_to_nm);
+            let n = |i| sexpr::num(m, i).map_or(Nm::ZERO, mm_to_nm);
             (t.margin_left_nm, t.margin_top_nm, t.margin_right_nm, t.margin_bottom_nm) = (n(1), n(2), n(3), n(4));
         }
         None => {
@@ -142,7 +143,7 @@ fn as_text(t: &TextBox) -> (Text, eda_model::board_text::TextExtra) {
     let extra = eda_model::board_text::TextExtra {
         id: t.id.clone(),
         width_nm: t.width_nm.filter(|w| *w != t.size_nm),
-        auto_thickness: t.thickness_nm == 0,
+        auto_thickness: t.thickness_nm == Nm::ZERO,
         valign: t.valign,
         bold: t.bold,
         italic: t.italic,
@@ -207,11 +208,11 @@ mod tests {
     fn a_text_box_is_read_as_parse_pcb_textbox_reads_it() {
         let b = read_one(BOX);
         assert_eq!(b.text, "Box\nof text");
-        assert_eq!((b.start, b.end, b.layer.as_str()), (Point { x: 20_000_000, y: 20_000_000 }, Point { x: 30_000_000, y: 25_000_000 }, "F.SilkS"));
-        assert_eq!((b.margin_left_nm, b.margin_top_nm, b.margin_right_nm, b.margin_bottom_nm), (1_000_000, 1_500_000, 2_000_000, 2_500_000));
-        assert_eq!((b.border, b.stroke_width_nm, b.line_style, b.knockout), (true, 120_000, LineStyle::Dot, true));
+        assert_eq!((b.start, b.end, b.layer.as_str()), (Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(25_000_000) }, "F.SilkS"));
+        assert_eq!((b.margin_left_nm, b.margin_top_nm, b.margin_right_nm, b.margin_bottom_nm), (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_500_000)));
+        assert_eq!((b.border, b.stroke_width_nm, b.line_style, b.knockout), (true, Nm::from_raw_shim(120_000), LineStyle::Dot, true));
         // `(size HEIGHT WIDTH)`
-        assert_eq!((b.size_nm, b.width_nm, b.thickness_nm), (1_000_000, Some(1_200_000), 150_000));
+        assert_eq!((b.size_nm, b.width_nm, b.thickness_nm), (Nm::from_raw_shim(1_000_000), Some(Nm::from_raw_shim(1_200_000)), Nm::from_raw_shim(150_000)));
         assert_eq!((b.halign, b.valign, b.mirror), (TextJustify::Left, TextVAlign::Top, false));
         assert_eq!(b.angle, 0);
     }
@@ -220,8 +221,8 @@ mod tests {
     fn a_box_with_no_margins_has_the_legacy_margin_and_one_with_no_effects_is_left_and_centre() {
         let b = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (border yes) (stroke (width 0.2) (type solid))))"#);
         // 0.2 / 2 + 1.524 * 0.75
-        assert_eq!(b.margin_left_nm, 100_000 + 1_143_000);
-        assert_eq!((b.halign, b.valign, b.size_nm), (TextJustify::Left, TextVAlign::Center, 1_524_000));
+        assert_eq!(b.margin_left_nm, Nm::from_raw_shim(100_000 + 1_143_000));
+        assert_eq!((b.halign, b.valign, b.size_nm), (TextJustify::Left, TextVAlign::Center, Nm::from_raw_shim(1_524_000)));
         // The effects of a file that wrote none of the justification are centre and centre.
         let c = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15)))))"#);
         assert_eq!((c.halign, c.valign), (TextJustify::Center, TextVAlign::Center));
@@ -232,7 +233,7 @@ mod tests {
         let old = |w: &str| read_one(&format!(r#"(kicad_pcb (version 20230620) (gr_text_box "x" (start 0 0) (end 5 5) (layer "F.SilkS") (stroke (width {w}) (type solid)) (effects (font (size 1 1)))))"#));
         assert!(old("0.1").border);
         assert!(!old("-1").border, "a negative width was no border");
-        assert_eq!(old("-1").stroke_width_nm, 0);
+        assert_eq!(old("-1").stroke_width_nm, Nm::ZERO);
     }
 
     #[test]
@@ -240,7 +241,7 @@ mod tests {
         let b = read_one(r#"(kicad_pcb (version 20241229) (gr_text_box "x" (pts (xy 0 0) (xy 5 5) (xy 0 10) (xy -5 5)) (angle 45) (layer "F.SilkS") (effects (font (size 1 1))) (border no)))"#);
         assert_eq!(b.pts.len(), 4);
         assert_eq!((b.angle, b.border, b.is_rect()), (45_000, false, false));
-        assert_eq!(b.bounds(), [-5_000_000, 0, 5_000_000, 10_000_000]);
+        assert_eq!(b.bounds(), [Nm::from_raw_shim(-5_000_000), Nm::ZERO, Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(10_000_000)]);
     }
 
     #[test]
@@ -257,7 +258,7 @@ mod tests {
         assert!(refs[0].locked && refs[0].uuid.as_deref() == Some(uuid.as_str()));
         // A rotated polygon box and the file's own angle.
         let mut p = b;
-        p.pts = vec![Point { x: 0, y: 0 }, Point { x: 5_000_000, y: 5_000_000 }, Point { x: 0, y: 10_000_000 }, Point { x: -5_000_000, y: 5_000_000 }];
+        p.pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) }, Point { x: Nm::from_raw_shim(-5_000_000), y: Nm::from_raw_shim(5_000_000) }];
         p.start = p.pts[0];
         p.end = p.pts[2];
         p.angle = 45_000;
@@ -274,7 +275,7 @@ mod tests {
     fn a_stroke_colour_and_a_font_survive() {
         let mut b = read_one(BOX);
         b.stroke_color = Some("255 0 0 1".into());
-        b.thickness_nm = 0;
+        b.thickness_nm = Nm::ZERO;
         b.bold = true;
         b.italic = true;
         b.line_spacing_permille = 1_500;

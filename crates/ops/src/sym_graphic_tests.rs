@@ -12,7 +12,7 @@ fn design() -> Design {
 }
 
 fn board(m: &ConstraintModel) -> Board<'_> {
-    Board::new(design(), m, 100_000, 300_000)
+    Board::new(design(), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))
 }
 
 fn rectangle() -> LibrarySymbolGraphic {

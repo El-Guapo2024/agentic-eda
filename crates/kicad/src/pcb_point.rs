@@ -40,6 +40,7 @@ pub(crate) fn write(out: &mut String, p: &PcbPoint) -> String {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     #[test]
@@ -48,8 +49,8 @@ mod tests {
         let mut refs = Vec::new();
         let points = read_all(tree.as_list().unwrap(), &mut refs);
         assert_eq!(points.len(), 2);
-        assert_eq!((points[0].at, points[0].size_nm, points[0].layer.as_str()), (Point { x: 12_500_000, y: -3_000_000 }, 2_000_000, "F.SilkS"));
-        assert_eq!((points[1].at, points[1].size_nm, points[1].layer.as_str()), (Point { x: 0, y: 0 }, 1_000_000, "B.Cu"), "what the point leaves out is what PCB_POINT starts with");
+        assert_eq!((points[0].at, points[0].size_nm, points[0].layer.as_str()), (Point { x: Nm::from_raw_shim(12_500_000), y: Nm::from_raw_shim(-3_000_000) }, Nm::from_raw_shim(2_000_000), "F.SilkS"));
+        assert_eq!((points[1].at, points[1].size_nm, points[1].layer.as_str()), (Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(1_000_000), "B.Cu"), "what the point leaves out is what PCB_POINT starts with");
         assert_eq!(refs[0].uuid.as_deref(), Some("11111111-1111-1111-1111-111111111111"));
         let mut text = String::new();
         let uuid = write(&mut text, &points[0]);

@@ -8,6 +8,7 @@
 //! `getArcPolygonizationMaxError`) for everything that wants segments, as KiCad does; `Collide( SEG )` tests the arc's chords where
 //! KiCad tests the analytic arc (`SHAPE_ARC::Collide`), which differs by at most that error.
 
+use eda_model::units::Nm;
 use crate::kigeom::{isqrt, Seg, ShapeArc, ARC_POLYGONIZATION_MAX_ERROR_NM};
 use eda_model::ir::Point;
 
@@ -28,17 +29,17 @@ pub fn test_segment_hit(r: Point, start: Point, end: Point, dist: i64) -> bool {
     let (xmin, xmax) = (start.x.min(end.x), start.x.max(end.x));
     let (ymin, ymax) = (start.y.min(end.y), start.y.max(end.y));
     let delta = (start.x - r.x, start.y - r.y);
-    if ymin - r.y > dist || r.y - ymax > dist {
+    if ymin - r.y > Nm::from_raw_shim(dist) || r.y - ymax > Nm::from_raw_shim(dist) {
         return false;
     }
-    if xmin - r.x > dist || r.x - xmax > dist {
+    if xmin - r.x > Nm::from_raw_shim(dist) || r.x - xmax > Nm::from_raw_shim(dist) {
         return false;
     }
     if start.x == end.x && r.y > ymin && r.y < ymax {
-        return delta.0.abs() <= dist;
+        return delta.0.abs() <= Nm::from_raw_shim(dist);
     }
     if start.y == end.y && r.x > xmin && r.x < xmax {
-        return delta.1.abs() <= dist;
+        return delta.1.abs() <= Nm::from_raw_shim(dist);
     }
     Seg::new(start, end).squared_distance(r) < ((dist + 1) as i128) * ((dist + 1) as i128)
 }
@@ -272,7 +273,7 @@ impl ShapeLineChain {
     /// snaps to the arc's end, as in KiCad).
     pub fn nearest_point(&self, p: Point, allow_internal: bool) -> Point {
         if self.points.is_empty() {
-            return Point { x: 0, y: 0 };
+            return Point { x: Nm::ZERO, y: Nm::ZERO };
         }
         if self.points.len() == 1 {
             return self.points[0];
@@ -288,8 +289,8 @@ impl ShapeLineChain {
         }
         if !allow_internal && nearest > 0 && nearest < self.points.len() && self.is_arc_segment(nearest) {
             let seg = self.c_segment(nearest);
-            let to_start = crate::kigeom::norm_i(seg.a.x - p.x, seg.a.y - p.y);
-            let to_end = crate::kigeom::norm_i(seg.b.x - p.x, seg.b.y - p.y);
+            let to_start = crate::kigeom::norm_i((seg.a.x - p.x).raw_shim(), (seg.a.y - p.y).raw_shim());
+            let to_end = crate::kigeom::norm_i((seg.b.x - p.x).raw_shim(), (seg.b.y - p.y).raw_shim());
             if to_start > to_end {
                 nearest += 1;
             }
@@ -297,8 +298,8 @@ impl ShapeLineChain {
                 return self.points[nearest];
             }
             let arc = &self.arcs[self.arc_index(nearest) as usize];
-            let to_arc_start = crate::kigeom::norm_i(arc.start.x - p.x, arc.start.y - p.y);
-            let to_arc_end = crate::kigeom::norm_i(arc.end.x - p.x, arc.end.y - p.y);
+            let to_arc_start = crate::kigeom::norm_i((arc.start.x - p.x).raw_shim(), (arc.start.y - p.y).raw_shim());
+            let to_arc_end = crate::kigeom::norm_i((arc.end.x - p.x).raw_shim(), (arc.end.y - p.y).raw_shim());
             return if to_arc_start > to_arc_end { arc.end } else { arc.start };
         }
         self.c_segment(nearest).nearest_point(p)
@@ -337,7 +338,7 @@ impl ShapeLineChain {
         match self.points.len() {
             0 => false,
             1 => {
-                let d = ((self.points[0].x - p.x) as i128).pow(2) + ((self.points[0].y - p.y) as i128).pow(2);
+                let d = ((self.points[0].x - p.x).raw_shim() as i128).pow(2) + ((self.points[0].y - p.y).raw_shim() as i128).pow(2);
                 d <= threshold_sq
             }
             _ => (0..self.segment_count()).any(|i| {
@@ -597,7 +598,7 @@ impl ShapeLineChain {
 /// A convenience for the callers that hold plain polylines: the integer distance `SEG::Distance` gives, kept here so the `i128` squares do not
 /// leak out of this module.
 pub fn distance(a: Point, b: Point) -> i64 {
-    isqrt(((a.x - b.x) as i128).pow(2) + ((a.y - b.y) as i128).pow(2))
+    isqrt(((a.x - b.x).raw_shim() as i128).pow(2) + ((a.y - b.y).raw_shim() as i128).pow(2))
 }
 
 #[cfg(test)]
@@ -605,7 +606,7 @@ mod tests {
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x, y }
+        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
     }
 
     fn quarter() -> ShapeArc {

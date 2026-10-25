@@ -42,11 +42,12 @@ pub fn check(design: &Design, model: &ConstraintModel) -> Vec<Finding> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{PlacementSection, Provenance, RoutingSection, Track};
 
     fn design(width: i64) -> Design {
-        let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width, pts: vec![Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 }, Point { x: 1_000_000, y: 1_000_000 }], arc_mid_offset: None };
+        let track = Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(width), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }], arc_mid_offset: None };
         Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: eda_model::ir::SCHEMA_VERSION,
@@ -60,7 +61,7 @@ mod tests {
 
     fn model_with_class(width: i64) -> ConstraintModel {
         let mut m = ConstraintModel::default();
-        m.board.net_classes.push(eda_model::NetClass { name: "power".into(), nets: vec!["A".into()], track_width: Some(width), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        m.board.net_classes.push(eda_model::NetClass { name: "power".into(), nets: vec!["A".into()], track_width: Some(Nm::from_raw_shim(width)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         m
     }
 

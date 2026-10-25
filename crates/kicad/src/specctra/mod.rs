@@ -25,6 +25,7 @@ pub mod session;
 #[cfg(test)]
 mod tests;
 
+use eda_model::units::Nm;
 use eda_model::ir::{Design, Shape};
 use eda_model::{CheckResult, ConstraintModel};
 
@@ -65,13 +66,13 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
                 let n = pl.outline.len();
                 if n >= 2 {
                     for i in 0..n {
-                        shapes.push(Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 0, filled: false, start: pl.outline[i], end: pl.outline[(i + 1) % n] });
+                        shapes.push(Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::ZERO, filled: false, start: pl.outline[i], end: pl.outline[(i + 1) % n] });
                     }
                 }
             }
         }
         let max_error = model.board.max_error_nm;
-        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error as f64, eda_model::outline::CHAINING_EPSILON_NM, true);
+        let mut outline = eda_drc::outline::build_board_polygon_outlines(&shapes, max_error.raw_shim() as f64, eda_model::outline::CHAINING_EPSILON_NM, true);
         // "Make polygon strictly simple to avoid issues (especially in 3D viewer)".
         outline.polys.simplify();
         outline
@@ -81,19 +82,19 @@ pub fn export_dsn(design: &Design, model: &ConstraintModel, pcb_name: &str) -> R
     let facts_of = |net: &str| -> export::ClassFacts {
         export::ClassFacts {
             name: b.effective_class(net).name,
-            track_width: b.width_of(net),
-            clearance: b.clearance_of(net),
-            via_diameter: b.via_diameter_of(net),
-            via_drill: b.via_drill_of(net),
+            track_width: (b.width_of(net)).raw_shim(),
+            clearance: (b.clearance_of(net)).raw_shim(),
+            via_diameter: (b.via_diameter_of(net)).raw_shim(),
+            via_drill: (b.via_drill_of(net)).raw_shim(),
         }
     };
-    let default_class = export::ClassFacts { name: "Default".into(), track_width: b.track_width, clearance: b.clearance, via_diameter: b.via_diameter, via_drill: b.via_drill };
+    let default_class = export::ClassFacts { name: "Default".into(), track_width: b.track_width.raw_shim(), clearance: b.clearance.raw_shim(), via_diameter: b.via_diameter.raw_shim(), via_drill: b.via_drill.raw_shim() };
     let settings = export::Settings {
         pcb_name: pcb_name.to_string(),
         host_version: HOST_VERSION.to_string(),
         outline: &outline,
-        hole_clearance: b.hole_clearance_nm,
-        max_error: b.max_error_nm,
+        hole_clearance: b.hole_clearance_nm.raw_shim(),
+        max_error: b.max_error_nm.raw_shim(),
         default_class,
         class_of_net: &facts_of,
     };

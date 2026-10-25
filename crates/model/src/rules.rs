@@ -201,23 +201,23 @@ impl Constraints {
                 out.push((name, format!("Value must be between {} and {} mm.", fmt_mm(min_nm), fmt_mm(max_nm))));
             }
         };
-        range("min_clearance", self.min_clearance_nm, 0, 25_000_000);
-        range("min_connection", self.min_connection_nm, 0, 100_000_000);
-        range("min_track_width", self.min_track_width_nm, 0, 25_000_000);
-        range("min_via_annular_width", self.min_annular_width_nm, 0, 25_000_000);
-        range("min_via_diameter", self.min_via_diameter_nm, 0, 25_000_000);
-        range("min_through_hole_diameter", self.min_through_hole_nm, 0, 25_000_000);
-        range("min_microvia_diameter", self.min_microvia_diameter_nm, 0, 10_000_000);
-        range("min_microvia_drill", self.min_microvia_drill_nm, 0, 10_000_000);
-        range("min_hole_to_hole", self.min_hole_to_hole_nm, 0, 10_000_000);
-        range("min_hole_clearance", self.min_hole_clearance_nm, 0, 100_000_000);
-        range("min_silk_clearance", self.min_silk_clearance_nm, -10_000_000, 100_000_000);
-        range("min_groove_width", self.min_groove_width_nm, 0, 25_000_000);
-        range("min_text_height", self.min_silk_text_height_nm, 0, 100_000_000);
-        range("min_text_thickness", self.min_silk_text_thickness_nm, 0, 25_000_000);
+        range("min_clearance", self.min_clearance_nm, Nm::ZERO, Nm::new(25_000_000));
+        range("min_connection", self.min_connection_nm, Nm::ZERO, Nm::new(100_000_000));
+        range("min_track_width", self.min_track_width_nm, Nm::ZERO, Nm::new(25_000_000));
+        range("min_via_annular_width", self.min_annular_width_nm, Nm::ZERO, Nm::new(25_000_000));
+        range("min_via_diameter", self.min_via_diameter_nm, Nm::ZERO, Nm::new(25_000_000));
+        range("min_through_hole_diameter", self.min_through_hole_nm, Nm::ZERO, Nm::new(25_000_000));
+        range("min_microvia_diameter", self.min_microvia_diameter_nm, Nm::ZERO, Nm::new(10_000_000));
+        range("min_microvia_drill", self.min_microvia_drill_nm, Nm::ZERO, Nm::new(10_000_000));
+        range("min_hole_to_hole", self.min_hole_to_hole_nm, Nm::ZERO, Nm::new(10_000_000));
+        range("min_hole_clearance", self.min_hole_clearance_nm, Nm::ZERO, Nm::new(100_000_000));
+        range("min_silk_clearance", self.min_silk_clearance_nm, Nm::new(-10_000_000), Nm::new(100_000_000));
+        range("min_groove_width", self.min_groove_width_nm, Nm::ZERO, Nm::new(25_000_000));
+        range("min_text_height", self.min_silk_text_height_nm, Nm::ZERO, Nm::new(100_000_000));
+        range("min_text_thickness", self.min_silk_text_thickness_nm, Nm::ZERO, Nm::new(25_000_000));
         // `-0.01` mm is the flag for the pre-6.0 way of measuring the edge.
-        range("min_copper_edge_clearance", self.min_copper_edge_clearance_nm, -10_000, 25_000_000);
-        range("max_error", self.max_error_nm, 1000, 1_000_000);
+        range("min_copper_edge_clearance", self.min_copper_edge_clearance_nm, Nm::new(-10_000), Nm::new(25_000_000));
+        range("max_error", self.max_error_nm, Nm::new(1000), Nm::new(1_000_000));
         if self.min_resolved_spokes > 99 {
             out.push(("min_resolved_spokes", "Value must be between 0 and 99.".into()));
         }
@@ -244,10 +244,10 @@ pub fn validate_mask_paste(m: &MaskPaste) -> Vec<(&'static str, String)> {
             out.push((name, format!("Value must be between {} and {} mm.", fmt_mm(min_nm), fmt_mm(max_nm))));
         }
     };
-    range("solder_mask_expansion", m.expansion_nm, -25_000_000, 25_000_000);
-    range("solder_mask_min_width", m.min_width_nm, 0, 25_000_000);
-    range("solder_mask_to_copper_clearance", m.to_copper_clearance_nm, 0, 25_000_000);
-    range("solder_paste_margin", m.paste_margin_nm, -25_000_000, 25_000_000);
+    range("solder_mask_expansion", m.expansion_nm, Nm::new(-25_000_000), Nm::new(25_000_000));
+    range("solder_mask_min_width", m.min_width_nm, Nm::ZERO, Nm::new(25_000_000));
+    range("solder_mask_to_copper_clearance", m.to_copper_clearance_nm, Nm::ZERO, Nm::new(25_000_000));
+    range("solder_paste_margin", m.paste_margin_nm, Nm::new(-25_000_000), Nm::new(25_000_000));
     if !m.paste_margin_ratio.is_finite() || !(-1.0..=1.0).contains(&m.paste_margin_ratio) {
         out.push(("solder_paste_margin_ratio", "Value must be between -1.000 and 1.000.".into()));
     }
@@ -358,12 +358,12 @@ impl Default for TextGraphicsDefaults {
     fn default() -> Self {
         let class = |line, size, thickness| LayerClassDefaults { line_width_nm: line, text_width_nm: size, text_height_nm: size, text_thickness_nm: thickness, italic: false, upright: true };
         TextGraphicsDefaults {
-            silk: class(100_000, 1_000_000, 100_000),
-            copper: class(200_000, 1_500_000, 300_000),
-            edge_cuts_line_width_nm: 50_000,
-            courtyard_line_width_nm: 50_000,
-            fab: class(100_000, 1_000_000, 150_000),
-            others: class(100_000, 1_000_000, 150_000),
+            silk: class(Nm::new(100_000), Nm::new(1_000_000), Nm::new(100_000)),
+            copper: class(Nm::new(200_000), Nm::new(1_500_000), Nm::new(300_000)),
+            edge_cuts_line_width_nm: Nm::new(50_000),
+            courtyard_line_width_nm: Nm::new(50_000),
+            fab: class(Nm::new(100_000), Nm::new(1_000_000), Nm::new(150_000)),
+            others: class(Nm::new(100_000), Nm::new(1_000_000), Nm::new(150_000)),
         }
     }
 }
@@ -393,8 +393,8 @@ pub fn layer_class(layer: &str) -> LayerClass {
 
 /// `DEFAULT_TEXT_SIZE` and `DEFAULT_TEXT_WIDTH` (`include/board_design_settings.h`), in nm: the text of the edges and courtyard classes, which have a line
 /// thickness in Board Setup but no text cells.
-pub const DEFAULT_TEXT_SIZE_NM: Nm = 1_000_000;
-pub const DEFAULT_TEXT_WIDTH_NM: Nm = 150_000;
+pub const DEFAULT_TEXT_SIZE_NM: Nm = Nm::new(1_000_000);
+pub const DEFAULT_TEXT_WIDTH_NM: Nm = Nm::new(150_000);
 
 impl TextGraphicsDefaults {
     /// The text row of a class, `None` for the two classes that have only a line thickness.
@@ -446,19 +446,19 @@ impl TextGraphicsDefaults {
     pub fn validate(&self) -> Vec<(&'static str, String)> {
         let mut out = Vec::new();
         let line = |label: &'static str, w: Nm, out: &mut Vec<(&'static str, String)>| {
-            if !(5000..=100_000_000).contains(&w) {
+            if !(Nm::new(5000)..=Nm::new(100_000_000)).contains(&w) {
                 out.push((label, "Incorrect line width. It must be between 0.005 and 100 mm.".into()));
             }
         };
         let text = |label: &'static str, c: &LayerClassDefaults, out: &mut Vec<(&'static str, String)>| {
             line(label, c.line_width_nm, out);
-            if !(1000..=250_000_000).contains(&c.text_width_nm) || !(1000..=250_000_000).contains(&c.text_height_nm) {
+            if !(Nm::new(1000)..=Nm::new(250_000_000)).contains(&c.text_width_nm) || !(Nm::new(1000)..=Nm::new(250_000_000)).contains(&c.text_height_nm) {
                 out.push((label, "Text size is incorrect. Size must be between 0.001 and 250 mm.".into()));
             } else {
-                let max_thickness = (c.text_width_nm.min(c.text_height_nm) / 4).min(100_000_000);
+                let max_thickness = (c.text_width_nm.min(c.text_height_nm) / 4).min(Nm::new(100_000_000));
                 if c.text_thickness_nm > max_thickness {
                     out.push((label, format!("Text thickness is too large. It must be at most {} mm.", fmt_mm(max_thickness))));
-                } else if c.text_thickness_nm < 5_000 {
+                } else if c.text_thickness_nm < Nm::new(5_000) {
                     out.push((label, "Text thickness is too small. It must be at least 0.005 mm.".into()));
                 }
             }
@@ -547,7 +547,7 @@ impl StackupSettings {
     /// still has (`BOARD_STACKUP::SynchronizeWithBoard`): a copper or dielectric layer that exists in both keeps its
     /// thickness and material, a new one gets the default. The board thickness is kept.
     pub fn with_copper_layers(&self, copper_layers: usize) -> StackupSettings {
-        let mut next = StackupSettings::new(copper_layers, stackup_thickness_nm(&self.stackup).max(1));
+        let mut next = StackupSettings::new(copper_layers, stackup_thickness_nm(&self.stackup).max(Nm::new(1)));
         for l in next.stackup.layers.iter_mut() {
             if let Some(old) = self.stackup.layers.iter().find(|o| o.name == l.name && o.kind == l.kind) {
                 *l = old.clone();
@@ -654,7 +654,7 @@ impl RulesOverlay {
 }
 
 /// `MAXIMUM_CLEARANCE`: 500 mm.
-pub const MAXIMUM_CLEARANCE_NM: Nm = 500_000_000;
+pub const MAXIMUM_CLEARANCE_NM: Nm = Nm::new(500_000_000);
 
 /// Validate a Net Classes page: the names and the sizes.
 ///
@@ -679,7 +679,7 @@ pub fn validate_net_classes(s: &NetClassSettings) -> Result<(), CheckResult> {
         }
         for (what, v) in [("track width", c.track_width), ("clearance", c.clearance), ("via diameter", c.via_diameter), ("via drill", c.via_drill), ("microvia diameter", c.microvia_diameter), ("microvia drill", c.microvia_drill), ("differential pair width", c.diff_pair_width), ("differential pair gap", c.diff_pair_gap), ("differential pair via gap", c.diff_pair_via_gap)] {
             if let Some(v) = v {
-                if v < 0 || (v == 0 && what != "clearance" && what != "differential pair gap" && what != "differential pair via gap") {
+                if v < Nm::ZERO || (v == Nm::ZERO && what != "clearance" && what != "differential pair gap" && what != "differential pair via gap") {
                     return bad(&c.name, format!("{what} is {v} nm; sizes cannot be negative, and only a clearance can be zero"));
                 }
             }
@@ -725,26 +725,26 @@ mod tests {
     use super::*;
 
     fn class(name: &str, nets: &[&str]) -> NetClass {
-        NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(300_000), clearance: Some(250_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
+        NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(Nm::new(300_000)), clearance: Some(Nm::new(250_000)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
     }
 
     #[test]
     fn a_default_stackup_adds_up_to_the_board_thickness_with_copper_and_dielectrics_in_order() {
         for n in [2usize, 4, 6] {
-            let s = default_stackup(n, 1_600_000);
+            let s = default_stackup(n, Nm::new(1_600_000));
             let copper: Vec<&str> = s.layers.iter().filter(|l| l.kind.as_deref() == Some("copper")).map(|l| l.name.as_str()).collect();
             assert_eq!(copper, copper_layer_names(n).iter().map(String::as_str).collect::<Vec<_>>());
             assert_eq!(s.layers.iter().filter(|l| matches!(l.kind.as_deref(), Some("core" | "prepreg"))).count(), n - 1, "one dielectric between each pair of copper layers");
-            assert_eq!(stackup_thickness_nm(&s), 1_600_000, "{n} layers add up to {}", stackup_thickness_nm(&s));
+            assert_eq!(stackup_thickness_nm(&s), Nm::new(1_600_000), "{n} layers add up to {}", stackup_thickness_nm(&s));
         }
-        let four = default_stackup(4, 1_600_000);
+        let four = default_stackup(4, Nm::new(1_600_000));
         let kinds: Vec<&str> = four.layers.iter().filter_map(|l| l.kind.as_deref()).filter(|k| matches!(*k, "core" | "prepreg")).collect();
         assert_eq!(kinds, vec!["core", "prepreg", "core"], "KiCad alternates core and prepreg, starting with core");
     }
 
     #[test]
     fn changing_the_copper_layer_count_keeps_the_thickness_of_the_layers_that_remain() {
-        let mut two = StackupSettings::new(2, 1_600_000);
+        let mut two = StackupSettings::new(2, Nm::new(1_600_000));
         two.stackup.layers.iter_mut().find(|l| l.name == "F.Cu").unwrap().thickness_mm = Some(0.07);
         let four = two.with_copper_layers(4);
         assert_eq!(four.copper_layers, 4);
@@ -763,9 +763,9 @@ mod tests {
     fn the_web_pages_default_stackups_are_the_ones_computed_here() {
         let defaults: Vec<serde_json::Value> = [(2usize, 1_600_000), (4, 1_600_000), (4, 1_000_000), (6, 1_600_000), (8, 2_400_000)]
             .iter()
-            .map(|&(n, t)| serde_json::json!({ "copper_layers": n, "board_thickness_nm": t, "stackup": default_stackup(n, t) }))
+            .map(|&(n, t)| serde_json::json!({ "copper_layers": n, "board_thickness_nm": t, "stackup": default_stackup(n, Nm::new(t)) }))
             .collect();
-        let mut edited = StackupSettings::new(4, 1_600_000);
+        let mut edited = StackupSettings::new(4, Nm::new(1_600_000));
         for (name, t) in [("F.Cu", 0.07), ("dielectric 1", 0.2), ("B.Mask", 0.02)] {
             edited.stackup.layers.iter_mut().find(|l| l.name == name).unwrap().thickness_mm = Some(t);
         }
@@ -795,14 +795,14 @@ mod tests {
         assert_eq!(model.board, before, "an empty overlay changes nothing");
 
         let overlay = RulesOverlay {
-            constraints: Some(Constraints { min_clearance_nm: 300_000, ..Constraints::of(&before) }),
-            net_classes: Some(NetClassSettings { default: NetClass { track_width: Some(250_000), clearance: Some(180_000), ..net_class_settings_of(&before).default }, classes: vec![class("signal", &["SPI_*", "I2C_?"])] }),
+            constraints: Some(Constraints { min_clearance_nm: Nm::new(300_000), ..Constraints::of(&before) }),
+            net_classes: Some(NetClassSettings { default: NetClass { track_width: Some(Nm::new(250_000)), clearance: Some(Nm::new(180_000)), ..net_class_settings_of(&before).default }, classes: vec![class("signal", &["SPI_*", "I2C_?"])] }),
             ..Default::default()
         };
         overlay.apply(&mut model);
-        assert_eq!(model.board.min_clearance_nm, 300_000);
+        assert_eq!(model.board.min_clearance_nm, Nm::new(300_000));
         assert!(model.board.constraints_explicit, "the floors are exact once they are set");
-        assert_eq!((model.board.track_width, model.board.clearance), (250_000, 180_000), "the Default class's sizes are the board's defaults");
+        assert_eq!((model.board.track_width, model.board.clearance), (Nm::new(250_000), Nm::new(180_000)), "the Default class's sizes are the board's defaults");
         assert_eq!(model.board.net_classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["signal"], "the classes are replaced wholesale");
         assert_eq!(model.board.annular_width_min_nm, before.annular_width_min_nm, "a constraint the page does not change keeps its value");
         assert_eq!(model.board.via_drill, before.via_drill, "a Default size the page leaves unset keeps the board's");
@@ -812,26 +812,26 @@ mod tests {
     fn constraints_are_range_checked_like_validate_design_rules() {
         let ok = Constraints::of(&BoardRules::default());
         assert!(ok.validate().is_empty(), "{:?}", ok.validate());
-        let bad = Constraints { min_clearance_nm: 30_000_000, min_resolved_spokes: 100, max_error_nm: 0, ..ok.clone() };
+        let bad = Constraints { min_clearance_nm: Nm::new(30_000_000), min_resolved_spokes: 100, max_error_nm: Nm::ZERO, ..ok.clone() };
         let names: Vec<&str> = bad.validate().iter().map(|(n, _)| *n).collect();
         assert_eq!(names, vec!["min_clearance", "max_error", "min_resolved_spokes"]);
         assert!(bad.validate()[0].1.contains("between 0 and 25"), "{:?}", bad.validate()[0]);
-        assert!(Constraints { min_silk_clearance_nm: -5_000_000, ..ok }.validate().is_empty(), "the silk clearance may be negative, down to -10 mm");
+        assert!(Constraints { min_silk_clearance_nm: Nm::new(-5_000_000), ..ok }.validate().is_empty(), "the silk clearance may be negative, down to -10 mm");
     }
 
     #[test]
     fn a_new_item_takes_the_default_of_its_layer_class() {
         let mut t = TextGraphicsDefaults::default();
-        t.silk = LayerClassDefaults { line_width_nm: 120_000, text_width_nm: 1_200_000, text_height_nm: 1_300_000, text_thickness_nm: 180_000, italic: true, upright: false };
-        t.edge_cuts_line_width_nm = 70_000;
-        t.courtyard_line_width_nm = 60_000;
+        t.silk = LayerClassDefaults { line_width_nm: Nm::new(120_000), text_width_nm: Nm::new(1_200_000), text_height_nm: Nm::new(1_300_000), text_thickness_nm: Nm::new(180_000), italic: true, upright: false };
+        t.edge_cuts_line_width_nm = Nm::new(70_000);
+        t.courtyard_line_width_nm = Nm::new(60_000);
         for (layer, class) in [("F.SilkS", LayerClass::Silk), ("B.SilkS", LayerClass::Silk), ("F.Cu", LayerClass::Copper), ("In3.Cu", LayerClass::Copper), ("Edge.Cuts", LayerClass::Edges), ("B.CrtYd", LayerClass::Courtyard), ("F.Fab", LayerClass::Fab), ("Dwgs.User", LayerClass::Others), ("User.7", LayerClass::Others), ("F.Mask", LayerClass::Others)] {
             assert_eq!(layer_class(layer), class, "{layer}");
         }
-        assert_eq!((t.line_thickness_nm("F.SilkS"), t.line_thickness_nm("B.SilkS")), (120_000, 120_000));
-        assert_eq!((t.line_thickness_nm("Edge.Cuts"), t.line_thickness_nm("F.CrtYd"), t.line_thickness_nm("F.Cu"), t.line_thickness_nm("Dwgs.User")), (70_000, 60_000, 200_000, 100_000));
-        assert_eq!((t.text_size_nm("F.SilkS"), t.text_thickness_nm("F.SilkS"), t.text_italic_upright("F.SilkS")), ((1_200_000, 1_300_000), 180_000, (true, false)));
-        assert_eq!((t.text_size_nm("B.Cu"), t.text_thickness_nm("In1.Cu")), ((1_500_000, 1_500_000), 300_000));
+        assert_eq!((t.line_thickness_nm("F.SilkS"), t.line_thickness_nm("B.SilkS")), (Nm::new(120_000), Nm::new(120_000)));
+        assert_eq!((t.line_thickness_nm("Edge.Cuts"), t.line_thickness_nm("F.CrtYd"), t.line_thickness_nm("F.Cu"), t.line_thickness_nm("Dwgs.User")), (Nm::new(70_000), Nm::new(60_000), Nm::new(200_000), Nm::new(100_000)));
+        assert_eq!((t.text_size_nm("F.SilkS"), t.text_thickness_nm("F.SilkS"), t.text_italic_upright("F.SilkS")), ((Nm::new(1_200_000), Nm::new(1_300_000)), Nm::new(180_000), (true, false)));
+        assert_eq!((t.text_size_nm("B.Cu"), t.text_thickness_nm("In1.Cu")), ((Nm::new(1_500_000), Nm::new(1_500_000)), Nm::new(300_000)));
         assert_eq!((t.text_size_nm("Edge.Cuts"), t.text_thickness_nm("F.CrtYd")), ((DEFAULT_TEXT_SIZE_NM, DEFAULT_TEXT_SIZE_NM), DEFAULT_TEXT_WIDTH_NM), "the classes that have no text cells keep KiCad's own constants");
     }
 
@@ -839,9 +839,9 @@ mod tests {
     fn text_defaults_follow_the_grids_own_limits() {
         assert!(TextGraphicsDefaults::default().validate().is_empty());
         let mut t = TextGraphicsDefaults::default();
-        t.silk.text_thickness_nm = 400_000; // a quarter of the 1 mm text is 0.25
-        t.copper.line_width_nm = 2_000;
-        t.fab.text_width_nm = 300_000_000;
+        t.silk.text_thickness_nm = Nm::new(400_000); // a quarter of the 1 mm text is 0.25
+        t.copper.line_width_nm = Nm::new(2_000);
+        t.fab.text_width_nm = Nm::new(300_000_000);
         let rows: Vec<&str> = t.validate().iter().map(|(r, _)| *r).collect();
         assert_eq!(rows, vec!["Silk Layers", "Copper Layers", "Fab Layers"], "{:?}", t.validate());
     }
@@ -853,7 +853,7 @@ mod tests {
         for (bad, why) in [
             (vec![class("a", &["X"]), class("a", &["Y"])], "duplicate"),
             (vec![class("Power", &["X"]), class("power", &["Y"])], "duplicate without regard to case"),
-            (vec![NetClass { clearance: Some(500_001_000), ..class("huge", &["X"]) }], "a clearance over 500 mm"),
+            (vec![NetClass { clearance: Some(Nm::new(500_001_000)), ..class("huge", &["X"]) }], "a clearance over 500 mm"),
             (vec![class("", &["X"])], "unnamed"),
             (vec![class("Default", &["X"])], "named like the Default class"),
             (vec![class("a", &[""])], "empty pattern"),
@@ -861,8 +861,8 @@ mod tests {
             assert!(validate_net_classes(&settings(bad)).is_err(), "{why}");
         }
         let mut wide_drill = class("vias", &["V*"]);
-        wide_drill.via_diameter = Some(400_000);
-        wide_drill.via_drill = Some(400_000);
+        wide_drill.via_diameter = Some(Nm::new(400_000));
+        wide_drill.via_drill = Some(Nm::new(400_000));
         assert!(validate_net_classes(&settings(vec![wide_drill])).is_err(), "a drill as wide as its via leaves no annular ring");
     }
 

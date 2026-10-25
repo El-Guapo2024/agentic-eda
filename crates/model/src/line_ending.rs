@@ -51,7 +51,7 @@ impl LineEndingStyle {
 }
 
 fn is_zero(v: &Nm) -> bool {
-    *v == 0
+    *v == Nm::ZERO
 }
 
 /// One `LINE_ENDING`: its style, its size along the line (`length_nm`) and across it (`width_nm`), 0 being automatic (`DEFAULT_RATIO_LENGTH` and `DEFAULT_RATIO_WIDTH`
@@ -87,9 +87,9 @@ impl LineEnding {
 
     /// `LINE_ENDING::SetLength`, `SetWidth`, `SetStrokeWidth` as `DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow` calls them: a negative size is 0 (`std::max( 0, .. )`).
     pub fn clamped(mut self) -> LineEnding {
-        self.length_nm = self.length_nm.max(0);
-        self.width_nm = self.width_nm.max(0);
-        self.stroke_width_nm = self.stroke_width_nm.max(0);
+        self.length_nm = self.length_nm.max(Nm::ZERO);
+        self.width_nm = self.width_nm.max(Nm::ZERO);
+        self.stroke_width_nm = self.stroke_width_nm.max(Nm::ZERO);
         self
     }
 
@@ -100,13 +100,13 @@ impl LineEnding {
             return String::new();
         }
         let mut out = format!("({token} {}", self.style.token());
-        if self.length_nm > 0 {
+        if self.length_nm > Nm::ZERO {
             out.push_str(&format!(" (length {})", mm(self.length_nm)));
         }
-        if self.width_nm > 0 {
+        if self.width_nm > Nm::ZERO {
             out.push_str(&format!(" (width {})", mm(self.width_nm)));
         }
-        if self.stroke_width_nm > 0 {
+        if self.stroke_width_nm > Nm::ZERO {
             out.push_str(&format!(" (stroke (width {}) (type {}))", mm(self.stroke_width_nm), self.stroke_style.token()));
         }
         out.push(')');
@@ -148,7 +148,7 @@ mod tests {
     use super::*;
 
     fn mm(v: Nm) -> String {
-        let s = format!("{:.6}", v as f64 / 1e6);
+        let s = format!("{:.6}", v.as_f64() / 1e6);
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     }
 
@@ -156,9 +156,9 @@ mod tests {
     fn an_ending_is_written_as_line_ending_format_writes_it() {
         assert_eq!(LineEnding::new(LineEndingStyle::None).format("start_shape", mm), "", "no ending, no token");
         assert_eq!(LineEnding::new(LineEndingStyle::Arrow).format("start_shape", mm), "(start_shape arrow)", "an automatic size says none");
-        let e = LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: 3_000_000, width_nm: 3_000_000, stroke_width_nm: 600_000, stroke_style: LineStyle::Default };
+        let e = LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: Nm::new(3_000_000), width_nm: Nm::new(3_000_000), stroke_width_nm: Nm::new(600_000), stroke_style: LineStyle::Default };
         assert_eq!(e.format("end_shape", mm), "(end_shape arrow_open (length 3) (width 3) (stroke (width 0.6) (type default)))");
-        let both = LineEndings { start: LineEnding { width_nm: 1_500_000, ..LineEnding::new(LineEndingStyle::Square) }, end: LineEnding::new(LineEndingStyle::Circle) };
+        let both = LineEndings { start: LineEnding { width_nm: Nm::new(1_500_000), ..LineEnding::new(LineEndingStyle::Square) }, end: LineEnding::new(LineEndingStyle::Circle) };
         assert_eq!(both.format(mm), " (start_shape square (width 1.5)) (end_shape circle)");
     }
 

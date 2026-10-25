@@ -16,6 +16,7 @@
 //! Not done here: a stand-alone "Clear Annotation" -- a design cannot hold two symbols named `R?` (a part is its reference), so
 //! "Clear existing annotations" numbers again at once.
 
+use eda_model::units::Nm;
 use eda_model::annotate::{self, Algo, Entry, Problem, SortOrder};
 use crate::sch_clipboard::LibMerge;
 use eda_model::ir::{field_key, LibrarySymbol, SchematicSection};
@@ -253,7 +254,7 @@ impl<'a> Board<'a> {
         }
         // a footprint that exists only on the board (a mounting hole, a test point) is a part of the design too: its reference is taken
         for b in self.design.drawings.iter().flat_map(|d| d.board_parts.iter()) {
-            others.push(Entry::new(usize::MAX, &b.reference, 1, 1, "", b.value.as_deref().unwrap_or(""), 0, (0, 0), false));
+            others.push(Entry::new(usize::MAX, &b.reference, 1, 1, "", b.value.as_deref().unwrap_or(""), 0, (Nm::ZERO, Nm::ZERO), false));
         }
         (slots, mine, others)
     }

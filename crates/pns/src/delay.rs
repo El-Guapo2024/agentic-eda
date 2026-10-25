@@ -120,6 +120,7 @@ impl TuningPath {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, TuningProfiles};
 
@@ -130,8 +131,8 @@ mod tests {
             target_impedance: 50.0,
             enable_time_domain_tuning: enabled,
             layer_entries: vec![
-                ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200, diff_pair_gap_nm: 0, delay_as_per_mm: 6_100_000 },
-                ProfileLayerEntry { signal_layer: "B.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: 200, diff_pair_gap_nm: 0, delay_as_per_mm: 6_500_000 },
+                ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 6_100_000 },
+                ProfileLayerEntry { signal_layer: "B.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 6_500_000 },
             ],
             via_propagation_delay_as: 5_000_000,
             via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 12_000_000 }],
@@ -142,7 +143,7 @@ mod tests {
         let mut rules = eda_model::BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
         rules.tuning_profiles = TuningProfiles { profiles: vec![profile(enabled)], class_profiles: [("Default".to_string(), "USB".to_string())].into() };
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, 1_600_000), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
     }
 
     #[test]

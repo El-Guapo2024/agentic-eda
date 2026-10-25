@@ -119,6 +119,7 @@ impl<'a> Board<'a> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use crate::{Cmd, Domain};
     use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, Side};
@@ -160,7 +161,7 @@ mod tests {
         d.schematic = Some(Default::default());
         d.drawings = Some(eda_model::ir::DrawingsSection { page: Some(Default::default()), ..Default::default() });
         d.symbol_library = Some(Default::default());
-        let mut b = Board::new(d, &m, 100_000, 300_000);
+        let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
         let cmd = Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into(), keep_kicad_layer_names: false, project: None, rules: None };
         assert!(cmd.replaces_board() && cmd.spans_both_editors() && !cmd.clears_routing(), "an import is judged by nobody, takes the netlist the drawing set with it, and keeps the copper it brings");
         b.apply(&cmd).unwrap();
@@ -183,7 +184,7 @@ mod tests {
         // What the old design's drawings held (its page) is the old board's.
         assert!(d.drawings.as_ref().unwrap().page.is_none());
         // The same text is the same file: a redo finds it where the first run put it.
-        let again = Board::new(design(), &m, 100_000, 300_000);
+        let again = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
         let mut again = again;
         again.apply(&cmd).unwrap();
         assert_eq!(again.design().drawings.as_ref().unwrap().intent_file.as_ref(), Some(&file));
@@ -192,7 +193,7 @@ mod tests {
         let e = b.apply(&Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into(), keep_kicad_layer_names: false, project: None, rules: None }).unwrap_err();
         assert_eq!(e[0].check, "ops_bad_board");
         assert_eq!(serde_json::to_string(b.design()).unwrap(), before);
-        let _ = (Side::Top, Point { x: 0, y: 0 }, Provenance { engine_version: String::new(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] }, FootprintInstance { id: String::new(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: Default::default() }, PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+        let _ = (Side::Top, Point { x: Nm::ZERO, y: Nm::ZERO }, Provenance { engine_version: String::new(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] }, FootprintInstance { id: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: Default::default() }, PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     }
 
     /// The mcu30 example drawn as module sheets, written as a KiCad project in a scratch folder and read as a file: a root that places three sheets, a screen each, the library
@@ -219,7 +220,7 @@ mod tests {
         let mut d = design();
         // The old drawing: a root with a sheet of its own and a symbol the old drawing published (and one the Symbol Editor holds, unpublished).
         let mut old_root = eda_model::ir::SchematicSection::default();
-        old_root.symbols.push(crate::sch_annotate_tests::symbol("U9", "Old:Part", "x", 1, Point { x: 0, y: 0 }));
+        old_root.symbols.push(crate::sch_annotate_tests::symbol("U9", "Old:Part", "x", 1, Point { x: Nm::ZERO, y: Nm::ZERO }));
         d.schematic = Some(old_root);
         d.sheet_contents = Some([("old.kicad_sch".to_string(), Default::default())].into_iter().collect());
         let mut lib = eda_model::ir::SymbolLibrarySection::default();
@@ -240,7 +241,7 @@ mod tests {
         file.bus_aliases = vec![alias("USB", &["D+", "D-"])];
         let screens: Vec<String> = file.screens.keys().cloned().collect();
         let refs = file.references();
-        let mut b = Board::new(d, &m, 100_000, 300_000);
+        let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
         let cmd = Cmd::ReplaceSchematic { content: file, name: "mcu.SchDoc".into() };
         assert!(cmd.replaces_schematic() && cmd.edits_connectivity() && cmd.domain() == Domain::Schematic);
         b.apply(&cmd).unwrap();

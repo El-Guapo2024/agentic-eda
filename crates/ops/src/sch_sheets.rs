@@ -582,7 +582,7 @@ impl<'a> Board<'a> {
             if file.contains('/') || file.contains('\\') {
                 return Err(vec![CheckResult::fail("ops_bad_sheet", file, "a sheet file is a bare file name (no folders)")]);
             }
-            if size.0 <= 0 || size.1 <= 0 {
+            if size.0 <= Nm::ZERO || size.1 <= Nm::ZERO {
                 return Err(vec![CheckResult::fail("ops_bad_sheet", name, "a sheet needs a positive size")]);
             }
             if self.schematic_mut_or_create().sheets.iter().any(|s| s.name == name) {
@@ -593,7 +593,7 @@ impl<'a> Board<'a> {
             let placement = SheetInstance { id: String::new(), name: name.to_string(), file: OWN.to_string(), at, size, pins: vec![], page: String::new() };
             let numbering = if keep_annotations { Numbering::Paste(PasteMode::Keep) } else { Numbering::Annotate { order, options: options.clone() } };
             let hint = (!file.is_empty()).then_some(file);
-            self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols }, (0, 0), name, hint, &numbering)?;
+            self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols }, (Nm::ZERO, Nm::ZERO), name, hint, &numbering)?;
             // `DrawSheet`: `if( isDrawSheetFromDesignBlock && place_as_group )` the sheet alone goes in a group named and linked as the block
             if !how.block.is_empty() {
                 let new_sheet = self.schematic_mut()?.sheets.last().map(|s| s.id.clone());

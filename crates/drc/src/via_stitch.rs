@@ -33,7 +33,7 @@ pub const POISSON_TILE_PITCHES: i64 = 8;
 pub const POISSON_TILE_SEED: u32 = 0x542c_21fc;
 
 fn p64(p: Point) -> Point64 {
-    Point64::new(p.x, p.y)
+    Point64::new(p.x.raw_shim(), p.y.raw_shim())
 }
 
 /// The fills of the board's zones, nanometres, by `(zone id, layer)`: what kicad-cli made last (`ZONE::GetFill( layer )`).
@@ -58,9 +58,9 @@ pub fn cell_for_position(v: &ViaStitch, pitch: i64, pos: (i64, i64)) -> (i64, i6
     // `roundDiv`: half away from zero, in integers.
     let round_div = |a: i64, b: i64| if a >= 0 { (a + b / 2) / b } else { -((-a + b / 2) / b) };
     let (ox, oy) = (v.origin_offset.x, v.origin_offset.y);
-    let row = round_div(pos.1 - oy, pitch);
+    let row = round_div(pos.1 - oy.raw_shim(), pitch);
     let shift = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
-    let col = round_div(pos.0 - ox - shift, pitch);
+    let col = round_div(pos.0 - ox.raw_shim() - shift, pitch);
     (col, row)
 }
 
@@ -70,7 +70,7 @@ pub fn position_for_cell(v: &ViaStitch, pitch: i64, cell: (i64, i64)) -> (i64, i
         return cell;
     }
     let shift = if v.layout == StitchLayout::Staggered && (cell.1 % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
-    (cell.0 * pitch + v.origin_offset.x + shift, cell.1 * pitch + v.origin_offset.y)
+    (cell.0 * pitch + v.origin_offset.x.raw_shim() + shift, cell.1 * pitch + v.origin_offset.y.raw_shim())
 }
 
 /// `Update`'s "Try to detect origin offset change due to moved via": on a grid the vias were made on (`childrenAreOnThisGrid`), the first member via off its cell defines
@@ -86,7 +86,7 @@ pub fn detect_origin_offset(v: &ViaStitch, pitch: i64, members: &[(i64, i64)]) -
             let row = (p.1 - offset_y) / pitch;
             let shift = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
             let offset_x = (((p.0 - shift) % pitch) + pitch) % pitch;
-            return Some(Point { x: offset_x, y: offset_y });
+            return Some(Point { x: Nm::from_raw_shim(offset_x), y: Nm::from_raw_shim(offset_y) });
         }
     }
     None
@@ -288,13 +288,13 @@ fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Nm, at:
     let (sin, cos) = rot_deg.to_radians().sin_cos();
     // `RotatePoint( p, centre, angle )`, y down: x' = x cos + y sin, y' = -x sin + y cos, relative to the centre.
     let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
-    let (ax, ay) = (at.x as f64, at.y as f64);
+    let (ax, ay) = (at.x.raw_shim() as f64, at.y.raw_shim() as f64);
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in segs.iter().flat_map(|s| [s.a, s.b]) {
-        let q = turn((p.x as f64 - ax, p.y as f64 - ay), -sin);
+        let q = turn((p.x.raw_shim() as f64 - ax, p.y.raw_shim() as f64 - ay), -sin);
         (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
     }
-    let grow = (r + margin) as f64;
+    let grow = (r + Nm::from_raw_shim(margin)).raw_shim() as f64;
     let corners = [(x0 - grow, y0 - grow), (x1 + grow, y0 - grow), (x1 + grow, y1 + grow), (x0 - grow, y1 + grow)];
     let pts: Vec<Point64> = corners.iter().map(|&c| turn(c, sin)).map(|(x, y)| Point64::new((x + ax).round() as i64, (y + ay).round() as i64)).collect();
     let (bx0, by0) = (pts.iter().map(|p| p.x).min().unwrap_or(0), pts.iter().map(|p| p.y).min().unwrap_or(0));
@@ -338,13 +338,13 @@ fn boxes_overlap(a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)) -> bool {
 fn shape_to_polygon(out: &mut ShapePolySet, s: &Shape, margin: i64) {
     match s {
         Shape::Circle { c, r } => {
-            out.add_outline(circle_polygon(p64(*c), (*r) + margin, POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
+            out.add_outline(circle_polygon(p64(*c), ((*r) + Nm::from_raw_shim(margin)).raw_shim(), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
         }
         Shape::Stadium { a, b, r } => {
-            out.add_outline(oval_polygon(p64(*a), p64(*b), 2 * ((*r) + margin), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
+            out.add_outline(oval_polygon(p64(*a), p64(*b), (2 * ((*r) + Nm::from_raw_shim(margin))).raw_shim(), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
         }
         Shape::Rect { x0, y0, x1, y1 } => {
-            let mut r = rect_set(*x0, *y0, *x1, *y1);
+            let mut r = rect_set((*x0).raw_shim(), (*y0).raw_shim(), (*x1).raw_shim(), (*y1).raw_shim());
             if margin > 0 {
                 r.inflate(margin, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
             }
@@ -352,8 +352,8 @@ fn shape_to_polygon(out: &mut ShapePolySet, s: &Shape, margin: i64) {
         }
         Shape::RoundRect { x0, y0, x1, y1, r } => {
             let (rr, x0, y0, x1, y1) = ((*r), (*x0), (*y0), (*x1), (*y1));
-            let mut core = rect_set(x0 + rr, y0 + rr, x1 - rr, y1 - rr);
-            core.inflate(rr + margin, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
+            let mut core = rect_set((x0 + rr).raw_shim(), (y0 + rr).raw_shim(), (x1 - rr).raw_shim(), (y1 - rr).raw_shim());
+            core.inflate((rr + Nm::from_raw_shim(margin)).raw_shim(), CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
             out.polys.extend(core.polys);
         }
         Shape::Polygon { pts } => {
@@ -365,7 +365,7 @@ fn shape_to_polygon(out: &mut ShapePolySet, s: &Shape, margin: i64) {
         }
         Shape::Strokes { segs, r } => {
             for seg in segs {
-                out.add_outline(oval_polygon(p64(seg.a), p64(seg.b), 2 * ((*r) + margin), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
+                out.add_outline(oval_polygon(p64(seg.a), p64(seg.b), (2 * ((*r) + Nm::from_raw_shim(margin))).raw_shim(), POLY_APPROX_ERROR, ErrorLoc::Outside, 0));
             }
         }
         Shape::Compound { parts } => {
@@ -460,23 +460,23 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
     use eda_model::via_stitch::{default_pitch, default_via_drill, default_via_size};
     let mut v = stitch.clone();
     // `InitializeDefaults`
-    if v.via.size_nm <= 0 {
+    if v.via.size_nm <= Nm::ZERO {
         v.via.size_nm = default_via_size(inputs.current_via_size_nm);
     }
-    if v.via.drill_nm <= 0 {
+    if v.via.drill_nm <= Nm::ZERO {
         v.via.drill_nm = default_via_drill(inputs.current_via_drill_nm);
     }
-    if v.pitch_nm <= 0 {
+    if v.pitch_nm <= Nm::ZERO {
         v.pitch_nm = default_pitch(v.via.size_nm);
     }
     let pitch = v.pitch_nm;
     // `childrenAreOnThisGrid = m_childGridConfig == currentConfig`: the vias were made on the layout, mode and pitch the board's stitching of this id has (the settings of
     // its last `Update`; a Properties edit has not reached the board yet). On a new grid every via is off it, and the first one is no dragged via.
     let effective_pitch = |s: &ViaStitch| -> Nm {
-        if s.pitch_nm > 0 {
+        if s.pitch_nm > Nm::ZERO {
             s.pitch_nm
         } else {
-            let size = if s.via.size_nm > 0 { s.via.size_nm } else { default_via_size(inputs.current_via_size_nm) };
+            let size = if s.via.size_nm > Nm::ZERO { s.via.size_nm } else { default_via_size(inputs.current_via_size_nm) };
             default_pitch(size)
         }
     };
@@ -496,10 +496,10 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
         .routing
         .iter()
         .flat_map(|rt| v.member_ids.iter().filter_map(move |id| rt.vias.iter().find(|x| &x.id == id)))
-        .map(|x| (x.at.x, x.at.y))
+        .map(|x| (x.at.x.raw_shim(), x.at.y.raw_shim()))
         .collect()
     };
-    if let Some(offset) = detect_origin_offset(&v, pitch, &members) {
+    if let Some(offset) = detect_origin_offset(&v, pitch.raw_shim(), &members) {
         v.origin_offset = offset;
     }
     if v.outline.len() < 3 {
@@ -507,11 +507,11 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
     }
     let cells = placement_cells(inputs, &v);
     // `isExcluded`: a grid cell the user took out, a position (near one, for a guard: within a quarter pitch).
-    let guard_exclude_sq = (pitch / 4) as i128 * (pitch / 4) as i128;
+    let guard_exclude_sq = (pitch / 4).raw_shim() as i128 * (pitch / 4).raw_shim() as i128;
     let excluded = |cell: (i64, i64)| -> bool {
         if v.mode == StitchMode::Guard {
             return v.excluded_positions.iter().any(|e| {
-                let (dx, dy) = ((e.x - cell.0) as i128, (e.y - cell.1) as i128);
+                let (dx, dy) = ((e.x - Nm::from_raw_shim(cell.0)).raw_shim() as i128, (e.y - Nm::from_raw_shim(cell.1)).raw_shim() as i128);
                 dx * dx + dy * dy < guard_exclude_sq
             });
         }
@@ -519,17 +519,17 @@ pub fn plan(inputs: &PlanInputs<'_>, stitch: &ViaStitch) -> StitchPlan {
             v.excluded_cells.contains(&cell)
         } else {
             // The design keeps nanometres: a position is matched as the via was put there, to the nanometre.
-            v.excluded_positions.iter().any(|e| (e.x, e.y) == (cell.0, cell.1))
+            v.excluded_positions.iter().any(|e| (e.x, e.y) == (Nm::from_raw_shim(cell.0), Nm::from_raw_shim(cell.1)))
         }
     };
     let vias = cells
         .into_iter()
         .filter(|c| !excluded(*c))
         .map(|c| {
-            let (x, y) = position_for_cell(&v, pitch, c);
+            let (x, y) = position_for_cell(&v, pitch.raw_shim(), c);
             // The design keeps nanometres: the position rounded to one -- and where the layout has no grid, the position is the via's key, as rounded.
-            let at = Point { x: x, y: y };
-            (if v.uses_grid_cells() { c } else { (at.x, at.y) }, at)
+            let at = Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) };
+            (if v.uses_grid_cells() { c } else { (at.x.raw_shim(), at.y.raw_shim()) }, at)
         })
         .collect();
     StitchPlan { stitch: v, vias }
@@ -540,7 +540,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     let mut cells = BTreeSet::new();
     let design = inputs.design;
     let rules = &inputs.model.board;
-    let pitch = if v.pitch_nm > 0 { v.pitch_nm } else { eda_model::via_stitch::default_pitch(v.via.size_nm) };
+    let pitch = if v.pitch_nm > Nm::ZERO { v.pitch_nm } else { eda_model::via_stitch::default_pitch(v.via.size_nm) };
     let via_size = v.via.size_nm;
     let via_drill = v.via.drill_nm;
     // `GetNetCode() == 0`: a stitching of no net, or of a net the board does not have, makes nothing.
@@ -614,7 +614,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
         return cells;
     }
     // "Require the whole via, not just its center, to land on same-net copper inside the outline."
-    allowed.deflate(via_size / 2, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32);
+    allowed.deflate((via_size / 2).raw_shim(), CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32);
     if allowed.outline_count() == 0 {
         return cells;
     }
@@ -622,15 +622,15 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     // The rules, and the probe via they judge the obstacles against.
     let board = crate::board::build(design, inputs.model);
     let rb = crate::rule_board::RuleBoard::new(design, inputs.model, &board, crate::constraints::Units::Mm, rules.custom_rules_text.as_deref());
-    let probe = rb.probe_via(&v.net, Point { x: 0, y: 0 }, v.via.size_nm, v.via.drill_nm, &v.via.from_layer, &v.via.to_layer);
+    let probe = rb.probe_via(&v.net, Point { x: Nm::ZERO, y: Nm::ZERO }, v.via.size_nm, v.via.drill_nm, &v.via.from_layer, &v.via.to_layer);
     let eval = |t: CType, other: &std::rc::Rc<crate::rule_item::RuleItem>, layer: Option<&str>| -> i64 { rb.engine().eval_rules(t, Some(&probe), Some(other), layer, None).value.min() };
     let worst = crate::constraints::worst_case_clearance(rules);
-    let query_box = (stitch_box.0 - worst - via_size, stitch_box.1 - worst - via_size, stitch_box.2 + worst + via_size, stitch_box.3 + worst + via_size);
+    let query_box = (stitch_box.0 - worst.raw_shim() - via_size.raw_shim(), stitch_box.1 - worst.raw_shim() - via_size.raw_shim(), stitch_box.2 + worst.raw_shim() + via_size.raw_shim(), stitch_box.3 + worst.raw_shim() + via_size.raw_shim());
     let query_clip = rect_set(query_box.0, query_box.1, query_box.2, query_box.3);
-    let near = |b: (i64, i64, i64, i64)| boxes_overlap((b.0 - worst, b.1 - worst, b.2 + worst, b.3 + worst), query_box);
+    let near = |b: (i64, i64, i64, i64)| boxes_overlap((b.0 - worst.raw_shim(), b.1 - worst.raw_shim(), b.2 + worst.raw_shim(), b.3 + worst.raw_shim()), query_box);
     let shape_box = |s: &Shape| {
-        let (x0, y0, x1, y1) = s.bbox(0);
-        (x0, y0, x1, y1)
+        let (x0, y0, x1, y1) = s.bbox(Nm::ZERO);
+        (x0.raw_shim(), y0.raw_shim(), x1.raw_shim(), y1.raw_shim())
     };
 
     let mut obstacles = ShapePolySet::default();
@@ -642,11 +642,11 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
         if !hole_seen.insert(id.to_string()) {
             return;
         }
-        let mut margin = via_drill / 2 + eval(CType::HoleToHole, item, None);
+        let mut margin = via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleToHole, item, None));
         if !same_net(net) {
-            margin = margin.max(via_size / 2 + eval(CType::HoleClearance, item, Some(layer)));
+            margin = margin.max(via_size / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, item, Some(layer))));
         }
-        shape_to_polygon(obstacles, hole, margin);
+        shape_to_polygon(obstacles, hole, margin.raw_shim());
     };
     let (first, last) = (copper.first().cloned().unwrap_or_default(), copper.last().cloned().unwrap_or_default());
     for layer in &via_layers {
@@ -664,19 +664,19 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             if pad.flash(layer, &first, &last) == eda_model::padstack::Flash::Never || npth_without_copper(pad) {
                 continue;
             }
-            let mut margin = via_size / 2 + eval(CType::Clearance, &item, Some(layer));
+            let mut margin = via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)));
             if !same_net(&pad.net) {
-                margin = margin.max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+                margin = margin.max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
             }
-            shape_to_polygon(&mut obstacles, copper_shape, margin);
+            shape_to_polygon(&mut obstacles, copper_shape, margin.raw_shim());
         }
         for (i, t) in board.tracks.iter().enumerate() {
             if t.layer != *layer || same_net(&t.net) || !near(shape_box(&t.shape())) {
                 continue;
             }
             let item = rb.segment_item_at(i);
-            let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
-            shape_to_polygon(&mut obstacles, &t.shape(), margin);
+            let margin = (via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)))).max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
+            shape_to_polygon(&mut obstacles, &t.shape(), margin.raw_shim());
         }
         for (i, via) in board.vias.iter().enumerate() {
             // "Our own children are regenerated along with us and must not block their own cells."
@@ -685,11 +685,11 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             }
             let item = rb.via_item_at(i);
             add_hole(&mut obstacles, &via.id, &via.hole(), &via.net, &item, layer);
-            let mut margin = via_size / 2 + eval(CType::Clearance, &item, Some(layer));
+            let mut margin = via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)));
             if !same_net(&via.net) {
-                margin = margin.max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+                margin = margin.max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
             }
-            shape_to_polygon(&mut obstacles, &via.shape(), margin);
+            shape_to_polygon(&mut obstacles, &via.shape(), margin.raw_shim());
         }
         // A footprint's own graphics and texts on copper (`PCB_SHAPE`, `PCB_TEXT` of no net), and the board's texts on copper: `TransformShapeToPolygon` of each, a text's
         // bounding hull (`PCB_TEXT::buildBoundingHull`) grown by the margin.
@@ -697,18 +697,18 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             match piece {
                 crate::fp_art::FpCopper::Shape(s) if s.layer() == layer => {
                     let item = rb.shape_item_of(s);
-                    let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+                    let margin = (via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)))).max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
                     for part in crate::board::effective_shapes(s) {
                         if near(shape_box(&part)) {
-                            shape_to_polygon(&mut obstacles, &part, margin);
+                            shape_to_polygon(&mut obstacles, &part, margin.raw_shim());
                         }
                     }
                 }
                 crate::fp_art::FpCopper::Text(t) if t.layer == *layer => {
                     let item = rb.text_item_of("fp_text", t);
-                    let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+                    let margin = (via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)))).max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
                     if let Some(Shape::Strokes { segs, r }) = crate::board::footprint_text_shape(t) {
-                        add_text_hull(&mut obstacles, &segs, r, t.at, crate::board::footprint_text_draw_rotation(t), margin, &near);
+                        add_text_hull(&mut obstacles, &segs, r, t.at, crate::board::footprint_text_draw_rotation(t), margin.raw_shim(), &near);
                     }
                 }
                 _ => {}
@@ -716,14 +716,14 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
         }
         for t in design.drawings.iter().flat_map(|d| d.copper_texts.iter()).filter(|t| t.layer == *layer) {
             let item = rb.text_item_of("copper_text", t);
-            let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+            let margin = (via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)))).max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
             if let Some(Shape::Strokes { segs, r }) = crate::board::footprint_text_shape(t) {
-                add_text_hull(&mut obstacles, &segs, r, t.at, crate::board::footprint_text_draw_rotation(t), margin, &near);
+                add_text_hull(&mut obstacles, &segs, r, t.at, crate::board::footprint_text_draw_rotation(t), margin.raw_shim(), &near);
             }
         }
         for t in design.drawings.iter().flat_map(|d| d.texts.iter()).filter(|t| t.layer == *layer) {
             let item = rb.board_text_item_of(t);
-            let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+            let margin = (via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)))).max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
             // Laid out as the DRC lays out a plain text (`crate::board::build`): square glyphs, vertically centred.
             let size = (t.size_nm, t.size_nm);
             let pen = crate::stroke_font::effective_pen_width(t.stroke_width, size, false);
@@ -734,7 +734,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             };
             let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
             let segs = crate::stroke_font::kicad_text_segments(&crate::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: rot, mirror: t.mirror, halign, valign: 0 });
-            add_text_hull(&mut obstacles, &segs, pen / 2, t.at, rot, margin, &near);
+            add_text_hull(&mut obstacles, &segs, pen / 2, t.at, rot, margin.raw_shim(), &near);
         }
         // Graphics on copper (`PCB_SHAPE`), another net's or none.
         for s in design.drawings.iter().flat_map(|d| d.shapes.iter()) {
@@ -746,10 +746,10 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
                 continue;
             }
             let item = rb.shape_item_of(s);
-            let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+            let margin = (via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)))).max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
             for part in crate::board::effective_shapes(s) {
                 if near(shape_box(&part)) {
-                    shape_to_polygon(&mut obstacles, &part, margin);
+                    shape_to_polygon(&mut obstacles, &part, margin.raw_shim());
                 }
             }
         }
@@ -768,7 +768,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             let mut area = zone_set(z);
             area.boolean_intersection(&query_clip);
             if !area.is_empty() {
-                area.inflate(via_size / 2, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
+                area.inflate((via_size / 2).raw_shim(), CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
                 obstacles.boolean_add(&area);
             }
             continue;
@@ -785,8 +785,8 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             if near_fill.is_empty() {
                 continue;
             }
-            let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
-            near_fill.inflate(margin, CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
+            let margin = (via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(layer)))).max(via_drill / 2 + Nm::from_raw_shim(eval(CType::HoleClearance, &item, Some(layer))));
+            near_fill.inflate(margin.raw_shim(), CornerStrategy::RoundAllCorners, POLY_APPROX_ERROR as i32, false);
             let mut interior = zone_set(z);
             interior.boolean_intersection(&query_clip);
             near_fill.boolean_subtract(&interior);
@@ -816,9 +816,9 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
                 continue;
             }
             let item = rb.segment_item_at(i);
-            let margin = via_size / 2 + eval(CType::Clearance, &item, Some(&t.layer)) + safety;
+            let margin = via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(&t.layer))) + Nm::from_raw_shim(safety);
             let mut env = ShapePolySet::default();
-            shape_to_polygon(&mut env, &t.shape(), margin);
+            shape_to_polygon(&mut env, &t.shape(), margin.raw_shim());
             envelope.boolean_add(&env);
             shape_to_polygon(&mut guarded, &t.shape(), 0);
         }
@@ -828,15 +828,15 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             }
             let item = rb.via_item_at(i);
             // "arbitrary copper layer for clearance evaluation"
-            let margin = via_size / 2 + eval(CType::Clearance, &item, Some(&first)) + safety;
+            let margin = via_size / 2 + Nm::from_raw_shim(eval(CType::Clearance, &item, Some(&first))) + Nm::from_raw_shim(safety);
             let mut env = ShapePolySet::default();
-            shape_to_polygon(&mut env, &via.shape(), margin);
+            shape_to_polygon(&mut env, &via.shape(), margin.raw_shim());
             envelope.boolean_add(&env);
             shape_to_polygon(&mut guarded, &via.shape(), 0);
         }
         envelope.simplify();
         guarded.simplify();
-        for pt in sample_guard_envelope(&envelope, &guarded, pitch, &valid) {
+        for pt in sample_guard_envelope(&envelope, &guarded, pitch.raw_shim(), &valid) {
             cells.insert((pt.x, pt.y));
         }
         return cells;
@@ -845,7 +845,7 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
     let contains_box = |p: Point64| p.x >= bbox.0 && p.x <= bbox.2 && p.y >= bbox.1 && p.y <= bbox.3;
     if v.layout == StitchLayout::Poisson {
         let tile = baked_poisson_tile();
-        let tile_size = 1.max(pitch * POISSON_TILE_PITCHES);
+        let tile_size = 1.max((pitch * POISSON_TILE_PITCHES).raw_shim());
         let mut rng = Mt19937::new(v.seed);
         let offset_x = rng.uniform01() * tile_size as f64;
         let offset_y = rng.uniform01() * tile_size as f64;
@@ -869,17 +869,17 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
 
     // The plain and staggered grids, anchored to (0, 0) plus the offset.
     let (ox, oy) = (v.origin_offset.x, v.origin_offset.y);
-    let start_row = ((bbox.1 - oy) as f64 / pitch as f64).floor() as i64;
-    let start_col = ((bbox.0 - ox) as f64 / pitch as f64).floor() as i64;
+    let start_row = ((bbox.1 - oy.raw_shim()) as f64 / pitch.raw_shim() as f64).floor() as i64;
+    let start_col = ((bbox.0 - ox.raw_shim()) as f64 / pitch.raw_shim() as f64).floor() as i64;
     let origin = (start_col * pitch + ox, start_row * pitch + oy);
     let mut row = start_row;
     let mut y = origin.1;
-    while y <= bbox.3 {
-        let x_offset = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { 0 };
+    while y <= Nm::from_raw_shim(bbox.3) {
+        let x_offset = if v.layout == StitchLayout::Staggered && (row % 2 + 2) % 2 != 0 { pitch / 2 } else { Nm::ZERO };
         let mut col = start_col;
         let mut x = origin.0 + x_offset;
-        while x <= bbox.2 {
-            if valid(Point64::new(x, y)) {
+        while x <= Nm::from_raw_shim(bbox.2) {
+            if valid(Point64::new(x.raw_shim(), y.raw_shim())) {
                 cells.insert((col, row));
             }
             x += pitch;
@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn cells_and_positions_follow_the_anchor_and_the_stagger() {
         let mut v = ViaStitch::new(vec![]);
-        v.origin_offset = Point { x: 250_000, y: 0 };
+        v.origin_offset = Point { x: Nm::from_raw_shim(250_000), y: Nm::ZERO };
         let pitch = 1_000_000;
         assert_eq!(position_for_cell(&v, pitch, (3, 2)), (3_250_000, 2_000_000));
         assert_eq!(cell_for_position(&v, pitch, (3_250_000, 2_000_000)), (3, 2));
@@ -951,7 +951,7 @@ mod tests {
         // A via dragged to (10.1, 5.3) mm on a plain grid anchors it at (0.1, 0.3).
         let mut plain = ViaStitch::new(vec![]);
         plain.member_ids = vec!["a".into()];
-        assert_eq!(detect_origin_offset(&plain, pitch, &[(10_100_000, 5_300_000)]), Some(Point { x: 100_000, y: 300_000 }));
+        assert_eq!(detect_origin_offset(&plain, pitch, &[(10_100_000, 5_300_000)]), Some(Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(300_000) }));
         assert_eq!(detect_origin_offset(&plain, pitch, &[(10_000_000, 5_000_000)]), None, "on its cell");
     }
 }

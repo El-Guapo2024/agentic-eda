@@ -1,6 +1,7 @@
 //! A board's barcodes (`(barcode ..)`, KiCad's `PCB_BARCODE`) read and written: `PCB_IO_KICAD_SEXPR_PARSER::parsePCB_BARCODE` and
 //! `PCB_IO_KICAD_SEXPR::format( const PCB_BARCODE* )`, for [`eda_model::barcode::Barcode`].
 
+use eda_model::units::Nm;
 use std::fmt::Write as _;
 
 use eda_model::barcode::{Barcode, BarcodeKind, EccLevel};
@@ -28,16 +29,16 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Barcode> {
         at: Point { x: mm_to_nm(x), y: mm_to_nm(y) },
         angle,
         layer: sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Dwgs.User").to_string(),
-        width_nm: DEFAULT_SIZE_NM,
-        height_nm: DEFAULT_SIZE_NM,
+        width_nm: Nm::from_raw_shim(DEFAULT_SIZE_NM),
+        height_nm: Nm::from_raw_shim(DEFAULT_SIZE_NM),
         text: sexpr::find(item, "text").and_then(|t| sexpr::txt(t, 1)).unwrap_or("").to_string(),
-        text_height_nm: DEFAULT_TEXT_HEIGHT_NM,
+        text_height_nm: Nm::from_raw_shim(DEFAULT_TEXT_HEIGHT_NM),
         kind: BarcodeKind::default(),
         ecc: EccLevel::default(),
         show_text: true,
         knockout: false,
-        margin_x_nm: 0,
-        margin_y_nm: 0,
+        margin_x_nm: Nm::ZERO,
+        margin_y_nm: Nm::ZERO,
     };
     if let Some(s) = sexpr::find(item, "size") {
         b.width_nm = sexpr::num(s, 1).map_or(b.width_nm, mm_to_nm);
@@ -56,8 +57,8 @@ pub(crate) fn read(item: &[Sexpr]) -> Option<Barcode> {
     b.show_text = !yes(item, "hide").unwrap_or(false);
     b.knockout = yes(item, "knockout").unwrap_or(false);
     if let Some(m) = sexpr::find(item, "margins") {
-        b.margin_x_nm = sexpr::num(m, 1).map_or(0, mm_to_nm);
-        b.margin_y_nm = sexpr::num(m, 2).map_or(0, mm_to_nm);
+        b.margin_x_nm = sexpr::num(m, 1).map_or(Nm::ZERO, mm_to_nm);
+        b.margin_y_nm = sexpr::num(m, 2).map_or(Nm::ZERO, mm_to_nm);
     }
     Some(b)
 }
@@ -92,7 +93,7 @@ pub(crate) fn write(out: &mut String, b: &Barcode, locked: bool) -> String {
     }
     write!(out, " (hide {})", if b.show_text { "no" } else { "yes" }).unwrap();
     write!(out, " (knockout {})", if b.knockout { "yes" } else { "no" }).unwrap();
-    if b.margin_x_nm != 0 || b.margin_y_nm != 0 {
+    if b.margin_x_nm != Nm::ZERO || b.margin_y_nm != Nm::ZERO {
         write!(out, " (margins {} {})", mm(b.margin_x_nm), mm(b.margin_y_nm)).unwrap();
     }
     writeln!(out, " (uuid \"{uuid}\"))").unwrap();

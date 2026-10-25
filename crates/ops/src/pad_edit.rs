@@ -22,10 +22,10 @@ use eda_model::ir::{LibraryFootprint, LibraryPad, LibraryPadShape, PadEditMode, 
 use eda_model::CheckResult;
 
 /// `ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM` (`zones.h`): the width a thermal spoke template gets when the pad sets none.
-const THERMAL_SPOKE_WIDTH_NM: Nm = 500_000;
+const THERMAL_SPOKE_WIDTH_NM: Nm = Nm::from_raw_shim(500_000);
 
 /// The error `PAD::Recombine` converts curves to polygons with (`BOARD_DESIGN_SETTINGS::m_MaxError`, 5 micrometres by default).
-const MAX_ERROR_NM: Nm = 5_000;
+const MAX_ERROR_NM: Nm = Nm::from_raw_shim(5_000);
 
 /// The layer the pad's shapes are on, and the one a recombine reads: `F.Cu` when the pad is on it, else `B.Cu`, else the first of its layers in
 /// the order the layer lists show (`GetLayerSet().UIOrder().front()`: front copper, inner, back copper, then the technical layers).
@@ -95,20 +95,20 @@ impl PadFrame {
 
     /// `Rotate( 0, orientation )` then `Move( ShapePos )` on a shape of the pad's frame.
     fn out(&self, shape: &mut Shape, copper: usize) {
-        transform_shape(shape, Xform::Rotate { pivot: Point { x: 0, y: 0 }, angle: self.rot }, copper);
+        transform_shape(shape, Xform::Rotate { pivot: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: self.rot }, copper);
         transform_shape(shape, Xform::Move { dx: self.pos.x, dy: self.pos.y }, copper);
     }
 
     /// `Move( - ShapePos )` then `Rotate( 0, - orientation )`: the way back into the pad's frame.
     fn back(&self, shape: &mut Shape, copper: usize) {
         transform_shape(shape, Xform::Move { dx: -self.pos.x, dy: -self.pos.y }, copper);
-        transform_shape(shape, Xform::Rotate { pivot: Point { x: 0, y: 0 }, angle: -self.rot }, copper);
+        transform_shape(shape, Xform::Rotate { pivot: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: -self.rot }, copper);
     }
 }
 
 fn rotate(p: Point, angle_mdeg: i64) -> Point {
     let (s, c) = (angle_mdeg as f64 / 1000.0).to_radians().sin_cos();
-    Point { x: (p.x as f64 * c - p.y as f64 * s).round() as Nm, y: (p.x as f64 * s + p.y as f64 * c).round() as Nm }
+    Point { x: Nm::from_raw_shim((p.x.raw_shim() as f64 * c - p.y.raw_shim() as f64 * s).round() as i64), y: Nm::from_raw_shim((p.x.raw_shim() as f64 * s + p.y.raw_shim() as f64 * c).round() as i64) }
 }
 
 /// `PCB_SHAPE::Compare( other ) == 0` for the shapes the editor has: the same kind on the same layer with the same geometry, stroke width and fill.
@@ -253,12 +253,12 @@ fn recombine(fp: &mut LibraryFootprint, index: usize, mode: PadEditMode, copper:
                 // A new circular anchor the size of the pad's narrower side, and the old outline a polygon primitive.
                 _ => {
                     let outline = eda_drc::pad_shape::pad_polygons_in_footprint(&pad.to_engine_pad(), MAX_ERROR_NM);
-                    let pts: Vec<Point> = if outline.outline_count() > 0 { outline.outline(0).iter().map(|p| Point { x: p.x, y: p.y }).collect() } else { Vec::new() };
+                    let pts: Vec<Point> = if outline.outline_count() > 0 { outline.outline(0).iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect() } else { Vec::new() };
                     let min_extent = pad.size.0.min(pad.size.1);
                     custom.anchor = PadAnchor::Circle;
                     pad.size = (min_extent, min_extent);
                     if pts.len() >= 3 {
-                        let mut poly = Shape::Polygon { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, pts };
+                        let mut poly = Shape::Polygon { id: String::new(), layer: String::new(), stroke_width: Nm::ZERO, filled: true, pts };
                         frame.back(&mut poly, copper);
                         poly.set_layer(String::new());
                         primitives.insert(0, PadPrimitive { shape: poly, proxy: false });

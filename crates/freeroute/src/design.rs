@@ -20,6 +20,7 @@
 //! width into narrow pins. Every clearance carries a small margin for the
 //! rounding to whole µm on the way back.
 
+use eda_model::units::Nm;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -222,7 +223,7 @@ struct PlanKeepout {
 /// short of the pads.
 fn pad_gap_strips(pads: &[PlacedPad], max_gap: i64) -> Vec<(i64, i64, i64, i64)> {
     let rects: Vec<(i64, i64, i64, i64)> =
-        pads.iter().filter(|p| !p.through_hole).map(|p| (p.center.x - p.size.0 / 2, p.center.y - p.size.1 / 2, p.center.x + p.size.0 / 2, p.center.y + p.size.1 / 2)).collect();
+        pads.iter().filter(|p| !p.through_hole).map(|p| ((p.center.x - p.size.0 / 2).raw_shim(), (p.center.y - p.size.1 / 2).raw_shim(), (p.center.x + p.size.0 / 2).raw_shim(), (p.center.y + p.size.1 / 2).raw_shim())).collect();
     let mut strips = Vec::new();
     for i in 0..rects.len() {
         for j in i + 1..rects.len() {
@@ -297,7 +298,7 @@ impl Plan {
                 return Err(format!("the {} pour names layer {}, which is not in the stackup {:?}", pour.net, pour.layer, rules.layers));
             }
         }
-        if rules.track_width <= 0 || rules.clearance < 0 || rules.via_diameter <= 0 {
+        if rules.track_width <= Nm::ZERO || rules.clearance < Nm::ZERO || rules.via_diameter <= Nm::ZERO {
             return Err(format!("unusable rules: track {} clearance {} via {} nm", rules.track_width, rules.clearance, rules.via_diameter));
         }
         let mut outline = placement.outline.clone();
@@ -319,13 +320,13 @@ impl Plan {
         // Each pin with its stack's key; its stack's number and its net's
         // are settled once all are known.
         let mut placed: Vec<(String, Vec<(PlanPin, String)>)> = Vec::new();
-        let mut max_coor = outline.iter().map(|p| p.x.abs().max(p.y.abs())).max().unwrap_or(0);
+        let mut max_coor = outline.iter().map(|p| p.x.abs().max(p.y.abs())).max().unwrap_or(Nm::ZERO);
         let (bx0, by0) = (outline.iter().map(|p| p.x).min().unwrap(), outline.iter().map(|p| p.y).min().unwrap());
         let (bx1, by1) = (outline.iter().map(|p| p.x).max().unwrap(), outline.iter().map(|p| p.y).max().unwrap());
         let mut keepouts = Vec::new();
         let mut keep_out = |layer: usize, (x0, y0, x1, y1): (i64, i64, i64, i64)| {
             // Clipped to the board: the gates look at nothing beyond it.
-            let rect = (x0.max(bx0), y0.max(by0), x1.min(bx1), y1.min(by1));
+            let rect = (x0.max(bx0.raw_shim()), y0.max(by0.raw_shim()), x1.min(bx1.raw_shim()), y1.min(by1.raw_shim()));
             if rect.0 < rect.2 && rect.1 < rect.3 {
                 keepouts.push(PlanKeepout { layer, rect });
             }
@@ -334,11 +335,11 @@ impl Plan {
             let part = model.part(&fp.id).ok_or_else(|| format!("placed footprint {} has no part in the model", fp.id))?;
             let pads = placed_pads(model, part, fp).ok_or_else(|| format!("no footprint geometry for {}", fp.id))?;
             let side_layer = if fp.side == Side::Top { 0 } else { layer_count - 1 };
-            for strip in pad_gap_strips(&pads, rules.tuning.between_pads_max_gap_nm) {
+            for strip in pad_gap_strips(&pads, rules.tuning.between_pads_max_gap_nm.raw_shim()) {
                 keep_out(side_layer, strip);
             }
             if let Some(label) = placed_refdes_box(model, &placement.outline, part, fp) {
-                keep_out(side_layer, label);
+                keep_out(side_layer, (label.0.raw_shim(), label.1.raw_shim(), label.2.raw_shim(), label.3.raw_shim()));
             }
             let mut seen: BTreeMap<String, usize> = BTreeMap::new();
             let mut pins = Vec::new();
@@ -349,25 +350,25 @@ impl Plan {
                 let name = if *count == 0 && !pad.number.is_empty() { pad.number.clone() } else { format!("{}@{count}", pad.number) };
                 *count += 1;
                 let (from, to) = if pad.through_hole { (0, layer_count - 1) } else { (side_layer, side_layer) };
-                let form = PadForm::Box { half_w: units(pad.size.0) / 2, half_h: units(pad.size.1) / 2 };
+                let form = PadForm::Box { half_w: units(pad.size.0.raw_shim()) / 2, half_h: units(pad.size.1.raw_shim()) / 2 };
                 let span = if from == to { rules.layers[from].clone() } else { format!("{}-{}", rules.layers[from], rules.layers[to]) };
                 let key = format!("{}[{span}]", form.name());
                 stacks.insert(key.clone(), (form, from, to));
                 let net = pin_nets.get(format!("{}.{}", fp.id, pad.number).as_str()).and_then(|n| net_index.get(n).copied());
                 max_coor = max_coor.max(pad.center.x.abs()).max(pad.center.y.abs());
-                let center = IntPoint::new(units(pad.center.x), units(pad.center.y));
+                let center = IntPoint::new(units(pad.center.x.raw_shim()), units(pad.center.y.raw_shim()));
                 pins.push((PlanPin { number: pad.number.clone(), name, center, padstack: 0, net, geom: pad.clone() }, key));
             }
             placed.push((fp.id.clone(), pins));
         }
-        if 5 * units(max_coor) >= CRIT_INT {
+        if 5 * units(max_coor.raw_shim()) >= CRIT_INT {
             return Err(format!("the board reaches {max_coor} nm, past what FreeRouting holds unscaled"));
         }
         let mut padstacks: Vec<PlanPadstack> = stacks.iter().map(|(name, &(form, from_layer, to_layer))| PlanPadstack { name: name.clone(), form, from_layer, to_layer }).collect();
         let stack_no: BTreeMap<&str, usize> = stacks.keys().enumerate().map(|(i, k)| (k.as_str(), i)).collect();
         padstacks.push(PlanPadstack {
-            name: format!("Via[0-{}]_{}:{}_um", layer_count - 1, um(units(rules.via_diameter)), um(units(rules.via_drill))),
-            form: PadForm::Circle { radius: units(rules.via_diameter) / 2 },
+            name: format!("Via[0-{}]_{}:{}_um", layer_count - 1, um(units(rules.via_diameter.raw_shim())), um(units(rules.via_drill.raw_shim()))),
+            form: PadForm::Circle { radius: units(rules.via_diameter.raw_shim()) / 2 },
             from_layer: 0,
             to_layer: layer_count - 1,
         });
@@ -402,13 +403,13 @@ impl Plan {
                     (format!("class_{c}"), nc.track_width.unwrap_or(rules.track_width), nc.clearance.unwrap_or(rules.clearance))
                 }
             };
-            if width <= 0 {
+            if width <= Nm::ZERO {
                 return Err(format!("net class {name} has track width {width} nm"));
             }
-            if clearance_nm < 0 {
+            if clearance_nm < Nm::ZERO {
                 return Err(format!("net class {name} has clearance {clearance_nm} nm"));
             }
-            classes.push(PlanClass { name, half_width: units(width) / 2, clearance: units(clearance_nm) + ROUNDING_MARGIN });
+            classes.push(PlanClass { name, half_width: units(width.raw_shim()) / 2, clearance: units(clearance_nm.raw_shim()) + ROUNDING_MARGIN });
         }
         // Nets by number: FreeRouting makes a plane's net as it reads the
         // plane, before the netlist, so poured nets come first.
@@ -457,11 +458,11 @@ impl Plan {
             classes,
             keepouts,
             planes,
-            track_half_width: units(rules.track_width) / 2,
-            clearance: units(rules.clearance) + margin,
+            track_half_width: units(rules.track_width.raw_shim()) / 2,
+            clearance: units(rules.clearance.raw_shim()) + margin,
             // The outline is copper `OUTLINE_HALF_WIDTH` wide either side
             // of the edge.
-            edge_clearance: units(rules.tuning.edge_clearance_nm.max(EDGE_CLEARANCE_NM)) - OUTLINE_HALF_WIDTH + margin,
+            edge_clearance: units((rules.tuning.edge_clearance_nm.max(Nm::from_raw_shim(EDGE_CLEARANCE_NM))).raw_shim()) - OUTLINE_HALF_WIDTH + margin,
             keepout_clearance: margin,
         })
     }
@@ -469,7 +470,7 @@ impl Plan {
     /// The board's bounding box, board units: the outline's, grown by
     /// 1000 as FreeRouting grows it.
     fn bounds(&self) -> IntBox {
-        let (xs, ys) = (self.outline.iter().map(|p| units(p.x)), self.outline.iter().map(|p| units(p.y)));
+        let (xs, ys) = (self.outline.iter().map(|p| units(p.x.raw_shim())), self.outline.iter().map(|p| units(p.y.raw_shim())));
         IntBox::new(xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap()).offset(1000)
     }
 
@@ -509,7 +510,7 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     let _ = writeln!(out, "    )");
     let _ = write!(out, "    (boundary\n      (path pcb 0");
     for p in &plan.outline {
-        let _ = write!(out, "  {} {}", um(units(p.x)), um(units(p.y)));
+        let _ = write!(out, "  {} {}", um(units(p.x.raw_shim())), um(units(p.y.raw_shim())));
     }
     let _ = writeln!(out, ")\n      (clearance_class edge)\n    )");
     let via = plan.via_padstack();
@@ -531,7 +532,7 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     for p in &plan.planes {
         let _ = write!(out, "    (plane {} (polygon {} 0", quoted(&plan.nets[p.net].name), layer(p.layer));
         for c in &plan.outline {
-            let _ = write!(out, " {} {}", um(units(c.x)), um(units(c.y)));
+            let _ = write!(out, " {} {}", um(units(c.x.raw_shim())), um(units(c.y.raw_shim())));
         }
         let _ = writeln!(out, "))");
     }
@@ -806,7 +807,7 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     let plan = Plan::of(design, model, rules)?;
     let layer_count = plan.layers.len();
     let layers = plan.layers.iter().map(|name| Layer { name: name.clone(), is_signal: true }).collect();
-    let corners: Vec<IntPoint> = plan.outline.iter().map(|p| IntPoint::new(units(p.x), units(p.y))).collect();
+    let corners: Vec<IntPoint> = plan.outline.iter().map(|p| IntPoint::new(units(p.x.raw_shim()), units(p.y.raw_shim()))).collect();
     let bounds = plan.bounds();
 
     // The structure's rule: the clearance, then the outline's class and
@@ -991,7 +992,7 @@ fn pad_contains(shape: &PadShape, p: FloatPoint) -> bool {
 /// Board units as the nearest nanometre.
 fn to_nm(p: FloatPoint) -> IrPoint {
     let unit = NM_PER_UNIT as f64;
-    IrPoint { x: (p.x * unit).round() as i64, y: (p.y * unit).round() as i64 }
+    IrPoint { x: Nm::from_raw_shim((p.x * unit).round() as i64), y: Nm::from_raw_shim((p.y * unit).round() as i64) }
 }
 
 /// The routes on `rb`, a board [`board_from_design`] built for the design,
@@ -1043,7 +1044,7 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
                         }
                     }
                 }
-                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: 2 * half_width * NM_PER_UNIT, pts, arc_mid_offset: None });
+                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: Nm::from_raw_shim(2 * half_width * NM_PER_UNIT), pts, arc_mid_offset: None });
             }
             ItemKind::Via { center, .. } => vias.push(IrVia {
                 id: String::new(),
@@ -1257,7 +1258,7 @@ impl GatePad<'_> {
     fn core(&self) -> ((f64, f64, f64, f64), f64) {
         let g = self.geom;
         let r = g.corner_radius();
-        let (cx, cy, hw, hh) = (g.center.x as f64, g.center.y as f64, g.size.0 as f64 / 2.0, g.size.1 as f64 / 2.0);
+        let (cx, cy, hw, hh) = (g.center.x.raw_shim() as f64, g.center.y.raw_shim() as f64, g.size.0.raw_shim() as f64 / 2.0, g.size.1.raw_shim() as f64 / 2.0);
         (((cx - hw + r).round(), (cy - hh + r).round(), (cx + hw - r).round(), (cy + hh - r).round()), r)
     }
 
@@ -1267,14 +1268,14 @@ impl GatePad<'_> {
     /// core where the segment misses it.
     fn deepest_on(&self, a: IrPoint, b: IrPoint) -> Option<(f64, f64)> {
         let g = self.geom;
-        let (ax, ay, dx, dy) = (a.x as f64, a.y as f64, (b.x - a.x) as f64, (b.y - a.y) as f64);
+        let (ax, ay, dx, dy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, (b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
         let at = |t: f64| (ax + t * dx, ay + t * dy);
         if g.is_round() {
-            let (cx, cy) = (g.center.x as f64, g.center.y as f64);
+            let (cx, cy) = (g.center.x.raw_shim() as f64, g.center.y.raw_shim() as f64);
             let len2 = dx * dx + dy * dy;
             let t = if len2 == 0.0 { 0.0 } else { (((cx - ax) * dx + (cy - ay) * dy) / len2).clamp(0.0, 1.0) };
             let p = at(t);
-            let reach = (g.size.0.min(g.size.1) / 2) as f64;
+            let reach = (g.size.0.min(g.size.1) / 2).raw_shim() as f64;
             return (((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt() <= reach).then_some(p);
         }
         let (core, r) = self.core();
@@ -1329,7 +1330,7 @@ fn split_at_own_pads(tracks: Vec<Track>, pads: &[GatePad]) -> Vec<Track> {
             }
             for k in 0..t.pts.len() - 1 {
                 let Some((x, y)) = pad.deepest_on(t.pts[k], t.pts[k + 1]) else { continue };
-                let cut = IrPoint { x: x.round() as i64, y: y.round() as i64 };
+                let cut = IrPoint { x: Nm::from_raw_shim(x.round() as i64), y: Nm::from_raw_shim(y.round() as i64) };
                 if !pad.geom.contains(cut) {
                     continue;
                 }
@@ -1400,11 +1401,11 @@ mod tests {
     use eda_model::footprint::PadShape as ModelPadShape;
 
     fn pad(x: i64, y: i64, shape: ModelPadShape) -> PlacedPad {
-        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (1_000_000, 1_000_000), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
+        PlacedPad { number: "1".into(), center: IrPoint { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
     }
 
     fn track(pts: &[(i64, i64)]) -> Track {
-        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: 200_000, pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect(), arc_mid_offset: None }
+        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: pts.iter().map(|&(x, y)| IrPoint { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }).collect(), arc_mid_offset: None }
     }
 
     fn gate_pads(pads: &[PlacedPad]) -> Vec<GatePad<'_>> {
@@ -1433,10 +1434,10 @@ mod tests {
         let tracks = vec![track(&[(0, 0), (0, 2_000_000)]), track(&[(0, 2_000_000), (300_000, 2_000_000), (300_000, 300_000)]), track(&[(300_000, 300_000), (5_000_000, 0)])];
         let kept = drop_pad_loops(tracks, &[], &gate_pads(&pads));
         assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].pts[0], IrPoint { x: 300_000, y: 300_000 });
+        assert_eq!(kept[0].pts[0], IrPoint { x: Nm::from_raw_shim(300_000), y: Nm::from_raw_shim(300_000) });
         // A via on the way keeps the run: it may lead elsewhere.
         let tracks = vec![track(&[(0, 0), (0, 2_000_000)]), track(&[(0, 2_000_000), (300_000, 300_000)])];
-        let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: 0, y: 2_000_000 }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: Nm::ZERO, y: Nm::from_raw_shim(2_000_000) }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
         assert_eq!(drop_pad_loops(tracks, &[via], &gate_pads(&pads)).len(), 2);
     }
 
@@ -1453,7 +1454,7 @@ mod tests {
 
         let pad1 = Footprint {
             name: "PAD1".into(),
-            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1_000_000, 1_000_000), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
@@ -1482,18 +1483,18 @@ mod tests {
             ],
             footprints: vec![pad1],
             board: BoardRules {
-                clearance: 200_000,
-                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150_000), clearance: Some(150_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
+                clearance: Nm::from_raw_shim(200_000),
+                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(Nm::from_raw_shim(150_000)), clearance: Some(Nm::from_raw_shim(150_000)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
                 ..BoardRules::default()
             },
             ..Default::default()
         };
         let placement = PlacementSection {
-            outline: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 10_000_000, y: 0 }, IrPoint { x: 10_000_000, y: 10_000_000 }, IrPoint { x: 0, y: 10_000_000 }],
+            outline: vec![IrPoint { x: Nm::ZERO, y: Nm::ZERO }, IrPoint { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, IrPoint { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, IrPoint { x: Nm::ZERO, y: Nm::from_raw_shim(10_000_000) }],
             footprints: vec![
-                FootprintInstance { id: "P1".into(), at: IrPoint { x: 1_000_000, y: 1_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "P2".into(), at: IrPoint { x: 3_000_000, y: 1_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
-                FootprintInstance { id: "P3".into(), at: IrPoint { x: 5_000_000, y: 1_000_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P1".into(), at: IrPoint { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P2".into(), at: IrPoint { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(1_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P3".into(), at: IrPoint { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(1_000_000) }, rot: 0, side: Side::Top, label: Default::default() },
             ],
             modules: Vec::new(),
         };

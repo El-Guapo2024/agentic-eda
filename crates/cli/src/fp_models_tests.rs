@@ -1,6 +1,7 @@
 //! The 3D models of a footprint through a board directory (GAPS.md package P14, item 30): what the loader lays over the footprint, what the state sends the 3D view, what the
 //! derived `.kicad_pcb` carries, and what one undo step takes back. The slow tier hands the board to kicad-cli.
 
+use eda_model::units::Nm;
 use super::tests::{scratch, setup};
 use super::{load, redo, step, undo};
 use eda_model::footprint::Model3d;
@@ -159,9 +160,9 @@ fn the_models_follow_their_footprint_and_a_bottom_one_is_written_in_kicads_frame
     setup(&dir);
     let placed = Model3d { offset: [1.0, 2.0, 0.5], rotate: [90.0, 0.0, 30.0], ..Model3d::identity(LIB) };
     step(&dir, Cmd::SetBoardModels { part: "U1".into(), models: vec![placed.clone()] }, false, "test").unwrap();
-    step(&dir, Cmd::MoveTo { part: "U1".into(), x: 8_000_000, y: 8_000_000 }, false, "test").unwrap();
+    step(&dir, Cmd::MoveTo { part: "U1".into(), x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(8_000_000) }, false, "test").unwrap();
     assert_eq!(sent(&dir, "U1"), Some(vec![placed.clone()]), "moved: the same placement on the footprint");
-    step(&dir, Cmd::FlipItems { ids: vec!["U1".into()], pivot: eda_model::ir::Point { x: 8_000_000, y: 8_000_000 }, direction: eda_ops::FlipDirection::LeftRight }, false, "test").unwrap();
+    step(&dir, Cmd::FlipItems { ids: vec!["U1".into()], pivot: eda_model::ir::Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(8_000_000) }, direction: eda_ops::FlipDirection::LeftRight }, false, "test").unwrap();
     assert_eq!(sent(&dir, "U1"), Some(vec![placed.clone()]), "flipped: the footprint's list is the same, in the frame of the footprint on the top side");
     let pcb = derived_board(&dir);
     let block = footprint_block(&pcb, "U1");
@@ -228,9 +229,9 @@ fn a_footprint_placed_from_the_project_library_brings_its_models() {
     fp.pads.push(eda_model::ir::LibraryPad {
         id: String::new(),
         number: "1".into(),
-        at: eda_model::ir::Point { x: 0, y: 0 },
+        at: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO },
         offset: eda_model::ir::Point::default(),
-        size: (1_000_000, 1_000_000),
+        size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)),
         shape: eda_model::ir::LibraryPadShape::Rect,
         kind: eda_model::footprint::PadKind::Smd,
         drill: None,
@@ -253,7 +254,7 @@ fn a_footprint_placed_from_the_project_library_brings_its_models() {
     fp.models3d = two_models();
     fp.model = Some(fp.models3d[0].path.clone());
     step(&dir, Cmd::PutLibraryFootprint { footprint: fp.clone(), overwrite: false }, false, "test").unwrap();
-    step(&dir, Cmd::PlaceFootprint { footprint: "Test:Mounted".into(), at: eda_model::ir::Point { x: 10_000_000, y: 10_000_000 }, reference: String::new(), value: String::new(), definition: Some(fp) }, false, "test").unwrap();
+    step(&dir, Cmd::PlaceFootprint { footprint: "Test:Mounted".into(), at: eda_model::ir::Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, reference: String::new(), value: String::new(), definition: Some(fp) }, false, "test").unwrap();
     let (_, _, model) = load(&dir).unwrap();
     let placed = model.parts.iter().find(|p| p.footprint.as_deref() == Some("Test:Mounted")).expect("the footprint is a part of the board now");
     assert_eq!(model.footprint_of(placed).unwrap().models3d, two_models());
@@ -307,7 +308,7 @@ fn kicad_cli_reads_the_models_this_studio_writes_as_it_reads_its_own() {
     let dir = scratch("models_kicad_cli_proof");
     setup(&dir);
     // U1 turned a third of a quarter, with the two models
-    step(&dir, Cmd::RotateItems { ids: vec!["U1".into()], pivot: eda_model::ir::Point { x: 5_000_000, y: 5_000_000 }, angle_millideg: 30_000 }, false, "test").unwrap();
+    step(&dir, Cmd::RotateItems { ids: vec!["U1".into()], pivot: eda_model::ir::Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }, angle_millideg: 30_000 }, false, "test").unwrap();
     step(&dir, Cmd::SetBoardModels { part: "U1".into(), models: two_models() }, false, "test").unwrap();
     let ours = derived_board(&dir);
 

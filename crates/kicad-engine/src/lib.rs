@@ -825,7 +825,7 @@ fn track_anchors(design: &Design, id: &str) -> Vec<(i64, i64)> {
     let Some(track) = design.routing.as_ref().and_then(|r| r.tracks.iter().find(|t| t.id == base)) else {
         return Vec::new();
     };
-    let nm = |p: &eda_model::ir::Point| (p.x, p.y);
+    let nm = |p: &eda_model::ir::Point| (p.x.raw_shim(), p.y.raw_shim());
     let (Some(a), Some(b)) = (track.pts.get(n), track.pts.get(n + 1)) else {
         return Vec::new();
     };
@@ -1817,6 +1817,7 @@ pub fn bom_plugins_dir() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
 
     #[test]
@@ -1937,7 +1938,7 @@ mod tests {
     fn a_track_segment_offers_its_ends_and_its_middle_as_the_markers_position() {
         let mut design = empty_design().0;
         design.routing = Some(eda_model::ir::RoutingSection {
-            tracks: vec![eda_model::ir::Track { id: "t7".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 100_000, pts: vec![eda_model::ir::Point { x: 1_000_000, y: 2_000_000 }, eda_model::ir::Point { x: 3_001_000, y: 2_000_000 }, eda_model::ir::Point { x: 3_001_000, y: 9_000_000 }], arc_mid_offset: None }],
+            tracks: vec![eda_model::ir::Track { id: "t7".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(100_000), pts: vec![eda_model::ir::Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, eda_model::ir::Point { x: Nm::from_raw_shim(3_001_000), y: Nm::from_raw_shim(2_000_000) }, eda_model::ir::Point { x: Nm::from_raw_shim(3_001_000), y: Nm::from_raw_shim(9_000_000) }], arc_mid_offset: None }],
             vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default(),
         });
         // The first segment is the track's own id, the next ones `<id>#n`: `DRC_TEST_PROVIDER_TRACK_WIDTH` puts a trace's marker at (start + end) / 2.
@@ -2190,7 +2191,7 @@ fi"#;
     /// sheets (`SetSheetSpecificPath`), and the exclusion of one placement leaves the other an error.
     #[test]
     fn an_erc_exclusion_of_one_placement_leaves_the_other_placements_finding() {
-        let at = |sheet: &str| eda_model::ir::ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1, 2], items: vec!["u-a".into()], sheet: vec!["root".into(), sheet.into()], main_sheet: vec!["root".into(), sheet.into()], ..Default::default() };
+        let at = |sheet: &str| eda_model::ir::ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [Nm::from_raw_shim(1), Nm::from_raw_shim(2)], items: vec!["u-a".into()], sheet: vec!["root".into(), sheet.into()], main_sheet: vec!["root".into(), sheet.into()], ..Default::default() };
         let placed = |sheet: &str| Violation { marker: Some(at(sheet)), sheet: format!("/root/{sheet}"), ..erc_violation("pin_not_connected", vec![erc_item("Pin 2", Some("R1.2"), "u-a")], false) };
         let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![placed("s1"), placed("s2")], ignored_checks: vec![] };
         let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "R1.2".into(), marker: Some(at("s1")), ..Default::default() }]);
@@ -2214,7 +2215,7 @@ fi"#;
     fn a_finding_kicad_cli_matched_is_excluded_with_its_comment_and_counted_by_nobody() {
         let a = erc_item("Pin 1", Some("U1.1"), "u-a");
         let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![erc_violation("pin_not_connected", vec![a.clone()], true), erc_violation("pin_not_connected", vec![erc_item("Pin 2", Some("U1.2"), "u-b")], false)], ignored_checks: vec![] };
-        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.1".into(), comment: "reviewed".into(), marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1, 2], items: vec!["u-a".into()], ..Default::default() }) }]);
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.1".into(), comment: "reviewed".into(), marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [Nm::from_raw_shim(1), Nm::from_raw_shim(2)], items: vec!["u-a".into()], ..Default::default() }) }]);
         assert_eq!(j["violations"][0]["severity"], "excluded");
         assert_eq!(j["violations"][0]["kicad_matched"], true, "kicad-cli itself matched the marker text");
         assert_eq!(j["violations"][0]["comment"], "reviewed", "the studio's comment is the exclusion's");

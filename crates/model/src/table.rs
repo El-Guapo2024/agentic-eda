@@ -29,8 +29,8 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-fn is_zero(n: &Nm) -> bool {
-    *n == 0
+fn is_zero<T: Default + PartialEq>(n: &T) -> bool {
+    *n == T::default()
 }
 
 fn d_true() -> bool {
@@ -50,7 +50,7 @@ fn is_one(n: &u32) -> bool {
 }
 
 fn d_none_width() -> Nm {
-    -1
+    Nm::new(-1)
 }
 
 /// The id of cell (`row`, `col`) of the table `table` as an item of the editor (a click on a cell selects the cell, not the table: see `PCB_SELECTION_TOOL`
@@ -86,7 +86,7 @@ pub struct TableStroke {
 impl Default for TableStroke {
     /// What a table the file gave no stroke has: width -1, `LINE_STYLE::DEFAULT`, no colour.
     fn default() -> Self {
-        TableStroke { width_nm: -1, style: TableLineStyle::Default, color: None }
+        TableStroke { width_nm: Nm::new(-1), style: TableLineStyle::Default, color: None }
     }
 }
 
@@ -190,17 +190,17 @@ impl TableText {
     /// What an `EDA_TEXT` is until something sets it: 50 mil glyphs (`DEFAULT_SIZE_TEXT`), automatic thickness, and the justification a text box starts with
     /// (`PCB_TEXTBOX`: left, centre).
     pub fn pcb_default() -> Self {
-        TableText { height_nm: 1_270_000, width_nm: 1_270_000, thickness_nm: 0, bold: false, italic: false, h_align: TextJustify::Left, v_align: TextVAlign::Center, mirror: false, face: None, line_spacing_permille: 0, color: None }
+        TableText { height_nm: Nm::new(1_270_000), width_nm: Nm::new(1_270_000), thickness_nm: Nm::ZERO, bold: false, italic: false, h_align: TextJustify::Left, v_align: TextVAlign::Center, mirror: false, face: None, line_spacing_permille: 0, color: None }
     }
 
     /// `EDA_TEXT::GetEffectiveTextPenWidth`: the stroke width the glyphs are drawn with, which is the automatic one (an eighth of the glyph width, a fifth if
     /// bold) when none is set, never more than a quarter of the smaller glyph dimension (`ClampTextPenSize`).
     pub fn pen_nm(&self) -> Nm {
         let mut pen = self.thickness_nm;
-        if pen <= 1 {
-            pen = (self.width_nm as f64 / if self.bold { 5.0 } else { 8.0 }).round() as Nm;
+        if pen <= Nm::new(1) {
+            pen = Nm::kiround(self.width_nm.as_f64() / if self.bold { 5.0 } else { 8.0 });
         }
-        let max = (self.width_nm.abs().min(self.height_nm.abs()) as f64 * 0.25).round() as Nm;
+        let max = Nm::kiround((self.width_nm.abs().min(self.height_nm.abs())).as_f64() * 0.25);
         pen.min(max)
     }
 
@@ -255,7 +255,7 @@ impl TableCell {
     /// `PCB_TEXTBOX::GetLegacyTextMargin`: `KiROUND( GetStroke().GetWidth() / 2.0 ) + KiROUND( GetTextSize().y * 0.75 )`, which is what a cell has until a
     /// margin is set -- 1.0025 mm for a new cell's 1.27 mm text on a 0.1 mm stroke (the shape default).
     pub fn legacy_margin_nm(text: &TableText, stroke_nm: Nm) -> Nm {
-        crate::units::kiround(stroke_nm as f64 / 2.0) + crate::units::kiround(text.height_nm as f64 * 0.75)
+        Nm::new(crate::units::kiround(stroke_nm.as_f64() / 2.0) + crate::units::kiround(text.height_nm.as_f64() * 0.75))
     }
 
     /// Margin `i` (left, top, right, bottom): what `Autosize` lays a table out with and the writer writes.
@@ -268,14 +268,14 @@ impl TableCell {
     pub fn pcb_new(back: bool) -> Self {
         let mut style = TableText::pcb_default();
         style.mirror = back;
-        let margin = Self::legacy_margin_nm(&style, 100_000);
+        let margin = Self::legacy_margin_nm(&style, Nm::new(100_000));
         TableCell { uuid: String::new(), text: String::new(), col_span: 1, row_span: 1, margins: [margin; 4], style, fill: SchFill::None, fill_color: None, exclude_from_sim: false }
     }
 
     /// A new sheet cell (`new SCH_TABLECELL()`, then `SetTextSize` to the sheet's default text size, as Draw Table does): empty, no fill, left and top, and the margin the
     /// constructor gave it -- the legacy margin of 50 mil text on a stroke 0 wide.
     pub fn sch_new(text_size_nm: Nm) -> Self {
-        let margin = Self::legacy_margin_nm(&TableText::sch_default(1_270_000), 0);
+        let margin = Self::legacy_margin_nm(&TableText::sch_default(Nm::new(1_270_000)), Nm::ZERO);
         TableCell { uuid: String::new(), text: String::new(), col_span: 1, row_span: 1, margins: [margin; 4], style: TableText::sch_default(text_size_nm), fill: SchFill::None, fill_color: None, exclude_from_sim: false }
     }
 
@@ -327,7 +327,7 @@ pub fn rotate_point(x: Nm, y: Nm, angle: Millideg) -> (Nm, Nm) {
         270_000 => (-y, x),
         a => {
             let (s, c) = (a as f64 / 1000.0).to_radians().sin_cos();
-            (((y as f64 * s) + (x as f64 * c)).round() as Nm, ((y as f64 * c) - (x as f64 * s)).round() as Nm)
+            (Nm::kiround((y.as_f64() * s) + (x.as_f64() * c)), Nm::kiround((y.as_f64() * c) - (x.as_f64() * s)))
         }
     }
 }
@@ -408,7 +408,7 @@ impl Table {
     /// of the default width (`SCH_TABLE( 0 )`: width 0, the style the default one).
     pub fn new_sch_grid(at: Point, cols: usize, rows: usize, cell_w: Nm, cell_h: Nm, text_size_nm: Nm) -> Table {
         let (cols, rows) = (cols.max(1), rows.max(1));
-        let stroke = TableStroke { width_nm: 0, style: TableLineStyle::Default, color: None };
+        let stroke = TableStroke { width_nm: Nm::ZERO, style: TableLineStyle::Default, color: None };
         Table {
             id: String::new(),
             uuid: String::new(),
@@ -465,15 +465,15 @@ impl Table {
     pub fn cell_local_rect(&self, row: usize, col: usize) -> (Nm, Nm, Nm, Nm) {
         let x: Nm = self.col_widths.iter().take(col).sum();
         let y: Nm = self.row_heights.iter().take(row).sum();
-        let mut w = self.col_widths.get(col).copied().unwrap_or(0);
-        let mut h = self.row_heights.get(row).copied().unwrap_or(0);
+        let mut w = self.col_widths.get(col).copied().unwrap_or(Nm::ZERO);
+        let mut h = self.row_heights.get(row).copied().unwrap_or(Nm::ZERO);
         if let Some(cell) = self.cell(row, col) {
             if cell.col_span > 1 || cell.row_span > 1 {
                 for c in col + 1..col + cell.col_span as usize {
-                    w += self.col_widths.get(c).copied().unwrap_or(0);
+                    w += self.col_widths.get(c).copied().unwrap_or(Nm::ZERO);
                 }
                 for r in row + 1..row + cell.row_span as usize {
-                    h += self.row_heights.get(r).copied().unwrap_or(0);
+                    h += self.row_heights.get(r).copied().unwrap_or(Nm::ZERO);
                 }
             }
         }
@@ -564,7 +564,7 @@ impl Table {
                 line(corners[2], corners[3], stroke);
             }
         }
-        if self.border.external && self.border.stroke.width_nm >= 0 {
+        if self.border.external && self.border.stroke.width_nm >= Nm::ZERO {
             let s = self.border.stroke;
             line(top_left[0], top_right[1], s);
             line(top_right[1], bottom_right[2], s);
@@ -861,8 +861,8 @@ fn polygon_distance(poly: &[Point; 4], p: Point) -> Nm {
     let mut dist = f64::MAX;
     for i in 0..4 {
         let (a, b) = (poly[i], poly[(i + 1) % 4]);
-        let (abx, aby) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
-        let cross = abx * (p.y - a.y) as f64 - aby * (p.x - a.x) as f64;
+        let (abx, aby) = ((b.x - a.x).as_f64(), (b.y - a.y).as_f64());
+        let cross = abx * (p.y - a.y).as_f64() - aby * (p.x - a.x).as_f64();
         let s = if cross > 0.0 {
             1
         } else if cross < 0.0 {
@@ -878,14 +878,14 @@ fn polygon_distance(poly: &[Point; 4], p: Point) -> Nm {
             }
         }
         let len2 = abx * abx + aby * aby;
-        let t = if len2 == 0.0 { 0.0 } else { (((p.x - a.x) as f64 * abx + (p.y - a.y) as f64 * aby) / len2).clamp(0.0, 1.0) };
-        let (qx, qy) = (a.x as f64 + t * abx, a.y as f64 + t * aby);
-        dist = dist.min(((p.x as f64 - qx).powi(2) + (p.y as f64 - qy).powi(2)).sqrt());
+        let t = if len2 == 0.0 { 0.0 } else { (((p.x - a.x).as_f64() * abx + (p.y - a.y).as_f64() * aby) / len2).clamp(0.0, 1.0) };
+        let (qx, qy) = (a.x.as_f64() + t * abx, a.y.as_f64() + t * aby);
+        dist = dist.min(((p.x.as_f64() - qx).powi(2) + (p.y.as_f64() - qy).powi(2)).sqrt());
     }
     if inside {
-        0
+        Nm::ZERO
     } else {
-        dist.ceil() as Nm
+        Nm::new(dist.ceil() as i64)
     }
 }
 
@@ -920,13 +920,13 @@ mod tests {
             id: "tbl_test".into(),
             uuid: String::new(),
             layer: "F.SilkS".into(),
-            at: Point { x: 0, y: 0 },
+            at: Point { x: Nm::ZERO, y: Nm::ZERO },
             angle: 0,
-            col_widths: vec![10_000_000; cols],
-            row_heights: vec![5_000_000; rows],
+            col_widths: vec![Nm::new(10_000_000); cols],
+            row_heights: vec![Nm::new(5_000_000); rows],
             cells: (0..rows * cols).map(|_| TableCell::pcb_new(false)).collect(),
-            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(100_000) },
-            separators: TableSeparators { rows: true, cols: true, stroke: TableStroke::solid(100_000) },
+            border: TableBorder { external: true, header: true, stroke: TableStroke::solid(Nm::new(100_000)) },
+            separators: TableSeparators { rows: true, cols: true, stroke: TableStroke::solid(Nm::new(100_000)) },
         };
         for (i, c) in t.cells.iter_mut().enumerate() {
             c.text = format!("c{i}");
@@ -937,31 +937,31 @@ mod tests {
     #[test]
     fn a_cells_corners_are_the_grids_and_a_quarter_turn_puts_the_first_corner_at_the_bottom_left() {
         let mut t = grid(2, 2);
-        t.at = Point { x: 1_000_000, y: 2_000_000 };
-        assert_eq!(t.cell_corners(1, 1), [Point { x: 11_000_000, y: 7_000_000 }, Point { x: 21_000_000, y: 7_000_000 }, Point { x: 21_000_000, y: 12_000_000 }, Point { x: 11_000_000, y: 12_000_000 }]);
+        t.at = Point { x: Nm::new(1_000_000), y: Nm::new(2_000_000) };
+        assert_eq!(t.cell_corners(1, 1), [Point { x: Nm::new(11_000_000), y: Nm::new(7_000_000) }, Point { x: Nm::new(21_000_000), y: Nm::new(7_000_000) }, Point { x: Nm::new(21_000_000), y: Nm::new(12_000_000) }, Point { x: Nm::new(11_000_000), y: Nm::new(12_000_000) }]);
         // `GetCornersInSequence( ANGLE_90 )`: bbox left-bottom, left-top, right-top, right-bottom.
         t.angle = 90_000;
         let b = t.cell_corners(0, 0);
-        assert_eq!(b[0], Point { x: 1_000_000, y: 2_000_000 });
-        assert_eq!(b[1], Point { x: 1_000_000, y: 2_000_000 - 10_000_000 });
-        assert_eq!(b[2], Point { x: 1_000_000 + 5_000_000, y: 2_000_000 - 10_000_000 });
-        assert_eq!(b[3], Point { x: 1_000_000 + 5_000_000, y: 2_000_000 });
+        assert_eq!(b[0], Point { x: Nm::new(1_000_000), y: Nm::new(2_000_000) });
+        assert_eq!(b[1], Point { x: Nm::new(1_000_000), y: Nm::new(2_000_000 - 10_000_000) });
+        assert_eq!(b[2], Point { x: Nm::new(1_000_000 + 5_000_000), y: Nm::new(2_000_000 - 10_000_000) });
+        assert_eq!(b[3], Point { x: Nm::new(1_000_000 + 5_000_000), y: Nm::new(2_000_000) });
     }
 
     #[test]
     fn a_merged_cell_takes_the_widths_it_spans_and_a_covered_one_is_not_drawn_around() {
         let mut t = grid(3, 3);
         assert!(t.merge(&[(0, 0), (0, 1), (1, 0), (1, 1)]));
-        assert_eq!(t.cell_local_rect(0, 0), (0, 0, 20_000_000, 10_000_000));
+        assert_eq!(t.cell_local_rect(0, 0), (Nm::ZERO, Nm::ZERO, Nm::new(20_000_000), Nm::new(10_000_000)));
         assert_eq!((t.cell(0, 0).unwrap().col_span, t.cell(0, 0).unwrap().row_span), (2, 2));
         assert!(t.cell(1, 1).unwrap().is_covered());
         assert_eq!(t.cell(0, 0).unwrap().text, "c0\nc1\nc3\nc4", "the texts of the block, joined by line feeds");
         assert!(t.cell(0, 1).unwrap().text.is_empty());
         // a click in the merged block finds the merged cell
-        assert_eq!(t.cell_at(Point { x: 15_000_000, y: 7_000_000 }, 0), Some((0, 0)));
+        assert_eq!(t.cell_at(Point { x: Nm::new(15_000_000), y: Nm::new(7_000_000) }, Nm::ZERO), Some((0, 0)));
         // and the borders skip the lines inside it: the vertical line at x = 10 mm is drawn on row 2 only (rows 0 and 1 are inside the merge)
-        let inside: Vec<_> = t.borders().into_iter().filter(|l| l.a.x == 10_000_000 && l.b.x == 10_000_000).collect();
-        assert!(inside.iter().all(|l| l.a.y >= 10_000_000 && l.b.y >= 10_000_000), "{inside:?}");
+        let inside: Vec<_> = t.borders().into_iter().filter(|l| l.a.x == Nm::new(10_000_000) && l.b.x == Nm::new(10_000_000)).collect();
+        assert!(inside.iter().all(|l| l.a.y >= Nm::new(10_000_000) && l.b.y >= Nm::new(10_000_000)), "{inside:?}");
         assert!(t.unmerge(&[(0, 0)]));
         assert!(t.cells.iter().all(|c| c.col_span == 1 && c.row_span == 1));
     }
@@ -974,11 +974,11 @@ mod tests {
         assert_eq!(lines.len(), 2 * 2 + 3 + 4, "{lines:?}");
         // the line under the header and the verticals of the header row use the border stroke; the others the separators'
         let mut t2 = t.clone();
-        t2.separators.stroke = TableStroke { width_nm: 50_000, style: TableLineStyle::Dash, color: None };
-        let header_vertical = t2.borders().into_iter().find(|l| l.a.x == 10_000_000 && l.a.y == 0).unwrap();
-        assert_eq!(header_vertical.stroke.width_nm, 100_000);
-        let row2_vertical = t2.borders().into_iter().find(|l| l.a.x == 10_000_000 && l.a.y == 5_000_000).unwrap();
-        assert_eq!(row2_vertical.stroke.width_nm, 50_000);
+        t2.separators.stroke = TableStroke { width_nm: Nm::new(50_000), style: TableLineStyle::Dash, color: None };
+        let header_vertical = t2.borders().into_iter().find(|l| l.a.x == Nm::new(10_000_000) && l.a.y == Nm::ZERO).unwrap();
+        assert_eq!(header_vertical.stroke.width_nm, Nm::new(100_000));
+        let row2_vertical = t2.borders().into_iter().find(|l| l.a.x == Nm::new(10_000_000) && l.a.y == Nm::new(5_000_000)).unwrap();
+        assert_eq!(row2_vertical.stroke.width_nm, Nm::new(50_000));
         // no border, no separators: only the header lines remain
         t2.border.external = false;
         t2.separators.rows = false;
@@ -986,34 +986,34 @@ mod tests {
         assert_eq!(t2.borders().len(), 2 /* header verticals */ + 3 /* line under the header */);
         // a border with no stroke (width -1) draws no sides
         t2.border.external = true;
-        t2.border.stroke.width_nm = -1;
+        t2.border.stroke.width_nm = Nm::new(-1);
         assert_eq!(t2.borders().len(), 5);
     }
 
     #[test]
     fn rows_and_columns_are_added_and_deleted_as_the_tool_does() {
         let mut t = grid(2, 2);
-        t.row_heights = vec![5_000_000, 8_000_000];
+        t.row_heights = vec![Nm::new(5_000_000), Nm::new(8_000_000)];
         for (i, c) in t.cells.iter_mut().enumerate() {
             c.style.bold = i % 2 == 0;
         }
         // Add Row Below the first row: copies of its cells, its height, no text; KiCad inserts them at one index so they come out reversed.
         assert!(t.add_row(0, false));
         assert_eq!((t.row_count(), t.col_count()), (3, 2));
-        assert_eq!(t.row_heights, vec![5_000_000, 5_000_000, 8_000_000]);
+        assert_eq!(t.row_heights, vec![Nm::new(5_000_000), Nm::new(5_000_000), Nm::new(8_000_000)]);
         assert_eq!(t.texts(), vec![vec!["c0", "c1"], vec!["", ""], vec!["c2", "c3"]]);
         assert_eq!((t.cell(1, 0).unwrap().style.bold, t.cell(1, 1).unwrap().style.bold), (false, true), "reversed, as KiCad inserts them");
         // Add Row Above the last row, Add Column After the first and Before the last
         assert!(t.add_row(2, true));
-        assert_eq!(t.row_heights, vec![5_000_000, 5_000_000, 8_000_000, 8_000_000]);
+        assert_eq!(t.row_heights, vec![Nm::new(5_000_000), Nm::new(5_000_000), Nm::new(8_000_000), Nm::new(8_000_000)]);
         assert!(t.add_column(0, false));
         assert_eq!((t.row_count(), t.col_count()), (4, 3));
-        assert_eq!(t.col_widths, vec![10_000_000; 3]);
+        assert_eq!(t.col_widths, vec![Nm::new(10_000_000); 3]);
         assert_eq!(t.texts()[0], vec!["c0", "", "c1"]);
         assert!(t.is_well_formed());
         // Delete rows 1 and 2, then column 0
         assert!(t.delete_rows(&[1, 2, 2]));
-        assert_eq!((t.row_count(), t.row_heights.clone()), (2, vec![5_000_000, 8_000_000]));
+        assert_eq!((t.row_count(), t.row_heights.clone()), (2, vec![Nm::new(5_000_000), Nm::new(8_000_000)]));
         assert_eq!(t.texts(), vec![vec!["c0", "", "c1"], vec!["c2", "", "c3"]]);
         assert!(t.delete_columns(&[0]));
         assert_eq!(t.col_count(), 2);
@@ -1026,38 +1026,38 @@ mod tests {
     #[test]
     fn a_table_turned_about_a_point_keeps_the_centre_of_its_first_cell_where_the_turn_puts_it() {
         let mut t = grid(2, 2);
-        t.rotate(Point { x: 0, y: 0 }, 90_000);
+        t.rotate(Point { x: Nm::ZERO, y: Nm::ZERO }, 90_000);
         // cell (0,0) centre was (5000, 2500); a quarter turn about the origin takes it to (2500, -5000)
         assert_eq!(t.angle, 90_000);
-        assert_eq!(t.cell_box(0, 0).center(), Point { x: 2_500_000, y: -5_000_000 });
+        assert_eq!(t.cell_box(0, 0).center(), Point { x: Nm::new(2_500_000), y: Nm::new(-5_000_000) });
         // and four quarter turns come back
         for _ in 0..3 {
-            t.rotate(Point { x: 0, y: 0 }, 90_000);
+            t.rotate(Point { x: Nm::ZERO, y: Nm::ZERO }, 90_000);
         }
-        assert_eq!((t.angle, t.at), (0, Point { x: 0, y: 0 }));
+        assert_eq!((t.angle, t.at), (0, Point { x: Nm::ZERO, y: Nm::ZERO }));
     }
 
     #[test]
     fn a_flipped_table_is_the_mirror_image_with_its_columns_reversed_and_its_text_mirrored() {
         let mut t = grid(2, 3);
-        t.col_widths = vec![10_000_000, 20_000_000, 30_000_000];
-        t.at = Point { x: 10_000_000, y: 5_000_000 };
+        t.col_widths = vec![Nm::new(10_000_000), Nm::new(20_000_000), Nm::new(30_000_000)];
+        t.at = Point { x: Nm::new(10_000_000), y: Nm::new(5_000_000) };
         // the table spans x 10..70 mm; mirrored about x = 0 it spans -70..-10
-        t.flip(Point { x: 0, y: 0 }, true, "B.SilkS".into(), true);
+        t.flip(Point { x: Nm::ZERO, y: Nm::ZERO }, true, "B.SilkS".into(), true);
         assert_eq!(t.layer, "B.SilkS");
-        assert_eq!(t.col_widths, vec![30_000_000, 20_000_000, 10_000_000]);
+        assert_eq!(t.col_widths, vec![Nm::new(30_000_000), Nm::new(20_000_000), Nm::new(10_000_000)]);
         assert_eq!(t.texts(), vec![vec!["c2", "c1", "c0"], vec!["c5", "c4", "c3"]]);
         assert!(t.cells.iter().all(|c| c.style.mirror));
         let b = t.bounding_box();
-        assert_eq!((b.x0, b.x1, b.y0, b.y1), (-70_000_000, -10_000_000, 5_000_000, 15_000_000));
+        assert_eq!((b.x0, b.x1, b.y0, b.y1), (Nm::new(-70_000_000), Nm::new(-10_000_000), Nm::new(5_000_000), Nm::new(15_000_000)));
         // top-bottom reverses the rows instead
         let mut u = grid(2, 2);
-        u.row_heights = vec![5_000_000, 8_000_000];
-        u.flip(Point { x: 0, y: 0 }, false, "B.SilkS".into(), false);
-        assert_eq!(u.row_heights, vec![8_000_000, 5_000_000]);
+        u.row_heights = vec![Nm::new(5_000_000), Nm::new(8_000_000)];
+        u.flip(Point { x: Nm::ZERO, y: Nm::ZERO }, false, "B.SilkS".into(), false);
+        assert_eq!(u.row_heights, vec![Nm::new(8_000_000), Nm::new(5_000_000)]);
         assert_eq!(u.texts(), vec![vec!["c2", "c3"], vec!["c0", "c1"]]);
         let b = u.bounding_box();
-        assert_eq!((b.y0, b.y1), (-13_000_000, 0));
+        assert_eq!((b.y0, b.y1), (Nm::new(-13_000_000), Nm::ZERO));
     }
 
     #[test]

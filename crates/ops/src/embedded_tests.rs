@@ -109,7 +109,7 @@ fn a_footprint_on_the_board_has_a_list_of_its_own_and_the_board_can_take_a_file_
 #[test]
 fn library_footprints_and_symbols_keep_their_files_and_move_them_with_a_rename() {
     let m = ConstraintModel::default();
-    let mut b = Board::new(design(), &m, 100_000, 300_000);
+    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::NewFootprint { name: "Mine".into() }).unwrap();
     let owner = EmbeddedOwner::LibraryFootprint { name: "Mine".into() };
     b.apply(&add(owner.clone(), "m.step", b"model")).unwrap();

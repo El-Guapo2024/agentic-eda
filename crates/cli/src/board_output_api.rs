@@ -51,8 +51,8 @@ pub(crate) fn board_center_mm(outline: &[eda_model::ir::Point]) -> (f64, f64) {
     if outline.is_empty() {
         return (0.0, 0.0);
     }
-    let (x0, x1) = outline.iter().fold((i64::MAX, i64::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
-    let (y0, y1) = outline.iter().fold((i64::MAX, i64::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+    let (x0, x1) = outline.iter().fold((i64::MAX, i64::MIN), |(lo, hi), p| (lo.min(p.x.raw_shim()), hi.max(p.x.raw_shim())));
+    let (y0, y1) = outline.iter().fold((i64::MAX, i64::MIN), |(lo, hi), p| (lo.min(p.y.raw_shim()), hi.max(p.y.raw_shim())));
     ((x0 + x1) as f64 / 2e6, (y0 + y1) as f64 / 2e6)
 }
 
@@ -324,6 +324,7 @@ pub fn pcb_bom(dir: &Path) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::Point;
     use serde_json::json;
@@ -334,7 +335,7 @@ mod tests {
 
     #[test]
     fn the_board_centre_is_the_middle_of_the_outline_in_mm() {
-        let outline = [Point { x: 10_000_000, y: 20_000_000 }, Point { x: 110_000_000, y: 20_000_000 }, Point { x: 110_000_000, y: 80_000_000 }, Point { x: 10_000_000, y: 80_000_000 }];
+        let outline = [Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::from_raw_shim(110_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::from_raw_shim(110_000_000), y: Nm::from_raw_shim(80_000_000) }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(80_000_000) }];
         assert_eq!(board_center_mm(&outline), (60.0, 50.0));
         assert_eq!(board_center_mm(&[]), (0.0, 0.0));
     }

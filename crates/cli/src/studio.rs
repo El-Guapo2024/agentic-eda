@@ -23,6 +23,7 @@
 //! `crate::kicad_lane`, which keeps it to one kicad-cli at a time), so
 //! an edit or the /api/version poll never waits for one.
 
+use eda_model::units::Nm;
 use crate::board;
 use crate::bom_plugins;
 use crate::cleanup_api;
@@ -1131,7 +1132,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let (meta, design, model) = board::load(dir)?;
     // What `${NAME}` stands for in the board's texts and fields (`crate::text_vars_json`); each of them carries `shown` where it differs from the stored text.
     let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock));
-    let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
+    let b = eda_ops::Board::new(design.clone(), &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
     let view = eda_ops::view::view(&b, &model)?;
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
     let flashed = eda_connectivity::flashed_layers(&design, &model);
@@ -1966,7 +1967,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "pins": s.pins.iter().map(|p| {
                     let mut pin = json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] });
                     if let Some(look) = sch.extras.sheet_pin_looks.get(&p.id) {
-                        if look.size_nm > 0 {
+                        if look.size_nm > Nm::ZERO {
                             pin["size_nm"] = json!(look.size_nm);
                         }
                         if look.bold {
@@ -1985,7 +1986,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // The paper this sheet is drawn on: its full Page Settings when it has them (portrait, a user size), else the name its title block carries
     // (the layout engine writes it per sheet); A4 landscape when neither.
     let page = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or(""));
-    let (paper_w, paper_h) = page.size_nm().unwrap_or((297_000_000, 210_000_000));
+    let (paper_w, paper_h) = page.size_nm().unwrap_or((Nm::from_raw_shim(297_000_000), Nm::from_raw_shim(210_000_000)));
     let file = viewed_file(design, &breadcrumb);
 
     json!({
@@ -2487,6 +2488,7 @@ fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
 
@@ -2613,7 +2615,7 @@ mod tests {
 
     #[test]
     fn a_real_sheet_id_descends_and_builds_the_breadcrumb() {
-        let placement = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1_000_000, 1_000_000), pins: vec![], page: String::new() };
+        let placement = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), pins: vec![], page: String::new() };
         let child = sch(vec![]);
         let mut screens = std::collections::BTreeMap::new();
         screens.insert("child.kicad_sch".to_string(), child);
@@ -2629,16 +2631,16 @@ mod tests {
     fn the_state_carries_the_outline_with_its_cutouts_and_its_errors() {
         use eda_model::ir::{DrawingsSection, PlacementSection, Shape};
         let p = |x, y| Point { x, y };
-        let line = |a: Point, b: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50_000, filled: false, start: a, end: b };
+        let line = |a: Point, b: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, end: b };
         let mut d = design(sch(vec![]), Default::default());
-        d.placement = Some(PlacementSection { outline: vec![p(0, 0), p(40_000_000, 0), p(40_000_000, 30_000_000), p(0, 30_000_000)], footprints: vec![], modules: vec![] });
+        d.placement = Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(40_000_000), Nm::ZERO), p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(30_000_000)), p(Nm::ZERO, Nm::from_raw_shim(30_000_000))], footprints: vec![], modules: vec![] });
 
         // A plain polygon: one outline, no hole, nothing to report.
         assert_eq!(outline_polys_json(&d, None), json!([{ "outer": [[0, 0], [40_000_000, 0], [40_000_000, 30_000_000], [0, 30_000_000]], "holes": [] }]));
         assert_eq!(outline_errors_json(&d, None), json!([]));
 
         // A round hole drawn on Edge.Cuts is a hole of it.
-        let mut shapes = vec![Shape::Circle { id: "hole".into(), layer: "Edge.Cuts".into(), stroke_width: 50_000, filled: false, center: p(20_000_000, 15_000_000), end: p(23_000_000, 15_000_000) }];
+        let mut shapes = vec![Shape::Circle { id: "hole".into(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, center: p(Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(15_000_000)), end: p(Nm::from_raw_shim(23_000_000), Nm::from_raw_shim(15_000_000)) }];
         d.drawings = Some(DrawingsSection { shapes: shapes.clone(), ..Default::default() });
         let polys = outline_polys_json(&d, None);
         assert_eq!(polys.as_array().map(Vec::len), Some(1));
@@ -2646,7 +2648,7 @@ mod tests {
         assert_eq!(outline_errors_json(&d, None), json!([]));
 
         // The same board with the outline made of shapes, one side of it missing: malformed, and the outline is the rectangle round the edges.
-        shapes = vec![line(p(0, 0), p(18_000_000, 0)), line(p(22_000_000, 0), p(40_000_000, 0)), line(p(40_000_000, 0), p(40_000_000, 30_000_000)), line(p(40_000_000, 30_000_000), p(0, 30_000_000)), line(p(0, 30_000_000), p(0, 0))];
+        shapes = vec![line(p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(18_000_000), Nm::ZERO)), line(p(Nm::from_raw_shim(22_000_000), Nm::ZERO), p(Nm::from_raw_shim(40_000_000), Nm::ZERO)), line(p(Nm::from_raw_shim(40_000_000), Nm::ZERO), p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(30_000_000))), line(p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(30_000_000)), p(Nm::ZERO, Nm::from_raw_shim(30_000_000))), line(p(Nm::ZERO, Nm::from_raw_shim(30_000_000)), p(Nm::ZERO, Nm::ZERO))];
         for (i, sh) in shapes.iter_mut().enumerate() {
             sh.set_id(format!("edge{i}"));
         }

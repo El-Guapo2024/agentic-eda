@@ -3,6 +3,7 @@
 //! order, which cells keep their looks, the widths and heights `Autosize` gives them, the totals, the marks and the profile. KiCad 25ec2335's `api_kitchen_sink` is the board.
 //! Slow tier: kicad-cli runs, so it needs `EDA_SLOW_TESTS=1`; skipped, loudly, without kicad-cli or the QA board.
 
+use eda_model::units::Nm;
 use eda_kicad::{export_kicad_pcb, import_kicad_pcb, ExportMeta};
 use eda_model::drill_chart::{DrillChart, DrillChartFilter, TableUnits};
 use eda_model::ir::{Design, Point};
@@ -65,7 +66,7 @@ fn assert_same_chart(tag: &str, ours: &Design, kicad: &Design) {
     let cells = |t: &Table| t.cells.iter().map(|x| (x.text.clone(), x.style.h_align, x.style.height_nm, x.margins)).collect::<Vec<_>>();
     assert_eq!(cells(&t), cells(&kt), "{tag}: the cells");
     assert_eq!((t.col_count(), t.row_count(), t.at), (kt.col_count(), kt.row_count(), kt.at), "{tag}: the grid");
-    let near = |a: &[i64], b: &[i64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 2);
+    let near = |a: &[Nm], b: &[Nm]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (*x - *y).abs() <= Nm::from_raw_shim(2));
     assert!(near(&t.col_widths, &kt.col_widths), "{tag}: column widths against kicad-cli's: {:?} vs {:?}", t.col_widths, kt.col_widths);
     assert!(near(&t.row_heights, &kt.row_heights), "{tag}: row heights against kicad-cli's: {:?} vs {:?}", t.row_heights, kt.row_heights);
     assert_eq!((&c.row_keys, &c.row_shapes, c.symbol_column), (&kc.row_keys, &kc.row_shapes, kc.symbol_column), "{tag}: the keys and marks");
@@ -98,10 +99,10 @@ fn a_placed_drill_chart_is_the_one_kicad_builds() {
     // Ours: the board's chart taken away, a new one placed at the origin.
     let (d, m, _) = import_kicad_pcb(&text).unwrap();
     let (old, _) = chart_of(&d);
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     b.apply(&Cmd::Table(TableCmd::Delete { id: old.id })).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().board_items.drill_charts.is_empty(), "the chart goes with its table");
-    b.apply(&Cmd::PcbItem(PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: Point { x: 0, y: 0 } })).unwrap();
+    b.apply(&Cmd::PcbItem(PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO } })).unwrap();
     assert_same_chart("placed", b.design(), &kicad);
     let (t, _) = chart_of(b.design());
     assert_eq!(t.cells.iter().take(6).map(|c| c.text.as_str()).collect::<Vec<_>>(), ["SYM", "DRILL DIA", "SLOT W x L", "PLATED", "OPS", "FROM / TO"]);
@@ -121,7 +122,7 @@ fn a_drill_chart_with_new_settings_is_rebuilt_as_kicad_rebuilds_it() {
     let (kicad, _) = upgraded(&cli, &text.replacen("(precision 2)", "(precision 4)", 1), "precision");
     let (d, m, _) = import_kicad_pcb(&text).unwrap();
     let (t, c) = chart_of(&d);
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let filter: DrillChartFilter = c.filter;
     b.apply(&Cmd::PcbItem(PcbItemCmd::SetDrillChart { id: t.id.clone(), units: TableUnits::Mm, precision: 4, show_totals: c.show_totals, filter })).unwrap();
     assert_same_chart("precision", b.design(), &kicad);
@@ -141,9 +142,9 @@ fn a_new_hole_size_gets_a_row_as_kicad_gives_it_one() {
         return;
     };
     let (d, m, _) = import_kicad_pcb(&text).unwrap();
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     let net = m.nets.first().map(|n| n.name.clone()).unwrap_or_default();
-    b.apply(&Cmd::AddVia { net, x: 170_000_000, y: 80_000_000, drill: 800_000, diameter: 1_400_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddVia { net, x: Nm::from_raw_shim(170_000_000), y: Nm::from_raw_shim(80_000_000), drill: Nm::from_raw_shim(800_000), diameter: Nm::from_raw_shim(1_400_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
     // KiCad's: the board with the via and the chart as it was, rebuilt by kicad-cli.
     let (kicad, _) = upgraded(&cli, &export(b.design(), &m), "new_hole");
     assert!(b.refresh_drill_charts(), "the chart is stale");
@@ -171,7 +172,7 @@ fn a_chart_that_was_read_is_rebuilt_even_when_its_text_is_right() {
     let (kicad, _) = upgraded(&cli, &edited, "margins");
     let (d, m, _) = import_kicad_pcb(&edited).unwrap();
     let (before, _) = chart_of(&d);
-    let mut b = Board::new(d, &m, 100_000, 300_000);
+    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
     assert!(b.refresh_drill_charts(), "a chart that was read is stale");
     assert_same_chart("margins", b.design(), &kicad);
     assert_ne!(chart_of(b.design()).0.row_heights, before.row_heights, "laid out again");

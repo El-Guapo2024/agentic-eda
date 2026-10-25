@@ -649,7 +649,8 @@ pub fn module_of<'a>(modules: &'a [FunctionalModule], reference: &str) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::Nm;
+use super::*;
     use crate::{Net, Pin};
 
     fn pin(number: &str, name: &str, kind: PinKind) -> Pin {
@@ -758,7 +759,7 @@ mod tests {
     #[test]
     fn declared_modules_win_over_inference() {
         let model = mcu30();
-        let recorded = vec![ModuleRegion { name: "indicators".into(), refs: (1..=8).flat_map(|i| [format!("D{i}"), format!("R{i}")]).collect(), rect: (0, 0, 1, 1) }];
+        let recorded = vec![ModuleRegion { name: "indicators".into(), refs: (1..=8).flat_map(|i| [format!("D{i}"), format!("R{i}")]).collect(), rect: (Nm::ZERO, Nm::ZERO, Nm::new(1), Nm::new(1)) }];
         let m = infer_modules(&model, &recorded);
         assert_eq!(m[0].name, "indicators");
         assert_eq!(m[0].kind, ModuleKind::Declared);
