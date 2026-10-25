@@ -84,6 +84,9 @@ impl<'a> Board<'a> {
         let mut root = content.root.clone();
         let mut screens = content.screens.clone();
         for sec in std::iter::once(&mut root).chain(screens.values_mut()) {
+            // into the design's frame, as Import Sheet takes a file in: the `.kicad_sch` writer bakes a symbol against the corner of its box, and a symbol
+            // left at its library origin had every pin off the file's wires in the derived file
+            crate::sch_sheets::place_by_box_corner(sec, &merge.engine_of);
             for s in &mut sec.symbols {
                 rename(&mut s.lib_id);
             }
@@ -103,7 +106,7 @@ impl<'a> Board<'a> {
         self.design.schematic = Some(root);
         self.design.sheet_contents = (!screens.is_empty()).then_some(screens);
         // The file's bus aliases, which its buses are written with: one of a name the design already has replaces it (the new drawing's buses mean
-        // what the file says; `GetBusAlias` takes the last one added).
+        // what the file says; the connection graph's alias cache keeps the last of a name, `buildConnectionGraph`).
         for alias in &content.bus_aliases {
             self.design.bus_aliases.retain(|a| a.name != alias.name);
             self.design.bus_aliases.push(alias.clone());
@@ -243,7 +246,7 @@ mod tests {
         b.apply(&cmd).unwrap();
         let d = b.design();
         let root = d.schematic.as_ref().unwrap();
-        assert!(root.symbols.is_empty() && root.sheets.len() == 3 && root.imported_from_kicad, "the file's root: three sheets, in KiCad's frame");
+        assert!(root.symbols.is_empty() && root.sheets.len() == 3 && !root.imported_from_kicad, "the file's root: three sheets, in the design's frame");
         let mut got: Vec<String> = d.sheet_contents.as_ref().unwrap().keys().cloned().collect();
         got.sort();
         let mut want = screens;

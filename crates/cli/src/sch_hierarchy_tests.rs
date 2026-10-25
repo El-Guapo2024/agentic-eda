@@ -1172,14 +1172,38 @@ fn slow_a_kicad_projects_erc_exclusions_come_in_with_the_schematic() {
     // the marker is the derived schematic's: its item and its sheet
     let kept = waived[0].marker.clone().unwrap();
     assert_eq!((json!(kept.items), json!(kept.sheet), json!(kept.main_sheet)), (u1["marker"]["items"].clone(), u1["marker"]["sheet"].clone(), u1["marker"]["main_sheet"].clone()), "{u1:#}");
-    // and its position the file's, which is the derived one where the derived schematic draws the file's symbols where the file does: kicad-cli matches it then.
-    // **Not so on main** (2026-10-24): the schematic `eda import-kicad x.kicad_sch` derives draws a library symbol in its corner frame at the file's origin, so
-    // every pin is off the file's wires (U1.1 at 49.53, 54.61 for the file's 45.72, 50.8), a writer bug outside this batch.
-    if json!(kept.at_nm) == u1["marker"]["at_nm"] {
-        assert_eq!(u1["kicad_matched"], true, "{u1:#}");
-    } else {
-        eprintln!("the derived schematic moved U1.1 from {:?} to {}: kicad-cli cannot match the record", kept.at_nm, u1["marker"]["at_nm"]);
+    // and its position the file's, which is the derived one: kicad-cli matches the record on the studio's run
+    assert_eq!((json!(kept.at_nm), u1["kicad_matched"].clone()), (u1["marker"]["at_nm"].clone(), json!(true)), "{u1:#}");
+}
+
+/// `eda import-kicad` of a KiCad project's schematic (QA `bus_connection`, three sheets and bus aliases) derives a schematic kicad-cli reads as it reads the
+/// original: no unconnected pin the original has not, and the same nets. (The screens were kept in KiCad's frame, a symbol at its library origin, which the
+/// writer bakes against the corner of its box: every pin was off the file's wires.)
+#[test]
+fn slow_an_imported_kicad_schematic_derives_one_kicad_cli_reads_as_the_original() {
+    if !kicad_cli_ready() || std::env::var_os("KICAD_SRC_DIR").is_none() {
+        return;
     }
+    let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from).unwrap().join("qa/data/eeschema/netlists/bus_connection");
+    let work = scratch("import_bus_connection");
+    for e in std::fs::read_dir(&src).unwrap().flatten().filter(|e| e.path().is_file()) {
+        std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
+    }
+    let root = work.join("bus_connection.kicad_sch");
+    let unconnected = |report: &serde_json::Value| -> std::collections::BTreeSet<String> {
+        report["sheets"].as_array().unwrap().iter().flat_map(|s| s["violations"].as_array().unwrap().iter()).filter(|v| v["type"] == "pin_not_connected").filter_map(|v| v["items"][0]["description"].as_str().map(String::from)).collect()
+    };
+    let out = work.join("erc.json");
+    std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&out).arg(&root).output().unwrap();
+    let original = unconnected(&serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap());
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let derived_report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("erc.json")).unwrap()).unwrap();
+    let derived = unconnected(&derived_report);
+    assert!(derived.is_subset(&original), "unconnected only in the derived file: {:?}", derived.difference(&original).collect::<Vec<_>>());
+    let kicad_nets = |r: &Path| -> Vec<Vec<String>> { kicad_cli_net_groups(r).into_iter().filter(|g| g.len() >= 2).collect() };
+    assert_eq!(kicad_nets(&dir.join(".kicad").join("board.kicad_sch")), kicad_nets(&root), "kicad-cli's nets of the derived file are the original's");
 }
 
 /// The QA project `rel` read by our reader as it is (no Import Sheet: the symbols at their library origin) and traced as the studio traces a board
