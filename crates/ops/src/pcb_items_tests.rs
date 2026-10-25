@@ -4,9 +4,10 @@
 use super::pcb_transform_tests::{design, drawings, ids, model, p};
 use super::*;
 use eda_model::pcb_items::TextBox;
+use eda_model::units::{mm, um};
 
 fn text_box(layer: &str) -> TextBox {
-    let mut t = TextBox::new(layer, p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)), Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(120_000));
+    let mut t = TextBox::new(layer, p(mm(10.0), mm(10.0)), p(mm(30.0), mm(20.0)), mm(1.0), mm(0.12));
     t.text = "REV A\nsecond line".into();
     t
 }
@@ -23,7 +24,7 @@ fn add(b: &mut Board<'_>, t: TextBox) -> String {
 #[test]
 fn a_text_box_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let mut t = text_box("F.SilkS");
     t.id = "caller_id".into();
     let id = add(&mut b, t);
@@ -34,10 +35,10 @@ fn a_text_box_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     edited.text = "REV B".into();
     edited.layer = "F.Fab".into();
     edited.knockout = true;
-    edited.margin_top_nm = Nm::from_raw_shim(2_000_000);
+    edited.margin_top_nm = mm(2.0);
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditTextBox { id: id.clone(), text_box: edited })).unwrap();
     let t = &boxes(&b)[0];
-    assert_eq!((t.id.as_str(), t.text.as_str(), t.layer.as_str(), t.knockout, t.margin_top_nm), (id.as_str(), "REV B", "F.Fab", true, Nm::from_raw_shim(2_000_000)), "an edit keeps the id");
+    assert_eq!((t.id.as_str(), t.text.as_str(), t.layer.as_str(), t.knockout, t.margin_top_nm), (id.as_str(), "REV B", "F.Fab", true, mm(2.0)), "an edit keeps the id");
 
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteTextBox { id: id.clone() })).unwrap();
     assert!(boxes(&b).is_empty());
@@ -48,7 +49,7 @@ fn a_text_box_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
 #[test]
 fn a_text_box_that_cannot_be_drawn_is_refused_and_leaves_the_board_as_it_was() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let refused = |b: &mut Board<'_>, mutate: &dyn Fn(&mut TextBox)| {
         let mut t = text_box("F.SilkS");
         mutate(&mut t);
@@ -59,47 +60,47 @@ fn a_text_box_that_cannot_be_drawn_is_refused_and_leaves_the_board_as_it_was() {
     };
     assert_eq!(refused(&mut b, &|t| t.layer = String::new()), "ops_bad_text_box");
     assert_eq!(refused(&mut b, &|t| t.size_nm = Nm::ZERO), "ops_bad_text_box");
-    assert_eq!(refused(&mut b, &|t| t.size_nm = Nm::from_raw_shim(300_000_000)), "ops_bad_text_box", "250 mm is the largest text");
+    assert_eq!(refused(&mut b, &|t| t.size_nm = mm(300.0)), "ops_bad_text_box", "250 mm is the largest text");
     assert_eq!(refused(&mut b, &|t| t.width_nm = Some(Nm::ZERO)), "ops_bad_text_box");
-    assert_eq!(refused(&mut b, &|t| t.margin_left_nm = Nm::from_raw_shim(-1)), "ops_bad_text_box");
-    assert_eq!(refused(&mut b, &|t| t.stroke_width_nm = Nm::from_raw_shim(-1)), "ops_bad_text_box");
-    assert_eq!(refused(&mut b, &|t| t.pts = vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1), Nm::from_raw_shim(1))]), "ops_bad_text_box", "a polygon box has four corners");
+    assert_eq!(refused(&mut b, &|t| t.margin_left_nm = Nm::new(-1)), "ops_bad_text_box");
+    assert_eq!(refused(&mut b, &|t| t.stroke_width_nm = Nm::new(-1)), "ops_bad_text_box");
+    assert_eq!(refused(&mut b, &|t| t.pts = vec![p(Nm::ZERO, Nm::ZERO), p(Nm::new(1), Nm::new(1))]), "ops_bad_text_box", "a polygon box has four corners");
     assert_eq!(refused(&mut b, &|t| t.angle = 360_000), "ops_bad_text_box");
     // a layer the board has turned off takes nothing (Board Editor Layers)
     let mut off = model(&["F.Cu", "B.Cu"]);
     off.board.layer_setup.enabled.retain(|l| l != "F.Fab");
-    let mut c = Board::new(design(), &off, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut c = Board::new(design(), &off, mm(0.1), mm(0.3));
     assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddTextBox { text_box: text_box("F.Fab") })).unwrap_err()[0].check, "ops_layer_off");
 }
 
 #[test]
 fn a_text_box_moves_turns_and_flips_with_the_verbs_that_take_any_item() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let id = add(&mut b, text_box("F.SilkS"));
-    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(-2_000_000) }).unwrap();
-    assert_eq!((boxes(&b)[0].start, boxes(&b)[0].end), (p(Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(8_000_000)), p(Nm::from_raw_shim(31_000_000), Nm::from_raw_shim(18_000_000))));
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: mm(1.0), dy: mm(-2.0) }).unwrap();
+    assert_eq!((boxes(&b)[0].start, boxes(&b)[0].end), (p(mm(11.0), mm(8.0)), p(mm(31.0), mm(18.0))));
 
     b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
     let t = &boxes(&b)[0];
-    assert_eq!((t.start, t.end, t.angle), (p(Nm::from_raw_shim(-8_000_000), Nm::from_raw_shim(11_000_000)), p(Nm::from_raw_shim(-18_000_000), Nm::from_raw_shim(31_000_000)), 270_000));
+    assert_eq!((t.start, t.end, t.angle), (p(mm(-8.0), mm(11.0)), p(mm(-18.0), mm(31.0)), 270_000));
     assert!(t.is_rect(), "a quarter turn keeps a rectangle");
 
     b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let t = &boxes(&b)[0];
-    assert_eq!((t.layer.as_str(), t.mirror, t.start), ("B.SilkS", true, p(Nm::from_raw_shim(8_000_000), Nm::from_raw_shim(11_000_000))));
+    assert_eq!((t.layer.as_str(), t.mirror, t.start), ("B.SilkS", true, p(mm(8.0), mm(11.0))));
     assert_eq!(t.angle, 90_000, "negated by a left-right flip");
 }
 
 #[test]
 fn a_group_carries_a_text_box_and_a_lock_keeps_it_in_the_set() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let id = add(&mut b, text_box("F.SilkS"));
     b.apply(&Cmd::Group { ids: ids(&[&id, "shp_seg"]) }).unwrap();
     let group = drawings(&b).groups.last().unwrap().id.clone();
-    b.apply(&Cmd::MoveItems { ids: ids(&[&group]), dx: Nm::from_raw_shim(500_000), dy: Nm::ZERO }).unwrap();
-    assert_eq!(boxes(&b)[0].start, p(Nm::from_raw_shim(10_500_000), Nm::from_raw_shim(10_000_000)), "the group moves its text box");
+    b.apply(&Cmd::MoveItems { ids: ids(&[&group]), dx: mm(0.5), dy: Nm::ZERO }).unwrap();
+    assert_eq!(boxes(&b)[0].start, p(mm(10.5), mm(10.0)), "the group moves its text box");
     b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap();
     assert!(drawings(&b).locked_ids.contains(&id));
     b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: false }).unwrap();
@@ -109,7 +110,7 @@ fn a_group_carries_a_text_box_and_a_lock_keeps_it_in_the_set() {
 #[test]
 fn swap_layers_moves_a_text_box_to_the_other_layer() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     // Swap Layers is about the copper layers: a text box on one goes to the other
     add(&mut b, text_box("F.Cu"));
     b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into())] }).unwrap();
@@ -128,7 +129,7 @@ fn the_command_has_one_wire_form_and_describes_itself() {
     });
     let cmd: Cmd = serde_json::from_value(json).unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::AddTextBox { text_box }) = &cmd else { panic!("{cmd:?}") };
-    assert_eq!((text_box.text.as_str(), text_box.end, text_box.border, text_box.line_style), ("hi", p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(3_000_000)), true, eda_model::pcb_items::LineStyle::Dash));
+    assert_eq!((text_box.text.as_str(), text_box.end, text_box.border, text_box.line_style), ("hi", p(mm(5.0), mm(3.0)), true, eda_model::pcb_items::LineStyle::Dash));
     assert_eq!(cmd.domain(), Domain::Pcb);
     assert!(!cmd.clears_routing(), "a drawing never clears the routing");
     let back: Cmd = serde_json::from_value(serde_json::to_value(&cmd).unwrap()).unwrap();
@@ -158,18 +159,18 @@ fn add_image(b: &mut Board<'_>, layer: &str, at: Point) -> String {
 #[test]
 fn a_reference_image_is_added_with_an_id_of_ours_edited_and_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let mut image = RefImage::new("Cmts.User", p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(6_000_000)), &png_text(60, 40, [1, 2, 3]));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let mut image = RefImage::new("Cmts.User", p(mm(5.0), mm(6.0)), &png_text(60, 40, [1, 2, 3]));
     image.id = "caller_id".into();
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image })).unwrap();
     let id = images(&b)[0].id.clone();
     assert!(id.starts_with("img_"), "{id}");
-    assert_eq!(images(&b)[0].bounds(), [Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(8_000_000), Nm::from_raw_shim(8_000_000)], "60 x 40 px at 254 ppi are 6 mm x 4 mm around the centre");
+    assert_eq!(images(&b)[0].bounds(), [mm(2.0), mm(4.0), mm(8.0), mm(8.0)], "60 x 40 px at 254 ppi are 6 mm x 4 mm around the centre");
 
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditRefImage { id: id.clone(), layer: "Dwgs.User".into(), at: p(Nm::ZERO, Nm::ZERO), scale_ppm: 2_000_000 })).unwrap();
     let i = &images(&b)[0];
     assert_eq!((i.id.as_str(), i.layer.as_str(), i.at, i.scale_ppm), (id.as_str(), "Dwgs.User", p(Nm::ZERO, Nm::ZERO), 2_000_000));
-    assert_eq!(i.size_nm(), (Nm::from_raw_shim(12_000_000), Nm::from_raw_shim(8_000_000)), "the scale doubles the size");
+    assert_eq!(i.size_nm(), (mm(12.0), mm(8.0)), "the scale doubles the size");
 
     let greyer = png_text(60, 40, [9, 9, 9]);
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageData { id: id.clone(), data: greyer.clone() })).unwrap();
@@ -189,7 +190,7 @@ fn a_reference_image_is_added_with_an_id_of_ours_edited_and_deleted() {
 #[test]
 fn a_reference_image_that_cannot_be_shown_is_refused() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let try_add = |b: &mut Board<'_>, mutate: &dyn Fn(&mut RefImage)| {
         let mut i = RefImage::new("Cmts.User", p(Nm::ZERO, Nm::ZERO), &png_text(20, 20, [0, 0, 0]));
         mutate(&mut i);
@@ -204,7 +205,7 @@ fn a_reference_image_that_cannot_be_shown_is_refused() {
     assert_eq!(try_add(&mut b, &|i| i.layer = String::new()), "ops_bad_ref_image");
     let mut off = model(&["F.Cu", "B.Cu"]);
     off.board.layer_setup.enabled.retain(|l| l != "Cmts.User");
-    let mut c = Board::new(design(), &off, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut c = Board::new(design(), &off, mm(0.1), mm(0.3));
     assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image: RefImage::new("Cmts.User", p(Nm::ZERO, Nm::ZERO), &png_text(20, 20, [0, 0, 0])) })).unwrap_err()[0].check, "ops_layer_off");
     // the white space of a pasted text is taken out
     let spaced = format!("{}\n{}", &png_text(20, 20, [0, 0, 0])[..8], &png_text(20, 20, [0, 0, 0])[8..]);
@@ -217,21 +218,21 @@ fn a_reference_image_that_cannot_be_shown_is_refused() {
 #[test]
 fn a_reference_image_moves_with_the_verbs_that_take_any_item_and_a_flip_changes_its_side() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let id = add_image(&mut b, "F.SilkS", p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000)));
-    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(-2_000_000) }).unwrap();
-    assert_eq!(images(&b)[0].at, p(Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(18_000_000)));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let id = add_image(&mut b, "F.SilkS", p(mm(10.0), mm(20.0)));
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: mm(1.0), dy: mm(-2.0) }).unwrap();
+    assert_eq!(images(&b)[0].at, p(mm(11.0), mm(18.0)));
     b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
-    assert_eq!(images(&b)[0].at, p(Nm::from_raw_shim(-18_000_000), Nm::from_raw_shim(11_000_000)), "clockwise on the screen about the pivot");
+    assert_eq!(images(&b)[0].at, p(mm(-18.0), mm(11.0)), "clockwise on the screen about the pivot");
     b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
-    assert_eq!((images(&b)[0].layer.as_str(), images(&b)[0].at), ("B.SilkS", p(Nm::from_raw_shim(18_000_000), Nm::from_raw_shim(11_000_000))));
+    assert_eq!((images(&b)[0].layer.as_str(), images(&b)[0].at), ("B.SilkS", p(mm(18.0), mm(11.0))));
     b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap();
     assert!(drawings(&b).locked_ids.contains(&id));
     b.apply(&Cmd::Group { ids: ids(&[&id, "shp_seg"]) }).unwrap();
     let group = drawings(&b).groups.last().unwrap().id.clone();
     b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: false }).unwrap();
-    b.apply(&Cmd::MoveItems { ids: ids(&[&group]), dx: Nm::from_raw_shim(500_000), dy: Nm::ZERO }).unwrap();
-    assert_eq!(images(&b)[0].at, p(Nm::from_raw_shim(18_500_000), Nm::from_raw_shim(11_000_000)), "the group carries the image");
+    b.apply(&Cmd::MoveItems { ids: ids(&[&group]), dx: mm(0.5), dy: Nm::ZERO }).unwrap();
+    assert_eq!(images(&b)[0].at, p(mm(18.5), mm(11.0)), "the group carries the image");
 }
 
 #[test]
@@ -243,7 +244,7 @@ fn the_image_commands_have_one_wire_form() {
     }))
     .unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::AddRefImage { image }) = &cmd else { panic!("{cmd:?}") };
-    assert_eq!((image.layer.as_str(), image.at, image.scale_ppm), ("Cmts.User", p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000)), 500_000));
+    assert_eq!((image.layer.as_str(), image.at, image.scale_ppm), ("Cmts.User", p(mm(1.0), mm(2.0)), 500_000));
     assert_eq!(cmd.domain(), Domain::Pcb);
     // the scale of one is not sent
     let unit: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "add_ref_image", "image": {"layer": "F.SilkS", "at": {"x": 0, "y": 0}, "data": data}})).unwrap();
@@ -273,22 +274,22 @@ fn add_point(b: &mut Board<'_>, layer: &str, at: Point) -> String {
 #[test]
 fn a_point_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let mut p = PcbPoint::new("F.SilkS", p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(6_000_000)));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let mut p = PcbPoint::new("F.SilkS", p(mm(5.0), mm(6.0)));
     p.id = "caller_id".into();
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: p })).unwrap();
     let id = points(&b)[0].id.clone();
     assert!(id.starts_with("pnt_"), "{id}");
-    assert_eq!((points(&b)[0].size_nm, points(&b)[0].bounds()), (Nm::from_raw_shim(1_000_000), [Nm::from_raw_shim(4_500_000), Nm::from_raw_shim(5_500_000), Nm::from_raw_shim(5_500_000), Nm::from_raw_shim(6_500_000)]), "a new point is 1 mm");
+    assert_eq!((points(&b)[0].size_nm, points(&b)[0].bounds()), (mm(1.0), [mm(4.5), mm(5.5), mm(5.5), mm(6.5)]), "a new point is 1 mm");
 
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id: id.clone(), layer: "F.Fab".into(), at: p_at(1_000_000, 2_000_000), size_nm: Nm::from_raw_shim(2_500_000) })).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id: id.clone(), layer: "F.Fab".into(), at: p_at(1_000_000, 2_000_000), size_nm: mm(2.5) })).unwrap();
     let q = &points(&b)[0];
-    assert_eq!((q.id.as_str(), q.layer.as_str(), q.at, q.size_nm), (id.as_str(), "F.Fab", p_at(1_000_000, 2_000_000), Nm::from_raw_shim(2_500_000)), "an edit keeps the id");
+    assert_eq!((q.id.as_str(), q.layer.as_str(), q.at, q.size_nm), (id.as_str(), "F.Fab", p_at(1_000_000, 2_000_000), mm(2.5)), "an edit keeps the id");
 
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeletePoint { id: id.clone() })).unwrap();
     assert!(points(&b).is_empty());
     assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeletePoint { id: id.clone() })).unwrap_err()[0].check, "ops_unknown_point");
-    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id, layer: "F.Fab".into(), at: p_at(0, 0), size_nm: Nm::from_raw_shim(1_000_000) })).unwrap_err()[0].check, "ops_unknown_point");
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id, layer: "F.Fab".into(), at: p_at(0, 0), size_nm: mm(1.0) })).unwrap_err()[0].check, "ops_unknown_point");
 }
 
 fn p_at(x: i64, y: i64) -> Point {
@@ -298,7 +299,7 @@ fn p_at(x: i64, y: i64) -> Point {
 #[test]
 fn a_point_that_cannot_be_drawn_is_refused() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let refused = |b: &mut Board<'_>, mutate: &dyn Fn(&mut PcbPoint)| {
         let mut q = PcbPoint::new("F.SilkS", p_at(0, 0));
         mutate(&mut q);
@@ -307,20 +308,20 @@ fn a_point_that_cannot_be_drawn_is_refused() {
         e[0].check.clone()
     };
     assert_eq!(refused(&mut b, &|q| q.size_nm = Nm::ZERO), "ops_bad_point");
-    assert_eq!(refused(&mut b, &|q| q.size_nm = Nm::from_raw_shim(-5000)), "ops_bad_point");
+    assert_eq!(refused(&mut b, &|q| q.size_nm = um(-5.0)), "ops_bad_point");
     assert_eq!(refused(&mut b, &|q| q.layer = String::new()), "ops_bad_point");
     let mut off = model(&["F.Cu", "B.Cu"]);
     off.board.layer_setup.enabled.retain(|l| l != "F.Fab");
-    let mut c = Board::new(design(), &off, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut c = Board::new(design(), &off, mm(0.1), mm(0.3));
     assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new("F.Fab", p_at(0, 0)) })).unwrap_err()[0].check, "ops_layer_off");
 }
 
 #[test]
 fn a_point_moves_turns_and_flips_with_the_verbs_that_take_any_item_but_cannot_be_locked() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let id = add_point(&mut b, "F.SilkS", p_at(10_000_000, 20_000_000));
-    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(-2_000_000) }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: mm(1.0), dy: mm(-2.0) }).unwrap();
     assert_eq!(points(&b)[0].at, p_at(11_000_000, 18_000_000));
     b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p_at(0, 0), angle_millideg: 90_000 }).unwrap();
     assert_eq!(points(&b)[0].at, p_at(-18_000_000, 11_000_000), "clockwise on the screen about the pivot");
@@ -334,7 +335,7 @@ fn a_point_moves_turns_and_flips_with_the_verbs_that_take_any_item_but_cannot_be
 fn the_point_commands_have_one_wire_form() {
     let add: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "add_point", "point": {"layer": "F.SilkS", "at": {"x": 1_000_000, "y": 2_000_000}}})).unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point }) = &add else { panic!("{add:?}") };
-    assert_eq!((point.layer.as_str(), point.at, point.size_nm), ("F.SilkS", p_at(1_000_000, 2_000_000), Nm::from_raw_shim(1_000_000)), "the size left out is 1 mm");
+    assert_eq!((point.layer.as_str(), point.at, point.size_nm), ("F.SilkS", p_at(1_000_000, 2_000_000), mm(1.0)), "the size left out is 1 mm");
     assert_eq!(add.domain(), Domain::Pcb);
     let edit: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "edit_point", "id": "pnt_x", "layer": "F.Cu", "at": {"x": 1_000, "y": 2000}, "size_nm": 3_000_000})).unwrap();
     assert_eq!(edit.subjects(), vec!["pnt_x"]);
@@ -364,7 +365,7 @@ fn solid(b: &Board<'_>, id: &str) -> bool {
 #[test]
 fn a_shape_is_hatched_unhatched_and_filled_by_one_verb_each_and_a_fill_replaces_the_one_before() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     style(&mut b, &["shp_rect"], ShapeFill::Hatch).unwrap();
     assert_eq!((hatch_of(&b, "shp_rect"), solid(&b, "shp_rect")), (Some(HatchKind::Hatch), false));
     style(&mut b, &["shp_rect"], ShapeFill::CrossHatch).unwrap();
@@ -381,8 +382,8 @@ fn a_shape_is_hatched_unhatched_and_filled_by_one_verb_each_and_a_fill_replaces_
 #[test]
 fn several_shapes_are_given_a_fill_together_or_not_at_all() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    b.apply(&Cmd::AddShape { shape: Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: p(Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(50_000_000)), end: p(Nm::from_raw_shim(55_000_000), Nm::from_raw_shim(50_000_000)) } }).unwrap();
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddShape { shape: Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, center: p(mm(50.0), mm(50.0)), end: p(mm(55.0), mm(50.0)) } }).unwrap();
     let circle = drawings(&b).shapes.iter().find(|s| matches!(s, Shape::Circle { .. })).unwrap().id().to_string();
     style(&mut b, &["shp_rect", &circle], ShapeFill::Hatch).unwrap();
     assert_eq!((hatch_of(&b, "shp_rect"), hatch_of(&b, &circle)), (Some(HatchKind::Hatch), Some(HatchKind::Hatch)));
@@ -402,9 +403,9 @@ fn several_shapes_are_given_a_fill_together_or_not_at_all() {
 #[test]
 fn a_hatched_shape_keeps_its_hatch_through_a_move_a_turn_and_a_flip_and_loses_it_when_it_is_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     style(&mut b, &["shp_rect"], ShapeFill::Hatch).unwrap();
-    b.apply(&Cmd::MoveItems { ids: ids(&["shp_rect"]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(2_000_000) }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&["shp_rect"]), dx: mm(1.0), dy: mm(2.0) }).unwrap();
     b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
     b.apply(&Cmd::FlipItems { ids: ids(&["shp_rect"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::Hatch), "the shape is the same shape, so it is as hatched as it was");
@@ -415,12 +416,12 @@ fn a_hatched_shape_keeps_its_hatch_through_a_move_a_turn_and_a_flip_and_loses_it
 #[test]
 fn the_old_verbs_that_set_a_fill_put_a_solid_fill_in_place_of_a_hatch_and_leave_it_alone_otherwise() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     style(&mut b, &["shp_rect"], ShapeFill::Hatch).unwrap();
     // The layer and the line width change, the shape is not asked to be solid: it stays hatched.
-    b.apply(&Cmd::EditShape { id: "shp_rect".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(250_000), filled: false }).unwrap();
+    b.apply(&Cmd::EditShape { id: "shp_rect".into(), layer: "F.SilkS".into(), stroke_width: mm(0.25), filled: false }).unwrap();
     assert_eq!(hatch_of(&b, "shp_rect"), Some(HatchKind::Hatch));
-    b.apply(&Cmd::EditShape { id: "shp_rect".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(250_000), filled: true }).unwrap();
+    b.apply(&Cmd::EditShape { id: "shp_rect".into(), layer: "F.SilkS".into(), stroke_width: mm(0.25), filled: true }).unwrap();
     assert_eq!((hatch_of(&b, "shp_rect"), solid(&b, "shp_rect")), (None, true));
 
     style(&mut b, &["shp_rect"], ShapeFill::CrossHatch).unwrap();
@@ -436,12 +437,12 @@ fn the_old_verbs_that_set_a_fill_put_a_solid_fill_in_place_of_a_hatch_and_leave_
 #[test]
 fn a_shape_added_where_a_hatched_one_was_deleted_is_not_hatched() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    b.apply(&Cmd::AddShape { shape: Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)) } }).unwrap();
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddShape { shape: Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(mm(5.0), mm(5.0)) } }).unwrap();
     let id = drawings(&b).shapes.iter().find(|s| s.points().first() == Some(&p(Nm::ZERO, Nm::ZERO))).unwrap().id().to_string();
     style(&mut b, &[&id], ShapeFill::Hatch).unwrap();
     b.apply(&Cmd::DeleteShape { id: id.clone() }).unwrap();
-    b.apply(&Cmd::AddShape { shape: Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)) } }).unwrap();
+    b.apply(&Cmd::AddShape { shape: Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(mm(5.0), mm(5.0)) } }).unwrap();
     assert_eq!(hatch_of(&b, &id), None);
 }
 
@@ -464,7 +465,7 @@ fn the_shape_style_command_has_one_wire_form() {
 #[test]
 fn a_duplicate_a_paste_and_an_array_of_a_hatched_shape_are_hatched_the_same_way() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     style(&mut b, &["shp_rect"], ShapeFill::CrossHatch).unwrap();
     let hatched = |b: &Board<'_>| drawings(b).shapes.iter().filter(|s| hatch_of(b, s.id()).is_some()).count();
 
@@ -475,15 +476,15 @@ fn a_duplicate_a_paste_and_an_array_of_a_hatched_shape_are_hatched_the_same_way(
     assert_eq!(hatch_of(&b, &copy), Some(HatchKind::CrossHatch));
 
     // Copy and Paste: the KiCad text has the hatch (`(fill cross_hatch)`) and a paste reads it back.
-    let text = eda_kicad::export_pcb_clipboard(b.design(), &m, &ids(&["shp_rect"]), p(Nm::ZERO, Nm::from_raw_shim(90_000_000))).unwrap();
+    let text = eda_kicad::export_pcb_clipboard(b.design(), &m, &ids(&["shp_rect"]), p(Nm::ZERO, mm(90.0))).unwrap();
     assert!(text.contains("(fill cross_hatch)"), "{text}");
-    b.apply(&Cmd::PasteClipboard { text, at: p(Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(40_000_000)) }).unwrap();
+    b.apply(&Cmd::PasteClipboard { text, at: p(mm(40.0), mm(40.0)) }).unwrap();
     assert_eq!(hatched(&b), 3);
 
     // Create Array: each copy of the set is hatched.
     b.apply(&Cmd::CreateArray {
         ids: ids(&["shp_rect"]),
-        geometry: array::ArrayGeometry::Grid { nx: 3, ny: 1, dx: Nm::from_raw_shim(20_000_000), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false },
+        geometry: array::ArrayGeometry::Grid { nx: 3, ny: 1, dx: mm(20.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false },
         arrange: false,
         reannotate: true,
     })
@@ -506,10 +507,10 @@ fn qr(layer: &str, at: Point) -> Barcode {
         at,
         angle: 0,
         layer: layer.into(),
-        width_nm: Nm::from_raw_shim(10_000_000),
-        height_nm: Nm::from_raw_shim(10_000_000),
+        width_nm: mm(10.0),
+        height_nm: mm(10.0),
         text: "HELLO".into(),
-        text_height_nm: Nm::from_raw_shim(1_500_000),
+        text_height_nm: mm(1.5),
         kind: BarcodeKind::Qr,
         ecc: EccLevel::L,
         show_text: true,
@@ -527,8 +528,8 @@ fn add_barcode(b: &mut Board<'_>, barcode: Barcode) -> String {
 #[test]
 fn a_barcode_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let mut code = qr("F.SilkS", p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(40_000_000)));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let mut code = qr("F.SilkS", p(mm(30.0), mm(40.0)));
     code.id = "caller_id".into();
     let id = add_barcode(&mut b, code);
     assert!(id.starts_with("bar_"), "an id the caller sent is ignored: {id}");
@@ -539,11 +540,11 @@ fn a_barcode_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
     edited.kind = BarcodeKind::DataMatrix;
     edited.layer = "F.Fab".into();
     edited.knockout = true;
-    edited.margin_x_nm = Nm::from_raw_shim(700_000);
+    edited.margin_x_nm = mm(0.7);
     edited.angle = 90_000;
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditBarcode { id: id.clone(), barcode: edited })).unwrap();
     let c = &barcodes(&b)[0];
-    assert_eq!((c.id.as_str(), c.text.as_str(), c.kind, c.layer.as_str(), c.knockout, c.margin_x_nm, c.angle), (id.as_str(), "WORLD", BarcodeKind::DataMatrix, "F.Fab", true, Nm::from_raw_shim(700_000), 90_000), "an edit keeps the id");
+    assert_eq!((c.id.as_str(), c.text.as_str(), c.kind, c.layer.as_str(), c.knockout, c.margin_x_nm, c.angle), (id.as_str(), "WORLD", BarcodeKind::DataMatrix, "F.Fab", true, mm(0.7), 90_000), "an edit keeps the id");
 
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteBarcode { id: id.clone() })).unwrap();
     assert!(barcodes(&b).is_empty());
@@ -554,7 +555,7 @@ fn a_barcode_is_added_with_an_id_of_ours_edited_in_place_and_deleted() {
 #[test]
 fn a_barcode_that_cannot_be_drawn_is_refused_and_a_micro_qr_code_has_no_high_level() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let refused = |b: &mut Board<'_>, mutate: &dyn Fn(&mut Barcode)| {
         let mut c = qr("F.SilkS", p(Nm::ZERO, Nm::ZERO));
         mutate(&mut c);
@@ -564,13 +565,13 @@ fn a_barcode_that_cannot_be_drawn_is_refused_and_a_micro_qr_code_has_no_high_lev
     };
     assert_eq!(refused(&mut b, &|c| c.layer = String::new()), "ops_bad_barcode");
     assert_eq!(refused(&mut b, &|c| c.width_nm = Nm::ZERO), "ops_bad_barcode");
-    assert_eq!(refused(&mut b, &|c| c.height_nm = Nm::from_raw_shim(-1)), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.height_nm = Nm::new(-1)), "ops_bad_barcode");
     assert_eq!(refused(&mut b, &|c| c.text_height_nm = Nm::ZERO), "ops_bad_barcode");
     assert_eq!(refused(&mut b, &|c| c.angle = 360_000), "ops_bad_barcode");
-    assert_eq!(refused(&mut b, &|c| c.margin_y_nm = Nm::from_raw_shim(-5000)), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.margin_y_nm = um(-5.0)), "ops_bad_barcode");
     let mut off = model(&["F.Cu", "B.Cu"]);
     off.board.layer_setup.enabled.retain(|l| l != "F.Fab");
-    let mut c = Board::new(design(), &off, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut c = Board::new(design(), &off, mm(0.1), mm(0.3));
     assert_eq!(c.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddBarcode { barcode: qr("F.Fab", p(Nm::ZERO, Nm::ZERO)) })).unwrap_err()[0].check, "ops_layer_off");
 
     // `SetErrorCorrection`: Micro QR takes Q for High; QR keeps it.
@@ -578,7 +579,7 @@ fn a_barcode_that_cannot_be_drawn_is_refused_and_a_micro_qr_code_has_no_high_lev
     micro.kind = BarcodeKind::MicroQr;
     micro.ecc = EccLevel::H;
     add_barcode(&mut b, micro);
-    let mut full = qr("F.SilkS", p(Nm::from_raw_shim(5_000_000), Nm::ZERO));
+    let mut full = qr("F.SilkS", p(mm(5.0), Nm::ZERO));
     full.ecc = EccLevel::H;
     add_barcode(&mut b, full);
     let (m1, m2) = (&barcodes(&b)[0], &barcodes(&b)[1]);
@@ -588,18 +589,18 @@ fn a_barcode_that_cannot_be_drawn_is_refused_and_a_micro_qr_code_has_no_high_lev
 #[test]
 fn a_barcode_moves_turns_flips_and_locks_with_the_verbs_that_take_any_item() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let id = add_barcode(&mut b, qr("F.SilkS", p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000))));
-    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(-2_000_000) }).unwrap();
-    assert_eq!(barcodes(&b)[0].at, p(Nm::from_raw_shim(11_000_000), Nm::from_raw_shim(18_000_000)));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let id = add_barcode(&mut b, qr("F.SilkS", p(mm(10.0), mm(20.0))));
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: mm(1.0), dy: mm(-2.0) }).unwrap();
+    assert_eq!(barcodes(&b)[0].at, p(mm(11.0), mm(18.0)));
     // `PCB_BARCODE::Rotate`: the centre turns about the pivot, the angle (counter-clockwise in the file) grows by the turn; clockwise 90 here
     b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
-    assert_eq!((barcodes(&b)[0].at, barcodes(&b)[0].angle), (p(Nm::from_raw_shim(-18_000_000), Nm::from_raw_shim(11_000_000)), 270_000), "clockwise on the screen about the pivot");
+    assert_eq!((barcodes(&b)[0].at, barcodes(&b)[0].angle), (p(mm(-18.0), mm(11.0)), 270_000), "clockwise on the screen about the pivot");
     // `Flip`: left-right mirrors the centre and puts it on the back layer; top-bottom turns it half a turn as well
     b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
-    assert_eq!((barcodes(&b)[0].layer.as_str(), barcodes(&b)[0].at, barcodes(&b)[0].angle), ("B.SilkS", p(Nm::from_raw_shim(18_000_000), Nm::from_raw_shim(11_000_000)), 270_000));
+    assert_eq!((barcodes(&b)[0].layer.as_str(), barcodes(&b)[0].at, barcodes(&b)[0].angle), ("B.SilkS", p(mm(18.0), mm(11.0)), 270_000));
     b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::TopBottom }).unwrap();
-    assert_eq!((barcodes(&b)[0].layer.as_str(), barcodes(&b)[0].at, barcodes(&b)[0].angle), ("F.SilkS", p(Nm::from_raw_shim(18_000_000), Nm::from_raw_shim(-11_000_000)), 90_000));
+    assert_eq!((barcodes(&b)[0].layer.as_str(), barcodes(&b)[0].at, barcodes(&b)[0].angle), ("F.SilkS", p(mm(18.0), mm(-11.0)), 90_000));
     // a barcode has a lock in the file (`(locked yes)`)
     b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap();
     assert!(drawings(&b).locked_ids.contains(&id));
@@ -642,8 +643,8 @@ fn endings_of(b: &Board<'_>, id: &str) -> LineEndings {
 #[test]
 fn a_line_an_arc_and_a_curve_get_line_endings_and_a_closed_shape_none() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: Nm::from_raw_shim(3_000_000), width_nm: Nm::from_raw_shim(2_000_000), ..Default::default() };
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: mm(3.0), width_nm: mm(2.0), ..Default::default() };
     endings(&mut b, &["shp_seg", "shp_arc"], Some(arrow), None).unwrap();
     assert_eq!(endings_of(&b, "shp_seg"), LineEndings { start: arrow, end: LineEnding::default() });
     assert_eq!(endings_of(&b, "shp_arc").start, arrow);
@@ -651,8 +652,8 @@ fn a_line_an_arc_and_a_curve_get_line_endings_and_a_closed_shape_none() {
     endings(&mut b, &["shp_seg"], None, Some(LineEnding::new(LineEndingStyle::Circle))).unwrap();
     assert_eq!(endings_of(&b, "shp_seg"), LineEndings { start: arrow, end: LineEnding::new(LineEndingStyle::Circle) });
     // A size below 0 is 0 (`std::max( 0, .. )`).
-    endings(&mut b, &["shp_seg"], Some(LineEnding { style: LineEndingStyle::Square, length_nm: Nm::from_raw_shim(-5000), width_nm: Nm::from_raw_shim(1_000_000), stroke_width_nm: Nm::from_raw_shim(-1), ..Default::default() }), None).unwrap();
-    assert_eq!(endings_of(&b, "shp_seg").start, LineEnding { style: LineEndingStyle::Square, width_nm: Nm::from_raw_shim(1_000_000), ..Default::default() });
+    endings(&mut b, &["shp_seg"], Some(LineEnding { style: LineEndingStyle::Square, length_nm: um(-5.0), width_nm: mm(1.0), stroke_width_nm: Nm::new(-1), ..Default::default() }), None).unwrap();
+    assert_eq!(endings_of(&b, "shp_seg").start, LineEnding { style: LineEndingStyle::Square, width_nm: mm(1.0), ..Default::default() });
 
     let before = serde_json::to_value(b.design()).unwrap();
     assert_eq!(endings(&mut b, &["shp_seg", "shp_rect"], Some(arrow), None).unwrap_err()[0].check, "ops_bad_shape_style", "a rectangle is closed");
@@ -666,10 +667,10 @@ fn a_line_an_arc_and_a_curve_get_line_endings_and_a_closed_shape_none() {
 #[test]
 fn a_shape_keeps_its_endings_through_a_move_a_turn_a_flip_and_a_duplicate_and_loses_them_when_it_is_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let open = LineEnding::new(LineEndingStyle::ArrowOpen);
     endings(&mut b, &["shp_seg"], Some(open), Some(open)).unwrap();
-    b.apply(&Cmd::MoveItems { ids: ids(&["shp_seg"]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(2_000_000) }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&["shp_seg"]), dx: mm(1.0), dy: mm(2.0) }).unwrap();
     b.apply(&Cmd::RotateItems { ids: ids(&["shp_seg"]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
     b.apply(&Cmd::FlipItems { ids: ids(&["shp_seg"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     assert_eq!(endings_of(&b, "shp_seg").end, open);
@@ -684,7 +685,7 @@ fn a_shape_keeps_its_endings_through_a_move_a_turn_a_flip_and_a_duplicate_and_lo
 fn the_endings_have_one_wire_form() {
     let c: Cmd = serde_json::from_value(serde_json::json!({"op": "pcb_item", "verb": "set_shape_style", "ids": ["shp_a"], "start_ending": {"style": "arrow_open", "length_nm": 3_000_000, "width_nm": 3_000_000, "stroke_width_nm": 600_000}})).unwrap();
     let Cmd::PcbItem(pcb_items::PcbItemCmd::SetShapeStyle { start_ending, end_ending, fill, .. }) = &c else { panic!("{c:?}") };
-    assert_eq!((*start_ending, *end_ending, *fill), (Some(LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: Nm::from_raw_shim(3_000_000), width_nm: Nm::from_raw_shim(3_000_000), stroke_width_nm: Nm::from_raw_shim(600_000), ..Default::default() }), None, None));
+    assert_eq!((*start_ending, *end_ending, *fill), (Some(LineEnding { style: LineEndingStyle::ArrowOpen, length_nm: mm(3.0), width_nm: mm(3.0), stroke_width_nm: mm(0.6), ..Default::default() }), None, None));
     let Cmd::PcbItem(p) = &c else { panic!() };
     assert_eq!(p.describe(), "shape style shp_a --fill unchanged --start-shape arrow_open --start-size 3.000x3.000 --start-stroke 0.600");
     let back: Cmd = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
@@ -702,12 +703,12 @@ fn grids<'a>(b: &'a Board<'_>) -> &'a [GridItem] {
 #[test]
 fn a_grid_item_is_placed_edited_turned_flipped_locked_and_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let g = GridItem { id: "caller".into(), extent: p(Nm::from_raw_shim(-3_000_000), Nm::from_raw_shim(2_000_000)), priority: 0, ..GridItem::new(p(Nm::from_raw_shim(10_000_000), Nm::ZERO)) };
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let g = GridItem { id: "caller".into(), extent: p(mm(-3.0), mm(2.0)), priority: 0, ..GridItem::new(p(mm(10.0), Nm::ZERO)) };
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddGridItem { grid_item: g })).unwrap();
     let id = grids(&b)[0].id.clone();
     assert!(id.starts_with("grd_"), "{id}");
-    assert_eq!((grids(&b)[0].extent, grids(&b)[0].priority), (p(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(2_000_000)), 1), "the setters' ranges");
+    assert_eq!((grids(&b)[0].extent, grids(&b)[0].priority), (p(mm(3.0), mm(2.0)), 1), "the setters' ranges");
 
     let edited = GridItem { kind: GridKind::Polar, phi_extent_deg: 90.0, angle: -30.0, ..grids(&b)[0].clone() };
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditGridItem { id: id.clone(), grid_item: edited })).unwrap();
@@ -715,11 +716,11 @@ fn a_grid_item_is_placed_edited_turned_flipped_locked_and_deleted() {
 
     // A clockwise quarter turn about the origin takes 90 from KiCad's counter-clockwise orientation.
     b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
-    assert_eq!((grids(&b)[0].at, grids(&b)[0].angle), (p(Nm::ZERO, Nm::from_raw_shim(10_000_000)), 240.0));
+    assert_eq!((grids(&b)[0].at, grids(&b)[0].angle), (p(Nm::ZERO, mm(10.0)), 240.0));
     b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     assert_eq!(grids(&b)[0].angle, 300.0, "180 - 240");
-    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO }).unwrap();
-    assert_eq!(grids(&b)[0].at, p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(10_000_000)));
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: mm(1.0), dy: Nm::ZERO }).unwrap();
+    assert_eq!(grids(&b)[0].at, p(mm(1.0), mm(10.0)));
     b.apply(&Cmd::SetLocked { ids: ids(&[&id]), locked: true }).unwrap();
     assert!(drawings(&b).locked_ids.contains(&id));
 
@@ -747,10 +748,10 @@ use eda_model::via_stitch::{StitchLayout, ViaStitch, ViaTemplate};
 use pcb_items::PlannedVia;
 
 fn stitch() -> ViaStitch {
-    let mut v = ViaStitch::new(vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000_000))]);
+    let mut v = ViaStitch::new(vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0)), p(Nm::ZERO, mm(10.0))]);
     v.net = "GND".into();
-    v.pitch_nm = Nm::from_raw_shim(2_000_000);
-    v.via = ViaTemplate { size_nm: Nm::from_raw_shim(600_000), drill_nm: Nm::from_raw_shim(300_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() };
+    v.pitch_nm = mm(2.0);
+    v.via = ViaTemplate { size_nm: mm(0.6), drill_nm: mm(0.3), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new() };
     v
 }
 
@@ -776,14 +777,14 @@ fn member_vias(b: &Board<'_>) -> Vec<(String, eda_model::ir::Point)> {
 #[test]
 fn a_stitching_makes_its_vias_and_churns_as_few_as_update_does() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let before = b.design().routing.as_ref().unwrap().vias.len();
     set_stitch(&mut b, None, stitch(), &[(1, 1), (2, 1), (3, 1)]).unwrap();
     let id = stitches(&b)[0].id.clone();
     assert!(id.starts_with("vst_"), "{id}");
     assert_eq!(b.design().routing.as_ref().unwrap().vias.len(), before + 3);
     let first = member_vias(&b);
-    assert_eq!(first.iter().map(|(_, at)| *at).collect::<Vec<_>>(), vec![p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_000_000)), p(Nm::from_raw_shim(4_000_000), Nm::from_raw_shim(2_000_000)), p(Nm::from_raw_shim(6_000_000), Nm::from_raw_shim(2_000_000))]);
+    assert_eq!(first.iter().map(|(_, at)| *at).collect::<Vec<_>>(), vec![p(mm(2.0), mm(2.0)), p(mm(4.0), mm(2.0)), p(mm(6.0), mm(2.0))]);
     // "Vias must be marked free".
     assert!(drawings(&b).via_extras.iter().any(|x| x.id == first[0].0 && x.tokens == ["(free yes)"]));
 
@@ -797,7 +798,7 @@ fn a_stitching_makes_its_vias_and_churns_as_few_as_update_does() {
     let after = member_vias(&b);
     assert_eq!((after[0].0.as_str(), after[1].0.as_str()), (first[0].0.as_str(), first[1].0.as_str()));
     assert!(!after.iter().any(|(vid, _)| *vid == first[2].0), "the via of the cell that went is gone");
-    assert_eq!(after[2].1, p(Nm::from_raw_shim(8_000_000), Nm::from_raw_shim(2_000_000)));
+    assert_eq!(after[2].1, p(mm(8.0), mm(2.0)));
     // A new stitch net keeps the vias (`SetNetCode` gives the members the net), ids and all.
     let mut vcc = stitches(&b)[0].clone();
     vcc.net = "VCC".into();
@@ -809,10 +810,10 @@ fn a_stitching_makes_its_vias_and_churns_as_few_as_update_does() {
     set_stitch(&mut b, Some(&id), gnd, &[(1, 1), (2, 1), (4, 1)]).unwrap();
     // A new via size makes them again.
     let mut bigger = stitches(&b)[0].clone();
-    bigger.via.size_nm = Nm::from_raw_shim(800_000);
+    bigger.via.size_nm = mm(0.8);
     set_stitch(&mut b, Some(&id), bigger, &[(1, 1), (2, 1), (4, 1)]).unwrap();
     assert!(member_vias(&b).iter().all(|(vid, _)| !after.iter().any(|(o, _)| o == vid)));
-    assert!(b.design().routing.as_ref().unwrap().vias.iter().filter(|v| stitches(&b)[0].member_ids.contains(&v.id)).all(|v| v.diameter == Nm::from_raw_shim(800_000)));
+    assert!(b.design().routing.as_ref().unwrap().vias.iter().filter(|v| stitches(&b)[0].member_ids.contains(&v.id)).all(|v| v.diameter == mm(0.8)));
 
     // `Remove`: the stitching and its vias.
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteViaStitch { id })).unwrap();
@@ -823,19 +824,19 @@ fn a_stitching_makes_its_vias_and_churns_as_few_as_update_does() {
 #[test]
 fn a_nudged_via_is_put_back_on_its_cell_and_a_stitching_without_a_plan_is_refused() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     set_stitch(&mut b, None, stitch(), &[(1, 1)]).unwrap();
     let id = stitches(&b)[0].id.clone();
     let vid = member_vias(&b)[0].0.clone();
-    b.apply(&Cmd::MoveVia { id: vid.clone(), x: Nm::from_raw_shim(2_300_000), y: Nm::from_raw_shim(2_000_000) }).unwrap();
+    b.apply(&Cmd::MoveVia { id: vid.clone(), x: mm(2.3), y: mm(2.0) }).unwrap();
     // The plan has the cell at its place: the via is "just nudged" back, not made again.
     let cur = stitches(&b)[0].clone();
     set_stitch(&mut b, Some(&id), cur, &[(1, 1)]).unwrap();
-    assert_eq!(member_vias(&b), vec![(vid, p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_000_000)))]);
+    assert_eq!(member_vias(&b), vec![(vid, p(mm(2.0), mm(2.0)))]);
     let err = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetViaStitch { id: Some(id.clone()), stitch: stitch(), vias: None })).unwrap_err();
     assert_eq!(err[0].check, "ops_via_stitch_unplanned");
     let mut odd = stitch();
-    odd.via.drill_nm = Nm::from_raw_shim(700_000);
+    odd.via.drill_nm = mm(0.7);
     assert_eq!(set_stitch(&mut b, Some(&id), odd, &[]).unwrap_err()[0].check, "ops_bad_via_stitch");
     let mut poisson = stitch();
     poisson.layout = StitchLayout::Poisson;
@@ -847,18 +848,18 @@ fn a_nudged_via_is_put_back_on_its_cell_and_a_stitching_without_a_plan_is_refuse
 #[test]
 fn a_stitching_turns_and_flips_with_its_vias() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     set_stitch(&mut b, None, stitch(), &[(1, 1)]).unwrap();
     let id = stitches(&b)[0].id.clone();
     b.apply(&Cmd::RotateItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
     let at = member_vias(&b)[0].1;
-    assert_eq!((at.x.abs(), at.y.abs()), (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_000_000)), "turned about the origin with the outline");
-    assert_ne!(at, p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_000_000)));
+    assert_eq!((at.x.abs(), at.y.abs()), (mm(2.0), mm(2.0)), "turned about the origin with the outline");
+    assert_ne!(at, p(mm(2.0), mm(2.0)));
     b.apply(&Cmd::FlipItems { ids: ids(&[&id]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     assert_eq!(stitches(&b)[0].layer, "B.Cu");
     assert_eq!(member_vias(&b)[0].1.x, -at.x, "mirrored with it");
-    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: Nm::from_raw_shim(500_000), dy: Nm::ZERO }).unwrap();
-    assert_eq!(member_vias(&b)[0].1.x, -at.x + Nm::from_raw_shim(500_000));
+    b.apply(&Cmd::MoveItems { ids: ids(&[&id]), dx: mm(0.5), dy: Nm::ZERO }).unwrap();
+    assert_eq!(member_vias(&b)[0].1.x, -at.x + mm(0.5));
 }
 
 #[test]
@@ -877,7 +878,7 @@ fn the_via_stitching_commands_have_one_wire_form() {
 #[test]
 fn a_drill_map_is_placed_once_a_layer_and_moves_its_marks_not_its_holes() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let place = |b: &mut Board<'_>, layer: &str| b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillMap { layer: layer.into() }));
     place(&mut b, "F.Fab").unwrap();
     // "Two maps on one layer would overdraw each other's marks"; copper is no documentation layer.
@@ -885,18 +886,18 @@ fn a_drill_map_is_placed_once_a_layer_and_moves_its_marks_not_its_holes() {
     assert!(place(&mut b, "F.Cu").is_err());
     let map = drawings(&b).board_items.drill_maps[0].clone();
     assert!(map.id.starts_with("dmap_"), "{}", map.id);
-    assert_eq!((map.size_nm, map.span.is_none(), map.outline_slots, map.guide_cross), (Nm::from_raw_shim(1_500_000), true, true, false), "PCB_DRILL_MAP's defaults");
+    assert_eq!((map.size_nm, map.span.is_none(), map.outline_slots, map.guide_cross), (mm(1.5), true, true, false), "PCB_DRILL_MAP's defaults");
     // Move slides the marks (`m_offset`); a turn has nothing to turn; a flip takes the map to the other side's layer.
-    b.apply(&Cmd::MoveItems { ids: ids(&[&map.id]), dx: Nm::from_raw_shim(50_000_000), dy: Nm::ZERO }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&[&map.id]), dx: mm(50.0), dy: Nm::ZERO }).unwrap();
     b.apply(&Cmd::RotateItems { ids: ids(&[&map.id]), pivot: p(Nm::ZERO, Nm::ZERO), angle_millideg: 90_000 }).unwrap();
     b.apply(&Cmd::FlipItems { ids: ids(&[&map.id]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     let moved = drawings(&b).board_items.drill_maps[0].clone();
-    assert_eq!((moved.offset, moved.layer.as_str()), (p(Nm::from_raw_shim(50_000_000), Nm::ZERO), "B.Fab"));
+    assert_eq!((moved.offset, moved.layer.as_str()), (p(mm(50.0), Nm::ZERO), "B.Fab"));
     let mut edited = moved.clone();
     edited.guide_cross = true;
     edited.size_nm = Nm::ZERO;
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditDrillMap { id: map.id.clone(), map: edited })).unwrap();
-    assert_eq!((drawings(&b).board_items.drill_maps[0].guide_cross, drawings(&b).board_items.drill_maps[0].size_nm), (true, Nm::from_raw_shim(1)), "`SetSymbolSize`: at least one");
+    assert_eq!((drawings(&b).board_items.drill_maps[0].guide_cross, drawings(&b).board_items.drill_maps[0].size_nm), (true, Nm::new(1)), "`SetSymbolSize`: at least one");
     b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteDrillMap { id: map.id })).unwrap();
     assert!(drawings(&b).board_items.drill_maps.is_empty());
 }
@@ -904,15 +905,15 @@ fn a_drill_map_is_placed_once_a_layer_and_moves_its_marks_not_its_holes() {
 #[test]
 fn a_drill_chart_is_refused_off_the_documentation_layers_and_lists_the_holes() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let err = b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "F.SilkS".into(), at: p(Nm::ZERO, Nm::ZERO) })).unwrap_err();
     assert_eq!(err[0].hint.as_deref(), Some("No documentation layer is enabled to hold a drill chart."));
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(6_000_000)) })).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(10.0), y: mm(10.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: p(mm(5.0), mm(6.0)) })).unwrap();
     let dr = drawings(&b);
     let chart = &dr.board_items.drill_charts[0];
     let t = dr.tables.iter().find(|t| t.id == chart.table_id).unwrap();
-    assert_eq!((t.col_count(), t.at), (6, p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(6_000_000))));
+    assert_eq!((t.col_count(), t.at), (6, p(mm(5.0), mm(6.0))));
     let texts: Vec<&str> = t.cells.iter().map(|c| c.text.as_str()).collect();
     assert!(texts.contains(&"0.300") && texts.contains(&"F.Cu / B.Cu"), "{texts:?}");
     assert_eq!(chart.row_shapes.get(&1), Some(&0), "the first shape");
@@ -920,7 +921,7 @@ fn a_drill_chart_is_refused_off_the_documentation_layers_and_lists_the_holes() {
     // Nothing changed: nothing is rebuilt. Another via of the size: the chart counts it.
     let ops_before: usize = t.cells[6 + 4].text.parse().unwrap();
     assert!(!b.refresh_drill_charts());
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(10_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(20.0), y: mm(10.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
     assert!(b.refresh_drill_charts());
     let dr = drawings(&b);
     let t = dr.tables.iter().find(|t| t.id == dr.board_items.drill_charts[0].table_id).unwrap();
@@ -932,9 +933,9 @@ fn a_drill_chart_is_refused_off_the_documentation_layers_and_lists_the_holes() {
 #[test]
 fn a_drill_chart_is_stale_by_the_drill_generation_not_by_its_text() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(6_000_000)) })).unwrap();
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(10.0), y: mm(10.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::PlaceDrillChart { layer: "Dwgs.User".into(), at: p(mm(5.0), mm(6.0)) })).unwrap();
     let id = drawings(&b).board_items.drill_charts[0].table_id.clone();
     let cell = |b: &Board, i: usize| drawings(b).tables.iter().find(|t| t.id == id).unwrap().cells[i].text.clone();
     b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
@@ -943,13 +944,13 @@ fn a_drill_chart_is_stale_by_the_drill_generation_not_by_its_text() {
     // A chart as a file has it: no generation, stale.
     let mut read = b.design().clone();
     read.drawings.as_mut().unwrap().board_items.drill_charts[0].built_generation = None;
-    let mut b = Board::new(read, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(read, &m, mm(0.1), mm(0.3));
     assert!(b.refresh_drill_charts(), "a chart that was read is rebuilt");
     assert_eq!(cell(&b, 6 + 1), "0.300");
     b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
     // The via moved: a via changed, the generation with it.
     let via = b.design().routing.as_ref().unwrap().vias[0].id.clone();
-    b.apply(&Cmd::MoveItems { ids: ids(&[&via]), dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO }).unwrap();
+    b.apply(&Cmd::MoveItems { ids: ids(&[&via]), dx: mm(1.0), dy: Nm::ZERO }).unwrap();
     assert!(b.refresh_drill_charts(), "a via changed");
     assert_eq!(cell(&b, 6 + 1), "0.300");
     b.apply(&Cmd::Table(crate::TableCmd::EditCells { id: id.clone(), cells: vec![(1, 1)], edit: eda_model::table_edit::CellEdit { text: Some("by hand".into()), ..Default::default() } })).unwrap();
@@ -963,9 +964,9 @@ fn a_drill_chart_is_stale_by_the_drill_generation_not_by_its_text() {
 #[test]
 fn duplicate_copies_barcodes_and_points_and_keeps_a_lock() {
     let m = model(&["F.Cu", "B.Cu"]);
-    let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let bar = add_barcode(&mut b, qr("F.SilkS", p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(20_000_000))));
-    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new("F.SilkS", p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000))) })).unwrap();
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let bar = add_barcode(&mut b, qr("F.SilkS", p(mm(10.0), mm(20.0))));
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new("F.SilkS", p(mm(5.0), mm(5.0))) })).unwrap();
     let pnt = drawings(&b).board_items.points.last().unwrap().id.clone();
     b.apply(&Cmd::SetLocked { ids: ids(&[&bar]), locked: true }).unwrap();
     b.apply(&Cmd::Duplicate { ids: ids(&[&bar, &pnt]) }).unwrap();

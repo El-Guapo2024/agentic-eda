@@ -259,7 +259,7 @@ mod tests {
     }
 
     fn via(net: &str, x: i64, y: i64) -> Via {
-        Via { id: format!("v{x}_{y}"), net: net.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, drill: Nm::from_raw_shim(300), diameter: Nm::from_raw_shim(600), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+        Via { id: format!("v{x}_{y}"), net: net.into(), at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, drill: Nm::new(300), diameter: Nm::new(600), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     fn assigned(design: &Design, model: &ConstraintModel) -> Vec<(String, u32)> {

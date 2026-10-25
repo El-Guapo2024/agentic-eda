@@ -227,15 +227,16 @@ pub fn boolean_shapes(dr: &mut DrawingsSection, op: BooleanOp, ids: &[String]) -
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
 
     fn rect(id: &str, x0: i64, y0: i64, x1: i64, y1: i64) -> Shape {
-        Shape::Rect { id: id.into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) } }
+        Shape::Rect { id: id.into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) } }
     }
 
     fn circle(id: &str, cx: i64, cy: i64, r: i64) -> Shape {
-        Shape::Circle { id: id.into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: true, center: Point { x: Nm::from_raw_shim(cx), y: Nm::from_raw_shim(cy) }, end: Point { x: Nm::from_raw_shim(cx + r), y: Nm::from_raw_shim(cy) } }
+        Shape::Circle { id: id.into(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: true, center: Point { x: Nm::from_raw_shim(cx), y: Nm::from_raw_shim(cy) }, end: Point { x: Nm::from_raw_shim(cx + r), y: Nm::from_raw_shim(cy) } }
     }
 
     fn section(shapes: Vec<Shape>) -> DrawingsSection {
@@ -268,7 +269,7 @@ mod tests {
         assert!((area(&dr.shapes[0]) - 175_000_000_000_000.0).abs() < 1e6, "area {}", area(&dr.shapes[0]));
         // the donor (first shape) supplies layer, width and fill
         assert_eq!(dr.shapes[0].layer(), "F.Fab");
-        assert_eq!(dr.shapes[0].stroke_width(), Nm::from_raw_shim(100_000));
+        assert_eq!(dr.shapes[0].stroke_width(), mm(0.1));
         assert!(!dr.shapes[0].is_filled());
     }
 
@@ -331,7 +332,7 @@ mod tests {
         assert_eq!(dr.shapes.len(), 1);
         // the donor is the circle: silkscreen layer, 150 wide, filled
         assert_eq!(dr.shapes[0].layer(), "F.SilkS");
-        assert_eq!(dr.shapes[0].stroke_width(), Nm::from_raw_shim(150_000));
+        assert_eq!(dr.shapes[0].stroke_width(), mm(0.15));
         assert!(dr.shapes[0].is_filled());
         let pi_r2 = std::f64::consts::PI * 25_000_000_000_000.0;
         // circle + the part of the rect outside it (a 4 mm wide bar from the circle edge to x=12 mm), within polygonisation error
@@ -346,7 +347,7 @@ mod tests {
         // a segment is not eligible
         let mut dr2 = section(vec![
             rect("a", 0, 0, 1_000_000, 1_000_000),
-            Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(10_000), y: Nm::ZERO } },
+            Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(0.01), y: Nm::ZERO } },
         ]);
         let all2 = ids(&dr2);
         assert!(boolean_shapes(&mut dr2, BooleanOp::Merge, &all2).is_err());

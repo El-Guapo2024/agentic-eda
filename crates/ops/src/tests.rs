@@ -1,6 +1,7 @@
 use super::*;
 use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
 use eda_model::{Net, Part, Pin, PinKind, PlacementRule};
+use eda_model::units::{mm, um};
 
 fn part(r: &str, pkg: &str) -> Part {
     Part {
@@ -42,9 +43,9 @@ fn empty_design() -> Design {
         placement: Some(PlacementSection {
             outline: vec![
                 Point { x: Nm::ZERO, y: Nm::ZERO },
-                Point { x: Nm::from_raw_shim(100_000_000), y: Nm::ZERO },
-                Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(100_000_000) },
-                Point { x: Nm::ZERO, y: Nm::from_raw_shim(100_000_000) },
+                Point { x: mm(100.0), y: Nm::ZERO },
+                Point { x: mm(100.0), y: mm(100.0) },
+                Point { x: Nm::ZERO, y: mm(100.0) },
             ],
             footprints: Vec::new(),
             modules: Vec::new(),
@@ -54,7 +55,7 @@ fn empty_design() -> Design {
 }
 
 fn board(m: &ConstraintModel) -> Board<'_> {
-    Board::new(empty_design(), m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))
+    Board::new(empty_design(), m, mm(0.1), mm(0.3))
 }
 
 // ------------------------------------------------------------ refusals
@@ -290,8 +291,8 @@ fn a_seed_part_can_land_without_an_anchor() {
     let mut b = board(&m);
     b.apply(&Cmd::PlaceRegion { part: "U1".into(), region: Region::Centre }).unwrap();
     let at = b.pose_of("U1").unwrap().at;
-    assert!((Nm::from_raw_shim(40_000_000)..=Nm::from_raw_shim(60_000_000)).contains(&at.x), "centre region should be mid-board, got {at:?}");
-    assert!((Nm::from_raw_shim(40_000_000)..=Nm::from_raw_shim(60_000_000)).contains(&at.y), "centre region should be mid-board, got {at:?}");
+    assert!((mm(40.0)..=mm(60.0)).contains(&at.x), "centre region should be mid-board, got {at:?}");
+    assert!((mm(40.0)..=mm(60.0)).contains(&at.y), "centre region should be mid-board, got {at:?}");
 }
 
 #[test]
@@ -375,13 +376,13 @@ fn net_model() -> ConstraintModel {
 fn add_track_needs_a_real_net_and_a_real_layer() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::AddTrack { net: "NOPE".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap_err();
+    let e = b.apply(&Cmd::AddTrack { net: "NOPE".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_net");
 
-    let e = b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "In1.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap_err();
+    let e = b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "In1.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_layer");
 
-    let e = b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }] }).unwrap_err();
+    let e = b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_track");
 }
 
@@ -389,13 +390,13 @@ fn add_track_needs_a_real_net_and_a_real_layer() {
 fn add_track_assigns_an_id_that_set_track_width_and_delete_track_can_use() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap();
     let id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
     assert!(!id.is_empty(), "a track must get an id the moment it is added");
 
-    b.apply(&Cmd::SetTrackWidth { id: id.clone(), width: Nm::from_raw_shim(350_000) }).unwrap();
+    b.apply(&Cmd::SetTrackWidth { id: id.clone(), width: mm(0.35) }).unwrap();
     let t = &b.design().routing.as_ref().unwrap().tracks[0];
-    assert_eq!(t.width, Nm::from_raw_shim(350_000));
+    assert_eq!(t.width, mm(0.35));
     assert_eq!(t.id, id, "changing width must not move the id");
 
     b.apply(&Cmd::DeleteTrack { id: id.clone() }).unwrap();
@@ -411,8 +412,8 @@ fn adding_a_track_does_not_disturb_an_existing_one() {
     // each other.
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap();
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: mm(2.0) }, Point { x: mm(1.0), y: mm(2.0) }] }).unwrap();
     let ids: std::collections::BTreeSet<String> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
     assert_eq!(ids.len(), 2, "two different tracks must get two different ids");
 }
@@ -423,9 +424,9 @@ fn adding_a_track_does_not_disturb_an_existing_one() {
 fn add_via_rejects_a_drill_not_smaller_than_its_pad() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000), drill: Nm::from_raw_shim(600_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap_err();
+    let e = b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(5.0), y: mm(5.0), drill: mm(0.6), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via");
-    let e = b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "F.Cu".into() }).unwrap_err();
+    let e = b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(5.0), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "F.Cu".into() }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via");
 }
 
@@ -433,12 +434,12 @@ fn add_via_rejects_a_drill_not_smaller_than_its_pad() {
 fn move_via_changes_position_but_not_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(5.0), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
     let id = b.design().routing.as_ref().unwrap().vias[0].id.clone();
 
-    b.apply(&Cmd::MoveVia { id: id.clone(), x: Nm::from_raw_shim(9_000_000), y: Nm::from_raw_shim(9_000_000) }).unwrap();
+    b.apply(&Cmd::MoveVia { id: id.clone(), x: mm(9.0), y: mm(9.0) }).unwrap();
     let v = &b.design().routing.as_ref().unwrap().vias[0];
-    assert_eq!(v.at, Point { x: Nm::from_raw_shim(9_000_000), y: Nm::from_raw_shim(9_000_000) });
+    assert_eq!(v.at, Point { x: mm(9.0), y: mm(9.0) });
     assert_eq!(v.id, id);
 
     b.apply(&Cmd::DeleteVia { id: id.clone() }).unwrap();
@@ -450,22 +451,22 @@ fn move_via_changes_position_but_not_id() {
 fn edit_via_changes_diameter_and_drill_but_not_net_or_position() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(5.0), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
     let id = b.design().routing.as_ref().unwrap().vias[0].id.clone();
 
-    b.apply(&Cmd::EditVia { id: id.clone(), diameter: Nm::from_raw_shim(800_000), drill: Nm::from_raw_shim(400_000) }).unwrap();
+    b.apply(&Cmd::EditVia { id: id.clone(), diameter: mm(0.8), drill: mm(0.4) }).unwrap();
     let v = &b.design().routing.as_ref().unwrap().vias[0];
     assert_eq!(v.id, id);
-    assert_eq!((v.diameter, v.drill), (Nm::from_raw_shim(800_000), Nm::from_raw_shim(400_000)));
+    assert_eq!((v.diameter, v.drill), (mm(0.8), mm(0.4)));
     assert_eq!(v.net, "GND");
-    assert_eq!(v.at, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) });
+    assert_eq!(v.at, Point { x: mm(5.0), y: mm(5.0) });
 
-    let e = b.apply(&Cmd::EditVia { id: id.clone(), diameter: Nm::from_raw_shim(400_000), drill: Nm::from_raw_shim(400_000) }).unwrap_err();
+    let e = b.apply(&Cmd::EditVia { id: id.clone(), diameter: mm(0.4), drill: mm(0.4) }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via", "drill not smaller than diameter must be refused, same as AddVia");
     // The refused edit must not have applied halfway.
-    assert_eq!(b.design().routing.as_ref().unwrap().vias[0].diameter, Nm::from_raw_shim(800_000));
+    assert_eq!(b.design().routing.as_ref().unwrap().vias[0].diameter, mm(0.8));
 
-    assert_eq!(b.apply(&Cmd::EditVia { id: "via_nope".into(), diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000) }).unwrap_err()[0].check, "ops_unknown_via");
+    assert_eq!(b.apply(&Cmd::EditVia { id: "via_nope".into(), diameter: mm(0.6), drill: mm(0.3) }).unwrap_err()[0].check, "ops_unknown_via");
 }
 
 #[test]
@@ -474,18 +475,18 @@ fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
     let mut b = board(&m);
     assert!(b.design().routing.is_none(), "an empty board starts with no routing section at all");
 
-    b.apply(&Cmd::SetTrackWidthPresets { widths: vec![Nm::from_raw_shim(150_000), Nm::from_raw_shim(250_000), Nm::from_raw_shim(400_000)] }).unwrap();
-    assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![Nm::from_raw_shim(150_000), Nm::from_raw_shim(250_000), Nm::from_raw_shim(400_000)]);
+    b.apply(&Cmd::SetTrackWidthPresets { widths: vec![mm(0.15), mm(0.25), mm(0.4)] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![mm(0.15), mm(0.25), mm(0.4)]);
 
-    b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000) }, ViaPreset { diameter: Nm::from_raw_shim(800_000), drill: Nm::from_raw_shim(400_000) }] }).unwrap();
+    b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.6), drill: mm(0.3) }, ViaPreset { diameter: mm(0.8), drill: mm(0.4) }] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().via_presets.len(), 2);
 
-    let e = b.apply(&Cmd::SetTrackWidthPresets { widths: vec![Nm::from_raw_shim(200_000), Nm::ZERO] }).unwrap_err();
+    let e = b.apply(&Cmd::SetTrackWidthPresets { widths: vec![mm(0.2), Nm::ZERO] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_track");
     // A refused replace must leave the previous list in place.
-    assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![Nm::from_raw_shim(150_000), Nm::from_raw_shim(250_000), Nm::from_raw_shim(400_000)]);
+    assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![mm(0.15), mm(0.25), mm(0.4)]);
 
-    let e = b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: Nm::from_raw_shim(300_000), drill: Nm::from_raw_shim(300_000) }] }).unwrap_err();
+    let e = b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.3), drill: mm(0.3) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via");
 }
 
@@ -495,41 +496,41 @@ fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
 fn edit_tracks_and_vias_sets_explicit_width_diameter_drill_and_layer() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap();
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(5.0), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
     let track_id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
     let via_id = b.design().routing.as_ref().unwrap().vias[0].id.clone();
 
     b.apply(&Cmd::EditTracksAndVias {
         ids: vec![track_id.clone(), via_id.clone()],
-        track_width: Some(SizeSpec::Value { nm: Nm::from_raw_shim(350_000) }),
-        via_size: Some(ViaSizeSpec::Value { diameter: Nm::from_raw_shim(900_000), drill: Nm::from_raw_shim(450_000) }),
+        track_width: Some(SizeSpec::Value { nm: mm(0.35) }),
+        via_size: Some(ViaSizeSpec::Value { diameter: mm(0.9), drill: mm(0.45) }),
         layer: Some("B.Cu".into()),
     })
     .unwrap();
 
     let t = &b.design().routing.as_ref().unwrap().tracks[0];
-    assert_eq!(t.width, Nm::from_raw_shim(350_000));
+    assert_eq!(t.width, mm(0.35));
     assert_eq!(t.layer, "B.Cu", "a track's layer is editable; a via's layer span is not touched by this command");
     assert_eq!(t.id, track_id, "style/layer edits must not move the id");
     let v = &b.design().routing.as_ref().unwrap().vias[0];
-    assert_eq!((v.diameter, v.drill), (Nm::from_raw_shim(900_000), Nm::from_raw_shim(450_000)));
+    assert_eq!((v.diameter, v.drill), (mm(0.9), mm(0.45)));
     assert_eq!((v.from_layer.as_str(), v.to_layer.as_str()), ("F.Cu", "B.Cu"));
 }
 
 #[test]
 fn edit_tracks_and_vias_net_class_resolves_each_items_own_net() {
     let mut m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[("FAST", &["U1"]), ("SLOW", &["U2"])], vec![]);
-    m.board.net_classes = vec![eda_model::NetClass { name: "fast".into(), nets: vec!["FAST".into()], track_width: Some(Nm::from_raw_shim(500_000)), clearance: None, via_diameter: Some(Nm::from_raw_shim(1_000_000)), via_drill: Some(Nm::from_raw_shim(500_000)), microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }];
+    m.board.net_classes = vec![eda_model::NetClass { name: "fast".into(), nets: vec!["FAST".into()], track_width: Some(mm(0.5)), clearance: None, via_diameter: Some(mm(1.0)), via_drill: Some(mm(0.5)), microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }];
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "FAST".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap();
-    b.apply(&Cmd::AddTrack { net: "SLOW".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "FAST".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "SLOW".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: mm(2.0) }, Point { x: mm(1.0), y: mm(2.0) }] }).unwrap();
     let ids: Vec<String> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
 
     b.apply(&Cmd::EditTracksAndVias { ids, track_width: Some(SizeSpec::NetClass), via_size: None, layer: None }).unwrap();
 
     let widths: std::collections::BTreeMap<String, Nm> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| (t.net.clone(), t.width)).collect();
-    assert_eq!(widths["FAST"], Nm::from_raw_shim(500_000), "FAST is in the fast net class, which overrides track width");
+    assert_eq!(widths["FAST"], mm(0.5), "FAST is in the fast net class, which overrides track width");
     assert_eq!(widths["SLOW"], m.board.track_width, "SLOW has no class, so it falls back to the board default");
 }
 
@@ -543,7 +544,7 @@ fn edit_tracks_and_vias_refuses_empty_ids_and_bad_explicit_values() {
     let e = b.apply(&Cmd::EditTracksAndVias { ids: vec!["whatever".into()], track_width: Some(SizeSpec::Value { nm: Nm::ZERO }), via_size: None, layer: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_track");
 
-    let e = b.apply(&Cmd::EditTracksAndVias { ids: vec!["whatever".into()], track_width: None, via_size: Some(ViaSizeSpec::Value { diameter: Nm::from_raw_shim(300_000), drill: Nm::from_raw_shim(300_000) }), layer: None }).unwrap_err();
+    let e = b.apply(&Cmd::EditTracksAndVias { ids: vec!["whatever".into()], track_width: None, via_size: Some(ViaSizeSpec::Value { diameter: mm(0.3), drill: mm(0.3) }), layer: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via");
 }
 
@@ -551,10 +552,10 @@ fn edit_tracks_and_vias_refuses_empty_ids_and_bad_explicit_values() {
 fn edit_tracks_and_vias_tolerates_unknown_ids_among_known_ones() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap();
     let id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
-    b.apply(&Cmd::EditTracksAndVias { ids: vec![id, "nope".into()], track_width: Some(SizeSpec::Value { nm: Nm::from_raw_shim(500_000) }), via_size: None, layer: None }).unwrap();
-    assert_eq!(b.design().routing.as_ref().unwrap().tracks[0].width, Nm::from_raw_shim(500_000));
+    b.apply(&Cmd::EditTracksAndVias { ids: vec![id, "nope".into()], track_width: Some(SizeSpec::Value { nm: mm(0.5) }), via_size: None, layer: None }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks[0].width, mm(0.5));
 }
 
 // --------------------------------------------------------------- zones
@@ -563,8 +564,8 @@ fn edit_tracks_and_vias_tolerates_unknown_ids_among_known_ones() {
 fn add_zone_then_delete_it() {
     let m = net_model();
     let mut b = board(&m);
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }];
-    let e = b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1), y: Nm::from_raw_shim(1) }] }).unwrap_err();
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }];
+    let e = b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
 
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: outline.clone() }).unwrap();
@@ -580,11 +581,11 @@ fn add_zone_allows_an_empty_net_for_a_rule_area() {
     // must not be refused the way a real but-unknown net name still is.
     let m = net_model();
     let mut b = board(&m);
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }];
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }, Point { x: mm(5.0), y: mm(5.0) }];
     b.apply(&Cmd::AddZone { net: "".into(), layer: "F.Cu".into(), outline }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].net, "");
 
-    let e = b.apply(&Cmd::AddZone { net: "NOPE".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1), y: Nm::from_raw_shim(1) }] }).unwrap_err();
+    let e = b.apply(&Cmd::AddZone { net: "NOPE".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_net", "a real but unknown net name must still be refused");
 }
 
@@ -592,7 +593,7 @@ fn add_zone_allows_an_empty_net_for_a_rule_area() {
 fn edit_zone_keepout_flags_round_trip_and_empty_net_is_allowed() {
     let m = net_model();
     let mut b = board(&m);
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) }];
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }, Point { x: mm(5.0), y: mm(5.0) }];
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
 
@@ -657,28 +658,28 @@ fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cm
 fn edit_zone_sets_the_outline_smoothing_and_a_missing_one_leaves_it() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }] }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
 
     b.apply(&edit_zone_cmd(id.clone(), "GND", |z| {
         z.smoothing = eda_model::ir::ZoneSmoothing::Fillet;
-        z.corner_radius = Nm::from_raw_shim(1_500_000);
+        z.corner_radius = mm(1.5);
     }))
     .unwrap();
     let z = &b.design().routing.as_ref().unwrap().zones[0];
-    assert_eq!((z.smoothing, z.corner_radius), (eda_model::ir::ZoneSmoothing::Fillet, Nm::from_raw_shim(1_500_000)));
+    assert_eq!((z.smoothing, z.corner_radius), (eda_model::ir::ZoneSmoothing::Fillet, mm(1.5)));
 
     // a client that does not know about smoothing (the field absent) leaves it as it is
-    let mut cmd = edit_zone_cmd(id.clone(), "GND", |z| z.clearance = Nm::from_raw_shim(300_000));
+    let mut cmd = edit_zone_cmd(id.clone(), "GND", |z| z.clearance = mm(0.3));
     if let Cmd::EditZone { smoothing, corner_radius, .. } = &mut cmd {
         *smoothing = None;
         *corner_radius = None;
     }
     b.apply(&cmd).unwrap();
     let z = &b.design().routing.as_ref().unwrap().zones[0];
-    assert_eq!((z.clearance, z.smoothing, z.corner_radius), (Nm::from_raw_shim(300_000), eda_model::ir::ZoneSmoothing::Fillet, Nm::from_raw_shim(1_500_000)));
+    assert_eq!((z.clearance, z.smoothing, z.corner_radius), (mm(0.3), eda_model::ir::ZoneSmoothing::Fillet, mm(1.5)));
 
-    let e = b.apply(&edit_zone_cmd(id, "GND", |z| z.corner_radius = Nm::from_raw_shim(-1))).unwrap_err();
+    let e = b.apply(&edit_zone_cmd(id, "GND", |z| z.corner_radius = Nm::new(-1))).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
 }
 
@@ -688,7 +689,7 @@ fn edit_zone_sets_the_outline_smoothing_and_a_missing_one_leaves_it() {
 fn edit_zone_puts_a_zone_on_several_layers_and_back() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }] }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
     let zone = |b: &Board<'_>| b.design().routing.as_ref().unwrap().zones[0].clone();
 
@@ -733,7 +734,7 @@ fn edit_zone_puts_a_zone_on_several_layers_and_back() {
 fn a_zone_can_be_on_a_technical_layer_and_has_no_net_there() {
     let m = net_model();
     let mut b = board(&m);
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }];
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }];
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.SilkS".into(), outline: outline.clone() }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
     {
@@ -767,17 +768,17 @@ fn a_zone_can_be_on_a_technical_layer_and_has_no_net_there() {
 fn edit_zone_replaces_every_setting_but_leaves_the_outline_alone() {
     let m = net_model();
     let mut b = board(&m);
-    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }];
+    let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }];
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: outline.clone() }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
 
     b.apply(&edit_zone_cmd(id.clone(), "GND", |z| {
         z.priority = 3;
-        z.clearance = Nm::from_raw_shim(300_000);
+        z.clearance = mm(0.3);
         z.pad_connection = PadConnection::Full;
         z.fill_mode = FillMode::HatchPattern;
-        z.hatch_thickness = Nm::from_raw_shim(1_000_000);
-        z.hatch_gap = Nm::from_raw_shim(1_500_000);
+        z.hatch_thickness = mm(1.0);
+        z.hatch_gap = mm(1.5);
     }))
     .unwrap();
 
@@ -785,7 +786,7 @@ fn edit_zone_replaces_every_setting_but_leaves_the_outline_alone() {
     assert_eq!(z.id, id, "id is stable across an edit");
     assert_eq!(z.outline, outline, "EditZone never touches the outline");
     assert_eq!(z.priority, 3);
-    assert_eq!(z.clearance, Nm::from_raw_shim(300_000));
+    assert_eq!(z.clearance, mm(0.3));
     assert_eq!(z.pad_connection, PadConnection::Full);
     assert_eq!(z.fill_mode, FillMode::HatchPattern);
 }
@@ -794,13 +795,13 @@ fn edit_zone_replaces_every_setting_but_leaves_the_outline_alone() {
 fn edit_zone_rejects_a_thermal_spoke_narrower_than_the_minimum_width() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }] }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
 
     let e = b
         .apply(&edit_zone_cmd(id, "GND", |z| {
-            z.min_thickness = Nm::from_raw_shim(500_000);
-            z.thermal_spoke_width = Nm::from_raw_shim(100_000);
+            z.min_thickness = mm(0.5);
+            z.thermal_spoke_width = mm(0.1);
         }))
         .unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
@@ -810,7 +811,7 @@ fn edit_zone_rejects_a_thermal_spoke_narrower_than_the_minimum_width() {
 fn edit_zone_rejects_an_unknown_net_or_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }] }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
 
     let e = b.apply(&edit_zone_cmd(id.clone(), "NOPE", |_| {})).unwrap_err();
@@ -824,18 +825,18 @@ fn edit_zone_rejects_an_unknown_net_or_id() {
 fn set_zone_outline_replaces_the_outline_only() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }] }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
     b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.priority = 5)).unwrap();
 
-    let new_outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(20_000_000) }];
+    let new_outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }];
     b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: new_outline.clone(), holes: None }).unwrap();
     let z = &b.design().routing.as_ref().unwrap().zones[0];
     assert_eq!(z.id, id, "id is stable across an outline edit");
     assert_eq!(z.outline, new_outline);
     assert_eq!(z.priority, 5, "SetZoneOutline must not touch any other setting");
 
-    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1), y: Nm::from_raw_shim(1) }], holes: None }).unwrap_err();
+    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }], holes: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
     assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline, holes: None }).unwrap_err()[0].check, "ops_unknown_zone");
 }
@@ -877,22 +878,22 @@ fn moving_a_footprint_with_edge_cuts_refreshes_the_summary_outline() {
         (pad "1" smd rect (at 0 -3) (size 1 2) (layers "F.Cu" "F.Mask") (uuid "a1")))
 )"#;
     let (design, model, _) = eda_kicad::import_kicad_pcb(text).unwrap();
-    let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
     let min_y = |b: &Board| b.design().placement.as_ref().unwrap().outline.iter().map(|p| p.y).min().unwrap();
-    assert_eq!(min_y(&b), Nm::from_raw_shim(-5_000_000));
-    b.apply(&Cmd::MoveItems { ids: vec!["J1".into()], dx: Nm::ZERO, dy: Nm::from_raw_shim(-2_000_000) }).unwrap();
+    assert_eq!(min_y(&b), mm(-5.0));
+    b.apply(&Cmd::MoveItems { ids: vec!["J1".into()], dx: Nm::ZERO, dy: mm(-2.0) }).unwrap();
     // The tab no longer meets the board's lines: KiCad's outline is open, the summary its inferred box; either way the summary changed with the footprint.
-    assert_ne!(min_y(&b), Nm::from_raw_shim(-5_000_000), "the summary followed J1: {:?}", b.design().placement.as_ref().unwrap().outline);
-    b.apply(&Cmd::MoveItems { ids: vec!["J1".into()], dx: Nm::ZERO, dy: Nm::from_raw_shim(2_000_000) }).unwrap();
-    assert_eq!(min_y(&b), Nm::from_raw_shim(-5_000_000));
+    assert_ne!(min_y(&b), mm(-5.0), "the summary followed J1: {:?}", b.design().placement.as_ref().unwrap().outline);
+    b.apply(&Cmd::MoveItems { ids: vec!["J1".into()], dx: Nm::ZERO, dy: mm(2.0) }).unwrap();
+    assert_eq!(min_y(&b), mm(-5.0));
 }
 
 // ----------------------------------------------------------- teardrops
 
 fn via_and_track_board() -> (ConstraintModel, Point, Point) {
     let m = net_model();
-    let via_at = Point { x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(40_000_000) };
-    let far = Point { x: via_at.x + Nm::from_raw_shim(5_000_000), y: via_at.y };
+    let via_at = Point { x: mm(40.0), y: mm(40.0) };
+    let far = Point { x: via_at.x + mm(5.0), y: via_at.y };
     (m, via_at, far)
 }
 
@@ -900,8 +901,8 @@ fn via_and_track_board() -> (ConstraintModel, Point, Point) {
 fn add_all_teardrops_is_a_no_op_when_disabled() {
     let (m, via_at, far) = via_and_track_board();
     let mut b = board(&m);
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![via_at, far] }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, far] }).unwrap();
 
     b.apply(&Cmd::AddAllTeardrops).unwrap();
     assert!(b.design().routing.as_ref().unwrap().zones.is_empty(), "teardrop_settings.enabled defaults false");
@@ -911,8 +912,8 @@ fn add_all_teardrops_is_a_no_op_when_disabled() {
 fn add_all_teardrops_generates_once_and_is_idempotent() {
     let (m, via_at, far) = via_and_track_board();
     let mut b = board(&m);
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![via_at, far] }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, far] }).unwrap();
     b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { enabled: true, ..Default::default() } }).unwrap();
 
     b.apply(&Cmd::AddAllTeardrops).unwrap();
@@ -932,9 +933,9 @@ fn add_all_teardrops_generates_once_and_is_idempotent() {
 fn add_all_teardrops_never_touches_a_user_drawn_zone() {
     let (m, via_at, far) = via_and_track_board();
     let mut b = board(&m);
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![via_at, far] }).unwrap();
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, far] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }] }).unwrap();
     let user_zone_id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
     b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { enabled: true, ..Default::default() } }).unwrap();
 
@@ -964,15 +965,15 @@ fn set_teardrop_settings_rejects_a_ratio_outside_zero_to_one() {
 fn add_shape_move_and_delete() {
     let m = net_model();
     let mut b = board(&m);
-    let shape = Shape::Segment { id: "ignored-on-input".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO } };
+    let shape = Shape::Segment { id: "ignored-on-input".into(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.0), y: Nm::ZERO } };
     b.apply(&Cmd::AddShape { shape }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
     assert_ne!(id, "ignored-on-input", "a caller-supplied id must never be trusted");
     assert!(!id.is_empty());
 
-    b.apply(&Cmd::MoveShape { id: id.clone(), dx: Nm::from_raw_shim(500_000), dy: Nm::from_raw_shim(-500_000) }).unwrap();
+    b.apply(&Cmd::MoveShape { id: id.clone(), dx: mm(0.5), dy: mm(-0.5) }).unwrap();
     let moved = &b.design().drawings.as_ref().unwrap().shapes[0];
-    assert_eq!(moved.points(), vec![Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(-500_000) }, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(-500_000) }]);
+    assert_eq!(moved.points(), vec![Point { x: mm(0.5), y: mm(-0.5) }, Point { x: mm(1.5), y: mm(-0.5) }]);
 
     b.apply(&Cmd::DeleteShape { id: id.clone() }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().shapes.is_empty());
@@ -983,18 +984,18 @@ fn add_shape_move_and_delete() {
 fn the_outline_summary_follows_the_edge_cuts_shapes_when_they_are_the_outline() {
     let m = net_model();
     let b = board(&m);
-    let edge = |a: Point, c: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, start: a, end: c };
+    let edge = |a: Point, c: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, start: a, end: c };
     let p = |x, y| Point { x, y };
     // An imported board whose outline is its shapes: a 10 x 10 mm square, `placement.outline` the ring that stands for it.
     let mut d = b.design().clone();
     d.drawings = Some(eda_model::ir::DrawingsSection {
-        shapes: vec![edge(p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::ZERO)), edge(p(Nm::from_raw_shim(10_000_000), Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000))), edge(p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000_000))), edge(p(Nm::ZERO, Nm::from_raw_shim(10_000_000)), p(Nm::ZERO, Nm::ZERO))],
+        shapes: vec![edge(p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO)), edge(p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0))), edge(p(mm(10.0), mm(10.0)), p(Nm::ZERO, mm(10.0))), edge(p(Nm::ZERO, mm(10.0)), p(Nm::ZERO, Nm::ZERO))],
         outline_is_shapes: true,
         ..Default::default()
     });
     d.drawings.as_mut().unwrap().assign_missing_ids();
     eda_drc::outline::refresh_outline_summary(&mut d, None);
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     let area = |b: &Board| {
         let o = &b.design().placement.as_ref().unwrap().outline;
         (0..o.len()).map(|i| o[i].x.raw_shim() * o[(i + 1) % o.len()].y.raw_shim() - o[(i + 1) % o.len()].x.raw_shim() * o[i].y.raw_shim()).sum::<i64>().abs() / 2
@@ -1002,26 +1003,26 @@ fn the_outline_summary_follows_the_edge_cuts_shapes_when_they_are_the_outline() 
     assert_eq!(area(&b), 100_000_000_000_000);
 
     // A circular cutout drawn on Edge.Cuts is a hole: the summary ring is the outer ring still, but the shape is in the outline.
-    let hole = Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, center: p(Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)), end: p(Nm::from_raw_shim(7_000_000), Nm::from_raw_shim(5_000_000)) };
+    let hole = Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, center: p(mm(5.0), mm(5.0)), end: p(mm(7.0), mm(5.0)) };
     b.apply(&Cmd::AddShape { shape: hole }).unwrap();
     assert_eq!(area(&b), 100_000_000_000_000, "a cutout does not change the outer ring");
     let outline = eda_drc::outline::board_outline(b.design(), false);
     assert_eq!((outline.polys.outline_count(), outline.polys.hole_count(0)), (1, 1));
 
     // Taking the right side 2 mm in changes the outline, and the summary follows (the cutout stays well inside).
-    let right = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.x == Nm::from_raw_shim(10_000_000) && end.x == Nm::from_raw_shim(10_000_000))).unwrap().id().to_string();
-    let top = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.y == Nm::from_raw_shim(10_000_000) && end.y == Nm::from_raw_shim(10_000_000))).unwrap().id().to_string();
+    let right = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.x == mm(10.0) && end.x == mm(10.0))).unwrap().id().to_string();
+    let top = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.y == mm(10.0) && end.y == mm(10.0))).unwrap().id().to_string();
     let bottom = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.y == Nm::ZERO && end.y == Nm::ZERO)).unwrap().id().to_string();
     for id in [&right, &top, &bottom] {
         b.apply(&Cmd::DeleteShape { id: id.clone() }).unwrap();
     }
-    b.apply(&Cmd::AddShape { shape: edge(p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(8_000_000), Nm::ZERO)) }).unwrap();
-    b.apply(&Cmd::AddShape { shape: edge(p(Nm::from_raw_shim(8_000_000), Nm::ZERO), p(Nm::from_raw_shim(8_000_000), Nm::from_raw_shim(10_000_000))) }).unwrap();
-    b.apply(&Cmd::AddShape { shape: edge(p(Nm::from_raw_shim(8_000_000), Nm::from_raw_shim(10_000_000)), p(Nm::ZERO, Nm::from_raw_shim(10_000_000))) }).unwrap();
+    b.apply(&Cmd::AddShape { shape: edge(p(Nm::ZERO, Nm::ZERO), p(mm(8.0), Nm::ZERO)) }).unwrap();
+    b.apply(&Cmd::AddShape { shape: edge(p(mm(8.0), Nm::ZERO), p(mm(8.0), mm(10.0))) }).unwrap();
+    b.apply(&Cmd::AddShape { shape: edge(p(mm(8.0), mm(10.0)), p(Nm::ZERO, mm(10.0))) }).unwrap();
     assert_eq!(area(&b), 80_000_000_000_000, "the summary is the new 8 x 10 mm outline");
     // A cutout that crosses the outline is malformed, as in KiCad; the summary is then the rectangle round the edges.
     assert_eq!(eda_drc::outline::check_board_outline(b.design()).len(), 0);
-    b.apply(&Cmd::AddShape { shape: Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(50_000), filled: false, center: p(Nm::from_raw_shim(8_000_000), Nm::from_raw_shim(5_000_000)), end: p(Nm::from_raw_shim(9_500_000), Nm::from_raw_shim(5_000_000)) } }).unwrap();
+    b.apply(&Cmd::AddShape { shape: Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.05), filled: false, center: p(mm(8.0), mm(5.0)), end: p(mm(9.5), mm(5.0)) } }).unwrap();
     assert!(!eda_drc::outline::check_board_outline(b.design()).is_empty());
 }
 
@@ -1030,29 +1031,29 @@ fn add_shape_accepts_a_bezier_and_moving_it_shifts_all_four_control_points() {
     // `pcbnew.InteractiveDrawing.bezier` commits one `PCB_SHAPE` of type BEZIER: start, C1, C2, end.
     let m = net_model();
     let mut b = board(&m);
-    let curve = Shape::Bezier { id: "ignored".into(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(120_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, c1: Point { x: Nm::ZERO, y: Nm::from_raw_shim(2_000_000) }, c2: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }, end: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO } };
+    let curve = Shape::Bezier { id: "ignored".into(), layer: "F.SilkS".into(), stroke_width: mm(0.12), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, c1: Point { x: Nm::ZERO, y: mm(2.0) }, c2: Point { x: mm(3.0), y: mm(2.0) }, end: Point { x: mm(3.0), y: Nm::ZERO } };
     b.apply(&Cmd::AddShape { shape: curve }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
     assert!(id.starts_with("shp_"), "{id}");
     assert_ne!(id, "ignored");
 
-    b.apply(&Cmd::MoveShape { id: id.clone(), dx: Nm::from_raw_shim(100_000), dy: Nm::from_raw_shim(200_000) }).unwrap();
+    b.apply(&Cmd::MoveShape { id: id.clone(), dx: mm(0.1), dy: mm(0.2) }).unwrap();
     let s = &b.design().drawings.as_ref().unwrap().shapes[0];
-    assert_eq!(s.points(), vec![Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(200_000) }, Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(2_200_000) }, Point { x: Nm::from_raw_shim(3_100_000), y: Nm::from_raw_shim(2_200_000) }, Point { x: Nm::from_raw_shim(3_100_000), y: Nm::from_raw_shim(200_000) }]);
+    assert_eq!(s.points(), vec![Point { x: mm(0.1), y: mm(0.2) }, Point { x: mm(0.1), y: mm(2.2) }, Point { x: mm(3.1), y: mm(2.2) }, Point { x: mm(3.1), y: mm(0.2) }]);
     // the flattened polyline (what DRC/plot use) starts and ends on the curve's own ends
     let poly = s.bezier_points().unwrap();
-    assert_eq!(poly.first(), Some(&Point { x: Nm::from_raw_shim(100_000), y: Nm::from_raw_shim(200_000) }));
-    assert_eq!(poly.last(), Some(&Point { x: Nm::from_raw_shim(3_100_000), y: Nm::from_raw_shim(200_000) }));
+    assert_eq!(poly.first(), Some(&Point { x: mm(0.1), y: mm(0.2) }));
+    assert_eq!(poly.last(), Some(&Point { x: mm(3.1), y: mm(0.2) }));
     assert!(poly.len() > 3);
 
-    b.apply(&Cmd::EditShape { id, layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(200_000), filled: false }).unwrap();
+    b.apply(&Cmd::EditShape { id, layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false }).unwrap();
     let s = &b.design().drawings.as_ref().unwrap().shapes[0];
-    assert_eq!((s.layer(), s.stroke_width()), ("F.Fab", Nm::from_raw_shim(200_000)));
+    assert_eq!((s.layer(), s.stroke_width()), ("F.Fab", mm(0.2)));
 }
 
 #[test]
 fn a_bezier_shape_round_trips_through_json_with_its_tagged_kind() {
-    let curve = Shape::Bezier { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(120_000), filled: false, start: Point { x: Nm::from_raw_shim(1000), y: Nm::from_raw_shim(2000) }, c1: Point { x: Nm::from_raw_shim(3000), y: Nm::from_raw_shim(4000) }, c2: Point { x: Nm::from_raw_shim(5000), y: Nm::from_raw_shim(6000) }, end: Point { x: Nm::from_raw_shim(7000), y: Nm::from_raw_shim(8000) } };
+    let curve = Shape::Bezier { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.12), filled: false, start: Point { x: um(1.0), y: um(2.0) }, c1: Point { x: um(3.0), y: um(4.0) }, c2: Point { x: um(5.0), y: um(6.0) }, end: Point { x: um(7.0), y: um(8.0) } };
     let json = serde_json::to_value(&curve).unwrap();
     assert_eq!(json["kind"], "bezier");
     assert_eq!(json["c2"]["x"], 5000);
@@ -1064,7 +1065,7 @@ fn a_bezier_shape_round_trips_through_json_with_its_tagged_kind() {
 fn add_shape_rejects_a_short_polygon() {
     let m = net_model();
     let mut b = board(&m);
-    let shape = Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: true, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] };
+    let shape = Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: true, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] };
     let e = b.apply(&Cmd::AddShape { shape }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_shape");
 }
@@ -1073,23 +1074,23 @@ fn add_shape_rejects_a_short_polygon() {
 fn edit_shape_changes_layer_width_and_filled_but_not_geometry() {
     let m = net_model();
     let mut b = board(&m);
-    let shape = Shape::Rect { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) } };
+    let shape = Shape::Rect { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.0), y: mm(1.0) } };
     b.apply(&Cmd::AddShape { shape }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
 
-    b.apply(&Cmd::EditShape { id: id.clone(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(300_000), filled: true }).unwrap();
+    b.apply(&Cmd::EditShape { id: id.clone(), layer: "F.Fab".into(), stroke_width: mm(0.3), filled: true }).unwrap();
     let s = &b.design().drawings.as_ref().unwrap().shapes[0];
     assert_eq!(s.layer(), "F.Fab");
-    assert_eq!(s.points(), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }], "EditShape never touches geometry");
+    assert_eq!(s.points(), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: mm(1.0) }], "EditShape never touches geometry");
     let Shape::Rect { stroke_width, filled, .. } = s else { panic!("still a rect") };
-    assert_eq!((*stroke_width, *filled), (Nm::from_raw_shim(300_000), true));
+    assert_eq!((*stroke_width, *filled), (mm(0.3), true));
 
-    let e = b.apply(&Cmd::EditShape { id: id.clone(), layer: "".into(), stroke_width: Nm::from_raw_shim(300_000), filled: true }).unwrap_err();
+    let e = b.apply(&Cmd::EditShape { id: id.clone(), layer: "".into(), stroke_width: mm(0.3), filled: true }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_shape");
     let e = b.apply(&Cmd::EditShape { id, layer: "F.Fab".into(), stroke_width: Nm::ZERO, filled: true }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_shape");
 
-    assert_eq!(b.apply(&Cmd::EditShape { id: "shape_nope".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false }).unwrap_err()[0].check, "ops_unknown_shape");
+    assert_eq!(b.apply(&Cmd::EditShape { id: "shape_nope".into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false }).unwrap_err()[0].check, "ops_unknown_shape");
 }
 
 // --------------------------------------------------------------- text
@@ -1098,12 +1099,12 @@ fn edit_shape_changes_layer_width_and_filled_but_not_geometry() {
 fn add_edit_move_delete_text() {
     let m = net_model();
     let mut b = board(&m);
-    let text = Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false };
+    let text = Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Center, mirror: false };
     b.apply(&Cmd::AddText { text }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
     assert!(!id.is_empty());
 
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(1_200_000), stroke_width: Nm::from_raw_shim(200_000), justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.2), stroke_width: mm(0.2), justify: TextJustify::Left, mirror: true }).unwrap();
     let t = &b.design().drawings.as_ref().unwrap().texts[0];
     assert_eq!(t.content, "REV B");
     assert_eq!(t.layer, "F.Fab");
@@ -1111,12 +1112,12 @@ fn add_edit_move_delete_text() {
     assert!(t.mirror);
     assert_eq!(t.id, id, "editing style must not move the id");
 
-    b.apply(&Cmd::MoveText { id: id.clone(), x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(4_000_000) }).unwrap();
-    assert_eq!(b.design().drawings.as_ref().unwrap().texts[0].at, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::from_raw_shim(4_000_000) });
+    b.apply(&Cmd::MoveText { id: id.clone(), x: mm(4.0), y: mm(4.0) }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().texts[0].at, Point { x: mm(4.0), y: mm(4.0) });
 
     b.apply(&Cmd::DeleteText { id: id.clone() }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().texts.is_empty());
-    assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(100_000), stroke_width: Nm::from_raw_shim(10_000), justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
+    assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_nm: mm(0.1), stroke_width: mm(0.01), justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
 }
 
 /// What an imported board text kept beyond `Text`'s fields (`DrawingsSection::text_extras`) follows the text's verbs: it stays through an edit that leaves the size and the
@@ -1127,21 +1128,21 @@ fn a_texts_imported_looks_follow_its_edits_and_leave_with_it() {
     use eda_model::board_text::TextExtra;
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(125_000), justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.125), justify: TextJustify::Center, mirror: false } }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
     let mut d = b.design().clone();
-    d.drawings.as_mut().unwrap().text_extras = vec![TextExtra { id: id.clone(), width_nm: Some(Nm::from_raw_shim(800_000)), auto_thickness: true, bold: true, ..Default::default() }];
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    d.drawings.as_mut().unwrap().text_extras = vec![TextExtra { id: id.clone(), width_nm: Some(mm(0.8)), auto_thickness: true, bold: true, ..Default::default() }];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     let extra = |b: &Board| b.design().drawings.as_ref().unwrap().text_extra(&id).cloned();
 
     // The same size and stroke width: moved, turned, restyled otherwise, and the looks stay.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(125_000), justify: TextJustify::Left, mirror: true }).unwrap();
-    assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((Some(Nm::from_raw_shim(800_000)), true, true)));
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.0), stroke_width: mm(0.125), justify: TextJustify::Left, mirror: true }).unwrap();
+    assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((Some(mm(0.8)), true, true)));
     // A new size is square again.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(1_500_000), stroke_width: Nm::from_raw_shim(125_000), justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.5), stroke_width: mm(0.125), justify: TextJustify::Left, mirror: true }).unwrap();
     assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((None, true, true)));
     // A stroke width given is not the automatic one.
-    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(1_500_000), stroke_width: Nm::from_raw_shim(200_000), justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_nm: mm(1.5), stroke_width: mm(0.2), justify: TextJustify::Left, mirror: true }).unwrap();
     assert_eq!(extra(&b).map(|x| (x.width_nm, x.auto_thickness, x.bold)), Some((None, false, true)));
 
     b.apply(&Cmd::DeleteText { id: id.clone() }).unwrap();
@@ -1156,22 +1157,22 @@ fn the_global_text_edit_takes_the_imported_glyph_width_and_automatic_stroke_with
     let m = net_model();
     let mut b = board(&m);
     for content in ["one", "two", "three"] {
-        b.apply(&Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(125_000), justify: TextJustify::Center, mirror: false } }).unwrap();
+        b.apply(&Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.125), justify: TextJustify::Center, mirror: false } }).unwrap();
     }
     let ids: Vec<String> = b.design().drawings.as_ref().unwrap().texts.iter().map(|t| t.id.clone()).collect();
     let mut d = b.design().clone();
-    d.drawings.as_mut().unwrap().text_extras = ids.iter().map(|id| TextExtra { id: id.clone(), width_nm: Some(Nm::from_raw_shim(800_000)), auto_thickness: true, italic: true, ..Default::default() }).collect();
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    d.drawings.as_mut().unwrap().text_extras = ids.iter().map(|id| TextExtra { id: id.clone(), width_nm: Some(mm(0.8)), auto_thickness: true, italic: true, ..Default::default() }).collect();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     let edit = |ids: &[String], layer_defaults: bool, text_size: Option<Nm>, text_thickness: Option<Nm>| Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: ids.to_vec(), dimension_ids: vec![], layer_defaults, layer: None, line_width: None, text_size, text_thickness };
     let looks = |b: &Board, id: &str| b.design().drawings.as_ref().unwrap().text_extra(id).map(|x| (x.width_nm, x.auto_thickness, x.italic));
 
-    b.apply(&edit(&ids[..1], false, Some(Nm::from_raw_shim(1_500_000)), None)).unwrap();
+    b.apply(&edit(&ids[..1], false, Some(mm(1.5)), None)).unwrap();
     assert_eq!(looks(&b, &ids[0]), Some((None, true, true)), "a size: square again, the stroke width still automatic");
-    b.apply(&edit(&ids[1..2], false, None, Some(Nm::from_raw_shim(200_000)))).unwrap();
-    assert_eq!(looks(&b, &ids[1]), Some((Some(Nm::from_raw_shim(800_000)), false, true)), "a stroke width: not automatic, the glyph width stays");
+    b.apply(&edit(&ids[1..2], false, None, Some(mm(0.2)))).unwrap();
+    assert_eq!(looks(&b, &ids[1]), Some((Some(mm(0.8)), false, true)), "a stroke width: not automatic, the glyph width stays");
     b.apply(&edit(&ids[2..], true, None, None)).unwrap();
     assert_eq!(looks(&b, &ids[2]), Some((None, false, true)), "layer defaults: both, and what is not size or stroke stays");
-    assert_eq!(looks(&b, &ids[1]), Some((Some(Nm::from_raw_shim(800_000)), false, true)), "a text outside the selection is left alone");
+    assert_eq!(looks(&b, &ids[1]), Some((Some(mm(0.8)), false, true)), "a text outside the selection is left alone");
 }
 
 // ------------------------------------- global edit: text & graphics
@@ -1180,30 +1181,30 @@ fn the_global_text_edit_takes_the_imported_glyph_width_and_automatic_stroke_with
 fn edit_text_and_graphics_touches_only_the_fields_given() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO } } }).unwrap();
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REF".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.0), y: Nm::ZERO } } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REF".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Center, mirror: false } }).unwrap();
     let shape_id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
     let text_id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
 
     // Only a line-width change for the shape -- its layer must be untouched.
-    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: Some(Nm::from_raw_shim(250_000)), text_size: None, text_thickness: None }).unwrap();
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: Some(mm(0.25)), text_size: None, text_thickness: None }).unwrap();
     let dr = b.design().drawings.as_ref().unwrap();
     assert_eq!(dr.shapes[0].layer(), "F.SilkS");
     assert_eq!(dr.shapes[0].id(), shape_id, "a style edit must not move the id");
     match &dr.shapes[0] {
-        Shape::Segment { stroke_width, .. } => assert_eq!(*stroke_width, Nm::from_raw_shim(250_000)),
+        Shape::Segment { stroke_width, .. } => assert_eq!(*stroke_width, mm(0.25)),
         other => panic!("expected a Segment, got {other:?}"),
     }
 
     // Layer + text size/thickness for the text, same command touching both kinds at once.
-    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![text_id.clone()], dimension_ids: vec![], layer_defaults: false, layer: Some("F.Fab".into()), line_width: None, text_size: Some(Nm::from_raw_shim(1_200_000)), text_thickness: Some(Nm::from_raw_shim(200_000)) })
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![text_id.clone()], dimension_ids: vec![], layer_defaults: false, layer: Some("F.Fab".into()), line_width: None, text_size: Some(mm(1.2)), text_thickness: Some(mm(0.2)) })
         .unwrap();
     let dr = b.design().drawings.as_ref().unwrap();
     assert_eq!(dr.shapes[0].layer(), "F.Fab", "the shared `layer` field must still reach the shape on a mixed call");
     let t = dr.texts.iter().find(|t| t.id == text_id).unwrap();
     assert_eq!(t.layer, "F.Fab");
-    assert_eq!(t.size_nm, Nm::from_raw_shim(1_200_000));
-    assert_eq!(t.stroke_width, Nm::from_raw_shim(200_000));
+    assert_eq!(t.size_nm, mm(1.2));
+    assert_eq!(t.stroke_width, mm(0.2));
     assert_eq!(t.content, "REF", "content is not one of this command's fields");
 }
 
@@ -1217,7 +1218,7 @@ fn edit_text_and_graphics_refuses_empty_input_and_bad_values() {
     let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: Some(Nm::ZERO), text_size: None, text_thickness: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_shape");
 
-    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec!["x".into()], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: None, text_size: Some(Nm::from_raw_shim(-5000)), text_thickness: None }).unwrap_err();
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec!["x".into()], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: None, text_size: Some(um(-5.0)), text_thickness: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_text");
 }
 
@@ -1371,19 +1372,19 @@ fn removing_from_a_group_that_stays_above_two_members_keeps_it_alive() {
 #[test]
 fn only_part_edits_and_flip_clear_routing() {
     let copper_and_drawing_cmds = [
-        Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![] },
+        Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![] },
         Cmd::DeleteTrack { id: "x".into() },
-        Cmd::SetTrackWidth { id: "x".into(), width: Nm::from_raw_shim(200_000) },
-        Cmd::AddVia { net: "GND".into(), x: Nm::ZERO, y: Nm::ZERO, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() },
+        Cmd::SetTrackWidth { id: "x".into(), width: mm(0.2) },
+        Cmd::AddVia { net: "GND".into(), x: Nm::ZERO, y: Nm::ZERO, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() },
         Cmd::DeleteVia { id: "x".into() },
         Cmd::MoveVia { id: "x".into(), x: Nm::ZERO, y: Nm::ZERO },
         Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![] },
         Cmd::DeleteZone { id: "x".into() },
-        Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::ZERO, y: Nm::ZERO } } },
+        Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::ZERO, y: Nm::ZERO } } },
         Cmd::DeleteShape { id: "x".into() },
         Cmd::MoveShape { id: "x".into(), dx: Nm::ZERO, dy: Nm::ZERO },
-        Cmd::AddText { text: Text { id: String::new(), content: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(100_000), stroke_width: Nm::from_raw_shim(10_000), justify: TextJustify::Center, mirror: false } },
-        Cmd::EditText { id: "x".into(), content: String::new(), angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(100_000), stroke_width: Nm::from_raw_shim(10_000), justify: TextJustify::Center, mirror: false },
+        Cmd::AddText { text: Text { id: String::new(), content: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(0.1), stroke_width: mm(0.01), justify: TextJustify::Center, mirror: false } },
+        Cmd::EditText { id: "x".into(), content: String::new(), angle: 0, layer: "F.SilkS".into(), size_nm: mm(0.1), stroke_width: mm(0.01), justify: TextJustify::Center, mirror: false },
         Cmd::DeleteText { id: "x".into() },
         Cmd::MoveText { id: "x".into(), x: Nm::ZERO, y: Nm::ZERO },
         Cmd::Duplicate { ids: vec!["x".into()] },
@@ -1407,7 +1408,7 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::Rip { part: "U1".into() },
         Cmd::Flip { part: "U1".into() },
         Cmd::MoveExact { parts: vec!["U1".into()], dx: Nm::ZERO, dy: Nm::ZERO, rotate_millideg: 0, pivot: None },
-        Cmd::CreateArray { ids: vec!["U1".into()], geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: true, reannotate: true },
+        Cmd::CreateArray { ids: vec!["U1".into()], geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: mm(1.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: true, reannotate: true },
     ];
     for c in &part_edit_cmds {
         assert!(c.clears_routing(), "{c:?} must clear routing -- it can move a part out from under a track");
@@ -1420,11 +1421,11 @@ fn only_part_edits_and_flip_clear_routing() {
 fn duplicate_copies_a_track_via_zone_shape_and_text_with_fresh_ids() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap();
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }] }).unwrap();
-    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO } } }).unwrap();
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(5.0), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }] }).unwrap();
+    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.0), y: Nm::ZERO } } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Center, mirror: false } }).unwrap();
 
     let rt = b.design().routing.as_ref().unwrap();
     let (track_id, via_id, zone_id) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.zones[0].id.clone());
@@ -1446,12 +1447,12 @@ fn duplicate_copies_a_track_via_zone_shape_and_text_with_fresh_ids() {
     // this app commits move separately, so the backend verb's own job is
     // just the exact copy) but got its own, different id.
     let new_track = rt.tracks.iter().find(|t| t.id != track_id).unwrap();
-    assert_eq!(new_track.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }]);
+    assert_eq!(new_track.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }]);
     assert_ne!(new_track.id, track_id);
     assert!(!new_track.id.is_empty());
 
     let new_via = rt.vias.iter().find(|v| v.id != via_id).unwrap();
-    assert_eq!(new_via.at, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000) });
+    assert_eq!(new_via.at, Point { x: mm(5.0), y: mm(5.0) });
 
     let new_text = dr.texts.iter().find(|t| t.id != text_id).unwrap();
     assert_eq!(new_text.content, "REV A");
@@ -1474,7 +1475,7 @@ fn duplicate_rejects_an_empty_or_fully_unmatched_id_list() {
 fn duplicate_with_a_mix_of_known_and_unknown_ids_copies_only_the_known_ones() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap();
     let track_id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
 
     b.apply(&Cmd::Duplicate { ids: vec![track_id, "U1".into(), "nonexistent".into()] }).unwrap();
@@ -1485,8 +1486,8 @@ fn duplicate_with_a_mix_of_known_and_unknown_ids_copies_only_the_known_ones() {
 fn paste_items_inserts_fresh_copies_and_ignores_incoming_ids() {
     let m = net_model();
     let mut b = board(&m);
-    let track = Track { id: "stale-id-from-another-board".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }], arc_mid_offset: None };
-    let text = Text { id: "also-stale".into(), content: "PASTED".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false };
+    let track = Track { id: "stale-id-from-another-board".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(2.0), y: mm(2.0) }, Point { x: mm(3.0), y: mm(2.0) }], arc_mid_offset: None };
+    let text = Text { id: "also-stale".into(), content: "PASTED".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Center, mirror: false };
 
     b.apply(&Cmd::PasteItems { tracks: vec![track], vias: vec![], zones: vec![], shapes: vec![], texts: vec![text] }).unwrap();
 
@@ -1494,7 +1495,7 @@ fn paste_items_inserts_fresh_copies_and_ignores_incoming_ids() {
     assert_eq!(rt.tracks.len(), 1);
     assert_ne!(rt.tracks[0].id, "stale-id-from-another-board");
     assert!(!rt.tracks[0].id.is_empty());
-    assert_eq!(rt.tracks[0].pts, vec![Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(2_000_000) }]);
+    assert_eq!(rt.tracks[0].pts, vec![Point { x: mm(2.0), y: mm(2.0) }, Point { x: mm(3.0), y: mm(2.0) }]);
 
     let dr = b.design().drawings.as_ref().unwrap();
     assert_ne!(dr.texts[0].id, "also-stale");
@@ -1516,15 +1517,15 @@ fn paste_items_with_nothing_in_it_is_a_harmless_no_op() {
 fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(2.5), y: mm(-2.0) }, Point { x: mm(2.5), y: mm(2.0) }] }).unwrap();
     let old_id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
 
     b.apply(&Cmd::CommitRoute {
         remove_track_ids: vec![old_id.clone()],
         remove_via_ids: vec![],
         tracks: vec![
-            Track { id: "ignored".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }], arc_mid_offset: None },
-            Track { id: "ignored2".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, Point { x: Nm::from_raw_shim(2_200_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }], arc_mid_offset: None },
+            Track { id: "ignored".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }], arc_mid_offset: None },
+            Track { id: "ignored2".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(2.5), y: mm(-2.0) }, Point { x: mm(2.2), y: Nm::ZERO }, Point { x: mm(2.5), y: mm(2.0) }], arc_mid_offset: None },
         ],
         vias: vec![],
         lock_tracks: vec![],
@@ -1544,7 +1545,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
 fn commit_route_tolerates_an_already_gone_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
@@ -1552,7 +1553,7 @@ fn commit_route_tolerates_an_already_gone_id() {
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap_err();
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![] }).unwrap_err();
     assert!(!e.is_empty());
     assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
 }
@@ -1563,11 +1564,11 @@ fn commit_route_rejects_an_unknown_net() {
 fn move_exact_with_no_pivot_spins_a_single_part_in_place_around_its_own_anchor() {
     let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
     let mut b = board(&m);
-    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(10.0), y: mm(10.0) }).unwrap();
 
     b.apply(&Cmd::MoveExact { parts: vec!["U1".into()], dx: Nm::ZERO, dy: Nm::ZERO, rotate_millideg: 90_000, pivot: None }).unwrap();
     let pose = b.pose_of("U1").unwrap();
-    assert_eq!(pose.at, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, "no pivot given: rotating about its own anchor must not move it");
+    assert_eq!(pose.at, Point { x: mm(10.0), y: mm(10.0) }, "no pivot given: rotating about its own anchor must not move it");
     assert_eq!(pose.rot, 90_000);
 }
 
@@ -1575,14 +1576,14 @@ fn move_exact_with_no_pivot_spins_a_single_part_in_place_around_its_own_anchor()
 fn move_exact_translates_then_rotates_about_its_own_already_moved_anchor() {
     let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
     let mut b = board(&m);
-    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(10.0), y: mm(10.0) }).unwrap();
 
-    b.apply(&Cmd::MoveExact { parts: vec!["U1".into()], dx: Nm::from_raw_shim(5_000_000), dy: Nm::from_raw_shim(1_000_000), rotate_millideg: 45_000, pivot: None }).unwrap();
+    b.apply(&Cmd::MoveExact { parts: vec!["U1".into()], dx: mm(5.0), dy: mm(1.0), rotate_millideg: 45_000, pivot: None }).unwrap();
     let pose = b.pose_of("U1").unwrap();
     // Translation lands first, then the (pivot-less) rotation spins it in
     // place at that new position -- the position is exactly the
     // translation, regardless of the rotation angle.
-    assert_eq!(pose.at, Point { x: Nm::from_raw_shim(15_000_000), y: Nm::from_raw_shim(11_000_000) });
+    assert_eq!(pose.at, Point { x: mm(15.0), y: mm(11.0) });
     assert_eq!(pose.rot, 45_000);
 }
 
@@ -1594,12 +1595,12 @@ fn move_exact_with_a_shared_pivot_orbits_the_part_around_it() {
     // rotation around that pivot (this crate's rotation matrix: no
     // Y-axis flip, same as `to_board`) must swing it to due "south" of
     // the pivot in this app's Y-down board coordinates.
-    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(10_000_000) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(20.0), y: mm(10.0) }).unwrap();
 
-    b.apply(&Cmd::MoveExact { parts: vec!["U1".into()], dx: Nm::ZERO, dy: Nm::ZERO, rotate_millideg: 90_000, pivot: Some(Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }) }).unwrap();
+    b.apply(&Cmd::MoveExact { parts: vec!["U1".into()], dx: Nm::ZERO, dy: Nm::ZERO, rotate_millideg: 90_000, pivot: Some(Point { x: mm(10.0), y: mm(10.0) }) }).unwrap();
     let pose = b.pose_of("U1").unwrap();
-    assert_eq!(pose.at.x, Nm::from_raw_shim(10_000_000), "rotated 90 degrees around the pivot, the +10000 x offset becomes 0 relative to it (within rounding)");
-    assert_eq!(pose.at.y, Nm::from_raw_shim(20_000_000));
+    assert_eq!(pose.at.x, mm(10.0), "rotated 90 degrees around the pivot, the +10000 x offset becomes 0 relative to it (within rounding)");
+    assert_eq!(pose.at.y, mm(20.0));
     assert_eq!(pose.rot, 90_000, "orientation still turns by the same angle regardless of the pivot choice");
 }
 
@@ -1607,12 +1608,12 @@ fn move_exact_with_a_shared_pivot_orbits_the_part_around_it() {
 fn move_exact_applies_the_same_translation_and_angle_to_every_part_in_the_batch() {
     let m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[], vec![]);
     let mut b = board(&m);
-    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }).unwrap();
-    b.apply(&Cmd::PlaceAt { part: "U2".into(), x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(10_000_000) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(10.0), y: mm(10.0) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "U2".into(), x: mm(30.0), y: mm(10.0) }).unwrap();
 
-    b.apply(&Cmd::MoveExact { parts: vec!["U1".into(), "U2".into()], dx: Nm::from_raw_shim(1_000_000), dy: Nm::from_raw_shim(2_000_000), rotate_millideg: 90_000, pivot: None }).unwrap();
-    assert_eq!(b.pose_of("U1").unwrap().at, Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(12_000_000) });
-    assert_eq!(b.pose_of("U2").unwrap().at, Point { x: Nm::from_raw_shim(31_000_000), y: Nm::from_raw_shim(12_000_000) });
+    b.apply(&Cmd::MoveExact { parts: vec!["U1".into(), "U2".into()], dx: mm(1.0), dy: mm(2.0), rotate_millideg: 90_000, pivot: None }).unwrap();
+    assert_eq!(b.pose_of("U1").unwrap().at, Point { x: mm(11.0), y: mm(12.0) });
+    assert_eq!(b.pose_of("U2").unwrap().at, Point { x: mm(31.0), y: mm(12.0) });
     assert_eq!(b.pose_of("U1").unwrap().rot, 90_000);
     assert_eq!(b.pose_of("U2").unwrap().rot, 90_000);
 }
@@ -1621,11 +1622,11 @@ fn move_exact_applies_the_same_translation_and_angle_to_every_part_in_the_batch(
 fn move_exact_refuses_an_unplaced_or_unknown_part_without_moving_the_others() {
     let m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[], vec![]);
     let mut b = board(&m);
-    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(10.0), y: mm(10.0) }).unwrap();
     // U2 is never placed.
-    let e = b.apply(&Cmd::MoveExact { parts: vec!["U1".into(), "U2".into()], dx: Nm::from_raw_shim(1_000_000), dy: Nm::ZERO, rotate_millideg: 0, pivot: None }).unwrap_err();
+    let e = b.apply(&Cmd::MoveExact { parts: vec!["U1".into(), "U2".into()], dx: mm(1.0), dy: Nm::ZERO, rotate_millideg: 0, pivot: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_not_placed");
-    assert_eq!(b.pose_of("U1").unwrap().at, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }, "the whole batch refuses atomically -- U1 must not have moved either");
+    assert_eq!(b.pose_of("U1").unwrap().at, Point { x: mm(10.0), y: mm(10.0) }, "the whole batch refuses atomically -- U1 must not have moved either");
 }
 
 #[test]
@@ -1644,7 +1645,7 @@ fn fp_pad(number: &str, x: Nm, y: Nm) -> LibraryPad {
         number: number.into(),
         at: Point { x, y },
         offset: Point { x: Nm::ZERO, y: Nm::ZERO },
-        size: (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)),
+        size: (mm(1.0), mm(1.0)),
         shape: eda_model::ir::LibraryPadShape::RoundRect,
         kind: eda_model::PadKind::Smd,
         drill: None,
@@ -1745,7 +1746,7 @@ fn add_pad_rejects_a_zero_sized_pad() {
     let mut b = board(&m);
     b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
     let mut pad = fp_pad("1", Nm::ZERO, Nm::ZERO);
-    pad.size = (Nm::ZERO, Nm::from_raw_shim(1_000_000));
+    pad.size = (Nm::ZERO, mm(1.0));
     let e = b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_pad");
 }
@@ -1770,10 +1771,10 @@ fn move_rotate_and_delete_pad_round_trip_by_id() {
     b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", Nm::ZERO, Nm::ZERO) }).unwrap();
     let id = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads[0].id.clone();
 
-    b.apply(&Cmd::MovePad { footprint: "Test:FP".into(), id: id.clone(), x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(-500_000) }).unwrap();
+    b.apply(&Cmd::MovePad { footprint: "Test:FP".into(), id: id.clone(), x: mm(0.5), y: mm(-0.5) }).unwrap();
     b.apply(&Cmd::RotatePad { footprint: "Test:FP".into(), id: id.clone(), quarter_turns: 1 }).unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
-    assert_eq!(fp.pads[0].at, Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(-500_000) });
+    assert_eq!(fp.pads[0].at, Point { x: mm(0.5), y: mm(-0.5) });
     assert_eq!(fp.pads[0].rot, 90_000);
 
     b.apply(&Cmd::DeletePad { footprint: "Test:FP".into(), id }).unwrap();
@@ -1801,13 +1802,13 @@ fn edit_pad_replaces_every_field_but_keeps_the_id() {
     b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", Nm::ZERO, Nm::ZERO) }).unwrap();
     let id = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads[0].id.clone();
 
-    let mut edited = fp_pad("1A", Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(2_000_000));
-    edited.size = (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(3_000_000));
+    let mut edited = fp_pad("1A", mm(1.0), mm(2.0));
+    edited.size = (mm(2.0), mm(3.0));
     b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: id.clone(), pad: edited }).unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
     assert_eq!(fp.pads[0].id, id, "the id names which pad to replace -- it never changes underneath the caller");
     assert_eq!(fp.pads[0].number, "1A");
-    assert_eq!(fp.pads[0].size, (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(3_000_000)));
+    assert_eq!(fp.pads[0].size, (mm(2.0), mm(3.0)));
 }
 
 #[test]
@@ -1829,14 +1830,14 @@ fn push_pad_properties_only_touches_filtered_matches() {
     b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
     // Pad 1 (source): round, SMD. Pad 2: round, SMD (matches). Pad 3: rotated 90 (orientation mismatch).
     b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", Nm::ZERO, Nm::ZERO) }).unwrap();
-    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("2", Nm::from_raw_shim(1_000_000), Nm::ZERO) }).unwrap();
-    let mut pad3 = fp_pad("3", Nm::from_raw_shim(2_000_000), Nm::ZERO);
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("2", mm(1.0), Nm::ZERO) }).unwrap();
+    let mut pad3 = fp_pad("3", mm(2.0), Nm::ZERO);
     pad3.rot = 90_000;
     b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: pad3 }).unwrap();
 
     let ids: Vec<String> = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads.iter().map(|p| p.id.clone()).collect();
     // Change pad 1's size, then push with the orientation filter on.
-    b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: ids[0].clone(), pad: { let mut p = fp_pad("1", Nm::ZERO, Nm::ZERO); p.size = (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(3_000_000)); p } }).unwrap();
+    b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: ids[0].clone(), pad: { let mut p = fp_pad("1", Nm::ZERO, Nm::ZERO); p.size = (mm(3.0), mm(3.0)); p } }).unwrap();
     b.apply(&Cmd::PushPadProperties {
         footprint: "Test:FP".into(),
         source_pad_id: ids[0].clone(),
@@ -1849,8 +1850,8 @@ fn push_pad_properties_only_touches_filtered_matches() {
 
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
     let by_id = |id: &str| fp.pads.iter().find(|p| p.id == id).unwrap();
-    assert_eq!(by_id(&ids[1]).size, (Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(3_000_000)), "pad 2 shares the source's orientation (0) -- it must receive the push");
-    assert_eq!(by_id(&ids[2]).size, (Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), "pad 3 is rotated 90 degrees -- the orientation filter must exclude it");
+    assert_eq!(by_id(&ids[1]).size, (mm(3.0), mm(3.0)), "pad 2 shares the source's orientation (0) -- it must receive the push");
+    assert_eq!(by_id(&ids[2]).size, (mm(1.0), mm(1.0)), "pad 3 is rotated 90 degrees -- the orientation filter must exclude it");
     assert_eq!(by_id(&ids[2]).number, "3", "push never touches number/position");
 }
 
@@ -1861,16 +1862,16 @@ fn renumber_pads_orders_by_position_not_by_current_number() {
     b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
     // Placed right-to-left but numbered in placement order (1, 2, 3) --
     // a reading-order renumber must reverse them to (10, 11, 12).
-    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", Nm::from_raw_shim(4_000_000), Nm::ZERO) }).unwrap();
-    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("2", Nm::from_raw_shim(2_000_000), Nm::ZERO) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", mm(4.0), Nm::ZERO) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("2", mm(2.0), Nm::ZERO) }).unwrap();
     b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("3", Nm::ZERO, Nm::ZERO) }).unwrap();
 
     b.apply(&Cmd::RenumberPads { footprint: "Test:FP".into(), start: 10, prefix: String::new(), step: 1 }).unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
     let at_x = |x: Nm| fp.pads.iter().find(|p| p.at.x == x).unwrap().number.clone();
     assert_eq!(at_x(Nm::ZERO), "10");
-    assert_eq!(at_x(Nm::from_raw_shim(2_000_000)), "11");
-    assert_eq!(at_x(Nm::from_raw_shim(4_000_000)), "12");
+    assert_eq!(at_x(mm(2.0)), "11");
+    assert_eq!(at_x(mm(4.0)), "12");
 }
 
 #[test]
@@ -1878,21 +1879,21 @@ fn set_footprint_anchor_translates_every_pad_graphic_and_text_so_the_click_point
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
-    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", mm(1.0), mm(1.0)) }).unwrap();
     b.apply(&Cmd::AddFootprintGraphic {
         footprint: "Test:FP".into(),
-        shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) }, end: Point { x: Nm::from_raw_shim(2_000_000), y: Nm::from_raw_shim(1_000_000) } },
+        shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.1), filled: false, start: Point { x: mm(1.0), y: mm(1.0) }, end: Point { x: mm(2.0), y: mm(1.0) } },
     })
     .unwrap();
-    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "REF**".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(500_000) }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false } })
+    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "REF**".into(), at: Point { x: mm(1.0), y: mm(0.5) }, angle: 0, layer: "F.SilkS".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Center, mirror: false } })
         .unwrap();
 
-    b.apply(&Cmd::SetFootprintAnchor { name: "Test:FP".into(), at: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) } }).unwrap();
+    b.apply(&Cmd::SetFootprintAnchor { name: "Test:FP".into(), at: Point { x: mm(1.0), y: mm(1.0) } }).unwrap();
 
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
     assert_eq!(fp.pads[0].at, Point { x: Nm::ZERO, y: Nm::ZERO }, "the clicked point is now the origin");
     assert_eq!(fp.graphics[0].points()[0], Point { x: Nm::ZERO, y: Nm::ZERO });
-    assert_eq!(fp.texts[0].at, Point { x: Nm::ZERO, y: Nm::from_raw_shim(-500_000) });
+    assert_eq!(fp.texts[0].at, Point { x: Nm::ZERO, y: mm(-0.5) });
 }
 
 #[test]
@@ -2010,28 +2011,28 @@ fn footprint_graphic_and_text_add_move_edit_delete_round_trip() {
     b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
     b.apply(&Cmd::AddFootprintGraphic {
         footprint: "Test:FP".into(),
-        shape: Shape::Rect { id: "ignored".into(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000) } },
+        shape: Shape::Rect { id: "ignored".into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.0), y: mm(1.0) } },
     })
     .unwrap();
     let gid = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().graphics[0].id().to_string();
     assert_ne!(gid, "ignored");
-    b.apply(&Cmd::MoveFootprintGraphic { footprint: "Test:FP".into(), id: gid.clone(), dx: Nm::from_raw_shim(10_000), dy: Nm::from_raw_shim(20_000) }).unwrap();
-    b.apply(&Cmd::EditFootprintGraphic { footprint: "Test:FP".into(), id: gid.clone(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(200_000), filled: true }).unwrap();
+    b.apply(&Cmd::MoveFootprintGraphic { footprint: "Test:FP".into(), id: gid.clone(), dx: mm(0.01), dy: mm(0.02) }).unwrap();
+    b.apply(&Cmd::EditFootprintGraphic { footprint: "Test:FP".into(), id: gid.clone(), layer: "F.SilkS".into(), stroke_width: mm(0.2), filled: true }).unwrap();
     {
         let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
         assert_eq!(fp.graphics[0].layer(), "F.SilkS");
-        assert_eq!(fp.graphics[0].points()[0], Point { x: Nm::from_raw_shim(10_000), y: Nm::from_raw_shim(20_000) });
+        assert_eq!(fp.graphics[0].points()[0], Point { x: mm(0.01), y: mm(0.02) });
     }
     b.apply(&Cmd::DeleteFootprintGraphic { footprint: "Test:FP".into(), id: gid }).unwrap();
     assert!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().graphics.is_empty());
 
-    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "VAL**".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Fab".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "VAL**".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Fab".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Center, mirror: false } }).unwrap();
     let tid = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().texts[0].id.clone();
-    b.apply(&Cmd::MoveFootprintText { footprint: "Test:FP".into(), id: tid.clone(), x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(500_000) }).unwrap();
-    b.apply(&Cmd::EditFootprintText { footprint: "Test:FP".into(), id: tid.clone(), content: "V2".into(), angle: 900, layer: "F.SilkS".into(), size_nm: Nm::from_raw_shim(800_000), stroke_width: Nm::from_raw_shim(120_000), justify: TextJustify::Left, mirror: true }).unwrap();
+    b.apply(&Cmd::MoveFootprintText { footprint: "Test:FP".into(), id: tid.clone(), x: mm(0.5), y: mm(0.5) }).unwrap();
+    b.apply(&Cmd::EditFootprintText { footprint: "Test:FP".into(), id: tid.clone(), content: "V2".into(), angle: 900, layer: "F.SilkS".into(), size_nm: mm(0.8), stroke_width: mm(0.12), justify: TextJustify::Left, mirror: true }).unwrap();
     {
         let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
-        assert_eq!(fp.texts[0].at, Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(500_000) });
+        assert_eq!(fp.texts[0].at, Point { x: mm(0.5), y: mm(0.5) });
         assert_eq!(fp.texts[0].content, "V2");
         assert!(fp.texts[0].mirror);
     }
@@ -2063,14 +2064,14 @@ fn add_symbol_places_additional_units_of_an_existing_reference() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     add_unit(&mut b, "U1", 1, Nm::ZERO);
-    add_unit(&mut b, "U1", 2, Nm::from_raw_shim(50_000_000));
+    add_unit(&mut b, "U1", 2, mm(50.0));
     let sch = b.design().schematic.as_ref().unwrap();
     assert_eq!(sch.symbols.len(), 2);
     assert!(sch.symbols.iter().all(|s| s.id == "U1"));
     let units: std::collections::BTreeSet<u32> = sch.symbols.iter().map(|s| s.unit).collect();
     assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
 
-    let e = b.apply(&Cmd::AddSymbol { id: "U1".into(), lib_id: "test:DUAL".into(), at: Point { x: Nm::from_raw_shim(99_000_000), y: Nm::ZERO }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }).unwrap_err();
+    let e = b.apply(&Cmd::AddSymbol { id: "U1".into(), lib_id: "test:DUAL".into(), at: Point { x: mm(99.0), y: Nm::ZERO }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }).unwrap_err();
     assert_eq!(e[0].check, "ops_duplicate_symbol");
 }
 
@@ -2084,17 +2085,17 @@ fn per_instance_verbs_require_a_unit_once_more_than_one_is_placed() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     add_unit(&mut b, "U1", 1, Nm::ZERO);
-    add_unit(&mut b, "U1", 2, Nm::from_raw_shim(50_000_000));
+    add_unit(&mut b, "U1", 2, mm(50.0));
 
-    let e = b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000), unit: None }).unwrap_err();
+    let e = b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: mm(1.0), y: mm(1.0), unit: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_ambiguous_symbol");
 
-    b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000), unit: Some(2) }).unwrap();
+    b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: mm(1.0), y: mm(2.0), unit: Some(2) }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     let unit1 = sch.symbols.iter().find(|s| s.unit == 1).unwrap();
     let unit2 = sch.symbols.iter().find(|s| s.unit == 2).unwrap();
     assert_eq!(unit1.at, Point { x: Nm::ZERO, y: Nm::ZERO }, "unit 1 untouched by a move scoped to unit 2");
-    assert_eq!(unit2.at, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) });
+    assert_eq!(unit2.at, Point { x: mm(1.0), y: mm(2.0) });
 
     b.apply(&Cmd::RotateSymbol { id: "U1".into(), quarter_turns: 1, unit: Some(1) }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
@@ -2114,8 +2115,8 @@ fn per_instance_verbs_with_no_unit_still_work_for_a_single_unit_part() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     add_unit(&mut b, "U1", 1, Nm::ZERO);
-    b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(6_000_000), unit: None }).unwrap();
-    assert_eq!(b.design().schematic.as_ref().unwrap().symbols[0].at, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(6_000_000) });
+    b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: mm(5.0), y: mm(6.0), unit: None }).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().symbols[0].at, Point { x: mm(5.0), y: mm(6.0) });
 }
 
 /// Reference/Value/Footprint/Datasheet are part-wide: editing or renaming
@@ -2125,7 +2126,7 @@ fn edit_and_rename_apply_to_every_unit_together() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     add_unit(&mut b, "U1", 1, Nm::ZERO);
-    add_unit(&mut b, "U1", 2, Nm::from_raw_shim(50_000_000));
+    add_unit(&mut b, "U1", 2, mm(50.0));
 
     b.apply(&Cmd::EditSymbolFields { id: "U1".into(), value: Some("74HC00".into()), footprint: None, datasheet: None }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
@@ -2151,14 +2152,14 @@ fn a_junction_is_added_once_per_point_deleted_by_id_and_belongs_to_the_schematic
     let mut b = board(&m);
     assert_eq!(Cmd::AddJunction { at: p(Nm::ZERO, Nm::ZERO) }.domain(), Domain::Schematic);
     assert_eq!(Cmd::DeleteJunction { id: "x".into() }.domain(), Domain::Schematic);
-    b.apply(&Cmd::AddJunction { at: p(Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(5_080_000)) }).unwrap();
+    b.apply(&Cmd::AddJunction { at: p(mm(2.54), mm(5.08)) }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     assert_eq!(sch.junctions.len(), 1);
     assert!(sch.junctions[0].id.starts_with("jct_"), "{}", sch.junctions[0].id);
     // a second one at the same point is a no-op in source (a click on a junction does nothing): refused here so undo never records nothing
-    assert_eq!(b.apply(&Cmd::AddJunction { at: p(Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(5_080_000)) }).unwrap_err()[0].check, "ops_junction_exists");
+    assert_eq!(b.apply(&Cmd::AddJunction { at: p(mm(2.54), mm(5.08)) }).unwrap_err()[0].check, "ops_junction_exists");
     b.apply(&Cmd::AddJunction { at: p(Nm::ZERO, Nm::ZERO) }).unwrap();
-    let id = b.design().schematic.as_ref().unwrap().junctions.iter().find(|j| j.at == p(Nm::from_raw_shim(2_540_000), Nm::from_raw_shim(5_080_000))).unwrap().id.clone();
+    let id = b.design().schematic.as_ref().unwrap().junctions.iter().find(|j| j.at == p(mm(2.54), mm(5.08))).unwrap().id.clone();
     b.apply(&Cmd::DeleteJunction { id: id.clone() }).unwrap();
     assert_eq!(b.design().schematic.as_ref().unwrap().junctions.len(), 1);
     assert_eq!(b.apply(&Cmd::DeleteJunction { id }).unwrap_err()[0].check, "ops_unknown_junction");
@@ -2169,15 +2170,15 @@ fn a_graphic_line_needs_two_points_and_a_sane_width() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(Nm::ZERO, Nm::ZERO)], width_nm: Nm::ZERO }).unwrap_err()[0].check, "ops_bad_line");
-    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000), Nm::ZERO)], width_nm: Nm::from_raw_shim(-1) }).unwrap_err()[0].check, "ops_bad_line");
+    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(0.01), Nm::ZERO)], width_nm: Nm::new(-1) }).unwrap_err()[0].check, "ops_bad_line");
     // a line whose points all coincide has no segment left once zero-length ones are dropped
-    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(Nm::from_raw_shim(5000), Nm::from_raw_shim(5000)), p(Nm::from_raw_shim(5000), Nm::from_raw_shim(5000))], width_nm: Nm::ZERO }).unwrap_err()[0].check, "ops_bad_line");
+    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(um(5.0), um(5.0)), p(um(5.0), um(5.0))], width_nm: Nm::ZERO }).unwrap_err()[0].check, "ops_bad_line");
     // a double-click lands its last point twice: the repeat is dropped
-    b.apply(&Cmd::AddSchLine { pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::ZERO), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000)), p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(5_000_000))], width_nm: Nm::from_raw_shim(254_000) }).unwrap();
+    b.apply(&Cmd::AddSchLine { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(5.0)), p(mm(10.0), mm(5.0))], width_nm: mm(0.254) }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     assert_eq!(sch.lines.len(), 1);
     assert_eq!(sch.lines[0].pts.len(), 3);
-    assert_eq!(sch.lines[0].width_nm, Nm::from_raw_shim(254_000));
+    assert_eq!(sch.lines[0].width_nm, mm(0.254));
     assert!(sch.lines[0].id.starts_with("sln_"), "{}", sch.lines[0].id);
     assert!(sch.wires.is_empty(), "a notes-layer line is never a wire");
     let id = sch.lines[0].id.clone();
@@ -2190,16 +2191,16 @@ fn a_graphic_line_needs_two_points_and_a_sane_width() {
 fn a_new_sheet_gets_its_own_empty_screen_and_a_shared_file_is_reused() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
-    b.apply(&Cmd::AddSheet { name: "Power".into(), file: "power".into(), at: p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), size: (Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)) }).unwrap();
+    b.apply(&Cmd::AddSheet { name: "Power".into(), file: "power".into(), at: p(mm(10.0), mm(10.0)), size: (mm(30.0), mm(20.0)) }).unwrap();
     let d = b.design();
     let sheet = &d.schematic.as_ref().unwrap().sheets[0];
-    assert_eq!((sheet.name.as_str(), sheet.file.as_str(), sheet.size), ("Power", "power.kicad_sch", (Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000))), "the extension is added");
+    assert_eq!((sheet.name.as_str(), sheet.file.as_str(), sheet.size), ("Power", "power.kicad_sch", (mm(30.0), mm(20.0))), "the extension is added");
     assert!(sheet.id.starts_with("sheet_"), "{}", sheet.id);
     let screens = d.sheet_contents.as_ref().expect("a screen for the new file");
     assert!(screens.get("power.kicad_sch").unwrap().symbols.is_empty());
 
     // a second placement of the same file shares the screen (and keeps what is already drawn on it)
-    b.apply(&Cmd::AddSheet { name: "Power 2".into(), file: "power.kicad_sch".into(), at: p(Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(10_000_000)), size: (Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)) }).unwrap();
+    b.apply(&Cmd::AddSheet { name: "Power 2".into(), file: "power.kicad_sch".into(), at: p(mm(50.0), mm(10.0)), size: (mm(30.0), mm(20.0)) }).unwrap();
     assert_eq!(b.design().sheet_contents.as_ref().unwrap().len(), 1, "same file, same screen");
     assert_eq!(b.design().schematic.as_ref().unwrap().sheets.len(), 2);
 }
@@ -2209,12 +2210,12 @@ fn a_sheet_is_refused_without_a_name_with_a_folder_in_its_file_with_a_taken_name
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     let add = |name: &str, file: &str, size: (Nm, Nm)| Cmd::AddSheet { name: name.into(), file: file.into(), at: p(Nm::ZERO, Nm::ZERO), size };
-    assert_eq!(b.apply(&add("", "a", (Nm::from_raw_shim(1), Nm::from_raw_shim(1)))).unwrap_err()[0].check, "ops_bad_sheet");
-    assert_eq!(b.apply(&add("S", "", (Nm::from_raw_shim(1), Nm::from_raw_shim(1)))).unwrap_err()[0].check, "ops_bad_sheet");
-    assert_eq!(b.apply(&add("S", "sub/a.kicad_sch", (Nm::from_raw_shim(1), Nm::from_raw_shim(1)))).unwrap_err()[0].check, "ops_bad_sheet");
-    assert_eq!(b.apply(&add("S", "a", (Nm::ZERO, Nm::from_raw_shim(5_000_000)))).unwrap_err()[0].check, "ops_bad_sheet");
-    b.apply(&add("S", "a", (Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)))).unwrap();
-    assert_eq!(b.apply(&add("S", "b", (Nm::from_raw_shim(5_000_000), Nm::from_raw_shim(5_000_000)))).unwrap_err()[0].check, "ops_sheet_name_taken");
+    assert_eq!(b.apply(&add("", "a", (Nm::new(1), Nm::new(1)))).unwrap_err()[0].check, "ops_bad_sheet");
+    assert_eq!(b.apply(&add("S", "", (Nm::new(1), Nm::new(1)))).unwrap_err()[0].check, "ops_bad_sheet");
+    assert_eq!(b.apply(&add("S", "sub/a.kicad_sch", (Nm::new(1), Nm::new(1)))).unwrap_err()[0].check, "ops_bad_sheet");
+    assert_eq!(b.apply(&add("S", "a", (Nm::ZERO, mm(5.0)))).unwrap_err()[0].check, "ops_bad_sheet");
+    b.apply(&add("S", "a", (mm(5.0), mm(5.0)))).unwrap();
+    assert_eq!(b.apply(&add("S", "b", (mm(5.0), mm(5.0)))).unwrap_err()[0].check, "ops_sheet_name_taken");
 }
 
 fn place_sym(b: &mut Board<'_>, id: &str, lib_id: &str, at: Point, rot: Millideg) {
@@ -2225,41 +2226,41 @@ fn place_sym(b: &mut Board<'_>, id: &str, lib_id: &str, at: Point, rot: Millideg
 fn swap_exchanges_positions_and_the_orientation_only_for_the_same_library_symbol() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
-    place_sym(&mut b, "R1", "Device:R", p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), 0);
-    place_sym(&mut b, "R2", "Device:R", p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)), 90_000);
-    place_sym(&mut b, "D1", "Device:LED", p(Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(30_000_000)), 180_000);
+    place_sym(&mut b, "R1", "Device:R", p(mm(10.0), mm(10.0)), 0);
+    place_sym(&mut b, "R2", "Device:R", p(mm(30.0), mm(20.0)), 90_000);
+    place_sym(&mut b, "D1", "Device:LED", p(mm(50.0), mm(30.0)), 180_000);
     b.apply(&Cmd::SwapSchItems { a: "R1".into(), b: "R2".into() }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     let get = |id: &str| sch.symbols.iter().find(|s| s.id == id).unwrap();
-    assert_eq!((get("R1").at, get("R1").rot), (p(Nm::from_raw_shim(30_000_000), Nm::from_raw_shim(20_000_000)), 90_000), "R1 takes R2's place and orientation");
-    assert_eq!((get("R2").at, get("R2").rot), (p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), 0));
+    assert_eq!((get("R1").at, get("R1").rot), (p(mm(30.0), mm(20.0)), 90_000), "R1 takes R2's place and orientation");
+    assert_eq!((get("R2").at, get("R2").rot), (p(mm(10.0), mm(10.0)), 0));
     // a resistor and an LED: positions swap, orientations stay (different default orientations)
     b.apply(&Cmd::SwapSchItems { a: "R2".into(), b: "D1".into() }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     let get = |id: &str| sch.symbols.iter().find(|s| s.id == id).unwrap();
-    assert_eq!((get("R2").at, get("R2").rot), (p(Nm::from_raw_shim(50_000_000), Nm::from_raw_shim(30_000_000)), 0));
-    assert_eq!((get("D1").at, get("D1").rot), (p(Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), 180_000));
+    assert_eq!((get("R2").at, get("R2").rot), (p(mm(50.0), mm(30.0)), 0));
+    assert_eq!((get("D1").at, get("D1").rot), (p(mm(10.0), mm(10.0)), 180_000));
 }
 
 #[test]
 fn swap_reaches_labels_texts_and_power_symbols_and_a_chain_rotates_the_positions() {
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
-    b.apply(&Cmd::AddLabel { net: "A".into(), at: p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), kind: LabelKind::Local }).unwrap();
-    b.apply(&Cmd::AddSchText { content: "note".into(), at: p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_000_000)), angle_millideg: 0, size_nm: Nm::from_raw_shim(1_270_000) }).unwrap();
-    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(3_000_000)), rot_millideg: 0, net: "GND".into(), pin: "1".into() }).unwrap();
+    b.apply(&Cmd::AddLabel { net: "A".into(), at: p(mm(1.0), mm(1.0)), kind: LabelKind::Local }).unwrap();
+    b.apply(&Cmd::AddSchText { content: "note".into(), at: p(mm(2.0), mm(2.0)), angle_millideg: 0, size_nm: mm(1.27) }).unwrap();
+    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(mm(3.0), mm(3.0)), rot_millideg: 0, net: "GND".into(), pin: "1".into() }).unwrap();
     // labels and texts get their ids when the design is next loaded (`board::load`'s back-fill) -- do that here
     let mut d = b.into_design();
     d.assign_missing_ids();
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     let sch = b.design().schematic.as_ref().unwrap();
     let (lbl, txt, pwr) = (sch.labels[0].id.clone(), sch.texts[0].id.clone(), sch.power_symbols[0].id.clone());
     // sorted = [label, text, power]: swap(label, text), then swap(text, power) -- Swap's own loop over `sorted[i]`, `sorted[i + 1]`
     b.apply(&Cmd::Batch { cmds: vec![Cmd::SwapSchItems { a: lbl.clone(), b: txt.clone() }, Cmd::SwapSchItems { a: txt.clone(), b: pwr.clone() }] }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
-    assert_eq!(sch.labels[0].at, p(Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(2_000_000)), "label takes the text's place");
-    assert_eq!(sch.texts[0].at, p(Nm::from_raw_shim(3_000_000), Nm::from_raw_shim(3_000_000)), "text takes the power symbol's");
-    assert_eq!(sch.power_symbols[0].at, p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(1_000_000)), "power symbol ends where the label started");
+    assert_eq!(sch.labels[0].at, p(mm(2.0), mm(2.0)), "label takes the text's place");
+    assert_eq!(sch.texts[0].at, p(mm(3.0), mm(3.0)), "text takes the power symbol's");
+    assert_eq!(sch.power_symbols[0].at, p(mm(1.0), mm(1.0)), "power symbol ends where the label started");
 }
 
 #[test]
@@ -2267,8 +2268,8 @@ fn swap_refuses_the_same_item_twice_unknown_ids_and_an_ambiguous_multi_unit_refe
     let m = model(vec![], &[], vec![]);
     let mut b = board(&m);
     add_unit(&mut b, "U1", 1, Nm::ZERO);
-    add_unit(&mut b, "U1", 2, Nm::from_raw_shim(50_000_000));
-    place_sym(&mut b, "R1", "Device:R", p(Nm::from_raw_shim(1), Nm::from_raw_shim(1)), 0);
+    add_unit(&mut b, "U1", 2, mm(50.0));
+    place_sym(&mut b, "R1", "Device:R", p(Nm::new(1), Nm::new(1)), 0);
     assert_eq!(b.apply(&Cmd::SwapSchItems { a: "R1".into(), b: "R1".into() }).unwrap_err()[0].check, "ops_bad_swap");
     assert_eq!(b.apply(&Cmd::SwapSchItems { a: "R1".into(), b: "nope".into() }).unwrap_err()[0].check, "ops_unknown_item");
     assert_eq!(b.apply(&Cmd::SwapSchItems { a: "R1".into(), b: "U1".into() }).unwrap_err()[0].check, "ops_ambiguous_symbol");
@@ -2297,7 +2298,7 @@ fn aligned_dim(start: Point, end: Point) -> Dimension {
     Dimension {
         id: String::new(),
         layer: "Dwgs.User".into(),
-        kind: DimensionKind::Aligned { height: Nm::from_raw_shim(1_000_000) },
+        kind: DimensionKind::Aligned { height: mm(1.0) },
         start,
         end,
         prefix: String::new(),
@@ -2310,11 +2311,11 @@ fn aligned_dim(start: Point, end: Point) -> Dimension {
         text_position: DimensionTextPosition::Outside,
         keep_text_aligned: true,
         text_angle: 0,
-        text_size_nm: Nm::from_raw_shim(1_000_000),
-        stroke_width: Nm::from_raw_shim(150_000),
-        arrow_length: Nm::from_raw_shim(1_000_000),
-        extension_offset: Nm::from_raw_shim(200_000),
-        extension_height: Nm::from_raw_shim(500_000),
+        text_size_nm: mm(1.0),
+        stroke_width: mm(0.15),
+        arrow_length: mm(1.0),
+        extension_offset: mm(0.2),
+        extension_height: mm(0.5),
         arrow_direction: ArrowDirection::Outward,
         text_thickness_nm: None,
     }
@@ -2325,12 +2326,12 @@ fn add_dimension_needs_a_layer_and_two_distinct_points() {
     let m = net_model();
     let mut b = board(&m);
 
-    let mut no_layer = aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
+    let mut no_layer = aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO });
     no_layer.layer = String::new();
     let e = b.apply(&Cmd::AddDimension { dimension: no_layer }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_dimension");
 
-    let same_point = aligned_dim(Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(500_000) });
+    let same_point = aligned_dim(Point { x: mm(0.5), y: mm(0.5) }, Point { x: mm(0.5), y: mm(0.5) });
     let e = b.apply(&Cmd::AddDimension { dimension: same_point }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_dimension");
 
@@ -2341,7 +2342,7 @@ fn add_dimension_needs_a_layer_and_two_distinct_points() {
 fn add_dimension_assigns_an_id_ignoring_any_the_caller_sent() {
     let m = net_model();
     let mut b = board(&m);
-    let mut dim = aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
+    let mut dim = aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO });
     dim.id = "caller-supplied".into();
     b.apply(&Cmd::AddDimension { dimension: dim }).unwrap();
 
@@ -2356,7 +2357,7 @@ fn add_dimension_assigns_an_id_ignoring_any_the_caller_sent() {
 fn delete_dimension_removes_by_id_and_refuses_an_unknown_one() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }) }).unwrap();
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }) }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
 
     b.apply(&Cmd::DeleteDimension { id: id.clone() }).unwrap();
@@ -2370,33 +2371,33 @@ fn delete_dimension_removes_by_id_and_refuses_an_unknown_one() {
 fn move_dimension_translates_both_feature_points_but_not_the_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }) }).unwrap();
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }) }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
 
-    b.apply(&Cmd::MoveDimension { id: id.clone(), dx: Nm::from_raw_shim(500_000), dy: Nm::from_raw_shim(-200_000) }).unwrap();
+    b.apply(&Cmd::MoveDimension { id: id.clone(), dx: mm(0.5), dy: mm(-0.2) }).unwrap();
 
     let dim = &b.design().drawings.as_ref().unwrap().dimensions[0];
     assert_eq!(dim.id, id);
-    assert_eq!(dim.start, Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(-200_000) });
-    assert_eq!(dim.end, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(-200_000) });
+    assert_eq!(dim.start, Point { x: mm(0.5), y: mm(-0.2) });
+    assert_eq!(dim.end, Point { x: mm(1.5), y: mm(-0.2) });
 }
 
 #[test]
 fn edit_dimension_replaces_every_field_but_keeps_the_original_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }) }).unwrap();
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }) }).unwrap();
     let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
 
-    let mut edited = aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO });
+    let mut edited = aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(2.0), y: Nm::ZERO });
     edited.id = "ignored-too".into();
-    edited.kind = DimensionKind::Orthogonal { height: Nm::from_raw_shim(500_000), horizontal: true };
+    edited.kind = DimensionKind::Orthogonal { height: mm(0.5), horizontal: true };
     edited.prefix = "L=".into();
     b.apply(&Cmd::EditDimension { id: id.clone(), dimension: edited }).unwrap();
 
     let dim = &b.design().drawings.as_ref().unwrap().dimensions[0];
     assert_eq!(dim.id, id, "editing must never move the id");
-    assert_eq!(dim.end, Point { x: Nm::from_raw_shim(2_000_000), y: Nm::ZERO });
+    assert_eq!(dim.end, Point { x: mm(2.0), y: Nm::ZERO });
     assert_eq!(dim.prefix, "L=");
     assert!(matches!(dim.kind, DimensionKind::Orthogonal { horizontal: true, .. }));
 }
@@ -2405,7 +2406,7 @@ fn edit_dimension_replaces_every_field_but_keeps_the_original_id() {
 fn edit_dimension_on_an_unknown_id_is_refused() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::EditDimension { id: "nope".into(), dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }) }).unwrap_err();
+    let e = b.apply(&Cmd::EditDimension { id: "nope".into(), dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }) }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_dimension");
 }
 
@@ -2413,22 +2414,22 @@ fn edit_dimension_on_an_unknown_id_is_refused() {
 fn set_dimension_settings_replaces_the_whole_struct() {
     let m = net_model();
     let mut b = board(&m);
-    let settings = DimensionSettings { precision: 1, arrow_length: Nm::from_raw_shim(2_000_000), ..Default::default() };
+    let settings = DimensionSettings { precision: 1, arrow_length: mm(2.0), ..Default::default() };
     b.apply(&Cmd::SetDimensionSettings { settings }).unwrap();
 
     let dr = b.design().drawings.as_ref().unwrap();
     assert_eq!(dr.dimension_settings.precision, 1);
-    assert_eq!(dr.dimension_settings.arrow_length, Nm::from_raw_shim(2_000_000));
+    assert_eq!(dr.dimension_settings.arrow_length, mm(2.0));
 }
 
 #[test]
 fn dimension_commands_never_clear_routing() {
     let id = "x".to_string();
     let cmds = [
-        Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }) },
+        Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }) },
         Cmd::DeleteDimension { id: id.clone() },
         Cmd::MoveDimension { id: id.clone(), dx: Nm::ZERO, dy: Nm::ZERO },
-        Cmd::EditDimension { id, dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }) },
+        Cmd::EditDimension { id, dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }) },
         Cmd::SetDimensionSettings { settings: DimensionSettings::default() },
     ];
     for c in &cmds {
@@ -2442,12 +2443,12 @@ fn dimension_commands_never_clear_routing() {
 fn swap_layers_remaps_every_kind_but_leaves_vias_and_unmapped_layers_alone() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(200_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }] }).unwrap();
-    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }] }).unwrap();
-    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO } } }).unwrap();
-    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Cu".into(), size_nm: Nm::from_raw_shim(1_000_000), stroke_width: Nm::from_raw_shim(150_000), justify: TextJustify::Center, mirror: false } }).unwrap();
-    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }) }).unwrap(); // aligned_dim's own layer is "Dwgs.User", not swapped by this test's mapping
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(5_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: mm(10.0), y: mm(10.0) }] }).unwrap();
+    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.0), y: Nm::ZERO } } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.Cu".into(), size_nm: mm(1.0), stroke_width: mm(0.15), justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }) }).unwrap(); // aligned_dim's own layer is "Dwgs.User", not swapped by this test's mapping
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(5.0), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
 
     b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into())] }).unwrap();
 
@@ -2467,7 +2468,7 @@ fn swap_layers_remaps_every_kind_but_leaves_vias_and_unmapped_layers_alone() {
 fn swap_layers_remaps_a_dimension_on_a_mapped_layer() {
     let m = net_model();
     let mut b = board(&m);
-    let mut dim = aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO });
+    let mut dim = aligned_dim(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO });
     dim.layer = "F.Cu".into();
     b.apply(&Cmd::AddDimension { dimension: dim }).unwrap();
 
@@ -2483,14 +2484,14 @@ fn swap_layers_remaps_a_blind_via_but_never_a_through_via() {
     let mut m = net_model();
     m.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
     let mut b = board(&m);
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::ZERO, y: Nm::ZERO, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "In1.Cu".into() }).unwrap();
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::ZERO, y: Nm::ZERO, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "In1.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(5.0), y: Nm::ZERO, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
 
     b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into()), ("In1.Cu".into(), "In2.Cu".into())] }).unwrap();
 
     let vias = &b.design().routing.as_ref().unwrap().vias;
     let blind = vias.iter().find(|v| v.at.x == Nm::ZERO).unwrap();
-    let through = vias.iter().find(|v| v.at.x == Nm::from_raw_shim(5_000_000)).unwrap();
+    let through = vias.iter().find(|v| v.at.x == mm(5.0)).unwrap();
     assert_eq!((blind.from_layer.as_str(), blind.to_layer.as_str()), ("B.Cu", "In2.Cu"));
     assert_eq!((through.from_layer.as_str(), through.to_layer.as_str()), ("F.Cu", "B.Cu"));
 }
@@ -2803,7 +2804,7 @@ fn symbol_editor_commands_are_scoped_to_the_symbol_editor_domain() {
 fn set_locked_locks_and_unlocks_any_item_kind_and_prunes_dead_ids() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: Nm::from_raw_shim(250_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.25), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }] }).unwrap();
     let tid = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
 
     b.apply(&Cmd::SetLocked { ids: vec![tid.clone()], locked: true }).unwrap();
@@ -2819,7 +2820,7 @@ fn set_locked_locks_and_unlocks_any_item_kind_and_prunes_dead_ids() {
 
     // deleting the item and then touching the lock set prunes the dead id
     b.apply(&Cmd::DeleteTrack { id: tid }).unwrap();
-    b.apply(&Cmd::AddVia { net: "GND".into(), x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(1_000_000), drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(1.0), y: mm(1.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
     let vid = b.design().routing.as_ref().unwrap().vias[0].id.clone();
     b.apply(&Cmd::SetLocked { ids: vec![vid.clone()], locked: true }).unwrap();
     assert_eq!(b.design().drawings.as_ref().unwrap().locked_ids, vec![vid.clone()]);
@@ -2844,7 +2845,7 @@ fn swap_chain_shifts_every_pose_one_step_including_rotation_and_side() {
     let m = model(vec![part("R1", "0603"), part("R2", "0603"), part("R3", "0603")], &[], vec![]);
     let mut b = board(&m);
     for (r, x) in [("R1", 10_000_000), ("R2", 30_000_000), ("R3", 50_000_000)] {
-        b.apply(&Cmd::PlaceAt { part: r.into(), x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(20_000_000) }).unwrap();
+        b.apply(&Cmd::PlaceAt { part: r.into(), x: Nm::from_raw_shim(x), y: mm(20.0) }).unwrap();
     }
     b.apply(&Cmd::Rotate { part: "R2".into(), quarter_turns: 1 }).unwrap();
     b.apply(&Cmd::Flip { part: "R3".into() }).unwrap();
@@ -2862,8 +2863,8 @@ fn swap_chain_shifts_every_pose_one_step_including_rotation_and_side() {
 fn swap_chain_of_two_is_a_plain_pose_swap_and_refuses_bad_input() {
     let m = model(vec![part("R1", "0603"), part("R2", "0603")], &[], vec![]);
     let mut b = board(&m);
-    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }).unwrap();
-    b.apply(&Cmd::PlaceAt { part: "R2".into(), x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(30_000_000) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: mm(10.0), y: mm(10.0) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R2".into(), x: mm(40.0), y: mm(30.0) }).unwrap();
     let (a, c) = (b.pose_of("R1").unwrap().at, b.pose_of("R2").unwrap().at);
     b.apply(&Cmd::SwapChain { parts: vec!["R1".into(), "R2".into()] }).unwrap();
     assert_eq!((b.pose_of("R1").unwrap().at, b.pose_of("R2").unwrap().at), (c, a));
@@ -2888,13 +2889,13 @@ fn zone_cutout_across_an_edge_trims_the_zone_and_keeps_its_settings() {
     let mut b = board(&m);
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000_000, 10_000_000) }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
-    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.clearance = Nm::from_raw_shim(777_000))).unwrap();
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.clearance = mm(0.777))).unwrap();
 
     b.apply(&Cmd::ZoneCutout { id, cutout: square(6_000_000, -1_000_000, 11_000_000, 11_000_000) }).unwrap();
     let zones = &b.design().routing.as_ref().unwrap().zones;
     assert_eq!(zones.len(), 1);
     assert!((zone_area(&zones[0]) - 60_000_000_000_000.0).abs() < 1e6, "10x10mm minus the right 4mm strip");
-    assert_eq!((zones[0].net.as_str(), zones[0].layer.as_str(), zones[0].clearance), ("GND", "F.Cu", Nm::from_raw_shim(777_000)));
+    assert_eq!((zones[0].net.as_str(), zones[0].layer.as_str(), zones[0].clearance), ("GND", "F.Cu", mm(0.777)));
 }
 
 #[test]
@@ -2934,7 +2935,7 @@ fn zone_cutout_refuses_a_disjoint_cutout_a_degenerate_one_and_an_unknown_zone() 
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
     let e = b.apply(&Cmd::ZoneCutout { id: id.clone(), cutout: square(20_000_000, 20_000_000, 30_000_000, 30_000_000) }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
-    let e = b.apply(&Cmd::ZoneCutout { id: id.clone(), cutout: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1), y: Nm::from_raw_shim(1) }] }).unwrap_err();
+    let e = b.apply(&Cmd::ZoneCutout { id: id.clone(), cutout: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
     let e = b.apply(&Cmd::ZoneCutout { id: "zone_nope".into(), cutout: square(0, 0, 1_000_000, 1_000_000) }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_zone");
@@ -2945,8 +2946,8 @@ fn zone_cutout_refuses_a_disjoint_cutout_a_degenerate_one_and_an_unknown_zone() 
 fn batch_applies_every_sub_command_and_rolls_back_whole_on_a_refusal() {
     let m = model(vec![part("R1", "0603"), part("R2", "0603")], &[], vec![]);
     let mut b = board(&m);
-    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(10_000_000) }).unwrap();
-    b.apply(&Cmd::PlaceAt { part: "R2".into(), x: Nm::from_raw_shim(40_000_000), y: Nm::from_raw_shim(30_000_000) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: mm(10.0), y: mm(10.0) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R2".into(), x: mm(40.0), y: mm(30.0) }).unwrap();
     b.apply(&Cmd::Batch { cmds: vec![Cmd::Rotate { part: "R1".into(), quarter_turns: 1 }, Cmd::Rotate { part: "R2".into(), quarter_turns: 1 }] }).unwrap();
     assert_eq!(b.pose_of("R1").unwrap().rot, b.pose_of("R2").unwrap().rot);
     let r1 = b.pose_of("R1").unwrap().clone();
@@ -2965,13 +2966,13 @@ fn a_placement_snaps_to_the_grid_anchored_at_the_grid_origin() {
     // from there, so a point the editor snapped to the grid it draws is the point the verb keeps.
     let m = model(vec![part("R1", "0603")], &[], vec![]);
     let mut plain = board(&m);
-    plain.apply(&Cmd::PlaceAt { part: "R1".into(), x: Nm::from_raw_shim(10_234_000), y: Nm::from_raw_shim(10_678_000) }).unwrap();
-    assert_eq!((plain.pose_of("R1").unwrap().at.x, plain.pose_of("R1").unwrap().at.y), (Nm::from_raw_shim(10_200_000), Nm::from_raw_shim(10_700_000)), "no grid origin: whole steps from (0, 0)");
+    plain.apply(&Cmd::PlaceAt { part: "R1".into(), x: mm(10.234), y: mm(10.678) }).unwrap();
+    assert_eq!((plain.pose_of("R1").unwrap().at.x, plain.pose_of("R1").unwrap().at.y), (mm(10.2), mm(10.7)), "no grid origin: whole steps from (0, 0)");
 
     let mut b = board(&m);
-    b.apply(&Cmd::SetGridOrigin { at: Some(Point { x: Nm::from_raw_shim(50_000), y: Nm::from_raw_shim(30_000) }) }).unwrap();
-    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: Nm::from_raw_shim(10_234_000), y: Nm::from_raw_shim(10_678_000) }).unwrap();
-    assert_eq!((b.pose_of("R1").unwrap().at.x, b.pose_of("R1").unwrap().at.y), (Nm::from_raw_shim(10_250_000), Nm::from_raw_shim(10_630_000)), "a grid origin at (50, 30): 10234 -> 10250, 10678 -> 10630");
+    b.apply(&Cmd::SetGridOrigin { at: Some(Point { x: mm(0.05), y: mm(0.03) }) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: mm(10.234), y: mm(10.678) }).unwrap();
+    assert_eq!((b.pose_of("R1").unwrap().at.x, b.pose_of("R1").unwrap().at.y), (mm(10.25), mm(10.63)), "a grid origin at (50, 30): 10234 -> 10250, 10678 -> 10630");
     b.apply(&Cmd::SetGridOrigin { at: None }).unwrap();
     assert!(b.design().drawings.as_ref().and_then(|d| d.grid_origin).is_none());
 }
@@ -2993,8 +2994,8 @@ fn commit_route_gives_its_vias_their_type_and_drops_the_extras_of_removed_vias()
     .expect("the JSON reads");
     b.apply(&cmd).unwrap();
     let vias = b.design().routing.as_ref().unwrap().vias.clone();
-    let micro = vias.iter().find(|v| v.at.x == Nm::from_raw_shim(3_000_000)).unwrap().id.clone();
-    let through = vias.iter().find(|v| v.at.x == Nm::from_raw_shim(1_000_000)).unwrap().id.clone();
+    let micro = vias.iter().find(|v| v.at.x == mm(3.0)).unwrap().id.clone();
+    let through = vias.iter().find(|v| v.at.x == mm(1.0)).unwrap().id.clone();
     let extras = &b.design().drawings.as_ref().unwrap().via_extras;
     assert_eq!(extras.len(), 1);
     assert_eq!((extras[0].id.as_str(), extras[0].kind), (micro.as_str(), eda_model::via_extra::ViaKind::Micro));
@@ -3012,25 +3013,25 @@ fn place_at_refuses_a_cutout() {
     let mut d = empty_design();
     d.drawings = Some(eda_model::ir::DrawingsSection {
         shapes: vec![
-            Shape::Rect { id: "shp_edge".into(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::from_raw_shim(100_000_000), y: Nm::from_raw_shim(100_000_000) } },
+            Shape::Rect { id: "shp_edge".into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(100.0), y: mm(100.0) } },
             // a round cutout of 10 mm radius in the middle
-            Shape::Circle { id: "shp_hole".into(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: Point { x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }, end: Point { x: Nm::from_raw_shim(60_000_000), y: Nm::from_raw_shim(50_000_000) } },
+            Shape::Circle { id: "shp_hole".into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, center: Point { x: mm(50.0), y: mm(50.0) }, end: Point { x: mm(60.0), y: mm(50.0) } },
         ],
         // the shapes are the outline (`placement.outline` is their summary, the box)
         outline_is_shapes: true,
         ..Default::default()
     });
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-    let e = b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }).unwrap_err();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let e = b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(50.0), y: mm(50.0) }).unwrap_err();
     assert_eq!(e[0].check, "ops_outside_board");
     // half over the cutout's edge is refused too
-    assert!(b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(60_000_000), y: Nm::from_raw_shim(50_000_000) }).is_err());
+    assert!(b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(60.0), y: mm(50.0) }).is_err());
     // clear of it, it lands
-    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(20_000_000) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(20.0), y: mm(20.0) }).unwrap();
     // Place in the centre region spirals out of the cutout
     b.apply(&Cmd::PlaceRegion { part: "U2".into(), region: Region::Centre }).unwrap();
     let at = b.pose_of("U2").unwrap().at;
-    let (dx, dy) = ((at.x - Nm::from_raw_shim(50_000_000)).raw_shim() as f64, (at.y - Nm::from_raw_shim(50_000_000)).raw_shim() as f64);
+    let (dx, dy) = ((at.x - mm(50.0)).raw_shim() as f64, (at.y - mm(50.0)).raw_shim() as f64);
     assert!(dx.hypot(dy) > 10_000_000.0, "{at:?} is in the cutout");
 }
 
@@ -3038,10 +3039,10 @@ fn place_at_refuses_a_cutout() {
 fn a_board_of_two_pieces_takes_a_part_on_its_smaller_piece() {
     let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
     let mut d = empty_design();
-    let rect = |id: &str, x0, y0, x1, y1| Shape::Rect { id: id.into(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } };
-    d.drawings = Some(eda_model::ir::DrawingsSection { shapes: vec![rect("shp_a", Nm::ZERO, Nm::ZERO, Nm::from_raw_shim(60_000_000), Nm::from_raw_shim(100_000_000)), rect("shp_b", Nm::from_raw_shim(70_000_000), Nm::ZERO, Nm::from_raw_shim(100_000_000), Nm::from_raw_shim(30_000_000))], outline_is_shapes: true, ..Default::default() });
-    let mut b = Board::new(d, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let rect = |id: &str, x0, y0, x1, y1| Shape::Rect { id: id.into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } };
+    d.drawings = Some(eda_model::ir::DrawingsSection { shapes: vec![rect("shp_a", Nm::ZERO, Nm::ZERO, mm(60.0), mm(100.0)), rect("shp_b", mm(70.0), Nm::ZERO, mm(100.0), mm(30.0))], outline_is_shapes: true, ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     // between the pieces is off the board
-    assert!(b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(65_000_000), y: Nm::from_raw_shim(15_000_000) }).is_err());
-    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(85_000_000), y: Nm::from_raw_shim(15_000_000) }).unwrap();
+    assert!(b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(65.0), y: mm(15.0) }).is_err());
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(85.0), y: mm(15.0) }).unwrap();
 }

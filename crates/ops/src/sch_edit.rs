@@ -823,6 +823,7 @@ fn set_locked(sch: &mut SchematicSection, ids: &[String], locked: bool) -> Resul
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::{mm, um};
     use super::*;
     use eda_model::ir::{Design, Provenance, SchematicText, Wire};
     use eda_model::ir::{LabelShape, SheetInstance};
@@ -857,9 +858,9 @@ mod tests {
     fn lock_unlock_round_trips_and_refuses_no_ops() {
         let mut sch = empty_sheet();
         sch.wires.push(Wire { id: "wire_a".into(), net: "N".into(), pins: vec![], pts: vec![p(0, 0), p(1_000_000, 0)], bus: false });
-        sch.texts.push(SchematicText { id: "txt_a".into(), content: "hi".into(), at: p(0, 0), angle: 0, size_nm: Nm::from_raw_shim(1_270_000) });
+        sch.texts.push(SchematicText { id: "txt_a".into(), content: "hi".into(), at: p(0, 0), angle: 0, size_nm: mm(1.27) });
         let model = ConstraintModel::default();
-        let mut b = Board::new(design_with_schematic(sch), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design_with_schematic(sch), &model, mm(0.1), mm(0.3));
         assert_eq!(Cmd::sch(SchCmd::SetLocked { ids: vec!["wire_a".into()], locked: true }).domain(), crate::Domain::Schematic);
         b.apply(&Cmd::sch(SchCmd::SetLocked { ids: vec!["wire_a".into(), "txt_a".into()], locked: true })).unwrap();
         assert_eq!(b.design().schematic.as_ref().unwrap().extras.locked, vec!["txt_a".to_string(), "wire_a".to_string()]);
@@ -876,7 +877,7 @@ mod tests {
     #[test]
     fn lock_refuses_unknown_and_empty() {
         let model = ConstraintModel::default();
-        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, mm(0.1), mm(0.3));
         assert_eq!(b.apply(&Cmd::sch(SchCmd::SetLocked { ids: vec![], locked: true })).unwrap_err()[0].check, "ops_bad_lock");
         assert_eq!(b.apply(&Cmd::sch(SchCmd::SetLocked { ids: vec!["nope".into()], locked: true })).unwrap_err()[0].check, "ops_unknown_item");
     }
@@ -888,9 +889,9 @@ mod tests {
     #[test]
     fn graphics_are_added_edited_locked_and_deleted() {
         let model = ConstraintModel::default();
-        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, mm(0.1), mm(0.3));
         b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: rectangle(0, 0, 10_000_000, 5_000_000) })).unwrap();
-        b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: SchGraphic::new(SchGraphicKind::Circle { center: p(1, 1), radius_nm: Nm::from_raw_shim(3_000_000) }) })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: SchGraphic::new(SchGraphicKind::Circle { center: p(1, 1), radius_nm: mm(3.0) }) })).unwrap();
         let ids: Vec<String> = b.design().schematic.as_ref().unwrap().extras.graphics.iter().map(|g| g.id.clone()).collect();
         assert_eq!(ids.len(), 2);
         assert!(ids[0].starts_with("shp_") && ids[0] != ids[1]);
@@ -921,7 +922,7 @@ mod tests {
     #[test]
     fn an_image_is_added_edited_with_or_without_its_pixels_moved_and_refused_when_it_is_no_image() {
         let model = ConstraintModel::default();
-        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, mm(0.1), mm(0.3));
         let first = image(10_000_000, 20_000_000, 1_000_000, [1, 2, 3]);
         let data = if let SchGraphicKind::Image { data, .. } = &first.shape { data.clone() } else { unreachable!() };
         b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: first })).unwrap();
@@ -955,7 +956,7 @@ mod tests {
     #[test]
     fn degenerate_graphics_are_refused() {
         let model = ConstraintModel::default();
-        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design_with_schematic(empty_sheet()), &model, mm(0.1), mm(0.3));
         let refuse = |b: &mut Board, g: SchGraphic| assert_eq!(b.apply(&Cmd::sch(SchCmd::AddGraphic { graphic: g })).unwrap_err()[0].check, "ops_bad_graphic");
         refuse(&mut b, rectangle(0, 0, 0, 5_000_000));
         refuse(&mut b, SchGraphic::new(SchGraphicKind::Circle { center: p(0, 0), radius_nm: Nm::ZERO }));
@@ -963,7 +964,7 @@ mod tests {
         refuse(&mut b, SchGraphic::new(SchGraphicKind::Polygon { pts: vec![p(0, 0), p(1, 0), p(1, 0)] }));
         refuse(&mut b, SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 0), p(1, 0)], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: false }));
         let mut negative = rectangle(0, 0, 1, 1);
-        negative.width_nm = Nm::from_raw_shim(-5000);
+        negative.width_nm = um(-5.0);
         refuse(&mut b, negative);
         assert!(b.design().schematic.as_ref().unwrap().extras.graphics.is_empty());
     }
@@ -972,11 +973,11 @@ mod tests {
     fn deleting_a_sheet_removes_its_symbol_and_pins_but_not_the_file_content() {
         use eda_model::ir::{LabelShape, SheetInstance, SheetPin};
         let mut sch = empty_sheet();
-        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(10_000_000)), pins: vec![SheetPin { id: "pin_a".into(), name: "X".into(), shape: LabelShape::Input, at: p(0, 5_000_000) }], page: String::new() });
+        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (mm(10.0), mm(10.0)), pins: vec![SheetPin { id: "pin_a".into(), name: "X".into(), shape: LabelShape::Input, at: p(0, 5_000_000) }], page: String::new() });
         let model = ConstraintModel::default();
         let mut design = design_with_schematic(sch);
         design.sheet_contents = Some([("a.kicad_sch".to_string(), empty_sheet())].into_iter().collect());
-        let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
         b.apply(&Cmd::sch(SchCmd::DeleteSheet { id: "sheet_a".into() })).unwrap();
         assert!(b.design().schematic.as_ref().unwrap().sheets.is_empty());
         assert!(b.design().sheet_contents.as_ref().unwrap().contains_key("a.kicad_sch"));
@@ -985,14 +986,14 @@ mod tests {
 
     fn board_with_sheet() -> (ConstraintModel, Design) {
         let mut sch = empty_sheet();
-        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(10_000_000, 10_000_000), size: (Nm::from_raw_shim(20_000_000), Nm::from_raw_shim(10_000_000)), pins: vec![], page: String::new() });
+        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(10_000_000, 10_000_000), size: (mm(20.0), mm(10.0)), pins: vec![], page: String::new() });
         (ConstraintModel::default(), design_with_schematic(sch))
     }
 
     #[test]
     fn sheet_pins_are_added_on_the_border_edited_and_deleted() {
         let (model, design) = board_with_sheet();
-        let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
         // On the left edge, on the top edge (a corner counts for both).
         b.apply(&Cmd::sch(SchCmd::AddSheetPin { sheet: "sheet_a".into(), name: "VIN".into(), shape: LabelShape::Input, at: p(10_000_000, 15_000_000) })).unwrap();
         b.apply(&Cmd::sch(SchCmd::AddSheetPin { sheet: "sheet_a".into(), name: "CLK".into(), shape: LabelShape::Output, at: p(25_000_000, 10_000_000) })).unwrap();
@@ -1030,7 +1031,7 @@ mod tests {
         let mk = |id: &str, lib: &str, unit: u32| SymbolInstance { id: id.into(), at: p(0, 0), rot: 0, mirrored: false, mirror_y: false, lib_id: lib.into(), unit, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         sch.symbols.push(mk("R1", "Device:R", 1));
         let model = ConstraintModel::default();
-        let mut b = Board::new(design_with_schematic(sch), &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design_with_schematic(sch), &model, mm(0.1), mm(0.3));
         b.apply(&Cmd::sch(SchCmd::ChangeSymbol { id: "R1".into(), lib_id: "Device:C".into() })).unwrap();
         let s = &b.design().schematic.as_ref().unwrap().symbols[0];
         assert_eq!((s.lib_id.as_str(), s.value.as_str(), s.unit), ("Device:C", "10k", 1), "the fields stay; resetting them is the caller's");
@@ -1047,7 +1048,7 @@ mod tests {
         let mut design = design_with_schematic(empty_sheet());
         design.symbol_library = Some(SymbolLibrarySection { symbols: vec![LibrarySymbol::new_empty("Device:R"), LibrarySymbol::new_empty("Device:C")], ..Default::default() });
         let model = ConstraintModel::default();
-        let mut b = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
         let published = |b: &Board, id: &str| b.design().symbol_library.as_ref().unwrap().by_lib_id(id).unwrap().published;
         b.apply(&Cmd::sch(SchCmd::UpdateLibrarySymbols { lib_ids: vec!["Device:R".into(), "Device:Nowhere".into()] })).unwrap();
         assert!(published(&b, "Device:R") && !published(&b, "Device:C"));

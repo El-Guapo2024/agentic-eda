@@ -409,6 +409,7 @@ pub fn effective_stackup(settings: Option<(usize, Stackup)>, copper_layers: usiz
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
@@ -446,19 +447,19 @@ mod tests {
 
     #[test]
     fn the_ink_of_a_text_is_wider_for_more_text_and_has_none_for_a_space() {
-        let one = ink_size("H", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false);
-        let two = ink_size("HH", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false);
+        let one = ink_size("H", (mm(1.5), mm(1.5)), mm(0.2), false);
+        let two = ink_size("HH", (mm(1.5), mm(1.5)), mm(0.2), false);
         assert!(one.0 > 800_000.0 && one.0 < 1_500_000.0, "{one:?}");
         assert!(two.0 > one.0 * 1.8 && two.1 == one.1, "{two:?} {one:?}");
-        assert_eq!(ink_size("  ", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false), (0.0, 0.0));
-        assert_eq!(ink_size("", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false), (0.0, 0.0));
+        assert_eq!(ink_size("  ", (mm(1.5), mm(1.5)), mm(0.2), false), (0.0, 0.0));
+        assert_eq!(ink_size("", (mm(1.5), mm(1.5)), mm(0.2), false), (0.0, 0.0));
         // A thicker pen makes the ink bigger.
-        assert!(ink_size("H", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(300_000), false).0 > one.0);
+        assert!(ink_size("H", (mm(1.5), mm(1.5)), mm(0.3), false).0 > one.0);
     }
 
     #[test]
     fn a_four_layer_stackup_table_has_a_row_for_every_layer_and_sizes_itself_from_its_text() {
-        let stackup = default_stackup(4, Nm::from_raw_shim(1_600_000));
+        let stackup = default_stackup(4, mm(1.6));
         let t = stackup_table("F.SilkS", &stackup, Units::Mm);
         assert_eq!((t.col_count(), t.row_count()), (7, 1 + stackup.layers.len()));
         let text = |row: usize, col: usize| t.cell(row, col).unwrap().text.clone();
@@ -471,24 +472,24 @@ mod tests {
         assert_eq!(text(5, 0), "Dielectric 1");
         assert_eq!((1..7).map(|c| text(5, c)).collect::<Vec<_>>(), ["Core", "FR4", "0.48 mm", "Not specified", "4.5", "0.02"].map(String::from).to_vec());
         // The sizes of the text and its justification.
-        assert_eq!(t.cell(0, 0).unwrap().style.thickness_nm, Nm::from_raw_shim(300_000));
-        assert_eq!(t.cell(1, 0).unwrap().style.thickness_nm, Nm::from_raw_shim(200_000));
+        assert_eq!(t.cell(0, 0).unwrap().style.thickness_nm, mm(0.3));
+        assert_eq!(t.cell(1, 0).unwrap().style.thickness_nm, mm(0.2));
         assert_eq!(t.cell(1, 3).unwrap().style.h_align, TextJustify::Right);
         assert_eq!(t.cell(1, 0).unwrap().style.h_align, TextJustify::Left);
         // Autosize: every column is as wide as its widest text and the margins ask, every row as high; the corner is the origin.
         assert_eq!(t.at, Point { x: Nm::ZERO, y: Nm::ZERO });
-        assert!(t.col_widths.iter().all(|w| *w > Nm::from_raw_shim(3_009_000)), "{:?}", t.col_widths);
+        assert!(t.col_widths.iter().all(|w| *w > mm(3.009)), "{:?}", t.col_widths);
         let widest_name = t.col_widths[0];
-        assert!(widest_name > Nm::from_raw_shim(ink_size("Dielectric 1", (Nm::from_raw_shim(1500_000), Nm::from_raw_shim(1500_000)), Nm::from_raw_shim(200_000), false).0 as i64), "{widest_name}");
-        assert!(t.row_heights.iter().all(|h| *h > Nm::from_raw_shim(2_006_000)), "{:?}", t.row_heights);
+        assert!(widest_name > Nm::from_raw_shim(ink_size("Dielectric 1", (mm(1.5), mm(1.5)), mm(0.2), false).0 as i64), "{widest_name}");
+        assert!(t.row_heights.iter().all(|h| *h > mm(2.006)), "{:?}", t.row_heights);
         assert_eq!(t.layer, "F.SilkS");
         assert!(t.border.external && t.border.header && t.separators.rows && t.separators.cols);
-        assert_eq!(t.border.stroke.width_nm, Nm::from_raw_shim(100_000));
+        assert_eq!(t.border.stroke.width_nm, mm(0.1));
     }
 
     #[test]
     fn the_stackup_table_follows_the_units() {
-        let stackup = default_stackup(2, Nm::from_raw_shim(1_600_000));
+        let stackup = default_stackup(2, mm(1.6));
         let mils = stackup_table("F.SilkS", &stackup, Units::Mils);
         // Row 4 is F.Cu: 0.035 mm = 1.37795 mils.
         assert_eq!(mils.cell(4, 3).unwrap().text, "1.37795 mils");
@@ -498,7 +499,7 @@ mod tests {
 
     #[test]
     fn a_layer_with_no_type_is_what_its_name_says() {
-        let mut stackup = default_stackup(2, Nm::from_raw_shim(1_600_000));
+        let mut stackup = default_stackup(2, mm(1.6));
         for l in stackup.layers.iter_mut() {
             l.kind = None;
         }
@@ -513,7 +514,7 @@ mod tests {
 
     #[test]
     fn the_characteristics_table_is_a_title_and_label_value_pairs_two_to_a_row() {
-        let mut stackup = default_stackup(4, Nm::from_raw_shim(1_600_000));
+        let mut stackup = default_stackup(4, mm(1.6));
         stackup.copper_finish = Some("ENIG".into());
         stackup.dielectric_constraints = true;
         stackup.edge_connector = 2;
@@ -530,10 +531,10 @@ mod tests {
         assert_eq!(row(6), ["Plated board edge: ", "No", "Edge card connectors: ", "Yes, Bevelled"]);
         // No lines at all, 2 mm / 0.4 mm title, 1.5 mm / 0.2 mm data.
         assert!(!t.border.external && !t.border.header && !t.separators.rows && !t.separators.cols);
-        assert_eq!((t.cell(0, 0).unwrap().style.height_nm, t.cell(0, 0).unwrap().style.thickness_nm), (Nm::from_raw_shim(2_000_000), Nm::from_raw_shim(400_000)));
-        assert_eq!((t.cell(1, 0).unwrap().style.height_nm, t.cell(1, 0).unwrap().style.thickness_nm), (Nm::from_raw_shim(1_500_000), Nm::from_raw_shim(200_000)));
+        assert_eq!((t.cell(0, 0).unwrap().style.height_nm, t.cell(0, 0).unwrap().style.thickness_nm), (mm(2.0), mm(0.4)));
+        assert_eq!((t.cell(1, 0).unwrap().style.height_nm, t.cell(1, 0).unwrap().style.thickness_nm), (mm(1.5), mm(0.2)));
         // Autosize looks at the title's ink for the first column, as KiCad does (it does not know the title spans four).
-        assert!(t.col_widths[0] > Nm::from_raw_shim(ink_size("BOARD CHARACTERISTICS", (Nm::from_raw_shim(2000_000), Nm::from_raw_shim(2000_000)), Nm::from_raw_shim(400_000), false).0 as i64));
+        assert!(t.col_widths[0] > Nm::from_raw_shim(ink_size("BOARD CHARACTERISTICS", (mm(2.0), mm(2.0)), mm(0.4), false).0 as i64));
     }
 
     /// The point of sizing a table from its ink: KiCad's own line breaking (`GetShownText` breaks to the column less the margins) does not break any cell of it.
@@ -557,13 +558,13 @@ mod tests {
 
     #[test]
     fn no_cell_of_a_built_table_is_broken_into_lines_whatever_the_units() {
-        let mut stackup = default_stackup(6, Nm::from_raw_shim(1_600_000));
+        let mut stackup = default_stackup(6, mm(1.6));
         stackup.copper_finish = Some("ENIG".into());
         for units in [Units::Mm, Units::Mils, Units::Inch] {
             assert_no_cell_wraps(&stackup_table("F.SilkS", &stackup, units));
             assert_no_cell_wraps(&characteristics_table("Dwgs.User", 6, &stackup, &numbers(), units));
         }
-        let mut odd = default_stackup(2, Nm::from_raw_shim(1_600_000));
+        let mut odd = default_stackup(2, mm(1.6));
         odd.layers[3].material = Some("a long material name for the Material column".into());
         odd.layers[3].color = Some("#336699FF".into());
         assert_no_cell_wraps(&stackup_table("B.SilkS", &odd, Units::Mm));
@@ -571,9 +572,9 @@ mod tests {
 
     #[test]
     fn a_board_without_a_stackup_gets_the_default_one_for_its_layers() {
-        let (n, s) = effective_stackup(None, 4, Nm::from_raw_shim(1_600_000));
-        assert_eq!((n, s.layers.len()), (4, default_stackup(4, Nm::from_raw_shim(1_600_000)).layers.len()));
-        let own = default_stackup(2, Nm::from_raw_shim(1_000_000));
-        assert_eq!(effective_stackup(Some((2, own.clone())), 4, Nm::from_raw_shim(1_600_000)), (2, own));
+        let (n, s) = effective_stackup(None, 4, mm(1.6));
+        assert_eq!((n, s.layers.len()), (4, default_stackup(4, mm(1.6)).layers.len()));
+        let own = default_stackup(2, mm(1.0));
+        assert_eq!(effective_stackup(Some((2, own.clone())), 4, mm(1.6)), (2, own));
     }
 }

@@ -353,10 +353,11 @@ fn connect_pair(shapes: &mut [Shape], a: usize, b: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     fn seg(a: (i64, i64), b: (i64, i64)) -> Shape {
-        Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(a.0), y: Nm::from_raw_shim(a.1) }, end: Point { x: Nm::from_raw_shim(b.0), y: Nm::from_raw_shim(b.1) } }
+        Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::from_raw_shim(a.0), y: Nm::from_raw_shim(a.1) }, end: Point { x: Nm::from_raw_shim(b.0), y: Nm::from_raw_shim(b.1) } }
     }
 
     fn ends_of(s: &Shape) -> ((i64, i64), (i64, i64)) {
@@ -380,7 +381,7 @@ mod tests {
         // A square of 10 mm with 0.2 mm gaps at three corners and a 5 mm one at the fourth.
         let mut v = vec![seg((0, 0), (9_800_000, 0)), seg((10_000_000, 200_000), (10_000_000, 9_800_000)), seg((9_800_000, 10_000_000), (200_000, 10_000_000)), seg((0, 5_000_000), (0, 0))];
         // (the last side starts at its middle: its end at the origin is the first line's start)
-        connect_board_shapes(&mut v, Nm::from_raw_shim(1_000_000));
+        connect_board_shapes(&mut v, mm(1.0));
         let corners: Vec<_> = v.iter().map(ends_of).collect();
         assert_eq!(corners[0].1, (10_000_000, 0), "{corners:?}");
         assert_eq!(corners[1].0, (10_000_000, 0));
@@ -394,15 +395,15 @@ mod tests {
     fn a_gap_wider_than_the_tolerance_is_left_alone() {
         let mut v = vec![seg((0, 0), (9_000_000, 0)), seg((10_000_000, 100_000), (10_000_000, 5_000_000))];
         let before = v.clone();
-        connect_board_shapes(&mut v, Nm::from_raw_shim(500_000));
+        connect_board_shapes(&mut v, mm(0.5));
         assert_eq!(v, before);
     }
 
     #[test]
     fn a_line_takes_the_end_of_the_arc_it_nearly_touches() {
-        let arc = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, mid: Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(2_000_000) }, end: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(4_000_000) } };
+        let arc = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: Point { x: mm(10.0), y: Nm::ZERO }, mid: Point { x: mm(12.0), y: mm(2.0) }, end: Point { x: mm(10.0), y: mm(4.0) } };
         let mut v = vec![seg((0, 0), (9_900_000, 100_000)), arc];
-        connect_board_shapes(&mut v, Nm::from_raw_shim(1_000_000));
+        connect_board_shapes(&mut v, mm(1.0));
         assert_eq!(ends_of(&v[0]).1, (10_000_000, 0));
     }
 

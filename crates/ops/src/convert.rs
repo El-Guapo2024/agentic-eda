@@ -441,6 +441,7 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{DrawingsSection, PlacementSection, Provenance, RoutingSection};
@@ -496,12 +497,12 @@ mod tests {
 
     #[test]
     fn a_circle_becomes_a_polygon_on_the_circle() {
-        let d = design(vec![Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, center: Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, end: Point { x: Nm::from_raw_shim(6_000_000), y: Nm::from_raw_shim(2_000_000) } }]);
+        let d = design(vec![Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, center: Point { x: mm(1.0), y: mm(2.0) }, end: Point { x: mm(6.0), y: mm(2.0) } }]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
         assert!(r.rings[0].len() >= 16);
         for p in &r.rings[0] {
-            let dist = ((p.x - Nm::from_raw_shim(1_000_000)).raw_shim() as f64).hypot((p.y - Nm::from_raw_shim(2_000_000)).raw_shim() as f64);
+            let dist = ((p.x - mm(1.0)).raw_shim() as f64).hypot((p.y - mm(2.0)).raw_shim() as f64);
             assert!((dist - 5_000_000.0).abs() < 2_000.0, "{dist}");
         }
         let full = std::f64::consts::PI * 25_000_000_000_000.0;
@@ -537,7 +538,7 @@ mod tests {
 
     #[test]
     fn an_arc_and_its_chord_close_a_half_disc() {
-        let arc = Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::from_raw_shim(150_000), filled: false, start: Point { x: Nm::from_raw_shim(-5_000_000), y: Nm::ZERO }, mid: Point { x: Nm::ZERO, y: Nm::from_raw_shim(-5_000_000) }, end: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO } };
+        let arc = Shape::Arc { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: mm(-5.0), y: Nm::ZERO }, mid: Point { x: Nm::ZERO, y: mm(-5.0) }, end: Point { x: mm(5.0), y: Nm::ZERO } };
         let chord = seg((5_000_000, 0), (-5_000_000, 0), 150_000);
         let d = design(vec![arc, chord]);
         let r = polys_from_items(&d, &ids(&d), ConvertStrategy::Centerline, 0);
@@ -582,8 +583,8 @@ mod tests {
     fn tracks_and_vias_join_the_hull() {
         let mut d = design(vec![]);
         let rt = d.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(500_000), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }], arc_mid_offset: None });
-        rt.vias.push(Via { id: "v1".into(), net: "N".into(), at: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, drill: Nm::from_raw_shim(300_000), diameter: Nm::from_raw_shim(800_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.5), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(4.0), y: Nm::ZERO }], arc_mid_offset: None });
+        rt.vias.push(Via { id: "v1".into(), net: "N".into(), at: Point { x: mm(4.0), y: Nm::ZERO }, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let r = polys_from_items(&d, &["t1".to_string(), "v1".to_string()], ConvertStrategy::BoundingHull, 0);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.consumed, vec!["t1".to_string(), "v1".to_string()]);
@@ -593,7 +594,7 @@ mod tests {
     fn a_zone_outline_is_taken_as_it_is() {
         let mut d = design(vec![]);
         let rt = d.routing.as_mut().unwrap();
-        rt.zones.push(Zone { id: "z1".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::from_raw_shim(3_000_000) }], ..Default::default() });
+        rt.zones.push(Zone { id: "z1".into(), net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: Nm::ZERO }, Point { x: mm(3.0), y: mm(3.0) }], ..Default::default() });
         let r = polys_from_items(&d, &["z1".to_string()], ConvertStrategy::Centerline, 0);
         assert_eq!(r.rings.len(), 1);
         assert_eq!(r.rings[0].len(), 3);

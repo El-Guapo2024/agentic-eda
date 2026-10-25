@@ -6,6 +6,7 @@ use super::*;
 use eda_model::ir::{LibraryFill, LibrarySymbolGraphic, Millideg};
 use eda_model::kicad_font;
 use eda_model::sch_extras::{SchColor, SchFill, SchGraphic, SchGraphicKind, SchLineStyle};
+use eda_model::units::{mm, um};
 
 fn fixture(name: &str) -> String {
     let path = format!("{}/../kicad/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -84,7 +85,7 @@ fn the_scale_the_offset_and_the_default_line_width_are_the_dialogs() {
     let mut r = sch_req(GraphicsFormat::Dxf, fixture("no_units.dxf"));
     r.dxf_units = "mm".into();
     r.scale = 2.0;
-    r.line_width_nm = Nm::from_raw_shim(150_000);
+    r.line_width_nm = mm(0.15);
     r.offset_x_nm = 10_000_000;
     r.offset_y_nm = -5_000_000;
     b.apply(&Cmd::ImportSchGraphics(r)).unwrap();
@@ -94,7 +95,7 @@ fn the_scale_the_offset_and_the_default_line_width_are_the_dialogs() {
     let (x0, y0, x1, y1) = bounds(s.lines.iter().flat_map(|l| l.pts.iter().map(|p| (p.x.raw_shim() as f64, p.y.raw_shim() as f64))));
     assert_eq!((x0, x1), (10_000_000.0, 14_000_000.0));
     assert_eq!((y1 - y0).round(), 2_000_000.0);
-    assert!(s.lines.iter().all(|l| l.width_nm == Nm::from_raw_shim(300_000)), "{:?}", s.lines);
+    assert!(s.lines.iter().all(|l| l.width_nm == mm(0.3)), "{:?}", s.lines);
 }
 
 #[test]
@@ -113,7 +114,7 @@ fn circles_are_shapes_with_a_centre_and_a_radius() {
         })
         .collect();
     circles.sort_by_key(|(c, _)| c.x);
-    assert_eq!(circles, vec![(Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-5_000_000) }, Nm::from_raw_shim(1_600_000)), (Point { x: Nm::from_raw_shim(20_000_000), y: Nm::from_raw_shim(-15_000_000) }, Nm::from_raw_shim(4_000_000)), (Point { x: Nm::from_raw_shim(35_000_000), y: Nm::from_raw_shim(-25_000_000) }, Nm::from_raw_shim(1_600_000))]);
+    assert_eq!(circles, vec![(Point { x: mm(5.0), y: mm(-5.0) }, mm(1.6)), (Point { x: mm(20.0), y: mm(-15.0) }, mm(4.0)), (Point { x: mm(35.0), y: mm(-25.0) }, mm(1.6))]);
 }
 
 #[test]
@@ -125,7 +126,7 @@ fn a_dashed_red_svg_line_keeps_its_style_and_colour_in_the_stroke_table() {
     let s = sch(&b);
     assert_eq!(s.lines.len(), 1, "{:?}", s.lines);
     let l = &s.lines[0];
-    assert_eq!((l.pts[0], l.pts[1], l.width_nm), (Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(11_000_000), y: Nm::from_raw_shim(2_000_000) }, Nm::from_raw_shim(300_000)));
+    assert_eq!((l.pts[0], l.pts[1], l.width_nm), (Point { x: mm(1.0), y: mm(2.0) }, Point { x: mm(11.0), y: mm(2.0) }, mm(0.3)));
     let st = s.extras.strokes.get(&l.id).expect("the style and colour are in the stroke table");
     assert_eq!((st.width_nm, st.style, st.color), (Nm::ZERO, SchLineStyle::Dash, Some(SchColor { r: 255, g: 0, b: 0, a: 255 })));
 }
@@ -142,7 +143,7 @@ fn a_filled_svg_polygon_is_filled_with_its_colour_and_has_no_outline_to_speak_of
     assert_eq!(pts.len(), 4);
     assert_eq!((g[0].fill, g[0].fill_color), (SchFill::Color, Some(SchColor { r: 0, g: 255, b: 0, a: 255 })));
     // "Historically -1 meant no-stroke": a hairline stands for it.
-    assert_eq!(g[0].width_nm, Nm::from_raw_shim(1_000));
+    assert_eq!(g[0].width_nm, um(1.0));
 }
 
 #[test]
@@ -157,12 +158,12 @@ fn a_text_keeps_the_files_size_and_angle_and_stands_at_the_left_end_of_its_basel
     let t = &sch(&b).texts;
     assert_eq!(t.len(), 3, "{t:?}");
     let (plain, centred, up) = (&t[0], &t[1], &t[2]);
-    assert_eq!((plain.content.as_str(), plain.at, plain.angle, plain.size_nm), ("Hello", Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(-5_000_000) }, 0, Nm::from_raw_shim(2_500_000)));
+    assert_eq!((plain.content.as_str(), plain.at, plain.angle, plain.size_nm), ("Hello", Point { x: mm(10.0), y: mm(-5.0) }, 0, mm(2.5)));
     // Centred: the anchor is half the text's width to the left of the point the file gives.
     let width_nm = kicad_font::text_advance_iu("Hello", kicad_font::mm_to_iu(2.5)) * 100;
-    assert!((centred.at.x - Nm::from_raw_shim(10_000_000 - width_nm / 2)).abs() <= Nm::from_raw_shim(100) && centred.at.y == Nm::from_raw_shim(-20_000_000), "{centred:?} {width_nm}");
+    assert!((centred.at.x - Nm::from_raw_shim(10_000_000 - width_nm / 2)).abs() <= Nm::new(100) && centred.at.y == mm(-20.0), "{centred:?} {width_nm}");
     let angle: Millideg = 90_000;
-    assert_eq!((up.content.as_str(), up.at, up.angle, up.size_nm), ("Up", Point { x: Nm::from_raw_shim(30_000_000), y: Nm::from_raw_shim(-5_000_000) }, angle, Nm::from_raw_shim(1_500_000)));
+    assert_eq!((up.content.as_str(), up.at, up.angle, up.size_nm), ("Up", Point { x: mm(30.0), y: mm(-5.0) }, angle, mm(1.5)));
 }
 
 #[test]

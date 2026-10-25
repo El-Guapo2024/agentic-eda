@@ -608,6 +608,7 @@ pub fn unactionable(board: &Board) -> Vec<CheckResult> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
     use eda_model::ir::{Design, PlacementSection, Point, Provenance};
@@ -669,11 +670,11 @@ mod tests {
     #[test]
     fn chains_hung_out_of_their_pins_order_are_put_in_it() {
         let m = model();
-        let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }).unwrap();
+        let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(50.0), y: mm(50.0) }).unwrap();
         for (i, y) in [(3, 47_000_000), (2, 49_500_000), (1, 52_000_000)] {
-            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: Nm::from_raw_shim(44_500_000), y: Nm::from_raw_shim(y) }).unwrap();
-            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: Nm::from_raw_shim(41_500_000), y: Nm::from_raw_shim(y) }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: mm(44.5), y: Nm::from_raw_shim(y) }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: mm(41.5), y: Nm::from_raw_shim(y) }).unwrap();
         }
         let (_, before) = crossing_pairs(&b);
         assert_eq!(before.len(), 3, "{before:?}");
@@ -690,11 +691,11 @@ mod tests {
     #[test]
     fn chains_in_their_pins_order_stay() {
         let m = model();
-        let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
-        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: Nm::from_raw_shim(50_000_000), y: Nm::from_raw_shim(50_000_000) }).unwrap();
+        let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+        b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(50.0), y: mm(50.0) }).unwrap();
         for (i, y) in [(1, 47_000_000), (2, 49_500_000), (3, 52_000_000)] {
-            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: Nm::from_raw_shim(44_500_000), y: Nm::from_raw_shim(y) }).unwrap();
-            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: Nm::from_raw_shim(41_500_000), y: Nm::from_raw_shim(y) }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("R{i}"), x: mm(44.5), y: Nm::from_raw_shim(y) }).unwrap();
+            b.apply(&Cmd::PlaceAt { part: format!("D{i}"), x: mm(41.5), y: Nm::from_raw_shim(y) }).unwrap();
         }
         let was = b.design().placement.clone();
         assert!(!reorder_chains(&mut b, &m));

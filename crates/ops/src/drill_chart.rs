@@ -839,24 +839,25 @@ impl super::Board<'_> {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
     fn lengths_are_written_as_the_generated_tables_write_them() {
-        assert_eq!(format_length(Nm::from_raw_shim(300_000), TableUnits::Mm, 3), "0.300");
-        assert_eq!(format_length(Nm::from_raw_shim(1_143_000), TableUnits::Mm, 2), "1.14");
-        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Inch, 3), "0.0600\u{2033}");
-        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Mils, 3), "60.0 mil");
-        assert_eq!(format_length(Nm::from_raw_shim(1_524_000), TableUnits::Mils, 1), "60 mil");
+        assert_eq!(format_length(mm(0.3), TableUnits::Mm, 3), "0.300");
+        assert_eq!(format_length(mm(1.143), TableUnits::Mm, 2), "1.14");
+        assert_eq!(format_length(mm(1.524), TableUnits::Inch, 3), "0.0600\u{2033}");
+        assert_eq!(format_length(mm(1.524), TableUnits::Mils, 3), "60.0 mil");
+        assert_eq!(format_length(mm(1.524), TableUnits::Mils, 1), "60 mil");
     }
 
     #[test]
     fn marks_are_assigned_from_the_lowest_free_shape_and_then_letters() {
         let op = |d: Nm| DrillOp { source: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
         let p = DrillSymbolProfile::default();
-        assert_eq!(group_key(&p, &op(Nm::from_raw_shim(300_000))), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
+        assert_eq!(group_key(&p, &op(mm(0.3))), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
         let mut profile = DrillSymbolProfile::default();
-        profile.assignments.insert(group_key(&p, &op(Nm::from_raw_shim(400_000))), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
+        profile.assignments.insert(group_key(&p, &op(mm(0.4))), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
         let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(Nm::from_raw_shim(300_000 + i * 100_000))), first: op(Nm::from_raw_shim(300_000 + i * 100_000)), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
         assign(&mut gs, &mut profile);
         assert_eq!((gs[0].symbol.mode, gs[0].symbol.shape_index), (DrillMarkMode::Shape, 1), "shape 0 is the frozen 0.4 mm group's");

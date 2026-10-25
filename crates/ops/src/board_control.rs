@@ -414,6 +414,7 @@ pub fn repair_board(design: &mut Design, nets: &[Net]) -> RepairReport {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
 
@@ -672,7 +673,7 @@ mod tests {
         let model = eda_model::ConstraintModel::default();
         let mut d = design(vec![square("a", "F.Cu", "", 0, 0, 10_000, 1), square("b", "F.Cu", "", 5_000, 0, 10_000, 4), square("ghost", "F.Cu", "NOPE", 90_000, 0, 1_000, 0)]);
         d.placement = Some(serde_json::from_value(serde_json::json!({ "outline": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": 1, "y": 1 }], "footprints": [] })).unwrap());
-        let mut board = Board::new(d, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut board = Board::new(d, &model, mm(0.1), mm(0.3));
         let cmd = |j: serde_json::Value| serde_json::from_value::<Cmd>(j).unwrap();
         board.apply(&cmd(serde_json::json!({ "op": "set_zone_priority", "id": "a", "to": "raise" }))).unwrap();
         assert_eq!(priorities(board.design())[0], ("a".to_string(), 5));
@@ -688,7 +689,7 @@ mod tests {
         // The next load reads the board's own netlist back (`board::load` lets `design.nets` replace the intent's).
         let design = board.into_design();
         let model = eda_model::ConstraintModel { nets: design.nets.clone().unwrap(), ..Default::default() };
-        let again = Board::new(design, &model, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000)).apply(&Cmd::RepairBoard).unwrap_err();
+        let again = Board::new(design, &model, mm(0.1), mm(0.3)).apply(&Cmd::RepairBoard).unwrap_err();
         assert_eq!(again[0].hint.as_deref(), Some("No board problems found."));
     }
 

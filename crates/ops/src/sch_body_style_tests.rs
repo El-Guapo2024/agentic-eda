@@ -7,6 +7,7 @@ use crate::sch_edit::SchCmd;
 use eda_model::ir::{field_key, Provenance, SchematicSection, SymbolInstance};
 use eda_model::symbol::{AlternateBody, LibPin, LibSymbol, SPoint, SymbolGraphic};
 use eda_model::{Part, Pin, PinKind};
+use eda_model::units::mm;
 
 fn empty_design() -> Design {
     Design {
@@ -80,7 +81,7 @@ fn instance(id: &str, lib_id: &str, at: Point) -> SymbolInstance {
 
 fn sheet() -> SchematicSection {
     SchematicSection {
-        symbols: vec![instance("U1", "test:GATE", Point { x: Nm::from_raw_shim(50_800_000), y: Nm::from_raw_shim(50_800_000) }), instance("U2", "test:GATE", Point { x: Nm::from_raw_shim(101_600_000), y: Nm::from_raw_shim(50_800_000) }), instance("R1", "Device:R", Point { x: Nm::from_raw_shim(152_400_000), y: Nm::from_raw_shim(50_800_000) })],
+        symbols: vec![instance("U1", "test:GATE", Point { x: mm(50.8), y: mm(50.8) }), instance("U2", "test:GATE", Point { x: mm(101.6), y: mm(50.8) }), instance("R1", "Device:R", Point { x: mm(152.4), y: mm(50.8) })],
         ..Default::default()
     }
 }
@@ -88,7 +89,7 @@ fn sheet() -> SchematicSection {
 fn board<'a>(m: &'a ConstraintModel) -> Board<'a> {
     let mut design = empty_design();
     design.schematic = Some(sheet());
-    Board::new(design, m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000))
+    Board::new(design, m, mm(0.1), mm(0.3))
 }
 
 fn set(ids: &[&str], style: Option<u32>) -> Cmd {
@@ -165,7 +166,7 @@ fn a_symbol_in_the_alternate_body_style_has_its_pins_where_that_body_puts_them()
     b.apply(&set(&["U1"], None)).unwrap();
     let alternate = pins_of(&b, &m, "U1");
     assert_eq!(pin1(&normal), pin1(&alternate), "a pin both bodies share is where it was");
-    assert_eq!(pin2(&alternate).y - pin2(&normal).y, Nm::from_raw_shim(1_270_000), "pin 2 is one grid cell further down in the alternate body");
+    assert_eq!(pin2(&alternate).y - pin2(&normal).y, mm(1.27), "pin 2 is one grid cell further down in the alternate body");
     // the other gate, still in the normal style, is where it was
     assert_eq!(pins_of(&b, &m, "U2").iter().find(|(n, _)| n == "2").unwrap().1.y, pin2(&normal).y);
 }
@@ -175,7 +176,7 @@ fn moving_a_symbol_keeps_its_body_style_and_renaming_it_takes_the_style_along() 
     let m = model();
     let mut b = board(&m);
     b.apply(&set(&["U1"], None)).unwrap();
-    b.apply(&Cmd::SchMove(crate::sch_move::SchMoveCmd::Move { ids: vec!["U1".into()], dx: Nm::from_raw_shim(2_540_000), dy: Nm::ZERO, turns: Vec::new(), about: None })).unwrap();
+    b.apply(&Cmd::SchMove(crate::sch_move::SchMoveCmd::Move { ids: vec!["U1".into()], dx: mm(2.54), dy: Nm::ZERO, turns: Vec::new(), about: None })).unwrap();
     assert_eq!(style_of(&b, "U1"), 2, "a move does not change the body style");
     // the style is kept by the symbol's key: the key follows a rename
     b.apply(&Cmd::RenameSymbol { id: "U1".into(), new_id: "U7".into() }).unwrap();
