@@ -18,7 +18,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 ## What landed (2026-10-14 to 10-24)
 
 - 2026-10-25: **fix batch D, schematic connectivity**: buses sharing a member name, hidden power pins, `${#}` per placement, bus aliases, unit-0 pins, ERC exclusions per shared-sheet placement and on import; an imported KiCad schematic is no longer left in KiCad's frame. 22 QA hierarchies trace as kicad-cli reads them. Open: F5 keyed on a second item, project `${VAR}` in power values.
-- 2026-10-25: **fix batch A, KiCad's names** (`a8287704`): KiCad's net names everywhere incl. the studio (option 1), every net the intent names labelled in the derived schematic (the user, 2026-10-24), one footprint name, `(path)`/sheetname/sheetfile, fields and pinfunction/pintype, back footprints in KiCad's frame; kicad-cli's schematic-parity DRC: 0 differences on opamp_filter, ldo, mcu30 (were 22 and 76). Held: R6, the installed footprints' own pads (`task-fix-a-kicad-names-r6`), until the placer survives their 5 µm wider courtyards on mcu30.
+- 2026-10-25: **fix batch A, KiCad's names** (`a8287704`): KiCad's net names everywhere incl. the studio (option 1), every net the intent names labelled in the derived schematic (the user, 2026-10-24), one footprint name, `(path)`/sheetname/sheetfile, fields and pinfunction/pintype, back footprints in KiCad's frame; kicad-cli's schematic-parity DRC: 0 differences on opamp_filter, ldo, mcu30 (were 22 and 76). R6 merged 2026-10-25: package parts carry the installed footprint whole (pin headers keep the built-in pads); the repair loop reorders LED/resistor chains and re-places for proximity, so every example places at seeds 0-2.
 - 2026-10-24: **fix batches B and C** (`28ba30c4`): zones keep their holes, SMD pads on several copper layers, paste-only pads, curves, footprint Edge.Cuts (KiCad's footprint outline pass), rectangle corner radius (the router's edge as KiCad's effective shapes), Extruded 3D Body, importers' `.kicad_dru`, a project's DRC exclusions; refills keep teardrop copper via `(legacy_teardrops yes)` (trade-off: GAPS 13). Open: imported ERC exclusions (batch D's file), Repeat Layout target holes.
 - 2026-10-24: **fix batch F, editing** (`963764f7`): items edited in place keep their group, the real courtyard box, R/F while carrying, Position Relative's angle, Recombine, Repeat Layout's nets and groups, design-block layers and padless nets (`board_nets`), KiCad's Net Inspector with per-layer lengths; one-member groups kept, the < 2 rule only on groups a verb touched.
 - 2026-10-24: **fix batch E, the router** (`a6e4500a`): all 7 highs, 18/21 mediums; KiCad's 7 router QA sessions replay exactly; F is Attempt Finish, Esc commits fixed legs, empty-space routes on no net. Plus `ea752e1a`, the tuner's default board thickness (1.6 µm → 1.6 mm, a nanometre leftover).
@@ -64,7 +64,6 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-fix-a-kicad-names-r6` (`~/work/agentic-eda-embedded`) | R6 of batch A: a package part carries the installed KiCad footprint whole (pads, art, courtyard, models) when it is in the built-in's frame; the repair loop puts LED/resistor chains in their pins' order and re-places a proximity pair a walk cannot close, so `eda place` passes on every example at seeds 0-2 with the real courtyards (new slow test `place_examples`) | gated | merge |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
@@ -114,6 +113,8 @@ Kept out by decision: Import Netlist (user, 2026-10-21); the browser shell, Pyth
   - Keep hub-file edits small and additive (`crates/ops/src/lib.rs`, `ir.rs`, `studio.rs`, `board.rs`, `useActionRunner.ts`, `store.tsx`, `painter.ts`).
 
 ## Known pitfalls
+
+- `tune_edit::tests::the_tuner_on_the_boards_of_kicads_own_qa_never_makes_what_the_board_would_refuse` (eda-cli slow) failed once under a loaded full slow run ("cannot be tuned again") and passes alone on main and on R6: load-sensitive, look into it if it recurs.
 
 - **kicad-cli versions:**
   - The Mac ran 10.99.0-5334; the box has nightly 20261021 (25ec2335f2).
