@@ -63,6 +63,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-fix-a-kicad-names-r6` (`~/work/agentic-eda-embedded`) | R6 of batch A: a package part carries the installed KiCad footprint whole (pads, art, courtyard, models) when it is in the built-in's frame; the repair loop puts LED/resistor chains in their pins' order and re-places a proximity pair a walk cannot close, so `eda place` passes on every example at seeds 0-2 with the real courtyards (new slow test `place_examples`) | gated | merge |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
