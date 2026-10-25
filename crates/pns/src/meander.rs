@@ -1128,6 +1128,7 @@ pub fn tune_line_length(tuned: &mut MeanderedLine, elongation: i64) {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     /// A placer with nothing in the way and a fixed clearance.
@@ -1190,14 +1191,14 @@ mod tests {
         // it climbs to the maximum amplitude on the side a "false" side is, and comes back to the baseline
         let ys: Vec<Nm> = line.points().iter().map(|q| q.y).collect();
         let (lo, hi) = (*ys.iter().min().unwrap(), *ys.iter().max().unwrap());
-        assert_eq!((lo, hi), (Nm::ZERO, Nm::from_raw_shim(1_000_000)), "amplitude 1 mm up (y grows downward: the left of a line along +x is +y)");
+        assert_eq!((lo, hi), (Nm::ZERO, mm(1.0)), "amplitude 1 mm up (y grows downward: the left of a line along +x is +y)");
         assert_eq!(line.arcs().len(), 4, "four rounded corners");
         assert_eq!(line.c_last_point().y, Nm::ZERO);
         // the right side is the mirror image
         let mut right = MeanderShape::new(&env, 200_000, false);
         assert!(right.fit(&mut env, &[], MeanderType::Single, base, p(0, 0), true));
         let ys: Vec<Nm> = right.c_line(0).points().iter().map(|q| q.y).collect();
-        assert_eq!((*ys.iter().min().unwrap(), *ys.iter().max().unwrap()), (Nm::from_raw_shim(-1_000_000), Nm::ZERO));
+        assert_eq!((*ys.iter().min().unwrap(), *ys.iter().max().unwrap()), (mm(-1.0), Nm::ZERO));
         assert_eq!(right.c_line(0).length(), m.c_line(0).length());
         assert_eq!(m.baseline_length(), m.end().x.raw_shim());
     }
@@ -1213,7 +1214,7 @@ mod tests {
         for i in 0..m.c_line(0).segment_count() {
             let s = m.c_line(0).c_segment(i);
             let (dx, dy) = ((s.b.x - s.a.x).abs(), (s.b.y - s.a.y).abs());
-            assert!(dx == Nm::ZERO || dy == Nm::ZERO || dx == dy || (dx - dy).abs() <= Nm::from_raw_shim(2), "segment {i} {s:?} is not on a 45-degree heading");
+            assert!(dx == Nm::ZERO || dy == Nm::ZERO || dx == dy || (dx - dy).abs() <= Nm::new(2), "segment {i} {s:?} is not on a 45-degree heading");
             diagonals += (dx != Nm::ZERO && dy != Nm::ZERO) as usize;
         }
         assert_eq!(diagonals, 4);
@@ -1234,7 +1235,7 @@ mod tests {
                 self.0.clearance()
             }
             fn check_fit(&mut self, shape: &MeanderShape, _: &[MeanderShape]) -> bool {
-                shape.c_line(0).points().iter().all(|q| q.y.abs() <= Nm::from_raw_shim(401_000))
+                shape.c_line(0).points().iter().all(|q| q.y.abs() <= mm(0.401))
             }
         }
         let mut env = Narrow(free());

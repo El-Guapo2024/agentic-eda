@@ -1873,6 +1873,7 @@ pub fn shove_obstacle_line(node: &Node, rules: &BoardRules, settings: &RoutingSe
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::item::{net_of, Segment};
     use crate::layer::LayerRange;
@@ -1887,10 +1888,10 @@ mod tests {
     #[test]
     fn self_intersecting_flags_a_fold_back() {
         let p = |x, y| Point { x, y };
-        assert!(self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10), Nm::ZERO), p(Nm::from_raw_shim(5), Nm::ZERO)]));
-        assert!(self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10), Nm::ZERO), p(Nm::from_raw_shim(10), Nm::from_raw_shim(10)), p(Nm::from_raw_shim(5), Nm::from_raw_shim(-5))]));
-        assert!(!self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10), Nm::ZERO), p(Nm::from_raw_shim(10), Nm::from_raw_shim(10))]));
-        assert!(!self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(10), Nm::ZERO), p(Nm::from_raw_shim(20), Nm::from_raw_shim(10)), p(Nm::from_raw_shim(30), Nm::from_raw_shim(10))]));
+        assert!(self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(5), Nm::ZERO)]));
+        assert!(self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(10), Nm::new(10)), p(Nm::new(5), Nm::new(-5))]));
+        assert!(!self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(10), Nm::new(10))]));
+        assert!(!self_intersecting(&[p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(20), Nm::new(10)), p(Nm::new(30), Nm::new(10))]));
     }
 
     /// findings p5 F1-2: `pushOrShoveVia` refuses a via whose joint is locked (`if( jt->IsLocked() ) return SH_INCOMPLETE;`) -- the via a
@@ -1898,8 +1899,8 @@ mod tests {
     #[test]
     fn a_via_on_a_locked_joint_is_not_shoved() {
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("A"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("vA".into()), locked: false, is_virtual: false }));
+        node.add(Item::Segment(Segment { net: net_of("A"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(3.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("vA".into()), locked: false, is_virtual: false }));
         let (rules, settings) = (rules(), RoutingSettings::default());
         let mut free = Shove::new(&node, &rules, &settings);
         assert_eq!(free.push_or_shove_via(via_id, (500_000, 0), 0, false), Status::Ok, "a free via is pushed");
@@ -1915,20 +1916,20 @@ mod tests {
     fn a_head_via_shoves_a_track_on_the_other_layer_around_the_via_only() {
         let mut node = Node::new();
         // a B.Cu track under the F.Cu head, 350 um to its side: inside the hull of the via (600 um) and of the F.Cu segment (400 um)
-        node.add(Item::Segment(Segment { net: net_of("B"), layer: 1, a: Point { x: Nm::from_raw_shim(-2_000_000), y: Nm::from_raw_shim(350_000) }, b: Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(350_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkB".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("B"), layer: 1, a: Point { x: mm(-2.0), y: mm(0.35) }, b: Point { x: mm(8.0), y: mm(0.35) }, width: mm(0.2), source_track: Some(("trkB".into(), 0)), locked: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: crate::settings::Mode::Shove, ..RoutingSettings::default() };
-        let line = Line::from_points(net_of("A"), 0, Nm::from_raw_shim(200_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }]);
-        let via = Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: None, locked: false, is_virtual: false };
+        let line = Line::from_points(net_of("A"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }]);
+        let via = Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: mm(5.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false };
         let outcome = shove_heads_after(&node, vec![ShoveHead { line, via: Some(via) }], &rules, &settings, None).expect("the B.Cu track can be shoved round the via");
         assert_eq!(outcome.displaced_lines.len(), 1);
         let moved = &outcome.displaced_lines[0].line;
         assert_eq!(moved.layer, 1);
         // away from the via the track stays where it was: the F.Cu segment is no obstacle to it
-        assert!(moved.pts.iter().filter(|p| p.x < Nm::from_raw_shim(4_000_000)).all(|p| p.y == Nm::from_raw_shim(350_000)), "only bent round the via: {:?}", moved.pts);
+        assert!(moved.pts.iter().filter(|p| p.x < mm(4.0)).all(|p| p.y == mm(0.35)), "only bent round the via: {:?}", moved.pts);
         // round the via's hull, on the side the clockwise walk takes (`checkShoveDirection` tests the head's first point, which is far away)
-        assert!(moved.pts.iter().any(|p| p.y.abs() >= Nm::from_raw_shim(600_000)), "clear of the via's hull: {:?}", moved.pts);
-        assert_eq!((moved.first(), moved.last()), (Some(Point { x: Nm::from_raw_shim(-2_000_000), y: Nm::from_raw_shim(350_000) }), Some(Point { x: Nm::from_raw_shim(8_000_000), y: Nm::from_raw_shim(350_000) })));
+        assert!(moved.pts.iter().any(|p| p.y.abs() >= mm(0.6)), "clear of the via's hull: {:?}", moved.pts);
+        assert_eq!((moved.first(), moved.last()), (Some(Point { x: mm(-2.0), y: mm(0.35) }), Some(Point { x: mm(8.0), y: mm(0.35) })));
     }
 
     #[test]
@@ -1936,11 +1937,11 @@ mod tests {
         let mut node = Node::new();
         // An existing GND track running vertically through where the new
         // SIG route needs to go horizontally.
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(2.5), y: mm(-2.0) }, b: Point { x: mm(2.5), y: mm(2.0) }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
-        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }];
-        let outcome = shove_line(&node, &raw, &net_of("SIG"), 0, Nm::from_raw_shim(200_000), &rules, &settings).expect("a single crossing track must be shovable");
+        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
+        let outcome = shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules, &settings).expect("a single crossing track must be shovable");
         assert_eq!(outcome.head, raw, "the pusher itself goes straight through; only the obstacle moves");
         assert_eq!(outcome.displaced_lines.len(), 1);
         assert_eq!(outcome.displaced_lines[0].source_track.as_deref(), Some("trkA"));
@@ -1949,17 +1950,17 @@ mod tests {
         // exactly where it started.
         let moved = &outcome.displaced_lines[0].line;
         for pusher_leg in raw.windows(2) {
-            let pusher_shape = Shape::Stadium { a: pusher_leg[0], b: pusher_leg[1], r: Nm::from_raw_shim(100_000) };
+            let pusher_shape = Shape::Stadium { a: pusher_leg[0], b: pusher_leg[1], r: mm(0.1) };
             for moved_leg in moved.segs() {
-                let moved_shape = Shape::Stadium { a: moved_leg.0, b: moved_leg.1, r: Nm::from_raw_shim(100_000) };
+                let moved_shape = Shape::Stadium { a: moved_leg.0, b: moved_leg.1, r: mm(0.1) };
                 // KiCad's own test of a shoved line (`ITEM::collideSimple`'s "extra 1": a hull vertex rounded inwards may leave it 1 nm short)
-                assert!(pusher_shape.collides(&moved_shape, rules.clearance_of("SIG") - Nm::from_raw_shim(1)).is_none(), "shoved track still too close to the new route");
+                assert!(pusher_shape.collides(&moved_shape, rules.clearance_of("SIG") - Nm::new(1)).is_none(), "shoved track still too close to the new route");
             }
         }
         // Endpoints of the shoved track must be preserved (shove never
         // disconnects anything it moves).
-        assert_eq!(moved.first(), Some(Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }));
-        assert_eq!(moved.last(), Some(Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }));
+        assert_eq!(moved.first(), Some(Point { x: mm(2.5), y: mm(-2.0) }));
+        assert_eq!(moved.last(), Some(Point { x: mm(2.5), y: mm(2.0) }));
     }
 
     /// `SHOVE::shoveMainLoop` checks `timeLimit.Expired()` after every iteration, so a clock that has run out ends the shove as
@@ -1968,16 +1969,16 @@ mod tests {
     #[test]
     fn a_shove_whose_time_limit_has_run_out_is_incomplete() {
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(2.5), y: mm(-2.0) }, b: Point { x: mm(2.5), y: mm(2.0) }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
         let rules = rules();
-        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }];
+        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
         let default = RoutingSettings::default();
         assert_eq!(default.shove_time_limit_ms, 1000, "ROUTING_SETTINGS: m_shoveTimeLimit = 1000");
-        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, Nm::from_raw_shim(200_000), &rules, &default).is_some());
+        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules, &default).is_some());
         let out_of_time = RoutingSettings { shove_time_limit_ms: 0, ..RoutingSettings::default() };
-        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, Nm::from_raw_shim(200_000), &rules, &out_of_time).is_none(), "an expired clock fails the shove");
+        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules, &out_of_time).is_none(), "an expired clock fails the shove");
         let plenty = RoutingSettings { shove_time_limit_ms: 60_000, ..RoutingSettings::default() };
-        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, Nm::from_raw_shim(200_000), &rules, &plenty).is_some());
+        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules, &plenty).is_some());
     }
 
     #[test]
@@ -1988,10 +1989,10 @@ mod tests {
         let node = Node::new();
         let (rules, settings) = (rules(), RoutingSettings::default());
         let sh = Shove::new(&node, &rules, &settings);
-        let pusher = SLine::new(Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(500_000), y: Nm::from_raw_shim(-500_000) }]));
-        let obs = Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }]);
-        let up = Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(800_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(800_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }]);
-        let down = Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(-800_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::from_raw_shim(-800_000) }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }]);
+        let pusher = SLine::new(Line::from_points(None, 0, mm(0.1), vec![Point { x: mm(0.5), y: mm(0.5) }, Point { x: mm(0.5), y: mm(-0.5) }]));
+        let obs = Line::from_points(None, 0, mm(0.1), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }]);
+        let up = Line::from_points(None, 0, mm(0.1), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(0.8) }, Point { x: mm(1.0), y: mm(0.8) }, Point { x: mm(1.0), y: Nm::ZERO }]);
+        let down = Line::from_points(None, 0, mm(0.1), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(-0.8) }, Point { x: mm(1.0), y: mm(-0.8) }, Point { x: mm(1.0), y: Nm::ZERO }]);
         assert!(!sh.check_shove_direction(&pusher, &obs, &up));
         assert!(sh.check_shove_direction(&pusher, &obs, &down));
     }
@@ -2005,16 +2006,16 @@ mod tests {
         let mut sh = Shove::new(&node, &rules, &settings);
         let p = |x, y| Point { x, y };
         // the head, from (500, 500) to (500, -500), in the shove's node and registered as the head's root
-        let mut head = Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![p(Nm::from_raw_shim(500_000), Nm::from_raw_shim(500_000)), p(Nm::from_raw_shim(500_000), Nm::from_raw_shim(-500_000))]);
+        let mut head = Line::from_points(None, 0, mm(0.1), vec![p(mm(0.5), mm(0.5)), p(mm(0.5), mm(-0.5))]);
         head.segment_ids = sh.node.add_line(&head, None, false);
         let root = sh.new_root(RootEntry { is_head: true, ..RootEntry::default() });
         for id in &head.segment_ids {
             sh.root_of.insert(*id, root);
         }
         let pusher = SLine { line: head.clone(), via: None, rank: HEAD_RANK };
-        let obs = Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::from_raw_shim(1_000_000), Nm::ZERO)]);
-        let up = Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, Nm::from_raw_shim(800_000)), p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(800_000)), p(Nm::from_raw_shim(1_000_000), Nm::ZERO)]);
-        let down = Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, Nm::from_raw_shim(-800_000)), p(Nm::from_raw_shim(1_000_000), Nm::from_raw_shim(-800_000)), p(Nm::from_raw_shim(1_000_000), Nm::ZERO)]);
+        let obs = Line::from_points(None, 0, mm(0.1), vec![p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO)]);
+        let up = Line::from_points(None, 0, mm(0.1), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, mm(0.8)), p(mm(1.0), mm(0.8)), p(mm(1.0), Nm::ZERO)]);
+        let down = Line::from_points(None, 0, mm(0.1), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, mm(-0.8)), p(mm(1.0), mm(-0.8)), p(mm(1.0), Nm::ZERO)]);
         // pushed from its first point (500, 500): moving the obstacle up past it is the wrong way
         assert!(!sh.check_shove_direction(&pusher, &obs, &up));
         assert!(sh.check_shove_direction(&pusher, &obs, &down));
@@ -2023,7 +2024,7 @@ mod tests {
         assert!(sh.check_shove_direction(&pusher, &obs, &up));
         assert!(!sh.check_shove_direction(&pusher, &obs, &down));
         // a line that is not the head is never reversed
-        let other = SLine::new(Line::from_points(None, 0, Nm::from_raw_shim(100_000), vec![p(Nm::from_raw_shim(500_000), Nm::from_raw_shim(500_000)), p(Nm::from_raw_shim(500_000), Nm::from_raw_shim(-500_000))]));
+        let other = SLine::new(Line::from_points(None, 0, mm(0.1), vec![p(mm(0.5), mm(0.5)), p(mm(0.5), mm(-0.5))]));
         assert!(!sh.check_shove_direction(&other, &obs, &up));
         assert!(sh.check_shove_direction(&other, &obs, &down));
     }
@@ -2033,11 +2034,11 @@ mod tests {
     #[test]
     fn walks_the_head_around_a_locked_track() {
         let mut node = Node::new();
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, b: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("trkA".into(), 0)), locked: true }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(2.5), y: mm(-2.0) }, b: Point { x: mm(2.5), y: mm(2.0) }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: true }));
         let rules = rules();
         let settings = RoutingSettings::default();
-        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }];
-        let outcome = shove_line(&node, &raw, &net_of("SIG"), 0, Nm::from_raw_shim(200_000), &rules, &settings).expect("the head walks around the locked track");
+        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
+        let outcome = shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules, &settings).expect("the head walks around the locked track");
         assert!(outcome.displaced_lines.is_empty(), "a locked track never moves");
         assert_ne!(outcome.head, raw, "the head went around it");
         assert_eq!(outcome.head.first(), raw.first());
@@ -2048,11 +2049,11 @@ mod tests {
     #[test]
     fn the_optimizer_flattens_a_shoved_line() {
         let mut node = Node::new();
-        let id = node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }, width: Nm::from_raw_shim(200_000), source_track: Some(("t".into(), 0)), locked: false }));
+        let id = node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(4.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("t".into(), 0)), locked: false }));
         let (rules, settings) = (rules(), RoutingSettings::default());
         let mut sh = Shove::new(&node, &rules, &settings);
         let old = sh.assemble(id).unwrap();
-        let bumpy = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1_500_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(500_000) }, Point { x: Nm::from_raw_shim(3_000_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }];
+        let bumpy = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }, Point { x: mm(1.5), y: mm(0.5) }, Point { x: mm(2.5), y: mm(0.5) }, Point { x: mm(3.0), y: Nm::ZERO }, Point { x: mm(4.0), y: Nm::ZERO }];
         let mut shoved = old.clone();
         shoved.clear_links();
         shoved.line.pts = bumpy;
@@ -2062,10 +2063,10 @@ mod tests {
         sh.run_optimizer();
         let seg = sh.node.iter().find_map(|(id, it)| matches!(it, Item::Segment(_)).then_some(id)).unwrap();
         let after = sh.assemble(seg).unwrap();
-        assert_eq!(after.line.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }]);
+        assert_eq!(after.line.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(4.0), y: Nm::ZERO }]);
         // and the root line remembers where the track was, so the diff is against the original
         assert_eq!(sh.roots.len(), 1);
-        assert_eq!(sh.roots[0].root_line.as_ref().unwrap().line.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(4_000_000), y: Nm::ZERO }]);
+        assert_eq!(sh.roots[0].root_line.as_ref().unwrap().line.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(4.0), y: Nm::ZERO }]);
     }
 
     /// A junction cuts an IR track into two lines; only one is shoved, and the other part of the
@@ -2073,16 +2074,16 @@ mod tests {
     #[test]
     fn the_part_of_a_track_a_shove_did_not_touch_is_handed_back() {
         let mut node = Node::new();
-        for (i, (a, b)) in [(Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(-2_000_000) }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::ZERO }), (Point { x: Nm::from_raw_shim(2_500_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }), (Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(4_000_000) })].into_iter().enumerate() {
-            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a, b, width: Nm::from_raw_shim(200_000), source_track: Some(("t".into(), i)), locked: false }));
+        for (i, (a, b)) in [(Point { x: mm(2.5), y: mm(-2.0) }, Point { x: mm(2.5), y: Nm::ZERO }), (Point { x: mm(2.5), y: Nm::ZERO }, Point { x: mm(2.5), y: mm(2.0) }), (Point { x: mm(2.5), y: mm(2.0) }, Point { x: mm(2.5), y: mm(4.0) })].into_iter().enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a, b, width: mm(0.2), source_track: Some(("t".into(), i)), locked: false }));
         }
         // a second track of the same net leaves the middle joint: the first two segments and the last are different lines
-        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, b: Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(2_000_000) }, width: Nm::from_raw_shim(200_000), source_track: Some(("branch".into(), 0)), locked: false }));
-        let raw = vec![Point { x: Nm::ZERO, y: Nm::from_raw_shim(-1_000_000) }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::from_raw_shim(-1_000_000) }];
-        let out = shove_line(&node, &raw, &net_of("SIG"), 0, Nm::from_raw_shim(200_000), &rules(), &RoutingSettings::default()).expect("the first line is pushed");
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(2.5), y: mm(2.0) }, b: Point { x: mm(5.0), y: mm(2.0) }, width: mm(0.2), source_track: Some(("branch".into(), 0)), locked: false }));
+        let raw = vec![Point { x: Nm::ZERO, y: mm(-1.0) }, Point { x: mm(5.0), y: mm(-1.0) }];
+        let out = shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules(), &RoutingSettings::default()).expect("the first line is pushed");
         let of_t: Vec<_> = out.displaced_lines.iter().filter(|d| d.source_track.as_deref() == Some("t")).collect();
         assert_eq!(of_t.len(), 2, "the pushed line and the part of t that was not: {of_t:?}");
-        assert!(of_t.iter().any(|d| d.line.pts == vec![Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(2_000_000) }, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::from_raw_shim(4_000_000) }]), "the untouched part comes back as it was: {of_t:?}");
+        assert!(of_t.iter().any(|d| d.line.pts == vec![Point { x: mm(2.5), y: mm(2.0) }, Point { x: mm(2.5), y: mm(4.0) }]), "the untouched part comes back as it was: {of_t:?}");
         assert!(out.displaced_lines.iter().all(|d| d.source_track.as_deref() != Some("branch")));
     }
 
@@ -2091,10 +2092,10 @@ mod tests {
     fn a_locked_via_is_walked_around() {
         use crate::item::Via;
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::ZERO }, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("viaA".into()), locked: true, is_virtual: false }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: true, is_virtual: false }));
         let (rules, settings) = (rules(), RoutingSettings::default());
-        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }];
-        let out = shove_line(&node, &raw, &net_of("SIG"), 0, Nm::from_raw_shim(200_000), &rules, &settings).expect("walks around");
+        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
+        let out = shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules, &settings).expect("walks around");
         assert!(out.displaced_vias.is_empty());
         assert_ne!(out.head, raw);
     }
@@ -2103,13 +2104,13 @@ mod tests {
     fn pushes_a_stitching_via_aside() {
         use crate::item::Via;
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::from_raw_shim(2_500_000), y: Nm::ZERO }, diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
-        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5_000_000), y: Nm::ZERO }];
-        let outcome = shove_line(&node, &raw, &net_of("SIG"), 0, Nm::from_raw_shim(200_000), &rules, &settings).expect("a lone via must be shovable");
+        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
+        let outcome = shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules, &settings).expect("a lone via must be shovable");
         assert_eq!(outcome.displaced_vias.len(), 1);
         assert_eq!(outcome.displaced_vias[0].source_via, "viaA");
-        assert_ne!(outcome.displaced_vias[0].pos, Point { x: Nm::from_raw_shim(2_500_000), y: Nm::ZERO }, "the via must actually move");
+        assert_ne!(outcome.displaced_vias[0].pos, Point { x: mm(2.5), y: Nm::ZERO }, "the via must actually move");
     }
 }

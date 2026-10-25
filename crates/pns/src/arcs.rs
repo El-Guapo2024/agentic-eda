@@ -296,6 +296,7 @@ pub fn arc_hull(arc: &ArcPts, width: Nm, clearance: Nm, walk: Nm) -> Vec<Point> 
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
@@ -349,7 +350,7 @@ mod tests {
         let a = quarter();
         let n = a.nearest_point(p(6_000_000, 6_000_000));
         assert!(a.distance_to(n) < 1500.0, "{n:?}");
-        assert!(n.x > Nm::from_raw_shim(3_000_000) && n.y > Nm::from_raw_shim(3_000_000), "the middle of the arc: {n:?}");
+        assert!(n.x > mm(3.0) && n.y > mm(3.0), "the middle of the arc: {n:?}");
         // behind the start, off the sweep: the start
         assert_eq!(a.nearest_point(p(5_000_000, -3_000_000)), a.start);
         assert!((a.distance_to(p(0, 0)) - 5_000_000.0).abs() < 1000.0);
@@ -358,7 +359,7 @@ mod tests {
     #[test]
     fn the_hull_of_an_arc_encloses_the_clearance_round_it_and_not_the_arc_centre() {
         let a = quarter();
-        let hull = arc_hull(&a, Nm::from_raw_shim(250_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(250_000));
+        let hull = arc_hull(&a, mm(0.25), mm(0.2), mm(0.25));
         assert!(hull.len() > 8);
         let poly_contains = |q: Point| crate::walkaround::point_in_polygon(&hull, q);
         // points of the arc, and points up to clearance + both half widths either side of it, are inside
@@ -381,7 +382,7 @@ mod tests {
     #[test]
     fn a_tight_arc_is_hulled_as_its_circle() {
         let tight = ArcPts::new(p(300_000, 0), p(212_000, 212_000), p(0, 300_000));
-        let hull = arc_hull(&tight, Nm::from_raw_shim(250_000), Nm::from_raw_shim(200_000), Nm::from_raw_shim(250_000));
+        let hull = arc_hull(&tight, mm(0.25), mm(0.2), mm(0.25));
         assert_eq!(hull.len(), 8, "an octagon round the circle");
     }
 }

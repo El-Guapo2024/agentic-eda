@@ -233,6 +233,7 @@ fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm, at: P
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track};
     use eda_model::{ConstraintModel, Part, Pin, PinKind};
@@ -248,7 +249,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![fp], modules: vec![] }),
-            routing: Some(RoutingSection { tracks: vec![Track { id: "trk1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::from_raw_shim(200), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::from_raw_shim(1000) }], arc_mid_offset: None }], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            routing: Some(RoutingSection { tracks: vec![Track { id: "trk1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: Nm::new(200), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::new(1000) }], arc_mid_offset: None }], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         (design, model)
@@ -259,21 +260,21 @@ mod tests {
         use eda_model::padstack::{PadLayerShape, PadStack, PadStackMode};
         use eda_model::{BoardRules, Footprint, Pad, PadKind, PadShape};
         let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
-        let mut pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::from_raw_shim(1600), Nm::from_raw_shim(1600)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(Nm::from_raw_shim(800)), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let mut pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (Nm::new(1600), Nm::new(1600)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(Nm::new(800)), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
         pad.ext.stack = PadStack {
             mode: PadStackMode::FrontInnerBack,
-            inner: Some(PadLayerShape::plain(PadShape::Rect, (Nm::from_raw_shim(1200), Nm::from_raw_shim(1200)))),
-            back: Some(PadLayerShape::plain(PadShape::Oval, (Nm::from_raw_shim(2400), Nm::from_raw_shim(1000)))),
+            inner: Some(PadLayerShape::plain(PadShape::Rect, (Nm::new(1200), Nm::new(1200)))),
+            back: Some(PadLayerShape::plain(PadShape::Oval, (Nm::new(2400), Nm::new(1000)))),
             ..Default::default()
         };
         let model = ConstraintModel {
             parts: vec![part],
-            footprints: vec![Footprint { name: "TH1".into(), pads: vec![pad], courtyard: Some((Nm::from_raw_shim(2000), Nm::from_raw_shim(2000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }],
+            footprints: vec![Footprint { name: "TH1".into(), pads: vec![pad], courtyard: Some((Nm::new(2000), Nm::new(2000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }],
             board: BoardRules { layers: vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()], ..Default::default() },
             ..Default::default()
         };
         let (mut design, _) = two_pad_board();
-        design.placement = Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "J1".into(), at: Point { x: Nm::from_raw_shim(10_000), y: Nm::from_raw_shim(10_000) }, rot: 0, side, label: LabelSide::Above }], modules: vec![] });
+        design.placement = Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "J1".into(), at: Point { x: mm(0.01), y: mm(0.01) }, rot: 0, side, label: LabelSide::Above }], modules: vec![] });
         design.routing = None;
         (design, model)
     }
@@ -290,11 +291,11 @@ mod tests {
         let (design, model) = padstack_board(Side::Top);
         let (node, _) = build_node(&design, &model);
         // Front: the circle of 1.6 mm; the two inner layers one rectangle of 1.2 mm; the back the 2.4 x 1.0 mm oval.
-        assert_eq!(pad_solids(&node), vec![(0, 0, (Nm::from_raw_shim(9_200), Nm::from_raw_shim(9_200), Nm::from_raw_shim(10_800), Nm::from_raw_shim(10_800))), (1, 2, (Nm::from_raw_shim(9_400), Nm::from_raw_shim(9_400), Nm::from_raw_shim(10_600), Nm::from_raw_shim(10_600))), (3, 3, (Nm::from_raw_shim(8_800), Nm::from_raw_shim(9_500), Nm::from_raw_shim(11_200), Nm::from_raw_shim(10_500)))]);
+        assert_eq!(pad_solids(&node), vec![(0, 0, (Nm::new(9200), Nm::new(9200), Nm::new(10_800), Nm::new(10_800))), (1, 2, (Nm::new(9400), Nm::new(9400), Nm::new(10_600), Nm::new(10_600))), (3, 3, (Nm::new(8800), Nm::new(9500), Nm::new(11_200), Nm::new(10_500)))]);
         // A footprint on the bottom has them the other way round: the oval on the board's front, the circle on its back.
         let (design, model) = padstack_board(Side::Bottom);
         let (node, _) = build_node(&design, &model);
-        assert_eq!(pad_solids(&node), vec![(0, 0, (Nm::from_raw_shim(8_800), Nm::from_raw_shim(9_500), Nm::from_raw_shim(11_200), Nm::from_raw_shim(10_500))), (1, 2, (Nm::from_raw_shim(9_400), Nm::from_raw_shim(9_400), Nm::from_raw_shim(10_600), Nm::from_raw_shim(10_600))), (3, 3, (Nm::from_raw_shim(9_200), Nm::from_raw_shim(9_200), Nm::from_raw_shim(10_800), Nm::from_raw_shim(10_800)))]);
+        assert_eq!(pad_solids(&node), vec![(0, 0, (Nm::new(8800), Nm::new(9500), Nm::new(11_200), Nm::new(10_500))), (1, 2, (Nm::new(9400), Nm::new(9400), Nm::new(10_600), Nm::new(10_600))), (3, 3, (Nm::new(9200), Nm::new(9200), Nm::new(10_800), Nm::new(10_800)))]);
     }
 
     /// `syncTextItem`: a board text on copper is a solid of no net on its layer, the box of its glyphs turned with the text; nothing joins to
@@ -303,7 +304,7 @@ mod tests {
     fn a_copper_text_is_an_obstacle_on_its_layer() {
         use eda_model::ir::{DrawingsSection, FootprintText};
         let (mut design, model) = two_pad_board();
-        let text = |angle: i64, layer: &str| FootprintText { text: "AB".into(), layer: layer.into(), at: Point { x: Nm::from_raw_shim(20_000), y: Nm::from_raw_shim(20_000) }, angle_file_mdeg: angle, size: (Nm::from_raw_shim(1000), Nm::from_raw_shim(1000)), thickness: Nm::from_raw_shim(150), halign: 0, valign: 0, mirror: false, keep_upright: false, bold: false };
+        let text = |angle: i64, layer: &str| FootprintText { text: "AB".into(), layer: layer.into(), at: Point { x: mm(0.02), y: mm(0.02) }, angle_file_mdeg: angle, size: (Nm::new(1000), Nm::new(1000)), thickness: Nm::new(150), halign: 0, valign: 0, mirror: false, keep_upright: false, bold: false };
         design.drawings = Some(DrawingsSection { copper_texts: vec![text(0, "F.Cu"), text(90_000, "B.Cu"), text(0, "F.SilkS")], ..Default::default() });
         let (node, layers) = build_node(&design, &model);
         let texts: Vec<&Solid> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.is_text() => Some(s), _ => None }).collect();
@@ -314,15 +315,15 @@ mod tests {
         assert_eq!(pts.len(), 4);
         let (x0, y0, x1, y1) = front.shape.bbox(Nm::ZERO);
         // two glyphs 1 mm high, centred on (20, 20) mm: wider than high, round the anchor, the pen and the error outside the glyphs
-        assert!(x1 - x0 > y1 - y0 && x0 < Nm::from_raw_shim(20_000) && x1 > Nm::from_raw_shim(20_000) && y0 < Nm::from_raw_shim(19_500) && y1 > Nm::from_raw_shim(20_500), "{:?}", (x0, y0, x1, y1));
+        assert!(x1 - x0 > y1 - y0 && x0 < mm(0.02) && x1 > mm(0.02) && y0 < Nm::new(19_500) && y1 > Nm::new(20_500), "{:?}", (x0, y0, x1, y1));
         // the text turned by 90 degrees: its box is turned too
         let (bx0, by0, bx1, by1) = back.shape.bbox(Nm::ZERO);
-        assert!((bx1 - bx0 - (y1 - y0)).abs() <= Nm::from_raw_shim(2) && (by1 - by0 - (x1 - x0)).abs() <= Nm::from_raw_shim(2), "{:?} vs {:?}", (bx0, by0, bx1, by1), (x0, y0, x1, y1));
+        assert!((bx1 - bx0 - (y1 - y0)).abs() <= Nm::new(2) && (by1 - by0 - (x1 - x0)).abs() <= Nm::new(2), "{:?} vs {:?}", (bx0, by0, bx1, by1), (x0, y0, x1, y1));
         // a track through it collides; one that keeps the clearance does not
         let rules = model.board.clone();
-        let through = Shape::Stadium { a: Point { x: Nm::from_raw_shim(15_000), y: Nm::from_raw_shim(20_000) }, b: Point { x: Nm::from_raw_shim(25_000), y: Nm::from_raw_shim(20_000) }, r: Nm::from_raw_shim(100) };
+        let through = Shape::Stadium { a: Point { x: mm(0.015), y: mm(0.02) }, b: Point { x: mm(0.025), y: mm(0.02) }, r: Nm::new(100) };
         assert!(node.first_colliding(&through, &net_of("N1"), front.layers, &rules, &[]).is_some());
-        let clear = Shape::Stadium { a: Point { x: Nm::from_raw_shim(15_000), y: y1 + Nm::from_raw_shim(100) + rules.clearance }, b: Point { x: Nm::from_raw_shim(25_000), y: y1 + Nm::from_raw_shim(100) + rules.clearance }, r: Nm::from_raw_shim(100) };
+        let clear = Shape::Stadium { a: Point { x: mm(0.015), y: y1 + Nm::new(100) + rules.clearance }, b: Point { x: mm(0.025), y: y1 + Nm::new(100) + rules.clearance }, r: Nm::new(100) };
         assert!(node.first_colliding(&clear, &net_of("N1"), front.layers, &rules, &[]).is_none());
     }
 

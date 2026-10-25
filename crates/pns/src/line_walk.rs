@@ -399,8 +399,8 @@ mod tests {
     #[test]
     fn walkaround_does_not_cut_through_hull_d3_repro() {
         let pt = |x, y| Point { x, y };
-        let line = [pt(Nm::from_raw_shim(403), Nm::from_raw_shim(5139)), pt(Nm::from_raw_shim(9992), Nm::from_raw_shim(5639))];
-        let hull = make_clockwise(vec![pt(Nm::from_raw_shim(5157), Nm::from_raw_shim(5508)), pt(Nm::from_raw_shim(4849), Nm::from_raw_shim(5386)), pt(Nm::from_raw_shim(4717), Nm::from_raw_shim(5082)), pt(Nm::from_raw_shim(4839), Nm::from_raw_shim(4774)), pt(Nm::from_raw_shim(6502), Nm::from_raw_shim(4054)), pt(Nm::from_raw_shim(6810), Nm::from_raw_shim(4176)), pt(Nm::from_raw_shim(6942), Nm::from_raw_shim(4480)), pt(Nm::from_raw_shim(6820), Nm::from_raw_shim(4788))]);
+        let line = [pt(Nm::new(403), Nm::new(5139)), pt(Nm::new(9992), Nm::new(5639))];
+        let hull = make_clockwise(vec![pt(Nm::new(5157), Nm::new(5508)), pt(Nm::new(4849), Nm::new(5386)), pt(Nm::new(4717), Nm::new(5082)), pt(Nm::new(4839), Nm::new(4774)), pt(Nm::new(6502), Nm::new(4054)), pt(Nm::new(6810), Nm::new(4176)), pt(Nm::new(6942), Nm::new(4480)), pt(Nm::new(6820), Nm::new(4788))]);
         for cw in [true, false] {
             let path = walkaround(&line, &hull, cw).unwrap();
             assert!(path.len() > 3, "cw={cw} {path:?}");
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn walks_around_a_square_both_ways() {
         let hull = square(400, -100, 600, 100);
-        let line = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }];
+        let line = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }];
         let a = walkaround(&line, &hull, true).unwrap();
         let b = walkaround(&line, &hull, false).unwrap();
         assert_eq!(a.first(), Some(&line[0]));
@@ -461,21 +461,21 @@ mod tests {
         // One goes over the top, the other under the bottom.
         let ys_a: Vec<Nm> = a.iter().map(|p| p.y).collect();
         let ys_b: Vec<Nm> = b.iter().map(|p| p.y).collect();
-        assert!((ys_a.contains(&Nm::from_raw_shim(100)) && ys_b.contains(&Nm::from_raw_shim(-100))) || (ys_a.contains(&Nm::from_raw_shim(-100)) && ys_b.contains(&Nm::from_raw_shim(100))), "{a:?} / {b:?}");
+        assert!((ys_a.contains(&Nm::new(100)) && ys_b.contains(&Nm::new(-100))) || (ys_a.contains(&Nm::new(-100)) && ys_b.contains(&Nm::new(100))), "{a:?} / {b:?}");
     }
 
     #[test]
     fn a_line_that_misses_the_hull_is_unchanged() {
         let hull = square(400, 500, 600, 700);
-        let line = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }];
+        let line = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }];
         assert_eq!(walkaround(&line, &hull, true).unwrap(), line.to_vec());
     }
 
     #[test]
     fn walks_both_ways_around_a_roundrect_pad_hull() {
-        let shape = eda_drc::kimath::Shape::RoundRect { x0: Nm::from_raw_shim(2475 - 975), y0: Nm::from_raw_shim(-1905 - 300), x1: Nm::from_raw_shim(2475 + 975), y1: Nm::from_raw_shim(-1905 + 300), r: Nm::from_raw_shim(150) };
-        let hull = crate::hull::primitive_hull(&shape, Nm::from_raw_shim(200), Nm::from_raw_shim(200));
-        let line = [Point { x: Nm::from_raw_shim(-2475), y: Nm::from_raw_shim(-1905) }, Point { x: Nm::from_raw_shim(8665), y: Nm::from_raw_shim(-1905) }, Point { x: Nm::from_raw_shim(12475), y: Nm::from_raw_shim(1905) }];
+        let shape = eda_drc::kimath::Shape::RoundRect { x0: Nm::from_raw_shim(2475 - 975), y0: Nm::from_raw_shim(-1905 - 300), x1: Nm::from_raw_shim(2475 + 975), y1: Nm::from_raw_shim(-1905 + 300), r: Nm::new(150) };
+        let hull = crate::hull::primitive_hull(&shape, Nm::new(200), Nm::new(200));
+        let line = [Point { x: Nm::new(-2475), y: Nm::new(-1905) }, Point { x: Nm::new(8665), y: Nm::new(-1905) }, Point { x: Nm::new(12_475), y: Nm::new(1905) }];
         assert_eq!(hull_intersection(&hull, &line).len(), 2);
         for cw in [true, false] {
             let p = walkaround(&line, &hull, cw).expect("both windings clear one pad");
@@ -488,14 +488,14 @@ mod tests {
     #[test]
     fn starting_inside_the_hull_fails() {
         let hull = square(-100, -100, 100, 100);
-        let line = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }];
+        let line = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }];
         assert!(walkaround(&line, &hull, true).is_none());
     }
 
     #[test]
     fn ending_inside_the_hull_stops_at_the_nearest_projection() {
         let hull = square(400, -100, 600, 100);
-        let line = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500), y: Nm::ZERO }];
+        let line = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(500), y: Nm::ZERO }];
         let p = walkaround(&line, &hull, true).unwrap();
         assert_eq!(p.first(), Some(&line[0]));
         assert!(p.len() >= 2);

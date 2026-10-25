@@ -689,15 +689,15 @@ mod tests {
 
     #[test]
     fn simplify_drops_collinear_midpoint() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(500), y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }]);
         l.simplify();
-        assert_eq!(l.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }]);
+        assert_eq!(l.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }]);
     }
 
     /// findings p5 F1-4 / F2-15: `SHAPE_LINE_CHAIN::Simplify2` drops a point on the infinite line through its neighbours, so a fold-back goes.
     #[test]
     fn simplify2_drops_a_backtracking_point_like_kicad() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(10, 0), p(5, 0), p(5, 5)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(10, 0), p(5, 0), p(5, 5)]);
         l.simplify2();
         assert_eq!(l.pts, vec![p(0, 0), p(5, 0), p(5, 5)]);
     }
@@ -705,10 +705,10 @@ mod tests {
     /// `Simplify2` on 3 points only drops a repeated first point ("Always try to keep at least 2 points").
     #[test]
     fn simplify2_keeps_a_collinear_middle_of_three_points() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(500, 0), p(1000, 0)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(500, 0), p(1000, 0)]);
         l.simplify2();
         assert_eq!(l.pts.len(), 3);
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(0, 0), p(1000, 0)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(0, 0), p(1000, 0)]);
         l.simplify2();
         assert_eq!(l.pts, vec![p(0, 0), p(1000, 0)]);
     }
@@ -716,14 +716,14 @@ mod tests {
     /// The 1 nm kinks a walk round a hull leaves (`LineDistance <= 1`) go; a real corner stays.
     #[test]
     fn simplify2_drops_one_nanometre_kinks() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(0, 5_000_000), p(1, 5_000_001), p(0, 9_000_000), p(4_000_000, 9_000_000)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(0, 5_000_000), p(1, 5_000_001), p(0, 9_000_000), p(4_000_000, 9_000_000)]);
         l.simplify2();
         assert_eq!(l.pts, vec![p(0, 0), p(0, 9_000_000), p(4_000_000, 9_000_000)]);
     }
 
     #[test]
     fn simplify_keeps_real_corner() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500), y: Nm::from_raw_shim(500) }]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(500), y: Nm::ZERO }, Point { x: Nm::new(500), y: Nm::new(500) }]);
         l.simplify();
         assert_eq!(l.pts.len(), 3);
     }
@@ -742,7 +742,7 @@ mod tests {
     /// `LINE::DragCorner` (45-degree): dragging the end of a straight track just moves it along.
     #[test]
     fn drag_corner_keeps_a_straight_track_straight() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(2500, 3000), p(2500, 100)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(2500, 3000), p(2500, 100)]);
         l.drag_corner45(p(2500, 600), 1);
         assert_eq!(l.pts, vec![p(2500, 3000), p(2500, 600)]);
     }
@@ -751,7 +751,7 @@ mod tests {
     /// new 45-degree leg and a straight one, never a leg at an odd angle.
     #[test]
     fn drag_corner_re_solves_the_last_leg_at_45_degrees() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(4500, 2100), p(2500, 100)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(4500, 2100), p(2500, 100)]);
         l.drag_corner45(p(2500, 600), 1);
         assert_eq!(l.pts, vec![p(4500, 2100), p(3000, 600), p(2500, 600)]);
         assert!(on_45(&l.pts));
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn drag_corner_of_a_longer_line_only_changes_the_end() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(2000, 0), p(2000, 2000), p(2000, 3000)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(2000, 0), p(2000, 2000), p(2000, 3000)]);
         l.drag_corner45(p(2600, 3200), 3);
         assert!(on_45(&l.pts), "{:?}", l.pts);
         assert_eq!(l.pts.first(), Some(&p(0, 0)));
@@ -769,7 +769,7 @@ mod tests {
 
     #[test]
     fn drag_corner_at_the_start_works_on_the_reversed_line() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(1000, 0), p(1000, 1000)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(1000, 0), p(1000, 1000)]);
         l.drag_corner45(p(-300, 100), 0);
         assert!(on_45(&l.pts), "{:?}", l.pts);
         assert_eq!(l.pts.first(), Some(&p(-300, 100)));
@@ -805,7 +805,7 @@ mod tests {
         ];
         for (kind, snap, index, cursor, line, want) in cases {
             let pts: Vec<Point> = line.iter().map(|&(x, y)| p(x, y)).collect();
-            let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), pts);
+            let mut l = Line::from_points(None, 0, Nm::new(200), pts);
             let to = p(cursor.0, cursor.1);
             if *kind == 'S' {
                 l.drag_segment45(to, *index, Nm::from_raw_shim(*snap));
@@ -820,10 +820,10 @@ mod tests {
     /// `dragCornerFree`: the vertex goes to the cursor at any angle; the 45-degree drag keeps 45-degree legs.
     #[test]
     fn a_free_angle_corner_drag_moves_the_vertex_to_the_cursor() {
-        let mut free = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(1000, 0)]);
+        let mut free = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(1000, 0)]);
         free.drag_corner(p(1000, 300), 1, true, Nm::ZERO);
         assert_eq!(free.pts, vec![p(0, 0), p(1000, 300)]);
-        let mut to45 = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(1000, 0)]);
+        let mut to45 = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(1000, 0)]);
         to45.drag_corner(p(1000, 300), 1, false, Nm::ZERO);
         assert!(on_45(&to45.pts), "{:?}", to45.pts);
         assert_eq!(to45.pts.last(), Some(&p(1000, 300)));
@@ -831,19 +831,19 @@ mod tests {
 
     #[test]
     fn has_loops_and_find() {
-        let l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(10, 0), p(10, 10), p(0, 10), p(0, 0)]);
+        let l = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(10, 0), p(10, 10), p(0, 10), p(0, 0)]);
         assert!(l.has_loops());
-        assert!(!Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(10, 0), p(10, 10)]).has_loops());
+        assert!(!Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(10, 0), p(10, 10)]).has_loops());
         assert_eq!(l.find(p(10, 10)), Some(2));
         assert_eq!(l.find(p(7, 7)), None);
     }
 
     #[test]
     fn reverse_swaps_via_ends() {
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(100), y: Nm::ZERO }]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(100), y: Nm::ZERO }]);
         l.via_at_start = Some(5);
         l.reverse();
         assert_eq!(l.via_at_end, Some(5));
-        assert_eq!(l.first(), Some(Point { x: Nm::from_raw_shim(100), y: Nm::ZERO }));
+        assert_eq!(l.first(), Some(Point { x: Nm::new(100), y: Nm::ZERO }));
     }
 }

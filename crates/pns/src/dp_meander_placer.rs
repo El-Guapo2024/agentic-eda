@@ -675,6 +675,7 @@ impl DpMeanderPlacer {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::item::{Segment, Solid};
     use crate::layer::LayerRange;
@@ -687,16 +688,16 @@ mod tests {
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = Nm::from_raw_shim(150_000);
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
+        rules.clearance = mm(0.15);
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
     }
 
     fn pad(net: &str, at: Point) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: Nm::from_raw_shim(300_000) }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "U1.1".into(), edge: false })
     }
 
     fn seg(net: &str, a: Point, b: Point) -> Item {
-        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width: Nm::from_raw_shim(200_000), source_track: None, locked: false })
+        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width: mm(0.2), source_track: None, locked: false })
     }
 
     /// USB_P and USB_N, 40 mm long, 0.5 mm apart (centre to centre 0.4 mm: gap 0.2 mm).
@@ -724,7 +725,7 @@ mod tests {
         let (w, a, b) = board();
         let pair = assemble_diff_pair(&w, a).expect("a pair");
         assert_eq!((pair.net_p.as_deref(), pair.net_n.as_deref()), (Some("USB_P"), Some("USB_N")));
-        assert_eq!(pair.width, Nm::from_raw_shim(200_000));
+        assert_eq!(pair.width, mm(0.2));
         assert_eq!(pair.gap, 200_000, "0.4 mm between the centres less a width");
         // from the N line the pair is the same, P first
         let from_n = assemble_diff_pair(&w, b).expect("a pair");
@@ -769,7 +770,7 @@ mod tests {
             profile_type: ProfileType::Differential,
             target_impedance: 90.0,
             enable_time_domain_tuning: true,
-            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: Nm::from_raw_shim(200_000), diff_pair_gap_nm: Nm::from_raw_shim(200_000), delay_as_per_mm: 6_100_000 }],
+            layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: mm(0.2), diff_pair_gap_nm: mm(0.2), delay_as_per_mm: 6_100_000 }],
             via_propagation_delay_as: 0,
             via_overrides: vec![],
         };
@@ -806,7 +807,7 @@ mod tests {
         assert_eq!(c.len(), 2, "the two straight runs are coupled, the corners are not");
         assert_eq!((c[0].index_p, c[0].index_n), (0, 0));
         let base = baseline_segment(&c[0]);
-        assert_eq!(base.a.y, Nm::from_raw_shim(200_000));
+        assert_eq!(base.a.y, mm(0.2));
         assert!(pair_orientation(&c[0]), "N is below P, on the positive side");
         // a line too far for the gap
         assert!(coupled_segment_pairs(&p_line, &n_line, 200_000, 500_000).is_empty());

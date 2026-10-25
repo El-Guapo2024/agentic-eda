@@ -385,9 +385,9 @@ mod tests {
 
     #[test]
     fn from_vector_quantizes_to_nearest_octant() {
-        assert_eq!(Direction45::from_vector(Nm::from_raw_shim(100), Nm::ZERO), Direction45::E);
-        assert_eq!(Direction45::from_vector(Nm::from_raw_shim(100), Nm::from_raw_shim(100)), Direction45::SE);
-        assert_eq!(Direction45::from_vector(Nm::ZERO, Nm::from_raw_shim(-100)), Direction45::N);
+        assert_eq!(Direction45::from_vector(Nm::new(100), Nm::ZERO), Direction45::E);
+        assert_eq!(Direction45::from_vector(Nm::new(100), Nm::new(100)), Direction45::SE);
+        assert_eq!(Direction45::from_vector(Nm::ZERO, Nm::new(-100)), Direction45::N);
         assert_eq!(Direction45::from_vector(Nm::ZERO, Nm::ZERO), Direction45::Undefined);
     }
 
@@ -419,25 +419,25 @@ mod tests {
     #[test]
     fn build_initial_trace_45_degree_elbow() {
         let p0 = Point { x: Nm::ZERO, y: Nm::ZERO };
-        let p1 = Point { x: Nm::from_raw_shim(1000), y: Nm::from_raw_shim(500) };
+        let p1 = Point { x: Nm::new(1000), y: Nm::new(500) };
         let path = Direction45::E.build_initial_trace(p0, p1, false, CornerMode::Mitered45);
         assert_eq!(path.len(), 3);
         // E is not diagonal -> straight leg first (due east, matching the
         // heading), covering the longer axis's excess (1000-500=500),
         // then a 45-degree leg covers the remaining (500,500) into p1.
-        assert_eq!(path[1], Point { x: Nm::from_raw_shim(500), y: Nm::ZERO });
+        assert_eq!(path[1], Point { x: Nm::new(500), y: Nm::ZERO });
     }
 
     #[test]
     fn build_initial_trace_degenerates_to_one_segment_on_pure_diagonal() {
-        let path = Direction45::N.build_initial_trace(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500), y: Nm::from_raw_shim(500) }, false, CornerMode::Mitered45);
-        assert_eq!(path, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(500), y: Nm::from_raw_shim(500) }]);
+        let path = Direction45::N.build_initial_trace(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(500), y: Nm::new(500) }, false, CornerMode::Mitered45);
+        assert_eq!(path, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(500), y: Nm::new(500) }]);
     }
 
     #[test]
     fn build_initial_trace_90_mode_is_axis_aligned() {
-        let path = Direction45::E.build_initial_trace(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::from_raw_shim(500) }, false, CornerMode::Mitered90);
+        let path = Direction45::E.build_initial_trace(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::new(500) }, false, CornerMode::Mitered90);
         assert_eq!(path.len(), 3);
-        assert!(path[1] == Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO } || path[1] == Point { x: Nm::ZERO, y: Nm::from_raw_shim(500) });
+        assert!(path[1] == Point { x: Nm::new(1000), y: Nm::ZERO } || path[1] == Point { x: Nm::ZERO, y: Nm::new(500) });
     }
 }

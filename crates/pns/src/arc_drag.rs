@@ -310,6 +310,7 @@ impl ArcDrag {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     fn p(x: i64, y: i64) -> Point {
@@ -320,7 +321,7 @@ mod tests {
     /// the arc from (6000, 0) to (10000, 4000) about (6000, 4000).
     fn fillet() -> Line {
         let arc = ArcPts::from_start_end_center(p(6000, 0), p(10000, 4000), p(6000, 4000));
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(0, 0), p(6000, 0)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(0, 0), p(6000, 0)]);
         l.append_arc(arc);
         l.pts.push(p(10000, 12000));
         l
@@ -349,10 +350,10 @@ mod tests {
         assert_eq!(tight_line.arc_count(), 1);
         // tangent: its ends are on the tracks' lines
         assert_eq!(tight.start.y, Nm::ZERO);
-        assert_eq!(tight.end.x, Nm::from_raw_shim(10000));
+        assert_eq!(tight.end.x, mm(0.01));
         let (wide, wide_line) = d.at(&l, p(8000, 2000)).expect("a larger arc");
         assert!(wide.radius() > 4000.0, "{}", wide.radius());
-        assert_eq!((wide.start.y, wide.end.x), (Nm::ZERO, Nm::from_raw_shim(10000)));
+        assert_eq!((wide.start.y, wide.end.x), (Nm::ZERO, mm(0.01)));
         assert!(wide_line.arc_count() == 1);
         // the cursor can not take it past the biggest circle that fits
         let (far, _) = d.at(&l, p(3000, 9000)).unwrap();
@@ -362,7 +363,7 @@ mod tests {
     #[test]
     fn an_arc_of_179_degrees_or_more_is_refused_with_kicads_words() {
         let arc = ArcPts::new(p(0, 0), p(4000, -4000), p(8000, 0)); // a half circle
-        let mut l = Line::from_points(None, 0, Nm::from_raw_shim(200), vec![p(-2000, 0)]);
+        let mut l = Line::from_points(None, 0, Nm::new(200), vec![p(-2000, 0)]);
         l.append_arc(arc);
         let run = l.arc_runs()[0];
         assert_eq!(ArcDrag::new(&l, run).unwrap_err(), TOO_WIDE);

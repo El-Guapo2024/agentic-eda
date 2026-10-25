@@ -429,6 +429,7 @@ pub fn nearest_segment(world: &Node, p: Point, layer: i32, net: Option<&Net>, wi
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::item::{net_of, Segment, Solid, Via};
     use crate::layer::LayerRange;
@@ -438,7 +439,7 @@ mod tests {
     }
 
     fn seg(net: &str, layer: i32, a: Point, b: Point) -> Item {
-        Item::Segment(Segment { net: net_of(net), layer, a, b, width: Nm::from_raw_shim(250_000), source_track: None, locked: false })
+        Item::Segment(Segment { net: net_of(net), layer, a, b, width: mm(0.25), source_track: None, locked: false })
     }
 
     fn pad(net: &str, at: Point) -> Item {
@@ -446,13 +447,13 @@ mod tests {
     }
 
     fn pad_on(net: &str, at: Point, layers: LayerRange) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: Nm::from_raw_shim(400_000) }, source: "U1.1".into(), edge: false })
+        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: "U1.1".into(), edge: false })
     }
 
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
     }
 
     #[test]
@@ -474,7 +475,7 @@ mod tests {
         let mut w = Node::new();
         w.add(pad("S", p(0, 0)));
         let a = w.add(seg("S", 0, p(0, 0), p(10_000_000, 0)));
-        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000_000, 0), diameter: Nm::from_raw_shim(600_000), drill: Nm::from_raw_shim(300_000), source_via: Some("via".into()), locked: false, is_virtual: false }));
+        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000_000, 0), diameter: mm(0.6), drill: mm(0.3), source_via: Some("via".into()), locked: false, is_virtual: false }));
         w.add(seg("S", 1, p(10_000_000, 0), p(10_000_000, 8_000_000)));
         w.add(pad_on("S", p(10_000_000, 8_000_000), LayerRange::new(0, 1)));
         let path = assemble_tuning_path(&w, a).expect("a path");
@@ -511,7 +512,7 @@ mod tests {
 
     #[test]
     fn the_distance_between_inner_layers_counts_half_of_each_copper_layer() {
-        let s = eda_model::rules::default_stackup(4, Nm::from_raw_shim(1_600_000));
+        let s = eda_model::rules::default_stackup(4, mm(1.6));
         let copper: Vec<String> = eda_model::rules::copper_layer_names(4);
         let all = stackup_distance_nm(&s, &copper, "F.Cu", "B.Cu");
         let outer_to_in1 = stackup_distance_nm(&s, &copper, "F.Cu", "In1.Cu");

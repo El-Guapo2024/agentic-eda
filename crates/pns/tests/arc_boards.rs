@@ -5,6 +5,7 @@
 //!
 //! Skipped (prints a line, passes) when the QA corpus is not on this machine: `KICAD_QA_DATA`, default `~/ws/kicad-src-8303b2ad/qa/data`.
 
+use eda_model::units::mm;
 use eda_model::units::Nm;
 use eda_model::ir::{Design, Point, Track};
 use eda_model::ConstraintModel;
@@ -208,11 +209,11 @@ fn random_shove_routes_on_boards_with_arcs_never_leave_a_new_violation() {
             let (start, _) = anchors[rng.below(anchors.len() as i64) as usize].clone();
             let target = if k % 2 == 0 {
                 let (s, m, e) = arcs[rng.below(arcs.len() as i64) as usize];
-                Point { x: (s.x + m.x + e.x) / 3 + Nm::from_raw_shim(rng.below(1_500) * 1000) - Nm::from_raw_shim(750_000), y: (s.y + m.y + e.y) / 3 + Nm::from_raw_shim(rng.below(1_500) * 1000) - Nm::from_raw_shim(750_000) }
+                Point { x: (s.x + m.x + e.x) / 3 + Nm::from_raw_shim(rng.below(1_500) * 1000) - mm(0.75), y: (s.y + m.y + e.y) / 3 + Nm::from_raw_shim(rng.below(1_500) * 1000) - mm(0.75) }
             } else {
-                Point { x: start.x + Nm::from_raw_shim(rng.below(24_000) * 1000) - Nm::from_raw_shim(12_000_000), y: start.y + Nm::from_raw_shim(rng.below(24_000) * 1000) - Nm::from_raw_shim(12_000_000) }
+                Point { x: start.x + Nm::from_raw_shim(rng.below(24_000) * 1000) - mm(12.0), y: start.y + Nm::from_raw_shim(rng.below(24_000) * 1000) - mm(12.0) }
             };
-            if router.start(start, "F.Cu", Nm::from_raw_shim(250_000)).is_err() {
+            if router.start(start, "F.Cu", mm(0.25)).is_err() {
                 continue;
             }
             let Some(pv) = router.preview(target) else { continue };
@@ -263,7 +264,7 @@ fn random_arc_drags_never_leave_a_new_violation() {
                 let mut last = at;
                 let mut shown = d.drag(&node, &model.board, &settings, at);
                 for _ in 0..3 {
-                    last = Point { x: at.x + Nm::from_raw_shim(rng.below(3_000) * 1000) - Nm::from_raw_shim(1_500_000), y: at.y + Nm::from_raw_shim(rng.below(3_000) * 1000) - Nm::from_raw_shim(1_500_000) };
+                    last = Point { x: at.x + Nm::from_raw_shim(rng.below(3_000) * 1000) - mm(1.5), y: at.y + Nm::from_raw_shim(rng.below(3_000) * 1000) - mm(1.5) };
                     shown = d.drag(&node, &model.board, &settings, last);
                 }
                 if shown.colliding || shown.restored {
@@ -328,7 +329,7 @@ fn dragging_a_segment_or_corner_of_a_line_with_an_arc_keeps_the_arc() {
                 let mut last = at;
                 let mut shown = d.drag(&node, &model.board, &settings, at);
                 for _ in 0..3 {
-                    last = Point { x: at.x + Nm::from_raw_shim(rng.below(2_500) * 1000) - Nm::from_raw_shim(1_250_000), y: at.y + Nm::from_raw_shim(rng.below(2_500) * 1000) - Nm::from_raw_shim(1_250_000) };
+                    last = Point { x: at.x + Nm::from_raw_shim(rng.below(2_500) * 1000) - mm(1.25), y: at.y + Nm::from_raw_shim(rng.below(2_500) * 1000) - mm(1.25) };
                     if std::env::var("ARC_TRACE").is_ok() {
                         eprintln!("    to {last:?}");
                     }

@@ -153,12 +153,13 @@ pub fn hull_of(shape: &Shape, clearance: Nm, walkaround_width: Nm) -> Vec<Point>
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
     #[test]
     fn circle_hull_contains_true_circle() {
         let c = Point { x: Nm::ZERO, y: Nm::ZERO };
-        let hull = hull_of(&Shape::Circle { c, r: Nm::from_raw_shim(1000) }, Nm::from_raw_shim(200), Nm::ZERO);
+        let hull = hull_of(&Shape::Circle { c, r: Nm::new(1000) }, Nm::new(200), Nm::ZERO);
         assert_eq!(hull.len(), 8);
         // Every hull vertex must be at least `r+clearance` from centre
         // (apothem == r+clearance, vertices a bit further out).
@@ -170,10 +171,10 @@ mod tests {
 
     #[test]
     fn stadium_hull_is_convex_and_wider_than_radius() {
-        let hull = hull_of(&Shape::Stadium { a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(10_000), y: Nm::ZERO }, r: Nm::from_raw_shim(500) }, Nm::from_raw_shim(100), Nm::from_raw_shim(200) /* walkaround width */);
+        let hull = hull_of(&Shape::Stadium { a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(0.01), y: Nm::ZERO }, r: Nm::new(500) }, Nm::new(100), Nm::new(200) /* walkaround width */);
         // offset = 100 + 100 = 200; total half-extent from axis ~= 700.
         let max_y = hull.iter().map(|p| p.y).max().unwrap();
-        assert!((Nm::from_raw_shim(690)..=Nm::from_raw_shim(760)).contains(&max_y), "max_y={max_y}");
+        assert!((Nm::new(690)..=Nm::new(760)).contains(&max_y), "max_y={max_y}");
         // Convexity: re-hulling should not drop any point.
         let rehull = convex_hull(&hull);
         assert_eq!(rehull.len(), hull.len());
@@ -181,15 +182,15 @@ mod tests {
 
     #[test]
     fn rect_hull_is_exact_inflated_rect() {
-        let hull = hull_of(&Shape::Rect { x0: Nm::ZERO, y0: Nm::ZERO, x1: Nm::from_raw_shim(1000), y1: Nm::from_raw_shim(2000) }, Nm::from_raw_shim(50), Nm::ZERO);
+        let hull = hull_of(&Shape::Rect { x0: Nm::ZERO, y0: Nm::ZERO, x1: Nm::new(1000), y1: Nm::new(2000) }, Nm::new(50), Nm::ZERO);
         assert_eq!(hull.len(), 4);
         let xs: Vec<Nm> = hull.iter().map(|p| p.x).collect();
-        assert!(xs.contains(&Nm::from_raw_shim(-50)) && xs.contains(&Nm::from_raw_shim(1050)));
+        assert!(xs.contains(&Nm::new(-50)) && xs.contains(&Nm::new(1050)));
     }
 
     #[test]
     fn convex_hull_of_collinear_points_is_the_segment() {
-        let pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(5), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(10), y: Nm::ZERO }];
+        let pts = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(5), y: Nm::ZERO }, Point { x: Nm::new(10), y: Nm::ZERO }];
         let hull = convex_hull(&pts);
         assert_eq!(hull.len(), 2);
     }
@@ -205,7 +206,7 @@ mod tests {
 
 /// `PNS_HULL_MARGIN` (`pns_line.h`): 10 nm. (The micrometre-era `HULL_ROUNDING_GUARD`, a micrometre added to every router hull, is gone:
 /// on KiCad's nanometre grid the hulls are KiCad's own, findings p5 F1-6.)
-pub const PNS_HULL_MARGIN: Nm = Nm::from_raw_shim(10);
+pub const PNS_HULL_MARGIN: Nm = Nm::new(10);
 
 fn kiround(v: f64) -> Nm {
     Nm::from_raw_shim(v.round() as i64)
@@ -294,17 +295,17 @@ pub fn segment_hull(a: Point, b0: Point, width: Nm, clearance: Nm, walk: Nm) -> 
             }
         } else if len <= kink {
             let delta45 = (w.abs() - h.abs()).abs();
-            if w.abs() <= Nm::from_raw_shim(1) {
+            if w.abs() <= Nm::new(1) {
                 w = Nm::ZERO;
-                cl += Nm::from_raw_shim(1);
-            } else if h.abs() <= Nm::from_raw_shim(1) {
+                cl += Nm::new(1);
+            } else if h.abs() <= Nm::new(1) {
                 h = Nm::ZERO;
-                cl += Nm::from_raw_shim(1);
-            } else if delta45 <= Nm::from_raw_shim(2) {
+                cl += Nm::new(1);
+            } else if delta45 <= Nm::new(2) {
                 let m = w.abs().max(h.abs());
                 w = w.signum() * m;
                 h = h.signum() * m;
-                cl += Nm::from_raw_shim(2);
+                cl += Nm::new(2);
             }
             b = Point { x: a.x + w, y: a.y + h };
         }
@@ -431,7 +432,7 @@ pub fn convex_hull_octagon(vertices: &[Point], clearance: Nm) -> Vec<Point> {
 /// compound (inner rect + one segment per edge, `PAD::buildEffectiveShape`),
 /// hulled per primitive and unioned.
 pub fn primitive_hull(shape: &Shape, clearance: Nm, walk: Nm) -> Vec<Point> {
-    let cl = clearance + (walk + Nm::from_raw_shim(1)) / 2;
+    let cl = clearance + (walk + Nm::new(1)) / 2;
     match *shape {
         Shape::Circle { c, r } => make_clockwise(octagonal_hull(Point { x: c.x - r, y: c.y - r }, (2 * r, 2 * r), cl, Nm::from_raw_shim((2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * (r + cl).raw_shim() as f64) as i64))),
         Shape::Stadium { a, b, r } => segment_hull(a, b, 2 * r, clearance, walk),
@@ -479,39 +480,39 @@ mod kicad_hull_tests {
     #[test]
     fn a_custom_pads_hull_is_the_union_of_the_hulls_of_its_parts() {
         // A 1 mm round anchor and a 200 um arm 2 mm to the right (a custom pad): `SOLID::Hull` hulls each primitive and unions them.
-        let pad = Shape::Compound { parts: vec![Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: Nm::from_raw_shim(500) }, Shape::Stadium { a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::from_raw_shim(2000), y: Nm::ZERO }, r: Nm::from_raw_shim(100) }] };
-        let hull = primitive_hull(&pad, Nm::from_raw_shim(200), Nm::ZERO);
+        let pad = Shape::Compound { parts: vec![Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: Nm::new(500) }, Shape::Stadium { a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: Nm::new(2000), y: Nm::ZERO }, r: Nm::new(100) }] };
+        let hull = primitive_hull(&pad, Nm::new(200), Nm::ZERO);
         assert!(hull.len() >= 8, "{hull:?}");
         let (x0, x1) = (hull.iter().map(|p| p.x).min().unwrap(), hull.iter().map(|p| p.x).max().unwrap());
         // The arm's tip is at 2100: its hull reaches 200 past it, which the anchor's alone (to 700) does not.
-        assert!(x1 >= Nm::from_raw_shim(2290) && x1 <= Nm::from_raw_shim(2310), "{x1}");
-        assert!(x0 <= Nm::from_raw_shim(-690) && x0 >= Nm::from_raw_shim(-710), "{x0}");
+        assert!(x1 >= Nm::new(2290) && x1 <= Nm::new(2310), "{x1}");
+        assert!(x0 <= Nm::new(-690) && x0 >= Nm::new(-710), "{x0}");
         // Where the arm is thin the hull is too: nothing a 700-wide anchor hull would give at x = 1500.
-        assert!(hull.iter().filter(|p| p.x > Nm::from_raw_shim(800) && p.x < Nm::from_raw_shim(1900)).all(|p| p.y.abs() <= Nm::from_raw_shim(310)), "{hull:?}");
+        assert!(hull.iter().filter(|p| p.x > Nm::new(800) && p.x < Nm::new(1900)).all(|p| p.y.abs() <= Nm::new(310)), "{hull:?}");
         // A stroked arc's hull is a union of its chords'.
-        let arc = Shape::Strokes { segs: vec![eda_drc::kimath::Seg::new(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }), eda_drc::kimath::Seg::new(Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::from_raw_shim(1000) })], r: Nm::from_raw_shim(100) };
-        let hull = primitive_hull(&arc, Nm::from_raw_shim(100), Nm::ZERO);
-        assert!(hull.iter().any(|p| p.x >= Nm::from_raw_shim(1190)) && hull.iter().any(|p| p.y >= Nm::from_raw_shim(1190)), "{hull:?}");
+        let arc = Shape::Strokes { segs: vec![eda_drc::kimath::Seg::new(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }), eda_drc::kimath::Seg::new(Point { x: Nm::new(1000), y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::new(1000) })], r: Nm::new(100) };
+        let hull = primitive_hull(&arc, Nm::new(100), Nm::ZERO);
+        assert!(hull.iter().any(|p| p.x >= Nm::new(1190)) && hull.iter().any(|p| p.y >= Nm::new(1190)), "{hull:?}");
     }
 
     #[test]
     fn segment_hull_is_a_clockwise_octagon_at_the_right_offset() {
         // Horizontal 1 mm segment, width 200, clearance 100, walk 0:
         // d = 100 + 100 = 200 -> the long edges sit at y = +-200.
-        let h = segment_hull(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(1000), y: Nm::ZERO }, Nm::from_raw_shim(200), Nm::from_raw_shim(100), Nm::ZERO);
+        let h = segment_hull(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }, Nm::new(200), Nm::new(100), Nm::ZERO);
         assert_eq!(h.len(), 8);
         assert!(shoelace(&h) > 0, "clockwise in KiCad's sense");
-        assert!(h.iter().any(|p| p.y == Nm::from_raw_shim(200)) && h.iter().any(|p| p.y == Nm::from_raw_shim(-200)));
-        assert!(h.iter().any(|p| p.x == Nm::from_raw_shim(1200)) && h.iter().any(|p| p.x == Nm::from_raw_shim(-200)));
+        assert!(h.iter().any(|p| p.y == Nm::new(200)) && h.iter().any(|p| p.y == Nm::new(-200)));
+        assert!(h.iter().any(|p| p.x == Nm::new(1200)) && h.iter().any(|p| p.x == Nm::new(-200)));
     }
 
     #[test]
     fn via_hull_is_an_equilateral_octagon() {
-        let h = via_hull(Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::from_raw_shim(600), Nm::from_raw_shim(200), Nm::ZERO);
+        let h = via_hull(Point { x: Nm::ZERO, y: Nm::ZERO }, Nm::new(600), Nm::new(200), Nm::ZERO);
         assert_eq!(h.len(), 8);
         // bbox = 300 + 200 on each side.
-        assert_eq!(h.iter().map(|p| p.x).max(), Some(Nm::from_raw_shim(500)));
-        assert_eq!(h.iter().map(|p| p.y).min(), Some(Nm::from_raw_shim(-500)));
+        assert_eq!(h.iter().map(|p| p.x).max(), Some(Nm::new(500)));
+        assert_eq!(h.iter().map(|p| p.y).min(), Some(Nm::new(-500)));
     }
 
     /// D4: a 60-degree rotated 1.0 x 0.6 mm rectangle must keep the hull at
@@ -539,14 +540,14 @@ mod kicad_hull_tests {
 
     #[test]
     fn rect_pad_hull_has_square_corners() {
-        let h = primitive_hull(&Shape::Rect { x0: Nm::ZERO, y0: Nm::ZERO, x1: Nm::from_raw_shim(1000), y1: Nm::from_raw_shim(500) }, Nm::from_raw_shim(100), Nm::ZERO);
+        let h = primitive_hull(&Shape::Rect { x0: Nm::ZERO, y0: Nm::ZERO, x1: Nm::new(1000), y1: Nm::new(500) }, Nm::new(100), Nm::ZERO);
         assert_eq!(h.len(), 4);
     }
 
     #[test]
     fn roundrect_hull_is_one_outline_around_the_pad() {
-        let h = primitive_hull(&Shape::RoundRect { x0: Nm::ZERO, y0: Nm::ZERO, x1: Nm::from_raw_shim(1000), y1: Nm::from_raw_shim(600), r: Nm::from_raw_shim(150) }, Nm::from_raw_shim(100), Nm::ZERO);
+        let h = primitive_hull(&Shape::RoundRect { x0: Nm::ZERO, y0: Nm::ZERO, x1: Nm::new(1000), y1: Nm::new(600), r: Nm::new(150) }, Nm::new(100), Nm::ZERO);
         assert!(h.len() >= 8);
-        assert!(h.iter().map(|p| p.x).max().unwrap() >= Nm::from_raw_shim(1100));
+        assert!(h.iter().map(|p| p.x).max().unwrap() >= Nm::new(1100));
     }
 }

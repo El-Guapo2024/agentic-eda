@@ -201,6 +201,7 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
     use crate::item::{net_of, Segment};
     use crate::meander::MeanderSettings;
@@ -215,8 +216,8 @@ mod tests {
     fn env() -> LengthEnv {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
-        rules.clearance = Nm::from_raw_shim(200_000);
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, Nm::from_raw_shim(1_600_000)), rules }
+        rules.clearance = mm(0.2);
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
     }
 
     fn settings(target_nm: i64) -> MeanderSettings {
@@ -227,7 +228,7 @@ mod tests {
     }
 
     fn seg(w: &mut Node, track: &str, k: usize, a: Point, b: Point) -> ItemId {
-        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: Nm::from_raw_shim(200_000), source_track: Some((track.into(), k)), locked: false }))
+        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a, b, width: mm(0.2), source_track: Some((track.into(), k)), locked: false }))
     }
 
     fn poly_points(e: &LineEdit) -> Vec<Point> {
@@ -325,7 +326,7 @@ mod tests {
         assert_connected(&e);
         let pts = poly_points(&e);
         let (lo, hi) = (pts.iter().map(|q| q.x).min().unwrap(), pts.iter().map(|q| q.x).max().unwrap());
-        assert_eq!((lo, hi), (Nm::from_raw_shim(10_000_000), Nm::from_raw_shim(40_000_000)), "b is replaced whole: its start to its end");
+        assert_eq!((lo, hi), (mm(10.0), mm(40.0)), "b is replaced whole: its start to its end");
         assert!(e.pieces.iter().any(|q| q.member));
     }
 
