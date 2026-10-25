@@ -392,9 +392,13 @@ pub fn sheet_pin_rect(pin: Point, left: bool, name: &str) -> Rect {
     outward(kg::hier_label_rect(&TextStyle::new(h, VJustify::Center), name, fpt(pin), spin))
 }
 
-/// A no-connect flag.
+/// Half the side of a no-connect flag: `m_size = schIUScale.MilsToIU( DEFAULT_NOCONNECT_SIZE )` (48 mil, `eeschema/default_values.h`), halved.
+/// (It was written `610` when the IR was micrometres, 0.61 mm, and was left at 610 nm by the move to nanometres.)
+const NC_HALF_NM: Nm = Nm::new(609_600);
+
+/// A no-connect flag: the cross's own square, `SCH_NO_CONNECT`'s size about its position (KiCad's `GetBoundingBox` adds half the pen).
 pub fn nc_rect(at: Point) -> Rect {
-    Rect { x0: (at.x - Nm::from_raw_shim(610)).raw_shim(), y0: (at.y - Nm::from_raw_shim(610)).raw_shim(), x1: (at.x + Nm::from_raw_shim(610)).raw_shim(), y1: (at.y + Nm::from_raw_shim(610)).raw_shim() }
+    Rect { x0: (at.x - NC_HALF_NM).raw_shim(), y0: (at.y - NC_HALF_NM).raw_shim(), x1: (at.x + NC_HALF_NM).raw_shim(), y1: (at.y + NC_HALF_NM).raw_shim() }
 }
 
 #[cfg(test)]
@@ -402,6 +406,15 @@ mod tests {
     use super::*;
     use crate::geometry::STUB;
     use eda_model::{Pin, PinKind};
+
+    /// The flag is KiCad's 48 mil square, not a thousandth of it (the micrometre `610` read as nanometres).
+    #[test]
+    fn a_no_connect_flag_is_48_mil_across() {
+        let at = Point { x: Nm::new(10_160_000), y: Nm::new(5_080_000) };
+        let r = nc_rect(at);
+        assert_eq!((r.x1 - r.x0, r.y1 - r.y0), (1_219_200, 1_219_200));
+        assert_eq!((r.x0 + r.x1, r.y0 + r.y1), (2 * at.x.get(), 2 * at.y.get()), "centred on the flag");
+    }
 
     fn two_pin(reference: &str, value: &str) -> Part {
         Part {
