@@ -295,7 +295,8 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
         if matches!(check, "generic-warning" | "generic-error" | "unresolved_variable") {
             return None;
         }
-        let error_type = error_type(check, "error")?;
+        // `ERC_ITEM::Create( key )` takes the first item type of the key: `pin_to_pin` is the warning (`pinTableWarning` comes before the error)
+        let error_type = error_type(check, "warning")?;
         let iu = |i: usize| props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0) * 100;
         let items = [3, 4].iter().filter_map(|&i| props.get(i).map(|s| s.trim())).filter(|u| !u.is_empty() && *u != NIL_UUID).map(String::from).collect();
         let p = |i: usize| props.get(i).map(|t| text_path(t)).unwrap_or_default();
@@ -525,6 +526,8 @@ mod tests {
         let got = from_project(&legacy, &file_ids, &derived, "f-root", "d-root");
         let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1_333_500, 812_800], items: only(&["d-pin"]), ..Default::default() };
         assert_eq!(got, vec![excl("pin_not_connected", "U1.1", Some(marker), "comment1")]);
+        let pin_to_pin = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": ["pin_to_pin|1|1|f-pin|00000000-0000-0000-0000-000000000000|||"] } }).to_string();
+        assert_eq!(read_project(&pin_to_pin)[0].0.error_type, "ERCET_PIN_TO_PIN_WARNING", "a legacy pin_to_pin text is the warning");
         assert_eq!(file_uuid("(kicad_sch (version 20250114) (uuid \"ab-cd\"))").as_deref(), Some("ab-cd"));
     }
 }

@@ -821,7 +821,8 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     }
     notes.sheets_not_descended = still_not_descended;
     // The project's aliases (`SCHEMATIC::loadBusAliasesFromProject`, read when the project is set, before the files): a file's own legacy alias of the
-    // same name is added after them and wins (`GetBusAlias` searches from the last one added).
+    // same name is added after them and wins: `buildConnectionGraph` fills `m_bus_alias_cache[name]` in the list's order, a later one over an earlier, and
+    // the connection graph's `GetBusAlias` reads that cache.
     if let Ok(pro) = std::fs::read_to_string(path.with_extension("kicad_pro")) {
         for alias in project_bus_aliases(&pro) {
             if !design.bus_aliases.iter().any(|a| a.name == alias.name) {
@@ -836,18 +837,24 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
 }
 
 /// The bus aliases of a `.kicad_pro`'s text: `schematic.bus_aliases`, `{ "<name>": ["<member>", ..] }`, where KiCad 10 keeps them (`PROJECT_FILE`'s
-/// `"schematic.bus_aliases"` parameter, whose reader takes an object of arrays of strings, each member stripped and an empty one dropped), sorted by
+/// `"schematic.bus_aliases"` parameter, whose reader takes an object of arrays of strings, each name and member stripped and an empty one dropped), sorted by
 /// name as its map holds them. Nothing for a project without the section (one older than KiCad 10, whose aliases are in the `.kicad_sch`).
 pub fn project_bus_aliases(pro_text: &str) -> Vec<eda_model::ir::BusAlias> {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(pro_text) else { return Vec::new() };
     let Some(map) = json.get("schematic").and_then(|s| s.get("bus_aliases")).and_then(|a| a.as_object()) else { return Vec::new() };
-    let mut out: Vec<eda_model::ir::BusAlias> = map
-        .iter()
-        .filter_map(|(name, members)| {
-            let members = members.as_array()?.iter().filter_map(|m| m.as_str()).map(str::trim).filter(|m| !m.is_empty()).map(String::from).collect();
-            Some(eda_model::ir::BusAlias { name: name.clone(), members })
-        })
-        .collect();
+    // nlohmann's object is sorted by its keys; the name is stripped and an empty one dropped, and `m_BusAliases.emplace` keeps the first of a name
+    let mut entries: Vec<(&String, &serde_json::Value)> = map.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out: Vec<eda_model::ir::BusAlias> = Vec::new();
+    for (key, members) in entries {
+        let Some(members) = members.as_array() else { continue };
+        let name = key.trim();
+        if name.is_empty() || out.iter().any(|a| a.name == name) {
+            continue;
+        }
+        let members = members.iter().filter_map(|m| m.as_str()).map(str::trim).filter(|m| !m.is_empty()).map(String::from).collect();
+        out.push(eda_model::ir::BusAlias { name: name.to_string(), members });
+    }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -1881,7 +1888,8 @@ mod tests {
 
     /// p12 S4 (b): KiCad 10 keeps a project's bus aliases in the `.kicad_pro` (`schematic.bus_aliases`, `SCHEMATIC::loadBusAliasesFromProject`), not the
     /// `.kicad_sch`: they are read from the project beside the root, a member stripped and an empty one dropped, and a file's own legacy `(bus_alias ..)` of
-    /// the same name wins (`GetBusAlias` searches from the last one added, and the files are read after the project).
+    /// the same name wins (the files are read after the project, and `buildConnectionGraph`'s `m_bus_alias_cache[name]` keeps the last of a name). A name
+    /// is stripped and an empty one dropped, as `PROJECT_FILE`'s reader does.
     #[test]
     fn a_projects_bus_aliases_are_read_from_the_kicad_pro() {
         let dir = std::env::temp_dir().join(format!("eda_kicad_pro_bus_aliases_{}", std::process::id()));
@@ -1889,7 +1897,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let root = dir.join("p.kicad_sch");
         std::fs::write(&root, "(kicad_sch (version 20250114) (generator \"eeschema\") (uuid \"00000000-0000-0000-0000-000000000001\") (paper \"A4\")\n  (bus_alias \"b_yz\" (members \"q\"))\n)\n").unwrap();
-        std::fs::write(dir.join("p.kicad_pro"), r#"{ "schematic": { "bus_aliases": { "b_yz": ["y", "z"], "a_xyz": ["x", " y ", "", "z"] } } }"#).unwrap();
+        std::fs::write(dir.join("p.kicad_pro"), r#"{ "schematic": { "bus_aliases": { "b_yz": ["y", "z"], " a_xyz ": ["x", " y ", "", "z"], "a_xyz": ["dropped"], "  ": ["e"] } } }"#).unwrap();
         let (design, _, _) = import_kicad_sch_tree(&root).unwrap();
         let aliases: Vec<(String, Vec<String>)> = design.bus_aliases.iter().map(|a| (a.name.clone(), a.members.clone())).collect();
         let v = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<Vec<_>>();

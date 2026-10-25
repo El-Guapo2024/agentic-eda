@@ -548,7 +548,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             }
             let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
             for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == sym.unit) && p.hidden && p.electrical_type == "power_in") {
-                out.insert(format!("{}.{}", sym.id, p.number), p.name.clone());
+                // `GetDefaultNetName`: `EscapeString( pin name, CTX_NETNAME )`
+                out.insert(format!("{}.{}", sym.id, p.number), escape_net_name(&p.name));
             }
         }
         out
@@ -625,7 +626,7 @@ impl PowerValueView {
 /// sheet's `ResolveTextVar` up the path, `${#}` its page). **Differs**: the project's own variables are not known here (the tracer has no board folder), so a
 /// `${VAR}` of the project is left as it is written.
 fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) -> String {
-    let Some((page, levels, name)) = view.and_then(|v| v.placements.get(path)) else { return raw.to_string() };
+    let Some((page, levels, name)) = view.and_then(|v| v.placements.get(path)) else { return escape_net_name(raw) };
     let sheet = eda_model::text_vars::SchSheet {
         levels: levels.clone(),
         page: page.clone(),
@@ -635,7 +636,14 @@ fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) 
         sheet_path: std::iter::once("/".to_string()).chain(levels.iter().skip(1).filter_map(|l| l.fields.first()).map(|(_, n)| format!("{n}/"))).collect(),
         ..Default::default()
     };
-    sheet.field_shown(levels.len().saturating_sub(1), None, raw, 0)
+    // `GetDefaultNetName`: `EscapeString( GetValue( &aPath, FOR_NETNAME ), CTX_NETNAME )`
+    escape_net_name(&sheet.field_shown(levels.len().saturating_sub(1), None, raw, 0))
+}
+
+/// `EscapeString( aSource, CTX_NETNAME )` (common/string_utils.cpp): a `/` is written `{slash}`, a line break is dropped. (Batch A brings the tracer's own,
+/// `eda_engine::nets::escape_net_name`: this goes when it is in.)
+fn escape_net_name(s: &str) -> String {
+    s.replace('/', "{slash}").replace(['\n', '\r'], "")
 }
 
 /// `pins` ("REF.PIN" -> point) of `sec` under the references the placement `placement` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
