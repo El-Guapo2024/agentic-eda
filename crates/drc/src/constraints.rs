@@ -1212,20 +1212,20 @@ impl<'e, 'r> Eval<'e, 'r> {
 
         // Local overrides take precedence over everything *except* board min clearance.
         if ctype == CType::Clearance || ctype == CType::HoleClearance {
-            let mut override_val = 0i64;
+            let mut override_val = Nm::ZERO;
             let mut msg = String::new();
             let override_a = if ac.is_some() && !self.b_non_copper { ac.as_ref().and_then(|x| x.overrides.clearance.clone()) } else { None };
             let override_b = if bc.is_some() && !self.a_non_copper { bc.as_ref().and_then(|x| x.overrides.clearance.clone()) } else { None };
             if override_a.is_some() || override_b.is_some() {
                 if let Some((v, src)) = &override_a {
-                    let (d, t) = (escape_html(&Self::describe(&a)), message_text_from_value(*v as f64));
+                    let (d, t) = (escape_html(&Self::describe(&a)), message_text_from_value(v.as_f64()));
                     self.say(|| String::new());
                     self.say(|| format!("Local override on {d}; clearance: {t}."));
                     override_val = *v;
                     msg = src.clone();
                 }
                 if let Some((v, src)) = &override_b {
-                    let (d, t) = (escape_html(&Self::describe(&b)), message_text_from_value(*v as f64));
+                    let (d, t) = (escape_html(&Self::describe(&b)), message_text_from_value(v.as_f64()));
                     self.say(|| String::new());
                     self.say(|| format!("Local override on {d}; clearance: {t}."));
                     if *v > override_val {
@@ -1233,25 +1233,25 @@ impl<'e, 'r> Eval<'e, 'r> {
                         msg = src.clone();
                     }
                 }
-                if override_val != 0 {
+                if override_val != Nm::ZERO {
                     if ctype == CType::Clearance {
-                        if override_val < eng.settings.min_clearance.get() {
-                            override_val = eng.settings.min_clearance.get();
+                        if override_val < eng.settings.min_clearance {
+                            override_val = eng.settings.min_clearance;
                             msg = "board minimum".to_string();
-                            let t = message_text_from_value(override_val as f64);
+                            let t = message_text_from_value(override_val.as_f64());
                             self.say(|| String::new());
                             self.say(|| format!("Board minimum clearance: {t}."));
                         }
-                    } else if override_val < eng.settings.hole_clearance.get() {
-                        override_val = eng.settings.hole_clearance.get();
+                    } else if override_val < eng.settings.hole_clearance {
+                        override_val = eng.settings.hole_clearance;
                         msg = "board minimum hole".to_string();
-                        let t = message_text_from_value(override_val as f64);
+                        let t = message_text_from_value(override_val.as_f64());
                         self.say(|| String::new());
                         self.say(|| format!("Board minimum hole clearance: {t}."));
                     }
                     self.constraint.parent = None;
                     self.constraint.name = msg;
-                    self.constraint.value.min = Some(override_val);
+                    self.constraint.value.min = Some(override_val.get());
                     return self.constraint.clone();
                 }
             }
@@ -1271,33 +1271,33 @@ impl<'e, 'r> Eval<'e, 'r> {
             }
         } else if ctype == CType::ThermalReliefGap {
             if let Some(p) = &pad {
-                if let Some((gap, src)) = p.overrides.thermal_gap.clone().filter(|(g, _)| *g > 0) {
-                    let (d, t) = (escape_html(&p.description), message_text_from_value(gap as f64));
+                if let Some((gap, src)) = p.overrides.thermal_gap.clone().filter(|(g, _)| *g > Nm::ZERO) {
+                    let (d, t) = (escape_html(&p.description), message_text_from_value(gap.as_f64()));
                     self.say(|| String::new());
                     self.say(|| format!("Local override on {d}; thermal relief gap: {t}."));
                     self.constraint.parent = None;
                     self.constraint.name = src;
-                    self.constraint.value.min = Some(gap);
+                    self.constraint.value.min = Some(gap.get());
                     return self.constraint.clone();
                 }
             }
         } else if ctype == CType::ThermalSpokeWidth {
             if let Some(p) = &pad {
-                if let Some((mut spoke, src)) = p.overrides.spoke_width.clone().filter(|(g, _)| *g > 0) {
-                    let (d, t) = (escape_html(&p.description), message_text_from_value(spoke as f64));
+                if let Some((mut spoke, src)) = p.overrides.spoke_width.clone().filter(|(g, _)| *g > Nm::ZERO) {
+                    let (d, t) = (escape_html(&p.description), message_text_from_value(spoke.as_f64()));
                     self.say(|| String::new());
                     self.say(|| format!("Local override on {d}; thermal spoke width: {t}."));
                     if let Some(z) = &zone {
                         if z.zone_min_thickness > spoke {
                             spoke = z.zone_min_thickness;
-                            let (d, t) = (escape_html(&z.description), message_text_from_value(spoke as f64));
+                            let (d, t) = (escape_html(&z.description), message_text_from_value(spoke.as_f64()));
                             self.say(|| String::new());
                             self.say(|| format!("{d} min thickness: {t}."));
                         }
                     }
                     self.constraint.parent = None;
                     self.constraint.name = src;
-                    self.constraint.value.min = Some(spoke);
+                    self.constraint.value.min = Some(spoke.get());
                     return self.constraint.clone();
                 }
             }
@@ -1320,10 +1320,10 @@ impl<'e, 'r> Eval<'e, 'r> {
                 }
             }
             if let Some(v) = over {
-                let (d, t) = (escape_html(&Self::describe(&over_item)), message_text_from_value(v as f64));
+                let (d, t) = (escape_html(&Self::describe(&over_item)), message_text_from_value(v.as_f64()));
                 self.say(|| String::new());
                 self.say(|| format!("Local override on {d}; solder mask expansion: {t}."));
-                self.constraint.value.opt = Some(v);
+                self.constraint.value.opt = Some(v.get());
                 return self.constraint.clone();
             }
         } else if ctype == CType::SolderPasteAbsMargin {
@@ -1339,10 +1339,10 @@ impl<'e, 'r> Eval<'e, 'r> {
                 }
             }
             if let Some(v) = over {
-                let (d, t) = (escape_html(&Self::describe(&over_item)), message_text_from_value(v as f64));
+                let (d, t) = (escape_html(&Self::describe(&over_item)), message_text_from_value(v.as_f64()));
                 self.say(|| String::new());
                 self.say(|| format!("Local override on {d}; solder paste absolute clearance: {t}."));
-                self.constraint.value.opt = Some(v);
+                self.constraint.value.opt = Some(v.get());
                 return self.constraint.clone();
             }
         } else if ctype == CType::SolderPasteRelMargin {
@@ -1416,8 +1416,7 @@ impl<'e, 'r> Eval<'e, 'r> {
         // Unfortunately implicit rules don't work for local clearances (such as zones) because they have to be max'ed with netclass values (which are already implicit rules),
         // and our rule selection paradigm is "winner takes all".
         if ctype == CType::Clearance {
-            let global = self.constraint.value.min();
-            let mut clearance = global;
+            let mut clearance = Nm::new(self.constraint.value.min());
             let mut need_blank_line = true;
             for (ci, item, item_c) in [(0, &a, &ac), (1, &b, &bc)] {
                 let _ = ci;
@@ -1428,13 +1427,13 @@ impl<'e, 'r> Eval<'e, 'r> {
                     self.say(|| String::new());
                     need_blank_line = false;
                 }
-                let (d, t) = (escape_html(&Self::describe(item)), message_text_from_value(local as f64));
+                let (d, t) = (escape_html(&Self::describe(item)), message_text_from_value(local.as_f64()));
                 self.say(|| format!("Local clearance on {d}: {t}."));
                 if local > clearance {
                     clearance = local;
                     self.constraint.parent = None;
                     self.constraint.name = src;
-                    self.constraint.value.min = Some(clearance);
+                    self.constraint.value.min = Some(clearance.get());
                 }
             }
             if !self.a_non_copper && !self.b_non_copper {
@@ -1443,7 +1442,7 @@ impl<'e, 'r> Eval<'e, 'r> {
                 }
                 let t = message_text_from_value(eng.settings.min_clearance.as_f64());
                 self.say(|| format!("Board minimum clearance: {t}."));
-                if clearance < eng.settings.min_clearance.get() {
+                if clearance < eng.settings.min_clearance {
                     self.constraint.parent = None;
                     self.constraint.name = "board minimum".to_string();
                     self.constraint.value.min = Some(eng.settings.min_clearance.get());
@@ -1484,22 +1483,22 @@ impl<'e, 'r> Eval<'e, 'r> {
             }
         } else if ctype == CType::ThermalReliefGap {
             if let Some(z) = &zone {
-                let (d, t) = (escape_html(&z.description), message_text_from_value(z.zone_thermal_gap as f64));
+                let (d, t) = (escape_html(&z.description), message_text_from_value(z.zone_thermal_gap.as_f64()));
                 self.say(|| String::new());
                 self.say(|| format!("{d} thermal relief gap: {t}."));
                 self.constraint.parent = None;
                 self.constraint.name = "zone".to_string();
-                self.constraint.value.min = Some(z.zone_thermal_gap);
+                self.constraint.value.min = Some(z.zone_thermal_gap.get());
                 return self.constraint.clone();
             }
         } else if ctype == CType::ThermalSpokeWidth {
             if let Some(z) = &zone {
-                let (d, t) = (escape_html(&z.description), message_text_from_value(z.zone_spoke_width as f64));
+                let (d, t) = (escape_html(&z.description), message_text_from_value(z.zone_spoke_width.as_f64()));
                 self.say(|| String::new());
                 self.say(|| format!("{d} thermal spoke width: {t}."));
                 self.constraint.parent = None;
                 self.constraint.name = "zone".to_string();
-                self.constraint.value.min = Some(z.zone_spoke_width);
+                self.constraint.value.min = Some(z.zone_spoke_width.get());
                 return self.constraint.clone();
             }
         }
@@ -1934,7 +1933,7 @@ mod tests {
         let mut rules = rules_hv();
         let (eng, _) = engine(&rules, &["VBUS", "GND"], None, &[]);
         let mut p = (*pad("J1", "1", "GND", "F.Cu")).clone();
-        p.overrides.clearance = Some((150_000, "pad".to_string()));
+        p.overrides.clearance = Some((mm(0.15), "pad".to_string()));
         let p = Rc::new(p);
         let other = pad("U1", "2", "VBUS", "F.Cu");
         let mut report = Report::default();
@@ -1956,7 +1955,7 @@ mod tests {
         z.net = "GND".into();
         z.layers = vec!["F.Cu".into()];
         z.layer = Some("F.Cu".into());
-        z.local_clearance = Some((700_000, "zone".into()));
+        z.local_clearance = Some((mm(0.7), "zone".into()));
         z.description = "Zone [GND] on F.Cu, priority 0".into();
         let z = Rc::new(z);
         let p = pad("J1", "1", "VBUS", "F.Cu");
@@ -2118,7 +2117,7 @@ mod tests {
         let mut pth = (*pad("J1", "1", "A", "F.Cu")).clone();
         pth.set("Pad Type", Prop::Enum("Through-hole".into()));
         pth.pad_attribute = "PTH";
-        pth.drill = 800_000;
+        pth.drill = mm(0.8);
         pth.has_hole = true;
         pth.has_drilled_hole = true;
         let pth = Rc::new(pth);

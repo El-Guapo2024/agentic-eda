@@ -87,12 +87,12 @@ pub struct FootprintFacts {
 /// Lengths are nanometres.
 #[derive(Debug, Clone, Default)]
 pub struct Overrides {
-    pub clearance: Option<(i64, String)>,
+    pub clearance: Option<(Nm, String)>,
     pub zone_connection: Option<(crate::constraints::ZoneConnection, String)>,
-    pub thermal_gap: Option<(i64, String)>,
-    pub spoke_width: Option<(i64, String)>,
-    pub solder_mask_margin: Option<i64>,
-    pub solder_paste_margin: Option<i64>,
+    pub thermal_gap: Option<(Nm, String)>,
+    pub spoke_width: Option<(Nm, String)>,
+    pub solder_mask_margin: Option<Nm>,
+    pub solder_paste_margin: Option<Nm>,
     pub solder_paste_ratio: Option<f64>,
 }
 
@@ -134,7 +134,7 @@ pub struct RuleItem {
     /// The item's own overrides of the rules (`GetClearanceOverrides` and the pad's other local settings).
     pub overrides: Overrides,
     /// `GetLocalClearance( &source )`: a copper zone's own clearance, ...
-    pub local_clearance: Option<(i64, String)>,
+    pub local_clearance: Option<(Nm, String)>,
     /// The footprint an item of it belongs to, as an item (`GetParentFootprint`).
     pub parent: Option<Rc<RuleItem>>,
     /// `GetLayer()`.
@@ -147,15 +147,15 @@ pub struct RuleItem {
     pub tented: [bool; 2],
     /// A zone's pad connection (`GetPadConnection`), its thermal relief gap and spoke width, and its minimum thickness: nanometres.
     pub zone_pad_connection: Option<crate::constraints::ZoneConnection>,
-    pub zone_thermal_gap: i64,
-    pub zone_spoke_width: i64,
-    pub zone_min_thickness: i64,
+    pub zone_thermal_gap: Nm,
+    pub zone_spoke_width: Nm,
+    pub zone_min_thickness: Nm,
     /// A pad's attribute is PTH, NPTH, SMD or connector; its drill size (`GetDrillSize().x`), nanometres.
     pub pad_attribute: &'static str,
-    pub drill: i64,
+    pub drill: Nm,
     /// A text or field's height and thickness, nanometres.
-    pub text_height: i64,
-    pub text_thickness: i64,
+    pub text_height: Nm,
+    pub text_thickness: Nm,
     /// `PAD::FlashLayer( layer )`: the layers it is flashed on.
     pub flashed: Vec<String>,
     /// A via is micro, blind, buried or through: `Via Type`.
@@ -195,13 +195,13 @@ impl RuleItem {
             net_tie: Vec::new(),
             tented: [false; 2],
             zone_pad_connection: None,
-            zone_thermal_gap: 0,
-            zone_spoke_width: 0,
-            zone_min_thickness: 0,
+            zone_thermal_gap: Nm::ZERO,
+            zone_spoke_width: Nm::ZERO,
+            zone_min_thickness: Nm::ZERO,
             pad_attribute: "",
-            drill: 0,
-            text_height: 0,
-            text_thickness: 0,
+            drill: Nm::ZERO,
+            text_height: Nm::ZERO,
+            text_thickness: Nm::ZERO,
             flashed: Vec::new(),
             via_type: None,
             plated: false,
