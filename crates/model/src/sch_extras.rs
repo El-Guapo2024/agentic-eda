@@ -297,7 +297,7 @@ impl LabelLook {
 
     /// The size the text is set in, nanometres.
     pub fn text_size_nm(&self) -> Nm {
-        if self.size_nm > 0 {
+        if self.size_nm > Nm::ZERO {
             self.size_nm
         } else {
             crate::ir::DEFAULT_FIELD_SIZE_NM
@@ -907,7 +907,7 @@ pub struct SchGraphic {
 impl SchGraphic {
     /// A graphic of `shape` with every style at its default.
     pub fn new(shape: SchGraphicKind) -> SchGraphic {
-        SchGraphic { id: String::new(), shape, width_nm: 0, line_style: SchLineStyle::Default, color: None, fill: SchFill::None, fill_color: None }
+        SchGraphic { id: String::new(), shape, width_nm: Nm::ZERO, line_style: SchLineStyle::Default, color: None, fill: SchFill::None, fill_color: None }
     }
 
     /// The seed `assign_missing_ids` hashes: the kind's own geometry, so the same drawing always gets the same id.
@@ -928,7 +928,7 @@ impl SchGraphic {
 }
 
 fn is_zero_nm(v: &Nm) -> bool {
-    *v == 0
+    *v == Nm::ZERO
 }
 
 fn is_zero_angle(v: &Millideg) -> bool {
@@ -959,7 +959,7 @@ mod tests {
     #[test]
     fn an_image_command_may_leave_its_pixels_out_and_its_scale_is_not_written_when_it_is_one() {
         let edit: SchGraphic = serde_json::from_str(r#"{"shape": {"type": "image", "at": {"x": 5, "y": 6}, "scale_ppm": 500000}}"#).unwrap();
-        assert!(matches!(&edit.shape, SchGraphicKind::Image { at, scale_ppm: 500_000, data } if *at == p(5, 6) && data.is_empty()));
+        assert!(matches!(&edit.shape, SchGraphicKind::Image { at, scale_ppm: 500_000, data } if *at == p(Nm::new(5), Nm::new(6)) && data.is_empty()));
         let unit: SchGraphic = serde_json::from_str(r#"{"shape": {"type": "image", "at": {"x": 5, "y": 6}, "data": "AAAA"}}"#).unwrap();
         assert!(matches!(&unit.shape, SchGraphicKind::Image { scale_ppm: 1_000_000, .. }));
         let json = serde_json::to_value(&unit).unwrap();
@@ -982,12 +982,12 @@ mod tests {
     #[test]
     fn graphics_round_trip_through_json_and_get_distinct_ids() {
         let mut e = SchExtras::default();
-        let mut r = SchGraphic::new(SchGraphicKind::Rectangle { start: p(0, 0), end: p(10_000, 5_000), corner_radius_nm: 0 });
+        let mut r = SchGraphic::new(SchGraphicKind::Rectangle { start: p(Nm::ZERO, Nm::ZERO), end: p(Nm::new(10_000), Nm::new(5_000)), corner_radius_nm: Nm::ZERO });
         r.fill = SchFill::Background;
         e.graphics.push(r);
-        e.graphics.push(SchGraphic::new(SchGraphicKind::Circle { center: p(1, 2), radius_nm: 3_000 }));
-        e.graphics.push(SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 0), p(10, 0), p(10, 10)], exclude_from_sim: false, exclude_from_bom: true, exclude_from_board: false, dnp: false }));
-        e.graphics.push(SchGraphic::new(SchGraphicKind::Directive { at: p(5, 5), orientation: 90_000, shape: DirectiveShape::Round, pin_length_nm: 2_540, netclass: "HV".into(), component_class: String::new() }));
+        e.graphics.push(SchGraphic::new(SchGraphicKind::Circle { center: p(Nm::new(1), Nm::new(2)), radius_nm: Nm::new(3_000) }));
+        e.graphics.push(SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(10), Nm::new(10))], exclude_from_sim: false, exclude_from_bom: true, exclude_from_board: false, dnp: false }));
+        e.graphics.push(SchGraphic::new(SchGraphicKind::Directive { at: p(Nm::new(5), Nm::new(5)), orientation: 90_000, shape: DirectiveShape::Round, pin_length_nm: Nm::new(2_540), netclass: "HV".into(), component_class: String::new() }));
         let mut taken = BTreeSet::new();
         e.assign_missing_ids(&mut taken);
         let ids: Vec<&str> = e.graphics.iter().map(|g| g.id.as_str()).collect();

@@ -431,7 +431,7 @@ pub fn top_left_anchor(section: &SchematicSection) -> Option<Point> {
 /// origin), else, with none, the nearest of the items' own points -- `SCH_EDITOR_CONTROL::Paste`'s `aEvent.IsAction( &ACTIONS::duplicate )` block.
 /// `connection_points` are the extra points the caller knows (a symbol's pins in the fragment's frame).
 pub fn closest_anchor(section: &SchematicSection, connection_points: &[Point], cursor: Point) -> Option<Point> {
-    let dist = |p: &Point| (((p.x - cursor.x) as f64).powi(2) + ((p.y - cursor.y) as f64).powi(2)).sqrt();
+    let dist = |p: &Point| (((p.x - cursor.x).as_f64()).powi(2) + ((p.y - cursor.y).as_f64()).powi(2)).sqrt();
     let best = |pts: Vec<Point>| pts.into_iter().min_by(|a, b| dist(a).partial_cmp(&dist(b)).unwrap_or(std::cmp::Ordering::Equal));
     let mut connectable: Vec<Point> = connection_points.to_vec();
     connectable.extend(section.symbols.iter().map(|s| s.at));
@@ -474,7 +474,7 @@ mod tests {
         UsedRef { reference: reference.into(), unit, lib_id: lib.into(), value: value.into() }
     }
     fn pasted(reference: &str, x: Nm) -> PastedRef {
-        PastedRef { reference: reference.into(), unit: 1, unit_count: 1, lib_id: "Device:R".into(), value: "10k".into(), at: (x, 0), power: false }
+        PastedRef { reference: reference.into(), unit: 1, unit_count: 1, lib_id: "Device:R".into(), value: "10k".into(), at: (x, Nm::ZERO), power: false }
     }
 
     #[test]
@@ -492,7 +492,7 @@ mod tests {
     fn a_free_reference_stays_and_a_taken_one_takes_the_next_free_number_from_its_own() {
         let used = vec![used("R1", 1, "Device:R", "10k"), used("R2", 1, "Device:R", "10k"), used("R4", 1, "Device:R", "10k")];
         // R9 is free: it stays. R2 is taken: R3 is the first free number from 2. R4 is taken: R5.
-        let out = annotate_paste(&used, &[pasted("R9", 0), pasted("R2", 1), pasted("R4", 2)], PasteMode::Unique);
+        let out = annotate_paste(&used, &[pasted("R9", Nm::ZERO), pasted("R2", Nm::new(1)), pasted("R4", Nm::new(2))], PasteMode::Unique);
         assert_eq!(out, vec!["R9", "R3", "R5"]);
     }
 
@@ -500,8 +500,8 @@ mod tests {
     fn pasted_symbols_never_share_a_number_with_each_other() {
         let used = vec![used("C1", 1, "Device:C", "1u")];
         let two = vec![
-            PastedRef { reference: "C1".into(), lib_id: "Device:C".into(), value: "1u".into(), ..pasted("C1", 0) },
-            PastedRef { reference: "C1".into(), lib_id: "Device:C".into(), value: "1u".into(), ..pasted("C1", 5) },
+            PastedRef { reference: "C1".into(), lib_id: "Device:C".into(), value: "1u".into(), ..pasted("C1", Nm::ZERO) },
+            PastedRef { reference: "C1".into(), lib_id: "Device:C".into(), value: "1u".into(), ..pasted("C1", Nm::new(5)) },
         ];
         // The same reference pasted twice (two units of nothing): each is its own symbol, so each takes its own number.
         let out = annotate_paste(&used, &two, PasteMode::Unique);
@@ -515,21 +515,21 @@ mod tests {
     fn the_numbers_go_out_left_to_right_within_a_prefix() {
         let used = vec![used("R1", 1, "Device:R", "10k")];
         // Both are R1 (taken). The one on the left is numbered first.
-        let out = annotate_paste(&used, &[pasted("R1", 900_000), pasted("R1", 100_000)], PasteMode::Unique);
+        let out = annotate_paste(&used, &[pasted("R1", Nm::new(900_000)), pasted("R1", Nm::new(100_000))], PasteMode::Unique);
         assert_eq!(out, vec!["R3", "R2"]);
     }
 
     #[test]
     fn keep_keeps_a_free_reference_and_renumbers_only_a_taken_one() {
         let used = vec![used("R1", 1, "Device:R", "10k")];
-        let out = annotate_paste(&used, &[pasted("R7", 0), pasted("R1", 1)], PasteMode::Keep);
+        let out = annotate_paste(&used, &[pasted("R7", Nm::ZERO), pasted("R1", Nm::new(1))], PasteMode::Keep);
         assert_eq!(out, vec!["R7", "R2"]);
     }
 
     #[test]
     fn remove_numbers_every_pasted_symbol_from_one() {
         let used = vec![used("R1", 1, "Device:R", "10k"), used("R3", 1, "Device:R", "10k")];
-        let out = annotate_paste(&used, &[pasted("R7", 0), pasted("R8", 1), pasted("R9", 2)], PasteMode::Remove);
+        let out = annotate_paste(&used, &[pasted("R7", Nm::ZERO), pasted("R8", Nm::new(1)), pasted("R9", Nm::new(2))], PasteMode::Remove);
         assert_eq!(out, vec!["R2", "R4", "R5"]);
     }
 
@@ -537,31 +537,31 @@ mod tests {
     fn power_symbols_are_numbered_afresh_with_a_leading_zero() {
         let used = vec![used("#PWR01", 1, "power:GND", "GND"), used("#PWR02", 1, "power:GND", "GND")];
         let p = |r: &str, x| PastedRef { reference: r.into(), lib_id: "power:GND".into(), value: "GND".into(), power: true, ..pasted(r, x) };
-        assert_eq!(annotate_paste(&used, &[p("#PWR01", 0)], PasteMode::Unique), vec!["#PWR03"]);
-        assert_eq!(annotate_paste(&used, &[p("#PWR05", 0)], PasteMode::Keep), vec!["#PWR03"], "a power symbol is numbered anew even when Keep");
-        assert_eq!(annotate_paste(&[], &[p("#PWR05", 0)], PasteMode::Unique), vec!["#PWR05"]);
+        assert_eq!(annotate_paste(&used, &[p("#PWR01", Nm::ZERO)], PasteMode::Unique), vec!["#PWR03"]);
+        assert_eq!(annotate_paste(&used, &[p("#PWR05", Nm::ZERO)], PasteMode::Keep), vec!["#PWR03"], "a power symbol is numbered anew even when Keep");
+        assert_eq!(annotate_paste(&[], &[p("#PWR05", Nm::ZERO)], PasteMode::Unique), vec!["#PWR05"]);
     }
 
     #[test]
     fn the_units_of_one_part_pasted_together_keep_one_number() {
-        let unit = |u: u32, x: Nm| PastedRef { reference: "U1".into(), unit: u, unit_count: 4, lib_id: "Amp:Quad".into(), value: "LM324".into(), at: (x, 0), power: false };
+        let unit = |u: u32, x: Nm| PastedRef { reference: "U1".into(), unit: u, unit_count: 4, lib_id: "Amp:Quad".into(), value: "LM324".into(), at: (x, Nm::ZERO), power: false };
         let used = vec![used("U1", 1, "Amp:Quad", "LM324"), used("U1", 2, "Amp:Quad", "LM324")];
         // Units 1 and 2 of U1 are taken: pasting them again numbers both as U2.
-        let out = annotate_paste(&used, &[unit(1, 0), unit(2, 10_000)], PasteMode::Unique);
+        let out = annotate_paste(&used, &[unit(1, Nm::ZERO), unit(2, Nm::new(10_000))], PasteMode::Unique);
         assert_eq!(out, vec!["U2", "U2"]);
         // A unit the part does not have yet joins it.
-        let out = annotate_paste(&used, &[unit(3, 0)], PasteMode::Unique);
+        let out = annotate_paste(&used, &[unit(3, Nm::ZERO)], PasteMode::Unique);
         assert_eq!(out, vec!["U1"]);
         // ... unless the part there is another one.
         let other = vec![UsedRef { value: "TL074".into(), ..used[0].clone() }];
-        assert_eq!(annotate_paste(&other, &[unit(3, 0)], PasteMode::Unique), vec!["U2"]);
+        assert_eq!(annotate_paste(&other, &[unit(3, Nm::ZERO)], PasteMode::Unique), vec!["U2"]);
     }
 
     #[test]
     fn an_unannotated_reference_gets_a_number_in_every_mode() {
         let used = vec![used("R1", 1, "Device:R", "10k")];
         for mode in [PasteMode::Unique, PasteMode::Keep, PasteMode::Remove] {
-            assert_eq!(annotate_paste(&used, &[pasted("R?", 0)], mode), vec!["R2"], "{mode:?}");
+            assert_eq!(annotate_paste(&used, &[pasted("R?", Nm::ZERO)], mode), vec!["R2"], "{mode:?}");
         }
     }
 
@@ -575,23 +575,23 @@ mod tests {
         // `(mirror y)` negates x, `(mirror x)` negates y -- after the turn.
         assert_eq!(place_offset_mm(0.0, true, false, (1.0, 2.0)), (-1.0, -2.0));
         assert_eq!(place_offset_mm(0.0, false, true, (1.0, 2.0)), (1.0, 2.0));
-        assert_eq!(place_offset_nm(0.0, false, false, (1.27, 0.0)), (1_270_000, 0));
+        assert_eq!(place_offset_nm(0.0, false, false, (1.27, 0.0)), (Nm::new(1_270_000), Nm::ZERO));
     }
 
     #[test]
     fn the_anchor_is_the_leftmost_then_topmost_connectable_item() {
         use crate::ir::{NetLabel, SchematicText, Wire};
         let mut s = SchematicSection::default();
-        s.texts.push(SchematicText { id: String::new(), content: "far left".into(), at: Point { x: -9_000_000, y: 0 }, angle: 0, size_nm: 1_270_000 });
-        s.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 5_000_000, y: 7_000_000 }, Point { x: 9_000_000, y: 7_000_000 }], bus: false });
-        s.labels.push(NetLabel { id: String::new(), net: "A".into(), at: Point { x: 5_000_000, y: 2_000_000 }, kind: Default::default() });
+        s.texts.push(SchematicText { id: String::new(), content: "far left".into(), at: Point { x: Nm::new(-9_000_000), y: Nm::ZERO }, angle: 0, size_nm: Nm::new(1_270_000) });
+        s.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: Nm::new(5_000_000), y: Nm::new(7_000_000) }, Point { x: Nm::new(9_000_000), y: Nm::new(7_000_000) }], bus: false });
+        s.labels.push(NetLabel { id: String::new(), net: "A".into(), at: Point { x: Nm::new(5_000_000), y: Nm::new(2_000_000) }, kind: Default::default() });
         // The text is further left but not connectable: the label is the topmost of the two at x = 5000.
-        assert_eq!(top_left_anchor(&s), Some(Point { x: 5_000_000, y: 2_000_000 }));
+        assert_eq!(top_left_anchor(&s), Some(Point { x: Nm::new(5_000_000), y: Nm::new(2_000_000) }));
         let only_text = SchematicSection { texts: s.texts.clone(), ..Default::default() };
-        assert_eq!(top_left_anchor(&only_text), Some(Point { x: -9_000_000, y: 0 }));
+        assert_eq!(top_left_anchor(&only_text), Some(Point { x: Nm::new(-9_000_000), y: Nm::ZERO }));
         assert_eq!(top_left_anchor(&SchematicSection::default()), None);
         // The nearest connection point to a cursor: the label, not the far wire end.
-        assert_eq!(closest_anchor(&s, &[], Point { x: 5_100_000, y: 2_100_000 }), Some(Point { x: 5_000_000, y: 2_000_000 }));
+        assert_eq!(closest_anchor(&s, &[], Point { x: Nm::new(5_100_000), y: Nm::new(2_100_000) }), Some(Point { x: Nm::new(5_000_000), y: Nm::new(2_000_000) }));
     }
 
     /// Duplicate carries a sheet by the pin nearest the cursor (`SCH_SHEET::GetConnectionPoints` is its pins), not by its corner; a sheet with no pins by
@@ -599,11 +599,11 @@ mod tests {
     #[test]
     fn a_duplicated_sheet_is_carried_by_its_nearest_pin() {
         use crate::ir::{SheetInstance, SheetPin};
-        let pin = SheetPin { id: String::new(), name: "IN".into(), shape: Default::default(), at: Point { x: 50_000_000, y: 10_000_000 } };
-        let sheet = SheetInstance { id: String::new(), name: "A".into(), file: "a.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (50_000_000, 30_000_000), pins: vec![pin], page: String::new() };
+        let pin = SheetPin { id: String::new(), name: "IN".into(), shape: Default::default(), at: Point { x: Nm::new(50_000_000), y: Nm::new(10_000_000) } };
+        let sheet = SheetInstance { id: String::new(), name: "A".into(), file: "a.kicad_sch".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::new(50_000_000), Nm::new(30_000_000)), pins: vec![pin], page: String::new() };
         let s = SchematicSection { sheets: vec![sheet.clone()], ..Default::default() };
-        assert_eq!(closest_anchor(&s, &[], Point { x: 5_000_000, y: 5_000_000 }), Some(Point { x: 50_000_000, y: 10_000_000 }));
+        assert_eq!(closest_anchor(&s, &[], Point { x: Nm::new(5_000_000), y: Nm::new(5_000_000) }), Some(Point { x: Nm::new(50_000_000), y: Nm::new(10_000_000) }));
         let bare = SchematicSection { sheets: vec![SheetInstance { pins: vec![], ..sheet }], ..Default::default() };
-        assert_eq!(closest_anchor(&bare, &[], Point { x: 5_000_000, y: 5_000_000 }), Some(Point { x: 0, y: 0 }));
+        assert_eq!(closest_anchor(&bare, &[], Point { x: Nm::new(5_000_000), y: Nm::new(5_000_000) }), Some(Point { x: Nm::ZERO, y: Nm::ZERO }));
     }
 }

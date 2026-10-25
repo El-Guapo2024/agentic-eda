@@ -112,7 +112,7 @@ pub struct PadFrame {
 impl PadFrame {
     /// The frame of `pad` on the footprint instance `fp`, whose position for the pad is `origin` (a board point).
     pub fn of(fp: &FootprintInstance, pad: &Pad, origin: Point) -> PadFrame {
-        PadFrame { origin: (origin.x as f64, origin.y as f64), pad_rot_mdeg: pad.rot as i64, fp_rot_mdeg: fp.rot as i64, mirror: fp.side == Side::Bottom }
+        PadFrame { origin: (origin.x.as_f64(), origin.y.as_f64()), pad_rot_mdeg: pad.rot as i64, fp_rot_mdeg: fp.rot as i64, mirror: fp.side == Side::Bottom }
     }
 
     /// A point of the pad's frame on the board.
@@ -137,13 +137,13 @@ pub enum ErrorLoc {
 
 fn half(v: Nm) -> f64 {
     // `VECTOR2I / 2` truncates toward zero.
-    (v / 2) as f64
+    (v / 2).as_f64()
 }
 
 /// `PAD::GetRoundRectCornerRadius`: `KiROUND( ratio * min( size.x, size.y ) )`.
 pub fn round_rect_radius(pad: &Pad) -> Nm {
     let ratio = pad.roundrect_ratio.unwrap_or(0.25).clamp(0.0, 0.5);
-    (ratio * pad.size.0.min(pad.size.1) as f64).round() as Nm
+    Nm::kiround(ratio * (pad.size.0.min(pad.size.1)).as_f64())
 }
 
 /// The corners of a trapezoid or a rectangle, bottom left, bottom right, top right and top left (`PAD::buildEffectiveShape`); `half`
@@ -257,11 +257,11 @@ fn corner_list_to_polygon(corners: &[Corner], max_error: f64) -> Vec<P> {
 pub fn chamfered_rect_polygon(size: (Nm, Nm), corner_radius: Nm, chamfer_ratio: f64, corners: ChamferCorners, max_error: f64) -> Vec<P> {
     let (sx, sy) = (half(size.0), half(size.1));
     let mask = corners.bits();
-    let radius = corner_radius as f64;
+    let radius = corner_radius.as_f64();
     let mut list = vec![Corner { p: (-sx, -sy), r: radius }, Corner { p: (sx, -sy), r: radius }, Corner { p: (sx, sy), r: radius }, Corner { p: (-sx, sy), r: radius }];
     if mask != 0 {
         let shorter = size.0.min(size.1);
-        let chamfer = ((chamfer_ratio * shorter as f64).round() as i64).max(0) as f64;
+        let chamfer = ((chamfer_ratio * shorter.as_f64()).round() as i64).max(0) as f64;
         // top left, top right, bottom right, bottom left
         let cham_id = [1u8, 2, 8, 4];
         let sign: [f64; 8] = [0.0, 1.0, -1.0, 0.0, 0.0, -1.0, 1.0, 0.0];
@@ -281,7 +281,7 @@ pub fn chamfered_rect_polygon(size: (Nm, Nm), corner_radius: Nm, chamfer_ratio: 
             }
             pos += 1;
         }
-        if mask.count_ones() > 1 && 2.0 * chamfer >= shorter as f64 {
+        if mask.count_ones() > 1 && 2.0 * chamfer >= shorter.as_f64() {
             corner_list_remove_duplicates(&mut list);
         }
     }
@@ -295,8 +295,8 @@ pub fn custom_primitives(custom: &PadCustom) -> impl Iterator<Item = &PadPrimiti
 
 /// `EDA_SHAPE::makeEffectiveShapes` of one primitive, in the pad's frame, moved by `at`.
 pub fn primitive_pieces(shape: &Shape, at: P, max_error: f64) -> Vec<PadPiece> {
-    let mv = |p: Point| (p.x as f64 + at.0, p.y as f64 + at.1);
-    let width = shape.stroke_width().max(0) as f64;
+    let mv = |p: Point| (p.x.as_f64() + at.0, p.y.as_f64() + at.1);
+    let width = (shape.stroke_width().max(Nm::ZERO)).as_f64();
     let r = width / 2.0;
     let solid = shape.is_filled();
     let mut out = Vec::new();
@@ -311,7 +311,7 @@ pub fn primitive_pieces(shape: &Shape, at: P, max_error: f64) -> Vec<PadPiece> {
         Shape::Rect { start, end, .. } => {
             let (x0, x1) = (start.x.min(end.x), start.x.max(end.x));
             let (y0, y1) = (start.y.min(end.y), start.y.max(end.y));
-            let pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| (x as f64 + at.0, y as f64 + at.1));
+            let pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| (x.as_f64() + at.0, y.as_f64() + at.1));
             if solid {
                 out.push(PadPiece::Polygon(pts.to_vec()));
             }
@@ -322,7 +322,7 @@ pub fn primitive_pieces(shape: &Shape, at: P, max_error: f64) -> Vec<PadPiece> {
             }
         }
         Shape::Circle { center, end, .. } => {
-            let rad = ((end.x - center.x) as f64).hypot((end.y - center.y) as f64);
+            let rad = ((end.x - center.x).as_f64()).hypot((end.y - center.y).as_f64());
             let c = mv(*center);
             if solid {
                 out.push(PadPiece::Circle { c, r: rad });
@@ -364,7 +364,7 @@ pub fn primitive_pieces(shape: &Shape, at: P, max_error: f64) -> Vec<PadPiece> {
 /// `PAD::buildEffectiveShape`: the parts of the pad's copper in its own frame, the shape's offset applied. A rounded rectangle is its
 /// inner rectangle and four stadiums along its edges, as KiCad builds it.
 pub fn pad_pieces(pad: &Pad) -> Vec<PadPiece> {
-    let off = pad.ext.offset.map(|(x, y)| (x as f64, y as f64)).unwrap_or((0.0, 0.0));
+    let off = pad.ext.offset.map(|(x, y)| (x.as_f64(), y.as_f64())).unwrap_or((0.0, 0.0));
     let (w, h) = (pad.size.0, pad.size.1);
     let eff = match (pad.shape, &pad.ext.custom) {
         (PadShape::Custom, Some(c)) => match c.anchor {
@@ -389,7 +389,7 @@ pub fn pad_pieces(pad: &Pad) -> Vec<PadPiece> {
             }
         }
         PadShape::Rect | PadShape::Trapezoid | PadShape::RoundRect => {
-            let r = if eff == PadShape::RoundRect { round_rect_radius(pad) as f64 } else { 0.0 };
+            let r = if eff == PadShape::RoundRect { (round_rect_radius(pad)).as_f64() } else { 0.0 };
             let mut hs = (half(w), half(h));
             let mut delta = (0.0, 0.0);
             let mut circle_only = false;
@@ -401,7 +401,7 @@ pub fn pad_pieces(pad: &Pad) -> Vec<PadPiece> {
                     circle_only = true;
                 }
             } else if eff == PadShape::Trapezoid {
-                let d = pad.ext.trapezoid_delta.unwrap_or((0, 0));
+                let d = pad.ext.trapezoid_delta.unwrap_or((Nm::ZERO, Nm::ZERO));
                 delta = (half(d.0), half(d.1));
             }
             if !circle_only {
@@ -416,14 +416,14 @@ pub fn pad_pieces(pad: &Pad) -> Vec<PadPiece> {
         }
         PadShape::ChamferedRect => {
             let ratio = pad.ext.chamfer_ratio.unwrap_or(0.0);
-            let poly = chamfered_rect_polygon(pad.size, round_rect_radius(pad), ratio, pad.ext.chamfer_corners, MAX_ERROR_NM as f64);
+            let poly = chamfered_rect_polygon(pad.size, round_rect_radius(pad), ratio, pad.ext.chamfer_corners, MAX_ERROR_NM.as_f64());
             out.push(PadPiece::Polygon(poly.into_iter().map(|(x, y)| (x + off.0, y + off.1)).collect()));
         }
     }
     if pad.shape == PadShape::Custom {
         if let Some(c) = &pad.ext.custom {
             for prim in custom_primitives(c) {
-                out.extend(primitive_pieces(&prim.shape, off, MAX_ERROR_NM as f64));
+                out.extend(primitive_pieces(&prim.shape, off, MAX_ERROR_NM.as_f64()));
             }
         }
     }
@@ -466,7 +466,7 @@ mod tests {
     use crate::footprint::{PadKind, PadShapeExt};
 
     fn pad(shape: PadShape, size: (Nm, Nm)) -> Pad {
-        Pad { number: "1".into(), at: (0, 0), size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: PadShapeExt::default() }
+        Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: PadShapeExt::default() }
     }
 
     fn area(poly: &[P]) -> f64 {
@@ -477,15 +477,15 @@ mod tests {
     #[test]
     fn a_trapezoid_is_narrower_on_the_side_its_delta_says() {
         // 2 mm x 1 mm, `rect_delta 0.4 0`: the two sides at +-y differ by 0.4 mm (KiCad's x delta narrows the left and right).
-        let mut p = pad(PadShape::Trapezoid, (2_000_000, 1_000_000));
-        p.ext.trapezoid_delta = Some((400_000, 0));
+        let mut p = pad(PadShape::Trapezoid, (Nm::new(2_000_000), Nm::new(1_000_000)));
+        p.ext.trapezoid_delta = Some((Nm::new(400_000), Nm::ZERO));
         let pieces = pad_pieces(&p);
         let PadPiece::Polygon(c) = &pieces[0] else { panic!("{pieces:?}") };
         assert_eq!(c.as_slice(), [(-1_000_000.0, 700_000.0), (1_000_000.0, 300_000.0), (1_000_000.0, -300_000.0), (-1_000_000.0, -700_000.0)]);
         // The area is the mean of the two sides (1.4 and 0.6 mm) times the 2 mm between them.
         assert!((area(c) - 2_000_000.0 * 1_000_000.0).abs() < 1.0, "{}", area(c));
         // A y delta narrows the top and the bottom.
-        p.ext.trapezoid_delta = Some((0, 400_000));
+        p.ext.trapezoid_delta = Some((Nm::ZERO, Nm::new(400_000)));
         let pieces = pad_pieces(&p);
         let PadPiece::Polygon(c) = &pieces[0] else { panic!() };
         assert_eq!(c.as_slice(), [(-1_200_000.0, 500_000.0), (1_200_000.0, 500_000.0), (800_000.0, -500_000.0), (-800_000.0, -500_000.0)]);
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn a_chamfered_rectangle_loses_a_triangle_at_each_cut_corner() {
-        let mut p = pad(PadShape::ChamferedRect, (1_000_000, 600_000));
+        let mut p = pad(PadShape::ChamferedRect, (Nm::new(1_000_000), Nm::new(600_000)));
         p.roundrect_ratio = Some(0.0);
         p.ext.chamfer_ratio = Some(0.25);
         p.ext.chamfer_corners = ChamferCorners { top_left: true, bottom_right: true, ..Default::default() };
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn a_rounded_chamfered_rectangle_is_a_chamfered_one_with_arcs_at_the_other_corners() {
-        let mut p = pad(PadShape::ChamferedRect, (1_000_000, 600_000));
+        let mut p = pad(PadShape::ChamferedRect, (Nm::new(1_000_000), Nm::new(600_000)));
         p.roundrect_ratio = Some(0.25);
         p.ext.chamfer_ratio = Some(0.25);
         p.ext.chamfer_corners = ChamferCorners { top_left: true, ..Default::default() };
@@ -525,13 +525,13 @@ mod tests {
 
     #[test]
     fn a_custom_pad_is_its_anchor_and_its_primitives() {
-        let mut p = pad(PadShape::Custom, (1_000_000, 1_000_000));
+        let mut p = pad(PadShape::Custom, (Nm::new(1_000_000), Nm::new(1_000_000)));
         p.ext.custom = Some(PadCustom {
             anchor: PadAnchor::Circle,
             zone: Default::default(),
             primitives: vec![
-                PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 3_000_000, y: 0 } }, proxy: false },
-                PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 0, y: 9_000_000 } }, proxy: true },
+                PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::new(200_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::new(3_000_000), y: Nm::ZERO } }, proxy: false },
+                PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::new(200_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::ZERO, y: Nm::new(9_000_000) } }, proxy: true },
             ],
         });
         let pieces = pad_pieces(&p);
@@ -543,12 +543,12 @@ mod tests {
 
     #[test]
     fn a_ring_is_a_stroked_circle_and_a_filled_one_is_a_disc() {
-        let ring = Shape::Circle { id: String::new(), layer: String::new(), stroke_width: 2_200_000, filled: false, center: Point { x: -2_975_000, y: 0 }, end: Point { x: -375_000, y: 0 } };
+        let ring = Shape::Circle { id: String::new(), layer: String::new(), stroke_width: Nm::new(2_200_000), filled: false, center: Point { x: Nm::new(-2_975_000), y: Nm::ZERO }, end: Point { x: Nm::new(-375_000), y: Nm::ZERO } };
         let pieces = primitive_pieces(&ring, (0.0, 0.0), 5000.0);
         let [PadPiece::Strokes { pts, r }] = pieces.as_slice() else { panic!("{pieces:?}") };
         assert_eq!(*r, 1_100_000.0);
         assert!(pts.iter().all(|p| ((p.0 + 2_975_000.0).hypot(p.1) - 2_600_000.0).abs() < 1e-6));
-        let disc = Shape::Circle { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, center: Point { x: 0, y: 0 }, end: Point { x: 500_000, y: 0 } };
+        let disc = Shape::Circle { id: String::new(), layer: String::new(), stroke_width: Nm::ZERO, filled: true, center: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::new(500_000), y: Nm::ZERO } };
         assert_eq!(primitive_pieces(&disc, (10_000.0, 0.0), 5000.0), vec![PadPiece::Circle { c: (10_000.0, 0.0), r: 500_000.0 }]);
     }
 
@@ -558,36 +558,36 @@ mod tests {
         use crate::ir::{LabelSide, Side};
         use crate::{ConstraintModel, Part, Pin, PinKind};
         // A 0.6 mm round anchor and a 0.2 mm line from it 2 mm to the right: the copper reaches x = 2100.
-        let mut p = pad(PadShape::Custom, (600_000, 600_000));
-        p.ext.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 2_000_000, y: 0 } }, proxy: false }] });
+        let mut p = pad(PadShape::Custom, (Nm::new(600_000), Nm::new(600_000)));
+        p.ext.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::new(200_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::new(2_000_000), y: Nm::ZERO } }, proxy: false }] });
         let footprint = Footprint { name: "C".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("C".into()), footprint: Some("C".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel { parts: vec![part.clone()], footprints: vec![footprint], ..Default::default() };
-        let at = |rot, side| FootprintInstance { id: "J1".into(), at: Point { x: 10_000_000, y: 5_000_000 }, rot, side, label: LabelSide::Above };
+        let at = |rot, side| FootprintInstance { id: "J1".into(), at: Point { x: Nm::new(10_000_000), y: Nm::new(5_000_000) }, rot, side, label: LabelSide::Above };
         // Unturned: the box about the pad's position holds the arm (2.1 mm to the right, so 4.2 mm wide) and the anchor (0.6 mm high).
         let placed = &placed_pads(&model, &part, &at(0, Side::Top)).unwrap()[0];
-        assert_eq!(placed.size, (4_200_000, 600_000));
-        assert!(placed.signed_distance(Point { x: 11_500_000, y: 5_000_000 }) < 0.0, "inside the arm");
-        assert!((placed.signed_distance(Point { x: 11_500_000, y: 5_400_000 }) - 300_000.0).abs() < 1e-6, "300 um beside the arm's edge (it is 100 um out of the axis)");
-        assert!((placed.signed_distance(Point { x: 12_400_000, y: 5_000_000 }) - 300_000.0).abs() < 1e-6, "beyond the arm's end");
+        assert_eq!(placed.size, (Nm::new(4_200_000), Nm::new(600_000)));
+        assert!(placed.signed_distance(Point { x: Nm::new(11_500_000), y: Nm::new(5_000_000) }) < 0.0, "inside the arm");
+        assert!((placed.signed_distance(Point { x: Nm::new(11_500_000), y: Nm::new(5_400_000) }) - 300_000.0).abs() < 1e-6, "300 um beside the arm's edge (it is 100 um out of the axis)");
+        assert!((placed.signed_distance(Point { x: Nm::new(12_400_000), y: Nm::new(5_000_000) }) - 300_000.0).abs() < 1e-6, "beyond the arm's end");
         // Turned a quarter clockwise on the screen the arm points down, on the bottom side it is mirrored to the left.
         let down = &placed_pads(&model, &part, &at(90_000, Side::Top)).unwrap()[0];
-        assert_eq!(down.size, (600_000, 4_200_000));
-        assert!(down.signed_distance(Point { x: 10_000_000, y: 6_500_000 }) < 0.0);
+        assert_eq!(down.size, (Nm::new(600_000), Nm::new(4_200_000)));
+        assert!(down.signed_distance(Point { x: Nm::new(10_000_000), y: Nm::new(6_500_000) }) < 0.0);
         let mirrored = &placed_pads(&model, &part, &at(0, Side::Bottom)).unwrap()[0];
-        assert!(mirrored.signed_distance(Point { x: 8_500_000, y: 5_000_000 }) < 0.0 && mirrored.signed_distance(Point { x: 11_500_000, y: 5_000_000 }) > 0.0);
+        assert!(mirrored.signed_distance(Point { x: Nm::new(8_500_000), y: Nm::new(5_000_000) }) < 0.0 && mirrored.signed_distance(Point { x: Nm::new(11_500_000), y: Nm::new(5_000_000) }) > 0.0);
         // A plain pad has no pieces and measures as before.
-        assert!(placed_pads(&ConstraintModel { footprints: vec![Footprint { name: "C".into(), pads: vec![pad(PadShape::Rect, (600_000, 600_000))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() }], ..model.clone() }, &part, &at(0, Side::Top)).unwrap()[0].pieces.is_empty());
+        assert!(placed_pads(&ConstraintModel { footprints: vec![Footprint { name: "C".into(), pads: vec![pad(PadShape::Rect, (Nm::new(600_000), Nm::new(600_000)))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() }], ..model.clone() }, &part, &at(0, Side::Top)).unwrap()[0].pieces.is_empty());
     }
 
     #[test]
     fn the_footprints_pad_box_holds_a_custom_pads_shapes() {
         use crate::footprint::Footprint;
-        let mut p = pad(PadShape::Custom, (600_000, 600_000));
-        p.ext.custom = Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 0, y: -3_000_000 } }, proxy: false }] });
-        p.at = (1_000_000, 0);
+        let mut p = pad(PadShape::Custom, (Nm::new(600_000), Nm::new(600_000)));
+        p.ext.custom = Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::new(200_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::ZERO, y: Nm::new(-3_000_000) } }, proxy: false }] });
+        p.at = (Nm::new(1_000_000), Nm::ZERO);
         let fp = Footprint { name: "C".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
-        assert_eq!(fp.pad_bbox(), (700_000, -3_100_000, 1_300_000, 300_000));
+        assert_eq!(fp.pad_bbox(), (Nm::new(700_000), Nm::new(-3_100_000), Nm::new(1_300_000), Nm::new(300_000)));
     }
 
     #[test]

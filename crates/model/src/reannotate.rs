@@ -23,6 +23,7 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use crate::units::Nm;
 
 /// `MAXERROR`: how many duplicate references are told before the check gives up.
 pub const MAX_ERRORS: usize = 10;
@@ -151,8 +152,8 @@ pub struct ReannotateInput {
     /// The footprint's library id as the board has it; empty when it has none (the report says "unknown").
     pub fpid: String,
     /// The position it is sorted by (`footprint->GetPosition()` or `footprint->Reference().GetPosition()`), nanometres.
-    pub x: i64,
-    pub y: i64,
+    pub x: Nm,
+    pub y: Nm,
     /// `GetLayer() == F_Cu`.
     pub front: bool,
     pub locked: bool,
@@ -179,8 +180,8 @@ pub struct Listed {
     /// From 1.
     pub index: usize,
     pub reference: String,
-    pub x: i64,
-    pub y: i64,
+    pub x: Nm,
+    pub y: Nm,
     /// After the rounding to the grid, nanometres.
     pub rounded_x: f64,
     pub rounded_y: f64,
@@ -202,8 +203,8 @@ pub struct Change {
 pub struct Bad {
     pub reference: String,
     pub fpid: String,
-    pub x: i64,
-    pub y: i64,
+    pub x: Nm,
+    pub y: Nm,
 }
 
 /// What a run of the dialog works out: the lists it logs, the change log and what is wrong.
@@ -285,13 +286,13 @@ pub fn wild_matches(mask: &str, text: &str) -> bool {
 }
 
 /// `DIALOG_BOARD_REANNOTATE::RoundToGrid` (the remainder takes the sign of the coordinate, as C++'s `%` does).
-pub fn round_to_grid(coord: i64, grid: i64) -> i64 {
+pub fn round_to_grid(coord: Nm, grid: Nm) -> Nm {
     // `MINGRID` is 1000 nm
-    let grid = if grid == 0 { 1000 } else { grid };
+    let grid = if grid == Nm::ZERO { Nm::new(1000) } else { grid };
     let rounder = coord % grid;
     let mut coord = coord - rounder;
     if rounder.abs() > grid / 2 {
-        coord += if coord < 0 { -grid } else { grid };
+        coord += if coord < Nm::ZERO { -grid } else { grid };
     }
     coord
 }
@@ -316,10 +317,10 @@ fn prefix_of(reference: &str) -> &str {
 struct Info {
     reference: String,
     fpid: String,
-    x: i64,
-    y: i64,
-    rounded_x: i64,
-    rounded_y: i64,
+    x: Nm,
+    y: Nm,
+    rounded_x: Nm,
+    rounded_y: Nm,
     front: bool,
     action: Action,
     prefix: String,
@@ -362,7 +363,7 @@ fn before(a: &Info, b: &Info, code: u8) -> bool {
 fn listed(list: &[Info]) -> Vec<Listed> {
     list.iter()
         .enumerate()
-        .map(|(i, f)| Listed { index: i + 1, reference: f.reference.clone(), x: f.x, y: f.y, rounded_x: f.rounded_x as f64, rounded_y: f.rounded_y as f64 })
+        .map(|(i, f)| Listed { index: i + 1, reference: f.reference.clone(), x: f.x, y: f.y, rounded_x: f.rounded_x.as_f64(), rounded_y: f.rounded_y.as_f64() })
         .collect()
 }
 
@@ -445,7 +446,7 @@ pub fn plan(footprints: &[ReannotateInput], elsewhere: &[String], opts: &Reannot
             action = if f.front { Action::Exclude } else { Action::Update };
         }
         let (x, y) = (f.x, f.y);
-        let info = Info { reference, fpid: f.fpid.clone(), x, y, rounded_x: round_to_grid(x, grid), rounded_y: round_to_grid(y, grid), front: f.front, action, prefix };
+        let info = Info { reference, fpid: f.fpid.clone(), x, y, rounded_x: round_to_grid(x, Nm::new(grid)), rounded_y: round_to_grid(y, Nm::new(grid)), front: f.front, action, prefix };
         (if f.front { &mut front } else { &mut back }).push(info);
     }
 
@@ -507,7 +508,7 @@ mod tests {
     use super::*;
 
     fn fp(reference: &str, x: i64, y: i64, front: bool) -> ReannotateInput {
-        ReannotateInput { reference: reference.into(), fpid: "Lib:FP".into(), x, y, front, locked: false, selected: false }
+        ReannotateInput { reference: reference.into(), fpid: "Lib:FP".into(), x: Nm::new(x), y: Nm::new(y), front, locked: false, selected: false }
     }
 
     fn news(plan: &Plan) -> Vec<(String, String)> {
@@ -520,14 +521,14 @@ mod tests {
 
     #[test]
     fn a_coordinate_rounds_to_the_grid_with_the_sign_of_c_remainders() {
-        assert_eq!(round_to_grid(1500, 1000), 1000, "exactly half goes down");
-        assert_eq!(round_to_grid(1501, 1000), 2000);
-        assert_eq!(round_to_grid(-1500, 1000), -1000);
-        assert_eq!(round_to_grid(-1501, 1000), -2000);
-        assert_eq!(round_to_grid(299, 1000), 0);
-        assert_eq!(round_to_grid(7, 0), 0, "no grid is the minimum grid, 1000 nm");
-        assert_eq!(round_to_grid(1_270_000 * 3 + 700_000, 1_270_000), 1_270_000 * 4, "a 50 mil grid");
-        assert_eq!(round_to_grid(1_270_000 * 3 + 600_000, 1_270_000), 1_270_000 * 3);
+        assert_eq!(round_to_grid(Nm::new(1500), Nm::new(1000)), Nm::new(1000), "exactly half goes down");
+        assert_eq!(round_to_grid(Nm::new(1501), Nm::new(1000)), Nm::new(2000));
+        assert_eq!(round_to_grid(Nm::new(-1500), Nm::new(1000)), Nm::new(-1000));
+        assert_eq!(round_to_grid(Nm::new(-1501), Nm::new(1000)), Nm::new(-2000));
+        assert_eq!(round_to_grid(Nm::new(299), Nm::new(1000)), Nm::ZERO);
+        assert_eq!(round_to_grid(Nm::new(7), Nm::ZERO), Nm::ZERO, "no grid is the minimum grid, 1000 nm");
+        assert_eq!(round_to_grid(Nm::new(1_270_000 * 3 + 700_000), Nm::new(1_270_000)), Nm::new(1_270_000 * 4), "a 50 mil grid");
+        assert_eq!(round_to_grid(Nm::new(1_270_000 * 3 + 600_000), Nm::new(1_270_000)), Nm::new(1_270_000 * 3));
     }
 
     #[test]

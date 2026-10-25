@@ -59,6 +59,7 @@ pub mod via_extra;
 pub mod via_stitch;
 pub mod drill_chart;
 
+use crate::units::Nm;
 pub use footprint::{Footprint, Pad, PadKind, PadShape};
 pub use symbol::{is_synthetic_lib_id, resolve_lib_id, LibPin, LibSymbol, SymbolGraphic};
 
@@ -476,7 +477,7 @@ pub struct BoardRules {
 }
 
 fn is_zero_nm(v: &ir::Nm) -> bool {
-    *v == 0
+    *v == Nm::ZERO
 }
 
 fn is_false(v: &bool) -> bool {
@@ -526,7 +527,7 @@ fn d_true() -> bool {
 
 impl Default for SolderMaskRules {
     fn default() -> Self {
-        SolderMaskRules { expansion_nm: 0, min_width_nm: 0, to_copper_clearance_nm: 0, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true, paste_margin_nm: 0, paste_margin_ratio: 0.0 }
+        SolderMaskRules { expansion_nm: Nm::ZERO, min_width_nm: Nm::ZERO, to_copper_clearance_nm: Nm::ZERO, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true, paste_margin_nm: Nm::ZERO, paste_margin_ratio: 0.0 }
     }
 }
 
@@ -606,13 +607,13 @@ impl BoardRules {
         let mut bad = |what: &str, why: String| {
             out.push(CheckResult::fail("board_rules", format!("board.{what}"), why));
         };
-        if self.grid <= 0 {
+        if self.grid <= Nm::ZERO {
             bad("grid", format!("routing grid is {} nm; it is the divisor for every cell index on the board", self.grid));
         }
-        if self.track_width <= 0 {
+        if self.track_width <= Nm::ZERO {
             bad("track_width", format!("track width is {} nm; copper with no width has no clearance either", self.track_width));
         }
-        if self.clearance < 0 {
+        if self.clearance < Nm::ZERO {
             bad("clearance", format!("clearance is {} nm; a negative gap is copper overlapping on purpose", self.clearance));
         }
         if self.layers.is_empty() {
@@ -626,7 +627,7 @@ impl BoardRules {
                 }
             }
         }
-        if self.via_diameter <= 0 || self.via_drill <= 0 {
+        if self.via_diameter <= Nm::ZERO || self.via_drill <= Nm::ZERO {
             bad("via", format!("via is {} nm across a {} nm drill; both have to be positive", self.via_diameter, self.via_drill));
         } else if self.via_drill >= self.via_diameter {
             bad(
@@ -645,12 +646,12 @@ impl BoardRules {
         }
         for c in &self.net_classes {
             if let Some(w) = c.track_width {
-                if w <= 0 {
+                if w <= Nm::ZERO {
                     bad("net_classes", format!("net class {:?} sets a track width of {w} nm", c.name));
                 }
             }
             if let Some(cl) = c.clearance {
-                if cl < 0 {
+                if cl < Nm::ZERO {
                     bad("net_classes", format!("net class {:?} sets a clearance of {cl} nm", c.name));
                 }
             }
@@ -681,11 +682,11 @@ impl BoardRules {
             y1 = y1.max(p.y);
         }
         if outline.is_empty() {
-            return 600_000;
+            return Nm::new(600_000);
         }
         let m = 2_000_000;
-        let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
-        (vw.min(vh) / 40).clamp(600_000, 1_000_000)
+        let (vw, vh) = (x1 - x0 + Nm::new(2 * m), y1 - y0 + Nm::new(2 * m));
+        (vw.min(vh) / 40).clamp(Nm::new(600_000), Nm::new(1_000_000))
     }
 }
 
@@ -712,7 +713,7 @@ pub struct RoutingTuning {
 
 /// KiCad's default board-setup copper-to-edge clearance, which
 /// `kicad-cli pcb drc` holds every pad, track and via to against Edge.Cuts.
-pub const KICAD_EDGE_CLEARANCE_NM: ir::Nm = 500_000;
+pub const KICAD_EDGE_CLEARANCE_NM: ir::Nm = Nm::new(500_000);
 
 impl RoutingTuning {
     /// How far copper keeps from the board edge: the tuning's clearance,
@@ -732,7 +733,7 @@ impl RoutingTuning {
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
-        RoutingTuning { edge_clearance_nm: 500_000, between_pads_max_gap_nm: 2_000_000, preflight_reach_cells: 2000, optimizer_passes: 10 }
+        RoutingTuning { edge_clearance_nm: Nm::new(500_000), between_pads_max_gap_nm: Nm::new(2_000_000), preflight_reach_cells: 2000, optimizer_passes: 10 }
     }
 }
 
@@ -782,14 +783,14 @@ pub struct SolverSettings {
 }
 impl Default for SolverSettings {
     fn default() -> Self {
-        SolverSettings { placer: "build".into(), place_spacing_nm: 600_000, place_moves_per_part: 4000, place_snap_nm: 100_000, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3, floorplan: false }
+        SolverSettings { placer: "build".into(), place_spacing_nm: Nm::new(600_000), place_moves_per_part: 4000, place_snap_nm: Nm::new(100_000), cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3, floorplan: false }
     }
 }
 
 /// Max courtyard gap, nm, from a decoupling capacitor to the IC it
 /// decouples (shares both of its nets with). The placement gate judges it;
 /// the placers pull toward it.
-pub const DECOUPLING_MAX_GAP_NM: ir::Nm = 3_000_000;
+pub const DECOUPLING_MAX_GAP_NM: ir::Nm = Nm::new(3_000_000);
 
 /// A part the placer can freely move or swap to uncross a stub: two pins,
 /// not a connector or an IC.
@@ -837,26 +838,26 @@ pub fn decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
     }
     pairs
 }
-fn d_grid() -> ir::Nm { 254_000 }
-fn d_track() -> ir::Nm { 200_000 }
-fn d_clearance() -> ir::Nm { 200_000 }
-fn d_via_drill() -> ir::Nm { 300_000 }
-fn d_via_dia() -> ir::Nm { 600_000 }
+fn d_grid() -> ir::Nm { Nm::new(254_000) }
+fn d_track() -> ir::Nm { Nm::new(200_000) }
+fn d_clearance() -> ir::Nm { Nm::new(200_000) }
+fn d_via_drill() -> ir::Nm { Nm::new(300_000) }
+fn d_via_dia() -> ir::Nm { Nm::new(600_000) }
 fn d_layers() -> Vec<String> { vec!["F.Cu".into(), "B.Cu".into()] }
-fn d_hole_to_hole_min() -> ir::Nm { 250_000 }
-fn d_hole_clearance() -> ir::Nm { 250_000 }
-fn d_silk_clearance() -> ir::Nm { 0 }
-fn d_annular_width_min() -> ir::Nm { 100_000 }
-fn d_min_silk_text_height() -> ir::Nm { 800_000 }
-fn d_min_silk_text_thickness() -> ir::Nm { 80_000 }
-fn d_track_width_min() -> ir::Nm { 200_000 }
-fn d_via_diameter_min() -> ir::Nm { 500_000 }
-fn d_via_drill_min() -> ir::Nm { 300_000 }
-fn d_microvia_diameter_min() -> ir::Nm { 200_000 }
-fn d_microvia_drill_min() -> ir::Nm { 100_000 }
+fn d_hole_to_hole_min() -> ir::Nm { Nm::new(250_000) }
+fn d_hole_clearance() -> ir::Nm { Nm::new(250_000) }
+fn d_silk_clearance() -> ir::Nm { Nm::ZERO }
+fn d_annular_width_min() -> ir::Nm { Nm::new(100_000) }
+fn d_min_silk_text_height() -> ir::Nm { Nm::new(800_000) }
+fn d_min_silk_text_thickness() -> ir::Nm { Nm::new(80_000) }
+fn d_track_width_min() -> ir::Nm { Nm::new(200_000) }
+fn d_via_diameter_min() -> ir::Nm { Nm::new(500_000) }
+fn d_via_drill_min() -> ir::Nm { Nm::new(300_000) }
+fn d_microvia_diameter_min() -> ir::Nm { Nm::new(200_000) }
+fn d_microvia_drill_min() -> ir::Nm { Nm::new(100_000) }
 fn d_min_resolved_spokes() -> u32 { 2 }
-fn d_max_error() -> ir::Nm { 5_000 }
-fn d_board_thickness() -> ir::Nm { 1_600_000 }
+fn d_max_error() -> ir::Nm { Nm::new(5_000) }
+fn d_board_thickness() -> ir::Nm { Nm::new(1_600_000) }
 impl BoardRules {
     /// Every class whose pattern matches `net`, the one that takes precedence first. A class's place in the list is its priority (`panel_setup_netclasses.cpp` gives each class its row
     /// as `SetPriority( row )`, the Default class the lowest), and `NET_SETTINGS::makeEffectiveNetclass` sorts the matching ones by it.
@@ -940,14 +941,14 @@ impl BoardRules {
     /// board never lacks one. (`SIZES_SETTINGS`' constructor's 125 um only
     /// applies before there is a board; findings p5 F3-7.)
     pub fn diff_pair_width_of(&self, net: &str) -> ir::Nm {
-        self.class_setting(net, |c| c.diff_pair_width).unwrap_or(200_000)
+        self.class_setting(net, |c| c.diff_pair_width).unwrap_or(Nm::new(200_000))
     }
 
     /// Differential-pair gap for `net`'s class -- see
     /// `diff_pair_width_of`'s own doc comment; KiCad's Default class has
     /// `DEFAULT_DIFF_PAIR_GAP = pcbIUScale.mmToIU( 0.25 )`.
     pub fn diff_pair_gap_of(&self, net: &str) -> ir::Nm {
-        self.class_setting(net, |c| c.diff_pair_gap).unwrap_or(250_000)
+        self.class_setting(net, |c| c.diff_pair_gap).unwrap_or(Nm::new(250_000))
     }
 
     /// Differential-pair via-to-via gap for `net`'s class -- upstream's
@@ -979,10 +980,10 @@ impl Default for BoardRules {
             net_classes: Vec::new(), outline: None, refdes_font_nm: None, pours: Vec::new(), tuning: RoutingTuning::default(),
             hole_to_hole_min_nm: d_hole_to_hole_min(), hole_clearance_nm: d_hole_clearance(), silk_clearance_nm: d_silk_clearance(),
             annular_width_min_nm: d_annular_width_min(), min_silk_text_height_nm: d_min_silk_text_height(), min_silk_text_thickness_nm: d_min_silk_text_thickness(),
-            track_width_min_nm: d_track_width_min(), min_clearance_nm: 0, via_diameter_min_nm: d_via_diameter_min(), via_drill_min_nm: d_via_drill_min(),
+            track_width_min_nm: d_track_width_min(), min_clearance_nm: Nm::ZERO, via_diameter_min_nm: d_via_diameter_min(), via_drill_min_nm: d_via_drill_min(),
             rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(), outline_closed: None,
             copper_edge_clearance_nm: None, solder_mask: SolderMaskRules::default(),
-            min_connection_nm: 0, microvia_diameter_min_nm: d_microvia_diameter_min(), microvia_drill_min_nm: d_microvia_drill_min(), min_groove_width_nm: 0,
+            min_connection_nm: Nm::ZERO, microvia_diameter_min_nm: d_microvia_diameter_min(), microvia_drill_min_nm: d_microvia_drill_min(), min_groove_width_nm: Nm::ZERO,
             min_resolved_spokes: d_min_resolved_spokes(), max_error_nm: d_max_error(), use_height_for_length_calcs: true, zones_allow_external_fillets: false,
             constraints_explicit: false, board_thickness_nm: d_board_thickness(), text_graphics: rules::TextGraphicsDefaults::default(), default_class: None,
             layer_setup: layers::LayerSetup::default(),
@@ -1527,11 +1528,11 @@ mod tests {
 
     #[test]
     fn net_class_clearance_overrides_the_board_default_only_for_its_own_nets() {
-        let mut rules = BoardRules { clearance: 200_000, ..BoardRules::default() };
-        rules.net_classes.push(NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150_000), clearance: Some(150_000), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
-        assert_eq!(rules.clearance_of("CC1"), 150_000);
-        assert_eq!(rules.clearance_of("CC2"), 150_000);
-        assert_eq!(rules.clearance_of("GND"), 200_000, "a net outside the class keeps the board default");
+        let mut rules = BoardRules { clearance: Nm::new(200_000), ..BoardRules::default() };
+        rules.net_classes.push(NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(Nm::new(150_000)), clearance: Some(Nm::new(150_000)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        assert_eq!(rules.clearance_of("CC1"), Nm::new(150_000));
+        assert_eq!(rules.clearance_of("CC2"), Nm::new(150_000));
+        assert_eq!(rules.clearance_of("GND"), Nm::new(200_000), "a net outside the class keeps the board default");
         assert!(rules.validate().is_empty(), "{:?}", rules.validate());
     }
 
@@ -1543,25 +1544,25 @@ mod tests {
     /// class gives the rest and joins the name. Patterns are wildcard patterns or regular expressions.
     #[test]
     fn a_net_in_several_classes_has_the_settings_of_all_of_them_by_precedence() {
-        let mut rules = BoardRules { clearance: 200_000, track_width: 250_000, via_diameter: 600_000, via_drill: 300_000, ..BoardRules::default() };
+        let mut rules = BoardRules { clearance: Nm::new(200_000), track_width: Nm::new(250_000), via_diameter: Nm::new(600_000), via_drill: Nm::new(300_000), ..BoardRules::default() };
         rules.net_classes = vec![
-            class_with("power", &["VBUS", "V[0-9]+"], Some(400_000), None),
-            class_with("fast", &["USB_*", "VBUS"], Some(100_000), Some(500_000)),
-            class_with("misc", &["MISO"], Some(300_000), Some(150_000)),
+            class_with("power", &["VBUS", "V[0-9]+"], Some(Nm::new(400_000)), None),
+            class_with("fast", &["USB_*", "VBUS"], Some(Nm::new(100_000)), Some(Nm::new(500_000))),
+            class_with("misc", &["MISO"], Some(Nm::new(300_000)), Some(Nm::new(150_000))),
         ];
         // VBUS is in power (first, so it takes precedence) and fast
         assert_eq!(rules.matching_classes("VBUS").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["power", "fast"]);
         assert_eq!(rules.class_of("VBUS").unwrap().name, "power", "the class it is listed under is the one that takes precedence");
-        assert_eq!((rules.clearance_of("VBUS"), rules.width_of("VBUS")), (400_000, 500_000), "the clearance of power, which sets it first; the track width of fast, since power sets none");
-        assert_eq!(rules.via_diameter_of("VBUS"), 600_000, "nobody sets it: the Default class's");
+        assert_eq!((rules.clearance_of("VBUS"), rules.width_of("VBUS")), (Nm::new(400_000), Nm::new(500_000)), "the clearance of power, which sets it first; the track width of fast, since power sets none");
+        assert_eq!(rules.via_diameter_of("VBUS"), Nm::new(600_000), "nobody sets it: the Default class's");
         // a regex pattern
         assert_eq!(rules.class_of("V12").unwrap().name, "power");
-        assert_eq!(rules.clearance_of("V12"), 400_000);
+        assert_eq!(rules.clearance_of("V12"), Nm::new(400_000));
         // one class alone
-        assert_eq!((rules.clearance_of("MISO"), rules.width_of("MISO")), (300_000, 150_000));
+        assert_eq!((rules.clearance_of("MISO"), rules.width_of("MISO")), (Nm::new(300_000), Nm::new(150_000)));
         assert_eq!(rules.matching_classes("MISO").len(), 1);
         // none: the Default class
-        assert_eq!((rules.clearance_of("GND"), rules.width_of("GND")), (200_000, 250_000));
+        assert_eq!((rules.clearance_of("GND"), rules.width_of("GND")), (Nm::new(200_000), Nm::new(250_000)));
         assert!(rules.matching_classes("GND").is_empty() && rules.class_of("GND").is_none());
         // the names KiCad gives them
         assert_eq!(rules.effective_class("VBUS").name, "power,fast,Default");
@@ -1569,13 +1570,13 @@ mod tests {
         assert_eq!(rules.effective_class("GND").name, "Default");
         assert!(rules.effective_class("VBUS").is_composite() && !rules.effective_class("GND").is_composite());
         // a class that sets everything stands alone
-        let mut full = class_with("full", &["FULL"], Some(1000), Some(2000));
-        full.via_diameter = Some(3000);
-        full.via_drill = Some(1000);
-        full.microvia_diameter = Some(2000);
-        full.microvia_drill = Some(1000);
-        full.diff_pair_width = Some(2000);
-        full.diff_pair_gap = Some(2000);
+        let mut full = class_with("full", &["FULL"], Some(Nm::new(1000)), Some(Nm::new(2000)));
+        full.via_diameter = Some(Nm::new(3000));
+        full.via_drill = Some(Nm::new(1000));
+        full.microvia_diameter = Some(Nm::new(2000));
+        full.microvia_drill = Some(Nm::new(1000));
+        full.diff_pair_width = Some(Nm::new(2000));
+        full.diff_pair_gap = Some(Nm::new(2000));
         rules.net_classes.push(full);
         assert_eq!(rules.effective_class("FULL").name, "full");
         assert!(!rules.effective_class("FULL").is_composite());
@@ -1585,11 +1586,11 @@ mod tests {
     #[test]
     fn the_default_class_gives_a_net_the_settings_no_class_of_its_own_gives() {
         let mut rules = BoardRules::default();
-        rules.default_class = Some(NetClass { diff_pair_width: Some(200_000), diff_pair_gap: Some(220_000), ..class_with("Default", &[], None, None) });
-        assert_eq!((rules.diff_pair_width_of("ANY"), rules.diff_pair_gap_of("ANY"), rules.diff_pair_via_gap_of("ANY")), (200_000, 220_000, 220_000));
-        rules.net_classes.push(NetClass { diff_pair_gap: Some(150_000), ..class_with("tight", &["T*"], None, None) });
-        assert_eq!((rules.diff_pair_width_of("T1"), rules.diff_pair_gap_of("T1")), (200_000, 150_000), "the gap from the class, the width from Default");
-        assert_eq!(BoardRules::default().diff_pair_width_of("X"), 200_000, "with no Default class either: what KiCad's Default class has");
+        rules.default_class = Some(NetClass { diff_pair_width: Some(Nm::new(200_000)), diff_pair_gap: Some(Nm::new(220_000)), ..class_with("Default", &[], None, None) });
+        assert_eq!((rules.diff_pair_width_of("ANY"), rules.diff_pair_gap_of("ANY"), rules.diff_pair_via_gap_of("ANY")), (Nm::new(200_000), Nm::new(220_000), Nm::new(220_000)));
+        rules.net_classes.push(NetClass { diff_pair_gap: Some(Nm::new(150_000)), ..class_with("tight", &["T*"], None, None) });
+        assert_eq!((rules.diff_pair_width_of("T1"), rules.diff_pair_gap_of("T1")), (Nm::new(200_000), Nm::new(150_000)), "the gap from the class, the width from Default");
+        assert_eq!(BoardRules::default().diff_pair_width_of("X"), Nm::new(200_000), "with no Default class either: what KiCad's Default class has");
     }
 
     #[test]
@@ -1598,34 +1599,34 @@ mod tests {
         // No net class at all -- what KiCad's Default class always has
         // (`NETCLASS::NETCLASS( .., aInitWithDefaults )`): 0.2 mm width,
         // 0.25 mm gap, 0.25 mm via gap.
-        assert_eq!(rules.diff_pair_width_of("USB_DP"), 200_000);
-        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 250_000);
-        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 250_000);
+        assert_eq!(rules.diff_pair_width_of("USB_DP"), Nm::new(200_000));
+        assert_eq!(rules.diff_pair_gap_of("USB_DP"), Nm::new(250_000));
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), Nm::new(250_000));
     }
 
     #[test]
     fn a_net_classs_own_diff_pair_fields_override_the_defaults() {
         let mut rules = BoardRules::default();
-        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(200_000), diff_pair_gap: Some(150_000), diff_pair_via_gap: Some(300_000), priority: 0 });
-        assert_eq!(rules.diff_pair_width_of("USB_DP"), 200_000);
-        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 150_000);
-        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 300_000);
+        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(Nm::new(200_000)), diff_pair_gap: Some(Nm::new(150_000)), diff_pair_via_gap: Some(Nm::new(300_000)), priority: 0 });
+        assert_eq!(rules.diff_pair_width_of("USB_DP"), Nm::new(200_000));
+        assert_eq!(rules.diff_pair_gap_of("USB_DP"), Nm::new(150_000));
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), Nm::new(300_000));
         // A net outside the class keeps the upstream defaults, same as
         // every other per-class resolver.
-        assert_eq!(rules.diff_pair_width_of("GND"), 200_000);
+        assert_eq!(rules.diff_pair_width_of("GND"), Nm::new(200_000));
     }
 
     #[test]
     fn diff_pair_via_gap_falls_back_to_the_classs_own_trace_gap_not_the_default_literal() {
         let mut rules = BoardRules::default();
-        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: Some(150_000), diff_pair_via_gap: None, priority: 0 });
-        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 150_000, "SIZES_SETTINGS::DiffPairViaGap()'s own \"same as trace gap\" default");
+        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: Some(Nm::new(150_000)), diff_pair_via_gap: None, priority: 0 });
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), Nm::new(150_000), "SIZES_SETTINGS::DiffPairViaGap()'s own \"same as trace gap\" default");
     }
 
     #[test]
     fn a_negative_net_class_clearance_fails_validation() {
         let mut rules = BoardRules::default();
-        rules.net_classes.push(NetClass { name: "bad".into(), nets: vec!["X".into()], track_width: None, clearance: Some(-1), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        rules.net_classes.push(NetClass { name: "bad".into(), nets: vec!["X".into()], track_width: None, clearance: Some(Nm::new(-1)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         let fails = rules.validate();
         assert!(fails.iter().any(|c| c.location.as_deref() == Some("board.net_classes")), "{fails:?}");
     }

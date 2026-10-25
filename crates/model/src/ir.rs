@@ -620,7 +620,7 @@ pub struct SchLine {
 }
 
 fn is_zero_nm(v: &Nm) -> bool {
-    *v == 0
+    *v == Nm::ZERO
 }
 
 fn is_zero_millideg(v: &Millideg) -> bool {
@@ -744,7 +744,8 @@ pub struct ErcMarker {
     /// conflict is two kinds (`ERCET_PIN_TO_PIN_WARNING`, `ERCET_PIN_TO_PIN_ERROR`).
     pub error_type: String,
     /// The marker's position in nanometres, the schematic's own unit.
-    pub at_nm: [i64; 2],
+    // nanometres since schema 1: an old document has them right, not scaled
+    pub at_nm: [Nm; 2],
     /// The uuids of the items the finding names in the derived schematic, main item first (`RC_ITEM::GetMainItemID`, `GetAuxItemID`).
     pub items: Vec<String>,
     /// `SetSheetSpecificPath`: the sheet the marker belongs to, as the uuids from the root sheet down (`KIID_PATH`). Empty: it belongs to none.
@@ -783,7 +784,8 @@ pub struct DrcExclusion {
     /// lists one record for each, and the one that is the marker's is the one kicad-cli matches (the rest are dropped on load,
     /// as KiCad drops an exclusion no marker matches). Empty: the exclusion is the studio's alone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub positions_nm: Vec<[i64; 2]>,
+    // nanometres since schema 1: an old document has them right, not scaled
+    pub positions_nm: Vec<[Nm; 2]>,
     /// `PCB_MARKER::GetComment`: why it was waived. Empty for none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
@@ -1211,10 +1213,10 @@ fn default_td_width_ratio() -> f64 {
     1.0
 }
 fn default_td_max_len() -> Nm {
-    1_000_000 // TEARDROP_PARAMETERS() ctor: pcbIUScale.mmToIU(1.0)
+    Nm::new(1_000_000) // TEARDROP_PARAMETERS() ctor: pcbIUScale.mmToIU(1.0)
 }
 fn default_td_max_width() -> Nm {
-    2_000_000 // ctor: pcbIUScale.mmToIU(2.0)
+    Nm::new(2_000_000) // ctor: pcbIUScale.mmToIU(2.0)
 }
 fn default_td_width_to_size_ratio() -> f64 {
     0.9
@@ -1293,9 +1295,9 @@ pub const TRACK_ARC_SEGMENTS: usize = 32;
 /// chords. Endpoints are kept bit-exact. Collinear points (no circle)
 /// give the straight chord.
 pub fn tessellate_arc(start: Point, mid: Point, end: Point, segments: usize) -> Vec<Point> {
-    let (sx, sy) = (start.x as f64, start.y as f64);
-    let (mx, my) = (mid.x as f64, mid.y as f64);
-    let (ex, ey) = (end.x as f64, end.y as f64);
+    let (sx, sy) = (start.x.as_f64(), start.y.as_f64());
+    let (mx, my) = (mid.x.as_f64(), mid.y.as_f64());
+    let (ex, ey) = (end.x.as_f64(), end.y.as_f64());
 
     // Circumcenter of the three points (`CalcArcCenter`).
     let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
@@ -1320,7 +1322,7 @@ pub fn tessellate_arc(start: Point, mid: Point, end: Point, segments: usize) -> 
     let mut pts = Vec::with_capacity(n + 1);
     for i in 0..=n {
         let a = a0 + sweep * (i as f64 / n as f64);
-        pts.push(Point { x: (ux + r * a.cos()).round() as i64, y: (uy + r * a.sin()).round() as i64 });
+        pts.push(Point { x: Nm::kiround(ux + r * a.cos()), y: Nm::kiround(uy + r * a.sin()) });
     }
     pts[0] = start;
     *pts.last_mut().expect("n + 1 >= 1") = end;
@@ -1350,7 +1352,7 @@ impl Track {
         let expect = tessellate_arc(start, mid, end, TRACK_ARC_SEGMENTS);
         // 1 nm slack: a translated arc re-tessellates through float
         // round-off that can land a sample one unit over.
-        let same = expect.len() == self.pts.len() && expect.iter().zip(&self.pts).all(|(a, b)| (a.x - b.x).abs() <= 1 && (a.y - b.y).abs() <= 1);
+        let same = expect.len() == self.pts.len() && expect.iter().zip(&self.pts).all(|(a, b)| (a.x - b.x).abs() <= Nm::new(1) && (a.y - b.y).abs() <= Nm::new(1));
         same.then_some((start, mid, end))
     }
 
@@ -1420,25 +1422,25 @@ pub enum FillMode {
 // `ZONE_SETTINGS::ZONE_SETTINGS()`'s hardcoded defaults (`pcbnew/zone_settings.cpp`),
 // converted from KiCad's mm literals to this model's Nm.
 fn default_zone_clearance() -> Nm {
-    500_000 // ZONE_CLEARANCE_MM = 0.5
+    Nm::new(500_000) // ZONE_CLEARANCE_MM = 0.5
 }
 fn default_zone_min_thickness() -> Nm {
-    250_000 // ZONE_THICKNESS_MM = 0.25
+    Nm::new(250_000) // ZONE_THICKNESS_MM = 0.25
 }
 fn default_thermal_gap() -> Nm {
-    500_000 // ZONE_THERMAL_RELIEF_GAP_MM = 0.5
+    Nm::new(500_000) // ZONE_THERMAL_RELIEF_GAP_MM = 0.5
 }
 fn default_thermal_spoke_width() -> Nm {
-    500_000 // ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM = 0.5
+    Nm::new(500_000) // ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM = 0.5
 }
 fn default_min_island_area() -> i64 {
     10_000_000_000_000 // 10 * IU_PER_MM^2, i.e. 10 mm^2, in nm^2
 }
 fn default_hatch_thickness() -> Nm {
-    1_000_000 // max(min_thickness(0.25 mm)*4, 1 mm)
+    Nm::new(1_000_000) // max(min_thickness(0.25 mm)*4, 1 mm)
 }
 fn default_hatch_gap() -> Nm {
-    1_500_000 // max(min_thickness(0.25 mm)*6, 1.5 mm)
+    Nm::new(1_500_000) // max(min_thickness(0.25 mm)*6, 1.5 mm)
 }
 fn default_hatch_smoothing_value() -> f64 {
     0.1
@@ -1742,7 +1744,7 @@ impl Default for Zone {
             name: String::new(),
             border_style: ZoneBorderStyle::default(),
             smoothing: ZoneSmoothing::default(),
-            corner_radius: 0,
+            corner_radius: Nm::ZERO,
             placement: Default::default(),
         }
     }
@@ -2079,12 +2081,12 @@ pub struct FieldPlacement {
 impl FieldPlacement {
     /// A visible field named `name` at its owner's origin, horizontal, centred, in the default size.
     pub fn at_origin(name: &str) -> FieldPlacement {
-        FieldPlacement { name: name.to_string(), dx: 0, dy: 0, angle: 0, h: TextJustify::Center, v: TextVAlign::Center, visible: true, size_nm: 0, bold: false, italic: false, name_shown: false, no_autoplace: false }
+        FieldPlacement { name: name.to_string(), dx: Nm::ZERO, dy: Nm::ZERO, angle: 0, h: TextJustify::Center, v: TextVAlign::Center, visible: true, size_nm: Nm::ZERO, bold: false, italic: false, name_shown: false, no_autoplace: false }
     }
 
     /// The size the text is set in, nanometres (the default when none was set).
     pub fn text_size_nm(&self) -> Nm {
-        if self.size_nm > 0 {
+        if self.size_nm > Nm::ZERO {
             self.size_nm
         } else {
             DEFAULT_FIELD_SIZE_NM
@@ -2093,7 +2095,7 @@ impl FieldPlacement {
 }
 
 /// `DEFAULT_SIZE_TEXT` (50 mils): the size of a field, a label and a text until another is set.
-pub const DEFAULT_FIELD_SIZE_NM: Nm = 1_270_000;
+pub const DEFAULT_FIELD_SIZE_NM: Nm = Nm::new(1_270_000);
 
 fn d_true_field() -> bool {
     true
@@ -2416,11 +2418,11 @@ impl Default for DimensionSettings {
             suppress_trailing_zeros: true,
             text_position: DimensionTextPosition::Outside,
             keep_text_aligned: true,
-            text_size_nm: 1_000_000,
-            stroke_width: 200_000,
-            arrow_length,
-            extension_offset: 500_000, // 0.5mm
-            extension_height: (arrow_length as f64 * 27.5f64.to_radians().sin()).round() as Nm,
+            text_size_nm: Nm::new(1_000_000),
+            stroke_width: Nm::new(200_000),
+            arrow_length: Nm::new(arrow_length),
+            extension_offset: Nm::new(500_000), // 0.5mm
+            extension_height: Nm::kiround(arrow_length as f64 * 27.5f64.to_radians().sin()),
         }
     }
 }
@@ -3417,8 +3419,8 @@ impl LibraryPad {
         // A rounded corner ratio belongs to a rounded or chamfered rectangle only.
         let roundrect_ratio = if matches!(shape, S::RoundRect | S::ChamferedRect) { self.roundrect_ratio } else { None };
         let ext = crate::footprint::PadShapeExt {
-            offset: (self.offset.x != 0 || self.offset.y != 0).then_some((self.offset.x, self.offset.y)),
-            trapezoid_delta: if shape == S::Trapezoid { self.trapezoid_delta.filter(|d| *d != (0, 0)) } else { None },
+            offset: (self.offset.x != Nm::ZERO || self.offset.y != Nm::ZERO).then_some((self.offset.x, self.offset.y)),
+            trapezoid_delta: if shape == S::Trapezoid { self.trapezoid_delta.filter(|d| *d != (Nm::ZERO, Nm::ZERO)) } else { None },
             chamfer_ratio: if shape == S::ChamferedRect { self.chamfer_ratio } else { None },
             chamfer_corners: if shape == S::ChamferedRect { self.chamfer_corners } else { ChamferCorners::default() },
             custom: if shape == S::Custom { Some(self.custom.clone().unwrap_or_default()) } else { None },
@@ -3634,7 +3636,7 @@ impl Default for LibraryFootprint {
             courtyard: None,
             model: None,
             models3d: Vec::new(),
-            anchor: Point { x: 0, y: 0 },
+            anchor: Point { x: Nm::ZERO, y: Nm::ZERO },
             published: false,
             zone_connection: None,
             pad_edit: None,
@@ -4705,10 +4707,10 @@ mod tests {
             },
             schematic: Some(SchematicSection {
                 symbols: vec![
-                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800_000, y: 63_500_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100_000, y: 63_500_000 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { id: "U1".into(), at: Point { x: Nm::new(50_800_000), y: Nm::new(63_500_000) }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { id: "C1".into(), at: Point { x: Nm::new(38_100_000), y: Nm::new(63_500_000) }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 ],
-                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000_000, y: 60_000_000 }, Point { x: 48_000_000, y: 60_000_000 }], bus: false }],
+                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: Nm::new(35_000_000), y: Nm::new(60_000_000) }, Point { x: Nm::new(48_000_000), y: Nm::new(60_000_000) }], bus: false }],
                 labels: vec![],
                 texts: vec![],
                 power_symbols: vec![],
@@ -4764,10 +4766,10 @@ mod tests {
     // -------------------------------------------------------- item ids
 
     fn track(net: &str, layer: &str, pts: &[(Nm, Nm)]) -> Track {
-        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: 200_000, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
+        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: Nm::new(200_000), pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
     }
     fn via(net: &str, x: Nm, y: Nm) -> Via {
-        Via { id: String::new(), net: net.into(), at: Point { x, y }, drill: 300_000, diameter: 600_000, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+        Via { id: String::new(), net: net.into(), at: Point { x, y }, drill: Nm::new(300_000), diameter: Nm::new(600_000), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
     }
 
     /// A `design.json` written before ids existed: no `id` key on any
@@ -4804,7 +4806,7 @@ mod tests {
     /// save -> load round trip is stable.
     #[test]
     fn id_assignment_is_deterministic_and_stable_on_resave() {
-        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1_000_000)])], vias: vec![via("GND", 500_000, 500_000)], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("VCC", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::ZERO, Nm::new(1_000_000))])], vias: vec![via("GND", Nm::new(500_000), Nm::new(500_000))], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
 
         let mut a = build();
         a.assign_missing_ids();
@@ -4824,7 +4826,7 @@ mod tests {
     /// same tracks must not change which id lands on which track.
     #[test]
     fn ids_do_not_depend_on_array_order() {
-        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1_000_000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("VCC", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::ZERO, Nm::new(1_000_000))])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt1.assign_missing_ids();
         rt2.assign_missing_ids();
@@ -4837,7 +4839,7 @@ mod tests {
     /// verbatim) must still get two distinct ids.
     #[test]
     fn duplicate_content_gets_distinct_ids() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)]), track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         assert_ne!(rt.tracks[0].id, rt.tracks[1].id);
     }
@@ -4847,18 +4849,18 @@ mod tests {
     /// assigned -- callers (the web UI, `DeleteTrack`) hold onto it.
     #[test]
     fn changing_width_after_assignment_does_not_move_the_id() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1_000_000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         let id = rt.tracks[0].id.clone();
-        rt.tracks[0].width = 500_000; // what `SetTrackWidth` does
+        rt.tracks[0].width = Nm::new(500_000); // what `SetTrackWidth` does
         assert_eq!(rt.tracks[0].id, id);
     }
 
     #[test]
     fn shape_and_text_ids_backfill_the_same_way() {
         let mut dr = DrawingsSection {
-            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } }],
-            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_nm: 1_000_000, stroke_width: 150_000, justify: TextJustify::Center, mirror: false }],
+            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: Nm::new(150_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::new(1_000_000), y: Nm::ZERO } }],
+            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), size_nm: Nm::new(1_000_000), stroke_width: Nm::new(150_000), justify: TextJustify::Center, mirror: false }],
             ..Default::default()
         };
         dr.assign_missing_ids();
@@ -4870,9 +4872,9 @@ mod tests {
 
     #[test]
     fn shape_translate_moves_every_point() {
-        let mut s = Shape::Rect { id: "shp_1".into(), layer: "F.SilkS".into(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 100_000, y: 100_000 } };
-        s.translate(10_000, 20_000);
-        assert_eq!(s.points(), vec![Point { x: 10_000, y: 20_000 }, Point { x: 110_000, y: 120_000 }]);
+        let mut s = Shape::Rect { id: "shp_1".into(), layer: "F.SilkS".into(), stroke_width: Nm::new(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::new(100_000), y: Nm::new(100_000) } };
+        s.translate(Nm::new(10_000), Nm::new(20_000));
+        assert_eq!(s.points(), vec![Point { x: Nm::new(10_000), y: Nm::new(20_000) }, Point { x: Nm::new(110_000), y: Nm::new(120_000) }]);
     }
 
     // -------------------------------------------------- footprint library
@@ -4883,7 +4885,7 @@ mod tests {
             number: number.into(),
             at: Point { x, y },
             offset: Point::default(),
-            size: (1_000_000, 1_000_000),
+            size: (Nm::new(1_000_000), Nm::new(1_000_000)),
             shape: LibraryPadShape::RoundRect,
             kind: crate::footprint::PadKind::Smd,
             drill: None,
@@ -4908,7 +4910,7 @@ mod tests {
     #[test]
     fn footprint_library_pad_ids_are_assigned_and_stable() {
         let mut fp = LibraryFootprint::new_empty("Test:Lib");
-        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1_000_000, 0)];
+        fp.pads = vec![lib_pad("1", Nm::ZERO, Nm::ZERO), lib_pad("2", Nm::new(1_000_000), Nm::ZERO)];
         fp.assign_missing_ids();
         assert!(fp.pads.iter().all(|p| !p.id.is_empty()), "{:?}", fp.pads);
         assert_ne!(fp.pads[0].id, fp.pads[1].id);
@@ -4924,13 +4926,13 @@ mod tests {
         assert_eq!(empty.next_pad_number(), "1");
 
         let mut fp = LibraryFootprint::new_empty("Test:Lib");
-        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1_000_000, 0)];
+        fp.pads = vec![lib_pad("1", Nm::ZERO, Nm::ZERO), lib_pad("2", Nm::new(1_000_000), Nm::ZERO)];
         assert_eq!(fp.next_pad_number(), "3");
 
         // `GetNextPadNumber( "3" )` with "3" free is "3" (it was "5": the integer was counted up before it was tried); with "3" taken, the next free one
-        fp.pads.push(lib_pad("4", 2_000_000, 0));
+        fp.pads.push(lib_pad("4", Nm::new(2_000_000), Nm::ZERO));
         assert_eq!(fp.next_pad_number_after("3"), "3");
-        fp.pads.push(lib_pad("3", 3_000_000, 0));
+        fp.pads.push(lib_pad("3", Nm::new(3_000_000), Nm::ZERO));
         assert_eq!(fp.next_pad_number_after("3"), "5");
         // the last number "1" of a footprint just loaded fills the first gap, as KiCad's pad tool does
         fp.pads.retain(|p| p.number != "1");
@@ -4942,16 +4944,16 @@ mod tests {
 
     #[test]
     fn library_pad_round_trips_through_engine_pad_for_simple_shapes() {
-        let p = lib_pad("1", 500_000, -500_000);
+        let p = lib_pad("1", Nm::new(500_000), Nm::new(-500_000));
         let engine = p.to_engine_pad();
         assert_eq!(engine.number, "1");
-        assert_eq!(engine.at, (500_000, -500_000));
+        assert_eq!(engine.at, (Nm::new(500_000), Nm::new(-500_000)));
         assert_eq!(engine.shape, crate::footprint::PadShape::RoundRect);
         assert_eq!(engine.roundrect_ratio, Some(0.25));
 
         let back = LibraryPad::from_engine_pad(&engine);
         assert_eq!(back.number, engine.number);
-        assert_eq!(back.at, Point { x: 500_000, y: -500_000 });
+        assert_eq!(back.at, Point { x: Nm::new(500_000), y: Nm::new(-500_000) });
         assert_eq!(back.shape, LibraryPadShape::RoundRect);
         assert!(back.id.is_empty(), "from_engine_pad must leave id for the caller to assign");
     }
@@ -4959,16 +4961,16 @@ mod tests {
     #[test]
     fn trapezoid_chamfered_and_custom_pads_keep_their_shape_in_the_engine_and_come_back() {
         use crate::footprint::{PadAnchor, PadCustom, PadPrimitive, PadShape};
-        let mut trap = lib_pad("1", 0, 0);
+        let mut trap = lib_pad("1", Nm::ZERO, Nm::ZERO);
         trap.shape = LibraryPadShape::Trapezoid;
         trap.roundrect_ratio = None;
-        trap.trapezoid_delta = Some((200_000, 0));
-        trap.offset = Point { x: 100_000, y: -50_000 };
+        trap.trapezoid_delta = Some((Nm::new(200_000), Nm::ZERO));
+        trap.offset = Point { x: Nm::new(100_000), y: Nm::new(-50_000) };
         let engine = trap.to_engine_pad();
-        assert_eq!((engine.shape, engine.ext.trapezoid_delta, engine.ext.offset), (PadShape::Trapezoid, Some((200_000, 0)), Some((100_000, -50_000))));
-        assert_eq!(LibraryPad::from_engine_pad(&engine).trapezoid_delta, Some((200_000, 0)));
+        assert_eq!((engine.shape, engine.ext.trapezoid_delta, engine.ext.offset), (PadShape::Trapezoid, Some((Nm::new(200_000), Nm::ZERO)), Some((Nm::new(100_000), Nm::new(-50_000)))));
+        assert_eq!(LibraryPad::from_engine_pad(&engine).trapezoid_delta, Some((Nm::new(200_000), Nm::ZERO)));
 
-        let mut chf = lib_pad("1", 0, 0);
+        let mut chf = lib_pad("1", Nm::ZERO, Nm::ZERO);
         chf.shape = LibraryPadShape::ChamferedRect;
         chf.chamfer_ratio = Some(0.2);
         chf.chamfer_corners = ChamferCorners { top_left: true, ..Default::default() };
@@ -4977,10 +4979,10 @@ mod tests {
         let back = LibraryPad::from_engine_pad(&engine);
         assert_eq!((back.shape, back.chamfer_ratio, back.chamfer_corners, back.roundrect_ratio), (LibraryPadShape::ChamferedRect, Some(0.2), chf.chamfer_corners, Some(0.25)));
 
-        let mut custom = lib_pad("1", 0, 0);
+        let mut custom = lib_pad("1", Nm::ZERO, Nm::ZERO);
         custom.shape = LibraryPadShape::Custom;
         custom.roundrect_ratio = None;
-        let prim = PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100_000, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000_000, y: 0 } }, proxy: false };
+        let prim = PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::new(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: Nm::new(1_000_000), y: Nm::ZERO } }, proxy: false };
         custom.custom = Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![prim] });
         let engine = custom.to_engine_pad();
         assert_eq!(engine.shape, PadShape::Custom);

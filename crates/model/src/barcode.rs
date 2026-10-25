@@ -97,7 +97,7 @@ fn is_false(b: &bool) -> bool {
 }
 
 fn is_zero(n: &Nm) -> bool {
-    *n == 0
+    *n == Nm::ZERO
 }
 
 /// One barcode, as `PCB_BARCODE` holds it.

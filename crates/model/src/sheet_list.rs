@@ -237,7 +237,8 @@ pub fn placement_counts(design: &Design) -> std::collections::BTreeMap<String, u
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::Nm;
+use super::*;
     use crate::ir::{Point, Provenance};
     use std::collections::BTreeMap;
 
@@ -246,7 +247,7 @@ mod tests {
     }
 
     fn placement(id: &str, name: &str, file: &str, page: &str) -> SheetInstance {
-        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![], page: page.into() }
+        SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::new(1000), Nm::new(1000)), pins: vec![], page: page.into() }
     }
 
     fn design(root: SchematicSection, screens: Vec<(&str, SchematicSection)>) -> Design {

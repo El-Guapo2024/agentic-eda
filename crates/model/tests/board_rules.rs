@@ -5,6 +5,7 @@
 //! number nobody wrote down and every gate afterwards measured the board
 //! against that invention and reported the answer as fact.
 
+use eda_model::units::Nm;
 use eda_model::ir::Point;
 use eda_model::{BoardRules, CheckStatus, Pour};
 
@@ -25,7 +26,7 @@ fn the_default_board_is_valid() {
 fn a_zero_grid_is_rejected() {
     // It is the divisor for every cell index on the board.
     let mut b = BoardRules::default();
-    b.grid = 0;
+    b.grid = Nm::ZERO;
     assert!(failing_fields(&b).contains(&"board.grid".to_string()));
 }
 
@@ -56,7 +57,7 @@ fn a_via_with_no_annular_ring_is_rejected() {
 #[test]
 fn a_two_point_outline_is_rejected() {
     let mut b = BoardRules::default();
-    b.outline = Some(vec![Point { x: 0, y: 0 }, Point { x: 1_000_000, y: 0 }]);
+    b.outline = Some(vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1_000_000), y: Nm::ZERO }]);
     assert!(failing_fields(&b).contains(&"board.outline".to_string()));
 }
 
@@ -72,8 +73,8 @@ fn every_problem_is_reported_not_just_the_first() {
     // An agent fixing one value per run learns nothing a single list would
     // not have told it in one.
     let mut b = BoardRules::default();
-    b.grid = 0;
-    b.track_width = 0;
+    b.grid = Nm::ZERO;
+    b.track_width = Nm::ZERO;
     b.layers.clear();
     let f = failing_fields(&b);
     assert!(f.len() >= 3, "expected every bad field, got {f:?}");

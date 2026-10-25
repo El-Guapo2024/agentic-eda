@@ -24,6 +24,7 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use crate::units::Nm;
 
 /// `ANNOTATE_ORDER_T` without `UNSORTED`: which axis comes first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -107,7 +108,7 @@ pub struct Entry {
     /// The number of the sheet it is on (`SetSheetNumber( GetPageNumberAsInt() )`).
     pub sheet_num: i64,
     /// Its position on the sheet (`m_symbolPos`).
-    pub pos: (i64, i64),
+    pub pos: (Nm, Nm),
     /// A power symbol (its number is written with a leading zero, `#PWR012`).
     pub power: bool,
     // ---- `SCH_REFERENCE`'s working state
@@ -123,7 +124,7 @@ pub struct Entry {
 impl Entry {
     /// `SCH_REFERENCE::SCH_REFERENCE`: `reference` is the symbol's reference text as it stands (`R12`, `R?`, `#PWR01`).
     #[allow(clippy::too_many_arguments)]
-    pub fn new(key: usize, reference: &str, unit: u32, unit_count: u32, lib_name: &str, value: &str, sheet_num: i64, pos: (i64, i64), power: bool) -> Entry {
+    pub fn new(key: usize, reference: &str, unit: u32, unit_count: u32, lib_name: &str, value: &str, sheet_num: i64, pos: (Nm, Nm), power: bool) -> Entry {
         Entry {
             key,
             unit,
@@ -553,11 +554,11 @@ pub fn check_annotation(mut list: Vec<Entry>) -> Vec<Problem> {
 mod tests {
     use super::*;
 
-    fn e(key: usize, reference: &str, pos: (i64, i64)) -> Entry {
+    fn e(key: usize, reference: &str, pos: (Nm, Nm)) -> Entry {
         Entry::new(key, reference, 1, 1, "R", "10k", 1, pos, false)
     }
 
-    fn unit_entry(key: usize, reference: &str, unit: u32, units: u32, value: &str, pos: (i64, i64)) -> Entry {
+    fn unit_entry(key: usize, reference: &str, unit: u32, units: u32, value: &str, pos: (Nm, Nm)) -> Entry {
         Entry::new(key, reference, unit, units, "LM358", value, 1, pos, false)
     }
 
@@ -572,20 +573,20 @@ mod tests {
 
     #[test]
     fn split_follows_sch_reference_split() {
-        let mut r = e(0, "R12", (0, 0));
+        let mut r = e(0, "R12", (Nm::ZERO, Nm::ZERO));
         r.split();
         assert_eq!((r.prefix(), r.number(), r.number_text().as_str(), r.is_new()), ("R", Some(12), "12", false));
-        let mut r = e(0, "R?", (0, 0));
+        let mut r = e(0, "R?", (Nm::ZERO, Nm::ZERO));
         r.split();
         assert_eq!((r.prefix(), r.number(), r.is_new(), r.reference().as_str()), ("R", None, true, "R?"));
-        let mut r = e(0, "R?12", (0, 0));
+        let mut r = e(0, "R?12", (Nm::ZERO, Nm::ZERO));
         r.split();
         assert_eq!((r.prefix(), r.number(), r.is_new()), ("R", None, true), "the importer's placeholder is not a number");
         assert!(is_unannotated("R?") && is_unannotated("R?3") && is_unannotated("") && !is_unannotated("R3") && !is_unannotated("U1A"));
-        let mut r = e(0, "U1A", (0, 0));
+        let mut r = e(0, "U1A", (Nm::ZERO, Nm::ZERO));
         r.split();
         assert!(r.is_new(), "a reference that does not end in a digit is not annotated");
-        let mut p = Entry::new(0, "#PWR012", 1, 1, "GND", "GND", 1, (0, 0), true);
+        let mut p = Entry::new(0, "#PWR012", 1, 1, "GND", "GND", 1, (Nm::ZERO, Nm::ZERO), true);
         p.split();
         assert_eq!((p.prefix(), p.number(), p.number_text().as_str()), ("#PWR", Some(12), "012"));
         assert_eq!(unit_letters(1), "A");
@@ -595,7 +596,7 @@ mod tests {
 
     #[test]
     fn a_new_reference_takes_the_first_free_number_not_the_one_after_the_highest() {
-        let list = vec![e(0, "R1", (0, 0)), e(1, "R2", (10, 0)), e(2, "R4", (20, 0)), e(3, "R?", (30, 0))];
+        let list = vec![e(0, "R1", (Nm::ZERO, Nm::ZERO)), e(1, "R2", (Nm::new(10), Nm::ZERO)), e(2, "R4", (Nm::new(20), Nm::ZERO)), e(3, "R?", (Nm::new(30), Nm::ZERO))];
         let out = run(list, SortOrder::ByY, Algo::FirstFree, 0, &[], &[]);
         assert_eq!(out[3], (3, "R3".to_string()), "R3 is the gap");
         assert_eq!(out[2], (2, "R4".to_string()), "an annotated reference is not touched");
@@ -604,7 +605,7 @@ mod tests {
     #[test]
     fn the_order_is_by_prefix_then_x_then_y_or_y_then_x() {
         // A is left of and below B: by Y, B comes first; by X, A does
-        let list = || vec![e(0, "R?", (5_000, 50_000)), e(1, "R?", (60_000, 40_000)), Entry::new(2, "C?", 1, 1, "C", "1u", 1, (90_000, 90_000), false)];
+        let list = || vec![e(0, "R?", (Nm::new(5_000), Nm::new(50_000))), e(1, "R?", (Nm::new(60_000), Nm::new(40_000))), Entry::new(2, "C?", 1, 1, "C", "1u", 1, (Nm::new(90_000), Nm::new(90_000)), false)];
         let by_y = run(list(), SortOrder::ByY, Algo::FirstFree, 0, &[], &[]);
         assert_eq!(by_y, vec![(0, "R2".to_string()), (1, "R1".to_string()), (2, "C1".to_string())]);
         let by_x = run(list(), SortOrder::ByX, Algo::FirstFree, 0, &[], &[]);
@@ -613,7 +614,7 @@ mod tests {
 
     #[test]
     fn the_start_number_and_the_sheet_algorithms_set_where_counting_starts() {
-        let sheet = |key: usize, reference: &str, sheet_num: i64, x: i64| Entry::new(key, reference, 1, 1, "R", "1k", sheet_num, (x, 0), false);
+        let sheet = |key: usize, reference: &str, sheet_num: i64, x: i64| Entry::new(key, reference, 1, 1, "R", "1k", sheet_num, (Nm::new(x), Nm::ZERO), false);
         let list = || vec![sheet(0, "R?", 1, 0), sheet(1, "R?", 1, 10), sheet(2, "R?", 2, 0), sheet(3, "R?", 3, 0)];
         assert_eq!(run(list(), SortOrder::ByY, Algo::FirstFree, 10, &[], &[]).iter().map(|x| x.1.clone()).collect::<Vec<_>>(), vec!["R11", "R12", "R13", "R14"]);
         assert_eq!(run(list(), SortOrder::ByY, Algo::SheetX100, 0, &[], &[]).iter().map(|x| x.1.clone()).collect::<Vec<_>>(), vec!["R101", "R102", "R201", "R301"]);
@@ -622,17 +623,17 @@ mod tests {
 
     #[test]
     fn the_other_symbols_of_the_schematic_keep_their_numbers() {
-        let mut other = e(100, "R1", (0, 0));
+        let mut other = e(100, "R1", (Nm::ZERO, Nm::ZERO));
         other.split();
-        let mut other2 = e(101, "R2", (0, 0));
+        let mut other2 = e(101, "R2", (Nm::ZERO, Nm::ZERO));
         other2.split();
-        let out = run(vec![e(0, "R?", (0, 0))], SortOrder::ByY, Algo::FirstFree, 0, &[], &[other, other2]);
+        let out = run(vec![e(0, "R?", (Nm::ZERO, Nm::ZERO))], SortOrder::ByY, Algo::FirstFree, 0, &[], &[other, other2]);
         assert_eq!(out, vec![(0, "R3".to_string())]);
     }
 
     #[test]
     fn reset_renumbers_by_position_and_lets_go_of_the_old_numbers() {
-        let mut list = vec![e(0, "R7", (30, 0)), e(1, "R3", (10, 0)), e(2, "R9", (20, 0))];
+        let mut list = vec![e(0, "R7", (Nm::new(30), Nm::ZERO)), e(1, "R3", (Nm::new(10), Nm::ZERO)), e(2, "R9", (Nm::new(20), Nm::ZERO))];
         split_all(&mut list);
         remove_annotation(&mut list);
         annotate_by_options(&mut list, SortOrder::ByX, Algo::FirstFree, 0, &[], &[]);
@@ -644,7 +645,7 @@ mod tests {
     #[test]
     fn the_units_of_one_reference_keep_one_number_and_each_unit_is_held_once() {
         // U1 has units A and B on the sheet; a second chip's unit A is new. Resetting numbers both as parts.
-        let list = vec![unit_entry(0, "U1", 1, 2, "LM358", (0, 0)), unit_entry(1, "U1", 2, 2, "LM358", (0, 50)), unit_entry(2, "U5", 1, 2, "LM358", (100, 0)), unit_entry(3, "U5", 2, 2, "LM358", (100, 50))];
+        let list = vec![unit_entry(0, "U1", 1, 2, "LM358", (Nm::ZERO, Nm::ZERO)), unit_entry(1, "U1", 2, 2, "LM358", (Nm::ZERO, Nm::new(50))), unit_entry(2, "U5", 1, 2, "LM358", (Nm::new(100), Nm::ZERO)), unit_entry(3, "U5", 2, 2, "LM358", (Nm::new(100), Nm::new(50)))];
         let mut locked_group_u1 = vec![list[0].clone(), list[1].clone()];
         let mut locked_group_u5 = vec![list[2].clone(), list[3].clone()];
         locked_group_u1.iter_mut().chain(locked_group_u5.iter_mut()).for_each(Entry::split);
@@ -661,20 +662,20 @@ mod tests {
     #[test]
     fn an_unannotated_unit_takes_a_number_where_its_unit_is_free() {
         // U1 unit 1 is placed; a new unit-1 of the same part cannot share U1, a new unit 2 can
-        let mut held = unit_entry(10, "U1", 1, 2, "LM358", (0, 0));
+        let mut held = unit_entry(10, "U1", 1, 2, "LM358", (Nm::ZERO, Nm::ZERO));
         held.split();
-        let out = run(vec![unit_entry(0, "U?", 1, 2, "LM358", (50, 0)), unit_entry(1, "U?", 2, 2, "LM358", (60, 0))], SortOrder::ByY, Algo::FirstFree, 0, &[], &[held]);
+        let out = run(vec![unit_entry(0, "U?", 1, 2, "LM358", (Nm::new(50), Nm::ZERO)), unit_entry(1, "U?", 2, 2, "LM358", (Nm::new(60), Nm::ZERO))], SortOrder::ByY, Algo::FirstFree, 0, &[], &[held]);
         assert_eq!(out, vec![(0, "U2".to_string()), (1, "U1".to_string())], "the unit that is free on U1 joins it");
         // a different value keeps the numbers apart
-        let mut held = unit_entry(10, "U1", 1, 2, "TL072", (0, 0));
+        let mut held = unit_entry(10, "U1", 1, 2, "TL072", (Nm::ZERO, Nm::ZERO));
         held.split();
-        let out = run(vec![unit_entry(1, "U?", 2, 2, "LM358", (60, 0))], SortOrder::ByY, Algo::FirstFree, 0, &[], &[held]);
+        let out = run(vec![unit_entry(1, "U?", 2, 2, "LM358", (Nm::new(60), Nm::ZERO))], SortOrder::ByY, Algo::FirstFree, 0, &[], &[held]);
         assert_eq!(out, vec![(1, "U2".to_string())]);
     }
 
     #[test]
     fn a_power_symbol_is_numbered_with_a_leading_zero() {
-        let pwr = |key: usize, reference: &str, x: i64| Entry::new(key, reference, 1, 1, "GND", "GND", 1, (x, 0), true);
+        let pwr = |key: usize, reference: &str, x: i64| Entry::new(key, reference, 1, 1, "GND", "GND", 1, (Nm::new(x), Nm::ZERO), true);
         let mut taken = pwr(9, "#PWR01", 0);
         taken.split();
         let out = run(vec![pwr(0, "#PWR?", 10)], SortOrder::ByY, Algo::FirstFree, 0, &[], &[taken]);
@@ -684,17 +685,17 @@ mod tests {
     #[test]
     fn the_checks_say_what_kicad_says() {
         let msgs = |list: Vec<Entry>| check_annotation(list).into_iter().map(|p| (p.kind, p.message)).collect::<Vec<_>>();
-        assert!(msgs(vec![e(0, "R1", (0, 0)), e(1, "R2", (0, 0))]).is_empty());
-        assert_eq!(msgs(vec![e(0, "R?", (0, 0)), e(1, "R1", (0, 0))]), vec![(ProblemKind::Unannotated, "Item not annotated: R?".to_string())]);
-        assert_eq!(msgs(vec![e(0, "R1", (0, 0)), e(1, "R1", (5, 5))]), vec![(ProblemKind::DuplicateReference, "Duplicate items R1\n".to_string())]);
+        assert!(msgs(vec![e(0, "R1", (Nm::ZERO, Nm::ZERO)), e(1, "R2", (Nm::ZERO, Nm::ZERO))]).is_empty());
+        assert_eq!(msgs(vec![e(0, "R?", (Nm::ZERO, Nm::ZERO)), e(1, "R1", (Nm::ZERO, Nm::ZERO))]), vec![(ProblemKind::Unannotated, "Item not annotated: R?".to_string())]);
+        assert_eq!(msgs(vec![e(0, "R1", (Nm::ZERO, Nm::ZERO)), e(1, "R1", (Nm::new(5), Nm::new(5)))]), vec![(ProblemKind::DuplicateReference, "Duplicate items R1\n".to_string())]);
         assert_eq!(
-            msgs(vec![unit_entry(0, "U1", 3, 2, "LM358", (0, 0))]),
+            msgs(vec![unit_entry(0, "U1", 3, 2, "LM358", (Nm::ZERO, Nm::ZERO))]),
             vec![(ProblemKind::ExtraUnits, "Error: symbol U1C (unit 3) exceeds units defined (2)".to_string())]
         );
         assert_eq!(
-            msgs(vec![unit_entry(0, "U1", 1, 2, "LM358", (0, 0)), unit_entry(1, "U1", 2, 2, "TL072", (0, 9))]),
+            msgs(vec![unit_entry(0, "U1", 1, 2, "LM358", (Nm::ZERO, Nm::ZERO)), unit_entry(1, "U1", 2, 2, "TL072", (Nm::ZERO, Nm::new(9)))]),
             vec![(ProblemKind::DifferentUnitValue, "Different values for U1A (LM358) and U1B (TL072)".to_string())]
         );
-        assert_eq!(msgs(vec![unit_entry(0, "U1", 1, 2, "LM358", (0, 0)), unit_entry(1, "U1", 2, 2, "LM358", (0, 9))]), vec![]);
+        assert_eq!(msgs(vec![unit_entry(0, "U1", 1, 2, "LM358", (Nm::ZERO, Nm::ZERO)), unit_entry(1, "U1", 2, 2, "LM358", (Nm::ZERO, Nm::new(9)))]), vec![]);
     }
 }
