@@ -160,11 +160,11 @@ mod tests {
     use eda_model::ConstraintModel;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn seg(layer: &str, a: Point, b: Point, w: i64) -> FpShape {
-        FpShape::new(IrShape::Segment { id: String::new(), layer: layer.into(), stroke_width: Nm::from_raw_shim(w), filled: false, start: a, end: b })
+        FpShape::new(IrShape::Segment { id: String::new(), layer: layer.into(), stroke_width: Nm::new(w), filled: false, start: a, end: b })
     }
 
     /// One footprint at (10, 10) mm with a silk line, a fab line, a mask rectangle, a copper line, and a text on the silk and one on the fab layer.

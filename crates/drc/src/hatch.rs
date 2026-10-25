@@ -25,9 +25,9 @@ use eda_shape_poly_set::basic_shapes::{circle_polygon, oval_polygon, rotate_poin
 use eda_shape_poly_set::{CornerStrategy, LineChain, ShapePolySet};
 
 /// The board's `m_MaxError` (`ARC_HIGH_DEF`, 0.005 mm): the error of the polygon a circle is hatched as.
-pub const MAX_ERROR_NM: i64 = 5_000;
+pub const MAX_ERROR_NM: Nm = Nm::new(5_000);
 /// `ARC_LOW_DEF` (0.02 mm): the error of the polygons the knockouts are made of.
-pub const KNOCKOUT_ERROR_NM: i64 = 20_000;
+pub const KNOCKOUT_ERROR_NM: Nm = Nm::new(20_000);
 
 /// The lines of a hatched shape and the width they are drawn with.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -37,11 +37,11 @@ pub struct Hatching {
 }
 
 fn p64(p: Point) -> Point64 {
-    Point64::new(p.x.raw_shim(), p.y.raw_shim())
+    Point64::new(p.x.get(), p.y.get())
 }
 
 fn pt(p: Point64) -> Point {
-    Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }
+    Point { x: Nm::new(p.x), y: Nm::new(p.y) }
 }
 
 /// The outline a hatched shape is hatched inside: a rectangle's corners, a circle as the polygon of `TransformCircleToPolygon( .., ERROR_INSIDE )`, a polygon's points. `None`
@@ -51,37 +51,38 @@ fn outline_of(shape: &Shape) -> Option<LineChain> {
         Shape::Rect { start, end, .. } => {
             let (x0, x1) = (start.x.min(end.x), start.x.max(end.x));
             let (y0, y1) = (start.y.min(end.y), start.y.max(end.y));
-            Some(vec![Point64::new(x0.raw_shim(), y0.raw_shim()), Point64::new(x1.raw_shim(), y0.raw_shim()), Point64::new(x1.raw_shim(), y1.raw_shim()), Point64::new(x0.raw_shim(), y1.raw_shim())])
+            Some(vec![p64(Point { x: x0, y: y0 }), p64(Point { x: x1, y: y0 }), p64(Point { x: x1, y: y1 }), p64(Point { x: x0, y: y1 })])
         }
         Shape::Circle { center, end, .. } => {
-            let r = (((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64;
-            (r > 0).then(|| circle_polygon(p64(*center), r, MAX_ERROR_NM, ErrorLoc::Inside, 0))
+            let r = Nm::kiround((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64()));
+            (r > Nm::ZERO).then(|| circle_polygon(p64(*center), r.get(), MAX_ERROR_NM.get(), ErrorLoc::Inside, 0))
         }
         Shape::Polygon { pts, .. } if pts.len() >= 3 => Some(pts.iter().map(|p| p64(*p)).collect()),
         _ => None,
     }
 }
 
-/// `GetBoundingBox` of a shape: its points' box grown by half its line (a circle's by its radius).
+/// `GetBoundingBox` of a shape: its points' box grown by half its line (a circle's by its radius). In the polygons' integer nanometres, as the boxes of
+/// the knockouts' polygons it is compared with.
 fn shape_box(shape: &Shape) -> [i64; 4] {
     let half = shape.stroke_width().max(Nm::ZERO) / 2;
-    let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+    let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
     let mut take = |p: Point| {
-        x0 = x0.min(p.x.raw_shim());
-        y0 = y0.min(p.y.raw_shim());
-        x1 = x1.max(p.x.raw_shim());
-        y1 = y1.max(p.y.raw_shim());
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
     };
     match shape {
         Shape::Circle { center, end, .. } => {
-            let r = ((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64).round() as i64;
-            take(Point { x: center.x - Nm::from_raw_shim(r), y: center.y - Nm::from_raw_shim(r) });
-            take(Point { x: center.x + Nm::from_raw_shim(r), y: center.y + Nm::from_raw_shim(r) });
+            let r = Nm::kiround((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64()));
+            take(Point { x: center.x - r, y: center.y - r });
+            take(Point { x: center.x + r, y: center.y + r });
         }
         Shape::Bezier { .. } => shape.bezier_points().unwrap_or_default().into_iter().for_each(&mut take),
         _ => shape.points().into_iter().for_each(&mut take),
     }
-    [x0 - half.raw_shim(), y0 - half.raw_shim(), x1 + half.raw_shim(), y1 + half.raw_shim()]
+    [(x0 - half).get(), (y0 - half).get(), (x1 + half).get(), (y1 + half).get()]
 }
 
 fn boxes_meet(a: [i64; 4], b: [i64; 4]) -> bool {
@@ -89,29 +90,29 @@ fn boxes_meet(a: [i64; 4], b: [i64; 4]) -> bool {
 }
 
 /// The ovals (`TransformOvalToPolygon`) along the closed or open polyline `pts`, `width` wide, into `out`.
-fn ovals_along(out: &mut ShapePolySet, pts: &[Point], closed: bool, width: i64) {
+fn ovals_along(out: &mut ShapePolySet, pts: &[Point], closed: bool, width: Nm) {
     let n = pts.len();
     let count = if closed { n } else { n.saturating_sub(1) };
     for i in 0..count {
-        out.add_outline(oval_polygon(p64(pts[i]), p64(pts[(i + 1) % n]), width, KNOCKOUT_ERROR_NM, ErrorLoc::Outside, 0));
+        out.add_outline(oval_polygon(p64(pts[i]), p64(pts[(i + 1) % n]), width.get(), KNOCKOUT_ERROR_NM.get(), ErrorLoc::Outside, 0));
     }
 }
 
 /// `PCB_SHAPE::TransformShapeToPolygon( knockouts, layer, margin, ARC_LOW_DEF, ERROR_OUTSIDE )` for another shape of the layer: its area, if it is filled or hatched (a hatched shape
 /// is solid here: `includeFill` is false), and its line, both grown by `margin`.
-fn shape_knockout(out: &mut ShapePolySet, shape: &Shape, solid: bool, margin: i64) {
-    let width = shape.stroke_width().max(Nm::ZERO) + Nm::from_raw_shim(2 * margin);
+fn shape_knockout(out: &mut ShapePolySet, shape: &Shape, solid: bool, margin: Nm) {
+    let width = shape.stroke_width().max(Nm::ZERO) + margin * 2;
     match shape {
         Shape::Segment { start, end, .. } => {
-            out.add_outline(oval_polygon(p64(*start), p64(*end), width.raw_shim(), KNOCKOUT_ERROR_NM, ErrorLoc::Outside, 0));
+            out.add_outline(oval_polygon(p64(*start), p64(*end), width.get(), KNOCKOUT_ERROR_NM.get(), ErrorLoc::Outside, 0));
         }
         Shape::Arc { start, mid, end, .. } => {
-            let pts = eda_model::outline::Arc::through(*start, *mid, *end).polyline(KNOCKOUT_ERROR_NM as f64);
-            ovals_along(out, &pts, false, width.raw_shim());
+            let pts = eda_model::outline::Arc::through(*start, *mid, *end).polyline(KNOCKOUT_ERROR_NM.as_f64());
+            ovals_along(out, &pts, false, width);
         }
         Shape::Bezier { .. } => {
             let pts = shape.bezier_points().unwrap_or_default();
-            ovals_along(out, &pts, false, width.raw_shim());
+            ovals_along(out, &pts, false, width);
         }
         Shape::Rect { .. } => {
             let Some(corners) = outline_of(shape) else { return };
@@ -120,21 +121,22 @@ fn shape_knockout(out: &mut ShapePolySet, shape: &Shape, solid: bool, margin: i6
                 out.add_outline(corners);
             }
             if width > Nm::ZERO || !solid {
-                ovals_along(out, &pts, true, width.raw_shim());
+                ovals_along(out, &pts, true, width);
             }
         }
         Shape::Circle { center, end, .. } => {
-            let r = (((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64;
+            let r = Nm::kiround((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64()));
+            let err = KNOCKOUT_ERROR_NM.get();
             if solid {
-                out.add_outline(circle_polygon(p64(*center), r + width.raw_shim() / 2, KNOCKOUT_ERROR_NM, ErrorLoc::Outside, 0));
+                out.add_outline(circle_polygon(p64(*center), (r + width / 2).get(), err, ErrorLoc::Outside, 0));
             } else {
                 // `TransformRingToPolygon`: a ring, or a disc when the line is wider than the radius.
-                let inner = r - width.raw_shim() / 2;
-                if inner <= 0 {
-                    out.add_outline(circle_polygon(p64(*center), r + width.raw_shim() / 2, KNOCKOUT_ERROR_NM, ErrorLoc::Outside, 0));
+                let inner = r - width / 2;
+                if inner <= Nm::ZERO {
+                    out.add_outline(circle_polygon(p64(*center), (r + width / 2).get(), err, ErrorLoc::Outside, 0));
                 } else {
-                    let idx = out.add_outline(circle_polygon(p64(*center), inner + width.raw_shim(), KNOCKOUT_ERROR_NM, ErrorLoc::Outside, 0));
-                    out.add_hole(circle_polygon(p64(*center), inner, KNOCKOUT_ERROR_NM, ErrorLoc::Inside, 0), Some(idx));
+                    let idx = out.add_outline(circle_polygon(p64(*center), (inner + width).get(), err, ErrorLoc::Outside, 0));
+                    out.add_hole(circle_polygon(p64(*center), inner.get(), err, ErrorLoc::Inside, 0), Some(idx));
                 }
             }
         }
@@ -142,13 +144,13 @@ fn shape_knockout(out: &mut ShapePolySet, shape: &Shape, solid: bool, margin: i6
             if solid && pts.len() >= 3 {
                 let mut tmp = ShapePolySet::from_outline(pts.iter().map(|p| p64(*p)).collect());
                 if width > Nm::ZERO {
-                    tmp.inflate((width / 2 + Nm::from_raw_shim(KNOCKOUT_ERROR_NM)).raw_shim(), CornerStrategy::RoundAllCorners, KNOCKOUT_ERROR_NM as i32, false);
+                    tmp.inflate((width / 2 + KNOCKOUT_ERROR_NM).get(), CornerStrategy::RoundAllCorners, KNOCKOUT_ERROR_NM.get() as i32, false);
                 }
                 for poly in tmp.polys {
                     out.add_polygon(poly);
                 }
             } else {
-                ovals_along(out, pts, true, width.raw_shim());
+                ovals_along(out, pts, true, width);
             }
         }
         Shape::Polygon { .. } => {}
@@ -173,7 +175,7 @@ struct TextSpec<'a> {
 /// A text's knockout, `PCB_TEXT::TransformShapeToPolygon` (`buildBoundingHull`): the text as polygons (`TransformTextToPolySet`: an oval of the pen's width on every stroke, the error
 /// outside, the whole grown by the error again as `ERROR_OUTSIDE` asks), the box round them in the text's own frame (the strokes turned back about its anchor by its angle), grown by
 /// the margin and turned again; and the box of the ink in the board's own axes, for the test that the text is near the shape.
-fn text_hull(spec: &TextSpec, margin: i64) -> Option<(LineChain, [i64; 4])> {
+fn text_hull(spec: &TextSpec, margin: Nm) -> Option<(LineChain, [i64; 4])> {
     if spec.text.is_empty() || spec.size.0 <= Nm::ZERO || spec.size.1 <= Nm::ZERO {
         return None;
     }
@@ -185,16 +187,16 @@ fn text_hull(spec: &TextSpec, margin: i64) -> Option<(LineChain, [i64; 4])> {
     let pen = effective_pen_width(spec.thickness, spec.size, spec.bold);
     let mut ink = ShapePolySet::new();
     for seg in &strokes {
-        ink.add_outline(oval_polygon(p64(seg.a), p64(seg.b), pen.raw_shim(), KNOCKOUT_ERROR_NM, ErrorLoc::Outside, 0));
+        ink.add_outline(oval_polygon(p64(seg.a), p64(seg.b), pen.get(), KNOCKOUT_ERROR_NM.get(), ErrorLoc::Outside, 0));
     }
     ink.simplify();
     // `aClearance += aMaxError; textShape.Inflate( aClearance, ROUND_ALL_CORNERS, aMaxError )` of `ERROR_OUTSIDE`.
-    ink.inflate(KNOCKOUT_ERROR_NM, CornerStrategy::RoundAllCorners, KNOCKOUT_ERROR_NM as i32, false);
+    ink.inflate(KNOCKOUT_ERROR_NM.get(), CornerStrategy::RoundAllCorners, KNOCKOUT_ERROR_NM.get() as i32, false);
     let a = angle_deg.to_radians();
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
     let (mut bx0, mut by0, mut bx1, mut by1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
     for p in ink.polys.iter().flat_map(|poly| poly.iter()).flat_map(|chain| chain.iter()) {
-        let q = rotate_point(Point64::new(p.x - spec.pos.x.raw_shim(), p.y - spec.pos.y.raw_shim()), -a);
+        let q = rotate_point(Point64::new(p.x - spec.pos.x.get(), p.y - spec.pos.y.get()), -a);
         x0 = x0.min(q.x);
         y0 = y0.min(q.y);
         x1 = x1.max(q.x);
@@ -207,18 +209,19 @@ fn text_hull(spec: &TextSpec, margin: i64) -> Option<(LineChain, [i64; 4])> {
     if x0 > x1 {
         return None;
     }
-    let hull: LineChain = [(x0 - margin, y0 - margin), (x1 + margin, y0 - margin), (x1 + margin, y1 + margin), (x0 - margin, y1 + margin)]
+    let m = margin.get();
+    let hull: LineChain = [(x0 - m, y0 - m), (x1 + m, y0 - m), (x1 + m, y1 + m), (x0 - m, y1 + m)]
         .iter()
         .map(|&(x, y)| {
             let q = rotate_point(Point64::new(x, y), a);
-            Point64::new((spec.pos.x + Nm::from_raw_shim(q.x)).raw_shim(), (spec.pos.y + Nm::from_raw_shim(q.y)).raw_shim())
+            p64(Point { x: spec.pos.x + Nm::new(q.x), y: spec.pos.y + Nm::new(q.y) })
         })
         .collect();
     Some((hull, [bx0, by0, bx1, by1]))
 }
 
 /// The knockout of a free board text.
-fn text_knockout(design: &Design, text: &Text, margin: i64) -> Option<(LineChain, [i64; 4])> {
+fn text_knockout(design: &Design, text: &Text, margin: Nm) -> Option<(LineChain, [i64; 4])> {
     let extra = design.drawings.as_ref().and_then(|d| d.text_extra(&text.id));
     let spec = TextSpec {
         text: &text.content,
@@ -253,7 +256,7 @@ fn text_box_knockout(out: &mut ShapePolySet, tb: &TextBox) {
     };
     out.add_outline(corners.iter().map(|p| p64(*p)).collect());
     if tb.border && tb.stroke_width_nm > Nm::ZERO {
-        ovals_along(out, &corners, true, tb.stroke_width_nm.raw_shim());
+        ovals_along(out, &corners, true, tb.stroke_width_nm);
     }
 }
 
@@ -270,7 +273,7 @@ fn footprint_fields(design: &Design, part: &eda_model::Part, fp: &FootprintInsta
 }
 
 /// What the footprints of the board put in the knockouts: their courtyard on a courtyard layer, their visible fields and their graphics on the layer, each grown by `margin`.
-fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &ConstraintModel, layer: &str, my_box: [i64; 4], margin: i64) {
+fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &ConstraintModel, layer: &str, my_box: [i64; 4], margin: Nm) {
     let Some(placement) = design.placement.as_ref() else { return };
     for fp in &placement.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
@@ -282,7 +285,7 @@ fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &Constrai
             }
             if footprint.courtyard_outlines.is_empty() {
                 if let Some((x0, y0, x1, y1)) = eda_model::footprint::placed_courtyard(model, part, fp) {
-                    out.add_outline(vec![Point64::new(x0.raw_shim(), y0.raw_shim()), Point64::new(x1.raw_shim(), y0.raw_shim()), Point64::new(x1.raw_shim(), y1.raw_shim()), Point64::new(x0.raw_shim(), y1.raw_shim())]);
+                    out.add_outline(vec![p64(Point { x: x0, y: y0 }), p64(Point { x: x1, y: y0 }), p64(Point { x: x1, y: y1 }), p64(Point { x: x0, y: y1 })]);
                 }
             }
         }
@@ -318,7 +321,7 @@ fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &Constrai
 
 /// `PCB_SHAPE::getHatchingKnockouts`: the polygons of the other shapes, texts and text boxes on the layer of `me` whose box meets its own, and what the footprints put on the layer
 /// (when the model that holds them is at hand), grown by `margin`.
-fn knockouts(design: &Design, model: Option<&ConstraintModel>, me: &Shape, margin: i64) -> ShapePolySet {
+fn knockouts(design: &Design, model: Option<&ConstraintModel>, me: &Shape, margin: Nm) -> ShapePolySet {
     let mut out = ShapePolySet::new();
     let layer = me.layer();
     let my_box = shape_box(me);
@@ -346,7 +349,7 @@ fn knockouts(design: &Design, model: Option<&ConstraintModel>, me: &Shape, margi
             }
             let b = tb.bounds();
             let half = tb.stroke_width_nm.max(Nm::ZERO) / 2;
-            if boxes_meet([(b[0] - half).raw_shim(), (b[1] - half).raw_shim(), (b[2] + half).raw_shim(), (b[3] + half).raw_shim()], my_box) {
+            if boxes_meet([(b[0] - half).get(), (b[1] - half).get(), (b[2] + half).get(), (b[3] + half).get()], my_box) {
                 text_box_knockout(&mut out, tb);
             }
         }
@@ -360,7 +363,7 @@ fn knockouts(design: &Design, model: Option<&ConstraintModel>, me: &Shape, margi
 /// What `UpdateHatching` has worked out before it makes lines or polygons: the shape's area with the knockouts taken out, the spacing, and the knockouts.
 struct Prepared {
     width: Nm,
-    spacing: i64,
+    spacing: Nm,
     area: ShapePolySet,
     knockouts: ShapePolySet,
 }
@@ -374,7 +377,7 @@ fn prepare(design: &Design, model: Option<&ConstraintModel>, shape: &Shape) -> O
     // `EDA_SHAPE::UpdateHatching`, `case SHAPE_T::RECTANGLE`: `ROUNDRECT rr( SHAPE_RECT( .. ), GetCornerRadius() ); rr.TransformToPolygon( shapeBuffer, getMaxError() )`.
     let radius = design.drawings.as_ref().map(|d| d.board_items.corner_radius_of(shape.id())).unwrap_or(Nm::ZERO);
     let own = match shape {
-        Shape::Rect { start, end, .. } if radius > Nm::ZERO => eda_model::outline::rounded_rect_ring(*start, *end, radius, MAX_ERROR_NM as f64).into_iter().map(p64).collect(),
+        Shape::Rect { start, end, .. } if radius > Nm::ZERO => eda_model::outline::rounded_rect_ring(*start, *end, radius, MAX_ERROR_NM.as_f64()).into_iter().map(p64).collect(),
         _ => outline_of(shape)?,
     };
     let mut area = ShapePolySet::from_outline(own);
@@ -386,26 +389,26 @@ fn prepare(design: &Design, model: Option<&ConstraintModel>, shape: &Shape) -> O
         x1 = x1.max(p.x);
         y1 = y1.max(p.y);
     }
-    let major_axis = (x1 - x0).max(y1 - y0);
+    let major_axis = Nm::new((x1 - x0).max(y1 - y0));
     let mut spacing = uncapped;
-    if major_axis / spacing.raw_shim() > 100 {
-        spacing = Nm::from_raw_shim(major_axis / 100);
+    if major_axis / spacing > 100 {
+        spacing = major_axis / 100;
     }
     if spacing <= Nm::ZERO {
         return None;
     }
-    let knock = knockouts(design, model, shape, (uncapped / 2).raw_shim());
+    let knock = knockouts(design, model, shape, uncapped / 2);
     if !knock.is_empty() {
         area.boolean_subtract(&knock);
         area.fracture(true);
     }
-    Some(Prepared { width, spacing: spacing.raw_shim(), area, knockouts: knock })
+    Some(Prepared { width, spacing, area, knockouts: knock })
 }
 
 /// The hatch lines of `shape` as `EDA_SHAPE::UpdateHatching` makes them, the board being `design` (and `model`, which holds the footprints' definitions, if given). A shape that has no inside, no line width or no room gives none.
 pub fn hatching(design: &Design, model: Option<&ConstraintModel>, shape: &Shape, kind: HatchKind) -> Hatching {
     let Some(prep) = prepare(design, model, shape) else { return Hatching { width: shape.stroke_width().max(Nm::ZERO), lines: Vec::new() } };
-    let lines = prep.area.generate_hatch_lines(kind.slopes(), prep.spacing, -1).into_iter().map(|(a, b)| (pt(a), pt(b))).collect();
+    let lines = prep.area.generate_hatch_lines(kind.slopes(), prep.spacing.get(), -1).into_iter().map(|(a, b)| (pt(a), pt(b))).collect();
     Hatching { width: prep.width, lines }
 }
 
@@ -416,9 +419,9 @@ pub fn hatch_polygons(design: &Design, model: Option<&ConstraintModel>, shape: &
     if kind != HatchKind::CrossHatch {
         return prep
             .area
-            .generate_hatch_lines(kind.slopes(), prep.spacing, -1)
+            .generate_hatch_lines(kind.slopes(), prep.spacing.get(), -1)
             .into_iter()
-            .map(|(a, b)| oval_polygon(a, b, prep.width.raw_shim(), prep.width.raw_shim(), ErrorLoc::Inside, 0))
+            .map(|(a, b)| oval_polygon(a, b, prep.width.get(), prep.width.get(), ErrorLoc::Inside, 0))
             .collect();
     }
     let quarter = std::f64::consts::FRAC_PI_4;
@@ -431,8 +434,8 @@ pub fn hatch_polygons(design: &Design, model: Option<&ConstraintModel>, shape: &
             }
         }
     };
-    let grid = prep.spacing;
-    let hole_size = grid - prep.width.raw_shim();
+    let grid = prep.spacing.get();
+    let hole_size = (prep.spacing - prep.width).get();
     let mut lattice = prep.area.clone();
     rotate(&mut lattice, -quarter);
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
@@ -540,7 +543,7 @@ mod tests {
         assert!(h.lines.len() >= 4);
         for (a, b) in &h.lines {
             for p in [a, b] {
-                assert!(((p.x * p.x.raw_shim() + p.y * p.y.raw_shim()).raw_shim() as f64).sqrt() <= 5_001_000.0, "{p:?}");
+                assert!(((p.x.area(p.x) + p.y.area(p.y)) as f64).sqrt() <= 5_001_000.0, "{p:?}");
             }
         }
         let tri = Shape::Polygon { id: "shp_p".into(), layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false, pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(10.0), y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(10.0) }] };
@@ -562,7 +565,7 @@ mod tests {
         // The bar is 1 mm wide, half the spacing (1 mm) is kept free either side: nothing of a line is between x = 8.5 mm and 11.5 mm but ... the lines stop at its edge.
         for (a, b) in &with_bar.lines {
             for p in [a, b] {
-                assert!(p.x <= Nm::from_raw_shim(8_500_000 + 3_000) || p.x >= Nm::from_raw_shim(11_500_000 - 3_000) || p.x <= Nm::new(3_000) || p.x >= Nm::from_raw_shim(20_000_000 - 3_000), "{p:?}");
+                assert!(p.x <= Nm::new(8_500_000 + 3_000) || p.x >= Nm::new(11_500_000 - 3_000) || p.x <= Nm::new(3_000) || p.x >= Nm::new(20_000_000 - 3_000), "{p:?}");
             }
         }
     }
@@ -588,8 +591,8 @@ mod tests {
 
     #[test]
     fn the_box_round_a_turned_text_is_turned_with_it() {
-        let (flat, _) = text_hull(&spec_at(0), 1_000_000).unwrap();
-        let (up, _) = text_hull(&spec_at(90_000), 1_000_000).unwrap();
+        let (flat, _) = text_hull(&spec_at(0), mm(1.0)).unwrap();
+        let (up, _) = text_hull(&spec_at(90_000), mm(1.0)).unwrap();
         let ((w0, h0), (w90, h90)) = (extent(&flat), extent(&up));
         assert!(w0 > h0 * 2, "a word is wider than it is tall: {w0} x {h0}");
         assert!((w0 - h90).abs() <= 2 && (h0 - w90).abs() <= 2, "turned a quarter, the box has the other sides: {w0} x {h0} against {w90} x {h90}");
@@ -597,7 +600,7 @@ mod tests {
         assert!(flat.iter().all(|p| p.x >= 10_000_000 - 1_300_000) && flat.iter().any(|p| p.x > 14_000_000));
         assert!(up.iter().all(|p| p.y <= 10_000_000 + 1_300_000) && up.iter().any(|p| p.y < 6_000_000), "{up:?}");
         // A tilt of 45 degrees makes a box that is not axis-aligned.
-        let (tilt, _) = text_hull(&spec_at(45_000), 1_000_000).unwrap();
+        let (tilt, _) = text_hull(&spec_at(45_000), mm(1.0)).unwrap();
         assert!(tilt.windows(2).any(|w| w[0].x != w[1].x && w[0].y != w[1].y), "{tilt:?}");
     }
 

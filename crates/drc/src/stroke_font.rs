@@ -228,14 +228,14 @@ fn layout_strokes_anchored(text: &str, anchor: Point, size_nm: Nm, rot_millideg:
         }
     };
 
-    let size = size_nm.raw_shim() as f64;
+    let size = size_nm.as_f64();
     let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
     let mirror_sign = if mirror { -1.0 } else { 1.0 };
     let to_board = |local_x: f64, local_y: f64| -> Point {
         let lx = local_x * size * mirror_sign;
         let ly = (local_y - y_shift) * size;
-        Point { x: anchor.x + Nm::from_raw_shim((lx * cos - ly * sin).round() as i64), y: anchor.y + Nm::from_raw_shim((lx * sin + ly * cos).round() as i64) }
+        Point { x: anchor.x + Nm::kiround(lx * cos - ly * sin), y: anchor.y + Nm::kiround(lx * sin + ly * cos) }
     };
 
     let mut segs = Vec::new();
@@ -287,11 +287,11 @@ pub struct TextLayout<'a> {
 pub fn effective_pen_width(thickness: Nm, size: (Nm, Nm), bold: bool) -> Nm {
     let mut pen = thickness;
     if pen <= Nm::new(1) {
-        let w = size.0.raw_shim() as f64;
-        pen = if bold { Nm::from_raw_shim((w / 5.0).round() as i64) } else { Nm::from_raw_shim((w / 8.0).round() as i64) };
+        let w = size.0.as_f64();
+        pen = if bold { Nm::kiround(w / 5.0) } else { Nm::kiround(w / 8.0) };
     }
     // `ClampTextPenSize`: at most a quarter of the smaller glyph dimension.
-    let max = Nm::from_raw_shim(((size.0.abs().min(size.1.abs())).raw_shim() as f64 * 0.25).round() as i64);
+    let max = Nm::kiround((size.0.abs().min(size.1.abs())).as_f64() * 0.25);
     pen.min(max)
 }
 
@@ -358,7 +358,7 @@ fn parse_markup(line: &str) -> Vec<Run> {
 /// about the anchor. Italics are not drawn.
 pub fn kicad_text_segments(t: &TextLayout) -> Vec<Seg> {
     let lines: Vec<&str> = t.text.split('\n').collect();
-    let (sx, sy) = (t.size.0.raw_shim() as f64, t.size.1.raw_shim() as f64);
+    let (sx, sy) = (t.size.0.as_f64(), t.size.1.as_f64());
     let space_width = get_glyph(' ' as u32).width;
     // `GetInterline( size.y ) * LEGACY_FACTOR * m_LineSpacing`, truncated to int.
     let interline = (sy * 1.68 * 0.9583) as i64;
@@ -419,7 +419,7 @@ pub fn kicad_text_segments(t: &TextLayout) -> Vec<Seg> {
     for i in 0..laid.len() {
         height += if i == 0 { sy * 1.17 } else { interline as f64 };
     }
-    let th = t.thickness.raw_shim() as f64;
+    let th = t.thickness.as_f64();
     let off_x = th / 1.52;
     let mut off_y = sy - th * 0.052;
     match t.valign {
@@ -428,11 +428,11 @@ pub fn kicad_text_segments(t: &TextLayout) -> Vec<Seg> {
         _ => off_y -= height.trunc(),
     }
     let (sin, cos) = (t.angle_deg.to_radians()).sin_cos();
-    let origin = (t.pos.x.raw_shim() as f64, t.pos.y.raw_shim() as f64);
+    let origin = (t.pos.x.as_f64(), t.pos.y.as_f64());
     let xf = |x: f64, y: f64| -> Point {
         let x = if t.mirror { origin.0 - (x - origin.0) } else { x };
         let (dx, dy) = (x - origin.0, y - origin.1);
-        Point { x: Nm::from_raw_shim((origin.0 + dx * cos + dy * sin).round() as i64), y: Nm::from_raw_shim((origin.1 - dx * sin + dy * cos).round() as i64) }
+        Point { x: Nm::kiround(origin.0 + dx * cos + dy * sin), y: Nm::kiround(origin.1 - dx * sin + dy * cos) }
     };
     let mut segs = Vec::new();
     for (i, line) in laid.iter().enumerate() {

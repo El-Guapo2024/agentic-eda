@@ -68,7 +68,7 @@ impl BoardOutline {
     /// The outline with the largest area, as a ring (the polygon `placement.outline` summarises it as). Empty when there is none.
     pub fn main_ring(&self) -> Vec<Point> {
         let best = (0..self.polys.outline_count()).max_by(|&a, &b| eda_clipper2::area(self.polys.outline(a)).abs().total_cmp(&eda_clipper2::area(self.polys.outline(b)).abs()));
-        best.map(|i| self.polys.outline(i).iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect()).unwrap_or_default()
+        best.map(|i| self.polys.outline(i).iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect()).unwrap_or_default()
     }
 
     /// Is `p` on the board: inside an outline and in none of its holes? (A point on an edge counts as on.)
@@ -97,8 +97,8 @@ impl BoardOutline {
         for i in 0..self.polys.outline_count() {
             for p in self.polys.outline(i) {
                 bb = Some(match bb {
-                    None => (Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }, Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }),
-                    Some((a, b)) => (Point { x: a.x.min(Nm::from_raw_shim(p.x)), y: a.y.min(Nm::from_raw_shim(p.y)) }, Point { x: b.x.max(Nm::from_raw_shim(p.x)), y: b.y.max(Nm::from_raw_shim(p.y)) }),
+                    None => (Point { x: Nm::new(p.x), y: Nm::new(p.y) }, Point { x: Nm::new(p.x), y: Nm::new(p.y) }),
+                    Some((a, b)) => (Point { x: a.x.min(Nm::new(p.x)), y: a.y.min(Nm::new(p.y)) }, Point { x: b.x.max(Nm::new(p.x)), y: b.y.max(Nm::new(p.y)) }),
                 });
             }
         }
@@ -111,7 +111,7 @@ impl BoardOutline {
 // ----------------------------------------------------------------------------------------------------------------------
 
 fn sq_dist(a: Point, b: Point) -> i128 {
-    let (dx, dy) = ((a.x - b.x).raw_shim() as i128, (a.y - b.y).raw_shim() as i128);
+    let (dx, dy) = ((a.x - b.x).get() as i128, (a.y - b.y).get() as i128);
     dx * dx + dy * dy
 }
 
@@ -121,7 +121,7 @@ fn norm(a: Point, b: Point) -> f64 {
 
 /// `close_enough`: the squared distance is at most the squared limit.
 fn close_enough(a: Point, b: Point, limit: Nm) -> bool {
-    sq_dist(a, b) <= ((limit).raw_shim() as i128) * ((limit).raw_shim() as i128)
+    sq_dist(a, b) <= ((limit).get() as i128) * ((limit).get() as i128)
 }
 
 /// `closer_to_first`.
@@ -169,7 +169,7 @@ fn collinear_overlap(s: Seg, o: Seg, use_x_axis: bool, ignore_endpoints: bool) -
         }
     }
     let proj = (overlap_start + overlap_end) / 2;
-    let other = if seg1_end != seg1_start { coord1_start + Nm::from_raw_shim(rescale((proj - seg1_start).raw_shim() as i128, (coord1_end - coord1_start).raw_shim() as i128, (seg1_end - seg1_start).raw_shim() as i128) as i64) } else { coord1_start };
+    let other = if seg1_end != seg1_start { coord1_start + Nm::new(rescale((proj - seg1_start).get() as i128, (coord1_end - coord1_start).get() as i128, (seg1_end - seg1_start).get() as i128) as i64) } else { coord1_start };
     Some(if use_x_axis { Point { x: proj, y: other } } else { Point { x: other, y: proj } })
 }
 
@@ -179,9 +179,9 @@ fn seg_intersect(s: Seg, o: Seg, ignore_endpoints: bool) -> Option<Point> {
     if b1.2 < b2.0 || b2.2 < b1.0 || b1.3 < b2.1 || b2.3 < b1.1 {
         return None;
     }
-    let (d1x, d1y) = ((s.b.x - s.a.x).raw_shim() as i128, (s.b.y - s.a.y).raw_shim() as i128);
-    let (d2x, d2y) = ((o.b.x - o.a.x).raw_shim() as i128, (o.b.y - o.a.y).raw_shim() as i128);
-    let (ox, oy) = ((o.a.x - s.a.x).raw_shim() as i128, (o.a.y - s.a.y).raw_shim() as i128);
+    let (d1x, d1y) = ((s.b.x - s.a.x).get() as i128, (s.b.y - s.a.y).get() as i128);
+    let (d2x, d2y) = ((o.b.x - o.a.x).get() as i128, (o.b.y - o.a.y).get() as i128);
+    let (ox, oy) = ((o.a.x - s.a.x).get() as i128, (o.a.y - s.a.y).get() as i128);
     let cross = |ax: i128, ay: i128, bx: i128, by: i128| ax * by - ay * bx;
     let determinant = cross(d2x, d2y, d1x, d1y);
     if determinant == 0 {
@@ -204,7 +204,7 @@ fn seg_intersect(s: Seg, o: Seg, ignore_endpoints: bool) -> Option<Point> {
     if ignore_endpoints && (param1_num == 0 || param1_num == determinant) && (param2_num == 0 || param2_num == determinant) {
         return None;
     }
-    Some(Point { x: o.a.x + Nm::from_raw_shim(rescale(param1_num, d2x, determinant) as i64), y: o.a.y + Nm::from_raw_shim(rescale(param1_num, d2y, determinant) as i64) })
+    Some(Point { x: o.a.x + Nm::new(rescale(param1_num, d2x, determinant) as i64), y: o.a.y + Nm::new(rescale(param1_num, d2y, determinant) as i64) })
 }
 
 fn ring_bbox(ring: &[Point]) -> (Nm, Nm, Nm, Nm) {
@@ -224,12 +224,12 @@ fn point_inside_ring(ring: &[Point], p: Point) -> bool {
     let mut inside = false;
     for i in 0..n {
         let (p1, p2) = (ring[i], ring[(i + 1) % n]);
-        let (dx, dy) = ((p2.x - p1.x).raw_shim() as i128, (p2.y - p1.y).raw_shim() as i128);
+        let (dx, dy) = ((p2.x - p1.x).get() as i128, (p2.y - p1.y).get() as i128);
         if dy == 0 {
             continue;
         }
-        let d = rescale(dx, (p.y - p1.y).raw_shim() as i128, dy);
-        if ((p1.y >= p.y) != (p2.y >= p.y)) && ((p.x - p1.x).raw_shim() as i128) < d {
+        let d = rescale(dx, (p.y - p1.y).get() as i128, dy);
+        if ((p1.y >= p.y) != (p2.y >= p.y)) && ((p.x - p1.x).get() as i128) < d {
             inside = !inside;
         }
     }
@@ -237,7 +237,7 @@ fn point_inside_ring(ring: &[Point], p: Point) -> bool {
 }
 
 fn to_ring(chain: &LineChain) -> Vec<Point> {
-    chain.iter().map(|p| Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }).collect()
+    chain.iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect()
 }
 
 fn point_inside(chain: &LineChain, p: Point) -> bool {
@@ -248,9 +248,9 @@ fn point_inside(chain: &LineChain, p: Point) -> bool {
 fn point_on_ring(chain: &LineChain, p: Point) -> bool {
     let n = chain.len();
     (0..n).any(|i| {
-        let (a, b) = (Point { x: Nm::from_raw_shim(chain[i].x), y: Nm::from_raw_shim(chain[i].y) }, Point { x: Nm::from_raw_shim(chain[(i + 1) % n].x), y: Nm::from_raw_shim(chain[(i + 1) % n].y) });
-        let (dx, dy) = ((b.x - a.x).raw_shim() as i128, (b.y - a.y).raw_shim() as i128);
-        let (px, py) = ((p.x - a.x).raw_shim() as i128, (p.y - a.y).raw_shim() as i128);
+        let (a, b) = (Point { x: Nm::new(chain[i].x), y: Nm::new(chain[i].y) }, Point { x: Nm::new(chain[(i + 1) % n].x), y: Nm::new(chain[(i + 1) % n].y) });
+        let (dx, dy) = ((b.x - a.x).get() as i128, (b.y - a.y).get() as i128);
+        let (px, py) = ((p.x - a.x).get() as i128, (p.y - a.y).get() as i128);
         if dx * py - dy * px != 0 {
             return false;
         }
@@ -340,7 +340,7 @@ impl Contour {
 }
 
 fn to_line_chain(pts: &[Point]) -> LineChain {
-    pts.iter().map(|p| Point64::new(p.x.raw_shim(), p.y.raw_shim())).collect()
+    pts.iter().map(|p| Point64::new(p.x.get(), p.y.get())).collect()
 }
 
 // ----------------------------------------------------------------------------------------------------------------------
@@ -362,7 +362,7 @@ fn ends(s: &Shape) -> Option<(Point, Point)> {
 /// `PCB_SHAPE_ENDPOINTS_ADAPTOR` and its KD-tree, for `findNext` and the gap report.
 struct Endpoints {
     pts: Vec<(Point, usize)>,
-    grid: HashMap<(Nm, Nm), Vec<usize>>,
+    grid: HashMap<(i64, i64), Vec<usize>>,
     cell: Nm,
 }
 
@@ -376,9 +376,9 @@ impl Endpoints {
                 pts.push((b, i));
             }
         }
-        let mut grid: HashMap<(Nm, Nm), Vec<usize>> = HashMap::new();
+        let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
         for (k, (p, _)) in pts.iter().enumerate() {
-            grid.entry((Nm::from_raw_shim(p.x.div_euclid(cell)), Nm::from_raw_shim(p.y.div_euclid(cell)))).or_default().push(k);
+            grid.entry((p.x.div_euclid(cell), p.y.div_euclid(cell))).or_default().push(k);
         }
         Endpoints { pts, grid, cell }
     }
@@ -390,10 +390,10 @@ impl Endpoints {
         let mut found: Vec<(i128, usize, usize)> = Vec::new();
         for gx in cx - span..=cx + span {
             for gy in cy - span..=cy + span {
-                if let Some(list) = self.grid.get(&(Nm::from_raw_shim(gx), Nm::from_raw_shim(gy))) {
+                if let Some(list) = self.grid.get(&(gx, gy)) {
                     for &k in list {
                         let d = sq_dist(self.pts[k].0, p);
-                        if d < ((epsilon).raw_shim() as i128) * ((epsilon).raw_shim() as i128) {
+                        if d < ((epsilon).get() as i128) * ((epsilon).get() as i128) {
                             found.push((d, k, self.pts[k].1));
                         }
                     }
@@ -518,7 +518,7 @@ impl<'a> Chainer<'a> {
             }
             Shape::Bezier { start, c1, c2, end, .. } => {
                 let (next, reverse) = if closer_to_first(*prev, start, end) { (end, false) } else { (start, true) };
-                let poly = eda_model::bezier::bezier_polyline(start, c1, c2, end, Nm::from_raw_shim(self.max_error.round() as i64));
+                let poly = eda_model::bezier::bezier_polyline(start, c1, c2, end, Nm::kiround(self.max_error));
                 let walk: Vec<Point> = if reverse { poly.into_iter().rev().collect() } else { poly };
                 for pt in walk {
                     if *prev == pt {
@@ -575,13 +575,13 @@ fn nearest_midpoint(a: &Shape, b: &Shape, max_error: f64) -> Option<Point> {
 }
 
 fn nearest_on(s: Seg, p: Point) -> Point {
-    let (dx, dy) = ((s.b.x - s.a.x).raw_shim() as f64, (s.b.y - s.a.y).raw_shim() as f64);
+    let (dx, dy) = ((s.b.x - s.a.x).as_f64(), (s.b.y - s.a.y).as_f64());
     let len2 = dx * dx + dy * dy;
     if len2 == 0.0 {
         return s.a;
     }
-    let t = ((((p.x - s.a.x).raw_shim() as f64) * dx + ((p.y - s.a.y).raw_shim() as f64) * dy) / len2).clamp(0.0, 1.0);
-    Point { x: s.a.x + Nm::from_raw_shim((t * dx).round() as i64), y: s.a.y + Nm::from_raw_shim((t * dy).round() as i64) }
+    let t = ((((p.x - s.a.x).as_f64()) * dx + ((p.y - s.a.y).as_f64()) * dy) / len2).clamp(0.0, 1.0);
+    Point { x: s.a.x + Nm::kiround(t * dx), y: s.a.y + Nm::kiround(t * dy) }
 }
 
 /// `SEG::NearestPoints`.
@@ -765,7 +765,7 @@ fn convert(shapes: &[Shape], max_error: f64, epsilon: Nm, allow_disjoint: bool) 
     for (&ci, parents) in &hierarchy {
         if parents.len() % 2 == 0 {
             if !allow_disjoint && !polys.is_empty() {
-                let a = polys.outline(0).first().zip(polys.outline(0).get(1)).and_then(|(p, q)| c.owners.get(&(Point { x: Nm::from_raw_shim(p.x), y: Nm::from_raw_shim(p.y) }, Point { x: Nm::from_raw_shim(q.x), y: Nm::from_raw_shim(q.y) })).copied());
+                let a = polys.outline(0).first().zip(polys.outline(0).get(1)).and_then(|(p, q)| c.owners.get(&(Point { x: Nm::new(p.x), y: Nm::new(p.y) }, Point { x: Nm::new(q.x), y: Nm::new(q.y) })).copied());
                 let b = contours[ci].pts.first().zip(contours[ci].pts.get(1)).and_then(|(p, q)| c.owners.get(&(*p, *q)).copied());
                 if let (Some(a), Some(b)) = (a, b) {
                     c.report("(multiple board outlines not supported)", Some(a), Some(b), contours[ci].pts[0]);
@@ -832,7 +832,7 @@ fn check_self_intersections(polys: &ShapePolySet, c: &mut Chainer) -> bool {
         for ring in rings {
             let n = ring.len();
             for k in 0..n {
-                let (a, b) = (Point { x: Nm::from_raw_shim(ring[k].x), y: Nm::from_raw_shim(ring[k].y) }, Point { x: Nm::from_raw_shim(ring[(k + 1) % n].x), y: Nm::from_raw_shim(ring[(k + 1) % n].y) });
+                let (a, b) = (Point { x: Nm::new(ring[k].x), y: Nm::new(ring[k].y) }, Point { x: Nm::new(ring[(k + 1) % n].x), y: Nm::new(ring[(k + 1) % n].y) });
                 // `LexicographicalCompare( A, B ) > 0`: swap so that A is the smaller.
                 let (a, b) = if (a.x, a.y) > (b.x, b.y) { (b, a) } else { (a, b) };
                 segments.push(Seg { a, b });
@@ -840,7 +840,7 @@ fn check_self_intersections(polys: &ShapePolySet, c: &mut Chainer) -> bool {
         }
     }
     segments.sort_by_key(|s| (s.a.x, s.a.y, s.b.x, s.b.y));
-    let norm2 = |p: Point| ((p.x).raw_shim() as i128) * ((p.x).raw_shim() as i128) + ((p.y).raw_shim() as i128) * ((p.y).raw_shim() as i128);
+    let norm2 = |p: Point| ((p.x).get() as i128) * ((p.x).get() as i128) + ((p.y).get() as i128) * ((p.y).get() as i128);
     let mut self_intersecting = false;
     for i in 0..segments.len() {
         let s1 = segments[i];
@@ -971,8 +971,8 @@ fn footprint_pass(design: &Design, model: &eda_model::ConstraintModel, max_error
 /// any other. Without `model`, or with no footprint that has Edge.Cuts, this is [`board_outline`].
 pub fn board_outline_with(design: &Design, model: Option<&eda_model::ConstraintModel>, infer: bool) -> BoardOutline {
     let Some(model) = model.filter(|m| !footprint_edge_cuts(design, m).is_empty()) else { return board_outline(design, infer) };
-    let (items, mut holes, _) = footprint_pass(design, model, MAX_ERROR_NM.raw_shim() as f64);
-    let mut out = build_board_polygon_outlines(&items, MAX_ERROR_NM.raw_shim() as f64, CHAINING_EPSILON_NM, infer);
+    let (items, mut holes, _) = footprint_pass(design, model, MAX_ERROR_NM.as_f64());
+    let mut out = build_board_polygon_outlines(&items, MAX_ERROR_NM.as_f64(), CHAINING_EPSILON_NM, infer);
     if !holes.is_empty() {
         holes.simplify();
         out.polys.boolean_subtract(&holes);
@@ -983,7 +983,7 @@ pub fn board_outline_with(design: &Design, model: Option<&eda_model::ConstraintM
 
 /// [`board_outline`] of a list of Edge.Cuts items.
 pub fn board_outline_of(shapes: &[Shape], infer: bool) -> BoardOutline {
-    let mut out = build_board_polygon_outlines(shapes, MAX_ERROR_NM.raw_shim() as f64, CHAINING_EPSILON_NM, infer);
+    let mut out = build_board_polygon_outlines(shapes, MAX_ERROR_NM.as_f64(), CHAINING_EPSILON_NM, infer);
     // `aOutlines.Simplify()`: "make polygon strictly simple to avoid issues (especially in 3D viewer)".
     out.polys.simplify();
     out
@@ -1028,7 +1028,7 @@ pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_er
                 }
             }
             Shape::Circle { center, end, .. } => {
-                let r = (edge::circle_radius(*center, *end)).raw_shim() as f64;
+                let r = (edge::circle_radius(*center, *end)).as_f64();
                 if r <= min_dist {
                     (format!("(circle has null or very small radius: {} nm)", r), *center)
                 } else {
@@ -1202,7 +1202,7 @@ pub fn check_board_outline_with(design: &Design, model: Option<&eda_model::Const
     let (items, _, fp_shapes) = footprint_pass(design, model, 50.0);
     let mut every = edge::edge_cuts_outline_shapes(design);
     every.extend(fp_shapes);
-    let mut errors = test_board_outlines_graphic_items(&every, 1.0, MAX_ERROR_NM.raw_shim() as f64, CHAINING_EPSILON_NM);
+    let mut errors = test_board_outlines_graphic_items(&every, 1.0, MAX_ERROR_NM.as_f64(), CHAINING_EPSILON_NM);
     let built = build_board_polygon_outlines(&items, 50.0, CHAINING_EPSILON_NM, true);
     errors.extend(built.errors);
     if !built.valid && errors.is_empty() {
@@ -1217,7 +1217,7 @@ pub fn check_edge_cuts(shapes: &[Shape]) -> Vec<OutlineError> {
         return Vec::new();
     }
     // `minSizeForValideGraphics`: 0.001 mm.
-    let mut errors = test_board_outlines_graphic_items(shapes, 1.0, MAX_ERROR_NM.raw_shim() as f64, CHAINING_EPSILON_NM);
+    let mut errors = test_board_outlines_graphic_items(shapes, 1.0, MAX_ERROR_NM.as_f64(), CHAINING_EPSILON_NM);
     // `maxError`: "not critical here: we do not use the outline shape" -- 0.05 mm.
     let built = build_board_polygon_outlines(shapes, 50.0, CHAINING_EPSILON_NM, true);
     errors.extend(built.errors);
@@ -1235,7 +1235,7 @@ mod tests {
     use eda_model::outline::EDGE_CUTS;
 
     fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+        Point { x: Nm::new(x), y: Nm::new(y) }
     }
 
     fn line(id: &str, a: Point, b: Point) -> Shape {
@@ -1567,7 +1567,7 @@ mod tests {
         }
 
         fn point(&mut self, span: i64, grid: i64) -> Point {
-            Point { x: Nm::from_raw_shim(self.range(0, span / grid) * grid), y: Nm::from_raw_shim(self.range(0, span / grid) * grid) }
+            Point { x: Nm::new(self.range(0, span / grid) * grid), y: Nm::new(self.range(0, span / grid) * grid) }
         }
     }
 
