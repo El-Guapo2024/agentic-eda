@@ -17,6 +17,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## What landed (2026-10-14 to 10-24)
 
+- 2026-10-25: **fix batch A, KiCad's names** (`a8287704`): KiCad's net names everywhere incl. the studio (option 1), every net the intent names labelled in the derived schematic (the user, 2026-10-24), one footprint name, `(path)`/sheetname/sheetfile, fields and pinfunction/pintype, back footprints in KiCad's frame; kicad-cli's schematic-parity DRC: 0 differences on opamp_filter, ldo, mcu30 (were 22 and 76). Held: R6, the installed footprints' own pads (`task-fix-a-kicad-names-r6`), until the placer survives their 5 µm wider courtyards on mcu30.
 - 2026-10-24: **fix batches B and C** (`28ba30c4`): zones keep their holes, SMD pads on several copper layers, paste-only pads, curves, footprint Edge.Cuts (KiCad's footprint outline pass), rectangle corner radius (the router's edge as KiCad's effective shapes), Extruded 3D Body, importers' `.kicad_dru`, a project's DRC exclusions; refills keep teardrop copper via `(legacy_teardrops yes)` (trade-off: GAPS 13). Open: imported ERC exclusions (batch D's file), Repeat Layout target holes.
 - 2026-10-24: **fix batch F, editing** (`963764f7`): items edited in place keep their group, the real courtyard box, R/F while carrying, Position Relative's angle, Recombine, Repeat Layout's nets and groups, design-block layers and padless nets (`board_nets`), KiCad's Net Inspector with per-layer lengths; one-member groups kept, the < 2 rule only on groups a verb touched.
 - 2026-10-24: **fix batch E, the router** (`a6e4500a`): all 7 highs, 18/21 mediums; KiCad's 7 router QA sessions replay exactly; F is Attempt Finish, Esc commits fixed legs, empty-space routes on no net. Plus `ea752e1a`, the tuner's default board thickness (1.6 µm → 1.6 mm, a nanometre leftover).
@@ -62,7 +63,6 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-fix-a-kicad-names` (`~/work/agentic-eda-embedded`) | Batch A: KiCad's net names everywhere (the loader traces the schematic, `crates/cli/src/net_names.rs`; the derived schematic labels every net the intent names), one footprint name (`footprint_lib_id`), `(path)`/`sheetname`/`sheetfile`, fields, `pinfunction`/`pintype`, `unconnected-(..)`, the flip frame | review fixes R1-R5 and the cheap items done; R6 on `task-fix-a-kicad-names-r6`, held back (mcu30's greedy placement fails `placement_stub_crossings` with the real courtyards) | gate, merge; decide R6 with the placement lane; then batch D |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
