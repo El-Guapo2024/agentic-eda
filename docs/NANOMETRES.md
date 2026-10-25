@@ -275,9 +275,64 @@ length became `Nm` where that was the smaller change; neither is a shim. Wave 2 
 Kernels on raw integers (clipper2, shape-poly-set, the Specctra `V`, the router's force vectors) keep their `i64` and convert at their boundary with
 `get` / `new`. The counts per crate at the end of wave 1 are in the table below (`.raw_shim()` / `from_raw_shim(`).
 
+Shims at the end of wave 1 (`grep -c`; "test" is a `tests/` file, a `*_tests.rs` / `tests.rs` file or a `#[cfg(test)]` module at the end of a
+file; nearly all the test ones are literals in `Nm::from_raw_shim(..)`):
+
+| crate | code `.raw_shim()` | code `from_raw_shim(` | test `.raw_shim()` | test `from_raw_shim(` | total |
+|---|---:|---:|---:|---:|---:|
+| ops | 237 | 169 | 67 | 4908 | 5381 |
+| pns | 368 | 202 | 113 | 2816 | 3499 |
+| cli | 191 | 134 | 66 | 1437 | 1828 |
+| kicad | 71 | 117 | 38 | 1317 | 1543 |
+| drc | 333 | 131 | 3 | 364 | 831 |
+| connectivity | 114 | 35 | 15 | 279 | 443 |
+| engine | 135 | 123 | 30 | 117 | 405 |
+| gates | 45 | 8 | 0 | 270 | 323 |
+| lint | 76 | 11 | 0 | 92 | 179 |
+| place | 63 | 54 | 0 | 14 | 131 |
+| kicad-engine | 2 | 7 | 9 | 81 | 99 |
+| freeroute | 45 | 6 | 0 | 27 | 78 |
+| interchange | 38 | 7 | 0 | 30 | 75 |
+| cypress | 28 | 25 | 0 | 0 | 53 |
+| render | 30 | 2 | 6 | 4 | 42 |
+| grid | 17 | 10 | 0 | 8 | 35 |
+| eda | 0 | 0 | 0 | 18 | 18 |
+| intent | 0 | 0 | 6 | 10 | 16 |
+| judge | 4 | 0 | 0 | 0 | 4 |
+| **total** | 1797 | 1041 | 353 | 11792 | 14983 |
+
+The shims were put in mechanically (a script driven by the compiler's diagnostics, then the rest by hand), so many read badly
+(`Nm::from_raw_shim((a - b).raw_shim())`); wave 2 should rewrite an expression, not just drop the markers.
+
+### Bugs the shims showed
+
+A length literal is a shim outside `crates/model`, so each micrometre left over from the IR's micrometre days shows up as a small
+`Nm::from_raw_shim(..)`. Three were real, each fixed in a commit of its own with a test (after the no-change proofs):
+
+- `crates/engine/src/hier/kit.rs::nc_rect`: a no-connect flag's obstacle was +-610 nm (the micrometre 610); now KiCad's 48 mil square.
+- `crates/cli/src/fp_json.rs`: a complex pad's outline for the studio at a max error of 5 nm (the micrometre 5), ~2800 vertices for one custom
+  pad's ring; now `ARC_HIGH_DEF`.
+- `crates/drc/src/board.rs::exported_refdes_shape`: the reference's silk box was 220 nm a character by 500 nm (the anchor's constants beside it
+  had been converted); now 0.22 mm by 0.5 mm.
+
+Left as they are (no unit question, or arbitrary): `ops/src/pcb_items.rs` pads a text box of fewer than four points with corners 10 nm apart
+(10 µm before); the tests' self-consistent small coordinates.
+
 ### Proof of no behaviour change
 
 Every shim and every conversion is the identity on the bits, and every operator of `Nm` is the `i64` operator: a program that compiles computes the
 same numbers. Checked by: every test passes with its assertions unchanged (only the types and constructors of test literals changed);
 `tools/same_design.sh <main's eda> <this eda>` (every example through `eda pipeline` at seed 0 and every KiCad QA board through `eda import-kicad`,
 every file compared with `cmp`); `tools/parity_report.py` re-export and connectivity as on main; `tools/run-all-checks.sh`.
+
+### Gates (2026-10-25, on the box)
+
+1. `cargo check --workspace --tests --keep-going`: no warnings.
+2. `tools/check.sh fast`: on the refactor (`c333fc24`) `rust (debug): 3737 passed, 0 failed, 25 ignored`; on the branch with the three fixes
+   `rust (debug): 3740 passed, 0 failed, 25 ignored`; `web: typecheck ok, 2466 unit tests passed`.
+3. `tools/same_design.sh <main 5874839b's eda> <this eda>` (release, on the refactor): `same_design: 138 same, 0 different (8 of the same runs
+   failed in both)` (13 pipelines, 125 KiCad QA imports; the 8 fail the same way on both).
+4. `tools/parity_report.py` (`EDA_PARITY_PARTS=reexport`), run on main and on the refactor: `docs/parity/raw/connectivity.json` and
+   `roundtrip.json` identical but for the date; re-export 12/12, connectivity 552/558 (98.9%).
+5. `tools/run-all-checks.sh -j 2 --ports 8822-8823`: 43 passed, 1 failed of 44 (`import-foreign`: `KICAD_SRC_DIR` was not set), and
+   `import-foreign` alone with it set: 1 passed of 1. So 44/44.
