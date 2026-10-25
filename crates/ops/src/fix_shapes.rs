@@ -15,11 +15,11 @@ use eda_model::ir::{Point, Shape, Nm};
 type P = (i64, i64);
 
 fn pt(p: Point) -> P {
-    (p.x.raw_shim(), p.y.raw_shim())
+    (p.x.get(), p.y.get())
 }
 
 fn point(p: P) -> Point {
-    Point { x: Nm::from_raw_shim(p.0), y: Nm::from_raw_shim(p.1) }
+    Point { x: Nm::new(p.0), y: Nm::new(p.1) }
 }
 
 fn sub(a: P, b: P) -> P {
@@ -151,7 +151,7 @@ struct Piece {
 }
 
 /// `ConnectBoardShapes( aShapeList, aChainingEpsilon )` over the shapes of `shapes` that are lines, arcs or curves. Moves their end
-/// points in place; nothing is added or removed. `epsilon` is in micrometres (the design's unit).
+/// points in place; nothing is added or removed. `epsilon` is a length (the design's nanometres).
 pub(crate) fn connect_board_shapes(shapes: &mut [Shape], epsilon: Nm) {
     // The pieces and every end point of them as they were before anything moved (the k-d tree is built once).
     let pieces: Vec<Piece> = shapes.iter().enumerate().filter(|(_, s)| matches!(s, Shape::Segment { .. } | Shape::Arc { .. } | Shape::Bezier { .. })).map(|(at, _)| Piece { at }).collect();
@@ -169,7 +169,7 @@ pub(crate) fn connect_board_shapes(shapes: &mut [Shape], epsilon: Nm) {
         [(a, pi), (b, pi)]
     }).collect();
     let mut skip = vec![false; pieces.len()];
-    let eps_sq = epsilon.raw_shim() as i128 * epsilon.raw_shim() as i128;
+    let eps_sq = epsilon.area(epsilon);
 
     // `findNext`: of the two nearest end points to `p`, the closest valid one of another piece that is within the epsilon.
     let find_next = |curr: usize, p: P, skip: &[bool]| -> Option<usize> {
@@ -257,11 +257,11 @@ fn move_bezier_end(s: &mut Shape, at_start: bool, to: P) {
         if at_start {
             let d = sub(to, pt(*start));
             *start = point(to);
-            *c1 = Point { x: c1.x + Nm::from_raw_shim(d.0), y: c1.y + Nm::from_raw_shim(d.1) };
+            *c1 = Point { x: c1.x + Nm::new(d.0), y: c1.y + Nm::new(d.1) };
         } else {
             let d = sub(to, pt(*end));
             *end = point(to);
-            *c2 = Point { x: c2.x + Nm::from_raw_shim(d.0), y: c2.y + Nm::from_raw_shim(d.1) };
+            *c2 = Point { x: c2.x + Nm::new(d.0), y: c2.y + Nm::new(d.1) };
         }
     }
 }
@@ -353,15 +353,16 @@ fn connect_pair(shapes: &mut [Shape], a: usize, b: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use super::*;
 
-    fn seg(a: (i64, i64), b: (i64, i64)) -> Shape {
-        Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(a.0), y: Nm::from_raw_shim(a.1) }, end: Point { x: Nm::from_raw_shim(b.0), y: Nm::from_raw_shim(b.1) } }
+    fn seg(a: P, b: P) -> Shape {
+        Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: point(a), end: point(b) }
     }
 
-    fn ends_of(s: &Shape) -> ((i64, i64), (i64, i64)) {
+    fn ends_of(s: &Shape) -> (P, P) {
         match s {
-            Shape::Segment { start, end, .. } => ((start.x.raw_shim(), start.y.raw_shim()), (end.x.raw_shim(), end.y.raw_shim())),
+            Shape::Segment { start, end, .. } => (pt(*start), pt(*end)),
             _ => panic!(),
         }
     }
@@ -380,7 +381,7 @@ mod tests {
         // A square of 10 mm with 0.2 mm gaps at three corners and a 5 mm one at the fourth.
         let mut v = vec![seg((0, 0), (9_800_000, 0)), seg((10_000_000, 200_000), (10_000_000, 9_800_000)), seg((9_800_000, 10_000_000), (200_000, 10_000_000)), seg((0, 5_000_000), (0, 0))];
         // (the last side starts at its middle: its end at the origin is the first line's start)
-        connect_board_shapes(&mut v, Nm::from_raw_shim(1_000_000));
+        connect_board_shapes(&mut v, mm(1.0));
         let corners: Vec<_> = v.iter().map(ends_of).collect();
         assert_eq!(corners[0].1, (10_000_000, 0), "{corners:?}");
         assert_eq!(corners[1].0, (10_000_000, 0));
@@ -394,15 +395,15 @@ mod tests {
     fn a_gap_wider_than_the_tolerance_is_left_alone() {
         let mut v = vec![seg((0, 0), (9_000_000, 0)), seg((10_000_000, 100_000), (10_000_000, 5_000_000))];
         let before = v.clone();
-        connect_board_shapes(&mut v, Nm::from_raw_shim(500_000));
+        connect_board_shapes(&mut v, mm(0.5));
         assert_eq!(v, before);
     }
 
     #[test]
     fn a_line_takes_the_end_of_the_arc_it_nearly_touches() {
-        let arc = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: Nm::from_raw_shim(100_000), filled: false, start: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::ZERO }, mid: Point { x: Nm::from_raw_shim(12_000_000), y: Nm::from_raw_shim(2_000_000) }, end: Point { x: Nm::from_raw_shim(10_000_000), y: Nm::from_raw_shim(4_000_000) } };
+        let arc = Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: Point { x: mm(10.0), y: Nm::ZERO }, mid: Point { x: mm(12.0), y: mm(2.0) }, end: Point { x: mm(10.0), y: mm(4.0) } };
         let mut v = vec![seg((0, 0), (9_900_000, 100_000)), arc];
-        connect_board_shapes(&mut v, Nm::from_raw_shim(1_000_000));
+        connect_board_shapes(&mut v, mm(1.0));
         assert_eq!(ends_of(&v[0]).1, (10_000_000, 0));
     }
 

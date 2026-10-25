@@ -23,8 +23,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM` in `DIALOG_LABEL_PROPERTIES` and `DIALOG_TEXT_PROPERTIES`: "Don't allow text to disappear; it can be difficult to
 /// correct if you can't select it" (`m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`).
-const TEXT_SIZE_MIN_NM: Nm = Nm::from_raw_shim(10_000);
-const TEXT_SIZE_MAX_NM: Nm = Nm::from_raw_shim(1_000_000_000);
+const TEXT_SIZE_MIN_NM: Nm = Nm::new(10_000);
+const TEXT_SIZE_MAX_NM: Nm = Nm::new(1_000_000_000);
 
 /// `COLOR4D::UNSPECIFIED` is all four channels zero: the colour of the item's layer.
 fn specified(c: SchColor) -> Option<SchColor> {

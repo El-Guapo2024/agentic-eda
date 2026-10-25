@@ -10,6 +10,7 @@ use eda_model::ir::{LabelKind, NetLabel, PowerSymbol, Provenance, SheetInstance,
 use eda_model::symbol::SPoint;
 use eda_model::{LibPin, LibSymbol};
 use std::collections::BTreeMap;
+use eda_model::units::mm;
 
 fn empty_design() -> Design {
     Design {
@@ -85,7 +86,7 @@ fn run(sch: eda_model::ir::SchematicSection, cmd: SchCmd) -> Result<eda_model::i
     let m = model();
     let mut design = empty_design();
     design.schematic = Some(sch);
-    let mut b = Board::new(design, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::SchEdit(cmd))?;
     Ok(b.design().schematic.clone().unwrap())
 }
@@ -133,11 +134,11 @@ fn net_of(nets: &[(Vec<String>, Option<String>)], pin: &str) -> Option<String> {
 /// R1 with a wire and a label on each pin: pin 1 up to "A", pin 2 down to "B".
 fn labelled_resistor() -> eda_model::ir::SchematicSection {
     let mut s = section();
-    s.symbols.push(res("R1", p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(25_400_000))));
-    s.wires.push(wire("wire_a", &[p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(21_590_000)), p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(12_700_000))]));
-    s.wires.push(wire("wire_b", &[p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(29_210_000)), p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(38_100_000))]));
-    s.labels.push(label("lbl_a", "A", p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(12_700_000))));
-    s.labels.push(label("lbl_b", "B", p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(38_100_000))));
+    s.symbols.push(res("R1", p(mm(20.32), mm(25.4))));
+    s.wires.push(wire("wire_a", &[p(mm(20.32), mm(21.59)), p(mm(20.32), mm(12.7))]));
+    s.wires.push(wire("wire_b", &[p(mm(20.32), mm(29.21)), p(mm(20.32), mm(38.1))]));
+    s.labels.push(label("lbl_a", "A", p(mm(20.32), mm(12.7))));
+    s.labels.push(label("lbl_b", "B", p(mm(20.32), mm(38.1))));
     s.assign_missing_ids();
     s
 }
@@ -148,8 +149,8 @@ fn labelled_resistor() -> eda_model::ir::SchematicSection {
 fn swap_pins_trades_the_places_of_the_two_pins_and_the_wires_stay() {
     let s = labelled_resistor();
     let before = pin_points(&s);
-    assert_eq!(before["R1.1"], p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(21_590_000)));
-    assert_eq!(before["R1.2"], p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(29_210_000)));
+    assert_eq!(before["R1.1"], p(mm(20.32), mm(21.59)));
+    assert_eq!(before["R1.2"], p(mm(20.32), mm(29.21)));
     let nets = traced(&s);
     assert_eq!(net_of(&nets, "R1.1").as_deref(), Some("/A"));
     assert_eq!(net_of(&nets, "R1.2").as_deref(), Some("/B"));
@@ -174,7 +175,7 @@ fn a_rename_takes_the_swap_with_the_reference_and_a_delete_drops_it() {
     let m = model();
     let mut design = empty_design();
     design.schematic = Some(ok(labelled_resistor(), SchCmd::SwapPins { pins: ids(&["pin:R1:1", "pin:R1:2"]) }));
-    let mut b = Board::new(design, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::RenameSymbol { id: "R1".into(), new_id: "R9".into() }).unwrap();
     let s = b.design().schematic.clone().unwrap();
     assert!(s.extras.pin_swaps.contains_key("R9") && !s.extras.pin_swaps.contains_key("R1"), "{:?}", s.extras.pin_swaps);
@@ -200,7 +201,7 @@ fn swapping_the_same_two_pins_again_puts_them_back_and_leaves_no_entry() {
 #[test]
 fn three_pins_swap_in_a_cycle_in_selection_order() {
     let mut s = section();
-    s.symbols.push(sym_of("U1", "Test:TRI", 1, p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(25_400_000))));
+    s.symbols.push(sym_of("U1", "Test:TRI", 1, p(mm(20.32), mm(25.4))));
     let before = pin_points(&s);
     // pin 1 and 2, then 2 and 3 (`for i in 0..n-1: SwapPinGeometry( sorted[i], sorted[i+1] )`): 1 takes 2's place, 2 takes 3's, 3 takes 1's
     let after = ok(s, SchCmd::SwapPins { pins: ids(&["pin:U1:1", "pin:U1:2", "pin:U1:3"]) });
@@ -213,7 +214,7 @@ fn three_pins_swap_in_a_cycle_in_selection_order() {
 #[test]
 fn pins_are_swapped_in_the_order_they_were_picked() {
     let mut s = section();
-    s.symbols.push(sym_of("U1", "Test:TRI", 1, p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(25_400_000))));
+    s.symbols.push(sym_of("U1", "Test:TRI", 1, p(mm(20.32), mm(25.4))));
     let before = pin_points(&s);
     let after = ok(s, SchCmd::SwapPins { pins: ids(&["pin:U1:3", "pin:U1:1", "pin:U1:2"]) });
     let now = pin_points(&after);
@@ -228,12 +229,12 @@ fn a_swap_adds_the_junction_the_moved_pins_need_and_keeps_every_wire() {
     // Three things meet at pin 3's point (the pin and two wires) with no junction dot: `AddJunctionsIfNeeded` puts one there once the sheet is read
     // again after the swap, wherever the pins went.
     let mut s = section();
-    s.symbols.push(sym_of("U1", "Test:TRI", 1, p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(25_400_000))));
+    s.symbols.push(sym_of("U1", "Test:TRI", 1, p(mm(20.32), mm(25.4))));
     let pins = pin_points(&s);
     let (p2, p3) = (pins["U1.2"], pins["U1.3"]);
-    s.wires.push(wire("wire_b", &[p(p3.x - Nm::from_raw_shim(10_160_000), p3.y), p3]));
-    s.wires.push(wire("wire_c", &[p3, p(p3.x, p3.y + Nm::from_raw_shim(5_080_000))]));
-    s.wires.push(wire("wire_d", &[p(p2.x - Nm::from_raw_shim(10_160_000), p2.y), p2]));
+    s.wires.push(wire("wire_b", &[p(p3.x - mm(10.16), p3.y), p3]));
+    s.wires.push(wire("wire_c", &[p3, p(p3.x, p3.y + mm(5.08))]));
+    s.wires.push(wire("wire_d", &[p(p2.x - mm(10.16), p2.y), p2]));
     s.assign_missing_ids();
     assert!(s.junctions.is_empty());
     let after = ok(s.clone(), SchCmd::SwapPins { pins: ids(&["pin:U1:2", "pin:U1:3"]) });
@@ -255,7 +256,7 @@ fn swap_pins_is_refused_with_its_reason() {
     assert!(why.contains("at least two pins"), "{why}");
     // pins of two symbols
     let mut two = s.clone();
-    two.symbols.push(res("R2", p(Nm::from_raw_shim(60_960_000), Nm::from_raw_shim(25_400_000))));
+    two.symbols.push(res("R2", p(mm(60.96), mm(25.4))));
     let (check, why) = err(two, SchCmd::SwapPins { pins: ids(&["pin:R1:1", "pin:R2:2"]) });
     assert_eq!(check, "ops_swap_pins_symbols");
     assert!(why.contains("same symbol"), "{why}");
@@ -273,12 +274,12 @@ fn swap_pins_is_refused_for_a_symbol_of_a_sheet_that_is_placed_twice() {
     child.imported_from_kicad = true;
     let mut root = section();
     for (i, name) in ["Left", "Right"].iter().enumerate() {
-        root.sheets.push(SheetInstance { id: format!("sheet_{i}"), name: (*name).into(), file: "sub.kicad_sch".into(), at: p(Nm::from_raw_shim(10_000_000 + i as i64 * 60_000_000), Nm::from_raw_shim(10_000_000)), size: (Nm::from_raw_shim(40_000_000), Nm::from_raw_shim(20_000_000)), pins: vec![], page: String::new() });
+        root.sheets.push(SheetInstance { id: format!("sheet_{i}"), name: (*name).into(), file: "sub.kicad_sch".into(), at: p(mm(10.0) + i as i64 * mm(60.0), mm(10.0)), size: (mm(40.0), mm(20.0)), pins: vec![], page: String::new() });
     }
     let mut design = empty_design();
     design.schematic = Some(root);
     design.sheet_contents = Some([("sub.kicad_sch".to_string(), child)].into_iter().collect());
-    let mut b = Board::new(design, &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
     let cmd = Cmd::OnSheet { sheet: "sheet_0".into(), cmd: Box::new(Cmd::SchEdit(SchCmd::SwapPins { pins: ids(&["pin:R1:1", "pin:R1:2"]) })) };
     let e = b.apply(&cmd).unwrap_err();
     assert_eq!(e[0].check, "ops_swap_pins_shared");
@@ -310,12 +311,12 @@ fn swap_pin_labels_trades_the_texts_of_the_labels_on_the_pins() {
 #[test]
 fn three_pin_labels_cycle_in_selection_order() {
     let mut s = section();
-    s.symbols.push(sym_of("U1", "Test:TRI", 1, p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(25_400_000))));
+    s.symbols.push(sym_of("U1", "Test:TRI", 1, p(mm(20.32), mm(25.4))));
     let pins = pin_points(&s);
     for (n, net) in [("1", "X"), ("2", "Y"), ("3", "Z")] {
         let at = pins[&format!("U1.{n}")];
-        s.wires.push(wire(&format!("wire_{n}"), &[at, p(at.x - Nm::from_raw_shim(10_160_000), at.y)]));
-        s.labels.push(label(&format!("lbl_{n}"), net, p(at.x - Nm::from_raw_shim(10_160_000), at.y)));
+        s.wires.push(wire(&format!("wire_{n}"), &[at, p(at.x - mm(10.16), at.y)]));
+        s.labels.push(label(&format!("lbl_{n}"), net, p(at.x - mm(10.16), at.y)));
     }
     s.assign_missing_ids();
     let after = ok(s, SchCmd::SwapPinLabels { pins: ids(&["pin:U1:1", "pin:U1:2", "pin:U1:3"]) });
@@ -336,16 +337,16 @@ fn swap_pin_labels_is_refused_unless_each_pin_has_exactly_one_label_and_no_other
     // a connection with two labels
     let mut s = labelled_resistor();
     // (the second label sits on the wire between pin 2 and "B")
-    s.labels.push(label("lbl_c", "C", p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(34_000_000))));
+    s.labels.push(label("lbl_c", "C", p(mm(20.32), mm(34.0))));
     assert_eq!(err(s, SchCmd::SwapPinLabels { pins: ids(&["pin:R1:1", "pin:R1:2"]) }).1, msg);
     // a connection that reaches another pin: R1.2 wired to R2.1
     let mut s = labelled_resistor();
-    s.symbols.push(res("R2", p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(45_720_000))));
-    s.wires.push(wire("wire_x", &[p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(38_100_000)), p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(41_910_000))]));
+    s.symbols.push(res("R2", p(mm(20.32), mm(45.72))));
+    s.wires.push(wire("wire_x", &[p(mm(20.32), mm(38.1)), p(mm(20.32), mm(41.91))]));
     assert_eq!(err(s, SchCmd::SwapPinLabels { pins: ids(&["pin:R1:1", "pin:R1:2"]) }).1, msg);
     // a power symbol on the connection is a pin too
     let mut s = labelled_resistor();
-    s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(38_100_000)), rot: 0, net: "GND".into(), pin: String::new() });
+    s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(mm(20.32), mm(38.1)), rot: 0, net: "GND".into(), pin: String::new() });
     assert_eq!(err(s, SchCmd::SwapPinLabels { pins: ids(&["pin:R1:1", "pin:R1:2"]) }).1, msg);
     // fewer than two pins
     assert_eq!(err(labelled_resistor(), SchCmd::SwapPinLabels { pins: ids(&["pin:R1:1"]) }).0, "ops_swap_labels_few");
@@ -356,14 +357,14 @@ fn swap_pin_labels_is_refused_unless_each_pin_has_exactly_one_label_and_no_other
 /// U1 as two units side by side, each pin with a wire and a label to its left: unit 1 has "A" (pin 1, higher) and "B", unit 2 has "C" and "D".
 fn two_units() -> eda_model::ir::SchematicSection {
     let mut s = section();
-    s.symbols.push(sym_of("U1", "Test:DUAL", 1, p(Nm::from_raw_shim(40_640_000), Nm::from_raw_shim(25_400_000))));
-    s.symbols.push(sym_of("U1", "Test:DUAL", 2, p(Nm::from_raw_shim(101_600_000), Nm::from_raw_shim(25_400_000))));
+    s.symbols.push(sym_of("U1", "Test:DUAL", 1, p(mm(40.64), mm(25.4))));
+    s.symbols.push(sym_of("U1", "Test:DUAL", 2, p(mm(101.6), mm(25.4))));
     let pins = pin_points(&s);
     for (key, net) in [("U1.1", "A"), ("U1.2", "B"), ("U1#2.3", "C"), ("U1#2.4", "D")] {
         let at = pins[key];
         let id = key.replace(['.', '#'], "_");
-        s.wires.push(wire(&format!("wire_{id}"), &[at, p(at.x - Nm::from_raw_shim(10_160_000), at.y)]));
-        s.labels.push(label(&format!("lbl_{id}"), net, p(at.x - Nm::from_raw_shim(10_160_000), at.y)));
+        s.wires.push(wire(&format!("wire_{id}"), &[at, p(at.x - mm(10.16), at.y)]));
+        s.labels.push(label(&format!("lbl_{id}"), net, p(at.x - mm(10.16), at.y)));
     }
     s.assign_missing_ids();
     s
@@ -390,13 +391,13 @@ fn swap_unit_labels_is_refused_with_its_reason() {
     assert_eq!(why, msg);
     // a symbol with one unit, one unit placed, two references, an unknown reference
     let mut one = section();
-    one.symbols.push(res("R1", p(Nm::from_raw_shim(20_320_000), Nm::from_raw_shim(25_400_000))));
-    one.symbols.push(res("R2", p(Nm::from_raw_shim(60_960_000), Nm::from_raw_shim(25_400_000))));
+    one.symbols.push(res("R1", p(mm(20.32), mm(25.4))));
+    one.symbols.push(res("R2", p(mm(60.96), mm(25.4))));
     assert_eq!(err(one.clone(), SchCmd::SwapUnitLabels { ids: ids(&["R1"]) }).0, "ops_swap_units");
     assert_eq!(err(one.clone(), SchCmd::SwapUnitLabels { ids: ids(&["R1", "R2"]) }).0, "ops_swap_units");
     assert_eq!(err(one, SchCmd::SwapUnitLabels { ids: ids(&["R9"]) }).0, "ops_unknown_symbol");
     let mut single_unit = section();
-    single_unit.symbols.push(sym_of("U1", "Test:DUAL", 1, p(Nm::from_raw_shim(40_640_000), Nm::from_raw_shim(25_400_000))));
+    single_unit.symbols.push(sym_of("U1", "Test:DUAL", 1, p(mm(40.64), mm(25.4))));
     let (check, why) = err(single_unit, SchCmd::SwapUnitLabels { ids: ids(&["U1"]) });
     assert_eq!(check, "ops_swap_units");
     assert!(why.contains("only one unit"), "{why}");

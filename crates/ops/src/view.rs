@@ -38,16 +38,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{json, Value};
 
 /// Compass direction from one part to another, as a person would say it.
-fn bearing(dx: i64, dy: i64) -> &'static str {
+fn bearing(dx: Nm, dy: Nm) -> &'static str {
     // Screen coordinates: +y is south.
     let (ax, ay) = (dx.abs(), dy.abs());
     if ax * 3 < ay {
-        return if dy < 0 { "north" } else { "south" };
+        return if dy < Nm::ZERO { "north" } else { "south" };
     }
     if ay * 3 < ax {
-        return if dx < 0 { "west" } else { "east" };
+        return if dx < Nm::ZERO { "west" } else { "east" };
     }
-    match (dx < 0, dy < 0) {
+    match (dx < Nm::ZERO, dy < Nm::ZERO) {
         (true, true) => "north-west",
         (false, true) => "north-east",
         (true, false) => "south-west",
@@ -55,8 +55,8 @@ fn bearing(dx: i64, dy: i64) -> &'static str {
     }
 }
 
-fn mm(nm: i64) -> f64 {
-    (nm as f64 / 100_000.0).round() / 10.0
+fn mm(nm: Nm) -> f64 {
+    (nm.as_f64() / 100_000.0).round() / 10.0
 }
 
 /// How much of each ninth of the board is covered, so dead space is
@@ -68,7 +68,7 @@ fn regions(board: &Board, model: &ConstraintModel) -> Result<Value, Vec<CheckRes
     })?;
     let bounds = outline_bounds(&pl.outline)?;
     let (x0, y0, x1, y1) = bounds;
-    let (w, h) = (((x1 - x0) / 3).max(1), ((y1 - y0) / 3).max(1));
+    let (w, h) = (((x1 - x0) / 3).max(Nm::new(1)), ((y1 - y0) / 3).max(Nm::new(1)));
     let names = [
         ["north-west", "north", "north-east"],
         ["west", "centre", "east"],
@@ -86,12 +86,12 @@ fn regions(board: &Board, model: &ConstraintModel) -> Result<Value, Vec<CheckRes
         let c = eda_model::footprint::placed_courtyard(model, part, f).ok_or_else(|| {
             vec![CheckResult::fail("view_no_courtyard", &f.id, "this part resolves to no footprint, so its area is unknown")]
         })?;
-        let col = (((f.at.x - Nm::from_raw_shim(x0)) / w).clamp(Nm::ZERO, Nm::from_raw_shim(2))).raw_shim() as usize;
-        let row = (((f.at.y - Nm::from_raw_shim(y0)) / h).clamp(Nm::ZERO, Nm::from_raw_shim(2))).raw_shim() as usize;
-        area[row][col] += ((c.2 - c.0).raw_shim() as f64) * ((c.3 - c.1).raw_shim() as f64);
+        let col = ((f.at.x - x0) / w).clamp(0, 2) as usize;
+        let row = ((f.at.y - y0) / h).clamp(0, 2) as usize;
+        area[row][col] += (c.2 - c.0).as_f64() * (c.3 - c.1).as_f64();
         held[row][col].insert(f.id.clone());
     }
-    let cell = (w as f64) * (h as f64);
+    let cell = w.as_f64() * h.as_f64();
     let mut out = Vec::new();
     for r in 0..3 {
         for c in 0..3 {
@@ -106,7 +106,7 @@ fn regions(board: &Board, model: &ConstraintModel) -> Result<Value, Vec<CheckRes
 }
 
 /// The rectangle an outline spans, or a failure.
-fn outline_bounds(outline: &[eda_model::ir::Point]) -> Result<(i64, i64, i64, i64), Vec<CheckResult>> {
+fn outline_bounds(outline: &[eda_model::ir::Point]) -> Result<(Nm, Nm, Nm, Nm), Vec<CheckResult>> {
     if outline.len() < 3 {
         return Err(vec![CheckResult::fail(
             "view_no_outline",
@@ -115,10 +115,10 @@ fn outline_bounds(outline: &[eda_model::ir::Point]) -> Result<(i64, i64, i64, i6
         )]);
     }
     Ok((
-        (outline.iter().map(|p| p.x).min().expect("outline is non-empty")).raw_shim(),
-        (outline.iter().map(|p| p.y).min().expect("outline is non-empty")).raw_shim(),
-        (outline.iter().map(|p| p.x).max().expect("outline is non-empty")).raw_shim(),
-        (outline.iter().map(|p| p.y).max().expect("outline is non-empty")).raw_shim(),
+        outline.iter().map(|p| p.x).min().expect("outline is non-empty"),
+        outline.iter().map(|p| p.y).min().expect("outline is non-empty"),
+        outline.iter().map(|p| p.x).max().expect("outline is non-empty"),
+        outline.iter().map(|p| p.y).max().expect("outline is non-empty"),
     ))
 }
 
@@ -191,13 +191,13 @@ pub fn view(board: &Board, model: &ConstraintModel) -> Result<Value, Vec<CheckRe
         // Nearest placed neighbours, by relation rather than position.
         let mut near: Vec<Value> = Vec::new();
         if let Some(fp) = fp {
-            let mut cand: Vec<(i64, &eda_model::ir::FootprintInstance)> = pl
+            let mut cand: Vec<(Nm, &eda_model::ir::FootprintInstance)> = pl
                 .footprints
                 .iter()
                 .filter(|o| o.id != *r)
                 .map(|o| {
                     let (dx, dy) = (o.at.x - fp.at.x, o.at.y - fp.at.y);
-                    (((dx * dx.raw_shim() + dy * dy.raw_shim()).raw_shim() as f64).sqrt() as i64, o)
+                    (Nm::new(((dx.area(dx) + dy.area(dy)) as f64).sqrt() as i64), o)
                 })
                 .collect();
             cand.sort_by_key(|(d, _)| *d);
@@ -213,7 +213,7 @@ pub fn view(board: &Board, model: &ConstraintModel) -> Result<Value, Vec<CheckRe
                     .collect();
                 near.push(json!({
                     "part": o.id,
-                    "bearing": bearing((o.at.x - fp.at.x).raw_shim(), (o.at.y - fp.at.y).raw_shim()),
+                    "bearing": bearing(o.at.x - fp.at.x, o.at.y - fp.at.y),
                     "distance_mm": mm(dist),
                     "same_block": block_of.get(&o.id) == block_of.get(r),
                     "shared_nets": shared,

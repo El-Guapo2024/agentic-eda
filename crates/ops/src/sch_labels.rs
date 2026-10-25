@@ -22,8 +22,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM` of the label and text dialogs: "Don't allow text to disappear".
-const TEXT_SIZE_MIN_NM: Nm = Nm::from_raw_shim(10_000);
-const TEXT_SIZE_MAX_NM: Nm = Nm::from_raw_shim(1_000_000_000);
+const TEXT_SIZE_MIN_NM: Nm = Nm::new(10_000);
+const TEXT_SIZE_MAX_NM: Nm = Nm::new(1_000_000_000);
 
 /// `AutoRotateOnPlacementSupported`: a global label and a hierarchical label rotate themselves, a plain label and a directive label do not.
 pub(crate) fn auto_rotate_supported(kind: &LabelKind) -> bool {
@@ -122,7 +122,7 @@ impl<'m> Scene<'m> {
                 if *pos != at {
                     continue;
                 }
-                if let Some(spin) = self.shapes[i].dirs.get(k).and_then(|d| pin_spin_style(m.apply(d.0, d.1))) {
+                if let Some(spin) = self.shapes[i].dirs.get(k).and_then(|d| pin_spin_style(m.apply_dir(d.0, d.1))) {
                     ret = spin;
                 }
                 break;
@@ -132,11 +132,11 @@ impl<'m> Scene<'m> {
             let m = Matrix::of(p.rot, false, false);
             let shape = &self.power_shapes[i];
             for (k, (px, py)) in shape.pins.iter().map(|(_, at)| *at).enumerate() {
-                let (x, y) = m.apply(px.raw_shim(), py.raw_shim());
-                if (Point { x: p.at.x + Nm::from_raw_shim(x), y: p.at.y + Nm::from_raw_shim(y) }) != at {
+                let (x, y) = m.apply(px, py);
+                if (Point { x: p.at.x + x, y: p.at.y + y }) != at {
                     continue;
                 }
-                if let Some(spin) = shape.dirs.get(k).and_then(|d| pin_spin_style(m.apply(d.0, d.1))) {
+                if let Some(spin) = shape.dirs.get(k).and_then(|d| pin_spin_style(m.apply_dir(d.0, d.1))) {
                     ret = spin;
                 }
                 break;
@@ -166,8 +166,8 @@ impl<'m> Scene<'m> {
 
 /// Half the pen `SCH_LINE::GetPenWidth` gives a wire with nothing set (the Default net class's 6 mil; a graphic line's `m_DefaultLineWidth` is 6 mil too) and a bus
 /// (12 mil), in nanometres.
-const HALF_WIRE_PEN_NM: Nm = Nm::from_raw_shim(76_200);
-const HALF_BUS_PEN_NM: Nm = Nm::from_raw_shim(152_400);
+const HALF_WIRE_PEN_NM: Nm = Nm::new(76_200);
+const HALF_BUS_PEN_NM: Nm = Nm::new(152_400);
 
 /// What Place Label sets on the label it puts down (`createNewLabel`: the properties dialog's result).
 #[derive(Debug, Clone, Default)]

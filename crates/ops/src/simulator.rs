@@ -46,6 +46,7 @@ pub(crate) fn set_simulator(design: &mut Design, ngspice: Option<&NgspiceSetting
 
 #[cfg(test)]
 mod tests {
+    use eda_model::units::mm;
     use eda_model::units::Nm;
     use crate::{Board, Cmd};
     use eda_model::ir::{Design, PlacementSection, Point, Provenance};
@@ -59,7 +60,7 @@ mod tests {
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             routing: None,
-            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000), y: Nm::ZERO }, Point { x: Nm::from_raw_shim(50_000), y: Nm::from_raw_shim(50_000) }, Point { x: Nm::ZERO, y: Nm::from_raw_shim(50_000) }], footprints: vec![], modules: vec![] }),
+            placement: Some(PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(0.05), y: Nm::ZERO }, Point { x: mm(0.05), y: mm(0.05) }, Point { x: Nm::ZERO, y: mm(0.05) }], footprints: vec![], modules: vec![] }),
             drawings: None,
         }
     }
@@ -67,7 +68,7 @@ mod tests {
     #[test]
     fn the_simulators_settings_and_workbook_are_one_undoable_step() {
         let m = ConstraintModel::default();
-        let mut b = Board::new(design(), &m, Nm::from_raw_shim(100_000), Nm::from_raw_shim(300_000));
+        let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
         let settings = NgspiceSettings { workbook_filename: "board.wbk".into(), fix_include_paths: true, model_mode: NgspiceSettings::NGSPICE };
         let wbk = "{\n  \"version\": 7\n}\n".to_string();
         let cmd = Cmd::SetSimulator { ngspice: Some(settings.clone()), workbook: Some(wbk.clone()) };

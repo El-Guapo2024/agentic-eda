@@ -50,7 +50,7 @@ fn d_one() -> f64 {
 }
 
 fn d_dxf_width() -> Nm {
-    Nm::from_raw_shim(200_000)
+    Nm::new(200_000)
 }
 
 /// `Cmd::ImportGraphics`: what the Import Graphics dialog (`DIALOG_IMPORT_GRAPHICS`) hands `PlaceImportedGraphics`.
@@ -121,7 +121,7 @@ pub struct BoardItems {
 }
 
 fn point(p: (i64, i64)) -> Point {
-    Point { x: Nm::from_raw_shim(p.0), y: Nm::from_raw_shim(p.1) }
+    Point { x: Nm::new(p.0), y: Nm::new(p.1) }
 }
 
 /// `MapStrokeParams`: a stroke of -1 is none (a width of nothing on the board), any other is mapped.
@@ -129,7 +129,7 @@ fn stroke_width(mapper: &Mapper, s: &Stroke) -> Nm {
     if s.width == -1.0 {
         Nm::ZERO
     } else {
-        Nm::from_raw_shim(mapper.line_width(s.width))
+        Nm::new(mapper.line_width(s.width))
     }
 }
 
@@ -186,7 +186,7 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                 }
             }
             ImportedShape::Text { origin, text, height, thickness, orientation_deg, h, v, .. } => {
-                let size = Nm::from_raw_shim((height * m.scaling_factor()).round() as i64);
+                let size = Nm::kiround(height * m.scaling_factor());
                 if size <= Nm::ZERO || text.is_empty() {
                     continue;
                 }
@@ -196,11 +196,11 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                 let a = orientation_deg.to_radians();
                 let up = (-a.sin(), -a.cos());
                 let shift = match v {
-                    VJustify::Bottom => size.raw_shim() as f64 / 2.0,
-                    VJustify::Top => -(size.raw_shim() as f64) / 2.0,
+                    VJustify::Bottom => size.as_f64() / 2.0,
+                    VJustify::Top => -size.as_f64() / 2.0,
                     VJustify::Center => 0.0,
                 };
-                let at = Point { x: Nm::from_raw_shim(at.0 + (up.0 * shift).round() as i64), y: Nm::from_raw_shim(at.1 + (up.1 * shift).round() as i64) };
+                let at = Point { x: Nm::new(at.0) + Nm::kiround(up.0 * shift), y: Nm::new(at.1) + Nm::kiround(up.1 * shift) };
                 let mut mdeg = (orientation_deg * 1000.0).round() as i64 % 360_000;
                 if mdeg < 0 {
                     mdeg += 360_000;
@@ -210,7 +210,7 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                     HJustify::Center => TextJustify::Center,
                     HJustify::Right => TextJustify::Right,
                 };
-                out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_nm: size, stroke_width: Nm::from_raw_shim(m.line_width(*thickness).max(1)), justify, mirror: false });
+                out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_nm: size, stroke_width: Nm::new(m.line_width(*thickness)).max(Nm::new(1)), justify, mirror: false });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
                 let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));

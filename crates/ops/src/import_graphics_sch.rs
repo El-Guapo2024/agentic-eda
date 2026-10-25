@@ -137,7 +137,7 @@ fn line_style(s: LineStyle) -> SchLineStyle {
 }
 
 fn point(p: (i64, i64)) -> Point {
-    Point { x: Nm::from_raw_shim(p.0), y: Nm::from_raw_shim(p.1) }
+    Point { x: Nm::new(p.0), y: Nm::new(p.1) }
 }
 
 /// The width of the widest line of `text` in the stroke font at `size_mm`, in millimetres.
@@ -190,7 +190,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
     let m = *mapper;
     let mut out = SchItems::default();
     // `MapStrokeParams` for a shape: -1 is "no stroke", which this IR draws as a hairline; any other width is mapped.
-    let shape_stroke = |s: &Stroke| -> (Nm, SchLineStyle, Option<SchColor>) { (if s.width == -1.0 { Nm::from_raw_shim(1_000) } else { Nm::from_raw_shim(m.line_width(s.width)) }, line_style(s.style), s.color.map(sch_color)) };
+    let shape_stroke = |s: &Stroke| -> (Nm, SchLineStyle, Option<SchColor>) { (if s.width == -1.0 { Nm::new(1_000) } else { Nm::new(m.line_width(s.width)) }, line_style(s.style), s.color.map(sch_color)) };
     // "Arcs with a too big radius cannot" be handled: radius >= INT_MAX / 2 in KiCad's tenth-of-a-micrometre unit, a hundred times that in nanometres.
     let max_radius_nm = i32::MAX as f64 / 2.0 * 100.0;
     let add_line = |out: &mut SchItems, a: V2, b: V2, stroke: &Stroke| {
@@ -200,9 +200,9 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
             return;
         }
         // A width of -1 is not a pen width (`SCH_LINE::GetPenWidth` takes the default for it).
-        let width = if stroke.width == -1.0 { 0 } else { m.line_width(stroke.width) };
+        let width = if stroke.width == -1.0 { Nm::ZERO } else { Nm::new(m.line_width(stroke.width)) };
         let st = SchStroke { width_nm: Nm::ZERO, style: line_style(stroke.style), color: stroke.color.map(sch_color) };
-        out.lines.push((SchLine { id: String::new(), pts: vec![point(pa), point(pb)], width_nm: Nm::from_raw_shim(width) }, (!st.is_default()).then_some(st)));
+        out.lines.push((SchLine { id: String::new(), pts: vec![point(pa), point(pb)], width_nm: width }, (!st.is_default()).then_some(st)));
     };
     for shape in &imported.shapes {
         match shape {
@@ -210,7 +210,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
             ImportedShape::Circle { center, radius, stroke, filled, .. } => {
                 let c = m.coord(*center);
                 let e = m.coord(V2::new(center.x + radius, center.y));
-                let r = Nm::from_raw_shim((((e.0 - c.0) as f64).hypot((e.1 - c.1) as f64)).round() as i64);
+                let r = Nm::kiround(((e.0 - c.0) as f64).hypot((e.1 - c.1) as f64));
                 if r == Nm::ZERO {
                     continue;
                 }
@@ -269,7 +269,7 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                 out.graphics.push(g);
             }
             ImportedShape::Text { origin, text, height, orientation_deg, h, v, .. } => {
-                let size_nm = Nm::from_raw_shim((height * m.scaling_factor()).round() as i64);
+                let size_nm = Nm::kiround(height * m.scaling_factor());
                 if size_nm <= Nm::ZERO || text.is_empty() {
                     continue;
                 }
@@ -381,13 +381,13 @@ pub fn symbol_items(imported: &Imported, mapper: &Mapper, unit: u32, body_style:
                 let (ps, p1, p2, pe) = (m.coord(*start), m.coord(*c1), m.coord(*c2), m.coord(*end));
                 // `RebuildBezierToSegmentsPointsList( ARC_LOW_DEF_MM )` in the importer's own unit; "if the spline is degenerated (i.e. a segment) add it as
                 // segment or discard it if null".
-                let tolerance = Nm::from_raw_shim((ARC_LOW_DEF_MM * m.iu_per_mm).round() as i64);
+                let tolerance = Nm::kiround(ARC_LOW_DEF_MM * m.iu_per_mm);
                 let poly = eda_model::bezier::bezier_polyline(point(ps), point(p1), point(p2), point(pe), tolerance);
                 if poly.len() <= 2 {
                     line(&mut out, *start, *end, stroke);
                     continue;
                 }
-                let pts: Vec<SPoint> = poly.iter().map(|p| to_mm((p.x.raw_shim(), p.y.raw_shim()))).collect();
+                let pts: Vec<SPoint> = poly.iter().map(|p| to_mm((p.x.get(), p.y.get()))).collect();
                 out.push(LibrarySymbolGraphic::Polyline { id: String::new(), unit, body_style, pts, stroke_mm: stroke_mm(stroke), fill: LibraryFill::None });
             }
         }
