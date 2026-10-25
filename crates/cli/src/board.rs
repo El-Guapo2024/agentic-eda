@@ -5398,7 +5398,7 @@ pub(crate) mod tests {
             sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(mm(50.0), mm(30.0)), pt(mm(60.0), mm(30.0))], width_nm: Nm::ZERO });
             sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: pt(mm(10.0), mm(30.0)), rot: 0, net: "N1".into(), pin: String::new() });
             sch.extras.graphics.push(eda_model::sch_extras::SchGraphic::new(eda_model::sch_extras::SchGraphicKind::Rectangle { start: pt(mm(70.0), mm(30.0)), end: pt(mm(80.0), mm(40.0)), corner_radius_nm: Nm::ZERO }));
-            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(mm(0.09), mm(10.0)), size: (mm(20.0), mm(10.0)), pins: vec![eda_model::ir::SheetPin { id: "shpin_a".into(), name: "IN".into(), shape: eda_model::ir::LabelShape::Input, at: pt(mm(0.09), mm(15.0)) }], page: String::new() });
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(mm(90.0), mm(10.0)), size: (mm(20.0), mm(10.0)), pins: vec![eda_model::ir::SheetPin { id: "shpin_a".into(), name: "IN".into(), shape: eda_model::ir::LabelShape::Input, at: pt(mm(90.0), mm(15.0)) }], page: String::new() });
             sch.assign_missing_ids();
         }
         save(&dir, &design).unwrap();
@@ -5453,7 +5453,7 @@ pub(crate) mod tests {
             sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(mm(70.0), mm(10.0)), size: pt(mm(2.54), mm(2.54)) });
             sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(mm(80.0), mm(10.0)) });
             sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(mm(50.0), mm(30.0)), pt(mm(60.0), mm(30.0))], width_nm: Nm::ZERO });
-            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(mm(0.09), mm(10.0)), size: (mm(20.0), mm(10.0)), pins: vec![], page: String::new() });
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(mm(90.0), mm(10.0)), size: (mm(20.0), mm(10.0)), pins: vec![], page: String::new() });
             sch.assign_missing_ids();
         }
         design.sheet_contents = Some([("sub.kicad_sch".to_string(), eda_model::ir::SchematicSection::default())].into_iter().collect());
@@ -6189,8 +6189,8 @@ pub(crate) mod tests {
             let pt = |x: Nm, y: Nm| Point { x, y };
             let pin = |id: &str, name: &str, at: Point| eda_model::ir::SheetPin { id: id.into(), name: name.into(), shape: eda_model::ir::LabelShape::Input, at };
             // a sheet 20 x 10 mm at (90, 10) mm with a pin on its left border (to a wire and a label) and one on its right border
-            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(mm(0.09), mm(10.0)), size: (mm(20.0), mm(10.0)), pins: vec![pin("shpin_in", "IN", pt(mm(0.09), mm(15.0))), pin("shpin_out", "OUT", pt(mm(110.0), mm(14.0)))], page: String::new() });
-            sch.wires.push(eda_model::ir::Wire { id: "wire_in".into(), net: "N1".into(), pins: vec![], pts: vec![pt(mm(80.0), mm(15.0)), pt(mm(0.09), mm(15.0))], bus: false });
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(mm(90.0), mm(10.0)), size: (mm(20.0), mm(10.0)), pins: vec![pin("shpin_in", "IN", pt(mm(90.0), mm(15.0))), pin("shpin_out", "OUT", pt(mm(110.0), mm(14.0)))], page: String::new() });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_in".into(), net: "N1".into(), pins: vec![], pts: vec![pt(mm(80.0), mm(15.0)), pt(mm(90.0), mm(15.0))], bus: false });
             sch.labels.push(eda_model::ir::NetLabel { id: "lbl_in".into(), net: "N1".into(), at: pt(mm(80.0), mm(15.0)), kind: eda_model::ir::LabelKind::Local });
             sch.assign_missing_ids();
         }
