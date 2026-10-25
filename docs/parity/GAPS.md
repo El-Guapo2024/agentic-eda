@@ -278,7 +278,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   an invisible power input of an ordinary symbol is a global power pin; a power symbol's `${#}` is resolved per placement; bus aliases come from the `.kicad_pro` and with a
   sheet file; a library pin common to every unit stays unit 0; an ERC exclusion of one placement of a shared screen leaves the other's; a KiCad project's own ERC exclusions
   come in with `eda import-kicad`. 22 of KiCad's QA hierarchies trace as kicad-cli reads them (`bus_connection`, `issue17771`, `netlists/video`, `ERC_dynamic_power_symbol_test` added).
-  Found, not fixed (the writer's): the schematic `eda import-kicad x.kicad_sch` derives draws a library symbol in its corner frame at the file's origin (pins off the wires in kicad-cli).
+  Also fixed: the schematic `eda import-kicad x.kicad_sch` derives kept the file's frame, which the writer bakes otherwise (every pin off the wires in kicad-cli).
 - Left: a screen that has sheets of its own is still pasted as a copy, and a screen shown twice inside a screen shown twice has one reference per symbol for both (an override is filed
   under the placement just above the symbol, which nested placements share; KiCad's `qa/data/eeschema/issue10926_1`, `hierarchy_aliases`); Annotate numbers the screen's own
   references only, not the other placements' (it leaves no duplicate);

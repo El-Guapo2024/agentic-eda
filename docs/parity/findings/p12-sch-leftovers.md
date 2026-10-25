@@ -333,7 +333,7 @@ On `netlists/video` this gives exactly the "20 of 371" of the slow test. On `bus
 
 ### S1. Two buses on one sheet that share a member name are not joined (high)
 
-**Fixed** on task-fix-d-sch-connectivity: 4f07d67a (the virtual member nets; a bus a sheet pin alone names joins them as their neighbour, which the test proposed above had the other way). bus_connection, issue17771 and netlists/video trace as kicad-cli reads them.
+**Fixed** on task-fix-d-sch-connectivity: 4f07d67a (the virtual member nets; a bus a sheet pin alone names joins them as their neighbour only when `processSubGraphs` promotes it -- not beside another vector of its prefix, as in the test proposed above, where U2.1 stays apart). bus_connection, issue17771 and netlists/video trace as kicad-cli reads them.
 
 **What differs.** In KiCad, every **bus label** on a sheet makes one virtual net subgraph per net member, named by the member's full local name (`test.x`, `DQ0`). It is a strong driver. Two such virtual subgraphs with the same name on one sheet merge, and that merged net then has two bus parents. A later pass renames the matching member of every parent bus to one final name, and then renames every subgraph that still carries the old name. The result: two buses that never touch, on one sheet, are one net per shared member name, with no wire or net label needed.
 

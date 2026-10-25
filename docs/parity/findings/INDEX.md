@@ -48,7 +48,7 @@ Opening a studio project in KiCad and running Update PCB (F8) renames every net 
 - p22-p25 P25-2: pins common to all units (unit 0) are kept only in unit A. **Fixed on `task-fix-d-sch-connectivity`.**
 - p13-p16 F5 (P15): the ERC exclusion key merges a shared sheet's placements. **Fixed on `task-fix-d-sch-connectivity`.**
 - p13-p16 F6, the ERC half (a project's own ERC exclusions dropped on import). **Fixed on `task-fix-d-sch-connectivity`** (`eda import-kicad x.kicad_sch`).
-- Found while fixing (not batch D's files): the schematic `eda import-kicad x.kicad_sch` derives draws each library symbol in its corner frame at the file's origin, so in kicad-cli its pins are off the file's wires (QA `bus_connection`: every pin unconnected; on main too).
+- Found while fixing: the schematic `eda import-kicad x.kicad_sch` derives drew each library symbol in its corner frame at the file's origin, so in kicad-cli its pins were off the file's wires (QA `bus_connection`: every pin unconnected; on main too). **Fixed on `task-fix-d-sch-connectivity`** (`ReplaceSchematic` takes the screens into the design's frame, as Import Sheet does).
 
 ### E. Router (`crates/pns`)
 **Fixed on `task-fix-e-router` (2026-10-24):** all seven highs and the test infrastructure; 18 of the 21 mediums (F1-5 was fixed by the nanometre merge; F2-11 deferred, KiCad's grab radius is the grid size, which the router is not told; F4-2, arcs in the pair code, deferred); 13 of the 19 lows (some in part). The seven 8303b2ad router sessions now replay to the nanometre. Status per finding in `p5-router.md`.
