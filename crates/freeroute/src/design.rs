@@ -44,7 +44,8 @@ pub const UNITS_PER_UM: i64 = 10;
 pub const NM_PER_UNIT: i64 = 100;
 
 /// A design length (nm) in board units, to the nearest.
-fn units(nm: i64) -> i64 {
+fn units(nm: Nm) -> i64 {
+    let nm = nm.get();
     let q = nm.abs() / NM_PER_UNIT + i64::from(nm.abs() % NM_PER_UNIT >= NM_PER_UNIT / 2);
     nm.signum() * q
 }
@@ -61,7 +62,7 @@ const OUTLINE_HALF_WIDTH: i64 = 100;
 const ROUNDING_MARGIN: i64 = 2 * UNITS_PER_UM;
 
 /// The copper-to-edge clearance the routing gate holds a board to, nm.
-const EDGE_CLEARANCE_NM: i64 = 500_000;
+const EDGE_CLEARANCE_NM: Nm = Nm::new(500_000);
 
 /// Passes of rescue for what FreeRouting's own passes leave, each search
 /// keeping [`RESCUE_MARGIN`] more room round the trace than it needs.
@@ -86,7 +87,7 @@ const POUR_NET_OFF_LAYER_FACTOR: f64 = 4.0;
 /// degenerate, and the pad's own net cannot get out; a foreign trace fits
 /// no better through the sliver left, which lies within the pad's
 /// clearance.
-const STRIP_INSET_NM: i64 = 5_000;
+const STRIP_INSET_NM: Nm = Nm::new(5_000);
 
 /// A pad's copper about its centre, in board units, as a DSN padstack
 /// writes it and FreeRouting keeps it.
@@ -212,7 +213,7 @@ struct PlanClass {
 /// strip between two SMD pads of one footprint. µm, `(x0, y0, x1, y1)`.
 struct PlanKeepout {
     layer: usize,
-    rect: (i64, i64, i64, i64),
+    rect: (Nm, Nm, Nm, Nm),
 }
 
 /// The strips between the facing edges of adjacent SMD pads of one
@@ -221,9 +222,9 @@ struct PlanKeepout {
 /// with a third pad between them, or further apart than `max_gap`, have
 /// none; through-hole rows are left open. Each stops [`STRIP_INSET_NM`]
 /// short of the pads.
-fn pad_gap_strips(pads: &[PlacedPad], max_gap: i64) -> Vec<(i64, i64, i64, i64)> {
-    let rects: Vec<(i64, i64, i64, i64)> =
-        pads.iter().filter(|p| !p.through_hole).map(|p| ((p.center.x - p.size.0 / 2).raw_shim(), (p.center.y - p.size.1 / 2).raw_shim(), (p.center.x + p.size.0 / 2).raw_shim(), (p.center.y + p.size.1 / 2).raw_shim())).collect();
+fn pad_gap_strips(pads: &[PlacedPad], max_gap: Nm) -> Vec<(Nm, Nm, Nm, Nm)> {
+    let rects: Vec<(Nm, Nm, Nm, Nm)> =
+        pads.iter().filter(|p| !p.through_hole).map(|p| (p.center.x - p.size.0 / 2, p.center.y - p.size.1 / 2, p.center.x + p.size.0 / 2, p.center.y + p.size.1 / 2)).collect();
     let mut strips = Vec::new();
     for i in 0..rects.len() {
         for j in i + 1..rects.len() {
@@ -324,9 +325,9 @@ impl Plan {
         let (bx0, by0) = (outline.iter().map(|p| p.x).min().unwrap(), outline.iter().map(|p| p.y).min().unwrap());
         let (bx1, by1) = (outline.iter().map(|p| p.x).max().unwrap(), outline.iter().map(|p| p.y).max().unwrap());
         let mut keepouts = Vec::new();
-        let mut keep_out = |layer: usize, (x0, y0, x1, y1): (i64, i64, i64, i64)| {
+        let mut keep_out = |layer: usize, (x0, y0, x1, y1): (Nm, Nm, Nm, Nm)| {
             // Clipped to the board: the gates look at nothing beyond it.
-            let rect = (x0.max(bx0.raw_shim()), y0.max(by0.raw_shim()), x1.min(bx1.raw_shim()), y1.min(by1.raw_shim()));
+            let rect = (x0.max(bx0), y0.max(by0), x1.min(bx1), y1.min(by1));
             if rect.0 < rect.2 && rect.1 < rect.3 {
                 keepouts.push(PlanKeepout { layer, rect });
             }
@@ -335,11 +336,11 @@ impl Plan {
             let part = model.part(&fp.id).ok_or_else(|| format!("placed footprint {} has no part in the model", fp.id))?;
             let pads = placed_pads(model, part, fp).ok_or_else(|| format!("no footprint geometry for {}", fp.id))?;
             let side_layer = if fp.side == Side::Top { 0 } else { layer_count - 1 };
-            for strip in pad_gap_strips(&pads, rules.tuning.between_pads_max_gap_nm.raw_shim()) {
+            for strip in pad_gap_strips(&pads, rules.tuning.between_pads_max_gap_nm) {
                 keep_out(side_layer, strip);
             }
             if let Some(label) = placed_refdes_box(model, &placement.outline, part, fp) {
-                keep_out(side_layer, (label.0.raw_shim(), label.1.raw_shim(), label.2.raw_shim(), label.3.raw_shim()));
+                keep_out(side_layer, label);
             }
             let mut seen: BTreeMap<String, usize> = BTreeMap::new();
             let mut pins = Vec::new();
@@ -350,25 +351,25 @@ impl Plan {
                 let name = if *count == 0 && !pad.number.is_empty() { pad.number.clone() } else { format!("{}@{count}", pad.number) };
                 *count += 1;
                 let (from, to) = if pad.through_hole { (0, layer_count - 1) } else { (side_layer, side_layer) };
-                let form = PadForm::Box { half_w: units(pad.size.0.raw_shim()) / 2, half_h: units(pad.size.1.raw_shim()) / 2 };
+                let form = PadForm::Box { half_w: units(pad.size.0) / 2, half_h: units(pad.size.1) / 2 };
                 let span = if from == to { rules.layers[from].clone() } else { format!("{}-{}", rules.layers[from], rules.layers[to]) };
                 let key = format!("{}[{span}]", form.name());
                 stacks.insert(key.clone(), (form, from, to));
                 let net = pin_nets.get(format!("{}.{}", fp.id, pad.number).as_str()).and_then(|n| net_index.get(n).copied());
                 max_coor = max_coor.max(pad.center.x.abs()).max(pad.center.y.abs());
-                let center = IntPoint::new(units(pad.center.x.raw_shim()), units(pad.center.y.raw_shim()));
+                let center = IntPoint::new(units(pad.center.x), units(pad.center.y));
                 pins.push((PlanPin { number: pad.number.clone(), name, center, padstack: 0, net, geom: pad.clone() }, key));
             }
             placed.push((fp.id.clone(), pins));
         }
-        if 5 * units(max_coor.raw_shim()) >= CRIT_INT {
+        if 5 * units(max_coor) >= CRIT_INT {
             return Err(format!("the board reaches {max_coor} nm, past what FreeRouting holds unscaled"));
         }
         let mut padstacks: Vec<PlanPadstack> = stacks.iter().map(|(name, &(form, from_layer, to_layer))| PlanPadstack { name: name.clone(), form, from_layer, to_layer }).collect();
         let stack_no: BTreeMap<&str, usize> = stacks.keys().enumerate().map(|(i, k)| (k.as_str(), i)).collect();
         padstacks.push(PlanPadstack {
-            name: format!("Via[0-{}]_{}:{}_um", layer_count - 1, um(units(rules.via_diameter.raw_shim())), um(units(rules.via_drill.raw_shim()))),
-            form: PadForm::Circle { radius: units(rules.via_diameter.raw_shim()) / 2 },
+            name: format!("Via[0-{}]_{}:{}_um", layer_count - 1, um(units(rules.via_diameter)), um(units(rules.via_drill))),
+            form: PadForm::Circle { radius: units(rules.via_diameter) / 2 },
             from_layer: 0,
             to_layer: layer_count - 1,
         });
@@ -409,7 +410,7 @@ impl Plan {
             if clearance_nm < Nm::ZERO {
                 return Err(format!("net class {name} has clearance {clearance_nm} nm"));
             }
-            classes.push(PlanClass { name, half_width: units(width.raw_shim()) / 2, clearance: units(clearance_nm.raw_shim()) + ROUNDING_MARGIN });
+            classes.push(PlanClass { name, half_width: units(width) / 2, clearance: units(clearance_nm) + ROUNDING_MARGIN });
         }
         // Nets by number: FreeRouting makes a plane's net as it reads the
         // plane, before the netlist, so poured nets come first.
@@ -458,11 +459,11 @@ impl Plan {
             classes,
             keepouts,
             planes,
-            track_half_width: units(rules.track_width.raw_shim()) / 2,
-            clearance: units(rules.clearance.raw_shim()) + margin,
+            track_half_width: units(rules.track_width) / 2,
+            clearance: units(rules.clearance) + margin,
             // The outline is copper `OUTLINE_HALF_WIDTH` wide either side
             // of the edge.
-            edge_clearance: units((rules.tuning.edge_clearance_nm.max(Nm::from_raw_shim(EDGE_CLEARANCE_NM))).raw_shim()) - OUTLINE_HALF_WIDTH + margin,
+            edge_clearance: units(rules.tuning.edge_clearance_nm.max(EDGE_CLEARANCE_NM)) - OUTLINE_HALF_WIDTH + margin,
             keepout_clearance: margin,
         })
     }
@@ -470,7 +471,7 @@ impl Plan {
     /// The board's bounding box, board units: the outline's, grown by
     /// 1000 as FreeRouting grows it.
     fn bounds(&self) -> IntBox {
-        let (xs, ys) = (self.outline.iter().map(|p| units(p.x.raw_shim())), self.outline.iter().map(|p| units(p.y.raw_shim())));
+        let (xs, ys) = (self.outline.iter().map(|p| units(p.x)), self.outline.iter().map(|p| units(p.y)));
         IntBox::new(xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap()).offset(1000)
     }
 
@@ -510,7 +511,7 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     let _ = writeln!(out, "    )");
     let _ = write!(out, "    (boundary\n      (path pcb 0");
     for p in &plan.outline {
-        let _ = write!(out, "  {} {}", um(units(p.x.raw_shim())), um(units(p.y.raw_shim())));
+        let _ = write!(out, "  {} {}", um(units(p.x)), um(units(p.y)));
     }
     let _ = writeln!(out, ")\n      (clearance_class edge)\n    )");
     let via = plan.via_padstack();
@@ -532,7 +533,7 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     for p in &plan.planes {
         let _ = write!(out, "    (plane {} (polygon {} 0", quoted(&plan.nets[p.net].name), layer(p.layer));
         for c in &plan.outline {
-            let _ = write!(out, " {} {}", um(units(c.x.raw_shim())), um(units(c.y.raw_shim())));
+            let _ = write!(out, " {} {}", um(units(c.x)), um(units(c.y)));
         }
         let _ = writeln!(out, "))");
     }
@@ -807,7 +808,7 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     let plan = Plan::of(design, model, rules)?;
     let layer_count = plan.layers.len();
     let layers = plan.layers.iter().map(|name| Layer { name: name.clone(), is_signal: true }).collect();
-    let corners: Vec<IntPoint> = plan.outline.iter().map(|p| IntPoint::new(units(p.x.raw_shim()), units(p.y.raw_shim()))).collect();
+    let corners: Vec<IntPoint> = plan.outline.iter().map(|p| IntPoint::new(units(p.x), units(p.y))).collect();
     let bounds = plan.bounds();
 
     // The structure's rule: the clearance, then the outline's class and
@@ -992,7 +993,7 @@ fn pad_contains(shape: &PadShape, p: FloatPoint) -> bool {
 /// Board units as the nearest nanometre.
 fn to_nm(p: FloatPoint) -> IrPoint {
     let unit = NM_PER_UNIT as f64;
-    IrPoint { x: Nm::from_raw_shim((p.x * unit).round() as i64), y: Nm::from_raw_shim((p.y * unit).round() as i64) }
+    IrPoint { x: Nm::kiround(p.x * unit), y: Nm::kiround(p.y * unit) }
 }
 
 /// The routes on `rb`, a board [`board_from_design`] built for the design,
@@ -1044,7 +1045,7 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
                         }
                     }
                 }
-                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: Nm::from_raw_shim(2 * half_width * NM_PER_UNIT), pts, arc_mid_offset: None });
+                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: Nm::new(2 * half_width * NM_PER_UNIT), pts, arc_mid_offset: None });
             }
             ItemKind::Via { center, .. } => vias.push(IrVia {
                 id: String::new(),
@@ -1258,7 +1259,7 @@ impl GatePad<'_> {
     fn core(&self) -> ((f64, f64, f64, f64), f64) {
         let g = self.geom;
         let r = g.corner_radius();
-        let (cx, cy, hw, hh) = (g.center.x.raw_shim() as f64, g.center.y.raw_shim() as f64, g.size.0.raw_shim() as f64 / 2.0, g.size.1.raw_shim() as f64 / 2.0);
+        let (cx, cy, hw, hh) = (g.center.x.as_f64(), g.center.y.as_f64(), g.size.0.as_f64() / 2.0, g.size.1.as_f64() / 2.0);
         (((cx - hw + r).round(), (cy - hh + r).round(), (cx + hw - r).round(), (cy + hh - r).round()), r)
     }
 
@@ -1268,14 +1269,14 @@ impl GatePad<'_> {
     /// core where the segment misses it.
     fn deepest_on(&self, a: IrPoint, b: IrPoint) -> Option<(f64, f64)> {
         let g = self.geom;
-        let (ax, ay, dx, dy) = (a.x.raw_shim() as f64, a.y.raw_shim() as f64, (b.x - a.x).raw_shim() as f64, (b.y - a.y).raw_shim() as f64);
+        let (ax, ay, dx, dy) = (a.x.as_f64(), a.y.as_f64(), (b.x - a.x).as_f64(), (b.y - a.y).as_f64());
         let at = |t: f64| (ax + t * dx, ay + t * dy);
         if g.is_round() {
-            let (cx, cy) = (g.center.x.raw_shim() as f64, g.center.y.raw_shim() as f64);
+            let (cx, cy) = (g.center.x.as_f64(), g.center.y.as_f64());
             let len2 = dx * dx + dy * dy;
             let t = if len2 == 0.0 { 0.0 } else { (((cx - ax) * dx + (cy - ay) * dy) / len2).clamp(0.0, 1.0) };
             let p = at(t);
-            let reach = (g.size.0.min(g.size.1) / 2).raw_shim() as f64;
+            let reach = (g.size.0.min(g.size.1) / 2).as_f64();
             return (((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt() <= reach).then_some(p);
         }
         let (core, r) = self.core();
@@ -1330,7 +1331,7 @@ fn split_at_own_pads(tracks: Vec<Track>, pads: &[GatePad]) -> Vec<Track> {
             }
             for k in 0..t.pts.len() - 1 {
                 let Some((x, y)) = pad.deepest_on(t.pts[k], t.pts[k + 1]) else { continue };
-                let cut = IrPoint { x: Nm::from_raw_shim(x.round() as i64), y: Nm::from_raw_shim(y.round() as i64) };
+                let cut = IrPoint { x: Nm::kiround(x), y: Nm::kiround(y) };
                 if !pad.geom.contains(cut) {
                     continue;
                 }
@@ -1401,12 +1402,12 @@ mod tests {
     use eda_model::units::mm;
     use eda_model::footprint::PadShape as ModelPadShape;
 
-    fn pad(x: i64, y: i64, shape: ModelPadShape) -> PlacedPad {
-        PlacedPad { number: "1".into(), center: IrPoint { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }, size: (mm(1.0), mm(1.0)), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
+    fn pad(x: Nm, y: Nm, shape: ModelPadShape) -> PlacedPad {
+        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (mm(1.0), mm(1.0)), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
     }
 
-    fn track(pts: &[(i64, i64)]) -> Track {
-        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: mm(0.2), pts: pts.iter().map(|&(x, y)| IrPoint { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }).collect(), arc_mid_offset: None }
+    fn track(pts: &[(Nm, Nm)]) -> Track {
+        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: mm(0.2), pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect(), arc_mid_offset: None }
     }
 
     fn gate_pads(pads: &[PlacedPad]) -> Vec<GatePad<'_>> {
@@ -1416,28 +1417,28 @@ mod tests {
     #[test]
     fn a_track_through_a_pad_of_its_net_ends_in_it() {
         for shape in [ModelPadShape::Rect, ModelPadShape::RoundRect, ModelPadShape::Circle] {
-            let pads = [pad(0, 0, shape)];
-            let split = split_at_own_pads(vec![track(&[(-3_000_000, 100_000), (3_000_000, 100_000)])], &gate_pads(&pads));
+            let pads = [pad(Nm::ZERO, Nm::ZERO, shape)];
+            let split = split_at_own_pads(vec![track(&[(mm(-3.0), mm(0.1)), (mm(3.0), mm(0.1))])], &gate_pads(&pads));
             assert_eq!(split.len(), 2, "{shape:?}");
             for t in &split {
                 assert!(pads[0].contains(t.pts[0]) || pads[0].contains(t.pts[t.pts.len() - 1]), "{shape:?}: {:?}", t.pts);
             }
         }
         // Grazing a rounded corner is not running through it.
-        let pads = [pad(0, 0, ModelPadShape::Circle)];
-        assert_eq!(split_at_own_pads(vec![track(&[(-3_000_000, 600_000), (3_000_000, 600_000)])], &gate_pads(&pads)).len(), 1);
+        let pads = [pad(Nm::ZERO, Nm::ZERO, ModelPadShape::Circle)];
+        assert_eq!(split_at_own_pads(vec![track(&[(mm(-3.0), mm(0.6)), (mm(3.0), mm(0.6))])], &gate_pads(&pads)).len(), 1);
     }
 
     #[test]
     fn a_run_back_into_its_own_pad_goes() {
-        let pads = [pad(0, 0, ModelPadShape::Rect), pad(5_000_000, 0, ModelPadShape::Rect)];
+        let pads = [pad(Nm::ZERO, Nm::ZERO, ModelPadShape::Rect), pad(mm(5.0), Nm::ZERO, ModelPadShape::Rect)];
         // Out of the first pad and back into it, and on to the second.
-        let tracks = vec![track(&[(0, 0), (0, 2_000_000)]), track(&[(0, 2_000_000), (300_000, 2_000_000), (300_000, 300_000)]), track(&[(300_000, 300_000), (5_000_000, 0)])];
+        let tracks = vec![track(&[(Nm::ZERO, Nm::ZERO), (Nm::ZERO, mm(2.0))]), track(&[(Nm::ZERO, mm(2.0)), (mm(0.3), mm(2.0)), (mm(0.3), mm(0.3))]), track(&[(mm(0.3), mm(0.3)), (mm(5.0), Nm::ZERO)])];
         let kept = drop_pad_loops(tracks, &[], &gate_pads(&pads));
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].pts[0], IrPoint { x: mm(0.3), y: mm(0.3) });
         // A via on the way keeps the run: it may lead elsewhere.
-        let tracks = vec![track(&[(0, 0), (0, 2_000_000)]), track(&[(0, 2_000_000), (300_000, 300_000)])];
+        let tracks = vec![track(&[(Nm::ZERO, Nm::ZERO), (Nm::ZERO, mm(2.0))]), track(&[(Nm::ZERO, mm(2.0)), (mm(0.3), mm(0.3))])];
         let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: Nm::ZERO, y: mm(2.0) }, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
         assert_eq!(drop_pad_loops(tracks, &[via], &gate_pads(&pads)).len(), 2);
     }
