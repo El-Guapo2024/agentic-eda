@@ -23,7 +23,7 @@ pub(crate) fn plan(dir: &Path, design: &Design, model: &ConstraintModel, stitch:
 /// A Move of a via stitching (`PCB_VIA_STITCH::Move` translates the outline and its vias and marks it dirty; the move tool's `genUpdateEdit` / `genFinishEdit` make the
 /// vias again, the grid anchored where the moved vias now are) is followed, in the same step, by the regeneration of the stitching where the move left it: `snap` and
 /// `spacing` make the board the move is tried on. A Rotate or a Flip (`EDIT_TOOL::Rotate`, `Flip`) turns the vias with the outline and only marks it dirty: no regeneration.
-pub(crate) fn with_planned_vias(cmd: &Cmd, dir: &Path, design: &Design, model: &ConstraintModel, snap: i64, spacing: i64) -> Option<Cmd> {
+pub(crate) fn with_planned_vias(cmd: &Cmd, dir: &Path, design: &Design, model: &ConstraintModel, snap: Nm, spacing: Nm) -> Option<Cmd> {
     let stitch_ids = |ids: &[String]| -> Vec<String> { design.drawings.iter().flat_map(|d| d.board_items.via_stitches.iter()).filter(|v| ids.contains(&v.id)).map(|v| v.id.clone()).collect() };
     match cmd {
         Cmd::PcbItem(PcbItemCmd::SetViaStitch { id, stitch, vias: None }) => {
@@ -35,7 +35,7 @@ pub(crate) fn with_planned_vias(cmd: &Cmd, dir: &Path, design: &Design, model: &
             if moved.is_empty() {
                 return None;
             }
-            let mut b = eda_ops::Board::new(design.clone(), model, Nm::from_raw_shim(snap), Nm::from_raw_shim(spacing));
+            let mut b = eda_ops::Board::new(design.clone(), model, snap, spacing);
             b.apply(cmd).ok()?;
             let after = b.design();
             let mut cmds = vec![cmd.clone()];

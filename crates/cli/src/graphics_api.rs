@@ -64,7 +64,7 @@ pub fn read(body: &[u8]) -> Value {
         }
         // A circle's box is its centre's, one radius out.
         if let eda_model::ir::Shape::Circle { center, end, .. } = s {
-            let r = (((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64;
+            let r = ((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64())).round() as i64;
             grow((center.x - Nm::from_raw_shim(r)).raw_shim(), (center.y - Nm::from_raw_shim(r)).raw_shim());
             grow((center.x + Nm::from_raw_shim(r)).raw_shim(), (center.y + Nm::from_raw_shim(r)).raw_shim());
         }

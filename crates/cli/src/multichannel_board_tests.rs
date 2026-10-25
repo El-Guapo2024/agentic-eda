@@ -98,7 +98,7 @@ fn channels(dir: &Path) {
 /// `design` as the board folder `dir`'s design, with the intent of the three channels.
 fn write_board(dir: &Path, design: &Design) {
     save(dir, design).unwrap();
-    let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_nm: 100_000, spacing_nm: 600_000 };
+    let meta = Meta { intent: intent_path().canonicalize().unwrap().display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.6) };
     std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 }
 
@@ -109,7 +109,7 @@ fn design_json(dir: &Path) -> Value {
 /// Generate Placement Rule Areas with every sheet ticked, as the dialog's OK sends it.
 fn generate(dir: &Path) {
     let (meta, design, model) = load(dir).unwrap();
-    let rows = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm)).mc_potential_areas();
+    let rows = Board::new(design, &model, meta.snap_nm, meta.spacing_nm).mc_potential_areas();
     let areas: Vec<AreaPick> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| AreaPick { kind: r.kind, key: r.key.clone() }).collect();
     assert_eq!(areas.len(), 3, "one sheet for each amplifier: {rows:?}");
     step(dir, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { areas, replace_existing: false, group_items: false }), false, "test").unwrap();
@@ -205,7 +205,7 @@ fn strict_refuses_neither_the_areas_nor_the_repeat_on_a_board_that_is_not_routed
     write_board(&dir, &design(&PLACE));
     assert!(design_json(&dir)["routing"].is_null(), "no routing yet");
     let (meta, d, model) = load(&dir).unwrap();
-    let rows = Board::new(d, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm)).mc_potential_areas();
+    let rows = Board::new(d, &model, meta.snap_nm, meta.spacing_nm).mc_potential_areas();
     let areas: Vec<AreaPick> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| AreaPick { kind: r.kind, key: r.key.clone() }).collect();
     step(&dir, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { areas, replace_existing: false, group_items: false }), true, "test").expect("Strict lets the rule areas be made");
     let found = rule_areas(&dir);
@@ -330,7 +330,7 @@ fn kicad_cli_reads_the_rule_areas_as_its_own_rewrite_and_finds_the_repeated_chan
             assert!((x1 - x2).abs() < 1e-6 && (y1 - y2).abs() < 1e-6, "{source}: ({x1}, {y1}) against ({x2}, {y2})");
         }
         for (p, (x, y)) in outline.iter().zip(a.iter()) {
-            assert!(((p.x.raw_shim() as f64 / 1e6) - x).abs() < 1e-6 && ((p.y.raw_shim() as f64 / 1e6) - y).abs() < 1e-6, "{source}: the corner of the area is the corner written");
+            assert!((p.x.mm() - x).abs() < 1e-6 && (p.y.mm() - y).abs() < 1e-6, "{source}: the corner of the area is the corner written");
         }
     }
 

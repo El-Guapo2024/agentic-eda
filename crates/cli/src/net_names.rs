@@ -385,8 +385,8 @@ fn inside(outline: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
     for i in 0..outline.len() {
         let (a, b) = (outline[i], outline[(i + 1) % outline.len()]);
         if (a.y > p.y) != (b.y > p.y) {
-            let x = a.x.raw_shim() as f64 + (p.y - a.y).raw_shim() as f64 * (b.x - a.x).raw_shim() as f64 / (b.y - a.y).raw_shim() as f64;
-            if (p.x.raw_shim() as f64) < x {
+            let x = a.x.as_f64() + (p.y - a.y).as_f64() * (b.x - a.x).as_f64() / (b.y - a.y).as_f64();
+            if (p.x.as_f64()) < x {
                 odd = !odd;
             }
         }

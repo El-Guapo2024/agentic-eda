@@ -1132,7 +1132,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let (meta, design, model) = board::load(dir)?;
     // What `${NAME}` stands for in the board's texts and fields (`crate::text_vars_json`); each of them carries `shown` where it differs from the stored text.
     let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock));
-    let b = eda_ops::Board::new(design.clone(), &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
+    let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
     let view = eda_ops::view::view(&b, &model)?;
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
     let flashed = eda_connectivity::flashed_layers(&design, &model);

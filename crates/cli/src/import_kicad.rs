@@ -48,8 +48,8 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 #[derive(serde::Serialize)]
 struct Meta {
     intent: String,
-    snap_nm: i64,
-    spacing_nm: i64,
+    snap_nm: Nm,
+    spacing_nm: Nm,
 }
 
 const USAGE: &str = "usage: eda import-kicad <board.kicad_pcb | schematic.kicad_sch | file of another EDA format> -o <dir> [--format NAME] [--kind board|schematic] [--layer-map FILE] [--keep-kicad-layer-names] [--report FILE|-] [--no-pair]";
@@ -282,7 +282,7 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     // `board::load` reads `meta.intent` as a plain path (no relativizing to the board dir), so it has to survive the board directory moving relative to the cwd it was
     // created from -- same as `eda board new`.
     let abs_intent = std::fs::canonicalize(&intent_path).unwrap_or(intent_path);
-    let meta = Meta { intent: abs_intent.display().to_string(), snap_nm: model.solver.place_snap_nm.raw_shim(), spacing_nm: model.solver.place_spacing_nm.raw_shim() };
+    let meta = Meta { intent: abs_intent.display().to_string(), snap_nm: model.solver.place_snap_nm, spacing_nm: model.solver.place_spacing_nm };
     std::fs::write(out.join("board.json"), serde_json::to_string_pretty(&meta).expect("meta encodes")).map_err(|e| fail("io", "board.json", e.to_string()))?;
 
     // The libraries kicad-cli made of the footprints and symbols it read, and the tables that name them, so "Update from Library" finds them from this folder.

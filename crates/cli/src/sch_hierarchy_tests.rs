@@ -32,7 +32,7 @@ fn mcu30_board(name: &str) -> PathBuf {
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     dir
 }
@@ -439,7 +439,7 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
         root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
     }
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 
     step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
@@ -641,7 +641,7 @@ fn bus_board(name: &str, bus_label: &str) -> (PathBuf, String, Point) {
     design.schematic = Some(root);
     design.sheet_contents = Some([("child.kicad_sch".to_string(), child)].into_iter().collect());
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     (dir, sheet_id, hl)
 }
@@ -1322,7 +1322,7 @@ fn a_board_without_a_stored_schematic_is_loaded_with_the_derived_one_and_keeps_i
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(35.0), y: Nm::ZERO }, Point { x: mm(35.0), y: mm(35.0) }, Point { x: Nm::ZERO, y: mm(35.0) }], footprints: vec![], modules: vec![] });
     design.drawings = Some(eda_model::ir::DrawingsSection::default());
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     let (d, _) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
     assert!(d.schematic.as_ref().is_some_and(|s| !s.sheets.is_empty() || !s.symbols.is_empty()), "the derived schematic");
@@ -1383,7 +1383,7 @@ fn empty_board(name: &str) -> PathBuf {
     let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     save(&dir, &design).unwrap();
-    let meta = Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+    let meta = Meta { intent: intent.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
     std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     dir
 }

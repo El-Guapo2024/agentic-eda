@@ -370,7 +370,7 @@ pub fn patterns(dir: &Path) -> Value {
         .map(|p| {
             json!({
                 "id": p.id, "name": "Tuning Pattern", "mode": mode_name(p.mode), "layer": p.layer, "nets": nets_of(&scene.design, p),
-                "members": p.member_ids, "info": p.tuning_info(), "status": p.last_status, "length": p.last_tuning_length.raw_shim() as f64 / 1e6,
+                "members": p.member_ids, "info": p.tuning_info(), "status": p.last_status, "length": p.last_tuning_length.mm(),
                 "origin": { "x": p.origin.x, "y": p.origin.y }, "end": { "x": p.end.x, "y": p.end.y }, "locked": locked.contains(&&p.id),
             })
         })
@@ -583,7 +583,7 @@ mod tests {
             drawings: None,
         };
         board::save(dir, &design).unwrap();
-        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
         // (the derived schematic labels every net the intent names, so KiCad names them `/SIG`, `/OTHER`, `/USB_P` ...: the root's path and the intent's
         // name, a pair still a pair)

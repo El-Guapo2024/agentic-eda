@@ -99,8 +99,8 @@ pub(crate) struct Meta {
     pub(crate) intent: String,
     /// Snap and spacing, kept so every command uses the same grid the
     /// board was created on.
-    pub(crate) snap_nm: i64,
-    pub(crate) spacing_nm: i64,
+    pub(crate) snap_nm: Nm,
+    pub(crate) spacing_nm: Nm,
 }
 
 /// A `board.json` as it is on disk: `snap_nm`/`spacing_nm`, or the `snap_um`/`spacing_um` a board written before the IR was in
@@ -110,14 +110,14 @@ impl<'de> serde::Deserialize<'de> for Meta {
         #[derive(serde::Deserialize)]
         struct OnDisk {
             intent: String,
-            snap_nm: Option<i64>,
-            spacing_nm: Option<i64>,
+            snap_nm: Option<Nm>,
+            spacing_nm: Option<Nm>,
             snap_um: Option<i64>,
             spacing_um: Option<i64>,
         }
         let m = OnDisk::deserialize(d)?;
-        let pick = |nm: Option<i64>, um: Option<i64>, name: &'static str| {
-            nm.or(um.map(|v| v * eda_model::units::NM_PER_UM)).ok_or_else(|| serde::de::Error::missing_field(name))
+        let pick = |nm: Option<Nm>, um: Option<i64>, name: &'static str| {
+            nm.or(um.map(|v| Nm::new(v * eda_model::units::NM_PER_UM))).ok_or_else(|| serde::de::Error::missing_field(name))
         };
         Ok(Meta { snap_nm: pick(m.snap_nm, m.snap_um, "snap_nm")?, spacing_nm: pick(m.spacing_nm, m.spacing_um, "spacing_nm")?, intent: m.intent })
     }
@@ -944,7 +944,7 @@ fn print_fill(dir: &Path, want_zone: Option<&str>, want_layer: Option<&str>, as_
             let area_mm2 = fill.map(|f| f.area() / 1e12).unwrap_or(0.0);
 
             if as_json {
-                let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(Nm::from_raw_shim(p.x)), mm(Nm::from_raw_shim(p.y))]).collect()).collect();
+                let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(Nm::new(p.x)), mm(Nm::new(p.y))]).collect()).collect();
                 json_zones.push(serde_json::json!({
                     "id": z.id, "net": z.net, "layer": layer, "filled": filled,
                     "area_mm2": area_mm2, "islands": fragments.len(),
@@ -1353,7 +1353,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
         }
         before
     });
-    let mut board = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
+    let mut board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     // Reorganizing into sheets draws the design's nets anew: let it give a net back the name the intent declared for it.
     if matches!(cmd, Cmd::ReorganizeSheets) {
         if let Some(intent) = std::fs::read_to_string(&meta.intent).ok().and_then(|t| serde_yaml::from_str::<ConstraintModel>(&t).ok()) {
@@ -1394,7 +1394,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
         })
     };
     let judged: &ConstraintModel = refolded.as_ref().unwrap_or(&model);
-    let mut board = if refolded.is_some() { Board::new(board.design().clone(), judged, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm)) } else { board };
+    let mut board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_nm, meta.spacing_nm) } else { board };
     // KiCad 10's drill charts report the board, so a command that changed a hole has made them wrong: they are built again in the same step (`OnModify`'s
     // `RefreshGeneratedTables`), against the board as the command left it -- the model with the footprints a Paste, a pad edit or a new board brought (`refolded`).
     board.refresh_drill_charts();
@@ -1517,14 +1517,14 @@ pub(crate) fn log_activity(dir: &Path, by: &str, line: &str, ok: bool, message: 
 
 /// The command as it would be typed after `eda board`.
 fn cmd_line(c: &Cmd) -> String {
-    let mm = |v: i64| format!("{:.2}", eda_model::units::to_mm(Nm::from_raw_shim(v)));
-    let pts = |pts: &[Point]| pts.iter().map(|p| format!("{},{}", mm(p.x.raw_shim()), mm(p.y.raw_shim()))).collect::<Vec<_>>().join(" ");
+    let mm = |v: Nm| format!("{:.2}", eda_model::units::to_mm(v));
+    let pts = |pts: &[Point]| pts.iter().map(|p| format!("{},{}", mm(p.x), mm(p.y))).collect::<Vec<_>>().join(" ");
     match c {
         Cmd::Place { part, anchor, side } => format!("place {part} --near {anchor} --side {}", side.as_str()),
         Cmd::PlaceEdge { part, edge, fraction } => format!("place {part} --edge {} --along {fraction}", edge.as_str()),
         Cmd::PlaceRegion { part, region } => format!("place {part} --region {}", region.as_str()),
-        Cmd::PlaceAt { part, x, y } => format!("place {part} --at {},{}", mm((*x).raw_shim()), mm((*y).raw_shim())),
-        Cmd::MoveTo { part, x, y } => format!("move {part} --to {},{}", mm((*x).raw_shim()), mm((*y).raw_shim())),
+        Cmd::PlaceAt { part, x, y } => format!("place {part} --at {},{}", mm(*x), mm(*y)),
+        Cmd::MoveTo { part, x, y } => format!("move {part} --to {},{}", mm(*x), mm(*y)),
         Cmd::Nudge { part, dir, steps } => format!("move {part} --dir {} --steps {steps}", dir.as_str()),
         Cmd::Rotate { part, quarter_turns } => format!("rotate {part} --quarters {quarter_turns}"),
         Cmd::Swap { a, b } => format!("swap {a} {b}"),
@@ -1536,36 +1536,36 @@ fn cmd_line(c: &Cmd) -> String {
             format!("pad-zone-overrides {part}.{pad} --connection {zone_connection:?} --gap {thermal_gap:?} --spoke-width {thermal_spoke_width:?} --spoke-angle {thermal_spoke_angle_mdeg:?} --clearance {clearance:?}")
         }
 
-        Cmd::AddTrack { net, layer, width, pts: p } => format!("track add --net {net} --layer {layer} --width {} --pts \"{}\"", mm((*width).raw_shim()), pts(p)),
+        Cmd::AddTrack { net, layer, width, pts: p } => format!("track add --net {net} --layer {layer} --width {} --pts \"{}\"", mm(*width), pts(p)),
         Cmd::DeleteTrack { id } => format!("track delete {id}"),
-        Cmd::SetTrackWidth { id, width } => format!("track width {id} --width {}", mm((*width).raw_shim())),
+        Cmd::SetTrackWidth { id, width } => format!("track width {id} --width {}", mm(*width)),
 
         Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => {
-            format!("via add --net {net} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}", mm((*x).raw_shim()), mm((*y).raw_shim()), mm((*drill).raw_shim()), mm((*diameter).raw_shim()))
+            format!("via add --net {net} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}", mm(*x), mm(*y), mm(*drill), mm(*diameter))
         }
         Cmd::DeleteVia { id } => format!("via delete {id}"),
-        Cmd::MoveVia { id, x, y } => format!("via move {id} --to {},{}", mm((*x).raw_shim()), mm((*y).raw_shim())),
-        Cmd::EditVia { id, diameter, drill } => format!("via edit {id} --dia {} --drill {}", mm((*diameter).raw_shim()), mm((*drill).raw_shim())),
-        Cmd::SetTrackWidthPresets { widths } => format!("board-setup track-widths \"{}\"", widths.iter().map(|w| mm((*w).raw_shim())).collect::<Vec<_>>().join(" ")),
-        Cmd::SetViaPresets { presets } => format!("board-setup via-sizes \"{}\"", presets.iter().map(|p| format!("{}/{}", mm(p.diameter.raw_shim()), mm(p.drill.raw_shim()))).collect::<Vec<_>>().join(" ")),
+        Cmd::MoveVia { id, x, y } => format!("via move {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::EditVia { id, diameter, drill } => format!("via edit {id} --dia {} --drill {}", mm(*diameter), mm(*drill)),
+        Cmd::SetTrackWidthPresets { widths } => format!("board-setup track-widths \"{}\"", widths.iter().map(|w| mm(*w)).collect::<Vec<_>>().join(" ")),
+        Cmd::SetViaPresets { presets } => format!("board-setup via-sizes \"{}\"", presets.iter().map(|p| format!("{}/{}", mm(p.diameter), mm(p.drill))).collect::<Vec<_>>().join(" ")),
         Cmd::EditTracksAndVias { ids, .. } => format!("global-edit tracks-and-vias {}", ids.join(" ")),
 
         Cmd::AddZone { net, layer, outline } => format!("zone add --net {net} --layer {layer} --pts \"{}\"", pts(outline)),
         Cmd::DeleteZone { id } => format!("zone delete {id}"),
         Cmd::EditZone { id, net, layer, clearance, min_thickness, priority, .. } => {
-            format!("zone edit {id} --net {net} --layer {layer} --clearance {} --min-width {} --priority {priority}", mm((*clearance).raw_shim()), mm((*min_thickness).raw_shim()))
+            format!("zone edit {id} --net {net} --layer {layer} --clearance {} --min-width {} --priority {priority}", mm(*clearance), mm(*min_thickness))
         }
         Cmd::SetZoneOutline { id, outline, .. } => format!("zone outline {id} --pts \"{}\"", pts(outline)),
 
         Cmd::AddShape { shape } => format!("shape add --kind {} --layer {}", shape_kind(shape), shape.layer()),
         Cmd::DeleteShape { id } => format!("shape delete {id}"),
-        Cmd::MoveShape { id, dx, dy } => format!("shape move {id} --dx {} --dy {}", mm((*dx).raw_shim()), mm((*dy).raw_shim())),
-        Cmd::EditShape { id, layer, stroke_width, filled } => format!("shape edit {id} --layer {layer} --width {} --filled {filled}", mm((*stroke_width).raw_shim())),
+        Cmd::MoveShape { id, dx, dy } => format!("shape move {id} --dx {} --dy {}", mm(*dx), mm(*dy)),
+        Cmd::EditShape { id, layer, stroke_width, filled } => format!("shape edit {id} --layer {layer} --width {} --filled {filled}", mm(*stroke_width)),
 
-        Cmd::AddText { text } => format!("text add --content {:?} --at {},{} --layer {}", text.content, mm(text.at.x.raw_shim()), mm(text.at.y.raw_shim()), text.layer),
+        Cmd::AddText { text } => format!("text add --content {:?} --at {},{} --layer {}", text.content, mm(text.at.x), mm(text.at.y), text.layer),
         Cmd::EditText { id, content, layer, .. } => format!("text edit {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteText { id } => format!("text delete {id}"),
-        Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm((*x).raw_shim()), mm((*y).raw_shim())),
+        Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, .. } => {
             format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if *layer_defaults { " --layer-defaults" } else { "" })
         }
@@ -1581,11 +1581,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::RemoveFromGroup { ids } => format!("group remove-from {}", ids.join(" ")),
         Cmd::EditGroup { id, name, member_ids, design_block } => format!("group edit {id} --name {name:?} --members {}{}", member_ids.join(" "), design_block.as_ref().map_or(String::new(), |b| format!(" --design-block {b:?}"))),
         Cmd::LinkDesignBlock { ids, block } => format!("design-block link {block} {}", ids.join(" ")),
-        Cmd::PlaceDesignBlock { block, at, as_group, group_name, text } => format!("design-block place {block} --at {},{}{}{} ({} bytes of KiCad text)", mm(at.x.raw_shim()), mm(at.y.raw_shim()), if *as_group { " --group" } else { "" }, if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") }, text.len()),
+        Cmd::PlaceDesignBlock { block, at, as_group, group_name, text } => format!("design-block place {block} --at {},{}{}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *as_group { " --group" } else { "" }, if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") }, text.len()),
         Cmd::CreateArray { ids, arrange, .. } => format!("array{} {}", if *arrange { " --arrange" } else { "" }, ids.join(" ")),
         Cmd::AddDimension { .. } => "dimension add".to_string(),
         Cmd::DeleteDimension { id } => format!("dimension delete {id}"),
-        Cmd::MoveDimension { id, dx, dy } => format!("dimension move {id} --by {},{}", mm((*dx).raw_shim()), mm((*dy).raw_shim())),
+        Cmd::MoveDimension { id, dx, dy } => format!("dimension move {id} --by {},{}", mm(*dx), mm(*dy)),
         Cmd::EditDimension { id, .. } => format!("dimension edit {id}"),
         Cmd::SetDimensionSettings { .. } => "board-setup dimensions".to_string(),
         Cmd::SetNetClasses { settings } => format!("board-setup net-classes ({} classes)", settings.classes.len() + 1),
@@ -1613,9 +1613,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::ZoneCutout { id, cutout } => format!("zone cutout {id} --pts \"{}\"", pts(cutout)),
         Cmd::MergeZones { ids } => format!("zone merge {}", ids.join(" ")),
         Cmd::SetZonePriority { id, to } => format!("zone priority {id} --to {}", serde_json::to_value(to).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()),
-        Cmd::SetAuxOrigin { at: Some(p) } => format!("drill-origin --at {},{}", mm(p.x.raw_shim()), mm(p.y.raw_shim())),
+        Cmd::SetAuxOrigin { at: Some(p) } => format!("drill-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetAuxOrigin { at: None } => "drill-origin --reset".to_string(),
-        Cmd::SetGridOrigin { at: Some(p) } => format!("grid-origin --at {},{}", mm(p.x.raw_shim()), mm(p.y.raw_shim())),
+        Cmd::SetGridOrigin { at: Some(p) } => format!("grid-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetGridOrigin { at: None } => "grid-origin --reset".to_string(),
         Cmd::SetBoardPage { page, title_block } => format!("page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
         Cmd::SetSchematicPage { page, title_block } => format!("schematic page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
@@ -1626,25 +1626,25 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
             format!("paste --tracks {} --vias {} --zones {} --shapes {} --texts {}", tracks.len(), vias.len(), zones.len(), shapes.len(), texts.len())
         }
-        Cmd::PasteClipboard { text, at } => format!("paste-clipboard --at {},{} ({} bytes of KiCad text)", mm(at.x.raw_shim()), mm(at.y.raw_shim()), text.len()),
+        Cmd::PasteClipboard { text, at } => format!("paste-clipboard --at {},{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), text.len()),
         Cmd::ImportGraphics(r) => format!("import-graphics --format {:?} --layer {} --scale {} --offset {},{} ({} bytes of file)", r.format, r.layer, r.scale, r.offset_x_nm as f64 / 1.0e6, r.offset_y_nm as f64 / 1.0e6, r.text.len()),
         Cmd::ImportSchGraphics(r) => format!("import-sch-graphics --format {:?} --scale {} --offset {},{} ({} bytes of file)", r.format, r.scale, r.offset_x_nm as f64 / 1.0e6, r.offset_y_nm as f64 / 1.0e6, r.text.len()),
         Cmd::ImportSymbolGraphics(r) => format!("import-symbol-graphics {} --unit {} --format {:?} --scale {} --offset {},{} ({} bytes of file)", r.lib_id, r.unit, r.format, r.scale, r.offset_x_nm as f64 / 1.0e6, r.offset_y_nm as f64 / 1.0e6, r.text.len()),
-        Cmd::PasteSpecial { text, at, mode, clear_nets } => format!("paste-special --at {},{} --references {mode:?}{} ({} bytes of KiCad text)", mm(at.x.raw_shim()), mm(at.y.raw_shim()), if *clear_nets { " --clear-nets" } else { "" }, text.len()),
+        Cmd::PasteSpecial { text, at, mode, clear_nets } => format!("paste-special --at {},{} --references {mode:?}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *clear_nets { " --clear-nets" } else { "" }, text.len()),
         Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => format!(
             "move-exact {} --by {},{} --rotate {:.3} --pivot {}",
             parts.join(" "),
-            mm((*dx).raw_shim()),
-            mm((*dy).raw_shim()),
+            mm(*dx),
+            mm(*dy),
             *rotate_millideg as f64 / 1000.0,
-            pivot.map_or("self".to_string(), |p| format!("{},{}", mm(p.x.raw_shim()), mm(p.y.raw_shim())))
+            pivot.map_or("self".to_string(), |p| format!("{},{}", mm(p.x), mm(p.y)))
         ),
-        Cmd::MoveItems { ids, dx, dy } => format!("move-items {} --by {},{}", ids.join(" "), mm((*dx).raw_shim()), mm((*dy).raw_shim())),
-        Cmd::RotateItems { ids, pivot, angle_millideg } => format!("rotate-items {} --by {:.3} --pivot {},{}", ids.join(" "), *angle_millideg as f64 / 1000.0, mm(pivot.x.raw_shim()), mm(pivot.y.raw_shim())),
-        Cmd::FlipItems { ids, pivot, direction } => format!("flip-items {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x.raw_shim()), mm(pivot.y.raw_shim())),
-        Cmd::MirrorTracks { ids, pivot, direction } => format!("mirror-tracks {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x.raw_shim()), mm(pivot.y.raw_shim())),
+        Cmd::MoveItems { ids, dx, dy } => format!("move-items {} --by {},{}", ids.join(" "), mm(*dx), mm(*dy)),
+        Cmd::RotateItems { ids, pivot, angle_millideg } => format!("rotate-items {} --by {:.3} --pivot {},{}", ids.join(" "), *angle_millideg as f64 / 1000.0, mm(pivot.x), mm(pivot.y)),
+        Cmd::FlipItems { ids, pivot, direction } => format!("flip-items {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x), mm(pivot.y)),
+        Cmd::MirrorTracks { ids, pivot, direction } => format!("mirror-tracks {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x), mm(pivot.y)),
         Cmd::EditTrack { id, start, end } => {
-            let at = |p: &Option<Point>| p.map(|p| format!("{},{}", mm(p.x.raw_shim()), mm(p.y.raw_shim())));
+            let at = |p: &Option<Point>| p.map(|p| format!("{},{}", mm(p.x), mm(p.y)));
             format!("track edit {id}{}{}", at(start).map(|s| format!(" --start {s}")).unwrap_or_default(), at(end).map(|e| format!(" --end {e}")).unwrap_or_default())
         }
         Cmd::SetItemNet { ids, net } => format!("net-set {} --net {net}", ids.join(" ")),
@@ -1680,38 +1680,38 @@ fn cmd_line(c: &Cmd) -> String {
         // activity.jsonl's own human-readable log line, same role `mm`/
         // `pts` already play above for the PCB verbs, not a promise that
         // typing it back in works.
-        Cmd::MoveSymbol { id, x, y, .. } => format!("schematic move {id} --to {},{}", mm((*x).raw_shim()), mm((*y).raw_shim())),
-        Cmd::DragSymbol { id, x, y, .. } => format!("schematic drag {id} --to {},{}", mm((*x).raw_shim()), mm((*y).raw_shim())),
+        Cmd::MoveSymbol { id, x, y, .. } => format!("schematic move {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::DragSymbol { id, x, y, .. } => format!("schematic drag {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::RotateSymbol { id, quarter_turns, .. } => format!("schematic rotate {id} --quarters {quarter_turns}"),
         Cmd::MirrorSymbol { id, .. } => format!("schematic mirror {id}"),
         Cmd::MirrorSymbolVertical { id, .. } => format!("schematic mirror-vertical {id}"),
         Cmd::DeleteSymbol { id, .. } => format!("schematic delete-symbol {id}"),
         Cmd::AddWire { pts: p, bus } => format!("schematic {} --pts \"{}\"", if *bus { "bus" } else { "wire" }, pts(p)),
         Cmd::DeleteWire { id } => format!("schematic delete-wire {id}"),
-        Cmd::AddNoConnect { at } => format!("schematic no-connect --at {},{}", mm(at.x.raw_shim()), mm(at.y.raw_shim())),
+        Cmd::AddNoConnect { at } => format!("schematic no-connect --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteNoConnect { id } => format!("schematic delete-no-connect {id}"),
-        Cmd::AddBusEntry { at, size } => format!("schematic bus-entry --at {},{} --size {},{}", mm(at.x.raw_shim()), mm(at.y.raw_shim()), mm(size.x.raw_shim()), mm(size.y.raw_shim())),
+        Cmd::AddBusEntry { at, size } => format!("schematic bus-entry --at {},{} --size {},{}", mm(at.x), mm(at.y), mm(size.x), mm(size.y)),
         Cmd::DeleteBusEntry { id } => format!("schematic delete-bus-entry {id}"),
-        Cmd::AddJunction { at } => format!("schematic junction --at {},{}", mm(at.x.raw_shim()), mm(at.y.raw_shim())),
+        Cmd::AddJunction { at } => format!("schematic junction --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteJunction { id } => format!("schematic delete-junction {id}"),
         Cmd::AddSchLine { pts, .. } => format!("schematic line --points {}", pts.len()),
         Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
-        Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x.raw_shim()), mm(at.y.raw_shim())),
+        Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::ReplaceBoard { name, text, .. } => format!("import-board {name:?} ({} bytes of .kicad_pcb)", text.len()),
         Cmd::Specctra { name, session } => format!("import-ses {name:?} ({} bytes of session)", session.len()),
         Cmd::ReplaceSchematic { name, content } => format!("import-schematic {name:?} ({} sheet(s))", 1 + content.screens.len()),
         Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, as_group, group_name, block, .. } => format!(
             "schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}{}{}{}",
             if *as_sheet { "--as-sheet" } else { "--contents" },
-            mm(at.x.raw_shim()),
-            mm(at.y.raw_shim()),
+            mm(at.x),
+            mm(at.y),
             if *keep_annotations { " --keep-annotations" } else { "" },
             if *as_group { " --group" } else { "" },
             if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") },
             if block.is_empty() { String::new() } else { format!(" --design-block {block:?}") },
         ),
         Cmd::SwapSchItems { a, b } => format!("schematic swap {a} {b}"),
-        Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm((*dx).raw_shim()), mm((*dy).raw_shim())),
+        Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm(*dx), mm(*dy)),
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
         Cmd::PcbItem(c) => c.describe(),
@@ -1726,9 +1726,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
         Cmd::SetIntersheetRefs { settings } => format!("schematic intersheet-refs {}", if settings.show { "shown" } else { "hidden" }),
         Cmd::SetSimulator { workbook, .. } => format!("schematic simulator{}", if workbook.is_some() { " (workbook)" } else { "" }),
-        Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x.raw_shim()), mm(at.y.raw_shim())),
+        Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
-        Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x.raw_shim()), mm(at.y.raw_shim())),
+        Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteSchText { id } => format!("schematic text delete {id}"),
         Cmd::EditSymbolFields { id, value, footprint, datasheet } => format!(
             "schematic edit-fields {id}{}{}{}",
@@ -1741,11 +1741,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::ReplaceText { search, items, all_sheets } => format!("schematic replace {:?} {:?}{}{}", search.find, search.replace, items.as_ref().map(|i| format!(" --items {}", i.len())).unwrap_or_default(), if *all_sheets { " --all-sheets" } else { "" }),
         Cmd::SetErcPinMapCell { a, b, level } => format!("schematic erc-pin-map {a} {b} {level}"),
         Cmd::ResetErcPinMap => "schematic erc-pin-map-reset".to_string(),
-        Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x.raw_shim()), mm(at.y.raw_shim()), *rot_millideg as f64 / 1000.0),
+        Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
-        Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x.raw_shim()), mm(at.y.raw_shim())),
+        Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::EmbedLibSymbol { symbol } => format!("schematic keep-symbol {:?}", symbol.lib_id),
-        Cmd::PlaceFootprint { footprint, at, reference, .. } => format!("footprint place {footprint:?} --at {},{} --ref {reference:?}", mm(at.x.raw_shim()), mm(at.y.raw_shim())),
+        Cmd::PlaceFootprint { footprint, at, reference, .. } => format!("footprint place {footprint:?} --at {},{} --ref {reference:?}", mm(at.x), mm(at.y)),
         Cmd::ExchangeFootprints { references, footprint, .. } => match footprint {
             Some(f) => format!("footprint change {} --to {f:?}", references.join(",")),
             None => format!("footprint update {}", references.join(",")),
@@ -1794,10 +1794,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::RenameLibraryFootprint { name, new_name, overwrite } => format!("footprint rename {name:?} {new_name:?}{}", if *overwrite { " --overwrite" } else { "" }),
         Cmd::RepairFootprint { name } => format!("footprint repair {name:?}"),
         Cmd::EditFootprintProperties { name, description, .. } => format!("footprint properties {name:?} --description {description:?}"),
-        Cmd::SetFootprintAnchor { name, at } => format!("footprint anchor {name:?} --at {},{}", mm(at.x.raw_shim()), mm(at.y.raw_shim())),
+        Cmd::SetFootprintAnchor { name, at } => format!("footprint anchor {name:?} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::UpdateFootprintOnBoard { name } => format!("footprint update-on-board {name:?}"),
-        Cmd::AddPad { footprint, pad } => format!("pad add {footprint:?} --number {:?} --at {},{}", pad.number, mm(pad.at.x.raw_shim()), mm(pad.at.y.raw_shim())),
-        Cmd::MovePad { footprint, id, x, y } => format!("pad move {footprint:?} {id} --to {},{}", mm((*x).raw_shim()), mm((*y).raw_shim())),
+        Cmd::AddPad { footprint, pad } => format!("pad add {footprint:?} --number {:?} --at {},{}", pad.number, mm(pad.at.x), mm(pad.at.y)),
+        Cmd::MovePad { footprint, id, x, y } => format!("pad move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::RotatePad { footprint, id, quarter_turns } => format!("pad rotate {footprint:?} {id} --quarters {quarter_turns}"),
         Cmd::DeletePad { footprint, id } => format!("pad delete {footprint:?} {id}"),
         Cmd::EditPad { footprint, id, pad } => format!("pad edit {footprint:?} {id} --number {:?}", pad.number),
@@ -1806,12 +1806,12 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::RenumberPads { footprint, start, prefix, step } => format!("pad renumber {footprint:?} --start {start} --prefix {prefix:?} --step {step}"),
         Cmd::AddFootprintGraphic { footprint, shape } => format!("footprint-shape add {footprint:?} --kind {} --layer {}", shape_kind(shape), shape.layer()),
         Cmd::DeleteFootprintGraphic { footprint, id } => format!("footprint-shape delete {footprint:?} {id}"),
-        Cmd::MoveFootprintGraphic { footprint, id, dx, dy } => format!("footprint-shape move {footprint:?} {id} --dx {} --dy {}", mm((*dx).raw_shim()), mm((*dy).raw_shim())),
-        Cmd::EditFootprintGraphic { footprint, id, layer, stroke_width, filled } => format!("footprint-shape edit {footprint:?} {id} --layer {layer} --width {} --filled {filled}", mm((*stroke_width).raw_shim())),
-        Cmd::AddFootprintText { footprint, text } => format!("footprint-text add {footprint:?} --content {:?} --at {},{}", text.content, mm(text.at.x.raw_shim()), mm(text.at.y.raw_shim())),
+        Cmd::MoveFootprintGraphic { footprint, id, dx, dy } => format!("footprint-shape move {footprint:?} {id} --dx {} --dy {}", mm(*dx), mm(*dy)),
+        Cmd::EditFootprintGraphic { footprint, id, layer, stroke_width, filled } => format!("footprint-shape edit {footprint:?} {id} --layer {layer} --width {} --filled {filled}", mm(*stroke_width)),
+        Cmd::AddFootprintText { footprint, text } => format!("footprint-text add {footprint:?} --content {:?} --at {},{}", text.content, mm(text.at.x), mm(text.at.y)),
         Cmd::EditFootprintText { footprint, id, content, layer, .. } => format!("footprint-text edit {footprint:?} {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteFootprintText { footprint, id } => format!("footprint-text delete {footprint:?} {id}"),
-        Cmd::MoveFootprintText { footprint, id, x, y } => format!("footprint-text move {footprint:?} {id} --to {},{}", mm((*x).raw_shim()), mm((*y).raw_shim())),
+        Cmd::MoveFootprintText { footprint, id, x, y } => format!("footprint-text move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::CreateFootprintArray { footprint, ids, arrange, .. } => format!("footprint-array {footprint:?} --items {}{}", ids.len(), if *arrange { " --arrange" } else { "" }),
         Cmd::ExplodePad { footprint, id } => format!("pad-explode {footprint:?} {id}"),
         Cmd::RecombinePad { footprint } => format!("pad-recombine {footprint:?}"),
@@ -2076,14 +2076,14 @@ fn parse_region(s: &str) -> Result<Region, Vec<CheckResult>> {
 }
 
 /// A millimetre value, as every position/size flag below takes it.
-fn mm_arg(s: &str) -> Result<i64, Vec<CheckResult>> {
-    s.trim().parse::<f64>().map(|v| eda_model::units::from_mm(v).raw_shim()).map_err(|_| fail("board_usage", s, "expected a number, in millimetres"))
+fn mm_arg(s: &str) -> Result<Nm, Vec<CheckResult>> {
+    s.trim().parse::<f64>().map(eda_model::units::from_mm).map_err(|_| fail("board_usage", s, "expected a number, in millimetres"))
 }
 
 /// "x,y" in millimetres.
 fn parse_point_mm(s: &str) -> Result<Point, Vec<CheckResult>> {
     let (x, y) = s.split_once(',').ok_or_else(|| fail("board_usage", s, "expected x,y in millimetres"))?;
-    Ok(Point { x: Nm::from_raw_shim(mm_arg(x)?), y: Nm::from_raw_shim(mm_arg(y)?) })
+    Ok(Point { x: mm_arg(x)?, y: mm_arg(y)? })
 }
 
 /// A whitespace-separated run of "x,y" pairs, millimetres: `--pts "0,0 10,0 10,10"`.
@@ -2097,31 +2097,31 @@ fn parse_angle(s: Option<&str>) -> Result<u32, Vec<CheckResult>> {
     Ok(((deg * 1000.0).round() as i64).rem_euclid(360_000) as u32)
 }
 
-fn parse_shape(kind: &str, layer: String, stroke_width: i64, filled: bool, pts: Vec<Point>) -> Result<Shape, Vec<CheckResult>> {
+fn parse_shape(kind: &str, layer: String, stroke_width: Nm, filled: bool, pts: Vec<Point>) -> Result<Shape, Vec<CheckResult>> {
     Ok(match kind {
         "segment" => {
             let [start, end] = two_pts(&pts, "segment", "start,end")?;
-            Shape::Segment { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start, end }
+            Shape::Segment { id: String::new(), layer, stroke_width, filled, start, end }
         }
         "arc" => {
             if pts.len() != 3 {
                 return Err(fail("board_usage", "--pts", "an arc needs exactly 3 points: start,mid,end"));
             }
-            Shape::Arc { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start: pts[0], mid: pts[1], end: pts[2] }
+            Shape::Arc { id: String::new(), layer, stroke_width, filled, start: pts[0], mid: pts[1], end: pts[2] }
         }
         "rect" => {
             let [start, end] = two_pts(&pts, "rect", "start,end")?;
-            Shape::Rect { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, start, end }
+            Shape::Rect { id: String::new(), layer, stroke_width, filled, start, end }
         }
         "circle" => {
             let [center, end] = two_pts(&pts, "circle", "center,end")?;
-            Shape::Circle { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, center, end }
+            Shape::Circle { id: String::new(), layer, stroke_width, filled, center, end }
         }
         "polygon" => {
             if pts.len() < 3 {
                 return Err(fail("board_usage", "--pts", "a polygon needs at least 3 points"));
             }
-            Shape::Polygon { id: String::new(), layer, stroke_width: Nm::from_raw_shim(stroke_width), filled, pts }
+            Shape::Polygon { id: String::new(), layer, stroke_width, filled, pts }
         }
         other => return Err(fail("board_usage", other, "--kind must be segment, arc, rect, circle or polygon")),
     })
@@ -2167,8 +2167,8 @@ pub fn run(
             let abs = std::fs::canonicalize(intent).unwrap_or_else(|_| PathBuf::from(intent));
             let meta = Meta {
                 intent: abs.display().to_string(),
-                snap_nm: model.solver.place_snap_nm.raw_shim(),
-                spacing_nm: model.solver.place_spacing_nm.raw_shim(),
+                snap_nm: model.solver.place_snap_nm,
+                spacing_nm: model.solver.place_spacing_nm,
             };
             std::fs::write(meta_path(&out), serde_json::to_string_pretty(&meta).expect("meta encodes"))
                 .map_err(|e| fail("board_write", "board.json", e.to_string()))?;
@@ -2178,12 +2178,12 @@ pub fn run(
         }
         "status" => {
             let (meta, design, model) = load(&dir)?;
-            let board = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
+            let board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
             print_status(&board, &model)
         }
         "check" => {
             let (meta, design, model) = load(&dir)?;
-            let board = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
+            let board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
             let checks = judged_checks(&board, &model);
             let failed: Vec<CheckResult> = checks.iter().filter(|c| matches!(c.status, eda_model::CheckStatus::Fail)).cloned().collect();
             for c in &failed {
@@ -2209,10 +2209,10 @@ pub fn run(
                 Cmd::Place { part, anchor: n, side: parse_dir(&side)? }
             } else if let Some(at) = flag(rest, "--at") {
                 let (x, y) = at.split_once(',').ok_or_else(|| fail("board_usage", "--at", "--at takes x,y in millimetres"))?;
-                let mm = |s: &str| -> Result<i64, Vec<CheckResult>> {
-                    s.trim().parse::<f64>().map(|v| eda_model::units::from_mm(v).raw_shim()).map_err(|_| fail("board_usage", "--at", "x and y must be numbers, in millimetres"))
+                let mm = |s: &str| -> Result<Nm, Vec<CheckResult>> {
+                    s.trim().parse::<f64>().map(eda_model::units::from_mm).map_err(|_| fail("board_usage", "--at", "x and y must be numbers, in millimetres"))
                 };
-                Cmd::PlaceAt { part, x: Nm::from_raw_shim(mm(x)?), y: Nm::from_raw_shim(mm(y)?) }
+                Cmd::PlaceAt { part, x: mm(x)?, y: mm(y)? }
             } else {
                 return Err(fail("board_usage", "place", "say where: --region R, --edge E, --near P --side S, or --at x,y"));
             };
@@ -2222,10 +2222,10 @@ pub fn run(
             let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "move", "usage: eda board move <REF> (--dir north|south|east|west [--steps N] | --to x,y)"))?;
             if let Some(to) = flag(rest, "--to") {
                 let (x, y) = to.split_once(',').ok_or_else(|| fail("board_usage", "--to", "--to takes x,y in millimetres"))?;
-                let mm = |s: &str| -> Result<i64, Vec<CheckResult>> {
-                    s.trim().parse::<f64>().map(|v| eda_model::units::from_mm(v).raw_shim()).map_err(|_| fail("board_usage", "--to", "x and y must be numbers, in millimetres"))
+                let mm = |s: &str| -> Result<Nm, Vec<CheckResult>> {
+                    s.trim().parse::<f64>().map(eda_model::units::from_mm).map_err(|_| fail("board_usage", "--to", "x and y must be numbers, in millimetres"))
                 };
-                return step_with(&dir, Cmd::MoveTo { part, x: Nm::from_raw_shim(mm(x)?), y: Nm::from_raw_shim(mm(y)?) }, strict, &actor()).map(|s| eprintln!("{s}"));
+                return step_with(&dir, Cmd::MoveTo { part, x: mm(x)?, y: mm(y)? }, strict, &actor()).map(|s| eprintln!("{s}"));
             }
             let d = flag(rest, "--dir").ok_or_else(|| fail("board_usage", "move", "move needs --dir north|south|east|west, or --to x,y"))?;
             let steps = flag(rest, "--steps").and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -2255,7 +2255,7 @@ pub fn run(
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "track add", "needs --layer L"))?;
                 let width = mm_arg(&flag(rest, "--width").ok_or_else(|| fail("board_usage", "track add", "needs --width, mm"))?)?;
                 let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "track add", "needs --pts \"x1,y1 x2,y2 ...\", mm"))?)?;
-                step_with(&dir, Cmd::AddTrack { net, layer, width: Nm::from_raw_shim(width), pts }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::AddTrack { net, layer, width, pts }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "track delete", "usage: eda board track delete <id>"))?;
@@ -2264,7 +2264,7 @@ pub fn run(
             "width" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "track width", "usage: eda board track width <id> --width mm"))?;
                 let width = mm_arg(&flag(rest, "--width").ok_or_else(|| fail("board_usage", "track width", "needs --width, mm"))?)?;
-                step_with(&dir, Cmd::SetTrackWidth { id, width: Nm::from_raw_shim(width) }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::SetTrackWidth { id, width }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             other => Err(fail("board_usage", other, "usage: eda board track <add|delete|width> ...")),
         },
@@ -2276,7 +2276,7 @@ pub fn run(
                 let diameter = mm_arg(&flag(rest, "--dia").ok_or_else(|| fail("board_usage", "via add", "needs --dia, mm"))?)?;
                 let from_layer = flag(rest, "--from").ok_or_else(|| fail("board_usage", "via add", "needs --from LAYER"))?;
                 let to_layer = flag(rest, "--to-layer").ok_or_else(|| fail("board_usage", "via add", "needs --to-layer LAYER"))?;
-                step_with(&dir, Cmd::AddVia { net, x, y, drill: Nm::from_raw_shim(drill), diameter: Nm::from_raw_shim(diameter), from_layer, to_layer }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "via delete", "usage: eda board via delete <id>"))?;
@@ -2315,7 +2315,7 @@ pub fn run(
                 // No --width: the line thickness Board Setup > Text & Graphics > Defaults gives the layer's class (`BOARD_DESIGN_SETTINGS::GetLineThickness`).
                 let stroke_width = match flag(rest, "--width") {
                     Some(w) => mm_arg(&w)?,
-                    None => (load(&dir)?.2.board.text_graphics.line_thickness_nm(&layer)).raw_shim(),
+                    None => load(&dir)?.2.board.text_graphics.line_thickness_nm(&layer),
                 };
                 let filled = has(rest, "--filled");
                 let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "shape add", "needs --pts \"x,y ...\", mm"))?)?;
@@ -2330,7 +2330,7 @@ pub fn run(
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "shape move", "usage: eda board shape move <id> --dx mm --dy mm"))?;
                 let dx = mm_arg(&flag(rest, "--dx").ok_or_else(|| fail("board_usage", "shape move", "needs --dx, mm"))?)?;
                 let dy = mm_arg(&flag(rest, "--dy").ok_or_else(|| fail("board_usage", "shape move", "needs --dy, mm"))?)?;
-                step_with(&dir, Cmd::MoveShape { id, dx: Nm::from_raw_shim(dx), dy: Nm::from_raw_shim(dy) }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::MoveShape { id, dx, dy }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             other => Err(fail("board_usage", other, "usage: eda board shape <add|delete|move> ...")),
         },
@@ -2344,15 +2344,15 @@ pub fn run(
                 let defaults = load(&dir)?.2.board.text_graphics;
                 let size_nm = match flag(rest, "--size") {
                     Some(v) => mm_arg(&v)?,
-                    None => (defaults.text_size_nm(&layer).1).raw_shim(),
+                    None => defaults.text_size_nm(&layer).1,
                 };
                 let stroke_width = match flag(rest, "--width") {
                     Some(v) => mm_arg(&v)?,
-                    None => (defaults.text_thickness_nm(&layer)).raw_shim(),
+                    None => defaults.text_thickness_nm(&layer),
                 };
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
-                let text = Text { id: String::new(), content, at, angle, layer, size_nm: Nm::from_raw_shim(size_nm), stroke_width: Nm::from_raw_shim(stroke_width), justify, mirror };
+                let text = Text { id: String::new(), content, at, angle, layer, size_nm, stroke_width, justify, mirror };
                 step_with(&dir, Cmd::AddText { text }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "edit" => {
@@ -2364,7 +2364,7 @@ pub fn run(
                 let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
-                step_with(&dir, Cmd::EditText { id, content, angle, layer, size_nm: Nm::from_raw_shim(size_nm), stroke_width: Nm::from_raw_shim(stroke_width), justify, mirror }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::EditText { id, content, angle, layer, size_nm, stroke_width, justify, mirror }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text delete", "usage: eda board text delete <id>"))?;
@@ -2535,7 +2535,7 @@ pub(crate) mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -2550,7 +2550,7 @@ pub(crate) mod tests {
         step(&dir, cmd, false, "test").expect("adding the track itself is legal; only the copper it creates is bad");
 
         let (meta, design, model) = load(&dir).unwrap();
-        let board = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
+        let board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
         let checks = all_checks(&board, &model);
         assert!(
             checks.iter().any(|c| c.check == "routing_clearance" && matches!(c.status, CheckStatus::Fail)),
@@ -3843,7 +3843,7 @@ pub(crate) mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -4156,7 +4156,7 @@ pub(crate) mod tests {
             check: v["type"].as_str().unwrap().to_string(),
             items: strings("uuid"),
             ids: strings("id"),
-            positions_nm: v["marker_nm"].as_array().unwrap().iter().map(|p| [Nm::from_raw_shim(p[0].as_i64().unwrap()), Nm::from_raw_shim(p[1].as_i64().unwrap())]).collect(),
+            positions_nm: v["marker_nm"].as_array().unwrap().iter().map(|p| [Nm::new(p[0].as_i64().unwrap()), Nm::new(p[1].as_i64().unwrap())]).collect(),
             comment: comment.to_string(),
         }
     }
@@ -4750,7 +4750,7 @@ pub(crate) mod tests {
         };
         let base = counts(&dir);
         // On the schematic grid (50 mil, as the studio snaps a click): a pin off it is `endpoint_off_grid`, and rightly.
-        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: Nm::from_raw_shim(157 * 1_270_000), y: Nm::from_raw_shim(16 * 1_270_000) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: mm(1.27) * 157, y: mm(1.27) * 16 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         let after = counts(&dir);
         let grew = |kind: &str| after.get(kind).copied().unwrap_or(0).saturating_sub(base.get(kind).copied().unwrap_or(0));
         for kind in ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues", "unannotated", "endpoint_off_grid", "duplicate_reference", "unresolved_variable", "different_unit_footprint", "different_unit_net", "pin_to_pin", "bus_to_net_conflict"] {
@@ -4775,9 +4775,9 @@ pub(crate) mod tests {
         }
         let dir = scratch("pcb_installed_footprint");
         setup_mcu30_flat(&dir);
-        let place = |x: i64| Cmd::PlaceFootprint { footprint: name.into(), at: Point { x: Nm::from_raw_shim(x), y: mm(30.0) }, reference: String::new(), value: String::new(), definition: None };
-        step(&dir, place(40_000_000), false, "test").unwrap();
-        step(&dir, place(60_000_000), false, "test").unwrap();
+        let place = |x: Nm| Cmd::PlaceFootprint { footprint: name.into(), at: Point { x, y: mm(30.0) }, reference: String::new(), value: String::new(), definition: None };
+        step(&dir, place(mm(40.0)), false, "test").unwrap();
+        step(&dir, place(mm(60.0)), false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let parts: Vec<&str> = design.drawings.as_ref().unwrap().board_parts.iter().map(|p| p.reference.as_str()).collect();
         assert_eq!(parts, ["H1", "H2"]);
@@ -5201,7 +5201,7 @@ pub(crate) mod tests {
         let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
         design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -5239,7 +5239,7 @@ pub(crate) mod tests {
         let intent_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mcu_board_30plus.yaml");
         let design: eda_model::ir::Design = serde_json::from_str(include_str!("../tests/fixtures/mcu30_legacy_flat.design.json")).unwrap();
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 600_000 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.6) };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
@@ -6149,7 +6149,7 @@ pub(crate) mod tests {
         let mut sch = eda_model::ir::SchematicSection { symbols: vec![sym("R1", "TEST:R2", 1, pt(mm(20.0), mm(20.0))), sym("U2", "TEST:DUAL", 1, pt(mm(60.0), mm(20.0))), sym("U2", "TEST:DUAL", 2000, pt(mm(100.0), mm(20.0)))], imported_from_kicad: true, ..Default::default() };
         // a pin is 2.54 mm above or below its symbol's origin: a wire 10 mm further out to a label
         let mut wire_to_label = |tip: Point, up: bool, label: &str| {
-            let end = pt(tip.x, tip.y + Nm::from_raw_shim(if up { -10_000_000 } else { 10_000_000 }));
+            let end = pt(tip.x, tip.y + if up { mm(-10.0) } else { mm(10.0) });
             sch.wires.push(eda_model::ir::Wire { id: format!("wire_{label}"), net: label.into(), pins: vec![], pts: vec![tip, end], bus: false });
             sch.labels.push(eda_model::ir::NetLabel { id: format!("lbl_{label}"), net: label.into(), at: end, kind: eda_model::ir::LabelKind::Local });
         };
@@ -6171,7 +6171,7 @@ pub(crate) mod tests {
             drawings: None,
         };
         save(dir, &design).unwrap();
-        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+        let meta = Meta { intent: intent_path.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 

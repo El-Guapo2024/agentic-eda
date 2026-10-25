@@ -157,7 +157,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
     let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: Nm::ZERO, mode };
     let cmd = if sheet.is_empty() { paste } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(paste) } };
     let drawn_before = design.clone();
-    let mut tried = Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
+    let mut tried = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     if let Err(e) = tried.apply(&cmd) {
         return err(board::reasons(&e));
     }
@@ -251,7 +251,7 @@ mod tests {
         // A board always has a placement section; this one has no part on the PCB yet.
         design.placement = Some(eda_model::ir::PlacementSection { outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }], footprints: vec![], modules: vec![] });
         board::save(dir, &design).unwrap();
-        let meta = board::Meta { intent: intent.display().to_string(), snap_nm: 100_000, spacing_nm: 300_000 };
+        let meta = board::Meta { intent: intent.display().to_string(), snap_nm: mm(0.1), spacing_nm: mm(0.3) };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 

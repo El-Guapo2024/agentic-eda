@@ -3,7 +3,6 @@
 //! of the board with no answer given, and the reply is `{ "ok": true, "pads": ["R2.1", ..] }` (empty: nothing to ask, the swap can go) or `{ "ok": false, "message": .. }` (the
 //! swap is refused, and why). Nothing on the board changes.
 
-use eda_model::units::Nm;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -26,7 +25,7 @@ pub(crate) fn preview(dir: &Path, body: &[u8]) -> Value {
         Ok(loaded) => loaded,
         Err(e) => return fail(crate::board::reasons(&e)),
     };
-    let mut board = eda_ops::Board::new(design, &model, Nm::from_raw_shim(meta.snap_nm), Nm::from_raw_shim(meta.spacing_nm));
+    let mut board = eda_ops::Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
     match board.apply(&cmd) {
         Ok(()) => json!({ "ok": true, "pads": [] }),
         Err(failures) => match failures.iter().find(|c| c.check == "ops_swap_unselected_pads") {

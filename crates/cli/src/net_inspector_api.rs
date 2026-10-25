@@ -85,7 +85,7 @@ fn contains(shape: &Shape, p: Point) -> bool {
 
 /// Where the segment from `inside` (in the shape) to `outside` (not) leaves the shape, to a nanometre (`SHAPE::Collide( SEG, 0, .., &loc )`).
 fn exit_point(inside_pt: Point, outside: Point, inside: &dyn Fn(Point) -> bool) -> Point {
-    let at = |t: f64| Point { x: inside_pt.x + Nm::from_raw_shim(((outside.x - inside_pt.x).raw_shim() as f64 * t).round() as i64), y: inside_pt.y + Nm::from_raw_shim(((outside.y - inside_pt.y).raw_shim() as f64 * t).round() as i64) };
+    let at = |t: f64| Point { x: inside_pt.x + Nm::kiround((outside.x - inside_pt.x).as_f64() * t), y: inside_pt.y + Nm::kiround((outside.y - inside_pt.y).as_f64() * t) };
     let (mut lo, mut hi) = (0.0f64, 1.0f64);
     for _ in 0..48 {
         let mid = (lo + hi) / 2.0;

@@ -362,11 +362,11 @@ fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
     let mut out = serde_json::Map::new();
     if let Some(pl) = &design.placement {
         let outline_area = polygon_area(&pl.outline);
-        let mut used: i64 = 0;
+        let mut used: i128 = 0;
         for fp in &pl.footprints {
             if let Some(part) = model.part(&fp.id) {
                 if let Some((x0, y0, x1, y1)) = eda_model::footprint::placed_courtyard(model, part, fp) {
-                    used += (x1 - x0).raw_shim() * (y1 - y0).raw_shim();
+                    used += (x1 - x0).area(y1 - y0);
                 }
             }
         }
@@ -379,14 +379,14 @@ fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
         }
     }
     if let Some(r) = &design.routing {
-        let mut len_by_net: std::collections::BTreeMap<&str, i64> = Default::default();
+        let mut len_by_net: std::collections::BTreeMap<&str, Nm> = Default::default();
         let mut layers: std::collections::BTreeSet<&str> = Default::default();
         for t in &r.tracks {
             layers.insert(&t.layer);
             let l: Nm = t.pts.windows(2).map(|w| (w[1].x - w[0].x).abs() + (w[1].y - w[0].y).abs()).sum();
-            *len_by_net.entry(&t.net).or_default() += l.raw_shim();
+            *len_by_net.entry(&t.net).or_default() += l;
         }
-        let total: i64 = len_by_net.values().sum();
+        let total: Nm = len_by_net.values().copied().sum();
         out.insert("tracks".into(), r.tracks.len().into());
         out.insert("vias".into(), r.vias.len().into());
         out.insert("layers_used".into(), layers.len().into());
@@ -400,16 +400,16 @@ fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
             let mut detours: Vec<(f64, &str)> = Vec::new();
             for net in &model.nets {
                 let Some(&len) = len_by_net.get(net.name.as_str()) else { continue };
-                let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+                let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
                 for pin in &net.pins {
                     let refdes = pin.split('.').next().unwrap_or("");
                     if let Some(p) = at.get(refdes) {
-                        x0 = x0.min(p.x.raw_shim()); y0 = y0.min(p.y.raw_shim()); x1 = x1.max(p.x.raw_shim()); y1 = y1.max(p.y.raw_shim());
+                        x0 = x0.min(p.x); y0 = y0.min(p.y); x1 = x1.max(p.x); y1 = y1.max(p.y);
                     }
                 }
-                if x0 == i64::MAX { continue }
-                let hp = ((x1 - x0) + (y1 - y0)).max(2_000_000) as f64;
-                detours.push((len as f64 / hp, net.name.as_str()));
+                if x0 == Nm::MAX { continue }
+                let hp = ((x1 - x0) + (y1 - y0)).max(mm(2.0));
+                detours.push((len.ratio(hp), net.name.as_str()));
             }
             detours.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
             if !detours.is_empty() {
@@ -423,12 +423,13 @@ fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
     serde_json::Value::Object(out)
 }
 
-fn polygon_area(pts: &[Point]) -> i64 {
+/// The polygon's area, nm^2 (the shoelace formula).
+fn polygon_area(pts: &[Point]) -> i128 {
     if pts.len() < 3 { return 0 }
-    let mut a: i64 = 0;
+    let mut a: i128 = 0;
     for i in 0..pts.len() {
         let (p, q) = (pts[i], pts[(i + 1) % pts.len()]);
-        a += p.x.raw_shim() * q.y.raw_shim() - q.x.raw_shim() * p.y.raw_shim();
+        a += p.x.area(q.y) - q.x.area(p.y);
     }
     a.abs() / 2
 }
@@ -877,20 +878,20 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
     let (xs, ys): (Vec<_>, Vec<_>) = pl.outline.iter().map(|p| (p.x, p.y)).unzip();
     let (bx0, bx1) = (xs.iter().min().copied().unwrap_or(Nm::ZERO), xs.iter().max().copied().unwrap_or(Nm::ZERO));
     let (by0, by1) = (ys.iter().min().copied().unwrap_or(Nm::ZERO), ys.iter().max().copied().unwrap_or(Nm::ZERO));
-    let board_area = ((bx1 - bx0).raw_shim() as f64 / 1e6) * ((by1 - by0).raw_shim() as f64 / 1e6); // mm^2
+    let board_area = (bx1 - bx0).mm() * (by1 - by0).mm(); // mm^2
 
     let mut court_area = 0.0f64;
     let mut pads = 0usize;
-    let mut worst_edge_gap = 0i64;
+    let mut worst_edge_gap = Nm::ZERO;
     let mut rects: Vec<(String, (Nm, Nm, Nm, Nm))> = Vec::new();
     for fp in &pl.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
         pads += part.pins.len();
         if let Some(r) = eda_model::footprint::placed_courtyard(model, part, fp) {
-            court_area += ((r.2 - r.0).raw_shim() as f64 / 1e6) * ((r.3 - r.1).raw_shim() as f64 / 1e6);
+            court_area += (r.2 - r.0).mm() * (r.3 - r.1).mm();
             rects.push((fp.id.clone(), r));
             if eda_model::footprint::is_edge_connector(part) {
-                worst_edge_gap = worst_edge_gap.max((eda_model::footprint::edge_connector_gap(r, (bx0, by0, bx1, by1))).raw_shim());
+                worst_edge_gap = worst_edge_gap.max(eda_model::footprint::edge_connector_gap(r, (bx0, by0, bx1, by1)));
             }
         }
     }
@@ -898,13 +899,13 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
     // Tightest courtyard gap on the board: how much room legalisation had
     // left over, which is the thing that decides whether the router can
     // get a track between two parts at all.
-    let mut min_gap = i64::MAX;
+    let mut min_gap = Nm::MAX;
     for a in 0..rects.len() {
         for b in a + 1..rects.len() {
             let (ra, rb) = (rects[a].1, rects[b].1);
             let dx = (rb.0 - ra.2).max(ra.0 - rb.2).max(Nm::ZERO);
             let dy = (rb.1 - ra.3).max(ra.1 - rb.3).max(Nm::ZERO);
-            min_gap = min_gap.min(if dx == Nm::ZERO && dy == Nm::ZERO { 0 } else { (dx.max(dy)).raw_shim() });
+            min_gap = min_gap.min(dx.max(dy));
         }
     }
 
@@ -922,13 +923,13 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
             continue;
         }
         let mut area = 0.0f64;
-        let (mut nx0, mut ny0, mut nx1, mut ny1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        let (mut nx0, mut ny0, mut nx1, mut ny1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
         let mut ok = true;
         for r in &refs {
             match rects.iter().find(|(id, _)| id == r) {
                 Some((_, c)) => {
-                    area += ((c.2 - c.0).raw_shim() as f64) * ((c.3 - c.1).raw_shim() as f64);
-                    nx0 = nx0.min(c.0.raw_shim()); ny0 = ny0.min(c.1.raw_shim()); nx1 = nx1.max(c.2.raw_shim()); ny1 = ny1.max(c.3.raw_shim());
+                    area += (c.2 - c.0).as_f64() * (c.3 - c.1).as_f64();
+                    nx0 = nx0.min(c.0); ny0 = ny0.min(c.1); nx1 = nx1.max(c.2); ny1 = ny1.max(c.3);
                 }
                 None => { ok = false; break; }
             }
@@ -937,7 +938,7 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
             continue;
         }
         let bound = (2.0 * area.sqrt()).max(6_000_000.0);
-        let span = ((nx1 - nx0) + (ny1 - ny0)) as f64;
+        let span = ((nx1 - nx0) + (ny1 - ny0)).as_f64();
         worst_compact = worst_compact.max(span / bound);
     }
 
@@ -948,7 +949,7 @@ fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::V
         "board_mm2": (board_area * 100.0).round() / 100.0,
         "courtyard_fill": if board_area > 0.0 { (court_area / board_area * 1000.0).round() / 1000.0 } else { 0.0 },
         "pad_density_per_mm2": if board_area > 0.0 { (pads as f64 / board_area * 1000.0).round() / 1000.0 } else { 0.0 },
-        "min_courtyard_gap_nm": if min_gap == i64::MAX { serde_json::Value::Null } else { min_gap.into() },
+        "min_courtyard_gap_nm": if min_gap == Nm::MAX { serde_json::Value::Null } else { min_gap.into() },
         "worst_compact_ratio": (worst_compact * 1000.0).round() / 1000.0,
         "worst_edge_gap_nm": worst_edge_gap,
     })
@@ -1106,11 +1107,11 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             let fp = eda_model::floorplan::plan(&cx.model, bb, mm(0.5), cx.args.seed)
                 .map_err(|e| vec![CheckResult::fail("floorplan", "arrange", e)])?;
             println!("{} modules, {} free parts, board {:.1} x {:.1} mm",
-                fp.modules.len(), fp.free.len(), (bb.2 - bb.0).raw_shim() as f64 / 1e6, (bb.3 - bb.1).raw_shim() as f64 / 1e6);
+                fp.modules.len(), fp.free.len(), (bb.2 - bb.0).mm(), (bb.3 - bb.1).mm());
             for m in &fp.modules {
                 println!("  {:<10} {:>5.1} x {:>5.1} mm at ({:>5.1}, {:>5.1})  {} parts: {}",
-                    m.name, (m.rect.2 - m.rect.0).raw_shim() as f64 / 1e6, (m.rect.3 - m.rect.1).raw_shim() as f64 / 1e6,
-                    m.rect.0.raw_shim() as f64 / 1e6, m.rect.1.raw_shim() as f64 / 1e6, m.refs.len(), m.refs.join(" "));
+                    m.name, (m.rect.2 - m.rect.0).mm(), (m.rect.3 - m.rect.1).mm(),
+                    m.rect.0.mm(), m.rect.1.mm(), m.refs.len(), m.refs.join(" "));
             }
             if !fp.free.is_empty() {
                 println!("  free (no proximity rule ties them anywhere): {}", fp.free.join(" "));

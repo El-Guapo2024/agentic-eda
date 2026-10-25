@@ -61,7 +61,7 @@ pub fn fab_bbox(graphics: &[Shape]) -> Option<Rect> {
             Shape::Segment { start, end, .. } | Shape::Rect { start, end, .. } => pts.extend([*start, *end]),
             Shape::Arc { start, mid, end, .. } => pts.extend([*start, *mid, *end]),
             Shape::Circle { center, end, .. } => {
-                let r = Nm::from_raw_shim((((end.x - center.x).raw_shim() as f64).hypot((end.y - center.y).raw_shim() as f64)).round() as i64);
+                let r = Nm::kiround((end.x - center.x).as_f64().hypot((end.y - center.y).as_f64()));
                 pts.extend([Point { x: center.x - r, y: center.y - r }, Point { x: center.x + r, y: center.y + r }]);
             }
             Shape::Polygon { pts: p, .. } => pts.extend(p.iter().copied()),
