@@ -1148,8 +1148,10 @@ mod tests {
             let want = drawn_nets(&model);
             // the same pins, the names KiCad gives what is drawn: a power net's, a label's with the sheet's path, a pin's
             let by_pins = |m: &BTreeMap<String, Vec<String>>| -> BTreeMap<Vec<String>, String> { m.iter().map(|(n, p)| (p.clone(), n.clone())).collect() };
-            // every named net is labelled on the root (`crate::net_labels`): `/<name>`, or a power net's own name
-            let named = by_pins(&got).iter().all(|(pins, name)| by_pins(&want).get(pins).is_some_and(|i| name == i || *name == format!("/{i}")));
+            // every named net is labelled on the root (`crate::net_labels`): a power net is its symbol's name (`GND`, a power symbol outranks a label), any
+            // other `/<name>`
+            let power: BTreeSet<&str> = sch.power_symbols.iter().filter(|p| !p.lib_id.ends_with(":PWR_FLAG")).map(|p| p.net.as_str()).collect();
+            let named = by_pins(&got).iter().all(|(pins, name)| by_pins(&want).get(pins).is_some_and(|i| *name == if power.contains(i.as_str()) { i.clone() } else { format!("/{i}") }));
             // (an example whose flat drawing joins two nets or leaves one out is the layout's to fix, not the naming's: it is skipped, as before)
             if by_pins(&got).keys().ne(by_pins(&want).keys()) {
                 println!("MISMATCH {}\n   got  {:?}\n   want {:?}", f.display(), got, want);
