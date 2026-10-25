@@ -163,22 +163,6 @@ impl Nm {
     pub fn sch_round(self) -> Nm {
         sch_round(self)
     }
-
-    /// Wave-1 shim (`docs/NANOMETRES.md`, "The length type"): the same as [`Nm::get`], at a place outside `crates/model` where a length still meets code
-    /// that holds lengths as bare `i64`. Wave 2 replaces each with the typed form.
-    #[doc(hidden)]
-    #[inline]
-    pub const fn raw_shim(self) -> i64 {
-        self.0
-    }
-
-    /// Wave-1 shim: the same as [`Nm::new`], where a bare `i64` (a literal, a value from code not converted yet) becomes a length outside
-    /// `crates/model`. Wave 2 replaces each with the typed form ([`mm`], [`Nm::from_mm`], a typed constant).
-    #[doc(hidden)]
-    #[inline]
-    pub const fn from_raw_shim(nm: i64) -> Nm {
-        Nm(nm)
-    }
 }
 
 impl std::fmt::Debug for Nm {
