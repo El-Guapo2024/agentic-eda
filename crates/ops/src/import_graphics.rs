@@ -70,9 +70,9 @@ pub struct ImportGraphics {
     /// The importer's offset, in nanometres, added after the scale (`SetImportOffsetMM`): the dialog's "Place at" divided by the scale
     /// (KiCad's own arithmetic), or whatever puts the picture where it is wanted.
     #[serde(default)]
-    pub offset_x_nm: i64,
+    pub offset_x_nm: Nm,
     #[serde(default)]
-    pub offset_y_nm: i64,
+    pub offset_y_nm: Nm,
     /// "DXF default line width", nanometres. Not used for an SVG (its strokes carry their own widths).
     #[serde(default = "d_dxf_width")]
     pub line_width_nm: Nm,
@@ -105,7 +105,7 @@ impl ImportGraphics {
     pub fn mapper(&self) -> Mapper {
         Mapper {
             scale: self.scale,
-            offset_mm: V2::new(self.offset_x_nm as f64 / 1.0e6, self.offset_y_nm as f64 / 1.0e6),
+            offset_mm: V2::new(self.offset_x_nm.mm(), self.offset_y_nm.mm()),
             line_width_mm: if self.format == GraphicsFormat::Dxf { eda_model::units::to_mm(self.line_width_nm) } else { 0.0 },
             iu_per_mm: eda_model::units::PCB_IU_PER_MM,
         }

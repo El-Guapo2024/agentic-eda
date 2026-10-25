@@ -534,9 +534,10 @@ fn an_inductor_needs_two_points_a_name_and_a_track() {
 /// The S shape itself, in KiCad's nanometres: the corners start at the start point and end at the end point, and there are no more strands than the room allows.
 #[test]
 fn the_s_shape_runs_from_the_start_to_the_end() {
-    let SShape::Corners(c) = build_corners_s_shape((0, 0), (0, 10_000_000_000), 30_000_000_000, 250_000_000) else { panic!("a coil") };
-    assert_eq!((c[0], *c.last().unwrap()), ((0, 0), (0, 10_000_000_000)));
+    let (start, end) = (p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, Nm::new(10_000_000_000)));
+    let SShape::Corners(c) = build_corners_s_shape(start, end, Nm::new(30_000_000_000), Nm::new(250_000_000)) else { panic!("a coil") };
+    assert_eq!((c[0], *c.last().unwrap()), (start, end));
     // the first stub is straight down from the start by `stubs_len` (a tenth of the span), before the first arc
-    assert_eq!((c[1].0, c[1].1 > 0), (0, true));
-    assert_eq!(build_corners_s_shape((0, 0), (0, 10_000_000_000), 9_000_000_000, 250_000_000), SShape::TooShort, "length is checked against the stubs and four quarter circles");
+    assert_eq!((c[1].x, c[1].y > Nm::ZERO), (Nm::ZERO, true));
+    assert_eq!(build_corners_s_shape(start, end, Nm::new(9_000_000_000), Nm::new(250_000_000)), SShape::TooShort, "length is checked against the stubs and four quarter circles");
 }

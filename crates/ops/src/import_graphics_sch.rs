@@ -59,9 +59,9 @@ pub struct ImportSchGraphics {
     pub scale: f64,
     /// The importer's offset in nanometres, added after the scale: the dialog's "At" over the scale (KiCad's own arithmetic), or the cursor.
     #[serde(default)]
-    pub offset_x_nm: i64,
+    pub offset_x_nm: Nm,
     #[serde(default)]
-    pub offset_y_nm: i64,
+    pub offset_y_nm: Nm,
     /// "Default line width", nanometres; 0 is the sheet's default width.
     #[serde(default)]
     pub line_width_nm: Nm,
@@ -82,9 +82,9 @@ pub struct ImportSymbolGraphics {
     #[serde(default = "d_one")]
     pub scale: f64,
     #[serde(default)]
-    pub offset_x_nm: i64,
+    pub offset_x_nm: Nm,
     #[serde(default)]
-    pub offset_y_nm: i64,
+    pub offset_y_nm: Nm,
     #[serde(default)]
     pub line_width_nm: Nm,
 }
@@ -95,7 +95,7 @@ fn fail(check: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 
 /// The file read and the mapping set up with the request's scale, offset and default width, in `iu_per_mm` units of the editor's own; the size check of
 /// `GRAPHICS_IMPORTER_BUFFER::ImportTo` has run.
-fn read_and_map(format: GraphicsFormat, text: &str, dxf_units: &str, scale: f64, offset_nm: (i64, i64), line_width_nm: Nm, iu_per_mm: f64) -> Result<(Imported, Mapper), Vec<CheckResult>> {
+fn read_and_map(format: GraphicsFormat, text: &str, dxf_units: &str, scale: f64, offset_nm: (Nm, Nm), line_width_nm: Nm, iu_per_mm: f64) -> Result<(Imported, Mapper), Vec<CheckResult>> {
     if !(scale.is_finite() && scale != 0.0) {
         return Err(fail("ops_bad_import", "the import scale must be a number other than zero"));
     }
