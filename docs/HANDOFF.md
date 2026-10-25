@@ -1,4 +1,4 @@
-# Handoff: the KiCad port, 2026-10-24 (resumed)
+# Handoff: the KiCad port, 2026-10-25 (fix batches and the length type done)
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
@@ -80,7 +80,7 @@ Gates for any of them:
 The 2026-10-21 list is done: Specctra, embedded files and the pad-details fix, the simulator, the rule editor, the router details, the schematic details, the KiCad 10 items, P20's browser checks, and the connectivity measure (each row under "What landed").
 
 1. ~~**Finish `task-nanometres`**~~ merged 2026-10-24: lengths are KiCad's nanometres, design.json schema 2, old files migrated on read (one way). Connectivity 98.9%. See `docs/NANOMETRES.md`.
-2. **Fix the findings, batch by batch, from the new main** (`docs/parity/findings/INDEX.md`). Each batch's findings carry our `file:line`, KiCad's function, a repro and the failing test to write. A–D can run in parallel, then E and F.
+2. ~~**Fix the findings, batch by batch**~~ all six batches merged 2026-10-24/25 (see "What landed"); what each left open is in its findings file and GAPS.md. Original plan: (`docs/parity/findings/INDEX.md`). Each batch's findings carry our `file:line`, KiCad's function, a repro and the failing test to write. A–D can run in parallel, then E and F.
    - **A. KiCad compatibility of what we derive (first).** Today a studio project opened in KiCad and updated from its schematic (F8) renames every net and duplicates every footprint. **The user chose (2026-10-23) KiCad's own net names everywhere, the studio's display included**: `/sheet/NAME`, `/NAME` on a flat sheet, `Net-(REF-PadN)` unlabelled; global and power names unchanged. Also: one footprint name everywhere (the installed KiCad footprint), the footprint-to-symbol `(path ...)` link, symbol fields on footprints, `pinfunction`/`pintype`, the flipped footprint's frame. Prove it: kicad-cli's `--schematic-parity` DRC on the examples finds 0 differences (it finds 76 on mcu30 today).
    - **B. Board reader and writer losses:** zones with holes read as two zones, SMD pads on `*.Cu`, paste-only pads, curves with a control point on an end, footprint Edge.Cuts, rectangle corner radius, Extruded 3D Body, importers' `.kicad_dru`, a project's DRC/ERC exclusions.
    - **C. Teardrops:** Fill All and every refill before DRC or a plot wipe every teardrop's fill.
@@ -89,8 +89,8 @@ The 2026-10-21 list is done: Specctra, embedded files and the pad-details fix, t
    - **F. Editing:** point edit and Mirror dropping items from groups, footprint bounding boxes, the carry's rotate pivot, Position Relative's angle, Recombine, Repeat Layout's nets and groups, design-block copper, the Net Inspector.
    - Then the mediums and lows, and the wrong doc claims listed at the end of `INDEX.md`.
    - Order as run (2026-10-24, the user: "do all"): A, B+C, E and F in parallel (agents' extra brief: `~/work/briefs/fix/common-fix.md`); D after A merges (both touch `crates/engine` naming); then the length newtype below.
-3. **The length newtype** (the user, 2026-10-24: do it): make `Nm` a newtype so the compiler catches unit mixing, with `mm()`/`mil()` test helpers and conversions only at the boundaries, done in waves by crate (model, then kicad/drc/engine, then ops/pns, then cli/studio). Run it last, on a quiet main, since it touches every crate.
-4. **Leftovers named in the merges** (each in GAPS.md): springback in the dragger and the pair placer, a shared screen inside a shared screen, the Symbol Editor's pin and New Symbol dialogs, Both sides placement files, the checks P20 left uncovered.
+3. ~~**The length newtype**~~ done 2026-10-25 in three waves (see "What landed" and `docs/NANOMETRES.md`). Original plan: (the user, 2026-10-24: do it): make `Nm` a newtype so the compiler catches unit mixing, with `mm()`/`mil()` test helpers and conversions only at the boundaries, done in waves by crate (model, then kicad/drc/engine, then ops/pns, then cli/studio). Run it last, on a quiet main, since it touches every crate.
+4. **Next: leftovers named in the merges** (each in GAPS.md): springback in the dragger and the pair placer, a shared screen inside a shared screen, the Symbol Editor's pin and New Symbol dialogs, Both sides placement files, the checks P20 left uncovered.
 
 TODO (the user, 2026-10-23: not now): check the kicad-cli fallbacks on a kicad-cli without `pcb export specctra`, `idf` or `gencad` (the Mac's 10.99.0-5334); delete the deprecated Specctra exporter once every machine has the command (scope in GAPS.md P19).
 
