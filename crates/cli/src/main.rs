@@ -856,7 +856,7 @@ fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
 }
 
 /// Bookshelf integer unit used for Cypress export/import (100 µm).
-const BOOKSHELF_UNIT_NM: i64 = 100_000;
+const BOOKSHELF_UNIT_NM: Nm = Nm::new(100_000);
 
 /// A placement's shape, as numbers, for every candidate we log.
 ///

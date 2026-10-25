@@ -23,8 +23,8 @@ use eda_place::Placer;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Bookshelf unit used for the bridge, nm (100 um).
-pub const UNIT_NM: i64 = 100_000;
+/// Bookshelf unit used for the bridge (100 um).
+pub const UNIT_NM: Nm = Nm::new(100_000);
 
 #[derive(Debug, Clone)]
 pub struct CypressOptions {
