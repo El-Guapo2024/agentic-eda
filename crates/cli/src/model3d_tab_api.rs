@@ -548,10 +548,10 @@ mod tests {
     #[test]
     fn the_preview_is_the_footprint_at_the_origin_with_its_pads_and_drawings() {
         use eda_model::footprint::{Pad, PadKind, PadShape};
-        let pad = |n: &str, x: i64, y: i64| Pad { number: n.into(), at: (Nm::from_raw_shim(x), Nm::from_raw_shim(y)), size: (mm(0.8), mm(0.6)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let pad = |n: &str, x: Nm, y: Nm| Pad { number: n.into(), at: (x, y), size: (mm(0.8), mm(0.6)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
         let mut art = eda_model::fp_art::FpArt::default();
         art.shapes.push(eda_model::fp_art::FpShape::new(eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.12), filled: false, start: Point { x: mm(-1.0), y: mm(-0.9) }, end: Point { x: mm(1.0), y: mm(-0.9) } }));
-        let footprint = eda_model::Footprint { name: "T:Two".into(), pads: vec![pad("1", -1_000_000, 0), pad("2", 1_000_000, 0)], courtyard: Some((mm(2.4), mm(1.0))), art, ..Default::default() };
+        let footprint = eda_model::Footprint { name: "T:Two".into(), pads: vec![pad("1", mm(-1.0), Nm::ZERO), pad("2", mm(1.0), Nm::ZERO)], courtyard: Some((mm(2.4), mm(1.0))), art, ..Default::default() };
         let probe = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("v".into()), package: None, footprint: Some("T:Two".into()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
         let model = ConstraintModel { parts: vec![probe.clone()], footprints: vec![footprint], ..Default::default() };
         let p = preview_part(&model, &probe).unwrap();

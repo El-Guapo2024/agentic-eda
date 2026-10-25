@@ -7,6 +7,7 @@
 use eda_model::table::{cell_item_id, Table, TableLineStyle, TableStroke};
 use eda_model::table_text::{pcb_cell_draw, sch_cell_draw, CellDraw};
 use eda_model::text_vars::{PcbBoard, Resolver};
+use eda_model::units::Nm;
 use serde_json::{json, Value};
 
 fn color_json(c: Option<eda_model::table::TableColor>) -> Value {
@@ -100,7 +101,7 @@ fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: boo
             v
         })
         .collect();
-    let border_width = |w: i64| if sheet && w == 0 { json!(SCH_DEFAULT_LINE_NM) } else { json!(w) };
+    let border_width = |w: Nm| if sheet && w == Nm::ZERO { json!(SCH_DEFAULT_LINE_NM) } else { json!(w) };
     json!({
         "id": t.id,
         "layer": t.layer,
@@ -114,7 +115,7 @@ fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: boo
         "border": { "external": t.border.external, "header": t.border.header, "stroke": stroke_json(&t.border.stroke) },
         "separators": { "rows": t.separators.rows, "cols": t.separators.cols, "stroke": stroke_json(&t.separators.stroke) },
         "bbox": [bbox.x0, bbox.y0, bbox.x1, bbox.y1],
-        "borders": t.borders().iter().map(|l| json!({ "a": pt(l.a), "b": pt(l.b), "width": border_width(l.stroke.width_nm.raw_shim()), "style": style_token(l.stroke.drawn_style()), "color": color_json(l.stroke.color) })).collect::<Vec<_>>(),
+        "borders": t.borders().iter().map(|l| json!({ "a": pt(l.a), "b": pt(l.b), "width": border_width(l.stroke.width_nm), "style": style_token(l.stroke.drawn_style()), "color": color_json(l.stroke.color) })).collect::<Vec<_>>(),
         "cells": cells,
     })
 }

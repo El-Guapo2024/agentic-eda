@@ -12,6 +12,7 @@
 use crate::board;
 use eda_kicad::zone_fills::{self, KicadFills, ScannedFill};
 use eda_model::ir::Design;
+use eda_model::units::Nm;
 use eda_model::CheckResult;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -52,10 +53,10 @@ pub(crate) fn refill(dir: &Path, only: Option<Vec<String>>) -> Value {
 /// (`eda_drc::via_stitch::plan` over the new fills) in one step when their vias move. True when a stitching's vias changed.
 fn regenerate_stitchings(dir: &Path, only: Option<&[String]>) -> bool {
     let Ok((_, design, model)) = board::load(dir) else { return false };
-    let bbox = |pts: &[eda_model::ir::Point]| pts.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(a, b, c, d), p| (a.min(p.x.raw_shim()), b.min(p.y.raw_shim()), c.max(p.x.raw_shim()), d.max(p.y.raw_shim())));
-    let meets = |a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)| a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3;
+    let bbox = |pts: &[eda_model::ir::Point]| pts.iter().fold((Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN), |(a, b, c, d), p| (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y)));
+    let meets = |a: (Nm, Nm, Nm, Nm), b: (Nm, Nm, Nm, Nm)| a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3;
     let zones: Vec<&eda_model::ir::Zone> = design.routing.iter().flat_map(|r| r.zones.iter()).filter(|z| zone_fills::fillable(z) && only.is_none_or(|ids| ids.contains(&z.id))).collect();
-    let vias = |ids: &[String]| -> std::collections::BTreeSet<(i64, i64)> { design.routing.iter().flat_map(|r| r.vias.iter()).filter(|v| ids.contains(&v.id)).map(|v| (v.at.x.raw_shim(), v.at.y.raw_shim())).collect() };
+    let vias = |ids: &[String]| -> std::collections::BTreeSet<eda_model::ir::Point> { design.routing.iter().flat_map(|r| r.vias.iter()).filter(|v| ids.contains(&v.id)).map(|v| v.at).collect() };
     let mut cmds = Vec::new();
     for v in design.drawings.iter().flat_map(|d| d.board_items.via_stitches.iter()) {
         if v.net.is_empty() || v.outline.len() < 3 {
@@ -66,7 +67,7 @@ fn regenerate_stitchings(dir: &Path, only: Option<&[String]>) -> bool {
             continue;
         }
         let p = crate::via_stitch_api::plan(dir, &design, &model, v);
-        if p.vias.iter().map(|(_, at)| (at.x.raw_shim(), at.y.raw_shim())).collect::<std::collections::BTreeSet<_>>() == vias(&v.member_ids) {
+        if p.vias.iter().map(|(_, at)| *at).collect::<std::collections::BTreeSet<_>>() == vias(&v.member_ids) {
             continue;
         }
         let planned = p.vias.into_iter().map(|(cell, at)| eda_ops::pcb_items::PlannedVia { cell, at }).collect();
@@ -225,9 +226,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    fn square(id: &str, uuid: &str, layer: &str, x: i64) -> Zone {
+    fn square(id: &str, uuid: &str, layer: &str, x: Nm) -> Zone {
         let p = |x, y| Point { x, y };
-        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(Nm::from_raw_shim(x), Nm::ZERO), p(Nm::from_raw_shim(x + 10_000_000), Nm::ZERO), p(Nm::from_raw_shim(x + 10_000_000), mm(10.0)), p(Nm::from_raw_shim(x), mm(10.0))], ..Default::default() }
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(x, Nm::ZERO), p(x + mm(10.0), Nm::ZERO), p(x + mm(10.0), mm(10.0)), p(x, mm(10.0))], ..Default::default() }
     }
 
     /// A board directory with an intent of two nets, no part, and `zones`.
@@ -287,11 +288,11 @@ mod tests {
     /// and counts as out of date in the source, and a rule area, or an outline with fewer than three corners, is not in the report at all.
     #[test]
     fn the_report_says_which_zones_have_a_current_fill_and_leaves_rule_areas_and_degenerate_outlines_out() {
-        let mut keepout = square("ka", "", "F.Cu", 20_000_000);
+        let mut keepout = square("ka", "", "F.Cu", mm(20.0));
         keepout.is_rule_area = true;
-        let mut line = square("zl", "", "F.Cu", 40_000_000);
+        let mut line = square("zl", "", "F.Cu", mm(40.0));
         line.outline.truncate(2);
-        let (a, b) = (square("za", "", "F.Cu", 0), square("zb", "", "B.Cu", 0));
+        let (a, b) = (square("za", "", "F.Cu", Nm::ZERO), square("zb", "", "B.Cu", Nm::ZERO));
         let dir = board_dir("report", vec![a.clone(), b.clone(), keepout.clone(), line.clone()]);
 
         // design.json keeps its zones in a canonical order, so they are found by id.
@@ -327,12 +328,12 @@ mod tests {
     fn checking_the_zone_fills_fills_nothing_that_is_filled_or_that_has_no_zone() {
         let none = board_dir("ensure_none", vec![]);
         assert!(ensure_filled(&none).is_ok(), "no zone, nothing to fill");
-        let a = square("za", "", "F.Cu", 0);
+        let a = square("za", "", "F.Cu", Nm::ZERO);
         let dir = board_dir("ensure_current", vec![a.clone()]);
         zone_fills::store(&dir, &KicadFills::new("kicad-cli 10.99.0".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]))).unwrap();
         assert!(ensure_filled(&dir).is_ok(), "every pour is current: kicad-cli is not started");
         // A footprint's own zone is not one kicad-cli fills (`FillAllZones` walks the board's zones): it is not waited for, and not in the report.
-        let mut inside = square("zf", "", "F.Cu", 30_000_000);
+        let mut inside = square("zf", "", "F.Cu", mm(30.0));
         inside.parent_footprint = Some("U1".into());
         let with_footprint_zone = board_dir("ensure_footprint_zone", vec![a.clone(), inside]);
         zone_fills::store(&with_footprint_zone, &KicadFills::new("kicad-cli 10.99.0".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]))).unwrap();
@@ -347,7 +348,7 @@ mod tests {
     /// Unfill All Zones forgets every fill; Unfill Selected Zones only the named ones.
     #[test]
     fn unfilling_forgets_all_the_fills_or_the_selected_zones_only() {
-        let (a, b) = (square("za", "", "F.Cu", 0), square("zb", "", "B.Cu", 0));
+        let (a, b) = (square("za", "", "F.Cu", Nm::ZERO), square("zb", "", "B.Cu", Nm::ZERO));
         let dir = board_dir("clear", vec![a.clone(), b.clone()]);
         let both = KicadFills::new("kicad-cli".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu")), ("zb".to_string(), fill_of(&b, "B.Cu"))]));
         zone_fills::store(&dir, &both).unwrap();
@@ -364,7 +365,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eda_fill_api_import_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let (a, b) = (square("za", "uuid-a", "F.Cu", 0), square("zb", "uuid-b", "B.Cu", 0));
+        let (a, b) = (square("za", "uuid-a", "F.Cu", Nm::ZERO), square("zb", "uuid-b", "B.Cu", Nm::ZERO));
         let design = Design {
             schema: eda_model::ir::SCHEMA_VERSION,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },

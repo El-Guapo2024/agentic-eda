@@ -108,11 +108,11 @@ mod tests {
         Scratch(d)
     }
 
-    /// One footprint, `U1`, with a pad `1` on net HV above a pad `2` on net GND `pitch` micrometres apart (0.4 mm square copper: the copper gap is `pitch - 400`),
+    /// One footprint, `U1`, with a pad `1` on net HV above a pad `2` on net GND `pitch` apart (0.4 mm square copper: the copper gap is `pitch` - 0.4 mm),
     /// the board's rules as given.
-    pub(crate) fn setup(dir: &Path, pitch: i64, rules: eda_model::BoardRules) {
-        let pad = |n: &str, y: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::ZERO, Nm::from_raw_shim(y)), size: (mm(0.4), mm(0.4)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -pitch / 2), pad("2", pitch - pitch / 2)], courtyard: Some((mm(2.0), Nm::from_raw_shim(pitch + 1_000_000))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+    pub(crate) fn setup(dir: &Path, pitch: Nm, rules: eda_model::BoardRules) {
+        let pad = |n: &str, y: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::ZERO, y), size: (mm(0.4), mm(0.4)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -pitch / 2), pad("2", pitch - pitch / 2)], courtyard: Some((mm(2.0), pitch + mm(1.0))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "U1".into(),
             mpn: None,
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn the_clearance_report_names_the_winner_and_the_rules_it_considered() {
         let dir = scratch("net_class");
-        setup(&dir, 1_000_000, hv_rules(None));
+        setup(&dir, mm(1.0), hv_rules(None));
         let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2", "active_layer": "F.Cu"})));
         assert_eq!(reply["ok"], json!(true), "{reply}");
         assert_eq!(reply["title"], "Clearance Report");
@@ -199,14 +199,14 @@ mod tests {
     #[test]
     fn a_rules_file_rule_beats_the_net_class_and_a_bad_file_is_reported() {
         let dir = scratch("dru");
-        setup(&dir, 1_000_000, hv_rules(Some("(version 1)\n(rule \"hv pads\"\n\t(condition \"A.NetClass == 'HV' && B.Type == 'Pad'\")\n\t(constraint clearance (min 0.6mm)))\n")));
+        setup(&dir, mm(1.0), hv_rules(Some("(version 1)\n(rule \"hv pads\"\n\t(condition \"A.NetClass == 'HV' && B.Type == 'Pad'\")\n\t(constraint clearance (min 0.6mm)))\n")));
         let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2"})));
         assert_eq!(resolved_min(&reply), Some(600_000), "{reply}");
         assert_eq!(reply["pages"][0]["resolutions"][0]["rule"], "rule 'hv pads'");
         assert_eq!(reply["compile_error"], json!(null));
         // a file with a mistake in it: the implicit rules alone, and the report says so
         let bad = scratch("dru_bad");
-        setup(&bad, 1_000_000, hv_rules(Some("(version 1)\n(rule x (constraint clearance (min 1)))\n")));
+        setup(&bad, mm(1.0), hv_rules(Some("(version 1)\n(rule x (constraint clearance (min 1)))\n")));
         let reply = clearance(&bad, &body(json!({"a": "U1.1", "b": "U1.2"})));
         assert_eq!(resolved_min(&reply), Some(500_000), "{reply}");
         assert!(reply["compile_error"].as_str().unwrap().starts_with("ERROR: Missing units"), "{reply}");
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn same_net_items_have_no_clearance_and_the_other_pages_come_with_the_items() {
         let dir = scratch("pages");
-        setup(&dir, 1_000_000, hv_rules(None));
+        setup(&dir, mm(1.0), hv_rules(None));
         // a footprint with two different pads is itself; two pads on different nets get the per-layer clearance page and the physical clearances page
         let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2"})));
         let titles: Vec<_> = reply["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap().to_string()).collect();
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn the_constraints_report_of_a_pad_has_the_pages_a_pad_has() {
         let dir = scratch("constraints");
-        setup(&dir, 1_000_000, hv_rules(Some("(version 1)(rule \"fat pads\" (condition \"A.Type == 'Pad'\") (constraint assertion \"A.Size_X >= 0.5mm\"))")));
+        setup(&dir, mm(1.0), hv_rules(Some("(version 1)(rule \"fat pads\" (condition \"A.Type == 'Pad'\") (constraint assertion \"A.Size_X >= 0.5mm\"))")));
         let reply = constraints(&dir, &body(json!({"item": "U1.1"})));
         assert_eq!(reply["ok"], json!(true), "{reply}");
         assert_eq!(reply["title"], "Constraints Report");
@@ -249,7 +249,7 @@ mod tests {
     fn a_track_is_the_segment_the_click_was_nearest_to_and_the_report_follows_the_frames_units() {
         use eda_ops::Cmd;
         let dir = scratch("track");
-        setup(&dir, 3_000_000, hv_rules(None));
+        setup(&dir, mm(3.0), hv_rules(None));
         // a two-segment track on GND: 4 mm up, then 6 mm along
         let pts = vec![Point { x: mm(2.0), y: mm(2.0) }, Point { x: mm(2.0), y: mm(6.0) }, Point { x: mm(8.0), y: mm(6.0) }];
         // the intent's GND is U1.2 alone, which KiCad calls `unconnected-(U1-Pad2)`
@@ -309,7 +309,7 @@ mod tests {
         for (name, dru, expected_nm) in cases {
             // what the report says, on a board whose pads are far apart
             let dir = scratch(&format!("proof_{}", name.replace(' ', "_")));
-            setup(&dir, 3_000_000, hv_rules(dru));
+            setup(&dir, mm(3.0), hv_rules(dru));
             let reply = clearance(&dir, &body(json!({"a": "U1.1", "b": "U1.2"})));
             let resolved = resolved_min(&reply).unwrap_or_else(|| panic!("{name}: {reply}"));
             assert_eq!(resolved, expected_nm, "{name}: {reply}");
@@ -317,7 +317,7 @@ mod tests {
             // kicad-cli on the same board with the pads (copper gap) 10 um under and 10 um over it
             for (delta, violation) in [(-10_000, true), (10_000, false)] {
                 let board_dir = scratch(&format!("proof_{}_{delta}", name.replace(' ', "_")));
-                setup(&board_dir, 400_000 + um + delta, hv_rules(dru));
+                setup(&board_dir, mm(0.4) + Nm::new(um + delta), hv_rules(dru));
                 let (_, design, model) = board::load(&board_dir).unwrap();
                 let report = eda_kicad_engine::drc_scratch(&design, &model).unwrap_or_else(|e| panic!("{name}: kicad-cli: {e:?}"));
                 let clearance_violations: Vec<_> = report.violations.iter().filter(|v| v.kind == "clearance").collect();

@@ -183,8 +183,8 @@ mod tests {
         let fp = FootprintInstance { id: "R1".into(), at: Point { x: mm(10.0), y: mm(5.0) }, rot: 90_000, side: Side::Top, label: Default::default() };
         // A 1600 x 800 body turned a quarter turn is 800 wide and 1600 tall about the part's position.
         let corners = [to_board(&fp, (mm(-0.8), mm(-0.4))), to_board(&fp, (mm(0.8), mm(0.4)))];
-        assert_eq!(corners[0].x.min(corners[1].x), Nm::from_raw_shim(10_000_000 - 400_000));
-        assert_eq!(corners[0].y.min(corners[1].y), Nm::from_raw_shim(5_000_000 - 800_000));
+        assert_eq!(corners[0].x.min(corners[1].x), mm(10.0) - mm(0.4));
+        assert_eq!(corners[0].y.min(corners[1].y), mm(5.0) - mm(0.8));
     }
 
     /// The brief's four parts, with KiCad.app installed: their bodies are the real footprints' F.Fab boxes.

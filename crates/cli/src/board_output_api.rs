@@ -51,9 +51,9 @@ pub(crate) fn board_center_mm(outline: &[eda_model::ir::Point]) -> (f64, f64) {
     if outline.is_empty() {
         return (0.0, 0.0);
     }
-    let (x0, x1) = outline.iter().fold((i64::MAX, i64::MIN), |(lo, hi), p| (lo.min(p.x.raw_shim()), hi.max(p.x.raw_shim())));
-    let (y0, y1) = outline.iter().fold((i64::MAX, i64::MIN), |(lo, hi), p| (lo.min(p.y.raw_shim()), hi.max(p.y.raw_shim())));
-    ((x0 + x1) as f64 / 2e6, (y0 + y1) as f64 / 2e6)
+    let (x0, x1) = outline.iter().fold((eda_model::units::Nm::MAX, eda_model::units::Nm::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
+    let (y0, y1) = outline.iter().fold((eda_model::units::Nm::MAX, eda_model::units::Nm::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+    ((x0 + x1).as_f64() / 2e6, (y0 + y1).as_f64() / 2e6)
 }
 
 /// The formats of `DIALOG_EXPORT_STEP`'s choice (`c_formatCommand`), by their kicad-cli command.

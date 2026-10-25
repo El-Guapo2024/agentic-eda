@@ -8,11 +8,11 @@ use eda_model::{Footprint, Net, Pad, PadShape, Part, Pin, PinKind};
 const MM: i64 = 1_000_000;
 
 fn p(x: f64, y: f64) -> Point {
-    Point { x: Nm::from_raw_shim((x * MM as f64) as i64), y: Nm::from_raw_shim((y * MM as f64) as i64) }
+    Point { x: mm(x), y: mm(y) }
 }
 
-fn pad(n: &str, x: i64) -> Pad {
-    Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
+fn pad(n: &str, x: Nm) -> Pad {
+    Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
 }
 
 fn part(r: &str, pins: usize) -> Part {
@@ -21,7 +21,7 @@ fn part(r: &str, pins: usize) -> Part {
 
 /// R1 at (10, 10) mm with both pads on `N` (pads at x 9 and 11 mm), U1 at (20, 10) with pad 1 on `N`.
 fn model() -> ConstraintModel {
-    let fp = Footprint { name: "2PAD".into(), pads: vec![pad("1", -MM), pad("2", MM)], courtyard: Some((mm(1.5), mm(0.6))), ..Default::default() };
+    let fp = Footprint { name: "2PAD".into(), pads: vec![pad("1", mm(-1.0)), pad("2", mm(1.0))], courtyard: Some((mm(1.5), mm(0.6))), ..Default::default() };
     let mut m = ConstraintModel { footprints: vec![fp], parts: vec![part("R1", 2), part("U1", 2)], ..Default::default() };
     m.board.layers = vec!["F.Cu".into(), "B.Cu".into()];
     m.nets = vec![Net { name: "N".into(), pins: vec!["R1.1".into(), "R1.2".into(), "U1.1".into()] }, Net { name: "M".into(), pins: vec!["U1.2".into()] }];
@@ -131,7 +131,7 @@ fn the_die_length_is_the_pads_own() {
     let rows = rows(&d, &m);
     assert_eq!(row(&rows, "N")["die_length"], 1_500_000);
     assert_eq!(row(&rows, "N")["total_length"], 1_500_000);
-    assert_eq!(die_length_of(&["(die_length 0.25)".to_string()]), 250_000);
+    assert_eq!(die_length_of(&["(die_length 0.25)".to_string()]), mm(0.25));
 }
 
 #[test]

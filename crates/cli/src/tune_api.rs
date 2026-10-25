@@ -51,11 +51,11 @@ fn err(message: impl Into<String>) -> Value {
 
 fn point_of(v: &Value, key: &str) -> Option<Point> {
     let p = v.get(key)?;
-    Some(Point { x: Nm::from_raw_shim(p.get("x")?.as_f64()?.round() as i64), y: Nm::from_raw_shim(p.get("y")?.as_f64()?.round() as i64) })
+    Some(Point { x: Nm::kiround(p.get("x")?.as_f64()?), y: Nm::kiround(p.get("y")?.as_f64()?) })
 }
 
 fn xy(v: &Value) -> Option<Point> {
-    Some(Point { x: Nm::from_raw_shim(v.get("x")?.as_f64()?.round() as i64), y: Nm::from_raw_shim(v.get("y")?.as_f64()?.round() as i64) })
+    Some(Point { x: Nm::kiround(v.get("x")?.as_f64()?), y: Nm::kiround(v.get("y")?.as_f64()?) })
 }
 
 fn mode_of(v: &Value) -> TuningMode {
@@ -113,8 +113,8 @@ pub fn handles_json(p: &TuningPattern) -> Value {
 /// The cursor's pick for a request: `{x, y, tolerance, layer}`.
 fn pick_for(scene: &Scene, req: &Value) -> Option<Pick> {
     let at = xy(req)?;
-    let tolerance = req.get("tolerance").and_then(Value::as_f64).unwrap_or(150_000.0).round() as i64;
-    tune_edit::pick(scene, at.x, at.y, Nm::from_raw_shim(tolerance), req.get("layer").and_then(Value::as_str))
+    let tolerance = Nm::kiround(req.get("tolerance").and_then(Value::as_f64).unwrap_or(150_000.0));
+    tune_edit::pick(scene, at.x, at.y, tolerance, req.get("layer").and_then(Value::as_str))
 }
 
 fn settings_of(req: &Value) -> Value {
@@ -526,20 +526,20 @@ mod tests {
         Scratch(d)
     }
 
-    fn p(x: i64, y: i64) -> Point {
-        Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) }
+    fn p(x: Nm, y: Nm) -> Point {
+        Point { x, y }
     }
 
     /// Two parts 20 mm apart, each with a pad above a pad (1 mm pitch): nets `<a>` and `<b>` run from one to the other as 20 mm tracks. `rules` are custom rules.
     fn setup(dir: &Path, nets: [&str; 2], rules: Vec<eda_model::CustomRule>) {
-        let straight = |y: i64| vec![p(5_000_000, y), p(25_000_000, y)];
-        setup_with(dir, nets, rules, vec![(nets[0], straight(9_500_000)), (nets[1], straight(10_500_000))]);
+        let straight = |y: Nm| vec![p(mm(5.0), y), p(mm(25.0), y)];
+        setup_with(dir, nets, rules, vec![(nets[0], straight(mm(9.5))), (nets[1], straight(mm(10.5)))]);
     }
 
     /// [`setup`] with the tracks the caller draws (each its own track).
     fn setup_with(dir: &Path, nets: [&str; 2], rules: Vec<eda_model::CustomRule>, tracks: Vec<(&str, Vec<Point>)>) {
-        let pad = |n: &str, y: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::ZERO, Nm::from_raw_shim(y)), size: (mm(0.4), mm(0.4)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -500_000), pad("2", 500_000)], courtyard: Some((mm(1.0), mm(2.0))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, y: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::ZERO, y), size: (mm(0.4), mm(0.4)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", mm(-0.5)), pad("2", mm(0.5))], courtyard: Some((mm(1.0), mm(2.0))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = |r: &str| Part {
             reference: r.into(),
             mpn: None,
@@ -572,10 +572,10 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection {
-                outline: vec![p(0, 0), p(40_000_000, 0), p(40_000_000, 20_000_000), p(0, 20_000_000)],
+                outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(40.0), Nm::ZERO), p(mm(40.0), mm(20.0)), p(Nm::ZERO, mm(20.0))],
                 footprints: vec![
-                    FootprintInstance { id: "U1".into(), at: p(5_000_000, 10_000_000), rot: 0, side: Side::Top, label: Default::default() },
-                    FootprintInstance { id: "U2".into(), at: p(25_000_000, 10_000_000), rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U1".into(), at: p(mm(5.0), mm(10.0)), rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U2".into(), at: p(mm(25.0), mm(10.0)), rot: 0, side: Side::Top, label: Default::default() },
                 ],
                 modules: vec![],
             }),
@@ -682,8 +682,8 @@ mod tests {
         assert_eq!(patterns.len(), 1);
         let pat = &patterns[0];
         assert_eq!(f["pattern_id"], json!(pat.id));
-        assert_eq!((pat.mode, pat.layer.as_str(), pat.origin, pat.end), (TuningMode::Single, "F.Cu", p(8_000_000, 9_500_000), p(22_000_000, 9_500_000)));
-        assert_eq!(pat.base_line, vec![p(8_000_000, 9_500_000), p(22_000_000, 9_500_000)]);
+        assert_eq!((pat.mode, pat.layer.as_str(), pat.origin, pat.end), (TuningMode::Single, "F.Cu", p(mm(8.0), mm(9.5)), p(mm(22.0), mm(9.5))));
+        assert_eq!(pat.base_line, vec![p(mm(8.0), mm(9.5)), p(mm(22.0), mm(9.5))]);
         assert_eq!((pat.max_amplitude, pat.spacing), (mm(0.95), mm(0.65)));
         assert!(pat.member_ids.len() > 10, "the meander's tracks are the members: {}", pat.member_ids.len());
         let rt = after.routing.as_ref().unwrap();
@@ -696,7 +696,7 @@ mod tests {
 
         // findings p5 F4-4: a track of the pattern does not start another pattern (`PlaceTuningPattern`'s warning)
         let member = rt.tracks.iter().find(|t| &t.id == pat.member_ids.last().unwrap() && t.arc().is_none() && t.pts.len() >= 2).expect("a straight member");
-        let mid = p(((member.pts[0].x + member.pts[1].x) / 2).raw_shim(), ((member.pts[0].y + member.pts[1].y) / 2).raw_shim());
+        let mid = p((member.pts[0].x + member.pts[1].x) / 2, (member.pts[0].y + member.pts[1].y) / 2);
         let again = start(&dir, &body(json!({ "x": mid.x, "y": mid.y, "layer": "F.Cu", "mode": "single", "tolerance": 0 })));
         assert_eq!((again["ok"].clone(), again["message"].clone()), (json!(false), json!("Unable to tune segments inside other tuning patterns.")), "{again}");
 
@@ -876,7 +876,7 @@ mod tests {
         assert_eq!(f["pattern_id"], json!(id));
         let after = tune_edit::patterns_of(&design_of(&dir));
         assert_eq!(after.len(), 1);
-        assert_eq!((after[0].id.as_str(), after[0].end, after[0].max_amplitude, after[0].target_length.opt), (id.as_str(), p(18_000_000, 9_500_000), mm(0.8), 21_000_000));
+        assert_eq!((after[0].id.as_str(), after[0].end, after[0].max_amplitude, after[0].target_length.opt), (id.as_str(), p(mm(18.0), mm(9.5)), mm(0.8), 21_000_000));
         assert!((net_mm(&dir, "/SIG") - 21.0).abs() < 0.1);
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned), "the whole edit is one undo step");
@@ -920,8 +920,8 @@ mod tests {
     fn the_skew_tuner_lengthens_the_clicked_line_until_it_matches_its_partner() {
         let dir = scratch("skew");
         // USB_N takes a 0.7 mm detour on the way: 1.4 mm longer than USB_P, which runs straight
-        let n_path = vec![p(5_000_000, 10_500_000), p(10_000_000, 10_500_000), p(10_000_000, 11_200_000), p(12_000_000, 11_200_000), p(12_000_000, 10_500_000), p(25_000_000, 10_500_000)];
-        setup_with(&dir, ["USB_P", "USB_N"], vec![], vec![("/USB_P", vec![p(5_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("/USB_N", n_path)]);
+        let n_path = vec![p(mm(5.0), mm(10.5)), p(mm(10.0), mm(10.5)), p(mm(10.0), mm(11.2)), p(mm(12.0), mm(11.2)), p(mm(12.0), mm(10.5)), p(mm(25.0), mm(10.5))];
+        setup_with(&dir, ["USB_P", "USB_N"], vec![], vec![("/USB_P", vec![p(mm(5.0), mm(9.5)), p(mm(25.0), mm(9.5))]), ("/USB_N", n_path)]);
         let (p_before, n_before) = (net_mm(&dir, "/USB_P"), net_mm(&dir, "/USB_N"));
         assert!((n_before - p_before - 1.4).abs() < 0.01, "P {p_before} N {n_before}");
         let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "skew" })));
@@ -959,7 +959,7 @@ mod tests {
             &dir,
             ["SIG", "OTHER"],
             vec![],
-            vec![("/SIG", vec![p(5_000_000, 9_500_000), p(10_000_000, 9_500_000)]), ("/SIG", vec![p(10_000_000, 9_500_000), p(15_000_000, 9_500_000), p(20_000_000, 9_500_000)]), ("/SIG", vec![p(20_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("/OTHER", vec![p(5_000_000, 10_500_000), p(25_000_000, 10_500_000)])],
+            vec![("/SIG", vec![p(mm(5.0), mm(9.5)), p(mm(10.0), mm(9.5))]), ("/SIG", vec![p(mm(10.0), mm(9.5)), p(mm(15.0), mm(9.5)), p(mm(20.0), mm(9.5))]), ("/SIG", vec![p(mm(20.0), mm(9.5)), p(mm(25.0), mm(9.5))]), ("/OTHER", vec![p(mm(5.0), mm(10.5)), p(mm(25.0), mm(10.5))])],
         );
         let before = design_of(&dir);
         let ids_before: Vec<String> = tracks_of(&before).iter().filter(|t| t.net == "/SIG").map(|t| t.id.clone()).collect();
@@ -994,9 +994,9 @@ mod tests {
     fn a_track_that_is_an_arc_can_be_picked_and_a_pattern_is_tuned_along_it() {
         let dir = scratch("arc");
         // SIG: 7 mm straight, a quarter arc of radius 3 mm turning up, 5 mm straight on; the arc is a track of its own
-        let h = (3_000_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as i64;
-        let (arc_start, arc_mid, arc_end) = (p(12_000_000, 9_500_000), p(12_000_000 + h, 6_500_000 + h), p(15_000_000, 6_500_000));
-        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("/SIG", vec![p(5_000_000, 9_500_000), p(12_000_000, 9_500_000)]), ("/SIG", vec![p(15_000_000, 6_500_000), p(15_000_000, 1_500_000)]), ("/OTHER", vec![p(5_000_000, 10_500_000), p(25_000_000, 10_500_000)])]);
+        let h = mm(3.0).scale(std::f64::consts::FRAC_1_SQRT_2);
+        let (arc_start, arc_mid, arc_end) = (p(mm(12.0), mm(9.5)), p(mm(12.0) + h, mm(6.5) + h), p(mm(15.0), mm(6.5)));
+        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("/SIG", vec![p(mm(5.0), mm(9.5)), p(mm(12.0), mm(9.5))]), ("/SIG", vec![p(mm(15.0), mm(6.5)), p(mm(15.0), mm(1.5))]), ("/OTHER", vec![p(mm(5.0), mm(10.5)), p(mm(25.0), mm(10.5))])]);
         add_arc_track(&dir, "/SIG", arc_start, arc_mid, arc_end);
         let before = design_of(&dir);
         let original = net_mm(&dir, "/SIG");
@@ -1047,7 +1047,7 @@ mod tests {
         setup(&dir, ["SIG", "OTHER"], vec![]);
         start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000_000 } })));
         mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
-        board::step(&dir, Cmd::AddTrack { net: "/OTHER".into(), layer: "F.Cu".into(), width: mm(0.25), pts: vec![p(2_000_000, 3_000_000), p(4_000_000, 3_000_000)] }, false, "test").unwrap();
+        board::step(&dir, Cmd::AddTrack { net: "/OTHER".into(), layer: "F.Cu".into(), width: mm(0.25), pts: vec![p(mm(2.0), mm(3.0)), p(mm(4.0), mm(3.0))] }, false, "test").unwrap();
         let f = fix(&dir, &body(json!({})));
         assert_eq!(f["ok"], json!(false));
         assert!(f["message"].as_str().unwrap().contains("changed"), "{f}");
@@ -1114,8 +1114,8 @@ mod tests {
 
         // the skew tuner: USB_N takes a 0.7 mm detour (1.4 mm longer than USB_P), the skew is tuned away
         let sk = scratch("kicad_skew");
-        let n_path = vec![p(5_000_000, 10_500_000), p(10_000_000, 10_500_000), p(10_000_000, 11_200_000), p(12_000_000, 11_200_000), p(12_000_000, 10_500_000), p(25_000_000, 10_500_000)];
-        setup_with(&sk, ["USB_P", "USB_N"], vec![], vec![("/USB_P", vec![p(5_000_000, 9_500_000), p(25_000_000, 9_500_000)]), ("/USB_N", n_path)]);
+        let n_path = vec![p(mm(5.0), mm(10.5)), p(mm(10.0), mm(10.5)), p(mm(10.0), mm(11.2)), p(mm(12.0), mm(11.2)), p(mm(12.0), mm(10.5)), p(mm(25.0), mm(10.5))];
+        setup_with(&sk, ["USB_P", "USB_N"], vec![], vec![("/USB_P", vec![p(mm(5.0), mm(9.5)), p(mm(25.0), mm(9.5))]), ("/USB_N", n_path)]);
         let rule_skew = usb("skew (max 0.15mm) (within_diff_pairs)");
         assert_eq!(judge(&sk, &rule_skew, "skew_out_of_range").len(), 1, "the control: 1.4 mm of skew is flagged, on the shorter net (the longest has none against itself)");
         start(&sk, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "skew" })));

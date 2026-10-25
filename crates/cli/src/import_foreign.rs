@@ -176,7 +176,7 @@ pub(crate) fn top_level_siblings(import: &ForeignImport, first: &SheetFile) -> V
 /// looks for "an existing screen" of the same name), and the screens inside each file are filed under names that cannot meet another file's.
 pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
     // 1000 mil, in nanometres, and the default size of a sheet symbol (`MIN_SHEET_WIDTH`, `MIN_SHEET_HEIGHT`: 500 and 150 mil)
-    const GRID: i64 = 25_400_000;
+    const GRID: Nm = Nm::new(25_400_000);
     const SHEET: (Nm, Nm) = (Nm::new(12_700_000), Nm::new(3_810_000));
     let mut root = SchematicSection { imported_from_kicad: true, ..Default::default() };
     let mut screens: BTreeMap<String, SchematicSection> = BTreeMap::new();
@@ -214,7 +214,7 @@ pub(crate) fn combine_sheets(parts: Vec<(String, SheetFile)>) -> SheetFile {
             screens.insert(renamed(&f), sec);
         }
         screens.insert(key.clone(), top);
-        root.sheets.push(SheetInstance { id: String::new(), name: sheet_name, file: key, at: Point { x: Nm::from_raw_shim(x * GRID), y: Nm::from_raw_shim(y * GRID) }, size: SHEET, pins: vec![], page: page.to_string() });
+        root.sheets.push(SheetInstance { id: String::new(), name: sheet_name, file: key, at: Point { x: GRID * x, y: GRID * y }, size: SHEET, pins: vec![], page: page.to_string() });
         page += 1;
         x += 2;
         if x > 10 {
@@ -427,8 +427,8 @@ mod tests {
         use eda_model::ir::{FootprintInstance, PlacementSection, Provenance, Side};
         use eda_model::{ConstraintModel, Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
         let dir = scratch(&format!("board_{tag}"));
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_raw_shim(x), Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "HDR".into(), pads: vec![pad("1", -800_000), pad("2", 800_000)], courtyard: Some((mm(3.0), mm(1.5))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pad = |n: &str, x: Nm| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "HDR".into(), pads: vec![pad("1", mm(-0.8)), pad("2", mm(0.8))], courtyard: Some((mm(3.0), mm(1.5))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "J9".into(),
             mpn: None,

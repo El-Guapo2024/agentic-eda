@@ -28,13 +28,13 @@ fn slow() -> bool {
     !off
 }
 
-fn library_pad(number: &str, x: i64, y: i64) -> eda_model::ir::LibraryPad {
+fn library_pad(number: &str, x: Nm, y: Nm) -> eda_model::ir::LibraryPad {
     use eda_model::footprint::PadKind;
     use eda_model::ir::{ChamferCorners, LibraryPadShape};
     eda_model::ir::LibraryPad {
         id: String::new(),
         number: number.into(),
-        at: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y) },
+        at: Point { x, y },
         size: (mm(0.9), mm(0.6)),
         offset: Point::default(),
         shape: LibraryPadShape::RoundRect,
@@ -63,7 +63,7 @@ fn library_pad(number: &str, x: i64, y: i64) -> eda_model::ir::LibraryPad {
 fn bga_in(dir: &Path) -> String {
     let name = "Test:BGA_3x4";
     step(dir, Cmd::NewFootprint { name: name.into() }, false, "test").unwrap();
-    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("X", 0, 0) }, false, "test").unwrap();
+    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("X", Nm::ZERO, Nm::ZERO) }, false, "test").unwrap();
     let (_, design, _) = load(dir).unwrap();
     let id = design.footprint_library.as_ref().unwrap().by_name(name).unwrap().pads[0].id.clone();
     let numbering = PadNumbering {
@@ -176,7 +176,7 @@ fn footprint_with_fields_in(dir: &Path) -> String {
     use eda_model::ir::FootprintField;
     let name = "Test:Fielded";
     step(dir, Cmd::NewFootprint { name: name.into() }, false, "test").unwrap();
-    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("1", 0, 0) }, false, "test").unwrap();
+    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("1", Nm::ZERO, Nm::ZERO) }, false, "test").unwrap();
     let mut reference = FieldLayout::new(Point { x: mm(0.5), y: mm(-2.5) }, "F.Fab");
     reference.size = (mm(1.2), mm(1.0));
     reference.text = Some("J**".into());

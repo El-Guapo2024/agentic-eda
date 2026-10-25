@@ -440,7 +440,7 @@ pub(crate) fn heal_stale_nets(design: &mut Design, model: &ConstraintModel) {
 
 #[cfg(test)]
 mod tests {
-    use eda_model::units::{mm, Nm};
+    use eda_model::units::mm;
     use crate::board::tests::{scratch, setup};
     use crate::board::{load, save};
     use std::collections::BTreeSet;
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn every_track_via_and_zone_stays_on_a_net_through_renames() {
         use eda_model::ir::Point;
-        let p = |x: i64, y: i64| Point { x: Nm::from_raw_shim(x * 1_000_000), y: Nm::from_raw_shim(y * 1_000_000) };
+        let p = |x: i64, y: i64| Point { x: mm(x as f64), y: mm(y as f64) };
         let dir = scratch("kicad_names_routed");
         setup(&dir);
         let intent = dir.join("intent.yaml");

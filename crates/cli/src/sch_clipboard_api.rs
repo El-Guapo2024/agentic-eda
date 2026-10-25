@@ -136,7 +136,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
     let sheet = req.get("sheet").and_then(Value::as_str).unwrap_or("").to_string();
     let mode: PasteMode = req.get("mode").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
     let duplicate = req.get("duplicate").and_then(Value::as_bool).unwrap_or(false);
-    let cursor = req.get("cursor").and_then(Value::as_array).and_then(|c| Some(Point { x: Nm::from_raw_shim(c.first()?.as_i64()?), y: Nm::from_raw_shim(c.get(1)?.as_i64()?) }));
+    let cursor = req.get("cursor").and_then(Value::as_array).and_then(|c| Some(Point { x: Nm::new(c.first()?.as_i64()?), y: Nm::new(c.get(1)?.as_i64()?) }));
 
     let (kind, mut fragment) = match eda_kicad::parse_clipboard(text) {
         Ok(f) => ("fragment", f),
@@ -271,8 +271,8 @@ mod tests {
     }
 
     /// Wires as polylines of points (moved by `(dx, dy)`), with whether each is a bus, in a fixed order.
-    fn polylines(wires: &[eda_model::ir::Wire], dx: i64, dy: i64) -> Vec<(bool, Vec<(Nm, Nm)>)> {
-        let mut out: Vec<_> = wires.iter().map(|w| (w.bus, w.pts.iter().map(|p| (p.x + Nm::from_raw_shim(dx), p.y + Nm::from_raw_shim(dy))).collect())).collect();
+    fn polylines(wires: &[eda_model::ir::Wire], dx: Nm, dy: Nm) -> Vec<(bool, Vec<(Nm, Nm)>)> {
+        let mut out: Vec<_> = wires.iter().map(|w| (w.bus, w.pts.iter().map(|p| (p.x + dx, p.y + dy)).collect())).collect();
         out.sort();
         out
     }
@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(anchor.len(), 2);
 
         // Paste it, 40 mm to the right and 30 below: one command, one undo step.
-        let (dx, dy) = (40_640_000, 30_480_000);
+        let (dx, dy) = (mm(40.64), mm(30.48));
         // The command as the studio posts it (`/api/cmd` reads a parsed body with `from_value`): the fragment travels inside it, library symbols and all.
         let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"].clone(), "dx": dx, "dy": dy, "mode": "unique" })).expect("the studio's paste_sch command reads");
         board::step(&dir, cmd, false, "test").unwrap();
@@ -317,7 +317,7 @@ mod tests {
         // The copy of each symbol is the symbol: same library symbol, value, footprint, orientation, flags.
         for old in &orig.symbols {
             let new = sch.symbols.iter().find(|s| !orig.symbols.iter().any(|o| o.id == s.id) && s.value == old.value && s.footprint == old.footprint && s.rot == old.rot && s.mirrored == old.mirrored).unwrap_or_else(|| panic!("no copy of {}", old.id));
-            assert_eq!(((new.at.x - old.at.x).raw_shim(), (new.at.y - old.at.y).raw_shim()), (dx, dy), "{} moved by the paste's offset", old.id);
+            assert_eq!((new.at.x - old.at.x, new.at.y - old.at.y), (dx, dy), "{} moved by the paste's offset", old.id);
             if eda_model::symbol::is_synthetic_lib_id(&old.lib_id) {
                 assert_eq!(new.lib_id, "clipboard:U1", "a generated symbol (`eda:` or `gen:`) is a library symbol of its own in the copy");
             } else {
@@ -326,14 +326,14 @@ mod tests {
         }
         // Wires, power symbols and flags came with them.
         let new_wires: Vec<_> = sch.wires.iter().filter(|w| !orig.wires.iter().any(|o| o.id == w.id)).cloned().collect();
-        assert_eq!(polylines(&new_wires, 0, 0), polylines(&orig.wires, dx, dy), "the wires came back as the polylines they were");
+        assert_eq!(polylines(&new_wires, Nm::ZERO, Nm::ZERO), polylines(&orig.wires, dx, dy), "the wires came back as the polylines they were");
         assert_eq!(sch.power_symbols.len(), orig.power_symbols.len() * 2);
         assert_eq!(sch.no_connects.len(), orig.no_connects.len() * 2);
         // Every power symbol and flag has its copy, of the same library symbol and net, on the same spot moved by the offset (a ground and its
         // PWR_FLAG share a pin, so spots repeat).
-        let key = |p: &eda_model::ir::PowerSymbol, dx: i64, dy: i64| (p.lib_id.clone(), p.net.clone(), p.at.x + Nm::from_raw_shim(dx), p.at.y + Nm::from_raw_shim(dy), p.rot);
-        let mut have: Vec<_> = sch.power_symbols.iter().map(|p| key(p, 0, 0)).collect();
-        let mut want: Vec<_> = orig.power_symbols.iter().map(|p| key(p, 0, 0)).chain(orig.power_symbols.iter().map(|p| key(p, dx, dy))).collect();
+        let key = |p: &eda_model::ir::PowerSymbol, dx: Nm, dy: Nm| (p.lib_id.clone(), p.net.clone(), p.at.x + dx, p.at.y + dy, p.rot);
+        let mut have: Vec<_> = sch.power_symbols.iter().map(|p| key(p, Nm::ZERO, Nm::ZERO)).collect();
+        let mut want: Vec<_> = orig.power_symbols.iter().map(|p| key(p, Nm::ZERO, Nm::ZERO)).chain(orig.power_symbols.iter().map(|p| key(p, dx, dy))).collect();
         have.sort();
         want.sort();
         assert_eq!(have, want);

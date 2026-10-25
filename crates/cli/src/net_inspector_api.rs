@@ -54,7 +54,7 @@ struct LineItem {
 #[derive(Debug, Clone)]
 struct ViaItem {
     at: Point,
-    radius: i64,
+    radius: Nm,
     layers: (String, String),
 }
 
@@ -63,18 +63,18 @@ struct ViaItem {
 pub(crate) struct LengthStats {
     pub num_pads: usize,
     pub num_vias: usize,
-    pub via_length: i64,
-    pub track_length: i64,
-    pub pad_to_die_length: i64,
+    pub via_length: Nm,
+    pub track_length: Nm,
+    pub pad_to_die_length: Nm,
     /// Track length per copper layer (`LayerLengths`).
-    pub layer_lengths: BTreeMap<String, i64>,
+    pub layer_lengths: BTreeMap<String, Nm>,
     /// How many tracks, arcs, vias and pads of the net there are (`relevantConnectivityItems`): a net with none has no row (`foundNets`).
     pub items: usize,
 }
 
 impl LengthStats {
     /// `LIST_ITEM::GetTotalLength`.
-    pub fn total(&self) -> i64 {
+    pub fn total(&self) -> Nm {
         self.track_length + self.via_length + self.pad_to_die_length
     }
 }
@@ -153,15 +153,15 @@ fn merge_chains(primary: &ShapeLineChain, secondary: &ShapeLineChain, at_start: 
 
 /// `LENGTH_DELAY_CALCULATION::mergeLines`.
 fn merge_lines(lines: &mut [LineItem]) {
-    let mut at: BTreeMap<(i64, i64), BTreeSet<usize>> = BTreeMap::new();
+    let mut at: BTreeMap<Point, BTreeSet<usize>> = BTreeMap::new();
     for (i, l) in lines.iter().enumerate() {
         let (a, b) = (l.line.c_point(0), l.line.c_last_point());
-        at.entry((a.x.raw_shim(), a.y.raw_shim())).or_default().insert(i);
-        at.entry((b.x.raw_shim(), b.y.raw_shim())).or_default().insert(i);
+        at.entry(a).or_default().insert(i);
+        at.entry(b).or_default().insert(i);
     }
-    let remove = |at: &mut BTreeMap<(i64, i64), BTreeSet<usize>>, l: &LineItem, i: usize| {
+    let remove = |at: &mut BTreeMap<Point, BTreeSet<usize>>, l: &LineItem, i: usize| {
         for p in [l.line.c_point(0), l.line.c_last_point()] {
-            if let Some(s) = at.get_mut(&(p.x.raw_shim(), p.y.raw_shim())) {
+            if let Some(s) = at.get_mut(&p) {
                 s.remove(&i);
             }
         }
@@ -177,7 +177,7 @@ fn merge_lines(lines: &mut [LineItem]) {
             let mut merged = false;
             for at_start in [true, false] {
                 let pos = if at_start { lines[primary].line.c_point(0) } else { lines[primary].line.c_last_point() };
-                let Some(set) = at.get(&(pos.x.raw_shim(), pos.y.raw_shim())) else { continue };
+                let Some(set) = at.get(&pos) else { continue };
                 if set.len() != 1 {
                     continue;
                 }
@@ -203,7 +203,7 @@ fn merge_lines(lines: &mut [LineItem]) {
 /// `CalculateLengthDetails` of the items of `net` on `board` (see the module doc). `copper` is the board's copper layers in stack order,
 /// `die` the pad-to-die length of each pad of `board.pads` (0 where none), `height` the stackup height between two copper layers when the
 /// board uses it in its lengths (`None` when it does not).
-pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die: &[i64], height: Option<&dyn Fn(&str, &str) -> i64>) -> LengthStats {
+pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die: &[Nm], height: Option<&dyn Fn(&str, &str) -> i64>) -> LengthStats {
     let on = |n: &Option<String>| n.as_deref() == Some(net);
     let pads: Vec<usize> = board.pads.iter().enumerate().filter(|(_, p)| on(&p.net)).map(|(i, _)| i).collect();
     let mut lines: Vec<LineItem> = board
@@ -254,14 +254,14 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
             // "Nothing connects to this via": `pcbVia->GetLayer()` twice
             _ => (v.from_layer.clone(), v.from_layer.clone()),
         };
-        vias.push(ViaItem { at: v.at, radius: radius.raw_shim(), layers });
+        vias.push(ViaItem { at: v.at, radius, layers });
     }
 
     merge_lines(&mut lines);
 
     // "Clip traces inside VIA pads after merging"
     for v in &vias {
-        let circle = Shape::Circle { c: v.at, r: Nm::from_raw_shim(v.radius) };
+        let circle = Shape::Circle { c: v.at, r: v.radius };
         let inside = |p: Point| contains(&circle, p);
         for l in lines.iter_mut().filter(|l| l.status == Merge::InUse) {
             if l.line.point_count() < 2 {
@@ -298,35 +298,35 @@ pub(crate) fn length_details(board: &DrcBoard, net: &str, copper: &[String], die
 
     let mut stats = LengthStats { items: pads.len() + lines.len() + vias.len(), ..LengthStats::default() };
     for l in lines.iter().filter(|l| l.status != Merge::Retired) {
-        let length = l.line.length();
+        let length = Nm::new(l.line.length());
         stats.track_length += length;
         *stats.layer_lengths.entry(l.layer.clone()).or_default() += length;
     }
     if let Some(height) = height {
         for v in &vias {
-            stats.via_length += height(&v.layers.0, &v.layers.1);
+            stats.via_length += Nm::new(height(&v.layers.0, &v.layers.1));
             stats.num_vias += 1;
         }
     }
     for &i in &pads {
-        stats.pad_to_die_length += die.get(i).copied().unwrap_or(0);
+        stats.pad_to_die_length += die.get(i).copied().unwrap_or(Nm::ZERO);
         stats.num_pads += 1;
     }
     stats
 }
 
 /// The `(die_length ..)` a board file gave the pad, in nanometres (`PAD::GetPadToDieLength`): one of the pad's tokens the IR keeps.
-fn die_length_of(tokens: &[String]) -> i64 {
-    (tokens
+fn die_length_of(tokens: &[String]) -> Nm {
+    tokens
         .iter()
         .find_map(|t| t.trim().strip_prefix("(die_length").and_then(|r| r.trim().trim_end_matches(')').trim().parse::<f64>().ok()))
         .map(eda_model::units::from_mm)
-        .unwrap_or(Nm::ZERO)).raw_shim()
+        .unwrap_or(Nm::ZERO)
 }
 
 /// The pad-to-die length of each of `board.pads`: the k-th pad numbered N of a footprint is the k-th pad numbered N of its footprint's pads,
 /// whose tokens are the footprint extra's pad at the same index.
-fn die_lengths(design: &Design, model: &ConstraintModel, board: &DrcBoard) -> Vec<i64> {
+fn die_lengths(design: &Design, model: &ConstraintModel, board: &DrcBoard) -> Vec<Nm> {
     let extras = design.drawings.as_ref().map(|d| &d.footprint_extras);
     let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
     board
@@ -336,14 +336,14 @@ fn die_lengths(design: &Design, model: &ConstraintModel, board: &DrcBoard) -> Ve
             let k = seen.entry((p.footprint_ref.clone(), p.number.clone())).or_insert(0);
             let nth = *k;
             *k += 1;
-            let Some(part) = model.part(&p.footprint_ref) else { return 0 };
-            let Some(fp) = model.footprint_of(part) else { return 0 };
-            let Some(extra) = extras.and_then(|e| e.iter().find(|e| e.id == p.footprint_ref)) else { return 0 };
+            let Some(part) = model.part(&p.footprint_ref) else { return Nm::ZERO };
+            let Some(fp) = model.footprint_of(part) else { return Nm::ZERO };
+            let Some(extra) = extras.and_then(|e| e.iter().find(|e| e.id == p.footprint_ref)) else { return Nm::ZERO };
             if extra.pads.len() != fp.pads.len() {
-                return 0;
+                return Nm::ZERO;
             }
             let idx = fp.pads.iter().enumerate().filter(|(_, q)| q.number == p.number).nth(nth).map(|(i, _)| i);
-            idx.and_then(|i| extra.pads.get(i)).map(|m| die_length_of(&m.tokens)).unwrap_or(0)
+            idx.and_then(|i| extra.pads.get(i)).map(|m| die_length_of(&m.tokens)).unwrap_or(Nm::ZERO)
         })
         .collect()
 }

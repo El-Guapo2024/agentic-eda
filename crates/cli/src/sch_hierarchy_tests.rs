@@ -418,10 +418,10 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
     design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
     {
         let root = design.schematic.as_mut().unwrap();
-        for (unit, x) in [(1, 300_000_000), (2, 330_000_000), (3, 360_000_000)] {
+        for (unit, x) in [(1, mm(300.0)), (2, mm(330.0)), (3, mm(360.0))] {
             root.symbols.push(eda_model::ir::SymbolInstance {
                 id: "U9".into(),
-                at: Point { x: Nm::from_raw_shim(x), y: mm(20.0) },
+                at: Point { x, y: mm(20.0) },
                 rot: 0,
                 mirrored: false,
                 mirror_y: false,
@@ -1006,7 +1006,7 @@ fn write_twice_placed_tree_with(dir: &Path, file: &str, edit: impl Fn(&mut eda_m
     edit(child.schematic.as_mut().unwrap());
     let mut design = child.clone();
     let mut root = eda_model::ir::SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], ..child.schematic.clone().unwrap() };
-    root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: Nm::from_raw_shim(20_000_000 + 60_000_000 * i as i64), y: mm(20.0) }, size: (mm(40.0), mm(20.0)), pins: vec![], page: String::new() }).collect();
+    root.sheets = ["a", "b"].iter().enumerate().map(|(i, n)| eda_model::ir::SheetInstance { id: format!("sh_{n}"), name: format!("LDO {n}"), file: "ldo.kicad_sch".into(), at: Point { x: mm(20.0) + mm(60.0) * i as i64, y: mm(20.0) }, size: (mm(40.0), mm(20.0)), pins: vec![], page: String::new() }).collect();
     design.schematic = Some(root);
     design.sheet_contents = Some([("ldo.kicad_sch".to_string(), child.schematic.unwrap())].into_iter().collect());
     let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-23", title: "twice" }, file).unwrap();

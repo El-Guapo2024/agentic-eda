@@ -362,9 +362,9 @@ fn points(dir: &Path) -> Vec<PcbPoint> {
     load(dir).unwrap().1.drawings.map(|d| d.board_items.points).unwrap_or_default()
 }
 
-fn add_point(dir: &Path, layer: &str, at: Point, size_nm: i64) {
+fn add_point(dir: &Path, layer: &str, at: Point, size_nm: Nm) {
     let mut point = PcbPoint::new(layer, at);
-    point.size_nm = Nm::from_raw_shim(size_nm);
+    point.size_nm = size_nm;
     step(dir, Cmd::PcbItem(PcbItemCmd::AddPoint { point }), false, "test").unwrap();
 }
 
@@ -374,7 +374,7 @@ fn a_point_is_one_undo_step_described_by_the_state_and_written_to_the_board() {
     let dir = scratch("p16_point");
     setup(&dir);
     assert!(points(&dir).is_empty());
-    add_point(&dir, "F.SilkS", Point { x: mm(30.0), y: mm(20.0) }, 2_000_000);
+    add_point(&dir, "F.SilkS", Point { x: mm(30.0), y: mm(20.0) }, mm(2.0));
     let id = points(&dir)[0].id.clone();
     assert!(id.starts_with("pnt_"));
     let s = state(&dir);
@@ -420,8 +420,8 @@ fn kicad_cli_loads_the_points_this_studio_writes_keeps_them_and_does_not_plot_th
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let without = body(&plot(&cli, &derived_of(&dir), "F.SilkS", &dir.join("without.svg")));
     // inside the board's own extent: the plot's page is the board's extent, points included
-    add_point(&dir, "F.SilkS", Point { x: mm(10.0), y: mm(12.0) }, 2_000_000);
-    add_point(&dir, "B.Cu", Point { x: mm(5.0), y: mm(6.0) }, 1_000_000);
+    add_point(&dir, "F.SilkS", Point { x: mm(10.0), y: mm(12.0) }, mm(2.0));
+    add_point(&dir, "B.Cu", Point { x: mm(5.0), y: mm(6.0) }, mm(1.0));
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let derived = derived_of(&dir);
     let text = std::fs::read_to_string(&derived).unwrap();
@@ -459,13 +459,13 @@ fn set_fill(dir: &Path, id: &str, fill: ShapeFill) {
     step(dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.to_string()], fill: Some(fill), start_ending: None, end_ending: None }), false, "test").unwrap();
 }
 
-fn rect_shape(layer: &str, (x0, y0): (i64, i64), (x1, y1): (i64, i64)) -> Shape {
-    Shape::Rect { id: String::new(), layer: layer.into(), stroke_width: mm(0.2), filled: false, start: Point { x: Nm::from_raw_shim(x0), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x1), y: Nm::from_raw_shim(y1) } }
+fn rect_shape(layer: &str, (x0, y0): (Nm, Nm), (x1, y1): (Nm, Nm)) -> Shape {
+    Shape::Rect { id: String::new(), layer: layer.into(), stroke_width: mm(0.2), filled: false, start: Point { x: x0, y: y0 }, end: Point { x: x1, y: y1 } }
 }
 
 /// A vertical line 0.6 mm wide at `x` from `y0` to `y1`.
-fn bar(layer: &str, x: i64, y0: i64, y1: i64) -> Shape {
-    Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: mm(0.6), filled: false, start: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y0) }, end: Point { x: Nm::from_raw_shim(x), y: Nm::from_raw_shim(y1) } }
+fn bar(layer: &str, x: Nm, y0: Nm, y1: Nm) -> Shape {
+    Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: mm(0.6), filled: false, start: Point { x, y: y0 }, end: Point { x, y: y1 } }
 }
 
 /// The state's description of the shape `id`.
@@ -480,7 +480,7 @@ fn a_hatch_is_one_undo_step_described_by_the_state_with_its_lines_and_written_to
     let dir = scratch("p16_hatch");
     setup(&dir);
     // Away from the two footprints: their Value fields are on F.Fab and cut a hatching they are over (the slow test below has the square over one).
-    let id = add_shape(&dir, rect_shape("F.Fab", (1_000_000, 11_000_000), (9_000_000, 19_000_000)));
+    let id = add_shape(&dir, rect_shape("F.Fab", (mm(1.0), mm(11.0)), (mm(9.0), mm(19.0))));
     assert!(shape_json(&dir, &id).get("fill").is_none() && shape_json(&dir, &id).get("hatch_lines").is_none(), "an unfilled shape says nothing of hatching");
 
     set_fill(&dir, &id, ShapeFill::Hatch);
@@ -493,13 +493,13 @@ fn a_hatch_is_one_undo_step_described_by_the_state_with_its_lines_and_written_to
     let alone = lines.len();
 
     // A line across the shape on its layer: the lines it crosses are cut in two, with no step of ours between.
-    let cutter = add_shape(&dir, bar("F.Fab", 5_000_000, 10_000_000, 20_000_000));
+    let cutter = add_shape(&dir, bar("F.Fab", mm(5.0), mm(10.0), mm(20.0)));
     let cut = shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len();
     assert!(cut > alone, "{cut} against {alone}");
     step(&dir, Cmd::DeleteShape { id: cutter }, false, "test").unwrap();
     assert_eq!(shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len(), alone, "and taking the bar away gives the lines back");
     // One on another layer cuts nothing.
-    add_shape(&dir, bar("F.SilkS", 5_000_000, 10_000_000, 20_000_000));
+    add_shape(&dir, bar("F.SilkS", mm(5.0), mm(10.0), mm(20.0)));
     assert_eq!(shape_json(&dir, &id)["hatch_lines"].as_array().unwrap().len(), alone);
 
     // The three hatches: a reverse hatch has the lines the other way, a cross-hatch both.
@@ -589,9 +589,9 @@ fn kicad_cli_plots_the_hatching_this_studio_works_out() {
     };
     let dir = scratch("p16_hatch_cli");
     setup(&dir);
-    let rect = add_shape(&dir, rect_shape("F.Fab", (1_000_000, 1_000_000), (9_000_000, 9_000_000)));
+    let rect = add_shape(&dir, rect_shape("F.Fab", (mm(1.0), mm(1.0)), (mm(9.0), mm(9.0))));
     set_fill(&dir, &rect, ShapeFill::Hatch);
-    add_shape(&dir, bar("F.Fab", 5_000_000, 0, 12_000_000));
+    add_shape(&dir, bar("F.Fab", mm(5.0), Nm::ZERO, mm(12.0)));
     let circle = add_shape(&dir, Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false, center: Point { x: mm(15.0), y: mm(5.0) }, end: Point { x: mm(18.5), y: mm(5.0) } });
     set_fill(&dir, &circle, ShapeFill::ReverseHatch);
     let tri = add_shape(&dir, Shape::Polygon { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.2), filled: false, pts: vec![Point { x: mm(11.0), y: mm(11.0) }, Point { x: mm(19.0), y: mm(11.0) }, Point { x: mm(15.0), y: mm(19.0) }] });
@@ -750,30 +750,30 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     let dir = scratch("p16_barcode_cli");
     setup(&dir);
     let at = Point { x: mm(10.0), y: mm(12.0) };
-    let case = |layer: &str, kind: BarcodeKind, text: &str, w: i64, h: i64, mutate: &dyn Fn(&mut Barcode)| {
+    let case = |layer: &str, kind: BarcodeKind, text: &str, w: Nm, h: Nm, mutate: &dyn Fn(&mut Barcode)| {
         let mut b = qr(layer, at, text);
         b.kind = kind;
-        b.width_nm = Nm::from_raw_shim(w);
-        b.height_nm = Nm::from_raw_shim(h);
+        b.width_nm = w;
+        b.height_nm = h;
         mutate(&mut b);
         b
     };
     let cases = vec![
-        ("qr", case("F.SilkS", BarcodeKind::Qr, "HELLO", 8_000_000, 8_000_000, &|_| {})),
-        ("qr turned, level H", case("F.SilkS", BarcodeKind::Qr, "TURNED 90", 8_000_000, 8_000_000, &|b| {
+        ("qr", case("F.SilkS", BarcodeKind::Qr, "HELLO", mm(8.0), mm(8.0), &|_| {})),
+        ("qr turned, level H", case("F.SilkS", BarcodeKind::Qr, "TURNED 90", mm(8.0), mm(8.0), &|b| {
             b.angle = 90_000;
             b.ecc = EccLevel::H;
         })),
-        ("micro qr", case("F.SilkS", BarcodeKind::MicroQr, "MQ1", 6_000_000, 6_000_000, &|b| b.ecc = EccLevel::M)),
-        ("data matrix", case("F.SilkS", BarcodeKind::DataMatrix, "DM-2026", 7_000_000, 7_000_000, &|_| {})),
-        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", 14_000_000, 5_000_000, &|b| b.text_height_nm = mm(1.2))),
-        ("qr on the back (mirrored)", case("B.SilkS", BarcodeKind::Qr, "BACK", 8_000_000, 8_000_000, &|_| {})),
-        ("qr knocked out of the silkscreen", case("F.SilkS", BarcodeKind::Qr, "KO", 8_000_000, 8_000_000, &|b| {
+        ("micro qr", case("F.SilkS", BarcodeKind::MicroQr, "MQ1", mm(6.0), mm(6.0), &|b| b.ecc = EccLevel::M)),
+        ("data matrix", case("F.SilkS", BarcodeKind::DataMatrix, "DM-2026", mm(7.0), mm(7.0), &|_| {})),
+        ("code 128 with its text", case("F.SilkS", BarcodeKind::Code128, "AB-123", mm(14.0), mm(5.0), &|b| b.text_height_nm = mm(1.2))),
+        ("qr on the back (mirrored)", case("B.SilkS", BarcodeKind::Qr, "BACK", mm(8.0), mm(8.0), &|_| {})),
+        ("qr knocked out of the silkscreen", case("F.SilkS", BarcodeKind::Qr, "KO", mm(8.0), mm(8.0), &|b| {
             b.knockout = true;
             b.margin_x_nm = mm(1.0);
             b.margin_y_nm = mm(0.6);
         })),
-        ("code 39 with a text it cannot take", case("F.SilkS", BarcodeKind::Code39, "h\u{e9}llo", 14_000_000, 5_000_000, &|_| {})),
+        ("code 39 with a text it cannot take", case("F.SilkS", BarcodeKind::Code39, "h\u{e9}llo", mm(14.0), mm(5.0), &|_| {})),
     ];
     let derived_of = |dir: &Path| std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board file");
     for (name, barcode) in cases {
@@ -809,8 +809,8 @@ fn kicad_cli_plots_the_barcode_shape_this_studio_serves() {
     }
 
     // kicad-cli reads the barcodes and writes them back with what they were given
-    add_barcode(&dir, case("F.SilkS", BarcodeKind::Qr, "KEPT", 8_000_000, 8_000_000, &|b| b.ecc = EccLevel::Q));
-    add_barcode(&dir, case("F.SilkS", BarcodeKind::Code128, "KEPT-TOO", 14_000_000, 5_000_000, &|b| b.at = Point { x: mm(4.0), y: mm(3.0) }));
+    add_barcode(&dir, case("F.SilkS", BarcodeKind::Qr, "KEPT", mm(8.0), mm(8.0), &|b| b.ecc = EccLevel::Q));
+    add_barcode(&dir, case("F.SilkS", BarcodeKind::Code128, "KEPT-TOO", mm(14.0), mm(5.0), &|b| b.at = Point { x: mm(4.0), y: mm(3.0) }));
     let args: Vec<String> = ["--layers", "F.SilkS"].iter().map(|s| s.to_string()).collect();
     crate::kicad_engine::export(&dir, "svg", &args).expect("the studio's plot of the board");
     let derived = derived_of(&dir);
@@ -836,7 +836,7 @@ fn a_lines_endings_are_one_undo_step_described_by_the_state_and_written_to_the_b
     use eda_model::line_ending::{LineEnding, LineEndingStyle};
     let dir = scratch("k10_endings");
     setup(&dir);
-    let id = add_shape(&dir, bar("F.SilkS", 5_000_000, 10_000_000, 20_000_000));
+    let id = add_shape(&dir, bar("F.SilkS", mm(5.0), mm(10.0), mm(20.0)));
     let arrow = LineEnding { style: LineEndingStyle::Arrow, length_nm: mm(2.0), ..Default::default() };
     step(&dir, Cmd::PcbItem(PcbItemCmd::SetShapeStyle { ids: vec![id.clone()], fill: None, start_ending: Some(arrow), end_ending: Some(LineEnding::new(LineEndingStyle::ArrowOpen)) }), false, "test").unwrap();
     let s = shape_json(&dir, &id);

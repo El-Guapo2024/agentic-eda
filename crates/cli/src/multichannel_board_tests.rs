@@ -24,20 +24,20 @@ fn slow() -> bool {
     !off
 }
 
-/// Where the footprints go (um): channel 1 compact, the others in their own ways.
-const PLACE: [(&str, i64, i64); 12] = [
-    ("U1", 5_500_000, 9_000_000),
-    ("R1", 3_500_000, 4_200_000),
-    ("R2", 7_700_000, 4_200_000),
-    ("C1", 5_500_000, 13_200_000),
-    ("U2", 18_000_000, 9_000_000),
-    ("R3", 20_200_000, 4_200_000),
-    ("R4", 15_800_000, 4_200_000),
-    ("C2", 18_000_000, 14_000_000),
-    ("U3", 30_500_000, 9_000_000),
-    ("R5", 30_500_000, 4_200_000),
-    ("R6", 32_500_000, 13_500_000),
-    ("C3", 28_000_000, 13_500_000),
+/// Where the footprints go: channel 1 compact, the others in their own ways.
+const PLACE: [(&str, Nm, Nm); 12] = [
+    ("U1", Nm::new(5_500_000), Nm::new(9_000_000)),
+    ("R1", Nm::new(3_500_000), Nm::new(4_200_000)),
+    ("R2", Nm::new(7_700_000), Nm::new(4_200_000)),
+    ("C1", Nm::new(5_500_000), Nm::new(13_200_000)),
+    ("U2", Nm::new(18_000_000), Nm::new(9_000_000)),
+    ("R3", Nm::new(20_200_000), Nm::new(4_200_000)),
+    ("R4", Nm::new(15_800_000), Nm::new(4_200_000)),
+    ("C2", Nm::new(18_000_000), Nm::new(14_000_000)),
+    ("U3", Nm::new(30_500_000), Nm::new(9_000_000)),
+    ("R5", Nm::new(30_500_000), Nm::new(4_200_000)),
+    ("R6", Nm::new(32_500_000), Nm::new(13_500_000)),
+    ("C3", Nm::new(28_000_000), Nm::new(13_500_000)),
 ];
 
 const CH1: [&str; 4] = ["U1", "R1", "R2", "C1"];
@@ -62,7 +62,7 @@ fn channel_one(full: &ConstraintModel) -> ConstraintModel {
     m
 }
 
-fn design(placed: &[(&str, i64, i64)]) -> Design {
+fn design(placed: &[(&str, Nm, Nm)]) -> Design {
     Design {
         footprint_library: None,
         sheet_contents: None,
@@ -74,7 +74,7 @@ fn design(placed: &[(&str, i64, i64)]) -> Design {
         nets: None,
         placement: Some(PlacementSection {
             outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(36.0), y: Nm::ZERO }, Point { x: mm(36.0), y: mm(25.0) }, Point { x: Nm::ZERO, y: mm(25.0) }],
-            footprints: placed.iter().map(|(id, x, y)| FootprintInstance { id: id.to_string(), at: Point { x: Nm::from_raw_shim(*x), y: Nm::from_raw_shim(*y) }, rot: 0, side: Side::Top, label: Default::default() }).collect(),
+            footprints: placed.iter().map(|(id, x, y)| FootprintInstance { id: id.to_string(), at: Point { x: *x, y: *y }, rot: 0, side: Side::Top, label: Default::default() }).collect(),
             modules: vec![],
         }),
         routing: None,
@@ -346,7 +346,7 @@ fn kicad_cli_reads_the_rule_areas_as_its_own_rewrite_and_finds_the_repeated_chan
     let areas = rule_areas(&dir);
     let mut per: BTreeMap<(usize, String), u64> = BTreeMap::new();
     for v in after["violations"].as_array().unwrap().iter().chain(after["unconnected_items"].as_array().unwrap().iter()) {
-        let at: Vec<Point> = v["items"].as_array().unwrap().iter().map(|i| Point { x: Nm::from_raw_shim(i["pos"][0].as_i64().unwrap_or(0)), y: Nm::from_raw_shim(i["pos"][1].as_i64().unwrap_or(0)) }).collect();
+        let at: Vec<Point> = v["items"].as_array().unwrap().iter().map(|i| Point { x: Nm::new(i["pos"][0].as_i64().unwrap_or(0)), y: Nm::new(i["pos"][1].as_i64().unwrap_or(0)) }).collect();
         if at.is_empty() {
             continue;
         }
