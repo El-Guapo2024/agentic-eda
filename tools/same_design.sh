@@ -17,6 +17,7 @@ work="$(mktemp -d -p "${TMPDIR:-/tmp}" same-design.XXXX)"
 same=0
 diff=0
 failed=0
+volatile='s/"(wall_s|revision)": *[^,}]*/"\1": X/g'
 
 compare() {
     local name="$1" a="$2" b="$3"
@@ -30,7 +31,8 @@ compare() {
     local f bad=""
     while IFS= read -r f; do
         [ -n "$f" ] || continue
-        cmp -s "$a/$f" "$b/$f" || bad="$bad $f"
+        # what a run stamps with the clock: `result.json`'s `wall_s`, a fill cache's `revision`
+        cmp -s "$a/$f" "$b/$f" || cmp -s <(sed -E "$volatile" "$a/$f") <(sed -E "$volatile" "$b/$f") || bad="$bad $f"
     done <<< "$out"
     if [ -n "$bad" ]; then
         echo "DIFF  $name:$bad"
@@ -44,12 +46,17 @@ compare() {
 run_both() {
     local name="$1"
     shift
-    mkdir -p "$work/old/$name" "$work/new/$name"
+    mkdir -p "$work/old" "$work/new"
     local ra rb
-    (cd "$work/old/$name" && "$old" "$@" > ../"$name".log 2>&1)
+    # both run in the same directory, so the absolute paths they write (board.json's `intent`) are the same
+    mkdir -p "$work/run/$name"
+    (cd "$work/run/$name" && "$old" "$@" > "$work/old/$name".log 2>&1)
     ra=$?
-    (cd "$work/new/$name" && "$new" "$@" > ../"$name".log 2>&1)
+    mv "$work/run/$name" "$work/old/$name"
+    mkdir -p "$work/run/$name"
+    (cd "$work/run/$name" && "$new" "$@" > "$work/new/$name".log 2>&1)
     rb=$?
+    mv "$work/run/$name" "$work/new/$name"
     if [ "$ra" != "$rb" ]; then
         echo "DIFF  $name: exit $ra against $rb"
         diff=$((diff + 1))
