@@ -399,7 +399,7 @@ fn empty_board() -> eda_model::ir::Design {
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
-        placement: Some(PlacementSection { outline: vec![pt(Nm::ZERO, Nm::ZERO), pt(mm(0.1), Nm::ZERO), pt(mm(0.1), mm(0.08)), pt(Nm::ZERO, mm(0.08))], footprints: vec![], modules: vec![] }),
+        placement: Some(PlacementSection { outline: vec![pt(Nm::ZERO, Nm::ZERO), pt(mm(100.0), Nm::ZERO), pt(mm(100.0), mm(80.0)), pt(Nm::ZERO, mm(80.0))], footprints: vec![], modules: vec![] }),
         routing: None,
         drawings: None,
         footprint_library: None,
@@ -440,6 +440,16 @@ mod tests {
     use super::*;
 
     /// A project that has library tables and variables of its own is imported with them: the libraries still resolve from the new board folder.
+    /// The board a schematic without one gets is the 100 by 80 mm of a new project, not the 0.1 by 0.08 mm the micrometre literals were left as by the move to
+    /// nanometres.
+    #[test]
+    fn a_schematic_without_a_board_gets_a_100_by_80_mm_outline() {
+        let d = empty_board();
+        let outline = &d.placement.as_ref().unwrap().outline;
+        let (x1, y1) = (outline.iter().map(|p| p.x).max().unwrap(), outline.iter().map(|p| p.y).max().unwrap());
+        assert_eq!((x1.mm(), y1.mm()), (100.0, 80.0));
+    }
+
     #[test]
     fn the_projects_library_tables_and_variables_come_along() {
         let root = std::env::temp_dir().join(format!("eda-import-setup-{}", std::process::id()));
