@@ -185,14 +185,19 @@ pub fn sort_by_page_numbers(entries: &[SheetEntry]) -> Vec<SheetEntry> {
     sorted
 }
 
-/// The reference `sym` of `screen` has on the sheet whose last placement is `placement` (`SCH_SYMBOL::GetRef( &sheetPath )`): the
-/// [`crate::ir::SymbolPathOverride`] that placement keeps for it, else the symbol's own id. A screen placed once has no overrides, and a symbol
-/// the placement did not renumber keeps its id; `None` (the root) is always the id.
-pub fn reference_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, placement: Option<&str>) -> String {
-    placement
-        .and_then(|p| screen.instance_overrides.iter().find(|o| o.parent_sheet_instance_id == p && o.at == sym.at && o.unit == sym.unit))
-        .map(|o| o.reference.clone())
-        .unwrap_or_else(|| sym.id.clone())
+/// The reference `sym` of `screen` has on the sheet at `path` (`SCH_SYMBOL::GetRef( const SCH_SHEET_PATH* aSheet )`, which looks the instance up
+/// by the whole `aSheet->Path()`): the [`crate::ir::SymbolPathOverride`] filed under that path, else the symbol's own id. A screen shown once has
+/// no overrides, and a symbol the placement did not renumber keeps its id; the root (`[]`) is always the id.
+pub fn reference_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> String {
+    override_under(screen, sym, path).map(|o| o.reference.clone()).unwrap_or_else(|| sym.id.clone())
+}
+
+/// The [`crate::ir::SymbolPathOverride`] of `sym` filed under the sheet at `path`, if it has one.
+pub fn override_under<'a>(screen: &'a SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> Option<&'a crate::ir::SymbolPathOverride> {
+    if path.is_empty() {
+        return None;
+    }
+    screen.instance_overrides.iter().find(|o| o.sheet_path == path && o.at == sym.at && o.unit == sym.unit)
 }
 
 /// `SCHEMATIC::RecomputeIntersheetRefs`: the virtual pages each global label text is on (`GetPageRefsMap`), over every sheet of the hierarchy.
@@ -207,23 +212,55 @@ pub fn global_label_pages(design: &Design) -> std::collections::BTreeMap<String,
     out
 }
 
-/// `SCH_SCREENS::PruneOrphanedSymbolInstances`: drop every per-placement reference ([`crate::ir::SymbolPathOverride`]) whose placement no longer shows its
-/// screen -- a sheet symbol deleted, or its file changed -- so that a placement made later under the same id (an id is made from the sheet's file and
-/// place) does not take the references the old one had. Returns how many were dropped.
+/// `SCH_SCREENS::PruneOrphanedSymbolInstances`: drop every per-placement reference ([`crate::ir::SymbolPathOverride`]) whose sheet path no longer shows
+/// its screen -- a sheet symbol deleted, or its file changed, or one of the sheets above it -- so that a placement made later under the same id (an id is
+/// made from the sheet's file and place) does not take the references the old one had. Returns how many were dropped.
 pub fn prune_orphaned_overrides(design: &mut Design) -> usize {
-    let mut live: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
-    for e in walk(design).into_iter().skip(1) {
-        if let Some(last) = e.path.last() {
-            live.insert((e.file.clone(), last.clone()));
-        }
-    }
+    let live: std::collections::BTreeSet<(String, Vec<String>)> = walk(design).into_iter().skip(1).map(|e| (e.file, e.path)).collect();
     let mut dropped = 0;
     for (file, sec) in design.sheet_contents.iter_mut().flat_map(|c| c.iter_mut()) {
         let before = sec.instance_overrides.len();
-        sec.instance_overrides.retain(|o| live.contains(&(file.clone(), o.parent_sheet_instance_id.clone())));
+        sec.instance_overrides.retain(|o| live.contains(&(file.clone(), o.sheet_path.clone())));
         dropped += before - sec.instance_overrides.len();
     }
     dropped
+}
+
+/// A design file written before [`crate::ir::SymbolPathOverride::sheet_path`] filed each per-placement reference under the immediate placement's
+/// id alone (`parent_sheet_instance_id`), which the reader takes as the path of that one id. Where that is no path of the screen (the placement is
+/// inside another sheet), the reference stood for every sheet path that ends in that placement -- all the placements of the screen the sheet is
+/// on, which could not be told apart then -- so it becomes one reference for each of them: the file reads as it always did. A key that is a path of
+/// its screen, or that no path ends in (an orphan, as before), is left as it is. Returns how many keys were changed.
+pub fn migrate_override_paths(design: &mut Design) -> usize {
+    let has_legacy = design.sheet_contents.iter().flat_map(|c| c.values()).flat_map(|s| s.instance_overrides.iter()).any(|o| o.sheet_path.len() == 1);
+    if !has_legacy {
+        return 0;
+    }
+    let mut paths_of: std::collections::BTreeMap<String, Vec<Vec<String>>> = std::collections::BTreeMap::new();
+    for e in walk(design).into_iter().skip(1) {
+        paths_of.entry(e.file).or_default().push(e.path);
+    }
+    let mut changed = 0;
+    for (file, sec) in design.sheet_contents.iter_mut().flat_map(|c| c.iter_mut()) {
+        let Some(paths) = paths_of.get(file) else { continue };
+        if !sec.instance_overrides.iter().any(|o| o.sheet_path.len() == 1 && !paths.contains(&o.sheet_path)) {
+            continue;
+        }
+        let mut out: Vec<crate::ir::SymbolPathOverride> = Vec::with_capacity(sec.instance_overrides.len());
+        for o in std::mem::take(&mut sec.instance_overrides) {
+            let stood_for: Vec<&Vec<String>> = if o.sheet_path.len() == 1 && !paths.contains(&o.sheet_path) { paths.iter().filter(|p| p.last() == o.sheet_path.last()).collect() } else { Vec::new() };
+            if stood_for.is_empty() {
+                out.push(o);
+                continue;
+            }
+            changed += 1;
+            for p in stood_for {
+                out.push(crate::ir::SymbolPathOverride { sheet_path: p.clone(), ..o.clone() });
+            }
+        }
+        sec.instance_overrides = out;
+    }
+    changed
 }
 
 /// How many placements show each screen: a file two sheet symbols name is one screen shown twice (`SCH_SCREEN::GetRefCount`).
@@ -307,5 +344,51 @@ use super::*;
         assert_eq!(to_long(" -4"), Some(-4));
         assert_eq!(to_long("4a"), None);
         assert_eq!(to_long(""), None);
+    }
+
+    /// Root -> O twice (`oa`, `ob`) -> I twice (`ia`, `ib`), I holding R1 with the references `refs` gives.
+    fn nested(refs: Vec<crate::ir::SymbolPathOverride>) -> Design {
+        let mut inner = section(vec![]);
+        inner.symbols.push(serde_json::from_value(serde_json::json!({ "id": "R1", "at": { "x": 0, "y": 0 }, "rot": 0 })).unwrap());
+        inner.instance_overrides = refs;
+        design(section(vec![placement("oa", "OA", "o.kicad_sch", ""), placement("ob", "OB", "o.kicad_sch", "")]), vec![("o.kicad_sch", section(vec![placement("ia", "IA", "i.kicad_sch", ""), placement("ib", "IB", "i.kicad_sch", "")])), ("i.kicad_sch", inner)])
+    }
+
+    fn over(path: &[&str], reference: &str) -> crate::ir::SymbolPathOverride {
+        crate::ir::SymbolPathOverride { at: Point { x: Nm::ZERO, y: Nm::ZERO }, sheet_path: path.iter().map(|s| s.to_string()).collect(), reference: reference.into(), unit: 1 }
+    }
+
+    fn refs_by_path(d: &Design) -> Vec<(String, String)> {
+        walk(d).into_iter().filter(|e| e.file == "i.kicad_sch").map(|e| { let i = screen_of(d, &e.path).unwrap(); (e.path_text(), reference_under(i, &i.symbols[0], &e.path)) }).collect()
+    }
+
+    /// `SCH_SYMBOL::GetRef( &sheetPath )`: a screen shown twice inside a screen shown twice has a reference for each whole path (KiCad QA `issue10926_1`),
+    /// which the last placement alone could not tell apart; pruning keeps exactly the paths that still show the screen.
+    #[test]
+    fn a_screen_shown_twice_inside_a_screen_shown_twice_has_a_reference_per_whole_path() {
+        let mut d = nested(vec![over(&["oa", "ib"], "R2"), over(&["ob", "ia"], "R3"), over(&["ob", "ib"], "R4"), over(&["gone", "ib"], "R9")]);
+        assert_eq!(refs_by_path(&d), vec![("oa/ia".into(), "R1".into()), ("oa/ib".into(), "R2".into()), ("ob/ia".into(), "R3".into()), ("ob/ib".into(), "R4".into())]);
+        assert_eq!(prune_orphaned_overrides(&mut d), 1, "the path through a sheet that is not there");
+        d.schematic.as_mut().unwrap().sheets.retain(|s| s.id != "ob");
+        assert_eq!(prune_orphaned_overrides(&mut d), 2, "the paths through OB went with it");
+        assert_eq!(refs_by_path(&d), vec![("oa/ia".into(), "R1".into()), ("oa/ib".into(), "R2".into())]);
+    }
+
+    /// A file written before the whole path was kept: `parent_sheet_instance_id` is read as a path of one id, and where that is no path of the screen it
+    /// becomes every path that ends in it -- the references the file always gave. A key that is a path (a placement on the root) is left as it is.
+    #[test]
+    fn a_reference_filed_under_the_immediate_placement_is_read_for_every_path_that_ends_in_it() {
+        let mut d = nested(vec![]);
+        let old = serde_json::json!([{ "at": { "x": 0, "y": 0 }, "parent_sheet_instance_id": "ib", "reference": "R2" }]);
+        d.sheet_contents.as_mut().unwrap().get_mut("i.kicad_sch").unwrap().instance_overrides = serde_json::from_value(old).unwrap();
+        let o_old = serde_json::json!([{ "at": { "x": 0, "y": 0 }, "parent_sheet_instance_id": "ob", "reference": "C2" }]);
+        d.sheet_contents.as_mut().unwrap().get_mut("o.kicad_sch").unwrap().instance_overrides = serde_json::from_value(o_old).unwrap();
+        // through the design's own reader, as a design.json is read
+        let read: Design = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        let i = &read.sheet_contents.as_ref().unwrap()["i.kicad_sch"];
+        assert_eq!(i.instance_overrides.iter().map(|o| o.sheet_path.join("/")).collect::<Vec<_>>(), vec!["oa/ib", "ob/ib"]);
+        assert_eq!(refs_by_path(&read), vec![("oa/ia".into(), "R1".into()), ("oa/ib".into(), "R2".into()), ("ob/ia".into(), "R1".into()), ("ob/ib".into(), "R2".into())]);
+        assert_eq!(read.sheet_contents.as_ref().unwrap()["o.kicad_sch"].instance_overrides[0].sheet_path, vec!["ob".to_string()]);
+        assert_eq!(migrate_override_paths(&mut read.clone()), 0, "read once is read");
     }
 }

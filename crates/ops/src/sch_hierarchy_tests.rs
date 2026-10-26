@@ -89,8 +89,20 @@ fn refs_in(d: &Design, file: &str) -> Vec<String> {
     r
 }
 
+/// The references the sheet at `path` (placement ids from the root) gives the symbols of its screen (`SCH_SYMBOL::GetRef( &sheetPath )`), sorted.
+fn refs_on(d: &Design, path: &[&str]) -> Vec<String> {
+    let path: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+    let screen = eda_model::sheet_list::screen_of(d, &path).expect("a sheet at the path");
+    let mut r: Vec<String> = screen.symbols.iter().map(|s| eda_model::sheet_list::reference_under(screen, s, &path)).collect();
+    r.sort();
+    r
+}
+
+/// `SCH_EDITOR_CONTROL::Paste`: a sheet whose file the design shows shares that screen (`SearchHierarchy` / `loadedScreens`, `SetScreen`) -- a screen that has
+/// sheets of its own too, as KiCad does (`updatePastedSheet` recurses): the new sheet and the sheet inside its screen are new sheet paths, whose symbols get
+/// references of their own (`updatePastedSymbol`, `ReannotateDuplicates`), filed under the whole path.
 #[test]
-fn a_pasted_sheet_is_a_copy_with_a_new_name_a_file_of_its_own_and_new_references() {
+fn a_pasted_sheet_shares_the_screen_the_design_shows_and_the_screens_inside_it_with_new_references() {
     let m = ConstraintModel::default();
     let d = power_design();
     let fragment = power_fragment(&d);
@@ -98,33 +110,70 @@ fn a_pasted_sheet_is_a_copy_with_a_new_name_a_file_of_its_own_and_new_references
     b.apply(&Cmd::PasteSch { fragment: fragment.clone(), dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
     let d = b.design();
 
-    // the name counts up, the file is new, the sheet symbol moved with its pin
+    // the name counts up, the sheet symbol moved with its pin, and shows the same screen
     assert_eq!(sheet_names(d), vec!["Power", "Power1"]);
     let copy = d.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name == "Power1").unwrap();
-    assert_eq!(copy.file, "power1.kicad_sch");
-    assert_eq!(copy.at, pt(mm(160.0), mm(50.0)));
+    assert_eq!(copy.file, "power.kicad_sch");
+    assert_eq!(copy.at, pt(mm(160.0), mm(60.0) - mm(10.0)));
     assert_eq!(copy.pins.len(), 1);
     assert_eq!((copy.pins[0].name.as_str(), copy.pins[0].at), ("VIN", pt(mm(160.0), mm(60.0))));
     assert!(!copy.id.is_empty() && copy.id != "sp");
+    assert_eq!(d.sheet_contents.as_ref().unwrap().len(), 2, "no screen was copied");
 
-    // a copy of the screen it shows, and of the one inside that, each under a file of its own
-    let files: Vec<&String> = d.sheet_contents.as_ref().unwrap().keys().collect();
-    assert!(files.contains(&&"power1.kicad_sch".to_string()) && files.contains(&&"filter_2.kicad_sch".to_string()), "{files:?}");
-    let nested = &d.sheet_contents.as_ref().unwrap()["power1.kicad_sch"].sheets;
-    assert_eq!((nested[0].name.as_str(), nested[0].file.as_str()), ("Filter", "filter_2.kicad_sch"), "the sheet inside shows the copy of its screen");
-    assert_ne!(nested[0].id, "sf", "a sheet is its own id everywhere in the design");
+    // the old sheet paths keep their references; the new ones have references nothing else holds, the sheet inside included
+    assert_eq!(refs_on(d, &["sp"]), vec!["C1", "R1", "R2"]);
+    assert_eq!(refs_on(d, &["sp", "sf"]), vec!["R3"]);
+    assert_eq!(refs_on(d, &[&copy.id]), vec!["C2", "R4", "R5"]);
+    assert_eq!(refs_on(d, &[&copy.id, "sf"]), vec!["R6"]);
+    let filter = &d.sheet_contents.as_ref().unwrap()["filter.kicad_sch"];
+    assert_eq!(filter.instance_overrides.iter().map(|o| o.sheet_path.clone()).collect::<Vec<_>>(), vec![vec![copy.id.clone(), "sf".to_string()]], "filed under the whole path");
 
-    // the originals are untouched; the copies have references nothing else holds
-    assert_eq!(refs_in(d, "power.kicad_sch"), vec!["C1", "R1", "R2"]);
-    assert_eq!(refs_in(d, "filter.kicad_sch"), vec!["R3"]);
-    assert_eq!(refs_in(d, "power1.kicad_sch"), vec!["C2", "R4", "R5"]);
-    assert_eq!(refs_in(d, "filter_2.kicad_sch"), vec!["R6"]);
-
-    // one more paste: Power2 (a counting name: Power1 is taken, so the next number)
-    let before = d.clone();
+    // one more paste: Power2, a third path for both screens
+    let copy1 = copy.id.clone();
     b.apply(&Cmd::PasteSch { fragment, dx: Nm::ZERO, dy: mm(90.0), mode: PasteMode::Unique }).unwrap();
-    assert_eq!(sheet_names(b.design()), vec!["Power", "Power1", "Power2"]);
-    assert_eq!(before.sheet_contents.as_ref().unwrap().len() + 2, b.design().sheet_contents.as_ref().unwrap().len());
+    let d = b.design();
+    assert_eq!(sheet_names(d), vec!["Power", "Power1", "Power2"]);
+    assert_eq!(d.sheet_contents.as_ref().unwrap().len(), 2);
+    let copy2 = d.schematic.as_ref().unwrap().sheets[2].id.clone();
+    assert_eq!(refs_on(d, &[&copy1, "sf"]), vec!["R6"]);
+    assert_eq!(refs_on(d, &[&copy2]), vec!["C3", "R7", "R8"]);
+    assert_eq!(refs_on(d, &[&copy2, "sf"]), vec!["R9"]);
+}
+
+/// A screen shown twice inside a screen shown twice (KiCad QA `issue10926_1`): each of the four sheet paths has references of its own, and deleting one
+/// of the outer sheets takes the references of the paths through it away (`PruneOrphanedSymbolInstances`), the others staying.
+#[test]
+fn a_screen_shown_twice_inside_a_screen_shown_twice_has_a_reference_per_path() {
+    let m = ConstraintModel::default();
+    let mut d = power_design();
+    // Power shows Filter twice: sf and sg
+    let mut second = placement("sg", "Filter2", "filter.kicad_sch", "");
+    second.at = pt(mm(30.0), Nm::ZERO);
+    d.sheet_contents.as_mut().unwrap().get_mut("power.kicad_sch").unwrap().sheets.push(second);
+    // its R3 is R4 there
+    d.sheet_contents.as_mut().unwrap().get_mut("filter.kicad_sch").unwrap().instance_overrides.push(eda_model::ir::SymbolPathOverride { at: pt(mm(0.01), Nm::ZERO), sheet_path: vec!["sp".into(), "sg".into()], reference: "R4".into(), unit: 1 });
+    let fragment = power_fragment(&d);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    // Power pasted again: two more paths for Filter
+    b.apply(&Cmd::PasteSch { fragment, dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+    let d = b.design().clone();
+    let copy = d.schematic.as_ref().unwrap().sheets[1].id.clone();
+    let paths: Vec<Vec<String>> = eda_model::sheet_list::walk(&d).into_iter().filter(|e| e.file == "filter.kicad_sch").map(|e| e.path).collect();
+    assert_eq!(paths.len(), 4, "{paths:?}");
+    let refs: Vec<String> = paths.iter().map(|p| refs_on(&d, &p.iter().map(String::as_str).collect::<Vec<_>>())[0].clone()).collect();
+    let mut unique = refs.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), 4, "one reference per full path: {paths:?} -> {refs:?}");
+    assert_eq!(refs_on(&d, &["sp", "sf"]), vec!["R3"], "the first path keeps the symbol's own");
+
+    // the copy's paths go with its sheet; the first Power's stay
+    b.apply(&Cmd::SchEdit(SchCmd::DeleteSheet { id: copy.clone() })).unwrap();
+    let after = b.design();
+    let filter = &after.sheet_contents.as_ref().unwrap()["filter.kicad_sch"];
+    assert!(filter.instance_overrides.iter().all(|o| o.sheet_path[0] == "sp"), "{:?}", filter.instance_overrides);
+    assert_eq!(refs_on(after, &["sp", "sf"]), refs_on(&d, &["sp", "sf"]));
+    assert_eq!(refs_on(after, &["sp", "sg"]), refs_on(&d, &["sp", "sg"]));
 }
 
 /// `TestForRecursion`: a sheet pasted onto its own screen, or onto a screen inside it, would place itself; KiCad drops it with its words.
@@ -193,7 +242,9 @@ fn a_sheet_whose_screen_the_clipboard_lacks_is_pasted_from_the_design_else_empty
     // the design has the screen under that name: it is what the sheet shows
     let mut b = Board::new(d.clone(), &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: mm(90.0), mode: PasteMode::Unique }).unwrap();
-    assert_eq!(refs_in(b.design(), "power1.kicad_sch"), vec!["C2", "R4", "R5"]);
+    let copy = b.design().schematic.as_ref().unwrap().sheets[1].clone();
+    assert_eq!(copy.file, "power.kicad_sch", "shared");
+    assert_eq!(refs_on(b.design(), &[&copy.id]), vec!["C2", "R4", "R5"]);
     // a design that has none: an empty sheet (`InitSheet`)
     let mut other = power_design();
     other.sheet_contents = None;

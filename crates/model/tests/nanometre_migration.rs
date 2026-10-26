@@ -34,6 +34,11 @@ fn expected(v: &Value, path: &[String]) -> Value {
         Value::Object(m) => {
             let mut out = Map::new();
             for (k, x) in m {
+                // a per-placement reference written before the whole sheet path was kept: its one id is the path (`SymbolPathOverride`)
+                if k == "parent_sheet_instance_id" {
+                    out.insert("sheet_path".into(), json!([x]));
+                    continue;
+                }
                 let key = k.strip_suffix("_um").map(|b| format!("{b}_nm")).unwrap_or_else(|| k.clone());
                 let mut p = path.to_vec();
                 p.push(k.clone());
@@ -109,6 +114,25 @@ fn number_paths(v: &Value, path: String, out: &mut std::collections::BTreeSet<St
     }
 }
 
+/// Each `sheet_path` cut to its last id, the one a file written before the whole path was kept says (`parent_sheet_instance_id`).
+fn tail_of_sheet_paths(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            for (k, x) in m.iter_mut() {
+                if k == "sheet_path" {
+                    if let Value::Array(a) = x {
+                        a.drain(..a.len().saturating_sub(1));
+                    }
+                } else {
+                    tail_of_sheet_paths(x);
+                }
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(tail_of_sheet_paths),
+        _ => {}
+    }
+}
+
 #[test]
 fn every_design_written_in_micrometres_is_read_in_nanometres() {
     let files = fixtures(".json");
@@ -119,7 +143,9 @@ fn every_design_written_in_micrometres_is_read_in_nanometres() {
         assert_eq!(old["schema"], json!(1), "{}: a fixture is a version 1 file", f.display());
         let design: Design = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
         assert_eq!(design.schema, SCHEMA_VERSION);
-        let read = serde_json::to_value(&design).unwrap();
+        let mut read = serde_json::to_value(&design).unwrap();
+        // the old key is read as the whole sheet path (`sheet_list::migrate_override_paths`, tested there); the lengths are what is compared here
+        tail_of_sheet_paths(&mut read);
         let want = expected(&old, &[]);
         if read != want {
             // name the first number that differs

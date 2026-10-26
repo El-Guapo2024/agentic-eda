@@ -70,7 +70,7 @@ fn units_per_placement(design: &eda_model::ir::Design) -> Vec<(String, u32)> {
     let mut out = Vec::new();
     for e in eda_model::sheet_list::walk(design) {
         let sec = eda_model::sheet_list::screen_of(design, &e.path).unwrap();
-        out.extend(sec.symbols.iter().map(|s| (eda_model::sheet_list::reference_under(sec, s, e.path.last().map(String::as_str)), s.unit)));
+        out.extend(sec.symbols.iter().map(|s| (eda_model::sheet_list::reference_under(sec, s, &e.path), s.unit)));
     }
     out.sort();
     out
@@ -223,7 +223,7 @@ fn a_copied_sheet_is_pasted_as_a_second_placement_of_its_screen() {
     assert_eq!(sheets[1].file, "ldo_stage.kicad_sch");
     assert_eq!(design.sheet_contents.as_ref().unwrap().len(), 1);
     let screen = &design.sheet_contents.as_ref().unwrap()["ldo_stage.kicad_sch"];
-    let second: Vec<&eda_model::ir::SymbolPathOverride> = screen.instance_overrides.iter().filter(|o| o.parent_sheet_instance_id == sheets[1].id).collect();
+    let second: Vec<&eda_model::ir::SymbolPathOverride> = screen.instance_overrides.iter().filter(|o| o.sheet_path == [sheets[1].id.clone()]).collect();
     assert_eq!(second.len(), screen.symbols.len(), "every symbol has a reference of its own on the new sheet");
     let units = units_per_placement(&design);
     let mut unique = units.clone();
@@ -548,7 +548,7 @@ fn slow_a_pasted_sheet_shares_its_screen_and_kicad_cli_makes_a_net_per_placement
     let second = design.schematic.as_ref().unwrap().sheets[1].clone();
     assert_eq!(second.file, sheet.file, "one screen, two placements");
     let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
-    let second_refs: Vec<String> = screen.instance_overrides.iter().filter(|o| o.parent_sheet_instance_id == second.id).map(|o| o.reference.clone()).collect();
+    let second_refs: Vec<String> = screen.instance_overrides.iter().filter(|o| o.sheet_path == [second.id.clone()]).map(|o| o.reference.clone()).collect();
     assert_eq!(second_refs.len(), first_refs.len());
 
     // the derived files say it the way KiCad does: one file, each symbol with a reference per path
@@ -578,7 +578,7 @@ fn slow_a_pasted_sheet_shares_its_screen_and_kicad_cli_makes_a_net_per_placement
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
     let (_, back, _) = load(&dir).unwrap();
     assert_eq!(back.schematic.as_ref().unwrap().sheets.len(), 1, "one undo takes the placement back");
-    assert!(back.sheet_contents.as_ref().unwrap()[&sheet.file].instance_overrides.iter().all(|o| o.parent_sheet_instance_id != second.id));
+    assert!(back.sheet_contents.as_ref().unwrap()[&sheet.file].instance_overrides.iter().all(|o| o.sheet_path != [second.id.clone()]));
 }
 
 // ---------------------------------------------------------------------------------------- a bus across sheets
@@ -824,7 +824,7 @@ fn slow_a_shared_screens_label_class_is_in_force_on_each_placement() {
     let pin = wire.pins[0].clone();
     let (r, n) = pin.split_once('.').unwrap();
     let sym = screen.symbols.iter().find(|s| s.id == r).unwrap();
-    let other = format!("{}.{n}", eda_model::sheet_list::reference_under(&screen, sym, Some(&second)));
+    let other = format!("{}.{n}", eda_model::sheet_list::reference_under(&screen, sym, std::slice::from_ref(&second)));
     for p in [&pin, &other] {
         let net = design.nets.as_ref().unwrap().iter().find(|x| x.pins.iter().any(|q| q == p)).unwrap_or_else(|| panic!("{p} on a net")).name.clone();
         assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{p}'s net {net} is in the class: {:?}", class.nets);
@@ -908,7 +908,7 @@ fn a_deleted_placement_leaves_no_references_behind() {
     unique.dedup();
     assert_eq!(units.len(), unique.len(), "{units:?}");
     let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
-    assert_eq!(screen.instance_overrides.iter().filter(|o| o.parent_sheet_instance_id == second).count(), screen.symbols.len(), "one reference per symbol, not two");
+    assert_eq!(screen.instance_overrides.iter().filter(|o| o.sheet_path == [second.clone()]).count(), screen.symbols.len(), "one reference per symbol, not two");
 }
 
 /// A screen shown twice, edited on one of its placements: the references the other placement gives its symbols follow them (`SCH_SYMBOL_INSTANCE` belongs
@@ -929,7 +929,7 @@ fn the_references_of_a_shared_screen_follow_its_edits() {
     let second = design.schematic.as_ref().unwrap().sheets[1].id.clone();
     let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
     let moved = screen.symbols[0].clone();
-    let its_second = eda_model::sheet_list::reference_under(screen, &moved, Some(&second));
+    let its_second = eda_model::sheet_list::reference_under(screen, &moved, std::slice::from_ref(&second));
     assert_ne!(its_second, moved.id);
     let unique = |design: &eda_model::ir::Design| {
         let units = units_per_placement(design);
@@ -945,7 +945,7 @@ fn the_references_of_a_shared_screen_follow_its_edits() {
     let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
     let now = screen.symbols.iter().find(|s| s.id == moved.id).unwrap();
     assert_ne!(now.at, moved.at, "the symbol moved");
-    assert_eq!(eda_model::sheet_list::reference_under(screen, now, Some(&second)), its_second, "its reference on the other placement went with it");
+    assert_eq!(eda_model::sheet_list::reference_under(screen, now, std::slice::from_ref(&second)), its_second, "its reference on the other placement went with it");
     assert!(model.part(&its_second).is_some());
     unique(&design);
 
@@ -955,7 +955,7 @@ fn the_references_of_a_shared_screen_follow_its_edits() {
     let (_, design, model) = load(&dir).unwrap();
     let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
     let added = screen.symbols.iter().find(|s| s.id == "R90").expect("the symbol is on the shared screen");
-    let added_second = eda_model::sheet_list::reference_under(screen, added, Some(&second));
+    let added_second = eda_model::sheet_list::reference_under(screen, added, std::slice::from_ref(&second));
     assert_ne!(added_second, "R90", "a reference of its own on the other placement");
     assert!(model.part(&added_second).is_some(), "{added_second} is a part");
     unique(&design);
@@ -1036,7 +1036,7 @@ fn an_imported_tree_that_shows_a_screen_twice_numbers_each_placement() {
         let sec = &contents[&screen];
         let nets = design.nets.as_ref().unwrap();
         for s in &sec.symbols {
-            let second = eda_model::sheet_list::reference_under(sec, s, placements[1].path.last().map(String::as_str));
+            let second = eda_model::sheet_list::reference_under(sec, s, &placements[1].path);
             assert_ne!(second, s.id, "keep {keep}");
             assert!(model.part(&second).is_some(), "keep {keep}: {second} is a part");
             assert!(nets.iter().any(|n| n.pins.iter().any(|p| p.starts_with(&format!("{second}.")))), "keep {keep}: {second} is on the nets");
@@ -1285,13 +1285,13 @@ const QA_TRACED_ALIKE: &[&str] = &[
     "netlists/bus_connection/bus_connection.kicad_sch",
     "issue17771/issue1771.kicad_sch",
     "netlists/video/video.kicad_sch",
+    // a screen shown twice inside a screen shown twice: a reference per whole sheet path
+    "issue10926_1.kicad_sch",
+    "netlists/hierarchy_aliases/hierarchy_aliases.kicad_sch",
 ];
 
 /// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
-const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
-    ("issue10926_1.kicad_sch", "a screen shown twice inside a screen shown twice: one override per immediate parent"),
-    ("netlists/hierarchy_aliases/hierarchy_aliases.kicad_sch", "a screen shown twice inside a screen shown twice"),
-];
+const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[];
 
 #[test]
 fn slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them() {

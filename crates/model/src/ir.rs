@@ -279,10 +279,10 @@ pub struct SchematicSection {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<SheetInstance>,
     /// `SCH_SYMBOL_INSTANCE`-style per-placement overrides for this
-    /// screen's own symbols, keyed by `SymbolPathOverride::parent_sheet_instance_id` --
-    /// only ever non-empty on a screen placed by more than one
-    /// [`SheetInstance`] (the content this `SchematicSection` belongs to is
-    /// reused), and empty on the root sheet (nothing ever places it). See
+    /// screen's own symbols, keyed by `SymbolPathOverride::sheet_path` --
+    /// only ever non-empty on a screen shown on more than one sheet path
+    /// (placed twice, or inside a screen that is), and empty on the root
+    /// sheet (nothing ever places it). See
     /// [`SymbolPathOverride`]'s own doc for why `at`, not a stored id, is
     /// the per-symbol key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -898,29 +898,48 @@ impl SheetPin {
     }
 }
 
-/// One placed symbol's Reference/Value/Footprint/unit *as seen through one
-/// specific parent sheet placement*, for a screen ([`Design::sheet_contents`]
-/// entry) that is placed more than once -- real KiCad's `SCH_SYMBOL_INSTANCE`
-/// (`sch_sheet_path.h`), keyed there by a full root-to-leaf sheet-uuid path;
-/// keyed here by just `parent_sheet_instance_id` (the *immediate* parent
-/// [`SheetInstance::id`] that placed this screen), since that one id is
-/// already globally unique across the whole design and nothing deeper is
-/// needed to tell two placements of the same file apart. `at` identifies
-/// *which* symbol in this screen's own content the override is for (a
-/// screen's own drawn content is placement-invariant, so a symbol's own
-/// position is already a stable, unique-enough key within it -- the same
-/// reasoning `Wire`/`NetLabel` id derivation already leans on elsewhere in
-/// this file). Absent entirely for the overwhelming common case (a sheet
-/// placed exactly once), where [`SymbolInstance::id`] is already the only
-/// answer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// One placed symbol's Reference and unit *as seen through one placement* of a screen ([`Design::sheet_contents`] entry) that is shown more
+/// than once -- KiCad's `SCH_SYMBOL_INSTANCE` (`sch_sheet_path.h`), which `SCH_SYMBOL::GetRef( const SCH_SHEET_PATH* )` / `SetRef` look up by the
+/// whole sheet path (`SCH_SHEET_PATH::Path()`, the root sheet's uuid first). Keyed here the same way: `sheet_path` is the root-relative chain of
+/// [`SheetInstance::id`]s down to the placement that shows this screen (a [`crate::sheet_list::SheetEntry::path`]), the root screen's own uuid left
+/// out (the model does not keep it; the reader drops it, the writer puts it back). A screen's content is stored once, so the sheets *inside* a
+/// screen shown twice have the same ids under both placements: only the whole chain tells the two placements of a screen nested in it apart
+/// (KiCad QA `issue10926_1`). `at` identifies *which* symbol of the screen the reference is for (a screen's drawn content is the same under
+/// every placement, so a symbol's place is a stable key within it). Absent for the common case, a screen shown once, where
+/// [`SymbolInstance::id`] is the only answer.
+///
+/// A design file written before the whole path was kept says `parent_sheet_instance_id` (the *immediate* placement's id) instead: it is read
+/// as the path of that one id, and [`crate::sheet_list::migrate_override_paths`] (run by [`Design`]'s reader) turns such a key into the whole
+/// path of every placement it stood for, so an old file reads as it always did. It is written as `sheet_path` only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "SymbolPathOverrideFile")]
 pub struct SymbolPathOverride {
     pub at: Point,
-    pub parent_sheet_instance_id: String,
+    /// The placement's path from the root: [`SheetInstance::id`]s, the root's own uuid left out.
+    pub sheet_path: Vec<String>,
     pub reference: String,
-    #[serde(default = "d_unit_one")]
     pub unit: u32,
+}
+
+/// [`SymbolPathOverride`] as a file has it: the whole `sheet_path`, or (a file written before it) the immediate placement's id alone.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SymbolPathOverrideFile {
+    at: Point,
+    #[serde(default)]
+    sheet_path: Vec<String>,
+    #[serde(default)]
+    parent_sheet_instance_id: String,
+    reference: String,
+    #[serde(default = "d_unit_one")]
+    unit: u32,
+}
+
+impl From<SymbolPathOverrideFile> for SymbolPathOverride {
+    fn from(f: SymbolPathOverrideFile) -> Self {
+        let sheet_path = if f.sheet_path.is_empty() && !f.parent_sheet_instance_id.is_empty() { vec![f.parent_sheet_instance_id] } else { f.sheet_path };
+        SymbolPathOverride { at: f.at, sheet_path, reference: f.reference, unit: f.unit }
+    }
 }
 
 impl SchematicSection {
@@ -4649,6 +4668,8 @@ impl<'de> Deserialize<'de> for Design {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let (mut design, _): (Design, _) = crate::units::read_versioned(d, SCHEMA_VERSION, true)?;
         design.schema = SCHEMA_VERSION;
+        // a per-placement reference filed under the immediate placement's id alone (a file written before the whole path was kept)
+        crate::sheet_list::migrate_override_paths(&mut design);
         Ok(design)
     }
 }
