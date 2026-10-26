@@ -1,6 +1,8 @@
 //! Port of `PNS::SHOVE`'s spring-back stack (`pcbnew/router/pns_shove.{h,cpp}`: `SPRINGBACK_TAG`, `m_nodeStack`,
-//! `reduceSpringback`, `pushSpringback`, `AddLockedSpringbackNode`, `RewindSpringbackTo`, `RewindToLastLockedNode`) as the line
-//! placer uses it (`pns_line_placer.cpp`: `rhShoveOnly`, `FixRoute`, `UnfixRoute`).
+//! `reduceSpringback`, `pushSpringback`, `AddLockedSpringbackNode`, `RewindSpringbackTo`, `RewindToLastLockedNode`) as the placers use
+//! it: the line placer's `rhShoveOnly`/`FixRoute`/`UnfixRoute` (a locked frame per click), the dragger's `dragShove`/`dragViaShove`
+//! (one `SHOVE` per gesture), and the pair placer's `rhShoveOnly`/`FixRoute` (a fresh `SHOVE` over the committed world at every fix, so
+//! its frames are never locked).
 //!
 //! KiCad keeps one `NODE` per successful shove of a route's head (`SHOVE::Run` ends in `pushSpringback( m_currentNode, .. )`), and the
 //! next `Run` starts from the newest of them that the new head still collides with (`reduceSpringback`: "Pops NODE stackframes which no
@@ -27,7 +29,9 @@
 //!   puts a via where two runs on different layers meet). (Until the review of 2026-10-23 the runs were locked here, and what a later leg
 //!   pushed into the tail was walked round it or stopped the head.)
 //! - `SetSpringbackDoNotTouchNode` (the node that owns the placer's end item) has no counterpart: the end item is always picked from the
-//!   session's world, which is not a frame. The dragged vias of a frame (`m_draggedVias`) are the dragger's, which does not use this.
+//!   session's world, which is not a frame. The place of a dragged via in each frame (`m_draggedVias`) is not part of a [`World`],
+//!   because only the dragger has one: it keeps those places itself, one per frame (`crate::dragger`'s `DragShove`), and truncates
+//!   them with the frames a reduction pops.
 
 use crate::item::{Item, ItemId, Net, Via};
 use crate::layer::LayerRange;
@@ -263,19 +267,25 @@ impl Springback {
         head.via.is_some_and(|v| hit(&Shape::Circle { c: v.pos, r: v.diameter / 2 }, v.layers))
     }
 
-    /// `SHOVE::reduceSpringback( aHeadSet )`: pop the frames, newest first, whose world the head no longer collides with -- never a locked
+    /// `SHOVE::reduceSpringback( aHeadSet )`: pop the frames, newest first, whose world none of the heads collides with -- never a locked
     /// one, never the last one -- and return the world the shove starts from (the newest frame left, or the session's when there is none)
-    /// with its area.
-    pub fn reduce(&mut self, base: &Node, head: &HeadSet, rules: &BoardRules) -> (World, Option<Area>) {
+    /// with its area. The pair placer has two heads (`m_shove->AddHeads` of each line), which `CheckColliding( aHeadSet )` asks about
+    /// together: a frame one head still presses on stays for both.
+    pub fn reduce_all(&mut self, base: &Node, heads: &[HeadSet], rules: &BoardRules) -> (World, Option<Area>) {
         while self.stack.len() > 1 {
             let top = self.stack.last().unwrap();
-            if !top.locked && !Self::collides(base, top, head, rules) {
+            if !top.locked && !heads.iter().any(|head| Self::collides(base, top, head, rules)) {
                 self.stack.pop();
             } else {
                 break;
             }
         }
         self.top()
+    }
+
+    /// [`Self::reduce_all`] for one head.
+    pub fn reduce(&mut self, base: &Node, head: &HeadSet, rules: &BoardRules) -> (World, Option<Area>) {
+        self.reduce_all(base, std::slice::from_ref(head), rules)
     }
 
     /// The newest frame's world and area (`CurrentNode()` after a run), or the session's world when the stack is empty.
@@ -370,6 +380,25 @@ mod tests {
         // drawn back to y = -1000 it touches nothing of that world: the track springs back to the frame below
         let far = [Point { x: mm(2.0), y: mm(-1.0) }, Point { x: mm(8.0), y: mm(-1.0) }];
         let (w, _) = sb.reduce(&b, &head(&far, &a), &r);
+        assert_eq!(sb.len(), 1);
+        assert!(w.tracks.is_empty());
+    }
+
+    #[test]
+    fn a_frame_stays_while_any_of_the_heads_presses_on_it() {
+        let (b, r) = (base(), rules());
+        let (a, c) = (net_of("A"), net_of("C"));
+        let mut sb = Springback::new();
+        sb.push(&b, World::default(), None);
+        sb.push(&b, moved(mm(2.0)), None);
+        // one head drawn back, the other still on the track where the newest frame left it: the frame stays for both
+        let back = [Point { x: mm(2.0), y: mm(-1.0) }, Point { x: mm(8.0), y: mm(-1.0) }];
+        let near = [Point { x: mm(2.0), y: mm(1.8) }, Point { x: mm(8.0), y: mm(1.8) }];
+        let (w, _) = sb.reduce_all(&b, &[head(&back, &a), head(&near, &c)], &r);
+        assert_eq!(sb.len(), 2);
+        assert_eq!(w.tracks["t1"][0].pts[0].y, mm(2.0));
+        // both drawn back: it springs back to the frame below
+        let (w, _) = sb.reduce_all(&b, &[head(&back, &a), head(&back, &c)], &r);
         assert_eq!(sb.len(), 1);
         assert!(w.tracks.is_empty());
     }

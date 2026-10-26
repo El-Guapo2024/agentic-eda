@@ -27,11 +27,18 @@
 //! (`DRAGGER::FixRoute` re-runs `Drag( m_lastValidPoint )`). If the very first position fails, the drag goes on in Highlight
 //! collisions mode (`m_forceMarkObstaclesMode`): the violations are shown, and only Ctrl+click commits them.
 //!
+//! ## Springback (Shove mode)
+//!
+//! `DRAGGER` makes one `SHOVE` for the whole gesture (`m_shove`, in `Start`), so the frames each successful shove pushed
+//! (`SHOVE::m_nodeStack`, [`crate::springback`]) stay for the next position: a track or via the drag pushed stays pushed while the
+//! head still collides with the frame that has it -- and is pushed on from where that frame left it, not from where it started -- a
+//! frame the head no longer runs into anything of is popped, and the oldest frame of the gesture is never popped
+//! (`while( m_nodeStack.size() > 1 )`; [`DragShove`]). A via drag records the via's place in each frame
+//! (`SPRINGBACK_TAG::m_draggedVias`), and a frame popped puts the head via back to the one left on top. [`Self::preview`] runs the
+//! same reduction on a copy of the stack, so it shows what [`Self::drag`] would without moving the gesture on. The other modes
+//! re-derive their one world every position (`dragMarkObstacles`, `dragWalkaround`: `m_lastNode = m_world->Branch()`).
+//!
 //! Scoped down from upstream (see `PARITY.md`):
-//! - No springback: every `preview`/`finish` call re-derives everything
-//!   fresh from the committed world. (KiCad's `DRAGGER` keeps a `SHOVE` for
-//!   the whole drag and so its stack, `m_nodeStack`; the single-track placer
-//!   has it here, [`crate::springback`].)
 //! - **Dragging a corner in `Mode::Walkaround`** is `dragWalkaround`: the
 //!   dragged line is walked around what it would land on
 //!   (`DRAGGER::tryWalkaround`), and only refused if it cannot be. A
@@ -54,10 +61,12 @@ use crate::line::Line;
 use crate::node::Node;
 use crate::settings::{Mode, RoutingSettings};
 use crate::shove::{self, DisplacedLine, DisplacedVia};
+use crate::springback::{HeadSet, Springback, World};
 use crate::walkaround::{path_collides, WalkPolicy, WalkStatus, Walker};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Nm};
 use eda_model::BoardRules;
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +128,48 @@ pub struct Dragger {
     start_point: Point,
     /// What `Drag` remembers from one cursor position to the next.
     state: DragState,
+    /// `m_shove` (`Start`: a `SHOVE` over `m_preDragNode` in Shove mode): the frames the gesture's successful shoves pushed. Other
+    /// modes never push to it (`dragMarkObstacles`/`dragWalkaround` branch their world afresh every position).
+    shove: RefCell<DragShove>,
+}
+
+/// `DRAGGER`'s one `SHOVE` for the gesture, as far as the drag is concerned: its springback stack (`m_nodeStack`) and, per frame, the
+/// place the dragged via is left in it (`SPRINGBACK_TAG::m_draggedVias`: `reduceSpringback` puts the head via back to the one of the
+/// frame the shove starts from). A line or arc drag has no via places.
+#[derive(Debug, Clone, Default)]
+struct DragShove {
+    stack: Springback,
+    via_frames: Vec<Point>,
+}
+
+impl DragShove {
+    /// `SHOVE::reduceSpringback( aHeadSet )`: pop the frames, newest first, the head no longer collides with -- never the last one,
+    /// never a locked one (there are none: a drag fixes nothing until it commits) -- and put the head via back to the place the frame
+    /// left on top has for it.
+    fn reduce(&mut self, base: &Node, head: &HeadSet, rules: &BoardRules) -> (World, Option<shove::Area>) {
+        let top = self.stack.reduce(base, head, rules);
+        self.via_frames.truncate(self.stack.len());
+        top
+    }
+
+    /// `SHOVE::pushSpringback`: a frame for the world a successful line shove left.
+    fn push(&mut self, base: &Node, world: World, area: Option<shove::Area>) {
+        debug_assert!(self.via_frames.is_empty(), "a via drag's frames carry the via's place");
+        self.stack.push(base, world, area);
+    }
+
+    /// `SHOVE::pushSpringback` of a via drag: the frame, with the via's place in it (`m_draggedVias[i]`, the via as the shove left it).
+    fn push_via(&mut self, base: &Node, world: World, area: Option<shove::Area>, via: Point) {
+        debug_assert_eq!(self.via_frames.len(), self.stack.len(), "one via place per frame");
+        self.stack.push(base, world, area);
+        self.via_frames.push(via);
+    }
+
+    /// `m_headLines[0].theVia` after `reduceSpringback`: the dragged via's place in the frame the next position shoves from, or
+    /// `original` (where the drag started) before the first frame.
+    fn via_pos(&self, original: Point) -> Point {
+        self.via_frames.last().copied().unwrap_or(original)
+    }
 }
 
 /// `DRAGGER`'s `m_lastNode` / `m_lastValidPoint` / `m_lastDragSolution` / `m_dragStatus` / `m_forceMarkObstaclesMode`.
@@ -157,6 +208,11 @@ pub struct DragPreview {
     /// each fanout leg's shape here is simply its own candidate position,
     /// not something shove could have altered.
     pub fanout: Vec<Line>,
+    /// The IR tracks each [`Self::fanout`] leg stands on, one entry per leg, where the leg was taken from a frame's node
+    /// (`dragViaWalkaround` in the frame a shove left, or the frame a failed position restores): a line the frame re-made has item
+    /// ids the session's world does not know, so the commit cannot look its tracks up there. Empty when the legs are the session's
+    /// own lines (their `segment_ids` name the session's items).
+    pub fanout_tracks: Vec<Vec<String>>,
     /// This is not what the cursor's position gave but the last position that worked: the cursor is somewhere the drag cannot
     /// be resolved (`Drag`: "Restore last solution").
     pub restored: bool,
@@ -220,7 +276,7 @@ impl Dragger {
                 let index = line.segment_ids.iter().position(|&id| id == item_id).ok_or(CANT)?.min(line.segment_count().saturating_sub(1));
                 let run = line.arc_runs().into_iter().find(|r| index >= r.first && index < r.last).ok_or(CANT)?;
                 let drag = crate::arc_drag::ArcDrag::new(&line, run)?.ok_or("The arc has no corner to round: its tangents do not meet.")?;
-                Ok(Dragger { kind: DragKind::Arc, net: line.net.clone(), layer: line.layer, width: line.width, original: line.clone(), grabbed_index: run.first, via_id: None, via_pos: Point { x: Nm::ZERO, y: Nm::ZERO }, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, source_via: None, via_virtual: false, via_layers: LayerRange::single(line.layer), free_angle, arc: Some(drag), start_point: at, state: DragState::default() })
+                Ok(Dragger { kind: DragKind::Arc, net: line.net.clone(), layer: line.layer, width: line.width, original: line.clone(), grabbed_index: run.first, via_id: None, via_pos: Point { x: Nm::ZERO, y: Nm::ZERO }, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, source_via: None, via_virtual: false, via_layers: LayerRange::single(line.layer), free_angle, arc: Some(drag), start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) })
             }
             _ => Self::start_plain(node, at, item_id, free_angle).ok_or_else(|| CANT.to_string()),
         }
@@ -229,7 +285,7 @@ impl Dragger {
     fn start_plain(node: &Node, at: Point, item_id: ItemId, free_angle: bool) -> Option<Dragger> {
         let item = node.get(item_id)?;
         match item {
-            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: Nm::ZERO, original: Line::new(v.net.clone(), v.layers.start(), Nm::ZERO), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, via_layers: v.layers, source_via: v.source_via.clone(), via_virtual: v.is_virtual, free_angle, arc: None, start_point: at, state: DragState::default() }),
+            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: Nm::ZERO, original: Line::new(v.net.clone(), v.layers.start(), Nm::ZERO), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, via_layers: v.layers, source_via: v.source_via.clone(), via_virtual: v.is_virtual, free_angle, arc: None, start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) }),
             Item::Segment(seg) => {
                 // `DRAGGER::Start`: "VVIA* vvia = checkVirtualVia( aP, seg ); if( vvia ) return startDragVia( vvia );"
                 if let Some(vvia) = check_virtual_via(node, at, seg) {
@@ -259,16 +315,17 @@ impl Dragger {
                 } else {
                     kind = DragKind::Segment;
                 }
-                Some(Dragger { kind, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index: index, via_id: None, via_pos: Point { x: Nm::ZERO, y: Nm::ZERO }, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_layers: LayerRange::single(layer_of_line), source_via: None, via_virtual: false, free_angle, arc: None, start_point: at, state: DragState::default() })
+                Some(Dragger { kind, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index: index, via_id: None, via_pos: Point { x: Nm::ZERO, y: Nm::ZERO }, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_layers: LayerRange::single(layer_of_line), source_via: None, via_virtual: false, free_angle, arc: None, start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) })
             }
             _ => None,
         }
     }
 
-    /// The tracks attached to the dragged via, as the world has them (`findViaFanoutByHandle`): one assembled line each.
-    fn attached_lines(&self, node: &Node) -> Vec<Line> {
+    /// The tracks attached to the dragged via at `via_pos` -- where the via is in `node`, which is not where the drag started once a
+    /// frame has moved it -- as the node has them (`findViaFanoutByHandle`): one assembled line each.
+    fn attached_lines(&self, node: &Node, via_pos: Point) -> Vec<Line> {
         let mut out: Vec<Line> = Vec::new();
-        let Some(joint) = node.joint_at(self.via_pos, &self.net) else { return out };
+        let Some(joint) = node.joint_at(via_pos, &self.net) else { return out };
         for &id in &joint.links {
             if node.get(id).is_some_and(Item::is_track) {
                 if let Some(l) = assemble(node, id) {
@@ -285,10 +342,10 @@ impl Dragger {
     /// via's fan-out with its end at the via dragged to `to`, re-solved in the drag's angle mode -- `draggedLine.DragCorner( aP,
     /// origLine.CLine().Find( aHandle.pos ), m_freeAngleMode )`: at 45 degrees for `D`, a straight leg only for `G` (the fan-out lines carry
     /// no snap threshold of their own).
-    fn via_candidate(&self, node: &Node, to: Point) -> Vec<Line> {
-        let mut fanout = self.attached_lines(node);
+    fn via_candidate(&self, node: &Node, via_pos: Point, to: Point) -> Vec<Line> {
+        let mut fanout = self.attached_lines(node, via_pos);
         for l in fanout.iter_mut() {
-            if let Some(at) = l.find(self.via_pos) {
+            if let Some(at) = l.find(via_pos) {
                 l.drag_corner(to, at, self.free_angle, Nm::ZERO);
             }
         }
@@ -336,7 +393,7 @@ impl Dragger {
     fn solve_mark_obstacles(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         let exclude = self.exclude();
         if self.kind == DragKind::Via {
-            let fanout = self.via_candidate(node, to);
+            let fanout = self.via_candidate(node, self.via_pos, to);
             let shape = Shape::Circle { c: to, r: self.via_diameter / 2 };
             // a virtual via collides with nothing: only its tracks can
             let mut colliding = !self.via_virtual && node.first_colliding(&shape, &self.net, self.via_layers, rules, &exclude).is_some();
@@ -361,7 +418,7 @@ impl Dragger {
     /// cannot be (`ok` false).
     fn solve_walkaround(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> Option<DragPreview> {
         if self.kind == DragKind::Via {
-            let pv = self.drag_via_walkaround(node, rules, settings, to);
+            let pv = self.drag_via_walkaround(node, node, None, self.via_pos, rules, settings, to);
             return (!pv.colliding).then_some(pv);
         }
         let exclude = self.exclude();
@@ -410,32 +467,46 @@ impl Dragger {
     }
 
     /// `DRAGGER::dragShove`: whatever the dragged shape runs into is pushed aside, a pad walked around. `None` when it cannot be
-    /// (`ok` false); a via that will not be shoved is walked around instead, as upstream does.
-    fn solve_shove(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> Option<DragPreview> {
+    /// (`ok` false); a via that will not be shoved is walked around instead, as upstream does. `shove` is the gesture's `SHOVE`: the
+    /// stack is reduced against this position's head first (`reduceSpringback`; the pops stay, even when the shove then fails -- `Run`
+    /// leaves its `m_currentNode` at the reduced parent), and the frame a successful shove leaves is pushed (`pushSpringback`).
+    fn solve_shove(&self, shove: &mut DragShove, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> Option<DragPreview> {
         if self.kind == DragKind::Via {
-            let pv = self.drag_via_shove(node, rules, settings, to);
+            let pv = self.drag_via_shove(shove, node, rules, settings, to);
             return (!pv.colliding).then_some(pv);
         }
         let dragged = self.dragged_line(to, self.snap_threshold(settings, true), false);
+        let width = self.width.max(Nm::new(1));
+        // `m_headLines[0].origHead`: the head where the cursor puts it, which the stack is popped against
+        let head = HeadSet { pts: &dragged.pts, net: &self.net, layer: self.layer, width, via: None };
+        let (parent, area) = shove.reduce(node, &head, rules);
+        // `m_currentNode = parent->Branch()`: the shove starts from the frame left on top
+        let frame = parent.apply(node);
         // `m_mode == DM_CORNER && m_draggedSegmentIndex == 0`: the head is dragged by its first vertex, so its last point is the pusher
         let reversed = self.kind == DragKind::Corner && self.grabbed_index == 0;
-        let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &dragged.pts, &dragged.arcs, &self.net, self.layer, self.width.max(Nm::new(1)), rules, settings, reversed)?;
-        // `optimizeAndUpdateDraggedLine( draggedPostShove, m_draggedLine, aP )`, against the world the shove left (`m_lastNode = m_shove->CurrentNode()->Branch()`)
+        let outcome = shove::shove_dragged_line(&frame, &self.original.segment_ids, &dragged.pts, &dragged.arcs, &self.net, self.layer, width, rules, settings, reversed, area)?;
+        // `m_lastNode = m_shove->CurrentNode()->Branch()`: what the next position starts from is this frame, its moves folded into
+        // the one below it (`pushSpringback`)
+        let mut world = parent;
+        world.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
+        shove.push(node, world.clone(), outcome.area);
+        // `optimizeAndUpdateDraggedLine( draggedPostShove, m_draggedLine, aP )`, against the world the shove left
         let shoved = Line { pts: outcome.head.clone(), arcs: dragged.arcs.clone(), ..dragged };
         let shoved = if self.kind == DragKind::Arc { shoved } else { self.optimize_and_update_dragged_line(&outcome.world, rules, settings, &shoved, &self.original, to) };
-        Some(DragPreview { pts: shoved.pts, arcs: shoved.arcs, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, ..DragPreview::default() })
+        // the preview shows the frame's whole world: every track and via the gesture has moved so far, not just this position's
+        Some(DragPreview { pts: shoved.pts, arcs: shoved.arcs, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), ..DragPreview::default() })
     }
 
     /// One cursor position: what `dragMarkObstacles` / `dragWalkaround` / `dragShove` make of it, and whether it `ok`s -- their return
     /// value, true for every position when marking obstacles.
-    fn solve(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point, mark_only: bool) -> (DragPreview, bool) {
+    fn solve(&self, shove: &mut DragShove, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point, mark_only: bool) -> (DragPreview, bool) {
         // `DRAGGER::Drag`: `if( m_freeAngleMode || m_forceMarkObstaclesMode ) dragMarkObstacles`, else by `m_currentMode`
         if mark_only || self.free_angle || settings.mode == Mode::MarkObstacles {
             return (self.solve_mark_obstacles(node, rules, settings, to), true);
         }
         let resolved = match settings.mode {
             Mode::Walkaround => self.solve_walkaround(node, rules, settings, to),
-            _ => self.solve_shove(node, rules, settings, to),
+            _ => self.solve_shove(shove, node, rules, settings, to),
         };
         match resolved {
             Some(pv) => (pv, true),
@@ -449,9 +520,12 @@ impl Dragger {
     }
 
     /// `DRAGGER::Drag` without its memory: the shape the cursor at `to` gives, resolved per the active mode, for a drag that has not
-    /// failed yet. Pure -- never mutates `node` or `self`; [`Self::drag`] is the one a drag session uses.
+    /// failed yet. Pure -- never mutates `node` or `self`; [`Self::drag`] is the one a drag session uses. The gesture's springback
+    /// stack is reduced on a copy (`m_nodeStack` in KiCad lives as long as the dragger and a preview does not move it on), so the
+    /// preview shows the frames the drag's earlier positions pushed.
     pub fn preview(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
-        let mut pv = self.solve(node, rules, settings, to, self.state.force_mark_obstacles).0;
+        let mut shove = self.shove.borrow().clone();
+        let mut pv = self.solve(&mut shove, node, rules, settings, to, self.state.force_mark_obstacles).0;
         pv.forced_mark_obstacles = self.state.force_mark_obstacles;
         pv
     }
@@ -475,7 +549,12 @@ impl Dragger {
         let first = !self.state.started;
         self.state.started = true;
         let mark = self.free_angle || self.state.force_mark_obstacles || settings.mode == Mode::MarkObstacles;
-        let (mut pv, ok) = self.solve(node, rules, settings, to, mark);
+        // the gesture's `SHOVE` moves on with this position (`dragShove`'s `m_shove->Run()`): frames popped and pushed here are the
+        // ones the next position starts from
+        let (mut pv, ok) = {
+            let mut shove = self.shove.borrow_mut();
+            self.solve(&mut shove, node, rules, settings, to, mark)
+        };
         if ok {
             self.state.last_valid = Some(to);
             self.state.drag_status = self.status_of(&pv, ok, mark, settings);
@@ -495,9 +574,38 @@ impl Dragger {
         // "Restore last solution": m_dragStatus stays false, the line goes back to where the last good position put it
         self.state.drag_status = false;
         let mut restored = self.state.last_solution.clone().unwrap_or_else(|| DragPreview { pts: self.original.pts.clone(), arcs: self.original.arcs.clone(), ..DragPreview::default() });
+        if !mark && settings.mode != Mode::Walkaround {
+            self.restore_onto_frame(node, &mut restored);
+        }
         restored.restored = true;
         restored.forced_mark_obstacles = self.state.force_mark_obstacles;
         restored
+    }
+
+    /// `DRAGGER::Drag`'s "Restore last solution" in Shove mode: `NODE* parent = m_lastNode->GetParent()->Branch(); ..
+    /// m_lastNode->Add( m_lastDragSolution )` -- what is shown is the frame this failed position reduced the stack to (`SHOVE::Run`
+    /// leaves `m_currentNode` at the reduced parent when it fails), not the frame the last good position left: a frame this position
+    /// popped has sprung back. A line drag shows the last good line in it. A via drag has no `m_lastDragSolution` of its own (`dragShove`
+    /// sets it only for `DM_SEGMENT` / `DM_CORNER`), so the via and its tracks are where that frame has them. In Walk around mode the
+    /// parent is the session's world, which `last_solution` already shows.
+    fn restore_onto_frame(&self, node: &Node, pv: &mut DragPreview) {
+        let shove = self.shove.borrow();
+        let (top, _) = shove.stack.top();
+        if self.kind == DragKind::Via {
+            let at = shove.via_pos(self.via_pos);
+            let frame = top.apply(node);
+            let legs = self.attached_lines(&frame, at);
+            let tracks: Vec<Vec<String>> = legs.iter().map(|l| Self::source_tracks(&frame, l)).collect();
+            let (lines, vias) = self.frame_displacement(node, &top, &legs, &tracks);
+            pv.pts = vec![at];
+            pv.fanout = legs;
+            pv.fanout_tracks = tracks;
+            pv.displaced_lines = lines;
+            pv.displaced_vias = vias;
+        } else {
+            pv.displaced_lines = top.displaced_lines(node);
+            pv.displaced_vias = top.displaced_vias();
+        }
     }
 
     /// Whether the position `Drag` was last given can be committed (`m_dragStatus`).
@@ -525,63 +633,138 @@ impl Dragger {
     }
 
     /// `DRAGGER::dragShove`, `DM_VIA`: the via is the head of a shove (`SHOVE::AddHeads( VIA_HANDLE, aP, SHP_SHOVE )`): it is
-    /// moved to the cursor, the tracks attached to it go with it, and what they and the via collide with is pushed aside. The
-    /// via ends where the shove left it, which is not the cursor if a pad or the board edge pushed it on. When the shove
-    /// cannot be done -- `ShoveVias()` is off, the via is locked, or something will not give -- the drag walks around instead.
-    fn drag_via_shove(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
-        let Some(outcome) = self.via_id.and_then(|id| shove::shove_via(node, id, to, rules, settings)) else {
-            return self.drag_via_walkaround(node, rules, settings, to);
+    /// moved to the cursor from where the frame left on top has it, the tracks attached to it go with it, and what they and the via
+    /// collide with is pushed aside. The via ends where the shove left it, which is not the cursor if a pad or the board edge pushed
+    /// it on. When the shove cannot be done -- `ShoveVias()` is off, the via is locked, or something will not give -- the drag walks
+    /// around instead, in the frame the stack was reduced to (`m_lastNode = m_shove->CurrentNode()->Branch()`).
+    fn drag_via_shove(&self, shove: &mut DragShove, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
+        // `reduceSpringback`'s head set is the via as the current node has it (`FindViaByHandle( theVia )`), not where the cursor is
+        let from = shove.via_pos(self.via_pos);
+        let head_via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: from, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, is_virtual: self.via_virtual };
+        let head = HeadSet { pts: &[], net: &self.net, layer: self.layer, width: self.via_diameter, via: Some(&head_via) };
+        let (parent, area) = shove.reduce(node, &head, rules);
+        // the via may have sprung back to a frame below's place (`reduceSpringback` restores the handle)
+        let from = shove.via_pos(self.via_pos);
+        // `m_currentNode = parent->Branch()`: the frame the shove starts from
+        let mut frame = parent.apply(node);
+        let Some(id) = self.place_via(&mut frame, from) else {
+            return self.drag_via_walkaround(node, &frame, Some(&parent), from, rules, settings, to);
+        };
+        let Some(outcome) = shove::shove_via(&frame, id, to, rules, settings, area) else {
+            return self.drag_via_walkaround(node, &frame, Some(&parent), from, rules, settings, to);
         };
         let end = outcome.head.first().copied().unwrap_or(to);
-        let mut displaced_lines = outcome.displaced_lines;
-        // The attached tracks, as the shove left them: the displaced line that now ends at the via, in place of the original.
+        // `m_lastNode = m_shove->CurrentNode()->Branch()`: the frame this shove leaves, with the via's place in it
+        let mut world = parent;
+        world.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
+        shove.push_via(node, world.clone(), outcome.area, end);
+        let mut displaced_lines = world.displaced_lines(node);
+        // The attached tracks, as the drag left them: the displaced line that now ends at the via, in place of the original.
         let mut fanout = Vec::new();
-        for original in self.attached_lines(node) {
+        for original in self.attached_lines(node, self.via_pos) {
             let sources = Self::source_tracks(node, &original);
-            let found = displaced_lines.iter().position(|d| d.line.point_count() >= 2 && d.source_track.as_ref().is_some_and(|t| sources.contains(t)) && (d.line.first() == Some(end) || d.line.last() == Some(end)));
-            // A track the drag shortened to nothing has no line left; it is removed when the drag is committed.
-            let pts = found.map(|i| displaced_lines.remove(i).line.pts).unwrap_or_else(|| vec![end]);
+            let attached = |d: &DisplacedLine| d.line.point_count() >= 2 && d.source_track.as_ref().is_some_and(|t| sources.contains(t)) && (d.line.first() == Some(end) || d.line.last() == Some(end));
+            let found = displaced_lines.iter().position(attached);
+            let pts = match found {
+                Some(i) => displaced_lines.remove(i).line.pts,
+                // the frame has the leg where it started (no frame has moved the via yet, or the shove left it there)
+                None if original.first() == Some(end) || original.last() == Some(end) => original.pts.clone(),
+                // A track the drag shortened to nothing has no line left; it is removed when the drag is committed.
+                None => vec![end],
+            };
             fanout.push(Line { pts, ..original });
         }
-        let displaced_vias = outcome.displaced_vias.into_iter().filter(|v| Some(&v.source_via) != self.source_via.as_ref()).collect();
+        let displaced_vias = world.displaced_vias().into_iter().filter(|v| Some(&v.source_via) != self.source_via.as_ref()).collect();
         DragPreview { pts: vec![end], colliding: false, displaced_lines, displaced_vias, fanout, ..DragPreview::default() }
     }
 
-    /// `DRAGGER::dragViaWalkaround`: the via is pushed off whatever it would sit on (`propagateViaForces`: `VIA::PushoutForce`,
-    /// at most `ViaForcePropIterationLimit` steps, with the way back as the lead), then every track attached to it is dragged to
-    /// the via's new place -- at 45 degrees (`DragCorner`) -- and walked around what it would hit
-    /// ([`try_walkaround`]). A via that cannot be pushed free, or a track that cannot be walked, is a collision.
-    fn drag_via_walkaround(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
+    /// The dragged via in a frame's node, at `at`: a via the frame's world moved is already there (the world carries it by its
+    /// `source_via` name); a via the world cannot carry (`SHOVE` does not record a virtual one) is the session's via moved here.
+    fn place_via(&self, frame: &mut Node, at: Point) -> Option<ItemId> {
+        if let Some(id) = self.via_id {
+            if let Some(Item::Via(v)) = frame.get(id) {
+                if v.pos == at {
+                    return Some(id);
+                }
+            }
+        }
+        if let Some(name) = &self.source_via {
+            if let Some(id) = frame.iter().find_map(|(id, it)| match it {
+                Item::Via(v) if v.source_via.as_ref() == Some(name) && v.pos == at => Some(id),
+                _ => None,
+            }) {
+                return Some(id);
+            }
+        }
+        let id = self.via_id?;
+        let Item::Via(v) = frame.get(id)?.clone() else { return None };
+        frame.remove(id);
+        Some(frame.add(Item::Via(crate::item::Via { pos: at, ..v })))
+    }
+
+    /// `DRAGGER::dragViaWalkaround( aHandle, aNode, aP )`: the via is put at the cursor and pushed off whatever it would sit on
+    /// (`propagateViaForces`: `VIA::PushoutForce`, at most `ViaForcePropIterationLimit` steps, with the way back as the lead), then
+    /// every track attached to it -- the frame's, at `via_pos` -- is dragged to the via's new place -- at 45 degrees (`DragCorner`)
+    /// -- and walked around what it would hit ([`try_walkaround`]). A via that cannot be pushed free, or a track that cannot be
+    /// walked, is a collision. `world` is the session's world, which says whether a track would collide at all
+    /// (`m_world->CheckColliding( &draggedLine )`); `frame` is the node the pushout and the walkaround work in (`m_lastNode`), the
+    /// session's world unless a shove left a frame.
+    ///
+    /// `moved` is that frame's world (`dragShove`'s fallback: `dragViaWalkaround( m_draggedVia, m_lastNode, aP )`, `m_lastNode` a branch
+    /// of the frame the stack was reduced to): KiCad edits the branch -- `m_lastNode->Remove( origLine ); m_lastNode->Add( draggedLine )`
+    /// -- so what the earlier positions pushed stays, in the preview and in the commit, beside the walked fan-out. The preview carries
+    /// the frame's displacement without the via's own tracks (the fan-out replaces them) and without the dragged via, and the IR
+    /// tracks each leg stands on as the frame's items name them ([`DragPreview::fanout_tracks`]).
+    #[allow(clippy::too_many_arguments)]
+    fn drag_via_walkaround(&self, world: &Node, frame: &Node, moved: Option<&World>, via_pos: Point, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         let exclude = self.exclude();
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, is_virtual: false };
-        let lead = (self.via_pos.x - to.x, self.via_pos.y - to.y);
-        let Some(force) = shove::via_pushout_force(node, rules, &via, lead, crate::node::kind_mask::ANY, settings.via_force_prop_iteration_limit, &exclude) else {
+        let lead = (via_pos.x - to.x, via_pos.y - to.y);
+        let Some(force) = shove::via_pushout_force(frame, rules, &via, lead, crate::node::kind_mask::ANY, settings.via_force_prop_iteration_limit, &exclude) else {
             // can't force-propagate the via? bummer...
-            let fanout = self.via_candidate(node, to);
+            let fanout = self.via_candidate(frame, via_pos, to);
             return DragPreview { pts: vec![to], colliding: true, fanout, ..DragPreview::default() };
         };
         let target = Point { x: to.x + force.0, y: to.y + force.1 };
         let mut colliding = false;
         let mut fanout = Vec::new();
-        for original in self.attached_lines(node) {
+        let legs = self.attached_lines(frame, via_pos);
+        let fanout_tracks: Vec<Vec<String>> = legs.iter().map(|l| Self::source_tracks(frame, l)).collect();
+        let (displaced_lines, displaced_vias) = match moved {
+            Some(w) => self.frame_displacement(world, w, &legs, &fanout_tracks),
+            None => (Vec::new(), Vec::new()),
+        };
+        for original in legs {
             let mut dragged = original.clone();
-            if let Some(at) = dragged.find(self.via_pos) {
+            if let Some(at) = dragged.find(via_pos) {
                 dragged.drag_corner45(target, at);
                 dragged.simplify();
             }
-            if dragged.point_count() >= 2 && path_collides(node, rules, &dragged.net, dragged.layer, dragged.width.max(Nm::new(1)), &dragged.pts, &exclude) {
-                match try_walkaround(node, rules, settings, &dragged.net, dragged.layer, dragged.width.max(Nm::new(1)), &dragged.pts, &dragged.arcs) {
+            if dragged.point_count() >= 2 && path_collides(world, rules, &dragged.net, dragged.layer, dragged.width.max(Nm::new(1)), &dragged.pts, &exclude) {
+                match try_walkaround(frame, rules, settings, &dragged.net, dragged.layer, dragged.width.max(Nm::new(1)), &dragged.pts, &dragged.arcs) {
                     Some(walked) => {
                         dragged.pts = walked;
                         // `optimizeAndUpdateDraggedLine( walkLine, origLine, aP )`
-                        dragged = self.optimize_and_update_dragged_line(node, rules, settings, &dragged, &original, to);
+                        dragged = self.optimize_and_update_dragged_line(frame, rules, settings, &dragged, &original, to);
                     }
                     None => colliding = true,
                 }
             }
             fanout.push(dragged);
         }
-        DragPreview { pts: vec![target], colliding, fanout, ..DragPreview::default() }
+        DragPreview { pts: vec![target], colliding, displaced_lines, displaced_vias, fanout, fanout_tracks, ..DragPreview::default() }
+    }
+
+    /// What a frame's world `moved` has displaced, as a via drag's preview shows it beside the via's own tracks: the lines of
+    /// `legs` (the via's tracks as the frame has them, standing on `leg_tracks`) are left out, the fan-out takes their place, and so
+    /// is the dragged via. A line of a leg's IR track that is not part of the leg (the track runs on past a junction) stays.
+    fn frame_displacement(&self, base: &Node, moved: &World, legs: &[Line], leg_tracks: &[Vec<String>]) -> (Vec<DisplacedLine>, Vec<DisplacedVia>) {
+        let is_leg = |d: &DisplacedLine| {
+            legs.iter().zip(leg_tracks).any(|(l, ts)| d.source_track.as_ref().is_some_and(|t| ts.contains(t)) && d.line.point_count() >= 2 && d.line.pts.iter().all(|p| l.pts.contains(p)))
+        };
+        let lines = moved.displaced_lines(base).into_iter().filter(|d| !is_leg(d)).collect();
+        let vias = moved.displaced_vias().into_iter().filter(|v| Some(&v.source_via) != self.source_via.as_ref()).collect();
+        (lines, vias)
     }
 
     /// `DRAGGER::FixRoute( aForceCommit )`: commit the drag at `to`. The cursor goes there first (`Drag`); if that works the result is
@@ -628,8 +811,10 @@ impl Dragger {
                 if !self.via_virtual {
                     commit.vias.push((end, self.via_diameter, self.via_drill, self.source_via.clone()));
                 }
-                for l in &preview.fanout {
-                    for src in Self::source_tracks(node, l) {
+                // a leg taken from a frame names its tracks itself (its items are the frame's, not the session's)
+                for (i, l) in preview.fanout.iter().enumerate() {
+                    let sources = if preview.fanout_tracks.len() == preview.fanout.len() { preview.fanout_tracks[i].clone() } else { Self::source_tracks(node, l) };
+                    for src in sources {
                         if !commit.remove_track_ids.contains(&src) {
                             commit.remove_track_ids.push(src);
                         }
@@ -1280,6 +1465,113 @@ mod tests {
         let long = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(4.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("t".into(), 0)), locked: false }));
         let mid = Dragger::start_with(&node, Point { x: mm(1.5), y: Nm::ZERO }, long, true).unwrap();
         assert_eq!((mid.kind, mid.grabbed_index), (DragKind::Corner, 0));
+    }
+
+    /// `DRAGGER`'s single `SHOVE` (`m_shove`): a frame for each position that shoved, the stack reduced against the head before a
+    /// move (`SHOVE::reduceSpringback`) and the world a shove leaves pushed after it. A via the drag pushed stays pushed -- in the
+    /// preview and in the commit -- while the dragged line still collides with something of that frame's world (here a pad above
+    /// its path, which the shove walks it around), even at a position that no longer touches the via. Without the stack every
+    /// position re-derives from the committed world, so the via is back where it started the moment the head has moved off it.
+    #[test]
+    fn a_pushed_via_stays_pushed_while_the_drag_still_presses_on_the_frame() {
+        use crate::item::Solid;
+        let mut node = Node::new();
+        let ids = add_track(&mut node, "SIG", "t", &[p(0, 0), p(4_000_000, 0), p(4_000_000, 5_000_000)]);
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(2_000_000, 800_000), diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaM".into()), locked: false, is_virtual: false }));
+        // a pad above the line's path: the head is walked around it there, so it still collides with the frame's world
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(2_000_000, 3_600_000), shape: Shape::Circle { c: p(2_000_000, 3_600_000), r: mm(0.4) }, source: "U1.1".into(), edge: false }));
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let mut dragger = Dragger::start(&node, p(2_000_000, 0), ids[0]).unwrap();
+        assert_eq!(dragger.kind, DragKind::Segment);
+        // the first position pushes the via off the dragged segment, to clearance below it
+        let first = dragger.drag(&node, &rules, &settings, p(2_000_000, 1_000_000));
+        assert!(!first.colliding && !first.restored, "{first:?}");
+        let pushed = |pv: &DragPreview| pv.displaced_vias.iter().map(|v| (v.source_via.clone(), v.pos)).collect::<Vec<_>>();
+        assert_eq!(pushed(&first), vec![("viaM".to_string(), p(2_000_000, 400_000))], "the via is pushed to clearance below the line: {first:?}");
+        // the head is now far from the via and only meets the pad: the frame that pushed the via is still the one the shove starts from
+        let second = dragger.drag(&node, &rules, &settings, p(2_000_000, 3_000_000));
+        assert!(!second.colliding && !second.restored, "{second:?}");
+        assert_eq!(pushed(&second), vec![("viaM".to_string(), p(2_000_000, 400_000))], "the via stays pushed: {second:?}");
+        let commit = dragger.finish(&node, &rules, &settings, p(2_000_000, 3_000_000), false).expect("the drag commits");
+        assert!(commit.remove_via_ids.contains(&"viaM".to_string()), "the via the drag pushed is replaced: {commit:?}");
+        assert!(commit.vias.iter().any(|v| v.0 == p(2_000_000, 400_000) && v.3.as_deref() == Some("viaM")), "the pushed via is committed where the drag left it: {commit:?}");
+        // the first frame of a gesture is never popped (`while( m_nodeStack.size() > 1 )`): drawn back away from everything the
+        // via still stays where that frame put it, as in KiCad
+        let away = dragger.drag(&node, &rules, &settings, p(2_000_000, -2_000_000));
+        assert!(!away.colliding && !away.restored, "{away:?}");
+        assert_eq!(pushed(&away), vec![("viaM".to_string(), p(2_000_000, 400_000))], "the bottom frame is never popped: {away:?}");
+    }
+
+    /// `DRAGGER::dragShove`, `DM_VIA`, when the shove fails: `dragViaWalkaround( m_draggedVia, m_lastNode, aP )` works in a branch of
+    /// the frame the stack was reduced to, so what the earlier positions pushed stays (preview and commit), and the fan-out it walks
+    /// replaces the via's own tracks -- the frame's lines of them, which the frame re-made, map back to their IR tracks.
+    #[test]
+    fn a_via_shove_that_fails_walks_around_in_the_frame_and_keeps_its_pushes() {
+        let (mut node, _) = via_across_a_gnd_track();
+        // a locked GND track the via is then dragged onto: the shove cannot move it, so the via is pushed off it and its track walked
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(-2_000_000, 3_000_000), b: p(2_000_000, 3_000_000), width: mm(0.2), source_track: Some(("trkL".into(), 0)), locked: true }));
+        let via_id = node.iter().find_map(|(id, it)| matches!(it, Item::Via(_)).then_some(id)).unwrap();
+        let mut dragger = Dragger::start(&node, p(0, 0), via_id).expect("a via drag");
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        // the via pushes the GND track aside: the gesture's one frame, with trkA re-made to end at the via's new place
+        let first = dragger.drag(&node, &rules, &settings, p(4_000_000, 0));
+        assert!(!first.colliding && !first.restored, "{first:?}");
+        let pushed_b = first.displaced_lines.iter().find(|d| d.source_track.as_deref() == Some("trkB")).expect("trkB is pushed").line.pts.clone();
+        // onto the locked track: the shove fails, `dragViaWalkaround` works in the frame
+        let to = p(500_000, 3_200_000);
+        let second = dragger.drag(&node, &rules, &settings, to);
+        assert!(!second.colliding && !second.restored, "{second:?}");
+        assert_ne!(second.pts, vec![to], "the via is pushed off the locked track: {second:?}");
+        let b_of = |lines: &[DisplacedLine]| lines.iter().filter(|d| d.source_track.as_deref() == Some("trkB")).map(|d| d.line.pts.clone()).collect::<Vec<_>>();
+        assert_eq!(b_of(&second.displaced_lines), vec![pushed_b.clone()], "what the frame pushed stays in the preview: {second:?}");
+        assert!(second.displaced_lines.iter().all(|d| d.source_track.as_deref() != Some("trkA")), "the via's own track is the fan-out, not a displaced line: {second:?}");
+        assert!(second.displaced_vias.is_empty(), "the dragged via is not a displaced via: {second:?}");
+        assert_eq!(second.fanout.len(), 1, "{second:?}");
+        assert_eq!(second.fanout[0].pts.last(), second.pts.first(), "the walked track ends at the via: {second:?}");
+        let commit = dragger.finish(&node, &rules, &settings, to, false).expect("the walked position commits");
+        let mut removed = commit.remove_track_ids.clone();
+        removed.sort();
+        assert_eq!(removed, vec!["trkA".to_string(), "trkB".to_string()], "the via's original track and the pushed track are replaced, once each: {commit:?}");
+        let sig: Vec<_> = commit.tracks.iter().filter(|l| l.net == net_of("SIG")).collect();
+        assert_eq!(sig.len(), 1, "one SIG track, the walked one -- not the original beside it: {commit:?}");
+        assert_eq!(sig[0].pts, second.fanout[0].pts);
+        let gnd: Vec<_> = commit.tracks.iter().filter(|l| l.net == net_of("GND")).map(|l| l.pts.clone()).collect();
+        assert_eq!(gnd, vec![pushed_b], "the earlier push is committed: {commit:?}");
+        assert_eq!(commit.remove_via_ids, vec!["viaA"]);
+        assert_eq!(commit.vias.len(), 1, "{commit:?}");
+        assert_eq!(Some(commit.vias[0].0), second.pts.first().copied());
+    }
+
+    /// `DRAGGER::Drag`'s "Restore last solution" in Shove mode shows the frame the failed position reduced the stack to
+    /// (`m_lastNode->GetParent()`), not the one the last good position left: the via's place in the newest frame no longer touches
+    /// that frame's world, so the frame is popped, and when the via then cannot get to the cursor it is shown where the frame below
+    /// has it, with that frame's push.
+    #[test]
+    fn a_failed_via_position_shows_the_frame_it_reduced_the_stack_to() {
+        let (mut node, _) = via_across_a_gnd_track();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(-2_000_000, 3_000_000), b: p(2_000_000, 3_000_000), width: mm(0.2), source_track: Some(("trkL".into(), 0)), locked: true }));
+        let via_id = node.iter().find_map(|(id, it)| matches!(it, Item::Via(_)).then_some(id)).unwrap();
+        let mut dragger = Dragger::start(&node, p(0, 0), via_id).expect("a via drag");
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let first = dragger.drag(&node, &rules, &settings, p(4_000_000, 0));
+        assert!(!first.colliding && !first.restored, "{first:?}");
+        let second = dragger.drag(&node, &rules, &settings, p(4_000_000, 1_000_000));
+        assert!(!second.colliding && !second.restored, "{second:?}");
+        assert_eq!(dragger.shove.borrow().stack.len(), 2, "each move that shoved left a frame");
+        let b_of = |pv: &DragPreview| pv.displaced_lines.iter().filter(|d| d.source_track.as_deref() == Some("trkB")).map(|d| d.line.pts.clone()).collect::<Vec<_>>();
+        assert_ne!(b_of(&first), b_of(&second), "the second move pushed trkB on");
+        // centred on the locked track: neither the shove nor the pushout can place the via
+        let failed = dragger.drag(&node, &rules, &settings, p(0, 3_000_000));
+        assert!(failed.restored && !dragger.drag_status(), "{failed:?}");
+        assert_eq!(dragger.shove.borrow().stack.len(), 1, "the via's place in the newest frame touches nothing of it: popped");
+        assert_eq!(failed.pts, first.pts, "the via is where the frame left on top has it: {failed:?}");
+        assert_eq!(b_of(&failed), b_of(&first), "with that frame's push: {failed:?}");
+        assert_eq!(failed.fanout.len(), 1);
+        assert_eq!(failed.fanout[0].pts.last(), first.pts.first(), "its track ends at it: {failed:?}");
+        assert!(failed.displaced_lines.iter().all(|d| d.source_track.as_deref() != Some("trkA")), "{failed:?}");
     }
 
     #[test]

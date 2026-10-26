@@ -135,8 +135,10 @@ What is ported, function for function (`pns_shove.cpp`):
 
 Where it differs, on purpose:
 
-- **No springback.** Every call branches fresh from the committed world
-  (decision 1, and the HTTP-per-sample driver). The shove main loop is bounded
+- **The springback stack is the placer's, not the shove's.** KiCad's `SHOVE` owns `m_nodeStack`; here it is
+  [`crate::springback`], kept by the placers that shove (the line placer, the dragger, the pair placer), and a shove is one `Run` from the
+  node it is given: `shove_line_after` / `shove_heads_after` start from a reduced frame's world with its area (`totalAffectedArea`), the
+  plain entry points from the committed world (decision 1, and the HTTP-per-sample driver). The shove main loop is bounded
   as KiCad's is: 250 iterations (`ShoveIterationLimit`) and one second
   (`ShoveTimeLimit`, `time_limit.rs`), checked after every iteration; either
   one ends the shove as `SH_INCOMPLETE`.
@@ -269,9 +271,9 @@ The shove takes the dragged line out of its world first (`Shove::dragged_away`) 
 direction test for vertex 0. Replays of KiCad's `walk_drag_seg_against_board_edge` (the three
 segments it recorded) and `simple-drag-shove-singlelayer` (116 of 134, the same 139 tracks) are in
 `tests/qa_regressions.rs`. What the original scoping list below says about "corner drag only" and
-"free-angle" is superseded; what stayed out then and is ported now (P5d, Stage 9):
-`OptimizeEntireDraggedTrack`, arcs (`DM_ARC`), locked tracks; what still stays out: springback,
-virtual vias.
+"free-angle" is superseded; what stayed out then and is ported now (P5d, Stage 9, then Stage 10's virtual vias and Stage 14's
+springback): `OptimizeEntireDraggedTrack`, arcs (`DM_ARC`), locked tracks, virtual vias, springback, which is now a `DragShove` per
+gesture (`dragShove` / `dragViaShove`'s one `SHOVE`, the via's place in each frame for `m_draggedVias`).
 
 Scoped down further than `shove`/`walkaround` already are (see
 `dragger.rs`'s own doc comment for the full reasoning):
@@ -524,9 +526,12 @@ row of section D. The short version:
   Backspace is `UndoLastSegment`, `AttemptFinish` finishes. `painter.ts`
   draws both lines (the violation colour if either collides), the pair of vias
   and what the shove moves.
+- **Springback** (Stage 14): in Shove mode a `Move` starts its shove from the newest frame the new heads still press on
+  (`reduceSpringback` with both lines' heads at once), routes, walks and shoves in that frame (`m_currentNode`), and pushes the world the
+  shove leaves; a fix makes a fresh `SHOVE` over the committed world (`FixRoute`), so the stack restarts empty and no frame is locked, and
+  Backspace clears it.
 - **Differences from KiCad, on purpose** (the module header of `dp_placer.rs`
-  has them, with the reasoning): no springback (every move resolves from the
-  world the last fix left); two walk attempts where KiCad makes
+  has them, with the reasoning): two walk attempts where KiCad makes
   four (`attempt & 2` is a winding `attemptWalk` never reads, so 2 and 3 repeat
   0 and 1); Backspace; the gap and via gap raised to the clearance. Not
   ported because KiCad never calls it: `DP_GATEWAYS::BuildOrthoProjections` and
@@ -749,7 +754,8 @@ a locked track (refused, Drag Anyway, walked round), `V` shoving the track under
    asks the session's world without what the frame moved plus a small node of what it moved to. The fixed runs were **locked** in the frame (until the review below: now they are tracks a later shove may push, as KiCad's). When the stage's `commit` node is not a frame (no shove had succeeded before the click),
    KiCad's `RewindSpringbackTo` finds nothing and keeps the undone run's locked frame; here it is erased. `SetSpringbackDoNotTouchNode` has no
    counterpart (the end item is picked from the session's world, never a frame). Not ported here: the dragger's and the pair placer's use of the
-   stack (`DRAGGER::dragShove`, `DIFF_PAIR_PLACER::tryShove`: they still shove from the world their gesture or last fix started from).
+   stack (`DRAGGER::dragShove`, `DIFF_PAIR_PLACER::tryShove`), which Stage 14 ports (the dragger one `SHOVE` per gesture; the pair a frame per
+   move of the leg, a fresh `SHOVE` at each fix and no locked frames).
    **Before:** every move shoved from the session's world as it was when the route started, and the fixed legs' shoves were merged by IR id
    afterwards, so a second leg could push a track back over the first. **Proof:** KiCad's recorded sessions match better --
    `simple-shove-1` reproduces 24 of the 28 segments KiCad committed (12 before), `issue22749-shove-weird-drag-track-end` all 11 (4 before;
@@ -861,10 +867,8 @@ undo/redo, model change, before a footprint drag; the tuner's proxy too) is the 
 junction made by the last commit has its virtual via at once: a staleness of KiCad's not reproduced). (4) *`SwitchRounding*` and the
 catalog*: fixed (6 above).
 
-**Left, with sizes.** Springback in the dragger (`DRAGGER::dragShove` / `dragViaShove`: one `SHOVE` per gesture, a frame per move, and
-`m_draggedVias` restored when a frame is popped -- about the size of the line placer's use, 150-250 lines and a commit built from the newest
-frame) and in the pair placer (`DIFF_PAIR_PLACER::tryShove`: a frame per move of the leg, a fresh `SHOVE` at each fix, no locked frames --
-somewhat smaller). The mark-obstacles hull snap (`rhMarkObstacles`, with its 90-degree box) as before. And a pre-existing difference met on
+**Left, with sizes.** ~~Springback in the dragger and in the pair placer~~ **Ported 2026-10-25 (Stage 14).** The mark-obstacles hull
+snap (`rhMarkObstacles`, with its 90-degree box) as before. And a pre-existing difference met on
 the way: when the head cannot be resolved KiCad keeps the previous head (`routeStep`: `m_head = prevHead`) and `FixRoute` in Shove mode is
 refused only by a solid, where the port shows the straight line flagged colliding and refuses the click.
 
@@ -1006,6 +1010,65 @@ No behaviour change: every test passes with its values unchanged, KiCad's QA rep
 KiCad's nanometre cases by 1000 before giving them to the port (and multiplied the answers back); it now runs them at KiCad's scale, and
 the baked answers of `pns_mouse_trail_tracer.cpp` all agree.
 
+## Stage 14 -- springback in the dragger and the pair placer (branch `ds/handoff-1025`, 2026-10-25)
+
+Stage 10 review's "Left" list, first item: the two placers that kept no shove branch between moves, in the sizes that list gave them --
+the dragger's one `SHOVE` per gesture (KiCad makes it in `Start`, for `RM_Shove` and not free angle) and the pair's frame per move of the
+leg, with a fresh `SHOVE` at every fix (`DIFF_PAIR_PLACER::FixRoute`).
+
+**The dragger** (`src/dragger.rs`). The stack is a `DragShove` beside the dragger: a [`Springback`] and, per frame, the place a via drag left
+its via in (`SPRINGBACK_TAG::m_draggedVias`; a [`crate::springback::World`] is a diff and does not carry it, and only the dragger has vias
+of its own to carry). A line drag pops the frames the candidate line no longer collides with (`reduceSpringback` with the line as its head),
+shoves the stretched line from the reduced frame's world with that frame's area (`totalAffectedArea`, now a parameter of
+`shove_dragged_line`), and pushes the world the shove left. A position the shove cannot resolve keeps the pops -- the next position starts
+from the frame left on top, as in KiCad -- and the dragger falls back to marking obstacles; a via the shove cannot move goes to
+`dragViaWalkaround`, as `dragViaShove` does. A via drag's head is the via at the top frame's recorded place, so a frame popped puts the via
+back to the frame below's place before the shove starts, and the frame it pushes records where the shove left it. The dragged via may itself
+be virtual or unnamed, which a `World` cannot carry: the frame node is made first and the via put back at the frame's place in it. The commit
+(`commit_of`) is built from the preview at the last valid point, whose `displaced_lines` / `displaced_vias` are the newest frame's against
+the session's world, so everything the gesture pushed is committed, not only what the last position did. `preview()` reduces a copy of the
+stack: `m_nodeStack` lives as long as the dragger, and a preview does not move the gesture on.
+
+**The pair placer** (`src/dp_placer.rs`). `rhShoveOnly` starts with `m_currentNode = m_shove->CurrentNode()` -- `frame_node()`, the newest
+frame's world against the session's with the fixed legs in it -- and fits, walks (`tryWalkDp`) and shoves in it. The reduce takes both lines'
+heads at once (`Springback::reduce_all`): `CheckColliding( aHeadSet )` asks about the one head set, so a frame one line still presses on
+stays for the other too. The shove starts from the reduced frame's world (`shove_heads_after`, the frame's area in `totalAffectedArea`) and
+its world is pushed as the newest frame; a failed shove leaves the reduced frame as `m_currentNode` and the stack as the reduce left it.
+`FixRoute` commits that world with the pair in it, and makes a fresh `SHOVE` over the committed world (`m_shove =
+std::make_unique<SHOVE>( m_world, .. )` before `CommitPlacement`): the stack restarts empty at every fix, so no frame is ever locked, and
+`undo_last_segment` (the port's Backspace; KiCad's pair placer has no `UnfixRoute`) clears it with the leg. `Move`'s
+`m_lastNode = m_currentNode->Branch()` is the port's `last_node`: the frame the move started from, then the world the shove left, or the
+reduced frame when it failed, so a fix under `AllowDRCViolations` commits the pushed world as KiCad's does.
+
+**Proof.** Failing first, then passing: the dragger's `a_pushed_via_stays_pushed_while_the_drag_still_presses_on_the_frame` (a segment
+dragged over a GND via, the cursor taken past a pad and drawn back: the via stays where the first frame pushed it, in the preview and in the
+commit, and the oldest frame is never popped) and the pair's `a_via_the_pair_pushed_stays_pushed_until_the_leg_is_fixed` (the pair pushes
+a GND via off the N line, the cursor drawn back to where neither line presses on it: the via stays pushed and the fix commits it there);
+`springback.rs`'s `a_frame_stays_while_any_of_the_heads_presses_on_it` for the two-head reduce. All of `cargo test -p eda-pns` passes
+(301 unit tests and every integration suite), the QA replays of `tests/qa_regressions.rs` exact, `tests/dp_boards.rs` on KiCad's pair board,
+and the slow tier (`EDA_SLOW_TESTS=1`) green.
+
+**Review fixes (branch `task-ds-springback-fix`, 2026-10-26).**
+- *The walkaround fallback of a via drag keeps the frame.* `dragShove` (`DM_VIA`) calls `dragViaWalkaround( m_draggedVia, m_lastNode, aP )`
+  when the shove fails, and edits that branch of the reduced frame (`m_lastNode->Remove( origLine ); m_lastNode->Add( draggedLine )`), so
+  the commit keeps what the earlier positions pushed beside the walked fan-out. The port's fallback preview had dropped the frame: no
+  `displaced_lines` / `displaced_vias` (the pushes vanished from the preview and the commit), and the fan-out legs, assembled from the
+  frame's node, carried item ids the session's world does not have, so `commit_of` could not find their IR tracks and committed the walked
+  legs beside the original ones. Now `drag_via_walkaround` takes the frame's [`crate::springback::World`]: the preview carries its
+  displacement without the via's own legs (the fan-out replaces them) and without the dragged via, and `DragPreview::fanout_tracks` names
+  each leg's IR tracks as the frame's items have them, which `commit_of` uses. Failing first, then passing:
+  `a_via_shove_that_fails_walks_around_in_the_frame_and_keeps_its_pushes` (the via pushes a GND track aside, then is dragged onto a locked
+  GND track: the shove fails, the via is pushed off and its track walked; the preview and the commit keep the push, the original leg is
+  removed and only the walked one added).
+- *A failed position shows the reduced frame.* `DRAGGER::Drag`'s "Restore last solution" is `NODE* parent = m_lastNode->GetParent()->Branch();
+  .. m_lastNode->Add( m_lastDragSolution )`: in Shove mode the parent is the frame this failed position reduced the stack to, so a frame it
+  popped has sprung back in what is shown. The port showed `last_solution` whole, the frame from before this move's pops. Now
+  (`restore_onto_frame`) a line drag shows the last good line with the reduced frame's displacement; a via drag (`dragShove` sets
+  `m_lastDragSolution` only for lines) shows the via and its legs where that frame has them. Walk around mode is unchanged: its parent is the
+  session's world. Failing first, then passing: `a_failed_via_position_shows_the_frame_it_reduced_the_stack_to` (two frames, then a position
+  neither the shove nor the pushout can place: the newest frame is popped and the preview shows the via, its leg and the push of the frame
+  below). The line-drag half has no test of its own: a line head that pops a frame touches nothing of it, so its shove does not fail.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
@@ -1057,8 +1120,7 @@ the baked answers of `pns_mouse_trail_tracer.cpp` all agree.
 - ~~`VIA::PushoutForce`~~ is ported (2026-10-08, `shove::via_pushout_force`); the
   second lead KiCad tries (`m_last_p_end`) is not kept.
 - ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). ~~Springback~~
-  **Ported 2026-10-23** for the line placer (Stage 10 step 1; the dragger and the pair
-  placer do not keep the stack). See
+  **Ported 2026-10-23** for the line placer (Stage 10 step 1) and **2026-10-25** for the dragger and the pair placer (Stage 14). See
   `docs/parity/GAPS.md` item 7 for what is left in gap #7: `LockJoint`, ~~virtual vias~~ (Stage 10 step 3),
   the walkaround cluster timeout, the pad-to-die length and delay, time-domain rules as the tuner's
   target, the rounding of corners, the merged outline of a pair's pattern, a pattern moved, turned

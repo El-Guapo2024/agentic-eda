@@ -17,6 +17,7 @@ import { ImportSymbolDialog } from "./ImportSymbolDialog";
 import { LibraryFieldsTableDialog } from "./LibraryFieldsTableDialog";
 import { SymbolTextDialog } from "./SymbolTextDialog";
 import { DeriveSymbolDialog } from "./DeriveSymbolDialog";
+import { NewSymbolDialog } from "./NewSymbolDialog";
 import { UpdateSymbolFieldsDialog } from "./UpdateSymbolFieldsDialog";
 import { DerivedSymbolBanner } from "./DerivedSymbolBanner";
 import { LibraryDialogHost } from "../library/libraryDialogs";
@@ -61,6 +62,7 @@ export function SymbolEditorView() {
       <LibraryFieldsTableDialog />
       <SymbolTextDialog />
       <DeriveSymbolDialog />
+      <NewSymbolDialog />
       <UpdateSymbolFieldsDialog />
       <LibraryDialogHost />
       {state.toast && (

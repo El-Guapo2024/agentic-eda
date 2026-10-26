@@ -8,7 +8,7 @@
 //! ```text
 //! eda fab gerbers <dir> [--layers F.Cu,B.Cu,...]
 //! eda fab drill   <dir> [--separate-th] [--generate-report]
-//! eda fab pos     <dir> [--format csv|ascii] [--side front|back|both] [--units mm|in] [--smd-only] [--exclude-fp-th] [--exclude-dnp]
+//! eda fab pos     <dir> [--format csv|ascii] [--side front|back|both] [--units mm|in] [--smd-only] [--exclude-fp-th] [--exclude-dnp] [--separate-sides]
 //! eda fab bom     <dir>
 //! ```
 //!
@@ -56,7 +56,9 @@ pub fn run(argv: &[String]) -> Result<(), Vec<CheckResult>> {
             if has_flag(opts, "--exclude-dnp") {
                 args.push("--exclude-dnp".into());
             }
-            print_written(&dir, kicad_engine::export(&dir, "pos", &args)?)
+            // `DIALOG_GEN_FOOTPRINT_POSITION`'s "Generate single file with both front and back positions", checked: one `-all` file.
+            // `--separate-sides` unchecks it, so both sides become the top's and the bottom's files.
+            print_written(&dir, kicad_engine::export_pos(&dir, &args, !has_flag(opts, "--separate-sides"))?)
         }
         "bom" => print_written(&dir, kicad_engine::export_sch(&dir, "bom", &fab_api::bom_args())?),
         other => Err(fail("fab", "usage", format!("unknown verb {other:?}: expected gerbers, drill, pos or bom"))),

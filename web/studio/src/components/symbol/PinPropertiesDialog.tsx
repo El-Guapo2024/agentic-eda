@@ -6,13 +6,21 @@
 // a GPIO or a UART pin, `PinAlternatesGrid.tsx`). Not ported: the live
 // preview pane (the main canvas already shows the pin as drawn, one
 // dialog-width away).
+//
+// It is also where the Pin tool's click lands: `SYMBOL_EDITOR_PIN_TOOL::CreatePin` makes the pin and opens this dialog before adding it,
+// so Cancel drops the pin and OK adds it (after `PlacePin`'s Synchronized Pins Mode confirmation). An existing pin has an id and is edited;
+// the pending one (`state.pendingPin`) is added by OK and has no Delete Pin.
 import { useEffect, useState } from "react";
 import type { LibrarySymbolPin, PinElectricalType, PinShape } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { useStudioState } from "../../state/store";
 import { nmFrom, nmTo } from "../../state/units";
 import { angleDegToOrientation, orientationToAngleDeg, PIN_ORIENTATIONS, type PinOrientation } from "../../kicad-port/pinOrientation";
+import { pinOccupiedMessage, pinPlacementOccupant } from "../../kicad-port/pinPlacement";
 import { alternatesError, PIN_SHAPE_OPTIONS as SHAPE_OPTIONS, PIN_TYPE_OPTIONS as ELECTRICAL_TYPE_OPTIONS } from "../../kicad-port/symPinAlternates";
+import { pinTemplateOf } from "../../kicad-port/symPinTemplate";
+import { synchronizePins } from "../../kicad-port/symPinSync";
+import { askConfirm } from "../library/libraryDialogs";
 import { PinAlternatesGrid } from "./PinAlternatesGrid";
 
 const ORIENTATION_LABELS: Record<PinOrientation, string> = { right: "Right", left: "Left", up: "Up", down: "Down" };
@@ -31,8 +39,13 @@ export function PinPropertiesDialog() {
   const api = useSymApi();
   const units = useStudioState().units;
   const id = state.pinPropertiesId;
-  const pin = id ? state.symbol?.pins.find((p) => p.id === id) : undefined;
-  const close = () => dispatch({ type: "SET_PIN_PROPERTIES_ID", id: null });
+  /** The pin the Pin tool has just dropped (`SYMBOL_EDITOR_PIN_TOOL::CreatePin`): not in the document yet; OK adds it. */
+  const pending = state.pendingPin;
+  const pin = id ? state.symbol?.pins.find((p) => p.id === id) : pending ?? undefined;
+  const close = () => {
+    if (pending) dispatch({ type: "SET_PENDING_PIN", pin: null });
+    else dispatch({ type: "SET_PIN_PROPERTIES_ID", id: null });
+  };
 
   const [form, setForm] = useState<LibrarySymbolPin | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,9 +57,9 @@ export function PinPropertiesDialog() {
     if (pin) setForm(pin);
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, pending]);
 
-  if (!id || !pin || !form) return null;
+  if (!pin || !form) return null;
 
   const set = <K extends keyof LibrarySymbolPin>(key: K, value: LibrarySymbolPin[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
   const len = (mm: number, onChange: (mm: number) => void, width = 80) => (
@@ -59,7 +72,26 @@ export function PinPropertiesDialog() {
     // `TransferDataFromWindow`: a row of the alternates grid needs a name
     const problem = alternatesError(form.alternates ?? []);
     if (problem) return setError(problem);
-    if (await api.editPin(id, form)) close();
+    if (id) {
+      // `EditPinProperties` saves the sticky defaults (`g_LastPin*`) for an edited pin too; merely selecting one does not.
+      if (await api.editPin(id, form)) {
+        dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(form) });
+        close();
+      }
+      return;
+    }
+    // A pin the tool has just dropped: `PlacePin` asks first when it lands on another pin (Synchronized Pins Mode), and only then is it added.
+    const sym = state.symbol;
+    const syncMode = !!sym && synchronizePins(state.syncPins, sym.unit_count, !!sym.units_locked);
+    const occupant = pinPlacementOccupant(form, sym?.pins ?? [], syncMode);
+    if (occupant && !(await askConfirm({ title: "Confirmation", message: pinOccupiedMessage(occupant.unit), okLabel: "Place Pin Anyway" }))) {
+      dispatch({ type: "SET_PENDING_PIN", pin: null }); // PlacePin deletes the new pin and places nothing
+      return;
+    }
+    if (!(await api.addPin(form))) return; // the verb's refusal is the editor's toast; the dialog stays open on the pin
+    dispatch({ type: "PIN_PLACED", number: form.number });
+    dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(form) });
+    close();
   };
 
   return (
@@ -67,7 +99,7 @@ export function PinPropertiesDialog() {
       <div className="dialog" style={{ width: 520 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>Pin Properties</span>
-          <span>{pin.number || "(no number)"}</span>
+          <span>{form.number || "(no number)"}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "72vh", overflowY: "auto" }}>
           <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr" }}>
@@ -135,14 +167,16 @@ export function PinPropertiesDialog() {
           )}
         </div>
         <div className="dialog-footer">
-          <button
-            onClick={() => {
-              void api.deletePin(id);
-              close();
-            }}
-          >
-            Delete Pin
-          </button>
+          {id !== null && (
+            <button
+              onClick={() => {
+                void api.deletePin(id);
+                close();
+              }}
+            >
+              Delete Pin
+            </button>
+          )}
           <button onClick={close} data-testid="pin-props-cancel">
             Cancel
           </button>

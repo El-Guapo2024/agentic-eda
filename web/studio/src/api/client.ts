@@ -359,6 +359,9 @@ export interface FabPosOptions {
   exclude_dnp?: boolean;
   /** "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
   use_aux_origin?: boolean;
+  /** "Generate single file with both front and back positions" (`m_singleFile`, checked by default): with both sides asked and this
+   * off, KiCad writes the top's and the bottom's files (`<name>-top-pos.csv`, `<name>-bottom-pos.csv`). */
+  single_file?: boolean;
 }
 
 export function postFabPos(opts: FabPosOptions): Promise<FabReply> {

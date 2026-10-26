@@ -1,9 +1,13 @@
 // dialog_gen_footprint_position.cpp ("Generate Placement Files", File >
 // Fabrication Outputs > Component Placement...): format, side and unit
-// radios plus the SMD-only / exclude-through-hole filters. POSTs to
-// /api/fab/pos (crates/cli/src/fab_api.rs), which turns them into
-// `kicad-cli pcb export pos` arguments and runs it on the exported board --
-// KiCad's own PLACE_FILE_EXPORTER, not a Rust port.
+// radios, KiCad's "Generate single file with both front and back positions"
+// (checked by default, as `m_singleFile` is) plus the SMD-only /
+// exclude-through-hole filters. POSTs to /api/fab/pos
+// (crates/cli/src/fab_api.rs), which turns them into `kicad-cli pcb export
+// pos` arguments and runs it on the exported board -- KiCad's own
+// PLACE_FILE_EXPORTER, not a Rust port. The file names are KiCad's too
+// (`PLACE_FILE_EXPORTER::DecorateFilename`): `<name>-all-pos.csv` for the
+// single file, `<name>-top-pos.csv` and `<name>-bottom-pos.csv` for two.
 import { useState } from "react";
 import { postFabPos, type FabPosOptions } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
@@ -13,6 +17,8 @@ export function FootprintPositionDialog() {
   const dispatch = useStudioDispatch();
   const [format, setFormat] = useState<FabPosOptions["format"]>("ascii");
   const [side, setSide] = useState<FabPosOptions["side"]>("both");
+  // m_singleFile starts checked in KiCad's dialog: both sides in one `<name>-all-pos` file.
+  const [singleFile, setSingleFile] = useState(true);
   const [unitsMm, setUnitsMm] = useState(true);
   const [smdOnly, setSmdOnly] = useState(false);
   const [excludeFpTh, setExcludeFpTh] = useState(false);
@@ -29,7 +35,7 @@ export function FootprintPositionDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postFabPos({ format, side, units_mm: unitsMm, smd_only: smdOnly, exclude_fp_th: excludeFpTh, exclude_dnp: excludeDnp, use_aux_origin: useAuxOrigin });
+      const reply = await postFabPos({ format, side, units_mm: unitsMm, smd_only: smdOnly, exclude_fp_th: excludeFpTh, exclude_dnp: excludeDnp, use_aux_origin: useAuxOrigin, single_file: singleFile });
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Position file written." : "Failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
@@ -62,6 +68,12 @@ export function FootprintPositionDialog() {
             ))}
           </div>
           <div>
+            <label className="toggle" title="Both sides in one -all-pos file; unchecked, KiCad's -top-pos and -bottom-pos files">
+              <input type="checkbox" checked={singleFile} disabled={side !== "both"} onChange={(e) => setSingleFile(e.target.checked)} data-testid="pos-single-file" />
+              Generate single file with both front and back positions
+            </label>
+          </div>
+          <div>
             <div style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginBottom: 6 }}>Units</div>
             <label className="toggle">
               <input type="radio" name="pos-units" checked={unitsMm} onChange={() => setUnitsMm(true)} />
@@ -91,7 +103,8 @@ export function FootprintPositionDialog() {
             </label>
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)" }}>
-            Output directory: <code>export/kicad/pos/</code>. Written by <code>kicad-cli pcb export pos</code>, so it is KiCad's own file.
+            Output directory: <code>export/kicad/pos/</code>, named as KiCad names it: <code>-all-pos</code> for one file, <code>-top-pos</code> and{" "}
+            <code>-bottom-pos</code> for two. Written by <code>kicad-cli pcb export pos</code>, so it is KiCad's own file.
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>
