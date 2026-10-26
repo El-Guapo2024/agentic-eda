@@ -1048,6 +1048,27 @@ a GND via off the N line, the cursor drawn back to where neither line presses on
 (301 unit tests and every integration suite), the QA replays of `tests/qa_regressions.rs` exact, `tests/dp_boards.rs` on KiCad's pair board,
 and the slow tier (`EDA_SLOW_TESTS=1`) green.
 
+**Review fixes (branch `task-ds-springback-fix`, 2026-10-26).**
+- *The walkaround fallback of a via drag keeps the frame.* `dragShove` (`DM_VIA`) calls `dragViaWalkaround( m_draggedVia, m_lastNode, aP )`
+  when the shove fails, and edits that branch of the reduced frame (`m_lastNode->Remove( origLine ); m_lastNode->Add( draggedLine )`), so
+  the commit keeps what the earlier positions pushed beside the walked fan-out. The port's fallback preview had dropped the frame: no
+  `displaced_lines` / `displaced_vias` (the pushes vanished from the preview and the commit), and the fan-out legs, assembled from the
+  frame's node, carried item ids the session's world does not have, so `commit_of` could not find their IR tracks and committed the walked
+  legs beside the original ones. Now `drag_via_walkaround` takes the frame's [`crate::springback::World`]: the preview carries its
+  displacement without the via's own legs (the fan-out replaces them) and without the dragged via, and `DragPreview::fanout_tracks` names
+  each leg's IR tracks as the frame's items have them, which `commit_of` uses. Failing first, then passing:
+  `a_via_shove_that_fails_walks_around_in_the_frame_and_keeps_its_pushes` (the via pushes a GND track aside, then is dragged onto a locked
+  GND track: the shove fails, the via is pushed off and its track walked; the preview and the commit keep the push, the original leg is
+  removed and only the walked one added).
+- *A failed position shows the reduced frame.* `DRAGGER::Drag`'s "Restore last solution" is `NODE* parent = m_lastNode->GetParent()->Branch();
+  .. m_lastNode->Add( m_lastDragSolution )`: in Shove mode the parent is the frame this failed position reduced the stack to, so a frame it
+  popped has sprung back in what is shown. The port showed `last_solution` whole, the frame from before this move's pops. Now
+  (`restore_onto_frame`) a line drag shows the last good line with the reduced frame's displacement; a via drag (`dragShove` sets
+  `m_lastDragSolution` only for lines) shows the via and its legs where that frame has them. Walk around mode is unchanged: its parent is the
+  session's world. Failing first, then passing: `a_failed_via_position_shows_the_frame_it_reduced_the_stack_to` (two frames, then a position
+  neither the shove nor the pushout can place: the newest frame is popped and the preview shows the via, its leg and the push of the frame
+  below). The line-drag half has no test of its own: a line head that pops a frame touches nothing of it, so its shove does not fail.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
