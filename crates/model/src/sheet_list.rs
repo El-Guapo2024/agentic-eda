@@ -230,7 +230,8 @@ pub fn prune_orphaned_overrides(design: &mut Design) -> usize {
 /// id alone (`parent_sheet_instance_id`), which the reader takes as the path of that one id. Where that is no path of the screen (the placement is
 /// inside another sheet), the reference stood for every sheet path that ends in that placement -- all the placements of the screen the sheet is
 /// on, which could not be told apart then -- so it becomes one reference for each of them: the file reads as it always did. A key that is a path of
-/// its screen, or that no path ends in (an orphan, as before), is left as it is. Returns how many keys were changed.
+/// its screen, or that no path ends in (an orphan, as before), is left as it is; of two references then filed under one path for one symbol, the
+/// first stays (the one the old lookup found). Returns how many keys were changed.
 pub fn migrate_override_paths(design: &mut Design) -> usize {
     let has_legacy = design.sheet_contents.iter().flat_map(|c| c.values()).flat_map(|s| s.instance_overrides.iter()).any(|o| o.sheet_path.len() == 1);
     if !has_legacy {
@@ -258,6 +259,10 @@ pub fn migrate_override_paths(design: &mut Design) -> usize {
                 out.push(crate::ir::SymbolPathOverride { sheet_path: p.clone(), ..o.clone() });
             }
         }
+        // an old file could hold two references under one id (an import keyed by the last id of two whole paths): the first is the one the
+        // lookup found, and the later one, which could never win, is dropped
+        let mut seen: std::collections::BTreeSet<(Vec<String>, crate::ir::Point, u32)> = std::collections::BTreeSet::new();
+        out.retain(|o| seen.insert((o.sheet_path.clone(), o.at, o.unit)));
         sec.instance_overrides = out;
     }
     changed
@@ -390,5 +395,17 @@ use super::*;
         assert_eq!(refs_by_path(&read), vec![("oa/ia".into(), "R1".into()), ("oa/ib".into(), "R2".into()), ("ob/ia".into(), "R1".into()), ("ob/ib".into(), "R2".into())]);
         assert_eq!(read.sheet_contents.as_ref().unwrap()["o.kicad_sch"].instance_overrides[0].sheet_path, vec!["ob".to_string()]);
         assert_eq!(migrate_override_paths(&mut read.clone()), 0, "read once is read");
+    }
+
+    /// An old import of a screen shown twice inside a screen shown twice kept two references under the one last id (`issue10926_1`): the first, which
+    /// the old lookup found, is the one kept for each path; the second could never win and is not carried on.
+    #[test]
+    fn two_old_references_under_one_id_keep_the_first_once_per_path() {
+        let mut d = nested(vec![]);
+        let old = serde_json::json!([{ "at": { "x": 0, "y": 0 }, "parent_sheet_instance_id": "ib", "reference": "U1" }, { "at": { "x": 0, "y": 0 }, "parent_sheet_instance_id": "ib", "reference": "U4" }]);
+        d.sheet_contents.as_mut().unwrap().get_mut("i.kicad_sch").unwrap().instance_overrides = serde_json::from_value(old).unwrap();
+        let read: Design = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        let i = &read.sheet_contents.as_ref().unwrap()["i.kicad_sch"];
+        assert_eq!(i.instance_overrides.iter().map(|o| (o.sheet_path.join("/"), o.reference.as_str())).collect::<Vec<_>>(), vec![("oa/ib".to_string(), "U1"), ("ob/ib".to_string(), "U1")]);
     }
 }

@@ -285,8 +285,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `parent_sheet_instance_id` is migrated on read to every path it stood for); the reader keeps the whole `(instances (path ..))`, the writer writes each path's
   reference and a sheet's `(instances ..)` per path of its screen; Paste shares a screen that has sheets of its own (`updatePastedSheet`). KiCad's QA `issue10926_1` and
   `netlists/hierarchy_aliases` now trace as kicad-cli reads them (24 QA hierarchies alike).
-- Left: a nested sheet's page number is one per placement, not per sheet path; Annotate numbers the screen's own
-  references only, not the other placements' (it leaves no duplicate);
+- Left: a nested sheet's page number is one per `SheetInstance`, not per sheet path (the reader keeps the first `(path .. (page ..))` of a sheet only, so a
+  nested sheet's two paths get one page; keep the pages per path, as `SCH_SHEET_INSTANCE`); a symbol's and a sheet's instance paths are written in walk order,
+  not sorted by `KIID_PATH` as KiCad writes them (cosmetic); Annotate numbers the screen's own references only, not the other paths' (which count as taken,
+  so it hands none out twice);
   Find does not match a sheet's name, file or pins; Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
   of the drop, one file is imported at a time (the others of the drop that the first does not place are said to be left out; KiCad runs Import Sheet for each in turn) and Choose Schematic opens on the file, where KiCad, given a file, has no chooser and has the sheet or its contents in the hand at once;
   the attribute, library-link and Update / Change Symbol tools act on the sheet in view; a footprint already placed keeps

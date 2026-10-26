@@ -143,8 +143,21 @@ fn every_design_written_in_micrometres_is_read_in_nanometres() {
         assert_eq!(old["schema"], json!(1), "{}: a fixture is a version 1 file", f.display());
         let design: Design = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
         assert_eq!(design.schema, SCHEMA_VERSION);
+        // every sheet path gives each symbol the reference the old key gave it: the override filed under the path's last placement, else its own
+        for e in eda_model::sheet_list::walk(&design).into_iter().skip(1) {
+            let screen = eda_model::sheet_list::screen_of(&design, &e.path).unwrap();
+            let raw = old["sheet_contents"][&e.file]["instance_overrides"].as_array().cloned().unwrap_or_default();
+            for sym in &screen.symbols {
+                let was = raw
+                    .iter()
+                    .find(|o| o["parent_sheet_instance_id"].as_str() == e.path.last().map(String::as_str) && o["at"]["x"].as_i64().unwrap() * 1000 == sym.at.x.get() && o["at"]["y"].as_i64().unwrap() * 1000 == sym.at.y.get() && o["unit"].as_u64().unwrap_or(1) == u64::from(sym.unit))
+                    .and_then(|o| o["reference"].as_str())
+                    .unwrap_or(&sym.id);
+                assert_eq!(eda_model::sheet_list::reference_under(screen, sym, &e.path), was, "{}: {} under {:?}", f.display(), sym.id, e.path);
+            }
+        }
         let mut read = serde_json::to_value(&design).unwrap();
-        // the old key is read as the whole sheet path (`sheet_list::migrate_override_paths`, tested there); the lengths are what is compared here
+        // the old key is read as the whole sheet path (checked above, and the whole path below); the lengths are what is compared here
         tail_of_sheet_paths(&mut read);
         let want = expected(&old, &[]);
         if read != want {
@@ -158,6 +171,19 @@ fn every_design_written_in_micrometres_is_read_in_nanometres() {
             panic!("{}: not every length came out x1000: {line:?}; paths only read: {:?}; only expected: {:?}", f.display(), a.difference(&b).collect::<Vec<_>>(), b.difference(&a).collect::<Vec<_>>());
         }
     }
+}
+
+/// `issue17771`'s sub3 is placed by `38a5c293..` on sub2, which the root places once by `4fea18b4..`: its old key, the immediate placement alone, is read as
+/// the whole path.
+#[test]
+fn an_old_key_inside_a_sheet_is_read_as_the_whole_path() {
+    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/v1/eeschema-issue17771-sub.sch.json")).unwrap();
+    let design: Design = serde_json::from_str(&text).unwrap();
+    let screens = design.sheet_contents.as_ref().unwrap();
+    let path = |file: &str| -> Vec<Vec<String>> { screens[file].instance_overrides.iter().map(|o| o.sheet_path.clone()).collect() };
+    let whole = vec!["4fea18b4-6b3d-4acc-a71b-7ee31c8961ac".to_string(), "38a5c293-46d2-4c74-939b-43575208aa56".to_string()];
+    assert_eq!(path("sub3.kicad_sch"), vec![whole.clone(), whole]);
+    assert_eq!(path("sub2.kicad_sch"), vec![vec!["4fea18b4-6b3d-4acc-a71b-7ee31c8961ac".to_string()]; 2], "a placement on the root keeps its one id");
 }
 
 /// The kinds of length the fixtures hold, each checked by the test above: if a fixture is dropped, this says which kind lost its test.

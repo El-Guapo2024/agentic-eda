@@ -176,6 +176,76 @@ fn a_screen_shown_twice_inside_a_screen_shown_twice_has_a_reference_per_path() {
     assert_eq!(refs_on(after, &["sp", "sg"]), refs_on(&d, &["sp", "sg"]));
 }
 
+/// Power shows Filter twice (`sf`, `sg`; R3 is R4 on `sg`), and the root shows Power once: Filter is on two sheet paths.
+fn nested_power_design() -> Design {
+    let mut d = power_design();
+    let mut second = placement("sg", "Filter2", "filter.kicad_sch", "");
+    second.at = pt(mm(30.0), Nm::ZERO);
+    d.sheet_contents.as_mut().unwrap().get_mut("power.kicad_sch").unwrap().sheets.push(second);
+    d.sheet_contents.as_mut().unwrap().get_mut("filter.kicad_sch").unwrap().instance_overrides.push(eda_model::ir::SymbolPathOverride { at: pt(mm(0.01), Nm::ZERO), sheet_path: vec!["sp".into(), "sg".into()], reference: "R4".into(), unit: 1 });
+    d
+}
+
+/// Every reference of the schematic, one per symbol on each sheet path (`SCH_SHEET_LIST::GetSymbols`), sorted.
+fn every_reference(d: &Design) -> Vec<String> {
+    let mut out: Vec<String> = eda_model::sheet_list::walk(d).iter().flat_map(|e| refs_on(d, &e.path.iter().map(String::as_str).collect::<Vec<_>>())).collect();
+    out.sort();
+    out
+}
+
+/// Annotate's "reset and annotate all" on a design whose screen is shown on two paths: the reference another path gives a symbol counts as taken (KiCad
+/// annotates a `SCH_REFERENCE` per path), so no reference is handed out twice.
+#[test]
+fn annotate_all_on_a_nested_shared_screen_hands_out_no_reference_twice() {
+    let m = ConstraintModel::default();
+    let mut d = nested_power_design();
+    // the path `sp/sg` gives Filter's symbol a low number, one a reset of the screens' own references would hand out again
+    d.sheet_contents.as_mut().unwrap().get_mut("filter.kicad_sch").unwrap().instance_overrides[0].reference = "R1".into();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let options = AnnotateOptions { scope: Some(crate::sch_annotate::AnnotateScope::All), ..Default::default() };
+    b.apply(&Cmd::Annotate { reset_existing: true, order: AnnotateOrder::XThenY, ids: None, options }).unwrap();
+    let refs = every_reference(b.design());
+    let mut unique = refs.clone();
+    unique.dedup();
+    assert_eq!(refs, unique, "no duplicate references");
+    assert_eq!(refs.len(), 5, "R1 R2 C1 on Power, R3 on each Filter path: {refs:?}");
+}
+
+/// A sheet with a sheet inside it whose screen the design does not show comes in as a copy (`LoadSheetFromFile`): its screen and the one inside it under
+/// files of their own when the names are taken, the sheet inside with a new id, and references nothing else holds.
+#[test]
+fn a_pasted_sheet_whose_screen_the_design_does_not_show_is_a_copy_with_the_screens_inside_it() {
+    let m = ConstraintModel::default();
+    let d = power_design();
+    let fragment = power_fragment(&d);
+    // a design that shows other screens under the same file names
+    let mut other = power_design();
+    other.schematic.as_mut().unwrap().sheets[0].file = "else.kicad_sch".into();
+    other.schematic.as_mut().unwrap().sheets[0].id = "se".into();
+    let mut screens = other.sheet_contents.take().unwrap();
+    let mut power = screens.remove("power.kicad_sch").unwrap();
+    power.sheets.clear();
+    screens.insert("else.kicad_sch".into(), power);
+    screens.insert("filter.kicad_sch".into(), section(vec![symbol("R3", "Device:R", "1k", 1, pt(mm(0.05), Nm::ZERO))], vec![]));
+    let mut held = placement("sh", "Held", "filter.kicad_sch", "");
+    held.at = pt(mm(0.0), mm(150.0));
+    screens.get_mut("else.kicad_sch").unwrap().sheets.push(held);
+    other.sheet_contents = Some(screens);
+    let mut b = Board::new(other, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::PasteSch { fragment, dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+    let d = b.design();
+    assert_eq!(sheet_names(d), vec!["Power", "Power1"], "the name counts up");
+    let pasted = d.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name == "Power1").unwrap().clone();
+    assert_eq!(pasted.file, "power1.kicad_sch", "a file of its own");
+    let inner = d.sheet_contents.as_ref().unwrap()[&pasted.file].sheets[0].clone();
+    assert_eq!((inner.name.as_str(), inner.file.as_str()), ("Filter", "filter_2.kicad_sch"), "the screen inside is copied too, filter.kicad_sch being taken");
+    assert!(!inner.id.is_empty() && inner.id != "sf", "a sheet is its own id everywhere in the design");
+    assert_eq!(refs_in(d, "filter.kicad_sch"), vec!["R3"], "the design's own screen is untouched");
+    assert_eq!(refs_in(d, "power1.kicad_sch"), vec!["C2", "R4", "R5"]);
+    assert_eq!(refs_in(d, "filter_2.kicad_sch"), vec!["R6"]);
+    assert!(d.sheet_contents.as_ref().unwrap().values().all(|s| s.instance_overrides.is_empty()), "each screen is shown once");
+}
+
 /// `TestForRecursion`: a sheet pasted onto its own screen, or onto a screen inside it, would place itself; KiCad drops it with its words.
 #[test]
 fn a_sheet_pasted_inside_itself_is_refused_in_kicad_s_words() {
