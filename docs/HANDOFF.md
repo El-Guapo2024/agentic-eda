@@ -67,6 +67,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-nested-shared-sheets` | A screen shown twice inside a screen shown twice: per-placement references keyed by the whole sheet path (`SymbolPathOverride::sheet_path`, old `parent_sheet_instance_id` migrated on read), the reader/writer keep whole paths, a sheet's instances per path, Paste shares a nested screen. PARITY-sch.md section 42 | Done; `issue10926_1` and `hierarchy_aliases` trace alike | A nested sheet's page number per path |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
