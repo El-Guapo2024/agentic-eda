@@ -252,6 +252,19 @@ impl<'a> Board<'a> {
                 (if scope.is_some_and(|sc| sc.power) { &mut mine } else { &mut others }).push(entry);
             }
         }
+        // a screen shown on several sheet paths: the references its other paths give its symbols (`SchematicSection::instance_overrides`) are held too
+        // (`SCH_SHEET_LIST::GetSymbols` lists a `SCH_REFERENCE` per sheet path). **Differs**: KiCad annotates each path's reference; here only the screen's
+        // own are annotated, and the others' are counted as taken, so no number is handed out twice
+        for e in walk.iter().skip(1) {
+            let Some(sch) = sheet_list::screen_of(&self.design, &e.path) else { continue };
+            let num = e.page_number_as_int();
+            for s in &sch.symbols {
+                let Some(o) = sheet_list::override_under(sch, s, &e.path) else { continue };
+                let value = if s.value.is_empty() { self.model.part(&s.id).and_then(|p| p.value.clone()).unwrap_or_default() } else { s.value.clone() };
+                let units = self.model.part(&s.id).and_then(|p| self.model.real_symbol_of(&s.lib_id, p)).or_else(|| self.design_symbol(&s.lib_id)).map_or(1, |l| l.unit_count.max(1));
+                others.push(Entry::new(usize::MAX, &o.reference, o.unit, units, lib_item_name(&s.lib_id), &value, num, (s.at.x, s.at.y), false));
+            }
+        }
         // a footprint that exists only on the board (a mounting hole, a test point) is a part of the design too: its reference is taken
         for b in self.design.drawings.iter().flat_map(|d| d.board_parts.iter()) {
             others.push(Entry::new(usize::MAX, &b.reference, 1, 1, "", b.value.as_deref().unwrap_or(""), 0, (Nm::ZERO, Nm::ZERO), false));

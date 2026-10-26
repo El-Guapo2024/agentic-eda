@@ -413,9 +413,8 @@ fn sheets_of_schematic(design: &Design) -> BTreeMap<String, PartSheet> {
                 name.push('/');
             }
         }
-        let parent = entry.path.last();
         for sym in &screen.symbols {
-            let reference = eda_model::sheet_list::reference_under(screen, sym, parent.map(String::as_str));
+            let reference = eda_model::sheet_list::reference_under(screen, sym, &entry.path);
             out.entry(reference).or_insert_with(|| PartSheet { name: name.clone(), file: entry.file.clone(), symbol: Some(format!("{}|{},{}", entry.file, sym.at.x, sym.at.y)) });
         }
     }

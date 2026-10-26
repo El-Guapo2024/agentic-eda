@@ -877,8 +877,9 @@ fn symbol_places_of(text: &str) -> BTreeMap<String, (Point, Option<u32>)> {
 
 /// The root's `(symbol_instances (path "/<sheet>/../<symbol>" (reference ..) (unit ..)) ..)` of a file older than the per-symbol `(instances ..)` (KiCad 6 and
 /// early 7: `SCH_IO_KICAD_SEXPR_PARSER::parseSchSymbolInstances`, which `SCH_SHEET_LIST::UpdateSymbolInstanceData` hands to each symbol): the reference each
-/// placement of a screen gives its symbols, as `SchematicSection::instance_overrides` under the sheet the path ends in. A symbol whose own `(instances ..)`
-/// already says it for that placement keeps that.
+/// sheet path of a screen gives its symbols, as `SchematicSection::instance_overrides` under that path (the sheets of the path, which in these files does
+/// not start with the root's uuid: `parseSchSymbolInstances` puts `m_rootUuid` in front). A symbol whose own `(instances ..)` already says it for that path
+/// keeps that.
 fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mut BTreeMap<String, SchematicSection>, symbol_places: &BTreeMap<String, BTreeMap<String, (Point, Option<u32>)>>) {
     let Ok(tree) = sexpr::parse(root_text) else { return };
     let Some(root) = tree.as_list() else { return };
@@ -893,7 +894,8 @@ fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mu
     for path in sexpr::find_all(instances, "path") {
         let Some(path_str) = sexpr::txt(path, 1) else { continue };
         let parts: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
-        let [.., sheet, symbol] = parts.as_slice() else { continue };
+        let [sheets @ .., sheet, symbol] = parts.as_slice() else { continue };
+        let sheet_path: Vec<String> = sheets.iter().chain(std::iter::once(sheet)).map(|s| s.to_string()).collect();
         let Some(reference) = sexpr::find(path, "reference").and_then(|r| sexpr::txt(r, 1)) else { continue };
         let Some(file) = file_of.get(*sheet) else { continue };
         let Some(&(at, own_unit)) = symbol_places.get(file).and_then(|m| m.get(*symbol)) else { continue };
@@ -905,10 +907,10 @@ fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mu
                 sym.unit = unit;
             }
         }
-        if sec.instance_overrides.iter().any(|o| o.parent_sheet_instance_id == *sheet && o.at == at && o.unit == unit) {
+        if sec.instance_overrides.iter().any(|o| o.sheet_path == sheet_path && o.at == at && o.unit == unit) {
             continue;
         }
-        sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, parent_sheet_instance_id: sheet.to_string(), reference: reference.to_string(), unit });
+        sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit });
     }
 }
 
@@ -1055,22 +1057,26 @@ fn property_text(item: &[Sexpr], name: &str) -> Option<String> {
 /// walked here regardless of project name, matching real QA data's own
 /// inconsistent `""` vs the real project name across sibling symbols in
 /// the same file) -- the per-sheet-instance Reference/unit overrides
-/// `hierarchy::flatten` applies when a screen is placed more than once.
-/// `parent_sheet_instance_id` is the *last* component of the recorded path
-/// (`/<root-uuid>/<this-placement's-own-sheet-uuid>` -> the sheet uuid) --
-/// see `SymbolPathOverride`'s own doc for why only that one component is
-/// needed. A path with no components at all (shouldn't happen in a real
-/// file) is skipped, not guessed at.
+/// the studio applies when a screen is shown on more than one sheet path.
+/// The key is the recorded path (`SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`'s
+/// `T_instances` -> `KIID_PATH`, `/<root-uuid>/<sheet-uuid>/...`) without its
+/// first component, the root sheet's uuid, which the model does not keep
+/// (`SymbolPathOverride::sheet_path`): `/<root>/<a>/<b>` -> `[a, b]`. A path
+/// of the root alone (a symbol on the root sheet, whose reference is its
+/// own) or with no components at all is skipped.
 fn parse_instance_overrides(item: &[Sexpr], at: Point) -> Vec<eda_model::ir::SymbolPathOverride> {
     let Some(instances) = sexpr::find(item, "instances") else { return Vec::new() };
     let mut out = Vec::new();
     for project in sexpr::find_all(instances, "project") {
         for path in sexpr::find_all(project, "path") {
             let Some(path_str) = sexpr::txt(path, 1) else { continue };
-            let Some(parent_sheet_instance_id) = path_str.rsplit('/').find(|s| !s.is_empty()) else { continue };
+            let sheet_path: Vec<String> = path_str.split('/').filter(|s| !s.is_empty()).skip(1).map(String::from).collect();
+            if sheet_path.is_empty() {
+                continue;
+            }
             let Some(reference) = sexpr::find(path, "reference").and_then(|r| sexpr::txt(r, 1)) else { continue };
             let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
-            out.push(eda_model::ir::SymbolPathOverride { at, parent_sheet_instance_id: parent_sheet_instance_id.to_string(), reference: reference.to_string(), unit });
+            out.push(eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit });
         }
     }
     out

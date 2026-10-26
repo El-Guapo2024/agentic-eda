@@ -913,7 +913,7 @@ fn schematic_with_a_sheet_placed_twice(d: &mut Design) {
     use eda_model::ir::{SchematicSection, SheetInstance, SymbolInstance, SymbolPathOverride};
     let symbol = |id: &str, x: Nm| -> SymbolInstance { serde_json::from_value(serde_json::json!({ "id": id, "at": { "x": x, "y": 10_000_000 }, "rot": 0 })).unwrap() };
     let sheet = |id: &str, name: &str| SheetInstance { id: id.into(), name: name.into(), file: "channel.kicad_sch".into(), at: p(Nm::ZERO, Nm::ZERO), size: (mm(10.0), mm(10.0)), pins: vec![], page: String::new() };
-    let over = |parent: &str, x: Nm, reference: &str| SymbolPathOverride { at: p(x, mm(10.0)), parent_sheet_instance_id: parent.into(), reference: reference.into(), unit: 1 };
+    let over = |parent: &str, x: Nm, reference: &str| SymbolPathOverride { at: p(x, mm(10.0)), sheet_path: vec![parent.into()], reference: reference.into(), unit: 1 };
     d.schematic = Some(SchematicSection { sheets: vec![sheet("sh_a", "ch1"), sheet("sh_b", "ch2")], ..Default::default() });
     let screen = SchematicSection {
         symbols: vec![symbol("U1", mm(10.0)), symbol("R1", mm(20.0)), symbol("C1", mm(30.0))],

@@ -655,7 +655,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
 
     // Hierarchical sheets: the sheet symbols, with their pins; their screens are not in the text.
     for s in &sheets {
-        crate::write_sheet_item(&mut out, sch, s, if s.page.is_empty() { "1" } else { &s.page }, "/");
+        crate::write_sheet_item(&mut out, sch, s, &[("/".to_string(), if s.page.is_empty() { "1".to_string() } else { s.page.clone() })]);
     }
     let mut sheet_files: Vec<String> = sheets.iter().map(|s| s.file.clone()).collect();
     sheet_files.sort();

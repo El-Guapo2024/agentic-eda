@@ -346,7 +346,7 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
     for e in eda_model::sheet_list::walk(design).into_iter().skip(1) {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
         for sym in &sec.symbols {
-            let reference = eda_model::sheet_list::reference_under(sec, sym, e.path.last().map(String::as_str));
+            let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
             if reference == sym.id || model.part(&reference).is_some() {
                 continue;
             }
@@ -373,12 +373,11 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
     let mut assigned: Vec<(String, String)> = Vec::new();
     for e in eda_model::sheet_list::walk(design) {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
-        let placement = e.path.last().map(String::as_str);
         let renamed: std::collections::BTreeMap<&str, String> = sec
             .symbols
             .iter()
             .filter_map(|s| {
-                let r = eda_model::sheet_list::reference_under(sec, s, placement);
+                let r = eda_model::sheet_list::reference_under(sec, s, &e.path);
                 (r != s.id).then_some((s.id.as_str(), r))
             })
             .collect();
@@ -523,7 +522,7 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
         for sym in &sec.symbols {
             let Some(part) = model.part(&sym.id) else { continue };
             let Some(lib) = model.real_symbol_of_instance(sec, sym, part).filter(|l| l.unit_count > 1) else { continue };
-            let reference = eda_model::sheet_list::reference_under(sec, sym, e.path.last().map(String::as_str));
+            let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
             for p in lib.pins.iter().filter(|p| p.unit == sym.unit || p.unit == 0) {
                 pin_units.entry(format!("{reference}.{}", p.number)).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
             }
@@ -624,8 +623,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for e in entries.iter().skip(1) {
             let Some(sec) = contents.as_ref().and_then(|c| c.get(&e.file)) else { continue };
-            let pins = pins_under_placement(pins_of(sec), sec, e.path.last().map(String::as_str));
-            power_pins.extend(pins_under_placement(power_pins_of(sec), sec, e.path.last().map(String::as_str)));
+            let pins = pins_under_placement(pins_of(sec), sec, &e.path);
+            power_pins.extend(pins_under_placement(power_pins_of(sec), sec, &e.path));
             let first = seen.insert(e.file.as_str());
             if !first {
                 copies.push(sec.clone());
@@ -700,13 +699,13 @@ fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) 
     sheet.field_shown(levels.len().saturating_sub(1), None, raw, 0)
 }
 
-/// `pins` ("REF.PIN" -> point) of `sec` under the references the placement `placement` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
-fn pins_under_placement<V>(pins: std::collections::BTreeMap<String, V>, sec: &eda_model::ir::SchematicSection, placement: Option<&str>) -> std::collections::BTreeMap<String, V> {
+/// `pins` ("REF.PIN" -> point) of `sec` under the references the sheet at `path` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
+fn pins_under_placement<V>(pins: std::collections::BTreeMap<String, V>, sec: &eda_model::ir::SchematicSection, path: &[String]) -> std::collections::BTreeMap<String, V> {
     let renamed: std::collections::BTreeMap<&str, String> = sec
         .symbols
         .iter()
         .filter_map(|sym| {
-            let r = eda_model::sheet_list::reference_under(sec, sym, placement);
+            let r = eda_model::sheet_list::reference_under(sec, sym, path);
             (r != sym.id).then_some((sym.id.as_str(), r))
         })
         .collect();

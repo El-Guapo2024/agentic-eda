@@ -1716,6 +1716,8 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
 /// (`${NAME}`, `crate::text_vars_json`); without them the texts are sent as stored.
 fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str, shown: Option<(&Path, eda_model::text_vars::Project)>) -> Value {
     let (sch, breadcrumb) = resolve_sheet(design, sheet_path);
+    // the sheet's path from the root (`SCH_SHEET_PATH`), which a screen shown twice files each placement's references under
+    let sheet_ids: Vec<String> = breadcrumb.iter().map(|(id, _)| id.clone()).collect();
     // The net each pin is on ("REF.PIN" -> net), for the pin highlight and the pin's description.
     let pin_net: std::collections::HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     let shown = shown.map(|(dir, project)| crate::text_vars_json::SchShown::new(dir, design, model, &breadcrumb, project));
@@ -1734,7 +1736,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             let resolved = part.and_then(|p| model.real_symbol_of_instance(&sch, s, p));
             // A screen two sheets show: the reference this placement gives the symbol (`SCH_SYMBOL::GetRef( &GetCurrentSheet() )`), which its Reference
             // field shows and its pins' nets are filed under; the symbol's `id` stays what the verbs name it by.
-            let reference = eda_model::sheet_list::reference_under(&sch, s, breadcrumb.last().map(|(id, _)| id.as_str()));
+            let reference = eda_model::sheet_list::reference_under(&sch, s, &sheet_ids);
             let pins: Vec<Value> = part
                 .map(|p| {
                     p.pins

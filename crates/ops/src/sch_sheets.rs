@@ -7,9 +7,10 @@
 //! * A pasted sheet whose file the design already shows **shares that screen** (`Paste`: `SearchHierarchy` / `loadedScreens` find the
 //!   screen, `sheet->SetScreen( existingScreen )`): the new sheet symbol names the same file, and its symbols get references of their own
 //!   for that placement (`updatePastedSheet` -> `updatePastedSymbol` adds a `SCH_SYMBOL_INSTANCE` for the new path, numbered by
-//!   `ReannotateDuplicates`), kept in `SchematicSection::instance_overrides`. The screen in the clipboard is not used, as KiCad does not
-//!   use it. Unlike KiCad, a screen that has sheets of its own is not shared (an override is filed under the placement just above the
-//!   symbol, which would be the same for both placements of a nested screen): it comes in as a copy, as below.
+//!   `ReannotateDuplicates`), kept in `SchematicSection::instance_overrides` under each new sheet path. A screen that has sheets of its
+//!   own is shared whole, as KiCad shares it (`updatePastedSheet` recurses into the subsheets): every screen below the new sheet gets
+//!   references of its own for the new paths, each starting from the reference it has under the copied sheet. The screen in the
+//!   clipboard is not used, as KiCad does not use it.
 //! * Any other sheet comes in as a **copy** (Import Sheet, and a paste of a sheet whose file the design does not show: KiCad's
 //!   `LoadSheetFromFile`): its screen goes into the design under a file of its own, and so does the screen of every sheet inside it.
 //! * The new sheet has a name no sheet on the page has: the pasted name, its trailing number counted up until it is free
@@ -251,30 +252,19 @@ impl<'a> Board<'a> {
 
     /// The references a screen of `files` that is shown more than once has on its later placements (`SCH_SYMBOL_INSTANCE` per sheet path: `updatePastedSheet` ->
     /// `updatePastedSymbol` for each path, `ReannotateDuplicates`): its symbols numbered against every reference of the design, the placements before it
-    /// included, kept in `SchematicSection::instance_overrides` under the placement. The first placement keeps the screen's own. A placement that already
-    /// has references of its own, or whose sheet symbol is itself on a screen shown twice (its overrides could not tell the two apart: see
-    /// `share_pasted_sheet`), is left as it is; so are power symbols.
+    /// included, kept in `SchematicSection::instance_overrides` under the sheet path. The first sheet path keeps the screen's own. A path that already
+    /// has references of its own is left as it is; so are power symbols.
     fn number_later_placements(&mut self, files: &[String], mode: PasteMode, units_of: &dyn Fn(&Self, &str) -> u32) {
         // the copies' screens came with the overrides of the placements they were copied from, under ids no placement here has
         eda_model::sheet_list::prune_orphaned_overrides(&mut self.design);
         let entries = eda_model::sheet_list::walk(&self.design);
         let mut seen: BTreeSet<String> = BTreeSet::new();
-        let mut parents: BTreeMap<String, usize> = BTreeMap::new();
-        for e in entries.iter().skip(1) {
-            if let Some(last) = e.path.last() {
-                *parents.entry(last.clone()).or_insert(0) += 1;
-            }
-        }
         for e in entries.iter().skip(1) {
             if !files.contains(&e.file) || seen.insert(e.file.clone()) {
                 continue;
             }
-            let Some(placement) = e.path.last().cloned() else { continue };
-            if parents.get(&placement).copied().unwrap_or(0) > 1 {
-                continue;
-            }
             let Some(screen) = self.design.sheet_contents.as_ref().and_then(|c| c.get(&e.file)).cloned() else { continue };
-            if screen.instance_overrides.iter().any(|o| o.parent_sheet_instance_id == placement) {
+            if screen.instance_overrides.iter().any(|o| o.sheet_path == e.path) {
                 continue;
             }
             let pasted: Vec<PastedRef> = screen
@@ -286,7 +276,7 @@ impl<'a> Board<'a> {
             let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
             for (s, reference) in screen.symbols.iter().zip(numbered) {
                 if reference != s.id {
-                    sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, parent_sheet_instance_id: placement.clone(), reference, unit: s.unit });
+                    sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: e.path.clone(), reference, unit: s.unit });
                 }
             }
         }
@@ -310,7 +300,7 @@ impl<'a> Board<'a> {
     ///
     /// * a symbol that moved (`Move`, `Drag`, `Rotate`, ...) takes its references with it;
     /// * a symbol that was deleted takes them away, and so does a placement that is gone (`PruneOrphanedSymbolInstances`);
-    /// * a symbol new on a screen shown more than once gets a reference of its own on each placement past the first (KiCad gives it an instance for every
+    /// * a symbol new on a screen shown more than once gets a reference of its own on each sheet path past the first (KiCad gives it an instance for every
     ///   path, `SCH_SCREEN::Append` / `updatePastedSymbol`, and annotates each one: `ReannotateDuplicates`), numbered against every reference of the design.
     ///
     /// A symbol the command did not add keeps whatever references it had, so an imported design is not renumbered by an unrelated edit.
@@ -347,26 +337,19 @@ impl<'a> Board<'a> {
         }
         eda_model::sheet_list::prune_orphaned_overrides(&mut self.design);
 
-        // the new symbols of a screen shown more than once, on each placement past the first
+        // the new symbols of a screen shown more than once, on each sheet path past the first
         let entries = eda_model::sheet_list::walk(&self.design);
-        let mut parents: BTreeMap<String, usize> = BTreeMap::new();
-        for e in entries.iter().skip(1) {
-            if let Some(last) = e.path.last() {
-                *parents.entry(last.clone()).or_insert(0) += 1;
-            }
-        }
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for e in entries.iter().skip(1) {
             let Some(fresh) = new_symbols.get(&e.file).filter(|n| !n.is_empty()) else { continue };
             if seen.insert(e.file.clone()) {
                 continue; // the first placement: the symbol's own reference
             }
-            let Some(placement) = e.path.last().cloned().filter(|p| parents.get(p).copied().unwrap_or(0) <= 1) else { continue };
             let Some(screen) = self.design.sheet_contents.as_ref().and_then(|c| c.get(&e.file)).cloned() else { continue };
             let symbols: Vec<&eda_model::ir::SymbolInstance> = screen
                 .symbols
                 .iter()
-                .filter(|s| fresh.contains(&(s.id.clone(), s.unit)) && !screen.instance_overrides.iter().any(|o| o.parent_sheet_instance_id == placement && o.at == s.at && o.unit == s.unit))
+                .filter(|s| fresh.contains(&(s.id.clone(), s.unit)) && eda_model::sheet_list::override_under(&screen, s, &e.path).is_none())
                 .collect();
             if symbols.is_empty() {
                 continue;
@@ -379,7 +362,7 @@ impl<'a> Board<'a> {
             let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
             for (s, reference) in symbols.iter().zip(numbered) {
                 if reference != s.id {
-                    sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, parent_sheet_instance_id: placement.clone(), reference, unit: s.unit });
+                    sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: e.path.clone(), reference, unit: s.unit });
                 }
             }
         }
@@ -504,39 +487,39 @@ impl<'a> Board<'a> {
     }
 
     /// The pasted sheet `sh` as a second placement of the screen the design already shows under its file (see the module doc): `false`, and nothing done,
-    /// when the design shows no such screen or the screen has sheets of its own.
+    /// when the design shows no such screen.
     ///
-    /// `SCH_EDITOR_CONTROL::Paste`: the sheet gets a new KIID and its pins new ones, and `updatePastedSheet` gives every symbol of the screen an instance for
-    /// the new path, its reference the one the clipboard carried (the reference under the placement that was copied) -- kept by Paste Special's "Keep
-    /// existing annotations", numbered by `ReannotateDuplicates` against every reference of the schematic otherwise. The power symbols keep theirs.
+    /// `SCH_EDITOR_CONTROL::Paste`: the sheet gets a new KIID and its pins new ones, and is added on every sheet path that shows the screen pasted onto
+    /// (`FindAllSheetsForScreen( pasteRoot.LastScreen() )`, in page order). `updatePastedSheet` walks the screen and every screen below it, and
+    /// `updatePastedSymbol` gives each of their symbols an instance for each new sheet path, its reference the one the clipboard carried (the instance
+    /// whose path ends in the clipboard's path: the copied sheet, then the sheets below it) -- kept by Paste Special's "Keep existing annotations",
+    /// numbered by `ReannotateDuplicates` against every reference of the schematic otherwise, path by path, each path's references then counting as
+    /// used. The power symbols keep theirs.
     fn share_pasted_sheet(&mut self, sh: &SheetInstance, shift: (Nm, Nm), name: &str, mode: PasteMode) -> Result<bool, Vec<CheckResult>> {
         // a screen pasted into itself would place itself (`TestForRecursion`): the copy does not
         if !eda_model::sheet_list::reachable_files(&self.design).contains(&sh.file) || self.focus.as_deref() == Some(sh.file.as_str()) {
             return Ok(false);
         }
-        let Some(screen) = self.design.sheet_contents.as_ref().and_then(|c| c.get(&sh.file)).cloned() else { return Ok(false) };
-        if !screen.sheets.is_empty() {
+        if !self.design.sheet_contents.as_ref().is_some_and(|c| c.contains_key(&sh.file)) {
             return Ok(false);
         }
         // what an earlier placement under the id this one will get left behind is not this one's (`PruneOrphanedSymbolInstances`)
         eda_model::sheet_list::prune_orphaned_overrides(&mut self.design);
-        let screen = self.design.sheet_contents.as_ref().and_then(|c| c.get(&sh.file)).cloned().unwrap_or(screen);
-        // the references the clipboard carried: the ones the copied placement gives (`setPastedSymbolInstances`)
-        // (the clipboard names the copied sheet by its uuid, which is the placement's id or made from it: `eda_kicad::sheet_uuid`)
-        let copied_from: Option<String> = eda_model::sheet_list::walk(&self.design)
+        let before = eda_model::sheet_list::walk(&self.design);
+        // the sheet paths that show the screen pasted onto (`sheetPathsForScreen`, `SortByPageNumbers`)
+        let destinations: Vec<Vec<String>> = match self.focus.as_deref() {
+            None => vec![Vec::new()],
+            Some(here) => eda_model::sheet_list::sort_by_page_numbers(&before).into_iter().filter(|e| e.file == here).map(|e| e.path).collect(),
+        };
+        // the copied sheet's path, whose references the clipboard carried (`setPastedSymbolInstances`; the clipboard names the copied sheet by its
+        // uuid, which is the placement's id or made from it: `eda_kicad::sheet_uuid`)
+        let copied_from: Option<Vec<String>> = before
             .iter()
             .skip(1)
-            .filter_map(|e| eda_model::sheet_list::placement_at(&self.design, &e.path))
-            .find(|p| p.file == sh.file && !sh.id.is_empty() && (p.id == sh.id || eda_kicad::sheet_uuid(p) == sh.id))
-            .map(|p| p.id.clone());
-        let copied_from = copied_from.as_deref();
+            .find(|e| e.file == sh.file && !sh.id.is_empty() && eda_model::sheet_list::placement_at(&self.design, &e.path).is_some_and(|p| p.id == sh.id || eda_kicad::sheet_uuid(p) == sh.id))
+            .map(|e| e.path.clone());
         let units_of = |board: &Self, lib_id: &str| -> u32 { board.design_symbol(lib_id).map_or(1, |l| l.unit_count.max(1)) };
-        let pasted: Vec<PastedRef> = screen
-            .symbols
-            .iter()
-            .map(|s| PastedRef { reference: eda_model::sheet_list::reference_under(&screen, s, copied_from), unit: s.unit, unit_count: units_of(self, &s.lib_id), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
-            .collect();
-        let numbered = annotate_paste(&self.used_references(), &pasted, mode);
+        let mut used = self.used_references();
 
         let mut placement = sh.clone();
         placement.id.clear();
@@ -553,10 +536,28 @@ impl<'a> Board<'a> {
             sch.assign_missing_ids();
             sch.sheets.last().map(|s| s.id.clone()).unwrap_or_default()
         };
-        let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&sh.file)) else { return Ok(false) };
-        for (s, reference) in screen.symbols.iter().zip(numbered) {
-            if reference != s.id {
-                sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, parent_sheet_instance_id: id.clone(), reference, unit: s.unit });
+        // every sheet path the new sheet adds: the sheet on each destination, and every sheet below it there (`updatePastedSheet`'s recursion)
+        let after = eda_model::sheet_list::walk(&self.design);
+        for dest in &destinations {
+            let mut top = dest.clone();
+            top.push(id.clone());
+            for e in after.iter().filter(|e| e.path.starts_with(&top)) {
+                let Some(screen) = self.design.sheet_contents.as_ref().and_then(|c| c.get(&e.file)).cloned() else { continue };
+                // `updatePastedSymbol`: the instance whose path ends in the clipboard path, the copied sheet and the sheets below it
+                let source: Option<Vec<String>> = copied_from.as_ref().map(|from| from.iter().chain(&e.path[top.len()..]).cloned().collect());
+                let pasted: Vec<PastedRef> = screen
+                    .symbols
+                    .iter()
+                    .map(|s| PastedRef { reference: source.as_ref().map_or_else(|| s.id.clone(), |p| eda_model::sheet_list::reference_under(&screen, s, p)), unit: s.unit, unit_count: units_of(self, &s.lib_id), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
+                    .collect();
+                let numbered = annotate_paste(&used, &pasted, mode);
+                let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
+                for (s, reference) in screen.symbols.iter().zip(numbered) {
+                    used.push(UsedRef { reference: reference.clone(), unit: s.unit, lib_id: s.lib_id.clone(), value: s.value.clone() });
+                    if reference != s.id {
+                        sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: e.path.clone(), reference, unit: s.unit });
+                    }
+                }
             }
         }
         Ok(true)

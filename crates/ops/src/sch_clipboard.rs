@@ -36,7 +36,7 @@ impl<'a> Board<'a> {
         for e in eda_model::sheet_list::walk(&self.design).into_iter().skip(1) {
             let Some(sec) = eda_model::sheet_list::screen_of(&self.design, &e.path) else { continue };
             for s in &sec.symbols {
-                let reference = eda_model::sheet_list::reference_under(sec, s, e.path.last().map(String::as_str));
+                let reference = eda_model::sheet_list::reference_under(sec, s, &e.path);
                 if reference != s.id {
                     out.push(UsedRef { reference, unit: s.unit, lib_id: s.lib_id.clone(), value: s.value.clone() });
                 }
