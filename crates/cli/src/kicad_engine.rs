@@ -179,6 +179,14 @@ pub fn export(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<Chec
     eda_kicad_engine::export_pcb(&design, &model, &work(dir), dir, &project_name(dir), kind, args)
 }
 
+/// `kicad-cli pcb export pos [args...]` with KiCad's own file names (`DIALOG_GEN_FOOTPRINT_POSITION`: `<name>-all-pos.csv`, or the
+/// top's and the bottom's files with `single_file` off). The generic [`export`] asks for one file of both sides (`m_singleFile`'s
+/// default); this one lets the studio's dialog and `eda fab pos` say otherwise.
+pub fn export_pos(dir: &Path, args: &[String], single_file: bool) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    eda_kicad_engine::export_pcb_placement(&design, &model, &work(dir), dir, &project_name(dir), args, single_file)
+}
+
 /// `kicad-cli sch export <kind> [args...]` (`netlist`, `bom`, `pdf`, `svg`,
 /// `dxf`, `ps`, `png`): `{ ok, engine, files }`.
 pub fn export_sch(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {

@@ -23,12 +23,14 @@
 // take plain mm numbers, matching the wire format directly).
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
-import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureSymbolInProject } from "../api/libraryClient";
-import { uniqueSymbolLibId } from "../kicad-port/symEditActions";
+import { joinLibName } from "../kicad-port/libraryNames";
+import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
 import { allFields, wireField } from "../kicad-port/symFields";
 import { movedRows } from "../kicad-port/symFieldLayout";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
+import { DEFAULT_PIN_TEMPLATE, samePinTemplate, type PinTemplate } from "../kicad-port/symPinTemplate";
 import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kicad-port/symTextBox";
 import type { ViewTransform } from "./store";
 
@@ -135,6 +137,16 @@ export interface SymbolEditorState {
   fieldsTableScope: "library" | "related";
   /** `deriveFromExistingSymbol`: the Derive from Existing Symbol dialog (`DIALOG_LIB_NEW_SYMBOL` with a parent) is open on this symbol. */
   deriveRequest: { parent: string } | null;
+  /** `DIALOG_LIB_NEW_SYMBOL` (Ctrl+N, `CreateNewSymbol` with no parent): open, asking for the new symbol's name and first properties. */
+  newSymbolOpen: boolean;
+  /** `SYMBOL_EDITOR_PIN_TOOL::CreatePin`: the pin the Pin tool has just dropped, whose properties Pin Properties asks for before it is added
+   * (`CreatePin`'s `EditPinProperties`). OK adds it, Cancel drops it and places nothing. */
+  pendingPin: LibrarySymbolPin | null;
+  /** `g_lastPin`'s number, for the symbol it was placed in: a quick second click must get the next number before the document poll has the
+   * first (`nextPinNumber`), and the C++ tool carries it the same way. */
+  lastPlacedPin: { libId: string | null; number: string } | null;
+  /** `g_LastPin*`: the look the next pin starts with -- the last pin placed or edited (see `kicad-port/symPinTemplate.ts`). */
+  pinTemplate: PinTemplate;
   /** `updateSymbolFields`: the Update Symbol Fields dialog (`DIALOG_UPDATE_SYMBOL_FIELDS`) is open on the symbol being edited. */
   updateFieldsOpen: boolean;
   /** `placeSymbolText` / the Text tool: where the click landed, in internal µm; the Text Properties dialog asks for the text. */
@@ -194,6 +206,10 @@ const initialState: SymbolEditorState = {
   fieldsTableOpen: false,
   fieldsTableScope: "library",
   deriveRequest: null,
+  newSymbolOpen: false,
+  pendingPin: null,
+  lastPlacedPin: null,
+  pinTemplate: DEFAULT_PIN_TEMPLATE,
   updateFieldsOpen: false,
   textDialog: null,
   pendingText: null,
@@ -239,6 +255,12 @@ export type SymAction =
   | { type: "SET_IMPORT_REQUEST"; request: ImportRequest | null }
   | { type: "SET_FIELDS_TABLE_OPEN"; open: boolean; scope?: "library" | "related" }
   | { type: "SET_DERIVE_REQUEST"; parent: string | null }
+  | { type: "SET_NEW_SYMBOL_OPEN"; open: boolean }
+  | { type: "SET_PENDING_PIN"; pin: LibrarySymbolPin | null }
+  /** The pending pin has been added: its number becomes the next click's starting point (`g_lastPin`, `PIN_PLACED` only on success). */
+  | { type: "PIN_PLACED"; number: string }
+  /** `g_LastPin*`: the look the next pin starts with. */
+  | { type: "SET_PIN_TEMPLATE"; pin: PinTemplate }
   | { type: "SET_UPDATE_FIELDS_OPEN"; open: boolean }
   | { type: "SET_TEXT_DIALOG"; at: [number, number] | null }
   | { type: "SET_PENDING_TEXT"; pending: { text: string; sizeMm: number; angleDeg: number } | null }
@@ -269,6 +291,8 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
         copied: state.copied,
         lastTextAngle: state.lastTextAngle,
         lastTextBox: state.lastTextBox,
+        // `g_LastPin*` is static in KiCad: the look carries from one symbol to the next.
+        pinTemplate: state.pinTemplate,
       };
     case "SYMBOL_OK":
       // `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()` each time a symbol is loaded: on for a multi-unit symbol whose units are interchangeable.
@@ -351,6 +375,15 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, fieldsTableOpen: action.open, fieldsTableScope: action.scope ?? state.fieldsTableScope };
     case "SET_DERIVE_REQUEST":
       return { ...state, deriveRequest: action.parent ? { parent: action.parent } : null };
+    case "SET_NEW_SYMBOL_OPEN":
+      return { ...state, newSymbolOpen: action.open };
+    case "SET_PENDING_PIN":
+      return { ...state, pendingPin: action.pin };
+    case "PIN_PLACED":
+      return { ...state, lastPlacedPin: { libId: state.libId, number: action.number } };
+    case "SET_PIN_TEMPLATE":
+      // The poll re-reads the selected pin every ~700ms: a template it already has must not re-render the editor.
+      return samePinTemplate(state.pinTemplate, action.pin) ? state : { ...state, pinTemplate: action.pin };
     case "SET_UPDATE_FIELDS_OPEN":
       return { ...state, updateFieldsOpen: action.open };
     case "SET_TEXT_DIALOG":
@@ -372,13 +405,44 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
   }
 }
 
+/**
+ * `DIALOG_LIB_NEW_SYMBOL` as `CreateNewSymbol` asks it with no parent (`NewSymbolDialog.tsx`): the name and the properties the model
+ * has. "Pin name inside" is already folded into `pinNameOffsetMm` (`CreateSymbol` keeps the offset when it is inside -- 20 mils for one
+ * of 0 -- and writes 0 when it is outside), and a parent symbol is the Derive dialog's question, so neither is a field here.
+ */
+export interface NewSymbolRequest {
+  /** `GetName()`'s form: trimmed, spaces to underscores, LIB_ID specials escaped -- `newSymbolNameCheck` makes it. */
+  name: string;
+  /** "Default reference designator" (KiCad's "U"). */
+  reference: string;
+  /** "Number of units per package" (1..64). */
+  unitCount: number;
+  /** "All units are interchangeable" (`units_locked` is the opposite, and only for a symbol of several units). KiCad's dialog starts it
+   * unchecked, so a multi-unit symbol's units are locked unless the person checks it. */
+  unitsInterchangeable: boolean;
+  /** "Create symbol with alternate body style (De Morgan)". */
+  alternateBodyStyle: boolean;
+  /** "Create symbol as power symbol" (it also excludes the symbol from the BOM and the board). */
+  power: boolean;
+  excludeFromBom: boolean;
+  excludeFromBoard: boolean;
+  /** "Pin name position offset", in mm (KiCad's dialog shows mils; the studio shows the user's unit), as `CreateSymbol` settles it from
+   * "Pin name inside": the offset when inside, 20 mils for an inside offset of 0, and 0 when outside. */
+  pinNameOffsetMm: number;
+  /** "Show pin number text" / "Show pin name text" (`pin_numbers_hidden`/`pin_names_hidden` are the opposites). */
+  showPinNumbers: boolean;
+  showPinNames: boolean;
+}
+
 export interface SymbolEditorApi {
   /** The live state, read at call time (a hotkey handler's closure may be a render behind). */
   getState: () => SymbolEditorState;
   /** Open (or re-open -- a no-op server-side if already open) a symbol by lib_id and start polling it. */
   openSymbol: (libId: string) => Promise<void>;
-  /** `eeschema.SymbolLibraryControl.newSymbol` (Ctrl+N): a new, empty symbol in the project library named `Untitled` (made unique), opened in the editor. */
-  newSymbol: () => Promise<void>;
+  /** `SYMBOL_EDIT_FRAME::CreateNewSymbol`'s `LIB_SYMBOL_LIBRARY_MANAGER::CreateNewSymbol`: a new, empty symbol in the project library,
+   * one undo step (the `new_symbol` verb and its first properties), opened in the editor. Returns whether the verb accepted it (a name
+   * the library has is refused; the dialog has already checked, the verb is the authority). */
+  newSymbol: (request: NewSymbolRequest) => Promise<boolean>;
   closeSymbol: () => void;
   refresh: () => Promise<void>;
   /** Any Cmd this file doesn't have a named wrapper for. Returns whether the backend accepted it. */
@@ -388,7 +452,7 @@ export interface SymbolEditorApi {
   pinById: (id: string) => LibrarySymbolPin | undefined;
   graphicById: (id: string) => LibrarySymbolGraphic | undefined;
   /** `x`/`y` and every other geometry argument below is plain mm, matching the wire format directly -- callers (the canvas) convert from internal µm themselves, see this file's own unit-convention doc. */
-  addPin: (pin: LibrarySymbolPin) => Promise<void>;
+  addPin: (pin: LibrarySymbolPin) => Promise<boolean>;
   movePin: (id: string, xMm: number, yMm: number) => Promise<void>;
   /** Several pins moved to absolute positions as ONE undo step; in Synchronized Pins Mode the matching pins of the other units move with them. */
   movePins: (moves: { id: string; x: number; y: number }[]) => Promise<void>;
@@ -467,22 +531,46 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const { symbol, own } = await fetchSymbolForEditor(libId);
       dispatch({ type: "SYMBOL_OK", symbol, own });
     },
-    newSymbol: async () => {
-      let existing: string[] = [];
-      try {
-        existing = (await fetchSymbolEditorNames()).names;
-      } catch {
-        /* backend busy: Untitled is still very likely free; the verb refuses a duplicate name anyway */
-      }
-      const libId = uniqueSymbolLibId(existing);
-      const reply = await postCmd({ op: "new_symbol", lib_id: libId }, false);
+    newSymbol: async (request) => {
+      const libId = joinLibName(PROJECT_SYMBOL_LIB, request.name);
+      // `CreateNewSymbol` makes the symbol and then sets what the dialog asked (`NEW_SYMBOL_PROPERTIES`) as one edit: the batch is one
+      // undo step, and a name the verb refuses rolls the whole thing back.
+      const reply = await postCmd(
+        {
+          op: "batch",
+          cmds: [
+            { op: "new_symbol", lib_id: libId },
+            {
+              op: "edit_symbol_properties",
+              lib_id: libId,
+              reference_prefix: request.reference,
+              description: "",
+              keywords: "",
+              datasheet: "",
+              power: request.power,
+              in_bom: !request.excludeFromBom,
+              on_board: !request.excludeFromBoard,
+              pin_numbers_hidden: !request.showPinNumbers,
+              pin_names_hidden: !request.showPinNames,
+              pin_name_offset_mm: request.pinNameOffsetMm,
+              unit_count: request.unitCount,
+              has_alternate_body_style: request.alternateBodyStyle,
+              footprint_filters: [],
+              // "All units are interchangeable" unchecked; only ever set for a symbol of several units
+              units_locked: request.unitCount > 1 && !request.unitsInterchangeable,
+            },
+          ],
+        },
+        false
+      );
       if (!reply.ok) {
         dispatch({ type: "TOAST", message: reply.message, kind: "error" });
-        return;
+        return false;
       }
       dispatch({ type: "SET_LIB_ID", libId });
       const { symbol, own } = await fetchSymbolForEditor(libId);
       dispatch({ type: "SYMBOL_OK", symbol, own });
+      return true;
     },
     closeSymbol: () => dispatch({ type: "SET_LIB_ID", libId: null }),
     refresh,
@@ -504,11 +592,11 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     addPin: async (pin) => {
       const st = stateRef.current;
       const libId = st.libId;
-      if (!libId) return;
+      if (!libId) return false;
       // `PlacePin` -> `CreateImagePins`: in Synchronized Pins Mode a pin placed on one unit gets its image in every other unit.
       const images = st.symbol && synchronizePins(st.syncPins, st.symbol.unit_count, !!st.symbol.units_locked) ? imagePinsFor(pin, st.symbol.unit_count) : [];
       const cmds: Cmd[] = [pin, ...images].map((p): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin: p }));
-      await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+      return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
     movePin: async (id, xMm, yMm) => {
       const libId = stateRef.current.libId;

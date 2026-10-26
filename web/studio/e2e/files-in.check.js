@@ -602,6 +602,10 @@
     check("Import Graphics and its drop are wired in the Symbol Editor", symActs["eeschema.EditorControl.importGraphics"]?.enabled && symActs["eeschema.EditorControl.ddImportGraphics"]?.enabled);
     const names0 = (await get("/api/symbol_editor/names")).names;
     await E.run("eeschema.SymbolLibraryControl.newSymbol");
+    // `DIALOG_LIB_NEW_SYMBOL` asks for the name first; this check only needs a symbol to import into.
+    await waitFor(() => document.querySelector('[data-testid="new-symbol"]'));
+    setNative(document.querySelector('[data-testid="new-symbol"] [aria-label="Symbol name"]'), `P20Import${Date.now() % 100000}`);
+    document.querySelector('[data-testid="new-symbol-ok"]')?.click();
     await sleep(800);
     appliedSym++;
     const libId = (await get("/api/symbol_editor/names")).names.find((n) => !names0.includes(n));

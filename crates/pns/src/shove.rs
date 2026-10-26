@@ -1782,26 +1782,28 @@ impl<'a> Shove<'a> {
 /// not push, or the limit) -- the caller should fall back to walkaround,
 /// same as upstream's `rhShoveOnly`.
 pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Nm, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
-    shove_head(node, &[], raw, &[], net, layer, width, rules, settings, false)
+    shove_head(node, &[], raw, &[], net, layer, width, rules, settings, false, None)
 }
 
 /// `DRAGGER::dragShove` for a track: [`shove_line`] with a dragged head. `dragged` are the segments of the line being dragged, which
 /// are taken out of the shove's world first (`preShoveNode->Remove( draggedPreShove )`), or the line's old place would be an obstacle
 /// of its own. `reversed` is `SHP_REVERSED`, set when the head is dragged by its first vertex: the *last* point of the head is then
-/// the pusher `checkShoveDirection` tests the shoved lines against.
-#[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the dragged line and the one flag
-pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Nm, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
-    shove_head(node, dragged, raw, arcs, net, layer, width, rules, settings, reversed)
+/// the pusher `checkShoveDirection` tests the shoved lines against. `prior_area` is the area of the springback frame the shove starts
+/// from (`SHOVE::Run` after `reduceSpringback`: `totalAffectedArea` takes in both).
+#[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the dragged line, the one flag and the frame's area
+pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Nm, rules: &BoardRules, settings: &RoutingSettings, reversed: bool, prior_area: Option<Area>) -> Option<ShoveOutcome> {
+    shove_head(node, dragged, raw, arcs, net, layer, width, rules, settings, reversed, prior_area)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Nm, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
+fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Nm, rules: &BoardRules, settings: &RoutingSettings, reversed: bool, prior_area: Option<Area>) -> Option<ShoveOutcome> {
     if raw.len() < 2 {
-        return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone(), area: None });
+        return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone(), area: prior_area });
     }
     let mut head = Line::from_points(net.clone(), layer, width, raw.to_vec());
     head.arcs = arcs.to_vec();
     let mut shove = Shove::new(node, rules, settings);
+    shove.prior_area = prior_area;
     shove.reversed_head = reversed;
     for &id in dragged {
         shove.node.remove(id);
@@ -1814,9 +1816,11 @@ fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arc
 /// collide with out of the way. The outcome's `head` is `[where the via ended]` (see `Shove::run_via`), `displaced_lines` hold the
 /// attached tracks as they were left as well as everything else that moved, and `displaced_vias` the dragged via itself if it
 /// ended anywhere but where it was. `None` means the shove failed or the via may not be shoved (the dragger falls back to
-/// `dragViaWalkaround`).
-pub fn shove_via(node: &Node, via_id: ItemId, to: Point, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
-    Shove::new(node, rules, settings).run_via(via_id, to)
+/// `dragViaWalkaround`). `prior_area` is the area of the springback frame the shove starts from (see [`shove_dragged_line`]).
+pub fn shove_via(node: &Node, via_id: ItemId, to: Point, rules: &BoardRules, settings: &RoutingSettings, prior_area: Option<Area>) -> Option<ShoveOutcome> {
+    let mut shove = Shove::new(node, rules, settings);
+    shove.prior_area = prior_area;
+    shove.run_via(via_id, to)
 }
 
 /// `SHOVE::AddHeads( .. )` for each head, then `SHOVE::Run()`: shove whatever the heads -- a pair's two lines, say -- collide with out
