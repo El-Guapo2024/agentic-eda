@@ -208,6 +208,11 @@ pub struct DragPreview {
     /// each fanout leg's shape here is simply its own candidate position,
     /// not something shove could have altered.
     pub fanout: Vec<Line>,
+    /// The IR tracks each [`Self::fanout`] leg stands on, one entry per leg, where the leg was taken from a frame's node
+    /// (`dragViaWalkaround` in the frame a shove left, or the frame a failed position restores): a line the frame re-made has item
+    /// ids the session's world does not know, so the commit cannot look its tracks up there. Empty when the legs are the session's
+    /// own lines (their `segment_ids` name the session's items).
+    pub fanout_tracks: Vec<Vec<String>>,
     /// This is not what the cursor's position gave but the last position that worked: the cursor is somewhere the drag cannot
     /// be resolved (`Drag`: "Restore last solution").
     pub restored: bool,
@@ -413,7 +418,7 @@ impl Dragger {
     /// cannot be (`ok` false).
     fn solve_walkaround(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> Option<DragPreview> {
         if self.kind == DragKind::Via {
-            let pv = self.drag_via_walkaround(node, node, self.via_pos, rules, settings, to);
+            let pv = self.drag_via_walkaround(node, node, None, self.via_pos, rules, settings, to);
             return (!pv.colliding).then_some(pv);
         }
         let exclude = self.exclude();
@@ -614,10 +619,10 @@ impl Dragger {
         // `m_currentNode = parent->Branch()`: the frame the shove starts from
         let mut frame = parent.apply(node);
         let Some(id) = self.place_via(&mut frame, from) else {
-            return self.drag_via_walkaround(node, &frame, from, rules, settings, to);
+            return self.drag_via_walkaround(node, &frame, Some(&parent), from, rules, settings, to);
         };
         let Some(outcome) = shove::shove_via(&frame, id, to, rules, settings, area) else {
-            return self.drag_via_walkaround(node, &frame, from, rules, settings, to);
+            return self.drag_via_walkaround(node, &frame, Some(&parent), from, rules, settings, to);
         };
         let end = outcome.head.first().copied().unwrap_or(to);
         // `m_lastNode = m_shove->CurrentNode()->Branch()`: the frame this shove leaves, with the via's place in it
@@ -675,7 +680,14 @@ impl Dragger {
     /// walked, is a collision. `world` is the session's world, which says whether a track would collide at all
     /// (`m_world->CheckColliding( &draggedLine )`); `frame` is the node the pushout and the walkaround work in (`m_lastNode`), the
     /// session's world unless a shove left a frame.
-    fn drag_via_walkaround(&self, world: &Node, frame: &Node, via_pos: Point, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
+    ///
+    /// `moved` is that frame's world (`dragShove`'s fallback: `dragViaWalkaround( m_draggedVia, m_lastNode, aP )`, `m_lastNode` a branch
+    /// of the frame the stack was reduced to): KiCad edits the branch -- `m_lastNode->Remove( origLine ); m_lastNode->Add( draggedLine )`
+    /// -- so what the earlier positions pushed stays, in the preview and in the commit, beside the walked fan-out. The preview carries
+    /// the frame's displacement without the via's own tracks (the fan-out replaces them) and without the dragged via, and the IR
+    /// tracks each leg stands on as the frame's items name them ([`DragPreview::fanout_tracks`]).
+    #[allow(clippy::too_many_arguments)]
+    fn drag_via_walkaround(&self, world: &Node, frame: &Node, moved: Option<&World>, via_pos: Point, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         let exclude = self.exclude();
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, is_virtual: false };
         let lead = (via_pos.x - to.x, via_pos.y - to.y);
@@ -687,7 +699,13 @@ impl Dragger {
         let target = Point { x: to.x + force.0, y: to.y + force.1 };
         let mut colliding = false;
         let mut fanout = Vec::new();
-        for original in self.attached_lines(frame, via_pos) {
+        let legs = self.attached_lines(frame, via_pos);
+        let fanout_tracks: Vec<Vec<String>> = legs.iter().map(|l| Self::source_tracks(frame, l)).collect();
+        let (displaced_lines, displaced_vias) = match moved {
+            Some(w) => self.frame_displacement(world, w, &legs, &fanout_tracks),
+            None => (Vec::new(), Vec::new()),
+        };
+        for original in legs {
             let mut dragged = original.clone();
             if let Some(at) = dragged.find(via_pos) {
                 dragged.drag_corner45(target, at);
@@ -705,7 +723,19 @@ impl Dragger {
             }
             fanout.push(dragged);
         }
-        DragPreview { pts: vec![target], colliding, fanout, ..DragPreview::default() }
+        DragPreview { pts: vec![target], colliding, displaced_lines, displaced_vias, fanout, fanout_tracks, ..DragPreview::default() }
+    }
+
+    /// What a frame's world `moved` has displaced, as a via drag's preview shows it beside the via's own tracks: the lines of
+    /// `legs` (the via's tracks as the frame has them, standing on `leg_tracks`) are left out, the fan-out takes their place, and so
+    /// is the dragged via. A line of a leg's IR track that is not part of the leg (the track runs on past a junction) stays.
+    fn frame_displacement(&self, base: &Node, moved: &World, legs: &[Line], leg_tracks: &[Vec<String>]) -> (Vec<DisplacedLine>, Vec<DisplacedVia>) {
+        let is_leg = |d: &DisplacedLine| {
+            legs.iter().zip(leg_tracks).any(|(l, ts)| d.source_track.as_ref().is_some_and(|t| ts.contains(t)) && d.line.point_count() >= 2 && d.line.pts.iter().all(|p| l.pts.contains(p)))
+        };
+        let lines = moved.displaced_lines(base).into_iter().filter(|d| !is_leg(d)).collect();
+        let vias = moved.displaced_vias().into_iter().filter(|v| Some(&v.source_via) != self.source_via.as_ref()).collect();
+        (lines, vias)
     }
 
     /// `DRAGGER::FixRoute( aForceCommit )`: commit the drag at `to`. The cursor goes there first (`Drag`); if that works the result is
@@ -752,8 +782,10 @@ impl Dragger {
                 if !self.via_virtual {
                     commit.vias.push((end, self.via_diameter, self.via_drill, self.source_via.clone()));
                 }
-                for l in &preview.fanout {
-                    for src in Self::source_tracks(node, l) {
+                // a leg taken from a frame names its tracks itself (its items are the frame's, not the session's)
+                for (i, l) in preview.fanout.iter().enumerate() {
+                    let sources = if preview.fanout_tracks.len() == preview.fanout.len() { preview.fanout_tracks[i].clone() } else { Self::source_tracks(node, l) };
+                    for src in sources {
                         if !commit.remove_track_ids.contains(&src) {
                             commit.remove_track_ids.push(src);
                         }
@@ -1440,6 +1472,47 @@ mod tests {
         let away = dragger.drag(&node, &rules, &settings, p(2_000_000, -2_000_000));
         assert!(!away.colliding && !away.restored, "{away:?}");
         assert_eq!(pushed(&away), vec![("viaM".to_string(), p(2_000_000, 400_000))], "the bottom frame is never popped: {away:?}");
+    }
+
+    /// `DRAGGER::dragShove`, `DM_VIA`, when the shove fails: `dragViaWalkaround( m_draggedVia, m_lastNode, aP )` works in a branch of
+    /// the frame the stack was reduced to, so what the earlier positions pushed stays (preview and commit), and the fan-out it walks
+    /// replaces the via's own tracks -- the frame's lines of them, which the frame re-made, map back to their IR tracks.
+    #[test]
+    fn a_via_shove_that_fails_walks_around_in_the_frame_and_keeps_its_pushes() {
+        let (mut node, _) = via_across_a_gnd_track();
+        // a locked GND track the via is then dragged onto: the shove cannot move it, so the via is pushed off it and its track walked
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(-2_000_000, 3_000_000), b: p(2_000_000, 3_000_000), width: mm(0.2), source_track: Some(("trkL".into(), 0)), locked: true }));
+        let via_id = node.iter().find_map(|(id, it)| matches!(it, Item::Via(_)).then_some(id)).unwrap();
+        let mut dragger = Dragger::start(&node, p(0, 0), via_id).expect("a via drag");
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        // the via pushes the GND track aside: the gesture's one frame, with trkA re-made to end at the via's new place
+        let first = dragger.drag(&node, &rules, &settings, p(4_000_000, 0));
+        assert!(!first.colliding && !first.restored, "{first:?}");
+        let pushed_b = first.displaced_lines.iter().find(|d| d.source_track.as_deref() == Some("trkB")).expect("trkB is pushed").line.pts.clone();
+        // onto the locked track: the shove fails, `dragViaWalkaround` works in the frame
+        let to = p(500_000, 3_200_000);
+        let second = dragger.drag(&node, &rules, &settings, to);
+        assert!(!second.colliding && !second.restored, "{second:?}");
+        assert_ne!(second.pts, vec![to], "the via is pushed off the locked track: {second:?}");
+        let b_of = |lines: &[DisplacedLine]| lines.iter().filter(|d| d.source_track.as_deref() == Some("trkB")).map(|d| d.line.pts.clone()).collect::<Vec<_>>();
+        assert_eq!(b_of(&second.displaced_lines), vec![pushed_b.clone()], "what the frame pushed stays in the preview: {second:?}");
+        assert!(second.displaced_lines.iter().all(|d| d.source_track.as_deref() != Some("trkA")), "the via's own track is the fan-out, not a displaced line: {second:?}");
+        assert!(second.displaced_vias.is_empty(), "the dragged via is not a displaced via: {second:?}");
+        assert_eq!(second.fanout.len(), 1, "{second:?}");
+        assert_eq!(second.fanout[0].pts.last(), second.pts.first(), "the walked track ends at the via: {second:?}");
+        let commit = dragger.finish(&node, &rules, &settings, to, false).expect("the walked position commits");
+        let mut removed = commit.remove_track_ids.clone();
+        removed.sort();
+        assert_eq!(removed, vec!["trkA".to_string(), "trkB".to_string()], "the via's original track and the pushed track are replaced, once each: {commit:?}");
+        let sig: Vec<_> = commit.tracks.iter().filter(|l| l.net == net_of("SIG")).collect();
+        assert_eq!(sig.len(), 1, "one SIG track, the walked one -- not the original beside it: {commit:?}");
+        assert_eq!(sig[0].pts, second.fanout[0].pts);
+        let gnd: Vec<_> = commit.tracks.iter().filter(|l| l.net == net_of("GND")).map(|l| l.pts.clone()).collect();
+        assert_eq!(gnd, vec![pushed_b], "the earlier push is committed: {commit:?}");
+        assert_eq!(commit.remove_via_ids, vec!["viaA"]);
+        assert_eq!(commit.vias.len(), 1, "{commit:?}");
+        assert_eq!(Some(commit.vias[0].0), second.pts.first().copied());
     }
 
     #[test]
