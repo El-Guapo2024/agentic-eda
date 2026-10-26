@@ -112,3 +112,68 @@ stopped there, under the lane's rule for a design decision that spans many crate
 5. *Acceptance.* Move `issue10926_1` and `netlists/hierarchy_aliases` from `QA_TRACED_OTHERWISE` to `QA_TRACED_ALIKE` in
    `slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them`, plus a unit test that a screen shown twice inside a screen shown twice gets one
    reference per full path (the fixture is the `issue10926_1` shape above).
+
+## Item 4, leftover 3 -- the Symbol Editor's pin and New Symbol dialogs (done 2026-10-25)
+
+**What I did.**
+
+- The Pin tool (`SYMBOL_EDITOR_PIN_TOOL::CreatePin`). A click no longer places a pin at once: `SymbolEditorCanvas.tsx` builds the pin the tool
+  has dropped (sticky template + active unit/body style + the next free number) and puts it in the store as `pendingPin`; `PinPropertiesDialog`
+  opens on it. Cancel drops it and places nothing (the tool stays armed); OK asks `PlacePin`'s Synchronized Pins Mode question when the spot is
+  taken ("This position is already occupied by another pin, in unit %d." + the extended line, OK "Place Pin Anyway"; a refusal drops the pin),
+  adds the pin (image pins in every other unit as before), and only then saves the template (`g_LastPin*`) and the number (`g_lastPin`). An
+  existing pin still opens the same dialog by id and is edited as before; "Delete Pin" is not offered on the pending one.
+- The sticky template moved from a ref in the canvas into the store (`state.pinTemplate`), because the dialog's OK is now what saves it. It
+  survives opening another symbol (`g_LastPin*` is static in KiCad) and `SET_PIN_TEMPLATE` returns the same state when the template is unchanged,
+  so the ~700 ms poll does not re-render the editor.
+- New Symbol (Ctrl+N, `SYMBOL_EDIT_FRAME::CreateNewSymbol` with no parent). A new `NewSymbolDialog.tsx` asks what `DIALOG_LIB_NEW_SYMBOL` asks and
+  this model can hold: the name (`GetName`: trimmed, spaces to underscores, LIB_ID specials escaped; the validator's "Symbol must have a name.",
+  and a name the project library has is refused in the dialog), the default reference (`U`), units per package (1..64) with "All units are
+  interchangeable" (the opposite of `units_locked`, set only for several units), "Create symbol with alternate body style (De Morgan)", "Create
+  symbol as power symbol" (checking it forces and locks "Exclude from bill of materials"/"Exclude from board", as `onPowerCheckBox` does; unchecking
+  re-enables them and leaves them true), the pin name position offset (default 20 mil = 0.508 mm, shown in the user's unit) and "Show pin number
+  text"/"Show pin name text". OK is one `batch` (`new_symbol` + `edit_symbol_properties`), one undo step; the symbol opens in the editor.
+- The dialog starts on `uniqueSymbolLibId`'s free name ("Untitled", "Untitled_1", ...) until the person types one, so Ctrl+N + OK still makes a
+  symbol the way it used to; the names are fetched each opening and again on OK (as the Derive dialog does). Ctrl+N now dispatches
+  `SET_NEW_SYMBOL_OPEN` (`useActionRunner.ts`), still on the Symbol tab only.
+- Pure modules with their unit tests (written first, failing): `kicad-port/symPinTemplate.ts` (the sticky defaults, `newPinFromClick`,
+  `pinTemplateOf`, `samePinTemplate`), `kicad-port/pinPlacement.ts` (`pinPlacementOccupant`, `pinOccupiedMessage`), and
+  `symEditActions.ts::newSymbolName`/`newSymbolNameCheck` (the name's form, the validator, the whole-lib_id membership test).
+- `SymbolEditorApi.newSymbol(request)` now takes the dialog's answers and returns whether the verb accepted them; `addPin` returns the same (the
+  dialog has to know before it closes and saves the template). Existing callers ignore the value.
+- Docs: `web/studio/PARITY-symedit.md` (the two hotkey rows), `web/studio/PARITY-common.md` (the P20 finds table, and the "found, not fixed"
+  line loses the sentence), `docs/parity/GAPS.md` (the P20 paragraph's entry moved to a fixed one), `docs/HANDOFF.md` (item 4).
+- Browser checks: `lib-edit.check.js` (the New Symbol and pin-tool scenarios rewritten around the dialogs, plus a duplicate/Cancel scenario),
+  `lib-editors.check.js` (its four `clickAt` pin placements now OK the dialog) and `files-in.check.js` (Ctrl+N is followed by the dialog).
+
+**Commits.**
+
+- `4a3fc95c` -- studio: the Symbol Editor's pin tool and New Symbol ask first, as KiCad does
+- this log, in its own commit.
+
+**Tests run.**
+
+- Failing first: `npm --prefix web/studio run test:unit` on the old code gave EXIT 2 -- `TS2307: Cannot find module './pinPlacement'` and
+  `'./symPinTemplate'`, `TS2305: Module '"./symEditActions"' has no exported member 'newSymbolNameCheck'` -- and
+  `tools/run-all-checks.sh -j 1 lib-edit` gave EXIT 1 with seven failing scenarios (the three new ones -- New Symbol's dialog, the duplicate
+  refusal, the pin tool's dialog -- and four cascades, since the symbol they depend on was never made).
+- After: `npm --prefix web/studio run typecheck` EXIT 0; `npm --prefix web/studio run test:unit` 2477 tests, 2477 pass, 0 fail, EXIT 0;
+  `tools/run-all-checks.sh -j 1 lib-edit` ok, 13 scenarios, 58s; `tools/run-all-checks.sh -j 1 lib-editors files-in` ok, 26 and 103
+  scenarios, 203s and 115s, EXIT 0.
+- No Rust changed: the two verbs (`new_symbol`, `edit_symbol_properties`) and `batch` were already there, so no cargo run this item.
+
+**Unsure / for the reviewer.**
+
+- A taken name is refused with the verb's words ("a symbol with this name already exists; pick another name") instead of KiCad's
+  "Symbol '%s' already exists in library '%s'." + Overwrite. `new_symbol` cannot overwrite, and delete + create would be destructive; the
+  deviation is written into `PARITY-symedit.md`. If a real Overwrite is wanted, it is a new verb in `crates/ops` (out of this item's scope).
+- Two controls are not asked: "Place pin names inside" (no field in `SymbolPropertiesFields`/`LibrarySymbol`; adding it is a model + kicad writer
+  change) and the parent/derive combo (`derive_symbol` is the Derive dialog's verb, and that dialog asks it).
+- The template also follows a pin merely selected in the editor (the selection effect saves `pinTemplateOf(pin)`), which KiCad's `g_LastPin*` does
+  not do -- only `CreatePin` writes it there. That behaviour predates this item (it was the canvas's `pinTemplateRef`); keeping it meant the
+  template now includes the fields the dialog can change, not just the five the old ref kept. Say if it should follow only the Pin tool's dialog.
+- `pinPlacementOccupant` tests the dialog's edited copy (so a number/position changed in the dialog is what the question uses) against the
+  symbol's pins with `synchronizePins(state.syncPins, unit_count, units_locked)`. KiCad's `PlacePin` checks `m_frame->GetScreen()`'s pins;
+  I believe the two agree, but the unit the message prints is the occupant's `unit`, which for a unit-0 pin is 0 ("in unit 0"), the same as KiCad.
+- The new symbol's properties go through `edit_symbol_properties` with empty description/keywords/datasheet and no footprint filters, as a fresh
+  `LibrarySymbol` has them; if `new_symbol` ever writes something else there, the batch would overwrite it.
