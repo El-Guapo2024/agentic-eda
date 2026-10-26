@@ -177,3 +177,77 @@ stopped there, under the lane's rule for a design decision that spans many crate
   I believe the two agree, but the unit the message prints is the occupant's `unit`, which for a unit-0 pin is 0 ("in unit 0"), the same as KiCad.
 - The new symbol's properties go through `edit_symbol_properties` with empty description/keywords/datasheet and no footprint filters, as a fresh
   `LibrarySymbol` has them; if `new_symbol` ever writes something else there, the batch would overwrite it.
+
+## Item 4, leftover 4 -- Both sides placement files (done 2026-10-26)
+
+**What I did.**
+
+- The naming, taken from KiCad 8's source first: `PLACE_FILE_EXPORTER::DecorateFilename` suffixes the base name `-all` when both sides go in
+  one file, `-top` for the front and `-bottom` for the back; the ASCII file is `<base>.pos` (`CreateAsciiFiles`, `FILEEXT::FootprintPlaceFileExtension`)
+  and the CSV `<base>-pos.csv` (`CreateCSVFiles` puts `-pos` before the extension), so e.g. `board-all-pos.csv`, `board-top.pos`.
+  `DIALOG_GEN_FOOTPRINT_POSITION`'s "Generate single file with both front and back positions" (`m_singleFile`) starts checked; with it off and
+  "Both sides" asked, the dialog writes the top's and the bottom's files. `kicad-cli pcb export pos` writes exactly the name its `-o` has (the
+  newer API calls it `m_nakedFilename`), so the two-file mode has to be two runs, each with its own `--side front` / `--side back`.
+- `crates/kicad-engine/src/lib.rs`: `place_file_names(stem, side, format, single_file)` holds those rules (one side always wins over
+  `single_file`); `run_export_command` extracted from `run_export` so both paths share the invocation; `export_pcb` sends text `pos` exports
+  (`--format` absent/`ascii`/`csv`) to the new `export_pcb_placement(..., single_file)`, which returns `{ ok, engine, files }` like
+  `export_pcb`. `export_pcb_placement` deletes each target before its run (an old file must not pass as this run's) and lists the targets it
+  named rather than the files modified since a second before the run -- the mtime window `run_export` uses cannot tell the two sides apart on a
+  coarse file system. Gerber's raw route is untouched.
+- `crates/cli/src/kicad_engine.rs::export_pos(dir, args, single_file)`; `fab_api::pos` takes `"single_file"` (default true, the dialog's
+  default, so older callers keep one file); `eda fab pos --separate-sides` asks for the two files.
+- `web/studio`: `FabPosOptions.single_file?`; the dialog's checkbox "Generate single file with both front and back positions" (checked; disabled
+  unless "Both sides" is chosen, since the choice does not apply otherwise) and the footer's note names the files; the header comment cites the
+  dialog and `DecorateFilename`.
+- `plot-exports.check.js`: the placement scenario asks for CSV, both sides, default checked -> one `-all-pos.csv` and `single_file === true` in
+  the request; unchecks the box -> `-top-pos.csv` and `-bottom-pos.csv` and `single_file === false`; re-checks it; then ASCII -> one
+  `-all.pos`.
+- Docs: `docs/HANDOFF.md` (item 4), `docs/parity/GAPS.md` (the "Both sides" find becomes a fixed one, 2026-10-26),
+  `web/studio/PARITY-common.md` (P20's finds table and the "found, not fixed" list).
+
+**Commits.**
+
+- `4611df84` -- placement files: KiCad's -all / -top / -bottom names, the single-file box, and two runs for two sides
+- this log, in its own commit.
+
+**Tests run.**
+
+- Failing first: the naming test was written before the function and `cargo test -p eda-kicad-engine --lib placement_files` gave EXIT 101,
+  `error[E0425]: cannot find function 'place_file_names' in this scope`. The fake-kicad-cli test (one run per file, each run's `--side`) was
+  added once `place_file_names` and `export_pcb_placement` existed, so it is a regression check rather than red-first evidence.
+- After: `cargo test -p eda-kicad-engine --lib` 41 passed, 0 failed; the placement filter (`cargo test -p eda-kicad-engine --lib
+  placement`) 4 passed.
+- `cargo test -p eda-cli fab` 8 passed, 0 failed. (`-p eda-cli --lib` does not exist: no library target.)
+- `cargo check -p eda-cli --tests` finished clean; `cargo clippy -p eda-kicad-engine -p eda-cli --tests --no-deps` exit 0 with only the
+  pre-existing warnings (21 in eda-cli, none at a line this item added).
+- The two slow tests that use the real kicad-cli, run individually with `EDA_SLOW_TESTS=1` on the eda-cli unittests:
+  `board::tests::kicad_cli_loads_the_edited_board_and_its_position_and_bom_exports_honour_the_attributes` ok and
+  `board::edit_details_tests::kicad_cli_reads_the_references_a_paste_gave_and_the_board_after_paste_special_loads_for_its_drc` ok.
+- `npm --prefix web/studio run typecheck` EXIT 0.
+- `tools/run-all-checks.sh -j 1 plot-exports`: `ok plot-exports 11 scenarios 36s board=opamp-routed`, EXIT 0.
+- By hand with the real kicad-cli on `/tmp/poscheck` (`eda board new examples/opamp_filter.yaml -o /tmp/poscheck`): `eda fab pos` wrote
+  `export/kicad/pos/opamp_filter-all-pos.csv`; `--separate-sides` wrote `opamp_filter-top-pos.csv` and `opamp_filter-bottom-pos.csv`;
+  `--format ascii` `opamp_filter-all.pos`; `--side front` with ASCII `opamp_filter-top.pos`.
+- `cargo fmt --all -- --check` is red workspace-wide on pre-existing style; `cargo fmt -p eda-kicad-engine -p eda-cli -- --check` finds 282
+  hunks in the six files it lists, 173 of them in `kicad-engine/src/lib.rs` (2,674 lines of long lines) and the rest in
+  `footprint_check.rs`, `foreign.rs` and the three cli files; the new lines follow the surrounding long-line style, as the earlier entries'
+  code does.
+
+**Unsure / for the reviewer.**
+
+- `export_pcb` now routes text `pos` exports to the new function with `single_file = true`; a caller of the generic route that used to get
+  `<stem>.pos` now gets `<stem>-all.pos`/`<stem>-all-pos.csv`, which is KiCad's own default. I found no hard-coded `.pos` path elsewhere
+  (grep), and the remaining tests read `reply["files"][0]` only; `eda fab`'s package path (`crates/cli/src/main.rs:1031`) runs kicad-cli itself
+  with its own `-o` name and is untouched. Say if the generic route should keep the plain name instead.
+- Two files cost two kicad-cli runs (each run is seconds on a real board) and leave any older `-all` file from a previous run beside them in
+  `export/kicad/pos/` -- only the current run's targets are removed and listed, the same as the other export kinds. Is deleting the other
+  naming variant on each run wanted?
+- The checkbox is disabled unless "Both sides" is chosen. The server ignores `single_file` for one side anyway; I did not find an
+  enable/disable in the dialog's source I read, so if KiCad leaves it enabled this is a small deviation.
+- `--separate-sides` is the CLI flag name I chose (kicad-cli has no counterpart; the box lives in the dialog only). Rename it if the lane has a
+  convention.
+- The ASCII names (`-all.pos` etc.) are read off `CreateAsciiFiles` + `DecorateFilename`; the CSV `-pos` infix off `CreateCSVFiles`. I
+  confirmed end-to-end only that kicad-cli writes whatever `-o` names, not KiCad's GUI output side by side.
+- I did not run the whole workspace test suite or the other browser checks; the kicad-engine suite, the eda-cli fab filter, the two slow
+  kicad-cli tests, the typecheck and `plot-exports` are green. Say if the lane gate wants `tools/check.sh fast` and the rest of
+  `tools/run-all-checks.sh` too.
