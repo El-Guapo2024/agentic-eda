@@ -574,9 +574,38 @@ impl Dragger {
         // "Restore last solution": m_dragStatus stays false, the line goes back to where the last good position put it
         self.state.drag_status = false;
         let mut restored = self.state.last_solution.clone().unwrap_or_else(|| DragPreview { pts: self.original.pts.clone(), arcs: self.original.arcs.clone(), ..DragPreview::default() });
+        if !mark && settings.mode != Mode::Walkaround {
+            self.restore_onto_frame(node, &mut restored);
+        }
         restored.restored = true;
         restored.forced_mark_obstacles = self.state.force_mark_obstacles;
         restored
+    }
+
+    /// `DRAGGER::Drag`'s "Restore last solution" in Shove mode: `NODE* parent = m_lastNode->GetParent()->Branch(); ..
+    /// m_lastNode->Add( m_lastDragSolution )` -- what is shown is the frame this failed position reduced the stack to (`SHOVE::Run`
+    /// leaves `m_currentNode` at the reduced parent when it fails), not the frame the last good position left: a frame this position
+    /// popped has sprung back. A line drag shows the last good line in it. A via drag has no `m_lastDragSolution` of its own (`dragShove`
+    /// sets it only for `DM_SEGMENT` / `DM_CORNER`), so the via and its tracks are where that frame has them. In Walk around mode the
+    /// parent is the session's world, which `last_solution` already shows.
+    fn restore_onto_frame(&self, node: &Node, pv: &mut DragPreview) {
+        let shove = self.shove.borrow();
+        let (top, _) = shove.stack.top();
+        if self.kind == DragKind::Via {
+            let at = shove.via_pos(self.via_pos);
+            let frame = top.apply(node);
+            let legs = self.attached_lines(&frame, at);
+            let tracks: Vec<Vec<String>> = legs.iter().map(|l| Self::source_tracks(&frame, l)).collect();
+            let (lines, vias) = self.frame_displacement(node, &top, &legs, &tracks);
+            pv.pts = vec![at];
+            pv.fanout = legs;
+            pv.fanout_tracks = tracks;
+            pv.displaced_lines = lines;
+            pv.displaced_vias = vias;
+        } else {
+            pv.displaced_lines = top.displaced_lines(node);
+            pv.displaced_vias = top.displaced_vias();
+        }
     }
 
     /// Whether the position `Drag` was last given can be committed (`m_dragStatus`).
@@ -1513,6 +1542,36 @@ mod tests {
         assert_eq!(commit.remove_via_ids, vec!["viaA"]);
         assert_eq!(commit.vias.len(), 1, "{commit:?}");
         assert_eq!(Some(commit.vias[0].0), second.pts.first().copied());
+    }
+
+    /// `DRAGGER::Drag`'s "Restore last solution" in Shove mode shows the frame the failed position reduced the stack to
+    /// (`m_lastNode->GetParent()`), not the one the last good position left: the via's place in the newest frame no longer touches
+    /// that frame's world, so the frame is popped, and when the via then cannot get to the cursor it is shown where the frame below
+    /// has it, with that frame's push.
+    #[test]
+    fn a_failed_via_position_shows_the_frame_it_reduced_the_stack_to() {
+        let (mut node, _) = via_across_a_gnd_track();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(-2_000_000, 3_000_000), b: p(2_000_000, 3_000_000), width: mm(0.2), source_track: Some(("trkL".into(), 0)), locked: true }));
+        let via_id = node.iter().find_map(|(id, it)| matches!(it, Item::Via(_)).then_some(id)).unwrap();
+        let mut dragger = Dragger::start(&node, p(0, 0), via_id).expect("a via drag");
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let first = dragger.drag(&node, &rules, &settings, p(4_000_000, 0));
+        assert!(!first.colliding && !first.restored, "{first:?}");
+        let second = dragger.drag(&node, &rules, &settings, p(4_000_000, 1_000_000));
+        assert!(!second.colliding && !second.restored, "{second:?}");
+        assert_eq!(dragger.shove.borrow().stack.len(), 2, "each move that shoved left a frame");
+        let b_of = |pv: &DragPreview| pv.displaced_lines.iter().filter(|d| d.source_track.as_deref() == Some("trkB")).map(|d| d.line.pts.clone()).collect::<Vec<_>>();
+        assert_ne!(b_of(&first), b_of(&second), "the second move pushed trkB on");
+        // centred on the locked track: neither the shove nor the pushout can place the via
+        let failed = dragger.drag(&node, &rules, &settings, p(0, 3_000_000));
+        assert!(failed.restored && !dragger.drag_status(), "{failed:?}");
+        assert_eq!(dragger.shove.borrow().stack.len(), 1, "the via's place in the newest frame touches nothing of it: popped");
+        assert_eq!(failed.pts, first.pts, "the via is where the frame left on top has it: {failed:?}");
+        assert_eq!(b_of(&failed), b_of(&first), "with that frame's push: {failed:?}");
+        assert_eq!(failed.fanout.len(), 1);
+        assert_eq!(failed.fanout[0].pts.last(), first.pts.first(), "its track ends at it: {failed:?}");
+        assert!(failed.displaced_lines.iter().all(|d| d.source_track.as_deref() != Some("trkA")), "{failed:?}");
     }
 
     #[test]
