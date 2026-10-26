@@ -313,3 +313,53 @@ stopped there, under the lane's rule for a design decision that spans many crate
   check.
 - `board-stats` needs kicad-cli for `POST /api/board_stats` and waits up to 90 s for the dialog to fill; the header's `minutes=10` covers the
   slow runs seen so far (66 s wall for the check), but a machine without kicad-cli will fail on the setup assertion, as intended.
+
+## Symbol Editor review corrections F1-F4 on `4a3fc95c` (done 2026-10-26)
+
+**What I did** (from the Claude reviewer, checked against KiCad 8303b2ad).
+
+- **F1**: New Symbol's "All units are interchangeable" starts **unchecked** (`dialog_lib_new_symbol_base.cpp:78` never calls `SetValue`), so
+  `CreateSymbol`'s `LockUnits( !aProps.unitsInterchangeable )` locks a new multi-unit symbol made with default answers. The store already turned
+  that into `units_locked: unitCount > 1 && !unitsInterchangeable`, so no model change was needed.
+- **F2**: added KiCad's "Pin name inside" checkbox, **checked** (`dialog_lib_new_symbol_base.cpp:147-148`). OK folds it into `pinNameOffsetMm` the
+  way `SymbolPropertiesDialog.tsx`'s "Place pin names inside" already does: inside keeps the offset, an inside offset of 0 becomes 20 mils
+  (0.508 mm), outside writes 0 (`CreateSymbol`, `lib_symbol_library_manager.cpp:55`). The offset field is disabled while the box is off. No model or
+  writer change.
+- **F3**: `PinTemplate` no longer carries `name` (`g_LastPin*`, `symbol_editor_pin_tool.cpp:38-48` and `~197-205`, holds none);
+  `newPinFromClick` starts every pin with `name: ""`. Removed the canvas effect that saved `pinTemplateOf(pin)` whenever one pin was selected:
+  only Pin Properties' OK updates the template now -- the pending pin's OK (as before) and an edited pin's OK (`EditPinProperties` saves the
+  globals for that case too), which previously did not.
+- **F4**: the taken-name refusal is KiCad's own wording, "Symbol '%s' already exists in library '%s'." (`symbolExistsMessage`, the name
+  unescaped as the validator does), with no Overwrite, which `new_symbol` cannot do. The lib-edit regex now asks for those words.
+- **Parity**: `web/studio/PARITY-symedit.md` -- the Pin tool and Ctrl+N rows corrected, and a new "Differs from KiCad" section: a pin is placed
+  with one click here (OK places it; the occupied question is asked at OK) where KiCad's `TwoClickPlace` places on a second click; the name field
+  is prefilled "Untitled"/"Untitled_N" where KiCad's starts empty; the name is trimmed.
+- Tests written first: `symPinTemplate.test.ts` (no `name` in the template; a click's pin starts unnamed) and `symEditActions.test.ts`
+  (`symbolExistsMessage`: words, unescaping, no Overwrite), plus two `lib-edit.check.js` scenarios -- New Symbol's defaults and the offset
+  (two units + unchecked interchangeable is `units_locked: true`; inside with offset 0 gives 0.508 mm; outside gives 0) and the template (the
+  next click starts from the last OK's look but with no name; selecting a pin does not reset it).
+
+**Commits.**
+
+- `c943dd26` -- studio: four Symbol Editor corrections from the 4a3fc95c review
+- this log, in its own commit.
+
+**Tests run.**
+
+- Failing first: `npm --prefix web/studio run test:unit` EXIT 1 -- `TS2305: Module '"./symEditActions"' has no exported member 'symbolExistsMessage'`
+  (the template tests were changed to the new rule in the same edit).
+- After: `npm --prefix web/studio run test:unit` 2478 tests, 2478 pass, 0 fail, EXIT 0; `npm --prefix web/studio run typecheck` EXIT 0;
+  `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 lib-edit` -> `ok lib-edit 15 scenarios 70s board=mcu30`,
+  `run-all-checks: 1 passed, 0 failed of 1 in 70s`, EXIT 0 (the check had 13 scenarios before; the two new ones are the two above).
+- No Rust changed (no model, writer or verb), so no cargo run this round.
+- `npm test` in `web/studio` has no such script (`Missing script: "test"`); the package's runner is `npm run test:unit`, which I ran.
+
+**Unsure / for the reviewer.**
+
+- F2's "inside with an offset of 0" becomes **20 mils** here, as `SymbolPropertiesDialog`'s "Place pin names inside" already makes it, where
+  `CreateSymbol` itself calls `SetPinNameOffset( 1 )` (1 IU = 0.0001 mm). The reviewer said to copy the existing dialog, so the two dialogs agree;
+  KiCad's exact 1 IU is not reproduced.
+- Added the template save on an **edited** pin's OK as well. KiCad's `EditPinProperties` saves `g_LastPin*` for that path, and the reviewer's
+  "only the pin dialog's OK" read allows it; before, only the pending pin's OK saved the template.
+- `Pin name inside` changes only `pin_name_offset_mm` in the batch; "Show pin name text" still owns `pin_names_hidden`, as `CreateSymbol` keeps
+  them separate.
