@@ -187,6 +187,51 @@
     });
 
     // ================================================================================================ the Symbol Editor
+    await scenario("New Symbol starts with All units are interchangeable unchecked and Pin name inside checked; the pin name offset follows them", async (t) => {
+      await clickTab("Symbol");
+      const openNew = async () => {
+        await run("eeschema.SymbolLibraryControl.newSymbol");
+        return until(() => /New Symbol/.test(dialog()?.querySelector(".dialog-header")?.textContent ?? ""), 5000);
+      };
+      const made = [];
+      let open = await openNew();
+      if (!t(!!open, "the dialog opens")) return;
+      const interchangeable = document.querySelector('[data-testid="new-symbol-interchangeable"]');
+      const namesInside = document.querySelector('[data-testid="new-symbol-names-inside"]');
+      t(!!interchangeable && !interchangeable.checked, `All units are interchangeable starts unchecked (${interchangeable?.checked})`);
+      t(!!namesInside && namesInside.checked, `Pin name inside starts checked (${namesInside?.checked})`);
+      // KiCad's CreateSymbol: two units with the box unchecked is LockUnits( true ); inside with an offset of 0 is 20 mils
+      const nameA = `P20Lock${Date.now() % 100000}`;
+      setValue(fieldOf("Symbol name"), nameA);
+      setValue(fieldOf("Number of units per package"), 2);
+      setValue(fieldOf("Pin name position offset"), 0);
+      buttonText(dialog(), "OK")?.click();
+      const idA = await until(async () => (await symNames()).find((n) => n === `eda:${nameA}`), 8000);
+      if (t(!!idA, `a two-unit symbol is made (${idA})`)) {
+        made.push(idA);
+        const s = await symbol(idA);
+        t(s.unit_count === 2 && s.units_locked === true, `two units and All units are interchangeable unchecked is locked (${JSON.stringify([s.unit_count, s.units_locked])})`);
+        t(s.pin_name_offset_mm === 0.508, `Pin name inside with an offset of 0 is 20 mils, as Symbol Properties does (${s.pin_name_offset_mm})`);
+      }
+      // outside: "Pin name inside" unchecked writes an offset of 0
+      open = await openNew();
+      if (!t(!!open, "the dialog opens again")) return;
+      const nameB = `P20Out${Date.now() % 100000}`;
+      setValue(fieldOf("Symbol name"), nameB);
+      document.querySelector('[data-testid="new-symbol-names-inside"]')?.click();
+      await sleep(100);
+      buttonText(dialog(), "OK")?.click();
+      const idB = await until(async () => (await symNames()).find((n) => n === `eda:${nameB}`), 8000);
+      if (t(!!idB, `a symbol without pin names inside is made (${idB})`)) {
+        made.push(idB);
+        const s = await symbol(idB);
+        t(s.pin_name_offset_mm === 0, `Pin name inside unchecked writes an offset of 0 (${s.pin_name_offset_mm})`);
+      }
+      for (const id of made) await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ strict: false, cmd: { op: "delete_library_symbol", lib_id: id } }) });
+      await sleep(400);
+      t(!(await symNames()).some((n) => made.includes(n)), "the two symbols are out of the library again");
+    });
+
     await scenario("New Symbol asks for the name first, in KiCad's own dialog, and makes the symbol on OK", async (t) => {
       await clickTab("Symbol");
       t(__eda.state().tab === "symbol", `the Symbol Editor tab (${__eda.state().tab})`);
@@ -224,7 +269,8 @@
       buttonText(dialog(), "OK")?.click();
       await sleep(400);
       const err = document.querySelector('[data-testid="new-symbol-error"]');
-      t(/a symbol with this name already exists; pick another name/.test(err?.textContent ?? ""), `the taken name is refused (${err?.textContent})`);
+      t(/Symbol '.+' already exists in library 'eda'\./.test(err?.textContent ?? ""), `the taken name is refused in KiCad's words (${err?.textContent})`);
+      t(!/Overwrite/.test(err?.textContent ?? ""), "and offers no Overwrite, which the verb cannot do");
       t(!!dialog(), "the dialog stays open");
       buttonText(dialog(), "Cancel")?.click();
       await sleep(400);
@@ -287,6 +333,38 @@
       t(!!p && p.name === "VIN" && p.at.x === pin.at.x && p.at.y === pin.at.y, `the pin is VIN, number 7, where it was (${JSON.stringify(p && [p.name, p.number])})`);
       await undo();
       t(((await symbol(SYM)).pins ?? []).some((q) => q.number === pin.number && q.name === pin.name), "one undo gives it its name and number back");
+    });
+
+    await scenario("the pin template is the last Pin Properties OK, not the selected pin, and carries no name", async (t) => {
+      if (!SYM) return t(false, "no symbol");
+      const openPinDialog = async () => until(() => /Pin Properties/.test(dialog()?.querySelector(".dialog-header")?.textContent ?? ""), 4000);
+      t(await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin"), `the pin tool is armed (${__eda.state().tool})`);
+      // A pin with a look of its own: its name and length are what the next click starts with (`g_LastPin*` has no name, so only the length is).
+      await clickAt(-2_540_000, 5_080_000);
+      if (!t(!!(await openPinDialog()), "a click opens Pin Properties")) return;
+      setValue(fieldOf("Pin name"), "TMPL");
+      setValue(fieldOf("Pin length"), 5.08);
+      buttonText(dialog(), "OK")?.click();
+      await sleep(900);
+      // The next click starts from that look, but without the name.
+      await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
+      await clickAt(-2_540_000, 7_620_000);
+      if (!t(!!(await openPinDialog()), "the next click asks again")) return;
+      t(fieldOf("Pin name")?.value === "", `the template carries no name (${fieldOf("Pin name")?.value})`);
+      t(Number(fieldOf("Pin length")?.value) === 5.08, `but the last OK's length (${fieldOf("Pin length")?.value})`);
+      buttonText(dialog(), "Cancel")?.click();
+      await sleep(500);
+      // Merely selecting another pin (2.54 mm long) must not become the template.
+      const other = ((await symbol(SYM)).pins ?? []).find((q) => q.name === "");
+      if (!t(!!other, "another pin is there")) return;
+      await select([other.id ?? `pin:${other.number}`]);
+      await sleep(500);
+      await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
+      await clickAt(-2_540_000, 10_160_000);
+      if (!t(!!(await openPinDialog()), "and once more")) return;
+      t(Number(fieldOf("Pin length")?.value) === 5.08, `the selected pin did not reset it (${fieldOf("Pin length")?.value})`);
+      buttonText(dialog(), "Cancel")?.click();
+      await sleep(500);
     });
 
     await scenario("a rectangle drawn with two clicks; a pin dragged, turned (R) and deleted (Del); one undo step each", async (t) => {

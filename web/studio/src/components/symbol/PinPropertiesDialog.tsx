@@ -73,7 +73,11 @@ export function PinPropertiesDialog() {
     const problem = alternatesError(form.alternates ?? []);
     if (problem) return setError(problem);
     if (id) {
-      if (await api.editPin(id, form)) close();
+      // `EditPinProperties` saves the sticky defaults (`g_LastPin*`) for an edited pin too; merely selecting one does not.
+      if (await api.editPin(id, form)) {
+        dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(form) });
+        close();
+      }
       return;
     }
     // A pin the tool has just dropped: `PlacePin` asks first when it lands on another pin (Synchronized Pins Mode), and only then is it added.

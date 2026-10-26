@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { newSymbolNameCheck, uniqueSymbolLibId } from "./symEditActions";
+import { newSymbolNameCheck, symbolExistsMessage, uniqueSymbolLibId } from "./symEditActions";
 
 test("uniqueSymbolLibId: Untitled in the project library when free", () => {
   assert.equal(uniqueSymbolLibId([]), "eda:Untitled");
@@ -33,6 +33,12 @@ test("newSymbolNameCheck: a name is required, in KiCad's words", () => {
   assert.equal(newSymbolNameCheck("", []).error, "Symbol must have a name.");
   assert.equal(newSymbolNameCheck("   ", []).error, "Symbol must have a name.");
   assert.equal(newSymbolNameCheck("   ", []).exists, false);
+});
+
+test("symbolExistsMessage: KiCad's taken-name words, the name unescaped, no Overwrite", () => {
+  assert.equal(symbolExistsMessage("R", "eda"), "Symbol 'R' already exists in library 'eda'.");
+  assert.equal(symbolExistsMessage("A{colon}B", "eda"), "Symbol 'A:B' already exists in library 'eda'.");
+  assert.ok(!/Overwrite/.test(symbolExistsMessage("R", "eda")), "the verb cannot overwrite, so the dialog doesn't offer it");
 });
 
 test("newSymbolNameCheck: an existing name is reported for the dialog's own library only", () => {
