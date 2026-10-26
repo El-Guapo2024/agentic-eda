@@ -251,3 +251,65 @@ stopped there, under the lane's rule for a design decision that spans many crate
 - I did not run the whole workspace test suite or the other browser checks; the kicad-engine suite, the eda-cli fab filter, the two slow
   kicad-cli tests, the typecheck and `plot-exports` are green. Say if the lane gate wants `tools/check.sh fast` and the rest of
   `tools/run-all-checks.sh` too.
+
+## Item 4, leftover 5 -- the checks P20 left uncovered: Page Settings and the drill/place origin, Board Statistics and Swap Layers, and the board view (done 2026-10-26)
+
+**What I did.**
+
+- Registered nothing new in `tools/run-all-checks.sh`: each check file's header already names a board kind `make_board` builds -- `board=mcu30`
+  for `board-page-origin` (a fresh `eda board new`), `board=mcu30-zones` for `board-stats` (routed with pours, so both copper sides have
+  something to swap) and `board=mcu30-routed` for `board-view` -- so the three names run as the runner reads them.
+- Ran `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 board-page-origin board-stats board-view`. The first run had two failing checks,
+  both on assertions that were wrong about the studio rather than defects in it (below). Fixed the checks only; no studio or runner code was
+  touched, and no assertion was dropped or weakened.
+
+**The first run and what each failure was.**
+
+- `board-page-origin`, scenario "Page Settings on the board: paper and title block in one undo step, Cancel and an unchanged OK sending
+  nothing": `FAIL: the change is one set_board_page command (page --paper A3 --title "P9A page")`. The check tested `/set_board_page/` against
+  `activity[0].cmd`, but the activity log holds no op name: `Activity` is `{ t, by, cmd, ok, message }` (`web/studio/src/api/types.ts`) and
+  `cmd` is the CLI line `cmd_line` builds (`crates/cli/src/board.rs`, `Cmd::SetBoardPage`) -- `page --paper A3 --title "P9A page"`. The
+  "one command, not a batch of two settings" assertion stands, now as the exact CLI line, `ok === true`, and exactly one new activity entry
+  (`before.activity.length + 1`) -- stronger than the regex it replaced, not looser.
+- `board-view`, scenario "N and Shift+N cycle the grid, Ctrl+U switches units, and the status bar's X/Y and dx/dy follow the pointer and
+  Space", three notes:
+  - `FAIL: the status bar shows the pointer at 15.0850, 16.3097 mm (Z 0.79 15.085, 16.310 mm ...)` -- `formatXY` prints the unit's own
+    decimals (`DECIMALS` in `web/studio/src/state/units.ts`: 3 for mm, 1 for mil, 4 for in) and the check hard-coded 4. The readout is right;
+    the expected string was wrong (now the unit's decimals, with `u0` still the unit used).
+  - `FAIL: dx/dy are measured from the Space point (undefined; expected 1.9194, 0.9597 mm)` and `FAIL: and dist is their length (undefined
+    undefined; expected 2.1460 mm)` -- the check's `status()` helper collapses every run of whitespace to one space (`replace(/\s+/g, " ")`)
+    and the regex still asked for two spaces between the fields (`dx ... {2}dy ...`). The status bar's `dx <len> <unit>  dy ...  dist ...`
+    layout (`StatusBar.tsx`) is right; the regex was wrong.
+  - The rest of that scenario (N/Shift+N, Ctrl+U, Space -> `common.Control.resetLocalCoords` -> `SET_LOCAL_ORIGIN` at `state.cursorNm`) was
+    green, so the Space behaviour itself was never in question.
+- No studio defect was found: there is no finding to record against the studio beyond these two check fixes.
+
+**Commits.**
+
+- `a88caf31` -- browser checks: Page Settings and the drill/place origin, Board Statistics and Swap Layers, and the board view's zoom, pan,
+  grid, units and context menu
+- this log, in its own commit.
+
+**Tests run.**
+
+- `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 board-page-origin board-stats board-view`, first run:
+  `run-all-checks: 1 passed, 2 failed of 3 in 111s (logs: /tmp/run-all-checks.b6gj/runs)`.
+- The same command after the fixes:
+
+  ```
+  run-all-checks: 3 passed, 0 failed of 3 in 89s (logs: /tmp/run-all-checks.XIny/runs)
+  ```
+
+- Its line items: `ok board-page-origin 4 scenarios 11s board=mcu30`, `ok board-stats 5 scenarios 66s board=mcu30-zones`,
+  `ok board-view 6 scenarios 12s board=mcu30-routed`.
+
+**Unsure / for the reviewer.**
+
+- The activity log exposes no op name, so a check can only assert the CLI line a command is typed as, or that no new entry appeared. If
+  later checks want the op, `Activity` and `activity.jsonl` would need it; the server was not changed here.
+- `board-stats` runs its Swap Layers scenarios with the workspace's strict toggle off (as `board-edit.check.js` does) and puts the toggle
+  back: swapping F.Cu with B.Cu moves the tracks and zones but not the SMD pads, so strict (the default) refuses the swap for the
+  connectivity it breaks. Whether the dialog should behave differently under strict is a separate question about the studio, not about this
+  check.
+- `board-stats` needs kicad-cli for `POST /api/board_stats` and waits up to 90 s for the dialog to fill; the header's `minutes=10` covers the
+  slow runs seen so far (66 s wall for the check), but a machine without kicad-cli will fail on the setup assertion, as intended.
