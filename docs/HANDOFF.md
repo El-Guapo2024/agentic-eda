@@ -17,6 +17,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## What landed (2026-10-14 to 10-24)
 
+- 2026-10-26: **nested shared screens** (leftover 2): references keyed by the whole sheet path (`SymbolPathOverride::sheet_path`), old keys migrated on read with the same reference per placement; per-path sheet instances; Paste shares nested screens; Annotate counts other paths' references. Left (GAPS 4): a page number per sheet path (the reader keeps the first), per-path Annotate, sorted instance paths.
 - 2026-10-26: **the DeepSeek lane's leftovers** (reviewed by Claude against KiCad, then fixed and gated): springback in the dragger and the pair placer, the Symbol Editor's pin and New Symbol dialogs, Both-sides placement files with KiCad's names, browser checks for Page Settings/origin, Board Statistics/Swap Layers and the board view (`docs/DS-LOG.md`). Differs (small): New Symbol's pin-name offset of 0 with "Pin name inside" becomes 20 mil (KiCad: 1 IU), as Symbol Properties already does; a pin is placed on OK, not on a second click.
 - 2026-10-25: **the length type, wave 3**: the cross-crate items typed, the shims deleted, `docs/NANOMETRES.md` finished (the whole API, the integer kernels kept on purpose, every unit bug of the three waves); parity raw outputs refreshed. **The length type is done.** Follow-up (parity): KiCad's schematic graphics import approximates a spline with `aStroke.GetWidth() / 2` (`setupSplineOrLine`), ours always with `ARC_HIGH_DEF` (`eda_kicad::graphics_import::spline_or_line`).
 - 2026-10-25: **the length type, wave 2** (`53d856b7` ops, `044a5b46` pns, `027cfd87` cli group, `3bb23b95` core crates): every shim removed; same_design 138/138. Bugs caught: import-kicad's empty board was 0.1 x 0.08 mm (now 100 x 80), render's mirrored-symbol bounds ~15 km off (mm/nm mix), lint's um/nm message, the mouse-trail oracle test at 1/1000 scale, the undo tests' sheet at 0.09 mm.
@@ -68,7 +69,6 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
-| `task-nested-shared-sheets` | A screen shown twice inside a screen shown twice: per-placement references keyed by the whole sheet path (`SymbolPathOverride::sheet_path`, old `parent_sheet_instance_id` migrated on read), the reader/writer keep whole paths, a sheet's instances per path, Paste shares a nested screen. PARITY-sch.md section 42 | Done; `issue10926_1` and `hierarchy_aliases` trace alike | A nested sheet's page number per path |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
