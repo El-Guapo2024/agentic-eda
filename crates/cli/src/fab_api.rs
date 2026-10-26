@@ -122,8 +122,10 @@ pub fn drill(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `POST /api/fab/pos`: `{"format": "csv"|"ascii", "side": "front"|"back"|"both",
-/// "units_mm": bool, "smd_only": bool, "exclude_fp_th": bool, "exclude_dnp": bool}`. A footprint marked "exclude from position files" is never
-/// in the file; the other three options leave out SMD-less, through-hole and Do-Not-Populate footprints.
+/// "units_mm": bool, "smd_only": bool, "exclude_fp_th": bool, "exclude_dnp": bool, "single_file": bool}`. A footprint marked "exclude from position files" is never
+/// in the file; the other three options leave out SMD-less, through-hole and Do-Not-Populate footprints. `single_file` is the dialog's
+/// "Generate single file with both front and back positions" (checked by default): off with both sides, the top and the bottom are two
+/// files, named as KiCad names them (`<name>-all-pos.csv`, `<name>-top-pos.csv`, `<name>-bottom-pos.csv`).
 pub fn pos(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let mut args = pos_args(
@@ -137,7 +139,8 @@ pub fn pos(dir: &Path, body: &[u8]) -> Value {
     if req.get("exclude_dnp").and_then(Value::as_bool).unwrap_or(false) {
         args.push("--exclude-dnp".into());
     }
-    reply(kicad_engine::export(dir, "pos", &with_aux_origin("pos", args, &req)))
+    let single_file = req.get("single_file").and_then(Value::as_bool).unwrap_or(true);
+    reply(kicad_engine::export_pos(dir, &with_aux_origin("pos", args, &req), single_file))
 }
 
 /// `POST /api/fab/bom`: no body.

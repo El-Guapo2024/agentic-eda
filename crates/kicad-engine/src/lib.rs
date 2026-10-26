@@ -1561,6 +1561,33 @@ fn pcb_ext_for(kind: &str, args: &[String]) -> &'static str {
     }
 }
 
+/// The placement files a run of `kicad-cli pcb export pos` writes, named as `DIALOG_GEN_FOOTPRINT_POSITION` names them
+/// (`PLACE_FILE_EXPORTER::DecorateFilename`: `-all` for both sides in one file, `-top`/`-bottom` for one side or for the two-file
+/// mode, and `CreateAsciiFiles`'s CSV `-pos` before the extension). `single_file` is the dialog's "Generate single file with both front
+/// and back positions" (checked by default); with it off and both sides asked, the top and the bottom are two files.
+pub fn place_file_names(stem: &str, side: &str, format: &str, single_file: bool) -> Vec<String> {
+    let decorated = |front: bool, back: bool| -> String {
+        let base = match (front, back) {
+            (true, true) => format!("{stem}-all"),
+            (true, false) => format!("{stem}-top"),
+            (false, true) => format!("{stem}-bottom"),
+            (false, false) => stem.to_string(),
+        };
+        // `fn.SetExt( FILEEXT::FootprintPlaceFileExtension )` for the ASCII file, `fn.SetName( ... + "-pos" ); fn.SetExt( "csv" )` for the CSV.
+        if format == "csv" {
+            format!("{base}-pos.csv")
+        } else {
+            format!("{base}.pos")
+        }
+    };
+    match side {
+        "front" => vec![decorated(true, false)],
+        "back" => vec![decorated(false, true)],
+        _ if single_file => vec![decorated(true, true)],
+        _ => vec![decorated(true, false), decorated(false, true)],
+    }
+}
+
 fn sch_ext(kind: &str) -> &'static str {
     match kind {
         "netlist" => "net",
@@ -1578,6 +1605,14 @@ fn sch_ext(kind: &str) -> &'static str {
 
 /// `sch export` subcommands that write a directory of files (one per sheet).
 const SCH_DIR_KINDS: &[&str] = &["svg", "dxf", "png", "ps"];
+
+/// One `kicad-cli <scope> export <kind> [args] -o <out> <input>` run; `out` is the file (or the folder with its trailing slash) passed
+/// to `-o` as it is.
+fn run_export_command(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path, out: &str) -> Result<Output, Vec<CheckResult>> {
+    let mut cmd = cli_command(cli, None);
+    cmd.args([scope, "export", kind]).args(args).arg("-o").arg(out).arg(input);
+    output_within(cmd, limit(EXPORT_TIMEOUT))
+}
 
 /// A kicad-cli export that wrote files: their paths relative to `root`.
 #[allow(clippy::too_many_arguments)]
@@ -1598,9 +1633,7 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     if dir_kind && !out_arg.ends_with('/') {
         out_arg.push('/');
     }
-    let mut cmd = cli_command(cli, None);
-    cmd.args([scope, "export", kind]).args(args).arg("-o").arg(&out_arg).arg(input);
-    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    let out = run_export_command(cli, scope, kind, args, input, &out_arg)?;
     let mut files: Vec<String> = std::fs::read_dir(out_dir)
         .into_iter()
         .flatten()
@@ -1633,11 +1666,64 @@ fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
 /// relative to `root`.
 pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
     check_kind(kind)?;
+    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
+    // A placement file's name is decorated by the dialog's rules (`place_file_names`), so its export is its own function; one file of
+    // both sides (KiCad's default) unless the caller asks otherwise.
+    if kind == "pos" && matches!(value("--format"), None | Some("ascii") | Some("csv")) {
+        return export_pcb_placement(design, model, work, root, name, args, true);
+    }
     let cli = need_cli()?;
     let stem = file_stem(name);
     let (pcb, _) = export_board(design, model, work, &stem)?;
     let out_dir = root.join("export").join("kicad").join(kind);
     run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext_for(kind, args), &stem, root)
+}
+
+/// `kicad-cli pcb export pos` with the names `DIALOG_GEN_FOOTPRINT_POSITION` gives its files ([`place_file_names`]): `<name>-all`, or
+/// `<name>-top` and `<name>-bottom` with `single_file` off and both sides asked. kicad-cli writes exactly the file its `-o` names, so
+/// the two-file mode is two runs -- the second's `--side back` over the same board. Returns `{ ok, engine, files }` as [`export_pcb`].
+pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], single_file: bool) -> Result<Value, Vec<CheckResult>> {
+    check_kind("pos")?;
+    let cli = need_cli()?;
+    let stem = file_stem(name);
+    let (pcb, _) = export_board(design, model, work, &stem)?;
+    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
+    let names = place_file_names(&stem, value("--side").unwrap_or("both"), value("--format").unwrap_or("ascii"), single_file);
+    let out_dir = root.join("export").join("kicad").join("pos");
+    std::fs::create_dir_all(&out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
+    let mut files: Vec<String> = Vec::new();
+    for (i, file_name) in names.iter().enumerate() {
+        let run_args: Vec<String> = if names.len() == 2 {
+            // The two-file mode asks kicad-cli for one side at a time; the first file is the top's, the second the bottom's.
+            args_with_side(args, if i == 0 { "front" } else { "back" })
+        } else {
+            args.to_vec()
+        };
+        let target = out_dir.join(file_name);
+        // A file an earlier run left must not pass for this one's.
+        let _ = std::fs::remove_file(&target);
+        let out = run_export_command(&cli, "pcb", "pos", &run_args, &pcb, &target.to_string_lossy())?;
+        if !out.status.success() || !target.is_file() {
+            return Err(fail(
+                "kicad_cli_export",
+                "pos",
+                format!("kicad-cli pcb export pos failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)),
+            ));
+        }
+        files.push(target.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| target.to_string_lossy().to_string()));
+    }
+    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(&cli)), "files": files }))
+}
+
+/// `args` with `--side` set to `side` (`PLACE_FILE_EXPORTER`'s one side per run).
+fn args_with_side(args: &[String], side: &str) -> Vec<String> {
+    let mut out = args.to_vec();
+    match out.iter().position(|a| a == "--side") {
+        Some(i) if i + 1 < out.len() => out[i + 1] = side.to_string(),
+        Some(_) => out.push(side.to_string()),
+        None => out.extend(["--side".into(), side.into()]),
+    }
+    out
 }
 
 /// What kicad-cli prints on a Specctra export that worked: not a warning. (Read off kicad-cli 10.99 nightly 25ec2335f2; its Specctra job is later than the
@@ -2331,6 +2417,58 @@ fi"#;
         assert_eq!(pcb_ext_for("pos", &a(&["--format", "csv", "--side", "both"])), "csv");
         assert_eq!(pcb_ext_for("pos", &a(&["--format", "ascii", "--side", "front"])), "pos");
         assert_eq!(pcb_ext_for("pos", &a(&[])), "pos", "kicad-cli's own default format is ascii");
+    }
+
+    /// `PLACE_FILE_EXPORTER::DecorateFilename` and `DIALOG_GEN_FOOTPRINT_POSITION`'s "Generate single file with both front and back
+    /// positions" (checked by default): `<name>-all`, `-top`, `-bottom`, the CSV adding its `-pos` before the extension.
+    #[test]
+    fn placement_files_are_named_all_top_and_bottom_as_kicad_names_them() {
+        let names = |side: &str, format: &str, single: bool| place_file_names("board", side, format, single).join(", ");
+        assert_eq!(names("both", "csv", true), "board-all-pos.csv", "one file, both sides: KiCad's own default");
+        assert_eq!(names("both", "ascii", true), "board-all.pos");
+        assert_eq!(names("both", "csv", false), "board-top-pos.csv, board-bottom-pos.csv", "the checkbox off: the top and the bottom as two files");
+        assert_eq!(names("both", "ascii", false), "board-top.pos, board-bottom.pos");
+        assert_eq!(names("front", "csv", false), "board-top-pos.csv", "one side asked: the single-file choice does not apply");
+        assert_eq!(names("back", "ascii", true), "board-bottom.pos");
+    }
+
+    /// The mode is one kicad-cli run per file: kicad-cli writes exactly the name its `-o` has, so the two sides become two runs, each
+    /// with its own `--side`.
+    #[test]
+    fn a_placement_export_runs_kicad_cli_once_per_file_and_says_which_side_each_run_asked_for() {
+        let dir = board_dir("pos-names");
+        let (design, model) = empty_design();
+        let mut env = Env::take();
+        env.set(
+            "EDA_KICAD_CLI",
+            script(
+                &dir,
+                "pos.sh",
+                "out=\"\"; prev=\"\"; side=\"both\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$a\"; fi\n  if [ \"$prev\" = \"--side\" ]; then side=\"$a\"; fi\n  prev=\"$a\"\ndone\nprintf 'Ref,Val,PosX,PosY,Rot,Side\\n' > \"$out\"\necho \"$side\" >> \"$FAKE_POS_LOG\"",
+            ),
+        );
+        let log = dir.join("sides.log");
+        env.set("FAKE_POS_LOG", &log);
+        let work = dir.join("work");
+        let args = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let files = |v: &Value| v["files"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();
+        let both = args(&["--format", "csv", "--side", "both"]);
+
+        let one = export_pcb_placement(&design, &model, &work, &dir, "board", &both, true).expect("the single file");
+        assert_eq!(files(&one), vec!["export/kicad/pos/board-all-pos.csv"]);
+        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "both", "one run, both sides");
+
+        let _ = std::fs::remove_file(&log);
+        let two = export_pcb_placement(&design, &model, &work, &dir, "board", &both, false).expect("the two files");
+        assert_eq!(files(&two), vec!["export/kicad/pos/board-top-pos.csv", "export/kicad/pos/board-bottom-pos.csv"]);
+        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "front\nback", "a run per side");
+        assert!(dir.join("export/kicad/pos/board-top-pos.csv").is_file() && dir.join("export/kicad/pos/board-bottom-pos.csv").is_file());
+
+        let _ = std::fs::remove_file(&log);
+        let top = export_pcb_placement(&design, &model, &work, &dir, "board", &args(&["--format", "ascii", "--side", "front"]), false).expect("the top only");
+        assert_eq!(files(&top), vec!["export/kicad/pos/board-top.pos"], "one side asked: one file whatever the single-file choice");
+        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "front");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

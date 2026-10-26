@@ -831,9 +831,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Fixed 2026-10-25 (the DS lane, `ds/handoff-1025`): the Symbol Editor's pin tool and New Symbol placed at once where KiCad asks first -- the pin tool's click now
   opens Pin Properties (`SYMBOL_EDITOR_PIN_TOOL::CreatePin`; Cancel places nothing, OK places it after `PlacePin`'s Synchronized Pins Mode question) and Ctrl+N opens
   a `DIALOG_LIB_NEW_SYMBOL`-shaped dialog (name validator, the default reference, units, body style, power, BOM/board, pin name offset and pin texts; one undo step).
+- Fixed 2026-10-26 (the DS lane, `ds/handoff-1025`): Generate Placement Files now names its files as KiCad does (`PLACE_FILE_EXPORTER::DecorateFilename`):
+  `<name>-all-pos.csv` for both sides in one file, `<name>-top-pos.csv` and `<name>-bottom-pos.csv` when the dialog's "Generate single file with both front and
+  back positions" (checked by default, as `m_singleFile` is) is off -- two kicad-cli runs for the two sides -- and the ASCII names are `<name>-all.pos` etc.
+  `eda fab pos --separate-sides` asks for the two files too (`kicad-engine::place_file_names`).
 - Found, not fixed (listed for their packages): a symbol placed from the library under a lib_id the design already has keeps the design's definition (library_place.rs,
-  by design), so `Device:R` placed from the chooser on mcu30 draws the built-in R, not KiCad's; "Both sides" in Generate Placement Files writes one file where KiCad
-  writes a top and a bottom one, and the files are not named `-top-pos` / `-all-pos`; the export routes list the files modified since a second before the run, so a
+  by design), so `Device:R` placed from the chooser on mcu30 draws the built-in R, not KiCad's; the export routes list the files modified since a second before the run, so a
   second run within that second lists the first one's files too; the parity DRC of the mcu30 example, placed and routed, finds 76 differences between the board and the
   schematic derived for it (30 footprints the symbols' empty Footprint fields do not name, 8 field mismatches, 38 net conflicts), which a board and a schematic
   made from one intent should not have (items 2 and 26).

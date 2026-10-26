@@ -123,7 +123,7 @@
       t(res.reply?.body?.ok === true && apart.some((f) => /PTH/i.test(f)) && apart.length >= merged.length, `apart: ${apart.map(base).join(", ")}`);
     });
 
-    await scenario("Generate Placement Files: CSV for both sides, and ASCII, kicad-cli's position files", async (t) => {
+    await scenario("Generate Placement Files: CSV with both sides in KiCad's -all-pos file, or the -top-pos and -bottom-pos ones; ASCII", async (t) => {
       if (!(await open(t, "pcbnew.EditorControl.generatePosFile", "Generate Placement Files"))) return;
       const radio = (name, i) => dialog().querySelectorAll(`input[name="${name}"]`)[i];
       radio("pos-format", 1)?.click(); // CSV
@@ -131,12 +131,24 @@
       both?.click();
       await sleep(150);
       let res = await press(/^Generate/, "fab/pos");
-      judged(t, "CSV", res, /\.csv$/i);
-      t(res.reply?.req?.format === "csv" && res.reply?.req?.side === "both", `asked for CSV, both sides (${JSON.stringify(res.reply?.req)})`);
+      let files = judged(t, "CSV", res, /\.csv$/i);
+      t(files.length === 1 && /-all-pos\.csv$/.test(files[0]), `both sides in one -all-pos file (${files.map(base).join(", ")})`);
+      t(res.reply?.req?.format === "csv" && res.reply?.req?.side === "both" && res.reply?.req?.single_file === true, `asked for CSV, both sides, one file (${JSON.stringify(res.reply?.req)})`);
+      // The checkbox off, as KiCad's dialog offers: the top's and the bottom's files, named as `PLACE_FILE_EXPORTER::DecorateFilename` names them.
+      const single = box("Generate single file");
+      if (t(!!single, "the dialog has KiCad's single-file box")) {
+        single.click();
+        res = await press(/^Generate/, "fab/pos");
+        files = judged(t, "CSV, two files", res, /\.csv$/i);
+        t(files.length === 2 && files.some((f) => /-top-pos\.csv$/.test(f)) && files.some((f) => /-bottom-pos\.csv$/.test(f)), `the top's and the bottom's files (${files.map(base).join(", ")})`);
+        t(res.reply?.req?.single_file === false, "the server was told the box is off");
+        single.click(); // back to one file
+      }
       radio("pos-format", 0)?.click(); // ASCII
-      await sleep(1500); // the second-long window of the file list, as above
+      await sleep(150);
       res = await press(/^Generate/, "fab/pos");
-      judged(t, "ASCII", res, /\.pos$/i);
+      files = judged(t, "ASCII", res, /\.pos$/i);
+      t(files.length === 1 && /-all\.pos$/.test(files[0]), `ASCII, both sides, one file (${files.map(base).join(", ")})`);
     });
 
     const exportOne = (action, title, route, re) => async (t) => {

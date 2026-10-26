@@ -200,7 +200,8 @@ half is `crates/kicad/src/library_table.rs` (the format, the variables, how the 
 | A CSV placement file was named `.pos` | `DIALOG_GEN_FOOTPRINT_POSITION::CreateFiles`: `fn.SetExt( wxT( "csv" ) )` | `pcb_ext_for("pos", --format csv)` is `csv` |
 | The DRC's parity test failed on a board with no stored schematic: "design has no placement section" | `--schematic-parity` compares the board with the schematic | `load_with_schematic` takes the derived root and screens into the board's design instead of replacing it |
 | The Symbol Editor's pin tool placed at once, and Ctrl+N made an `Untitled` symbol with no name dialog | `SYMBOL_EDITOR_PIN_TOOL::CreatePin` opens Pin Properties before the pin is added (Cancel drops it); `CreateNewSymbol` opens `DIALOG_LIB_NEW_SYMBOL` for the name and the first properties | fixed 2026-10-25 by the DS lane (`ds/handoff-1025`): `kicad-port/pinPlacement.ts`, `kicad-port/symPinTemplate.ts`, `NewSymbolDialog.tsx`, `PinPropertiesDialog.tsx` |
+| Generate Placement Files wrote one file, unnamed, for "Both sides" | `PLACE_FILE_EXPORTER::DecorateFilename`: `-all` for both sides in one file, `-top`/`-bottom` for two (`m_singleFile` unchecked), the CSV adding `-pos` before the extension | fixed 2026-10-26 by the DS lane: `kicad-engine::place_file_names`/`export_pcb_placement`, the dialog's "Generate single file with both front and back positions" box, `eda fab pos --separate-sides` |
 
 Found, not fixed:
-"Both sides" in Generate Placement Files writes one file, not KiCad's top and bottom ones, and the names lack `-top-pos` / `-all-pos`; the export routes list
+The export routes list
 the files modified since a second before the run; the parity DRC of the mcu30 example finds 76 differences between its board and its derived schematic.
