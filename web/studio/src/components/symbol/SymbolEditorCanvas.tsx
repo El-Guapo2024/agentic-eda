@@ -37,7 +37,7 @@ import { computeClickModifiers, applySingleClickModifier, hasModifier } from "..
 import { distToSegment } from "../canvas/itemHitTest";
 import { nextPinNumber } from "../../kicad-port/pinNumbering";
 import { polyBegin, polyContinue, polyFinish } from "../../kicad-port/symPolyDraw";
-import { newPinFromClick, pinTemplateOf } from "../../kicad-port/symPinTemplate";
+import { newPinFromClick } from "../../kicad-port/symPinTemplate";
 import { pinShown } from "../../kicad-port/symPinText";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useActionRunner } from "../../actions/useActionRunner";
@@ -625,15 +625,6 @@ export function SymbolEditorCanvas() {
     ];
     setContextMenu({ x: e.clientX, y: e.clientY, entries });
   };
-
-  // Remember the last-edited pin's own template (`g_LastPin*`, saved by `EditPinProperties`), the way
-  // `FootprintCanvas.tsx`'s own `m_Pad_Master` push-back comment describes.
-  useEffect(() => {
-    if (state.selection.size !== 1) return;
-    const [only] = state.selection;
-    const p = sym?.pins.find((pin) => pin.id === only);
-    if (p) dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(p) });
-  }, [state.selection, sym, dispatch]);
 
   return (
     <div

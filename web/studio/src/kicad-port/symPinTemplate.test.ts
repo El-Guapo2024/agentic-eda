@@ -7,8 +7,8 @@ const template = { ...DEFAULT_PIN_TEMPLATE };
 
 test("newPinFromClick: the sticky defaults and the click's place, in mm and +y up", () => {
   const pin = newPinFromClick(template, 2, 1, "5", { x: -5.08, y: 2.54 });
-  assert.deepEqual(pin, { ...template, number: "5", at: { x: -5.08, y: 2.54 }, unit: 2, body_style: 1 });
-  assert.equal(pin.name, "");
+  assert.deepEqual(pin, { ...template, name: "", number: "5", at: { x: -5.08, y: 2.54 }, unit: 2, body_style: 1 });
+  assert.equal(pin.name, "", "g_LastPin* holds no name: a new pin starts without one");
   assert.equal(pin.length_mm, 2.54, "the default 100 mil pin");
 });
 
@@ -39,7 +39,6 @@ test("pinTemplateOf: what the next pin carries, and what it does not", () => {
     alternates: [{ name: "UART", electrical_type: "output", shape: "line" }],
   };
   assert.deepEqual(pinTemplateOf(pin), {
-    name: "VIN",
     electrical_type: "power_in",
     shape: "inverted",
     angle_deg: 90,
@@ -51,6 +50,7 @@ test("pinTemplateOf: what the next pin carries, and what it does not", () => {
     body_style: 2,
   });
   assert.ok(!("alternates" in pinTemplateOf(pin)), "the alternate functions are the pin's own, not a default for the next");
+  assert.ok(!("name" in pinTemplateOf(pin)), "the name is the pin's own too: KiCad's g_LastPin* has no name");
 });
 
 test("samePinTemplate: what the poll may re-set without a re-render", () => {

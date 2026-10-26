@@ -1,14 +1,15 @@
 // `DIALOG_LIB_NEW_SYMBOL` as `SYMBOL_EDIT_FRAME::CreateNewSymbol` opens it with no parent (eeschema/dialogs/dialog_lib_new_symbol.cpp):
 // the symbol's name -- the validator's "Symbol must have a name.", and a name the library already has is refused -- and the properties the
-// new symbol starts with: the default reference designator, the units per package with "All units are interchangeable", the alternate body
-// style, "Create symbol as power symbol" (which, as KiCad's dialog does, also excludes it from the BOM and the board and locks those two
-// boxes), the pin name position offset and the pin number/name text. "Place pin names inside" has no field in this model, and a parent
-// symbol is the Derive from Existing Symbol dialog's question, so this one doesn't ask them. OK is one `new_symbol` and its properties (one
-// undo step, `SymbolEditorApi.newSymbol`); the new symbol opens in the editor.
+// new symbol starts with: the default reference designator, the units per package with "All units are interchangeable" (unchecked, so a
+// multi-unit symbol's units are locked, `LockUnits( !aProps.unitsInterchangeable )`), the alternate body style, "Create symbol as power
+// symbol" (which, as KiCad's dialog does, also excludes it from the BOM and the board and locks those two boxes), the pin name position
+// offset with "Pin name inside" (`CreateSymbol`: inside keeps the offset, 20 mils for one of 0; outside writes 0) and the pin number/name
+// text. A parent symbol is the Derive from Existing Symbol dialog's question, so this one doesn't ask it. OK is one `new_symbol` and its
+// properties (one undo step, `SymbolEditorApi.newSymbol`); the new symbol opens in the editor.
 import { useEffect, useState } from "react";
 import { fetchSymbolEditorNames } from "../../api/client";
 import { splitLibName } from "../../kicad-port/libraryNames";
-import { newSymbolNameCheck, uniqueSymbolLibId } from "../../kicad-port/symEditActions";
+import { newSymbolNameCheck, symbolExistsMessage, uniqueSymbolLibId } from "../../kicad-port/symEditActions";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { useStudioState } from "../../state/store";
 import { nmFrom, nmTo } from "../../state/units";
@@ -28,12 +29,14 @@ export function NewSymbolDialog() {
   const [name, setName] = useState("");
   const [reference, setReference] = useState(DEFAULT_REFERENCE);
   const [unitCount, setUnitCount] = useState(1);
-  const [interchangeable, setInterchangeable] = useState(true);
+  const [interchangeable, setInterchangeable] = useState(false);
   const [alternateBodyStyle, setAlternateBodyStyle] = useState(false);
   const [power, setPower] = useState(false);
   const [excludeFromBom, setExcludeFromBom] = useState(false);
   const [excludeFromBoard, setExcludeFromBoard] = useState(false);
   const [pinNameOffsetMm, setPinNameOffsetMm] = useState(DEFAULT_PIN_NAME_OFFSET_MM);
+  /** "Pin name inside" (`m_checkShowPinNameInside`, checked): `CreateSymbol` keeps the offset when it is on and writes 0 when it is off. */
+  const [namesInside, setNamesInside] = useState(true);
   const [showPinNumbers, setShowPinNumbers] = useState(true);
   const [showPinNames, setShowPinNames] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,12 +48,13 @@ export function NewSymbolDialog() {
     setName("");
     setReference(DEFAULT_REFERENCE);
     setUnitCount(1);
-    setInterchangeable(true);
+    setInterchangeable(false);
     setAlternateBodyStyle(false);
     setPower(false);
     setExcludeFromBom(false);
     setExcludeFromBoard(false);
     setPinNameOffsetMm(DEFAULT_PIN_NAME_OFFSET_MM);
+    setNamesInside(true);
     setShowPinNumbers(true);
     setShowPinNames(true);
     setError(null);
@@ -82,12 +86,15 @@ export function NewSymbolDialog() {
     }
     const check = newSymbolNameCheck(name, existing);
     if (check.error) return setError(check.error);
-    // The verb's own words for a taken name (`ops_symbol_exists`). KiCad's dialog would offer "Overwrite" here; `new_symbol` has no such
-    // option (the project library's entry would be replaced by an empty one), so the dialog asks for another name instead.
-    if (check.exists) return setError("a symbol with this name already exists; pick another name");
+    // KiCad's validator words for a taken name. Its dialog would then offer "Overwrite"; `new_symbol` has no such option (the project
+    // library's entry would be replaced by an empty one), so ours says the same words and asks for another name.
+    if (check.exists) return setError(symbolExistsMessage(check.name, splitLibName(check.libId).lib));
     setBusy(true);
     setError(null);
     try {
+      // `CreateSymbol`: `if( aProps.pinNameInside ) { SetPinNameOffset( aProps.pinTextPosition ); if( GetPinNameOffset() == 0 ) SetPinNameOffset( 1 ); }
+      // else SetPinNameOffset( 0 );` -- an inside offset of 0 is 20 mils here, as Symbol Properties' "Place pin names inside" already makes it.
+      const offsetMm = namesInside ? (pinNameOffsetMm === 0 ? DEFAULT_PIN_NAME_OFFSET_MM : pinNameOffsetMm) : 0;
       const done = await api.newSymbol({
         name: check.name,
         reference,
@@ -97,7 +104,7 @@ export function NewSymbolDialog() {
         power,
         excludeFromBom,
         excludeFromBoard,
-        pinNameOffsetMm,
+        pinNameOffsetMm: offsetMm,
         showPinNumbers,
         showPinNames,
       });
@@ -146,6 +153,7 @@ export function NewSymbolDialog() {
                 type="number"
                 step="any"
                 value={offset}
+                disabled={!namesInside}
                 onChange={(e) => Number.isFinite(Number(e.target.value)) && setPinNameOffsetMm(Math.max(0, nmFrom(Number(e.target.value), units) / 1e6))}
                 aria-label="Pin name position offset"
                 style={{ width: 80 }}
@@ -155,7 +163,7 @@ export function NewSymbolDialog() {
           </div>
           <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
             <label>
-              <input type="checkbox" checked={interchangeable} onChange={(e) => setInterchangeable(e.target.checked)} /> All units are interchangeable
+              <input type="checkbox" checked={interchangeable} onChange={(e) => setInterchangeable(e.target.checked)} data-testid="new-symbol-interchangeable" /> All units are interchangeable
             </label>
             <label>
               <input type="checkbox" checked={alternateBodyStyle} onChange={(e) => setAlternateBodyStyle(e.target.checked)} /> Create symbol with alternate body style (De Morgan)
@@ -188,6 +196,9 @@ export function NewSymbolDialog() {
             </label>
             <label>
               <input type="checkbox" checked={showPinNames} onChange={(e) => setShowPinNames(e.target.checked)} /> Show pin name text
+            </label>
+            <label>
+              <input type="checkbox" checked={namesInside} onChange={(e) => setNamesInside(e.target.checked)} data-testid="new-symbol-names-inside" /> Pin name inside
             </label>
           </div>
           {error && (

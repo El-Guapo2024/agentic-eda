@@ -1,16 +1,15 @@
 // `SYMBOL_EDITOR_PIN_TOOL`'s sticky defaults (`g_LastPinType`/`g_LastPinShape`/`g_LastPinOrient`/`g_LastPinLength`/
 // `g_LastPinNameSize`/`g_LastPinNumSize`/`g_LastPinCommonUnit`/`g_LastPinCommonBodyStyle`/`g_LastPinVisible`, set at the end of
 // `EditPinProperties` and read by `CreatePin`), and the pin one click of the Pin tool makes from them. Pure, so the unit tests can
-// pin the "the next pin carries the last one's look" rule down: the Pin Properties dialog's OK is now where a new pin is edited,
-// and it must leave what it was told for the click after.
+// pin the "the next pin carries the last one's look" rule down: only the Pin Properties dialog's OK (`EditPinProperties`) updates
+// the template -- merely selecting a pin does not -- and it leaves what it was told for the click after.
 import type { LibrarySymbolPin, MmPoint, PinElectricalType, PinShape } from "../api/types";
 import { orientationToAngleDeg } from "./pinOrientation";
 
 /** What the next pin starts with. `unit`/`body_style` are the last pin's: 0 means "common to all units/body styles", which
  * `CreatePin` then keeps for the next pin (`g_LastPinCommonUnit ? 0 : GetUnit()`); any other value takes the unit/body style being
- * edited. The alternate functions and the pin's own id, number and place are never carried. */
+ * edited. The alternate functions and the pin's own id, number, place and name are never carried (`g_LastPin*` holds no name). */
 export interface PinTemplate {
-  name: string;
   electrical_type: PinElectricalType;
   shape: PinShape;
   angle_deg: number;
@@ -24,7 +23,6 @@ export interface PinTemplate {
 
 /** `SYMBOL_EDITOR_SETTINGS::m_Defaults`: input/line/right (180deg, see pinOrientation.ts), 100 mil (2.54mm) length, 50 mil (1.27mm) name/number text. */
 export const DEFAULT_PIN_TEMPLATE: PinTemplate = {
-  name: "",
   electrical_type: "input",
   shape: "line",
   angle_deg: orientationToAngleDeg("right"),
@@ -41,6 +39,7 @@ export const DEFAULT_PIN_TEMPLATE: PinTemplate = {
 export function newPinFromClick(template: PinTemplate, activeUnit: number, activeBodyStyle: number, number: string, at: MmPoint): LibrarySymbolPin {
   return {
     ...template,
+    name: "",
     number,
     at,
     unit: template.unit === 0 ? 0 : activeUnit,
@@ -51,7 +50,6 @@ export function newPinFromClick(template: PinTemplate, activeUnit: number, activ
 /** The template a pin leaves for the next one (the fields `EditPinProperties` saves). */
 export function pinTemplateOf(pin: LibrarySymbolPin): PinTemplate {
   return {
-    name: pin.name,
     electrical_type: pin.electrical_type,
     shape: pin.shape,
     angle_deg: pin.angle_deg,
@@ -68,7 +66,6 @@ export function pinTemplateOf(pin: LibrarySymbolPin): PinTemplate {
  * re-render for a template it already has. */
 export function samePinTemplate(a: PinTemplate, b: PinTemplate): boolean {
   return (
-    a.name === b.name &&
     a.electrical_type === b.electrical_type &&
     a.shape === b.shape &&
     a.angle_deg === b.angle_deg &&

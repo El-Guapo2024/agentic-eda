@@ -251,3 +251,115 @@ stopped there, under the lane's rule for a design decision that spans many crate
 - I did not run the whole workspace test suite or the other browser checks; the kicad-engine suite, the eda-cli fab filter, the two slow
   kicad-cli tests, the typecheck and `plot-exports` are green. Say if the lane gate wants `tools/check.sh fast` and the rest of
   `tools/run-all-checks.sh` too.
+
+## Item 4, leftover 5 -- the checks P20 left uncovered: Page Settings and the drill/place origin, Board Statistics and Swap Layers, and the board view (done 2026-10-26)
+
+**What I did.**
+
+- Registered nothing new in `tools/run-all-checks.sh`: each check file's header already names a board kind `make_board` builds -- `board=mcu30`
+  for `board-page-origin` (a fresh `eda board new`), `board=mcu30-zones` for `board-stats` (routed with pours, so both copper sides have
+  something to swap) and `board=mcu30-routed` for `board-view` -- so the three names run as the runner reads them.
+- Ran `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 board-page-origin board-stats board-view`. The first run had two failing checks,
+  both on assertions that were wrong about the studio rather than defects in it (below). Fixed the checks only; no studio or runner code was
+  touched, and no assertion was dropped or weakened.
+
+**The first run and what each failure was.**
+
+- `board-page-origin`, scenario "Page Settings on the board: paper and title block in one undo step, Cancel and an unchanged OK sending
+  nothing": `FAIL: the change is one set_board_page command (page --paper A3 --title "P9A page")`. The check tested `/set_board_page/` against
+  `activity[0].cmd`, but the activity log holds no op name: `Activity` is `{ t, by, cmd, ok, message }` (`web/studio/src/api/types.ts`) and
+  `cmd` is the CLI line `cmd_line` builds (`crates/cli/src/board.rs`, `Cmd::SetBoardPage`) -- `page --paper A3 --title "P9A page"`. The
+  "one command, not a batch of two settings" assertion stands, now as the exact CLI line, `ok === true`, and exactly one new activity entry
+  (`before.activity.length + 1`) -- stronger than the regex it replaced, not looser.
+- `board-view`, scenario "N and Shift+N cycle the grid, Ctrl+U switches units, and the status bar's X/Y and dx/dy follow the pointer and
+  Space", three notes:
+  - `FAIL: the status bar shows the pointer at 15.0850, 16.3097 mm (Z 0.79 15.085, 16.310 mm ...)` -- `formatXY` prints the unit's own
+    decimals (`DECIMALS` in `web/studio/src/state/units.ts`: 3 for mm, 1 for mil, 4 for in) and the check hard-coded 4. The readout is right;
+    the expected string was wrong (now the unit's decimals, with `u0` still the unit used).
+  - `FAIL: dx/dy are measured from the Space point (undefined; expected 1.9194, 0.9597 mm)` and `FAIL: and dist is their length (undefined
+    undefined; expected 2.1460 mm)` -- the check's `status()` helper collapses every run of whitespace to one space (`replace(/\s+/g, " ")`)
+    and the regex still asked for two spaces between the fields (`dx ... {2}dy ...`). The status bar's `dx <len> <unit>  dy ...  dist ...`
+    layout (`StatusBar.tsx`) is right; the regex was wrong.
+  - The rest of that scenario (N/Shift+N, Ctrl+U, Space -> `common.Control.resetLocalCoords` -> `SET_LOCAL_ORIGIN` at `state.cursorNm`) was
+    green, so the Space behaviour itself was never in question.
+- No studio defect was found: there is no finding to record against the studio beyond these two check fixes.
+
+**Commits.**
+
+- `a88caf31` -- browser checks: Page Settings and the drill/place origin, Board Statistics and Swap Layers, and the board view's zoom, pan,
+  grid, units and context menu
+- this log, in its own commit.
+
+**Tests run.**
+
+- `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 board-page-origin board-stats board-view`, first run:
+  `run-all-checks: 1 passed, 2 failed of 3 in 111s (logs: /tmp/run-all-checks.b6gj/runs)`.
+- The same command after the fixes:
+
+  ```
+  run-all-checks: 3 passed, 0 failed of 3 in 89s (logs: /tmp/run-all-checks.XIny/runs)
+  ```
+
+- Its line items: `ok board-page-origin 4 scenarios 11s board=mcu30`, `ok board-stats 5 scenarios 66s board=mcu30-zones`,
+  `ok board-view 6 scenarios 12s board=mcu30-routed`.
+
+**Unsure / for the reviewer.**
+
+- The activity log exposes no op name, so a check can only assert the CLI line a command is typed as, or that no new entry appeared. If
+  later checks want the op, `Activity` and `activity.jsonl` would need it; the server was not changed here.
+- `board-stats` runs its Swap Layers scenarios with the workspace's strict toggle off (as `board-edit.check.js` does) and puts the toggle
+  back: swapping F.Cu with B.Cu moves the tracks and zones but not the SMD pads, so strict (the default) refuses the swap for the
+  connectivity it breaks. Whether the dialog should behave differently under strict is a separate question about the studio, not about this
+  check.
+- `board-stats` needs kicad-cli for `POST /api/board_stats` and waits up to 90 s for the dialog to fill; the header's `minutes=10` covers the
+  slow runs seen so far (66 s wall for the check), but a machine without kicad-cli will fail on the setup assertion, as intended.
+
+## Symbol Editor review corrections F1-F4 on `4a3fc95c` (done 2026-10-26)
+
+**What I did** (from the Claude reviewer, checked against KiCad 8303b2ad).
+
+- **F1**: New Symbol's "All units are interchangeable" starts **unchecked** (`dialog_lib_new_symbol_base.cpp:78` never calls `SetValue`), so
+  `CreateSymbol`'s `LockUnits( !aProps.unitsInterchangeable )` locks a new multi-unit symbol made with default answers. The store already turned
+  that into `units_locked: unitCount > 1 && !unitsInterchangeable`, so no model change was needed.
+- **F2**: added KiCad's "Pin name inside" checkbox, **checked** (`dialog_lib_new_symbol_base.cpp:147-148`). OK folds it into `pinNameOffsetMm` the
+  way `SymbolPropertiesDialog.tsx`'s "Place pin names inside" already does: inside keeps the offset, an inside offset of 0 becomes 20 mils
+  (0.508 mm), outside writes 0 (`CreateSymbol`, `lib_symbol_library_manager.cpp:55`). The offset field is disabled while the box is off. No model or
+  writer change.
+- **F3**: `PinTemplate` no longer carries `name` (`g_LastPin*`, `symbol_editor_pin_tool.cpp:38-48` and `~197-205`, holds none);
+  `newPinFromClick` starts every pin with `name: ""`. Removed the canvas effect that saved `pinTemplateOf(pin)` whenever one pin was selected:
+  only Pin Properties' OK updates the template now -- the pending pin's OK (as before) and an edited pin's OK (`EditPinProperties` saves the
+  globals for that case too), which previously did not.
+- **F4**: the taken-name refusal is KiCad's own wording, "Symbol '%s' already exists in library '%s'." (`symbolExistsMessage`, the name
+  unescaped as the validator does), with no Overwrite, which `new_symbol` cannot do. The lib-edit regex now asks for those words.
+- **Parity**: `web/studio/PARITY-symedit.md` -- the Pin tool and Ctrl+N rows corrected, and a new "Differs from KiCad" section: a pin is placed
+  with one click here (OK places it; the occupied question is asked at OK) where KiCad's `TwoClickPlace` places on a second click; the name field
+  is prefilled "Untitled"/"Untitled_N" where KiCad's starts empty; the name is trimmed.
+- Tests written first: `symPinTemplate.test.ts` (no `name` in the template; a click's pin starts unnamed) and `symEditActions.test.ts`
+  (`symbolExistsMessage`: words, unescaping, no Overwrite), plus two `lib-edit.check.js` scenarios -- New Symbol's defaults and the offset
+  (two units + unchecked interchangeable is `units_locked: true`; inside with offset 0 gives 0.508 mm; outside gives 0) and the template (the
+  next click starts from the last OK's look but with no name; selecting a pin does not reset it).
+
+**Commits.**
+
+- `c943dd26` -- studio: four Symbol Editor corrections from the 4a3fc95c review
+- this log, in its own commit.
+
+**Tests run.**
+
+- Failing first: `npm --prefix web/studio run test:unit` EXIT 1 -- `TS2305: Module '"./symEditActions"' has no exported member 'symbolExistsMessage'`
+  (the template tests were changed to the new rule in the same edit).
+- After: `npm --prefix web/studio run test:unit` 2478 tests, 2478 pass, 0 fail, EXIT 0; `npm --prefix web/studio run typecheck` EXIT 0;
+  `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 lib-edit` -> `ok lib-edit 15 scenarios 70s board=mcu30`,
+  `run-all-checks: 1 passed, 0 failed of 1 in 70s`, EXIT 0 (the check had 13 scenarios before; the two new ones are the two above).
+- No Rust changed (no model, writer or verb), so no cargo run this round.
+- `npm test` in `web/studio` has no such script (`Missing script: "test"`); the package's runner is `npm run test:unit`, which I ran.
+
+**Unsure / for the reviewer.**
+
+- F2's "inside with an offset of 0" becomes **20 mils** here, as `SymbolPropertiesDialog`'s "Place pin names inside" already makes it, where
+  `CreateSymbol` itself calls `SetPinNameOffset( 1 )` (1 IU = 0.0001 mm). The reviewer said to copy the existing dialog, so the two dialogs agree;
+  KiCad's exact 1 IU is not reproduced.
+- Added the template save on an **edited** pin's OK as well. KiCad's `EditPinProperties` saves `g_LastPin*` for that path, and the reviewer's
+  "only the pin dialog's OK" read allows it; before, only the pending pin's OK saved the template.
+- `Pin name inside` changes only `pin_name_offset_mm` in the batch; "Show pin name text" still owns `pin_names_hidden`, as `CreateSymbol` keeps
+  them separate.

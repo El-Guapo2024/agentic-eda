@@ -407,7 +407,8 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
 
 /**
  * `DIALOG_LIB_NEW_SYMBOL` as `CreateNewSymbol` asks it with no parent (`NewSymbolDialog.tsx`): the name and the properties the model
- * has. "Place pin names inside" has no field in this model, and a parent symbol is the Derive dialog's question, so neither is here.
+ * has. "Pin name inside" is already folded into `pinNameOffsetMm` (`CreateSymbol` keeps the offset when it is inside -- 20 mils for one
+ * of 0 -- and writes 0 when it is outside), and a parent symbol is the Derive dialog's question, so neither is a field here.
  */
 export interface NewSymbolRequest {
   /** `GetName()`'s form: trimmed, spaces to underscores, LIB_ID specials escaped -- `newSymbolNameCheck` makes it. */
@@ -416,7 +417,8 @@ export interface NewSymbolRequest {
   reference: string;
   /** "Number of units per package" (1..64). */
   unitCount: number;
-  /** "All units are interchangeable" (`units_locked` is the opposite, and only for a symbol of several units). */
+  /** "All units are interchangeable" (`units_locked` is the opposite, and only for a symbol of several units). KiCad's dialog starts it
+   * unchecked, so a multi-unit symbol's units are locked unless the person checks it. */
   unitsInterchangeable: boolean;
   /** "Create symbol with alternate body style (De Morgan)". */
   alternateBodyStyle: boolean;
@@ -424,7 +426,8 @@ export interface NewSymbolRequest {
   power: boolean;
   excludeFromBom: boolean;
   excludeFromBoard: boolean;
-  /** "Pin name position offset", in mm (KiCad's dialog shows mils; the studio shows the user's unit). */
+  /** "Pin name position offset", in mm (KiCad's dialog shows mils; the studio shows the user's unit), as `CreateSymbol` settles it from
+   * "Pin name inside": the offset when inside, 20 mils for an inside offset of 0, and 0 when outside. */
   pinNameOffsetMm: number;
   /** "Show pin number text" / "Show pin name text" (`pin_numbers_hidden`/`pin_names_hidden` are the opposites). */
   showPinNumbers: boolean;
