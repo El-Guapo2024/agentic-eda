@@ -828,8 +828,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Delete as actions did nothing or were not offered (only the canvas's keys worked); Pre-defined Sizes' Apply was two undo steps; Escape on a popup menu also closed
   the dialog under it (the DRC window's marker menu); a CSV placement file was named `.pos`; on a board with no stored schematic (every board `eda board new` makes)
   the DRC's "Test for parity between PCB and schematic" failed with "design has no placement section" (`load_with_schematic` replaced the design by the derived one).
-- Found, not fixed (listed for their packages): the Symbol Editor's pin tool and New Symbol place at once where KiCad asks first (`SYMBOL_EDITOR_PIN_TOOL::CreatePin`
-  opens Pin Properties, `DIALOG_LIB_NEW_SYMBOL`); a symbol placed from the library under a lib_id the design already has keeps the design's definition (library_place.rs,
+- Fixed 2026-10-25 (the DS lane, `ds/handoff-1025`): the Symbol Editor's pin tool and New Symbol placed at once where KiCad asks first -- the pin tool's click now
+  opens Pin Properties (`SYMBOL_EDITOR_PIN_TOOL::CreatePin`; Cancel places nothing, OK places it after `PlacePin`'s Synchronized Pins Mode question) and Ctrl+N opens
+  a `DIALOG_LIB_NEW_SYMBOL`-shaped dialog (name validator, the default reference, units, body style, power, BOM/board, pin name offset and pin texts; one undo step).
+- Found, not fixed (listed for their packages): a symbol placed from the library under a lib_id the design already has keeps the design's definition (library_place.rs,
   by design), so `Device:R` placed from the chooser on mcu30 draws the built-in R, not KiCad's; "Both sides" in Generate Placement Files writes one file where KiCad
   writes a top and a bottom one, and the files are not named `-top-pos` / `-all-pos`; the export routes list the files modified since a second before the run, so a
   second run within that second lists the first one's files too; the parity DRC of the mcu30 example, placed and routed, finds 76 differences between the board and the

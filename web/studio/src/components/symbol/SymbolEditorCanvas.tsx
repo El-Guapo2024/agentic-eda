@@ -36,11 +36,9 @@ import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
 import { nextPinNumber } from "../../kicad-port/pinNumbering";
-import { orientationToAngleDeg } from "../../kicad-port/pinOrientation";
 import { polyBegin, polyContinue, polyFinish } from "../../kicad-port/symPolyDraw";
-import { pinOccupying, synchronizePins } from "../../kicad-port/symPinSync";
+import { newPinFromClick, pinTemplateOf } from "../../kicad-port/symPinTemplate";
 import { pinShown } from "../../kicad-port/symPinText";
-import { askConfirm } from "../library/libraryDialogs";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { stackedPinMenuState } from "../../kicad-port/stackedPins";
@@ -59,18 +57,6 @@ const SHAPE_TOOL_KIND: Partial<Record<SymToolId, SymShapeKind>> = {
 
 /** Draw Lines and Draw Polygons are one tool in this KiCad (`SHAPE_T::POLY` for both): points are added by clicks and the shape ends on a double click or Enter. */
 const isPolyKind = (k: SymShapeKind) => k === "lines" || k === "polygon";
-
-/** `SYMBOL_EDITOR_PIN_TOOL`'s own sticky defaults (`g_LastPinType`/`g_LastPinShape`/`g_LastPinOrient`, `SYMBOL_EDITOR_SETTINGS::m_Defaults`), confirmed directly from source: input/line/right (180deg, see pinOrientation.ts), 100 mil (2.54mm) length, 50 mil (1.27mm) name/number text. Reused here as this editor's own "last placed pin" memory the same way `FootprintCanvas.tsx`'s `DEFAULT_PAD_TEMPLATE` stands in for `m_Pad_Master`. */
-const DEFAULT_PIN_TEMPLATE: Omit<LibrarySymbolPin, "id" | "number" | "at" | "unit" | "body_style"> = {
-  name: "",
-  electrical_type: "input",
-  shape: "line",
-  angle_deg: orientationToAngleDeg("right"),
-  length_mm: 2.54,
-  hidden: false,
-  name_size_mm: 1.27,
-  number_size_mm: 1.27,
-};
 
 function graphicPoints(g: LibrarySymbolGraphic): [number, number][] {
   const toNm = (p: { x: number; y: number }) => mmPointToNm(p);
@@ -188,9 +174,6 @@ export function SymbolEditorCanvas() {
   const gestureRef = useRef<ClickDragGesture | null>(null);
   /** A right-button press that became a pan-drag: the `contextmenu` event that follows its release must not open the menu (a drag is not a click). */
   const justPannedRef = useRef(false);
-  const pinTemplateRef = useRef<Omit<LibrarySymbolPin, "id" | "number" | "at" | "unit" | "body_style">>(DEFAULT_PIN_TEMPLATE);
-  /** The number the Pin tool gave its latest pin, per open symbol -- see the pin-tool branch of onPointerDown. */
-  const lastPlacedPinRef = useRef<{ libId: string | null; number: string } | null>(null);
   /** The view as of now, for work that finishes after a round trip (the anchor tool re-centres the view once the symbol has moved). */
   const viewRef = useRef(state.view);
   viewRef.current = state.view;
@@ -362,24 +345,6 @@ export function SymbolEditorCanvas() {
   }, [state.drawState, state.activeUnit, state.activeBodyStyle, api, dispatch]);
 
   /**
-   * `PlacePin`: with Synchronized Pins Mode on, a pin dropped on top of another one (any unit, a body style that matches) asks first --
-   * "This position is already occupied by another pin, in unit %d." -- and only a "Place Pin Anyway" goes on.
-   */
-  const confirmPinPlacement = useCallback(
-    async (pin: LibrarySymbolPin): Promise<boolean> => {
-      if (!sym || !synchronizePins(state.syncPins, sym.unit_count, !!sym.units_locked)) return true;
-      const occupant = pinOccupying(pin, sym.pins);
-      if (!occupant) return true;
-      return askConfirm({
-        title: "Confirmation",
-        message: `This position is already occupied by another pin, in unit ${occupant.unit}.\n\nDisable the 'Synchronized Pins Mode' option to avoid this message.`,
-        okLabel: "Place Pin Anyway",
-      });
-    },
-    [sym, state.syncPins]
-  );
-
-  /**
    * `SYMBOL_EDITOR_DRAWING_TOOLS::PlaceAnchor`: the click point becomes the symbol's origin (`symbol->Move( -cursorPos )`) and the view is
    * "refreshed without changing the viewport" -- re-centred by the same amount, so the symbol stays where it is on the screen.
    */
@@ -425,16 +390,12 @@ export function SymbolEditorCanvas() {
     const [sx, sy] = placing ? toolPoint(e, wx, wy) : [wx, wy];
 
     if (state.activeTool === "pin" && sym) {
-      // The pin just placed may not be in `sym.pins` yet (the document is re-polled after the round trip), so seed from it too:
-      // a quick second click must get the NEXT number, as the C++ tool's `m_lastPin` carry does.
-      const last = lastPlacedPinRef.current;
+      // `SYMBOL_EDITOR_PIN_TOOL::CreatePin`: the click makes the pin (the sticky defaults at that place) and Pin Properties asks for its
+      // properties before it is added -- OK adds it, Cancel drops it. The pin just placed may not be in `sym.pins` yet (the document is
+      // re-polled after the round trip), so the next number is seeded from `lastPlacedPin` too, as the C++ tool's `g_lastPin` carry does.
+      const last = state.lastPlacedPin;
       const number = nextPinNumber(last && last.libId === state.libId ? [...sym.pins, { number: last.number }] : sym.pins);
-      const pin: LibrarySymbolPin = { ...pinTemplateRef.current, number, unit: state.activeUnit, body_style: state.activeBodyStyle, at: nmPointToMm(sx, sy) };
-      void confirmPinPlacement(pin).then((go) => {
-        if (!go) return;
-        lastPlacedPinRef.current = { libId: state.libId, number };
-        void api.addPin(pin);
-      });
+      dispatch({ type: "SET_PENDING_PIN", pin: newPinFromClick(state.pinTemplate, state.activeUnit, state.activeBodyStyle, number, nmPointToMm(sx, sy)) });
       return;
     }
 
@@ -665,16 +626,14 @@ export function SymbolEditorCanvas() {
     setContextMenu({ x: e.clientX, y: e.clientY, entries });
   };
 
-  // Remember the last-placed pin's own template, mirroring
-  // `FootprintCanvas.tsx`'s own `m_Pad_Master` push-back comment.
+  // Remember the last-edited pin's own template (`g_LastPin*`, saved by `EditPinProperties`), the way
+  // `FootprintCanvas.tsx`'s own `m_Pad_Master` push-back comment describes.
   useEffect(() => {
     if (state.selection.size !== 1) return;
     const [only] = state.selection;
     const p = sym?.pins.find((pin) => pin.id === only);
-    if (p) {
-      pinTemplateRef.current = { name: p.name, electrical_type: p.electrical_type, shape: p.shape, angle_deg: p.angle_deg, length_mm: p.length_mm, hidden: p.hidden, name_size_mm: p.name_size_mm, number_size_mm: p.number_size_mm };
-    }
-  }, [state.selection, sym]);
+    if (p) dispatch({ type: "SET_PIN_TEMPLATE", pin: pinTemplateOf(p) });
+  }, [state.selection, sym, dispatch]);
 
   return (
     <div

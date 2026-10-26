@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { uniqueSymbolLibId } from "./symEditActions";
+import { newSymbolNameCheck, uniqueSymbolLibId } from "./symEditActions";
 
 test("uniqueSymbolLibId: Untitled in the project library when free", () => {
   assert.equal(uniqueSymbolLibId([]), "eda:Untitled");
@@ -20,4 +20,24 @@ test("uniqueSymbolLibId: an Untitled of another library is not a clash", () => {
 test("uniqueSymbolLibId: a different base or library", () => {
   assert.equal(uniqueSymbolLibId(["eda:Chip"], "Chip"), "eda:Chip_1");
   assert.equal(uniqueSymbolLibId([], "X", "mylib"), "mylib:X");
+});
+
+test("newSymbolNameCheck: GetName trims, underscores spaces and escapes a LIB_ID's specials", () => {
+  assert.deepEqual(newSymbolNameCheck("  My Symbol ", []), { name: "My_Symbol", libId: "eda:My_Symbol", error: null, exists: false });
+  assert.equal(newSymbolNameCheck("A:B", []).name, "A{colon}B", "a colon becomes {colon}, as EscapeString( CTX_LIBID )");
+  assert.equal(newSymbolNameCheck('a"b', []).name, "a{dblquote}b");
+  assert.equal(newSymbolNameCheck("a<b>c", []).error, null, "the escaped name is a legal lib_id");
+});
+
+test("newSymbolNameCheck: a name is required, in KiCad's words", () => {
+  assert.equal(newSymbolNameCheck("", []).error, "Symbol must have a name.");
+  assert.equal(newSymbolNameCheck("   ", []).error, "Symbol must have a name.");
+  assert.equal(newSymbolNameCheck("   ", []).exists, false);
+});
+
+test("newSymbolNameCheck: an existing name is reported for the dialog's own library only", () => {
+  assert.equal(newSymbolNameCheck("R", ["eda:R", "Device:C"]).exists, true);
+  assert.equal(newSymbolNameCheck("R", ["Device:R"]).exists, false, "another library's R is no clash");
+  assert.equal(newSymbolNameCheck("R", ["eda:R"], "mylib").exists, false);
+  assert.deepEqual(newSymbolNameCheck("R", ["eda:R"]), { name: "R", libId: "eda:R", error: null, exists: true });
 });

@@ -2284,9 +2284,10 @@ export function useActionRunner() {
         symDispatch({ type: "SET_ACTIVE_TOOL", tool: symApi.getState().activeTool === "pin" ? "select" : "pin" });
       });
 
-      // Ctrl+N (newSymbol) -- SYMBOL_EDIT_FRAME::CreateNewSymbol: an empty symbol, "Untitled" made unique, opened in the editor.
+      // Ctrl+N (newSymbol) -- SYMBOL_EDIT_FRAME::CreateNewSymbol: `DIALOG_LIB_NEW_SYMBOL` asks for the name (starting on the free
+      // "Untitled") and the new symbol's first properties; its OK makes an empty symbol and opens it.
       m.set("eeschema.SymbolLibraryControl.newSymbol", () => {
-        if (state.tab === "symbol") void symApi.newSymbol();
+        if (state.tab === "symbol") symDispatch({ type: "SET_NEW_SYMBOL_OPEN", open: true });
       });
 
       // Ctrl+Shift+S (saveLibraryAs) -- SYMBOL_EDIT_FRAME::saveLibrary( ..., aNewFile ): the library as a new `.kicad_sym`, here a download of the
