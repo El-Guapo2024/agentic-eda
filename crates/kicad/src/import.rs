@@ -740,7 +740,8 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
                 m.corner_style = CornerStyle::from_code(v);
             }
             if let Some(v) = e.get("corner_radius_percentage").and_then(|v| v.as_i64()) {
-                m.corner_radius_percentage = v.clamp(0, 100) as u32;
+                // `entry["corner_radius_percentage"].get<int>()`, no clamp (R6-R7); the model's percentage is unsigned
+                m.corner_radius_percentage = v.max(0).min(u32::MAX as i64) as u32;
             }
             if let Some(v) = e.get("single_sided").and_then(|v| v.as_bool()) {
                 m.single_sided = v;
@@ -752,9 +753,9 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
             diff_pair: read(patterns.get("diff_pair_defaults"), &b.tuning_patterns.diff_pair),
             diff_pair_skew: read(patterns.get("diff_pair_skew_defaults"), &b.tuning_patterns.diff_pair_skew),
         };
-        if next.validate().is_ok() {
-            b.tuning_patterns = next;
-        }
+        // `BOARD_DESIGN_SETTINGS`' `tuning_pattern_settings` reader takes each key as it is, each group on its own: no check (R6-R7). The page's own
+        // refusals (`TuningPatterns::validate`, beyond KiCad's panel) judge an edit, not what a file brought.
+        b.tuning_patterns = next;
     }
     let layer_of = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).filter(|s| !s.is_empty() && *s != "UNDEFINED").map(String::from);
     if let Some(list) = root.get("tuning_profiles").and_then(|t| t.get("tuning_profiles_impedance_geometric")).and_then(|v| v.as_array()) {
