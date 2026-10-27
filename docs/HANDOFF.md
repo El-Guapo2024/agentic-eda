@@ -69,6 +69,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r2-pcb-edit` | The round-2 PCB editing findings (`work/findings/round2/r2-pcb-edit.md`: 8 high, 11 medium, 17 low) and `r2-board-io.md` F7 / F14: zone cutout Delete, dimension Rotate and precision, the clipboard for every kind, groups of one, footprint orientation, rounded rectangles, net class / custom rule widths, user layer flips, Track & Via Properties over the selection, and the lows; PARITY-pcb section 54, GAPS 8 / 17 / 35, `e2e/pcb-edit-r2.check.js` | done but A6 and A7 (left, PARITY 54); gates in the branch's report | A6, A7; Mirror of text boxes and images; the via layer pair rows of Track & Via Properties |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
