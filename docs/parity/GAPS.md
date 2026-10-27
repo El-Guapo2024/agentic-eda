@@ -1379,3 +1379,22 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - Left: item 24's "Left of the multichannel tool".
 - KiCad: `pcbnew/tools/multichannel_tool.{h,cpp}`, `pcbnew/connectivity/topo_match.{h,cpp}`, `pcbnew/dialogs/dialog_multichannel_{generate_rule_areas,repeat_layout}.cpp`, `pcbnew/dialogs/dialog_rule_area_properties.cpp`, `pcbnew/zone.cpp`, `pcbnew/tools/pcb_control.cpp` (`ApplyDesignBlockLayout`), `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.cpp`.
 - Conflicts: `crates/ops/src/lib.rs` (a `Cmd` variant and `EditZone`'s new field), `crates/model/src/ir.rs` (`Zone::placement`), `crates/cli/src/{studio,board,main}.rs` (three routes, a module, a test module), `web/studio/src/{App.tsx,actions/pcbEditSweep.ts,actions/designBlockActions.ts,components/ZoneDialog.tsx,components/canvas/painter.ts,kicad-port/pcbProperties.ts}`.
+
+### 39. Public C/C++ libraries called instead of ported (the port-vs-reuse audit's rows 3, 5, 6, 7)
+**Done 2026-10-28 on `task-reuse-cpp`.** `docs/ARCHITECTURE.md`, "Reuse before porting" and "INACTIVE, not deleted".
+- **Clipper2**: KiCad's vendored 2.0.1 C++ behind `eda_clipper2`'s API (`crates/clipper2/src/cpp.rs`). The port (`src/port/`, feature `rust-port`)
+  follows an older Clipper2 than 2.0.1: on KiCad's QA board polygons its boolean operations are identical to 2.0.1's, but `ClipperOffset` differs
+  (1.x hole list, a zero-area path offset to nothing, `DoBevel` without z) in about 9% of cases and `RectClip64` in 3%
+  (`crates/clipper2/tests/differential.rs` prints the table). The audit said the port lacked the Z callback: it had it; no caller sets one.
+- **delaunator** crate for the ratsnest; same triangles as the port except at co-circular ties (same MST length); the port's `hull` was wrong in
+  places (nothing read it).
+- **nanosvg**: KiCad's (25ec2335) for the SVG import. Left: `text`/`tspan` draw nothing (KiCad draws them through Fontconfig, FreeType and
+  HarfBuzz, which this build stubs out, `crates/kicad/cpp/nofont`); only KiCad's basic colour keywords are colours (KiCad builds it without
+  `NANOSVG_ALL_COLOR_KEYWORDS`: "lime" is grey there too); coordinates are `float` (a few nm off, as in KiCad). Gained: `<style>` sheets of class
+  selectors, KiCad's default stroke width and aspect rules.
+- **Expression language**: one copy, Rust. Find by Properties' Query posts to `/api/pcb/query`; `pcbExpr.ts`/`libeval.ts` INACTIVE.
+  `memberOfSheet('/')` now answers as KiCad (the studio sends no sheet path: every footprint is on the root sheet). Left: the geometry functions
+  (`intersectsCourtyard`, `intersectsArea`, `enclosedByArea`) still say false in the Query tab (the request carries no shapes; the rule engine's
+  own items have them).
+- Not done: the SPICE value parser (`crates/sim/src/value.rs` and `web/studio/src/kicad-port/sim/spiceValue.ts`): the TS copy formats every plot
+  tick, cursor readout and typed value in the simulator as you type and pan; a round trip per label is not the same simple change.

@@ -201,6 +201,38 @@ never edited as masters.
     malformed-outline finding it makes is the live view of what kicad-cli's
     `invalid_outline` reports on the export, and kicad-cli stays the judge);
     that crate is no longer a checker and keeps its name for now.
+- **Reuse before porting** (the user, 2026-10-28): rewrite only what has to
+  be rewritten. A public C/C++ library or kicad-cli that can do the job on the
+  backend is called, not ported; a port is for code that must answer inside
+  one interaction where no API exists, or must run in the browser. Called
+  today:
+  - **Clipper2**: KiCad's vendored 2.0.1 (`third_party/clipper2`, Boost,
+    from `kicad-src-25ec2335/thirdparty`), built by `crates/clipper2/build.rs`
+    with `cc` and `USINGZ`, behind `eda_clipper2`'s own API (`cpp.rs`, a C
+    ABI shim in `cpp/shim.cpp`), so zones, outlines, pad shapes, hatching and
+    router hulls run KiCad's own polygon code;
+  - **nanosvg**: KiCad's copy (`third_party/nanosvg`, zlib), built by
+    `crates/kicad/build.rs`, for Import Graphics' SVG reader. KiCad links it
+    with Fontconfig, FreeType and HarfBuzz for `text`; this build stands in
+    for them (`crates/kicad/cpp/nofont`), so SVG text draws nothing;
+  - **delaunator** (crates.io, ISC) for the ratsnest's triangulation;
+  - the **expression language** has one copy, the Rust one (`eda_drc::pcbexpr`):
+    Find by Properties' Query tab asks it through `POST /api/pcb/query`
+    (`eda_drc::query`) with the Properties panel's items.
+  `cc` uses the system C++ compiler: g++ or clang++ on Linux, Apple clang
+  (Xcode Command Line Tools) on macOS; both crates build their C++ at `-O2`
+  even in a debug profile.
+- **INACTIVE, not deleted**: a port replaced by a library call stays in the
+  repo, compiling and with its tests, unused by default, under a header
+  `INACTIVE (<date>): replaced by <what>; kept for a future all-Rust build`
+  and, where it fits, an opt-in cargo feature that switches the callers back
+  (off by default): `eda-clipper2/rust-port` (`src/port/`, checked against
+  the binding by `tests/differential.rs` on every run),
+  `eda-connectivity/rust-port` (`delaunay_port.rs`), `eda-kicad/rust-nanosvg`
+  (`svg_import/nanosvg_port.rs`, `read_svg_port`), and `EDA_RUST_PICTURES=1`
+  for `crates/render`. A TypeScript copy is INACTIVE by its header and by
+  nothing importing it but its tests (`web/studio/src/kicad-port/pcbExpr.ts`,
+  `libeval.ts`, held to the Rust one by a shared golden file).
 - **Never duplicate kicad-cli in Rust**, not even as a faster version
   (decided 2026-10-02, replacing "the Rust DRC/ERC ports stay as fast
   previews"). One answer per question, no parity work. A kicad-cli DRC run
