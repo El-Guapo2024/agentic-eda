@@ -110,11 +110,11 @@ export function valueStringCompare(first: string, second: string): number {
   const [sBeg, sMid, sEnd] = splitString(second);
   const beg = cmpNoCase(fBeg, sBeg);
   if (beg !== 0) return beg;
-  // `ToCDouble`: a number that does not parse leaves 0
+  // `ToCDouble`: `strtod` in the C locale -- the number its longest prefix reads (`1.2.3` is 1.2, round 3 C-8), 0 when nothing does
   const parse = (s: string): number => {
     const c = convertSeparators(s) ?? s;
     const n = Number.parseFloat(c);
-    return Number.isFinite(n) && /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(c) ? n : 0;
+    return Number.isFinite(n) ? n : 0;
   };
   const [a, am] = applyModifier(parse(fMid), fEnd);
   const [b, bm] = applyModifier(parse(sMid), sEnd);
