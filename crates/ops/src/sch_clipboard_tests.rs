@@ -377,3 +377,18 @@ fn paste_keeps_the_clipboards_local_power_symbol() {
     assert!(published(&b, &pasted.lib_id).is_some_and(|s| s.power_local), "{}", pasted.lib_id);
     assert_eq!(sch.power_symbols[0].lib_id, "power:VCC", "the first stays the design's global one");
 }
+
+/// r4 B4-M2 (`SCH_SYMBOL::m_excludedFromPosFiles` is the symbol's, kept by the clipboard): a pasted copy of a symbol excluded from position files is excluded
+/// under its new reference, and the original's reference does not gain or lose it.
+#[test]
+fn a_pasted_symbol_keeps_exclude_from_position_files() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    let mut f = fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(Nm::ZERO, Nm::ZERO))));
+    f.section.extras.excluded_from_pos_files.insert("R1".into());
+    b.apply(&paste(&f, mm(20.0), Nm::ZERO, PasteMode::Unique)).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let pasted = sch.symbols.iter().find(|s| s.id != "R1").unwrap().id.clone();
+    assert_eq!(sch.extras.excluded_from_pos_files.iter().cloned().collect::<Vec<_>>(), vec![pasted]);
+}

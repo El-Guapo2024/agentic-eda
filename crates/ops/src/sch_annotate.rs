@@ -594,6 +594,8 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
     let mut autoplaced = Vec::new();
     let mut styles = Vec::new();
     let mut swaps = Vec::new();
+    let mut path_units = Vec::new();
+    let mut pos_excluded = Vec::new();
     for r in renames {
         let (old_key, new_key) = (field_key(&r.old, r.unit), field_key(&r.new, r.unit));
         if let Some(v) = sch.field_layout.remove(&old_key) {
@@ -606,13 +608,22 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
             styles.push((new_key.clone(), v));
         }
         if let Some(v) = sch.extras.pin_swaps.remove(&old_key) {
-            swaps.push((new_key, v));
+            swaps.push((new_key.clone(), v));
+        }
+        // the unit each path draws and "Exclude from position files" are the symbol's own (r4 A4-M3, B4-M2)
+        if let Some(v) = sch.extras.path_units.remove(&old_key) {
+            path_units.push((new_key.clone(), v));
+        }
+        if sch.extras.excluded_from_pos_files.remove(&old_key) {
+            pos_excluded.push(new_key);
         }
     }
     sch.field_layout.extend(layout);
     sch.extras.fields_autoplaced.extend(autoplaced);
     sch.extras.body_styles.extend(styles);
     sch.extras.pin_swaps.extend(swaps);
+    sch.extras.path_units.extend(path_units);
+    sch.extras.excluded_from_pos_files.extend(pos_excluded);
     // the user fields and the lock belong to the part: they move with a reference renamed as a whole
     let mut fields = Vec::new();
     for (old, new) in &whole {

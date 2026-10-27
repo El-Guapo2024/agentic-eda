@@ -367,7 +367,8 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, l
     let _ = writeln!(out, "\t\t(exclude_from_sim {})", yes(sym.exclude_from_sim));
     let _ = writeln!(out, "\t\t(in_bom {})", yes(!sym.exclude_from_bom));
     let _ = writeln!(out, "\t\t(on_board {})", yes(!sym.exclude_from_board));
-    let _ = writeln!(out, "\t\t(in_pos_files yes)");
+    // the symbol's own "Exclude from position files" (`FormatBool( "in_pos_files", !GetExcludedFromPosFiles() )`, r4 B4-M2)
+    let _ = writeln!(out, "\t\t(in_pos_files {})", yes(!input.section.extras.excluded_from_pos_files.contains(&eda_model::ir::field_key(&sym.id, sym.unit))));
     let _ = writeln!(out, "\t\t(dnp {})", yes(sym.dnp));
     let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
     let uuid = duid_plain(&format!("clipboard:symbol:{}:{}", sym.id, sym.unit));

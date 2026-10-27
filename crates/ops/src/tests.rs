@@ -3170,6 +3170,24 @@ fn delete_junction_at_crossing_unjoins() {
     assert!(sch.junctions.is_empty());
 }
 
+/// r4 C4-H1 (`SCH_EDIT_TOOL::DoDelete`: every item goes first, the junctions are cleaned up at the end and the commit's `CleanUp` runs once): the batch the
+/// studio sends for a window over a T -- the through wire, the stem, the dot -- deletes all three; a clean-up after each verb merged a wire or dropped the
+/// dot the next verb named, and the atomic batch was refused ("no junction with this id").
+#[test]
+fn deleting_a_t_with_its_junction_in_one_batch_deletes_all_three() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(10.16), mm(40.64)), p(mm(30.48), mm(40.64))], bus: false }).unwrap();
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(20.32), mm(50.8)), p(mm(20.32), mm(40.64))], bus: false }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.junctions.len(), 1, "the T's dot");
+    let mut cmds: Vec<Cmd> = sch.wires.iter().map(|w| Cmd::DeleteWire { id: w.id.clone() }).collect();
+    cmds.push(Cmd::DeleteJunction { id: sch.junctions[0].id.clone() });
+    b.apply(&Cmd::Batch { cmds }).unwrap_or_else(|e| panic!("{:?}", e));
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert!(sch.wires.is_empty() && sch.junctions.is_empty(), "{:?} {:?}", sch.wires, sch.junctions);
+}
+
 /// r3 C3-M4 (`SCH_LINE::IsStrokeEquivalent`: DEFAULT and SOLID are alike): a `solid` wire and a default one in line merge.
 #[test]
 fn clean_up_merges_solid_with_default() {

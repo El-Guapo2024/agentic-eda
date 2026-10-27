@@ -307,3 +307,16 @@ fn dragging_a_wire_into_a_sheet_pin_sideways_keeps_it_on_the_pin() {
     let ends: Vec<Point> = root_of(&after).wires.iter().flat_map(|w| [w.pts[0], *w.pts.last().unwrap()]).collect();
     assert!(ends.contains(&at), "a wire ends where the pin stopped: {:?}", root_of(&after).wires);
 }
+
+/// r4 C4-L1 (`SCH_EDIT_TOOL::DoDelete`: a sheet pin's point goes into `pts`, and a junction there that is no longer an explicit one is deleted; the commit's
+/// `CleanUp`): deleting a sheet pin that a wire and a stem met at, with a dot, drops the dot.
+#[test]
+fn deleting_a_sheet_pin_drops_its_junction() {
+    let mut d = design();
+    let root = d.schematic.as_mut().unwrap();
+    root.wires.push(wire("", &[p(mm(100.0), mm(60.0)), p(mm(100.0), mm(80.0))]));
+    root.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(mm(100.0), mm(60.0)) });
+    root.assign_missing_ids();
+    let after = ok(&d, Cmd::SchEdit(crate::sch_edit::SchCmd::DeleteSheetPin { id: "shpin_in".into() }));
+    assert!(root_of(&after).junctions.is_empty(), "{:?}", root_of(&after).junctions);
+}

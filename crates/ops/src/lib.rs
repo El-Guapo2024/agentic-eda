@@ -2559,6 +2559,8 @@ pub struct Board<'a> {
     intent_nets: Option<Vec<eda_model::Net>>,
     /// What the net-collision monitor drew for the last Move or Drag this board applied (`sch_net_collision.rs`): the studio's move preview reads it with the sheet.
     net_collision: Option<sch_net_collision::NetCollision>,
+    /// Inside a [`Cmd::Batch`]: the sheets (their [`Self::focus`]) whose commit-time clean-up a verb asked for, run once when the batch ends (r4 C4-H1).
+    pending_clean_up: Option<BTreeSet<Option<String>>>,
 }
 
 /// Decoupling pairs `(cap, ic)` that no proximity rule already places --
@@ -2602,7 +2604,7 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None, pending_clean_up: None }
     }
 
     /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
@@ -2646,6 +2648,7 @@ impl<'a> Board<'a> {
             focus: self.focus.clone(),
             intent_nets: self.intent_nets.clone(),
             net_collision: None,
+            pending_clean_up: None,
         }
     }
 
@@ -2998,13 +3001,31 @@ impl<'a> Board<'a> {
             Cmd::ReplaceShape { id, shape } => self.replace_shape(id, shape.clone()),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
-                for c in cmds {
-                    if let Err(e) = self.apply(c) {
-                        self.design = saved;
-                        return Err(e);
+                // One commit: the verbs' clean-up runs once, at the end (`SCH_EDIT_TOOL::DoDelete` deletes every item, then the junctions, then
+                // `commit.Push` runs `SCHEMATIC::CleanUp` once): a clean-up after each verb would merge or drop an item a later verb of the batch names (r4 C4-H1).
+                let outer = self.pending_clean_up.is_none();
+                if outer {
+                    self.pending_clean_up = Some(BTreeSet::new());
+                }
+                let mut result = cmds.iter().try_for_each(|c| self.apply(c));
+                if outer {
+                    let sheets = self.pending_clean_up.take().unwrap_or_default();
+                    if result.is_ok() {
+                        let focus = self.focus.clone();
+                        for sheet in sheets {
+                            self.focus = sheet;
+                            result = self.commit_clean_up();
+                            if result.is_err() {
+                                break;
+                            }
+                        }
+                        self.focus = focus;
                     }
                 }
-                Ok(())
+                if result.is_err() {
+                    self.design = saved;
+                }
+                result
             }
 
             Cmd::MoveSymbol { id, x, y, unit } => self.move_symbol(id, *x, *y, *unit),
@@ -5003,6 +5024,10 @@ impl<'a> Board<'a> {
     /// goes (`DoDelete`'s `if( junction->HasFlag( STRUCT_DELETED ) || !screen->IsExplicitJunction( point ) ) DeleteJunction(..)` comes to the same), and
     /// wires that meet in line with no junction between them merge (r3 C3-H1, C3-M1). The sheet is left as it was when nothing changes.
     pub(crate) fn commit_clean_up(&mut self) -> Result<(), Vec<CheckResult>> {
+        if let Some(pending) = self.pending_clean_up.as_mut() {
+            pending.insert(self.focus.clone());
+            return Ok(());
+        }
         let model = self.model;
         let Ok(sch) = self.schematic_mut() else { return Ok(()) };
         let mut scene = sch_scene::Scene::new(sch, model);

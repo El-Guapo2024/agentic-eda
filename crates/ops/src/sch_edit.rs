@@ -390,10 +390,11 @@ impl<'a> Board<'a> {
                 delete_sheet(self.schematic_mut()?, id)?;
                 // the references its placement gave a screen another sheet still shows go with it (`PruneOrphanedSymbolInstances`)
                 eda_model::sheet_list::prune_orphaned_overrides(&mut self.design);
-                Ok(())
+                // `DoDelete` puts the sheet's pins' points in `pts` and drops a junction there that joins nothing any more; the commit cleans up (r4 C4-L1)
+                self.commit_clean_up()
             }
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
-            SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
+            SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id).and_then(|_| self.commit_clean_up()),
             SchCmd::EditSheetPin { id, name, shape, at, size_nm, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic }),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
@@ -402,7 +403,8 @@ impl<'a> Board<'a> {
                 self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate, fields: fields.clone() })
             }
             SchCmd::PlaceLabel { net, at, kind, spin, size_nm, bold, italic, auto_rotate } => {
-                self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate })
+                // a label is connectable: its commit runs the clean-up (`SCH_COMMIT::pushSchEdit`, `LOCAL_CLEANUP`; r4 C4-L1)
+                self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate }).and_then(|_| self.commit_clean_up())
             }
             SchCmd::PlaceText { content, at, angle, size_nm, h, v } => self.place_text(content, *at, *angle, *size_nm, *h, *v),
             SchCmd::EditField { id, text, at, vertical, h, v, size_nm, bold, italic, visible, name_shown, allow_autoplace } => self.edit_sch_field(

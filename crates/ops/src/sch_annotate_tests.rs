@@ -316,3 +316,38 @@ fn the_command_reads_as_it_did_before_the_dialog_had_a_scope() {
     let Cmd::Annotate { options, .. } = cmd else { panic!() };
     assert_eq!((options.scope, options.algo, options.start_number, options.recursive, options.regroup_units, options.sheets.len()), (Some(AnnotateScope::All), Algo::SheetX100, 5, true, true, 1));
 }
+
+/// r4 A4-M3, B4-M2 (KiCad keeps a path's unit, `SCH_SYMBOL_INSTANCE::m_Unit`, and "Exclude from position files", `m_excludedFromPosFiles`, in the symbol
+/// itself): Annotate's renumbering moves them with the symbol; nothing else gains them.
+#[test]
+fn annotate_keeps_exclude_from_position_files_and_the_units_per_path() {
+    let m = ConstraintModel::default();
+    let mut d = design();
+    let a = d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap();
+    a.extras.excluded_from_pos_files.insert("R5".into());
+    a.extras.path_units.insert("R5".into(), [("sa".to_string(), 2u32)].into());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&annotate(true, AnnotateOrder::XThenY, None, all(Algo::FirstFree, 0))).unwrap();
+    let d = b.design();
+    let renamed = at(d, "a.kicad_sch", mm(0.03)).id.clone();
+    assert_ne!(renamed, "R5");
+    let a = &d.sheet_contents.as_ref().unwrap()["a.kicad_sch"];
+    assert_eq!(a.extras.excluded_from_pos_files.iter().cloned().collect::<Vec<_>>(), vec![renamed.clone()]);
+    assert_eq!(a.extras.path_units.keys().cloned().collect::<Vec<_>>(), vec![renamed]);
+}
+
+/// r4 A4-M3: Edit Reference (`Cmd::RenameSymbol`) moves a symbol's unit per path; Delete drops it, so a symbol that later takes the reference does not
+/// inherit it.
+#[test]
+fn a_renamed_symbol_keeps_its_unit_on_each_path_and_a_deleted_one_leaves_none() {
+    let m = ConstraintModel::default();
+    let mut d = design();
+    let a = d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap();
+    a.extras.path_units.insert("R5".into(), [("sa".to_string(), 2u32)].into());
+    a.extras.path_units.insert("R9".into(), [("sa".to_string(), 2u32)].into());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&on("sa", Cmd::RenameSymbol { id: "R5".into(), new_id: "R7".into() })).unwrap();
+    b.apply(&on("sa", Cmd::DeleteSymbol { id: "R9".into(), unit: None })).unwrap();
+    let a = &b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"];
+    assert_eq!(a.extras.path_units.keys().cloned().collect::<Vec<_>>(), vec!["R7".to_string()]);
+}

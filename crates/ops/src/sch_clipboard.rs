@@ -318,6 +318,12 @@ impl<'a> Board<'a> {
                 sch.extras.body_styles.insert(eda_model::ir::field_key(new, s.unit), style);
             }
         }
+        // ... and "Exclude from position files", the symbol's own attribute (`SCH_SYMBOL::m_excludedFromPosFiles`, kept by the clipboard; r4 B4-M2)
+        for (s, new) in src.symbols.iter().zip(symbol_refs) {
+            if src.extras.excluded_from_pos_files.contains(&eda_model::ir::field_key(&s.id, s.unit)) {
+                sch.extras.excluded_from_pos_files.insert(eda_model::ir::field_key(new, s.unit));
+            }
+        }
         // a pasted symbol keeps the places Swap Pins gave its pins (`SchExtras::pin_swaps`; the clipboard names the symbol's own copy of its library symbol, `lib_name`)
         for (s, new) in src.symbols.iter().zip(symbol_refs) {
             if let Some(swaps) = src.extras.pin_swaps_of(&eda_model::ir::field_key(&s.id, s.unit)) {

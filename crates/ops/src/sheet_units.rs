@@ -176,6 +176,8 @@ pub(crate) fn restore(sec: &mut SchematicSection, back: &BTreeMap<String, (Strin
     let mut layout = Vec::new();
     let mut autoplaced = Vec::new();
     let mut styles = Vec::new();
+    let mut path_units = Vec::new();
+    let mut pos_excluded = Vec::new();
     for s in sec.symbols.iter_mut() {
         let Some((real, unit)) = back.get(&s.id) else { continue };
         let (old, new) = (field_key(&s.id, s.unit), field_key(real, *unit));
@@ -186,7 +188,13 @@ pub(crate) fn restore(sec: &mut SchematicSection, back: &BTreeMap<String, (Strin
             autoplaced.push((new.clone(), v));
         }
         if let Some(v) = sec.extras.body_styles.remove(&old) {
-            styles.push((new, v));
+            styles.push((new.clone(), v));
+        }
+        if let Some(v) = sec.extras.path_units.remove(&old) {
+            path_units.push((new.clone(), v));
+        }
+        if sec.extras.excluded_from_pos_files.remove(&old) {
+            pos_excluded.push(new);
         }
         s.id = real.clone();
         s.unit = *unit;
@@ -194,6 +202,8 @@ pub(crate) fn restore(sec: &mut SchematicSection, back: &BTreeMap<String, (Strin
     sec.field_layout.extend(layout);
     sec.extras.fields_autoplaced.extend(autoplaced);
     sec.extras.body_styles.extend(styles);
+    sec.extras.path_units.extend(path_units);
+    sec.extras.excluded_from_pos_files.extend(pos_excluded);
     sec.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
     // the pins the drawing names
     let rename_pin = |pin: &mut String| {

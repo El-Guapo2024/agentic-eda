@@ -475,6 +475,8 @@ fn keys_of(sch: &SchematicSection, id: &str) -> Vec<String> {
     keys.extend(sch.extras.fields_autoplaced.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.body_styles.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.pin_swaps.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
+    keys.extend(sch.extras.path_units.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
+    keys.extend(sch.extras.excluded_from_pos_files.iter().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.into_iter().collect()
 }
 
@@ -503,7 +505,8 @@ pub(crate) fn rename_field_placements(sch: &mut SchematicSection, refs: &[String
 }
 
 /// A symbol is renamed: what is kept per unit under its reference (where its fields are, whether Autoplace Fields put them there, its body style, the places
-/// Swap Pins gave its pins) is kept under the new one.
+/// Swap Pins gave its pins, the unit each sheet path draws (r4 A4-M3), "Exclude from position files" (r4 B4-M2)) is kept under the new one: KiCad keeps them
+/// in the symbol (`SCH_SYMBOL_INSTANCE::m_Unit`, `m_excludedFromPosFiles`), which a new reference does not change.
 pub(crate) fn rename_symbol_keys(sch: &mut SchematicSection, id: &str, new_id: &str) {
     // the groups that list the reference list the new one
     crate::sch_groups::rename_member(sch, id, new_id);
@@ -519,7 +522,13 @@ pub(crate) fn rename_symbol_keys(sch: &mut SchematicSection, id: &str, new_id: &
             sch.extras.body_styles.insert(new.clone(), v);
         }
         if let Some(v) = sch.extras.pin_swaps.remove(&old) {
-            sch.extras.pin_swaps.insert(new, v);
+            sch.extras.pin_swaps.insert(new.clone(), v);
+        }
+        if let Some(v) = sch.extras.path_units.remove(&old) {
+            sch.extras.path_units.insert(new.clone(), v);
+        }
+        if sch.extras.excluded_from_pos_files.remove(&old) {
+            sch.extras.excluded_from_pos_files.insert(new);
         }
     }
 }
@@ -531,4 +540,6 @@ pub(crate) fn drop_symbol_keys(sch: &mut SchematicSection, id: &str, unit: u32) 
     sch.extras.fields_autoplaced.remove(&key);
     sch.extras.body_styles.remove(&key);
     sch.extras.pin_swaps.remove(&key);
+    sch.extras.path_units.remove(&key);
+    sch.extras.excluded_from_pos_files.remove(&key);
 }
