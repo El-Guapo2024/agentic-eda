@@ -262,3 +262,25 @@ fn a_one_member_group_survives_an_unrelated_group() {
     assert_eq!(members(&b, "grp_one"), ids(&["shp_seg"]), "Remove Items of another group leaves it too");
     assert!(drawings(&b).parent_group("via_a").is_none(), "the group trk_a left fell under two and dissolved");
 }
+
+/// r2-pcb-edit A1: KiCad copies a group whole (`PCB_GROUP::DeepDuplicate`), whatever its size, and its clipboard parser keeps every group
+/// (`resolveGroups`): a group of one comes over in Duplicate, Paste and Create Array.
+#[test]
+fn duplicating_and_pasting_a_one_member_group_copies_the_group() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let one = || {
+        let mut d = design();
+        d.drawings.as_mut().unwrap().groups = vec![group("grp_one", &["shp_seg"])];
+        d
+    };
+    let mut b = Board::new(one(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::Duplicate { ids: ids(&["grp_one"]) }).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.groups.len(), 2, "{:?}", dr.groups);
+    assert!(dr.groups.iter().all(|g| g.member_ids.len() == 1), "{:?}", dr.groups);
+
+    let text = eda_kicad::export_pcb_clipboard(&one(), &m, &ids(&["grp_one"]), p(Nm::ZERO, Nm::ZERO)).unwrap();
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::PasteClipboard { text, at: p(mm(5.0), mm(5.0)) }).unwrap();
+    assert_eq!(drawings(&b).groups.len(), 1, "{:?}", drawings(&b).groups);
+}

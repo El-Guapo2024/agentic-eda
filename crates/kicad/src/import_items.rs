@@ -208,8 +208,10 @@ pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &
             if key.is_some() {
                 self.visiting.pop();
             }
-            // A group of one is not a group, unless it is linked to a design block: `SaveSelectionAsDesignBlock` and a block placed as a sheet make those.
-            let built = if members.len() < 2 && !(members.len() == 1 && !g.lib_id.is_empty()) {
+            // `PCB_IO_KICAD_SEXPR_PARSER::resolveGroups` makes a `PCB_GROUP` for every group it reads, whatever its size, so a group of one is kept.
+            // One with no member on the board is left out: KiCad keeps it in memory but never writes it (`format( const PCB_GROUP* )`:
+            // `if( memberIds.empty() ) return;`), and the model holds no empty group.
+            let built = if members.is_empty() {
                 Built::Dropped(members)
             } else {
                 let mut group = Group { id: String::new(), name: g.name.clone(), member_ids: members, design_block: g.lib_id.clone() };

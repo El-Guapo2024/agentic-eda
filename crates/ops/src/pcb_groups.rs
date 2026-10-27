@@ -10,8 +10,8 @@
 //! A group's members are item ids, and an id may be another group's: grouping a selection that holds groups makes those groups
 //! members of the new one (`PCB_GROUP_TOOL::Group` adds every selected item, a group included, to the new group), where this
 //! model used to flatten them. An item is in one group at a time (`EDA_GROUP::AddItem` takes it out of the one it was in), a
-//! group can hold neither itself nor a group that holds it, and a group of fewer than two members dissolves
-//! (`GROUP_TOOL::RemoveFromGroup`), a nested one taking its place in the group above with it.
+//! group can hold neither itself nor a group that holds it, and Remove Items dissolves a group it leaves with fewer than two
+//! members (`GROUP_TOOL::RemoveFromGroup`'s `affectedGroups`); a group of one is otherwise kept, as KiCad keeps it.
 //!
 //! # Items made while a group is entered
 //!
@@ -24,8 +24,8 @@
 //!
 //! `BOARD_COMMIT::Push` takes an item that is removed out of its parent group. The delete verbs here do not know about groups, so
 //! [`Board::apply`](super::Board::apply) compares the board before and after a command ([`Board::group_universe`]) and
-//! [`Board::tidy_groups`] drops from every group the members that were on the board and no longer are, dissolving a group
-//! that is left with fewer than two. A member the board never had (a group made over ids no item answers to) stays, as it did.
+//! [`Board::tidy_groups`] drops from every group the members that were on the board and no longer are, dropping a group
+//! that is left empty (a group of one stays). A member the board never had (a group made over ids no item answers to) stays, as it did.
 
 use super::{Board, Cmd};
 use eda_model::groups::{GroupHost, GroupRefusal};

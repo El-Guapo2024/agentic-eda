@@ -2888,7 +2888,8 @@ mod tests {
         assert!(outer.member_ids.contains(&"U1".to_string()) && outer.member_ids.contains(&middle.id), "{outer:?}");
         assert!(middle.member_ids.contains(&"C1".to_string()) && middle.member_ids.contains(&inner.id), "{middle:?}");
         assert!(inner.member_ids.contains(&brt.tracks[0].id) && inner.member_ids.iter().any(|m| brt.vias.iter().any(|v| &v.id == m)), "{inner:?}");
-        assert!(!dr.groups.iter().any(|g| g.name == "holder"), "a group of one item is dropped on the way in: {:?}", dr.groups);
+        let holder = by_name("holder");
+        assert_eq!(holder.member_ids, vec![brt.vias.iter().find(|v| holder.member_ids.contains(&v.id)).expect("the via").id.clone()], "a group of one item is read back (`resolveGroups` keeps every group)");
         assert_eq!(dr.group_leaves(&outer.id).len(), 4, "U1, C1, the track and a via: {:?}", dr.group_leaves(&outer.id));
     }
 

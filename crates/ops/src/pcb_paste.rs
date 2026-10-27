@@ -696,8 +696,9 @@ impl Board<'_> {
         let mut new_groups: Vec<Group> = Vec::new();
         for g in &copies.groups {
             let member_ids: Vec<String> = g.members.iter().filter_map(|m| id_of(m, &group_ids)).collect();
-            // A group of fewer than two members is not a group (`prune_groups`), unless it is linked to a design block.
-            if member_ids.len() < 2 && !(member_ids.len() == 1 && !g.design_block.is_empty()) {
+            // Every group comes over, a group of one too (`PCB_GROUP::DeepDuplicate` in Duplicate and Create Array, the clipboard's parser's
+            // `resolveGroups` in Paste); only one left with no member is not made.
+            if member_ids.is_empty() {
                 group_ids.push(None);
                 continue;
             }
