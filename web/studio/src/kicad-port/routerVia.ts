@@ -153,25 +153,27 @@ export function viaSizeFor(board: BoardState, net: string, viaType: ViaType, cho
 
 /**
  * The width a route starts at, as `PNS_KICAD_IFACE_BASE::ImportSizes` picks it: undefined while the net class's widths are in use
- * (`BOARD_DESIGN_SETTINGS::UseNetClassTrack()`: `m_trackWidthIndex <= 0 && !m_useCustomTrackVia` -- no width chosen yet, or the list's first entry,
- * which is the net class's), and the server then takes the start net's width through the rules (`CT_WIDTH`); otherwise the chosen width. The
- * list's first entry is told by its width (the board's Default width): a preset of the same width is taken for it.
+ * (`BOARD_DESIGN_SETTINGS::UseNetClassTrack()`: `m_trackWidthIndex <= 0 && !m_useCustomTrackVia` -- no width chosen yet, or the list's first
+ * entry, index 0, which is the net class's), and the server then takes the start net's width through the rules (`CT_WIDTH`); otherwise the
+ * chosen width. The choice is the list INDEX, as KiCad's is: a preset whose width happens to equal the Default class's width is still the
+ * user's choice when it sits at index > 0 (r4 R4-8). `GetCurrentTrackWidth` also falls back to the net class's when the index is past the
+ * list (a preset list edited under a selected index); `listLength` is the list including index 0.
  */
-export function chosenTrackWidth(current: Nm | null, netClassEntry: Nm | undefined, useCustomTrackVia: boolean): Nm | undefined {
+export function chosenTrackWidth(current: Nm | null, index: number | null, listLength: number, useCustomTrackVia: boolean): Nm | undefined {
   if (useCustomTrackVia) return current ?? undefined;
-  if (current == null || current === netClassEntry) return undefined;
-  return current;
+  if (index == null || index <= 0 || index >= listLength) return undefined;
+  return current ?? undefined;
 }
 
 /**
  * The via size `ROUTER_TOOL::handleLayerSwitch` arms a via with, as the studio sends it: null while the net class's sizes are in use
- * (`bds.UseNetClassVia()`: no via size of the list chosen, or its first entry, and no custom size) or for a microvia (`|| viaType == MICROVIA`),
- * and the server then takes the rules' (`VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy via of the route's net, type and layers);
- * otherwise the chosen size.
+ * (`bds.UseNetClassVia()`: no via size of the list chosen, or its first entry, index 0, and no custom size) or for a microvia
+ * (`|| viaType == MICROVIA`), and the server then takes the rules' (`VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy via of the
+ * route's net, type and layers); otherwise the chosen size. The choice is the list INDEX too, not the size (r4 R4-8).
  */
-export function chosenViaSize(viaType: ViaType, chosen: ViaPreset | null, netClassEntry: ViaPreset | undefined, useCustomTrackVia: boolean): ViaPreset | null {
+export function chosenViaSize(viaType: ViaType, chosen: ViaPreset | null, index: number | null, listLength: number, useCustomTrackVia: boolean): ViaPreset | null {
   if (viaType === "micro" || !chosen) return null;
-  if (!useCustomTrackVia && netClassEntry && chosen.diameter === netClassEntry.diameter && chosen.drill === netClassEntry.drill) return null;
+  if (!useCustomTrackVia && (index == null || index <= 0 || index >= listLength)) return null;
   return chosen;
 }
 

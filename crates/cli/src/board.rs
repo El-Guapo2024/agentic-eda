@@ -1600,6 +1600,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditVia { id, diameter, drill } => format!("via edit {id} --dia {} --drill {}", mm(*diameter), mm(*drill)),
         Cmd::SetTrackWidthPresets { widths } => format!("board-setup track-widths \"{}\"", widths.iter().map(|w| mm(*w)).collect::<Vec<_>>().join(" ")),
         Cmd::SetViaPresets { presets } => format!("board-setup via-sizes \"{}\"", presets.iter().map(|p| format!("{}/{}", mm(p.diameter), mm(p.drill))).collect::<Vec<_>>().join(" ")),
+        Cmd::SetDiffPairPresets { presets } => format!("board-setup diff-pairs \"{}\"", presets.iter().map(|p| format!("{}/{}/{}", mm(p.width), mm(p.gap), mm(p.via_gap))).collect::<Vec<_>>().join(" ")),
         Cmd::EditTracksAndVias { ids, .. } => format!("global-edit tracks-and-vias {}", ids.join(" ")),
 
         Cmd::AddZone { net, layer, outline } => format!("zone add --net {net} --layer {layer} --pts \"{}\"", pts(outline)),
@@ -1964,7 +1965,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetFootprintZoneConnection { .. } | Cmd::SetPadZoneOverrides { .. } => "pad-zone",
         Cmd::AddTrack { .. } | Cmd::DeleteTrack { .. } | Cmd::SetTrackWidth { .. } => "track",
         Cmd::AddVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } | Cmd::EditVia { .. } => "via",
-        Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } => "board-setup",
+        Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } | Cmd::SetDiffPairPresets { .. } => "board-setup",
         Cmd::EditTracksAndVias { .. } => "global-edit-tracks-and-vias",
         Cmd::AddZone { .. } | Cmd::DeleteZone { .. } | Cmd::EditZone { .. } | Cmd::SetZoneOutline { .. } => "zone",
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } | Cmd::EditShape { .. } => "shape",

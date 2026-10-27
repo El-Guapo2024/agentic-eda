@@ -21,9 +21,10 @@
 // The default stackup is also computed by the backend (`eda_model::rules::default_stackup`); both are held to the same cases in
 // src/kicad/default_stackups.json (a Rust test fails when the file is stale, boardSetupRules.test.ts when this code disagrees with it).
 
-import type { Cmd, Constraints, LayerClassDefaults, NetClass, NetClassSettings, RuleSeverity, Stackup, StackupLayer, StackupSettings, TextGraphicsDefaults, Nm } from "../api/types";
+import type { Cmd, Constraints, DiffPairPreset, LayerClassDefaults, NetClass, NetClassSettings, RuleSeverity, Stackup, StackupLayer, StackupSettings, TextGraphicsDefaults, Nm, ViaPreset } from "../api/types";
 import { strNumCmp } from "./sheetPages";
 import { globMatch, patternMatches } from "./netPattern";
+import { validateViaParameters } from "./routerVia";
 
 export { globMatch };
 
@@ -484,9 +485,35 @@ export function severitiesToSend(items: readonly SeverityItem[], chosen: Readonl
 }
 
 /**
- * Pre-defined Sizes' Apply: the track widths and the via sizes as one command (`batch`), so the page is one undo step, as every other page of the
- * dialog is. (KiCad's Board Setup applies `BOARD_DESIGN_SETTINGS` outside the undo list; here every edit is an undoable verb, one per Apply.)
+ * Pre-defined Sizes' Apply: the track widths, the via sizes and the differential pairs as one command (`batch`), so the page is one undo step,
+ * as every other page of the dialog is. (KiCad's Board Setup applies `BOARD_DESIGN_SETTINGS` outside the undo list; here every edit is an
+ * undoable verb, one per Apply.)
  */
-export function predefinedSizesCmds(widths: readonly Nm[], vias: ReadonlyArray<{ diameter: Nm; drill: Nm }>): Cmd[] {
-  return [{ op: "batch", cmds: [{ op: "set_track_width_presets", widths: [...widths] }, { op: "set_via_presets", presets: vias.map((v) => ({ ...v })) }] }];
+export function predefinedSizesCmds(widths: readonly Nm[], vias: ReadonlyArray<ViaPreset>, diffPairs: ReadonlyArray<DiffPairPreset>): Cmd[] {
+  return [
+    {
+      op: "batch",
+      cmds: [
+        { op: "set_track_width_presets", widths: [...widths] },
+        { op: "set_via_presets", presets: vias.map((v) => ({ ...v })) },
+        { op: "set_diff_pair_presets", presets: diffPairs.map((d) => ({ ...d })) },
+      ],
+    },
+  ];
+}
+
+/**
+ * `PANEL_SETUP_TRACKS_AND_VIAS::Validate()`: the via rows through `PCB_VIA::ValidateViaParameters` (`validateViaParameters`, in row order), then
+ * the pairs through `BOARD_DESIGN_SETTINGS::ValidateDesignRules` (`m_Width > 0 && m_Gap <= 0` -- the gap alone, and a pair of width 0, are not
+ * checked there). The message is KiCad's, word for word; the dialog shows it next to the page's Apply, as the panel does with its grid's cells.
+ */
+export function validatePredefinedSizes(vias: ReadonlyArray<ViaPreset>, diffPairs: ReadonlyArray<DiffPairPreset>): string | null {
+  for (const v of vias) {
+    const message = validateViaParameters(v.diameter, v.drill);
+    if (message) return message;
+  }
+  for (const d of diffPairs) {
+    if (d.width > 0 && d.gap <= 0) return "No differential pair gap defined.";
+  }
+  return null;
 }

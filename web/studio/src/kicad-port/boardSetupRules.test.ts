@@ -33,6 +33,7 @@ import {
   textRowOf,
   validateConstraints,
   validateNetClasses,
+  validatePredefinedSizes,
   validateStackup,
   validateTextGraphics,
   withAssignment,
@@ -362,14 +363,32 @@ test("a check has the table's severity, else KiCad's default", () => {
   assert.deepEqual(severitiesToSend(items, { clearance: "error" }, {}), {});
 });
 
-test("predefinedSizesCmds: Pre-defined Sizes' Apply is the track widths and the via sizes in one command, so one Undo takes the page back", () => {
-  const cmds = predefinedSizesCmds([250, 350], [{ diameter: 900, drill: 450 }]);
+test("predefinedSizesCmds: Pre-defined Sizes' Apply is the track widths, the via sizes and the differential pairs in one command, so one Undo takes the page back", () => {
+  const cmds = predefinedSizesCmds([250, 350], [{ diameter: 900, drill: 450 }], [{ width: 200, gap: 150, via_gap: 150 }]);
   assert.equal(cmds.length, 1);
   assert.deepEqual(cmds[0], {
     op: "batch",
     cmds: [
       { op: "set_track_width_presets", widths: [250, 350] },
       { op: "set_via_presets", presets: [{ diameter: 900, drill: 450 }] },
+      { op: "set_diff_pair_presets", presets: [{ width: 200, gap: 150, via_gap: 150 }] },
     ],
   });
+});
+
+// r4 R4-3: the panel's Validate() (pcbnew/dialogs/panel_setup_tracks_and_vias.cpp) checks the via rows with PCB_VIA::ValidateViaParameters
+// (pcbnew/pcb_track.cpp: diameter, then drill, then the pair) and then the pairs with BOARD_DESIGN_SETTINGS::ValidateDesignRules.
+test("validatePredefinedSizes: KiCad's via messages row by row, then the differential pair check", () => {
+  const via = (diameter: number, drill: number) => ({ diameter, drill });
+  assert.equal(validatePredefinedSizes([], []), null);
+  assert.equal(validatePredefinedSizes([via(600_000, 300_000)], []), null);
+  assert.equal(validatePredefinedSizes([via(999, 300_000)], []), "Via diameter is too small.");
+  assert.equal(validatePredefinedSizes([via(600_000, 999)], []), "Via drill is too small.");
+  assert.equal(validatePredefinedSizes([via(600_000, 600_000)], []), "Via hole size must be smaller than via diameter");
+  assert.equal(validatePredefinedSizes([via(600_000, 300_000), via(0, 300_000)], []), "Via diameter is too small.", "the rows are checked in order");
+  // ValidateDesignRules: `m_Width > 0 && m_Gap <= 0`; via gap and a zero width are not checked.
+  assert.equal(validatePredefinedSizes([], [{ width: 200, gap: 150, via_gap: 0 }]), null);
+  assert.equal(validatePredefinedSizes([], [{ width: 0, gap: 0, via_gap: 0 }]), null);
+  assert.equal(validatePredefinedSizes([], [{ width: 200, gap: 0, via_gap: 150 }]), "No differential pair gap defined.");
+  assert.equal(validatePredefinedSizes([via(0, 300_000)], [{ width: 200, gap: 0, via_gap: 0 }]), "Via diameter is too small.", "the via rows come first, as the panel checks them");
 });

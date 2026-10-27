@@ -1092,10 +1092,11 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
     // above.
     let track_width_presets = design.routing.as_ref().map(|r| r.track_width_presets.clone()).unwrap_or_default();
     let via_presets = design.routing.as_ref().map(|r| r.via_presets.clone()).unwrap_or_default();
+    let diff_pair_presets = design.routing.as_ref().map(|r| r.diff_pair_presets.clone()).unwrap_or_default();
     // Teardrop settings (Board Setup's own page) carried forward unchanged
     // too, same reasoning as the presets above.
     let teardrop_settings = design.routing.as_ref().map(|r| r.teardrop_settings).unwrap_or_default();
-    let mut rt = RoutingSection { tracks, vias, zones, track_width_presets, via_presets, teardrop_settings };
+    let mut rt = RoutingSection { tracks, vias, zones, track_width_presets, via_presets, diff_pair_presets, teardrop_settings };
     // Assigned here, at the router's own output, so every track/via/zone
     // is addressable the moment a route finishes -- deterministically:
     // the same design routed twice gets the same ids both times.

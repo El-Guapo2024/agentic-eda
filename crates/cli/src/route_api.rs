@@ -839,7 +839,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(20.0)), p(Nm::ZERO, mm(20.0))], footprints: vec![], modules: vec![] }),
-            routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         board::save(dir, &design).unwrap();
