@@ -183,8 +183,11 @@ struct DragState {
     drag_status: bool,
     /// `m_lastValidPoint`.
     last_valid: Option<Point>,
-    /// `m_lastDragSolution`: what the last position that worked gave.
-    last_solution: Option<DragPreview>,
+    /// `m_lastDragSolution`: the line a failed position puts back. `startDragSegment` sets it to the line as it was assembled
+    /// (`m_lastDragSolution = m_draggedLine`, here `None`: the original), and only `dragShove` moves it on (`m_lastDragSolution =
+    /// std::move( draggedPostShove )`, the shoved line before the optimizer: `optimizeAndUpdateDraggedLine` splits it at the anchor and
+    /// optimizes a copy, `draggedPostOpt`). Walk around and Highlight collisions never set it.
+    last_solution: Option<(Vec<Point>, Vec<crate::arcs::ArcPts>)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -219,6 +222,9 @@ pub struct DragPreview {
     /// The drag is in Highlight collisions mode because its first position failed (`GetForceMarkObstaclesMode`): `colliding` then
     /// says whether releasing here is a violation, which only Ctrl+click commits.
     pub forced_mark_obstacles: bool,
+    /// `dragShove` only: the line `m_lastDragSolution` takes from this position (the shoved line, split at the anchor when the optimizer
+    /// runs, not optimized), what a later failed position shows again.
+    pub(crate) solution: Option<(Vec<Point>, Vec<crate::arcs::ArcPts>)>,
 }
 
 /// What a finished drag replaces/adds -- `crate::router::Router` turns
@@ -446,9 +452,15 @@ impl Dragger {
     /// the nearest point of the line to it, which is made a vertex: `Split( anchor )`) preserved. With it off, KiCad's default, the line is kept as it is.
     /// `world` is the world the optimizer checks against, without the line's old place.
     fn optimize_and_update_dragged_line(&self, world: &Node, rules: &BoardRules, settings: &RoutingSettings, dragged: &Line, orig: &Line, cursor: Point) -> Line {
+        self.optimize_and_update_dragged_line_split(world, rules, settings, dragged, orig, cursor).0
+    }
+
+    /// [`Self::optimize_and_update_dragged_line`], and `aDragged` as the function leaves it: split at the anchor when the optimizer runs
+    /// (`aDragged.Line().Split( anchor )`; `optimizer.Optimize( &aDragged, &draggedPostOpt, .. )` optimizes a copy), as it was otherwise.
+    fn optimize_and_update_dragged_line_split(&self, world: &Node, rules: &BoardRules, settings: &RoutingSettings, dragged: &Line, orig: &Line, cursor: Point) -> (Line, Line) {
         use crate::optimizer::{effort, optimize_constrained, Constraints};
         if !settings.optimize_entire_dragged_track {
-            return dragged.clone();
+            return (dragged.clone(), dragged.clone());
         }
         let mut flags = effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY | effort::RESTRICT_AREA;
         if settings.smooth_dragged_segments {
@@ -463,7 +475,7 @@ impl Dragger {
         line.clear_links();
         split_chain_at(&mut line.pts, anchor);
         let constraints = Constraints { area: Some(affected), preserve_vertex: Some(anchor), keep_topology: true, corner_mode: settings.corner_mode };
-        optimize_constrained(&line, world, rules, &self.exclude(), flags | effort::PRESERVE_VERTEX, &constraints)
+        (optimize_constrained(&line, world, rules, &self.exclude(), flags | effort::PRESERVE_VERTEX, &constraints), line)
     }
 
     /// `DRAGGER::dragShove`: whatever the dragged shape runs into is pushed aside, a pad walked around. `None` when it cannot be
@@ -492,9 +504,9 @@ impl Dragger {
         shove.push(node, world.clone(), outcome.area);
         // `optimizeAndUpdateDraggedLine( draggedPostShove, m_draggedLine, aP )`, against the world the shove left
         let shoved = Line { pts: outcome.head.clone(), arcs: dragged.arcs.clone(), ..dragged };
-        let shoved = if self.kind == DragKind::Arc { shoved } else { self.optimize_and_update_dragged_line(&outcome.world, rules, settings, &shoved, &self.original, to) };
+        let (shoved, solution) = if self.kind == DragKind::Arc { (shoved.clone(), shoved) } else { self.optimize_and_update_dragged_line_split(&outcome.world, rules, settings, &shoved, &self.original, to) };
         // the preview shows the frame's whole world: every track and via the gesture has moved so far, not just this position's
-        Some(DragPreview { pts: shoved.pts, arcs: shoved.arcs, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), ..DragPreview::default() })
+        Some(DragPreview { pts: shoved.pts, arcs: shoved.arcs, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), solution: Some((solution.pts, solution.arcs)), ..DragPreview::default() })
     }
 
     /// One cursor position: what `dragMarkObstacles` / `dragWalkaround` / `dragShove` make of it, and whether it `ok`s -- their return
@@ -559,7 +571,9 @@ impl Dragger {
             self.state.last_valid = Some(to);
             self.state.drag_status = self.status_of(&pv, ok, mark, settings);
             pv.forced_mark_obstacles = self.state.force_mark_obstacles;
-            self.state.last_solution = Some(pv.clone());
+            if let Some(solution) = pv.solution.take() {
+                self.state.last_solution = Some(solution);
+            }
             return pv;
         }
         if first {
@@ -571,11 +585,17 @@ impl Dragger {
             pv.forced_mark_obstacles = true;
             return pv;
         }
-        // "Restore last solution": m_dragStatus stays false, the line goes back to where the last good position put it
+        // "Restore last solution": m_dragStatus stays false; the view is the parent of the last node (the session's world in Walk around
+        // mode, the shove's reduced frame in Shove mode) with `m_lastDragSolution` added, and nothing dragged (`m_draggedItems.Clear()`)
         self.state.drag_status = false;
-        let mut restored = self.state.last_solution.clone().unwrap_or_else(|| DragPreview { pts: self.original.pts.clone(), arcs: self.original.arcs.clone(), ..DragPreview::default() });
-        if !mark && settings.mode != Mode::Walkaround {
+        let (pts, arcs) = self.state.last_solution.clone().unwrap_or_else(|| (self.original.pts.clone(), self.original.arcs.clone()));
+        let mut restored = DragPreview { pts, arcs, ..DragPreview::default() };
+        if !mark && settings.mode == Mode::Shove {
             self.restore_onto_frame(node, &mut restored);
+        } else if self.kind == DragKind::Via {
+            // a via drag has no `m_lastDragSolution` of its own: the via and its tracks are where the world has them
+            restored.pts = vec![self.via_pos];
+            restored.fanout = self.attached_lines(node, self.via_pos);
         }
         restored.restored = true;
         restored.forced_mark_obstacles = self.state.force_mark_obstacles;
@@ -586,8 +606,9 @@ impl Dragger {
     /// m_lastNode->Add( m_lastDragSolution )` -- what is shown is the frame this failed position reduced the stack to (`SHOVE::Run`
     /// leaves `m_currentNode` at the reduced parent when it fails), not the frame the last good position left: a frame this position
     /// popped has sprung back. A line drag shows the last good line in it. A via drag has no `m_lastDragSolution` of its own (`dragShove`
-    /// sets it only for `DM_SEGMENT` / `DM_CORNER`), so the via and its tracks are where that frame has them. In Walk around mode the
-    /// parent is the session's world, which `last_solution` already shows.
+    /// sets it only for `DM_SEGMENT` / `DM_CORNER`), so the via and its tracks are where that frame has them. (In Walk around mode the
+    /// parent is the session's world, and `m_lastDragSolution` is still the line `startDragSegment` assembled, since `dragWalkaround`
+    /// never sets it: the line is shown where it started, [`Self::drag`].)
     fn restore_onto_frame(&self, node: &Node, pv: &mut DragPreview) {
         let shove = self.shove.borrow();
         let (top, _) = shove.stack.top();
@@ -1135,8 +1156,10 @@ mod tests {
             assert!(dragger.drag_status());
             // on the pad: the end has nowhere to go
             let on_the_pad = dragger.drag(&node, &rules, &settings, p(3_000_000, 0));
-            assert!(on_the_pad.restored, "{mode:?}: the preview is the last valid one, not the illegal position: {on_the_pad:?}");
-            assert_eq!(on_the_pad.pts, valid.pts);
+            assert!(on_the_pad.restored, "{mode:?}: the preview is not the illegal position: {on_the_pad:?}");
+            // `m_lastDragSolution`: the last shoved line in Shove mode; in Walk around mode the line as the drag started (round-2 R-7)
+            let shown = if mode == Mode::Shove { valid.pts.clone() } else { vec![p(0, 0), p(1_000_000, 0)] };
+            assert_eq!(on_the_pad.pts, shown, "{mode:?}");
             assert!(!on_the_pad.colliding);
             assert!(!dragger.drag_status(), "{mode:?}: the cursor is not at a position that can be committed");
             assert!(!dragger.force_mark_obstacles());
@@ -1148,6 +1171,50 @@ mod tests {
             let again = dragger.drag(&node, &rules, &settings, p(2_000_000, 1_000_000));
             assert!(!again.restored && dragger.drag_status(), "{mode:?}");
         }
+    }
+
+    /// Round-2 R-7: `DRAGGER::Drag`'s "Restore last solution" in Walk around mode adds `m_lastDragSolution` to a branch of the world, and
+    /// `dragWalkaround` never sets it: it is the line `startDragSegment` assembled. A position that cannot be walked shows the track where it
+    /// started (not the last good position), with nothing dragged; releasing there still commits the last valid point.
+    #[test]
+    fn walkaround_restore_shows_the_original_line() {
+        let (node, mut dragger) = track_end_and_a_pad();
+        let (rules, settings) = (rules(), RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() });
+        dragger.drag(&node, &rules, &settings, p(1_000_000, 0));
+        let valid = dragger.drag(&node, &rules, &settings, p(2_000_000, 1_500_000));
+        assert!(!valid.restored && valid.pts.last() == Some(&p(2_000_000, 1_500_000)), "{valid:?}");
+        let boxed_in = dragger.drag(&node, &rules, &settings, p(3_000_000, 0));
+        assert!(boxed_in.restored);
+        assert_eq!(boxed_in.pts, dragger.original.pts, "the original line, not the first position's");
+        assert!(boxed_in.displaced_lines.is_empty() && boxed_in.displaced_vias.is_empty());
+        let commit = dragger.finish(&node, &rules, &settings, p(3_000_000, 0), false).expect("the last valid point is committed");
+        assert_eq!(commit.tracks[0].pts, valid.pts);
+    }
+
+    /// Round-2 R-7: in Shove mode `m_lastDragSolution` is `draggedPostShove` before the optimizer: `optimizeAndUpdateDraggedLine` splits it at the
+    /// anchor (`aDragged.Line().Split( anchor )`) and optimizes a copy (`optimizer.Optimize( &aDragged, &draggedPostOpt, .. )`). With "Optimize entire
+    /// track being dragged" on, the line a later failed position shows again is that split line, not the optimized one the preview draws.
+    #[test]
+    fn shove_restore_shows_the_line_before_the_optimizer() {
+        let mut node = Node::new();
+        let pts = [p(0, 0), p(1_000_000, 0), p(1_500_000, 500_000), p(2_500_000, 500_000), p(3_000_000, 1_000_000), p(4_000_000, 1_000_000)];
+        let ids: Vec<ItemId> = pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: mm(0.25), source_track: Some(("t".into(), i)), locked: false }))).collect();
+        let rules = rules();
+        let cursor = p(1_400_000, 800_000);
+        let run = |settings: &RoutingSettings| {
+            let d = Dragger::start(&node, p(2_000_000, 500_000), ids[2]).unwrap();
+            let pv = d.preview(&node, &rules, settings, cursor);
+            assert!(!pv.colliding && !pv.restored, "{pv:?}");
+            pv
+        };
+        let off = RoutingSettings { mode: Mode::Shove, smooth_dragged_segments: false, ..RoutingSettings::default() };
+        let on = RoutingSettings { optimize_entire_dragged_track: true, ..off.clone() };
+        let (plain, optimized) = (run(&off), run(&on));
+        assert_ne!(optimized.pts, plain.pts, "the optimizer changed the line");
+        assert_eq!(plain.solution.as_ref().map(|s| &s.0), Some(&plain.pts), "with the optimizer off the solution is the shoved line");
+        let mut split = plain.pts.clone();
+        split_chain_at(&mut split, if plain.pts.contains(&cursor) { cursor } else { nearest_point_of(&plain.pts, cursor) });
+        assert_eq!(optimized.solution.as_ref().map(|s| &s.0), Some(&split), "with it on, the shoved line split at the anchor, not optimized");
     }
 
     /// `m_forceMarkObstaclesMode`: when the very first position fails, the drag goes on marking obstacles, and only Ctrl+click commits

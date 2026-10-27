@@ -1064,8 +1064,10 @@ and the slow tier (`EDA_SLOW_TESTS=1`) green.
   .. m_lastNode->Add( m_lastDragSolution )`: in Shove mode the parent is the frame this failed position reduced the stack to, so a frame it
   popped has sprung back in what is shown. The port showed `last_solution` whole, the frame from before this move's pops. Now
   (`restore_onto_frame`) a line drag shows the last good line with the reduced frame's displacement; a via drag (`dragShove` sets
-  `m_lastDragSolution` only for lines) shows the via and its legs where that frame has them. Walk around mode is unchanged: its parent is the
-  session's world. Failing first, then passing: `a_failed_via_position_shows_the_frame_it_reduced_the_stack_to` (two frames, then a position
+  `m_lastDragSolution` only for lines) shows the via and its legs where that frame has them. ~~Walk around mode is unchanged: its parent is the
+  session's world.~~ **Corrected (round-2 R-7):** in Walk around mode the parent is the session's world and `m_lastDragSolution` is still the line
+  as `startDragSegment` assembled it (`dragWalkaround` never sets it), so the track is shown where it started, not at the last good position (see
+  the round-2 section). Failing first, then passing: `a_failed_via_position_shows_the_frame_it_reduced_the_stack_to` (two frames, then a position
   neither the shove nor the pushout can place: the newest frame is popped and the preview shows the via, its leg and the push of the frame
   below). The line-drag half has no test of its own: a line head that pops a frame touches nothing of it, so its shove does not fail.
 
