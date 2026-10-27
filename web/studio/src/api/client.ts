@@ -620,13 +620,19 @@ export function routeToggleVia(enabled: boolean, diameter?: Nm, drill?: Nm, toLa
   return postJson("/api/route/via", { enabled, diameter, drill, to_layer: toLayer, ...(typed ? { via_type: typed.viaType, span: typed.span } : {}) });
 }
 
+/** A layer key while routing (`ROUTER_TOOL::onLayerCommand`, R6-R3): `switched` when the head moved to `layer` (`ROUTER::SwitchLayer`); not switched, the caller arms a via to it. */
+export function routeSwitchLayer(layer: string): Promise<{ ok: boolean; message?: string; switched?: boolean }> {
+  return postJson("/api/route/layer", { layer });
+}
+
 export function routeFinish(x: Nm, y: Nm): Promise<CmdReply> {
   return postJson("/api/route/finish", { x, y });
 }
 
-/** AttemptFinish (`F`, `ROUTER::Finish`): route to the nearest unconnected anchor of the net and commit (`finished`), or go on routing with the head where it got (`warp`, `preview`). */
-export function routeAttemptFinish(x: Nm, y: Nm): Promise<{ ok: boolean; message?: string; finished?: boolean; warp?: [Nm, Nm]; preview?: RoutePreview }> {
-  return postJson("/api/route/attempt_finish", { x: Math.round(x), y: Math.round(y) });
+/** AttemptFinish (`F`, `ROUTER::Finish`): route to the nearest unconnected anchor of the net and commit (`finished`), or go on routing with the head where it got (`warp`, `preview`).
+ *  `appendUndo` (Autoroute): the route's commit joins the undo step before it (`APPEND_UNDO`), now or when it is finished by hand. */
+export function routeAttemptFinish(x: Nm, y: Nm, appendUndo?: boolean): Promise<{ ok: boolean; message?: string; finished?: boolean; warp?: [Nm, Nm]; preview?: RoutePreview }> {
+  return postJson("/api/route/attempt_finish", { x: Math.round(x), y: Math.round(y), ...(appendUndo != null ? { append_undo: appendUndo } : {}) });
 }
 
 /** Esc: a route or a pair commits what its clicks fixed (`committed`); a drag leaves the board as it was. */

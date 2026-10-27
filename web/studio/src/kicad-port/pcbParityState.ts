@@ -65,6 +65,8 @@ export interface PcbParityState {
   menuCursorNm: { x: number; y: number } | null;
   /** `PCB_EDIT_FRAME::m_layerPairSettings` (layer_pairs.cpp): the copper layer pair `V` switches between and its presets. Null = the default (the board's outer copper layers, no presets) until "Set Layer Pair..." changes it. */
   layerPairs: LayerPairSettings | null;
+  /** `ROUTER_TOOL::m_startWithVia`: V was pressed with the route tool armed and no route drawn, so the next route starts with a via armed (R6-R5). */
+  startWithVia?: boolean;
   /** `BOARD_DESIGN_SETTINGS::m_customDiffPair`: the "Differential Pair Dimensions..." dialog's width, gap and via gap (`SetCustomDiffPairWidth/Gap/ViaGap`; null until the dialog was first accepted). */
   customDiffPair: CustomDiffPair | null;
   /** `BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions()`: the pairs routed from now on take `customDiffPair` rather than the net class's. Set by the pair menu's "Use Custom Values..." (`DIFF_PAIR_MENU::eventHandler`, kept on Cancel too), cleared by "Use Net Class Values"; the Route menu's dialog alone does not set it (`DpDimensionsDialog`). */

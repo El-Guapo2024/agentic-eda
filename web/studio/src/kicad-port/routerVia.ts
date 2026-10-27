@@ -205,3 +205,29 @@ export function validateViaParameters(diameter: Nm | null, drill: Nm | null): st
   if (diameter != null && drill != null && diameter <= drill) return "Via hole size must be smaller than via diameter";
   return null;
 }
+
+/**
+ * The layer a layer command asks for while routing (`ROUTER_TOOL::handleLayerSwitch`'s first half, R6-R3), from the router's current layer: `next` /
+ * `prev` step through the copper layers in UI order, wrapping, to the next visible one (issue 14480: none visible, nothing); a named layer
+ * (`layerTop`, `layerInnerN`, `layerBottom`: `layerDirectSwitchActions`) only when the board has it (`enabledLayers.test( targetLayer )`). Null:
+ * nothing to do -- and the current layer itself is nothing to do too (`if( targetLayer == currentLayer ) return 0;`).
+ */
+export function routerLayerTarget(cmd: "next" | "prev" | string, current: string, copper: readonly string[], visible: (layer: string) => boolean): string | null {
+  let target: string | null = null;
+  if (cmd === "next" || cmd === "prev") {
+    const idx = Math.max(0, copper.indexOf(current));
+    const n = copper.length;
+    if (n === 0) return null;
+    let t = cmd === "next" ? (idx + 1) % n : idx > 0 ? idx - 1 : n - 1;
+    for (let i = 0; i < n - 1; i++) {
+      if (visible(copper[t]!)) {
+        target = copper[t]!;
+        break;
+      }
+      t = cmd === "next" ? (t + 1) % n : t > 0 ? t - 1 : n - 1;
+    }
+  } else if (copper.includes(cmd)) {
+    target = cmd;
+  }
+  return target === current ? null : target;
+}

@@ -279,6 +279,17 @@ pub fn undo_segment(cell: &RouteCell) -> Value {
     json!({ "ok": true, "popped": popped, "placing_via": via.is_some(), "via_to_layer": via })
 }
 
+/// `POST /api/route/layer`: `{layer}` -- a layer key while routing (`ROUTER_TOOL::onLayerCommand` -> `handleLayerSwitch( aEvent, false )`, R6-R3):
+/// `ROUTER::SwitchLayer` moves the head to `layer` when nothing holds it to its own (`Router::switch_layer`). `{ ok, switched }`: not switched, the
+/// studio arms a through via to `layer` instead (`/api/route/via`), as `handleLayerSwitch` goes on to.
+pub fn layer(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing") };
+    let Some(layer) = req.get("layer").and_then(Value::as_str).and_then(|n| router.layer_index(n)) else { return err("not a copper layer of the board") };
+    json!({ "ok": true, "switched": router.switch_layer(layer) })
+}
+
 /// `POST /api/route/via`: `{enabled, diameter?, drill?, to_layer?, via_type?, span?}` -- without a size, the net class's (`handleLayerSwitch`) --
 /// arms (or disarms) "drop a via at the next fix and continue on
 /// `to_layer`", the live via-placement-with-layer-switch gesture.
@@ -368,7 +379,7 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     }
 }
 
-/// `POST /api/route/attempt_finish`: `{x, y}` -- `ROUTER_TOOL`'s `routerAttemptFinish` (`F`) -> `ROUTER::Finish`: the route is taken to the
+/// `POST /api/route/attempt_finish`: `{x, y, append_undo?}` -- `ROUTER_TOOL`'s `routerAttemptFinish` (`F`) -> `ROUTER::Finish`: the route is taken to the
 /// nearest unconnected anchor of its net and, when it gets there, committed (`finished`, one undo step, as `finish`'s); otherwise the
 /// route goes on and the reply carries where the head got (`warp`, where KiCad warps the cursor) and the preview there.
 pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
@@ -376,6 +387,11 @@ pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
+    // `append_undo` (Autoroute, R6-R4): `RouteSelected`'s `m_iface->SetCommitFlags( APPEND_UNDO )` for every connection of a run but the first of a
+    // group -- the commit joins the step before it, whether `Finish` makes it now or the user finishes the route by hand later
+    if let Some(append) = req.get("append_undo").and_then(Value::as_bool) {
+        router.append_undo = append;
+    }
     match router.attempt_finish(at) {
         Ok(commit) => {
             let (append_undo, group) = (router.append_undo, router.entered_group.clone());
@@ -1020,6 +1036,29 @@ mod tests {
         assert_eq!((reply["width"].clone(), reply["sizes"]["width_source"].clone()), (json!(200_000), json!("user choice")), "{reply}");
     }
 
+    /// R6-R3 (`LINE_PLACER::SetLayer`): a layer key while routing moves the head to that layer while the route started on a via or pad that is on it
+    /// too, or in empty space; once a fix chains the route to a segment, or when it started on a track, it is refused (the studio then arms a via).
+    #[test]
+    fn a_layer_key_moves_the_head_to_the_layer_until_a_fix_chains_it() {
+        let dir = scratch("layer_key");
+        let via = Via { id: "v_sig".into(), net: "SIG".into(), at: p(mm(5.0), mm(5.0)), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(10.0), mm(15.0)), p(mm(12.0), mm(15.0))], arc_mid_offset: None };
+        setup_board_on(&dir, vec![stub], vec![via], &["F.Cu", "In1.Cu", "B.Cu"]);
+        let cell = RouteCell::default();
+        let started = start(&dir, &cell, &body(json!({ "x": 5_000_000, "y": 5_000_000, "layer": "F.Cu", "width": 200_000, "auto_track_width": false })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        mv(&cell, &body(json!({ "x": 9_000_000, "y": 5_000_000 })));
+        assert_eq!(layer(&cell, &body(json!({ "layer": "B.Cu" }))), json!({ "ok": true, "switched": true }), "a through via is on every layer");
+        assert_eq!(mv(&cell, &body(json!({ "x": 9_000_000, "y": 5_000_000 })))["layer"], json!("B.Cu"));
+        assert_eq!(fix(&cell, &body(json!({ "x": 9_000_000, "y": 5_000_000 })))["ok"], json!(true));
+        assert_eq!(layer(&cell, &body(json!({ "layer": "In1.Cu" }))), json!({ "ok": true, "switched": false }), "chained to the fixed segment");
+        // a start on a track's end is held to the track's layer
+        let started = start(&dir, &cell, &body(json!({ "x": 12_000_000, "y": 15_000_000, "layer": "F.Cu", "width": 200_000 })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        assert_eq!(layer(&cell, &body(json!({ "layer": "B.Cu" })))["switched"], json!(false));
+        assert_eq!(layer(&cell, &body(json!({ "layer": "Nope" })))["ok"], json!(false));
+    }
+
     /// findings p5 F2-9: `F` routes to the nearest unconnected anchor and commits, or leaves the route going with the head where it got.
     #[test]
     fn attempt_finish_commits_at_the_nearest_unconnected_anchor() {
@@ -1037,6 +1076,32 @@ mod tests {
         let reached = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.id != "sig" && t.id != "sig2").any(|t| t.pts.contains(&p(mm(15.0), mm(12.0))));
         assert!(reached, "the new track ends on the other stub: {:?}", design.routing.as_ref().unwrap().tracks);
         assert!(cell.lock().unwrap().is_none());
+    }
+
+    /// R6-R4 (`ROUTER_TOOL::RouteSelected`: `if( groupStart ) groupStart = false; else m_iface->SetCommitFlags( APPEND_UNDO );`): Autoroute's connections
+    /// each go through `ROUTER::Finish` (`attempt_finish`), and those it routes are one undo step -- the first commits a step, the others join it.
+    #[test]
+    fn autoroute_of_three_free_connections_is_one_undo_step() {
+        let dir = scratch("autoroute_undo");
+        let stub = |id: &str, net: &str, x: f64, y: f64| Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(x), mm(y)), p(mm(x + 1.0), mm(y))], arc_mid_offset: None };
+        let mut stubs = Vec::new();
+        for (i, (net, y)) in [("SIG", 2.0), ("GND", 6.0), ("USB_DP", 10.0)].into_iter().enumerate() {
+            stubs.push(stub(&format!("a{i}"), net, 2.0, y));
+            stubs.push(stub(&format!("b{i}"), net, 8.0, y));
+        }
+        setup_board(&dir, stubs, vec![]);
+        let tracks = || board::load(&dir).unwrap().1.routing.unwrap().tracks;
+        let before = tracks();
+        let cell = RouteCell::default();
+        for (i, y) in [2_000_000, 6_000_000, 10_000_000].into_iter().enumerate() {
+            let started = start(&dir, &cell, &body(json!({ "x": 3_000_000, "y": y, "layer": "F.Cu", "width": 200_000, "settings": { "mode": "walkaround" } })));
+            assert_eq!(started["ok"], json!(true), "{started}");
+            let reply = attempt_finish(&dir, &cell, &body(json!({ "x": 8_000_000, "y": y, "append_undo": i > 0 })));
+            assert_eq!(reply["finished"], json!(true), "{reply}");
+        }
+        assert_ne!(tracks(), before, "the routes were committed");
+        board::undo(&dir, "test", Some(eda_ops::Domain::Pcb)).unwrap();
+        assert_eq!(tracks(), before, "one undo takes the three autorouted connections away");
     }
 
     /// findings p5 F2-3: Esc commits what the clicks fixed (`ROUTER_TOOL::performRouting`: the cancel branch breaks out of the loop, and

@@ -270,7 +270,7 @@ export type DrawState =
       pendingViaLayer?: string;
       /** The pad, via or track segment the route started on: it does not end there (see kicad-port/routeTool.ts). */
       startItem?: string;
-      /** The active layer before a start on another layer's item: see kicad-port/routeTool.ts. */
+      /** The active layer when the route started: see kicad-port/routeTool.ts. */
       originalActiveLayer?: string;
       /** The message panel's sizes: see kicad-port/routeTool.ts. */
       sizes?: RouteSizesInfo;
@@ -339,7 +339,7 @@ export type DrawState =
       /** Shove mode: other tracks/vias the pair would push aside. */
       displaced?: { layer: string; pts: [Nm, Nm][] }[];
       displacedVias?: { source_via: string; x: Nm; y: Nm }[];
-      /** The active layer before a start on another layer's item: see kicad-port/dpTool.ts. */
+      /** The active layer when the pair started: see kicad-port/dpTool.ts. */
       originalActiveLayer?: string;
       /** The message panel's sizes: see kicad-port/dpTool.ts. */
       sizes?: RouteSizesInfo;
@@ -1622,10 +1622,16 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "LINT_OK":
       return { ...state, lint: action.lint };
     case "SET_DRAW_STATE": {
-      // `ROUTER_TOOL::finishInteractive`: `frame()->SetActiveLayer( m_originalActiveLayer )` -- a route that started on another layer's item
-      // (`getStartLayer`, r5 R5-1) gives the active layer back when it ends
+      // `ROUTER_TOOL::finishInteractive`: `frame()->SetActiveLayer( m_originalActiveLayer )` -- a route gives back the active layer it started from
+      // when it ends (r5 R5-1, R6-R6)
       const prev = state.drawState;
       if ((prev?.kind === "route" || prev?.kind === "diffpair") && prev.originalActiveLayer !== undefined && action.draw?.kind !== prev.kind) return { ...state, drawState: action.draw, activeLayer: prev.originalActiveLayer };
+      // `performRouting`'s `syncRouterAndFrameLayer`: while a route runs, the active layer is the one being routed (after a via or a layer switch too), made
+      // visible if it was not (R6-R6)
+      const next = action.draw;
+      if ((next?.kind === "route" || next?.kind === "diffpair") && next.layer && next.layer !== state.activeLayer) {
+        return { ...state, drawState: next, activeLayer: next.layer, layerVisible: state.layerVisible[next.layer] === false ? { ...state.layerVisible, [next.layer]: true } : state.layerVisible };
+      }
       return { ...state, drawState: action.draw };
     }
     case "SET_ZONE_PENDING":

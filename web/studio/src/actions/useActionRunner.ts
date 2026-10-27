@@ -23,7 +23,7 @@ import { cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteracti
 import { withTrackSnapping } from "../kicad-port/routerSettings";
 import { chosenDiffPair, chosenTrackWidthOf, routeWidthAfterChange, stepDiffPairIndex, stepTrackWidth } from "../kicad-port/routerSizes";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
-import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpSetDims, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
+import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpSetDims, dpUndoSegment, fetchErc, routeAttemptFinish, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
@@ -2150,10 +2150,8 @@ export function useActionRunner() {
           const selection = [...state.selection];
           if (selection.length === 0) return;
           const anchors = routeSelectedAnchors(board.parts, ratsnestEdges, board.routing?.tracks ?? [], board.routing?.vias ?? [], selection);
-          if (anchors.length === 0) {
-            dispatch({ type: "TOAST", message: "Nothing to route: the selection has no unrouted connections.", kind: "info" });
-            return;
-          }
+          // (`RouteSelected` says nothing when there is nothing to route, and nothing after a run)
+          if (anchors.length === 0) return;
           dispatch({ type: "SET_SELECTION", refs: [] });
           // `ImportSizes`: undefined on "use net class" (list index 0, or a custom size chosen), and each connection starts at its own net's
           // width (the server's `CT_WIDTH`). By index, so a preset equal to the Default class's width is still chosen (r4 R4-8).
@@ -2163,33 +2161,30 @@ export function useActionRunner() {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
             return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch, undefined, state.bcx.autoTrackWidth)) ? "live" : "done";
           };
-          let done = 0;
+          // "We want autorouted tracks to all be in one undo group except for any tracks that need to be manually finished." (R6-R4)
+          let groupStart = true;
           const runAnchor = (a: (typeof anchors)[number]) => async (): Promise<QueueOutcome> => {
             const layer = routeStartLayer(a, copperLayers, state.activeLayer);
             if (variant !== "auto") return handOver(variant === "fromEnd" ? a.target : a.at, layer);
-            const started = await routeStart(a.at[0], a.at[1], layer, width, settings, state.bcx.autoTrackWidth);
-            if (!started.ok) return "done";
-            const head = await routeMove(a.target[0], a.target[1]);
-            // AttemptFinish: only a head that reaches the far end without colliding completes by itself.
-            if (head.ok && !head.colliding && head.snapped_end && (await routeFinish(a.target[0], a.target[1])).ok) {
-              done++;
+            // `if( groupStart ) groupStart = false; else m_iface->SetCommitFlags( APPEND_UNDO );`
+            const appendUndo = !groupStart;
+            groupStart = false;
+            // `performRouting` with `routerAttemptFinish` posted: the route starts at the anchor and `ROUTER::Finish` takes it to the nearest unconnected
+            // anchor of its net (up to five Moves until the end settles, then `FixRoute`) -- the server's `attempt_finish`, as the F key's
+            if ((await handOver(a.at, layer)) !== "live") return "done";
+            const draw = api.getState().drawState;
+            const reply = await routeAttemptFinish(a.target[0], a.target[1], appendUndo);
+            if (reply.ok && reply.finished) {
+              dispatch({ type: "SET_DRAW_STATE", draw: null });
+              await api.refresh();
               return "done";
             }
-            await routeCancel();
-            await api.refresh();
-            dispatch({ type: "TOAST", message: `Autorouted ${done} of ${anchors.length} connections; finish the next one by hand.`, kind: "info" });
-            return handOver(a.at, layer);
+            // `if( !autoRouted ) groupStart = true;` -- the route stays live with the head where `Finish` left it, for the user to finish
+            groupStart = true;
+            if (reply.ok && reply.preview?.ok && draw?.kind === "route") dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, reply.preview) });
+            return "live";
           };
-          await startRouteQueue(
-            anchors.map(runAnchor),
-            dispatch,
-            variant === "auto"
-              ? () => {
-                  void api.refresh();
-                  dispatch({ type: "TOAST", message: `Autorouted ${done} of ${anchors.length} connections.`, kind: done === anchors.length ? "info" : "error" });
-                }
-              : null
-          );
+          await startRouteQueue(anchors.map(runAnchor), dispatch, variant === "auto" ? () => void api.refresh() : null);
         });
       m.set("pcbnew.InteractiveRouter.RouteSelected", routeSelected("interactive"));
       m.set("pcbnew.InteractiveRouter.RouteSelectedFromEnd", routeSelected("fromEnd"));

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, NetClass } from "../api/types";
 import { chosenTrackWidthOf } from "./routerSizes";
-import { chosenViaOf, chosenViaSize, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
+import { chosenViaOf, chosenViaSize, routerLayerTarget, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
 
 const CU4 = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const blind: ViaCommand = { type: "blind", selectLayer: false };
@@ -125,4 +125,16 @@ test("R6-R1: V while routing sizes the via as the other via commands (handleLaye
   assert.deepEqual(chosenViaOf("through", { ...choice, index: 2 }), presets[1]);
   assert.deepEqual(chosenViaOf("through", { ...choice, index: 2, useCustomTrackVia: true }), { diameter: DEFAULT_CUSTOM_TRACK_VIA.viaDiameterNm, drill: DEFAULT_CUSTOM_TRACK_VIA.viaDrillNm });
   assert.equal(chosenViaOf("micro", { ...choice, index: 2 }), null, "a microvia's is the rules'");
+});
+
+test("R6-R3: the layer a layer key asks for while routing (handleLayerSwitch): next / prev in UI order past hidden layers, a named layer the board has", () => {
+  const copper = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
+  const all = () => true;
+  assert.equal(routerLayerTarget("next", "F.Cu", copper, all), "In1.Cu");
+  assert.equal(routerLayerTarget("prev", "F.Cu", copper, all), "B.Cu", "wraps");
+  assert.equal(routerLayerTarget("next", "F.Cu", copper, (l) => l !== "In1.Cu"), "In2.Cu", "issue 14480: a hidden layer is skipped");
+  assert.equal(routerLayerTarget("next", "F.Cu", copper, (l) => l === "F.Cu"), null, "no other layer visible");
+  assert.equal(routerLayerTarget("B.Cu", "F.Cu", copper, all), "B.Cu");
+  assert.equal(routerLayerTarget("In5.Cu", "F.Cu", copper, all), null, "not a layer of the board");
+  assert.equal(routerLayerTarget("F.Cu", "F.Cu", copper, all), null, "the current layer: nothing to do");
 });

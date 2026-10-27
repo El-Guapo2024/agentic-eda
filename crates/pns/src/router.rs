@@ -505,6 +505,12 @@ impl Router {
         Some((width, source))
     }
 
+    /// `ROUTER::SwitchLayer` (R6-R3): `m_placer->SetLayer( aLayer )` while a track is routed ([`LinePlacer::set_layer`]); false when no route is in
+    /// progress or the placer refuses, and then `handleLayerSwitch` arms a via to the layer instead.
+    pub fn switch_layer(&mut self, layer: i32) -> bool {
+        self.session.as_mut().is_some_and(|s| s.placer.set_layer(layer))
+    }
+
     /// `ROUTER::ToggleViaPlacement`: arm (or disarm) "drop a via here" for
     /// the *next* fix. `to_layer`, when arming, is which layer the route
     /// continues on after that via -- the layer-switch half of the task's

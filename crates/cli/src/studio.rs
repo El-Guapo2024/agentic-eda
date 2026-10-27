@@ -994,6 +994,7 @@ fn handle(
         ("POST", "/api/route/fix") => respond(stream, "200 OK", "application/json", route_api::fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/undo_segment") => respond(stream, "200 OK", "application/json", route_api::undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/via") => respond(stream, "200 OK", "application/json", route_api::via(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/layer") => respond(stream, "200 OK", "application/json", route_api::layer(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/attempt_finish") => respond(stream, "200 OK", "application/json", route_api::attempt_finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/continue_from_end") => respond(stream, "200 OK", "application/json", route_api::continue_from_end(dir, route_session, &body).to_string().as_bytes()),

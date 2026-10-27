@@ -13,13 +13,14 @@
 // layerToggle (actions/pcbMenuActions.ts).
 
 import { createElement } from "react";
-import { dpMove, routeMove, routeToggleVia } from "../api/client";
+import { dpMove, routeMove, routeSwitchLayer, routeToggleVia } from "../api/client";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { chosenViaOf, pickableLayers, planViaCommand, VIA_COMMANDS, type ViaChoice, type ViaCommand } from "../kicad-port/routerVia";
+import { chosenViaOf, pickableLayers, planViaCommand, routerLayerTarget, VIA_COMMANDS, type ViaChoice, type ViaCommand } from "../kicad-port/routerVia";
 import { SelectLayerDialog, TrackViaSizeDialog } from "../components/PcbRouterDialogs";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { layerPairsOf } from "./pcbRouterSweep";
+import { otherLayerOfPair } from "../kicad-port/layerPairs";
 import type { SweepCtx } from "./pcbSweepKit";
 
 /** The studio's via size choice (kicad-port/routerVia.ts `ViaChoice`): every via command of the router sizes its via from it (R6-R1). */
@@ -90,6 +91,52 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
   m.set("pcbnew.InteractiveRouter.SelLayerAndPlaceVia", viaCommand("pcbnew.InteractiveRouter.SelLayerAndPlaceVia"));
   m.set("pcbnew.InteractiveRouter.SelLayerAndPlaceBlindVia", viaCommand("pcbnew.InteractiveRouter.SelLayerAndPlaceBlindVia"));
   m.set("pcbnew.InteractiveRouter.SelLayerAndPlaceMicroVia", viaCommand("pcbnew.InteractiveRouter.SelLayerAndPlaceMicroVia"));
+
+  // ------------------------------------------------------------------------------ layer commands while routing
+  // While the router runs, the layer actions are its own (`ROUTER_TOOL::setTransitions`: `onLayerCommand` for layerTop .. layerBottom, layerNext,
+  // layerPrev), `handleLayerSwitch( aEvent, false )`: the head moves to the layer when nothing holds it to its own (`ROUTER::SwitchLayer`), else a
+  // through via to the layer is armed, sized as every via command sizes one (R6-R3). Without a route drawn they are the board editor's (active layer).
+  if (board && draw?.kind === "route") {
+    const layerCommand = (cmd: string) =>
+      pcbOnly(() => {
+        const target = routerLayerTarget(cmd, draw.layer, board.layers, (l) => state.layerVisible[l] !== false);
+        if (!target) return;
+        const cursor = state.cursorNm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
+        const refresh = (next: typeof draw) => void routeMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(next, preview) }));
+        void routeSwitchLayer(target).then((r) => {
+          if (!r.ok) return;
+          // `updateEndItem( aEvent ); .. m_router->Move( m_endSnapPoint, m_endItem ); // refresh`
+          if (r.switched) return refresh(draw);
+          // `if( !m_router->IsPlacingVia() ) m_router->ToggleViaPlacement();` with the target in the sizes' layer pair
+          const size = chosenViaOf("through", viaChoiceOf(state));
+          void routeToggleVia(true, size?.diameter, size?.drill, target).then((armed) => {
+            if (!armed.ok) return;
+            const next = { ...draw, placingVia: true, pendingViaLayer: target };
+            dispatch({ type: "SET_DRAW_STATE", draw: next });
+            refresh(next);
+          });
+        });
+      });
+    m.set("pcbnew.Control.layerNext", layerCommand("next"));
+    m.set("pcbnew.Control.layerPrev", layerCommand("prev"));
+    m.set("pcbnew.Control.layerTop", layerCommand("F.Cu"));
+    m.set("pcbnew.Control.layerBottom", layerCommand("B.Cu"));
+    for (let i = 1; i <= 30; i++) m.set(`pcbnew.Control.layerInner${i}`, layerCommand(`In${i}.Cu`));
+  }
+
+  // ------------------------------------------------------------------------------ V with the route tool armed
+  // `ROUTER_TOOL::MainLoop`: "else if( evt->IsAction( &ACT_PlaceThroughVia ) ) { m_startWithVia = true; m_toolMgr->RunAction( PCB_ACTIONS::layerToggle ); }"
+  // -- the active layer flips to the other layer of the pair (`PCB_CONTROL::LayerToggle`) and the next route starts with a via armed (`performRouting`:
+  // `if( m_startWithVia ) { m_startWithVia = false; handleLayerSwitch( ACT_PlaceThroughVia.MakeEvent(), true ); }`, components/canvas/routing.ts), R6-R5.
+  if (board && !draw && state.activeTool === "route") {
+    const startWithVia = pcbOnly(() => {
+      const pair = layerPairsOf(board, state.pcbx.layerPairs).current;
+      dispatch({ type: "SET_ACTIVE_LAYER", layer: otherLayerOfPair(pair, state.activeLayer ?? "") });
+      dispatch({ type: "PCBX", patch: { startWithVia: true } });
+    });
+    m.set("pcbnew.Control.layerToggle", startWithVia);
+    m.set("pcbnew.InteractiveRouter.PlaceVia", startWithVia);
+  }
 
   // ------------------------------------------------------------------------------ Switch Track Posture
   // performRouting: `else if( evt->IsAction( &ACT_SwitchPosture ) ) { m_router->FlipPosture(); updateEndItem( *evt ); m_router->Move( m_endSnapPoint, m_endItem ); }`
