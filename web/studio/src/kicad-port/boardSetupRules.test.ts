@@ -32,6 +32,7 @@ import {
   stackupThicknessNm,
   textRowOf,
   validateConstraints,
+  spokeCountOf,
   validateNetClasses,
   validatePredefinedSizes,
   validateStackup,
@@ -231,16 +232,14 @@ const constraints = (over: Partial<Constraints> = {}): Constraints => ({
 
 test("the Constraints page is range-checked like ValidateDesignRules", () => {
   assert.deepEqual(validateConstraints(constraints()), {});
-  const bad = validateConstraints(constraints({ min_clearance_nm: 30_000_000, max_error_nm: 0, min_resolved_spokes: 100 }));
-  assert.deepEqual(Object.keys(bad).sort(), ["max_error_nm", "min_clearance_nm", "min_resolved_spokes"]);
+  const bad = validateConstraints(constraints({ min_clearance_nm: 30_000_000, max_error_nm: 0 }));
+  assert.deepEqual(Object.keys(bad).sort(), ["max_error_nm", "min_clearance_nm"]);
   assert.equal(bad.min_clearance_nm, "Value must be between 0 mm and 25 mm.");
   assert.equal(bad.max_error_nm, "Value must be between 0.001 mm and 0.1 mm.");
-  assert.equal(bad.min_resolved_spokes, "Value must be between 0 and 99.");
   assert.deepEqual(validateConstraints(constraints({ min_silk_clearance_nm: -5_000_000 })), {}, "the silk clearance may be negative, down to -10 mm");
   assert.deepEqual(Object.keys(validateConstraints(constraints({ min_silk_clearance_nm: -10_000_001 }))), ["min_silk_clearance_nm"]);
   assert.deepEqual(validateConstraints(constraints({ min_copper_edge_clearance_nm: -10_000 })), {}, "-0.01 mm is the legacy flag value");
   assert.equal(validateConstraints(constraints({ min_track_width_nm: Number.NaN })).min_track_width_nm, "Value is not a number.");
-  assert.ok(validateConstraints(constraints({ min_resolved_spokes: 1.5 })).min_resolved_spokes);
   assert.deepEqual(validateConstraints(constraints({ max_error_nm: 100_000 })), {}, "0.1 mm is the largest (MAXIMUM_ERROR_SIZE_MM)");
   assert.equal(validateConstraints(constraints({ max_error_nm: 100_001 })).max_error_nm, "Value must be between 0.001 mm and 0.1 mm.", "one nanometre more is out");
   assert.equal(new Set(CONSTRAINT_RANGES.map((r) => r.key)).size, CONSTRAINT_RANGES.length);
@@ -400,4 +399,12 @@ test("predefinedSizesCmds sorts the widths, the vias and the pairs as KiCad's Ap
   assert.deepEqual(batch.cmds[0]!.widths, [300, 600]);
   assert.deepEqual(batch.cmds[1]!.presets, [{ diameter: 800, drill: 400 }, { diameter: 800, drill: 500 }, { diameter: 900, drill: 450 }]);
   assert.deepEqual(batch.cmds[2]!.presets, [{ width: 100, gap: 200, via_gap: 0 }, { width: 200, gap: 150, via_gap: 150 }]);
+});
+
+test("R6-Z5: the spoke count field is KiCad's 0 .. 10 spin control: a value beyond is clamped, with no message", () => {
+  assert.equal(spokeCountOf(25, 2), 10);
+  assert.equal(spokeCountOf(-3, 2), 0);
+  assert.equal(spokeCountOf(1.5, 2), 1);
+  assert.equal(spokeCountOf(Number.NaN, 2), 2, "a text that is no number leaves the value");
+  assert.equal(spokeCountOf(null, 3), 3);
 });

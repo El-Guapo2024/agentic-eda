@@ -250,8 +250,16 @@ export function validateConstraints(c: Constraints): Partial<Record<keyof Constr
     const m = rangeMessage(c[r.key] as number, r.min, r.max);
     if (m) out[r.key] = m;
   }
-  if (!Number.isInteger(c.min_resolved_spokes) || c.min_resolved_spokes < 0 || c.min_resolved_spokes > 99) out.min_resolved_spokes = "Value must be between 0 and 99.";
+  // (the spoke count is a spin control that cannot hold anything else: `spokeCountOf`)
   return out;
+}
+
+/** The Minimum thermal relief spoke count field: `panel_setup_constraints_base.cpp`'s `wxSpinCtrl( .., wxSP_ARROW_KEYS, 0, 10, 0 )`, which holds a whole number
+ *  from 0 to 10 and says nothing of what is typed beyond (R6-Z5): the typed value clamped into that range, and a text that is no number leaves `current`.
+ *  (The project file's 0 .. 99, `rules.min_resolved_spokes`, is the loader's range, not the field's.) */
+export function spokeCountOf(typed: number | null | undefined, current: number): number {
+  if (typed == null || !Number.isFinite(typed)) return current;
+  return Math.min(10, Math.max(0, Math.trunc(typed)));
 }
 
 // Solder Mask/Paste has no range checks here: `PANEL_SETUP_MASK_AND_PASTE::TransferDataFromWindow` validates nothing, it stores the
