@@ -171,6 +171,8 @@
       await sleep(1200);
       if (!(await open(t, "common.Control.plot", "Plot Schematic"))) return;
       const radio = (text) => labelled(text)?.querySelector("input");
+      // `dialog_plot_schematic_base.cpp`: PDF selected, "Plot background color" unchecked.
+      t(radio("PDF")?.checked === true && radio("Plot background color")?.checked === false, "the dialog starts at PDF with no background colour, as KiCad's");
       radio("PDF")?.click();
       radio("Plot all pages")?.click();
       await sleep(150);

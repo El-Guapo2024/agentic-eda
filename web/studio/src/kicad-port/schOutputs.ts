@@ -28,12 +28,13 @@ export interface SchPlotForm {
   currentSheetIds: string[];
 }
 
-/** `SCH_PLOT_OPTS::SCH_PLOT_OPTS`'s own defaults (colour, drawing sheet, background, all pages), SVG first. */
+/** What `DIALOG_PLOT_SCHEMATIC` starts with (`dialog_plot_schematic_base.cpp`): PDF (`m_plotFormatOpt->SetSelection( 1 )`), Color, "Plot drawing sheet" checked,
+ * "Plot background color" unchecked (`m_plotBackgroundColor` has no SetValue), all pages. */
 export const DEFAULT_SCH_PLOT_FORM: SchPlotForm = {
-  format: "svg",
+  format: "pdf",
   color: true,
   plotDrawingSheet: true,
-  useBackgroundColor: true,
+  useBackgroundColor: false,
   scope: "all",
   currentSheetIds: [],
 };
