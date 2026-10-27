@@ -1356,6 +1356,10 @@ const QA_TRACED_ALIKE: &[&str] = &[
     "ERC_dynamic_power_symbol_test.kicad_sch",
     "netlists/bus_connection/bus_connection.kicad_sch",
     "issue17771/issue1771.kicad_sch",
+    // a pin name another unit repeats (r2 A-N6)
+    "netlists/complex_hierarchy/complex_hierarchy.kicad_sch",
+    "legacy_hierarchy/legacy_hierarchy.kicad_sch",
+    "issue19646/issue19646.kicad_sch",
     // a screen shown twice inside a screen shown twice: a reference per whole sheet path
     "issue10926_1.kicad_sch",
     "netlists/hierarchy_aliases/hierarchy_aliases.kicad_sch",
@@ -1363,9 +1367,6 @@ const QA_TRACED_ALIKE: &[&str] = &[
 
 /// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
 const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
-    ("netlists/complex_hierarchy/complex_hierarchy.kicad_sch", "r2 A-N6: a pin name another unit repeats gets -Pad<n>"),
-    ("legacy_hierarchy/legacy_hierarchy.kicad_sch", "r2 A-N6"),
-    ("issue19646/issue19646.kicad_sch", "r2 A-N6"),
     ("netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch", "r2 B-H2: its sheets are in a subfolder"),
     ("issue23962/issue23962.kicad_sch", "r2 A-N10: a label's text variables are not resolved"),
     ("issue24044/issue24044.kicad_sch", "r2 A-N10"),

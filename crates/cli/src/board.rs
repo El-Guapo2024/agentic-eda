@@ -517,6 +517,7 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
     // the reference with the unit of each pin of a symbol of several units (`Net-(U1A-OUT)`), and the no-connect pins (`unconnected-(..)`), as the
     // schematic writer writes them (`resolve_pin_electrical_type`)
     let mut pin_units: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut common_pins: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for e in eda_model::sheet_list::walk(design) {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
         for sym in &sec.symbols {
@@ -525,6 +526,9 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
             let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
             for p in lib.pins.iter().filter(|p| p.unit == sym.unit || p.unit == 0) {
                 pin_units.entry(format!("{reference}.{}", p.number)).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
+                if p.unit == 0 {
+                    common_pins.insert(format!("{reference}.{}", p.number));
+                }
             }
         }
     }
@@ -543,7 +547,7 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
                 .collect::<Vec<_>>()
         })
         .collect();
-    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), common_pins: Some(&common_pins), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
     trace_design(design, model, &naming)
 }
 
