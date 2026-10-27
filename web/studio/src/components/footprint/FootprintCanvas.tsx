@@ -502,12 +502,10 @@ export function FootprintCanvas() {
     if (state.activeTool === "text") {
       if (state.textDialog) return;
       if (state.carriedText) {
-        const before = new Set((fp?.texts ?? []).map((t) => t.id));
         const text = { ...state.carriedText, at: { x: sx, y: sy } };
         dispatch({ type: "SET_CARRIED_TEXT", text: null });
-        void api.addText(text).then(() => {
-          const made = api.getState().footprint?.texts.find((t) => t.id && !before.has(t.id));
-          if (made?.id) dispatch({ type: "SET_SELECTION", refs: [made.id] }); // `selectItem, text`
+        void api.addText(text).then((id) => {
+          if (id) dispatch({ type: "SET_SELECTION", refs: [id] }); // `selectItem, text`
         });
         return;
       }

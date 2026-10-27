@@ -944,18 +944,25 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
 }
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseBoardStackup`: `(setup (stackup (layer "F.Cu" (type "copper") (thickness 0.035)) ..
-/// (copper_finish "ENIG") (dielectric_constraints yes) ..))`. A layer with several sublayers (`addsublayer`) is read as its
-/// first. `None` when the board has no stackup block.
+/// (copper_finish "ENIG") (dielectric_constraints yes) ..))`. A layer with several sublayers holds their sum, which is what
+/// `BOARD_ADAPTER::InitSettings` adds to the 3D board's body for a dielectric: the layer's own `(thickness ..)` is sublayer 0
+/// and each `(addsublayer (thickness ..))` the ones after it (0 when a sublayer writes none). `None` when the board has no
+/// stackup block.
 fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
     let st = sexpr::find(root, "setup").and_then(|setup| sexpr::find(setup, "stackup"))?;
     let layers: Vec<eda_model::StackupLayer> = sexpr::find_all(st, "layer")
         .filter_map(|l| {
             let name = sexpr::txt(l, 1)?.to_string();
             let kind = sexpr::find(l, "type").and_then(|t| sexpr::txt(t, 1)).map(String::from);
+            let thicknesses: Vec<f64> = sexpr::find(l, "thickness")
+                .and_then(|t| sexpr::num(t, 1))
+                .into_iter()
+                .chain(sexpr::find_all(l, "addsublayer").filter_map(|s| sexpr::find(s, "thickness")).filter_map(|t| sexpr::num(t, 1)))
+                .collect();
             Some(eda_model::StackupLayer {
                 name,
                 material: sexpr::find(l, "material").and_then(|m| sexpr::txt(m, 1)).map(String::from),
-                thickness_mm: sexpr::find(l, "thickness").and_then(|t| sexpr::num(t, 1)),
+                thickness_mm: (!thicknesses.is_empty()).then(|| thicknesses.iter().sum()),
                 kind,
                 epsilon_r: sexpr::find(l, "epsilon_r").and_then(|e| sexpr::num(e, 1)),
                 loss_tangent: sexpr::find(l, "loss_tangent").and_then(|e| sexpr::num(e, 1)),
@@ -2836,6 +2843,34 @@ mod tests {
         assert_eq!(import_kicad_pcb(board).unwrap().0.drawings.unwrap().board_items.text_boxes.len(), 2);
         let (_, _, plain) = import_kicad_pcb(r#"(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 "F.Cu" signal)) (net 0 ""))"#).unwrap();
         assert!(plain.unread_items.is_empty());
+    }
+
+    /// V5-3: a dielectric with sublayers is one item whose thicknesses `BOARD_ADAPTER::InitSettings` adds up for the 3D body
+    /// (`for( sublayer ... ) body_thickness += item->GetThickness( sublayer )`), so the import keeps their sum on the one layer it
+    /// reads. A layer whose sublayer writes no thickness adds 0 (`DIELECTRIC_PRMS`'s default); a layer with none keeps its own.
+    #[test]
+    fn a_dielectrics_sublayers_add_up_to_the_layers_thickness() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6)) (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (setup (stackup
+    (layer "F.Mask" (type "Top Solder Mask") (thickness 0.01))
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "core") (thickness 0.5) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02)
+      (addsublayer (thickness 0.06) (material "FR4") (epsilon_r 4.2) (loss_tangent 0.01))
+      (addsublayer (material "FR4")))
+    (layer "B.Cu" (type "copper") (thickness 0.035))
+    (layer "B.Mask" (type "Bottom Solder Mask") (thickness 0.01))
+    (copper_finish "ENIG")))
+  (net 0 "")
+)"#;
+        let (_, model, _) = import_kicad_pcb(board).unwrap();
+        let layers = &model.stackup.expect("the stackup").layers;
+        let diel = layers.iter().find(|l| l.name == "dielectric 1").unwrap();
+        assert!((diel.thickness_mm.unwrap() - 0.56).abs() < 1e-9, "{diel:?}");
+        assert_eq!((diel.material.as_deref(), diel.epsilon_r, diel.loss_tangent), (Some("FR4"), Some(4.5), Some(0.02)), "the first sublayer's material, as KiCad shows the layer");
+        let copper = layers.iter().find(|l| l.name == "F.Cu").unwrap();
+        assert_eq!(copper.thickness_mm, Some(0.035), "no addsublayer: the layer's own thickness");
     }
 
     /// In a pre-9.0 file a footprint margin of 0 means "inherit" (`parseFOOTPRINT_unchecked`): neither the mask margin nor a paste margin token of 0 comes through as a margin
