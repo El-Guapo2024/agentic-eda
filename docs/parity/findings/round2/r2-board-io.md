@@ -73,6 +73,7 @@ The results are in `/tmp/findings-r2-board-io.eUqB/rt/<board>/{diff.txt,diff2.tx
 **Already known?** No. PARITY-pcb mentions 20241229 only for the clipboard.
 
 **Fixed** on task-r2-board-io: fe661733. The version is decided from 25ec2335's gates: KiCad refuses a newer file outright (`checkVersion`), so a board stays KiCad 9's 20241229 (which KiCad 9 opens) unless the setup holds the vias' covering/plugging/capping/filling defaults; then it is 20250228, the first version whose vias inherit them, and the only other gate in between (20250210's stroked fill) is off by our `(filled_areas_thickness no)`. The later gates are met on reading, as bold text and the library frame already were: a version past 20260616 would have every footprint read in its library frame. The image scale is held as KiCad 10 holds it (an older file's PNG scaled by `GetPPI / GetLegacyPPI`) and written as the scale a 20241229 file must say. Both proposed slow tests are in `crates/kicad/tests/board_io_round2.rs`. Left: a KiCad 10 board with no such setup still gets explicit `no` tokens on its vias in kicad-cli's rewrite of our file (same meaning, the board's defaults are off); a `thieving` zone would still make an unreadable 20241229 file.
+**Fixed** on task-r2-misc-leftovers: 9e1c1ed1 (the thieving zone: kept, and the board written as 20260513; r3-board-io F2).
 
 ### F2. A track or arc with solder mask (`(layers "B.Cu" "B.Mask")`) is moved to F.Cu and loses its mask. A copper shape with mask is moved to Cmts.User. **high**
 
@@ -315,6 +316,7 @@ Test to write: `plot_params_round_trip`. Read `(pcbplotparams (outputdirectory "
 **Already known?** Partly: GAPS item 24 says Repeat Layout does not copy tuning patterns. The file-level membership loss is not listed.
 
 ### F15. Pre-version-8 user fields lose their position and their mirror justification. **low**
+**Fixed** on task-r2-misc-leftovers: 20b60bc8 (the field where `parseFOOTPRINT_unchecked` leaves a new `PCB_FIELD`, `p - R(a) p` from the footprint, in nanometres with KiCad's rounding; mirrored on the back; `simple` 965 -> 111 lines).
 
 - `simple` (20220914): 427 hidden fields are written `(at 0 0 0)`; kicad-cli's view of the original has them at the footprint's place.
 - `stonehenge` (B.Fab): fields lose `(justify mirror)`.
@@ -337,6 +339,7 @@ Test to write: `plot_params_round_trip`. Read `(pcbplotparams (outputdirectory "
 - A tuning pattern's `target_length` of 1000000 mm (the "unconstrained" value of the skew patterns in 25ec2335 `test_proj`, `diff_pair_uncoupled_tuning_drc`, `multichannel_nested`) is clamped to 2147.483637 mm. KiCad keeps a `long long` (`pcb_tuning_pattern.cpp`: `long long int val; aProps.get_to_iu( "target_length", val )`).
 
 **Partly fixed** on task-r2-board-io: 0187d49a (the target length clamp). The rest is open.
+**Fixed in part** on task-r2-misc-leftovers: 0d5779ef (a padless footprint's `zone_connect` and `clearance`; the board's technical layers are the file's plus the mandatory ones, as `BOARD_DESIGN_SETTINGS::SetEnabledLayers` has them: `issue18839` 10 -> 0 lines). Left: an empty footprint `(embedded_files)` (files listed with no data, which KiCad writes as an empty block and which carry nothing) and the stackup `addsublayer` (the stackup model has one row per layer, PARITY section 52).
 
 ### F18. Note on the R6 change (installed footprints carried whole). **low (design note)**
 

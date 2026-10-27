@@ -63,6 +63,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 
 ### R4 (medium). Mirror skips footprint fields, points and tuning patterns
 **Fixed** on task-r2-pcb-edit: 8c0c6a33 (fields and points; text boxes, images and tuning patterns still not mirrored, PARITY 55)
+**Fixed** on task-r2-misc-leftovers: 203ae39a (text boxes, `PCB_TEXTBOX::Mirror`, and tuning patterns, `baseMirror`, through `Cmd::MirrorItems`), d96f5642 (the action's selection filter had left fields, points and text boxes out, so 8c0c6a33's fields and points never mirrored from the menu). An image: **not a bug**, `MirrorableItems` has no `PCB_REFERENCE_IMAGE_T`.
 - **What differs.** `EDIT_TOOL::MirrorableItems` (`edit_tool.cpp:2643`) is `{ PCB_SHAPE_T, PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_ZONE_T, PCB_PAD_T, PCB_TRACE_T, PCB_ARC_T, PCB_VIA_T, PCB_GROUP_T, PCB_GENERATOR_T, PCB_POINT_T }`, and `EDIT_TOOL::Mirror` has `case PCB_FIELD_T: case PCB_TEXT_T: static_cast<PCB_TEXT*>( item )->Mirror( mirrorPoint, flipDirection );` (the position mirrored, the horizontal justification flipped at exactly 0 / 90 degrees), `case PCB_GENERATOR_T: ...->Mirror(...)`, `case PCB_POINT_T: ...->Mirror(...)`. Ours: `mirrorableIds` (`web/studio/src/kicad-port/pcbMirror.ts:77-91`) keeps only `track`, `via`, `zone`, `shape`, `text` (and opens groups), so a selected Reference/Value, a point or a tuning pattern is silently left alone (text boxes and images are the known PARITY section 39 gap). Slice B's B1 is the menu side of the same gap (no Mirror / Rotate submenu for these kinds).
 - **How to see it.** Select a footprint's Value text, Edit > Mirror Horizontally: KiCad moves nothing (a lone item mirrors about its own position) but flips its justification left/right; select the Value and a line: KiCad mirrors both about their centre, ours only the line. Test: `pcbMirror.test.ts` `a field and a point are mirrorable`: `planMirror(board, ["R1:Value", "pt_1", "shp_a"], c, "leftRight").cmds` has an `edit_board_field` (position, justify) for R1's Value and a move of the point.
 - **Severity.** Medium.
@@ -198,6 +199,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 
 ### A5 (medium). Track & Via Properties and Shape Properties (`ItemPropertiesDialog.tsx`) lack fields KiCad's dialogs have, give a false reason, and edit only one item
 **Fixed** on task-r2-pcb-edit: 409c35da (in part: net, lock, ends, width, layer, via place and size over the selection; the via layer pair, mask and backdrill rows not yet)
+**Fixed** on task-r2-misc-leftovers: 8b9e5241 (Via type, Start layer, End layer, Annular rings: `Cmd::SetViaLayers`, `SanitizeLayers`, `ValidateViaParameters`' messages). Left: the protection features (IPC-4761 presets), backdrill and post-machining rows -- all but tenting are KiCad 10 tokens (covering and the rest from 20250228, backdrill later) that a board without them is not written in; tenting alone would be a partial preset row.
 - **What differs.**
   - `PARITY-pcb.md` section 10 (lines 561-562) and the header of `web/components/ItemPropertiesDialog.tsx:1-9` say net, position and the via's layer span "stay read-only, matching source's own dialog", and that a shape's "Geometry itself has no dialog field in source either". The dialog's text says: "Net and layer span have no edit command yet, same as real KiCad's own dialog -- delete and redraw to change either." (`:157`). The track branch says "Net and layer have no edit command yet" (`:156`).
   - KiCad's `pcbnew/dialogs/dialog_track_via_properties.cpp` has a net selector (`m_netSelector`, `onNetSelector`), track start/end and via position binders (`m_trackStartX`, `m_viaX`, ...), the via's layer pair (`m_ViaStartLayer`, `m_ViaEndLayer`) and the via type.
@@ -212,6 +214,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 
 ### A6 (low). The footprint's Properties panel rows differ from `FOOTPRINT_DESC`
 **Not fixed** on task-r2-pcb-edit: confirmed, left (PARITY-pcb section 55, "Not done")
+**Fixed** on task-r2-misc-leftovers: 789d6187 (Library Description, Keywords, Component Class, Clearance Override, both Solderpaste overrides, Zone Connection Style; no Value, MPN, Block, Nets). Differs: the solderpaste overrides are shown, not edited (no verb sets a footprint's own paste margins); Component Class is the footprint's own classes (the project's assignment rules are kicad-cli's).
 - **What differs.** KiCad's rows after Orientation (`pcbnew/footprint.cpp::FOOTPRINT_DESC`): Reference (writeable, `SetReference`); Library Link, Library Description, Keywords and Component Class under "Footprint Properties"; the four Attributes; then the Overrides: "Exempt From Courtyard Requirement", "Clearance Override", "Solderpaste Margin Override", "Solderpaste Margin Ratio Override" and "Zone Connection Style".
   - Ours (`pcbProperties.ts:647-700`) adds Value, MPN, Block and Nets, none of which KiCad has. `PARITY-pcb.md` section 23 names only "Component Type" as an extra.
   - Ours lacks Library Description, Keywords and Component Class.
@@ -223,6 +226,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 
 ### A7 (low). Validators KiCad does not have: a length of 0 is refused for track width, pad size, text size, rectangle side and circle radius
 **Not fixed** on task-r2-pcb-edit: confirmed, left -- the verbs refuse a zero size too, so the panel alone cannot take it (PARITY 55)
+**Fixed in part** on task-r2-misc-leftovers: 2e8a9bc9 (a track Width of 0: `set_track_width` serves only the panel and the width steps). Left: pad size, text size and a shape's sizes -- their verbs are also the Pad Properties, Text Properties and Shape Properties dialogs', whose KiCad checks refuse 0 (`padValuesOK`, `TEXT_MIN_SIZE_MM`, "Line width must be greater than zero."), checked in the verb here; taking 0 from the panel alone needs a verb argument of its own. The rectangle's signed Width/Height is left too (`PGPROPERTY_SIZE` is unsigned, so KiCad's own row cannot show the sign either).
 - **What differs.**
   - KiCad registers these with no validator. Their grid cell is `PGPROPERTY_SIZE` (a `wxUIntProperty`, which only refuses negatives):
     - `PCB_TRACK` "Width": `PROPERTY<PCB_TRACK, int>( _HKI( "Width" ), &PCB_TRACK::SetWidth, &PCB_TRACK::GetWidth, PROPERTY_DISPLAY::PT_SIZE )`, no `SetValidator` (`pcb_track.cpp` ~3133);
@@ -402,6 +406,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 
 ### C1. Rotate by a non-quarter angle drops a rounded rectangle's corner radius
 **Fixed** on task-r2-pcb-edit: 81948dba (confirmed: `EDA_SHAPE::rotate` makes the polygon of the ROUNDRECT)
+**Fixed** on task-r2-misc-leftovers: 68c98bce (Create Array and Repeat Layout copies too).
 - **What differs.** `EDA_SHAPE::rotate` (`common/eda_shape.cpp:966-981`) turns a rectangle that is not turned by a cardinal angle into the polygon of its *rounded* rectangle:
   ```cpp
   case SHAPE_T::RECTANGLE:
@@ -450,6 +455,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 
 ### C4. Flip leaves an item on a front/back user layer where it is; KiCad moves it to the paired layer
 **Fixed** on task-r2-pcb-edit: b5e0d278 (board items; a footprint's own drawings on user layers not yet)
+**Left** on task-r2-misc-leftovers: a footprint's drawings are kept once per footprint definition in the top-side frame and put on a side by `fp_art::layer_on_side` (render, writer, reader and DRC, eleven callers) with no board context; pairing user layers there needs the board's layer setup at every one of them, or art per placed footprint. KiCad stores the flipped layer on the item, so a layer retyped later would also differ.
 - **What differs.** Every item's `Flip` calls `GetBoard()->FlipLayer( GetLayer() )` (`pcb_shape.cpp:581`, `pcb_text.cpp:486`, `pcb_track.cpp:1136`, `zone.cpp:1114`, `footprint.cpp:2983`, ...), which is `m_layers[...].m_opposite` (`pcbnew/board.cpp:930-933`). `BOARD::recalcOpposites` (`board.cpp:869-926`) pairs user layers typed `front`/`back`: first by the name after the first dot ("Match up similary-named front/back user layers"), then consecutive `User.n` (front) / `User.n+1` (back) pairs with custom names.
   Ours: `flip_layer` (`crates/ops/src/pcb_transform.rs:83-102`) maps the seven fixed technical pairs and the inner copper only; a `User.*` layer always stays. The IR has the types (`LayerType::Front | Back`, `crates/model/src/layers.rs:131-142`, whose doc says such a layer "does" flip, and `crates/kicad/src/pcb.rs:579` writes them), so a board with `User.1 "F.Assembly" front` and `User.2 "B.Assembly" back` flips its assembly drawings in KiCad and not here (same for footprint art flipped through `fp_edit.rs:350,367`, `pcb_items.rs:511,521`, `pcb_tables.rs:165`).
 - **How to see it.** Board Setup > Board Editor Layers: User.1 named `F.Notes` type front, User.2 `B.Notes` type back; draw a line on User.1, F: KiCad puts it on User.2; we keep User.1. Test: `pcb_transform_tests.rs` `flip_takes_a_front_user_layer_to_its_back_pair` (layer setup with the two types; `FlipItems` on a line on `User.1`; assert its layer is `User.2`).
