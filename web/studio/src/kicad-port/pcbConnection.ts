@@ -16,8 +16,8 @@
 //
 // Pure: no store, no DOM. Unit-tested in pcbConnection.test.ts.
 import type { BoardState } from "../api/types";
-import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "./expandConnection";
-import { itemKind, padById, shapeById } from "./pcbItems";
+import { selectAllConnectedTracks, type ConnPad, type ConnSeg, type ConnStart, type ConnVia, type ConnWorld, type StopCondition } from "./expandConnection";
+import { itemKind, padIds, shapeById } from "./pcbItems";
 
 /** What `selectPoint` found under the cursor, best first (`pickSelectionCandidates`). */
 export interface HitCandidate {
@@ -50,41 +50,65 @@ function isExpandableGraphicShape(board: BoardState, id: string): boolean {
   return s.kind === "segment" || s.kind === "arc" || s.kind === "bezier";
 }
 
-/**
- * The selection after the flood: `selection` plus every track and via of the connections its tracks, vias, pads and footprints' pads belong to, the stages
- * `STOP_AT_JUNCTION`, `STOP_AT_PAD`, `STOP_NEVER` tried in turn. Null when nothing in `selection` can start one.
- */
-export function expandedSelection(board: BoardState, selection: ReadonlySet<string>): string[] | null {
-  const tracks: ConnTrack[] = (board.routing?.tracks ?? []).map((t) => ({ id: t.id, net: t.net, start: t.pts[0]!, end: t.pts[t.pts.length - 1]! })).filter((t) => t.start && t.end);
-  const vias: ConnVia[] = (board.routing?.vias ?? []).map((v) => ({ id: v.id, net: v.net, at: [v.x, v.y] }));
-  const startPoints: StartPoint[] = [];
-  const selectedTrackIds: string[] = [];
-  const selectedViaIds: string[] = [];
-  for (const id of selection) {
-    const kind = itemKind(board, id);
-    if (kind === "track") {
-      const t = board.routing?.tracks.find((q) => q.id === id);
-      if (!t) continue;
-      selectedTrackIds.push(id);
-      startPoints.push({ point: t.pts[0]!, net: t.net }, { point: t.pts[t.pts.length - 1]!, net: t.net });
-    } else if (kind === "via") {
-      const v = board.routing?.vias.find((q) => q.id === id);
-      if (!v) continue;
-      selectedViaIds.push(id);
-      startPoints.push({ point: [v.x, v.y], net: v.net });
-    } else if (kind === "part") {
-      const p = board.parts.find((q) => q.ref === id);
-      for (const pad of p?.pads ?? []) if (pad.net) startPoints.push({ point: [pad.x, pad.y], net: pad.net });
-    } else if (kind === "pad") {
-      const pad = padById(board, id)?.pad;
-      if (pad?.net) startPoints.push({ point: [pad.x, pad.y], net: pad.net });
-    }
+/** The board as `selectAllConnectedTracks` walks it: every track's segments, every via with its copper span, every pad of a placed footprint with its copper layers. */
+export function connectionWorld(board: BoardState): ConnWorld {
+  const copper = board.layers.filter((l) => l.endsWith(".Cu"));
+  const segs: ConnSeg[] = [];
+  for (const t of board.routing?.tracks ?? []) {
+    if (t.pts.length < 2) continue;
+    // an arc is one `PCB_ARC`, its two ends; a polyline is a run of `PCB_TRACK`s
+    if (t.arc_mid) segs.push({ track: t.id, seg: 0, layer: t.layer, start: t.pts[0]!, end: t.pts[t.pts.length - 1]! });
+    else for (let i = 0; i + 1 < t.pts.length; i++) segs.push({ track: t.id, seg: i, layer: t.layer, start: t.pts[i]!, end: t.pts[i + 1]! });
   }
-  if (startPoints.length === 0) return null;
-  const result = expandConnection(tracks, vias, startPoints, { trackIds: selectedTrackIds, viaIds: selectedViaIds });
+  const span = (a: string, b: string) => {
+    const [i, j] = [copper.indexOf(a), copper.indexOf(b)];
+    return i < 0 || j < 0 ? [a, b] : copper.slice(Math.min(i, j), Math.max(i, j) + 1);
+  };
+  const vias: ConnVia[] = (board.routing?.vias ?? []).map((v) => ({ id: v.id, at: [v.x, v.y], diameter: v.d, layers: span(v.from, v.to) }));
+  const pads: ConnPad[] = [];
+  for (const part of board.parts) {
+    if (!part.placed) continue;
+    const ids = padIds(part);
+    (part.pads ?? []).forEach((pad, i) => {
+      const layers = pad.th ? copper : [part.side === "bottom" ? "B.Cu" : "F.Cu"];
+      pads.push({ id: ids[i]!, at: [pad.px ?? pad.x, pad.py ?? pad.y], layers });
+    });
+  }
+  return { segs, vias, pads };
+}
+
+/**
+ * The stages of `expandConnection` from `selection`: STOP_AT_JUNCTION, STOP_AT_PAD, STOP_NEVER, each adding to the selection what `selectAllConnectedTracks` reaches
+ * from the selection as it stands (a footprint stands for its pads, a tuning pattern for its tracks), until the selection holds more than `initialCount` items --
+ * `initialCount` is counted before a cursor pick, so after one the first stage that finds anything is the last. A track of a tuning pattern is selected as the
+ * pattern ("Promote generated members to their PCB_GENERATOR parents"). Null when nothing in `selection` can start a walk.
+ */
+export function expandedSelection(board: BoardState, selection: ReadonlySet<string>, initialCount = connectedStartCount(board, selection)): string[] | null {
+  const world = connectionWorld(board);
+  const generators = (board.drawings?.groups ?? []).filter((g) => g.generator);
+  const generatorOf = new Map(generators.flatMap((g) => g.member_ids.map((m) => [m, g.id] as const)));
   const refs = new Set(selection);
-  for (const id of result.trackIds) refs.add(id);
-  for (const id of result.viaIds) refs.add(id);
+  const startsOf = (ids: Iterable<string>): ConnStart[] => {
+    const out: ConnStart[] = [];
+    for (const id of ids) {
+      const kind = itemKind(board, id);
+      if (kind === "track" || kind === "via" || kind === "pad") out.push({ kind, id });
+      else if (kind === "part") for (const pid of padIds(board.parts.find((q) => q.ref === id) ?? { ref: id })) out.push({ kind: "pad", id: pid });
+      else {
+        const g = generators.find((q) => q.id === id);
+        for (const m of g?.member_ids ?? []) if (itemKind(board, m) === "track" || itemKind(board, m) === "via") out.push({ kind: itemKind(board, m) as "track" | "via", id: m });
+      }
+    }
+    return out;
+  };
+  if (startsOf(refs).length === 0) return null;
+  for (const stage of ["junction", "pad", "never"] as StopCondition[]) {
+    const selected = { trackIds: new Set<string>(), viaIds: new Set<string>() };
+    selectAllConnectedTracks(world, startsOf(refs), stage, selected);
+    for (const id of [...selected.trackIds, ...selected.viaIds]) refs.add(generatorOf.get(id) ?? id);
+    for (const id of [...refs]) if (generatorOf.has(id)) refs.delete(id);
+    if (refs.size > initialCount) break;
+  }
   return [...refs];
 }
 
@@ -95,11 +119,12 @@ export function expandedSelection(board: BoardState, selection: ReadonlySet<stri
  */
 export function planSelectConnection(board: BoardState, selection: ReadonlySet<string>, candidates: readonly HitCandidate[]): { refs: string[] } | null {
   let start: ReadonlySet<string> = selection;
-  if (connectedStartCount(board, selection) === 0) {
+  const initialCount = connectedStartCount(board, selection);
+  if (initialCount === 0) {
     if ([...selection].some((id) => isExpandableGraphicShape(board, id))) return null;
     const hit = connectedItemAt(candidates);
     start = new Set(hit ? [hit] : []);
     if (start.size === 0) return selection.size === 0 ? null : { refs: [] };
   }
-  return { refs: expandedSelection(board, start) ?? [...start] };
+  return { refs: expandedSelection(board, start, initialCount) ?? [...start] };
 }
