@@ -72,6 +72,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
 | Round 2 leftovers and round 3 fixes (2026-10-28): `task-r2-leftovers` (`ds-agentic-eda`, push disabled: merge locally; then round-3 schematic A3/C3), `task-r2-misc-leftovers` (`-router`; then round-3 board files), `task-r3-editors-exports` (`-embedded`), `task-r3-pcb-edit` (`-exports`), `task-r3-router` (`-rules`), `task-r3-sch-files` (`-sim`: schematic B3/D3) | Round 3 findings: `docs/parity/findings/round3/` (copies; live in `~/work/findings/round3/`): schematic 41, PCB editing 36, editors/exports 24, board files 13, router 11 (125; round 2 had 160, round 1 about 200) | started | all |
+| `task-pictures-kicad-cli` (`-embedded`, 2026-10-28) | The schematic and board pictures (`eda schematic`'s `schematic.svg`, `GET /api/schematic.svg`, the judge's `judge_<stage>.{svg,png}`) are kicad-cli's plots (`crates/kicad-engine/src/pictures.rs`); `crates/render` and the judge's hand-drawn board kept INACTIVE behind `EDA_RUST_PICTURES=1`; GAPS item 38 | done | the judge's rubric re-baseline on the bench boards (needs an API key) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

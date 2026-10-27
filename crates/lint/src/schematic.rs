@@ -1058,7 +1058,7 @@ fn check_sheet_density(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_
 
 /// Extracts the `x y w h` of an SVG document's top-level `viewBox`
 /// attribute, in mm — `eda-render` always emits one on its root `<svg>`
-/// (see `render_screen`).
+/// (see `render_screen`). Used only with `EDA_RUST_PICTURES=1`.
 fn parse_view_box(svg: &str) -> Option<(f64, f64, f64, f64)> {
     let start = svg.find("viewBox=\"")? + "viewBox=\"".len();
     let rest = &svg[start..];
@@ -1074,34 +1074,38 @@ fn parse_view_box(svg: &str) -> Option<(f64, f64, f64, f64)> {
 /// Fails when any drawn element's full extent — a symbol box or its pin
 /// stub tips, a wire segment endpoint, a refdes/value/pin-name text box, or
 /// a net label's full ink (its tag/glyph including the pentagon nose and,
-/// for Ground/Power, the leader line and bars/arrowhead) — lies outside the
-/// sheet bounding box `eda-render` actually emits as the SVG `viewBox`. This
-/// is deliberately checked against the *real rendered* viewBox (by calling
-/// `eda_render::render_screen` directly), not a second independently
-/// re-derived bounding box, so a future drawn element that `eda-render`'s
-/// own bounds computation forgets to include is still caught here rather
-/// than the two computations silently agreeing on the same mistake. Every
-/// element's own extent is still measured with the exact shared
-/// `eda_engine::geometry` functions `eda-render` draws with (`symbol_box_mm`,
-/// `stub_tip`, `pin_text_box`, `resolve_net_label`/`net_label_extent`), so a
-/// disagreement here always means the sheet bounding box itself is wrong,
-/// never a difference in how the two crates estimate ink.
+/// for Ground/Power, the leader line and bars/arrowhead) — lies off the
+/// sheet. Every element's own extent is measured with the shared
+/// `eda_engine::geometry` functions (`symbol_box_mm`, `stub_tip`,
+/// `pin_text_box`, `resolve_net_label`/`net_label_extent`).
+///
+/// The sheet is the page kicad-cli plots (`sch export svg`'s viewBox is the
+/// paper, `0 0 <width> <height>` mm): the paper the derived `.kicad_sch`
+/// declares (`(paper ...)`, A4 when the title block names none, as the
+/// exporter writes it). With `EDA_RUST_PICTURES=1` it is instead the viewBox
+/// of the INACTIVE `eda-render` picture, as this check measured before the
+/// pictures became kicad-cli's.
 fn check_content_in_bounds(sch: &SchematicSection, model: &ConstraintModel, geos: &BTreeMap<String, SymGeo<'_>>, out: &mut Vec<CheckResult>) {
-    let svg = match eda_render::render_screen(sch, model) {
-        Ok(s) => s,
-        Err(_) => {
-            // Rendering itself already failed for an unrelated reason (e.g.
-            // a symbol with no matching Part) — nothing for this gate to
-            // measure against.
-            out.push(CheckResult::pass("schematic_content_in_bounds"));
+    let (x0, y0, x1, y1) = if eda_render::rust_pictures() {
+        let svg = match eda_render::render_screen(sch, model) {
+            Ok(s) => s,
+            Err(_) => {
+                // Rendering itself already failed for an unrelated reason (e.g.
+                // a symbol with no matching Part) — nothing for this gate to
+                // measure against.
+                out.push(CheckResult::pass("schematic_content_in_bounds"));
+                return;
+            }
+        };
+        let Some((vx, vy, vw, vh)) = parse_view_box(&svg) else {
+            out.push(CheckResult::fail("schematic_content_in_bounds", "sheet", "renderer did not emit a parseable viewBox"));
             return;
-        }
+        };
+        (vx, vy, vx + vw, vy + vh)
+    } else {
+        let paper = eda_engine::hier::kit::paper_named(sch.title_block.as_ref().map(|t| t.paper.as_str()).filter(|p| !p.is_empty()).unwrap_or("A4"));
+        (0.0, 0.0, paper.w.mm(), paper.h.mm())
     };
-    let Some((vx, vy, vw, vh)) = parse_view_box(&svg) else {
-        out.push(CheckResult::fail("schematic_content_in_bounds", "sheet", "renderer did not emit a parseable viewBox"));
-        return;
-    };
-    let (x0, y0, x1, y1) = (vx, vy, vx + vw, vy + vh);
     let eps = 1e-6;
     let mut ok = true;
 

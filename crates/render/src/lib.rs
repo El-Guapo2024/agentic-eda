@@ -1,3 +1,9 @@
+//! INACTIVE (2026-10-28): replaced by kicad-cli `sch export svg` / `pcb export svg` per the user's port-vs-reuse rule; kept for a future
+//! all-Rust build. Nothing calls this crate by default: `eda schematic`'s `schematic.svg`, the studio's `GET /api/schematic.svg` and the
+//! judge's pictures are kicad-cli's plots (`eda_kicad_engine::pictures`), and lint's `schematic_content_in_bounds` measures against the
+//! page kicad-cli plots. `EDA_RUST_PICTURES=1` ([`rust_pictures`]) switches those callers back to this renderer, so it keeps compiling,
+//! keeps its tests and does not rot.
+//!
 //! eda-render — deterministic SVG rendering of a `Design`'s schematic
 //! section.
 //!
@@ -25,6 +31,11 @@ use eda_model::{CheckResult, ConstraintModel, Part};
 const STUB: i64 = 1_270_000; // 1.27mm, one GRID
 /// SVG-space margin around all content, in mm.
 const MARGIN_MM: f64 = 5.0;
+
+/// The opt-in to this inactive renderer: `EDA_RUST_PICTURES=1` (or `true`). Off by default; the pictures are kicad-cli's.
+pub fn rust_pictures() -> bool {
+    std::env::var("EDA_RUST_PICTURES").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
 
 /// Renders `design`'s schematic (looked up against `model` for part/pin metadata) as a complete standalone SVG document.
 ///
