@@ -55,6 +55,7 @@ pub mod table_text;
 pub mod text_vars;
 pub mod topo_match;
 pub mod units;
+pub mod track_mask;
 pub mod via_extra;
 pub mod via_stitch;
 pub mod drill_chart;

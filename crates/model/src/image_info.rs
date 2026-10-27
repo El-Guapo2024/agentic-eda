@@ -40,6 +40,10 @@ pub struct ImageHeader {
     pub height: u32,
     /// Pixels per inch (`BITMAP_BASE::GetPPI`): the file's, else [`DEFAULT_PPI`].
     pub ppi: u32,
+    /// The definition KiCad took before file version 20260623 (`BITMAP_BASE::GetLegacyPPI`: a PNG's pixels per centimetre read as an integer, `GetOptionInt` truncating 37.8 to
+    /// 37, then `KiROUND( dpiX * 2.54 )`); the same as `ppi` for every other image. `parsePCB_REFERENCE_IMAGE` scales an older file's image by `ppi / legacy_ppi` to keep the size
+    /// it was drawn at.
+    pub legacy_ppi: u32,
 }
 
 /// What reading a header gave: the header, a file that ends before it says, or a file that is not an image of a kind known.
@@ -84,7 +88,8 @@ pub fn sniff(b: &[u8]) -> Option<ImageFormat> {
 /// inch (unit 1) or per centimetre (unit 2, `KiROUND( dpiX * 2.54 )`). A GIF, a BMP, or a file that says none has [`DEFAULT_PPI`]; a resolution of one or less is no resolution.
 pub fn parse(b: &[u8]) -> Parsed {
     let Some(format) = sniff(b) else { return if b.len() < 8 { Parsed::NeedMore } else { Parsed::Bad } };
-    let done = |width: u32, height: u32, ppi: u32| if width > 0 && height > 0 { Parsed::Header(ImageHeader { format, width, height, ppi }) } else { Parsed::Bad };
+    let done_legacy = |width: u32, height: u32, ppi: u32, legacy_ppi: u32| if width > 0 && height > 0 { Parsed::Header(ImageHeader { format, width, height, ppi, legacy_ppi }) } else { Parsed::Bad };
+    let done = |width: u32, height: u32, ppi: u32| done_legacy(width, height, ppi, ppi);
     match format {
         ImageFormat::Png => {
             // signature, then chunks: length, type, data, crc; IHDR first
@@ -96,6 +101,7 @@ pub fn parse(b: &[u8]) -> Parsed {
             }
             let (Some(w), Some(h)) = (be32(b, 16), be32(b, 20)) else { return Parsed::NeedMore };
             let mut ppi = DEFAULT_PPI;
+            let mut legacy_ppi = DEFAULT_PPI;
             let mut at = 8usize;
             loop {
                 let (Some(len), Some(kind)) = (be32(b, at), b.get(at + 4..at + 8)) else { return Parsed::NeedMore };
@@ -104,6 +110,8 @@ pub fn parse(b: &[u8]) -> Parsed {
                     if *unit == 1 && per_metre as f64 / 100.0 > 1.0 {
                         ppi = (per_metre as f64 / 100.0 * 2.54).round() as u32;
                     }
+                    // (`GetLegacyPPI`: `if( dpiX > 1 )` on the truncated integer, else `m_ppi`)
+                    legacy_ppi = if *unit == 1 && per_metre / 100 > 1 { ((per_metre / 100) as f64 * 2.54).round() as u32 } else { ppi };
                     break;
                 }
                 if kind == b"IDAT" || kind == b"IEND" {
@@ -114,7 +122,7 @@ pub fn parse(b: &[u8]) -> Parsed {
                     return Parsed::NeedMore;
                 }
             }
-            done(w, h, ppi)
+            done_legacy(w, h, ppi, legacy_ppi)
         }
         ImageFormat::Gif => match (le16(b, 6), le16(b, 8)) {
             (Some(w), Some(h)) => done(w, h, DEFAULT_PPI),
@@ -381,6 +389,9 @@ mod tests {
             at += 12 + len;
         }
         assert_eq!(header_of_bytes(&no_phys).unwrap().ppi, DEFAULT_PPI);
+        // 96 dpi is 3780 pixels per metre, 37.8 per centimetre: KiCad's 96, and before 20260623 37 x 2.54, 94
+        let h96 = header_of_bytes(&solid_png(3, 3, [0, 0, 0], 96)).unwrap();
+        assert_eq!((h96.ppi, h96.legacy_ppi), (96, 94));
         // 300 ppi is 11811 pixels per metre
         assert_eq!(header_of_bytes(&solid_png(3, 3, [0, 0, 0], 300)).unwrap().ppi, 300);
     }

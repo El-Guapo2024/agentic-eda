@@ -2619,6 +2619,10 @@ pub struct DrawingsSection {
     /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_extras: Vec<crate::via_extra::ViaExtra>,
+    /// The solder-mask openings of the tracks that have one (`(layers "F.Cu" "F.Mask")`, `PCB_TRACK::HasSolderMask`), keyed by the track's id -- see
+    /// [`crate::track_mask`]. Additive: absent in an older `design.json` reads as "no track has a mask opening".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub track_masks: Vec<crate::track_mask::TrackMask>,
     /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
     /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
     /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`
@@ -2706,6 +2710,11 @@ pub struct PadMaskInfo {
     /// gives it back its type and its layers, which kicad-cli's padstack check and the mask plot tell from an SMD pad's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub connector: bool,
+    /// The paste and mask layers of a through-hole, non-plated or edge connector pad when they are not the `*.Mask` (and no paste) the writer gives such a pad otherwise: a
+    /// through-hole pad with paste (`"*.Cu" "*.Paste" "*.Mask"`) or a mask on one side only, an edge connector pad with mask on its own side only. Named as for a top-side
+    /// footprint, like [`Self::art_layers`]. KiCad writes the pad's own layer set (`format( const PAD* )`: `formatLayers( aPad->GetLayerSet() )`). `None` is the default set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hole_tech_layers: Option<Vec<String>>,
     /// A pad whose `(layers ..)` has no solder mask layer (copper under the mask, a pad the mask covers): the writer leaves the mask layer out, where a pad otherwise gets its
     /// side's (a through-hole pad both sides').
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -2925,6 +2934,14 @@ pub struct FootprintHole {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "crate::units::de")]
     pub clearance: Option<Nm>,
+    /// The hole's `(layers ..)` when it is not `*.Mask` (a mask opening on one side only, `(layers "F.Mask")`, or none, `(layers)`), named as for a top-side footprint like
+    /// [`PadMaskInfo::art_layers`]. KiCad writes the pad's own set (`format( const PAD* )`). `None` is `*.Mask`. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+    /// The pad's other tokens as the file wrote them, in file order: `(solder_mask_margin ..)`, `(zone_connect ..)`, the paste margins, `(pintype ..)`, whatever a newer KiCad adds
+    /// (without the position, size, shape, drill, layers, net, clearance and uuid, which the hole holds or the writer makes). Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<String>,
 }
 
 /// A pad of a footprint with no copper layer that is not a hole of its own ([`FootprintHole`]): a stencil opening (`(layers "F.Paste")`), a mask aperture, a pad on

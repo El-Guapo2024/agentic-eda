@@ -166,7 +166,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // file can be turned into ids once the items have them.
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
-    let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
+    let (tracks, track_masks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &net_names, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
     let (outline, outline_is_shapes, outline_width_nm) = import_outline(&mut shapes, &mut refs, &mut notes);
@@ -284,6 +284,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if let Some(dr) = design.drawings.as_mut() {
         let styles: Vec<eda_model::pcb_items::ShapeStyle> = dr.shapes.iter().zip(&refs.shapes).filter_map(|(s, r)| r.shape_style(s.id())).collect();
         dr.board_items.shape_styles = styles;
+    }
+    // The tracks' solder-mask openings, named by the ids the tracks have just been given.
+    let track_masks: Vec<eda_model::track_mask::TrackMask> = design.routing.iter().flat_map(|r| r.tracks.iter()).zip(track_masks).filter_map(|(t, m)| m.map(|m| eda_model::track_mask::TrackMask { id: t.id.clone(), ..m })).collect();
+    if !track_masks.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).track_masks = track_masks;
     }
     // The vias' tokens beyond `Via`'s fields, named by the ids the vias have just been given.
     let via_extras: Vec<eda_model::via_extra::ViaExtra> = design.routing.iter().flat_map(|r| r.vias.iter()).zip(via_extras).filter(|(_, x)| !x.is_default()).map(|(v, mut x)| { x.id = v.id.clone(); x }).collect();
@@ -815,10 +820,28 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
     if let Some(v) = sexpr::find(setup, "allow_soldermask_bridges_in_footprints").and_then(|f| sexpr::txt(f, 1)) {
         board.solder_mask.allow_bridges_in_footprints = v == "yes";
     }
-    if let Some(t) = sexpr::find(setup, "tenting") {
-        let (front, back) = front_back_opt_bool(t);
-        board.solder_mask.tent_vias_front = front.unwrap_or(false);
-        board.solder_mask.tent_vias_back = back.unwrap_or(false);
+    // In file order: `(tenting ..)`, and the `(viasonmask ..)` of a legacy `(pcbplotparams ..)`, which the parser turns into tenting (`case T_pcbplotparams`:
+    // `if( plotParams.GetLegacyPlotViaOnMaskLayer().has_value() ) { bool tent = !( *plotParams.GetLegacyPlotViaOnMaskLayer() ); m_TentViasFront = tent; m_TentViasBack = tent; }`;
+    // `PCB_PLOT_PARAMS_PARSER::parseBool` takes `true`, `yes`, `false` and `no`).
+    for item in setup.iter().skip(1).filter_map(Sexpr::as_list) {
+        match sexpr::tag(item) {
+            Some("tenting") => {
+                let (front, back) = front_back_opt_bool(item);
+                board.solder_mask.tent_vias_front = front.unwrap_or(false);
+                board.solder_mask.tent_vias_back = back.unwrap_or(false);
+            }
+            Some("pcbplotparams") => {
+                if let Some(on_mask) = sexpr::find(item, "viasonmask").and_then(|v| sexpr::txt(v, 1)).and_then(|v| match v {
+                    "true" | "yes" => Some(true),
+                    "false" | "no" => Some(false),
+                    _ => None,
+                }) {
+                    board.solder_mask.tent_vias_front = !on_mask;
+                    board.solder_mask.tent_vias_back = !on_mask;
+                }
+            }
+            _ => {}
+        }
     }
     // `m_SolderPasteMargin` / `m_SolderPasteMarginRatio`.
     if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance").and_then(|f| sexpr::num(f, 1)) {
@@ -1586,6 +1609,12 @@ fn import_footprints(
         let mut extra = footprint_extra_header(fp, &reference, file_version);
         // The Reference and Value text as the file has it, the user fields and the attributes; the pad offsets and margins join below.
         let mut edit = crate::fp_fields::parse_footprint_edit_in(fp, &reference, value.as_deref(), side, rot, file_version);
+        // A footprint with no `(attr ..)` has no attributes (`parseFOOTPRINT_unchecked`: `attributes` starts at 0), not the ones its pads would give a footprint made here; a
+        // file before 20200826 meant through-hole by it (`if( m_requiredVersion < 20200826 && attributes == 0 ) attributes |= FP_THROUGH_HOLE;`).
+        if edit.attrs.is_none() {
+            let kind = if file_version < 20200826 { eda_model::fp_edit::FootprintKind::ThroughHole } else { eda_model::fp_edit::FootprintKind::Unspecified };
+            edit.attrs = Some(eda_model::fp_edit::FootprintAttrs { kind, ..Default::default() });
+        }
         for pad in sexpr::find_all(fp, "pad") {
             let Some(p) = parse_pad_geometry_in(pad, side, rot, notes, false, layers) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
@@ -1717,8 +1746,30 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
         "layer", "uuid", "tstamp", "tedit", "at", "transform", "locked", "attr", "clearance", "zone_connect", "solder_mask_margin", "thermal_width", "thermal_gap", "net_tie_pad_groups", "fp_line", "fp_arc",
         "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "units", "path", "embedded_fonts", "embedded_files",
     ];
+    // A file from before footprint fields (20230620) held the symbol's keywords and description as properties of no place of their own (`parseFOOTPRINT_unchecked`,
+    // `case T_property`, `if( m_requiredVersion < 20230620 )`): `ki_keywords` and `ki_locked` are dropped, `ki_description` is the text of the Description field, and a field
+    // kept is hidden ("a legacy field that did not have text effects applied"). Written to a newer file as they were, they would be visible fields of their own; they are
+    // written as the fields KiCad made of them, which `format( PCB_FIELD )` writes at the footprint's origin on its side's Fab layer.
+    let legacy = file_version < crate::fp_fields::FIELD_PROPERTIES_VERSION;
+    let fab = if sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("B.Cu") { "B.Fab" } else { "F.Fab" };
+    // (Both name one field: the later text wins, as `SetText` on it.)
+    let push_field = |tokens: &mut Vec<String>, field: String, name: &str| {
+        let head = format!("(property {} ", crate::sexpr_str(name));
+        tokens.retain(|t| !t.starts_with(&head));
+        tokens.push(field);
+    };
+    let hidden_field = |name: &str, value: &str| format!("(property {} {} (at 0 0 0) (layer \"{fab}\") (hide yes) (effects (font (size 1.27 1.27))))", crate::sexpr_str(name), crate::sexpr_str(value));
     for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
         let tag = sexpr::tag(item);
+        if legacy && tag == Some("property") {
+            match (sexpr::txt(item, 1), sexpr::txt(item, 2)) {
+                (Some("ki_description"), Some(v)) => push_field(&mut e.tokens, hidden_field("Description", v), "Description"),
+                (Some(name @ ("Datasheet" | "Description")), Some(v)) => push_field(&mut e.tokens, hidden_field(name, v), name),
+                (Some("ki_fp_filters"), Some(_)) => e.tokens.push(sexpr::to_text(&Sexpr::List(item.to_vec()))),
+                _ => {}
+            }
+            continue;
+        }
         let kept = match tag {
             Some("property") => matches!(sexpr::txt(item, 1), Some("Datasheet") | Some("Description") | Some("ki_fp_filters") | Some("ki_keywords") | Some("ki_locked") | Some("ki_description")),
             // In pre-9.0 files a paste margin of 0 meant "inherit" (the parser reads it so, `parseFOOTPRINT_unchecked`); written to a new file it would be a margin of its own.
@@ -1772,7 +1823,7 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
         e.solder_mask_margin = if file_version <= 20240201 && m == Nm::ZERO { None } else { Some(m) };
     }
     if let Some(attr) = sexpr::find(fp, "attr") {
-        e.allow_soldermask_bridges = attr.iter().skip(1).filter_map(Sexpr::text).any(|t| t == "allow_soldermask_bridges");
+        e.allow_soldermask_bridges = attr.iter().skip(1).filter_map(Sexpr::text).any(|t| t == "allow_soldermask_bridges" || t == "allow_solder_mask_bridges");
     }
     if let Some(g) = sexpr::find(fp, "net_tie_pad_groups") {
         e.net_tie_pad_groups = g.iter().skip(1).filter_map(Sexpr::text).map(String::from).collect();
@@ -1829,6 +1880,15 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
             info.smd_layers.sort();
         }
         info.no_mask = !info.layers.iter().any(|l| l.ends_with(".Mask"));
+        // A hole's or an edge connector's paste and mask when they are not the writer's default (see `PadMaskInfo::hole_tech_layers`).
+        if matches!(sexpr::txt(pad, 2), Some("thru_hole") | Some("np_thru_hole") | Some("connect")) {
+            let mut tech: Vec<String> = info.layers.iter().filter(|l| l.ends_with(".Mask") || l.ends_with(".Paste")).map(|l| eda_model::fp_art::layer_on_side(l, side)).collect();
+            tech.sort();
+            tech.dedup();
+            if !(tech.is_empty() || tech == ["B.Mask", "F.Mask"]) {
+                info.hole_tech_layers = Some(tech);
+            }
+        }
     }
     if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_nm(m);
@@ -1884,7 +1944,19 @@ fn layerless_hole(pad: &[Sexpr], fp_side: Side, fp_rot: u32, file_version: i64, 
     }
     // `(clearance C)` on the pad (`PAD::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
     let clearance = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_nm).filter(|&c| !(file_version <= 20240201 && c == Nm::ZERO));
-    Some(eda_model::ir::FootprintHole { pad: p, clearance })
+    // Its layers when they are not `*.Mask`, and the tokens the hole has besides what it is made of (see `FootprintHole::layers`, `FootprintHole::tokens`): `issue5990`'s holes
+    // have a mask margin of 1.2 mm, which makes their mask opening 7.4 mm across where the 5 mm pad alone makes 5 mm.
+    let mut names: Vec<String> = sexpr::find(pad, "layers").map(|l| l.iter().skip(1).filter_map(Sexpr::text).map(|n| n.to_string()).collect()).unwrap_or_default();
+    names = names.iter().flat_map(|n| if n == "*.Mask" { vec!["F.Mask".to_string(), "B.Mask".to_string()] } else { vec![n.clone()] }).map(|l| eda_model::fp_art::layer_on_side(&l, fp_side)).collect();
+    names.sort();
+    names.dedup();
+    let layers = (names != ["B.Mask", "F.Mask"]).then_some(names);
+    const OWN: &[&str] = &["at", "size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "drill", "layers", "net", "clearance", "uuid", "tstamp", "options", "primitives"];
+    let tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).filter(|l| {
+        // In pre-9.0 files a margin of 0 meant "inherit" (`parsePAD`); written to a new file it would be a margin of its own.
+        !(file_version <= 20240201 && matches!(sexpr::tag(l), Some("solder_mask_margin") | Some("solder_paste_margin") | Some("solder_paste_margin_ratio")) && sexpr::num(l, 1) == Some(0.0))
+    }).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
+    Some(eda_model::ir::FootprintHole { pad: p, clearance, layers, tokens })
 }
 
 /// A pad with no copper layer, as the file wrote it, its `(net ..)` taken out and named ([`eda_model::ir::FootprintAuxPad`]); `None` for a pad with copper or no
@@ -2053,16 +2125,19 @@ fn parse_text_on(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_u
 
 // ---------------------------------------------------------------- routing
 
-fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>, Vec<eda_model::via_extra::ViaExtra>) {
+fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Option<eda_model::track_mask::TrackMask>>, Vec<Via>, Vec<ViaTenting>, Vec<eda_model::via_extra::ViaExtra>) {
 
     let mut tracks = Vec::new();
+    // The solder-mask opening of each track, one per track in the same order, for the caller to name once the tracks have ids.
+    let mut track_masks = Vec::new();
     for seg in sexpr::find_all(root, "segment") {
         let (Some(s), Some(e)) = (sexpr::find(seg, "start").and_then(xy_point), sexpr::find(seg, "end").and_then(xy_point)) else { continue };
         let net = net_ref(sexpr::find(seg, "net"), net_names);
         // Net 0 (no net) stays as an empty `net`: KiCad still checks a
         // netless track (clearance, shorting, dangling) like any other.
         let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(mm(0.2));
-        let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
+        let (layer, mask) = cu_item_layers(seg).unwrap_or_else(|| ("F.Cu".to_string(), false));
+        track_masks.push(mask.then(|| eda_model::track_mask::TrackMask { id: String::new(), margin: sexpr::find(seg, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(mm_to_nm) }));
         tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e], arc_mid_offset: None });
         refs.tracks.push(ItemRef::of(seg));
     }
@@ -2075,7 +2150,8 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         };
         let net = net_ref(sexpr::find(arc, "net"), net_names);
         let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_nm).unwrap_or(mm(0.2));
-        let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
+        let (layer, mask) = cu_item_layers(arc).unwrap_or_else(|| ("F.Cu".to_string(), false));
+        track_masks.push(mask.then(|| eda_model::track_mask::TrackMask { id: String::new(), margin: sexpr::find(arc, "solder_mask_margin").and_then(|m| sexpr::num(m, 1)).map(mm_to_nm) }));
         notes.track_arcs_kept += 1;
         tracks.push(Track::new_arc(net, layer, width, s, m, e));
         refs.tracks.push(ItemRef::of(arc));
@@ -2106,7 +2182,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         refs.vias.push(ItemRef::of(via));
     }
 
-    (tracks, vias, via_tenting, via_extras)
+    (tracks, track_masks, vias, via_tenting, via_extras)
 }
 
 // Track arcs go through `Track::new_arc` (eda_model), which keeps the true
@@ -2174,9 +2250,24 @@ pub(crate) fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point,
     (start, turn(angle_deg / 2.0), turn(angle_deg))
 }
 
-/// An item's `(layer ..)`.
+/// An item's `(layer ..)`, or the copper layer of the `(layers "F.Cu" "F.Mask")` a track or a copper shape with a solder-mask opening has instead (see [`cu_item_layers`]).
 fn layer_of(item: &[Sexpr]) -> String {
-    sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string()
+    cu_item_layers(item).map(|(layer, _)| layer).unwrap_or_else(|| "Cmts.User".to_string())
+}
+
+/// The layer of a track, an arc or a board shape, and whether it has a solder-mask opening. KiCad 9 writes such an item with a mask opening as `(layers "B.Cu" "B.Mask")`
+/// instead of `(layer "B.Cu")` (`pcb_io_kicad_sexpr.cpp::format( PCB_TRACK )` and `format( PCB_SHAPE )`: `formatLayers( GetLayerSet() )` when the set has more than one layer),
+/// and the parser gives the item every copper layer of the set as its layer and a mask opening for a mask layer (`parseLayersForCuItemWithSoldermask`, `PCB_TRACK::SetLayerSet`,
+/// `PCB_SHAPE::SetLayerSet`: `RunOnLayers`, `IsCopperLayer` then `SetLayer`, `IsSolderMaskLayer` then `SetHasSolderMask( true )`). A set with no copper layer keeps its first
+/// layer (a shape's `(layers ..)` of KiCad 10's other kinds). `None` when the item names no layer.
+pub(crate) fn cu_item_layers(item: &[Sexpr]) -> Option<(String, bool)> {
+    if let Some(layer) = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)) {
+        return Some((layer.to_string(), false));
+    }
+    let names: Vec<&str> = sexpr::find(item, "layers").map(|l| (1..l.len()).filter_map(|i| sexpr::txt(l, i)).collect()).unwrap_or_default();
+    let mask = names.iter().any(|n| n.ends_with(".Mask"));
+    let layer = names.iter().rev().find(|n| n.ends_with(".Cu")).or(names.first())?;
+    Some((layer.to_string(), mask))
 }
 
 /// `(fill yes|solid)`.
