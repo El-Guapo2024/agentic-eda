@@ -16,6 +16,7 @@
 //
 // Named `LibrarySymbolPropertiesDialog` (not `SymbolPropertiesDialog`, already taken by the top-level placed-instance Reference/Value/Footprint/Datasheet dialog) -- same naming
 // split `components/footprint/FootprintPropertiesDialog.tsx`'s own `FootprintLibraryPropertiesDialog` already establishes for the Footprint Editor.
+import { storedPinNameOffsetMm } from "../../kicad-port/symPinDialog";
 import { useEffect, useState } from "react";
 import type { Cmd, LibrarySymbol, SymbolPropertiesFields } from "../../api/types";
 import { fetchLibrarySymbolFlat, fetchSymbolEditorNames } from "../../api/client";
@@ -29,8 +30,6 @@ const FORM_KEYS: (keyof SymbolPropertiesFields)[] = ["reference_prefix", "descri
 /** The flags the backend leaves out of the JSON when they are off. */
 const FLAG_KEYS = ["units_locked", "power_local", "exclude_from_sim", "exclude_from_pos_files"] as const;
 
-/** `DEFAULT_PIN_NAME_OFFSET`'s 20 mils: the offset "Place pin names inside" gives a symbol whose offset is 0 ("We interpret an offset of 0 as outside"). */
-const DEFAULT_PIN_NAME_OFFSET_MM = 0.508;
 
 /** The properties `edit_symbol_properties` takes, from a symbol. */
 function formOf(sym: LibrarySymbol): SymbolPropertiesFields {
@@ -104,8 +103,8 @@ export function LibrarySymbolPropertiesDialog() {
     // "Power symbols must have value matching name for now"
     const out = !derived && form.power ? rows.map((r) => (r.name === "Value" ? { ...r, text: bareName(subject.lib_id) } : r)) : rows;
     const text = (name: string) => out.find((r) => r.name === name)?.text ?? "";
-    // "Place pin names inside": the offset, or 20 mils for one of 0; unchecked, 0 (outside)
-    const pin_name_offset_mm = namesInside ? (form.pin_name_offset_mm === 0 ? DEFAULT_PIN_NAME_OFFSET_MM : form.pin_name_offset_mm) : 0;
+    // "Place pin names inside": the offset, or `offset == 0 ? 20 : offset` in internal units (0.002 mm, "We interpret an offset of 0 as outside"); unchecked, 0
+    const pin_name_offset_mm = storedPinNameOffsetMm(namesInside, form.pin_name_offset_mm, "symbol_properties");
     // `LockUnits( GetUnitCount() > 1 && !interchangeable )`; `SetLocalPower` only for a power symbol
     const units_locked = form.unit_count > 1 && !!form.units_locked;
     const power_local = form.power && !!form.power_local;

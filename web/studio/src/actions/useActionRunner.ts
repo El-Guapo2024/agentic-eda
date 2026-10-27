@@ -2277,8 +2277,8 @@ export function useActionRunner() {
         })
       );
 
-      // P (placeSymbolPin) -- SYMBOL_EDITOR_PIN_TOOL / SYMBOL_EDITOR_DRAWING_TOOLS::PlacePin: arms the Symbol Editor's pin tool (a click places a pin whose number
-      // and name take the next value, `IncrementString`); the hotkey again leaves it.
+      // P (placeSymbolPin) -- SYMBOL_EDITOR_PIN_TOOL / SYMBOL_EDITOR_DRAWING_TOOLS::PlacePin: arms the Symbol Editor's pin tool (a click makes a pin with no
+      // number or name, `CreatePin`, and opens Pin Properties; Insert repeats it with both incremented); the hotkey again leaves it.
       m.set("eeschema.SymbolDrawing.placeSymbolPin", () => {
         if (state.tab !== "symbol") return;
         symDispatch({ type: "SET_ACTIVE_TOOL", tool: symApi.getState().activeTool === "pin" ? "select" : "pin" });

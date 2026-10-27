@@ -5766,6 +5766,12 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_symbol_exists", lib_id, "a symbol with this name already exists; pick another name")]);
         }
         let mut lib_sym = LibrarySymbol::new_empty(lib_id);
+        // `LIB_SYMBOL::LIB_SYMBOL( aName, .. )` makes the mandatory fields with `new SCH_FIELD( this, id )`, at the origin, and `CreateSymbol` sets only their
+        // texts (the Value is the name): the Reference and the Value of a new symbol are stored at (0, 0), not at `default_field`'s places.
+        lib_sym.fields = vec![
+            eda_model::sym_fields::LibrarySymbolField::named("Reference", ""),
+            eda_model::sym_fields::LibrarySymbolField::named("Value", eda_model::sym_fields::bare_name(lib_id)),
+        ];
         lib_sym.assign_missing_ids();
         self.symbol_library_mut().symbols.push(lib_sym);
         Ok(())
