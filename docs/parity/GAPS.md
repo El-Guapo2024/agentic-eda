@@ -624,8 +624,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `kicad-cli pcb export vrml` into a cache. Time to the first real model on mcu30 (30 parts) and a 93-part QA board: 2.7 to 4.4 s from the request, from 10 to 50 s with the GLB export (now the optional "Exact
   export"). The Appearance manager is `appearance_controls_3D.cpp`'s layer tree (`kicad-port/appearance3d.ts`); stackup colours come from Board Setup (`StackupLayer.color`); hover highlight; animated view
   moves. The board slab and solder mask are extruded from the outline KiCad builds from Edge.Cuts. `e2e/viewer3d.check.js` (50 checks). Two stalls of the request loop were found by measuring and fixed.
-- Missing: raytracing (out of scope); layer presets and viewports of the 3D viewer; the PCB editor's selection drawn green in the 3D view; the 3D Navigator; the Value and user fields (a footprint's own texts and the Reference are drawn since P1), off-board silkscreen, models not
-  in the position file and DNP models; X3D and IGES models; per-layer ambient and specular colours of the board; the preferences that set the animation speed; NPTH holes are not cut out of the slab
+- Missing: raytracing (out of scope); layer presets and viewports of the 3D viewer; the PCB editor's selection drawn green in the 3D view; the 3D Navigator; the Value and user fields (a footprint's own texts and the Reference are drawn since P1), off-board silkscreen;
+  the PCB editor's per-layer copper colours on inner layers; X3D and IGES models; per-layer ambient and specular colours of the board; the preferences that set the animation speed; NPTH holes are not cut out of the slab
   (`aIncludeNPTHAsOutlines`, item 27); the Extruded 3D Body of a footprint (item 30).
 
 ### 24. Item kinds the IR does not have
@@ -904,7 +904,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Every row is wired: Inspect > Simulator, the 12 `eeschema.Simulation.*` (Probe and Tune on the sheet among them), the 9 `eeschema.Simulator.*` (the exports, the View toggles), Show OP Voltages and Currents, and the plot's zoom history and axes (6 `common.Control`).
 - The architecture is the user's: kicad-cli's SPICE netlist (`kicad-cli sch export netlist --format spice`, and `--format kicadxml` for the fields and pins), ngspice as a separate program in batch mode (`ngspice -b`, `EDA_NGSPICE` or `PATH`), its raw files read back; the plot is a canvas painted as mathplot paints. The workbook (`.wbk`) is read and written byte for byte and kept in the design (`Cmd::SetSimulator`), the project's `schematic.ngspice` with it.
 - Left, by that architecture: libngspice's background run and its live plot (a batch run shows its result when it is over; Stop kills ngspice and what it computed); a measurement or a Fourier analysis added after a run is a new run, not a command to the loaded simulator.
-- Left: the user-defined signals' auto-completion, the probe's cursors and its net highlight, the SP analysis's S-parameter signals, the multi-run cursor's run labels. A net drawn in pieces gets one OP label per sheet. Tuning a potentiometer.
+- Left: the user-defined signals' auto-completion, the probe's cursors and its net highlight, the SP analysis's S-parameter signals, the multi-run cursor's run labels. A net drawn in pieces gets one OP label per sheet. The project's OP overlay formats (`drawing.operating_point_overlay_*`) are not carried: the defaults are used. Tuning a potentiometer.
 - Found on the way: the derived schematic now gives a placed symbol its library symbol's `Sim.*` fields (it had dropped them, so no `Simulation_SPICE` source simulated); two symbols of one library symbol placed at different angles still share one transform in the derived schematic (`write_regular_lib_symbol`), which can leave a pin unconnected for kicad-cli.
 
 ### 35. The long tail of the PCB tools

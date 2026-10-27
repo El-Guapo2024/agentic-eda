@@ -8,6 +8,7 @@ import {
   footprintZ,
   inferKind,
   kindShown,
+  footprintShown,
   mat4Identity,
   mat4Mul,
   mat4RotationX,
@@ -186,4 +187,13 @@ test("the models are asked for most-used first, ties in first-use order, hidden 
   assert.deepEqual(modelsByUse(parts), ["A", "B", "C"], "A is used 3 times, B twice, C once");
   assert.deepEqual(modelsByUse([{ placed: true, models: [m("X")] }, { placed: true, models: [m("Y")] }]), ["X", "Y"], "equal counts keep the order of first use");
   assert.deepEqual(modelsByUse([]), []);
+});
+
+test("V2: IsFootprintShown -- not in the position file, then DNP, then the kind", () => {
+  const rows = { tht: true, smd: true, virtual: true, notInPos: true, dnp: false };
+  assert.equal(footprintShown({ kind: "smd" }, rows), true);
+  assert.equal(footprintShown({ kind: "smd", dnp: true }, rows), false, "a DNP model is hidden by default");
+  assert.equal(footprintShown({ kind: "smd", dnp: true }, { ...rows, dnp: true }), true);
+  assert.equal(footprintShown({ kind: "tht", notInPos: true }, { ...rows, notInPos: false }), false);
+  assert.equal(footprintShown({ kind: "virtual", notInPos: true }, { ...rows, virtual: false }), false);
 });

@@ -11,7 +11,7 @@ import { layerColor } from "../canvas/layers";
 export function paintOperatingPoints(ctx: CanvasRenderingContext2D, scale: number, sch: Schematic, background: string): void {
   const ui = getSimUi();
   if (ui.opPoints.size === 0 || (!ui.showOpVoltages && !ui.showOpCurrents)) return;
-  const pins = pinItems(sch).map((p) => ({ reference: p.reference, number: p.number, tip: p.tip, root: p.root, net: p.net }));
+  const pins = pinItems(sch).map((p) => ({ reference: p.reference, symbol: p.key, number: p.number, tip: p.tip, root: p.root, net: p.net }));
   const labels = opLabels({ wires: sch.wires, pins, circuit: ui.frame.circuit, points: ui.opPoints, voltages: ui.showOpVoltages, currents: ui.showOpCurrents, scale });
   const size = opTextSize(scale);
   // `GetPenSizeForDemiBold`: a sixth of the size.

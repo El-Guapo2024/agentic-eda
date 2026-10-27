@@ -1215,9 +1215,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             p["body"] = json!(resolved.as_ref().and_then(|f| crate::fp_art_json::placed_body(fp, f)).or_else(|| crate::body_api::placed_body(&body_libs, &design, part, fp)).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's 3D models with the placement its footprint gives each, and whether KiCad counts it a through-hole, SMD or virtual model: what the 3D
             // view loads (`GET /api/3dmodel`) and places. Absent when the footprint names no model: the view then draws the body box.
-            if let Some(models) = resolved.as_ref().and_then(|f| crate::model3d_api::part_json(&model, part, f)) {
+            if let Some(models) = resolved.as_ref().and_then(|f| crate::model3d_api::part_json(&design, &model, part, f)) {
                 p["models"] = models["models"].clone();
                 p["kind3d"] = models["kind3d"].clone();
+                p["dnp"] = models["dnp"].clone();
+                p["not_in_pos"] = models["not_in_pos"].clone();
             }
             p["pads"] = json!(pads);
             // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when
@@ -1507,8 +1509,8 @@ fn outline_polys_json(design: &eda_model::ir::Design, model: Option<&eda_model::
 /// The board's plot settings as the Plot and Generate Drill Files dialogs start from them (`DIALOG_PLOT::init_Dialog`, `DIALOG_GENDRILL::TransferDataToWindow`):
 /// the layer selection, of the layers the board has, and "Use drill/place file origin".
 fn plot_params_json(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Value {
-    let plot = crate::fab_api::plot_params_of(design);
-    json!({ "layers": crate::fab_api::board_plot_layers(&plot, &model.board.layers), "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false) })
+    let plot = eda_model::plot_params::PlotParams::of_design(design);
+    json!({ "layers": plot.board_layers(&model.board.layers), "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false) })
 }
 
 /// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board, from the live port of the same check:

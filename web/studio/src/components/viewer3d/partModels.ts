@@ -11,7 +11,7 @@
 // of every material of its models swapped for the selection colour (`OglSetMaterial`'s `aUseSelectedMaterial`); `pick` finds the part for a ray.
 import * as THREE from "three";
 import type { BoardState, Part } from "../../api/types";
-import { DEFAULT_STACK, inferKind, kindShown, modelsByUse, modelWorldMatrix, type Model3dEntry, type ModelKind, type Stack } from "../../kicad-port/model3d";
+import { DEFAULT_STACK, inferKind, footprintShown, modelsByUse, modelWorldMatrix, type Model3dEntry, type ModelKind, type Stack } from "../../kicad-port/model3d";
 import type { ModelCache, ModelRecord } from "./modelCache";
 import { buildPartPlaceholder, placeholderMaterials } from "./scene";
 
@@ -23,6 +23,9 @@ export interface PartModelOptions {
   showTHT: boolean;
   showSMD: boolean;
   showVirtual: boolean;
+  /** "Models not in POS File" and "Models marked DNP" (`render.show_footprints_not_in_posfile`, `render.show_footprints_dnp`). */
+  showNotInPos: boolean;
+  showDNP: boolean;
   /** render.opengl_show_model_bbox: an outline of each model's bounding box. */
   showBoundingBoxes: boolean;
 }
@@ -97,7 +100,7 @@ export class PartModels {
         this.group.add(entry.group);
         if (this.hovered === part.ref) this.paint(entry, true);
       }
-      entry.group.visible = kindShown(kind, { tht: opts.showTHT, smd: opts.showSMD, virtual: opts.showVirtual });
+      entry.group.visible = footprintShown({ kind, dnp: part.dnp, notInPos: part.not_in_pos }, { tht: opts.showTHT, smd: opts.showSMD, virtual: opts.showVirtual, notInPos: opts.showNotInPos, dnp: opts.showDNP });
       stats.total++;
       if (entry.group.visible) stats.shown++;
       if (entry.withModels) stats.asModels++;

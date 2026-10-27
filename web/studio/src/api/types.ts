@@ -300,6 +300,10 @@ export interface Part {
   models?: Array<{ name: string; offset: [number, number, number]; scale: [number, number, number]; rotate: [number, number, number]; opacity: number; show: boolean }>;
   /** How KiCad's 3D viewer sorts the part's models: a through-hole model (`tht`), an SMD one or a virtual one (`BOARD_ADAPTER::IsFootprintShown`). */
   kind3d?: "smd" | "tht" | "virtual";
+  /** The board footprint's "Do not populate" and "Exclude from position files" (`FP_DNP`, `FP_EXCLUDE_FROM_POS_FILES`), which hide its models unless the 3D viewer's
+   * "Models marked DNP" / "Models not in POS File" rows are on (`IsFootprintShown`). Absent = false. */
+  dnp?: boolean;
+  not_in_pos?: boolean;
   pads?: Pad[];
   /** A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`): each unit's name and the numbers of its pads; absent when it has fewer than two (Swap Gate Nets). */
   units?: Array<{ name: string; pins: string[] }> | null;
