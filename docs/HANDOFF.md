@@ -69,6 +69,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r2-router` | The round-2 router findings (`findings/round2/r2-route-rules.md` R-1, R-2, R-3, R-6, R-7, R-8): the router's clearance is the DRC engine's (`PNS_PCBNEW_RULE_RESOLVER::Clearance` over `RuleEngine::eval_rules`: local pad and footprint clearances, net ties, the `.kicad_dru`, hole clearance and hole to hole), keepout rule areas are obstacles (`syncZone`, `IsKeepout`), a pair's legs are `SimplifyLine`d, the pair's Shove restore and the dragger's Walk around restore as KiCad's, and the dangling test's integer accuracy and true arcs. `crates/pns/PARITY.md` Stage 15, GAPS item 7. | Done: `cargo check` 0 warnings; `tools/check.sh fast` Rust 3777 passed, 0 failed, 25 ignored, web 2478; `EDA_SLOW_TESTS=1 cargo test -p eda-pns` all green (`qa_regressions` 13/13 exact, `tests/rules_kicad.rs` 9/9 with kicad-cli); browser checks router-leftovers, diff-pairs, length-tuning 3/3. | R-4, R-5 (Board Setup, another lane). A shoved via's MTV is from its copper, not its hole; a keepout's holes and `subdividePolygon` are not ported; an existing track is asked about as a dummy of its net (no width of its own). |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
