@@ -55,7 +55,7 @@ mod tests {
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] }),
-            routing: Some(RoutingSection { tracks: vec![track], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            routing: Some(RoutingSection { tracks: vec![track], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         }
     }

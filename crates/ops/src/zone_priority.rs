@@ -248,7 +248,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] }),
-            routing: Some(RoutingSection { tracks: vec![], vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            routing: Some(RoutingSection { tracks: vec![], vias, zones, track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
             footprint_library: None,
             sheet_contents: None,

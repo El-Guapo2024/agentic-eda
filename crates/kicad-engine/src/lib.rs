@@ -2061,7 +2061,7 @@ mod tests {
         let mut design = empty_design().0;
         design.routing = Some(eda_model::ir::RoutingSection {
             tracks: vec![eda_model::ir::Track { id: "t7".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.1), pts: vec![eda_model::ir::Point { x: mm(1.0), y: mm(2.0) }, eda_model::ir::Point { x: Nm::new(3_001_000), y: mm(2.0) }, eda_model::ir::Point { x: Nm::new(3_001_000), y: mm(9.0) }], arc_mid_offset: None }],
-            vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default(),
+            vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default(),
         });
         // The first segment is the track's own id, the next ones `<id>#n`: `DRC_TEST_PROVIDER_TRACK_WIDTH` puts a trace's marker at (start + end) / 2.
         assert_eq!(track_anchors(&design, "t7"), vec![pt(1_000_000, 2_000_000), pt(3_001_000, 2_000_000), pt(2_000_500, 2_000_000)]);

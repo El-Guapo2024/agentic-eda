@@ -741,7 +741,7 @@ export function Canvas() {
           // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width). `autoTrackWidth` (`m_UseConnectedTrackWidth`): the
           // server's `inheritTrackWidth` first -- the width of the track the route starts on, or of the one joined to the pad or via whose far end
           // is nearest the cursor -- over either
-          const width = chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
+          const width = chosenTrackWidth(state.currentTrackWidthNm, state.currentTrackWidthIndex, 1 + (board.routing?.track_width_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth);
           return;

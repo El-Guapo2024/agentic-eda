@@ -122,7 +122,7 @@ pub(super) fn design(channels: usize) -> Design {
         schematic: None,
         nets: None,
         placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(100.0), Nm::ZERO), p(mm(100.0), mm(100.0)), p(Nm::ZERO, mm(100.0))], footprints: footprints_, modules: vec![] }),
-        routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+        routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
         drawings: Some(DrawingsSection {
             shapes: vec![
                 Shape::Segment { id: "shp_mark0".into(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: p(mm(24.0), mm(18.5)), end: p(mm(26.0), mm(18.5)) },

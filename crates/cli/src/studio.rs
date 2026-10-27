@@ -1341,15 +1341,20 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 // The rule area's placement source (`ZONE::GetPlacementAreaEnabled` and the source type and name): the Placement tab of Zone Properties and what Repeat Layout reads.
                 "placement": z.placement,
             })).collect::<Vec<_>>(),
-            // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
-            // the Board Setup "Track Widths & Vias" panel's editable
-            // preset lists (`eda_ops::Cmd::SetTrackWidthPresets`/
-            // `SetViaPresets`), driving the W/Shift+W and via-size-cycle
-            // hotkeys. The board's own default (board_rules.track_width/
-            // via_diameter/via_drill below) is always the implicit first
-            // entry, not repeated in these lists.
+            // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList`/
+            // `m_DiffPairDimensionsList` -- the Board Setup "Track Widths &
+            // Vias" panel's editable preset lists
+            // (`eda_ops::Cmd::SetTrackWidthPresets`/`SetViaPresets`/
+            // `SetDiffPairPresets`), driving the W/Shift+W, via-size-cycle
+            // and differential-pair hotkeys. The board's own default
+            // (board_rules.track_width/via_diameter/via_drill below) is
+            // always the implicit first entry of the track and via lists,
+            // and KiCad's diff pair list likewise keeps an unused index 0
+            // (`GetDiffPairWidth()` only reads index >= 1); none of those
+            // dummy entries is repeated in these lists.
             "track_width_presets": r.track_width_presets,
             "via_presets": r.via_presets.iter().map(|p| json!({ "diameter": p.diameter, "drill": p.drill })).collect::<Vec<_>>(),
+            "diff_pair_presets": r.diff_pair_presets.iter().map(|p| json!({ "width": p.width, "gap": p.gap, "via_gap": p.via_gap })).collect::<Vec<_>>(),
             // Board Setup > Teardrops (task item 4).
             "teardrop_settings": json!({
                 "enabled": r.teardrop_settings.enabled,

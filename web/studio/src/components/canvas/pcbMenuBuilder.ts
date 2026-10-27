@@ -87,23 +87,23 @@ export function trackViaWidthMenu(state: StudioState, board: BoardState): MenuNo
   const custom = state.pcbx.useCustomTrackVia;
   const auto = state.bcx.autoTrackWidth && !custom;
   const useIndex = !state.bcx.autoTrackWidth && !custom;
-  const width = state.currentTrackWidthNm;
-  const via = state.currentViaPreset;
+  // The checked entries are told by the list indices (`GetTrackWidthIndex()` / `GetViaSizeIndex()`), as the menu's update() does -- not by
+  // the value, which a preset may share with the Default class's width (r4 R4-8).
+  const widthIndex = state.currentTrackWidthIndex;
+  const viaIndex = state.currentViaIndex;
   const mm = (um: number) => formatLength(um, state.units);
   const out: MenuNode[] = [
     { type: "item", action: "pcbnew.EditorControl.autoTrackWidth", label: "Use Starting Track Width", checked: auto },
-    { type: "item", action: "studio.Router.useNetclassSizes", label: "Use Net Class Values", checked: useIndex && width == null && via == null },
+    { type: "item", action: "studio.Router.useNetclassSizes", label: "Use Net Class Values", checked: useIndex && widthIndex === 0 && viaIndex === 0 },
     { type: "item", action: "pcbnew.InteractiveRouter.CustomTrackViaSize", label: "Use Custom Values...", checked: custom },
     { type: "separator" },
   ];
   widths.forEach((w, i) => {
-    const current = width == null ? i === 0 : width === w;
-    out.push({ type: "item", action: "studio.Router.setTrackWidth", label: i === 0 ? "Track netclass width" : `Track ${mm(w)}`, arg: i, checked: useIndex && current });
+    out.push({ type: "item", action: "studio.Router.setTrackWidth", label: i === 0 ? "Track netclass width" : `Track ${mm(w)}`, arg: i, checked: useIndex && widthIndex === i });
   });
   out.push({ type: "separator" });
   vias.forEach((v, i) => {
-    const current = via == null ? i === 0 : via.diameter === v.diameter && via.drill === v.drill;
-    out.push({ type: "item", action: "studio.Router.setViaSize", label: i === 0 ? "Via netclass values" : v.drill > 0 ? `Via ${mm(v.diameter)}, hole ${mm(v.drill)}` : `Via ${mm(v.diameter)}`, arg: i, checked: useIndex && current });
+    out.push({ type: "item", action: "studio.Router.setViaSize", label: i === 0 ? "Via netclass values" : v.drill > 0 ? `Via ${mm(v.diameter)}, hole ${mm(v.drill)}` : `Via ${mm(v.diameter)}`, arg: i, checked: useIndex && viaIndex === i });
   });
   return out;
 }

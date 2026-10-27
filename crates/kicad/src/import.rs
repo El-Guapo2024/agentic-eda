@@ -62,7 +62,7 @@ use eda_model::units::mm;
 use std::collections::BTreeMap;
 
 use eda_model::units::Nm;
-use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, Track, Via, Zone};
+use eda_model::ir::{Design, DiffPairPreset, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Track, Text, Via, Zone};
 use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::outline as edge;
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
@@ -229,7 +229,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         schematic: None,
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
-        routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
+        routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }) },
         drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_nm.is_none() && barcodes.is_empty() && board_items.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_nm, barcodes, board_items, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
@@ -810,6 +810,27 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
             }
         }
     }
+}
+
+/// A `.kicad_pro`'s Pre-defined Sizes' Differential Pairs (`board.design_settings.diff_pair_dimensions`): `BOARD_DESIGN_SETTINGS`' PARAM_LAMBDA
+/// writes `{width, gap, via_gap}` rows in millimetres, its first row the all-zero "use net class" dummy. Read as KiCad's loader reads the array: a
+/// row that is not an object, or misses one of the three keys, is skipped; the first row is the net class entry, not a pair of ours. The list
+/// replaces the design's own, as the panel's Apply does; absent or unreadable JSON is a no-op.
+pub fn merge_project_predefined_sizes(design: &mut Design, project_json: &str) {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else { return };
+    let Some(rows) = root.get("board").and_then(|b| b.get("design_settings")).and_then(|s| s.get("diff_pair_dimensions")).and_then(|v| v.as_array()) else { return };
+    let pairs: Vec<DiffPairPreset> = rows
+        .iter()
+        .skip(1)
+        .filter_map(|row| {
+            let nm = |key: &str| row.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
+            Some(DiffPairPreset { width: nm("width")?, gap: nm("gap")?, via_gap: nm("via_gap")? })
+        })
+        .collect();
+    let routing = design
+        .routing
+        .get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+    routing.diff_pair_presets = pairs;
 }
 
 /// A `(net_class ..)` block's microvia size and differential-pair sizes (`uvia_dia`, `uvia_drill`, `diff_pair_width`,
