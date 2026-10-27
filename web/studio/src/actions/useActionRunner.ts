@@ -30,6 +30,7 @@ import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-po
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
+import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
@@ -1635,7 +1636,8 @@ export function useActionRunner() {
           return hit ? [hit] : [];
         };
         const ids = state.selection.size > 0 || state.tab !== "schematic" ? [...state.selection] : hovered();
-        const texts = state.tab === "schematic" ? (sch ? schSelectionTexts(sch, ids) : []) : ids.map((id) => api.textById(id)?.content ?? api.dimensionById(id)?.text);
+        // the board: each item's shown text, a table's cells tab- and newline-separated (kicad-port/pcbCopyAsText.ts)
+        const texts = state.tab === "schematic" ? (sch ? schSelectionTexts(sch, ids) : []) : state.board ? ids.map((id) => boardItemAsText(state.board!, id)) : [];
         const text = selectionAsText(texts);
         if (text === "") return;
         navigator.clipboard.writeText(text).catch(() => dispatch({ type: "TOAST", message: "Could not write to the clipboard.", kind: "error" }));

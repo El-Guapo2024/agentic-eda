@@ -10,7 +10,7 @@
 import { hasExclusions } from "./viaStitch";
 import type { BoardState, Zone } from "../api/types";
 import { convertAvailability } from "./pcbConvert";
-import { emptyPcbSummary, type PcbSelectionSummary, type ShapeKind } from "./pcbContextMenu";
+import { emptyPcbSummary, type OtherKind, type PcbSelectionSummary, type ShapeKind } from "./pcbContextMenu";
 import { ancestors, parentGroup } from "./groupTree";
 import { itemBounds, itemKind, padById } from "./pcbItems";
 import { canMerge, canUnmerge, cellById } from "./tables";
@@ -107,6 +107,10 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
       case "group":
         s.groups++;
         break;
+      default: {
+        const other: OtherKind = kind === "field" || kind === "textbox" || kind === "barcode" || kind === "point" || kind === "image" ? kind : kind === "via_stitch" ? "generator" : "other";
+        s.others = { ...s.others, [other]: (s.others?.[other] ?? 0) + 1 };
+      }
     }
     // GROUP_CONTEXT_MENU::update
     if (kind === "group") {

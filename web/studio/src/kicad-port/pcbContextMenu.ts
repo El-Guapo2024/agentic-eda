@@ -73,6 +73,9 @@ export interface PcbSelectionSummary {
   zoneCanLower: boolean;
   /** `GROUP_CONTEXT_MENU::update`: `selectionCount`, a group selected, one group selected, an ungrouped item selected, a member of a group selected. */
   group: { hasGroup: boolean; onlyOneGroup: boolean; hasUngroupedItems: boolean; hasMember: boolean };
+  /** The other item kinds, by `KICAD_T`: `PCB_FIELD_T` (a footprint's field), `PCB_TEXTBOX_T`, `PCB_BARCODE_T`, `PCB_POINT_T`, `PCB_REFERENCE_IMAGE_T`, and
+   *  `PCB_GENERATOR_T` (via stitchings and tuning patterns); the grid items and drill maps under `other`. Absent counts are 0. */
+  others?: Partial<Record<OtherKind, number>>;
   /** KiCad 10: selected via stitchings that have exclusions (`VIA_STITCH_TOOL::Init`'s `hasExclusionsCondition`). */
   stitchesWithExclusions?: number;
   /** `groupWithDesignBlockLink` (pcb_edit_frame.cpp): the one selected item is a group linked to a design block -- Place Linked Design Block and Save to Linked Design Block are on only for it. */
@@ -154,7 +157,9 @@ export function defaultMenuContext(): PcbMenuContext {
 type Sel = PcbSelectionSummary;
 
 /** The `KICAD_T` lists the conditions use, as the kinds of the summary they cover. */
-type Kind = "footprint" | "pad" | "track" | "arc" | "via" | "zone" | "text" | "dimension" | "group" | "shape" | "segment" | "rect" | "circle" | "shapeArc" | "polygon" | "bezier" | "tablecell" | "table";
+type Kind = "footprint" | "pad" | "track" | "arc" | "via" | "zone" | "text" | "dimension" | "group" | "shape" | "segment" | "rect" | "circle" | "shapeArc" | "polygon" | "bezier" | "tablecell" | "table" | OtherKind;
+/** The summary's [`PcbSelectionSummary::others`]. */
+export type OtherKind = "field" | "textbox" | "barcode" | "point" | "image" | "generator" | "other";
 
 const count = (s: Sel, kind: Kind): number => {
   switch (kind) {
@@ -194,6 +199,8 @@ const count = (s: Sel, kind: Kind): number => {
       return s.shapes.polygon;
     case "bezier":
       return s.shapes.bezier;
+    default:
+      return s.others?.[kind] ?? 0;
   }
 };
 
@@ -208,14 +215,14 @@ const CONNECTED_TYPES: readonly Kind[] = ["track", "arc", "via", "pad", "zone"];
 const ROUTABLE_TYPES: readonly Kind[] = ["track", "arc", "via", "pad", "footprint"];
 /** `GENERAL_COLLECTOR::DraggableItems`. */
 const DRAGGABLE_TYPES: readonly Kind[] = ["track", "via", "footprint", "arc"];
-/** `EDIT_TOOL::MirrorableItems` (fields are texts here; generators and points do not exist). */
-const MIRRORABLE_TYPES: readonly Kind[] = ["shape", "text", "zone", "pad", "track", "arc", "via", "group"];
+/** `EDIT_TOOL::MirrorableItems`: `{ PCB_SHAPE_T, PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_ZONE_T, PCB_PAD_T, PCB_TRACE_T, PCB_ARC_T, PCB_VIA_T, PCB_GROUP_T, PCB_GENERATOR_T, PCB_POINT_T }`. */
+const MIRRORABLE_TYPES: readonly Kind[] = ["shape", "field", "text", "textbox", "zone", "pad", "track", "arc", "via", "group", "generator", "point"];
 const FILLET_CHAMFER_TYPES: readonly Kind[] = ["polygon", "rect", "segment"];
 const HEAL_TYPES: readonly Kind[] = ["segment", "shapeArc", "bezier"];
 const BOOLEAN_TYPES: readonly Kind[] = ["rect", "polygon", "circle"];
 const POLYGON_SIMPLIFY_TYPES: readonly Kind[] = ["polygon", "zone"];
-/** `canCopyAsText`'s list. */
-const COPY_AS_TEXT_TYPES: readonly Kind[] = ["text", "dimension"];
+/** `canCopyAsText`'s list: `{ PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_DIM_*, PCB_TABLE_T, PCB_TABLECELL_T }`. */
+const COPY_AS_TEXT_TYPES: readonly Kind[] = ["field", "text", "textbox", "dimension", "table", "tablecell"];
 const CROSS_PROBE_TYPES: readonly Kind[] = ["pad", "footprint", "group"];
 const PAD_OWNER_TYPES: readonly Kind[] = ["footprint", "pad"];
 
@@ -791,7 +798,8 @@ export function buildSelectionMenu(): ConditionalMenu {
   menu.addMenu("Zones", zoneMenu, whenOnly("zone"), 100);
 
   // ---- BOARD_INSPECTION_TOOL::Init: "Only show the net menu if all items in the selection are connectable"
-  const showNetMenu: Cond = (s) => s.total > 0 && s.footprints === 0 && s.texts === 0 && s.tables === 0 && s.tableCells === 0 && s.dimensions === 0 && s.groups === 0 && s.shapes.segment + s.shapes.rect + s.shapes.circle + s.shapes.arc + s.shapes.polygon + s.shapes.bezier === s.copperShapes;
+  // `showNetMenuFunc`: tracks, arcs, vias, pads, zones and copper shapes only; any other type hides it
+  const showNetMenu: Cond = (s) => onlyTypes(s, ["track", "arc", "via", "pad", "zone", "shape"]) && s.shapes.segment + s.shapes.rect + s.shapes.circle + s.shapes.arc + s.shapes.polygon + s.shapes.bezier === s.copperShapes;
   menu.addMenu("Net Inspection Tools", netMenu, showNetMenu, 100);
 
   // ---- ALIGN_DISTRIBUTE_TOOL::Init
