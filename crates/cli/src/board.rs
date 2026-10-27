@@ -689,7 +689,10 @@ impl PowerValueView {
                 let placement = here.and_then(|s| s.sheets.iter().find(|p| &p.id == id));
                 let content = placement.and_then(|p| design.sheet_contents.as_ref().and_then(|c| c.get(&p.file)));
                 name = placement.map(|p| p.name.clone()).unwrap_or_default();
-                levels.push(SchSheetLevel { fields: vec![("Sheetname".into(), name.clone()), ("Sheetfile".into(), placement.map(|p| p.file.clone()).unwrap_or_default())], title_block: tb(content) });
+                let mut fields = vec![("Sheetname".into(), name.clone()), ("Sheetfile".into(), placement.map(|p| p.file.clone()).unwrap_or_default())];
+                // the sheet's user fields (`SCH_SHEET::ResolveTextVar`: a field by its name), r2 B-L1
+                fields.extend(here.and_then(|s| s.extras.sheet_fields.get(id)).into_iter().flatten().map(|f| (f.name.clone(), f.text.clone())));
+                levels.push(SchSheetLevel { fields, title_block: tb(content) });
                 here = content;
             }
             placements.insert(e.path.clone(), (e.effective_page(), levels, name));

@@ -529,10 +529,16 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     let mut sheet_pin_looks: Vec<(String, eda_model::sch_extras::LabelLook)> = Vec::new();
     // the pages of a sheet on the paths after its first (`SchExtras::sheet_pages`)
     let mut sheet_pages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = std::collections::BTreeMap::new();
+    let mut sheet_user_fields: Vec<(String, Vec<eda_model::sch_extras::LabelField>)> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
         let file = sheet_property_text(s, "Sheetfile").unwrap_or_default();
+        // the sheet's user fields (r2 B-L1): every property but the two mandatory ones
+        let user: Vec<eda_model::sch_extras::LabelField> = crate::label_fields::read_label_fields(s, false).into_iter().filter(|f| !is_sheet_field(&f.name, "Sheetname") && !is_sheet_field(&f.name, "Sheetfile")).collect();
+        if !user.is_empty() && !id.is_empty() {
+            sheet_user_fields.push((id.clone(), user));
+        }
         let at = sexpr::find(s, "at").and_then(point_mm).unwrap_or(SPoint::new(0.0, 0.0));
         let size = sexpr::find(s, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))).unwrap_or((0.0, 0.0));
         let pins = sexpr::find_all(s, "pin")
@@ -637,6 +643,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         sch.extras.pin_swaps.extend(pin_swap_entries);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
+        sch.extras.sheet_fields.extend(sheet_user_fields);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {
@@ -1929,6 +1936,18 @@ mod tests {
         assert!(text("root.kicad_sch").contains("(property \"Sheetfile\" \"b/b.kicad_sch\""));
         assert!(text("b/x.kicad_sch").contains("IN_B"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// r2 B-L1 (`saveSheet` saves every field; `SCH_SHEET::ResolveTextVar` reads one by name): a sheet's user field is read and written back.
+    #[test]
+    fn a_sheets_user_field_is_read_and_written_back() {
+        let text = "(kicad_sch (version 20250114) (generator \"test\") (uuid \"11111111-1111-1111-1111-111111111111\") (paper \"A4\") (sheet (at 100 100) (size 20 20) (uuid \"21111111-1111-1111-1111-111111111111\") (property \"Sheetname\" \"A\" (at 100 99 0)) (property \"Sheetfile\" \"a.kicad_sch\" (at 100 121 0)) (property \"param\" \"NODE_1\" (at 100 100 0) (effects (font (size 1.27 1.27)) hide))))";
+        let (design, model, _) = import_kicad_sch(text).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        let fields = &sch.extras.sheet_fields["21111111-1111-1111-1111-111111111111"];
+        assert_eq!((fields[0].name.as_str(), fields[0].text.as_str(), fields[0].visible), ("param", "NODE_1", false));
+        let out = crate::export_kicad_sch(&design, &model, &ExportMeta { date: "2026-10-27", title: "t" }).unwrap();
+        assert!(out.contains("(property \"param\" \"NODE_1\""), "{out}");
     }
 
     /// r2 B-M3 (`parseSchSheetInstances`, `UpdateSheetInstanceData`): a KiCad 6 root's `(sheet_instances (path "/<sheet>/" (page "7")))` is the sheet's page, and an

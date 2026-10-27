@@ -763,6 +763,10 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
     for f in eda_engine::fields::sheet_fields(sch, s) {
         write_page_field(out, &f);
     }
+    // the sheet's user fields (`saveSheet` saves every field), at the sheet's corner (r2 B-L1: where they were is not kept)
+    for f in sch.extras.sheet_fields.get(&s.id).into_iter().flatten() {
+        write_property(out, &f.name, &f.text, s.at.x.mm(), s.at.y.mm(), !f.visible);
+    }
     for p in &s.pins {
         let px = sch_mm(p.at.x);
         let py = sch_mm(p.at.y);

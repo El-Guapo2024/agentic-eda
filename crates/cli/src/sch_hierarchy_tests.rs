@@ -1434,6 +1434,9 @@ fn slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them() {
         if !t.names.is_empty() {
             wrong.push(format!("{rel}: (pin, ours, kicad-cli's) {:?}", t.names.iter().take(12).collect::<Vec<_>>()));
         }
+        if !t.derived.is_empty() {
+            wrong.push(format!("{rel}: kicad-cli reads the derived schematic otherwise: (pin, derived, original) {:?}", t.derived.iter().take(12).collect::<Vec<_>>()));
+        }
     }
     for (rel, why) in QA_TRACED_OTHERWISE {
         let Some(t) = qa_traced(rel) else { continue };
