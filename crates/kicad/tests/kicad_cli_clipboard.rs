@@ -175,3 +175,64 @@ fn what_kicad_itself_writes_for_those_items_reads_back_the_same() {
     assert_eq!((c1.reference.as_str(), c1.at, c1.rot, c1.side), ("C1", p(mm(50.0), mm(40.0)), 90_000, Side::Top));
     assert_eq!(c1.pad_nets, vec![("1".to_string(), "VIN".to_string()), ("2".to_string(), "GND".to_string())]);
 }
+
+/// r2-pcb-edit C2: a Copy of one pad, a footprint's field and a barcode is KiCad's `SaveSelection` text: the pad in a footprint of its own on its net, the
+/// field as a free text with the field's text, the barcode as itself. kicad-cli loads it and writes back all three.
+#[test]
+fn a_copied_pad_field_and_barcode_load_in_kicad() {
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("100n".into()), package: Some("0603".into()), footprint: Some("0603".into()), pins: ["1", "2"].iter().map(|n| Pin { number: (*n).into(), name: None, kind: PinKind::Passive }).collect(), body_nm: None, symbol: None, datasheet: None, edge: None };
+    let model = ConstraintModel {
+        parts: vec![part("C1")],
+        nets: vec![Net { name: "VIN".into(), pins: vec!["C1.1".into()] }, Net { name: "GND".into(), pins: vec!["C1.2".into()] }],
+        ..Default::default()
+    };
+    let barcode = eda_model::barcode::Barcode {
+        id: "bar_a".into(),
+        at: p(mm(120.0), mm(120.0)),
+        angle: 0,
+        layer: "F.SilkS".into(),
+        width_nm: mm(5.0),
+        height_nm: mm(5.0),
+        text: "HELLO".into(),
+        text_height_nm: mm(1.0),
+        kind: eda_model::barcode::BarcodeKind::Qr,
+        ecc: eda_model::barcode::EccLevel::L,
+        show_text: true,
+        knockout: false,
+        margin_x_nm: Nm::ZERO,
+        margin_y_nm: Nm::ZERO,
+    };
+    let design = Design {
+        footprint_library: None,
+        sheet_contents: None,
+        bus_aliases: vec![],
+        symbol_library: None,
+        schema: eda_model::ir::SCHEMA_VERSION,
+        provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+        schematic: None,
+        nets: None,
+        placement: Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "C1".into(), at: p(mm(150.0), mm(140.0)), rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] }),
+        routing: None,
+        drawings: Some(eda_model::ir::DrawingsSection { barcodes: vec![barcode], ..Default::default() }),
+    };
+    let text = export_pcb_clipboard(&design, &model, &["C1.1".into(), "C1:Value".into(), "bar_a".into()], p(mm(100.0), mm(100.0))).unwrap();
+    let dir = scratch("pad_field_barcode");
+    let pcb = dir.join("clip.kicad_pcb");
+    std::fs::write(&pcb, &text).unwrap();
+    let out = Command::new(&cli).args(["pcb", "upgrade", "--force"]).arg(&pcb).output().expect("kicad-cli runs");
+    assert!(out.status.success(), "{}\n{}\n{text}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let kicad = std::fs::read_to_string(&pcb).unwrap();
+    assert_eq!(kicad.matches("(pad \"").count(), 1, "one pad: {kicad}");
+    assert!(kicad.contains("(net \"VIN\")"), "the pad on its net: {kicad}");
+    assert!(kicad.contains("(gr_text \"100n\""), "the Value field as a free text: {kicad}");
+    assert!(kicad.contains("(barcode"), "{kicad}");
+
+    let clip = parse_pcb_clipboard(&kicad).unwrap();
+    assert_eq!((clip.footprints.len(), clip.texts.len(), clip.barcodes.len()), (1, 1, 1));
+    assert_eq!(clip.footprints[0].pad_nets, vec![("1".to_string(), "VIN".to_string())]);
+    assert_eq!(clip.barcodes[0].at, p(mm(20.0), mm(20.0)));
+}

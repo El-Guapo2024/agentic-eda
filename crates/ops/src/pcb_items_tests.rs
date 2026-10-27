@@ -982,3 +982,27 @@ fn duplicate_copies_barcodes_and_points_and_keeps_a_lock() {
     b.apply(&Cmd::Duplicate { ids: ids(&[&bar]) }).unwrap();
     assert_eq!(drawings(&b).barcodes.len(), 3);
 }
+
+/// r2-pcb-edit C2: `CLIPBOARD_IO::SaveSelection` writes every board item: a footprint's field as a free `PCB_TEXT` with the field's text, barcodes, text boxes and
+/// points as themselves. Our clipboard refused the whole copy for any of them; now it carries them and Paste brings them back, and Duplicate copies a text box.
+#[test]
+fn a_field_copies_as_a_text_and_a_barcode_a_text_box_and_a_point_copy() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let code = add_barcode(&mut b, qr("F.SilkS", p(mm(30.0), mm(40.0))));
+    let tbx = add(&mut b, text_box("F.SilkS"));
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: eda_model::pcb_items::PcbPoint::new("F.SilkS", p(mm(5.0), mm(5.0))) })).unwrap();
+    let pnt = drawings(&b).board_items.points[0].id.clone();
+    let d = b.design().clone();
+    let text = eda_kicad::export_pcb_clipboard(&d, &m, &ids(&["U1:Reference", &code, &tbx, &pnt, "trk_a"]), p(Nm::ZERO, Nm::ZERO)).expect("every kind copies");
+    assert!(text.contains("(gr_text \"U1\""), "the Reference field as a free text: {text}");
+    assert!(text.contains("(barcode") && text.contains("(gr_text_box") && text.contains("(point"), "{text}");
+
+    let before = (drawings(&b).texts.len(), drawings(&b).barcodes.len(), boxes(&b).len(), drawings(&b).board_items.points.len());
+    b.apply(&Cmd::PasteClipboard { text, at: p(mm(1.0), mm(1.0)) }).unwrap();
+    let after = (drawings(&b).texts.len(), drawings(&b).barcodes.len(), boxes(&b).len(), drawings(&b).board_items.points.len());
+    assert_eq!(after, (before.0 + 1, before.1 + 1, before.2 + 1, before.3 + 1));
+
+    b.apply(&Cmd::Duplicate { ids: ids(&[&tbx]) }).unwrap();
+    assert_eq!(boxes(&b).len(), before.2 + 2, "Duplicate copies a text box");
+}

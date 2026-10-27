@@ -339,9 +339,11 @@ export function useActionRunner() {
       "common.Interactive.cut",
       pcbOnly(() => {
         if (!state.board) return;
-        const refs = editableSelection(state.board, requestSelection()).ids;
+        // a pad is cut as itself: copied in a footprint of its own, and not deleted (`DeleteItems`' `PCB_PAD_T` without free pads)
+        const refs = editableSelection(state.board, requestSelection(), { keepPads: true }).ids;
         if (refs.length === 0) return;
-        void api.copySelection(refs).then(() => deleteRefs(refs, true));
+        // "delete exactly that; no more, no fewer" of what reached the clipboard: nothing, when the copy failed
+        void api.copySelection(refs).then((copied) => (copied ? deleteRefs(refs, true) : undefined));
       })
     );
 

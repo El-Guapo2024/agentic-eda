@@ -395,6 +395,8 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             Member::Group(i) => (7, i),
             Member::Point(i) => (8, i),
             Member::Barcode(i) => (9, i),
+            Member::TextBox(i) => (10, i),
+            Member::Image(i) => (11, i),
         }
     };
     let position = |block: &Copies, m: &Member| -> Option<Point> {
@@ -408,6 +410,9 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             Member::Footprint(i) => Some(block.footprints[i].at),
             Member::Point(i) => Some(block.points[i].at),
             Member::Barcode(i) => Some(block.barcodes[i].at),
+            // `EDA_SHAPE::getPosition`: a polygon's first corner, a rectangle's start.
+            Member::TextBox(i) => Some(block.text_boxes[i].pts.first().copied().unwrap_or(block.text_boxes[i].start)),
+            Member::Image(i) => Some(block.images[i].at),
             // A group copy is moved through its leaves (below), never as a point of its own.
             Member::Group(_) => None,
         }
@@ -422,6 +427,8 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
         Member::Dimension(i) => transform_dimension(&mut block.dimensions[i], x, copper),
         Member::Point(i) => super::pcb_items::transform_point(&mut block.points[i], x, copper),
         Member::Barcode(i) => super::pcb_items::transform_barcode(&mut block.barcodes[i], x, copper),
+        Member::TextBox(i) => super::pcb_items::transform_text_box(&mut block.text_boxes[i], x, copper),
+        Member::Image(i) => super::pcb_items::transform_ref_image(&mut block.images[i], x, copper),
         Member::Footprint(i) => {
             let f = &mut block.footprints[i];
             let pose = FootprintInstance { id: f.reference.clone(), at: f.at, rot: f.rot, side: f.side, label: f.label };
@@ -465,6 +472,8 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
     each.extend((0..block.footprints.len()).map(Member::Footprint));
     each.extend((0..block.points.len()).map(Member::Point));
     each.extend((0..block.barcodes.len()).map(Member::Barcode));
+    each.extend((0..block.text_boxes.len()).map(Member::TextBox));
+    each.extend((0..block.images.len()).map(Member::Image));
     for m in each.into_iter().filter(|m| !in_group.contains(&key(m))) {
         let Some(pos) = position(block, &m) else { continue };
         let (offset, turn) = g.transform(index, pos);

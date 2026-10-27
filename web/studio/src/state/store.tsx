@@ -1779,7 +1779,8 @@ export interface StudioApi {
   /** Ctrl+Shift+G: dissolve every group named in the current selection, then select their former members. */
   ungroupSelection: () => Promise<void>;
   /** Cmd+C: the selection as KiCad's clipboard text, on the system clipboard and in `state.clipboard`. `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback; `reference` is the point Copy with Reference Point picked. */
-  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => Promise<void>;
+  /** True when the copy reached the clipboard (Cut deletes only then). */
+  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => Promise<boolean>;
   /**
    * Cmd+V: put what is on the clipboard on the board (KiCad's text, else this session's copy, else plain text as a text item), then select it and arm Move on it, same as duplicateSelection.
    * Paste Special passes the dialog's answers (`DIALOG_PASTE_SPECIAL`): what happens to the reference designators and whether the nets are cleared; a plain paste keeps the references.
@@ -2514,18 +2515,20 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.
     copySelection: async (refs, reference) => {
       const st = stateRef.current;
-      if (!st.board) return;
-      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false });
-      if (ids.length === 0) return;
+      if (!st.board) return false;
+      // a pad is copied as itself, in a footprint of its own (`SaveSelection`)
+      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false, keepPads: true });
+      if (ids.length === 0) return false;
       // `copyToClipboard`: `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )` -- the anchor of the copied items nearest the cursor, so a paste puts it on the cursor.
       const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(dragOriginFor(st, ids, [st.cursorNm.x, st.cursorNm.y])) : null);
       const reply = await postClipboardCopy(ids, at);
       if (!reply.ok) {
         dispatch({ type: "TOAST", message: reply.message, kind: "error" });
-        return;
+        return false;
       }
       dispatch({ type: "SET_CLIPBOARD", clipboard: at ? { text: reply.text, reference: at } : { text: reply.text } });
       await writeClipboardText(reply.text);
+      return true;
     },
     // pcb_control.cpp Paste: whatever KiCad text is on the system clipboard (a copy made in KiCad, or on another board), else this session's own copy
     // where the browser will not hand the system clipboard over; text that is not KiCad's is pasted as a text item on the active layer ("If it wasn't
