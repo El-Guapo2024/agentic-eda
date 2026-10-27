@@ -5064,13 +5064,12 @@ impl<'a> Board<'a> {
         if net.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_power_symbol", "power_symbol", "a power symbol needs a net name")]);
         }
+        // r2 D-A2: `PlaceSymbol` always annotates a power symbol (`AlwaysAnnotate`) against the whole hierarchy, and `FindFirstUnusedReference` takes the
+        // first number no `#PWR` of any sheet holds; `SCH_REFERENCE::formatRefStr` writes it after a "0" (`#PWR01`, `#PWR010`)
+        let used: BTreeSet<u64> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.power_symbols.iter()).filter_map(|p| p.id.strip_prefix("#PWR").and_then(|n| n.parse::<u64>().ok())).collect();
+        let n = (1..).find(|n| !used.contains(n)).unwrap_or(1);
+        let id = format!("#PWR0{n}");
         let sch = self.schematic_mut_or_create();
-        let mut n = sch.power_symbols.len() as u32 + 1;
-        let mut id = format!("#PWR{n:02}");
-        while sch.power_symbols.iter().any(|p| p.id == id) {
-            n += 1;
-            id = format!("#PWR{n:02}");
-        }
         sch.power_symbols.push(PowerSymbol { id, lib_id: lib_id.into(), at, rot, net: net.into(), pin: pin.into() });
         let last = sch.power_symbols.len() - 1;
         self.settle_placed(sch_scene::Item::Power(last));

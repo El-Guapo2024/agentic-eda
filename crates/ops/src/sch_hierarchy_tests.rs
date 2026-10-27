@@ -670,3 +670,20 @@ fn replace_schematic_keeps_the_references_of_each_sheet_path() {
     assert_eq!(sub.symbols[0].id, "R7");
     assert_eq!(sub.instance_overrides.iter().map(|o| (o.sheet_path.clone(), o.reference.clone())).collect::<Vec<_>>(), vec![(vec!["sb".to_string()], "R8".to_string())]);
 }
+
+/// r2 D-A2 (`PlaceSymbol`: a power symbol is always annotated against the whole hierarchy, `FindFirstUnusedReference`, `formatRefStr`'s "0"): a power
+/// symbol placed on a sheet takes the first `#PWR` number no sheet holds, and the tenth is `#PWR010`.
+#[test]
+fn a_placed_power_symbol_is_numbered_across_sheets_like_kicad() {
+    let m = ConstraintModel::default();
+    let mut d = power_design();
+    let gnd = |id: &str| eda_model::ir::PowerSymbol { id: id.into(), lib_id: "power:GND".into(), at: pt(Nm::ZERO, Nm::ZERO), rot: 0, net: "GND".into(), pin: String::new() };
+    d.schematic.as_mut().unwrap().power_symbols = vec![gnd("#PWR01"), gnd("#PWR03")];
+    d.sheet_contents.as_mut().unwrap().get_mut("power.kicad_sch").unwrap().power_symbols = (4..=9).map(|n| gnd(&format!("#PWR0{n}"))).collect();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let place = |b: &mut Board<'_>| b.apply(&on("sp", Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: pt(mm(50.0), mm(50.0)), rot_millideg: 0, net: "GND".into(), pin: String::new() })).unwrap();
+    place(&mut b);
+    place(&mut b);
+    let ids: Vec<String> = b.design().sheet_contents.as_ref().unwrap()["power.kicad_sch"].power_symbols.iter().map(|p| p.id.clone()).collect();
+    assert_eq!(&ids[6..], ["#PWR02", "#PWR010"], "the gap of the root sheet first, then the first number past every sheet's");
+}
