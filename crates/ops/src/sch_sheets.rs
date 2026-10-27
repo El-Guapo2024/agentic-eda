@@ -324,7 +324,7 @@ impl<'a> Board<'a> {
     ///   path, `SCH_SCREEN::Append` / `updatePastedSymbol`, and annotates each one: `ReannotateDuplicates`), numbered against every reference of the design.
     ///
     /// A symbol the command did not add keeps whatever references it had, so an imported design is not renumbered by an unrelated edit.
-    pub(crate) fn tidy_shared_screens(&mut self, before: SharedScreens) {
+    pub(crate) fn tidy_shared_screens(&mut self, before: SharedScreens, numbering: eda_model::sch_clipboard::PasteNumbering) {
         if before.0.is_empty() && !self.design.sheet_contents.iter().flatten().any(|(_, s)| !s.instance_overrides.is_empty()) {
             let counts = eda_model::sheet_list::placement_counts(&self.design);
             if counts.values().all(|&n| n <= 1) {
@@ -378,7 +378,9 @@ impl<'a> Board<'a> {
                 .iter()
                 .map(|s| PastedRef { reference: s.id.clone(), unit: s.unit, unit_count: self.design_symbol(&s.lib_id).map_or(1, |l| l.unit_count.max(1)), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
                 .collect();
-            let numbered = annotate_paste(&self.used_references(), &pasted, PasteMode::Unique, Default::default(), 1);
+            // by the project's method and start number and this path's page (`PlaceSymbol`'s `annotate` lambda and `Paste` loop over the screen's paths,
+            // `ReannotateByOptions` gives each `SetSheetNumber( path->GetPageNumberAsInt() )`, r4 D4-M1)
+            let numbered = annotate_paste(&self.used_references(), &pasted, PasteMode::Unique, numbering, e.page_number_as_int());
             let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
             for (s, reference) in symbols.iter().zip(numbered) {
                 if reference != s.id {

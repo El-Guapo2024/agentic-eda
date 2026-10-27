@@ -62,13 +62,13 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
         }
         Cmd::OnSheet { sheet, cmd } => rewrite(cmd, design, model, symbols, footprints).map(|inner| Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(inner) }),
         Cmd::InGroup { group, cmd } => rewrite(cmd, design, model, symbols, footprints).map(|inner| Cmd::InGroup { group: group.clone(), cmd: Box::new(inner) }),
-        Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => {
+        Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, annotate } => {
             // The design's own definition (the intent's, a published one, one a placed symbol already needed) stands.
             if !lacks_definition(lib_id, design, model) {
                 return None;
             }
             let (definition, summary) = crate::library_search::installed_symbol(symbols, lib_id)?;
-            let place = Cmd::AddSymbol {
+            let place = Cmd::AddSymbol { annotate: annotate.clone(),
                 id: id.clone(),
                 lib_id: lib_id.clone(),
                 at: *at,
@@ -222,7 +222,7 @@ mod tests {
         (symbol "Plain" (property "Reference" "U") (property "Value" "Plain") (property "Datasheet" "~") (symbol "Plain_1_1" (pin input line (at 0 0 0) (length 1) (name "A") (number "1")))))"##;
 
     fn add(lib_id: &str, value: &str, footprint: &str) -> Cmd {
-        Cmd::AddSymbol { id: "U1".into(), lib_id: lib_id.into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot_millideg: 0, value: value.into(), footprint: footprint.into(), unit: 1 }
+        Cmd::AddSymbol { annotate: None, id: "U1".into(), lib_id: lib_id.into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot_millideg: 0, value: value.into(), footprint: footprint.into(), unit: 1 }
     }
 
     fn root_with_lm358(tag: &str) -> std::path::PathBuf {

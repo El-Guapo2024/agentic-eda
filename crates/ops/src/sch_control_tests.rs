@@ -24,7 +24,7 @@ fn empty_design() -> Design {
 }
 
 fn place(b: &mut Board<'_>, id: &str, lib_id: &str, unit: u32, x: Nm) {
-    b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: lib_id.into(), at: p(x, mm(10.0)), rot_millideg: 0, value: String::new(), footprint: String::new(), unit }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: id.into(), lib_id: lib_id.into(), at: p(x, mm(10.0)), rot_millideg: 0, value: String::new(), footprint: String::new(), unit }).unwrap();
 }
 
 fn symbols(b: &Board<'_>) -> Vec<SymbolInstance> {
@@ -139,9 +139,9 @@ fn a_label_or_text_changes_its_text_and_keeps_its_id_and_place() {
 fn the_library_link_of_a_group_moves_with_its_value_proxy_and_is_checked_first() {
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "R".into(), footprint: String::new(), unit: 1 }).unwrap();
-    b.apply(&Cmd::AddSymbol { id: "R2".into(), lib_id: "Device:R".into(), at: p(mm(10.0), Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
-    b.apply(&Cmd::AddSymbol { id: "C1".into(), lib_id: "Device:C".into(), at: p(mm(20.0), Nm::ZERO), rot_millideg: 0, value: "C".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "R".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "R2".into(), lib_id: "Device:R".into(), at: p(mm(10.0), Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "C1".into(), lib_id: "Device:C".into(), at: p(mm(20.0), Nm::ZERO), rot_millideg: 0, value: "C".into(), footprint: String::new(), unit: 1 }).unwrap();
     let change = |from: &str, to: &str| Cmd::SetSymbolLibIds { changes: vec![(from.into(), to.into())], update_fields: false };
     assert_eq!(b.apply(&change("Device:R", "R")).unwrap_err()[0].check, "ops_bad_lib_id");
     assert_eq!(b.apply(&change("Device:R", "Device:Nope")).unwrap_err()[0].check, "ops_unknown_symbol");

@@ -1058,7 +1058,7 @@ fn placing_a_resistor_on_a_wire_cuts_it_between_the_pins() {
     let mut design = empty_design();
     design.schematic = Some(s);
     let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(mm(20.32), mm(25.4)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "R1".into(), lib_id: "Device:R".into(), at: p(mm(20.32), mm(25.4)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
     let out = b.design().schematic.clone().unwrap();
     let mut runs: Vec<Vec<Point>> = out.wires.iter().map(|w| w.pts.clone()).collect();
     runs.sort();

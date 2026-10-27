@@ -1558,7 +1558,7 @@ pub(crate) mod tests {
         assert_eq!((fp["numbered_pads"].clone(), fp["footprint"]["name"].clone()), (json!(2), json!("Mine:Pad2")));
         // placing it keeps its definition with the schematic, with the library's Footprint field
         let design: eda_model::ir::Design = serde_json::from_str(r#"{"schema":1,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]}}"#).unwrap();
-        let cmd = eda_ops::Cmd::AddSymbol { id: "U1".into(), lib_id: "Mine:Chip9000".into(), at: eda_model::ir::Point { x: Nm::new(1000), y: Nm::new(1000) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
+        let cmd = eda_ops::Cmd::AddSymbol { annotate: None, id: "U1".into(), lib_id: "Mine:Chip9000".into(), at: eda_model::ir::Point { x: Nm::new(1000), y: Nm::new(1000) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
         let rewritten = crate::library_place::rewrite_for_tests(&cmd, &design, &eda_model::ConstraintModel::default(), &syms, &fps).expect("placed from the table library");
         let eda_ops::Cmd::Batch { cmds } = rewritten else { panic!("{rewritten:?}") };
         assert!(matches!(&cmds[0], eda_ops::Cmd::EmbedLibSymbol { symbol } if symbol.lib_id == "Mine:Chip9000" && symbol.pins.len() == 2));

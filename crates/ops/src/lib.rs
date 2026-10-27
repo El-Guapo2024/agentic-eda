@@ -1486,7 +1486,21 @@ pub enum Cmd {
     /// session, so two distinct unannotated multi-unit parts sharing the
     /// literal text `"U?"` would be mis-numbered as one; placing additional
     /// units of an already-numbered reference is unaffected by this.
-    AddSymbol { id: String, lib_id: String, at: Point, rot_millideg: Millideg, value: String, footprint: String, #[serde(default = "d_unit_one")] unit: u32 },
+    ///
+    /// `annotate` is the project's numbering (`PlaceSymbol`'s `annotate` lambda: `ReannotateByOptions` with Schematic Setup's method and start number), which
+    /// numbers the symbol on each further sheet path of a screen shown more than once, by that path's page (r4 D4-M1); absent, the first free number.
+    AddSymbol {
+        id: String,
+        lib_id: String,
+        at: Point,
+        rot_millideg: Millideg,
+        value: String,
+        footprint: String,
+        #[serde(default = "d_unit_one")]
+        unit: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annotate: Option<AnnotateOptions>,
+    },
     /// `SCH_SCREEN::AddLibSymbol`: keep a copy of a library symbol's definition with the schematic (KiCad's `lib_symbols` cache), so an instance
     /// that names it draws, exports and passes ERC without the library it came from -- what placing a symbol of an installed library
     /// does first (`SCH_DRAWING_TOOLS::PlaceSymbol` -> `SCH_SCREEN::AddLibSymbol`). Stored as a published entry of the project symbol library,
@@ -2283,6 +2297,19 @@ impl Cmd {
 }
 
 impl Cmd {
+    /// The numbering the command places or pastes symbols by (Schematic Setup's annotation settings, which `PlaceSymbol` and `Paste` read): what numbers
+    /// a new symbol on the further sheet paths of a screen shown more than once ([`Board::tidy_shared_screens`], r4 D4-M1). KiCad's defaults when it carries none.
+    pub fn numbering(&self) -> eda_model::sch_clipboard::PasteNumbering {
+        let of = |a: &AnnotateOptions| eda_model::sch_clipboard::PasteNumbering { algo: a.algo, start: a.start_number, ..Default::default() };
+        match self {
+            Cmd::PasteSch { numbering, .. } => *numbering,
+            Cmd::AddSymbol { annotate: Some(a), .. } | Cmd::AddPowerSymbol { annotate: Some(a), .. } => of(a),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.numbering(),
+            Cmd::Batch { cmds } => cmds.iter().map(Cmd::numbering).find(|n| *n != Default::default()).unwrap_or_default(),
+            _ => Default::default(),
+        }
+    }
+
     /// The parts this command touches, for logging and credit assignment.
     pub fn subjects(&self) -> Vec<&str> {
         match self {
@@ -2778,7 +2805,7 @@ impl<'a> Board<'a> {
         let shared_before = self.shared_screens_before();
         let pages_before = (self.design.schematic.is_some() && (matches!(cmd.domain(), Domain::Schematic) || matches!(cmd, Cmd::Batch { .. }))).then(|| eda_model::sheet_list::walk(&self.design));
         self.apply_cmd(cmd)?;
-        self.tidy_shared_screens(shared_before);
+        self.tidy_shared_screens(shared_before, cmd.numbering());
         // the page numbers KiCad keeps: a new sheet path numbered, a page shown kept when the walk moves (`sheet_list::keep_pages`)
         if let Some(before) = pages_before {
             eda_model::sheet_list::keep_pages(&mut self.design, &before);
@@ -3074,7 +3101,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteSchText { id } => self.delete_sch_text(id),
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin, annotate } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin, annotate.as_ref()).and_then(|_| self.commit_clean_up()),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id).and_then(|_| self.commit_clean_up()),
-            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
+            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, .. } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),

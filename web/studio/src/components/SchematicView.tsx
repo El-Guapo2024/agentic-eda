@@ -771,7 +771,9 @@ export function SchematicView() {
           const id = ref ?? nextReference(sch.symbols, referencePrefix || "U", state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start), sch.page_number ?? 1));
           const value = state.armedSymbol.value ?? (libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId);
           const [sx, sy] = snapToGrid(wx, wy);
-          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: state.armedSymbol.footprint ?? "", unit });
+          // the project's numbering numbers it on the further paths of a screen shown more than once, each by its page (`PlaceSymbol`, r4 D4-M1)
+          const numbering = rememberedAnnotateSettings();
+          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: state.armedSymbol.footprint ?? "", unit, annotate: { algo: numbering.algo, start_number: startNumber(numbering.start) } });
           // `PlaceNextSymbolUnit` hands the tool one symbol -- "place that and get out of the placement tool" (`placeOneOnly`).
           if (ref) {
             dispatch({ type: "SET_ARMED_SYMBOL", symbol: null });

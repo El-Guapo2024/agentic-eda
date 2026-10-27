@@ -760,3 +760,26 @@ fn a_placed_power_symbol_takes_its_prefix_and_the_annotate_method() {
     place(&mut b, "", "power:GND", Some(AnnotateOptions { start_number: 10, ..Default::default() }));
     assert_eq!(b.design().schematic.as_ref().unwrap().power_symbols.last().unwrap().id, "#PWR011");
 }
+
+/// r4 D4-M1 (`SCH_DRAWING_TOOLS::PlaceSymbol`'s `annotate` lambda: every instance of the screen, sorted by page, `ReannotateByOptions` with Schematic Setup's
+/// method and start number and `SetSheetNumber( path->GetPageNumberAsInt() )`): a symbol placed on a screen shown on pages 2 and 3 with "sheet number x 100"
+/// is numbered on the page-3 path by its page, `R301`, not by the first free number after the first path's.
+#[test]
+fn a_symbol_placed_on_a_shared_screen_numbers_each_path_by_its_page() {
+    let m = ConstraintModel::default();
+    let mut d = power_design();
+    let root = d.schematic.as_mut().unwrap();
+    root.sheets[0].page = "2".into();
+    let mut second = root.sheets[0].clone();
+    second.id = "sp2".into();
+    second.name = "Power2".into();
+    second.page = "3".into();
+    second.at = pt(mm(200.0), mm(50.0));
+    root.sheets.push(second);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let annotate = Some(AnnotateOptions { algo: eda_model::annotate::Algo::SheetX100, ..Default::default() });
+    let add = Cmd::AddSymbol { id: "R201".into(), lib_id: "Device:R".into(), at: pt(mm(0.05), Nm::ZERO), rot_millideg: 0, value: "1k".into(), footprint: String::new(), unit: 1, annotate };
+    b.apply(&Cmd::OnSheet { sheet: "sp".into(), cmd: Box::new(add) }).unwrap();
+    assert!(refs_on(b.design(), &["sp"]).contains(&"R201".to_string()));
+    assert!(refs_on(b.design(), &["sp2"]).contains(&"R301".to_string()), "{:?}", refs_on(b.design(), &["sp2"]));
+}

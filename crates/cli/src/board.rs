@@ -4806,7 +4806,7 @@ pub(crate) mod tests {
         let dir = scratch("sch_placed_symbol_part");
         setup_schematic(&dir);
         assert!(load(&dir).unwrap().2.part("R3").is_none(), "the intent has no R3");
-        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: mm(30.0), y: mm(10.0) }, rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { annotate: None, id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: mm(30.0), y: mm(10.0) }, rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let part = model.part("R3").expect("the placed symbol has a part again after a fresh load");
         assert_eq!((part.symbol.as_deref(), part.value.as_deref(), part.pins.len()), (Some("TEST:R"), Some("10k"), 1));
@@ -4828,7 +4828,7 @@ pub(crate) mod tests {
         setup_mcu30_flat(&dir);
         let before = load(&dir).unwrap().1;
         assert!(before.symbol_library.is_none());
-        let place = |id: &str, x: Nm| Cmd::AddSymbol { id: id.into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x, y: mm(20.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
+        let place = |id: &str, x: Nm| Cmd::AddSymbol { annotate: None, id: id.into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x, y: mm(20.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
 
         step(&dir, place("U90", mm(200.0)), false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
@@ -4843,7 +4843,7 @@ pub(crate) mod tests {
         assert!(part.datasheet.as_deref().is_some_and(|d| d.contains("lm2904")), "and its Datasheet: {:?}", part.datasheet);
         // A symbol with a default footprint brings it: the part names it, and it resolves from the footprint library so the PCB can place the part.
         if eda_kicad::default_symbol_library_root().join("Regulator_Linear.kicad_sym").is_file() && eda_kicad::default_footprint_library_root().join("Package_TO_SOT_SMD.pretty").is_dir() {
-            step(&dir, Cmd::AddSymbol { id: "U95".into(), lib_id: "Regulator_Linear:AMS1117-3.3".into(), at: Point { x: mm(240.0), y: mm(20.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+            step(&dir, Cmd::AddSymbol { annotate: None, id: "U95".into(), lib_id: "Regulator_Linear:AMS1117-3.3".into(), at: Point { x: mm(240.0), y: mm(20.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
             let (_, _, model) = load(&dir).unwrap();
             let reg = model.part("U95").unwrap();
             assert_eq!((reg.value.as_deref(), reg.footprint.as_deref(), reg.pins.len()), (Some("AMS1117-3.3"), Some("Package_TO_SOT_SMD:SOT-223-3_TabPin2"), 3));
@@ -4902,7 +4902,7 @@ pub(crate) mod tests {
         };
         let base = counts(&dir);
         // On the schematic grid (50 mil, as the studio snaps a click): a pin off it is `endpoint_off_grid`, and rightly.
-        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: mm(1.27) * 157, y: mm(1.27) * 16 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { annotate: None, id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: mm(1.27) * 157, y: mm(1.27) * 16 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         let after = counts(&dir);
         let grew = |kind: &str| after.get(kind).copied().unwrap_or(0).saturating_sub(base.get(kind).copied().unwrap_or(0));
         for kind in ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues", "unannotated", "endpoint_off_grid", "duplicate_reference", "unresolved_variable", "different_unit_footprint", "different_unit_net", "pin_to_pin", "bus_to_net_conflict"] {
@@ -4998,7 +4998,7 @@ pub(crate) mod tests {
         let added = crate::library_tables::add_library(&dir, br#"{"kind":"symbol","path":"${KIPRJMOD}/libs/MyParts.kicad_sym","descr":"mine"}"#);
         assert_eq!(added["ok"], true, "{added}");
         step(&dir, Cmd::SetErcSeverities { severities: [("lib_symbol_issues".to_string(), "warning".to_string())].into() }, false, "test").unwrap();
-        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "MyParts:R".into(), at: Point { x: mm(63.5), y: mm(25.4) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { annotate: None, id: "U90".into(), lib_id: "MyParts:R".into(), at: Point { x: mm(63.5), y: mm(25.4) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("MyParts:R").is_some()), "the placed symbol kept its definition with the schematic");
 
@@ -5117,8 +5117,8 @@ pub(crate) mod tests {
     fn annotate_with_an_explicit_id_list_only_touches_those_symbols() {
         let dir = scratch("sch_annotate_selection");
         setup_schematic(&dir);
-        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: mm(30.0), y: mm(10.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
-        step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: mm(40.0), y: mm(10.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { annotate: None, id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: mm(30.0), y: mm(10.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { annotate: None, id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: mm(40.0), y: mm(10.0) }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
 
         step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]), options: Default::default() }, false, "test").unwrap();
 

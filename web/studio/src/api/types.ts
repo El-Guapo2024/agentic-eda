@@ -1861,7 +1861,7 @@ export type Cmd =
   // placing `{ id: "U1", unit: 2 }` once "U1" unit 1 is already on the
   // sheet is how another unit of an existing, already-annotated part gets
   // added.
-  | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string; unit?: number }
+  | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string; unit?: number; annotate?: AnnotateOptions }
   | { op: "edit_symbol_fields"; id: string; value?: string | null; footprint?: string | null; datasheet?: string | null }
   | { op: "rename_symbol"; id: string; new_id: string }
   /** `DIALOG_ANNOTATE` (`options`: scope, numbering algorithm, start number, recursive, regroup units; see hierarchyTypes.ts). */

@@ -302,7 +302,8 @@ fn sheet_made(dir: &Path, sheet_path: &str) -> Result<Made, String> {
     }
     let (file, name) = sheet_file_and_name(&design, sheet_path).ok_or_else(|| "That sheet is not in the design.".to_string())?;
     let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: &crate::kicad_engine::chrono_like_today(), title: &project }, "board.kicad_sch").map_err(|e| board::reasons(&e))?;
-    let wanted = file.clone().unwrap_or_else(|| "board.kicad_sch".into());
+    // the screen is written where the derived tree puts it: a sheet above the root's folder under `__up__/` (`sheet_file_in_work`, r4 B4-M1)
+    let wanted = file.as_deref().map(eda_kicad::sheet_file_in_work).unwrap_or_else(|| "board.kicad_sch".into());
     let text = files.into_iter().find(|(n, _)| *n == wanted).map(|(_, t)| t).ok_or_else(|| format!("The file of the sheet ({wanted}) was not written."))?;
     let items = section.symbols.len() + section.power_symbols.len() + section.wires.len() + section.labels.len() + section.texts.len();
     Ok(Made { text, default_name: if name.is_empty() { project } else { name }, fields: Vec::new(), items })
@@ -688,5 +689,39 @@ pub(crate) fn delete_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     match db::delete(&library.path, &name) {
         Ok(()) => json!({ "ok": true, "message": format!("Design block '{name}' deleted from library '{lib}'") }),
         Err(e) => bad(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// r4 B4-M1 (`SCH_DESIGN_BLOCK_CONTROL::SaveSheetAsDesignBlock` saves the sheet's screen, wherever its file is): a sheet whose file is above the root's folder
+    /// (`../shared/amp.kicad_sch`) is written as `__up__/shared/amp.kicad_sch` in the derived tree (179c5cf5), and its design block is that screen.
+    #[test]
+    fn a_sheet_above_the_root_folder_saves_as_a_design_block() {
+        let base = std::env::temp_dir().join(format!("eda_dblock_up_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("proj")).unwrap();
+        std::fs::create_dir_all(base.join("shared")).unwrap();
+        let root = r#"(kicad_sch (version 20250114) (generator "eeschema") (generator_version "9.0") (uuid "11111111-1111-1111-1111-111111111111") (paper "A4")
+ (sheet (at 100 100) (size 20 20) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (uuid "21111111-1111-1111-1111-111111111111")
+  (property "Sheetname" "AMP" (at 100 99 0) (effects (font (size 1.27 1.27)) (justify left bottom)))
+  (property "Sheetfile" "../shared/amp.kicad_sch" (at 100 121 0) (effects (font (size 1.27 1.27)) (justify left top)))
+  (instances (project "root" (path "/11111111-1111-1111-1111-111111111111" (page "2")))))
+ (sheet_instances (path "/" (page "1"))))
+"#;
+        let amp = r#"(kicad_sch (version 20250114) (generator "eeschema") (generator_version "9.0") (uuid "41111111-1111-1111-1111-111111111111") (paper "A4")
+ (text "AMPLIFIER" (exclude_from_sim no) (at 50 50 0) (effects (font (size 1.27 1.27))) (uuid "51111111-1111-1111-1111-111111111111")))
+"#;
+        std::fs::write(base.join("proj/root.kicad_sch"), root).unwrap();
+        std::fs::write(base.join("shared/amp.kicad_sch"), amp).unwrap();
+        let dir = base.join("proj/board");
+        crate::import_kicad::run(&[base.join("proj/root.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+        let (_, design, _) = board::load(&dir).unwrap();
+        let sheet = design.schematic.as_ref().unwrap().sheets[0].id.clone();
+        let made = sheet_made(&dir, &sheet).unwrap_or_else(|e| panic!("{e}"));
+        assert!(made.text.contains("AMPLIFIER"), "the amp screen: {}", made.text);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

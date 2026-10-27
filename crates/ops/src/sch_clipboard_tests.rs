@@ -107,10 +107,10 @@ fn the_numbers_are_unique_across_every_sheet() {
     b.apply(&Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: p(Nm::ZERO, Nm::ZERO), size: (mm(10.0), mm(10.0)) }).unwrap();
     let sheet_id = b.design().schematic.as_ref().unwrap().sheets[0].id.clone();
     for (id, x) in [("R1", Nm::ZERO), ("R2", mm(10.0))] {
-        b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: p(x, mm(50.0)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+        b.apply(&Cmd::AddSymbol { annotate: None, id: id.into(), lib_id: "Device:R".into(), at: p(x, mm(50.0)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
     }
     for (id, x) in [("R3", Nm::ZERO), ("R4", mm(10.0))] {
-        b.apply(&Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: p(x, mm(50.0)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }) }).unwrap();
+        b.apply(&Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(Cmd::AddSymbol { annotate: None, id: id.into(), lib_id: "Device:R".into(), at: p(x, mm(50.0)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }) }).unwrap();
     }
     // Pasting R1 and R3 onto the child sheet: both references exist (on one sheet or the other), so each takes the next free number from its own.
     let f = fragment(|s| {
@@ -138,7 +138,7 @@ fn the_numbers_are_unique_across_every_sheet() {
 fn paste_special_keeps_or_resets_the_numbers() {
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
     let f = fragment(|s| {
         s.symbols.push(symbol("R1", "Device:R", "10k", p(Nm::ZERO, Nm::ZERO)));
         s.symbols.push(symbol("R7", "Device:R", "10k", p(mm(10.0), Nm::ZERO)));
@@ -155,7 +155,7 @@ fn paste_special_keeps_or_resets_the_numbers() {
 fn a_cut_and_paste_keeps_the_references_nothing_else_holds() {
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
     b.apply(&Cmd::DeleteSymbol { id: "R1".into(), unit: None }).unwrap();
     b.apply(&paste(&fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(Nm::ZERO, Nm::ZERO)))), mm(5.0), Nm::ZERO, PasteMode::Unique)).unwrap();
     assert_eq!(refs(b.design().schematic.as_ref().unwrap()), vec!["R1"]);
@@ -359,7 +359,7 @@ fn paste_keeps_the_clipboards_local_power_symbol() {
     assert!(matches!(drawn.first(), Some(eda_model::symbol::SymbolGraphic::Rectangle { end, .. }) if (end.x - 1.516).abs() < 1e-9), "the clipboard's artwork, not the installed library's: {drawn:?}");
     // a design that places Device:R already draws a pasted one its own way
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::AddSymbol { id: "R9".into(), lib_id: "Device:R".into(), at: p(mm(50.0), mm(50.0)), rot_millideg: 0, value: "1k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "R9".into(), lib_id: "Device:R".into(), at: p(mm(50.0), mm(50.0)), rot_millideg: 0, value: "1k".into(), footprint: String::new(), unit: 1 }).unwrap();
     b.apply(&paste(&f, Nm::ZERO, Nm::ZERO, PasteMode::Unique)).unwrap();
     assert!(published(&b, "Device:R").is_none(), "the design's own Device:R");
     // a local power symbol where the design has the global one
@@ -384,7 +384,7 @@ fn paste_keeps_the_clipboards_local_power_symbol() {
 fn a_pasted_symbol_keeps_exclude_from_position_files() {
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "R1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
     let mut f = fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(Nm::ZERO, Nm::ZERO))));
     f.section.extras.excluded_from_pos_files.insert("R1".into());
     b.apply(&paste(&f, mm(20.0), Nm::ZERO, PasteMode::Unique)).unwrap();

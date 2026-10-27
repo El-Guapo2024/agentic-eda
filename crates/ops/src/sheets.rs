@@ -545,7 +545,7 @@ mod tests {
         let root = b.design().schematic.clone().unwrap();
         let mcu = root.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().id.clone();
         let on_mcu = |cmd: Cmd| Cmd::OnSheet { sheet: mcu.clone(), cmd: Box::new(cmd) };
-        let add = |id: &str| Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: Point { x: Nm::new(10_160), y: Nm::new(10_160) }, rot_millideg: 0, value: "1k".into(), footprint: String::new(), unit: 1 };
+        let add = |id: &str| Cmd::AddSymbol { annotate: None, id: id.into(), lib_id: "Device:R".into(), at: Point { x: Nm::new(10_160), y: Nm::new(10_160) }, rot_millideg: 0, value: "1k".into(), footprint: String::new(), unit: 1 };
         // R1 is on the LED channels sheet: the MCU sheet cannot have another
         assert_eq!(b.apply(&on_mcu(add("R1"))).unwrap_err()[0].check, "ops_duplicate_symbol");
         // a part may not be renamed onto a reference another sheet has

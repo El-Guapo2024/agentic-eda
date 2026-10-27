@@ -82,7 +82,7 @@ fn a_field_the_dialog_would_refuse_is_refused_with_its_message() {
 fn dnp_and_exclude_from_bom_reach_the_symbol_and_a_symbol_edit_reaches_the_footprint() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    b.apply(&Cmd::AddSymbol { id: "U1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "U1".into(), lib_id: "Device:R".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }).unwrap();
     let flags = |b: &Board<'_>| {
         let s = b.design().schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "U1").unwrap().clone();
         (s.dnp, s.exclude_from_bom)

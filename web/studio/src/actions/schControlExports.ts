@@ -4,6 +4,7 @@ import type { SchControlContext } from "./schControlActions";
 import { fetchHierarchy, fetchSchematicFiles, postSymbolSvg } from "../api/schControlClient";
 import { fileStem } from "../kicad-port/saveAs";
 import { samePath } from "../kicad-port/sheetPages";
+import { sheetFileBaseName, sheetFileInWork } from "../kicad-port/sheetFileInWork";
 import { shownTitleBlock } from "../kicad-port/pageSettings";
 import { saveBlob, saveTextFile } from "../api/libraryClient";
 import { layerColor } from "../components/canvas/layers";
@@ -24,9 +25,10 @@ export async function saveSheetCopy(ctx: SchControlContext): Promise<void> {
     const path = ctx.state.currentSheetPath;
     const sheet = hierarchy.find((h) => samePath(h.path, path));
     const atRoot = path.length === 0;
-    const source = atRoot ? files[0] : files.find((f) => f.name === sheet?.file);
+    // the files are named where the derived tree writes them: a sheet above the root's folder is under `__up__/` (r4 B4-M1)
+    const source = atRoot ? files[0] : files.find((f) => sheet !== undefined && (f.name === sheet.file || f.name === sheetFileInWork(sheet.file)));
     if (!source) return toast("This sheet has no file to copy.", "error");
-    const name = atRoot ? `${fileStem(ctx.state.board?.name ?? "board")}.kicad_sch` : source.name;
+    const name = atRoot ? `${fileStem(ctx.state.board?.name ?? "board")}.kicad_sch` : sheetFileBaseName(source.name);
     saveTextFile(source.text, name);
     toast(`Saved a copy of this sheet as ${name}`, "info");
   } catch (e) {

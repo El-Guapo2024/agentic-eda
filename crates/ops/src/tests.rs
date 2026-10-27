@@ -2124,7 +2124,7 @@ fn footprint_editor_commands_are_their_own_undo_domain() {
 // ------------------------------------------------------------ multi-unit symbols (GAPS.md #21)
 
 fn add_unit(b: &mut Board<'_>, id: &str, unit: u32, x: Nm) {
-    b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: "test:DUAL".into(), at: Point { x, y: Nm::ZERO }, rot_millideg: 0, value: "DUAL".into(), footprint: String::new(), unit }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: id.into(), lib_id: "test:DUAL".into(), at: Point { x, y: Nm::ZERO }, rot_millideg: 0, value: "DUAL".into(), footprint: String::new(), unit }).unwrap();
 }
 
 /// Placing a second unit of an *already-placed* reference (same `id`, a
@@ -2142,7 +2142,7 @@ fn add_symbol_places_additional_units_of_an_existing_reference() {
     let units: std::collections::BTreeSet<u32> = sch.symbols.iter().map(|s| s.unit).collect();
     assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
 
-    let e = b.apply(&Cmd::AddSymbol { id: "U1".into(), lib_id: "test:DUAL".into(), at: Point { x: mm(99.0), y: Nm::ZERO }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }).unwrap_err();
+    let e = b.apply(&Cmd::AddSymbol { annotate: None, id: "U1".into(), lib_id: "test:DUAL".into(), at: Point { x: mm(99.0), y: Nm::ZERO }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }).unwrap_err();
     assert_eq!(e[0].check, "ops_duplicate_symbol");
 }
 
@@ -2297,7 +2297,7 @@ fn a_sheet_is_refused_without_a_name_with_a_folder_in_its_file_with_a_taken_name
 }
 
 fn place_sym(b: &mut Board<'_>, id: &str, lib_id: &str, at: Point, rot: Millideg) {
-    b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: lib_id.into(), at, rot_millideg: rot, value: String::new(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&Cmd::AddSymbol { annotate: None, id: id.into(), lib_id: lib_id.into(), at, rot_millideg: rot, value: String::new(), footprint: String::new(), unit: 1 }).unwrap();
 }
 
 #[test]
