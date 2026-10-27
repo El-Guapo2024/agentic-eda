@@ -526,7 +526,8 @@
     if (setup) {
       const nav = [...setup.querySelectorAll(".bs-nav-item")].find((n) => n.innerText.trim() === "Formatting");
       nav?.click();
-      await sleep(300);
+      // The page reads the design's setting (GET /api/sch/formatting) when the dialog opens and shows the field once it has it.
+      await until(() => grid(), 5000);
       check("it has a Formatting page with the connection grid, 50 mils to begin with", !!grid() && grid().value === "50", grid()?.value);
       setValue(grid(), "100");
       await sleep(200);
@@ -546,6 +547,8 @@
       check("the finding's menu ends with Edit connection grid spacing", labels.some((l) => l.startsWith("Edit violation severities")) && labels.some((l) => l.startsWith("Edit connection grid spacing")), JSON.stringify(labels));
       await pick("Edit connection grid spacing");
       const again = await until(() => dialogOf("Schematic Setup"), 3000);
+      // As above: the field is there once the page has the design's setting, which a loaded box may take longer than the dialog to give.
+      if (again) await until(() => grid(), 5000);
       check("which opens Schematic Setup on Formatting, showing 100", !!again && /Formatting/.test(again.querySelector(".bs-nav-item.active")?.innerText ?? "") && grid()?.value === "100", again?.querySelector(".bs-nav-item.active")?.innerText + " " + grid()?.value);
       if (again) {
         setValue(grid(), "50");
