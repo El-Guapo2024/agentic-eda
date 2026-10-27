@@ -281,6 +281,10 @@ pub struct Naming<'a> {
     /// "REF.PIN" -> the reference with the unit the pin is drawn on, for a symbol of several units (`U1A`): KiCad's default net name of a named pin has
     /// it (`Net-(U1A-OUT)`).
     pub pin_units: Option<&'a BTreeMap<String, String>>,
+    /// "REF.PIN" -> the alternate function a placed pin picked, where it has one (`SCH_PIN::GetShownName` returns `m_alt` when it is set). KiCad 25ec2335
+    /// counts duplicate names by it (`conn_facts.cpp`: `numbersByName[pin->GetShownName()]`, looked up by `pin->GetShownName()`); the name in the net's
+    /// name stays the library pin's ([`Naming::pin_names`], `libPin->GetShownName()`, r6 A6-M2).
+    pub pin_alternate_names: Option<&'a BTreeMap<String, String>>,
     /// The no-connect pins (`PT_NC`), "REF.PIN": KiCad names a net of theirs `unconnected-(..)` (`PIN_NAME_FACT::noConnect`).
     pub nc_pins: Option<&'a BTreeSet<String>>,
     /// The pins of a symbol of several units common to every unit (`ALL_UNITS`), "REF.PIN": they count among each drawn unit's pins when a pin name
@@ -764,7 +768,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     }
     // The undriven nets, the larger ones first: what KiCad calls them (`SCH_PIN::GetDefaultNetName` of the best pin). A group with no pin (a
     // stray wire, a lone label) has no net and stays unnamed.
-    let facts = PinFacts { names: naming.pin_names, units: naming.pin_units, nc: naming.nc_pins, common: naming.common_pins, quiet: naming.quiet_pins };
+    let facts = PinFacts { names: naming.pin_names, units: naming.pin_units, nc: naming.nc_pins, common: naming.common_pins, quiet: naming.quiet_pins, alternates: naming.pin_alternate_names };
     let shown_count = shown_name_counts(&facts);
     let mut order: Vec<usize> = (0..finals.len()).filter(|&i| finals[i].name.is_none() && !finals[i].pins.is_empty()).collect();
     order.sort_by(|&a, &b| finals[b].pins.len().cmp(&finals[a].pins.len()).then_with(|| finals[a].pins.first().cmp(&finals[b].pins.first())));
@@ -854,11 +858,17 @@ pub struct PinFacts<'a> {
     pub common: Option<&'a BTreeSet<String>>,
     /// The pins that make no claim (see [`Naming::quiet_pins`]).
     pub quiet: Option<&'a BTreeSet<String>>,
+    /// The placed pins' alternates (see [`Naming::pin_alternate_names`]).
+    pub alternates: Option<&'a BTreeMap<String, String>>,
 }
 
 impl PinFacts<'_> {
     fn shown(&self, pin_ref: &str) -> &str {
         self.names.and_then(|n| n.get(pin_ref).or_else(|| n.get(base_pin(pin_ref)))).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("")
+    }
+    /// `SCH_PIN::GetShownName` of the placed pin, which the duplicate-name test compares: its alternate when it has one, else its library name.
+    fn placed_shown(&self, pin_ref: &str) -> &str {
+        self.alternates.and_then(|a| a.get(pin_ref).or_else(|| a.get(base_pin(pin_ref)))).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or_else(|| self.shown(pin_ref))
     }
     fn is_nc(&self, pin_ref: &str) -> bool {
         self.nc.is_some_and(|n| n.contains(pin_ref) || n.contains(base_pin(pin_ref)))
@@ -890,7 +900,7 @@ fn shown_name_counts(facts: &PinFacts) -> BTreeMap<(String, String), BTreeSet<St
     for pin_ref in facts.names.into_iter().flat_map(|n| n.keys()) {
         // a copy of a pin (another unit's pin of the number, r5 A5-H1) counts under its number
         if let Some((reference, number)) = base_pin(pin_ref).split_once('.') {
-            let name = facts.shown(pin_ref);
+            let name = facts.placed_shown(pin_ref);
             if name.is_empty() || facts.is_nc(pin_ref) {
                 continue;
             }
@@ -925,7 +935,7 @@ fn default_net_name(pin_ref: &str, facts: &PinFacts, shown_count: &BTreeMap<(Str
     if !shown.is_empty() && shown != number {
         let with_unit = facts.unit_ref(pin_ref).unwrap_or(reference);
         // `hasDuplicateName = numbers.size() > 1 || !numbers.contains( pin->GetShownNumber() )`
-        let has_multiple = !unconnected && shown_count.get(&(with_unit.to_string(), shown.to_string())).is_some_and(|numbers| numbers.len() > 1 || !numbers.contains(number));
+        let has_multiple = !unconnected && shown_count.get(&(with_unit.to_string(), facts.placed_shown(pin_ref).to_string())).is_some_and(|numbers| numbers.len() > 1 || !numbers.contains(number));
         let pad = if unconnected || has_multiple { format!("-Pad{}", escape(&pad_number)) } else { String::new() };
         format!("{prefix}{}-{}{pad})", escape(with_unit), escape(shown))
     } else {

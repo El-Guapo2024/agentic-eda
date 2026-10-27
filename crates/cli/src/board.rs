@@ -493,13 +493,16 @@ fn fold_board_parts(design: &eda_model::ir::Design, model: &mut ConstraintModel)
     }
 }
 
-/// The alternate function each placed symbol picked for a pin (`SchExtras::pin_alternates`), by "REF.NUM" of the symbol's own reference.
+/// The alternate function each placed symbol picked for a pin (`SchExtras::pin_alternates`), by "REF.NUM" of the reference each sheet path gives the
+/// symbol: `m_alt` is the `SCH_PIN`'s, so a shared screen's later path (`R11` where the screen says `R1`) has it too (r6 A6-L2).
 fn pin_alternates_by_pin(design: &eda_model::ir::Design) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
-    for sec in design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
         for sym in &sec.symbols {
+            let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
             for (number, alt) in sec.extras.pin_alternates.get(&eda_model::ir::field_key(&sym.id, sym.unit)).into_iter().flatten() {
-                out.insert(format!("{}.{number}", sym.id), alt.clone());
+                out.insert(format!("{reference}.{number}"), alt.clone());
             }
         }
     }
@@ -585,7 +588,27 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
                 .collect::<Vec<_>>()
         })
         .collect();
-    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), common_pins: Some(&common_pins), quiet_pins: Some(&quiet_pins), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), local_power: Some(&local_power), ..Default::default() };
+    // the placed pins' shown names where they differ from the library's: the alternate they picked, which `SCH_PIN::SetAlt` keeps only when the library
+    // pin has it and it is not the pin's own name; the duplicate-name test compares these (`numbersByName[pin->GetShownName()]`, r6 A6-M2)
+    let alternate_names: std::collections::BTreeMap<String, String> = model
+        .parts
+        .iter()
+        .flat_map(|part| {
+            let lib = part.symbol.as_deref().and_then(|id| resolve_lib_symbol(id, model));
+            let alternates = &alternates;
+            part.pins
+                .iter()
+                .filter_map(move |pin| {
+                    let key = format!("{}.{}", part.reference, pin.number);
+                    let alt = alternates.get(&key)?;
+                    let lp = lib.as_ref()?.pin_by_number(&pin.number)?;
+                    let valid = !alt.is_empty() && *alt != lp.name && lib.as_ref()?.connectivity.pin_alternates.get(&pin.number).is_some_and(|alts| alts.iter().any(|a| a.name == *alt));
+                    valid.then(|| (key, alt.clone()))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), pin_alternate_names: Some(&alternate_names), common_pins: Some(&common_pins), quiet_pins: Some(&quiet_pins), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), local_power: Some(&local_power), ..Default::default() };
     trace_design(design, model, &naming)
 }
 
