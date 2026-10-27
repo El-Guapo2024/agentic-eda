@@ -148,6 +148,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     // the project's root: this file's own uuid when it is the root
     let own_uuid = uuid_of(root).unwrap_or_default();
     let root_uuid = root_uuid.map_or(own_uuid.clone(), str::to_string);
+    // `m_requiredVersion`: the version this file says it is
+    let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0);
     let mut lib_table: HashMap<String, LibSymbol> = sexpr::find(root, "lib_symbols").map(build_symbol_table).unwrap_or_default();
     // A symbol is drawn from the cache entry its `(lib_name ..)` names, the library id when it has none (`parseSchematicSymbol`'s `T_lib_name`,
     // `SCH_SYMBOL::GetSchSymbolLibraryName`, `SCH_SCREEN::UpdateSymbolLinks`): a cache that holds only `Test_Symbol_GND_1` for `Test:Test_Symbol_GND` draws
@@ -273,7 +275,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         // `T_instances`: `SetValueFieldText`, `SetFootprintFieldText`), and the root's own path `/<root uuid>` names a symbol of the root sheet:
         // `SCH_SYMBOL::GetRef( sheet )` takes the instance of the path before the Reference field, and `SCH_SHEET_PATH::UpdateAllScreenReferences`
         // sets the field and the unit from it (`SetText( GetRef( this ) )`, `SetUnit( GetUnitSelection( this ) )`) (r5 D5-H2)
-        if let Some((r, u, v, f)) = own_instance_fields(item, &root_uuid) {
+        if let Some((r, u, v, f)) = own_instance_fields(item, &root_uuid, file_version) {
             if let Some(r) = r {
                 reference = r;
                 unit = u;
@@ -1410,14 +1412,16 @@ fn parse_instance_overrides(item: &[Sexpr], at: Point, own_unit: u32) -> Vec<(ed
 /// What a placed symbol's own `(instances (project .. (path ..)))` set on its fields when read (`SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`,
 /// `T_instances`): the reference and unit of the root's own path `/<root uuid>` (a symbol of the root sheet; `SCH_SYMBOL::GetRef` prefers it to the
 /// Reference field), and the value and footprint a path of a KiCad 7.0 file gives (`SetValueFieldText`, `SetFootprintFieldText`, the last read winning;
-/// `~` is empty). `None` when there is no `(instances ..)`.
-fn own_instance_fields(item: &[Sexpr], root_uuid: &str) -> Option<(Option<String>, u32, Option<String>, Option<String>)> {
+/// `~` is empty in a file older than 20250318, `if( m_requiredVersion < 20250318 && CurStr() == "~" )`, and a literal tilde after it, r6 A6-L3). `None`
+/// when there is no `(instances ..)`.
+fn own_instance_fields(item: &[Sexpr], root_uuid: &str, version: f64) -> Option<(Option<String>, u32, Option<String>, Option<String>)> {
     let instances = sexpr::find(item, "instances")?;
     let (mut reference, mut unit, mut value, mut footprint) = (None, 1, None, None);
     for project in sexpr::find_all(instances, "project") {
         for path in sexpr::find_all(project, "path") {
             let Some(path_str) = sexpr::txt(path, 1) else { continue };
-            let text = |name: &str| sexpr::find(path, name).and_then(|n| sexpr::txt(n, 1)).map(|t| if t == "~" { String::new() } else { t.to_string() });
+            let raw = |name: &str| sexpr::find(path, name).and_then(|n| sexpr::txt(n, 1)).map(str::to_string);
+            let text = |name: &str| raw(name).map(|t| if version < 20250318.0 && t == "~" { String::new() } else { t });
             if let Some(v) = text("value") {
                 value = Some(v);
             }
@@ -1426,7 +1430,8 @@ fn own_instance_fields(item: &[Sexpr], root_uuid: &str) -> Option<(Option<String
             }
             let comps: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
             if !root_uuid.is_empty() && comps == [root_uuid] {
-                if let Some(r) = text("reference") {
+                // (the reference is taken as it is, `instance.m_Reference = FromUTF8()`)
+                if let Some(r) = raw("reference") {
                     reference = Some(r);
                     unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).map_or(1, |u| u.max(1.0) as u32);
                 }
@@ -1799,6 +1804,28 @@ mod tests {
         assert_eq!(design.schematic.as_ref().unwrap().symbols.len(), 1);
         let numbers: Vec<&str> = model.part("R1").unwrap().pins.iter().map(|p| p.number.as_str()).collect();
         assert_eq!(numbers, vec!["7", "8"], "the pins of the lib_name entry");
+    }
+    /// r6 A6-L3 (`parseSchematicSymbol`'s `T_instances`: `if( m_requiredVersion < 20250318 && CurStr() == "~" ) SetValueFieldText( wxEmptyString )`): an
+    /// instance's `(value "~")` is a literal tilde in a file of 20250318 or later, and empty in an older one.
+    #[test]
+    fn a_tilde_value_is_literal_in_a_new_file() {
+        let file = |version: u32| {
+            format!(
+                r#"(kicad_sch (version {version}) (generator "eeschema") (uuid "00000000-0000-0000-0000-0000000000a1") (paper "A4")
+ (lib_symbols (symbol "Device:R" (property "Reference" "R" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "Value" "R" (at 0 0 0) (effects (font (size 1.27 1.27))))
+  (symbol "R_1_1" (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))))))
+ (symbol (lib_id "Device:R") (at 50.8 50.8 0) (unit 1) (uuid "cf2ba0bc-c5e7-461a-aaf6-14063af92c9d")
+  (property "Reference" "R1" (at 53.8 50.8 0) (effects (font (size 1.27 1.27)))) (property "Value" "R" (at 53.8 52.8 0) (effects (font (size 1.27 1.27))))
+  (instances (project "p" (path "/00000000-0000-0000-0000-0000000000a1" (reference "R1") (unit 1) (value "~") (footprint "~"))))))"#
+            )
+        };
+        let value_of = |version: u32| {
+            let (design, _, _) = import_kicad_sch(&file(version)).unwrap();
+            let s = design.schematic.unwrap().symbols.into_iter().next().unwrap();
+            (s.value, s.footprint)
+        };
+        assert_eq!(value_of(20250318), ("~".to_string(), "~".to_string()));
+        assert_eq!(value_of(20250114), (String::new(), String::new()));
     }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
         Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), symbol: None, datasheet: None, pins, body_nm: None, edge: None }
