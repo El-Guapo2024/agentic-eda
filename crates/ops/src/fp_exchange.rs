@@ -217,6 +217,8 @@ pub fn board_footprint(design: &eda_model::ir::Design, model: &ConstraintModel, 
             thermal_spoke_angle_mdeg: facts.thermal_spoke_angle_mdeg,
             pad_to_die_length: file_pad.and_then(|p| eda_model::lib_keep::kept_mm(&p.tokens, "die_length")),
             fabrication_property: file_pad.and_then(|p| eda_model::lib_keep::kept_atom(&p.tokens, "property")).filter(|p| p != "pad_prop_none"),
+            // The set the board's file has for the pad (`padNeedsUpdate`'s "%s layers differ."), from the kept facts or the defaults of its kind.
+            layers: Some(eda_model::fp_compare::written_pad_layers(pad, file_pad)),
         };
         if o != (PadOverrides { number: pad.number.clone(), ..Default::default() }) {
             pad_overrides.push(o);

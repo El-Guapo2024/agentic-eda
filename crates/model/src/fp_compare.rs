@@ -15,6 +15,7 @@ use crate::fp_art::FpShape;
 use crate::fp_edit::{FootprintAttrs, FootprintKind};
 use crate::ir::{LibraryFootprint, Millideg, PadConnection, Point, Shape, Nm};
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 /// The footprint-level overrides the board -- or the library copy -- has on a footprint (`GetLocalClearance`, `GetLocalSolderMaskMargin`,
 /// `GetLocalSolderPasteMargin`, `GetLocalSolderPasteMarginRatio`, `GetLocalZoneConnection`), `None` for one it does not set.
@@ -46,6 +47,10 @@ pub struct PadOverrides {
     pub pad_to_die_length: Option<Nm>,
     /// `GetProperty` (`(property pad_prop_heatsink)`), the Pad Properties dialog's "Fabrication property".
     pub fabrication_property: Option<String>,
+    /// `GetLayerSet`: the pad's `(layers ..)` in the footprint's own frame (as for a top-side footprint), wildcards as the file writes them (`*.Cu`, `*.Mask`). For the
+    /// board, the set the file has, or the writer writes ([`written_pad_layers`]); for the library, its `LibraryPad::layers`. `None` when it is not known (a library
+    /// pad whose set was never filled in), and then the sets are not compared.
+    pub layers: Option<Vec<String>>,
 }
 
 /// What the library's copy sets on itself and its pads (`aLibFP`): the values the board's overrides are compared with. The library's margins of
@@ -82,6 +87,7 @@ impl LibraryFacts {
                 thermal_spoke_angle_mdeg: p.thermal_spoke_angle_mdeg,
                 pad_to_die_length: crate::lib_keep::kept_mm(&p.kicad.tokens, "die_length"),
                 fabrication_property: p.kicad.property.clone().filter(|p| p != "pad_prop_none"),
+                layers: (!p.layers.is_empty()).then(|| p.layers.clone()),
             })
             .collect();
         LibraryFacts { overrides, pad_overrides }
@@ -225,10 +231,12 @@ fn shape_differs(a: &FpShape, b: &FpShape) -> bool {
 }
 
 /// `PCB_SHAPE::GetItemDescription` inside a board footprint: `"%s of %s on %s"` (the friendly name, the footprint's reference, the layer), and on copper
-/// `"%s %s of %s on %s"` with the net -- a footprint's graphic is on none, so `"[<no net>]"` (`BOARD_CONNECTED_ITEM::GetNetnameMsg`).
+/// `"%s %s of %s on %s"` with the net message. The shapes `FootprintNeedsUpdate` describes are its copy's (`FOOTPRINT dummy( *this ); dummy.SetParent( nullptr )`),
+/// which has no board, so `BOARD_CONNECTED_ITEM::GetNetnameMsg` says `"[** NO BOARD DEFINED **]"` (`if( !GetBoard() )`), and the layer is `LayerName`'s
+/// canonical name, which is the name the art keeps.
 fn describe(s: &FpShape, reference: &str) -> String {
     if is_copper(s.layer()) {
-        format!("{} [<no net>] of {} on {}", kind_name(&s.shape), reference, s.layer())
+        format!("{} [** NO BOARD DEFINED **] of {} on {}", kind_name(&s.shape), reference, s.layer())
     } else {
         format!("{} of {} on {}", kind_name(&s.shape), reference, s.layer())
     }
@@ -277,9 +285,9 @@ fn stack_roles(a: &Pad) -> Vec<String> {
 /// library pad's own values (`l`) where KiCad has them: after the drill, before the primitives.
 fn pad_lines(a: &Pad, lib: &Pad, o: &PadOverrides, l: &PadOverrides, out: &mut Vec<String>) {
     let name = format!("Pad {}", a.number);
-    // `TEST( a->GetPadToDieLength(), bLib->GetPadToDieLength(), .. )`. The engine footprint has no field for it, so the board's value is the file's
-    // kept `(die_length ..)`; a footprint placed here has none, and then nothing is claimed either way.
-    if o.pad_to_die_length.is_some() && o.pad_to_die_length != l.pad_to_die_length {
+    // `TEST( a->GetPadToDieLength(), bLib->GetPadToDieLength(), .. )`, always. The engine footprint has no field for it, so the board's value is the file's
+    // kept `(die_length ..)`; a footprint placed here has none, and none is what its file says (the writer writes only the kept token), as KiCad would read it.
+    if o.pad_to_die_length.unwrap_or(Nm::ZERO) != l.pad_to_die_length.unwrap_or(Nm::ZERO) {
         out.push(format!("{name} pad to die length differs."));
     }
     if pt_differs(a.at, lib.at) {
@@ -287,14 +295,19 @@ fn pad_lines(a: &Pad, lib: &Pad, o: &PadOverrides, l: &PadOverrides, out: &mut V
     }
     // `layerSettingsDiffer`: whether the unconnected layers are removed, and, when they are, whether the outside ones are kept.
     let (ua, ul) = (a.ext.stack.unconnected, lib.ext.stack.unconnected);
-    if a.opposite_side != lib.opposite_side || ua.removes() != ul.removes() || (ua.removes() && ua.keeps_outer() != ul.keeps_outer()) {
+    // Then the sets themselves, `boardLayersMatchWithInnerLayerExpansion` (see [`layer_sets_match`]); the side a pad is on is part of its set.
+    let sets_differ = match (&o.layers, &l.layers) {
+        (Some(mine), Some(theirs)) => !layer_sets_match(mine, theirs),
+        _ => false,
+    };
+    if a.opposite_side != lib.opposite_side || ua.removes() != ul.removes() || (ua.removes() && ua.keeps_outer() != ul.keeps_outer()) || sets_differ {
         out.push(format!("{name} layers differ."));
     }
     if a.kind != lib.kind {
         out.push(format!("{name} pad type differs."));
     }
-    // `TEST( a->GetProperty(), bLib->GetProperty(), .. )`, the fabricated property from the files' `(property ..)`, when the board has one.
-    if o.fabrication_property.is_some() && o.fabrication_property != l.fabrication_property {
+    // `TEST( a->GetProperty(), bLib->GetProperty(), .. )`, always: the fabrication property from the files' `(property ..)` (none on a footprint placed here, as its file says).
+    if o.fabrication_property != l.fabrication_property {
         out.push(format!("{name} fabrication property differs."));
     }
     if a.rot != lib.rot {
@@ -342,6 +355,88 @@ fn pad_lines(a: &Pad, lib: &Pad, o: &PadOverrides, l: &PadOverrides, out: &mut V
     if let Some(role) = roles.iter().find(|role| a.shape_for_role(role).custom != lib.shape_for_role(role).custom) {
         out.push(format!("{name} shape primitives differ on layer {}.", layer_name(role)));
     }
+}
+
+/// A pad layer set as `LSET` holds it: the copper named one by one or `*.Cu` (every copper layer: the front, the back and all inner ones), the other layers by
+/// name with `*.X` for both sides (`F&B.Cu` the two outer copper layers).
+#[derive(Debug, PartialEq)]
+struct LayerSet {
+    outer_cu: BTreeSet<String>,
+    /// `None` is every inner layer (`*.Cu`).
+    inner_cu: Option<BTreeSet<String>>,
+    other: BTreeSet<String>,
+}
+
+fn layer_set(names: &[String]) -> LayerSet {
+    let mut set = LayerSet { outer_cu: BTreeSet::new(), inner_cu: Some(BTreeSet::new()), other: BTreeSet::new() };
+    for n in names {
+        match n.as_str() {
+            "*.Cu" => {
+                set.outer_cu.extend(["F.Cu".to_string(), "B.Cu".to_string()]);
+                set.inner_cu = None;
+            }
+            "F&B.Cu" => set.outer_cu.extend(["F.Cu".to_string(), "B.Cu".to_string()]),
+            "F.Cu" | "B.Cu" => {
+                set.outer_cu.insert(n.clone());
+            }
+            w if w.starts_with("*.") => set.other.extend([format!("F.{}", &w[2..]), format!("B.{}", &w[2..])]),
+            w if w.ends_with(".Cu") => {
+                if let Some(inner) = &mut set.inner_cu {
+                    inner.insert(w.to_string());
+                }
+            }
+            w => {
+                set.other.insert(w.to_string());
+            }
+        }
+    }
+    set
+}
+
+/// `boardLayersMatchWithInnerLayerExpansion( getBoardNormalizedLayerSet( a ), getBoardNormalizedLayerSet( bLib ), allowExpansion )` for a footprint of the default
+/// stackup (`FOOTPRINT_STACKUP::EXPAND_INNER_LAYERS`, the only one the model has): the layers besides copper the same, the outer copper the same, and every inner
+/// layer of the library's on the board's pad too ("missingInnerInA"). Where we differ: the sets are not first cut down to the board's enabled layers (the comparison
+/// has no board), so an inner layer named on the library's pad and not on the board's differs even when the board has no such layer, and `*.Cu` against inner layers
+/// named one by one is taken for different.
+fn layer_sets_match(board: &[String], library: &[String]) -> bool {
+    let (a, b) = (layer_set(board), layer_set(library));
+    if a.other != b.other || a.outer_cu != b.outer_cu {
+        return false;
+    }
+    match (&a.inner_cu, &b.inner_cu) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(mine), Some(theirs)) => theirs.is_subset(mine),
+    }
+}
+
+/// The `(layers ..)` the board's file has for the pad, in the footprint's own frame: what `export_kicad_pcb` writes for it (`eda_kicad`'s footprint writer, the
+/// pad's layers), from the facts the import kept (`info`, [`crate::ir::PadMaskInfo`]) or, for a pad of a footprint placed here, the defaults of its kind. A
+/// through-hole or non-plated pad is on `*.Cu` and its hole's paste and mask (`hole_tech_layers`, else both masks unless it has none); an SMD pad on its side's
+/// copper, paste and mask (those it lacks left out), or the set it had on several copper layers (`smd_layers`); an edge connector on its copper and both masks; then
+/// the art layers (`art_layers`).
+pub fn written_pad_layers(pad: &Pad, info: Option<&crate::ir::PadMaskInfo>) -> Vec<String> {
+    use crate::footprint::PadKind;
+    let (no_paste, no_mask, connector) = info.map_or((false, false, false), |i| (i.no_paste, i.no_mask, i.connector));
+    let hole_tech = info.and_then(|i| i.hole_tech_layers.clone());
+    let both_masks = || if no_mask { Vec::new() } else { vec!["F.Mask".to_string(), "B.Mask".to_string()] };
+    let mut out: Vec<String> = match pad.kind {
+        PadKind::ThroughHole | PadKind::NonPlatedHole => std::iter::once("*.Cu".to_string()).chain(hole_tech.unwrap_or_else(both_masks)).collect(),
+        PadKind::Smd => {
+            let side = if pad.opposite_side { "B" } else { "F" };
+            let cu = format!("{side}.Cu");
+            let smd_layers = info.map(|i| i.smd_layers.clone()).unwrap_or_default();
+            if !connector && !smd_layers.is_empty() {
+                smd_layers
+            } else if connector {
+                std::iter::once(cu).chain(hole_tech.unwrap_or_else(both_masks)).collect()
+            } else {
+                std::iter::once(cu).chain((!no_paste).then(|| format!("{side}.Paste"))).chain((!no_mask).then(|| format!("{side}.Mask"))).collect()
+            }
+        }
+    };
+    out.extend(info.map(|i| i.art_layers.clone()).unwrap_or_default());
+    out
 }
 
 /// `PADSTACK::DefaultThermalSpokeAngleForShape`: 90 degrees for an oval or a (rounded, chamfered) rectangle, 45 for the other shapes.
@@ -646,11 +741,11 @@ mod tests {
         board.art.shapes[0].shape.set_stroke_width(Nm::new(300_000));
         assert!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()).is_empty(), "a silkscreen line may be thicker");
         board.art.shapes[1].shape.set_stroke_width(Nm::new(300_000));
-        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Segment [<no net>] of R1 on F.Cu differs."]);
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Segment [** NO BOARD DEFINED **] of R1 on F.Cu differs."]);
         // `TEST( curr_shape.GetStroke(), ref_shape.GetStroke(), "" )`: the width, the line style and the colour, not the width only.
         board.art.shapes[1].shape.set_stroke_width(Nm::new(5000));
         board.art.shapes[1].style = crate::fp_art::LineStyle::Dash;
-        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Segment [<no net>] of R1 on F.Cu differs."]);
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Segment [** NO BOARD DEFINED **] of R1 on F.Cu differs."]);
     }
 
     #[test]
@@ -689,6 +784,58 @@ mod tests {
         // the library's values are the board's: nothing differs
         let library = LibraryFacts { pad_overrides: vec![board.pad_overrides[0].clone()], ..Default::default() };
         assert!(footprint_differences(&board, &lib, &library).is_empty());
+    }
+
+    /// `padNeedsUpdate`: "%s layers differ." when the sets differ (`boardLayersMatchWithInnerLayerExpansion`), with the library's inner layers allowed to be a
+    /// part of the board's (r5 F4).
+    #[test]
+    fn a_pad_whose_paste_layer_was_removed_reports_layers_differ() {
+        let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
+        let with = |layers: &[&str]| PadOverrides { number: "1".into(), layers: Some(layers.iter().map(|l| l.to_string()).collect()), ..Default::default() };
+        let mut board = facts(&lib);
+        board.pad_overrides.push(with(&["F.Cu", "F.Paste", "F.Mask"]));
+        let library = |layers: &[&str]| LibraryFacts { pad_overrides: vec![with(layers)], ..Default::default() };
+        assert_eq!(footprint_differences(&board, &lib, &library(&["F.Cu", "F.Mask"])), ["Pad 1 layers differ."]);
+        assert!(footprint_differences(&board, &lib, &library(&["F.Cu", "F.Mask", "F.Paste"])).is_empty(), "the order does not matter");
+        // `*.Cu` against inner layers: the library's inner ones must all be on the board's pad, not the other way round
+        board.pad_overrides[0] = with(&["*.Cu", "*.Mask"]);
+        assert!(footprint_differences(&board, &lib, &library(&["F.Cu", "B.Cu", "In1.Cu", "F.Mask", "B.Mask"])).is_empty());
+        assert!(footprint_differences(&board, &lib, &library(&["F&B.Cu", "*.Mask"])).is_empty());
+        assert_eq!(footprint_differences(&board, &lib, &library(&["*.Cu", "F.Mask"])), ["Pad 1 layers differ."]);
+        board.pad_overrides[0] = with(&["F&B.Cu", "*.Mask"]);
+        assert_eq!(footprint_differences(&board, &lib, &library(&["*.Cu", "*.Mask"])), ["Pad 1 layers differ."]);
+        // unknown on either side: not compared
+        assert!(footprint_differences(&board, &lib, &LibraryFacts::default()).is_empty());
+    }
+
+    /// The board's set is the one its file has: the defaults of the pad's kind for a footprint placed here, else the kept facts.
+    #[test]
+    fn the_boards_pad_layers_are_the_ones_its_file_has() {
+        use crate::footprint::PadKind;
+        let smd = pad("1", Nm::ZERO, Nm::ZERO);
+        assert_eq!(written_pad_layers(&smd, None), ["F.Cu", "F.Paste", "F.Mask"]);
+        let info = crate::ir::PadMaskInfo { no_paste: true, art_layers: vec!["F.SilkS".into()], ..Default::default() };
+        assert_eq!(written_pad_layers(&smd, Some(&info)), ["F.Cu", "F.Mask", "F.SilkS"]);
+        let mut back = smd.clone();
+        back.opposite_side = true;
+        assert_eq!(written_pad_layers(&back, None), ["B.Cu", "B.Paste", "B.Mask"]);
+        let mut th = smd.clone();
+        th.kind = PadKind::ThroughHole;
+        assert_eq!(written_pad_layers(&th, None), ["*.Cu", "F.Mask", "B.Mask"]);
+        let tech = crate::ir::PadMaskInfo { hole_tech_layers: Some(vec!["F.Mask".into()]), ..Default::default() };
+        assert_eq!(written_pad_layers(&th, Some(&tech)), ["*.Cu", "F.Mask"]);
+    }
+
+    /// `TEST( a->GetPadToDieLength(), .. )` and `TEST( a->GetProperty(), .. )` are not gated: a library that has a die length or a property the board's pad lacks
+    /// differs (r5 F4).
+    #[test]
+    fn a_library_die_length_the_board_lacks_is_reported() {
+        let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
+        let library = LibraryFacts {
+            pad_overrides: vec![PadOverrides { number: "1".into(), pad_to_die_length: Some(Nm::new(500_000)), fabrication_property: Some("pad_prop_heatsink".into()), ..Default::default() }],
+            ..Default::default()
+        };
+        assert_eq!(footprint_differences(&facts(&lib), &lib, &library), ["Pad 1 pad to die length differs.", "Pad 1 fabrication property differs."]);
     }
 
     /// `primitivesDiffer` is told once, for `firstDifferingLayer`, not once per layer of a padstack whose layers share the pad's primitives.
