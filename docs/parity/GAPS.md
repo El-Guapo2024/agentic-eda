@@ -274,7 +274,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   with a power symbol drawn otherwise than the design's hung Import Sheet and Paste; a sheet pasted inside itself is refused (`TestForRecursion`); a pasted sheet's pins keep
   their look; Duplicate carries a sheet by its pin; Sheet Pin Properties and Cleanup Sheet Pins as KiCad's; the library-link check; Annotate's final check of a selection.
   The practical check: KiCad's 130 QA schematic roots imported, written back and judged by kicad-cli, 87 alike (53 before). Left: a duplicate sheet name, "Untitled Sheet"
-  and the "Link?" prompt, first-free page numbers, the sheet's fill colour.
+  and the "Link?" prompt, ~~first-free page numbers~~ (done 2026-10-27, section 43), the sheet's fill colour.
 - Done 2026-10-24 (`task-fix-d-sch-connectivity`, fix batch D; `PARITY-sch.md` section 41): two buses on one sheet that share a member name are one net (`generateBusAliasMembers`);
   an invisible power input of an ordinary symbol is a global power pin; a power symbol's `${#}` is resolved per placement; bus aliases come from the `.kicad_pro` and with a
   sheet file; a library pin common to every unit stays unit 0; an ERC exclusion of one placement of a shared screen leaves the other's; a KiCad project's own ERC exclusions
@@ -285,8 +285,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `parent_sheet_instance_id` is migrated on read to every path it stood for); the reader keeps the whole `(instances (path ..))`, the writer writes each path's
   reference and a sheet's `(instances ..)` per path of its screen; Paste shares a screen that has sheets of its own (`updatePastedSheet`). KiCad's QA `issue10926_1` and
   `netlists/hierarchy_aliases` now trace as kicad-cli reads them (24 QA hierarchies alike).
-- Left: a nested sheet's page number is one per `SheetInstance`, not per sheet path (the reader keeps the first `(path .. (page ..))` of a sheet only, so a
-  nested sheet's two paths get one page; keep the pages per path, as `SCH_SHEET_INSTANCE`); a symbol's and a sheet's instance paths are written in walk order,
+- Done 2026-10-27 (`task-hierarchy-pages`; `PARITY-sch.md` section 43): **page numbers as KiCad keeps them**: a schematic with none stored shows the load's
+  numbers (`SetInitialPageNumbers`), a sheet drawn, imported or pasted (and the sheets inside it) gets the next free page, a page once shown stays when the
+  walk moves, and a sheet on a screen shown twice has a page per sheet path (read, written, edited); the walk visits a screen's sheets by place
+  (`SCH_SCREEN::GetSheets`); the Hierarchy Navigator sorts each sheet's children by page and shows every page.
+- Left: a symbol's and a sheet's instance paths are written in walk order,
   not sorted by `KIID_PATH` as KiCad writes them (cosmetic); Annotate numbers the screen's own references only, not the other paths' (which count as taken,
   so it hands none out twice);
   Find does not match a sheet's name, file or pins; Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
@@ -855,7 +858,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | P1 footprint graphics | `fp-graphics` |
 | P2 assignment, exchange, rename | `fp-assign` |
 | P3 library tables | `library-tables`; the choosers: `sch-edit` (Symbol Chooser), `fp-models` (Footprint Chooser's 3D view) |
-| P4 hierarchy | `sch-details` (sheet pins), `sch-details-2` (a screen shown twice, buses across sheets), `design-blocks` (place as a sheet), `import-sheet` (the chooser's checks and options, a sheet imported as one undo step, its symbols, labels and nested sheet pins), `hierarchy-navigator` (every sheet once, a screen shown twice twice, a click and the breadcrumb) |
+| P4 hierarchy | `sch-details` (sheet pins), `sch-details-2` (a screen shown twice, buses across sheets), `design-blocks` (place as a sheet), `import-sheet` (the chooser's checks and options, a sheet imported as one undo step, its symbols, labels and nested sheet pins), `hierarchy-navigator` (every sheet once, children in page order, every page shown and written, a screen shown twice twice, a click and the breadcrumb) |
 | P5 router | `diff-pairs`, `length-tuning`, `router-leftovers` |
 | P6 PCB editing details | `pcb-edit-details`, `board-edit` (select, move, rotate, flip, delete, undo) |
 | P7 custom pads | `pad-shapes`, `pad-details` |

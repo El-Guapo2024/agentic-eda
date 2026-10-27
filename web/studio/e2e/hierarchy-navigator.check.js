@@ -2,20 +2,25 @@
 // checks it lacked): the docked tree of the design's sheets -- the root, then every sheet placed on it, then the sheets those place --
 // against KiCad's hierarchy pane at 8303b2ad (eeschema/widgets/hierarchy_pane.cpp). KiCad's pane labels every sheet "name (page N)"
 // (`formatPageString`, the page of its `SCH_SHEET_PATH`: the one it was given, else the place in the walk the load numbers,
-// `SetInitialPageNumbers` in files-io.cpp), sorts
+// `SetInitialPageNumbers` in files-io.cpp; a sheet drawn or imported gets `GetNextPageNumber`, the sheets inside an imported one the lowest
+// free numbers, `AddNewSheetInstances`), sorts
 // each parent's children by `ComparePageNum` (`HIERARCHY_TREE::OnCompareItems` and `SortChildren`), lists a screen shown twice once for
-// each placement, and a click opens that sheet (`SCH_ACTIONS::changeSheet`). The studio's panel reads the same walk from
+// each placement, and a click opens that sheet (`SCH_ACTIONS::changeSheet`). The walk visits a screen's sheets by place, left to right
+// (`SCH_SCREEN::GetSheets`). The studio's panel reads the same walk from
 // `GET /api/sch/hierarchy` and opens a sheet with `eeschema.NavigateTool.changeSheet`; what a click opens is the editor's sheet path and
 // the breadcrumb `GET /api/schematic` returns (the title block's "Sheet: /.../").
 //
 // The board is examples/mcu_board_30plus.yaml (three module sheets, no page numbers of their own) with KiCad's QA
 // `qa/data/eeschema/issue10926_1_subsheet_1.kicad_sch` under `fixtures/` (tools/run-all-checks.sh, board=mcu30-sheet). The check brings
 // it in as a sheet through `import_sheet` first, so the tree is two levels deep and holds a screen shown twice: the imported sheet's two
-// nested sheets both show `issue10926_1_subsheet_1_1.kicad_sch`, with the pages the QA file gave them (4 and 2).
+// nested sheets both show `issue10926_1_subsheet_1_1.kicad_sch`. The module sheets have no page stored, so they show the pages the load
+// numbers by place (Header 2, MCU 3, LED channels 4); the imported sheet gets the next free page (5) and its nested sheets the lowest free
+// ones in the walk, Subsheet_1_2 (on the left) 6 and Subsheet_1_1 7 -- not the 2 and 4 the QA file gave them: `AddNewSheetInstances` finds no
+// instance of the new sheet path among them (`getInstance( .., aTestFromEnd )` matches the path's end, which is the new sheet's own uuid).
 //
 // Run it in the page of a served board (see tools/run-all-checks.sh), schematic tab open --
-// `node web/studio/e2e/run-check.mjs <url> web/studio/e2e/hierarchy-navigator.check.js`. It reads and navigates; the only edit is the
-// setup import, on the runner's copy of the board.
+// `node web/studio/e2e/run-check.mjs <url> web/studio/e2e/hierarchy-navigator.check.js`. It reads and navigates; the edits are the
+// setup import and one page number set and undone, on the runner's copy of the board.
 //
 // It answers through `window.__hierarchyNavigatorCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
 // run-all-checks: board=mcu30-sheet minutes=10   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
@@ -114,25 +119,45 @@
     await scenario("The hierarchy: every sheet once, the root first, KiCad's order, a screen shown twice twice, with its pages", async (t) => {
       t(!!panel(), "the Hierarchy Navigator is docked");
       t(rows().length === sheets.length, `it lists every sheet of GET /api/sch/hierarchy (${rows().length} of ${sheets.length})`);
-      // BuildSheetList's walk order: the root, then each placement depth first. KiCad's pane lists the same depth-first tree and orders
-      // siblings by page; where the pages follow the walk -- the level-1 sheets, which the load numbers 1, 2, ... (SetInitialPageNumbers,
-      // files-io.cpp) -- that is the walk order too.
-      const walk = ["Root", "MCU (U1)", "LED channels (D1–D8)", "Header (J1)", "issue10926_1_subsheet_1"];
-      t(walk.every((label, i) => text(rows()[i]).startsWith(label)), `the root first, then the three modules and the imported sheet in walk order (${rows().map((r) => text(r).split(/ \S+\.kicad_sch/)[0])})`);
+      // KiCad's pane: the root, then each sheet followed by the sheets inside it, a parent's children in page order (buildHierarchyTree,
+      // m_tree->SortChildren( aParent ), HIERARCHY_TREE::OnCompareItems -> SCH_SHEET_PATH::ComparePageNum). The modules' pages are the
+      // load's numbers by place (SetInitialPageNumbers over the walk, SCH_SCREEN::GetSheets: Header x 90, MCU 135, LED channels 175), the
+      // imported sheet is the next free page (GetNextPageNumber, sch_drawing_tools.cpp).
+      const order = ["Root", "Header (J1)", "MCU (U1)", "LED channels (D1–D8)", "issue10926_1_subsheet_1", "Subsheet_1_2", "Subsheet_1_1"];
+      t(order.every((label, i) => text(rows()[i]).startsWith(label)), `the root first, then the modules and the imported sheet in page order, the imported sheet's two after it (${rows().map((r) => text(r).split(/ \S+\.kicad_sch/)[0])})`);
       t(rows()[5]?.style.marginLeft === "20px" && rows()[6]?.style.marginLeft === "20px" && rows()[1]?.style.marginLeft === "10px", `a nested sheet is shown under its parent (${rows().map((r) => r.style.marginLeft)})`);
       const nestedRows = rows().filter((r) => text(r).includes(NESTED));
       t(nestedRows.length === 2, `the screen shown twice is listed twice (${nestedRows.length})`);
       t(same(nestedRows.map((r) => text(r).replace(` ${NESTED}`, "").replace(/ · page \d+/g, "").trim()).sort(), ["Subsheet_1_1", "Subsheet_1_2"]), `under its two names (${nestedRows.map((r) => text(r))})`);
-      t(/page 4/.test(text(rowAt("Subsheet_1_1"))) && /page 2/.test(text(rowAt("Subsheet_1_2"))), `with the pages the QA file gave them: 4 and 2 (${[text(rowAt("Subsheet_1_1")), text(rowAt("Subsheet_1_2"))]})`);
-      // KiCad's pane sorts a parent's children by page number (HIERARCHY_TREE::OnCompareItems -> SCH_SHEET_PATH::ComparePageNum, and
-      // buildHierarchyTree's m_tree->SortChildren(aParent)): the imported sheet's page 2 comes before its page 4. The studio's panel
-      // keeps the walk order it is given. DS-LOG finding (2026-10-27, "hierarchy-navigator: a parent's children are not in page order").
-      // t(rows().indexOf(rowAt("Subsheet_1_2")) < rows().indexOf(rowAt("Subsheet_1_1")), "the imported sheet's children are in page order, as KiCad sorts them: Subsheet_1_2 (page 2) before Subsheet_1_1 (page 4)");
-      // KiCad's pane labels every sheet with a page: formatPageString(name, GetPageNumber()), and a sheet whose page is empty on load
-      // is numbered by SetInitialPageNumbers (files-io.cpp), a sheet drawn or imported by GetNextPageNumber (sch_drawing_tools.cpp).
-      // The studio prints the page only when the design stored one. DS-LOG finding (2026-10-27, "hierarchy-navigator: no page number
-      // for a sheet that was never given one").
-      // t(rows().slice(1).every((r) => / · page \S+/.test(text(r))), `every sheet shows its page number, as KiCad's pane does (${rows().slice(1).map((r) => text(r))})`);
+      // KiCad's pane labels every sheet with a page: formatPageString(name, GetPageNumber()) -- the root (the top-level sheet) too.
+      const pages = rows().map((r) => (/ · page (\S+)$/.exec(text(r)) ?? [])[1] ?? "");
+      t(same(pages, ["1", "2", "3", "4", "5", "6", "7"]), `every sheet shows its page, as KiCad's pane does: the load's numbers, then the next free ones for the import (${pages})`);
+      t(/page 7$/.test(text(rowAt("Subsheet_1_1"))) && /page 6$/.test(text(rowAt("Subsheet_1_2"))), `the imported sheet's two get the lowest free pages in the walk, not the QA file's 4 and 2 (AddNewSheetInstances) (${[text(rowAt("Subsheet_1_1")), text(rowAt("Subsheet_1_2"))]})`);
+      t(same(sheets.map((h) => h.page), ["1", "2", "3", "4", "5", "6", "7"]), `GET /api/sch/hierarchy gives the same pages in the walk (${sheets.map((h) => `${h.name || "root"}:${h.page}`)})`);
+      // the derived .kicad_sch gives each sheet the page the pane shows (saveSheet's `(instances (project .. (path .. (page ..))))`)
+      const files = (await json("/api/schematic.kicad_sch")).files ?? [];
+      const pageInFiles = (name) => {
+        for (const f of files) for (const block of f.text.split(/\n\t\(sheet\n/).slice(1)) if (block.includes(`"Sheetname" "${name}"`)) return (/\(page "([^"]*)"\)/.exec(block) ?? [])[1];
+        return undefined;
+      };
+      const written = sheets.slice(1).map((h) => pageInFiles(h.name));
+      t(same(written, sheets.slice(1).map((h) => h.page)), `the derived schematic writes those pages (${sheets.slice(1).map((h, i) => `${h.name}:${written[i]}`)})`);
+    });
+
+    // ----- the page order: a page set on one sheet moves it among its siblings
+    await scenario("A page number set on a sheet moves it in its parent's list, as KiCad sorts by page; undo puts it back", async (t) => {
+      const header = sheets.find((h) => h.name === "Header (J1)");
+      const r = await post({ op: "set_sheet_page", sheet: header.path[0], page: "8", path: header.path });
+      t(r.ok === true, `Edit Sheet Page Number: Header (J1) is page 8 (${JSON.stringify(r).slice(0, 200)})`);
+      for (let i = 0; i < 50 && !text(rows()[6]).startsWith("Header"); i++) await sleep(200);
+      const after = ["Root", "MCU (U1)", "LED channels (D1–D8)", "issue10926_1_subsheet_1", "Subsheet_1_2", "Subsheet_1_1", "Header (J1)"];
+      const labels = rows().map((r) => text(r).split(/ \S+\.kicad_sch/)[0]);
+      t(after.every((label, i) => labels[i]?.startsWith(label)) && /page 8$/.test(text(rows()[6])), `Header (J1), page 8, is listed after the imported sheet (page 5) and its two, though the walk visits it first (${labels})`);
+      t(rows()[6]?.style.marginLeft === "10px" && rows()[4]?.style.marginLeft === "20px", "it is still a sheet of the root, and the imported sheet keeps its two under it");
+      t(same((await hierarchy()).map((h) => h.name), sheets.map((h) => h.name)), "GET /api/sch/hierarchy keeps the walk order (Next / Previous sort it themselves)");
+      await fetch("/api/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: "schematic" }) });
+      for (let i = 0; i < 50 && !text(rows()[1]).startsWith("Header"); i++) await sleep(200);
+      t(text(rows()[1]).startsWith("Header (J1)") && /page 2$/.test(text(rows()[1])), `undo: Header (J1) is page 2 again, first among the modules (${text(rows()[1])})`);
     });
 
     // ----- a click opens the sheet
