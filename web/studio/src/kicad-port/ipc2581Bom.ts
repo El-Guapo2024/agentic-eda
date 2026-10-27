@@ -1,4 +1,5 @@
-// Export IPC-2581's BOM columns, as `pcbnew/dialogs/dialog_export_2581.cpp` (DIALOG_EXPORT_2581) fills, guesses and keeps them (round 4's X4-4).
+// Export IPC-2581's BOM columns, as `pcbnew/dialogs/dialog_export_2581.cpp` (DIALOG_EXPORT_2581) and, at 25ec2335, its `DIALOG_EXPORT_2581_BOM`
+// (dialog_export_2581_bom.cpp) fill, guess and keep them (round 4's X4-4; round 5's X5-2 for the Internal ID).
 //
 // - The four column controls are choices: the first item ("Generate unique", "Omit", "N/A") and then the field names of the board's
 //   footprints (`init`: every `PCB_FIELD` of every footprint into a `std::set<wxString>`, so sorted and once each). A footprint always has
@@ -78,15 +79,16 @@ export function manufacturerAfter(mpn: string, current: string, options: string[
   return find("manufacturer") ?? find("mfg") ?? "";
 }
 
-/** `DIALOG_EXPORT_2581::TransferDataToWindow` (not a job): the controls from the stored columns, each kept only when the board still has a
+/** `DIALOG_EXPORT_2581_BOM::TransferDataToWindow` (25ec2335; not a job): the controls from the stored columns, each kept only when the board still has a
  *  field of that name (`SetStringSelection` fails otherwise and the first item is chosen).
  *
- *  The Internal ID always starts at "Generate unique": KiCad's code sets the stored internal-id column on the Manufacturer P/N control
- *  (`if( !m_choiceMPN->SetStringSelection( internalIdCol ) )`), which the MPN column then overwrites, so `m_oemRef` keeps its first item. */
+ *  The Internal ID is read back with the rest (`if( !m_oemRef->SetStringSelection( m_fields.m_internalId ) ) m_oemRef->SetSelection( 0 )`). At
+ *  8303b2ad the dialog wrote no column on Export (`onOKClick` transferred into a job, so `TransferDataFromWindow` took its `m_job` branch), and its
+ *  read-back put the Internal ID on `m_choiceMPN`, where the MPN column overwrote it; this follows 25ec2335, whose `saveToProject` keeps them all. */
 export function ipc2581DialogStart(stored: Ipc2581Bom | undefined, schRevision: string, options: string[]): Ipc2581Columns {
   const s = stored ?? {};
   const has = (c: string | undefined) => !!c && options.includes(c);
-  const out: Ipc2581Columns = { bom_rev: s.bom_rev || schRevision, col_id: "", col_mpn: "", col_mfg: "", col_dist_pn: "", col_dist: NOT_APPLICABLE };
+  const out: Ipc2581Columns = { bom_rev: s.bom_rev || schRevision, col_id: has(s.id) ? s.id! : "", col_mpn: "", col_mfg: "", col_dist_pn: "", col_dist: NOT_APPLICABLE };
   if (has(s.mpn)) {
     out.col_mpn = s.mpn!;
     out.col_mfg = has(s.mfg) ? s.mfg! : "";
