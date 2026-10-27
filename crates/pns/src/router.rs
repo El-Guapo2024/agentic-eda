@@ -505,6 +505,7 @@ impl Router {
         let dp_commit = d.commit();
         let mut commit = self.build_dp_commit(&dp_commit);
         self.drop_redundant(&mut commit);
+        self.simplify_pair_legs(&dp_commit, &mut commit);
         Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width, from, to: current_end, gap, via_gap })
     }
 
@@ -584,6 +585,7 @@ impl Router {
             }
             let mut commit = self.build_dp_commit(&c);
             self.drop_redundant(&mut commit);
+            self.simplify_pair_legs(&c, &mut commit);
             return Some(commit);
         }
         let s = self.session.as_mut()?;
@@ -791,6 +793,14 @@ impl Router {
     /// middle of a straight run, leaves one segment where KiCad does (findings p5 F2-6). **Differs:** an old track is taken in only when the
     /// whole of its polyline is in the line, and a commit with an arc track is left as it is (`Simplify` keeps an arc's points anyway).
     fn simplify_new_lines(&self, commit: &mut RouteCommit) {
+        let all = commit.tracks.len();
+        self.simplify_new_lines_of(commit, all);
+    }
+
+    /// [`Self::simplify_new_lines`] for the first `seeds` tracks of the commit only (a pair's legs: `DIFF_PAIR_PLACER::FixRoute`'s
+    /// `topo.SimplifyLine( &lineP ); topo.SimplifyLine( &lineN );`, not the lines its shove moved). A line that takes in a track of the
+    /// commit past them is left as it is.
+    fn simplify_new_lines_of(&self, commit: &mut RouteCommit, seeds: usize) {
         if commit.tracks.is_empty() || commit.tracks.iter().any(|t| t.arc().is_some()) {
             return;
         }
@@ -823,7 +833,7 @@ impl Router {
         let opts = crate::node::AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false };
         let mut consumed: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         let mut merged: Vec<eda_model::ir::Track> = Vec::new();
-        for i in 0..commit.tracks.len() {
+        for i in 0..seeds.min(commit.tracks.len()) {
             if consumed.contains(&i) || commit.lock_tracks.contains(&i) {
                 continue;
             }
@@ -840,7 +850,7 @@ impl Router {
             members.dedup();
             let whole = members.iter().all(|t| line.segment_ids.iter().filter(|id| w.get(**id).and_then(|it| it.source_track_id()) == Some(*t)).count() == count_of(&w, t));
             let news: Vec<usize> = members.iter().filter_map(|t| t.strip_prefix(NEW).and_then(|k| k.parse().ok())).collect();
-            if !whole || news.iter().any(|k| consumed.contains(k) || commit.lock_tracks.contains(k)) {
+            if !whole || news.iter().any(|k| *k >= seeds || consumed.contains(k) || commit.lock_tracks.contains(k)) {
                 continue;
             }
             consumed.extend(news.iter().copied());
@@ -1130,8 +1140,21 @@ impl Router {
         let commit = self.diff.as_mut()?.finish(&self.rules, &self.settings, at)?;
         let mut route_commit = self.build_dp_commit(&commit);
         self.drop_redundant(&mut route_commit);
+        self.simplify_pair_legs(&commit, &mut route_commit);
         self.diff = None;
         Some(route_commit)
+    }
+
+    /// `DIFF_PAIR_PLACER::FixRoute`'s `topo.SimplifyLine( &lineP ); topo.SimplifyLine( &lineN );` (`TOPOLOGY::SimplifyLine`: the line
+    /// assembled through the node's same-net segments, `AssembleLine( root, nullptr, false, false, false )`, `Simplify()`d, and put back
+    /// in place of the old one if that dropped a point), on the board the commit leaves: a leg that goes straight on from the leg before it,
+    /// or from the track the pair started on, is one segment with it (round-2 R-3). KiCad simplifies at each fix, with the legs fixed before
+    /// it in the node; doing it once over all the legs gives the same segments. The legs are the commit's first tracks, the ones on the
+    /// pair's nets ([`Self::build_dp_commit`] puts the lines its shove moved, which are of other nets, after them).
+    fn simplify_pair_legs(&self, c: &crate::dp_placer::DpCommit, commit: &mut RouteCommit) {
+        let nets = [c.net_p.as_deref().unwrap_or(""), c.net_n.as_deref().unwrap_or("")];
+        let seeds = commit.tracks.iter().take_while(|t| nets.contains(&t.net.as_str())).count();
+        self.simplify_new_lines_of(commit, seeds);
     }
 
     /// What a finished pair puts on the board, as the IR has it.
@@ -1546,6 +1569,34 @@ mod tests {
         let mut router = Router::new(&design, &model);
         router.start_diff_pair(Point { x: mm(-0.825), y: Nm::ZERO }, "F.Cu").expect("R1.1 and R1.2 are a pair");
         assert_eq!(router.diff_pair_preview(Point { x: mm(3.0), y: Nm::ZERO }).expect("preview").width, mm(0.15));
+    }
+
+    /// Round-2 R-3: `DIFF_PAIR_PLACER::FixRoute`'s `TOPOLOGY::SimplifyLine` on both lines: a pair fixed once on a straight run and finished
+    /// further along it is one segment per net from the start to the end, not two meeting at the fix point.
+    #[test]
+    fn a_pair_that_goes_straight_on_across_a_fix_is_one_segment_per_line() {
+        let (design, mut model) = two_pad_board();
+        model.nets = vec![IrNet { name: "USB_DP".into(), pins: vec!["R1.1".into(), "R2.1".into()] }, IrNet { name: "USB_DN".into(), pins: vec!["R1.2".into(), "R2.2".into()] }];
+        let mut router = Router::new(&design, &model);
+        router.settings.mode = crate::settings::Mode::Walkaround;
+        router.start_diff_pair(Point { x: mm(-0.825), y: Nm::ZERO }, "F.Cu").expect("R1.1 and R1.2 are a pair");
+        // straight on down: fix once at 7 mm (the last segment is not fixed), then finish at 12 mm on the same line
+        let mid = Point { x: Nm::ZERO, y: mm(7.0) };
+        let first = router.diff_pair_preview(mid).expect("preview");
+        router.fix_diff_pair(mid).expect("fixed");
+        let end = Point { x: Nm::ZERO, y: mm(12.0) };
+        router.diff_pair_preview(end).expect("preview");
+        let commit = router.finish_diff_pair(end).expect("finished");
+        for (net, head) in [("USB_DP", &first.head_a), ("USB_DN", &first.head_b)] {
+            let tracks: Vec<&eda_model::ir::Track> = commit.tracks.iter().filter(|t| t.net == net).collect();
+            assert_eq!(tracks.len(), 1, "{net}: one track: {:?}", commit.tracks);
+            let pts = &tracks[0].pts;
+            // the fan-out from the pad as the first preview had it, then one straight segment down to the end
+            let turns = |a: Point, b: Point, c: Point| (b.x - a.x).get() as i128 * (c.y - b.y).get() as i128 - (b.y - a.y).get() as i128 * (c.x - b.x).get() as i128 != 0;
+            assert!(pts.windows(3).all(|w| turns(w[0], w[1], w[2])), "{net}: no collinear vertex is left: {pts:?}");
+            assert_eq!(pts[..pts.len() - 1], head.pts[..pts.len() - 1], "{net}: {pts:?} vs {:?}", head.pts);
+            assert_eq!(pts.last().unwrap().y, mm(12.0));
+        }
     }
 
     /// findings p5 F4-6: a pair started where nothing is gets KiCad's own refusal.

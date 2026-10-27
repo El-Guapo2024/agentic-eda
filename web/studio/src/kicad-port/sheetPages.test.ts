@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { comparePageNum, neighbourSheet, sortByPageNumbers, strNumCmp, toLong, type HierarchySheet } from "./sheetPages";
+import { comparePageNum, hierarchyTreeOrder, neighbourSheet, sortByPageNumbers, strNumCmp, toLong, type HierarchySheet } from "./sheetPages";
 
 const sheet = (path: string[], page = "", name = path.join("/") || "root"): HierarchySheet => ({ path, name, file: `${name}.kicad_sch`, page });
 
@@ -47,4 +47,14 @@ test("Next and Previous step along the page order and stop at its ends", () => {
   assert.equal(neighbourSheet(walk, ["c"], -1)?.name, "A");
   assert.equal(neighbourSheet(walk, [], -1), null, "the first page has no previous");
   assert.equal(neighbourSheet(walk, ["nope"], 1), null, "a sheet that is not in the list has no neighbours");
+});
+
+test("the Hierarchy Navigator's tree: each sheet's children in page order, under their parent (buildHierarchyTree, SortChildren)", () => {
+  // walk: root, A (page 5) with A1 (7) and A2 (6) inside it, B (2), C (none: its place, 6)
+  const walk = [sheet([], "1"), sheet(["a"], "5", "A"), sheet(["a", "1"], "7", "A1"), sheet(["a", "2"], "6", "A2"), sheet(["b"], "2", "B"), sheet(["c"], "", "C")];
+  assert.deepEqual(hierarchyTreeOrder(walk).map((s) => s.name), ["root", "B", "A", "A2", "A1", "C"]);
+  // two of one page keep the walk order
+  const tie = [sheet([], "1"), sheet(["x"], "3", "X"), sheet(["y"], "3", "Y")];
+  assert.deepEqual(hierarchyTreeOrder(tie).map((s) => s.name), ["root", "X", "Y"]);
+  assert.deepEqual(hierarchyTreeOrder([]), []);
 });

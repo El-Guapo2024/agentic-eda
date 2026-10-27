@@ -452,6 +452,30 @@ fn import_sheet_contents_are_numbered_afresh_by_the_annotate_options_unless_anno
     assert!(refs.contains(&"R9".to_string()), "{refs:?}");
 }
 
+/// `DrawSheet` gives an imported sheet `GetNextPageNumber` and `LoadSheetFromFile` the sheets inside it the lowest free pages
+/// (`AddNewSheetInstances`), before the annotation, which numbers "sheet number X 100" by them; the sheets already there keep their pages
+/// though the new one, drawn to their left, comes first in the walk.
+#[test]
+fn an_imported_sheet_and_the_sheets_inside_it_get_the_next_free_pages_before_they_are_annotated() {
+    let m = ConstraintModel::default();
+    let mut x100 = import(Some(a_file()), true, false);
+    if let Cmd::ImportSheet { options, .. } = &mut x100 {
+        options.algo = eda_model::annotate::Algo::SheetX100;
+    }
+    let mut b = Board::new(power_design(), &m, mm(0.1), mm(0.3));
+    let shown = |d: &Design| eda_model::sheet_list::walk(d).into_iter().map(|e| (e.name.clone(), e.effective_page())).collect::<Vec<_>>();
+    assert_eq!(shown(b.design()), vec![("".to_string(), "1".to_string()), ("Power".into(), "2".into()), ("Filter".into(), "3".into())]);
+    b.apply(&x100).unwrap();
+    let d = b.design();
+    assert_eq!(
+        shown(d),
+        vec![("".to_string(), "1".to_string()), ("Amp".into(), "4".into()), ("Sub".into(), "5".into()), ("Power".into(), "2".into()), ("Filter".into(), "3".into())],
+        "Amp (at x 20) is walked before Power (x 100): the new pages are 4 and 5, Power and Filter keep 2 and 3"
+    );
+    assert_eq!(refs_in(d, "amp.kicad_sch"), vec!["C401", "R401", "R402"]);
+    assert_eq!(refs_in(d, "sub.kicad_sch"), vec!["R501"]);
+}
+
 #[test]
 fn the_checks_of_a_sheet_file_are_loadsheetfromfile_s() {
     let m = ConstraintModel::default();
