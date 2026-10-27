@@ -104,7 +104,7 @@ pub fn export_symbols(dir: &Path, body: &[u8]) -> Value {
 mod tests {
     use eda_model::units::{mm, Nm};
     use super::*;
-    use eda_model::ir::{Point, Provenance, SheetInstance};
+    use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
     use std::collections::BTreeMap;
 
     fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
