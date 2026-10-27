@@ -635,29 +635,44 @@
       "value": "U1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "MCU"
-     },
-     {
-      "name": "MPN",
-      "kind": "str",
-      "value": "STM32"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "Package_QFP:LQFP-48"
      },
      {
-      "name": "Block",
+      "name": "Library Description",
       "kind": "str",
-      "value": "core"
+      "value": ""
      },
      {
-      "name": "Nets",
+      "name": "Keywords",
       "kind": "str",
-      "value": "GND, VCC, USB_P"
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -731,29 +746,44 @@
       "value": "U1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "MCU"
-     },
-     {
-      "name": "MPN",
-      "kind": "str",
-      "value": "STM32"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "Package_QFP:LQFP-48"
      },
      {
-      "name": "Block",
+      "name": "Library Description",
       "kind": "str",
-      "value": "core"
+      "value": ""
      },
      {
-      "name": "Nets",
+      "name": "Keywords",
       "kind": "str",
-      "value": "GND, VCC, USB_P"
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -875,29 +905,44 @@
       "value": "U1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "MCU"
-     },
-     {
-      "name": "MPN",
-      "kind": "str",
-      "value": "STM32"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "Package_QFP:LQFP-48"
      },
      {
-      "name": "Block",
+      "name": "Library Description",
       "kind": "str",
-      "value": "core"
+      "value": ""
      },
      {
-      "name": "Nets",
+      "name": "Keywords",
       "kind": "str",
-      "value": "GND, VCC, USB_P"
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -1011,29 +1056,44 @@
       "value": "U1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "MCU"
-     },
-     {
-      "name": "MPN",
-      "kind": "str",
-      "value": "STM32"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "Package_QFP:LQFP-48"
      },
      {
-      "name": "Block",
+      "name": "Library Description",
       "kind": "str",
-      "value": "core"
+      "value": ""
      },
      {
-      "name": "Nets",
+      "name": "Keywords",
       "kind": "str",
-      "value": "GND, VCC, USB_P"
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -1152,29 +1212,44 @@
       "value": "U1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "MCU"
-     },
-     {
-      "name": "MPN",
-      "kind": "str",
-      "value": "STM32"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "Package_QFP:LQFP-48"
      },
      {
-      "name": "Block",
+      "name": "Library Description",
       "kind": "str",
-      "value": "core"
+      "value": ""
      },
      {
-      "name": "Nets",
+      "name": "Keywords",
       "kind": "str",
-      "value": "GND, VCC, USB_P"
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -1291,29 +1366,44 @@
       "value": "U1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "MCU"
-     },
-     {
-      "name": "MPN",
-      "kind": "str",
-      "value": "STM32"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "Package_QFP:LQFP-48"
      },
      {
-      "name": "Block",
+      "name": "Library Description",
       "kind": "str",
-      "value": "core"
+      "value": ""
      },
      {
-      "name": "Nets",
+      "name": "Keywords",
       "kind": "str",
-      "value": "GND, VCC, USB_P"
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -1445,29 +1535,44 @@
       "value": "U1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "MCU"
-     },
-     {
-      "name": "MPN",
-      "kind": "str",
-      "value": "STM32"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "Package_QFP:LQFP-48"
      },
      {
-      "name": "Block",
+      "name": "Library Description",
       "kind": "str",
-      "value": "core"
+      "value": ""
      },
      {
-      "name": "Nets",
+      "name": "Keywords",
       "kind": "str",
-      "value": "GND, VCC, USB_P"
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -1599,29 +1704,44 @@
       "value": "U1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "MCU"
-     },
-     {
-      "name": "MPN",
-      "kind": "str",
-      "value": "STM32"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "Package_QFP:LQFP-48"
      },
      {
-      "name": "Block",
+      "name": "Library Description",
       "kind": "str",
-      "value": "core"
+      "value": ""
      },
      {
-      "name": "Nets",
+      "name": "Keywords",
       "kind": "str",
-      "value": "GND, VCC, USB_P"
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -1753,19 +1873,44 @@
       "value": "R1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "GND"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -1837,19 +1982,44 @@
       "value": "R1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "GND"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -1964,19 +2134,44 @@
       "value": "R1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "GND"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -2106,19 +2301,44 @@
       "value": "R1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "GND"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -2248,19 +2468,44 @@
       "value": "R1"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "GND"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -2390,19 +2635,44 @@
       "value": "R2"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "HV1"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -2474,19 +2744,44 @@
       "value": "R2"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "HV1"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -2601,19 +2896,44 @@
       "value": "R2"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "HV1"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -2743,19 +3063,44 @@
       "value": "R2"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "HV1"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -2885,19 +3230,44 @@
       "value": "R2"
      },
      {
-      "name": "Value",
-      "kind": "str",
-      "value": "10k"
-     },
-     {
       "name": "Library Link",
       "kind": "str",
       "value": "R_0603"
      },
      {
-      "name": "Nets",
+      "name": "Library Description",
       "kind": "str",
-      "value": "HV1"
+      "value": ""
+     },
+     {
+      "name": "Keywords",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Component Class",
+      "kind": "str",
+      "value": ""
+     },
+     {
+      "name": "Clearance Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Override",
+      "kind": "int",
+      "value": 0
+     },
+     {
+      "name": "Solderpaste Margin Ratio Override",
+      "kind": "double",
+      "value": 0
+     },
+     {
+      "name": "Zone Connection Style",
+      "kind": "enum",
+      "value": "Inherited"
      },
      {
       "name": "Position X",
@@ -3676,7 +4046,6 @@
     "Associated Layer",
     "Auto Thickness",
     "Barcode Type",
-    "Block",
     "Bold",
     "Border",
     "Border Color",
@@ -3686,7 +4055,9 @@
     "Center X",
     "Center Y",
     "Clearance",
+    "Clearance Override",
     "Column Width",
+    "Component Class",
     "Component Type",
     "Corner Radius Ratio",
     "Corner Radius Size",
@@ -3736,16 +4107,17 @@
     "Keep Out Vias",
     "Keep Out Zone Fills",
     "Keep Upright",
+    "Keywords",
     "Knockout",
     "Layer",
     "Layer Bottom",
     "Layer Top",
     "Layout",
     "Leader Length",
+    "Library Description",
     "Library Link",
     "Line Width",
     "Locked",
-    "MPN",
     "Margin Bottom",
     "Margin Left",
     "Margin Right",
@@ -3759,7 +4131,6 @@
     "Name",
     "Net",
     "Net Class",
-    "Nets",
     "Not in Schematic",
     "Offset X",
     "Offset Y",
@@ -3798,6 +4169,8 @@
     "Size Y",
     "Smoothing Amount",
     "Smoothing Effort",
+    "Solderpaste Margin Override",
+    "Solderpaste Margin Ratio Override",
     "Source Name",
     "Source Type",
     "Spacing X",
@@ -3820,11 +4193,11 @@
     "Type",
     "Units",
     "Units Format",
-    "Value",
     "Vertical Justification",
     "Via Type",
     "Visible",
-    "Width"
+    "Width",
+    "Zone Connection Style"
    ]
   }
  },
@@ -4286,17 +4659,10 @@
   {
    "expression": "A.Value == 'MCU'",
    "ok": true,
-   "errors": [],
-   "ids": [
-    "U1",
-    "U1.1",
-    "U1.2",
-    "U1.3",
-    "U1.4",
-    "U1:Reference",
-    "U1:Value",
-    "U1:Supplier"
-   ]
+   "errors": [
+    "Unrecognized property 'Value'"
+   ],
+   "ids": []
   },
   {
    "expression": "A.Library_Link == 'Package_QFP:LQFP-48'",
