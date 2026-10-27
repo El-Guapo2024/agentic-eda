@@ -71,9 +71,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
 
     let mut out = String::new();
     writeln!(out, "(kicad_pcb").unwrap();
-    writeln!(out, "\t(version 20241229)").unwrap();
+    let version = board_file_version(design);
+    writeln!(out, "\t(version {version})").unwrap();
     writeln!(out, "\t(generator \"eda-kicad\")").unwrap();
-    writeln!(out, "\t(generator_version \"9.0\")").unwrap();
+    writeln!(out, "\t(generator_version \"{}\")", if version > KICAD9_BOARD_FILE_VERSION { "10.0" } else { "9.0" }).unwrap();
     writeln!(out, "\t(general").unwrap();
     // `(general (thickness ..))`: the board's thickness (`BOARD_DESIGN_SETTINGS::GetBoardThickness()`), KiCad's 1.6 mm unless Board Setup's
     // Physical Stackup says otherwise.
@@ -1621,6 +1622,31 @@ fn teardrop_priorities(zones: &[Zone]) -> std::collections::HashMap<&str, u32> {
 ///
 /// `style` is what the board keeps of the shape beyond `Shape` ([`eda_model::pcb_items::ShapeStyle`]): its hatch, its line endings (`(start_shape ..)` and `(end_shape ..)`
 /// after the stroke, `LINE_ENDING::Format`; an open shape's only) and its net, which `net` has already turned into the file's number (0 is none: `GetNetCode() > 0`).
+/// KiCad 9's board file version (`SEXPR_BOARD_FILE_VERSION` 20241229, "Expand User layers to arbitrary count"): what the writer writes a board as, so that KiCad 9 opens it
+/// (`parseBOARD_unchecked`'s `checkVersion` refuses a newer file outright).
+pub(crate) const KICAD9_BOARD_FILE_VERSION: i64 = 20241229;
+
+/// The first board file version whose vias inherit the board's covering, plugging, capping and filling when they say none of their own (20250228, "ipc-4761 via protection
+/// features"; `parsePCB_VIA`: `if( m_requiredVersion < 20250228 )` sets them all off, "Versions before 10.0 had no protection features other than tenting, so those features must
+/// be interpreted as OFF in legacy boards, not as unspecified (aka: inherit from board stackup)").
+pub(crate) const FIRST_VIA_PROTECTION_VERSION: i64 = 20250228;
+
+/// The file version a board is written as: KiCad 9's, which every reader of this crate's files opens, unless the board holds KiCad 10 data whose meaning the version decides
+/// (`m_requiredVersion` in 25ec2335's `pcb_io_kicad_sexpr_parser.cpp`):
+/// - board defaults for the vias' covering, plugging, capping or filling (`DrawingsSection::setup_tokens`): a via that says nothing inherits them only from 20250228 on, so the
+///   board is written as 20250228. The one other gate between the two versions, the stroked zone fill of before 20250210 (`isStrokedFill`), is off in either, as every zone is
+///   written `(filled_areas_thickness no)`; KiCad 9 cannot read such a setup anyway.
+/// - The later gates are met where the board is read instead, the tree normalised to KiCad 9's meaning: bold text (20260826, `crate::bold_text`), a footprint's library frame
+///   (20260616, `crate::fp_transform`), a reference image's scale (20260623, `crate::pcb_image::file_scale`). A version past 20260616 would have every footprint read in its
+///   library frame, which this writer does not write.
+pub(crate) fn board_file_version(design: &Design) -> i64 {
+    if design.drawings.as_ref().is_some_and(|d| !d.setup_tokens.is_empty()) {
+        FIRST_VIA_PROTECTION_VERSION
+    } else {
+        KICAD9_BOARD_FILE_VERSION
+    }
+}
+
 /// The layer words of a track, an arc or a board shape: `(layer "F.Cu")`, or, for one with a solder-mask opening on an outer copper layer, `(layers "F.Cu" "F.Mask")` and its own
 /// `(solder_mask_margin ..)` when it has one (`pcb_io_kicad_sexpr.cpp::format( PCB_TRACK )` and `format( PCB_SHAPE )`: `formatLayers( GetLayerSet() )` when the set has more than one
 /// layer, and `GetLayerSet` adds `F_Mask` to `F_Cu` and `B_Mask` to `B_Cu` only; the margin `if( HasSolderMask() && GetLocalSolderMaskMargin().has_value() &&

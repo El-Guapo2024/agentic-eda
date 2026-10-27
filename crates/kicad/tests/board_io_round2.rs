@@ -190,3 +190,104 @@ fn a_mask_only_hole_keeps_its_margin_and_layers() {
     assert!(pads.iter().any(|p| p.contains(r#"(layers "*.Mask") (solder_mask_margin 1.2) (clearance 1.2)"#)), "{out}");
     assert!(pads.iter().any(|p| p.contains(r#"(layers "F.Mask") (zone_connect 0)"#)), "{out}");
 }
+
+fn slow_tests_off() -> bool {
+    let off = std::env::var_os("EDA_SLOW_TESTS").is_none();
+    if off {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+    }
+    off
+}
+
+fn kicad_cli() -> Option<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("EDA_KICAD_CLI") {
+        return Some(p.into());
+    }
+    let out = std::process::Command::new("which").arg("kicad-cli").output().ok()?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!p.is_empty()).then(|| std::path::PathBuf::from(p))
+}
+
+/// Our file of `text`, as kicad-cli writes it back (`pcb upgrade --force`).
+fn kicad_resave(text: &str, tag: &str) -> Option<String> {
+    let cli = kicad_cli()?;
+    let dir = std::env::temp_dir().join(format!("eda_board_io_round2_{}", std::process::id())).join(tag);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (design, model, _) = import_kicad_pcb(text).expect("parses");
+    let path = dir.join("ours.kicad_pcb");
+    std::fs::write(&path, export(&design, &model)).unwrap();
+    let up = std::process::Command::new(cli).args(["pcb", "upgrade", "--force"]).arg(&path).output().unwrap();
+    assert!(up.status.success(), "kicad-cli pcb upgrade failed: {}", String::from_utf8_lossy(&up.stderr));
+    Some(std::fs::read_to_string(&path).unwrap())
+}
+
+const KICAD10_VIAS: &str = r#"(kicad_pcb (version 20260410) (generator "pcbnew") (generator_version "10.0")
+ (general (thickness 1.6) (legacy_teardrops no)) (paper "A4")
+ (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (1 "F.Mask" user) (3 "B.Mask" user) (25 "Edge.Cuts" user))
+ (setup (pad_to_mask_clearance 0) (tenting (front yes) (back yes)) (covering (front yes) (back no)) (plugging (front no) (back no)) (capping no) (filling yes))
+ (net 0 "") (net 1 "A")
+ (gr_rect (start 90 90) (end 130 130) (stroke (width 0.1) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "11111111-1111-1111-1111-111111111111"))
+ (via (at 100 100) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "22222222-2222-2222-2222-222222222222"))
+ (via (at 110 100) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "33333333-3333-3333-3333-333333333333"))
+)"#;
+
+/// F1: a board whose setup has KiCad 10's via protection defaults is written as 20250228, the first version whose vias that say nothing inherit them (`parsePCB_VIA`:
+/// `if( m_requiredVersion < 20250228 )` turns them all off). A board without them stays KiCad 9's 20241229.
+#[test]
+fn a_board_with_via_protection_defaults_is_written_as_a_version_whose_vias_inherit_them() {
+    let (design, model, _) = import_kicad_pcb(KICAD10_VIAS).expect("parses");
+    let out = export(&design, &model);
+    assert!(out.contains("(version 20250228)") && out.contains("(covering (front yes) (back no))"), "{out}");
+    let (plain, plain_model, _) = import_kicad_pcb(&board("")).expect("parses");
+    assert!(export(&plain, &plain_model).contains("(version 20241229)"));
+}
+
+/// F1, as kicad-cli reads it: its re-save of our file has no protection on a via of its own (it inherits the board's), as its re-save of the original has none.
+#[test]
+fn a_kicad10_via_keeps_inheriting_the_board_protection() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(back) = kicad_resave(KICAD10_VIAS, "vias") else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let vias = blocks(&back, "via");
+    assert_eq!(vias.len(), 2, "{back}");
+    for v in vias {
+        assert!(!v.contains("(covering") && !v.contains("(filling") && !v.contains("(capping") && !v.contains("(plugging"), "{v}");
+    }
+    assert!(back.contains("(filling yes)"), "the board's default is kept: {back}");
+}
+
+/// F1, the reference image: a 96 dpi PNG of a 20261017 file at scale 1 is scale 1 in kicad-cli's re-save of our 20241229 file (KiCad scales an older file's image by
+/// `GetPPI() / GetLegacyPPI()`, 96 / 94, `parsePCB_REFERENCE_IMAGE`), and an older file's image keeps its size too.
+#[test]
+fn reference_image_scale_survives_a_kicad10_round_trip() {
+    if slow_tests_off() {
+        return;
+    }
+    let data = eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(40, 40, [10, 200, 30], 96));
+    let image = |version: i64, scale: &str| {
+        format!(
+            r#"(kicad_pcb (version {version}) (generator "pcbnew") (generator_version "10.0")
+ (general (thickness 1.6) (legacy_teardrops no)) (paper "A4")
+ (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user) (17 "Dwgs.User" user "User.Drawings"))
+ (setup (pad_to_mask_clearance 0))
+ (net 0 "")
+ (image (at 100 100) (layer "Dwgs.User"){scale} (uuid "44444444-4444-4444-4444-444444444444") (data "{data}"))
+)"#
+        )
+    };
+    let Some(back) = kicad_resave(&image(20261017, ""), "image_new") else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let img = blocks(&back, "image");
+    assert_eq!(img.len(), 1, "{back}");
+    assert!(!img[0].contains("(scale"), "{}", &img[0][..img[0].len().min(200)]);
+    // A 20241229 file's image at scale 2 is KiCad's 2 x 96 / 94; it comes back as that.
+    let back = kicad_resave(&image(20241229, " (scale 2)"), "image_old").unwrap();
+    let img = blocks(&back, "image");
+    assert!(img[0].contains("(scale 2.04255)"), "{}", &img[0][..img[0].len().min(200)]);
+}
