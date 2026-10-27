@@ -320,6 +320,14 @@ export interface Part {
   attrs?: FootprintAttrsInfo;
   /** The zone-connection facts this placed footprint and its pads carry (`crates/cli/src/studio.rs`); absent when there are none. */
   zone?: PartZoneFacts;
+  /** `FOOTPRINT::GetLibDescription` and `GetKeywords`: the board file's `(descr ..)` and `(tags ..)` of the footprint; absent when it has none. */
+  lib_description?: string;
+  keywords?: string;
+  /** The component classes the board file gives the footprint itself (`(component_classes ..)`); absent when none. */
+  component_classes?: string[];
+  /** The footprint's own `(solder_paste_margin ..)` (nm) and `(solder_paste_margin_ratio ..)` (`GetLocalSolderPasteMargin`, `..Ratio`); absent when it has none. */
+  paste_margin?: Nm;
+  paste_margin_ratio?: number;
 }
 
 /** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */

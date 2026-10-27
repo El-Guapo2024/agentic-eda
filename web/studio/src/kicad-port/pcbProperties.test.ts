@@ -192,20 +192,30 @@ test("the caption of a single item is its friendly name", () => {
 
 // ------------------------------------------------------------------------------------------------------------------ property lists
 
-test("a footprint: position, side and orientation, then its fields, library link, and where the intent put it", () => {
-  assert.deepEqual(names(board(), ["U1"]), [
+test("a footprint lists FOOTPRINT_DESC's rows: position, side and orientation, the Reference, the library facts and the overrides (r2-pcb-edit A6)", () => {
+  const rows = [
     ["Basic Properties", ["Position X", "Position Y", "Locked", "Layer", "Orientation"]],
-    ["Fields", ["Reference", "Value", "MPN"]],
-    ["Footprint Properties", ["Library Link"]],
-    ["Placement", ["Block", "Nets"]],
-  ]);
-  // No MPN and no block: the rows that need one are not there.
-  assert.deepEqual(names(board(), ["R1"]), [
-    ["Basic Properties", ["Position X", "Position Y", "Locked", "Layer", "Orientation"]],
-    ["Fields", ["Reference", "Value"]],
-    ["Footprint Properties", ["Library Link"]],
-    ["Placement", ["Nets"]],
-  ]);
+    ["Fields", ["Reference"]],
+    ["Footprint Properties", ["Library Link", "Library Description", "Keywords", "Component Class"]],
+    ["Overrides", ["Clearance Override", "Solderpaste Margin Override", "Solderpaste Margin Ratio Override", "Zone Connection Style"]],
+  ];
+  assert.deepEqual(names(board(), ["U1"]), rows);
+  assert.deepEqual(names(board(), ["R1"]), rows);
+});
+
+test("a footprint's Clearance Override (empty: none) and Zone Connection Style go through set_footprint_zone_connection, each keeping the other", () => {
+  const b = board();
+  const u1 = b.parts.find((p) => p.ref === "U1")!;
+  u1.zone = { connection: "Full", clearance: null, pads: [] };
+  u1.lib_description = "an MCU";
+  u1.component_classes = ["b", "a"];
+  assert.equal(rowOf(b, ["U1"], "Library Description")!.value, "an MCU");
+  assert.equal(rowOf(b, ["U1"], "Component Class")!.value, "a,b");
+  assert.equal(rowOf(b, ["U1"], "Clearance Override")!.value, "");
+  assert.deepEqual(edit(b, ["U1"], "Clearance Override", 250_000), [{ op: "set_footprint_zone_connection", part: "U1", zone_connection: "Full", clearance: 250_000 }]);
+  assert.deepEqual(edit(b, ["U1"], "Clearance Override", ""), []);
+  assert.deepEqual(edit(b, ["U1"], "Zone Connection Style", "inherited"), [{ op: "set_footprint_zone_connection", part: "U1", zone_connection: null, clearance: null }]);
+  assert.equal(rowOf(b, ["U1"], "Zone Connection Style")!.value, "Full");
 });
 
 test("a pad: where it is, and what it is; its number and net are read-only, its type, shape, size and hole are edited", () => {
@@ -385,8 +395,8 @@ test("a footprint: position moves it by the difference, orientation turns it abo
 
 test("a footprint's reference, value and library link are read-only", () => {
   const b = board();
-  for (const name of ["Reference", "Value", "Library Link", "Nets"]) assert.equal(rowOf(b, ["U1"], name)!.writable, false, name);
-  assert.deepEqual(edit(b, ["U1"], "Value", "other"), [], "an edit of a read-only row sends nothing");
+  for (const name of ["Reference", "Library Link", "Library Description", "Keywords", "Component Class"]) assert.equal(rowOf(b, ["U1"], name)!.writable, false, name);
+  assert.deepEqual(edit(b, ["U1"], "Library Link", "other"), [], "an edit of a read-only row sends nothing");
 });
 
 test("a pad's position moves its footprint", () => {
@@ -709,9 +719,9 @@ test("a field's orientation is its absolute angle: the footprint's own turn is t
 
 test("a footprint lists its attributes and each is an edit_board_footprint with the others as they were", () => {
   const b = edited();
-  assert.deepEqual(names(b, ["U1"]).map(([g]) => g), ["Basic Properties", "Fields", "Footprint Properties", "Attributes", "Overrides", "Placement"]);
+  assert.deepEqual(names(b, ["U1"]).map(([g]) => g), ["Basic Properties", "Fields", "Footprint Properties", "Attributes", "Overrides"]);
   assert.deepEqual(names(b, ["U1"]).find(([g]) => g === "Attributes")![1], ["Component Type", "Not in Schematic", "Exclude From Position Files", "Exclude From Bill of Materials", "Do not Populate"]);
-  assert.deepEqual(names(b, ["U1"]).find(([g]) => g === "Overrides")![1], ["Exempt From Courtyard Requirement"]);
+  assert.deepEqual(names(b, ["U1"]).find(([g]) => g === "Overrides")![1], ["Exempt From Courtyard Requirement", "Clearance Override", "Solderpaste Margin Override", "Solderpaste Margin Ratio Override", "Zone Connection Style"]);
   const all = { kind: "smd", board_only: false, exclude_from_pos_files: false, exclude_from_bom: false, dnp: false, allow_missing_courtyard: false };
   assert.deepEqual(edit(b, ["U1"], "Do not Populate", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, dnp: true } }]);
   assert.deepEqual(edit(b, ["U1"], "Exclude From Position Files", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, exclude_from_pos_files: true } }]);

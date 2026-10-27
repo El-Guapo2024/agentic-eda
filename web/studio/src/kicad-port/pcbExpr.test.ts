@@ -86,7 +86,8 @@ test("a pad reads a footprint's property through its footprint: A.Reference on a
   assert.equal(holds("A.Reference == 'U1'", "U1.2"), true);
   assert.equal(holds("A.Reference == 'U*'", "U1.2"), true);
   assert.equal(holds("A.Reference == 'R*'", "U1.2"), false);
-  assert.equal(holds("A.Value == 'MCU'", "U1"), true);
+  // `FOOTPRINT_DESC` has no Value property (r2-pcb-edit A6): the field is read with getField
+  assert.equal(holds("A.getField('Value') == 'MCU'", "U1"), true);
   assert.equal(holds("A.Library_Link == 'Package_QFP:LQFP-48'", "U1"), true);
 });
 

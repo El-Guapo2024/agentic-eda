@@ -14,7 +14,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import { stitchPosition } from "./viaStitch";
-import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Nm, Via, Zone } from "../api/types";
+import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadConnection, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Nm, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
 import { effectiveClassName } from "./boardSetupRules";
@@ -652,12 +652,15 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       return Math.abs(delta) < 1e-9 ? [] : [{ op: "rotate_items", ids: [part.ref], pivot: xy(part.at), angle_millideg: Math.round(delta * 1000) }];
     },
   });
-  // The texts are read-only: a footprint's reference, value and library link come from the schematic and the intent (the fields' own layout is the Reference and
-  // Value items' to edit, and a user field's text the field's).
+  // The texts are read-only: a footprint's reference and library link come from the schematic and the intent (the fields' own layout is the Reference and
+  // Value items' to edit, and a user field's text the field's). `FOOTPRINT_DESC`'s "Footprint Properties": Library Link, Library Description (`GetLibDescription`,
+  // the file's `(descr ..)`), Keywords (`(tags ..)`) and Component Class (`GetComponentClassAsString`: the footprint's own classes, sorted and joined by ","
+  // as `GetFullClassNameForConstituents` names a composite class; the classes the project's assignment rules add are kicad-cli's DRC's, not shown here).
   add({ owner: "FOOTPRINT", name: "Reference", kind: "string", get: (i) => i.part!.fields?.[0]?.text ?? i.part!.ref }, "Fields");
-  add({ owner: "FOOTPRINT", name: "Value", kind: "string", get: (i) => i.part!.value ?? "" }, "Fields");
-  add({ owner: "FOOTPRINT", name: "MPN", kind: "string", get: (i) => i.part!.mpn ?? "", available: (i) => !!i.part!.mpn }, "Fields");
   add({ owner: "FOOTPRINT", name: "Library Link", kind: "string", get: (i) => i.part!.footprint ?? "" }, "Footprint Properties");
+  add({ owner: "FOOTPRINT", name: "Library Description", kind: "string", get: (i) => i.part!.lib_description ?? "" }, "Footprint Properties");
+  add({ owner: "FOOTPRINT", name: "Keywords", kind: "string", get: (i) => i.part!.keywords ?? "" }, "Footprint Properties");
+  add({ owner: "FOOTPRINT", name: "Component Class", kind: "string", get: (i) => [...(i.part!.component_classes ?? [])].sort().join(",") }, "Footprint Properties");
   // `FOOTPRINT_DESC`'s "Attributes" and "Overrides": the type (the dialog's "Component Type"; KiCad's panel has no row for it), "Not in Schematic", "Exclude From
   // Position Files", "Exclude From Bill of Materials", "Do not Populate" and "Exempt From Courtyard Requirement" are all written to the footprint's `(attr ..)`.
   const ATTRIBUTES = "Attributes";
@@ -696,15 +699,50 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   attribute("Exclude From Bill of Materials", "exclude_from_bom", ATTRIBUTES);
   attribute("Do not Populate", "dnp", ATTRIBUTES);
   attribute("Exempt From Courtyard Requirement", "allow_missing_courtyard", "Overrides");
-  add({ owner: "FOOTPRINT", name: "Block", kind: "string", get: (i) => i.part!.block ?? "", available: (i) => !!i.part!.block }, "Placement");
+  // "Clearance Override" (`SetLocalClearance`, a `std::optional<int>`: an empty cell is none) and "Zone Connection Style" (`SetLocalZoneConnection`, "Inherited"
+  // the default) -- both through `set_footprint_zone_connection`, which sets the two together, as Footprint Properties' Clearance Overrides tab does.
+  const fpZoneCmd = (part: Part, zone_connection: PadConnection | null, clearance: number | null): Cmd => ({ op: "set_footprint_zone_connection", part: part.ref, zone_connection, clearance });
   add(
     {
       owner: "FOOTPRINT",
-      name: "Nets",
-      kind: "string",
-      get: (i) => [...new Set((i.part!.pads ?? []).map((p) => p.net).filter((n): n is string => !!n))].join(", "),
+      name: "Clearance Override",
+      kind: "int",
+      display: "size",
+      optional: true,
+      get: (i) => i.part!.zone?.clearance ?? "",
+      validate: (v) => (v !== "" && num(v) < 0 ? "Value must be greater than or equal to 0" : null),
+      set: (i, v) => {
+        const now = i.part!.zone?.clearance ?? null;
+        const next = v === "" ? null : Math.round(num(v));
+        return now === next ? [] : [fpZoneCmd(i.part!, i.part!.zone?.connection ?? null, next)];
+      },
     },
-    "Placement"
+    "Overrides"
+  );
+  // "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override": the footprint's own `(solder_paste_margin ..)` / `(solder_paste_margin_ratio ..)`, shown;
+  // no verb sets them yet.
+  add({ owner: "FOOTPRINT", name: "Solderpaste Margin Override", kind: "int", display: "size", optional: true, get: (i) => i.part!.paste_margin ?? "" }, "Overrides");
+  add({ owner: "FOOTPRINT", name: "Solderpaste Margin Ratio Override", kind: "double", display: "ratio", optional: true, get: (i) => i.part!.paste_margin_ratio ?? "" }, "Overrides");
+  add(
+    {
+      owner: "FOOTPRINT",
+      name: "Zone Connection Style",
+      kind: "enum",
+      // `ENUM_MAP<ZONE_CONNECTION>`
+      choices: () => [
+        { label: "Inherited", value: "inherited" },
+        { label: "None", value: "None" },
+        { label: "Thermal reliefs", value: "Thermal" },
+        { label: "Solid", value: "Full" },
+        { label: "Thermal reliefs for PTH", value: "ThtThermal" },
+      ],
+      get: (i) => i.part!.zone?.connection ?? "inherited",
+      set: (i, v) => {
+        const next = v === "inherited" ? null : (String(v) as PadConnection);
+        return (i.part!.zone?.connection ?? null) === next ? [] : [fpZoneCmd(i.part!, next, i.part!.zone?.clearance ?? null)];
+      },
+    },
+    "Overrides"
   );
 
   // ----------------------------------------------------------------------------------------------------------------------- PAD

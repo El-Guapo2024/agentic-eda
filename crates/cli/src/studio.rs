@@ -1242,6 +1242,26 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     });
                 }
             }
+            // `FOOTPRINT_DESC`'s Library Description, Keywords, Component Class and the solder paste overrides: what the board file said of the footprint
+            // (`FootprintExtra`: its `(descr ..)`, `(tags ..)`, `(component_classes ..)`, `(solder_paste_margin ..)`, `(solder_paste_margin_ratio ..)`).
+            if let Some(e) = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference)) {
+                let facts = eda_kicad::footprint_file_facts(&e.tokens);
+                if let Some(d) = facts.description {
+                    p["lib_description"] = json!(d);
+                }
+                if let Some(k) = facts.keywords {
+                    p["keywords"] = json!(k);
+                }
+                if !e.component_classes.is_empty() {
+                    p["component_classes"] = json!(e.component_classes);
+                }
+                if let Some(m) = facts.paste_margin {
+                    p["paste_margin"] = json!(m);
+                }
+                if let Some(r) = facts.paste_margin_ratio {
+                    p["paste_margin_ratio"] = json!(r);
+                }
+            }
         }
         parts.push(p);
     }

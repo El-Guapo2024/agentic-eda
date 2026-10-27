@@ -2393,3 +2393,31 @@ mod tests {
         assert!(files.iter().all(|(_, t)| t.contains("(paper \"A4\")")), "mcu30's sheets fit A4");
     }
 }
+
+/// What a footprint's kept tokens (`FootprintExtra::tokens`, the file's forms nothing else reads) say that the Properties panel shows (`FOOTPRINT_DESC`): the
+/// `(descr ..)` (`GetLibDescription`), the `(tags ..)` (`GetKeywords`) and the footprint's own solder paste margins (`(solder_paste_margin ..)`, nm, and
+/// `(solder_paste_margin_ratio ..)`, the pre-6 `(solder_paste_ratio ..)` too).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct FootprintFileFacts {
+    pub description: Option<String>,
+    pub keywords: Option<String>,
+    pub paste_margin: Option<eda_model::ir::Nm>,
+    pub paste_margin_ratio: Option<f64>,
+}
+
+/// [`FootprintFileFacts`] of `tokens`.
+pub fn footprint_file_facts(tokens: &[String]) -> FootprintFileFacts {
+    let mut out = FootprintFileFacts::default();
+    for t in tokens {
+        let Ok(node) = sexpr::parse(t) else { continue };
+        let Some(l) = node.as_list() else { continue };
+        match sexpr::tag(l) {
+            Some("descr") => out.description = sexpr::txt(l, 1).map(str::to_string),
+            Some("tags") => out.keywords = sexpr::txt(l, 1).map(str::to_string),
+            Some("solder_paste_margin") => out.paste_margin = sexpr::num(l, 1).map(import::mm_to_nm),
+            Some("solder_paste_margin_ratio") | Some("solder_paste_ratio") => out.paste_margin_ratio = sexpr::num(l, 1),
+            _ => {}
+        }
+    }
+    out
+}
