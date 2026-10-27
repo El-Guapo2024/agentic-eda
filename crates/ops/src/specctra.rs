@@ -6,7 +6,9 @@
 //! placement names, adds the session's wires and vias, and deletes the DRC markers. Here it is one command, so one undo step that brings the old routing back. The session
 //! travels in the command as text: a browser gives the page a file's contents and not its path.
 //!
-//! What the session holds is read by `eda_kicad::specctra::session::from_session` against the board as KiCad reads it; this module only applies it to the design:
+//! What the session holds is read by KiCad itself where it can be (`kicad-cli api-server`'s `ImportSpecctraSession`, the importer the CLI and the studio set:
+//! [`set_session_importer`]), else by our own port, `eda_kicad::specctra::session::from_session` (INACTIVE but as that fallback), against the board as KiCad reads
+//! it; this module only applies it to the design:
 //! * the tracks and vias that are not in [`DrawingsSection::locked_ids`](eda_model::ir::DrawingsSection) go, netless ones too (`RemoveAll( { PCB_TRACE_T } )`), and a
 //!   locked one stays (it was exported `(type fix)`, so the session does not bring it back);
 //! * a footprint the placement names takes the session's position, side and orientation (`FOOTPRINT::SetPosition`, `Flip`, `SetOrientation`);
@@ -19,7 +21,32 @@
 //! unchanged gets its old content id, but not the old item's group, tuning pattern or via settings.
 
 use super::Board;
-use eda_model::ir::{DrawingsSection, RoutingSection};
+use eda_kicad::specctra::session::SessionImport;
+use eda_model::ir::{Design, DrawingsSection, RoutingSection};
+use eda_model::ConstraintModel;
+use std::sync::OnceLock;
+
+/// An importer of a session that `Cmd::Specctra` asks before our own port: `(session text, file name, design, model)` to what the import puts on the board,
+/// `None` when it cannot (then our port of `FromSESSION` reads the session, `eda_kicad::specctra::session::from_session`), `Some(Err(words))` when KiCad refused
+/// the file. The CLI and the studio set KiCad's own (`kicad-cli api-server`'s `ImportSpecctraSession`, `eda_kicad_engine::api::specctra`); this crate cannot
+/// reach kicad-cli itself.
+pub type SessionImporter = fn(&str, &str, &Design, &ConstraintModel) -> Option<Result<SessionImport, String>>;
+
+static IMPORTER: OnceLock<SessionImporter> = OnceLock::new();
+
+/// Set the importer [`SessionImporter`] names, once per process (a second call is ignored).
+pub fn set_session_importer(importer: SessionImporter) {
+    let _ = IMPORTER.set(importer);
+}
+
+/// The session read against the board: by the importer set, else (none set, or it cannot) by our own port.
+fn read_session(session: &str, source: &str, design: &Design, model: &ConstraintModel) -> Result<SessionImport, String> {
+    if let Some(r) = IMPORTER.get().and_then(|f| f(session, source, design, model)) {
+        return r;
+    }
+    // INACTIVE (2026-10-28) but as this fallback: a kicad-cli without api-server, or one whose server has no ImportSpecctraSession.
+    eda_kicad::specctra::session::from_session(session, source, design, model)
+}
 use eda_model::via_extra::{ViaExtra, ViaKind};
 use eda_model::CheckResult;
 
@@ -27,7 +54,7 @@ impl<'a> Board<'a> {
     /// `Cmd::Specctra`: see the module doc. `name` is the file the session came from, for the messages.
     pub(crate) fn import_specctra_session(&mut self, session: &str, name: &str) -> Result<(), Vec<CheckResult>> {
         let source = if name.is_empty() { "session" } else { name };
-        let import = eda_kicad::specctra::session::from_session(session, source, &self.design, self.model).map_err(|e| vec![CheckResult::fail("ops_specctra_session", source, e)])?;
+        let import = read_session(session, source, &self.design, self.model).map_err(|e| vec![CheckResult::fail("ops_specctra_session", source, e)])?;
 
         let locked: std::collections::BTreeSet<String> = self.design.drawings.as_ref().map(|d| d.locked_ids.iter().cloned().collect()).unwrap_or_default();
         let copper = self.model.board.layers.len();

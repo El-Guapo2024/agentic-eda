@@ -88,6 +88,7 @@ mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
 mod specctra;
+pub use specctra::{set_session_importer, SessionImporter};
 mod pcb_paste_special;
 mod design_blocks;
 mod multichannel;

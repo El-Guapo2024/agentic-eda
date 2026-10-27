@@ -897,10 +897,18 @@ fn handle(
             let carry = req.get("carry").and_then(Value::as_str).and_then(board::carry::Carry::parse);
             let reply = match serde_json::from_value::<eda_ops::Cmd>(req.get("cmd").cloned().unwrap_or(Value::Null)) {
                 Err(e) => json!({ "ok": false, "message": format!("not a board command: {e}") }),
-                Ok(cmd) => match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
-                    Ok(summary) => json!({ "ok": true, "message": summary }),
-                    Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
-                },
+                Ok(cmd) => {
+                    // A Specctra session KiCad imported with items skipped (`crate::specctra_api::take_session_warning`): its warning travels in the reply.
+                    let session = cmd.imports_session();
+                    let _ = session.then(crate::specctra_api::take_session_warning);
+                    match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
+                        Ok(summary) => match session.then(crate::specctra_api::take_session_warning).flatten() {
+                            Some(w) => json!({ "ok": true, "message": summary, "warning": w }),
+                            None => json!({ "ok": true, "message": summary }),
+                        },
+                        Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+                    }
+                }
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
