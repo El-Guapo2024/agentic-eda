@@ -10,6 +10,13 @@
 import type { CmdDimension, CmdDimensionKind, Dimension, DimensionSettings, TextGraphicsDefaults } from "../api/types";
 import { lineThicknessNm, textStyleOf } from "./layerDefaults";
 
+/** KiCad's `DIM_PRECISION` levels and their labels (`dialog_dimension_properties_base.cpp`'s `m_cbPrecisionChoices`, the same
+ * words as `ENUM_MAP<DIM_PRECISION>` in `pcb_dimension.cpp`): 0-5 are that many decimals, 6-9 depend on the units. */
+export const DIM_PRECISION_CHOICES: { value: number; label: string }[] = [
+  "0", "0.0", "0.00", "0.000", "0.0000", "0.00000",
+  "0.00 in / 0 mils / 0.0 mm", "0.000 / 0 / 0.00", "0.0000 / 0.0 / 0.000", "0.00000 / 0.00 / 0.0000",
+].map((label, value) => ({ value, label }));
+
 export function cmdDimensionKindOf(dim: Pick<Dimension, "kind" | "height" | "horizontal" | "leader_length">): CmdDimensionKind {
   switch (dim.kind) {
     case "aligned":

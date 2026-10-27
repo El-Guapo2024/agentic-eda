@@ -68,7 +68,9 @@ fn the_selection_saved_as_a_block_is_grouped_and_linked_or_its_group_takes_the_l
     // Group Properties' link box
     b.apply(&Cmd::EditGroup { id: plain.id.clone(), name: "pair".into(), member_ids: plain.member_ids.clone(), design_block: Some(String::new()) }).unwrap();
     assert!(drawings(&b).groups.iter().find(|g| g.id == plain.id).unwrap().design_block.is_empty());
-    assert!(b.apply(&Cmd::EditGroup { id: plain.id.clone(), name: "pair".into(), member_ids: plain.member_ids.clone(), design_block: Some("bogus".into()) }).is_err());
+    // `LIB_ID::Parse( text, true )` never fails: a name with no library is a link too (r2-pcb-edit A9)
+    b.apply(&Cmd::EditGroup { id: plain.id.clone(), name: "pair".into(), member_ids: plain.member_ids.clone(), design_block: Some("bogus".into()) }).unwrap();
+    assert_eq!(drawings(&b).groups.iter().find(|g| g.id == plain.id).unwrap().design_block, "bogus");
     // an id the board does not have, and a link that is no id
     assert_eq!(b.apply(&Cmd::LinkDesignBlock { ids: ids(&["nothing"]), block: "Mine:X".into() }).unwrap_err()[0].check, "ops_unknown_item");
     assert!(b.apply(&Cmd::LinkDesignBlock { ids: ids(&["shp_seg"]), block: "Mine".into() }).is_err());

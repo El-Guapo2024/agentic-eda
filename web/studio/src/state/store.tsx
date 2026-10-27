@@ -21,12 +21,14 @@ import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
-import { subItemIds } from "../kicad-port/pcbItems";
+import { itemKind, subItemIds } from "../kicad-port/pcbItems";
 import { tableCellIds } from "../kicad-port/tables";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
 import type { CarryOp } from "../kicad-port/pcbCarry";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
+import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
+import { LONG_TEXT_QUESTION, plainTextPaste } from "../kicad-port/plainTextPaste";
 import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
@@ -1373,6 +1375,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       // -- wrong: EDIT_TOOL::doMoveSelection's own cancel just reverts
       // the move and leaves the pre-move selection exactly as it was.
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.armedFootprint != null || state.movePreview != null;
+      // A board drawing tool with an item started: the item goes, the tool stays (kicad-port/drawingCancel.ts); the next Escape leaves the tool.
+      if (state.movePreview == null && escapeKeepsDrawingTool(state.tab, state.activeTool, state.drawState)) {
+        return { ...state, drawState: null };
+      }
       if (inProgress) {
         return {
           ...state,
@@ -1779,7 +1785,8 @@ export interface StudioApi {
   /** Ctrl+Shift+G: dissolve every group named in the current selection, then select their former members. */
   ungroupSelection: () => Promise<void>;
   /** Cmd+C: the selection as KiCad's clipboard text, on the system clipboard and in `state.clipboard`. `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback; `reference` is the point Copy with Reference Point picked. */
-  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => Promise<void>;
+  /** True when the copy reached the clipboard (Cut deletes only then). */
+  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => Promise<boolean>;
   /**
    * Cmd+V: put what is on the clipboard on the board (KiCad's text, else this session's copy, else plain text as a text item), then select it and arm Move on it, same as duplicateSelection.
    * Paste Special passes the dialog's answers (`DIALOG_PASTE_SPECIAL`): what happens to the reference designators and whether the nets are cleared; a plain paste keeps the references.
@@ -2463,7 +2470,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     groupSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      const ids = [...stateRef.current.selection];
+      // `PCB_GROUP_TOOL::Group`'s filter: "if( item->GetParentFootprint() ) aCollector.Remove( item );" -- a pad or a field is not grouped -- then two items or more
+      const ids = [...stateRef.current.selection].filter((id) => {
+        const kind = itemKind(board, id);
+        return kind !== "pad" && kind !== "field";
+      });
       if (ids.length < 2) return;
       const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
       const ok = await runCmd({ op: "group", ids });
@@ -2514,18 +2525,20 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.
     copySelection: async (refs, reference) => {
       const st = stateRef.current;
-      if (!st.board) return;
-      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false });
-      if (ids.length === 0) return;
+      if (!st.board) return false;
+      // a pad is copied as itself, in a footprint of its own (`SaveSelection`)
+      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false, keepPads: true });
+      if (ids.length === 0) return false;
       // `copyToClipboard`: `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )` -- the anchor of the copied items nearest the cursor, so a paste puts it on the cursor.
       const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(dragOriginFor(st, ids, [st.cursorNm.x, st.cursorNm.y])) : null);
       const reply = await postClipboardCopy(ids, at);
       if (!reply.ok) {
         dispatch({ type: "TOAST", message: reply.message, kind: "error" });
-        return;
+        return false;
       }
       dispatch({ type: "SET_CLIPBOARD", clipboard: at ? { text: reply.text, reference: at } : { text: reply.text } });
       await writeClipboardText(reply.text);
+      return true;
     },
     // pcb_control.cpp Paste: whatever KiCad text is on the system clipboard (a copy made in KiCad, or on another board), else this session's own copy
     // where the browser will not hand the system clipboard over; text that is not KiCad's is pasted as a text item on the active layer ("If it wasn't
@@ -2542,7 +2555,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
       } else if (system != null && system.trim() !== "") {
-        cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: activeLayerName(st.activeLayer, "F.SilkS"), size_nm: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false } };
+        // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts); a long one asks first
+        const plain = plainTextPaste(system, at, activeLayerName(st.activeLayer, "F.SilkS"))!;
+        if (plain.longText && !window.confirm(LONG_TEXT_QUESTION)) return;
+        cmd = plain.cmd;
       } else if (st.clipboard) {
         cmd = paste(st.clipboard.text);
       } else {

@@ -1,11 +1,10 @@
 // "E" on a selected track/via/shape (a zone gets its own full dialog --
-// ZoneDialog.tsx, same one "Add Zone" uses). dialog_track_via_properties.cpp
-// (track width; via diameter/drill) and pcb_shape's own properties
-// (layer/line width/filled) are now editable through `set_track_width`/
-// `edit_via`/`edit_shape` (GAPS.md #11) -- net, position and a via's
-// layer span stay read-only, same as real KiCad's own dialogs (re-netting
-// or re-spanning an existing via isn't a field edit there either, it's
-// delete-and-redraw).
+// ZoneDialog.tsx, same one "Add Zone" uses). A track or a via opens
+// `DIALOG_TRACK_VIA_PROPERTIES` on every selected track and via when the
+// selection holds only those (`EDIT_TOOL::Properties`' `OnlyTypes( { PCB_TRACE_T,
+// PCB_ARC_T, PCB_VIA_T } )`): TrackViaPropertiesDialog.tsx. A shape gets its
+// layer, line width, fill and endings here (`edit_shape`); its geometry and net
+// are the Properties panel's (not this dialog's yet).
 import { useEffect, useState } from "react";
 import type { Cmd } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
@@ -13,7 +12,8 @@ import { canFill, fillOf, fillWidthError, SHAPE_FILL_CHOICES, type ShapeFill } f
 import { LINE_ENDING_CHOICES, LINE_ENDING_HELP, NO_ENDING, type LineEnding, type LineEndingStyle } from "../kicad-port/lineEnding";
 import type { CmdLineEnding } from "../api/pcbItemTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { formatLength, formatXY, nmFrom, nmTo } from "../state/units";
+import { nmFrom, nmTo } from "../state/units";
+import { TrackViaPropertiesDialog } from "./TrackViaPropertiesDialog";
 
 export function ItemPropertiesDialog() {
   const state = useStudioState();
@@ -27,9 +27,6 @@ export function ItemPropertiesDialog() {
   const shape = id ? api.shapeById(id) : undefined;
   const units = state.units;
 
-  const [width, setWidth] = useState("");
-  const [viaDiameter, setViaDiameter] = useState(0);
-  const [viaDrill, setViaDrill] = useState(0);
   const [shapeLayer, setShapeLayer] = useState("");
   const [shapeWidth, setShapeWidth] = useState(0);
   const [shapeFill, setShapeFill] = useState<ShapeFill>("none");
@@ -42,10 +39,6 @@ export function ItemPropertiesDialog() {
   // (possibly different) item -- not every render, or a mid-edit
   // keystroke would be clobbered by the next /api/state poll.
   useEffect(() => {
-    if (via) {
-      setViaDiameter(nmTo(via.d, units));
-      setViaDrill(nmTo(via.drill, units));
-    }
     if (shape) {
       setShapeLayer(shape.layer);
       setShapeWidth(nmTo(shape.stroke_width, units));
@@ -54,13 +47,18 @@ export function ItemPropertiesDialog() {
       setStartEnding(endingFields(shape.start_ending ?? NO_ENDING, units));
       setEndEnding(endingFields(shape.end_ending ?? NO_ENDING, units));
     }
-    setWidth("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   if (!id || (!track && !via && !shape)) return null;
+  if ((track || via) && state.board) {
+    // the whole selection when it is tracks and vias only and holds this one, else this one
+    const sel = [...state.selection];
+    const onlyTrackVia = sel.length > 0 && sel.includes(id) && sel.every((s) => api.trackById(s) || api.viaById(s));
+    return <TrackViaPropertiesDialog key={id} board={state.board} ids={onlyTrackVia ? sel : [id]} units={units} onClose={close} />;
+  }
 
-  const title = track ? "Track Properties" : via ? "Via Properties" : "Shape Properties";
+  const title = "Shape Properties";
   // The layers the board has (Board Setup > Board Editor Layers); a shape on a layer the board has since turned off keeps its own.
   const layerSetup = state.board?.board_rules?.layer_setup;
   const layerOptions = boardLayerList(state.board?.layers ?? [], layerSetup);
@@ -74,38 +72,6 @@ export function ItemPropertiesDialog() {
         </div>
         <div className="dialog-body">
           <div className="kv-grid">
-            {track && (
-              <>
-                <span>Net</span>
-                <span>{track.net}</span>
-                <span>Layer</span>
-                <span>{track.layer}</span>
-                <span>Width</span>
-                <span>
-                  <input placeholder={formatLength(track.width, units)} value={width} onChange={(e) => setWidth(e.target.value)} style={{ width: 90 }} />
-                </span>
-              </>
-            )}
-            {via && (
-              <>
-                <span>Net</span>
-                <span>{via.net}</span>
-                <span>Position</span>
-                <span>{formatXY(via.x, via.y, units)}</span>
-                <span>Diameter</span>
-                <span>
-                  <input type="number" step="any" value={viaDiameter} onChange={(e) => setViaDiameter(Number(e.target.value) || 0)} style={{ width: 90 }} /> {units}
-                </span>
-                <span>Drill</span>
-                <span>
-                  <input type="number" step="any" value={viaDrill} onChange={(e) => setViaDrill(Number(e.target.value) || 0)} style={{ width: 90 }} /> {units}
-                </span>
-                <span>Layers</span>
-                <span>
-                  {via.from} - {via.to}
-                </span>
-              </>
-            )}
             {shape && (
               <>
                 <span>Kind</span>
@@ -153,34 +119,8 @@ export function ItemPropertiesDialog() {
               {shapeError}
             </p>
           )}
-          {track && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>Net and layer have no edit command yet -- delete and redraw to change either.</p>}
-          {via && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>Net and layer span have no edit command yet, same as real KiCad's own dialog -- delete and redraw to change either.</p>}
         </div>
         <div className="dialog-footer">
-          {track && (
-            <button
-              disabled={!width.trim()}
-              onClick={() => {
-                const um = Math.round(nmFrom(Number(width), units));
-                if (Number.isFinite(um) && um > 0) api.cmd({ op: "set_track_width", id, width: um });
-                setWidth("");
-              }}
-            >
-              Apply Width
-            </button>
-          )}
-          {via && (
-            <button
-              className="primary"
-              onClick={async () => {
-                const diameter = Math.round(nmFrom(viaDiameter, units));
-                const drill = Math.round(nmFrom(viaDrill, units));
-                if (await api.cmd({ op: "edit_via", id, diameter, drill })) close();
-              }}
-            >
-              Apply
-            </button>
-          )}
           {shape && (
             <button
               className="primary"
@@ -206,17 +146,7 @@ export function ItemPropertiesDialog() {
               Apply
             </button>
           )}
-          <button
-            onClick={() => {
-              if (track) api.cmd({ op: "delete_track", id });
-              else if (via) api.cmd({ op: "delete_via", id });
-              else if (shape) api.cmd({ op: "delete_shape", id });
-              close();
-            }}
-          >
-            Delete
-          </button>
-          <button onClick={close}>{via || shape ? "Cancel" : "Close"}</button>
+          <button onClick={close}>Cancel</button>
         </div>
       </div>
     </div>

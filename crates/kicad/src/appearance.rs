@@ -180,15 +180,30 @@ pub fn with_board_net_names(appearance: &Value, model: &eda_model::ConstraintMod
     };
     let mut out = appearance.clone();
     if let Some(colors) = out.pointer_mut("/project/net_colors").and_then(Value::as_object_mut) {
-        let renamed: Map<String, Value> = std::mem::take(colors).into_iter().map(|(k, v)| (rename(&k), v)).collect();
+        // A colour saved under the board's name wins over one left under the intent's name of the same net (the newer save is the board's).
+        let mut renamed = Map::new();
+        let old = std::mem::take(colors);
+        for (k, v) in old.iter().filter(|(k, _)| rename(k) != **k) {
+            renamed.insert(rename(k), v.clone());
+        }
+        for (k, v) in old.into_iter().filter(|(k, _)| rename(k) == *k) {
+            renamed.insert(k, v);
+        }
         *colors = renamed;
     }
     if let Some(hidden) = out.pointer_mut("/local/hidden_nets").and_then(Value::as_array_mut) {
-        for h in hidden.iter_mut() {
-            if let Some(name) = h.as_str() {
-                *h = json!(rename(name));
+        let mut seen = std::collections::BTreeSet::new();
+        let mut kept = Vec::new();
+        for h in hidden.drain(..) {
+            let h = match h.as_str() {
+                Some(name) => json!(rename(name)),
+                None => h,
+            };
+            if seen.insert(h.to_string()) {
+                kept.push(h);
             }
         }
+        *hidden = kept;
     }
     out
 }
@@ -518,6 +533,18 @@ mod tests {
         let b = with_board_net_names(&a, &model);
         assert_eq!(b["local"]["hidden_nets"], json!(["/FB", "GND", "OLD"]));
         assert_eq!(b["project"]["net_colors"], json!({ "/FB": "rgb(1, 2, 3)", "GND": "rgb(4, 5, 6)" }));
+    }
+
+    /// r2-pcb-edit B6: a colour under the board's name wins over one left under the intent's, and a hidden net is listed once.
+    #[test]
+    fn a_colour_under_the_boards_name_wins_over_one_left_under_the_intents() {
+        let mut model = eda_model::ConstraintModel::default();
+        model.nets = vec![eda_model::Net { name: "/FB".into(), pins: vec![] }];
+        model.intent_net_names.insert("/FB".into(), "FB".into());
+        let a = json!({ "local": { "hidden_nets": ["FB", "/FB"] }, "project": { "net_colors": { "FB": "rgb(1,1,1)", "/FB": "rgb(2,2,2)" } } });
+        let b = with_board_net_names(&a, &model);
+        assert_eq!(b["project"]["net_colors"], json!({ "/FB": "rgb(2,2,2)" }));
+        assert_eq!(b["local"]["hidden_nets"], json!(["/FB"]));
     }
 
     #[test]

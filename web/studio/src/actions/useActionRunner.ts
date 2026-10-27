@@ -28,6 +28,9 @@ import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, t
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { snapPoint } from "../components/canvas/gridHelper";
+import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
+import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
@@ -106,7 +109,7 @@ import { registerAppearanceActions } from "./appearanceActions";
 import { nextContrastMode } from "../kicad-port/appearance";
 import { registerPcbFindActions } from "./pcbFindActions";
 import { registerPcbEditDetailsActions } from "./pcbEditDetailsActions";
-import { modificationSnapFor } from "../state/modificationSnap";
+import { dragOriginFor, modificationSnapFor } from "../state/modificationSnap";
 import { toggledUnits } from "../kicad-port/unitToggle";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
@@ -214,20 +217,26 @@ export function useActionRunner() {
     // The Design Blocks panes of the schematic and the board editor: show, place, save, update, properties, delete (actions/designBlockActions.ts).
     registerDesignBlockActions(m, { tab: state.tab, dispatch, api });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
-    const deleteRefs = (refs: string[]) => {
+    const deleteRefs = (refs: string[], isCut = false) => {
       const cmds: Cmd[] = [];
+      let keepSelection: string[] | undefined;
       // `SCH_EDIT_TOOL::DoDelete`: every selectable schematic item, locked ones skipped (kicad-port/schDelete.ts).
       if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
       // `EDIT_TOOL::DeleteItems`: each item by its own verb, a group with everything below it (the groups it holds opened), a locked item -- or a group with a locked
       // item anywhere in it -- skipped (kicad-port/deleteCmds.ts).
       if (state.tab === "pcb" && state.board) {
-        const del = boardDeleteCmds(state.board, refs);
+        // `DeleteItems` reads the cursor (`GetCursorPosition()`, grid-snapped) for a lone zone's cutout.
+        const cursor = state.cursorNm ? (([x, y]) => ({ x, y }))(snapPoint(state.cursorNm.x, state.cursorNm.y, state.gridNm)) : null;
+        const del = boardDeleteCmds(state.board, refs, { cursor, isCut });
         cmds.push(...del.cmds);
+        keepSelection = del.keepSelection;
         if (del.message) dispatch({ type: "TOAST", message: del.message, kind: "error" });
       }
       // A tuning pattern is removed, its track put back (`PCB_TUNING_PATTERN::Remove`), before what else was selected goes.
       const patterns = state.tab === "pcb" ? tuningPatternIds(state.board, refs) : [];
-      dispatch({ type: "CLEAR_SELECTION" });
+      // "Restore the selection on the original zone" after a cutout is removed.
+      if (keepSelection) dispatch({ type: "SET_SELECTION", refs: keepSelection });
+      else dispatch({ type: "CLEAR_SELECTION" });
       if (patterns.length > 0) void removeTuningPatterns(patterns, api, dispatch).then(() => (cmds.length ? api.cmdBatch(cmds) : undefined));
       else if (cmds.length) void api.cmdBatch(cmds);
     };
@@ -267,17 +276,21 @@ export function useActionRunner() {
       const rotateQuarterTurns = addQuarterTurns ? wrapTurns((base.rotateQuarterTurns ?? 0) + press, state.prefs.rotationStepDeg) : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
       // A PCB carry keeps the presses in order, each about the point KiCad's acts about at that moment (`carryPress`: a turn about the grab point, a flip
-      // about it for a lone item or about the box of the items as they are now), so F then R turns the way KiCad's does. Before the pointer has moved the
-      // grab point is not known yet: the selection's own reference point stands in.
+      // about it for a lone item or about the box of the items as they are now), so F then R turns the way KiCad's does. Before the pointer has moved, the
+      // grab point is where M was pressed made the drag origin (`doMoveSelection`'s first event is the move itself: `BestDragOrigin( originalMousePos, .. )`).
       let ops = base.ops;
+      let grabNm = base.grabNm;
+      if (kind === "pcb" && state.board && !grabNm && state.moveOriginNm && state.activeTool === "move") {
+        grabNm = dragOriginFor(state, base.refs, [state.moveOriginNm.x, state.moveOriginNm.y]);
+      }
       if (kind === "pcb" && state.board) {
-        const grab = base.grabNm ?? base.pivotNm ?? rotationPivot(state.board, base.refs, modificationSnapFor(state));
+        const grab = grabNm ?? base.pivotNm ?? rotationPivot(state.board, base.refs, modificationSnapFor(state));
         if (grab) {
           const op = carryPress(state.board, base.refs, base.ops ?? [], toggleFlip ? { flip: state.prefs.flipDirection } : { turnDegCcw: press * state.prefs.rotationStepDeg }, grab);
           if (op) ops = [...(base.ops ?? []), op];
         }
       }
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped, ops } });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped, ops, ...(grabNm ? { grabNm } : {}) } });
       return true;
     };
 
@@ -332,9 +345,11 @@ export function useActionRunner() {
       "common.Interactive.cut",
       pcbOnly(() => {
         if (!state.board) return;
-        const refs = editableSelection(state.board, requestSelection()).ids;
+        // a pad is cut as itself: copied in a footprint of its own, and not deleted (`DeleteItems`' `PCB_PAD_T` without free pads)
+        const refs = editableSelection(state.board, requestSelection(), { keepPads: true }).ids;
         if (refs.length === 0) return;
-        void api.copySelection(refs).then(() => deleteRefs(refs));
+        // "delete exactly that; no more, no fewer" of what reached the clipboard: nothing, when the copy failed
+        void api.copySelection(refs).then((copied) => (copied ? deleteRefs(refs, true) : undefined));
       })
     );
 
@@ -629,6 +644,8 @@ export function useActionRunner() {
     const boardMoving = () => state.tab === "pcb" && (state.activeTool === "move" || state.movePreview?.kind === "pcb");
     m.set("common.Interactive.undo", () => {
       if (boardMoving()) return void m.get("common.Interactive.cancel")?.();
+      // `drawShape`: "( started && evt->IsAction( &ACTIONS::undo ) )" cancels the item being drawn, as Escape does, and keeps the tool
+      if (escapeKeepsDrawingTool(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "ESCAPE" });
       void (state.tab === "footprint" ? fpApi.undo() : state.tab === "symbol" ? symApi.undo() : api.undo());
     });
     m.set("common.Interactive.redo", () => {
@@ -1623,7 +1640,8 @@ export function useActionRunner() {
           return hit ? [hit] : [];
         };
         const ids = state.selection.size > 0 || state.tab !== "schematic" ? [...state.selection] : hovered();
-        const texts = state.tab === "schematic" ? (sch ? schSelectionTexts(sch, ids) : []) : ids.map((id) => api.textById(id)?.content ?? api.dimensionById(id)?.text);
+        // the board: each item's shown text, a table's cells tab- and newline-separated (kicad-port/pcbCopyAsText.ts)
+        const texts = state.tab === "schematic" ? (sch ? schSelectionTexts(sch, ids) : []) : state.board ? ids.map((id) => boardItemAsText(state.board!, id)) : [];
         const text = selectionAsText(texts);
         if (text === "") return;
         navigator.clipboard.writeText(text).catch(() => dispatch({ type: "TOAST", message: "Could not write to the clipboard.", kind: "error" }));

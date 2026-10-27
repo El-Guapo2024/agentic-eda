@@ -10,7 +10,7 @@
 // none of the net edits of the panel's menu (Rename / Delete / Add Net).
 import { useEffect, useMemo, useState } from "react";
 import { saveTextFile } from "../api/libraryClient";
-import { DEFAULT_NET_INSPECTOR_OPTIONS, netInspectorColumns, netInspectorCell, netInspectorReport, netInspectorRows, type NetInspectorColumn, type NetInspectorOptions, type NetInspectorRow } from "../kicad-port/netInspector";
+import { DEFAULT_NET_INSPECTOR_OPTIONS, netInspectorColumns, netInspectorCell, netInspectorReport, netInspectorRows, netShown, type NetInspectorColumn, type NetInspectorOptions, type NetInspectorRow } from "../kicad-port/netInspector";
 import { useStudioDispatch, useStudioState } from "../state/store";
 
 export function NetInspectorDialog() {
@@ -107,7 +107,8 @@ export function NetInspectorDialog() {
           {rows && shown.length === 0 && <span className="panel-empty">No nets.</span>}
         </div>
         <div className="dialog-footer">
-          <button onClick={() => saveTextFile(netInspectorReport(shown, units, columns), "net-inspector.csv", "text/csv")} data-testid="net-inspector-report">
+          {/* `generateReport` walks the model's own list (`itemAt( row )`), not the view's sort: the filtered rows in the order they came */}
+          <button onClick={() => saveTextFile(netInspectorReport((rows ?? []).filter((r) => netShown(r, opts)), units, columns), "net-inspector.csv", "text/csv")} data-testid="net-inspector-report">
             Save Net Inspector Report...
           </button>
           <button onClick={close}>Close</button>

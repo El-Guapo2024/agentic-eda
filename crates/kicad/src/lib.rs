@@ -45,7 +45,7 @@ mod pcb_items;
 mod pcb_table;
 mod clipboard;
 pub use clipboard::{export_pcb_clipboard, parse_pcb_clipboard, ClipFootprint, ClipGroup, ClipRef, Clipboard};
-pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pcb_mapped_with, export_kicad_pcb_with, export_kicad_pro, export_kicad_pro_for};
+pub use pcb::{custom_erc_pin_map, effective_rule_severities, kicad_footprint_orientation, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pcb_mapped_with, export_kicad_pcb_with, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
 mod page;

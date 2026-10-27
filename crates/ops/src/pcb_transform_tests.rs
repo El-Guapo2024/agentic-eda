@@ -285,6 +285,21 @@ fn a_text_turned_clockwise_loses_the_same_angle_because_its_angle_is_kicads() {
 }
 
 #[test]
+fn rotating_a_dimension_turns_its_text_the_way_a_text_turns() {
+    // `PCB_DIMENSION_BASE::Rotate`: `newAngle = GetTextAngle() + aAngle` with KiCad's counter-clockwise angle, the same
+    // way `PCB_TEXT::Rotate` turns a text. Our clockwise-positive -90 is KiCad's +90.
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let dims = &mut d.drawings.as_mut().unwrap().dimensions;
+    dims[0].keep_text_aligned = false;
+    dims[0].text_angle = 0;
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::RotateItems { ids: ids(&["dim_a", "txt_a"]), pivot: p(mm(70.0), mm(80.0)), angle_millideg: -90_000 }).unwrap();
+    assert_eq!(drawings(&b).texts[0].angle, 90_000);
+    assert_eq!(drawings(&b).dimensions[0].text_angle, 90_000, "the dimension's text turns with the text");
+}
+
+#[test]
 fn a_footprint_turned_about_a_pivot_has_its_pads_where_the_same_turn_puts_them() {
     let m = model(&["F.Cu", "B.Cu"]);
     for (rot, side) in [(0, Side::Top), (90_000, Side::Top), (30_000_000, Side::Bottom), (270_000, Side::Bottom)] {
@@ -319,6 +334,29 @@ fn a_rectangle_turned_a_quarter_stays_a_normalised_rectangle_and_any_other_turn_
     let r = drawings(&b).shapes.iter().find(|s| s.id() == "shp_rect").unwrap();
     assert!(matches!(r, Shape::Polygon { pts, .. } if pts.len() == 4), "{r:?}");
     assert_eq!(r.id(), "shp_rect", "it is still the same item");
+}
+
+#[test]
+fn a_rounded_rectangle_turned_45_degrees_is_the_polygon_of_its_rounded_rectangle() {
+    // `EDA_SHAPE::rotate`: `ROUNDRECT rr( SHAPE_RECT( .. ), m_cornerRadius ); m_shape = SHAPE_T::POLY; rr.TransformToPolygon( .. ); .Rotate( .. )`.
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().board_items.set_corner_radius("shp_rect", mm(2.0));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let pivot = p(mm(5.0), mm(92.5));
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot, angle_millideg: 45_000 }).unwrap();
+    let dr = drawings(&b);
+    let r = dr.shapes.iter().find(|s| s.id() == "shp_rect").unwrap();
+    let Shape::Polygon { pts, .. } = r else { panic!("{r:?}") };
+    assert!(pts.len() > 4, "the corners are rounded: {pts:?}");
+    // Every point turned back lies on the rounded rectangle 0..10 x 90..95 mm with 2 mm corners.
+    let ring = eda_model::outline::rounded_rect_ring(p(Nm::ZERO, mm(90.0)), p(mm(10.0), mm(95.0)), mm(2.0), eda_model::outline::MAX_ERROR_NM.as_f64());
+    let want: Vec<Point> = ring.iter().map(|q| rotate_point_about(*q, pivot, 45_000)).collect();
+    assert_eq!(pts.len(), want.len());
+    for (a, w) in pts.iter().zip(&want) {
+        assert!((a.x - w.x).abs() <= Nm::new(2) && (a.y - w.y).abs() <= Nm::new(2), "{a:?} vs {w:?}");
+    }
+    assert_eq!(dr.board_items.corner_radius_of("shp_rect"), Nm::ZERO, "a polygon has no corner radius");
 }
 
 #[test]
@@ -565,4 +603,27 @@ fn the_new_verbs_round_trip_through_json_as_the_studio_sends_them() {
     }
     let from_studio: Cmd = serde_json::from_str(r#"{"op":"flip_items","ids":["a"],"pivot":{"x":5,"y":6},"direction":"left_right"}"#).unwrap();
     assert_eq!(from_studio, Cmd::FlipItems { ids: ids(&["a"]), pivot: p(Nm::new(5), Nm::new(6)), direction: FlipDirection::LeftRight });
+}
+
+/// r2-pcb-edit C4: `BOARD::FlipLayer` reads `m_opposite`, which `recalcOpposites` pairs for user layers typed front and back: by the name after the first dot,
+/// else two consecutive renamed ones.
+#[test]
+fn flip_takes_a_front_user_layer_to_its_back_pair() {
+    use eda_model::layers::LayerType;
+    let mut m = model(&["F.Cu", "B.Cu"]);
+    let ls = &mut m.board.layer_setup;
+    ls.types.insert("User.1".into(), LayerType::Front);
+    ls.types.insert("User.2".into(), LayerType::Back);
+    ls.names.insert("User.1".into(), "F.Notes".into());
+    ls.names.insert("User.2".into(), "B.Notes".into());
+    ls.types.insert("User.5".into(), LayerType::Front);
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    dr.shapes.iter_mut().find(|s| s.id() == "shp_seg").unwrap().set_layer("User.1".into());
+    dr.texts[0].layer = "User.5".into();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FlipItems { ids: ids(&["shp_seg", "txt_a"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().layer(), "User.2");
+    assert_eq!(drawings(&b).texts[0].layer, "User.5", "a front user layer with no pair stays");
+    assert_eq!(m.board.layer_setup.user_layer_opposites().get("User.2").map(String::as_str), Some("User.1"));
 }

@@ -15,12 +15,17 @@
 //   ZONE::Mirror                  the outline
 //   PCB_TRACK/PCB_ARC/PCB_VIA     start, end (and mid) / the position
 //   PCB_GROUP::Mirror             every member
+//   PCB_FIELD (a PCB_TEXT)        as a text: its position, and the horizontal justification
+//   PCB_POINT::Mirror             the position
+// (Not yet: a text box, an image and a tuning pattern, `PCB_TEXTBOX::Mirror`, `PCB_GENERATOR::Mirror`.)
 // Output is a list of `Cmd`s (one `batch` = one undo step).
 
 import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
 import { itemKind, itemPosition, itemBounds, unionBounds } from "./pcbItems";
 import type { P } from "./trackArc";
 import { reshapeCmds } from "./shapeFill";
+import { editFieldCmd, fieldById } from "./fpFields";
+import { extraItemById } from "./pcbExtraItems";
 
 export type FlipDirection = "leftRight" | "topBottom";
 
@@ -77,7 +82,7 @@ export function mirrorableIds(board: BoardState, ids: readonly string[]): string
     const kind = itemKind(board, id);
     if (kind === "group") {
       for (const member of board.drawings?.groups.find((g) => g.id === id)?.member_ids ?? []) visit(member);
-    } else if (kind === "track" || kind === "via" || kind === "zone" || kind === "shape" || kind === "text") {
+    } else if (kind === "track" || kind === "via" || kind === "zone" || kind === "shape" || kind === "text" || kind === "field" || kind === "point") {
       out.push(id);
     }
   };
@@ -124,6 +129,18 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
       }
       const [x, y] = mirrorPoint([t.x, t.y], centre, dir);
       cmds.push({ op: "move_text", id, x, y });
+    } else if (kind === "field") {
+      // `PCB_TEXT::Mirror` of a footprint's field: the justification first (the edit carries the field's place as it is), then the move
+      const f = fieldById(board, id)!;
+      const just = (["left", "center", "right"] as const)[f.field.halign + 1]!;
+      const flipped = mirroredJustify(just, f.field.angle, dir);
+      if (flipped !== just) cmds.push(editFieldCmd(f.part, f.field, { halign: flipped === "left" ? -1 : flipped === "right" ? 1 : 0 }));
+      const [x, y] = mirrorPoint([f.field.x, f.field.y], centre, dir);
+      if (x !== f.field.x || y !== f.field.y) cmds.push({ op: "move_items", ids: [id], dx: Math.round(x - f.field.x), dy: Math.round(y - f.field.y) });
+    } else if (kind === "point") {
+      const at = extraItemById(board, id)!.position;
+      const [x, y] = mirrorPoint(at, centre, dir);
+      if (x !== at[0] || y !== at[1]) cmds.push({ op: "move_items", ids: [id], dx: Math.round(x - at[0]), dy: Math.round(y - at[1]) });
     }
   }
   if (mirrorTracks.length > 0) cmds.push({ op: "mirror_tracks", ids: mirrorTracks, pivot: { x: Math.round(centre[0]), y: Math.round(centre[1]) }, direction: dir === "leftRight" ? "left_right" : "top_bottom" });

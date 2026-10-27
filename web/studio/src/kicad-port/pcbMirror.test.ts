@@ -128,3 +128,16 @@ test("planMirror: a zone's holes are mirrored with its outline (`ZONE::Mirror` m
   if (cmd.op !== "set_zone_outline") return;
   assert.deepEqual(cmd.holes, [[{ x: -2, y: 2 }, { x: -4, y: 2 }, { x: -4, y: 4 }]]);
 });
+
+test("a field and a point are mirrorable: the field's justification flips and it moves, the point moves (EDIT_TOOL::MirrorableItems, r2-pcb-edit R4)", () => {
+  const field = { id: "R1:Value", name: "Value", text: "10k", x: 1000, y: 0, angle: 0, w: 1000, h: 1000, thickness: 150, layer: "F.Fab", visible: true, halign: -1, valign: 0, mirror: false, bold: false, italic: false, upright: true, knockout: false, lx: 1000, ly: 0, langle: 0, custom: true };
+  const b = board({
+    parts: [{ ref: "R1", placed: true, at: [0, 0], rot: 0, side: "top", pads: [], fields: [field] }] as unknown as BoardState["parts"],
+    drawings: { shapes: [], texts: [], dimensions: [], groups: [], points: [{ id: "pt_1", layer: "F.SilkS", x: 3000, y: 500, size: 100 }] } as unknown as BoardState["drawings"],
+  });
+  assert.deepEqual(mirrorableIds(b, ["R1:Value", "pt_1"]), ["R1:Value", "pt_1"]);
+  const cmds = planMirror(b, ["R1:Value", "pt_1"], [2000, 0], "leftRight").cmds as (Cmd & { op: string })[];
+  const edit = cmds.find((c) => c.op === "edit_board_field") as unknown as { layout: { halign: number } };
+  assert.equal(edit.layout.halign, 1, "left becomes right");
+  assert.deepEqual(cmds.filter((c) => c.op === "move_items"), [{ op: "move_items", ids: ["R1:Value"], dx: 2000, dy: 0 }, { op: "move_items", ids: ["pt_1"], dx: -2000, dy: 0 }]);
+});

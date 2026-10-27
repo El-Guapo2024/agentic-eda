@@ -46,3 +46,11 @@ test("one length column per copper layer, in layer-id order (F.Cu, B.Cu, then th
   assert.ok(csv.endsWith(";1.0000;0.0000;\n"), csv);
   assert.deepEqual(netInspectorRows([row("A", { layer_lengths: { "F.Cu": 5 } }), row("B")], DEFAULT_NET_INSPECTOR_OPTIONS, "layer:F.Cu").map((x) => x.name), ["B", "A"]);
 });
+
+test("names sort as ValueStringCompare sorts them; the netclass filter reads the effective class's name (r2-pcb-edit B3, B4)", () => {
+  assert.deepEqual(netInspectorRows([row("D10"), row("D2")], DEFAULT_NET_INSPECTOR_OPTIONS).map((r) => r.name), ["D2", "D10"]);
+  const multi = row("X", { netclass: "A and B", netclass_name: "Effective for net: X" });
+  const opts = { ...DEFAULT_NET_INSPECTOR_OPTIONS, filter: "and", filterByNetName: false };
+  assert.equal(netShown(multi, opts), false, "the column's 'A and B' is not what the filter reads");
+  assert.equal(netShown(multi, { ...opts, filter: "effective" }), true);
+});

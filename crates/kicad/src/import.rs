@@ -314,6 +314,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     // KiCad 10's via stitchings (`(generated (type via_stitch) ..)`), their members named by the ids the vias have just been given.
     crate::via_stitch_io::attach(&mut design, root, &mut refs);
+    // `(generated ..)`: the tuning patterns, named by the same file uuids -- before the groups, which may hold one.
+    crate::pcb_generated::attach_patterns(&mut design, root, &mut refs);
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
     // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
     let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
@@ -326,8 +328,6 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         dr.locked_ids = locked_ids;
         dr.assign_missing_ids();
     }
-    // `(generated ..)`: the tuning patterns, named by the same file uuids.
-    crate::pcb_generated::attach_patterns(&mut design, root, &refs);
     let mut model = ConstraintModel { schema: eda_model::INTENT_SCHEMA_VERSION,
         parts,
         nets,
@@ -1631,6 +1631,22 @@ fn import_footprints(
         let mut extra = footprint_extra_header(fp, &reference, file_version);
         // The Reference and Value text as the file has it, the user fields and the attributes; the pad offsets and margins join below.
         let mut edit = crate::fp_fields::parse_footprint_edit_in(fp, &reference, value.as_deref(), side, rot, file_version);
+        // The places of the footprint's own items by file uuid, for the footprint's groups (`FootprintExtra::groups`).
+        let mut slots: BTreeMap<String, String> = crate::fp_art_io::art_slots(fp, side).into_iter().collect();
+        for item in fp.iter().filter_map(Sexpr::as_list) {
+            let name = match sexpr::tag(item) {
+                Some("property") => sexpr::txt(item, 1).map(str::to_string),
+                Some("fp_text") => match sexpr::txt(item, 1) {
+                    Some("reference") => Some("Reference".to_string()),
+                    Some("value") => Some("Value".to_string()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let (Some(name), Some(u)) = (name, import_items::item_uuid(item)) {
+                slots.insert(u, format!("field:{name}"));
+            }
+        }
         // A footprint with no `(attr ..)` has no attributes (`parseFOOTPRINT_unchecked`: `attributes` starts at 0), not the ones its pads would give a footprint made here; a
         // file before 20200826 meant through-hole by it (`if( m_requiredVersion < 20200826 && attributes == 0 ) attributes |= FP_THROUGH_HOLE;`).
         if edit.attrs.is_none() {
@@ -1672,6 +1688,7 @@ fn import_footprints(
                 pins.push(Pin { number: p.number.clone(), name: None, kind: PinKind::Signal });
             }
             if let Some(u) = import_items::item_uuid(pad) {
+                slots.insert(u.clone(), format!("pad:{}#{}", p.number, pads.iter().filter(|q| q.number == p.number).count() + 1));
                 notes.item_ids.entry(u).or_insert_with(|| format!("{reference}.{}", p.number));
             }
             pads.push(p);
@@ -1702,6 +1719,21 @@ fn import_footprints(
         // geometry, so `model.footprint_of` -- a plain name lookup with no
         // side of its own to disambiguate by -- still resolves to the right
         // one for every instance.
+        // A courtyard item is written as the file had it, its uuid with it.
+        for item in &extra.courtyard_items {
+            if let Ok(Sexpr::List(l)) = crate::sexpr::parse(item) {
+                if let Some(u) = import_items::item_uuid(&l) {
+                    slots.insert(u.clone(), format!("uuid:{u}"));
+                }
+            }
+        }
+        // The footprint's own groups (`resolveGroups` makes them like a board's), each member by its place; a member that is not one of those is left out.
+        for g in sexpr::find_all(fp, "group") {
+            let members: Vec<String> = sexpr::find(g, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).filter_map(|u| slots.get(u).cloned()).collect()).unwrap_or_default();
+            if !members.is_empty() {
+                extra.groups.push(eda_model::ir::FootprintGroup { name: sexpr::txt(g, 1).unwrap_or_default().to_string(), locked: import_items::is_locked(g), members });
+            }
+        }
         extras.push(extra);
         if !edit.is_empty() {
             edits.push(edit);

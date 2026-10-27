@@ -380,6 +380,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   are routed keeps the routing; Duplicate and Paste are one undo step with the drop, and Escape leaves nothing, not even a redo entry (`crates/cli/src/carry.rs`).
 - Missing: a copy keeps the original's nets, so `--strict` refuses moving it away (paste it, or untick Strict); under `--strict` an edit that breaks a net that was complete is still refused (`routing_connectivity`) where KiCad
   shows a ratsnest line; a footprint's box lacks the silkscreen and fab graphics beyond the courtyard and the fab body until they are on the board (item 25).
+- Done 2026-10-27 (`task-r2-pcb-edit`, `PARITY-pcb.md` section 55, the round-2 findings `r2-pcb-edit`): Delete inside a lone zone's cutout removes the cutout; Copy and Cut take every item kind (a field as a free
+  text, a pad in a footprint of its own, barcodes, points, text boxes, images, tables) and Cut deletes only what the copy put on the clipboard; Paste, Duplicate and Create Array land text boxes and images; a rounded
+  rectangle turned by a non-quarter angle keeps its rounded corners; Flip follows front/back user layer pairs; Mirror takes fields and points; Escape or Undo with a shape started keeps the drawing tool; a plain-text
+  Paste is KiCad's text; Track & Via Properties works on the selection; Position Relative remembers; R right after M turns about the drag origin.
+- Missing (2026-10-27): Mirror of a text box, an image and a tuning pattern; a footprint's own drawings on a user layer keep it when the footprint flips; Create Array and Repeat Layout turn a rounded rectangle as
+  four corners; the Properties panel refuses a zero width or size KiCad takes (A7) and its footprint rows are not `FOOTPRINT_DESC`'s (A6); Track & Via Properties lacks the via's layer pair, solder mask and backdrill rows.
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcb_control.cpp` (`Paste`, `placeBoardItems`), `common/dialogs/dialog_paste_special.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are editable objects
@@ -558,7 +564,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Group Properties are `SchCmd` verbs (one undo step each) with the studio's whole-group selection, Enter and Leave Group, window and crossing boxes, the Grouping and Enter Group entries of the context menu, the group's box and name, Properties on a group, and Move, Drag, Rotate, Mirror (a lone group turns on itself), Lock,
   Delete, Copy, Cut, Paste and Duplicate taking the whole tree; what is made while a group is entered joins it; `(group "name" (uuid ..) (members ..))` is written as `saveGroup` writes it and read back (the writer names every item's uuid for it). 7 model, 23 ops, 8 kicad (one slow: kicad-cli loads nested groups, runs ERC, `sch upgrade` keeps them), 1 cli and 12 `node --test` cases;
   `web/studio/e2e/sch-groups.check.js` (thirteen scenarios through `window.__eda`).
-- Missing: what the router commits is not made in the entered group (package P5); no groups in the footprint editor. (Create Array copies groups: `array.rs` uses `collect_copies`, PARITY-pcb.md section 17.) On the sheet: Reorganize into Module Sheets drops the groups of the sheets it takes items out of; a lone group's turn point counts a text or a label by its anchor; Group Properties does not take the view to a row's item; the Align and Distribute verbs are not group-aware.
+- Done 2026-10-27 (`task-r2-pcb-edit`): a group of one is kept on import, Paste, Duplicate and Create Array; a group's lock is read back; a tuning pattern is a member both ways; a footprint's own groups are kept
+  (`FootprintExtra::groups`); Group Items locks the group of a locked item and leaves pads and fields out; Group Properties has Locked and takes any library link (`LIB_ID::Parse( .., true )` never fails); text boxes,
+  barcodes, images and generators are groupable.
+- Missing: what the router commits is not made in the entered group (package P5); no groups in the footprint editor; the `group` verb used by itself nests a group made of items that share a group into it (KiCad does that
+  only with the group entered, which the studio sends as `in_group`). (Create Array copies groups: `array.rs` uses `collect_copies`, PARITY-pcb.md section 17.) On the sheet: Reorganize into Module Sheets drops the groups of the sheets it takes items out of; a lone group's turn point counts a text or a label by its anchor; Group Properties does not take the view to a row's item; the Align and Distribute verbs are not group-aware.
 - Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
 
 ### 18. Appearance and display options
@@ -920,8 +930,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Graphics Properties reaches dimensions, lists every board layer and has "Set to layer (and dimension) default values" (section 13). Still open there: microvias and the annular-ring and IPC-4761 presets (a via has no
   padstack here); of text and graphics the footprint reference, value, other-field, text, graphic and dimension scopes, the two "By parent ..." filters, bold, italic, font, keep upright, visible and "center text on footprint"
   (a footprint's own text is not an item of the board until package P1). Rule areas: multi-layer rule areas, `(disallow ...)` rules on non-keepout items, `DRCE_TEXT_ON_EDGECUTS` (section 14). Teardrops: curved edges,
-  rectangular and non-circular pad anchors, track-to-track, two-segment borrowing, `m_TdOnPadsInZones`, incremental updates (section 15). Dimensions: a leader's text border, manual text position,
-  Rotate/Flip of a dimension (section 18). The Draw Zone Fill Fracture Borders / Triangulation debug modes draw strokes only (the triangulation is an earcut port without KiCad's Z-order hash); Flip Board View mirrors text on
+  rectangular and non-circular pad anchors, track-to-track, two-segment borrowing, `m_TdOnPadsInZones`, incremental updates (section 15). Dimensions: a leader's text border, manual text position
+  (section 18; Rotate/Flip of a dimension is done). The Draw Zone Fill Fracture Borders / Triangulation debug modes draw strokes only (the triangulation is an earcut port without KiCad's Z-order hash); Flip Board View mirrors text on
   non-side-specific layers with the board where KiCad keeps it readable; Automatically select track width does not turn off when a width is picked in the toolbar and the first width key while routing
   does not set `m_TempOverrideTrackWidth` (`PARITY-boardctl.md`).
 

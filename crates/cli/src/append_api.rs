@@ -112,6 +112,9 @@ pub fn reference_point(clip: &Clipboard) -> Point {
             ClipRef::Text(i) => (4, i),
             ClipRef::Dimension(i) => (5, i),
             ClipRef::Footprint(i) => (6, i),
+            ClipRef::Barcode(i) => (7, i),
+            ClipRef::TextBox(i) => (8, i),
+            ClipRef::Image(i) => (9, i),
             ClipRef::Group(_) => return None,
         })
     };
@@ -172,12 +175,36 @@ pub fn reference_point(clip: &Clipboard) -> Point {
             consider(f.at);
         }
     }
+    for (i, b) in clip.barcodes.iter().enumerate() {
+        if free(7, i) {
+            consider(b.at);
+        }
+    }
+    for (i, t) in clip.text_boxes.iter().enumerate() {
+        if free(8, i) {
+            consider(text_box_position(t));
+        }
+    }
+    for (i, m) in clip.images.iter().enumerate() {
+        if free(9, i) {
+            consider(m.at);
+        }
+    }
+    // (a point is in no group, `IsGroupableType`)
+    for q in &clip.points {
+        consider(q.at);
+    }
     for gi in (0..clip.groups.len()).filter(|gi| !held_groups.contains(gi)) {
         if let Some(p) = group_position(clip, gi) {
             consider(p);
         }
     }
     best.unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO })
+}
+
+/// `EDA_SHAPE::getPosition` of a text box: a polygon's first corner, a rectangle's start.
+fn text_box_position(t: &eda_model::pcb_items::TextBox) -> Point {
+    t.pts.first().copied().unwrap_or(t.start)
 }
 
 /// `PCB_TRACK::GetPosition` is the start; `PCB_ARC::GetPosition` the centre of the arc.
@@ -242,6 +269,9 @@ fn collect_group(clip: &Clipboard, group: usize, out: &mut Vec<Point>, seen: &mu
             ClipRef::Text(i) => out.extend(clip.texts.get(i).map(|t| t.at)),
             ClipRef::Dimension(i) => out.extend(clip.dimensions.get(i).map(|d| d.start)),
             ClipRef::Footprint(i) => out.extend(clip.footprints.get(i).map(|f| f.at)),
+            ClipRef::Barcode(i) => out.extend(clip.barcodes.get(i).map(|b| b.at)),
+            ClipRef::TextBox(i) => out.extend(clip.text_boxes.get(i).map(text_box_position)),
+            ClipRef::Image(i) => out.extend(clip.images.get(i).map(|m| m.at)),
             ClipRef::Group(i) => collect_group(clip, i, out, seen),
         }
     }

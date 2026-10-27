@@ -2274,11 +2274,11 @@ pub struct Dimension {
     pub override_text: Option<String>,
     pub units: DimensionUnits,
     pub units_format: DimensionUnitsFormat,
-    /// Decimal places, 0-5. A flat count -- source's own `DIM_PRECISION`
-    /// also has four unit-dependent "V_VVV"-style levels (fewer decimals
-    /// for mm than inch at the "same" precision); not ported, since a
-    /// fixed decimal count covers the overwhelming majority of real
-    /// dimensioned drawings and keeps one precision concept instead of two.
+    /// KiCad's `DIM_PRECISION`: 0-5 (`X` .. `X_XXXXX`) are that many
+    /// decimals; 6-9 (`V_VV` .. `V_VVVVV`) are unit-dependent levels whose
+    /// decimals `PCB_DIMENSION_BASE::GetValueText` works out from the units
+    /// (inch `p - 4`, mils `max(0, p - 7)`, mm `p - 5`), see
+    /// `eda_connectivity::dimension::decimals`.
     pub precision: u8,
     pub suppress_trailing_zeros: bool,
     pub text_position: DimensionTextPosition,
@@ -2441,7 +2441,8 @@ impl Default for DimensionSettings {
             stroke_width: Nm::new(200_000),
             arrow_length: Nm::new(arrow_length),
             extension_offset: Nm::new(500_000), // 0.5mm
-            extension_height: Nm::kiround(arrow_length as f64 * 27.5f64.to_radians().sin()),
+            // `static_cast<int>( m_arrowLength * s_arrowAngle.Sin() )`: truncated, not rounded.
+            extension_height: Nm::new((arrow_length as f64 * 27.5f64.to_radians().sin()) as i64),
         }
     }
 }
@@ -2961,6 +2962,18 @@ pub struct FootprintAuxPad {
     pub net: String,
 }
 
+/// A group inside a footprint ([`FootprintExtra::groups`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintGroup {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
+    /// Each member by its place: `art:<i>` / `arttext:<i>` (the footprint's i-th graphic / user text, `Footprint::art`), `pad:<number>#<k>` (the k-th pad
+    /// with that number), `field:<name>` (Reference, Value or a user field), `uuid:<u>` (an item the file's text is kept for as it was, a courtyard item).
+    pub members: Vec<String>,
+}
+
 /// See [`DrawingsSection::footprint_extras`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3025,6 +3038,11 @@ pub struct FootprintExtra {
     /// them: the derived schematic's symbols have uuids of their own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tokens: Vec<String>,
+    /// The footprint's own groups (`(group ..)` inside the `(footprint ..)`: `resolveGroups` keeps them, members the footprint's own items), each member named
+    /// by its place in the footprint ([`FootprintGroup::members`]); written back while the part is on the footprint they were read from ([`Self::source_name`]).
+    /// Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<FootprintGroup>,
     /// The courtyard graphics as the file wrote them (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`, `fp_curve` on `F.CrtYd` or `B.CrtYd`), in file order. The checks here
     /// work from the outlines made of them (`Footprint::courtyard_outlines`), but a courtyard of four lines, or a circle, is not one polygon, and a footprint on the board whose
     /// courtyard is no longer the library's does not match the library's copy (`lib_footprint_mismatch`): these are written back, in place of the polygons, while the part is

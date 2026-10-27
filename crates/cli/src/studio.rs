@@ -1199,6 +1199,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
+            // KiCad's orientation (`FOOTPRINT::GetOrientationDegrees`, the file's angle): a back footprint made or flipped here is half a turn from `-rot`.
+            p["orientation"] = json!(eda_kicad::kicad_footprint_orientation(&design, fp) as f64 / 1000.0);
             p["side"] = json!(if fp.side == Side::Bottom { "bottom" } else { "top" });
             p["label"] = json!(match fp.label {
                 LabelSide::Above => "above",

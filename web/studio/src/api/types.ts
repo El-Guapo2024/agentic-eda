@@ -284,6 +284,9 @@ export interface Part {
   // Present only when `placed` is true:
   at?: [Nm, Nm];
   rot?: Degrees;
+  /** KiCad's orientation (`FOOTPRINT::GetOrientationDegrees`, counter-clockwise, in (-180, 180]): the file's angle, half a turn from `-rot` for a back footprint
+   * made or flipped here (`eda_kicad::kicad_footprint_orientation`). Absent from an older backend: read it with `fpOrientation`. */
+  orientation?: Degrees;
   side?: Side;
   label?: LabelSide;
   /** The box of the courtyard the board file has, board space (`eda_model::footprint::placed_courtyard_box`): an off-centre courtyard stays off-centre. */

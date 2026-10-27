@@ -534,6 +534,32 @@ fn edit_tracks_and_vias_net_class_resolves_each_items_own_net() {
     assert_eq!(widths["SLOW"], m.board.track_width, "SLOW has no class, so it falls back to the board default");
 }
 
+/// r2-pcb-edit C3: "Set to net class / custom rule values" is `PCB_EDIT_FRAME::SetTrackSegmentWidth( .., true )`: the width the DRC engine's
+/// `TRACK_WIDTH_CONSTRAINT` gives the item (its opt, else its min), so a custom rule wins over the class and a net of a diff pair takes the class's diff-pair
+/// width (`drc_engine.cpp`'s `A.hasExactNetclass(..) && A.inDiffPair('*')` rule); a via its `VIA_DIAMETER_CONSTRAINT` and `HOLE_SIZE_CONSTRAINT`.
+#[test]
+fn edit_tracks_and_vias_net_class_takes_the_diff_pair_width_and_custom_rules() {
+    let mut m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[("USB_P", &["U1"]), ("USB_N", &["U2"]), ("VBUS", &["U1"])], vec![]);
+    m.board.net_classes = vec![eda_model::NetClass { name: "HS".into(), nets: vec!["USB_P".into(), "USB_N".into()], track_width: Some(mm(0.2)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(mm(0.12)), diff_pair_gap: Some(mm(0.15)), diff_pair_via_gap: None, priority: 0 }];
+    m.board.custom_rules_text = Some("(version 1)\n(rule w\n  (condition \"A.NetName == 'VBUS'\")\n  (constraint track_width (opt 0.5mm)))\n(rule v\n  (condition \"A.NetName == 'VBUS'\")\n  (constraint via_diameter (opt 0.9mm))\n  (constraint hole_size (opt 0.4mm)))\n".into());
+    let mut b = board(&m);
+    for (i, net) in ["USB_P", "USB_N", "VBUS"].iter().enumerate() {
+        let y = mm(i as f64 * 2.0);
+        b.apply(&Cmd::AddTrack { net: (*net).into(), layer: "F.Cu".into(), width: mm(0.3), pts: vec![Point { x: Nm::ZERO, y }, Point { x: mm(5.0), y }] }).unwrap();
+    }
+    b.apply(&Cmd::AddVia { net: "VBUS".into(), x: mm(8.0), y: mm(4.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    let rt = b.design().routing.as_ref().unwrap();
+    let mut ids: Vec<String> = rt.tracks.iter().map(|t| t.id.clone()).collect();
+    ids.push(rt.vias[0].id.clone());
+    b.apply(&Cmd::EditTracksAndVias { ids, track_width: Some(SizeSpec::NetClass), via_size: Some(ViaSizeSpec::NetClass), layer: None }).unwrap();
+    let rt = b.design().routing.as_ref().unwrap();
+    let widths: std::collections::BTreeMap<String, Nm> = rt.tracks.iter().map(|t| (t.net.clone(), t.width)).collect();
+    assert_eq!(widths["USB_P"], mm(0.12), "a diff pair's net takes the class's diff-pair width");
+    assert_eq!(widths["USB_N"], mm(0.12));
+    assert_eq!(widths["VBUS"], mm(0.5), "the custom rule's opt");
+    assert_eq!((rt.vias[0].diameter, rt.vias[0].drill), (mm(0.9), mm(0.4)));
+}
+
 #[test]
 fn edit_tracks_and_vias_refuses_empty_ids_and_bad_explicit_values() {
     let m = net_model();

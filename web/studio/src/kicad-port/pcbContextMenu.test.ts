@@ -472,3 +472,16 @@ test("a table (not its cells), or cells with something else selected, get none o
   const hand = actions(sel({ tableCells: 1 }), ctx({ moving: true }));
   assert.ok(hand.includes(A.selectColumns) && !hand.includes(A.addRowAbove) && !hand.includes(A.deleteColumns) && !hand.includes(A.exportTableCSV));
 });
+
+test("a lone field or text box gets Mirror / Rotate and Copy as Text, and no Net Inspection Tools (r2-pcb-edit B1, B2)", () => {
+  for (const kind of ["field", "textbox"] as const) {
+    const nodes = pcbSelectionMenu(sel({ total: 1, others: { [kind]: 1 } }));
+    const titles = outline(nodes);
+    assert.ok(titles.includes("Mirror / Rotate >"), `${kind}: ${titles.join(", ")}`);
+    assert.ok(!titles.includes("Net Inspection Tools >"), `${kind}: ${titles.join(", ")}`);
+    assert.ok(actions(sel({ total: 1, others: { [kind]: 1 } })).includes(A.copyAsText), kind);
+  }
+  assert.ok(!outline(pcbSelectionMenu(sel({ total: 1, others: { barcode: 1 } }))).includes("Net Inspection Tools >"), "a barcode has no net menu");
+  assert.ok(actions(sel({ tables: 1 })).includes(A.copyAsText), "a table copies as text");
+  assert.ok(outline(pcbSelectionMenu(sel({ tracks: 1 }))).includes("Net Inspection Tools >"), "a track still has it");
+});

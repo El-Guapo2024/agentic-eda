@@ -218,8 +218,16 @@ fn prop_delay_range(list: &[Sexpr], key: &str) -> TargetRange {
 
 /// The tuning patterns of the board file `root`, their members named by the file's uuid: `track_ids` maps the uuid of a track the importer made to
 /// its id in the design. A generator of another kind, and a pattern none of whose members is a track of the board, is left out.
+#[cfg(test)]
 pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, String>) -> Vec<TuningPattern> {
+    import_patterns_with_refs(root, track_ids).0
+}
+
+/// [`import_patterns`] with each pattern's file uuid and lock, in the same order: a `(group ..)` names a tuning pattern by its uuid (`resolveGroups` takes
+/// generators as members, `groupTypeObjects`), and `(locked yes)` is the pattern's lock.
+pub(crate) fn import_patterns_with_refs(root: &[Sexpr], track_ids: &BTreeMap<String, String>) -> (Vec<TuningPattern>, Vec<crate::import_items::ItemRef>) {
     let mut out = Vec::new();
+    let mut refs = Vec::new();
     for g in sexpr::find_all(root, "generated") {
         if prop_str(g, "type") != Some("tuning_pattern") {
             continue;
@@ -265,18 +273,20 @@ pub(crate) fn import_patterns(root: &[Sexpr], track_ids: &BTreeMap<String, Strin
             last_status: prop_str(g, "last_status").unwrap_or("tuned").to_string(),
             member_ids: members,
         });
+        refs.push(crate::import_items::ItemRef { uuid: prop_str(g, "uuid").map(str::to_string), locked: prop_bool(g, "locked").unwrap_or(false), ..Default::default() });
     }
-    out
+    (out, refs)
 }
 
 /// The patterns of an imported design: [`import_patterns`] with the tracks the importer made (`refs.tracks[i]` is the file uuid of the design's `i`th track).
-pub(crate) fn attach_patterns(design: &mut Design, root: &[Sexpr], refs: &crate::import_items::Refs) {
+pub(crate) fn attach_patterns(design: &mut Design, root: &[Sexpr], refs: &mut crate::import_items::Refs) {
     let Some(rt) = &design.routing else { return };
     let ids: BTreeMap<String, String> = refs.tracks.iter().zip(&rt.tracks).filter_map(|(r, t)| Some((r.uuid.clone()?, t.id.clone()))).collect();
-    let patterns = import_patterns(root, &ids);
+    let (patterns, pattern_refs) = import_patterns_with_refs(root, &ids);
     if patterns.is_empty() {
         return;
     }
+    refs.patterns = pattern_refs;
     let dr = design.drawings.get_or_insert_with(Default::default);
     dr.tuning_patterns = patterns;
     dr.assign_missing_ids();

@@ -626,15 +626,15 @@ fn linking_the_selection_to_a_block_groups_it_or_links_the_group_and_group_prope
     b.apply(&link(&[&plain.id], "Mine:Pair")).unwrap();
     let g = groups_of(b.design(), "power.kicad_sch").into_iter().find(|g| g.id == plain.id).unwrap();
     assert_eq!((g.name.as_str(), g.design_block.as_str()), ("", "Mine:Pair"));
-    // Group Properties' "Library link:" box: change, keep, clear, refuse
+    // Group Properties' "Library link:" box: change, keep, clear, and a name with no library taken as it is (`LIB_ID::Parse( text, true )` never fails)
     let edit = |design_block: Option<&str>| on("sp", Cmd::SchEdit(SchCmd::EditGroup { id: plain.id.clone(), name: "pair".into(), member_ids: g.member_ids.clone(), design_block: design_block.map(str::to_string) }));
     b.apply(&edit(Some("Mine:Other"))).unwrap();
     let link_now = |b: &Board<'_>| groups_of(b.design(), "power.kicad_sch").into_iter().find(|x| x.id == plain.id).unwrap().design_block;
     assert_eq!(link_now(&b), "Mine:Other");
     b.apply(&edit(None)).unwrap();
     assert_eq!(link_now(&b), "Mine:Other");
-    let refused = b.apply(&edit(Some("broken"))).unwrap_err();
-    assert_eq!((refused[0].check.as_str(), refused[0].location.clone().unwrap_or_default()), ("ops_bad_group", plain.id.clone()));
+    b.apply(&edit(Some("broken"))).unwrap();
+    assert_eq!(link_now(&b), "broken");
     b.apply(&edit(Some(""))).unwrap();
     assert_eq!(link_now(&b), "");
     // an id that is no item of the sheet, and a link that is no id

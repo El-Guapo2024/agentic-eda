@@ -192,22 +192,64 @@ export function newFieldLayout(part: Part): FieldLayoutCmd {
  * `DIALOG_PAD_PROPERTIES::padValuesOK` for the values the board's pad dialog edits: messages in the dialog's words, in its order, or null when the pad can be
  * made. `pad` is what the dialog holds.
  */
-export function checkPadValues(pad: { kind: string; shape: string; size: [Nm, Nm]; drill?: Nm | null; slot?: [Nm, Nm] | null; ratio?: number | null; pasteRatio?: number | null }, fmt: (um: Nm) => string): string | null {
-  // `PAD::doCheckPad`: "(Pad must have a positive size)"; `CheckPad`: a through-hole pad with no hole, "(PTH pad hole leaves no copper)".
-  if (pad.size[0] <= 0 || (pad.shape !== "circle" && pad.size[1] <= 0)) return "Error: (Pad must have a positive size)";
-  const hole = pad.kind !== "smd";
-  if (hole) {
-    const round = pad.slot == null;
-    if (round && (pad.drill ?? 0) <= 0) return "Error: Through hole pad has no hole.";
-    if (!round && ((pad.slot?.[0] ?? 0) <= 0 || (pad.slot?.[1] ?? 0) <= 0)) return "Error: Through hole pad has no hole.";
-    const [hw, hh] = round ? [pad.drill ?? 0, pad.drill ?? 0] : (pad.slot as [Nm, Nm]);
-    const [pw, ph] = pad.shape === "circle" ? [pad.size[0], pad.size[0]] : pad.size;
-    // A plated hole needs copper around it; a non-plated one may be as big as its pad.
-    if (pad.kind === "through_hole" && (hw >= pw || hh >= ph)) return `Error: (PTH pad hole leaves no copper): the ${fmt(Math.max(hw, hh))} hole is as big as the pad.`;
+type PadValues = { kind: string; shape: string; size: [Nm, Nm]; drill?: Nm | null; slot?: [Nm, Nm] | null; ratio?: number | null; pasteRatio?: number | null };
+
+/** Whether the point (x, y) lies in the stadium of width `w` and height `h` centred on the origin (a hole: `GetEffectiveHoleShape`). */
+function inStadium(x: number, y: number, w: number, h: number): boolean {
+  const r = Math.min(w, h) / 2;
+  const half = Math.max(w, h) / 2 - r;
+  const [a, b] = w >= h ? [x, y] : [y, x];
+  const dx = Math.max(Math.abs(a) - half, 0);
+  return dx * dx + b * b <= r * r + 1e-6;
+}
+
+/** Points round the outline of the stadium `w` x `h` centred on the origin (a circle when `w == h`). */
+function stadiumOutline(w: number, h: number): number[][] {
+  const r = Math.min(w, h) / 2;
+  const half = Math.max(w, h) / 2 - r;
+  const out: number[][] = [];
+  for (let i = 0; i < 32; i++) {
+    const a = (i / 32) * 2 * Math.PI;
+    const along = Math.cos(a) * r + (Math.cos(a) >= 0 ? half : -half);
+    const across = Math.sin(a) * r;
+    out.push(w >= h ? [along, across] : [across, along]);
   }
-  if (pad.shape === "round_rect" && pad.ratio != null && (pad.ratio < 0 || pad.ratio > 0.5)) return "Corner radius ratio must be between 0 and 50%.";
-  if (pad.pasteRatio != null && (pad.pasteRatio < -0.5 || pad.pasteRatio > 1)) return "Solder paste ratio must be between -50% and 100%.";
-  return null;
+  return out;
+}
+
+/**
+ * `DIALOG_PAD_PROPERTIES::padValuesOK` over `PAD::doCheckPad( .., aForPadProperties = true )`: the errors (`DRCE_PADSTACK_INVALID`, `DRCE_PAD_TH_WITH_NO_HOLE`)
+ * keep the dialog open; the warnings (`DRCE_PADSTACK`, "Warning: " in front) are shown and the pad is applied. "(PTH pad hole leaves no copper)" is a pad the hole
+ * covers whole, "(PTH pad hole not fully inside copper)" a hole that pokes out of the pad (the hole's stadium against the pad's outline, the hole centred; a rounded
+ * or chamfered corner is taken as square). KiCad has no message of its own for the corner and the paste ratios (the dialog clamps them).
+ */
+export function padCheck(pad: PadValues, fmt: (um: Nm) => string): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (pad.size[0] <= 0 || (pad.shape !== "circle" && pad.shape !== "custom" && pad.size[1] <= 0)) errors.push("Error: (Pad must have a positive size)");
+  if (pad.kind !== "smd") {
+    const round = pad.slot == null;
+    const [hw, hh] = round ? [pad.drill ?? 0, pad.drill ?? 0] : (pad.slot as [Nm, Nm]);
+    // `CheckPad`: `DRCE_PAD_TH_WITH_NO_HOLE` for a plated or non-plated pad without a hole
+    if (hw <= 0 || hh <= 0) errors.push("Error: Through hole pad has no hole.");
+    else {
+      const MIN_DRILL = 4;
+      if (hw <= MIN_DRILL || hh <= MIN_DRILL) errors.push(`Error: (PTH pad hole size must be larger than ${fmt(MIN_DRILL)})`);
+      const [pw, ph] = pad.shape === "circle" ? [pad.size[0], pad.size[0]] : pad.size;
+      if (pad.kind === "through_hole") {
+        // the pad's outline inside the hole: nothing of the copper is left
+        const padIn = (pad.shape === "circle" || pad.shape === "oval" ? stadiumOutline(pw, ph) : [[pw / 2, ph / 2], [pw / 2, -ph / 2], [-pw / 2, ph / 2], [-pw / 2, -ph / 2]]).every(([x, y]) => inStadium(x!, y!, hw, hh));
+        if (padIn) warnings.push("Warning: (PTH pad hole leaves no copper)");
+        else if (pad.shape === "circle" ? Math.max(hw, hh) > pw : hw > pw || hh > ph) warnings.push("Warning: (PTH pad hole not fully inside copper)");
+      }
+    }
+  }
+  return { errors, warnings };
+}
+
+/** The first error [`padCheck`] finds, or null (the warnings do not stop the dialog). */
+export function checkPadValues(pad: PadValues, fmt: (um: Nm) => string): string | null {
+  return padCheck(pad, fmt).errors[0] ?? null;
 }
 
 /**
