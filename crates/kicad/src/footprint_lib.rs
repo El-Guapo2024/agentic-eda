@@ -67,7 +67,10 @@ pub fn find_footprint_file(lib_root: &Path, lib_id: &str) -> Option<PathBuf> {
 /// four hand-editable features, plus roundrect ratio), and a courtyard
 /// from `F.CrtYd`/`B.CrtYd` graphics.
 pub fn parse_footprint_file(text: &str, name: &str) -> Result<Footprint, String> {
-    let tree = sexpr::parse(text).map_err(|e| format!("not a valid s-expression file: {e}"))?;
+    let mut tree = sexpr::parse(text).map_err(|e| format!("not a valid s-expression file: {e}"))?;
+    // KiCad 10's bold text, whose thickness is the width before the bold factor: `parseEDA_TEXT` widens it back for a footprint file of version
+    // 20260826 or later, the footprint's own `(version ..)` (`parseFOOTPRINT_unchecked`'s `m_requiredVersion`). See `bold_text`.
+    crate::bold_text::normalize(&mut tree);
     let root = tree.as_list().filter(|l| sexpr::tag(l) == Some("footprint")).ok_or("top-level form is not (footprint ...); not a KiCad footprint file")?;
 
     // A bare footprint file has no board placement, so its own `(at ...)`
@@ -635,6 +638,21 @@ mod tests {
         assert_eq!(hh, mm(5.0));
 
         assert!(fp.validate().is_empty(), "{:?}", fp.validate());
+    }
+
+    /// `parseEDA_TEXT`: `if( m_requiredVersion < 20260826 ) aText->MigrateLegacyBoldStrokeWidth();`, and a footprint file's own `(version ..)`
+    /// sets that version (`parseFOOTPRINT_unchecked`'s `m_requiredVersion = std::max( m_requiredVersion, this_version )`). A 20261017 file's bold
+    /// `(thickness 0.125)` is the width before the bold factor, so every reader here -- which has the older meaning -- must see 0.2 mm.
+    #[test]
+    fn a_kicad_11_footprint_files_bold_text_keeps_its_width() {
+        let text = r#"(footprint "X" (version 20261017) (generator "pcbnew") (layer "F.Cu")
+            (fp_text user "X" (at 0 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.125) (bold yes))))
+            (fp_text user "Y" (at 0 2) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.125))))
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))"#;
+        let fp = parse_footprint_file(text, "X").expect("parses");
+        let by = |t: &str| fp.art.texts.iter().find(|x| x.text == t).expect("the text");
+        assert_eq!((by("X").layout.thickness, by("X").layout.bold), (mm(0.2), true), "a bold text of a 20260826+ file keeps the width KiCad drew");
+        assert_eq!(by("Y").layout.thickness, mm(0.125), "a text that is not bold is left as it is");
     }
 
     #[test]

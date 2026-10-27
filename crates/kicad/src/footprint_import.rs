@@ -69,7 +69,10 @@ fn layer_of(item: &[Sexpr]) -> String {
 
 /// Parse a `.kicad_mod` file (`(footprint "Name" ...)`, or the KiCad 6 `(module ...)`).
 pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
-    let tree = sexpr::parse(text).map_err(|e| format!("not a valid s-expression file: {e}"))?;
+    let mut tree = sexpr::parse(text).map_err(|e| format!("not a valid s-expression file: {e}"))?;
+    // KiCad 10's bold text, whose thickness is the width before the bold factor: `parseEDA_TEXT` widens it back for a footprint file of version
+    // 20260826 or later, the footprint's own `(version ..)` (`parseFOOTPRINT_unchecked`'s `m_requiredVersion`). See `bold_text`.
+    crate::bold_text::normalize(&mut tree);
     let root = tree.as_list().filter(|l| matches!(sexpr::tag(l), Some("footprint") | Some("module"))).ok_or("the top-level form is not (footprint ...); not a KiCad footprint file")?;
     let name = sexpr::txt(root, 1).ok_or("the footprint has no name")?;
     let mut warnings = Vec::new();
@@ -527,6 +530,18 @@ mod tests {
         assert_eq!((t.content.as_str(), t.angle, t.size_nm, t.stroke_width, t.justify, t.mirror), ("hello", 90_000, mm(1.0), mm(0.15), TextJustify::Left, true));
         assert!(back.courtyard.is_some(), "the F.CrtYd circle gives a courtyard box");
         assert!(back.pads.iter().all(|p| !p.id.is_empty()) && back.graphics.iter().all(|g| !g.id().is_empty()));
+    }
+
+    /// As [`crate::footprint_lib::parse_footprint_file`] (the test there): the Footprint Editor's reader is gated by the footprint file's own
+    /// `(version ..)` too (`parseEDA_TEXT`'s `m_requiredVersion < 20260826`), so a 20261017 bold `(thickness 0.125)` is the older 0.2 mm.
+    #[test]
+    fn a_kicad_11_footprint_files_bold_text_keeps_its_width() {
+        let text = r#"(footprint "X" (version 20261017) (generator "pcbnew") (layer "F.Cu")
+            (fp_text user "X" (at 0 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.125) (bold yes))))
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))"#;
+        let fp = parse_library_footprint(text).expect("parses").footprint;
+        assert_eq!(fp.texts.len(), 1);
+        assert_eq!(fp.texts[0].stroke_width, mm(0.2), "the width KiCad 10 drew, which the writer's older file version means");
     }
 
     #[test]
