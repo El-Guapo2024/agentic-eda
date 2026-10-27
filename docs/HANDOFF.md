@@ -71,6 +71,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r3-sch-files` | Round-3 schematic findings, slices B (sheets and the `.kicad_sch` files) and D (clipboard, Annotate, ERC data): PARITY-sch section 45 | B3: 1/1 high, 6/6 medium, 3/3 low; D3: 1/1 high, 5/6 medium fixed + D3-M2 not a bug, 5/5 low | the Properties panel's sheet file text; per-path power references of a shared screen |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
