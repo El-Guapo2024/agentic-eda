@@ -100,14 +100,18 @@ fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
 }
 
 #[test]
-fn mask_paste_text_defaults_and_severities_validate_and_apply() {
+fn mask_paste_text_defaults_and_severities_apply() {
     let base = model();
     let mut b = Board::new(design(), &base, mm(0.1), mm(0.3));
 
     let mask = MaskPaste { expansion_nm: mm(0.05), min_width_nm: mm(0.1), to_copper_clearance_nm: mm(0.04), paste_margin_nm: mm(-0.05), paste_margin_ratio: -0.05, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true };
     b.apply(&Cmd::SetMaskPaste { settings: mask.clone() }).unwrap();
     assert_eq!(effective(&b, &base).board.solder_mask, mask);
-    assert!(b.apply(&Cmd::SetMaskPaste { settings: MaskPaste { paste_margin_ratio: 2.0, ..mask } }).is_err(), "a paste ratio is within -100% .. 100%");
+    // `PANEL_SETUP_MASK_AND_PASTE::TransferDataFromWindow` validates nothing: it stores the values and returns true. (The mask and paste
+    // ranges `ValidateDesignRules` holds are the Constraints page's, which has no field for them.)
+    b.apply(&Cmd::SetMaskPaste { settings: MaskPaste { paste_margin_ratio: 2.0, ..mask.clone() } }).unwrap();
+    assert_eq!(effective(&b, &base).board.solder_mask.paste_margin_ratio, 2.0);
+    b.apply(&Cmd::SetMaskPaste { settings: mask.clone() }).unwrap();
 
     let mut text = TextGraphicsDefaults::default();
     text.silk.text_height_nm = mm(1.2);

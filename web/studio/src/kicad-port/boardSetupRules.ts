@@ -9,7 +9,7 @@
 //   common/project/net_settings.cpp                  SetNetclassPatternAssignment / addSinglePatternAssignment
 //   common/eda_pattern_match.cpp                     EDA_PATTERN_MATCH_WILDCARD_ANCHORED (what a net class pattern matches)
 //   common/dialogs/panel_setup_netclasses.cpp        validateNetclassName, validateNetclassClearance (MAXIMUM_CLEARANCE)
-//   pcbnew/board_design_settings.cpp                 ValidateDesignRules (the ranges of Constraints and Solder Mask/Paste)
+//   pcbnew/board_design_settings.cpp                 ValidateDesignRules (the ranges of the Constraints page)
 //   pcbnew/dialogs/panel_setup_text_and_graphics.cpp TransferDataFromWindow's checks
 //   pcbnew/board_stackup_manager/board_stackup.cpp   BuildDefaultStackupList, BuildBoardThicknessFromStackup, IsThicknessEditable ...
 //
@@ -21,7 +21,7 @@
 // The default stackup is also computed by the backend (`eda_model::rules::default_stackup`); both are held to the same cases in
 // src/kicad/default_stackups.json (a Rust test fails when the file is stale, boardSetupRules.test.ts when this code disagrees with it).
 
-import type { Cmd, Constraints, LayerClassDefaults, MaskPaste, NetClass, NetClassSettings, RuleSeverity, Stackup, StackupLayer, StackupSettings, TextGraphicsDefaults, Nm } from "../api/types";
+import type { Cmd, Constraints, LayerClassDefaults, NetClass, NetClassSettings, RuleSeverity, Stackup, StackupLayer, StackupSettings, TextGraphicsDefaults, Nm } from "../api/types";
 import { strNumCmp } from "./sheetPages";
 import { globMatch, patternMatches } from "./netPattern";
 
@@ -201,15 +201,16 @@ export function boardNetNames(board: {
 
 // ------------------------------------------------------------------ constraints and mask / paste: ranges
 
-/** A length in µm as the millimetres a message shows (`Value must be between 0 and 25 mm.`). */
+/** A length in µm as the millimetres a message shows (`Value must be between 0 mm and 25 mm.`). */
 export function mmText(um: Nm): string {
   const s = (um / 1e6).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
   return s === "" || s === "-0" ? "0" : s;
 }
 
+/** `addRangeError`: each bound is `StringFromValue( .., true )`, which puts the unit on both. */
 function rangeMessage(v: number, minNm: Nm, maxNm: Nm): string | null {
   if (!Number.isFinite(v)) return "Value is not a number.";
-  return v < minNm || v > maxNm ? `Value must be between ${mmText(minNm)} and ${mmText(maxNm)} mm.` : null;
+  return v < minNm || v > maxNm ? `Value must be between ${mmText(minNm)} mm and ${mmText(maxNm)} mm.` : null;
 }
 
 /** One number of the Constraints page and the range `ValidateDesignRules` holds it to (`setting` is the `.kicad_pro` key). */
@@ -237,7 +238,8 @@ export const CONSTRAINT_RANGES: readonly ConstraintRange[] = [
   { key: "min_silk_text_thickness_nm", setting: "min_text_thickness", min: 0, max: 25_000_000 },
   // -0.01 mm is the flag for the pre-6.0 way of measuring the edge (-10_000 nm).
   { key: "min_copper_edge_clearance_nm", setting: "min_copper_edge_clearance", min: -10_000, max: 25_000_000 },
-  { key: "max_error_nm", setting: "max_error", min: 1_000, max: 1_000_000 },
+  // `MAXIMUM_ERROR_SIZE_MM` (0.1 mm), the bound the dialog checks -- not the 1 mm of the `rules.max_error` load range.
+  { key: "max_error_nm", setting: "max_error", min: 1_000, max: 100_000 },
 ];
 
 /** `BOARD_DESIGN_SETTINGS::ValidateDesignRules`: the message for each number of the Constraints page that is out of range. */
@@ -247,24 +249,12 @@ export function validateConstraints(c: Constraints): Partial<Record<keyof Constr
     const m = rangeMessage(c[r.key] as number, r.min, r.max);
     if (m) out[r.key] = m;
   }
-  if (!Number.isInteger(c.min_resolved_spokes) || c.min_resolved_spokes < 0 || c.min_resolved_spokes > 99) out.min_resolved_spokes = "Value must be a whole number between 0 and 99.";
+  if (!Number.isInteger(c.min_resolved_spokes) || c.min_resolved_spokes < 0 || c.min_resolved_spokes > 99) out.min_resolved_spokes = "Value must be between 0 and 99.";
   return out;
 }
 
-/** Solder Mask/Paste's ranges. The paste ratio is checked as the fraction it is stored as (-1 .. 1; the page shows percent). */
-export function validateMaskPaste(m: MaskPaste): Partial<Record<keyof MaskPaste, string>> {
-  const out: Partial<Record<keyof MaskPaste, string>> = {};
-  const check = (key: keyof MaskPaste, minNm: Nm, maxNm: Nm) => {
-    const msg = rangeMessage(m[key] as number, minNm, maxNm);
-    if (msg) out[key] = msg;
-  };
-  check("expansion_nm", -25_000_000, 25_000_000);
-  check("min_width_nm", 0, 25_000_000);
-  check("to_copper_clearance_nm", 0, 25_000_000);
-  check("paste_margin_nm", -25_000_000, 25_000_000);
-  if (!Number.isFinite(m.paste_margin_ratio) || m.paste_margin_ratio < -1 || m.paste_margin_ratio > 1) out.paste_margin_ratio = "Value must be between -100 and 100 %.";
-  return out;
-}
+// Solder Mask/Paste has no range checks here: `PANEL_SETUP_MASK_AND_PASTE::TransferDataFromWindow` validates nothing, it stores the
+// values and returns true. (The mask and paste ranges `ValidateDesignRules` holds belong to the Constraints page, which has no field for them.)
 
 // ------------------------------------------------------------------ text & graphics
 
