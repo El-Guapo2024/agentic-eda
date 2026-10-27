@@ -25,7 +25,7 @@ fn body(half_width: f64) -> SymbolGraphic {
 
 /// A two-input gate. Its alternate body is wider and has the second input one grid cell further down, so a wire that meets pin 2 in one body misses it in the other.
 fn gate() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "test:GATE".into(),
         graphics: vec![body(2.54)],
         pins: vec![pin("1", "A", "input", -7.62, 2.54, 0.0), pin("2", "B", "input", -7.62, 0.0, 0.0), pin("3", "Y", "output", 7.62, 0.0, 180.0)],

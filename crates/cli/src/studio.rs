@@ -2207,7 +2207,7 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
     // this" signal available here, same heuristic `annotate()` already
     // uses to recover a prefix from an id.
     let reference_prefix: String = reference.chars().take_while(|c| c.is_alphabetic()).collect();
-    let empty = || eda_model::LibSymbol {
+    let empty = || eda_model::LibSymbol { connectivity: Default::default(),
         lib_id: lib_id.to_string(),
         graphics: vec![],
         pins: vec![],
@@ -2265,7 +2265,7 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         .into_iter()
         .map(|(p, at, angle_deg)| eda_model::LibPin { number: p.number.clone(), name: p.name.clone().unwrap_or_default(), electrical_type: etype(p.kind).to_string(), shape: "line".to_string(), at, angle_deg, length_mm: 1.27, unit: 1, hidden: false })
         .collect();
-    eda_model::LibSymbol {
+    eda_model::LibSymbol { connectivity: Default::default(),
         lib_id: lib_id.to_string(),
         graphics,
         pins: lib_pins,
@@ -2673,7 +2673,7 @@ mod tests {
             assert_eq!((p["body_style"].as_u64(), p["hidden"].as_bool()), (Some(0), Some(false)));
         }
         // a filled body is the body colour, any other filled shape the outline colour, a text carries its `content`
-        let gnd = lib_symbol_json(&eda_model::LibSymbol {
+        let gnd = lib_symbol_json(&eda_model::LibSymbol { connectivity: Default::default(),
             lib_id: "T:X".into(),
             graphics: vec![
                 eda_model::SymbolGraphic::Rectangle { unit: 1, start: eda_model::symbol::SPoint::new(0.0, 0.0), end: eda_model::symbol::SPoint::new(1.0, 1.0), stroke_mm: 0.2, filled: true },

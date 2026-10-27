@@ -383,7 +383,7 @@ mod tests {
             unit,
             hidden: false,
         };
-        let sym = LibSymbol {
+        let sym = LibSymbol { connectivity: Default::default(),
             lib_id: "Test:Dual3".into(),
             graphics: vec![eda_model::symbol::SymbolGraphic::Rectangle { unit: 0, start: SPoint::new(-5.08, 5.08), end: SPoint::new(5.08, -5.08), stroke_mm: 0.254, filled: false }],
             pins: vec![

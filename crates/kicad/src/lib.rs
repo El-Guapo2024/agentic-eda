@@ -402,7 +402,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             // resolves it, real library first, then `symbol::builtin`'s
             // generic rail fallback for any net name.
             let resolved = model.symbol_of(lib_id).unwrap_or_else(|| eda_model::symbol::builtin(lib_id).expect("power lib_id always resolves"));
-            write_power_lib_symbol(&mut out, lib_id, &resolved, sch.extras.local_power.contains(lib_id));
+            // local when its library symbol is (`LIB_SYMBOL::IsLocalPower`, r4 A4-H1), unless the screen's own cache said otherwise
+            let local = sch.extras.power_is_local(lib_id, model.symbols.iter().find(|s| s.lib_id == *lib_id).map(|lib| lib.power && lib.connectivity.power_local));
+            write_power_lib_symbol(&mut out, lib_id, &resolved, local);
         }
     }
     let mut written_copies: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
@@ -483,8 +485,13 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // placed unit elsewhere on the sheet. A single-unit part (no real
         // symbol resolved, or one with exactly one unit) has every pin
         // match trivially, same list as before this field existed.
-        for pin in part.pins.iter().filter(|pin| resolved.as_ref().and_then(|s| s.pin_by_number(&pin.number)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit)) {
-            let pin_uuid = duid_for(&format!("pin:{}:{}", sym.id, pin.number), &format!("{}.{}", sym.id, pin.number));
+        for (i, pin) in part.pins.iter().enumerate() {
+            // a second pin of one number is a pin object of its own, with a uuid of its own (r4 A4-H3)
+            let nth = part.pins[..i].iter().filter(|p| p.number == pin.number).count();
+            if !resolved.as_ref().and_then(|s| s.nth_pin_by_number(&pin.number, nth)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit) {
+                continue;
+            }
+            let pin_uuid = if nth == 0 { duid_for(&format!("pin:{}:{}", sym.id, pin.number), &format!("{}.{}", sym.id, pin.number)) } else { duid_for(&format!("pin:{}:{}:{nth}", sym.id, pin.number), &format!("{}.{}#{nth}", sym.id, pin.number)) };
             writeln!(out, "\t\t(pin {} (uuid \"{pin_uuid}\"))", sexpr_str(&pin.number)).unwrap();
         }
         writeln!(out, "\t\t(instances").unwrap();
@@ -1355,6 +1362,16 @@ fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, inst
         }
     }
     writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
+    // the pins the symbol jumpers together, which the connectivity of the file joins (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`, r4 A4-H2)
+    if let Some(c) = resolved.as_ref().map(|r| &r.connectivity) {
+        if c.duplicate_pin_numbers_are_jumpers {
+            writeln!(out, "\t\t\t(duplicate_pin_numbers_are_jumpers yes)").unwrap();
+        }
+        if !c.jumper_pin_groups.is_empty() {
+            let groups: Vec<String> = c.jumper_pin_groups.iter().map(|g| format!("({})", g.iter().map(|n| sexpr_str(n)).collect::<Vec<_>>().join(" "))).collect();
+            writeln!(out, "\t\t\t(jumper_pin_groups {})", groups.join(" ")).unwrap();
+        }
+    }
     write_property(out, "Reference", "U", 0.0, 0.0, false);
     write_property(out, "Value", bare_name, 0.0, 0.0, false);
 
@@ -1446,7 +1463,9 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
         for (port_idx, port) in ports.iter().enumerate() {
             let Some(pin_idx) = pin_of_port[port_idx] else { continue };
             let pin = &part.pins[pin_idx];
-            let real_pin = resolved.and_then(|s| s.pin_by_number(&pin.number));
+            // the k-th pin of a number the symbol repeats is the library's k-th, at its own place (r4 A4-H3)
+            let nth = part.pins[..pin_idx].iter().filter(|p| p.number == pin.number).count();
+            let real_pin = resolved.and_then(|s| s.nth_pin_by_number(&pin.number, nth));
             let (bx, by, angle, length_mm) = match real_pin {
                 // The real pin's own outer point/angle/length -- exactly
                 // where its own drawn line (just written above, as part of
@@ -1482,7 +1501,7 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             let etype = resolve_pin_electrical_type(pin, resolved);
             let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
             // an invisible pin stays one: KiCad's legacy global power pins are the invisible power inputs (`SCH_PIN::IsGlobalPower`)
-            let hide = if resolved.and_then(|s| s.pin_by_number(&pin.number)).is_some_and(|rp| rp.hidden) { " (hide yes)" } else { "" };
+            let hide = if resolved.and_then(|s| s.nth_pin_by_number(&pin.number, nth)).is_some_and(|rp| rp.hidden) { " (hide yes)" } else { "" };
             writeln!(
                 out,
                 "\t\t\t\t(pin {etype} line (at {} {} {}) (length {}){hide}\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
@@ -1511,7 +1530,8 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             let (lx, ly) = (local.x as f64 + (x0_u - x0) * 1e6, local.y as f64 + (y1 - y1_u) * 1e6);
             let (bx, by) = baked_local(baker, width as f64, lx, ly);
             // a library symbol draws its no-connect pin like any other, along its own line; only a pin the symbol does not have is a point
-            let (angle, length) = match resolved.and_then(|r| r.pin_by_number(&pin.number)) {
+            let nth = part.pins[..i].iter().filter(|p| p.number == pin.number).count();
+            let (angle, length) = match resolved.and_then(|r| r.nth_pin_by_number(&pin.number, nth)) {
                 Some(rp) => (baked_real_angle(baker, rp.angle_deg), rp.length_mm),
                 None => (0.0, 0.0),
             };

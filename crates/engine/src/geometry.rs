@@ -518,7 +518,9 @@ fn build_ports_from_real_symbol(part: &Part, sym: &eda_model::symbol::LibSymbol,
         if pin.kind == PinKind::Nc {
             continue; // no port; positioned via `nc_pin_local_points` instead
         }
-        let Some(real_pin) = sym.pin_by_number(&pin.number) else { continue };
+        // the k-th pin of a number the symbol repeats is the library's k-th (r4 A4-H3)
+        let k = part.pins[..i].iter().filter(|p| p.number == pin.number).count();
+        let Some(real_pin) = sym.nth_pin_by_number(&pin.number, k) else { continue };
         // A pin belonging to a *different* unit of this same multi-unit
         // part isn't on this instance at all -- it's drawn (if anywhere)
         // by whichever other placed `SymbolInstance` carries that unit
@@ -1389,7 +1391,8 @@ pub fn nc_pin_local_points(part: &Part, width: i64, height: i64, resolved: Optio
             if p.kind != PinKind::Nc {
                 continue;
             }
-            let Some(real_pin) = sym.pin_by_number(&p.number) else { continue };
+            let k = part.pins[..i].iter().filter(|q| q.number == p.number).count();
+            let Some(real_pin) = sym.nth_pin_by_number(&p.number, k) else { continue };
             if !(real_pin.unit == 0 || real_pin.unit == unit) {
                 continue; // this nc pin lives on a different placed unit
             }

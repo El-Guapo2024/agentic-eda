@@ -33,7 +33,14 @@
 //!   buses are groups, so a member's nets on both sheets are one net.
 //! - **A pin common to every unit** is a pin of each placed unit, at each unit's place ([`PIN_COPY`]).
 //!
-//! Not ported: bus entries take no part (KiCad's do not either: a wire is on a member by its label), nor does a bus-to-bus entry.
+//! - **Pin facts** (25ec2335 `conn_facts.cpp`, `conn_islands.cpp::BuildScreenIslands`): a no-connect pin (`PT_NC`) is a contact of kind `NC`, which joins
+//!   nothing ([`Naming::nc_contacts`]); the pins of a jumper group, and with `duplicate_pin_numbers_are_jumpers` every pin of one number, are one node
+//!   wherever they sit ([`Naming::jumpered`]); a stacked pin number (`[1,15,38,39]`) is one pin on the schematic and each of its pads in the net list
+//!   (`ExpandStackedPinNotation`), its default net name taking the smallest (`GetSmallestStackedPadNumber`).
+//! - **Bus wire entries** (`conn_islands.cpp`: an entry's two ends are `ENTRY` contacts, `PROPAGATES[ENTRY][WIRE]`; an end on a bus is `BUS_SIDE`, which joins
+//!   nothing): an entry whose two ends are off any bus joins what is at both; one on a bus joins nothing (a wire is on a member by its label).
+//!
+//! Not ported: a bus-to-bus entry.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,6 +55,27 @@ pub const PIN_COPY: char = '\u{1}';
 /// The key of the copy of `pin_ref` (`REF.PIN`) a placed unit `unit` draws, when an earlier unit drew the first one.
 pub fn pin_copy_key(pin_ref: &str, unit: u32) -> String {
     format!("{pin_ref}{PIN_COPY}{unit}")
+}
+
+/// The key of the `k`-th further pin (k >= 1) of one number on one placed symbol (two pins `1` at two places, KiCad 25ec2335 `conn_facts.cpp`: a pin object
+/// per place, `key = { number, contact }`): each is a node of its own, and the nets name it `REF.PIN`.
+pub fn pin_twin_key(pin_ref: &str, k: usize) -> String {
+    format!("{pin_ref}{PIN_COPY}#{k}")
+}
+
+/// The pads a pin key stands for in the net list: a stacked number (`U1.[1,15,38,39]`, `ExpandStackedPinNotation`) is each of its pads, any other the pin.
+pub fn pads_of(pin_ref: &str) -> Vec<String> {
+    let base = base_pin(pin_ref);
+    match base.split_once('.') {
+        Some((reference, number)) if number.starts_with('[') => {
+            let (numbers, valid) = eda_model::fp_units::expand_stacked_pin_notation(number);
+            if valid {
+                return numbers.into_iter().map(|n| format!("{reference}.{n}")).collect();
+            }
+            vec![base.to_string()]
+        }
+        _ => vec![base.to_string()],
+    }
 }
 
 /// `REF.PIN` of a key of [`ScreenIn::pins`], a copy's or the first's.
@@ -278,6 +306,16 @@ pub struct Naming<'a> {
     /// `label->GetShownText( &path, FOR_NETNAME )`, a sheet pin's with its sheet pushed on the path), given the path and the stored text: a shared
     /// screen's `${SHEETNAME}_EN` is `A_EN` on one placement and `B_EN` on the other. Without it the stored text names the net.
     pub label_text: Option<&'a dyn Fn(&[String], &str) -> String>,
+    /// Whether the power symbol of a `lib_id` is a local one (`SCH_PIN::IsLocalPower`: `LIB_SYMBOL::IsLocalPower`, `(power local)`), from its library symbol;
+    /// `None` for a symbol the library does not give. A screen's own cache overrides it where the two disagree (`SchExtras::power_is_local`).
+    pub local_power: Option<&'a dyn Fn(&str) -> Option<bool>>,
+    /// The keys of [`ScreenIn::pins`] that are no-connect pins (`PT_NC`): a contact of kind `NC` (KiCad 25ec2335 `conn_islands.cpp::BuildScreenIslands`:
+    /// `if( a.kind == NC || b.kind == NC ) continue;`), a node of its own whatever is drawn on it.
+    pub nc_contacts: Option<&'a BTreeSet<String>>,
+    /// Groups of keys of [`ScreenIn::pins`], each one node wherever its pins sit: a symbol's jumper pin groups, and every pin of one number of a symbol whose
+    /// duplicate pin numbers are jumpers (`conn_facts.cpp`: `jumperedWith`, `joinApart`; `BuildScreenIslands`: "Pins merged by number are stacked or jumpered,
+    /// so each touches the others wherever they sit"). A key is looked for on each screen.
+    pub jumpered: Option<&'a [Vec<String>]>,
 }
 
 impl Naming<'_> {
@@ -315,9 +353,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     let mut bus_group_at: Vec<BTreeMap<Point, usize>> = Vec::with_capacity(screens.len());
     // per screen: wire index -> group id
     let mut wire_group: Vec<Vec<Option<usize>>> = Vec::with_capacity(screens.len());
+    // per screen: the groups of the pins jumpered together ([`Naming::jumpered`])
+    let mut jumper_nodes: Vec<Vec<Vec<usize>>> = Vec::with_capacity(screens.len());
 
     for (si, screen) in screens.iter().enumerate() {
         let sch: &SchematicSection = &*screen.sch;
+        let is_nc_contact = |k: &str| naming.nc_contacts.is_some_and(|n| n.contains(k));
         let touches = |p: Point, bus: bool| sch.wires.iter().filter(|w| w.bus == bus).any(|w| w.pts.contains(&p) || w.pts.windows(2).any(|seg| on_interior(p, seg[0], seg[1])));
         let pin_points: BTreeSet<Point> = screen.pins.values().copied().collect();
         let on_bus = |p: Point, name: &str| touches(p, true) || (!touches(p, false) && !pin_points.contains(&p) && bus_members(name).is_some());
@@ -348,8 +389,20 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 }
             }
             if !bus {
-                for &p in screen.pins.values() {
-                    seed(p, &mut ids, &mut uf);
+                for (k, &p) in &screen.pins {
+                    if !is_nc_contact(k) {
+                        seed(p, &mut ids, &mut uf);
+                    }
+                }
+                // a bus wire entry whose two ends are off every bus is a node joining both (`PROPAGATES[ENTRY][WIRE]`, `[ENTRY][ANCHOR]`); an end on a bus is
+                // `BUS_SIDE`, which joins nothing, and the entry is then only a part of what its other end touches
+                for e in &sch.bus_entries {
+                    let ends = [e.at, Point { x: e.at.x + e.size.x, y: e.at.y + e.size.y }];
+                    if ends.iter().any(|&p| touches(p, true)) {
+                        continue;
+                    }
+                    let (a, b) = (seed(ends[0], &mut ids, &mut uf), seed(ends[1], &mut ids, &mut uf));
+                    uf.union(a, b);
                 }
                 for ps in &sch.power_symbols {
                     seed(ps.at, &mut ids, &mut uf);
@@ -408,9 +461,22 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 groups[g].no_connect = true;
             }
         }
+        let mut pin_gid: BTreeMap<&str, usize> = BTreeMap::new();
         for (pin_ref, p) in &screen.pins {
-            groups[at[p]].pins.push(pin_ref.clone());
-            groups[at[p]].drivers.push(Driver::new(PIN, String::new(), depth[si], &spath[si]));
+            let nc = is_nc_contact(pin_ref);
+            let gid = if nc {
+                // a no-connect pin's own island
+                groups.push(Group { screen: si, ..Default::default() });
+                groups.len() - 1
+            } else {
+                at[p]
+            };
+            pin_gid.insert(pin_ref.as_str(), gid);
+            groups[gid].pins.push(pin_ref.clone());
+            groups[gid].drivers.push(Driver::new(PIN, String::new(), depth[si], &spath[si]));
+            if nc {
+                continue;
+            }
             // `GetDriverPriority`: a global power pin drives its subgraph at `GLOBAL_POWER_PIN`, named by `GetDefaultNetName` (the lib pin's name, escaped as
             // a net name), even where it is wired: `generateGlobalPowerPinSubGraphs` skips only the unwired one's own subgraph, the name joins it to the
             // others all the same.
@@ -449,7 +515,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             let name = naming.power_value.map(|f| f(&screen.path, &ps.net)).unwrap_or_else(|| ps.net.clone());
             let g = &mut groups[at[&ps.at]];
             // a local power symbol (`LOCAL_POWER_PIN`): a `SCOPE::SHEET` name edge only, its net named with the sheet's path (r2 D-E1's note, QA issue22938)
-            if sch.extras.local_power.contains(&ps.lib_id) {
+            if sch.extras.power_is_local(&ps.lib_id, naming.local_power.and_then(|f| f(&ps.lib_id))) {
                 g.drivers.push(Driver::new(LOCAL_POWER_PIN, name.clone(), depth[si], &spath[si]));
                 g.local_names.push(name);
                 continue;
@@ -474,6 +540,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         group_at.push(at);
         bus_group_at.push(bus_at);
         wire_group.push(per_wire);
+        jumper_nodes.push(naming.jumpered.into_iter().flatten().map(|keys| keys.iter().filter_map(|k| pin_gid.get(k.as_str()).copied()).collect::<Vec<usize>>()).filter(|g| g.len() > 1).collect());
     }
 
     // ---- phase B: join subgraphs by name and through the hierarchy ----
@@ -506,7 +573,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             hier.entry((g.screen, g.bus, n.clone())).or_default().push(gid);
         }
     }
-    for gids in local.values().chain(global.values()) {
+    for gids in local.values().chain(global.values()).chain(jumper_nodes.iter().flatten()) {
         for w in gids.windows(2) {
             join.union(w[0], w[1]);
         }
@@ -713,8 +780,8 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     }
     for (si, screen) in screens.iter_mut().enumerate() {
         let mut pins_of_point: BTreeMap<Point, Vec<String>> = BTreeMap::new();
-        for (pin_ref, p) in &screen.pins {
-            pins_of_point.entry(*p).or_default().push(base_pin(pin_ref).to_string());
+        for (pin_ref, p) in screen.pins.iter().filter(|(k, _)| !naming.nc_contacts.is_some_and(|n| n.contains(k.as_str()))) {
+            pins_of_point.entry(*p).or_default().extend(pads_of(pin_ref));
         }
         for (wi, w) in screen.sch.wires.iter_mut().enumerate() {
             if let Some(g) = wire_group[si][wi] {
@@ -733,7 +800,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         for nc in screen.sch.no_connects.iter_mut() {
             let refs: Vec<&String> = screen.pins.iter().filter(|(_, p)| **p == nc.at).map(|(r, _)| r).collect();
             if let Some(r) = refs.first() {
-                nc.pin = base_pin(r).to_string();
+                nc.pin = pads_of(r).swap_remove(0);
             }
         }
     }
@@ -756,6 +823,11 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             n.pins = pins.into_iter().collect();
         }
         nets.retain(|n| !n.pins.is_empty());
+    }
+    // a stacked pin is each of its pads in the net list (KiCad's netlist lists every pad of `[1,15,38,39]`)
+    for n in nets.iter_mut().filter(|n| n.pins.iter().any(|p| p.contains('['))) {
+        let pads: BTreeSet<String> = n.pins.iter().flat_map(|p| pads_of(p)).collect();
+        n.pins = pads.into_iter().collect();
     }
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     nets
@@ -831,6 +903,11 @@ fn shown_name_counts(facts: &PinFacts) -> BTreeMap<(String, String), BTreeSet<St
 /// no-connect pins; `unconnected-(...)` for a pin that is alone or is a no-connect pin. `/` is written `{slash}`.
 fn default_net_name(pin_ref: &str, facts: &PinFacts, shown_count: &BTreeMap<(String, String), BTreeSet<String>>, force_no_connect: bool) -> String {
     let (reference, number) = base_pin(pin_ref).split_once('.').unwrap_or((pin_ref, ""));
+    // `PIN_NAME_FACT::padNumber`: a stacked number's smallest pad (`GetSmallestStackedPadNumber`, the first `ExpandStackedPinNotation` gives)
+    let pad_number = match eda_model::fp_units::expand_stacked_pin_notation(number) {
+        (numbers, true) => numbers.into_iter().next().unwrap_or_else(|| number.to_string()),
+        _ => number.to_string(),
+    };
     let escape = |s: &str| s.replace('/', "{slash}").replace(['\n', '\r'], "");
     let shown = facts.shown(pin_ref);
     let unconnected = force_no_connect || facts.is_nc(pin_ref);
@@ -839,10 +916,10 @@ fn default_net_name(pin_ref: &str, facts: &PinFacts, shown_count: &BTreeMap<(Str
         let with_unit = facts.unit_ref(pin_ref).unwrap_or(reference);
         // `hasDuplicateName = numbers.size() > 1 || !numbers.contains( pin->GetShownNumber() )`
         let has_multiple = !unconnected && shown_count.get(&(with_unit.to_string(), shown.to_string())).is_some_and(|numbers| numbers.len() > 1 || !numbers.contains(number));
-        let pad = if unconnected || has_multiple { format!("-Pad{}", escape(number)) } else { String::new() };
+        let pad = if unconnected || has_multiple { format!("-Pad{}", escape(&pad_number)) } else { String::new() };
         format!("{prefix}{}-{}{pad})", escape(with_unit), escape(shown))
     } else {
-        format!("{prefix}{}-Pad{})", escape(reference), escape(number))
+        format!("{prefix}{}-Pad{})", escape(reference), escape(&pad_number))
     }
 }
 
@@ -992,6 +1069,66 @@ mod tests {
         assert_eq!(nets.len(), 2, "{nets:?}");
         assert_eq!(root.wires[0].net, "Net-(D1-Pad1)");
         assert_eq!(root.wires[0].pins, vec!["D1.1", "R1.2"]);
+    }
+
+    /// r4 A4-H4 (`SCH_PIN::GetStackedPinNumbers`, `GetSmallestStackedPadNumber`): a stacked pin `[1-2]` is each of its pads on the net, named by the smallest.
+    #[test]
+    fn a_stacked_pin_number_is_each_of_its_pads() {
+        let mut root = section();
+        root.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("J1.[1-2]", p(0, 0)), ("R1.1", p(1000, 0))]) }];
+        let nets = trace_nets(&mut screens);
+        assert_eq!(pins_of(&nets, "Net-(J1-Pad1)"), vec!["J1.1", "J1.2", "R1.1"], "{nets:?}");
+    }
+
+    /// r4 A4-M1 (25ec2335 `conn_islands.cpp::BuildScreenIslands`: a `PT_NC` pin is an `NC` contact, which propagates to nothing): a wire on a no-connect pin
+    /// does not put it on the net.
+    #[test]
+    fn a_no_connect_type_pin_joins_nothing() {
+        let mut root = section();
+        root.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
+        let nc: BTreeSet<String> = ["U1.1".to_string()].into();
+        let naming = Naming { nc_contacts: Some(&nc), nc_pins: Some(&nc), ..Default::default() };
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("U1.1", p(0, 0)), ("R1.1", p(1000, 0))]) }];
+        let nets: Vec<Net> = trace_nets_with(&mut screens, &naming).into_iter().map(|t| Net { name: t.name, pins: t.pins }).collect();
+        assert_eq!(pins_of(&nets, "unconnected-(R1-Pad1)"), vec!["R1.1"], "{nets:?}");
+        assert_eq!(pins_of(&nets, "unconnected-(U1-Pad1)"), vec!["U1.1"], "{nets:?}");
+    }
+
+    /// r4 A4-M2 (`conn_islands.cpp`: `PROPAGATES[ENTRY][WIRE]`; an entry end on a bus is `BUS_SIDE`): a bus wire entry between two wires joins them, one with
+    /// an end on a bus joins nothing.
+    #[test]
+    fn a_bus_entry_between_two_wires_joins_them() {
+        let entry = |at: Point| eda_model::ir::BusEntry { id: String::new(), at, size: p(2540, 2540) };
+        let mut root = section();
+        root.wires.push(wire("", &[p(0, 0), p(10000, 0)]));
+        root.wires.push(wire("", &[p(12540, 2540), p(20000, 2540)]));
+        root.bus_entries.push(entry(p(10000, 0)));
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R3.1", p(20000, 2540))]) }];
+        let nets = trace_nets(&mut screens);
+        assert_eq!(pins_of(&nets, "Net-(R1-Pad1)"), vec!["R1.1", "R3.1"], "{nets:?}");
+        // the same entry with its corner on a bus
+        let mut root = section();
+        root.wires.push(wire("", &[p(0, 0), p(10000, 0)]));
+        root.wires.push(bus(&[p(12540, 0), p(12540, 5000)]));
+        root.wires.push(wire("", &[p(12540, 2540), p(20000, 2540)]));
+        root.bus_entries.push(entry(p(10000, 0)));
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R3.1", p(20000, 2540))]) }];
+        let nets = trace_nets(&mut screens);
+        assert_eq!(nets.len(), 2, "{nets:?}");
+    }
+
+    /// r4 A4-H2 (`conn_facts.cpp` `jumperedWith`): the pins of a jumper group are one node wherever they sit.
+    #[test]
+    fn a_jumper_pin_group_is_one_net() {
+        let mut root = section();
+        root.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
+        root.wires.push(wire("", &[p(0, 5000), p(1000, 5000)]));
+        let jumpered = vec![vec!["J1.1".to_string(), "J1.2".to_string()]];
+        let naming = Naming { jumpered: Some(&jumpered), ..Default::default() };
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("J1.1", p(0, 0)), ("R1.1", p(1000, 0)), ("J1.2", p(0, 5000)), ("R2.1", p(1000, 5000))]) }];
+        let nets: Vec<Net> = trace_nets_with(&mut screens, &naming).into_iter().map(|t| Net { name: t.name, pins: t.pins }).collect();
+        assert_eq!(pins_of(&nets, "Net-(J1-Pad1)"), vec!["J1.1", "J1.2", "R1.1", "R2.1"], "{nets:?}");
     }
 
     #[test]

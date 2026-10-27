@@ -4644,6 +4644,11 @@ impl LibrarySymbol {
             pin_numbers_hidden: self.pin_numbers_hidden,
             pin_name_offset_mm: self.pin_name_offset_mm,
             alternate,
+            connectivity: crate::symbol::LibConnectivity {
+                power_local: self.power && self.power_local,
+                duplicate_pin_numbers_are_jumpers: self.kicad.duplicate_pin_numbers_are_jumpers,
+                jumper_pin_groups: self.kicad.jumper_pin_groups.clone(),
+            },
         }
     }
 

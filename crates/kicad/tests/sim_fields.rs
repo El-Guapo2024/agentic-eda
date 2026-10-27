@@ -13,7 +13,7 @@ const META: ExportMeta<'static> = ExportMeta { date: "2026-10-23", title: "sim" 
 
 fn source() -> LibSymbol {
     let pin = |n: &str, y: f64| LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: if y > 0.0 { 270.0 } else { 90.0 }, length_mm: 2.54, unit: 1, hidden: false };
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "Simulation_SPICE:VSIN".into(),
         graphics: vec![],
         pins: vec![pin("1", 5.08), pin("2", -5.08)],

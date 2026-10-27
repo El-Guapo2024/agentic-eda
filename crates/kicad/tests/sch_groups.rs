@@ -21,7 +21,7 @@ fn pin(number: &str, name: &str, etype: &str, x: f64, y: f64, angle: f64) -> Lib
 
 /// A two-input gate: A and B on the left (one grid cell apart), Y on the right.
 fn gate() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "test:GATE".into(),
         graphics: vec![SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(-2.54, 5.08), end: SPoint::new(2.54, -5.08), stroke_mm: 0.254, filled: false }],
         pins: vec![pin("1", "A", "input", -7.62, 2.54, 0.0), pin("2", "B", "input", -7.62, 0.0, 0.0), pin("3", "Y", "output", 7.62, 0.0, 180.0)],

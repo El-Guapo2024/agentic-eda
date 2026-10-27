@@ -173,7 +173,7 @@ pub fn generate(part: &Part, lib_id: &str) -> LibSymbol {
     }
 
     let reference_prefix: String = part.reference.chars().take_while(|c| c.is_alphabetic()).collect();
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: lib_id.to_string(),
         graphics: vec![SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(-hw, hh), end: SPoint::new(hw, -hh), stroke_mm: 0.254, filled: true }],
         pins,

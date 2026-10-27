@@ -35,7 +35,7 @@ fn rect(x0: f64, x1: f64) -> SymbolGraphic {
 
 /// A gate whose alternate body has pin 2 one grid cell further down: the two bodies do not put every pin in the same place.
 fn gate() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "test:GATE".into(),
         graphics: vec![rect(-2.54, 2.54)],
         pins: vec![pin("1", "A", -7.62, 1.27, 0.0), pin("2", "B", -7.62, -1.27, 0.0), pin("3", "Y", 7.62, 0.0, 180.0)],

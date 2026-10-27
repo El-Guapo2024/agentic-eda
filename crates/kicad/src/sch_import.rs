@@ -81,6 +81,17 @@ fn kicad_page(raw: &str) -> String {
     }
 }
 
+/// The `(lib_id, lib_name)` of every placed symbol whose `(lib_name ..)` names a cache entry other than its library id (see `import_screen`).
+pub(crate) fn cache_aliases(root: &[Sexpr]) -> Vec<(String, String)> {
+    sexpr::find_all(root, "symbol")
+        .filter_map(|item| {
+            let lib_id = sexpr::find(item, "lib_id").and_then(|l| sexpr::txt(l, 1))?;
+            let lib_name = sexpr::find(item, "lib_name").and_then(|l| sexpr::txt(l, 1)).filter(|n| *n != lib_id)?;
+            Some((lib_id.to_string(), lib_name.to_string()))
+        })
+        .collect()
+}
+
 /// [`import_kicad_sch_with`] of one screen of the project whose root sheet's uuid is `root_uuid` (none: the file read is the root): a sheet's
 /// `(instances (project .. (path "/<root uuid>/.." ..)))` of another root are another project's (`SCH_SHEET::getPageNumber( aParentPath )` compares the
 /// whole path, root uuid included).
@@ -95,7 +106,18 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>) -> R
     // the project's root: this file's own uuid when it is the root
     let own_uuid = uuid_of(root).unwrap_or_default();
     let root_uuid = root_uuid.map_or(own_uuid.clone(), str::to_string);
-    let lib_table: HashMap<String, LibSymbol> = sexpr::find(root, "lib_symbols").map(build_symbol_table).unwrap_or_default();
+    let mut lib_table: HashMap<String, LibSymbol> = sexpr::find(root, "lib_symbols").map(build_symbol_table).unwrap_or_default();
+    // A symbol is drawn from the cache entry its `(lib_name ..)` names, the library id when it has none (`parseSchematicSymbol`'s `T_lib_name`,
+    // `SCH_SYMBOL::GetSchSymbolLibraryName`, `SCH_SCREEN::UpdateSymbolLinks`): a cache that holds only `Test_Symbol_GND_1` for `Test:Test_Symbol_GND` draws
+    // the symbol from it (r4 B4-H1, QA `ground_pin_test_ok`). The design keeps one library symbol per id, so the copy stands under the id where the cache has
+    // no entry of the id's own. **Differs**: where both are cached and differ, the id's entry is drawn (Swap Pins' traded places excepted, `pin_swaps_between`).
+    for (lib_id, lib_name) in cache_aliases(root) {
+        if !lib_table.contains_key(&lib_id) {
+            if let Some(copy) = lib_table.get(&lib_name).cloned() {
+                lib_table.insert(lib_id.clone(), LibSymbol { lib_id, ..copy });
+            }
+        }
+    }
 
     let title_block = import_title_block(root);
 
@@ -1611,6 +1633,23 @@ mod tests {
     fn pin(number: &str, name: &str, kind: PinKind) -> Pin {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
+
+    /// r4 B4-H1 (`parseSchematicSymbol`'s `T_lib_name`, `SCH_SYMBOL::GetSchSymbolLibraryName`): a symbol whose cache entry is its `(lib_name ..)`, the library id
+    /// having none, is drawn and traced from that entry, not left out.
+    #[test]
+    fn a_symbol_is_resolved_by_its_lib_name() {
+        let text = r#"(kicad_sch (version 20250114) (generator "eeschema") (uuid "00000000-0000-0000-0000-0000000000a1") (paper "A4")
+ (lib_symbols (symbol "R_1" (property "Reference" "R" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "Value" "R" (at 0 0 0) (effects (font (size 1.27 1.27))))
+  (symbol "R_1_1_1" (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "7" (effects (font (size 1.27 1.27)))))
+   (pin passive line (at 0 -3.81 90) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "8" (effects (font (size 1.27 1.27))))))))
+ (symbol (lib_name "R_1") (lib_id "Device:R") (at 50.8 50.8 0) (unit 1) (uuid "cf2ba0bc-c5e7-461a-aaf6-14063af92c9d")
+  (property "Reference" "R1" (at 53.8 50.8 0) (effects (font (size 1.27 1.27)))) (property "Value" "R" (at 53.8 52.8 0) (effects (font (size 1.27 1.27))))))"#;
+        let (design, model, notes) = import_kicad_sch(text).unwrap();
+        assert_eq!(notes.unresolved_symbols, 0);
+        assert_eq!(design.schematic.as_ref().unwrap().symbols.len(), 1);
+        let numbers: Vec<&str> = model.part("R1").unwrap().pins.iter().map(|p| p.number.as_str()).collect();
+        assert_eq!(numbers, vec!["7", "8"], "the pins of the lib_name entry");
+    }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
         Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), symbol: None, datasheet: None, pins, body_nm: None, edge: None }
     }
@@ -1810,7 +1849,7 @@ mod tests {
             unit,
             hidden: false,
         };
-        let lib = LibSymbol {
+        let lib = LibSymbol { connectivity: Default::default(),
             lib_id: "test:DUAL".into(),
             graphics: vec![],
             pins: vec![
@@ -1907,7 +1946,7 @@ mod tests {
         };
         let rect = |x0: f64, x1: f64| SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(x0, 2.54), end: SPoint::new(x1, -2.54), stroke_mm: 0.254, filled: false };
         // style 1: inputs on the left, the output on the right; style 2 (the same gate drawn with its bubbles): same pins, a wider body
-        let lib = LibSymbol {
+        let lib = LibSymbol { connectivity: Default::default(),
             lib_id: "test:GATE".into(),
             graphics: vec![rect(-2.54, 2.54)],
             pins: vec![p("1", "A", "input", -7.62, 1.27, 0.0), p("2", "B", "input", -7.62, -1.27, 0.0), p("3", "Y", "output", 7.62, 0.0, 180.0)],

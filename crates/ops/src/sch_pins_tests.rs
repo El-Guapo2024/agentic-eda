@@ -57,7 +57,7 @@ fn lib_pin(number: &str, x: f64, y: f64, angle: f64, unit: u32) -> LibPin {
 }
 
 fn lib(lib_id: &str, unit_count: u32, pins: Vec<LibPin>) -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: lib_id.into(),
         graphics: vec![],
         pins,

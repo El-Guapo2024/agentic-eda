@@ -242,6 +242,26 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
         pin_numbers_hidden: pin_numbers.map(hidden).unwrap_or(false),
         pin_name_offset_mm: pin_names.and_then(|p| sexpr::find(p, "offset")).and_then(|o| sexpr::num(o, 1)).unwrap_or(eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM),
         alternate,
+        connectivity: connectivity_of(root),
+    }
+}
+
+/// `(power local)`, `(duplicate_pin_numbers_are_jumpers yes)` and `(jumper_pin_groups ("1" "2") ..)` of a symbol's node (`SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol`:
+/// `T_power`, `T_duplicate_pin_numbers_are_jumpers`, `T_jumper_pin_groups`), each group's numbers sorted as KiCad's `std::set` keeps them.
+pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectivity {
+    let mut jumper_pin_groups: Vec<Vec<String>> = Vec::new();
+    if let Some(groups) = sexpr::find(node, "jumper_pin_groups") {
+        for g in groups.iter().skip(1).filter_map(Sexpr::as_list) {
+            let mut set: Vec<String> = g.iter().filter_map(Sexpr::text).map(str::to_string).collect();
+            set.sort();
+            set.dedup();
+            jumper_pin_groups.push(set);
+        }
+    }
+    eda_model::symbol::LibConnectivity {
+        power_local: sexpr::find(node, "power").and_then(|p| sexpr::txt(p, 1)) == Some("local"),
+        duplicate_pin_numbers_are_jumpers: sexpr::find(node, "duplicate_pin_numbers_are_jumpers").and_then(|p| sexpr::txt(p, 1)) == Some("yes"),
+        jumper_pin_groups,
     }
 }
 

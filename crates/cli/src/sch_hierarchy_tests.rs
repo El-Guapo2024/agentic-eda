@@ -362,7 +362,7 @@ fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
         unit,
         hidden: false,
     };
-    let sym = LibSymbol {
+    let sym = LibSymbol { connectivity: Default::default(),
         lib_id: "Test:Dual3".into(),
         graphics: vec![SymbolGraphic::Rectangle { unit: 0, start: SPoint::new(-5.08, 5.08), end: SPoint::new(5.08, -5.08), stroke_mm: 0.254, filled: false }],
         pins: vec![
@@ -1792,4 +1792,86 @@ fn the_shown_text_resolves_a_sheets_user_fields() {
     let project = crate::text_vars_json::project(&dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
     let shown = crate::text_vars_json::SchShown::new(&dir, &design, &model, &breadcrumb, project);
     assert_eq!(shown.text_shown("${param}"), "param_subsheet_1");
+}
+
+// ---------------------------------------------------------------------------------------- round 4: the pin facts of KiCad 25ec2335's connectivity
+
+/// Import the round-4 case `case` (`tests/fixtures/r4_connectivity/<case>`, the reviewer's generated files) into a scratch board: the board folder, the
+/// copied root, and the board's nets as `name -> pins`.
+fn r4_case(case: &str) -> (PathBuf, PathBuf, std::collections::BTreeMap<String, Vec<String>>) {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/r4_connectivity").join(case);
+    let work = scratch(&format!("r4_{case}"));
+    for e in std::fs::read_dir(&src).unwrap().flatten() {
+        std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
+    }
+    let root = work.join("t.kicad_sch");
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let nets = design.nets.unwrap_or_default().into_iter().map(|n| (n.name, n.pins)).collect();
+    (dir, root, nets)
+}
+
+/// r4 A4-H2, A4-H3, A4-H4, A4-M1, A4-M2 (KiCad 25ec2335 `conn_facts.cpp`, `conn_islands.cpp::BuildScreenIslands`): a symbol's jumper pin group is one net
+/// (`j1`), and so is every pin of one number when duplicate pin numbers are jumpers (`j2`); two pins `1` at two places without the flag are two nodes
+/// (`j3`; KiCad lists `J1.1` on both nets, the board's net list holds a pin once); a stacked number `[1-2]` is each of its pads, named by the smallest
+/// (`s1`); a no-connect pin joins nothing (`n1`); a bus wire entry between two wires joins them (`g6`). The nets `eda import-kicad` stores are kicad-cli's
+/// of the original, and kicad-cli reads the derived file as it reads the original.
+#[test]
+fn a_symbols_jumper_pins_are_one_net_as_kicad_cli_reads_them() {
+    let cases: &[(&str, &[(&str, &[&str])])] = &[
+        ("j1", &[("Net-(J1-A)", &["J1.1", "J1.2", "R1.1", "R2.1"])]),
+        ("j2", &[("Net-(J1-A)", &["J1.1", "R1.1", "R2.1"])]),
+        ("j3", &[("Net-(J1-A)", &["J1.1", "R1.1"]), ("Net-(J1-A)_1", &["R2.1"])]),
+        ("s1", &[("Net-(J1-Pad1)", &["J1.1", "J1.2", "R1.1"]), ("unconnected-(J1-Pad3)", &["J1.3"])]),
+        ("n1", &[("unconnected-(R1-Pad1)", &["R1.1"]), ("unconnected-(U1-NC-Pad1)", &["U1.1"])]),
+        ("g6", &[("Net-(R1-Pad1)", &["R1.1", "R3.1"])]),
+    ];
+    for (case, want) in cases {
+        let (dir, root, nets) = r4_case(case);
+        for (name, pins) in *want {
+            assert_eq!(nets.get(*name).map(|p| p.iter().map(String::as_str).collect::<Vec<_>>()), Some(pins.to_vec()), "{case}: {name} in {nets:?}");
+        }
+        if kicad_cli_ready() {
+            let derived = kicad_net_groups(&dir);
+            assert_eq!(derived, kicad_cli_net_groups(&root), "{case}: kicad-cli reads the derived file as the original");
+        }
+    }
+}
+
+/// r4 A4-H1 (`SCH_PIN::IsLocalPower`: the placed symbol's library symbol decides): one library id cached `(power local)` on the root and `(power)` on the
+/// sheet (`p7`) keeps each screen's kind, as kicad-cli reads the original; the design's one library symbol of the id is the root's local one.
+#[test]
+fn a_screens_own_power_kind_is_kept_where_it_differs_from_the_library() {
+    let (dir, root, nets) = r4_case("p7");
+    assert_eq!(nets.get("+48V").map(Vec::len), Some(3), "{nets:?}");
+    let (_, design, _) = load(&dir).unwrap();
+    let sheet = design.sheet_contents.as_ref().unwrap().values().next().unwrap();
+    assert!(sheet.extras.global_power.contains("lp:+48V") && design.schematic.as_ref().unwrap().extras.local_power.is_empty(), "only the sheet that differs keeps a kind of its own");
+    if kicad_cli_ready() {
+        assert_eq!(kicad_net_groups(&dir), kicad_cli_net_groups(&root));
+    }
+}
+
+/// r4 A4-H1: a local power symbol placed in the editor (`P`) is local because its library symbol is (`SCH_PIN::IsLocalPower`), not because an import
+/// listed it: a second `lp:+48V` put on the sheet's R3 pin 2 is on the sheet's `/A/+48V` with R3 pin 1, not a global `+48V`, and the sheet's file has
+/// it `(power local)`.
+#[test]
+fn a_placed_local_power_symbol_is_a_net_of_its_sheet() {
+    let (dir, _root, _) = r4_case("p1");
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).all(|s| s.extras.local_power.is_empty()), "the library decides, no screen lists it");
+    let sheet_id = design.schematic.as_ref().unwrap().sheets[0].id.clone();
+    let add = Cmd::AddPowerSymbol { lib_id: "lp:+48V".into(), at: Point { x: mm(50.8), y: mm(54.61) }, rot_millideg: 180_000, net: "+48V".into(), pin: String::new(), annotate: None };
+    step(&dir, Cmd::OnSheet { sheet: sheet_id, cmd: Box::new(add) }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let net_of = |pin: &str| design.nets.iter().flatten().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone());
+    assert_eq!(net_of("R3.2").as_deref(), Some("/A/+48V"), "{:?}", design.nets);
+    assert_eq!(net_of("R3.1").as_deref(), Some("/A/+48V"));
+    assert_eq!(net_of("R1.1").as_deref(), Some("/+48V"));
+    eda_kicad::export_kicad_sch_tree(&design, &load(&dir).unwrap().2, &eda_kicad::ExportMeta { date: "2026-10-28", title: "t" }, "board.kicad_sch")
+        .unwrap()
+        .iter()
+        .filter(|(_, text)| text.contains("lp:+48V"))
+        .for_each(|(file, text)| assert!(text.contains("(power local)") && !text.contains("\t\t\t(power)\n"), "{file}"));
 }

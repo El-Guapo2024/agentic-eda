@@ -6106,6 +6106,11 @@ impl<'a> Board<'a> {
 
     fn update_symbol_on_board(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
         self.library_symbol_mut(lib_id)?.published = true;
+        // every screen's cache takes the library's copy (`SCH_SCREEN::UpdateSymbolLinks`): no screen keeps a power kind of its own for it (r4 A4-H1)
+        for sch in self.design.schematic.iter_mut().chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {
+            sch.extras.local_power.remove(lib_id);
+            sch.extras.global_power.remove(lib_id);
+        }
         Ok(())
     }
 

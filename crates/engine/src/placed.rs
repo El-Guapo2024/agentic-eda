@@ -79,7 +79,9 @@ pub fn pin_points(sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol
     let mut out = Vec::new();
     for (i, pin) in part.pins.iter().enumerate() {
         let Some(pi) = b.pin_port[i] else { continue };
-        let exact = resolved.zip(real_box).and_then(|(r, (x0, _, _, y1))| r.pin_by_number(&pin.number).filter(|p| p.unit == 0 || p.unit == sym.unit).map(|p| (eda_model::units::sch_from_mm(p.at.x - x0).get(), eda_model::units::sch_from_mm(y1 - p.at.y).get())));
+        // the k-th pin of a number repeated on the symbol is the library's k-th (r4 A4-H3)
+        let k = part.pins[..i].iter().filter(|p| p.number == pin.number).count();
+        let exact = resolved.zip(real_box).and_then(|(r, (x0, _, _, y1))| r.nth_pin_by_number(&pin.number, k).filter(|p| p.unit == 0 || p.unit == sym.unit).map(|p| (eda_model::units::sch_from_mm(p.at.x - x0).get(), eda_model::units::sch_from_mm(y1 - p.at.y).get())));
         let (lx, ly) = exact.unwrap_or_else(|| {
             let tip = b.node.stub_tip(LPoint { x: 0, y: 0 }, pi);
             (tip.x, tip.y)
@@ -205,7 +207,7 @@ pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, un
         });
     }
     let reference_prefix: String = part.reference.chars().take_while(|c| c.is_alphabetic()).collect();
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: lib_id.to_string(),
         graphics: vec![SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(0.0, 0.0), end: SPoint::new(mm(w), -mm(h)), stroke_mm: 0.254, filled: false }],
         pins,

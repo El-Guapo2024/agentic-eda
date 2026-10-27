@@ -251,11 +251,44 @@ pub struct LibSymbol {
     /// until this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alternate: Option<Box<AlternateBody>>,
+    /// What the connectivity engine reads of the symbol beyond its pins (see [`LibConnectivity`]).
+    #[serde(default, skip_serializing_if = "LibConnectivity::is_default")]
+    pub connectivity: LibConnectivity,
+}
+
+/// What KiCad 25ec2335's connectivity engine reads of a library symbol beyond its pins (`conn_facts.cpp`, `SCH_PIN::IsLocalPower`): whether a power symbol is a
+/// local one, and which of its pins are jumpered together. Read from `(power local)`, `(duplicate_pin_numbers_are_jumpers yes)` and `(jumper_pin_groups ..)` of a
+/// library or a schematic's cache, or taken from the design library's symbol (`LibrarySymbol::power_local`, `LibrarySymbolKeep`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibConnectivity {
+    /// `(power local)` (`LIB_SYMBOL::IsLocalPower`): a power symbol whose pin names its net on its own sheet only (`PRIORITY::LOCAL_POWER_PIN`, `SCOPE::SHEET`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub power_local: bool,
+    /// `(duplicate_pin_numbers_are_jumpers yes)` (`LIB_SYMBOL::GetDuplicatePinNumbersAreJumpers`): every pin of one number is one node wherever it sits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub duplicate_pin_numbers_are_jumpers: bool,
+    /// `(jumper_pin_groups ("1" "2") ..)` (`LIB_SYMBOL::JumperPinGroups`): the pins of each group, by number, are one node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jumper_pin_groups: Vec<Vec<String>>,
+}
+
+impl LibConnectivity {
+    pub fn is_default(&self) -> bool {
+        *self == LibConnectivity::default()
+    }
 }
 
 impl LibSymbol {
     pub fn pin_by_number(&self, number: &str) -> Option<&LibPin> {
         self.pins.iter().find(|p| p.number == number)
+    }
+
+    /// The `k`-th pin (from 0) of the number `number`: a symbol may have several pins of one number at several places (KiCad keeps every pin object,
+    /// `SCH_SYMBOL::GetRawPins`), and a part lists them in the library's order, so its `k`-th pin of a number is the library's `k`-th. The first one when
+    /// the library has fewer.
+    pub fn nth_pin_by_number(&self, number: &str, k: usize) -> Option<&LibPin> {
+        self.pins.iter().filter(|p| p.number == number).nth(k).or_else(|| self.pin_by_number(number))
     }
 
     /// `LIB_SYMBOL::HasAlternateBodyStyle`.
@@ -297,7 +330,7 @@ impl LibSymbol {
     pub fn in_style(&self, style: u32) -> std::borrow::Cow<'_, LibSymbol> {
         let want = if style == 2 { 2 } else { 1 };
         match &self.alternate {
-            Some(alt) if self.drawn_style() != want => std::borrow::Cow::Owned(LibSymbol {
+            Some(alt) if self.drawn_style() != want => std::borrow::Cow::Owned(LibSymbol { connectivity: Default::default(),
                 lib_id: self.lib_id.clone(),
                 graphics: alt.graphics.clone(),
                 pins: alt.pins.clone(),
@@ -453,7 +486,7 @@ fn pin(number: &str, etype: &str, x: Mm, y: Mm, angle_deg: f64, length_mm: Mm) -
 
 /// `Device:R` -- transcribed from the installed `Device.kicad_sym`.
 fn device_r() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "Device:R".into(),
         graphics: vec![SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(-1.016, -2.54), end: SPoint::new(1.016, 2.54), stroke_mm: 0.254, filled: false }],
         pins: vec![pin("1", "passive", 0.0, 3.81, 270.0, 1.27), pin("2", "passive", 0.0, -3.81, 90.0, 1.27)],
@@ -473,7 +506,7 @@ fn device_r() -> LibSymbol {
 
 /// `Device:C` -- two plates, transcribed proportionally from the real symbol.
 fn device_c() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "Device:C".into(),
         graphics: vec![
             SymbolGraphic::Polyline { unit: 1, pts: vec![SPoint::new(-1.524, 0.508), SPoint::new(1.524, 0.508)], stroke_mm: 0.508, filled: false },
@@ -499,7 +532,7 @@ fn device_c() -> LibSymbol {
 /// avoids needing this port's arc writer to reproduce KiCad's exact bulge
 /// geometry for a part none of this task's examples actually use.
 fn device_l() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "Device:L".into(),
         graphics: vec![SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(-1.27, -3.81), end: SPoint::new(1.27, 3.81), stroke_mm: 0.254, filled: false }],
         pins: vec![pin("1", "passive", 0.0, 5.08, 270.0, 1.27), pin("2", "passive", 0.0, -5.08, 90.0, 1.27)],
@@ -519,7 +552,7 @@ fn device_l() -> LibSymbol {
 
 /// `Device:D` -- a diode: triangle + bar.
 fn device_d() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "Device:D".into(),
         graphics: vec![
             SymbolGraphic::Polyline { unit: 1, pts: vec![SPoint::new(0.0, 1.27), SPoint::new(0.0, -1.27)], stroke_mm: 0.254, filled: false },
@@ -567,7 +600,7 @@ fn conn_01x(n: u32) -> LibSymbol {
         pins.push(pin(&(i + 1).to_string(), "passive", -5.08, y, 0.0, 3.81));
     }
     let rect = SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(-1.27, top_y), end: SPoint::new(1.27, top_y - (n as f64) * pitch), stroke_mm: 0.254, filled: false };
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: format!("Connector_Generic:Conn_01x{n:02}"),
         graphics: vec![rect],
         pins,
@@ -587,7 +620,7 @@ fn conn_01x(n: u32) -> LibSymbol {
 
 /// `power:GND` -- the ground tines glyph, transcribed from `power.kicad_sym`.
 fn power_gnd() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "power:GND".into(),
         graphics: vec![SymbolGraphic::Polyline {
             unit: 1,
@@ -614,7 +647,7 @@ fn power_gnd() -> LibSymbol {
 /// `power_out` pin, so it satisfies ERC's power-input-driven rule for any
 /// net it is dropped on.
 fn power_flag() -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: "power:PWR_FLAG".into(),
         graphics: vec![SymbolGraphic::Polyline {
             unit: 1,
@@ -643,7 +676,7 @@ fn power_flag() -> LibSymbol {
 /// KiCad user makes a custom rail symbol in practice (copy `VCC`, rename
 /// its Value).
 fn power_rail(net: &str) -> LibSymbol {
-    LibSymbol {
+    LibSymbol { connectivity: Default::default(),
         lib_id: format!("power:{net}"),
         graphics: vec![
             SymbolGraphic::Polyline { unit: 1, pts: vec![SPoint::new(-0.762, 1.27), SPoint::new(0.0, 2.54)], stroke_mm: 0.0, filled: false },

@@ -38,6 +38,26 @@ pub fn load_sheet_file(path: &Path) -> Result<SheetFile, Vec<CheckResult>> {
     // a name two files give to different symbols: the first wins, as the design's own would
     let mut names = BTreeSet::new();
     lib_symbols.retain(|s| names.insert(s.lib_id.clone()));
+    // A screen's power kinds: the library symbol decides, and a screen keeps an override only where its own cache disagrees with the winner
+    // (`SchExtras::power_is_local`; r4 A4-H1).
+    let lib_local: std::collections::BTreeMap<&str, bool> = lib_symbols.iter().map(|s| (s.lib_id.as_str(), s.power && s.power_local)).collect();
+    let mut root = root;
+    let mut screens = screens;
+    for sch in std::iter::once(&mut root).chain(screens.values_mut()) {
+        let ids: BTreeSet<String> = sch.power_symbols.iter().map(|p| p.lib_id.clone()).collect();
+        for id in ids {
+            let here = sch.extras.local_power.contains(&id);
+            match lib_local.get(id.as_str()) {
+                Some(&lib) if lib == here => {
+                    sch.extras.local_power.remove(&id);
+                }
+                Some(&true) => {
+                    sch.extras.global_power.insert(id);
+                }
+                _ => {}
+            }
+        }
+    }
 
     if imported.unresolved_symbols > 0 {
         notes.push(format!("{} symbol(s) had no library symbol in the file and were left out", imported.unresolved_symbols));
@@ -82,7 +102,18 @@ fn collect_lib_symbols(path: &Path, placed_by: Option<(&str, &str)>, seen: &mut 
     for cache in sexpr::find_all(root, "lib_symbols") {
         let parsed = crate::symbol_import::symbols_of(cache);
         notes.extend(parsed.warnings);
+        // a symbol drawn from a cache entry of another name (`(lib_name ..)`) whose id has none of its own: the entry stands under the id (r4 B4-H1, as the
+        // importer resolves it)
+        let mut aliased: Vec<LibrarySymbol> = Vec::new();
+        for (lib_id, lib_name) in crate::sch_import::cache_aliases(root) {
+            if parsed.symbols.iter().all(|s| s.lib_id != lib_id) && aliased.iter().all(|s| s.lib_id != lib_id) {
+                if let Some(copy) = parsed.symbols.iter().find(|s| s.lib_id == lib_name) {
+                    aliased.push(LibrarySymbol { lib_id, ..copy.clone() });
+                }
+            }
+        }
         out.extend(parsed.symbols);
+        out.extend(aliased);
     }
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let own = path.file_name().and_then(|n| n.to_str()).unwrap_or("the sheet");

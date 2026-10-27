@@ -118,8 +118,17 @@ pub struct SchExtras {
     /// id: a local power symbol names a net on its own sheet only (`PRIORITY::LOCAL_POWER_PIN`, a `SCOPE::SHEET` name edge and no `SCOPE::GLOBAL` one,
     /// `conn_claims.cpp::BuildIslandRecord`), so a `+48V` on the root and one on a sheet are two nets (QA `issue22938`). Read from a file's `lib_symbols`
     /// and written back as `(power local)`. Additive.
+    ///
+    /// Since r4 A4-H1 the library symbol decides (`LibConnectivity::power_local`, what `SCH_PIN::IsLocalPower` reads), so a local power symbol placed,
+    /// pasted or brought in by Import Sheet is local; this set (and [`Self::global_power`]) only says where the screen's own cache disagrees with the
+    /// design's one library symbol of that id (KiCad keeps a cache per screen; the design keeps one symbol per id, the first file's), and a design read
+    /// before the library symbol carried it. "Update Symbol in Schematic" clears both for its id. Read through [`Self::power_is_local`].
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub local_power: std::collections::BTreeSet<String>,
+    /// The power symbols of this screen whose own cache has them as global (`(power)`) where the design's library symbol of that id is a local one (see
+    /// [`Self::local_power`]). Additive.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub global_power: std::collections::BTreeSet<String>,
     /// The symbols marked "Exclude from position files" (`SCH_SYMBOL::GetExcludedFromPosFiles`, `(in_pos_files no)`), by `field_key` (r2 B-L2): read and
     /// written back, so the board's position files leave them out as KiCad's do. Additive.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
@@ -579,6 +588,18 @@ pub fn permute_pins<T: Clone>(items: Vec<(String, T)>, swaps: &BTreeMap<String, 
 }
 
 impl SchExtras {
+    /// Whether a power symbol of `lib_id` on this screen is a local one (`SCH_PIN::IsLocalPower`): as the screen's own cache says where it disagrees with
+    /// the design's library symbol ([`Self::global_power`], [`Self::local_power`]), else as the library symbol says (`library`: `power && power_local`,
+    /// `None` when no library gives the symbol).
+    pub fn power_is_local(&self, lib_id: &str, library: Option<bool>) -> bool {
+        if self.global_power.contains(lib_id) {
+            return false;
+        }
+        self.local_power.contains(lib_id) || library.unwrap_or(false)
+    }
+}
+
+impl SchExtras {
     pub fn is_empty(&self) -> bool {
         self.graphics.is_empty()
             && self.locked.is_empty()
@@ -593,6 +614,7 @@ impl SchExtras {
             && self.sheet_pages.is_empty()
             && self.path_units.is_empty()
             && self.local_power.is_empty()
+            && self.global_power.is_empty()
             && self.excluded_from_pos_files.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()

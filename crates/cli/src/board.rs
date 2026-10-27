@@ -514,6 +514,8 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
     let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
     // a power symbol names its net when its pin is a power input (`SCH_PIN::IsGlobalPower`), which a PWR_FLAG's is not
     let global_power = |lib_id: &str| -> Option<bool> { resolve_lib_symbol(lib_id, model).map(|lib| lib.pins.iter().any(|p| p.electrical_type == "power_in")) };
+    // ... and is a local one when its library symbol is (`SCH_PIN::IsLocalPower`: `GetParentSymbol()->IsLocalPower()`), wherever it was placed from (r4 A4-H1)
+    let local_power = |lib_id: &str| -> Option<bool> { resolve_lib_symbol(lib_id, model).map(|lib| lib.power && lib.connectivity.power_local) };
     // the reference with the unit of each pin of a symbol of several units (`Net-(U1A-OUT)`), and the no-connect pins (`unconnected-(..)`), as the
     // schematic writer writes them (`resolve_pin_electrical_type`)
     let mut pin_units: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
@@ -561,7 +563,7 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
                 .collect::<Vec<_>>()
         })
         .collect();
-    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), common_pins: Some(&common_pins), quiet_pins: Some(&quiet_pins), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), common_pins: Some(&common_pins), quiet_pins: Some(&quiet_pins), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), local_power: Some(&local_power), ..Default::default() };
     trace_design(design, model, &naming)
 }
 
@@ -587,17 +589,35 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
     // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
     // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
     // A symbol a sheet path draws as another unit (`SCH_SYMBOL::GetPins( aSheet )` takes `GetUnitSelection( aSheet )`, r2 B-M4) has that unit's pins there.
+    // the no-connect pins and the jumpered pins of what `pins_of` placed, by the same keys
+    let pin_facts = std::cell::RefCell::new(std::collections::BTreeMap::<Vec<String>, (std::collections::BTreeSet<String>, Vec<Vec<String>>)>::new());
     let pins_of = |sch: &eda_model::ir::SchematicSection, path: &[String]| -> std::collections::BTreeMap<String, Point> {
         let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
+        let mut nc: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut jumpered: Vec<Vec<String>> = Vec::new();
         for (idx, sym) in sch.symbols.iter().enumerate() {
             let unit = eda_model::sheet_list::unit_under(sch, sym, path);
             if !sch.imported_from_kicad {
                 if let Some(part) = model.part(&sym.id) {
                     let resolved = model.real_symbol_of_instance(sch, sym, part);
                     let pins = if unit == sym.unit { eda_engine::placed::pin_points_in(sch, sym, part, resolved.as_ref()) } else { eda_engine::placed::pin_points(&drawn_as_unit(sym, unit, resolved.as_ref()), part, resolved.as_ref()) };
+                    let mut placed: Vec<(String, String, bool)> = Vec::new();
+                    let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
                     for (number, at) in pins {
-                        let common = resolved.as_ref().and_then(|r| r.pin_by_number(&number)).is_some_and(|p| p.unit == 0 && r_units(resolved.as_ref()) > 1);
-                        pin_world.insert(pin_key(sch, idx, sym, unit, &number, common), at);
+                        let k = seen.entry(number.clone()).or_insert(0);
+                        let lib_pin = resolved.as_ref().and_then(|r| r.nth_pin_by_number(&number, *k));
+                        let common = lib_pin.is_some_and(|p| p.unit == 0 && r_units(resolved.as_ref()) > 1);
+                        let key = pin_key(sch, idx, sym, unit, &number, common);
+                        // a second pin of the number is a node of its own (r4 A4-H3)
+                        let key = if *k == 0 { key } else { eda_engine::nets::pin_twin_key(&key, *k) };
+                        *k += 1;
+                        placed.push((key.clone(), number.clone(), lib_pin.is_some_and(|p| p.electrical_type == "no_connect")));
+                        pin_world.insert(key, at);
+                    }
+                    if let Some(lib) = resolved.as_ref() {
+                        let (n, j) = pin_contacts(&placed, &lib.connectivity);
+                        nc.extend(n);
+                        jumpered.extend(j);
                     }
                 }
                 continue;
@@ -609,19 +629,34 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             // positioned when *that* unit's own `SymbolInstance` is visited, not here.
             let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
             let mut placed: Vec<(String, Point)> = Vec::new();
+            let mut no_connect: Vec<bool> = Vec::new();
             for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == unit) {
                 let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
                 placed.push((p.number.clone(), Point { x: sym.at.x + eda_kicad::mm_to_nm(world.x), y: sym.at.y + eda_kicad::mm_to_nm(world.y) }));
+                no_connect.push(p.electrical_type == "no_connect");
             }
             // the places Swap Pins traded (of the symbol's own unit)
             if let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)).filter(|_| unit == sym.unit) {
                 placed = eda_model::sch_extras::permute_pins(placed, swaps);
             }
-            for (number, at) in placed {
+            // Every pin object is a contact of its own (KiCad 25ec2335 `conn_facts.cpp`: an item per `{ number, contact }`): a second pin `1` elsewhere on the
+            // symbol is a node of its own, keyed apart ([`eda_engine::nets::pin_twin_key`]), not the first one moved (r4 A4-H3).
+            let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+            let mut keyed: Vec<(String, String, bool)> = Vec::new();
+            for ((number, at), nc_pin) in placed.into_iter().zip(no_connect) {
                 let common = lib.unit_count > 1 && lib.pins.iter().any(|p| p.number == number && p.unit == 0);
-                pin_world.insert(pin_key(sch, idx, sym, unit, &number, common), at);
+                let key = pin_key(sch, idx, sym, unit, &number, common);
+                let k = seen.entry(number.clone()).or_insert(0);
+                let key = if *k == 0 { key } else { eda_engine::nets::pin_twin_key(&key, *k) };
+                *k += 1;
+                keyed.push((key.clone(), number, nc_pin));
+                pin_world.insert(key, at);
             }
+            let (n, j) = pin_contacts(&keyed, &lib.connectivity);
+            nc.extend(n);
+            jumpered.extend(j);
         }
+        pin_facts.borrow_mut().insert(path.to_vec(), (nc, jumpered));
         pin_world
     };
     // `SCH_PIN::IsGlobalPower`'s legacy rule: an invisible power input of a symbol that is not a power symbol names its net by its pin name
@@ -643,6 +678,22 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
     };
     let mut contents = design.sheet_contents.take();
     let root_pins = pins_of(&root, &[]);
+    // the pin facts of a placement, under the references it gives its symbols (as its pins are)
+    let mut nc_contacts: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut jumpered: Vec<Vec<String>> = Vec::new();
+    let mut take_facts = |path: &[String], sec: Option<&eda_model::ir::SchematicSection>| {
+        if let Some((nc, groups)) = pin_facts.borrow_mut().remove(path) {
+            let rename = |keys: std::collections::BTreeSet<String>| -> Vec<String> {
+                match sec {
+                    Some(sec) => pins_under_placement(keys.into_iter().map(|k| (k, ())).collect(), sec, path).into_keys().collect(),
+                    None => keys.into_iter().collect(),
+                }
+            };
+            nc_contacts.extend(rename(nc));
+            jumpered.extend(groups.into_iter().map(|g| rename(g.into_iter().collect())));
+        }
+    };
+    take_facts(&[], None);
     let mut power_pins = power_pins_of(&root, &[]);
     // (path, file, pins, the first placement of its file); a later placement of a file traces a copy of the screen
     let mut plan: Vec<(Vec<String>, String, std::collections::BTreeMap<String, Point>, bool)> = Vec::new();
@@ -652,6 +703,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         for e in entries.iter().skip(1) {
             let Some(sec) = contents.as_ref().and_then(|c| c.get(&e.file)) else { continue };
             let pins = pins_under_placement(pins_of(sec, &e.path), sec, &e.path);
+            take_facts(&e.path, Some(sec));
             power_pins.extend(pins_under_placement(power_pins_of(sec, &e.path), sec, &e.path));
             let first = seen.insert(e.file.as_str());
             if !first {
@@ -672,7 +724,14 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         }
         let resolve = |path: &[String], raw: &str| power_value_under(design_view, path, raw);
         // a label's and a sheet pin's text as a power symbol's Value: `GetShownText( &path, FOR_NETNAME )` of the placement (r2 A-N10)
-        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), power_value: naming.power_value.or(Some(&resolve)), label_text: naming.label_text.or(Some(&resolve)), ..*naming };
+        let naming = eda_engine::nets::Naming {
+            power_pins: naming.power_pins.or(Some(&power_pins)),
+            power_value: naming.power_value.or(Some(&resolve)),
+            label_text: naming.label_text.or(Some(&resolve)),
+            nc_contacts: naming.nc_contacts.or(Some(&nc_contacts)),
+            jumpered: naming.jumpered.or(Some(&jumpered)),
+            ..*naming
+        };
         eda_engine::nets::trace_nets_with(&mut screens, &naming)
     };
     design.schematic = Some(root);
@@ -751,6 +810,33 @@ fn drawn_as_unit(sym: &eda_model::ir::SymbolInstance, unit: u32, resolved: Optio
         drawn.at = Point { x: sym.at.x + ox - ux, y: sym.at.y + oy - uy };
     }
     drawn
+}
+
+/// The pin facts of one placed symbol's pins (`(key, number, a no-connect pin)`, keys as [`trace_design`] gives them): the no-connect pins' keys
+/// (`PT_NC`: a contact that joins nothing, `conn_islands.cpp`), and the groups of keys that are one node wherever they sit (KiCad 25ec2335 `conn_facts.cpp`):
+/// every pin of one number when the symbol's duplicate pin numbers are jumpers (`joinApart`), and the pins of each jumper pin group, a stacked number
+/// counting as each of its numbers (`numbers[ number ]` for `GetStackedPinNumbers`). A no-connect pin is in no group.
+fn pin_contacts(pins: &[(String, String, bool)], facts: &eda_model::symbol::LibConnectivity) -> (Vec<String>, Vec<Vec<String>>) {
+    let nc: Vec<String> = pins.iter().filter(|p| p.2).map(|p| p.0.clone()).collect();
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    if facts.duplicate_pin_numbers_are_jumpers {
+        let mut by_number: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
+        for (key, number, _) in pins.iter().filter(|p| !p.2) {
+            by_number.entry(number.as_str()).or_default().push(key.clone());
+        }
+        groups.extend(by_number.into_values().filter(|g| g.len() > 1));
+    }
+    for group in &facts.jumper_pin_groups {
+        let keys: Vec<String> = pins
+            .iter()
+            .filter(|(_, number, nc)| !nc && (group.contains(number) || eda_model::fp_units::expand_stacked_pin_notation(number).0.iter().any(|n| group.contains(n))))
+            .map(|p| p.0.clone())
+            .collect();
+        if keys.len() > 1 {
+            groups.push(keys);
+        }
+    }
+    (nc, groups)
 }
 
 fn pins_under_placement<V>(pins: std::collections::BTreeMap<String, V>, sec: &eda_model::ir::SchematicSection, path: &[String]) -> std::collections::BTreeMap<String, V> {
@@ -3853,7 +3939,7 @@ pub(crate) mod tests {
             datasheet: None,
             edge: None,
         };
-        let lib = eda_model::LibSymbol {
+        let lib = eda_model::LibSymbol { connectivity: Default::default(),
             lib_id: "TEST:R".into(),
             graphics: vec![],
             pins: vec![eda_model::LibPin { number: "1".into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, length_mm: 2.54, unit: 1, hidden: false }],
@@ -6185,7 +6271,7 @@ pub(crate) mod tests {
         let pin = |n: &str| Pin { number: n.into(), name: None, kind: PinKind::Passive };
         let part = |r: &str, pins: &[&str], symbol: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, symbol: Some(symbol.into()), pins: pins.iter().map(|n| pin(n)).collect(), body_nm: None, datasheet: None, edge: None };
         let lib_pin = |n: &str, y: f64, unit: u32| eda_model::LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit, hidden: false };
-        let lib = |id: &str, units: u32, pins: Vec<eda_model::LibPin>| eda_model::LibSymbol {
+        let lib = |id: &str, units: u32, pins: Vec<eda_model::LibPin>| eda_model::LibSymbol { connectivity: Default::default(),
             lib_id: id.into(),
             graphics: vec![],
             pins,
