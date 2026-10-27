@@ -1534,6 +1534,8 @@ export type Cmd =
   | { op: "move_via"; id: string; x: Nm; y: Nm }
   /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */
   | { op: "edit_via"; id: string; diameter: Nm; drill: Nm }
+  /** `crates/ops/src/via_layers.rs`: Track & Via Properties' via type, layer pair and annular rings over `ids`; an omitted row is left alone. */
+  | { op: "set_via_layers"; ids: string[]; kind?: "through" | "blind" | "buried" | "micro"; from_layer?: string; to_layer?: string; unconnected?: UnconnectedLayers }
   /** Board Setup > Track Widths & Vias: replace the W/Shift+W preset list wholesale (no per-entry add/remove Cmd -- same spirit as `paste_items`). The board's own default (`board_rules.track_width`) is not part of this list. */
   | { op: "set_track_width_presets"; widths: Nm[] }
   /** Same panel's via-size-cycle preset list. */

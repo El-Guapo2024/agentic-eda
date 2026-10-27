@@ -62,6 +62,8 @@ pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingA
 mod fp_array;
 mod pad_edit;
 mod unused_pads;
+mod via_layers;
+pub use via_layers::ViaLayerEdit;
 mod pad_nets;
 mod fp_lib_fields;
 mod sym_derive;
@@ -371,6 +373,13 @@ pub enum Cmd {
     /// unchanged (KiCad does not let you re-net or re-span an existing via
     /// from this dialog either -- that is what delete-and-redraw is for).
     EditVia { id: String, diameter: Nm, drill: Nm },
+    /// Track & Via Properties' via type, layer pair and annular rings over the vias `ids` (`DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`); a
+    /// row left `None` is left alone -- see `via_layers.rs`. One undo step; refused when nothing changes.
+    SetViaLayers {
+        ids: Vec<String>,
+        #[serde(flatten)]
+        edit: ViaLayerEdit,
+    },
     /// `BOARD_DESIGN_SETTINGS::m_TrackWidthList`, replaced wholesale --
     /// the studio's Board Setup "Track Widths & Vias" panel has no
     /// per-entry add/remove Cmd of its own, it just resubmits the whole
@@ -2328,6 +2337,7 @@ impl Cmd {
             Cmd::ZoneCutout { id, .. } => vec![id.as_str()],
             Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::SetZonePriority { id, .. } => vec![id.as_str()],
+            Cmd::SetViaLayers { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
@@ -2767,6 +2777,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
             Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),
+            Cmd::SetViaLayers { ids, edit } => self.set_via_layers(ids, edit),
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
             Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),

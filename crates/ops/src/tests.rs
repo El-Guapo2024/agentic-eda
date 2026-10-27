@@ -3082,3 +3082,42 @@ fn a_board_of_two_pieces_takes_a_part_on_its_smaller_piece() {
     assert!(b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(65.0), y: mm(15.0) }).is_err());
     b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(85.0), y: mm(15.0) }).unwrap();
 }
+
+/// Track & Via Properties' via type, layer pair and annular rings (`DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`, `PCB_VIA::SanitizeLayers`,
+/// `ValidateViaParameters`): over every via of the dialog, a row left out left alone, KiCad's messages for a bad pair.
+#[test]
+fn set_via_layers_sets_type_pair_and_rings_as_the_via_dialog_does() {
+    let mut m = net_model();
+    m.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+    let mut b = board(&m);
+    for x in [5.0, 8.0] {
+        b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(x), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    }
+    let ids: Vec<String> = b.design().routing.as_ref().unwrap().vias.iter().map(|v| v.id.clone()).collect();
+    let cmd = |j: serde_json::Value| serde_json::from_value::<Cmd>(j).unwrap();
+    // Blind, from the back to In1 (given back to front: swapped).
+    b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": ids, "kind": "blind", "from_layer": "B.Cu", "to_layer": "In1.Cu" }))).unwrap();
+    for v in &b.design().routing.as_ref().unwrap().vias {
+        assert_eq!((v.from_layer.as_str(), v.to_layer.as_str()), ("In1.Cu", "B.Cu"));
+        assert_eq!(b.design().drawings.as_ref().unwrap().via_extra(&v.id).unwrap().kind, eda_model::via_extra::ViaKind::Blind);
+    }
+    // The rings only: type and layers kept.
+    b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": [ids[0]], "unconnected": "remove_except_start_and_end" }))).unwrap();
+    let e = b.design().drawings.as_ref().unwrap().via_extra(&ids[0]).unwrap();
+    assert_eq!((e.kind, e.unconnected_layers()), (eda_model::via_extra::ViaKind::Blind, eda_model::padstack::UnconnectedLayers::RemoveExceptStartAndEnd));
+    assert_eq!(b.design().routing.as_ref().unwrap().vias[0].from_layer, "In1.Cu");
+    // Back to Through: `SanitizeLayers` puts it on F.Cu..B.Cu whatever the pair says; with the rings kept all, the via has no extras left.
+    b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": [ids[1]], "kind": "through", "from_layer": "In1.Cu", "to_layer": "In2.Cu" }))).unwrap();
+    let v1 = &b.design().routing.as_ref().unwrap().vias[1];
+    assert_eq!((v1.from_layer.as_str(), v1.to_layer.as_str()), ("F.Cu", "B.Cu"));
+    assert!(b.design().drawings.as_ref().unwrap().via_extra(&ids[1]).is_none());
+    // KiCad's words.
+    let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": ids, "from_layer": "In1.Cu", "to_layer": "In1.Cu" }))).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Via start layer and end layer cannot be the same"));
+    let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": ids, "from_layer": "F.SilkS" }))).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Via layer must be a copper layer."));
+    let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": ids, "to_layer": "In5.Cu" }))).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Via layer is outside the board stack."));
+    let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": [ids[1]], "kind": "through" }))).unwrap_err();
+    assert_eq!(e[0].check, "ops_nothing_to_change");
+}

@@ -1588,6 +1588,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, .. } => {
             format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if *layer_defaults { " --layer-defaults" } else { "" })
         }
+        Cmd::SetViaLayers { ids, edit } => format!("via-layers {}{}{}{}", ids.join(","), edit.kind.map(|k| format!(" --type {k:?}")).unwrap_or_default(), edit.from_layer.as_ref().map(|l| format!(" --from {l}")).unwrap_or_default(), edit.to_layer.as_ref().map(|l| format!(" --to {l}")).unwrap_or_default()),
         Cmd::RemoveUnusedPads { selected, vias, pads, remove, .. } => format!("remove-unused-pads {}{}{}{}", if *remove { "--remove" } else { "--restore" }, if *vias { " --vias" } else { "" }, if *pads { " --pads" } else { "" }, selected.as_ref().map(|s| format!(" --selected {}", s.len())).unwrap_or_default()),
         Cmd::SwapPadNets { ids, .. } => format!("swap-pad-nets {}", ids.join(" ")),
         Cmd::SwapGateNets { ids, target, .. } => format!("swap-gate-nets {}{}", ids.join(" "), target.as_ref().map(|t| format!(" --with {t}")).unwrap_or_default()),
@@ -1930,6 +1931,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
         Cmd::EditTextAndGraphics { .. } => "global-edit-text-and-graphics",
         Cmd::RemoveUnusedPads { .. } => "remove-unused-pads",
+        Cmd::SetViaLayers { .. } => "via-layers",
         Cmd::SwapPadNets { .. } | Cmd::SwapGateNets { .. } => "swap-nets",
         Cmd::SetTeardropSettings { .. } => "board-setup-teardrops",
         Cmd::AddAllTeardrops => "teardrops-add-all",
