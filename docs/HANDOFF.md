@@ -73,6 +73,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r4-schematic` (`-embedded`, 2026-10-28) | The round-4 schematic findings (`findings/round4/r4-schematic.md`): 25ec2335's pin facts (jumpers, duplicate and stacked numbers, NC pins, bus wire entries), local power from the library symbol, `lib_name` resolution, one clean-up per batch, a path's unit and Exclude from position files through renames, sheets above the root's folder, per-path numbering, Align to Grid's grid, a label on a pin's net, ERC severities and markers; `PARITY-sch.md` section 47 | 6/6 high, 8/8 medium, 5/8 low | D4-L1, D4-L2, D4-L5 |
 | `task-reuse-cpp` (`-sim`, 2026-10-28) | The user's reuse rule: KiCad's own Clipper2 2.0.1 and nanosvg (C++, `third_party/`, built with `cc`), the `delaunator` crate, and one copy of the expression language (Find by Properties posts to `/api/pcb/query`); the ports kept INACTIVE (features `eda-clipper2/rust-port`, `eda-connectivity/rust-port`, `eda-kicad/rust-nanosvg`; the TS `pcbExpr.ts`/`libeval.ts` imported only by tests); ARCHITECTURE "Reuse before porting", GAPS item 39 | done | SVG text (needs Fontconfig/FreeType/HarfBuzz); the SPICE value parser stays in two languages; the Query tab's geometry functions |
 
 Gates for any of them:

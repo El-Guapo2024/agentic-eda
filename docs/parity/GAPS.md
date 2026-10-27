@@ -156,6 +156,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (D-C4), Duplicate's hover (D-C8), the Annotate dialog's enabling (D-A4); round 3: a deleted junction merges its wires, the commit-time `CleanUp` after
   Delete and placements, `J` breaks wires, `solid` and `default` strokes merge, the wire tool's terminal points (C3-H1, C3-M1 to M4). **Left**: C-L7 to C-L9,
   C3-L1 (Break and Repeat run `finishSegments`), C3-L3; a pasted sheet's contents use the default numbering.
+- Round 4 (2026-10-28, `task-r4-schematic`, `PARITY-sch.md` section 47): a batch (Delete of a window over a T) cleans up once at its end (C4-H1); the label
+  tool, Delete Sheet and Delete Sheet Pin clean up (C4-L1); a T's deleted dot merges the through wire (C4-L2); Align to Grid uses the selection's grid (C4-M1);
+  a label on a pin has its net (C4-M2) and is a terminal point (C4-L3); a symbol on a shared screen is numbered per path by the project's method and page (D4-M1).
 - Done (`crates/ops/src/{sch_move,sch_drag,sch_scene,sch_props}.rs`, `kicad-port/{schMove,schAlign,schProperties}.ts`, `components/{SchematicView,SchPropertiesDialogs}.tsx`):
   one verb family, `Cmd::SchMove`, moves, drags, turns, mirrors and aligns any set of symbols, power symbols, wires and bus wires, labels of every kind,
   free text, text boxes, shapes, rule areas, directive labels, junctions, no-connects, bus entries, graphic lines and sheets (with their pins), as one
@@ -259,6 +262,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   every file), an unannotated reference's uuid hash (A-N13). Done 2026-10-28 (`task-r2-leftovers`, section 46): the pages of a partly paged file (B-M2), a unit
   per path (B-M4), `in_pos_files` (B-L2), local power symbols (QA issue22938), a common pin per unit, a bus sheet pin's members by `drivesRecord`, a `#`
   reference's claim, which of two same-named nets keeps the bare name by claim (A3-H1, H2, M1 to M3), and an undriven net's KiCad name after an edit (A3-H3).
+  Done 2026-10-28 (`task-r4-schematic`, section 47): local power from the library symbol, so a placed or pasted one stays local (A4-H1); jumper pin groups and
+  duplicate pins as jumpers (A4-H2), two pins of one number (A4-H3), stacked numbers (A4-H4), no-connect pins (A4-M1), bus wire entries (A4-M2), all alike
+  in kicad-cli; a symbol cached under its `lib_name` (B4-H1); a unit per path and Exclude from position files follow the symbol (A4-M3, B4-M2); a sheet above
+  the root's folder saves as a design block and a copy (B4-M1). Left: D4-L1 (the root's page), D4-L2 (a power symbol's flags), D4-L5 (Paste's per-screen cache).
 - Done earlier: the IR (`SchematicSection::sheets`, `Design::sheet_contents` in `crates/model/src/ir.rs`); tree import and multi-file export
   (`crates/kicad/src/sch_import.rs::import_kicad_sch_tree`, `lib.rs`); one derived schematic as module sheets (`crates/engine/src/hier/`,
   Tools > Reorganize into Module Sheets); every schematic command acts on the sheet in view (`Cmd::OnSheet`); the nets traced across sheets
@@ -479,6 +486,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-10-27 (`task-r3-sch-files`; `PARITY-sch.md` section 45, round-3 slice D): the ERC check table is KiCad 25ec2335's (the box's kicad-cli: 55 checks, nine of them new,
   so a project's severities for them come in and Setup takes them); a project's pin map keeps its good cells; the library, footprint, netclass, sheet-name and unit-footprint
   markers carry 25ec2335's sheet paths. Left: a pin-to-pin error ignored from the menu comes back on the next run (KiCad keeps it ignored until the project is reopened).
+- Done 2026-10-28 (`task-r4-schematic`, `PARITY-sch.md` section 47): a project severity other than `warning` / `ignore` is an error (`SeverityFromString`); the three new
+  checks' markers; the connectivity marker rules compared with 25ec2335's `ERC_MARKER_PLACER` (all match).
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `eeschema/sch_marker.cpp`, `eeschema/schematic.cpp` (`ResolveERCExclusions`), `eeschema/erc/erc_settings.cpp`,
   `common/rc_item.cpp`, `common/dialogs/panel_setup_severities.cpp`.
 
