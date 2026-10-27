@@ -28,6 +28,7 @@ import type { CarryOp } from "../kicad-port/pcbCarry";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
+import { LONG_TEXT_QUESTION, plainTextPaste } from "../kicad-port/plainTextPaste";
 import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
@@ -2550,7 +2551,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
       } else if (system != null && system.trim() !== "") {
-        cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: activeLayerName(st.activeLayer, "F.SilkS"), size_nm: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false } };
+        // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts); a long one asks first
+        const plain = plainTextPaste(system, at, activeLayerName(st.activeLayer, "F.SilkS"))!;
+        if (plain.longText && !window.confirm(LONG_TEXT_QUESTION)) return;
+        cmd = plain.cmd;
       } else if (st.clipboard) {
         cmd = paste(st.clipboard.text);
       } else {
