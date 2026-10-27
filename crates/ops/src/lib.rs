@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
 };
 #[cfg(test)]
 use eda_model::ir::Group;
@@ -2961,12 +2961,12 @@ impl<'a> Board<'a> {
             Cmd::RotateSymbol { id, quarter_turns, unit } => self.rotate_symbol(id, *quarter_turns, *unit),
             Cmd::MirrorSymbol { id, unit } => self.mirror_symbol(id, *unit),
             Cmd::MirrorSymbolVertical { id, unit } => self.mirror_symbol_vertical(id, *unit),
-            Cmd::DeleteSymbol { id, unit } => self.delete_symbol(id, *unit),
+            Cmd::DeleteSymbol { id, unit } => self.delete_symbol(id, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::AddWire { pts, bus } => self.add_wire(pts.clone(), *bus),
-            Cmd::DeleteWire { id } => self.delete_wire(id),
-            Cmd::AddNoConnect { at } => self.add_no_connect(*at),
-            Cmd::AddBusEntry { at, size } => self.add_bus_entry(*at, *size),
-            Cmd::DeleteBusEntry { id } => self.delete_bus_entry(id),
+            Cmd::DeleteWire { id } => self.delete_wire(id).and_then(|_| self.commit_clean_up()),
+            Cmd::AddNoConnect { at } => self.add_no_connect(*at).and_then(|_| self.commit_clean_up()),
+            Cmd::AddBusEntry { at, size } => self.add_bus_entry(*at, *size).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteBusEntry { id } => self.delete_bus_entry(id).and_then(|_| self.commit_clean_up()),
             Cmd::AddJunction { at } => self.add_junction(*at),
             Cmd::DeleteJunction { id } => self.delete_junction(id),
             Cmd::AddSchLine { pts, width_nm } => self.add_sch_line(pts.clone(), *width_nm),
@@ -2992,17 +2992,17 @@ impl<'a> Board<'a> {
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
-            Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
+            Cmd::DeleteNoConnect { id } => self.delete_no_connect(id).and_then(|_| self.commit_clean_up()),
             Cmd::AddErcExclusion { check, location, comment, marker } => self.add_erc_exclusion(check, location, comment, marker),
             Cmd::DeleteErcExclusion { check, location, sheet } => self.delete_erc_exclusion(check, location, sheet.as_deref()),
             Cmd::ClearErcExclusions => self.clear_erc_exclusions(),
-            Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
-            Cmd::DeleteLabel { id } => self.delete_label(id),
+            Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteLabel { id } => self.delete_label(id).and_then(|_| self.commit_clean_up()),
             Cmd::AddSchText { content, at, angle_millideg, size_nm } => self.add_sch_text(content, *at, *angle_millideg, *size_nm),
             Cmd::DeleteSchText { id } => self.delete_sch_text(id),
-            Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
-            Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
-            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit),
+            Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin).and_then(|_| self.commit_clean_up()),
+            Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id).and_then(|_| self.commit_clean_up()),
+            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
@@ -4769,8 +4769,10 @@ impl<'a> Board<'a> {
 
     /// The wire tool's commit, `SCH_LINE_WIRE_BUS_TOOL::finishSegments` (eeschema/tools/sch_line_wire_bus_tool.cpp): the wire goes on the sheet, and
     /// each of its ends and each connection point of the sheet that lies on it gets the junction `IsExplicitJunctionNeeded` asks for (`AddJunction`,
-    /// which breaks a wire passing through the dot). Not here: `simplifyWireList` (the studio's tool drops the null segments before it sends the
-    /// points), the bus unfold (its own command), `SCHEMATIC::CleanUp`'s merging of collinear wires and `TrimWire` across a two-pin symbol.
+    /// which breaks a wire passing through the dot), after `SCHEMATIC::CleanUp` and `TrimWire` across a part of at most two connection points. Not here:
+    /// `simplifyWireList` (the studio's tool drops the null segments before it sends the points) and the bus unfold (its own command). **Differs**
+    /// (r3 C3-L1): Break / Slice and Repeat send this verb too, so they also run `finishSegments`' `TrimWire`, which KiCad's move finish and
+    /// `RepeatDrawItem` do not.
     fn add_wire(&mut self, pts: Vec<Point>, bus: bool) -> Result<(), Vec<CheckResult>> {
         if pts.len() < 2 {
             return Err(vec![CheckResult::fail("ops_bad_wire", "wire", "a wire needs at least two points")]);
@@ -4861,23 +4863,53 @@ impl<'a> Board<'a> {
 
     /// `J`: an explicit junction. A second one at the same point is refused (a click on an existing junction
     /// does nothing in `SingleClickPlace`), so the undo stack never records a step that changed nothing.
+    ///
+    /// `SCH_DRAWING_TOOLS::SingleClickPlace`: `lwbTool->AddJunction( &commit, screen, cursorPos ); m_frame->Schematic().CleanUp( &commit );` -- `AddJunction`
+    /// breaks the wires through the dot (`BreakSegments`), and the clean-up drops a dot that joins nothing (r3 C3-M2).
     fn add_junction(&mut self, at: Point) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
         let sch = self.schematic_mut_or_create();
         if sch.junctions.iter().any(|j| j.at == at) {
             return Err(vec![CheckResult::fail("ops_junction_exists", "junction", "there is already a junction at this point")]);
         }
-        sch.junctions.push(Junction { id: String::new(), at });
+        let mut scene = sch_scene::Scene::new(sch, model);
+        if !scene.is_explicit_junction_allowed(at) {
+            return Err(vec![CheckResult::fail("ops_junction_not_allowed", "junction", "Junction location contains no joinable wires and/or pins.")]);
+        }
+        scene.add_junction(at);
+        scene.clean_up();
+        *sch = scene.finish();
         sch.junctions.sort_by_key(|j| j.at);
         sch.assign_missing_ids();
         Ok(())
     }
 
+    /// Delete a junction (`SCH_EDIT_FRAME::DeleteJunction` from `DoDelete`): the dot goes and the wires that end at it merge where they are in line
+    /// (`MergeOverlap`), as the commit's `SCHEMATIC::CleanUp` does, so two crossing wires are no longer joined and the stem of a T is cut off (r3 C3-H1).
     fn delete_junction(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
         let sch = self.schematic_mut()?;
         let before = sch.junctions.len();
         sch.junctions.retain(|j| j.id != id);
         if sch.junctions.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_junction", id, "no junction with this id")]);
+        }
+        self.commit_clean_up()
+    }
+
+    /// The commit-time `SCHEMATIC::CleanUp` of an edit that holds a connectable item (`SCH_COMMIT::pushSchEdit`: "Do a local clean up if there are any
+    /// connectable objects in the commit", `RecalculateConnections( this, LOCAL_CLEANUP )`), on the sheet the verbs act on: a junction that joins nothing
+    /// goes (`DoDelete`'s `if( junction->HasFlag( STRUCT_DELETED ) || !screen->IsExplicitJunction( point ) ) DeleteJunction(..)` comes to the same), and
+    /// wires that meet in line with no junction between them merge (r3 C3-H1, C3-M1). The sheet is left as it was when nothing changes.
+    pub(crate) fn commit_clean_up(&mut self) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
+        let Ok(sch) = self.schematic_mut() else { return Ok(()) };
+        let mut scene = sch_scene::Scene::new(sch, model);
+        scene.clean_up();
+        let after = scene.finish();
+        let shape = |s: &eda_model::ir::SchematicSection| (s.wires.iter().map(|w| (w.pts.clone(), w.bus)).collect::<Vec<_>>(), s.junctions.iter().map(|j| j.at).collect::<Vec<_>>(), s.no_connects.len());
+        if shape(&after) != shape(sch) {
+            *sch = after;
+            sch.assign_missing_ids();
         }
         Ok(())
     }

@@ -2188,6 +2188,11 @@ fn a_junction_is_added_once_per_point_deleted_by_id_and_belongs_to_the_schematic
     let mut b = board(&m);
     assert_eq!(Cmd::AddJunction { at: p(Nm::ZERO, Nm::ZERO) }.domain(), Domain::Schematic);
     assert_eq!(Cmd::DeleteJunction { id: "x".into() }.domain(), Domain::Schematic);
+    // `IsExplicitJunctionAllowed`: a dot only where three or more things meet (two crossings here)
+    assert_eq!(b.apply(&Cmd::AddJunction { at: p(mm(2.54), mm(5.08)) }).unwrap_err()[0].check, "ops_junction_not_allowed");
+    for (a, z) in [(p(Nm::ZERO, mm(5.08)), p(mm(5.08), mm(5.08))), (p(mm(2.54), Nm::ZERO), p(mm(2.54), mm(10.16))), (p(Nm::ZERO, -mm(2.54)), p(Nm::ZERO, mm(2.54))), (p(-mm(2.54), Nm::ZERO), p(mm(2.54), Nm::ZERO))] {
+        b.apply(&Cmd::AddWire { pts: vec![a, z], bus: false }).unwrap();
+    }
     b.apply(&Cmd::AddJunction { at: p(mm(2.54), mm(5.08)) }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     assert_eq!(sch.junctions.len(), 1);
@@ -2198,6 +2203,8 @@ fn a_junction_is_added_once_per_point_deleted_by_id_and_belongs_to_the_schematic
     let id = b.design().schematic.as_ref().unwrap().junctions.iter().find(|j| j.at == p(mm(2.54), mm(5.08))).unwrap().id.clone();
     b.apply(&Cmd::DeleteJunction { id: id.clone() }).unwrap();
     assert_eq!(b.design().schematic.as_ref().unwrap().junctions.len(), 1);
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.wires.iter().map(|w| w.pts.len() - 1).sum::<usize>(), 6, "the wires of the deleted dot merge again (DeleteJunction), the other dot's stay broken: {:?}", sch.wires);
     assert_eq!(b.apply(&Cmd::DeleteJunction { id }).unwrap_err()[0].check, "ops_unknown_junction");
 }
 
@@ -3081,4 +3088,44 @@ fn a_board_of_two_pieces_takes_a_part_on_its_smaller_piece() {
     // between the pieces is off the board
     assert!(b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(65.0), y: mm(15.0) }).is_err());
     b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(85.0), y: mm(15.0) }).unwrap();
+}
+
+/// r3 C3-H1 (`DoDelete` -> `SCH_EDIT_FRAME::DeleteJunction`: the wires that end at the dot merge in line, `MergeOverlap`; the commit's `CleanUp`): four wire
+/// pieces meeting at a junction are two crossing wires once the dot is deleted, on two nets. r3 C3-M2 (`SingleClickPlace`: `AddJunction` breaks the wires,
+/// then `CleanUp`): placing the dot on two crossing wires breaks them into four.
+#[test]
+fn delete_junction_at_crossing_unjoins() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::AddWire { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.32), Nm::ZERO)], bus: false }).unwrap();
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(10.16), -mm(10.16)), p(mm(10.16), mm(10.16))], bus: false }).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().wires.len(), 2, "two wires cross, unjoined");
+    b.apply(&Cmd::AddJunction { at: p(mm(10.16), Nm::ZERO) }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    // (a wire here is a polyline the writer writes a `(wire ..)` per segment of: broken at the dot, each has a point there)
+    let segments = |sch: &SchematicSection| sch.wires.iter().map(|w| w.pts.len() - 1).sum::<usize>();
+    assert_eq!((segments(sch), sch.junctions.len()), (4, 1), "the dot breaks both wires");
+    assert!(sch.wires.iter().all(|w| w.pts.contains(&p(mm(10.16), Nm::ZERO))));
+    let id = sch.junctions[0].id.clone();
+    b.apply(&Cmd::DeleteJunction { id }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let mut wires: Vec<Vec<Point>> = sch.wires.iter().map(|w| { let mut v = w.pts.clone(); v.sort(); v }).collect();
+    wires.sort();
+    assert_eq!(wires, vec![vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.32), Nm::ZERO)], vec![p(mm(10.16), -mm(10.16)), p(mm(10.16), mm(10.16))]]);
+    assert!(sch.junctions.is_empty());
+}
+
+/// r3 C3-M4 (`SCH_LINE::IsStrokeEquivalent`: DEFAULT and SOLID are alike): a `solid` wire and a default one in line merge.
+#[test]
+fn clean_up_merges_solid_with_default() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::AddWire { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.16), Nm::ZERO)], bus: false }).unwrap();
+    {
+        let sch = b.design.schematic.as_mut().unwrap();
+        let id = sch.wires[0].id.clone();
+        sch.extras.strokes.insert(id, eda_model::sch_extras::SchStroke { style: eda_model::sch_extras::SchLineStyle::Solid, ..Default::default() });
+    }
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(10.16), Nm::ZERO), p(mm(20.32), Nm::ZERO)], bus: false }).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().wires.len(), 1, "one wire, end to end");
 }
