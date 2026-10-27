@@ -6116,10 +6116,10 @@ pub(crate) mod tests {
         setup(&dir);
         let geometry = eda_ops::ArrayGeometry::Grid { nx: 2, ny: 2, dx: Nm::ZERO, dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
         // a zero spacing is the dialog's refusal; a real one
-        let bad = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true }, false, "test");
+        let bad = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true, group_positions: Default::default() }, false, "test");
         assert!(bad.is_err(), "horizontal delta of zero with 2 objects");
         let geometry = eda_ops::ArrayGeometry::Grid { nx: 2, ny: 2, dx: mm(3.0), dy: mm(4.0), offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
-        let msg = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true }, false, "test").unwrap();
+        let msg = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true, group_positions: Default::default() }, false, "test").unwrap();
         assert!(msg.contains("5/5 placed"), "three copies join the two parts: {msg}");
         let (_, design, model) = load(&dir).unwrap();
         let refs: Vec<String> = design.placement.as_ref().unwrap().footprints.iter().map(|f| f.id.clone()).collect();

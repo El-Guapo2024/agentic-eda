@@ -487,6 +487,7 @@ fn a_duplicate_a_paste_and_an_array_of_a_hatched_shape_are_hatched_the_same_way(
         geometry: array::ArrayGeometry::Grid { nx: 3, ny: 1, dx: mm(20.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false },
         arrange: false,
         reannotate: true,
+        group_positions: Default::default(),
     })
     .unwrap();
     assert_eq!(hatched(&b), 5, "two more");

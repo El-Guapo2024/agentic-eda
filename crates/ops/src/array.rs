@@ -31,7 +31,7 @@ use super::{rotate_point_about, Board};
 use eda_model::fp_edit::{parse_field_id, parse_pad_id};
 use eda_model::ir::{FootprintInstance, Point, Shape, Nm};
 use eda_model::CheckResult;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn d_true() -> bool {
     true
@@ -225,9 +225,11 @@ fn middle(points: &[Point]) -> Option<Point> {
 
 impl Board<'_> {
     /// `BOARD_ITEM::GetPosition()` of the item `id` names: a footprint's origin, a track's start, a via's centre, a zone's first corner, a
-    /// shape's (see [`shape_position`]), a text's anchor, a dimension's first feature point, a group's middle. `None` when nothing on
-    /// the board has the id.
-    pub(crate) fn item_position(&self, id: &str) -> Option<Point> {
+    /// shape's (see [`shape_position`]), a text's anchor, a dimension's first feature point, a point's, a barcode's and an image's own
+    /// position, a text box's (`EDA_SHAPE::getPosition`: a polygon's first corner, a rectangle's start), a table's (its first cell's
+    /// corner), a group's from `boxes` (`PCB_GROUP::GetPosition`, its bounding box's centre, as the studio worked it out) or else the
+    /// middle of its members'. `None` when nothing on the board has the id.
+    pub(crate) fn item_position(&self, id: &str, boxes: &BTreeMap<String, Point>) -> Option<Point> {
         if let Some(fp) = self.pose_of(id) {
             return Some(fp.at);
         }
@@ -252,8 +254,26 @@ impl Board<'_> {
         if let Some(d) = dr.dimensions.iter().find(|d| d.id == id) {
             return Some(d.start);
         }
+        if let Some(p) = dr.board_items.points.iter().find(|p| p.id == id) {
+            return Some(p.at);
+        }
+        if let Some(b) = dr.barcodes.iter().find(|b| b.id == id) {
+            return Some(b.at);
+        }
+        if let Some(t) = dr.board_items.text_boxes.iter().find(|t| t.id == id) {
+            return Some(t.pts.first().copied().unwrap_or(t.start));
+        }
+        if let Some(i) = dr.board_items.images.iter().find(|i| i.id == id) {
+            return Some(i.at);
+        }
+        if let Some(t) = dr.tables.iter().find(|t| t.id == id) {
+            return Some(t.at);
+        }
         if let Some(g) = dr.groups.iter().find(|g| g.id == id) {
-            let members: Vec<Point> = g.member_ids.iter().filter_map(|m| self.item_position(m)).collect();
+            if let Some(p) = boxes.get(id) {
+                return Some(*p);
+            }
+            let members: Vec<Point> = g.member_ids.iter().filter_map(|m| self.item_position(m, boxes)).collect();
             return middle(&members);
         }
         None
@@ -261,7 +281,7 @@ impl Board<'_> {
 
     /// The items an array works on: the ids given with a pad or a field standing for its footprint, once; an id that names nothing on
     /// the board dropped. Order is the order given (`GetItemsSortedBySelectionOrder`).
-    pub(crate) fn array_selection(&self, ids: &[String]) -> Vec<String> {
+    pub(crate) fn array_selection(&self, ids: &[String], boxes: &BTreeMap<String, Point>) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for id in ids {
@@ -270,7 +290,7 @@ impl Board<'_> {
                 (_, Some((r, _))) if self.resolve_field(id).is_some() => r.to_string(),
                 _ => id.clone(),
             };
-            if self.item_position(&item).is_some() && seen.insert(item.clone()) {
+            if self.item_position(&item, boxes).is_some() && seen.insert(item.clone()) {
                 out.push(item);
             }
         }
@@ -282,38 +302,43 @@ impl Board<'_> {
     }
 
     /// `Cmd::CreateArray`. See the module doc.
-    pub(crate) fn create_array(&mut self, ids: &[String], geometry: &ArrayGeometry, arrange: bool, reannotate: bool) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn create_array(&mut self, ids: &[String], geometry: &ArrayGeometry, arrange: bool, reannotate: bool, group_positions: &BTreeMap<String, Point>) -> Result<(), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_array", "array", "no ids given")]);
         }
         geometry.validate().map_err(|m| vec![CheckResult::fail("ops_bad_array", "array", m)])?;
-        let selection = self.array_selection(ids);
+        let mut boxes = group_positions.clone();
+        let selection = self.array_selection(ids, &boxes);
         if selection.is_empty() {
-            return Err(vec![CheckResult::fail("ops_unknown_array", "array", "none of the given ids name a footprint, track, via, zone, shape, text, dimension or group on the board")]);
+            return Err(vec![CheckResult::fail("ops_unknown_array", "array", "none of the given ids name a footprint, track, via, zone, shape, text, dimension, point, barcode, text box, image, table or group on the board")]);
         }
         if arrange {
-            self.arrange_into_array(&selection, geometry)
+            self.arrange_into_array(&selection, geometry, &mut boxes)
         } else {
-            self.duplicate_into_array(&selection, geometry, reannotate)
+            self.duplicate_into_array(&selection, geometry, reannotate, &mut boxes)
         }
     }
 
     /// `TransformItem` for an item on the board: move it by the transform's offset, then turn it about where it now is.
-    fn transform_on_board(&mut self, id: &str, geometry: &ArrayGeometry, index: i64) -> Result<(), Vec<CheckResult>> {
-        let Some(pos) = self.item_position(id) else { return Ok(()) };
+    /// A group's position in `boxes` moves with it (a turn about that position leaves it where it is).
+    fn transform_on_board(&mut self, id: &str, geometry: &ArrayGeometry, index: i64, boxes: &mut BTreeMap<String, Point>) -> Result<(), Vec<CheckResult>> {
+        let Some(pos) = self.item_position(id, boxes) else { return Ok(()) };
         let (offset, turn) = geometry.transform(index, pos);
         if offset != (Point { x: Nm::ZERO, y: Nm::ZERO }) {
             self.transform_items("array", std::slice::from_ref(&id.to_string()), Xform::Move { dx: offset.x, dy: offset.y })?;
+            if let Some(p) = boxes.get_mut(id) {
+                *p = Point { x: p.x + offset.x, y: p.y + offset.y };
+            }
         }
         if turn != 0 {
-            let at = self.item_position(id).unwrap_or(pos);
+            let at = self.item_position(id, boxes).unwrap_or(pos);
             self.transform_items("array", std::slice::from_ref(&id.to_string()), Xform::Rotate { pivot: at, angle: turn })?;
         }
         Ok(())
     }
 
     /// `ARRAY_TOOL::CreateArray`'s `ShouldArrangeSelection()` branch: the items, in order, onto the points. A footprint is moved whole.
-    fn arrange_into_array(&mut self, selection: &[String], geometry: &ArrayGeometry) -> Result<(), Vec<CheckResult>> {
+    fn arrange_into_array(&mut self, selection: &[String], geometry: &ArrayGeometry, boxes: &mut BTreeMap<String, Point>) -> Result<(), Vec<CheckResult>> {
         let size = geometry.size();
         let mut first: Option<Point> = None;
         for (index, id) in selection.iter().enumerate() {
@@ -322,21 +347,24 @@ impl Board<'_> {
             }
             if let Some(origin) = first {
                 // Every item after the first starts at the first item's position.
-                let here = self.item_position(id).expect("the selection holds items on the board");
+                let here = self.item_position(id, boxes).expect("the selection holds items on the board");
                 if here != origin {
                     self.transform_items("array", std::slice::from_ref(id), Xform::Move { dx: origin.x - here.x, dy: origin.y - here.y })?;
+                    if let Some(p) = boxes.get_mut(id) {
+                        *p = origin;
+                    }
                 }
             }
-            self.transform_on_board(id, geometry, index as i64)?;
+            self.transform_on_board(id, geometry, index as i64, boxes)?;
             if first.is_none() {
-                first = self.item_position(id);
+                first = self.item_position(id, boxes);
             }
         }
         Ok(())
     }
 
     /// The default branch: one set of copies for every point after the first, each moved to its point, and the selection to the first.
-    fn duplicate_into_array(&mut self, selection: &[String], geometry: &ArrayGeometry, reannotate: bool) -> Result<(), Vec<CheckResult>> {
+    fn duplicate_into_array(&mut self, selection: &[String], geometry: &ArrayGeometry, reannotate: bool, boxes: &mut BTreeMap<String, Point>) -> Result<(), Vec<CheckResult>> {
         let size = geometry.size();
         let copper = self.model.board.layers.len();
         let outer = (self.model.board.layers.first().cloned(), self.model.board.layers.last().cloned());
@@ -348,7 +376,9 @@ impl Board<'_> {
                     f.shown_reference = Some(f.reference.clone());
                 }
             }
-            transform_block(&mut block, geometry, index, copper, &outer, self.model.board.max_error_nm);
+            // A group copy is where its original is (`PCB_GROUP::GetPosition` of an identical copy).
+            let group_pos: BTreeMap<usize, Point> = block.sources.iter().filter_map(|(m, id)| if let Member::Group(gi) = *m { boxes.get(id).map(|p| (gi, *p)) } else { None }).collect();
+            transform_block(&mut block, geometry, index, copper, &outer, self.model.board.max_error_nm, &group_pos);
             all.absorb(block);
         }
         // Copies first, with unique ids and references in the order of the points; then the selection moves to the first point.
@@ -356,7 +386,7 @@ impl Board<'_> {
             self.insert_copies_all(all)?;
         }
         for id in selection {
-            self.transform_on_board(id, geometry, 0)?;
+            self.transform_on_board(id, geometry, 0, boxes)?;
         }
         Ok(())
     }
@@ -379,7 +409,7 @@ fn group_leaves(block: &Copies, gi: usize, out: &mut Vec<Member>) {
 }
 
 /// `TransformItem` over a set of not-yet-placed copies: each one (a group's members as one) moves to point `index` and turns there.
-fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: usize, outer: &(Option<String>, Option<String>), max_error: Nm) {
+fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: usize, outer: &(Option<String>, Option<String>), max_error: Nm, group_pos: &BTreeMap<usize, Point>) {
     // Members of a copied group are transformed as the group is (`PCB_GROUP::Move`/`Rotate`, which are deep: the groups it holds go with
     // it), about the group's position.
     let mut in_group: BTreeSet<(u8, usize)> = BTreeSet::new();
@@ -397,6 +427,7 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             Member::Barcode(i) => (9, i),
             Member::TextBox(i) => (10, i),
             Member::Image(i) => (11, i),
+            Member::Table(i) => (12, i),
         }
     };
     let position = |block: &Copies, m: &Member| -> Option<Point> {
@@ -413,6 +444,7 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             // `EDA_SHAPE::getPosition`: a polygon's first corner, a rectangle's start.
             Member::TextBox(i) => Some(block.text_boxes[i].pts.first().copied().unwrap_or(block.text_boxes[i].start)),
             Member::Image(i) => Some(block.images[i].at),
+            Member::Table(i) => Some(block.tables[i].at),
             // A group copy is moved through its leaves (below), never as a point of its own.
             Member::Group(_) => None,
         }
@@ -437,6 +469,7 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
         Member::Barcode(i) => super::pcb_items::transform_barcode(&mut block.barcodes[i], x, copper),
         Member::TextBox(i) => super::pcb_items::transform_text_box(&mut block.text_boxes[i], x, copper),
         Member::Image(i) => super::pcb_items::transform_ref_image(&mut block.images[i], x, copper),
+        Member::Table(i) => super::pcb_tables::transform_table(&mut block.tables[i], x, copper),
         Member::Footprint(i) => {
             let f = &mut block.footprints[i];
             let pose = FootprintInstance { id: f.reference.clone(), at: f.at, rot: f.rot, side: f.side, label: f.label };
@@ -457,7 +490,7 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             in_group.insert(key(m));
         }
         let points: Vec<Point> = members.iter().filter_map(|m| position(block, m)).collect();
-        let Some(pos) = middle(&points) else { continue };
+        let Some(pos) = group_pos.get(&gi).copied().or_else(|| middle(&points)) else { continue };
         let (offset, turn) = g.transform(index, pos);
         for m in &members {
             apply(block, m, move_by(offset));
@@ -482,6 +515,7 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
     each.extend((0..block.barcodes.len()).map(Member::Barcode));
     each.extend((0..block.text_boxes.len()).map(Member::TextBox));
     each.extend((0..block.images.len()).map(Member::Image));
+    each.extend((0..block.tables.len()).map(Member::Table));
     for m in each.into_iter().filter(|m| !in_group.contains(&key(m))) {
         let Some(pos) = position(block, &m) else { continue };
         let (offset, turn) = g.transform(index, pos);

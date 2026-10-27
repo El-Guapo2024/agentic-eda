@@ -578,6 +578,10 @@ pub enum Cmd {
         /// next free number. False is "Keep original reference designators": the copies show the original's text.
         #[serde(default = "d_true")]
         reannotate: bool,
+        /// `PCB_GROUP::GetPosition()` -- the centre of the group's bounding box (`GetBoundingBox().Centre()`) -- of each group among `ids`, as the
+        /// studio, which has the items' boxes, works it out. A group not named here is at the middle of its members' positions.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        group_positions: std::collections::BTreeMap<String, Point>,
     },
 
     // ------------------------------------------------------- dimensions
@@ -2832,7 +2836,7 @@ impl<'a> Board<'a> {
             Cmd::EditGroup { id, name, member_ids, design_block } => self.edit_group(id, name, member_ids, design_block.as_deref()),
             Cmd::LinkDesignBlock { ids, block } => self.link_design_block_items(ids, block),
             Cmd::PlaceDesignBlock { text, at, block, as_group, group_name } => self.place_design_block(text, *at, block, *as_group, group_name),
-            Cmd::CreateArray { ids, geometry, arrange, reannotate } => self.create_array(ids, geometry, *arrange, *reannotate),
+            Cmd::CreateArray { ids, geometry, arrange, reannotate, group_positions } => self.create_array(ids, geometry, *arrange, *reannotate, group_positions),
             Cmd::AddDimension { dimension } => self.add_dimension(dimension.clone()),
             Cmd::DeleteDimension { id } => self.delete_dimension(id),
             Cmd::MoveDimension { id, dx, dy } => self.move_dimension(id, *dx, *dy),

@@ -41,6 +41,8 @@ pub(crate) enum Member {
     /// A `PCB_TEXTBOX` (`Copies::text_boxes`) and a `PCB_REFERENCE_IMAGE` (`Copies::images`), duplicated, pasted and arrayed like any item.
     TextBox(usize),
     Image(usize),
+    /// A `PCB_TABLE` (`Copies::tables`): `ARRAY_TOOL::onDialogClosed` and `EDIT_TOOL::Duplicate` duplicate it with its cells (`item->Duplicate( true, .. )`).
+    Table(usize),
     /// A group copy (`Copies::groups`); the groups a group holds are listed before it.
     Group(usize),
 }
@@ -115,6 +117,7 @@ pub(crate) struct Copies {
     pub(crate) barcodes: Vec<Barcode>,
     pub(crate) text_boxes: Vec<TextBox>,
     pub(crate) images: Vec<RefImage>,
+    pub(crate) tables: Vec<eda_model::table::Table>,
     pub(crate) groups: Vec<GroupCopy>,
     /// A copy of a member of a group that is not itself copied joins that group (`addToParentGroup`).
     pub(crate) join: Vec<(Member, String)>,
@@ -140,6 +143,7 @@ impl Copies {
                 Member::Barcode(i) => Member::Barcode(i + this.barcodes.len()),
                 Member::TextBox(i) => Member::TextBox(i + this.text_boxes.len()),
                 Member::Image(i) => Member::Image(i + this.images.len()),
+                Member::Table(i) => Member::Table(i + this.tables.len()),
                 // A group copy that holds another group copy (nested groups).
                 Member::Group(i) => Member::Group(i + this.groups.len()),
             }
@@ -164,6 +168,7 @@ impl Copies {
         self.barcodes.extend(other.barcodes);
         self.text_boxes.extend(other.text_boxes);
         self.images.extend(other.images);
+        self.tables.extend(other.tables);
         self.groups.extend(groups);
         self.join.extend(join);
         self.locked.extend(locked);
@@ -171,7 +176,7 @@ impl Copies {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.footprints.is_empty() && self.points.is_empty() && self.barcodes.is_empty() && self.text_boxes.is_empty() && self.images.is_empty()
+        self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.footprints.is_empty() && self.points.is_empty() && self.barcodes.is_empty() && self.text_boxes.is_empty() && self.images.is_empty() && self.tables.is_empty()
     }
 }
 
@@ -314,7 +319,7 @@ impl Board<'_> {
             }
         }
         if copies.is_empty() {
-            return Err(vec![CheckResult::fail("ops_unknown_duplicate", "duplicate", "none of the given ids name a footprint, track, via, zone, shape, text, dimension, point, barcode, text box or image")]);
+            return Err(vec![CheckResult::fail("ops_unknown_duplicate", "duplicate", "none of the given ids name a footprint, track, via, zone, shape, text, dimension, point, barcode, text box, image or table")]);
         }
         Ok(copies)
     }
@@ -427,6 +432,12 @@ impl Board<'_> {
             if let Some(i) = dr.board_items.images.iter().find(|i| i.id == id) {
                 copies.images.push(i.clone());
                 return Some(Member::Image(copies.images.len() - 1));
+            }
+            if let Some(t) = dr.tables.iter().find(|t| t.id == id) {
+                let mut t = t.clone();
+                super::pcb_tables::forget_uuids(&mut t);
+                copies.tables.push(t);
+                return Some(Member::Table(copies.tables.len() - 1));
             }
         }
         None
@@ -681,6 +692,11 @@ impl Board<'_> {
             m.id = mint("img", format!("copy{i}|{}", m.id_seed()));
             image_ids.push(m.id.clone());
         }
+        let mut table_ids: Vec<String> = Vec::new();
+        for (i, t) in copies.tables.iter_mut().enumerate() {
+            t.id = mint("tbl", format!("copy{i}|{}", t.id_seed()));
+            table_ids.push(t.id.clone());
+        }
 
         // Footprints: placed again, or new parts under references nobody has.
         let mut references = self.all_references();
@@ -752,6 +768,7 @@ impl Board<'_> {
                 Member::Barcode(i) => Some(barcode_ids[i].clone()),
                 Member::TextBox(i) => Some(box_ids[i].clone()),
                 Member::Image(i) => Some(image_ids[i].clone()),
+                Member::Table(i) => Some(table_ids[i].clone()),
                 Member::Group(i) => group_ids.get(i).cloned().flatten(),
             }
         };
@@ -770,7 +787,7 @@ impl Board<'_> {
         }
         // the top of what is coming in: no new group holds it
         let held: BTreeSet<&str> = new_groups.iter().flat_map(|g| g.member_ids.iter().map(String::as_str)).collect();
-        let top: Vec<String> = track_ids.iter().chain(&via_ids).chain(&zone_ids).chain(&shape_ids).chain(&text_ids).chain(&dim_ids).chain(&point_ids).chain(&barcode_ids).chain(&box_ids).chain(&image_ids).chain(&fp_refs).chain(new_groups.iter().map(|g| &g.id)).filter(|id| !held.contains(id.as_str())).cloned().collect();
+        let top: Vec<String> = track_ids.iter().chain(&via_ids).chain(&zone_ids).chain(&shape_ids).chain(&text_ids).chain(&dim_ids).chain(&point_ids).chain(&barcode_ids).chain(&box_ids).chain(&image_ids).chain(&table_ids).chain(&fp_refs).chain(new_groups.iter().map(|g| &g.id)).filter(|id| !held.contains(id.as_str())).cloned().collect();
         let joins: Vec<(String, String)> = copies.join.iter().filter_map(|(m, g)| id_of(m, &group_ids).map(|id| (id, g.clone()))).collect();
         let locked_copies: Vec<String> = copies.locked.iter().filter_map(|m| id_of(m, &group_ids)).collect();
 
@@ -782,12 +799,13 @@ impl Board<'_> {
             rt.zones.append(&mut copies.zones);
             self.sort_routing();
         }
-        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !copies.points.is_empty() || !copies.barcodes.is_empty() || !copies.text_boxes.is_empty() || !copies.images.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() || !new_extras.is_empty() || !locked_copies.is_empty() {
+        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !copies.points.is_empty() || !copies.barcodes.is_empty() || !copies.text_boxes.is_empty() || !copies.images.is_empty() || !copies.tables.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() || !new_extras.is_empty() || !locked_copies.is_empty() {
             let dr = self.drawings_mut();
             dr.board_items.points.append(&mut copies.points);
             dr.barcodes.append(&mut copies.barcodes);
             dr.board_items.text_boxes.append(&mut copies.text_boxes);
             dr.board_items.images.append(&mut copies.images);
+            dr.tables.append(&mut copies.tables);
             if !locked_copies.is_empty() {
                 dr.locked_ids.extend(locked_copies);
                 dr.locked_ids.sort();

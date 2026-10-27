@@ -330,7 +330,7 @@ fn a_routed_footprint_moved_turned_flipped_or_deleted_leaves_the_routing_in_the_
         Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), angle_millideg: -15_000 },
         Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight },
         Cmd::Rip { part: id("U1") },
-        Cmd::CreateArray { ids: ids(&["U1"]), geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: mm(5.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: false, reannotate: true },
+        Cmd::CreateArray { ids: ids(&["U1"]), geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: mm(5.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: false, reannotate: true, group_positions: Default::default() },
     ] {
         assert!(!cmd.clears_routing_in(&b), "{cmd:?}");
     }

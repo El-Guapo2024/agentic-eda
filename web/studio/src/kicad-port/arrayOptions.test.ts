@@ -98,6 +98,11 @@ test("the command is create_array over the selection, with arrange and the refer
   });
 });
 
+test("a group's box centre goes with the command (PCB_GROUP::GetPosition, round 4 C-3)", () => {
+  const cmd = arrayCmd(grid({ nx: 2, ny: 1 }), ["grp_a", "U1"], { grp_a: [5000, 1500] });
+  assert.deepEqual((cmd as { group_positions?: unknown }).group_positions, { grp_a: { x: 5000, y: 1500 } });
+});
+
 test("the circle's centre starts at a lone item's position, or the middle of the box around several", () => {
   const at: Record<string, [number, number]> = { A: [1000, 2000], B: [0, 0], C: [4000, 2000], D: [1000, 500] };
   const box: Record<string, [number, number, number, number]> = { A: [900, 1900, 1100, 2100], B: [-100, -100, 100, 100], C: [3900, 1900, 4100, 2100], D: [900, 400, 1100, 600] };

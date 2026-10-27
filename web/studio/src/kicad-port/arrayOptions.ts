@@ -284,9 +284,15 @@ export function arrayGeometry(o: ArrayOptions): ArrayGeometry {
   };
 }
 
-/** The one command a Create Array makes. */
-export function arrayCmd(o: ArrayOptions, ids: readonly string[]): Cmd {
-  return { op: "create_array", ids: [...ids], geometry: arrayGeometry(o), arrange: o.arrange, reannotate: o.reannotate };
+/**
+ * The one command a Create Array makes. `groupPositions` is `PCB_GROUP::GetPosition()` -- its bounding box's centre -- of each group among the ids, which only
+ * the studio (it has the items' boxes) can work out; `TransformItem` moves and turns a group by it.
+ */
+export function arrayCmd(o: ArrayOptions, ids: readonly string[], groupPositions: Readonly<Record<string, readonly [number, number]>> = {}): Cmd {
+  const cmd: Cmd = { op: "create_array", ids: [...ids], geometry: arrayGeometry(o), arrange: o.arrange, reannotate: o.reannotate };
+  const entries = Object.entries(groupPositions);
+  if (entries.length > 0) cmd.group_positions = Object.fromEntries(entries.map(([id, [x, y]]) => [id, { x, y }]));
+  return cmd;
 }
 
 type Box = readonly [number, number, number, number];

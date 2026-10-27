@@ -1439,7 +1439,7 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::Rip { part: "U1".into() },
         Cmd::Flip { part: "U1".into() },
         Cmd::MoveExact { parts: vec!["U1".into()], dx: Nm::ZERO, dy: Nm::ZERO, rotate_millideg: 0, pivot: None },
-        Cmd::CreateArray { ids: vec!["U1".into()], geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: mm(1.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: true, reannotate: true },
+        Cmd::CreateArray { ids: vec!["U1".into()], geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: mm(1.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: true, reannotate: true, group_positions: Default::default() },
     ];
     for c in &part_edit_cmds {
         assert!(c.clears_routing(), "{c:?} must clear routing -- it can move a part out from under a track");

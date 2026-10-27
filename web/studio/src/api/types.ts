@@ -1591,7 +1591,7 @@ export type Cmd =
    * `reannotate` (default true) is "Assign unique reference designators"; false is "Keep original reference designators". See `ArrayGeometry`'s
    * own doc for the angle-sign convention.
    */
-  | { op: "create_array"; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; reannotate?: boolean }
+  | { op: "create_array"; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; reannotate?: boolean; group_positions?: Record<string, { x: number; y: number }> }
   /** Task item 7: `pcbnew/pcb_dimension.{h,cpp}`. `id` on `dimension`, if sent, is ignored. */
   | { op: "add_dimension"; dimension: CmdDimension }
   | { op: "delete_dimension"; id: string }
