@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardViaStitch } from "../api/pcbItemTypes";
-import { bakedPoissonTile, cellForPosition, excludedAt, hasExclusions, Mt19937, stitchesExcluding, stitchHitDistance, stitchPreview, stitchTicks, viaStitchCmd, withLayoutAndMode, withoutExclusions } from "./viaStitch";
+import { bakedPoissonTile, cellForPosition, excludedAt, hasExclusions, Mt19937, stitchesExcluding, stitchFilteredAsVia, stitchHitDistance, stitchPreview, stitchTicks, viaStitchCmd, withLayoutAndMode, withoutExclusions } from "./viaStitch";
 
 const square = (): BoardViaStitch => ({
   id: "vst_a",
@@ -74,4 +74,10 @@ test("the command gives the settings and lets the server place the vias", () => 
   assert.ok(c.op === "pcb_item" && c.verb === "set_via_stitch" && c.id === "vst_a" && !("vias" in c) && !("id" in c.stitch));
   const n = viaStitchCmd(null, square());
   assert.ok(n.op === "pcb_item" && n.verb === "set_via_stitch" && n.id === undefined);
+});
+
+test("a via stitch with vias is gated by Vias, an empty one by Other items (itemPassesFilter, r2-pcb-edit R7)", () => {
+  const b = { drawings: { via_stitches: [{ id: "vs1", member_ids: ["via_1"] }, { id: "vs2", member_ids: [] }] } };
+  assert.equal(stitchFilteredAsVia(b, "vs1"), true);
+  assert.equal(stitchFilteredAsVia(b, "vs2"), false);
 });
