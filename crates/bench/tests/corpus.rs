@@ -82,29 +82,50 @@ enum Expect {
 /// `examples/ldo.yaml`'s J1) -- both shrink a cluster's own "intrinsic size"
 /// and change its wiring topology without the layout engine's own spacing
 /// constants (`node_spacing`, text-clearance margins, `CLUSTER_SPREAD_RATIO`)
-/// changing to match, so several of this corpus's otherwise-simple cases now
-/// fail a schematic style/readability gate (`schematic_cluster_split`,
-/// `schematic_text_overlap`, `schematic_wire_overlap`, and others -- see the
-/// scorecard this bench prints) that they passed against the old synthetic
-/// geometry. These are kept as KNOWN_FAIL (not silently expected, and not
-/// hidden by loosening the gates themselves) so the corpus stays honest while
-/// that spacing-model recalibration -- a layout-engine change in its own
-/// right, out of this geometry port's own scope -- is still pending; re-run
-/// this bench once it lands; a case that then reaches `Done` should be
+/// changing to match.
+///
+/// Most of those cases were in fact only failing `schematic_cluster_split`:
+/// its packed extent summed bare symbol-box areas, with no room for the gap
+/// the layout must leave between two boxes, so it judged a tightly drawn
+/// block against an extent smaller than any layout can produce. That gate
+/// now pads each member's box by `LayoutOptions::node_spacing` (branch
+/// ds/cluster-gate). `passive_divider_ladder`, `star_net`,
+/// `through_hole_headers` and `two_pin_nets` were only failing it here and
+/// rejoin `Expect::Clean`.
+///
+/// `ldo`, `ldo_proximity_heavy`, `mcu_board_30plus` and `mixed_track_widths`
+/// still stop at `Schematic` at seeds 0-2, but on *`schematic_text_overlap`*,
+/// not `schematic_cluster_split`: this bench parses the intent with
+/// `serde_yaml` and derives with only the built-in symbols, so every part is
+/// a synthesized box. `eda pipeline` resolves the installed KiCad symbol
+/// libraries first and draws those four cleanly (a 2026-10-27 check: the raw
+/// model failed `schematic_text_overlap` at every seed; the same model after
+/// `eda::resolve_library_symbols` failed nothing). Keeping the KNOWN_FAIL
+/// entries keeps this bench independent of whether KiCad's libraries are
+/// installed, and keeps the text geometry that does trip the gate visible;
+/// see docs/DS-LOG.md, 2026-10-27, for the bench-vs-CLI divergence.
+///
+/// `dense_small_outline` passes `cluster_split` too but still fails
+/// `schematic_wire_overlap` here at every seed (twice at seeds 0/2; under
+/// `eda pipeline` seed 1 additionally fails `schematic_sheet_aspect`), so it
+/// stays KNOWN_FAIL, not hidden by loosening those gates: re-run this bench
+/// once that layout work lands; a case that then reaches `Done` should be
 /// promoted back to `Expect::Clean` here, not left KNOWN_FAIL.
 fn default_expect(stem: &str) -> Expect {
     match stem {
         "unroutable_tiny_outline" => Expect::ExpectedFail(Stage::Placement),
-        "dense_small_outline" | "ldo" | "ldo_proximity_heavy" | "mcu_board_30plus" | "mixed_track_widths" | "passive_divider_ladder"
-        | "star_net" | "through_hole_headers" | "two_pin_nets" => Expect::KnownFail(Stage::Schematic),
+        "dense_small_outline" | "ldo" | "ldo_proximity_heavy" | "mcu_board_30plus" | "mixed_track_widths" => {
+            Expect::KnownFail(Stage::Schematic)
+        }
         _ => Expect::Clean,
     }
 }
 
-/// Per-(file, seed) overrides for cases whose outcome is seed-dependent. All
-/// of today's `KNOWN_FAIL` cases (see `default_expect`'s own doc comment)
-/// fail identically at every seed, so there is currently nothing to override
-/// here -- add a `(stem, seed) =>` arm above the fallback if that changes.
+/// Per-(file, seed) overrides for cases whose outcome is seed-dependent. The
+/// remaining `KNOWN_FAIL` cases all fail at the same stage (schematic) at
+/// every seed -- though not always on the same check -- so there is currently
+/// nothing to override here: add a `(stem, seed) =>` arm above the fallback
+/// if that changes.
 fn expect_for(stem: &str, seed: u64) -> Expect {
     match (stem, seed) {
         _ => default_expect(stem),

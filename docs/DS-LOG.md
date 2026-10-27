@@ -531,3 +531,95 @@ that points here.
   `a_rule_on_a_vias_layer_reads_the_layer_asked_about`, `a_no_net_head_is_excused_at_a_no_net_pad_of_a_net_tie`,
   `a_custom_rule_sets_the_pairs_gap_and_width_and_the_via`) still build designs with padless nets; the pad rule does not apply to them, so they
   are unchanged.
+## schematic_cluster_split: the packed extent includes the layout's node_spacing (done 2026-10-27)
+
+**What I did.**
+
+- `crates/lint/src/schematic.rs`: `check_cluster_split` now sums `(width + node_spacing) * (height + node_spacing)` per member,
+  with `node_spacing` read from `eda_layout::LayoutOptions::default().node_spacing` (3.81 mm = 3 x `DEFAULT_GRID`), never a number
+  copied into the gate. The doc comment above `CLUSTER_SPREAD_RATIO` records why: the layout can never draw two boxes closer than
+  `node_spacing` on either axis, so summing bare symbol areas measured the cluster's ink, not the smallest extent the layout can
+  actually draw. With the real KiCad symbol boxes (2026-09-30) and their label hang room (2026-10-08) the missing gap per member
+  per axis is most of a small passive's own size, so compact, correctly drawn clusters were called "scattered". No ratio, layout
+  constant or other check changed.
+- Tests written first, in `crates/lint/src/schematic.rs`'s `mod integration`. With the old bare-area formula,
+  `a_compact_cluster_laid_out_by_the_engine_passes_cluster_split` failed with `cluster of 3 parts (R1,R2,R3) is drawn 27.9mm
+  across, more than 3.5x its own 6.2mm packed extent`; with the fix it passes. `a_scattered_cluster_still_fails_cluster_split`
+  moves the same three resistors 100 mm apart and still fails.
+- `crates/cli/tests/no_outline.rs`: removed the `known_schematic_fail` allowance for `star_net`, `ldo` and `two_pin_nets`; all
+  four intents the test runs must now pass the whole `eda pipeline`.
+- `crates/bench/tests/corpus.rs`: `passive_divider_ladder`, `star_net`, `through_hole_headers` and `two_pin_nets` were only
+  failing `schematic_cluster_split` in the bench and are `Expect::Clean` again. `dense_small_outline`, `ldo`,
+  `ldo_proximity_heavy`, `mcu_board_30plus` and `mixed_track_widths` stay `KnownFail(Stage::Schematic)` -- see the bench section
+  below: their remaining failing gate is not cluster_split.
+
+**`eda pipeline` on every example at seeds 0-2** (debug build, `target/debug/eda pipeline`; only failing gates listed, every
+other gate passed; "pass" = all gates passed and `design.json` written):
+
+| example | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| all_power_ground_net | pass | pass | pass |
+| dense_small_outline | schematic_wire_overlap | schematic_wire_overlap, schematic_sheet_aspect | schematic_wire_overlap |
+| ldo | pass | pass | pass |
+| ldo_proximity_heavy | pass | pass | pass |
+| mcu_board_30plus | pass | pass | pass |
+| mixed_track_widths | pass | pass | pass |
+| nc_pins | pass | pass | pass |
+| opamp_filter | pass | pass | pass |
+| passive_divider_ladder | pass | pass | pass |
+| star_net | pass | pass | pass |
+| through_hole_headers | pass | pass | pass |
+| two_pin_nets | pass | pass | pass |
+| unroutable_tiny_outline | schematic_label_far_from_part | pass | pass |
+| ladder/l1_usb_mcu | schematic_text_overlap, schematic_sheet_density | schematic_text_overlap, schematic_sheet_density | schematic_text_overlap |
+| ladder/l2_sensor_hub | schematic_text_overlap, schematic_cluster_split, schematic_sheet_density | schematic_text_overlap, schematic_sheet_density | schematic_text_overlap |
+| ladder/l3_motor_hub | schematic_text_overlap, schematic_cluster_split, schematic_sheet_density | schematic_text_overlap, schematic_sheet_density | schematic_text_overlap, schematic_cluster_split, schematic_sheet_density |
+| ladder/l4_control_hub | schematic_cluster_split, schematic_text_overlap, schematic_sheet_density | schematic_cluster_split, schematic_text_overlap, schematic_sheet_density | schematic_cluster_split, schematic_text_overlap, schematic_sheet_density |
+
+All 13 root examples (the 12 "core" ones plus the deliberately unroutable one) pass `schematic_cluster_split` at seeds 0-2. The
+ladder still fails it exactly where intended: `l2_sensor_hub` seed 0, `l3_motor_hub` seeds 0/2, `l4_control_hub` seeds 0-2;
+`l1_usb_mcu` has no cluster_split failure (its text_overlap/sheet_density failures predate this change).
+
+**Bench corpus** (`EDA_SLOW_TESTS=1 cargo test -p eda-bench --test corpus`), EXIT 0, 1 test passed in 396.21s:
+
+- At seeds 0-2, `all_power_ground_net`, `nc_pins`, `opamp_filter`, `passive_divider_ladder`, `star_net`,
+  `through_hole_headers` and `two_pin_nets` reach `done`, and `unroutable_tiny_outline` still stops at `placement`
+  (`place_legalize`, `place_outside`) as its `ExpectedFail`.
+- `dense_small_outline` (schematic: `schematic_wire_overlap` at every seed, twice at seeds 0/2), `ldo`,
+  `ldo_proximity_heavy`, `mcu_board_30plus` and `mixed_track_widths` (schematic: `schematic_text_overlap`, every seed) remain
+  KNOWN_FAIL on gates that are not cluster_split. None of them fails `schematic_cluster_split` in the bench any more. (Under
+  `eda pipeline` `dense_small_outline` seed 1 also fails `schematic_sheet_aspect`; the bench itself does not.)
+
+**Tests run.**
+
+- `cargo test -p eda-lint` EXIT 0 -- lib 37 passed (including the two new tests), `check_registry` 3 passed, every target 0
+  failed.
+- `cargo test -p eda-bench` EXIT 0 (0 lib tests; the corpus test is skipped without `EDA_SLOW_TESTS`, and passes with
+  it: `EDA_SLOW_TESTS=1 cargo test -p eda-bench --test corpus` EXIT 0 -- 1 passed in 396.21s, scorecard at
+  `target/bench/scorecard.md`).
+- `cargo test -p eda-cli --test no_outline` with `EDA_SLOW_TESTS=1` EXIT 0 -- 3 passed (18.06s), including
+  `pipeline_with_no_flags_fits_a_board_for_an_intent_without_one`, which now fails on any of nc_pins/star_net/ldo/two_pin_nets
+  instead of allowing a schematic-stage failure.
+
+**Commits.**
+
+- `46994d38` -- schematic_cluster_split: the packed extent includes the layout's node_spacing
+- this log, in its own commit.
+
+**Unsure / for the reviewer.**
+
+- **The bench and `eda pipeline` do not draw the same symbol geometry.** The corpus parses the YAML with `serde_yaml` and calls
+  `derive_schematic` directly; it never calls `eda::resolve_library_symbols`/`resolve_library_footprints`, so every part is a
+  synthesized box. `eda pipeline` resolves the installed KiCad libraries first. I checked the difference on 2026-10-27 with a
+  temporary test (deleted before commit): for `ldo`, `ldo_proximity_heavy`, `mcu_board_30plus` and `mixed_track_widths`, the raw
+  model failed `schematic_text_overlap` at seeds 0-2 while the same model after `eda::resolve_library_symbols` failed nothing.
+  That is why those four keep a bench `KnownFail` even though they now pass the CLI pipeline. I left the bench hermetic (it must
+  not depend on whether KiCad's libraries are installed on the machine) rather than making it resolve libraries; making the bench
+  mirror the CLI is a change to the bench harness in its own right, and it would change other cases' geometry too. Recorded here
+  as the design question rather than decided unilaterally.
+- `unroutable_tiny_outline`: under the bench it fails placement at all seeds (its `ExpectedFail`, unchanged). Under
+  `eda pipeline` seed 0 stops earlier, on `schematic_label_far_from_part`, while seeds 1-2 pass. This is the same
+  bench-vs-CLI geometry difference, not a cluster_split regression; the bench entry was left alone.
+- `a_compact_cluster_laid_out_by_the_engine_passes_cluster_split` derives with the built-in symbols (the lint crate does not
+  depend on the installed libraries), so its three resistor boxes are the synthesized ones. The gate change is geometry-agnostic
+  (`node_spacing` added on both axes); the bench run above is the evidence that it also holds for the real KiCad boxes.
