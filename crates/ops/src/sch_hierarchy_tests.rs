@@ -617,3 +617,32 @@ fn linking_the_selection_to_a_block_groups_it_or_links_the_group_and_group_prope
     assert_eq!(b.apply(&link(&["R9"], "Mine:X")).unwrap_err()[0].check, "ops_unknown_item");
     assert!(b.apply(&link(&["R1"], "no colon")).is_err());
 }
+
+/// r2 B-H1: `Cmd::ReplaceSchematic` (`eda import-kicad x.kicad_sch`) of a file that shows `sub.kicad_sch` twice keeps the reference each sheet path gives each symbol
+/// (`SCH_SYMBOL::GetRef( &aSheet )`, the symbol's `m_instances`). The screens go into the design's frame (`place_by_box_corner`), which moves every symbol; the
+/// references of a path name their symbol by where it is (`SymbolPathOverride::at`) and used to be left behind, then dropped (`tidy_shared_screens`): both
+/// placements showed R7.
+#[test]
+fn replace_schematic_keeps_the_references_of_each_sheet_path() {
+    let m = ConstraintModel::default();
+    let mut file = a_file();
+    file.root.sheets = vec![placement("sa", "A", "sub.kicad_sch", "2"), placement("sb", "B", "sub.kicad_sch", "3")];
+    let sub = file.screens.get_mut("sub.kicad_sch").unwrap();
+    // the file's own Reference field is unannotated (`R?`, read as a placeholder): the instances say what each path shows
+    sub.symbols[0].id = "R?1".into();
+    let r7 = sub.symbols[0].clone();
+    sub.instance_overrides = vec![
+        eda_model::ir::SymbolPathOverride { at: r7.at, sheet_path: vec!["sa".into()], reference: "R7".into(), unit: 1 },
+        eda_model::ir::SymbolPathOverride { at: r7.at, sheet_path: vec!["sb".into()], reference: "R8".into(), unit: 1 },
+    ];
+    let mut b = Board::new(power_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::ReplaceSchematic { content: file, name: "twice.kicad_sch".into() }).unwrap();
+    let d = b.design();
+    let moved = &d.sheet_contents.as_ref().unwrap()["sub.kicad_sch"].symbols[0];
+    assert_ne!(moved.at, r7.at, "the symbol is in the design's frame");
+    assert_eq!((refs_on(d, &["sa"]), refs_on(d, &["sb"])), (vec!["R7".to_string()], vec!["R8".to_string()]), "each path's reference, as the file has it");
+    // the first path's reference is the symbol's own (what Annotate and Edit Reference rename), the later path's an override
+    let sub = &d.sheet_contents.as_ref().unwrap()["sub.kicad_sch"];
+    assert_eq!(sub.symbols[0].id, "R7");
+    assert_eq!(sub.instance_overrides.iter().map(|o| (o.sheet_path.clone(), o.reference.clone())).collect::<Vec<_>>(), vec![(vec!["sb".to_string()], "R8".to_string())]);
+}
