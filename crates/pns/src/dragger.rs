@@ -216,8 +216,8 @@ pub struct DragPreview {
     /// ids the session's world does not know, so the commit cannot look its tracks up there. Empty when the legs are the session's
     /// own lines (their `segment_ids` name the session's items).
     pub fanout_tracks: Vec<Vec<String>>,
-    /// This is not what the cursor's position gave but the last position that worked: the cursor is somewhere the drag cannot
-    /// be resolved (`Drag`: "Restore last solution").
+    /// This is not what the cursor's position gave: the cursor is somewhere the drag cannot be resolved (`Drag`: "Restore last solution"),
+    /// and what is shown is `m_lastDragSolution` -- the last shoved line in Shove mode, the line where the drag started in Walk around mode.
     pub restored: bool,
     /// The drag is in Highlight collisions mode because its first position failed (`GetForceMarkObstaclesMode`): `colliding` then
     /// says whether releasing here is a violation, which only Ctrl+click commits.
