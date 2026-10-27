@@ -275,3 +275,133 @@ impl Board<'_> {
         Ok(())
     }
 }
+
+impl Board<'_> {
+    /// `Cmd::TrackViaNets`: `DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow` from `std::set<int> shortingNets` on, on the board as the batch's earlier edits left it.
+    ///
+    /// `connected_tracks` are the tracks and vias of the copper the selected ones are in (`GetConnectedItems`, here the same-net flood of the connectivity graph, with
+    /// zones that have no fill computed: they connect nothing). For each of them, every other track or via whose net is neither its own nor the new one, and every pad
+    /// not on the new net, that its copper touches (`collide`, on a layer both have) is a short (`shortingNets`) -- or, for a pad of its own net, a pad the net
+    /// change takes along (`changingPads`). A short asks first (`confirmShortingNets`; Cancel Changes is `commit.Revert()`: the studio sends nothing); then, when the
+    /// net is set, the pads (`confirmPadChange`): Change Nets sets the selected tracks and vias and those pads to the net (a pad's net is its pin's place in the net
+    /// list in force), Leave Nets Unchanged leaves every net.
+    pub(crate) fn track_via_nets(&mut self, ids: &[String], net: Option<&str>, apply_anyway: Option<bool>, change_pads: Option<bool>) -> Result<(), Vec<CheckResult>> {
+        use eda_connectivity::ItemRef;
+        let rt = self.design.routing.as_ref();
+        let selected_tracks: BTreeSet<&str> = ids.iter().map(String::as_str).filter(|id| rt.is_some_and(|r| r.tracks.iter().any(|t| t.id == *id))).collect();
+        let selected_vias: BTreeSet<&str> = ids.iter().map(String::as_str).filter(|id| rt.is_some_and(|r| r.vias.iter().any(|v| v.id == *id))).collect();
+        if let Some(n) = net {
+            self.known_net(n)?;
+        }
+        let nets = self.nets_in_force();
+        let mut model: ConstraintModel = self.model.clone();
+        model.nets = nets.clone();
+        let graph = eda_connectivity::build_graph(&self.design, &model, &eda_drc::zone_copper::ZoneCopper::default());
+        let pad_of = eda_connectivity::flash::pad_of_items(&graph);
+        // the graph's items of a track or via
+        let key = |i: usize| -> Option<(bool, &str)> {
+            match &graph.items[i].item {
+                ItemRef::TrackSeg { track_id, .. } => Some((true, track_id.as_str())),
+                ItemRef::Via { via_id } => Some((false, via_id.as_str())),
+                _ => None,
+            }
+        };
+        // `connected_tracks`: the same-net flood from the selected tracks and vias
+        let mut in_cluster = vec![false; graph.items.len()];
+        let mut queue: Vec<usize> = (0..graph.items.len()).filter(|&i| key(i).is_some_and(|(t, id)| if t { selected_tracks.contains(id) } else { selected_vias.contains(id) })).collect();
+        for &i in &queue {
+            in_cluster[i] = true;
+        }
+        while let Some(cur) = queue.pop() {
+            for &nb in &graph.items[cur].connected {
+                if !in_cluster[nb] && graph.items[nb].net == graph.items[cur].net && !matches!(graph.items[nb].item, ItemRef::ZoneOutline { .. }) {
+                    in_cluster[nb] = true;
+                    queue.push(nb);
+                }
+            }
+        }
+        let new_net = net.unwrap_or("\u{0}indeterminate");
+        let mut shorting: BTreeSet<String> = BTreeSet::new();
+        let mut changing: Vec<(String, String, u32)> = Vec::new();
+        for i in (0..graph.items.len()).filter(|&i| in_cluster[i] && key(i).is_some()) {
+            let mine = &graph.items[i].net;
+            for &o in &graph.items[i].connected {
+                let other = &graph.items[o];
+                match &other.item {
+                    ItemRef::TrackSeg { .. } | ItemRef::Via { .. } => {
+                        if other.net != *mine && other.net != new_net {
+                            shorting.insert(other.net.clone());
+                        }
+                    }
+                    ItemRef::Pad { .. } => {
+                        if other.net == new_net {
+                            continue;
+                        }
+                        if other.net == *mine {
+                            if let Some(p) = pad_of[o].clone().filter(|p| !changing.contains(p)) {
+                                changing.push(p);
+                            }
+                        } else {
+                            shorting.insert(other.net.clone());
+                        }
+                    }
+                    ItemRef::ZoneOutline { .. } => {}
+                }
+            }
+        }
+        // `m_netSelector->GetValue()`: the net's name, `<no net>` for none
+        let shown = |n: &str| if n.is_empty() { "<no net>".to_string() } else { n.to_string() };
+        let selector = net.map(shown).unwrap_or_default();
+        if !shorting.is_empty() && apply_anyway != Some(true) {
+            let message = if shorting.len() == 1 {
+                format!("Applying these changes will short net {selector} with {}.", shown(shorting.iter().next().unwrap()))
+            } else {
+                format!("Applying these changes will short net {selector} with other nets.")
+            };
+            return Err(vec![CheckResult::fail("ops_net_change_shorts", "track_via_nets", message).with_detail(serde_json::json!({ "nets": shorting.iter().collect::<Vec<_>>() }))]);
+        }
+        let Some(net) = net else { return Ok(()) };
+        if !changing.is_empty() {
+            let pad_ids: Vec<String> = changing.iter().map(|(r, n, k)| PadKey { reference: r.clone(), number: n.clone(), nth: *k }.id()).collect();
+            match change_pads {
+                None => {
+                    let message = match changing.as_slice() {
+                        [(r, n, _)] => format!("Changing the net will also update {r} pad {n} to {selector}."),
+                        [(r1, n1, _), (r2, n2, _)] => format!("Changing the net will also update {r1} pad {n1} and {r2} pad {n2} to {selector}."),
+                        _ => format!("Changing the net will also update {} connected pads to {selector}.", changing.len()),
+                    };
+                    return Err(vec![CheckResult::fail("ops_net_change_pads", "track_via_nets", message).with_detail(serde_json::json!({ "pads": pad_ids }))]);
+                }
+                Some(false) => return Ok(()),
+                Some(true) => {}
+            }
+        }
+        // `track->SetNetCode( newNetCode )` for the selected ones, `pad->SetNetCode( newNetCode )` for the pads
+        if let Some(rt) = self.design.routing.as_mut() {
+            for t in rt.tracks.iter_mut().filter(|t| selected_tracks.contains(t.id.as_str())) {
+                t.net = net.to_string();
+            }
+            for v in rt.vias.iter_mut().filter(|v| selected_vias.contains(v.id.as_str())) {
+                v.net = net.to_string();
+            }
+        }
+        if !changing.is_empty() {
+            let mut nets = nets;
+            for (r, n, _) in &changing {
+                let pin = format!("{r}.{n}");
+                for list in nets.iter_mut() {
+                    list.pins.retain(|p| *p != pin);
+                }
+                if !net.is_empty() {
+                    match nets.iter_mut().find(|l| l.name == net) {
+                        Some(l) => insert_pin(&mut l.pins, pin),
+                        None => nets.push(Net { name: net.to_string(), pins: vec![pin] }),
+                    }
+                }
+            }
+            self.design.nets = Some(nets);
+        }
+        self.sort_routing();
+        Ok(())
+    }
+}

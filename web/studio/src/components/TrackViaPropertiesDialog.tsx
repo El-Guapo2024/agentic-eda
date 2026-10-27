@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BoardState, Nm } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { pcbContext } from "../kicad-port/pcbProperties";
-import { trackViaCmds, trackViaForm, type TrackViaForm } from "../kicad-port/trackViaDialog";
+import { trackViaCmds, trackViaForm, withNetAnswers, type TrackViaForm } from "../kicad-port/trackViaDialog";
+import { postTrackViaPreview } from "../api/client";
+import { askConfirm } from "./library/libraryDialogs";
 import { useStudioApi } from "../state/store";
 import { formatLength, nmFrom, nmTo, type LengthUnit } from "../state/units";
 
@@ -55,9 +57,24 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
     const out = trackViaCmds(board, before, form, (nm) => formatLength(nm, units));
     if ("error" in out) return setError(out.error);
     if (out.cmds.length === 0) return onClose();
-    if (await api.cmdBatch(out.cmds)) onClose();
+    // `confirmShortingNets` (Cancel Changes: `commit.Revert()`, the dialog closes with nothing done), then `confirmPadChange`
+    let cmds = out.cmds;
+    for (;;) {
+      const pre = await postTrackViaPreview(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+      if (!pre.ok) return setError(pre.message);
+      if (!pre.ask) break;
+      if (pre.ask.check === "ops_net_change_shorts") {
+        if (!(await askConfirm({ title: "Confirmation", message: pre.ask.message, okLabel: "Apply Anyway", cancelLabel: "Cancel Changes" }))) return onClose();
+        cmds = withNetAnswers(cmds, { apply_anyway: true });
+      } else {
+        cmds = withNetAnswers(cmds, { change_pads: await askConfirm({ title: "Confirmation", message: pre.ask.message, okLabel: "Change Nets", cancelLabel: "Leave Nets Unchanged" }) });
+        break;
+      }
+    }
+    if (await api.cmdBatch(cmds)) onClose();
   };
-  const title = hasTracks && hasVias ? "Track & Via Properties" : hasVias ? "Via Properties" : "Track Properties";
+  // `DIALOG_TRACK_VIA_PROPERTIES_BASE`'s title, whatever is selected (no `SetTitle`)
+  const title = "Track & Via Properties";
   return (
     <div className="dialog-backdrop" onClick={onClose}>
       <div className="dialog" style={{ width: 380 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Track & Via Properties">

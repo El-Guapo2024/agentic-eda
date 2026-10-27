@@ -273,3 +273,53 @@ fn selected_pads_that_the_copper_joins_still_take_the_nets_they_were_given() {
     // The track is in the cluster of both pads that join it: the last pad's new net wins, as the map of KiCad's tool is overwritten.
     assert_eq!(board.design().routing.as_ref().unwrap().tracks[0].net, "N3");
 }
+
+// ------------------------------------------------- Track & Via Properties' net questions (round 3 C-2)
+
+fn track_via_nets(ids: &[&str], net: Option<&str>, apply_anyway: Option<bool>, change_pads: Option<bool>) -> Cmd {
+    Cmd::TrackViaNets { ids: ids.iter().map(|s| s.to_string()).collect(), net: net.map(String::from), apply_anyway, change_pads }
+}
+
+/// U1.1 (N1) with a track of N1 ending on it, and that track's id.
+fn track_on_u1_1(m: &ConstraintModel) -> (Design, Point) {
+    let mut d = design_of(m);
+    let a = centre(&d, m, "U1", "1");
+    d.routing.as_mut().unwrap().tracks.push(track_of("t1", "N1", a, Point { x: a.x, y: a.y + mm(5.0) }));
+    (d, a)
+}
+
+#[test]
+fn a_net_change_on_a_track_touching_a_pad_of_its_net_asks_to_update_the_pad() {
+    let m = model();
+    let (d, _) = track_on_u1_1(&m);
+    let mut b = Board::new(d.clone(), &m, mm(0.1), mm(0.3));
+    let e = b.apply(&track_via_nets(&["t1"], Some("N2"), None, None)).unwrap_err();
+    assert_eq!(e[0].check, "ops_net_change_pads");
+    assert_eq!(e[0].hint.as_deref().unwrap_or_default(), "Changing the net will also update U1 pad 1 to N2.");
+    assert_eq!(e[0].detail.as_ref().unwrap()["pads"], serde_json::json!(["U1.1"]));
+    // "Change Nets": the track and the pad
+    b.apply(&track_via_nets(&["t1"], Some("N2"), None, Some(true))).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks[0].net, "N2");
+    assert_eq!(nets_of(&b, "U1.1"), "N2");
+    // "Leave Nets Unchanged": neither
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&track_via_nets(&["t1"], Some("N2"), None, Some(false))).unwrap();
+    assert_eq!((b.design().routing.as_ref().unwrap().tracks[0].net.as_str(), nets_of(&b, "U1.1").as_str()), ("N1", "N1"));
+}
+
+#[test]
+fn copper_that_touches_another_net_asks_before_it_shorts() {
+    let m = model();
+    let (mut d, a) = track_on_u1_1(&m);
+    // a track of N3 crossing t1's far end
+    let far = Point { x: a.x, y: a.y + mm(5.0) };
+    d.routing.as_mut().unwrap().tracks.push(track_of("t3", "N3", Point { x: far.x - mm(1.0), y: far.y }, Point { x: far.x + mm(1.0), y: far.y }));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let e = b.apply(&track_via_nets(&["t1"], Some("N1"), None, None)).unwrap_err();
+    assert_eq!((e[0].check.as_str(), e[0].hint.as_deref().unwrap_or_default()), ("ops_net_change_shorts", "Applying these changes will short net N1 with N3."));
+    // "Apply Anyway": the net stays N1 (it is the track's), nothing to update on the pad
+    b.apply(&track_via_nets(&["t1"], Some("N1"), Some(true), None)).unwrap();
+    // the new net itself is no short: moving t1 to N3 asks only about the pad
+    let e = b.apply(&track_via_nets(&["t1"], Some("N3"), None, None)).unwrap_err();
+    assert_eq!(e[0].check, "ops_net_change_pads");
+}

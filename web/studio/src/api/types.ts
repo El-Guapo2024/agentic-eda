@@ -1734,6 +1734,8 @@ export type Cmd =
    */
   | { op: "edit_track"; id: string; start?: PointXY; end?: PointXY }
   | { op: "set_item_net"; ids: string[]; net: string }
+  /** Track & Via Properties' net and its questions (crates/ops/src/pad_nets.rs `track_via_nets`): `net` null leaves every net; the answers left out make a question a refusal. */
+  | { op: "track_via_nets"; ids: string[]; net: string | null; apply_anyway?: boolean; change_pads?: boolean }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
   /**

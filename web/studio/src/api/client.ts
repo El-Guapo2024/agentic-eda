@@ -248,6 +248,19 @@ export async function postSwapPreview(cmd: Cmd): Promise<{ ok: true; pads: strin
 }
 
 /**
+ * What Track & Via Properties' OK would ask first (crates/cli/src/pad_nets_api.rs): the question, word for word, of a short (`ops_net_change_shorts`) or of the pads a
+ * net change takes along (`ops_net_change_pads`), or null when there is none. A read: it changes nothing on the board.
+ */
+export async function postTrackViaPreview(cmd: Cmd): Promise<{ ok: true; ask: { check: string; message: string; pads: string[] } | null } | { ok: false; message: string }> {
+  const r = await fetch("/api/track_via_nets/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cmd }),
+  });
+  return (await r.json()) as { ok: true; ask: { check: string; message: string; pads: string[] } | null } | { ok: false; message: string };
+}
+
+/**
  * The end of a carried placement without a command of its own (crates/cli/src/carry.rs): "commit" when the drop changed nothing, "cancel" for Escape --
  * `commit.Revert()`, which takes the carried items away and leaves the undo and redo history as it was. `ok` is false when nothing was being carried.
  */
