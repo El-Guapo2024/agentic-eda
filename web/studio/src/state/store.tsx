@@ -33,7 +33,7 @@ import { LONG_TEXT_QUESTION, plainTextPaste } from "../kicad-port/plainTextPaste
 import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
-import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { DEFAULT_PCB_PARITY, loadAngleSnapMode, saveAngleSnapMode, type PcbParityState } from "../kicad-port/pcbParityState";
 import { strokeStepKept } from "../kicad-port/layerDefaults";
 import { substituteSelection } from "../kicad-port/groupTree";
 import { substituteSchSelection } from "../kicad-port/schGroups";
@@ -1054,7 +1054,7 @@ const initialState: StudioState = {
   routerSettingsDialogOpen: false,
   lengthTuningDialogOpen: false,
   lengthTuningMode: "single",
-  pcbx: DEFAULT_PCB_PARITY,
+  pcbx: { ...DEFAULT_PCB_PARITY, angleSnapMode: loadAngleSnapMode(browserStorage()) },
   bcx: DEFAULT_BOARD_CONTROL,
   appearance: DEFAULT_APPEARANCE,
   nextZoneIsRuleArea: false,
@@ -1890,6 +1890,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     savePreferences(browserStorage(), state.prefs);
   }, [state.prefs]);
+  useEffect(() => saveAngleSnapMode(browserStorage(), state.pcbx.angleSnapMode), [state.pcbx.angleSnapMode]);
   const stateRef = useRef(state);
   stateRef.current = state;
   /**

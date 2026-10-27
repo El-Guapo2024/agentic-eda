@@ -136,6 +136,27 @@ export function stepStrokeWidth(widthNm: number, dir: 1 | -1): number {
 }
 
 /** `PCB_VIEWER_TOOLS::NextLineMode`: DIRECT -> DEG45 -> DEG90 -> DIRECT. */
+/** Where the board editor's line mode is kept between sessions: `PCBNEW_SETTINGS::m_AngleSnapMode` is a stored setting (`editing.pcb_angle_snap_mode`, round 6 A6-5). */
+const ANGLE_SNAP_KEY = "eda.pcb.angleSnapMode";
+
+/** The stored line mode, or DIRECT (`pcbnew_settings.cpp`'s default) when there is none or the storage cannot be read. */
+export function loadAngleSnapMode(storage: Pick<Storage, "getItem"> | null): AngleSnapMode {
+  try {
+    const v = storage?.getItem(ANGLE_SNAP_KEY);
+    return v === "45" || v === "90" ? v : "direct";
+  } catch {
+    return "direct";
+  }
+}
+
+export function saveAngleSnapMode(storage: Pick<Storage, "setItem"> | null, mode: AngleSnapMode): void {
+  try {
+    storage?.setItem(ANGLE_SNAP_KEY, mode);
+  } catch {
+    // blocked storage: the mode lasts for this session only
+  }
+}
+
 export function nextAngleSnapMode(mode: AngleSnapMode): AngleSnapMode {
   switch (mode) {
     case "direct":

@@ -72,11 +72,9 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
             const plan = planCleanupGraphics(shapes, o, false);
             const cmds: Cmd[] = cleanupGraphicsCmds(plan);
             dispatch({ type: "CLEAR_SELECTION" }); // "Clear current selection list to avoid selection of deleted items"
-            if (cmds.length === 0) {
-              toast("Nothing to clean up.");
-              return;
-            }
-            void applyEdit(cmds, plan.remove, "Graphics cleaned up.");
+            // `doCleanup( false )` pushes the commit when it is not empty and says nothing (round 6 D6-6).
+            if (cmds.length === 0) return;
+            void applyEdit(cmds, plan.remove);
           },
         }),
       });
