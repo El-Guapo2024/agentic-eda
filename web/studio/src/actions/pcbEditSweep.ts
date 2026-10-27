@@ -329,8 +329,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
             if (s?.kind === "polygon") {
               const ring = simplifyPolygonRing(s.pts, toleranceNm);
               if (!ring || ring.length < 3) continue;
-              cmds.push({ op: "delete_shape", id }, { op: "add_shape", shape: { kind: "polygon", layer: s.layer, stroke_width: s.stroke_width, filled: s.filled, pts: ring.map(([x, y]) => ({ x, y })) } });
-              removed.push(id);
+              // `commit.Modify( item ); poly.SimplifyOutlines( .. )`: the same polygon, its id, group and lock kept (round 3 D-10)
+              cmds.push({ op: "replace_shape", id, shape: { kind: "polygon", layer: s.layer, stroke_width: s.stroke_width, filled: s.filled, pts: ring.map(([x, y]) => ({ x, y })) } });
             } else if (z) {
               const ring = simplifyPolygonRing(z.outline, toleranceNm);
               if (ring && ring.length >= 3) cmds.push({ op: "set_zone_outline", id, outline: ring.map(([x, y]) => ({ x, y })) });
