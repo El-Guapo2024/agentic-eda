@@ -251,28 +251,29 @@ async function revisionAfter(reportVersion: string | null, before: StudioState):
 
 /**
  * "Exclude this violation" / "Exclude with comment..." / "Exclude all ..." (and Exclude Marker) on the board: one undo step. The report on screen
- * is patched in place -- a waiver does not make a current report out of date.
+ * is patched in place -- a waiver does not make a current report out of date. `hold`: one marker waived from its row (ID_ADD_EXCLUSION, ExcludeMarker),
+ * which DIALOG_DRC updates with `ValueChanged( node )` and so leaves in its place; the "all" entries end with `Update`, which sorts the list again (r2 D-E3).
  */
-export async function excludeDrc(ctx: CheckerCtx, violations: readonly DrcViolation[], comment = ""): Promise<boolean> {
+export async function excludeDrc(ctx: CheckerCtx, violations: readonly DrcViolation[], comment = "", hold = false): Promise<boolean> {
   const { api, dispatch } = ctx;
   const todo = violations.filter(canExclude);
   if (todo.length === 0) return false;
   const before = api.getState();
   if (!(await api.cmd({ op: "add_drc_exclusions", exclusions: todo.map((v) => drcExclusionSpec(v, comment)) }))) return false;
   const version = await revisionAfter(before.drcVersion, before);
-  dispatch({ type: "DRC_PATCH_EXCLUDED", keys: todo.map(drcKey), excluded: true, comment, version });
+  dispatch({ type: "DRC_PATCH_EXCLUDED", keys: todo.map(drcKey), excluded: true, comment, version, hold });
   return true;
 }
 
-/** "Remove exclusion for this violation" (and "Remove all exclusions ..."). */
-export async function restoreDrc(ctx: CheckerCtx, violations: readonly DrcViolation[]): Promise<boolean> {
+/** "Remove exclusion for this violation" (and "Remove all exclusions ..."). `hold` as for [`excludeDrc`]: true for one marker from its row. */
+export async function restoreDrc(ctx: CheckerCtx, violations: readonly DrcViolation[], hold = false): Promise<boolean> {
   const { api, dispatch } = ctx;
   const todo = violations.filter(canExclude);
   if (todo.length === 0) return false;
   const before = api.getState();
   if (!(await api.cmd({ op: "delete_drc_exclusions", exclusions: todo.map(drcKey) }))) return false;
   const version = await revisionAfter(before.drcVersion, before);
-  dispatch({ type: "DRC_PATCH_EXCLUDED", keys: todo.map(drcKey), excluded: false, comment: "", version });
+  dispatch({ type: "DRC_PATCH_EXCLUDED", keys: todo.map(drcKey), excluded: false, comment: "", version, hold });
   return true;
 }
 
@@ -326,23 +327,24 @@ export async function excludeMarkerDrc(ctx: CheckerCtx): Promise<void> {
   if (here === null || !v || v.excluded) return;
   const filter = getCheckerView().drc.filter;
   const listed = listedIndexes(list, filter);
-  if (!(await excludeDrc(ctx, [v]))) return;
+  if (!(await excludeDrc(ctx, [v], "", true))) return;
   const next = filter.exclusions ? null : selectionAfterRowGone(listed, here);
   if (next !== null) selectDrc(ctx, "violations", next);
 }
 
-/** `DIALOG_ERC::ExcludeMarker`: the same for the schematic's selected finding. */
+/**
+ * `DIALOG_ERC::ExcludeMarker`: the same for the schematic's selected finding, but the ERC dialog ends with `m_markerTreeModel->Update(..)`, not
+ * `DeleteCurrentItem`: the list is sorted again (the waived row goes after the others, r2 D-E3) and `rebuildModel` selects the same marker if it is
+ * still listed. With exclusions not shown it is not, and nothing is selected.
+ */
 export async function excludeMarkerErc(ctx: CheckerCtx): Promise<void> {
   const s = ctx.api.getState();
   const list = s.erc?.violations ?? [];
   const here = s.ercSelected;
   const v = here !== null ? list[here] : undefined;
   if (here === null || !v || !v.location || v.severity === "excluded") return;
-  const filter = getCheckerView().erc.filter;
-  const listed = listedIndexes(list, filter);
   if (!(await setErcExcluded(ctx, [v], true))) return;
-  const next = filter.exclusions ? null : selectionAfterRowGone(listed, here);
-  if (next !== null) selectErc(ctx, next);
+  if (!getCheckerView().erc.filter.exclusions) ctx.dispatch({ type: "SET_ERC_SELECTED", index: null });
 }
 
 /** Waive (or restore) every violation of one custom rule on every page of the report: "Exclude all violations of rule '...'" (`ID_ADD_EXCLUSION_ALL`, `ID_REMOVE_EXCLUSION_ALL`). */
@@ -649,20 +651,20 @@ export async function runMarkerMenu(ctx: CheckerCtx, target: MarkerTarget, id: R
     if (!v) return;
     switch (id) {
       case "exclude":
-        await excludeDrc(ctx, [v]);
+        await excludeDrc(ctx, [v], "", true);
         return;
       case "exclude_comment": {
         const text = await askComment("");
-        if (text !== null) await excludeDrc(ctx, [v], text);
+        if (text !== null) await excludeDrc(ctx, [v], text, true);
         return;
       }
       case "edit_comment": {
         const text = await askComment(v.comment ?? "");
-        if (text !== null) await excludeDrc(ctx, [v], text);
+        if (text !== null) await excludeDrc(ctx, [v], text, true);
         return;
       }
       case "remove_exclusion":
-        await restoreDrc(ctx, [v]);
+        await restoreDrc(ctx, [v], true);
         return;
       case "exclude_type":
         await excludeDrcOfCheck(ctx, v.type, true);

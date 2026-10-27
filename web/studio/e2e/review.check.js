@@ -441,15 +441,17 @@
 
     // ----------------------------------------------------------------------------------------------------------------------- Delete Marker
     check("Delete Marker waits for a marker to be selected", footer(TITLE, "Delete Marker")?.disabled === true && footer(TITLE, "Delete All Markers")?.disabled === false && footer(TITLE, "Save...")?.disabled === false);
-    rowAt(0).click();
+    // the first row: the list is every error, then the warnings (`SetSeverities`' sort, r2 D-E3), so it need not be the report's first finding
+    const gone = rowIndex(rows()[0]);
+    rows()[0].click();
     await sleep(300);
-    check("a click on a row selects its marker and turns Delete Marker on", selectedRow() && rowIndex(selectedRow()) === 0 && footer(TITLE, "Delete Marker").disabled === false);
-    const kind0 = first.violations[0].severity === "warning" ? "warning" : "error";
+    check("a click on a row selects its marker and turns Delete Marker on", selectedRow() && rowIndex(selectedRow()) === gone && footer(TITLE, "Delete Marker").disabled === false);
+    const kind0 = first.violations[gone].severity === "warning" ? "warning" : "error";
     const n0 = count(kind0);
     footer(TITLE, "Delete Marker").click();
     await sleep(600);
     check("Delete Marker takes the marker off the list and the counts follow", rows().length === total - 1 && count(kind0) === n0 - 1, `${rows().length} rows, ${n0} -> ${count(kind0)} ${kind0}s`);
-    check("and selects the row that followed it (the list closes up: it has the deleted one's place)", selectedRow() && rowIndex(selectedRow()) === 0, selectedRow() ? rowIndex(selectedRow()) : "none");
+    check("and selects the row that followed it (the list closes up: it has the deleted one's place)", selectedRow() && rows().indexOf(selectedRow()) === 0, selectedRow() ? rows().indexOf(selectedRow()) : "none");
     check("the design is untouched: the server still has every finding", (await report()).violations.length === total);
     // The list on the page has lost a marker the server's report still has; a run puts the two in step again, with the deleted finding found again.
     check("Run ERC finds the deleted finding again", !!(await runErc()) && rows().length === total, `${rows().length} rows of ${total}`);

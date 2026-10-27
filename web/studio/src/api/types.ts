@@ -2989,6 +2989,9 @@ export interface DrcViolation {
   kicad_matched?: boolean;
   /** Where the violation's marker may sit, in nanometres: the positions an exclusion keeps for the derived project (`eda_kicad_engine::marker_candidates`). */
   marker_nm?: Array<[number, number]>;
+  /** The studio's own, never sent: the kind this row was sorted as when the DRC dialog last refiltered, kept while a marker waived or restored from
+   *  its row stays where it was (`ValueChanged`, r2 D-E3; `rcItems.ts::listedIndexes`). */
+  listed_as?: "error" | "warning" | "exclusion";
 }
 
 /** What `add_drc_exclusions` takes for one violation (`eda_model::ir::DrcExclusion`). */
