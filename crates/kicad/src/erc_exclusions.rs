@@ -358,8 +358,12 @@ pub fn from_project(pro_text: &str, file_ids: &std::collections::BTreeMap<String
         let Some(check) = check_of(&m.error_type) else { continue };
         let marker = ErcMarker { items, sheet: sheet(&m.sheet), main_sheet: sheet(&m.main_sheet), aux_sheet: sheet(&m.aux_sheet), ..m };
         let e = ErcExclusion { check: check.to_string(), location: ids[0].clone(), comment, marker: Some(marker) };
-        if !out.iter().any(|o| o.check == e.check && o.location == e.location && o.marker == e.marker) {
-            out.push(e);
+        // KiCad 25ec2335 `SCHEMATIC::ResolveERCExclusions`: "Legacy format can sometimes have the same exclusion multiple times, without and with a comment.
+        // If this happens, replace the existing one if we can go from no comment to comment" (r2 D-E2)
+        match out.iter_mut().find(|o| o.check == e.check && o.location == e.location && o.marker == e.marker) {
+            Some(o) if o.comment.is_empty() && !e.comment.is_empty() => o.comment = e.comment,
+            Some(_) => {}
+            None => out.push(e),
         }
     }
     out.sort();
@@ -411,6 +415,17 @@ mod tests {
             })
         );
         assert!(entry(&m, "").get("comment").is_none(), "no comment: none is written");
+    }
+
+    /// r2 D-E2: a legacy (schema 0) exclusion listed twice, first without and then with a comment, keeps the comment (`ResolveERCExclusions`).
+    #[test]
+    fn a_legacy_exclusion_listed_twice_keeps_its_comment() {
+        let text = "pin_not_connected|13335|8128|f-pin|00000000-0000-0000-0000-000000000000|||";
+        let pro = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": [text, [text, "why"]] } }).to_string();
+        let ids: std::collections::BTreeMap<String, String> = [("f-pin".to_string(), "U1.1".to_string())].into_iter().collect();
+        let derived: std::collections::HashMap<String, String> = [("d-pin".to_string(), "U1.1".to_string())].into_iter().collect();
+        let got = from_project(&pro, &ids, &derived, "", "");
+        assert_eq!(got.iter().map(|e| e.comment.as_str()).collect::<Vec<_>>(), ["why"]);
     }
 
     #[test]
