@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LibrarySymbolGraphic, LibrarySymbolPin } from "../api/types";
-import { deletePlan, duplicateItems, maxPinNumber, nearestHalfGrid, pastedItems, placedPinWithId, repeatPin, rotatePlan, selectionPivot } from "./symEditItems";
+import { deletePlan, duplicateItems, maxPinNumber, nearestHalfGrid, pastedItems, placedPinWithId, repeatPin, rotatePivot, rotatePlan, selectionPivot } from "./symEditItems";
 import { pinBoxAt } from "./schPins";
 import { resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 
@@ -91,4 +91,21 @@ test("Rotate's pivot counts the pins' name and number boxes (PIN_LAYOUT_CACHE::G
   assert.equal(c.y, -0.635);
   const [r1] = rotatePlan(pins, 2, true, 1.27, [], c);
   assert.deepEqual(r1!.at, { x: 1.905, y: -3.175 });
+});
+
+test("Rotate's pivot counts a body_style 1 rectangle and skips a text, as SELECTION::GetCenter (r4 E4-1)", () => {
+  const rect: LibrarySymbolGraphic = { id: "r", kind: "rectangle", unit: 0, body_style: 1, start: { x: 0, y: 0 }, end: { x: 10, y: 10 } } as unknown as LibrarySymbolGraphic;
+  const text: LibrarySymbolGraphic = { id: "t", kind: "text", unit: 0, body_style: 1, at: { x: 20, y: 20 }, text: "X", size_mm: 1.27 } as unknown as LibrarySymbolGraphic;
+  // a pin's box at (0, 5) pointing left, in y-down nm
+  const pinBox = { minX: -2_540_000, minY: -5_000_000, maxX: 0, maxY: -5_000_000 };
+  // `graphicBox` of itemBoxes.ts in the editor's y-down nm (a text's box would be around (20, -20))
+  const boxOf = (g: LibrarySymbolGraphic) => (g.kind === "rectangle" ? { minX: 0, minY: -10_000_000, maxX: 10_000_000, maxY: 0 } : { minX: 19e6, minY: -21e6, maxX: 21e6, maxY: -19e6 });
+  const c = rotatePivot([pinBox], [rect, text], 1.27, boxOf)!;
+  // box x -2.54..10 (centre 3.73 -> 3.81 on the half grid), y 0..10 (centre 5 -> 5.08); the text at (20, 20) is not in it
+  assert.deepEqual(c, { x: 3.81, y: 5.08 });
+});
+
+test("Rotate's pivot of texts alone is the mean of their positions (SELECTION::GetCenter hasOnlyText)", () => {
+  const t = (id: string, x: number, y: number) => ({ id, kind: "text", unit: 1, body_style: 2, at: { x, y }, text: "A", size_mm: 1.27 }) as unknown as LibrarySymbolGraphic;
+  assert.deepEqual(rotatePivot([], [t("a", 0, 0), t("b", 5.08, 2.54)], 1.27, () => null), { x: 2.54, y: 1.27 });
 });

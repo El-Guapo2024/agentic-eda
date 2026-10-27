@@ -59,9 +59,9 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
           if (plan.message) toast(plan.message, "error");
           return;
         }
-        // the net class's sizes (or a microvia's): none sent, the server asks the rules for the route's net (`handleLayerSwitch`, r3 R3-4)
-        const rules = board.board_rules;
-        const size = chosenViaSize(plan.viaType, state.currentViaPreset, rules ? { diameter: rules.via_diameter, drill: rules.via_drill } : undefined, state.pcbx.useCustomTrackVia);
+        // the net class's sizes (or a microvia's): none sent, the server asks the rules for the route's net (`handleLayerSwitch`, r3 R3-4).
+        // The choice is the via list's index (0 = net class), not the size (r4 R4-8).
+        const size = chosenViaSize(plan.viaType, state.currentViaPreset, state.currentViaIndex, 1 + (board.routing?.via_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
         void routeToggleVia(true, size?.diameter, size?.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span }).then((reply) => {
           if (!reply.ok) {
             if (reply.message) toast(reply.message, "error");

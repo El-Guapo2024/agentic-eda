@@ -145,6 +145,11 @@ pub struct Router {
     /// The mode the drag in progress started in (`DRAGGER::Start`: `m_currentMode = Settings().Mode()`, and a shove made only for Shove): a
     /// mode changed in the middle of a drag waits for the next one (findings p5 F3-12). The other settings are read live, as KiCad's are.
     drag_mode: Option<crate::settings::Mode>,
+    /// `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (the project's `board.auto_track_width`, `PROJECT_LOCAL_SETTINGS::m_AutoTrackWidth`, on by
+    /// default; the studio's "Use Starting Track Width"): a route or pair started on a track, or on a pad or via a track is joined to, takes that
+    /// track's width ([`crate::settings::inherit_track_width`], r4 R4-1). `m_TempOverrideTrackWidth` is cleared before each start
+    /// (`ROUTER_TOOL::prepareInteractive`), so it is not kept here.
+    pub use_connected_track_width: bool,
 }
 
 impl Router {
@@ -152,7 +157,7 @@ impl Router {
         let (world, layers) = crate::from_ir::build_node(design, model);
         let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
         let track_pins = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| !t.pins.is_empty()).map(|t| (t.id.clone(), t.pins.clone())).collect();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds, track_pins, drag_mode: None }
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds, track_pins, drag_mode: None, use_connected_track_width: true }
     }
 
     /// The type of the board's via `id` (a through via unless the board says otherwise).
@@ -266,14 +271,28 @@ impl Router {
         Ok(())
     }
 
-    /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a route about to start at `at` on `layer_name` ([`crate::settings::import_sizes`]): the start
+    /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a route about to start at `at` on `layer_name` ([`crate::settings::import_sizes`]): the width of
+    /// the track joined to the start item when [`Self::use_connected_track_width`] is on (source "existing track", r4 R4-1), else the start
     /// item's net's width, via and pair sizes through the board's rules -- what a route starts at when the width list is on "use net class"
     /// (`UseNetClassTrack()`, r3 R3-3). `None` for a layer the board does not have.
     pub fn import_sizes(&self, at: Point, layer_name: &str) -> Option<crate::settings::ImportedSizes> {
         let layer = self.layer_index(layer_name)?;
         let pick = self.pick_start(at, layer);
-        let start = pick.as_ref().and_then(|p| self.world.get(p.item).map(|it| (it, p.pos)));
-        Some(crate::settings::import_sizes(&self.world, &self.rules, start, layer))
+        // `aStartPosition`: the click (`performRouting( evt->Position() )`), not the anchor it snapped to
+        let start = pick.as_ref().and_then(|p| self.world.get(p.item).map(|it| (it, at)));
+        Some(crate::settings::import_sizes(&self.world, &self.rules, start, layer, self.use_connected_track_width))
+    }
+
+    /// `inheritTrackWidth` alone, for a route about to start at `at` on `layer_name` with a width of the user's choice: KiCad asks it before
+    /// the width list (`ImportSizes`: `if( bds.m_UseConnectedTrackWidth && !bds.m_TempOverrideTrackWidth && aStartItem != nullptr )`), so a
+    /// joined track's width wins over a chosen one too. `None` when [`Self::use_connected_track_width`] is off or nothing is joined.
+    pub fn connected_track_width(&self, at: Point, layer_name: &str) -> Option<Nm> {
+        if !self.use_connected_track_width {
+            return None;
+        }
+        let layer = self.layer_index(layer_name)?;
+        let pick = self.pick_start(at, layer)?;
+        crate::settings::inherit_track_width(&self.world, self.world.get(pick.item)?, at, layer)
     }
 
     /// What building the world had to tell the user (`SyncWorld`'s `syncZone`: "%s is malformed.").
@@ -854,7 +873,7 @@ impl Router {
             for (via_id, pos) in s.placer.displaced_vias() {
                 commit.remove_via_ids.push(via_id.to_string());
                 if let Some(v) = self.find_via_by_source(via_id) {
-                    commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: pos, drill: v.drill, diameter: v.diameter, from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+                    commit.vias.push(eda_model::ir::Via { id: via_id.to_string(), net: v.net.as_deref().unwrap_or("").to_string(), at: pos, drill: v.drill, diameter: v.diameter, from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
                     Self::note_via_kind(&mut commit, self.kind_of_via(Some(via_id)));
                 }
             }
@@ -1010,7 +1029,18 @@ impl Router {
     /// of them). Without `drag_locked` a locked item is refused with [`crate::dragger::LOCKED_MESSAGE`].
     pub fn drag_start_locked(&mut self, at: Point, layer_name: &str, free_angle: bool, drag_locked: bool) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
-        let item_id = self.world.item_at(at, LayerRange::single(layer), START_SNAP_NM).ok_or("nothing to drag there")?;
+        // `TOOL_BASE::pickSingleItem`: a via (or pad) on the layer outranks a track (`prioritized[0]` before `prioritized[1]`), so a click on a
+        // via with tracks joined to it takes hold of the via
+        let via = self
+            .world
+            .iter()
+            .filter_map(|(id, it)| match it {
+                Item::Via(v) if !v.is_virtual && v.layers.overlaps(&LayerRange::single(layer)) && crate::seg_ops::length(at, v.pos) <= v.diameter / 2 => Some((crate::seg_ops::length(at, v.pos), id)),
+                _ => None,
+            })
+            .min()
+            .map(|(_, id)| id);
+        let item_id = via.or_else(|| self.world.item_at(at, LayerRange::single(layer), START_SNAP_NM)).ok_or("nothing to drag there")?;
         if drag_locked {
             self.world.set_locked(item_id, false);
         }
@@ -1096,7 +1126,8 @@ impl Router {
                 .as_ref()
                 .map(|v| (v.net.as_deref().unwrap_or("").to_string(), self.layer_name(v.layers.start()).to_string(), self.layer_name(v.layers.end()).to_string(), v.diameter, v.drill))
                 .unwrap_or_else(|| ("".to_string(), self.layer_name(0).to_string(), self.layer_name(self.layers.count() as i32 - 1).to_string(), *diameter, *drill));
-            commit.vias.push(eda_model::ir::Via { id: String::new(), net, at: *pos, drill: resolved_drill, diameter: resolved_diameter, from_layer, to_layer });
+            // the board's via moved keeps its id, and so its extras (`Cmd::CommitRoute`: KiCad modifies the `PCB_VIA` the router's via came from)
+            commit.vias.push(eda_model::ir::Via { id: source_via.clone().unwrap_or_default(), net, at: *pos, drill: resolved_drill, diameter: resolved_diameter, from_layer, to_layer });
             Self::note_via_kind(&mut commit, self.kind_of_via(source_via.as_deref()));
         }
         self.drop_redundant(&mut commit);
@@ -1135,39 +1166,13 @@ impl Router {
                 return Err(reason);
             }
         }
-        let mut placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, layer, self.layers.all())?;
         // `ImportSizes`: "First try to pick up diff pair width from starting track" (`m_UseConnectedTrackWidth`, on by default) -- also off a
-        // pad or via with a stub (findings p5 F4-5)
-        if let Some(w) = self.inherit_track_width(start_item, at, layer) {
-            placer.set_dimensions(Some(w), None, None);
-        }
+        // pad or via with a stub (findings p5 F4-5), and before the start-gap check (r4 R4-4)
+        let placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, at, layer, self.layers.all(), self.use_connected_track_width)?;
         self.session = None;
         self.drag = None;
         self.diff = Some(placer);
         Ok(())
-    }
-
-    /// `PNS_KICAD_IFACE_BASE::inheritTrackWidth( aItem, .., aStartPosition )`: a track's own width; for a pad or via, of the tracks joined to it
-    /// on the start layer the one whose far end is nearest the cursor ("the far-end direction is a proxy for which exit stub the user is
-    /// pointing at"), else the narrowest on the start layer, else the narrowest of all; none with no track joined.
-    fn inherit_track_width(&self, item: ItemId, at: Point, layer: i32) -> Option<Nm> {
-        let it = self.world.get(item)?;
-        if it.is_track() {
-            return Some(it.width());
-        }
-        let p = match it {
-            Item::Via(v) => v.pos,
-            Item::Solid(s) => s.pos,
-            _ => return None,
-        };
-        let joint = self.world.joint_at(p, it.net())?;
-        let linked: Vec<&Item> = joint.links.iter().filter(|&&id| id != item).filter_map(|&id| self.world.get(id)).filter(|i| i.is_track()).collect();
-        let sq = |a: Point, b: Point| ((a.x - b.x).get() as i128).pow(2) + ((a.y - b.y).get() as i128).pow(2);
-        let closest = linked.iter().filter(|i| i.layers().start() == layer).filter_map(|i| i.track_ends().map(|(a, b)| (i, if sq(a, p) > sq(b, p) { a } else { b }))).min_by_key(|(_, far)| sq(*far, at));
-        if let Some((i, _)) = closest {
-            return Some(i.width());
-        }
-        linked.iter().filter(|i| i.layers().start() == layer).map(|i| i.width()).min().or_else(|| linked.iter().map(|i| i.width()).min())
     }
 
     /// `ROUTER::UpdateSizes` for a pair (the "Differential Pair Dimensions..." dialog,
@@ -1274,7 +1279,7 @@ impl Router {
         for (via_id, pos) in &c.displaced_vias {
             commit.remove_via_ids.push(via_id.clone());
             if let Some(v) = self.find_via_by_source(via_id) {
-                commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: *pos, drill: v.drill, diameter: v.diameter, from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+                commit.vias.push(eda_model::ir::Via { id: via_id.clone(), net: v.net.as_deref().unwrap_or("").to_string(), at: *pos, drill: v.drill, diameter: v.diameter, from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
                 Self::note_via_kind(&mut commit, self.kind_of_via(Some(via_id)));
             }
         }
@@ -1323,7 +1328,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "R1".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: Point { x: mm(6.0), y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] }),
-            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         (design, model)
@@ -1347,6 +1352,7 @@ mod tests {
                 zones: vec![],
                 track_width_presets: vec![],
                 via_presets: vec![],
+                diff_pair_presets: vec![],
                 teardrop_settings: Default::default(),
             }),
             drawings: None,

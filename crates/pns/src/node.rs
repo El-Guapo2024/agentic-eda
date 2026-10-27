@@ -88,11 +88,14 @@ pub struct QueryOpts<'a> {
     pub box_hull: bool,
     /// The radius of the probe's hole, when the probe is a via (`aHead->Hole()`): [`Node::via_colliding`] sets it.
     pub head_hole: Option<Nm>,
+    /// The board via the probe is, when it is one (`aHead->Parent()`, a dragged or shoved `PCB_VIA`: [`crate::item::Via::source_via`]):
+    /// [`Node::via_colliding`] sets it, for `IsFlashedOnLayer( aHead, Layers() )` (r4 R4-2).
+    pub head_via: Option<&'a str>,
 }
 
 impl Default for QueryOpts<'_> {
     fn default() -> Self {
-        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true, box_hull: false, head_hole: None }
+        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true, box_hull: false, head_hole: None, head_via: None }
     }
 }
 
@@ -1048,7 +1051,7 @@ impl Node {
 
     /// [`Self::colliding_with`] of a via: its copper, and its hole (`opts.head_hole`, `aHead->Hole()`).
     pub fn via_colliding(&self, via: &Via, rules: &BoardRules, exclude: &[ItemId], opts: QueryOpts) -> Vec<Obstacle> {
-        let opts = QueryOpts { head_hole: (via.drill > Nm::ZERO).then_some(via.drill / 2), ..opts };
+        let opts = QueryOpts { head_hole: (via.drill > Nm::ZERO).then_some(via.drill / 2), head_via: via.source_via.as_deref(), ..opts };
         self.colliding_with(&Shape::Circle { c: via.pos, r: via.diameter / 2 }, &via.net, via.layers, rules, exclude, opts)
     }
 
@@ -1092,7 +1095,14 @@ impl Node {
         // `else if( iface && !iface->IsFlashedOnLayer( this, aHead->Layers() ) ) clearance = -1;`: a pad's or via's copper on a layer it has removed
         // is not there; its hole still is (`holeI->collideSimple( aHead )`, below, which nothing then lets the copper's clearance skip)
         let flashed = self.rules.as_ref().is_none_or(|r| r.is_flashed_on(item, layers));
-        if !same && flashed {
+        // `else if( iface && !iface->IsFlashedOnLayer( aHead, Layers() ) ) clearance = -1;`: the probe's own copper, when it is a board via that
+        // removed its unconnected layers, is not there on the item's layers either -- against the item's copper, and against its hole
+        // (`holeI->collideSimple( aHead )` asks the head the same); the probe's hole still is ("a special case for the "head" via's hole")
+        let head_flashed = self.rules.as_ref().is_none_or(|r| match head {
+            Side::Item(h) => r.is_flashed_on(h, item.layers()),
+            _ => r.is_via_flashed_on(opts.head_via, layers, item.layers()),
+        });
+        if !same && flashed && head_flashed {
             // `COLLISION_SEARCH_OPTIONS::m_useClearanceEpsilon` (default on): `rv - m_clearanceEpsilon`, the board's DRC epsilon (0.5 um)
             let clearance = self.clearance_between(rules, Side::Item(item), head, opts.use_epsilon);
             match shape.collides(&item_shape, clearance) {
@@ -1126,7 +1136,7 @@ impl Node {
             _ => None,
         };
         let reach = |depth: Nm| clear_at.is_none_or(|c| r.hole_reach(c, depth));
-        let item_hole_counts = !same && reach(item_depth);
+        let item_hole_counts = !same && head_flashed && reach(item_depth);
         let head_counts = head_hole.is_some_and(|(_, _, d)| same || reach(d));
         if !item_hole_counts && !head_counts {
             return None;

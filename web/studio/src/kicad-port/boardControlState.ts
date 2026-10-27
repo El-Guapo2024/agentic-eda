@@ -29,7 +29,8 @@ export interface BoardControlState {
   currentHighlight: string[];
   /** Pads whose local-ratsnest flag differs from the global state (`pcbnew.Control.localRatsnestTool`'s clicks), as `REF.NUMBER`. */
   localRatsnestPads: string[];
-  /** `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (`pcbnew.EditorControl.autoTrackWidth`). */
+  /** `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (`pcbnew.EditorControl.autoTrackWidth`): on by default, as the project's `board.auto_track_width` is
+   * (`PROJECT_LOCAL_SETTINGS`: `m_AutoTrackWidth( true )`). */
   autoTrackWidth: boolean;
   /** `PCB_DISPLAY_OPTIONS::m_FlipBoardView` (`pcbnew.Control.flipBoard`). */
   boardFlipped: boolean;
@@ -53,7 +54,7 @@ export const DEFAULT_BOARD_CONTROL: BoardControlState = {
   lastHighlight: [],
   currentHighlight: [],
   localRatsnestPads: [],
-  autoTrackWidth: false,
+  autoTrackWidth: true,
   boardFlipped: false,
   zoneManagerOpen: false,
   boardExport: null,

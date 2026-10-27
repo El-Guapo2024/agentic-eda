@@ -35,3 +35,6 @@ Logical steps on your branch, messages in the repo's style (`git log`), each end
     Claude-Session: https://claude.ai/code/session_018eAWc4qjKVQDxtCKwM4JXN
 
 Push your branch to origin. Final report (short): what is done, commits, gate results with numbers, what is unverified or left, and decisions the lead should check.
+
+## Test scope (the user, 2026-10-28: overrides the gate list above)
+Run only what your change touches: `cargo check --workspace --tests --keep-going` (0 warnings), the tests of the crates you changed (`cargo test -p <crate>`), the web unit tests and typecheck if you changed web/studio, and the slow kicad-cli tests and browser checks for the feature you changed. Do NOT run the full `tools/check.sh fast`, the full `run-all-checks`, or the parity report (unless your change is in the KiCad readers/writers, then the reexport part only). The lead runs the full suite once on main after merging.

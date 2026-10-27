@@ -61,7 +61,7 @@
   /** Everything the pages here edit, to compare with the start. */
   const fingerprint = (s) => J({
     layers: s.layers, constraints: s.board_rules?.constraints, mask: s.board_rules?.mask_paste, text: s.board_rules?.text_graphics, stackup: s.board_rules?.stackup ?? null,
-    sev: s.board_rules?.severities ?? {}, rules: s.board_rules?.custom_rules_text ?? null, widths: s.routing?.track_width_presets ?? [], vias: s.routing?.via_presets ?? [],
+    sev: s.board_rules?.severities ?? {}, rules: s.board_rules?.custom_rules_text ?? null, widths: s.routing?.track_width_presets ?? [], vias: s.routing?.via_presets ?? [], pairs: s.routing?.diff_pair_presets ?? [],
     td: s.routing?.teardrop_settings ?? null, dims: s.drawings?.dimension_settings ?? null,
   });
 

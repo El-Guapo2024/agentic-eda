@@ -1055,9 +1055,10 @@ export function useActionRunner() {
         void api.cmdBatch(cmds);
         return;
       }
-      const cur = state.currentTrackWidthNm ?? list[0]!;
-      const next = list[wrapStep(list.indexOf(cur), list.length, dir)]!;
-      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: next });
+      // The cycle runs on the list INDEX (`m_trackWidthIndex`), as KiCad's does -- not on the value, which a preset may share with the
+      // Default class's width (r4 R4-8).
+      const nextIndex = wrapStep(state.currentTrackWidthIndex, list.length, dir);
+      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: list[nextIndex]!, index: nextIndex });
     };
     if (state.drawState?.kind !== "route") {
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleTrackWidth(1)));
@@ -1070,7 +1071,6 @@ export function useActionRunner() {
       const base = { diameter: board?.board_rules?.via_diameter ?? 600_000, drill: board?.board_rules?.via_drill ?? 300_000 };
       return [base, ...(board?.routing?.via_presets ?? [])];
     };
-    const sameViaPreset = (a: { diameter: number; drill: number }, b: { diameter: number; drill: number }) => a.diameter === b.diameter && a.drill === b.drill;
     const cycleViaPreset = (dir: 1 | -1) => {
       const list = viaPresetList();
       const sel = toolIdle ? selOnlyTracksVias() : null;
@@ -1086,9 +1086,9 @@ export function useActionRunner() {
         void api.cmdBatch(cmds);
         return;
       }
-      const cur = state.currentViaPreset ?? list[0]!;
-      const next = list[wrapStep(list.findIndex((p) => sameViaPreset(p, cur)), list.length, dir)]!;
-      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: next });
+      // Same as the width cycle: the index (`m_viaSizeIndex`), not the size (r4 R4-8).
+      const nextIndex = wrapStep(state.currentViaIndex, list.length, dir);
+      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: list[nextIndex]!, index: nextIndex });
     };
     m.set("pcbnew.EditorControl.viaSizeInc", pcbOnly(() => cycleViaPreset(1)));
     m.set("pcbnew.EditorControl.viaSizeDec", pcbOnly(() => cycleViaPreset(-1)));
@@ -2121,18 +2121,19 @@ export function useActionRunner() {
             return;
           }
           dispatch({ type: "SET_SELECTION", refs: [] });
-          // `ImportSizes`: undefined on "use net class", and each connection starts at its own net's width (the server's `CT_WIDTH`)
-          const width = chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
+          // `ImportSizes`: undefined on "use net class" (list index 0, or a custom size chosen), and each connection starts at its own net's
+          // width (the server's `CT_WIDTH`). By index, so a preset equal to the Default class's width is still chosen (r4 R4-8).
+          const width = chosenTrackWidth(state.currentTrackWidthNm, state.currentTrackWidthIndex, 1 + (board.routing?.track_width_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
           const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
-            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch)) ? "live" : "done";
+            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch, undefined, state.bcx.autoTrackWidth)) ? "live" : "done";
           };
           let done = 0;
           const runAnchor = (a: (typeof anchors)[number]) => async (): Promise<QueueOutcome> => {
             const layer = routeStartLayer(a, copperLayers, state.activeLayer);
             if (variant !== "auto") return handOver(variant === "fromEnd" ? a.target : a.at, layer);
-            const started = await routeStart(a.at[0], a.at[1], layer, width, settings);
+            const started = await routeStart(a.at[0], a.at[1], layer, width, settings, state.bcx.autoTrackWidth);
             if (!started.ok) return "done";
             const head = await routeMove(a.target[0], a.target[1]);
             // AttemptFinish: only a head that reaches the far end without colliding completes by itself.

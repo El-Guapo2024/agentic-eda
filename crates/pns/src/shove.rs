@@ -386,7 +386,7 @@ pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, dire
     let (mut pos, mut total) = (via.pos, NO_FORCE);
     let mut iter = 0;
     while iter < max_iterations {
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false, box_hull: false, head_hole: None };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false, box_hull: false, head_hole: None, head_via: None };
         let obstacles = node.via_colliding(&Via { pos, ..via.clone() }, rules, exclude, opts);
         let Some(first) = obstacles.first() else { break };
         let force = via_pushout_from(node, rules, via, pos, node.get(first.id)?);
@@ -1428,7 +1428,7 @@ impl<'a> Shove<'a> {
     fn nearest_for(&self, cur: &SLine, mask: u8) -> Option<NearestHit> {
         let exclude = cur.links();
         // `NODE::NearestObstacle` reads the router's corner mode itself: box hulls in a 90-degree mode
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: self.settings.corner_mode.is_90(), head_hole: None };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: self.settings.corner_mode.is_90(), head_hole: None, head_via: None };
         self.node.nearest_obstacle(&cur.line, cur.via.as_ref().map(|v| &v.data), self.rules, &exclude, opts)
     }
 

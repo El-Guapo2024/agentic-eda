@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultReferenceLayout, gridProblem, moveRow, newRowName, panelOfRows, rowsOfFootprint, type LibFieldRow } from "./fpLibFields";
+import { checkLibFieldRow, defaultReferenceLayout, gridProblem, moveRow, newRowName, panelOfRows, pastedFootprint, rowsOfFootprint, type LibFieldRow } from "./fpLibFields";
 import type { LibraryFootprint } from "../api/types";
 
 const fp = (over: Partial<LibraryFootprint> = {}) => ({ name: "R_0603", reference_visible: true, value_visible: true, fields: [], ...over }) as unknown as LibraryFootprint;
@@ -61,7 +61,7 @@ test("the grid's problems are the dialog's: the size, the pen, a name, a mandato
   const rows = rowsOfFootprint(fp({ fields: [{ name: "MPN", value: "a", visible: true }] }));
   assert.equal(gridProblem(rows, fmt), null);
   const tiny = rows.map((r, i) => (i === 0 ? { ...r, layout: { ...r.layout, size: [0, 1_000_000] as [number, number] } } : r));
-  assert.match(gridProblem(tiny, fmt)!, /^Reference: Text width must be at least/);
+  assert.match(gridProblem(tiny, fmt)!, /^Reference: The text width must be between/);
   assert.match(gridProblem(rows.map((r, i) => (i === 4 ? { ...r, name: "" } : r)), fmt)!, /Fields must have a name\./);
   assert.match(gridProblem(rows.map((r, i) => (i === 4 ? { ...r, name: "Datasheet" } : r)), fmt)!, /is the name of a mandatory field/);
   assert.match(gridProblem(rows.map((r, i) => (i === 4 ? { ...r, name: "ki_keywords" } : r)), fmt)!, /not a field/);
@@ -83,4 +83,21 @@ test("rows move one place, never into the four mandatory rows", () => {
   assert.deepEqual(moveRow(rows, 6, 1), rows, "the last row cannot go down");
   assert.deepEqual(moveRow(rows, 5, -1).map((r) => r.name), ["R", "V", "D", "E", "b", "a", "c"]);
   assert.deepEqual(moveRow(rows, 4, 1).map((r) => r.name), ["R", "V", "D", "E", "b", "a", "c"]);
+});
+
+test("the library dialog's size messages are the Footprint Editor's (DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::Validate)", () => {
+  assert.equal(checkLibFieldRow("A", { size: [0, 1_000_000], thickness: 0 }, fmt), "The text width must be between 0.001 mm and 250 mm.");
+  assert.equal(checkLibFieldRow("A", { size: [1_000_000, 300_000_000], thickness: 0 }, fmt), "The text height must be between 0.001 mm and 250 mm.");
+  assert.equal(checkLibFieldRow("A", { size: [1_000_000, 1_000_000], thickness: 900_000 }, fmt), "The text thickness is too large for the text size.\nIt will be clamped.");
+  assert.equal(checkLibFieldRow("", { size: [1_000_000, 1_000_000], thickness: 0 }, fmt), "Fields must have a name.");
+  assert.equal(checkLibFieldRow("A", { size: [1_000_000, 1_000_000], thickness: 150_000 }, fmt), null);
+});
+
+test("Paste Footprint renames the copy and keeps its Value (FOOTPRINT_EDITOR_CONTROL::PasteFootprint only does SetFPID)", () => {
+  const plain = pastedFootprint(fp({ name: "X" }), "X_copy");
+  assert.equal(plain.name, "X_copy");
+  assert.equal(plain.value?.text, "X");
+  assert.equal(rowsOfFootprint(plain)[1]!.text, "X", "the Value shows the old name");
+  const own = pastedFootprint(fp({ name: "X", value: { at: { x: 0, y: 2 }, size: [1, 1], layer: "F.Fab", text: "10k" } }), "X_copy");
+  assert.deepEqual([own.value?.text, own.value?.at], ["10k", { x: 0, y: 2 }]);
 });

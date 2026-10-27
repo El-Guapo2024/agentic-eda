@@ -47,7 +47,9 @@ export function specctraImportCmd(file: { name: string; text: string }): { op: "
 /** What `ImportSpecctraSession` says: "Session file imported and merged OK." in the status bar, or, when `FromSESSION` threw, the error KiCad's dialog shows
  * (`DisplayErrorMessage( this, _( "Board may be corrupted, do not save it.\n Fix problem and try again" ), ioe.What() )`). Differs: the first sentence is left out,
  * since a refused import here leaves the board as it was; "Fix problem and try again" comes first, the error under it. */
-export function describeImport(reply: { ok: boolean; message: string }): { message: string; kind: "info" | "error" } {
-  if (reply.ok) return { message: "Session file imported and merged OK. Undo takes the import back.", kind: "info" };
+export function describeImport(reply: { ok: boolean; message: string; warning?: string }): { message: string; kind: "info" | "error" } {
+  // KiCad (25ec2335 on, through kicad-cli api-server) skips a part, wire or via it cannot resolve and imports the rest, with a warning: "%d session item(s) were
+  // skipped due to unresolved reference, layer, or padstack." It comes under the status line.
+  if (reply.ok) return { message: `Session file imported and merged OK. Undo takes the import back.${reply.warning ? `\n${reply.warning}` : ""}`, kind: "info" };
   return { message: reply.message ? `Fix problem and try again\n${reply.message}` : "Fix problem and try again", kind: "error" };
 }

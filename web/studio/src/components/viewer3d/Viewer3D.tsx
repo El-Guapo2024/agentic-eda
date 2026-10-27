@@ -36,6 +36,7 @@ import { MODEL_ROWS, ROWS, isVisible, toggled } from "../../kicad-port/appearanc
 import { useViewerColors } from "./useViewerColors";
 import { ModelCache } from "./modelCache";
 import { PartModels, type PartStats } from "./partModels";
+import { stackOfBoard } from "../../kicad-port/model3d";
 import { viewer3dProbe } from "./viewer3dProbe";
 
 const ROTATION_STEP_RAD = (ROTATION_STEP_DEG * Math.PI) / 180;
@@ -204,6 +205,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   useEffect(() => {
     boardRef.current = board;
   }, [board]);
+  /** The wheel's scroll settings (EDA_3D_CANVAS takes `EDA_DRAW_PANEL_GAL::GetVcSettings()`, the same Preferences the 2D canvases read), fresh for the mount effect's wheel handler. */
+  const scrollPrefsRef = useRef(state.prefs);
+  useEffect(() => {
+    scrollPrefsRef.current = state.prefs;
+  }, [state.prefs]);
   /** Tracks the previous `flipped` value so the flip effect below (keyed on that boolean) can tell "the user just toggled it" apart from "this effect also runs once on mount" -- `camera3d.flip()` is additive (KiCad's own flipView action, see camera3d.ts), not an absolute set, so it must fire exactly once per real toggle, never on mount. */
   const prevFlippedRef = useRef(state.viewer3d.flipped);
 
@@ -445,13 +451,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (camera3d.isMoving()) return;
-      // Cmd is accepted alongside Ctrl for the pan-horizontal modifier:
-      // source's own default (view_controls.cpp's WXK_CONTROL) means the
-      // *physical* Control key on every platform including macOS, but
-      // physical-Ctrl+scroll is also macOS's system "zoom the screen"
-      // accessibility gesture -- accepting Cmd too avoids that clash on a
-      // trackpad without changing the Windows/Linux behavior at all.
-      camera3d.handleWheel({ deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey, altKey: e.altKey });
+      // Cmd is accepted alongside Ctrl (wx's ControlDown() is Cmd on
+      // macOS). The modifiers and reversals are the user's Preferences
+      // (`VC_SETTINGS`), and the zoom modifier decides `aPan`
+      // (eda_3d_viewer_frame.cpp::loadCommonSettings) -- see handleWheel.
+      camera3d.handleWheel({ deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey, altKey: e.altKey }, scrollPrefsRef.current);
     };
     // KiCad shows a real right-click context menu (view presets, rotate
     // submenu, flip, move submenu -- eda_3d_controller.cpp's Init()) when
@@ -675,7 +679,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const dnpShown = isVisible(layers, "dnp_models");
   const bboxShown = isVisible(layers, "bounding_boxes");
   useEffect(() => {
-    threeRef.current?.partModels.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showNotInPos: notInPosShown, showDNP: dnpShown, showBoundingBoxes: bboxShown });
+    // The models stand on the board's own build-up (BOARD_ADAPTER::InitSettings from the stackup, GetFootprintZPos), as the slab does (scene.ts).
+    threeRef.current?.partModels.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showNotInPos: notInPosShown, showDNP: dnpShown, showBoundingBoxes: bboxShown }, stackOfBoard(board?.board_rules));
   }, [board, thtShown, smdShown, virtualShown, notInPosShown, dnpShown, bboxShown]);
 
   // The background gradient (the Appearance manager's Background Start / End swatches).

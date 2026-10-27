@@ -1,5 +1,5 @@
 use super::*;
-use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
+use eda_model::ir::{ArrowDirection, DiffPairPreset, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
 use eda_model::{Net, Part, Pin, PinKind, PlacementRule};
 use eda_model::units::{mm, um};
 
@@ -56,6 +56,10 @@ fn empty_design() -> Design {
 
 fn board(m: &ConstraintModel) -> Board<'_> {
     Board::new(empty_design(), m, mm(0.1), mm(0.3))
+}
+
+fn set_vias(b: &mut Board<'_>, presets: Vec<ViaPreset>) -> Vec<CheckResult> {
+    b.apply(&Cmd::SetViaPresets { presets }).unwrap_err()
 }
 
 // ------------------------------------------------------------ refusals
@@ -493,6 +497,44 @@ fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
 
     let e = b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.3), drill: mm(0.3) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via");
+
+    b.apply(&Cmd::SetDiffPairPresets { presets: vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().diff_pair_presets, vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }]);
+}
+
+// r4 R4-3: the panel's via rows go through `PCB_VIA::ValidateViaParameters` (`pcb_track.cpp`), whose words and order these are -- the diameter
+// before the drill, and a pair that is only checked once both are sizes at all.
+#[test]
+fn set_via_presets_refuses_with_kicads_words() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.6), drill: mm(0.3) }] }).unwrap();
+
+    let e = set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(500), drill: Nm::new(300) }]);
+    assert_eq!((e[0].check.as_str(), e[0].hint.as_deref()), ("ops_bad_via", Some("Via diameter is too small.")));
+    assert_eq!(b.design().routing.as_ref().unwrap().via_presets, vec![ViaPreset { diameter: mm(0.6), drill: mm(0.3) }], "a refused replace leaves the list");
+
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(500), drill: Nm::ZERO }])[0].hint.as_deref(), Some("Via diameter is too small."), "the diameter is checked first");
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: mm(0.6), drill: Nm::new(999) }])[0].hint.as_deref(), Some("Via drill is too small."));
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(600_000), drill: Nm::new(600_000) }])[0].hint.as_deref(), Some("Via hole size must be smaller than via diameter"));
+    // A 1 um size is the minimum, as `GEOMETRY_MIN_SIZE` is (0.001 mm): 999 nm is refused for either dimension, and 1 um passes for both.
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(999), drill: Nm::new(500) }])[0].hint.as_deref(), Some("Via diameter is too small."));
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(2_000), drill: Nm::new(999) }])[0].hint.as_deref(), Some("Via drill is too small."));
+    b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: Nm::new(2_000), drill: Nm::new(1_000) }] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().via_presets, vec![ViaPreset { diameter: Nm::new(2_000), drill: Nm::new(1_000) }]);
+}
+
+// r4 R4-3: `BOARD_DESIGN_SETTINGS::ValidateDesignRules`' `diff_pair_dimensions_list[..]` check: a pair with a width needs a gap; a pair of width 0
+// (an empty row, as the panel's Add makes one) is not checked, and neither is the via gap.
+#[test]
+fn diff_pair_presets_refuse_a_width_without_a_gap() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::SetDiffPairPresets { presets: vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }] }).unwrap();
+    let e = b.apply(&Cmd::SetDiffPairPresets { presets: vec![DiffPairPreset { width: mm(0.3), gap: Nm::ZERO, via_gap: mm(0.2) }] }).unwrap_err();
+    assert_eq!((e[0].check.as_str(), e[0].hint.as_deref()), ("ops_bad_diff_pair", Some("No differential pair gap defined.")));
+    assert_eq!(b.design().routing.as_ref().unwrap().diff_pair_presets, vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }]);
+    b.apply(&Cmd::SetDiffPairPresets { presets: vec![DiffPairPreset { width: Nm::ZERO, gap: Nm::ZERO, via_gap: Nm::ZERO }] }).unwrap();
 }
 
 // ------------------------------------------- global edit: tracks & vias
@@ -1897,6 +1939,48 @@ fn push_pad_properties_only_touches_filtered_matches() {
     assert_eq!(by_id(&ids[2]).number, "3", "push never touches number/position");
 }
 
+/// Round 4's E4-F5 (`pad_tool.cpp::doPushPadProperties`): the type filter compares `GetAttribute()`, so an edge-connector pad (`PAD_ATTRIB::CONN`, an
+/// SMD pad with `kicad.connector` here) is not an SMD pad; and between two connector pads, an aperture pad (no copper, `PAD::IsAperturePad`) is kept
+/// apart from one with copper ("Special-case for aperture pads").
+#[test]
+fn push_pad_type_filter_keeps_connector_pads_apart() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    let connector = |n: &str, x: Nm, layers: &[&str]| {
+        let mut p = fp_pad(n, x, Nm::ZERO);
+        p.kicad.connector = true;
+        p.layers = layers.iter().map(|l| l.to_string()).collect();
+        p
+    };
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", Nm::ZERO, Nm::ZERO) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: connector("2", mm(2.0), &["F.Cu", "F.Mask"]) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: connector("3", mm(4.0), &["F.Mask"]) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: connector("4", mm(6.0), &["F.Cu", "F.Mask"]) }).unwrap();
+    let pads = |b: &Board| b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads.clone();
+    let ids: Vec<String> = pads(&b).iter().map(|p| p.id.clone()).collect();
+    let push = |b: &mut Board, src: &str, size: Nm| {
+        let mut p = pads(b).into_iter().find(|p| p.id == src).unwrap();
+        p.size = (size, size);
+        b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: src.to_string(), pad: p }).unwrap();
+        b.apply(&Cmd::PushPadProperties { footprint: "Test:FP".into(), source_pad_id: src.to_string(), filter_shape: false, filter_orientation: false, filter_layers: false, filter_type: true }).unwrap();
+    };
+
+    // From the SMD pad: no connector pad is of its type.
+    push(&mut b, &ids[0], mm(3.0));
+    let after = pads(&b);
+    for i in 1..=3 {
+        assert_eq!(after[i].size, (mm(1.0), mm(1.0)), "pad {} is a connector pad, not an SMD pad", after[i].number);
+        assert!(after[i].kicad.connector);
+    }
+    // From a connector pad with copper: the other one receives the push, the aperture pad does not.
+    push(&mut b, &ids[3], mm(2.0));
+    let after = pads(&b);
+    assert_eq!(after[1].size, (mm(2.0), mm(2.0)), "pad 2 is a connector pad with copper, as pad 4");
+    assert_eq!(after[2].size, (mm(1.0), mm(1.0)), "pad 3 is an aperture pad (no copper)");
+    assert_eq!(after[0].size, (mm(3.0), mm(3.0)), "the SMD pad is not a connector pad");
+}
+
 #[test]
 fn renumber_pads_orders_by_position_not_by_current_number() {
     let m = net_model();
@@ -3074,6 +3158,21 @@ fn the_plot_dialogs_store_their_choices_in_the_board() {
     b.apply(&Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(false) }).unwrap();
     let plot = eda_model::plot_params::PlotParams::of_design(b.design());
     assert_eq!((plot.flag("useauxorigin"), plot.board_layers(&m.board.layers)), (Some(false), vec!["F.Cu".to_string(), "F.Mask".into(), "Edge.Cuts".into()]));
+}
+
+/// r4 X4-4: Export IPC-2581's BOM columns kept in the board (`DIALOG_EXPORT_2581::TransferDataFromWindow`, the project's `m_IP2581Bom`); all
+/// empty clears them; nothing changed is refused.
+#[test]
+fn the_ipc2581_dialog_keeps_its_bom_columns_in_the_board() {
+    let m = net_model();
+    let mut b = board(&m);
+    let cmd: Cmd = serde_json::from_str(r#"{"op":"set_ipc2581_bom","bom":{"mpn":"MPN","dist_pn":"LCSC","dist":"LCSC","bom_rev":"A"}}"#).unwrap();
+    b.apply(&cmd).unwrap();
+    let kept = b.design().drawings.as_ref().unwrap().ipc2581_bom.clone().unwrap();
+    assert_eq!((kept.mpn.as_str(), kept.dist_pn.as_str(), kept.dist.as_str(), kept.bom_rev.as_str(), kept.id.as_str()), ("MPN", "LCSC", "LCSC", "A", ""));
+    assert_eq!(b.apply(&cmd).unwrap_err()[0].check, "ops_ipc2581_bom");
+    b.apply(&Cmd::SetIpc2581Bom { bom: Default::default() }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().ipc2581_bom, None);
 }
 
 /// `Cmd::CommitRoute`'s `via_kinds` read from the JSON the studio and the route API send (`[[index, "blind"]]`, numbers inside a tagged enum: the

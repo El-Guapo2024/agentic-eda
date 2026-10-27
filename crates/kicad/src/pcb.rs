@@ -985,6 +985,14 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
             "workbook_filename": ng.workbook_filename,
         });
     }
+    // Board Setup > Pre-defined Sizes' Differential Pairs (`BOARD_DESIGN_SETTINGS::m_DiffPairDimensionsList`, the project's `diff_pair_dimensions`):
+    // width, gap and via gap in millimetres, with the index-0 "use net class" dummy row KiCad keeps at the head of its list.
+    if let Some(pairs) = design.routing.as_ref().map(|r| r.diff_pair_presets.as_slice()).filter(|p| !p.is_empty()) {
+        let mm_f = eda_model::units::to_mm;
+        let mut dims = vec![serde_json::json!({ "width": 0.0, "gap": 0.0, "via_gap": 0.0 })];
+        dims.extend(pairs.iter().map(|p| serde_json::json!({ "width": mm_f(p.width), "gap": mm_f(p.gap), "via_gap": mm_f(p.via_gap) })));
+        project["board"]["design_settings"]["diff_pair_dimensions"] = serde_json::Value::Array(dims);
+    }
     let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
@@ -1949,6 +1957,7 @@ mod tests {
                 zones: vec![],
                 track_width_presets: vec![],
                 via_presets: vec![],
+                diff_pair_presets: vec![],
                 teardrop_settings: Default::default(),
             }),
             drawings: None,

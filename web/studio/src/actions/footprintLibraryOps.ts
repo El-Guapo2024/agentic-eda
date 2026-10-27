@@ -12,6 +12,7 @@ import { fetchFootprintLibraryNames, fetchState } from "../api/client";
 import { fetchAnyFootprint, parseFootprintText, pickTextFile } from "../api/libraryClient";
 import { addedPart, insertedMessage, outlineCentre } from "../kicad-port/fpInsert";
 import { duplicateIdCount, repairMessage } from "../kicad-port/fpRepair";
+import { pastedFootprint } from "../kicad-port/fpLibFields";
 import { ensureUniqueLibId, footprintNameError, joinLibName, pastedFootprintName, PROJECT_LIBRARY, splitLibName } from "../kicad-port/libraryNames";
 import { askConfirm, askText } from "../components/library/libraryDialogs";
 import { notifyLibraryChanged } from "../components/library/useLibraryNames";
@@ -78,7 +79,7 @@ export async function copyFootprint(c: FpCtx, cut: boolean): Promise<void> {
 
 /**
  * `FOOTPRINT_EDITOR_CONTROL::PasteFootprint`: the copied footprint lands in the target's library under its own name, `_copy` appended
- * while that name is taken, and is loaded.
+ * while that name is taken, and is loaded. Only the name changes (`SetFPID`): the Value keeps what it showed (kicad-port/fpLibFields.ts `pastedFootprint`).
  */
 export async function pasteFootprint(c: FpCtx): Promise<void> {
   const copied = c.api.getState().copiedFootprint;
@@ -87,7 +88,7 @@ export async function pasteFootprint(c: FpCtx): Promise<void> {
     const { all } = await names();
     const lib = splitLibName(targetName(c) ?? "").lib;
     const name = pastedFootprintName(joinLibName(lib, splitLibName(copied.name).item), all);
-    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...copied, name, published: false } }]))) return;
+    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...pastedFootprint(copied, name), published: false } }]))) return;
     await c.api.openFootprint(name);
     select(c, name);
   } catch (e) {

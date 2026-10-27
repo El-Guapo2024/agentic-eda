@@ -56,7 +56,7 @@ fn board(fps: &[(&str, &str, Point)], nets: &[(&str, &[&str])]) -> (Design, Cons
         schematic: None,
         nets: None,
         placement: Some(PlacementSection { outline: vec![p(0.0, 0.0), p(30.0, 0.0), p(30.0, 20.0), p(0.0, 20.0)], footprints: fps.iter().map(|(r, _, at)| FootprintInstance { id: r.to_string(), at: *at, rot: 0, side: Side::Top, label: Default::default() }).collect(), modules: vec![] }),
-        routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+        routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
         drawings: Some(DrawingsSection::default()),
     };
     (design, model)
@@ -719,4 +719,150 @@ fn a_no_net_head_is_excused_at_a_no_net_pad_of_a_net_tie() {
     // the collision with pad 2 at a point on pad 1 (no net), for a head of no net
     assert!(r.is_net_tie_exclusion(&None, 0, p(15.4, 10.0), pad2));
     assert!(!r.is_net_tie_exclusion(&eda_pns::item::net_of("SIG"), 0, p(15.4, 10.0), pad2), "a SIG head is not pad 1's net");
+}
+
+/// r4 R4-1 (`ImportSizes`: `if( bds.m_UseConnectedTrackWidth && !bds.m_TempOverrideTrackWidth && aStartItem != nullptr ) found =
+/// inheritTrackWidth( .. )`, source "existing track"; `inheritTrackWidth` covers a pad or via too): SIG's pad R1.1 has a 0.15 mm stub, SIG is
+/// in Default at 0.25 mm. A route started on the pad starts at 0.15 mm, with "Use Starting Track Width" on (KiCad's project default) and
+/// with a width of the user's choice too; off, at the class's 0.25 mm. Two GND pads leave a 0.6 mm channel on the straight way to R2.1: at
+/// 0.15 mm the route goes through it, and kicad-cli finds no `clearance`; the straight track at 0.25 mm is what it flags.
+#[test]
+fn a_route_started_on_a_pad_takes_the_width_of_its_stub() {
+    let (r1, r2, g1, g2) = (p(5.0, 10.0), p(25.0, 10.0), p(15.0, 9.2), p(15.0, 10.8));
+    let (mut design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("G1", "PAD1", g1), ("G2", "PAD1", g2)], &[("SIG", &["R1.1", "R2.1"]), ("GND", &["G1.1", "G2.1"])]);
+    model.board.track_width = mm(0.25);
+    assert_eq!(model.board.clearance, mm(0.2));
+    let track = |id: &str, w: f64, pts: Vec<Point>| eda_model::ir::Track { id: id.into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(w), pts, arc_mid_offset: None };
+    design.routing.as_mut().unwrap().tracks.push(track("stub", 0.15, vec![r1, p(7.0, 10.0)]));
+    let mut router = Router::new(&design, &model);
+    let s = router.import_sizes(r1, "F.Cu").unwrap();
+    assert_eq!((s.track_width, s.width_source.as_str()), (mm(0.15), "existing track"), "{s:?}");
+    assert_eq!(router.connected_track_width(p(5.3, 10.0), "F.Cu"), Some(mm(0.15)), "a width of the user's choice gives way too");
+    router.use_connected_track_width = false;
+    let s = router.import_sizes(r1, "F.Cu").unwrap();
+    assert_eq!((s.track_width, s.width_source.as_str()), (mm(0.25), "netclass 'Default'"), "{s:?}");
+    assert_eq!(router.connected_track_width(r1, "F.Cu"), None);
+    // a via with a stub, and a pad with two: the one whose far end is nearer the cursor, else the narrowest on the layer
+    {
+        let mut d = design.clone();
+        let rt = d.routing.as_mut().unwrap();
+        rt.vias.push(eda_model::ir::Via { id: "v1".into(), net: "SIG".into(), at: p(10.0, 15.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(track("vstub", 0.18, vec![p(10.0, 15.0), p(12.0, 15.0)]));
+        rt.tracks.push(track("wide", 0.3, vec![r1, p(3.0, 10.0)]));
+        let router = Router::new(&d, &model);
+        assert_eq!(router.import_sizes(p(10.0, 15.0), "F.Cu").unwrap().track_width, mm(0.18), "the via's stub");
+        assert_eq!(router.connected_track_width(p(4.9, 10.0), "F.Cu"), Some(mm(0.3)), "the cursor towards the left stub");
+        assert_eq!(router.connected_track_width(p(5.1, 10.0), "F.Cu"), Some(mm(0.15)), "the cursor towards the right one");
+    }
+    // the route at the stub's width goes through the channel
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    let w = router.connected_track_width(r1, "F.Cu").unwrap();
+    router.start(r1, "F.Cu", w).unwrap();
+    router.preview(r2).unwrap();
+    let commit = router.finish(r2).unwrap();
+    assert!(commit.tracks.iter().all(|t| t.width == mm(0.15)), "{:?}", commit.tracks);
+    assert!(commit.tracks.iter().flat_map(|t| t.pts.iter()).all(|q| q.y == mm(10.0)), "straight through the channel: {:?}", commit.tracks);
+    assert!(gap_to_pad(&commit, g1).min(gap_to_pad(&commit, g2)) >= 199_500.0);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance", "shorting_items", "tracks_crossing"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let wide = RouteCommit { tracks: vec![track("", 0.25, vec![p(7.0, 10.0), r2])], ..Default::default() };
+        assert!(!kicad_violations(&apply(&design, &wide), &model, &["clearance"]).unwrap().is_empty(), "the class's width is what kicad-cli flags");
+    }
+}
+
+/// The four-layer board of r4 R4-2: a 0.6 / 0.3 mm via `v1` of SIG at (10, 10) joined on F.Cu (to pad R1.1) and on B.Cu, that removes its
+/// unconnected layers when `unflashed`; a 0.2 mm GND track on In1.Cu from (12, y) to the through-hole pad H1.1 at (20, y), its edge `edge`
+/// above the line y = 10. A 0.2 mm clearance and a 0.25 mm hole clearance.
+fn unflashed_via_board(edge: f64, unflashed: bool) -> (Design, ConstraintModel) {
+    let y = 10.0 - edge - 0.1;
+    let (mut d, mut m) = board(&[("R1", "PAD1", p(5.0, 10.0)), ("H1", "TH1", p(20.0, y))], &[("SIG", &["R1.1"]), ("GND", &["H1.1"])]);
+    m.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+    m.board.constraints_explicit = true;
+    m.board.min_clearance_nm = m.board.min_clearance_nm.min(mm(0.2));
+    let at = p(10.0, 10.0);
+    let rt = d.routing.as_mut().unwrap();
+    rt.vias.push(eda_model::ir::Via { id: "v1".into(), net: "SIG".into(), at, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+    for layer in ["F.Cu", "B.Cu"] {
+        rt.tracks.push(eda_model::ir::Track { id: format!("t_{layer}"), net: "SIG".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![at, p(5.0, 10.0)], arc_mid_offset: None });
+    }
+    rt.tracks.push(eda_model::ir::Track { id: "gnd".into(), net: "GND".into(), pins: vec![], layer: "In1.Cu".into(), width: mm(0.2), pts: vec![p(12.0, y), p(20.0, y)], arc_mid_offset: None });
+    if unflashed {
+        d.drawings.as_mut().unwrap().via_extras.push(eda_model::via_extra::ViaExtra { id: "v1".into(), tokens: vec!["(remove_unused_layers yes)".into(), "(keep_end_layers no)".into()], ..Default::default() });
+    }
+    (d, m)
+}
+
+/// r4 R4-2 (`ITEM::collideSimple`: `else if( iface && !iface->IsFlashedOnLayer( aHead, Layers() ) ) clearance = -1;`, the head's side): the
+/// board's via `v1`, which removes its unconnected layers, taken to (15, 10) as a drag or a shove takes it, has no copper on In1.Cu, so the
+/// GND track there may come to its hole's 0.15 + 0.25 mm and not only to its ring's 0.3 + 0.2 mm; a via of the router's own (no board via
+/// behind it) has its ring there. Dragged along to (15, 10) in Walk around mode, it gets there, keeps its id (and so its
+/// `remove_unused_layers`), and kicad-cli finds no `clearance` or `hole_clearance`; the same via flashed on every layer is what it flags.
+#[test]
+fn an_unflashed_head_via_collides_by_its_hole_only() {
+    let (design, model) = unflashed_via_board(0.45, true);
+    let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+    let own = node.iter().find(|(_, it)| matches!(it, eda_pns::item::Item::Via(v) if v.source_via.as_deref() == Some("v1"))).map(|(id, _)| id).unwrap();
+    let head = |x: f64, y: f64, source: Option<&str>| eda_pns::item::Via { net: eda_pns::item::net_of("SIG"), layers: layers.all(), pos: p(x, y), diameter: mm(0.6), drill: mm(0.3), source_via: source.map(str::to_string), locked: false, is_virtual: false };
+    let hits = |v: &eda_pns::item::Via| node.via_colliding(v, &model.board, &[own], eda_pns::node::QueryOpts::default()).len();
+    assert_eq!(hits(&head(15.0, 10.0, Some("v1"))), 0, "0.45 mm from the track's edge: the hole's 0.4 mm is kept");
+    assert_eq!(hits(&head(15.0, 9.93, Some("v1"))), 1, "0.38 mm: the hole is too near");
+    assert_eq!(hits(&head(15.0, 10.0, None)), 1, "a via of the router's own has its ring on In1.Cu");
+    // dragged there
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start(p(10.0, 10.0), "F.Cu").expect("the via can be grabbed");
+    router.drag_preview(p(15.0, 10.0)).expect("a drag");
+    let commit = router.drag_finish(p(15.0, 10.0)).expect("commits");
+    assert_eq!(commit.vias.iter().map(|v| (v.id.as_str(), v.at)).collect::<Vec<_>>(), vec![("v1", p(15.0, 10.0))], "{commit:?}");
+    let moved = |design: &Design| {
+        let mut d = apply(design, &commit);
+        let rt = d.routing.as_mut().unwrap();
+        rt.vias.retain(|v| !(v.id == "v1" && v.at == p(10.0, 10.0)));
+        d
+    };
+    if let Some(found) = kicad_violations(&moved(&design), &model, &["clearance", "hole_clearance", "shorting_items", "tracks_crossing"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let (flashed, model) = unflashed_via_board(0.45, false);
+        assert!(!kicad_violations(&moved(&flashed), &model, &["clearance"]).unwrap().is_empty(), "the via's ring on In1.Cu is what kicad-cli flags");
+    }
+}
+
+/// r4 R4-4 (`ROUTER::isStartingPointRoutable`: `if( aStartItem->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) )`, the start-gap check; the pair's
+/// width `inheritTrackWidth( aStartItem, .. )`, which takes `ARC_T` too): a pair started at the end of two concentric 0.2 mm arcs of
+/// `/USB_P` and `/USB_N` at a 0.5 mm pitch, the class 0.25 / 0.15 mm (clearance 0.15 mm), is refused (0.2 + 0.15 is not 0.5 to 10 %); at a 0.35 mm pitch it starts, at the
+/// arcs' 0.2 mm and not the class's 0.25 mm.
+#[test]
+fn a_pair_started_on_arcs_checks_the_gap() {
+    let start = |pitch: f64| {
+        let (mut design, mut model) = board(&[("J1", "PAD1", p(25.0, 5.0)), ("J2", "PAD1", p(25.0, 15.0))], &[("/USB_P", &["J1.1"]), ("/USB_N", &["J2.1"])]);
+        model.board.net_classes.push(eda_model::NetClass { diff_pair_gap: Some(mm(0.15)), diff_pair_width: Some(mm(0.25)), clearance: Some(mm(0.15)), ..class("usb", &["/USB_P", "/USB_N"]) });
+        model.board.min_clearance_nm = mm(0.1);
+        // concentric half circles about (7.5, 15), of radius 5 mm (P) and 5 mm + `pitch` (N): their ends on y = 15 are `pitch` apart
+        let arc = |net: &str, r: f64| {
+            let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), mm(0.2), p(7.5 - r, 15.0), p(7.5, 15.0 - r), p(7.5 + r, 15.0));
+            t.id = format!("arc_{net}");
+            t
+        };
+        design.routing.as_mut().unwrap().tracks.extend([arc("/USB_P", 5.0), arc("/USB_N", 5.0 + pitch)]);
+        let mut router = Router::new(&design, &model);
+        router.start_diff_pair(p(12.5, 15.0), "F.Cu").map(|()| router.diff_pair_preview(p(12.7, 18.0)).unwrap().width)
+    };
+    assert_eq!(
+        start(0.5),
+        Err("The differential pair gap at the start point does not match the configured gap. This can occur in neckdown areas where tracks have narrower width and spacing. Adjust the differential pair settings or start from a location with the correct gap.".into())
+    );
+    assert_eq!(start(0.35), Ok(mm(0.2)));
+}
+
+/// r4 R4-5 (`ImportSizes` asks `CT_HOLE_TO_HOLE` of `&dummyVia, &dummyVia, UNDEFINED_LAYER` outside `if( aStartItem )`): a route started in
+/// empty space, under a rule for vias of no net, has the rule's hole to hole, not the board's minimum.
+#[test]
+fn hole_to_hole_is_asked_with_no_start_item_too() {
+    let (design, mut model) = board(&[("R1", "PAD1", p(5.0, 5.0))], &[("SIG", &["R1.1"])]);
+    let plain = Router::new(&design, &model).import_sizes(p(15.0, 10.0), "F.Cu").unwrap().hole_to_hole;
+    assert_eq!(plain, model.board.hole_to_hole_min_nm);
+    model.board.custom_rules_text = Some("(version 1)\n(rule h2h\n  (condition \"A.Type == 'Via' && A.NetName == ''\")\n  (constraint hole_to_hole (min 0.5mm)))\n".into());
+    let s = Router::new(&design, &model).import_sizes(p(15.0, 10.0), "F.Cu").unwrap();
+    assert_eq!((s.hole_to_hole, s.diff_pair_hole_to_hole), (mm(0.5), mm(0.5)), "{s:?}");
 }

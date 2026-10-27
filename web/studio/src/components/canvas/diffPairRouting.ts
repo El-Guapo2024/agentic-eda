@@ -16,9 +16,9 @@ import type { RouterSettings } from "../../kicad-port/routerSettings";
  * router's (the pair is walked, shoved or only marked per its mode).
  * Shows an error toast -- KiCad's own message -- and leaves `drawState`
  * untouched otherwise. */
-export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings): Promise<void> {
+export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings, autoTrackWidth?: boolean): Promise<void> {
   // `dims`: the "Differential Pair Dimensions..." dialog's custom width and gap, when it was used.
-  const preview = await dpStart(x, y, layer, dims, settings);
+  const preview = await dpStart(x, y, layer, dims, settings, autoTrackWidth);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start from a differential-pair net (needs a +/-/P/N suffix and a matching pad already on the board).", kind: "error" });
     return;

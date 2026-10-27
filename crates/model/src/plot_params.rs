@@ -347,3 +347,31 @@ mod tests {
         assert_eq!(p.items.last().unwrap(), "(gerberprecision 5)");
     }
 }
+
+/// Export IPC-2581's BOM columns as the dialog keeps them in the project (`PROJECT_FILE::m_IP2581Bom`, `board.ipc2581.*` of the `.kicad_pro`:
+/// `id`, `mpn`, `mfg`, `distpn`, `dist`, `bom_rev`; `DIALOG_EXPORT_2581::TransferDataFromWindow`). Each column is a footprint field's name, empty
+/// for the choice's first item ("Generate unique", "Omit", "N/A"). Stored in `design.json` ([`crate::ir::DrawingsSection::ipc2581_bom`]) as
+/// every project setting of the board is; KiCad's `schRevision` (the root schematic's title block revision, which `eeschema_config.cpp`
+/// copies into the project) is not stored: it is read from the schematic when the dialog opens.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ipc2581Bom {
+    /// "Internal ID:" (`id`): empty is "Generate unique".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// "Manufacturer P/N:" (`mpn`): empty is "Omit".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mpn: String,
+    /// "Manufacturer:" (`mfg`): empty is "N/A".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mfg: String,
+    /// "Distributor P/N:" (`distpn`): empty is "Omit".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dist_pn: String,
+    /// "Distributor:" (`dist`), free text: empty is "N/A".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dist: String,
+    /// "BOM revision:" (`bom_rev`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bom_rev: String,
+}

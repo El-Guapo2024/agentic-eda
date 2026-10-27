@@ -153,8 +153,16 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
     })
 }
 
-/// `POST /api/route/start`: `{x, y, layer, width?, settings?}`. Without `width` the route starts at the width `ImportSizes` gives the start
-/// item's net (`Router::import_sizes`); the reply's `width` is the one it started at. `settings` is the router's
+/// `auto_track_width` of a start request: `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (the studio's "Use Starting Track Width", the
+/// project's `board.auto_track_width`), on unless the request says otherwise, as KiCad's project default is (`PROJECT_LOCAL_SETTINGS`:
+/// `m_AutoTrackWidth( true )`).
+fn auto_track_width(req: &Value) -> bool {
+    req.get("auto_track_width").and_then(Value::as_bool).unwrap_or(true)
+}
+
+/// `POST /api/route/start`: `{x, y, layer, width?, auto_track_width?, settings?}`. With `auto_track_width` (on unless `false`) a start on a
+/// track, or on a pad or via a track is joined to, takes that track's width (`inheritTrackWidth`); else, without `width`, the route starts at
+/// the width `ImportSizes` gives the start item's net (`Router::import_sizes`); the reply's `width` is the one it started at. `settings` is the router's
 /// `ROUTING_SETTINGS` ([`settings_of`]); `mode` and `remove_loops` at the top level still work, for a client that predates it.
 /// Without any, KiCad's defaults: `walkaround`, `remove_loops` on.
 pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
@@ -165,13 +173,16 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings_of(&req);
+    router.use_connected_track_width = auto_track_width(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
-    // no `width`: the width list is on "use net class" (`UseNetClassTrack()`), and `ImportSizes` takes the start net's width through the rules
-    // (`CT_WIDTH`: its class, a `.kicad_dru` rule, a pair's class width), r3 R3-3
-    let width = match req.get("width").and_then(Value::as_i64) {
-        Some(w) => Nm::new(w),
-        None => router.import_sizes(at, layer).map_or(model.board.track_width, |s| s.track_width),
+    // `ImportSizes`: the width of the track the start item is (or is joined to) first, whatever width was chosen (`m_UseConnectedTrackWidth &&
+    // !m_TempOverrideTrackWidth`, r4 R4-1); no `width`: the width list is on "use net class" (`UseNetClassTrack()`), and `ImportSizes` takes
+    // the start net's width through the rules (`CT_WIDTH`: its class, a `.kicad_dru` rule, a pair's class width), r3 R3-3
+    let width = match (router.connected_track_width(at, layer), req.get("width").and_then(Value::as_i64)) {
+        (Some(w), _) => w,
+        (None, Some(w)) => Nm::new(w),
+        (None, None) => router.import_sizes(at, layer).map_or(model.board.track_width, |s| s.track_width),
     };
     match router.start(at, layer, width) {
         Ok(()) => {
@@ -585,7 +596,7 @@ fn dp_preview_json(router: &Router, preview: &eda_pns::dp_placer::DiffPairPrevie
     })
 }
 
-/// `POST /api/route/dp_start`: `{x, y, layer, width?, gap?, via_gap?, settings?}` -- `width`/`gap`/`via_gap` are the "Differential Pair
+/// `POST /api/route/dp_start`: `{x, y, layer, width?, gap?, via_gap?, auto_track_width?, settings?}` -- `width`/`gap`/`via_gap` are the "Differential Pair
 /// Dimensions..." dialog's custom values (`BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions`); without them the pair takes the net
 /// class's. `settings` is the router's ([`settings_of`]): the pair is walked, shoved or only marked per its `mode`. A refusal carries
 /// KiCad's own message (`ROUTER::SetFailureReason`).
@@ -597,6 +608,7 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings_of(&req);
+    router.use_connected_track_width = auto_track_width(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     match router.start_diff_pair(at, layer) {
@@ -839,7 +851,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(20.0)), p(Nm::ZERO, mm(20.0))], footprints: vec![], modules: vec![] }),
-            routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         board::save(dir, &design).unwrap();
@@ -857,7 +869,8 @@ mod tests {
     }
 
     /// r3 R3-3: a start without a width (the width list on "use net class") takes the start net's class width through the rules
-    /// (`ImportSizes`), and the reply says it; with a width, that width. A via armed without a size has the net class's (`handleLayerSwitch`).
+    /// (`ImportSizes`), and the reply says it; with a width, that width -- both with "Use Starting Track Width" off, which on (the default) takes the
+    /// stub's width over either (r4 R4-1). A via armed without a size has the net class's (`handleLayerSwitch`).
     #[test]
     fn a_start_without_a_width_takes_the_nets_class_width() {
         let dir = scratch("class_width");
@@ -868,12 +881,17 @@ mod tests {
         model.board.net_classes.push(eda_model::NetClass { name: "Power".into(), nets: vec!["SIG".into()], track_width: Some(mm(0.5)), clearance: None, via_diameter: Some(mm(0.9)), via_drill: Some(mm(0.45)), microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
         let cell = RouteCell::default();
+        // r4 R4-1: with "Use Starting Track Width" on (the default) the start on the stub's end takes its 0.2 mm, a chosen width too
         let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu" })));
+        assert_eq!((reply["ok"].clone(), reply["width"].clone()), (json!(true), json!(200_000)), "{reply}");
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 300_000 })));
+        assert_eq!(reply["width"], json!(200_000), "{reply}");
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "auto_track_width": false })));
         assert_eq!((reply["ok"].clone(), reply["width"].clone()), (json!(true), json!(500_000)), "{reply}");
         assert_eq!(via(&cell, &body(json!({ "enabled": true, "to_layer": "B.Cu" })))["ok"], json!(true));
         let pv = mv(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
         assert_eq!((pv["via"]["diameter"].clone(), pv["via"]["drill"].clone()), (json!(900_000), json!(450_000)), "{pv}");
-        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 300_000 })));
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 300_000, "auto_track_width": false })));
         assert_eq!(reply["width"], json!(300_000), "{reply}");
     }
 

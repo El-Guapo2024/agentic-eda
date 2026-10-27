@@ -101,8 +101,35 @@ export function netAt(sch: Schematic, at: readonly [number, number]): string | n
   return power ? power.net : null;
 }
 
+/**
+ * The net of a label's `Connection()` (`SCH_LABEL_BASE::ResolveTextVar`): the wire, pin or power symbol at its anchor ([`netAt`]), else the net its name joins. A label on
+ * nothing is still a subgraph of its own, driven by itself (`CONNECTION_GRAPH::buildConnectionGraph`), and `m_local_label_cache[( sheet, name )]` (a local or
+ * hierarchical label) or `m_global_label_cache[name]` (a global label, a global power symbol) merges it with the other subgraphs of that name: here, a label
+ * of the sheet of the same name and kind that is on something, or a power symbol of that net for a global label. Alone, it is its own net,
+ * `SCH_LABEL_BASE`'s driver name: the global label's text, a local one's sheet path (`SCH_SHEET_PATH::PathHumanReadable`, "/" at the root) and text (r4 S4-1).
+ * Differs: labels of other sheets are not in the payload, so a label joined only from another sheet gets its own name -- the net's name for a global label,
+ * but a hierarchical label on nothing that its sheet pin joins to the parent's net is named after itself, not after the parent's driver.
+ */
+export function labelNet(sch: Schematic, label: { net: string; at: readonly [number, number]; scope: string }): string | null {
+  const own = netAt(sch, label.at);
+  if (own !== null) return own;
+  const global = label.scope === "global";
+  for (const other of sch.labels) {
+    if (other.net !== label.net || (other.scope === "global") !== global) continue;
+    if (other.at[0] === label.at[0] && other.at[1] === label.at[1]) continue;
+    const net = netAt(sch, other.at) ?? other.net_name ?? null;
+    if (net !== null) return net;
+  }
+  if (global) {
+    const power = sch.power_symbols.find((p) => p.net === label.net);
+    return power ? power.net : label.net;
+  }
+  const path = (sch.sheet_path ?? []).map((e) => e.name);
+  return `/${path.map((n) => `${n}/`).join("")}${label.net}`;
+}
+
 /** The sheet as drawn with every `${OP..}` of its symbols' fields, its labels and its sheet pins resolved (`SCH_SHEET_PIN` is an `SCH_HIERLABEL`, so it resolves
- * `${OP}` as a label does); the sheet itself when none has one. A label's net is the net of the wire or pin at its anchor (its connection, [`netAt`]). */
+ * `${OP}` as a label does); the sheet itself when none has one. A label's net is the net of the wire or pin at its anchor (its connection, [`netAt`]), else the one its name joins ([`labelNet`]). */
 export function withOpVars(sch: Schematic, circuit: Circuit | null, points: Map<string, number>): Schematic {
   const symbols = sch.symbols.some((s) => (s.fields ?? []).some(fieldHasOp));
   const labels = sch.labels.some((l) => hasOp(l.net) || (l.fields ?? []).some(fieldHasOp));
@@ -120,7 +147,7 @@ export function withOpVars(sch: Schematic, circuit: Circuit | null, points: Map<
   if (labels) {
     out.labels = sch.labels.map((l) => {
       if (!hasOp(l.net) && !(l.fields ?? []).some(fieldHasOp)) return l;
-      const net = netAt(sch, l.at);
+      const net = labelNet(sch, l);
       const resolve = (t: string) => labelOpToken(t, { points, net });
       return { ...l, net: expandOpVars(l.net, resolve), ...(l.fields ? { fields: l.fields.map((f) => (fieldHasOp(f) ? { ...f, shown: expandOpVars(f.shown ?? f.text, resolve) } : f)) } : {}) };
     });

@@ -1267,6 +1267,15 @@ fn run_judge(cx: &mut Ctx, d: &Design, stage: eda_judge::Stage) -> Result<(), Ve
 }
 
 fn main() -> ExitCode {
+    // File > Import > Specctra Session (`Cmd::Specctra`) by KiCad's own `ImportSpecctraSession` where this kicad-cli has `api-server`.
+    eda_ops::set_session_importer(specctra_api::kicad_session_importer);
+    let code = run_main();
+    // The kicad-cli api-server this run started, if any (`eda_kicad_engine::api`): stopped now rather than when the pipe to it closes with this process.
+    eda_kicad_engine::api::shutdown();
+    code
+}
+
+fn run_main() -> ExitCode {
     // `eda board ...` is its own surface: a board held in a directory
     // and advanced one command at a time, rather than a pipeline stage.
     // It is dispatched before the usual argument parsing because its

@@ -32,9 +32,10 @@ import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { arcClick, arcMotion, arcRemoveLastPoint } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion, bezierRemoveLastPoint } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "../canvas/curveTools";
-
-/** The footprint editor's fixed graphic line width (`footprintToShapeArg`'s own 150 um). */
-const DRAW_STROKE_WIDTH_NM = 150_000;
+import { fpShape, fpStrokeWidthNm, type FpPointShapeKind } from "../../kicad-port/fpDrawDefaults";
+import { fpNewText } from "../../kicad-port/fpTextTool";
+import { flipCarriedPad } from "../../kicad-port/fpPadPlacer";
+import { useStudioState } from "../../state/store";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useFootprintGridOrigin } from "../../state/gridOrigin";
 import { useGridSettings } from "../../state/gridSettings";
@@ -128,22 +129,9 @@ type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] }
   | { kind: "move"; refs: string[]; moveKind: "pad" | "graphic" | "text"; startWorld: [number, number]; snapOrigin: [number, number] };
 
+/** The shape a point-counted tool commits: the layer class's width and, for a polygon, KiCad's fill rule (kicad-port/fpDrawDefaults.ts). */
 function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier", pts: [number, number][], layer: string): CmdShape | null {
-  const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
-  switch (kind) {
-    case "bezier":
-      return null; // built from the construction manager's `BezierCurve`, never from a bare point list
-    case "segment":
-      return pts.length >= 2 ? { kind: "segment", layer, stroke_width: 150_000, filled: false, start: p(0), end: p(1) } : null;
-    case "rect":
-      return pts.length >= 2 ? { kind: "rect", layer, stroke_width: 150_000, filled: false, start: p(0), end: p(1) } : null;
-    case "circle":
-      return pts.length >= 2 ? { kind: "circle", layer, stroke_width: 150_000, filled: false, center: p(0), end: p(1) } : null;
-    case "arc":
-      return pts.length >= 3 ? { kind: "arc", layer, stroke_width: 150_000, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
-    case "polygon":
-      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: 150_000, filled: true, pts: pts.map((_, i) => p(i)) } : null;
-  }
+  return kind === "bezier" ? null : fpShape(kind as FpPointShapeKind, pts, layer); // a Bezier is built from the construction manager's `BezierCurve`, never from a bare point list
 }
 
 // `polygon` has no fixed point count (like the PCB tab's own AddShape
@@ -214,6 +202,13 @@ export function FootprintCanvas() {
     const p = snap.point(tool, [wx, wy], snapMods(e), toolOpts(tool));
     return [p[0], p[1]];
   };
+  /** The pad the Pad tool carries, at `(x, y)` (`PAD_PLACER::CreateItem`): the default pad, or the one R / F turned or flipped, with the next number. */
+  const carriedPadAt = (x: number, y: number): LibraryPad => {
+    const base = state.carriedPad;
+    const number = padCanHaveNumber(base ?? state.defaultPad) ? nextPadNumber(fp?.pads ?? [], state.lastPadNumber) : "";
+    return base ? { ...base, number, at: { x, y } } : newPadFromMaster(state.defaultPad, number, { x, y });
+  };
+  const flipDirection = useStudioState().prefs.flipDirection;
   /** The tools whose clicks go through the grid helper: the marker and the rubber band follow them on every move. */
   const placing = state.activeTool === "pad" || state.activeTool === "text" || state.activeTool === "anchor" || state.activeTool.startsWith("draw_");
 
@@ -303,7 +298,11 @@ export function FootprintCanvas() {
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     // The Renumber Pads tool shows the numbers it has handed out (and highlights those pads, `pad->SetSelected()`) before anything is committed.
     const session = state.enumerate;
-    const shown = fp && session ? { ...fp, pads: fp.pads.map((p) => ({ ...p, number: enumerateShownNumber(session, p.id ?? "", p.number) })) } : fp;
+    let shown = fp && session ? { ...fp, pads: fp.pads.map((p) => ({ ...p, number: enumerateShownNumber(session, p.id ?? "", p.number) })) } : fp;
+    // What a placing tool carries, drawn at the snapped cursor (`doInteractiveItemPlacement`'s preview, PlaceText's moving text): not items yet, so no id to pick.
+    const carriedAt = snap.lastPoint() ?? (state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null);
+    if (shown && carriedAt && state.activeTool === "pad") shown = { ...shown, pads: [...shown.pads, { ...carriedPadAt(carriedAt[0], carriedAt[1]), id: undefined }] };
+    if (shown && carriedAt && state.carriedText) shown = { ...shown, texts: [...shown.texts, { ...state.carriedText, id: undefined, at: { x: carriedAt[0], y: carriedAt[1] } }] };
     paintFootprint(ctx, state.view, width, height, shown, {
       selection: session ? new Set([...state.selection, ...session.assigned.keys()]) : state.selection,
       gridNm: state.gridNm,
@@ -327,7 +326,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick]);
+  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -386,7 +385,7 @@ export function FootprintCanvas() {
       // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
       const at = snap.lastPoint() ?? draw.bezier?.lastPoint;
       const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
-      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_NM));
+      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, fpStrokeWidthNm(state.activeLayer)));
       dispatch({ type: "SET_DRAW_STATE", draw: null });
       return;
     }
@@ -449,13 +448,13 @@ export function FootprintCanvas() {
     }
 
     // `PAD_TOOL::PlacePad` (`PAD_PLACER::CreateItem` / `PlaceItem`): the new pad is the default pad (`m_Pad_Master`) with the next number
-    // (none for a pad that cannot have one), and the pad placed is pushed back into the default pad.
+    // (none for a pad that cannot have one) -- as R / F turned or flipped it while it was carried (`carriedPad`) -- and the pad placed is pushed back into the default pad.
     if (state.activeTool === "pad" && fp) {
-      const master = state.defaultPad;
-      const number = padCanHaveNumber(master) ? nextPadNumber(fp.pads, state.lastPadNumber) : "";
-      const pad: LibraryPad = newPadFromMaster(master, number, { x: sx, y: sy });
+      const pad: LibraryPad = carriedPadAt(sx, sy);
       void api.addPad(pad);
+      dispatch({ type: "SET_CARRIED_PAD", pad: null }); // `IPO_SINGLE_CLICK`: the next pad is made afresh from the default pad, which now has this one's settings
       dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(pad) });
+      const number = pad.number;
       if (number) dispatch({ type: "SET_LAST_PAD_NUMBER", number }); // `PAD_PLACER::CreateItem`: `m_padTool->SetLastPadNumber( padNumber )`
       return;
     }
@@ -473,7 +472,7 @@ export function FootprintCanvas() {
     if (shapeKind === "arc") {
       const prev = state.drawState?.shapeKind === "arc" ? state.drawState.arc : undefined;
       const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap("45", e));
-      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: DRAW_STROKE_WIDTH_NM, filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
+      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: fpStrokeWidthNm(state.activeLayer), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
       dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
       return;
     }
@@ -481,7 +480,7 @@ export function FootprintCanvas() {
     if (shapeKind === "bezier") {
       const prev = state.drawState?.shapeKind === "bezier" ? state.drawState.bezier : undefined;
       const { geom, curve } = bezierClick(prev, [sx, sy]);
-      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_NM));
+      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, fpStrokeWidthNm(state.activeLayer)));
       dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
       return;
     }
@@ -498,9 +497,22 @@ export function FootprintCanvas() {
       return;
     }
 
+    // `DRAWING_TOOL::PlaceText` (kicad-port/fpTextTool.ts): the first click makes a text with the layer's defaults and opens the dialog on it; the text then follows the
+    // cursor, and the next click commits it ("Draw Text") and selects it. The tool stays armed.
     if (state.activeTool === "text") {
-      void api.addText({ content: "TEXT", at: { x: sx, y: sy }, angle: 0, layer: state.activeLayer, size_nm: 1_000_000, stroke_width: 150_000, justify: "center", mirror: false });
-      dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      if (state.textDialog) return;
+      if (state.carriedText) {
+        const before = new Set((fp?.texts ?? []).map((t) => t.id));
+        const text = { ...state.carriedText, at: { x: sx, y: sy } };
+        dispatch({ type: "SET_CARRIED_TEXT", text: null });
+        void api.addText(text).then(() => {
+          const made = api.getState().footprint?.texts.find((t) => t.id && !before.has(t.id));
+          if (made?.id) dispatch({ type: "SET_SELECTION", refs: [made.id] }); // `selectItem, text`
+        });
+        return;
+      }
+      dispatch({ type: "SET_SELECTION", refs: [] }); // `ACTIONS::selectionClear`
+      dispatch({ type: "SET_TEXT_DIALOG", text: fpNewText(state.activeLayer, { x: sx, y: sy }) });
       return;
     }
 
@@ -616,6 +628,15 @@ export function FootprintCanvas() {
         void api.undo();
       }
       dispatch({ type: "ESCAPE" });
+      return;
+    }
+    // F with the Pad tool armed: `PCB_ACTIONS::flip` on the carried pad (`IPO_FLIP`: `newItem->Flip( newItem->GetPosition(), m_FlipDirection )`). (R / Shift+R are the
+    // registered rotate actions, which turn the carried pad the same way: actions/editorFrameActions.ts.)
+    if ((e.key === "f" || e.key === "F") && !e.ctrlKey && !e.metaKey && !e.altKey && state.activeTool === "pad") {
+      e.preventDefault();
+      const flipped = flipCarriedPad(carriedPadAt(0, 0), flipDirection);
+      if (flipped) dispatch({ type: "SET_CARRIED_PAD", pad: flipped });
+      else dispatch({ type: "TOAST", message: "A pad with its own shapes on other copper layers (a padstack) cannot be flipped here yet.", kind: "info" });
       return;
     }
     // Backspace mid-draw -> `deleteLastPoint`: the construction manager steps back one point.

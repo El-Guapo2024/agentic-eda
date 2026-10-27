@@ -319,7 +319,8 @@ impl ShapePolySet {
         if simplify {
             let mut paths = Vec::new();
             c.execute(amount as f64, &mut paths);
-            let paths = cl::simplify_paths(&paths, (amount as f64).abs() * coeff, true);
+            // `Clipper2Lib::SimplifyPaths( paths, std::abs( aAmount ) * coeff, true );`: KiCad drops the result (`SimplifyPaths` takes
+            // `const Paths<T>&` and returns a new one), so the union is of the offset as it is (r4 R4-7)
 
             let mut c2 = Clipper64::new();
             c2.set_preserve_collinear(false);
@@ -351,7 +352,7 @@ impl ShapePolySet {
         if simplify {
             let mut paths2 = Vec::new();
             c.execute(amount as f64, &mut paths2);
-            let paths2 = cl::simplify_paths(&paths2, (amount as f64).abs() * coeff, false);
+            // `Clipper2Lib::SimplifyPaths( paths2, .., false );`: its result dropped, as in `inflate2` above (r4 R4-7)
 
             let mut c2 = Clipper64::new();
             c2.set_preserve_collinear(false);

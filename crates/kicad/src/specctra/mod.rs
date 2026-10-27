@@ -1,9 +1,22 @@
+//! INACTIVE (2026-10-28): replaced by KiCad itself -- the DSN by `kicad-cli pcb export specctra`, the session import by `kicad-cli api-server`'s
+//! `ImportSpecctraSession` (`eda_kicad_engine::api::specctra`); kept for a future all-Rust build, and as the fallback where kicad-cli has neither.
+//!
 //! Specctra DSN export and SES import (`pcbnew/specctra_import_export`), File > Export > Specctra DSN... and File > Import > Specctra Session...
 //! (`pcbnew.EditorControl.exportSpecctraDSN`, `pcbnew.EditorControl.importSpecctraSession`).
 //!
-//! The session import is ours, an approved exception to "kicad-cli is the only engine" (docs/ARCHITECTURE.md): kicad-cli has no SES command. The DSN export is
-//! kicad-cli's (`kicad-cli pcb export specctra`) where the kicad-cli found has the command; [`export_dsn`] is the fallback for one that has not, deprecated and
-//! to be deleted once every machine has it (see its doc for what goes with it). The studio's autorouter (`crates/freeroute`) works on `design.json` directly and
+//! What still runs this code:
+//! - the session import of `eda_ops`' `Cmd::Specctra` when the importer the CLI sets (`eda_cli::specctra_api::kicad_session_importer`) cannot use the
+//!   api-server: a kicad-cli without `api-server` (the Mac's 10.99.0-5334, KiCad 9), one whose server lacks `ImportSpecctraSession` (before 11.0), a
+//!   server that failed twice, or `EDA_KICAD_API=0` (the opt-in switch back to this port). The `eda_ops` unit tests set no importer and run it too.
+//!   [`session::from_session`], with [`parse`], [`lexer`], [`model`], [`format`], [`geom`] and [`board`] under it;
+//! - the DSN of a kicad-cli without `pcb export specctra` ([`export_dsn`], deprecated already, or `EDA_KICAD_CLI_NO_SPECCTRA`);
+//! - the tests: `echo_session` makes the session a router that keeps the routing would send back (crates/cli/tests/specctra_*.rs), and `parse::load_pcb`
+//!   reads kicad-cli's DSN there.
+//!
+//! The session import was ours, an approved exception to "kicad-cli is the only engine" (docs/ARCHITECTURE.md), while kicad-cli had no SES command;
+//! KiCad 25ec2335 is later than the 8303b2ad this port follows in one way that shows: a `(place ..)` of a reference the board has not got is skipped
+//! there and refused here ("Reference '%s' not found."). The DSN export is kicad-cli's (`kicad-cli pcb export specctra`) where the kicad-cli found has the
+//! command; [`export_dsn`] is the fallback for one that has not (see its doc for what goes with it). The studio's autorouter (`crates/freeroute`) works on `design.json` directly and
 //! is left alone -- the DSN and the session are for outside autorouters such as FreeRouting.
 //!
 //! The port is `SPECCTRA_DB`'s, file by file:

@@ -129,14 +129,25 @@
     t((await copper()).tracks === original.tracks, "and Undo takes it away again");
   });
 
-  await scenario("a session with a layer the board has not got is refused in KiCad's words, the board untouched", async (t) => {
+  // KiCad's own import (kicad-cli api-server, KiCad 25ec2335 on) skips the wire it cannot resolve and imports the rest, with its warning; our port of 8303b2ad
+  // (the fallback where kicad-cli has no api-server) refuses the session in KiCad's words and leaves the board as it was.
+  await scenario("a session with a layer the board has not got: skipped with KiCad's warning (api-server), or refused in KiCad's words (fallback)", async (t) => {
     const bad = sessionOf(dsn).text.replace(/\(path F\.Cu /, "(path In7.Cu ");
     const r = await E.run("pcbnew.EditorControl.importSpecctraSession", { name: "bad.ses", text: bad });
     const said = r.toast?.message ?? r.toast ?? "";
-    t(/Session file uses invalid layer id 'In7\.Cu'\./.test(said), `the error: ${JSON.stringify(said)}`);
     await sleep(300);
     const now = await copper();
-    t(same(now, original) && now.tracks === original.tracks, "the board is as it was");
+    if (/merged OK/.test(said)) {
+      t(/1 session item\(s\) were skipped due to unresolved reference, layer, or padstack\./.test(said), `KiCad's warning: ${JSON.stringify(said)}`);
+      t(now.segs.length > 0 && now.segs.length < original.segs.length && now.segs.every((s) => original.segs.includes(s)), `the other wires came in: ${now.segs.length} of ${original.segs.length} segments`);
+      await E.run("common.Interactive.undo");
+      await sleep(600);
+      const back = await copper();
+      t(same(back, original) && back.tracks === original.tracks, "Undo brings the board back");
+    } else {
+      t(/Session file uses invalid layer id 'In7\.Cu'\./.test(said), `the error: ${JSON.stringify(said)}`);
+      t(same(now, original) && now.tracks === original.tracks, "the board is as it was");
+    }
   });
 
   await scenario("nothing logged an error that was not asked for", async (t) => {

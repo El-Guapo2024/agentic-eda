@@ -6,6 +6,8 @@ import {
   VRML_UNIT_MM,
   flippedFrame,
   footprintZ,
+  stackOfBoard,
+  previewStack,
   inferKind,
   kindShown,
   footprintShown,
@@ -67,26 +69,80 @@ test("a model's own placement is offset * Rz(-z) * Ry(-y) * Rx(-x) * scale, scal
   close(xyz, byHand);
 });
 
-test("a footprint sits on the copper: +-(thickness / 2 + copper), from the stack-up", () => {
-  assert.ok(Math.abs(footprintZ(DEFAULT_STACK, false) - 0.835) < EPS);
+test("a footprint sits on the front paste's top / the back copper's face (GetFootprintZPos: m_layerZcoordTop[F_Paste], m_layerZcoordBottom[B_Paste])", () => {
+  // Front: body / 2 + front copper + SOLDERPASTE_LAYER_THICKNESS (0.04); back: -(body / 2 + back copper), no paste (B_Paste's bottom is the copper's top).
+  assert.ok(Math.abs(footprintZ(DEFAULT_STACK, false) - 0.875) < EPS);
   assert.ok(Math.abs(footprintZ(DEFAULT_STACK, true) + 0.835) < EPS);
-  assert.ok(Math.abs(footprintZ({ boardThicknessMm: 1, copperMm: 0.07 }, false) - 0.57) < EPS);
+  assert.ok(Math.abs(footprintZ({ boardThicknessMm: 1, copperMm: 0.07 }, false) - 0.61) < EPS);
+  assert.ok(Math.abs(footprintZ({ boardThicknessMm: 1, copperMm: 0.07, copperBackMm: 0.018 }, true) + 0.518) < EPS);
+});
+
+// V4-2 (round 4): BOARD_ADAPTER::InitSettings takes the build-up from the board's stackup.
+test("the mounting height follows the stackup", () => {
+  const rules = {
+    board_thickness_nm: 1_600_000,
+    copper_layers: 2,
+    stackup: {
+      layers: [
+        { name: "F.SilkS", material: null, thickness_mm: null, kind: "Top Silk Screen" },
+        { name: "F.Mask", material: null, thickness_mm: 0.02, kind: "Top Solder Mask" },
+        { name: "F.Cu", material: null, thickness_mm: 0.035, kind: "copper" },
+        { name: "dielectric 1", material: "FR4", thickness_mm: 0.71, kind: "core" },
+        { name: "B.Cu", material: null, thickness_mm: 0.018, kind: "copper" },
+        { name: "B.Mask", material: null, thickness_mm: 0, kind: "Bottom Solder Mask" },
+      ],
+    },
+  };
+  const s = stackOfBoard(rules);
+  assert.ok(Math.abs(s.boardThicknessMm - 0.71) < EPS, `body ${s.boardThicknessMm}`);
+  assert.ok(Math.abs(s.copperMm - 0.035) < EPS && Math.abs((s.copperBackMm ?? 0) - 0.018) < EPS);
+  assert.ok(Math.abs((s.maskFrontMm ?? 0) - 0.02) < EPS, "the front mask's own thickness");
+  assert.ok(Math.abs((s.maskBackMm ?? 0) - 0.001) < EPS, "a mask is at least 1 um");
+  assert.ok(Math.abs(footprintZ(s, false) - (0.71 / 2 + 0.035 + 0.04)) < EPS);
+  assert.ok(Math.abs(footprintZ(s, true) + (0.71 / 2 + 0.018)) < EPS);
+  // Inner copper is in the body; a copper with no thickness is the item's default 35 um, a dielectric's 0.
+  const four = stackOfBoard({
+    stackup: {
+      layers: [
+        { name: "F.Cu", material: null, thickness_mm: 0.035, kind: "copper" },
+        { name: "dielectric 1", material: null, thickness_mm: 0.2, kind: "prepreg" },
+        { name: "In1.Cu", material: null, thickness_mm: null },
+        { name: "dielectric 2", material: null, thickness_mm: 0.5, kind: "core" },
+        { name: "In2.Cu", material: null, thickness_mm: 0.0175, kind: "copper" },
+        { name: "dielectric 3", material: null, thickness_mm: null, kind: "prepreg" },
+        { name: "B.Cu", material: null, thickness_mm: 0.035, kind: "copper" },
+      ],
+    },
+  });
+  assert.ok(Math.abs(four.boardThicknessMm - (0.2 + 0.035 + 0.5 + 0.0175)) < EPS, `body ${four.boardThicknessMm}`);
+});
+
+test("a board with no stackup gets BuildDefaultStackupList's from its thickness and copper count", () => {
+  // 0.8 mm, 2 layers: one dielectric of 0.8 - 2 * 0.035 - 2 * 0.01 = 0.71 mm; 35 um copper and 10 um masks.
+  const s = stackOfBoard({ board_thickness_nm: 800_000, copper_layers: 2, stackup: null });
+  assert.ok(Math.abs(s.boardThicknessMm - 0.71) < EPS, `body ${s.boardThicknessMm}`);
+  assert.ok(Math.abs(s.copperMm - 0.035) < EPS && Math.abs((s.maskFrontMm ?? 0) - 0.01) < EPS);
+  // 1.6 mm, 4 layers: three dielectrics of trunc((1.6 - 4 * 0.035 - 0.02) / 3) nm, plus the two inner coppers.
+  const f = stackOfBoard({ board_thickness_nm: 1_600_000, copper_layers: 4 });
+  assert.ok(Math.abs(f.boardThicknessMm - (3 * 0.48 + 2 * 0.035)) < EPS, `body ${f.boardThicknessMm}`);
+  // Nothing known: KiCad's 1.6 mm board (BOARD_DESIGN_SETTINGS' default thickness) and two copper layers.
+  assert.ok(Math.abs(stackOfBoard(undefined).boardThicknessMm - 1.51) < EPS);
 });
 
 const at = (xMm: number, yMm: number, rotDeg = 0, bottom = false) => ({ xMm, yMm, rotDeg, bottom });
 const plain = { offset: [0, 0, 0] as Vec3Tuple, scale: [1, 1, 1] as Vec3Tuple, rotate: [0, 0, 0] as Vec3Tuple };
 
 test("a top footprint: the model's origin is on the footprint, up on the copper; offset lifts and moves it (board y is down, the model's y is up)", () => {
-  close(transformPoint(modelWorldMatrix(at(10, 20), plain), [0, 0, 0]), [10, 0.835, 20]);
+  close(transformPoint(modelWorldMatrix(at(10, 20), plain), [0, 0, 0]), [10, 0.875, 20]);
   // A vertex 1 mm up the model's y is 1 mm up the board (toward smaller board y): world z 19.
-  close(transformPoint(modelWorldMatrix(at(10, 20), plain), [0, 1, 0]), [10, 0.835, 19]);
-  close(transformPoint(modelWorldMatrix(at(10, 20), { ...plain, offset: [1, 2, 0.5] }), [0, 0, 0]), [11, 1.335, 18]);
+  close(transformPoint(modelWorldMatrix(at(10, 20), plain), [0, 1, 0]), [10, 0.875, 19]);
+  close(transformPoint(modelWorldMatrix(at(10, 20), { ...plain, offset: [1, 2, 0.5] }), [0, 0, 0]), [11, 1.375, 18]);
 });
 
 test("the footprint's rotation is the studio's: clockwise on screen, the matrix to_board rotates pads by", () => {
   // to_board: (x, y) -> (x cos - y sin, x sin + y cos), board y down. 90 degrees takes +x to +y (down the screen).
-  close(transformPoint(modelWorldMatrix(at(10, 20, 90), plain), [1, 0, 0]), [10, 0.835, 21]);
-  close(transformPoint(modelWorldMatrix(at(10, 20, 90), plain), [0, 1, 0]), [11, 0.835, 20], 1e-9);
+  close(transformPoint(modelWorldMatrix(at(10, 20, 90), plain), [1, 0, 0]), [10, 0.875, 21]);
+  close(transformPoint(modelWorldMatrix(at(10, 20, 90), plain), [0, 1, 0]), [11, 0.875, 20], 1e-9);
   // Any angle: the model's footprint-frame point (x, -y) lands where to_board puts the pad at (x, y).
   for (const deg of [0, 30, 45, 90, 135, 180, 270, 359]) {
     const rad = (deg * Math.PI) / 180;
@@ -196,4 +252,10 @@ test("V2: IsFootprintShown -- not in the position file, then DNP, then the kind"
   assert.equal(footprintShown({ kind: "smd", dnp: true }, { ...rows, dnp: true }), true);
   assert.equal(footprintShown({ kind: "tht", notInPos: true }, { ...rows, notInPos: false }), false);
   assert.equal(footprintShown({ kind: "virtual", notInPos: true }, { ...rows, virtual: false }), false);
+});
+
+test("the 3D model preview's dummy board: BuildDefaultStackupList with no copper counted (panel_preview_3d_model.cpp)", () => {
+  const s = previewStack();
+  assert.ok(Math.abs(s.boardThicknessMm - 1.58) < EPS && Math.abs(s.copperMm - 0.035) < EPS);
+  assert.ok(Math.abs(footprintZ(s, false) - (0.79 + 0.035 + 0.04)) < EPS);
 });

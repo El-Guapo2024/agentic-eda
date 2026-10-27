@@ -3,12 +3,13 @@
 //
 // The Reference's text is `REF**` and the Value's the footprint's name until the file says otherwise; their layouts default to `CreateNewFootprint`'s (1 mm text just above and below the origin). The Datasheet
 // and the Description are the third and fourth mandatory rows (hidden, empty, at the origin on the fabrication layer until the file says otherwise). A user field
-// starts as `OnAddField` makes it: hidden, at the origin, on the fabrication layer, named `Field<n>`. The rules of a row are the board dialog's (kicad-port/fpFields.ts
-// `checkFieldRow`) and `Validate`'s for the names: every user field has one, none is a mandatory field's, none repeats another's (compared without case here, as KiCad's grid does).
+// starts as `OnAddField` makes it: hidden, at the origin, on the fabrication layer, named `Field<n>`. The rules of a row are this dialog's own `Validate` (`checkLibFieldRow`: its
+// size and pen messages differ from the board dialog's, kicad-port/fpFields.ts `checkFieldRow`) and, for the names: every user field has one, none is a mandatory field's, none
+// repeats another's (compared without case here, as KiCad's grid does).
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { FieldLayoutCmd, FootprintField, LibraryFootprint, Nm } from "../api/types";
-import { checkFieldRow } from "./fpFields";
+import { TEXT_MAX_NM, TEXT_MIN_NM } from "./fpFields";
 
 export const LIBRARY_REFERENCE_TEXT = "REF**";
 
@@ -53,6 +54,30 @@ export function rowsOfFootprint(fp: Pick<LibraryFootprint, "name" | "reference" 
   return rows;
 }
 
+/**
+ * `DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::Validate` for one row of the grid, word for word: the name, then the width and the height against `TEXT_MIN_SIZE_MM` /
+ * `TEXT_MAX_SIZE_MM`, then the pen against `ClampTextPenSize` (KiCad clamps the cell and says so; the grid here reports it and leaves the value to the user).
+ */
+export function checkLibFieldRow(name: string, layout: Pick<FieldLayoutCmd, "size" | "thickness">, fmt: (um: Nm) => string): string | null {
+  if (name.length === 0) return "Fields must have a name.";
+  const [w, h] = layout.size;
+  if (w < TEXT_MIN_NM || w > TEXT_MAX_NM) return `The text width must be between ${fmt(TEXT_MIN_NM)} and ${fmt(TEXT_MAX_NM)}.`;
+  if (h < TEXT_MIN_NM || h > TEXT_MAX_NM) return `The text height must be between ${fmt(TEXT_MIN_NM)} and ${fmt(TEXT_MAX_NM)}.`;
+  // `ClampTextPenSize( thickness, size )`: no pen thicker than a quarter of the smaller side.
+  const max = Math.round(Math.min(Math.abs(w), Math.abs(h)) * 0.25);
+  if ((layout.thickness ?? 0) > max) return "The text thickness is too large for the text size.\nIt will be clamped.";
+  return null;
+}
+
+/**
+ * `FOOTPRINT_EDITOR_CONTROL::PasteFootprint`: the copy only takes its new name (`m_copiedFootprint->SetFPID( LIB_ID( newLib, newName ) )`); its Value keeps the text it showed,
+ * which for a Value with no text of its own was the old name -- so that text is written out, or the copy would show its new name.
+ */
+export function pastedFootprint(copied: LibraryFootprint, name: string): LibraryFootprint {
+  const value: FieldLayoutCmd = { ...defaultValueLayout(), ...(copied.value ?? {}), text: copied.value?.text ?? copied.name };
+  return { ...copied, name, value };
+}
+
 /** `GetUserFieldName( ordinal )`: `Field<rows>`, or the next number that is free. */
 export function newRowName(rows: readonly LibFieldRow[]): string {
   const taken = new Set(rows.map((r) => r.name.toLowerCase()));
@@ -65,7 +90,7 @@ export function gridProblem(rows: readonly LibFieldRow[], fmt: (um: Nm) => strin
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]!;
     const label = r.name || `Field ${i + 1}`;
-    const bad = checkFieldRow(r.name, { size: r.layout.size, thickness: r.layout.thickness }, fmt);
+    const bad = checkLibFieldRow(r.name, { size: r.layout.size, thickness: r.layout.thickness }, fmt);
     if (bad) return `${label}: ${bad}`;
     if (i < MANDATORY_ROWS) continue;
     const name = r.name.trim();

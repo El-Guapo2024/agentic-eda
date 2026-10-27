@@ -1162,6 +1162,14 @@ pub struct RoutingSection {
     /// `track_width_presets`, for the via-size cycling hotkey.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_presets: Vec<ViaPreset>,
+    /// `BOARD_DESIGN_SETTINGS::m_DiffPairDimensionsList` -- Board Setup >
+    /// Pre-defined Sizes' Differential Pairs grid (width, gap, via gap;
+    /// `.kicad_pro`'s `diff_pair_dimensions`). The index-0 "use net class"
+    /// dummy row KiCad keeps in the list is not stored: [`Self::via_presets`]
+    /// and [`Self::track_width_presets`] leave their dummies out the same
+    /// way. Additive: absent in an older `design.json` reads as no pairs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diff_pair_presets: Vec<DiffPairPreset>,
     /// Task item 4: `TEARDROP_PARAMETERS` -- Board Setup > Teardrops.
     /// Lives here (not `BoardRules`) for the same reason `track_width_presets`
     /// does: the studio needs to *write* it through a `Cmd`, and `BoardRules`
@@ -1269,6 +1277,18 @@ pub struct ViaPreset {
     pub diameter: Nm,
     #[serde(deserialize_with = "crate::units::de")]
     pub drill: Nm,
+}
+
+/// One entry of `RoutingSection::diff_pair_presets` (`BOARD_DESIGN_SETTINGS::DIFF_PAIR_DIMENSION`, `pcbnew/board_design_settings.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiffPairPreset {
+    #[serde(deserialize_with = "crate::units::de")]
+    pub width: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub gap: Nm,
+    #[serde(deserialize_with = "crate::units::de")]
+    pub via_gap: Nm,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2668,6 +2688,10 @@ pub struct DrawingsSection {
     /// and kicad-cli's `--board-plot-params` plot with them. Additive: absent in an older `design.json` (and for a board that never had a block) reads as KiCad's defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plot_params: Option<crate::plot_params::PlotParams>,
+    /// Export IPC-2581's BOM columns as the dialog last left them (KiCad keeps them in the project file) -- see [`crate::plot_params::Ipc2581Bom`].
+    /// Additive: absent reads as none chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc2581_bom: Option<crate::plot_params::Ipc2581Bom>,
     /// The items of the board file that nothing reads (a text box, a reference image, a target, a table, a board-level property, whatever a newer KiCad adds), each as the file
     /// wrote it on one line: not in the design, not on the canvas, and written back where the board ends, so that the file kicad-cli judges and plots has them. Additive: absent
     /// in an older `design.json` reads as "none". Lives here for the reason `rules` does.
@@ -4941,7 +4965,7 @@ mod tests {
     /// save -> load round trip is stable.
     #[test]
     fn id_assignment_is_deterministic_and_stable_on_resave() {
-        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("VCC", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::ZERO, Nm::new(1_000_000))])], vias: vec![via("GND", Nm::new(500_000), Nm::new(500_000))], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("VCC", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::ZERO, Nm::new(1_000_000))])], vias: vec![via("GND", Nm::new(500_000), Nm::new(500_000))], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() };
 
         let mut a = build();
         a.assign_missing_ids();
@@ -4961,8 +4985,8 @@ mod tests {
     /// same tracks must not change which id lands on which track.
     #[test]
     fn ids_do_not_depend_on_array_order() {
-        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("VCC", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::ZERO, Nm::new(1_000_000))])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
-        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("VCC", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::ZERO, Nm::new(1_000_000))])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() };
         rt1.assign_missing_ids();
         rt2.assign_missing_ids();
         let gnd1 = rt1.tracks.iter().find(|t| t.net == "GND").unwrap();
@@ -4974,7 +4998,7 @@ mod tests {
     /// verbatim) must still get two distinct ids.
     #[test]
     fn duplicate_content_gets_distinct_ids() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)]), track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         assert_ne!(rt.tracks[0].id, rt.tracks[1].id);
     }
@@ -4984,11 +5008,27 @@ mod tests {
     /// assigned -- callers (the web UI, `DeleteTrack`) hold onto it.
     #[test]
     fn changing_width_after_assignment_does_not_move_the_id() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(Nm::ZERO, Nm::ZERO), (Nm::new(1_000_000), Nm::ZERO)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         let id = rt.tracks[0].id.clone();
         rt.tracks[0].width = Nm::new(500_000); // what `SetTrackWidth` does
         assert_eq!(rt.tracks[0].id, id);
+    }
+
+    /// r4 R4-3: `diff_pair_dimensions` -- an old design without the list reads as none (additive), and a set list survives the JSON round trip.
+    #[test]
+    fn diff_pair_presets_default_to_empty_and_round_trip() {
+        let mut rt: RoutingSection = serde_json::from_value(serde_json::json!({
+            "tracks": [], "vias": [], "zones": [], "track_width_presets": [], "via_presets": [],
+            "teardrop_settings": serde_json::to_value(TeardropSettings::default()).unwrap(),
+        }))
+        .expect("an older routing section reads");
+        assert_eq!(rt.diff_pair_presets, vec![], "absent: no pairs saved yet");
+        rt.diff_pair_presets = vec![DiffPairPreset { width: Nm::new(200_000), gap: Nm::new(150_000), via_gap: Nm::new(180_000) }];
+        let written = serde_json::to_value(&rt).unwrap();
+        assert_eq!(written["diff_pair_presets"], serde_json::json!([{ "width": 200_000, "gap": 150_000, "via_gap": 180_000 }]));
+        let back: RoutingSection = serde_json::from_value(written).expect("reads back");
+        assert_eq!(back.diff_pair_presets, rt.diff_pair_presets);
     }
 
     #[test]

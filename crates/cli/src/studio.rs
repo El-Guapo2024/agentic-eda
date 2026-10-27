@@ -897,10 +897,18 @@ fn handle(
             let carry = req.get("carry").and_then(Value::as_str).and_then(board::carry::Carry::parse);
             let reply = match serde_json::from_value::<eda_ops::Cmd>(req.get("cmd").cloned().unwrap_or(Value::Null)) {
                 Err(e) => json!({ "ok": false, "message": format!("not a board command: {e}") }),
-                Ok(cmd) => match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
-                    Ok(summary) => json!({ "ok": true, "message": summary }),
-                    Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
-                },
+                Ok(cmd) => {
+                    // A Specctra session KiCad imported with items skipped (`crate::specctra_api::take_session_warning`): its warning travels in the reply.
+                    let session = cmd.imports_session();
+                    let _ = session.then(crate::specctra_api::take_session_warning);
+                    match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
+                        Ok(summary) => match session.then(crate::specctra_api::take_session_warning).flatten() {
+                            Some(w) => json!({ "ok": true, "message": summary, "warning": w }),
+                            None => json!({ "ok": true, "message": summary }),
+                        },
+                        Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+                    }
+                }
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
@@ -1341,15 +1349,20 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 // The rule area's placement source (`ZONE::GetPlacementAreaEnabled` and the source type and name): the Placement tab of Zone Properties and what Repeat Layout reads.
                 "placement": z.placement,
             })).collect::<Vec<_>>(),
-            // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
-            // the Board Setup "Track Widths & Vias" panel's editable
-            // preset lists (`eda_ops::Cmd::SetTrackWidthPresets`/
-            // `SetViaPresets`), driving the W/Shift+W and via-size-cycle
-            // hotkeys. The board's own default (board_rules.track_width/
-            // via_diameter/via_drill below) is always the implicit first
-            // entry, not repeated in these lists.
+            // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList`/
+            // `m_DiffPairDimensionsList` -- the Board Setup "Track Widths &
+            // Vias" panel's editable preset lists
+            // (`eda_ops::Cmd::SetTrackWidthPresets`/`SetViaPresets`/
+            // `SetDiffPairPresets`), driving the W/Shift+W, via-size-cycle
+            // and differential-pair hotkeys. The board's own default
+            // (board_rules.track_width/via_diameter/via_drill below) is
+            // always the implicit first entry of the track and via lists,
+            // and KiCad's diff pair list likewise keeps an unused index 0
+            // (`GetDiffPairWidth()` only reads index >= 1); none of those
+            // dummy entries is repeated in these lists.
             "track_width_presets": r.track_width_presets,
             "via_presets": r.via_presets.iter().map(|p| json!({ "diameter": p.diameter, "drill": p.drill })).collect::<Vec<_>>(),
+            "diff_pair_presets": r.diff_pair_presets.iter().map(|p| json!({ "width": p.width, "gap": p.gap, "via_gap": p.via_gap })).collect::<Vec<_>>(),
             // Board Setup > Teardrops (task item 4).
             "teardrop_settings": json!({
                 "enabled": r.teardrop_settings.enabled,
@@ -1533,10 +1546,14 @@ fn outline_polys_json(design: &eda_model::ir::Design, model: Option<&eda_model::
 }
 
 /// The board's plot settings as the Plot and Generate Drill Files dialogs start from them (`DIALOG_PLOT::init_Dialog`, `DIALOG_GENDRILL::TransferDataToWindow`):
-/// the layer selection, of the layers the board has, and "Use drill/place file origin".
+/// the layer selection, of the layers the board has, and "Use drill/place file origin". With them, what Export IPC-2581 starts from
+/// (`DIALOG_EXPORT_2581::TransferDataToWindow`): the BOM columns kept in the board and the root schematic's title block revision
+/// (`m_IP2581Bom.schRevision`, the BOM revision when none was kept).
 fn plot_params_json(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Value {
     let plot = eda_model::plot_params::PlotParams::of_design(design);
-    json!({ "layers": plot.board_layers(&model.board.layers), "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false) })
+    let bom = design.drawings.as_ref().and_then(|d| d.ipc2581_bom.clone()).unwrap_or_default();
+    let sch_revision = design.schematic.as_ref().and_then(|s| s.title_block.as_ref()).map(|t| t.rev.clone()).unwrap_or_default();
+    json!({ "layers": plot.board_layers(&model.board.layers), "use_aux_origin": plot.flag("useauxorigin").unwrap_or(false), "ipc2581_bom": bom, "sch_revision": sch_revision })
 }
 
 /// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board, from the live port of the same check:

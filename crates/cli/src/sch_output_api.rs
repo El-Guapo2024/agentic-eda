@@ -18,7 +18,7 @@
 
 use crate::fab_api::{err, reply};
 use crate::kicad_engine;
-use eda_model::ir::{Design, SchematicSection};
+use eda_model::ir::Design;
 use serde_json::Value;
 use std::path::Path;
 
@@ -26,37 +26,23 @@ fn bool_of(req: &Value, key: &str, default: bool) -> bool {
     req.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
-/// KiCad's page number for the sheet at `path` (placement ids from the
-/// root down): the root is page 1, then every sheet in depth-first order
-/// (`SCH_SHEET_LIST::BuildSheetList`).
-pub(crate) fn page_of(design: &Design, path: &[&str]) -> Option<usize> {
-    fn visit<'a>(design: &'a Design, sch: &'a SchematicSection, ids: &mut Vec<&'a str>, n: &mut usize, want: &[&str]) -> Option<usize> {
-        if ids.len() > 32 {
-            return None; // a file that (indirectly) places itself
-        }
-        for child in &sch.sheets {
-            let Some(content) = design.sheet_contents.as_ref().and_then(|c| c.get(&child.file)) else { continue };
-            *n += 1;
-            ids.push(child.id.as_str());
-            if ids.as_slice() == want {
-                return Some(*n);
-            }
-            if let Some(p) = visit(design, content, ids, n, want) {
-                return Some(p);
-            }
-            ids.pop();
-        }
-        None
-    }
-    let root = design.schematic.as_ref()?;
-    if path.is_empty() {
-        return Some(1);
-    }
-    visit(design, root, &mut Vec::new(), &mut 1, path)
+/// The page number of the sheet at `path` (placement ids from the root down) as the derived file stores it, which is what kicad-cli's
+/// `--pages` matches: `SCH_SHEET_LIST::TrimToPageNumbers` keeps a sheet when `sheet.GetPageNumber()` is in the list. That is the number the
+/// user gave the sheet (Edit Sheet Page Number, an imported file's `(page ..)`), else its virtual page in the walk's order
+/// (`SheetEntry::effective_page`, the number the writer writes; the walk orders each screen's sheets by place, `SCH_SCREEN::GetSheets`).
+/// `None`: no sheet at `path`.
+///
+/// KiCad's "Plot Current Page" plots `m_schematic->CurrentSheet()` itself (`SCH_PLOTTER::createSVGFiles` and the other formats:
+/// `sheetList.push_back( m_schematic->CurrentSheet() )`); kicad-cli has no sheet-path option, so its page number stands for it. The one
+/// difference: two sheets with the same page number are both plotted. (Round 4's X4-2: this used to be the sheet's place in the stored list,
+/// counted over sheets with a screen only, so a renumbered or reordered sheet plotted another page.)
+pub(crate) fn page_of(design: &Design, path: &[&str]) -> Option<String> {
+    design.schematic.as_ref()?;
+    eda_model::sheet_list::walk(design).into_iter().find(|e| e.path.iter().map(String::as_str).eq(path.iter().copied())).map(|e| e.effective_page())
 }
 
 /// `kicad-cli sch export svg|pdf` arguments for the plot dialog's options.
-pub(crate) fn plot_args(req: &Value, page: Option<usize>) -> Vec<String> {
+pub(crate) fn plot_args(req: &Value, page: Option<String>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     if !bool_of(req, "color", true) {
         a.push("--black-and-white".into());
@@ -73,7 +59,7 @@ pub(crate) fn plot_args(req: &Value, page: Option<usize>) -> Vec<String> {
         a.extend(["--pages".into(), pages.join(",")]);
     } else if !bool_of(req, "plot_all", true) {
         if let Some(p) = page {
-            a.extend(["--pages".into(), p.to_string()]);
+            a.extend(["--pages".into(), p]);
         }
     }
     a
@@ -133,7 +119,45 @@ mod tests {
         assert_eq!(plot_args(&json!({ "background": false }), None), vec!["--no-background-color"]);
         // No background flag in black and white: it only applies in colour mode.
         assert_eq!(plot_args(&json!({ "color": false, "background": false }), None), vec!["--black-and-white"]);
-        assert_eq!(plot_args(&json!({ "plot_all": false }), Some(1)), vec!["--pages", "1"]);
+        assert_eq!(plot_args(&json!({ "plot_all": false }), Some("1".into())), vec!["--pages", "1"]);
         assert_eq!(plot_args(&json!({ "pages": ["2", "3"] }), None), vec!["--pages", "2,3"]);
+    }
+
+    /// Round 4's X4-2: "current page only" passes the sheet's own page number, which kicad-cli's `--pages` matches
+    /// (`SCH_SHEET_LIST::TrimToPageNumbers` compares `GetPageNumber()`): A, drawn at x=100 and numbered "5", is page "5"; B, drawn at x=50 with
+    /// no number, is the second sheet of the walk (`SCH_SCREEN::GetSheets` orders by x), so page "2", whatever the stored order.
+    #[test]
+    fn plot_current_page_passes_the_sheets_own_page_number() {
+        use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
+        use eda_model::units::Nm;
+        let placement = |id: &str, x_mm: f64, page: &str| SheetInstance {
+            id: id.into(),
+            name: id.to_uppercase(),
+            file: format!("{id}.kicad_sch"),
+            at: Point { x: Nm::from_mm(x_mm), y: Nm::ZERO },
+            size: (Nm::new(1000), Nm::new(1000)),
+            pins: vec![],
+            page: page.into(),
+        };
+        let root = SchematicSection { sheets: vec![placement("a", 100.0, "5"), placement("b", 50.0, "")], ..Default::default() };
+        let contents = [("a.kicad_sch".to_string(), SchematicSection::default()), ("b.kicad_sch".to_string(), SchematicSection::default())].into_iter().collect();
+        let design = Design {
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(root),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: Some(contents),
+            bus_aliases: vec![],
+            symbol_library: None,
+        };
+        assert_eq!(page_of(&design, &["a"]).as_deref(), Some("5"));
+        assert_eq!(page_of(&design, &["b"]).as_deref(), Some("2"));
+        assert_eq!(page_of(&design, &[]).as_deref(), Some("1"));
+        assert_eq!(page_of(&design, &["c"]), None);
+        assert_eq!(plot_args(&json!({ "plot_all": false }), Some("5".into())), vec!["--pages", "5"]);
     }
 }

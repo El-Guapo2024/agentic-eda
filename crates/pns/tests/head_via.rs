@@ -42,7 +42,7 @@ fn board(tracks: Vec<Track>) -> (Design, ConstraintModel) {
             footprints: vec![FootprintInstance { id: "R1".into(), at: p(mm(-9.0), mm(30.0)), rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: p(mm(9.0), mm(30.0)), rot: 0, side: Side::Top, label: LabelSide::Above }],
             modules: vec![],
         }),
-        routing: Some(RoutingSection { tracks: all, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+        routing: Some(RoutingSection { tracks: all, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
         drawings: None,
     };
     (design, model)
