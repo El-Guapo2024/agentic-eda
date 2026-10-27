@@ -210,11 +210,11 @@ fn incrementing_annotations_moves_the_references_together_and_carries_the_pins()
     for (i, r) in ["R1", "R2", "R3", "C1"].iter().enumerate() {
         place(&mut b, r, "Device:R", 1, i as i64 * mm(10.0));
     }
-    b.apply(&Cmd::IncrementAnnotations { start: "R2".into(), increment: 1 }).unwrap();
+    b.apply(&Cmd::IncrementAnnotations { start: "R2".into(), increment: 1, all_sheets: false }).unwrap();
     let mut ids: Vec<String> = symbols(&b).into_iter().map(|s| s.id).collect();
     ids.sort();
     assert_eq!(ids, vec!["C1", "R1", "R3", "R4"], "R2 -> R3 and R3 -> R4 in one go, R1 is below the start");
-    b.apply(&Cmd::IncrementAnnotations { start: "R3".into(), increment: -1 }).unwrap();
+    b.apply(&Cmd::IncrementAnnotations { start: "R3".into(), increment: -1, all_sheets: false }).unwrap();
     let mut ids: Vec<String> = symbols(&b).into_iter().map(|s| s.id).collect();
     ids.sort();
     assert_eq!(ids, vec!["C1", "R1", "R2", "R3"]);
@@ -233,13 +233,13 @@ fn incrementing_annotations_refuses_a_collision_a_negative_number_and_leaves_a_b
         ids
     };
     // R3 -> R1 would land on a symbol that stays: refused as a whole, nothing renamed
-    assert_eq!(b.apply(&Cmd::IncrementAnnotations { start: "R3".into(), increment: -2 }).unwrap_err()[0].check, "ops_duplicate_symbol");
+    assert_eq!(b.apply(&Cmd::IncrementAnnotations { start: "R3".into(), increment: -2, all_sheets: false }).unwrap_err()[0].check, "ops_duplicate_symbol");
     assert_eq!(ids(&b), vec!["R1", "R2", "R3"]);
     // R1 would become R-1
-    assert_eq!(b.apply(&Cmd::IncrementAnnotations { start: "R1".into(), increment: -2 }).unwrap_err()[0].check, "ops_bad_increment");
+    assert_eq!(b.apply(&Cmd::IncrementAnnotations { start: "R1".into(), increment: -2, all_sheets: false }).unwrap_err()[0].check, "ops_bad_increment");
     assert_eq!(ids(&b), vec!["R1", "R2", "R3"]);
     // a start with no number is not splittable: nothing to do, and no error (the C++ returns quietly)
-    b.apply(&Cmd::IncrementAnnotations { start: "R?".into(), increment: 1 }).unwrap();
+    b.apply(&Cmd::IncrementAnnotations { start: "R?".into(), increment: 1, all_sheets: false }).unwrap();
     assert_eq!(ids(&b), vec!["R1", "R2", "R3"]);
 }
 
@@ -268,4 +268,43 @@ fn replace_can_empty_a_label() {
     let search = crate::search::SearchData { find: "X".into(), replace: String::new(), ..Default::default() };
     b.apply(&Cmd::ReplaceText { search, items: None, all_sheets: false }).unwrap();
     assert_eq!(b.design().schematic.as_ref().unwrap().labels[0].net, "");
+}
+
+/// U1 unit 1 and R5 on the root, U1 unit 2 and R6 on sheet `a` (a.kicad_sch).
+fn two_sheet_design() -> Design {
+    use crate::sch_annotate_tests::{placement, section, symbol};
+    let mut d = crate::sch_annotate_tests::design();
+    let at = |x: f64| p(mm(x), mm(10.0));
+    d.schematic = Some(section(vec![symbol("U1", "Device:R", "x", 1, at(10.0)), symbol("R5", "Device:R", "1k", 1, at(30.0))], vec![placement("sa", "A", "a.kicad_sch", "")]));
+    d.sheet_contents = Some([("a.kicad_sch".to_string(), section(vec![symbol("U1", "Device:R", "x", 2, at(10.0)), symbol("R6", "Device:R", "1k", 1, at(30.0))], vec![]))].into_iter().collect());
+    d
+}
+
+#[test]
+fn dnp_reaches_the_units_on_other_sheets() {
+    // r5 D5-M2: `SetAttribute` collects the other units of an annotated symbol on every sheet (`CollectOtherUnits`).
+    let m = ConstraintModel::default();
+    let mut b = Board::new(two_sheet_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SetSymbolAttrs { ids: vec!["U1".into()], dnp: Some(true), exclude_from_bom: None, exclude_from_board: None, exclude_from_sim: None }).unwrap();
+    let a = &b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"];
+    assert!(a.symbols.iter().find(|s| s.id == "U1").unwrap().dnp, "unit 2 on sheet a follows");
+    assert!(!a.symbols.iter().find(|s| s.id == "R6").unwrap().dnp);
+    assert!(b.design().schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "U1").unwrap().dnp);
+}
+
+#[test]
+fn increment_annotations_over_all_sheets() {
+    // r5 D5-M3: "All sheets" is `Hierarchy().GetSymbols(..)`.
+    let m = ConstraintModel::default();
+    let mut b = Board::new(two_sheet_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::IncrementAnnotations { start: "R5".into(), increment: 1, all_sheets: true }).unwrap();
+    let ids_of = |s: &SchematicSection| s.symbols.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids_of(b.design().schematic.as_ref().unwrap()), vec!["U1", "R6"]);
+    assert_eq!(ids_of(&b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"]), vec!["U1", "R7"]);
+    // a multi-unit symbol on two sheets moves together
+    b.apply(&Cmd::IncrementAnnotations { start: "U1".into(), increment: 2, all_sheets: true }).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().symbols.iter().any(|x| x.id == "U3"));
+    assert!(b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"].symbols.iter().any(|x| x.id == "U3"));
+    // "Current sheet only" leaves sheet a alone
+    b.apply(&Cmd::IncrementAnnotations { start: "R6".into(), increment: 1, all_sheets: false }).unwrap_err(); // the current sheet only: R7 is sheet a's and does not move
 }

@@ -1,22 +1,21 @@
 // Increment Annotations From... (`eeschema.EditorControl.incrementAnnotations`, `SCH_EDITOR_CONTROL::IncrementAnnotations`, DIALOG_INCREMENT_ANNOTATIONS):
 // the first reference to move and the step; every symbol with those letters and a number from that one up is renumbered, together, in one undo step.
+// "All sheets" renumbers the references of every sheet (`Hierarchy().GetSymbols( .. )`), "Current sheet only" those of the sheet in view.
 import { useState } from "react";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
+import { useStudioApi, useStudioDispatch } from "../../state/store";
 import { SchDialogFrame } from "./SchDialogFrame";
 
 export function IncrementAnnotationsDialog({ onClose }: { onClose: () => void }) {
-  const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const [start, setStart] = useState("");
   const [by, setBy] = useState(1);
-  const hasSubSheets = (state.schematic?.sheets.length ?? 0) > 0;
   const [scope, setScope] = useState<"current" | "all">("current");
 
   const submit = async () => {
     // `dlg.m_FirstRefDes->SetValidator( wxTextValidator( wxFILTER_EMPTY ) )`: the start must be given.
     if (start.trim() === "") return;
-    const ok = await api.cmd({ op: "increment_annotations", start: start.trim(), increment: by });
+    const ok = await api.cmd({ op: "increment_annotations", start: start.trim(), increment: by, all_sheets: scope === "all" });
     if (!ok) return; // the verb's refusal (a clash, a number below 0) is already on screen as a toast
     dispatch({ type: "TOAST", message: "Incremented annotations.", kind: "info" });
     onClose();
@@ -42,8 +41,8 @@ export function IncrementAnnotationsDialog({ onClose }: { onClose: () => void })
       <label style={{ display: "block", marginTop: 12 }}>
         <input type="radio" checked={scope === "current"} onChange={() => setScope("current")} /> Current sheet only
       </label>
-      <label style={{ display: "block", opacity: hasSubSheets ? 0.5 : 1 }} title={hasSubSheets ? "Sub-sheets cannot be edited here yet" : undefined}>
-        <input type="radio" checked={scope === "all"} disabled={hasSubSheets} onChange={() => setScope("all")} /> All sheets
+      <label style={{ display: "block" }}>
+        <input type="radio" checked={scope === "all"} onChange={() => setScope("all")} /> All sheets
       </label>
     </SchDialogFrame>
   );

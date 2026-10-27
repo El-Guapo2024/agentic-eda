@@ -1984,7 +1984,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetSheetPage { sheet, page, .. } => format!("schematic sheet-page {sheet} {page:?}"),
         Cmd::SetSchItemText { id, text } => format!("schematic item-text {id} {text:?}"),
         Cmd::SetSymbolLibIds { changes, .. } => format!("schematic lib-ids {}", changes.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(",")),
-        Cmd::IncrementAnnotations { start, increment } => format!("schematic increment-annotations {start} {increment}"),
+        Cmd::IncrementAnnotations { start, increment, .. } => format!("schematic increment-annotations {start} {increment}"),
         Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids, .. } => {
             format!("route: +{} track(s) +{} via(s), -{} track(s) -{} via(s)", tracks.len(), vias.len(), remove_track_ids.len(), remove_via_ids.len())
         }

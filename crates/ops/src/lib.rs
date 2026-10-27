@@ -1657,7 +1657,13 @@ pub enum Cmd {
     },
     /// `eeschema.EditorControl.incrementAnnotations` (`SCH_EDITOR_CONTROL::IncrementAnnotations`): every reference with the start
     /// reference's letters and a number at least its own moves by `increment`.
-    IncrementAnnotations { start: String, increment: i32 },
+    /// `all_sheets`: the dialog's "All sheets" (`Hierarchy().GetSymbols( .. )`) rather than "Current sheet only" (`CurrentSheet().GetSymbols( .. )`).
+    IncrementAnnotations {
+        start: String,
+        increment: i32,
+        #[serde(default)]
+        all_sheets: bool,
+    },
 
     // -------------------------------------------------- footprint editor
     //
@@ -3123,7 +3129,7 @@ impl<'a> Board<'a> {
             Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
-            Cmd::IncrementAnnotations { start, increment } => self.increment_annotations(start, *increment),
+            Cmd::IncrementAnnotations { start, increment, all_sheets } => self.increment_annotations(start, *increment, *all_sheets),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
             Cmd::ReplaceText { search, items, all_sheets } => self.replace_text(search, items.as_deref(), *all_sheets),
             Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
@@ -5707,6 +5713,13 @@ impl<'a> Board<'a> {
         if new_id == id {
             return Ok(false); // renaming to the same id is a no-op, not an error
         }
+        self.rename_symbol_here_unchecked(id, new_id)?;
+        Ok(true)
+    }
+
+    /// The renaming half of [`Self::rename_symbol_in_schematic`], with no test that `new_id` is free: for a caller that moves several references at
+    /// once and has checked the end state itself (Increment Annotations over every sheet, where a multi-unit symbol's units on two sheets move together).
+    pub(crate) fn rename_symbol_here_unchecked(&mut self, id: &str, new_id: &str) -> Result<(), Vec<CheckResult>> {
         // a generated symbol is drawn from the part it is named for: it keeps its drawing under a name of its own
         self.freeze_generated_symbols(&BTreeSet::from([id.to_string()]));
         let sch = self.schematic_mut()?;
@@ -5737,7 +5750,7 @@ impl<'a> Board<'a> {
         }
         // where its fields are, and whether Autoplace Fields put them there, follow the new reference
         sch_fields::rename_symbol_keys(sch, id, new_id);
-        Ok(true)
+        Ok(())
     }
 
     // -------------------------------------------------- footprint editor
