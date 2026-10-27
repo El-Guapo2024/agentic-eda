@@ -2565,6 +2565,9 @@ export interface SchematicWire {
   members?: string[];
   /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
   stroke?: SchStroke;
+  /** `SCH_DRAWING_TOOLS::findWireLabelDriverName`: the wire's connection's `LocalName()` on this sheet path when the net's driver is a local or a global label,
+   *  absent otherwise (a power symbol, a hierarchical label, a pin, or no driver). A local or global label put down on the wire takes it with no dialog (r2 C-L5). */
+  label_driver?: string;
 }
 
 /** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
