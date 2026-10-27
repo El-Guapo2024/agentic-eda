@@ -158,6 +158,19 @@ impl<'m> Scene<'m> {
                 self.get_connected_items(st, Item::Seg(i), loose, &mut found);
                 st.line_conn.entry(i).or_default().extend(found);
             }
+            // r2 C-H1: KiCad runs `getConnectedItems` on both ends of every line of the selection, drag additions included, and its `SCH_SHEET_T` case
+            // records a line end on a selected sheet pin (`m_specialCaseSheetPins[pin] = { line, line->GetStartPoint() == aPoint }`; a pin the drag added is
+            // selected too, `AddItemToSel`): `performItemMove` then puts that end where `ConstrainOnEdge` left the pin, so a wire dragged sideways into
+            // a pin, or a pin dragged past its sheet's corner, keeps the wire on the pin.
+            for end_pt in [self.segs[i].a, self.segs[i].b] {
+                let pins: Vec<Item> = self.items().into_iter().filter(|&t| matches!(t, Item::SheetPin(..)) && (self.is_user_selected(t) || self.by_drag.contains(&t)) && self.is_connected(t, end_pt)).collect();
+                for pin in pins {
+                    let entry = (pin, i, self.segs[i].a == end_pt);
+                    if !st.special_pins.contains(&entry) {
+                        st.special_pins.push(entry);
+                    }
+                }
+            }
         }
     }
 
