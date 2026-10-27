@@ -559,6 +559,26 @@ fn net_of(n: &[Sexpr], net_names: &BTreeMap<i64, String>) -> String {
     sexpr::txt(n, 1).unwrap_or("").to_string()
 }
 
+/// A pad's `(net ...)`, as `parsePAD`'s `T_net` reads it: a legacy net code is the pad's net, the file's table giving its name, and the name written
+/// beside the code must be that name -- a different one leaves the pad on no net (`SetNetCode( NETINFO_LIST::ORPHANED )`, whose name is ""). A code the
+/// board does not have (the table lists no such net, or there is no table: a KiCad 10 file lists none) makes the name the net, a new one where the
+/// table does not have it (`FindNet( netName )`, else a new `NETINFO_ITEM`). Code 0 is always the board's net 0, named "".
+fn pad_net(net: Option<&[Sexpr]>, net_names: &BTreeMap<i64, String>) -> String {
+    let Some(n) = net else { return String::new() };
+    if sexpr::is_bare_number(n, 1) {
+        let code = sexpr::num(n, 1).unwrap_or(0.0) as i64;
+        let table = net_names.get(&code).map(String::as_str).or(if code == 0 { Some("") } else { None });
+        return match table {
+            Some(name) => match sexpr::txt(n, 2) {
+                Some(written) if written != name => String::new(),
+                _ => name.to_string(),
+            },
+            None => sexpr::txt(n, 2).unwrap_or("").to_string(),
+        };
+    }
+    sexpr::txt(n, 1).unwrap_or("").to_string()
+}
+
 fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)], copper_nets: &[&str]) -> Vec<Net> {
     let mut pins_by_name: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for (pin, net) in pin_nets {
@@ -1737,7 +1757,7 @@ fn import_footprints(
             // a stub for), but it still occupies space in `pads`, so it
             // still counts as a hole for clearance.
             if p.kind != PadKind::NonPlatedHole {
-                let name = net_ref(sexpr::find(pad, "net"), net_names);
+                let name = pad_net(sexpr::find(pad, "net"), net_names);
                 if !name.is_empty() {
                     pin_nets.push((format!("{reference}.{}", p.number), name));
                 }
@@ -3437,6 +3457,37 @@ mod tests {
         let routing = design.routing.expect("copper");
         assert_eq!(routing.zones[0].net, "", "an unquoted 0 is net code 0: no net");
         assert_eq!(model.nets.iter().find(|n| n.name == "0").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]), "the quoted \"0\" is a name");
+    }
+
+    /// `parsePAD`'s `T_net` (25ec2335): a legacy net code is authoritative, and the name written beside it is checked against the net the file's table
+    /// gives that code -- a different name leaves the pad on no net (`NETINFO_LIST::ORPHANED`, whose name is ""). A code the table does not have is looked
+    /// up by the name instead (`FindNet( netName )`, else a new `NETINFO_ITEM`), so a name is a net even in a file that lists none.
+    #[test]
+    fn a_pad_whose_net_name_disagrees_with_its_code_is_on_no_net() {
+        let text = r#"(kicad_pcb (version 20221018) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (net 0 "") (net 3 "A")
+            (footprint "L:R" (layer "F.Cu") (at 10 10)
+                (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))
+                (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask") (net 3 "B")))
+        )"#;
+        let (_design, model, _notes) = import_kicad_pcb(text).expect("parses");
+        assert_eq!(model.nets.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), vec!["A"], "the code is the net; its name is the table's, and \"B\" is no net of the file");
+        assert!(model.nets.iter().all(|n| n.pins.is_empty()), "the pad is on no net (net 0, whose name is empty): {:?}", model.nets.iter().map(|n| (&n.name, &n.pins)).collect::<Vec<_>>());
+        // The table's own name is the pad's net.
+        let (_, model, _) = import_kicad_pcb(&text.replace("(net 3 \"B\")", "(net 3 \"A\")")).expect("parses");
+        assert_eq!(model.nets.iter().find(|n| n.name == "A").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]));
+
+        // A 20260206 file lists no nets (KiCad 10 names them where they are used): a code the board does not have (`SetNetCode` fails) makes the name a
+        // net, though this file writes the code before it.
+        let text = r#"(kicad_pcb (version 20260206) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (footprint "L:R" (layer "F.Cu") (uuid "f1") (at 10 10)
+                (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+                (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net 5 "X") (uuid "a1")))
+        )"#;
+        let (_, model, _) = import_kicad_pcb(text).expect("parses");
+        assert_eq!(model.nets.iter().find(|n| n.name == "X").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]), "{:?}", model.nets.iter().map(|n| (&n.name, &n.pins)).collect::<Vec<_>>());
     }
 
     /// r3-board-io F8: `ZONE_SETTINGS::ZONE_SETTINGS` keeps out tracks, vias and pads by default and `case T_keepout` resets only pads and footprints, so a placement
