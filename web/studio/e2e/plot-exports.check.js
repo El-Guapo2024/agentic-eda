@@ -128,9 +128,8 @@
     await scenario("Generate Placement Files: CSV with both sides in KiCad's -all-pos file, or the -top-pos and -bottom-pos ones; ASCII", async (t) => {
       if (!(await open(t, "pcbnew.EditorControl.generatePosFile", "Generate Placement Files"))) return;
       const radio = (name, i) => dialog().querySelectorAll(`input[name="${name}"]`)[i];
+      t(radio("pos-format", 0)?.checked === true && !dialog().querySelector('input[name="pos-side"]'), "Plain text first, and no side choice (KiCad's dialog always does both sides)");
       radio("pos-format", 1)?.click(); // CSV
-      const both = [...dialog().querySelectorAll('input[name="pos-side"]')].find((x) => x.closest("label")?.textContent.includes("Both"));
-      both?.click();
       await sleep(150);
       let res = await press(/^Generate/, "fab/pos");
       let files = judged(t, "CSV", res, /\.csv$/i);
@@ -151,6 +150,13 @@
       res = await press(/^Generate/, "fab/pos");
       files = judged(t, "ASCII", res, /\.pos$/i);
       t(files.length === 1 && /-all\.pos$/.test(files[0]), `ASCII, both sides, one file (${files.map(base).join(", ")})`);
+      t(/^Placement file: '.*'\.\nComponent count: \d+\.\nDone\.$/.test(res.reply?.body?.message ?? ""), `CreateAsciiFiles' report (${JSON.stringify(res.reply?.body?.message)})`);
+      radio("pos-format", 2)?.click(); // Gerber X3
+      await sleep(150);
+      res = await press(/^Generate/, "fab/pos");
+      files = judged(t, "Gerber X3", res, /\.gbr$/i);
+      t(files.length === 2 && files.some((f) => /-pnp_top\.gbr$/.test(f)) && files.some((f) => /-pnp_bottom\.gbr$/.test(f)), `Gerber X3: -pnp_top and -pnp_bottom (${files.map(base).join(", ")})`);
+      radio("pos-format", 0)?.click();
     });
 
     const exportOne = (action, title, route, re) => async (t) => {

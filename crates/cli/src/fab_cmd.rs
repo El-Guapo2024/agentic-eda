@@ -45,8 +45,8 @@ pub fn run(argv: &[String]) -> Result<(), Vec<CheckResult>> {
         "drill" => print_written(&dir, kicad_engine::export(&dir, "drill", &fab_api::drill_args(has_flag(opts, "--merge-pth-npth"), has_flag(opts, "--alt-drill-mode"), has_flag(opts, "--generate-report")))?),
         "pos" => {
             let format = flag_value(opts, "--format").unwrap_or("csv");
-            if !matches!(format, "csv" | "ascii") {
-                return Err(fail("fab", "--format", format!("unknown position format {format:?}: expected csv or ascii")));
+            if !matches!(format, "csv" | "ascii" | "gerber") {
+                return Err(fail("fab", "--format", format!("unknown position format {format:?}: expected csv, ascii or gerber")));
             }
             let side = flag_value(opts, "--side").unwrap_or("both");
             if !matches!(side, "front" | "back" | "both") {

@@ -112,10 +112,19 @@ pub(crate) fn drill_args(merge_pth_npth: bool, alt_drill_mode: bool, report: boo
     a
 }
 
-/// `kicad-cli pcb export pos`.
+/// `kicad-cli pcb export pos`. `format` is `ascii`, `csv` or `gerber` (Gerber X3, `CreateGerberFiles`: units and the footprint filters do
+/// not apply to it, kicad-cli's `--help` says "ascii or csv only").
 pub(crate) fn pos_args(format: &str, side: &str, units_mm: bool, smd_only: bool, exclude_fp_th: bool) -> Vec<String> {
-    let mut a: Vec<String> = vec!["--format".into(), if format == "ascii" { "ascii" } else { "csv" }.into()];
+    let format = match format {
+        "ascii" => "ascii",
+        "gerber" => "gerber",
+        _ => "csv",
+    };
+    let mut a: Vec<String> = vec!["--format".into(), format.into()];
     a.extend(["--side".into(), match side { "front" => "front", "back" => "back", _ => "both" }.into()]);
+    if format == "gerber" {
+        return a;
+    }
     a.extend(["--units".into(), if units_mm { "mm" } else { "in" }.into()]);
     if smd_only {
         a.push("--smd-only".into());
@@ -124,6 +133,36 @@ pub(crate) fn pos_args(format: &str, side: &str, units_mm: bool, smd_only: bool,
         a.push("--exclude-fp-th".into());
     }
     a
+}
+
+/// The footprints in a placement file kicad-cli wrote: an ASCII file's lines that are not `#` comments, a CSV's lines after its header.
+pub(crate) fn place_file_rows(text: &str, csv: bool) -> usize {
+    let lines = text.lines().filter(|l| !l.trim().is_empty());
+    if csv {
+        lines.skip(1).count()
+    } else {
+        lines.filter(|l| !l.starts_with('#')).count()
+    }
+}
+
+/// `CreateAsciiFiles`' report, word for word: each file with its component count, the full count of a two-file run, then "Done.". `files` are
+/// (path, rows); two of them are the top's and the bottom's.
+pub(crate) fn place_report(files: &[(String, usize)]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if files.len() == 1 {
+        lines.push(format!("Placement file: '{}'.", files[0].0));
+        lines.push(format!("Component count: {}.", files[0].1));
+    } else {
+        for (i, (f, n)) in files.iter().enumerate() {
+            lines.push(if i == 0 { format!("Front (top side) placement file: '{f}'.") } else { format!("Back (bottom side) placement file: '{f}'.") });
+            lines.push(format!("Component count: {n}."));
+        }
+        if files.len() == 2 {
+            lines.push(format!("Full component count: {}.", files.iter().map(|(_, n)| n).sum::<usize>()));
+        }
+    }
+    lines.push("Done.".into());
+    lines.join("\n")
 }
 
 /// `kicad-cli sch export bom` in JLCPCB's column layout (Comment,
@@ -197,19 +236,45 @@ pub fn drill(dir: &Path, body: &[u8]) -> Value {
 /// files, named as KiCad names them (`<name>-all-pos.csv`, `<name>-top-pos.csv`, `<name>-bottom-pos.csv`).
 pub fn pos(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let mut args = pos_args(
-        req.get("format").and_then(Value::as_str).unwrap_or("csv"),
-        req.get("side").and_then(Value::as_str).unwrap_or("both"),
-        req.get("units_mm").and_then(Value::as_bool).unwrap_or(true),
-        req.get("smd_only").and_then(Value::as_bool).unwrap_or(false),
-        req.get("exclude_fp_th").and_then(Value::as_bool).unwrap_or(false),
-    );
+    let format = req.get("format").and_then(Value::as_str).unwrap_or("csv");
+    let gerber = format == "gerber";
+    let flag = |k: &str| req.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let mut args = pos_args(format, req.get("side").and_then(Value::as_str).unwrap_or("both"), req.get("units_mm").and_then(Value::as_bool).unwrap_or(true), flag("smd_only"), flag("exclude_fp_th"));
     // `PLACE_FILE_EXPORTER`'s `m_excludeDNP`: footprints marked Do Not Populate stay out of the file.
-    if req.get("exclude_dnp").and_then(Value::as_bool).unwrap_or(false) {
+    if flag("exclude_dnp") {
         args.push("--exclude-dnp".into());
     }
+    // "Use negative X coordinates for footprints on bottom layer" (`m_negateXcb`, ASCII and CSV) and "Include board edge layer" (`m_cbIncludeBoardEdge`, Gerber X3).
+    if flag("negate_x") && !gerber {
+        args.push("--bottom-negate-x".into());
+    }
+    if flag("board_edge") && gerber {
+        args.push("--gerber-board-edge".into());
+    }
     let single_file = req.get("single_file").and_then(Value::as_bool).unwrap_or(true);
-    reply(kicad_engine::export_pos(dir, &with_aux_origin("pos", args, &req), single_file))
+    let args = if gerber { args } else { with_aux_origin("pos", args, &req) };
+    let mut v = match kicad_engine::export_pos(dir, &args, single_file) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+    if gerber {
+        // `CreateGerberFiles` has no candidate test; the count is what `CreatePlaceFile` returns, which the file does not say plainly.
+        let mut lines: Vec<String> = files.iter().enumerate().map(|(i, f)| if i == 0 && files.len() == 2 || f.contains("-pnp_top") { format!("Front (top side) placement file: '{f}'.") } else { format!("Back (bottom side) placement file: '{f}'.") }).collect();
+        lines.push("Done.".into());
+        v["message"] = Value::String(lines.join("\n"));
+        return v;
+    }
+    let counted: Vec<(String, usize)> = files.iter().map(|f| (f.clone(), std::fs::read_to_string(dir.join(f)).map(|t| place_file_rows(&t, format == "csv")).unwrap_or(0))).collect();
+    // `CreateAsciiFiles`: "Test for any footprint candidate in list" first, and write nothing when there is none.
+    if counted.iter().all(|(_, n)| *n == 0) {
+        for f in &files {
+            let _ = std::fs::remove_file(dir.join(f));
+        }
+        return err("No footprint for automated placement.");
+    }
+    v["message"] = Value::String(place_report(&counted));
+    v
 }
 
 /// `POST /api/fab/bom`: no body.
@@ -271,6 +336,21 @@ mod tests {
         assert_eq!(with_aux_origin("pos", vec![], &on), vec!["--use-drill-file-origin"]);
         assert_eq!(with_aux_origin("drill", vec![], &on), vec!["--drill-origin", "plot"]);
         assert!(with_aux_origin("drill", vec![], &off).is_empty(), "unset: the absolute origin, kicad-cli's default");
+    }
+
+    /// X8 (r2-editors-exports): `CreateAsciiFiles`' candidate count and report.
+    #[test]
+    fn placement_rows_and_the_report_are_kicads() {
+        assert_eq!(place_file_rows("### Footprint positions\n## Unit = mm\n# Ref Val\n## End\n", false), 0, "a header-only ASCII file has no footprint");
+        assert_eq!(place_file_rows("# Ref Val\nR1 1k R_0603 1 2 0 top\n## End\n", false), 1);
+        assert_eq!(place_file_rows("Ref,Val,Package,PosX,PosY,Rot,Side\n", true), 0);
+        assert_eq!(place_file_rows("Ref,Val,Package,PosX,PosY,Rot,Side\n\"R1\",\"1k\",x,1,2,0,top\n", true), 1);
+        assert_eq!(place_report(&[("a-all-pos.csv".into(), 3)]), "Placement file: 'a-all-pos.csv'.\nComponent count: 3.\nDone.");
+        assert_eq!(
+            place_report(&[("a-top.pos".into(), 2), ("a-bottom.pos".into(), 1)]),
+            "Front (top side) placement file: 'a-top.pos'.\nComponent count: 2.\nBack (bottom side) placement file: 'a-bottom.pos'.\nComponent count: 1.\nFull component count: 3.\nDone."
+        );
+        assert_eq!(pos_args("gerber", "front", true, true, true), vec!["--format", "gerber", "--side", "front"], "units and filters are ASCII/CSV only");
     }
 
     #[test]

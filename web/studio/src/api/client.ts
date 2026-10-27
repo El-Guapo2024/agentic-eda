@@ -359,7 +359,8 @@ export function postFabDrill(opts: FabDrillOptions): Promise<FabReply> {
 }
 
 export interface FabPosOptions {
-  format: "csv" | "ascii";
+  /** Plain text, CSV or Gerber X3 (`m_formatCtrl`). */
+  format: "csv" | "ascii" | "gerber";
   side: "front" | "back" | "both";
   units_mm: boolean;
   smd_only: boolean;
@@ -371,6 +372,10 @@ export interface FabPosOptions {
   /** "Generate single file with both front and back positions" (`m_singleFile`, checked by default): with both sides asked and this
    * off, KiCad writes the top's and the bottom's files (`<name>-top-pos.csv`, `<name>-bottom-pos.csv`). */
   single_file?: boolean;
+  /** "Use negative X coordinates for footprints on bottom layer" (`m_negateXcb`; plain text and CSV). */
+  negate_x?: boolean;
+  /** "Include board edge layer" (`m_cbIncludeBoardEdge`; Gerber X3). */
+  board_edge?: boolean;
 }
 
 export function postFabPos(opts: FabPosOptions): Promise<FabReply> {
