@@ -904,11 +904,18 @@ fn handle(
                     // A Specctra session KiCad imported with items skipped (`crate::specctra_api::take_session_warning`): its warning travels in the reply.
                     let session = cmd.imports_session();
                     let _ = session.then(crate::specctra_api::take_session_warning);
+                    // a copy of a zone carries its fill (R6-Z1): the design before, to tell the copies from the zones that were there
+                    let copied = crate::fill_api::copies_zones(&cmd).then(|| board::load(dir).ok().map(|(_, d, _)| (d, cmd.clone()))).flatten();
                     match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
-                        Ok(summary) => match session.then(crate::specctra_api::take_session_warning).flatten() {
-                            Some(w) => json!({ "ok": true, "message": summary, "warning": w }),
-                            None => json!({ "ok": true, "message": summary }),
-                        },
+                        Ok(summary) => {
+                            if let Some((before, cmd)) = &copied {
+                                crate::fill_api::carry_copied_fills(dir, before, cmd);
+                            }
+                            match session.then(crate::specctra_api::take_session_warning).flatten() {
+                                Some(w) => json!({ "ok": true, "message": summary, "warning": w }),
+                                None => json!({ "ok": true, "message": summary }),
+                            }
+                        }
                         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
                     }
                 }

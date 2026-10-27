@@ -28,7 +28,9 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
         Ok(t) => t,
         Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
     };
-    match eda_kicad::export_pcb_clipboard(&design, &model, &ids, reference) {
+    // a copied zone carries its fill (`format( const ZONE* )` writes its `(filled_polygon ..)`), so the paste does too (R6-Z1)
+    let fills = crate::fill_api::cached(dir);
+    match eda_kicad::export_pcb_clipboard_with(&design, &model, &ids, reference, fills.as_ref()) {
         Ok(text) => json!({ "ok": true, "text": text }),
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
     }
