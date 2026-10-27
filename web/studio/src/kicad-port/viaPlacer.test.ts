@@ -46,6 +46,7 @@ test("two nets' fills under the via: the user chooses ('Select Net:')", () => {
   // High contrast: the active layer's one net decides.
   assert.deepEqual(viaNet(input({}, fills, { highContrast: true, activeLayer: "B.Cu" }), [5 * MM, 5 * MM]), { kind: "net", net: "VCC", track: null });
   assert.deepEqual(selectNetLabels(["GND", "VCC"]), ["1  GND", "2  VCC"]);
+  assert.deepEqual(selectNetLabels(["", "GND"]), ["1  <no net>", "2  GND"], "a pour of no net is NO_NET (round 6 C6-8)");
 });
 
 test("a click beside a track snaps onto its line and takes its net; the track is split there (SnapItem, PlaceItem)", () => {
@@ -70,4 +71,14 @@ test("a click on a pad goes to its centre with its net", () => {
   const pos = snapViaPosition(i, [20.4 * MM, 19.8 * MM], [20 * MM, 20 * MM]);
   assert.deepEqual(pos, [20 * MM, 20 * MM]);
   assert.deepEqual(viaNet(i, [20.4 * MM, 19.8 * MM]), { kind: "net", net: "N2", track: null });
+});
+
+test("a track on a hidden layer is not snapped to, gives no net and is not split (VIEW::Query skips hidden layers, round 6 C6-1)", () => {
+  const b = { routing: { tracks: [{ ...track("t1", "GND", [0, 5 * MM], [10 * MM, 5 * MM]), layer: "B.Cu" }], vias: [], zones: [] } };
+  const hidden = input(b, [], { isLayerVisible: (l) => l !== "B.Cu" });
+  assert.deepEqual(snapViaPosition(hidden, [4.2 * MM, 5.3 * MM], [4 * MM, 5 * MM]), [4 * MM, 5 * MM], "where the grid put it");
+  assert.deepEqual(snapViaPosition(hidden, [4.2 * MM, 5.1 * MM], [4.2 * MM, 5.1 * MM]), [4.2 * MM, 5.1 * MM]);
+  assert.deepEqual(viaNet(hidden, [4 * MM, 5 * MM]), { kind: "net", net: "", track: null });
+  // Shown again: snapped, its net, split.
+  assert.deepEqual(viaNet(input(b), [4 * MM, 5 * MM]), { kind: "net", net: "GND", track: "t1" });
 });

@@ -38,6 +38,11 @@ const last: { convert: ConvertSettings; outset: OutsetParams | null; tracks: { l
   tracks: { layer: "", net: "", deleteOriginals: true },
 };
 
+/** What the zone dialog's "Conversion Settings" box chose, kept for the next conversion as `m_userSettings` is (Create Zone / Rule Area from Selection). */
+export function rememberZoneConversion(chosen: Pick<ConvertSettings, "strategy" | "gapNm" | "deleteOriginals">): void {
+  last.convert = { ...last.convert, ...chosen };
+}
+
 /** `bds.m_LineThickness[ bds.GetLayerClass( layer ) ]`: the board's Text & Graphics default for the layer's class, KiCad's own table (copper 0.2 mm, silkscreen / fab / other 0.1 mm, edges and courtyard 0.05 mm) when the backend sends none. */
 export function layerLineWidthNm(layer: string, defaults?: TextGraphicsDefaults): number {
   return lineThicknessNm(defaults, layer);
@@ -74,6 +79,16 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
         if (!pre.ok || pre.rings.length === 0) return;
         // "No copy-line-width option for zones/keepouts".
         const start: ConvertSettings = kind !== "poly" && last.convert.strategy === "copy_linewidth" ? { ...last.convert, strategy: "centerline" } : { ...last.convert };
+        if (kind !== "poly") {
+          // One dialog: the zone editor with `&m_userSettings` (`InvokeCopperZonesEditor( frame, nullptr, &zoneInfo, &m_userSettings )`, the non-copper and
+          // rule-area editors alike), which shows a "Conversion Settings" box; `getPolys( m_userSettings )` runs after its OK (round 6 D6-2). The pre-flight's
+          // first outline stands for the zone until then.
+          const [first] = pre.rings;
+          dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: kind === "keepout" });
+          dispatch({ type: "PCBX", patch: { zoneConvert: { ids, strategy: start.strategy === "bounding_hull" ? "bounding_hull" : "centerline", gapNm: start.gapNm, deleteOriginals: start.deleteOriginals } } });
+          dispatch({ type: "SET_ZONE_PENDING", outline: first ?? null });
+          return;
+        }
         openSweepDialog({
           kind: "element",
           element: createElement(ConversionSettingsDialog, {
@@ -92,18 +107,10 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
                 }
                 const sources = chosen.deleteOriginals ? reply.consumed : [];
                 const deleteCmds = sources.map((id) => deleteCmd(board, id));
-                if (kind === "poly") {
-                  // COPY_LINEWIDTH takes the stroke of the top-left source item.
-                  const width = resolved.strategy === "copy_linewidth" ? (copiedLineWidth(board, ids) ?? resolved.widthNm) : resolved.widthNm;
-                  const adds: Cmd[] = reply.rings.map((ring) => ({ op: "add_shape", shape: { kind: "polygon", layer, stroke_width: width, filled: resolved.strategy === "centerline", pts: ring.map(([x, y]) => ({ x, y })) } }));
-                  await applyEdit([...adds, ...deleteCmds], sources);
-                } else {
-                  // The zone dialog takes the settings; it adds the other outlines with them and removes the sources.
-                  const [first, ...rest] = reply.rings;
-                  dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: kind === "keepout" });
-                  dispatch({ type: "PCBX", patch: { zoneConvert: { extraOutlines: rest, deleteCmds } } });
-                  dispatch({ type: "SET_ZONE_PENDING", outline: first ?? null });
-                }
+                // COPY_LINEWIDTH takes the stroke of the top-left source item.
+                const width = resolved.strategy === "copy_linewidth" ? (copiedLineWidth(board, ids) ?? resolved.widthNm) : resolved.widthNm;
+                const adds: Cmd[] = reply.rings.map((ring) => ({ op: "add_shape", shape: { kind: "polygon", layer, stroke_width: width, filled: resolved.strategy === "centerline", pts: ring.map(([x, y]) => ({ x, y })) } }));
+                await applyEdit([...adds, ...deleteCmds], sources);
               })();
             },
           }),

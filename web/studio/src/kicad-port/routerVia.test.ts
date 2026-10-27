@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, NetClass } from "../api/types";
 import { chosenTrackWidthOf } from "./routerSizes";
-import { chosenViaOf, chosenViaSize, routerLayerTarget, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
+import { chosenViaEntry, chosenViaOf, chosenViaSize, currentViaSize, routerLayerTarget, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
 
 const CU4 = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const blind: ViaCommand = { type: "blind", selectLayer: false };
@@ -120,11 +120,12 @@ test("a via takes the net class's size from the server unless a size is chosen",
 
 test("R6-R1: V while routing sizes the via as the other via commands (handleLayerSwitch): none at index 0, the list's entry, the custom size", () => {
   const presets = [{ diameter: 700_000, drill: 350_000 }, { diameter: 800_000, drill: 400_000 }];
-  const choice = { presets, index: 0, currentPreset: null, useCustomTrackVia: false, custom: DEFAULT_CUSTOM_TRACK_VIA };
+  const choice = { presets, index: 0, useCustomTrackVia: false, custom: DEFAULT_CUSTOM_TRACK_VIA };
   assert.equal(chosenViaOf("through", choice), null, "the net class's: the server asks the rules for the route's net");
   assert.deepEqual(chosenViaOf("through", { ...choice, index: 2 }), presets[1]);
   assert.deepEqual(chosenViaOf("through", { ...choice, index: 2, useCustomTrackVia: true }), { diameter: DEFAULT_CUSTOM_TRACK_VIA.viaDiameterNm, drill: DEFAULT_CUSTOM_TRACK_VIA.viaDrillNm });
   assert.equal(chosenViaOf("micro", { ...choice, index: 2 }), null, "a microvia's is the rules'");
+  assert.equal(chosenViaEntry({ ...choice, index: 3 }), null, "past the list: the net class's (Draw Via: the Default class's via)");
 });
 
 test("R6-R3: the layer a layer key asks for while routing (handleLayerSwitch): next / prev in UI order past hidden layers, a named layer the board has", () => {
@@ -137,4 +138,16 @@ test("R6-R3: the layer a layer key asks for while routing (handleLayerSwitch): n
   assert.equal(routerLayerTarget("B.Cu", "F.Cu", copper, all), "B.Cu");
   assert.equal(routerLayerTarget("In5.Cu", "F.Cu", copper, all), null, "not a layer of the board");
   assert.equal(routerLayerTarget("F.Cu", "F.Cu", copper, all), null, "the current layer: nothing to do");
+});
+
+test("Draw Via takes the board's list entry at the chosen index each time, not the size cached when it was picked (GetCurrentViaSize, round 6 C6-2)", () => {
+  const board = (presets: { diameter: number; drill: number }[], def?: Partial<NetClass>) =>
+    ({ routing: { tracks: [], vias: [], zones: [], via_presets: presets }, board_rules: { via_diameter: 600_000, via_drill: 300_000, ...(def ? { default_class: def } : {}) } }) as unknown as BoardState;
+  // Entry 1 was 0.8/0.4 when picked; Board Setup made it 1.0/0.5.
+  assert.deepEqual(currentViaSize(board([{ diameter: 1_000_000, drill: 500_000 }]), 1, false, DEFAULT_CUSTOM_TRACK_VIA), { diameter: 1_000_000, drill: 500_000 });
+  // Index 0 ("use net class values") and an index past the list: the Default class's via.
+  assert.deepEqual(currentViaSize(board([], { via_diameter: 700_000, via_drill: 350_000 }), 0, false, DEFAULT_CUSTOM_TRACK_VIA), { diameter: 700_000, drill: 350_000 });
+  assert.deepEqual(currentViaSize(board([{ diameter: 1_000_000, drill: 500_000 }]), 4, false, DEFAULT_CUSTOM_TRACK_VIA), { diameter: 600_000, drill: 300_000 });
+  // Custom sizes in use.
+  assert.deepEqual(currentViaSize(board([]), 1, true, { trackNm: 1, viaDiameterNm: 900_000, viaDrillNm: 400_000 }), { diameter: 900_000, drill: 400_000 });
 });

@@ -259,7 +259,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/dialogs/dialog_board_setup.cpp` and `panel_setup_*.cpp`, `common/dialogs/panel_setup_netclasses.cpp`, `panel_setup_severities.cpp`,
   `panel_text_variables.cpp`, `pcbnew/drc/drc_rule_parser.cpp`, `pcbnew/tools/drc_rule_editor_tool.cpp`.
 
-- Round 6 (`task-r6-router`, 2026-10-28, `web/studio/PARITY-pcb.md` section 62): `A.Orientation` and `A.Locked` on the rule board are KiCad's; Multichannel and Find by Properties' Query read the rule board's component classes and sheets; a class rule KiCad cannot compile leaves none; Violation Severity lists the checks of the box kicad-cli (25ec2335); Custom Rules' Check rule syntax is `OnCompile`'s reporter; the spoke count field is KiCad's 0 .. 10; a project's tuning-pattern groups are read as KiCad reads them.
+- Round 6 (`task-r6-router`, 2026-10-28, `web/studio/PARITY-pcb.md` section 63): `A.Orientation` and `A.Locked` on the rule board are KiCad's; Multichannel and Find by Properties' Query read the rule board's component classes and sheets; a class rule KiCad cannot compile leaves none; Violation Severity lists the checks of the box kicad-cli (25ec2335); Custom Rules' Check rule syntax is `OnCompile`'s reporter; the spoke count field is KiCad's 0 .. 10; a project's tuning-pattern groups are read as KiCad reads them.
 
 ### 4. Hierarchical sheets
 **Mostly done (2026-10-10, `task-sch-hierarchy`)**, limits below. Hit: every multi-sheet design. Package P4 for what is left.
@@ -457,7 +457,18 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Missing (round 5): a free via's `(free yes)` (no flag in the IR's via); a Draw Via on an arc track does not cut it; the DRC check reads no constraint severity or pad clearance override; the canvas
   draws a text centred on its anchor whatever its vertical justification; Cleanup Graphics leaves text boxes alone (B5-6: KiCad's cleaner takes a `PCB_TEXTBOX` as a `PCB_SHAPE`) and its change list
   is not clickable; Create Tracks has its own dialog, delete flag and net (B5-16: KiCad's has none, uses the active copper layer and the shared `m_DeleteOriginals`, and leaves the tracks with no net,
-  which `commit_route` here refuses); `CalcArcCenter`'s round-number snap in the teardrop's arc.
+  which `commit_route` here refuses). (`CalcArcCenter`'s round-number snap in the teardrop's arc: done in round 6, D6-1.)
+- Done 2026-10-28 (`task-r6-pcb-edit`, `PARITY-pcb.md` section 62, the round-6 findings `r6-pcb-edit`): **no studio edit clears the routing any more** (E6-1, high: Swap, Move Exactly, the Pack and
+  Move drop and placing a part from the unplaced list deleted every track, via and zone); Swap takes vias, graphics, texts and zones, swaps the layers of two items of a kind and leaves locked items out;
+  Select / Grab Unconnected start from a pad; Select All Tracks in Net takes copper shapes; a group's lock is seen by Toggle Lock and the sweep filters; a stepped line width survives re-arming a tool;
+  a board graphic polygon is unfilled on Edge.Cuts and the courtyards at the layer's width; a new copper text is bold (`InferBold`); teardrops follow 25ec2335 only (the chord filter, Max width 0, the
+  arc's polyline and centre: 14 kicad-cli cases point for point); Draw Via ignores hidden layers, takes the board's via list entry and judges copper text by its own shape (and a knockout's hull);
+  Create Zone / Rule Area from Selection is one dialog; the line mode is kept between sessions; `eda board via place`; messages KiCad does not have are gone.
+- Missing (round 6): Swap of arc tracks, dimensions, groups, tables, text boxes, barcodes and points, and of two footprints' orientation and side inside a mixed selection, and of two pads as pads
+  (`PAD::SwapShapePositions`); the Select Net menu's order by net code; the via ghost at `SnapItem`'s point (C6-7); "Via location violates DRC." with Allow DRC violations on (C6-6); a PTH pad's
+  unflashed layer and text boxes, tables, dimensions and barcodes on copper in the via's DRC check (C6-4, C6-5); R / F / E on a carried text (A6-6); a rounded rectangle's corners through
+  `TransformRoundChamferedRectToPolygon` (D6-3); the 100 nm chaining's direction (D6-4) and the outline fix's view of a removed duplicate (D6-5), both KiCad quirks; teardrops fitted to other nets'
+  clearance (25ec2335's `computeFittedTeardropPolygon`) and the solder-mask teardrops; the text dialog's Bold control.
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcb_control.cpp` (`Paste`, `placeBoardItems`), `common/dialogs/dialog_paste_special.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are editable objects
@@ -608,7 +619,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/zone.cpp`, `zone_utils.cpp` (`AutoAssignZonePriorities`), `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `jobs` of `pcbnew_jobs_handler.cpp`
   (`JobExportDrc`: `--refill-zones`, `--save-board`), `pcb_io/kicad_sexpr/` (`format( const ZONE* )`: the layer set and the filled polygons), `pcbnew/teardrop/`.
 
-- Round 6 (`task-r6-router`, 2026-10-28, `web/studio/PARITY-pcb.md` section 62): a duplicated, arrayed or pasted zone carries its fill (Copy writes it, the paste reads it back); a flipped one-sided zone keeps its fill but is written not filled; Auto-Assign Priorities counts net-0 pads and vias for a no-net zone; Cleanup's merge leaves out a different-width track the filter skips.
+- Round 6 (`task-r6-router`, 2026-10-28, `web/studio/PARITY-pcb.md` section 63): a duplicated, arrayed or pasted zone carries its fill (Copy writes it, the paste reads it back); a flipped one-sided zone keeps its fill but is written not filled; Auto-Assign Priorities counts net-0 pads and vias for a no-net zone; Cleanup's merge leaves out a different-width track the filter skips.
 
 ### 14. Snap, grid and the click-versus-drag rule
 **Closed 2026-10-09 for the board, the schematic and the click rule (`358606b`); the footprint and symbol editors snap to other items' anchors since 2026-10-14 (P17, `task-lib-editors`, not merged).** Hit: every drag. Blocks: no.

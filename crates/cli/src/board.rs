@@ -1747,7 +1747,16 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => {
             format!("via add --net {net} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}", mm(*x), mm(*y), mm(*drill), mm(*diameter))
         }
-        Cmd::PlaceVia { net, x, y, .. } => format!("via place --net {net:?} --at {},{}", mm(*x), mm(*y)),
+        Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers } => format!(
+            "via place --net {net:?} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}{}{}{}",
+            mm(*x),
+            mm(*y),
+            mm(*drill),
+            mm(*diameter),
+            split_track.as_ref().map(|t| format!(" --split {t}")).unwrap_or_default(),
+            if *allow_drc_violations { " --allow-drc" } else { "" },
+            if hidden_layers.is_empty() { String::new() } else { format!(" --hidden {:?}", hidden_layers.join(" ")) },
+        ),
         Cmd::DeleteVia { id } => format!("via delete {id}"),
         Cmd::MoveVia { id, x, y } => format!("via move {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::EditVia { id, diameter, drill } => format!("via edit {id} --dia {} --drill {}", mm(*diameter), mm(*drill)),
@@ -2498,6 +2507,20 @@ pub fn run(
                 let to_layer = flag(rest, "--to-layer").ok_or_else(|| fail("board_usage", "via add", "needs --to-layer LAYER"))?;
                 step_with(&dir, Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
+            // The Draw Via tool's via (`Cmd::PlaceVia`): the net may be none, the DRC check refuses it unless --allow-drc, --split cuts that track at it
+            // (round 6 C6-9: the activity log wrote this line with no verb to read it).
+            "place" => {
+                let net = flag(rest, "--net").unwrap_or_default();
+                let Point { x, y } = parse_point_mm(&flag(rest, "--at").ok_or_else(|| fail("board_usage", "via place", "needs --at x,y, mm"))?)?;
+                let drill = mm_arg(&flag(rest, "--drill").ok_or_else(|| fail("board_usage", "via place", "needs --drill, mm"))?)?;
+                let diameter = mm_arg(&flag(rest, "--dia").ok_or_else(|| fail("board_usage", "via place", "needs --dia, mm"))?)?;
+                let from_layer = flag(rest, "--from").ok_or_else(|| fail("board_usage", "via place", "needs --from LAYER"))?;
+                let to_layer = flag(rest, "--to-layer").ok_or_else(|| fail("board_usage", "via place", "needs --to-layer LAYER"))?;
+                let split_track = flag(rest, "--split");
+                let hidden_layers = flag(rest, "--hidden").map(|h| h.split_whitespace().map(str::to_string).collect()).unwrap_or_default();
+                let cmd = Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations: has(rest, "--allow-drc"), hidden_layers };
+                step_with(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "via delete", "usage: eda board via delete <id>"))?;
                 step_with(&dir, Cmd::DeleteVia { id }, strict, &actor()).map(|s| eprintln!("{s}"))
@@ -2507,7 +2530,7 @@ pub fn run(
                 let Point { x, y } = parse_point_mm(&flag(rest, "--to").ok_or_else(|| fail("board_usage", "via move", "needs --to x,y, mm"))?)?;
                 step_with(&dir, Cmd::MoveVia { id, x, y }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
-            other => Err(fail("board_usage", other, "usage: eda board via <add|delete|move> ...")),
+            other => Err(fail("board_usage", other, "usage: eda board via <add|place|delete|move> ...")),
         },
         "zone" => match rest.get(1).map(String::as_str).unwrap_or("") {
             "add" => {
@@ -3983,6 +4006,75 @@ pub(crate) mod tests {
         step(&dir, Cmd::MoveTo { part: "U2".into(), x: mm(16.0), y: mm(5.0) }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(design.routing.is_none(), "moving a part must still clear routing -- it can move a footprint out from under a track");
+    }
+
+    /// Round 6 C6-9: the activity log's line for a Draw Via via is a command `eda board` reads back.
+    #[test]
+    fn the_logged_draw_via_line_runs_as_a_cli_command() {
+        let dir = scratch("via_place_line");
+        setup(&dir);
+        let cmd = Cmd::PlaceVia { net: String::new(), x: mm(10.0), y: mm(15.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: None, allow_drc_violations: true, hidden_layers: vec!["B.Cu".into()] };
+        step(&dir, cmd, false, "ui").unwrap();
+        let log = std::fs::read_to_string(dir.join("activity.jsonl")).unwrap();
+        let line = serde_json::from_str::<serde_json::Value>(log.lines().last().unwrap()).unwrap()["cmd"].as_str().unwrap().to_string();
+        // The line split as a shell would: quoted words kept whole.
+        let mut args: Vec<String> = Vec::new();
+        let (mut cur, mut quoted, mut any) = (String::new(), false, false);
+        for ch in line.chars() {
+            match ch {
+                '"' => (quoted, any) = (!quoted, true),
+                ' ' if !quoted => {
+                    if any || !cur.is_empty() {
+                        args.push(std::mem::take(&mut cur));
+                    }
+                    any = false;
+                }
+                c => cur.push(c),
+            }
+        }
+        if any || !cur.is_empty() {
+            args.push(cur);
+        }
+        args.extend(["-C".to_string(), dir.display().to_string()]);
+        run(&args, |_| unreachable!()).unwrap_or_else(|e| panic!("{line}: {e:?}"));
+        let vias = load(&dir).unwrap().1.routing.unwrap().vias;
+        assert_eq!(vias.len(), 2, "{line}");
+        assert!(vias.iter().all(|v| v.at == Point { x: mm(10.0), y: mm(15.0) } && v.net.is_empty()));
+    }
+
+    /// Round 6 E6-1: the studio's Swap (`swap_chain`, `EDIT_TOOL::Swap`), Move Exactly (`move_exact`, `EDIT_TOOL::MoveExact`) and the placing of a part from
+    /// the unplaced list (`place_at` of a part not on the board) change only the footprints they act on, as KiCad's do: every track, via and zone stays,
+    /// the ones routed to a moved pad left dangling where they were. They used to take the whole routing with them.
+    #[test]
+    fn swap_move_exact_and_placing_an_unplaced_part_leave_the_routing_as_it_was() {
+        let dir = scratch("studio_keeps_routing");
+        setup(&dir);
+        // U2 off the board first (`rip` keeps the routing), so `place_at` has an unplaced part to put down.
+        step(&dir, Cmd::Rip { part: "U2".into() }, false, "test").unwrap();
+        // A GND track ending on U1's pad 1 (4000, 5000), a via, and a GND zone.
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(2.0), y: mm(5.0) }, Point { x: mm(4.0), y: mm(5.0) }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: mm(2.0), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        let sq = |x0: f64, y0: f64, x1: f64, y1: f64| vec![Point { x: mm(x0), y: mm(y0) }, Point { x: mm(x1), y: mm(y0) }, Point { x: mm(x1), y: mm(y1) }, Point { x: mm(x0), y: mm(y1) }];
+        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "B.Cu".into(), outline: sq(1.0, 12.0, 19.0, 19.0) }, false, "test").unwrap();
+        let routing = |dir: &Path| load(dir).unwrap().1.routing.expect("the routing is still there");
+        let was = routing(&dir);
+        assert_eq!((was.tracks.len(), was.vias.len(), was.zones.len()), (1, 1, 1));
+        let same = |dir: &Path, what: &str| {
+            let now = routing(dir);
+            assert_eq!(serde_json::to_value(&now.tracks).unwrap(), serde_json::to_value(&was.tracks).unwrap(), "{what}: the tracks stay where they were");
+            assert_eq!(serde_json::to_value(&now.vias).unwrap(), serde_json::to_value(&was.vias).unwrap(), "{what}: the vias stay");
+            assert_eq!(serde_json::to_value(&now.zones).unwrap(), serde_json::to_value(&was.zones).unwrap(), "{what}: the zones stay");
+        };
+        // Placing U2 from the unplaced list.
+        step(&dir, Cmd::PlaceAt { part: "U2".into(), x: mm(15.0), y: mm(5.0) }, false, "ui").unwrap();
+        same(&dir, "place_at of an unplaced part");
+        // Swap U1 (with the track on its pad) and U2: the track stays, dangling.
+        step(&dir, Cmd::SwapChain { parts: vec!["U1".into(), "U2".into()] }, false, "ui").unwrap();
+        assert_eq!(load(&dir).unwrap().1.placement.unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().at, Point { x: mm(15.0), y: mm(5.0) });
+        same(&dir, "swap_chain");
+        // Move Exactly.
+        step(&dir, Cmd::MoveExact { parts: vec!["U1".into()], dx: mm(-1.0), dy: mm(1.0), rotate_millideg: 0, pivot: None }, false, "ui").unwrap();
+        same(&dir, "move_exact");
     }
 
     /// A `design.json` written before tracks/vias carried ids -- no `id`

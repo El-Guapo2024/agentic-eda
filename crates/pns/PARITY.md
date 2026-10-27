@@ -1344,7 +1344,7 @@ The router side of `work/findings/round6/r6-route-rules.md` section R (and R6-D1
 - **R6-R6, the active layer.** `syncRouterAndFrameLayer`: while a route or pair runs the active layer is the one being routed, made visible
   (the store's `SET_DRAW_STATE`); `m_originalActiveLayer` is saved at every start and given back at the end (`finishInteractive`). GAPS item 7's R5 line
   said the active layer followed the route; now it does. Browser: router-leftovers' r6 scenario.
-- **R6-D1 on the router.** `A.Orientation` of a footprint and a pad is KiCad's (`web/studio/PARITY-pcb.md` section 62). kicad-cli:
+- **R6-D1 on the router.** `A.Orientation` of a footprint and a pad is KiCad's (`web/studio/PARITY-pcb.md` section 63). kicad-cli:
   `a_rule_on_the_orientation_reads_kicads_angle` (a pad orientation rule and a Rotation component class hold a route off a footprint KiCad has at
   90, and not one at -90).
 - **R6-R8, not fixed.** A shoved line that stood on several board tracks is committed under one of them (`ShoveOutcome`: the first of

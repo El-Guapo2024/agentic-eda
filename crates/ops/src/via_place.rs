@@ -41,7 +41,12 @@ fn sub_e(clearance: Nm) -> Nm {
 /// the via's copper against the item's at `EvalRules( CLEARANCE_CONSTRAINT )` less the epsilon, and the via's copper against the item's hole at
 /// `HOLE_CLEARANCE_CONSTRAINT`. Text on copper (a board text, a footprint's text) is no connected item and is judged by its strokes. Not judged: a constraint's
 /// severity (`RPT_SEVERITY_IGNORE`), a pad's own clearance override beyond what the rules give.
-pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via) -> bool {
+///
+/// `hidden_layers` are the layers the Appearance panel hides: `checkDRCViolation` takes its candidates from `view->Query`, which skips the view layers that are
+/// not shown (round 6 C6-1), so an item none of whose layers is shown is not judged. A via (its hole layers) and a plated pad (the plated-hole layers) are
+/// always shown; a track, an SMD or NPTH pad, a graphic and a text by their copper layers.
+pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via, hidden_layers: &[String]) -> bool {
+    let shown = |layers: &[&str]| layers.iter().any(|l| !hidden_layers.iter().any(|h| h == l));
     let board: DrcBoard = eda_drc::board::build(design, model);
     let rules = &model.board;
     let rb = RuleBoard::new(design, model, &board, eda_drc::constraints::Units::Mm, rules.custom_rules_text.as_deref());
@@ -65,6 +70,10 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via) -> 
         if !other_net(&pad.net) {
             continue;
         }
+        let plated_hole = pad.hole.is_some() && pad.kind != eda_model::PadKind::NonPlatedHole;
+        if !plated_hole && !shown(&copper.iter().filter(|l| pad.copper_on(l).is_some()).map(String::as_str).collect::<Vec<_>>()) {
+            continue;
+        }
         let Some(item) = rb.pad_item_at(i) else { continue };
         for layer in &copper {
             if pad.flash(layer, &first, &last) == eda_model::padstack::Flash::Never {
@@ -83,7 +92,7 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via) -> 
     }
     // Tracks (a segment of a polyline, or an arc).
     for (i, t) in board.tracks.iter().enumerate() {
-        if !other_net(&t.net) {
+        if !other_net(&t.net) || !shown(&[t.layer.as_str()]) {
             continue;
         }
         let item = rb.segment_item_at(i);
@@ -109,7 +118,7 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via) -> 
     }
     // Graphics on copper with a net of their own.
     for s in design.drawings.iter().flat_map(|d| d.shapes.iter()) {
-        if !copper.iter().any(|l| l == s.layer()) {
+        if !copper.iter().any(|l| l == s.layer()) || !shown(&[s.layer()]) {
             continue;
         }
         let net = design.drawings.as_ref().and_then(|d| d.board_items.net_of(s.id())).map(str::to_string);
@@ -123,23 +132,18 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via) -> 
         }
     }
     // Text on copper: the board's own and the footprints'.
-    for t in design.drawings.iter().flat_map(|d| d.texts.iter()).filter(|t| copper.contains(&t.layer)) {
+    for t in design.drawings.iter().flat_map(|d| d.texts.iter()).filter(|t| copper.contains(&t.layer) && shown(&[t.layer.as_str()])) {
         let item = rb.board_text_item_of(t);
-        let size = (t.size_nm, t.size_nm);
-        let pen = eda_drc::stroke_font::effective_pen_width(t.stroke_width, size, false);
-        let halign = match t.justify {
-            eda_model::ir::TextJustify::Left => -1,
-            eda_model::ir::TextJustify::Center => 0,
-            eda_model::ir::TextJustify::Right => 1,
-        };
-        let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
-        let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: rot, mirror: t.mirror, halign, valign: 0 });
-        if !segs.is_empty() && collides(&Shape::Strokes { segs, r: pen / 2 }, eval(CType::Clearance, &item, Some(&t.layer))) {
+        let extra = design.drawings.as_ref().and_then(|d| d.text_extra(&t.id));
+        if board_text_effective_shape(t, extra).is_some_and(|shape| collides(&shape, eval(CType::Clearance, &item, Some(&t.layer)))) {
             return true;
         }
     }
     for piece in eda_drc::fp_art::footprint_copper(design, model) {
         if let eda_drc::fp_art::FpCopper::Text(t) = &piece {
+            if !shown(&[t.layer.as_str()]) {
+                continue;
+            }
             let item = rb.text_item_of("fp_text", t);
             if let Some(shape) = eda_drc::board::footprint_text_shape(t) {
                 if collides(&shape, eval(CType::Clearance, &item, Some(&t.layer))) {
@@ -151,6 +155,73 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via) -> 
 
     // `EvalRules( DISALLOW_CONSTRAINT, aVia, nullptr, UNDEFINED_LAYER )`: `m_DisallowFlags`.
     rb.engine().eval_rules(CType::Disallow, Some(&probe), None, None, None).disallow != 0
+}
+
+/// `PCB_TEXT::GetEffectiveShape` of a board text, with what its extras say (round 6 C6-3): the glyph width (`width_nm`, else square), the vertical
+/// justification, bold (the automatic pen of a text with no thickness), and for a knockout text `TransformTextToPolySet`'s
+/// `buildBoundingHull( &finalPoly, textShape, margin )` -- the convex hull of the strokes grown by `GetKnockoutTextMargin( size, penWidth )` =
+/// `max( KiROUND( penWidth / 2.0 ), KiROUND( size.y / 9.0 ) )` (the glyphs it then subtracts are inside the hull and no via fits in one).
+pub(crate) fn board_text_effective_shape(t: &eda_model::ir::Text, extra: Option<&eda_model::board_text::TextExtra>) -> Option<Shape> {
+    let default = eda_model::board_text::TextExtra::default();
+    let x = extra.unwrap_or(&default);
+    let size = (x.width_nm.unwrap_or(t.size_nm), t.size_nm);
+    let thickness = if x.auto_thickness { Nm::ZERO } else { t.stroke_width };
+    let pen = eda_drc::stroke_font::effective_pen_width(thickness, size, x.bold);
+    let halign = match t.justify {
+        eda_model::ir::TextJustify::Left => -1,
+        eda_model::ir::TextJustify::Center => 0,
+        eda_model::ir::TextJustify::Right => 1,
+    };
+    let valign = match x.valign {
+        eda_model::ir::TextVAlign::Top => -1,
+        eda_model::ir::TextVAlign::Center => 0,
+        eda_model::ir::TextVAlign::Bottom => 1,
+    };
+    let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
+    let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness, angle_deg: rot, mirror: t.mirror, halign, valign });
+    if segs.is_empty() {
+        return None;
+    }
+    if !x.knockout {
+        return Some(Shape::Strokes { segs, r: pen / 2 });
+    }
+    let margin = Nm::kiround(pen.as_f64() / 2.0).max(Nm::kiround(size.1.as_f64() / 9.0));
+    let grow = pen.get() / 2 + margin.get();
+    // The hull of the strokes' ends grown by `grow` in the eight compass directions and the four diagonals (a polygon round each end), then hulled.
+    let mut pts: Vec<(i64, i64)> = Vec::new();
+    for seg in &segs {
+        for p in [&seg.a, &seg.b] {
+            for k in 0..16 {
+                let ang = std::f64::consts::TAU * k as f64 / 16.0;
+                let r = grow as f64 / (std::f64::consts::PI / 16.0).cos();
+                pts.push((p.x.get() + (r * ang.cos()).round() as i64, p.y.get() + (r * ang.sin()).round() as i64));
+            }
+        }
+    }
+    Some(Shape::Polygon { pts: convex_hull(pts).into_iter().map(|(x, y)| Point { x: Nm::new(x), y: Nm::new(y) }).collect() })
+}
+
+/// Andrew's monotone chain (`BuildConvexHull`).
+fn convex_hull(mut pts: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+    pts.sort_unstable();
+    pts.dedup();
+    if pts.len() < 3 {
+        return pts;
+    }
+    let cross = |o: (i64, i64), a: (i64, i64), b: (i64, i64)| (a.0 - o.0) as i128 * (b.1 - o.1) as i128 - (a.1 - o.1) as i128 * (b.0 - o.0) as i128;
+    let mut hull: Vec<(i64, i64)> = Vec::with_capacity(pts.len() * 2);
+    for pass in 0..2 {
+        let start = hull.len();
+        let iter: Box<dyn Iterator<Item = &(i64, i64)>> = if pass == 0 { Box::new(pts.iter()) } else { Box::new(pts.iter().rev()) };
+        for &p in iter {
+            while hull.len() >= start + 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0 {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    hull
 }
 
 /// The copper layers from `a` to `b`, either way round (all of them when one is unknown).
@@ -183,7 +254,7 @@ fn split_index(track: &Track, at: Point) -> Option<usize> {
 impl Board<'_> {
     /// `Cmd::PlaceVia`: `VIA_PLACER::PlaceItem` with the net chosen ([`self`](crate::via_place) module doc).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn place_via(&mut self, net: &str, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: &str, to_layer: &str, split_track: Option<&str>, allow_drc_violations: bool) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn place_via(&mut self, net: &str, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: &str, to_layer: &str, split_track: Option<&str>, allow_drc_violations: bool, hidden_layers: &[String]) -> Result<(), Vec<CheckResult>> {
         if !net.is_empty() {
             self.known_net(net)?;
         }
@@ -197,7 +268,7 @@ impl Board<'_> {
         }
         let at = Point { x, y };
         let via = Via { id: String::new(), net: net.into(), at, drill, diameter, from_layer: from_layer.into(), to_layer: to_layer.into() };
-        if !allow_drc_violations && via_violates_drc(&self.design, self.model, &via) {
+        if !allow_drc_violations && via_violates_drc(&self.design, self.model, &via, hidden_layers) {
             return Err(vec![CheckResult::fail("ops_via_drc", net, VIA_VIOLATES_DRC)]);
         }
         // The split, before the via goes in: the track must be the one under the via, of its net.
@@ -264,7 +335,7 @@ mod tests {
     }
 
     fn place(net: &str, x: f64, y: f64, split: Option<String>, allow: bool) -> Cmd {
-        Cmd::PlaceVia { net: net.into(), x: mm(x), y: mm(y), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: split, allow_drc_violations: allow }
+        Cmd::PlaceVia { net: net.into(), x: mm(x), y: mm(y), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: split, allow_drc_violations: allow, hidden_layers: Vec::new() }
     }
 
     fn track(net: &str, a: (f64, f64), b: (f64, f64)) -> Cmd {
@@ -314,6 +385,43 @@ mod tests {
         // A via of the track's own net, or of no net next to it, or far enough: no violation.
         b.apply(&place("VCC", 7.0, 5.45, None, false)).unwrap();
         b.apply(&place("GND", 2.0, 6.0, None, false)).unwrap();
+    }
+
+    /// Round 6 C6-1: `checkDRCViolation` takes its candidates from `view->Query`, which skips hidden layers.
+    #[test]
+    fn copper_on_a_hidden_layer_does_not_refuse_the_via() {
+        let m = model();
+        let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+        b.apply(&track("VCC", (0.0, 5.0), (10.0, 5.0))).unwrap();
+        assert!(b.apply(&place("GND", 5.0, 5.45, None, false)).is_err());
+        let Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, .. } = place("GND", 5.0, 5.45, None, false) else { unreachable!() };
+        b.apply(&Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers: vec!["F.Cu".into()] }).unwrap();
+    }
+
+    /// Round 6 C6-3: a board text is judged by `GetEffectiveShape` with its own attributes: the Text tool's bottom-justified text sits above its anchor, and a
+    /// knockout text is its grown hull.
+    #[test]
+    fn a_bottom_justified_text_is_judged_above_its_anchor_and_a_knockout_by_its_hull() {
+        use eda_model::board_text::TextExtra;
+        use eda_model::ir::{Text, TextJustify, TextVAlign};
+        let m = model();
+        let text = Text { id: String::new(), content: "GND".into(), at: Point { x: mm(10.0), y: mm(10.0) }, angle: 0, layer: "F.Cu".into(), size_nm: mm(1.5), stroke_width: mm(0.3), justify: TextJustify::Left, mirror: false };
+        let with_text = |text: &Text, extra: TextExtra| {
+            let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+            b.apply(&Cmd::PlaceText { text: text.clone(), extra: Some(extra) }).unwrap();
+            b
+        };
+        let with = |extra: TextExtra| with_text(&text, extra);
+        let bottom = TextExtra { bold: true, valign: TextVAlign::Bottom, ..Default::default() };
+        // The via's edge 0.7 mm below the anchor: clear of the glyphs, which end 0.2 mm above it (plus half the pen and the 0.2 mm clearance); the same
+        // text centred on its anchor reaches 0.68 mm below it.
+        with(bottom.clone()).apply(&place("GND", 10.5, 11.0, None, false)).unwrap();
+        assert!(with(TextExtra::default()).apply(&place("GND", 10.5, 11.0, None, false)).is_err(), "the same text centred on its anchor is too near");
+        // A 3 mm text: its strokes end 0.23 mm above the anchor (half the pen included), a knockout's hull, grown by max( pen / 2, 3 mm / 9 ), 0.11 mm
+        // below it. The via's edge on the anchor: clear of the strokes by more than the clearance, inside the hull.
+        let big = Text { size_nm: mm(3.0), ..text.clone() };
+        with_text(&big, bottom.clone()).apply(&place("GND", 12.0, 10.3, None, false)).unwrap();
+        assert!(with_text(&big, TextExtra { knockout: true, ..bottom }).apply(&place("GND", 12.0, 10.3, None, false)).is_err());
     }
 
     #[test]

@@ -25,7 +25,7 @@ import type { SweepCtx } from "./pcbSweepKit";
 
 /** The studio's via size choice (kicad-port/routerVia.ts `ViaChoice`): every via command of the router sizes its via from it (R6-R1). */
 export function viaChoiceOf(state: SweepCtx["state"]): ViaChoice {
-  return { presets: state.board?.routing?.via_presets ?? [], index: state.currentViaIndex, currentPreset: state.currentViaPreset, useCustomTrackVia: state.pcbx.useCustomTrackVia, custom: state.pcbx.customTrackVia };
+  return { presets: state.board?.routing?.via_presets ?? [], index: state.currentViaIndex, useCustomTrackVia: state.pcbx.useCustomTrackVia, custom: state.pcbx.customTrackVia };
 }
 
 export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepCtx): void {

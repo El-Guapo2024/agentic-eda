@@ -33,7 +33,8 @@ import { LONG_TEXT_QUESTION, plainTextPaste } from "../kicad-port/plainTextPaste
 import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
-import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { DEFAULT_PCB_PARITY, loadAngleSnapMode, saveAngleSnapMode, type PcbParityState } from "../kicad-port/pcbParityState";
+import { strokeStepKept } from "../kicad-port/layerDefaults";
 import { substituteSelection } from "../kicad-port/groupTree";
 import { substituteSchSelection } from "../kicad-port/schGroups";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
@@ -376,10 +377,10 @@ export interface ViewTransform {
   y: number;
 }
 
-/** A part being dragged, previewed locally before `move_to` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
+/** A part being dragged, previewed locally before `move_items` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
 export interface MovePreview {
   refs: string[];
-  /** Which kind of item `refs` names -- each commits through a different Cmd (pcb: any mix of PCB items, one batch, see below; parts: move_to per ref; via/shape/text/dimension: their own move_* by id; sch_move / sch_drag: the schematic's `sch_move` verb for items of every kind, see kicad-port/schMove.ts). Defaults to "part" (every pre-existing caller moves parts). */
+  /** Which kind of item `refs` names -- each commits through a different Cmd (pcb: any mix of PCB items, one batch, see below; parts: move_items per ref; via/shape/text/dimension: their own move_* by id; sch_move / sch_drag: the schematic's `sch_move` verb for items of every kind, see kicad-port/schMove.ts). Defaults to "part" (every pre-existing caller moves parts). */
   kind?: "pcb" | "part" | "via" | "shape" | "text" | "dimension" | "sch_move" | "sch_drag";
   /** `sch_move` / `sch_drag`: the picked points of a wire (a click near a wire's end picks that end); a wire not named is picked whole. */
   vertices?: Record<string, number[]>;
@@ -1053,7 +1054,7 @@ const initialState: StudioState = {
   routerSettingsDialogOpen: false,
   lengthTuningDialogOpen: false,
   lengthTuningMode: "single",
-  pcbx: DEFAULT_PCB_PARITY,
+  pcbx: { ...DEFAULT_PCB_PARITY, angleSnapMode: loadAngleSnapMode(browserStorage()) },
   bcx: DEFAULT_BOARD_CONTROL,
   appearance: DEFAULT_APPEARANCE,
   nextZoneIsRuleArea: false,
@@ -1507,8 +1508,11 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, sketchTracks: !state.sketchTracks };
     case "TOGGLE_SKETCH_VIAS":
       return { ...state, sketchVias: !state.sketchVias };
-    case "SET_ACTIVE_LAYER":
-      return { ...state, activeLayer: action.layer };
+    case "SET_ACTIVE_LAYER": {
+      // A layer change seen by a running drawShape / drawArc / Bezier tool resets `m_stroke` to the new layer's width (`layerChanged`, round 6 A6-1).
+      const kept = strokeStepKept(state.pcbx.drawStrokeStep, state.activeTool, action.layer);
+      return { ...state, activeLayer: action.layer, pcbx: kept === state.pcbx.drawStrokeStep ? state.pcbx : { ...state.pcbx, drawStrokeStep: kept } };
+    }
     case "TOGGLE_HIGH_CONTRAST":
       // `PCB_CONTROL::HighContrastMode`: NORMAL <-> DIMMED (from HIDDEN it goes back to NORMAL).
       return { ...state, highContrast: !state.highContrast, appearance: state.appearance.contrastHidden ? { ...state.appearance, contrastHidden: false } : state.appearance };
@@ -1649,7 +1653,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_ZONE_DISPLAY_MODE":
       return { ...state, zoneDisplayMode: action.mode };
     case "SET_BOARD_SETUP_DIALOG_OPEN":
-      return { ...state, boardSetupDialogOpen: action.open };
+      // Leaving Board Setup is its OK (every page applies as it goes): `ShowBoardSetupDialog`'s `ResetTools( MODEL_RELOAD )` runs `DRAWING_TOOL::Reset`,
+      // which puts `m_stroke` back to the class's width (round 6 A6-1).
+      return { ...state, boardSetupDialogOpen: action.open, pcbx: action.open || !state.pcbx.drawStrokeStep ? state.pcbx : { ...state.pcbx, drawStrokeStep: null } };
     case "SET_BOARD_SETUP_INITIAL_PAGE":
       return { ...state, boardSetupInitialPage: action.page };
     case "SET_PLOT_DIALOG_OPEN":
@@ -1890,6 +1896,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     savePreferences(browserStorage(), state.prefs);
   }, [state.prefs]);
+  useEffect(() => saveAngleSnapMode(browserStorage(), state.pcbx.angleSnapMode), [state.pcbx.angleSnapMode]);
   const stateRef = useRef(state);
   stateRef.current = state;
   /**
@@ -2385,7 +2392,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           // Pack and Move: this ref's own SpreadFootprints shift rides along with the shared drag delta.
           const own = perRefOffsetNm?.[ref];
           const to = p?.placed && p.at ? { x: Math.round(p.at[0] + dxNm + (own?.[0] ?? 0)), y: Math.round(p.at[1] + dyNm + (own?.[1] ?? 0)) } : null;
-          if (to) cmds.push({ op: "move_to", part: ref, x: to.x, y: to.y });
+          // `move_items`, the edit tools' move (`doMoveSelection`): it moves the footprint and nothing else. `move_to` is the CLI's and the agents'
+          // re-placement verb, which clears the whole routing (round 6 E6-1: a Pack and Move drop deleted every track, via and zone).
+          if (to && p?.at) cmds.push({ op: "move_items", ids: [ref], dx: to.x - p.at[0], dy: to.y - p.at[1] });
           // Rotating/flipping about the part's own (already-moved) anchor is the same final pose as KiCad's live in-place spin during a single-item
           // drag -- see MovePreview's own doc comment. R presses count counter-clockwise by the preferences' rotation step, and the item verbs turn
           // clockwise-positive; F flips across the preferred axis.

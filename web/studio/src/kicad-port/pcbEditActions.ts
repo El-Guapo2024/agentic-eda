@@ -8,6 +8,7 @@
 // pcbEditActions.test.ts.
 
 import type { ExtraKind } from "./pcbExtraItems";
+import { ancestors, type GroupLike } from "./groupTree";
 
 // ------------------------------------------------------------------ lock
 
@@ -18,8 +19,9 @@ import type { ExtraKind } from "./pcbExtraItems";
  * only an entirely unlocked selection locks. Returns the `locked` value to
  * send in `set_locked`.
  */
-export function resolveToggleLock(ids: readonly string[], lockedIds: ReadonlySet<string>): boolean {
-  for (const id of ids) if (lockedIds.has(id)) return false;
+export function resolveToggleLock(ids: readonly string[], lockedIds: ReadonlySet<string>, groups: readonly GroupLike[] = []): boolean {
+  // `BOARD_ITEM::IsLocked`: an item's own lock, or a locked group above it (round 6 E6-8).
+  for (const id of ids) if (lockedIds.has(id) || ancestors(groups, id).some((g) => lockedIds.has(g.id))) return false;
   return true;
 }
 
@@ -52,30 +54,45 @@ function padAt(parts: readonly UnconnectedPart[], pt: readonly [number, number],
 }
 
 /**
- * `GetRatsnestForPad` + the loop both `PCB_SELECTION_TOOL::selectUnconnected`
- * and `::grabUnconnected` share: for every pad of every selected footprint,
- * the ratsnest edges touching that pad, each resolved to the pad at its far
- * end (when the far end is a pad -- an edge ending on a track end/via has
+ * The pads `selectUnconnected` and `grabUnconnected` start from, in selection order: every pad of a selected footprint, and a selected pad itself
+ * (`REF.NUMBER`, `#k` for the k-th pad of a number the footprint repeats; round 6 E6-4: `else if( item->Type() == PCB_PAD_T ) pads.push_back( pad )`).
+ */
+function selectedPads(parts: readonly UnconnectedPart[], selected: readonly string[]): { part: UnconnectedPart; pad: UnconnectedPad }[] {
+  const out: { part: UnconnectedPart; pad: UnconnectedPad }[] = [];
+  const byRef = new Map(parts.filter((p) => p.placed).map((p) => [p.ref, p] as const));
+  for (const id of selected) {
+    const whole = byRef.get(id);
+    if (whole) {
+      for (const pad of whole.pads ?? []) out.push({ part: whole, pad });
+      continue;
+    }
+    const dot = id.indexOf(".");
+    const part = dot > 0 ? byRef.get(id.slice(0, dot)) : undefined;
+    if (!part) continue;
+    const [num, k] = id.slice(dot + 1).split("#");
+    const nth = k ? Number(k) : 1;
+    const pad = (part.pads ?? []).filter((q) => q.num === num)[nth - 1];
+    if (pad) out.push({ part, pad });
+  }
+  return out;
+}
+
+/**
+ * `GetRatsnestForPad` for one pad, each edge resolved to the pad at its far end (when the far end is a pad -- an edge ending on a track end or a via has
  * `Parent()->Type() != PCB_PAD_T` and is skipped, as in source).
  */
-function farPadsOf(parts: readonly UnconnectedPart[], edges: readonly UnconnectedEdge[], selected: readonly string[]): { padOwner: string; far: { part: UnconnectedPart; pad: UnconnectedPad }; length: number }[] {
-  const out: { padOwner: string; far: { part: UnconnectedPart; pad: UnconnectedPad }; length: number }[] = [];
-  const sel = new Set(selected);
-  for (const part of parts) {
-    if (!part.placed || !sel.has(part.ref)) continue;
-    for (const pad of part.pads ?? []) {
-      if (!pad.net) continue;
-      for (const e of edges) {
-        if (e.net !== pad.net) continue;
-        let otherPt: readonly [number, number] | null = null;
-        if (e.from[0] === pad.x && e.from[1] === pad.y) otherPt = e.to;
-        else if (e.to[0] === pad.x && e.to[1] === pad.y) otherPt = e.from;
-        if (!otherPt) continue;
-        const far = padAt(parts, otherPt, e.net);
-        if (!far) continue;
-        out.push({ padOwner: part.ref, far, length: Math.hypot(e.from[0] - e.to[0], e.from[1] - e.to[1]) });
-      }
-    }
+function farPadsOfPad(parts: readonly UnconnectedPart[], edges: readonly UnconnectedEdge[], pad: UnconnectedPad): { far: { part: UnconnectedPart; pad: UnconnectedPad }; length: number }[] {
+  const out: { far: { part: UnconnectedPart; pad: UnconnectedPad }; length: number }[] = [];
+  if (!pad.net) return out;
+  for (const e of edges) {
+    if (e.net !== pad.net) continue;
+    let otherPt: readonly [number, number] | null = null;
+    if (e.from[0] === pad.x && e.from[1] === pad.y) otherPt = e.to;
+    else if (e.to[0] === pad.x && e.to[1] === pad.y) otherPt = e.from;
+    if (!otherPt) continue;
+    const far = padAt(parts, otherPt, e.net);
+    if (!far) continue;
+    out.push({ far, length: Math.hypot(e.from[0] - e.to[0], e.from[1] - e.to[1]) });
   }
   return out;
 }
@@ -89,10 +106,12 @@ function farPadsOf(parts: readonly UnconnectedPart[], edges: readonly Unconnecte
 export function selectUnconnectedFootprints(parts: readonly UnconnectedPart[], edges: readonly UnconnectedEdge[], selected: readonly string[]): string[] {
   const result = [...selected];
   const have = new Set(result);
-  for (const { far } of farPadsOf(parts, edges, selected)) {
-    if (!have.has(far.part.ref)) {
-      have.add(far.part.ref);
-      result.push(far.part.ref);
+  for (const { pad } of selectedPads(parts, selected)) {
+    for (const { far } of farPadsOfPad(parts, edges, pad)) {
+      if (!have.has(far.part.ref)) {
+        have.add(far.part.ref);
+        result.push(far.part.ref);
+      }
     }
   }
   return result;
@@ -107,29 +126,21 @@ export function selectUnconnectedFootprints(parts: readonly UnconnectedPart[], e
  * Move Individually on the result.
  */
 export function grabNearestUnconnectedFootprints(parts: readonly UnconnectedPart[], edges: readonly UnconnectedEdge[], selected: readonly string[]): string[] {
-  const sel = new Set(selected);
   const result: string[] = [];
   const have = new Set<string>();
-  for (const part of parts) {
-    if (!part.placed || !sel.has(part.ref)) continue;
-    for (const pad of part.pads ?? []) {
-      if (!pad.net) continue;
-      // `farPadsOf` restricted to this single pad: reuse it on a one-pad part.
-      const one: UnconnectedPart = { ref: part.ref, placed: true, pads: [pad] };
-      const rest = parts.map((p) => (p.ref === part.ref ? one : p));
-      let best = Infinity;
-      let nearest: string | null = null;
-      for (const c of farPadsOf(rest, edges, [part.ref])) {
-        if (c.far.part.ref === part.ref) continue; // "This edge is a loop on the same footprint"
-        if (c.length < best) {
-          best = c.length;
-          nearest = c.far.part.ref;
-        }
+  for (const { part, pad } of selectedPads(parts, selected)) {
+    let best = Infinity;
+    let nearest: string | null = null;
+    for (const c of farPadsOfPad(parts, edges, pad)) {
+      if (c.far.part.ref === part.ref) continue; // "This edge is a loop on the same footprint"
+      if (c.length < best) {
+        best = c.length;
+        nearest = c.far.part.ref;
       }
-      if (nearest && !have.has(nearest)) {
-        have.add(nearest);
-        result.push(nearest);
-      }
+    }
+    if (nearest && !have.has(nearest)) {
+      have.add(nearest);
+      result.push(nearest);
     }
   }
   return result;

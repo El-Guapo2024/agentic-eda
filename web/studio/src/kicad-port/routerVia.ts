@@ -163,24 +163,45 @@ export function chosenViaSize(viaType: ViaType, chosen: ViaPreset | null, index:
   return chosen;
 }
 
-/** What the studio holds of the via size choice: the board's Pre-defined Sizes list, the chosen index (0 = net class), the chosen entry, and the custom size. */
+/** What the studio holds of the via size choice: the board's Pre-defined Sizes list (without KiCad's entry 0), the chosen index (0 = net class), and the
+ *  custom size and whether it is in use. */
 export interface ViaChoice {
   presets: readonly ViaPreset[];
   index: number | null;
-  currentPreset: ViaPreset | null;
   useCustomTrackVia: boolean;
   custom: CustomTrackVia;
 }
 
 /**
- * [`chosenViaSize`] of the studio's choice, for every via command of the router -- Place Through Via (V while routing, `ACT_PlaceThroughVia`) as
- * much as the blind, micro and Select Layer ones, since all go through `handleLayerSwitch`'s one sizing (R6-R1). The chosen entry is read from the
- * board's list now (`GetCurrentViaSize`: `m_ViasDimensionsList[ m_viaSizeIndex ]`, r5 R5-9); the custom size while custom sizes are in use.
- * Null: send no size, and the server takes the rules' for the route's net (its class, a `.kicad_dru` `via_diameter` / `hole_size` rule).
+ * The chosen via size of `BOARD_DESIGN_SETTINGS::GetCurrentViaSize()` / `GetCurrentViaDrill()`, the one place both of KiCad's via sizings read it: the custom
+ * size while custom sizes are in use; else the list entry at the index, read from the board's list now (`m_ViasDimensionsList[ m_viaSizeIndex ]`, so a
+ * Board Setup edit to it is seen, r5 R5-9, round 6 C6-2); null for index 0 ("use net class values") or an index past the list.
+ */
+export function chosenViaEntry(c: ViaChoice): ViaPreset | null {
+  if (c.useCustomTrackVia) return { diameter: c.custom.viaDiameterNm, drill: c.custom.viaDrillNm };
+  const entry = c.index != null && c.index > 0 ? c.presets[c.index - 1] : undefined;
+  return entry ? { diameter: entry.diameter, drill: entry.drill } : null;
+}
+
+/**
+ * The router's via commands (`handleLayerSwitch`, R6-R1) -- Place Through Via (V while routing, `ACT_PlaceThroughVia`) as much as the blind, micro and
+ * Select Layer ones: [`chosenViaEntry`], except a microvia (`|| viaType == MICROVIA`). Null: send no size, and the server takes the rules' for the
+ * route's net (its class, a `.kicad_dru` `via_diameter` / `hole_size` rule).
  */
 export function chosenViaOf(viaType: ViaType, c: ViaChoice): ViaPreset | null {
-  const entry = c.useCustomTrackVia ? { diameter: c.custom.viaDiameterNm, drill: c.custom.viaDrillNm } : c.index != null && c.index > 0 ? (c.presets[c.index - 1] ?? null) : c.currentPreset;
-  return chosenViaSize(viaType, entry, c.index, 1 + c.presets.length, c.useCustomTrackVia);
+  return viaType === "micro" ? null : chosenViaEntry(c);
+}
+
+/**
+ * Draw Via (`CreateItem`, round 6 C6-2): `GetCurrentViaSize()` / `GetCurrentViaDrill()` asked each time a via is made -- [`chosenViaEntry`], else (index 0
+ * or past the list) the Default class's via (`m_NetSettings->GetDefaultNetclass()`). `presets` is the board's list without KiCad's entry 0.
+ */
+export function currentViaSize(board: BoardState, index: number | null, useCustomTrackVia: boolean, custom: CustomTrackVia): ViaPreset {
+  const chosen = chosenViaEntry({ presets: board.routing?.via_presets ?? [], index, useCustomTrackVia, custom });
+  if (chosen) return chosen;
+  const rules = board.board_rules;
+  const def = rules?.default_class;
+  return { diameter: def?.via_diameter ?? rules?.via_diameter ?? 600_000, drill: def?.via_drill ?? rules?.via_drill ?? 300_000 };
 }
 
 /** `BOARD_DESIGN_SETTINGS`' custom track and via size (`m_customTrackWidth`, `m_customViaSize`): what `DIALOG_TRACK_VIA_SIZE` edits. */

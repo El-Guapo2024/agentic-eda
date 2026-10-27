@@ -64,7 +64,7 @@ export function copiedLineWidth(board: BoardState, ids: readonly string[]): numb
 }
 
 /** `EDA_SHAPE::getPosition` of a shape: an arc's centre (`if( m_shape == SHAPE_T::ARC ) return getCenter();`, round 5 B5-12), a polygon's first point, else its start (a circle's is its centre). */
-function shapePosition(s: Shape): P {
+export function shapePosition(s: Shape): P {
   switch (s.kind) {
     case "arc":
       return fromIU(arcCenter({ start: toIU(s.start), mid: toIU(s.mid), end: toIU(s.end) }));

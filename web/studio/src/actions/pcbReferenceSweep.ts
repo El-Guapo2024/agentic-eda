@@ -32,10 +32,8 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
       if (!board) return;
       const hovered = state.selection.size === 0;
       const ids = requestFiltered(() => true);
-      if (!ids.some((id) => movableItem(board, id) !== null)) {
-        toast("Select an item to move.");
-        return;
-      }
+      // `doMoveSelection`: an empty selection returns, saying nothing but `ReportFilteredLockedItems`' (round 6 E6-7).
+      if (!ids.some((id) => movableItem(board, id) !== null)) return;
       if (hovered) dispatch({ type: "SET_SELECTION", refs: ids });
       picker.start({
         kind: "point",
@@ -61,16 +59,14 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
     pcbOnly(() => {
       if (!board) return;
       const ids = ctx.requestSelection();
-      if (editableSelection(board, ids, { respectLocks: false }).ids.length === 0) {
-        toast("Select something to copy.");
-        return;
-      }
+      // `copyToClipboard`: nothing to copy, nothing said (round 6 E6-7).
+      if (editableSelection(board, ids, { respectLocks: false }).ids.length === 0) return;
       picker.start({
         kind: "point",
         prompt: "Select reference point for the copy...",
         onPoint: (at) => {
-          api.copySelection(ids, at);
-          toast("Selection copied");
+          // "Selection copied" once the copy is made (a failed copy says its own error).
+          void api.copySelection(ids, at).then((ok) => ok && toast("Selection copied"));
           return false;
         },
         onCancel: () => toast("Copy canceled"),
@@ -90,10 +86,8 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
       if (state.activeTool === "measure") return;
       const hovered = state.selection.size === 0;
       const ids = requestFiltered(() => true);
-      if (!ids.some((id) => movableItem(board, id) !== null)) {
-        toast("Select an item first.");
-        return;
-      }
+      // `if( selection.Empty() ) return 0;` (round 6 E6-7).
+      if (!ids.some((id) => movableItem(board, id) !== null)) return;
       if (hovered) dispatch({ type: "SET_SELECTION", refs: ids });
       // The ruler is the measure tool's; leave a route or drawing in progress alone.
       const ruler = (pts: [number, number][] | null) => {
@@ -107,7 +101,7 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
         const movable = [...live.selection].filter((id) => live.board && movableItem(live.board, id) && !(live.board.locked ?? []).includes(id));
         const cmds = live.board ? moveSelectionCommands(live.board, movable, interactiveOffsetMove(first, second, edited)) : [];
         if (cmds.length) await applyCommands(api, dispatch, cmds);
-        else if (movable.length === 0) toast("Select an item first.");
+        else if (movable.length === 0) return;
       };
 
       const stageOne = (): PickerSession => ({
