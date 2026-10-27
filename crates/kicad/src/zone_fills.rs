@@ -253,7 +253,7 @@ pub fn forget(board_dir: &Path) {
 
 // --------------------------------------------------------------------------------------------- reading a refilled board
 
-/// A `(filled_polygon ..)` of a zone, as the file has it.
+/// A `(filled_polygon ..)` of a zone, as the file has it; one with no points stands for a zone the file says is filled (`(fill yes ..)`) with nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScannedFill {
     /// The `(uuid ..)` of the zone it is in.
@@ -288,7 +288,11 @@ pub fn entries_by_zone(design: &Design, scanned: Vec<ScannedFill>, ids: &HashMap
     for f in scanned {
         let Some(id) = ids.get(&f.zone) else { continue };
         let Some(zone) = zones.get(id.as_str()) else { continue };
-        out.entry(id.clone()).or_insert_with(|| ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::new() }).layers.entry(f.layer).or_default().push(KicadRing { island: f.island, pts: f.pts });
+        let rings = out.entry(id.clone()).or_insert_with(|| ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::new() }).layers.entry(f.layer).or_default();
+        // (no points: a zone filled with nothing, which has a fill all the same)
+        if !f.pts.is_empty() {
+            rings.push(KicadRing { island: f.island, pts: f.pts });
+        }
     }
     out
 }
@@ -498,6 +502,9 @@ impl<'a> Cursor<'a> {
         let mut uuid = String::new();
         let mut outline: Vec<[i64; 2]> = Vec::new();
         let first = out.len();
+        // `(fill yes ..)` and the zone's first layer: a zone the file says is filled but that has no `(filled_polygon ..)` is filled with nothing (`ZONE::IsFilled`).
+        let mut filled = false;
+        let mut layer = String::new();
         loop {
             self.skip_ws();
             match self.s.get(self.i) {
@@ -521,6 +528,14 @@ impl<'a> Cursor<'a> {
                                 out.push(f);
                             }
                         }
+                        "fill" => {
+                            filled = self.atom() == Some("yes");
+                            self.skip_list();
+                        }
+                        "layer" | "layers" if layer.is_empty() => {
+                            layer = self.atom().unwrap_or("").to_string();
+                            self.skip_list();
+                        }
                         // The outline (the first `(polygon (pts ..))`): what names a zone written without a uuid.
                         "polygon" if outline.is_empty() => {
                             outline = self.read_polygon();
@@ -532,6 +547,9 @@ impl<'a> Cursor<'a> {
                     self.atom();
                 }
             }
+        }
+        if filled && out.len() == first && !layer.is_empty() {
+            out.push(ScannedFill { zone: String::new(), layer, island: false, pts: Vec::new() });
         }
         // A teardrop has no uuid in the file (`format( const ZONE* )`: `if( !aZone->IsTeardropArea() ) KICAD_FORMAT::FormatUuid( m_out, aZone->m_Uuid )`): its fills are
         // filed under its layer and outline instead ([`outline_key`]).

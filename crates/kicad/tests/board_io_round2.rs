@@ -353,3 +353,22 @@ fn a_footprint_with_no_reference_keeps_an_empty_one() {
     let value = props.iter().find(|p| p.starts_with("(property \"Value\"")).unwrap();
     assert!(value.starts_with(r#"(property "Value" "" (at 0 0 0) (layer "F.Fab")"#), "{value}");
 }
+
+/// F8: a zone the file says is filled with nothing (`(fill yes ..)`, no `(filled_polygon ..)`) is filled all the same, and comes back so with the fills the import keeps.
+#[test]
+fn a_zone_filled_with_nothing_stays_filled() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "77777777-7777-7777-7777-777777777777") (hatch edge 0.5)
+  (connect_pads (clearance 0.5)) (min_thickness 0.25) (filled_areas_thickness no)
+  (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125))))"#,
+    );
+    let (mut design, model, notes) = import_kicad_pcb(&text).expect("parses");
+    design.assign_missing_ids();
+    let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
+    assert_eq!(entries.len(), 1, "{:?}", notes.zone_fills);
+    let fills = eda_kicad::zone_fills::KicadFills::new("import".into(), String::new(), 0, entries);
+    let out = eda_kicad::export_kicad_pcb_with(&design, &model, &ExportMeta { date: "2026-01-01", title: "round2" }, Some(&fills)).expect("export");
+    let zones = blocks(&out, "zone");
+    assert!(zones[0].contains("(fill yes (thermal_gap") && !zones[0].contains("filled_polygon"), "{}", zones[0]);
+}
