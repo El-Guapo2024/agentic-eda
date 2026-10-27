@@ -163,6 +163,8 @@ pub fn pending_footprint_changes(design: &eda_model::ir::Design, model: &Constra
 /// ([`eda_model::fp_compare::footprint_differences`]).
 #[derive(Debug, Clone)]
 pub struct BoardFootprint {
+    /// The reference the part goes by (`FOOTPRINT::GetReference`: the report's "Segment of R1 on F.SilkS differs.").
+    pub reference: String,
     /// The pads with the edits laid on, the graphics, the courtyard.
     pub footprint: Footprint,
     pub attrs: FootprintAttrs,
@@ -172,7 +174,7 @@ pub struct BoardFootprint {
 
 impl BoardFootprint {
     pub fn facts(&self) -> InstanceFacts<'_> {
-        InstanceFacts { footprint: &self.footprint, attrs: self.attrs, overrides: self.overrides.clone(), pad_overrides: self.pad_overrides.clone() }
+        InstanceFacts { footprint: &self.footprint, reference: &self.reference, attrs: self.attrs, overrides: self.overrides.clone(), pad_overrides: self.pad_overrides.clone() }
     }
 }
 
@@ -201,22 +203,26 @@ pub fn board_footprint(design: &eda_model::ir::Design, model: &ConstraintModel, 
     for (i, pad) in footprint.pads.iter().enumerate() {
         let facts = design.pad_zone_facts(reference, &name, i, n, &pad.number);
         let pad_edit = edit.and_then(|e| e.pad(&pad.number, footprint.pads[..i].iter().filter(|p| p.number == pad.number).count() as u32 + 1));
+        // The pad's own file facts (`PadMaskInfo`), when the board was read from one and the counts still agree.
+        let file_pad = extra.filter(|e| e.pads.len() == n).map(|e| &e.pads[i]);
         let o = PadOverrides {
             number: pad.number.clone(),
             clearance: facts.pad_clearance,
-            solder_mask_margin: pad_edit.and_then(|e| e.solder_mask_margin).or_else(|| extra.filter(|e| e.pads.len() == n).and_then(|e| e.pads[i].solder_mask_margin)),
+            solder_mask_margin: pad_edit.and_then(|e| e.solder_mask_margin).or_else(|| file_pad.and_then(|p| p.solder_mask_margin)),
             solder_paste_margin: pad_edit.and_then(|e| e.solder_paste_margin),
             solder_paste_margin_ratio: pad_edit.and_then(|e| e.solder_paste_margin_ratio),
             zone_connection: facts.connection,
             thermal_gap: facts.thermal_gap,
             thermal_spoke_width: facts.thermal_spoke_width,
             thermal_spoke_angle_mdeg: facts.thermal_spoke_angle_mdeg,
+            pad_to_die_length: file_pad.and_then(|p| eda_model::lib_keep::kept_mm(&p.tokens, "die_length")),
+            fabrication_property: file_pad.and_then(|p| eda_model::lib_keep::kept_atom(&p.tokens, "property")).filter(|p| p != "pad_prop_none"),
         };
         if o != (PadOverrides { number: pad.number.clone(), ..Default::default() }) {
             pad_overrides.push(o);
         }
     }
-    Some(BoardFootprint { footprint, attrs, overrides, pad_overrides })
+    Some(BoardFootprint { reference: reference.to_string(), footprint, attrs, overrides, pad_overrides })
 }
 
 impl Board<'_> {

@@ -134,6 +134,15 @@ pub fn kept_mm(tokens: &[String], tag: &str) -> Option<Nm> {
     kept_number(tokens, tag).map(Nm::from_mm)
 }
 
+/// The word of a kept `(tag word)` token, one that is not a number (`(property pad_prop_heatsink)`).
+pub fn kept_atom(tokens: &[String], tag: &str) -> Option<String> {
+    let head = format!("({tag} ");
+    tokens.iter().find_map(|t| {
+        let word = t.strip_prefix(&head)?.strip_suffix(')')?.trim();
+        (!word.is_empty() && !word.contains(' ')).then(|| word.to_string())
+    })
+}
+
 /// See the module doc: a library pad's.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

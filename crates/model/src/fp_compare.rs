@@ -42,6 +42,10 @@ pub struct PadOverrides {
     pub thermal_spoke_width: Option<Nm>,
     /// `GetThermalSpokeAngle` as the file has it; `None` is the shape's default (see [`default_spoke_angle`]).
     pub thermal_spoke_angle_mdeg: Option<Millideg>,
+    /// `GetPadToDieLength` (`(die_length ..)`, an integer number of nanometres).
+    pub pad_to_die_length: Option<Nm>,
+    /// `GetProperty` (`(property pad_prop_heatsink)`), the Pad Properties dialog's "Fabrication property".
+    pub fabrication_property: Option<String>,
 }
 
 /// What the library's copy sets on itself and its pads (`aLibFP`): the values the board's overrides are compared with. The library's margins of
@@ -76,6 +80,8 @@ impl LibraryFacts {
                 thermal_gap: p.thermal_gap_override,
                 thermal_spoke_width: p.thermal_spoke_width_override,
                 thermal_spoke_angle_mdeg: p.thermal_spoke_angle_mdeg,
+                pad_to_die_length: crate::lib_keep::kept_mm(&p.kicad.tokens, "die_length"),
+                fabrication_property: p.kicad.property.clone().filter(|p| p != "pad_prop_none"),
             })
             .collect();
         LibraryFacts { overrides, pad_overrides }
@@ -87,6 +93,8 @@ impl LibraryFacts {
 pub struct InstanceFacts<'a> {
     /// The footprint as the board has it: the pads with their edits laid on, the graphics, the courtyard.
     pub footprint: &'a Footprint,
+    /// The reference the board's footprint goes by (`FOOTPRINT::GetReference`): `PCB_SHAPE::GetItemDescription`'s "of R1".
+    pub reference: &'a str,
     /// The attributes in effect (`FOOTPRINT::GetAttributes`).
     pub attrs: FootprintAttrs,
     pub overrides: FootprintOverrides,
@@ -129,9 +137,10 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
+/// `EDA_SHAPE::getFriendlyName`: what `PCB_SHAPE::GetItemDescription` opens a graphic's line with (KiCad says "Segment", not "Line").
 fn kind_name(shape: &Shape) -> &'static str {
     match shape {
-        Shape::Segment { .. } => "Line",
+        Shape::Segment { .. } => "Segment",
         Shape::Arc { .. } => "Arc",
         Shape::Rect { .. } => "Rectangle",
         Shape::Circle { .. } => "Circle",
@@ -194,7 +203,9 @@ fn shape_differs(a: &FpShape, b: &FpShape) -> bool {
     if kind_rank(&a.shape) != kind_rank(&b.shape) || a.layer() != b.layer() || a.shape.is_filled() != b.shape.is_filled() || a.hatch != b.hatch {
         return true;
     }
-    if is_copper(a.layer()) && a.shape.stroke_width() != b.shape.stroke_width() {
+    // `TEST( curr_shape.GetStroke(), ref_shape.GetStroke(), "" )` on copper: the width, the line style and the colour (`STROKE_PARAMS::operator!=`).
+    // The colour is not kept (`FpShape` has no field for it); the other two are.
+    if is_copper(a.layer()) && (a.shape.stroke_width() != b.shape.stroke_width() || a.style != b.style) {
         return true;
     }
     match (&a.shape, &b.shape) {
@@ -213,8 +224,14 @@ fn shape_differs(a: &FpShape, b: &FpShape) -> bool {
     }
 }
 
-fn describe(s: &FpShape) -> String {
-    format!("{} on {}", kind_name(&s.shape), s.layer())
+/// `PCB_SHAPE::GetItemDescription` inside a board footprint: `"%s of %s on %s"` (the friendly name, the footprint's reference, the layer), and on copper
+/// `"%s %s of %s on %s"` with the net -- a footprint's graphic is on none, so `"[<no net>]"` (`BOARD_CONNECTED_ITEM::GetNetnameMsg`).
+fn describe(s: &FpShape, reference: &str) -> String {
+    if is_copper(s.layer()) {
+        format!("{} [<no net>] of {} on {}", kind_name(&s.shape), reference, s.layer())
+    } else {
+        format!("{} of {} on {}", kind_name(&s.shape), reference, s.layer())
+    }
 }
 
 fn shape_rank(shape: PadShape) -> u8 {
@@ -256,9 +273,15 @@ fn stack_roles(a: &Pad) -> Vec<String> {
     roles
 }
 
-/// `padNeedsUpdate` with a reporter: the lines for the pad `a` (the board's) against `lib` (the library's).
-fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
+/// `padNeedsUpdate` with a reporter: the lines for the pad `a` (the board's) against `lib` (the library's), with the board's overrides (`o`) against the
+/// library pad's own values (`l`) where KiCad has them: after the drill, before the primitives.
+fn pad_lines(a: &Pad, lib: &Pad, o: &PadOverrides, l: &PadOverrides, out: &mut Vec<String>) {
     let name = format!("Pad {}", a.number);
+    // `TEST( a->GetPadToDieLength(), bLib->GetPadToDieLength(), .. )`. The engine footprint has no field for it, so the board's value is the file's
+    // kept `(die_length ..)`; a footprint placed here has none, and then nothing is claimed either way.
+    if o.pad_to_die_length.is_some() && o.pad_to_die_length != l.pad_to_die_length {
+        out.push(format!("{name} pad to die length differs."));
+    }
     if pt_differs(a.at, lib.at) {
         out.push(format!("{name} position differs."));
     }
@@ -269,6 +292,10 @@ fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
     }
     if a.kind != lib.kind {
         out.push(format!("{name} pad type differs."));
+    }
+    // `TEST( a->GetProperty(), bLib->GetProperty(), .. )`, the fabricated property from the files' `(property ..)`, when the board has one.
+    if o.fabrication_property.is_some() && o.fabrication_property != l.fabrication_property {
+        out.push(format!("{name} fabrication property differs."));
     }
     if a.rot != lib.rot {
         out.push(format!("{name} orientation differs."));
@@ -309,10 +336,11 @@ fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
     if a.drill != lib.drill || a.drill_slot != lib.drill_slot {
         out.push(format!("{name} drill size differs."));
     }
-    for role in &roles {
-        if a.shape_for_role(role).custom != lib.shape_for_role(role).custom {
-            out.push(format!("{name} shape primitives differ on layer {}.", layer_name(role)));
-        }
+    // "So we just do it when we have a reporter": `padHasOverrides` runs here, between the drill and the primitives.
+    pad_override_lines(a, lib, o, l, out);
+    // One line, for the first differing layer (`firstDifferingLayer`), not one per layer.
+    if let Some(role) = roles.iter().find(|role| a.shape_for_role(role).custom != lib.shape_for_role(role).custom) {
+        out.push(format!("{name} shape primitives differ on layer {}.", layer_name(role)));
     }
 }
 
@@ -422,9 +450,17 @@ pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint, libr
         out.push("Zone connection overridden.".to_string());
     }
 
-    // graphics (and the courtyard, which KiCad keeps among them)
+    // graphics (and the courtyard, which KiCad keeps among them: `GraphicalItems()` filtered to `PCB_SHAPE_T`)
     let mut mine: Vec<&FpShape> = board.art.shapes.iter().collect();
     let mut theirs: Vec<&FpShape> = library.art.shapes.iter().collect();
+    // A footprint read from a library file keeps its courtyard's own graphics (`FpArt::courtyard`), and KiCad compares them among the other graphics,
+    // saying "Segment of U1 on F.CrtYd differs." or "Graphic item count differs.". When either side has only the derived outlines (`courtyard_of`),
+    // those stand in below.
+    let courtyard_graphics = !board.art.courtyard.is_empty() && !library.art.courtyard.is_empty();
+    if courtyard_graphics {
+        mine.extend(board.art.courtyard.iter());
+        theirs.extend(library.art.courtyard.iter());
+    }
     mine.sort_by_key(|s| shape_key(s));
     theirs.sort_by_key(|s| shape_key(s));
     if mine.len() != theirs.len() {
@@ -432,15 +468,17 @@ pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint, libr
     } else {
         for (m, t) in mine.iter().zip(&theirs) {
             if shape_differs(m, t) {
-                out.push(format!("{} differs.", describe(m)));
+                out.push(format!("{} differs.", describe(m, instance.reference)));
             }
         }
     }
-    let (mc, lc) = (courtyard_of(board), courtyard_of(library));
-    if mc.len() != lc.len() {
-        out.push("Courtyard differs.".to_string());
-    } else if !mc.iter().all(|m| lc.iter().any(|l| same_outline(m, l))) {
-        out.push("Courtyard differs.".to_string());
+    if !courtyard_graphics {
+        let (mc, lc) = (courtyard_of(board), courtyard_of(library));
+        if mc.len() != lc.len() {
+            out.push("Courtyard differs.".to_string());
+        } else if !mc.iter().all(|m| lc.iter().any(|l| same_outline(m, l))) {
+            out.push("Courtyard differs.".to_string());
+        }
     }
 
     // pads
@@ -452,12 +490,11 @@ pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint, libr
         out.push("Pad count differs.".to_string());
     } else {
         for (m, t) in mine.iter().zip(&theirs) {
-            pad_lines(m, t, &mut out);
             // with a reporter the board's overrides on the pad are told too, against the library pad's own values
             let none = PadOverrides::default();
             let o = instance.pad_overrides.iter().find(|o| o.number == m.number).unwrap_or(&none);
             let l = library_facts.pad_overrides.iter().find(|o| o.number == t.number).unwrap_or(&none);
-            pad_override_lines(m, t, o, l, &mut out);
+            pad_lines(m, t, o, l, &mut out);
         }
     }
     // the 3D models are not part of the test (`FootprintNeedsUpdate` leaves them to "Update 3D models"), but a board that has none of the library's does not match it
@@ -488,7 +525,7 @@ mod tests {
     }
 
     fn facts(f: &Footprint) -> InstanceFacts<'_> {
-        InstanceFacts { footprint: f, attrs: FootprintAttrs::derived(f, false, false), overrides: Default::default(), pad_overrides: vec![] }
+        InstanceFacts { footprint: f, reference: "R1", attrs: FootprintAttrs::derived(f, false, false), overrides: Default::default(), pad_overrides: vec![] }
     }
 
     #[test]
@@ -542,10 +579,14 @@ mod tests {
     #[test]
     fn the_lines_follow_kicads_order_and_wording() {
         let lib = fp(vec![pad("1", Nm::new(-1_000_000), Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO)], vec![line("F.SilkS", (Nm::new(-500_000), Nm::new(-700_000)), (Nm::new(500_000), Nm::new(-700_000)))]);
+        let mut lib = lib;
+        // A library footprint read from a file carries its courtyard's own graphics, and `FootprintNeedsUpdate` compares them among the other graphics.
+        lib.art.courtyard.push(line("F.CrtYd", (Nm::new(-900_000), Nm::new(-600_000)), (Nm::new(900_000), Nm::new(-600_000))));
         let mut board = lib.clone();
         board.pads[1].size = (Nm::new(1_100_000), Nm::new(900_000));
         board.pads[0].at = (Nm::new(-1_200_000), Nm::ZERO);
         board.art.shapes[0] = line("F.SilkS", (Nm::new(-500_000), Nm::new(-700_000)), (Nm::new(600_000), Nm::new(-700_000)));
+        board.art.courtyard[0] = line("F.CrtYd", (Nm::new(-1_000_000), Nm::new(-600_000)), (Nm::new(1_000_000), Nm::new(-600_000)));
         let mut f = facts(&board);
         f.attrs.dnp = true;
         f.overrides.clearance = Some(Nm::new(250_000));
@@ -556,7 +597,9 @@ mod tests {
             [
                 "'Do not populate' settings differ.",
                 "Pad clearance overridden.",
-                "Line on F.SilkS differs.",
+                // `PCB_SHAPE::GetItemDescription`: `getFriendlyName` ("Segment"), the footprint's reference and the layer.
+                "Segment of R1 on F.CrtYd differs.",
+                "Segment of R1 on F.SilkS differs.",
                 "Pad 1 position differs.",
                 "Pad 2 size differs on layer F.Cu.",
                 "Pad 2 has clearance override.",
@@ -593,17 +636,21 @@ mod tests {
         board.art.shapes = vec![square(&[(Nm::new(10_000), Nm::new(10_000)), (Nm::ZERO, Nm::new(10_000)), (Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::ZERO)]), rect((Nm::new(10_000), Nm::new(10_000)), (Nm::ZERO, Nm::ZERO))];
         assert!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()).is_empty());
         board.art.shapes[0] = square(&[(Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::ZERO), (Nm::new(10_000), Nm::new(11_000)), (Nm::ZERO, Nm::new(10_000))]);
-        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Polygon on F.SilkS differs."]);
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Polygon of R1 on F.SilkS differs."]);
     }
 
     #[test]
-    fn a_stroke_only_counts_on_copper() {
+    fn a_stroke_only_counts_on_copper_and_it_is_the_whole_stroke() {
         let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![line("F.SilkS", (Nm::ZERO, Nm::ZERO), (Nm::new(1000), Nm::new(1000))), line("F.Cu", (Nm::ZERO, Nm::ZERO), (Nm::new(5000), Nm::new(5000)))]);
         let mut board = lib.clone();
         board.art.shapes[0].shape.set_stroke_width(Nm::new(300_000));
         assert!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()).is_empty(), "a silkscreen line may be thicker");
         board.art.shapes[1].shape.set_stroke_width(Nm::new(300_000));
-        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Line on F.Cu differs."]);
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Segment [<no net>] of R1 on F.Cu differs."]);
+        // `TEST( curr_shape.GetStroke(), ref_shape.GetStroke(), "" )`: the width, the line style and the colour, not the width only.
+        board.art.shapes[1].shape.set_stroke_width(Nm::new(5000));
+        board.art.shapes[1].style = crate::fp_art::LineStyle::Dash;
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Segment [<no net>] of R1 on F.Cu differs."]);
     }
 
     #[test]
@@ -623,5 +670,42 @@ mod tests {
         let mut board = lib.clone();
         board.courtyard = Some((Nm::new(1_800_000), Nm::new(800_000)));
         assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Courtyard differs."]);
+    }
+
+    /// `padNeedsUpdate`'s first check (`GetPadToDieLength`) and `GetProperty` ("%s fabrication property differs."). The engine `Pad` has no field for
+    /// either, so both come from the files' kept `(die_length ..)` and `(property ..)` tokens, and the board's is told only when it has one: a footprint
+    /// placed from a library has no such facts, and the library's own values must not be reported.
+    #[test]
+    fn a_pads_pad_to_die_length_and_fabrication_property_are_compared() {
+        let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
+        let mut board = facts(&lib);
+        board.pad_overrides.push(PadOverrides {
+            number: "1".into(),
+            pad_to_die_length: Some(Nm::new(300_000)),
+            fabrication_property: Some("pad_prop_heatsink".into()),
+            ..Default::default()
+        });
+        assert_eq!(footprint_differences(&board, &lib, &LibraryFacts::default()), ["Pad 1 pad to die length differs.", "Pad 1 fabrication property differs."]);
+        // the library's values are the board's: nothing differs
+        let library = LibraryFacts { pad_overrides: vec![board.pad_overrides[0].clone()], ..Default::default() };
+        assert!(footprint_differences(&board, &lib, &library).is_empty());
+    }
+
+    /// `primitivesDiffer` is told once, for `firstDifferingLayer`, not once per layer of a padstack whose layers share the pad's primitives.
+    #[test]
+    fn the_primitives_line_names_the_first_differing_layer_only() {
+        use crate::footprint::{PadCustom, PadPrimitive};
+        use crate::padstack::{PadStack, PadStackMode};
+        let primitive = |end: Nm| PadPrimitive {
+            shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: Nm::new(100_000), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: end, y: Nm::ZERO } },
+            proxy: false,
+        };
+        let mut lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
+        lib.pads[0].shape = PadShape::Custom;
+        lib.pads[0].ext.custom = Some(PadCustom { primitives: vec![primitive(Nm::new(100_000))], ..Default::default() });
+        lib.pads[0].ext.stack = PadStack { mode: PadStackMode::FrontInnerBack, ..Default::default() };
+        let mut board = lib.clone();
+        board.pads[0].ext.custom.as_mut().unwrap().primitives = vec![primitive(Nm::new(200_000))];
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Pad 1 shape primitives differ on layer F.Cu."]);
     }
 }
