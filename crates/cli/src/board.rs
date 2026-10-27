@@ -493,6 +493,19 @@ fn fold_board_parts(design: &eda_model::ir::Design, model: &mut ConstraintModel)
     }
 }
 
+/// The alternate function each placed symbol picked for a pin (`SchExtras::pin_alternates`), by "REF.NUM" of the symbol's own reference.
+fn pin_alternates_by_pin(design: &eda_model::ir::Design) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for sec in design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
+        for sym in &sec.symbols {
+            for (number, alt) in sec.extras.pin_alternates.get(&eda_model::ir::field_key(&sym.id, sym.unit)).into_iter().flatten() {
+                out.insert(format!("{}.{number}", sym.id), alt.clone());
+            }
+        }
+    }
+    out
+}
+
 /// "REF.PIN" -> the pin's name, for the names KiCad gives a net nothing drives (`Net-(U1-PA0)`): the part's own pin names.
 fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String, String> {
     let mut names = std::collections::BTreeMap::new();
@@ -508,7 +521,7 @@ fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String
 
 /// [`trace_design`] with what KiCad names the nets by: the parts' pin names, the design's bus aliases, and which power symbols are global power pins.
 pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &ConstraintModel) -> Vec<eda_engine::nets::TracedNet> {
-    let pin_names = shown_pin_names(model);
+    let mut pin_names = shown_pin_names(model);
     // a bus's members: its vector, its group, the design's aliases (`SCH_CONNECTION::ConfigureFromLabel`)
     let aliases = design.bus_aliases.clone();
     let members = move |name: &str| eda_kicad::expand_bus_members(name, &aliases);
@@ -539,8 +552,12 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
             let unit = eda_model::sheet_list::unit_under(sec, sym, &e.path);
             for p in lib.pins.iter().filter(|p| p.unit == unit || p.unit == 0) {
                 // each copy of a pin common to every unit is named with its own unit (`GetRef( &aPath, true )`, r3 A3-H1)
-                let key = pin_key(sec, idx, sym, unit, &p.number, p.unit == 0);
+                let key = pin_key(sec, idx, sym, unit, &p.number, number_in_units(&lib, &p.number, p.unit));
                 let key = key.replacen(&format!("{}.", sym.id), &format!("{reference}."), 1);
+                // the name of this unit's pin of the number: another unit's pin of the number may have another (r5 A5-H1)
+                if !p.name.is_empty() {
+                    pin_names.insert(key.clone(), p.name.clone());
+                }
                 pin_units.entry(key).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(unit)));
                 if p.unit == 0 {
                     common_pins.insert(format!("{reference}.{}", p.number));
@@ -548,15 +565,19 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
             }
         }
     }
+    // the alternate functions the symbols picked for their pins, by "REF.NUM" (`SchExtras::pin_alternates`): a pin is of its alternate's type
+    // (`SCH_PIN::GetType`), and `GetDefaultNetName` names a pin `unconnected-(..)` by that type (`fact.noConnect`) (r5 D5-H3)
+    let alternates = pin_alternates_by_pin(design);
     let nc_pins: std::collections::BTreeSet<String> = model
         .parts
         .iter()
         .flat_map(|part| {
             let lib = part.symbol.as_deref().and_then(|id| resolve_lib_symbol(id, model));
+            let alternates = &alternates;
             part.pins
                 .iter()
-                .filter(move |pin| match lib.as_ref().and_then(|l| l.pin_by_number(&pin.number)) {
-                    Some(lp) => lp.electrical_type == "no_connect",
+                .filter(move |pin| match lib.as_ref().and_then(|l| l.pin_by_number(&pin.number).map(|lp| (l, lp))) {
+                    Some((l, lp)) => l.placed_pin_type(lp, alternates.get(&format!("{}.{}", part.reference, pin.number)).map(String::as_str)) == "no_connect",
                     None => pin.kind == eda_model::PinKind::Nc,
                 })
                 .map(|pin| format!("{}.{}", part.reference, pin.number))
@@ -606,12 +627,14 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
                     for (number, at) in pins {
                         let k = seen.entry(number.clone()).or_insert(0);
                         let lib_pin = resolved.as_ref().and_then(|r| r.nth_pin_by_number(&number, *k));
-                        let common = lib_pin.is_some_and(|p| p.unit == 0 && r_units(resolved.as_ref()) > 1);
+                        let common = lib_pin.zip(resolved.as_ref()).is_some_and(|(p, r)| number_in_units(r, &number, p.unit));
                         let key = pin_key(sch, idx, sym, unit, &number, common);
                         // a second pin of the number is a node of its own (r4 A4-H3)
                         let key = if *k == 0 { key } else { eda_engine::nets::pin_twin_key(&key, *k) };
                         *k += 1;
-                        placed.push((key.clone(), number.clone(), lib_pin.is_some_and(|p| p.electrical_type == "no_connect")));
+                        // of the alternate's type when the symbol picked one (`SCH_PIN::GetType`, r5 D5-H3)
+                        let alt = sch.extras.pin_alternate(&eda_model::ir::field_key(&sym.id, sym.unit), &number);
+                        placed.push((key.clone(), number.clone(), lib_pin.zip(resolved.as_ref()).is_some_and(|(p, r)| r.placed_pin_type(p, alt) == "no_connect")));
                         pin_world.insert(key, at);
                     }
                     if let Some(lib) = resolved.as_ref() {
@@ -633,7 +656,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == unit) {
                 let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
                 placed.push((p.number.clone(), Point { x: sym.at.x + eda_kicad::mm_to_nm(world.x), y: sym.at.y + eda_kicad::mm_to_nm(world.y) }));
-                no_connect.push(p.electrical_type == "no_connect");
+                // of the alternate's type when the symbol picked one (`SCH_PIN::GetType`, r5 D5-H3)
+                no_connect.push(lib.placed_pin_type(p, sch.extras.pin_alternate(&eda_model::ir::field_key(&sym.id, sym.unit), &p.number)) == "no_connect");
             }
             // the places Swap Pins traded (of the symbol's own unit)
             if let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)).filter(|_| unit == sym.unit) {
@@ -644,7 +668,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
             let mut keyed: Vec<(String, String, bool)> = Vec::new();
             for ((number, at), nc_pin) in placed.into_iter().zip(no_connect) {
-                let common = lib.unit_count > 1 && lib.pins.iter().any(|p| p.number == number && p.unit == 0);
+                let common = lib.pins.iter().any(|p| p.number == number && (p.unit == 0 || p.unit == unit) && number_in_units(&lib, &number, p.unit));
                 let key = pin_key(sch, idx, sym, unit, &number, common);
                 let k = seen.entry(number.clone()).or_insert(0);
                 let key = if *k == 0 { key } else { eda_engine::nets::pin_twin_key(&key, *k) };
@@ -669,9 +693,11 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             }
             let unit = eda_model::sheet_list::unit_under(sch, sym, path);
             let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
-            for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == unit) && p.hidden && p.electrical_type == "power_in") {
+            // a power input by the alternate the symbol picked, if any (`IsGlobalPower`: `GetType() != PT_POWER_IN`, r5 D5-H3)
+            let key = eda_model::ir::field_key(&sym.id, sym.unit);
+            for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == unit) && p.hidden && lib.placed_pin_type(p, sch.extras.pin_alternate(&key, &p.number)) == "power_in") {
                 // escaped as a net name by the tracer (`GetDefaultNetName`: `EscapeString( pin name, CTX_NETNAME )`, `Driver::new`)
-                out.insert(pin_key(sch, idx, sym, unit, &p.number, p.unit == 0 && lib.unit_count > 1), p.name.clone());
+                out.insert(pin_key(sch, idx, sym, unit, &p.number, number_in_units(&lib, &p.number, p.unit)), p.name.clone());
             }
         }
         out
@@ -791,10 +817,14 @@ fn pin_key(sch: &eda_model::ir::SchematicSection, idx: usize, sym: &eda_model::i
     }
 }
 
-/// The number of units of a resolved library symbol (1 without one).
-fn r_units(resolved: Option<&eda_model::symbol::LibSymbol>) -> u32 {
-    resolved.map_or(1, |r| r.unit_count)
+/// Whether a pin `number` of unit `unit` (0: common to every unit) is drawn by more than one unit of a symbol of several units: a pin common to every
+/// unit (r3 A3-H1), or a number another unit has a pin of too (r5 A5-H1). Each placed unit's pin is then a contact of its own (KiCad 25ec2335
+/// `conn_facts.cpp`: an item per pin of each placed `SCH_SYMBOL`, `fact.owner = symbol.m_Uuid`), keyed apart by [`pin_key`] when another unit of the
+/// reference is placed before it on the screen.
+fn number_in_units(lib: &eda_model::symbol::LibSymbol, number: &str, unit: u32) -> bool {
+    lib.unit_count > 1 && (unit == 0 || lib.pins.iter().any(|q| q.number == number && q.unit != 0 && q.unit != unit))
 }
+
 
 /// `sym` as the unit `unit` a sheet path draws it as (r2 B-M4): a symbol placed by the corner of its box (`eda_engine::placed`) keeps its library origin,
 /// where the writer bakes it from the box of its own unit, so its corner moves by the difference of the two units' boxes (`sch_sheets::place_by_box_corner`).

@@ -225,6 +225,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         user_fields: Vec<RawUserField>,
         /// The places Swap Pins traded, read from the symbol's own copy of its library symbol (`(lib_name ..)`): pin number -> the pin whose place it has (`SchExtras::pin_swaps`).
         swaps: BTreeMap<String, String>,
+        /// The alternate functions picked for its pins, `(pin "3" (uuid ..) (alternate "3.out"))` (`SchExtras::pin_alternates`, r5 D5-H3).
+        alternates: BTreeMap<String, String>,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
     // each power symbol's `(uuid ..)`, parallel to `power_symbols`
@@ -333,7 +335,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             }
             overrides.push(o);
         }
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps, exclude_from_pos_files });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps, exclude_from_pos_files, alternates: placed_pin_alternates(item) });
     }
 
     if opts.unique_references {
@@ -388,6 +390,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut pos_files_excluded: Vec<String> = Vec::new();
     // the places Swap Pins traded, by `field_key` (`SchExtras::pin_swaps`)
     let mut pin_swap_entries: Vec<(String, BTreeMap<String, String>)> = Vec::new();
+    // the alternate functions picked for pins, by `field_key` (`SchExtras::pin_alternates`)
+    let mut pin_alternate_entries: Vec<(String, BTreeMap<String, String>)> = Vec::new();
     // the user-defined fields of the symbols (`SchematicSection::user_fields`, by reference) and where each unit draws them (`field_layout`, by `field_key`)
     let mut user_fields_read: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut field_layout_read: BTreeMap<String, Vec<eda_model::ir::FieldPlacement>> = BTreeMap::new();
@@ -435,7 +439,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                         if nc_points.contains(&at_pin) {
                             eda_model::PinKind::Nc
                         } else {
-                            pin_kind_from_electrical_type(&p.electrical_type, &p.name)
+                            // of the alternate's type when the symbol picked one (`SCH_PIN::GetType`, r5 D5-H3)
+                            pin_kind_from_electrical_type(resolved.placed_pin_type(p, owner.alternates.get(&p.number).map(String::as_str)), &p.name)
                         }
                     }
                     None => pin_kind_from_electrical_type(&p.electrical_type, &p.name),
@@ -460,6 +465,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             let r = &raw[i];
             if r.body_style > 1 && lib_table.get(r.lib_id.as_str()).is_some_and(|l| l.has_alternate_body()) {
                 body_style_entries.push((eda_model::ir::field_key(&reference, r.unit), r.body_style.min(2)));
+            }
+            if !r.alternates.is_empty() {
+                pin_alternate_entries.push((eda_model::ir::field_key(&reference, r.unit), r.alternates.clone()));
             }
             if !r.swaps.is_empty() {
                 pin_swap_entries.push((eda_model::ir::field_key(&reference, r.unit), r.swaps.clone()));
@@ -779,6 +787,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         sch.extras.body_styles.extend(body_style_entries);
         sch.extras.excluded_from_pos_files.extend(pos_files_excluded);
         sch.extras.pin_swaps.extend(pin_swap_entries);
+        sch.extras.pin_alternates.extend(pin_alternate_entries);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
         // the local power symbols of the file's library cache (`(power local)`, `parseSymbol`'s `T_power`)
@@ -1235,6 +1244,19 @@ pub(crate) fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
         comments.pop();
     }
     Some(TitleBlock { title: text("title"), date: text("date"), rev: text("rev"), company: text("company"), comments, paper })
+}
+
+/// A placed symbol's `(pin "<number>" (uuid ..) (alternate "<name>"))`: the alternate function picked for each pin that has one
+/// (`SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`, `T_pin` / `T_alternate`), by number. An empty name is no alternate (`SCH_PIN::SetAlt`); one that is the
+/// pin's own name or that the library pin does not have is kept here and ignored where the pin's type is read (`LibSymbol::placed_pin_type`), as `SetAlt` does.
+fn placed_pin_alternates(item: &[Sexpr]) -> BTreeMap<String, String> {
+    sexpr::find_all(item, "pin")
+        .filter_map(|p| {
+            let number = sexpr::txt(p, 1)?;
+            let alt = sexpr::find(p, "alternate").and_then(|a| sexpr::txt(a, 1)).filter(|a| !a.is_empty())?;
+            Some((number.to_string(), alt.to_string()))
+        })
+        .collect()
 }
 
 /// The places Swap Pins traded, read from the symbol's own copy of its library symbol: `SwapPinGeometry` swaps the position, orientation and length of two `SCH_PIN`s in the

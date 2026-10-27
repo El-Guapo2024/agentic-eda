@@ -394,16 +394,6 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                         seed(p, &mut ids, &mut uf);
                     }
                 }
-                // a bus wire entry whose two ends are off every bus is a node joining both (`PROPAGATES[ENTRY][WIRE]`, `[ENTRY][ANCHOR]`); an end on a bus is
-                // `BUS_SIDE`, which joins nothing, and the entry is then only a part of what its other end touches
-                for e in &sch.bus_entries {
-                    let ends = [e.at, Point { x: e.at.x + e.size.x, y: e.at.y + e.size.y }];
-                    if ends.iter().any(|&p| touches(p, true)) {
-                        continue;
-                    }
-                    let (a, b) = (seed(ends[0], &mut ids, &mut uf), seed(ends[1], &mut ids, &mut uf));
-                    uf.union(a, b);
-                }
                 for ps in &sch.power_symbols {
                     seed(ps.at, &mut ids, &mut uf);
                 }
@@ -433,6 +423,25 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                     }
                     if w.pts.windows(2).any(|seg| on_interior(p, seg[0], seg[1])) {
                         uf.union(ids[&p], rep);
+                    }
+                }
+            }
+            // A bus wire entry whose two ends are off every bus is a node joining what is at both (`PROPAGATES[ENTRY][WIRE]`, `[ENTRY][ANCHOR]`): a wire
+            // (its end or its interior), a pin, a label, a junction, a power pin. Another entry's end is none of those: `PROPAGATES[ENTRY][ENTRY]` is
+            // false, so two entries that meet end to end with nothing else there join nothing (r5 A5-M1). An end on a bus is `BUS_SIDE`, which joins
+            // nothing, and the entry is then only a part of what its other end touches.
+            if !bus {
+                for e in &sch.bus_entries {
+                    let ends = [e.at, Point { x: e.at.x + e.size.x, y: e.at.y + e.size.y }];
+                    if ends.iter().any(|&p| touches(p, true)) {
+                        continue;
+                    }
+                    let node = uf.add();
+                    for p in ends {
+                        let there = ids.get(&p).copied().or_else(|| wires.iter().find(|w| w.pts.len() >= 2 && w.pts.windows(2).any(|seg| on_interior(p, seg[0], seg[1]))).map(|w| ids[&w.pts[0]]));
+                        if let Some(there) = there {
+                            uf.union(node, there);
+                        }
                     }
                 }
             }
@@ -879,12 +888,13 @@ fn shown_name_counts(facts: &PinFacts) -> BTreeMap<(String, String), BTreeSet<St
     }
     let mut out: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     for pin_ref in facts.names.into_iter().flat_map(|n| n.keys()) {
-        if let Some((reference, number)) = pin_ref.split_once('.') {
+        // a copy of a pin (another unit's pin of the number, r5 A5-H1) counts under its number
+        if let Some((reference, number)) = base_pin(pin_ref).split_once('.') {
             let name = facts.shown(pin_ref);
             if name.is_empty() || facts.is_nc(pin_ref) {
                 continue;
             }
-            let common = facts.common.is_some_and(|c| c.contains(pin_ref));
+            let common = facts.common.is_some_and(|c| c.contains(base_pin(pin_ref)));
             let symbols: Vec<String> = match drawn.get(reference) {
                 Some(units) if common => units.iter().cloned().collect(),
                 _ => vec![symbol_of(pin_ref, reference)],
@@ -1093,6 +1103,32 @@ mod tests {
         let nets: Vec<Net> = trace_nets_with(&mut screens, &naming).into_iter().map(|t| Net { name: t.name, pins: t.pins }).collect();
         assert_eq!(pins_of(&nets, "unconnected-(R1-Pad1)"), vec!["R1.1"], "{nets:?}");
         assert_eq!(pins_of(&nets, "unconnected-(U1-Pad1)"), vec!["U1.1"], "{nets:?}");
+    }
+
+    /// r5 A5-M1 (`conn_islands.cpp`: `PROPAGATES[ENTRY][ENTRY]` is false): two bus wire entries that meet end to end, a wire on each far end, join nothing; a
+    /// wire end at the point where they meet joins all of it.
+    #[test]
+    fn two_bus_entries_end_to_end_do_not_join() {
+        let entry = |at: Point| eda_model::ir::BusEntry { id: String::new(), at, size: p(2540, -2540) };
+        let build = |meeting_wire: bool| {
+            let mut root = section();
+            root.wires.push(wire("", &[p(0, 0), p(10000, 0)]));
+            root.wires.push(wire("", &[p(15080, -5080), p(20000, -5080)]));
+            root.bus_entries.push(entry(p(10000, 0)));
+            root.bus_entries.push(entry(p(12540, -2540)));
+            if meeting_wire {
+                root.wires.push(wire("", &[p(12540, -2540), p(12540, 5000)]));
+            }
+            root
+        };
+        let mut root = build(false);
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R3.1", p(20000, -5080))]) }];
+        let nets = trace_nets(&mut screens);
+        assert_eq!(nets.len(), 2, "{nets:?}");
+        let mut root = build(true);
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R3.1", p(20000, -5080))]) }];
+        let nets = trace_nets(&mut screens);
+        assert_eq!(pins_of(&nets, "Net-(R1-Pad1)"), vec!["R1.1", "R3.1"], "{nets:?}");
     }
 
     /// r4 A4-M2 (`conn_islands.cpp`: `PROPAGATES[ENTRY][WIRE]`; an entry end on a bus is `BUS_SIDE`): a bus wire entry between two wires joins them, one with

@@ -258,10 +258,21 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
             jumper_pin_groups.push(set);
         }
     }
+    // the pins' `(alternate "name" <type> <shape>)` (`parseSymbol`'s `T_alternate`), by number, from every unit and body style's sub-symbol (r5 D5-H3)
+    let mut pin_alternates: std::collections::BTreeMap<String, Vec<eda_model::ir::PinAlternate>> = std::collections::BTreeMap::new();
+    let pins = sexpr::find_all(node, "pin").chain(sexpr::find_all(node, "symbol").flat_map(|sub| sexpr::find_all(sub, "pin")));
+    for pin in pins {
+        let Some(number) = sexpr::find(pin, "number").and_then(|n| sexpr::txt(n, 1)) else { continue };
+        let alts = crate::symbol_import::pin_alternates(pin);
+        if !alts.is_empty() {
+            pin_alternates.entry(number.to_string()).or_insert(alts);
+        }
+    }
     eda_model::symbol::LibConnectivity {
         power_local: sexpr::find(node, "power").and_then(|p| sexpr::txt(p, 1)) == Some("local"),
         duplicate_pin_numbers_are_jumpers: sexpr::find(node, "duplicate_pin_numbers_are_jumpers").and_then(|p| sexpr::txt(p, 1)) == Some("yes"),
         jumper_pin_groups,
+        pin_alternates,
     }
 }
 
