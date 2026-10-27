@@ -300,6 +300,22 @@ fn grouping_a_locked_item_locks_the_group() {
     assert!(!drawings(&b).locked_ids.contains(&g2), "nothing locked, the group is not");
 }
 
+/// round 3 B-3: `BOARD_ITEM::IsLocked` is also the lock of the group above, so grouping items of a locked group makes a locked group.
+#[test]
+fn group_items_inside_a_locked_group_is_locked() {
+    use eda_model::ir::Group;
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    dr.groups.push(Group { id: "grp_g".into(), name: "G".into(), member_ids: ids(&["shp_seg", "txt_a", "trk_a"]), design_block: String::new() });
+    dr.locked_ids = vec!["grp_g".into()];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::Group { ids: ids(&["shp_seg", "txt_a"]) }).unwrap();
+    let g = drawings(&b).parent_group("txt_a").unwrap().id.clone();
+    assert_ne!(g, "grp_g");
+    assert!(drawings(&b).locked_ids.contains(&g), "{:?}", drawings(&b).locked_ids);
+}
+
 /// r2-pcb-edit A3: text boxes, barcodes and reference images are groupable (`BOARD_ITEM::IsGroupableType`): one drawn in an entered group joins it, and a
 /// deleted one leaves its group.
 #[test]
@@ -314,4 +330,19 @@ fn a_text_box_drawn_in_an_entered_group_joins_it_and_a_deleted_one_leaves_it() {
     assert!(members(&b, "grp_a").contains(&id), "{:?}", members(&b, "grp_a"));
     b.apply(&Cmd::PcbItem(crate::pcb_items::PcbItemCmd::DeleteTextBox { id: id.clone() })).unwrap();
     assert_eq!(members(&b, "grp_a"), ids(&["shp_seg", "txt_a"]), "the deleted box leaves the group");
+}
+
+/// round 3 B-4: KiCad 25ec2335's `IsGroupableType` takes points (and grid items and drill maps): a point drawn in an entered group joins it, a deleted one leaves it.
+#[test]
+fn deleting_a_grouped_point_leaves_its_group() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().groups = vec![group("grp_a", &["shp_seg", "txt_a"])];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let q = eda_model::pcb_items::PcbPoint::new("F.SilkS", p(mm(1.0), mm(1.0)));
+    b.apply(&Cmd::InGroup { group: "grp_a".into(), cmd: Box::new(Cmd::PcbItem(crate::pcb_items::PcbItemCmd::AddPoint { point: q })) }).unwrap();
+    let id = drawings(&b).board_items.points[0].id.clone();
+    assert!(members(&b, "grp_a").contains(&id), "{:?}", members(&b, "grp_a"));
+    b.apply(&Cmd::PcbItem(crate::pcb_items::PcbItemCmd::DeletePoint { id })).unwrap();
+    assert_eq!(members(&b, "grp_a"), ids(&["shp_seg", "txt_a"]));
 }

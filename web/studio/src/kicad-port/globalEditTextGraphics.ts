@@ -2,7 +2,8 @@
 // (pcbnew/dialogs/dialog_global_edit_text_and_graphics.cpp at 8303b2ad: `TransferDataFromWindow` walks `Drawings()` and picks the kind each scope box
 // names, `visitItem` applies the filters). The change itself is `Cmd::EditTextAndGraphics` on the ids this module returns.
 //
-//     TransferDataFromWindow   "PCB text items" -> texts, "PCB graphic items" -> shapes, "PCB dimensions" -> dimensions
+//     TransferDataFromWindow   "PCB text items" -> texts, text boxes (`PCB_TEXT_T || PCB_TEXTBOX_T`) and every table's cells (`RunOnChildren`),
+//                              "PCB graphic items" -> shapes and barcodes (`PCB_SHAPE_T || PCB_BARCODE_T`), "PCB dimensions" -> dimensions
 //     visitItem                selected items only (the item, or a group above it, selected) -> by layer (`GetLayer()`)
 //
 // What this model has of the dialog's items is the free-standing board ones; the footprint reference, value, other fields, text, graphics and
@@ -13,6 +14,7 @@
 import type { BoardState } from "../api/types";
 import { enabledOptionalLayers } from "./boardLayers";
 import { ancestors } from "./groupTree";
+import { cellItemId } from "./tables";
 
 /** The Scope box. */
 export interface TextGraphicsScope {
@@ -63,8 +65,20 @@ export function matchingTextAndGraphics(board: BoardState | null, scope: TextGra
     if (filter.layerOn && filter.layer !== "" && layer !== filter.layer) return false;
     return true;
   };
-  if (scope.graphics) for (const s of dr.shapes) if (passes(s.id, s.layer)) out.shapeIds.push(s.id);
-  if (scope.text) for (const t of dr.texts) if (passes(t.id, t.layer)) out.textIds.push(t.id);
+  if (scope.graphics) {
+    for (const s of dr.shapes) if (passes(s.id, s.layer)) out.shapeIds.push(s.id);
+    for (const b of dr.barcodes ?? []) if (passes(b.id, b.layer)) out.shapeIds.push(b.id);
+  }
+  if (scope.text) {
+    for (const t of dr.texts) if (passes(t.id, t.layer)) out.textIds.push(t.id);
+    for (const t of dr.text_boxes ?? []) if (passes(t.id, t.layer)) out.textIds.push(t.id);
+    // a cell is on its table's layer; it is selected only as itself (a cell has no group: its table has)
+    for (const tb of dr.tables ?? [])
+      for (const c of tb.cells) {
+        const id = cellItemId(tb.id, c.row, c.col);
+        if ((!filter.selectedOnly || selection.has(id)) && (!filter.layerOn || filter.layer === "" || tb.layer === filter.layer)) out.textIds.push(id);
+      }
+  }
   if (scope.dimensions) for (const d of dr.dimensions ?? []) if (passes(d.id, d.layer)) out.dimensionIds.push(d.id);
   return out;
 }

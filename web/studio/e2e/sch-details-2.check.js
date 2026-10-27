@@ -156,6 +156,27 @@
       t(back.symbols.every((s) => (s.reference ?? s.id) === s.id), "and the screen is shown once again");
     });
 
+    // ----- (a2) r2 D-C8: Duplicate of the item under the cursor, nothing selected, leaves nothing selected once the copy is dropped (`m_duplicateIsHoverSelection`)
+    await scenario("Duplicate of a hovered symbol: the copy is made and nothing is left selected (a hover selection)", async (t) => {
+      const sheet = root0.sheets[0];
+      await enterSheet(sheet.id);
+      const s0 = await sch(sheet.id);
+      const sym = s0.symbols[0];
+      if (!t(!!sym, `a symbol to hover (${sym && sym.id})`)) return leave();
+      await select([]);
+      const [hx, hy] = screenOf(sym.at[0], sym.at[1]);
+      fire("pointermove", hx, hy);
+      await sleep(600);
+      const r = await __eda.run("common.Interactive.duplicate");
+      await sleep(1500);
+      await clickAt(sym.at[0] + 40_000_000, sym.at[1]);
+      const s1 = await sch(sheet.id);
+      t(s1.symbols.length === s0.symbols.length + 1, `the hovered symbol is duplicated (${s0.symbols.length} -> ${s1.symbols.length}; ${JSON.stringify(r)})`);
+      t(__eda.state().selection.length === 0, `nothing is selected after the drop (${JSON.stringify(__eda.state().selection)})`);
+      await undo();
+      await leave();
+    });
+
     // ----- (b) a bus across sheets
     await scenario("A bus across sheets: a member's nets on the two sheets are one net; Delete of the root's bus parts them, one undo joins them again", async (t) => {
       const root = await sch("");

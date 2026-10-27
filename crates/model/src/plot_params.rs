@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::layers::{pcb_layer_id, user_layer_name, MAX_USER_LAYERS, TECH_LAYERS};
 
+/// `Rescue` (`include/layer_ids.h`).
+const RESCUE: u32 = 37;
+
 /// `PCB_LAYER_ID_COUNT` (`include/layer_ids.h`).
 const LAYER_COUNT: u32 = 128;
 
@@ -40,6 +43,8 @@ fn all_layers() -> Vec<(u32, String)> {
     names.extend(TECH_LAYERS.iter().map(|s| s.to_string()));
     names.extend((1..=MAX_USER_LAYERS).map(user_layer_name));
     let mut v: Vec<(u32, String)> = names.into_iter().filter_map(|n| pcb_layer_id(&n).map(|id| (id, n))).collect();
+    // `Rescue` (37) is no layer a board defines, but a selection read with `ParseHex` keeps its bit, and `FmtHex` writes it back.
+    v.push((RESCUE, "Rescue".into()));
     v.sort();
     v
 }
@@ -102,16 +107,25 @@ pub fn decode_layer_selection(value: &str, file_version: i64, number: bool) -> V
             parse_hex_bits(hex, LAYER_COUNT).into_iter().filter_map(|b| table.iter().find(|(id, _)| *id == b).map(|(_, n)| n.clone())).collect()
         }
     };
-    names.sort_by_key(|n| pcb_layer_id(n).unwrap_or(u32::MAX));
+    names.sort_by_key(|n| layer_number(n).unwrap_or(u32::MAX));
     names.dedup();
     names
+}
+
+/// `pcb_layer_id`, and `Rescue`.
+fn layer_number(name: &str) -> Option<u32> {
+    if name == "Rescue" {
+        Some(RESCUE)
+    } else {
+        pcb_layer_id(name)
+    }
 }
 
 /// `BASE_SET::FmtHex` of the set of `layers` (128 bits, `_` between groups of eight nibbles), with KiCad's `0x` prefix.
 pub fn encode_layer_selection(layers: &[String]) -> String {
     let mut bits = [false; LAYER_COUNT as usize];
     for l in layers {
-        if let Some(id) = pcb_layer_id(l) {
+        if let Some(id) = layer_number(l) {
             bits[id as usize] = true;
         }
     }
@@ -130,6 +144,15 @@ pub fn encode_layer_selection(layers: &[String]) -> String {
     }
     format!("0x{}", s.chars().rev().collect::<String>())
 }
+
+/// The items `PCB_PLOT_PARAMS::Format` writes after the two layer sets: the only ones a board KiCad saves keeps.
+pub const FORMAT_TOKENS: &[&str] = &[
+    "disableapertmacros", "usegerberextensions", "usegerberattributes", "usegerberadvancedattributes", "creategerberjobfile", "gerberprecision",
+    "dashed_line_dash_ratio", "dashed_line_gap_ratio", "svgprecision", "pngdpi", "pngantialias", "plotframeref", "mode", "useauxorigin",
+    "pdf_front_fp_property_popups", "pdf_back_fp_property_popups", "pdf_metadata", "pdf_single_document", "dxfpolygonmode", "dxfimperialunits",
+    "dxfusepcbnewfont", "psnegative", "psa4output", "plot_black_and_white", "sketchpadsonfab", "plotpadnumbers", "hidednponfab", "sketchdnponfab",
+    "crossoutdnponfab", "subtractmaskfromsilk", "outputformat", "mirror", "drillshape", "scaleselection", "outputdirectory",
+];
 
 impl PlotParams {
     /// `PCB_PLOT_PARAMS::PCB_PLOT_PARAMS`' `m_layerSelection`: both silkscreens, masks and pastes, the board outline, and every copper layer.
@@ -183,15 +206,73 @@ impl PlotParams {
         .to_vec()
     }
 
-    /// The board's plot settings: an imported board's own block, else `PCB_PLOT_PARAMS`' defaults.
+    /// The board's plot settings: an imported board's own block, else `PCB_PLOT_PARAMS`' defaults, read as KiCad reads them back
+    /// ([`PlotParams::normalized`]: a board imported before the legacy tokens were dropped on import comes out the same).
     pub fn of_design(design: &crate::ir::Design) -> PlotParams {
-        design.drawings.as_ref().and_then(|d| d.plot_params.clone()).unwrap_or_else(Self::kicad_default)
+        design.drawings.as_ref().and_then(|d| d.plot_params.clone()).map(PlotParams::normalized).unwrap_or_else(Self::kicad_default)
     }
 
-    /// The layers the selection names, of those the board has (its copper layers, and every non-copper layer, which a `.kicad_pcb` always defines): the
-    /// Plot dialog's checklist as `DIALOG_PLOT::init_Dialog` fills it from `GetLayerSelection()`.
+    /// One item of the block as `PCB_PLOT_PARAMS_PARSER::Parse` reads it and `PCB_PLOT_PARAMS::Format` writes it back, in its place in
+    /// the block. A legacy token `Format` no longer writes is applied and dropped, as a board KiCad saves loses it:
+    /// - `(excludeedgelayer no)` is Edge.Cuts pushed on "Plot on All Layers" (`case T_excludeedgelayer: if( !parseBool() )
+    ///   m_plotOnAllLayersSequence.push_back( Edge_Cuts )`); `yes` is nothing;
+    /// - `(viasonmask ..)` is the board's via tenting, which the board reader applies (`case T_pcbplotparams`:
+    ///   `GetLegacyPlotViaOnMaskLayer()`), so it is not kept here: written back after `(tenting ..)` it would undo the tenting on
+    ///   every read;
+    /// - `svguseinch`, `pscolor`, `plotinvisibletext`, the HPGL pen tokens and any unknown token (`default: skipCurrent()`) are read
+    ///   and dropped;
+    /// - `(gerberprecision n)` is clamped to 5..6 (`parseInt( gbrDefaultPrecision - 1, gbrDefaultPrecision )`), and 6, the default, is
+    ///   not written (`if( m_gerberPrecision != gbrDefaultPrecision )`).
+    pub fn read_item(&mut self, item: &str) {
+        let body = item.trim().trim_start_matches('(').trim_end_matches(')');
+        let mut words = body.split_whitespace();
+        let Some(tag) = words.next() else { return };
+        let value = words.next().unwrap_or("");
+        match tag {
+            "excludeedgelayer" => {
+                if matches!(value, "no" | "false") && !self.plot_on_all_layers.iter().any(|l| l == "Edge.Cuts") {
+                    self.plot_on_all_layers.push("Edge.Cuts".into());
+                }
+            }
+            "gerberprecision" => {
+                // `atoi`: a leading number, else 0.
+                let digits: String = value.chars().enumerate().take_while(|(i, c)| c.is_ascii_digit() || (*i == 0 && (*c == '-' || *c == '+'))).map(|(_, c)| c).collect();
+                let n = digits.parse::<i64>().unwrap_or(0).clamp(5, 6);
+                self.items.retain(|i| !i.starts_with("(gerberprecision"));
+                if n != 6 {
+                    self.items.push(format!("(gerberprecision {n})"));
+                }
+            }
+            t if FORMAT_TOKENS.contains(&t) => self.items.push(item.to_string()),
+            _ => {}
+        }
+    }
+
+    /// The block as KiCad reads it back: every item through [`PlotParams::read_item`], in order.
+    pub fn normalized(self) -> PlotParams {
+        let mut p = PlotParams { layer_selection: self.layer_selection, plot_on_all_layers: self.plot_on_all_layers, items: Vec::new() };
+        for item in &self.items {
+            p.read_item(item);
+        }
+        p
+    }
+
+    /// The layers the selection names, of those the board has (its copper layers, and every non-copper layer, which a `.kicad_pcb` always defines;
+    /// never `Rescue`, which `GetEnabledLayers` never has): the Plot dialog's checklist as `DIALOG_PLOT::init_Dialog` fills it from `GetLayerSelection()`.
     pub fn board_layers(&self, copper: &[String]) -> Vec<String> {
-        self.layer_selection.iter().filter(|l| !crate::layers::is_copper_layer_name(l) || copper.contains(l)).cloned().collect()
+        self.layer_selection.iter().filter(|l| *l != "Rescue" && (!crate::layers::is_copper_layer_name(l) || copper.contains(l))).cloned().collect()
+    }
+
+    /// The Plot dialog's checklist stored back as the layer selection (`DIALOG_PLOT::applyPlotSettings`): the `checked` layers, plus every
+    /// copper layer the board does not have (`selectedLayers | ( LSET::AllCuMask() & ~GetEnabledLayers() )`: "If someone enables more
+    /// copper layers they will be selected by default"), in `PCB_LAYER_ID` order. A layer the checklist does not list (one the board has
+    /// not enabled, `Rescue`) is not kept, as `m_layerList` is the board's enabled layers.
+    pub fn set_dialog_layer_selection(&mut self, checked: &[String], board_copper: &[String]) {
+        let mut v: Vec<String> = checked.iter().filter(|l| layer_number(l).is_some() && *l != "Rescue").cloned().collect();
+        v.extend(all_copper().into_iter().filter(|l| !board_copper.contains(l)));
+        v.sort_by_key(|n| layer_number(n).unwrap_or(u32::MAX));
+        v.dedup();
+        self.layer_selection = v;
     }
 
     /// A default `PCB_PLOT_PARAMS`.
@@ -234,6 +315,15 @@ mod tests {
         assert_eq!(encode_layer_selection(&PlotParams::default_layer_selection()), "0x00000000_00000000_55555555_5755f5ff");
         assert_eq!(encode_layer_selection(&[]), "0x00000000_00000000_00000000_00000000");
         assert_eq!(decode_layer_selection("0x00000000_00000000_55555555_5755f5ff", 20241229, false), PlotParams::default_layer_selection());
+    }
+
+    #[test]
+    fn the_rescue_bit_is_kept() {
+        // r3 board-io F11: `video-v10`'s selection, bit 37 (Rescue) included, reads and writes back unchanged.
+        let v = decode_layer_selection("0x00000000_00000000_000010fc_ffffffff", 20241229, false);
+        assert!(v.contains(&"Rescue".to_string()));
+        assert_eq!(encode_layer_selection(&v), "0x00000000_00000000_000010fc_ffffffff");
+        assert!(!PlotParams { layer_selection: v, ..Default::default() }.board_layers(&[]).contains(&"Rescue".to_string()));
     }
 
     #[test]

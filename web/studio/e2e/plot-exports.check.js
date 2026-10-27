@@ -3,7 +3,8 @@
 // is not plotted), Generate Drill Files (one merged .drl, or PTH and NPTH apart), Generate Placement Files (CSV and ASCII, per side), STEP, VRML, IPC-D-356,
 // IPC-2581, ODB++ and the board's Bill of Materials, and Plot Schematic (PDF, SVG one file per sheet). Each is opened with its action, run with its own
 // button, and judged by what the server answered (`/api/fab/*`, `/api/sch/plot`, captured as they come back: `ok`, the engine and the files written in
-// the board's `export/kicad/<kind>/`) and by the dialog's result panel; none of them edits the design (the revision is the same at the end).
+// the board's `export/kicad/<kind>/`) and by the dialog's result panel; none of them edits the design except the Plot and Drill dialogs' choices, which KiCad
+// stores in the board's plot settings (one undo step, undone here; the revision is the same at the end).
 // Run it in the page of a served board that is placed and routed -- `eda pipeline examples/opamp_filter.yaml -o <p>`, `eda board new examples/opamp_filter.yaml
 // -o <dir>`, `cp <p>/design.json <dir>/`, `eda board serve -C <dir> --port N --ui web/studio/dist`, kicad-cli on the PATH or in EDA_KICAD_CLI -- with
 // `PLAYWRIGHT_MODULE=... node web/studio/e2e/run-check.mjs http://localhost:N/ web/studio/e2e/plot-exports.check.js`, or pasted into the Browser pane's
@@ -83,7 +84,9 @@
   if (__eda.state().tab !== "pcb") { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click(); await sleep(900); }
   const st0 = await fetch("/api/state", { cache: "no-store" }).then((r) => r.json());
   const copper = st0.layers ?? ["F.Cu", "B.Cu"];
-  const rev0 = await version();
+  let rev0 = await version();
+  const post = (cmd) => fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd, strict: false }) }).then((r) => r.json());
+  const plotParams = async () => (await fetch("/api/state", { cache: "no-store" }).then((r) => r.json())).plot_params ?? null;
   if (!st0.parts?.some((p) => p.placed) || !(st0.routing?.tracks ?? []).length) { results.push({ name: "setup", ok: false, notes: ["FAIL: the board needs placed footprints and routed tracks (eda pipeline examples/opamp_filter.yaml)"] }); check.done = true; return "no board"; }
 
   (async () => {
@@ -107,8 +110,41 @@
         res = await press(/^Plot$/, "fab/gerbers");
         t(res.reply?.body?.ok === true && !(res.reply?.req?.layers ?? []).includes("B.SilkS"), `the second plot asks for the layers without B.SilkS (${(res.reply?.req?.layers ?? []).join(",")})`);
         t((res.reply?.body?.files ?? []).filter((f) => !/\.gbrjob$/.test(f)).length === gerbers.length - 1, `and writes one Gerber fewer (${(res.reply?.body?.files ?? []).length})`);
-        silk.click();
+        // r3 X3-3: `applyPlotSettings` stored the checklist in the board before the plot (one undo step), and the plot took the origin from the board.
+        const stored = await plotParams();
+        t(stored && !stored.layers.includes("B.SilkS") && stored.layers.includes("F.SilkS"), `the board's plot settings no longer select B.SilkS (${(stored?.layers ?? []).join(",")})`);
+        t(res.reply?.req && !("use_aux_origin" in res.reply.req), "the plot does not send the origin: the server takes the board's useauxorigin");
+        await close();
+        await run("common.Interactive.undo");
+        const back = await until(async () => { const p = await plotParams(); return p?.layers.includes("B.SilkS") ? p : null; }, 15000);
+        t(back, "one Ctrl+Z puts B.SilkS back in the board's plot settings");
+        rev0 = await version();
       }
+    });
+
+    await scenario("Plot and Drill dialogs start from the board's plot settings at each opening (r3 X3-3): a selection without F.Paste and useauxorigin yes", async (t) => {
+      const before = await plotParams();
+      const r = await post({ op: "set_plot_settings", layers: (before?.layers ?? []).filter((l) => l !== "F.Paste"), use_aux_origin: true });
+      if (!t(r.ok, `set_plot_settings (${JSON.stringify(r).slice(0, 200)})`)) return;
+      await until(async () => (await plotParams())?.use_aux_origin === true, 10000);
+      const v = await version();
+      await until(() => __eda.state().revision === v, 10000); // the page's poll picks the new board up
+      await sleep(300);
+      if (!(await open(t, "pcbnew.EditorControl.generateGerbers", "Plot"))) return;
+      const paste = [...dialog().querySelectorAll("label.toggle")].find((l) => l.textContent.trim().startsWith("F.Paste"))?.querySelector("input");
+      t(paste && paste.checked === false, "F.Paste starts unchecked, as the board's selection says");
+      t(box("Use drill/place file origin")?.checked === true, "Use drill/place file origin starts checked (useauxorigin yes)");
+      await close();
+      if (!(await open(t, "pcbnew.EditorControl.generateDrillFiles", "Generate Drill Files"))) return;
+      t(dialog().querySelector("select")?.value === "aux", `the drill Origin starts at the drill/place file origin (${dialog().querySelector("select")?.value})`);
+      const res = await press(/^Generate Drill File$/, "fab/drill");
+      t(/^Created file '.*-PTH\.drl'\n(Created file '.*'\n)*Done\.$/.test(res.reply?.body?.message ?? ""), `the writer's report (${JSON.stringify(res.reply?.body?.message)})`);
+      t(res.panel.message.startsWith("Created file"), "and the dialog shows it");
+      await close();
+      await run("common.Interactive.undo");
+      const back = await until(async () => { const p = await plotParams(); return p?.use_aux_origin === (before?.use_aux_origin ?? false) && p.layers.includes("F.Paste") ? p : null; }, 15000);
+      t(back, "one Ctrl+Z puts the board's plot settings back");
+      rev0 = await version();
     });
 
     await scenario("Generate Drill Files: the plated and non-plated holes in two Excellon files (KiCad's default), or in one with \"PTH and NPTH in single file\"", async (t) => {
@@ -165,6 +201,28 @@
       judged(t, title, res, re);
       t(typeof res.reply?.body?.engine !== "string" || res.reply.body.engine.startsWith("kicad-cli"), `kicad-cli wrote it (${res.reply?.body?.engine ?? "-"})`);
     };
+    await scenario("Export STEP: a model scaled (2,1,1) brings KiCad's Model Scale Warning when the dialog opens (r3 X3-4)", async (t) => {
+      const part = st0.parts.find((p) => p.placed && (p.models ?? []).length > 0);
+      if (!t(part, `a placed part with a 3D model (${part?.ref})`)) return;
+      const r = await post({ op: "edit_board_model", part: part.ref, index: 0, scale: [2, 1, 1] });
+      if (!t(r.ok, `edit_board_model (${JSON.stringify(r).slice(0, 160)})`)) return;
+      const v = await version();
+      await until(() => __eda.state().revision === v, 10000);
+      await sleep(300);
+      if (await open(t, "pcbnew.EditorControl.exportSTEP", "Export STEP")) {
+        const w = dialog().querySelector("[data-testid=step-scale-warning]");
+        t(w && w.textContent.includes("Scaled models detected.  Model scaling is not reliable for mechanical export."), `the warning, word for word (${w?.textContent.slice(0, 160)})`);
+        t(w && w.textContent.includes("Non-unity scaled models:") && w.textContent.includes(part.models[0].name), "with the model's file in the details");
+        [...(w?.querySelectorAll("button") ?? [])].find((b) => b.textContent.trim() === "OK")?.click();
+        await sleep(200);
+        t(!dialog().querySelector("[data-testid=step-scale-warning]"), "OK dismisses it");
+        await close();
+      }
+      await run("common.Interactive.undo");
+      await until(async () => { const s = await fetch("/api/state", { cache: "no-store" }).then((x) => x.json()); return s.parts.find((p) => p.ref === part.ref)?.models?.[0]?.scale?.[0] === 1; }, 15000);
+      rev0 = await version();
+    });
+
     await scenario("Export STEP: the board and its models as one .step", exportOne("pcbnew.EditorControl.exportSTEP", "Export STEP", "fab/3d", /\.(step|stp)$/i));
     await scenario("Export VRML: the board as a .wrl", exportOne("pcbnew.EditorControl.exportVRML", "Export VRML", "fab/vrml", /\.wrl$/i));
     await scenario("IPC-D-356 Netlist File: the board's test netlist", exportOne("pcbnew.EditorControl.generateD356File", "IPC-D-356", "fab/ipcd356", /\.(d356|ipc)$/i));

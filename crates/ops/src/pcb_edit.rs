@@ -211,7 +211,8 @@ pub fn boolean_shapes(dr: &mut DrawingsSection, op: BooleanOp, ids: &[String]) -
         outcome = run_routine(op, &items);
     }
     if outcome.successes == 0 {
-        return Err(vec![CheckResult::fail("ops_bad_boolean", op.verb(), format!("unable to {} the selected polygons", op.verb()))]);
+        // `GetStatusMessage()`'s words (`GetSuccesses() == 0`); KiCad still pushes the commit then, which here is a refusal (round 3 D-11)
+        return Err(vec![CheckResult::fail("ops_bad_boolean", op.verb(), format!("Unable to {} the selected polygons.", op.verb()))]);
     }
 
     let consumed: Vec<String> = outcome.removed.iter().map(|&i| items[i].id().to_string()).collect();

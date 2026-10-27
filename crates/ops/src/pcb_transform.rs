@@ -238,6 +238,50 @@ impl Board<'_> {
         Ok(())
     }
 
+    /// `Cmd::MirrorItems`: `EDIT_TOOL::Mirror` of the text boxes and tuning patterns among `ids`, about `pivot` (the other kinds have verbs of their own, which
+    /// the studio's Mirror sends with this one in one batch). A text box mirrors as `PCB_TEXTBOX::Mirror`: its shape (`PCB_SHAPE::Mirror`, the layer kept) and
+    /// its text angle (`ANGLE_180 - angle` left-right, `-angle` top-bottom), not its text or justification. A tuning pattern as `PCB_TUNING_PATTERN::Mirror`
+    /// (`baseMirror`): its base lines, origin and end mirror and its initial side swaps (its tracks are its members, mirrored with `MirrorTracks`). A reference
+    /// image is not mirrorable (`MirrorableItems` has no `PCB_REFERENCE_IMAGE_T`) and is refused with the other unknown ids.
+    pub(crate) fn mirror_items(&mut self, ids: &[String], pivot: Point, direction: FlipDirection) -> Result<(), Vec<CheckResult>> {
+        let x = Xform::Flip { pivot, dir: direction };
+        let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_item", ids.join(","), "the board has no drawings")])?;
+        for id in ids {
+            if !dr.board_items.text_boxes.iter().any(|t| &t.id == id) && !dr.tuning_patterns.iter().any(|p| &p.id == id) {
+                return Err(vec![CheckResult::fail("ops_unknown_item", id.as_str(), "no text box or tuning pattern with this id")]);
+            }
+        }
+        for t in dr.board_items.text_boxes.iter_mut().filter(|t| ids.contains(&t.id)) {
+            t.start = x.point(t.start);
+            t.end = x.point(t.end);
+            for p in t.pts.iter_mut() {
+                *p = x.point(*p);
+            }
+            t.angle = match direction {
+                FlipDirection::LeftRight => norm360(180_000 - t.angle as i64),
+                FlipDirection::TopBottom => norm360(-(t.angle as i64)),
+            } as _;
+        }
+        for p in dr.tuning_patterns.iter_mut().filter(|p| ids.contains(&p.id)) {
+            for q in p.base_line.iter_mut().chain(p.base_line_coupled.iter_mut()) {
+                *q = x.point(*q);
+            }
+            match (p.base_line.first(), p.base_line.last()) {
+                (Some(&first), Some(&last)) => {
+                    p.origin = first;
+                    p.end = last;
+                }
+                _ => {
+                    p.origin = x.point(p.origin);
+                    p.end = x.point(p.end);
+                }
+            }
+            // `if( m_settings.m_initialSide == MEANDER_SIDE_RIGHT ) .. = LEFT; else .. = RIGHT;`
+            p.initial_side = if p.initial_side == eda_model::tuning::PatternSide::Right { eda_model::tuning::PatternSide::Left } else { eda_model::tuning::PatternSide::Right };
+        }
+        Ok(())
+    }
+
     pub(crate) fn transform_items(&mut self, verb: &str, ids: &[String], x: Xform) -> Result<(), Vec<CheckResult>> {
         let targets = self.resolve_targets(verb, ids)?;
         let copper = self.model.board.layers.len();
@@ -274,10 +318,12 @@ impl Board<'_> {
                 transform_zone(z, x, copper);
             }
         }
+        // `BOARD_ITEM::GetMaxError()`: the board's arc approximation (Board Setup's "Maximum error"), not a constant
+        let max_error = self.model.board.max_error_nm;
         if let Some(dr) = self.design.drawings.as_mut() {
             for s in dr.shapes.iter_mut().filter(|s| targets.shapes.contains(s.id())) {
                 let radius = dr.board_items.corner_radius_of(s.id());
-                if transform_rounded_shape(s, x, copper, radius) && radius > Nm::ZERO {
+                if transform_rounded_shape(s, x, copper, radius, max_error) && radius > Nm::ZERO {
                     dr.board_items.set_corner_radius(s.id(), Nm::ZERO);
                 }
             }
@@ -295,7 +341,21 @@ impl Board<'_> {
         // `BOARD::FlipLayer` is `m_layers[..].m_opposite`: a user layer typed front or back flips to its pair (`recalcOpposites`), which `::FlipLayer`
         // above left where it was.
         if x.is_flip() {
-            let opp = self.model.board.layer_setup.user_layer_opposites();
+            let setup = &self.model.board.layer_setup;
+            let opp = setup.user_layer_opposites();
+            // `BOARD_ITEM::IsSideSpecific` is also true on a layer whose type is front or back (`GetLayerType( m_layer )`), so a text or a text box turned
+            // over onto one toggles its mirror as on F. and B. (`PCB_TEXT::Flip`, `PCB_TEXTBOX::Flip`: `if( IsSideSpecific() ) SetMirrored( !IsMirrored() )`,
+            // after `SetLayer( FlipLayer( .. ) )`); `transform_text` saw only the layer names.
+            let typed_side = |l: &str| l.starts_with("User.") && matches!(setup.types.get(l), Some(eda_model::layers::LayerType::Front | eda_model::layers::LayerType::Back));
+            if let Some(dr) = self.design.drawings.as_mut() {
+                let new_layer = |l: &str| opp.get(l).cloned().unwrap_or_else(|| l.to_string());
+                for t in dr.texts.iter_mut().filter(|t| targets.texts.contains(&t.id) && typed_side(&new_layer(&t.layer))) {
+                    t.mirror = !t.mirror;
+                }
+                for t in dr.board_items.text_boxes.iter_mut().filter(|t| targets.board_items.contains(&t.id) && typed_side(&new_layer(&t.layer))) {
+                    t.mirror = !t.mirror;
+                }
+            }
             if !opp.is_empty() {
                 let to = |l: &mut String| {
                     if let Some(o) = opp.get(l.as_str()) {
@@ -430,13 +490,15 @@ fn norm_rect(start: &mut Point, end: &mut Point) {
 /// start at the top left. A mirrored arc swaps its ends, as in source, so it still runs counter-clockwise from start
 /// to end; the three points describe the same arc either way.
 pub(crate) fn transform_shape(s: &mut Shape, x: Xform, copper: usize) {
-    transform_rounded_shape(s, x, copper, Nm::ZERO);
+    transform_rounded_shape(s, x, copper, Nm::ZERO, eda_model::outline::MAX_ERROR_NM);
 }
 
 /// [`transform_shape`] of a shape whose rectangle has corners of `corner_radius` (`BoardItems::corner_radius_of`): a turn by anything but a
 /// quarter makes it the polygon of its *rounded* rectangle, `ROUNDRECT( SHAPE_RECT( .. ), m_cornerRadius ).TransformToPolygon( .., getMaxError() )`
-/// turned (`EDA_SHAPE::rotate`). True when the rectangle became a polygon, so the caller drops the radius (a polygon has none).
-pub(crate) fn transform_rounded_shape(s: &mut Shape, x: Xform, copper: usize, corner_radius: Nm) -> bool {
+/// turned (`EDA_SHAPE::rotate`), at `max_error` (`getMaxError()`, the board's). True when the rectangle became a polygon, so the caller drops the radius (a
+/// polygon has none). KiCad's polygon keeps its four corners as true arcs (`SHAPE_LINE_CHAIN::Append( SHAPE_ARC, .. )`, written as `(arc ..)` in the
+/// `gr_poly`); this model's polygon has no arcs, so they are their points.
+pub(crate) fn transform_rounded_shape(s: &mut Shape, x: Xform, copper: usize, corner_radius: Nm, max_error: Nm) -> bool {
     let flip = x.is_flip();
     let moving = matches!(x, Xform::Move { .. });
     let mut as_polygon: Option<Shape> = None;
@@ -456,7 +518,7 @@ pub(crate) fn transform_rounded_shape(s: &mut Shape, x: Xform, copper: usize, co
         Shape::Rect { id, layer, stroke_width, filled, start, end } => {
             if let Xform::Rotate { angle, .. } = x {
                 if angle.rem_euclid(90_000) != 0 {
-                    let corners = eda_model::outline::rounded_rect_ring(*start, *end, corner_radius, eda_model::outline::MAX_ERROR_NM.as_f64());
+                    let corners = eda_model::outline::rounded_rect_ring(*start, *end, corner_radius, max_error.as_f64());
                     as_polygon = Some(Shape::Polygon { id: std::mem::take(id), layer: layer.clone(), stroke_width: *stroke_width, filled: *filled, pts: corners.iter().map(|c| x.point(*c)).collect() });
                 }
             }

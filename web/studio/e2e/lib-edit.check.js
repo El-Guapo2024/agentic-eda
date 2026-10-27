@@ -312,6 +312,20 @@
       await undo();
       t(((await symbol(SYM)).pins ?? []).length === 1, "one undo takes the second pin away");
       await redo();
+      // r3 E3-4: KiCad keeps the last pin by UUID (`g_lastPin`), so after it is renumbered Insert still repeats it, as it is now.
+      const last = ((await symbol(SYM)).pins ?? []).find((p) => p.number === "2");
+      if (t(!!last?.id, "the repeated pin is there with its id")) {
+        const r = await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: { op: "edit_symbol_pin", lib_id: SYM, id: last.id, pin: { ...last, number: "5" } }, strict: false }) }).then((x) => x.json());
+        t(r.ok, `renumbered to 5 (${JSON.stringify(r).slice(0, 160)})`);
+        await sleep(900);
+        await run("eeschema.InteractiveEdit.repeatDrawItem");
+        await sleep(900);
+        const six = ((await symbol(SYM)).pins ?? []).find((p) => p.number === "6");
+        t(!!six && Math.abs(six.at.y + 5.08) < 1e-6, `Insert repeats the edited pin: pin 6 one step further down (${JSON.stringify(six && [six.number, six.at])})`);
+        await undo();
+        await undo();
+        t(((await symbol(SYM)).pins ?? []).some((p) => p.number === "2") && ((await symbol(SYM)).pins ?? []).length === 2, "two undos put the pins back");
+      }
     });
 
     await scenario("Pin Properties (E) edits a pin's name and number; OK is one undo step", async (t) => {

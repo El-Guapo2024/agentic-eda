@@ -291,7 +291,7 @@ Test: `nets.rs::a_labels_sheet_variable_is_resolved_per_placement`, beside `a_po
 
 ### A-N13. An unannotated reference: KiCad adds a hash of the symbol's uuid (low, unconfirmed on ours)
 
-**Open** after task-r2-schematic: needs the symbol's own uuid kept (B-L3) and `KIID::Hash`
+**Open** after task-r2-leftovers: not changed. It needs an imported symbol's own uuid kept (B-L3), and `KIID::Hash` is `boost::uuids::hash_value`, whose value depends on the Boost version kicad-cli was built with; an unannotated symbol is also given a placeholder id here (`R?1`), so its reference does not end in `?` (was: needs the symbol's own uuid kept (B-L3) and `KIID::Hash`)
 
 **What differs.**
 - **Ours:** `default_net_name` (`nets.rs:726-743`) treats `R?` like any reference, giving `Net-(R?-Pad1)`.
@@ -470,7 +470,7 @@ Test to write: `walk_orders_a_screens_sheets_by_x_then_y`. Store two placements 
 
 ### B-M2. The writer's fallback page number collides with pages the user set; the doc's claim that KiCad falls back to the virtual page is wrong (medium)
 
-**Open** after task-r2-schematic: page numbering, the task-hierarchy-pages lane's area (main 962541a8 numbers new paths; an imported file with some pages set still falls back to walk numbers)
+**Fixed** on task-r2-leftovers: bd21173b (`sheet_list::repair_page_numbers`, KiCad 25ec2335 `RepairPageNumbers`, run on import; the `effective_page` doc no longer claims the fallback) (was: page numbering, the task-hierarchy-pages lane's area (main 962541a8 numbers new paths; an imported file with some pages set still falls back to walk numbers))
 
 **What differs.**
 - **Ours.** `export_kicad_sch_tree` (`crates/kicad/src/lib.rs:674-684`) writes `s.page` when it is set. Otherwise it writes the sheet's place in its own walk (`w.pages + 1`), whether or not another sheet already has that number as a page set by the user.
@@ -512,7 +512,7 @@ Test to write: a root at version 20211123 whose `(sheet_instances (path "/<s>/" 
 
 ### B-M4. One unit per symbol: a per-path unit in the file is lost, and so is that path's reference (medium)
 
-**Open** after task-r2-schematic: a per-path unit needs the tracer and the writer to draw a symbol as another unit per path
+**Fixed** on task-r2-leftovers: b96fd002 (`SchExtras::path_units`, read by the tracer and the writer; an edit still sets one unit for every path, and the studio draws the symbol's own unit) (was: a per-path unit needs the tracer and the writer to draw a symbol as another unit per path)
 
 **What differs.**
 - **Ours.**
@@ -575,7 +575,7 @@ Test to write: `crates/ops/src/sch_hierarchy_tests.rs`, `a_copy_on_the_second_pl
 
 ### B-L2. Symbol `(in_pos_files no)` is dropped (low)
 
-**Open** after task-r2-schematic: needs a symbol flag in the IR
+**Fixed** on task-r2-leftovers: 94a1fb37 (was: needs a symbol flag in the IR)
 
 **What differs.**
 - **Ours.** The reader reads only `dnp`, `in_bom`, `on_board` and `exclude_from_sim` (`sch_import.rs:191-193`). The writer never writes `in_pos_files`.
@@ -589,7 +589,7 @@ So an "exclude from position files" symbol comes back included.
 
 ### B-L3. Symbol uuids are minted from the reference, so an imported file's uuids are not kept and a rename changes the uuid (low, impact unconfirmed)
 
-**Open** after task-r2-schematic: not changed
+**Open** after task-r2-leftovers: not changed (the derived board and schematic stay consistent through `symbol_links`; keeping the file's uuids needs them in the IR, which the lead should decide on) (was: not changed)
 
 **What differs.**
 - **Ours.** `duid_for(&format!("sym:{}", sym.id), &sym.id)` (`crates/kicad/src/lib.rs:372`). The file's `(uuid ..)` is read only for the uuid -> id map.
@@ -603,7 +603,7 @@ The derived pair (board and schematic) stays consistent (`symbol_links`). But th
 
 ### B-L4. Writer cosmetics against `Format` (low)
 
-**Open** after task-r2-schematic: not changed
+**Fixed** in part on task-r2-leftovers: 94a1fb37 (power symbols written `(in_bom yes) (on_board yes)`; the last instance of a path wins). Page "1" on a sheet: **not a bug** in effect, since the root holds "1" and KiCad's `RepairPageNumbers` renumbers a sub-sheet that repeats it, as ours does (bd21173b). Left: a corner sheet pin's side, the provenance title block, the root instance and `embedded_fonts` in every file (was: not changed)
 
 **What differs.**
 - **`(sheet_instances (path "/" (page "1")))` and `(embedded_fonts no)` are written into every screen's file** (`lib.rs:692-697`, `embedded::write_owner(.., true)`).
@@ -878,7 +878,7 @@ Assert orientation 270_000 (ours keeps 90_000). With `orientation: 0`, `mirror(.
 
 ### C-M3. Power symbols are not placed by Autoplace Fields: a hand-set Value spot, written with `(fields_autoplaced yes)`, and a PWR_FLAG's Value hidden (medium)
 
-**Open** after task-r2-schematic: power symbols still use the library's offsets
+**Fixed** on task-r2-leftovers: 53b1473b (was: power symbols still use the library's offsets)
 
 **What differs.** KiCad runs the same `AUTOPLACER` for a power symbol as for any symbol (`PlaceSymbol` runs `AutoplaceFields( screen, AUTOPLACE_AUTO )`,
 and so do Autoplace Fields `O` and a lone rotate). The power case has its own preferred sides (`getPreferredSides`, `m_is_power_symbol =
@@ -1019,7 +1019,7 @@ no collision.
 
 ### C-L1. Align to Grid moves items KiCad leaves alone, and finishes like a drag (low)
 
-**Open** after task-r2-schematic: not changed
+**Fixed** on task-r2-leftovers: 4cdc30e7 (a field picked on its own is still not aligned: the scene has no field item) (was: not changed)
 
 **What differs.** `AlignSchematicItemsToGrid` handles `SCH_LINE_T` (each end separately, with what is attached to it), `SCH_FIELD_T` and `SCH_TEXT_T`
 (by position) and `SCH_SHEET_T`. Everything else is aligned by the most common shift of its connection points. Shapes, text boxes, bitmaps and tables
@@ -1043,7 +1043,7 @@ which also adds junctions at the internal points, runs `trim_dangling_lines` and
 
 ### C-L2. Turn and mirror pivots use the body box where KiCad's include fields (low; ours only says so in a code comment)
 
-**Open** after task-r2-schematic: not changed
+**Fixed** on task-r2-leftovers: 4cdc30e7 (was: not changed)
 
 **What differs.**
 - `SELECTION::GetCenter` merges `item->GetBoundingBox()` of every non-text item, and for a symbol that is `doGetBoundingBox( true, true )` (body, pins
@@ -1093,7 +1093,7 @@ A wire stretched by a drag across the end of another wire gets a junction (and i
 
 ### C-L5. A label placed on a wire is not named after the wire's label (low; the PARITY row is partial)
 
-**Open** after task-r2-schematic: not changed
+**Fixed** on task-r2-leftovers: ca076f83 (studio), 9132b39d (`label_driver` on each wire) (was: not changed)
 
 **What differs.** `SCH_DRAWING_TOOLS::createNewLabel`, for a local or global label: `if( SCH_LINE* wire = findWire( aPosition ) ) netName =
 findWireLabelDriverName( wire );`. When the wire's driver is a local or global label, the new label takes `wireConnection->LocalName()` and no dialog
@@ -1105,7 +1105,7 @@ opens. Neither the studio (`LabelDialog`) nor `place_label` does this.
 
 ### C-L6. Autoplace Fields on a selection of labels is refused (low)
 
-**Open** after task-r2-schematic: not changed
+**Fixed** on task-r2-leftovers: 10369883 (the message was the studio's) (was: not changed)
 
 **What differs.** `SCH_EDIT_TOOL::AutoplaceFields` takes every `SCH_COLLECTOR::FieldOwners` item, labels included, and runs
 `AutoplaceFields( screen, AUTOPLACE_MANUAL )` with no error. `autoplace_sch_fields` refuses a selection of only labels with "nothing here has fields to
@@ -1117,7 +1117,7 @@ place" (`sch_fields.rs`). Our label fields are always autoplaced, so only the me
 
 ### C-L7. A sheet pin's drag accumulates from its constrained place, not from its stored place (low, unconfirmed in effect)
 
-**Open** after task-r2-schematic: not changed (unconfirmed)
+**Open** after task-r2-leftovers: not changed (unconfirmed, low) (was: not changed (unconfirmed))
 
 **What differs.** `MoveSchematicItem` does `pin->SetStoredPos( pin->GetStoredPos() + aDelta ); pin->ConstrainOnEdge( pin->GetStoredPos(), true );`,
 so the unconstrained point accumulates across the x and y splits (and across events). Ours adds each split to the already constrained place
@@ -1130,7 +1130,7 @@ so the unconstrained point accumulates across the x and y splits (and across eve
 
 ### C-L8. `trim_dangling_lines` rules differ from `trimDanglingLines` (low, unconfirmed)
 
-**Open** after task-r2-schematic: not changed (unconfirmed)
+**Open** after task-r2-leftovers: not changed (unconfirmed, low) (was: not changed (unconfirmed))
 
 **What differs.** In KiCad:
 - the new bend lines lose `IS_NEW` before the trim (`for( SCH_LINE* newLine : m_newDragLines ) newLine->ClearEditFlags()`);
@@ -1146,7 +1146,7 @@ Ours removes any `F_NEW` line with both ends dangling, including pieces `break_s
 
 ### C-L9. Small `getConnectedDragItems` / `AnalyzePoint` details (low)
 
-**Open** after task-r2-schematic: not changed
+**Open** after task-r2-leftovers: not changed (low; "harmless today" for the first item) (was: not changed)
 
 - The label-splits-a-wire branch: KiCad assigns the stub to the shared `newWire`, so no second stub is made at that point for a symbol, junction or
   label. Ours uses a local `nw` (`sch_drag.rs:312`) and also fills `line_conn` for the split, which KiCad does only in its unreachable `else` branch.
@@ -1270,7 +1270,7 @@ KiCad is 8303b2ad. These come from reading both codebases. None was confirmed by
 
 ### D-C3. Paste ignores the annotation method and start number (medium)
 
-**Open** after task-r2-schematic: needs the method and start number in `Cmd::PasteSch`
+**Fixed** on task-r2-leftovers: a9ef6e65 (`Cmd::PasteSch::numbering`; a pasted sheet's contents still use the defaults) (was: needs the method and start number in `Cmd::PasteSch`)
 - **What differs.**
   - **Ours:** `annotate_paste` (`crates/model/src/sch_clipboard.rs`) takes no method or start, and `paste_sch` calls it with `(used, pasted, mode)`. The studio does hold `algo` and `start` (`web/studio/src/kicad-port/schAnnotate.ts`).
   - **KiCad `Paste`:**
@@ -1286,7 +1286,7 @@ KiCad is 8303b2ad. These come from reading both codebases. None was confirmed by
 
 ### D-C4. A paste prefers the installed or built-in library symbol over the clipboard's cached one, and has no power-type check (medium)
 
-**Open** after task-r2-schematic: not changed
+**Fixed** on task-r2-leftovers: d87cec9c (was: not changed)
 - **What differs.**
   - **Ours:** `merge_lib_symbols` (`crates/ops/src/sch_clipboard.rs`) asks `design_symbol`, which falls through to `model.symbol_of` and then the built-ins (`crates/model/src/lib.rs:1408`).
     - The design's symbol wins unless the pins differ.
@@ -1324,7 +1324,7 @@ KiCad is 8303b2ad. These come from reading both codebases. None was confirmed by
 
 ### D-C8. Duplicate of a hovered item leaves the copy selected; KiCad leaves nothing selected (low)
 
-**Open** after task-r2-schematic: not changed
+**Fixed** on task-r2-leftovers: 9858b752 (was: not changed)
 - **What differs.** `schClipboardActions.ts:97` always selects the new items. KiCad:
   - `doCopy( true )` records the hover state (`m_duplicateIsHoverSelection`);
   - `Paste` restores it with `SetIsHover`;
@@ -1426,7 +1426,7 @@ KiCad is 8303b2ad. None of these was confirmed with the binary: `eda` has no ver
 
 ### D-A4. The Annotate dialog disables controls that KiCad leaves enabled (low)
 
-**Open** after task-r2-schematic: not changed
+**Fixed** on task-r2-leftovers: e733a458 (was: not changed)
 - **What differs.** `AnnotateDialog.tsx`:
   - "Recurse into subsheets" is disabled for the Entire schematic scope (:94);
   - the start-number field is disabled unless "Use first free number after" is chosen (:122);
@@ -1469,6 +1469,7 @@ Commits checked: 18db02a5, 132bd8da, e6cc0ab4, 01230f08.
 ### D-E1. A KiCad project's own ERC severities, pin map and connection grid are dropped on import; only its exclusions come in (high)
 
 **Fixed** on task-r2-schematic: 5d66ea32
+- **Note fixed** on task-r2-leftovers: 22b21f9e. The derived ERC of QA issue22938 had 4 `power_pin_not_driven` where the original has 6: its `0IBF_Supply:+48V` and `IBF_supply:+7V` are `(power local)` symbols on the root and on its sheet, four nets in KiCad; ours read every power symbol as global (`LOCAL_POWER_PIN` was not ported) and wrote `(power)`, so each pair was one net. Now 6, and every pin named as kicad-cli names it.
 - **What differs.** `eda import-kicad x.kicad_sch` reads the project's `erc.erc_exclusions` (`crates/cli/src/import_kicad.rs:370-391`, `keep_project_erc_exclusions`) and nothing else of the `erc` section: `crates/kicad/src/sch_import.rs:584` sets `erc_pin_map: None` and `extras` without `erc_severities`; nothing under `crates/kicad/src` or `crates/cli/src` reads `erc.rule_severities`, `erc.pin_map` or `schematic.connection_grid_size` from a `.kicad_pro` (only writers). The board side does merge `board.design_settings.rule_severities` (`import_kicad.rs:234`, `merge_project_rule_severities`); the schematic side has nothing like it. KiCad keeps these in the project and kicad-cli judges by them. In `erc_settings.cpp` (the `ERC_SETTINGS` constructor), the `rule_severities` loader does `if( aJson.contains( key ) ) m_ERCSeverities[code] = SeverityFromString( aJson[key] );` and the `pin_map` loader does `SetPinMapValue( i, j, static_cast<PIN_ERROR>( val ) )`. The derived project then carries the defaults (`effective_erc_severities`, `custom_erc_pin_map` -> None).
 - **How to see it.** Confirmed by running both tools.
   - Original: `cp -r $KICAD_SRC_DIR/qa/data/eeschema/issue22938 orig; cd orig; kicad-cli sch erc --format json -o ../orig_erc.json issue22938.kicad_sch`. Its project sets `pin_not_connected: ignore`; the report lists that check under `ignored_checks` and has 0 `pin_not_connected`.
@@ -1498,7 +1499,7 @@ Commits checked: 18db02a5, 132bd8da, e6cc0ab4, 01230f08.
 
 ### D-E3. The violations list is in report order; KiCad lists every error, then warnings, then exclusions (low)
 
-**Open** after task-r2-schematic: tried in 4d5db9e6 and taken back: KiCad sorts `m_filteredMarkers` when `SetSeverities` refilters, so an excluded marker keeps its row until then; sorting at every redraw moved it to the end and broke the review and drc-review browser checks. Needs the order kept from one filter to the next (the DRC dialog sorts the same way in `drc_item.cpp`)
+**Fixed** on task-r2-leftovers: f849c0e3 (sorted when the list refilters; the ERC re-sorts on every exclusion change, the DRC keeps a waived row in place, as KiCad's two providers do; the review and drc-review browser checks pass) (was: tried in 4d5db9e6 and taken back: KiCad sorts `m_filteredMarkers` when `SetSeverities` refilters, so an excluded marker keeps its row until then; sorting at every redraw moved it to the end and broke the review and drc-review browser checks. Needs the order kept from one filter to the next (the DRC dialog sorts the same way in `drc_item.cpp`))
 - **What differs.** `web/studio/src/kicad-port/rcItems.ts:62-68` (`listedIndexes`) and `ErcDialog.tsx:99` keep kicad-cli's report order. `ERC_REPORT::WriteJsonReport` groups that order by sheet, so it is severity-sorted only within each sheet. KiCad sorts the whole filtered list once, in `erc_settings.cpp::SHEETLIST_ERC_ITEMS_PROVIDER::SetSeverities`: `// Sort markers so that errors appear before warnings` `std::stable_sort( m_filteredMarkers.begin(), m_filteredMarkers.end(), []( const SCH_MARKER* a, const SCH_MARKER* b ) { return a->GetSeverity() > b->GetSeverity(); } );` (ERROR 0x20 > WARNING 0x10 > EXCLUSION 0x04). Next and Previous Marker step in that order too.
 - **How to see it.** On two sheets, put a warning on sheet 1 and an error on sheet 2: KiCad lists the error first, the studio lists the warning first. Test in rcItems.test.ts: input `[warning(s1), error(s2), excluded(s1)]`, assert the listed order is `[1,0,2]`.
 - **Already known?** No. PARITY-sch.md section 4 says "a flat list in report order" and marks it identical.
@@ -1552,7 +1553,7 @@ Commits checked: 18db02a5, 132bd8da, e6cc0ab4, 01230f08.
 
 ### D-V3. (unconfirmed) Shift+wheel: a browser that turns Shift+wheel into a horizontal delta makes it pan sideways, KiCad pans up/down (low)
 
-**Open** after task-r2-schematic: unconfirmed, not changed
+**Fixed** on task-r2-leftovers: 98533828 (off macOS a Shift+wheel the browser turned horizontal pans vertically; not reproducible headless, so unconfirmed in a real browser) (was: unconfirmed, not changed)
 - **What differs.** `viewControls.ts:116` treats any event with |deltaX| > |deltaY| as a native horizontal wheel and pans horizontally regardless of modifiers. KiCad's `onWheel` only does that for `axis == wxMOUSE_WHEEL_HORIZONTAL`; a vertical wheel with Shift (default `scroll_modifier_pan_h` = WXK_CONTROL, so Shift is not the H modifier) falls to `scrollY = -scrollVec.y` (vertical pan). Chromium on Windows (and, I believe, Linux) delivers Shift+vertical-wheel as `deltaX` with `deltaY = 0`, so here Shift+wheel would pan horizontally. To confirm: in Chromium on Linux/Windows, log `e.deltaX/e.deltaY` for a physical Shift+wheel notch over the schematic canvas; if deltaX is set, the fix is to treat `shiftKey && deltaY == 0` as the vertical axis with the swapped delta.
 - **Already known?** Not listed.
 

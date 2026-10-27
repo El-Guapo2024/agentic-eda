@@ -109,6 +109,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 
 ### X7. Board > Fabrication Outputs > BOM is not `GenBOMFileFromBoard`'s file (medium)
 - **Fixed in part** on task-r2-editors-exports: baff7dc0 (`kicad-cli pcb export bom` on the board: board-only footprints in; the empty-board message). Left: kicad-cli's writer quotes every value, keeps the library prefix and has no `;;;` (no kicad-cli option for them; GAPS 37).
+- **Left** on task-r2-misc-leftovers: not cheap -- kicad-cli is the only export engine and it has no option for the three; writing the file ourselves is against that rule.
 - **What differs.**
   - Ours: `board_output_api.rs:224` `pcb_bom_args` runs `kicad-cli sch export bom` on the derived **schematic**.
   - KiCad (`pcbnew/build_BOM_from_board.cpp::BOARD_EDITOR_CONTROL::GenBOMFileFromBoard`) walks `board->Footprints()`, skipping only `FP_EXCLUDE_FROM_BOM`. It groups by `m_Val` and **`m_FPID`**, and writes:
@@ -152,6 +153,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 
 ### X10. The PCB Plot dialog has only Gerber and three controls (medium, a tracking gap)
 - **Tracked** on task-r2-editors-exports: d2b7f55a (GAPS item 37; the board's own settings now reach the plot, X3).
+- **Not done** on task-r2-misc-leftovers: the dialogs' choices stored back in the board (`DIALOG_PLOT::applyPlotSettings`, `DIALOG_GENDRILL::updateConfig`) went to task-r3-editors-exports at the lead's request (round 3 found the dialogs never read the board's settings). A draft verb was made and dropped; note from it: kicad-cli 10.99's `pcb export gerbers --board-plot-params` plotted B.Cu with a layer selection that leaves it out (`fab_api.rs` already says it "plots every copper layer whatever the checklist").
 - **What differs.** KiCad's `DIALOG_PLOT` (`pcbnew/dialogs/dialog_plot.cpp`) also offers:
   - the formats PostScript, SVG, DXF, HPGL and PDF;
   - "Plot drawing sheet", "Plot footprint values" and "Plot reference designators";
@@ -436,6 +438,7 @@ Since 2026-10-24 in these paths: `8a567378` (P18-1 fix: Place Design Block grows
 
 #### V3. The copper swatches and the editor copper colours are not KiCad's single copper colour (low)
 - **Fixed in part** on task-r2-editors-exports: d743df5a (a swatch sets both copper rows). Left: per-layer editor copper colours on inner layers (PARITY-3d, GAPS 23).
+- **Left** on task-r2-misc-leftovers: not cheap (a colour per inner layer in the 3D settings model and the viewer).
 - **What differs.** `appearance3d.ts:resolveColors` (`:345-369`) applies a swatch to `copper_top` or to `copper_bottom` on its own, and with `useEditorCopperColors` it sets top from `F_Cu` and bottom from `B_Cu`. Inner-layer tracks then take the colour of `silkSide(layer)` (`scene.ts:961`), which is F or B.
   - KiCad, `appearance_controls_3D.cpp::onColorSwatchChanged`: "The internals of the 3D viewer only supports a single color for copper, which must be applied to all copper layers." A change to any of `LAYER_3D_COPPER_TOP`, `LAYER_3D_COPPER_BOTTOM` or `LAYER_3D_PLATED_BARRELS` sets the other two as well.
   - KiCad, `render_3d_opengl.cpp::setLayerMaterial`: with `GetUseBoardEditorCopperLayerColors()`, each copper layer takes its own 2D colour: `COLOR4D copper_color = m_boardAdapter.m_BoardEditorColors[aLayerID];`. That includes In1.Cu .. In30.Cu. The option is off for the footprint holder (`!m_board->IsFootprintHolder()`).
@@ -458,6 +461,7 @@ Since 2026-10-24 in these paths: `8a567378` (P18-1 fix: Place Design Block grows
 
 #### S2. The operating point overlay ignores the project's precision and range (low)
 - **Fixed in part** on task-r2-editors-exports: d743df5a (`opLabels` takes the four formats). Left: the project does not carry `drawing.operating_point_overlay_*` yet (GAPS 34).
+- **Left** on task-r2-misc-leftovers: not cheap (a Schematic Setup page and a project overlay).
 - **What differs.** `kicad-port/sim/opOverlay.ts:86, :111, :118` hard-code `operatingPoint(points, name, 3, "~V")` and `(…, 3, "~A")`. KiCad uses `settings.m_OPO_VPrecision`, `m_OPO_VRange`, `m_OPO_IPrecision` and `m_OPO_IRange` (`sch_edit_frame.cpp::RefreshOperatingPointDisplay`). These are project settings: `schematic_settings.cpp`'s `"drawing.operating_point_overlay_v_precision"` (3), `"drawing.operating_point_overlay_v_range"` ("~V"), and the `_i_` pair ("~A"). Schematic Setup > Formatting edits them (`panel_setup_formatting.cpp:112-163`).
   `grep operating_point_overlay` finds nothing in `crates/` or `web/studio/src`. So a KiCad project that sets "mV" or 5 digits shows 3 digits auto-ranged in the studio. From the reading, the setting is probably also lost from the derived `.kicad_pro` (not run).
 - **How to see it.** In a project with `"operating_point_overlay_v_range": "mV"` and an OP run, a 1.2 V net shows "1.20V" in the studio and "1200mV" in KiCad.

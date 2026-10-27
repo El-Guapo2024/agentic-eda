@@ -54,3 +54,8 @@ export function netAtPoint(wires: readonly NetWire[], anchors: readonly NetAncho
   }
   return null;
 }
+
+/** The net a label is on (`SCH_EDITOR_CONTROL::HighlightNet` takes the label's connection, `conn->Name()`): the traced name the server sends, else its text (r3 A3-M4). */
+export function labelNet(l: { net: string; net_name?: string | null }): string {
+  return l.net_name ?? l.net;
+}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { netAtPoint } from "./schNetAtPoint";
+import { netAtPoint, labelNet } from "./schNetAtPoint";
 
 const wires = [{ net: "VCC", pts: [[0, 0], [1_000_000, 0]] as const }];
 test("netAtPoint: wire hit, anchor hit, miss clears", () => {
@@ -24,4 +24,11 @@ test("netAtPoint: the accuracy grows in steps and the first that finds an item d
   assert.equal(netAtPoint([], [], 0, 0, 400_000, [{ net: "SDA", distNm: 200_000 }]), "SDA");
   // a pin on no net found: the highlight is cleared, not kept
   assert.equal(netAtPoint(wires, [], 500_000, 100_000, 400_000, [{ net: null, distNm: 0 }]), null);
+});
+
+test("a label's net is the one its wire carries, not its text (r3 A3-M4: HighlightNet takes the label's connection)", () => {
+  assert.equal(labelNet({ net: "X", net_name: "/X" }), "/X");
+  assert.equal(labelNet({ net: "X", net_name: null }), "X", "a label on no wire: its text");
+  const wires = [{ net: "/X", pts: [[0, 0], [10_000_000, 0]] as [number, number][], bus: false }];
+  assert.equal(netAtPoint(wires as never, [{ net: labelNet({ net: "X", net_name: "/X" }), at: [10_000_000, 0] }], 10_000_000, 0, 1_000_000, []), "/X");
 });

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { closeGroupDialog, updateGroupDialog, useCommonDialogs } from "../state/commonDialogs";
 import { removeMemberAt } from "../kicad-port/groupEdit";
+import { ancestors } from "../kicad-port/groupTree";
 import { describeBoardItem, describeSchematicItem } from "../actions/editorAdapter";
 import { useActionRunner } from "../actions/useActionRunner";
 import { AboutDialog } from "./AboutDialog";
@@ -35,7 +36,11 @@ function GroupPropertiesDialog() {
     closeGroupDialog();
   };
   const onBoard = state.tab !== "schematic";
-  const wasLocked = onBoard && (state.board?.locked ?? []).includes(dlg.id);
+  // `m_locked->SetValue( aGroup->AsEdaItem()->IsLocked() )`: the group's own lock or that of a group above it (`BOARD_ITEM::IsLocked`); OK sets the group's own
+  // lock to the box (`SetLocked( m_locked->GetValue() )`), so a group shown locked by the group above becomes locked itself
+  const lockedSet = new Set(state.board?.locked ?? []);
+  const ownLocked = onBoard && lockedSet.has(dlg.id);
+  const wasLocked = ownLocked || (onBoard && ancestors(state.board?.drawings?.groups ?? [], dlg.id).some((g) => lockedSet.has(g.id)));
   const locked = dlg.locked ?? wasLocked;
   const ok = async () => {
     setBusy(true);
@@ -47,7 +52,7 @@ function GroupPropertiesDialog() {
         : await api.cmdBatch([
             { op: "edit_group", id: dlg.id, name: dlg.name, member_ids: dlg.members, design_block },
             // `m_group->AsEdaItem()->SetLocked( m_locked->GetValue() )`
-            ...(locked !== wasLocked ? [{ op: "set_locked" as const, ids: [dlg.id], locked }] : []),
+            ...(locked !== ownLocked ? [{ op: "set_locked" as const, ids: [dlg.id], locked }] : []),
           ]);
       if (!done) return;
       dispatch({ type: "SET_HOT", refs: [] });

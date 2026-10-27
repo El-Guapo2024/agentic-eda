@@ -39,6 +39,7 @@
 ## Part A. Fab outputs and exports
 
 ### X3-1. A legacy `(viasonmask ..)` is written back in `pcbplotparams`, so KiCad undoes the board's via tenting every time it reads a board we wrote (high)
+**Fixed** on task-r3-editors-exports: 899dfdef
 - **What differs.**
   - Ours:
     - `crates/kicad/src/import.rs:619` `import_plot_params` keeps every item of the block other than the two layer sets: `Some(_) => p.items.push(..)`. A legacy `(viasonmask yes)` is one of those items.
@@ -68,6 +69,7 @@
 - **Already known?** No. Round-2 F10 fixed the reading of the token, not the writing back.
 
 ### X3-2. A legacy `(excludeedgelayer no)` is not plotted as KiCad plots it: Edge.Cuts on every layer (medium)
+**Fixed** on task-r3-editors-exports: 899dfdef
 - **What differs.**
   - KiCad, `PCB_PLOT_PARAMS_PARSER::Parse`:
     ```cpp
@@ -85,6 +87,7 @@
 - **Already known?** No.
 
 ### X3-3. The Plot and Drill dialogs never start from the board's plot settings in the studio: they are mounted before the board loads (medium)
+**Fixed** on task-r3-editors-exports: 0e6b4f69 (the dialogs store their choices back as `set_plot_settings`, one undo step: 0e6b4f69; the check: 32c5338d)
 - **What differs.**
   - Ours: `App.tsx:316,319` renders `<PlotDialog />` and `<GenerateDrillDialog />` from the first frame, when `state.board` is still `null` (`store.tsx:911`).
     - `PlotDialog.tsx:35` takes the checklist from a `useState` initializer: `state.board?.plot_params?.layers ?? defaultLayers(..)`. `PlotDialog.tsx:67` does the same for the origin, `useAuxOrigin`: `state.board?.plot_params?.use_aux_origin ?? false`.
@@ -104,6 +107,7 @@
 - **Already known?** No. PARITY-boardctl section 5 says "the checklist and 'Use drill/place file origin' start from it".
 
 ### X3-4. Export STEP/GLB/...: no "Scaled models detected." warning (medium)
+**Fixed** on task-r3-editors-exports: 0e6b4f69
 - **What differs.**
   - KiCad's `DIALOG_EXPORT_STEP::DIALOG_EXPORT_STEP` lists every model whose scale is not 1 (up to 5) and shows this warning, which can be turned off:
     ```cpp
@@ -121,12 +125,14 @@
 - **Already known?** No.
 
 ### X3-5. `(gerberprecision 4)` (or lower) plots at 4.6 here; KiCad clamps it to 4.5 (low)
+**Fixed** on task-r3-editors-exports: 899dfdef
 - Ours: `fab_api.rs:71`: `if precision == 5 { "5" } else { "6" }`.
 - KiCad: `case T_gerberprecision: m_gerberPrecision = parseInt( gbrDefaultPrecision - 1, gbrDefaultPrecision );`, where `parseInt` clamps to [5, 6], so 4 becomes 5.
 - Run: `vm/t.kicad_pcb` with `(gerberprecision 4)` was upgraded to `(gerberprecision 5)`.
 - Test: `gerber_args` with `(gerberprecision 4)` contains `--precision 5`.
 
 ### X3-6. The DNP fab options are passed as stored, not as the dialog reads them back (low)
+**Fixed** on task-r3-editors-exports: 899dfdef
 - KiCad's dialog normalizes the three flags.
   - `DIALOG_PLOT::init_Dialog`: `m_plotDNP` = hide || sketch || crossout. Then the "Hide" radio is chosen if hide is set, else "Cross-out".
   - `applyPlotSettings`:
@@ -141,11 +147,13 @@
 - Test: `gerber_args` of hide+sketch+crossout gives only `--hide-DNP-footprints-on-fab-layers`. Sketch alone gives both `--sketch-DNP..` and `--crossout-DNP..`. This only matters for F.Fab/B.Fab.
 
 ### X3-7. Generate Drill Files shows "Drill file written." instead of the writer's report (low)
+**Fixed** on task-r3-editors-exports: 899dfdef
 - Ours: `GenerateDrillDialog.tsx:32`.
 - KiCad's `EXCELLON_WRITER::CreateDrillandMapFilesSet` reports `"Created file '%s'"` for each file (no full stop), then `ReportTail( _( "Done." ) )`.
 - kicad-cli prints the same lines. Run: `drill/`: `Created file 'o/issue5093-PTH.drl'`, `Created file 'o/issue5093-NPTH.drl'`, `Done.`. They are not shown.
 
 ### X3-8. Gerber X3 placement report has no "Component count" lines (low)
+**Fixed** on task-r3-editors-exports: 899dfdef
 - Ours: `fab_api.rs:261-266` writes only the two file lines and "Done.".
 - KiCad's `DIALOG_GEN_FOOTPRINT_POSITION::CreateGerberFiles` writes:
   - "Component count: %d." after each file;
@@ -154,11 +162,13 @@
 - The count is `CreatePlaceFile`'s return value. One way to get it here is to count the `%TO.C,` objects of each file.
 
 ### X3-9. Sketched pads on the fab layers use 0.1 mm, not the board's F.Fab line width (low; kicad-cli has no flag)
+**Fixed** on task-r3-editors-exports: 32c5338d (recorded in GAPS.md item 37 as a kicad-cli limit; nothing to change in the code)
 - KiCad's `DIALOG_PLOT::Plot` sets `m_plotOpts.SetSketchPadLineWidth( board->GetDesignSettings().GetLineThickness( F_Fab ) )`.
 - kicad-cli never sets it, so the width stays `PCB_PLOT_PARAMS`' `m_sketchPadLineWidth = pcbIUScale.mmToIU( 0.1 )`.
 - It differs only on a board whose fab line width is not 0.1 mm, with `(sketchpadsonfab yes)`. Record it in GAPS 37 as a kicad-cli limit.
 
 ### X3-10. The `.cmp` file's `Path` is `/<symbol uuid>`, not the footprint's `(path ..)` (low)
+**Fixed** on task-r3-editors-exports: 9aedac85
 - Ours: `board_control_api.rs:110` builds `format!("/{symbol}")` from the derived schematic's id map. A symbol on a sub-sheet therefore loses its sheet uuids, and the path differs from the `(path ..)` our own board writer gives the footprint (`pcb.rs:1181`, `link.path`).
 - KiCad's `RecreateCmpFile` writes `fp->GetPath().AsString()`.
 - KiCad's readers use only `Reference` and `IdModule`:
@@ -168,9 +178,11 @@
 - PARITY-boardctl says "identical in content".
 
 ### X3-11. `eda fab gerbers` ignores the board's `useauxorigin` (low)
+**Fixed** on task-r3-editors-exports: 899dfdef
 - `fab_cmd.rs:32-42` never calls `with_aux_origin`, while `/api/fab/gerbers` applies the board's flag when the request does not say otherwise. The `fab_api` module doc promises that "a dialog and the CLI produce identical output for identical input".
 
 ### X3-12. Stale text in the Plot dialog (low, doc)
+**Fixed** on task-r3-editors-exports: 0e6b4f69
 - `PlotDialog.tsx:1-5`: "this keeps the two that actually change the output: X2 format and whether a board-edge check should block the plot". Neither of those is a control.
 - `PlotDialog.tsx:120-121`: "(Gerber X2, with its .gbrjob job file)". That is false for a board with `(usegerberattributes no)`, which is now plotted with `--no-x2`.
 
@@ -219,6 +231,7 @@
 These were read on main against 8303b2ad (25ec2335 where noted). Nothing was run.
 
 ### E3-1. Footprint Editor Set Anchor leaves the Reference, Value, user fields and 3D model offsets where they were (high)
+**Fixed** on task-r3-editors-exports: a10c9d08 (the kept zones/dimensions and the `courtyard` override do not move: noted in PARITY-fpedit)
 - **What differs.**
   - Ours: `crates/ops/src/lib.rs:5551-5564` `set_footprint_anchor` moves only `fp.pads`, `fp.graphics` and `fp.texts`. It does not move:
     - `fp.reference` / `fp.value` (`Option<FieldLayout>`; `None` is the default layout at (0,-0.5) / (0,1));
@@ -251,6 +264,7 @@ These were read on main against 8303b2ad (25ec2335 where noted). Nothing was run
 - **Already known?** No. The existing test (`tests.rs:1914`) covers only pads, graphics and texts.
 
 ### E3-2. Symbol Editor Move Symbol Anchor leaves the fields where they were (high)
+**Fixed** on task-r3-editors-exports: a10c9d08; the side note (no undo step in KiCad) recorded as a deliberate difference in PARITY-symedit: 32c5338d
 - **What differs.**
   - Ours: `crates/ops/src/library_editors.rs:382-394` `set_symbol_anchor` moves `sym.graphics` and `sym.pins` only. A mandatory field with no stored layout stays at `default_field`'s place.
   - KiCad: `symbol_editor_drawing_tools.cpp::PlaceAnchor` calls `symbol->Move( -cursorPos );`.
@@ -266,6 +280,7 @@ These were read on main against 8303b2ad (25ec2335 where noted). Nothing was run
 - **Side note (low).** `PlaceAnchor` pushes no commit: it only calls `OnModify()`, so it has no undo step in either 8303b2ad or 25ec2335. Ours has one. That is better, but PARITY-symedit should record it as a deliberate difference.
 
 ### E3-3. Rotate of several pins: the pivot is the box of the pins' two ends, but KiCad uses each pin's full bounding box (medium)
+**Fixed** on task-r3-editors-exports: 3cd18c9f
 - **What differs.**
   - Ours:
     - `web/studio/src/kicad-port/symEditItems.ts:66` `rotatePlan` boxes `at` and `pinEnd(p)` (`:47`).
@@ -284,6 +299,7 @@ These were read on main against 8303b2ad (25ec2335 where noted). Nothing was run
 - **Already known?** No. This is in the fix for round-2 E5.
 
 ### E3-4. Repeat Pin (Insert) finds the last pin by its content; KiCad finds it by UUID, so after an edit ours does nothing (medium)
+**Fixed** on task-r3-editors-exports: 0e6b4f69
 - **What differs.**
   - Ours: `symbolEditorStore.tsx:681` searches for a pin with `last.pin`'s number, unit, body style and position as placed. Once that pin has been moved, renumbered or renamed, nothing matches.
   - KiCad: `symbol_editor_drawing_tools.cpp::RepeatDrawItem` matches `test->m_Uuid == g_lastPin`.
@@ -295,6 +311,7 @@ These were read on main against 8303b2ad (25ec2335 where noted). Nothing was run
 - **Already known?** No.
 
 ### E3-5. Repeat Pin does not update the sticky pin template (low)
+**Fixed** on task-r3-editors-exports: 0e6b4f69
 - Ours: `repeatLastPin` (`symbolEditorStore.tsx:673`) dispatches no `SET_PIN_TEMPLATE`.
 - KiCad: `SYMBOL_EDITOR_PIN_TOOL::PlacePin` updates the template for every `aPin->IsNew() && !aPin->HasFlag( IS_PASTED )`, and `RepeatPin`'s pin is `IS_NEW`:
   `g_LastPinOrient = aPin->GetOrientation(); g_LastPinType = aPin->GetType(); g_LastPinShape = aPin->GetShape();`
@@ -329,6 +346,7 @@ These were read on main against 8303b2ad (25ec2335 where noted). Nothing was run
 This part reviews d743df5a, read against 8303b2ad. Nothing was run. Design blocks have not changed since round 2's checked list (8a567378, c40ebb4c), so they were not reviewed again.
 
 ### S3-1. A label's `${OP}` shows "?" when the label sits on a pin with no wire; sheet pins are not resolved (medium)
+**Fixed** on task-r3-editors-exports: 459f1ffe
 - **What differs.**
   - Ours: `web/studio/src/kicad-port/sim/opVars.ts` `withOpVars` finds a label's net only from a wire vertex: `sch.wires.find((w) => !w.bus && w.pts.some(at))?.net ?? null`. With no wire there, it shows "?". Only `sch.labels` are visited.
   - KiCad: `sch_label.cpp::SCH_LABEL_BASE::ResolveTextVar`:
@@ -348,27 +366,32 @@ This part reviews d743df5a, read against 8303b2ad. Nothing was run. Design block
 - **Already known?** No.
 
 ### S3-2. An escaped `\${OP}` is resolved anyway (low)
+**Fixed** on task-r3-editors-exports: 459f1ffe
 - Ours: `crates/model/src/text_vars.rs::shown_text` undoes the escape (`text.replace(ESC_DOLLAR, "${")`) before the studio runs `withOpVars` on `shown`. The literal `${OP}` therefore becomes the value.
 - KiCad resolves `${OP}` inside `ResolveTextVars`, before the `<<<ESC_DOLLAR:` markers are undone (`common.cpp`).
 - `opVars.test.ts:15` tests only the raw `\${OP}`, which is not what reaches the resolver.
 - Test: a field `{ text: "\\${OP}", shown: "${OP}" }` keeps `${OP}`.
 
 ### S3-3. `${OP:<pin>}` shows "?" before any run (or for a symbol not in the circuit); KiCad shows "--" (low)
+**Fixed** on task-r3-editors-exports: 459f1ffe
 - Ours: `opVars.ts` `symbolOpToken` walks the pins only `if (item)`.
 - KiCad: `SCH_SYMBOL::ResolveTextVar` always builds the model (`simLibMgr.CreateModel`) and calls `GetOperatingPoint`, which returns `wxS( "--" )` while `m_operatingPoints.empty()`.
 - Test: `symbolOpToken("OP:1", { points: new Map(), ref: "R1", item: undefined, pins: [{ number: "1", name: "~" }] }) === "--"`.
 
 ### S3-4. The OP current overlay counts only visible pins in its two-pin test (low)
+**Fixed** on task-r3-editors-exports: 459f1ffe
 - Ours: `opPainter.ts` gets its pins from `schPins.ts::pinsOfSymbol`, which skips hidden pins. `opOverlay.ts` then tests `ps.length === 2`.
 - KiCad: `sch_edit_frame.cpp::RefreshOperatingPointDisplay` uses `symbol->GetPins( &sheetPath )`, hidden pins included, then `if( pins.size() == 2 )`.
 - Test: a unit with 2 visible pins and 1 hidden pin takes the model-pin path.
 
 ### V3-1. 3D model-row hotkeys also fire with Shift held (low)
+**Fixed** on task-r3-editors-exports: 459f1ffe
 - Ours: `Viewer3D.tsx` `onKeyDown` matches `e.key.toLowerCase()` for t/s/v/p/d and never checks Shift.
 - KiCad binds the plain letters only: `eda_3d_actions.cpp` `showTHT` 'T', `showSMD` 'S', `showVirtual` 'V', `showNotInPosFile` 'P', `showDNP` 'D'.
 - Test: Shift+D leaves `dnp_models` unchanged.
 
 ### R3-1. Model-path expansion keeps a trailing `$` or `${`; KiCad drops it (low)
+**Fixed** on task-r3-editors-exports: 459f1ffe
 - KiCad: `common.cpp::KIwxExpandEnvVars`, case `'$'`: `size_t m = n + 1; if( m >= strlen ) break;`. Nothing is appended, so `"a$"` becomes `"a"` and `"a${"` becomes `"a"`.
 - Ours: `crates/cli/src/model3d_api.rs` `expand` does `out.extend(&s[n..]); break;`.
 - The new test `variables_are_scanned_as_kiwxexpandenvvars_scans_them` asserts `expand("a$") == "a$"`, which is the wrong result.

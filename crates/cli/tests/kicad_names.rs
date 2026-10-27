@@ -349,3 +349,28 @@ fn kicad_cli_parity_is_clean_on_a_hierarchical_board_made_from_an_example() {
     // (`nc_pins` is not here: its U1 has a no-connect pin 4 the built-in SOT-223 has no pad for, and KiCad's parity test says "No pad found for pin 4
     // in schematic" -- the intent's pinout against the footprint, nothing this test is about)
 }
+
+/// An intent board's derived project asks kicad-cli for KiCad's default hole clearance and hole-to-hole spacing, 0.25 mm
+/// (`BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS`, `DEFAULT_HOLECLEARANCE`, `DEFAULT_HOLETOHOLEMIN`), which is what the router keeps
+/// (`board.hole_clearance_nm`); it used to say the class clearance, 0.2 mm. A through-hole example routed by `eda route` passes kicad-cli's DRC
+/// at that floor: no hole, clearance or short finding.
+#[test]
+fn an_intent_boards_project_asks_kicads_hole_clearance_and_the_routed_board_meets_it() {
+    if !slow() {
+        return;
+    }
+    let (b, drc) = derived_project("through_hole_headers");
+    let pro: Value = serde_json::from_str(&std::fs::read_to_string(b.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+    let rules = &pro["board"]["design_settings"]["rules"];
+    assert_eq!(rules["min_hole_clearance"], serde_json::json!(0.25), "{rules}");
+    assert_eq!(rules["min_hole_to_hole"], serde_json::json!(0.25), "{rules}");
+    let bad: Vec<String> = drc["violations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v["type"].as_str())
+        .filter(|t| matches!(*t, "hole_clearance" | "hole_to_hole" | "clearance" | "shorting_items" | "drill_out_of_range"))
+        .map(str::to_string)
+        .collect();
+    assert!(bad.is_empty(), "{bad:?}\n{drc}");
+}

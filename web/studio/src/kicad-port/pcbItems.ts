@@ -190,7 +190,7 @@ export function itemBounds(board: BoardState, id: string, opts: { includeText?: 
       const d = board.drawings?.dimensions.find((q) => q.id === id);
       if (!d) return null;
       const pts: [number, number][] = d.lines.flatMap(([a, b]) => [a, b]);
-      const text = d.text ? textBounds({ id: d.id, content: d.text, x: d.text_at[0], y: d.text_at[1], angle: -d.computed_text_angle, layer: d.layer, size: d.text_size_nm, stroke_width: d.stroke_width, justify: "center", mirror: false }) : null;
+      const text = d.text ? textBounds({ id: d.id, content: d.text, x: d.text_at[0], y: d.text_at[1], angle: d.computed_text_angle, layer: d.layer, size: d.text_size_nm, stroke_width: d.stroke_width, justify: "center", mirror: false }) : null;
       const lines = pts.length > 0 ? padded(boundsOf(pts), d.stroke_width / 2) : null;
       return unionBounds([lines, text]);
     }
@@ -266,4 +266,9 @@ function boundsOf(pts: readonly (readonly [number, number])[]): [number, number,
 
 function padded(b: [number, number, number, number], by: number): [number, number, number, number] {
   return [b[0] - by, b[1] - by, b[2] + by, b[3] + by];
+}
+
+/** The canvas angle (radians, clockwise in a y-down canvas) a dimension's text is drawn at: its KiCad angle (millidegrees, counter-clockwise), negated (round 3 A-4). */
+export function dimensionTextAngleRad(d: { computed_text_angle: number }): number {
+  return (-d.computed_text_angle / 1000) * (Math.PI / 180);
 }

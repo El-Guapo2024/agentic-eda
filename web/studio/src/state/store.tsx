@@ -13,7 +13,7 @@ import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimens
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
-import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, type DrcPage } from "../kicad-port/rcItems";
+import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type CarryStep, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
@@ -1124,7 +1124,9 @@ export type Action =
   | { type: "SET_DRC_REFILL"; refill: boolean }
   | { type: "SET_DRC_PARITY"; parity: boolean }
   /** Waive or restore DRC violations in the report on screen without running kicad-cli again (the exclusion itself is a persisted `Cmd`); `version` as for `ERC_MARK_EXCLUDED`. */
-  | { type: "DRC_PATCH_EXCLUDED"; keys: ReadonlyArray<{ check: string; items: string[] }>; excluded: boolean; comment: string; version: string | null }
+  | { type: "DRC_PATCH_EXCLUDED"; keys: ReadonlyArray<{ check: string; items: string[] }>; excluded: boolean; comment: string; version: string | null; /** One marker from its row: it keeps its place in the list (`ValueChanged`, r2 D-E3). */ hold?: boolean }
+  /** The DRC dialog's provider refilters (`RC_TREE_MODEL::Update`, e.g. a Show box changed): every row is sorted afresh (r2 D-E3). */
+  | { type: "DRC_REFILTER" }
   /** A check's severity changed (`set_rule_severities`): the report on screen takes it (`patchDrcSeverity`) -- an ignored check leaves the list and joins the ignored ones. */
   | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   /** The same for the schematic (`set_erc_severities`). */
@@ -1551,7 +1553,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drcParity: action.parity };
     case "DRC_PATCH_EXCLUDED":
       if (!state.drc) return state;
-      return { ...state, drc: patchDrcExcluded(state.drc, action.keys, action.excluded, action.comment), drcVersion: action.version };
+      return { ...state, drc: patchDrcExcluded(state.drc, action.keys, action.excluded, action.comment, action.hold === true), drcVersion: action.version };
+    case "DRC_REFILTER":
+      return state.drc ? { ...state, drc: refilterDrc(state.drc) } : state;
     case "DRC_PATCH_SEVERITY":
       if (!state.drc) return state;
       return { ...state, drc: patchDrcSeverity(state.drc, action.check, action.severity, action.description), drcVersion: action.version, drcSelected: null };
@@ -2470,10 +2474,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     groupSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      // `PCB_GROUP_TOOL::Group`'s filter: "if( item->GetParentFootprint() ) aCollector.Remove( item );" -- a pad or a field is not grouped -- then two items or more
+      // `PCB_GROUP_TOOL::Group`'s filter: "if( item->GetParentFootprint() ) aCollector.Remove( item );" -- a pad or a field is not grouped -- and `IsGroupableType()`,
+      // which a table cell is not (round 3 B-4) -- then two items or more
       const ids = [...stateRef.current.selection].filter((id) => {
         const kind = itemKind(board, id);
-        return kind !== "pad" && kind !== "field";
+        return kind !== "pad" && kind !== "field" && kind !== "tablecell";
       });
       if (ids.length < 2) return;
       const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
@@ -2527,7 +2532,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const st = stateRef.current;
       if (!st.board) return false;
       // a pad is copied as itself, in a footprint of its own (`SaveSelection`)
-      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false, keepPads: true });
+      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false, forClipboard: true });
       if (ids.length === 0) return false;
       // `copyToClipboard`: `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )` -- the anchor of the copied items nearest the cursor, so a paste puts it on the cursor.
       const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(dragOriginFor(st, ids, [st.cursorNm.x, st.cursorNm.y])) : null);
@@ -2554,8 +2559,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       let cmd: Cmd;
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
-      } else if (system != null && system.trim() !== "") {
-        // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts); a long one asks first
+      } else if (system != null && system !== "") {
+        // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts), blanks too (`clipText.empty()` is the only text KiCad
+        // does not paste; an empty clipboard here falls back to the session's copy, as a browser that hands nothing over does); a long one asks first
         const plain = plainTextPaste(system, at, activeLayerName(st.activeLayer, "F.SilkS"))!;
         if (plain.longText && !window.confirm(LONG_TEXT_QUESTION)) return;
         cmd = plain.cmd;

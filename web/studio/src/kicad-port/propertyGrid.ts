@@ -23,6 +23,8 @@ export interface GridRow {
   writable: boolean;
   /** For an enum or net row. */
   choices: readonly Choice[] | null;
+  /** A `std::optional` property: an empty cell is no value. */
+  optional?: boolean;
 }
 
 export interface GridGroup {
@@ -125,7 +127,7 @@ export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>
     if (!property || property.hidden || property.hiddenFromDesignEditors) continue;
     const got = extractValueAndWritability(pm, items, name, ctx);
     if (!got) continue;
-    const row: GridRow = { name: property.name, kind: property.kind, display: property.display ?? "default", value: got.value, writable: got.writable, choices: got.choices };
+    const row: GridRow = { name: property.name, kind: property.kind, display: property.display ?? "default", value: got.value, writable: got.writable, choices: got.choices, ...(property.optional ? { optional: true } : {}) };
     const group = property.group ?? "";
     const list = byGroup.get(group) ?? [];
     list.push({ row, at: order.get(property) ?? 0 });
@@ -225,9 +227,11 @@ const NUMBER = "[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?";
  * What the text typed into a cell means. A length takes a unit suffix (`mm`, `mil`, `in`, `"`) and means the display unit without one; an angle may end with a degree sign;
  * an integer must be whole. A string is taken as typed.
  */
-export function parseValue(row: Pick<GridRow, "kind" | "display">, text: string, units: LengthUnit): Parsed {
+export function parseValue(row: Pick<GridRow, "kind" | "display" | "optional">, text: string, units: LengthUnit): Parsed {
   if (row.kind === "string") return { ok: true, value: text };
   const t = text.trim().replace(",", ".");
+  // `PGPROPERTY_SIZE` of a `std::optional`: an empty cell is no value
+  if (row.optional && t === "") return { ok: true, value: "" };
   if (row.kind === "bool") return { ok: false, error: "Not a check box value." };
   if (row.kind === "enum" || row.kind === "net" || row.kind === "color") return { ok: true, value: text };
   const bad = (what: string): Parsed => ({ ok: false, error: `"${text.trim()}" is not ${what}.` });

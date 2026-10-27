@@ -18,6 +18,7 @@
 // views reading the same state.selection/state.netHighlight.
 //
 // Scope: see PARITY-sch.md for the full per-action table.
+import { isTerminalPoint } from "../kicad-port/schTerminalPoint";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LabelScope, Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
@@ -523,6 +524,7 @@ export function SchematicView() {
       deltaY: e.deltaY,
       shiftKey: e.shiftKey,
       ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+      mac: isMac(),
       altKey: e.altKey,
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
@@ -657,12 +659,10 @@ export function SchematicView() {
           const tail = wireTail(draw.pts[draw.pts.length - 1]!, snapped, state.schLineMode, state.schPosture, elbowRef.current);
           elbowRef.current = null;
           const next = { ...draw, pts: [...draw.pts, ...(tail as [number, number][])] };
-          // sch_screen.cpp IsTerminalPoint, simplified: landing back on a
-          // pin auto-finishes the wire, same as a real click on a pin/
-          // junction/other wire does in source -- this app only checks
-          // the pin case (see this file's header comment for the rest).
-          const onPin = !isLine && pinSnapPoints(sch).some(([px, py]) => px === snapped[0] && py === snapped[1]);
-          if (onPin && next.pts.length >= 2) {
+          // `SCH_SCREEN::IsTerminalPoint( cursorPos, segment->GetLayer() )`: a pin, junction, label, wire or bus of the segment's layer finishes it (r3 C3-M3)
+          const layer = isLine ? "notes" : state.activeTool === "bus" ? "bus" : "wire";
+          const terminal = isTerminalPoint(sch, pinSnapPoints(sch), snapped, layer);
+          if (terminal && next.pts.length >= 2) {
             commitDrawn(next.pts);
             dispatch({ type: "SET_DRAW_STATE", draw: null });
           } else {
@@ -768,7 +768,7 @@ export function SchematicView() {
         // is for a part this simple.
         if (state.activeTool === "sch_place_symbol" && state.armedSymbol) {
           const { libId, referencePrefix, unit, ref } = state.armedSymbol;
-          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U", state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start)));
+          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U", state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start), sch.page_number ?? 1));
           const value = state.armedSymbol.value ?? (libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId);
           const [sx, sy] = snapToGrid(wx, wy);
           api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: state.armedSymbol.footprint ?? "", unit });

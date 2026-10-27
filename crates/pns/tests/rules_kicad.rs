@@ -190,7 +190,7 @@ fn a_net_tie_lets_a_track_touch_the_other_pad() {
     let pv = router.preview(to).unwrap();
     let held = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: pv.head.pts.clone(), arc_mid_offset: None }], ..Default::default() };
     assert!(pv.colliding || gap_to_pad(&held, pad2) >= 199_500.0, "without the tie pad 2 holds the track off: {:?}", pv.head.pts);
-    if let Some(found) = kicad_violations(&apply(&design, &tied), &model, &["clearance", "shorting_items"]) {
+    if let Some(found) = kicad_violations(&apply(&design, &tied), &model, &["clearance", "shorting_items", "tracks_crossing"]) {
         assert!(found.is_empty(), "{found:#?}");
         // the same track on the board without the tie is a clearance violation to kicad-cli
         assert!(!kicad_violations(&apply(&plain, &tied), &plain_model, &["clearance"]).unwrap().is_empty());
@@ -257,12 +257,13 @@ fn a_keepout_on_both_copper_layers_blocks_a_route_on_the_back() {
     }
 }
 
-/// R3-5 (`CacheTriangulation` of the outline with its holes): a 10 x 10 mm keepout of tracks with a 4 x 4 mm hole, and two pads in the hole: the
-/// route between them is straight, and kicad-cli finds nothing.
+/// R3-5 (`CacheTriangulation` of the outline with its holes): a 10 x 10 mm keepout of tracks with a 4 x 4 mm hole, two pads in the hole and one
+/// outside it: the route between the two pads in the hole is straight, and kicad-cli finds nothing; a track from the pad outside it across the
+/// area's body, outside the hole, is flagged. (The outside pad anchors that track's net, so `PropagateNets` cannot absorb it into the area.)
 #[test]
 fn a_route_may_cross_the_hole_of_a_keepout() {
-    let (r1, r2) = (p(13.0, 10.0), p(17.0, 10.0));
-    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2)], &[("SIG", &["R1.1", "R2.1"])]);
+    let (r1, r2, r3) = (p(13.0, 10.0), p(17.0, 10.0), p(13.0, 6.0));
+    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("R3", "PAD1", r3)], &[("SIG", &["R1.1", "R2.1", "R3.1"])]);
     let mut zone = rule_area("ko4", vec![p(10.0, 5.0), p(20.0, 5.0), p(20.0, 15.0), p(10.0, 15.0)], true, false);
     zone.holes = vec![vec![p(12.0, 8.0), p(18.0, 8.0), p(18.0, 12.0), p(12.0, 12.0)]];
     design.routing.as_mut().unwrap().zones.push(zone);
@@ -271,7 +272,7 @@ fn a_route_may_cross_the_hole_of_a_keepout() {
     if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["items_not_allowed", "clearance"]) {
         assert!(found.is_empty(), "{found:#?}");
         // the hole is in the derived board: a track across the area's body, outside the hole, is flagged
-        let body = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(13.0, 6.0), p(17.0, 6.0)], arc_mid_offset: None }], ..Default::default() };
+        let body = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![r3, p(17.0, 6.0)], arc_mid_offset: None }], ..Default::default() };
         assert!(!kicad_violations(&apply(&design, &body), &model, &["items_not_allowed"]).unwrap().is_empty());
     }
 }
@@ -292,7 +293,8 @@ fn gap_to_poly(commit: &RouteCommit, pts: &[Point]) -> f64 {
 }
 
 /// R3-2 (`SyncWorld` -> `syncGraphicalItem` for a `PCB_SHAPE` on copper): a filled copper polygon of no net across the straight way between two SIG
-/// pads is an obstacle: the route goes round it at the clearance.
+/// pads is an obstacle: the route goes round it at the clearance; a SIG track that comes 0.1 mm from the polygon's copper is what kicad-cli flags
+/// (`clearance`). (A track run through the no-net polygon is no short: `PropagateNets` gives the polygon the track's net.)
 #[test]
 fn a_copper_polygon_is_an_obstacle() {
     let (r1, r2) = (p(5.0, 10.0), p(25.0, 10.0));
@@ -302,18 +304,21 @@ fn a_copper_polygon_is_an_obstacle() {
     let commit = route(&design, &model, r1, r2);
     let gap = gap_to_poly(&commit, &poly);
     assert!(gap >= 199_500.0, "the track keeps {gap} nm from the polygon: {:?}", commit.tracks);
-    // (kicad-cli 10.99 reports no track against a copper graphic on a board this small -- not even the straight track through the polygon, nor
-    // two crossing tracks of two nets; it does on KiCad's `simple.kicad_pcb` -- so its DRC is no judge of the polygon here: the gap above is)
-    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance", "shorting_items"]) {
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance", "shorting_items", "tracks_crossing"]) {
         assert!(found.is_empty(), "{found:#?}");
+        // from R1.1, a track whose upper edge runs 0.1 mm below the polygon's y = 8.0 mm edge
+        let near = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![r1, p(10.0, 7.8), p(20.0, 7.8)], arc_mid_offset: None }], ..Default::default() };
+        assert!(!kicad_violations(&apply(&design, &near), &model, &["clearance"]).unwrap().is_empty(), "kicad-cli sees the polygon's clearance");
     }
 }
 
 /// R3-2: a copper polygon of the net GND (`SetNet( aItem->GetNet() )`). A SIG route keeps the clearance from it (kicad-cli: no `clearance`,
-/// no `shorting_items`), and a GND route from a GND pad may end on it (`SetAnchorPoints( GetConnectionPoints() )`: a filled shape's centre).
+/// no `shorting_items`, no `tracks_crossing`), and a GND route from a GND pad may end on it (`SetAnchorPoints( GetConnectionPoints() )`: a filled
+/// shape's centre). G1 sits below the polygon so that its route to the centre does not cross the SIG route, which goes above (the two are routed
+/// independently); the straight SIG route through the polygon, with G1 anchoring the polygon's net, is the `shorting_items` kicad-cli reports.
 #[test]
 fn a_copper_shape_with_a_net_is_an_obstacle_to_other_nets_and_an_end_for_its_own() {
-    let (r1, r2, g1) = (p(5.0, 10.0), p(25.0, 10.0), p(15.0, 3.0));
+    let (r1, r2, g1) = (p(5.0, 10.0), p(25.0, 10.0), p(15.0, 17.0));
     let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("G1", "PAD1", g1)], &[("SIG", &["R1.1", "R2.1"]), ("GND", &["G1.1"])]);
     let poly = vec![p(13.0, 8.0), p(17.0, 8.0), p(17.0, 12.0), p(13.0, 12.0)];
     copper_poly(&mut design, "shp_gnd", poly.clone(), Some("GND"));
@@ -328,8 +333,11 @@ fn a_copper_shape_with_a_net_is_an_obstacle_to_other_nets_and_an_end_for_its_own
     assert!(!pv.colliding, "a GND route may run onto the GND polygon: {:?}", pv.head.pts);
     assert_eq!(pv.head.pts.last(), Some(&centre), "{:?}", pv.head.pts);
     let gnd = router.finish(centre).expect("the route ends on the polygon");
-    if let Some(found) = kicad_violations(&apply(&apply(&design, &commit), &gnd), &model, &["clearance", "shorting_items"]) {
+    if let Some(found) = kicad_violations(&apply(&apply(&design, &commit), &gnd), &model, &["clearance", "shorting_items", "tracks_crossing"]) {
         assert!(found.is_empty(), "{found:#?}");
+        // the straight SIG route through the GND polygon is a short: the GND route's pad G1.1 anchors the polygon's net against it
+        let straight = RouteCommit { tracks: vec![eda_model::ir::Track { id: String::new(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![r1, r2], arc_mid_offset: None }], ..Default::default() };
+        assert!(!kicad_violations(&apply(&apply(&design, &straight), &gnd), &model, &["shorting_items"]).unwrap().is_empty(), "kicad-cli sees the SIG track short the GND polygon");
     }
 }
 
@@ -424,8 +432,8 @@ fn a_custom_rule_sets_the_pairs_gap_and_width_and_the_via() {
 
 /// R3-4 against kicad-cli: a pair routed from the `/USB_P` / `/USB_N` pads with the sizes `ImportSizes` gives under a rule of `A.inDiffPair('/USB*')`
 /// -- `track_width (min 0.3mm) (opt 0.3mm)`, `diff_pair_gap (min 0.3mm) (opt 0.35mm)` -- is 0.3 mm wide at a 0.35 mm gap, and kicad-cli finds no
-/// `track_width`, `diff_pair_gap` or `clearance`; the same pair at the class's 0.2 mm width and 0.25 mm gap is what it flags (`track_width`; kicad-cli
-/// 10.99 reports no `diff_pair_gap` on a board this small even for the class's pair, so the gap is held here, not by it).
+/// `track_width`, `diff_pair_gap_out_of_range` or `clearance`; the same pair at the class's 0.2 mm width and 0.25 mm gap is what it flags
+/// (`track_width`, and `diff_pair_gap_out_of_range` for the gap under the rule's 0.3 mm minimum).
 #[test]
 fn a_pair_routed_at_the_rules_sizes_passes_kicad_clis_checks() {
     let (p1, n1, p2, n2) = (p(5.0, 10.0), p(5.0, 11.6), p(25.0, 10.0), p(25.0, 11.6));
@@ -450,11 +458,12 @@ fn a_pair_routed_at_the_rules_sizes_passes_kicad_clis_checks() {
     let ruled = pair(None);
     assert!(ruled.tracks.iter().all(|t| t.width == mm(0.3)), "{:?}", ruled.tracks);
     assert!((gap_of(&ruled) - 350_000.0).abs() < 2_000.0, "the pair is at the rule's opt gap: {}: {:?}", gap_of(&ruled), ruled.tracks);
-    if let Some(found) = kicad_violations(&apply(&design, &ruled), &model, &["track_width", "diff_pair_gap", "clearance"]) {
+    if let Some(found) = kicad_violations(&apply(&design, &ruled), &model, &["track_width", "diff_pair_gap_out_of_range", "clearance"]) {
         assert!(found.is_empty(), "{found:#?}");
         let classed = pair(Some((mm(0.2), mm(0.25))));
         assert!((gap_of(&classed) - 250_000.0).abs() < 2_000.0);
         assert!(!kicad_violations(&apply(&design, &classed), &model, &["track_width"]).unwrap().is_empty(), "the class's width is under the rule's minimum");
+        assert!(!kicad_violations(&apply(&design, &classed), &model, &["diff_pair_gap_out_of_range"]).unwrap().is_empty(), "the class's gap is under the rule's minimum");
     }
 }
 

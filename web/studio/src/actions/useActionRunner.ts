@@ -30,7 +30,7 @@ import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
-import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
+import { drawZoneStarted, undoDropsDrawing, withoutLastCorner } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
@@ -348,7 +348,7 @@ export function useActionRunner() {
       pcbOnly(() => {
         if (!state.board) return;
         // a pad is cut as itself: copied in a footprint of its own, and not deleted (`DeleteItems`' `PCB_PAD_T` without free pads)
-        const refs = editableSelection(state.board, requestSelection(), { keepPads: true }).ids;
+        const refs = editableSelection(state.board, requestSelection(), { forClipboard: true }).ids;
         if (refs.length === 0) return;
         // "delete exactly that; no more, no fewer" of what reached the clipboard: nothing, when the copy failed
         void api.copySelection(refs).then((copied) => (copied ? deleteRefs(refs, true) : undefined));
@@ -360,6 +360,8 @@ export function useActionRunner() {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
       // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
+      // `DrawZone`'s loop on the board: Delete with a corner placed removes the last corner (zones, rule areas, cutouts, graphic polygons)
+      if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
       const refs = requestSelection();
       // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
       // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
@@ -646,8 +648,10 @@ export function useActionRunner() {
     const boardMoving = () => state.tab === "pcb" && (state.activeTool === "move" || state.movePreview?.kind === "pcb");
     m.set("common.Interactive.undo", () => {
       if (boardMoving()) return void m.get("common.Interactive.cancel")?.();
-      // `drawShape`: "( started && evt->IsAction( &ACTIONS::undo ) )" cancels the item being drawn, as Escape does, and keeps the tool
-      if (escapeKeepsDrawingTool(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "ESCAPE" });
+      // `DrawZone`: Undo with a corner placed removes the last corner (`DeleteLastCorner`)
+      if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
+      // `drawShape`: "( started && evt->IsAction( &ACTIONS::undo ) )" cancels the item being drawn, as Escape does, and keeps the tool (not the measure tool's)
+      if (undoDropsDrawing(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "ESCAPE" });
       void (state.tab === "footprint" ? fpApi.undo() : state.tab === "symbol" ? symApi.undo() : api.undo());
     });
     m.set("common.Interactive.redo", () => {
@@ -722,8 +726,8 @@ export function useActionRunner() {
     // board_inspection_tool.cpp BOARD_INSPECTION_TOOL::ClearHighlight ("~").
     m.set("pcbnew.EditorControl.clearHighlight", pcbOnly(() => dispatch({ type: "SET_NET_HIGHLIGHT", net: null })));
 
-    // pcb_selection_tool.cpp expandConnection ("U" -- Select/Expand Connection): seed points from every currently-selected track/via's
-    // own endpoints, every selected pad and every pad of a selected footprint, each on its own net, and flood outward (kicad-port/expandConnection.ts).
+    // pcb_selection_tool.cpp expandConnection ("U" -- Select/Expand Connection): from every selected track (each of its segments), via and pad and every pad
+    // of a selected footprint, `selectAllConnectedTracks` walks the tracks, vias and pads that meet, whatever their nets (kicad-port/expandConnection.ts).
     // With no footprint or connected item selected it takes the one under the cursor first (`selectCursor( true, connectedItemFilter )`,
     // kicad-port/pcbConnection.ts).
     m.set(
@@ -1642,7 +1646,8 @@ export function useActionRunner() {
           const hit = pickItem(sch, state.cursorNm.x, state.cursorNm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "first");
           return hit ? [hit] : [];
         };
-        const ids = state.selection.size > 0 || state.tab !== "schematic" ? [...state.selection] : hovered();
+        // (the board's `RequestSelection` falls back to the item under the cursor too, and `if( selection.IsHover() ) ClearSelection()` leaves no selection behind: round 3 B-6)
+        const ids = state.tab !== "schematic" ? requestSelection() : state.selection.size > 0 ? [...state.selection] : hovered();
         // the board: each item's shown text, a table's cells tab- and newline-separated (kicad-port/pcbCopyAsText.ts)
         const texts = state.tab === "schematic" ? (sch ? schSelectionTexts(sch, ids) : []) : state.board ? ids.map((id) => boardItemAsText(state.board!, id)) : [];
         const text = selectionAsText(texts);
@@ -2294,7 +2299,7 @@ export function useActionRunner() {
         "eeschema.InteractiveEdit.repeatDrawItem",
         schematicOnly(() => {
           if (!sch || state.schRepeat.length === 0) return;
-          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id), state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start))) });
+          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id), state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start), sch.page_number ?? 1)) });
           if (cmds.length > 0) void api.cmdBatch(cmds);
         })
       );

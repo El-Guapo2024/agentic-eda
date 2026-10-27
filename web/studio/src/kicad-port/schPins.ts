@@ -75,14 +75,19 @@ export function pinItems(sch: Schematic): PinItem[] {
   return items;
 }
 
-function pinsOfSymbol(sch: Schematic, s: SchematicSymbol): PinItem[] {
+/** Every pin of every placed symbol, hidden ones too (`SCH_SYMBOL::GetPins`), each with whether it is hidden. Not cached: the OP overlay asks once a frame. */
+export function allPinItems(sch: Schematic): Array<PinItem & { hidden: boolean }> {
+  return sch.symbols.flatMap((s) => pinsOfSymbol(sch, s, true));
+}
+
+function pinsOfSymbol(sch: Schematic, s: SchematicSymbol, withHidden = false): Array<PinItem & { hidden: boolean }> {
   const real = resolveLibSymbol(s, sch.lib_symbols);
   if (!real) return [];
   const key = symbolKey(s.id, s.unit || 1);
   const nets = new Map((s.pins ?? []).map((p) => [p.number, p.net ?? null]));
-  const out: PinItem[] = [];
+  const out: Array<PinItem & { hidden: boolean }> = [];
   for (const r of real.pins) {
-    if (r.pin.hidden) continue;
+    if (r.pin.hidden && !withHidden) continue;
     out.push({
       id: pinItemId(key, r.pin.number),
       key,
@@ -95,6 +100,7 @@ function pinsOfSymbol(sch: Schematic, s: SchematicSymbol): PinItem[] {
       root: r.root,
       net: nets.get(r.pin.number) ?? null,
       texts: real.texts,
+      hidden: !!r.pin.hidden,
     });
   }
   return out;
@@ -137,10 +143,18 @@ function textBox(t: PinTextPlacement, sizeNm: number, measure: Measure): Box {
  * number. (A pin shape's decoration -- the bubble of an inverted pin, the clock triangle -- is inside the box the line and the texts give, within the accuracy.)
  */
 export function pinBox(pin: PinItem, measure: Measure): Box {
+  return pinBoxAt(pin.tip, pin.root, pin.name, pin.number, pin.texts, measure);
+}
+
+/** [`pinBox`] of a pin given by its two ends (internal nm, y down), its texts and their sizes (the Symbol Editor's pins have their own: `GetNameTextSize`, `GetNumberTextSize`). */
+export function pinBoxAt(tip: [number, number], root: [number, number], name: string | null, number: string, pinTexts: PinItem["texts"], measure: Measure, nameSizeNm = PIN_TEXT_SIZE_NM, numberSizeNm = PIN_TEXT_SIZE_NM): Box {
   const pen = PIN_TEXT_PEN_NM;
-  let box: Box | null = inflateBox(boxOfPoints([pin.tip, pin.root])!, pen / 2);
-  const texts = pinTextPlacements({ name: pin.name, number: pin.number }, pin.tip, pin.root, pin.texts);
-  for (const t of [texts.name, texts.number]) if (t) box = unionBox(box, textBox(t, PIN_TEXT_SIZE_NM, measure));
+  let box: Box | null = inflateBox(boxOfPoints([tip, root])!, pen / 2);
+  const n = pinTextPlacements({ name, number: "" }, tip, root, pinTexts, nameSizeNm).name;
+  // the number's place depends on whether a name is drawn over the line, so it is placed with the name there
+  const m = pinTextPlacements({ name, number }, tip, root, pinTexts, numberSizeNm).number;
+  if (n) box = unionBox(box, textBox(n, nameSizeNm, measure));
+  if (m) box = unionBox(box, textBox(m, numberSizeNm, measure));
   return box!;
 }
 

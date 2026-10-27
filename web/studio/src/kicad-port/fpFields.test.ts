@@ -132,6 +132,11 @@ test("the field grid's rows are checked the way the dialog's Validate does", () 
 test("a new field starts hidden at the origin on the fabrication layer of the footprint's side", () => {
   assert.deepEqual([newFieldLayout(part()).layer, newFieldLayout(part()).visible, newFieldLayout(part()).mirror], ["F.Fab", false, false]);
   assert.deepEqual([newFieldLayout(part({ side: "bottom" })).layer, newFieldLayout(part({ side: "bottom" })).mirror], ["B.Fab", true]);
+  // `StyleFromSettings( .., true )`: Board Setup's Fab text defaults (round 3 C-5)
+  const fab = { line_width_nm: 100_000, text_width_nm: 800_000, text_height_nm: 800_000, text_thickness_nm: 120_000, italic: true, upright: false };
+  const defaults = { silk: fab, copper: fab, fab, others: fab, edge_cuts_line_width_nm: 50_000, courtyard_line_width_nm: 50_000 } as unknown as Parameters<typeof newFieldLayout>[1];
+  const l = newFieldLayout(part(), defaults);
+  assert.deepEqual([l.size, l.thickness, l.italic, l.keep_upright], [[800_000, 800_000], 120_000, true, false]);
   assert.equal(newFieldName([], 4), "Field4");
   assert.equal(newFieldName(["Field4", "Field5"], 4), "Field6");
 });
@@ -149,8 +154,25 @@ test("pad values: sizes and holes are refused with the dialog's words; a hole at
   assert.equal(checkPadValues({ kind: "smd", shape: "rect", size: [600, 400], drill: null }, fmt), null, "an SMD pad has no hole");
   assert.deepEqual(padCheck({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [900, 1000] }, fmt).warnings, ["Warning: (PTH pad hole not fully inside copper)"]);
   assert.deepEqual(padCheck({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [1600, 1000] }, fmt).warnings, ["Warning: (PTH pad hole leaves no copper)"]);
-  assert.equal(checkPadValues({ ...ok, drill: 3 }, fmt), "Error: (PTH pad hole size must be larger than 0.004 mm)");
+  // `StringFromValue( 4, true )`: 4 nm (round 3 C-4)
+  assert.equal(padCheck({ ...ok, drill: 3 }, fmt, "mm").errors[0], "Error: (PTH pad hole size must be larger than 0.000004 mm)");
   assert.equal(checkPadValues({ kind: "smd", shape: "round_rect", size: [600, 400], ratio: 0.7 }, fmt), null, "KiCad has no message for the ratios: the dialog clamps them");
+});
+
+test("pad values: doCheckPad's clearance, mask, paste and NPTH warnings; the hole is at the pad's position, the copper at its offset (round 3 C-4)", () => {
+  const fmt = (nm: number) => `${nm / 1e6} mm`;
+  const smd = { kind: "smd", shape: "rect", size: [1_000_000, 1_000_000] as [number, number] };
+  assert.deepEqual(padCheck({ ...smd, maskMargin: -2_000_000 }, fmt).warnings, ["Warning: (negative solder mask clearance is larger than pad; no solder mask will be generated)"]);
+  assert.deepEqual(padCheck({ ...smd, maskMargin: -500_000 }, fmt).warnings, []);
+  assert.deepEqual(padCheck({ ...smd, clearance: -100_000 }, fmt).warnings, ["Warning: (negative local clearance values have no effect)"]);
+  assert.deepEqual(padCheck({ ...smd, pasteMargin: -600_000, pasteRatio: -0.5 }, fmt).warnings, ["Warning: (negative solder paste margin is larger than pad; no solder paste mask will be generated)"]);
+  const npth = { kind: "non_plated_hole", shape: "circle", size: [2_000_000, 2_000_000] as [number, number], drill: 1_000_000 };
+  assert.deepEqual(padCheck({ ...npth, offset: [1_500_000, 0] }, fmt).warnings, ["Warning: (pad hole not inside pad shape)"]);
+  assert.deepEqual(padCheck(npth, fmt).warnings, []);
+  // a PTH hole that fits a centred pad pokes out of one moved aside
+  const pth = { kind: "through_hole", shape: "circle", size: [2_000_000, 2_000_000] as [number, number], drill: 1_000_000 };
+  assert.deepEqual(padCheck(pth, fmt).warnings, []);
+  assert.deepEqual(padCheck({ ...pth, offset: [800_000, 0] }, fmt).warnings, ["Warning: (PTH pad hole not fully inside copper)"]);
 });
 
 test("a field follows the Appearance panel's Objects rows: References for the Reference, Values for the Value, Footprint Text for all, the footprint's side for the lot", () => {

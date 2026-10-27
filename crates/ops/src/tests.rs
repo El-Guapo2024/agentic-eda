@@ -398,6 +398,11 @@ fn add_track_assigns_an_id_that_set_track_width_and_delete_track_can_use() {
     let t = &b.design().routing.as_ref().unwrap().tracks[0];
     assert_eq!(t.width, mm(0.35));
     assert_eq!(t.id, id, "changing width must not move the id");
+    // r2-pcb-edit A7: the Properties panel's Width (`PROPERTY<PCB_TRACK, int>( "Width", .., PT_SIZE )`, a `PGPROPERTY_SIZE` with no validator) takes 0; only a
+    // negative width is refused.
+    b.apply(&Cmd::SetTrackWidth { id: id.clone(), width: Nm::ZERO }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks[0].width, Nm::ZERO);
+    assert!(b.apply(&Cmd::SetTrackWidth { id: id.clone(), width: Nm::new(-1) }).is_err());
 
     b.apply(&Cmd::DeleteTrack { id: id.clone() }).unwrap();
     assert!(b.design().routing.as_ref().unwrap().tracks.is_empty());
@@ -1932,6 +1937,36 @@ fn set_footprint_anchor_translates_every_pad_graphic_and_text_so_the_click_point
     assert_eq!(fp.texts[0].at, Point { x: Nm::ZERO, y: mm(-0.5) });
 }
 
+/// r3 E3-1: `FOOTPRINT::MoveAnchorPosition` moves the fields and the 3D model offsets too.
+#[test]
+fn set_footprint_anchor_moves_fields_and_models_as_move_anchor_position() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", mm(2.0), Nm::ZERO) }).unwrap();
+    {
+        let mut fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().clone();
+        fp.reference = None;
+        fp.value = None;
+        let mut l = eda_model::fp_edit::new_library_field_layout();
+        l.at = Point { x: mm(1.0), y: mm(1.0) };
+        fp.fields = vec![eda_model::ir::FootprintField { name: "Vendor".into(), value: "X".into(), visible: false, layout: Some(l) }];
+        fp.models3d = vec![eda_model::footprint::Model3d::identity("m.step")];
+        b.apply(&Cmd::PutLibraryFootprint { footprint: fp, overwrite: true }).unwrap();
+    }
+    b.apply(&Cmd::SetFootprintAnchor { name: "Test:FP".into(), at: Point { x: mm(2.0), y: Nm::ZERO } }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.pads[0].at, Point { x: Nm::ZERO, y: Nm::ZERO });
+    assert_eq!(fp.reference.as_ref().unwrap().at, Point { x: mm(-2.0), y: mm(-0.5) });
+    assert_eq!(fp.value.as_ref().unwrap().at, Point { x: mm(-2.0), y: mm(1.0) });
+    assert_eq!(fp.fields[0].layout.as_ref().unwrap().at, Point { x: mm(-1.0), y: mm(1.0) });
+    assert_eq!(fp.models3d[0].offset, [-2.0, 0.0, 0.0]);
+    // The y offset is negated (KiCad's model frame is y up).
+    b.apply(&Cmd::SetFootprintAnchor { name: "Test:FP".into(), at: Point { x: Nm::ZERO, y: mm(1.0) } }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.models3d[0].offset, [-2.0, 1.0, 0.0]);
+}
+
 #[test]
 fn update_footprint_on_board_only_flips_the_explicit_flag() {
     let m = net_model();
@@ -2188,6 +2223,11 @@ fn a_junction_is_added_once_per_point_deleted_by_id_and_belongs_to_the_schematic
     let mut b = board(&m);
     assert_eq!(Cmd::AddJunction { at: p(Nm::ZERO, Nm::ZERO) }.domain(), Domain::Schematic);
     assert_eq!(Cmd::DeleteJunction { id: "x".into() }.domain(), Domain::Schematic);
+    // `IsExplicitJunctionAllowed`: a dot only where three or more things meet (two crossings here)
+    assert_eq!(b.apply(&Cmd::AddJunction { at: p(mm(2.54), mm(5.08)) }).unwrap_err()[0].check, "ops_junction_not_allowed");
+    for (a, z) in [(p(Nm::ZERO, mm(5.08)), p(mm(5.08), mm(5.08))), (p(mm(2.54), Nm::ZERO), p(mm(2.54), mm(10.16))), (p(Nm::ZERO, -mm(2.54)), p(Nm::ZERO, mm(2.54))), (p(-mm(2.54), Nm::ZERO), p(mm(2.54), Nm::ZERO))] {
+        b.apply(&Cmd::AddWire { pts: vec![a, z], bus: false }).unwrap();
+    }
     b.apply(&Cmd::AddJunction { at: p(mm(2.54), mm(5.08)) }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     assert_eq!(sch.junctions.len(), 1);
@@ -2198,6 +2238,8 @@ fn a_junction_is_added_once_per_point_deleted_by_id_and_belongs_to_the_schematic
     let id = b.design().schematic.as_ref().unwrap().junctions.iter().find(|j| j.at == p(mm(2.54), mm(5.08))).unwrap().id.clone();
     b.apply(&Cmd::DeleteJunction { id: id.clone() }).unwrap();
     assert_eq!(b.design().schematic.as_ref().unwrap().junctions.len(), 1);
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.wires.iter().map(|w| w.pts.len() - 1).sum::<usize>(), 6, "the wires of the deleted dot merge again (DeleteJunction), the other dot's stay broken: {:?}", sch.wires);
     assert_eq!(b.apply(&Cmd::DeleteJunction { id }).unwrap_err()[0].check, "ops_unknown_junction");
 }
 
@@ -2284,7 +2326,7 @@ fn swap_reaches_labels_texts_and_power_symbols_and_a_chain_rotates_the_positions
     let mut b = board(&m);
     b.apply(&Cmd::AddLabel { net: "A".into(), at: p(mm(1.0), mm(1.0)), kind: LabelKind::Local }).unwrap();
     b.apply(&Cmd::AddSchText { content: "note".into(), at: p(mm(2.0), mm(2.0)), angle_millideg: 0, size_nm: mm(1.27) }).unwrap();
-    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(mm(3.0), mm(3.0)), rot_millideg: 0, net: "GND".into(), pin: "1".into() }).unwrap();
+    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(mm(3.0), mm(3.0)), rot_millideg: 0, net: "GND".into(), pin: "1".into(), annotate: None }).unwrap();
     // labels and texts get their ids when the design is next loaded (`board::load`'s back-fill) -- do that here
     let mut d = b.into_design();
     d.assign_missing_ids();
@@ -3013,6 +3055,26 @@ fn a_placement_snaps_to_the_grid_anchored_at_the_grid_origin() {
     assert!(b.design().drawings.as_ref().and_then(|d| d.grid_origin).is_none());
 }
 
+/// r3 X3-3: the Plot dialog's checklist and origin, and the drill dialog's origin, are stored back in the board's plot settings
+/// (`DIALOG_PLOT::applyPlotSettings`, `DIALOG_GENDRILL::updateConfig`); the copper layers the board lacks stay selected; nothing changed is refused.
+#[test]
+fn the_plot_dialogs_store_their_choices_in_the_board() {
+    let m = net_model();
+    let mut b = board(&m);
+    let cmd: Cmd = serde_json::from_str(r#"{"op":"set_plot_settings","layers":["F.Cu","F.Mask","Edge.Cuts"],"use_aux_origin":true}"#).unwrap();
+    b.apply(&cmd).unwrap();
+    let plot = eda_model::plot_params::PlotParams::of_design(b.design());
+    assert_eq!(plot.flag("useauxorigin"), Some(true));
+    assert!(plot.layer_selection.contains(&"F.Cu".to_string()) && plot.layer_selection.contains(&"In1.Cu".to_string()) && !plot.layer_selection.contains(&"B.Cu".to_string()));
+    assert!(!plot.layer_selection.contains(&"F.Paste".to_string()));
+    assert_eq!(plot.board_layers(&m.board.layers), vec!["F.Cu", "F.Mask", "Edge.Cuts"]);
+    assert_eq!(b.apply(&cmd).unwrap_err()[0].check, "ops_plot_settings");
+    // The drill dialog sends only its Origin.
+    b.apply(&Cmd::SetPlotSettings { layers: None, use_aux_origin: Some(false) }).unwrap();
+    let plot = eda_model::plot_params::PlotParams::of_design(b.design());
+    assert_eq!((plot.flag("useauxorigin"), plot.board_layers(&m.board.layers)), (Some(false), vec!["F.Cu".to_string(), "F.Mask".into(), "Edge.Cuts".into()]));
+}
+
 /// `Cmd::CommitRoute`'s `via_kinds` read from the JSON the studio and the route API send (`[[index, "blind"]]`, numbers inside a tagged enum: the
 /// `arbitrary_precision` reader), and the via it names gets its type in `via_extras`; a removed via's extras go with it.
 #[test]
@@ -3081,4 +3143,83 @@ fn a_board_of_two_pieces_takes_a_part_on_its_smaller_piece() {
     // between the pieces is off the board
     assert!(b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(65.0), y: mm(15.0) }).is_err());
     b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(85.0), y: mm(15.0) }).unwrap();
+}
+
+/// r3 C3-H1 (`DoDelete` -> `SCH_EDIT_FRAME::DeleteJunction`: the wires that end at the dot merge in line, `MergeOverlap`; the commit's `CleanUp`): four wire
+/// pieces meeting at a junction are two crossing wires once the dot is deleted, on two nets. r3 C3-M2 (`SingleClickPlace`: `AddJunction` breaks the wires,
+/// then `CleanUp`): placing the dot on two crossing wires breaks them into four.
+#[test]
+fn delete_junction_at_crossing_unjoins() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::AddWire { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.32), Nm::ZERO)], bus: false }).unwrap();
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(10.16), -mm(10.16)), p(mm(10.16), mm(10.16))], bus: false }).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().wires.len(), 2, "two wires cross, unjoined");
+    b.apply(&Cmd::AddJunction { at: p(mm(10.16), Nm::ZERO) }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    // (a wire here is a polyline the writer writes a `(wire ..)` per segment of: broken at the dot, each has a point there)
+    let segments = |sch: &SchematicSection| sch.wires.iter().map(|w| w.pts.len() - 1).sum::<usize>();
+    assert_eq!((segments(sch), sch.junctions.len()), (4, 1), "the dot breaks both wires");
+    assert!(sch.wires.iter().all(|w| w.pts.contains(&p(mm(10.16), Nm::ZERO))));
+    let id = sch.junctions[0].id.clone();
+    b.apply(&Cmd::DeleteJunction { id }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let mut wires: Vec<Vec<Point>> = sch.wires.iter().map(|w| { let mut v = w.pts.clone(); v.sort(); v }).collect();
+    wires.sort();
+    assert_eq!(wires, vec![vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.32), Nm::ZERO)], vec![p(mm(10.16), -mm(10.16)), p(mm(10.16), mm(10.16))]]);
+    assert!(sch.junctions.is_empty());
+}
+
+/// r3 C3-M4 (`SCH_LINE::IsStrokeEquivalent`: DEFAULT and SOLID are alike): a `solid` wire and a default one in line merge.
+#[test]
+fn clean_up_merges_solid_with_default() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::AddWire { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.16), Nm::ZERO)], bus: false }).unwrap();
+    {
+        let sch = b.design.schematic.as_mut().unwrap();
+        let id = sch.wires[0].id.clone();
+        sch.extras.strokes.insert(id, eda_model::sch_extras::SchStroke { style: eda_model::sch_extras::SchLineStyle::Solid, ..Default::default() });
+    }
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(10.16), Nm::ZERO), p(mm(20.32), Nm::ZERO)], bus: false }).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().wires.len(), 1, "one wire, end to end");
+}
+
+/// Track & Via Properties' via type, layer pair and annular rings (`DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`, `PCB_VIA::SanitizeLayers`,
+/// `ValidateViaParameters`): over every via of the dialog, a row left out left alone, KiCad's messages for a bad pair.
+#[test]
+fn set_via_layers_sets_type_pair_and_rings_as_the_via_dialog_does() {
+    let mut m = net_model();
+    m.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+    let mut b = board(&m);
+    for x in [5.0, 8.0] {
+        b.apply(&Cmd::AddVia { net: "GND".into(), x: mm(x), y: mm(5.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    }
+    let ids: Vec<String> = b.design().routing.as_ref().unwrap().vias.iter().map(|v| v.id.clone()).collect();
+    let cmd = |j: serde_json::Value| serde_json::from_value::<Cmd>(j).unwrap();
+    // Blind, from the back to In1 (given back to front: swapped).
+    b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": ids, "kind": "blind", "from_layer": "B.Cu", "to_layer": "In1.Cu" }))).unwrap();
+    for v in &b.design().routing.as_ref().unwrap().vias {
+        assert_eq!((v.from_layer.as_str(), v.to_layer.as_str()), ("In1.Cu", "B.Cu"));
+        assert_eq!(b.design().drawings.as_ref().unwrap().via_extra(&v.id).unwrap().kind, eda_model::via_extra::ViaKind::Blind);
+    }
+    // The rings only: type and layers kept.
+    b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": [ids[0]], "unconnected": "remove_except_start_and_end" }))).unwrap();
+    let e = b.design().drawings.as_ref().unwrap().via_extra(&ids[0]).unwrap();
+    assert_eq!((e.kind, e.unconnected_layers()), (eda_model::via_extra::ViaKind::Blind, eda_model::padstack::UnconnectedLayers::RemoveExceptStartAndEnd));
+    assert_eq!(b.design().routing.as_ref().unwrap().vias[0].from_layer, "In1.Cu");
+    // Back to Through: `SanitizeLayers` puts it on F.Cu..B.Cu whatever the pair says; with the rings kept all, the via has no extras left.
+    b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": [ids[1]], "kind": "through", "from_layer": "In1.Cu", "to_layer": "In2.Cu" }))).unwrap();
+    let v1 = &b.design().routing.as_ref().unwrap().vias[1];
+    assert_eq!((v1.from_layer.as_str(), v1.to_layer.as_str()), ("F.Cu", "B.Cu"));
+    assert!(b.design().drawings.as_ref().unwrap().via_extra(&ids[1]).is_none());
+    // KiCad's words.
+    let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": ids, "from_layer": "In1.Cu", "to_layer": "In1.Cu" }))).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Via start layer and end layer cannot be the same"));
+    let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": ids, "from_layer": "F.SilkS" }))).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Via layer must be a copper layer."));
+    let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": ids, "to_layer": "In5.Cu" }))).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Via layer is outside the board stack."));
+    let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": [ids[1]], "kind": "through" }))).unwrap_err();
+    assert_eq!(e[0].check, "ops_nothing_to_change");
 }

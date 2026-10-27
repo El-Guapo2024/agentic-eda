@@ -1,8 +1,8 @@
-// dialog_plot.cpp ("Plot", File > Fabrication Outputs > Gerbers...): a
-// layer checklist, a few format options, and a Plot button -- the real
-// dialog's drill/vias/refdes/colour options aren't ported (nothing here
-// yet reads them back), so this keeps the two that actually change the
-// output: X2 format and whether a board-edge check should block the plot.
+// dialog_plot.cpp ("Plot", File > Fabrication Outputs > Gerbers...): the
+// layer checklist, "Check zone fills before plotting", "Use drill/place file
+// origin" and a Plot button. The real dialog's other controls (format, drill
+// marks, scale, the Gerber options) are not ported; the Gerber options are
+// plotted as the board's plot settings say.
 //
 // POSTs straight to /api/fab/gerbers (crates/cli/src/fab_api.rs), which
 // runs `kicad-cli pcb export gerbers --layers ...` on the exported board with
@@ -10,11 +10,14 @@
 // not, precision, X2, subtract mask from silk, the DNP fab options -- what
 // KiCad's dialog plots with) and writes into this board's own
 // export/kicad/gerbers/ folder. The checklist and the origin box start from
-// the board's plot settings too. Differs: KiCad stores the dialog's choices
-// back in the board on Plot; here they are this dialog's only.
+// the board's plot settings each time the dialog opens (`DIALOG_PLOT::init_Dialog`,
+// run by each construction), and Plot stores them back in the board first
+// (`applyPlotSettings`: `SetPlotSettings( tempOptions ); OnModify()` when they
+// changed), as one undoable `set_plot_settings`; the plot then takes the
+// origin from the board.
 import { useEffect, useRef, useState } from "react";
 import { postFabGerbers } from "../api/client";
-import { useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { enabledOptionalLayers, layerDisplayName } from "../kicad-port/boardLayers";
 
 /** The default checklist: every copper layer (board.layers), both mask/
@@ -31,8 +34,14 @@ export function PlotDialog() {
   const copperLayers = state.board?.layers ?? ["F.Cu", "B.Cu"];
   const layerSetup = state.board?.board_rules?.layer_setup;
   const optional = enabledOptionalLayers(layerSetup);
-  // `DIALOG_PLOT::init_Dialog`: the checklist is the board's plot settings' layer selection (`GetLayerSelection()`), KiCad's default for a board that has none.
-  const [checked, setChecked] = useState<Set<string>>(() => new Set(state.board?.plot_params?.layers ?? defaultLayers(copperLayers, optional)));
+  const api = useStudioApi();
+  // `DIALOG_PLOT::init_Dialog`: the checklist is the board's plot settings' layer selection (`GetLayerSelection()`) of the layers it lists
+  // (`m_layerList`, the board's enabled layers), KiCad's default for a board that has none.
+  const fromBoard = (): Set<string> => {
+    const listed = [...copperLayers, ...optional];
+    return new Set((state.board?.plot_params?.layers ?? defaultLayers(copperLayers, optional)).filter((l) => listed.includes(l)));
+  };
+  const [checked, setChecked] = useState<Set<string>>(fromBoard);
   // Board Setup > Physical Stackup changes the number of copper layers while this dialog's state lives on: a copper layer the board gained
   // starts checked (the default is every layer the board has) and one it lost is dropped, whatever else was ticked or cleared stays.
   const knownCopper = useRef(copperLayers);
@@ -65,6 +74,15 @@ export function PlotDialog() {
   }, [optionalKey]);
   // "Use drill/place file origin" (`m_useAuxOriginCheckBox`) starts as the board's `useauxorigin`.
   const [useAuxOrigin, setUseAuxOrigin] = useState(() => state.board?.plot_params?.use_aux_origin ?? false);
+  // KiCad builds the dialog each time it is opened, so both start from the board as it is then (the board loads after this component
+  // is mounted, and its settings change between two plots).
+  useEffect(() => {
+    if (!state.plotDialogOpen) return;
+    setChecked(fromBoard());
+    setUseAuxOrigin(state.board?.plot_params?.use_aux_origin ?? false);
+    setResult(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.plotDialogOpen]);
   // `DIALOG_PLOT::m_zoneFillCheck`: on by default in KiCad.
   const [checkZones, setCheckZones] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -85,7 +103,12 @@ export function PlotDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postFabGerbers([...checked], useAuxOrigin, checkZones);
+      // `applyPlotSettings` before the plot: the board keeps the choices (one undo step, only when they changed), and the plot takes the
+      // origin from the board's settings.
+      const before = fromBoard();
+      const changed = before.size !== checked.size || [...checked].some((l) => !before.has(l)) || useAuxOrigin !== (state.board?.plot_params?.use_aux_origin ?? false);
+      if (changed && !(await api.cmd({ op: "set_plot_settings", layers: [...checked], use_aux_origin: useAuxOrigin }))) return;
+      const reply = await postFabGerbers([...checked], undefined, checkZones);
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Plotted." : "Plot failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
@@ -118,7 +141,7 @@ export function PlotDialog() {
           </label>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
             Output directory: <code>export/kicad/gerbers/</code> (inside this board's own directory). Written by `kicad-cli pcb export gerbers`
-            (Gerber X2, with its .gbrjob job file).
+            with the board's plot settings, and a .gbrjob job file.
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>

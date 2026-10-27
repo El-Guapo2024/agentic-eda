@@ -320,6 +320,14 @@ export interface Part {
   attrs?: FootprintAttrsInfo;
   /** The zone-connection facts this placed footprint and its pads carry (`crates/cli/src/studio.rs`); absent when there are none. */
   zone?: PartZoneFacts;
+  /** `FOOTPRINT::GetLibDescription` and `GetKeywords`: the board file's `(descr ..)` and `(tags ..)` of the footprint; absent when it has none. */
+  lib_description?: string;
+  keywords?: string;
+  /** The component classes the board file gives the footprint itself (`(component_classes ..)`); absent when none. */
+  component_classes?: string[];
+  /** The footprint's own `(solder_paste_margin ..)` (nm) and `(solder_paste_margin_ratio ..)` (`GetLocalSolderPasteMargin`, `..Ratio`); absent when it has none. */
+  paste_margin?: Nm;
+  paste_margin_ratio?: number;
 }
 
 /** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */
@@ -1534,6 +1542,8 @@ export type Cmd =
   | { op: "move_via"; id: string; x: Nm; y: Nm }
   /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */
   | { op: "edit_via"; id: string; diameter: Nm; drill: Nm }
+  /** `crates/ops/src/via_layers.rs`: Track & Via Properties' via type, layer pair and annular rings over `ids`; an omitted row is left alone. */
+  | { op: "set_via_layers"; ids: string[]; kind?: "through" | "blind" | "buried" | "micro"; from_layer?: string; to_layer?: string; unconnected?: UnconnectedLayers }
   /** Board Setup > Track Widths & Vias: replace the W/Shift+W preset list wholesale (no per-entry add/remove Cmd -- same spirit as `paste_items`). The board's own default (`board_rules.track_width`) is not part of this list. */
   | { op: "set_track_width_presets"; widths: Nm[] }
   /** Same panel's via-size-cycle preset list. */
@@ -1637,7 +1647,7 @@ export type Cmd =
   | { op: "swap_pad_nets"; ids: string[]; connected_pads?: boolean | null }
   | { op: "swap_gate_nets"; ids: string[]; target?: string | null; connected_pads?: boolean | null }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
-  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[] }
+  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[]; /** indices into `tracks` of the new tracks that are locked */ lock_tracks?: number[] }
   /** `EDIT_TOOL::BooleanPolygons`: merge/subtract/intersect rectangles, circles and polygons (`ids` in routine order, the base first). */
   | { op: "boolean_shapes"; operation: "merge" | "subtract" | "intersect"; ids: string[] }
   /** `BOARD_EDITOR_CONTROL::modifyLockSelected` -- lock/unlock every id (part ref or track/via/zone/shape/text id). */
@@ -1652,6 +1662,7 @@ export type Cmd =
   | { op: "set_zone_priority"; id: string; to: ZonePriorityMove }
   /** `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin` -- the drill/place file origin; `null` resets it to (0, 0). */
   | { op: "set_aux_origin"; at: PointXY | null }
+  | { op: "set_plot_settings"; layers?: string[]; use_aux_origin?: boolean }
   /** `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` -- the point the editing grid is anchored at; `null` resets it to (0, 0). */
   | { op: "set_grid_origin"; at: PointXY | null }
   /** `common.Control.pageSettings` -- the board's paper and title block, one undo step (`BOARD_EDITOR_CONTROL::PageSettings`). Refused when nothing changes. */
@@ -1728,12 +1739,16 @@ export type Cmd =
   | { op: "flip_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
   /** `EDIT_TOOL::Mirror` of tracks and arcs (`PCB_TRACK::Mirror`): the points mirrored across the axis through `pivot`, in place (the id, the layer, the net and the group stay). */
   | { op: "mirror_tracks"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
+  /** `crates/ops/src/pcb_transform.rs` `mirror_items`: `PCB_TEXTBOX::Mirror` and `PCB_TUNING_PATTERN::Mirror` of text boxes and tuning patterns. */
+  | { op: "mirror_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
   /**
    * The Properties panel's own verbs (crates/ops/src/pcb_props.rs): a track's or arc's first and last point (a field left out stays), the net of tracks, vias and zones
    * (only a zone may be given ""), a zone's name, and a shape's new geometry in place (its id and lock stay). Every other row of the grid goes through the verbs above.
    */
   | { op: "edit_track"; id: string; start?: PointXY; end?: PointXY }
   | { op: "set_item_net"; ids: string[]; net: string }
+  /** Track & Via Properties' net and its questions (crates/ops/src/pad_nets.rs `track_via_nets`): `net` null leaves every net; the answers left out make a question a refusal. */
+  | { op: "track_via_nets"; ids: string[]; net: string | null; apply_anyway?: boolean; change_pads?: boolean }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
   /**
@@ -1822,7 +1837,7 @@ export type Cmd =
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
   /** Ctrl+V / Ctrl+Shift+V / Ctrl+D (`SCH_EDITOR_CONTROL::Paste`): the `fragment` `POST /api/sch/clipboard/parse` returned, added to the sheet in view moved by (`dx`, `dy`); `mode` is Paste Special's reference-designator choice. One undo step. */
-  | { op: "paste_sch"; fragment: unknown; dx?: Nm; dy?: Nm; mode?: "unique" | "keep" | "remove" }
+  | { op: "paste_sch"; fragment: unknown; dx?: Nm; dy?: Nm; mode?: "unique" | "keep" | "remove"; numbering?: { algo?: "first_free" | "sheet_x100" | "sheet_x1000"; start?: number; order?: "by_x" | "by_y" } }
   /** The schematic editor's other tool verbs (lock, break, convert text, shapes, sheet pins, ...) -- see api/schEditTypes.ts. */
   | ({ op: "sch_edit" } & SchEditCmd)
   /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
@@ -1839,7 +1854,7 @@ export type Cmd =
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_nm: Nm }
   | { op: "delete_sch_text"; id: string }
-  | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
+  | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string; annotate?: AnnotateOptions }
   | { op: "delete_power_symbol"; id: string }
   // `unit`: which unit of a multi-unit symbol this placement is (omit for
   // 1, a single-unit part). Only refused if `(id, unit)` already exists --
@@ -2569,6 +2584,9 @@ export interface SchematicWire {
   members?: string[];
   /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
   stroke?: SchStroke;
+  /** `SCH_DRAWING_TOOLS::findWireLabelDriverName`: the wire's connection's `LocalName()` on this sheet path when the net's driver is a local or a global label,
+   *  absent otherwise (a power symbol, a hierarchical label, a pin, or no driver). A local or global label put down on the wire takes it with no dialog (r2 C-L5). */
+  label_driver?: string;
 }
 
 /** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
@@ -2583,7 +2601,10 @@ export interface BusEntry {
 export interface SchematicLabel {
   /** Stable id (`lbl_xxxxxxxxxxxx`) -- for `delete_label`. */
   id: string;
+  /** The label's text. */
   net: string;
+  /** The net the label is on as the tracer names it (`/sub/X`, `A_EN`), the wire's under it; absent or null for a label on no wire (r3 A3-M4). */
+  net_name?: string | null;
   at: [Nm, Nm];
   scope: LabelScope;
   shape: LabelShape | null;
@@ -2740,6 +2761,9 @@ export interface Schematic {
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */
   sheet_path: SheetPathEntry[];
+  /** The page of the sheet in view as a number (`SCH_SHEET_PATH::GetPageNumberAsInt`: the page when it is a number, else its place in the walk), which
+   *  the "sheet number x 100 / x 1000" numbering of a placed symbol counts from; absent from an older backend (page 1). */
+  page_number?: number;
   /** The paper this sheet is drawn on; absent from a backend built before sheets chose their own. */
   paper?: SchematicPaper;
   /** The file of the screen shown (empty for the root sheet): the title block names it. The design's whole tree is `fetchHierarchy` (`GET /api/sch/hierarchy`). */
@@ -2993,6 +3017,9 @@ export interface DrcViolation {
   kicad_matched?: boolean;
   /** Where the violation's marker may sit, in nanometres: the positions an exclusion keeps for the derived project (`eda_kicad_engine::marker_candidates`). */
   marker_nm?: Array<[number, number]>;
+  /** The studio's own, never sent: the kind this row was sorted as when the DRC dialog last refiltered, kept while a marker waived or restored from
+   *  its row stays where it was (`ValueChanged`, r2 D-E3; `rcItems.ts::listedIndexes`). */
+  listed_as?: "error" | "warning" | "exclusion";
 }
 
 /** What `add_drc_exclusions` takes for one violation (`eda_model::ir::DrcExclusion`). */

@@ -67,11 +67,12 @@ test("items of different classes: the properties they all have by name", () => {
 
 test("footprints: their fields that the properties do not show are rows of their own, after the properties", () => {
   const b = rowsOf(["U1", "R1"]);
-  const last = b.rows[b.rows.length - 1] as FindRow;
-  assert.equal(last.name, "Supplier");
-  assert.equal(last.prop, null);
-  assert.equal(last.raw, "ACME");
-  assert.equal(last.display, "ACME");
+  // the field rows in name order (`std::set<wxString>`): Supplier, then Value, which `FOOTPRINT_DESC` has no property for
+  const supplier = row(b.rows, "Supplier") as FindRow;
+  assert.equal(supplier.prop, null);
+  assert.equal(supplier.raw, "ACME");
+  assert.equal(supplier.display, "ACME");
+  assert.equal((b.rows[b.rows.length - 1] as FindRow).name, "Value");
   assert.ok(!names(b.rows).includes("Reference") || row(b.rows, "Reference").prop !== null, "Reference is the property, not a field row");
   const mixed = rowsOf(["U1", "R2"]);
   assert.equal(row(mixed.rows, "Supplier").mixed, true);

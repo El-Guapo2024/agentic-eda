@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { expandOpVars, labelOpToken, symbolOpToken } from "./opVars";
+import type { Schematic } from "../../api/types";
+import { pinItems } from "../schPins";
+import { expandOpVars, labelOpToken, netAt, symbolOpToken, withOpVars } from "./opVars";
 import type { CircuitItem } from "./simSignals";
 
 const points = new Map<string, number>([["/out", 0.98946], ["r1", 0.0012], ["r1:power", 0.002], ["q1:c", 0.0005]]);
@@ -23,4 +25,46 @@ test("S1: a symbol's ${OP} is its current, ${OP:power} its power, ${OP:<pin>} a 
   assert.equal(expandOpVars("${OP:c}", (t) => symbolOpToken(t, { points, ref: "Q1", item: q1, pins })), "500uA", "by the pin's name, case ignored");
   assert.equal(expandOpVars("${OP:9}", (t) => symbolOpToken(t, { points, ref: "Q1", item: q1, pins })), "?");
   assert.equal(expandOpVars("${VALUE}", (t) => symbolOpToken(t, { points, ref: "R1", item: r1, pins: [] })), "${VALUE}");
+});
+
+// r3 S3-1: a label on a pin with no wire takes the pin's net (`updateGenericItemConnectivity`); a sheet pin resolves `${OP}` as the hierarchical label it is.
+test("withOpVars: a label on a pin takes the pin's net, a label mid-wire the wire's, and a sheet pin resolves too", () => {
+  const libPin = (number: string, y: number, angle: number) => ({ number, name: "~", electrical_type: "passive", shape: "line", at: [0, y], angle_deg: angle, length_mm: 2.54, unit: 1, body_style: 1, hidden: false });
+  const r = { id: "R1", reference: "R1", lib_id: "Dev:R", at: [0, 0], rot: 0, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [{ number: "1", name: "~", kind: "passive", net: "/IN" }, { number: "2", name: "~", kind: "passive", net: "/OUT" }] };
+  const base = {
+    lib_symbols: { "Dev:R": { graphics: [], pins: [libPin("1", 3.81, 270), libPin("2", -3.81, 90)], pin_name_offset: 0 } },
+    symbols: [r],
+    power_symbols: [],
+    wires: [{ id: "w1", net: "/IN", pins: [], pts: [[10_000_000, 0], [30_000_000, 0]], bus: false }],
+    no_connects: [],
+    labels: [] as unknown[],
+    texts: [],
+    title_block: null,
+    bus_entries: [],
+    sheets: [{ id: "s1", name: "sub", file: "sub.kicad_sch", at: [0, 0], size: [1, 1], pins: [{ id: "sp", name: "${OP}", shape: "input", at: [20_000_000, 0] }] }],
+    sheet_path: [],
+  } as unknown as Schematic;
+  const tip = pinItems(base).find((p) => p.number === "2")!.tip;
+  const sch = { ...base, labels: [{ id: "l1", net: "OUT ${OP}", at: tip, scope: "local", shape: null }, { id: "l2", net: "${OP}", at: [15_000_000, 0], scope: "local", shape: null }] } as unknown as Schematic;
+  const pts = new Map<string, number>([["/out", 0.98946], ["/in", 5]]);
+  const out = withOpVars(sch, null, pts);
+  assert.equal(out.labels[0]!.net, "OUT 989mV");
+  assert.equal(out.labels[1]!.net, "5.00V", "on the wire between its ends");
+  assert.equal(out.sheets[0]!.pins[0]!.name, "5.00V");
+  assert.equal(netAt(sch, [99, 99]), null);
+});
+
+test("r3 S3-2: an escaped \\${OP} that the server's shown text has already undone stays as written", () => {
+  const r = { id: "R1", reference: "R1", lib_id: "Dev:R", at: [0, 0], rot: 0, mirror: null, unit: 1, body_style: 1, pins: [], fields: [{ name: "Note", text: "\\${OP}", shown: "${OP}", at: [0, 0], vertical: false, h: "center", v: "center" }, { name: "I", text: "${OP}", shown: "${OP}", at: [0, 0], vertical: false, h: "center", v: "center" }] };
+  const sch = { lib_symbols: {}, symbols: [r], power_symbols: [], wires: [], no_connects: [], labels: [], texts: [], title_block: null, bus_entries: [], sheets: [], sheet_path: [] } as unknown as Schematic;
+  const out = withOpVars(sch, null, points);
+  assert.equal(out.symbols[0]!.fields![0]!.shown, "${OP}");
+  assert.equal(out.symbols[0]!.fields![1]!.shown, "1.20mA");
+});
+
+test("r3 S3-3: ${OP:<pin>} of a symbol not in the circuit is \"--\" before any run (the model is built anyway), \"?\" for a pin it lacks", () => {
+  const pins = [{ number: "1", name: "~" }, { number: "2", name: "~" }];
+  assert.equal(symbolOpToken("OP:1", { points: new Map(), ref: "R1", item: undefined, pins }), "--");
+  assert.equal(symbolOpToken("OP:7", { points: new Map(), ref: "R1", item: undefined, pins }), "?");
+  assert.equal(symbolOpToken("OP:1", { points, ref: "R1", item: undefined, pins }), "1.20mA", "a two-pin model: the item's current");
 });

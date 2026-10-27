@@ -31,7 +31,11 @@ import { allFields, wireField } from "../kicad-port/symFields";
 import { movedRows } from "../kicad-port/symFieldLayout";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
 import { DEFAULT_PIN_TEMPLATE, samePinTemplate, type PinTemplate } from "../kicad-port/symPinTemplate";
-import { deletePlan, duplicateItems, pastedItems, repeatPin, rotatePlan } from "../kicad-port/symEditItems";
+import { deletePlan, duplicateItems, pastedItems, placedPinWithId, repeatPin, rotatePlan, selectionPivot } from "../kicad-port/symEditItems";
+import { pinBoxAt } from "../kicad-port/schPins";
+import { symbolItemBoxes } from "../kicad-port/itemBoxes";
+import { resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
+import { measureStrokeText } from "../components/text/strokeFont";
 import { pinOccupiedMessage, pinPlacementOccupant } from "../kicad-port/pinPlacement";
 import { askConfirm } from "../components/library/libraryDialogs";
 import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kicad-port/symTextBox";
@@ -145,8 +149,9 @@ export interface SymbolEditorState {
   /** `SYMBOL_EDITOR_PIN_TOOL::CreatePin`: the pin the Pin tool has just dropped, whose properties Pin Properties asks for before it is added
    * (`CreatePin`'s `EditPinProperties`). OK adds it, Cancel drops it and places nothing. */
   pendingPin: LibrarySymbolPin | null;
-  /** `g_lastPin`: the pin placed last (by the Pin tool or by Repeat Pin), for the symbol it was placed in -- what Repeat Pin (Insert) repeats. The ids are the server's,
-   * so the pin is kept as placed and found again in the symbol by its place, number, unit and body style. */
+  /** `g_lastPin`: the pin placed last (by the Pin tool or by Repeat Pin), for the symbol it was placed in -- what Repeat Pin (Insert) repeats. KiCad keeps its UUID
+   * (`g_lastPin = pin->m_Uuid`): the ids are the server's, so `PIN_PLACED` (sent after the add and its refetch) takes the id of the pin of the symbol that is the
+   * pin as placed, and Repeat finds it by that id, as it is now (moved, renumbered or renamed since). */
   lastPlacedPin: { libId: string | null; pin: LibrarySymbolPin } | null;
   /** `SYMBOL_EDITOR_EDIT_TOOL::Copy`'s clipboard of items (pins and graphics), for Paste. Kept in the editor session, not on the system clipboard. */
   copiedItems: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] } | null;
@@ -388,7 +393,7 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_PENDING_PIN":
       return { ...state, pendingPin: action.pin };
     case "PIN_PLACED":
-      return { ...state, lastPlacedPin: { libId: state.libId, pin: action.pin } };
+      return { ...state, lastPlacedPin: { libId: state.libId, pin: placedPinWithId(action.pin, state.symbol?.pins ?? []) } };
     case "SET_COPIED_ITEMS":
       return { ...state, copiedItems: action.items };
     case "SET_PIN_TEMPLATE":
@@ -666,7 +671,19 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       if (!libId || !sym || st.selection.size === 0) return;
       const ids = [...st.selection];
       const pins = ids.map((id) => sym.pins.find((p) => p.id === id)).filter((p): p is LibrarySymbolPin => !!p);
-      const turned = rotatePlan(pins, ids.length, ccw, st.gridNm / 1e6);
+      // `selection.GetCenter()`: every selected item's `GetBoundingBox()` -- a pin's line, name and number (`PIN_LAYOUT_CACHE::GetPinBoundingBox`), a graphic's box.
+      const texts = { namesHidden: !!sym.pin_names_hidden, numbersHidden: !!sym.pin_numbers_hidden, nameOffsetNm: (sym.pin_name_offset_mm ?? 0) * 1e6 };
+      const identity = symbolTransformMatrix(0, null);
+      const boxes = pins.map((p) => {
+        const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: p.body_style, hidden: p.hidden }, identity, [0, 0]);
+        return pinBoxAt(r.tip, r.root, p.name, p.number, texts, measureStrokeText, (p.name_size_mm ?? 1.27) * 1e6, (p.number_size_mm ?? 1.27) * 1e6);
+      });
+      const graphicBoxes = symbolItemBoxes(sym, 0, 0);
+      for (const id of ids) {
+        const b = sym.graphics.some((g) => g.id === id) ? graphicBoxes.get(id) : undefined;
+        if (b) boxes.push({ minX: b[0], minY: b[1], maxX: b[2], maxY: b[3] });
+      }
+      const turned = rotatePlan(pins, ids.length, ccw, st.gridNm / 1e6, [], selectionPivot(boxes, st.gridNm / 1e6));
       const cmds: Cmd[] = turned.map((p): Cmd => ({ op: "edit_symbol_pin", lib_id: libId, id: p.id!, pin: p }));
       if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
@@ -676,9 +693,8 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const sym = st.symbol;
       const last = st.lastPlacedPin;
       if (!libId || !sym || !last || last.libId !== libId) return;
-      // `RepeatDrawItem` finds `g_lastPin` in the symbol; a pin deleted since is not repeated.
-      const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
-      const source = sym.pins.find((p) => p.number === last.pin.number && p.unit === last.pin.unit && p.body_style === last.pin.body_style && near(p.at.x, last.pin.at.x) && near(p.at.y, last.pin.at.y));
+      // `RepeatDrawItem` finds `g_lastPin` in the symbol by UUID (`test->m_Uuid == g_lastPin`); a pin deleted since is not repeated.
+      const source = last.pin.id ? sym.pins.find((p) => p.id === last.pin.id) : undefined;
       if (!source) return;
       const pin = repeatPin(source);
       // `PlacePin`: the occupied-spot question in sync mode, then the images in the other units -- as the Pin tool's placement does.
@@ -688,7 +704,12 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const images = syncMode ? imagePinsFor(pin, sym.unit_count) : [];
       const cmds: Cmd[] = [pin, ...images].map((p): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin: p }));
       dispatch({ type: "CLEAR_SELECTION" });
-      if (await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds })) dispatch({ type: "PIN_PLACED", pin });
+      if (await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds })) {
+        dispatch({ type: "PIN_PLACED", pin });
+        // `PlacePin`: a new pin that was not pasted leaves its orientation, type and shape for the next one (`g_LastPinOrient`, `g_LastPinType`,
+        // `g_LastPinShape`); Repeat's pin is `IS_NEW`.
+        dispatch({ type: "SET_PIN_TEMPLATE", pin: { ...st.pinTemplate, angle_deg: pin.angle_deg, electrical_type: pin.electrical_type, shape: pin.shape } });
+      }
     },
     duplicateSelection: async () => {
       const st = stateRef.current;

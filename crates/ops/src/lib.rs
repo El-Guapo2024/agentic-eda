@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
 };
 #[cfg(test)]
 use eda_model::ir::Group;
@@ -62,6 +62,8 @@ pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingA
 mod fp_array;
 mod pad_edit;
 mod unused_pads;
+mod via_layers;
+pub use via_layers::ViaLayerEdit;
 mod pad_nets;
 mod fp_lib_fields;
 mod sym_derive;
@@ -371,6 +373,13 @@ pub enum Cmd {
     /// unchanged (KiCad does not let you re-net or re-span an existing via
     /// from this dialog either -- that is what delete-and-redraw is for).
     EditVia { id: String, diameter: Nm, drill: Nm },
+    /// Track & Via Properties' via type, layer pair and annular rings over the vias `ids` (`DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`); a
+    /// row left `None` is left alone -- see `via_layers.rs`. One undo step; refused when nothing changes.
+    SetViaLayers {
+        ids: Vec<String>,
+        #[serde(flatten)]
+        edit: ViaLayerEdit,
+    },
     /// `BOARD_DESIGN_SETTINGS::m_TrackWidthList`, replaced wholesale --
     /// the studio's Board Setup "Track Widths & Vias" panel has no
     /// per-entry add/remove Cmd of its own, it just resubmits the whole
@@ -711,6 +720,14 @@ pub enum Cmd {
     /// `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin`: the drill/place file origin
     /// (`DrawingsSection::aux_origin`); `None` is the reset to (0, 0).
     SetAuxOrigin { at: Option<Point> },
+    /// The Plot dialog's checklist and "Use drill/place file origin", and the Generate Drill Files dialog's Origin, stored back in the
+    /// board's plot settings as KiCad's dialogs store them -- see [`board_control::set_plot_settings`].
+    SetPlotSettings {
+        #[serde(default)]
+        layers: Option<Vec<String>>,
+        #[serde(default)]
+        use_aux_origin: Option<bool>,
+    },
     /// `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` (`PCB_CONTROL::DoSetGridOrigin`): the point the editing grid is anchored
     /// at (`DrawingsSection::grid_origin`); `None` is the reset to (0, 0). The placement snap of the verbs below follows it.
     SetGridOrigin { at: Option<Point> },
@@ -831,6 +848,20 @@ pub enum Cmd {
         target: Option<String>,
         #[serde(default)]
         connected_pads: Option<bool>,
+    },
+    /// The end of Track & Via Properties' OK (`DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`), after the batch's other edits -- see `pad_nets.rs`: the copper
+    /// connected to the tracks and vias `ids` that would touch another net (`confirmShortingNets`) or a pad of their own net that the net change would leave behind
+    /// (`confirmPadChange`). `net` is the dialog's net (`None` when it is indeterminate: nothing changes net). `apply_anyway` answers "Applying these changes will short
+    /// net ..": left out, a short is refused with `ops_net_change_shorts`; `change_pads` answers "Changing the net will also update ..": left out, such pads are refused
+    /// with `ops_net_change_pads` (the pads in its `detail`), `false` leaves every net as it was, `true` moves the tracks, the vias and those pads to `net`.
+    TrackViaNets {
+        ids: Vec<String>,
+        #[serde(default)]
+        net: Option<String>,
+        #[serde(default)]
+        apply_anyway: Option<bool>,
+        #[serde(default)]
+        change_pads: Option<bool>,
     },
 
     /// `EDIT_TOOL::Duplicate` (the studio's Cmd+D): exact copies of the named items in place, under fresh ids -- placed footprints,
@@ -1036,6 +1067,9 @@ pub enum Cmd {
     /// `EDIT_TOOL::Mirror` of tracks and arcs (`PCB_TRACK::Mirror`, `PCB_ARC::Mirror`: `MIRROR( m_Start, aCentre, aFlipDirection )` and the end, and an
     /// arc's mid point): mirrored across the axis through `pivot`, in place -- the id, the layer, the net and the group stay.
     MirrorTracks { ids: Vec<String>, pivot: Point, direction: FlipDirection },
+    /// `EDIT_TOOL::Mirror` of text boxes and tuning patterns (`PCB_TEXTBOX::Mirror`, `PCB_TUNING_PATTERN::Mirror`) about `pivot` -- see
+    /// `Board::mirror_items`.
+    MirrorItems { ids: Vec<String>, pivot: Point, direction: FlipDirection },
 
     // ------------------------------------------------- Properties panel (see [`pcb_props`])
     //
@@ -1322,6 +1356,10 @@ pub enum Cmd {
         dy: Nm,
         #[serde(default)]
         mode: eda_model::sch_clipboard::PasteMode,
+        /// Schematic Setup's annotation settings the numbers follow (`m_AnnotateMethod`, `m_AnnotateStartNum`, `m_AnnotateSortOrder`), r2 D-C3. Absent:
+        /// KiCad's defaults.
+        #[serde(default)]
+        numbering: eda_model::sch_clipboard::PasteNumbering,
     },
     /// The schematic editor's other edit and drawing tools (lock, break, convert text type, shapes, sheet pins,
     /// ...), one verb family -- see [`sch_edit::SchCmd`]. On the wire: `{"op": "sch_edit", "verb": "...", ...}`.
@@ -1416,8 +1454,17 @@ pub enum Cmd {
     /// which a schematic has).
     AddSchText { content: String, at: Point, angle_millideg: Millideg, size_nm: Nm },
     DeleteSchText { id: String },
-    /// `P`: place a power symbol on a pin.
-    AddPowerSymbol { lib_id: String, at: Point, rot_millideg: Millideg, net: String, pin: String },
+    /// `P`: place a power symbol on a pin. `annotate` is the project's numbering (Annotate's method and start number, `schSettings.m_AnnotateMethod` /
+    /// `m_AnnotateStartNum`, which `PlaceSymbol` numbers by); absent, the first free number from 1.
+    AddPowerSymbol {
+        lib_id: String,
+        at: Point,
+        rot_millideg: Millideg,
+        net: String,
+        pin: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annotate: Option<AnnotateOptions>,
+    },
     DeletePowerSymbol { id: String },
 
     /// `A`: place a new symbol instance from the library -- the one verb
@@ -2224,6 +2271,8 @@ impl Cmd {
             Cmd::ReplaceBoard { .. } => true,
             // a swap of nets moves pins between the nets of `design.nets` -- the netlist the schematic's half of the design owns -- and the nets of the board's copper with them
             Cmd::SwapPadNets { .. } | Cmd::SwapGateNets { .. } => true,
+            // a pad's net is its pin's place in `design.nets`
+            Cmd::TrackViaNets { .. } => true,
             // Replace All renames a reference when it is asked to look at them
             Cmd::ReplaceText { search, .. } => search.replace_references,
             // Field Properties of a Reference field renames the symbol
@@ -2281,7 +2330,7 @@ impl Cmd {
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
-            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
@@ -2291,7 +2340,7 @@ impl Cmd {
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, .. } => shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).map(String::as_str).collect(),
             Cmd::RemoveUnusedPads { selected, .. } => selected.iter().flatten().map(String::as_str).collect(),
-            Cmd::SwapPadNets { ids, .. } | Cmd::SwapGateNets { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SwapPadNets { ids, .. } | Cmd::SwapGateNets { ids, .. } | Cmd::TrackViaNets { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
             Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
@@ -2328,7 +2377,9 @@ impl Cmd {
             Cmd::ZoneCutout { id, .. } => vec![id.as_str()],
             Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::SetZonePriority { id, .. } => vec![id.as_str()],
+            Cmd::SetViaLayers { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
+            Cmd::SetPlotSettings { .. } => vec!["plot_params"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
             Cmd::RepairBoard => vec!["repair_board"],
@@ -2484,7 +2535,7 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
             Cmd::InGroup { cmd, .. } => cmd.clears_routing_in(board),
-            Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
+            Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::MirrorItems { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
             other => other.clears_routing(),
         }
     }
@@ -2767,6 +2818,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
             Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),
+            Cmd::SetViaLayers { ids, edit } => self.set_via_layers(ids, edit),
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
             Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),
@@ -2815,6 +2867,7 @@ impl<'a> Board<'a> {
             Cmd::MergeZones { ids } => board_control::merge_zones(&mut self.design, ids).map(|_| ()),
             Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
             Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
+            Cmd::SetPlotSettings { layers, use_aux_origin } => board_control::set_plot_settings(&mut self.design, &self.model.board.layers, layers.as_deref(), *use_aux_origin),
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
@@ -2905,6 +2958,7 @@ impl<'a> Board<'a> {
             Cmd::RemoveUnusedPads { selected, vias, pads, keep_outside, remove } => self.remove_unused_pads(&unused_pads::UnusedPadLayers { selected: selected.as_deref(), vias: *vias, pads: *pads, keep_outside: *keep_outside, remove: *remove }),
             Cmd::SwapPadNets { ids, connected_pads } => self.swap_pad_nets(ids, *connected_pads),
             Cmd::SwapGateNets { ids, target, connected_pads } => self.swap_gate_nets(ids, target.as_deref(), *connected_pads),
+            Cmd::TrackViaNets { ids, net, apply_anyway, change_pads } => self.track_via_nets(ids, net.as_deref(), *apply_anyway, *change_pads),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, layer, line_width, text_size, text_thickness } => {
                 self.edit_text_and_graphics(&pcb_global_edit::GlobalTextEdit { shape_ids, text_ids, dimension_ids, layer_defaults: *layer_defaults, layer: layer.as_deref(), line_width: *line_width, text_size: *text_size, text_thickness: *text_thickness })
             }
@@ -2926,6 +2980,7 @@ impl<'a> Board<'a> {
             Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
             Cmd::FlipItems { ids, pivot, direction } => self.flip_items(ids, *pivot, *direction),
             Cmd::MirrorTracks { ids, pivot, direction } => self.mirror_tracks(ids, *pivot, *direction),
+            Cmd::MirrorItems { ids, pivot, direction } => self.mirror_items(ids, *pivot, *direction),
             Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => self.edit_board_footprint(part, reference.as_ref(), value.as_ref(), fields.as_deref(), attrs.as_ref()),
             Cmd::EditBoardField { part, name, layout, text } => self.edit_board_field(part, name, layout.as_ref(), text.as_deref()),
             Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
@@ -2957,12 +3012,12 @@ impl<'a> Board<'a> {
             Cmd::RotateSymbol { id, quarter_turns, unit } => self.rotate_symbol(id, *quarter_turns, *unit),
             Cmd::MirrorSymbol { id, unit } => self.mirror_symbol(id, *unit),
             Cmd::MirrorSymbolVertical { id, unit } => self.mirror_symbol_vertical(id, *unit),
-            Cmd::DeleteSymbol { id, unit } => self.delete_symbol(id, *unit),
+            Cmd::DeleteSymbol { id, unit } => self.delete_symbol(id, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::AddWire { pts, bus } => self.add_wire(pts.clone(), *bus),
-            Cmd::DeleteWire { id } => self.delete_wire(id),
-            Cmd::AddNoConnect { at } => self.add_no_connect(*at),
-            Cmd::AddBusEntry { at, size } => self.add_bus_entry(*at, *size),
-            Cmd::DeleteBusEntry { id } => self.delete_bus_entry(id),
+            Cmd::DeleteWire { id } => self.delete_wire(id).and_then(|_| self.commit_clean_up()),
+            Cmd::AddNoConnect { at } => self.add_no_connect(*at).and_then(|_| self.commit_clean_up()),
+            Cmd::AddBusEntry { at, size } => self.add_bus_entry(*at, *size).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteBusEntry { id } => self.delete_bus_entry(id).and_then(|_| self.commit_clean_up()),
             Cmd::AddJunction { at } => self.add_junction(*at),
             Cmd::DeleteJunction { id } => self.delete_junction(id),
             Cmd::AddSchLine { pts, width_nm } => self.add_sch_line(pts.clone(), *width_nm),
@@ -2975,7 +3030,7 @@ impl<'a> Board<'a> {
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
             Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project, rules } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref(), rules.as_deref()),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
-            Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode).map(|_| ()),
+            Cmd::PasteSch { fragment, dx, dy, mode, numbering } => self.paste_sch(fragment, *dx, *dy, *mode, *numbering).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
@@ -2988,17 +3043,17 @@ impl<'a> Board<'a> {
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
-            Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
+            Cmd::DeleteNoConnect { id } => self.delete_no_connect(id).and_then(|_| self.commit_clean_up()),
             Cmd::AddErcExclusion { check, location, comment, marker } => self.add_erc_exclusion(check, location, comment, marker),
             Cmd::DeleteErcExclusion { check, location, sheet } => self.delete_erc_exclusion(check, location, sheet.as_deref()),
             Cmd::ClearErcExclusions => self.clear_erc_exclusions(),
-            Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
-            Cmd::DeleteLabel { id } => self.delete_label(id),
+            Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteLabel { id } => self.delete_label(id).and_then(|_| self.commit_clean_up()),
             Cmd::AddSchText { content, at, angle_millideg, size_nm } => self.add_sch_text(content, *at, *angle_millideg, *size_nm),
             Cmd::DeleteSchText { id } => self.delete_sch_text(id),
-            Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
-            Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
-            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit),
+            Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin, annotate } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin, annotate.as_ref()).and_then(|_| self.commit_clean_up()),
+            Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id).and_then(|_| self.commit_clean_up()),
+            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
@@ -3674,9 +3729,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// The Properties panel's Width and the width steps (`PCB_TRACK::SetWidth`): KiCad's grid row is a `PGPROPERTY_SIZE`, which takes 0 and refuses a negative size only
+    /// (r2-pcb-edit A7; the Track & Via Properties dialog's `GEOMETRY_MIN_SIZE` check is its own, `edit_tracks_and_vias`).
     fn set_track_width(&mut self, id: &str, width: Nm) -> Result<(), Vec<CheckResult>> {
-        if width <= Nm::ZERO {
-            return Err(vec![CheckResult::fail("ops_bad_track", id, "track width must be positive")]);
+        if width < Nm::ZERO {
+            return Err(vec![CheckResult::fail("ops_bad_track", id, "Value must be greater than or equal to 0")]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "the board has no routing yet")])?;
         let t = rt.tracks.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "no track with this id")])?;
@@ -4299,7 +4356,56 @@ impl<'a> Board<'a> {
                 }
             }
         }
+        self.swap_generator_layers(&map);
         Ok(())
+    }
+
+    /// `GLOBAL_EDIT_TOOL::SwapLayers`' `for( PCB_GENERATOR* generator : Generators() ) hasChanges |= swapBoardItem( generator, layerMap );`, after the
+    /// tracks: `swapBoardItem` maps the generator's `GetLayerSet()` -- `PCB_GROUP::GetLayerSet() | LSET( { GetLayer() } )`, its members' layers (the tracks
+    /// already moved) and its own -- and when that changes `SetLayerSet` takes it only if it is one layer (`SetLayer`; more is a `wxFAIL` that changes
+    /// nothing). So a tuning pattern moved one way (F.Cu to In1.Cu) goes with its tracks, while a two-way swap (F.Cu with B.Cu) maps {F.Cu, B.Cu} onto
+    /// itself and leaves the pattern where it was, as KiCad does. A via stitching's vias span several layers, so it moves only when it has none.
+    fn swap_generator_layers(&mut self, map: &std::collections::HashMap<&str, &str>) {
+        let layers = self.model.board.layers.clone();
+        let (tracks, vias) = match self.design.routing.as_ref() {
+            Some(rt) => (rt.tracks.clone(), rt.vias.clone()),
+            None => (Vec::new(), Vec::new()),
+        };
+        // `GetLayerSet()` of a member: a track's layer, a via's copper span
+        let member_layers = |ids: &[String]| -> BTreeSet<String> {
+            let mut out = BTreeSet::new();
+            for id in ids {
+                if let Some(t) = tracks.iter().find(|t| &t.id == id) {
+                    out.insert(t.layer.clone());
+                } else if let Some(v) = vias.iter().find(|v| &v.id == id) {
+                    let at = |l: &str| layers.iter().position(|c| c == l);
+                    match (at(&v.from_layer), at(&v.to_layer)) {
+                        (Some(a), Some(b)) => out.extend(layers[a.min(b)..=a.max(b)].iter().cloned()),
+                        _ => {
+                            out.insert(v.from_layer.clone());
+                            out.insert(v.to_layer.clone());
+                        }
+                    }
+                }
+            }
+            out
+        };
+        let swapped = |own: &str, mut set: BTreeSet<String>| -> Option<String> {
+            set.insert(own.to_string());
+            let mapped: BTreeSet<String> = set.iter().map(|l| map.get(l.as_str()).map_or_else(|| l.clone(), |d| (*d).to_string())).collect();
+            (mapped != set && mapped.len() == 1).then(|| mapped.into_iter().next()).flatten()
+        };
+        let Some(dr) = self.design.drawings.as_mut() else { return };
+        for p in dr.tuning_patterns.iter_mut() {
+            if let Some(l) = swapped(&p.layer, member_layers(&p.member_ids)) {
+                p.layer = l;
+            }
+        }
+        for v in dr.board_items.via_stitches.iter_mut() {
+            if let Some(l) = swapped(&v.layer, member_layers(&v.member_ids)) {
+                v.layer = l;
+            }
+        }
     }
 
     // -------------------------------------------------------- drawings
@@ -4765,8 +4871,10 @@ impl<'a> Board<'a> {
 
     /// The wire tool's commit, `SCH_LINE_WIRE_BUS_TOOL::finishSegments` (eeschema/tools/sch_line_wire_bus_tool.cpp): the wire goes on the sheet, and
     /// each of its ends and each connection point of the sheet that lies on it gets the junction `IsExplicitJunctionNeeded` asks for (`AddJunction`,
-    /// which breaks a wire passing through the dot). Not here: `simplifyWireList` (the studio's tool drops the null segments before it sends the
-    /// points), the bus unfold (its own command), `SCHEMATIC::CleanUp`'s merging of collinear wires and `TrimWire` across a two-pin symbol.
+    /// which breaks a wire passing through the dot), after `SCHEMATIC::CleanUp` and `TrimWire` across a part of at most two connection points. Not here:
+    /// `simplifyWireList` (the studio's tool drops the null segments before it sends the points) and the bus unfold (its own command). **Differs**
+    /// (r3 C3-L1): Break / Slice and Repeat send this verb too, so they also run `finishSegments`' `TrimWire`, which KiCad's move finish and
+    /// `RepeatDrawItem` do not.
     fn add_wire(&mut self, pts: Vec<Point>, bus: bool) -> Result<(), Vec<CheckResult>> {
         if pts.len() < 2 {
             return Err(vec![CheckResult::fail("ops_bad_wire", "wire", "a wire needs at least two points")]);
@@ -4857,23 +4965,53 @@ impl<'a> Board<'a> {
 
     /// `J`: an explicit junction. A second one at the same point is refused (a click on an existing junction
     /// does nothing in `SingleClickPlace`), so the undo stack never records a step that changed nothing.
+    ///
+    /// `SCH_DRAWING_TOOLS::SingleClickPlace`: `lwbTool->AddJunction( &commit, screen, cursorPos ); m_frame->Schematic().CleanUp( &commit );` -- `AddJunction`
+    /// breaks the wires through the dot (`BreakSegments`), and the clean-up drops a dot that joins nothing (r3 C3-M2).
     fn add_junction(&mut self, at: Point) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
         let sch = self.schematic_mut_or_create();
         if sch.junctions.iter().any(|j| j.at == at) {
             return Err(vec![CheckResult::fail("ops_junction_exists", "junction", "there is already a junction at this point")]);
         }
-        sch.junctions.push(Junction { id: String::new(), at });
+        let mut scene = sch_scene::Scene::new(sch, model);
+        if !scene.is_explicit_junction_allowed(at) {
+            return Err(vec![CheckResult::fail("ops_junction_not_allowed", "junction", "Junction location contains no joinable wires and/or pins.")]);
+        }
+        scene.add_junction(at);
+        scene.clean_up();
+        *sch = scene.finish();
         sch.junctions.sort_by_key(|j| j.at);
         sch.assign_missing_ids();
         Ok(())
     }
 
+    /// Delete a junction (`SCH_EDIT_FRAME::DeleteJunction` from `DoDelete`): the dot goes and the wires that end at it merge where they are in line
+    /// (`MergeOverlap`), as the commit's `SCHEMATIC::CleanUp` does, so two crossing wires are no longer joined and the stem of a T is cut off (r3 C3-H1).
     fn delete_junction(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
         let sch = self.schematic_mut()?;
         let before = sch.junctions.len();
         sch.junctions.retain(|j| j.id != id);
         if sch.junctions.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_junction", id, "no junction with this id")]);
+        }
+        self.commit_clean_up()
+    }
+
+    /// The commit-time `SCHEMATIC::CleanUp` of an edit that holds a connectable item (`SCH_COMMIT::pushSchEdit`: "Do a local clean up if there are any
+    /// connectable objects in the commit", `RecalculateConnections( this, LOCAL_CLEANUP )`), on the sheet the verbs act on: a junction that joins nothing
+    /// goes (`DoDelete`'s `if( junction->HasFlag( STRUCT_DELETED ) || !screen->IsExplicitJunction( point ) ) DeleteJunction(..)` comes to the same), and
+    /// wires that meet in line with no junction between them merge (r3 C3-H1, C3-M1). The sheet is left as it was when nothing changes.
+    pub(crate) fn commit_clean_up(&mut self) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
+        let Ok(sch) = self.schematic_mut() else { return Ok(()) };
+        let mut scene = sch_scene::Scene::new(sch, model);
+        scene.clean_up();
+        let after = scene.finish();
+        let shape = |s: &eda_model::ir::SchematicSection| (s.wires.iter().map(|w| (w.pts.clone(), w.bus)).collect::<Vec<_>>(), s.junctions.iter().map(|j| j.at).collect::<Vec<_>>(), s.no_connects.len());
+        if shape(&after) != shape(sch) {
+            *sch = after;
+            sch.assign_missing_ids();
         }
         Ok(())
     }
@@ -5093,17 +5231,34 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// `P`: place a power symbol. `id` follows KiCad's own synthetic
-    /// `#PWR01`/`#PWR02`/... numbering (`PowerSymbol::id`'s own doc).
-    fn add_power_symbol(&mut self, lib_id: &str, at: Point, rot: Millideg, net: &str, pin: &str) -> Result<(), Vec<CheckResult>> {
+    /// `P`: place a power symbol, numbered as `SCH_DRAWING_TOOLS::PlaceSymbol` numbers it (`AlwaysAnnotate`: `ReannotateByOptions( sort, method, start,
+    /// existingRefs, false, &hierarchy )`): its prefix is the library symbol's Reference (`#PWR`, a `PWR_FLAG`'s `#FLG`: r3 D3-M4), and it takes the first
+    /// number no symbol of that prefix holds on any sheet (`existingRefs` is `GetSymbols( .., SYMBOL_FILTER_ALL )`, `FindFirstUnusedReference`), from the
+    /// method's first number up (r3 D3-M5): the start number + 1, or the page of the sheet in view x 100 / x 1000 + 1 (`SetSheetNumber(
+    /// GetPageNumberAsInt() )`, the first of the screen's sheet paths in page order). `SCH_REFERENCE::formatRefStr` writes it after a "0" (`#PWR01`,
+    /// `#PWR0201`). **Differs**: a screen shown on several sheet paths gives the symbol one reference for all of them (a power symbol has no per-path
+    /// reference here); KiCad numbers each path's anew.
+    fn add_power_symbol(&mut self, lib_id: &str, at: Point, rot: Millideg, net: &str, pin: &str, annotate: Option<&AnnotateOptions>) -> Result<(), Vec<CheckResult>> {
         if net.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_power_symbol", "power_symbol", "a power symbol needs a net name")]);
         }
-        // r2 D-A2: `PlaceSymbol` always annotates a power symbol (`AlwaysAnnotate`) against the whole hierarchy, and `FindFirstUnusedReference` takes the
-        // first number no `#PWR` of any sheet holds; `SCH_REFERENCE::formatRefStr` writes it after a "0" (`#PWR01`, `#PWR010`)
-        let used: BTreeSet<u64> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.power_symbols.iter()).filter_map(|p| p.id.strip_prefix("#PWR").and_then(|n| n.parse::<u64>().ok())).collect();
-        let n = (1..).find(|n| !used.contains(n)).unwrap_or(1);
-        let id = format!("#PWR0{n}");
+        let prefix = self.design_symbol(lib_id).map(|s| s.reference_prefix).filter(|p| !p.is_empty()).unwrap_or_else(|| "#PWR".to_string());
+        let screens = || self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values()));
+        let number_of = |id: &str| id.strip_prefix(prefix.as_str()).filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse::<i64>().ok());
+        let used: BTreeSet<i64> = screens().flat_map(|s| s.power_symbols.iter().map(|p| p.id.as_str()).chain(s.symbols.iter().map(|x| x.id.as_str())).chain(s.instance_overrides.iter().map(|o| o.reference.as_str()))).filter_map(number_of).collect();
+        let algo = annotate.map(|a| a.algo).unwrap_or_default();
+        let min = match algo {
+            eda_model::annotate::Algo::FirstFree => annotate.map_or(0, |a| a.start_number.max(0)) + 1,
+            eda_model::annotate::Algo::SheetX100 | eda_model::annotate::Algo::SheetX1000 => {
+                let step = if algo == eda_model::annotate::Algo::SheetX100 { 100 } else { 1000 };
+                let entries = eda_model::sheet_list::walk(&self.design);
+                let here = self.focus.clone().unwrap_or_default();
+                let page = eda_model::sheet_list::sort_by_page_numbers(&entries).into_iter().find(|e| e.file == here).map_or(1, |e| e.page_number_as_int());
+                page * step + 1
+            }
+        };
+        let n = (min..).find(|n| !used.contains(n)).unwrap_or(min);
+        let id = format!("{prefix}0{n}");
         let sch = self.schematic_mut_or_create();
         sch.power_symbols.push(PowerSymbol { id, lib_id: lib_id.into(), at, rot, net: net.into(), pin: pin.into() });
         let last = sch.power_symbols.len() - 1;
@@ -5548,17 +5703,37 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// `drawing_tool.cpp::SetAnchor` -> `FOOTPRINT::MoveAnchorPosition( -cursorPos )` (a library footprint has no orientation, so the
+    /// `RotatePoint` is a no-op): the fields (Reference and Value at their default places when they have no layout of their own, the
+    /// Datasheet and Description when the footprint has them, every user field), the pads, the graphics and texts move; each 3D model's
+    /// offset follows, in millimetres with y up (`m_Offset.x += IUTomm( moveVector.x ); m_Offset.y -= IUTomm( moveVector.y )`).
+    /// Differs: the kept items the editor does not draw (`kicad.tokens`: zones, dimensions, ...) stay put, and the `courtyard`
+    /// half-extents override is centred on the origin by definition (KiCad has no such override: its courtyard is the F.CrtYd graphics,
+    /// which move).
     fn set_footprint_anchor(&mut self, name: &str, at: Point) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(name)?;
         let (dx, dy) = (-at.x, -at.y);
+        let shift = |p: &mut Point| *p = Point { x: p.x + dx, y: p.y + dy };
+        shift(&mut fp.reference.get_or_insert_with(eda_model::fp_edit::default_library_reference_layout).at);
+        shift(&mut fp.value.get_or_insert_with(eda_model::fp_edit::default_library_value_layout).at);
+        for l in [fp.datasheet.as_mut(), fp.description_field.as_mut()].into_iter().flatten() {
+            shift(&mut l.at);
+        }
+        for f in &mut fp.fields {
+            shift(&mut f.layout.get_or_insert_with(eda_model::fp_edit::new_library_field_layout).at);
+        }
         for p in &mut fp.pads {
-            p.at = Point { x: p.at.x + dx, y: p.at.y + dy };
+            shift(&mut p.at);
         }
         for g in &mut fp.graphics {
             g.translate(dx, dy);
         }
         for t in &mut fp.texts {
-            t.at = Point { x: t.at.x + dx, y: t.at.y + dy };
+            shift(&mut t.at);
+        }
+        for m in &mut fp.models3d {
+            m.offset[0] += dx.mm();
+            m.offset[1] -= dy.mm();
         }
         Ok(())
     }

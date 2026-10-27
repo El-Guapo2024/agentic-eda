@@ -193,7 +193,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
-    let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
+    let (zones, zone_thieving, zone_arc_rings, zone_props) = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
     notes.zone_fills = crate::zone_fills::scan_zone_fills(text);
     // The board's nets: those the file lists and every net an item names -- a pad, but also a track, a via or a zone (`PCB_IO_KICAD_SEXPR_PARSER::parseNet` makes a net of any
     // `(net "name")` it meets, and a KiCad 10 file lists none: a net that only copper uses, a pour with no pad on it, is a net of the board all the same).
@@ -295,6 +295,21 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if !track_masks.is_empty() {
         design.drawings.get_or_insert_with(Default::default).track_masks = track_masks;
     }
+    // The zones drawn with arcs: their rings as the file had them, named by the ids the zones have just been given.
+    let zone_arcs: Vec<eda_model::ir::ZoneArcs> = design.routing.iter().flat_map(|r| r.zones.iter()).zip(zone_arc_rings).filter_map(|(z, rings)| rings.map(|rings| eda_model::ir::ZoneArcs { id: z.id.clone(), rings, shape: eda_model::ir::ZoneArcs::shape_of(z) })).collect();
+    if !zone_arcs.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).zone_arcs = zone_arcs;
+    }
+    // The zones' per-layer settings (`(property (layer ..) (hatch_position ..))`), likewise.
+    let zone_layer_props: Vec<eda_model::ir::ZoneThieving> = design.routing.iter().flat_map(|r| r.zones.iter()).zip(zone_props).filter_map(|(z, t)| t.map(|settings| eda_model::ir::ZoneThieving { id: z.id.clone(), settings })).collect();
+    if !zone_layer_props.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).zone_layer_props = zone_layer_props;
+    }
+    // The thieving zones' settings, named by the ids the zones have just been given.
+    let zone_thieving: Vec<eda_model::ir::ZoneThieving> = design.routing.iter().flat_map(|r| r.zones.iter()).zip(zone_thieving).filter_map(|(z, t)| t.map(|settings| eda_model::ir::ZoneThieving { id: z.id.clone(), settings })).collect();
+    if !zone_thieving.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).zone_thieving = zone_thieving;
+    }
     // The vias' tokens beyond `Via`'s fields, named by the ids the vias have just been given.
     let via_extras: Vec<eda_model::via_extra::ViaExtra> = design.routing.iter().flat_map(|r| r.vias.iter()).zip(via_extras).filter(|(_, x)| !x.is_default()).map(|(v, mut x)| { x.id = v.id.clone(); x }).collect();
     if !via_extras.is_empty() {
@@ -321,6 +336,21 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
     for (uuid, id) in refs.item_ids(&design) {
         notes.item_ids.entry(uuid).or_insert(id);
+    }
+    // The unread generators (KiCad 10's `via_stack`), their members named by our ids (`DrawingsSection::raw_generators`).
+    let ids_by_uuid: BTreeMap<String, String> = refs.item_ids(&design).into_iter().collect();
+    if let Some(dr) = design.drawings.as_mut() {
+        let (generators, rest): (Vec<String>, Vec<String>) = std::mem::take(&mut dr.raw_items).into_iter().partition(|t| t.starts_with("(generated"));
+        dr.raw_items = rest;
+        for text in generators {
+            let Ok(Sexpr::List(items)) = sexpr::parse(&text) else {
+                dr.raw_items.push(text);
+                continue;
+            };
+            let member_ids = sexpr::find(&items, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).filter_map(|u| ids_by_uuid.get(u).cloned()).collect()).unwrap_or_default();
+            let without: Vec<Sexpr> = items.into_iter().filter(|i| i.as_list().and_then(sexpr::tag) != Some("members")).collect();
+            dr.raw_generators.push(eda_model::ir::RawGenerator { text: sexpr::to_text(&Sexpr::List(without)), member_ids });
+        }
     }
     if !groups.is_empty() || !locked_ids.is_empty() {
         let dr = design.drawings.get_or_insert_with(Default::default);
@@ -452,14 +482,13 @@ fn default_layers() -> Vec<String> {
     vec!["F.Cu".into(), "B.Cu".into()]
 }
 
-/// The layers every board this studio wrote had listed, whatever the file says: its adhesive, paste, silkscreen, mask and fabrication layers, the courtyards and the outline.
-const ALWAYS_ENABLED: [&str; 13] = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Edge.Cuts", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
-
 /// `(layers ..)` as the Board Editor Layers page holds it (`PCB_IO_KICAD_SEXPR_PARSER::parseLayers` / `parseLayer`): the non-copper layers the file lists, the name a layer is
-/// shown by (the entry's last word) and the type of the copper layers and of the user layers off-board at the front or the back. The page's mandatory layers (the courtyards, the
-/// outline, the margin) and the ones this studio has always drawn are on whatever the file lists, so a board written before there was a page keeps its silkscreen and fabrication;
-/// a layer name the file has that is not one of KiCad's (`Rescue`, a name from before KiCad 5) is skipped. [`add_layers_in_use`] adds the layers the imported items sit on.
+/// shown by (the entry's last word) and the type of the copper layers and of the user layers off-board at the front or the back. The mandatory layers (the courtyards, the
+/// outline, the margin) are on whatever the file lists (`BOARD_DESIGN_SETTINGS::SetEnabledLayers`); a technical layer the file does not list is off, as KiCad has it (r2-board-io
+/// F17: `issue18839` lists no adhesive, paste, mask, silkscreen or fabrication layer; every board this studio wrote lists them all). A layer name the file has that is not one of
+/// KiCad's (`Rescue`, a name from before KiCad 5) is skipped. [`add_layers_in_use`] adds the layers the imported items sit on.
 fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
+    let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut setup = LayerSetup { enabled: Vec::new(), names: BTreeMap::new(), types: BTreeMap::new() };
     for item in sexpr::find(root, "layers").map_or(&[][..], |l| &l[1..]) {
         let Some(l) = item.as_list() else { continue };
@@ -479,9 +508,13 @@ fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
         }
         if let Some(shown) = sexpr::txt(l, 3).filter(|s| *s != "hide" && !s.is_empty() && *s != eda_model::layers::standard_layer_name(name)) {
             setup.names.insert(name.to_string(), shown.to_string());
+        } else if file_version < 20200922 && !eda_model::layers::is_copper_layer_name(name) && name != eda_model::layers::standard_layer_name(name) {
+            // "Older versions didn't have a dedicated user name field" (`parseLayer`: `m_name = m_userName = name`): the layer is shown, and written back, by the name
+            // the file used (`formatBoardLayers` writes no long name when `GetLayerName` is `LSET::Name`) (r3-board-io F13: `custom_pads`, `issue4139`, `issue4257`).
+            setup.names.insert(name.to_string(), name.to_string());
         }
     }
-    setup.enabled.extend(ALWAYS_ENABLED.iter().chain(eda_model::layers::MANDATORY_LAYERS.iter()).map(|l| l.to_string()));
+    setup.enabled.extend(eda_model::layers::MANDATORY_LAYERS.iter().map(|l| l.to_string()));
     setup.canonical()
 }
 
@@ -514,17 +547,16 @@ fn net_ref(net: Option<&[Sexpr]>, net_names: &BTreeMap<i64, String>) -> String {
     net_of(n, net_names)
 }
 
-/// The net a `(net ..)` form names. The reader of s-expressions does not keep whether an argument was quoted, and `PCB_IO_KICAD_SEXPR_PARSER::parseNet` goes by that: a number
-/// is a net code, a string is a name. What tells them apart here is the file: a legacy file lists its nets at the top (`(net 0 "")` at least, always), so a number is a
-/// code; a KiCad 10 file lists none, and its one argument is a name even when it is made of digits -- `(net "0")` is the net a SPICE netlist calls ground.
+/// The net a `(net ..)` form names, as `PCB_IO_KICAD_SEXPR_PARSER::parseNet` reads it: a bare number (`IsNumber( token )`) is a net code
+/// (`getNetCode`), looked up in the file's net table, and a code the table does not have -- every code in a KiCad 10 file, which lists no nets, `(zone (net 0) ..)`
+/// of QA `issue23467` -- is no net (`SetNetCode` fails and the item stays on net 0); a quoted string is a name even when it is made of digits -- `(net "0")` is the
+/// net a SPICE netlist calls ground. (A legacy line `(net 12 "name")` says the name again; it is used when the table has no code 12.)
 fn net_of(n: &[Sexpr], net_names: &BTreeMap<i64, String>) -> String {
-    if net_names.is_empty() && n.len() == 2 {
-        return sexpr::txt(n, 1).unwrap_or("").to_string();
+    if sexpr::is_bare_number(n, 1) {
+        let code = sexpr::num(n, 1).unwrap_or(0.0) as i64;
+        return net_names.get(&code).cloned().or_else(|| if net_names.is_empty() { None } else { sexpr::txt(n, 2).map(str::to_string) }).unwrap_or_default();
     }
-    match sexpr::num(n, 1) {
-        Some(code) => net_names.get(&(code as i64)).cloned().or_else(|| sexpr::txt(n, 2).map(str::to_string)).unwrap_or_default(),
-        None => sexpr::txt(n, 1).unwrap_or("").to_string(),
-    }
+    sexpr::txt(n, 1).unwrap_or("").to_string()
 }
 
 fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)], copper_nets: &[&str]) -> Vec<Net> {
@@ -607,7 +639,8 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
 }
 
 /// `(setup (pcbplotparams ..))` as `PCB_PLOT_PARAMS_PARSER::Parse` reads it: the two layer sets decoded by the file's version (`T_layerselection`, `T_plot_on_all_layers_selection`:
-/// a number is the legacy "pretty 3" stack, a hex value of a file older than 20240819 is in the legacy layer numbers), every other item kept as written.
+/// a number is the legacy "pretty 3" stack, a hex value of a file older than 20240819 is in the legacy layer numbers), every other item
+/// that `PCB_PLOT_PARAMS::Format` writes kept as written ([`eda_model::plot_params::PlotParams::read_item`]).
 fn import_plot_params(plot: &[Sexpr], version: i64) -> eda_model::plot_params::PlotParams {
     use eda_model::plot_params::decode_layer_selection;
     let mut p = eda_model::plot_params::PlotParams::default();
@@ -616,7 +649,9 @@ fn import_plot_params(plot: &[Sexpr], version: i64) -> eda_model::plot_params::P
         match sexpr::tag(item) {
             Some("layerselection") => p.layer_selection = selection(item).unwrap_or_default(),
             Some("plot_on_all_layers_selection") => p.plot_on_all_layers = selection(item).unwrap_or_default(),
-            Some(_) => p.items.push(sexpr::to_text(&Sexpr::List(item.to_vec()))),
+            // `PCB_PLOT_PARAMS_PARSER::Parse`'s other cases, in file order: a legacy token is applied and dropped (`viasonmask` is the
+            // board's tenting, read in `import_solder_mask_setup`), as a board KiCad saves loses it.
+            Some(_) => p.read_item(&sexpr::to_text(&Sexpr::List(item.to_vec()))),
             None => {}
         }
     }
@@ -1803,16 +1838,20 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     // A file from before footprint fields (20230620) held the symbol's keywords and description as properties of no place of their own (`parseFOOTPRINT_unchecked`,
     // `case T_property`, `if( m_requiredVersion < 20230620 )`): `ki_keywords` and `ki_locked` are dropped, `ki_description` is the text of the Description field, and a field
     // kept is hidden ("a legacy field that did not have text effects applied"). Written to a newer file as they were, they would be visible fields of their own; they are
-    // written as the fields KiCad made of them, which `format( PCB_FIELD )` writes at the footprint's origin on its side's Fab layer.
+    // written as the fields KiCad made of them: the Datasheet and Description fields `FOOTPRINT::FOOTPRINT` makes (`addField( FIELD_T::DESCRIPTION, F_Fab, false )`),
+    // on F.Fab whatever the footprint's side (the `(layer ..)` parsed after does not move them) and turned with the footprint by its `(at x y a)` (`SetOrientation`),
+    // which `format( PCB_FIELD )` writes at the footprint's origin at that angle (r3-board-io F7: `issue12609`'s back C1 at -90 has `(at 0 0 270) (layer "F.Fab")`).
     let legacy = file_version < crate::fp_fields::FIELD_PROPERTIES_VERSION;
-    let fab = if sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("B.Cu") { "B.Fab" } else { "F.Fab" };
+    let fab = "F.Fab";
+    let fp_angle = sexpr::find(fp, "at").and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0).rem_euclid(360.0);
+    let fp_angle = crate::fmt_mm_f(if (fp_angle - 360.0).abs() < 1e-9 { 0.0 } else { fp_angle });
     // (Both name one field: the later text wins, as `SetText` on it.)
     let push_field = |tokens: &mut Vec<String>, field: String, name: &str| {
         let head = format!("(property {} ", crate::sexpr_str(name));
         tokens.retain(|t| !t.starts_with(&head));
         tokens.push(field);
     };
-    let hidden_field = |name: &str, value: &str| format!("(property {} {} (at 0 0 0) (layer \"{fab}\") (hide yes) (effects (font (size 1.27 1.27))))", crate::sexpr_str(name), crate::sexpr_str(value));
+    let hidden_field = |name: &str, value: &str| format!("(property {} {} (at 0 0 {fp_angle}) (layer \"{fab}\") (hide yes) (effects (font (size 1.27 1.27))))", crate::sexpr_str(name), crate::sexpr_str(value));
     for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
         let tag = sexpr::tag(item);
         if legacy && tag == Some("property") {
@@ -2417,7 +2456,10 @@ fn import_outline(shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNo
 /// design: the scan of the file (`eda_kicad::zone_fills::scan_zone_fills`) is handed out in [`ImportNotes::zone_fills`] and kept beside `design.json` as the board's fills (KiCad's
 /// own, as saved), which is what kicad-cli's `pcb drc --refill-zones` replaces on the next Fill All Zones. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
-fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes, refs: &mut Refs) -> Vec<Zone> {
+/// The zones, and for each, in the same order, the `(thieving ..)` settings of a copper thieving zone (`parseZONE`'s `T_thieving`: `SetFillMode( COPPER_THIEVING )`)
+/// and the `(pts ..)` of its rings when they have arcs (`DrawingsSection::zone_arcs`; the zone's outline is their flattening, [`poly_points`]).
+#[allow(clippy::type_complexity)]
+fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Zone>, Vec<Option<String>>, Vec<Option<Vec<String>>>, Vec<Option<String>>) {
     // Board-level zones, then each footprint's own (`forEachGeometryItem`
     // walks `footprint->Zones()` too; a footprint zone's points are stored
     // in board coordinates). The parent reference is recomputed exactly as
@@ -2437,6 +2479,9 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         all.extend(sexpr::find_all(fp, "zone").map(|z| (z, Some(reference.clone()))));
     }
     let mut out = Vec::new();
+    let mut thieving = Vec::new();
+    let mut arc_rings = Vec::new();
+    let mut layer_props = Vec::new();
     for (z, parent) in all {
         // `SetIslandRemovalMode( ISLAND_REMOVAL_MODE::ALWAYS )` and priority 0 before parsing.
         let mut zone = Zone { parent_footprint: parent, ..Zone::default() };
@@ -2545,14 +2590,26 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
                 zone.corner_radius = radius.unwrap_or(Nm::ZERO);
             }
         }
+        // The keepout flags start as `ZONE::ZONE` gives them, from `ZONE_SETTINGS::ZONE_SETTINGS` (`ExportSetting`): tracks, vias and pads kept out, copper pours and
+        // footprints allowed. `case T_keepout` then sets pads and footprints allowed ("Initialize these two because their tokens won't appear in older files") and each
+        // flag the block names; one it does not name keeps its default. So a rule area made by `(placement ..)` alone (QA `vme-wren`) keeps out tracks, vias and pads.
+        if sexpr::find(z, "keepout").is_some() || sexpr::find(z, "placement").is_some() {
+            (zone.keepout_tracks, zone.keepout_vias, zone.keepout_pads, zone.keepout_copper_pour, zone.keepout_footprints) = (true, true, true, false, false);
+        }
         if let Some(k) = sexpr::find(z, "keepout") {
             zone.is_rule_area = true;
-            let not_allowed = |key: &str| sexpr::find(k, key).and_then(|v| sexpr::txt(v, 1)) == Some("not_allowed");
-            zone.keepout_tracks = not_allowed("tracks");
-            zone.keepout_vias = not_allowed("vias");
-            zone.keepout_copper_pour = not_allowed("copperpour");
-            zone.keepout_pads = not_allowed("pads");
-            zone.keepout_footprints = not_allowed("footprints");
+            zone.keepout_pads = false;
+            zone.keepout_footprints = false;
+            let flag = |key: &str, current: bool| match sexpr::find(k, key).and_then(|v| sexpr::txt(v, 1)) {
+                Some("not_allowed") => true,
+                Some("allowed") => false,
+                _ => current,
+            };
+            zone.keepout_tracks = flag("tracks", zone.keepout_tracks);
+            zone.keepout_vias = flag("vias", zone.keepout_vias);
+            zone.keepout_copper_pour = flag("copperpour", zone.keepout_copper_pour);
+            zone.keepout_pads = flag("pads", zone.keepout_pads);
+            zone.keepout_footprints = flag("footprints", zone.keepout_footprints);
         }
         // `T_placement` of `parseZONE`: `(enabled yes|no)` and one source, `(sheetname ..)`, `(component_class ..)` or `(group ..)`; the last of them in the file stands.
         if let Some(pl) = sexpr::find(z, "placement") {
@@ -2594,10 +2651,20 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         let mut outlines = outlines.into_iter();
         zone.outline = outlines.next().unwrap_or_default();
         zone.holes = outlines.collect();
+        let fill = sexpr::find(z, "fill");
+        let is_thieving = fill.and_then(|f| sexpr::find(f, "mode")).and_then(|m| sexpr::txt(m, 1)) == Some("thieving");
+        thieving.push(fill.filter(|_| is_thieving).map(|f| sexpr::find(f, "thieving").map(|t| sexpr::to_text(&Sexpr::List(t.to_vec()))).unwrap_or_else(|| "(thieving)".to_string())));
+        // The rings that made the outline and holes above (those with three points or more), as the file wrote them, when one has an arc.
+        let rings: Vec<&[Sexpr]> = sexpr::find_all(z, "polygon").filter(|p| poly_points(p).is_some()).filter_map(|p| sexpr::find(p, "pts")).collect();
+        let has_arc = rings.iter().any(|pts| pts[1..].iter().any(|i| i.as_list().and_then(sexpr::tag) == Some("arc")));
+        arc_rings.push(has_arc.then(|| rings.iter().map(|pts| sexpr::to_text(&Sexpr::List(pts.to_vec()))).collect()));
+        // `ZONE::LayerProperties` (`parseZONE`'s `T_property`), one line each.
+        let props: Vec<String> = sexpr::find_all(z, "property").map(|p| sexpr::to_text(&Sexpr::List(p.to_vec()))).collect();
+        layer_props.push((!props.is_empty()).then(|| props.join("\n")));
         out.push(zone);
         refs.zones.push(ItemRef::of(z));
     }
-    out
+    (out, thieving, arc_rings, layer_props)
 }
 
 /// Points of a `gr_poly`'s (or a zone's) `(pts ...)` list: `xy` entries verbatim, and an `(arc (start ..) (mid ..) (end ..))` of KiCad 9's polygons as the polyline
@@ -3331,5 +3398,44 @@ mod tests {
         let (design, model, _) = import_kicad_pcb(legacy).expect("parses");
         assert_eq!(design.routing.expect("copper").tracks[0].net, "SIG");
         assert_eq!(model.nets.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), vec!["SIG"]);
+    }
+
+    /// r3-board-io F1: `parseNet` goes by the token: `IsNumber( token )` is a net code (`getNetCode`, 0 is no net, and a KiCad 10 file lists no codes, so any
+    /// number there is no net), a string is a name. `(zone (net 0) (net_name ""))` of a KiCad 10 file (QA `issue23467`) is a netless pour, `(net "0")` the net "0".
+    #[test]
+    fn import_reads_an_unquoted_zero_net_as_no_net() {
+        let text = r#"(kicad_pcb (version 20260206) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (footprint "L:R" (layer "F.Cu") (uuid "f1") (at 10 10)
+                (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+                (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net "0") (uuid "a1")))
+            (zone (net 0) (net_name "") (layer "F.Cu") (uuid "z1") (hatch edge 0.5)
+                (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))))
+        )"#;
+        let (design, model, _notes) = import_kicad_pcb(text).expect("parses");
+        let routing = design.routing.expect("copper");
+        assert_eq!(routing.zones[0].net, "", "an unquoted 0 is net code 0: no net");
+        assert_eq!(model.nets.iter().find(|n| n.name == "0").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]), "the quoted \"0\" is a name");
+    }
+
+    /// r3-board-io F8: `ZONE_SETTINGS::ZONE_SETTINGS` keeps out tracks, vias and pads by default and `case T_keepout` resets only pads and footprints, so a placement
+    /// area without `(keepout ..)` (QA `vme-wren`) keeps out tracks, vias and pads, and `(keepout (pads allowed))` alone keeps out tracks and vias.
+    #[test]
+    fn a_placement_area_without_keepout_keeps_kicads_defaults() {
+        let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+            (zone (net 0) (net_name "") (layer "F.Cu") (uuid "z1") (name "auto-placement-area") (hatch edge 0.5)
+                (placement (enabled yes) (sheetname "/io/")) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+                (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))))
+            (zone (net 0) (net_name "") (layer "F.Cu") (uuid "z2") (hatch edge 0.5) (keepout (pads allowed))
+                (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+                (polygon (pts (xy 30 0) (xy 50 0) (xy 50 20) (xy 30 20))))
+        )"#;
+        let (design, _, _) = import_kicad_pcb(text).expect("parses");
+        let zones = &design.routing.expect("zones").zones;
+        let flags = |z: &Zone| (z.is_rule_area, z.keepout_tracks, z.keepout_vias, z.keepout_pads, z.keepout_copper_pour, z.keepout_footprints);
+        let by_uuid = |u: &str| zones.iter().find(|z| z.uuid == u).unwrap();
+        assert_eq!(flags(by_uuid("z1")), (true, true, true, true, false, false));
+        assert_eq!(flags(by_uuid("z2")), (true, true, true, false, false, false));
     }
 }

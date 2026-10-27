@@ -249,6 +249,19 @@ export async function postSwapPreview(cmd: Cmd): Promise<{ ok: true; pads: strin
 }
 
 /**
+ * What Track & Via Properties' OK would ask first (crates/cli/src/pad_nets_api.rs): the question, word for word, of a short (`ops_net_change_shorts`) or of the pads a
+ * net change takes along (`ops_net_change_pads`), or null when there is none. A read: it changes nothing on the board.
+ */
+export async function postTrackViaPreview(cmd: Cmd): Promise<{ ok: true; ask: { check: string; message: string; pads: string[] } | null } | { ok: false; message: string }> {
+  const r = await fetch("/api/track_via_nets/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cmd }),
+  });
+  return (await r.json()) as { ok: true; ask: { check: string; message: string; pads: string[] } | null } | { ok: false; message: string };
+}
+
+/**
  * The end of a carried placement without a command of its own (crates/cli/src/carry.rs): "commit" when the drop changed nothing, "cancel" for Escape --
  * `commit.Revert()`, which takes the carried items away and leaves the undo and redo history as it was. `ok` is false when nothing was being carried.
  */
@@ -343,8 +356,9 @@ export interface FabReply {
  * `useAuxOrigin`: the Plot dialog's "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). `checkZones`: its "Check zone fills before plotting" -- KiCad's filler
  * runs first when some zone has no current fill.
  */
-export function postFabGerbers(layers?: string[], useAuxOrigin = false, checkZones = false): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), use_aux_origin: useAuxOrigin, ...(checkZones ? { check_zones: true } : {}) });
+/** `useAuxOrigin` left out plots from the origin the board's plot settings say (`useauxorigin`), as KiCad's Plot dialog does after it stored its choices. */
+export function postFabGerbers(layers?: string[], useAuxOrigin?: boolean, checkZones = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin !== undefined ? { use_aux_origin: useAuxOrigin } : {}), ...(checkZones ? { check_zones: true } : {}) });
 }
 
 /** The Generate Drill Files dialog's options (`DIALOG_GENDRILL`): "PTH and NPTH in single file", "Use alternate drill mode" (oval holes as

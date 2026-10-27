@@ -664,6 +664,12 @@ impl<'m> Scene<'m> {
         info.is_junction && (!info.has_bus_entry || info.has_bus_entry_to_multiple_wires)
     }
 
+    /// `SCH_SCREEN::IsExplicitJunctionAllowed`: the point would join three or more items, a wire passing through counting twice (`AnalyzePoint( .., true )`).
+    pub(crate) fn is_explicit_junction_allowed(&self, p: Point) -> bool {
+        let info = self.analyze_point(p, true, &BTreeSet::new());
+        info.is_junction && (!info.has_bus_entry || info.has_bus_entry_to_multiple_wires)
+    }
+
     /// `SCH_SCREEN::IsExplicitJunctionNeeded`.
     pub(crate) fn is_explicit_junction_needed(&self, p: Point) -> bool {
         let info = self.analyze_point(p, false, &BTreeSet::new());
@@ -770,7 +776,7 @@ impl<'m> Scene<'m> {
                     }
                     // `SCHEMATIC::CleanUp`: `!secondLine->IsParallel( firstLine ) || !secondLine->IsStrokeEquivalent( firstLine ) || secondLine->GetLayer() !=
                     // firstLine->GetLayer()` -- two wires of different strokes stay apart (r2 C-M1)
-                    if !parallel(s.dir(), f.dir()) || s.bus != f.bus || self.stroke_of(i1) != self.stroke_of(i2) {
+                    if !parallel(s.dir(), f.dir()) || s.bus != f.bus || !self.stroke_equivalent(i1, i2) {
                         continue;
                     }
                     // identical lines
@@ -806,6 +812,15 @@ impl<'m> Scene<'m> {
     }
 
     /// The stroke the segment's wire was drawn with (`SchExtras::strokes`, by the wire's id); `None` for the default.
+    /// `SCH_LINE::IsStrokeEquivalent`: the same width and colour, and the same style -- `DEFAULT` and `SOLID` being alike (r3 C3-M4). A line with no
+    /// stroke of its own has the default one.
+    fn stroke_equivalent(&self, i1: usize, i2: usize) -> bool {
+        use eda_model::sch_extras::{SchLineStyle, SchStroke};
+        let (a, b) = (self.stroke_of(i1).cloned().unwrap_or_default(), self.stroke_of(i2).cloned().unwrap_or_default());
+        let solid = |s: &SchStroke| if s.style == SchLineStyle::Solid { SchLineStyle::Default } else { s.style };
+        a.width_nm == b.width_nm && a.color == b.color && solid(&a) == solid(&b)
+    }
+
     fn stroke_of(&self, i: usize) -> Option<&eda_model::sch_extras::SchStroke> {
         self.segs[i].from.and_then(|(w, _)| self.meta.get(w)).and_then(|m| self.sch.extras.strokes.get(&m.id))
     }

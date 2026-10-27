@@ -90,7 +90,11 @@ export function DrcDialog() {
   if (!open) return null;
   const close = () => dispatch({ type: "SET_DRC_OPEN", open: false });
   const setTab = (tab: DrcTab) => setDrcView({ tab });
-  const setFilter = (filter: RcFilter) => setDrcView({ filter });
+  // `OnSeverity` -> `Update`: the provider refilters and sorts every row afresh (r2 D-E3)
+  const setFilter = (filter: RcFilter) => {
+    setDrcView({ filter });
+    dispatch({ type: "DRC_REFILTER" });
+  };
 
   const listedCount = (tab: DrcTab) => listedIndexes(drcListOf(report, tab), view.filter).length;
   const tabTitle = (tab: DrcTab, label: string) => {
@@ -113,7 +117,7 @@ export function DrcDialog() {
   const toggle = (tab: DrcTab, index: number) => {
     const v = drcListOf(report, tab)[index];
     if (!v) return;
-    void (v.excluded ? restoreDrc(cctx, [v]) : excludeDrc(cctx, [v]));
+    void (v.excluded ? restoreDrc(cctx, [v], true) : excludeDrc(cctx, [v], "", true));
   };
 
   const rowsOf = (tab: DrcTab): RcRow[] => {

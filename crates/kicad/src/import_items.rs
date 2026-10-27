@@ -71,7 +71,8 @@ pub(crate) fn is_locked(item: &[Sexpr]) -> bool {
     if let Some(l) = sexpr::find(item, "locked") {
         return sexpr::txt(l, 1) != Some("no");
     }
-    item.iter().skip(1).any(|it| it.text() == Some("locked"))
+    // the bare keyword, not a quoted string that says `locked` (a group's name, a text): `Sexpr::text` drops the quote mark, the atom itself keeps it
+    item.iter().skip(1).any(|it| matches!(it, Sexpr::Atom(a) if a == "locked"))
 }
 
 /// One `ItemRef` per emitted IR item, per kind, in emission order (so index `i` is the `i`th
@@ -268,14 +269,15 @@ pub(crate) struct RawGroup {
     pub lib_id: String,
 }
 
-/// `PCB_IO_KICAD_SEXPR_PARSER::parseGROUP`: `(group "name" (uuid ..) [(locked yes)] [(lib_id ..)] (members "uuid" ..))`.
+/// `PCB_IO_KICAD_SEXPR_PARSER::parseGROUP`: `(group "name" [locked] (uuid ..) [(locked yes)] [(lib_id ..)] (members "uuid" ..))`.
 pub(crate) fn import_groups(root: &[Sexpr]) -> Vec<RawGroup> {
     sexpr::find_all(root, "group")
         .map(|g| {
             let name = g.get(1).and_then(Sexpr::text).unwrap_or("").to_string();
             let uuid = sexpr::find(g, "uuid").or_else(|| sexpr::find(g, "id")).and_then(|u| sexpr::txt(u, 1)).map(str::to_string);
             let members = sexpr::find(g, "members").map(|m| m.iter().skip(1).filter_map(Sexpr::text).map(str::to_string).collect()).unwrap_or_default();
-            let locked = sexpr::find(g, "locked").is_some_and(|l| sexpr::txt(l, 1) != Some("no"));
+            // `parseGROUP`: `(locked yes)`, or the bare `locked` files before 20221130 write after the name (`else if( token == T_locked ) groupInfo.locked = true`).
+            let locked = is_locked(g);
             let lib_id = sexpr::find(g, "lib_id").and_then(|l| sexpr::txt(l, 1)).and_then(|t| eda_model::groups::check_design_block_id(t).ok()).unwrap_or_default();
             RawGroup { name, uuid, members, locked, lib_id }
         })

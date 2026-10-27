@@ -128,6 +128,67 @@ impl Board<'_> {
                 x.auto_thickness = false;
             }
         }
+        // A text box is a text and a shape (`PCB_TEXTBOX` is an `EDA_TEXT` and a `PCB_SHAPE`): its glyphs, its pen and its border width.
+        for t in dr.board_items.text_boxes.iter_mut().filter(|t| texts.contains(t.id.as_str())) {
+            if e.layer_defaults {
+                // `PCB_TEXTBOX::StyleFromSettings`: `PCB_SHAPE::StyleFromSettings`, then the text
+                t.stroke_width_nm = line_thickness(&defaults, &t.layer);
+                t.size_nm = text_size(&defaults, &t.layer);
+                t.width_nm = None;
+                t.thickness_nm = text_thickness(&defaults, &t.layer);
+                continue;
+            }
+            if let Some(l) = e.layer {
+                t.layer = l.to_string();
+            }
+            if let Some(s) = e.text_size {
+                t.size_nm = s;
+                t.width_nm = None;
+            }
+            if let Some(th) = e.text_thickness {
+                t.thickness_nm = th;
+            }
+            if let Some(w) = e.line_width {
+                t.stroke_width_nm = w;
+            }
+        }
+        // A table's cells (`RunOnChildren`, `PCB_TABLECELL_T`), named `<table>:<row>:<col>`: a `PCB_TEXTBOX` each, on the table's layer. A cell has no layer and no
+        // border of its own here (the table's grid draws it), so only its text changes.
+        for table in dr.tables.iter_mut() {
+            let layer = table.layer.clone();
+            let cols = table.col_widths.len().max(1);
+            for (i, cell) in table.cells.iter_mut().enumerate() {
+                if !texts.contains(eda_model::table::cell_item_id(&table.id, i / cols, i % cols).as_str()) {
+                    continue;
+                }
+                if e.layer_defaults {
+                    cell.style.height_nm = text_size(&defaults, &layer);
+                    cell.style.width_nm = cell.style.height_nm;
+                    cell.style.thickness_nm = text_thickness(&defaults, &layer);
+                    continue;
+                }
+                if let Some(s) = e.text_size {
+                    cell.style.height_nm = s;
+                    cell.style.width_nm = s;
+                }
+                if let Some(th) = e.text_thickness {
+                    cell.style.thickness_nm = th;
+                }
+            }
+        }
+        // `PCB_BARCODE_T` with the graphics: its layer and its text's size (`SetTextSize( m_textHeight )`; `PCB_BARCODE::StyleFromSettings`: the layer's text height).
+        for b in dr.barcodes.iter_mut().filter(|b| shapes.contains(b.id.as_str())) {
+            if e.layer_defaults {
+                b.text_height_nm = text_size(&defaults, &b.layer);
+                continue;
+            }
+            if let Some(l) = e.layer {
+                b.layer = l.to_string();
+            }
+            if let Some(s) = e.text_size {
+                b.text_height_nm = s;
+            }
+        }
         for d in dr.dimensions.iter_mut().filter(|d| dims.contains(d.id.as_str())) {
             if e.layer_defaults {
                 // `PCB_TEXT::StyleFromSettings`, then `PCB_DIMENSION_BASE::StyleFromSettings`.

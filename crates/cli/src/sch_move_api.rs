@@ -39,7 +39,7 @@ fn preview(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         b.apply(&cmd)?;
     }
     let (sch, breadcrumb) = crate::studio::resolve_sheet(b.design(), &sheet);
-    let mut patch = patch_json(&sch, &model);
+    let mut patch = patch_json(&sch, &model, &crate::studio::viewed_file(b.design(), &breadcrumb));
     // The tables of the sheet where the held ones would be: every cell's corners and placed text lines are the server's (`crate::table_json`), a turned table has new ones.
     if !sch.extras.tables.is_empty() {
         let project = crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
@@ -61,7 +61,8 @@ fn pt(p: eda_model::ir::Point) -> Value {
 }
 
 /// The geometry of a sheet's items, in the shapes `GET /api/schematic` reports them (`studio.rs::schematic_json`).
-pub(crate) fn patch_json(sch: &SchematicSection, model: &eda_model::ConstraintModel) -> Value {
+/// `placing_key` is the screen's key (`""` for the root): a sheet's Sheetfile is its file as that screen names it.
+pub(crate) fn patch_json(sch: &SchematicSection, model: &eda_model::ConstraintModel, placing_key: &str) -> Value {
     use crate::studio::{owner_fields_json, page_field_json};
     // The fields go where their items go: a held symbol shows its Reference and Value with it, a held field shows where it would land.
     let symbols: Vec<Value> = sch
@@ -85,6 +86,6 @@ pub(crate) fn patch_json(sch: &SchematicSection, model: &eda_model::ConstraintMo
         "junctions": sch.junctions.iter().map(|j| json!({ "id": j.id, "at": pt(j.at) })).collect::<Vec<_>>(),
         "lines": sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| pt(*p)).collect::<Vec<_>>() })).collect::<Vec<_>>(),
         "graphics": serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null),
-        "sheets": sch.sheets.iter().map(|s| json!({ "id": s.id, "at": pt(s.at), "size": [s.size.0, s.size.1], "pins": s.pins.iter().map(|p| json!({ "id": p.id, "at": pt(p.at) })).collect::<Vec<_>>(), "fields": eda_engine::fields::sheet_fields(sch, s).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+        "sheets": sch.sheets.iter().map(|s| json!({ "id": s.id, "at": pt(s.at), "size": [s.size.0, s.size.1], "pins": s.pins.iter().map(|p| json!({ "id": p.id, "at": pt(p.at) })).collect::<Vec<_>>(), "fields": eda_engine::fields::sheet_fields_on(sch, s, placing_key).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>() })).collect::<Vec<_>>(),
     })
 }

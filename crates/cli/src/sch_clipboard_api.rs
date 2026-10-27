@@ -156,7 +156,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
         Err(e) => return e,
     };
     let before = crate::studio::schematic_json_of(&design, &model, &sheet);
-    let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: Nm::ZERO, mode };
+    let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: Nm::ZERO, mode, numbering: Default::default() };
     let cmd = if sheet.is_empty() { paste } else { Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(paste) } };
     let drawn_before = design.clone();
     let mut tried = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(copy["ok"], true, "{copy}");
         let parsed = post(parse, &dir, json!({ "text": copy["text"], "sheet": sheet }));
         assert_eq!(parsed["ok"], true, "{parsed}");
-        let cmd = Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(Cmd::PasteSch { fragment: serde_json::from_value(parsed["fragment"].clone()).unwrap(), dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique }) };
+        let cmd = Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(Cmd::PasteSch { fragment: serde_json::from_value(parsed["fragment"].clone()).unwrap(), dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }) };
         board::step(&dir, cmd, false, "test").unwrap();
         let (_, d, _) = board::load(&dir).unwrap();
         let child = d.sheet_contents.as_ref().unwrap().get("child.kicad_sch").unwrap();

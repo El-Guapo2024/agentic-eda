@@ -172,6 +172,12 @@ fn legacy_ki_properties_become_the_description_field() {
     assert!(!out.contains("ki_description") && !out.contains("ki_keywords"), "{out}");
     assert!(out.contains(r#"(property "Description" "Generic connector" (at 0 0 0) (layer "F.Fab") (hide yes)"#), "{out}");
     assert!(out.contains(r#"(property "Datasheet" "~" (at 0 0 0) (layer "F.Fab") (hide yes)"#), "a legacy field is hidden: {out}");
+    // r3 F7: on a back footprint turned by -90 the Description field `FOOTPRINT::FOOTPRINT` made stays on F.Fab and turns with the footprint (`issue12609`'s C1).
+    let back = text.replace(r#"(footprint "Conn:X" (layer "F.Cu")"#, r#"(footprint "Conn:X" (layer "B.Cu")"#).replace("(at 110 110)\n", "(at 110 110 -90)\n").replace(r#"(layers "F.Cu" "F.Paste" "F.Mask")"#, r#"(layers "B.Cu" "B.Paste" "B.Mask")"#);
+    assert!(back.contains("(at 110 110 -90)"), "{back}");
+    let (design, model, _) = import_kicad_pcb(&back).expect("parses");
+    let out = export(&design, &model);
+    assert!(out.contains(r#"(property "Description" "Generic connector" (at 0 0 270) (layer "F.Fab") (hide yes)"#), "{out}");
 }
 
 /// F6: a mask-only mounting hole keeps its mask margin (`issue5990`'s `MH1`: the mask opening is 5 mm + 2 x 1.2 mm), its zone connection and a one-sided layer set, as
@@ -390,4 +396,238 @@ fn a_zone_with_rings_the_file_says_is_unfilled_stays_unfilled() {
     let out = eda_kicad::export_kicad_pcb_with(&design, &model, &ExportMeta { date: "2026-01-01", title: "round2" }, Some(&fills)).expect("export");
     let zones = blocks(&out, "zone");
     assert!(zones[0].contains("(fill (thermal_gap") && zones[0].contains("(filled_polygon"), "{}", zones[0]);
+}
+
+// ------------------------------------------------------------------------------------------------- round 3 (`work/findings/round3/r3-board-io.md`)
+
+const THIEVING: &str = r#"(kicad_pcb (version 20260513) (generator "pcbnew") (generator_version "10.99")
+ (general (thickness 1.6) (legacy_teardrops no)) (paper "A4")
+ (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+ (setup (pad_to_mask_clearance 0))
+ (gr_rect (start 90 90) (end 130 130) (stroke (width 0.1) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "11111111-1111-1111-1111-111111111111"))
+ (zone (net 0) (net_name "") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25)
+  (fill yes (mode thieving) (thermal_gap 0.5) (thermal_bridge_width 0.5) (island_removal_mode 1)
+   (thieving (type hatch) (size 5) (gap 2) (width 0.3) (stagger yes) (orientation 33)))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125))))
+)"#;
+
+/// r3 F2: `parseZONE`'s `T_thieving` (`SetFillMode( ZONE_FILL_MODE::COPPER_THIEVING )`, the settings block, "thieving requires file version >= 20260513"): a copper
+/// thieving zone (QA 25ec2335 `zone_thieving_track_bisection`) is written back thieving, with its settings, in a 20260513 file -- not as a solid pour.
+#[test]
+fn a_thieving_zone_is_kept() {
+    let (design, model, _) = import_kicad_pcb(THIEVING).expect("parses");
+    let out = export(&design, &model);
+    assert!(out.contains("(version 20260513)"), "{out}");
+    let zones = blocks(&out, "zone");
+    assert_eq!(zones.len(), 1, "{out}");
+    assert!(zones[0].contains("(mode thieving)") && zones[0].contains("(thieving (type hatch) (size 5) (gap 2) (width 0.3) (stagger yes) (orientation 33))"), "{}", zones[0]);
+    assert!(zones[0].contains("(net 0)") || !zones[0].contains("(net_name \"0\")"), "the netless pour stays netless: {}", zones[0]);
+}
+
+/// r3 F2, as kicad-cli reads our file: its re-save still has the thieving zone and its settings.
+#[test]
+fn kicad_cli_reads_the_thieving_zone_back() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(back) = kicad_resave(THIEVING, "thieving") else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let flat = back.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("(mode thieving)") && flat.contains("(thieving (type hatch) (size 5) (gap 2) (width 0.3) (stagger yes) (orientation 33)"), "{back}");
+}
+
+/// r3 F3: three vias of one net at one point (25ec2335 `multichannel_nested`): each keeps a uuid of its own, so the group that names all three keeps three members
+/// (`resolveGroups` finds one item per uuid).
+#[test]
+fn vias_at_one_point_get_distinct_uuids() {
+    let text = board(
+        r#" (via (at 100 100) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "a0000000-0000-0000-0000-000000000001"))
+ (via (at 100 100) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "a0000000-0000-0000-0000-000000000002"))
+ (via (at 100 100) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "a0000000-0000-0000-0000-000000000003"))
+ (group "G" (uuid "b0000000-0000-0000-0000-000000000001") (members "a0000000-0000-0000-0000-000000000001" "a0000000-0000-0000-0000-000000000002" "a0000000-0000-0000-0000-000000000003"))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let mut uuids: Vec<String> = blocks(&out, "via").iter().map(|v| v.split("(uuid \"").nth(1).unwrap().split('"').next().unwrap().to_string()).collect();
+    assert_eq!(uuids.len(), 3, "{out}");
+    uuids.sort();
+    uuids.dedup();
+    assert_eq!(uuids.len(), 3, "three distinct uuids: {out}");
+    let (again, _, _) = import_kicad_pcb(&out).expect("parses ours");
+    let groups = &again.drawings.as_ref().expect("drawings").groups;
+    assert_eq!(groups.iter().find(|g| g.name == "G").map(|g| g.member_ids.len()), Some(3), "{groups:?}");
+}
+
+/// r3 F4: the bare `locked` a file before 20221130 writes after a group's name (8303b2ad `reverse_via`: `(group "" locked (id ..) (members ..))`) is the group's lock,
+/// as `parseGROUP` reads it; a group named "locked" is not locked.
+#[test]
+fn a_legacy_group_lock_is_read() {
+    let text = board(
+        r#" (gr_line (start 100 100) (end 110 100) (stroke (width 0.1) (type solid)) (layer "F.SilkS") (uuid "c0000000-0000-0000-0000-000000000001"))
+ (gr_line (start 100 110) (end 110 110) (stroke (width 0.1) (type solid)) (layer "F.SilkS") (uuid "c0000000-0000-0000-0000-000000000002"))
+ (group "" locked (id "b0000000-0000-0000-0000-000000000001") (members "c0000000-0000-0000-0000-000000000001"))
+ (group "locked" (id "b0000000-0000-0000-0000-000000000002") (members "c0000000-0000-0000-0000-000000000002"))"#,
+    );
+    let (design, _, _) = import_kicad_pcb(&text).expect("parses");
+    let d = design.drawings.as_ref().expect("drawings");
+    assert_eq!(d.groups.len(), 2, "{:?}", d.groups);
+    let id_of = |name: &str| d.groups.iter().find(|g| g.name == name).unwrap().id.clone();
+    assert!(d.locked_ids.contains(&id_of("")), "{:?}", d.locked_ids);
+    assert!(!d.locked_ids.contains(&id_of("locked")), "{:?}", d.locked_ids);
+}
+
+/// 25ec2335's QA board `name`, if the KiCad 10 source is here (`KICAD10_SRC_DIR`, else `~/src/kicad-src-25ec2335`).
+fn kicad10_qa(name: &str) -> Option<String> {
+    let root = std::env::var_os("KICAD10_SRC_DIR").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("src/kicad-src-25ec2335")))?;
+    std::fs::read_to_string(root.join("qa/data/pcbnew").join(name)).ok()
+}
+
+/// r3 F5: a generator nothing here reads (KiCad 10's microvia stack, 25ec2335 `via_stacks`) names its members by the uuids our file writes them as, so kicad-cli's
+/// `resolveGroups` keeps it: its re-save of our file has both stacks, with their 2 and 3 vias.
+#[test]
+fn an_unread_generator_keeps_its_members() {
+    let Some(text) = kicad10_qa("via_stacks.kicad_pcb") else {
+        eprintln!("skipped: no 25ec2335 QA data");
+        return;
+    };
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let item_uuids: Vec<String> = out.split("(uuid \"").skip(1).map(|r| r.split('"').next().unwrap().to_string()).collect();
+    let gens = blocks(&out, "generated");
+    let stacks: Vec<&&str> = gens.iter().filter(|g| g.contains("(type via_stack)")).collect();
+    assert_eq!(stacks.len(), 2, "{out}");
+    let members = |g: &str| -> Vec<String> { g.split("(members").nth(1).unwrap_or("").split('"').skip(1).step_by(2).map(str::to_string).collect() };
+    let counts: Vec<usize> = stacks.iter().map(|g| members(g).len()).collect();
+    assert_eq!(counts, vec![2, 3], "{stacks:?}");
+    for g in &stacks {
+        assert!(members(g).iter().all(|u| item_uuids.contains(u)), "every member is an item of the file: {g}");
+    }
+    if slow_tests_off() {
+        return;
+    }
+    let Some(back) = kicad_resave(&text, "via_stacks") else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let flat = back.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(flat.matches("(type via_stack)").count(), 2, "{back}");
+}
+
+/// r3 F6: a footprint read from a board that has no `(model ..)` keeps none (`format( FOOTPRINT )` writes only `aFootprint->Models()`): no header model is guessed from a
+/// name with "1x" and digits (`fill_bad`'s `SolderWirePad_1x01_SMD_2.9x7.8mm#2` got `PinHeader_1x02`).
+#[test]
+fn an_imported_footprint_without_models_stays_without() {
+    let text = board(
+        r#" (footprint "X:Foo_1x03" (layer "F.Cu") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") (at 110 110)
+  (property "Reference" "J1" (at 0 -2 0) (layer "F.SilkS") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab1") (effects (font (size 1 1) (thickness 0.15))))
+  (property "Value" "X" (at 0 2 0) (layer "F.Fab") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab2") (effects (font (size 1 1) (thickness 0.15))))
+  (pad "1" thru_hole circle (at 0 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1"))
+  (pad "2" thru_hole circle (at 2.54 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac2"))
+  (pad "3" thru_hole circle (at 5.08 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac3")))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    assert!(!out.contains("(model "), "{out}");
+}
+
+/// r3 F10: a zone outline drawn with arcs (`issue22475`'s GND pour, `issue22826`'s round rule areas) is written back with its arcs, as `format( const ZONE* )` writes
+/// the chain; once the outline is edited, as points.
+#[test]
+fn a_zone_outline_keeps_its_arcs() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25)
+  (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+  (polygon (pts (xy 95 95) (xy 120 95) (arc (start 120 95) (mid 123.535534 96.464466) (end 125 100)) (xy 125 125) (xy 95 125))))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let zone = blocks(&out, "zone")[0].to_string();
+    assert!(zone.contains("(arc (start 120 95) (mid 123.535534 96.464466) (end 125 100))"), "{zone}");
+    let mut moved = design.clone();
+    for p in &mut moved.routing.as_mut().unwrap().zones[0].outline {
+        p.x += eda_model::units::mm(1.0);
+    }
+    let out = export(&moved, &model);
+    let zone = blocks(&out, "zone")[0].to_string();
+    assert!(!zone.contains("(arc ") && zone.contains("(xy 96 95)"), "an edited outline is its points: {zone}");
+}
+
+/// r2 F15: a user field of a file before 20230620 (`(property "Case" "0805")`, no place of its own) is where KiCad's parser leaves it -- a new `PCB_FIELD`, not turned
+/// with the footprint -- which `format( PCB_FIELD )` writes at `p - R(a) p` (QA `simple`'s C1 at (147.91 100.48 -90): `(at 47.43 248.39 0)`); on a back footprint on
+/// B.Fab, mirrored (`StyleFromSettings( .., true )`).
+#[test]
+fn a_legacy_user_field_is_where_kicad_reads_it() {
+    let text = r#"(kicad_pcb (version 20220914) (generator pcbnew)
+ (general (thickness 1.6)) (paper "A4")
+ (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user "B.Silkscreen") (37 "F.SilkS" user "F.Silkscreen") (44 "Edge.Cuts" user) (49 "F.Fab" user) (48 "B.Fab" user))
+ (setup (pad_to_mask_clearance 0))
+ (net 0 "")
+ (footprint "C:C" (layer "F.Cu") (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) (at 147.91 100.48 -90)
+  (property "Case" "0805")
+  (fp_text reference "C1" (at 0 -2 90) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))) (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab1))
+  (fp_text value "X" (at 0 2 90) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))) (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab2))
+  (pad "1" smd rect (at 0 0 90) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (tstamp aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1)))
+ (footprint "C:C" (layer "B.Cu") (tstamp bbbbbbbb-aaaa-aaaa-aaaa-aaaaaaaaaaaa) (at 160.325 107.075 180)
+  (property "Case" "0603")
+  (fp_text reference "C2" (at 0 -2 180) (layer "B.SilkS") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)) (tstamp bbbbbbbb-aaaa-aaaa-aaaa-aaaaaaaaaab1))
+  (fp_text value "X" (at 0 2 180) (layer "B.Fab") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)) (tstamp bbbbbbbb-aaaa-aaaa-aaaa-aaaaaaaaaab2))
+  (pad "1" smd rect (at 0 0 180) (size 1 1) (layers "B.Cu" "B.Paste" "B.Mask") (tstamp bbbbbbbb-aaaa-aaaa-aaaa-aaaaaaaaaac1)))
+)"#;
+    let (design, model, _) = import_kicad_pcb(text).expect("parses");
+    let out = export(&design, &model);
+    let line = |value: &str| blocks(&out, "property").into_iter().find(|l| l.contains(&format!("(property \"Case\" \"{value}\""))).unwrap_or_else(|| panic!("Case {value}: {out}")).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(line("0805").contains("(at 47.43 248.39 0) (layer \"F.Fab\")"), "{}", line("0805"));
+    assert!(!line("0805").contains("mirror"), "{}", line("0805"));
+    assert!(line("0603").contains("(at 320.65 214.15 0) (layer \"B.Fab\")") && line("0603").contains("mirror"), "{}", line("0603"));
+}
+
+/// r3 F9: a teardrop read from a file keeps its border style (`parseZONE` reads `(hatch full ..)` into it; only the teardrops KiCad makes get `INVISIBLE_BORDER`).
+#[test]
+fn a_files_teardrop_keeps_its_border_style() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") (name "$teardrop_padvia$") (hatch full 0.1) (priority 30000)
+  (attr (teardrop (type padvia))) (connect_pads yes (clearance 0)) (min_thickness 0.0254) (filled_areas_thickness no)
+  (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5) (island_removal_mode 1))
+  (polygon (pts (xy 100 100) (xy 101 100) (xy 101 101))))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    assert!(design.routing.as_ref().unwrap().zones[0].teardrop, "read as a teardrop");
+    let out = export(&design, &model);
+    assert!(blocks(&out, "zone")[0].contains("(hatch full "), "{out}");
+}
+
+/// r3 F12: a footprint whose file names a `(sheetfile)` and no `(sheetname)` gets one `(sheetfile ..)`, the file's.
+#[test]
+fn a_footprint_has_one_sheetfile() {
+    let text = board(&format!("{FP_HEAD}  (sheetfile \"A05-attenuator.kicad_sch\")\n  (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\") (net 1 \"A\") (uuid \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1\")))"));
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    assert_eq!(out.matches("(sheetfile ").count(), 1, "{out}");
+    assert!(out.contains("(sheetfile \"A05-attenuator.kicad_sch\")"), "{out}");
+}
+
+/// r2 F17: a footprint with no pad (a logo, `issue14549`'s `Logo1`) keeps its own `(zone_connect ..)` and `(clearance ..)`.
+#[test]
+fn a_padless_footprint_keeps_its_zone_connection() {
+    let text = board(&format!("{FP_HEAD}  (clearance 0.3)\n  (zone_connect 0)\n  (fp_line (start 0 0) (end 1 0) (stroke (width 0.1) (type solid)) (layer \"F.SilkS\") (uuid \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaad1\")))"));
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let fp = blocks(&out, "footprint")[0].to_string();
+    assert!(fp.contains("(zone_connect 0)") && fp.contains("(clearance 0.3)"), "{fp}");
+}
+
+/// r3 F13: a zone's own per-layer setting (`(property (layer "F.Cu") (hatch_position (xy 1 1)))`, `ZONE::LayerProperties`) is written back.
+#[test]
+fn a_zones_layer_properties_are_kept() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25)
+  (fill (mode hatch) (thermal_gap 0.5) (thermal_bridge_width 0.5) (hatch_thickness 0.5) (hatch_gap 1) (hatch_orientation 0) (hatch_border_algorithm hatch_thickness) (hatch_min_hole_area 0.3))
+  (property (layer "F.Cu") (hatch_position (xy 1 1)))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125))))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    assert!(blocks(&out, "zone")[0].contains("(property (layer \"F.Cu\") (hatch_position (xy 1 1)))"), "{out}");
 }

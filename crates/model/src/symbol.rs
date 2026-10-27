@@ -628,7 +628,7 @@ fn power_flag() -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: "Special symbol for telling ERC where power comes from".into(),
-        reference_prefix: "#PWR".into(),
+        reference_prefix: "#FLG".into(),
         unit_count: 1,
         pin_names_hidden: true,
         pin_numbers_hidden: true,

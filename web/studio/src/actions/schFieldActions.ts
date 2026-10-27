@@ -13,16 +13,16 @@ export function registerSchFieldActions(registry: ActionMap, ctx: SchEditContext
   const { state, api, requestSelection } = ctx;
   const m = schematicActions(registry, state.tab);
   const sch = state.schematic;
-  const info = (message: string) => ctx.dispatch({ type: "TOAST", message, kind: "info" });
 
   // Autoplace Fields (`O`): "Runs the automatic placement algorithm on the symbol's (or sheet's) fields". The selection's symbols, power symbols and sheets, and the item each
   // selected field belongs to, have their fields placed beside them, on a side with no pins and clear of what is drawn around (the manual routine, `AUTOPLACE_MANUAL`); one
   // undo step. Moving, turning or editing a field's place afterwards takes the item out of the autoplaced ones again.
   m.set("eeschema.InteractiveEdit.autoplaceFields", () => {
     if (!sch) return;
+    // r2 C-L6: `SCH_EDIT_TOOL::AutoplaceFields` says nothing when the selection is empty or holds nothing whose fields it places (a label's fields are
+    // always autoplaced here, so a selection of labels has nothing to change): no message.
     const cmd = autoplaceCmd(sch, requestSelection());
-    if (!cmd) return info("Select a symbol, a sheet or one of their fields.");
-    void api.cmd(cmd);
+    if (cmd) void api.cmd(cmd);
   });
 
   // Left / Center / Right Justify -- `JustifyText`: every selected field is justified as asked (as it reads on the sheet), and so is a label whose text runs horizontally (a

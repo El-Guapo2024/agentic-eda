@@ -81,9 +81,37 @@ pub(crate) fn cmp_text(date: &str, footprints: &[(String, String, String, String
     out
 }
 
+/// Each footprint's `(path ..)` in a `.kicad_pcb` the board writer wrote, by the footprint's uuid: the footprint block opens with
+/// `\t(footprint`, its own `(uuid ..)` and `(path ..)` are its two-tab lines, and it closes with `\t)`.
+pub(crate) fn footprint_paths(pcb: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let (mut uuid, mut path): (Option<String>, Option<String>) = (None, None);
+    let mut inside = false;
+    let unquote = |l: &str, tag: &str| l.strip_prefix(tag).map(|r| r.trim_end().trim_end_matches(')').trim_matches('"').to_string());
+    for line in pcb.lines() {
+        if line.starts_with("\t(footprint ") {
+            inside = true;
+            (uuid, path) = (None, None);
+        } else if inside && line == "\t)" {
+            if let (Some(u), Some(p)) = (uuid.take(), path.take()) {
+                out.insert(u, p);
+            }
+            inside = false;
+        } else if inside {
+            if uuid.is_none() {
+                uuid = unquote(line, "\t\t(uuid ");
+            }
+            if path.is_none() {
+                path = unquote(line, "\t\t(path ");
+            }
+        }
+    }
+    out
+}
+
 /// `POST /api/fab/cmp`: write `export/kicad/cmp/<project>.cmp`. The timestamps are the footprints' uuids in the
-/// derived `.kicad_pcb` (the ones kicad-cli and KiCad see), the path the schematic symbol's uuid in the derived
-/// `.kicad_sch`.
+/// derived `.kicad_pcb` (the ones kicad-cli and KiCad see), the path each footprint's `(path ..)` there (`RecreateCmpFile`:
+/// `fp->GetPath().AsString()`, the sheet uuids and the symbol's), so a symbol on a sub-sheet keeps its sheets.
 pub fn export_cmp(dir: &Path) -> Value {
     let (design, model) = match kicad_engine::load_with_schematic(dir) {
         Ok(loaded) => loaded,
@@ -94,11 +122,11 @@ pub fn export_cmp(dir: &Path) -> Value {
     };
     let date = kicad_engine::chrono_like_today();
     let meta = eda_kicad::ExportMeta { date: &date, title: "board" };
-    let (_, pcb_ids) = match eda_kicad::export_kicad_pcb_mapped(&design, &model, &meta) {
+    let (pcb_text, pcb_ids) = match eda_kicad::export_kicad_pcb_mapped(&design, &model, &meta) {
         Ok(r) => r,
         Err(e) => return crate::fab_api::err(board::reasons(&e)),
     };
-    let sch_ids = eda_kicad::export_kicad_sch_mapped(&design, &model, &meta).map(|(_, m)| m).unwrap_or_default();
+    let paths = footprint_paths(&pcb_text);
     let uuid_of = |map: &std::collections::HashMap<String, String>, id: &str| map.iter().find(|(_, ours)| ours.as_str() == id).map(|(u, _)| u.clone()).unwrap_or_default();
 
     let mut rows: Vec<(String, String, String, String, String)> = Vec::new();
@@ -106,8 +134,9 @@ pub fn export_cmp(dir: &Path) -> Value {
         let Some(part) = model.part(&fp.id) else { continue };
         // The exporter's own lib id for it (`footprint_lib_id`: a package's installed KiCad footprint, a name with no library bare).
         let id = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).or_else(|| model.footprint_of(part).map(|f| f.name)).unwrap_or_default();
-        let symbol = uuid_of(&sch_ids, &fp.id);
-        rows.push((uuid_of(&pcb_ids, &fp.id), if symbol.is_empty() { String::new() } else { format!("/{symbol}") }, fp.id.clone(), part.value.clone().unwrap_or_default(), id));
+        let uuid = uuid_of(&pcb_ids, &fp.id);
+        let path = paths.get(&uuid).cloned().unwrap_or_default();
+        rows.push((uuid, path, fp.id.clone(), part.value.clone().unwrap_or_default(), id));
     }
     let text = cmp_text(&eda::now_rfc3339(), &rows);
     let name = std::fs::read_to_string(dir.join("board.json"))
@@ -128,6 +157,15 @@ pub fn export_cmp(dir: &Path) -> Value {
 
 #[cfg(test)]
 mod tests {
+    /// r3 X3-10: the `.cmp` path is the footprint's own `(path ..)`, sheet uuids included.
+    #[test]
+    fn the_cmp_path_is_the_footprints_path() {
+        let pcb = "(kicad_pcb\n\t(footprint \"R\"\n\t\t(layer \"F.Cu\")\n\t\t(uuid \"f1\")\n\t\t(property \"Reference\" \"R1\"\n\t\t\t(uuid \"p1\")\n\t\t)\n\t\t(path \"/s1/u1\")\n\t)\n\t(footprint \"C\"\n\t\t(uuid \"f2\")\n\t)\n)\n";
+        let p = super::footprint_paths(pcb);
+        assert_eq!(p.get("f1").map(String::as_str), Some("/s1/u1"));
+        assert!(!p.contains_key("f2"));
+    }
+
     use super::*;
 
     #[test]

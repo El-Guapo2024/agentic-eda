@@ -477,9 +477,10 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       // view-OPTIONS, not camera actions, so these go straight to the
       // store (Viewer3DOptions) rather than through Action3D/camera3d.
       // showNotInPosFile ('P') and showDNP ('D') toggle the two attribute rows the same way.
+      // The plain letters only: KiCad binds no Shift form of them (`eda_3d_actions.cpp`), so Shift+D does nothing.
       const k = e.key.toLowerCase();
       const modelRow = k === "t" ? "th_models" : k === "s" ? "smd_models" : k === "v" ? "virtual_models" : k === "p" ? "not_in_pos_models" : k === "d" ? "dnp_models" : null;
-      if (modelRow && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (modelRow && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
         dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { layers: toggled(viewer3dRef.current.layers, modelRow) } });

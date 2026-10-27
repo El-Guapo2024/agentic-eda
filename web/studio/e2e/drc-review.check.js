@@ -116,12 +116,16 @@
   check("the waivers are the design's (GET /api/drc says excluded)", persisted.violations.filter((v) => v.excluded).length >= 3, `${persisted.violations.filter((v) => v.excluded).length} of ${persisted.violations.length}`);
   check("an exclusion's comment comes back with the report", persisted.violations.some((v) => v.comment === "known and accepted"));
 
-  await rightClick(rows()[0]);
+  // "Exclude all" ends with `Update( m_markersProvider, .. )`, which refilters and sorts: the waived rows now come after the others (r2 D-E3)
+  const waivedAt = rows().findIndex((r) => r.classList.contains("excluded"));
+  check("Exclude all sorts the list again: every waived row comes after the others", waivedAt >= 0 && rows().slice(waivedAt).every((r) => r.classList.contains("excluded")), `first waived row ${waivedAt} of ${rows().length}`);
+  await rightClick(rows()[waivedAt]);
   const waived = menuLabels();
   check("a waived violation's menu offers to remove the exclusion", waived.some((l) => l.startsWith("Remove exclusion")) && waived.some((l) => l.startsWith("Edit exclusion comment")), JSON.stringify(waived));
   await pick("Remove exclusion");
   await sleep(1000);
-  check("Remove exclusion puts it back", !rows()[0].classList.contains("excluded"));
+  // ID_REMOVE_EXCLUSION ends with `ValueChanged( node )`: no refilter, so the row stays where it was
+  check("Remove exclusion puts it back, in the row it had", !rows()[waivedAt].classList.contains("excluded"));
 
   const show = [...document.querySelectorAll(".dialog .rc-show input")];
   show[show.length - 1].click();
@@ -179,7 +183,10 @@
     check("Next Marker selects the first row", selectedIndex() === 0, selectedIndex());
     await eda.run("common.Checker.excludeMarker");
     await sleep(800);
-    check("Exclude Marker waives it", rows()[0].classList.contains("excluded") && /^Excluded /.test(rows()[0].innerText), badges());
+    // DIALOG_ERC::ExcludeMarker ends with `Update`, which sorts the list again (errors, warnings, exclusions; r2 D-E3) and selects the same marker: the
+    // waived row moves after every other one, still selected (DRC's `ValueChanged` keeps its place, above)
+    const waivedRow = rows()[selectedIndex()];
+    check("Exclude Marker waives it, and the list sorts it after the findings that are not waived", !!waivedRow && waivedRow.classList.contains("excluded") && /^Excluded /.test(waivedRow.innerText) && rows().slice(selectedIndex() + 1).every((r) => r.classList.contains("excluded")) && rows().slice(0, selectedIndex()).every((r) => !r.classList.contains("excluded")), `${selectedIndex()} of ${rows().length}; ${badges()}`);
     const target = rows().find((r) => !r.classList.contains("excluded") && /^Error: /.test(r.innerText));
     if (target) {
       const title = target.innerText.split("\n")[0].replace(/^Error: /, "");

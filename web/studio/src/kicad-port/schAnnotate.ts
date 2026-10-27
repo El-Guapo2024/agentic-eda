@@ -50,13 +50,21 @@ export function startNumber(text: string): number {
   return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
 }
 
+/** What `paste_sch` is told to number by (r2 D-C3): `SCH_EDITOR_CONTROL::Paste` reads Schematic Setup's `m_AnnotateMethod`, `m_AnnotateStartNum` and
+ *  `m_AnnotateSortOrder`, the settings the Annotate dialog last saved. */
+export function pasteNumbering(s: Pick<AnnotateSettings, "sort" | "algo" | "start">): { algo: AnnotateSettings["algo"]; start: number; order: "by_x" | "by_y" } {
+  return { algo: s.algo, start: startNumber(s.start), order: s.sort === "x" ? "by_x" : "by_y" };
+}
+
 /** The selection Annotate's "Selection" scope numbers (`annotate.cpp::getInferredSymbols`): a selected group stands for every symbol below it
  *  (`group->RunOnChildren( .., RECURSE_MODE::RECURSE )`), then the symbols (`isSymbol`) and the sheets of the sheet in view. */
 export function annotateSelectionOf(sch: Schematic | null | undefined, selected: readonly string[], isSymbol: (id: string) => boolean): AnnotateSelection {
   const leaves = leafIds(sch, selected);
   return {
     symbols: [...new Set(leaves.filter(isSymbol))],
-    sheets: leaves.filter((id) => sch?.sheets.some((s) => s.id === id) ?? false),
+    // `AnnotateSymbols` takes the sheets from the selected items themselves (`for( EDA_ITEM* item : selection ) if( item->Type() == SCH_SHEET_T )`), not from
+    // inside a selected group (r3 D3-L1)
+    sheets: selected.filter((id) => sch?.sheets.some((s) => s.id === id) ?? false),
   };
 }
 
@@ -68,10 +76,11 @@ export interface AnnotateSelection {
   sheets: readonly string[];
 }
 
-/** The scope the dialog starts in when it is opened with something selected: the choice it had, but the selection when that is what is there. */
-export function scopeOnOpen(remembered: AnnotateScopeId, selection: AnnotateSelection): AnnotateScopeId {
-  const hasSelection = selection.symbols.length > 0 || selection.sheets.length > 0;
-  if (remembered === "selection" && !hasSelection) return "all";
+/**
+ * The scope the dialog starts in: `DIALOG_ANNOTATE::TransferDataToWindow` restores `m_AnnotatePanel.scope` as it was, whatever is selected (r2 D-A4). A
+ * Selection scope with nothing selected annotates nothing (`getInferredSymbols` finds no symbol).
+ */
+export function scopeOnOpen(remembered: AnnotateScopeId, _selection: AnnotateSelection): AnnotateScopeId {
   return remembered;
 }
 

@@ -28,6 +28,7 @@ import {
   ercKey,
   patchErcExcluded,
   patchErcSeverity,
+  refilterDrc,
   rcKind,
   rcMenu,
   selectionAfterRowGone,
@@ -466,4 +467,28 @@ test("the ERC report loses a marker the same way, and the exclusions only when t
   assert.deepEqual(some.counts, {});
   assert.equal(some.markers_deleted, true);
   assert.equal(patchErcDeleteAll(report, true).violations.length, 0);
+});
+
+test("r2 D-E3: the list is every error, then the warnings, then the exclusions, each in report order (SetSeverities' stable sort)", () => {
+  const mixed = [v("w", ["1"], { severity: "warning" }), v("e", ["2"]), v("x", ["3"], { excluded: true }), v("e2", ["4"])];
+  assert.deepEqual(listedIndexes(mixed, SHOW_ALL), [1, 3, 0, 2]);
+  assert.deepEqual(listedIndexes(mixed, { errors: false, warnings: true, exclusions: true }), [0, 2]);
+});
+
+test("r2 D-E3: a DRC marker waived or restored on its own keeps its row until the next refilter; a bulk change or a new severity sorts again", () => {
+  const report: DrcReport = { violations: [v("e1", ["1"]), v("w", ["2"], { severity: "warning" }), v("e2", ["3"])], counts: {} } as unknown as DrcReport;
+  assert.deepEqual(listedIndexes(report.violations, SHOW_ALL), [0, 2, 1]);
+  // DIALOG_DRC's ID_ADD_EXCLUSION / ExcludeMarker: `ValueChanged( node )`, no refilter
+  const held = patchDrcExcluded(report, [{ check: "e1", items: ["1"] }], true, "", true);
+  assert.deepEqual(listedIndexes(held.violations, SHOW_ALL), [0, 2, 1], "the waived error keeps the first row");
+  const back = patchDrcExcluded(held, [{ check: "e1", items: ["1"] }], false, "", true);
+  assert.deepEqual(listedIndexes(back.violations, SHOW_ALL), [0, 2, 1]);
+  // ID_ADD_EXCLUSION_ALL and friends: `Update( m_markersProvider, getSeverities() )`, which refilters and sorts
+  const bulk = patchDrcExcluded(held, [{ check: "e2", items: ["3"] }], true, "", false);
+  assert.deepEqual(listedIndexes(bulk.violations, SHOW_ALL), [1, 0, 2]);
+  const sev = patchDrcSeverity(held, "w", "error", "w");
+  assert.deepEqual(listedIndexes(sev.violations, SHOW_ALL), [1, 2, 0], "a severity change refilters: the waived row goes to the end");
+  assert.deepEqual(listedIndexes(refilterDrc(held).violations, SHOW_ALL), [2, 1, 0], "a change of the Show boxes refilters too");
+  // with exclusions hidden a waived row leaves the list at once (`DeleteCurrentItem`)
+  assert.deepEqual(listedIndexes(held.violations, { errors: true, warnings: true, exclusions: false }), [2, 1]);
 });

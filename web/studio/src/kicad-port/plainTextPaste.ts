@@ -16,5 +16,6 @@ const DEFAULT_TEXT_SIZE_NM = 1_270_000;
 export function plainTextPaste(clipText: string, at: { x: number; y: number }, layer: string): { cmd: Cmd; longText: boolean } | null {
   if (clipText === "") return null;
   const cmd: Cmd = { op: "add_text", text: { content: clipText, at, angle: 0, layer, size_nm: DEFAULT_TEXT_SIZE_NM, stroke_width: Math.round(DEFAULT_TEXT_SIZE_NM / 8), justify: "center", mirror: false } };
-  return { cmd, longText: clipText.length > MAX_PASTED_TEXT_LENGTH };
+  // `clipText.size()`: a wxString counts code points (UTF-32), not UTF-16 units
+  return { cmd, longText: [...clipText].length > MAX_PASTED_TEXT_LENGTH };
 }

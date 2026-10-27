@@ -17,6 +17,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 # Part A: transforms, zone cutout, dimensions, flip, orientation (round-2 R1-R10, C1, C4, A2)
 
 ### A-1 (medium). Flip onto (or within) a user layer typed front or back does not toggle the mirror of a text or a dimension, so the C4 fix is incomplete
+- **Status:** **Fixed** on task-r3-pcb-edit: 904bc77e (texts and text boxes; a dimension has no mirror flag here, left open).
 - **What differs.**
   - KiCad, `pcbnew/pcb_text.cpp::PCB_TEXT::Flip`:
     ```
@@ -35,6 +36,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No. GAPS (line 397) lists only "a footprint's own drawings on a user layer".
 
 ### A-2 (medium). Swap Layers leaves a tuning pattern (and a via stitch) on its old layer while its tracks move
+- **Status:** **Fixed** on task-r3-pcb-edit: 904bc77e.
 - **What differs.**
   - KiCad, `pcbnew/tools/global_edit_tool.cpp::GLOBAL_EDIT_TOOL::SwapLayers`: after the tracks are swapped, `for( PCB_GENERATOR* generator : frame()->GetBoard()->Generators() ) hasChanges |= swapBoardItem( generator, layerMap );`.
   - `PCB_GENERATOR::GetLayerSet` is `PCB_GROUP::GetLayerSet() | LSET( { GetLayer() } )`: its members' layers (already moved) plus its own.
@@ -47,6 +49,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No. R9 covered tables and barcodes only.
 
 ### A-3 (medium). A rounded rectangle turned by a non-quarter angle: KiCad's polygon keeps four true arcs; ours is flattened at a fixed 5 µm
+- **Status:** **Fixed** in part on task-r3-pcb-edit: 904bc77e (the board's maximum error; the arcs need arcs in the IR's polygon, open; Create Array is task-r2-misc-leftovers', Edit Pad as Graphic Shapes open).
 - **What differs.**
   - KiCad, `common/eda_shape.cpp::EDA_SHAPE::rotate`: `rr.TransformToPolygon( GetPolyShape(), getMaxError() )`.
   - `libs/kimath/src/geometry/roundrect.cpp::ROUNDRECT::TransformToPolygon` builds the corners with `outline.Append( MakeCornerArcCw90(..), maxError )`.
@@ -60,6 +63,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** Not for Rotate. GAPS 397 names the four-corner leftover in Create Array and Repeat Layout only. The same four-corner shortcut is also in `crates/ops/src/fp_array.rs:83` (Footprint Editor Create Array) and `crates/ops/src/pad_edit.rs:98-105` (Edit Pad as Graphic Shapes; KiCad's explode also calls `shape->Rotate`).
 
 ### A-4 (low). The canvas paints a dimension's text turned the wrong way (vertical and diagonal dimensions)
+- **Status:** **Fixed** on task-r3-pcb-edit: 5300a295.
 - **What differs.**
   - `crates/connectivity/src/dimension.rs:279` and `:359-366` compute KiCad's counter-clockwise angle (`PCB_DIM_ALIGNED::updateText`: `FULL_CIRCLE - EDA_ANGLE( crossbarCenter )`; `ANGLE_VERTICAL` for a vertical orthogonal crossbar).
   - `web/components/canvas/painter.ts:1026` draws `computed_text_angle` with no sign flip, and its comment calls the angle "canvas-native clockwise-positive".
@@ -71,10 +75,12 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No. This predates round 2.
 
 ### A-5 (low). A kept-aligned dimension's text angle is written to the millidegree; KiCad writes `{:.10g}`
+- **Status:** Open (low; KiCad recomputes the angle on load).
 - **What differs.** `common/eda_units.cpp::FormatAngle` is `fmt::format( "{:.10g}", aAngle.AsDegrees() )`, which gives 33.69006753. We write 33.69 (`angle_of`, after R10). KiCad recomputes the angle on load, so only the text differs.
 - **Already known?** No.
 
 ### A-6 (low). Delete from a zone cutout snaps the cursor to the grid even with grid snapping off
+- **Status:** Not applicable here: the studio has no grid-snapping switch (`gal->GetGridSnapping()`); Ctrl turns the grid off per move only.
 - **What differs.**
   - KiCad, `common/view/wx_view_controls.cpp::GetCursorPosition`: snaps only `if( aEnableSnapping && gal->GetGridSnapping() )`.
   - Ours: `web/actions/useActionRunner.ts` `deleteRefs` always calls `snapPoint(.., state.gridNm)`.
@@ -108,6 +114,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 # Part B: clipboard, plain-text paste, Copy as Text, groups (round-2 C2, C7, B2, A1, A3, A4, A9, A10, A11)
 
 ### B-1 (high). Cut of selected table cells deletes the whole table; KiCad only clears those cells. Copy of cells copies the whole table
+- **Status:** **Fixed** on task-r3-pcb-edit: 291dfd71.
 - **What differs.**
   - Ours: Cut (`web/actions/useActionRunner.ts:346-354`) runs the selection through `editableSelection(.., { keepPads: true })`. `web/kicad-port/pcbTransform.ts:73` turns every table cell into its table's id (`FilterCollectorForTableCells`), so `deleteRefs([tableId], true)` deletes the table and `export_pcb_clipboard` writes it whole.
   - Plain Delete is right: `web/kicad-port/deleteCmds.ts:72-84` gets the raw cell ids.
@@ -120,6 +127,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** In part. PARITY-pcb line 1769 says "Copy, Cut, Paste and Duplicate of a table or of cells" is not done. Section 55 says a table is copied. The data loss on Cut is listed nowhere.
 
 ### B-2 (medium). Copy of a group whose only member is a footprint is written as a bare footprint, so the group and the pads' nets are lost
+- **Status:** **Fixed** on task-r3-pcb-edit: 291dfd71.
 - **What differs.**
   - Ours: `crates/kicad/src/clipboard.rs:356` tests `picked.total() == 1 && picked.footprints.len() == 1`. `total()` (lines 159-174) does not count `groups`, so a selected group of one (kept since A1) takes the lone-footprint branch: no `(group ..)`, pads on no net.
   - KiCad: `if( aSelected.Size() == 1 && aSelected.Front()->Type() == PCB_FOOTPRINT_T )`. A selected group is `PCB_GROUP_T`, so KiCad takes the board branch (`static_cast<PCB_GROUP*>( boardItem )->DeepClone()`, then each descendant formatted, pads with their nets).
@@ -128,6 +136,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### B-3 (low). Group Items and the Group Properties "Locked" box ignore the lock of the item's parent group
+- **Status:** **Fixed** on task-r3-pcb-edit: 8b3a2a07.
 - **What differs.**
   - KiCad, `PCB_GROUP_TOOL::Group`: `if( static_cast<BOARD_ITEM*>( eda_item )->IsLocked() ) group->SetLocked( true );`. `pcbnew/board_item.cpp::BOARD_ITEM::IsLocked` starts with `if( EDA_GROUP* group = GetParentGroup() ) { if( group->AsEdaItem()->IsLocked() ) return true; }`.
   - KiCad, `DIALOG_GROUP_PROPERTIES` constructor: `m_locked->SetValue( aGroup->AsEdaItem()->IsLocked() );`.
@@ -138,6 +147,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No. A4 handled the item's own lock only.
 
 ### B-4 (low). Table cells can become group members; points, grid items and drill maps are outside the group bookkeeping
+- **Status:** **Fixed** on task-r3-pcb-edit: ce191e83.
 - **What differs.**
   - **Table cells:** `web/state/store.tsx:2474-2477` filters out only pads and fields, and `make_group` checks no ids, so selected cells become members under their cell ids. Such a group has no uuid to write, so it is lost on save. KiCad's `Group` filter drops anything that fails `IsGroupableType()`, and `PCB_TABLECELL_T` fails it.
   - **Points, grid items, drill maps:** the importer puts these in groups (`crates/kicad/src/import_items.rs:150-153`), as 25ec2335's `IsGroupableType` allows (`PCB_POINT_T`, `PCB_GRID_ITEM_T`, `PCB_DRILL_CHART_T`, `PCB_DRILL_MAP_T`). But `universe()` (`crates/ops/src/pcb_groups.rs:41-66`) leaves them out. So `tidy_groups` never removes a deleted one from its group, and `in_group` never adds new ones to the entered group.
@@ -146,6 +156,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### B-5 (low). Plain-text paste of whitespace pastes the old session copy; the long-text threshold counts UTF-16 units
+- **Status:** **Fixed** on task-r3-pcb-edit: 30547418 (an empty clipboard still falls back to the session copy, the browser's case).
 - **What differs.**
   - Ours: `web/state/store.tsx:2557` tests `system.trim() !== ""`, so a clipboard of "  " falls back to the in-session board copy.
   - KiCad, `pcbnew/tools/pcb_control.cpp::PCB_CONTROL::Paste`: `if( clipText.empty() ) return 0;`, and any other text becomes a `PCB_TEXT`.
@@ -153,12 +164,14 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### B-6 (low). Copy as Text on the board has no hover fallback
+- **Status:** **Fixed** on task-r3-pcb-edit: e373e87d.
 - **What differs.**
   - Ours: `web/actions/useActionRunner.ts:1644` uses `state.selection` on the board; only the schematic picks the hovered item.
   - KiCad, `EDIT_TOOL::copyToClipboardAsText`: `RequestSelection` falls back to the item under the cursor, then `if( selection.IsHover() ) m_selectionTool->ClearSelection();`.
 - **Already known?** No (B2 fixed the item types).
 
 ### B-7 (low). A copied pad pasted while its parent reference is not on the board brings back the whole parent footprint
+- **Status:** Open.
 - **What differs.**
   - Ours: the pad's clipboard footprint keeps the parent's reference (documented in section 55). `crates/ops/src/pcb_paste.rs:713` (`reuse_unplaced`, set for every clipboard footprint at line 586) re-places part R1 as the model knows it, with all its pads, and ignores the one-pad definition.
   - KiCad pastes a fresh, unnamed one-pad footprint.
@@ -166,18 +179,21 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** The reference difference is documented; this consequence of it is not.
 
 ### B-8 (low). Paste of a clipboard image is missing
+- **Status:** Open.
 - **What differs.**
   - KiCad, `PCB_CONTROL::Paste`, when the clipboard text does not parse: `if( std::unique_ptr<wxBitmap> clipImg = GetImageFromClipboard() )` makes a `PCB_REFERENCE_IMAGE`.
   - Ours reads text only (`readClipboardText`, `web/api/libraryClient.ts:95`).
 - **Already known?** Not in GAPS or PARITY.
 
 ### B-9 (low). A footprint's nested groups are flattened or dropped on import
+- **Status:** Open (overlaps r2-board-io F7/F14).
 - **What differs.**
   - Ours: `crates/kicad/src/import.rs:1731-1736` keeps only members found in `slots` (art, text, field, pad, courtyard). A member that is another group's uuid is dropped, so an outer group holding only groups disappears.
   - KiCad, `pcb_io_kicad_sexpr_parser.cpp::resolveGroups` with a footprint parent: "Keep the footprint lookup map in sync with newly added groups" (every group added to `fpItemMap`).
 - **Already known?** No. This overlaps r2-board-io F7/F14.
 
 ### B-10 (low). Group Properties writes a library link KiCad would not write
+- **Status:** Open.
 - **What differs.**
   - Ours: `fix_lib_link` (`crates/model/src/groups.rs`) turns "MyBlock" or "Lib:" into a link, and `write_group` (`crates/kicad/src/pcb_items.rs:402`) writes `(lib_id ..)` whenever the link is non-empty.
   - KiCad writes it only `if( aGroup->HasDesignBlockLink() )`, i.e. `m_designBlockLibId.IsValid()`, which needs both names. Our reader drops such a link too (`check_design_block_id`), so the outcome on reload is the same; only the file differs.
@@ -209,6 +225,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 # Part C: property dialogs, drawing tools, selection, context menu, Net Inspector (round-2 C3, A5, A8, C5, C6, C8, C9, B1, B3-B6, R5)
 
 ### C-1 (high). On the board, Delete and Undo while a zone, rule area or graphic polygon is being drawn do not remove the last corner
+- **Status:** **Fixed** on task-r3-pcb-edit: 5f553a9d.
 - **What differs.**
   - KiCad, `pcbnew/tools/drawing_tool.cpp::DRAWING_TOOL::DrawZone` (lines 3608-3622). It serves zones, rule areas, cutouts, similar zones and graphic polygons:
     ```
@@ -228,6 +245,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### C-2 (medium). Track & Via Properties changes the net without KiCad's short and pad questions; pads are never updated
+- **Status:** **Fixed** on task-r3-pcb-edit: 3d208446.
 - **What differs.**
   - KiCad, `pcbnew/dialogs/dialog_track_via_properties.cpp::TransferDataFromWindow` (lines 1567-1637) gathers `shortingNets` and `changingPads` over the connected tracks.
   - `confirmShortingNets` asks "Applying these changes will short net %s with %s." or "... will short net %s with other nets.". The title is "Confirmation", the buttons "Apply Anyway" / "Cancel Changes", and Cancel calls `commit.Revert()`.
@@ -242,6 +260,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No (A5's leftovers are the via layer pair, the mask and backdrill only).
 
 ### C-3 (medium). Track & Via Properties' width error is not KiCad's message, and the title varies
+- **Status:** **Fixed** on task-r3-pcb-edit: 3d208446.
 - **What differs.**
   - KiCad: `m_trackWidth.Validate( GEOMETRY_MIN_SIZE, INT_MAX )`. `common/widgets/unit_binder.cpp::UNIT_BINDER::Validate` builds `_( "%s must be at least %s." )` from the label without its colon, giving "Track width must be at least 0.001 mm.".
   - Ours: `web/kicad-port/trackViaDialog.ts:73` says "Value must be greater than or equal to ...".
@@ -250,6 +269,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### C-4 (medium). Pad Properties lacks several `PAD::doCheckPad` warnings for fields the dialog edits; the minimum-drill text differs
+- **Status:** **Fixed** on task-r3-pcb-edit: 8aefbd9e (still a toast, not an HTML_MESSAGE_BOX).
 - **What differs.**
   - KiCad, `pcbnew/pad.cpp::PAD::doCheckPad` warns (shown by `padValuesOK` with "Warning: " in front):
     - "(negative local clearance values have no effect)"
@@ -264,6 +284,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** In part. Section 55 names the centred hole and the square corner, not these.
 
 ### C-5 (medium). Footprint Properties' Add Field ignores the board's Fab text defaults
+- **Status:** **Fixed** on task-r3-pcb-edit: eb2172ab.
 - **What differs.**
   - KiCad, `dialog_footprint_properties.cpp::OnAddField`: `newField.StyleFromSettings( m_frame->GetDesignSettings(), true )`. `PCB_TEXT::StyleFromSettings` takes the layer class's size, thickness, italic and keep-upright, and the mirror from `IsBackLayer`.
   - Ours: `web/kicad-port/fpFields.ts:186-189` (`newFieldLayout`) hard-codes 1 mm, 0.15 mm, upright, not italic.
@@ -272,16 +293,19 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No (C8's Field4 is right).
 
 ### C-6 (low). Undo in the measure tool clears the ruler instead of undoing the board
+- **Status:** **Fixed** on task-r3-pcb-edit: 5f553a9d.
 - **What differs.** KiCad, `pcbnew/tools/pcb_viewer_tools.cpp::MeasureTool`, handles only `IsCancelInteractive()`, so Undo reaches the frame. 68e1c0f0 put `measure` in `BOARD_DRAWING_KINDS`, so Ctrl+Z becomes `ESCAPE`.
 - **Already known?** No.
 
 ### C-7 (low). Doc drift: PARITY-pcb line 1086 gives a false reason for the read-only via rows
+- **Status:** **Fixed** on task-r3-pcb-edit: 6d43abc3.
 - **What differs.**
   - The row says Layer Top/Bottom and Via Type are read-only because "KiCad's own dialog does not either".
   - In KiCad, the Properties panel has setters for them (`pcb_track.cpp:3195-3198`), and `DIALOG_TRACK_VIA_PROPERTIES` sets the type (`m_ViaTypeChoice`, lines 1470-1475) and the layers.
   - The difference itself is known (A5's leftovers); only the reason is wrong.
 
 ### C-8 (low). ValueStringCompare when a number does not fully parse
+- **Status:** **Fixed** on task-r3-pcb-edit: 6d43abc3.
 - **What differs.**
   - KiCad: when `convertSeparators` fails, `wxString::ToCDouble` still keeps the strtod prefix (`1.2.3` reads as 1.2).
   - Ours: `web/kicad-port/valueStringCompare.ts:114-118` returns 0 unless the whole string parses.
@@ -314,6 +338,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 # Part D: ported/identical rows no round reviewed (Cleanup Tracks & Vias, Select Connection, microwave, Break Track, global edits, shape modification)
 
 ### D-1 (high). Cleanup "Delete tracks unconnected at one end" removes a whole multi-point Track when only one of its segments dangles
+- **Status:** **Fixed** on task-r3-pcb-edit: 19e8c01f.
 - **What differs.**
   - Ours: `crates/connectivity/src/cleanup.rs:369` maps the dangling segment `trk#N` back to its Track (`d.id.split('#').next()`) and removes the whole Track.
   - KiCad, `pcbnew/tracks_cleaner.cpp::TRACKS_CLEANER::deleteDanglingTracks`, removes only the flagged `PCB_TRACK` (`m_brd->Remove( track ); m_commit.Removed( track );`) and iterates.
@@ -327,6 +352,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No. The PARITY section 12 row says identical.
 
 ### D-2 (high). Cleanup "Delete tracks connecting different nets" removes a whole polyline (high); it skips no-net items and counts zones (medium)
+- **Status:** **Fixed** on task-r3-pcb-edit: 19e8c01f.
 - **What differs.** `crates/connectivity/src/cleanup.rs:310-350`:
   - (a) It removes the whole Track when one segment shorts. KiCad (`removeShortingTrackSegments`) removes the segment.
   - (b) It skips when either side has no net (`it.net.is_empty()` at line 317, `other.net.is_empty()` at line 322). KiCad tests `segment->GetNetCode() != testedPad->GetNetCode()` over `GetConnectedPads` and `GetConnectedTracks`, with no exception for net 0. A GND track on a no-net mounting pad is deleted by KiCad and kept here.
@@ -337,6 +363,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### D-3 (medium). Cleanup's dangling pass uses DRC's `aIgnoreTracksInPads = true`; KiCad's cleaner passes `false`
+- **Status:** **Fixed** on task-r3-pcb-edit: 19e8c01f.
 - **What differs.**
   - `crates/connectivity/src/dangling.rs:9` and `:160` hard-code `true`; `tracks_cleaner.cpp:304` calls `TestTrackEndpointDangling( track, false )`.
   - So a track with both ends under one pad and nothing else attached is deleted by KiCad and kept here.
@@ -345,6 +372,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### D-4 (medium). "Delete tracks fully inside pads" ignores the track's width
+- **Status:** **Fixed** on task-r3-pcb-edit: 19e8c01f.
 - **What differs.**
   - Ours: `cleanup.rs:294` tests only that both ends are inside (`signed_distance <= 0`).
   - KiCad, `deleteTracksInPads`: `TransformShapeToPolygon(..)`, then `poly.BooleanSubtract( *pad->GetEffectivePolygon(..) )`, and deletes only if `poly.IsEmpty()`.
@@ -352,6 +380,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No. The PARITY row's "equivalent" is wrong.
 
 ### D-5 (medium). "Delete redundant vias" on a through-hole pad only at the pad's exact centre
+- **Status:** **Fixed** on task-r3-pcb-edit: 19e8c01f (the upside-down duplicate too).
 - **What differs.**
   - Ours: `cleanup.rs:231` tests `full_stack_pad_centers.contains(&v.at)` (the set is built at line 511).
   - KiCad uses `GetConnectedPads( via )` with `( pad->GetLayerSet() & all_cu ) == all_cu`: any touching through-hole pad counts.
@@ -360,6 +389,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### D-6 (medium). Select Connection (U) walks through pads, ignores layers, and misses branches at inner vertices
+- **Status:** **Fixed** on task-r3-pcb-edit: 586d125c.
 - **What differs.**
   - Ours: `web/kicad-port/pcbConnection.ts:58` keeps only each track's two ends. `web/kicad-port/expandConnection.ts:134` stops the junction stage only when more than two tracks or a via meet.
   - KiCad, `PCB_SELECTION_TOOL::selectAllConnectedTracks`, stops on `pt_count > 2 || gotVia || gotNonStartPad`. It counts only tracks on `layerSetCu`, and joins off-centre vias within their radius.
@@ -373,6 +403,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** PARITY line 129 documents only "pads are start points".
 
 ### D-7 (medium). Microwave Gap, Stub and Polygonal Shape: pad numbers are swapped
+- **Status:** **Fixed** on task-r3-pcb-edit: d7082fdb.
 - **What differs.**
   - KiCad, `pcbnew/microwave/microwave_footprint.cpp::createBaseFootprint`: `footprint->Add( pad, ADD_MODE::INSERT )` (line 218). `FOOTPRINT::Add` with INSERT is `m_pads.push_front` (`footprint.cpp:1433`), so `Pads().begin()` is pad "2". The same holds in 25ec2335.
   - Hence:
@@ -384,6 +415,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No. The PARITY section 41 rows are wrong.
 
 ### D-8 (medium). Break Track on a locked track is refused; KiCad asks and breaks it
+- **Status:** **Fixed** on task-r3-pcb-edit: 04a71b87 (the do-not-show box and the break point's grid origin open).
 - **What differs.**
   - Ours: `web/actions/pcbEditSweep.ts:441-443` shows a toast of our own, "The selected item is locked. Unlock it to break the track.".
   - KiCad, `pcbnew/router/router_tool.cpp::ROUTER_TOOL::InlineBreakTrack`: `KIDIALOG( frame(), _( "The selected item is locked." ), _( "Confirmation" ), wxOK | wxCANCEL | wxICON_WARNING )` with `SetOKLabel( _( "Break Track" ) )` and the do-not-show checkbox. Both halves stay locked.
@@ -392,6 +424,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### D-9 (medium). Edit Text & Graphics Properties leaves out text boxes, table cells and barcodes
+- **Status:** **Fixed** on task-r3-pcb-edit: ed91d108.
 - **What differs.**
   - Ours: `web/kicad-port/globalEditTextGraphics.ts:66-67` takes `dr.shapes`, `dr.texts` and `dr.dimensions` only.
   - KiCad, `dialog_global_edit_text_and_graphics.cpp::TransferDataFromWindow`, takes:
@@ -400,6 +433,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No. The PARITY section 13 row ("no table/barcode item") is stale since sections 38 and 39.
 
 ### D-10 (medium). Simplify Shapes deletes and re-adds a polygon, so it loses its id and group
+- **Status:** **Fixed** on task-r3-pcb-edit: bbcd3bcb (a zone's holes are still not simplified).
 - **What differs.**
   - Ours: `web/actions/pcbEditSweep.ts:331` sends `delete_shape` + `add_shape`, keeping only layer, width and fill.
   - KiCad, `EDIT_TOOL::SimplifyPolygons`: `commit.Modify( item ); poly.SimplifyOutlines(..)` on the same item.
@@ -409,6 +443,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
 - **Already known?** No.
 
 ### D-11 (low). Polygon booleans: messages and the all-failed case
+- **Status:** **Fixed** in part on task-r3-pcb-edit: e2cba0ac (the all-failed words; "Some of the polygons could not be ..." and the push with no success open).
 - **What differs.**
   - Ours: `crates/ops/src/pcb_edit.rs:214` writes "unable to {verb} the selected polygons".
   - KiCad's `GetStatusMessage` texts are "Unable to merge the selected polygons." and "Some of the polygons could not be merged." (likewise subtracted and intersected).
@@ -416,6 +451,7 @@ Finding ids are round-3 ids (`A-1`, ...), distinct from round 2's `A1`.
   - Our "Select at least two polygons, rectangles or circles to ..." is our own wording.
 
 ### D-12 (low). Cleanup leftovers
+- **Status:** **Fixed** in part on task-r3-pcb-edit: 19e8c01f ((a), (c), (d); (b) open: a merged track is new).
 - (a) For duplicates, KiCad deletes the earlier-iterated track; we delete the later one.
 - (b) A merged pair becomes a new Track with `id: ""` and no `pins`. KiCad modifies `aSeg1` in place, keeping its uuid, group and mask.
 - (c) We compare arcs in the duplicate pass. KiCad's covers `PCB_TRACE_T` only.

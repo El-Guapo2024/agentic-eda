@@ -17,7 +17,9 @@
 //   PCB_GROUP::Mirror             every member
 //   PCB_FIELD (a PCB_TEXT)        as a text: its position, and the horizontal justification
 //   PCB_POINT::Mirror             the position
-// (Not yet: a text box, an image and a tuning pattern, `PCB_TEXTBOX::Mirror`, `PCB_GENERATOR::Mirror`.)
+//   PCB_TEXTBOX::Mirror           the box and the text angle (180 - a left-right, -a top-bottom), not the text   } `mirror_items`
+//   PCB_TUNING_PATTERN::Mirror    its base lines, origin and end, and the initial side swaps; its tracks as members }
+// A reference image is not mirrorable (`MirrorableItems` has no `PCB_REFERENCE_IMAGE_T`).
 // Output is a list of `Cmd`s (one `batch` = one undo step).
 
 import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
@@ -81,8 +83,11 @@ export function mirrorableIds(board: BoardState, ids: readonly string[]): string
     seen.add(id);
     const kind = itemKind(board, id);
     if (kind === "group") {
-      for (const member of board.drawings?.groups.find((g) => g.id === id)?.member_ids ?? []) visit(member);
-    } else if (kind === "track" || kind === "via" || kind === "zone" || kind === "shape" || kind === "text" || kind === "field" || kind === "point") {
+      const group = board.drawings?.groups.find((g) => g.id === id);
+      // a tuning pattern (`PCB_GENERATOR`) mirrors itself, then its members (`PCB_GENERATOR::Mirror`: `baseMirror`, `PCB_GROUP::Mirror`)
+      if (group?.generator === "tuning_pattern") out.push(id);
+      for (const member of group?.member_ids ?? []) visit(member);
+    } else if (kind === "track" || kind === "via" || kind === "zone" || kind === "shape" || kind === "text" || kind === "field" || kind === "point" || kind === "textbox") {
       out.push(id);
     }
   };
@@ -101,6 +106,7 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
   const cmds: Cmd[] = [];
   const removed: string[] = [];
   const mirrorTracks: string[] = [];
+  const mirrorItems: string[] = [];
 
   for (const id of mirrorableIds(board, ids)) {
     const kind = itemKind(board, id);
@@ -137,6 +143,8 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
       if (flipped !== just) cmds.push(editFieldCmd(f.part, f.field, { halign: flipped === "left" ? -1 : flipped === "right" ? 1 : 0 }));
       const [x, y] = mirrorPoint([f.field.x, f.field.y], centre, dir);
       if (x !== f.field.x || y !== f.field.y) cmds.push({ op: "move_items", ids: [id], dx: Math.round(x - f.field.x), dy: Math.round(y - f.field.y) });
+    } else if (kind === "textbox" || (kind === "group" && board.drawings?.groups.find((g) => g.id === id)?.generator === "tuning_pattern")) {
+      mirrorItems.push(id);
     } else if (kind === "point") {
       const at = extraItemById(board, id)!.position;
       const [x, y] = mirrorPoint(at, centre, dir);
@@ -144,5 +152,6 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
     }
   }
   if (mirrorTracks.length > 0) cmds.push({ op: "mirror_tracks", ids: mirrorTracks, pivot: { x: Math.round(centre[0]), y: Math.round(centre[1]) }, direction: dir === "leftRight" ? "left_right" : "top_bottom" });
+  if (mirrorItems.length > 0) cmds.push({ op: "mirror_items", ids: mirrorItems, pivot: { x: Math.round(centre[0]), y: Math.round(centre[1]) }, direction: dir === "leftRight" ? "left_right" : "top_bottom" });
   return { cmds, removed };
 }

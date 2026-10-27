@@ -10,6 +10,7 @@
 // into the box works too.
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
 
 const PRESETS = ["power:GND", "power:+5V", "power:+3V3", "power:+12V", "power:-12V", "power:VCC", "power:VDD", "power:VSS", "power:PWR_FLAG"];
 
@@ -48,7 +49,9 @@ export function PowerSymbolDialog() {
     const trimmed = libId.trim();
     if (!trimmed) return;
     const full = trimmed.includes(":") ? trimmed : `power:${trimmed}`;
-    api.cmd({ op: "add_power_symbol", lib_id: full, at: { x: pending.at[0], y: pending.at[1] }, rot_millideg: rotMillideg, net: netOf(full), pin: "" });
+    // `PlaceSymbol` numbers it by the project's Annotate method and start number (r3 D3-M5)
+    const a = rememberedAnnotateSettings();
+    api.cmd({ op: "add_power_symbol", lib_id: full, at: { x: pending.at[0], y: pending.at[1] }, rot_millideg: rotMillideg, net: netOf(full), pin: "", annotate: { algo: a.algo, start_number: startNumber(a.start) } });
     dispatch({ type: "SET_LAST_POWER_LIB_ID", libId: full });
     close();
   };

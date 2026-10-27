@@ -1167,6 +1167,141 @@ fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
     }
 }
 
+/// Import the reviewer's case `case` (`tests/fixtures/r3_nets/<case>/`, round 3's `/tmp/findings-r3-schematic.jjpH/cases`) and the net of each pin, `#` pins left out.
+fn r3_case_nets(case: &str, files: &[(&str, &str)]) -> (PathBuf, std::collections::BTreeMap<String, String>) {
+    let work = scratch(&format!("r3_{case}"));
+    for (f, text) in files {
+        std::fs::write(work.join(f), text).unwrap();
+    }
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("t.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let nets = design.nets.unwrap_or_default().into_iter().flat_map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).map(move |p| (p, n.name.replace("{slash}", "/")))).collect();
+    (dir, nets)
+}
+
+/// Round 3's connectivity cases, as kicad-cli names their nets:
+/// - A3-H2 (`BindBundle`: a sheet pin names its members on its sheet when it drives its bus, `drivesRecord`): `c5`, one screen behind two sheet symbols
+///   with a bus pin `D[0..1]` each, is one net `/A/D0` of R1, R3 and R4; `c5d`, a bus labelled `D[0..1]` elsewhere on the root, is one net `/D0`;
+/// - A3-M1 (`canDrive &= .. !reference.StartsWith( "#" )`): `c1`, `#R1` wired to R2.1, is `Net-(R2-Pad1)`;
+/// - A3-M2 (`Align`: by place unless both buses are groups): `c4`, a global `{D1 D0}` and a local `D[0..1]` on one bus, joins R1 (D0) and R2 (D1) as `D0`;
+/// - A3-M3 (`AssignNames`' `preferred`: a strong claim holds the name): `c7`, a sheet pin `X` on R1.1 and a local label `X` on R2.1, is `/X` for R2.1.
+#[test]
+fn round_3s_connectivity_cases_are_named_as_kicad_cli_names_them() {
+    let fx = |c: &str, f: &str| -> String { std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/r3_nets").join(c).join(f)).unwrap() };
+    let cases: [(&str, &[&str], &[(&str, &str)]); 5] = [
+        ("c5", &["t.kicad_sch", "sub.kicad_sch"], &[("R1.1", "/A/D0"), ("R3.1", "/A/D0"), ("R4.1", "/A/D0")]),
+        ("c5d", &["t.kicad_sch", "sub.kicad_sch"], &[("R1.1", "/D0"), ("R3.1", "/D0")]),
+        ("c1", &["t.kicad_sch"], &[("R2.1", "Net-(R2-Pad1)")]),
+        ("c4", &["t.kicad_sch"], &[("R1.1", "D0"), ("R2.1", "D0")]),
+        ("c7", &["t.kicad_sch", "sub.kicad_sch"], &[("R1.1", "/X_1"), ("R2.1", "/X")]),
+    ];
+    for (case, files, want) in cases {
+        let texts: Vec<(&str, String)> = files.iter().map(|f| (*f, fx(case, f))).collect();
+        let refs: Vec<(&str, &str)> = texts.iter().map(|(f, t)| (*f, t.as_str())).collect();
+        let (dir, nets) = r3_case_nets(case, &refs);
+        for (pin, name) in want {
+            assert_eq!(nets.get(*pin).map(String::as_str), Some(*name), "{case}: {pin} in {nets:?}");
+        }
+        if kicad_cli_ready() {
+            let kicad = kicad_net_names(&dir);
+            for (pin, name) in want {
+                assert_eq!(kicad.get(*pin).map(|n| n.replace("{slash}", "/")).as_deref(), Some(*name), "{case}: kicad-cli's name of the derived file for {pin}");
+            }
+        }
+    }
+}
+
+/// r3 A3-H1 (`conn_facts.cpp`: a `PIN_FACT` per pin object, a pin common to every unit drawn on each placed unit; `GetRef( &aPath, true )`): a dual part
+/// whose pin 3 "C" is common to both units, U1A and U1B both placed, a wire from one unit's copy to R1.1. kicad-cli keeps R1.1 and U1.3 on one net named
+/// after the wired copy's unit, `Net-(U1A-C)` or `Net-(U1B-C)`; before, the copy of the unit written last overwrote the other, so a wire on U1A's copy
+/// connected nothing. (KiCad's netlist also lists the other copy as `unconnected-(..)`; the net list here holds a pin once.)
+#[test]
+fn a_common_pin_wired_on_one_unit_only_stays_on_its_wire() {
+    for (file, text, name) in [("a", include_str!("../tests/fixtures/common_pin/wired_on_a.kicad_sch"), "Net-(U1A-C)"), ("b", include_str!("../tests/fixtures/common_pin/wired_on_b.kicad_sch"), "Net-(U1B-C)")] {
+        let work = scratch(&format!("common_pin_{file}"));
+        std::fs::write(work.join("t.kicad_sch"), text).unwrap();
+        let dir = work.join("board");
+        crate::import_kicad::run(&[work.join("t.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let net = design.nets.unwrap_or_default().into_iter().find(|n| n.pins.iter().any(|p| p == "R1.1")).map(|n| (n.name, n.pins));
+        assert_eq!(net, Some((name.to_string(), vec!["R1.1".to_string(), "U1.3".into()])), "wired on unit {file}");
+        if kicad_cli_ready() {
+            assert_eq!(kicad_net_names(&dir).get("R1.1").map(String::as_str), Some(name), "kicad-cli's name of the derived file, wired on unit {file}");
+        }
+    }
+}
+
+/// r3 A3-H3 (`DeriveSignal`, `SignalBaseName`: a net nothing drives is named from the drawing every time): R2.1 wired to R3.1 is `Net-(R2-Pad1)`; a wire that
+/// joins R1.1 makes it `Net-(R1-Pad1)`, the name kicad-cli gives the derived file, not the old name.
+#[test]
+fn an_undriven_net_an_edit_touches_takes_kicads_name() {
+    let work = scratch("undriven_rename");
+    std::fs::write(work.join("t.kicad_sch"), include_str!("../tests/fixtures/three_resistors.kicad_sch")).unwrap();
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("t.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let net = |dir: &Path, pin: &str| load(dir).unwrap().1.nets.unwrap_or_default().into_iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| (n.name, n.pins));
+    assert_eq!(net(&dir, "R2.1").map(|n| n.0).as_deref(), Some("Net-(R2-Pad1)"));
+    let pt = |x: i64, y: i64| Point { x: Nm::new(x), y: Nm::new(y) };
+    step(&dir, Cmd::AddWire { pts: vec![pt(50_800_000, 46_990_000), pt(76_200_000, 46_990_000)], bus: false }, false, "test").unwrap();
+    assert_eq!(net(&dir, "R2.1"), Some(("Net-(R1-Pad1)".to_string(), vec!["R1.1".to_string(), "R2.1".into(), "R3.1".into()])));
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(design.schematic.as_ref().unwrap().wires.iter().filter(|w| !w.pins.is_empty()).all(|w| w.net == "Net-(R1-Pad1)"), "every wire carries it");
+    if kicad_cli_ready() {
+        assert_eq!(kicad_net_names(&dir).get("R2.1").map(String::as_str), Some("Net-(R1-Pad1)"), "kicad-cli's name of the derived file");
+    }
+}
+
+/// r2 B-M4 (`SCH_SYMBOL_INSTANCE::m_Unit`, `SCH_SYMBOL::GetPins( aSheet )` -> `GetUnitSelection( aSheet )`): a shared channel screen whose dual part is U1
+/// unit A on one path and U1 unit B on the other, unit B's pins and box 2.54 mm higher. kicad-cli's netlist of the file puts pins 1 and 2 on `/a/OUT` and
+/// `/a/IN`, pins 7 and 6 on `/b/OUT2` and `/b/IN2` (the wires of the other unit's pins are on no pin there); the import keeps
+/// the second path's unit, its pins are on that path's nets, and the derived file says `(unit 2)` for that path, so kicad-cli reads it the same.
+#[test]
+fn a_symbol_drawn_as_another_unit_on_a_second_path_keeps_its_pins_there() {
+    let work = scratch("per_path_unit");
+    std::fs::write(work.join("root.kicad_sch"), include_str!("../tests/fixtures/per_path_unit/root.kicad_sch")).unwrap();
+    std::fs::write(work.join("ch.kicad_sch"), include_str!("../tests/fixtures/per_path_unit/ch.kicad_sch")).unwrap();
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("root.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let mut nets: Vec<(String, Vec<String>)> = design.nets.clone().unwrap_or_default().into_iter().map(|n| (n.name, n.pins)).collect();
+    nets.sort();
+    let net = |name: &str, pins: &[&str]| (name.to_string(), pins.iter().map(|p| p.to_string()).collect::<Vec<_>>());
+    nets.retain(|(_, pins)| !pins.is_empty());
+    assert_eq!(nets, vec![net("/a/IN", &["U1.2"]), net("/a/OUT", &["U1.1"]), net("/b/IN2", &["U1.6"]), net("/b/OUT2", &["U1.7"])], "kicad-cli's nets of the file");
+    if kicad_cli_ready() {
+        let kicad = kicad_net_names(&dir);
+        let want: std::collections::BTreeMap<String, String> = [("U1.1", "/a/OUT"), ("U1.2", "/a/IN"), ("U1.6", "/b/IN2"), ("U1.7", "/b/OUT2")].iter().map(|(p, n)| (p.to_string(), n.to_string())).collect();
+        assert_eq!(kicad, want, "kicad-cli reads the derived files as it reads the original");
+    }
+}
+
+/// r2 D-E1's note: QA `issue22938`'s `0IBF_Supply:+48V` and `IBF_supply:+7V` are local power symbols (`(power local)`), on the root and on its sheet:
+/// kicad-cli names four nets `/+48V`, `/+7V`, `/Spannungsversorgung/+48V`, `/Spannungsversorgung/+7V` and reports six `power_pin_not_driven`. Ours read them
+/// as global power symbols, so the derived file had two nets of them and four findings; now every pin's net is named as kicad-cli names it in the original,
+/// and the derived ERC reports six.
+#[test]
+fn slow_qa_issue22938s_local_power_symbols_are_a_net_per_sheet() {
+    let Some(qa) = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from) else { return };
+    if !kicad_cli_ready() {
+        return;
+    }
+    let src = qa.join("eeschema/issue22938");
+    let work = scratch("issue22938");
+    for e in std::fs::read_dir(&src).unwrap().flatten() {
+        std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
+    }
+    let root = work.join("issue22938.kicad_sch");
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let ours: std::collections::BTreeMap<String, String> = design.nets.unwrap_or_default().into_iter().flat_map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).map(move |p| (p, n.name.clone()))).collect();
+    let derived = kicad_net_names(&dir);
+    assert!(derived.values().any(|n| n == "/Spannungsversorgung/+48V") && derived.values().any(|n| n == "/+48V"), "{derived:?}");
+    assert_eq!(ours, derived, "our nets are kicad-cli's of the derived files");
+    assert_eq!(erc_kinds(&dir).get("power_pin_not_driven").copied(), Some(6), "as kicad-cli reports on the original");
+}
+
 /// r2 D-E1 (`ERC_SETTINGS`'s `rule_severities` and `pin_map` loaders, `SCHEMATIC_SETTINGS`'s `connection_grid_size`): `eda import-kicad` of a schematic brings
 /// its project's ERC severities, pin map and connection grid with it, so the derived project's ERC judges as kicad-cli judges the original (QA `issue22938`
 /// ignores `pin_not_connected`; ours reported 50 of them). A library-link check stays at the derived project's ignore.
@@ -1177,12 +1312,18 @@ fn a_kicad_projects_erc_settings_come_in_with_the_schematic() {
     std::fs::write(&root, include_str!("../tests/fixtures/hidden_power_pins.kicad_sch")).unwrap();
     let mut pin_map = eda_model::ir::ErcPinMap::default_matrix();
     pin_map[1][1] = (pin_map[1][1] + 1) % 3;
-    std::fs::write(root.with_extension("kicad_pro"), json!({ "erc": { "rule_severities": { "pin_not_connected": "ignore", "lib_symbol_mismatch": "warning", "pin_to_pin": "warning" }, "pin_map": pin_map }, "schematic": { "connection_grid_size": 100.0 } }).to_string()).unwrap();
+    // one bad cell is left at its default; the rest of the map is kept (r3 D3-L3, `ERC_SETTINGS`' loader)
+    let mut written = json!(pin_map);
+    written[2][3] = json!("x");
+    std::fs::write(root.with_extension("kicad_pro"), json!({ "erc": { "rule_severities": { "pin_not_connected": "ignore", "lib_symbol_mismatch": "warning", "pin_to_pin": "warning", "empty_label_name": "ignore", "wired_implicit_power": "error" }, "pin_map": written }, "schematic": { "connection_grid_size": 100.0 } }).to_string()).unwrap();
     let dir = work.join("board");
     crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
     let (_, design, _) = load(&dir).unwrap();
     let severities = eda_kicad::effective_erc_severities(&design);
     assert_eq!(severities.get("pin_not_connected").map(String::as_str), Some("ignore"));
+    // two of the checks KiCad 25ec2335 (the box's kicad-cli) added (r3 D3-H1)
+    assert_eq!(severities.get("empty_label_name").map(String::as_str), Some("ignore"));
+    assert_eq!(severities.get("wired_implicit_power").map(String::as_str), Some("error"));
     assert_eq!(severities.get("lib_symbol_mismatch").map(String::as_str), Some("ignore"), "the derived project's library-link checks stay ignored");
     assert_eq!(eda_kicad::custom_erc_pin_map(&design).unwrap()[1][1], pin_map[1][1]);
     assert_eq!(design.schematic.as_ref().unwrap().extras.connection_grid_mils, Some(100));
@@ -1599,4 +1740,56 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
 /// [`kicad_cli_net_groups`] that answers no nets when kicad-cli writes no netlist.
 fn kicad_cli_net_groups_opt(root: &Path) -> Vec<Vec<String>> {
     std::panic::catch_unwind(|| kicad_cli_net_groups(root)).unwrap_or_default()
+}
+
+/// The QA project `rel` brought in with `eda import-kicad`, its folder copied whole: the board folder, or `None` without `KICAD_SRC_DIR`.
+fn qa_imported(rel: &str, name: &str) -> Option<PathBuf> {
+    let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from)?.join("qa/data/eeschema").join(rel);
+    let work = scratch(name);
+    copy_tree(src.parent().unwrap(), &work.join("src"));
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("src").join(src.file_name().unwrap()).display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    Some(dir)
+}
+
+/// The placement ids from the root down to the first sheet (depth first) whose screen is `file`.
+fn path_to_file(design: &eda_model::ir::Design, file: &str) -> Vec<String> {
+    eda_model::sheet_list::walk(design).into_iter().find(|e| e.file == file).unwrap_or_else(|| panic!("a sheet of {file}")).path
+}
+
+/// r3 B3-M1: a sheet's `Sheetfile` is its `SHEET_FILENAME` field's text (`SCH_SHEET::GetFileName`), as the file that places it says it: the Filter sheet of
+/// QA `complex_hierarchy_shared`, placed by `ampli_ht/ampli_ht.kicad_sch`, says `filter.kicad_sch`, not its key `ampli_ht/filter.kicad_sch`; and
+/// `${SHEETFILE}` (`SCH_SHEET::ResolveTextVar`) on its screen shows the same.
+#[test]
+fn a_sheets_file_shows_as_the_placing_file_names_it() {
+    let Some(dir) = qa_imported("netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch", "sheetfile_text") else { return };
+    let (meta, design, model) = load(&dir).unwrap();
+    let filter = path_to_file(&design, "ampli_ht/filter.kicad_sch");
+    let parent = filter[..filter.len() - 1].join("/");
+    let json = crate::studio::schematic_json_of(&design, &model, &parent);
+    let sheet = json["sheets"].as_array().unwrap().iter().find(|s| s["id"] == filter.last().unwrap().as_str()).unwrap();
+    let field = sheet["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Sheetfile").unwrap();
+    assert_eq!(field["text"], "filter.kicad_sch", "{sheet}");
+    // the page of the sheet in view, which a placed symbol's "sheet number x 100" counts from (r3 D3-M3): the file's own page of the ampli_ht sheet
+    let entry = eda_model::sheet_list::walk(&design).into_iter().find(|e| e.path_text() == parent).unwrap();
+    assert!(entry.page_number_as_int() > 1);
+    assert_eq!(json["page_number"], entry.page_number_as_int());
+    let (_, breadcrumb) = crate::studio::resolve_sheet(&design, &filter.join("/"));
+    let project = crate::text_vars_json::project(&dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
+    let shown = crate::text_vars_json::SchShown::new(&dir, &design, &model, &breadcrumb, project);
+    assert_eq!(shown.text_shown("${SHEETFILE}"), "filter.kicad_sch");
+}
+
+/// r3 B3-M3: the studio's shown text resolves a sheet's user fields as the tracer does (one `SCH_SHEET::ResolveTextVar`): `${param}` on a sub-sheet of QA
+/// `ERC_dynamic_power_symbol_test` shows that sheet's `param` field.
+#[test]
+fn the_shown_text_resolves_a_sheets_user_fields() {
+    let Some(dir) = qa_imported("ERC_dynamic_power_symbol_test.kicad_sch", "sheet_user_fields_shown") else { return };
+    let (meta, design, model) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    let sub = root.sheets.iter().find(|s| s.name == "ERC_dynamic_power_symbol_subsheet1").expect("the sub-sheet");
+    let (_, breadcrumb) = crate::studio::resolve_sheet(&design, &sub.id);
+    let project = crate::text_vars_json::project(&dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
+    let shown = crate::text_vars_json::SchShown::new(&dir, &design, &model, &breadcrumb, project);
+    assert_eq!(shown.text_shown("${param}"), "param_subsheet_1");
 }

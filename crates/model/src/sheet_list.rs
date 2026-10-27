@@ -29,7 +29,9 @@ pub struct SheetEntry {
 }
 
 impl SheetEntry {
-    /// The page the sheet shows: the one set for it, else its virtual page number (`GetPageNumber` falls back that way).
+    /// The page the sheet shows: the one set for it, else its virtual page number. KiCad's `GetPageNumber` has no fallback (an unset page is
+    /// empty); the virtual page stands for the number `SCH_SHEET_LIST::SetInitialPageNumbers` gives every sheet of a schematic loaded with no page
+    /// set, and an imported file with only some pages set gets the others from [`repair_page_numbers`] (r2 B-M2).
     pub fn effective_page(&self) -> String {
         if self.page.is_empty() {
             self.virtual_page.to_string()
@@ -49,28 +51,42 @@ impl SheetEntry {
     }
 }
 
-/// The deepest chain of sheets followed: a file that places itself would otherwise never end.
+/// The deepest chain of sheets followed: a guard only, a file that places itself is stopped by its ancestry first.
 pub const MAX_DEPTH: usize = 32;
 
-/// Every sheet that has a screen, depth first, the root first: the order `SCH_SHEET_LIST::BuildSheetList` builds. A placement whose file
-/// has no screen in `design` is left out (there is nothing to show or edit there), and so is anything deeper than [`MAX_DEPTH`].
+/// Every sheet, depth first, the root first: the order `SCH_SHEET_LIST::BuildSheetList` builds. A placement whose file has no screen in `design` is listed
+/// all the same, with nothing inside it: KiCad gives such a sheet an empty screen and queues the error (`SCH_IO_KICAD_SEXPR::loadHierarchy`), so it takes
+/// its place in the page numbers (r3 B3-M4). A file already on its own path is not followed (r3 B3-M6): `loadHierarchy` refuses it ("Could not load sheet
+/// '%s' because it already appears as a direct ancestor in the schematic hierarchy.") and leaves it an empty screen; and `BuildSheetList( aSheet, false )`,
+/// the list kicad-cli builds, leaves out a sheet whose file name is its parent's (`wxCHECK2_MSG( sheet->GetFileName() != aSheet->GetFileName(), continue,
+/// .. "Recursion prevented .." )`, the `Sheetfile` texts compared), so a file that places itself is listed once, and one that places a screen above
+/// its parent is listed with nothing inside. Nothing deeper than [`MAX_DEPTH`] either.
 pub fn walk(design: &Design) -> Vec<SheetEntry> {
-    fn visit(design: &Design, sch: &SchematicSection, path: &mut Vec<String>, out: &mut Vec<SheetEntry>) {
+    fn visit<'a>(design: &'a Design, sch: &'a SchematicSection, path: &mut Vec<String>, files: &mut Vec<&'a str>, parent_text: &str, out: &mut Vec<SheetEntry>) {
         if path.len() > MAX_DEPTH {
             return;
         }
+        let here = files.last().copied().unwrap_or("");
         for child in sheets_in_order(sch) {
-            let Some(content) = design.sheet_contents.as_ref().and_then(|c| c.get(&child.file)) else { continue };
+            let text = sheet_file_text(here, &child.file);
+            if !path.is_empty() && text == parent_text {
+                continue;
+            }
             let page = page_on(sch, child, path).to_string();
             path.push(child.id.clone());
             out.push(SheetEntry { path: path.clone(), name: child.name.clone(), file: child.file.clone(), page, virtual_page: out.len() + 1 });
-            visit(design, content, path, out);
+            let content = design.sheet_contents.as_ref().and_then(|c| c.get(&child.file));
+            if let Some(content) = content.filter(|_| !files.contains(&child.file.as_str())) {
+                files.push(child.file.as_str());
+                visit(design, content, path, files, &text, out);
+                files.pop();
+            }
             path.pop();
         }
     }
     let mut out = vec![SheetEntry { path: Vec::new(), name: String::new(), file: String::new(), page: String::new(), virtual_page: 1 }];
     if let Some(root) = &design.schematic {
-        visit(design, root, &mut Vec::new(), &mut out);
+        visit(design, root, &mut Vec::new(), &mut Vec::new(), "", &mut out);
     }
     out
 }
@@ -195,6 +211,41 @@ pub fn keep_pages(design: &mut Design, before: &[SheetEntry]) -> bool {
     changed
 }
 
+/// `SCH_SHEET_LIST::RepairPageNumbers` (KiCad 25ec2335 `sch_sheet_path.cpp`), which eeschema and kicad-cli run on a schematic just loaded whose pages are
+/// not all empty (`SCH_EDIT_FRAME::OpenProjectFiles`, `files-io.cpp`; `EESCHEMA_HELPERS::LoadSchematic`): "A page number is claimed by the first sheet in
+/// the list that uses it. Any sheet with an empty page number, or one repeating a number an earlier sheet already claimed, is reassigned to the lowest
+/// unused positive integer", every page some sheet holds being reserved first. KiCad's `GetPageNumber` has no fallback (an unset page is empty), so an
+/// imported file with some pages set and others not (QA `netlists/hierarchy_aliases`: root sheets on "2" and "3", a nested sheet on none) must get
+/// its pages here, or each unset path would show its virtual page number and could repeat a page the user set (r2 B-M2). The root is page 1 here (it
+/// claims "1" first, as the root's own `(sheet_instances (path "/" (page "1")))` does). A schematic whose sheets have no page at all is left alone:
+/// KiCad gives it `SetInitialPageNumbers` (the walk's numbers), which is what a page left empty shows here. Returns whether a page was stored.
+pub fn repair_page_numbers(design: &mut Design) -> bool {
+    let entries = walk(design);
+    if entries.iter().skip(1).all(|e| e.page.is_empty()) {
+        return false;
+    }
+    let root = "1".to_string();
+    let reserved: std::collections::BTreeSet<String> = std::iter::once(root.clone()).chain(entries.iter().skip(1).filter(|e| !e.page.is_empty()).map(|e| e.page.clone())).collect();
+    let mut assigned: std::collections::BTreeSet<String> = std::iter::once(root).collect();
+    let mut next: i64 = 1;
+    let mut changed = false;
+    for e in entries.iter().skip(1) {
+        // keep the first sheet to claim a given page number
+        if !e.page.is_empty() && assigned.insert(e.page.clone()) {
+            continue;
+        }
+        let mut page = next.to_string();
+        while reserved.contains(&page) || assigned.contains(&page) {
+            next += 1;
+            page = next.to_string();
+        }
+        changed |= set_page(design, &e.path, &page);
+        assigned.insert(page);
+        next += 1;
+    }
+    changed
+}
+
 /// The screens some sheet shows: the files of the placements reachable from the root. A screen no sheet shows any more (its sheet was deleted) is
 /// still kept in `Design::sheet_contents` -- the file is still there to be shown again -- but it is not part of the schematic: its symbols hold no
 /// reference and its pins are on no net.
@@ -227,6 +278,37 @@ pub fn screen_of<'a>(design: &'a Design, path: &[String]) -> Option<&'a Schemati
 pub fn placement_at<'a>(design: &'a Design, path: &[String]) -> Option<&'a SheetInstance> {
     let (last, parents) = path.split_last()?;
     screen_of(design, parents)?.sheets.iter().find(|s| s.id == *last)
+}
+
+/// The key of the screen shown at `path` (`""` for the root): the file of the placement there.
+pub fn screen_key_at(design: &Design, path: &[String]) -> String {
+    placement_at(design, path).map(|p| p.file.clone()).unwrap_or_default()
+}
+
+/// The folder of the screen `key` (its path from the root's folder): `ampli_ht` of `ampli_ht/filter.kicad_sch`, `""` of `a.kicad_sch`.
+pub fn screen_folder(key: &str) -> &str {
+    key.rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+/// `file` (a screen's key: its path from the root's folder, `ampli_ht/filter.kicad_sch`) as the file in `folder` that places it names it: relative to that
+/// folder (`filter.kicad_sch` from `ampli_ht`, `../a.kicad_sch` from `ampli_ht` to a file beside the root), an absolute one as it is.
+pub fn sheet_file_relative_to(folder: &str, file: &str) -> String {
+    if file.starts_with('/') {
+        return file.to_string();
+    }
+    let from: Vec<&str> = folder.split('/').filter(|c| !c.is_empty()).collect();
+    let to: Vec<&str> = file.split('/').filter(|c| !c.is_empty()).collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count().min(to.len().saturating_sub(1));
+    let mut parts: Vec<&str> = std::iter::repeat_n("..", from.len() - common).collect();
+    parts.extend(&to[common..]);
+    parts.join("/")
+}
+
+/// A sheet's `Sheetfile` text, its `SHEET_FILENAME` field (`SCH_SHEET::GetFileName`, what `${SHEETFILE}` and the drawn field show): its screen `file` as
+/// the screen `placing_key` that places it names it ([`sheet_file_relative_to`] from that screen's folder). A sheet inside `ampli_ht/ampli_ht.kicad_sch`
+/// whose screen is `ampli_ht/filter.kicad_sch` shows `filter.kicad_sch`, as the file says.
+pub fn sheet_file_text(placing_key: &str, file: &str) -> String {
+    sheet_file_relative_to(screen_folder(placing_key), file)
 }
 
 /// The sheets inside the sheet at `path`, itself included when `include_self` (`SCH_SHEET_LIST::GetSheetsWithinPath`), in walk order.
@@ -313,6 +395,15 @@ pub fn sort_by_page_numbers(entries: &[SheetEntry]) -> Vec<SheetEntry> {
 /// no overrides, and a symbol the placement did not renumber keeps its id; the root (`[]`) is always the id.
 pub fn reference_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> String {
     override_under(screen, sym, path).map(|o| o.reference.clone()).unwrap_or_else(|| sym.id.clone())
+}
+
+/// The unit `sym` of `screen` is drawn as on the sheet at `path` (`SCH_SYMBOL::GetUnitSelection( aSheet )`, which `GetPins( aSheet )` and the connectivity
+/// read): the unit filed for that path ([`crate::sch_extras::SchExtras::path_units`], r2 B-M4), else the symbol's own unit.
+pub fn unit_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> u32 {
+    if path.is_empty() {
+        return sym.unit;
+    }
+    screen.extras.path_units.get(&crate::ir::field_key(&sym.id, sym.unit)).and_then(|m| m.get(&path.join("/"))).copied().unwrap_or(sym.unit)
 }
 
 /// The [`crate::ir::SymbolPathOverride`] of `sym` filed under the sheet at `path`, if it has one.
@@ -433,19 +524,34 @@ use super::*;
     }
 
     #[test]
-    fn the_walk_is_depth_first_with_virtual_pages_and_skips_a_sheet_with_no_screen() {
+    fn the_walk_is_depth_first_with_virtual_pages_and_lists_a_sheet_with_no_screen() {
         let d = design(
             section(vec![placement("a", "A", "a.kicad_sch", ""), placement("gone", "Gone", "nope.kicad_sch", ""), placement("b", "B", "b.kicad_sch", "7")]),
             vec![("a.kicad_sch", section(vec![placement("c", "C", "c.kicad_sch", "")])), ("b.kicad_sch", section(vec![])), ("c.kicad_sch", section(vec![]))],
         );
         let w = walk(&d);
         let seen: Vec<(String, usize, i64)> = w.iter().map(|e| (e.path_text(), e.virtual_page, e.page_number_as_int())).collect();
-        assert_eq!(seen, vec![("".into(), 1, 1), ("a".into(), 2, 2), ("a/c".into(), 3, 3), ("b".into(), 4, 7)]);
+        // the sheet with no screen keeps its place (r3 B3-M4: KiCad gives it an empty screen and numbers it)
+        assert_eq!(seen, vec![("".into(), 1, 1), ("a".into(), 2, 2), ("a/c".into(), 3, 3), ("b".into(), 4, 7), ("gone".into(), 5, 5)]);
         assert_eq!(within(&w, &["a".to_string()], true).len(), 2);
         assert_eq!(within(&w, &["a".to_string()], false).len(), 1);
-        assert_eq!(within(&w, &[], true).len(), 4);
+        assert_eq!(within(&w, &[], true).len(), 5);
+        assert!(screen_of(&d, &["gone".to_string()]).is_none());
         assert!(screen_of(&d, &["a".to_string(), "c".to_string()]).is_some());
         assert!(placement_at(&d, &["b".to_string()]).is_some_and(|p| p.name == "B"));
+    }
+
+    /// r3 B3-M6: a file that places itself is listed once (`BuildSheetList`'s "Recursion prevented"), and a screen that places the one above its parent is
+    /// listed with nothing inside (`loadHierarchy`'s "already appears as a direct ancestor": an empty screen).
+    #[test]
+    fn a_file_that_places_itself_is_listed_once_and_not_followed() {
+        let d = design(section(vec![placement("a", "A", "a.kicad_sch", "")]), vec![("a.kicad_sch", section(vec![placement("self", "Again", "a.kicad_sch", "")]))]);
+        assert_eq!(walk(&d).iter().map(|e| e.path_text()).collect::<Vec<_>>(), vec!["", "a"]);
+        let d = design(
+            section(vec![placement("a", "A", "a.kicad_sch", "")]),
+            vec![("a.kicad_sch", section(vec![placement("b", "B", "b.kicad_sch", "")])), ("b.kicad_sch", section(vec![placement("up", "Up", "a.kicad_sch", "")]))],
+        );
+        assert_eq!(walk(&d).iter().map(|e| e.path_text()).collect::<Vec<_>>(), vec!["", "a", "a/b", "a/b/up"]);
     }
 
     fn at_x(mut p: SheetInstance, x_mm: f64) -> SheetInstance {
@@ -626,4 +732,26 @@ use super::*;
         let i = &read.sheet_contents.as_ref().unwrap()["i.kicad_sch"];
         assert_eq!(i.instance_overrides.iter().map(|o| (o.sheet_path.join("/"), o.reference.as_str())).collect::<Vec<_>>(), vec![("oa/ib".to_string(), "U1"), ("ob/ib".to_string(), "U1")]);
     }
+
+    /// r2 B-M2 (`SCH_SHEET_LIST::RepairPageNumbers`): root sheets on pages "2" and "3" and a sheet with no page inside the first: the unset paths get
+    /// the lowest numbers no sheet holds (4 and 5), not their walk places (3 and 5), so no page is shown twice; a repeated page is renumbered too.
+    #[test]
+    fn a_file_with_some_pages_set_gets_the_lowest_unused_pages_for_the_others() {
+        let mut d = design(
+            section(vec![at_x(placement("first", "First", "sub.kicad_sch", "2"), 0.0), at_x(placement("second", "Second", "sub.kicad_sch", "3"), 50.0)]),
+            vec![("sub.kicad_sch", section(vec![placement("sub2", "Sub2", "sub2.kicad_sch", "")])), ("sub2.kicad_sch", section(vec![]))],
+        );
+        assert!(repair_page_numbers(&mut d));
+        let shown = pages(&d);
+        assert_eq!(shown, vec![("".into(), "1".into()), ("first".into(), "2".into()), ("first/sub2".into(), "4".into()), ("second".into(), "3".into()), ("second/sub2".into(), "5".into())]);
+        assert!(!repair_page_numbers(&mut d), "nothing left to repair");
+
+        let mut dup = design(section(vec![at_x(placement("a", "A", "x.kicad_sch", "3"), 0.0), at_x(placement("b", "B", "x.kicad_sch", "3"), 50.0), at_x(placement("c", "C", "x.kicad_sch", "1"), 90.0)]), vec![("x.kicad_sch", section(vec![]))]);
+        assert!(repair_page_numbers(&mut dup));
+        assert_eq!(pages(&dup), vec![("".into(), "1".into()), ("a".into(), "3".into()), ("b".into(), "2".into()), ("c".into(), "4".into())], "the first to claim a page keeps it; the root claims 1");
+
+        let mut none = design(section(vec![placement("a", "A", "x.kicad_sch", "")]), vec![("x.kicad_sch", section(vec![]))]);
+        assert!(!repair_page_numbers(&mut none), "a schematic with no page set keeps its walk numbers (SetInitialPageNumbers)");
+    }
+
 }

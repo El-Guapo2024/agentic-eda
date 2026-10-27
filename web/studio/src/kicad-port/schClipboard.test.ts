@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Schematic } from "../api/types";
-import { newIdsAfter, pasteOffset, PASTE_SPECIAL_OPTIONS, previewIds, shiftPreview, shiftShape, withPaste, type SchPastePreview } from "./schClipboard";
+import { newIdsAfter, selectionAfterPaste, pasteOffset, PASTE_SPECIAL_OPTIONS, previewIds, shiftPreview, shiftShape, withPaste, type SchPastePreview } from "./schClipboard";
 
 const sym = (id: string, at: [number, number], unit = 1) => ({ id, lib_id: "Device:R", at, rot: 0, mirror: null, unit, body_style: 0, value: "10k", mpn: null, package: null, footprint: null, datasheet: null, pins: [] });
 
@@ -137,4 +137,10 @@ test("the sheets of a paste are drawn on the sheet in view, are selected while c
   const before = sheet({ sheets: [placed("sheet_a", "Power", [0, 0])] });
   const after = sheet({ sheets: [placed("sheet_a", "Power", [0, 0]), placed("sheet_c", "LDO", [3000, 0])] });
   assert.deepEqual(newIdsAfter(before, after), ["sheet_c"]);
+});
+
+test("r2 D-C8: a Duplicate of the hovered item leaves nothing selected once it is dropped; of a selection, the copies", () => {
+  assert.deepEqual(selectionAfterPaste({ hover: true }, ["R2"]), []);
+  assert.deepEqual(selectionAfterPaste({ hover: false }, ["R2"]), ["R2"]);
+  assert.deepEqual(selectionAfterPaste({}, ["R2", "W1"]), ["R2", "W1"], "a Paste leaves the pasted items selected");
 });

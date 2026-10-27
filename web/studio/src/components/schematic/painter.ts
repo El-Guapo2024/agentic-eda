@@ -1055,7 +1055,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
 
   // Labels.
   for (const l of sch.labels) {
-    drawLabel(ctx, view, l, sch.wires, opts.netHighlight === l.net || opts.selection.has(l.id));
+    drawLabel(ctx, view, l, sch.wires, opts.netHighlight === (l.net_name ?? l.net) || opts.selection.has(l.id));
   }
   // Their fields where `AutoplaceFields` puts them (`SCH_PAINTER::draw( SCH_FIELD )` of a label): a net class in `LAYER_NETCLASS_REFS`, a global label's Sheet References in
   // `LAYER_INTERSHEET_REFS` (this palette has no colour of its own for it: the global label's), any other in `LAYER_FIELDS`; hidden ones only with Show Hidden Fields.

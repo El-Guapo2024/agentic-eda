@@ -148,8 +148,9 @@ export function BoardPadPropertiesDialog() {
     const size = sizeOf(s);
     // `padValuesOK`: an error keeps the dialog open; the warnings are shown and the pad is applied
     const checked = padCheck(
-      { kind: form.kind, shape: shapeNameOf(s.choice), size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: s.choice === "round_rect" ? s.ratio : null, pasteRatio: form.pasteRatio },
-      fmt
+      { kind: form.kind, shape: shapeNameOf(s.choice), size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: s.choice === "round_rect" ? s.ratio : null, pasteRatio: form.pasteRatio, offset: [form.ox, form.oy], clearance: form.zone.clearance, maskMargin: form.mask, pasteMargin: form.paste },
+      fmt,
+      units
     );
     const message = checked.errors[0] ?? checkShape(s) ?? (stackShown ? checkStack(form.stack) : null);
     if (message) return setError(message);

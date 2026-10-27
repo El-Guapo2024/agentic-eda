@@ -92,7 +92,7 @@ fn an_erc_exclusion_with_a_comment_reaches_kicad_cli_and_a_deleted_marker_stays_
     assert_eq!((u1["severity"].as_str(), u1["kicad_matched"].as_bool()), (Some("warning"), Some(false)), "nothing is waived yet: {u1:#}");
     let marker = marker_of(&u1);
     assert_eq!(marker.error_type, "ERCET_FOOTPRINT_LINK_ISSUES");
-    assert!(marker.sheet.is_empty() && marker.main_sheet.is_empty(), "a symbol's footprint link has no sheet in its marker: {marker:?}");
+    assert!(!marker.sheet.is_empty() && marker.main_sheet == marker.sheet, "a symbol's footprint link names its sheet, as KiCad 25ec2335's marker does (r3 D3-L5): {marker:?}");
     assert!(marker.at_nm[0] > mm(1.0), "the position is in nanometres, as kicad-cli's report says millimetres: {marker:?}");
     let (n, warnings) = (listed(&first), first["counts"]["footprint_link_issues"].as_u64().unwrap());
     assert!(warnings >= 2, "{first:#}");

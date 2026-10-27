@@ -39,6 +39,8 @@ export interface OpPin {
   tip: [number, number];
   root: [number, number];
   net: string | null;
+  /** A hidden pin (`!IsVisible()`): counted, as `symbol->GetPins( &sheetPath )` has it, but not drawn. */
+  hidden?: boolean;
 }
 
 /** The project's OP formats (`SCHEMATIC_SETTINGS`: `drawing.operating_point_overlay_v_precision` / `_v_range` / `_i_precision` / `_i_range`, Schematic Setup >
@@ -119,7 +121,7 @@ export function opLabels(args: { wires: OpWire[]; pins: OpPin[]; circuit: Circui
       const item = circuit.items.find((i) => i.ref === ref);
       if (!item) continue;
       const put = (pin: OpPin | undefined, op: string) => {
-        if (!pin || !usable(op)) return;
+        if (!pin || pin.hidden || !usable(op)) return;
         const len = Math.hypot(pin.tip[0] - pin.root[0], pin.tip[1] - pin.root[1]);
         if (len <= size) return;
         const mid: [number, number] = [Math.trunc((pin.root[0] + pin.tip[0]) / 2), Math.trunc((pin.root[1] + pin.tip[1]) / 2)];

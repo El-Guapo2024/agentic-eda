@@ -105,6 +105,25 @@ pub struct SchExtras {
     /// written through `crate::sheet_list::page_on` / `set_page`. Additive: empty and not written for a design with no screen shown twice that holds sheets.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheet_pages: BTreeMap<String, BTreeMap<String, String>>,
+    /// The unit a symbol of this screen is drawn as on a sheet path, where the screen is shown on several paths and that path's unit is not the
+    /// symbol's own [`crate::ir::SymbolInstance::unit`] (`SCH_SYMBOL_INSTANCE::m_Unit`, one per sheet path: a shared channel sheet can use U1A on one
+    /// path and U1B on another, `SCH_SYMBOL::GetUnitSelection( aSheet )`): by the symbol's `field_key`, then by the sheet path (the placement ids from
+    /// the root down, joined with `/`) -> the unit. Read from a file's `(instances (project (path .. (unit N))))` (r2 B-M4); read through
+    /// `crate::sheet_list::unit_under`, which the tracer (the pins of that unit), the net names and the writer's `(unit ..)` per path use. **Differs**:
+    /// an edit of a symbol's unit sets it for every path (KiCad's Symbol Properties sets the current sheet's only), and the studio draws the symbol's own
+    /// unit on every path. Additive: empty and not written for a design with no such symbol.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub path_units: BTreeMap<String, BTreeMap<String, u32>>,
+    /// The power symbols of this screen that are local power symbols (`(power local)` in the screen's library cache, `LIB_SYMBOL::IsLocalPower`), by library
+    /// id: a local power symbol names a net on its own sheet only (`PRIORITY::LOCAL_POWER_PIN`, a `SCOPE::SHEET` name edge and no `SCOPE::GLOBAL` one,
+    /// `conn_claims.cpp::BuildIslandRecord`), so a `+48V` on the root and one on a sheet are two nets (QA `issue22938`). Read from a file's `lib_symbols`
+    /// and written back as `(power local)`. Additive.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub local_power: std::collections::BTreeSet<String>,
+    /// The symbols marked "Exclude from position files" (`SCH_SYMBOL::GetExcludedFromPosFiles`, `(in_pos_files no)`), by `field_key` (r2 B-L2): read and
+    /// written back, so the board's position files leave them out as KiCad's do. Additive.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub excluded_from_pos_files: std::collections::BTreeSet<String>,
     /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
     /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
     /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
@@ -572,6 +591,9 @@ impl SchExtras {
             && self.sheet_pin_looks.is_empty()
             && self.sheet_fields.is_empty()
             && self.sheet_pages.is_empty()
+            && self.path_units.is_empty()
+            && self.local_power.is_empty()
+            && self.excluded_from_pos_files.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()

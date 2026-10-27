@@ -1,5 +1,7 @@
 # Round 3 findings: board files, footprints and libraries (r3-board-io, 2026-10-27)
 
+**After task-r2-misc-leftovers** (tools/board-roundtrip over the 214 boards, against main's run above): 35922 -> 32362 lines that differ, 8 -> 15 boards identical, 67 better, 1 "worse" (`via_stacks` 2 -> 4: its two generators are now kept, with member uuids that differ from the source's), `plugins/fakeboard` still fails to import.
+
 Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`. KiCad sources: `kicad-src-8303b2ad` (`$KICAD_SRC_DIR`) and `kicad-src-25ec2335` for KiCad 10 items. No port was used.
 
 ## How it was measured
@@ -44,6 +46,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 ## Findings
 
 ### F1. A no-net zone in a KiCad 10 file becomes a zone on a new net named "0". **high**
+**Fixed** on task-r2-misc-leftovers: b52602d9 (`net_of` goes by `sexpr::is_bare_number`, as `parseNet`'s `IsNumber( token )`).
 
 **What differs.**
 - `crates/kicad/src/import.rs:520` (`net_of`): when the file has no net table (`net_names.is_empty()`), the one argument of `(net ..)` is taken as a name, quoted or not. The comment says the reader "does not keep whether an argument was quoted".
@@ -68,6 +71,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No.
 
 ### F2. A copper-thieving zone loses its fill mode and is written as a solid pour. **high**
+**Fixed** on task-r2-misc-leftovers: 9e1c1ed1 (`DrawingsSection::zone_thieving`; the board is written as 20260513; slow `kicad_cli_reads_the_thieving_zone_back`; PARITY-pcb section 54's claim corrected).
 
 **What differs.**
 - `import.rs:2488-2492` reads `(fill (mode ..))` and keeps only `hatch`. `(mode thieving)` and its `(thieving (type ..) (size ..) (gap ..) (width ..) (stagger ..) (orientation ..))` block are dropped silently, with no `ImportNotes` entry.
@@ -94,6 +98,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No (the §54 claim is wrong).
 
 ### F3. Three vias of one net at one point: two get the same uuid, and the group of the third loses it. **medium**
+**Fixed** on task-r2-misc-leftovers: f7f5adac (a count after the layers while the seed is taken).
 
 **What differs.**
 - `crates/kicad/src/pcb.rs:370-384`: the via uuid seed is `via:{net}:{x}:{y}`, and on a clash it is extended once with `:{from}:{to}`.
@@ -110,6 +115,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No. The comment at `pcb.rs:370` handles only the two-via microvia case.
 
 ### F4. A legacy group lock (`(group "" locked (id ..))`) is lost. **medium**
+**Fixed** on task-r2-misc-leftovers: 5d26ee10 (`import_groups` uses `is_locked`, which now takes the bare keyword only, not a quoted string saying `locked`).
 
 **What differs.**
 - `crates/kicad/src/import_items.rs:278` (`import_groups`): `locked = sexpr::find(g, "locked").is_some_and(..)` sees only the `(locked yes)` list form.
@@ -128,6 +134,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** Round-2 F7's lock half is marked Fixed; that fix is incomplete.
 
 ### F5. The KiCad 10 microvia-stack generator is "kept as text" but its members name uuids the vias no longer have, so KiCad drops it. **medium**
+**Fixed** on task-r2-misc-leftovers: 24fc35aa (`DrawingsSection::raw_generators`: members by our ids, written with the uuids the items were written as; kicad-cli's rewrite keeps both stacks; the board-roundtrip counts `via_stacks` 2 -> 4 lines, the member uuids now being the written ones, which norm.py does not drop).
 
 **What differs.**
 - `import.rs:383`: "A generator of a kind nothing here reads (KiCad 10's microvia stack, `via_stack`) goes on as text".
@@ -144,6 +151,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No (GAPS says it is kept).
 
 ### F6. A footprint read from a file that has no 3D model gets one made up from its name. Pin-header models are guessed from any name with "1x" and trailing digits. **medium**
+**Fixed** on task-r2-misc-leftovers: f2521f9f (an explicit footprint with no model has none; `kicad_footprint_for`'s header rule takes `PINHEADER-n`, `PIN-HEADER-n` and names ending in `1X<n>` only).
 
 **What differs.**
 - `crates/kicad/src/model3d.rs:231-262` (`default_part_models_in`): an explicit footprint (`explicit == true`) with no `models3d` and no `model` falls through to `kicad_footprint_of_part(part)`.
@@ -161,6 +169,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No. Round-2 F18 is about the installed-art tolerance, not this.
 
 ### F7. The round-2 F5 fix puts a legacy footprint's Description field on B.Fab and at angle 0. KiCad has it on F.Fab at the footprint's angle. **low**
+**Fixed** on task-r2-misc-leftovers: 20b60bc8 (F.Fab, `(at 0 0 <the footprint's angle, 0..360>)`).
 
 **What differs.**
 - `import.rs:1808,1815`: `fab = B.Fab` for a `B.Cu` footprint, and `(at 0 0 0)`.
@@ -176,6 +185,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No: §54 claims "on its Fab layer", which is the wrong layer for back-side footprints.
 
 ### F8. A rule area with `(placement ..)` and no `(keepout ..)` is read as allowing everything. KiCad reads it as keeping out tracks, vias and pads. **high (rare)**
+**Fixed** on task-r2-misc-leftovers: e4d2db42.
 
 **What differs.**
 - `import.rs:2548-2556` sets the keepout flags only from a `(keepout ..)`, so a zone made a rule area by `(placement ..)` alone keeps all-allowed.
@@ -200,6 +210,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No.
 
 ### F9. Teardrop zones are always written `(hatch none ..)`; the file's border style is lost. **low**
+**Fixed** on task-r2-misc-leftovers: 5c1af957 (a teardrop with the file's uuid keeps its style; the ones made here are `none`).
 
 **What differs.**
 - `crates/kicad/src/pcb_items.rs:95-97` writes `none` for every teardrop.
@@ -211,6 +222,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No.
 
 ### F10. Arcs in a zone outline are flattened to polylines. **medium**
+**Fixed** on task-r2-misc-leftovers: 98b84624 (`DrawingsSection::zone_arcs`: the rings as the file drew them, written while the outline is the one read; an edited outline is its points).
 
 **What differs.**
 - `import.rs:2602-2635` (`poly_points`) turns `(pts (arc ..))` into a 5 µm polyline for zones as well as for `gr_poly`.
@@ -224,6 +236,8 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** Partly: round 2 and GAPS 27/31 list arcs in `gr_poly`, not in zone outlines.
 
 ### F11. The plot settings' layer selection drops the Rescue layer bit. **low**
+**Not fixed** on task-r2-misc-leftovers: skipped at the lead's request (the plot settings are task-r3-editors-exports').
+**Fixed** on task-r3-editors-exports: a10c9d08 (`Rescue`, id 37, is read and written back; the Plot dialog's checklist never lists it, as `GetEnabledLayers` never has it)
 
 **What differs.**
 - `crates/model/src/plot_params.rs:36-45` (`all_layers`) has no `Rescue` (layer id 37), so `decode_layer_selection` drops bit 37 and `encode_layer_selection` cannot write it.
@@ -234,6 +248,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No (it came in with X3).
 
 ### F12. A footprint whose file names a `(sheetfile)` and no `(sheetname)` is written with two `(sheetfile ..)`. **low**
+**Fixed** on task-r2-misc-leftovers: 5c1af957.
 
 **What differs.**
 - `pcb.rs:1170-1175` writes the file's own `sheetname`/`sheetfile` from `FootprintExtra`.
@@ -245,6 +260,7 @@ Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`.
 **Known?** No.
 
 ### F13. Smaller differences. **low**
+**Fixed in part** on task-r2-misc-leftovers: 9746d13a (a zone's per-layer hatch offsets), e33afc48 (the long user names of a pre-20200922 board: its layers keep their file names, `parseLayer`). Left: a circle pad's `rect_delta` (no effect on a circle), the Edge.Cuts loop's direction (same geometry).
 
 - **A zone's per-layer hatch offsets are dropped.** The offset is `(property (layer "F.Cu") (hatch_position (xy 1 1)))` inside a zone, not in `zone_defaults`. Seen on `api_kitchen_sink` and `Issue19775_ZoneLayers/LayerEnumerate`. Only a hatched fill changes.
 - **A circle pad's `rect_delta` is dropped.** `hatch_thermal_connectivity` (`(size 2 2) (rect_delta 0.5 0)` on a circle): KiCad keeps the delta, which has no effect on a circle.

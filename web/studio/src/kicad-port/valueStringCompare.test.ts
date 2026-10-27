@@ -13,3 +13,8 @@ test("ValueStringCompare: the number at the end compares as a number, with its m
   assert.equal(valueStringCompare("470", "4k7"), -1);
   assert.equal(valueStringCompare("A", "B"), -1);
 });
+
+test("a middle part that does not fully parse reads as strtod's prefix (round 3 C-8)", () => {
+  assert.equal(valueStringCompare("N1.2.3", "N1.5"), -1);
+  assert.equal(valueStringCompare("N1.7.3", "N1.5"), 1);
+});
