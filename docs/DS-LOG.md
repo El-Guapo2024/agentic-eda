@@ -842,3 +842,118 @@ Tests: eda-kicad 712/0, eda-model 435/0, eda-cli+connectivity+ops 1756/0
   (21 targets), slow suite 712/0; all exit 0.
 Marked findings at work/findings/round4/r4-board-io.md; docs committed on ds/r4-board-io.
 ```
+
+## Round-5 editors/exports findings X5-1..X5-4, V5-1..V5-3, E5-1, E5-2 (r5-editors-exports) (done 2026-10-27)
+
+Findings: `work/findings/round5/r5-editors-exports.md`, parts A-C (D5-1 was left to the lead, as asked).
+
+**What I did.**
+
+- **X5-1, a successful served export's words.** `ExecuteBoardJob` (`pcbnew/api/api_handler_pcb.cpp`, 25ec2335) fills
+  `RunJobResponse::message` only in the error branch, so the api-server path kept no log on success while the per-run path kept
+  `CLI_REPORTER`'s output. `api::jobs::success_log` rebuilds the per-run lines from the job's `output_path`, word for word:
+  IPC-D-356 `Successfully created IPC-D-356 file` (`JobExportIpcD356`); drill `Created file '%s'` for the Excellon files (no full
+  stop), `Created file '%s'.` for the maps and every Gerber file, then `Done.` (`EXCELLON_WRITER::CreateDrillandMapFilesSet`); pos
+  `Wrote front/back position data to '%s'.` for the Gerber writer and the two-file ASCII mode, `Wrote position data to '%s'.`
+  otherwise (`PCBNEW_JOBS_HANDLER::JobExportPos`). `run_export` and `export_pcb_placement` now return those lines as `log`, the same
+  keys and text as the per-run path. A warning reported on a run that attached `JS_SUCCESS` is not in the protocol: the comment in
+  `success_log` says so. The slow test `api_jobs::a_served_export_reports_what_kicad_says` runs the per-run path and the served path
+  into one folder on QA `issue8407` for ipcd356, drill, drill with an SVG map, pos and `pos --format gerber --side front`, and
+  asserts the same log, KiCad's own text for each kind, the same files and that they exist.
+- **X5-2, IPC-2581's Internal ID.** 25ec2335's `DIALOG_EXPORT_2581_BOM::TransferDataToWindow` reads every kept column back,
+  Internal ID included (`if( !m_oemRef->SetStringSelection( m_fields.m_internalId ) ) m_oemRef->SetSelection( 0 )`), and its
+  `saveToProject` keeps them all; 8303b2ad kept nothing on Export and put the Internal ID on `m_choiceMPN`. `ipc2581DialogStart`
+  now starts `col_id` from the kept column when the board still has a field of that name (else "Generate unique"), and the PARITY
+  row names both KiCad versions. Tests: `ipc2581Bom.test.ts`'s new `the internal id is read back as 25ec2335's BOM dialog does`, and
+  the kept-columns test now expects `col_id: "Reference"`.
+- **X5-3, one-shot commands do not start the server.** `api::exports_use_server` (with `api::long_lived_process`) opens the lane only
+  for a long-lived caller or `EDA_KICAD_API` set to anything but `0`/`off`/`no`/`false`; unset in a one-shot process, the export runs
+  per-run kicad-cli. The studio's `serve` (`crates/cli/src/studio.rs`) marks its process long-lived; `run_export` and
+  `export_pcb_placement` gate on it; `=0` still closes the lane for the studio, and `=1` still asks from any process (the slow tests
+  and `tools/run-all-checks.sh`'s API checks use it). Measured on `padstacks_normal`: 1.02 s with the lane, 0.43 s per-run
+  (X5-3's table); the same files either way. Test: `server::tests::only_a_long_lived_caller_or_a_asking_environment_takes_the_lane`.
+- **X5-4, a Gerber placement file's name.** Every `pos` export now goes through `export_pcb_placement`, so the generic
+  `eda board export --kicad pos -- --format gerber --side front` writes `-pnp_top.gbr` / `-pnp_bottom.gbr`
+  (`PLACEFILE_GERBER_WRITER::GetPlaceFileName`), not `<name>.pos`; the dead `pcb_ext_for("pos", ..)` arm and its test are gone.
+  Test: the fake-kicad-cli test in `lib.rs` pins `export/kicad/pos/board-pnp_top.gbr` and its log line.
+- **V5-1, the preview's dummy board.** `previewStack()` is `stackOfBoard({ copper_layers: 2, board_thickness_nm })`:
+  `LSET::FrontMask` includes F.Cu, so `SetEnabledLayers` counts 2 copper layers and `BuildDefaultStackupList` gives the dielectric a
+  body of 1.6 - 2 x 0.035 - 2 x 0.01 = 1.51 mm (`panel_preview_3d_model.cpp`). The test that pinned 1.58 now asserts 1.51 and
+  `footprintZ = 0.755 + 0.035 + 0.04`.
+- **V5-2, the preview wheel.** `previewWheelScroll(prefs)` hands the camera the Preferences' zoom modifier and `VC_SETTINGS::Reset`'s
+  other wheel values (`PANEL_PREVIEW_3D_MODEL::loadSettings`), and `ModelPreview3D` reads it through a ref at each notch. Test: with
+  `scrollModifierZoom: "ctrl"` a plain wheel pans and does not zoom; with `"none"` it zooms.
+- **V5-3, dielectric sublayers.** `import_stackup` sums a layer's own `(thickness ..)` and its `(addsublayer (thickness ..))`
+  entries, the sum `BOARD_ADAPTER::InitSettings` adds to the 3D body; the first sublayer's material, epsilon and loss stay the
+  layer's, and a layer without sublayers keeps its own thickness. Test:
+  `import::tests::a_dielectrics_sublayers_add_up_to_the_layers_thickness` (0.5 + 0.06 + 0 = 0.56).
+- **E5-1, the Text dialog's size message.** `fpTextSizeMessage` (kicad-port/fpTextTool.ts) gives `UNIT_BINDER::Validate`'s words,
+  the bound printed as `StringFromValue` does (mm, trailing zeros off): `Width must be at least 0.001 mm.` under 1000 nm,
+  `Width must be less than 250 mm.` over 250 mm; `FpTextDialog` shows it in the dialog. Tests: `fpTextTool.test.ts` pins 0, 999,
+  300 mm and null for 1 um, 1 mm and 250 mm; `fp-tools.check.js` sees both messages, only one at a time, and no text placed.
+- **E5-2, the text placed from the dialog is selected.** With an edited offset, `FpTextDialog` selects the id `api.addText` answers
+  with; the footprint store's `addText` now answers with the new text's id, read back from the document (`fetchFootprint`) because
+  the refreshed state its `runCmd` dispatches can land after the promise (the first browser run placed the text but selected
+  nothing: the new text was not in `getState()` yet). The canvas's second-click placement selects that id too. Test:
+  `fp-tools.check.js` places a text at Offset X 3 mm with one click, then asserts the selection is exactly that text with kind
+  "text", the tool stays armed and Escape leaves it.
+
+**Commits.**
+
+- `a6095d11` -- the fixes above (kicad-engine, `crates/kicad/src/import.rs`, `crates/cli/src/studio.rs`, the studio's kicad-port,
+  state and footprint editor files, `fp-tools.check.js`, ARCHITECTURE and PARITY-boardctl).
+- this log (and the findings' marks in `work/findings/round5/r5-editors-exports.md`, which is not a git repo).
+
+**Tests run.**
+
+- `cargo check --workspace --tests` EXIT 0 -- 0 warnings.
+- `cargo test` (workspace, fail fast): EXIT 101 -- 38 targets, 1231 passed, 1 failed; the failure is
+  `sch_clipboard::forms_taken_from_real_kicad_files_read_as_the_file_does` at
+  `ground_pin_test_ok.kicad_sch: Test:Test_Symbol_GND has its library symbol` (see "Unsure", below), and the run stops there.
+- `cargo test -p eda-kicad --no-fail-fast` EXIT 101 -- 39 targets, 715 passed, 1 failed (the same test only).
+- `cargo test -p eda-kicad-engine --no-fail-fast` EXIT 0 -- 11 targets, 72 passed, 0 failed.
+- `cargo test -p eda-cli --no-fail-fast` EXIT 0 -- 12 targets, 568 passed, 0 failed.
+- `EDA_SLOW_TESTS=1 KICAD_SRC_DIR=$HOME/src/kicad-src-8303b2ad KICAD_QA_DATA=$HOME/src/kicad-src-8303b2ad/qa/data
+  EDA_KICAD_CLI=/usr/local/bin/kicad-cli cargo test -p eda-kicad-engine --test api_jobs --test api_server` EXIT 0 --
+  `api_jobs` 2 passed (291.97 s), `api_server` 1 passed (1.94 s).
+- `cd web/studio && npm run test:unit` EXIT 0 -- 2587 tests, 0 failed (before and after the E5-2 fix).
+- `npm run typecheck` EXIT 0 (before and after the E5-2 fix).
+- `bash tools/run-all-checks.sh -j 1 --ports 8830-8832 viewer3d fp-graphics cli-exports plot-exports fp-tools` EXIT 1 --
+  `viewer3d` 41 scenarios, `fp-graphics` 6, `cli-exports` 6, `plot-exports` 14 passed; `fp-tools` failed its new E5-2
+  scenario only: the text was placed at Offset X 3 mm, but the selection was empty (the store's `addText` resolved before
+  React committed the refreshed footprint). After the fix: `fp-tools fp-graphics` EXIT 0 -- 6 and 6 scenarios, and
+  `fp-models` (the 3D model preview panel, V5) EXIT 0 -- 11 scenarios.
+
+**Unsure / for the reviewer.**
+
+- **Pre-existing failure, not touched:** `crates/kicad/tests/sch_clipboard.rs::forms_taken_from_real_kicad_files_read_as_the_file_does`
+  fails on this base (`8a8e47f1`) when `KICAD_QA_DATA` is set, at
+  `ground_pin_test_ok.kicad_sch: Test:Test_Symbol_GND has its library symbol`. The file's `(lib_symbols ...)` entry is named
+  `Test_Symbol_GND_1` while the placed symbol's `(lib_id ...)` is `Test:Test_Symbol_GND` (with `(lib_name ...)` the cache name), and
+  the test looks the fragment's library symbol up by `lib_id`. The path is `parse_clipboard` -> `import_kicad_sch` -> `symbol_import`;
+  this branch's only `eda-kicad` change is `import_stackup`, called only from board import. The same assertion has been in the test
+  since `d6f0cc2c`, and the QA file is the same in both KiCad checkouts here. It fails deterministically in a rerun of that single
+  target on the untouched files; I did not loosen it or change the parser, as it is outside this task. Question: should the fragment's
+  cache be looked up by the placed symbol's `lib_name` (KiCad's paste resolves that way), or is the QA file not what the test expects?
+- **X5-1's one gap:** a warning the handler reports on a run that still succeeds never reaches `RunJobResponse` (`ExecuteBoardJob`
+  returns early), so the served path cannot repeat it; the per-run path still shows it. The finding asks for the same text "or KiCad's
+  own success message where the server gives none": the served path now gives the per-run success text (`CLI_REPORTER`'s), not
+  `GenD356File`'s `IPC-D-356 netlist file created:\n'%s'.` dialog text, because that is what the per-run kicad-cli prints.
+- The slow-test runs' timings are printed in the test output and are not asserted; X5-3's numbers are the finding's,
+  re-measured with the same board.
+
+**Summary (as printed).**
+
+```
+Round-5 editors/exports findings on ds/r5-editors-exports: X5-1..X5-4, V5-1..V5-3, E5-1, E5-2 fixed (a6095d11).
+  X5-1 a served success logs the per-run words; X5-2 IPC-2581 keeps the Internal ID (25ec2335);
+  X5-3 one-shot commands run kicad-cli per run, only the studio's serve keeps the lane;
+  X5-4 Gerber placement files are -pnp_top.gbr / -pnp_bottom.gbr; V5-1 the preview board is 1.51 mm;
+  V5-2 its wheel honours the zoom modifier; V5-3 dielectric sublayers add up; E5-1 the Text dialog's
+  Width messages; E5-2 the text placed at an edited offset is selected.
+Tests: cargo check 0 warnings; eda-kicad-engine 72/0, eda-cli 568/0, eda-kicad 715/1 (pre-existing
+  sch_clipboard); slow api_jobs 2/0 and api_server 1/0; web unit 2587/0, typecheck 0; browser checks
+  viewer3d/fp-graphics/cli-exports/plot-exports/fp-tools/fp-models all green (after the E5-2 fix).
+Marked findings at work/findings/round5/r5-editors-exports.md; D5-1 left to the lead; both commits on
+  ds/r5-editors-exports.
+```
