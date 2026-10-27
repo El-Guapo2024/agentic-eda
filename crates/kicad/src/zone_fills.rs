@@ -130,7 +130,10 @@ impl KicadFills {
                 (to, rings.iter().map(|r| KicadRing { island: r.island, pts: r.pts.iter().map(|&p| motion.apply(p)).collect() }).collect())
             })
             .collect();
-        Some(Cow::Owned(ZoneEntry { sig: entry.sig.clone(), layers, unfilled: entry.unfilled, shape: entry.shape.clone() }))
+        // `ZONE::Flip` of a one-sided zone: `SetLayerSet( flipped )` sees another set and unfills (`m_isFilled = false`), then `SetFilledPolysList` puts the
+        // mirrored fill back without setting the flag -- the copper is there, `IsFilled()` is false (R6-Z3)
+        let unfilled = entry.unfilled || !layer_of.is_empty();
+        Some(Cow::Owned(ZoneEntry { sig: entry.sig.clone(), layers, unfilled, shape: entry.shape.clone() }))
     }
 
     /// The fill a copy of `source` carries (R6-Z1): `EDIT_TOOL::Duplicate` and the array tool clone the zone (`ZONE::InitDataFromSrcInCopyCtor` copies
@@ -1167,6 +1170,10 @@ mod tests {
         flipped.layer = "B.Cu".into();
         assert!(fills.rings(&flipped, "F.Cu").is_empty());
         assert_eq!(fills.rings(&flipped, "B.Cu")[0].pts[0], [19_500_000, 10_500_000]);
+        // R6-Z3: `SetLayerSet` of the other side unfills (`m_isFilled = false`), and `SetFilledPolysList` puts the mirrored copper back without the flag: the
+        // zone is written `(fill` without ` yes`; a mirror on its own layer keeps it
+        assert!(fills.current(&flipped).unwrap().unfilled, "a flipped one-sided zone has its fill but is not filled");
+        assert!(!fills.current(&mirrored).unwrap().unfilled);
         // a zone sent to B.Cu without a mirror (Zone Properties' layers): `ZONE::SetLayerSet` unfills it
         let mut relayered = z.clone();
         relayered.layer = "B.Cu".into();
