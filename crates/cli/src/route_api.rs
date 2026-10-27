@@ -869,7 +869,8 @@ mod tests {
     }
 
     /// r3 R3-3: a start without a width (the width list on "use net class") takes the start net's class width through the rules
-    /// (`ImportSizes`), and the reply says it; with a width, that width. A via armed without a size has the net class's (`handleLayerSwitch`).
+    /// (`ImportSizes`), and the reply says it; with a width, that width -- both with "Use Starting Track Width" off, which on (the default) takes the
+    /// stub's width over either (r4 R4-1). A via armed without a size has the net class's (`handleLayerSwitch`).
     #[test]
     fn a_start_without_a_width_takes_the_nets_class_width() {
         let dir = scratch("class_width");
@@ -880,12 +881,17 @@ mod tests {
         model.board.net_classes.push(eda_model::NetClass { name: "Power".into(), nets: vec!["SIG".into()], track_width: Some(mm(0.5)), clearance: None, via_diameter: Some(mm(0.9)), via_drill: Some(mm(0.45)), microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
         let cell = RouteCell::default();
+        // r4 R4-1: with "Use Starting Track Width" on (the default) the start on the stub's end takes its 0.2 mm, a chosen width too
         let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu" })));
+        assert_eq!((reply["ok"].clone(), reply["width"].clone()), (json!(true), json!(200_000)), "{reply}");
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 300_000 })));
+        assert_eq!(reply["width"], json!(200_000), "{reply}");
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "auto_track_width": false })));
         assert_eq!((reply["ok"].clone(), reply["width"].clone()), (json!(true), json!(500_000)), "{reply}");
         assert_eq!(via(&cell, &body(json!({ "enabled": true, "to_layer": "B.Cu" })))["ok"], json!(true));
         let pv = mv(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
         assert_eq!((pv["via"]["diameter"].clone(), pv["via"]["drill"].clone()), (json!(900_000), json!(450_000)), "{pv}");
-        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 300_000 })));
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 300_000, "auto_track_width": false })));
         assert_eq!(reply["width"], json!(300_000), "{reply}");
     }
 

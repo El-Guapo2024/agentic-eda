@@ -73,6 +73,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r4-router` (2026-10-28) | The round-4 router findings R4-1, R4-2, R4-4 .. R4-7 (`crates/pns/PARITY.md` Stage 17): `inheritTrackWidth` for pads and vias (`auto_track_width`, on by default, in the studio too), the head's `IsFlashedOnLayer` (a moved via keeps its id and extras; a drag at a via takes the via), the pair's start-gap check on arcs, `ImportSizes`' hole to hole with no start item, a borderless text box's stroke and copper arcs' flattening error, `inflate2`'s dropped `SimplifyPaths` | done, gated | R4-8 (the studio's width list by width, not index), R4-3 (Board Setup, the DeepSeek lane) |
 | `task-reuse-cpp` (`-sim`, 2026-10-28) | The user's reuse rule: KiCad's own Clipper2 2.0.1 and nanosvg (C++, `third_party/`, built with `cc`), the `delaunator` crate, and one copy of the expression language (Find by Properties posts to `/api/pcb/query`); the ports kept INACTIVE (features `eda-clipper2/rust-port`, `eda-connectivity/rust-port`, `eda-kicad/rust-nanosvg`; the TS `pcbExpr.ts`/`libeval.ts` imported only by tests); ARCHITECTURE "Reuse before porting", GAPS item 39 | done | SVG text (needs Fontconfig/FreeType/HarfBuzz); the SPICE value parser stays in two languages; the Query tab's geometry functions |
 
 Gates for any of them:

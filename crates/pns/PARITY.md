@@ -1197,6 +1197,52 @@ The findings of `findings/round3/r3-route-rules.md` (R3-1 .. R3-11), each re-rea
 - **R3-11, net-tie groups.** `MapPadNumbersToNetTieGroups`' backslash escape (`net_tie_group_pads`), and `IsNetTieExclusion`'s net codes: a
   head of no net matches a pad of no net. Tests: `net_tie_groups_read_an_escaped_comma`, `a_no_net_head_is_excused_at_a_no_net_pad_of_a_net_tie`.
 
+## Stage 17 -- round-4 router findings (branch `task-r4-router`, 2026-10-28)
+
+The findings of `findings/round4/r4-route-rules.md` (R4-1, R4-2, R4-4 .. R4-7; R4-3 is the Board Setup lane's, R4-8 is the studio's width
+list), each re-read against `pns_kicad_iface.cpp` (`ImportSizes`, `inheritTrackWidth`, `IsFlashedOnLayer`, `syncGraphicalItem`), `pns_item.cpp`
+(`collideSimple`), `pns_router.cpp` (`isStartingPointRoutable`), `router_tool.cpp` (`prepareInteractive`, `TRACK_WIDTH_MENU`), `pns_tool_base.cpp`
+(`pickSingleItem`), `project_local_settings.cpp` and `shape_poly_set.cpp` (`inflate2`, `inflateLine2`) at 8303b2ad. Each fix has a test that
+failed without it; R4-1 and R4-2 have kicad-cli proofs under `EDA_SLOW_TESTS=1` in `tests/rules_kicad.rs`.
+
+- **R4-1, the joined track's width.** `ImportSizes` asks `inheritTrackWidth` first when `m_UseConnectedTrackWidth && !m_TempOverrideTrackWidth`
+  (the project's `board.auto_track_width`, on by default; `prepareInteractive` clears the override before each start, so a chosen width gives way
+  too). `settings::inherit_track_width` is its port (a track's own width; for a pad or via, of the tracks joined to it on the start layer the one
+  whose far end is nearest the cursor, else the narrowest on the layer, else of all), `settings::import_sizes( .., use_connected_track_width )`
+  takes it for the route ("existing track") and the pair. `Router::use_connected_track_width` (default on), `Router::connected_track_width`;
+  `/api/route/start` and `/api/route/dp_start` take `auto_track_width` (default on). The studio's "Use Starting Track Width" (`bcx.autoTrackWidth`)
+  is on by default and is sent with every start; its own track-end-only `connectedTrackWidth` / `trackUnder` are gone. Test:
+  `a_route_started_on_a_pad_takes_the_width_of_its_stub` (a pad's 0.15 mm stub in a 0.25 mm class, a via's stub, two stubs by the cursor; the
+  route at 0.15 mm goes straight through a 0.6 mm channel between two GND pads; kicad-cli: no `clearance`, `shorting_items` or `tracks_crossing`,
+  and the straight track at the class's 0.25 mm is a `clearance`).
+- **R4-2, the head's side of `IsFlashedOnLayer`.** `collideSimple` also asks `IsFlashedOnLayer( aHead, Layers() )`: a board via dragged or shoved
+  (`QueryOpts::head_via`, its `source_via`), or a world item as the head (the shove's `items_collide`), that removes its unconnected layers has no
+  copper on the world item's layers there -- against the item's copper and against its hole (`holeI->collideSimple( aHead )` asks the same) --
+  while its own hole still collides (`RuleResolver::is_via_flashed_on`). Two things the fix needs, also KiCad's: a via the router moves comes
+  back under its own id, so `Cmd::CommitRoute` keeps its extras (`remove_unused_layers`; KiCad modifies the `PCB_VIA`), and `Router::drag_start`
+  takes hold of a via under the cursor before a track joined to it (`pickSingleItem`'s `prioritized[0]`). Test:
+  `an_unflashed_head_via_collides_by_its_hole_only` (a four-layer board, an In1.Cu GND track 0.45 mm from the via's path: the hole's 0.4 mm is
+  kept, a router-made via's ring is not; the drag gets there, keeps `v1`; kicad-cli: no `clearance` / `hole_clearance`, and the same via flashed is
+  a `clearance`).
+- **R4-4, a pair started on arcs.** `isStartingPointRoutable`'s start-gap check is for a start item of `SEGMENT_T | ARC_T`; `DiffPairPlacer::start`
+  checks it so, with the width the start item inherits (`inheritTrackWidth( aStartItem, .. )`, N's when the pair starts on N), now taken inside
+  `DiffPairPlacer::start` (`DpSizes::import_from`). Test: `a_pair_started_on_arcs_checks_the_gap` (concentric arcs at 0.5 mm: refused with
+  KiCad's words; at 0.35 mm: starts at the arcs' 0.2 mm, not the class's 0.25 mm).
+- **R4-5, `ImportSizes` details.** `CT_HOLE_TO_HOLE` is asked with no start item too (a no-net via); the pair's dummy tracks are at
+  `aStartItem->Anchor( 0 )`; the dummy via is default-built, at (0, 0). Test: `hole_to_hole_is_asked_with_no_start_item_too`.
+- **R4-6, copper graphics.** A text box with its border off keeps its stroke's width (`GetEffectiveWidth()`; `m_borderEnabled` is only the text
+  box's own drawing); an arc or a circle's ring on copper is its chords with `ARC_HIGH_DEF` added to the stroke, so the band holds KiCad's
+  `SHAPE_ARC`. **Not router bugs:** a hidden board copper text and a hidden dimension text are not in the model (the importer leaves them out,
+  so the derived board kicad-cli checks has none either; the reader's loss is noted in GAPS 7), and a footprint's hidden text is a hidden field,
+  which `syncTextItem` drops as well. Test: `from_ir::tests::a_borderless_text_box_keeps_its_stroke_and_an_arc_its_flattening_error`.
+- **R4-7, `inflate2` / `inflateLine2` with `aSimplify`.** KiCad's `Clipper2Lib::SimplifyPaths( paths, .. );` drops its result, so the union is
+  of the offset as it is; ours now does the same (latent: no caller passes `simplify`). Test (`eda-shape-poly-set`):
+  `inflate_with_simplify_keeps_the_offsets_vertices`.
+- **Left:** R4-8 (a pre-defined width equal to the Default class's taken for "use net class": the studio keeps the width, not KiCad's index,
+  `routerVia.ts::chosenTrackWidth`, `useActionRunner.ts`'s width list; no server half needed) and R4-3 (Board Setup's Differential Pairs list,
+  the via rows' checks), other lanes'. A pair's custom dimensions are still applied after `start_diff_pair`'s start-gap check, where KiCad's
+  `ImportSizes` has them before it (`UseCustomDiffPairDimensions`).
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
