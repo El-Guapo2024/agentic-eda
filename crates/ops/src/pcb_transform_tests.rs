@@ -360,6 +360,21 @@ fn a_rounded_rectangle_turned_45_degrees_is_the_polygon_of_its_rounded_rectangle
 }
 
 #[test]
+fn a_rounded_rectangle_turned_off_quarter_is_flattened_at_the_boards_max_error() {
+    // `rr.TransformToPolygon( GetPolyShape(), getMaxError() )`: the board's maximum error, not a constant (round 3 A-3)
+    let mut m = model(&["F.Cu", "B.Cu"]);
+    m.board.max_error_nm = Nm::new(1000);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().board_items.set_corner_radius("shp_rect", mm(2.0));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::RotateItems { ids: ids(&["shp_rect"]), pivot: p(mm(5.0), mm(92.5)), angle_millideg: 45_000 }).unwrap();
+    let Shape::Polygon { pts, .. } = drawings(&b).shapes.iter().find(|s| s.id() == "shp_rect").unwrap() else { panic!() };
+    let ring = eda_model::outline::rounded_rect_ring(p(Nm::ZERO, mm(90.0)), p(mm(10.0), mm(95.0)), mm(2.0), 1000.0);
+    assert_eq!(pts.len(), ring.len());
+    assert!(ring.len() > eda_model::outline::rounded_rect_ring(p(Nm::ZERO, mm(90.0)), p(mm(10.0), mm(95.0)), mm(2.0), 5000.0).len());
+}
+
+#[test]
 fn a_rotated_arc_track_is_still_an_arc_with_its_mid_point_turned() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
@@ -625,5 +640,19 @@ fn flip_takes_a_front_user_layer_to_its_back_pair() {
     b.apply(&Cmd::FlipItems { ids: ids(&["shp_seg", "txt_a"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     assert_eq!(drawings(&b).shapes.iter().find(|s| s.id() == "shp_seg").unwrap().layer(), "User.2");
     assert_eq!(drawings(&b).texts[0].layer, "User.5", "a front user layer with no pair stays");
+    // `PCB_TEXT::Flip`: `if( IsSideSpecific() ) SetMirrored( !IsMirrored() )`, and a user layer typed front or back is side specific (round 3 A-1)
+    assert!(drawings(&b).texts[0].mirror, "a text on a front-typed user layer is turned over");
     assert_eq!(m.board.layer_setup.user_layer_opposites().get("User.2").map(String::as_str), Some("User.1"));
+    // a text on User.1 lands on User.2, mirrored
+    let mut d = design();
+    d.drawings.as_mut().unwrap().texts[0].layer = "User.1".into();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FlipItems { ids: ids(&["txt_a"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!((drawings(&b).texts[0].layer.as_str(), drawings(&b).texts[0].mirror), ("User.2", true));
+    // a user layer of no side (typed auxiliary, the default) is not
+    let mut d = design();
+    d.drawings.as_mut().unwrap().texts[0].layer = "User.9".into();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FlipItems { ids: ids(&["txt_a"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    assert!(!drawings(&b).texts[0].mirror);
 }

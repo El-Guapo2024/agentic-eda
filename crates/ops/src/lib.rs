@@ -4299,7 +4299,56 @@ impl<'a> Board<'a> {
                 }
             }
         }
+        self.swap_generator_layers(&map);
         Ok(())
+    }
+
+    /// `GLOBAL_EDIT_TOOL::SwapLayers`' `for( PCB_GENERATOR* generator : Generators() ) hasChanges |= swapBoardItem( generator, layerMap );`, after the
+    /// tracks: `swapBoardItem` maps the generator's `GetLayerSet()` -- `PCB_GROUP::GetLayerSet() | LSET( { GetLayer() } )`, its members' layers (the tracks
+    /// already moved) and its own -- and when that changes `SetLayerSet` takes it only if it is one layer (`SetLayer`; more is a `wxFAIL` that changes
+    /// nothing). So a tuning pattern moved one way (F.Cu to In1.Cu) goes with its tracks, while a two-way swap (F.Cu with B.Cu) maps {F.Cu, B.Cu} onto
+    /// itself and leaves the pattern where it was, as KiCad does. A via stitching's vias span several layers, so it moves only when it has none.
+    fn swap_generator_layers(&mut self, map: &std::collections::HashMap<&str, &str>) {
+        let layers = self.model.board.layers.clone();
+        let (tracks, vias) = match self.design.routing.as_ref() {
+            Some(rt) => (rt.tracks.clone(), rt.vias.clone()),
+            None => (Vec::new(), Vec::new()),
+        };
+        // `GetLayerSet()` of a member: a track's layer, a via's copper span
+        let member_layers = |ids: &[String]| -> BTreeSet<String> {
+            let mut out = BTreeSet::new();
+            for id in ids {
+                if let Some(t) = tracks.iter().find(|t| &t.id == id) {
+                    out.insert(t.layer.clone());
+                } else if let Some(v) = vias.iter().find(|v| &v.id == id) {
+                    let at = |l: &str| layers.iter().position(|c| c == l);
+                    match (at(&v.from_layer), at(&v.to_layer)) {
+                        (Some(a), Some(b)) => out.extend(layers[a.min(b)..=a.max(b)].iter().cloned()),
+                        _ => {
+                            out.insert(v.from_layer.clone());
+                            out.insert(v.to_layer.clone());
+                        }
+                    }
+                }
+            }
+            out
+        };
+        let swapped = |own: &str, mut set: BTreeSet<String>| -> Option<String> {
+            set.insert(own.to_string());
+            let mapped: BTreeSet<String> = set.iter().map(|l| map.get(l.as_str()).map_or_else(|| l.clone(), |d| (*d).to_string())).collect();
+            (mapped != set && mapped.len() == 1).then(|| mapped.into_iter().next()).flatten()
+        };
+        let Some(dr) = self.design.drawings.as_mut() else { return };
+        for p in dr.tuning_patterns.iter_mut() {
+            if let Some(l) = swapped(&p.layer, member_layers(&p.member_ids)) {
+                p.layer = l;
+            }
+        }
+        for v in dr.board_items.via_stitches.iter_mut() {
+            if let Some(l) = swapped(&v.layer, member_layers(&v.member_ids)) {
+                v.layer = l;
+            }
+        }
     }
 
     // -------------------------------------------------------- drawings

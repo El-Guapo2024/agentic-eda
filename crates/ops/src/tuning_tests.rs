@@ -134,3 +134,29 @@ fn a_member_deleted_by_another_verb_leaves_the_pattern_and_the_last_one_takes_it
     assert!(drawings(&b).tuning_patterns.is_empty(), "no member left: no pattern");
     let _ = ids(&[]);
 }
+
+/// A board with a pattern on F.Cu whose meander is its member, on four copper layers.
+fn tuned_on_four_layers() -> Board<'static> {
+    let m: &'static eda_model::ConstraintModel = Box::leak(Box::new(model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])));
+    let mut b = Board::new(design(), m, mm(0.1), mm(0.3));
+    b.apply(&tuned(meander(), vec![1], Some(pattern()), None, vec![])).unwrap();
+    b
+}
+
+#[test]
+fn swap_layers_moves_a_tuning_pattern_one_way() {
+    // `swapBoardItem( generator, .. )`: {F.Cu (its own), In1.Cu (its track, moved)} maps onto {In1.Cu}, one layer: `SetLayer( In1.Cu )` (round 3 A-2)
+    let mut b = tuned_on_four_layers();
+    b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "In1.Cu".into())] }).unwrap();
+    assert_eq!(drawings(&b).tuning_patterns[0].layer, "In1.Cu");
+}
+
+#[test]
+fn swap_layers_both_ways_leaves_a_tuning_pattern_where_it_was() {
+    // KiCad's quirk: {F.Cu, B.Cu} maps onto itself, so the pattern stays on F.Cu while its track goes to B.Cu
+    let mut b = tuned_on_four_layers();
+    b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into()), ("B.Cu".into(), "F.Cu".into())] }).unwrap();
+    assert_eq!(drawings(&b).tuning_patterns[0].layer, "F.Cu");
+    let member = &drawings(&b).tuning_patterns[0].member_ids[0];
+    assert_eq!(routing(&b).tracks.iter().find(|t| &t.id == member).unwrap().layer, "B.Cu");
+}
