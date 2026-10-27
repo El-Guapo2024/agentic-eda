@@ -555,6 +555,36 @@ fn a_chosen_width_below_the_board_minimum_routes_at_the_minimum() {
     }
 }
 
+/// R6-R1 (`handleLayerSwitch`: with the net class's via sizes in use, `VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy via of the
+/// route's net): V while routing a `+5V` net of a `Power` class with a 0.8 / 0.4 mm via arms the class's via, not the board's 0.6 / 0.3 mm default
+/// the studio used to send. Under `EDA_SLOW_TESTS=1`, with a rule that wants Power's vias at least 0.8 / 0.4 mm, kicad-cli finds no `via_diameter`
+/// or `drill_out_of_range` in the route, and flags the same route with the default via.
+#[test]
+fn a_via_armed_while_routing_has_the_nets_class_size() {
+    let (r1, r2, at) = (p(5.0, 10.0), p(25.0, 10.0), p(15.0, 10.0));
+    let (design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "TH1", r2)], &[("+5V", &["R1.1", "R2.1"])]);
+    model.board.layers = vec!["F.Cu".into(), "B.Cu".into()];
+    model.board.net_classes.push(eda_model::NetClass { via_diameter: Some(mm(0.8)), via_drill: Some(mm(0.4)), ..class("Power", &["+5V"]) });
+    model.board.custom_rules_text = Some("(version 1)\n(rule power_via\n  (condition \"A.Type == 'Via' && A.NetClass == 'Power'\")\n  (constraint via_diameter (min 0.8mm))\n  (constraint hole_size (min 0.4mm)))\n".into());
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(r1, "F.Cu", mm(0.25)).unwrap();
+    router.preview(at).unwrap();
+    let back = router.layer_index("B.Cu");
+    let size = router.net_class_via_size(eda_model::via_extra::ViaKind::Through, None, back).unwrap();
+    assert_eq!(size, (mm(0.8), mm(0.4)), "the class's via");
+    router.toggle_via(true, size.0, size.1, back);
+    router.fix(at).unwrap();
+    router.preview(r2).unwrap();
+    let commit = router.finish(r2).unwrap();
+    assert_eq!(commit.vias.iter().map(|v| (v.diameter, v.drill)).collect::<Vec<_>>(), vec![(mm(0.8), mm(0.4))], "{commit:?}");
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["via_diameter", "drill_out_of_range"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let default_via = RouteCommit { vias: commit.vias.iter().map(|v| eda_model::ir::Via { diameter: mm(0.6), drill: mm(0.3), ..v.clone() }).collect(), ..commit.clone() };
+        assert!(!kicad_violations(&apply(&design, &default_via), &model, &["via_diameter", "drill_out_of_range"]).unwrap().is_empty(), "the board's default via is what kicad-cli flags");
+    }
+}
+
 /// R3-4 (`ImportSizes` for a pair, via and holes: `CT_WIDTH` of the track and its coupled one, `CT_DIFF_PAIR_GAP`, `CT_VIA_DIAMETER`,
 /// `CT_VIA_HOLE`, `CT_HOLE_TO_HOLE`): a `.kicad_dru` rule for `/USB*` sets the pair's gap and width over the class's 0.25 mm gap, and a via
 /// rule the via's size; the hole to hole is the rule's.

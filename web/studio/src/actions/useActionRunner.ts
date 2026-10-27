@@ -107,6 +107,8 @@ import { registerDesignBlockActions } from "./designBlockActions";
 import { designBlockChecked, useDesignBlocksUi } from "../state/designBlocks";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
+import { viaChoiceOf } from "./routerViaActions";
+import { chosenViaOf } from "../kicad-port/routerVia";
 import { registerPcbMenuActions } from "./pcbMenuActions";
 import { registerAppearanceActions } from "./appearanceActions";
 import { nextContrastMode } from "../kicad-port/appearance";
@@ -417,8 +419,10 @@ export function useActionRunner() {
           if (!state.board) return;
           // `layerToggle` (router_tool.cpp): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts).
           const toLayer = otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer);
-          const rules = state.board.board_rules;
-          routeToggleVia(!draw.placingVia, rules?.via_diameter ?? 600_000, rules?.via_drill ?? 300_000, toLayer).then(() => {
+          // `ACT_PlaceThroughVia` -> `onViaCommand` -> `handleLayerSwitch( aEvent, true )`: sized as every other via command (R6-R1) -- no size while
+          // the net class's are in use (the server asks the rules for the route's net: its class, a `.kicad_dru` via rule), else the chosen entry or custom size
+          const size = chosenViaOf("through", viaChoiceOf(state));
+          routeToggleVia(!draw.placingVia, size?.diameter, size?.drill, toLayer).then(() => {
             dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, placingVia: !draw.placingVia, pendingViaLayer: toLayer } });
             refreshPreview();
           });

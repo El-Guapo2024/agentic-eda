@@ -163,6 +163,26 @@ export function chosenViaSize(viaType: ViaType, chosen: ViaPreset | null, index:
   return chosen;
 }
 
+/** What the studio holds of the via size choice: the board's Pre-defined Sizes list, the chosen index (0 = net class), the chosen entry, and the custom size. */
+export interface ViaChoice {
+  presets: readonly ViaPreset[];
+  index: number | null;
+  currentPreset: ViaPreset | null;
+  useCustomTrackVia: boolean;
+  custom: CustomTrackVia;
+}
+
+/**
+ * [`chosenViaSize`] of the studio's choice, for every via command of the router -- Place Through Via (V while routing, `ACT_PlaceThroughVia`) as
+ * much as the blind, micro and Select Layer ones, since all go through `handleLayerSwitch`'s one sizing (R6-R1). The chosen entry is read from the
+ * board's list now (`GetCurrentViaSize`: `m_ViasDimensionsList[ m_viaSizeIndex ]`, r5 R5-9); the custom size while custom sizes are in use.
+ * Null: send no size, and the server takes the rules' for the route's net (its class, a `.kicad_dru` `via_diameter` / `hole_size` rule).
+ */
+export function chosenViaOf(viaType: ViaType, c: ViaChoice): ViaPreset | null {
+  const entry = c.useCustomTrackVia ? { diameter: c.custom.viaDiameterNm, drill: c.custom.viaDrillNm } : c.index != null && c.index > 0 ? (c.presets[c.index - 1] ?? null) : c.currentPreset;
+  return chosenViaSize(viaType, entry, c.index, 1 + c.presets.length, c.useCustomTrackVia);
+}
+
 /** `BOARD_DESIGN_SETTINGS`' custom track and via size (`m_customTrackWidth`, `m_customViaSize`): what `DIALOG_TRACK_VIA_SIZE` edits. */
 export interface CustomTrackVia {
   trackNm: Nm;

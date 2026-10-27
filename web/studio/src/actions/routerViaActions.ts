@@ -16,11 +16,16 @@ import { createElement } from "react";
 import { dpMove, routeMove, routeToggleVia } from "../api/client";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { chosenViaSize, pickableLayers, planViaCommand, VIA_COMMANDS, type ViaCommand } from "../kicad-port/routerVia";
+import { chosenViaOf, pickableLayers, planViaCommand, VIA_COMMANDS, type ViaChoice, type ViaCommand } from "../kicad-port/routerVia";
 import { SelectLayerDialog, TrackViaSizeDialog } from "../components/PcbRouterDialogs";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { layerPairsOf } from "./pcbRouterSweep";
 import type { SweepCtx } from "./pcbSweepKit";
+
+/** The studio's via size choice (kicad-port/routerVia.ts `ViaChoice`): every via command of the router sizes its via from it (R6-R1). */
+export function viaChoiceOf(state: SweepCtx["state"]): ViaChoice {
+  return { presets: state.board?.routing?.via_presets ?? [], index: state.currentViaIndex, currentPreset: state.currentViaPreset, useCustomTrackVia: state.pcbx.useCustomTrackVia, custom: state.pcbx.customTrackVia };
+}
 
 export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepCtx): void {
   const { state, dispatch } = ctx;
@@ -61,10 +66,7 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
         }
         // the net class's sizes (or a microvia's): none sent, the server asks the rules for the route's net (`handleLayerSwitch`, r3 R3-4).
         // The choice is the via list's index (0 = net class), not the size (r4 R4-8).
-        // The chosen entry is read from the board's list now (`GetCurrentViaSize`: `m_ViasDimensionsList[ m_viaSizeIndex ]`), so a Board Setup edit to it reaches it (r5 R5-9); the custom size while custom sizes are in use.
-        const presets = board.routing?.via_presets ?? [];
-        const entry = state.pcbx.useCustomTrackVia ? { diameter: state.pcbx.customTrackVia.viaDiameterNm, drill: state.pcbx.customTrackVia.viaDrillNm } : state.currentViaIndex != null && state.currentViaIndex > 0 ? (presets[state.currentViaIndex - 1] ?? null) : state.currentViaPreset;
-        const size = chosenViaSize(plan.viaType, entry, state.currentViaIndex, 1 + presets.length, state.pcbx.useCustomTrackVia);
+        const size = chosenViaOf(plan.viaType, viaChoiceOf(state));
         void routeToggleVia(true, size?.diameter, size?.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span }).then((reply) => {
           if (!reply.ok) {
             if (reply.message) toast(reply.message, "error");

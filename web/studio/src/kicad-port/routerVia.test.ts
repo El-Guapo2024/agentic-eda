@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, NetClass } from "../api/types";
 import { chosenTrackWidthOf } from "./routerSizes";
-import { chosenViaSize, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
+import { chosenViaOf, chosenViaSize, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
 
 const CU4 = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const blind: ViaCommand = { type: "blind", selectLayer: false };
@@ -116,4 +116,13 @@ test("a via takes the net class's size from the server unless a size is chosen",
   assert.equal(chosenViaSize("through", base, 3, 3, false), null, "past the list's end is the net class's");
   assert.equal(chosenViaSize("micro", { diameter: 800_000, drill: 400_000 }, 2, 3, false), null, "a microvia's is always the net class's");
   assert.deepEqual(chosenViaSize("through", base, 0, 3, true), base, "a custom size is a size");
+});
+
+test("R6-R1: V while routing sizes the via as the other via commands (handleLayerSwitch): none at index 0, the list's entry, the custom size", () => {
+  const presets = [{ diameter: 700_000, drill: 350_000 }, { diameter: 800_000, drill: 400_000 }];
+  const choice = { presets, index: 0, currentPreset: null, useCustomTrackVia: false, custom: DEFAULT_CUSTOM_TRACK_VIA };
+  assert.equal(chosenViaOf("through", choice), null, "the net class's: the server asks the rules for the route's net");
+  assert.deepEqual(chosenViaOf("through", { ...choice, index: 2 }), presets[1]);
+  assert.deepEqual(chosenViaOf("through", { ...choice, index: 2, useCustomTrackVia: true }), { diameter: DEFAULT_CUSTOM_TRACK_VIA.viaDiameterNm, drill: DEFAULT_CUSTOM_TRACK_VIA.viaDrillNm });
+  assert.equal(chosenViaOf("micro", { ...choice, index: 2 }), null, "a microvia's is the rules'");
 });
