@@ -1662,6 +1662,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveItems { ids, dx, dy } => format!("move-items {} --by {},{}", ids.join(" "), mm(*dx), mm(*dy)),
         Cmd::RotateItems { ids, pivot, angle_millideg } => format!("rotate-items {} --by {:.3} --pivot {},{}", ids.join(" "), *angle_millideg as f64 / 1000.0, mm(pivot.x), mm(pivot.y)),
         Cmd::FlipItems { ids, pivot, direction } => format!("flip-items {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x), mm(pivot.y)),
+        Cmd::MirrorItems { ids, pivot, direction } => format!("mirror-items {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x), mm(pivot.y)),
         Cmd::MirrorTracks { ids, pivot, direction } => format!("mirror-tracks {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x), mm(pivot.y)),
         Cmd::EditTrack { id, start, end } => {
             let at = |p: &Option<Point>| p.map(|p| format!("{},{}", mm(p.x), mm(p.y)));
@@ -1986,6 +1987,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::RotateItems { .. } => "rotate-items",
         Cmd::FlipItems { .. } => "flip-items",
         Cmd::MirrorTracks { .. } => "mirror-tracks",
+        Cmd::MirrorItems { .. } => "mirror-items",
         Cmd::EditTrack { .. } => "track",
         Cmd::SetItemNet { .. } => "net-set",
         Cmd::SetZoneName { .. } => "zone",

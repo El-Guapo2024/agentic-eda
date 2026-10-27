@@ -238,6 +238,50 @@ impl Board<'_> {
         Ok(())
     }
 
+    /// `Cmd::MirrorItems`: `EDIT_TOOL::Mirror` of the text boxes and tuning patterns among `ids`, about `pivot` (the other kinds have verbs of their own, which
+    /// the studio's Mirror sends with this one in one batch). A text box mirrors as `PCB_TEXTBOX::Mirror`: its shape (`PCB_SHAPE::Mirror`, the layer kept) and
+    /// its text angle (`ANGLE_180 - angle` left-right, `-angle` top-bottom), not its text or justification. A tuning pattern as `PCB_TUNING_PATTERN::Mirror`
+    /// (`baseMirror`): its base lines, origin and end mirror and its initial side swaps (its tracks are its members, mirrored with `MirrorTracks`). A reference
+    /// image is not mirrorable (`MirrorableItems` has no `PCB_REFERENCE_IMAGE_T`) and is refused with the other unknown ids.
+    pub(crate) fn mirror_items(&mut self, ids: &[String], pivot: Point, direction: FlipDirection) -> Result<(), Vec<CheckResult>> {
+        let x = Xform::Flip { pivot, dir: direction };
+        let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_item", ids.join(","), "the board has no drawings")])?;
+        for id in ids {
+            if !dr.board_items.text_boxes.iter().any(|t| &t.id == id) && !dr.tuning_patterns.iter().any(|p| &p.id == id) {
+                return Err(vec![CheckResult::fail("ops_unknown_item", id.as_str(), "no text box or tuning pattern with this id")]);
+            }
+        }
+        for t in dr.board_items.text_boxes.iter_mut().filter(|t| ids.contains(&t.id)) {
+            t.start = x.point(t.start);
+            t.end = x.point(t.end);
+            for p in t.pts.iter_mut() {
+                *p = x.point(*p);
+            }
+            t.angle = match direction {
+                FlipDirection::LeftRight => norm360(180_000 - t.angle as i64),
+                FlipDirection::TopBottom => norm360(-(t.angle as i64)),
+            } as _;
+        }
+        for p in dr.tuning_patterns.iter_mut().filter(|p| ids.contains(&p.id)) {
+            for q in p.base_line.iter_mut().chain(p.base_line_coupled.iter_mut()) {
+                *q = x.point(*q);
+            }
+            match (p.base_line.first(), p.base_line.last()) {
+                (Some(&first), Some(&last)) => {
+                    p.origin = first;
+                    p.end = last;
+                }
+                _ => {
+                    p.origin = x.point(p.origin);
+                    p.end = x.point(p.end);
+                }
+            }
+            // `if( m_settings.m_initialSide == MEANDER_SIDE_RIGHT ) .. = LEFT; else .. = RIGHT;`
+            p.initial_side = if p.initial_side == eda_model::tuning::PatternSide::Right { eda_model::tuning::PatternSide::Left } else { eda_model::tuning::PatternSide::Right };
+        }
+        Ok(())
+    }
+
     pub(crate) fn transform_items(&mut self, verb: &str, ids: &[String], x: Xform) -> Result<(), Vec<CheckResult>> {
         let targets = self.resolve_targets(verb, ids)?;
         let copper = self.model.board.layers.len();

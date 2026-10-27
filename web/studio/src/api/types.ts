@@ -1730,6 +1730,8 @@ export type Cmd =
   | { op: "flip_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
   /** `EDIT_TOOL::Mirror` of tracks and arcs (`PCB_TRACK::Mirror`): the points mirrored across the axis through `pivot`, in place (the id, the layer, the net and the group stay). */
   | { op: "mirror_tracks"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
+  /** `crates/ops/src/pcb_transform.rs` `mirror_items`: `PCB_TEXTBOX::Mirror` and `PCB_TUNING_PATTERN::Mirror` of text boxes and tuning patterns. */
+  | { op: "mirror_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
   /**
    * The Properties panel's own verbs (crates/ops/src/pcb_props.rs): a track's or arc's first and last point (a field left out stays), the net of tracks, vias and zones
    * (only a zone may be given ""), a zone's name, and a shape's new geometry in place (its id and lock stay). Every other row of the grid goes through the verbs above.

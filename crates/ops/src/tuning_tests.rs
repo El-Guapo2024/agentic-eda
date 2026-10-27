@@ -134,3 +134,19 @@ fn a_member_deleted_by_another_verb_leaves_the_pattern_and_the_last_one_takes_it
     assert!(drawings(&b).tuning_patterns.is_empty(), "no member left: no pattern");
     let _ = ids(&[]);
 }
+
+/// r2-pcb-edit "Mirror ... not yet": `PCB_TUNING_PATTERN::Mirror` (`baseMirror`): the base line mirrors, the origin and end are its ends, the initial side swaps.
+#[test]
+fn mirror_items_mirrors_a_tuning_pattern_as_base_mirror() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let mut pat = pattern();
+    pat.id = "gen_1".into();
+    d.drawings.get_or_insert_with(Default::default).tuning_patterns.push(pat);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::MirrorItems { ids: vec!["gen_1".into()], pivot: p(mm(0.0), mm(0.0)), direction: FlipDirection::LeftRight }).unwrap();
+    let pat = &b.design().drawings.as_ref().unwrap().tuning_patterns[0];
+    assert_eq!((pat.origin, pat.end), (p(mm(-1.0), mm(2.0)), p(mm(-9.0), mm(2.0))));
+    assert_eq!(pat.base_line, vec![p(mm(-1.0), mm(2.0)), p(mm(-9.0), mm(2.0))]);
+    assert_eq!(pat.initial_side, eda_model::tuning::PatternSide::Right, "LEFT becomes RIGHT");
+}
