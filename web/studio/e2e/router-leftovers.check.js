@@ -814,7 +814,14 @@
       const via = async (fn) => { const k = replies.length; await fn(); return replies.slice(k).filter((r) => r.name === "via").pop() ?? null; };
       // Ctrl+V: Place Microvia, implicit target on the F.Cu / B.Cu pair -- and Ctrl+V again takes it back (`onViaCommand`: `ToggleViaPlacement()`)
       let v = await via(() => canvasKey("v", "KeyV", { ctrl: true }));
-      t(v && v.req.enabled === true && v.req.via_type === "micro" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "B.Cu"]) && v.req.diameter === 300_000 && v.req.drill === 100_000, `Ctrl+V arms a microvia of the net class's microvia size on the pair: ${v && JSON.stringify(v.req)}`);
+      // the size is the server's (`handleLayerSwitch`: `VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy microvia of the net, r3 R3-4): none is sent
+      t(v && v.req.enabled === true && v.req.via_type === "micro" && JSON.stringify(v.req.span) === JSON.stringify(["F.Cu", "B.Cu"]) && v.req.diameter === undefined && v.req.drill === undefined, `Ctrl+V arms a microvia on the pair, its size left to the net class's rules: ${v && JSON.stringify(v.req)}`);
+      {
+        const k = replies.length;
+        await moveTo(8_500_000, 6_000_000);
+        const m = replies.slice(k).filter((r) => r.name === "move").pop();
+        t(m && m.body.via && m.body.via.diameter === 300_000 && m.body.via.drill === 100_000, `the head's microvia is the net class's microvia size: ${m && JSON.stringify(m.body.via)}`);
+      }
       v = await via(() => canvasKey("v", "KeyV", { ctrl: true }));
       t(v && v.req.enabled === false, `Ctrl+V again takes it back: ${v && JSON.stringify(v.req)}`);
       t(tracksOf(await state()).length === 1 && E.state().tool === "route", `Ctrl+V did not paste: ${tracksOf(await state()).length} track(s), tool ${E.state().tool}`);

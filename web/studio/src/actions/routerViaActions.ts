@@ -16,7 +16,7 @@ import { createElement } from "react";
 import { dpMove, routeMove, routeToggleVia } from "../api/client";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { pickableLayers, planViaCommand, viaSizeFor, VIA_COMMANDS, type ViaCommand } from "../kicad-port/routerVia";
+import { chosenViaSize, pickableLayers, planViaCommand, VIA_COMMANDS, type ViaCommand } from "../kicad-port/routerVia";
 import { SelectLayerDialog, TrackViaSizeDialog } from "../components/PcbRouterDialogs";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { layerPairsOf } from "./pcbRouterSweep";
@@ -59,8 +59,10 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
           if (plan.message) toast(plan.message, "error");
           return;
         }
-        const size = viaSizeFor(board, draw.net, plan.viaType, state.currentViaPreset);
-        void routeToggleVia(true, size.diameter, size.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span }).then((reply) => {
+        // the net class's sizes (or a microvia's): none sent, the server asks the rules for the route's net (`handleLayerSwitch`, r3 R3-4)
+        const rules = board.board_rules;
+        const size = chosenViaSize(plan.viaType, state.currentViaPreset, rules ? { diameter: rules.via_diameter, drill: rules.via_drill } : undefined, state.pcbx.useCustomTrackVia);
+        void routeToggleVia(true, size?.diameter, size?.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span }).then((reply) => {
           if (!reply.ok) {
             if (reply.message) toast(reply.message, "error");
             return;

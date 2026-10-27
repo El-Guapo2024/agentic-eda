@@ -18,7 +18,7 @@ pub mod constraints;
 pub mod dru;
 pub mod hatch;
 pub mod inspect;
-mod fp_art;
+pub mod fp_art;
 pub mod kimath;
 pub mod outline;
 pub mod pad_shape;

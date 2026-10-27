@@ -89,6 +89,18 @@ impl DpSizes {
         }
     }
 
+    /// [`Self::resolve`] through the board's rules: `ImportSizes` of the item the pair starts on ([`crate::settings::import_sizes`]), so a
+    /// `.kicad_dru` rule's `track_width` and `diff_pair_gap` (of `A.inDiffPair(..)`), via size and hole to hole set the pair as they do in KiCad
+    /// (r3 R3-4). A world with no rule resolver is [`Self::resolve`].
+    pub fn import(world: &Node, rules: &BoardRules, start: &Item, layer: i32, net_p: &str, net_n: &str) -> Self {
+        if world.rule_resolver().is_none() {
+            return Self::resolve(rules, net_p, net_n);
+        }
+        let at = start.anchors().first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
+        let s = crate::settings::import_sizes(world, rules, Some((start, at)), layer);
+        DpSizes { width: s.diff_pair_width, gap: s.diff_pair_gap, via_gap: s.diff_pair_via_gap, via_diameter: s.via_diameter, via_drill: s.via_drill, hole_to_hole: s.diff_pair_hole_to_hole }
+    }
+
     /// `DIFF_PAIR_PLACER::viaGap`.
     pub fn via_gap_total(&self) -> Nm {
         self.via_gap.max(self.hole_to_hole + self.via_drill - self.via_diameter)
@@ -327,7 +339,10 @@ impl DiffPairPlacer {
         let (Some(prim_p), Some(prim_n)) = (found.pair.prim_p.clone(), found.pair.prim_n.clone()) else { return Err(NO_COMPLEMENT.into()) };
         let (net_p, net_n) = (prim_p.net().clone(), prim_n.net().clone());
         let (name_p, name_n) = (net_p.as_deref().unwrap_or(""), net_n.as_deref().unwrap_or(""));
-        let mut sizes = DpSizes::resolve(rules, name_p, name_n);
+        let mut sizes = match world.get(start_item) {
+            Some(it) => DpSizes::import(world, rules, it, layer, name_p, name_n),
+            None => DpSizes::resolve(rules, name_p, name_n),
+        };
 
         // `isStartingPointRoutable` (`if( Settings().AllowDRCViolations() ) return true;` first)
         if !settings.allow_drc_violations() {
@@ -1062,11 +1077,11 @@ mod tests {
 
     #[allow(dead_code)]
     fn pad(node: &mut Node, net: &str, at: Point, r: Nm) -> ItemId {
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false, rule: 0 }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false, rule: 0, anchor_points: Vec::new() }))
     }
 
     fn smd_pad(node: &mut Node, net: &str, at: Point, r: Nm) -> ItemId {
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false, rule: 0 }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false, rule: 0, anchor_points: Vec::new() }))
     }
 
     fn track(node: &mut Node, net: &str, a: Point, b: Point, width: Nm) -> ItemId {
@@ -1330,10 +1345,10 @@ mod tests {
         // (1.515 mm, the largest force of the loop, which every later step adds again) into each small one in turn, until its 40 steps
         // run out still colliding -- so `routeHead` fails
         let (ax, ay) = (mm(0.0), mm(-30.0));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(ax, ay), shape: Shape::Circle { c: p(ax, ay), r: mm(1.0) }, source: "U9.0".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(ax, ay), shape: Shape::Circle { c: p(ax, ay), r: mm(1.0) }, source: "U9.0".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         for k in 1..=45i64 {
             let c = p(ax + mm(0.01) + Nm::new(1_515_000) * k + mm(0.3), ay);
-            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.05) }, source: format!("U9.{k}"), edge: false, rule: 0 }));
+            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.05) }, source: format!("U9.{k}"), edge: false, rule: 0, anchor_points: Vec::new() }));
         }
         let (rules, settings) = (rules(), mode(Mode::Shove));
         let mut dp = placer(&node, start);
@@ -1386,8 +1401,8 @@ mod tests {
         // pads side by side, along the pads' long side -- are only built for pads that line up like this.
         let mut node = Node::new();
         let rect = |c: Point| Shape::Rect { x0: c.x - mm(0.5), y0: c.y - mm(0.3), x1: c.x + mm(0.5), y1: c.y + mm(0.3) };
-        let start = node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(0), pos: p(Nm::ZERO, Nm::ZERO), shape: rect(p(Nm::ZERO, Nm::ZERO)), source: "J1.1".into(), edge: false, rule: 0 }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(mm(0.7), mm(0.7)), shape: rect(p(mm(0.7), mm(0.7))), source: "J1.2".into(), edge: false, rule: 0 }));
+        let start = node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(0), pos: p(Nm::ZERO, Nm::ZERO), shape: rect(p(Nm::ZERO, Nm::ZERO)), source: "J1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(mm(0.7), mm(0.7)), shape: rect(p(mm(0.7), mm(0.7))), source: "J1.2".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let found = find_dp_primitive_pair(&node, start).unwrap();
         let mut gws = DpGateways::new(mm(0.4));
         gws.build_from_primitive_pair(&found.pair, false);
@@ -1419,8 +1434,8 @@ mod tests {
         for id in far {
             node.remove(id);
         }
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(mm(10.0), Nm::ZERO), shape: Shape::Circle { c: p(mm(10.0), Nm::ZERO), r: mm(0.25) }, source: "far P".into(), edge: false, rule: 0 }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(mm(10.0), mm(1.0)), shape: Shape::Circle { c: p(mm(10.0), mm(1.0)), r: mm(0.25) }, source: "far N".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(mm(10.0), Nm::ZERO), shape: Shape::Circle { c: p(mm(10.0), Nm::ZERO), r: mm(0.25) }, source: "far P".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(mm(10.0), mm(1.0)), shape: Shape::Circle { c: p(mm(10.0), mm(1.0)), r: mm(0.25) }, source: "far N".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
         dp.toggle_via(true, None, None, Some(1));

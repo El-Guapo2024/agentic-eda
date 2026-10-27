@@ -39,7 +39,7 @@ fn track(node: &mut Node, net: &str, id: &str, pts: &[Point], width: Nm) {
 }
 
 fn pad(net: &str, name: &str, c: Point, r: Nm) -> Item {
-    Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: name.into(), edge: false, rule: 0 })
+    Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: name.into(), edge: false, rule: 0, anchor_points: Vec::new() })
 }
 
 fn via(net: &str, id: &str, c: Point) -> Item {

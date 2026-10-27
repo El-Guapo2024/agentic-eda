@@ -114,6 +114,9 @@ pub struct Continuation {
     pub via_gap: Nm,
 }
 
+/// `isStartingPointRoutable`'s refusal of a start on a non-plated pad.
+const NPTH_START: &str = "Cannot start routing from a non-plated hole.";
+
 pub struct Router {
     world: Node,
     layers: LayerMap,
@@ -213,13 +216,18 @@ impl Router {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
         let pick = self.pick_start(at, layer);
         if let Some(Item::Solid(s)) = pick.as_ref().and_then(|p| self.world.get(p.item)) {
-            if self.world.is_npth(&s.source) {
-                return Err("Cannot start routing from a non-plated hole.".into());
+            if self.world.is_npth(&s.source) && !self.settings.allow_drc_violations() {
+                return Err(NPTH_START.into());
             }
         }
         // the item's net, or none (`OrphanedItem()`: every item of no net is that one net, `same_net`), and none in empty space
         let net = pick.as_ref().and_then(|p| self.world.get(p.item)).and_then(|i| i.net().clone());
         let start_pos = pick.as_ref().map_or(at, |p| p.pos);
+        if !self.settings.allow_drc_violations() {
+            if let Some(reason) = self.start_refusal(start_pos, layer) {
+                return Err(reason);
+            }
+        }
         if !self.settings.allow_drc_violations() {
             // `isStartingPointRoutable`: "If the only reason we collide is track width; it's better to allow the user to start anyway and just
             // highlight the resulting collisions, so they can change width later."
@@ -256,6 +264,76 @@ impl Router {
         self.diff = None;
         self.session = Some(Session { placer, pending_via_layer: None, world, splits, pending_via_kind: ViaKind::Through, placed_vias: Vec::new() });
         Ok(())
+    }
+
+    /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a route about to start at `at` on `layer_name` ([`crate::settings::import_sizes`]): the start
+    /// item's net's width, via and pair sizes through the board's rules -- what a route starts at when the width list is on "use net class"
+    /// (`UseNetClassTrack()`, r3 R3-3). `None` for a layer the board does not have.
+    pub fn import_sizes(&self, at: Point, layer_name: &str) -> Option<crate::settings::ImportedSizes> {
+        let layer = self.layer_index(layer_name)?;
+        let pick = self.pick_start(at, layer);
+        let start = pick.as_ref().and_then(|p| self.world.get(p.item).map(|it| (it, p.pos)));
+        Some(crate::settings::import_sizes(&self.world, &self.rules, start, layer))
+    }
+
+    /// What building the world had to tell the user (`SyncWorld`'s `syncZone`: "%s is malformed.").
+    pub fn warnings(&self) -> &[String] {
+        self.world.rule_resolver().map_or(&[], |r| r.warnings())
+    }
+
+    /// The width of the route in progress (`m_sizes.TrackWidth()`).
+    pub fn current_width(&self) -> Option<Nm> {
+        self.session().map(|s| s.placer.width)
+    }
+
+    /// `ROUTER_TOOL::handleLayerSwitch`'s via size with the net class's sizes in use (`bds.UseNetClassVia() || viaType == VIATYPE::MICROVIA`):
+    /// the board's minimum via size and through drill (`sizes.SetViaDiameter( bds.m_ViasMinSize )`, `SetViaDrill( bds.m_MinThroughDrill )`), each
+    /// replaced by the opt of `VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy via of the route's net, of `kind`, over `span`
+    /// (`SetLayerPair( currentLayer, targetLayer )`) on the layer being routed, when a rule gives one
+    /// ([`crate::rule_resolver::RuleResolver::via_size`]); a world without rules has the net class's. `None` when no route is in progress.
+    pub fn net_class_via_size(&self, kind: ViaKind, span: Option<(i32, i32)>, to_layer: Option<i32>) -> Option<(Nm, Nm)> {
+        let s = self.session()?;
+        let layer = s.placer.current_layer;
+        let net = s.placer.net.clone();
+        let Some(r) = self.world.rule_resolver() else {
+            let name = net.as_deref().unwrap_or("");
+            return Some((self.rules.via_diameter_of(name), self.rules.via_drill_of(name)));
+        };
+        let span = span.unwrap_or_else(|| match kind {
+            ViaKind::Through => (0, self.layers.count() as i32 - 1),
+            _ => (layer, to_layer.unwrap_or(layer)),
+        });
+        let (d, h) = r.via_size(&net, kind, span, layer);
+        Some((d.unwrap_or(self.rules.via_diameter_min_nm), h.unwrap_or(self.rules.via_drill_min_nm)))
+    }
+
+    /// `ROUTER::isStartingPointRoutable`'s walk over `QueryHoverItems( aWhere )` (every item whose shape is under the point, here in the world's
+    /// order) on the start layer: the board edge is passed over ("Edge cuts are put on all layers, but they're not *really* on all layers"); an
+    /// item that is routable ends the walk with no refusal; otherwise the last non-routable item names the refusal -- a non-plated hole ("Cannot
+    /// start routing from a non-plated hole."), a rule area that keeps something out ("Rule area '%s' disallows tracks.", or "Rule area disallows
+    /// tracks." without a name: for any keepout, one that keeps out vias only too), a text ("Cannot start routing from a text item."), and nothing for
+    /// any other (a dimension, a barcode, a table). It runs in every mode before the dot of track is tested (r3 R3-8).
+    fn start_refusal(&self, at: Point, layer: i32) -> Option<String> {
+        let probe = eda_drc::kimath::Shape::Circle { c: at, r: Nm::ZERO };
+        let mut reason: Option<String> = None;
+        for id in self.world.overlapping(&probe, LayerRange::single(layer), &[]) {
+            let Some(item) = self.world.get(id) else { continue };
+            if item.is_virtual() {
+                continue;
+            }
+            match item {
+                Item::Solid(s) if s.edge => continue,
+                Item::Solid(s) if self.world.is_npth(&s.source) => reason = Some(NPTH_START.into()),
+                Item::Solid(s) if s.is_keepout() => {
+                    let name = self.world.rule_resolver().and_then(|r| r.keepout(s)).map(|k| k.name.clone()).unwrap_or_default();
+                    reason = Some(if name.is_empty() { "Rule area disallows tracks.".into() } else { format!("Rule area '{name}' disallows tracks.") });
+                }
+                Item::Solid(s) if s.is_text() => reason = Some("Cannot start routing from a text item.".into()),
+                Item::Solid(s) if !s.routable() => {}
+                _ => return None,
+            }
+        }
+        reason
     }
 
     /// `TOOL_BASE::updateStartItem` for a point the studio's snapping has already put on what it picked (`PcbSnap.routePoint`): the
@@ -1044,6 +1122,19 @@ impl Router {
         let Some(start_item) = hit else {
             return Err("Cannot start a differential pair in the middle of nowhere.".into());
         };
+        // `isStartingPointRoutable` for a pair: the gap against the board's minimum clearance first, then the items under the point (r3 R3-8)
+        if !self.settings.allow_drc_violations() {
+            if let Some(it) = self.world.get(start_item) {
+                let coupled = crate::diff_pair::dp_coupled_net_name(it.net().as_deref().unwrap_or("")).unwrap_or_default();
+                if crate::dp_placer::DpSizes::import(&self.world, &self.rules, it, layer, it.net().as_deref().unwrap_or(""), &coupled).gap < self.rules.min_clearance_nm {
+                    return Err("Diff pair gap is less than board minimum clearance.".into());
+                }
+            }
+            let pos = self.world.get(start_item).and_then(|it| it.anchors().first().copied()).unwrap_or(at);
+            if let Some(reason) = self.start_refusal(if self.world.get(start_item).is_some_and(Item::is_track) { at } else { pos }, layer) {
+                return Err(reason);
+            }
+        }
         let mut placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, layer, self.layers.all())?;
         // `ImportSizes`: "First try to pick up diff pair width from starting track" (`m_UseConnectedTrackWidth`, on by default) -- also off a
         // pad or via with a stub (findings p5 F4-5)
@@ -1680,6 +1771,34 @@ mod tests {
         router.start(Point { x: mm(50.0), y: mm(50.3) }, "F.Cu", mm(0.2)).expect("empty space");
         let pv = router.preview(Point { x: mm(53.0), y: mm(50.3) }).unwrap();
         assert!(!pv.colliding && pv.head.pts.len() == 2, "{pv:?}");
+    }
+
+    /// r3 R3-8 (`isStartingPointRoutable`'s walk over `QueryHoverItems`): a start inside a rule area is refused with the area's message -- its
+    /// name when it has one, and for an area that keeps out vias only too -- and a start on a copper text with the text's, before the dot of track
+    /// is tested; on a pad inside an area the walk ends at the pad (a routable item), and the dot of track in the area refuses it.
+    #[test]
+    fn a_start_inside_a_rule_area_or_on_a_text_says_so() {
+        let (mut design, model) = two_pad_board();
+        let area = |name: &str, tracks: bool, vias: bool, x: f64| eda_model::ir::Zone { id: format!("ko_{name}{x}"), name: name.into(), layer: "F.Cu".into(), is_rule_area: true, keepout_tracks: tracks, keepout_vias: vias, outline: vec![Point { x: mm(x), y: mm(40.0) }, Point { x: mm(x + 10.0), y: mm(40.0) }, Point { x: mm(x + 10.0), y: mm(50.0) }, Point { x: mm(x), y: mm(50.0) }], ..Default::default() };
+        let rt = design.routing.as_mut().unwrap();
+        rt.zones.push(area("ANT", true, false, 0.0));
+        rt.zones.push(area("", false, true, 20.0));
+        rt.zones.push(area("", true, false, 40.0));
+        // a rule area round the first pad
+        rt.zones.push(eda_model::ir::Zone { outline: vec![Point { x: mm(-2.0), y: mm(-2.0) }, Point { x: mm(0.5), y: mm(-2.0) }, Point { x: mm(0.5), y: mm(2.0) }, Point { x: mm(-2.0), y: mm(2.0) }], ..area("PAD", true, false, 0.0) });
+        design.drawings = Some(eda_model::ir::DrawingsSection { copper_texts: vec![eda_model::ir::FootprintText { text: "TXT".into(), layer: "F.Cu".into(), at: Point { x: mm(70.0), y: mm(45.0) }, angle_file_mdeg: 0, size: (mm(1.5), mm(1.5)), thickness: mm(0.2), halign: 0, valign: 0, mirror: false, keep_upright: false, bold: false }], ..Default::default() });
+        let mut router = Router::new(&design, &model);
+        let at = |x: f64| Point { x: mm(x), y: mm(45.0) };
+        assert_eq!(router.start(at(5.0), "F.Cu", mm(0.2)), Err("Rule area 'ANT' disallows tracks.".to_string()));
+        assert_eq!(router.start(at(25.0), "F.Cu", mm(0.2)), Err("Rule area disallows tracks.".to_string()), "a vias-only area too");
+        assert_eq!(router.start(at(45.0), "F.Cu", mm(0.2)), Err("Rule area disallows tracks.".to_string()));
+        assert_eq!(router.start(at(70.0), "F.Cu", mm(0.2)), Err("Cannot start routing from a text item.".to_string()));
+        assert!(router.start(at(60.0), "F.Cu", mm(0.2)).is_ok(), "empty space");
+        // the pad under the point is routable, so the area says nothing; the dot of track in the area is what refuses it then
+        assert_eq!(router.start(Point { x: mm(-0.825), y: Nm::ZERO }, "F.Cu", mm(0.2)), Err("The routing start point violates DRC.".to_string()));
+        // with violations allowed nothing is refused
+        router.settings = RoutingSettings { mode: crate::settings::Mode::MarkObstacles, can_violate_drc: true, ..RoutingSettings::default() };
+        assert!(router.start(at(5.0), "F.Cu", mm(0.2)).is_ok());
     }
 
     /// findings p5 F2-8 / F3-4: `isStartingPointRoutable` refuses a start whose dot of track collides at the route's width and at the board's

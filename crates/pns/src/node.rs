@@ -383,12 +383,15 @@ impl Node {
         let mut out: Vec<(Point, Net)> = Vec::new();
         for id in self.index.query(bbox) {
             let Some(Item::Solid(s)) = self.items.get(&id) else { continue };
-            let p = s.pos;
-            if p.x < bbox.0 || p.x > bbox.2 || p.y < bbox.1 || p.y > bbox.3 || !s.layers.overlaps(&layers) {
-                continue;
-            }
-            if !out.iter().any(|(q, n)| *q == p && *n == s.net) {
-                out.push((p, s.net.clone()));
+            // a graphic on copper is joined at its connection points (`SOLID::Anchor`), a pad at its position
+            let at: &[Point] = if s.anchor_points.is_empty() { std::slice::from_ref(&s.pos) } else { &s.anchor_points };
+            for &p in at {
+                if p.x < bbox.0 || p.x > bbox.2 || p.y < bbox.1 || p.y > bbox.3 || !s.layers.overlaps(&layers) {
+                    continue;
+                }
+                if !out.iter().any(|(q, n)| *q == p && *n == s.net) {
+                    out.push((p, s.net.clone()));
+                }
             }
         }
         out.sort_by_key(|(p, _)| (p.x, p.y));
@@ -967,6 +970,14 @@ impl Node {
     /// hole's clearance when that reaches further. **Differs:** KiCad walks round both; the larger of the two (by the box it spans) is the one
     /// that matters for the round pads and vias of a board.
     pub fn obstacle_hull(&self, rules: &BoardRules, item: &Item, head: Side, extra: Nm, walk_width: Nm, layer: i32, use_epsilon: bool) -> Vec<Point> {
+        // `VIA::Hull`: "if( m_hole && !..->IsFlashedOnLayer( this, aLayer ) ) return m_hole->Hull( .. )" -- a via (and a pad, whose copper is then no
+        // obstacle and whose hole is) on a layer it has removed is its hole
+        if self.rules.as_ref().is_some_and(|r| !r.is_flashed_on(item, LayerRange::single(layer))) {
+            if let Some((hole, hole_side)) = self.hole_of(item) {
+                let hole_clearance = self.clearance_between(rules, hole_side, head, use_epsilon);
+                return crate::hull::primitive_hull(&hole, hole_clearance + extra, walk_width);
+            }
+        }
         let clearance = self.clearance_between(rules, Side::Item(item), head, use_epsilon);
         let hull = item.hull(clearance + extra, walk_width, layer);
         if same_net(item.net(), head.net()) {
@@ -1078,7 +1089,10 @@ impl Node {
         // the copper's clearance when it was asked and did not collide: a hole that far inside the copper cannot then reach the probe
         // ([`crate::rule_resolver::RuleResolver::hole_reach`])
         let mut clear_at: Option<Nm> = None;
-        if !same {
+        // `else if( iface && !iface->IsFlashedOnLayer( this, aHead->Layers() ) ) clearance = -1;`: a pad's or via's copper on a layer it has removed
+        // is not there; its hole still is (`holeI->collideSimple( aHead )`, below, which nothing then lets the copper's clearance skip)
+        let flashed = self.rules.as_ref().is_none_or(|r| r.is_flashed_on(item, layers));
+        if !same && flashed {
             // `COLLISION_SEARCH_OPTIONS::m_useClearanceEpsilon` (default on): `rv - m_clearanceEpsilon`, the board's DRC epsilon (0.5 um)
             let clearance = self.clearance_between(rules, Side::Item(item), head, opts.use_epsilon);
             match shape.collides(&item_shape, clearance) {
@@ -1495,7 +1509,7 @@ mod tests {
     fn collision_ignores_same_net_and_excluded() {
         let mut n = Node::new();
         let rules = rules();
-        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(Nm::ZERO, Nm::ZERO), shape: Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0 }));
+        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(Nm::ZERO, Nm::ZERO), shape: Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let shape = Shape::Stadium { a: p(Nm::ZERO, Nm::ZERO), b: p(mm(1.0), Nm::ZERO), r: mm(0.1) };
         // Same net as the pad: must not collide.
         assert!(n.first_colliding(&shape, &net_of("GND"), LayerRange::single(0), &rules, &[]).is_none());
@@ -1509,7 +1523,7 @@ mod tests {
     #[test]
     fn nearest_anchor_finds_pad_within_threshold() {
         let mut n = Node::new();
-        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
+        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let hit = n.nearest_anchor(p(mm(1.05), mm(1.0)), LayerRange::single(0), mm(0.2), None);
         assert_eq!(hit.map(|(_, p)| p), Some(p(mm(1.0), mm(1.0))));
         assert!(n.nearest_anchor(p(mm(5.0), mm(5.0)), LayerRange::single(0), mm(0.2), None).is_none());
@@ -1523,7 +1537,7 @@ mod tests {
         // followed the table's iteration order would differ from round to round
         for _ in 0..40 {
             let mut n = Node::new();
-            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
+            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
             n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(mm(1.0), mm(1.0)), b: p(mm(3.0), mm(1.0)), width: mm(0.2), source_track: None, locked: false }));
             assert_eq!(n.nearest_anchor(p(mm(1.1), mm(1.0)), LayerRange::single(0), mm(0.5), None).map(|(id, _)| id), Some(pad));
         }
@@ -1544,7 +1558,7 @@ mod tests {
     }
 
     fn pad_item(net: &str, c: Point, r: Nm) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false, rule: 0 })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false, rule: 0, anchor_points: Vec::new() })
     }
 
     /// D12: `NearestObstacle` is the first hull the line enters, not the item it overlaps most.

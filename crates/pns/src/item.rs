@@ -85,6 +85,10 @@ pub struct Solid {
     /// The number of its board item to the world's rule resolver ([`crate::rule_resolver::RuleResolver::rule_of`]): `from_ir` gives every pad,
     /// keepout triangle and copper text one. `0` is none of its own (a solid a test makes, the board edge), and the resolver goes by `source`.
     pub rule: u32,
+    /// `SOLID::SetAnchorPoints( aItem->GetConnectionPoints() )` (`syncGraphicalItem`): where a route joins a graphic on copper -- a line's ends, an
+    /// arc's ends and middle, a polygon's corners, a filled shape's centre. Empty for everything else, whose one anchor is `pos`
+    /// (`SOLID::Anchor`: `m_anchorPoints.empty() ? m_pos : m_anchorPoints[n]`).
+    pub anchor_points: Vec<Point>,
 }
 
 impl Solid {
@@ -93,6 +97,24 @@ impl Solid {
 
     /// The `source` prefix of a triangle of a keepout rule area ([`crate::from_ir`]'s `syncZone`): `keepout:<zone id>#<triangle>`.
     pub const KEEPOUT_SOURCE: &'static str = "keepout:";
+
+    /// The `source` prefix of a graphic on copper ([`crate::from_ir`]'s `syncGraphicalItem`, `syncDimension`, `syncBarcode`, a table's
+    /// `syncTextItem`): `graphic:<id>#<piece>`.
+    pub const GRAPHIC_SOURCE: &'static str = "graphic:";
+
+    /// A graphic on copper: a board's or a footprint's shape, a text box, a dimension, a barcode or a table on a copper layer.
+    pub fn is_graphic(&self) -> bool {
+        self.source.starts_with(Self::GRAPHIC_SOURCE)
+    }
+
+    /// The `source` prefix of a copper graphic that is not routable: a dimension (`syncDimension`), a barcode (`syncBarcode`), a table
+    /// (`syncTextItem`): `obstacle:<id>#<piece>`.
+    pub const OBSTACLE_SOURCE: &'static str = "obstacle:";
+
+    /// A dimension, barcode or table on copper: an obstacle of no net with the ordinary copper clearance, not routable.
+    pub fn is_obstacle(&self) -> bool {
+        self.source.starts_with(Self::OBSTACLE_SOURCE)
+    }
 
     /// A triangle of a keepout rule area (`syncZone`: `solid->SetParent( aZone )`, `SetRoutable( false )`). What it keeps out, and from what
     /// clearance, is the rule resolver's ([`crate::rule_resolver::RuleResolver::keepout`]).
@@ -105,10 +127,11 @@ impl Solid {
         self.source.starts_with(Self::TEXT_SOURCE)
     }
 
-    /// `ITEM::IsRoutable()`: a pad is; the board outline (`syncGraphicalItem`) and a copper text (`syncTextItem`: `SetRoutable( false )`) are
+    /// `ITEM::IsRoutable()`: a pad and a copper shape are; the board outline (`syncGraphicalItem`), a copper text (`syncTextItem`: `SetRoutable( false )`),
+    /// a dimension, a barcode and a table are
     /// not -- nothing joins to them, nothing starts or ends a route on them, nothing picks them.
     pub fn routable(&self) -> bool {
-        !self.edge && !self.is_text() && !self.is_keepout()
+        !self.edge && !self.is_text() && !self.is_keepout() && !self.is_obstacle()
     }
 }
 
@@ -330,6 +353,7 @@ impl Item {
     pub fn anchors(&self) -> Vec<Point> {
         match self {
             Item::Solid(s) if !s.routable() => Vec::new(),
+            Item::Solid(s) if !s.anchor_points.is_empty() => s.anchor_points.clone(),
             Item::Solid(s) => vec![s.pos],
             Item::Segment(s) => vec![s.a, s.b],
             Item::Arc(a) => vec![a.arc.start, a.arc.end],

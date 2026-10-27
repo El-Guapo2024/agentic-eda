@@ -566,7 +566,8 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 /** `settings`: the Interactive Router Settings (`components/RouterSettingsDialog.tsx`, `kicad-port/routerSettings.ts`) --
  * the mode, shove vias, jump over obstacles, remove redundant tracks, optimize pad connections, allow DRC violations,
  * free angle mode, fix all segments and the optimizer effort, sent as the backend's `ROUTING_SETTINGS` for this session. */
-export function routeStart(x: Nm, y: Nm, layer: string, width: Nm, settings: RouterSettings): Promise<RoutePreview> {
+/** `width` undefined: the width list is on "use net class" (`UseNetClassTrack()`), and the server takes the start net's width through the rules (`ImportSizes`). */
+export function routeStart(x: Nm, y: Nm, layer: string, width: Nm | undefined, settings: RouterSettings): Promise<RoutePreview> {
   return postJson("/api/route/start", { x, y, layer, width, settings: routerSettingsToWire(settings) });
 }
 

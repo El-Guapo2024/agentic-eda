@@ -28,13 +28,16 @@ import { advanceRouteQueue } from "./routeQueue";
  * RouterSettingsDialog.tsx) -- read fresh at the start of every session,
  * same as every other "current pick" this app's route/via tools read
  * (track width, via preset). */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null): Promise<boolean> {
+/** `width` undefined: the server's `ImportSizes` width of the start net (the width list on "use net class"), which the reply carries. */
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number | undefined, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null): Promise<boolean> {
   const preview = await routeStart(x, y, layer, width, settings);
+  // `syncZone`'s warning (KiCad's `KIDIALOG`): a rule area the router cannot handle is left out of its world
+  for (const w of preview.warnings ?? []) dispatch({ type: "TOAST", message: w, kind: "info" });
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
     return false;
   }
-  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined };
+  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width: preview.width ?? width ?? 250_000, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined };
   dispatch({ type: "SET_DRAW_STATE", draw });
   return true;
 }

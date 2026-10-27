@@ -1135,7 +1135,7 @@ mod tests {
         use crate::item::Solid;
         let mut node = Node::new();
         let seg = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(1_000_000, 0), width: mm(0.2), source_track: Some(("t".into(), 0)), locked: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(3_000_000, 0), shape: Shape::Circle { c: p(3_000_000, 0), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(3_000_000, 0), shape: Shape::Circle { c: p(3_000_000, 0), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let dragger = Dragger::start(&node, p(1_000_000, 0), seg).unwrap();
         assert_eq!((dragger.kind, dragger.grabbed_index), (DragKind::Corner, 1));
         (node, dragger)
@@ -1387,7 +1387,7 @@ mod tests {
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: mm(-3.0), y: Nm::ZERO }, b: Point { x: Nm::ZERO, y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
         let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(4.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(4.0), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(4.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(4.0), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let rules = rules();
         let onto_the_pad = Point { x: mm(4.0), y: mm(0.3) };
         for mode in [Mode::Walkaround, Mode::Shove] {
@@ -1416,7 +1416,7 @@ mod tests {
         use crate::item::Solid;
         let mut node = Node::new();
         let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let rules = rules();
         let mut dragger = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id).unwrap();
         let settings = RoutingSettings::default();
@@ -1487,7 +1487,7 @@ mod tests {
         use crate::layer::LayerRange;
         let mut node = Node::new();
         let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
         let mut dragger = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, seg_id).unwrap();
@@ -1546,7 +1546,7 @@ mod tests {
         let ids = add_track(&mut node, "SIG", "t", &[p(0, 0), p(4_000_000, 0), p(4_000_000, 5_000_000)]);
         node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(2_000_000, 800_000), diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaM".into()), locked: false, is_virtual: false }));
         // a pad above the line's path: the head is walked around it there, so it still collides with the frame's world
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(2_000_000, 3_600_000), shape: Shape::Circle { c: p(2_000_000, 3_600_000), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(2_000_000, 3_600_000), shape: Shape::Circle { c: p(2_000_000, 3_600_000), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
         let mut dragger = Dragger::start(&node, p(2_000_000, 0), ids[0]).unwrap();
@@ -1645,7 +1645,7 @@ mod tests {
     fn starting_on_a_pad_refuses() {
         use crate::item::Solid;
         let mut node = Node::new();
-        let pad_id = node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0 }));
+        let pad_id = node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         assert!(Dragger::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, pad_id).is_none());
     }
 }

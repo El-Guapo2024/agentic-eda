@@ -1113,8 +1113,8 @@ re-read against KiCad 8303b2ad, and each fix has a test that failed first.
   (`from_ir::add_keepouts`, `Solid::KEEPOUT_SOURCE`); `IsKeepout`'s `checkKeepout` keeps out tracks or vias by the area's flags (a pad has no
   board item to the router, so never), as an exact boundary (clearance 0); its hull is the class clearance (`GetClearance` of the zone item); in
   `AssembleCluster` it touches only what it keeps out. The triangles are `POLYGON_TRIANGULATION::TesselatePolygon`'s ear cutting
-  (`src/triangulation.rs`). **Differs:** `subdividePolygon` / `splitPolygon` are not ported (an outline the ear cutting cannot finish is one solid
-  of its outline) and an area's holes are not cut out of it. Tests: `a_keepout_rule_area_blocks_tracks` (the route goes round; kicad-cli: no
+  (`src/triangulation.rs`). **Differs:** `subdividePolygon` / `splitPolygon` are not ported (an outline the ear cutting cannot finish is
+  left out with KiCad's warning since Stage 16, R3-9; the holes are cut out since R3-5). Tests: `a_keepout_rule_area_blocks_tracks` (the route goes round; kicad-cli: no
   `items_not_allowed`, and the straight route is one), `a_vias_only_keepout_lets_tracks_through_but_not_vias`.
 - **R-3, a pair's legs are simplified.** `DIFF_PAIR_PLACER::FixRoute`'s `topo.SimplifyLine( &lineP ); topo.SimplifyLine( &lineN )`:
   `Router::simplify_pair_legs` runs the single-track `simplifyNewLine` merge (findings p5 F2-6) on the pair's legs at the commit (finish, Esc,
@@ -1131,6 +1131,71 @@ re-read against KiCad 8303b2ad, and each fix has a test that failed first.
   Stage 14 sentence "Walk around mode is unchanged" was wrong and is corrected there. Tests: `walkaround_restore_shows_the_original_line`,
   `shove_restore_shows_the_line_before_the_optimizer`.
 - **R-8** is the connectivity crate's (`crates/connectivity/src/dangling.rs`: the integer accuracy, the integer `getMinDist`, true arcs).
+
+## Stage 16 -- round-3 router findings (branch `task-r3-router`, 2026-10-27)
+
+The findings of `findings/round3/r3-route-rules.md` (R3-1 .. R3-11), each re-read against `pns_kicad_iface.cpp` (`SyncWorld`, `syncZone`,
+`syncGraphicalItem`, `syncDimension`, `syncBarcode`, `syncTextItem`, `ImportSizes`, `IsFlashedOnLayer`, `getBoardItem`), `pns_router.cpp`
+(`isStartingPointRoutable`), `pns_item.cpp` (`collideSimple`), `router_tool.cpp` (`handleLayerSwitch`) and `footprint.cpp`
+(`MapPadNumbersToNetTieGroups`) at 8303b2ad. Each fix has a test that failed without it; the highs and R3-4 have kicad-cli proofs under
+`EDA_SLOW_TESTS=1` in `tests/rules_kicad.rs`.
+
+- **R3-1, a keepout on several copper layers.** `syncZone` adds the triangles on each copper layer of `GetLayerSet()`; `add_keepouts` now does
+  (`Zone::copper_layers`), so an area on F.Cu and B.Cu or on `*.Cu` keeps every one of them. Tests: `a_keepout_is_an_obstacle_on_every_copper_layer_of_its_set`,
+  `a_keepout_on_both_copper_layers_blocks_a_route_on_the_back` (two through-hole pads, the route on B.Cu goes round; kicad-cli: no `items_not_allowed`,
+  and the straight B.Cu route is one).
+- **R3-5, a keepout's holes.** `CacheTriangulation` triangulates the outline with its holes; `keepout_triangles` fractures the outline and its holes
+  (`ShapePolySet::fracture`) and cuts the one chain into ears. **Differs:** KiCad first tries `TesselatePolygon( const POLYGON& )`'s own
+  `eliminateHoles`; the triangles differ, the area they cover does not. Tests: `a_keepouts_hole_is_left_open` (84 of 100 mm2 covered),
+  `a_route_may_cross_the_hole_of_a_keepout` (straight across; kicad-cli: nothing, and a track across the area's body is flagged).
+- **R3-9, a malformed keepout.** An outline the ear cutting cannot finish is left out of the world, as `!IsTriangulationUpToDate()` does, with
+  KiCad's words ("Rule area 'ANT' on F.Cu and B.Cu is malformed." and the dialog's detail, `RuleResolver::warnings`), which `/api/route/start`
+  returns and the studio shows as a toast (KiCad: a `KIDIALOG`). Test: `a_malformed_keepout_is_left_out_with_a_warning`.
+- **R3-2, copper graphics.** `SyncWorld` syncs `m_board->Drawings()` and each footprint's `GraphicalItems()`; `from_ir::add_copper_graphics` now
+  adds, on their copper layer: a board shape (`syncGraphicalItem`: one solid per effective shape, of the shape's net, routable, anchored at
+  `GetConnectionPoints()` -- `Solid::anchor_points`, `Solid::GRAPHIC_SOURCE`), a footprint's copper shape (of its footprint, so a net tie's bridge is
+  in the tie: `IsInNetTie`), a text box's border (`PCB_TEXTBOX` as a `PCB_SHAPE`), a dimension's lines and text (`syncDimension`), a barcode's turned
+  box (`syncBarcode`), a table's box grown by half its widest rule (`syncTextItem` of a `PCB_TABLE`), and a footprint's copper texts (`syncTextItem`,
+  GAPS 7's old "Left"). The last four are `Solid::OBSTACLE_SOURCE` / texts: not routable, of no net. **Differs:** a dimension's and a barcode's text
+  is the box of its glyphs; a barcode's printed text is left out; a rounded rectangle on copper is its square corners. Tests:
+  `copper_graphics_are_solids_on_their_layer`, `a_footprints_copper_shape_is_of_its_footprint`, `a_copper_polygon_is_an_obstacle` (the route keeps
+  the clearance), `a_copper_shape_with_a_net_is_an_obstacle_to_other_nets_and_an_end_for_its_own` (a GND route ends on the GND polygon's centre;
+  kicad-cli: nothing), `kicads_boards_with_copper_graphics_have_them_in_the_router_world` (the 20 boards of `qa/data/pcbnew` with copper graphics).
+  *kicad-cli 10.99 reports no track against a copper graphic on boards this small -- not the straight track through the polygon, nor two crossing
+  tracks of two nets -- while it does on KiCad's `simple.kicad_pcb`; so for the no-net polygon the router-side gap is the proof, not kicad-cli.*
+- **R3-6, Margin.** `syncGraphicalItem`'s `Edge_Cuts || Margin` and `isEdge`'s `IsOnLayer( Margin )`: a board graphic on Margin is a board edge on
+  every copper layer (`from_ir::add_margin`, `margin:<n>`), kept at the copper-to-edge clearance from its stroke's edge (it keeps its width;
+  `SetWidth( 0 )` is Edge.Cuts'). **Differs:** a footprint's Margin graphics are not read. Tests: `a_margin_line_is_an_edge`,
+  `a_margin_line_holds_a_route_off_as_an_edge` (kicad-cli: no `copper_edge_clearance`; the straight route is one).
+- **R3-3, the start width.** `ImportSizes` with `UseNetClassTrack()`: `settings::import_sizes` asks `CT_WIDTH` of a dummy track of the start item's
+  net on the start layer (`RuleResolver::query_constraint`, `EvalRules`), the larger of it and the board's minimum width, else the current (Default)
+  width; `Router::import_sizes` picks the start item as `start` does. `/api/route/start` without a width starts there and replies with `width`; the
+  studio sends no width while the width list is on its first entry, the net class's (`chosenTrackWidth`, `UseNetClassTrack()`: Canvas.tsx's
+  route tool, Route Selected / Autoroute). Change Track Width and Convert to Tracks keep `GetCurrentTrackWidth()`, as KiCad's do (not
+  `ImportSizes`). Tests: `a_route_takes_the_start_nets_class_width` (a Power class of 0.5 mm; a `.kicad_dru` `track_width (opt 0.6mm)` wins;
+  kicad-cli under a 0.5 mm minimum: nothing for the route, `track_width` for the Default width), `route_api`'s
+  `a_start_without_a_width_takes_the_nets_class_width`, `routerVia.test.ts`.
+- **R3-4, the pair's and the via's sizes.** `import_sizes` also asks `CT_WIDTH` of the track and its coupled one, `CT_DIFF_PAIR_GAP` (gap and via
+  gap), `CT_VIA_DIAMETER` / `CT_VIA_HOLE` of a dummy via (over the board's minimums) and `CT_HOLE_TO_HOLE` of two dummy vias on no layer and of the
+  via and its coupled one; `DpSizes::import` takes the pair's from it, and `Router::start_diff_pair` checks the gap against the board's minimum
+  clearance first (`isStartingPointRoutable`). A via armed without a size (`/api/route/via`) is `handleLayerSwitch`'s: `VIA_DIAMETER_CONSTRAINT` /
+  `HOLE_SIZE_CONSTRAINT` of a dummy via of the route's net, type and span (`RuleResolver::via_size`), the studio sending none on the net class's
+  entry or for a microvia (`chosenViaSize`). Tests: `a_custom_rule_sets_the_pairs_gap_and_width_and_the_via`,
+  `a_pair_routed_at_the_rules_sizes_passes_kicad_clis_checks` (0.3 mm at 0.35 mm from a rule; kicad-cli: no `track_width`, `diff_pair_gap` or
+  `clearance`, and the class's 0.2 mm pair is a `track_width`; kicad-cli 10.99 reported no `diff_pair_gap` on that board even for a pair under
+  the rule's minimum, so the gap is held by the test, not by it).
+- **R3-7, unflashed layers.** `collideSimple`'s `!IsFlashedOnLayer( this, aHead->Layers() )` -> `clearance = -1`: a board pad or via that removes
+  its unconnected layers (`eda_connectivity::flash::flashed_layers`, the layers Remove Unused Pads keeps) has no copper on the others to the router
+  (`RuleResolver::is_flashed_on`), its hole still collides at `max( HOLE_CLEARANCE, CLEARANCE )`, and the hull it is walked round there is its
+  hole's (`VIA::Hull`'s `HullForHole`; a pad's too, since its copper is no obstacle there). Test: `an_unflashed_via_is_its_hole_on_that_layer`.
+- **R3-8, the start's refusals.** `isStartingPointRoutable` walks `QueryHoverItems( aWhere )`: `Router::start_refusal` takes the items under the
+  start in the world's order, passes over the board edge, stops at a routable one, and otherwise names the last: "Cannot start routing from a
+  non-plated hole.", "Rule area '%s' disallows tracks." / "Rule area disallows tracks." (any keepout, one of vias only too), "Cannot start
+  routing from a text item.". It runs in every mode before the dot of track. Test: `a_start_inside_a_rule_area_or_on_a_text_says_so`.
+- **R3-10, the dummy via's layer.** `getBoardItem`'s `m_dummyVias[aIdx].SetLayer( aBoardLayer )`: the dummy via's `A.Layer` is the layer asked
+  about. Test: `a_rule_on_a_vias_layer_reads_the_layer_asked_about`.
+- **R3-11, net-tie groups.** `MapPadNumbersToNetTieGroups`' backslash escape (`net_tie_group_pads`), and `IsNetTieExclusion`'s net codes: a
+  head of no net matches a pad of no net. Tests: `net_tie_groups_read_an_escaped_comma`, `a_no_net_head_is_excused_at_a_no_net_pad_of_a_net_tie`.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

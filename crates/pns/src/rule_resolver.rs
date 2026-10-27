@@ -118,6 +118,8 @@ pub enum SideKind {
 #[derive(Clone, Debug)]
 pub struct Keepout {
     pub zone_id: String,
+    /// `GetZoneName()`: empty for an area with no name.
+    pub name: String,
     pub tracks: bool,
     pub vias: bool,
     pub pads: bool,
@@ -248,6 +250,11 @@ pub struct RuleResolver {
     /// hole clearances too), and every hole, physical or edge rule.
     max_hole_clearance: Nm,
     cache: RefCell<FnvMap<(Key, Key, bool), Nm>>,
+    /// What building the world had to tell the user ([`Self::warnings`]).
+    warnings: Vec<String>,
+    /// The layers each pad and via that removes its unconnected layers has its copper on (`PAD::FlashLayer`, `PCB_VIA::FlashLayer`), by pad id
+    /// and via id: [`Self::is_flashed_on`].
+    flashed: HashMap<String, Vec<i32>>,
 }
 
 impl std::fmt::Debug for RuleResolver {
@@ -269,6 +276,38 @@ fn hole_depth(copper: &Shape, hole: &Shape) -> Nm {
         (Shape::RoundRect { x0, y0, x1, y1, r }, _) => ((hx0 - *x0).min(*x1 - hx1).min(hy0 - *y0).min(*y1 - hy1) - *r).max(Nm::ZERO),
         _ => Nm::ZERO,
     }
+}
+
+/// `FOOTPRINT::MapPadNumbersToNetTieGroups`' pad numbers: each group split at its commas, a backslash keeping the character after it (`case '\\':
+/// esc = true;`, so `\,` is a comma of a pad number), each number trimmed and kept when it is not empty (`processPad`).
+fn net_tie_group_pads(groups: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for group in groups {
+        let (mut esc, mut pad) = (false, String::new());
+        let mut process = |pad: &str| {
+            let pad = pad.trim();
+            if !pad.is_empty() {
+                out.push(pad.to_string());
+            }
+        };
+        for ch in group.chars() {
+            if esc {
+                esc = false;
+                pad.push(ch);
+                continue;
+            }
+            match ch {
+                '\\' => esc = true,
+                ',' => {
+                    process(&pad);
+                    pad.clear();
+                }
+                _ => pad.push(ch),
+            }
+        }
+        process(&pad);
+    }
+    out
 }
 
 /// A net's name as the rules know it: `None` for no net and for [`crate::item::not_a_net`].
@@ -322,7 +361,7 @@ impl RuleResolver {
             for z in rt.zones.iter().filter(|z| z.is_rule_area && (z.keepout_tracks || z.keepout_vias || z.keepout_pads || z.keepout_copper_pour || z.keepout_footprints)) {
                 ids.insert(format!("{}{}", Solid::KEEPOUT_SOURCE, z.id), items.len() as u32);
                 items.push(rb.zone_item_of(z));
-                let keepout = Keepout { zone_id: z.id.clone(), tracks: z.keepout_tracks, vias: z.keepout_vias, pads: z.keepout_pads, footprints: z.keepout_footprints, parent_footprint: z.parent_footprint.clone() };
+                let keepout = Keepout { zone_id: z.id.clone(), name: z.name.clone(), tracks: z.keepout_tracks, vias: z.keepout_vias, pads: z.keepout_pads, footprints: z.keepout_footprints, parent_footprint: z.parent_footprint.clone() };
                 info.push(SolidInfo { keepout: Some(keepout), special: true, ..Default::default() });
             }
         }
@@ -330,11 +369,11 @@ impl RuleResolver {
         let mut net_ties: HashMap<String, Vec<NetTiePad>> = HashMap::new();
         if let Some(d) = &design.drawings {
             for e in d.footprint_extras.iter().filter(|e| !e.net_tie_pad_groups.is_empty()) {
-                let grouped: Vec<&str> = e.net_tie_pad_groups.iter().flat_map(|g| g.split(',').map(str::trim)).filter(|n| !n.is_empty()).collect();
+                let grouped = net_tie_group_pads(&e.net_tie_pad_groups);
                 let pads = board
                     .pads
                     .iter()
-                    .filter(|p| p.footprint_ref == e.id && grouped.contains(&p.number.as_str()))
+                    .filter(|p| p.footprint_ref == e.id && grouped.contains(&p.number))
                     .map(|p| {
                         let idx: Vec<i32> = p.layers.iter().filter_map(|l| layer_index(l)).collect();
                         let layers = match (idx.iter().min(), idx.iter().max()) {
@@ -374,13 +413,49 @@ impl RuleResolver {
                     _ => false,
                 }
         });
-        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, cache: RefCell::new(FnvMap::default()) }
+        RuleResolver { engine, layer_names, items, info, ids, extra: RefCell::new(FnvMap::default()), net_ties, geometry, plain, net_rules: rules.clone(), max_clearance, max_hole_clearance, cache: RefCell::new(FnvMap::default()), warnings: Vec::new(), flashed: HashMap::new() }
     }
 
     /// The worst clearance anything of this board can ask for (`NODE::GetMaxClearance`, without the epsilon): how far a collision search
     /// has to look.
     pub fn max_clearance(&self) -> Nm {
         self.max_clearance
+    }
+
+    /// What `SyncWorld` told the user while it built the world: a rule area the router cannot handle (`syncZone`'s `KIDIALOG`: "%s is malformed.").
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// The flashed layers of the board's pads and vias that remove their unconnected layers ([`eda_connectivity::flash::flashed_layers`]).
+    pub fn set_flashed(&mut self, flashed: &eda_connectivity::flash::Flashed) {
+        let index = |names: &Vec<String>| -> Vec<i32> { names.iter().filter_map(|n| self.layer_names.iter().position(|l| l == n).map(|i| i as i32)).collect() };
+        let map: HashMap<String, Vec<i32>> = flashed.pads.iter().chain(flashed.vias.iter()).map(|(id, names)| (id.clone(), index(names))).collect();
+        self.flashed = map;
+    }
+
+    /// `PNS_KICAD_IFACE_BASE::IsFlashedOnLayer( aItem, aLayer )` (the range form): is the item's copper on some layer of `layers` it spans? A
+    /// board's via or pad that removes its unconnected layers (`via->FlashLayer( .. )`, `pad->FlashLayer( .. )` of a layer of the
+    /// intersection) only on the layers it keeps; everything else -- a via the router made (`ConnectsLayer`), a track, a pad that keeps all its
+    /// layers -- on every layer it is on (r3 R3-7). Where it is not, its copper is no obstacle (`collideSimple`: `clearance = -1`) and a via
+    /// is its hole (`VIA::Hull`: `HullForHole`).
+    pub fn is_flashed_on(&self, item: &Item, layers: LayerRange) -> bool {
+        if self.flashed.is_empty() {
+            return true;
+        }
+        let id = match item {
+            Item::Via(v) => v.source_via.as_deref(),
+            Item::Solid(s) if !s.edge => Some(s.source.as_str()),
+            _ => None,
+        };
+        let Some(on) = id.and_then(|id| self.flashed.get(id)) else { return true };
+        let (lo, hi) = (item.layers().start().max(layers.start()), item.layers().end().min(layers.end()));
+        on.iter().any(|&l| l >= lo && l <= hi)
+    }
+
+    /// Adds a warning to [`Self::warnings`].
+    pub fn warn(&mut self, message: String) {
+        self.warnings.push(message);
     }
 
     /// The number `from_ir` gives the solid of `source` (`Solid::rule`): a pad's id, `keepout:<zone id>`, a copper text's source; `0` when the
@@ -402,6 +477,27 @@ impl RuleResolver {
         let id = self.items.len() as u32;
         self.items.push(Rc::new(it));
         self.info.push(SolidInfo { special: true, ..Default::default() });
+        self.ids.insert(source.to_string(), id);
+        id
+    }
+
+    /// A graphic's board item (`syncGraphicalItem`'s `PCB_SHAPE` / `PCB_TEXTBOX`, `syncDimension`'s and `syncBarcode`'s items, `syncTextItem`'s table): an item
+    /// of `net` (none: no net) on its copper layer, of the footprint `footprint` when it is one's (`GetParentFootprint()`, which a net tie's bridge is
+    /// [`Self::is_in_net_tie`] by), numbered for its solids. `class` is what the rules see it as (`A.Type`).
+    pub fn add_graphic(&mut self, source: &str, layer: i32, net: Option<&str>, footprint: Option<&str>, class: Class) -> u32 {
+        if let Some(&id) = self.ids.get(source) {
+            return id;
+        }
+        let layer = self.layer_name(layer).unwrap_or("F.Cu").to_string();
+        let mut it = RuleItem::new(source.to_string(), class);
+        it.layers = vec![layer.clone()];
+        it.layer = Some(layer.clone());
+        it.net = net.unwrap_or("").to_string();
+        it.set("Net", Prop::Enum(it.net.clone()));
+        it.set("Layer", Prop::Layer(layer));
+        let id = self.items.len() as u32;
+        self.items.push(Rc::new(it));
+        self.info.push(SolidInfo { special: true, footprint: footprint.map(str::to_string), ..Default::default() });
         self.ids.insert(source.to_string(), id);
         id
     }
@@ -462,7 +558,8 @@ impl RuleResolver {
         let Item::Solid(s) = colliding else { return false };
         let Some(pads) = self.footprint_of(s).and_then(|fp| self.net_ties.get(fp)) else { return false };
         let probe = Shape::Circle { c: pos, r: Nm::ZERO };
-        pads.iter().any(|p| p.net.is_some() && p.net == *net && p.layers.overlaps_layer(layer) && p.shape.collides(&probe, DRC_EPSILON).is_some())
+        // `aTrackNetCode == pad->GetNetCode()`: net codes, so a head of no net matches a pad of no net (r3 R3-11)
+        pads.iter().any(|p| net_name(&p.net) == net_name(net) && p.layers.overlaps_layer(layer) && p.shape.collides(&probe, DRC_EPSILON).is_some())
     }
 
     fn layer_name(&self, layer: i32) -> Option<&str> {
@@ -548,7 +645,10 @@ impl RuleResolver {
             let mut it = RuleItem::new("router_via", Class::Via);
             it.net = net_name(net);
             it.layers = copper();
-            it.layer = it.layers.first().cloned();
+            // `m_dummyVias[aIdx].SetLayer( aBoardLayer )`: `PCB_VIA::SetLayer` is `Padstack().Drill().start = aLayer`, so `GetLayer()` -- a rule's
+            // `A.Layer` -- is the layer being asked about (r3 R3-10)
+            it.layer = Some(layer.to_string());
+            it.set("Layer", Prop::Layer(layer.to_string()));
             it.position = pos;
             it.via_type = Some("Through");
             it.has_hole = true;
@@ -581,7 +681,7 @@ impl RuleResolver {
     /// area on a copper layer are; the board edge is not.
     fn is_copper(&self, side: &Side, item: &RuleItem) -> bool {
         match side {
-            Side::Item(Item::Solid(s)) => !s.edge && (item.on_copper() || self.keepout(s).is_some() || s.is_text()),
+            Side::Item(Item::Solid(s)) => !s.edge && (item.on_copper() || self.keepout(s).is_some() || s.is_text() || s.is_graphic() || s.is_obstacle()),
             _ => true,
         }
     }
@@ -613,6 +713,70 @@ impl RuleResolver {
             }
         }
         Some(c.value.min())
+    }
+
+    /// `PNS_PCBNEW_RULE_RESOLVER::QueryConstraint( aType, aItemA, aItemB, aPNSLayer )` for what is not a clearance (`ImportSizes`' `CT_WIDTH`,
+    /// `CT_DIFF_PAIR_GAP`, `CT_VIA_DIAMETER`, `CT_VIA_HOLE`, `CT_HOLE_TO_HOLE`): the min/opt/max of `EvalRules` of the two sides' board items
+    /// (`getBoardItem`: a dummy track or via of its net), on `layer` -- `None` is `UNDEFINED_LAYER`, which the rules see as no layer. `None` when
+    /// no rule gives the constraint; a rule of severity ignore (other than a tuning profile's) gives a minimum of -1 and nothing else.
+    pub fn query_constraint(&self, ctype: CType, a: &Side, b: Option<&Side>, layer: Option<i32>) -> Option<(eda_drc::constraints::MinOptMax, String)> {
+        let name = match layer {
+            Some(l) => Some(self.layer_name(l)?),
+            None => None,
+        };
+        let item_layer = name.or_else(|| self.layer_names.first().map(String::as_str)).unwrap_or("F.Cu");
+        let ia = self.board_item(a, item_layer);
+        let ib = b.map(|b| self.board_item(b, item_layer));
+        let c = self.engine.eval_rules(ctype, Some(&ia), ib.as_ref(), name, None);
+        if c.is_null() {
+            return None;
+        }
+        // `DRC_CONSTRAINT::GetName()`: the parent rule's name, else its own
+        let rule_name = c.parent.map_or_else(|| c.name.clone(), |i| self.engine.rules[i].name.clone());
+        if let Some(rule) = c.parent.map(|i| &self.engine.rules[i]) {
+            if rule.severity == Severity::Ignore && !(rule.is_implicit() && rule.implicit == ImplicitSource::TuningProfile) {
+                return Some((eda_drc::constraints::MinOptMax::with_min(-1), rule_name));
+            }
+        }
+        Some((c.value, rule_name))
+    }
+
+    /// The number of copper layers of the world.
+    pub fn layer_count(&self) -> usize {
+        self.layer_names.len()
+    }
+
+    /// `ROUTER_TOOL::handleLayerSwitch` with the net class's via sizes in use (`bds.UseNetClassVia() || viaType == VIATYPE::MICROVIA`): the
+    /// opt of `VIA_DIAMETER_CONSTRAINT` and of `HOLE_SIZE_CONSTRAINT` (`EvalRules( .., &dummyVia, nullptr, currentLayer )`) of a dummy via of the
+    /// route's net, of `kind`, over `span` (`SetLayerPair( currentLayer, targetLayer )`); each `None` when no rule gives it.
+    pub fn via_size(&self, net: &Net, kind: eda_model::via_extra::ViaKind, span: (i32, i32), layer: i32) -> (Option<Nm>, Option<Nm>) {
+        let Some(name) = self.layer_name(layer).map(str::to_string) else { return (None, None) };
+        let (lo, hi) = (span.0.min(span.1).max(0) as usize, span.0.max(span.1).max(0) as usize);
+        let layers: Vec<String> = self.layer_names.iter().enumerate().filter(|(i, _)| *i >= lo && *i <= hi).map(|(_, l)| l.clone()).collect();
+        let kind_name = match kind {
+            eda_model::via_extra::ViaKind::Through => "Through",
+            eda_model::via_extra::ViaKind::Blind => "Blind",
+            eda_model::via_extra::ViaKind::Buried => "Buried",
+            eda_model::via_extra::ViaKind::Micro => "Micro",
+        };
+        let mut it = RuleItem::new("router_via", Class::Via);
+        it.net = net_name(net).unwrap_or("").to_string();
+        it.layer = Some(name.clone());
+        it.layers = layers.clone();
+        it.via_type = Some(kind_name);
+        it.has_hole = true;
+        it.has_drilled_hole = true;
+        it.plated = true;
+        it.flashed = layers;
+        it.set("Net", Prop::Enum(it.net.clone()));
+        it.set("Layer", Prop::Layer(name.clone()));
+        it.set("Via Type", Prop::Enum(kind_name.to_string()));
+        let it = Rc::new(it);
+        let opt = |t: CType| {
+            let c = self.engine.eval_rules(t, Some(&it), None, Some(&name), None);
+            (!c.is_null()).then(|| Nm::new(c.value.opt()))
+        };
+        (opt(CType::ViaDiameter), opt(CType::HoleSize))
     }
 
     /// `QueryConstraint( CT_CLEARANCE, aItem, nullptr, aLayer )` of a track of `net` on `layer`: the clearance the rules ask of it alone
@@ -739,5 +903,16 @@ impl RuleResolver {
         }
         cache.insert(key, Nm::new(rv));
         Nm::new(rv)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// r3 R3-11: `MapPadNumbersToNetTieGroups` keeps the character after a backslash, splits at the other commas and trims.
+    #[test]
+    fn net_tie_groups_read_an_escaped_comma() {
+        assert_eq!(net_tie_group_pads(&["1, 2".into(), "A\\,B,3".into(), " ,".into()]), vec!["1", "2", "A,B", "3"]);
     }
 }

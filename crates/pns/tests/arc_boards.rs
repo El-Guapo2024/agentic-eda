@@ -46,7 +46,9 @@ fn violations(node: &Node, rules: &eda_model::BoardRules) -> BTreeMap<(String, S
     };
     let mut seen: HashSet<(ItemId, ItemId)> = HashSet::new();
     let mut out: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for (id, item) in node.iter() {
+    // seen from the tracks and vias: a pair of solids never changes, and a solid seen as the probe would not have a net tie's exclusion, which is
+    // the track's (`IsNetTieExclusion( track net, .., the tie's item )`: a track entering its pad across the tie's copper bridge)
+    for (id, item) in node.iter().filter(|(_, it)| !matches!(it, Item::Solid(_))) {
         for o in node.all_colliding(&item.shape(item.layers().start()), item.net(), item.layers(), rules, &[id]) {
             if !seen.insert((id.min(o.id), id.max(o.id))) {
                 continue;
