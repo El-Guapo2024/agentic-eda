@@ -1520,6 +1520,39 @@ pub struct RawGenerator {
     pub member_ids: Vec<String>,
 }
 
+/// A zone outline drawn with arcs: see `DrawingsSection::zone_arcs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneArcs {
+    /// The zone's id (`Zone::id`).
+    pub id: String,
+    /// Each ring's `(pts ..)` as the file wrote it, on one line: the outline, then the holes.
+    pub rings: Vec<String>,
+    /// [`ZoneArcs::shape_of`] of the zone as read: the rings stand while the zone still has this outline and these holes.
+    pub shape: u64,
+}
+
+impl ZoneArcs {
+    /// A hash of the zone's outline and holes (FNV-1a over the points), to tell whether they are the ones the rings were read with.
+    pub fn shape_of(zone: &Zone) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |v: i64| {
+            for b in v.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for ring in std::iter::once(&zone.outline).chain(zone.holes.iter()) {
+            eat(ring.len() as i64);
+            for p in ring {
+                eat(p.x.get());
+                eat(p.y.get());
+            }
+        }
+        h
+    }
+}
+
 /// One copper thieving zone: see `DrawingsSection::zone_thieving`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2660,6 +2693,11 @@ pub struct DrawingsSection {
     /// "no zone is a thieving zone".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub zone_thieving: Vec<ZoneThieving>,
+    /// The zones whose outline the file drew with arcs (`(pts .. (arc (start ..) (mid ..) (end ..)) ..)`, kept in the zone's `SHAPE_LINE_CHAIN` and written back as arcs by
+    /// `format( const ZONE* )`): the `(pts ..)` of each ring as the file had it, written back in place of the flattened points while the zone's outline and holes are
+    /// still the ones read ([`ZoneArcs::shape`]). Additive: absent in an older `design.json` reads as "no zone outline has arcs".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_arcs: Vec<ZoneArcs>,
     /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
     /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
     /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`

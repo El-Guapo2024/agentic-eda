@@ -43,6 +43,9 @@ pub(crate) struct ZoneArgs<'a> {
     /// A copper thieving zone's `(thieving ..)` settings (`DrawingsSection::zone_thieving`): the zone is written `(mode thieving)` with them, as KiCad 10 writes a
     /// `ZONE_FILL_MODE::COPPER_THIEVING` zone, unless it has become a hatched one since.
     pub thieving: Option<&'a str>,
+    /// The `(pts ..)` of each ring as the file drew it, with its arcs (`DrawingsSection::zone_arcs`), while the zone's outline and holes are still the ones read: written
+    /// in place of the points.
+    pub arc_rings: Option<&'a [String]>,
 }
 
 /// `PCB_IO_KICAD_SEXPR::formatLayers( layers, aEnumerateLayers, aIsZone )` for a zone: `(layers "F.Cu" "B.Cu")`. A zone on copper layers lists each of them
@@ -208,12 +211,19 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     writeln!(out, ")").unwrap();
 
     // `SHAPE_POLY_SET::POLYGON poly = aZone->Outline()->Polygon(0); for( const SHAPE_LINE_CHAIN& chain : poly )`: the outline, then each of its holes.
-    for ring in std::iter::once(&z.outline).chain(z.holes.iter().filter(|h| h.len() >= 3)) {
-        writeln!(out, "\t\t(polygon (pts").unwrap();
-        for p in ring {
-            writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
+    if let Some(rings) = a.arc_rings {
+        // The arcs as `format( const ZONE* )` writes them (`formatPolyPts`: `(arc (start ..) (mid ..) (end ..))` for each arc of the chain).
+        for pts in rings {
+            writeln!(out, "\t\t(polygon {pts})").unwrap();
         }
-        writeln!(out, "\t\t))").unwrap();
+    } else {
+        for ring in std::iter::once(&z.outline).chain(z.holes.iter().filter(|h| h.len() >= 3)) {
+            writeln!(out, "\t\t(polygon (pts").unwrap();
+            for p in ring {
+                writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
+            }
+            writeln!(out, "\t\t))").unwrap();
+        }
     }
 
     if !rule_area {

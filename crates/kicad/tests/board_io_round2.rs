@@ -525,3 +525,25 @@ fn an_imported_footprint_without_models_stays_without() {
     let out = export(&design, &model);
     assert!(!out.contains("(model "), "{out}");
 }
+
+/// r3 F10: a zone outline drawn with arcs (`issue22475`'s GND pour, `issue22826`'s round rule areas) is written back with its arcs, as `format( const ZONE* )` writes
+/// the chain; once the outline is edited, as points.
+#[test]
+fn a_zone_outline_keeps_its_arcs() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25)
+  (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+  (polygon (pts (xy 95 95) (xy 120 95) (arc (start 120 95) (mid 123.535534 96.464466) (end 125 100)) (xy 125 125) (xy 95 125))))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let zone = blocks(&out, "zone")[0].to_string();
+    assert!(zone.contains("(arc (start 120 95) (mid 123.535534 96.464466) (end 125 100))"), "{zone}");
+    let mut moved = design.clone();
+    for p in &mut moved.routing.as_mut().unwrap().zones[0].outline {
+        p.x += eda_model::units::mm(1.0);
+    }
+    let out = export(&moved, &model);
+    let zone = blocks(&out, "zone")[0].to_string();
+    assert!(!zone.contains("(arc ") && zone.contains("(xy 96 95)"), "an edited outline is its points: {zone}");
+}

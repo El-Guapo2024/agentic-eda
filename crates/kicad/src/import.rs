@@ -193,7 +193,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
-    let (zones, zone_thieving) = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
+    let (zones, zone_thieving, zone_arc_rings) = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
     notes.zone_fills = crate::zone_fills::scan_zone_fills(text);
     // The board's nets: those the file lists and every net an item names -- a pad, but also a track, a via or a zone (`PCB_IO_KICAD_SEXPR_PARSER::parseNet` makes a net of any
     // `(net "name")` it meets, and a KiCad 10 file lists none: a net that only copper uses, a pour with no pad on it, is a net of the board all the same).
@@ -294,6 +294,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let track_masks: Vec<eda_model::track_mask::TrackMask> = design.routing.iter().flat_map(|r| r.tracks.iter()).zip(track_masks).filter_map(|(t, m)| m.map(|m| eda_model::track_mask::TrackMask { id: t.id.clone(), ..m })).collect();
     if !track_masks.is_empty() {
         design.drawings.get_or_insert_with(Default::default).track_masks = track_masks;
+    }
+    // The zones drawn with arcs: their rings as the file had them, named by the ids the zones have just been given.
+    let zone_arcs: Vec<eda_model::ir::ZoneArcs> = design.routing.iter().flat_map(|r| r.zones.iter()).zip(zone_arc_rings).filter_map(|(z, rings)| rings.map(|rings| eda_model::ir::ZoneArcs { id: z.id.clone(), rings, shape: eda_model::ir::ZoneArcs::shape_of(z) })).collect();
+    if !zone_arcs.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).zone_arcs = zone_arcs;
     }
     // The thieving zones' settings, named by the ids the zones have just been given.
     let zone_thieving: Vec<eda_model::ir::ZoneThieving> = design.routing.iter().flat_map(|r| r.zones.iter()).zip(zone_thieving).filter_map(|(z, t)| t.map(|settings| eda_model::ir::ZoneThieving { id: z.id.clone(), settings })).collect();
@@ -2436,8 +2441,10 @@ fn import_outline(shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNo
 /// design: the scan of the file (`eda_kicad::zone_fills::scan_zone_fills`) is handed out in [`ImportNotes::zone_fills`] and kept beside `design.json` as the board's fills (KiCad's
 /// own, as saved), which is what kicad-cli's `pcb drc --refill-zones` replaces on the next Fill All Zones. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
-/// The zones, and for each the `(thieving ..)` settings of a copper thieving zone (`parseZONE`'s `T_thieving`: `SetFillMode( COPPER_THIEVING )`), in the same order.
-fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Zone>, Vec<Option<String>>) {
+/// The zones, and for each, in the same order, the `(thieving ..)` settings of a copper thieving zone (`parseZONE`'s `T_thieving`: `SetFillMode( COPPER_THIEVING )`)
+/// and the `(pts ..)` of its rings when they have arcs (`DrawingsSection::zone_arcs`; the zone's outline is their flattening, [`poly_points`]).
+#[allow(clippy::type_complexity)]
+fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Zone>, Vec<Option<String>>, Vec<Option<Vec<String>>>) {
     // Board-level zones, then each footprint's own (`forEachGeometryItem`
     // walks `footprint->Zones()` too; a footprint zone's points are stored
     // in board coordinates). The parent reference is recomputed exactly as
@@ -2458,6 +2465,7 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
     }
     let mut out = Vec::new();
     let mut thieving = Vec::new();
+    let mut arc_rings = Vec::new();
     for (z, parent) in all {
         // `SetIslandRemovalMode( ISLAND_REMOVAL_MODE::ALWAYS )` and priority 0 before parsing.
         let mut zone = Zone { parent_footprint: parent, ..Zone::default() };
@@ -2630,10 +2638,14 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         let fill = sexpr::find(z, "fill");
         let is_thieving = fill.and_then(|f| sexpr::find(f, "mode")).and_then(|m| sexpr::txt(m, 1)) == Some("thieving");
         thieving.push(fill.filter(|_| is_thieving).map(|f| sexpr::find(f, "thieving").map(|t| sexpr::to_text(&Sexpr::List(t.to_vec()))).unwrap_or_else(|| "(thieving)".to_string())));
+        // The rings that made the outline and holes above (those with three points or more), as the file wrote them, when one has an arc.
+        let rings: Vec<&[Sexpr]> = sexpr::find_all(z, "polygon").filter(|p| poly_points(p).is_some()).filter_map(|p| sexpr::find(p, "pts")).collect();
+        let has_arc = rings.iter().any(|pts| pts[1..].iter().any(|i| i.as_list().and_then(sexpr::tag) == Some("arc")));
+        arc_rings.push(has_arc.then(|| rings.iter().map(|pts| sexpr::to_text(&Sexpr::List(pts.to_vec()))).collect()));
         out.push(zone);
         refs.zones.push(ItemRef::of(z));
     }
-    (out, thieving)
+    (out, thieving, arc_rings)
 }
 
 /// Points of a `gr_poly`'s (or a zone's) `(pts ...)` list: `xy` entries verbatim, and an `(arc (start ..) (mid ..) (end ..))` of KiCad 9's polygons as the polyline
