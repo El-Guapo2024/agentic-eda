@@ -2,7 +2,7 @@
 // derived board and the fills are kept beside the design; the board shows the last fill, as KiCad does with auto-refill off; a zone never filled, or reshaped since, is drawn as an
 // outline (a zone moved keeps its fill moved, one edited in Zone Properties keeps it as it was). The scenarios: a board with nothing filled; B (the status bar says so while it runs, the toast says what filled and how long it took, the derived .kicad_pcb carries
 // kicad-cli's rings); an edit elsewhere leaves the fills, Zone Properties keep a zone's fill, a move carries it, a reshape empties that zone only, Undo giving it back; Fill Selected Zones and Unfill Selected Zones; Unfill
-// All Zones; the Zone Manager (the preview with a tab per layer of the zone, Auto-Assign Priorities on zones that overlap, its Refill zones box); the lock in Zone Properties;
+// All Zones; the Zone Manager (the preview with a tab per layer of the zone, Auto-Assign Priorities on zones that overlap, its Refill zones box); the lock in Zone Properties; a zone on no net kept on no net by Zone Properties' OK;
 // "Refill all zones before performing DRC" and the Plot dialog's "Check zone fills before plotting".
 // Run it in the page of a served board that has footprints placed and two copper pours of one net on the two outer layers (examples/mcu_board_30plus.yaml, placed and routed,
 // `eda board zone add --net GND --layer F.Cu --pts "2.9,5 28.3,5 28.3,29.2 2.9,29.2"` and the same on B.Cu) -- paste it into the Browser pane's javascript tool, or
@@ -221,6 +221,30 @@
       await undo();
       t(!((await state()).locked ?? []).includes(A.id), "Undo unlocks it");
       await select([]);
+    });
+
+    await scenario("Zone Properties on a copper zone on no net: <no net> is offered and OK keeps it on no net, with KiCad's warning", async (t) => {
+      const added = await post({ op: "add_zone", net: "", layer: A.layer, outline: [{ x: 5_000_000, y: 8_000_000 }, { x: 9_000_000, y: 8_000_000 }, { x: 9_000_000, y: 12_000_000 }, { x: 5_000_000, y: 12_000_000 }] });
+      t(added.ok, `a pour on no net is added (${added.message})`);
+      await sleep(800);
+      const z = (await zonesOf()).find((x) => !startZones.some((s0) => s0.id === x.id));
+      t(!!z && z.net === "", "it is on no net");
+      if (z) {
+        await select([z.id]);
+        await __eda.run("pcbnew.InteractiveEdit.properties");
+        await sleep(600);
+        const sel = tid("zone-net");
+        t(!!sel && sel.options[0]?.textContent === "<no net>" && sel.value === "", `the net list starts with <no net>, chosen (${sel && sel.value})`);
+        t(tid("zone-no-net-warning")?.textContent === "<no net> will result in an isolated copper island.", "the panel warns as KiCad's does");
+        tid("zone-ok").click();
+        await sleep(1200);
+        const after = (await zonesOf()).find((x) => x.id === z.id);
+        t(after?.net === "", `OK keeps the zone on no net (${after?.net})`);
+        await select([]);
+        await post({ op: "delete_zone", id: z.id });
+        await sleep(600);
+      }
+      t((await zonesOf()).length === startZones.length, "the pour is taken away again");
     });
 
     await scenario("Refill all zones before performing DRC and Check zone fills before plotting run kicad-cli's filler first and keep what it makes", async (t) => {
