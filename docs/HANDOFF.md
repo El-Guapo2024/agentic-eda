@@ -75,6 +75,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r6-editors-exports` | Round-6 editors/exports findings (`work/findings/round6/r6-editors-exports.md`): the simulator's dialogs (S6-1..6: include paths from the project, Plot Setup in SI via `SIM_VALUE`, Delete on the cursor's signal, DC sources as listed, explicit filter regexes, blank node choices), the 3D viewer (V6-1..9: the preview's wheel, pan step in 3D units, plot-settings defaults without stackup colours, fields from the fields, paste from the pad's layers and margin, colours, hotkeys, labels), design blocks (B6-1..5: `IsDirWritable`, "Root", Recently Used, existing library, Yes/No and titles), exports (X6-1 the IPC-D-356 message, X6-2 the backdrill log order) | 22 of 23 fixed; cargo check 0 warnings; eda-kicad, eda-kicad-engine, eda-cli tests 1383 passed 0 failed; web unit 2629/2629, typecheck clean; browser checks simulator, plot-exports, viewer3d, fp-models, design-blocks, library-tables all ok | D6-1 (drill charts by `kicad-cli pcb upgrade`) waits on the user; the Simulation Model dialog is a GAPS 34 entry, not ported (needs `SIM_MODEL`'s ~14.7k lines); a pad's paste margin from the board file is not in `/api/state`; `is_writable` sees no ACLs or read-only mounts |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
