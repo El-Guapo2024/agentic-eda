@@ -857,6 +857,7 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     }
     legacy_symbol_instances(&text, &design, &mut sheet_contents, &symbol_places);
     design.sheet_contents = (!sheet_contents.is_empty()).then_some(sheet_contents);
+    legacy_sheet_instances(&text, &mut design);
 
     Ok((design, model, notes))
 }
@@ -964,6 +965,57 @@ fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mu
             continue;
         }
         sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit });
+    }
+}
+
+/// The root's `(sheet_instances (path "/<sheet>/../" (page ..)) ..)` of a KiCad 6 / early 7 file (r2 B-M3), which holds the page of every sheet path: KiCad reads
+/// them with `SCH_IO_KICAD_SEXPR_PARSER::parseSchSheetInstances` (an empty page is "#": "Empty page numbers are not permitted"; a file older than 20221002 has
+/// no root uuid in front) and hands them to each sheet (`SCH_SHEET_LIST::UpdateSheetInstanceData`, `eeschema_helpers.cpp` for kicad-cli). A sheet on a screen
+/// shown once takes the page as its own (`SheetInstance::page`), one on a screen shown on several paths for that path (`SchExtras::sheet_pages`). The root's
+/// own `/` is page 1, and a page "1" is no page here, as for a sheet's own instances.
+fn legacy_sheet_instances(root_text: &str, design: &mut Design) {
+    let Ok(tree) = sexpr::parse(root_text) else { return };
+    let Some(root) = tree.as_list() else { return };
+    let Some(instances) = sexpr::find(root, "sheet_instances") else { return };
+    let root_uuid = uuid_of(root).unwrap_or_default();
+    let counts = eda_model::sheet_list::placement_counts(design);
+    for path in sexpr::find_all(instances, "path") {
+        let Some(path_str) = sexpr::txt(path, 1) else { continue };
+        let mut ids: Vec<String> = path_str.split('/').filter(|c| !c.is_empty()).map(String::from).collect();
+        if ids.first() == Some(&root_uuid) {
+            ids.remove(0);
+        }
+        let Some((sheet_id, parent)) = ids.split_last() else { continue };
+        let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map(|p| if p.is_empty() { "#" } else { p }).unwrap_or("#").to_string();
+        if page == "1" {
+            continue;
+        }
+        // the screen the sheet is drawn on: the root, else the screen of the placement `parent` ends at
+        let mut file: Option<String> = None;
+        let mut here = design.schematic.as_ref();
+        for id in parent {
+            let Some(placement) = here.and_then(|s| s.sheets.iter().find(|sh| &sh.id == id)) else {
+                here = None;
+                break;
+            };
+            file = Some(placement.file.clone());
+            here = design.sheet_contents.as_ref().and_then(|c| c.get(&placement.file));
+        }
+        if here.is_none() {
+            continue;
+        }
+        let shown_once = file.as_ref().is_none_or(|f| counts.get(f).copied().unwrap_or(1) <= 1);
+        let screen = match &file {
+            None => design.schematic.as_mut(),
+            Some(f) => design.sheet_contents.as_mut().and_then(|c| c.get_mut(f)),
+        };
+        let Some(screen) = screen else { continue };
+        let Some(sheet) = screen.sheets.iter_mut().find(|sh| &sh.id == sheet_id) else { continue };
+        if shown_once {
+            sheet.page = page;
+        } else {
+            screen.extras.sheet_pages.entry(sheet_id.clone()).or_default().insert(parent.join("/"), page);
+        }
     }
 }
 
@@ -1876,6 +1928,25 @@ mod tests {
         assert!(text("a/a.kicad_sch").contains("(property \"Sheetfile\" \"x.kicad_sch\""), "{}", text("a/a.kicad_sch"));
         assert!(text("root.kicad_sch").contains("(property \"Sheetfile\" \"b/b.kicad_sch\""));
         assert!(text("b/x.kicad_sch").contains("IN_B"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// r2 B-M3 (`parseSchSheetInstances`, `UpdateSheetInstanceData`): a KiCad 6 root's `(sheet_instances (path "/<sheet>/" (page "7")))` is the sheet's page, and an
+    /// empty page is "#".
+    #[test]
+    fn a_kicad_6_roots_sheet_instances_give_the_sheets_their_pages() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_sheet_instances_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sheet = |uuid: &str, file: &str, y: i32| format!("(sheet (at 100 {y}) (size 20 20) (uuid \"{uuid}\") (property \"Sheet name\" \"{file}\" (at 100 99 0)) (property \"Sheet file\" \"{file}.kicad_sch\" (at 100 121 0)))");
+        let root = format!("(kicad_sch (version 20211123) (generator eeschema) (uuid \"11111111-1111-1111-1111-111111111111\") (paper \"A4\") {} {} (sheet_instances (path \"/\" (page \"1\")) (path \"/21111111-1111-1111-1111-111111111111/\" (page \"7\")) (path \"/31111111-1111-1111-1111-111111111111/\" (page \"\"))))", sheet("21111111-1111-1111-1111-111111111111", "a", 100), sheet("31111111-1111-1111-1111-111111111111", "b", 200));
+        std::fs::write(dir.join("root.kicad_sch"), root).unwrap();
+        for f in ["a", "b"] {
+            std::fs::write(dir.join(format!("{f}.kicad_sch")), "(kicad_sch (version 20211123) (generator eeschema) (uuid \"41111111-1111-1111-1111-111111111111\") (paper \"A4\"))").unwrap();
+        }
+        let (design, _, _) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).unwrap();
+        let pages: Vec<(String, String)> = design.schematic.as_ref().unwrap().sheets.iter().map(|s| (s.name.clone(), s.page.clone())).collect();
+        assert_eq!(pages, [("a".to_string(), "7".to_string()), ("b".to_string(), "#".to_string())]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
