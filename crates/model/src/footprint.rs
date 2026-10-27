@@ -1026,8 +1026,12 @@ pub fn kicad_footprint_for(key: &str, reference: &str, value: Option<&str>) -> O
         _ => {
             // Generic headers -- same trailing-digit extraction `builtin`'s own fallback branch uses, since `key` here can be any of several spellings
             // ("PINHEADER-4", "PIN-HEADER-4", "1X04").
+            // The digits must be the header's count: "PINHEADER-4", or a name that ends in "1X<n>" ("PIN-HEADER-1X04", "1X04"). A name that only has "1X" or the prefix
+            // somewhere ("C-GROUP-1X-0603", "PIN-HEADER-STRAIGHT-2X03", "SOLDERWIREPAD-1X01-SMD-2.9X7.8MM#2") is not a one-row header (r3-board-io F6).
             let digits: String = key.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
-            if (key.starts_with("PINHEADER") || key.starts_with("PIN-HEADER") || key.contains("1X")) && !digits.is_empty() {
+            let stem = &key[..key.len() - digits.len()];
+            let one_row = stem == "PINHEADER-" || stem == "PIN-HEADER-" || stem == "1X" || stem.ends_with("-1X");
+            if one_row && !digits.is_empty() {
                 let n: u32 = digits.parse().ok()?;
                 Some(KicadFootprintRef::new("Connector_PinHeader_2.54mm", format!("PinHeader_1x{n:02}_P2.54mm_Vertical")))
             } else {
@@ -1097,6 +1101,12 @@ mod tests {
         assert_eq!(id(&part("D1", "0603", Some("LED"))).as_deref(), Some("LED_SMD:LED_0603_1608Metric"));
         assert_eq!(id(&part("U1", "SOIC-16", None)).as_deref(), Some("Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"));
         assert_eq!(id(&part("J1", "PINHEADER-4", None)).as_deref(), Some("Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical"));
+        // r3-board-io F6: names that are not one-row headers get no header model.
+        assert_eq!(kicad_footprint_for(&normalize_name("Hera_Kicad_C-Group:C-Group_1x_0603"), "C1", None), None);
+        assert_eq!(kicad_footprint_for(&normalize_name("programming_header:Pin_Header_Straight_2x03"), "J1", None), None);
+        assert_eq!(kicad_footprint_for(&normalize_name("lib:SolderWirePad_1x01_SMD_2.9x7.8mm#2"), "J1", None), None);
+        assert_eq!(kicad_footprint_for("PIN-HEADER-1X04", "J1", None).map(|r| r.id()).as_deref(), Some("Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical"));
+        assert_eq!(kicad_footprint_for("1X03", "J1", None).map(|r| r.id()).as_deref(), Some("Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical"));
         assert_eq!(model_path_for_part(&part("R1", "0603", None)).as_deref(), Some("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step"));
         assert_eq!(model_path_for_part(&part("U1", "SOIC-16", None)).as_deref(), Some("${KICAD10_3DMODEL_DIR}/Package_SO.3dshapes/SOIC-16_3.9x9.9mm_P1.27mm.step"));
         assert_eq!(model_path_for_part(&part("J1", "PINHEADER-4", None)).as_deref(), Some("${KICAD10_3DMODEL_DIR}/Connector_PinHeader_2.54mm.3dshapes/PinHeader_1x04_P2.54mm_Vertical.step"));

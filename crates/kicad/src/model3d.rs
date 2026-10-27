@@ -244,6 +244,12 @@ pub fn default_part_models_in(root: &std::path::Path, model: &ConstraintModel, p
         let kind = named_installed.as_ref().map(|i| i.kind).unwrap_or_else(|| ModelKind::of_pads(footprint));
         return Some(PartModels { models: own, kind });
     }
+    if explicit {
+        // An explicit footprint with no model has none: KiCad writes (and shows) only the models the footprint has (`format( FOOTPRINT )`: `for( const FP_3DMODEL& model
+        // : aFootprint->Models() )`), and its file or library said it has none -- no model is made up from its name (r3-board-io F6: `fill_bad`'s solder pad got a pin
+        // header).
+        return None;
+    }
 
     // The part's pads are the studio's built-in ones: the model of the KiCad footprint it stands for, fitted onto them.
     let generic = kicad_footprint_of_part(part);

@@ -508,3 +508,20 @@ fn an_unread_generator_keeps_its_members() {
     let flat = back.split_whitespace().collect::<Vec<_>>().join(" ");
     assert_eq!(flat.matches("(type via_stack)").count(), 2, "{back}");
 }
+
+/// r3 F6: a footprint read from a board that has no `(model ..)` keeps none (`format( FOOTPRINT )` writes only `aFootprint->Models()`): no header model is guessed from a
+/// name with "1x" and digits (`fill_bad`'s `SolderWirePad_1x01_SMD_2.9x7.8mm#2` got `PinHeader_1x02`).
+#[test]
+fn an_imported_footprint_without_models_stays_without() {
+    let text = board(
+        r#" (footprint "X:Foo_1x03" (layer "F.Cu") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") (at 110 110)
+  (property "Reference" "J1" (at 0 -2 0) (layer "F.SilkS") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab1") (effects (font (size 1 1) (thickness 0.15))))
+  (property "Value" "X" (at 0 2 0) (layer "F.Fab") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaab2") (effects (font (size 1 1) (thickness 0.15))))
+  (pad "1" thru_hole circle (at 0 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1"))
+  (pad "2" thru_hole circle (at 2.54 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac2"))
+  (pad "3" thru_hole circle (at 5.08 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac3")))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    assert!(!out.contains("(model "), "{out}");
+}
