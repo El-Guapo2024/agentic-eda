@@ -17,6 +17,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## What landed (2026-10-14 to 10-24)
 
+- 2026-10-27: **Hierarchy Navigator and sheet pages**: the walk by place, children sorted by page, every path paged (virtual pages, `GetNextPageNumber`), pages per sheet path in the file (`SchExtras::sheet_pages`). Differs: the panel's label reads "name, file · page N" (KiCad: "name (page N)").
 - 2026-10-26: **nested shared screens** (leftover 2): references keyed by the whole sheet path (`SymbolPathOverride::sheet_path`), old keys migrated on read with the same reference per placement; per-path sheet instances; Paste shares nested screens; Annotate counts other paths' references. Left (GAPS 4): a page number per sheet path (the reader keeps the first), per-path Annotate, sorted instance paths.
 - 2026-10-26: **the DeepSeek lane's leftovers** (reviewed by Claude against KiCad, then fixed and gated): springback in the dragger and the pair placer, the Symbol Editor's pin and New Symbol dialogs, Both-sides placement files with KiCad's names, browser checks for Page Settings/origin, Board Statistics/Swap Layers and the board view (`docs/DS-LOG.md`). Differs (small): New Symbol's pin-name offset of 0 with "Pin name inside" becomes 20 mil (KiCad: 1 IU), as Symbol Properties already does; a pin is placed on OK, not on a second click.
 - 2026-10-25: **the length type, wave 3**: the cross-crate items typed, the shims deleted, `docs/NANOMETRES.md` finished (the whole API, the integer kernels kept on purpose, every unit bug of the three waves); parity raw outputs refreshed. **The length type is done.** Follow-up (parity): KiCad's schematic graphics import approximates a spline with `aStroke.GetWidth() / 2` (`setupSplineOrLine`), ours always with `ARC_HIGH_DEF` (`eda_kicad::graphics_import::spline_or_line`).
@@ -69,6 +70,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| Round 2 fixes (2026-10-27): `task-r2-router` (`-router`), `task-r2-pcb-edit` (`-exports`), `task-r2-editors-exports` (`-embedded`), `task-r2-schematic` (`ds-agentic-eda`), `task-r2-board-io` (`-sim`) | The round-2 findings, `docs/parity/findings/round2/` (copies; the live files are in `~/work/findings/round2/`). Router/rules 8, PCB editing 36, editors/exports 35, schematic 62, board files 19. The user, 2026-10-27: the schematic tracer matches KiCad's NEW connectivity engine (`eeschema/connectivity/`, 25ec2335) | started | all |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

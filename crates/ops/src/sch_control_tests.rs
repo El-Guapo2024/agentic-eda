@@ -68,12 +68,34 @@ fn a_sheet_page_is_set_on_the_placement_wherever_it_is_and_validated() {
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::AddSheet { name: "Power".into(), file: "power".into(), at: p(mm(10.0), mm(10.0)), size: (mm(30.0), mm(20.0)) }).unwrap();
     let id = b.design().schematic.as_ref().unwrap().sheets[0].id.clone();
-    b.apply(&Cmd::SetSheetPage { sheet: id.clone(), page: " A3 ".into() }).unwrap();
+    b.apply(&Cmd::SetSheetPage { sheet: id.clone(), page: " A3 ".into(), path: None }).unwrap();
     assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].page, "A3", "trimmed");
-    assert_eq!(b.apply(&Cmd::SetSheetPage { sheet: id.clone(), page: "2 b".into() }).unwrap_err()[0].check, "ops_bad_page");
-    assert_eq!(b.apply(&Cmd::SetSheetPage { sheet: "nope".into(), page: "2".into() }).unwrap_err()[0].check, "ops_unknown_sheet");
-    b.apply(&Cmd::SetSheetPage { sheet: id, page: String::new() }).unwrap();
+    assert_eq!(b.apply(&Cmd::SetSheetPage { sheet: id.clone(), page: "2 b".into(), path: None }).unwrap_err()[0].check, "ops_bad_page");
+    assert_eq!(b.apply(&Cmd::SetSheetPage { sheet: "nope".into(), page: "2".into(), path: None }).unwrap_err()[0].check, "ops_unknown_sheet");
+    b.apply(&Cmd::SetSheetPage { sheet: id, page: String::new(), path: None }).unwrap();
     assert!(b.design().schematic.as_ref().unwrap().sheets[0].page.is_empty(), "empty puts the sheet back to its place in the hierarchy");
+}
+
+#[test]
+fn a_drawn_sheet_gets_the_next_free_page_and_one_drawn_to_its_left_does_not_take_it() {
+    // `SCH_DRAWING_TOOLS::DrawSheet`: `GetNextPageNumber`; the sheets are walked by place (`SCH_SCREEN::GetSheets`), so a sheet drawn to the
+    // left of another comes before it in the walk, and the one there keeps the page it had
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    let shown = |b: &Board<'_>| eda_model::sheet_list::walk(b.design()).into_iter().map(|e| (e.name.clone(), e.effective_page())).collect::<Vec<_>>();
+    let s = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+    b.apply(&Cmd::AddSheet { name: "First".into(), file: "first".into(), at: p(mm(60.0), mm(10.0)), size: (mm(10.0), mm(10.0)) }).unwrap();
+    assert_eq!(shown(&b), s(&[("", "1"), ("First", "2")]));
+    b.apply(&Cmd::AddSheet { name: "Second".into(), file: "second".into(), at: p(mm(30.0), mm(10.0)), size: (mm(10.0), mm(10.0)) }).unwrap();
+    assert_eq!(shown(&b), s(&[("", "1"), ("Second", "3"), ("First", "2")]), "Second is walked first and is page 3");
+    b.apply(&Cmd::AddSheet { name: "Third".into(), file: "third".into(), at: p(mm(0.0), mm(10.0)), size: (mm(10.0), mm(10.0)) }).unwrap();
+    assert_eq!(shown(&b), s(&[("", "1"), ("Third", "4"), ("Second", "3"), ("First", "2")]));
+    // a page set by hand frees its number: the next sheet drawn takes the first free one
+    let first = b.design().schematic.as_ref().unwrap().sheets.iter().find(|x| x.name == "First").unwrap().id.clone();
+    b.apply(&Cmd::SetSheetPage { sheet: first.clone(), page: "9".into(), path: Some(vec![first]) }).unwrap();
+    b.apply(&Cmd::AddSheet { name: "Fourth".into(), file: "fourth".into(), at: p(mm(90.0), mm(10.0)), size: (mm(10.0), mm(10.0)) }).unwrap();
+    assert_eq!(shown(&b), s(&[("", "1"), ("Third", "4"), ("Second", "3"), ("First", "9"), ("Fourth", "2")]));
+    assert_eq!(b.apply(&Cmd::SetSheetPage { sheet: "nope".into(), page: "2".into(), path: Some(vec!["nope".into()]) }).unwrap_err()[0].check, "ops_unknown_sheet");
 }
 
 #[test]
@@ -86,7 +108,7 @@ fn a_sheet_page_reaches_a_placement_that_lives_on_a_child_screen() {
     let grandchild = eda_model::ir::SheetInstance { id: "g1".into(), name: "G".into(), file: "g.kicad_sch".into(), at: p(Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), pins: vec![], page: String::new() };
     design.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap().sheets.push(grandchild);
     let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::SetSheetPage { sheet: "g1".into(), page: "9".into() }).unwrap();
+    b.apply(&Cmd::SetSheetPage { sheet: "g1".into(), page: "9".into(), path: None }).unwrap();
     assert_eq!(b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"].sheets[0].page, "9");
 }
 

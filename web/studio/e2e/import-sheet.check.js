@@ -201,7 +201,8 @@
       const entry = tree.find((h) => h.path.length === 1 && h.path[0] === sheet.id);
       const below = tree.filter((h) => h.path.length === 2 && h.path[0] === sheet.id);
       t(!!entry && entry.file === sheet.file, "the hierarchy lists it");
-      t(below.length === 2 && below.every((h) => h.file === NESTED) && same(below.map((h) => h.name), ["Subsheet_1_1", "Subsheet_1_2"]), `and the two sheets its screen places, both showing ${NESTED} (${below.map((h) => h.name)})`);
+      // in the walk's order, by place (SCH_SCREEN::GetSheets: Subsheet_1_2 is on the left)
+      t(below.length === 2 && below.every((h) => h.file === NESTED) && same(below.map((h) => h.name), ["Subsheet_1_2", "Subsheet_1_1"]), `and the two sheets its screen places, both showing ${NESTED} (${below.map((h) => h.name)})`);
       // what its screen holds
       await enterSheet(sheet.id);
       t(same(__eda.state().sheetPath, [sheet.id]), "the imported sheet opens in the editor");

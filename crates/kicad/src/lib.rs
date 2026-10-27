@@ -147,8 +147,8 @@ pub struct ScreenCtx {
     /// (`[]` for the root), which a symbol's per-placement reference is filed under (`SymbolPathOverride::sheet_path`).
     pub instance_sheet_paths: Vec<Vec<String>>,
     pub seed: String,
-    /// The KiCad path of a sheet drawn on this screen (one of `instance_paths`, then the sheet's uuid) -> its page number.
-    pub sheet_pages: BTreeMap<String, usize>,
+    /// The KiCad path of a sheet drawn on this screen (one of `instance_paths`, then the sheet's uuid) -> its page number on that path.
+    pub sheet_pages: BTreeMap<String, String>,
     /// The folder of this screen's file, relative to the root's (`""` for a file beside the root): a sheet's `Sheetfile` is written relative to it,
     /// as KiCad reads it (`SCH_IO_KICAD_SEXPR::loadHierarchy`: `fileName.MakeAbsolute( m_currentPath.top() )`).
     pub folder: String,
@@ -697,7 +697,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             .instance_paths
             .iter()
             .map(|path| {
-                let page = if s.page.is_empty() { ctx.sheet_pages.get(&format!("{path}/{uuid}")).copied().unwrap_or(1).to_string() } else { s.page.clone() };
+                let page = ctx.sheet_pages.get(&format!("{path}/{uuid}")).cloned().unwrap_or_else(|| if s.page.is_empty() { "1".to_string() } else { s.page.clone() });
                 (path.clone(), page)
             })
             .collect();
@@ -817,8 +817,10 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
     };
 
     // The hierarchy, depth first (`SCH_SHEET_LIST::BuildSheetList`): every sheet path that shows each screen (its KiCad path of sheet uuids, and
-    // the model's path of placement ids) and the page each sheet gets on each path it is on (the root is page 1, then 2, 3, ... in the order the
-    // sheets are met). A sheet inside a screen shown twice is met twice, once on each path.
+    // the model's path of placement ids) and the page each sheet has on each path it is on: the page `sheet_list::walk` shows for that path (the
+    // one stored for it, else its place in the walk, the root being page 1), so the file holds the pages the studio shows. A sheet inside a
+    // screen shown twice is met twice, once on each path; a sheet whose file has no screen (which the walk leaves out) gets its stored page, else
+    // its place among the sheets met here.
     struct Walk<'a> {
         design: &'a Design,
         in_progress: Vec<String>,
@@ -826,15 +828,19 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
         placements: BTreeMap<String, Vec<(String, Vec<String>)>>,
         /// the sheets met so far
         pages: usize,
+        /// model path -> the page `sheet_list::walk` shows
+        shown: BTreeMap<Vec<String>, String>,
         /// file ("" = root) -> KiCad sheet path -> page
-        sheet_pages_of: BTreeMap<String, BTreeMap<String, usize>>,
+        sheet_pages_of: BTreeMap<String, BTreeMap<String, String>>,
     }
     fn walk(w: &mut Walk, sch: &eda_model::ir::SchematicSection, here: &str, model_path: &mut Vec<String>, file: &str) {
         for s in &sch.sheets {
             let uuid = sheet_uuid(s);
             let path = format!("{here}/{uuid}");
             w.pages += 1;
-            let page = w.pages + 1;
+            model_path.push(s.id.clone());
+            let page = w.shown.get(model_path.as_slice()).cloned().unwrap_or_else(|| if s.page.is_empty() { (w.pages + 1).to_string() } else { s.page.clone() });
+            model_path.pop();
             w.sheet_pages_of.entry(file.to_string()).or_default().insert(path.clone(), page);
             let Some(child) = w.design.sheet_contents.as_ref().and_then(|c| c.get(&s.file)) else { continue };
             model_path.push(s.id.clone());
@@ -848,7 +854,8 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
             model_path.pop();
         }
     }
-    let mut w = Walk { design, in_progress: Vec::new(), placements: BTreeMap::new(), pages: 0, sheet_pages_of: BTreeMap::new() };
+    let shown = eda_model::sheet_list::walk(design).into_iter().skip(1).map(|e| { let page = e.effective_page(); (e.path, page) }).collect();
+    let mut w = Walk { design, in_progress: Vec::new(), placements: BTreeMap::new(), pages: 0, shown, sheet_pages_of: BTreeMap::new() };
     walk(&mut w, root_sch, &root_path, &mut Vec::new(), "");
     let Walk { placements, sheet_pages_of, .. } = w;
 
@@ -2250,6 +2257,50 @@ mod tests {
         let mut want: Vec<(Vec<String>, String)> = [("oa", "ia", "R1"), ("oa", "ib", "R2"), ("ob", "ia", "R3"), ("ob", "ib", "R4")].iter().map(|(a, b, r)| (vec![u(a), u(b)], r.to_string())).collect();
         want.sort();
         assert_eq!(got, want);
+    }
+
+    /// A sheet on a screen shown twice has a page per sheet path (`SCH_SHEET_INSTANCE::m_PageNumber`, `SchExtras::sheet_pages`): the writer gives each
+    /// `(path ..)` of the sheet the page `sheet_list::walk` shows for that path (the one the studio shows), and the reader takes each path's page back.
+    #[test]
+    fn a_sheet_on_a_screen_shown_twice_keeps_a_page_per_path_through_the_file() {
+        let (mut design, model) = nested_shared_design(&[]);
+        let path = |a: &str, b: &str| vec![a.to_string(), b.to_string()];
+        assert!(eda_model::sheet_list::set_page(&mut design, &path("oa", "ib"), "9"));
+        assert!(eda_model::sheet_list::set_page(&mut design, &path("ob", "ib"), "12"));
+        let shown: Vec<(Vec<String>, String)> = eda_model::sheet_list::walk(&design).into_iter().map(|e| { let p = e.effective_page(); (e.path, p) }).collect();
+        let files = export_kicad_sch_tree(&design, &model, &ExportMeta { date: "2026-01-01", title: "root" }, "root.kicad_sch").unwrap();
+        let text = |name: &str| files.iter().find(|(n, _)| n == name).unwrap().1.clone();
+        let root_uuid = text("root.kicad_sch").lines().find_map(|l| l.trim().strip_prefix("(uuid \"")).and_then(|r| r.strip_suffix("\")")).unwrap().to_string();
+        let u = |id: &str| sheet_uuid(&eda_model::ir::SheetInstance { id: id.into(), name: String::new(), file: String::new(), at: Default::default(), size: (Nm::ZERO, Nm::ZERO), pins: vec![], page: String::new() });
+        // every sheet path's page in the files is the one the walk shows
+        let page_in = |file: &str, sheet: &str, parent: &str| -> String {
+            let t = text(file);
+            let item = t.split("\t(sheet\n").skip(1).find(|s| s.contains(&format!("(uuid \"{}\")", u(sheet)))).unwrap().to_string();
+            let line = if parent.is_empty() { format!("(path \"/{root_uuid}\" (page \"") } else { format!("(path \"/{root_uuid}/{}\" (page \"", u(parent)) };
+            item.split(&line).nth(1).unwrap().split('"').next().unwrap().to_string()
+        };
+        for (p, page) in &shown {
+            match p.as_slice() {
+                [] => {}
+                [a] => assert_eq!(&page_in("root.kicad_sch", a, ""), page, "{p:?}"),
+                [a, b] => assert_eq!(&page_in("outer.kicad_sch", b, a), page, "{p:?}"),
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!((page_in("outer.kicad_sch", "ib", "oa"), page_in("outer.kicad_sch", "ib", "ob")), ("9".to_string(), "12".to_string()));
+
+        let dir = std::env::temp_dir().join(format!("eda_kicad_sheet_pages_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, t) in &files {
+            std::fs::write(dir.join(name), t).unwrap();
+        }
+        let (back, _, _) = crate::import_kicad_sch_tree(&dir.join("root.kicad_sch")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut got: Vec<(Vec<String>, String)> = eda_model::sheet_list::walk(&back).into_iter().map(|e| { let p = e.effective_page(); (e.path, p) }).collect();
+        let mut want: Vec<(Vec<String>, String)> = shown.iter().map(|(p, page)| (p.iter().map(|id| u(id)).collect(), page.clone())).collect();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "each path's page read back");
     }
 
     /// A design file written before the whole sheet path was kept (`parent_sheet_instance_id`, the immediate placement alone) reads and writes the derived
