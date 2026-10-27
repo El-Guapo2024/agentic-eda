@@ -306,7 +306,20 @@ fn sheet_made(dir: &Path, sheet_path: &str) -> Result<Made, String> {
     let wanted = file.as_deref().map(eda_kicad::sheet_file_in_work).unwrap_or_else(|| "board.kicad_sch".into());
     let text = files.into_iter().find(|(n, _)| *n == wanted).map(|(_, t)| t).ok_or_else(|| format!("The file of the sheet ({wanted}) was not written."))?;
     let items = section.symbols.len() + section.power_symbols.len() + section.wires.len() + section.labels.len() + section.texts.len();
-    Ok(Made { text, default_name: if name.is_empty() { project } else { name }, fields: Vec::new(), items })
+    Ok(Made { text, default_name: sheet_block_name(&name), fields: Vec::new(), items })
+}
+
+/// The name Save Current Sheet as Design Block opens with: `SaveSheetAsDesignBlock`'s `wxFileName fn = wxFileNameFromPath( aSheetPath.Last()->GetName() );
+/// blk.SetLibId( LIB_ID( aLibraryName, fn.GetName() ) )` (eeschema/sch_design_block_utils.cpp). The root sheet's name is "Root" (`topSheet->SetName( _( "Root" ) )`,
+/// eeschema/files-io.cpp); `wxFileNameFromPath` keeps what follows the last '/', and `GetName` drops the extension, what follows the last '.' unless that '.' starts
+/// the name (wx reads ".x" as a hidden file without one).
+fn sheet_block_name(sheet_name: &str) -> String {
+    let name = if sheet_name.is_empty() { "Root" } else { sheet_name };
+    let file = name.rsplit('/').next().unwrap_or(name);
+    match file.rfind('.') {
+        Some(dot) if dot > 0 => file[..dot].to_string(),
+        _ => file.to_string(),
+    }
 }
 
 /// `SaveSelectionAsDesignBlock`: the selected items as a file. A selection with a sheet is the sheet's own save when it is the only thing selected, else refused.
@@ -695,6 +708,17 @@ pub(crate) fn delete_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// r6 B6-2: Save Current Sheet as Design Block opens with `wxFileName( wxFileNameFromPath( sheet name ) ).GetName()`, "Root" for the root sheet.
+    #[test]
+    fn prepare_for_the_root_sheet_names_it_root() {
+        assert_eq!(sheet_block_name(""), "Root");
+        assert_eq!(sheet_block_name("A.b"), "A");
+        assert_eq!(sheet_block_name("PSU v1.2"), "PSU v1");
+        assert_eq!(sheet_block_name("power/PSU"), "PSU");
+        assert_eq!(sheet_block_name(".hidden"), ".hidden");
+        assert_eq!(sheet_block_name("AMP"), "AMP");
+    }
 
     /// r4 B4-M1 (`SCH_DESIGN_BLOCK_CONTROL::SaveSheetAsDesignBlock` saves the sheet's screen, wherever its file is): a sheet whose file is above the root's folder
     /// (`../shared/amp.kicad_sch`) is written as `__up__/shared/amp.kicad_sch` in the derived tree (179c5cf5), and its design block is that screen.
