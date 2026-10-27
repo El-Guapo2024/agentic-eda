@@ -67,7 +67,45 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
 /// [`import_kicad_sch`] with the choices of [`ImportOptions`].
 pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
-    import_screen(text, opts, None)
+    // the root's own symbols' paths of its legacy `(symbol_instances ..)`: `/<symbol uuid>` (r5 D5-H1)
+    let legacy = sexpr::parse(text).ok().and_then(|t| t.as_list().map(|root| legacy_instances_where(root, |sheets| sheets.is_empty()))).unwrap_or_default();
+    import_screen(text, opts, None, &legacy)
+}
+
+/// One `(path ..)` of a KiCad 6 / early-7 root's `(symbol_instances ..)`, as `SCH_IO_KICAD_SEXPR_PARSER::parseSchSymbolInstances` reads it into a
+/// `SCH_SYMBOL_INSTANCE`: the reference, the unit (`m_Unit = 1` when the path gives none), and the value and footprint (a `~` is empty in a file older than
+/// 20250318, which every such file is).
+#[derive(Clone, Debug, Default)]
+struct LegacyInstance {
+    reference: String,
+    unit: u32,
+    value: String,
+    footprint: String,
+}
+
+/// The root's `(symbol_instances ..)` paths whose sheets (the components before the symbol's uuid, without the root's: these files do not write it) pass
+/// `keep`, by the symbol's uuid (the last one of several for one uuid wins), for a root older than 20221002 only: kicad-cli and eeschema hand them to the
+/// symbols with `SCH_SHEET_LIST::UpdateSymbolInstanceData` when `GetFileFormatVersionAtLoad() < 20221002` (`eeschema_helpers.cpp`, `files-io.cpp`), and
+/// a newer file's are not read.
+fn legacy_instances_where(root: &[Sexpr], keep: impl Fn(&[&str]) -> bool) -> BTreeMap<String, LegacyInstance> {
+    let mut out = BTreeMap::new();
+    let version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0);
+    if version >= 20221002.0 {
+        return out;
+    }
+    let Some(instances) = sexpr::find(root, "symbol_instances") else { return out };
+    for path in sexpr::find_all(instances, "path") {
+        let Some(path_str) = sexpr::txt(path, 1) else { continue };
+        let parts: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
+        let Some((symbol, sheets)) = parts.split_last() else { continue };
+        if !keep(sheets) {
+            continue;
+        }
+        let text = |name: &str| sexpr::find(path, name).and_then(|n| sexpr::txt(n, 1)).filter(|t| *t != "~").unwrap_or_default().to_string();
+        let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).map_or(1, |u| u.max(1.0) as u32);
+        out.insert(symbol.to_string(), LegacyInstance { reference: text("reference"), unit, value: text("value"), footprint: text("footprint") });
+    }
+    out
 }
 
 /// A page number as KiCad reads one from a file's `(instances ..)` or `(sheet_instances ..)` (`SCH_IO_KICAD_SEXPR_PARSER::parseSchSheet` and
@@ -95,7 +133,10 @@ pub(crate) fn cache_aliases(root: &[Sexpr]) -> Vec<(String, String)> {
 /// [`import_kicad_sch_with`] of one screen of the project whose root sheet's uuid is `root_uuid` (none: the file read is the root): a sheet's
 /// `(instances (project .. (path "/<root uuid>/.." ..)))` of another root are another project's (`SCH_SHEET::getPageNumber( aParentPath )` compares the
 /// whole path, root uuid included).
-fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
+///
+/// `legacy` holds the root's `(symbol_instances ..)` entries for this screen's symbols, by uuid (see [`legacy_instances_where`]): the reference, value and
+/// footprint each gives its symbol (r5 D5-H1).
+fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, legacy: &BTreeMap<String, LegacyInstance>) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
     let tree = sexpr::parse(text).map_err(|e| vec![CheckResult::fail("kicad_import.parse", "file", format!("not a valid s-expression file: {e}"))])?;
     let root = tree
         .as_list()
@@ -103,6 +144,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>) -> R
         .ok_or_else(|| vec![CheckResult::fail("kicad_import.not_a_schematic", "file", "top-level form is not (kicad_sch ...); not a KiCad schematic file")])?;
 
     let mut notes = SchImportNotes::default();
+    let is_root = root_uuid.is_none();
     // the project's root: this file's own uuid when it is the root
     let own_uuid = uuid_of(root).unwrap_or_default();
     let root_uuid = root_uuid.map_or(own_uuid.clone(), str::to_string);
@@ -221,7 +263,43 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>) -> R
         let mirror_tag = sexpr::find(item, "mirror").and_then(|m| sexpr::txt(m, 1));
         let mirrored = mirror_tag == Some("y");
         let mirror_y = mirror_tag == Some("x");
-        let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
+        let mut unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
+        let mut reference = property_text(item, "Reference").unwrap_or_default();
+        let mut value = property_text(item, "Value").unwrap_or_default();
+        let mut footprint = property_text(item, "Footprint").unwrap_or_default();
+        // A symbol's `(instances ..)`: a path's `(value ..)` or `(footprint ..)` (files of KiCad 7.0) sets the field (`parseSchematicSymbol`'s
+        // `T_instances`: `SetValueFieldText`, `SetFootprintFieldText`), and the root's own path `/<root uuid>` names a symbol of the root sheet:
+        // `SCH_SYMBOL::GetRef( sheet )` takes the instance of the path before the Reference field, and `SCH_SHEET_PATH::UpdateAllScreenReferences`
+        // sets the field and the unit from it (`SetText( GetRef( this ) )`, `SetUnit( GetUnitSelection( this ) )`) (r5 D5-H2)
+        if let Some((r, u, v, f)) = own_instance_fields(item, &root_uuid) {
+            if let Some(r) = r {
+                reference = r;
+                unit = u;
+            }
+            if let Some(v) = v {
+                value = v;
+            }
+            if let Some(f) = f {
+                footprint = f;
+            }
+        }
+        // A KiCad 6 / early-7 root's `(symbol_instances ..)` path of this symbol: `SCH_SHEET_LIST::UpdateSymbolInstanceData` sets the Reference field
+        // (and the root path's unit, through `AddHierarchicalReference` and `UpdateAllScreenReferences`), and the value and footprint where the path
+        // gives them (`if( !it->m_Value.IsEmpty() ) symbol->SetValueFieldText( it->m_Value )`, the same for the footprint) (r5 D5-H1)
+        if let Some(inst) = uuid_of(item).and_then(|u| legacy.get(&u)) {
+            if !inst.reference.is_empty() {
+                reference = inst.reference.clone();
+            }
+            if is_root {
+                unit = inst.unit;
+            }
+            if !inst.value.is_empty() {
+                value = inst.value.clone();
+            }
+            if !inst.footprint.is_empty() {
+                footprint = inst.footprint.clone();
+            }
+        }
         // `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`: `case T_convert` (legacy) and `case T_body_style` both read `SetBodyStyle`
         let body_style = sexpr::find(item, "body_style").or_else(|| sexpr::find(item, "convert")).and_then(|b| sexpr::num(b, 1)).unwrap_or(1.0).max(1.0) as u32;
         let at_nm = Point { x: crate::import::sch_mm_to_nm(x_mm), y: crate::import::sch_mm_to_nm(y_mm) };
@@ -229,9 +307,6 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>) -> R
         // `(lib_name "<cache>")`: the symbol's own copy of its library symbol in the sheet's cache, which Swap Pins gave other places for some of its pins
         let swaps = sexpr::find(item, "lib_name").and_then(|l| sexpr::txt(l, 1)).filter(|name| *name != lib_id).and_then(|name| lib_table.get(name)).map(|cached| pin_swaps_between(resolved, cached, unit, body_style)).unwrap_or_default();
 
-        let reference = property_text(item, "Reference").unwrap_or_default();
-        let value = property_text(item, "Value").unwrap_or_default();
-        let footprint = property_text(item, "Footprint").unwrap_or_default();
         let datasheet = property_text(item, "Datasheet").unwrap_or_default();
         // `(dnp yes) (in_bom no) (on_board no) (exclude_from_sim yes)`: the attributes `SetAttribute` toggles. A file without the token (KiCad 6)
         // has the default: populated, in the BOM, on the board, simulated.
@@ -850,6 +925,30 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     let Some(dir) = path.parent() else { return Ok((design, model, notes)) };
     // the project's root sheet, whose uuid every instance path of this project starts with
     let root_uuid = sexpr::parse(&text).ok().and_then(|t| t.as_list().and_then(uuid_of)).unwrap_or_default();
+    // The root's legacy `(symbol_instances ..)` paths of the symbols on sheets (r5 D5-H1). A symbol of a screen shown once has one path, whose reference,
+    // value and footprint it takes when its screen is read. A shared screen's symbol has several: its value and footprint are the last path's (the
+    // design keeps one per symbol; KiCad's are the last sheet path's of `UpdateSymbolInstanceData`'s walk, the same in the files KiCad wrote), and its
+    // references go per path to `instance_overrides` (`legacy_symbol_instances`).
+    let legacy_on_sheets: BTreeMap<String, LegacyInstance> = {
+        let tree = sexpr::parse(&text).ok();
+        let root = tree.as_ref().and_then(|t| t.as_list());
+        let mut paths_of: BTreeMap<String, usize> = BTreeMap::new();
+        if let Some(instances) = root.and_then(|r| sexpr::find(r, "symbol_instances")) {
+            for path in sexpr::find_all(instances, "path") {
+                if let Some(last) = sexpr::txt(path, 1).and_then(|p| p.split('/').rfind(|c| !c.is_empty())) {
+                    *paths_of.entry(last.to_string()).or_default() += 1;
+                }
+            }
+        }
+        let mut out = root.map(|r| legacy_instances_where(r, |sheets| !sheets.is_empty())).unwrap_or_default();
+        for (uuid, inst) in out.iter_mut() {
+            if paths_of.get(uuid).copied().unwrap_or(0) > 1 {
+                // the reference is per path; the symbol keeps the one its own file gives
+                inst.reference.clear();
+            }
+        }
+        out
+    };
 
     let mut sheet_contents: BTreeMap<String, SchematicSection> = BTreeMap::new();
     let mut read_files: BTreeSet<String> = BTreeSet::new();
@@ -875,7 +974,7 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
         let child_path = dir.join(&file);
         let resolve_dir = child_path.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
         let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
-        let Ok((child_design, child_model, child_notes)) = import_screen(&child_text, opts, Some(&root_uuid)) else { continue };
+        let Ok((child_design, child_model, child_notes)) = import_screen(&child_text, opts, Some(&root_uuid), &legacy_on_sheets) else { continue };
         symbol_places.insert(file.clone(), symbol_places_of(&child_text));
         notes.unresolved_symbols += child_notes.unresolved_symbols;
         for (u, id) in child_notes.item_ids {
@@ -1284,6 +1383,35 @@ fn parse_instance_overrides(item: &[Sexpr], at: Point, own_unit: u32) -> Vec<(ed
         }
     }
     out
+}
+
+/// What a placed symbol's own `(instances (project .. (path ..)))` set on its fields when read (`SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`,
+/// `T_instances`): the reference and unit of the root's own path `/<root uuid>` (a symbol of the root sheet; `SCH_SYMBOL::GetRef` prefers it to the
+/// Reference field), and the value and footprint a path of a KiCad 7.0 file gives (`SetValueFieldText`, `SetFootprintFieldText`, the last read winning;
+/// `~` is empty). `None` when there is no `(instances ..)`.
+fn own_instance_fields(item: &[Sexpr], root_uuid: &str) -> Option<(Option<String>, u32, Option<String>, Option<String>)> {
+    let instances = sexpr::find(item, "instances")?;
+    let (mut reference, mut unit, mut value, mut footprint) = (None, 1, None, None);
+    for project in sexpr::find_all(instances, "project") {
+        for path in sexpr::find_all(project, "path") {
+            let Some(path_str) = sexpr::txt(path, 1) else { continue };
+            let text = |name: &str| sexpr::find(path, name).and_then(|n| sexpr::txt(n, 1)).map(|t| if t == "~" { String::new() } else { t.to_string() });
+            if let Some(v) = text("value") {
+                value = Some(v);
+            }
+            if let Some(f) = text("footprint") {
+                footprint = Some(f);
+            }
+            let comps: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
+            if !root_uuid.is_empty() && comps == [root_uuid] {
+                if let Some(r) = text("reference") {
+                    reference = Some(r);
+                    unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).map_or(1, |u| u.max(1.0) as u32);
+                }
+            }
+        }
+    }
+    Some((reference, unit, value, footprint))
 }
 
 fn sheet_property_text(item: &[Sexpr], name: &str) -> Option<String> {
@@ -2085,6 +2213,48 @@ mod tests {
         assert_eq!(back.schematic.as_ref().unwrap().extras.excluded_from_pos_files.len(), 1);
         let again = export_kicad_sch(&back, &back_model, &ExportMeta { date: "2026-01-01", title: "pos" }).unwrap();
         assert_eq!(again.matches("(in_pos_files no)").count(), 1, "{again}");
+    }
+
+    /// A `Device:R` cache entry and one placed symbol of it, for the r5 D5-H1 / D5-H2 tests.
+    fn r5_resistor(uuid: &str, x: f64, reference: &str, value: &str, extra: &str) -> String {
+        format!("(symbol (lib_id \"Device:R\") (at {x} 50.8 0) (unit 1) (uuid \"{uuid}\") (property \"Reference\" \"{reference}\" (at {x} 48 0)) (property \"Value\" \"{value}\" (at {x} 53 0)) (property \"Footprint\" \"\" (at {x} 53 0)) {extra})")
+    }
+    const R5_LIB: &str = r#"(lib_symbols (symbol "Device:R" (property "Reference" "R" (at 0 0 0)) (property "Value" "R" (at 0 0 0)) (symbol "R_1_1" (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1")) (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2")))))"#;
+
+    /// r5 D5-H1 (`SCH_SHEET_LIST::UpdateSymbolInstanceData`, called for a root older than 20221002, `eeschema_helpers.cpp`): a KiCad 6 root's
+    /// `(symbol_instances (path "/<symbol uuid>" ..))` gives a symbol of the root sheet its reference, value and footprint, and a path through a sheet gives
+    /// a symbol there its value and footprint over its own fields. QA `issue11926`, `spice_netlists/legacy_rectifier`.
+    #[test]
+    fn a_kicad6_roots_symbol_instances_give_root_symbols_their_reference_value_and_footprint() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_r5_symbol_instances_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = format!(
+            "(kicad_sch (version 20220622) (generator eeschema) (uuid \"11111111-1111-1111-1111-111111111111\") (paper \"A4\") {R5_LIB} {} (sheet (at 100 100) (size 20 20) (uuid \"21111111-1111-1111-1111-111111111111\") (property \"Sheet name\" \"a\" (at 100 99 0)) (property \"Sheet file\" \"a.kicad_sch\" (at 100 121 0))) (symbol_instances (path \"/a1111111-1111-1111-1111-111111111111\" (reference \"R7\") (unit 1) (value \"10k\") (footprint \"Resistor_SMD:R_0603\")) (path \"/21111111-1111-1111-1111-111111111111/b1111111-1111-1111-1111-111111111111\" (reference \"R8\") (unit 1) (value \"22k\") (footprint \"~\"))))",
+            r5_resistor("a1111111-1111-1111-1111-111111111111", 50.8, "", "", "")
+        );
+        std::fs::write(dir.join("root.kicad_sch"), root).unwrap();
+        std::fs::write(dir.join("a.kicad_sch"), format!("(kicad_sch (version 20220622) (generator eeschema) (uuid \"41111111-1111-1111-1111-111111111111\") (paper \"A4\") {R5_LIB} {})", r5_resistor("b1111111-1111-1111-1111-111111111111", 30.48, "R8", "1k", ""))).unwrap();
+        let (design, model, _) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).unwrap();
+        let ids: Vec<&str> = design.schematic.as_ref().unwrap().symbols.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["R7"], "the root symbol's reference is its path's");
+        let r7 = model.part("R7").expect("R7");
+        assert_eq!((r7.value.as_deref(), r7.footprint.as_deref()), (Some("10k"), Some("Resistor_SMD:R_0603")));
+        let r8 = model.part("R8").expect("R8");
+        assert_eq!(r8.value.as_deref(), Some("22k"), "the path's value replaces the symbol's own");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// r5 D5-H2 (`SCH_SYMBOL::GetRef( sheet )`: the instance of the path before the Reference field; `SCH_SHEET_PATH::UpdateAllScreenReferences`): a symbol of
+    /// the root sheet whose `(instances ..)` has the root's own path `/<root uuid>` is named by it, not by a stale Reference property. QA `netlists/issue14494`.
+    #[test]
+    fn a_root_symbols_own_instance_names_it() {
+        let inst = "(instances (project \"p\" (path \"/11111111-1111-1111-1111-111111111111/21111111-1111-1111-1111-111111111111\" (reference \"R3\") (unit 1)) (path \"/11111111-1111-1111-1111-111111111111\" (reference \"R2\") (unit 1))))";
+        let text = format!("(kicad_sch (version 20230121) (generator eeschema) (uuid \"11111111-1111-1111-1111-111111111111\") (paper \"A4\") {R5_LIB} {})", r5_resistor("a1111111-1111-1111-1111-111111111111", 50.8, "R3", "10k", inst));
+        let (design, model, _) = import_kicad_sch(&text).unwrap();
+        let ids: Vec<&str> = design.schematic.as_ref().unwrap().symbols.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["R2"]);
+        assert!(model.part("R2").is_some());
     }
 
     /// r2 B-M3 (`parseSchSheetInstances`, `UpdateSheetInstanceData`): a KiCad 6 root's `(sheet_instances (path "/<sheet>/" (page "7")))` is the sheet's page, and an
