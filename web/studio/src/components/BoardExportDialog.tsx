@@ -208,7 +208,7 @@ function VrmlForm({ o, set }: { o: VrmlOptions; set: (patch: Partial<VrmlOptions
           <input value={o.models_dir} disabled={!o.copy_models} onChange={(e) => set({ models_dir: e.target.value })} style={{ width: 160 }} />
         </Row>
       </div>
-      <Check label="User defined origin (the board center otherwise)" checked={o.user_origin} onChange={(v) => set({ user_origin: v })} />
+      <Check label="User defined origin" checked={o.user_origin} onChange={(v) => set({ user_origin: v })} />
       {o.user_origin && (
         <div style={{ marginLeft: 18, marginBottom: 6 }}>
           X <input type="number" step="any" value={o.origin_x} onChange={(e) => set({ origin_x: Number(e.target.value) })} style={{ width: 80 }} /> Y{" "}
@@ -339,7 +339,7 @@ export function BoardExportDialog() {
   const [ipc, setIpc] = useState<Ipc2581Options>(DEFAULT_IPC2581_OPTIONS);
   const [odb, setOdb] = useState<OdbOptions>(DEFAULT_ODB_OPTIONS);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; message: string; files: string[]; log?: string } | null>(null);
 
   if (!kind) return null;
   const close = () => {
@@ -371,7 +371,7 @@ export function BoardExportDialog() {
                       : kind === "cmp"
                         ? await postFabCmp()
                         : await postFabIpcD356();
-      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Done." : "Failed."), files: reply.files ?? [] });
+      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Done." : "Failed."), files: reply.files ?? [], log: reply.log });
     } catch (e) {
       setResult({ ok: false, message: e instanceof Error ? e.message : String(e), files: [] });
     } finally {
@@ -402,6 +402,12 @@ export function BoardExportDialog() {
                     <li key={f}>{f}</li>
                   ))}
                 </ul>
+              )}
+              {/* kicad-cli's own output, its warnings included (KiCad's STEP export shows it in `DIALOG_EXPORT_STEP_LOG`). */}
+              {result.log && (
+                <pre data-testid="board-export-log" style={{ margin: "6px 0 0", whiteSpace: "pre-wrap", maxHeight: 160, overflowY: "auto" }}>
+                  {result.log}
+                </pre>
               )}
             </div>
           )}

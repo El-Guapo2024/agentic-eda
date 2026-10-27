@@ -332,6 +332,8 @@ export interface FabReply {
   /** Paths written, relative to the board directory (e.g. `export/board-F_Cu.gtl`). */
   files?: string[];
   message?: string;
+  /** What kicad-cli printed on a run that worked: its warnings and progress lines (`run_export`). */
+  log?: string;
   /** The design revision the export was made from (the /api/version stamp), like every kicad-cli reply. */
   revision?: string;
 }

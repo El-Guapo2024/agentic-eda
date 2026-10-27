@@ -1648,7 +1648,14 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     if !out.status.success() || files.is_empty() {
         return Err(fail("kicad_cli_export", kind, format!("kicad-cli {scope} export {kind} failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))));
     }
-    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(cli)), "files": files }))
+    // What kicad-cli said on the way (its warnings -- "Board outline is malformed. Run DRC for a full analysis." -- and its progress), as
+    // KiCad's STEP dialog shows the exporter's output in its log window (`DIALOG_EXPORT_STEP_LOG`): kept in the reply, not thrown away.
+    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)).trim().to_string();
+    let mut reply = json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(cli)), "files": files });
+    if !log.is_empty() {
+        reply["log"] = Value::String(log);
+    }
+    Ok(reply)
 }
 
 fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
