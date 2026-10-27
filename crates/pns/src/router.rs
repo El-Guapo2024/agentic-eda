@@ -315,6 +315,16 @@ impl Router {
         Some(crate::settings::import_sizes(&self.world, &self.rules, start, layer, self.use_connected_track_width))
     }
 
+    /// [`Self::import_sizes`] without the connected track's width (`m_TempOverrideTrackWidth` set: what the route takes when the width list is
+    /// put back on its first entry while routing, `TrackWidthInc`/`Dec` and the width menu's `trackViaSizeChanged`, r5 R5-6), with its source.
+    pub fn rule_sizes(&self, at: Point, layer_name: &str) -> Option<crate::settings::ImportedSizes> {
+        let active = self.layer_index(layer_name)?;
+        let pick = self.pick_start(at, active);
+        let layer = self.start_layer_of(pick.as_ref(), active);
+        let start = pick.as_ref().and_then(|p| self.world.get(p.item).map(|it| (it, at)));
+        Some(crate::settings::import_sizes(&self.world, &self.rules, start, layer, false))
+    }
+
     /// `inheritTrackWidth` alone, for a route about to start at `at` on `layer_name` with a width of the user's choice: KiCad asks it before
     /// the width list (`ImportSizes`: `if( bds.m_UseConnectedTrackWidth && !bds.m_TempOverrideTrackWidth && aStartItem != nullptr )`), so a
     /// joined track's width wins over a chosen one too. `None` when [`Self::use_connected_track_width`] is off or nothing is joined.

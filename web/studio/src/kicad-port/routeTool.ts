@@ -24,6 +24,7 @@
 //   /              -> flip posture
 //   W              -> cycle track width
 import type { RoutePreview } from "../api/types";
+import type { RouteSizesInfo } from "./routerSizes";
 
 // Mirrors `state/store.tsx`'s `DrawState`'s "route" variant exactly --
 // duplicated rather than imported so this module stays on the
@@ -52,6 +53,10 @@ export interface RouteDrawState {
    * `SetActiveLayer( getStartLayer( .. ) )`): the active layer goes back to it when the route ends (`finishInteractive`). Unset when the route
    * started on the active layer. */
   originalActiveLayer?: string;
+  /** What the message panel shows of the route's sizes (the start reply's `sizes`; kicad-port/routerSizes.ts). */
+  sizes?: RouteSizesInfo;
+  /** `m_TempOverrideTrackWidth`: a width was chosen while routing (W, the width menu), so the route no longer keeps the width it inherited. */
+  widthOverride?: boolean;
 }
 
 /** The `DrawState` "route" patch for a successful `RoutePreview` reply,

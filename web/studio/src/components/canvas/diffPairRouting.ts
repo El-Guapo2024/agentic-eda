@@ -23,7 +23,7 @@ export async function startDiffPairRoute(x: number, y: number, layer: string, di
     dispatch({ type: "TOAST", message: preview.message ?? "Start from a differential-pair net (needs a +/-/P/N suffix and a matching pad already on the board).", kind: "error" });
     return;
   }
-  const draw: DpDrawState = dpStateFromPreview({ kind: "diffpair", netA: preview.net_a, netB: preview.net_b, layer: preview.layer, width: preview.width, ptsA: [], ptsB: [] }, preview);
+  const draw: DpDrawState = dpStateFromPreview({ kind: "diffpair", netA: preview.net_a, netB: preview.net_b, layer: preview.layer, width: preview.width, ptsA: [], ptsB: [], sizes: preview.sizes }, preview);
   // `prepareInteractive`: the pair starts on `getStartLayer`'s layer, the active one until it ends (r5 R5-1)
   if (preview.layer && preview.layer !== layer) {
     draw.originalActiveLayer = layer;

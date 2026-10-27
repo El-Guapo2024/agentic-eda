@@ -30,6 +30,9 @@
 //   springback   (Stage 10) in Shove mode a track the head pushed stays pushed, is pushed on from where it was left, and springs back once the head draws back off it; a click keeps the
 //                push and the next leg pushes on from it, Backspace takes the leg and its push back, and the finished route commits the track where the session left it in one undo step;
 //   start width  (r4 R4-1) a route started on a via with a 0.15 mm stub starts at 0.15 mm with Use Starting Track Width on (the default), at the class's width with it off;
+//   r5           a route started on a B.Cu stub with F.Cu active starts on B.Cu, B.Cu is active while it runs and F.Cu again after (R5-1); the message panel shows the width and the
+//                clearance with their sources (R5-8); W steps the class's width, then the board's 0.3 and 0.6 mm, the first press only overriding the inherited width (R5-6); a width
+//                chosen from the menu leaves Use Starting Track Width on (R5-7);
 //   via actions  (task-router-actions) on the board made 4-layer for the scenario (`set_stackup`, undone after): `/` (Switch Track Posture) flips the head, Ctrl+V (Place Microvia) arms a
 //                microvia and takes it back, `<` opens the layer picker and arms a through via to the picked layer, Select Layer and Place Micro Via picks among the layers but the one
 //                being routed, Q (Custom Track/Via Size) refuses a hole as big as the via in KiCad's words and its sizes go with the route, Alt+< and Alt+Shift+V arm blind vias; the
@@ -267,6 +270,53 @@
     t(s && s.body.ok === true && s.req.auto_track_width === false && s.body.width !== 150_000, `off: the net class's width instead: ${s && JSON.stringify([s.body.ok, s.req.auto_track_width, s.body.width])}`);
     await E.run("pcbnew.EditorControl.autoTrackWidth");
     await sleep(200);
+  });
+
+  await scenario("r5: a route started on a B.Cu track with F.Cu active starts on B.Cu (the active layer follows and comes back), W steps the board's widths, a width from the menu keeps Use Starting Track Width, the message panel says where the width came from", async (t) => {
+    const before = (await state()).routing?.track_width_presets ?? [];
+    await cmd({ op: "set_track_width_presets", widths: [300_000, 600_000] });
+    await settle();
+    const net = "/LED channels (D1–D8)/PA2", end = [10_000_000, 20_000_000];
+    await commit([{ net, layer: "B.Cu", width: 150_000, pts: [xy([8_000_000, 20_000_000]), xy(end)] }]);
+    await E.run("studio.Router.setTrackWidth", 0);
+    await E.run("pcbnew.Control.layerTop");
+    await sleep(200);
+    const startOnStub = async () => {
+      if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); }
+      const n = replies.length;
+      await clickAt(end[0], end[1]);
+      return waitReply("start", n);
+    };
+    let s = await startOnStub();
+    t(s && s.body.ok === true && s.req.layer === "F.Cu" && s.body.layer === "B.Cu" && s.body.net === net, `R5-1: sent with F.Cu active, it starts on B.Cu with the track's net: ${s && JSON.stringify([s.req.layer, s.body.layer, s.body.net, s.body.message])}`);
+    t(E.state().activeLayer === "B.Cu", `and B.Cu is the active layer while it runs: ${E.state().activeLayer}`);
+    t(s && s.body.width === 150_000 && s.body.sizes?.width_source === "existing track", `at the stub's width, from the existing track: ${s && JSON.stringify([s.body.width, s.body.sizes])}`);
+    await moveTo(14_000_000, 20_000_000);
+    const panel = () => document.querySelector("[data-router-panel]")?.textContent ?? "";
+    t(/Routing Track: .*PA2/.test(panel()) && panel().includes("Track Width: ") && panel().includes("(from existing track)") && panel().includes("Min Clearance: ") && /Walk around|Shove|Highlight collisions/.test(panel()), `R5-8: the message panel: ${panel()}`);
+    // W: the first press only overrides the inherited width (the list's current entry, the net class's), then 0.3, then 0.6, then back to the class's
+    const widths = [];
+    for (let i = 0; i < 4; i++) {
+      const n = replies.length;
+      await E.run("pcbnew.EditorControl.trackWidthInc");
+      const m = await waitReply("move", n, 8000);
+      widths.push(m && m.req.width);
+    }
+    t(widths[1] === 300_000 && widths[2] === 600_000 && widths[0] === widths[3] && widths[0] !== 150_000, `R5-6: W goes the class's width, 0.3, 0.6, the class's again: ${JSON.stringify(widths)}`);
+    t(panel().includes("(from netclass"), `the panel's source after W back to the class's entry is the class's rule: ${panel()}`);
+    await leaveTool();
+    await sleep(300);
+    t(E.state().activeLayer === "F.Cu", `the route over, F.Cu is active again (finishInteractive): ${E.state().activeLayer}`);
+    // R5-7: a width from the menu leaves Use Starting Track Width on: the next route on the stub inherits it again
+    await E.run("studio.Router.setTrackWidth", 2);
+    await sleep(200);
+    s = await startOnStub();
+    t(s && s.body.ok === true && s.req.auto_track_width === true && s.req.width === 600_000 && s.body.width === 150_000, `R5-7: Track 0.6 mm chosen, the next route still starts at the stub's width: ${s && JSON.stringify([s.req.auto_track_width, s.req.width, s.body.width])}`);
+    await leaveTool();
+    await E.run("studio.Router.setTrackWidth", 0);
+    await restore();
+    await cmd({ op: "set_track_width_presets", widths: before });
+    await settle();
   });
 
   await scenario("the mouse path sets the posture of the head, and with \"Use mouse path to set track posture\" off it does not", async (t) => {

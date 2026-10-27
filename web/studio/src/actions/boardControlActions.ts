@@ -202,8 +202,17 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
 
   // ---------------------------------------------------------- board editor control (board_editor_control.cpp)
 
-  // AutoTrackWidth: a route that starts at an existing track takes its width (Canvas.tsx reads `bcx.autoTrackWidth`).
-  m.set("pcbnew.EditorControl.autoTrackWidth", pcbOnly(() => bcx({ autoTrackWidth: !state.bcx.autoTrackWidth })));
+  // AutoTrackWidth: a route that starts at an existing track takes its width (Canvas.tsx reads `bcx.autoTrackWidth`). `BOARD_EDITOR_CONTROL::AutoTrackWidth`:
+  // with custom sizes in use it turns them off and the flag on (`UseCustomTrackViaSize( false ); m_UseConnectedTrackWidth = true;`), else toggles the flag (r5 R5-7).
+  m.set(
+    "pcbnew.EditorControl.autoTrackWidth",
+    pcbOnly(() => {
+      if (state.pcbx.useCustomTrackVia) {
+        dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
+        bcx({ autoTrackWidth: true });
+      } else bcx({ autoTrackWidth: !state.bcx.autoTrackWidth });
+    })
+  );
 
   // DrillOrigin: a picker -- one click sets the drill/place file origin (Canvas.tsx); the reset puts it back at (0, 0). Both are Cmd::SetAuxOrigin.
   m.set("pcbnew.EditorControl.drillOrigin", pcbOnly(toggleTool("drill_origin")));

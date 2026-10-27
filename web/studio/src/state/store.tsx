@@ -9,6 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
+import type { RouteSizesInfo } from "../kicad-port/routerSizes";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Nm, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
@@ -269,6 +270,10 @@ export type DrawState =
       startItem?: string;
       /** The active layer before a start on another layer's item: see kicad-port/routeTool.ts. */
       originalActiveLayer?: string;
+      /** The message panel's sizes: see kicad-port/routeTool.ts. */
+      sizes?: RouteSizesInfo;
+      /** `m_TempOverrideTrackWidth`: see kicad-port/routeTool.ts. */
+      widthOverride?: boolean;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
@@ -334,6 +339,8 @@ export type DrawState =
       displacedVias?: { source_via: string; x: Nm; y: Nm }[];
       /** The active layer before a start on another layer's item: see kicad-port/dpTool.ts. */
       originalActiveLayer?: string;
+      /** The message panel's sizes: see kicad-port/dpTool.ts. */
+      sizes?: RouteSizesInfo;
     }
   | { kind: "zone"; pts: [Nm, Nm][] }
   | {

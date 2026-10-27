@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, NetClass } from "../api/types";
-import { chosenTrackWidth, chosenViaSize, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
+import { chosenTrackWidthOf } from "./routerSizes";
+import { chosenViaSize, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
 
 const CU4 = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const blind: ViaCommand = { type: "blind", selectLayer: false };
@@ -92,14 +93,15 @@ test("PCB_VIA::ValidateViaParameters' messages, word for word", () => {
 // route sends no width and takes the start net's class width from the server; a chosen width or a custom size is sent. The choice is the
 // list INDEX, as `m_trackWidthIndex == 0` upstream, not the width: a preset that happens to equal the Default class's width is a user choice.
 test("a route takes the start net's class width unless a width is chosen", () => {
-  // list = [netclass 250_000, preset 250_000, preset 400_000]
-  assert.equal(chosenTrackWidth(null, null, 3, false), undefined, "nothing chosen: the net class's");
-  assert.equal(chosenTrackWidth(250_000, 0, 3, false), undefined, "index 0 is the net class's");
-  assert.equal(chosenTrackWidth(400_000, 2, 3, false), 400_000, "a width of the list");
+  // list = [netclass 250_000, preset 250_000, preset 400_000] (r5 R5-9: the presets are read at route time, kicad-port/routerSizes.ts)
+  const presets = [250_000, 400_000];
+  assert.equal(chosenTrackWidthOf(presets, null, false, null), undefined, "nothing chosen: the net class's");
+  assert.equal(chosenTrackWidthOf(presets, 0, false, null), undefined, "index 0 is the net class's");
+  assert.equal(chosenTrackWidthOf(presets, 2, false, null), 400_000, "a width of the list");
   // r4 R4-8: the same width as the Default class's, but at index > 0, is the user's choice (ImportSizes: source "user choice").
-  assert.equal(chosenTrackWidth(250_000, 1, 3, false), 250_000, "a preset equal to the Default class's width is still a chosen width");
-  assert.equal(chosenTrackWidth(250_000, 3, 3, false), undefined, "past the list's end is the net class's (GetCurrentTrackWidth's range check)");
-  assert.equal(chosenTrackWidth(250_000, 1, 3, true), 250_000, "a custom size is a size");
+  assert.equal(chosenTrackWidthOf(presets, 1, false, null), 250_000, "a preset equal to the Default class's width is still a chosen width");
+  assert.equal(chosenTrackWidthOf(presets, 3, false, null), undefined, "past the list's end is the net class's (GetCurrentTrackWidth's range check)");
+  assert.equal(chosenTrackWidthOf(presets, 1, true, 250_000), 250_000, "a custom size is a size");
 });
 
 // r3 R3-4 / r4 R4-8: `handleLayerSwitch`' `UseNetClassVia() || viaType == MICROVIA` -- the server asks the rules for the via's size then.

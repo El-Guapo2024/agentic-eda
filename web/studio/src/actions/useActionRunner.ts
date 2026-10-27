@@ -21,9 +21,9 @@ import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute, attemptFinishInteractiveRoute } from "../components/canvas/routing";
 import { withTrackSnapping } from "../kicad-port/routerSettings";
-import { chosenTrackWidth } from "../kicad-port/routerVia";
+import { chosenDiffPair, chosenTrackWidthOf, routeWidthAfterChange, stepDiffPairIndex, stepTrackWidth } from "../kicad-port/routerSizes";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
-import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
+import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpSetDims, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
@@ -123,9 +123,6 @@ import { cliExporterReason } from "../kicad-port/cliExporters";
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
 }
-
-/** `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec`'s ("W"/"Shift+W") preset ladder -- see those two action registrations below for why this is a fixed list rather than a per-board setting. */
-const WIDTH_PRESETS_NM = [100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 800_000, 1_000_000];
 
 /** common/tool/common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the exact per-step factor for zoomIn/zoomOut (F1/F2) and zoomInCenter/zoomOutCenter alike (doZoomInOut/doZoomInOutCenter share it). Source then snaps the result to the nearest entry in a separate zoom% preset list before applying it -- not ported (that preset list lives in per-app window settings this project has no equivalent of yet), so this applies the 1.3 factor directly. */
 const ZOOM_STEP_FACTOR = 1.3;
@@ -440,26 +437,49 @@ export function useActionRunner() {
           });
         })
       );
-      // W / Shift+W: cycle the live track width through a small fixed
-      // preset list -- this app has no per-board "preferred track widths"
-      // setting the way real pcbnew's dialog does, so the preset is just a
-      // reasonable fixed ladder (see WIDTH_PRESETS_NM below).
+      // W / Shift+W (board_editor_control.cpp `TrackWidthInc` / `TrackWidthDec` while routing, r5 R5-6): the board's width list by index (entry 0
+      // the net class's), wrapping; the first press of a route still at the width it inherited only overrides it (`m_TempOverrideTrackWidth =
+      // true`) and goes to the current entry. `SetTrackWidthIndex` and `UseCustomTrackViaSize( false )`, then `trackViaSizeChanged`: the route
+      // takes the entry at once (`ImportSizes` with the override: the net's rule width at entry 0, the server's `rule_width`).
       const cycleWidth = (dir: 1 | -1) => {
-        const i = WIDTH_PRESETS_NM.findIndex((w) => w >= draw.width);
-        // board_editor_control.cpp TrackWidthInc/Dec wrap at both ends.
-        const next = WIDTH_PRESETS_NM[wrapStep(i, WIDTH_PRESETS_NM.length, dir)]!;
-        dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, width: next } });
+        const presets = state.board?.routing?.track_width_presets ?? [];
+        const step = stepTrackWidth(state.currentTrackWidthIndex ?? 0, 1 + presets.length, dir, { autoTrackWidth: state.bcx.autoTrackWidth, override: !!draw.widthOverride });
+        const next = routeWidthAfterChange(presets, step.index, false, 0, draw.sizes?.rule_width ?? state.board?.board_rules?.track_width ?? draw.width);
+        dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: step.index > 0 ? presets[step.index - 1]! : (state.board?.board_rules?.track_width ?? next), index: step.index });
+        dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
+        // `ImportSizes`' source: "user choice" for an entry of the list, the rule's at entry 0
+        const sizes = draw.sizes ? { ...draw.sizes, width_source: step.index > 0 ? "user choice" : (draw.sizes.rule_width_source ?? draw.sizes.width_source) } : undefined;
+        const d = { ...draw, width: next, widthOverride: step.override, sizes };
+        dispatch({ type: "SET_DRAW_STATE", draw: d });
         routeMove(cursor.x, cursor.y, undefined, next).then((preview) => {
-          if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...draw, width: next }, preview) });
+          if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(d, preview) });
         });
       };
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleWidth(1)));
       m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleWidth(-1)));
     } else if (state.drawState?.kind === "diffpair") {
       // Same shape as the route branch above (crates/pns/src/dp_placer.rs is the pair's placer): `V` places a pair of vias and the
-      // route goes on from them on the other layer; no width cycling.
+      // route goes on from them on the other layer.
       const draw = state.drawState;
       const cursor = state.cursorNm ?? { x: draw.ptsA[draw.ptsA.length - 1]?.[0] ?? 0, y: draw.ptsA[draw.ptsA.length - 1]?.[1] ?? 0 };
+      // W / Shift+W while a pair is routed (`TrackWidthInc` / `Dec`: `Mode() == PNS_MODE_ROUTE_DIFF_PAIR`): the Differential Pairs list's index
+      // steps, wrapping, custom dimensions off (`SetDiffPairIndex`, `UseCustomDiffPairDimensions( false )`), and the pair takes the entry at once
+      // (`trackViaSizeChanged` -> `ImportSizes`: the rule's sizes at entry 0, the dp_start reply's), r5 R5-5
+      const cyclePair = (dir: 1 | -1) => {
+        const presets = state.board?.routing?.diff_pair_presets ?? [];
+        const index = stepDiffPairIndex(state.pcbx.diffPairIndex, 1 + presets.length, dir);
+        dispatch({ type: "PCBX", patch: { diffPairIndex: index, useCustomDiffPair: false } });
+        const dims = chosenDiffPair(presets, index, false, null) ?? (draw.sizes?.rule_width != null && draw.sizes.rule_gap != null ? { width: draw.sizes.rule_width, gap: draw.sizes.rule_gap, viaGap: draw.sizes.rule_via_gap ?? draw.sizes.rule_gap } : undefined);
+        if (!dims) return;
+        const sizes = draw.sizes ? { ...draw.sizes, width_source: index > 0 ? "user choice" : (draw.sizes.rule_width_source ?? ""), gap_source: index > 0 ? "user choice" : (draw.sizes.rule_gap_source ?? "") } : undefined;
+        void dpSetDims(dims.width, dims.gap, dims.viaGap).then(() =>
+          dpMove(cursor.x, cursor.y).then((preview) => {
+            if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview({ ...draw, sizes }, preview) });
+          })
+        );
+      };
+      m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cyclePair(1)));
+      m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cyclePair(-1)));
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
         pcbOnly(() => void finishDiffPairRoute(cursor.x, cursor.y, dispatch, api))
@@ -1056,12 +1076,19 @@ export function useActionRunner() {
         void api.cmdBatch(cmds);
         return;
       }
+      // The pair router armed (`routerTool->IsToolActive() && Mode() == PNS_MODE_ROUTE_DIFF_PAIR`): the Differential Pairs list's index (r5 R5-5)
+      if (state.activeTool === "diffpair") {
+        const index = stepDiffPairIndex(state.pcbx.diffPairIndex, 1 + (state.board?.routing?.diff_pair_presets?.length ?? 0), dir);
+        dispatch({ type: "PCBX", patch: { diffPairIndex: index, useCustomDiffPair: false } });
+        return;
+      }
       // The cycle runs on the list INDEX (`m_trackWidthIndex`), as KiCad's does -- not on the value, which a preset may share with the
-      // Default class's width (r4 R4-8).
-      const nextIndex = wrapStep(state.currentTrackWidthIndex, list.length, dir);
+      // Default class's width (r4 R4-8); `UseCustomTrackViaSize( false )` (r5 R5-7).
+      const nextIndex = stepTrackWidth(state.currentTrackWidthIndex ?? 0, list.length, dir, null).index;
       dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthNm: list[nextIndex]!, index: nextIndex });
+      dispatch({ type: "PCBX", patch: { useCustomTrackVia: false } });
     };
-    if (state.drawState?.kind !== "route") {
+    if (state.drawState?.kind !== "route" && state.drawState?.kind !== "diffpair") {
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleTrackWidth(1)));
       m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleTrackWidth(-1)));
     }
@@ -2126,7 +2153,7 @@ export function useActionRunner() {
           dispatch({ type: "SET_SELECTION", refs: [] });
           // `ImportSizes`: undefined on "use net class" (list index 0, or a custom size chosen), and each connection starts at its own net's
           // width (the server's `CT_WIDTH`). By index, so a preset equal to the Default class's width is still chosen (r4 R4-8).
-          const width = chosenTrackWidth(state.currentTrackWidthNm, state.currentTrackWidthIndex, 1 + (board.routing?.track_width_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
+          const width = chosenTrackWidthOf(board.routing?.track_width_presets ?? [], state.currentTrackWidthIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia.trackNm);
           const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
