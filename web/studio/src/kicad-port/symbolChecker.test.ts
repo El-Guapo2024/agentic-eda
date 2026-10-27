@@ -93,6 +93,14 @@ test("a power symbol needs one unit, one pin, and a power pin", () => {
   assert.deepEqual(texts(hidden), ["Suspicious Power Symbol\nInvisible input power pins are no longer required"]);
 });
 
+test("r6 C6-L3: a local power symbol is not a global one, so its hidden power input pin gets the info line (`!IsGlobalPower()`)", () => {
+  const local = sym({ power: true, power_local: true, reference_prefix: "#PWR", pins: [pin({ electrical_type: "power_in", hidden: true })] });
+  assert.deepEqual(texts(local), [
+    "Suspicious Power Symbol\nInvisible input power pins are no longer required",
+    "Info: Hidden power pin 1  at location (0 mm, 3.81 mm).\n(Hidden power pins will drive their pin names on to any connected nets.)",
+  ]);
+});
+
 test("a hidden power input pin on an ordinary symbol is an info line that names what it will drive", () => {
   const s = sym({ pins: [pin({ number: "8", name: "VCC", electrical_type: "power_in", hidden: true })] });
   assert.deepEqual(texts(s), ["Info: Hidden power pin 8 'VCC' at location (0 mm, 3.81 mm).\n(Hidden power pins will drive their pin names on to any connected nets.)"]);

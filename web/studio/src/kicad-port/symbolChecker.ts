@@ -158,8 +158,8 @@ export function checkLibSymbol(symbol: LibrarySymbol, gridIu: number, fmt: Lengt
       return symbol.unit_count <= 1 ? "." : ` in unit ${unitLetterOf}.`;
     };
 
-    // hidden power pin
-    if (!symbol.power && pin.electrical_type === "power_in" && pin.hidden) {
+    // hidden power pin: `!aSymbol->IsGlobalPower()`, so a local power symbol (`(power local)`) gets the note too (r6 C6-L3)
+    if (!(symbol.power && !symbol.power_local) && pin.electrical_type === "power_in" && pin.hidden) {
       out.push([
         t("Info: "),
         b(`Hidden power pin ${pin.number}`),
