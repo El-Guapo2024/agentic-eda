@@ -43,8 +43,8 @@
 //!   round 4 A-5) within `( width + 1 ) / 2` of it, a zone only when its
 //!   fill touches the segments. A segment with a straight track of another
 //!   width attached is not merged (`mergeSegments`' necking-down rule).
-//!   The dialog's filter and the lock are one set here: a filtered track
-//!   still counts as attached where KiCad's `filterItem` skips it. Not ported: the merge of overlapping or
+//!   A track the dialog's filter skips is not counted as attached, a locked
+//!   one is (`!filterItem( candidate )`, R6-Z4). Not ported: the merge of overlapping or
 //!   folded-back collinear segments into their bounding span, and
 //!   `ApproxCollinear`'s 1 nm tolerance.
 
@@ -619,12 +619,14 @@ fn is_node(p: Point, segs: [(Point, Point); 2], layer: &str, width: Nm, exclude:
 
 /// `TRACKS_CLEANER::cleanup`'s `mergeSegments`: "Do not merge an end which has different width tracks attached -- it's a common use-case for
 /// necking-down a track between pads." A segment that connectivity joins (anywhere along it) to a straight track (`PCB_TRACE_T`, not an arc) of
-/// another width takes part in no merge as the segment the pass starts from.
-fn has_different_width_attached(seg: &Track, tracks: &[Track]) -> bool {
+/// another width takes part in no merge as the segment the pass starts from. A track the dialog's filter leaves out is no candidate (`!filterItem( candidate )`,
+/// R6-Z4); a locked one is.
+fn has_different_width_attached(seg: &Track, tracks: &[Track], prot: &Protected) -> bool {
     let (a, b) = (seg.pts[0], seg.pts[1]);
     let hw = seg.width.as_f64() / 2.0;
     tracks.iter().any(|t| {
         t.id != seg.id
+            && !prot.filtered_tracks.contains(&t.id)
             && t.layer == seg.layer
             && t.width != seg.width
             && t.arc().is_none()
@@ -647,7 +649,7 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
             // the board's order stands for KiCad's `candidate < segment` (the items' addresses): the pair is tried from its first segment, whose
             // attached tracks decide
             // ("one can merge only collinear segments, not vias or arcs")
-            if tracks[i].pts.len() != 2 || tracks[i].arc().is_some() || has_different_width_attached(&tracks[i], tracks) {
+            if tracks[i].pts.len() != 2 || tracks[i].arc().is_some() || has_different_width_attached(&tracks[i], tracks, prot) {
                 continue;
             }
             for j in (i + 1)..tracks.len() {
