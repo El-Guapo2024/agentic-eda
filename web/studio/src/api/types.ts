@@ -1895,7 +1895,7 @@ export type Cmd =
   /** `eeschema.EditorControl.editSymbolLibraryLinks`: every symbol linked to a `from` library id is linked to the paired `to` id (`update_fields`: the Datasheet follows the library symbol). */
   | { op: "set_symbol_lib_ids"; changes: Array<[string, string]>; update_fields?: boolean }
   /** `eeschema.EditorControl.incrementAnnotations`: every reference with the start's letters and a number at least its own moves by `increment`. */
-  | { op: "increment_annotations"; start: string; increment: number }
+  | { op: "increment_annotations"; start: string; increment: number; all_sheets?: boolean }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
   | { op: "add_erc_exclusion"; check: string; location: string; comment?: string; marker?: ErcMarker }
   /** `sheet`: the sheet path of the finding's marker, so that deleting one placement's exclusion leaves the other placements' of a shared screen. */
@@ -3388,7 +3388,7 @@ export interface FindMatch {
   page?: string;
   /** The sheet's place in the page order: matches come sorted by it. */
   sheet_rank?: number;
-  kind: "field" | "label" | "text" | "pin";
+  kind: "field" | "label" | "text" | "pin" | "label_field";
   /** Symbol reference / label id / text id that owns the match. */
   id: string;
   /** Field name or pin number (empty for labels/text). */

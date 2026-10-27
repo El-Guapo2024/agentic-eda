@@ -104,3 +104,21 @@ test("a search goes over every sheet unless the current sheet only, or the selec
   assert.match(endReachedMessage(true), /^Reached end of schematic\. Find again/);
   assert.match(endReachedMessage(false), /^Reached end of sheet\. Find again/);
 });
+
+// ---- r5 C5-L4 / C5-L5
+import { WRAP_WINDOW_MS, currentMatch, findStartCursor } from "./schFind";
+
+test("a Find wraps only within 4 s of the end being reported (m_wrapAroundTimer)", () => {
+  assert.equal(findStartCursor("c", 1000, 1000 + WRAP_WINDOW_MS - 1, true), WRAP_CURSOR);
+  assert.equal(findStartCursor("c", 1000, 1000 + WRAP_WINDOW_MS - 1, false), null);
+  assert.equal(findStartCursor("c", 1000, 1000 + WRAP_WINDOW_MS, true), "c", "later, the walk goes on from the cursor and reports the end again");
+  assert.equal(findStartCursor("c", null, 5, true), "c");
+});
+
+test("Replace takes the selected item when it matches, the cursor's match with selected-only", () => {
+  const ms = [m("R1", 0), m("R3", 20)];
+  assert.equal(currentMatch(ms, "R1", ["R3"], false)?.key, "R3", "the user clicked R3 after the Find went to R1");
+  assert.equal(currentMatch(ms, "R1", ["C9"], false), null, "a non-matching selection replaces nothing");
+  assert.equal(currentMatch(ms, "R1", [], false), null);
+  assert.equal(currentMatch(ms, "R1", ["R3"], true)?.key, "R1", "selected-only: m_afterItem");
+});

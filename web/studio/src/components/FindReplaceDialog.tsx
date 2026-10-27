@@ -3,15 +3,12 @@
 // sch_find_replace_tool.cpp). One dialog, two modes like the source's
 // DIALOG_SCH_FIND (`SetReplaceMode`): "find" hides the replace controls.
 //
-// Options ported from the dialog: Match case, Whole word (+ Wildcards, the
-// third EDA_SEARCH_MATCH_MODE the dialog does not expose but the data
-// struct has), Search all fields (hidden ones too: `searchAllFields`),
-// Search pins (`searchAllPins`), Search net names (`searchNetNames`),
-// Replace in references (`replaceReferences`), "Search the current sheet
-// only" (`searchCurrentSheetOnly`; off, the search goes over every sheet of
-// the hierarchy in page order and each match takes you to its sheet) and
-// "Search only selected objects" (`searchSelectedOnly`, which implies the
-// current sheet). Not ported: regex mode.
+// Options ported from the dialog, with its labels (dialog_sch_find_base.cpp): Match case, Whole words only (`updateFlags` sets WHOLEWORD
+// or PLAIN; the dialog has no wildcard mode), Search pin names and numbers (`searchAllPins`), Include hidden fields (`searchAllFields`),
+// "Search the current sheet only" (`searchCurrentSheetOnly`; off, the search goes over every sheet of the hierarchy in page order and
+// each match takes you to its sheet), Search net names (`searchNetNames`), and -- shown in the replace dialog only (`if( aStyle &
+// wxFR_REPLACEDIALOG )`) -- "Search the current selection only" (`searchSelectedOnly`, which implies the current sheet) and "Replace matches
+// in reference designators" (`replaceReferences`). Not ported: the replace dialog's Regular Expression box.
 //
 // Find Next/Previous cycle the match list GET /api/sch/find returns (the
 // `nextMatch` order) with a cursor shared with F3 / Shift+F3
@@ -97,23 +94,15 @@ export function FindReplaceDialog() {
             </label>
             <label className="toggle">
               <input type="checkbox" checked={modeValue === "whole_word"} onChange={(e) => update({ mode: e.target.checked ? "whole_word" : "plain" })} />
-              Whole word
-            </label>
-            <label className="toggle">
-              <input type="checkbox" checked={modeValue === "wildcard"} onChange={(e) => update({ mode: e.target.checked ? "wildcard" : "plain" })} />
-              Wildcards (* and ?)
-            </label>
-            <label className="toggle">
-              <input type="checkbox" checked={search.search_hidden_fields} onChange={(e) => update({ search_hidden_fields: e.target.checked })} />
-              Search all fields (incl. hidden)
+              Whole words only
             </label>
             <label className="toggle">
               <input type="checkbox" checked={search.search_pins} onChange={(e) => update({ search_pins: e.target.checked })} />
-              Search pins
+              Search pin names and numbers
             </label>
             <label className="toggle">
-              <input type="checkbox" checked={search.search_net_names} onChange={(e) => update({ search_net_names: e.target.checked })} />
-              Search net names
+              <input type="checkbox" checked={search.search_hidden_fields} onChange={(e) => update({ search_hidden_fields: e.target.checked })} />
+              Include hidden fields
             </label>
             <label className="toggle" title="Off: the search goes over every sheet of the hierarchy, in page order, and takes you to the sheet of each match">
               <input
@@ -125,14 +114,20 @@ export function FindReplaceDialog() {
               Search the current sheet only
             </label>
             <label className="toggle">
-              <input type="checkbox" checked={selectedOnly} onChange={(e) => dispatch({ type: "SET_SCH_FIND", find: { selectedOnly: e.target.checked } })} />
-              Search only selected objects
+              <input type="checkbox" checked={search.search_net_names} onChange={(e) => update({ search_net_names: e.target.checked })} />
+              Search net names
             </label>
             {replaceMode && (
-              <label className="toggle">
-                <input type="checkbox" checked={search.replace_references} onChange={(e) => update({ replace_references: e.target.checked })} />
-                Replace in reference designators
-              </label>
+              <>
+                <label className="toggle">
+                  <input type="checkbox" checked={selectedOnly} onChange={(e) => dispatch({ type: "SET_SCH_FIND", find: { selectedOnly: e.target.checked, cursor: null, status: "" } })} />
+                  Search the current selection only
+                </label>
+                <label className="toggle">
+                  <input type="checkbox" checked={search.replace_references} onChange={(e) => update({ replace_references: e.target.checked })} />
+                  Replace matches in reference designators
+                </label>
+              </>
             )}
           </div>
           <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 11 }}>
