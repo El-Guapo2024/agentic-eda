@@ -1090,7 +1090,8 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   for (const s of sch.symbols) unitCounts.set(s.id, (unitCounts.get(s.id) ?? 0) + 1);
   for (const s of sch.symbols) {
     const selected = opts.selection.has(s.id);
-    const unitSuffix = (unitCounts.get(s.id) ?? 1) > 1 ? unitLetter(s.unit) : "";
+    // `SCH_SYMBOL::SubReference` (KiCad 25ec2335): a unit's display name in place of its letter
+    const unitSuffix = (unitCounts.get(s.id) ?? 1) > 1 ? (sch.lib_symbols[s.lib_id ?? ""]?.unit_names?.[String(s.unit)] ?? unitLetter(s.unit)) : "";
     const real = resolveLibSymbol(s, sch.lib_symbols);
     if (real) {
       drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix, display.showHiddenPins, real.texts);

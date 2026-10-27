@@ -2473,6 +2473,8 @@ export interface LibSymbol {
   pin_name_offset?: Mm;
   /** `LIB_SYMBOL::GetBodyStyleCount`: 2 for a symbol with an alternate ("De Morgan") body style, whose items are then of `body_style` 1 or 2 (or 0, drawn in both); 1 (or absent) for one with a single body. */
   body_style_count?: number;
+  /** `LIB_SYMBOL::GetUnitDisplayNames`, by unit number: a unit's `(unit_name ..)`, which KiCad 25ec2335's `SCH_SYMBOL::SubReference` shows in place of its letter. */
+  unit_names?: Record<string, string>;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */

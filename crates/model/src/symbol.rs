@@ -276,6 +276,10 @@ pub struct LibConnectivity {
     /// electrical type ([`LibSymbol::placed_pin_type`]). Kept here, not on [`LibPin`], so the pin's literals stay as they are.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub pin_alternates: std::collections::BTreeMap<String, Vec<crate::ir::PinAlternate>>,
+    /// The units' display names (`(unit_name "..")` of a unit's sub-symbol, `LIB_SYMBOL::GetUnitDisplayNames`), by unit number. KiCad 25ec2335 names a unit
+    /// by it in place of its letter ([`LibSymbol::sub_reference`]), so a net's default name has it (`unconnected-(A1TopLeft_UnderSide-+3.3V-PadJ1.1)`, r6 B6-H1).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub unit_names: std::collections::BTreeMap<u32, String>,
 }
 
 impl LibConnectivity {
@@ -285,6 +289,15 @@ impl LibConnectivity {
 }
 
 impl LibSymbol {
+    /// `SCH_SYMBOL::SubReference( aUnit, false )` (KiCad 25ec2335, `sch_symbol.cpp`): "A custom unit display name overrides the default A/B/C (or numeric)
+    /// suffix", else the unit's letters (`LIB_SYMBOL::LetterSubReference( aUnit, 'A' )`). The separator (`m_SubpartIdSeparator`) is KiCad's default, none.
+    pub fn sub_reference(&self, unit: u32) -> String {
+        match self.connectivity.unit_names.get(&unit) {
+            Some(name) => name.clone(),
+            None => crate::annotate::unit_letters(unit),
+        }
+    }
+
     /// The electrical type of the library pin `pin` on a placed symbol that picked the alternate function `alt` for it (`SCH_PIN::GetType`: an alternate's
     /// `m_Type` when the pin has one, `m_libPin->GetAlt( m_alt )`). `SCH_PIN::SetAlt` keeps no alternate that is the pin's own name or that the library
     /// pin does not have, so for those, and for no alternate, it is the library pin's type (r5 D5-H3).

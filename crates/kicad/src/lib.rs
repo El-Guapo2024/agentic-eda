@@ -1002,7 +1002,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                     let pin_type = resolve_pin_electrical_type(pin, resolved.as_ref());
                     let function = pin.name.as_deref().filter(|n| !n.is_empty() && *n != "~").map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
                     link.pins.entry(pin.number.clone()).or_insert((function, pin_type));
-                    link.units.entry(pin.number.clone()).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
+                    link.units.entry(pin.number.clone()).or_insert_with(|| format!("{reference}{}", resolved.as_ref().map_or_else(|| eda_model::annotate::unit_letters(sym.unit), |r| r.sub_reference(sym.unit))));
                 }
                 continue;
             }
@@ -1047,7 +1047,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                     .filter(|pin| drawn(&pin.number))
                     .map(|pin| {
                         let unit = r.pin_by_number(&pin.number).map(|p| p.unit).filter(|u| *u > 0).unwrap_or(sym.unit);
-                        (pin.number.clone(), format!("{reference}{}", eda_model::annotate::unit_letters(unit)))
+                        (pin.number.clone(), format!("{reference}{}", r.sub_reference(unit)))
                     })
                     .collect(),
                 None => BTreeMap::new(),
@@ -1458,6 +1458,10 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
         // The places Swap Pins traded in this unit: pin `n` has the place of pin `swap[n]`, so the place of pin `m` is worn by the pin whose entry names `m`.
         let swap_map = swaps.and_then(|(sch, reference)| sch.extras.pin_swaps_of(&eda_model::ir::field_key(reference, u)));
         writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_{u}_{style}"))).unwrap();
+        // "if the unit has a display name, write that" (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`): KiCad 25ec2335 names the unit by it (r6 B6-H1)
+        if let Some(name) = resolved.and_then(|s| s.connectivity.unit_names.get(&u)) {
+            writeln!(out, "\t\t\t\t(unit_name {})", sexpr_str(name)).unwrap();
+        }
         // This unit's own graphics (a multi-unit symbol very often draws a
         // different body outline per unit -- e.g. each gate of a logic
         // array) -- unit 1 of a single-unit part has none of these beyond

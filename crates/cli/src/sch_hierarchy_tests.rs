@@ -1970,3 +1970,66 @@ fn a_pasted_sheet_keeps_the_unit_its_path_drew() {
     let new_id = sheets.last().unwrap().id.clone();
     assert_eq!(eda_model::sheet_list::unit_under(screen, u1, &[new_id]), 2, "{:?}", screen.extras.path_units);
 }
+
+// ---------------------------------------------------------------------------------------- round 6
+
+/// r6 B6-H1 (KiCad 25ec2335 `SCH_SYMBOL::SubReference`: "A custom unit display name overrides the default A/B/C (or numeric) suffix"): QA `issue21980`'s
+/// `A1` names its units `TopLeft_UnderSide` .. `Eqep2`. The design's nets are kicad-cli's (`unconnected-(A1TopLeft_UnderSide-+3.3V-PadJ1.1)`, not `A1A`), the
+/// derived file's cache keeps the names (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`: "if the unit has a display name, write that"), and the studio's
+/// `${UNIT}` and the shown sub-reference are the name.
+#[test]
+fn a_units_display_name_names_its_nets() {
+    let Some(dir) = qa_imported("issue21980/issue21980.kicad_sch", "unit_display_names") else { return };
+    let (_, design, model) = load(&dir).unwrap();
+    let names: Vec<&str> = design.nets.iter().flatten().map(|n| n.name.as_str()).collect();
+    assert!(names.contains(&"unconnected-(A1TopLeft_UnderSide-+3.3V-PadJ1.1)"), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("(A1A-")), "{names:?}");
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-28", title: "t" }, "board.kicad_sch").unwrap();
+    let derived = &files[0].1;
+    assert!(derived.contains("(unit_name \"TopLeft_UnderSide\")") && derived.contains("(unit_name \"Eqep2\")"), "the cache keeps the units' names");
+    let sheet = crate::studio::schematic_json(&dir, "", eda_model::text_vars::Clock::utc_now()).unwrap();
+    let lib = sheet["lib_symbols"].as_object().unwrap().values().find(|l| l["unit_names"].as_object().is_some_and(|m| !m.is_empty())).expect("a symbol with unit names");
+    assert_eq!(lib["unit_names"]["1"], "TopLeft_UnderSide");
+    if kicad_cli_ready() {
+        // every net named as kicad-cli names the original's (which its XML writes unescaped, `UnescapeString`), and the derived file read back the same
+        let root = dir.parent().unwrap().join("src/issue21980.kicad_sch");
+        let original = kicad_cli_named_nets(&root);
+        let ours: std::collections::BTreeMap<String, Vec<String>> =
+            design.nets.iter().flatten().map(|n| (eda_model::text_vars::unescape_string(&n.name), n.pins.iter().filter(|p| !p.starts_with('#')).cloned().collect::<Vec<_>>())).filter(|(_, p)| !p.is_empty()).map(|(n, mut p)| { p.sort(); (n, p) }).collect();
+        assert_eq!(ours, original, "the design's nets are kicad-cli's");
+        let derived_dir = dir.parent().unwrap().join("derived");
+        std::fs::create_dir_all(&derived_dir).unwrap();
+        for (name, text) in &files {
+            std::fs::write(derived_dir.join(name), text).unwrap();
+        }
+        assert_eq!(kicad_cli_named_nets(&derived_dir.join("board.kicad_sch")), original, "kicad-cli reads the derived file's names as the original's");
+    }
+}
+
+/// kicad-cli's netlist of `root` as `name -> pins` (sorted, `#` pins left out, nets of no other pin left out).
+fn kicad_cli_named_nets(root: &Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    let out = root.with_extension("names.net.xml");
+    let status = std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "export", "netlist", "--format", "kicadxml", "-o"]).arg(&out).arg(root).output().unwrap();
+    assert!(out.exists(), "kicad-cli exports {}: {}", root.display(), String::from_utf8_lossy(&status.stderr));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let unescape = |s: &str| s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
+    let attr = |line: &str, name: &str| line.split(&format!(" {name}=\"")).nth(1).and_then(|r| r.split('"').next()).map(unescape).unwrap_or_default();
+    let mut nets = std::collections::BTreeMap::new();
+    let mut current: Option<(String, Vec<String>)> = None;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            current = Some((attr(line, "name"), Vec::new()));
+        } else if line.starts_with("</net>") {
+            if let Some((name, mut pins)) = current.take().filter(|(_, p)| !p.is_empty()) {
+                pins.sort();
+                nets.insert(name, pins);
+            }
+        } else if line.starts_with("<node ") {
+            let reference = attr(line, "ref");
+            if let Some((_, pins)) = current.as_mut().filter(|_| !reference.starts_with('#')) {
+                pins.push(format!("{reference}.{}", attr(line, "pin")));
+            }
+        }
+    }
+    nets
+}

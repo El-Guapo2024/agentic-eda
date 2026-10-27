@@ -4712,6 +4712,7 @@ impl LibrarySymbol {
                 duplicate_pin_numbers_are_jumpers: self.kicad.duplicate_pin_numbers_are_jumpers,
                 jumper_pin_groups: self.kicad.jumper_pin_groups.clone(),
                 pin_alternates: self.pins.iter().filter(|p| !p.alternates.is_empty()).map(|p| (p.number.clone(), p.alternates.clone())).collect(),
+                unit_names: self.kicad.unit_names.clone(),
             },
         }
     }

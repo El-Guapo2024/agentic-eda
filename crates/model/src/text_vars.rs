@@ -733,6 +733,9 @@ pub struct SchSymbol {
     pub exclude_from_board: bool,
     pub exclude_from_sim: bool,
     pub pins: Vec<SchPin>,
+    /// The units' display names of the symbol's library symbol (`LIB_SYMBOL::GetUnitDisplayNames`), which [`SchSymbol::unit_letter_of`] gives in place of
+    /// a letter (KiCad 25ec2335 `SCH_SYMBOL::SubReference`, r6 B6-H1).
+    pub unit_names: std::collections::BTreeMap<u32, String>,
 }
 
 /// One sheet of the path from the root down to the sheet in view (`SCH_SHEET_PATH`): the placement's fields and the title block of the screen it shows.
@@ -903,6 +906,9 @@ impl SchSymbol {
     pub fn unit_letter_of(&self, unit: u32) -> String {
         if unit == 0 {
             return String::new();
+        }
+        if let Some(name) = self.unit_names.get(&unit) {
+            return name.clone();
         }
         let mut n = unit - 1;
         let mut s = String::new();
@@ -1165,5 +1171,8 @@ mod tests {
     fn unit_letters_count_like_a_spreadsheet() {
         let s = SchSymbol::default();
         assert_eq!((s.unit_letter_of(1), s.unit_letter_of(2), s.unit_letter_of(26), s.unit_letter_of(27), s.unit_letter_of(0)), ("A".into(), "B".into(), "Z".into(), "AA".into(), String::new()));
+        // a unit's display name in place of its letter (r6 B6-H1)
+        let named = SchSymbol { unit_names: [(2, "Eqep2".to_string())].into(), ..Default::default() };
+        assert_eq!((named.unit_letter_of(1), named.unit_letter_of(2)), ("A".into(), "Eqep2".into()));
     }
 }

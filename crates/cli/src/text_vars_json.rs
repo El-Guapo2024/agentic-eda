@@ -169,7 +169,7 @@ fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::i
     for (name, text) in sch.user_fields.get(&sym.id).into_iter().flatten() {
         fields.push((name.clone(), text.clone()));
     }
-    let probe = SchSymbol::default();
+    let probe = SchSymbol { unit_names: lib.as_ref().map(|l| l.connectivity.unit_names.clone()).unwrap_or_default(), ..Default::default() };
     let letter = probe.unit_letter_of(sym.unit);
     let lib_id = if sym.lib_id.is_empty() { format!("eda:{}", sym.id) } else { sym.lib_id.clone() };
     let (nickname, item) = lib_id.split_once(':').unwrap_or(("", lib_id.as_str()));
@@ -202,6 +202,7 @@ fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::i
         exclude_from_board: sym.exclude_from_board,
         exclude_from_sim: sym.exclude_from_sim,
         pins,
+        unit_names: probe.unit_names,
     }
 }
 

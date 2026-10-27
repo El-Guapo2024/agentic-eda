@@ -268,7 +268,12 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
             pin_alternates.entry(number.to_string()).or_insert(alts);
         }
     }
+    // a unit's `(unit_name "..")` (`parseSymbol`'s `T_unit_name`: `symbol->GetUnitDisplayNames()[m_unit] = FromUTF8()`), by its sub-symbol's unit (r6 B6-H1)
+    let unit_names = sexpr::find_all(node, "symbol")
+        .filter_map(|sub| Some((unit_and_style_of_subname(sexpr::txt(sub, 1)?).0, sexpr::find(sub, "unit_name").and_then(|n| sexpr::txt(n, 1))?.to_string())))
+        .collect();
     eda_model::symbol::LibConnectivity {
+        unit_names,
         power_local: sexpr::find(node, "power").and_then(|p| sexpr::txt(p, 1)) == Some("local"),
         duplicate_pin_numbers_are_jumpers: sexpr::find(node, "duplicate_pin_numbers_are_jumpers").and_then(|p| sexpr::txt(p, 1)) == Some("yes"),
         jumper_pin_groups,

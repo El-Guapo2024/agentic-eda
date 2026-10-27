@@ -558,7 +558,8 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
                 if !p.name.is_empty() {
                     pin_names.insert(key.clone(), p.name.clone());
                 }
-                pin_units.entry(key).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(unit)));
+                // (`SCH_SYMBOL::SubReference`: the unit's display name when it has one, r6 B6-H1)
+                pin_units.entry(key).or_insert_with(|| format!("{reference}{}", lib.sub_reference(unit)));
                 if p.unit == 0 {
                     common_pins.insert(format!("{reference}.{}", p.number));
                 }
