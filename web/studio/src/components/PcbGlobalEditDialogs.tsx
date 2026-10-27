@@ -89,7 +89,8 @@ export function CleanupGraphicsDialog({ shapes, options, onOk }: { shapes: reado
       width={460}
       onCancel={closeSweepDialog}
       okLabel="Update PCB"
-      okDisabled={!any || (o.fixBoardOutlines && tolerance === null)}
+      // KiCad's OK always runs `doCleanup( false )`, which pushes nothing when nothing is ticked (round 5 B5-7); only a tolerance that is no length holds it.
+      okDisabled={o.fixBoardOutlines && tolerance === null}
       onOk={() => {
         closeSweepDialog();
         onOk(opts);
