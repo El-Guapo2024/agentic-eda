@@ -70,3 +70,28 @@ fn gerberprecision_is_clamped_as_kicad_reads_it() {
     let (design, _, _) = import_kicad_pcb(&legacy("(gerberprecision 7)")).expect("parses");
     assert_eq!(design.drawings.as_ref().unwrap().plot_params.as_ref().unwrap().item("gerberprecision"), None);
 }
+
+/// X3-1, against kicad-cli (`EDA_SLOW_TESTS=1`): the board we write after tenting the vias of a `(viasonmask yes)` board reads tented in
+/// kicad-cli (`pcb upgrade --force` writes what it read), and both legacy tokens are gone, as from a board KiCad saves.
+#[test]
+fn kicad_cli_reads_the_tenting_we_write() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let cli = std::env::var_os("EDA_KICAD_CLI").map(std::path::PathBuf::from).unwrap_or_else(|| "kicad-cli".into());
+    let (design, mut model, _) = import_kicad_pcb(&legacy("(viasonmask yes) (excludeedgelayer no)")).expect("parses");
+    model.board.solder_mask.tent_vias_front = true;
+    model.board.solder_mask.tent_vias_back = true;
+    let dir = std::env::temp_dir().join(format!("eda_plot_params_legacy_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("ours.kicad_pcb");
+    std::fs::write(&path, export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-01-01", title: "r3" }).expect("export")).unwrap();
+    let up = std::process::Command::new(cli).args(["pcb", "upgrade", "--force"]).arg(&path).output().expect("kicad-cli runs");
+    assert!(up.status.success(), "kicad-cli pcb upgrade failed: {}", String::from_utf8_lossy(&up.stderr));
+    let back = std::fs::read_to_string(&path).unwrap();
+    let flat: String = back.split_whitespace().collect::<Vec<_>>().join(" ").replace(" )", ")");
+    assert!(flat.contains("(tenting (front yes) (back yes))"), "{back}");
+    assert!(flat.contains("(plot_on_all_layers_selection 0x00000000_00000000_00000000_02000000)"), "{back}");
+    assert!(!back.contains("viasonmask") && !back.contains("excludeedgelayer"));
+}
