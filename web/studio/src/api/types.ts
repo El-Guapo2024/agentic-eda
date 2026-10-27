@@ -320,6 +320,14 @@ export interface Part {
   attrs?: FootprintAttrsInfo;
   /** The zone-connection facts this placed footprint and its pads carry (`crates/cli/src/studio.rs`); absent when there are none. */
   zone?: PartZoneFacts;
+  /** `FOOTPRINT::GetLibDescription` and `GetKeywords`: the board file's `(descr ..)` and `(tags ..)` of the footprint; absent when it has none. */
+  lib_description?: string;
+  keywords?: string;
+  /** The component classes the board file gives the footprint itself (`(component_classes ..)`); absent when none. */
+  component_classes?: string[];
+  /** The footprint's own `(solder_paste_margin ..)` (nm) and `(solder_paste_margin_ratio ..)` (`GetLocalSolderPasteMargin`, `..Ratio`); absent when it has none. */
+  paste_margin?: Nm;
+  paste_margin_ratio?: number;
 }
 
 /** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */
@@ -1534,6 +1542,8 @@ export type Cmd =
   | { op: "move_via"; id: string; x: Nm; y: Nm }
   /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */
   | { op: "edit_via"; id: string; diameter: Nm; drill: Nm }
+  /** `crates/ops/src/via_layers.rs`: Track & Via Properties' via type, layer pair and annular rings over `ids`; an omitted row is left alone. */
+  | { op: "set_via_layers"; ids: string[]; kind?: "through" | "blind" | "buried" | "micro"; from_layer?: string; to_layer?: string; unconnected?: UnconnectedLayers }
   /** Board Setup > Track Widths & Vias: replace the W/Shift+W preset list wholesale (no per-entry add/remove Cmd -- same spirit as `paste_items`). The board's own default (`board_rules.track_width`) is not part of this list. */
   | { op: "set_track_width_presets"; widths: Nm[] }
   /** Same panel's via-size-cycle preset list. */
@@ -1729,6 +1739,8 @@ export type Cmd =
   | { op: "flip_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
   /** `EDIT_TOOL::Mirror` of tracks and arcs (`PCB_TRACK::Mirror`): the points mirrored across the axis through `pivot`, in place (the id, the layer, the net and the group stay). */
   | { op: "mirror_tracks"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
+  /** `crates/ops/src/pcb_transform.rs` `mirror_items`: `PCB_TEXTBOX::Mirror` and `PCB_TUNING_PATTERN::Mirror` of text boxes and tuning patterns. */
+  | { op: "mirror_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
   /**
    * The Properties panel's own verbs (crates/ops/src/pcb_props.rs): a track's or arc's first and last point (a field left out stays), the net of tracks, vias and zones
    * (only a zone may be given ""), a zone's name, and a shape's new geometry in place (its id and lock stay). Every other row of the grid goes through the verbs above.

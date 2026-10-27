@@ -4,11 +4,13 @@
 //
 //   Common:  Net (`m_netSelector`), Locked (3-state `m_lockedCbox`)
 //   Tracks:  Start X/Y, End X/Y, Width (`m_trackWidth.Validate( GEOMETRY_MIN_SIZE, INT_MAX )`), Layer
-//   Vias:    X/Y, Diameter, Hole (`PCB_VIA::ValidateViaParameters`)
+//   Vias:    X/Y, Diameter, Hole (`PCB_VIA::ValidateViaParameters`), Via type, Start layer, End layer (`m_ViaTypeChoice`, `m_ViaStartLayer`, `m_ViaEndLayer`:
+//            a through via's pair is F.Cu..B.Cu and the two are disabled, `onViaEdit`), Annular rings (`m_annularRingsCtrl`, shown when `getLayerDepth() > 1`)
 //
-// Not here: the via's layer pair and type, the solder mask, backdrill and post-machining rows (no verb edits those yet), and the connected tracks KiCad offers
-// to resize with a via.
-import type { BoardState, Cmd, Nm } from "../api/types";
+// Not here: the protection features (IPC-4761 tenting, covering, plugging, capping, filling), backdrill and post-machining rows: all but tenting exist only in
+// KiCad 10's board format (covering and the rest from 20250228, backdrill and post-machining later), which the writer does not write for a board that never had
+// them; and the connected tracks KiCad offers to resize with a via.
+import type { BoardState, Cmd, Nm, UnconnectedLayers } from "../api/types";
 import { validateViaParameters } from "./routerVia";
 
 export interface TrackViaForm {
@@ -26,6 +28,35 @@ export interface TrackViaForm {
   viaY: Nm | null;
   diameter: Nm | null;
   drill: Nm | null;
+  viaType: ViaType | null;
+  viaFrom: string | null;
+  viaTo: string | null;
+  rings: UnconnectedLayers | null;
+}
+
+export type ViaType = "through" | "micro" | "blind" | "buried";
+/** `m_ViaTypeChoiceChoices`, in the dialog's order. */
+export const VIA_TYPE_CHOICES: readonly [ViaType, string][] = [
+  ["through", "Through"],
+  ["micro", "Micro"],
+  ["blind", "Blind"],
+  ["buried", "Buried"],
+];
+/** `m_annularRingsCtrlChoices` (`getAnnularRingSelection`'s order). */
+export const ANNULAR_RING_CHOICES: readonly [UnconnectedLayers, string][] = [
+  ["keep_all", "All copper layers"],
+  ["remove_except_start_and_end", "Start, end, and connected layers"],
+  ["remove_all", "Connected layers only"],
+  ["start_end_only", "Start and end layers only"],
+];
+
+/** `BOARD::LayerDepth` as `getLayerDepth` asks it: a through via (or a pair not chosen) spans the whole stack, `copperCount - 1`. */
+export function viaLayerDepth(type: ViaType | null, from: string | null, to: string | null, copper: readonly string[]): number {
+  const whole = copper.length - 1;
+  if (type == null || type === "through" || from == null || to == null) return whole;
+  const a = copper.indexOf(from);
+  const b = copper.indexOf(to);
+  return a < 0 || b < 0 ? whole : Math.abs(b - a);
 }
 
 /** The one value every element of `values` has, else null (an indeterminate field). */
@@ -55,6 +86,10 @@ export function trackViaForm(board: BoardState, ids: readonly string[]): TrackVi
     viaY: common(vias.map((v) => v.y)),
     diameter: common(vias.map((v) => v.d)),
     drill: common(vias.map((v) => v.drill)),
+    viaType: common(vias.map((v) => (v.type ?? "through") as ViaType)),
+    viaFrom: common(vias.map((v) => v.from)),
+    viaTo: common(vias.map((v) => v.to)),
+    rings: common(vias.map((v) => v.unconnected ?? "keep_all")),
   };
 }
 
@@ -90,6 +125,18 @@ export function trackViaCmds(board: BoardState, before: TrackViaForm, form: Trac
         cmds.push({ op: "edit_track", id, ...(start ? { start } : {}), ...(end ? { end } : {}) });
       }
     }
+  }
+  if (form.vias.length > 0) {
+    // `ValidateViaParameters`' layer check, before anything is sent
+    if (form.viaType !== "through" && form.viaFrom != null && form.viaFrom === form.viaTo) return { error: "Via start layer and end layer cannot be the same" };
+    const viaRow: Extract<Cmd, { op: "set_via_layers" }> = { op: "set_via_layers", ids: form.vias };
+    if (changed("viaType")) viaRow.kind = form.viaType!;
+    if (form.viaType !== "through") {
+      if (changed("viaFrom")) viaRow.from_layer = form.viaFrom!;
+      if (changed("viaTo")) viaRow.to_layer = form.viaTo!;
+    }
+    if (changed("rings")) viaRow.unconnected = form.rings!;
+    if (Object.keys(viaRow).length > 2) cmds.push(viaRow);
   }
   for (const id of form.vias) {
     const v = board.routing!.vias.find((q) => q.id === id)!;

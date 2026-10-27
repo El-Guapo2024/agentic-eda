@@ -129,7 +129,15 @@ impl Item {
             Item::Track(v) => t::transform_track(v, x, copper),
             Item::Via(v) => t::transform_via(v, x, copper, outer),
             Item::Zone(v) => t::transform_zone(v, x, copper),
-            Item::Shape(v, _) => t::transform_shape(v, x, copper),
+            // A rounded rectangle turned off the quarter becomes the polygon of its rounded rectangle (`EDA_SHAPE::rotate`), its radius gone.
+            Item::Shape(v, style) => {
+                let radius = style.as_ref().map_or(eda_model::ir::Nm::ZERO, |st| st.corner_radius);
+                if t::transform_rounded_shape(v, x, copper, radius) && radius > eda_model::ir::Nm::ZERO {
+                    if let Some(st) = style.as_mut() {
+                        st.corner_radius = eda_model::ir::Nm::ZERO;
+                    }
+                }
+            }
             Item::Text(v, _) => t::transform_text(v, x, copper),
             Item::Dimension(v) => t::transform_dimension(v, x, copper),
             Item::TextBox(v) => super::pcb_items::transform_text_box(v, x, copper),

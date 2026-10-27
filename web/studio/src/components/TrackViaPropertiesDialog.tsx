@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BoardState, Nm } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { pcbContext } from "../kicad-port/pcbProperties";
-import { trackViaCmds, trackViaForm, type TrackViaForm } from "../kicad-port/trackViaDialog";
+import { ANNULAR_RING_CHOICES, trackViaCmds, trackViaForm, VIA_TYPE_CHOICES, viaLayerDepth, type TrackViaForm, type ViaType } from "../kicad-port/trackViaDialog";
+import type { UnconnectedLayers } from "../api/types";
 import { useStudioApi } from "../state/store";
 import { formatLength, nmFrom, nmTo, type LengthUnit } from "../state/units";
 
@@ -116,6 +117,60 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
                 {lengthRow("Via Y", "viaY")}
                 {lengthRow("Diameter", "diameter")}
                 {lengthRow("Hole", "drill")}
+                <span>Via type:</span>
+                <span>
+                  <select
+                    aria-label="Via type"
+                    value={form.viaType ?? "\u0000"}
+                    onChange={(e) => {
+                      const t = e.target.value === "\u0000" ? null : (e.target.value as ViaType);
+                      // `onViaEdit`: a through via spans F.Cu..B.Cu, its layer choices disabled
+                      setForm((f) => ({ ...f, viaType: t, ...(t === "through" ? { viaFrom: "F.Cu", viaTo: "B.Cu" } : {}) }));
+                    }}
+                  >
+                    {form.viaType == null && <option value={"\u0000"}>{"<...>"}</option>}
+                    {VIA_TYPE_CHOICES.map(([k, label]) => (
+                      <option key={k} value={k}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+                {(["viaFrom", "viaTo"] as const).map((key) => (
+                  <span key={key} style={{ display: "contents" }}>
+                    <span>{key === "viaFrom" ? "Start layer:" : "End layer:"}</span>
+                    <span>
+                      <select
+                        aria-label={key === "viaFrom" ? "Start layer" : "End layer"}
+                        disabled={form.viaType === "through"}
+                        value={form[key] ?? "\u0000"}
+                        onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value === "\u0000" ? null : e.target.value }))}
+                      >
+                        {form[key] == null && <option value={"\u0000"}>{"<...>"}</option>}
+                        {copper.map((l) => (
+                          <option key={l} value={l}>
+                            {layerDisplayName(layerSetup, l)}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </span>
+                ))}
+                {viaLayerDepth(form.viaType, form.viaFrom, form.viaTo, copper) > 1 && (
+                  <>
+                    <span>Annular rings:</span>
+                    <span>
+                      <select aria-label="Annular rings" value={form.rings ?? "\u0000"} onChange={(e) => setForm((f) => ({ ...f, rings: e.target.value === "\u0000" ? null : (e.target.value as UnconnectedLayers) }))}>
+                        {form.rings == null && <option value={"\u0000"}>{"<...>"}</option>}
+                        {ANNULAR_RING_CHOICES.map(([k, label]) => (
+                          <option key={k} value={k}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </>
+                )}
               </>
             )}
           </div>

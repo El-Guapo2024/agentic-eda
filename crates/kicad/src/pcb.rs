@@ -306,7 +306,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             };
             let filled = fills.and_then(|k| k.current(z)).is_some_and(|e| !e.unfilled);
             let mut block = String::new();
-            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, filled, enabled_layers: Some(&enabled) });
+            let thieving = design.drawings.as_ref().and_then(|d| d.zone_thieving.iter().find(|t| t.id == z.id)).map(|t| t.settings.as_str());
+            let layer_props = design.drawings.as_ref().and_then(|d| d.zone_layer_props.iter().find(|t| t.id == z.id)).map(|t| t.settings.as_str());
+            let arc_rings = design.drawings.as_ref().and_then(|d| d.zone_arcs.iter().find(|a| a.id == z.id)).filter(|a| a.shape == eda_model::ir::ZoneArcs::shape_of(z)).map(|a| a.rings.as_slice());
+            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, filled, enabled_layers: Some(&enabled), thieving, arc_rings, layer_props });
             zone_blocks.push((z.parent_footprint.clone(), block));
         }
     }
@@ -368,7 +371,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
 
         let mut vias: Vec<&Via> = routing.vias.iter().collect();
         vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
-        // Two vias of a net at one point (a microvia stack's, `PCB_VIA_STACK`) would mint one uuid: the second takes its layers into the seed.
+        // Two vias of a net at one point (a microvia stack's, `PCB_VIA_STACK`) would mint one uuid: the second takes its layers into the seed, and any later one at the
+        // same place on the same layers a count as well (25ec2335 `multichannel_nested` has three VCC vias at one point; `resolveGroups` finds one item per uuid).
         let mut via_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for v in &vias {
             let n = net_of("a via", &format!("{} at ({}, {})", v.net, v.at.x, v.at.y), &v.net);
@@ -379,8 +383,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             let lock = if is_locked(&v.id) { " (locked yes)" } else { "" };
             let mut seed = format!("via:{}:{}:{}", v.net, v.at.x, v.at.y);
             if !via_seeds.insert(seed.clone()) {
-                seed = format!("{seed}:{}:{}", v.from_layer, v.to_layer);
-                via_seeds.insert(seed.clone());
+                let layered = format!("{seed}:{}:{}", v.from_layer, v.to_layer);
+                seed = layered.clone();
+                let mut k = 2;
+                while !via_seeds.insert(seed.clone()) {
+                    seed = format!("{layered}:{k}");
+                    k += 1;
+                }
             }
             let uuid = crate::duid_for(&seed, &v.id);
             written.entry(v.id.clone()).or_default().push(uuid.clone());
@@ -496,6 +505,12 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
         // KiCad 10's via stitchings, generators too.
         crate::via_stitch_io::write_all(&mut out, &drawings.board_items.via_stitches, &written, &|v| crate::duid_for(&format!("generated:{}", v.id), &v.id), &is_locked);
+        // The generators nothing reads (`via_stack`), with the uuids their members were just written as.
+        for g in &drawings.raw_generators {
+            let members: Vec<String> = g.member_ids.iter().flat_map(|id| written.get(id).into_iter().flatten()).map(|u| sexpr_str(u)).collect();
+            let text = g.text.strip_suffix(')').unwrap_or(&g.text);
+            writeln!(out, "\t{text} (members {}))", members.join(" ")).unwrap();
+        }
     }
 
     // The items nothing reads (a text box, a reference image, a target ..), as the file had them.
@@ -554,9 +569,11 @@ fn layer_ordinal(layer: &str) -> i32 {
 /// `TechAndUserUIOrder`, typed `user` unless a user layer is off-board at the front or the back. A layer the user renamed, and every layer whose standard name
 /// KiCad shows differs from the one the file writes (`F.SilkS` is `F.Silkscreen`), carries that name as the entry's last word.
 pub(crate) fn write_layers(out: &mut String, copper_layers: &[String], setup: &LayerSetup) {
+    // A layer shown by the very name the file writes needs no name of its own -- unless KiCad's standard name for it differs (`F.SilkS` is `F.Silkscreen`): a layer of a
+    // file from before 20200922 is shown by its file name (`parseLayer`), and only an explicit `(5 "F.SilkS" user "F.SilkS")` says so to a reader of this file.
     let shown = |layer: &str| {
         let name = setup.display_name(layer);
-        if name == layer { String::new() } else { format!(" {}", sexpr_str(&name)) }
+        if name == layer && eda_model::layers::standard_layer_name(layer) == layer { String::new() } else { format!(" {}", sexpr_str(&name)) }
     };
     writeln!(out, "\t(layers").unwrap();
     for (i, name) in copper_layers.iter().enumerate() {
@@ -685,10 +702,11 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
         })
     } else {
         // A board built from an intent states no minimums, so the floors are lowered to what the board itself asks of
-        // them: the narrowest class it routes. The router keeps every pad -- through-hole or not -- at least the
-        // board's own default clearance from copper on another net (see `crates/freeroute`'s clearance matrix); that is
-        // the real guarantee behind a hole on this board, so it is what the hole-clearance floor should ask for, never
-        // more.
+        // them: the narrowest class it routes. The hole floors are the board's own `hole_clearance_nm` and
+        // `hole_to_hole_min_nm`, KiCad's defaults unless the intent says otherwise (`DEFAULT_HOLECLEARANCE` and
+        // `DEFAULT_HOLETOHOLEMIN`, 0.25 mm, `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS`): the router keeps exactly
+        // these (`pns::rule_resolver`'s `HOLE_CLEARANCE` and `HOLE_TO_HOLE`), so kicad-cli checks what was routed. (This
+        // wrote the class clearance, 0.2 mm, as the hole clearance until 2026-10-27.)
         let min_clearance = b.net_classes.iter().filter_map(|c| c.clearance).fold(b.clearance, Nm::min);
         let min_track_width = b.net_classes.iter().filter_map(|c| c.track_width).fold(b.track_width, Nm::min);
         serde_json::json!({
@@ -696,8 +714,8 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
             "min_track_width": mm_f(min_track_width),
             "min_via_annular_width": 0.1,
             "min_via_diameter": 0.3,
-            "min_hole_clearance": mm_f(b.clearance),
-            "min_hole_to_hole": 0.25,
+            "min_hole_clearance": mm_f(b.hole_clearance_nm),
+            "min_hole_to_hole": mm_f(b.hole_to_hole_min_nm),
             "min_through_hole_diameter": 0.2,
             "min_microvia_diameter": 0.2,
             "min_microvia_drill": 0.1,
@@ -1180,9 +1198,13 @@ pub(crate) fn write_footprint(
     // matched by nothing, so it would add a second footprint for every symbol. A footprint read from a file keeps the sheet the file named.
     if let Some(link) = link {
         writeln!(out, "\t\t(path {})", sexpr_str(&link.path)).unwrap();
+        // Each of the two only when the file named none (a file that names a `(sheetfile)` and no `(sheetname)` had both written, and KiCad reads the last:
+        // r3-board-io F12, `issue11814`).
         if own_extra.is_none_or(|e| e.sheetname.as_deref().is_none_or(str::is_empty)) {
-            let file = if link.sheetfile.is_empty() { from_schematic.root_sheetfile.as_str() } else { link.sheetfile.as_str() };
             writeln!(out, "\t\t(sheetname {})", sexpr_str(&link.sheetname)).unwrap();
+        }
+        if own_extra.is_none_or(|e| e.sheetfile.as_deref().is_none_or(str::is_empty)) {
+            let file = if link.sheetfile.is_empty() { from_schematic.root_sheetfile.as_str() } else { link.sheetfile.as_str() };
             if !file.is_empty() {
                 writeln!(out, "\t\t(sheetfile {})", sexpr_str(file)).unwrap();
             }
@@ -1230,6 +1252,15 @@ pub(crate) fn write_footprint(
             writeln!(out, "\t\t(clearance {})", mm(c)).unwrap();
         }
         if let Some(c) = facts.footprint_connection {
+            writeln!(out, "\t\t(zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
+        }
+    } else if let Some(e) = own_extra {
+        // A footprint with no pad (a logo: `issue14549`'s `Logo1`) has no pad to resolve the facts through; `format( FOOTPRINT )` writes its own all the same
+        // (r2-board-io F17).
+        if let Some(c) = e.clearance {
+            writeln!(out, "\t\t(clearance {})", mm(c)).unwrap();
+        }
+        if let Some(c) = e.zone_connection {
             writeln!(out, "\t\t(zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
         }
     }
@@ -1673,16 +1704,30 @@ pub(crate) const KICAD9_BOARD_FILE_VERSION: i64 = 20241229;
 /// be interpreted as OFF in legacy boards, not as unspecified (aka: inherit from board stackup)").
 pub(crate) const FIRST_VIA_PROTECTION_VERSION: i64 = 20250228;
 
+/// The first board file version that may hold a copper thieving zone (20260513: `parseZONE`'s `T_thieving`, "thieving requires file version >= 20260513").
+pub(crate) const FIRST_THIEVING_VERSION: i64 = 20260513;
+
+/// Whether some copper pour of the board is written as a thieving zone (`DrawingsSection::zone_thieving`, the zone not hatched since).
+fn has_thieving_zone(design: &Design) -> bool {
+    let Some(d) = design.drawings.as_ref() else { return false };
+    !d.zone_thieving.is_empty()
+        && design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| !z.teardrop && !z.is_rule_area && z.fill_mode == eda_model::ir::FillMode::Polygons && d.zone_thieving.iter().any(|t| t.id == z.id)))
+}
+
 /// The file version a board is written as: KiCad 9's, which every reader of this crate's files opens, unless the board holds KiCad 10 data whose meaning the version decides
 /// (`m_requiredVersion` in 25ec2335's `pcb_io_kicad_sexpr_parser.cpp`):
 /// - board defaults for the vias' covering, plugging, capping or filling (`DrawingsSection::setup_tokens`): a via that says nothing inherits them only from 20250228 on, so the
 ///   board is written as 20250228. The one other gate between the two versions, the stroked zone fill of before 20250210 (`isStrokedFill`), is off in either, as every zone is
 ///   written `(filled_areas_thickness no)`; KiCad 9 cannot read such a setup anyway.
+/// - a copper thieving zone (`DrawingsSection::zone_thieving`): 20260513, the version `parseZONE` asks of one. The gates on the way are met as above, but for 20250926's: a pad's
+///   `(die_delay ..)` is read as a time after it (`parsePAD`), so one kept among a pad's tokens from an older file would change its meaning (no QA board has both).
 /// - The later gates are met where the board is read instead, the tree normalised to KiCad 9's meaning: bold text (20260826, `crate::bold_text`), a footprint's library frame
 ///   (20260616, `crate::fp_transform`), a reference image's scale (20260623, `crate::pcb_image::file_scale`). A version past 20260616 would have every footprint read in its
 ///   library frame, which this writer does not write.
 pub(crate) fn board_file_version(design: &Design) -> i64 {
-    if design.drawings.as_ref().is_some_and(|d| !d.setup_tokens.is_empty()) {
+    if has_thieving_zone(design) {
+        FIRST_THIEVING_VERSION
+    } else if design.drawings.as_ref().is_some_and(|d| !d.setup_tokens.is_empty()) {
         FIRST_VIA_PROTECTION_VERSION
     } else {
         KICAD9_BOARD_FILE_VERSION
@@ -2085,6 +2130,25 @@ mod tests {
         assert_eq!(out.matches("(layer \"B.CrtYd\")").count(), bottom, "a bottom-side footprint's courtyard is on B.CrtYd");
         assert!(out.contains("(fp_rect (start ") && out.contains("(fill none) (layer \"F.CrtYd\")"), "{out}");
         assert!(out.contains("(46 \"B.CrtYd\" user \"B.Courtyard\")") && out.contains("(47 \"F.CrtYd\" user \"F.Courtyard\")"), "both courtyard layers declared, with the names KiCad shows for them (formatBoardLayers)");
+    }
+
+    #[test]
+    fn an_intent_boards_project_asks_the_hole_clearance_the_router_keeps() {
+        // `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS`: `m_HoleClearance = mmToIU( DEFAULT_HOLECLEARANCE )`, 0.25 mm
+        // (`board_design_settings.h`), and `m_HoleToHoleMin` 0.25 mm. The router (`pns::rule_resolver`, `HOLE_CLEARANCE`)
+        // keeps `board.hole_clearance_nm`; the project kicad-cli checks it with has to ask the same, not the class clearance.
+        let (_, model) = fixture();
+        assert!(!model.board.constraints_explicit);
+        let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).expect("valid json");
+        let rules = &pro["board"]["design_settings"]["rules"];
+        assert_eq!(rules["min_hole_clearance"], serde_json::json!(0.25), "KiCad's DEFAULT_HOLECLEARANCE, the router's hole_clearance_nm");
+        assert_eq!(rules["min_hole_to_hole"], serde_json::json!(0.25), "KiCad's DEFAULT_HOLETOHOLEMIN");
+        let mut tighter = model.clone();
+        tighter.board.hole_clearance_nm = Nm::new(300_000);
+        tighter.board.hole_to_hole_min_nm = Nm::new(400_000);
+        let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro(&tighter)).expect("valid json");
+        assert_eq!(pro["board"]["design_settings"]["rules"]["min_hole_clearance"], serde_json::json!(0.3));
+        assert_eq!(pro["board"]["design_settings"]["rules"]["min_hole_to_hole"], serde_json::json!(0.4));
     }
 
     #[test]

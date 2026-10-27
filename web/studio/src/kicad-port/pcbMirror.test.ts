@@ -141,3 +141,23 @@ test("a field and a point are mirrorable: the field's justification flips and it
   assert.equal(edit.layout.halign, 1, "left becomes right");
   assert.deepEqual(cmds.filter((c) => c.op === "move_items"), [{ op: "move_items", ids: ["R1:Value"], dx: 2000, dy: 0 }, { op: "move_items", ids: ["pt_1"], dx: -2000, dy: 0 }]);
 });
+
+test("a text box and a tuning pattern are mirrored by mirror_items, the pattern's tracks as its members; an image is not mirrorable (r2-pcb-edit)", () => {
+  const b = board({
+    routing: { tracks: [{ id: "t1", net: "A", layer: "F.Cu", width: 200, pts: [[0, 0], [100, 0]] }], vias: [], zones: [] } as unknown as BoardState["routing"],
+    drawings: {
+      shapes: [],
+      texts: [],
+      dimensions: [],
+      groups: [{ id: "gen_1", name: "", member_ids: ["t1"], generator: "tuning_pattern" }],
+      text_boxes: [{ id: "tb1", layer: "F.SilkS", text: "x", start: [0, 0], end: [10, 10], pts: [], angle: 0 }],
+      images: [{ id: "img1", layer: "F.SilkS", x: 5, y: 5 }],
+    } as unknown as BoardState["drawings"],
+  });
+  assert.deepEqual(mirrorableIds(b, ["tb1", "gen_1", "img1"]), ["tb1", "gen_1", "t1"]);
+  const plan = planMirror(b, ["tb1", "gen_1", "img1"], [0, 0], "leftRight");
+  assert.deepEqual(plan.cmds, [
+    { op: "mirror_tracks", ids: ["t1"], pivot: { x: 0, y: 0 }, direction: "left_right" },
+    { op: "mirror_items", ids: ["tb1", "gen_1"], pivot: { x: 0, y: 0 }, direction: "left_right" },
+  ] satisfies Cmd[]);
+});

@@ -40,6 +40,8 @@ export interface PropertyDef<I extends PropItem = PropItem, C = unknown, K = unk
   base?: string;
   kind: PropKind;
   display?: PropDisplay;
+  /** A `PROPERTY<Owner, std::optional<T>>`: an empty cell is no value (`std::nullopt`), the getter's "" and the setter's "". */
+  optional?: boolean;
   /** The group the grid puts the row under; "" is "Basic Properties". Set by `addProperty`. */
   group?: string;
   /** The choices of an enum or net row, for this item (`SetChoicesFunc`, `PROPERTY_ENUM`'s `Choices()`). */

@@ -192,13 +192,14 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   );
 
   // ------------------------------------------------------------------ Mirror
-  // EDIT_TOOL::Mirror: shapes, text, zones, tracks, vias and groups about the item's position / the selection centre.
+  // EDIT_TOOL::Mirror: `MirrorableItems` -- shapes, fields, texts, text boxes, zones, tracks, vias, groups (tuning patterns among them) and points -- about the
+  // item's position / the selection centre.
   const mirror = (direction: FlipDirection) =>
     pcbOnly(() => {
       if (!board) return;
       const ids = requestFiltered((id) => {
         const k = itemKind(board, id);
-        return k === "track" || k === "via" || k === "zone" || k === "shape" || k === "text" || k === "group";
+        return k === "track" || k === "via" || k === "zone" || k === "shape" || k === "text" || k === "group" || k === "field" || k === "point" || k === "textbox";
       });
       // `FilterCollectorForLockedItems`: an item that is locked, in a locked group, or a group with a locked item in it, is left out -- then its members.
       const free = ids.filter((id) => !isLocked(board, id));

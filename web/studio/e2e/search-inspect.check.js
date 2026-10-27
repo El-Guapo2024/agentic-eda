@@ -82,7 +82,10 @@
     t(!!dialog("find-by-properties"), "Edit > Find by Properties... opens the dialog");
     t(text("fbp-status") === "Footprint", `the line says what is selected: ${text("fbp-status")}`);
     const names = rowNames();
-    t(names.length >= 10 && JSON.stringify(names) === JSON.stringify([...names].sort()), `${names.length} rows in the alphabetical order of their names`);
+    // the properties in the alphabetical order of their names, then the fields the properties do not show (`getCommonFootprintFieldNames`), Value among them
+    // (`FOOTPRINT_DESC` has no Value property)
+    const props = names.slice(0, Math.max(0, names.indexOf("Value")));
+    t(names.length >= 10 && props.length >= 8 && JSON.stringify(props) === JSON.stringify([...props].sort()), `${props.length} property rows in the alphabetical order of their names, then the field rows (${names.slice(props.length).join(", ")})`);
     t(names.includes("Type") && rowValue("Type") === "Footprint", `Type is a row, though the Properties panel hides it: ${rowValue("Type")}`);
     t(rowValue("Library Link") === c1.footprint, `Library Link is ${rowValue("Library Link")}`);
     t(rowValue("Value") === (c1.value ?? ""), `Value is ${rowValue("Value")}`);
@@ -155,7 +158,8 @@
     t(!button("find-by-properties", "Create from Selection Tab").disabled, "Create from Selection Tab is on with a row active");
     await pressFbp("Create from Selection Tab", 300);
     const q = dialog("fbp-query")?.value ?? "";
-    t(q === `A.Library_Link == '${c1.footprint}' && A.Value == '${c1.value}'`, `the query: ${q}`);
+    // a field row is written `A.getField('Value')` (`DIALOG_FIND_BY_PROPERTIES`: a row with no property)
+    t(q === `A.Library_Link == '${c1.footprint}' && A.getField('Value') == '${c1.value}'`, `the query: ${q}`);
     await pressFbp("Select Matching");
     t(JSON.stringify(selection().sort()) === JSON.stringify([...expected].sort()), `the query selects the same ${expected.length}: ${selection().length}`);
     t(text("fbp-query-status") === `${expected.length} items matched`, `the line: ${text("fbp-query-status")}`);

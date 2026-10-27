@@ -1020,3 +1020,21 @@ fn swap_layers_moves_a_table_and_a_barcode() {
     assert_eq!(drawings(&b).tables[0].layer, "B.Cu");
     assert_eq!(drawings(&b).barcodes[0].layer, "B.Cu");
 }
+
+/// r2-pcb-edit "Mirror ... not yet": `PCB_TEXTBOX::Mirror` mirrors the box (the layer kept, the text not mirrored) and sets the text angle to `180 - angle` left-right, `-angle`
+/// top-bottom; `Cmd::MirrorItems` refuses a reference image (not in `MirrorableItems`).
+#[test]
+fn mirror_items_mirrors_a_text_box_as_pcb_textbox_mirror() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let mut t = text_box("F.SilkS");
+    t.angle = 30_000;
+    let id = add(&mut b, t);
+    b.apply(&Cmd::MirrorItems { ids: vec![id.clone()], pivot: p(mm(0.0), mm(0.0)), direction: FlipDirection::LeftRight }).unwrap();
+    let t = boxes(&b).iter().find(|t| t.id == id).unwrap();
+    assert_eq!((t.start, t.end, t.angle, t.layer.as_str(), t.mirror), (p(mm(-10.0), mm(10.0)), p(mm(-30.0), mm(20.0)), 150_000, "F.SilkS", false));
+    b.apply(&Cmd::MirrorItems { ids: vec![id.clone()], pivot: p(mm(0.0), mm(5.0)), direction: FlipDirection::TopBottom }).unwrap();
+    let t = boxes(&b).iter().find(|t| t.id == id).unwrap();
+    assert_eq!((t.start, t.end, t.angle), (p(mm(-10.0), mm(0.0)), p(mm(-30.0), mm(-10.0)), 210_000));
+    assert!(b.apply(&Cmd::MirrorItems { ids: vec!["img_nope".into()], pivot: p(mm(0.0), mm(0.0)), direction: FlipDirection::LeftRight }).is_err());
+}

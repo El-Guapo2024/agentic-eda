@@ -40,6 +40,15 @@ pub(crate) struct ZoneArgs<'a> {
     /// `BOARD::GetEnabledLayers`: the layers the board has. The zone is written on the ones of its layer set that are in this list (`format( const ZONE* )`'s
     /// `layers &= aZone->GetBoard()->GetEnabledLayers()`); `None` is every layer.
     pub enabled_layers: Option<&'a std::collections::BTreeSet<String>>,
+    /// A copper thieving zone's `(thieving ..)` settings (`DrawingsSection::zone_thieving`): the zone is written `(mode thieving)` with them, as KiCad 10 writes a
+    /// `ZONE_FILL_MODE::COPPER_THIEVING` zone, unless it has become a hatched one since.
+    pub thieving: Option<&'a str>,
+    /// The `(pts ..)` of each ring as the file drew it, with its arcs (`DrawingsSection::zone_arcs`), while the zone's outline and holes are still the ones read: written
+    /// in place of the points.
+    pub arc_rings: Option<&'a [String]>,
+    /// The zone's own per-layer settings as the file wrote them (`DrawingsSection::zone_layer_props`), one per line: written after the fill for the layers the
+    /// zone is on (`for( const auto& [layer, properties] : aZone->LayerProperties() ) format( properties, 0, layer )`).
+    pub layer_props: Option<&'a str>,
 }
 
 /// `PCB_IO_KICAD_SEXPR::formatLayers( layers, aEnumerateLayers, aIsZone )` for a zone: `(layers "F.Cu" "B.Cu")`. A zone on copper layers lists each of them
@@ -91,8 +100,9 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     if !z.name.is_empty() && !z.teardrop {
         writeln!(out, "\t\t(name {})", sexpr_str(&z.name)).unwrap();
     }
-    // `INVISIBLE_BORDER` (a teardrop's) is written as `none`, like `NO_HATCH`.
-    let hatch = if z.teardrop {
+    // `INVISIBLE_BORDER` (what `TEARDROP_MANAGER::createTeardrop` gives the teardrops it makes) is written as `none`, like `NO_HATCH`. A teardrop read from a file
+    // (it has the file's uuid) keeps the style the file gave it, as `parseZONE` keeps a `(hatch full|edge ..)` (r3-board-io F9: `issue11814`'s 547 `full` ones).
+    let hatch = if z.teardrop && z.uuid.is_empty() {
         "none"
     } else {
         match z.border_style {
@@ -159,8 +169,11 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         write!(out, " yes").unwrap();
     }
     let hatch_fill = !z.teardrop && z.fill_mode == eda_model::ir::FillMode::HatchPattern;
+    let thieving = a.thieving.filter(|_| !z.teardrop && !rule_area && !hatch_fill);
     if hatch_fill {
         write!(out, " (mode hatch)").unwrap();
+    } else if thieving.is_some() {
+        write!(out, " (mode thieving)").unwrap();
     }
     if !z.teardrop {
         write!(out, " (thermal_gap {}) (thermal_bridge_width {})", mm(z.thermal_gap), mm(z.thermal_spoke_width)).unwrap();
@@ -195,15 +208,32 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         )
         .unwrap();
     }
+    // `else if( aZone->GetFillMode() == ZONE_FILL_MODE::COPPER_THIEVING )`: the settings, last in the fill.
+    if let Some(t) = thieving {
+        write!(out, " {t}").unwrap();
+    }
     writeln!(out, ")").unwrap();
+    for prop in a.layer_props.into_iter().flat_map(|p| p.lines()) {
+        let on = prop.split("(layer \"").nth(1).and_then(|r| r.split('"').next()).is_none_or(|l| z.is_on_layer(l));
+        if on {
+            writeln!(out, "\t\t{prop}").unwrap();
+        }
+    }
 
     // `SHAPE_POLY_SET::POLYGON poly = aZone->Outline()->Polygon(0); for( const SHAPE_LINE_CHAIN& chain : poly )`: the outline, then each of its holes.
-    for ring in std::iter::once(&z.outline).chain(z.holes.iter().filter(|h| h.len() >= 3)) {
-        writeln!(out, "\t\t(polygon (pts").unwrap();
-        for p in ring {
-            writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
+    if let Some(rings) = a.arc_rings {
+        // The arcs as `format( const ZONE* )` writes them (`formatPolyPts`: `(arc (start ..) (mid ..) (end ..))` for each arc of the chain).
+        for pts in rings {
+            writeln!(out, "\t\t(polygon {pts})").unwrap();
         }
-        writeln!(out, "\t\t))").unwrap();
+    } else {
+        for ring in std::iter::once(&z.outline).chain(z.holes.iter().filter(|h| h.len() >= 3)) {
+            writeln!(out, "\t\t(polygon (pts").unwrap();
+            for p in ring {
+                writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
+            }
+            writeln!(out, "\t\t))").unwrap();
+        }
     }
 
     if !rule_area {

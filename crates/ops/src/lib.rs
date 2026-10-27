@@ -62,6 +62,8 @@ pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingA
 mod fp_array;
 mod pad_edit;
 mod unused_pads;
+mod via_layers;
+pub use via_layers::ViaLayerEdit;
 mod pad_nets;
 mod fp_lib_fields;
 mod sym_derive;
@@ -371,6 +373,13 @@ pub enum Cmd {
     /// unchanged (KiCad does not let you re-net or re-span an existing via
     /// from this dialog either -- that is what delete-and-redraw is for).
     EditVia { id: String, diameter: Nm, drill: Nm },
+    /// Track & Via Properties' via type, layer pair and annular rings over the vias `ids` (`DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`); a
+    /// row left `None` is left alone -- see `via_layers.rs`. One undo step; refused when nothing changes.
+    SetViaLayers {
+        ids: Vec<String>,
+        #[serde(flatten)]
+        edit: ViaLayerEdit,
+    },
     /// `BOARD_DESIGN_SETTINGS::m_TrackWidthList`, replaced wholesale --
     /// the studio's Board Setup "Track Widths & Vias" panel has no
     /// per-entry add/remove Cmd of its own, it just resubmits the whole
@@ -1044,6 +1053,9 @@ pub enum Cmd {
     /// `EDIT_TOOL::Mirror` of tracks and arcs (`PCB_TRACK::Mirror`, `PCB_ARC::Mirror`: `MIRROR( m_Start, aCentre, aFlipDirection )` and the end, and an
     /// arc's mid point): mirrored across the axis through `pivot`, in place -- the id, the layer, the net and the group stay.
     MirrorTracks { ids: Vec<String>, pivot: Point, direction: FlipDirection },
+    /// `EDIT_TOOL::Mirror` of text boxes and tuning patterns (`PCB_TEXTBOX::Mirror`, `PCB_TUNING_PATTERN::Mirror`) about `pivot` -- see
+    /// `Board::mirror_items`.
+    MirrorItems { ids: Vec<String>, pivot: Point, direction: FlipDirection },
 
     // ------------------------------------------------- Properties panel (see [`pcb_props`])
     //
@@ -2302,7 +2314,7 @@ impl Cmd {
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
-            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
@@ -2349,6 +2361,7 @@ impl Cmd {
             Cmd::ZoneCutout { id, .. } => vec![id.as_str()],
             Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::SetZonePriority { id, .. } => vec![id.as_str()],
+            Cmd::SetViaLayers { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
             Cmd::SetPlotSettings { .. } => vec!["plot_params"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
@@ -2506,7 +2519,7 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
             Cmd::InGroup { cmd, .. } => cmd.clears_routing_in(board),
-            Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
+            Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::MirrorItems { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
             other => other.clears_routing(),
         }
     }
@@ -2789,6 +2802,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
             Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),
+            Cmd::SetViaLayers { ids, edit } => self.set_via_layers(ids, edit),
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
             Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),
@@ -2949,6 +2963,7 @@ impl<'a> Board<'a> {
             Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
             Cmd::FlipItems { ids, pivot, direction } => self.flip_items(ids, *pivot, *direction),
             Cmd::MirrorTracks { ids, pivot, direction } => self.mirror_tracks(ids, *pivot, *direction),
+            Cmd::MirrorItems { ids, pivot, direction } => self.mirror_items(ids, *pivot, *direction),
             Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => self.edit_board_footprint(part, reference.as_ref(), value.as_ref(), fields.as_deref(), attrs.as_ref()),
             Cmd::EditBoardField { part, name, layout, text } => self.edit_board_field(part, name, layout.as_ref(), text.as_deref()),
             Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
@@ -3697,9 +3712,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// The Properties panel's Width and the width steps (`PCB_TRACK::SetWidth`): KiCad's grid row is a `PGPROPERTY_SIZE`, which takes 0 and refuses a negative size only
+    /// (r2-pcb-edit A7; the Track & Via Properties dialog's `GEOMETRY_MIN_SIZE` check is its own, `edit_tracks_and_vias`).
     fn set_track_width(&mut self, id: &str, width: Nm) -> Result<(), Vec<CheckResult>> {
-        if width <= Nm::ZERO {
-            return Err(vec![CheckResult::fail("ops_bad_track", id, "track width must be positive")]);
+        if width < Nm::ZERO {
+            return Err(vec![CheckResult::fail("ops_bad_track", id, "Value must be greater than or equal to 0")]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "the board has no routing yet")])?;
         let t = rt.tracks.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "no track with this id")])?;

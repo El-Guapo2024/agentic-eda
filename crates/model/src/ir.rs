@@ -1509,6 +1509,60 @@ impl ZoneSmoothing {
     }
 }
 
+/// A generator nothing here reads: see `DrawingsSection::raw_generators`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawGenerator {
+    /// The `(generated ..)` item as the file wrote it, on one line, without its `(members ..)`.
+    pub text: String,
+    /// The ids of its members, in the file's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_ids: Vec<String>,
+}
+
+/// A zone outline drawn with arcs: see `DrawingsSection::zone_arcs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneArcs {
+    /// The zone's id (`Zone::id`).
+    pub id: String,
+    /// Each ring's `(pts ..)` as the file wrote it, on one line: the outline, then the holes.
+    pub rings: Vec<String>,
+    /// [`ZoneArcs::shape_of`] of the zone as read: the rings stand while the zone still has this outline and these holes.
+    pub shape: u64,
+}
+
+impl ZoneArcs {
+    /// A hash of the zone's outline and holes (FNV-1a over the points), to tell whether they are the ones the rings were read with.
+    pub fn shape_of(zone: &Zone) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |v: i64| {
+            for b in v.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for ring in std::iter::once(&zone.outline).chain(zone.holes.iter()) {
+            eat(ring.len() as i64);
+            for p in ring {
+                eat(p.x.get());
+                eat(p.y.get());
+            }
+        }
+        h
+    }
+}
+
+/// One copper thieving zone: see `DrawingsSection::zone_thieving`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneThieving {
+    /// The zone's id (`Zone::id`).
+    pub id: String,
+    /// The `(thieving ..)` list as the file wrote it, on one line.
+    pub settings: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Zone {
@@ -2619,6 +2673,11 @@ pub struct DrawingsSection {
     /// in an older `design.json` reads as "none". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub raw_items: Vec<String>,
+    /// The generators of a kind nothing here reads (KiCad 10's microvia stack, `(generated (type via_stack) ..)`), kept as text like `raw_items` but with their members
+    /// by our ids: the file's `(members ..)` names items by the uuids it gave them, which the writer does not write again, so the writer puts in the uuids it wrote
+    /// those items as (KiCad's `resolveGroups` drops a generator whose members it cannot find). Additive: absent in an older `design.json` reads as "none".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_generators: Vec<RawGenerator>,
     /// What a via says beyond `Via`'s fields (its type, the unconnected-layer mode, `free`, the zone layer connections, tenting, capping, covering, plugging, filling, its padstack
     /// and teardrop settings, ..), one entry per via that has any, keyed by the via's id -- see [`crate::via_extra`]. Additive: absent in an older `design.json` reads as
     /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.
@@ -2628,6 +2687,22 @@ pub struct DrawingsSection {
     /// [`crate::track_mask`]. Additive: absent in an older `design.json` reads as "no track has a mask opening".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub track_masks: Vec<crate::track_mask::TrackMask>,
+    /// KiCad 10's copper thieving zones (`ZONE_FILL_MODE::COPPER_THIEVING`, `(fill (mode thieving) .. (thieving (type ..) (size ..) (gap ..) (width ..) (stagger ..)
+    /// (orientation ..)))`, file version 20260513): the zone's id and its `(thieving ..)` settings as the file wrote them. Such a zone is written back thieving (and the
+    /// board as 20260513, which `parseZONE` asks of it) while its `fill_mode` is `Polygons`; kicad-cli fills it. Additive: absent in an older `design.json` reads as
+    /// "no zone is a thieving zone".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_thieving: Vec<ZoneThieving>,
+    /// The zones whose outline the file drew with arcs (`(pts .. (arc (start ..) (mid ..) (end ..)) ..)`, kept in the zone's `SHAPE_LINE_CHAIN` and written back as arcs by
+    /// `format( const ZONE* )`): the `(pts ..)` of each ring as the file had it, written back in place of the flattened points while the zone's outline and holes are
+    /// still the ones read ([`ZoneArcs::shape`]). Additive: absent in an older `design.json` reads as "no zone outline has arcs".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_arcs: Vec<ZoneArcs>,
+    /// A zone's own per-layer settings (`ZONE::LayerProperties`, `(property (layer "F.Cu") (hatch_position (xy ..)))` inside the zone: a hatched fill's offset on that
+    /// layer), as the file wrote them, keyed by the zone's id; written back for the layers the zone is still on. Additive: absent in an older `design.json` reads
+    /// as "no zone has any".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_layer_props: Vec<ZoneThieving>,
     /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
     /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
     /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`

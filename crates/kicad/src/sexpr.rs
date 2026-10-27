@@ -169,6 +169,11 @@ fn parse_quoted(input: &str, bytes: &[u8], pos: &mut usize) -> Result<String, St
     }
 }
 
+/// Whether the item at `idx` is a number the file wrote bare: KiCad's lexer's `DSN_NUMBER` (`IsNumber( token )`), not a quoted string of digits.
+pub(crate) fn is_bare_number(list: &[Sexpr], idx: usize) -> bool {
+    matches!(list.get(idx), Some(Sexpr::Atom(a)) if !a.starts_with(QUOTED) && a.parse::<f64>().is_ok())
+}
+
 /// An atom as the file had it: quoted if the file quoted it ([`QUOTED`]), bare if it was bare (a number, a keyword, an old file's layer name). An atom the parser did not make
 /// and that cannot be bare (empty, or with a space, a parenthesis or a quote in it) is quoted.
 pub(crate) fn atom_text(a: &str) -> String {
