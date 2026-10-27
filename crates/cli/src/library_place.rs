@@ -156,14 +156,26 @@ fn find_footprint<F: LibSource + ?Sized>(wanted: &str, id: &str, design: &Design
     (model.footprint_of(&probe).is_some() || in_editor).then_some(None)
 }
 
+/// The library copy of footprint `name` for the compare tools: the footprint the board is compared with (or drawn beside), and what the library
+/// sets on it and its pads -- its `LibraryFootprint`'s margins and zone facts, which the engine `Footprint` does not carry and `FootprintNeedsUpdate`
+/// compares the board's overrides with.
+pub(crate) struct LibraryCopy {
+    pub footprint: eda_model::Footprint,
+    pub facts: eda_model::fp_compare::LibraryFacts,
+}
+
 /// The library copy of footprint `name`: the Footprint Editor's entry for it where the project edited one (the newest copy there is), else the file of the library tables.
-pub(crate) fn library_copy<F: LibSource + ?Sized>(name: &str, design: &Design, footprints: &F) -> Option<eda_model::Footprint> {
-    let edited = design.footprint_library.as_ref().and_then(|l| l.by_name(name)).map(|entry| {
+pub(crate) fn library_copy<F: LibSource + ?Sized>(name: &str, design: &Design, footprints: &F) -> Option<LibraryCopy> {
+    if let Some(entry) = design.footprint_library.as_ref().and_then(|l| l.by_name(name)) {
         let mut copy = entry.to_engine_footprint();
         copy.name = name.to_string();
-        copy
-    });
-    edited.or_else(|| crate::library_search::installed_engine_footprint(footprints, name))
+        return Some(LibraryCopy { footprint: copy, facts: eda_model::fp_compare::LibraryFacts::of_library_footprint(entry) });
+    }
+    let footprint = crate::library_search::installed_engine_footprint(footprints, name)?;
+    // The installed file as the editor reads it, for the values the engine copy drops. A file the editor refuses keeps no facts: every override of the
+    // board's is then told, as before.
+    let facts = crate::library_search::installed_footprint(footprints, name).map(|fp| eda_model::fp_compare::LibraryFacts::of_library_footprint(&fp)).unwrap_or_default();
+    Some(LibraryCopy { footprint, facts })
 }
 
 /// Is the footprint `wanted` one the studio can put on the part `id` (Update PCB from Schematic: "Cannot update %s (footprint '%s' not found).")?

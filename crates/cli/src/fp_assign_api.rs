@@ -53,9 +53,9 @@ fn plan_entry(dir_libs: &dyn crate::library_index::LibSource, design: &eda_model
     match to {
         Some(to) => json!({ "reference": reference, "from": from, "to": to, "found": crate::library_place::footprint_found(to, reference, design, model, dir_libs), "differs": true }),
         None => {
-            let copy: Option<Footprint> = crate::library_place::library_copy(&from, design, dir_libs);
+            let copy = crate::library_place::library_copy(&from, design, dir_libs);
             let lines: Vec<String> = match (&copy, eda_ops::board_footprint(design, model, reference)) {
-                (Some(library), Some(board)) => eda_model::fp_compare::footprint_differences(&board.facts(), library),
+                (Some(library), Some(board)) => eda_model::fp_compare::footprint_differences(&board.facts(), &library.footprint, &library.facts),
                 _ => Vec::new(),
             };
             json!({ "reference": reference, "from": from, "to": from, "found": copy.is_some(), "differs": !lines.is_empty(), "lines": lines })
@@ -122,9 +122,9 @@ pub fn footprint_diff(dir: &Path, reference: &str) -> Value {
         }
         Some(copy) => {
             out.insert("found".into(), json!(true));
-            out.insert("lines".into(), json!(eda_model::fp_compare::footprint_differences(&board_fp.facts(), &copy)));
+            out.insert("lines".into(), json!(eda_model::fp_compare::footprint_differences(&board_fp.facts(), &copy.footprint, &copy.facts)));
             out.insert("board".into(), footprint_drawing(&board_fp.footprint));
-            out.insert("library_copy".into(), footprint_drawing(&copy));
+            out.insert("library_copy".into(), footprint_drawing(&copy.footprint));
         }
     }
     Value::Object(out)

@@ -4,22 +4,28 @@
 //!
 //! KiCad's DRC runs the same test as the "footprint does not match copy in library" violation; that stays kicad-cli's. This is the interactive tool's list, over the
 //! studio's model: the footprint as the board has it ([`InstanceFacts`]: its pads with the edits laid on, its graphics, its attributes and its overrides) against the library's
-//! [`Footprint`]. What the model keeps of a library footprint is its pads, graphics, courtyard and models; the file's attribute flags, net-tie groups and rule areas it does
-//! not keep, so those are not compared (the footprint type is the one the pads give).
+//! [`Footprint`], with what the library's file says of its own and its pads' margins and zone settings ([`LibraryFacts`]: the engine footprint has no
+//! place for them). What the model keeps of a library footprint is its pads, graphics, courtyard and models; the file's attribute flags, net-tie groups and rule areas it
+//! does not keep, so those are not compared (the footprint type is the one the pads give).
 //!
 //! The order of the lines is KiCad's: footprint type, fabrication attributes, overrides, graphics, pads.
 
 use crate::footprint::{Footprint, Pad, PadShape};
 use crate::fp_art::FpShape;
 use crate::fp_edit::{FootprintAttrs, FootprintKind};
-use crate::ir::{PadConnection, Point, Shape, Nm};
+use crate::ir::{LibraryFootprint, Millideg, PadConnection, Point, Shape, Nm};
 use std::cmp::Ordering;
 
-/// The footprint-level overrides the board has on a footprint (`GetLocalClearance`, `GetLocalSolderMaskMargin`, `GetLocalZoneConnection`), `None` for one it does not set.
+/// The footprint-level overrides the board -- or the library copy -- has on a footprint (`GetLocalClearance`, `GetLocalSolderMaskMargin`,
+/// `GetLocalSolderPasteMargin`, `GetLocalSolderPasteMarginRatio`, `GetLocalZoneConnection`), `None` for one it does not set.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FootprintOverrides {
     pub clearance: Option<Nm>,
     pub solder_mask_margin: Option<Nm>,
+    /// `GetLocalSolderPasteMargin` (`(solder_paste_margin ..)`).
+    pub solder_paste_margin: Option<Nm>,
+    /// `GetLocalSolderPasteMarginRatio` (`(solder_paste_margin_ratio ..)`; the legacy `(solder_paste_ratio ..)`).
+    pub solder_paste_margin_ratio: Option<f64>,
     pub zone_connection: Option<PadConnection>,
 }
 
@@ -34,6 +40,46 @@ pub struct PadOverrides {
     pub zone_connection: Option<PadConnection>,
     pub thermal_gap: Option<Nm>,
     pub thermal_spoke_width: Option<Nm>,
+    /// `GetThermalSpokeAngle` as the file has it; `None` is the shape's default (see [`default_spoke_angle`]).
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+/// What the library's copy sets on itself and its pads (`aLibFP`): the values the board's overrides are compared with. The library's margins of
+/// a footprint file are kept as written ([`crate::lib_keep::LibraryFootprintKeep::tokens`]), since the editor does not edit them.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LibraryFacts {
+    pub overrides: FootprintOverrides,
+    pub pad_overrides: Vec<PadOverrides>,
+}
+
+impl LibraryFacts {
+    /// The library footprint's own values, as `FootprintNeedsUpdate` reads them off `aLibFP`.
+    pub fn of_library_footprint(lib: &LibraryFootprint) -> Self {
+        let tokens = &lib.kicad.tokens;
+        let overrides = FootprintOverrides {
+            clearance: crate::lib_keep::kept_mm(tokens, "clearance"),
+            solder_mask_margin: crate::lib_keep::kept_mm(tokens, "solder_mask_margin"),
+            solder_paste_margin: crate::lib_keep::kept_mm(tokens, "solder_paste_margin"),
+            solder_paste_margin_ratio: crate::lib_keep::kept_number(tokens, "solder_paste_margin_ratio").or_else(|| crate::lib_keep::kept_number(tokens, "solder_paste_ratio")),
+            zone_connection: lib.zone_connection,
+        };
+        let pad_overrides = lib
+            .pads
+            .iter()
+            .map(|p| PadOverrides {
+                number: p.number.clone(),
+                clearance: p.clearance_override,
+                solder_mask_margin: p.kicad.solder_mask_margin,
+                solder_paste_margin: p.kicad.solder_paste_margin,
+                solder_paste_margin_ratio: p.kicad.solder_paste_margin_ratio,
+                zone_connection: p.zone_connection,
+                thermal_gap: p.thermal_gap_override,
+                thermal_spoke_width: p.thermal_spoke_width_override,
+                thermal_spoke_angle_mdeg: p.thermal_spoke_angle_mdeg,
+            })
+            .collect();
+        LibraryFacts { overrides, pad_overrides }
+    }
 }
 
 /// What the board has of a footprint, to be compared with the library's.
@@ -270,26 +316,58 @@ fn pad_lines(a: &Pad, lib: &Pad, out: &mut Vec<String>) {
     }
 }
 
-/// `padHasOverrides`: what the board sets on a pad that the library's pad does not.
-fn pad_override_lines(number: &str, o: &PadOverrides, out: &mut Vec<String>) {
-    let name = format!("Pad {number}");
-    if o.clearance.is_some() {
+/// `PADSTACK::DefaultThermalSpokeAngleForShape`: 90 degrees for an oval or a (rounded, chamfered) rectangle, 45 for the other shapes.
+fn default_spoke_angle(shape: PadShape) -> Millideg {
+    match shape {
+        PadShape::Oval | PadShape::Rect | PadShape::RoundRect | PadShape::ChamferedRect => 90_000,
+        _ => 45_000,
+    }
+}
+
+/// `PAD::GetThermalSpokeAngle()`: the pad's own angle, else [`default_spoke_angle`]'s for its shape.
+fn spoke_angle(p: &Pad, local: Option<Millideg>) -> Millideg {
+    local.unwrap_or_else(|| default_spoke_angle(p.shape))
+}
+
+/// `PAD::GetCustomShapeInZoneOpt()`: a custom pad's `(options (clearance outline|convexhull))`, `OUTLINE` for every pad that is not custom.
+fn zone_mode(p: &Pad) -> crate::footprint::CustomZoneMode {
+    p.ext.custom.as_ref().map(|c| c.zone).unwrap_or_default()
+}
+
+/// `padHasOverrides`: the board's overrides on a pad that the library's pad does not share. Each is told only when the board sets it and the
+/// library's value -- its `LibraryFootprint`'s, which `b` alone cannot say -- is not the same; a spoke angle and a custom pad's zone knockout
+/// are compared always, defaults included.
+fn pad_override_lines(a: &Pad, b: &Pad, o: &PadOverrides, l: &PadOverrides, out: &mut Vec<String>) {
+    let name = format!("Pad {}", a.number);
+    if o.clearance.is_some() && o.clearance != l.clearance {
         out.push(format!("{name} has clearance override."));
     }
-    if o.solder_mask_margin.is_some() {
+    if o.solder_mask_margin.is_some() && o.solder_mask_margin != l.solder_mask_margin {
         out.push(format!("{name} has solder mask expansion override."));
     }
-    if o.solder_paste_margin.is_some() || o.solder_paste_margin_ratio.is_some() {
+    // KiCad has one `if` for the absolute margin and one for the relative, both saying the same words.
+    if o.solder_paste_margin.is_some() && o.solder_paste_margin != l.solder_paste_margin {
         out.push(format!("{name} has solder paste clearance override."));
     }
-    if o.zone_connection.is_some() {
+    if o.solder_paste_margin_ratio.is_some() && o.solder_paste_margin_ratio != l.solder_paste_margin_ratio {
+        out.push(format!("{name} has solder paste clearance override."));
+    }
+    if o.zone_connection.is_some() && o.zone_connection != l.zone_connection {
         out.push(format!("{name} has zone connection override."));
     }
-    if o.thermal_gap.is_some() {
+    // `GetLocalThermalGapOverride().has_value() && GetThermalGap() != GetThermalGap()`: the gate is the board's local value, the values
+    // compared are the effective ones (`GetThermalGap()` is 0 for a pad that sets none).
+    if o.thermal_gap.is_some() && o.thermal_gap.unwrap_or(Nm::ZERO) != l.thermal_gap.unwrap_or(Nm::ZERO) {
         out.push(format!("{name} has thermal relief gap override."));
     }
-    if o.thermal_spoke_width.is_some() {
+    if o.thermal_spoke_width.is_some() && o.thermal_spoke_width != l.thermal_spoke_width {
         out.push(format!("{name} has thermal relief spoke width override."));
+    }
+    if spoke_angle(a, o.thermal_spoke_angle_mdeg) != spoke_angle(b, l.thermal_spoke_angle_mdeg) {
+        out.push(format!("{name} has thermal relief spoke angle override."));
+    }
+    if zone_mode(a) != zone_mode(b) {
+        out.push(format!("{name} has zone knockout setting override."));
     }
 }
 
@@ -309,9 +387,9 @@ fn courtyard_of(fp: &Footprint) -> Vec<Vec<Point>> {
     }
 }
 
-/// `FootprintNeedsUpdate( aLibFP, 0, reporter )`: every way the footprint the board has differs from the library's copy -- empty when it needs no update. Texts are not
-/// compared ("Currently we punt and ignore all the text items").
-pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint) -> Vec<String> {
+/// `FootprintNeedsUpdate( aLibFP, 0, reporter )`: every way the footprint the board has differs from the library's copy (`library`, with the values
+/// `library_facts` reads off it) -- empty when it needs no update. Texts are not compared ("Currently we punt and ignore all the text items").
+pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint, library_facts: &LibraryFacts) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let board = instance.footprint;
 
@@ -325,14 +403,22 @@ pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint) -> V
             out.push(format!("'{what}' settings differ."));
         }
     }
-    // "Clearance and zone connection overrides are as likely to be set at the board level as in the library"
-    if instance.overrides.clearance.is_some() {
+    // "Clearance and zone connection overrides are as likely to be set at the board level as in the library ... we just do it when we have a
+    // reporter": each is told only when the board sets it and the library's differs.
+    let (mine, theirs) = (&instance.overrides, &library_facts.overrides);
+    if mine.clearance.is_some() && mine.clearance != theirs.clearance {
         out.push("Pad clearance overridden.".to_string());
     }
-    if instance.overrides.solder_mask_margin.is_some() {
+    if mine.solder_mask_margin.is_some() && mine.solder_mask_margin != theirs.solder_mask_margin {
         out.push("Solder mask expansion overridden.".to_string());
     }
-    if instance.overrides.zone_connection.is_some() {
+    if mine.solder_paste_margin.is_some() && mine.solder_paste_margin != theirs.solder_paste_margin {
+        out.push("Solder paste absolute clearance overridden.".to_string());
+    }
+    if mine.solder_paste_margin_ratio.is_some() && mine.solder_paste_margin_ratio != theirs.solder_paste_margin_ratio {
+        out.push("Solder paste relative clearance overridden.".to_string());
+    }
+    if mine.zone_connection.is_some() && mine.zone_connection != theirs.zone_connection {
         out.push("Zone connection overridden.".to_string());
     }
 
@@ -367,10 +453,11 @@ pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint) -> V
     } else {
         for (m, t) in mine.iter().zip(&theirs) {
             pad_lines(m, t, &mut out);
-            // with a reporter the board's overrides on the pad are told too
-            if let Some(o) = instance.pad_overrides.iter().find(|o| o.number == m.number) {
-                pad_override_lines(&m.number, o, &mut out);
-            }
+            // with a reporter the board's overrides on the pad are told too, against the library pad's own values
+            let none = PadOverrides::default();
+            let o = instance.pad_overrides.iter().find(|o| o.number == m.number).unwrap_or(&none);
+            let l = library_facts.pad_overrides.iter().find(|o| o.number == t.number).unwrap_or(&none);
+            pad_override_lines(m, t, o, l, &mut out);
         }
     }
     // the 3D models are not part of the test (`FootprintNeedsUpdate` leaves them to "Update 3D models"), but a board that has none of the library's does not match it
@@ -378,8 +465,8 @@ pub fn footprint_differences(instance: &InstanceFacts, library: &Footprint) -> V
 }
 
 /// Does the footprint the board has need an update from the library (`FootprintNeedsUpdate( aLibFP )`)?
-pub fn needs_update(instance: &InstanceFacts, library: &Footprint) -> bool {
-    !footprint_differences(instance, library).is_empty()
+pub fn needs_update(instance: &InstanceFacts, library: &Footprint, library_facts: &LibraryFacts) -> bool {
+    !footprint_differences(instance, library, library_facts).is_empty()
 }
 
 #[cfg(test)]
@@ -407,8 +494,49 @@ mod tests {
     #[test]
     fn a_footprint_equal_to_its_library_copy_needs_no_update() {
         let lib = fp(vec![pad("1", Nm::new(-1_000_000), Nm::ZERO), pad("2", Nm::new(1_000_000), Nm::ZERO)], vec![line("F.SilkS", (Nm::new(-500_000), Nm::new(-700_000)), (Nm::new(500_000), Nm::new(-700_000)))]);
-        assert!(footprint_differences(&facts(&lib.clone()), &lib).is_empty());
-        assert!(!needs_update(&facts(&lib.clone()), &lib));
+        assert!(footprint_differences(&facts(&lib.clone()), &lib, &LibraryFacts::default()).is_empty());
+        assert!(!needs_update(&facts(&lib.clone()), &lib, &LibraryFacts::default()));
+    }
+
+    /// `FootprintNeedsUpdate` reports an override only when the board's value is set *and* is not the library's (`GetLocalClearance().has_value()
+    /// && GetLocalClearance() != aLibFP->GetLocalClearance()`, `GetLocalZoneConnection() != INHERITED && a != b`). The board's values come from
+    /// the footprint's own facts (`Design::pad_zone_facts`, `FootprintExtra`): for a footprint placed from a library they are the library's, so an
+    /// unedited footprint must list nothing. The library's values are its `LibraryFootprint`'s -- the engine `Footprint` has no margins.
+    #[test]
+    fn an_override_equal_to_the_librarys_is_not_reported() {
+        let engine = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
+        let mut library = LibraryFootprint::from_engine_footprint(&engine);
+        library.pads[0].zone_connection = Some(PadConnection::Full);
+        library.kicad.tokens.push("(clearance 0.25)".to_string());
+        let library_facts = LibraryFacts::of_library_footprint(&library);
+        let mut board = facts(&engine);
+        board.overrides.clearance = Some(Nm::new(250_000));
+        board.pad_overrides.push(PadOverrides { number: "1".into(), zone_connection: Some(PadConnection::Full), ..Default::default() });
+        assert!(footprint_differences(&board, &engine, &library_facts).is_empty(), "the board's overrides are the library's own values: an unedited footprint needs no update");
+        // A value other than the library's, and one the library does not set, are still told.
+        board.overrides.clearance = Some(Nm::new(300_000));
+        board.pad_overrides[0].zone_connection = Some(PadConnection::Thermal);
+        assert_eq!(footprint_differences(&board, &engine, &library_facts), ["Pad clearance overridden.", "Pad 1 has zone connection override."]);
+    }
+
+    /// The footprint-level solder paste checks `FootprintNeedsUpdate` has and this port lacked, and the pad's spoke angle, which `padHasOverrides`
+    /// compares always (`a->GetThermalSpokeAngle() != b->GetThermalSpokeAngle()`, the shape's default where the file says none).
+    #[test]
+    fn the_paste_margins_and_the_spoke_angle_are_compared_too() {
+        let engine = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
+        let mut board = facts(&engine);
+        board.overrides.solder_paste_margin = Some(Nm::new(-10_000));
+        board.overrides.solder_paste_margin_ratio = Some(0.05);
+        let library = LibraryFacts::default();
+        assert_eq!(footprint_differences(&board, &engine, &library), ["Solder paste absolute clearance overridden.", "Solder paste relative clearance overridden."]);
+        // A rectangle pad's default is 90 degrees: a library pad whose file says 45 differs from the board's, which says nothing.
+        let mut lib = LibraryFootprint::from_engine_footprint(&engine);
+        lib.pads[0].thermal_spoke_angle_mdeg = Some(45_000);
+        let library = LibraryFacts::of_library_footprint(&lib);
+        assert_eq!(footprint_differences(&facts(&engine), &engine, &library), ["Pad 1 has thermal relief spoke angle override."]);
+        // The library's own 90 degrees is the rectangle's default: nothing differs.
+        lib.pads[0].thermal_spoke_angle_mdeg = Some(90_000);
+        assert!(footprint_differences(&facts(&engine), &engine, &LibraryFacts::of_library_footprint(&lib)).is_empty());
     }
 
     #[test]
@@ -422,7 +550,7 @@ mod tests {
         f.attrs.dnp = true;
         f.overrides.clearance = Some(Nm::new(250_000));
         f.pad_overrides.push(PadOverrides { number: "2".into(), clearance: Some(Nm::new(300_000)), ..Default::default() });
-        let lines = footprint_differences(&f, &lib);
+        let lines = footprint_differences(&f, &lib, &LibraryFacts::default());
         assert_eq!(
             lines,
             [
@@ -442,7 +570,7 @@ mod tests {
         let mut board = lib.clone();
         board.pads.push(pad("3", Nm::ZERO, Nm::new(1_000_000)));
         board.art.shapes.push(line("F.Fab", (Nm::ZERO, Nm::ZERO), (Nm::new(1000), Nm::new(1000))));
-        assert_eq!(footprint_differences(&facts(&board), &lib), ["Graphic item count differs.", "Pad count differs."]);
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Graphic item count differs.", "Pad count differs."]);
     }
 
     #[test]
@@ -451,7 +579,7 @@ mod tests {
         let mut th = lib.clone();
         th.pads[0].kind = PadKind::ThroughHole;
         th.pads[0].drill = Some(Nm::new(800_000));
-        let lines = footprint_differences(&facts(&th), &lib);
+        let lines = footprint_differences(&facts(&th), &lib, &LibraryFacts::default());
         assert!(lines.contains(&"Footprint types differ.".to_string()), "{lines:?}");
         assert!(lines.contains(&"Pad 1 pad type differs.".to_string()) && lines.contains(&"Pad 1 drill shape differs.".to_string()) && lines.contains(&"Pad 1 drill size differs.".to_string()), "{lines:?}");
     }
@@ -463,9 +591,9 @@ mod tests {
         let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![square(&[(Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::ZERO), (Nm::new(10_000), Nm::new(10_000)), (Nm::ZERO, Nm::new(10_000))]), rect((Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::new(10_000)))]);
         let mut board = lib.clone();
         board.art.shapes = vec![square(&[(Nm::new(10_000), Nm::new(10_000)), (Nm::ZERO, Nm::new(10_000)), (Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::ZERO)]), rect((Nm::new(10_000), Nm::new(10_000)), (Nm::ZERO, Nm::ZERO))];
-        assert!(footprint_differences(&facts(&board), &lib).is_empty());
+        assert!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()).is_empty());
         board.art.shapes[0] = square(&[(Nm::ZERO, Nm::ZERO), (Nm::new(10_000), Nm::ZERO), (Nm::new(10_000), Nm::new(11_000)), (Nm::ZERO, Nm::new(10_000))]);
-        assert_eq!(footprint_differences(&facts(&board), &lib), ["Polygon on F.SilkS differs."]);
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Polygon on F.SilkS differs."]);
     }
 
     #[test]
@@ -473,9 +601,9 @@ mod tests {
         let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![line("F.SilkS", (Nm::ZERO, Nm::ZERO), (Nm::new(1000), Nm::new(1000))), line("F.Cu", (Nm::ZERO, Nm::ZERO), (Nm::new(5000), Nm::new(5000)))]);
         let mut board = lib.clone();
         board.art.shapes[0].shape.set_stroke_width(Nm::new(300_000));
-        assert!(footprint_differences(&facts(&board), &lib).is_empty(), "a silkscreen line may be thicker");
+        assert!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()).is_empty(), "a silkscreen line may be thicker");
         board.art.shapes[1].shape.set_stroke_width(Nm::new(300_000));
-        assert_eq!(footprint_differences(&facts(&board), &lib), ["Line on F.Cu differs."]);
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Line on F.Cu differs."]);
     }
 
     #[test]
@@ -483,7 +611,7 @@ mod tests {
         let lib = fp(vec![pad("2", Nm::ZERO, Nm::ZERO), pad("10", Nm::new(1_000_000), Nm::ZERO), pad("1", Nm::new(-1_000_000), Nm::ZERO)], vec![]);
         let mut board = lib.clone();
         board.pads.reverse();
-        assert!(footprint_differences(&facts(&board), &lib).is_empty());
+        assert!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()).is_empty());
         assert_eq!(natural_cmp("2", "10"), Ordering::Less);
         assert_eq!(natural_cmp("A1", "A10"), Ordering::Less);
         assert_eq!(natural_cmp("a1", "A1"), Ordering::Greater, "lower case after upper on a tie");
@@ -494,6 +622,6 @@ mod tests {
         let lib = fp(vec![pad("1", Nm::ZERO, Nm::ZERO)], vec![]);
         let mut board = lib.clone();
         board.courtyard = Some((Nm::new(1_800_000), Nm::new(800_000)));
-        assert_eq!(footprint_differences(&facts(&board), &lib), ["Courtyard differs."]);
+        assert_eq!(footprint_differences(&facts(&board), &lib, &LibraryFacts::default()), ["Courtyard differs."]);
     }
 }

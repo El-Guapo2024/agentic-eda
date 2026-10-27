@@ -188,7 +188,15 @@ pub fn board_footprint(design: &eda_model::ir::Design, model: &ConstraintModel, 
     let edit = design.footprint_edit(reference);
     let n = footprint.pads.len();
     let first = footprint.pads.first().map(|p| design.pad_zone_facts(reference, &name, 0, n, &p.number));
-    let overrides = FootprintOverrides { clearance: first.and_then(|f| f.footprint_clearance), solder_mask_margin: extra.and_then(|e| e.solder_mask_margin), zone_connection: first.and_then(|f| f.footprint_connection) };
+    // The footprint-level paste margins are kept as the file wrote them (`FootprintExtra::tokens`: the model has no field for them).
+    let paste = |tag: &str| extra.and_then(|e| eda_model::lib_keep::kept_mm(&e.tokens, tag));
+    let overrides = FootprintOverrides {
+        clearance: first.and_then(|f| f.footprint_clearance),
+        solder_mask_margin: extra.and_then(|e| e.solder_mask_margin),
+        solder_paste_margin: paste("solder_paste_margin"),
+        solder_paste_margin_ratio: extra.and_then(|e| eda_model::lib_keep::kept_number(&e.tokens, "solder_paste_margin_ratio").or_else(|| eda_model::lib_keep::kept_number(&e.tokens, "solder_paste_ratio"))),
+        zone_connection: first.and_then(|f| f.footprint_connection),
+    };
     let mut pad_overrides = Vec::new();
     for (i, pad) in footprint.pads.iter().enumerate() {
         let facts = design.pad_zone_facts(reference, &name, i, n, &pad.number);
@@ -202,6 +210,7 @@ pub fn board_footprint(design: &eda_model::ir::Design, model: &ConstraintModel, 
             zone_connection: facts.connection,
             thermal_gap: facts.thermal_gap,
             thermal_spoke_width: facts.thermal_spoke_width,
+            thermal_spoke_angle_mdeg: facts.thermal_spoke_angle_mdeg,
         };
         if o != (PadOverrides { number: pad.number.clone(), ..Default::default() }) {
             pad_overrides.push(o);
