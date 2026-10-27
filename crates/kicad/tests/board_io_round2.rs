@@ -607,3 +607,13 @@ fn a_footprint_has_one_sheetfile() {
     assert_eq!(out.matches("(sheetfile ").count(), 1, "{out}");
     assert!(out.contains("(sheetfile \"A05-attenuator.kicad_sch\")"), "{out}");
 }
+
+/// r2 F17: a footprint with no pad (a logo, `issue14549`'s `Logo1`) keeps its own `(zone_connect ..)` and `(clearance ..)`.
+#[test]
+fn a_padless_footprint_keeps_its_zone_connection() {
+    let text = board(&format!("{FP_HEAD}  (clearance 0.3)\n  (zone_connect 0)\n  (fp_line (start 0 0) (end 1 0) (stroke (width 0.1) (type solid)) (layer \"F.SilkS\") (uuid \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaad1\")))"));
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let fp = blocks(&out, "footprint")[0].to_string();
+    assert!(fp.contains("(zone_connect 0)") && fp.contains("(clearance 0.3)"), "{fp}");
+}

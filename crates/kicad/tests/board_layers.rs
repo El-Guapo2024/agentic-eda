@@ -56,10 +56,11 @@ fn the_layers_of_a_board_file_come_in_as_the_page_holds_them() {
     assert_eq!((setup.layer_type("F.Cu"), setup.layer_type("In1.Cu"), setup.layer_type("In2.Cu"), setup.layer_type("B.Cu")), (LayerType::Signal, LayerType::Power, LayerType::Mixed, LayerType::Jumper));
     assert_eq!((setup.layer_type("User.1"), setup.layer_type("User.2"), setup.layer_type("User.3"), setup.layer_type("User.4"), setup.layer_type("User.5")), (LayerType::Auxiliary, LayerType::Front, LayerType::Back, LayerType::Auxiliary, LayerType::Auxiliary));
     assert_eq!(setup.enabled[setup.enabled.len() - 5..], ["User.1", "User.2", "User.3", "User.4", "User.5"]);
-    for always in ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Edge.Cuts", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab", "Margin", "Dwgs.User"] {
-        assert!(setup.enabled.iter().any(|l| l == always), "{always} is on: {:?}", setup.enabled);
+    for on in ["F.Adhes", "F.SilkS", "F.Mask", "Edge.Cuts", "F.CrtYd", "B.CrtYd", "Margin", "Dwgs.User"] {
+        assert!(setup.enabled.iter().any(|l| l == on), "{on} is on: {:?}", setup.enabled);
     }
-    for off in ["Cmts.User", "Eco1.User", "Eco2.User"] {
+    // `BOARD_DESIGN_SETTINGS::SetEnabledLayers` adds only the mandatory layers to the file's list (r2-board-io F17).
+    for off in ["B.Adhes", "F.Paste", "B.Paste", "B.SilkS", "B.Mask", "F.Fab", "B.Fab", "Cmts.User", "Eco1.User", "Eco2.User"] {
         assert!(!setup.enabled.iter().any(|l| l == off), "{off} was not in the file and nothing sits on it");
     }
     assert!(setup.validate(&model.board.layers).is_ok(), "what is imported is a page the verb would accept");
@@ -101,7 +102,7 @@ fn the_writer_emits_formatboardlayers_and_the_file_comes_back_the_same() {
 fn a_board_nobody_set_up_is_the_board_kicad_starts() {
     let (design, model, _) = import_kicad_pcb(r#"(kicad_pcb (version 20241229) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user)) (net 0 ""))"#).expect("imports");
     let layers = layers_section(&export(&design, &model));
-    assert_eq!(layers.len(), 2 + 14, "a file that lists three layers still has the ones this studio always drew and the page's mandatory ones: {layers:?}");
+    assert_eq!(layers.len(), 2 + 4, "a file that lists three layers has those and the mandatory ones (the courtyards, the outline, the margin), as KiCad has it: {layers:?}");
 
     let mut m = ConstraintModel::default();
     m.board.layers = vec!["F.Cu".into(), "B.Cu".into()];

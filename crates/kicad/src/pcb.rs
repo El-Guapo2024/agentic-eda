@@ -1250,6 +1250,15 @@ pub(crate) fn write_footprint(
         if let Some(c) = facts.footprint_connection {
             writeln!(out, "\t\t(zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
         }
+    } else if let Some(e) = own_extra {
+        // A footprint with no pad (a logo: `issue14549`'s `Logo1`) has no pad to resolve the facts through; `format( FOOTPRINT )` writes its own all the same
+        // (r2-board-io F17).
+        if let Some(c) = e.clearance {
+            writeln!(out, "\t\t(clearance {})", mm(c)).unwrap();
+        }
+        if let Some(c) = e.zone_connection {
+            writeln!(out, "\t\t(zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
+        }
     }
 
     // `(net_tie_pad_groups "1, 2" "3")` (`FOOTPRINT::SetNetTiePadGroups`): the pads a net tie joins. Without it KiCad's DRC reports the tie's short, and its zone fill keeps

@@ -477,13 +477,11 @@ fn default_layers() -> Vec<String> {
     vec!["F.Cu".into(), "B.Cu".into()]
 }
 
-/// The layers every board this studio wrote had listed, whatever the file says: its adhesive, paste, silkscreen, mask and fabrication layers, the courtyards and the outline.
-const ALWAYS_ENABLED: [&str; 13] = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Edge.Cuts", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
-
 /// `(layers ..)` as the Board Editor Layers page holds it (`PCB_IO_KICAD_SEXPR_PARSER::parseLayers` / `parseLayer`): the non-copper layers the file lists, the name a layer is
-/// shown by (the entry's last word) and the type of the copper layers and of the user layers off-board at the front or the back. The page's mandatory layers (the courtyards, the
-/// outline, the margin) and the ones this studio has always drawn are on whatever the file lists, so a board written before there was a page keeps its silkscreen and fabrication;
-/// a layer name the file has that is not one of KiCad's (`Rescue`, a name from before KiCad 5) is skipped. [`add_layers_in_use`] adds the layers the imported items sit on.
+/// shown by (the entry's last word) and the type of the copper layers and of the user layers off-board at the front or the back. The mandatory layers (the courtyards, the
+/// outline, the margin) are on whatever the file lists (`BOARD_DESIGN_SETTINGS::SetEnabledLayers`); a technical layer the file does not list is off, as KiCad has it (r2-board-io
+/// F17: `issue18839` lists no adhesive, paste, mask, silkscreen or fabrication layer; every board this studio wrote lists them all). A layer name the file has that is not one of
+/// KiCad's (`Rescue`, a name from before KiCad 5) is skipped. [`add_layers_in_use`] adds the layers the imported items sit on.
 fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
     let mut setup = LayerSetup { enabled: Vec::new(), names: BTreeMap::new(), types: BTreeMap::new() };
     for item in sexpr::find(root, "layers").map_or(&[][..], |l| &l[1..]) {
@@ -506,7 +504,7 @@ fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
             setup.names.insert(name.to_string(), shown.to_string());
         }
     }
-    setup.enabled.extend(ALWAYS_ENABLED.iter().chain(eda_model::layers::MANDATORY_LAYERS.iter()).map(|l| l.to_string()));
+    setup.enabled.extend(eda_model::layers::MANDATORY_LAYERS.iter().map(|l| l.to_string()));
     setup.canonical()
 }
 
