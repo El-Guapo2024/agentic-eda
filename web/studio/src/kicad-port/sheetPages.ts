@@ -11,7 +11,8 @@ export interface HierarchySheet {
   path: string[];
   name: string;
   file: string;
-  /** The page number the user gave it; empty when none. */
+  /** The page this sheet path shows: the one stored for it (Edit Sheet Page Number, or the number a new sheet was given), else its place in
+   *  the walk -- the page the derived `.kicad_sch` gives it. (Empty only from a server older than that: `effectivePage` then numbers it.) */
   page: string;
 }
 
@@ -83,6 +84,30 @@ export function sortByPageNumbers(sheets: readonly HierarchySheet[]): HierarchyS
     .map((sheet, i) => ({ sheet, i, page: effectivePage(sheet, i) }))
     .sort((a, b) => comparePageNum(a.page, b.page) || a.i - b.i)
     .map((x) => x.sheet);
+}
+
+/**
+ * The Hierarchy Navigator's tree (`HIERARCHY_PANE::buildHierarchyTree`): the root, then each sheet followed by the sheets inside it, a
+ * sheet's children sorted by page (`m_tree->SortChildren( aParent )` with `HIERARCHY_TREE::OnCompareItems`, which is
+ * `SCH_SHEET_PATH::ComparePageNum`: the page, then the virtual page number -- the walk order -- on a tie). `sheets` is in walk order.
+ */
+export function hierarchyTreeOrder(sheets: readonly HierarchySheet[]): HierarchySheet[] {
+  const entries = sheets.map((sheet, i) => ({ sheet, i, page: effectivePage(sheet, i) }));
+  const childrenOf = (parent: readonly string[]) =>
+    entries
+      .filter((e) => e.sheet.path.length === parent.length + 1 && parent.every((id, k) => e.sheet.path[k] === id))
+      .sort((a, b) => comparePageNum(a.page, b.page) || a.i - b.i);
+  const out: HierarchySheet[] = [];
+  const visit = (parent: readonly string[]) => {
+    for (const child of childrenOf(parent)) {
+      out.push(child.sheet);
+      visit(child.sheet.path);
+    }
+  };
+  const root = entries.find((e) => e.sheet.path.length === 0);
+  if (root) out.push(root.sheet);
+  visit([]);
+  return out;
 }
 
 export function samePath(a: readonly string[], b: readonly string[]): boolean {

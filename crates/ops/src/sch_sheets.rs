@@ -142,6 +142,7 @@ impl<'a> Board<'a> {
     /// Put a copy of the sheet `inc` on the screen the verbs act on: the sheet symbol (named `name`, moved by `shift`), a copy of each screen it shows under a
     /// file of its own, the library symbols its symbols need, its symbols numbered. Returns the files the copies got (the sheet's first).
     pub(crate) fn add_sheet_tree(&mut self, inc: Incoming<'_>, shift: (Nm, Nm), name: &str, file_hint: Option<&str>, numbering: &Numbering) -> Result<Vec<String>, Vec<CheckResult>> {
+        let pages_before = eda_model::sheet_list::walk(&self.design);
         let own = self.design.sheet_contents.clone().unwrap_or_default();
         let screen_of = |f: &str| -> Option<SchematicSection> { inc.screens.get(f).or_else(|| own.get(f)).cloned() };
         // the files the sheet shows, parents first
@@ -236,6 +237,9 @@ impl<'a> Board<'a> {
             sch.assign_missing_ids();
         }
 
+        // the new sheet paths' page numbers before the annotation, which may number by page (`DrawSheet` gives the sheet `GetNextPageNumber`
+        // and `LoadSheetFromFile` the sheets inside it theirs before `AnnotateSymbols` runs; `Board::apply` would number them after)
+        eda_model::sheet_list::keep_pages(&mut self.design, &pages_before);
         // an import's automatic annotation, now that the sheets are in
         if let Numbering::Annotate { order, options } = numbering {
             self.annotate_new_screens(&files, *order, options);

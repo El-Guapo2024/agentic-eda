@@ -1766,7 +1766,7 @@ fn cmd_line(c: &Cmd) -> String {
             let flag = |name: &str, v: &Option<bool>| v.map(|v| format!(" --{name} {}", if v { "on" } else { "off" })).unwrap_or_default();
             format!("schematic attrs {}{}{}{}{}", ids.join(","), flag("dnp", dnp), flag("exclude-from-bom", exclude_from_bom), flag("exclude-from-board", exclude_from_board), flag("exclude-from-sim", exclude_from_sim))
         }
-        Cmd::SetSheetPage { sheet, page } => format!("schematic sheet-page {sheet} {page:?}"),
+        Cmd::SetSheetPage { sheet, page, .. } => format!("schematic sheet-page {sheet} {page:?}"),
         Cmd::SetSchItemText { id, text } => format!("schematic item-text {id} {text:?}"),
         Cmd::SetSymbolLibIds { changes, .. } => format!("schematic lib-ids {}", changes.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(",")),
         Cmd::IncrementAnnotations { start, increment } => format!("schematic increment-annotations {start} {increment}"),

@@ -93,6 +93,13 @@ pub struct SchExtras {
     /// Properties set it, as `label_looks` does for labels (`auto_rotate` is for labels and stays off). A pin with no entry has the default text, 50 mil, regular, upright.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheet_pin_looks: BTreeMap<String, LabelLook>,
+    /// The page number of a sheet drawn on this screen, per sheet path, where the screen is shown on several paths and the paths' pages differ
+    /// (`SCH_SHEET::m_instances`: one `SCH_SHEET_INSTANCE`, with its own `m_PageNumber`, per sheet path the sheet is on): by the sheet's
+    /// `SheetInstance::id`, then by the path of the screen the sheet is drawn on (the placement ids from the root down, joined with `/`) -> the page.
+    /// A path with no entry has the sheet's own [`crate::ir::SheetInstance::page`], which is the only page a sheet on a screen shown once has. Read and
+    /// written through `crate::sheet_list::page_on` / `set_page`. Additive: empty and not written for a design with no screen shown twice that holds sheets.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheet_pages: BTreeMap<String, BTreeMap<String, String>>,
     /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
     /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
     /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
@@ -558,6 +565,7 @@ impl SchExtras {
             && self.label_looks.is_empty()
             && self.label_fields.is_empty()
             && self.sheet_pin_looks.is_empty()
+            && self.sheet_pages.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()

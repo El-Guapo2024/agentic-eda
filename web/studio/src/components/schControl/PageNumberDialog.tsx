@@ -40,7 +40,8 @@ export function PageNumberDialog({ path, onClose }: { path: string[]; onClose: (
     if (value === effectivePage(entry, index)) return onClose();
     const id = path[path.length - 1];
     if (!id) return;
-    if (await api.cmd({ op: "set_sheet_page", sheet: id, page: value })) {
+    // the page of this sheet path (`SCH_SHEET_PATH::SetPageNumber`): another path of a screen shown twice keeps its own
+    if (await api.cmd({ op: "set_sheet_page", sheet: id, page: value, path })) {
       dispatch({ type: "TOAST", message: `Sheet ${label} is page ${value || "(by order)"}.`, kind: "info" });
       onClose();
     }

@@ -230,8 +230,11 @@ export function textEditCmd(
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_text", id: text.id, ...edit } : null;
 }
 
-/** Sheet Properties: the name and file the sheet has, and the page number, as one command (one undo step). */
-export function sheetEditCmd(sheet: Pick<Sheet, "id" | "name" | "file" | "page">, next: { name: string; file: string; page: string }): Cmd | null {
+/**
+ * Sheet Properties: the name and file the sheet has, and the page number, as one command (one undo step). `path` is the sheet's own sheet path
+ * (the sheet in view's, then its id): the page is set for that path (`SCH_SHEET_PATH::SetPageNumber` on the instance the dialog edits).
+ */
+export function sheetEditCmd(sheet: Pick<Sheet, "id" | "name" | "file" | "page">, next: { name: string; file: string; page: string }, path?: string[]): Cmd | null {
   const cmds: Cmd[] = [];
   const name = next.name.trim();
   const file = next.file.trim();
@@ -240,7 +243,7 @@ export function sheetEditCmd(sheet: Pick<Sheet, "id" | "name" | "file" | "page">
   if (file !== "" && file !== sheet.file && file !== sheet.file.replace(/\.kicad_sch$/, "")) edit.file = file;
   if (Object.keys(edit).length > 0) cmds.push({ op: "sch_edit", verb: "edit_sheet", id: sheet.id, ...edit });
   const page = next.page.trim();
-  if (page !== (sheet.page ?? "")) cmds.push({ op: "set_sheet_page", sheet: sheet.id, page });
+  if (page !== (sheet.page ?? "")) cmds.push(path ? { op: "set_sheet_page", sheet: sheet.id, page, path } : { op: "set_sheet_page", sheet: sheet.id, page });
   if (cmds.length === 0) return null;
   return cmds.length === 1 ? cmds[0]! : { op: "batch", cmds };
 }
