@@ -356,7 +356,7 @@
       buttonText(dialog(), "Cancel")?.click();
       await sleep(500);
       // Merely selecting another pin (2.54 mm long) must not become the template.
-      const other = ((await symbol(SYM)).pins ?? []).find((q) => q.name === "");
+      const other = ((await symbol(SYM)).pins ?? []).find((q) => q.name !== "TMPL");
       if (!t(!!other, "another pin is there")) return;
       await select([other.id ?? `pin:${other.number}`]);
       await sleep(500);

@@ -5838,16 +5838,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// A pin needs a non-empty number (KiCad allows an empty pin *name*,
-    /// never an empty number) and a non-empty electrical type -- the one
-    /// validation cheap and unambiguous enough to enforce without
-    /// transcribing all of `pin_type.h`'s closed vocabulary (same "keep
-    /// the raw string, round-trip whatever this port doesn't special-case"
-    /// convention `LibPin::electrical_type`'s own doc already accepts).
+    /// A pin needs a non-empty electrical type -- the one validation cheap and unambiguous enough to enforce without transcribing all of
+    /// `pin_type.h`'s closed vocabulary (same "keep the raw string, round-trip whatever this port doesn't special-case" convention
+    /// `LibPin::electrical_type`'s own doc already accepts). Its number may be empty, as KiCad's may: `SYMBOL_EDITOR_PIN_TOOL::CreatePin` makes
+    /// a pin with none and `DIALOG_PIN_PROPERTIES::TransferDataFromWindow` does not ask for one.
     fn validate_pin(pin: &LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
-        if pin.number.trim().is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_pin", "pin", "a pin needs a number")]);
-        }
         if pin.electrical_type.trim().is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "a pin needs an electrical type")]);
         }

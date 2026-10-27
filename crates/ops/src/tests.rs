@@ -2585,12 +2585,12 @@ fn add_pin_against_an_unopened_symbol_is_refused() {
 }
 
 #[test]
-fn add_pin_rejects_an_empty_number() {
+fn add_pin_takes_an_empty_number_as_createpin_makes_it() {
+    // r2-editors-exports E2: `CreatePin` leaves the number empty and Pin Properties' OK does not ask for one.
     let m = net_model();
     let mut b = board(&m);
     b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
-    let e = b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("", 0.0, 0.0) }).unwrap_err();
-    assert_eq!(e[0].check, "ops_bad_pin");
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("", 0.0, 0.0) }).unwrap();
 }
 
 #[test]

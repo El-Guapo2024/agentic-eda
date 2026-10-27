@@ -149,3 +149,9 @@ test("isActionEnabledForTab: Properties (E) runs in the editors that register it
     assert.equal(isActionEnabledForTab(name, "footprint", true), false, name);
   }
 });
+
+test("Repeat Last Item (Insert) is live on the Schematic and the Symbol tabs (r2-editors-exports E3)", () => {
+  assert.equal(isActionEnabledForTab("eeschema.InteractiveEdit.repeatDrawItem", "symbol", true), true);
+  assert.equal(isActionEnabledForTab("eeschema.InteractiveEdit.repeatDrawItem", "schematic", true), true);
+  assert.equal(isActionEnabledForTab("eeschema.InteractiveEdit.repeatDrawItem", "pcb", true), false);
+});
