@@ -687,3 +687,55 @@ fn a_placed_power_symbol_is_numbered_across_sheets_like_kicad() {
     let ids: Vec<String> = b.design().sheet_contents.as_ref().unwrap()["power.kicad_sch"].power_symbols.iter().map(|p| p.id.clone()).collect();
     assert_eq!(&ids[6..], ["#PWR02", "#PWR010"], "the gap of the root sheet first, then the first number past every sheet's");
 }
+
+fn param(text: &str) -> Vec<eda_model::sch_extras::LabelField> {
+    vec![eda_model::sch_extras::LabelField { name: "param".into(), text: text.into(), visible: true, italic: false }]
+}
+
+/// r3 B3-M2: a sheet's user fields are its own (`SCH_SHEET::m_fields`) and travel with any copy of it: a pasted Power keeps its `param`, and so does the Filter
+/// sheet inside each copy of its screen; Import Sheet brings the file's inner sheets in with theirs.
+#[test]
+fn a_pasted_sheet_keeps_its_user_fields() {
+    let m = ConstraintModel::default();
+    let mut d = power_design();
+    d.schematic.as_mut().unwrap().extras.sheet_fields.insert("sp".into(), param("top"));
+    d.sheet_contents.as_mut().unwrap().get_mut("power.kicad_sch").unwrap().extras.sheet_fields.insert("sf".into(), param("inner"));
+    let mut fragment = power_fragment(&d);
+    fragment.section.extras.sheet_fields.insert("sp".into(), param("top"));
+    // pasted into the same design (a second placement of the screen), and into another one (a copy of the screens)
+    let mut other = d.clone();
+    other.sheet_contents = None;
+    other.schematic.as_mut().unwrap().sheets.clear();
+    other.schematic.as_mut().unwrap().extras.sheet_fields.clear();
+    for (design, copies) in [(d, false), (other, true)] {
+        let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+        b.apply(&Cmd::PasteSch { fragment: fragment.clone(), dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+        let sch = b.design().schematic.as_ref().unwrap();
+        let pasted = sch.sheets.iter().filter(|s| s.id != "sp").last().unwrap();
+        assert_eq!(sch.extras.sheet_fields.get(&pasted.id), Some(&param("top")), "copies {copies}: {:?}", sch.extras.sheet_fields);
+        let screen = &b.design().sheet_contents.as_ref().unwrap()[&pasted.file];
+        let inner = &screen.sheets[0];
+        assert_eq!(screen.extras.sheet_fields.get(&inner.id), Some(&param("inner")), "copies {copies}: {:?}", screen.extras.sheet_fields);
+    }
+    // Import Sheet: the file's own inner sheet keeps its field
+    let mut file = a_file();
+    file.root.extras.sheet_fields.insert("sub".into(), param("sub"));
+    let mut b = Board::new(power_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&import(Some(file), true, false)).unwrap();
+    let amp = &b.design().sheet_contents.as_ref().unwrap()["amp.kicad_sch"];
+    assert_eq!(amp.extras.sheet_fields.get(&amp.sheets[0].id), Some(&param("sub")), "{:?}", amp.extras.sheet_fields);
+}
+
+/// r3 B3-L3: a deleted sheet's user fields and pages go with it.
+#[test]
+fn a_deleted_sheet_leaves_no_fields_or_pages_behind() {
+    let m = ConstraintModel::default();
+    let mut d = power_design();
+    let root = d.schematic.as_mut().unwrap();
+    root.extras.sheet_fields.insert("sp".into(), param("top"));
+    root.extras.sheet_pages.insert("sp".into(), [("".to_string(), "7".to_string())].into_iter().collect());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SchEdit(crate::sch_edit::SchCmd::DeleteSheet { id: "sp".into() })).unwrap();
+    let extras = &b.design().schematic.as_ref().unwrap().extras;
+    assert!(extras.sheet_fields.is_empty() && extras.sheet_pages.is_empty(), "{extras:?}");
+}
