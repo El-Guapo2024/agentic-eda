@@ -188,7 +188,13 @@ impl<'a> RuleBoard<'a> {
     /// m_assignmentRules = std::move( rules )`). The reference of each footprint a rule matched, with the classes it is given.
     fn dynamic_component_classes(&self, env: &Rc<Env>) -> Vec<(String, Vec<String>)> {
         let settings = &self.rules.component_classes;
-        let mut rules: Vec<(String, String)> = settings.assignments.iter().filter(|a| !a.class.is_empty()).map(|a| (a.class.clone(), assignment_condition(a))).collect();
+        // `CompileAssignmentRule` gives no rule for an empty class (`if( ruleSource.empty() ) return nullptr;`) and for a text the rules parser cannot read -- a `"`
+        // in the class or a condition ends the `"%s"` it is written into (`(assign_component_class "%s" (condition "%s"))`) -- and one rule that does not
+        // compile leaves the board with none (`success = false`, R6-D8)
+        if settings.assignments.iter().any(|a| a.class.is_empty() || a.class.contains('"') || assignment_condition(a).contains('"')) {
+            return Vec::new();
+        }
+        let mut rules: Vec<(String, String)> = settings.assignments.iter().map(|a| (a.class.clone(), assignment_condition(a))).collect();
         if settings.sheet_classes {
             let mut sheets: BTreeSet<String> = BTreeSet::new();
             for fp in self.footprints.values() {
@@ -1086,6 +1092,21 @@ mod footprint_facts_tests {
         assert!(!holds(&rb, "A.Locked", &rb.footprint_item("R6").unwrap()));
         let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R5")).unwrap();
         assert!(!holds(&rb, "A.Locked", &pad), "a pad has no Locked property");
+    }
+
+    /// R6-D8 (`SyncDynamicComponentClassAssignments`: `if( success ) m_assignmentRules = std::move( rules );`): one row with no class, or a `"` in a value, gives
+    /// `CompileAssignmentRule` no rule, and the board has no dynamic class at all -- not even the rows that are good.
+    #[test]
+    fn a_class_rule_kicad_cannot_compile_leaves_the_board_with_none() {
+        for bad in [ClassAssignment { class: String::new(), all: true, conditions: vec![] }, ClassAssignment { class: "Q".into(), all: true, conditions: vec![ClassCondition { kind: ConditionKind::FootprintField, primary: "Voltage".into(), secondary: "4\"00V".into() }] }] {
+            let (design, model) = hv_board(|_, m| {
+                m.board.component_classes.assignments.push(bad.clone());
+                m.board.component_classes.assignments.push(ClassAssignment { class: "PWR".into(), all: true, conditions: vec![] });
+            });
+            let board = crate::board::build(&design, &model);
+            let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+            assert!(rb.footprint_item("R5").unwrap().footprint.as_ref().unwrap().classes.is_empty(), "{bad:?}");
+        }
     }
 
     /// R5-D1: the classes a file gives a footprint, the project's assignment rules (`GetAssignmentInDRCLanguage`, evaluated on the footprint) and the sheet classes,
