@@ -69,6 +69,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r2-editors-exports` | Round 2's r2-editors-exports findings (4 high, 17 medium, 14 low): the board's plot settings kept and plotted with (also r2-board-io F11), KiCad's drill, placement, schematic Plot, VRML and STEP dialog defaults and checks, the board BOM on the board, new footprints' fields; the Symbol Editor's pin tool, Repeat/Duplicate/Clipboard, sync delete, rotate; 3D viewer user layers, DNP models, `${OP}`; Specctra session items | all 35 handled (fixed, in part, or not a bug), each marked in the findings file | GAPS 37 (the Plot dialog's other formats and options, drill map/units, Exclude-from-BOM), V3 inner-layer colours, S2's project settings |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
