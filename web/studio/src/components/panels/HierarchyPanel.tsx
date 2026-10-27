@@ -1,14 +1,16 @@
 // The Hierarchy Navigator (docked left, below Properties, per the coordinator's reading of eeschema's default AUI layout in sch_edit_frame.cpp) --
-// the tree of the design's sheets (GAPS.md #6): the root, then every sheet placed on it, then the sheets those place, in the order
-// `SCH_SHEET_LIST::BuildSheetList` builds. The list is `GET /api/sch/hierarchy` (the same one Next / Previous Sheet and Edit Sheet Page Number read) and it is read
-// again whenever the design changes, so a Reorganize into Module Sheets, an undo or a new sheet shows at once.
+// the tree of the design's sheets (GAPS.md #6): the root, then every sheet placed on it, then the sheets those place, as
+// `HIERARCHY_PANE::buildHierarchyTree` builds it: each sheet's children sorted by page (`SortChildren`, `ComparePageNum`; `hierarchyTreeOrder`),
+// every sheet labelled with its page (`formatPageString`: KiCad's "name (page N)"; here the name, then the file and the page). The list is
+// `GET /api/sch/hierarchy` (the same one Next / Previous Sheet and Edit Sheet Page Number read) and it is read again whenever the design
+// changes, so a Reorganize into Module Sheets, an undo, a new sheet or a page number shows at once.
 //
 // A click opens the sheet: it runs `eeschema.NavigateTool.changeSheet` with the sheet's path (`SCH_NAVIGATE_TOOL::ChangeSheet`, which the Hierarchy Navigator's
 // tree raises in KiCad), so Back / Forward / Leave Sheet keep their history. The sheet in view is highlighted.
 import { useEffect, useState } from "react";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { fetchHierarchy, type HierarchyEntry } from "../../api/schControlClient";
-import { samePath } from "../../kicad-port/sheetPages";
+import { effectivePage, hierarchyTreeOrder, samePath } from "../../kicad-port/sheetPages";
 import { useStudioState } from "../../state/store";
 
 export function HierarchyPanel() {
@@ -31,7 +33,8 @@ export function HierarchyPanel() {
 
   const open = (path: string[]) => run("eeschema.NavigateTool.changeSheet", path);
   // The root first even when the list has not arrived yet, so the panel is never empty.
-  const rows: HierarchyEntry[] = sheets.length > 0 ? sheets : [{ path: [], name: "", file: "", page: "" }];
+  const rows: HierarchyEntry[] = sheets.length > 0 ? hierarchyTreeOrder(sheets) : [{ path: [], name: "", file: "", page: "1" }];
+  const pageOf = (s: HierarchyEntry) => effectivePage(s, Math.max(0, sheets.indexOf(s)));
 
   return (
     <div className="panel-section" id="hierarchy-panel" tabIndex={-1}>
@@ -58,7 +61,7 @@ export function HierarchyPanel() {
             title={current ? `"${label}" is the sheet in view` : isRoot ? "Go to the root sheet" : `Open sheet "${label}" (${file})`}
           >
             <b>{label}</b>
-            <small>{s.page ? `${file} · page ${s.page}` : file}</small>
+            <small>{`${file} · page ${pageOf(s)}`}</small>
           </div>
         );
       })}

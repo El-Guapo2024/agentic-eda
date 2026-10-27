@@ -101,25 +101,27 @@ impl<'a> Board<'a> {
     }
 
     /// `SCH_EDIT_TOOL::EditPageNumber`: the placement `sheet` (a `SheetInstance::id`, found on the root sheet or on any sheet
-    /// screen) gets `page`. Letters and digits only; empty clears it.
-    pub(crate) fn set_sheet_page(&mut self, sheet: &str, page: &str) -> Result<(), Vec<CheckResult>> {
+    /// screen) gets `page`. Letters and digits only; empty clears it. With `path` (the sheet path, ending in `sheet`), the page of that path
+    /// only (`SCH_SHEET_PATH::SetPageNumber`, the sheet's instance on the path of the sheet in view), as `sheet_list::set_page` keeps it;
+    /// without, of every path the sheet is on.
+    pub(crate) fn set_sheet_page(&mut self, sheet: &str, page: &str, path: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
         let page = page.trim();
         if !page_number_is_valid(page) {
             return Err(fail("ops_bad_page", sheet, "a page number is letters and digits only (no spaces)"));
         }
-        if let Some(s) = self.design.schematic.as_mut().and_then(|root| root.sheets.iter_mut().find(|s| s.id == sheet)) {
-            s.page = page.to_string();
+        if let Some(path) = path {
+            if path.last().map(String::as_str) != Some(sheet) || !eda_model::sheet_list::set_page(&mut self.design, path, page) {
+                return Err(fail("ops_unknown_sheet", sheet, "no sheet with this id on this sheet path"));
+            }
             return Ok(());
         }
-        if let Some(screens) = self.design.sheet_contents.as_mut() {
-            for screen in screens.values_mut() {
-                if let Some(s) = screen.sheets.iter_mut().find(|s| s.id == sheet) {
-                    s.page = page.to_string();
-                    return Ok(());
-                }
+        match eda_model::sheet_list::placement_for_every_path(&mut self.design, sheet) {
+            Some(s) => {
+                s.page = page.to_string();
+                Ok(())
             }
+            None => Err(fail("ops_unknown_sheet", sheet, "no sheet with this id")),
         }
-        Err(fail("ops_unknown_sheet", sheet, "no sheet with this id"))
     }
 
     /// What `SCH_TOOL_BASE::Increment` does to a label or a text (`label.SetText( *newLabel )`): the item keeps its place and its id,

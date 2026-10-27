@@ -10,45 +10,15 @@ use eda_model::ir::{Design, SchematicSection};
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// One sheet of the hierarchy, as `SCH_SHEET_LIST` holds it: the placement ids from the root down (`[]` is the root), the placement's
-/// name and file, and the page number it was given (empty when none was set).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HierarchyEntry {
-    pub path: Vec<String>,
-    pub name: String,
-    pub file: String,
-    pub page: String,
-}
-
-/// Every sheet that has content, depth first, the root first -- the order `SCH_SHEET_LIST::BuildSheetList` builds (the studio sorts
-/// it by page number, `SortByPageNumbers`, so Next / Previous Sheet follow the page order). A placement whose file has no screen is
-/// left out (nothing to show there), and so is anything deeper than 32 sheets (a file that places itself).
-pub fn hierarchy_of(design: &Design) -> Vec<HierarchyEntry> {
-    fn visit(design: &Design, sch: &SchematicSection, path: &mut Vec<String>, out: &mut Vec<HierarchyEntry>) {
-        if path.len() > 32 {
-            return;
-        }
-        for child in &sch.sheets {
-            let Some(content) = design.sheet_contents.as_ref().and_then(|c| c.get(&child.file)) else { continue };
-            path.push(child.id.clone());
-            out.push(HierarchyEntry { path: path.clone(), name: child.name.clone(), file: child.file.clone(), page: child.page.clone() });
-            visit(design, content, path, out);
-            path.pop();
-        }
-    }
-    let mut out = vec![HierarchyEntry { path: Vec::new(), name: String::new(), file: String::new(), page: String::new() }];
-    if let Some(root) = &design.schematic {
-        visit(design, root, &mut Vec::new(), &mut out);
-    }
-    out
-}
-
-/// `GET /api/sch/hierarchy`: `{ "ok": true, "sheets": [{ "path": ["id", ...], "name", "file", "page" }] }`, the root first.
+/// `GET /api/sch/hierarchy`: `{ "ok": true, "sheets": [{ "path": ["id", ...], "name", "file", "page" }] }`, the root first, in the order
+/// `SCH_SHEET_LIST::BuildSheetList` walks them (`eda_model::sheet_list::walk`: depth first, a screen's sheets by place); `page` is the page each
+/// sheet path shows (`SCH_SHEET_PATH::GetPageNumber`: the one stored for it, else its place in the walk, the root being 1), the one the derived
+/// `.kicad_sch` gives it. The studio sorts it by page for Next / Previous Sheet and sorts each sheet's children by page in the Hierarchy Navigator.
 pub fn hierarchy(dir: &Path) -> Value {
     match kicad_engine::load_with_schematic(dir) {
         Ok((design, _)) => json!({
             "ok": true,
-            "sheets": hierarchy_of(&design).into_iter().map(|h| json!({ "path": h.path, "name": h.name, "file": h.file, "page": h.page })).collect::<Vec<_>>(),
+            "sheets": eda_model::sheet_list::walk(&design).into_iter().map(|h| { let page = h.effective_page(); json!({ "path": h.path, "name": h.name, "file": h.file, "page": page }) }).collect::<Vec<_>>(),
         }),
         Err(e) => err(crate::board::reasons(&e)),
     }
@@ -182,7 +152,7 @@ mod tests {
 
     #[test]
     fn a_flat_design_has_only_the_root() {
-        let h = hierarchy_of(&design(sch(vec![]), BTreeMap::new()));
+        let h = eda_model::sheet_list::walk(&design(sch(vec![]), BTreeMap::new()));
         assert_eq!(h.len(), 1);
         assert!(h[0].path.is_empty());
     }
@@ -194,9 +164,10 @@ mod tests {
         screens.insert("b.kicad_sch".to_string(), sch(vec![]));
         screens.insert("c.kicad_sch".to_string(), sch(vec![]));
         let d = design(sch(vec![placement("sa", "A", "a.kicad_sch", "7"), placement("sb", "B", "b.kicad_sch", "")]), screens);
-        let h = hierarchy_of(&d);
-        let seen: Vec<(Vec<&str>, &str, &str)> = h.iter().map(|e| (e.path.iter().map(String::as_str).collect(), e.name.as_str(), e.page.as_str())).collect();
-        assert_eq!(seen, vec![(vec![], "", ""), (vec!["sa"], "A", "7"), (vec!["sa", "a1"], "Deep", ""), (vec!["sb"], "B", "")]);
+        let h = eda_model::sheet_list::walk(&d);
+        // the page each path shows, which `GET /api/sch/hierarchy` sends: the one set, else the place in the walk
+        let seen: Vec<(Vec<&str>, &str, String)> = h.iter().map(|e| (e.path.iter().map(String::as_str).collect(), e.name.as_str(), e.effective_page())).collect();
+        assert_eq!(seen, vec![(vec![], "", "1".into()), (vec!["sa"], "A", "7".into()), (vec!["sa", "a1"], "Deep", "3".into()), (vec!["sb"], "B", "4".into())]);
     }
 
     #[test]
@@ -204,7 +175,7 @@ mod tests {
         let mut screens = BTreeMap::new();
         screens.insert("loop.kicad_sch".to_string(), sch(vec![placement("again", "Loop", "loop.kicad_sch", "")]));
         let d = design(sch(vec![placement("gone", "Gone", "missing.kicad_sch", ""), placement("lp", "Loop", "loop.kicad_sch", "")]), screens);
-        let h = hierarchy_of(&d);
+        let h = eda_model::sheet_list::walk(&d);
         assert!(h.iter().all(|e| e.name != "Gone"), "no screen, nothing to show");
         assert!(h.len() < 40, "the self-placing file stops at the depth limit instead of looping forever: {}", h.len());
     }
