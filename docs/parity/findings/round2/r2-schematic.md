@@ -1498,7 +1498,7 @@ Commits checked: 18db02a5, 132bd8da, e6cc0ab4, 01230f08.
 
 ### D-E3. The violations list is in report order; KiCad lists every error, then warnings, then exclusions (low)
 
-**Fixed** on task-r2-schematic: 4d5db9e6 (the DRC list too: drc_item.cpp sorts the same way)
+**Open** after task-r2-schematic: tried in 4d5db9e6 and taken back: KiCad sorts `m_filteredMarkers` when `SetSeverities` refilters, so an excluded marker keeps its row until then; sorting at every redraw moved it to the end and broke the review and drc-review browser checks. Needs the order kept from one filter to the next (the DRC dialog sorts the same way in `drc_item.cpp`)
 - **What differs.** `web/studio/src/kicad-port/rcItems.ts:62-68` (`listedIndexes`) and `ErcDialog.tsx:99` keep kicad-cli's report order. `ERC_REPORT::WriteJsonReport` groups that order by sheet, so it is severity-sorted only within each sheet. KiCad sorts the whole filtered list once, in `erc_settings.cpp::SHEETLIST_ERC_ITEMS_PROVIDER::SetSeverities`: `// Sort markers so that errors appear before warnings` `std::stable_sort( m_filteredMarkers.begin(), m_filteredMarkers.end(), []( const SCH_MARKER* a, const SCH_MARKER* b ) { return a->GetSeverity() > b->GetSeverity(); } );` (ERROR 0x20 > WARNING 0x10 > EXCLUSION 0x04). Next and Previous Marker step in that order too.
 - **How to see it.** On two sheets, put a warning on sheet 1 and an error on sheet 2: KiCad lists the error first, the studio lists the warning first. Test in rcItems.test.ts: input `[warning(s1), error(s2), excluded(s1)]`, assert the listed order is `[1,0,2]`.
 - **Already known?** No. PARITY-sch.md section 4 says "a flat list in report order" and marks it identical.

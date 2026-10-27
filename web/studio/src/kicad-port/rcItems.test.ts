@@ -56,9 +56,6 @@ test("a marker is listed by what it is: an excluded one is an exclusion whatever
   assert.deepEqual(listedIndexes(list, SHOW_ALL), [0, 1, 2, 3]);
   assert.deepEqual(listedIndexes(list, { errors: true, warnings: false, exclusions: false }), [0]);
   assert.deepEqual(listedIndexes(list, { errors: false, warnings: true, exclusions: true }), [1, 2, 3]);
-  // r2 D-E3: every error, then the warnings, then the exclusions (`SetSeverities`' stable sort), whatever the report's order
-  const mixed = [v("w", ["1"], { severity: "warning" }), v("e", ["2"]), v("x", ["3"], { excluded: true }), v("e2", ["4"])];
-  assert.deepEqual(listedIndexes(mixed, SHOW_ALL), [1, 3, 0, 2]);
 });
 
 test("the All box turns warnings and exclusions on or off with it and leaves the errors on", () => {
