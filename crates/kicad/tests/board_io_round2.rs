@@ -391,3 +391,43 @@ fn a_zone_with_rings_the_file_says_is_unfilled_stays_unfilled() {
     let zones = blocks(&out, "zone");
     assert!(zones[0].contains("(fill (thermal_gap") && zones[0].contains("(filled_polygon"), "{}", zones[0]);
 }
+
+// ------------------------------------------------------------------------------------------------- round 3 (`work/findings/round3/r3-board-io.md`)
+
+const THIEVING: &str = r#"(kicad_pcb (version 20260513) (generator "pcbnew") (generator_version "10.99")
+ (general (thickness 1.6) (legacy_teardrops no)) (paper "A4")
+ (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+ (setup (pad_to_mask_clearance 0))
+ (gr_rect (start 90 90) (end 130 130) (stroke (width 0.1) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "11111111-1111-1111-1111-111111111111"))
+ (zone (net 0) (net_name "") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25)
+  (fill yes (mode thieving) (thermal_gap 0.5) (thermal_bridge_width 0.5) (island_removal_mode 1)
+   (thieving (type hatch) (size 5) (gap 2) (width 0.3) (stagger yes) (orientation 33)))
+  (polygon (pts (xy 95 95) (xy 125 95) (xy 125 125) (xy 95 125))))
+)"#;
+
+/// r3 F2: `parseZONE`'s `T_thieving` (`SetFillMode( ZONE_FILL_MODE::COPPER_THIEVING )`, the settings block, "thieving requires file version >= 20260513"): a copper
+/// thieving zone (QA 25ec2335 `zone_thieving_track_bisection`) is written back thieving, with its settings, in a 20260513 file -- not as a solid pour.
+#[test]
+fn a_thieving_zone_is_kept() {
+    let (design, model, _) = import_kicad_pcb(THIEVING).expect("parses");
+    let out = export(&design, &model);
+    assert!(out.contains("(version 20260513)"), "{out}");
+    let zones = blocks(&out, "zone");
+    assert_eq!(zones.len(), 1, "{out}");
+    assert!(zones[0].contains("(mode thieving)") && zones[0].contains("(thieving (type hatch) (size 5) (gap 2) (width 0.3) (stagger yes) (orientation 33))"), "{}", zones[0]);
+    assert!(zones[0].contains("(net 0)") || !zones[0].contains("(net_name \"0\")"), "the netless pour stays netless: {}", zones[0]);
+}
+
+/// r3 F2, as kicad-cli reads our file: its re-save still has the thieving zone and its settings.
+#[test]
+fn kicad_cli_reads_the_thieving_zone_back() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(back) = kicad_resave(THIEVING, "thieving") else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let flat = back.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("(mode thieving)") && flat.contains("(thieving (type hatch) (size 5) (gap 2) (width 0.3) (stagger yes) (orientation 33)"), "{back}");
+}

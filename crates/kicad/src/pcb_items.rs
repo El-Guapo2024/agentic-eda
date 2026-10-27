@@ -40,6 +40,9 @@ pub(crate) struct ZoneArgs<'a> {
     /// `BOARD::GetEnabledLayers`: the layers the board has. The zone is written on the ones of its layer set that are in this list (`format( const ZONE* )`'s
     /// `layers &= aZone->GetBoard()->GetEnabledLayers()`); `None` is every layer.
     pub enabled_layers: Option<&'a std::collections::BTreeSet<String>>,
+    /// A copper thieving zone's `(thieving ..)` settings (`DrawingsSection::zone_thieving`): the zone is written `(mode thieving)` with them, as KiCad 10 writes a
+    /// `ZONE_FILL_MODE::COPPER_THIEVING` zone, unless it has become a hatched one since.
+    pub thieving: Option<&'a str>,
 }
 
 /// `PCB_IO_KICAD_SEXPR::formatLayers( layers, aEnumerateLayers, aIsZone )` for a zone: `(layers "F.Cu" "B.Cu")`. A zone on copper layers lists each of them
@@ -159,8 +162,11 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         write!(out, " yes").unwrap();
     }
     let hatch_fill = !z.teardrop && z.fill_mode == eda_model::ir::FillMode::HatchPattern;
+    let thieving = a.thieving.filter(|_| !z.teardrop && !rule_area && !hatch_fill);
     if hatch_fill {
         write!(out, " (mode hatch)").unwrap();
+    } else if thieving.is_some() {
+        write!(out, " (mode thieving)").unwrap();
     }
     if !z.teardrop {
         write!(out, " (thermal_gap {}) (thermal_bridge_width {})", mm(z.thermal_gap), mm(z.thermal_spoke_width)).unwrap();
@@ -194,6 +200,10 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
             fmt_mm_f(z.hatch_hole_min_area)
         )
         .unwrap();
+    }
+    // `else if( aZone->GetFillMode() == ZONE_FILL_MODE::COPPER_THIEVING )`: the settings, last in the fill.
+    if let Some(t) = thieving {
+        write!(out, " {t}").unwrap();
     }
     writeln!(out, ")").unwrap();
 

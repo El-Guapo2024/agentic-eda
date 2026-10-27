@@ -305,7 +305,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             };
             let filled = fills.and_then(|k| k.current(z)).is_some_and(|e| !e.unfilled);
             let mut block = String::new();
-            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, filled, enabled_layers: Some(&enabled) });
+            let thieving = design.drawings.as_ref().and_then(|d| d.zone_thieving.iter().find(|t| t.id == z.id)).map(|t| t.settings.as_str());
+            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, filled, enabled_layers: Some(&enabled), thieving });
             zone_blocks.push((z.parent_footprint.clone(), block));
         }
     }
@@ -1673,16 +1674,30 @@ pub(crate) const KICAD9_BOARD_FILE_VERSION: i64 = 20241229;
 /// be interpreted as OFF in legacy boards, not as unspecified (aka: inherit from board stackup)").
 pub(crate) const FIRST_VIA_PROTECTION_VERSION: i64 = 20250228;
 
+/// The first board file version that may hold a copper thieving zone (20260513: `parseZONE`'s `T_thieving`, "thieving requires file version >= 20260513").
+pub(crate) const FIRST_THIEVING_VERSION: i64 = 20260513;
+
+/// Whether some copper pour of the board is written as a thieving zone (`DrawingsSection::zone_thieving`, the zone not hatched since).
+fn has_thieving_zone(design: &Design) -> bool {
+    let Some(d) = design.drawings.as_ref() else { return false };
+    !d.zone_thieving.is_empty()
+        && design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| !z.teardrop && !z.is_rule_area && z.fill_mode == eda_model::ir::FillMode::Polygons && d.zone_thieving.iter().any(|t| t.id == z.id)))
+}
+
 /// The file version a board is written as: KiCad 9's, which every reader of this crate's files opens, unless the board holds KiCad 10 data whose meaning the version decides
 /// (`m_requiredVersion` in 25ec2335's `pcb_io_kicad_sexpr_parser.cpp`):
 /// - board defaults for the vias' covering, plugging, capping or filling (`DrawingsSection::setup_tokens`): a via that says nothing inherits them only from 20250228 on, so the
 ///   board is written as 20250228. The one other gate between the two versions, the stroked zone fill of before 20250210 (`isStrokedFill`), is off in either, as every zone is
 ///   written `(filled_areas_thickness no)`; KiCad 9 cannot read such a setup anyway.
+/// - a copper thieving zone (`DrawingsSection::zone_thieving`): 20260513, the version `parseZONE` asks of one. The gates on the way are met as above, but for 20250926's: a pad's
+///   `(die_delay ..)` is read as a time after it (`parsePAD`), so one kept among a pad's tokens from an older file would change its meaning (no QA board has both).
 /// - The later gates are met where the board is read instead, the tree normalised to KiCad 9's meaning: bold text (20260826, `crate::bold_text`), a footprint's library frame
 ///   (20260616, `crate::fp_transform`), a reference image's scale (20260623, `crate::pcb_image::file_scale`). A version past 20260616 would have every footprint read in its
 ///   library frame, which this writer does not write.
 pub(crate) fn board_file_version(design: &Design) -> i64 {
-    if design.drawings.as_ref().is_some_and(|d| !d.setup_tokens.is_empty()) {
+    if has_thieving_zone(design) {
+        FIRST_THIEVING_VERSION
+    } else if design.drawings.as_ref().is_some_and(|d| !d.setup_tokens.is_empty()) {
         FIRST_VIA_PROTECTION_VERSION
     } else {
         KICAD9_BOARD_FILE_VERSION

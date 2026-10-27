@@ -1509,6 +1509,16 @@ impl ZoneSmoothing {
     }
 }
 
+/// One copper thieving zone: see `DrawingsSection::zone_thieving`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneThieving {
+    /// The zone's id (`Zone::id`).
+    pub id: String,
+    /// The `(thieving ..)` list as the file wrote it, on one line.
+    pub settings: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Zone {
@@ -2628,6 +2638,12 @@ pub struct DrawingsSection {
     /// [`crate::track_mask`]. Additive: absent in an older `design.json` reads as "no track has a mask opening".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub track_masks: Vec<crate::track_mask::TrackMask>,
+    /// KiCad 10's copper thieving zones (`ZONE_FILL_MODE::COPPER_THIEVING`, `(fill (mode thieving) .. (thieving (type ..) (size ..) (gap ..) (width ..) (stagger ..)
+    /// (orientation ..)))`, file version 20260513): the zone's id and its `(thieving ..)` settings as the file wrote them. Such a zone is written back thieving (and the
+    /// board as 20260513, which `parseZONE` asks of it) while its `fill_mode` is `Polygons`; kicad-cli fills it. Additive: absent in an older `design.json` reads as
+    /// "no zone is a thieving zone".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_thieving: Vec<ZoneThieving>,
     /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
     /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
     /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`
