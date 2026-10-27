@@ -27,6 +27,7 @@ import { planAlignSelection, planDistributeSelection } from "../kicad-port/align
 import type { CarryOp } from "../kicad-port/pcbCarry";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
+import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
 import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
@@ -1373,6 +1374,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       // -- wrong: EDIT_TOOL::doMoveSelection's own cancel just reverts
       // the move and leaves the pre-move selection exactly as it was.
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.armedFootprint != null || state.movePreview != null;
+      // A board drawing tool with an item started: the item goes, the tool stays (kicad-port/drawingCancel.ts); the next Escape leaves the tool.
+      if (state.movePreview == null && escapeKeepsDrawingTool(state.tab, state.activeTool, state.drawState)) {
+        return { ...state, drawState: null };
+      }
       if (inProgress) {
         return {
           ...state,

@@ -29,6 +29,7 @@ import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
+import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
@@ -638,6 +639,8 @@ export function useActionRunner() {
     const boardMoving = () => state.tab === "pcb" && (state.activeTool === "move" || state.movePreview?.kind === "pcb");
     m.set("common.Interactive.undo", () => {
       if (boardMoving()) return void m.get("common.Interactive.cancel")?.();
+      // `drawShape`: "( started && evt->IsAction( &ACTIONS::undo ) )" cancels the item being drawn, as Escape does, and keeps the tool
+      if (escapeKeepsDrawingTool(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "ESCAPE" });
       void (state.tab === "footprint" ? fpApi.undo() : state.tab === "symbol" ? symApi.undo() : api.undo());
     });
     m.set("common.Interactive.redo", () => {
