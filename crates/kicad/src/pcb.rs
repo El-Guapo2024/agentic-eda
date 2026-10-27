@@ -985,6 +985,20 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
             "workbook_filename": ng.workbook_filename,
         });
     }
+    // Board Setup > Pre-defined Sizes' Tracks and Vias (`BOARD_DESIGN_SETTINGS::m_TrackWidthList` / `m_ViasDimensionsList`, the project's
+    // `track_widths` and `via_dimensions`, each a `PARAM_LAMBDA` of `board_design_settings.cpp`): millimetres, with the index-0 "use net class"
+    // dummy entry KiCad keeps at the head of each list (r5 R5-3)
+    if let Some(widths) = design.routing.as_ref().map(|r| r.track_width_presets.as_slice()).filter(|w| !w.is_empty()) {
+        let mut js = vec![serde_json::json!(0.0)];
+        js.extend(widths.iter().map(|w| serde_json::json!(eda_model::units::to_mm(*w))));
+        project["board"]["design_settings"]["track_widths"] = serde_json::Value::Array(js);
+    }
+    if let Some(vias) = design.routing.as_ref().map(|r| r.via_presets.as_slice()).filter(|v| !v.is_empty()) {
+        let mm_f = eda_model::units::to_mm;
+        let mut js = vec![serde_json::json!({ "diameter": 0.0, "drill": 0.0 })];
+        js.extend(vias.iter().map(|v| serde_json::json!({ "diameter": mm_f(v.diameter), "drill": mm_f(v.drill) })));
+        project["board"]["design_settings"]["via_dimensions"] = serde_json::Value::Array(js);
+    }
     // Board Setup > Pre-defined Sizes' Differential Pairs (`BOARD_DESIGN_SETTINGS::m_DiffPairDimensionsList`, the project's `diff_pair_dimensions`):
     // width, gap and via gap in millimetres, with the index-0 "use net class" dummy row KiCad keeps at the head of its list.
     if let Some(pairs) = design.routing.as_ref().map(|r| r.diff_pair_presets.as_slice()).filter(|p| !p.is_empty()) {

@@ -62,7 +62,7 @@ use eda_model::units::mm;
 use std::collections::BTreeMap;
 
 use eda_model::units::Nm;
-use eda_model::ir::{Design, DiffPairPreset, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Track, Text, Via, Zone};
+use eda_model::ir::{Design, DiffPairPreset, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaPreset, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Track, Text, Via, Zone};
 use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::outline as edge;
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
@@ -821,25 +821,41 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
     }
 }
 
-/// A `.kicad_pro`'s Pre-defined Sizes' Differential Pairs (`board.design_settings.diff_pair_dimensions`): `BOARD_DESIGN_SETTINGS`' PARAM_LAMBDA
-/// writes `{width, gap, via_gap}` rows in millimetres, its first row the all-zero "use net class" dummy. Read as KiCad's loader reads the array: a
-/// row that is not an object, or misses one of the three keys, is skipped; the first row is the net class entry, not a pair of ours. The list
-/// replaces the design's own, as the panel's Apply does; absent or unreadable JSON is a no-op.
+/// A `.kicad_pro`'s Pre-defined Sizes (`board.design_settings.track_widths`, `via_dimensions` and `diff_pair_dimensions`): `BOARD_DESIGN_SETTINGS`'
+/// PARAM_LAMBDAs write millimetres, a width per entry, `{diameter, drill}` and `{width, gap, via_gap}` rows, each list's first entry the all-zero "use
+/// net class" dummy. Read as KiCad's loaders read the arrays: an empty entry (`entry.empty()`: a null, `{}`), a row that is not an object, or one that
+/// misses a key, is skipped; then the first entry left is the net class's, not a preset of ours (`GetCurrentTrackWidth`'s index 0; r5 R5-11: filtered
+/// first, the dummy dropped after). Each list present replaces the design's own, as the panel's Apply does; a list absent leaves it, and absent or
+/// unreadable JSON is a no-op (r5 R5-3 and p22 F5 for the widths and vias).
 pub fn merge_project_predefined_sizes(design: &mut Design, project_json: &str) {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else { return };
-    let Some(rows) = root.get("board").and_then(|b| b.get("design_settings")).and_then(|s| s.get("diff_pair_dimensions")).and_then(|v| v.as_array()) else { return };
-    let pairs: Vec<DiffPairPreset> = rows
-        .iter()
-        .skip(1)
-        .filter_map(|row| {
-            let nm = |key: &str| row.get(key).and_then(|v| v.as_f64()).map(mm_to_nm);
-            Some(DiffPairPreset { width: nm("width")?, gap: nm("gap")?, via_gap: nm("via_gap")? })
-        })
-        .collect();
+    let Some(settings) = root.get("board").and_then(|b| b.get("design_settings")) else { return };
+    let list = |key: &str| settings.get(key).and_then(|v| v.as_array()).cloned();
+    // `if( entry.empty() || !entry.is_object() ) continue;` and the keys' check, then the net class's entry off the front
+    let rows = |key: &str, fields: &[&str]| -> Option<Vec<Vec<Nm>>> {
+        let rows = list(key)?;
+        let kept: Vec<Vec<Nm>> = rows.iter().filter_map(|row| fields.iter().map(|f| row.get(*f).and_then(|v| v.as_f64()).map(mm_to_nm)).collect::<Option<Vec<Nm>>>()).collect();
+        Some(kept.into_iter().skip(1).collect())
+    };
+    // `track_widths`: `if( entry.empty() ) continue;`, then `entry.get<double>()`
+    let widths: Option<Vec<Nm>> = list("track_widths").map(|rows| rows.iter().filter_map(|v| v.as_f64()).map(mm_to_nm).skip(1).collect());
+    let vias = rows("via_dimensions", &["diameter", "drill"]);
+    let pairs = rows("diff_pair_dimensions", &["width", "gap", "via_gap"]);
+    if widths.is_none() && vias.is_none() && pairs.is_none() {
+        return;
+    }
     let routing = design
         .routing
         .get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
-    routing.diff_pair_presets = pairs;
+    if let Some(widths) = widths {
+        routing.track_width_presets = widths;
+    }
+    if let Some(vias) = vias {
+        routing.via_presets = vias.into_iter().map(|r| ViaPreset { diameter: r[0], drill: r[1] }).collect();
+    }
+    if let Some(pairs) = pairs {
+        routing.diff_pair_presets = pairs.into_iter().map(|r| DiffPairPreset { width: r[0], gap: r[1], via_gap: r[2] }).collect();
+    }
 }
 
 /// A `(net_class ..)` block's microvia size and differential-pair sizes (`uvia_dia`, `uvia_drill`, `diff_pair_width`,
