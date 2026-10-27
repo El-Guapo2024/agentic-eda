@@ -87,6 +87,7 @@ import { registerSchSheetFileActions } from "./schSheetFileActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, schematicBounds } from "../components/schematic/schHit";
+import { BROKEN_LINK_MESSAGE, symbolEditorTarget } from "../kicad-port/editWithSymbolEditor";
 import { hitField } from "../kicad-port/schFieldEdit";
 import { measureStrokeText } from "../components/text/strokeFont";
 import { allItems, itemBounds } from "../components/schematic/schItems";
@@ -1462,19 +1463,24 @@ export function useActionRunner() {
 
     // Ctrl+E / Ctrl+Shift+E -- SCH_EDITOR_CONTROL::EditWithSymbolEditor
     // (editWithSymbolEditor, and editLibSymbolWithSymbolEditor which
-    // routes through the same function): open the selected symbol's
-    // library entry in the Symbol Editor. This IR has one symbol library
-    // (no separate schematic-local copy), so both open the same entry.
-    // An unresolvable lib_id starts a blank symbol named after the
-    // reference (`Cmd::OpenSymbolForEdit`'s own precedent).
+    // routes through the same function; kicad-port/editWithSymbolEditor.ts):
+    // the first selected symbol, or the one under the cursor with nothing
+    // selected (`RequestSelection( { SCH_SYMBOL_T } )`, r6 C6-M3); a broken
+    // library link is refused with KiCad's message. This IR has one symbol
+    // library (no separate schematic-local copy), so both open the same
+    // entry (PARITY-sch Differs: KiCad's Ctrl+E edits the placed symbol's
+    // own copy, `LoadSymbolFromSchematic` / `SaveSymbolToSchematic`).
     const editInSymbolEditor = schematicOnly(() => {
-      if (state.selection.size !== 1) return;
-      const id = [...state.selection][0]!;
-      const sym = sch?.symbols.find((s) => s.id === id);
-      if (!sym) return;
-      const libId = sym.lib_id && sym.lib_id.trim() ? sym.lib_id : `eda:${sym.id}`;
+      if (!sch) return;
+      const hovered = state.cursorNm ? hitSymbol(sch, state.cursorNm.x, state.cursorNm.y) : null;
+      const target = symbolEditorTarget([...state.selection], [...sch.symbols, ...sch.power_symbols], (libId) => !!sch.lib_symbols[libId], hovered);
+      if (target.kind === "none") return;
+      if (target.kind === "broken") {
+        dispatch({ type: "TOAST", message: BROKEN_LINK_MESSAGE, kind: "error" });
+        return;
+      }
       dispatch({ type: "SET_TAB", tab: "symbol" });
-      void symApi.openSymbol(libId);
+      void symApi.openSymbol(target.libId);
     });
     m.set("eeschema.EditorControl.editWithSymbolEditor", editInSymbolEditor);
     m.set("eeschema.EditorControl.editLibSymbolWithSymbolEditor", editInSymbolEditor);
