@@ -5465,6 +5465,8 @@ impl<'a> Board<'a> {
         if self.design.schematic.is_none() {
             return Err(vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")]);
         }
+        // a row of a later sheet path stands for the screen's symbol (`fields_table::changes_for_sheets`)
+        let edits = &fields_table::changes_for_sheets(&self.design, edits)[..];
         let known: BTreeSet<String> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter().map(|x| x.id.clone())).collect();
         if let Some(e) = edits.iter().find(|e| !known.contains(&e.id)) {
             return Err(vec![CheckResult::fail("ops_bad_fields", "symbol_fields", format!("no symbol with reference '{}'", e.id))]);
