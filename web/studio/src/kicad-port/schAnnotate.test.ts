@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Schematic } from "../api/types";
-import { annotateCmd, annotateRequest, annotateSelectionOf, defaultAnnotateSettings, scopeOnOpen, startNumber } from "./schAnnotate";
+import { annotateCmd, annotateRequest, annotateSelectionOf, defaultAnnotateSettings, pasteNumbering, scopeOnOpen, startNumber } from "./schAnnotate";
 
 const none = { symbols: [], sheets: [] };
 
@@ -61,4 +61,9 @@ test("r2 D-A3: a selected group stands for every symbol below it (getInferredSym
   const isSymbol = (id: string) => ["R1", "C1", "R9"].includes(id);
   assert.deepEqual(annotateSelectionOf(sch, ["grp"], isSymbol), { symbols: ["R1", "C1"], sheets: [] });
   assert.deepEqual(annotateSelectionOf(sch, ["R9", "sheet_a"], isSymbol), { symbols: ["R9"], sheets: ["sheet_a"] });
+});
+
+test("a paste is numbered by the settings Annotate last saved (r2 D-C3: Paste reads m_AnnotateMethod, m_AnnotateStartNum, m_AnnotateSortOrder)", () => {
+  assert.deepEqual(pasteNumbering(defaultAnnotateSettings()), { algo: "first_free", start: 0, order: "by_x" });
+  assert.deepEqual(pasteNumbering({ sort: "y", algo: "sheet_x100", start: "10" }), { algo: "sheet_x100", start: 10, order: "by_y" });
 });

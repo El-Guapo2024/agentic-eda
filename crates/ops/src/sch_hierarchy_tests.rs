@@ -107,7 +107,7 @@ fn a_pasted_sheet_shares_the_screen_the_design_shows_and_the_screens_inside_it_w
     let d = power_design();
     let fragment = power_fragment(&d);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::PasteSch { fragment: fragment.clone(), dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+    b.apply(&Cmd::PasteSch { fragment: fragment.clone(), dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
     let d = b.design();
 
     // the name counts up, the sheet symbol moved with its pin, and shows the same screen
@@ -130,7 +130,7 @@ fn a_pasted_sheet_shares_the_screen_the_design_shows_and_the_screens_inside_it_w
 
     // one more paste: Power2, a third path for both screens
     let copy1 = copy.id.clone();
-    b.apply(&Cmd::PasteSch { fragment, dx: Nm::ZERO, dy: mm(90.0), mode: PasteMode::Unique }).unwrap();
+    b.apply(&Cmd::PasteSch { fragment, dx: Nm::ZERO, dy: mm(90.0), mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
     let d = b.design();
     assert_eq!(sheet_names(d), vec!["Power", "Power1", "Power2"]);
     assert_eq!(d.sheet_contents.as_ref().unwrap().len(), 2);
@@ -155,7 +155,7 @@ fn a_screen_shown_twice_inside_a_screen_shown_twice_has_a_reference_per_path() {
     let fragment = power_fragment(&d);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     // Power pasted again: two more paths for Filter
-    b.apply(&Cmd::PasteSch { fragment, dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+    b.apply(&Cmd::PasteSch { fragment, dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
     let d = b.design().clone();
     let copy = d.schematic.as_ref().unwrap().sheets[1].id.clone();
     let paths: Vec<Vec<String>> = eda_model::sheet_list::walk(&d).into_iter().filter(|e| e.file == "filter.kicad_sch").map(|e| e.path).collect();
@@ -232,7 +232,7 @@ fn a_pasted_sheet_whose_screen_the_design_does_not_show_is_a_copy_with_the_scree
     screens.get_mut("else.kicad_sch").unwrap().sheets.push(held);
     other.sheet_contents = Some(screens);
     let mut b = Board::new(other, &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::PasteSch { fragment, dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+    b.apply(&Cmd::PasteSch { fragment, dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
     let d = b.design();
     assert_eq!(sheet_names(d), vec!["Power", "Power1"], "the name counts up");
     let pasted = d.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name == "Power1").unwrap().clone();
@@ -253,7 +253,7 @@ fn a_sheet_pasted_inside_itself_is_refused_in_kicad_s_words() {
     let d = power_design();
     let fragment = power_fragment(&d);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique };
+    let paste = Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() };
     let e = b.apply(&Cmd::OnSheet { sheet: "sp".into(), cmd: Box::new(paste.clone()) }).unwrap_err();
     assert_eq!(e[0].check, "ops_sheet_recursion");
     assert_eq!(e[0].hint.as_deref(), Some("The pasted sheet 'power.kicad_sch'\nwas dropped because the destination already has the sheet or one of its subsheets as a parent."));
@@ -276,7 +276,7 @@ fn a_pasted_sheet_s_pins_keep_their_text_look() {
     let look = eda_model::sch_extras::LabelLook { size_nm: mm(2.54), bold: true, ..Default::default() };
     fragment.section.extras.sheet_pin_looks.insert(pin_id, look);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::PasteSch { fragment, dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+    b.apply(&Cmd::PasteSch { fragment, dx: mm(60.0), dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     let copy = sch.sheets.iter().find(|s| s.name == "Power1").unwrap();
     assert_eq!(sch.extras.sheet_pin_looks.get(&copy.pins[0].id), Some(&look), "{:?}", sch.extras.sheet_pin_looks);
@@ -294,7 +294,7 @@ fn a_cut_and_paste_of_a_sheet_keeps_its_name_its_file_and_its_numbers() {
     assert!(b.design().sheet_contents.as_ref().unwrap().contains_key("power.kicad_sch"));
     assert!(eda_model::sheet_list::reachable_files(b.design()).is_empty());
     assert!(b.used_references().iter().all(|u| u.reference.starts_with('#')), "the references of a screen no sheet shows are free");
-    b.apply(&Cmd::PasteSch { fragment, dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+    b.apply(&Cmd::PasteSch { fragment, dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
     let d = b.design();
     assert_eq!(sheet_names(d), vec!["Power"]);
     assert_eq!(d.schematic.as_ref().unwrap().sheets[0].file, "power.kicad_sch");
@@ -311,7 +311,7 @@ fn a_sheet_whose_screen_the_clipboard_lacks_is_pasted_from_the_design_else_empty
     fragment.sheet_screens.clear();
     // the design has the screen under that name: it is what the sheet shows
     let mut b = Board::new(d.clone(), &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: mm(90.0), mode: PasteMode::Unique }).unwrap();
+    b.apply(&Cmd::PasteSch { fragment: fragment.clone(), dx: Nm::ZERO, dy: mm(90.0), mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
     let copy = b.design().schematic.as_ref().unwrap().sheets[1].clone();
     assert_eq!(copy.file, "power.kicad_sch", "shared");
     assert_eq!(refs_on(b.design(), &[&copy.id]), vec!["C2", "R4", "R5"]);
@@ -320,7 +320,7 @@ fn a_sheet_whose_screen_the_clipboard_lacks_is_pasted_from_the_design_else_empty
     other.sheet_contents = None;
     other.schematic.as_mut().unwrap().sheets.clear();
     let mut b = Board::new(other, &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::PasteSch { fragment, dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique }).unwrap();
+    b.apply(&Cmd::PasteSch { fragment, dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
     assert_eq!(sheet_names(b.design()), vec!["Power"]);
     assert!(b.design().sheet_contents.as_ref().unwrap()["power.kicad_sch"].symbols.is_empty());
 }

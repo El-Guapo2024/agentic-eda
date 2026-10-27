@@ -41,7 +41,7 @@ fn fragment(f: impl FnOnce(&mut SchematicSection)) -> SchFragment {
 }
 
 fn paste(f: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode) -> Cmd {
-    Cmd::PasteSch { fragment: f.clone(), dx, dy, mode }
+    Cmd::PasteSch { fragment: f.clone(), dx, dy, mode, numbering: Default::default() }
 }
 
 fn refs(sch: &SchematicSection) -> Vec<String> {
@@ -80,7 +80,7 @@ fn a_paste_adds_every_kind_of_item_translated_with_new_ids_and_no_locks_as_one_c
     assert_eq!(sch.lines[0].pts[1], p(mm(7.54), mm(3.73)));
     assert!(sch.extras.locked.is_empty(), "locks are dropped on paste");
     assert_eq!(sch.user_fields.get("R1").and_then(|f| f.get("MPN")).map(String::as_str), Some("RC0603"));
-    assert_eq!(Cmd::PasteSch { fragment: f, dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique }.domain(), Domain::Schematic);
+    assert_eq!(Cmd::PasteSch { fragment: f, dx: Nm::ZERO, dy: Nm::ZERO, mode: PasteMode::Unique, numbering: Default::default() }.domain(), Domain::Schematic);
 }
 
 #[test]
@@ -317,4 +317,22 @@ fn a_pasted_symbol_keeps_the_places_swap_pins_gave_its_pins_under_its_new_refere
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
     b.apply(&paste(&fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(mm(100.0), mm(50.0))))), Nm::ZERO, Nm::ZERO, PasteMode::Unique)).unwrap();
     assert!(b.design().schematic.as_ref().unwrap().extras.pin_swaps.is_empty());
+}
+
+/// r2 D-C3: a paste follows Schematic Setup's numbering -- "First free after sheet number X 100" on the sheet on page 2 gives a free R5 the number 201
+/// (`AnnotateByOptions`: from the page's number times 100, never at the symbol's own), and the root (page 1) 101.
+#[test]
+fn a_paste_numbers_from_the_sheet_number_times_100_when_setup_says_so() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddSheet { name: "Child".into(), file: "child.kicad_sch".into(), at: p(Nm::ZERO, Nm::ZERO), size: (mm(10.0), mm(10.0)) }).unwrap();
+    let sheet_id = b.design().schematic.as_ref().unwrap().sheets[0].id.clone();
+    let f = fragment(|s| s.symbols.push(symbol("R5", "Device:R", "10k", p(Nm::ZERO, Nm::ZERO))));
+    let x100 = eda_model::sch_clipboard::PasteNumbering { algo: eda_model::annotate::Algo::SheetX100, ..Default::default() };
+    let cmd = |f: &SchFragment| Cmd::PasteSch { fragment: f.clone(), dx: Nm::ZERO, dy: mm(50.0), mode: PasteMode::Unique, numbering: x100 };
+    b.apply(&Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(cmd(&f)) }).unwrap();
+    b.apply(&cmd(&f)).unwrap();
+    let child = &b.design().sheet_contents.as_ref().unwrap()["child.kicad_sch"];
+    assert_eq!(refs(child), vec!["R201"]);
+    assert_eq!(refs(b.design().schematic.as_ref().unwrap()), vec!["R101"]);
 }

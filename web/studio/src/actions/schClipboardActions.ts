@@ -16,6 +16,7 @@ import { fetchSchematic } from "../api/client";
 import { postSchCopy, postSchParse } from "../api/schClipboardClient";
 import { clipboardTextOrNull, newIdsAfter, pasteOffset, selectionAfterPaste, type SchPasteMode } from "../kicad-port/schClipboard";
 import { deleteCmds } from "../kicad-port/schDelete";
+import { pasteNumbering, rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
 import { getSchPaste, openPasteSpecial, setSchPaste } from "../state/schPasteStore";
 import type { Action, StudioApi, StudioState } from "../state/store";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
@@ -90,7 +91,7 @@ export async function placeSchPaste(api: StudioApi, dispatch: Dispatch<Action>, 
   const [dx, dy] = pasteOffset(paste.anchor, snapped);
   setSchPaste(null);
   const before = api.getState().schematic;
-  const ok = await api.cmd({ op: "paste_sch", fragment: paste.fragment, dx, dy, mode: paste.mode });
+  const ok = await api.cmd({ op: "paste_sch", fragment: paste.fragment, dx, dy, mode: paste.mode, numbering: pasteNumbering(rememberedAnnotateSettings()) });
   if (!ok || !before) return;
   try {
     const ids = selectionAfterPaste(paste, newIdsAfter(before, await fetchSchematic(paste.sheet)));

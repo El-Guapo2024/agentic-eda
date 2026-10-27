@@ -1322,6 +1322,10 @@ pub enum Cmd {
         dy: Nm,
         #[serde(default)]
         mode: eda_model::sch_clipboard::PasteMode,
+        /// Schematic Setup's annotation settings the numbers follow (`m_AnnotateMethod`, `m_AnnotateStartNum`, `m_AnnotateSortOrder`), r2 D-C3. Absent:
+        /// KiCad's defaults.
+        #[serde(default)]
+        numbering: eda_model::sch_clipboard::PasteNumbering,
     },
     /// The schematic editor's other edit and drawing tools (lock, break, convert text type, shapes, sheet pins,
     /// ...), one verb family -- see [`sch_edit::SchCmd`]. On the wire: `{"op": "sch_edit", "verb": "...", ...}`.
@@ -2975,7 +2979,7 @@ impl<'a> Board<'a> {
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
             Cmd::ReplaceBoard { text, name, keep_kicad_layer_names, project, rules } => self.replace_board(text, name, *keep_kicad_layer_names, project.as_deref(), rules.as_deref()),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
-            Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode).map(|_| ()),
+            Cmd::PasteSch { fragment, dx, dy, mode, numbering } => self.paste_sch(fragment, *dx, *dy, *mode, *numbering).map(|_| ()),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),

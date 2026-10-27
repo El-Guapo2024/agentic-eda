@@ -34,6 +34,30 @@ pub enum PasteMode {
     Remove,
 }
 
+/// The numbering a paste follows, Schematic Setup's annotation settings (`SCHEMATIC_SETTINGS::m_AnnotateMethod`, `m_AnnotateStartNum`,
+/// `m_AnnotateSortOrder`, which the Annotate dialog saves): `SCH_EDITOR_CONTROL::Paste` hands them to `ReannotateDuplicates( existingRefs, annotateAlgo )`
+/// (Unique) and `ReannotateByOptions( annotateOrder, annotateAlgo, annotateStartNum, existingRefs, false, .. )` (the rest) -- r2 D-C3. Absent: KiCad's
+/// defaults (first free number after 0, by X).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasteNumbering {
+    #[serde(default)]
+    pub algo: crate::annotate::Algo,
+    #[serde(default)]
+    pub start: i64,
+    #[serde(default = "by_x")]
+    pub order: crate::annotate::SortOrder,
+}
+
+fn by_x() -> crate::annotate::SortOrder {
+    crate::annotate::SortOrder::ByX
+}
+
+impl Default for PasteNumbering {
+    fn default() -> Self {
+        PasteNumbering { algo: crate::annotate::Algo::FirstFree, start: 0, order: by_x() }
+    }
+}
+
 /// What one copy holds, read back: the items of the fragment and the library symbols they name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -206,7 +230,13 @@ fn format_reference(prefix: &str, number: u32, power: bool) -> String {
 /// * [`PasteMode::Keep`]: a reference not yet in the design stays; one already taken is numbered as in `Unique`. A power symbol is always
 ///   numbered afresh (`AlwaysAnnotate`), from 1.
 /// * [`PasteMode::Remove`]: every pasted symbol is numbered from 1.
-pub fn annotate_paste(used: &[UsedRef], pasted: &[PastedRef], mode: PasteMode) -> Vec<String> {
+///
+/// `numbering` and `sheet_number` (`GetPageNumberAsInt` of the sheet pasted on): the numbers counted from. `ReannotateDuplicates` (Unique, and a taken
+/// reference Keep renumbers here) passes no start number and starts at a symbol's own number, sorted by X; `ReannotateByOptions` (a power symbol in Keep,
+/// every symbol in Remove) counts from after the start number in the order the settings say. "First free after sheet number X 100 / X 1000" counts from the
+/// sheet's number times 100 or 1000 plus one in both, and never at a symbol's own number (`AnnotateByOptions`: `aStartAtCurrent = false; // Not
+/// implemented for sheet # * 100`).
+pub fn annotate_paste(used: &[UsedRef], pasted: &[PastedRef], mode: PasteMode, numbering: PasteNumbering, sheet_number: i64) -> Vec<String> {
     let mut taken: Vec<Numbered> = used
         .iter()
         .filter_map(|u| {
@@ -232,12 +262,22 @@ pub fn annotate_paste(used: &[UsedRef], pasted: &[PastedRef], mode: PasteMode) -
         }
     }
 
-    // The order the numbers are handed out in (`SortByXCoordinate`: reference prefix, then x, then y).
+    // The order the numbers are handed out in (`SortByXCoordinate`: reference prefix, then x, then y; `SortByYCoordinate`: y, then x). `ReannotateDuplicates`
+    // passes `UNSORTED`, which `AnnotateByOptions` sorts by X.
+    let by_y = mode != PasteMode::Unique && numbering.order == crate::annotate::SortOrder::ByY;
     let mut order: Vec<usize> = (0..pasted.len()).filter(|&i| out[i].is_none()).collect();
     order.sort_by(|&a, &b| {
         let (pa, pb) = (split_reference(&pasted[a].reference).0.to_ascii_lowercase(), split_reference(&pasted[b].reference).0.to_ascii_lowercase());
-        (pa, pasted[a].at.0, pasted[a].at.1, a).cmp(&(pb, pasted[b].at.0, pasted[b].at.1, b))
+        let key = |i: usize| if by_y { (pasted[i].at.1, pasted[i].at.0) } else { (pasted[i].at.0, pasted[i].at.1) };
+        (pa, key(a), a).cmp(&(pb, key(b), b))
     });
+    let sheet_algo = numbering.algo != crate::annotate::Algo::FirstFree;
+    let step: i64 = if numbering.algo == crate::annotate::Algo::SheetX1000 { 1000 } else { 100 };
+    // `Annotate`'s `minRefId`: the sheet's number times the step plus one, or one after the start number (none for `ReannotateDuplicates`)
+    let base = |duplicates_pass: bool| -> u32 {
+        let n = if sheet_algo { sheet_number.max(0) * step + 1 } else if duplicates_pass { 1 } else { numbering.start.max(0) + 1 };
+        n.clamp(1, u32::MAX as i64) as u32
+    };
 
     // `lockedSymbols`: the pasted units of one multi-unit reference are numbered together. `Remove` clears the references first, so
     // units of different symbols can no longer be told apart by their old one -- but they still were pasted as one reference.
@@ -257,19 +297,19 @@ pub fn annotate_paste(used: &[UsedRef], pasted: &[PastedRef], mode: PasteMode) -
         }
         let p = &pasted[i];
         let (prefix, number) = split_reference(&p.reference);
+        // `aStartAtCurrent`: a pasted number that is free stays; `Unique` starts from it. A power symbol is numbered from the start unless it is
+        // the plain duplicate pass. `Remove` and a symbol that lost its number count up from the running minimum.
+        let duplicates_pass = mode == PasteMode::Unique || (mode == PasteMode::Keep && !always_annotated(&p.reference, p.power));
         if current_prefix.as_ref().is_none_or(|c| !same_prefix(c, &prefix)) {
             current_prefix = Some(prefix.clone());
-            min_ref = 1;
+            min_ref = base(duplicates_pass);
         }
-        // `aStartAtCurrent`: a pasted number that is free stays; `Unique` starts from it. A power symbol is numbered from 1 unless it is
-        // the plain duplicate pass. `Remove` and a symbol that lost its number count up from the running minimum.
-        let from_current = mode == PasteMode::Unique || (mode == PasteMode::Keep && !always_annotated(&p.reference, p.power));
-        if from_current {
+        if duplicates_pass && !sheet_algo {
             if let Some(n) = number.filter(|n| *n > 0) {
                 min_ref = n;
             }
         } else {
-            min_ref = 1;
+            min_ref = base(duplicates_pass);
         }
         let group = group_of(i);
         let units: Vec<u32> = if p.unit_count > 1 {
@@ -506,7 +546,7 @@ mod tests {
     fn a_free_reference_stays_and_a_taken_one_takes_the_next_free_number_from_its_own() {
         let used = vec![used("R1", 1, "Device:R", "10k"), used("R2", 1, "Device:R", "10k"), used("R4", 1, "Device:R", "10k")];
         // R9 is free: it stays. R2 is taken: R3 is the first free number from 2. R4 is taken: R5.
-        let out = annotate_paste(&used, &[pasted("R9", Nm::ZERO), pasted("R2", Nm::new(1)), pasted("R4", Nm::new(2))], PasteMode::Unique);
+        let out = annotate_paste(&used, &[pasted("R9", Nm::ZERO), pasted("R2", Nm::new(1)), pasted("R4", Nm::new(2))], PasteMode::Unique, PasteNumbering::default(), 1);
         assert_eq!(out, vec!["R9", "R3", "R5"]);
     }
 
@@ -518,7 +558,7 @@ mod tests {
             PastedRef { reference: "C1".into(), lib_id: "Device:C".into(), value: "1u".into(), ..pasted("C1", Nm::new(5)) },
         ];
         // The same reference pasted twice (two units of nothing): each is its own symbol, so each takes its own number.
-        let out = annotate_paste(&used, &two, PasteMode::Unique);
+        let out = annotate_paste(&used, &two, PasteMode::Unique, PasteNumbering::default(), 1);
         let mut sorted = out.clone();
         sorted.dedup();
         assert_eq!(sorted.len(), 2, "{out:?}");
@@ -529,21 +569,21 @@ mod tests {
     fn the_numbers_go_out_left_to_right_within_a_prefix() {
         let used = vec![used("R1", 1, "Device:R", "10k")];
         // Both are R1 (taken). The one on the left is numbered first.
-        let out = annotate_paste(&used, &[pasted("R1", Nm::new(900_000)), pasted("R1", Nm::new(100_000))], PasteMode::Unique);
+        let out = annotate_paste(&used, &[pasted("R1", Nm::new(900_000)), pasted("R1", Nm::new(100_000))], PasteMode::Unique, PasteNumbering::default(), 1);
         assert_eq!(out, vec!["R3", "R2"]);
     }
 
     #[test]
     fn keep_keeps_a_free_reference_and_renumbers_only_a_taken_one() {
         let used = vec![used("R1", 1, "Device:R", "10k")];
-        let out = annotate_paste(&used, &[pasted("R7", Nm::ZERO), pasted("R1", Nm::new(1))], PasteMode::Keep);
+        let out = annotate_paste(&used, &[pasted("R7", Nm::ZERO), pasted("R1", Nm::new(1))], PasteMode::Keep, PasteNumbering::default(), 1);
         assert_eq!(out, vec!["R7", "R2"]);
     }
 
     #[test]
     fn remove_numbers_every_pasted_symbol_from_one() {
         let used = vec![used("R1", 1, "Device:R", "10k"), used("R3", 1, "Device:R", "10k")];
-        let out = annotate_paste(&used, &[pasted("R7", Nm::ZERO), pasted("R8", Nm::new(1)), pasted("R9", Nm::new(2))], PasteMode::Remove);
+        let out = annotate_paste(&used, &[pasted("R7", Nm::ZERO), pasted("R8", Nm::new(1)), pasted("R9", Nm::new(2))], PasteMode::Remove, PasteNumbering::default(), 1);
         assert_eq!(out, vec!["R2", "R4", "R5"]);
     }
 
@@ -551,9 +591,9 @@ mod tests {
     fn power_symbols_are_numbered_afresh_with_a_leading_zero() {
         let used = vec![used("#PWR01", 1, "power:GND", "GND"), used("#PWR02", 1, "power:GND", "GND")];
         let p = |r: &str, x| PastedRef { reference: r.into(), lib_id: "power:GND".into(), value: "GND".into(), power: true, ..pasted(r, x) };
-        assert_eq!(annotate_paste(&used, &[p("#PWR01", Nm::ZERO)], PasteMode::Unique), vec!["#PWR03"]);
-        assert_eq!(annotate_paste(&used, &[p("#PWR05", Nm::ZERO)], PasteMode::Keep), vec!["#PWR03"], "a power symbol is numbered anew even when Keep");
-        assert_eq!(annotate_paste(&[], &[p("#PWR05", Nm::ZERO)], PasteMode::Unique), vec!["#PWR05"]);
+        assert_eq!(annotate_paste(&used, &[p("#PWR01", Nm::ZERO)], PasteMode::Unique, PasteNumbering::default(), 1), vec!["#PWR03"]);
+        assert_eq!(annotate_paste(&used, &[p("#PWR05", Nm::ZERO)], PasteMode::Keep, PasteNumbering::default(), 1), vec!["#PWR03"], "a power symbol is numbered anew even when Keep");
+        assert_eq!(annotate_paste(&[], &[p("#PWR05", Nm::ZERO)], PasteMode::Unique, PasteNumbering::default(), 1), vec!["#PWR05"]);
     }
 
     #[test]
@@ -561,21 +601,43 @@ mod tests {
         let unit = |u: u32, x: Nm| PastedRef { reference: "U1".into(), unit: u, unit_count: 4, lib_id: "Amp:Quad".into(), value: "LM324".into(), at: (x, Nm::ZERO), power: false };
         let used = vec![used("U1", 1, "Amp:Quad", "LM324"), used("U1", 2, "Amp:Quad", "LM324")];
         // Units 1 and 2 of U1 are taken: pasting them again numbers both as U2.
-        let out = annotate_paste(&used, &[unit(1, Nm::ZERO), unit(2, Nm::new(10_000))], PasteMode::Unique);
+        let out = annotate_paste(&used, &[unit(1, Nm::ZERO), unit(2, Nm::new(10_000))], PasteMode::Unique, PasteNumbering::default(), 1);
         assert_eq!(out, vec!["U2", "U2"]);
         // A unit the part does not have yet joins it.
-        let out = annotate_paste(&used, &[unit(3, Nm::ZERO)], PasteMode::Unique);
+        let out = annotate_paste(&used, &[unit(3, Nm::ZERO)], PasteMode::Unique, PasteNumbering::default(), 1);
         assert_eq!(out, vec!["U1"]);
         // ... unless the part there is another one.
         let other = vec![UsedRef { value: "TL074".into(), ..used[0].clone() }];
-        assert_eq!(annotate_paste(&other, &[unit(3, Nm::ZERO)], PasteMode::Unique), vec!["U2"]);
+        assert_eq!(annotate_paste(&other, &[unit(3, Nm::ZERO)], PasteMode::Unique, PasteNumbering::default(), 1), vec!["U2"]);
+    }
+
+    /// r2 D-C3 (`Paste`: `ReannotateDuplicates( existingRefs, annotateAlgo )`, `ReannotateByOptions( annotateOrder, annotateAlgo, annotateStartNum, .. )`;
+    /// `AnnotateByOptions`: `SHEET_NUMBER_X_100` counts from the sheet's number times 100 and never at the current number; `Annotate`: `minRefId =
+    /// aStartNumber + 1`): a free R5 pasted on page 2 with "First free after sheet number X 100" is R201; a power symbol pasted with Keep and "after 10" is
+    /// `#PWR011`; Remove counts from after the start number.
+    #[test]
+    fn annotate_paste_sheet_x100_numbers_from_the_page() {
+        let x100 = PasteNumbering { algo: crate::annotate::Algo::SheetX100, ..PasteNumbering::default() };
+        assert_eq!(annotate_paste(&[], &[pasted("R5", Nm::ZERO)], PasteMode::Unique, x100, 2), vec!["R201"]);
+        assert_eq!(annotate_paste(&[used("R201", 1, "Device:R", "10k")], &[pasted("R5", Nm::ZERO)], PasteMode::Unique, x100, 2), vec!["R202"]);
+        let after_10 = PasteNumbering { start: 10, ..PasteNumbering::default() };
+        let pwr = PastedRef { reference: "#PWR05".into(), lib_id: "power:GND".into(), value: "GND".into(), power: true, ..pasted("#PWR05", Nm::ZERO) };
+        assert_eq!(annotate_paste(&[], std::slice::from_ref(&pwr), PasteMode::Keep, after_10, 1), vec!["#PWR011"]);
+        assert_eq!(annotate_paste(&[], &[pasted("R7", Nm::ZERO)], PasteMode::Remove, after_10, 1), vec!["R11"]);
+        assert_eq!(annotate_paste(&[], &[pasted("R7", Nm::ZERO)], PasteMode::Unique, after_10, 1), vec!["R7"], "the duplicates pass takes no start number");
+        // Remove in the order the settings say: by Y, the upper one first
+        let by_y = PasteNumbering { order: crate::annotate::SortOrder::ByY, ..PasteNumbering::default() };
+        let upper = PastedRef { at: (Nm::new(900_000), Nm::ZERO), ..pasted("R8", Nm::ZERO) };
+        let lower = PastedRef { at: (Nm::ZERO, Nm::new(500_000)), ..pasted("R9", Nm::ZERO) };
+        assert_eq!(annotate_paste(&[], &[lower.clone(), upper.clone()], PasteMode::Remove, by_y, 1), vec!["R2", "R1"]);
+        assert_eq!(annotate_paste(&[], &[lower, upper], PasteMode::Remove, PasteNumbering::default(), 1), vec!["R1", "R2"], "by X, the left one first");
     }
 
     #[test]
     fn an_unannotated_reference_gets_a_number_in_every_mode() {
         let used = vec![used("R1", 1, "Device:R", "10k")];
         for mode in [PasteMode::Unique, PasteMode::Keep, PasteMode::Remove] {
-            assert_eq!(annotate_paste(&used, &[pasted("R?", Nm::ZERO)], mode), vec!["R2"], "{mode:?}");
+            assert_eq!(annotate_paste(&used, &[pasted("R?", Nm::ZERO)], mode, PasteNumbering::default(), 1), vec!["R2"], "{mode:?}");
         }
     }
 

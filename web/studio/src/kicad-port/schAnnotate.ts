@@ -50,6 +50,12 @@ export function startNumber(text: string): number {
   return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
 }
 
+/** What `paste_sch` is told to number by (r2 D-C3): `SCH_EDITOR_CONTROL::Paste` reads Schematic Setup's `m_AnnotateMethod`, `m_AnnotateStartNum` and
+ *  `m_AnnotateSortOrder`, the settings the Annotate dialog last saved. */
+export function pasteNumbering(s: Pick<AnnotateSettings, "sort" | "algo" | "start">): { algo: AnnotateSettings["algo"]; start: number; order: "by_x" | "by_y" } {
+  return { algo: s.algo, start: startNumber(s.start), order: s.sort === "x" ? "by_x" : "by_y" };
+}
+
 /** The selection Annotate's "Selection" scope numbers (`annotate.cpp::getInferredSymbols`): a selected group stands for every symbol below it
  *  (`group->RunOnChildren( .., RECURSE_MODE::RECURSE )`), then the symbols (`isSymbol`) and the sheets of the sheet in view. */
 export function annotateSelectionOf(sch: Schematic | null | undefined, selected: readonly string[], isSymbol: (id: string) => boolean): AnnotateSelection {

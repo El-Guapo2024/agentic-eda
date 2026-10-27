@@ -122,7 +122,7 @@ impl<'a> Board<'a> {
 
     /// `Cmd::PasteSch` -- see the module doc. Returns what the paste put on the sheet at its top: the ids of the new items that are in no new group and of the new groups that
     /// are in no other (what `SCH_SELECTION` then holds, and what Place as group groups).
-    pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode) -> Result<Vec<String>, Vec<CheckResult>> {
+    pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode, numbering: eda_model::sch_clipboard::PasteNumbering) -> Result<Vec<String>, Vec<CheckResult>> {
         if fragment.is_empty() {
             return Err(vec![CheckResult::fail("ops_empty_paste", "paste", "there is nothing to paste")]);
         }
@@ -145,7 +145,12 @@ impl<'a> Board<'a> {
             pasted.push(PastedRef { reference: p.id.clone(), unit: 1, unit_count: 1, lib_id: p.lib_id.clone(), value: p.net.clone(), at: (p.at.x, p.at.y), power: true });
         }
         let used = self.used_references();
-        let numbered = annotate_paste(&used, &pasted, mode);
+        // the number of the sheet pasted on (`ReannotateByOptions`' `ref.SetSheetNumber( path->GetPageNumberAsInt() )`): the first sheet path that shows it
+        let sheet_number = match self.focus.as_deref() {
+            None => 1,
+            Some(file) => eda_model::sheet_list::walk(&self.design).iter().find(|e| e.file == file).map_or(1, eda_model::sheet_list::SheetEntry::page_number_as_int),
+        };
+        let numbered = annotate_paste(&used, &pasted, mode, numbering, sheet_number);
         let (symbol_refs, power_refs) = numbered.split_at(src.symbols.len());
         for (r, p) in symbol_refs.iter().zip(&src.symbols) {
             if used.iter().any(|u| u.reference == *r && u.unit == p.unit) {
