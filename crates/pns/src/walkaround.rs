@@ -280,7 +280,7 @@ impl<'a> Walker<'a> {
         let line = Line::from_points(net.clone(), layer, width, pts.to_vec());
         let restricted = &self.restricted;
         let filter = |id: ItemId| restricted.contains(&id);
-        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true, box_hull: self.corner_mode.is_90(), head_hole: None };
+        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true, box_hull: self.corner_mode.is_90(), head_hole: None, head_via: None };
         self.node.nearest_obstacle(&line, self.end_via.as_ref(), self.rules, &self.exclude, opts)
     }
 
@@ -300,7 +300,7 @@ impl<'a> Walker<'a> {
             let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
             self.node.item_collision(self.rules, id, item, &shape, Side::Track { net, layer, seg: Some((w[0], w[1])) }, LayerRange::single(layer), opts).is_some()
         }) || self.end_via.as_ref().is_some_and(|v| {
-            let opts = QueryOpts { head_hole: (v.drill > Nm::ZERO).then_some(v.drill / 2), ..opts };
+            let opts = QueryOpts { head_hole: (v.drill > Nm::ZERO).then_some(v.drill / 2), head_via: v.source_via.as_deref(), ..opts };
             self.node.item_collision(self.rules, id, item, &Shape::Circle { c: v.pos, r: v.diameter / 2 }, Side::via(v), v.layers, opts).is_some()
         })
     }

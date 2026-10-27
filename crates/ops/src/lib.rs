@@ -4621,16 +4621,20 @@ impl<'a> Board<'a> {
                 rt.tracks.retain(|t| !remove_track_ids.iter().any(|id| id == &t.id));
                 rt.vias.retain(|v| !remove_via_ids.iter().any(|id| id == &v.id));
             }
-            // a removed via's extras go with it (a displaced via comes back under a new id, its type in `via_kinds`)
+            // a removed via's extras go with it, unless it comes back (below); a displaced via's type is in `via_kinds` too
             if let Some(dr) = self.design.drawings.as_mut() {
-                dr.via_extras.retain(|e| !remove_via_ids.iter().any(|id| id == &e.id));
+                dr.via_extras.retain(|e| !remove_via_ids.iter().any(|id| id == &e.id) || vias.iter().any(|v| v.id == e.id));
             }
         }
         for t in &mut tracks {
             t.id.clear();
         }
+        // a via the router moved (dragged or shoved) comes back under the id it is removed under, with its extras (`remove_unused_layers`,
+        // tenting, ..): KiCad's router modifies the board's `PCB_VIA` it came from (r4 R4-2); any other id is a new via's
         for v in &mut vias {
-            v.id.clear();
+            if !remove_via_ids.contains(&v.id) {
+                v.id.clear();
+            }
         }
         if !tracks.is_empty() || !vias.is_empty() {
             let rt = self.routing_mut();

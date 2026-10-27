@@ -29,6 +29,7 @@
 //                follows, no via is drawn or committed, one Undo puts it back; in the middle the segment slides;
 //   springback   (Stage 10) in Shove mode a track the head pushed stays pushed, is pushed on from where it was left, and springs back once the head draws back off it; a click keeps the
 //                push and the next leg pushes on from it, Backspace takes the leg and its push back, and the finished route commits the track where the session left it in one undo step;
+//   start width  (r4 R4-1) a route started on a via with a 0.15 mm stub starts at 0.15 mm with Use Starting Track Width on (the default), at the class's width with it off;
 //   via actions  (task-router-actions) on the board made 4-layer for the scenario (`set_stackup`, undone after): `/` (Switch Track Posture) flips the head, Ctrl+V (Place Microvia) arms a
 //                microvia and takes it back, `<` opens the layer picker and arms a through via to the picked layer, Select Layer and Place Micro Via picks among the layers but the one
 //                being routed, Q (Custom Track/Via Size) refuses a hole as big as the via in KiCad's words and its sizes go with the route, Alt+< and Alt+Shift+V arm blind vias; the
@@ -243,6 +244,29 @@
     await sleep(400);
     t(again("Use mouse path to set track posture")?.checked === true && again("Optimize entire track being dragged")?.checked === false, "and the defaults are back");
     await press("Cancel");
+  });
+
+  await scenario("Use Starting Track Width (on by default, KiCad's board.auto_track_width): a route started on a via takes the width of the stub joined to it, and not with it off", async (t) => {
+    // r4 R4-1 (`ImportSizes`' `inheritTrackWidth` for a pad or via): a via of PA2 with a 0.15 mm stub on F.Cu
+    const net = "/LED channels (D1–D8)/PA2", at = [8_000_000, 20_000_000];
+    await commit([{ net, layer: "F.Cu", width: 150_000, pts: [xy(at), xy([10_000_000, 20_000_000])] }], [{ net, at: xy(at), drill: 300_000, diameter: 600_000, from_layer: "F.Cu", to_layer: "B.Cu" }]);
+    const startOnVia = async () => {
+      await E.run("pcbnew.InteractiveRouter.SingleTrack");
+      await sleep(300);
+      const n = replies.length;
+      await clickAt(at[0], at[1]);
+      const s = await waitReply("start", n);
+      await leaveTool();
+      return s;
+    };
+    let s = await startOnVia();
+    t(s && s.body.ok === true && s.req.auto_track_width === true && s.body.width === 150_000, `on by default: the route starts at the stub's 0.15 mm: ${s && JSON.stringify([s.body.ok, s.req.auto_track_width, s.body.width, s.body.message])}`);
+    await E.run("pcbnew.EditorControl.autoTrackWidth");
+    await sleep(200);
+    s = await startOnVia();
+    t(s && s.body.ok === true && s.req.auto_track_width === false && s.body.width !== 150_000, `off: the net class's width instead: ${s && JSON.stringify([s.body.ok, s.req.auto_track_width, s.body.width])}`);
+    await E.run("pcbnew.EditorControl.autoTrackWidth");
+    await sleep(200);
   });
 
   await scenario("the mouse path sets the posture of the head, and with \"Use mouse path to set track posture\" off it does not", async (t) => {

@@ -2110,13 +2110,13 @@ export function useActionRunner() {
           const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
-            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch)) ? "live" : "done";
+            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch, undefined, state.bcx.autoTrackWidth)) ? "live" : "done";
           };
           let done = 0;
           const runAnchor = (a: (typeof anchors)[number]) => async (): Promise<QueueOutcome> => {
             const layer = routeStartLayer(a, copperLayers, state.activeLayer);
             if (variant !== "auto") return handOver(variant === "fromEnd" ? a.target : a.at, layer);
-            const started = await routeStart(a.at[0], a.at[1], layer, width, settings);
+            const started = await routeStart(a.at[0], a.at[1], layer, width, settings, state.bcx.autoTrackWidth);
             if (!started.ok) return "done";
             const head = await routeMove(a.target[0], a.target[1]);
             // AttemptFinish: only a head that reaches the far end without colliding completes by itself.

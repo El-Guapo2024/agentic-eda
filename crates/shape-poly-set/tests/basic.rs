@@ -155,3 +155,28 @@ fn inflate_with_linked_holes_keeps_hole_linked_through_growth() {
     assert!(sps.area() > before);
     assert_eq!(sps.outline_count(), 1);
 }
+
+/// r4 R4-7: `inflate2` with `aSimplify` calls `Clipper2Lib::SimplifyPaths( paths, .. )` and drops its result (it returns a new `Paths`), so the
+/// union is of the offset as it is: the same outline as without `aSimplify`, every vertex of the offset kept.
+#[test]
+fn inflate_with_simplify_keeps_the_offsets_vertices() {
+    let circle: Vec<Point64> = (0..64)
+        .map(|i| {
+            let a = i as f64 * std::f64::consts::TAU / 64.0;
+            Point64::new((1_000_000.0 * a.cos()).round() as i64, (1_000_000.0 * a.sin()).round() as i64)
+        })
+        .collect();
+    let inflated = |simplify: bool| {
+        let mut sps = ShapePolySet::new();
+        sps.add_outline(circle.clone());
+        sps.inflate2(100_000, 16, CornerStrategy::RoundAllCorners, simplify);
+        if !simplify {
+            sps.simplify();
+        }
+        sps
+    };
+    let (with, without) = (inflated(true), inflated(false));
+    assert_eq!(with.outline_count(), 1);
+    assert_eq!(with.outline(0).len(), without.outline(0).len());
+    assert_eq!(with.area(), without.area());
+}

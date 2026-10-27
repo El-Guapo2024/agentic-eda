@@ -582,8 +582,9 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
  * the mode, shove vias, jump over obstacles, remove redundant tracks, optimize pad connections, allow DRC violations,
  * free angle mode, fix all segments and the optimizer effort, sent as the backend's `ROUTING_SETTINGS` for this session. */
 /** `width` undefined: the width list is on "use net class" (`UseNetClassTrack()`), and the server takes the start net's width through the rules (`ImportSizes`). */
-export function routeStart(x: Nm, y: Nm, layer: string, width: Nm | undefined, settings: RouterSettings): Promise<RoutePreview> {
-  return postJson("/api/route/start", { x, y, layer, width, settings: routerSettingsToWire(settings) });
+/** `autoTrackWidth`: "Use Starting Track Width" (`m_UseConnectedTrackWidth`): the width of the track the start is on or joined to wins over `width` (the server's default: on). */
+export function routeStart(x: Nm, y: Nm, layer: string, width: Nm | undefined, settings: RouterSettings, autoTrackWidth?: boolean): Promise<RoutePreview> {
+  return postJson("/api/route/start", { x, y, layer, width, auto_track_width: autoTrackWidth, settings: routerSettingsToWire(settings) });
 }
 
 /** `OK` in Interactive Router Settings while a route, drag or diff pair is running: the new `ROUTING_SETTINGS` apply from the next move (`ok: false` when none is: the studio keeps them for the next one). */
@@ -678,7 +679,7 @@ export function routeDragFinish(x: Nm, y: Nm, forceCommit?: boolean): Promise<Cm
 // `routeCancel` above already ends a dp session too (same backend session).
 
 /** `dims` are the "Differential Pair Dimensions..." dialog's custom values; `settings` the router's (`mode` decides whether the pair is walked, shoved or only marked). */
-export function dpStart(x: Nm, y: Nm, layer: string, dims?: { width: Nm; gap: Nm; viaGap?: Nm }, settings?: RouterSettings): Promise<DiffPairPreview> {
+export function dpStart(x: Nm, y: Nm, layer: string, dims?: { width: Nm; gap: Nm; viaGap?: Nm }, settings?: RouterSettings, autoTrackWidth?: boolean): Promise<DiffPairPreview> {
   return postJson("/api/route/dp_start", {
     x: Math.round(x),
     y: Math.round(y),
@@ -686,6 +687,7 @@ export function dpStart(x: Nm, y: Nm, layer: string, dims?: { width: Nm; gap: Nm
     width: dims ? Math.round(dims.width) : undefined,
     gap: dims ? Math.round(dims.gap) : undefined,
     via_gap: dims?.viaGap !== undefined ? Math.round(dims.viaGap) : undefined,
+    auto_track_width: autoTrackWidth,
     settings: settings ? routerSettingsToWire(settings) : undefined,
   });
 }
