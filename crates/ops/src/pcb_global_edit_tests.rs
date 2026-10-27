@@ -1,7 +1,7 @@
 //! "Edit Text & Graphics Properties...": the dimension items it now reaches, and "Set to layer default values" (`StyleFromSettings`).
 
 use super::pcb_global_edit::{layer_class, line_thickness, text_size, text_thickness, LayerClass};
-use super::pcb_transform_tests::{board, design, drawings, ids, model, text};
+use super::pcb_transform_tests::{board, design, drawings, ids, model, p, text};
 use super::*;
 use eda_model::ir::{DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Shape};
 use eda_model::rules::TextGraphicsDefaults;
@@ -172,4 +172,34 @@ fn the_verb_reads_the_payload_older_clients_send() {
     }
     let cmd: Cmd = serde_json::from_str(r#"{"op":"edit_text_and_graphics","dimension_ids":["d"],"layer_defaults":true}"#).unwrap();
     assert!(matches!(cmd, Cmd::EditTextAndGraphics { layer_defaults: true, .. }));
+}
+
+/// round 3 D-9: `TransferDataFromWindow` takes text boxes and table cells with the texts (`PCB_TEXT_T || PCB_TEXTBOX_T`, `RunOnChildren`) and barcodes with
+/// the graphics (`PCB_SHAPE_T || PCB_BARCODE_T`).
+#[test]
+fn text_boxes_table_cells_and_barcodes_are_edited_too() {
+    use eda_model::pcb_items::TextBox;
+    use eda_model::table::Table;
+    let m = model_with_defaults();
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    let mut tb = TextBox::new("F.SilkS", p(Nm::ZERO, Nm::ZERO), p(mm(10.0), mm(5.0)), mm(1.0), mm(0.1));
+    tb.id = "tbx_a".into();
+    dr.board_items.text_boxes.push(tb);
+    let mut t = Table::new_grid("F.SilkS", p(mm(20.0), mm(20.0)), 2, 1, mm(10.0), mm(5.0), mm(0.1));
+    t.id = "tbl_a".into();
+    dr.tables.push(t);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let set = Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: ids(&["tbx_a", "tbl_a:0:1"]), dimension_ids: vec![], layer_defaults: false, layer: None, line_width: Some(mm(0.3)), text_size: Some(mm(2.0)), text_thickness: Some(mm(0.25)) };
+    b.apply(&set).unwrap();
+    let tb = &drawings(&b).board_items.text_boxes[0];
+    assert_eq!((tb.size_nm, tb.thickness_nm, tb.stroke_width_nm), (mm(2.0), mm(0.25), mm(0.3)), "a text box is a text and a shape");
+    let cells = &drawings(&b).tables[0].cells;
+    assert_eq!((cells[1].style.height_nm, cells[1].style.thickness_nm), (mm(2.0), mm(0.25)));
+    assert_ne!(cells[0].style.height_nm, mm(2.0), "only the cell named");
+    // layer defaults: the silkscreen class
+    b.apply(&defaults_cmd(&[], &["tbx_a", "tbl_a:0:0"], &[])).unwrap();
+    let tb = &drawings(&b).board_items.text_boxes[0];
+    assert_eq!((tb.size_nm, tb.thickness_nm, tb.stroke_width_nm), (mm(1.2), mm(0.11), mm(0.12)));
+    assert_eq!(drawings(&b).tables[0].cells[0].style.height_nm, mm(1.2));
 }
