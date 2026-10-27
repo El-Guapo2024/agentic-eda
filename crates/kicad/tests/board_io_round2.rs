@@ -337,3 +337,19 @@ fn viasonmask_true_untents_the_vias() {
     let (design, model, _) = import_kicad_pcb(&legacy("false")).expect("parses");
     assert!(export(&design, &model).contains("(tenting (front yes) (back yes))"));
 }
+
+/// F13: a footprint that names no Reference or Value keeps KiCad's empty ones (`FOOTPRINT::FOOTPRINT`'s mandatory fields, at its origin, 1.27 mm), not a made-up `FP1`.
+#[test]
+fn a_footprint_with_no_reference_keeps_an_empty_one() {
+    let text = board(
+        r#" (footprint "TestFP1" (layer "F.Cu") (at 100 100) (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+  (pad "1" thru_hole circle (at 0 0) (size 1.7 1.7) (drill 1) (layers "*.Cu") (net 1 "A") (uuid "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    let props = blocks(&out, "property");
+    let reference = props.iter().find(|p| p.starts_with("(property \"Reference\"")).unwrap_or_else(|| panic!("{out}"));
+    assert!(reference.starts_with(r#"(property "Reference" "" (at 0 0 0) (layer "F.SilkS")"#) && reference.contains("(size 1.27 1.27)"), "{reference}");
+    let value = props.iter().find(|p| p.starts_with("(property \"Value\"")).unwrap();
+    assert!(value.starts_with(r#"(property "Value" "" (at 0 0 0) (layer "F.Fab")"#), "{value}");
+}

@@ -306,6 +306,16 @@ pub(crate) fn parse_footprint_edit_in(fp: &[Sexpr], id: &str, value: Option<&str
         }
     }
     edit.attrs = sexpr::find(fp, "attr").map(parse_attrs);
+    // A footprint that names no Reference or Value has KiCad's own empty ones (`FOOTPRINT::FOOTPRINT`: `addField( FIELD_T::REFERENCE, F_SilkS, true )`, `addField(
+    // FIELD_T::VALUE, F_Fab, true )`, at the footprint's origin in the default text size); its reference is empty, whatever id the footprint has here (a logo, a
+    // mounting hole: `issue23123_minimal`).
+    for (slot, layer, own) in [(&mut edit.reference, "F.SilkS", id), (&mut edit.value, "F.Fab", value.unwrap_or(id))] {
+        if slot.is_none() {
+            let node = sexpr::parse(&format!("(property \"\" \"\" (at 0 0 0) (layer \"{layer}\") (effects (font (size 1.27 1.27))))")).expect("a property");
+            let Sexpr::List(items) = node else { unreachable!() };
+            *slot = Some(with_text(parse_layout(&items, side, fp_rot), "", own));
+        }
+    }
     edit
 }
 
