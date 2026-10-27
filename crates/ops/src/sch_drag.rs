@@ -805,7 +805,9 @@ impl<'m> Scene<'m> {
                 self.add_junction(p);
             }
         }
-        let selection = self.in_selection();
+        // `finalizeMoveOperation` takes the drag additions out of the selection first (`RemoveItemsFromSel( &m_dragAdditions )`): the cleanup's
+        // `selectionCopy` is the user's items and the lines the drag made or changed, and the labels that are auto-rotated are the user's (r2 C-L3, C-L4)
+        let selection: Vec<Item> = self.in_selection().into_iter().filter(|&it| self.is_user_selected(it)).collect();
         let mut copy: Vec<Item> = selection.clone();
         if let Some(st) = st {
             copy.extend(st.new_lines.iter().filter(|i| !self.segs[**i].dead).map(|i| Item::Seg(*i)));
@@ -819,7 +821,7 @@ impl<'m> Scene<'m> {
             self.trim_dangling_lines(st);
         }
         // "Auto-rotate any moved labels"
-        for it in self.in_selection() {
+        for &it in &selection {
             self.auto_rotate_item(it);
         }
         // "Clear SELECTED_BY_DRAG and other temp flags before CleanUp so that cleanup can properly process all items"
