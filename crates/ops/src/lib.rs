@@ -3781,12 +3781,36 @@ impl<'a> Board<'a> {
         }
 
         let id_set: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-        let model = self.model;
+        // "Set to net class / custom rule values" is `PCB_EDIT_FRAME::SetTrackSegmentWidth( aItem, .., true )`: the DRC engine's constraint for the item
+        // (`PCB_TRACK::GetWidthConstraint`: `EvalRules( TRACK_WIDTH_CONSTRAINT, this, nullptr, m_layer )`; a via's `VIA_DIAMETER_CONSTRAINT` and
+        // `HOLE_SIZE_CONSTRAINT`), its opt else its min; nothing (`<= 0`) leaves the item's own value. So a custom rule wins over the class, and a net of a
+        // diff pair takes the class's diff-pair width. Worked out first, on the board as it is.
+        let wants_rules = matches!(track_width, Some(SizeSpec::NetClass)) || matches!(via_size, Some(ViaSizeSpec::NetClass));
+        let mut by_rule: BTreeMap<String, (Option<Nm>, Option<Nm>)> = BTreeMap::new();
+        if wants_rules {
+            use eda_drc::constraints::CType;
+            let drc_board = eda_drc::board::build(&self.design, self.model);
+            let rb = eda_drc::rule_board::RuleBoard::new(&self.design, self.model, &drc_board, eda_drc::constraints::Units::Mm, self.model.board.custom_rules_text.as_deref());
+            let value = |ctype: CType, id: &str, layer: &str| -> Option<Nm> {
+                let item = rb.item(id, None).ok()?;
+                let c = rb.engine().eval_rules(ctype, Some(&item), None, Some(layer), None).value;
+                let v = c.opt.or_else(|| c.min.filter(|m| *m > 0))?;
+                (v > 0).then_some(Nm::new(v))
+            };
+            if let Some(rt) = &self.design.routing {
+                for t in rt.tracks.iter().filter(|t| id_set.contains(t.id.as_str())) {
+                    by_rule.insert(t.id.clone(), (value(CType::TrackWidth, &t.id, &t.layer), None));
+                }
+                for v in rt.vias.iter().filter(|v| id_set.contains(v.id.as_str())) {
+                    by_rule.insert(v.id.clone(), (value(CType::ViaDiameter, &v.id, &v.from_layer), value(CType::HoleSize, &v.id, &v.from_layer)));
+                }
+            }
+        }
         if let Some(rt) = self.design.routing.as_mut() {
             for t in rt.tracks.iter_mut().filter(|t| id_set.contains(t.id.as_str())) {
                 if let Some(spec) = track_width {
                     t.width = match spec {
-                        SizeSpec::NetClass => model.board.width_of(&t.net),
+                        SizeSpec::NetClass => by_rule.get(&t.id).and_then(|r| r.0).unwrap_or(t.width),
                         SizeSpec::Value { nm } => *nm,
                     };
                 }
@@ -3798,8 +3822,9 @@ impl<'a> Board<'a> {
                 if let Some(spec) = via_size {
                     match spec {
                         ViaSizeSpec::NetClass => {
-                            v.diameter = model.board.via_diameter_of(&v.net);
-                            v.drill = model.board.via_drill_of(&v.net);
+                            let (diameter, drill) = by_rule.get(&v.id).copied().unwrap_or((None, None));
+                            v.diameter = diameter.unwrap_or(v.diameter);
+                            v.drill = drill.unwrap_or(v.drill);
                         }
                         ViaSizeSpec::Value { diameter, drill } => {
                             v.diameter = *diameter;
