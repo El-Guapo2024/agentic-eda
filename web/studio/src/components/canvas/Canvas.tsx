@@ -52,7 +52,7 @@ import { heldCursor } from "../../kicad-port/heldCursor";
 import { findRouteAnchor, constrainByAngleMode, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
-import { routeMove, routeDragMove, dpMove } from "../../api/client";
+import { routeMove, routeDragMove, dpMove, setRouterEnteredGroup } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
 import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
@@ -275,6 +275,8 @@ export function Canvas() {
     bumpSnap((n) => n + 1);
   }, [snap, state.activeTool]);
   useEffect(() => () => snap.reset(), [snap]);
+  // the router's sessions start with the entered group, which their new items join (r5 R5-2)
+  useEffect(() => setRouterEnteredGroup(state.enteredGroupId), [state.enteredGroupId]);
 
   // The canvas's backing size tracks its container's actual box, not a
   // value computed once at mount -- a side panel opening/closing or the
@@ -472,7 +474,11 @@ export function Canvas() {
       const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
       // what the cursor does not snap onto: the line a drag is dragging (`checkSnap`), the item a route started on (`pickSingleItem( .., { m_startItem } )`)
       const skip = draw?.kind === "drag" && draw.lineTracks?.length ? new Set(draw.lineTracks) : draw?.kind === "route" && draw.startItem ? new Set([draw.startItem]) : undefined;
-      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip });
+      // `pickSingleItem`'s layer (r5 R5-1): a start takes the active layer's items first and then any layer's (`aLayer` -1, `tl` the top layer); a
+      // route's or a pair's end only its current layer's (`updateEndItem`: `layer = m_router->GetCurrentLayer()`, -1 while placing a via)
+      const routing = draw?.kind === "route" || draw?.kind === "diffpair" ? draw : null;
+      const layer = routing ? (routing.placingVia ? { top: routing.layer } : { top: routing.layer, only: true }) : draw?.kind === "drag" ? undefined : { top: state.activeLayer ?? board?.layers[0] ?? "F.Cu" };
+      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip, layer });
       return [p[0], p[1]];
     }
     const opts: PointOpts = {};

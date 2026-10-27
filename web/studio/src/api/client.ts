@@ -573,6 +573,13 @@ export function saveTextAs(text: string, fileName: string): void {
 // session these calls share -- `routeStart` opens it, `routeFinish`/
 // `routeCancel` close it, everything between just reads/advances it.
 
+/** The board editor's entered group (`PCB_SELECTION_TOOL::GetEnteredGroup()`, `StudioState.enteredGroupId`), sent with each router session's start: what the
+ * router adds with no source item joins it (`PNS_KICAD_IFACE::Commit`'s `ENTERED_GROUP_MAGIC_NUMBER`, r5 R5-2). The canvas keeps it current. */
+let routerEnteredGroup: string | null = null;
+export function setRouterEnteredGroup(group: string | null): void {
+  routerEnteredGroup = group;
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return (await r.json()) as T;
@@ -584,7 +591,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 /** `width` undefined: the width list is on "use net class" (`UseNetClassTrack()`), and the server takes the start net's width through the rules (`ImportSizes`). */
 /** `autoTrackWidth`: "Use Starting Track Width" (`m_UseConnectedTrackWidth`): the width of the track the start is on or joined to wins over `width` (the server's default: on). */
 export function routeStart(x: Nm, y: Nm, layer: string, width: Nm | undefined, settings: RouterSettings, autoTrackWidth?: boolean): Promise<RoutePreview> {
-  return postJson("/api/route/start", { x, y, layer, width, auto_track_width: autoTrackWidth, settings: routerSettingsToWire(settings) });
+  return postJson("/api/route/start", { x, y, layer, width, auto_track_width: autoTrackWidth, settings: routerSettingsToWire(settings), group: routerEnteredGroup ?? undefined });
 }
 
 /** `OK` in Interactive Router Settings while a route, drag or diff pair is running: the new `ROUTING_SETTINGS` apply from the next move (`ok: false` when none is: the studio keeps them for the next one). */
@@ -662,7 +669,7 @@ export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
  * (`ROUTER_TOOL::performDragging`'s dialog): without it the backend refuses one, with `locked: true` in the reply. */
 export function routeDragStart(x: Nm, y: Nm, layer: string, settings?: RouterSettings, freeAngle?: boolean, dragLocked?: boolean): Promise<DragPreview> {
   // The backend reads whole nanometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
-  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined });
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined, group: routerEnteredGroup ?? undefined });
 }
 
 export function routeDragMove(x: Nm, y: Nm): Promise<DragPreview> {
@@ -689,6 +696,7 @@ export function dpStart(x: Nm, y: Nm, layer: string, dims?: { width: Nm; gap: Nm
     via_gap: dims?.viaGap !== undefined ? Math.round(dims.viaGap) : undefined,
     auto_track_width: autoTrackWidth,
     settings: settings ? routerSettingsToWire(settings) : undefined,
+    group: routerEnteredGroup ?? undefined,
   });
 }
 

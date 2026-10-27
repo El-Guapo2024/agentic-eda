@@ -70,6 +70,34 @@ pub struct DpSizes {
     pub hole_to_hole: Nm,
 }
 
+/// The pair dimensions the user chose (`BOARD_DESIGN_SETTINGS::GetCurrentDiffPairWidth/Gap/ViaGap()` while `UseCustomDiffPairDimensions()` or a
+/// pre-defined pair is chosen): each that is given replaces the rules' (`ImportSizes`' `else` branch).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct UserDpSizes {
+    pub width: Option<Nm>,
+    pub gap: Option<Nm>,
+    pub via_gap: Option<Nm>,
+}
+
+impl UserDpSizes {
+    /// `None` when nothing is given.
+    pub fn of(width: Option<Nm>, gap: Option<Nm>, via_gap: Option<Nm>) -> Option<Self> {
+        (width.is_some() || gap.is_some() || via_gap.is_some()).then_some(UserDpSizes { width, gap, via_gap })
+    }
+
+    pub fn apply(&self, sizes: &mut DpSizes) {
+        if let Some(w) = self.width {
+            sizes.width = w;
+        }
+        if let Some(g) = self.gap {
+            sizes.gap = g;
+        }
+        if let Some(g) = self.via_gap {
+            sizes.via_gap = g;
+        }
+    }
+}
+
 impl DpSizes {
     /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a pair, from the net class of the P net (the nets of a pair are in one class), in net-class
     /// mode: the width starts at the board's minimum track width and takes the larger of that and the class's (`std::max( diffPairWidth,
@@ -342,6 +370,15 @@ impl DiffPairPlacer {
     /// the lines at the start not colliding with anything (at the board's minimum width if not at the pair's own). `layer` is the layer
     /// the route starts on.
     pub fn start(world: &Node, rules: &BoardRules, settings: &RoutingSettings, start_item: ItemId, at: Point, layer: i32, all_layers: LayerRange, use_connected_track_width: bool) -> Result<Self, String> {
+        Self::start_with(world, rules, settings, start_item, at, layer, all_layers, use_connected_track_width, None)
+    }
+
+    /// [`Self::start`] with the user's pair dimensions (`user`: width, gap, via gap, each when given) -- `ImportSizes`' `else` branch while
+    /// `UseCustomDiffPairDimensions()` or a pre-defined pair is chosen (`GetCurrentDiffPairWidth/Gap/ViaGap()`, "user choice", over the
+    /// inherited width too), which `prepareInteractive` hands the router (`UpdateSizes`) before `StartRouting`: the start checks judge them
+    /// (r5 R5-4).
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with(world: &Node, rules: &BoardRules, settings: &RoutingSettings, start_item: ItemId, at: Point, layer: i32, all_layers: LayerRange, use_connected_track_width: bool, user: Option<UserDpSizes>) -> Result<Self, String> {
         let found = find_dp_primitive_pair(world, start_item)?;
         let (Some(prim_p), Some(prim_n)) = (found.pair.prim_p.clone(), found.pair.prim_n.clone()) else { return Err(NO_COMPLEMENT.into()) };
         let (net_p, net_n) = (prim_p.net().clone(), prim_n.net().clone());
@@ -358,6 +395,10 @@ impl DiffPairPlacer {
                 sizes
             }
         };
+        let mut sizes = sizes;
+        if let Some(u) = user {
+            u.apply(&mut sizes);
+        }
 
         // `isStartingPointRoutable` (`if( Settings().AllowDRCViolations() ) return true;` first)
         if !settings.allow_drc_violations() {

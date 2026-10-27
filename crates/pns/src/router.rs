@@ -93,6 +93,28 @@ pub struct RouteCommit {
     /// The vias of `vias` that are not through vias, by index, and their type: the blind/buried and micro vias the route placed
     /// (`ROUTER_TOOL::handleLayerSwitch`'s `sizes.SetViaType( viaType )`), and a displaced via keeps the type it had.
     pub via_kinds: Vec<(usize, ViaKind)>,
+    /// The tracks of `tracks` that replace a board track, by index, and that track's id (`ITEM::GetSourceItem()`: a shoved or dragged line's
+    /// segments keep it, `SEGMENT( const LINE& aParentLine, .. )`, as do the halves of a split track): `PNS_KICAD_IFACE::createBoardItem` gives each
+    /// its source's solder-mask opening, and `Commit` files it in its source's group (`m_replacementMap`). A track with no source is a new one,
+    /// which joins the entered group. r5 R5-2.
+    pub track_sources: Vec<(usize, String)>,
+}
+
+impl RouteCommit {
+    /// The board track the track `index` replaces, if any ([`Self::track_sources`]).
+    pub fn source_of(&self, index: usize) -> Option<&str> {
+        self.track_sources.iter().find(|(i, _)| *i == index).map(|(_, s)| s.as_str())
+    }
+
+    /// Adds `tracks`, each replacing the board track `source` when one is given.
+    fn push_tracks(&mut self, tracks: Vec<eda_model::ir::Track>, source: Option<&str>) {
+        for t in tracks {
+            if let Some(src) = source {
+                self.track_sources.push((self.tracks.len(), src.to_string()));
+            }
+            self.tracks.push(t);
+        }
+    }
 }
 
 /// Where "Route From Other End" restarts and what it commits on the way (`ROUTER::ContinueFromEnd`): see
@@ -137,6 +159,12 @@ pub struct Router {
     /// This session restarted from the other end of a route whose fixed part was committed (`ROUTER::ContinueFromEnd`): what it commits
     /// is one undo step with that earlier commit (`APPEND_UNDO`). The caller that applies the commits keeps it.
     pub append_undo: bool,
+    /// The group the board editor has entered (`PCB_SELECTION_TOOL::GetEnteredGroup()`), which the new items of the commit join
+    /// (`PNS_KICAD_IFACE::Commit`'s `ENTERED_GROUP_MAGIC_NUMBER`, r5 R5-2). The caller that applies the commits keeps it, as it keeps [`Self::append_undo`].
+    pub entered_group: Option<String>,
+    /// The pair dimensions the user chose, for the next pair started ([`crate::dp_placer::UserDpSizes`]): the custom ones or a pre-defined pair
+    /// (`ImportSizes`' "user choice"); `None` routes at the net class's. The start checks judge them (r5 R5-4).
+    pub user_diff_pair: Option<crate::dp_placer::UserDpSizes>,
     /// The type of every via of the board that is not a through via, by id (`DrawingsSection::via_extras`): a via a shove or a drag moves
     /// is removed and put back, and keeps its type (`PNS_KICAD_IFACE::syncVia` reads `aVia->GetViaType()` into the router's via).
     via_kinds: HashMap<String, ViaKind>,
@@ -157,7 +185,7 @@ impl Router {
         let (world, layers) = crate::from_ir::build_node(design, model);
         let via_kinds = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|e| e.kind != ViaKind::Through).map(|e| (e.id.clone(), e.kind)).collect();
         let track_pins = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| !t.pins.is_empty()).map(|t| (t.id.clone(), t.pins.clone())).collect();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, via_kinds, track_pins, drag_mode: None, use_connected_track_width: true }
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, append_undo: false, entered_group: None, user_diff_pair: None, via_kinds, track_pins, drag_mode: None, use_connected_track_width: true }
     }
 
     /// The type of the board's via `id` (a through via unless the board says otherwise).
@@ -218,8 +246,10 @@ impl Router {
     /// already in progress (matching `StopRouting()` + fresh `StartRouting()`,
     /// not an error).
     pub fn start(&mut self, at: Point, layer_name: &str, width: Nm) -> Result<(), String> {
-        let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
-        let pick = self.pick_start(at, layer);
+        let active = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
+        let pick = self.pick_start(at, active);
+        // `getStartLayer`: the start item's layer when it is not on the active one (r5 R5-1)
+        let layer = self.start_layer_of(pick.as_ref(), active);
         if let Some(Item::Solid(s)) = pick.as_ref().and_then(|p| self.world.get(p.item)) {
             if self.world.is_npth(&s.source) && !self.settings.allow_drc_violations() {
                 return Err(NPTH_START.into());
@@ -276,8 +306,10 @@ impl Router {
     /// item's net's width, via and pair sizes through the board's rules -- what a route starts at when the width list is on "use net class"
     /// (`UseNetClassTrack()`, r3 R3-3). `None` for a layer the board does not have.
     pub fn import_sizes(&self, at: Point, layer_name: &str) -> Option<crate::settings::ImportedSizes> {
-        let layer = self.layer_index(layer_name)?;
-        let pick = self.pick_start(at, layer);
+        let active = self.layer_index(layer_name)?;
+        let pick = self.pick_start(at, active);
+        // `SetStartLayerFromPCBNew( pcbLayer )`: the layer `getStartLayer` gives
+        let layer = self.start_layer_of(pick.as_ref(), active);
         // `aStartPosition`: the click (`performRouting( evt->Position() )`), not the anchor it snapped to
         let start = pick.as_ref().and_then(|p| self.world.get(p.item).map(|it| (it, at)));
         Some(crate::settings::import_sizes(&self.world, &self.rules, start, layer, self.use_connected_track_width))
@@ -290,8 +322,9 @@ impl Router {
         if !self.use_connected_track_width {
             return None;
         }
-        let layer = self.layer_index(layer_name)?;
-        let pick = self.pick_start(at, layer)?;
+        let active = self.layer_index(layer_name)?;
+        let pick = self.pick_start(at, active)?;
+        let layer = self.start_layer_of(Some(&pick), active);
         crate::settings::inherit_track_width(&self.world, self.world.get(pick.item)?, at, layer)
     }
 
@@ -355,47 +388,80 @@ impl Router {
         reason
     }
 
-    /// `TOOL_BASE::updateStartItem` for a point the studio's snapping has already put on what it picked (`PcbSnap.routePoint`): the
-    /// pad, via or track end the point is exactly on; else the track whose copper it is in -- at the end nearer to it if that is within
-    /// half the track's width (`snapToItem`), else at the point on its centre line, in the middle of the track; else (a point that was
-    /// not snapped: a script's, the API's) the nearest pad, via or track end within [`START_SNAP_NM`].
+    /// `TOOL_BASE::updateStartItem` for a point the studio's snapping has already put on what it picked (`PcbSnap.routePoint`), as
+    /// `TOOL_BASE::pickSingleItem( pos, nullptr, -1 )` ranks what is there: first what is exactly under the point (`QueryHoverItems( aWhere, 0 )`),
+    /// a pad, via or track end on the active layer `layer` (`prioritized[0]`), then a track there whose copper the point is in (`prioritized[1]`),
+    /// then the same on any copper layer (`prioritized[2]`, `[3]`: "the same kinds on any layer"); only with nothing there, what is within the
+    /// slop (`maxSlopRadius`, here [`START_SNAP_NM`]: a point that was not snapped, a script's, the API's), on the active layer and then on any. A
+    /// track is taken at the end nearer the point if that is within half the track's width (`snapToItem`), else at the point on its centre line, in
+    /// the middle of the track. The route then starts on the item's layer when it is not on the active one ([`Self::start_layer`], r5 R5-1).
+    /// **Differs:** the layers' visibility (`IsAnyLayerVisible`) and high contrast are the studio's, not asked here; on any layer the track
+    /// found first by layer order wins rather than the nearest end.
     fn pick_start(&self, at: Point, layer: i32) -> Option<StartPick> {
-        let layers = LayerRange::single(layer);
-        if let Some((item, pos)) = self.world.nearest_anchor(at, layers, EXACT_NM, None) {
+        let all = self.layers.all();
+        let any_layer_track = || (all.start()..=all.end()).filter(|&l| l != layer).find_map(|l| self.track_pick(at, l));
+        if let Some((item, pos)) = self.world.nearest_anchor(at, LayerRange::single(layer), EXACT_NM, None) {
             return Some(StartPick { item, pos, split: None });
         }
-        if let Some(id) = self.world.segment_at(at, layer, None, None, &[]) {
-            match self.world.get(id) {
-                Some(Item::Segment(s)) => {
-                    let seg = eda_drc::kimath::Seg::new(s.a, s.b);
-                    let on = if seg.sq_distance_to_point(at) <= EXACT_NM.area(EXACT_NM) { at } else { seg.nearest_point(at) };
-                    let half = s.width / 2;
-                    let (da, db) = (crate::seg_ops::length(at, s.a), crate::seg_ops::length(at, s.b));
-                    if da < half || db < half {
-                        return Some(StartPick { item: id, pos: if da < db { s.a } else { s.b }, split: None });
-                    }
-                    if s.source_track.is_some() {
-                        return Some(StartPick { item: id, pos: on, split: Some(id) });
-                    }
-                }
-                Some(Item::Arc(a)) => {
-                    // `snapToItem` for `ARC_T`: within half the width of an end, that end; else the point of the arc nearest the cursor
-                    // (`AlignToArc`), where `SplitAdjacentArcs` cuts it
-                    let half = a.width / 2;
-                    let (da, db) = (crate::seg_ops::length(at, a.start()), crate::seg_ops::length(at, a.end()));
-                    if da < half || db < half {
-                        return Some(StartPick { item: id, pos: if da < db { a.start() } else { a.end() }, split: None });
-                    }
-                    if a.source_track.is_some() {
-                        let on = if a.arc.distance_to(at) <= EXACT_NM.as_f64() { at } else { a.arc.nearest_point(at) };
-                        return Some(StartPick { item: id, pos: on, split: Some(id) });
-                    }
-                }
-                _ => {}
-            }
+        if let Some(pick) = self.track_pick(at, layer) {
+            return Some(pick);
         }
-        let (item, pos) = self.world.nearest_anchor(at, layers, START_SNAP_NM, None)?;
+        if let Some((item, pos)) = self.world.nearest_anchor(at, all, EXACT_NM, None) {
+            return Some(StartPick { item, pos, split: None });
+        }
+        if let Some(pick) = any_layer_track() {
+            return Some(pick);
+        }
+        let (item, pos) = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None).or_else(|| self.world.nearest_anchor(at, all, START_SNAP_NM, None))?;
         Some(StartPick { item, pos, split: None })
+    }
+
+    /// The track on `layer` whose copper `at` is in, as [`Self::pick_start`] takes it: at its end when `at` is within half its width of it, else
+    /// in its middle (to be split there).
+    fn track_pick(&self, at: Point, layer: i32) -> Option<StartPick> {
+        let id = self.world.segment_at(at, layer, None, None, &[])?;
+        match self.world.get(id) {
+            Some(Item::Segment(s)) => {
+                let seg = eda_drc::kimath::Seg::new(s.a, s.b);
+                let on = if seg.sq_distance_to_point(at) <= EXACT_NM.area(EXACT_NM) { at } else { seg.nearest_point(at) };
+                let half = s.width / 2;
+                let (da, db) = (crate::seg_ops::length(at, s.a), crate::seg_ops::length(at, s.b));
+                if da < half || db < half {
+                    return Some(StartPick { item: id, pos: if da < db { s.a } else { s.b }, split: None });
+                }
+                s.source_track.is_some().then_some(StartPick { item: id, pos: on, split: Some(id) })
+            }
+            Some(Item::Arc(a)) => {
+                // `snapToItem` for `ARC_T`: within half the width of an end, that end; else the point of the arc nearest the cursor
+                // (`AlignToArc`), where `SplitAdjacentArcs` cuts it
+                let half = a.width / 2;
+                let (da, db) = (crate::seg_ops::length(at, a.start()), crate::seg_ops::length(at, a.end()));
+                if da < half || db < half {
+                    return Some(StartPick { item: id, pos: if da < db { a.start() } else { a.end() }, split: None });
+                }
+                let on = if a.arc.distance_to(at) <= EXACT_NM.as_f64() { at } else { a.arc.nearest_point(at) };
+                a.source_track.is_some().then_some(StartPick { item: id, pos: on, split: Some(id) })
+            }
+            _ => None,
+        }
+    }
+
+    /// `ROUTER_TOOL::getStartLayer` (index): the active layer `layer` when the start item is on it or there is none (`if( ls.Overlaps( startLayer
+    /// ) ) return tl;`), else the first layer of the item (`GetBoardLayerFromPNSLayer( ls.Start() )`).
+    fn start_layer_of(&self, pick: Option<&StartPick>, layer: i32) -> i32 {
+        match pick.and_then(|p| self.world.get(p.item)) {
+            Some(item) if !item.layers().overlaps_layer(layer) => item.layers().start(),
+            _ => layer,
+        }
+    }
+
+    /// `ROUTER_TOOL::getStartLayer` for a route about to start at `at` with `layer_name` active: the layer it starts on, which `prepareInteractive`
+    /// makes the active layer (`editFrame->SetActiveLayer( pcbLayer )`) -- a pad of a bottom-side footprint clicked with F.Cu active starts on B.Cu.
+    /// `None` for a layer the board does not have.
+    pub fn start_layer(&self, at: Point, layer_name: &str) -> Option<String> {
+        let layer = self.layer_index(layer_name)?;
+        let pick = self.pick_start(at, layer);
+        Some(self.layer_name(self.start_layer_of(pick.as_ref(), layer)).to_string())
     }
 
     fn session(&self) -> Option<&Session> {
@@ -753,7 +819,8 @@ impl Router {
                         if arc.locked {
                             commit.lock_tracks.push(commit.tracks.len());
                         }
-                        commit.tracks.push(eda_model::ir::Track::new_arc(net.clone(), layer.clone(), arc.width, a.start, a.mid, a.end));
+                        // `SplitAdjacentArcs`' halves are clones of the arc: their source is its board track
+                        commit.push_tracks(vec![eda_model::ir::Track::new_arc(net.clone(), layer.clone(), arc.width, a.start, a.mid, a.end)], Some(track));
                     }
                 }
                 continue;
@@ -776,7 +843,7 @@ impl Router {
             if self.world.iter().any(|(_, it)| it.source_track_id() == Some(track) && it.is_locked()) {
                 commit.lock_tracks.push(commit.tracks.len());
             }
-            commit.tracks.push(eda_model::ir::Track { id: String::new(), net: self.net_name_of(&line), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts, arc_mid_offset: None });
+            commit.push_tracks(vec![eda_model::ir::Track { id: String::new(), net: self.net_name_of(&line), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts, arc_mid_offset: None }], Some(track));
         }
     }
 
@@ -789,16 +856,25 @@ impl Router {
         let stays = |id: ItemId| self.world.get(id).and_then(|it| it.source_track_id()).is_none_or(|t| !removed.contains(t));
         let mut out: Vec<eda_model::ir::Track> = Vec::with_capacity(commit.tracks.len());
         let mut locks: Vec<usize> = Vec::new();
+        let mut sources: Vec<(usize, String)> = Vec::new();
         let mut changed = false;
         for (index, t) in commit.tracks.iter().enumerate() {
+            let source = commit.source_of(index);
             let (Some(layer), net) = (self.layer_index(&t.layer), net_of(&t.net)) else {
+                if let Some(src) = source {
+                    sources.push((out.len(), src.to_string()));
+                }
                 out.push(t.clone());
                 continue;
             };
             let locked = commit.lock_tracks.contains(&index);
+            // what is kept of a track keeps its lock and its source
             let mut keep = |track: eda_model::ir::Track, out: &mut Vec<eda_model::ir::Track>| {
                 if locked {
                     locks.push(out.len());
+                }
+                if let Some(src) = source {
+                    sources.push((out.len(), src.to_string()));
                 }
                 out.push(track);
             };
@@ -838,6 +914,7 @@ impl Router {
         if changed {
             commit.tracks = out;
             commit.lock_tracks = locks;
+            commit.track_sources = sources;
         }
     }
 
@@ -867,7 +944,7 @@ impl Router {
             for (track_id, lines) in s.placer.displaced_tracks() {
                 commit.remove_track_ids.push(track_id.to_string());
                 for line in lines.iter().filter(|l| l.point_count() >= 2) {
-                    commit.tracks.extend(self.line_tracks(line, None));
+                    commit.push_tracks(self.line_tracks(line, None), Some(track_id));
                 }
             }
             for (via_id, pos) in s.placer.displaced_vias() {
@@ -930,6 +1007,7 @@ impl Router {
         let opts = crate::node::AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false, stop_at_locked_joints: false };
         let mut consumed: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         let mut merged: Vec<eda_model::ir::Track> = Vec::new();
+        let mut merged_sources: Vec<Option<String>> = Vec::new();
         for i in 0..seeds.min(commit.tracks.len()) {
             if consumed.contains(&i) || commit.lock_tracks.contains(&i) {
                 continue;
@@ -958,6 +1036,8 @@ impl Router {
             pins.sort();
             pins.dedup();
             let template = &commit.tracks[i];
+            // `AssembleLine( aLatest, .. )`: the simplified line's source is the seed segment's (`pl.SetSourceItem( aSeg->GetSourceItem() )`)
+            merged_sources.push(commit.source_of(i).map(str::to_string));
             merged.push(eda_model::ir::Track { id: String::new(), net: template.net.clone(), pins, layer: template.layer.clone(), width: template.width, pts: simplified.pts, arc_mid_offset: None });
         }
         if consumed.is_empty() {
@@ -965,6 +1045,7 @@ impl Router {
         }
         let mut tracks = Vec::with_capacity(commit.tracks.len());
         let mut locks = Vec::new();
+        let mut sources = Vec::new();
         for (i, t) in std::mem::take(&mut commit.tracks).into_iter().enumerate() {
             if consumed.contains(&i) {
                 continue;
@@ -972,11 +1053,20 @@ impl Router {
             if commit.lock_tracks.contains(&i) {
                 locks.push(tracks.len());
             }
+            if let Some(src) = commit.source_of(i) {
+                sources.push((tracks.len(), src.to_string()));
+            }
             tracks.push(t);
         }
-        tracks.extend(merged);
+        for (t, src) in merged.into_iter().zip(merged_sources) {
+            if let Some(src) = src {
+                sources.push((tracks.len(), src));
+            }
+            tracks.push(t);
+        }
         commit.tracks = tracks;
         commit.lock_tracks = locks;
+        commit.track_sources = sources;
     }
 
     fn net_name_of(&self, line: &Line) -> String {
@@ -1105,8 +1195,8 @@ impl Router {
         let settings = self.drag_settings();
         let drag_commit = self.drag.as_mut()?.finish(&self.world, &self.rules, &settings, at, force_commit)?;
         let mut commit = RouteCommit { remove_track_ids: drag_commit.remove_track_ids, remove_via_ids: drag_commit.remove_via_ids, ..RouteCommit::default() };
-        for line in &drag_commit.tracks {
-            commit.tracks.extend(self.line_tracks(line, None));
+        for (k, line) in drag_commit.tracks.iter().enumerate() {
+            commit.push_tracks(self.line_tracks(line, None), drag_commit.sources.get(k).and_then(Option::as_deref));
         }
         for (pos, diameter, drill, source_via) in &drag_commit.vias {
             // A dragged via keeps its own net/layer/size; a via displaced
@@ -1146,18 +1236,28 @@ impl Router {
     /// nearest item of the same kind ([`crate::dp_placer::find_dp_primitive_pair`]). Replaces any route/drag/diff-pair session already
     /// in progress. The error is KiCad's own message.
     pub fn start_diff_pair(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
-        let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
+        let active = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
         // the pad, via or track end there, else the track under the cursor (`isStartingPointRoutable` with `aStartItem` the item picked:
-        // `FindDpPrimitivePair` then finds its free end, or says "Can't find a suitable starting point. ..."), else nothing (findings p5 F4-6)
-        let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_NM, None).map(|(id, _)| id).or_else(|| self.world.segment_at(at, layer, None, None, &[]));
-        let Some(start_item) = hit else {
+        // `FindDpPrimitivePair` then finds its free end, or says "Can't find a suitable starting point. ..."), else nothing (findings p5 F4-6);
+        // with nothing on the active layer, what `pickSingleItem` finds on another (`prioritized[2]`, `[3]`), and the pair starts on its layer
+        // (`getStartLayer`, r5 R5-1)
+        let hit = self.world.nearest_anchor(at, LayerRange::single(active), START_SNAP_NM, None).map(|(id, _)| id).or_else(|| self.world.segment_at(at, active, None, None, &[]));
+        let Some(start_item) = hit.or_else(|| self.pick_start(at, active).map(|p| p.item)) else {
             return Err("Cannot start a differential pair in the middle of nowhere.".into());
+        };
+        let layer = match self.world.get(start_item) {
+            Some(item) if !item.layers().overlaps_layer(active) => item.layers().start(),
+            _ => active,
         };
         // `isStartingPointRoutable` for a pair: the gap against the board's minimum clearance first, then the items under the point (r3 R3-8)
         if !self.settings.allow_drc_violations() {
             if let Some(it) = self.world.get(start_item) {
                 let coupled = crate::diff_pair::dp_coupled_net_name(it.net().as_deref().unwrap_or("")).unwrap_or_default();
-                if crate::dp_placer::DpSizes::import(&self.world, &self.rules, it, layer, it.net().as_deref().unwrap_or(""), &coupled).gap < self.rules.min_clearance_nm {
+                let mut sizes = crate::dp_placer::DpSizes::import(&self.world, &self.rules, it, layer, it.net().as_deref().unwrap_or(""), &coupled);
+                if let Some(u) = self.user_diff_pair {
+                    u.apply(&mut sizes);
+                }
+                if sizes.gap < self.rules.min_clearance_nm {
                     return Err("Diff pair gap is less than board minimum clearance.".into());
                 }
             }
@@ -1168,7 +1268,7 @@ impl Router {
         }
         // `ImportSizes`: "First try to pick up diff pair width from starting track" (`m_UseConnectedTrackWidth`, on by default) -- also off a
         // pad or via with a stub (findings p5 F4-5), and before the start-gap check (r4 R4-4)
-        let placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, at, layer, self.layers.all(), self.use_connected_track_width)?;
+        let placer = crate::dp_placer::DiffPairPlacer::start_with(&self.world, &self.rules, &self.settings, start_item, at, layer, self.layers.all(), self.use_connected_track_width, self.user_diff_pair)?;
         self.session = None;
         self.drag = None;
         self.diff = Some(placer);
@@ -1273,7 +1373,7 @@ impl Router {
         for (track_id, lines) in &c.displaced_tracks {
             commit.remove_track_ids.push(track_id.clone());
             for line in lines.iter().filter(|l| l.point_count() >= 2) {
-                commit.tracks.extend(self.line_tracks(line, None));
+                commit.push_tracks(self.line_tracks(line, None), Some(track_id));
             }
         }
         for (via_id, pos) in &c.displaced_vias {

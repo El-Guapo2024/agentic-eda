@@ -38,6 +38,12 @@ export async function startInteractiveRoute(x: number, y: number, layer: string,
     return false;
   }
   const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width: preview.width ?? width ?? 250_000, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined };
+  // `ROUTER_TOOL::prepareInteractive`: the route starts on `getStartLayer`'s layer -- the start item's when it is not on the active one -- and that
+  // becomes the active layer until the route ends (r5 R5-1)
+  if (preview.layer && preview.layer !== layer) {
+    draw.originalActiveLayer = layer;
+    dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
+  }
   dispatch({ type: "SET_DRAW_STATE", draw });
   return true;
 }

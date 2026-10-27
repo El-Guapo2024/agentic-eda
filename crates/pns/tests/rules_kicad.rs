@@ -107,7 +107,8 @@ fn kicad_violations(design: &Design, model: &ConstraintModel, kinds: &[&str]) ->
     std::fs::create_dir_all(&work).unwrap();
     let report = eda_kicad_engine::drc(design, model, &work, false).unwrap_or_else(|e| panic!("kicad-cli DRC: {e:?}"));
     let _ = std::fs::remove_dir_all(&work);
-    Some(report.violations.iter().filter(|v| kinds.contains(&v.kind.as_str()) && !v.excluded).map(|v| format!("{}: {}", v.kind, v.description)).collect())
+    // the ratsnest's items (`unconnected_items`) are a list of their own in the report
+    Some(report.violations.iter().chain(&report.unconnected_items).filter(|v| kinds.contains(&v.kind.as_str()) && !v.excluded).map(|v| format!("{}: {}", v.kind, v.description)).collect())
 }
 
 /// R-1: a 0.6 mm clearance on pad R2.1 (`PAD::GetLocalClearance`, "Local override on %s"), where the net class asks 0.2 mm. The straight way from
@@ -855,6 +856,32 @@ fn a_pair_started_on_arcs_checks_the_gap() {
     assert_eq!(start(0.35), Ok(mm(0.2)));
 }
 
+/// r5 R5-4 (`prepareInteractive`: `ImportSizes` then `UpdateSizes` before `StartRouting`; `ImportSizes`' `else` branch takes
+/// `GetCurrentDiffPairWidth/Gap/ViaGap()` while custom dimensions are on, over the inherited width too): the same arcs at a 0.5 mm pitch, which
+/// the class refuses, start a pair routed at a custom 0.3 / 0.2 mm, at the custom width; and a custom gap under the board's minimum clearance is
+/// refused although the class's is not.
+#[test]
+fn a_pair_with_custom_dimensions_is_checked_with_them_at_the_start() {
+    let start = |user: Option<eda_pns::dp_placer::UserDpSizes>| {
+        let (mut design, mut model) = board(&[("J1", "PAD1", p(25.0, 5.0)), ("J2", "PAD1", p(25.0, 15.0))], &[("/USB_P", &["J1.1"]), ("/USB_N", &["J2.1"])]);
+        model.board.net_classes.push(eda_model::NetClass { diff_pair_gap: Some(mm(0.15)), diff_pair_width: Some(mm(0.25)), clearance: Some(mm(0.15)), ..class("usb", &["/USB_P", "/USB_N"]) });
+        model.board.min_clearance_nm = mm(0.1);
+        let arc = |net: &str, r: f64| {
+            let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), mm(0.2), p(7.5 - r, 15.0), p(7.5, 15.0 - r), p(7.5 + r, 15.0));
+            t.id = format!("arc_{net}");
+            t
+        };
+        design.routing.as_mut().unwrap().tracks.extend([arc("/USB_P", 5.0), arc("/USB_N", 5.5)]);
+        let mut router = Router::new(&design, &model);
+        router.user_diff_pair = user;
+        router.start_diff_pair(p(12.5, 15.0), "F.Cu").map(|()| router.diff_pair_preview(p(12.7, 18.0)).unwrap().width)
+    };
+    assert!(start(None).unwrap_err().starts_with("The differential pair gap at the start point does not match the configured gap."));
+    let custom = |w: f64, g: f64| Some(eda_pns::dp_placer::UserDpSizes { width: Some(mm(w)), gap: Some(mm(g)), via_gap: Some(mm(g)) });
+    assert_eq!(start(custom(0.3, 0.2)), Ok(mm(0.3)), "0.3 + 0.2 is the 0.5 mm pitch; the custom width is routed");
+    assert_eq!(start(custom(0.45, 0.05)), Err("Diff pair gap is less than board minimum clearance.".into()));
+}
+
 /// r4 R4-5 (`ImportSizes` asks `CT_HOLE_TO_HOLE` of `&dummyVia, &dummyVia, UNDEFINED_LAYER` outside `if( aStartItem )`): a route started in
 /// empty space, under a rule for vias of no net, has the rule's hole to hole, not the board's minimum.
 #[test]
@@ -865,4 +892,24 @@ fn hole_to_hole_is_asked_with_no_start_item_too() {
     model.board.custom_rules_text = Some("(version 1)\n(rule h2h\n  (condition \"A.Type == 'Via' && A.NetName == ''\")\n  (constraint hole_to_hole (min 0.5mm)))\n".into());
     let s = Router::new(&design, &model).import_sizes(p(15.0, 10.0), "F.Cu").unwrap();
     assert_eq!((s.hole_to_hole, s.diff_pair_hole_to_hole), (mm(0.5), mm(0.5)), "{s:?}");
+}
+
+/// r5 R5-1: with F.Cu active, a route started on a pad of a bottom-side footprint starts on B.Cu with the pad's net (`pickSingleItem` on every
+/// layer, `ROUTER_TOOL::getStartLayer`), and the route to the other bottom-side pad connects the two for kicad-cli: no unconnected item, no
+/// clearance, short or crossing. Before, it started on F.Cu with no net and left R1.1 and R2.1 unconnected.
+#[test]
+fn a_route_started_on_a_bottom_pad_with_the_top_layer_active_connects_on_the_bottom() {
+    let (r1, r2) = (p(5.0, 10.0), p(25.0, 10.0));
+    let (mut design, model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2)], &[("SIG", &["R1.1", "R2.1"])]);
+    for f in &mut design.placement.as_mut().unwrap().footprints {
+        f.side = Side::Bottom;
+    }
+    let commit = route_on(&design, &model, r1, r2, "F.Cu");
+    assert!(!commit.tracks.is_empty());
+    assert!(commit.tracks.iter().all(|t| t.layer == "B.Cu" && t.net == "SIG"), "{:?}", commit.tracks);
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["unconnected_items", "clearance", "shorting_items", "tracks_crossing"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        // the control: the board without the route has R1.1 and R2.1 unconnected
+        assert!(!kicad_violations(&design, &model, &["unconnected_items"]).unwrap().is_empty());
+    }
 }

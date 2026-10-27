@@ -1024,6 +1024,14 @@ pub enum Cmd {
         /// displaced via that keeps its type. They go into `DrawingsSection::via_extras`, in the same step.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         via_kinds: Vec<(usize, eda_model::via_extra::ViaKind)>,
+        /// The new tracks of `tracks` that replace a removed track, as (index into `tracks`, the removed track's id): each takes that track's solder-mask
+        /// opening (`PNS_KICAD_IFACE::createBoardItem`: `track->SetHasSolderMask( sourceTrack->HasSolderMask() )`, the margin too) and joins its group
+        /// (`m_replacementMap[src]`, `Commit`'s `group->AddItem( bi )`). r5 R5-2.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        track_sources: Vec<(usize, String)>,
+        /// The group the editor has entered: the new tracks with no source and the new vias join it (`m_replacementMap[ENTERED_GROUP_MAGIC_NUMBER]`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
     },
 
     /// What the length tuner (`crates/pns`'s `MeanderPlacer`, `GENERATOR_TOOL::GenEditAction`) makes, as one undo step: remove the tracks of
@@ -3017,7 +3025,7 @@ impl<'a> Board<'a> {
             Cmd::ExchangeFootprints { references, footprint, options, library } => self.exchange_footprints(references, footprint.as_deref(), options, library),
             Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
-            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias, lock_tracks, via_kinds } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone(), lock_tracks, via_kinds),
+            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias, lock_tracks, via_kinds, track_sources, group } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone(), lock_tracks, via_kinds, track_sources, group.as_deref()),
             Cmd::CommitTuning { pattern, remove_pattern, remove_track_ids, tracks, member_indices } => self.commit_tuning(pattern.as_ref(), remove_pattern.as_deref(), remove_track_ids, tracks.clone(), member_indices),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
             Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
@@ -4676,7 +4684,8 @@ impl<'a> Board<'a> {
     /// already on the board and so already known-good) -- this router's
     /// output is new geometry, not a copy, so the same guard applies.
     #[allow(clippy::too_many_arguments)] // the fields of `Cmd::CommitRoute`, one argument each, as the other verbs take theirs
-    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize], via_kinds: &[(usize, eda_model::via_extra::ViaKind)]) -> Result<(), Vec<CheckResult>> {
+    #[allow(clippy::too_many_arguments)]
+    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize], via_kinds: &[(usize, eda_model::via_extra::ViaKind)], track_sources: &[(usize, String)], group: Option<&str>) -> Result<(), Vec<CheckResult>> {
         for t in &tracks {
             self.known_net(&t.net)?;
             self.known_layer(&t.layer)?;
@@ -4692,6 +4701,11 @@ impl<'a> Board<'a> {
                 return Err(vec![CheckResult::fail("ops_bad_via", &v.net, "a committed route via needs a drill smaller than its diameter, both positive")]);
             }
         }
+        // what each new track takes from the track it replaces (`createBoardItem`, `m_itemGroups`), read before that track goes: its mask opening and its group
+        let inherited: Vec<(usize, Option<eda_model::track_mask::TrackMask>, Option<String>)> = match self.design.drawings.as_ref() {
+            Some(dr) => track_sources.iter().filter(|(i, _)| *i < tracks.len()).map(|(i, src)| (*i, dr.track_mask(src).cloned(), dr.parent_group(src).map(|g| g.id.clone()))).collect(),
+            None => Vec::new(),
+        };
         if !remove_track_ids.is_empty() || !remove_via_ids.is_empty() {
             if let Some(rt) = self.design.routing.as_mut() {
                 rt.tracks.retain(|t| !remove_track_ids.iter().any(|id| id == &t.id));
@@ -4700,6 +4714,8 @@ impl<'a> Board<'a> {
             // a removed via's extras go with it, unless it comes back (below); a displaced via's type is in `via_kinds` too
             if let Some(dr) = self.design.drawings.as_mut() {
                 dr.via_extras.retain(|e| !remove_via_ids.iter().any(|id| id == &e.id) || vias.iter().any(|v| v.id == e.id));
+                // a removed track's mask opening goes with it (a track that replaces it takes it over, below)
+                dr.track_masks.retain(|m| !remove_track_ids.contains(&m.id));
             }
         }
         for t in &mut tracks {
@@ -4723,6 +4739,39 @@ impl<'a> Board<'a> {
             let locked_now: Vec<String> = lock_tracks.iter().filter_map(|&i| rt.tracks.get(first_new + i).map(|t| t.id.clone())).collect();
             // and the new vias that are not through vias, with their type
             let kinds_now: Vec<(String, eda_model::via_extra::ViaKind)> = via_kinds.iter().filter(|(_, k)| *k != eda_model::via_extra::ViaKind::Through).filter_map(|&(i, k)| rt.vias.get(first_new_via + i).map(|v| (v.id.clone(), k))).collect();
+            // `createBoardItem`: a track with a source takes its mask opening and goes in its group (`m_replacementMap[src]`, when the source was
+            // in one); one without goes in the entered group (`m_replacementMap[ENTERED_GROUP_MAGIC_NUMBER]`), as does a new via (r5 R5-2)
+            let new_track_ids: Vec<String> = rt.tracks[first_new..].iter().map(|t| t.id.clone()).collect();
+            let new_via_ids: Vec<String> = rt.vias[first_new_via..].iter().filter(|v| !remove_via_ids.contains(&v.id)).map(|v| v.id.clone()).collect();
+            let mut masks: Vec<eda_model::track_mask::TrackMask> = Vec::new();
+            let mut joins: Vec<(String, String)> = Vec::new();
+            for (i, id) in new_track_ids.iter().enumerate() {
+                match inherited.iter().find(|(k, _, _)| *k == i) {
+                    Some((_, mask, src_group)) => {
+                        if let Some(m) = mask {
+                            masks.push(eda_model::track_mask::TrackMask { id: id.clone(), margin: m.margin });
+                        }
+                        if let Some(g) = src_group {
+                            joins.push((g.clone(), id.clone()));
+                        }
+                    }
+                    None if track_sources.iter().any(|(k, _)| *k == i) => {}
+                    None => joins.extend(group.map(|g| (g.to_string(), id.clone()))),
+                }
+            }
+            joins.extend(new_via_ids.into_iter().filter_map(|id| group.map(|g| (g.to_string(), id))));
+            if !masks.is_empty() {
+                self.drawings_mut().track_masks.extend(masks);
+            }
+            if !joins.is_empty() {
+                if let Some(dr) = self.design.drawings.as_mut() {
+                    for (g, id) in joins {
+                        if let Some(grp) = dr.groups.iter_mut().find(|x| x.id == g) {
+                            grp.member_ids.push(id);
+                        }
+                    }
+                }
+            }
             self.sort_routing();
             if !kinds_now.is_empty() {
                 let dr = self.drawings_mut();

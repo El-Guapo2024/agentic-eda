@@ -48,6 +48,10 @@ export interface RouteDrawState {
   pendingViaLayer?: string;
   /** The id of the pad, via or track segment the route started on (`m_startItem`): the route does not end on it, so the cursor within a grid of it does not snap back onto it. */
   startItem?: string;
+  /** The active layer before the route started on an item of another layer (`ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer`, then
+   * `SetActiveLayer( getStartLayer( .. ) )`): the active layer goes back to it when the route ends (`finishInteractive`). Unset when the route
+   * started on the active layer. */
+  originalActiveLayer?: string;
 }
 
 /** The `DrawState` "route" patch for a successful `RoutePreview` reply,
