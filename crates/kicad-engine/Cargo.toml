@@ -8,6 +8,8 @@ description = "kicad-cli as the batch engine: DRC, ERC and every export, run on 
 serde_json = { workspace = true }
 eda-model = { path = "../model" }
 eda-kicad = { path = "../kicad" }
+# The protobuf messages of KiCad's IPC API (`kicad-cli api-server`, src/api): the generated types in src/api/gen need prost's runtime only.
+prost = "0.14"
 
 [dev-dependencies]
 eda-engine = { path = "../engine" }

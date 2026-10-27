@@ -1,3 +1,6 @@
+//! INACTIVE (2026-10-28): replaced by `kicad-cli api-server`'s `ImportSpecctraSession` (`eda_kicad_engine::api::specctra`); kept for a future all-Rust build
+//! and as `Cmd::Specctra`'s fallback where kicad-cli has no `api-server` or `EDA_KICAD_API=0` (see `super`'s doc). [`SessionImport`] is the answer of both.
+//!
 //! `SPECCTRA_DB::FromSESSION` (`pcbnew/specctra_import_export/specctra_import.cpp`): what a Specctra session -- the file an outside autorouter such as FreeRouting
 //! writes back -- puts on the board.
 //!
@@ -267,14 +270,24 @@ pub fn from_session(text: &str, source: &str, design: &Design, model: &Constrain
     let board = BoardView::parse(&pcb_text)?;
     let b = &model.board;
     let mut out = from_session_db(&session, &board, b.via_drill.get(), &|net: &str| b.via_drill_of(net).get())?;
-    // A footprint on the back made here is in the board file turned half a turn in its own frame and back in its orientation (`pcb::write_footprint`, KiCad's
-    // frame): the orientation the session gives is the file's, half a turn from the design's.
-    // (a footprint read in the file's frame, by a reader of before `FootprintExtra::library_frame`, is written as it was read)
+    to_design_frame(&mut out.placements, design);
+    Ok(out)
+}
+
+/// A footprint's orientation in a board file (degrees, KiCad's: counter-clockwise, y down) as the design's rotation (`import::import_rot_millideg`).
+pub fn rot_of_file_orientation(degrees: f64) -> Millideg {
+    crate::import::import_rot_millideg(degrees)
+}
+
+/// The placements of an import, whose rotations are the board file's, in the design's frame. A footprint on the back made here is in the board file turned
+/// half a turn in its own frame and back in its orientation (`pcb::write_footprint`, KiCad's frame): the orientation the file gives is half a turn from the
+/// design's. (A footprint read in the file's frame, by a reader of before `FootprintExtra::library_frame`, is written as it was read.) Also used by the
+/// api-server import (`eda_kicad_engine::api::specctra`), whose placements are read off KiCad's own board.
+pub fn to_design_frame(placements: &mut [SessionPlace], design: &Design) {
     let read_from_a_file: std::collections::BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.footprint_extras.iter().filter(|e| !e.library_frame).map(|e| e.id.as_str())).collect();
-    for p in out.placements.iter_mut().filter(|p| p.side == IrSide::Bottom && !read_from_a_file.contains(p.reference.as_str())) {
+    for p in placements.iter_mut().filter(|p| p.side == IrSide::Bottom && !read_from_a_file.contains(p.reference.as_str())) {
         p.rot = (p.rot + 180_000) % 360_000;
     }
-    Ok(out)
 }
 
 /// The session a router that changes nothing would write back for `pcb`, a design file: its placement, its via padstacks as the `library_out` and its wiring as the

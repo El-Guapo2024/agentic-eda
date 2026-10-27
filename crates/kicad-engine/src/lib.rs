@@ -25,6 +25,8 @@ pub use foreign::{import_foreign_pcb, import_foreign_sch, ForeignImport, Foreign
 // Pictures of the design as KiCad draws them (`eda schematic`'s `schematic.svg`, the judge's): `kicad-cli sch|pcb export svg|png`.
 pub mod pictures;
 pub use pictures::{board_plot, schematic_plot, PictureFormat};
+// KiCad's IPC API: one `kicad-cli api-server` kept up, for what it does without a per-run start (Specctra session import, export jobs).
+pub mod api;
 
 use eda_kicad::zone_fills::KicadFills;
 use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
@@ -1658,7 +1660,20 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     if dir_kind && !out_arg.ends_with('/') {
         out_arg.push('/');
     }
-    let out = run_export_command(cli, scope, kind, args, input, &out_arg)?;
+    // The kept api-server first, for the kinds whose job it builds from these arguments (`api::jobs`); per-run kicad-cli when it cannot (no server on
+    // this machine, another kind or argument) or when its job failed, so a failure is always kicad-cli's own words.
+    let by_server = (scope == "pcb").then(|| api::jobs::board_job(kind, args)).flatten().and_then(|job| match api::jobs::run_board_jobs(input, &[(job, out_arg.clone())]) {
+        Ok(answers) if answers.iter().all(api::jobs::succeeded) => Some(answers.into_iter().map(|a| a.message).filter(|m| !m.is_empty()).collect::<Vec<_>>().join("\n")),
+        _ => None,
+    });
+    let (success, log, engine) = match by_server {
+        Some(log) => (true, log, format!("kicad-cli {} (api-server)", cli_version(cli))),
+        None => {
+            let out = run_export_command(cli, scope, kind, args, input, &out_arg)?;
+            let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            (out.status.success(), log, format!("kicad-cli {}", cli_version(cli)))
+        }
+    };
     let mut files: Vec<String> = std::fs::read_dir(out_dir)
         .into_iter()
         .flatten()
@@ -1670,13 +1685,13 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
         })
         .collect();
     files.sort();
-    if !out.status.success() || files.is_empty() {
-        return Err(fail("kicad_cli_export", kind, format!("kicad-cli {scope} export {kind} failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))));
+    if !success || files.is_empty() {
+        return Err(fail("kicad_cli_export", kind, format!("kicad-cli {scope} export {kind} failed: {log}")));
     }
     // What kicad-cli said on the way (its warnings -- "Board outline is malformed. Run DRC for a full analysis." -- and its progress), as
     // KiCad's STEP dialog shows the exporter's output in its log window (`DIALOG_EXPORT_STEP_LOG`): kept in the reply, not thrown away.
-    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)).trim().to_string();
-    let mut reply = json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(cli)), "files": files });
+    let log = log.trim().to_string();
+    let mut reply = json!({ "ok": true, "engine": engine, "files": files });
     if !log.is_empty() {
         reply["log"] = Value::String(log);
     }
@@ -1724,6 +1739,7 @@ pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Pat
     let out_dir = root.join("export").join("kicad").join("pos");
     std::fs::create_dir_all(&out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
     let mut files: Vec<String> = Vec::new();
+    let mut served = false;
     for (i, file_name) in names.iter().enumerate() {
         let run_args: Vec<String> = if names.len() == 2 {
             // The two-file mode asks kicad-cli for one side at a time; the first file is the top's, the second the bottom's.
@@ -1734,6 +1750,14 @@ pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Pat
         let target = out_dir.join(file_name);
         // A file an earlier run left must not pass for this one's.
         let _ = std::fs::remove_file(&target);
+        // The kept api-server's job when it builds this one (`api::jobs`), else per-run kicad-cli (see `run_export`).
+        let by_server = api::jobs::board_job("pos", &run_args)
+            .is_some_and(|job| api::jobs::run_board_jobs(&pcb, &[(job, target.to_string_lossy().into_owned())]).is_ok_and(|a| a.iter().all(api::jobs::succeeded)) && target.is_file());
+        if by_server {
+            served = true;
+            files.push(target.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| target.to_string_lossy().to_string()));
+            continue;
+        }
         let out = run_export_command(&cli, "pcb", "pos", &run_args, &pcb, &target.to_string_lossy())?;
         if !out.status.success() || !target.is_file() {
             return Err(fail(
@@ -1744,7 +1768,7 @@ pub fn export_pcb_placement(design: &Design, model: &ConstraintModel, work: &Pat
         }
         files.push(target.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| target.to_string_lossy().to_string()));
     }
-    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(&cli)), "files": files }))
+    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}{}", cli_version(&cli), if served { " (api-server)" } else { "" }), "files": files }))
 }
 
 /// `args` with `--side` set to `side` (`PLACE_FILE_EXPORTER`'s one side per run).
@@ -2483,6 +2507,8 @@ fi"#;
         );
         let log = dir.join("sides.log");
         env.set("FAKE_POS_LOG", &log);
+        // The per-run path (a stand-in kicad-cli has no api-server, and its `--help` probe would write to the log).
+        env.set(api::server::ENV, "0");
         let work = dir.join("work");
         let args = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         let files = |v: &Value| v["files"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();

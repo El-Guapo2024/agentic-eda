@@ -20,6 +20,10 @@ test("an export says BOARD exported OK, a warning of FromBOARD, or the server's 
 test("a session file is the specctra command, and its answer KiCad's words", () => {
   assert.deepEqual(specctraImportCmd({ name: "b.ses", text: "(session b)" }), { op: "specctra", session: "(session b)", name: "b.ses" });
   assert.match(describeImport({ ok: true, message: "" }).message, /^Session file imported and merged OK\./);
+  // KiCad's own import (kicad-cli api-server) skips what it cannot resolve and says so under the status line.
+  const skipped = describeImport({ ok: true, message: "", warning: "1 session item(s) were skipped due to unresolved reference, layer, or padstack." });
+  assert.equal(skipped.kind, "info");
+  assert.match(skipped.message, /merged OK\.[^\n]*\n1 session item\(s\) were skipped/);
   // D4 (r2-editors-exports): KiCad's "Fix problem and try again" over the error.
   assert.deepEqual(describeImport({ ok: false, message: "Session file uses invalid layer id 'In3.Cu'." }), { message: "Fix problem and try again\nSession file uses invalid layer id 'In3.Cu'.", kind: "error" });
 });

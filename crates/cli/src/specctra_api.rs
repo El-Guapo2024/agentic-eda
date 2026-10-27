@@ -3,8 +3,9 @@
 //!
 //! The DSN is kicad-cli's (`kicad-cli pcb export specctra`, docs/ARCHITECTURE.md, "Engines") when the kicad-cli found has that command, which this process asks
 //! it once (`eda_kicad_engine::cli_has_export`); a kicad-cli without it (10.99.0-5334 and older) gets the board exported by our own port of `FromBOARD`
-//! (`eda_kicad::specctra::export_dsn`), a fallback kept until every machine has a kicad-cli with the command, then deleted. The session import is ours either
-//! way (`eda_ops::Cmd::Specctra`): kicad-cli has no command for it.
+//! (`eda_kicad::specctra::export_dsn`), a fallback kept until every machine has a kicad-cli with the command. The session import (`eda_ops::Cmd::Specctra`) is
+//! KiCad's own where kicad-cli has `api-server` ([`kicad_session_importer`]: `ImportSpecctraSession` on a server kept up by `eda_kicad_engine::api`), else our port
+//! of `FromSESSION` (`eda_kicad::specctra::session`, INACTIVE but as that fallback); `EDA_KICAD_API=0` forces the fallback.
 //!
 //! The export is a read of the board: it writes `export/specctra/<board>.dsn` beside the other outputs and hands the text to the page, which saves it as a download;
 //! the reply says which engine wrote it. The import is a command (one undo step); a browser gives the page the session file's text and not its path, so the text
@@ -112,4 +113,50 @@ pub fn import_cmd(file: &Path) -> Result<eda_ops::Cmd, Vec<eda_model::CheckResul
     let session = std::fs::read_to_string(file).map_err(|e| vec![eda_model::CheckResult::fail("specctra.read", &file.display().to_string(), format!("cannot read {}: {e}", file.display()))])?;
     let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("session.ses").to_string();
     Ok(eda_ops::Cmd::Specctra { session, name })
+}
+
+/// KiCad's warning of the last session import that skipped items, until the studio's `/api/cmd` takes it for its reply ([`take_session_warning`]).
+static SESSION_WARNING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The warning of the session import just applied, if KiCad skipped items of it (taken: the next import starts without one).
+pub(crate) fn take_session_warning() -> Option<String> {
+    SESSION_WARNING.lock().ok().and_then(|mut w| w.take())
+}
+
+/// Set to anything, `kicad_session_importer` reports which engine read each session on stderr (`eda board import-ses` prints it; the tests read it).
+pub(crate) const SAY_ENGINE_ENV: &str = "EDA_SAY_SESSION_ENGINE";
+
+/// The importer `Cmd::Specctra` asks first (`eda_ops::set_session_importer`, set in `main`): KiCad's `ImportSpecctraSession` through the api-server lane. `None`
+/// sends the command to our own port: the lane is closed (no `api-server` in this kicad-cli, `EDA_KICAD_API=0`), the server lacks the command (before KiCad
+/// 11.0), or it failed twice under the request. A session KiCad refuses is refused in its words. What KiCad skipped (a part of another board's session) and its
+/// report go to stderr.
+pub(crate) fn kicad_session_importer(text: &str, source: &str, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Option<Result<eda_kicad::specctra::session::SessionImport, String>> {
+    let say = std::env::var_os(SAY_ENGINE_ENV).is_some();
+    match eda_kicad_engine::api::specctra::import_session(text, source, design, model) {
+        Ok(r) => {
+            if r.skipped > 0 {
+                // KiCad's warning (`SPECCTRA_DB::FromSESSION`: "%d session item(s) were skipped due to unresolved reference, layer, or padstack."), for the
+                // CLI's log and the studio's reply (`take_session_warning`).
+                let words = if r.report.trim().is_empty() { format!("{} session item(s) were skipped due to unresolved reference, layer, or padstack.", r.skipped) } else { r.report.trim().to_string() };
+                eprintln!("{words}");
+                if let Ok(mut w) = SESSION_WARNING.lock() {
+                    *w = Some(words);
+                }
+            }
+            if say {
+                eprintln!("session engine: kicad-cli api-server {}", r.engine);
+            }
+            Some(Ok(r.import))
+        }
+        Err(e) if e.falls_back() => {
+            if say {
+                eprintln!("session engine: eda ({e})");
+            }
+            None
+        }
+        Err(e) => Some(Err(match &e {
+            eda_kicad_engine::api::ApiError::Status { message, .. } if !message.is_empty() => message.clone(),
+            _ => e.to_string(),
+        })),
+    }
 }

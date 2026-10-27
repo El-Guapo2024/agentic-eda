@@ -3,8 +3,9 @@
 //! with its routing taken away, as one undo step. The slow tier (`EDA_SLOW_TESTS=1`, kicad-cli) holds the board that comes back to kicad-cli's DRC: no violation it did
 //! not have before.
 //!
-//! The DSN is kicad-cli's where kicad-cli has `pcb export specctra`, else our own exporter's (`specctra_api::engine`). The fast tier forces the fallback
-//! (`EDA_KICAD_CLI_NO_SPECCTRA`), so it runs without kicad-cli and holds our exporter; the slow tier exports through kicad-cli.
+//! The DSN is kicad-cli's where kicad-cli has `pcb export specctra`, else our own exporter's (`specctra_api::engine`); the session import is KiCad's own through
+//! `kicad-cli api-server` where kicad-cli has it, else our port. The fast tier forces both fallbacks (`EDA_KICAD_CLI_NO_SPECCTRA`, `EDA_KICAD_API=0`), so it runs
+//! without kicad-cli and holds our exporter and importer; the slow tier exports and imports through kicad-cli.
 //!
 //! The board is `examples/opamp_filter.yaml` placed and routed by `eda pipeline`, in a folder made by `eda board new` (the examples are never written to).
 
@@ -19,9 +20,10 @@ fn eda_with(args: &[&str], fallback: bool) -> (bool, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_eda"));
     cmd.args(args);
     if fallback {
-        cmd.env(NO_CLI, "1");
+        // Our own exporter, and our own session import (no kicad-cli api-server): what a machine without them gets.
+        cmd.env(NO_CLI, "1").env("EDA_KICAD_API", "0");
     } else {
-        cmd.env_remove(NO_CLI);
+        cmd.env_remove(NO_CLI).env_remove("EDA_KICAD_API");
     }
     let out = cmd.output().expect("run eda");
     (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
@@ -105,7 +107,7 @@ fn round_trip(tag: &str, fallback: bool) -> (PathBuf, PathBuf, Value) {
     stripped["routing"]["tracks"] = Value::Array(vec![]);
     stripped["routing"]["vias"] = Value::Array(vec![]);
     std::fs::write(b.join("design.json"), serde_json::to_string_pretty(&stripped).unwrap()).unwrap();
-    let log = ok(&["board", "import-ses", ses.to_str().unwrap(), "-C", b.to_str().unwrap()]);
+    let log = ok_with(&["board", "import-ses", ses.to_str().unwrap(), "-C", b.to_str().unwrap()], fallback);
     assert!(log.contains("Session file imported and merged OK."), "{log}");
     let after = design(&b);
     assert_eq!(counts(&after), (segments, vias), "a track of each segment of the session's paths, and its vias");
@@ -127,7 +129,8 @@ fn a_routed_board_comes_back_from_the_session_of_its_own_dsn_in_one_undo_step() 
     let bad = b.parent().unwrap().join("bad.ses");
     std::fs::write(&bad, other).unwrap();
     let before = std::fs::read_to_string(b.join("design.json")).unwrap();
-    let (good, log) = eda(&["board", "import-ses", bad.to_str().unwrap(), "-C", b.to_str().unwrap()]);
+    // (Our port of 8303b2ad's `FromSESSION`; KiCad 25ec2335's, through kicad-cli api-server, skips the part instead: tests/specctra_api_server.rs.)
+    let (good, log) = eda_with(&["board", "import-ses", bad.to_str().unwrap(), "-C", b.to_str().unwrap()], true);
     assert!(!good && log.contains("Reference 'NOPE_"), "{log}");
     assert_eq!(std::fs::read_to_string(b.join("design.json")).unwrap(), before);
     let _ = std::fs::remove_dir_all(b.parent().unwrap());
