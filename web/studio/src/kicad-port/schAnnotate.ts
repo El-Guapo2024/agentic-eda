@@ -68,10 +68,11 @@ export interface AnnotateSelection {
   sheets: readonly string[];
 }
 
-/** The scope the dialog starts in when it is opened with something selected: the choice it had, but the selection when that is what is there. */
-export function scopeOnOpen(remembered: AnnotateScopeId, selection: AnnotateSelection): AnnotateScopeId {
-  const hasSelection = selection.symbols.length > 0 || selection.sheets.length > 0;
-  if (remembered === "selection" && !hasSelection) return "all";
+/**
+ * The scope the dialog starts in: `DIALOG_ANNOTATE::TransferDataToWindow` restores `m_AnnotatePanel.scope` as it was, whatever is selected (r2 D-A4). A
+ * Selection scope with nothing selected annotates nothing (`getInferredSymbols` finds no symbol).
+ */
+export function scopeOnOpen(remembered: AnnotateScopeId, _selection: AnnotateSelection): AnnotateScopeId {
   return remembered;
 }
 

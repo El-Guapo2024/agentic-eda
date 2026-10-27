@@ -43,8 +43,8 @@ test("the start number is read as a whole number, never below zero", () => {
   assert.equal(startNumber(""), 0);
 });
 
-test("a remembered selection scope falls back to the whole schematic when nothing is selected", () => {
-  assert.equal(scopeOnOpen("selection", none), "all");
+test("r2 D-A4: the dialog opens on the remembered scope as it was, Selection too when nothing is selected (TransferDataToWindow)", () => {
+  assert.equal(scopeOnOpen("selection", none), "selection");
   assert.equal(scopeOnOpen("selection", { symbols: ["R1"], sheets: [] }), "selection");
   assert.equal(scopeOnOpen("current_sheet", none), "current_sheet");
 });

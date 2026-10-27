@@ -26,7 +26,6 @@ export function AnnotateDialog() {
   const open = state.annotateDialogOpen;
 
   const selection: AnnotateSelection = annotateSelectionOf(state.schematic, [...state.selection], (id) => !!api.symbolById(id));
-  const hasSelection = selection.symbols.length > 0 || selection.sheets.length > 0;
 
   const [settings, setSettings] = useState<AnnotateSettings>(rememberedAnnotateSettings);
   const [messages, setMessages] = useState<AnnotateMessage[]>([]);
@@ -68,9 +67,11 @@ export function AnnotateDialog() {
     }
   };
 
-  const scopeRadio = (id: AnnotateSettings["scope"], label: string, enabled = true) => (
-    <label style={{ display: "block", opacity: enabled ? 1 : 0.5 }}>
-      <input type="radio" name="annotate-scope" checked={settings.scope === id} disabled={!enabled} onChange={() => update({ scope: id })} /> {label}
+  // r2 D-A4: `dialog_annotate_base.cpp` labels the radios plainly and only "Regroup symbol units" is ever disabled (`OnOptionChanged`:
+  // `m_checkRegroupUnits->Enable( m_rbReset_Annotations->GetValue() )`); the scope radios, "Recurse into subsheets" and the start number stay enabled.
+  const scopeRadio = (id: AnnotateSettings["scope"], label: string) => (
+    <label style={{ display: "block" }}>
+      <input type="radio" name="annotate-scope" checked={settings.scope === id} onChange={() => update({ scope: id })} /> {label}
     </label>
   );
 
@@ -86,9 +87,9 @@ export function AnnotateDialog() {
               <legend>Scope</legend>
               {scopeRadio("all", "Entire schematic")}
               {scopeRadio("current_sheet", "Current sheet only")}
-              {scopeRadio("selection", `Selection${hasSelection ? ` (${selection.symbols.length} symbol${selection.symbols.length === 1 ? "" : "s"}${selection.sheets.length > 0 ? `, ${selection.sheets.length} sheet${selection.sheets.length === 1 ? "" : "s"}` : ""})` : ""}`, hasSelection)}
-              <label style={{ display: "block", marginLeft: 18, opacity: settings.scope === "all" ? 0.5 : 1 }}>
-                <input type="checkbox" checked={settings.recursive} disabled={settings.scope === "all"} onChange={(e) => update({ recursive: e.target.checked })} /> Recurse into subsheets
+              {scopeRadio("selection", "Selection")}
+              <label style={{ display: "block", marginLeft: 18 }}>
+                <input type="checkbox" checked={settings.recursive} onChange={(e) => update({ recursive: e.target.checked })} /> Recurse into subsheets
               </label>
             </fieldset>
             <fieldset>
@@ -116,7 +117,7 @@ export function AnnotateDialog() {
               <legend>Numbering</legend>
               <label style={{ display: "block" }}>
                 <input type="radio" name="annotate-algo" checked={settings.algo === "first_free"} onChange={() => update({ algo: "first_free" })} /> Use first free number after:{" "}
-                <input style={{ width: 56 }} value={settings.start} disabled={settings.algo !== "first_free"} onChange={(e) => update({ start: e.target.value })} />
+                <input style={{ width: 56 }} value={settings.start} onChange={(e) => update({ start: e.target.value })} />
               </label>
               <label style={{ display: "block" }}>
                 <input type="radio" name="annotate-algo" checked={settings.algo === "sheet_x100"} onChange={() => update({ algo: "sheet_x100" })} /> First free after sheet number X 100
