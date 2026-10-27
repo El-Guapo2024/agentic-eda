@@ -582,3 +582,28 @@ fn a_legacy_user_field_is_where_kicad_reads_it() {
     assert!(!line("0805").contains("mirror"), "{}", line("0805"));
     assert!(line("0603").contains("(at 320.65 214.15 0) (layer \"B.Fab\")") && line("0603").contains("mirror"), "{}", line("0603"));
 }
+
+/// r3 F9: a teardrop read from a file keeps its border style (`parseZONE` reads `(hatch full ..)` into it; only the teardrops KiCad makes get `INVISIBLE_BORDER`).
+#[test]
+fn a_files_teardrop_keeps_its_border_style() {
+    let text = board(
+        r#" (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "44444444-4444-4444-4444-444444444444") (name "$teardrop_padvia$") (hatch full 0.1) (priority 30000)
+  (attr (teardrop (type padvia))) (connect_pads yes (clearance 0)) (min_thickness 0.0254) (filled_areas_thickness no)
+  (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5) (island_removal_mode 1))
+  (polygon (pts (xy 100 100) (xy 101 100) (xy 101 101))))"#,
+    );
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    assert!(design.routing.as_ref().unwrap().zones[0].teardrop, "read as a teardrop");
+    let out = export(&design, &model);
+    assert!(blocks(&out, "zone")[0].contains("(hatch full "), "{out}");
+}
+
+/// r3 F12: a footprint whose file names a `(sheetfile)` and no `(sheetname)` gets one `(sheetfile ..)`, the file's.
+#[test]
+fn a_footprint_has_one_sheetfile() {
+    let text = board(&format!("{FP_HEAD}  (sheetfile \"A05-attenuator.kicad_sch\")\n  (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\") (net 1 \"A\") (uuid \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1\")))"));
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    assert_eq!(out.matches("(sheetfile ").count(), 1, "{out}");
+    assert!(out.contains("(sheetfile \"A05-attenuator.kicad_sch\")"), "{out}");
+}

@@ -1194,9 +1194,13 @@ pub(crate) fn write_footprint(
     // matched by nothing, so it would add a second footprint for every symbol. A footprint read from a file keeps the sheet the file named.
     if let Some(link) = link {
         writeln!(out, "\t\t(path {})", sexpr_str(&link.path)).unwrap();
+        // Each of the two only when the file named none (a file that names a `(sheetfile)` and no `(sheetname)` had both written, and KiCad reads the last:
+        // r3-board-io F12, `issue11814`).
         if own_extra.is_none_or(|e| e.sheetname.as_deref().is_none_or(str::is_empty)) {
-            let file = if link.sheetfile.is_empty() { from_schematic.root_sheetfile.as_str() } else { link.sheetfile.as_str() };
             writeln!(out, "\t\t(sheetname {})", sexpr_str(&link.sheetname)).unwrap();
+        }
+        if own_extra.is_none_or(|e| e.sheetfile.as_deref().is_none_or(str::is_empty)) {
+            let file = if link.sheetfile.is_empty() { from_schematic.root_sheetfile.as_str() } else { link.sheetfile.as_str() };
             if !file.is_empty() {
                 writeln!(out, "\t\t(sheetfile {})", sexpr_str(file)).unwrap();
             }

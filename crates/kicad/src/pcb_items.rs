@@ -97,8 +97,9 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     if !z.name.is_empty() && !z.teardrop {
         writeln!(out, "\t\t(name {})", sexpr_str(&z.name)).unwrap();
     }
-    // `INVISIBLE_BORDER` (a teardrop's) is written as `none`, like `NO_HATCH`.
-    let hatch = if z.teardrop {
+    // `INVISIBLE_BORDER` (what `TEARDROP_MANAGER::createTeardrop` gives the teardrops it makes) is written as `none`, like `NO_HATCH`. A teardrop read from a file
+    // (it has the file's uuid) keeps the style the file gave it, as `parseZONE` keeps a `(hatch full|edge ..)` (r3-board-io F9: `issue11814`'s 547 `full` ones).
+    let hatch = if z.teardrop && z.uuid.is_empty() {
         "none"
     } else {
         match z.border_style {
