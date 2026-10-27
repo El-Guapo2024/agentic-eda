@@ -559,6 +559,7 @@ mod tests {
         let pads: Vec<(i64, i64, i64, i64)> = p["pads"].as_array().unwrap().iter().map(|q| (q["x"].as_i64().unwrap(), q["y"].as_i64().unwrap(), q["w"].as_i64().unwrap(), q["h"].as_i64().unwrap())).collect();
         assert_eq!(pads, [(-1_000_000, 0, 800_000, 600_000), (1_000_000, 0, 800_000, 600_000)], "in the footprint's own frame");
         assert_eq!(p["graphics"].as_array().unwrap().len(), 1);
-        assert_eq!(p["courtyard"], json!([-2_400_000, -1_000_000, 2_400_000, 1_000_000]));
+        // grown by half KiCad's 0.05 mm courtyard line (`PCB_SHAPE::GetBoundingBox`)
+        assert_eq!(p["courtyard"], json!([-2_425_000, -1_025_000, 2_425_000, 1_025_000]));
     }
 }

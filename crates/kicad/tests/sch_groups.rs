@@ -201,7 +201,7 @@ fn groups_read_back_with_the_same_names_and_members() {
 }
 
 #[test]
-fn a_member_the_file_does_not_have_leaves_the_group_and_a_group_of_one_dissolves() {
+fn a_member_the_file_does_not_have_leaves_the_group_and_a_group_of_one_stays() {
     let m = model();
     let file = export_kicad_sch(&design_with(grouped(&m)), &m, &META).unwrap();
     // a member uuid that no item has
@@ -211,10 +211,10 @@ fn a_member_the_file_does_not_have_leaves_the_group_and_a_group_of_one_dissolves
     let (design, _, _) = import_kicad_sch(&broken).unwrap();
     let g = design.schematic.unwrap().extras.groups.into_iter().find(|g| g.name == "the rest").expect("two members are left");
     assert_eq!(g.member_ids.len(), 2);
-    // ... two unknown ones leave one: no group
+    // ... two unknown ones leave one: still a group (`SCH_IO_KICAD_SEXPR_PARSER::resolveGroups` makes every group it reads; r2-pcb-edit A1)
     let broken = broken.replacen(&rest.2[1], "00000000-0000-4000-8000-000000000001", 1);
     let (design, _, _) = import_kicad_sch(&broken).unwrap();
-    assert!(!design.schematic.unwrap().extras.groups.iter().any(|g| g.name == "the rest"));
+    assert_eq!(design.schematic.unwrap().extras.groups.iter().find(|g| g.name == "the rest").map(|g| g.member_ids.len()), Some(1));
 }
 
 #[test]
