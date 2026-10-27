@@ -154,8 +154,25 @@ test("pad values: sizes and holes are refused with the dialog's words; a hole at
   assert.equal(checkPadValues({ kind: "smd", shape: "rect", size: [600, 400], drill: null }, fmt), null, "an SMD pad has no hole");
   assert.deepEqual(padCheck({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [900, 1000] }, fmt).warnings, ["Warning: (PTH pad hole not fully inside copper)"]);
   assert.deepEqual(padCheck({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [1600, 1000] }, fmt).warnings, ["Warning: (PTH pad hole leaves no copper)"]);
-  assert.equal(checkPadValues({ ...ok, drill: 3 }, fmt), "Error: (PTH pad hole size must be larger than 0.004 mm)");
+  // `StringFromValue( 4, true )`: 4 nm (round 3 C-4)
+  assert.equal(padCheck({ ...ok, drill: 3 }, fmt, "mm").errors[0], "Error: (PTH pad hole size must be larger than 0.000004 mm)");
   assert.equal(checkPadValues({ kind: "smd", shape: "round_rect", size: [600, 400], ratio: 0.7 }, fmt), null, "KiCad has no message for the ratios: the dialog clamps them");
+});
+
+test("pad values: doCheckPad's clearance, mask, paste and NPTH warnings; the hole is at the pad's position, the copper at its offset (round 3 C-4)", () => {
+  const fmt = (nm: number) => `${nm / 1e6} mm`;
+  const smd = { kind: "smd", shape: "rect", size: [1_000_000, 1_000_000] as [number, number] };
+  assert.deepEqual(padCheck({ ...smd, maskMargin: -2_000_000 }, fmt).warnings, ["Warning: (negative solder mask clearance is larger than pad; no solder mask will be generated)"]);
+  assert.deepEqual(padCheck({ ...smd, maskMargin: -500_000 }, fmt).warnings, []);
+  assert.deepEqual(padCheck({ ...smd, clearance: -100_000 }, fmt).warnings, ["Warning: (negative local clearance values have no effect)"]);
+  assert.deepEqual(padCheck({ ...smd, pasteMargin: -600_000, pasteRatio: -0.5 }, fmt).warnings, ["Warning: (negative solder paste margin is larger than pad; no solder paste mask will be generated)"]);
+  const npth = { kind: "non_plated_hole", shape: "circle", size: [2_000_000, 2_000_000] as [number, number], drill: 1_000_000 };
+  assert.deepEqual(padCheck({ ...npth, offset: [1_500_000, 0] }, fmt).warnings, ["Warning: (pad hole not inside pad shape)"]);
+  assert.deepEqual(padCheck(npth, fmt).warnings, []);
+  // a PTH hole that fits a centred pad pokes out of one moved aside
+  const pth = { kind: "through_hole", shape: "circle", size: [2_000_000, 2_000_000] as [number, number], drill: 1_000_000 };
+  assert.deepEqual(padCheck(pth, fmt).warnings, []);
+  assert.deepEqual(padCheck({ ...pth, offset: [800_000, 0] }, fmt).warnings, ["Warning: (PTH pad hole not fully inside copper)"]);
 });
 
 test("a field follows the Appearance panel's Objects rows: References for the Reference, Values for the Value, Footprint Text for all, the footprint's side for the lot", () => {
