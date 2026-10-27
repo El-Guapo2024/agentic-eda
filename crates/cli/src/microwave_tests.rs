@@ -53,8 +53,8 @@ fn a_gap_is_a_part_of_the_board_with_its_own_pads_and_one_undo_step() {
     let part = model.part("REF1").expect("the gap is a part of the model now");
     assert_eq!((part.footprint.as_deref(), part.value.as_deref()), (Some("muwave_gap"), Some("muwave_gap")));
     let fp = model.footprint_of(part).expect("its pads come from its own definition");
-    assert_eq!(fp.pads.iter().map(|p| (p.number.as_str(), p.at, p.size)).collect::<Vec<_>>(), [("1", (Nm::new(-375_000), Nm::ZERO), (mm(0.25), mm(0.25))), ("2", (Nm::new(375_000), Nm::ZERO), (mm(0.25), mm(0.25)))]);
-    assert_eq!(part.pins.iter().map(|p| p.number.as_str()).collect::<Vec<_>>(), ["1", "2"], "a pin for each pad");
+    assert_eq!(fp.pads.iter().map(|p| (p.number.as_str(), p.at, p.size)).collect::<Vec<_>>(), [("2", (Nm::new(-375_000), Nm::ZERO), (mm(0.25), mm(0.25))), ("1", (Nm::new(375_000), Nm::ZERO), (mm(0.25), mm(0.25)))], "pad 2 first, on the left (`ADD_MODE::INSERT`)");
+    assert_eq!(part.pins.iter().map(|p| p.number.as_str()).collect::<Vec<_>>(), ["2", "1"], "a pin for each pad, in the pads' order");
     let pose = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "REF1").unwrap();
     assert_eq!((pose.at, pose.rot), (p(mm(10.0), mm(12.0)), 0));
 
@@ -109,8 +109,8 @@ fn the_derived_board_writes_a_gap_as_kicads_tool_leaves_it() {
     assert!(block.contains("(property \"Value\" \"muwave_gap\" (at 0 1 0) (layer \"F.Fab\")"), "{block}");
     assert!(block.contains("(attr exclude_from_pos_files exclude_from_bom)"), "neither smd nor through_hole: {block}");
     assert!(block.contains("(fp_text user \"${REFERENCE}\" (at 0 2.5 0) (layer \"F.Fab\")"), "{block}");
-    assert!(block.contains("(pad \"1\" smd rect (at -0.375 0 0) (size 0.25 0.25) (layers \"F.Cu\")"), "copper only: {block}");
-    assert!(block.contains("(pad \"2\" smd rect (at 0.375 0 0) (size 0.25 0.25) (layers \"F.Cu\")"), "{block}");
+    assert!(block.contains("(pad \"2\" smd rect (at -0.375 0 0) (size 0.25 0.25) (layers \"F.Cu\")"), "copper only: {block}");
+    assert!(block.contains("(pad \"1\" smd rect (at 0.375 0 0) (size 0.25 0.25) (layers \"F.Cu\")"), "{block}");
     assert!(!block.contains("CrtYd") && !block.contains("F.Paste") && !block.contains("F.Mask"), "no courtyard, no paste, no mask opening: {block}");
 }
 
@@ -128,7 +128,7 @@ fn a_duplicate_of_a_microwave_footprint_is_copper_only_with_no_courtyard_too() {
     assert_eq!((b.no_courtyard, b.pads.clone(), b.unlinked_name.clone(), b.uuid.clone()), (a.no_courtyard, a.pads.clone(), a.unlinked_name.clone(), None));
     let pcb = derived_board(&dir);
     let copy = footprint_block(&pcb, "REF2");
-    assert!(copy.starts_with("\t(footprint \"muwave_gap\"\n") && copy.contains("(pad \"1\" smd rect (at -0.375 0 0) (size 0.25 0.25) (layers \"F.Cu\")"), "{copy}");
+    assert!(copy.starts_with("\t(footprint \"muwave_gap\"\n") && copy.contains("(pad \"2\" smd rect (at -0.375 0 0) (size 0.25 0.25) (layers \"F.Cu\")"), "{copy}");
     assert!(!copy.contains("CrtYd") && !copy.contains("F.Paste") && !copy.contains("F.Mask"), "{copy}");
 }
 
@@ -146,7 +146,7 @@ fn the_derived_board_writes_the_arc_stub_the_polygon_and_the_inductor() {
     let poly = footprint_block(&pcb, "REF2");
     assert!(poly.starts_with("\t(footprint \"muwave_polygon\"\n"), "{poly}");
     assert!(poly.contains("(fp_poly (pts (xy -3 0) (xy -3 -0.75)") && poly.contains("(stroke (width 0) (type solid)) (fill yes) (layer \"F.Cu\")"), "{poly}");
-    assert!(poly.contains("(pad \"1\" smd rect (at -3 0 0)") && poly.contains("(pad \"2\" smd rect (at 3 0 0)"), "{poly}");
+    assert!(poly.contains("(pad \"2\" smd rect (at -3 0 0)") && poly.contains("(pad \"1\" smd rect (at 3 0 0)"), "{poly}");
     let coil = footprint_block(&pcb, "REF3");
     assert!(coil.starts_with("\t(footprint \"mw_inductor\"\n") && coil.contains("(property \"Value\" \"L7\""), "{coil}");
     assert!(coil.contains("(at 17 16 0)"), "anchored at the end point: {coil}");
