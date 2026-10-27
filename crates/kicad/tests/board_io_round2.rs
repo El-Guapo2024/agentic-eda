@@ -453,3 +453,21 @@ fn vias_at_one_point_get_distinct_uuids() {
     let groups = &again.drawings.as_ref().expect("drawings").groups;
     assert_eq!(groups.iter().find(|g| g.name == "G").map(|g| g.member_ids.len()), Some(3), "{groups:?}");
 }
+
+/// r3 F4: the bare `locked` a file before 20221130 writes after a group's name (8303b2ad `reverse_via`: `(group "" locked (id ..) (members ..))`) is the group's lock,
+/// as `parseGROUP` reads it; a group named "locked" is not locked.
+#[test]
+fn a_legacy_group_lock_is_read() {
+    let text = board(
+        r#" (gr_line (start 100 100) (end 110 100) (stroke (width 0.1) (type solid)) (layer "F.SilkS") (uuid "c0000000-0000-0000-0000-000000000001"))
+ (gr_line (start 100 110) (end 110 110) (stroke (width 0.1) (type solid)) (layer "F.SilkS") (uuid "c0000000-0000-0000-0000-000000000002"))
+ (group "" locked (id "b0000000-0000-0000-0000-000000000001") (members "c0000000-0000-0000-0000-000000000001"))
+ (group "locked" (id "b0000000-0000-0000-0000-000000000002") (members "c0000000-0000-0000-0000-000000000002"))"#,
+    );
+    let (design, _, _) = import_kicad_pcb(&text).expect("parses");
+    let d = design.drawings.as_ref().expect("drawings");
+    assert_eq!(d.groups.len(), 2, "{:?}", d.groups);
+    let id_of = |name: &str| d.groups.iter().find(|g| g.name == name).unwrap().id.clone();
+    assert!(d.locked_ids.contains(&id_of("")), "{:?}", d.locked_ids);
+    assert!(!d.locked_ids.contains(&id_of("locked")), "{:?}", d.locked_ids);
+}
