@@ -2582,7 +2582,10 @@ export interface BusEntry {
 export interface SchematicLabel {
   /** Stable id (`lbl_xxxxxxxxxxxx`) -- for `delete_label`. */
   id: string;
+  /** The label's text. */
   net: string;
+  /** The net the label is on as the tracer names it (`/sub/X`, `A_EN`), the wire's under it; absent or null for a label on no wire (r3 A3-M4). */
+  net_name?: string | null;
   at: [Nm, Nm];
   scope: LabelScope;
   shape: LabelShape | null;

@@ -1911,7 +1911,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_nm": 1_270_000 })
                 })
                 .collect();
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
+            // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)
+            let traced = sch.wires.iter().find(|w| !w.net.is_empty() && w.pts.windows(2).any(|s| point_on_segment(s[0], s[1], l.at))).map(|w| w.net.clone());
+            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -2519,6 +2521,12 @@ fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         })
         .collect();
     Ok(json!({ "edges": edges }))
+}
+
+/// `p` on the segment `a`-`b`, its ends included (`SCH_LINE::HitTest( p, 0 )`).
+fn point_on_segment(a: eda_model::ir::Point, b: eda_model::ir::Point, p: eda_model::ir::Point) -> bool {
+    let (ax, ay, bx, by, px, py) = (a.x.get() as i128, a.y.get() as i128, b.x.get() as i128, b.y.get() as i128, p.x.get() as i128, p.y.get() as i128);
+    (bx - ax) * (py - ay) == (by - ay) * (px - ax) && ax.min(bx) <= px && px <= ax.max(bx) && ay.min(by) <= py && py <= ay.max(by)
 }
 
 /// The name a local or global label put down on `w` takes (`SCH_DRAWING_TOOLS::createNewLabel`: `if( SCH_LINE* wire = findWire( aPosition ) ) netName =

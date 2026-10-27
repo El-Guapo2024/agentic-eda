@@ -14,7 +14,7 @@ import type { Cmd } from "../api/types";
 import { fetchHierarchy } from "../api/schControlClient";
 import { neighbourSheet, samePath } from "../kicad-port/sheetPages";
 import { ATTRIBUTE_ACTIONS, attributeChecked, hitSheet, INCREMENT_PARAMS, nearestTextItem, nextAttributeState, planIncrement, type IncrementTarget, type SymbolAttrKey } from "../kicad-port/schControl";
-import { netAtPoint } from "../kicad-port/schNetAtPoint";
+import { labelNet, netAtPoint } from "../kicad-port/schNetAtPoint";
 import { pinDistance, pinItems } from "../kicad-port/schPins";
 import { measureStrokeText } from "../components/text/strokeFont";
 import { copySheetImage, exportSymbolSvg, saveSheetCopy } from "./schControlExports";
@@ -321,7 +321,7 @@ function incrementTargets(ctx: SchControlContext): IncrementTarget[] {
 export function netAtClick(sch: NonNullable<StudioState["schematic"]>, x: number, y: number, scale: number, gridNm = 1_270_000): string | null {
   return netAtPoint(
     sch.wires,
-    [...sch.labels.map((l) => ({ net: l.net, at: l.at })), ...sch.power_symbols.map((p) => ({ net: p.net, at: p.at }))],
+    [...sch.labels.map((l) => ({ net: labelNet(l), at: l.at })), ...sch.power_symbols.map((p) => ({ net: p.net, at: p.at }))],
     x,
     y,
     // `GetNode`: the larger of five pixels and the length of the grid's diagonal (`GetGridSize().EuclideanNorm()`), tried from nothing up (kicad-port/schNetAtPoint.ts)
