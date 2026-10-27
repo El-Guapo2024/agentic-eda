@@ -678,6 +678,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Missing: raytracing (out of scope); layer presets and viewports of the 3D viewer; the PCB editor's selection drawn green in the 3D view; the 3D Navigator; the Value and user fields (a footprint's own texts and the Reference are drawn since P1), off-board silkscreen;
   the PCB editor's per-layer copper colours on inner layers; X3D and IGES models; per-layer ambient and specular colours of the board; the preferences that set the animation speed; NPTH holes are not cut out of the slab
   (`aIncludeNPTHAsOutlines`, item 27); the Extruded 3D Body of a footprint (item 30).
+- Round 4 (`task-r4-editors-exports`, V4-1, V4-2): the wheel is `OnMouseWheelCamera` with KiCad's default `aPan = false` (Shift pans along y, Ctrl along x, Alt and no modifier zoom; a fixed `0.7 * zoom` step), and the slab, copper and mask
+  thicknesses and the models' mounting height come from the stackup (`BOARD_ADAPTER::InitSettings`, `GetFootprintZPos`; KiCad's default stackup when the board has none). Left: both masks are taken as enabled; the silkscreen keeps its own offset.
 
 ### 24. Item kinds the IR does not have
 **Done in part (2026-10-21, `task-pcb-items`, package P16i, not merged yet): the board's text box, reference image, points, hatch fills and barcodes and the schematic's image are real items (tables are P16t's, on main, below); what is left is listed after.**
@@ -990,6 +992,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Left: the judge's rubric is `judge-rubric-2` and has not been re-baselined on the bench boards' verdicts (the audit's golden check: no
   `ANTHROPIC_API_KEY` on the box); a schematic picture is the whole page KiCad plots, so a small sheet is small in it (the old picture was
   cropped to the content); lint's `schematic_content_in_bounds` now measures against the paper (the page kicad-cli plots), not a cropped viewBox.
+- Round 4 (`task-r4-editors-exports`, X4-1): the board PNG is painted back to front. kicad-cli plots the `--layers` entry first (`PCB_PLOTTER::getPlotSequence`), so the base is Edge.Cuts and F.Cu comes after
+  B.Cu in `--common-layers` (it was F.Cu, painted under the back copper, the back silkscreen and the courtyards); proved by `pictures.rs::the_board_png_has_the_front_copper_on_top`.
 
 ## Appendix A. The original 30, one verdict each
 
