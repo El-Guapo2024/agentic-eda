@@ -109,7 +109,7 @@ import { registerAppearanceActions } from "./appearanceActions";
 import { nextContrastMode } from "../kicad-port/appearance";
 import { registerPcbFindActions } from "./pcbFindActions";
 import { registerPcbEditDetailsActions } from "./pcbEditDetailsActions";
-import { modificationSnapFor } from "../state/modificationSnap";
+import { dragOriginFor, modificationSnapFor } from "../state/modificationSnap";
 import { toggledUnits } from "../kicad-port/unitToggle";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
@@ -276,17 +276,21 @@ export function useActionRunner() {
       const rotateQuarterTurns = addQuarterTurns ? wrapTurns((base.rotateQuarterTurns ?? 0) + press, state.prefs.rotationStepDeg) : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
       // A PCB carry keeps the presses in order, each about the point KiCad's acts about at that moment (`carryPress`: a turn about the grab point, a flip
-      // about it for a lone item or about the box of the items as they are now), so F then R turns the way KiCad's does. Before the pointer has moved the
-      // grab point is not known yet: the selection's own reference point stands in.
+      // about it for a lone item or about the box of the items as they are now), so F then R turns the way KiCad's does. Before the pointer has moved, the
+      // grab point is where M was pressed made the drag origin (`doMoveSelection`'s first event is the move itself: `BestDragOrigin( originalMousePos, .. )`).
       let ops = base.ops;
+      let grabNm = base.grabNm;
+      if (kind === "pcb" && state.board && !grabNm && state.moveOriginNm && state.activeTool === "move") {
+        grabNm = dragOriginFor(state, base.refs, [state.moveOriginNm.x, state.moveOriginNm.y]);
+      }
       if (kind === "pcb" && state.board) {
-        const grab = base.grabNm ?? base.pivotNm ?? rotationPivot(state.board, base.refs, modificationSnapFor(state));
+        const grab = grabNm ?? base.pivotNm ?? rotationPivot(state.board, base.refs, modificationSnapFor(state));
         if (grab) {
           const op = carryPress(state.board, base.refs, base.ops ?? [], toggleFlip ? { flip: state.prefs.flipDirection } : { turnDegCcw: press * state.prefs.rotationStepDeg }, grab);
           if (op) ops = [...(base.ops ?? []), op];
         }
       }
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped, ops } });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped, ops, ...(grabNm ? { grabNm } : {}) } });
       return true;
     };
 
