@@ -1839,7 +1839,7 @@ export type Cmd =
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_nm: Nm }
   | { op: "delete_sch_text"; id: string }
-  | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
+  | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string; annotate?: AnnotateOptions }
   | { op: "delete_power_symbol"; id: string }
   // `unit`: which unit of a multi-unit symbol this placement is (omit for
   // 1, a single-unit part). Only refused if `(id, unit)` already exists --
@@ -2736,6 +2736,9 @@ export interface Schematic {
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */
   sheet_path: SheetPathEntry[];
+  /** The page of the sheet in view as a number (`SCH_SHEET_PATH::GetPageNumberAsInt`: the page when it is a number, else its place in the walk), which
+   *  the "sheet number x 100 / x 1000" numbering of a placed symbol counts from; absent from an older backend (page 1). */
+  page_number?: number;
   /** The paper this sheet is drawn on; absent from a backend built before sheets chose their own. */
   paper?: SchematicPaper;
   /** The file of the screen shown (empty for the root sheet): the title block names it. The design's whole tree is `fetchHierarchy` (`GET /api/sch/hierarchy`). */

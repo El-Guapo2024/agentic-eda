@@ -1632,6 +1632,10 @@ fn a_sheets_file_shows_as_the_placing_file_names_it() {
     let sheet = json["sheets"].as_array().unwrap().iter().find(|s| s["id"] == filter.last().unwrap().as_str()).unwrap();
     let field = sheet["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Sheetfile").unwrap();
     assert_eq!(field["text"], "filter.kicad_sch", "{sheet}");
+    // the page of the sheet in view, which a placed symbol's "sheet number x 100" counts from (r3 D3-M3): the file's own page of the ampli_ht sheet
+    let entry = eda_model::sheet_list::walk(&design).into_iter().find(|e| e.path_text() == parent).unwrap();
+    assert!(entry.page_number_as_int() > 1);
+    assert_eq!(json["page_number"], entry.page_number_as_int());
     let (_, breadcrumb) = crate::studio::resolve_sheet(&design, &filter.join("/"));
     let project = crate::text_vars_json::project(&dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
     let shown = crate::text_vars_json::SchShown::new(&dir, &design, &model, &breadcrumb, project);

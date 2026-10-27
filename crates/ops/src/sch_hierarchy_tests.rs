@@ -681,7 +681,7 @@ fn a_placed_power_symbol_is_numbered_across_sheets_like_kicad() {
     d.schematic.as_mut().unwrap().power_symbols = vec![gnd("#PWR01"), gnd("#PWR03")];
     d.sheet_contents.as_mut().unwrap().get_mut("power.kicad_sch").unwrap().power_symbols = (4..=9).map(|n| gnd(&format!("#PWR0{n}"))).collect();
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let place = |b: &mut Board<'_>| b.apply(&on("sp", Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: pt(mm(50.0), mm(50.0)), rot_millideg: 0, net: "GND".into(), pin: String::new() })).unwrap();
+    let place = |b: &mut Board<'_>| b.apply(&on("sp", Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: pt(mm(50.0), mm(50.0)), rot_millideg: 0, net: "GND".into(), pin: String::new(), annotate: None })).unwrap();
     place(&mut b);
     place(&mut b);
     let ids: Vec<String> = b.design().sheet_contents.as_ref().unwrap()["power.kicad_sch"].power_symbols.iter().map(|p| p.id.clone()).collect();
@@ -738,4 +738,25 @@ fn a_deleted_sheet_leaves_no_fields_or_pages_behind() {
     b.apply(&Cmd::SchEdit(crate::sch_edit::SchCmd::DeleteSheet { id: "sp".into() })).unwrap();
     let extras = &b.design().schematic.as_ref().unwrap().extras;
     assert!(extras.sheet_fields.is_empty() && extras.sheet_pages.is_empty(), "{extras:?}");
+}
+
+/// r3 D3-M4, D3-M5: `PlaceSymbol` numbers a power symbol by its library prefix (a `PWR_FLAG` is `#FLG01`), from the project's method's first number:
+/// the start number + 1, or the page of the sheet in view x 100 (`ReannotateByOptions( .., &hierarchy )`: `SetSheetNumber( GetPageNumberAsInt() )`).
+#[test]
+fn a_placed_power_symbol_takes_its_prefix_and_the_annotate_method() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(power_design(), &m, mm(0.1), mm(0.3));
+    let place = |b: &mut Board<'_>, sheet: &str, lib_id: &str, annotate: Option<AnnotateOptions>| {
+        let cmd = Cmd::AddPowerSymbol { lib_id: lib_id.into(), at: pt(mm(50.0), mm(50.0)), rot_millideg: 0, net: lib_id.trim_start_matches("power:").into(), pin: String::new(), annotate };
+        b.apply(&if sheet.is_empty() { cmd } else { on(sheet, cmd) }).unwrap();
+    };
+    place(&mut b, "", "power:PWR_FLAG", None);
+    assert_eq!(b.design().schematic.as_ref().unwrap().power_symbols.last().unwrap().id, "#FLG01");
+    // the Power sheet is page 2 (its place in the walk): x 100 starts at 201
+    let x100 = AnnotateOptions { algo: eda_model::annotate::Algo::SheetX100, ..Default::default() };
+    place(&mut b, "sp", "power:GND", Some(x100));
+    assert_eq!(b.design().sheet_contents.as_ref().unwrap()["power.kicad_sch"].power_symbols.last().unwrap().id, "#PWR0201");
+    // "Use first free number after" 10
+    place(&mut b, "", "power:GND", Some(AnnotateOptions { start_number: 10, ..Default::default() }));
+    assert_eq!(b.design().schematic.as_ref().unwrap().power_symbols.last().unwrap().id, "#PWR011");
 }

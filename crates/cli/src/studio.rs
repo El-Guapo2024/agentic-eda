@@ -2015,6 +2015,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let page = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or(""));
     let (paper_w, paper_h) = page.size_nm().unwrap_or((mm(297.0), mm(210.0)));
     let file = viewed_file(design, &breadcrumb);
+    // the page of the sheet in view as a number (`GetPageNumberAsInt`), which a placed symbol's "sheet number x 100" numbering counts from (r3 D3-M3)
+    let page_number = eda_model::sheet_list::walk(design).iter().find(|e| e.path == sheet_ids).map_or(1, eda_model::sheet_list::SheetEntry::page_number_as_int);
 
     json!({
         "paper": { "name": page.paper, "width_nm": paper_w, "height_nm": paper_h },
@@ -2037,6 +2039,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "lib_symbols": lib_symbols,
         "sheets": sheets,
         "sheet_path": sheet_path,
+        "page_number": page_number,
     })
 }
 

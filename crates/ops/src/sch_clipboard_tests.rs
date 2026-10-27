@@ -165,7 +165,7 @@ fn a_cut_and_paste_keeps_the_references_nothing_else_holds() {
 fn a_pasted_power_symbol_takes_the_next_free_power_reference() {
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
-    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, net: "GND".into(), pin: String::new() }).unwrap();
+    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(Nm::ZERO, Nm::ZERO), rot_millideg: 0, net: "GND".into(), pin: String::new(), annotate: None }).unwrap();
     let f = fragment(|s| {
         s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(mm(10.0), Nm::ZERO), rot: 0, net: "GND".into(), pin: String::new() });
     });

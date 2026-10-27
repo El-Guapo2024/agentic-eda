@@ -2284,7 +2284,7 @@ fn swap_reaches_labels_texts_and_power_symbols_and_a_chain_rotates_the_positions
     let mut b = board(&m);
     b.apply(&Cmd::AddLabel { net: "A".into(), at: p(mm(1.0), mm(1.0)), kind: LabelKind::Local }).unwrap();
     b.apply(&Cmd::AddSchText { content: "note".into(), at: p(mm(2.0), mm(2.0)), angle_millideg: 0, size_nm: mm(1.27) }).unwrap();
-    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(mm(3.0), mm(3.0)), rot_millideg: 0, net: "GND".into(), pin: "1".into() }).unwrap();
+    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(mm(3.0), mm(3.0)), rot_millideg: 0, net: "GND".into(), pin: "1".into(), annotate: None }).unwrap();
     // labels and texts get their ids when the design is next loaded (`board::load`'s back-fill) -- do that here
     let mut d = b.into_design();
     d.assign_missing_ids();
