@@ -352,6 +352,15 @@ pub fn reference_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstanc
     override_under(screen, sym, path).map(|o| o.reference.clone()).unwrap_or_else(|| sym.id.clone())
 }
 
+/// The unit `sym` of `screen` is drawn as on the sheet at `path` (`SCH_SYMBOL::GetUnitSelection( aSheet )`, which `GetPins( aSheet )` and the connectivity
+/// read): the unit filed for that path ([`crate::sch_extras::SchExtras::path_units`], r2 B-M4), else the symbol's own unit.
+pub fn unit_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> u32 {
+    if path.is_empty() {
+        return sym.unit;
+    }
+    screen.extras.path_units.get(&crate::ir::field_key(&sym.id, sym.unit)).and_then(|m| m.get(&path.join("/"))).copied().unwrap_or(sym.unit)
+}
+
 /// The [`crate::ir::SymbolPathOverride`] of `sym` filed under the sheet at `path`, if it has one.
 pub fn override_under<'a>(screen: &'a SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> Option<&'a crate::ir::SymbolPathOverride> {
     if path.is_empty() {

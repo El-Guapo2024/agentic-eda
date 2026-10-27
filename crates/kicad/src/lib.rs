@@ -306,6 +306,24 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         *n += 1;
         cache_names.insert((sym.id.clone(), sym.unit), format!("{bare}_{n}"));
     }
+    // A symbol a sheet path draws as another unit (`SchExtras::path_units`, r2 B-M4) is written at the corner of its own unit's box, so its copy bakes every
+    // unit through it and from that one corner: kicad-cli then draws the other unit's pins where the library puts them about the symbol's origin (a copy
+    // per symbol, as for Swap Pins).
+    let mut corner_units: BTreeMap<(String, u32), u32> = BTreeMap::new();
+    for sym in &symbols {
+        if sch.extras.path_units.get(&eda_model::ir::field_key(&sym.id, sym.unit)).is_none_or(|m| m.is_empty()) {
+            continue;
+        }
+        corner_units.insert((sym.id.clone(), sym.unit), sym.unit);
+        if cache_names.contains_key(&(sym.id.clone(), sym.unit)) {
+            continue;
+        }
+        let lib_id = sym_lib_id(sym);
+        let bare = lib_id.rsplit(':').next().unwrap_or(&lib_id).to_string();
+        let n = cache_counts.entry(bare.clone()).or_insert(0);
+        *n += 1;
+        cache_names.insert((sym.id.clone(), sym.unit), format!("{bare}_{n}"));
+    }
     // Every symbol is written at angle 0 with its library symbol baked through its own turn and mirror, and the cache holds one entry per
     // `lib_id`, baked through the first reference that uses it: another reference of that `lib_id` turned or mirrored otherwise would be drawn
     // (and connected, by kicad-cli) the first one's way. Such a reference gets a copy of its own in the cache, baked through its own units, as a
@@ -374,8 +392,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         if !written_copies.insert(name.as_str()) {
             continue; // a copy references turned alike share, or one a multi-unit reference's other unit wrote
         }
-        let instances: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == sym.id).copied().collect();
-        write_lib_symbol_entry(&mut out, name, &sym_lib_id(sym), &instances, parts_by_ref[sym.id.as_str()], model, Some((sch, sym.id.as_str())));
+        let corner_unit = corner_units.get(&(sym.id.clone(), sym.unit)).copied();
+        let instances: Vec<&SymbolInstance> = if corner_unit.is_some() { vec![*sym] } else { symbols.iter().filter(|s| s.id == sym.id).copied().collect() };
+        write_lib_symbol_entry(&mut out, name, &sym_lib_id(sym), &instances, parts_by_ref[sym.id.as_str()], model, Some((sch, sym.id.as_str())), corner_unit);
     }
     writeln!(out, "\t)").unwrap();
 
@@ -451,11 +470,13 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
         // `SCH_SYMBOL_INSTANCE`: the reference this symbol has on each sheet path that shows the screen (`SCH_IO_KICAD_SEXPR::saveSymbol` writes
         // one `(path ..)` per instance; `SCH_SYMBOL::GetRef( &sheetPath )` looks it up by the whole path) -- a screen shown twice keeps one per path
+        // and the unit it is drawn as on that path (`SCH_SYMBOL_INSTANCE::m_Unit`, r2 B-M4)
         for (k, path) in ctx.instance_paths.iter().enumerate() {
-            let reference = eda_model::sheet_list::reference_under(sch, sym, ctx.instance_sheet_paths.get(k).map(Vec::as_slice).unwrap_or(&[]));
+            let model_path = ctx.instance_sheet_paths.get(k).map(Vec::as_slice).unwrap_or(&[]);
+            let reference = eda_model::sheet_list::reference_under(sch, sym, model_path);
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
             writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference)).unwrap();
-            writeln!(out, "\t\t\t\t\t(unit {})", sym.unit).unwrap();
+            writeln!(out, "\t\t\t\t\t(unit {})", eda_model::sheet_list::unit_under(sch, sym, model_path)).unwrap();
             writeln!(out, "\t\t\t\t)").unwrap();
         }
         writeln!(out, "\t\t\t)").unwrap();
@@ -1261,14 +1282,16 @@ fn baked_graphic(g: &eda_model::SymbolGraphic, sym: &SymbolInstance, width_nm: f
 /// one for a single-unit part; several, one per placed unit, for a
 /// multi-unit one -- see this function's own per-unit loop below).
 fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&SymbolInstance], part: &Part, model: &ConstraintModel) {
-    write_lib_symbol_entry(out, lib_id, lib_id, instances, part, model, None);
+    write_lib_symbol_entry(out, lib_id, lib_id, instances, part, model, None, None);
 }
 
 /// [`write_regular_lib_symbol`] under the name `cache_name` and with the places Swap Pins traded: `swaps` is the sheet and the reference whose
 /// units' `SchExtras::pin_swaps` apply. KiCad keeps a placed symbol whose pins are not the library's as a copy of its own in the sheet's cache
 /// (`SCH_SCREEN::Append`: "the original library symbol may have changed ... a new name must be created"), named `<symbol>_<n>` with no
-/// library, and the instance points at it with `(lib_name ...)`.
-fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, instances: &[&SymbolInstance], part: &Part, model: &ConstraintModel, swaps: Option<(&eda_model::ir::SchematicSection, &str)>) {
+/// library, and the instance points at it with `(lib_name ...)`. `corner_unit`: every unit is baked from the corner of that unit's box (a symbol a sheet path
+/// draws as another unit, r2 B-M4); `None`, each unit from its own.
+#[allow(clippy::too_many_arguments)]
+fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, instances: &[&SymbolInstance], part: &Part, model: &ConstraintModel, swaps: Option<(&eda_model::ir::SchematicSection, &str)>, corner_unit: Option<u32>) {
     let resolved = model.real_symbol_of(lib_id, part);
     // The representative instance whose own rotation/mirror every graphic
     // and pin gets baked through (see `baked_graphic`/`baked_real_point`'s
@@ -1317,7 +1340,7 @@ fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, inst
     let styles: &[u32] = if resolved.as_ref().is_some_and(|r| r.has_alternate_body()) { &[1, 2] } else { &[1] };
     for &style in styles {
         let in_style = resolved.as_ref().map(|r| r.in_style(style).into_owned());
-        write_body_style_blocks(out, &bare_name, style, in_style.as_ref(), instances, part, default_baker, unit_count, swaps);
+        write_body_style_blocks(out, &bare_name, style, in_style.as_ref(), instances, part, default_baker, unit_count, swaps, corner_unit);
     }
 
     writeln!(out, "\t\t)").unwrap();
@@ -1335,7 +1358,7 @@ fn pin_wearing_place_of<'a>(part: &'a Part, swap_map: Option<&std::collections::
 /// The `(symbol "<name>_0_<style>" ...)` block of the graphics every unit shares and the `(symbol "<name>_<u>_<style>" ...)` block of each unit's own graphics
 /// and pins, for body style `style` of a lib symbol: `resolved` is the symbol as that style draws it ([`eda_model::LibSymbol::in_style`]).
 #[allow(clippy::too_many_arguments)]
-fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolved: Option<&eda_model::LibSymbol>, instances: &[&SymbolInstance], part: &Part, default_baker: &SymbolInstance, unit_count: u32, swaps: Option<(&eda_model::ir::SchematicSection, &str)>) {
+fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolved: Option<&eda_model::LibSymbol>, instances: &[&SymbolInstance], part: &Part, default_baker: &SymbolInstance, unit_count: u32, swaps: Option<(&eda_model::ir::SchematicSection, &str)>, corner_unit: Option<u32>) {
     // ---- unit _0_<style>: the body common to every unit ----
     writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_0_{style}"))).unwrap();
     match resolved {
@@ -1346,8 +1369,8 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             // contents underneath *every* unit's own body, so leaking a
             // unit-1-specific graphic in here would draw it under units
             // 2..N as well).
-            let (width, _height) = eda_engine::geometry::node_size(part, resolved, 1);
-            let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(sym_data, 1);
+            let (width, _height) = eda_engine::geometry::node_size(part, resolved, corner_unit.unwrap_or(1));
+            let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(sym_data, corner_unit.unwrap_or(1));
             for g in sym_data.graphics.iter().filter(|g| g.unit() == 0) {
                 write_symbol_graphic(out, &baked_graphic(g, default_baker, width as f64, x0, y1));
             }
@@ -1371,9 +1394,11 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
     // old unconditional "_1_1" block always wrote -- no behavior change.
     for u in 1..=unit_count {
         let baker = instances.iter().find(|s| s.unit == u).copied().unwrap_or(default_baker);
-        let (width, height) = eda_engine::geometry::node_size(part, resolved, u);
-        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved, u);
-        let (x0, _, _, y1) = resolved.map(|s| eda_engine::geometry::real_symbol_bbox(s, u)).unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let (width_u, height) = eda_engine::geometry::node_size(part, resolved, u);
+        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width_u, height, resolved, u);
+        // the box the unit is baked from: its own, or the one corner every unit of the copy hangs from
+        let width = corner_unit.filter(|_| resolved.is_some()).map_or(width_u, |c| eda_engine::geometry::node_size(part, resolved, c).0);
+        let (x0, _, _, y1) = resolved.map(|s| eda_engine::geometry::real_symbol_bbox(s, corner_unit.unwrap_or(u))).unwrap_or((0.0, 0.0, 0.0, 0.0));
         let mut pin_of_port: Vec<Option<usize>> = vec![None; ports.len()];
         for (pin_idx, port_idx) in pin_port.iter().enumerate() {
             if let Some(pi) = port_idx {
@@ -1415,7 +1440,7 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
                 // right, 0; a top pin down, 270), so that its name is drawn
                 // inside the body as KiCad lays a pin's name out.
                 None => {
-                    let (plx, ply) = local_port_point(port, width, height);
+                    let (plx, ply) = local_port_point(port, width_u, height);
                     let (slx, sly) = local_stub_tip(port, plx, ply);
                     let (bx, by) = baked_local(baker, width as f64, slx, sly);
                     let inward = match port.side {
@@ -1449,14 +1474,17 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
         // draw them here too, at the same points `derive_schematic` placed a
         // `no_connects` marker at, so this unit's own pin-uuid list always
         // has a matching drawn pin for every one of its `part.pins` entries.
-        for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width, height, resolved, u) {
+        for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width_u, height, resolved, u) {
             let pin = &part.pins[i];
             // `baked_local` takes um (like every other call site in this
             // function — `local_stub_tip`'s output, `width`/`height`
             // themselves) and does its own um->mm division at the end; do
             // not pre-convert `local` here too, or every nc pin lands 1000x
             // closer to the origin than intended.
-            let (bx, by) = baked_local(baker, width as f64, local.x as f64, local.y as f64);
+            // (from the corner every unit hangs from, when it is not this unit's own)
+            let (x0_u, y1_u) = resolved.map(|s| eda_engine::geometry::real_symbol_bbox(s, u)).map_or((x0, y1), |(a, _, _, d)| (a, d));
+            let (lx, ly) = (local.x as f64 + (x0_u - x0) * 1e6, local.y as f64 + (y1 - y1_u) * 1e6);
+            let (bx, by) = baked_local(baker, width as f64, lx, ly);
             // a library symbol draws its no-connect pin like any other, along its own line; only a pin the symbol does not have is a point
             let (angle, length) = match resolved.and_then(|r| r.pin_by_number(&pin.number)) {
                 Some(rp) => (baked_real_angle(baker, rp.angle_deg), rp.length_mm),

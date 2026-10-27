@@ -532,8 +532,9 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
             let Some(part) = model.part(&sym.id) else { continue };
             let Some(lib) = model.real_symbol_of_instance(sec, sym, part).filter(|l| l.unit_count > 1) else { continue };
             let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
-            for p in lib.pins.iter().filter(|p| p.unit == sym.unit || p.unit == 0) {
-                pin_units.entry(format!("{reference}.{}", p.number)).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
+            let unit = eda_model::sheet_list::unit_under(sec, sym, &e.path);
+            for p in lib.pins.iter().filter(|p| p.unit == unit || p.unit == 0) {
+                pin_units.entry(format!("{reference}.{}", p.number)).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(unit)));
                 if p.unit == 0 {
                     common_pins.insert(format!("{reference}.{}", p.number));
                 }
@@ -580,13 +581,16 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
     // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
     // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
-    let pins_of = |sch: &eda_model::ir::SchematicSection| -> std::collections::BTreeMap<String, Point> {
+    // A symbol a sheet path draws as another unit (`SCH_SYMBOL::GetPins( aSheet )` takes `GetUnitSelection( aSheet )`, r2 B-M4) has that unit's pins there.
+    let pins_of = |sch: &eda_model::ir::SchematicSection, path: &[String]| -> std::collections::BTreeMap<String, Point> {
         let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
         for sym in &sch.symbols {
+            let unit = eda_model::sheet_list::unit_under(sch, sym, path);
             if !sch.imported_from_kicad {
                 if let Some(part) = model.part(&sym.id) {
                     let resolved = model.real_symbol_of_instance(sch, sym, part);
-                    for (number, at) in eda_engine::placed::pin_points_in(sch, sym, part, resolved.as_ref()) {
+                    let pins = if unit == sym.unit { eda_engine::placed::pin_points_in(sch, sym, part, resolved.as_ref()) } else { eda_engine::placed::pin_points(&drawn_as_unit(sym, unit, resolved.as_ref()), part, resolved.as_ref()) };
+                    for (number, at) in pins {
                         pin_world.insert(format!("{}.{number}", sym.id), at);
                     }
                 }
@@ -599,12 +603,12 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             // positioned when *that* unit's own `SymbolInstance` is visited, not here.
             let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
             let mut placed: Vec<(String, Point)> = Vec::new();
-            for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
+            for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == unit) {
                 let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
                 placed.push((p.number.clone(), Point { x: sym.at.x + eda_kicad::mm_to_nm(world.x), y: sym.at.y + eda_kicad::mm_to_nm(world.y) }));
             }
-            // the places Swap Pins traded
-            if let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)) {
+            // the places Swap Pins traded (of the symbol's own unit)
+            if let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)).filter(|_| unit == sym.unit) {
                 placed = eda_model::sch_extras::permute_pins(placed, swaps);
             }
             for (number, at) in placed {
@@ -614,15 +618,16 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         pin_world
     };
     // `SCH_PIN::IsGlobalPower`'s legacy rule: an invisible power input of a symbol that is not a power symbol names its net by its pin name
-    let power_pins_of = |sch: &eda_model::ir::SchematicSection| -> std::collections::BTreeMap<String, String> {
+    let power_pins_of = |sch: &eda_model::ir::SchematicSection, path: &[String]| -> std::collections::BTreeMap<String, String> {
         let mut out = std::collections::BTreeMap::new();
         for sym in &sch.symbols {
             let Some(lib) = resolve_lib_symbol(&sym.lib_id, model) else { continue };
             if lib.power {
                 continue;
             }
+            let unit = eda_model::sheet_list::unit_under(sch, sym, path);
             let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
-            for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == sym.unit) && p.hidden && p.electrical_type == "power_in") {
+            for p in lib.pins.iter().filter(|p| (p.unit == 0 || p.unit == unit) && p.hidden && p.electrical_type == "power_in") {
                 // escaped as a net name by the tracer (`GetDefaultNetName`: `EscapeString( pin name, CTX_NETNAME )`, `Driver::new`)
                 out.insert(format!("{}.{}", sym.id, p.number), p.name.clone());
             }
@@ -630,8 +635,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         out
     };
     let mut contents = design.sheet_contents.take();
-    let root_pins = pins_of(&root);
-    let mut power_pins = power_pins_of(&root);
+    let root_pins = pins_of(&root, &[]);
+    let mut power_pins = power_pins_of(&root, &[]);
     // (path, file, pins, the first placement of its file); a later placement of a file traces a copy of the screen
     let mut plan: Vec<(Vec<String>, String, std::collections::BTreeMap<String, Point>, bool)> = Vec::new();
     let mut copies: Vec<eda_model::ir::SchematicSection> = Vec::new();
@@ -639,8 +644,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for e in entries.iter().skip(1) {
             let Some(sec) = contents.as_ref().and_then(|c| c.get(&e.file)) else { continue };
-            let pins = pins_under_placement(pins_of(sec), sec, &e.path);
-            power_pins.extend(pins_under_placement(power_pins_of(sec), sec, &e.path));
+            let pins = pins_under_placement(pins_of(sec, &e.path), sec, &e.path);
+            power_pins.extend(pins_under_placement(power_pins_of(sec, &e.path), sec, &e.path));
             let first = seen.insert(e.file.as_str());
             if !first {
                 copies.push(sec.clone());
@@ -720,6 +725,22 @@ fn power_value_under(view: Option<&PowerValueView>, path: &[String], raw: &str) 
 }
 
 /// `pins` ("REF.PIN" -> point) of `sec` under the references the sheet at `path` gives its symbols (`SCH_SYMBOL::GetRef( &sheetPath )`).
+/// `sym` as the unit `unit` a sheet path draws it as (r2 B-M4): a symbol placed by the corner of its box (`eda_engine::placed`) keeps its library origin,
+/// where the writer bakes it from the box of its own unit, so its corner moves by the difference of the two units' boxes (`sch_sheets::place_by_box_corner`).
+fn drawn_as_unit(sym: &eda_model::ir::SymbolInstance, unit: u32, resolved: Option<&eda_model::symbol::LibSymbol>) -> eda_model::ir::SymbolInstance {
+    let mut drawn = sym.clone();
+    drawn.unit = unit;
+    if let Some(lib) = resolved {
+        let offset = |u: u32| {
+            let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(lib, u);
+            eda_model::sch_clipboard::place_offset_nm(sym.rot as f64 / 1000.0, sym.mirrored, sym.mirror_y, (-x0, -y1))
+        };
+        let ((ox, oy), (ux, uy)) = (offset(sym.unit), offset(unit));
+        drawn.at = Point { x: sym.at.x + ox - ux, y: sym.at.y + oy - uy };
+    }
+    drawn
+}
+
 fn pins_under_placement<V>(pins: std::collections::BTreeMap<String, V>, sec: &eda_model::ir::SchematicSection, path: &[String]) -> std::collections::BTreeMap<String, V> {
     let renamed: std::collections::BTreeMap<&str, String> = sec
         .symbols

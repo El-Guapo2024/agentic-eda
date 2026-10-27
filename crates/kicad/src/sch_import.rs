@@ -153,6 +153,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // around it -- a bare single-file `import_kicad_sch` on a screen that
     // happens to be shared just carries overrides nothing yet queries.
     let mut overrides: Vec<eda_model::ir::SymbolPathOverride> = Vec::new();
+    // (place, own unit, sheet path, the unit on that path) of a symbol whose `(path .. (unit N))` is not its own `(unit ..)` (r2 B-M4)
+    let mut path_units: Vec<(Point, u32, Vec<String>, u32)> = Vec::new();
 
     for item in sexpr::find_all(root, "symbol") {
         let Some(lib_id) = sexpr::find(item, "lib_id").and_then(|l| sexpr::txt(l, 1)) else { continue };
@@ -204,7 +206,12 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             continue;
         }
 
-        overrides.extend(parse_instance_overrides(item, at_nm));
+        for (o, path_unit) in parse_instance_overrides(item, at_nm, unit) {
+            if path_unit != unit {
+                path_units.push((at_nm, unit, o.sheet_path.clone(), path_unit));
+            }
+            overrides.push(o);
+        }
         raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps });
     }
 
@@ -645,6 +652,11 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         sch.extras.pin_swaps.extend(pin_swap_entries);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
+        for (at, own, path, unit) in path_units {
+            if let Some(sym) = sch.symbols.iter().find(|s| s.at == at && s.unit == own) {
+                sch.extras.path_units.entry(eda_model::ir::field_key(&sym.id, sym.unit)).or_default().insert(path.join("/"), unit);
+            }
+        }
         sch.extras.sheet_fields.extend(sheet_user_fields);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
@@ -976,16 +988,21 @@ fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mu
         let Some(&(at, own_unit)) = symbol_places.get(file).and_then(|m| m.get(*symbol)) else { continue };
         let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).map(|u| u.max(1.0) as u32).or(own_unit).unwrap_or(1);
         let Some(sec) = sheet_contents.get_mut(file) else { continue };
-        // a symbol the file gives no unit is drawn as the unit its instances say (`UpdateSymbolInstanceData` -> `SetUnit`)
-        if own_unit.is_none() && unit != 1 {
-            if let Some(sym) = sec.symbols.iter_mut().find(|s| s.at == at && s.unit == 1) {
-                sym.unit = unit;
-            }
+        // the symbol: by its place and own unit; one the file gives no unit by its place alone
+        let Some(i) = sec.symbols.iter().position(|s| s.at == at && s.unit == own_unit.unwrap_or(1)).or_else(|| own_unit.is_none().then(|| sec.symbols.iter().position(|s| s.at == at)).flatten()) else { continue };
+        // a symbol the file gives no unit is drawn as the unit its (first) instance says (`UpdateSymbolInstanceData` -> `SetUnit`)
+        if own_unit.is_none() && unit != 1 && sec.symbols[i].unit == 1 && !sec.instance_overrides.iter().any(|o| o.at == at && o.unit == 1) {
+            sec.symbols[i].unit = unit;
         }
-        if sec.instance_overrides.iter().any(|o| o.sheet_path == sheet_path && o.at == at && o.unit == unit) {
+        let (sym_id, own) = (sec.symbols[i].id.clone(), sec.symbols[i].unit);
+        if sec.instance_overrides.iter().any(|o| o.sheet_path == sheet_path && o.at == at && o.unit == own) {
             continue;
         }
-        sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit });
+        // a path that draws the symbol as another unit (r2 B-M4)
+        if unit != own {
+            sec.extras.path_units.entry(eda_model::ir::field_key(&sym_id, own)).or_default().insert(sheet_path.join("/"), unit);
+        }
+        sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit: own });
     }
 }
 
@@ -1190,7 +1207,7 @@ fn property_text(item: &[Sexpr], name: &str) -> Option<String> {
 /// (`SymbolPathOverride::sheet_path`): `/<root>/<a>/<b>` -> `[a, b]`. A path
 /// of the root alone (a symbol on the root sheet, whose reference is its
 /// own) or with no components at all is skipped.
-fn parse_instance_overrides(item: &[Sexpr], at: Point) -> Vec<eda_model::ir::SymbolPathOverride> {
+fn parse_instance_overrides(item: &[Sexpr], at: Point, own_unit: u32) -> Vec<(eda_model::ir::SymbolPathOverride, u32)> {
     let Some(instances) = sexpr::find(item, "instances") else { return Vec::new() };
     let mut out = Vec::new();
     for project in sexpr::find_all(instances, "project") {
@@ -1201,8 +1218,10 @@ fn parse_instance_overrides(item: &[Sexpr], at: Point) -> Vec<eda_model::ir::Sym
                 continue;
             }
             let Some(reference) = sexpr::find(path, "reference").and_then(|r| sexpr::txt(r, 1)) else { continue };
+            // `SCH_SYMBOL_INSTANCE::m_Unit`: the unit this path draws the symbol as. The override is filed under the symbol's own unit, which tells
+            // the symbol apart (`sheet_list::override_under`), and a path unit that differs goes to `SchExtras::path_units` (r2 B-M4)
             let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
-            out.push(eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit });
+            out.push((eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit: own_unit }, unit));
         }
     }
     out

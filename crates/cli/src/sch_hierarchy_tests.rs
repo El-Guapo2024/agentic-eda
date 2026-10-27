@@ -1167,6 +1167,30 @@ fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
     }
 }
 
+/// r2 B-M4 (`SCH_SYMBOL_INSTANCE::m_Unit`, `SCH_SYMBOL::GetPins( aSheet )` -> `GetUnitSelection( aSheet )`): a shared channel screen whose dual part is U1
+/// unit A on one path and U1 unit B on the other, unit B's pins and box 2.54 mm higher. kicad-cli's netlist of the file puts pins 1 and 2 on `/a/OUT` and
+/// `/a/IN`, pins 7 and 6 on `/b/OUT2` and `/b/IN2` (the wires of the other unit's pins are on no pin there); the import keeps
+/// the second path's unit, its pins are on that path's nets, and the derived file says `(unit 2)` for that path, so kicad-cli reads it the same.
+#[test]
+fn a_symbol_drawn_as_another_unit_on_a_second_path_keeps_its_pins_there() {
+    let work = scratch("per_path_unit");
+    std::fs::write(work.join("root.kicad_sch"), include_str!("../tests/fixtures/per_path_unit/root.kicad_sch")).unwrap();
+    std::fs::write(work.join("ch.kicad_sch"), include_str!("../tests/fixtures/per_path_unit/ch.kicad_sch")).unwrap();
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("root.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let mut nets: Vec<(String, Vec<String>)> = design.nets.clone().unwrap_or_default().into_iter().map(|n| (n.name, n.pins)).collect();
+    nets.sort();
+    let net = |name: &str, pins: &[&str]| (name.to_string(), pins.iter().map(|p| p.to_string()).collect::<Vec<_>>());
+    nets.retain(|(_, pins)| !pins.is_empty());
+    assert_eq!(nets, vec![net("/a/IN", &["U1.2"]), net("/a/OUT", &["U1.1"]), net("/b/IN2", &["U1.6"]), net("/b/OUT2", &["U1.7"])], "kicad-cli's nets of the file");
+    if kicad_cli_ready() {
+        let kicad = kicad_net_names(&dir);
+        let want: std::collections::BTreeMap<String, String> = [("U1.1", "/a/OUT"), ("U1.2", "/a/IN"), ("U1.6", "/b/IN2"), ("U1.7", "/b/OUT2")].iter().map(|(p, n)| (p.to_string(), n.to_string())).collect();
+        assert_eq!(kicad, want, "kicad-cli reads the derived files as it reads the original");
+    }
+}
+
 /// r2 D-E1 (`ERC_SETTINGS`'s `rule_severities` and `pin_map` loaders, `SCHEMATIC_SETTINGS`'s `connection_grid_size`): `eda import-kicad` of a schematic brings
 /// its project's ERC severities, pin map and connection grid with it, so the derived project's ERC judges as kicad-cli judges the original (QA `issue22938`
 /// ignores `pin_not_connected`; ours reported 50 of them). A library-link check stays at the derived project's ignore.
