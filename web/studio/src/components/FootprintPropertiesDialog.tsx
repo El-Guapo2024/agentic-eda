@@ -142,6 +142,7 @@ export function FootprintPropertiesDialog() {
       const r = rows[i]!;
       const message = checkFieldRow(r.name, { size: r.layout.size, thickness: r.layout.thickness }, len);
       if (message) return setError(`${r.name || `Field ${i + 1}`}: ${message}`);
+      // Not KiCad's (its `Validate` checks only for an empty name): this model keys a footprint's fields by name, so a repeated or a mandatory name would lose a field.
       if (i >= 2 && (r.name === REFERENCE || r.name === VALUE || r.name === "Datasheet" || r.name === "Description")) return setError(`"${r.name}" is the name of a mandatory field.`);
       if (nameClash(r.name, i)) return setError(`There are two fields called "${r.name}".`);
     }
@@ -344,7 +345,7 @@ export function FootprintPropertiesDialog() {
             <button
               data-testid="add-field"
               onClick={() => {
-                setRows((rs) => [...rs, { key: Math.max(-1, ...rs.map((r) => r.key)) + 1, from: null, name: newFieldName(rs.map((r) => r.name), rs.length), text: "", layout: newFieldLayout(part) }]);
+                setRows((rs) => [...rs, { key: Math.max(-1, ...rs.map((r) => r.key)) + 1, from: null, name: newFieldName(rs.map((r) => r.name), rs.length + 2) /* `GetUserFieldName( m_fields->size() )`: KiCad's grid has four mandatory rows (Datasheet and Description too), ours two */, text: "", layout: newFieldLayout(part) }]);
                 setSelected(rows.length);
               }}
             >
