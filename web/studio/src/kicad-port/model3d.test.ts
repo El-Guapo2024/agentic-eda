@@ -8,7 +8,7 @@ import {
   footprintZ,
   stackOfBoard,
   previewStack,
-  previewWheelScroll,
+  previewWheel,
   inferKind,
   kindShown,
   footprintShown,
@@ -28,7 +28,7 @@ import {
   transformPoint,
   type Vec3Tuple,
 } from "./model3d";
-import { TrackballCamera } from "./camera3d";
+import { DEFAULT_WHEEL_SCROLL, TrackballCamera } from "./camera3d";
 import { lengthV, subV, vec3 } from "./math3d";
 
 const EPS = 1e-9;
@@ -265,21 +265,32 @@ test("the 3D model preview's dummy board: FrontMask includes F.Cu, so two copper
   assert.ok(Math.abs(footprintZ(s, false) - (0.755 + 0.035 + 0.04)) < EPS, "the top of the front copper plus the paste");
 });
 
-test("the 3D model preview's wheel honours the zoom-modifier preference (PANEL_PREVIEW_3D_MODEL::loadSettings)", () => {
-  // V5-2: `m_MousewheelPanning = settings->m_Input.scroll_modifier_zoom != 0`: with Ctrl as the zoom modifier, a plain wheel pans and does not zoom,
-  // and the rest of the wheel settings are `VC_SETTINGS::Reset`'s (Ctrl pans horizontally, Shift vertically, nothing reversed).
-  const scroll = previewWheelScroll({ scrollModifierZoom: "ctrl" });
-  assert.equal(scroll.scrollModifierZoom, "ctrl");
-  assert.deepEqual({ panH: scroll.scrollModifierPanH, panV: scroll.scrollModifierPanV, rz: scroll.reverseScrollZoom, rp: scroll.reverseScrollPanH }, { panH: "ctrl", panV: "shift", rz: false, rp: false });
-  const cam = new TrackballCamera(100, vec3(0, 0, 0));
-  const beforeZoom = cam.zoom;
-  const beforePos = cam.getRenderPose().position;
-  cam.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, altKey: false }, scroll);
-  assert.equal(cam.zoom, beforeZoom, "a plain wheel must not zoom while a zoom modifier is set");
-  assert.ok(lengthV(subV(cam.getRenderPose().position, beforePos)) > 1e-9, "it pans instead");
-  // With no zoom modifier, the same wheel zooms, as before.
+test("the preview pans only with a modifier when a zoom modifier is set (OnMouseWheelCamera with Reset's m_scrollModifierZoom = 0)", () => {
+  // V6-1 (replaces round 5's V5-2 test, which read only the first line): PANEL_PREVIEW_3D_MODEL::loadSettings sets `m_MousewheelPanning =
+  // scroll_modifier_zoom != 0` (aPan), but the preview canvas never gets SetVcSettings, so its `m_scrollModifierZoom` stays VC_SETTINGS::Reset's 0:
+  // a plain wheel has `modifiers == 0 == m_scrollModifierZoom`, skips the pan branch and zooms; Ctrl pans horizontally, Shift vertically.
+  const { scroll, aPan } = previewWheel({ scrollModifierZoom: "ctrl" });
+  assert.equal(aPan, true);
+  assert.deepEqual(scroll, DEFAULT_WHEEL_SCROLL);
+  // Seen from the top: a pan moves the camera along world x / z, a zoom only along y (its distance).
+  const lookAt = (c: TrackballCamera) => { const p = c.getRenderPose().position; return vec3(p.x, 0, p.z); };
   const plain = new TrackballCamera(100, vec3(0, 0, 0));
-  const start = plain.zoom;
-  plain.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, altKey: false }, previewWheelScroll({ scrollModifierZoom: "none" }));
-  assert.ok(plain.zoom < start);
+  const t0 = lookAt(plain);
+  const z0 = plain.zoom;
+  plain.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, altKey: false }, scroll, aPan);
+  assert.ok(plain.zoom < z0, "a plain wheel zooms");
+  assert.ok(lengthV(subV(lookAt(plain), t0)) < 1e-9, "and does not pan");
+  const ctrl = new TrackballCamera(100, vec3(0, 0, 0));
+  ctrl.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: true, altKey: false }, scroll, aPan);
+  const dc = subV(lookAt(ctrl), t0);
+  assert.equal(ctrl.zoom, z0, "Ctrl+wheel keeps the zoom");
+  assert.ok(Math.abs(dc.x) > 1e-9 && Math.abs(dc.z) < 1e-9, `Ctrl+wheel pans along x: ${JSON.stringify(dc)}`);
+  const shift = new TrackballCamera(100, vec3(0, 0, 0));
+  shift.handleWheel({ deltaX: 0, deltaY: -100, shiftKey: true, ctrlKey: false, altKey: false }, scroll, aPan);
+  const ds = subV(lookAt(shift), t0);
+  assert.equal(shift.zoom, z0);
+  assert.ok(Math.abs(ds.x) < 1e-9 && Math.abs(ds.z) > 1e-9, `Shift+wheel pans along the screen's y: ${JSON.stringify(ds)}`);
+  // With no zoom modifier, aPan is false and the plain wheel zooms too.
+  const none = previewWheel({ scrollModifierZoom: "none" });
+  assert.equal(none.aPan, false);
 });
