@@ -1061,3 +1061,29 @@ fn a_directive_label_mirrors_its_pole_across_the_mirror_axis() {
         assert_eq!(got, want, "with another: {orientation} mirrored vertical={vertical}");
     }
 }
+
+/// r2 C-M1 (`SCHEMATIC::CleanUp` merges two lines only when `IsStrokeEquivalent`; `BreakAt` copies the line, stroke and all): two wires end to end of
+/// different strokes stay two wires after an unrelated move, and a dashed wire a part cuts in two is dashed on both pieces.
+#[test]
+fn clean_up_keeps_wires_of_different_strokes_apart_and_a_split_wire_keeps_its_stroke() {
+    use eda_model::sch_extras::{SchLineStyle, SchStroke};
+    let dashed = SchStroke { style: SchLineStyle::Dash, width_nm: mm(0.5), ..Default::default() };
+    let mut s = section();
+    s.wires.push(wire("w1", &[p(mm(10.0), mm(10.0)), p(mm(20.0), mm(10.0))]));
+    s.wires.push(wire("w2", &[p(mm(20.0), mm(10.0)), p(mm(30.0), mm(10.0))]));
+    s.extras.strokes.insert("w2".into(), dashed);
+    s.symbols.push(sym("R1", p(mm(80.0), mm(80.0))));
+    let out = run_on(s, mv(&["R1"], mm(2.54), Nm::ZERO));
+    assert_eq!(out.wires.len(), 2, "{:?}", out.wires);
+    assert_eq!(out.extras.strokes.get("w2"), Some(&dashed));
+
+    let mut s = section();
+    s.wires.push(wire("w1", &[p(mm(20.32), mm(10.0)), p(mm(20.32), mm(40.0))]));
+    s.extras.strokes.insert("w1".into(), dashed);
+    s.symbols.push(sym("R1", p(mm(60.0), mm(25.4))));
+    let out = run_on(s, mv(&["R1"], mm(20.32) - mm(60.0), Nm::ZERO));
+    assert_eq!(out.wires.len(), 2, "the resistor cuts the wire: {:?}", out.wires);
+    for w in &out.wires {
+        assert_eq!(out.extras.strokes.get(&w.id), Some(&dashed), "{} keeps the stroke", w.id);
+    }
+}

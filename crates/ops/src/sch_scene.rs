@@ -768,7 +768,9 @@ impl<'m> Scene<'m> {
                     if f.a.y.min(f.b.y).max(s.a.y.min(s.b.y)) > f.a.y.max(f.b.y).min(s.a.y.max(s.b.y)) {
                         continue;
                     }
-                    if !parallel(s.dir(), f.dir()) || s.bus != f.bus {
+                    // `SCHEMATIC::CleanUp`: `!secondLine->IsParallel( firstLine ) || !secondLine->IsStrokeEquivalent( firstLine ) || secondLine->GetLayer() !=
+                    // firstLine->GetLayer()` -- two wires of different strokes stay apart (r2 C-M1)
+                    if !parallel(s.dir(), f.dir()) || s.bus != f.bus || self.stroke_of(i1) != self.stroke_of(i2) {
                         continue;
                     }
                     // identical lines
@@ -801,6 +803,11 @@ impl<'m> Scene<'m> {
                 }
             }
         }
+    }
+
+    /// The stroke the segment's wire was drawn with (`SchExtras::strokes`, by the wire's id); `None` for the default.
+    fn stroke_of(&self, i: usize) -> Option<&eda_model::sch_extras::SchStroke> {
+        self.segs[i].from.and_then(|(w, _)| self.meta.get(w)).and_then(|m| self.sch.extras.strokes.get(&m.id))
     }
 
     fn meeting_point(&self, i1: usize, i2: usize) -> Point {
@@ -854,6 +861,8 @@ impl<'m> Scene<'m> {
     /// The section back, with the segments joined into wires again where they still form a chain.
     pub(crate) fn finish(mut self) -> SchematicSection {
         let mut wires: Vec<Wire> = Vec::new();
+        // (the index of a run after the first of a split wire, and the wire's id: the run is a wire of its own, `BreakAt` copies the line, so it keeps the stroke)
+        let mut split_from: Vec<(usize, String)> = Vec::new();
         // wires the edit did not touch keep their points and ids exactly
         let mut by_wire: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         let mut fresh: Vec<usize> = Vec::new();
@@ -879,6 +888,9 @@ impl<'m> Scene<'m> {
             }
             for (k, pts) in runs.into_iter().enumerate() {
                 let seg_net = list.first().map(|&i| self.segs[i].net.clone()).unwrap_or_else(|| m.net.clone());
+                if k > 0 && !m.id.is_empty() {
+                    split_from.push((wires.len(), m.id.clone()));
+                }
                 wires.push(Wire { id: if k == 0 { m.id.clone() } else { String::new() }, net: seg_net, pins: if k == 0 { m.pins.clone() } else { Vec::new() }, pts, bus: m.bus });
             }
         }
@@ -888,6 +900,11 @@ impl<'m> Scene<'m> {
         }
         self.sch.wires = wires;
         self.sch.assign_missing_ids();
+        for (i, from) in split_from {
+            if let Some(stroke) = self.sch.extras.strokes.get(&from).cloned() {
+                self.sch.extras.strokes.insert(self.sch.wires[i].id.clone(), stroke);
+            }
+        }
         self.sch
     }
 }
