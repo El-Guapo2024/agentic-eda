@@ -453,6 +453,14 @@ impl RuleResolver {
         on.iter().any(|&l| l >= lo && l <= hi)
     }
 
+    /// [`Self::is_flashed_on`] of a via that is not an item of the world -- the router's probe, a board via (`source`, its id) dragged or shoved
+    /// (`IsFlashedOnLayer( aHead, Layers() )`, r4 R4-2) -- spanning `own`; a via the router made (no `source`) is on every layer it spans.
+    pub fn is_via_flashed_on(&self, source: Option<&str>, own: LayerRange, layers: LayerRange) -> bool {
+        let Some(on) = source.and_then(|id| self.flashed.get(id)) else { return true };
+        let (lo, hi) = (own.start().max(layers.start()), own.end().min(layers.end()));
+        on.iter().any(|&l| l >= lo && l <= hi)
+    }
+
     /// Adds a warning to [`Self::warnings`].
     pub fn warn(&mut self, message: String) {
         self.warnings.push(message);

@@ -153,8 +153,16 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
     })
 }
 
-/// `POST /api/route/start`: `{x, y, layer, width?, settings?}`. Without `width` the route starts at the width `ImportSizes` gives the start
-/// item's net (`Router::import_sizes`); the reply's `width` is the one it started at. `settings` is the router's
+/// `auto_track_width` of a start request: `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (the studio's "Use Starting Track Width", the
+/// project's `board.auto_track_width`), on unless the request says otherwise, as KiCad's project default is (`PROJECT_LOCAL_SETTINGS`:
+/// `m_AutoTrackWidth( true )`).
+fn auto_track_width(req: &Value) -> bool {
+    req.get("auto_track_width").and_then(Value::as_bool).unwrap_or(true)
+}
+
+/// `POST /api/route/start`: `{x, y, layer, width?, auto_track_width?, settings?}`. With `auto_track_width` (on unless `false`) a start on a
+/// track, or on a pad or via a track is joined to, takes that track's width (`inheritTrackWidth`); else, without `width`, the route starts at
+/// the width `ImportSizes` gives the start item's net (`Router::import_sizes`); the reply's `width` is the one it started at. `settings` is the router's
 /// `ROUTING_SETTINGS` ([`settings_of`]); `mode` and `remove_loops` at the top level still work, for a client that predates it.
 /// Without any, KiCad's defaults: `walkaround`, `remove_loops` on.
 pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
@@ -165,13 +173,16 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings_of(&req);
+    router.use_connected_track_width = auto_track_width(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
-    // no `width`: the width list is on "use net class" (`UseNetClassTrack()`), and `ImportSizes` takes the start net's width through the rules
-    // (`CT_WIDTH`: its class, a `.kicad_dru` rule, a pair's class width), r3 R3-3
-    let width = match req.get("width").and_then(Value::as_i64) {
-        Some(w) => Nm::new(w),
-        None => router.import_sizes(at, layer).map_or(model.board.track_width, |s| s.track_width),
+    // `ImportSizes`: the width of the track the start item is (or is joined to) first, whatever width was chosen (`m_UseConnectedTrackWidth &&
+    // !m_TempOverrideTrackWidth`, r4 R4-1); no `width`: the width list is on "use net class" (`UseNetClassTrack()`), and `ImportSizes` takes
+    // the start net's width through the rules (`CT_WIDTH`: its class, a `.kicad_dru` rule, a pair's class width), r3 R3-3
+    let width = match (router.connected_track_width(at, layer), req.get("width").and_then(Value::as_i64)) {
+        (Some(w), _) => w,
+        (None, Some(w)) => Nm::new(w),
+        (None, None) => router.import_sizes(at, layer).map_or(model.board.track_width, |s| s.track_width),
     };
     match router.start(at, layer, width) {
         Ok(()) => {
@@ -585,7 +596,7 @@ fn dp_preview_json(router: &Router, preview: &eda_pns::dp_placer::DiffPairPrevie
     })
 }
 
-/// `POST /api/route/dp_start`: `{x, y, layer, width?, gap?, via_gap?, settings?}` -- `width`/`gap`/`via_gap` are the "Differential Pair
+/// `POST /api/route/dp_start`: `{x, y, layer, width?, gap?, via_gap?, auto_track_width?, settings?}` -- `width`/`gap`/`via_gap` are the "Differential Pair
 /// Dimensions..." dialog's custom values (`BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions`); without them the pair takes the net
 /// class's. `settings` is the router's ([`settings_of`]): the pair is walked, shoved or only marked per its `mode`. A refusal carries
 /// KiCad's own message (`ROUTER::SetFailureReason`).
@@ -597,6 +608,7 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings_of(&req);
+    router.use_connected_track_width = auto_track_width(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     match router.start_diff_pair(at, layer) {

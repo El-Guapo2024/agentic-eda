@@ -91,13 +91,20 @@ impl DpSizes {
 
     /// [`Self::resolve`] through the board's rules: `ImportSizes` of the item the pair starts on ([`crate::settings::import_sizes`]), so a
     /// `.kicad_dru` rule's `track_width` and `diff_pair_gap` (of `A.inDiffPair(..)`), via size and hole to hole set the pair as they do in KiCad
-    /// (r3 R3-4). A world with no rule resolver is [`Self::resolve`].
+    /// (r3 R3-4). A world with no rule resolver is [`Self::resolve`]. The connected track's width is not asked ([`Self::import_from`] does).
     pub fn import(world: &Node, rules: &BoardRules, start: &Item, layer: i32, net_p: &str, net_n: &str) -> Self {
         if world.rule_resolver().is_none() {
             return Self::resolve(rules, net_p, net_n);
         }
         let at = start.anchors().first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
-        let s = crate::settings::import_sizes(world, rules, Some((start, at)), layer);
+        Self::import_from(world, rules, start, at, layer, false)
+    }
+
+    /// [`Self::import`] for a pair started at `at` (`aStartPosition`): with `use_connected_track_width` (`m_UseConnectedTrackWidth`) the width
+    /// is the start item's own track width, or of the track joined to the pad or via nearest the cursor (`ImportSizes`: "First try to pick up
+    /// diff pair width from starting track, if enabled", `inheritTrackWidth( aStartItem, &diffPairWidth, startPosInt )`, r4 R4-4).
+    pub fn import_from(world: &Node, rules: &BoardRules, start: &Item, at: Point, layer: i32, use_connected_track_width: bool) -> Self {
+        let s = crate::settings::import_sizes(world, rules, Some((start, at)), layer, use_connected_track_width);
         DpSizes { width: s.diff_pair_width, gap: s.diff_pair_gap, via_gap: s.diff_pair_via_gap, via_diameter: s.via_diameter, via_drill: s.via_drill, hole_to_hole: s.diff_pair_hole_to_hole }
     }
 
@@ -334,14 +341,22 @@ impl DiffPairPlacer {
     /// and its coupled partner ([`find_dp_primitive_pair`]), the gap at the start of a pair of tracks matching the configured one, and
     /// the lines at the start not colliding with anything (at the board's minimum width if not at the pair's own). `layer` is the layer
     /// the route starts on.
-    pub fn start(world: &Node, rules: &BoardRules, settings: &RoutingSettings, start_item: ItemId, layer: i32, all_layers: LayerRange) -> Result<Self, String> {
+    pub fn start(world: &Node, rules: &BoardRules, settings: &RoutingSettings, start_item: ItemId, at: Point, layer: i32, all_layers: LayerRange, use_connected_track_width: bool) -> Result<Self, String> {
         let found = find_dp_primitive_pair(world, start_item)?;
         let (Some(prim_p), Some(prim_n)) = (found.pair.prim_p.clone(), found.pair.prim_n.clone()) else { return Err(NO_COMPLEMENT.into()) };
         let (net_p, net_n) = (prim_p.net().clone(), prim_n.net().clone());
         let (name_p, name_n) = (net_p.as_deref().unwrap_or(""), net_n.as_deref().unwrap_or(""));
-        let mut sizes = match world.get(start_item) {
-            Some(it) => DpSizes::import(world, rules, it, layer, name_p, name_n),
-            None => DpSizes::resolve(rules, name_p, name_n),
+        // `ImportSizes` of the start item: its width when it is a track or a track is joined to it (`inheritTrackWidth( aStartItem, .. )`, the
+        // start item's, which may be N's), else the rules'
+        let sizes = match world.get(start_item) {
+            Some(it) if world.rule_resolver().is_some() => DpSizes::import_from(world, rules, it, at, layer, use_connected_track_width),
+            it => {
+                let mut sizes = DpSizes::resolve(rules, name_p, name_n);
+                if let Some(w) = it.filter(|_| use_connected_track_width).and_then(|it| crate::settings::inherit_track_width(world, it, at, layer)) {
+                    sizes.width = w;
+                }
+                sizes
+            }
         };
 
         // `isStartingPointRoutable` (`if( Settings().AllowDRCViolations() ) return true;` first)
@@ -350,13 +365,10 @@ impl DiffPairPlacer {
                 return Err("Diff pair gap is less than board minimum clearance.".into());
             }
         }
-        // starting from tracks: the width they have (`inheritTrackWidth`)
-        if let (Item::Segment(sp), Item::Segment(_)) = (&prim_p, &prim_n) {
-            sizes.width = sp.width;
-        }
         if !settings.allow_drc_violations() {
-            // ... and the gap they are at has to be the configured one (to 10 %)
-            if let (Item::Segment(_), Item::Segment(_)) = (&prim_p, &prim_n) {
+            // ... and, starting from a track (`aStartItem->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T )`), the gap they are at has to be the
+            // configured one (to 10 %)
+            if world.get(start_item).is_some_and(Item::is_track) {
                 let actual_gap = vnorm(vsub(found.pair.anchor_p, found.pair.anchor_n));
                 let configured = sizes.gap + sizes.width;
                 if (actual_gap - configured).abs() > configured / 10 {
@@ -516,7 +528,7 @@ impl DiffPairPlacer {
         let norm_sq = |v: crate::diff_pair::Vec2| v.0.area(v.0) + v.1.area(v.1);
         while iter < MAX_ITER {
             // `m_currentNode->QueryColliding( &virtHead, ..)`: its copper and its hole
-            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false, head_hole: None };
+            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: false, head_hole: None, head_via: None };
             let mut obstacles = node.via_colliding(&virt, rules, &[], opts);
             obstacles.sort_by_key(|o| o.id);
             let Some(obs) = obstacles.first() else { break };
@@ -1103,7 +1115,7 @@ mod tests {
     }
 
     fn placer(node: &Node, start: ItemId) -> DiffPairPlacer {
-        DiffPairPlacer::start(node, &rules(), &RoutingSettings::default(), start, 0, LayerRange::new(0, 1)).expect("starts")
+        DiffPairPlacer::start(node, &rules(), &RoutingSettings::default(), start, node.get(start).and_then(|it| it.anchors().first().copied()).unwrap(), 0, LayerRange::new(0, 1), true).expect("starts")
     }
 
     #[test]
@@ -1550,7 +1562,7 @@ mod tests {
         let sizes = DpSizes::resolve(&plain, "A_P", "A_N");
         assert_eq!((sizes.width, sizes.gap), (mm(0.2), mm(0.25)));
         let (node, start) = two_pad_pairs();
-        let mut dp = DiffPairPlacer::start(&node, &plain, &RoutingSettings::default(), start, 0, LayerRange::new(0, 1)).unwrap();
+        let mut dp = DiffPairPlacer::start(&node, &plain, &RoutingSettings::default(), start, node.get(start).and_then(|it| it.anchors().first().copied()).unwrap(), 0, LayerRange::new(0, 1), true).unwrap();
         dp.set_dimensions(None, Some(mm(0.15)), None);
         assert_eq!(dp.sizes.gap, mm(0.15), "typed in: kept");
     }

@@ -80,7 +80,7 @@ import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
-import { connectedTrackWidth, trackUnder, displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
+import { displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
 import { padAt } from "../../kicad-port/boardControlPick";
 import { canExclude, rcMenu } from "../../kicad-port/rcItems";
 import { drcMarkerAt, drcMenuContext, runMarkerMenu, selectMarkerDrc, showDrcInDialog, toMenuEntries } from "../../actions/checkerOps";
@@ -737,15 +737,13 @@ export function Canvas() {
           // real net), same as `isStartingPointRoutable` upstream.
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
-          // `autoTrackWidth`: starting from an existing track's end, that track's width wins over the current one.
-          // (a route can start in the middle of a track too: that track's width then)
-          const under = state.bcx.autoTrackWidth ? trackUnder(board.routing?.tracks ?? [], sx, sy, layer) : null;
-          const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_NM)?.from ?? (under ? `track ${under.id}` : undefined), board.routing?.tracks ?? []) : null;
           // `ImportSizes`: with the width list on "use net class" (`UseNetClassTrack()`) no width is sent, and the server takes the start net's
-          // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width)
-          const width = connected ?? chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
+          // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width). `autoTrackWidth` (`m_UseConnectedTrackWidth`): the
+          // server's `inheritTrackWidth` first -- the width of the track the route starts on, or of the one joined to the pad or via whose far end
+          // is nearest the cursor -- over either
+          const width = chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
-          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked());
+          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth);
           return;
         }
         void fixInteractiveRoute(sx, sy, draw, dispatch, api);
@@ -761,7 +759,7 @@ export function Canvas() {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // `ImportSizes`: the board's custom pair dimensions only while `UseCustomDiffPairDimensions()`
           const custom = state.pcbx.useCustomDiffPair ? state.pcbx.customDiffPair : null;
-          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks));
+          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth);
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);
