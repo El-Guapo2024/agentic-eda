@@ -4275,6 +4275,17 @@ impl<'a> Board<'a> {
                 }
             }
             dr.board_items.swap_layers(&|l| map.get(l).map(|d| (*d).to_string()));
+            // `Drawings()` holds the tables and the barcodes too (`swapBoardItem` over every drawing).
+            for t in dr.tables.iter_mut() {
+                if let Some(dest) = map.get(t.layer.as_str()) {
+                    t.layer = (*dest).to_string();
+                }
+            }
+            for b in dr.barcodes.iter_mut() {
+                if let Some(dest) = map.get(b.layer.as_str()) {
+                    b.layer = (*dest).to_string();
+                }
+            }
         }
         Ok(())
     }

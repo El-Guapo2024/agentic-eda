@@ -1006,3 +1006,17 @@ fn a_field_copies_as_a_text_and_a_barcode_a_text_box_and_a_point_copy() {
     b.apply(&Cmd::Duplicate { ids: ids(&[&tbx]) }).unwrap();
     assert_eq!(boxes(&b).len(), before.2 + 2, "Duplicate copies a text box");
 }
+
+/// r2-pcb-edit R9: `GLOBAL_EDIT_TOOL::SwapLayers` runs over every drawing, tables and barcodes among them.
+#[test]
+fn swap_layers_moves_a_table_and_a_barcode() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    dr.tables.push(eda_model::table::Table { id: "tbl_1".into(), ..eda_model::table::Table::new_grid("F.Cu", p(mm(1.0), mm(1.0)), 2, 2, mm(5.0), mm(2.0), mm(0.1)) });
+    dr.barcodes.push(Barcode { id: "bar_1".into(), ..qr("F.Cu", p(mm(30.0), mm(40.0))) });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into())] }).unwrap();
+    assert_eq!(drawings(&b).tables[0].layer, "B.Cu");
+    assert_eq!(drawings(&b).barcodes[0].layer, "B.Cu");
+}
