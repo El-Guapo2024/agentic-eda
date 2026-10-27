@@ -88,9 +88,11 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let (section, _) = crate::studio::resolve_sheet(&design, req.get("sheet").and_then(Value::as_str).unwrap_or(""));
+    let sheet = req.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let (section, crumbs) = crate::studio::resolve_sheet(&design, sheet);
+    let sheet_path: Vec<String> = crumbs.into_iter().map(|(id, _)| id).collect();
     let project = dir.file_name().and_then(|n| n.to_str()).unwrap_or("project").to_string();
-    match eda_kicad::write_clipboard(&eda_kicad::CopyInput { design: &design, model: &model, section: &section, project: &project }, &ids) {
+    match eda_kicad::write_clipboard(&eda_kicad::CopyInput { design: &design, model: &model, section: &section, project: &project, sheet_path: &sheet_path }, &ids) {
         Ok(out) => {
             remember_screens(&design, &out.sheet_files);
             json!({ "ok": true, "text": out.text, "items": out.items, "skipped": out.skipped, "sheets": out.sheet_files.len() })

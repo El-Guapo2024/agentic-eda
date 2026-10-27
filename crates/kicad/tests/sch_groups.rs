@@ -279,7 +279,7 @@ fn grouped_with_link(m: &ConstraintModel) -> SchematicSection {
 
 fn copy_of(m: &ConstraintModel, sch: &SchematicSection, ids: &[&str]) -> String {
     let design = design_with(sch.clone());
-    let input = CopyInput { design: &design, model: m, section: sch, project: "groups" };
+    let input = CopyInput { design: &design, model: m, section: sch, project: "groups", sheet_path: &[] };
     write_clipboard(&input, &ids.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("a copy").text
 }
 

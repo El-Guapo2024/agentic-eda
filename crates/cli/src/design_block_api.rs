@@ -320,7 +320,7 @@ fn selection_made(dir: &Path, sheet_path: &str, ids: &[String]) -> Result<Made, 
     if !sheet_ids.is_empty() {
         return Err(if ids.len() == 1 { "SHEET".to_string() } else { "Design blocks with nested sheets are not supported.".to_string() });
     }
-    let out = eda_kicad::write_clipboard(&eda_kicad::CopyInput { design: &design, model: &model, section: &section, project: &project }, ids).map_err(|e| board::reasons(&e))?;
+    let out = eda_kicad::write_clipboard(&eda_kicad::CopyInput { design: &design, model: &model, section: &section, project: &project, sheet_path: &[] }, ids).map_err(|e| board::reasons(&e))?;
     if out.items == 0 {
         return Err("Please select some items to save as a design block.".into());
     }

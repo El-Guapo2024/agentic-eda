@@ -89,7 +89,7 @@ fn what_a_copy_writes_loads_in_kicad_and_keeps_the_connections() {
     for list in [sch.wires.iter().map(|w| w.id.clone()).collect::<Vec<_>>(), sch.labels.iter().map(|l| l.id.clone()).collect(), sch.power_symbols.iter().map(|p| p.id.clone()).collect(), sch.no_connects.iter().map(|n| n.id.clone()).collect()] {
         ids.extend(list);
     }
-    let copy = write_clipboard(&CopyInput { design: &design, model: &model, section: sch, project: "demo" }, &ids).unwrap();
+    let copy = write_clipboard(&CopyInput { design: &design, model: &model, section: sch, project: "demo", sheet_path: &[] }, &ids).unwrap();
 
     // `Paste` hands every pasted symbol the instance path of the sheet it lands on; a file needs it written out.
     let root = "11111111-1111-4111-8111-111111111111";
@@ -134,7 +134,7 @@ fn what_a_copy_of_sheets_writes_loads_in_kicad_beside_the_screens_it_shows() {
     let root = design.schematic.as_ref().unwrap();
     assert!(root.sheets.len() >= 2, "mcu30 is drawn as module sheets");
     let ids: Vec<String> = root.sheets.iter().map(|s| s.id.clone()).collect();
-    let copy = write_clipboard(&CopyInput { design: &design, model: &model, section: root, project: "demo" }, &ids).unwrap();
+    let copy = write_clipboard(&CopyInput { design: &design, model: &model, section: root, project: "demo", sheet_path: &[] }, &ids).unwrap();
     assert_eq!(copy.text.matches("(sheet").count(), root.sheets.len(), "every sheet symbol is in the text");
     assert_eq!(copy.sheet_files.len(), root.sheets.len(), "and the files they show are named");
     assert!(copy.skipped.is_empty(), "{:?}", copy.skipped);
@@ -263,4 +263,20 @@ fn forms_taken_from_real_kicad_files_read_as_the_file_does() {
         checked += 1;
     }
     assert!(checked >= 3, "the QA schematics were found ({checked})");
+}
+
+/// r2 D-C1 (`SCH_IO_KICAD_SEXPR::saveSymbol( aForClipboard, aRelativePath )`: the Reference field and the instance are the ones of the sheet path the copy is made
+/// on): a symbol of a screen shown twice, copied on its second placement, is written with that placement's reference.
+#[test]
+fn a_copy_on_a_second_placement_writes_that_paths_reference() {
+    let model = model();
+    let design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
+    let mut sch = design.schematic.clone().unwrap();
+    let sym = sch.symbols[0].clone();
+    sch.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: sym.at, sheet_path: vec!["sheet_b".into()], reference: "R55".into(), unit: sym.unit });
+    let ids = vec![sym.id.clone()];
+    let on_b = write_clipboard(&CopyInput { design: &design, model: &model, section: &sch, project: "demo", sheet_path: &["sheet_b".to_string()] }, &ids).unwrap().text;
+    assert!(on_b.contains("(property \"Reference\" \"R55\"") && on_b.contains("(reference \"R55\")"), "{on_b}");
+    let on_a = write_clipboard(&CopyInput { design: &design, model: &model, section: &sch, project: "demo", sheet_path: &["sheet_a".to_string()] }, &ids).unwrap().text;
+    assert!(on_a.contains(&format!("(property \"Reference\" \"{}\"", sym.id)), "{on_a}");
 }
