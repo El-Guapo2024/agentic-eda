@@ -192,3 +192,14 @@ test("a field follows the Appearance panel's Objects rows: References for the Re
   assert.deepEqual([ref, value, vendor].map((f) => fieldShownByObjects({ "obj:footprint_text": false, "obj:footprints_front": false }, front, f, true)), [true, true, true], "the footprint selected shows its fields whatever the rows say");
 });
 
+
+test("a custom pad's checks: its copper's box for the paste, its basic shapes for the mask (PAD::doCheckPad, round 4 B-4)", () => {
+  const fmt = (nm: number) => `${nm / 1e6} mm`;
+  // a 0.5 mm anchor and a 0.2 x 0.2 mm basic shape, mask margin -0.3 mm
+  const custom = { kind: "smd", shape: "custom", size: [500_000, 500_000] as [number, number], maskMargin: -300_000, customBox: [500_000, 500_000] as [number, number], primitiveBoxes: [[200_000, 200_000]] as [number, number][] };
+  assert.deepEqual(padCheck(custom, fmt).warnings, ["Warning: (negative solder mask clearance is larger than some shape primitives; results may be surprising)"]);
+  assert.deepEqual(padCheck({ ...custom, maskMargin: -100_000 }, fmt).warnings, []);
+  // the paste: the box of the copper, not the anchor
+  assert.deepEqual(padCheck({ ...custom, maskMargin: null, size: [100_000, 100_000], customBox: [2_000_000, 2_000_000], pasteMargin: -500_000 }, fmt).warnings, []);
+  assert.deepEqual(padCheck({ ...custom, size: [0, 0] }, fmt).errors, [], "a custom pad has no positive-size check");
+});

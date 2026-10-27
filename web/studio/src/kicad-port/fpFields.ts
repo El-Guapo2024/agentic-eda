@@ -213,6 +213,9 @@ type PadValues = {
   clearance?: Nm | null;
   maskMargin?: Nm | null;
   pasteMargin?: Nm | null;
+  /** A custom pad: the size of its copper's box (`GetBoundingBox().GetSize()`, the anchor and the basic shapes) and the size of each basic shape's box. */
+  customBox?: [Nm, Nm] | null;
+  primitiveBoxes?: [Nm, Nm][] | null;
 };
 
 /** `EDA_UNIT_UTILS::UI::StringFromValue( .., aAddUnitsText = true )` of a length in nm: `%.10f` in mm, `%.5f` in mils, `%.8f` in inches, trailing zeros removed. */
@@ -258,8 +261,9 @@ function stadiumOutline(w: number, h: number): number[][] {
 export function padCheck(pad: PadValues, fmt: (nm: Nm) => string, units?: "mm" | "mil" | "in"): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
-  if (pad.size[0] <= 0 || (pad.shape !== "circle" && pad.shape !== "custom" && pad.size[1] <= 0)) errors.push("Error: (Pad must have a positive size)");
-  const [pw, ph] = pad.shape === "circle" ? [pad.size[0], pad.size[0]] : pad.size;
+  // `if( GetShape() == PAD_SHAPE::CUSTOM ) pad_size = GetBoundingBox().GetSize(); else if( size not positive ) ...`
+  if (pad.shape !== "custom" && (pad.size[0] <= 0 || (pad.shape !== "circle" && pad.size[1] <= 0))) errors.push("Error: (Pad must have a positive size)");
+  const [pw, ph] = pad.shape === "circle" ? [pad.size[0], pad.size[0]] : pad.shape === "custom" && pad.customBox ? pad.customBox : pad.size;
   const [ox, oy] = pad.offset ?? [0, 0];
   // the copper's outline, about the pad's position (the hole's centre)
   const padOutline = (pad.shape === "circle" || pad.shape === "oval" ? stadiumOutline(pw, ph) : [[pw / 2, ph / 2], [pw / 2, -ph / 2], [-pw / 2, ph / 2], [-pw / 2, -ph / 2]]).map(([x, y]) => [x! + ox, y! + oy]);
@@ -284,7 +288,10 @@ export function padCheck(pad: PadValues, fmt: (nm: Nm) => string, units?: "mm" |
   }
   if ((pad.clearance ?? 0) < 0) warnings.push("Warning: (negative local clearance values have no effect)");
   const mask = pad.maskMargin ?? null;
-  if (mask != null && mask < 0 && pad.shape !== "custom" && (Math.abs(mask) > pw || Math.abs(mask) > ph)) warnings.push("Warning: (negative solder mask clearance is larger than pad; no solder mask will be generated)");
+  if (mask != null && mask < 0 && pad.shape === "custom") {
+    // `for( shape : GetPrimitives( aLayer ) ) if( absMargin > shapeBBox.GetWidth() || absMargin > shapeBBox.GetHeight() ) { ..; break; }`
+    if ((pad.primitiveBoxes ?? []).some(([w, h]) => Math.abs(mask) > w || Math.abs(mask) > h)) warnings.push("Warning: (negative solder mask clearance is larger than some shape primitives; results may be surprising)");
+  } else if (mask != null && mask < 0 && (Math.abs(mask) > pw || Math.abs(mask) > ph)) warnings.push("Warning: (negative solder mask clearance is larger than pad; no solder mask will be generated)");
   // `paste_size = pad_size + paste_margin + KiROUND( pad_size * mratio )`
   const margin = pad.pasteMargin ?? 0;
   const ratio = pad.pasteRatio ?? 0;
