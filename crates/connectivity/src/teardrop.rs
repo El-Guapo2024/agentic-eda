@@ -18,6 +18,10 @@
 //! - **Arc tracks** (`PCB_ARC_T`, round 5's A5-1) follow the real arc: the crossing with its polyline, the reference segment found on it, and 25ec2335's
 //!   two refinements (the polyline's points moved onto the arc, the corners kept `maxError` inside an arc's edge), as the kicad-cli 25ec2335 this is proven
 //!   against does (`crates/kicad/tests/teardrops_kicad_cli.rs` has arc cases both ways round).
+//! - **One KiCad version: 25ec2335** (round 6 D6-1), the kicad-cli the proof runs against, for every rule: `UpdateTeardrops`' filters (a Max width of 0 is no
+//!   limit; `computeChordThroughShape`'s graze test on the extended centreline, arcs exempt, in place of 8303b2ad's `computeEmergingTrackLength`) as well as
+//!   the arc geometry. Not ported from 25ec2335: `computeFittedTeardropPolygon` (a teardrop shrunk or dropped where it would come within clearance of
+//!   another net's copper, `collidesWithOtherNets`) and the solder-mask teardrops (`createAndAddTeardropWithMask`).
 //! - **Straight edges only** (`m_CurvedEdges` is not modeled -- always
 //!   `false`, which is also upstream's own factory default). No Bezier
 //!   curve, no multi-segment curve approximation.
@@ -336,8 +340,120 @@ fn compute_anchor_points(settings: &TeardropSettings, center: Point64, width: i6
     true
 }
 
-/// `SHAPE_ARC( aStart, aMid, aEnd, aWidth )` for a track arc (`libs/kimath/src/geometry/shape_arc.cpp`): the centre is `CalcArcCenter`'s, rounded to the
-/// nanometre (its snap to a round 10 or 100 nm within its error estimate is not ported: the plain circumcentre, rounded), the radius a double from it.
+/// `EDA_ANGLE( const VECTOR2D& )` (`eda_angle.h`), degrees: the axes and the diagonals exact, else `atan2` in radians divided by `DEGREES_TO_RADIANS`.
+fn deg_angle(x: f64, y: f64) -> f64 {
+    if x == 0.0 && y == 0.0 {
+        0.0
+    } else if y == 0.0 {
+        if x >= 0.0 { 0.0 } else { -180.0 }
+    } else if x == 0.0 {
+        if y >= 0.0 { 90.0 } else { -90.0 }
+    } else if x == y {
+        if x >= 0.0 { 45.0 } else { -180.0 + 45.0 }
+    } else if x == -y {
+        if x >= 0.0 { -45.0 } else { 180.0 - 45.0 }
+    } else {
+        y.atan2(x) / DEGREES_TO_RADIANS
+    }
+}
+
+/// `EDA_ANGLE::DEGREES_TO_RADIANS`.
+const DEGREES_TO_RADIANS: f64 = std::f64::consts::PI / 180.0;
+
+/// `EDA_ANGLE::Normalize` for the small angles met here: into [0, 360).
+fn deg_normalize(mut a: f64) -> f64 {
+    while a < 0.0 {
+        a += 360.0;
+    }
+    while a >= 360.0 {
+        a -= 360.0;
+    }
+    a
+}
+
+/// `EDA_ANGLE::Cos`: exact at the multiples of 45 degrees (of the normalised angle), else `cos( AsRadians() )` of the angle as it is.
+fn deg_cos(a: f64) -> f64 {
+    let sqrt1_2 = std::f64::consts::FRAC_1_SQRT_2;
+    match deg_normalize(a) {
+        t if t == 0.0 => 1.0,
+        t if t == 180.0 => -1.0,
+        t if t == 90.0 || t == 270.0 => 0.0,
+        t if t == 45.0 || t == 315.0 => sqrt1_2,
+        t if t == 135.0 || t == 225.0 => -sqrt1_2,
+        _ => (a * DEGREES_TO_RADIANS).cos(),
+    }
+}
+
+/// `EDA_ANGLE::Sin`, as [`deg_cos`].
+fn deg_sin(a: f64) -> f64 {
+    let sqrt1_2 = std::f64::consts::FRAC_1_SQRT_2;
+    match deg_normalize(a) {
+        t if t == 0.0 || t == 180.0 => 0.0,
+        t if t == 45.0 || t == 135.0 => sqrt1_2,
+        t if t == 225.0 || t == 315.0 => -sqrt1_2,
+        t if t == 90.0 => 1.0,
+        t if t == 270.0 => -1.0,
+        _ => (a * DEGREES_TO_RADIANS).sin(),
+    }
+}
+
+/// `CalcArcCenter( const VECTOR2I& aStart, aMid, aEnd )` of 25ec2335 (`libs/kimath/src/trigo.cpp`): the circumcentre with the deltas exact in 64 bits and the
+/// numerators in 128 ("only the final divisions round"), `snapArcCenter`'s round 100 nm or 10 nm centre when the three radii still agree to 1 nm,
+/// `degenerateArcCenter`'s clusters and coincident pairs, `collinearArcCenter`, and `KiROUND`. (Round 6 D6-1: the plain circumcentre put a short arc's
+/// teardrop 1 nm off kicad-cli's.)
+fn calc_arc_center_i(start: Point64, mid: Point64, end: Point64) -> Point64 {
+    let (ds, dm, de) = ((start.x as f64, start.y as f64), (mid.x as f64, mid.y as f64), (end.x as f64, end.y as f64));
+    let norm = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1)).sqrt();
+    let degenerate = || -> Option<(f64, f64)> {
+        let (min_x, max_x) = (ds.0.min(dm.0).min(de.0), ds.0.max(dm.0).max(de.0));
+        let (min_y, max_y) = (ds.1.min(dm.1).min(de.1), ds.1.max(dm.1).max(de.1));
+        // kClusterExtent = 5, kCoincidentRadius = 2.
+        if max_x - min_x < 5.0 && max_y - min_y < 5.0 {
+            return Some(((ds.0 + dm.0 + de.0) / 3.0, (ds.1 + dm.1 + de.1) / 3.0));
+        }
+        let coincident = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1) < 4.0;
+        if coincident(ds, dm) || coincident(dm, de) {
+            return Some(((ds.0 + de.0) / 2.0, (ds.1 + de.1) / 2.0));
+        }
+        if coincident(ds, de) {
+            return Some(((ds.0 + dm.0) / 2.0, (ds.1 + dm.1) / 2.0));
+        }
+        None
+    };
+    let center = degenerate().unwrap_or_else(|| {
+        let (bx, by) = ((mid.x - start.x) as i128, (mid.y - start.y) as i128);
+        let (cx, cy) = ((end.x - start.x) as i128, (end.y - start.y) as i128);
+        let (b2, c2) = (bx * bx + by * by, cx * cx + cy * cy);
+        let d = (bx * cy - by * cx) * 2;
+        if d == 0 {
+            // `collinearArcCenter`: the chord's middle, pushed 1e17 out along its normal.
+            let (chx, chy) = (de.0 - ds.0, de.1 - ds.1);
+            let len = chx.hypot(chy);
+            let k = if len > 0.0 { 1e17 / len } else { 0.0 };
+            return ((ds.0 + de.0) / 2.0 + chy * k, (ds.1 + de.1) / 2.0 - chx * k);
+        }
+        let dd = d as f64;
+        let ux = (start.x as i128 * d + b2 * cy - c2 * by) as f64 / dd;
+        let uy = (start.y as i128 * d + c2 * bx - b2 * cx) as f64 / dd;
+        // `snapArcCenter`: kMaxExactInteger = 2^53, kSnapRadiusTolerance = 1.
+        if !(ux.abs() < 9007199254740992.0) || !(uy.abs() < 9007199254740992.0) {
+            return (ux, uy);
+        }
+        for grid in [100.0, 10.0] {
+            let cand = ((ux / grid + 0.5).floor() * grid, (uy / grid + 0.5).floor() * grid);
+            let (rs, rm, re) = (norm(cand, ds), norm(cand, dm), norm(cand, de));
+            if rs.max(rm).max(re) - rs.min(rm).min(re) <= 1.0 {
+                return cand;
+            }
+        }
+        (ux, uy)
+    });
+    let clamp = |v: f64| v.clamp(i32::MIN as f64 + 100.0, i32::MAX as f64 - 100.0).round() as i64;
+    Point64::new(clamp(center.0), clamp(center.1))
+}
+
+/// `SHAPE_ARC( aStart, aMid, aEnd, aWidth )` for a track arc (`libs/kimath/src/geometry/shape_arc.cpp`): the centre is `CalcArcCenter`'s ([`calc_arc_center_i`]),
+/// an integer point, the radius a double from it (`sqrt( ( VECTOR2D( m_start ) - m_center ).SquaredEuclideanNorm() )`).
 #[derive(Clone, Copy)]
 struct TrackArc {
     start: Point64,
@@ -351,15 +467,14 @@ struct TrackArc {
 impl TrackArc {
     fn new(start: Point, mid: Point, end: Point, width: Nm) -> Option<TrackArc> {
         let (s, m, e) = (p64(start), p64(mid), p64(end));
-        let (sx, sy, mx, my, ex, ey) = (s.x as f64, s.y as f64, m.x as f64, m.y as f64, e.x as f64, e.y as f64);
-        let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
-        if d == 0.0 {
+        // A straight "arc" is not one this generator follows (its centre would be `collinearArcCenter`'s, 1e17 away).
+        if (m.x - s.x) as i128 * (e.y - s.y) as i128 - (m.y - s.y) as i128 * (e.x - s.x) as i128 == 0 {
             return None;
         }
-        let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
-        let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
-        let center = (ux.round(), uy.round());
-        Some(TrackArc { start: s, mid: m, end: e, width: width.get(), center, radius: (sx - center.0).hypot(sy - center.1) })
+        let c = calc_arc_center_i(s, m, e);
+        let center = (c.x as f64, c.y as f64);
+        let (dx, dy) = (s.x as f64 - center.0, s.y as f64 - center.1);
+        Some(TrackArc { start: s, mid: m, end: e, width: width.get(), center, radius: (dx * dx + dy * dy).sqrt() })
     }
 
     /// `SHAPE_ARC::Reverse`: the ends swapped, the middle and the centre kept.
@@ -393,7 +508,17 @@ impl TrackArc {
         use eda_model::outline::{arc_to_segment_count, circle_to_end_segment_delta_radius};
         let (s, m, e) = (self.start, self.mid, self.end);
         let (cx, cy) = self.center;
-        let (sa, ca) = (self.start_angle(), self.central_angle());
+        // `EDA_ANGLE`s, in degrees as KiCad keeps them (round 6 D6-1: the radians a vertex was computed in put it 1 nm off KiCad's): `GetStartAngle()`
+        // normalised, `GetCentralAngle()` as `EDA_ANGLE( end - c ) - EDA_ANGLE( start - c )` turned by `IsCCW()`.
+        let sa = deg_normalize(deg_angle(s.x as f64 - cx, s.y as f64 - cy));
+        let mut ca = deg_angle(e.x as f64 - cx, e.y as f64 - cy) - deg_angle(s.x as f64 - cx, s.y as f64 - cy);
+        if self.central_angle() > 0.0 {
+            if ca < 0.0 {
+                ca += 360.0;
+            }
+        } else if ca > 0.0 {
+            ca -= 360.0;
+        }
         let half_max_error = (max_error as f64 / 2.0).max(1.0);
         let external_radius = self.radius + self.width as f64 / 2.0;
         // `startToEnd.Distance( GetArcMid() )`: the middle's distance to the chord.
@@ -406,17 +531,19 @@ impl TrackArc {
         let (n, effective_error) = if external_radius < half_max_error || chord_dist < half_max_error {
             (0, external_radius)
         } else {
-            let n = arc_to_segment_count((external_radius as i64) as f64, max_error as f64, ca);
-            let seg360 = (n as f64 * 360.0 / ca.to_degrees().abs()) as i64;
-            (n, circle_to_end_segment_delta_radius((external_radius as i64) as f64, seg360))
+            let n = arc_to_segment_count((external_radius as i64) as f64, max_error as f64, ca.to_radians());
+            let seg360 = (n as f64 * 360.0 / ca.abs()) as i64;
+            // `CircleToEndSegmentDeltaRadius` returns an `int`, `KiROUND`ed (round 6 D6-1: unrounded, a short arc's vertex came 1 nm off KiCad's).
+            (n, circle_to_end_segment_delta_radius((external_radius as i64) as f64, seg360).round())
         };
         let r = self.radius + effective_error / 2.0;
         let n2 = n * 2;
         let mut out = vec![s];
         let mut i = 1;
         while i < n2 {
+            // `EDA_ANGLE a = sa; a += ( ca * i ) / n;` and `a.Cos()`, `a.Sin()`.
             let a = sa + ca * i as f64 / n2 as f64;
-            let p = Point64::new((cx + r * a.cos()).round() as i64, (cy + r * a.sin()).round() as i64);
+            let p = Point64::new((cx + r * deg_cos(a)).round() as i64, (cy + r * deg_sin(a)).round() as i64);
             if out.last() != Some(&p) {
                 out.push(p);
             }
@@ -506,6 +633,50 @@ fn chain_chain_intersect(outline: &[Point64], poly: &[Point64]) -> Vec<Point64> 
     hits
 }
 
+/// `TEARDROP_MANAGER::computeChordThroughShape` (`pcbnew/teardrop/teardrop_utils.cpp`, 25ec2335) for a straight track and a round anchor (a via, or a round
+/// pad: `TransformCircleToPolygon( shapebuffer, pos, radius, maxError, ERROR_INSIDE, 16 )`): the length of the copper span of the track's centreline, extended
+/// both ways by the polygon's box diagonal plus the track's length, that holds `inside`. The crossings are projected on the direction, sorted, and the span
+/// between two neighbours whose middle is inside the polygon and that brackets `inside` is the answer. A zero-length track, fewer than two crossings or no such
+/// span answer `i64::MAX` ("keep the teardrop"). (The arc's `std::numeric_limits<int>::max()` is the caller's.)
+fn chord_through_round_anchor(center: Point64, radius: i64, start: Point64, end: Point64, inside: Point64) -> i64 {
+    let (dx, dy) = ((end.x - start.x) as f64, (end.y - start.y) as f64);
+    let len = dx.hypot(dy);
+    if len == 0.0 {
+        return i64::MAX;
+    }
+    let outline = eda_shape_poly_set::basic_shapes::circle_polygon(center, radius, MAX_ERROR, ErrorLoc::Inside, 16);
+    let (dir_x, dir_y) = (dx / len, dy / len);
+    // `VECTOR2I mid = ( start + end ) / 2`: integer division.
+    let mid = Point64::new((start.x + end.x) / 2, (start.y + end.y) / 2);
+    // `shapebuffer.BBox().Diagonal()`: the box's size, `VECTOR2I::EuclideanNorm`.
+    let (min_x, max_x) = outline.iter().fold((i64::MAX, i64::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)));
+    let (min_y, max_y) = outline.iter().fold((i64::MAX, i64::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+    let reach = (euclidean_norm(max_x - min_x, max_y - min_y) as f64 + len).round();
+    let off = Point64::new((dir_x * reach).round() as i64, (dir_y * reach).round() as i64);
+    let (ext_start, ext_end) = (Point64::new(mid.x - off.x, mid.y - off.y), Point64::new(mid.x + off.x, mid.y + off.y));
+    let pts = chain_intersect(&outline, ext_start, ext_end);
+    // "Degenerate/tangent-only crossings should not drop the teardrop."
+    if pts.len() < 2 {
+        return i64::MAX;
+    }
+    let project = |x: f64, y: f64| (x - ext_start.x as f64) * dir_x + (y - ext_start.y as f64) * dir_y;
+    let mut proj: Vec<f64> = pts.iter().map(|p| project(p.x as f64, p.y as f64)).collect();
+    proj.sort_by(|a, b| a.total_cmp(b));
+    let inside_proj = project(inside.x as f64, inside.y as f64);
+    for ii in 0..proj.len() - 1 {
+        let m = (proj[ii] + proj[ii + 1]) / 2.0;
+        let span_mid = Point64::new(ext_start.x + (dir_x * m).round() as i64, ext_start.y + (dir_y * m).round() as i64);
+        if !eda_shape_poly_set::hatch::point_inside(&outline, span_mid) {
+            continue;
+        }
+        if inside_proj >= proj[ii] && inside_proj <= proj[ii + 1] {
+            return (proj[ii + 1] - proj[ii]).round() as i64;
+        }
+    }
+    // "Boundary-touch fallback: keep the teardrop."
+    i64::MAX
+}
+
 /// The teardrop of one track (a segment, or an arc when `arc` is its `(start, mid, end)`) at a round anchor (a via, or a pad `TEARDROP_MANAGER::IsRound`
 /// calls round), with straight edges: the pentagon `[A, B, C, D, E]` of `TEARDROP_MANAGER::computeTeardropPolygon` (`pcbnew/teardrop/teardrop_utils.cpp`). A
 /// and B are on the track, C and E on the anchor's outline, D just behind the anchor's centre.
@@ -515,7 +686,8 @@ fn chain_chain_intersect(outline: &[Point64], poly: &[Point64]) -> Vec<Point64> 
 ///   outline (`actualTdLen = std::min( targetLength, SEG( start, end ).Length() )`).
 /// - An arc (`PCB_ARC_T`, round 5's A5-1): the crossing is the outline's with the arc's polyline (`arc.ConvertToPolyline( maxError )`), and the reference
 ///   segment is the polyline's last one whose start is nearer the crossing than `actualTdLen`, walked from the far end ("find the best teardrop end point on
-///   the arc"), with `actualTdLen` less that start's distance from the crossing. `computeEmergingTrackLength` measures the arc's polyline too.
+///   the arc"), with `actualTdLen` less that start's distance from the crossing.
+/// - The graze filter is 25ec2335's `computeChordThroughShape` ([`chord_through_round_anchor`]), which leaves arcs out.
 /// - A and B: `start + vecT * len ± perp * width / 2`, the doubles truncated into a `VECTOR2I`.
 /// - D: `intersection - vecVia * ( effectiveDist + 1 um )`, `effectiveDist` the larger of the centre's projection on the axis and the radius, clamped to the far
 ///   side of the circle less 2 um. (`vecVia` is `vecT`: one track, and an arc keeps its own track.)
@@ -531,8 +703,10 @@ fn teardrop_polygon(center: Point, width: Nm, near: Point, far: Point, arc: Opti
     if radius <= 0 || tw <= 0 || near != center {
         return None;
     }
-    // `UpdateTeardrops`: "Ensure a teardrop shape can be built: track width must be < teardrop width and filter width".
-    if tw >= settings.max_width_nm.get() || tw as f64 >= w as f64 * settings.best_width_ratio || tw as f64 >= w as f64 * settings.width_to_size_filter_ratio {
+    // `UpdateTeardrops` (25ec2335): "Ensure a teardrop shape can be built: track width must be < teardrop width and filter width. A max width of 0 means no
+    // limit, not "nothing fits"." (8303b2ad had no `m_TdMaxWidth > 0` guard; round 6 D6-1.)
+    let max_width = settings.max_width_nm.get();
+    if (max_width > 0 && tw >= max_width) || tw as f64 >= w as f64 * settings.best_width_ratio || tw as f64 >= w as f64 * settings.width_to_size_filter_ratio {
         return None;
     }
     let c = p64(center);
@@ -547,19 +721,15 @@ fn teardrop_polygon(center: Point, width: Nm, near: Point, far: Point, arc: Opti
     // The track's own polyline when it is an arc (`SHAPE_ARC( GetStart(), GetMid(), GetEnd(), GetWidth() ).ConvertToPolyline( maxError )`).
     let track_arc = arc.and_then(|(s, m, e)| TrackArc::new(s, m, e, track_width));
     let arc_poly = track_arc.as_ref().map(|a| a.polyline(MAX_ERROR));
-    let (hits, emerging) = match &arc_poly {
-        Some(poly) => {
-            let mut hits = chain_chain_intersect(&outline, poly);
-            let first = hits.first().copied();
-            let d = |p: &Point64| euclidean_norm(p.x - end.x, p.y - end.y);
-            hits.sort_by_key(d);
-            (first.into_iter().collect::<Vec<_>>(), hits)
-        }
-        None => (chain_intersect(&outline, start, end), chain_intersect(&outline, end, start)),
+    let hits = match &arc_poly {
+        Some(poly) => chain_chain_intersect(&outline, poly).first().copied().into_iter().collect::<Vec<_>>(),
+        None => chain_intersect(&outline, start, end),
     };
-    // `computeEmergingTrackLength`: a track emerging by less than its own width does not anchor a teardrop. (Measured from the outside end.)
-    let Some(&nearest_out) = emerging.first() else { return None };
-    if euclidean_norm(nearest_out.x - end.x, nearest_out.y - end.y) < tw {
+    // `UpdateTeardrops` (25ec2335): "Reject tangential grazes, but keep short radial entries." -- `computeChordThroughShape( track, via, layer, inside end )
+    // < track->GetWidth()`, which answers "no limit" for an arc ("Arcs are genuine entries"). It replaced 8303b2ad's `computeEmergingTrackLength`, which
+    // refused a track emerging from the anchor by less than its width, arcs included (round 6 D6-1: this port follows 25ec2335, the kicad-cli it is proven
+    // against, for every teardrop rule).
+    if arc.is_none() && chord_through_round_anchor(c, radius, start, end, start) < tw {
         return None;
     }
     let intersection = *hits.first()?;
@@ -776,6 +946,34 @@ mod tests {
         assert!(generate_teardrops(&design, &model, &enabled_settings()).is_empty());
     }
 
+    /// Round 6 D6-1, 25ec2335's `UpdateTeardrops`: a track leaving the via by less than its own width is a radial entry (the chord on its extended centreline
+    /// is the via's diameter), not a graze, and gets its teardrop; a Max width of 0 is "no limit, not nothing fits".
+    #[test]
+    fn a_short_radial_track_and_a_max_width_of_zero_still_get_teardrops() {
+        let (mut design, model) = two_pad_model();
+        let a = pad_center(&design, &model, "R1", "1");
+        let via_at = Point { x: a.x + mm(3.0), y: a.y };
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, Point { x: via_at.x + mm(0.35), y: via_at.y }], arc_mid_offset: None });
+        assert_eq!(generate_teardrops(&design, &model, &enabled_settings()).len(), 1, "0.05 mm out of the via, under the track's 0.2 mm width");
+        let no_limit = TeardropSettings { enabled: true, max_width_nm: Nm::ZERO, ..Default::default() };
+        assert_eq!(generate_teardrops(&design, &model, &no_limit).len(), 1, "max width 0 = no limit");
+    }
+
+    /// `computeChordThroughShape`: the copper span of the extended centreline that holds the inside end; arcs and a line missing the shape answer "no limit".
+    #[test]
+    fn the_chord_through_a_round_anchor_is_measured_on_the_extended_centreline() {
+        let c = Point64::new(0, 0);
+        // Through the centre: the inscribed polygon's width along x, within maxError of the diameter (ERROR_INSIDE).
+        let d = chord_through_round_anchor(c, 300_000, Point64::new(0, 0), Point64::new(350_000, 0), Point64::new(0, 0));
+        assert!((600_000 - 2 * MAX_ERROR..=600_000).contains(&d), "{d}");
+        // A graze: a short track whose inside end is near the rim, off the centre line.
+        let g = chord_through_round_anchor(c, 300_000, Point64::new(-50_000, 290_000), Point64::new(50_000, 290_000), Point64::new(0, 290_000));
+        assert!(g < 200_000, "{g}");
+        assert_eq!(chord_through_round_anchor(c, 300_000, Point64::new(5, 5), Point64::new(5, 5), Point64::new(5, 5)), i64::MAX, "a zero-length track");
+    }
+
     #[test]
     fn a_track_on_a_different_net_than_the_via_is_ignored() {
         let (mut design, model) = two_pad_model();
@@ -865,7 +1063,7 @@ mod tests {
         let via_at = Point { x: a.x + mm(3.0), y: a.y };
         let rt = design.routing.as_mut().unwrap();
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: mm(0.3), diameter: mm(0.8), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        // 0.65 mm long: 0.25 mm past the via's edge (more than its 0.2 mm width, `computeEmergingTrackLength`), less than the requested 0.4 mm, so the
+        // 0.65 mm long: 0.25 mm past the via's edge (more than its 0.2 mm width), less than the requested 0.4 mm, so the
         // teardrop ends at the track's end (`actualTdLen`).
         rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![via_at, Point { x: via_at.x + mm(0.65), y: via_at.y }], arc_mid_offset: None });
         let out = generate_teardrops(&design, &model, &enabled_settings());
