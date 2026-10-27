@@ -174,3 +174,143 @@ impl SizesSettings {
         SizesSettings { clearance: rules.clearance_of(net), track_width: rules.width_of(net), via_diameter: rules.via_diameter_of(net), via_drill: rules.via_drill_of(net) }
     }
 }
+
+/// What `PNS_KICAD_IFACE_BASE::ImportSizes` gives a route, the net class's sizes in use (`UseNetClassTrack()`, `UseNetClassVia()`,
+/// `UseNetClassDiffPair()`: the width list on its first entry and no custom size, KiCad's default).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedSizes {
+    /// `SetClearance`: the start's `CT_CLEARANCE` when it is at least the board's minimum, else the board's minimum clearance.
+    pub clearance: Nm,
+    pub track_width: Nm,
+    /// `SetWidthSource`: the name of the rule the width is from ("netclass 'Power'", a custom rule's name), "board minimum track width" or
+    /// "netclass 'Default'".
+    pub width_source: String,
+    pub via_diameter: Nm,
+    pub via_drill: Nm,
+    pub diff_pair_width: Nm,
+    pub diff_pair_gap: Nm,
+    pub diff_pair_via_gap: Nm,
+    /// `SetHoleToHole`: `CT_HOLE_TO_HOLE` of two dummy vias of the net.
+    pub hole_to_hole: Nm,
+    /// `SetDiffPairHoleToHole`: the larger of that and the one of the via and its coupled one.
+    pub diff_pair_hole_to_hole: Nm,
+}
+
+/// `PNS_KICAD_IFACE_BASE::ImportSizes( aSizes, aStartItem, aNet, aStartPosition )` with the net class's sizes in use: every size is the rule
+/// engine's (`m_ruleResolver->QueryConstraint`, [`crate::rule_resolver::RuleResolver::query_constraint`]) for a dummy track of the start item's net
+/// on `layer` (`dummyTrack.SetEnds( aStartItem->Anchor( startAnchor ), .. )`, the anchor of a segment nearer `at`), so the start net's class, a
+/// `.kicad_dru` rule (`track_width`, `diff_pair_gap`, `via_diameter`, `hole_size`, `hole_to_hole`) and a pair's class width (`A.inDiffPair('*')`)
+/// all count:
+/// - the width is the larger of the board's minimum track width and `CT_WIDTH`'s opt; with no start item (or no rule) the current width, the
+///   Default class's (`GetCurrentTrackWidth()` on the list's first entry);
+/// - the via the larger of the board's minimum via size / through drill and `CT_VIA_DIAMETER` / `CT_VIA_HOLE` of a dummy via of the net;
+/// - the pair's width `CT_WIDTH` of the track and its coupled one (`&dummyTrack, &coupledTrack`) over the board's minimum width, its gap and via
+///   gap `CT_DIFF_PAIR_GAP` over the board's minimum clearance;
+/// - hole to hole `CT_HOLE_TO_HOLE` of two dummy vias on no layer (`UNDEFINED_LAYER`), and of the via and its coupled one for a pair.
+///
+/// A world with no rule resolver answers from the net classes ([`SizesSettings::for_net`], [`crate::dp_placer::DpSizes::resolve`]). The connected
+/// track's width (`m_UseConnectedTrackWidth`, `inheritTrackWidth`) is the caller's.
+pub fn import_sizes(world: &crate::node::Node, rules: &BoardRules, start: Option<(&crate::item::Item, eda_model::ir::Point)>, layer: i32) -> ImportedSizes {
+    use crate::rule_resolver::Side;
+    use eda_drc::constraints::CType;
+    let net: crate::item::Net = start.and_then(|(it, _)| it.net().clone()).filter(|n| &**n != "\u{1}");
+    let name = net.as_deref().unwrap_or("");
+    let coupled: crate::item::Net = crate::diff_pair::dp_coupled_net_name(name).and_then(|n| crate::item::net_of(&n));
+    let Some(r) = world.rule_resolver() else {
+        let s = SizesSettings::for_net(rules, name);
+        let dp = crate::dp_placer::DpSizes::resolve(rules, name, coupled.as_deref().unwrap_or(""));
+        return ImportedSizes {
+            clearance: s.clearance,
+            track_width: if start.is_some() { s.track_width.max(rules.track_width_min_nm) } else { rules.track_width.max(rules.track_width_min_nm) },
+            width_source: String::new(),
+            via_diameter: s.via_diameter,
+            via_drill: s.via_drill,
+            diff_pair_width: dp.width,
+            diff_pair_gap: dp.gap,
+            diff_pair_via_gap: dp.via_gap,
+            hole_to_hole: dp.hole_to_hole,
+            diff_pair_hole_to_hole: dp.hole_to_hole,
+        };
+    };
+    // "Find the start anchor which is closest to the start mouse location"
+    let anchor = start.map(|(it, at)| {
+        let anchors = it.anchors();
+        match (it, anchors.as_slice()) {
+            (crate::item::Item::Segment(_), [a0, a1, ..]) => {
+                let d = |p: &eda_model::ir::Point| ((p.x - at.x).as_f64()).hypot((p.y - at.y).as_f64());
+                if d(a1) < d(a0) {
+                    *a1
+                } else {
+                    *a0
+                }
+            }
+            (_, [a0, ..]) => *a0,
+            _ => at,
+        }
+    });
+    let track = |n: &'_ crate::item::Net, p: eda_model::ir::Point| (n.clone(), p);
+    let mut out = ImportedSizes {
+        clearance: rules.min_clearance_nm,
+        track_width: rules.track_width_min_nm,
+        width_source: "board minimum track width".into(),
+        via_diameter: rules.via_diameter_min_nm,
+        via_drill: rules.via_drill_min_nm,
+        diff_pair_width: rules.track_width_min_nm,
+        diff_pair_gap: rules.min_clearance_nm,
+        diff_pair_via_gap: rules.min_clearance_nm,
+        hole_to_hole: rules.hole_to_hole_min_nm,
+        diff_pair_hole_to_hole: rules.hole_to_hole_min_nm,
+    };
+    let nm = Nm::new;
+    let mut found = false;
+    if let Some(p) = anchor {
+        let (n, p) = track(&net, p);
+        let dummy = Side::Track { net: &n, layer, seg: Some((p, p)) };
+        if let Some((c, _)) = r.query_constraint(CType::Clearance, &dummy, None, Some(layer)) {
+            if nm(c.min()) >= rules.min_clearance_nm {
+                out.clearance = nm(c.min());
+            }
+        }
+        if let Some((c, rule)) = r.query_constraint(CType::TrackWidth, &dummy, None, Some(layer)) {
+            out.track_width = out.track_width.max(nm(c.opt()));
+            found = true;
+            if out.track_width == nm(c.opt()) {
+                out.width_source = rule;
+            }
+        }
+        let (cn, _) = track(&coupled, p);
+        let coupled_track = Side::Track { net: &cn, layer, seg: Some((p, p)) };
+        if let Some((c, _)) = r.query_constraint(CType::TrackWidth, &dummy, Some(&coupled_track), Some(layer)) {
+            out.diff_pair_width = out.diff_pair_width.max(nm(c.opt()));
+        }
+        if let Some((c, _)) = r.query_constraint(CType::DiffPairGap, &dummy, Some(&coupled_track), Some(layer)) {
+            out.diff_pair_gap = out.diff_pair_gap.max(nm(c.opt()));
+            out.diff_pair_via_gap = out.diff_pair_via_gap.max(nm(c.opt()));
+        }
+        let via = Side::Via { net: &n, layers: crate::layer::LayerRange::new(0, (r.layer_count() as i32 - 1).max(0)), pos: p };
+        if let Some((c, _)) = r.query_constraint(CType::ViaDiameter, &via, None, Some(layer)) {
+            out.via_diameter = out.via_diameter.max(nm(c.opt()));
+        }
+        if let Some((c, _)) = r.query_constraint(CType::HoleSize, &via, None, Some(layer)) {
+            out.via_drill = out.via_drill.max(nm(c.opt()));
+        }
+        if let Some((c, _)) = r.query_constraint(CType::HoleToHole, &via, Some(&via), None) {
+            out.hole_to_hole = nm(c.min());
+        }
+        let coupled_via = Side::Via { net: &cn, layers: crate::layer::LayerRange::new(0, (r.layer_count() as i32 - 1).max(0)), pos: p };
+        let mut h2h = out.hole_to_hole;
+        if let Some((c, _)) = r.query_constraint(CType::HoleToHole, &via, Some(&coupled_via), None) {
+            h2h = nm(c.min());
+        }
+        out.diff_pair_hole_to_hole = h2h.max(out.hole_to_hole);
+    } else {
+        out.via_diameter = rules.via_diameter;
+        out.via_drill = rules.via_drill;
+    }
+    if !found {
+        // `GetCurrentTrackWidth()` on the list's first entry: the Default class's width
+        out.track_width = out.track_width.max(rules.track_width);
+        out.width_source = "netclass 'Default'".into();
+    }
+    out
+}

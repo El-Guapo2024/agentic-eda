@@ -17,6 +17,7 @@
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
+import { chosenTrackWidth } from "../../kicad-port/routerVia";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
@@ -740,7 +741,9 @@ export function Canvas() {
           // (a route can start in the middle of a track too: that track's width then)
           const under = state.bcx.autoTrackWidth ? trackUnder(board.routing?.tracks ?? [], sx, sy, layer) : null;
           const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_NM)?.from ?? (under ? `track ${under.id}` : undefined), board.routing?.tracks ?? []) : null;
-          const width = connected ?? state.currentTrackWidthNm ?? board.board_rules?.track_width ?? 250_000;
+          // `ImportSizes`: with the width list on "use net class" (`UseNetClassTrack()`) no width is sent, and the server takes the start net's
+          // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width)
+          const width = connected ?? chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked());
           return;

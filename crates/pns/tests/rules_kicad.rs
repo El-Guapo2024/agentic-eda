@@ -354,6 +354,110 @@ fn a_margin_line_holds_a_route_off_as_an_edge() {
     }
 }
 
+fn class(name: &str, nets: &[&str]) -> eda_model::NetClass {
+    eda_model::NetClass { name: name.into(), nets: nets.iter().map(|n| n.to_string()).collect(), track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
+}
+
+/// R3-3 (`ImportSizes`, `UseNetClassTrack()`: `QueryConstraint( CT_WIDTH, &dummyTrack, .. )`): a route that starts on a VBUS pad, VBUS in a
+/// `Power` class of 0.5 mm (the Default class 0.25 mm), starts at 0.5 mm, and one on a Default net at 0.25 mm; a `.kicad_dru` rule's
+/// `track_width (opt ..)` wins over the class, as in KiCad's rule order. Under `EDA_SLOW_TESTS=1`, with a rule that wants VBUS at least
+/// 0.5 mm wide, kicad-cli finds no `track_width` in the route at the imported width, and finds one in the same route at the Default width.
+#[test]
+fn a_route_takes_the_start_nets_class_width() {
+    let (r1, r2, r3, r4) = (p(5.0, 5.0), p(25.0, 5.0), p(5.0, 15.0), p(25.0, 15.0));
+    let (design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("R3", "PAD1", r3), ("R4", "PAD1", r4)], &[("VBUS", &["R1.1", "R2.1"]), ("SIG", &["R3.1", "R4.1"])]);
+    model.board.track_width = mm(0.25);
+    model.board.net_classes.push(eda_model::NetClass { track_width: Some(mm(0.5)), ..class("Power", &["VBUS"]) });
+    let router = Router::new(&design, &model);
+    let sizes = router.import_sizes(r1, "F.Cu").unwrap();
+    assert_eq!(sizes.track_width, mm(0.5), "{sizes:?}");
+    assert_eq!(sizes.width_source, "netclass 'Power'");
+    assert_eq!(router.import_sizes(r3, "F.Cu").unwrap().track_width, mm(0.25), "a Default net");
+    assert_eq!(router.import_sizes(p(15.0, 10.0), "F.Cu").unwrap().track_width, mm(0.25), "empty space: the current (Default) width");
+    // a custom rule's opt
+    let mut ruled = model.clone();
+    ruled.board.custom_rules_text = Some("(version 1)\n(rule vbus_w\n  (condition \"A.NetName == 'VBUS'\")\n  (constraint track_width (min 0.3mm) (opt 0.6mm)))\n".into());
+    let s = Router::new(&design, &ruled).import_sizes(r1, "F.Cu").unwrap();
+    assert_eq!((s.track_width, s.width_source.as_str()), (mm(0.6), "vbus_w"));
+    // the route at the imported width, and kicad-cli's judgement of it
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    let w = router.import_sizes(r1, "F.Cu").unwrap().track_width;
+    router.start(r1, "F.Cu", w).unwrap();
+    assert_eq!(router.current_width(), Some(mm(0.5)));
+    router.preview(r2).unwrap();
+    let commit = router.finish(r2).unwrap();
+    assert!(commit.tracks.iter().all(|t| t.width == mm(0.5)), "{:?}", commit.tracks);
+    let mut judged = model.clone();
+    judged.board.custom_rules_text = Some("(version 1)\n(rule vbus_min\n  (condition \"A.NetName == 'VBUS'\")\n  (constraint track_width (min 0.5mm)))\n".into());
+    if let Some(found) = kicad_violations(&apply(&design, &commit), &judged, &["track_width"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let narrow = RouteCommit { tracks: commit.tracks.iter().map(|t| eda_model::ir::Track { width: mm(0.25), ..t.clone() }).collect(), ..Default::default() };
+        assert!(!kicad_violations(&apply(&design, &narrow), &judged, &["track_width"]).unwrap().is_empty(), "the Default width is what kicad-cli flags");
+    }
+}
+
+/// R3-4 (`ImportSizes` for a pair, via and holes: `CT_WIDTH` of the track and its coupled one, `CT_DIFF_PAIR_GAP`, `CT_VIA_DIAMETER`,
+/// `CT_VIA_HOLE`, `CT_HOLE_TO_HOLE`): a `.kicad_dru` rule for `/USB*` sets the pair's gap and width over the class's 0.25 mm gap, and a via
+/// rule the via's size; the hole to hole is the rule's.
+#[test]
+fn a_custom_rule_sets_the_pairs_gap_and_width_and_the_via() {
+    let (p1, n1) = (p(5.0, 10.0), p(5.0, 12.0));
+    let (design, mut model) = board(&[("J1", "PAD1", p1), ("J2", "PAD1", n1)], &[("/USB_P", &["J1.1"]), ("/USB_N", &["J2.1"])]);
+    model.board.net_classes.push(eda_model::NetClass { diff_pair_gap: Some(mm(0.25)), diff_pair_width: Some(mm(0.3)), ..class("usb", &["/USB_P", "/USB_N"]) });
+    let plain = Router::new(&design, &model).import_sizes(p1, "F.Cu").unwrap();
+    assert_eq!((plain.diff_pair_gap, plain.diff_pair_width), (mm(0.25), mm(0.3)), "the class's: {plain:?}");
+    model.board.custom_rules_text = Some(
+        "(version 1)\n(rule usb\n  (condition \"A.inDiffPair('/USB*')\")\n  (constraint diff_pair_gap (min 0.12mm) (opt 0.15mm))\n  (constraint track_width (opt 0.2mm)))\n(rule usb_via\n  (condition \"A.Type == 'Via' && A.NetName == '/USB_P'\")\n  (constraint via_diameter (opt 0.8mm))\n  (constraint hole_size (opt 0.4mm))\n  (constraint hole_to_hole (min 0.4mm)))\n"
+            .into(),
+    );
+    let s = Router::new(&design, &model).import_sizes(p1, "F.Cu").unwrap();
+    assert_eq!((s.diff_pair_gap, s.diff_pair_via_gap, s.diff_pair_width), (mm(0.15), mm(0.15), mm(0.2)), "{s:?}");
+    assert_eq!((s.via_diameter, s.via_drill), (mm(0.8), mm(0.4)), "{s:?}");
+    assert_eq!(s.hole_to_hole, mm(0.4), "{s:?}");
+    // and the pair placer starts with them (`DpSizes::import`)
+    let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+    let start = node.iter().find(|(_, it)| matches!(it, eda_pns::item::Item::Solid(s) if s.source == "J1.1")).map(|(_, it)| it.clone()).unwrap();
+    let dp = eda_pns::dp_placer::DpSizes::import(&node, &model.board, &start, 0, "/USB_P", "/USB_N");
+    assert_eq!((dp.gap, dp.width, dp.via_diameter, dp.hole_to_hole), (mm(0.15), mm(0.2), mm(0.8), mm(0.4)), "{dp:?}");
+}
+
+/// R3-4 against kicad-cli: a pair routed from the `/USB_P` / `/USB_N` pads with the sizes `ImportSizes` gives under a rule of `A.inDiffPair('/USB*')`
+/// -- `track_width (min 0.3mm) (opt 0.3mm)`, `diff_pair_gap (min 0.3mm) (opt 0.35mm)` -- is 0.3 mm wide at a 0.35 mm gap, and kicad-cli finds no
+/// `track_width`, `diff_pair_gap` or `clearance`; the same pair at the class's 0.2 mm width and 0.25 mm gap is what it flags (`track_width`; kicad-cli
+/// 10.99 reports no `diff_pair_gap` on a board this small even for the class's pair, so the gap is held here, not by it).
+#[test]
+fn a_pair_routed_at_the_rules_sizes_passes_kicad_clis_checks() {
+    let (p1, n1, p2, n2) = (p(5.0, 10.0), p(5.0, 11.6), p(25.0, 10.0), p(25.0, 11.6));
+    let (design, mut model) = board(&[("J1", "PAD1", p1), ("J2", "PAD1", n1), ("J3", "PAD1", p2), ("J4", "PAD1", n2)], &[("/USB_P", &["J1.1", "J3.1"]), ("/USB_N", &["J2.1", "J4.1"])]);
+    model.board.net_classes.push(eda_model::NetClass { diff_pair_gap: Some(mm(0.25)), diff_pair_width: Some(mm(0.2)), ..class("usb", &["/USB_P", "/USB_N"]) });
+    model.board.custom_rules_text = Some("(version 1)\n(rule usb\n  (condition \"A.inDiffPair('/USB*')\")\n  (constraint track_width (min 0.3mm) (opt 0.3mm))\n  (constraint diff_pair_gap (min 0.3mm) (opt 0.35mm)))\n".into());
+    let pair = |sizes: Option<(Nm, Nm)>| {
+        let mut router = Router::new(&design, &model);
+        router.settings.mode = Mode::Walkaround;
+        router.start_diff_pair(p1, "F.Cu").expect("the pair starts");
+        if let Some((w, g)) = sizes {
+            router.set_diff_pair_sizes(Some(w), Some(g), Some(g));
+        }
+        let pv = router.diff_pair_preview(p2).expect("a preview");
+        assert!(!pv.colliding, "{pv:?}");
+        router.finish_diff_pair(p2).expect("commits")
+    };
+    let gap_of = |c: &RouteCommit| {
+        let (tp, tn) = (c.tracks.iter().find(|t| t.net == "/USB_P").unwrap(), c.tracks.iter().find(|t| t.net == "/USB_N").unwrap());
+        tp.pts.windows(2).flat_map(|a| tn.pts.windows(2).map(move |b| Shape::Stadium { a: a[0], b: a[1], r: tp.width / 2 }.gap_to(&Shape::Stadium { a: b[0], b: b[1], r: tn.width / 2 }))).fold(f64::MAX, f64::min)
+    };
+    let ruled = pair(None);
+    assert!(ruled.tracks.iter().all(|t| t.width == mm(0.3)), "{:?}", ruled.tracks);
+    assert!((gap_of(&ruled) - 350_000.0).abs() < 2_000.0, "the pair is at the rule's opt gap: {}: {:?}", gap_of(&ruled), ruled.tracks);
+    if let Some(found) = kicad_violations(&apply(&design, &ruled), &model, &["track_width", "diff_pair_gap", "clearance"]) {
+        assert!(found.is_empty(), "{found:#?}");
+        let classed = pair(Some((mm(0.2), mm(0.25))));
+        assert!((gap_of(&classed) - 250_000.0).abs() < 2_000.0);
+        assert!(!kicad_violations(&apply(&design, &classed), &model, &["track_width"]).unwrap().is_empty(), "the class's width is under the rule's minimum");
+    }
+}
+
 /// R-2: a rule area that keeps out vias only: a track crosses it as if it were not there, but a via in it collides (`checkKeepout`:
 /// `GetDoNotAllowVias() && aOther->Type() == PCB_VIA_T`), and one outside it does not.
 #[test]
@@ -536,4 +640,25 @@ fn kicads_boards_with_copper_graphics_have_them_in_the_router_world() {
     }
     eprintln!("{} boards: {seen:?}", seen.len());
     assert!(seen.len() >= 20, "{seen:?}");
+}
+
+/// r3 R3-10 (`getBoardItem`: `m_dummyVias[aIdx].SetLayer( aBoardLayer )`, so a rule's `A.Layer` of the head's via is the layer being asked about):
+/// a rule for vias on B.Cu holds a via 1 mm off a through-hole pad there, and one for vias on In1.Cu (a layer this board has not) does not.
+#[test]
+fn a_rule_on_a_vias_layer_reads_the_layer_asked_about() {
+    let j1 = p(10.0, 10.0);
+    let (design, mut model) = board(&[("J1", "TH1", j1)], &[("GND", &["J1.1"]), ("SIG", &[])]);
+    let via = |node: &eda_pns::node::Node, layers: &eda_pns::layer::LayerMap, rules: &eda_model::BoardRules| {
+        let v = eda_pns::item::Via { net: eda_pns::item::net_of("SIG"), layers: layers.all(), pos: p(11.6, 10.0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false };
+        node.via_colliding(&v, rules, &[], eda_pns::node::QueryOpts::default()).len()
+    };
+    // the via's copper is 0.5 mm from the pad's: clear at the class's 0.2 mm
+    let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+    assert_eq!(via(&node, &layers, &model.board), 0);
+    model.board.custom_rules_text = Some("(version 1)\n(rule bvia\n  (condition \"A.Type == 'Via' && A.Layer == 'B.Cu'\")\n  (constraint clearance (min 1mm)))\n".into());
+    let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+    assert_eq!(via(&node, &layers, &model.board), 1, "the rule holds on B.Cu");
+    model.board.custom_rules_text = Some("(version 1)\n(rule ivia\n  (condition \"A.Type == 'Via' && A.Layer == 'In1.Cu'\")\n  (constraint clearance (min 1mm)))\n".into());
+    let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+    assert_eq!(via(&node, &layers, &model.board), 0);
 }

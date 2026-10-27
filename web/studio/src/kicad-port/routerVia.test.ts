@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, NetClass } from "../api/types";
-import { DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
+import { chosenTrackWidth, chosenViaSize, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
 
 const CU4 = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const blind: ViaCommand = { type: "blind", selectLayer: false };
@@ -86,4 +86,23 @@ test("PCB_VIA::ValidateViaParameters' messages, word for word", () => {
   assert.equal(validateViaParameters(null, 300_000), "No via diameter defined.");
   assert.equal(validateViaParameters(300_000, 300_000), "Via hole size must be smaller than via diameter");
   assert.equal(validateViaParameters(600_000, 300_000), null);
+});
+
+// r3 R3-3: `ImportSizes`' `UseNetClassTrack()` -- with no width chosen, or the list's first entry (the net class's), a route sends no width and
+// takes the start net's class width from the server; a chosen width or a custom size is sent.
+test("a route takes the start net's class width unless a width is chosen", () => {
+  assert.equal(chosenTrackWidth(null, 250_000, false), undefined, "nothing chosen: the net class's");
+  assert.equal(chosenTrackWidth(250_000, 250_000, false), undefined, "the list's first entry is the net class's");
+  assert.equal(chosenTrackWidth(400_000, 250_000, false), 400_000, "a width of the list");
+  assert.equal(chosenTrackWidth(250_000, 250_000, true), 250_000, "a custom size is a size");
+});
+
+// r3 R3-4: `handleLayerSwitch`' `UseNetClassVia() || viaType == MICROVIA` -- the server asks the rules for the via's size then.
+test("a via takes the net class's size from the server unless a size is chosen", () => {
+  const base = { diameter: 600_000, drill: 300_000 };
+  assert.equal(chosenViaSize("through", null, base, false), null);
+  assert.equal(chosenViaSize("through", base, base, false), null, "the list's first entry is the net class's");
+  assert.deepEqual(chosenViaSize("blind", { diameter: 800_000, drill: 400_000 }, base, false), { diameter: 800_000, drill: 400_000 });
+  assert.equal(chosenViaSize("micro", { diameter: 800_000, drill: 400_000 }, base, false), null, "a microvia's is always the net class's");
+  assert.deepEqual(chosenViaSize("through", base, base, true), base, "a custom size is a size");
 });

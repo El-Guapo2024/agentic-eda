@@ -258,6 +258,42 @@ impl Router {
         Ok(())
     }
 
+    /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a route about to start at `at` on `layer_name` ([`crate::settings::import_sizes`]): the start
+    /// item's net's width, via and pair sizes through the board's rules -- what a route starts at when the width list is on "use net class"
+    /// (`UseNetClassTrack()`, r3 R3-3). `None` for a layer the board does not have.
+    pub fn import_sizes(&self, at: Point, layer_name: &str) -> Option<crate::settings::ImportedSizes> {
+        let layer = self.layer_index(layer_name)?;
+        let pick = self.pick_start(at, layer);
+        let start = pick.as_ref().and_then(|p| self.world.get(p.item).map(|it| (it, p.pos)));
+        Some(crate::settings::import_sizes(&self.world, &self.rules, start, layer))
+    }
+
+    /// The width of the route in progress (`m_sizes.TrackWidth()`).
+    pub fn current_width(&self) -> Option<Nm> {
+        self.session().map(|s| s.placer.width)
+    }
+
+    /// `ROUTER_TOOL::handleLayerSwitch`'s via size with the net class's sizes in use (`bds.UseNetClassVia() || viaType == VIATYPE::MICROVIA`):
+    /// the board's minimum via size and through drill (`sizes.SetViaDiameter( bds.m_ViasMinSize )`, `SetViaDrill( bds.m_MinThroughDrill )`), each
+    /// replaced by the opt of `VIA_DIAMETER_CONSTRAINT` / `HOLE_SIZE_CONSTRAINT` of a dummy via of the route's net, of `kind`, over `span`
+    /// (`SetLayerPair( currentLayer, targetLayer )`) on the layer being routed, when a rule gives one
+    /// ([`crate::rule_resolver::RuleResolver::via_size`]); a world without rules has the net class's. `None` when no route is in progress.
+    pub fn net_class_via_size(&self, kind: ViaKind, span: Option<(i32, i32)>, to_layer: Option<i32>) -> Option<(Nm, Nm)> {
+        let s = self.session()?;
+        let layer = s.placer.current_layer;
+        let net = s.placer.net.clone();
+        let Some(r) = self.world.rule_resolver() else {
+            let name = net.as_deref().unwrap_or("");
+            return Some((self.rules.via_diameter_of(name), self.rules.via_drill_of(name)));
+        };
+        let span = span.unwrap_or_else(|| match kind {
+            ViaKind::Through => (0, self.layers.count() as i32 - 1),
+            _ => (layer, to_layer.unwrap_or(layer)),
+        });
+        let (d, h) = r.via_size(&net, kind, span, layer);
+        Some((d.unwrap_or(self.rules.via_diameter_min_nm), h.unwrap_or(self.rules.via_drill_min_nm)))
+    }
+
     /// `TOOL_BASE::updateStartItem` for a point the studio's snapping has already put on what it picked (`PcbSnap.routePoint`): the
     /// pad, via or track end the point is exactly on; else the track whose copper it is in -- at the end nearer to it if that is within
     /// half the track's width (`snapToItem`), else at the point on its centre line, in the middle of the track; else (a point that was

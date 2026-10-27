@@ -2042,6 +2042,8 @@ export interface RoutePreview {
   ok: boolean;
   message?: string;
   net: string | null;
+  /** The width the route is drawn at (`m_sizes.TrackWidth()`): what a start without a width took from the start net (`ImportSizes`). */
+  width?: Nm | null;
   colliding: boolean;
   layer: string;
   /** The live, not-yet-fixed head: last fixed point (or the route's

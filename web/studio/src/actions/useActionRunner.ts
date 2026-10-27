@@ -21,6 +21,7 @@ import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute, attemptFinishInteractiveRoute } from "../components/canvas/routing";
 import { withTrackSnapping } from "../kicad-port/routerSettings";
+import { chosenTrackWidth } from "../kicad-port/routerVia";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
 import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic, postSwapPreview } from "../api/client";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
@@ -2098,7 +2099,8 @@ export function useActionRunner() {
             return;
           }
           dispatch({ type: "SET_SELECTION", refs: [] });
-          const width = state.currentTrackWidthNm ?? board.board_rules?.track_width ?? 250_000;
+          // `ImportSizes`: undefined on "use net class", and each connection starts at its own net's width (the server's `CT_WIDTH`)
+          const width = chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
           const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });

@@ -89,6 +89,18 @@ impl DpSizes {
         }
     }
 
+    /// [`Self::resolve`] through the board's rules: `ImportSizes` of the item the pair starts on ([`crate::settings::import_sizes`]), so a
+    /// `.kicad_dru` rule's `track_width` and `diff_pair_gap` (of `A.inDiffPair(..)`), via size and hole to hole set the pair as they do in KiCad
+    /// (r3 R3-4). A world with no rule resolver is [`Self::resolve`].
+    pub fn import(world: &Node, rules: &BoardRules, start: &Item, layer: i32, net_p: &str, net_n: &str) -> Self {
+        if world.rule_resolver().is_none() {
+            return Self::resolve(rules, net_p, net_n);
+        }
+        let at = start.anchors().first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
+        let s = crate::settings::import_sizes(world, rules, Some((start, at)), layer);
+        DpSizes { width: s.diff_pair_width, gap: s.diff_pair_gap, via_gap: s.diff_pair_via_gap, via_diameter: s.via_diameter, via_drill: s.via_drill, hole_to_hole: s.diff_pair_hole_to_hole }
+    }
+
     /// `DIFF_PAIR_PLACER::viaGap`.
     pub fn via_gap_total(&self) -> Nm {
         self.via_gap.max(self.hole_to_hole + self.via_drill - self.via_diameter)
@@ -327,7 +339,10 @@ impl DiffPairPlacer {
         let (Some(prim_p), Some(prim_n)) = (found.pair.prim_p.clone(), found.pair.prim_n.clone()) else { return Err(NO_COMPLEMENT.into()) };
         let (net_p, net_n) = (prim_p.net().clone(), prim_n.net().clone());
         let (name_p, name_n) = (net_p.as_deref().unwrap_or(""), net_n.as_deref().unwrap_or(""));
-        let mut sizes = DpSizes::resolve(rules, name_p, name_n);
+        let mut sizes = match world.get(start_item) {
+            Some(it) => DpSizes::import(world, rules, it, layer, name_p, name_n),
+            None => DpSizes::resolve(rules, name_p, name_n),
+        };
 
         // `isStartingPointRoutable` (`if( Settings().AllowDRCViolations() ) return true;` first)
         if !settings.allow_drc_violations() {

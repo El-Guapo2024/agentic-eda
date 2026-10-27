@@ -134,6 +134,7 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
     json!({
         "ok": true,
         "net": router.current_net(),
+        "width": router.current_width(),
         "colliding": preview.colliding,
         "layer": router.layer_name(preview.head.layer),
         "head": pts_json(&preview.head.pts),
@@ -152,7 +153,8 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
     })
 }
 
-/// `POST /api/route/start`: `{x, y, layer, width?, settings?}`. `settings` is the router's
+/// `POST /api/route/start`: `{x, y, layer, width?, settings?}`. Without `width` the route starts at the width `ImportSizes` gives the start
+/// item's net (`Router::import_sizes`); the reply's `width` is the one it started at. `settings` is the router's
 /// `ROUTING_SETTINGS` ([`settings_of`]); `mode` and `remove_loops` at the top level still work, for a client that predates it.
 /// Without any, KiCad's defaults: `walkaround`, `remove_loops` on.
 pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
@@ -165,7 +167,12 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     router.settings = settings_of(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
-    let width = num(&req, "width", model.board.track_width);
+    // no `width`: the width list is on "use net class" (`UseNetClassTrack()`), and `ImportSizes` takes the start net's width through the rules
+    // (`CT_WIDTH`: its class, a `.kicad_dru` rule, a pair's class width), r3 R3-3
+    let width = match req.get("width").and_then(Value::as_i64) {
+        Some(w) => Nm::new(w),
+        None => router.import_sizes(at, layer).map_or(model.board.track_width, |s| s.track_width),
+    };
     match router.start(at, layer, width) {
         Ok(()) => {
             let reply = router.preview(at).map(|p| preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
@@ -219,7 +226,7 @@ pub fn undo_segment(cell: &RouteCell) -> Value {
     json!({ "ok": true, "popped": popped, "placing_via": via.is_some(), "via_to_layer": via })
 }
 
-/// `POST /api/route/via`: `{enabled, diameter?, drill?, to_layer?, via_type?, span?}` --
+/// `POST /api/route/via`: `{enabled, diameter?, drill?, to_layer?, via_type?, span?}` -- without a size, the net class's (`handleLayerSwitch`) --
 /// arms (or disarms) "drop a via at the next fix and continue on
 /// `to_layer`", the live via-placement-with-layer-switch gesture.
 /// `via_type` (`through`, `blind`, `buried`, `micro`; through when absent) and `span` (`[top, bottom]`, the layer names the via spans:
@@ -230,8 +237,6 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
     let enabled = req.get("enabled").and_then(Value::as_bool).unwrap_or(true);
-    let diameter = num(&req, "diameter", mm(0.6));
-    let drill = num(&req, "drill", mm(0.3));
     let to_layer = req.get("to_layer").and_then(Value::as_str).and_then(|n| router.layer_index(n));
     let kind = match req.get("via_type").and_then(Value::as_str) {
         None | Some("through") => ViaKind::Through,
@@ -247,6 +252,11 @@ pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
             _ => return err("a via span is two copper layers of the board"),
         },
     };
+    // no size: the net class's via sizes in use (`bds.UseNetClassVia() || viaType == VIATYPE::MICROVIA`), the rules' for a dummy via of the
+    // route's net, type and span (`Router::net_class_via_size`)
+    let class_size = router.net_class_via_size(kind, span, to_layer).unwrap_or((mm(0.6), mm(0.3)));
+    let diameter = num(&req, "diameter", class_size.0);
+    let drill = num(&req, "drill", class_size.1);
     router.toggle_via_typed(enabled, diameter, drill, to_layer, span, kind);
     json!({ "ok": true })
 }
@@ -840,6 +850,27 @@ mod tests {
     fn start_with(dir: &Path, cell: &RouteCell, settings: Value) {
         let reply = start(dir, cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000, "settings": settings })));
         assert_eq!(reply["ok"], json!(true), "{reply}");
+    }
+
+    /// r3 R3-3: a start without a width (the width list on "use net class") takes the start net's class width through the rules
+    /// (`ImportSizes`), and the reply says it; with a width, that width. A via armed without a size has the net class's (`handleLayerSwitch`).
+    #[test]
+    fn a_start_without_a_width_takes_the_nets_class_width() {
+        let dir = scratch("class_width");
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))], arc_mid_offset: None };
+        setup_board(&dir, vec![stub], vec![]);
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.net_classes.push(eda_model::NetClass { name: "Power".into(), nets: vec!["SIG".into()], track_width: Some(mm(0.5)), clearance: None, via_diameter: Some(mm(0.9)), via_drill: Some(mm(0.45)), microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let cell = RouteCell::default();
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu" })));
+        assert_eq!((reply["ok"].clone(), reply["width"].clone()), (json!(true), json!(500_000)), "{reply}");
+        assert_eq!(via(&cell, &body(json!({ "enabled": true, "to_layer": "B.Cu" })))["ok"], json!(true));
+        let pv = mv(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
+        assert_eq!((pv["via"]["diameter"].clone(), pv["via"]["drill"].clone()), (json!(900_000), json!(450_000)), "{pv}");
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 300_000 })));
+        assert_eq!(reply["width"], json!(300_000), "{reply}");
     }
 
     /// findings p5 F2-9: `F` routes to the nearest unconnected anchor and commits, or leaves the route going with the head where it got.

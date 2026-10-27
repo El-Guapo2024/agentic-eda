@@ -581,7 +581,10 @@ impl RuleResolver {
             let mut it = RuleItem::new("router_via", Class::Via);
             it.net = net_name(net);
             it.layers = copper();
-            it.layer = it.layers.first().cloned();
+            // `m_dummyVias[aIdx].SetLayer( aBoardLayer )`: `PCB_VIA::SetLayer` is `Padstack().Drill().start = aLayer`, so `GetLayer()` -- a rule's
+            // `A.Layer` -- is the layer being asked about (r3 R3-10)
+            it.layer = Some(layer.to_string());
+            it.set("Layer", Prop::Layer(layer.to_string()));
             it.position = pos;
             it.via_type = Some("Through");
             it.has_hole = true;
@@ -646,6 +649,70 @@ impl RuleResolver {
             }
         }
         Some(c.value.min())
+    }
+
+    /// `PNS_PCBNEW_RULE_RESOLVER::QueryConstraint( aType, aItemA, aItemB, aPNSLayer )` for what is not a clearance (`ImportSizes`' `CT_WIDTH`,
+    /// `CT_DIFF_PAIR_GAP`, `CT_VIA_DIAMETER`, `CT_VIA_HOLE`, `CT_HOLE_TO_HOLE`): the min/opt/max of `EvalRules` of the two sides' board items
+    /// (`getBoardItem`: a dummy track or via of its net), on `layer` -- `None` is `UNDEFINED_LAYER`, which the rules see as no layer. `None` when
+    /// no rule gives the constraint; a rule of severity ignore (other than a tuning profile's) gives a minimum of -1 and nothing else.
+    pub fn query_constraint(&self, ctype: CType, a: &Side, b: Option<&Side>, layer: Option<i32>) -> Option<(eda_drc::constraints::MinOptMax, String)> {
+        let name = match layer {
+            Some(l) => Some(self.layer_name(l)?),
+            None => None,
+        };
+        let item_layer = name.or_else(|| self.layer_names.first().map(String::as_str)).unwrap_or("F.Cu");
+        let ia = self.board_item(a, item_layer);
+        let ib = b.map(|b| self.board_item(b, item_layer));
+        let c = self.engine.eval_rules(ctype, Some(&ia), ib.as_ref(), name, None);
+        if c.is_null() {
+            return None;
+        }
+        // `DRC_CONSTRAINT::GetName()`: the parent rule's name, else its own
+        let rule_name = c.parent.map_or_else(|| c.name.clone(), |i| self.engine.rules[i].name.clone());
+        if let Some(rule) = c.parent.map(|i| &self.engine.rules[i]) {
+            if rule.severity == Severity::Ignore && !(rule.is_implicit() && rule.implicit == ImplicitSource::TuningProfile) {
+                return Some((eda_drc::constraints::MinOptMax::with_min(-1), rule_name));
+            }
+        }
+        Some((c.value, rule_name))
+    }
+
+    /// The number of copper layers of the world.
+    pub fn layer_count(&self) -> usize {
+        self.layer_names.len()
+    }
+
+    /// `ROUTER_TOOL::handleLayerSwitch` with the net class's via sizes in use (`bds.UseNetClassVia() || viaType == VIATYPE::MICROVIA`): the
+    /// opt of `VIA_DIAMETER_CONSTRAINT` and of `HOLE_SIZE_CONSTRAINT` (`EvalRules( .., &dummyVia, nullptr, currentLayer )`) of a dummy via of the
+    /// route's net, of `kind`, over `span` (`SetLayerPair( currentLayer, targetLayer )`); each `None` when no rule gives it.
+    pub fn via_size(&self, net: &Net, kind: eda_model::via_extra::ViaKind, span: (i32, i32), layer: i32) -> (Option<Nm>, Option<Nm>) {
+        let Some(name) = self.layer_name(layer).map(str::to_string) else { return (None, None) };
+        let (lo, hi) = (span.0.min(span.1).max(0) as usize, span.0.max(span.1).max(0) as usize);
+        let layers: Vec<String> = self.layer_names.iter().enumerate().filter(|(i, _)| *i >= lo && *i <= hi).map(|(_, l)| l.clone()).collect();
+        let kind_name = match kind {
+            eda_model::via_extra::ViaKind::Through => "Through",
+            eda_model::via_extra::ViaKind::Blind => "Blind",
+            eda_model::via_extra::ViaKind::Buried => "Buried",
+            eda_model::via_extra::ViaKind::Micro => "Micro",
+        };
+        let mut it = RuleItem::new("router_via", Class::Via);
+        it.net = net_name(net).unwrap_or("").to_string();
+        it.layer = Some(name.clone());
+        it.layers = layers.clone();
+        it.via_type = Some(kind_name);
+        it.has_hole = true;
+        it.has_drilled_hole = true;
+        it.plated = true;
+        it.flashed = layers;
+        it.set("Net", Prop::Enum(it.net.clone()));
+        it.set("Layer", Prop::Layer(name.clone()));
+        it.set("Via Type", Prop::Enum(kind_name.to_string()));
+        let it = Rc::new(it);
+        let opt = |t: CType| {
+            let c = self.engine.eval_rules(t, Some(&it), None, Some(&name), None);
+            (!c.is_null()).then(|| Nm::new(c.value.opt()))
+        };
+        (opt(CType::ViaDiameter), opt(CType::HoleSize))
     }
 
     /// `QueryConstraint( CT_CLEARANCE, aItem, nullptr, aLayer )` of a track of `net` on `layer`: the clearance the rules ask of it alone
