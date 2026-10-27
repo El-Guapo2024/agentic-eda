@@ -71,6 +71,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r3-pcb-edit` | The round-3 PCB editing findings (`work/findings/round3/r3-pcb-edit.md`): all 4 highs, the 16 mediums (A-1 and A-3 in part), 10 of 16 lows (D-11, D-12 in part); `PARITY-pcb.md` section 56 | done, gated | A-5, A-6 (no snap switch), B-7..B-10, D-12 (b); dimension mirror on user layers; arcs in turned rounded rectangles |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.

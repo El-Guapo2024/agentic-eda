@@ -725,8 +725,8 @@ export function useActionRunner() {
     // board_inspection_tool.cpp BOARD_INSPECTION_TOOL::ClearHighlight ("~").
     m.set("pcbnew.EditorControl.clearHighlight", pcbOnly(() => dispatch({ type: "SET_NET_HIGHLIGHT", net: null })));
 
-    // pcb_selection_tool.cpp expandConnection ("U" -- Select/Expand Connection): seed points from every currently-selected track/via's
-    // own endpoints, every selected pad and every pad of a selected footprint, each on its own net, and flood outward (kicad-port/expandConnection.ts).
+    // pcb_selection_tool.cpp expandConnection ("U" -- Select/Expand Connection): from every selected track (each of its segments), via and pad and every pad
+    // of a selected footprint, `selectAllConnectedTracks` walks the tracks, vias and pads that meet, whatever their nets (kicad-port/expandConnection.ts).
     // With no footprint or connected item selected it takes the one under the cursor first (`selectCursor( true, connectedItemFilter )`,
     // kicad-port/pcbConnection.ts).
     m.set(

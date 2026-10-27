@@ -396,6 +396,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Paste is KiCad's text; Track & Via Properties works on the selection; Position Relative remembers; R right after M turns about the drag origin.
 - Missing (2026-10-27): Mirror of a text box, an image and a tuning pattern; a footprint's own drawings on a user layer keep it when the footprint flips; Create Array and Repeat Layout turn a rounded rectangle as
   four corners; the Properties panel refuses a zero width or size KiCad takes (A7) and its footprint rows are not `FOOTPRINT_DESC`'s (A6); Track & Via Properties lacks the via's layer pair, solder mask and backdrill rows.
+- Done 2026-10-27 (`task-r3-pcb-edit`, `PARITY-pcb.md` section 56, the round-3 findings `r3-pcb-edit`): Cleanup Tracks & Vias works on segments (only the dangling or shorting segment of a
+  polyline goes; the cleaner's `aIgnoreTracksInPads`; widths in pads; redundant vias anywhere on a through-hole pad); Cut of table cells empties them and keeps the table; Delete and Undo while
+  drawing a zone or polygon remove its last corner; Track & Via Properties asks about shorts and the pads a net change takes along; Select Connection walks as `selectAllConnectedTracks`;
+  microwave pad numbers; Break Track on a locked track asks; Edit Text & Graphics reaches text boxes, cells and barcodes; Simplify keeps the polygon; Pad Properties' warnings; Add Field's Fab defaults.
+- Missing (round 3): a turned rounded rectangle has no true arcs (no arcs in the IR's polygon); a dimension's mirror on a user layer typed back; the dimension text angle to `{:.10g}` (A-5);
+  B-7 (a pad pasted while its footprint is gone brings the footprint back), B-8 (pasting an image), B-9 (a footprint's nested groups), B-10 (a group's half-made library link); a merged or cut track is new
+  (KiCad keeps the first segment's uuid); a zone's holes under Simplify; the do-not-show boxes of the questions.
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcb_control.cpp` (`Paste`, `placeBoardItems`), `common/dialogs/dialog_paste_special.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are editable objects
