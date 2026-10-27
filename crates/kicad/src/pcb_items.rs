@@ -381,9 +381,24 @@ pub(crate) fn write_groups(out: &mut String, groups: &[&Group], written: &BTreeM
     let mut sorted: Vec<&Group> = groups.to_vec();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     let (mut memo, mut visiting) = (Memo::new(), Vec::new());
+    // `format( PCB_GROUP )` writes `IsLocked()`, and `BOARD_ITEM::IsLocked` is also true when the group above is locked
+    let parent_of = |id: &str| groups.iter().find(|p| p.member_ids.iter().any(|m| m == id)).map(|p| p.id.as_str());
+    let locked_or_above = |id: &str| {
+        let mut at = id;
+        for _ in 0..64 {
+            if locked(at) {
+                return true;
+            }
+            match parent_of(at) {
+                Some(p) => at = p,
+                None => return false,
+            }
+        }
+        false
+    };
     for g in sorted {
         let members = members_of(g, &by_id, written, uuid_of, &mut memo, &mut visiting);
-        write_group(out, g, &uuid_of(g), locked(&g.id), members);
+        write_group(out, g, &uuid_of(g), locked_or_above(&g.id), members);
     }
 }
 

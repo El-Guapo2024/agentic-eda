@@ -72,8 +72,23 @@ impl Board<'_> {
     pub(crate) fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
         let dr = self.drawings_mut();
         let before: BTreeSet<String> = dr.groups.iter().map(|g| g.id.clone()).collect();
+        // `BOARD_ITEM::IsLocked`: the item's own lock, or that of a group above it (`GetParentGroup()->IsLocked()`), before it leaves that group
+        let locked_or_above = |id: &str| {
+            let mut at = id.to_string();
+            for _ in 0..64 {
+                if dr.locked_ids.contains(&at) {
+                    return true;
+                }
+                match dr.parent_group(&at) {
+                    Some(g) => at = g.id.clone(),
+                    None => return false,
+                }
+            }
+            false
+        };
+        let any_locked = ids.iter().any(|id| locked_or_above(id));
         dr.make_group(ids).map_err(refused)?;
-        if ids.iter().any(|id| dr.locked_ids.contains(id)) {
+        if any_locked {
             let new: Vec<String> = dr.groups.iter().map(|g| g.id.clone()).filter(|g| !before.contains(g)).collect();
             dr.locked_ids.extend(new);
             dr.locked_ids.sort();
