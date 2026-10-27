@@ -3117,6 +3117,21 @@ fn the_plot_dialogs_store_their_choices_in_the_board() {
     assert_eq!((plot.flag("useauxorigin"), plot.board_layers(&m.board.layers)), (Some(false), vec!["F.Cu".to_string(), "F.Mask".into(), "Edge.Cuts".into()]));
 }
 
+/// r4 X4-4: Export IPC-2581's BOM columns kept in the board (`DIALOG_EXPORT_2581::TransferDataFromWindow`, the project's `m_IP2581Bom`); all
+/// empty clears them; nothing changed is refused.
+#[test]
+fn the_ipc2581_dialog_keeps_its_bom_columns_in_the_board() {
+    let m = net_model();
+    let mut b = board(&m);
+    let cmd: Cmd = serde_json::from_str(r#"{"op":"set_ipc2581_bom","bom":{"mpn":"MPN","dist_pn":"LCSC","dist":"LCSC","bom_rev":"A"}}"#).unwrap();
+    b.apply(&cmd).unwrap();
+    let kept = b.design().drawings.as_ref().unwrap().ipc2581_bom.clone().unwrap();
+    assert_eq!((kept.mpn.as_str(), kept.dist_pn.as_str(), kept.dist.as_str(), kept.bom_rev.as_str(), kept.id.as_str()), ("MPN", "LCSC", "LCSC", "A", ""));
+    assert_eq!(b.apply(&cmd).unwrap_err()[0].check, "ops_ipc2581_bom");
+    b.apply(&Cmd::SetIpc2581Bom { bom: Default::default() }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().ipc2581_bom, None);
+}
+
 /// `Cmd::CommitRoute`'s `via_kinds` read from the JSON the studio and the route API send (`[[index, "blind"]]`, numbers inside a tagged enum: the
 /// `arbitrary_precision` reader), and the via it names gets its type in `via_extras`; a removed via's extras go with it.
 #[test]

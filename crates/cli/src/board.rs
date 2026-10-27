@@ -1081,14 +1081,22 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
 /// through an undo or a redo of the edits around it ([`keep_outside_history`]), as KiCad's undo, which restores items, never touches the
 /// board's plot settings. (Round 4's X4-3: it used to be a step, so Ctrl+Z after a plot took back the dialog's checklist.)
 fn outside_history(cmd: &Cmd) -> bool {
-    matches!(cmd, Cmd::SetPlotSettings { .. })
+    matches!(cmd, Cmd::SetPlotSettings { .. } | Cmd::SetIpc2581Bom { .. })
 }
 
-/// What [`outside_history`] commands store (the plot settings of the design before an undo or a redo), carried into the design it
-/// restores. A whole-design (`file`) step is an outside edit of `design.json` and restores them with the rest.
-fn keep_outside_history(plot: Option<eda_model::plot_params::PlotParams>, mut restored: eda_model::ir::Design) -> eda_model::ir::Design {
-    if plot != restored.drawings.as_ref().and_then(|d| d.plot_params.clone()) {
-        restored.drawings.get_or_insert_with(Default::default).plot_params = plot;
+/// What [`outside_history`] commands store: the plot settings and Export IPC-2581's BOM columns.
+type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>);
+
+fn outside_history_of(design: &eda_model::ir::Design) -> OutsideHistory {
+    design.drawings.as_ref().map(|d| (d.plot_params.clone(), d.ipc2581_bom.clone())).unwrap_or_default()
+}
+
+/// What [`outside_history`] commands store (in the design before an undo or a redo), carried into the design it restores. A whole-design
+/// (`file`) step is an outside edit of `design.json` and restores them with the rest.
+fn keep_outside_history(kept: OutsideHistory, mut restored: eda_model::ir::Design) -> eda_model::ir::Design {
+    if kept != outside_history_of(&restored) {
+        let d = restored.drawings.get_or_insert_with(Default::default);
+        (d.plot_params, d.ipc2581_bom) = kept;
     }
     restored
 }
@@ -1309,10 +1317,10 @@ pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
     };
     let _ = push_snapshot_tagged(&redo_dir(dir), &current, &snap.tag, &snap.by);
     // A whole-design (`file`) step restores everything, whatever the scope; one that changed both editors' halves restores both.
-    let kept = (snap.tag != FILE_TAG).then(|| current.drawings.as_ref().and_then(|d| d.plot_params.clone()));
+    let kept = (snap.tag != FILE_TAG).then(|| outside_history_of(&current));
     let restored = if snap.tag == BOTH_TAG { restore_both(current, snap.design) } else { restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope }) };
     let restored = match kept {
-        Some(plot) => keep_outside_history(plot, restored),
+        Some(kept) => keep_outside_history(kept, restored),
         None => restored,
     };
     save(dir, &restored)?;
@@ -1347,10 +1355,10 @@ pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
     };
     let _ = push_snapshot_tagged(&undo_dir(dir), &current, &snap.tag, &snap.by);
     // A whole-design (`file`) step restores everything, whatever the scope; one that changed both editors' halves restores both.
-    let kept = (snap.tag != FILE_TAG).then(|| current.drawings.as_ref().and_then(|d| d.plot_params.clone()));
+    let kept = (snap.tag != FILE_TAG).then(|| outside_history_of(&current));
     let restored = if snap.tag == BOTH_TAG { restore_both(current, snap.design) } else { restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope }) };
     let restored = match kept {
-        Some(plot) => keep_outside_history(plot, restored),
+        Some(kept) => keep_outside_history(kept, restored),
         None => restored,
     };
     save(dir, &restored)?;
@@ -1702,6 +1710,7 @@ fn cmd_line(c: &Cmd) -> String {
             layers.as_ref().map(|l| format!(" --layers {}", l.join(","))).unwrap_or_default(),
             use_aux_origin.map(|a| format!(" --use-aux-origin {a}")).unwrap_or_default()
         ),
+        Cmd::SetIpc2581Bom { bom } => format!("ipc2581-bom {}", serde_json::to_string(bom).unwrap_or_default()),
         Cmd::SetGridOrigin { at: Some(p) } => format!("grid-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetGridOrigin { at: None } => "grid-origin --reset".to_string(),
         Cmd::SetBoardPage { page, title_block } => format!("page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
@@ -2041,6 +2050,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::ZoneCutout { .. } | Cmd::MergeZones { .. } | Cmd::SetZonePriority { .. } => "zone",
         Cmd::SetAuxOrigin { .. } => "drill-origin",
         Cmd::SetPlotSettings { .. } => "plot-settings",
+        Cmd::SetIpc2581Bom { .. } => "ipc2581-bom",
         Cmd::SetGridOrigin { .. } => "grid-origin",
         Cmd::SetBoardPage { .. } => "page",
         Cmd::SetSchematicPage { .. } => "schematic-page",
@@ -3730,6 +3740,15 @@ pub(crate) mod tests {
         undo(&dir, "test", None).unwrap();
         assert_eq!(aux(&dir).as_deref(), Some("(useauxorigin yes)"), "an unscoped undo (the CLI's) keeps them too");
         assert!(undo(&dir, "test", Some(Domain::Pcb)).is_err(), "and there was no step of their own");
+
+        // Export IPC-2581's BOM columns, kept in the project by KiCad (`TransferDataFromWindow`), are no step either.
+        let bom = eda_model::plot_params::Ipc2581Bom { dist_pn: "LCSC".into(), dist: "LCSC".into(), ..Default::default() };
+        step(&dir, Cmd::SetIpc2581Bom { bom: bom.clone() }, false, "test").unwrap();
+        assert!(step(&dir, Cmd::SetIpc2581Bom { bom: bom.clone() }, false, "test").is_err(), "nothing changed is refused");
+        redo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(r1(&dir), moved, "the redo stack was left as it was");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.drawings.unwrap().ipc2581_bom, Some(bom), "the columns stay through the undo");
     }
 
     /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a

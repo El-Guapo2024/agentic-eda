@@ -1033,7 +1033,13 @@ export interface BoardState {
   /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` nm; null/absent = (0, 0). */
   aux_origin?: [Nm, Nm] | null;
   /** The board's plot settings (`PCB_PLOT_PARAMS`, `(setup (pcbplotparams ..))`) the Plot and drill dialogs start from: the layer selection of the layers the board has, and "Use drill/place file origin". Absent from an older backend. */
-  plot_params?: { layers: string[]; use_aux_origin: boolean };
+  plot_params?: {
+    layers: string[];
+    use_aux_origin: boolean;
+    /** Export IPC-2581's BOM columns as the dialog last kept them (`PROJECT_FILE::m_IP2581Bom`), and the root schematic's title block revision (`schRevision`). */
+    ipc2581_bom?: import("../kicad-port/ipc2581Bom").Ipc2581Bom;
+    sch_revision?: string;
+  };
   /** The point the editing grid is anchored at (`BOARD_DESIGN_SETTINGS::GetGridOrigin`, `common.Control.gridSetOrigin`), `[x, y]` nm; null/absent = (0, 0). */
   grid_origin?: [Nm, Nm] | null;
   /** The board's paper and title block (Page Settings, `common.Control.pageSettings`); null/absent are A4 landscape and an empty title block. */
@@ -1663,6 +1669,8 @@ export type Cmd =
   /** `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin` -- the drill/place file origin; `null` resets it to (0, 0). */
   | { op: "set_aux_origin"; at: PointXY | null }
   | { op: "set_plot_settings"; layers?: string[]; use_aux_origin?: boolean }
+  /** Export IPC-2581's BOM columns kept for the next opening (`DIALOG_EXPORT_2581::TransferDataFromWindow`); no undo step, as KiCad's project file has none. */
+  | { op: "set_ipc2581_bom"; bom: import("../kicad-port/ipc2581Bom").Ipc2581Bom }
   /** `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` -- the point the editing grid is anchored at; `null` resets it to (0, 0). */
   | { op: "set_grid_origin"; at: PointXY | null }
   /** `common.Control.pageSettings` -- the board's paper and title block, one undo step (`BOARD_EDITOR_CONTROL::PageSettings`). Refused when nothing changes. */

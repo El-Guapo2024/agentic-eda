@@ -339,6 +339,18 @@ pub fn set_plot_settings(design: &mut Design, board_copper: &[String], layers: O
     Ok(())
 }
 
+/// Export IPC-2581's BOM columns kept in the board for the next opening of the dialog (`DIALOG_EXPORT_2581::TransferDataFromWindow`:
+/// `prj.m_IP2581Bom.id = GetOEM(); .. bomRev = m_textBomRev->GetValue();`, on Export). Like the plot settings this is no undo step (the
+/// project file has none), see `crates/cli/src/board.rs`'s `outside_history`. All empty clears it; nothing changed is refused.
+pub fn set_ipc2581_bom(design: &mut Design, bom: &eda_model::plot_params::Ipc2581Bom) -> Result<(), Vec<CheckResult>> {
+    let bom = (*bom != eda_model::plot_params::Ipc2581Bom::default()).then(|| bom.clone());
+    if design.drawings.as_ref().and_then(|d| d.ipc2581_bom.as_ref()) == bom.as_ref() {
+        return Err(fail("ops_ipc2581_bom", "ipc2581_bom", "the IPC-2581 BOM columns are already these"));
+    }
+    design.drawings.get_or_insert_with(Default::default).ipc2581_bom = bom;
+    Ok(())
+}
+
 /// `PCB_CONTROL::DoSetGridOrigin`: the point the editing grid is anchored at; `None` (or (0, 0)) is `GridResetOrigin`'s reset.
 pub fn set_grid_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
     let at = at.filter(|p| p.x != Nm::ZERO || p.y != Nm::ZERO);

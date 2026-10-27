@@ -728,6 +728,9 @@ pub enum Cmd {
         #[serde(default)]
         use_aux_origin: Option<bool>,
     },
+    /// Export IPC-2581's BOM columns, kept for the next opening as `DIALOG_EXPORT_2581::TransferDataFromWindow` keeps them in the project --
+    /// see [`board_control::set_ipc2581_bom`].
+    SetIpc2581Bom { bom: eda_model::plot_params::Ipc2581Bom },
     /// `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` (`PCB_CONTROL::DoSetGridOrigin`): the point the editing grid is anchored
     /// at (`DrawingsSection::grid_origin`); `None` is the reset to (0, 0). The placement snap of the verbs below follows it.
     SetGridOrigin { at: Option<Point> },
@@ -2380,6 +2383,7 @@ impl Cmd {
             Cmd::SetViaLayers { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
             Cmd::SetPlotSettings { .. } => vec!["plot_params"],
+            Cmd::SetIpc2581Bom { .. } => vec!["ipc2581_bom"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
             Cmd::RepairBoard => vec!["repair_board"],
@@ -2868,6 +2872,7 @@ impl<'a> Board<'a> {
             Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
             Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
             Cmd::SetPlotSettings { layers, use_aux_origin } => board_control::set_plot_settings(&mut self.design, &self.model.board.layers, layers.as_deref(), *use_aux_origin),
+            Cmd::SetIpc2581Bom { bom } => board_control::set_ipc2581_bom(&mut self.design, bom),
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
