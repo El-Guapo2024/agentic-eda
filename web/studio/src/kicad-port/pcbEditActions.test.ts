@@ -24,6 +24,8 @@ test("resolveToggleLock: any locked item in the selection unlocks all (modifyLoc
   assert.equal(resolveToggleLock(["a", "b"], new Set(["b"])), false);
   assert.equal(resolveToggleLock(["a", "b"], new Set(["a", "b"])), false);
   assert.equal(resolveToggleLock(["a"], new Set(["zzz"])), true, "a lock on an unselected item is irrelevant");
+  // Round 6 E6-8: a member of a locked group reports locked (`BOARD_ITEM::IsLocked`'s parent-group branch), so the toggle unlocks.
+  assert.equal(resolveToggleLock(["a"], new Set(["g"]), [{ id: "g", member_ids: ["a"] }]), false);
 });
 
 // ------------------------------------------------------------ unconnected
@@ -205,4 +207,13 @@ test("positionRelativeSelectionAnchor prefers a pad over other items (the middle
     { x: 5, y: 5 }
   );
   assert.deepEqual(positionRelativeSelectionAnchor([{ isFootprint: true, x: 9, y: 9 }, { isFootprint: false, isPad: true, x: 5, y: 5 }]), { x: 9, y: 9 }, "a footprint still comes first");
+});
+
+test("Select / Grab Unconnected start from a selected pad too, in selection order (round 6 E6-4)", () => {
+  // U2's pad 1 alone: its ratsnest lines go to U1 and U3; its pad 2 (to U1 over M) is not asked.
+  assert.deepEqual(selectUnconnectedFootprints(parts, edges, ["U2.1"]), ["U2.1", "U1", "U3"]);
+  assert.deepEqual(selectUnconnectedFootprints(parts, edges, ["U3.1"]), ["U3.1", "U2"]);
+  assert.deepEqual(selectUnconnectedFootprints(parts, edges, ["U3.9"]), ["U3.9"], "no such pad");
+  assert.deepEqual(grabNearestUnconnectedFootprints(parts, edges, ["U3.1"]), ["U2"]);
+  assert.deepEqual(grabNearestUnconnectedFootprints(parts, edges, ["U1.2"]), ["U2"], "the pad's own line, over M");
 });

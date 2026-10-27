@@ -42,6 +42,7 @@ import { nextAngleSnapMode } from "../kicad-port/pcbParityState";
 import { cancelEditPattern, cancelTune, finishEditPattern, removeTuningPatterns, startEditPattern, stepTune, updateEditPattern } from "../components/canvas/tuneRouting";
 import { tuneRegenerate } from "../api/tuneClient";
 import { STROKE_TOOLS, steppedDrawStroke, strokeStepKept } from "../kicad-port/layerDefaults";
+import { planSwap } from "../kicad-port/pcbSwap";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { continueDiffPairFromEnd, finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
@@ -1784,7 +1785,7 @@ export function useActionRunner() {
           };
           const ids = requestSelection().filter((id) => Boolean(api.partByRef(id)?.placed || api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id) || lockable(id) || (extraItemById(board, id) && extraItemById(board, id)!.kind !== "point")));
           if (ids.length === 0) return;
-          const locked = mode === "toggle" ? resolveToggleLock(ids, lockedSet) : mode === "on";
+          const locked = mode === "toggle" ? resolveToggleLock(ids, lockedSet, board?.drawings?.groups ?? []) : mode === "on";
           void api.cmd({ op: "set_locked", ids, locked });
         });
       m.set("pcbnew.EditorControl.toggleLock", modifyLock("toggle"));
@@ -1886,13 +1887,15 @@ export function useActionRunner() {
         })
       );
 
-      // ---- swap (Alt+S) -- edit_tool_move_fct.cpp EDIT_TOOL::Swap, footprints (needs 2+ selected; poses shift cyclically in selection order).
+      // ---- swap (Alt+S) -- edit_tool_move_fct.cpp EDIT_TOOL::Swap: footprints, vias, graphics, texts and zones, locked items left out, in selection order;
+      // one undo step (kicad-port/pcbSwap.ts; round 6 E6-2, E6-3).
       m.set(
         "pcbnew.InteractiveEdit.swap",
         pcbOnly(() => {
-          const parts = [...state.selection].filter((id) => api.partByRef(id)?.placed);
-          if (parts.length < 2) return;
-          void api.cmd({ op: "swap_chain", parts });
+          if (!board) return;
+          const cmds = planSwap(board, [...state.selection]);
+          if (!cmds) return;
+          void (cmds.length === 1 ? api.cmd(cmds[0]!) : api.cmdBatch(cmds));
         })
       );
 

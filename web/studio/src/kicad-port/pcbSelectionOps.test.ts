@@ -125,3 +125,12 @@ test("selectConnections: the routed copper of the footprints' pads, and every tr
   // R3 owns net M entirely
   assert.deepEqual(selectConnections(b, ["R3"]), ["m"]);
 });
+
+test("Select All Tracks in Net takes the net's copper shapes too, and a pad or a copper shape gives its net (round 6 E6-5)", () => {
+  const b = board();
+  b.drawings!.shapes.push({ kind: "polygon", id: "cu", layer: "F.Cu", stroke_width: 100, filled: true, pts: [[0, 0], [1000, 0], [0, 1000]], net: "M" } as never);
+  assert.deepEqual(netItems(b, new Set(["M"])).sort(), ["cu", "m"]);
+  assert.deepEqual([...netsOfItems(b, ["R3.1"])], ["M"], "a pad's net");
+  assert.deepEqual([...netsOfItems(b, ["cu"])], ["M"], "a copper shape's net");
+  assert.deepEqual([...netsOfItems(b, ["s2"])], [], "a silkscreen line has none");
+});
