@@ -5495,6 +5495,7 @@ impl<'a> Board<'a> {
         if search.find.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_search", "replace_text", "nothing to search for")]);
         }
+        let mut renames: Vec<(Option<String>, String, String)> = Vec::new();
         let replaced = if all_sheets {
             // `ReplaceAll` over `Schematic().Hierarchy()`: every screen once (a screen two sheets share has one set of items)
             let mut files: Vec<Option<String>> = vec![None];
@@ -5505,7 +5506,10 @@ impl<'a> Board<'a> {
             for file in files {
                 self.focus = file;
                 match self.replace_text_here(search, None) {
-                    Ok(n) => total += n,
+                    Ok((n, r)) => {
+                        total += n;
+                        renames.extend(r);
+                    }
                     Err(e) => {
                         outcome = Err(e);
                         break;
@@ -5516,16 +5520,20 @@ impl<'a> Board<'a> {
             outcome?;
             total
         } else {
-            self.replace_text_here(search, items)?
+            let (n, r) = self.replace_text_here(search, items)?;
+            renames.extend(r);
+            n
         };
         if replaced == 0 {
             return Err(vec![CheckResult::fail("ops_nothing_to_replace", "replace_text", "nothing to replace")]);
         }
-        Ok(())
+        self.apply_reference_renames(renames)
     }
 
-    /// [`Self::replace_text`] on the screen the verbs act on: how many items it replaced in.
-    fn replace_text_here(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<usize, Vec<CheckResult>> {
+    /// [`Self::replace_text`] on the screen the verbs act on: how many items it replaced in, and the Reference replacements it found (with the
+    /// sheet they are on), which [`Self::apply_reference_renames`] makes once every sheet is done.
+    #[allow(clippy::type_complexity)]
+    fn replace_text_here(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<(usize, Vec<(Option<String>, String, String)>), Vec<CheckResult>> {
         let mut data = search.clone();
         data.search_and_replace = true;
         let model = self.model;
@@ -5562,13 +5570,22 @@ impl<'a> Board<'a> {
                         }
                         replaced += 1;
                     }
+                    // `SCH_LABEL_BASE::Replace`: the strings escaped as a net name (r5 C5-M4). A label may be emptied, as `EDA_TEXT::Replace` sets
+                    // any text; ERC then reports `empty_label_name` (r5 C5-L6).
                     search::ItemKind::Label => {
                         if let Some(l) = sch.labels.iter_mut().find(|l| l.id == h.id) {
-                            if let Some(new) = search::replace_text(&l.net, &data) {
-                                if new.is_empty() {
-                                    return Err(vec![CheckResult::fail("ops_bad_replace", &h.id, "replacing would leave a net label empty")]);
-                                }
+                            if let Some(new) = search::replace_label_text(&l.net, &data) {
                                 l.net = new;
+                                replaced += 1;
+                            }
+                        }
+                    }
+                    // a label's own field: `SCH_FIELD::Replace` -> `EDA_TEXT::Replace` (r5 C5-L2)
+                    search::ItemKind::LabelField => {
+                        let field = sch.extras.label_fields.get_mut(&h.id).and_then(|fs| fs.iter_mut().find(|f| f.name == h.name));
+                        if let Some(f) = field {
+                            if let Some(new) = search::replace_text(&f.text, &data) {
+                                f.text = new;
                                 replaced += 1;
                             }
                         }
@@ -5585,10 +5602,45 @@ impl<'a> Board<'a> {
                 }
             }
         }
-        for (old, new) in renames {
-            self.rename_symbol(&old, &new)?;
+        let focus = self.focus.clone();
+        Ok((replaced, renames.into_iter().map(|(old, new)| (focus.clone(), old, new)).collect()))
+    }
+
+    /// The Reference replacements of a Replace / Replace All, applied together once every match is replaced: `SCH_FIELD::Replace` sets each reference
+    /// (`parentSymbol->SetRef( sheet, text )`) with no test against the others, so only the end state counts. A chain like `R1 -> R10, R10 -> R100`
+    /// would trip over itself one rename at a time, so every renamed reference first takes a temporary name, then its final one, as Increment
+    /// Annotations does (r5 C5-M2). Each rename is made on its own sheet and carries what `Cmd::RenameSymbol` carries; the board's parts follow in
+    /// one go. Refused as a whole when a new reference is still another symbol's.
+    fn apply_reference_renames(&mut self, renames: Vec<(Option<String>, String, String)>) -> Result<(), Vec<CheckResult>> {
+        let renames: Vec<(Option<String>, String, String)> = renames.into_iter().filter(|(_, old, new)| old != new).collect();
+        if renames.is_empty() {
+            return Ok(());
         }
-        Ok(replaced)
+        for (_, old, new) in &renames {
+            if new.is_empty() {
+                return Err(vec![CheckResult::fail("ops_bad_symbol", old, "a symbol needs a reference designator")]);
+            }
+            if self.board_part_without_symbol(new) {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new, "a footprint with this reference is already on the board")]);
+            }
+        }
+        let saved_focus = self.focus.clone();
+        let mut outcome: Result<(), Vec<CheckResult>> = Ok(());
+        'pass: for pass in 0..2 {
+            for (i, (focus, old, new)) in renames.iter().enumerate() {
+                self.focus = focus.clone();
+                let temp = format!("\u{1}replace{i}");
+                let (from, to) = if pass == 0 { (old.as_str(), temp.as_str()) } else { (temp.as_str(), new.as_str()) };
+                if let Err(e) = self.rename_symbol_in_schematic(from, to) {
+                    outcome = Err(e);
+                    break 'pass;
+                }
+            }
+        }
+        self.focus = saved_focus;
+        outcome?;
+        self.rename_part(&renames.iter().map(|(_, old, new)| (old.clone(), new.clone())).collect());
+        Ok(())
     }
 
     /// `panel_setup_pinmap.cpp::changeErrorLevel`: see

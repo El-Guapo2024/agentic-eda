@@ -242,3 +242,30 @@ fn incrementing_annotations_refuses_a_collision_a_negative_number_and_leaves_a_b
     b.apply(&Cmd::IncrementAnnotations { start: "R?".into(), increment: 1 }).unwrap();
     assert_eq!(ids(&b), vec!["R1", "R2", "R3"]);
 }
+
+#[test]
+fn replace_all_in_references_renames_through_a_chain() {
+    // r5 C5-M2: `SCH_FIELD::Replace` sets each reference with no uniqueness test; only the end state has to be unique.
+    // R1 is left of R10, so the hits come R1 first: R1 -> R10 while R10 still stands.
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    place(&mut b, "R1", "Device:R", 1, mm(10.0));
+    place(&mut b, "R10", "Device:R", 1, mm(50.0));
+    let search = crate::search::SearchData { find: "R1".into(), replace: "R10".into(), replace_references: true, ..Default::default() };
+    b.apply(&Cmd::ReplaceText { search, items: None, all_sheets: false }).unwrap();
+    let mut refs: Vec<(String, Nm)> = symbols(&b).into_iter().map(|s| (s.id, s.at.x)).collect();
+    refs.sort();
+    assert_eq!(refs, vec![("R10".to_string(), mm(10.0)), ("R100".to_string(), mm(50.0))], "R1 became R10 and R10 became R100");
+}
+
+#[test]
+fn replace_can_empty_a_label() {
+    // r5 C5-L6: `EDA_TEXT::Replace` sets the empty text; ERC reports `empty_label_name`.
+    let m = ConstraintModel::default();
+    let mut d = empty_design();
+    d.schematic = Some(eda_model::ir::SchematicSection { labels: vec![eda_model::ir::NetLabel { id: "lbl_x".into(), net: "X".into(), at: p(mm(30.0), mm(10.0)), kind: Default::default() }], ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let search = crate::search::SearchData { find: "X".into(), replace: String::new(), ..Default::default() };
+    b.apply(&Cmd::ReplaceText { search, items: None, all_sheets: false }).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().labels[0].net, "");
+}
