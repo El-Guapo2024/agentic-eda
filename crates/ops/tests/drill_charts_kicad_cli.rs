@@ -179,3 +179,59 @@ fn a_chart_that_was_read_is_rebuilt_even_when_its_text_is_right() {
     assert_ne!(chart_of(b.design()).0.row_heights, before.row_heights, "laid out again");
     assert!(!b.refresh_drill_charts(), "built: fresh");
 }
+
+/// A four-layer board whose copper layers have names of their own (`Top`, `GND plane`), a via of an imperial drill (0.3048 mm, 12 mil), vias with a backdrill from either side
+/// and a tertiary drill, vias with front and back post-machining, a buried via, and a chart of ten columns (the operation, the protection, the backdrill stub and the aspect ratio
+/// among them): KiCad 25ec2335's `EnumerateDrillSpans` gives the backdrill spans, `enumerateVia` their operations (kind 1 or 2, not plated, the stub from `GetDrillDepth`) and the
+/// primary drills' post-machining, `GroupKeyString` the `|k` and `|m` of each, `spanText` the board's layer names.
+const BACKDRILL_BOARD: &str = include_str!("drill_chart_backdrills.kicad_pcb");
+
+/// The board's chart refreshed here, against the chart kicad-cli's `pcb upgrade` builds for the same file (a chart read from a file is always stale: `m_builtGeneration` 0).
+fn refreshed_against_kicad(cli: &Path, text: &str, tag: &str) -> Design {
+    let (kicad, _) = upgraded(cli, text, tag);
+    let (d, m, _) = import_kicad_pcb(text).unwrap();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    assert!(b.refresh_drill_charts(), "{tag}: a chart that was read is stale");
+    assert_same_chart(tag, b.design(), &kicad);
+    b.design().clone()
+}
+
+fn rows(d: &Design) -> Vec<Vec<String>> {
+    let (t, _) = chart_of(d);
+    t.cells.chunks(t.col_count()).map(|r| r.iter().map(|c| c.text.clone()).collect()).collect()
+}
+
+#[test]
+fn backdrills_post_machining_layer_names_and_imperial_holes_are_charted_as_kicad_charts_them() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = kicad_cli() else {
+        eprintln!("skipped: needs kicad-cli");
+        return;
+    };
+    let d = refreshed_against_kicad(&cli, BACKDRILL_BOARD, "backdrills");
+    let r = rows(&d);
+    let col = |r: &[String], i: usize| r[i].clone();
+    // The imperial drill keyed and printed from its nanometres.
+    assert_eq!(chart_of(&d).1.row_keys.get(&2).map(String::as_str), Some("v1|d304800|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0"));
+    assert_eq!((col(&r[2], 1), col(&r[2], 5)), ("0.305".to_string(), "Top / B.Cu".to_string()));
+    // The post-machined vias: a row each, keyed by their post-machining.
+    let keys: Vec<String> = chart_of(&d).1.row_keys.values().cloned().collect();
+    assert!(keys.contains(&"v1|d400000|s-|p1|L0-31|k0|m3:900000:0:900/0:0:0:0".to_string()) && keys.contains(&"v1|d400000|s-|p1|L0-31|k0|m0:0:0:0/2:1000000:300000:0".to_string()), "{keys:?}");
+    // The backdrills: not plated, after the plated rows, their stub and the "Backdrill" operation.
+    assert_eq!(r[6][1..].to_vec(), ["0.600", "No", "1", "1", "Top / GND plane", "Backdrill", "\u{2014}", "0.790", "0.3:1"]);
+    assert_eq!((col(&r[8], 1), col(&r[8], 5), col(&r[8], 8)), ("0.650".to_string(), "In2.Cu / B.Cu".to_string(), "1.495".to_string()));
+    assert_eq!(r[9][0], "9 OPS / 6 SITES");
+
+    // Without a stackup in the file: KiCad's default stackup gives the stubs and the aspect ratios.
+    let start = BACKDRILL_BOARD.find("\t\t(stackup").unwrap();
+    let end = BACKDRILL_BOARD.find("\t\t(pad_to_mask_clearance").unwrap();
+    let bare = format!("{}{}", &BACKDRILL_BOARD[..start], &BACKDRILL_BOARD[end..]);
+    refreshed_against_kicad(&cli, &bare, "backdrills_default_stackup");
+
+    // Backdrills filtered out (`(backdrill no)`): only the primary drills.
+    let filtered = BACKDRILL_BOARD.replacen("(column_count 10)", "(filter (plated yes) (npth yes) (vias yes) (slots yes) (backdrill no) (castellated yes))\n\t\t(column_count 10)", 1);
+    let d = refreshed_against_kicad(&cli, &filtered, "backdrills_filtered");
+    assert_eq!(rows(&d).len(), 1 + 5 + 1);
+}

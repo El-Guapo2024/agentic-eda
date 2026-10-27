@@ -9,8 +9,9 @@
 //!   pcbnew/pcb_generated_table.cpp           PCB_GENERATED_TABLE::RebuildCells, migrateRows, IsStale         [`rebuild`], [`is_stale`]
 //!   pcbnew/board_tables/generated_table_refresh.cpp   RefreshGeneratedTables                                 [`Board::refresh_drill_charts`]
 //!
-//! What the IR has no field for is not ported: backdrills (a padstack's secondary and tertiary drills, so no backdrill span and no stub length) and post-machining (every
-//! operation's is `UNKNOWN`, as KiCad's is for a hole nothing set it on). Positions are the IR's micrometres, keys and sites KiCad's nanometres (µm x 1000).
+//! A via's backdrills (`(backdrill ..)`, `(tertiary_drill ..)`) and post-machining (`(front_post_machining ..)`, `(back_post_machining ..)`) are read from the tokens its
+//! [`eda_model::via_extra::ViaExtra`] kept (r6-editors-exports D6-1): a backdrill span and its rows, the operation kind and the post-machining in the key, the stub length. A pad's
+//! are not needed: the chart's queries leave `m_PadMachining` off (`DRILL_QUERY`), so KiCad's chart has neither. Positions, sizes, keys and sites are nanometres.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,6 +20,7 @@ use eda_model::footprint::{to_board, Pad, PadKind};
 use eda_model::ir::Side;
 use eda_model::ir::{Design, FootprintInstance, Point, TextJustify, Nm};
 use eda_model::table::{Table, TableCell};
+use eda_model::via_extra::{PostMachining, ViaBackdrill};
 use eda_model::{ConstraintModel, Stackup};
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------ the operations
@@ -28,13 +30,14 @@ use eda_model::{ConstraintModel, Stackup};
 pub enum HoleAttribute {
     ViaThrough = 1,
     ViaBuried = 2,
+    ViaBackdrill = 3,
     Pad = 4,
     PadCastellated = 5,
     PadPressfit = 6,
     Mechanical = 7,
 }
 
-/// `DRILL_OPERATION`: one hole, a primary drill (the only kind the IR holds).
+/// `DRILL_OPERATION`: one machining action, a hole's primary drill or a via's backdrill.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrillOp {
     /// The via's id, or `REF.PAD`.
@@ -52,6 +55,12 @@ pub struct DrillOp {
     pub attribute: HoleAttribute,
     /// filled, capped, top/bottom covered, top/bottom plugged, top/bottom tented.
     pub protection: [bool; 8],
+    /// `DRILL_OP_KIND`: 0 the primary drill, 1 the secondary (the backdrill), 2 the tertiary.
+    pub kind: i32,
+    /// `m_FrontPostMachining`, `m_BackPostMachining`.
+    pub post_machining: [PostMachining; 2],
+    /// `m_StubLength`: a backdrill's `BOARD_STACKUP::GetDrillDepth` of its start and end layers.
+    pub stub_length: Option<Nm>,
 }
 
 /// `DRILL_SPAN` of two copper layers of the board, ordered as the board stacks them.
@@ -86,22 +95,44 @@ fn copper_layers(model: &ConstraintModel) -> Vec<String> {
     }
 }
 
-/// `EnumerateDrillSpans` (without pad backdrills): the through span first, then every other pair the vias span, in `DRILL_SPAN::operator<` order (by the layer ids of the top
-/// and the bottom).
+/// `isBackdrillSet`: a drill with both layers and a size.
+fn backdrill_set(d: &ViaBackdrill) -> bool {
+    !d.start.is_empty() && !d.end.is_empty() && d.size > Nm::ZERO
+}
+
+/// A via's secondary and tertiary drills, with their `DRILL_OP_KIND`.
+fn via_backdrills(design: &Design, via_id: &str) -> Vec<(i32, ViaBackdrill)> {
+    let Some(x) = design.drawings.as_ref().and_then(|d| d.via_extra(via_id)) else { return Vec::new() };
+    [(1, x.secondary_drill()), (2, x.tertiary_drill())].into_iter().filter_map(|(k, d)| d.filter(backdrill_set).map(|d| (k, d))).collect()
+}
+
+/// `EnumerateDrillSpans` (without pad backdrills, `aPadBackdrills` false as the chart and the map ask): the through span first, then every other pair the vias span and every
+/// span a via's backdrill drills, in `DRILL_SPAN::operator<` order (the layer ids of the top and the bottom, a backdrill before a plain span, then the stored layers).
 pub fn spans(design: &Design, model: &ConstraintModel) -> Vec<DrillSpan> {
     let layers = copper_layers(model);
     let id = |n: &str| eda_model::layers::pcb_layer_id(n).unwrap_or(0);
-    let mut unique: BTreeSet<(u32, u32, String, String)> = BTreeSet::new();
+    let mut unique: BTreeSet<(u32, u32, bool, u32, u32, DrillSpanKey)> = BTreeSet::new();
+    let mut add = |start: &str, end: &str, backdrill: bool| {
+        let (top, bottom) = top_bottom(&layers, start, end);
+        unique.insert((id(&top), id(&bottom), !backdrill, id(start), id(end), DrillSpanKey(start.to_string(), end.to_string(), backdrill)));
+    };
     for v in design.routing.iter().flat_map(|r| r.vias.iter()) {
         let (top, bottom) = top_bottom(&layers, &v.from_layer, &v.to_layer);
         if !(top == "F.Cu" && bottom == "B.Cu") {
-            unique.insert((id(&top), id(&bottom), top, bottom));
+            add(&top, &bottom, false);
+        }
+        for (_, d) in via_backdrills(design, &v.id) {
+            add(&d.start, &d.end, true);
         }
     }
     let mut out = vec![DrillSpan { start: "F.Cu".into(), end: "B.Cu".into(), backdrill: false, npth: false }];
-    out.extend(unique.into_iter().map(|(_, _, t, b)| DrillSpan { start: t, end: b, backdrill: false, npth: false }));
+    out.extend(unique.into_iter().filter(|u| u.5 .2 || !(u.0 == id("F.Cu") && u.1 == id("B.Cu"))).map(|u| DrillSpan { start: u.5 .0, end: u.5 .1, backdrill: u.5 .2, npth: false }));
     out
 }
+
+/// A span's stored layers and its backdrill flag, the tail of the set's order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct DrillSpanKey(String, String, bool);
 
 /// A via's or the board's protection word: `(name yes)` among the tokens, `(name (front yes) ..)` for a side.
 fn token_flag(tokens: &[String], name: &str, side: Option<&str>) -> Option<bool> {
@@ -118,6 +149,11 @@ fn token_flag(tokens: &[String], name: &str, side: Option<&str>) -> Option<bool>
 /// `EnumerateDrillOperations` for one span: the vias of the span, then -- for the through span -- the pads of every footprint (and the footprint's holes on no copper). A
 /// `non_plated` query gives the non-plated holes only, vias none; a plated one every other.
 pub fn operations(design: &Design, model: &ConstraintModel, span: &DrillSpan, non_plated: bool, merged: bool) -> Vec<DrillOp> {
+    operations_in(design, model, None, span, non_plated, merged)
+}
+
+/// [`operations`] with the board's stackup, which gives a backdrill its stub length (`stubLength`, `GetStackupDescriptor().GetDrillDepth`).
+pub fn operations_in(design: &Design, model: &ConstraintModel, stackup: Option<&Stackup>, span: &DrillSpan, non_plated: bool, merged: bool) -> Vec<DrillOp> {
     let layers = copper_layers(model);
     let mut out = Vec::new();
     let dr = design.drawings.as_ref();
@@ -125,6 +161,37 @@ pub fn operations(design: &Design, model: &ConstraintModel, span: &DrillSpan, no
     let sm = &model.board.solder_mask;
     let span_pair = top_bottom(&layers, &span.start, &span.end);
     let through = span_pair.0 == "F.Cu" && span_pair.1 == "B.Cu";
+    if span.backdrill {
+        // `enumerateVia`'s `tryBackdrill`: each of the via's drills that runs from the span's start layer to its end layer, not plated, with its stub; "Backdrills remove
+        // the via barrel, so via surface protection is not inherited" (the drill's own filling and capping, which the file format does not write: false).
+        if non_plated && !merged {
+            return out;
+        }
+        for v in design.routing.iter().flat_map(|r| r.vias.iter()) {
+            for (kind, d) in via_backdrills(design, &v.id) {
+                if d.start != span.start || d.end != span.end {
+                    continue;
+                }
+                out.push(DrillOp {
+                    source: v.id.clone(),
+                    at: v.at,
+                    size: (d.size, d.size),
+                    orientation_deg: 0.0,
+                    diameter: d.size,
+                    is_slot: false,
+                    top: span_pair.0.clone(),
+                    bottom: span_pair.1.clone(),
+                    not_plated: true,
+                    attribute: HoleAttribute::ViaBackdrill,
+                    protection: [false; 8],
+                    kind,
+                    post_machining: Default::default(),
+                    stub_length: stackup.map(|s| drill_depth_nm(s, &d.start, &d.end)),
+                });
+            }
+        }
+        return out;
+    }
     if !non_plated || merged {
         for v in design.routing.iter().flat_map(|r| r.vias.iter()) {
             if v.drill == Nm::ZERO {
@@ -169,6 +236,9 @@ pub fn operations(design: &Design, model: &ConstraintModel, span: &DrillSpan, no
                 not_plated: false,
                 attribute: if through { HoleAttribute::ViaThrough } else { HoleAttribute::ViaBuried },
                 protection,
+                kind: 0,
+                post_machining: dr.and_then(|d| d.via_extra(&v.id)).map(|x| [x.post_machining(true), x.post_machining(false)]).unwrap_or_default(),
+                stub_length: None,
             });
         }
     }
@@ -238,6 +308,10 @@ fn pad_op(fp: &FootprintInstance, pad: &Pad, tokens: &[String], non_plated: bool
         not_plated: npth,
         attribute,
         protection: [false; 8],
+        kind: 0,
+        // `m_PadMachining` is off in every query the chart and the map make.
+        post_machining: Default::default(),
+        stub_length: None,
     })
 }
 
@@ -257,7 +331,7 @@ pub fn group_key(p: &DrillSymbolProfile, op: &DrillOp) -> String {
         key += &format!("|L{}-{}", ordinal(&op.top), ordinal(&op.bottom));
     }
     if p.is_grouped_by(DrillGroupKey::Operation) {
-        key += "|k0";
+        key += &format!("|k{}", op.kind);
     }
     if p.is_grouped_by(DrillGroupKey::HoleFunction) {
         key += &format!("|a{}", op.attribute as i32);
@@ -269,7 +343,8 @@ pub fn group_key(p: &DrillSymbolProfile, op: &DrillOp) -> String {
         }
     }
     if p.is_grouped_by(DrillGroupKey::PostMachining) {
-        key += "|m0:0:0:0/0:0:0:0";
+        let [f, b] = op.post_machining;
+        key += &format!("|m{}:{}:{}:{}/{}:{}:{}:{}", f.mode, f.size, f.depth, f.angle, b.mode, b.size, b.depth, b.angle);
     }
     key
 }
@@ -293,6 +368,9 @@ fn matches_filter(op: &DrillOp, f: &DrillChartFilter) -> bool {
     if op.not_plated && !f.non_plated || !op.not_plated && !f.plated || op.is_slot && !f.slots {
         return false;
     }
+    if op.kind != 0 && !f.backdrills {
+        return false;
+    }
     if op.attribute == HoleAttribute::PadCastellated && !f.castellated {
         return false;
     }
@@ -302,10 +380,15 @@ fn matches_filter(op: &DrillOp, f: &DrillChartFilter) -> bool {
 
 /// `DRILL_CHART_MODEL::Build`: every span's plated then non-plated operations that pass `filter`, grouped by the profile's key, sorted plated first, then by diameter, then by key.
 pub fn groups(design: &Design, model: &ConstraintModel, profile: &DrillSymbolProfile, filter: &DrillChartFilter) -> Vec<DrillGroup> {
+    groups_in(design, model, None, profile, filter)
+}
+
+/// [`groups`] with the board's stackup (the backdrills' stub lengths).
+pub fn groups_in(design: &Design, model: &ConstraintModel, stackup: Option<&Stackup>, profile: &DrillSymbolProfile, filter: &DrillChartFilter) -> Vec<DrillGroup> {
     let mut by_key: BTreeMap<String, DrillGroup> = BTreeMap::new();
     for span in spans(design, model) {
         for non_plated in [false, true] {
-            for op in operations(design, model, &span, non_plated, false) {
+            for op in operations_in(design, model, stackup, &span, non_plated, false) {
                 if !matches_filter(&op, filter) {
                     continue;
                 }
@@ -479,6 +562,31 @@ fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: 
     total
 }
 
+/// `BOARD_STACKUP::GetDrillDepth( aFirstLayer, aSecondLayer )`: the thickness of every copper layer and dielectric from the board's top (from its bottom when the second layer's id
+/// is below the first's) down to the second layer, and half of the item after it -- the first layer only picks the direction, as KiCad's loop has it.
+pub fn drill_depth_nm(stackup: &Stackup, first: &str, second: &str) -> Nm {
+    let id = |n: &str| eda_model::layers::pcb_layer_id(n).unwrap_or(0);
+    let is_copper = |l: &eda_model::StackupLayer| l.kind.as_deref() == Some("copper") || (l.kind.is_none() && l.name.ends_with(".Cu"));
+    let is_dielectric = |l: &eda_model::StackupLayer| matches!(l.kind.as_deref(), Some("core") | Some("prepreg") | Some("dielectric"));
+    let (mut total, mut half) = (Nm::ZERO, false);
+    let items: Vec<&eda_model::StackupLayer> = if id(second) > id(first) { stackup.layers.iter().collect() } else { stackup.layers.iter().rev().collect() };
+    for l in items {
+        // "Will be UNDEFINED_LAYER for dielectrics"; a silk or mask layer is skipped.
+        if !is_copper(l) && !is_dielectric(l) {
+            continue;
+        }
+        let t = Nm::kiround(l.thickness_mm.unwrap_or(0.0) * 1_000_000.0);
+        total += if half { t / 2 } else { t };
+        if half {
+            return total;
+        }
+        if is_copper(l) && l.name == second {
+            half = true;
+        }
+    }
+    total
+}
+
 /// `DRILL_CHART_CONTENT`: the rows (key and text of each cell), the totals, the shape of each row's mark and the symbol column.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartContent {
@@ -491,7 +599,7 @@ pub struct ChartContent {
 /// `PCB_DRILL_CHART::generate`: the chart's groups under the profile `profile` (assigned into it when `refresh`, else resolved over the whole board on a copy), and the text of
 /// each of the chart's columns for each.
 pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, chart: &DrillChart, profile: &mut DrillSymbolProfile, refresh: bool) -> ChartContent {
-    let mut gs = groups(design, model, profile, &chart.filter);
+    let mut gs = groups_in(design, model, Some(stackup), profile, &chart.filter);
     if refresh {
         assign(&mut gs, profile);
     } else {
@@ -532,8 +640,17 @@ pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, char
                 DrillChartColumnId::Plating => (if f.not_plated { "No" } else { "Yes" }).into(),
                 DrillChartColumnId::OperationCount => g.operations.to_string(),
                 DrillChartColumnId::SiteCount => g.sites.len().to_string(),
-                DrillChartColumnId::LayerSpan => format!("{} / {}", f.top, f.bottom),
-                DrillChartColumnId::Operation => (if f.is_slot { "Slot" } else { "Drill" }).into(),
+                // `spanText`: "The board's own layer names, so a chart matches the stackup the fabricator was given" (`BOARD::GetLayerName`).
+                DrillChartColumnId::LayerSpan => format!("{} / {}", model.board.layer_setup.display_name(&f.top), model.board.layer_setup.display_name(&f.bottom)),
+                // `operationText`.
+                DrillChartColumnId::Operation => (if f.kind != 0 {
+                    "Backdrill"
+                } else if f.is_slot {
+                    "Slot"
+                } else {
+                    "Drill"
+                })
+                .into(),
                 DrillChartColumnId::Protection => {
                     let pr = f.protection;
                     let parts: Vec<&str> = [(pr[0], "filled"), (pr[1], "capped"), (pr[4] || pr[5], "plugged"), (pr[2] || pr[3], "covered"), (pr[6] || pr[7], "tented")].into_iter().filter(|(on, _)| *on).map(|(_, w)| w).collect();
@@ -543,7 +660,7 @@ pub fn content(design: &Design, model: &ConstraintModel, stackup: &Stackup, char
                         parts.join(",")
                     }
                 }
-                DrillChartColumnId::BackdrillStub => NO_VALUE.into(),
+                DrillChartColumnId::BackdrillStub => f.stub_length.map(|s| format_length(s, u, p)).unwrap_or_else(|| NO_VALUE.into()),
                 DrillChartColumnId::AspectRatio => {
                     let depth = layer_distance_nm(stackup, &copper, &f.top, &f.bottom);
                     let d = f.diameter;
@@ -592,6 +709,7 @@ pub fn drill_generation(design: &Design, model: &ConstraintModel) -> String {
     }
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     eat(&mut h, &model.board.layers);
+    eat(&mut h, &model.board.layer_setup.names);
     if let Some(r) = &design.routing {
         eat(&mut h, &r.vias);
     }
@@ -853,7 +971,7 @@ mod tests {
 
     #[test]
     fn marks_are_assigned_from_the_lowest_free_shape_and_then_letters() {
-        let op = |d: Nm| DrillOp { source: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8] };
+        let op = |d: Nm| DrillOp { source: String::new(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (d, d), orientation_deg: 0.0, diameter: d, is_slot: false, top: "F.Cu".into(), bottom: "B.Cu".into(), not_plated: false, attribute: HoleAttribute::Pad, protection: [false; 8], kind: 0, post_machining: Default::default(), stub_length: None };
         let p = DrillSymbolProfile::default();
         assert_eq!(group_key(&p, &op(mm(0.3))), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
         let mut profile = DrillSymbolProfile::default();
