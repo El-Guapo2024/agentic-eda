@@ -70,7 +70,7 @@
 
 use crate::item::{same_net, Item, ItemId, Kind, Net, Via};
 use crate::line::Line;
-use crate::node::{kind_mask, AssembleOpts, NearestHit, Node, QueryOpts};
+use crate::node::{kind_mask, AssembleOpts, NearestHit, Node, QueryOpts, Side};
 use crate::settings::{OptEffort, RoutingSettings};
 use crate::time_limit::TimeLimit;
 use crate::walkaround::{self, WalkPolicy, WalkStatus, Walker};
@@ -364,8 +364,9 @@ pub(crate) fn item_circle_mtv(other: &Item, pos: Point, r: Nm, clearance: Nm) ->
 
 /// `VIA::PushoutForce( aNode, aOther, aForce )`: the displacement that takes a via at `pos` out of one obstacle, at the full
 /// clearance (no epsilon). `(0, 0)` when the via is not in it, or the obstacle's MTV is zero.
-fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> Force {
-    item_circle_mtv(other, pos, via.diameter / 2, Node::clearance_to(rules, &via.net, other)).unwrap_or(NO_FORCE)
+fn via_pushout_from(node: &Node, rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> Force {
+    let at = Via { pos, ..via.clone() };
+    item_circle_mtv(other, pos, via.diameter / 2, node.clearance_to(rules, Side::via(&at), other)).unwrap_or(NO_FORCE)
 }
 
 /// `VIA::PushoutForce( aNode, aDirection, aForce, aCollisionMask, aMaxIterations )`: push the via out of whatever of
@@ -385,11 +386,10 @@ pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, dire
     let (mut pos, mut total) = (via.pos, NO_FORCE);
     let mut iter = 0;
     while iter < max_iterations {
-        let circle = Shape::Circle { c: pos, r: via.diameter / 2 };
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false, box_hull: false };
-        let obstacles = node.colliding_with(&circle, &via.net, via.layers, rules, exclude, opts);
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false, box_hull: false, head_hole: None };
+        let obstacles = node.via_colliding(&Via { pos, ..via.clone() }, rules, exclude, opts);
         let Some(first) = obstacles.first() else { break };
-        let force = via_pushout_from(rules, via, pos, node.get(first.id)?);
+        let force = via_pushout_from(node, rules, via, pos, node.get(first.id)?);
         if force == NO_FORCE {
             return None;
         }
@@ -549,21 +549,22 @@ impl<'a> Shove<'a> {
         Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None, prior_area: None }
     }
 
-    fn clearance(&self, a: &Net, b: &Net) -> Nm {
-        Node::clearance(self.rules, a, b)
+    /// `m_currentNode->GetClearance( aA, aB, false )`: what the rules ask of the two (no epsilon).
+    fn clearance(&self, a: Side, b: Side) -> Nm {
+        self.node.clearance_between(self.rules, a, b, false)
     }
 
     /// The distance `ITEM::collideSimple` (no search context: `ITEM::Collide( aOther, aNode, aLayer )`) calls a collision under: the rules'
     /// clearance less 1 nm -- "The extra "1" here is to account for the fact that the hulls are built to exactly the clearance distance, so
     /// we need to allow for no collision when exactly at the clearance distance" (`shapeH->Collide( shapeI, clearance + lineWidthH +
     /// lineWidthI - 1 )`). A line walked round a hull whose vertices were rounded inwards is then not taken for a collision.
-    fn collide_clearance(&self, a: &Net, b: &Net) -> Nm {
+    fn collide_clearance(&self, a: Side, b: Side) -> Nm {
         self.clearance(a, b) - Nm::new(1)
     }
 
     /// `SHOVE::getClearance`: what a hull is built at -- the forced clearance if there is one, else the rules'. (A *collision* between
     /// two lines is always judged at the rules' clearance: `ITEM::Collide` asks the node, not the shove.)
-    fn get_clearance(&self, a: &Net, b: &Net) -> Nm {
+    fn get_clearance(&self, a: Side, b: Side) -> Nm {
         self.force_clearance.unwrap_or_else(|| self.clearance(a, b))
     }
 
@@ -793,14 +794,14 @@ impl<'a> Shove<'a> {
         }
         let circle = Shape::Circle { c: v.pos, r: v.diameter / 2 };
         if !same_net(&v.net, &l.line.net) && l.line.layer >= v.layers.start() && l.line.layer <= v.layers.end() {
-            let clearance = self.collide_clearance(&v.net, &l.line.net);
+            let clearance = self.collide_clearance(Side::via(v), Side::track(&l.line.net, l.line.layer));
             if l.line.segs().any(|(a, b)| Shape::Stadium { a, b, r: l.line.width / 2 }.collides(&circle, clearance).is_some()) {
                 return true;
             }
         }
         if let Some(lv) = l.via.as_ref().filter(|lv| !lv.data.is_virtual) {
             if !same_net(&v.net, &lv.data.net) {
-                let clearance = self.collide_clearance(&v.net, &lv.data.net);
+                let clearance = self.collide_clearance(Side::via(v), Side::via(&lv.data));
                 if (Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }).collides(&circle, clearance).is_some() {
                     return true;
                 }
@@ -814,7 +815,7 @@ impl<'a> Shove<'a> {
     fn lines_collide(&self, l: &SLine, cur: &SLine) -> bool {
         // `ITEM::collideSimple`: "check if we are not on completely different layers first" -- the vias are tested below on their own layers
         if !same_net(&l.line.net, &cur.line.net) && l.line.layer == cur.line.layer {
-            let clearance = self.collide_clearance(&l.line.net, &cur.line.net);
+            let clearance = self.collide_clearance(Side::track(&l.line.net, l.line.layer), Side::track(&cur.line.net, cur.line.layer));
             let hit = l.line.segs().any(|(a, b)| cur.line.segs().any(|(c, d)| Shape::Stadium { a, b, r: l.line.width / 2 }.collides(&Shape::Stadium { a: c, b: d, r: cur.line.width / 2 }, clearance).is_some()));
             if hit {
                 return true;
@@ -833,15 +834,19 @@ impl<'a> Shove<'a> {
         false
     }
 
-    /// `ITEM::Collide` between two items of the node (different nets, shapes within clearance).
+    /// `ITEM::Collide` between two items of the node: `ib` against `ia` as the head (`ITEM::collideSimple`, [`Node::item_collision`]: the
+    /// rules' clearance, keepouts, net ties, holes), with no epsilon.
     fn items_collide(&self, a: ItemId, b: ItemId) -> bool {
         let (Some(ia), Some(ib)) = (self.node.get(a), self.node.get(b)) else { return false };
-        if ia.is_virtual() || ib.is_virtual() || same_net(ia.net(), ib.net()) || !ia.layers().overlaps(&ib.layers()) {
+        if ia.is_virtual() || ib.is_virtual() {
             return false;
         }
-        // An Edge.Cuts graphic on either side asks for the board's edge clearance, not a net class's.
-        let clearance = if matches!(ib, Item::Solid(s) if s.edge) { Node::clearance_to(self.rules, ia.net(), ib) } else { Node::clearance_to(self.rules, ib.net(), ia) };
-        ia.shape(ia.layers().start()).collides(&ib.shape(ib.layers().start()), clearance).is_some()
+        let head_hole = match ia {
+            Item::Via(v) if v.drill > Nm::ZERO => Some(v.drill / 2),
+            _ => None,
+        };
+        let opts = QueryOpts { use_epsilon: false, head_hole, ..QueryOpts::default() };
+        self.node.item_collision(self.rules, b, ib, &ia.shape(ia.layers().start()), Side::Item(ia), ia.layers(), opts).is_some()
     }
 
     // ------------------------------------------------------------ shoving a track
@@ -871,7 +876,7 @@ impl<'a> Shove<'a> {
     fn shove_line_from_lone_via(&self, cur: &SLine, obstacle: &SLine, result: &mut SLine) -> bool {
         let Some(lv) = &cur.via else { return false };
         let via = &lv.data;
-        let clearance = self.get_clearance(&via.net, &obstacle.line.net);
+        let clearance = self.get_clearance(Side::via(via), Side::track(&obstacle.line.net, obstacle.line.layer));
         let hull = Item::Via(via.clone()).hull(clearance, obstacle.line.width, cur.line.layer);
         let Some(path_cw) = walkaround::walk_around_hull(&obstacle.line.pts, &hull, true) else { return false };
         let Some(path_ccw) = walkaround::walk_around_hull(&obstacle.line.pts, &hull, false) else { return false };
@@ -984,7 +989,7 @@ impl<'a> Shove<'a> {
             return ok;
         }
         let obstacle_width = obstacle_line.line.width;
-        let clearance = self.get_clearance(&cur.line.net, &obstacle_line.line.net);
+        let clearance = self.get_clearance(Side::track(&cur.line.net, cur.line.layer), Side::track(&obstacle_line.line.net, obstacle_line.line.layer));
         // "Arcs need additional clearance to ensure the hulls are always bigger than the arc" (`SHAPE_ARC::DefaultAccuracyForPCB()`, 5 um): KiCad adds
         // it to the `clearance` the loops carry, so it piles up arc chord after arc chord -- every later hull of the line, a straight one too, is
         // bigger -- and attempt after attempt
@@ -1005,7 +1010,7 @@ impl<'a> Shove<'a> {
                 }
             }
             if let Some(lv) = &cur.via {
-                let via_clearance = self.get_clearance(&lv.data.net, &obstacle_line.line.net);
+                let via_clearance = self.get_clearance(Side::via(&lv.data), Side::track(&obstacle_line.line.net, obstacle_line.line.layer));
                 hulls.push(Item::Via(lv.data.clone()).hull(via_clearance, obstacle_width, obstacle_line.line.layer));
             }
             let (adj_start, adj_end) = (attempt >= 2 && !voe_start, attempt >= 2 && !voe_end);
@@ -1161,20 +1166,20 @@ impl<'a> Shove<'a> {
         let (mut mtv, mut collided) = (NO_FORCE, false);
         match &cur {
             Pusher::Line(line) => {
-                let clearance = self.get_clearance(&line.line.net, &obstacle_via.net);
+                let clearance = self.get_clearance(Side::track(&line.line.net, line.line.layer), Side::via(&obstacle_via));
                 let mut vtmp = obstacle_via.clone();
                 if info.max_fanout_width > Nm::ZERO && info.max_fanout_width > vtmp.diameter {
                     vtmp.diameter = info.max_fanout_width;
                 }
                 let line_mtv = circle_chain_mtv(vtmp.pos, vtmp.diameter / 2, &line.line.pts, clearance + line.line.width / 2);
                 // "Check the via if present. Via takes priority."
-                let via_mtv = line.via.as_ref().and_then(|lv| circle_circle_mtv(lv.data.pos, lv.data.diameter / 2, vtmp.pos, vtmp.diameter / 2, self.get_clearance(&lv.data.net, &vtmp.net)));
+                let via_mtv = line.via.as_ref().and_then(|lv| circle_circle_mtv(lv.data.pos, lv.data.diameter / 2, vtmp.pos, vtmp.diameter / 2, self.get_clearance(Side::via(&lv.data), Side::via(&vtmp))));
                 collided = line_mtv.is_some() || via_mtv.is_some();
                 mtv = via_mtv.or(line_mtv).unwrap_or(NO_FORCE);
             }
             Pusher::Item(id) => {
                 if let Some(solid @ Item::Solid(s)) = self.node.get(*id) {
-                    let clearance = Node::clearance_to(self.rules, &obstacle_via.net, solid);
+                    let clearance = self.node.clearance_to(self.rules, Side::via(&obstacle_via), solid);
                     if let Some(m) = solid_via_mtv(&s.shape, obstacle_via.pos, obstacle_via.diameter / 2, clearance) {
                         mtv = m;
                         collided = true;
@@ -1194,7 +1199,7 @@ impl<'a> Shove<'a> {
     fn degenerate_push(&self, cur: &Pusher, via: &Via) -> Force {
         let (dir, reach) = match cur {
             Pusher::Line(line) => {
-                let clearance = self.clearance(&line.line.net, &via.net);
+                let clearance = self.clearance(Side::track(&line.line.net, line.line.layer), Side::via(via));
                 let seg = line.line.segs().min_by_key(|&(a, b)| Seg::new(a, b).sq_distance_to_point(via.pos));
                 let dir = seg.map(|(a, b)| (-(b.y - a.y), b.x - a.x)).filter(|d| *d != NO_FORCE).unwrap_or((Nm::ZERO, Nm::new(1)));
                 (dir, clearance + line.line.width / 2 + via.diameter / 2 + Nm::new(1))
@@ -1299,7 +1304,7 @@ impl<'a> Shove<'a> {
     fn on_reverse_colliding_via(&mut self, cur: &SLine, via_id: ItemId, info: &ObstacleInfo) -> Status {
         let Some(obstacle_via) = self.via_item(via_id) else { return Status::Incomplete };
         if let Some(lv) = &cur.via {
-            let clearance = self.get_clearance(&lv.data.net, &obstacle_via.net);
+            let clearance = self.get_clearance(Side::via(&lv.data), Side::via(&obstacle_via));
             let hit = !lv.data.is_virtual && !same_net(&lv.data.net, &obstacle_via.net) && Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }.collides(&Shape::Circle { c: obstacle_via.pos, r: obstacle_via.diameter / 2 }, clearance).is_some();
             if hit {
                 let next = self.line_rank(cur) - 1;
@@ -1423,7 +1428,7 @@ impl<'a> Shove<'a> {
     fn nearest_for(&self, cur: &SLine, mask: u8) -> Option<NearestHit> {
         let exclude = cur.links();
         // `NODE::NearestObstacle` reads the router's corner mode itself: box hulls in a 90-degree mode
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: self.settings.corner_mode.is_90() };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: self.settings.corner_mode.is_90(), head_hole: None };
         self.node.nearest_obstacle(&cur.line, cur.via.as_ref().map(|v| &v.data), self.rules, &exclude, opts)
     }
 
@@ -1458,7 +1463,7 @@ impl<'a> Shove<'a> {
                     // does the obstacle via itself collide with the via the current line ends in?
                     let mut vias_collide = false;
                     if let (Some(lv), Some(Item::Via(nv))) = (&current.via, self.node.get(ni)) {
-                        let clearance = self.clearance(&nv.net, &lv.data.net);
+                        let clearance = self.clearance(Side::via(nv), Side::via(&lv.data));
                         vias_collide = !lv.data.is_virtual && !same_net(&nv.net, &lv.data.net) && Shape::Circle { c: nv.pos, r: nv.diameter / 2 }.collides(&Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }, clearance).is_some();
                     }
                     if vias_collide {

@@ -9,9 +9,9 @@
 //! fields and semantics of each kind are what KiCad's headers declare.
 //!
 //! An arc track (`PCB_ARC`) is an [`Arc`] (`ARC_T`, `pns_arc.h`): one item with the three points of the arc, its hull
-//! ([`crate::arcs::arc_hull`]) and its collisions, linked at its two ends like a segment. `DIFF_PAIR_T`/`HOLE_T` are out
-//! of scope (a pair is a struct of two lines here; a pad/via's drilled hole is not separately collision-tested -- see the
-//! crate's `PARITY.md` for the full fidelity-gap list).
+//! ([`crate::arcs::arc_hull`]) and its collisions, linked at its two ends like a segment. `DIFF_PAIR_T`/`HOLE_T` are not items (a
+//! pair is a struct of two lines here; a pad's or via's drilled hole is part of it, tested by [`crate::node::Node::item_collision`]
+//! with the world's rules -- see the crate's `PARITY.md`, Stage 15).
 
 use crate::arcs::{self, ArcPts};
 use crate::hull;
@@ -82,11 +82,23 @@ pub struct Solid {
     /// net class the other item is in. It has no anchor: nothing joins to it,
     /// nothing starts a route on it.
     pub edge: bool,
+    /// The number of its board item to the world's rule resolver ([`crate::rule_resolver::RuleResolver::rule_of`]): `from_ir` gives every pad,
+    /// keepout triangle and copper text one. `0` is none of its own (a solid a test makes, the board edge), and the resolver goes by `source`.
+    pub rule: u32,
 }
 
 impl Solid {
     /// The `source` prefix of a board text on copper ([`crate::from_ir`]'s `syncTextItem`).
     pub const TEXT_SOURCE: &'static str = "text:";
+
+    /// The `source` prefix of a triangle of a keepout rule area ([`crate::from_ir`]'s `syncZone`): `keepout:<zone id>#<triangle>`.
+    pub const KEEPOUT_SOURCE: &'static str = "keepout:";
+
+    /// A triangle of a keepout rule area (`syncZone`: `solid->SetParent( aZone )`, `SetRoutable( false )`). What it keeps out, and from what
+    /// clearance, is the rule resolver's ([`crate::rule_resolver::RuleResolver::keepout`]).
+    pub fn is_keepout(&self) -> bool {
+        self.source.starts_with(Self::KEEPOUT_SOURCE)
+    }
 
     /// A board text on copper (`syncTextItem`): an obstacle with the ordinary copper clearance, not routable.
     pub fn is_text(&self) -> bool {
@@ -96,7 +108,7 @@ impl Solid {
     /// `ITEM::IsRoutable()`: a pad is; the board outline (`syncGraphicalItem`) and a copper text (`syncTextItem`: `SetRoutable( false )`) are
     /// not -- nothing joins to them, nothing starts or ends a route on them, nothing picks them.
     pub fn routable(&self) -> bool {
-        !self.edge && !self.is_text()
+        !self.edge && !self.is_text() && !self.is_keepout()
     }
 }
 

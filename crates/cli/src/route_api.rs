@@ -432,7 +432,8 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
         // `DM_VIA` of a virtual via (the joint where tracks meet, `DRAGGER::checkVirtualVia`): no via is drawn (`ROUTER_PREVIEW_ITEM`: "if( v->IsVirtual() ) return") or committed
         "virtual_via": router.drag_virtual_via(),
         "colliding": preview.colliding,
-        // the cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last solution")
+        // the cursor is somewhere the drag cannot be resolved: `pts` is what `DRAGGER::Drag` restores ("Restore last solution", `m_lastDragSolution`):
+        // the last shoved line in Shove mode, the line where the drag started in Walk around mode
         "restored": preview.restored,
         // the first position failed, so the drag only marks obstacles; a violation then needs Ctrl+click (`GetForceMarkObstaclesMode`)
         "forced_mark_obstacles": preview.forced_mark_obstacles,
@@ -1041,7 +1042,9 @@ mod tests {
         let on_the_via = drag_move(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
         assert_eq!(on_the_via["restored"], json!(true), "{on_the_via}");
         assert_eq!(on_the_via["colliding"], json!(false));
-        assert_eq!(on_the_via["pts"], valid["pts"], "the line is where the last valid position put it");
+        // Walk around mode (the default): `DRAGGER::Drag`'s restore shows `m_lastDragSolution`, which `dragWalkaround` never sets -- the line
+        // where the drag started (round-2 R-7); a release still commits the last valid position
+        assert_eq!(on_the_via["pts"], json!([[10_000_000, 9_000_000], [10_000_000, 8_000_000]]), "the line is where it started");
         let done = drag_finish(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
         assert_eq!(done["ok"], json!(true), "{done}");
         let tracks = tracks_of(&dir);

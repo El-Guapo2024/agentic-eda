@@ -1064,10 +1064,73 @@ and the slow tier (`EDA_SLOW_TESTS=1`) green.
   .. m_lastNode->Add( m_lastDragSolution )`: in Shove mode the parent is the frame this failed position reduced the stack to, so a frame it
   popped has sprung back in what is shown. The port showed `last_solution` whole, the frame from before this move's pops. Now
   (`restore_onto_frame`) a line drag shows the last good line with the reduced frame's displacement; a via drag (`dragShove` sets
-  `m_lastDragSolution` only for lines) shows the via and its legs where that frame has them. Walk around mode is unchanged: its parent is the
-  session's world. Failing first, then passing: `a_failed_via_position_shows_the_frame_it_reduced_the_stack_to` (two frames, then a position
+  `m_lastDragSolution` only for lines) shows the via and its legs where that frame has them. ~~Walk around mode is unchanged: its parent is the
+  session's world.~~ **Corrected (round-2 R-7):** in Walk around mode the parent is the session's world and `m_lastDragSolution` is still the line
+  as `startDragSegment` assembled it (`dragWalkaround` never sets it), so the track is shown where it started, not at the last good position (see
+  the round-2 section). Failing first, then passing: `a_failed_via_position_shows_the_frame_it_reduced_the_stack_to` (two frames, then a position
   neither the shove nor the pushout can place: the newest frame is popped and the preview shows the via, its leg and the push of the frame
   below). The line-drag half has no test of its own: a line head that pops a frame touches nothing of it, so its shove does not fail.
+
+## Stage 15 -- round-2 router findings (branch `task-r2-router`, 2026-10-27)
+
+The findings of `findings/round2/r2-route-rules.md` (R-1, R-2, R-3, R-6, R-7, R-8; R-4 and R-5 are Board Setup's, another lane's). Each was
+re-read against KiCad 8303b2ad, and each fix has a test that failed first.
+
+- **R-1, the router's clearance is the DRC engine's.** `PNS_PCBNEW_RULE_RESOLVER::Clearance` asks `QueryConstraint` -> `DRC_ENGINE::EvalRules`
+  for every layer two items share and takes the largest of `CT_HOLE_TO_HOLE`, `CT_HOLE_CLEARANCE`, `CT_CLEARANCE`, `CT_EDGE_CLEARANCE` and
+  `CT_PHYSICAL_CLEARANCE`. `src/rule_resolver.rs` ports it over `eda_drc::constraints::RuleEngine::eval_rules` and the board items of
+  `eda_drc::rule_board::RuleBoard` (the same engine the Clearance Resolution dialog and the via stitcher use), so a pad's or footprint's local
+  clearance, the net-tie rule, the custom rules of the `.kicad_dru` and the board minimum count. `from_ir::build_node` gives the world its
+  resolver (`NODE::SetRuleResolver`); every clearance the router asks -- collisions, hulls, the walkaround, the shove's hulls and MTVs, the pair
+  placer, the meander spacing (`MEANDER_PLACER_BASE::Clearance`) -- goes through `Node::clearance_between` and is cached per pair of items
+  (`m_clearanceCache`). A world built item by item (`Node::new`, the unit tests) has no resolver and keeps the net-class answer. The search margin
+  is the resolver's worst rule or local clearance (`SetMaxClearance`).
+  - *Holes.* A pad's drilled hole and a via's are tested as KiCad's `HOLE_T` items are (`collideSimple`): the item's hole against the probe's
+    copper of another net, the probe via's hole (`QueryOpts::head_hole`, `Node::via_colliding`) against copper of another net and against holes
+    of any net (hole to hole), a geometrically identical via of the same net excepted. **Differs:** a hole is part of its pad or via, not an
+    item of its own, so an item is one obstacle and the hull it is walked round is the larger of its copper's and its hole's
+    (`Node::obstacle_hull`); a shoved via's MTV is still measured from its copper.
+  - *Net ties.* `collideSimple`'s `checkNetTie`: a collision with a pad of a net-tie footprint is allowed where it is on a pad of that
+    footprint's groups of the probe's own net (`IsNetTieExclusion`, at the position on the pad, as `shapeH->Collide( shapeI, .., &pos )` gives it).
+    The finding's "clearance 0" holds only there: the router keeps the clearance from the other pad elsewhere, as KiCad does.
+  - *Differs:* an existing track or via is asked about as `getBoardItem`'s dummy of its net and layer (KiCad asks the `PCB_TRACK`, with its own
+    width); `evaluateLineSegments` is not ported (only geometry-dependent rules would see it).
+  - *Cost.* The answers are cached per pair as KiCad's `m_clearanceCache` is, a net known by its handle (`from_ir` gives all the items of a net
+    one `Rc`, as a board has one `NETINFO_ITEM`) and a solid by the number of its board item (`Solid::rule`). On a board whose clearance rules
+    are its board setup's and its net classes' plain ones (`RuleResolver::is_plain`: no `.kicad_dru` rule of a clearance type, no "(diff pair)"
+    clearance), a pair of items with no rules of their own (tracks, vias, their holes, pads with no local clearance, the edge) is answered without
+    the engine, from the same numbers `EvalRules` takes there; `the_plain_answer_is_the_engines_on_kicads_boards` holds this to the engine on
+    about 100 000 pairs of ten QA boards. A hole whose copper reaches further than the worst hole clearance can is not tested
+    (`RuleResolver::hole_reach`). The search margin leaves out the barcodes' implicit 1 mm physical clearance, which no router item is subject
+    to (KiCad's `QueryWorstConstraint` counts it). Measured on `simple-shove-1` replayed in Shove mode (debug build, CPU time, the best of
+    nine): 0.65 s with the rules, 0.63 s with the net classes alone.
+  - Tests: `tests/rules_kicad.rs` -- a pad's local clearance, a footprint's, a custom rule, a net tie, a mounting hole's hole clearance, hole to
+    hole between two vias of one net. Each routes in Walk around mode through `Router`, checks the copper, and under `EDA_SLOW_TESTS=1` has
+    kicad-cli's DRC judge the board with the route on it (no violation), and the route the net class alone gives (a violation: kicad-cli sees
+    the rule). All eight failed with the resolver taken out. A ninth, `the_plain_answer_is_the_engines_on_kicads_boards`, holds the resolver's
+    shortcut to the engine (below).
+- **R-2, keepout rule areas are obstacles.** `syncZone`: each triangle of a keepout area's outline is a `SOLID` of no net, not routable
+  (`from_ir::add_keepouts`, `Solid::KEEPOUT_SOURCE`); `IsKeepout`'s `checkKeepout` keeps out tracks or vias by the area's flags (a pad has no
+  board item to the router, so never), as an exact boundary (clearance 0); its hull is the class clearance (`GetClearance` of the zone item); in
+  `AssembleCluster` it touches only what it keeps out. The triangles are `POLYGON_TRIANGULATION::TesselatePolygon`'s ear cutting
+  (`src/triangulation.rs`). **Differs:** `subdividePolygon` / `splitPolygon` are not ported (an outline the ear cutting cannot finish is one solid
+  of its outline) and an area's holes are not cut out of it. Tests: `a_keepout_rule_area_blocks_tracks` (the route goes round; kicad-cli: no
+  `items_not_allowed`, and the straight route is one), `a_vias_only_keepout_lets_tracks_through_but_not_vias`.
+- **R-3, a pair's legs are simplified.** `DIFF_PAIR_PLACER::FixRoute`'s `topo.SimplifyLine( &lineP ); topo.SimplifyLine( &lineN )`:
+  `Router::simplify_pair_legs` runs the single-track `simplifyNewLine` merge (findings p5 F2-6) on the pair's legs at the commit (finish, Esc,
+  Route From Other End), not on the lines its shove moved. A leg that goes straight on from the leg before it, or from the track it starts on,
+  is one segment with it; a track it continues is taken in (`a_pair_that_goes_straight_on_across_a_fix_is_one_segment_per_line`, and the QA
+  board `a_pair_continues_from_a_pair_of_tracks_..`, which now takes in the J1-side tracks and the stubs it meets). KiCad simplifies at each fix
+  with the legs before it in the node; once over all the legs gives the same segments.
+- **R-6, the pair's Shove move that cannot be routed.** `rhShoveOnly` sets `m_currentNode = m_shove->CurrentNode()` first and `Move` branches
+  `m_lastNode` from it whatever `route()` returned: the preview shows the newest frame's pushes. KiCad's `tryWalkDp` always returns true (as here),
+  so the early return is `routeHead`'s (`propagateDpHeadForces` out of steps). Test: `a_via_the_pair_pushed_stays_pushed_until_the_leg_is_fixed`.
+- **R-7, the dragger's restore.** `Drag`'s restore adds `m_lastDragSolution` to a branch of the last node's parent. `dragWalkaround` never sets
+  it (it is the line `startDragSegment` assembled), so in Walk around mode a position that cannot be walked shows the track where it started;
+  `dragShove` sets it to `draggedPostShove`, split at the anchor but not optimized (`optimizeAndUpdateDraggedLine` optimizes a copy). The
+  Stage 14 sentence "Walk around mode is unchanged" was wrong and is corrected there. Tests: `walkaround_restore_shows_the_original_line`,
+  `shove_restore_shows_the_line_before_the_optimizer`.
+- **R-8** is the connectivity crate's (`crates/connectivity/src/dangling.rs`: the integer accuracy, the integer `getMinDist`, true arcs).
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
