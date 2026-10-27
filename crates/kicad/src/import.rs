@@ -514,17 +514,16 @@ fn net_ref(net: Option<&[Sexpr]>, net_names: &BTreeMap<i64, String>) -> String {
     net_of(n, net_names)
 }
 
-/// The net a `(net ..)` form names. The reader of s-expressions does not keep whether an argument was quoted, and `PCB_IO_KICAD_SEXPR_PARSER::parseNet` goes by that: a number
-/// is a net code, a string is a name. What tells them apart here is the file: a legacy file lists its nets at the top (`(net 0 "")` at least, always), so a number is a
-/// code; a KiCad 10 file lists none, and its one argument is a name even when it is made of digits -- `(net "0")` is the net a SPICE netlist calls ground.
+/// The net a `(net ..)` form names, as `PCB_IO_KICAD_SEXPR_PARSER::parseNet` reads it: a bare number (`IsNumber( token )`) is a net code
+/// (`getNetCode`), looked up in the file's net table, and a code the table does not have -- every code in a KiCad 10 file, which lists no nets, `(zone (net 0) ..)`
+/// of QA `issue23467` -- is no net (`SetNetCode` fails and the item stays on net 0); a quoted string is a name even when it is made of digits -- `(net "0")` is the
+/// net a SPICE netlist calls ground. (A legacy line `(net 12 "name")` says the name again; it is used when the table has no code 12.)
 fn net_of(n: &[Sexpr], net_names: &BTreeMap<i64, String>) -> String {
-    if net_names.is_empty() && n.len() == 2 {
-        return sexpr::txt(n, 1).unwrap_or("").to_string();
+    if sexpr::is_bare_number(n, 1) {
+        let code = sexpr::num(n, 1).unwrap_or(0.0) as i64;
+        return net_names.get(&code).cloned().or_else(|| if net_names.is_empty() { None } else { sexpr::txt(n, 2).map(str::to_string) }).unwrap_or_default();
     }
-    match sexpr::num(n, 1) {
-        Some(code) => net_names.get(&(code as i64)).cloned().or_else(|| sexpr::txt(n, 2).map(str::to_string)).unwrap_or_default(),
-        None => sexpr::txt(n, 1).unwrap_or("").to_string(),
-    }
+    sexpr::txt(n, 1).unwrap_or("").to_string()
 }
 
 fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)], copper_nets: &[&str]) -> Vec<Net> {
@@ -3331,5 +3330,23 @@ mod tests {
         let (design, model, _) = import_kicad_pcb(legacy).expect("parses");
         assert_eq!(design.routing.expect("copper").tracks[0].net, "SIG");
         assert_eq!(model.nets.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), vec!["SIG"]);
+    }
+
+    /// r3-board-io F1: `parseNet` goes by the token: `IsNumber( token )` is a net code (`getNetCode`, 0 is no net, and a KiCad 10 file lists no codes, so any
+    /// number there is no net), a string is a name. `(zone (net 0) (net_name ""))` of a KiCad 10 file (QA `issue23467`) is a netless pour, `(net "0")` the net "0".
+    #[test]
+    fn import_reads_an_unquoted_zero_net_as_no_net() {
+        let text = r#"(kicad_pcb (version 20260206) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (footprint "L:R" (layer "F.Cu") (uuid "f1") (at 10 10)
+                (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+                (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net "0") (uuid "a1")))
+            (zone (net 0) (net_name "") (layer "F.Cu") (uuid "z1") (hatch edge 0.5)
+                (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))))
+        )"#;
+        let (design, model, _notes) = import_kicad_pcb(text).expect("parses");
+        let routing = design.routing.expect("copper");
+        assert_eq!(routing.zones[0].net, "", "an unquoted 0 is net code 0: no net");
+        assert_eq!(model.nets.iter().find(|n| n.name == "0").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]), "the quoted \"0\" is a name");
     }
 }
