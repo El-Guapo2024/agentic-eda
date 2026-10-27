@@ -72,11 +72,19 @@ pub fn pin_points(sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol
         let (dx, dy) = bake_offset(rot, mirrored, w, lx, ly);
         Point { x: sym.at.x + Nm::new(dx), y: sym.at.y + Nm::new(dy) }
     };
+    // A real library symbol's pin is where the writer bakes it (`eda_kicad`'s `baked_real_point`: the library point against the corner of the box,
+    // `(x - x0, y1 - y)`), which is its port's stub tip for a pin on the edge its angle names, and is not for one that is not (a hidden power input
+    // inside the body or past the far edge, QA `video`'s `4C4001`: its pins 10 and 20 both point up, and the box model put both on the bottom edge).
+    let real_box = resolved.map(|r| real_symbol_bbox(r, sym.unit));
     let mut out = Vec::new();
     for (i, pin) in part.pins.iter().enumerate() {
         let Some(pi) = b.pin_port[i] else { continue };
-        let tip = b.node.stub_tip(LPoint { x: 0, y: 0 }, pi);
-        out.push((pin.number.clone(), at(tip.x, tip.y)));
+        let exact = resolved.zip(real_box).and_then(|(r, (x0, _, _, y1))| r.pin_by_number(&pin.number).filter(|p| p.unit == 0 || p.unit == sym.unit).map(|p| (eda_model::units::sch_from_mm(p.at.x - x0).get(), eda_model::units::sch_from_mm(y1 - p.at.y).get())));
+        let (lx, ly) = exact.unwrap_or_else(|| {
+            let tip = b.node.stub_tip(LPoint { x: 0, y: 0 }, pi);
+            (tip.x, tip.y)
+        });
+        out.push((pin.number.clone(), at(lx, ly)));
     }
     for (i, local) in nc_pin_local_points(part, w, h, resolved, sym.unit) {
         out.push((part.pins[i].number.clone(), at(local.x, local.y)));

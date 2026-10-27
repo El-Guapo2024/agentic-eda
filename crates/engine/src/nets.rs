@@ -7,14 +7,15 @@
 //! What it ports, and from where:
 //! - **Subgraphs** (`CONNECTION_GRAPH::buildItemSubGraphs`): points that share a coordinate, the points of one wire polyline,
 //!   and a point that lands on the interior of a wire (a T-junction) are one electrical node.
-//! - **Drivers and their priority** (`CONNECTION_SUBGRAPH::GetDriverPriority`): pin < sheet pin < hierarchical label < local
-//!   label < global power pin (a power symbol) < global label. The best driver names the net.
-//! - **Labels by name** (`processSubGraphs`): on one sheet, subgraphs with the same local or hierarchical label text are one
-//!   net; a sheet pin joins only when no other sheet pin on the sheet has its name ("promote sheet pins ... if no conflict").
-//! - **Global names**: power symbols and global labels with the same text are one net across every sheet.
-//! - **The hierarchy** (`propagateToNeighbors`): a sheet pin on the parent and a hierarchical label of the same name inside the
-//!   sheet are one net. The name that survives is the best driver anywhere along it: a power or global driver, else a strong
-//!   driver (label) of higher priority, else the one closest to the root, else the alphabetically first.
+//! - **Claims and their order** (KiCad 25ec2335's connectivity engine, `eeschema/connectivity/conn_claims.cpp`, which the box's kicad-cli runs:
+//!   `ADVANCED_CFG::m_ConnectivityEngine` is on by default): pin < sheet pin < hierarchical label < local label < bus member < global power pin (a
+//!   power symbol, a hidden power input) < global label. The greatest claim of the net names it (`CLAIM_LESS`: priority, then nearest the root with
+//!   a global name and a pin unscoped, then a power symbol's pin, then an output sheet pin, then a name without `-Pad`, then the first name).
+//! - **Names** (`BuildIslandRecord`'s edges): on one sheet every label, power symbol and hidden power input of one text is one net (`SCOPE::SHEET`:
+//!   a power symbol `VCC` and a local label `VCC` there are one net); global labels and power names are one net across every sheet
+//!   (`SCOPE::GLOBAL`); a sheet pin is a name at the port of its placement only (`SCOPE::PORT`), with the hierarchical labels of that name inside.
+//! - **The hierarchy**: a sheet pin on the parent and a hierarchical label of the same name inside the sheet are one net, at its port; a sheet pin
+//!   joins no label of its name on its own sheet.
 //!
 //! A subgraph with no driver keeps the name its wires already carry (a derived schematic names every wire after its net), so a
 //! retrace after an edit does not rename nets under a routed board; otherwise it is `NET_<n>`.
@@ -36,13 +37,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use eda_model::ir::{LabelKind, Point, SchematicSection};
 use eda_model::Net;
 
-/// `CONNECTION_SUBGRAPH::PRIORITY`.
+/// `SCH_CONNECTIVITY::PRIORITY` (KiCad 25ec2335 `eeschema/connectivity/conn_claims.h`; the old engine's `CONNECTION_SUBGRAPH::PRIORITY` lacks
+/// `BUS_MEMBER`). `LOCAL_POWER_PIN` (5, a local power symbol) is not ported.
 const PIN: u8 = 1;
 const SHEET_PIN: u8 = 2;
 const HIER_LABEL: u8 = 3;
 const LOCAL_LABEL: u8 = 4;
-const GLOBAL_POWER_PIN: u8 = 6;
-const GLOBAL: u8 = 7;
+/// A bus member's slot (`BindBundle`: `slot.claim.priority = PRIORITY::BUS_MEMBER`), above every label but a global one.
+const BUS_MEMBER: u8 = 6;
+const GLOBAL_POWER_PIN: u8 = 7;
+const GLOBAL: u8 = 8;
 
 /// One screen (a sheet's drawn content) to trace.
 pub struct ScreenIn<'a> {
@@ -102,7 +106,13 @@ struct Driver {
     prio: u8,
     /// The driver's own text (`CONNECTION_SUBGRAPH::GetNameForDriver`): a label's, a sheet pin's, a power symbol's value.
     name: String,
+    /// `CLAIM::depth`: the sheet path's size, 0 for a claim with no scope (a global label, a global power pin, a pin: `PrepareInstanceClaims`'s
+    /// `unscoped`).
     depth: usize,
+    /// `CLAIM::globalPowerParent`: the pin of a global power symbol (not an invisible power input of an ordinary symbol), which outranks it.
+    power_parent: bool,
+    /// `CLAIM::outputShape`: a sheet pin of output shape.
+    output: bool,
     /// The net name this driver gives (`SCH_CONNECTION::Name()`, `m_cached_name_with_path`): [`Self::name`] with the path of its sheet in front, but for a
     /// global label or a global power pin (`recacheName`'s `prepend_path`).
     full: String,
@@ -114,7 +124,8 @@ impl Driver {
     fn new(prio: u8, name: String, depth: usize, sheet_path: &str) -> Self {
         let name = escape_net_name(&name);
         let full = if prio >= GLOBAL_POWER_PIN || name.is_empty() { name.clone() } else { format!("{sheet_path}/{name}") };
-        Driver { prio, name, depth, full }
+        let depth = if prio >= GLOBAL_POWER_PIN || prio == PIN { 0 } else { depth };
+        Driver { prio, name, depth, power_parent: false, output: false, full }
     }
 }
 
@@ -197,18 +208,18 @@ fn nested_group_members(name: &str, bus_members: &dyn Fn(&str) -> Option<Vec<Str
     inner.split_whitespace().filter_map(|t| bus_members(t)).flatten().map(|m| format!("{dot}{m}")).collect()
 }
 
-/// KiCad's order of the drivers of a net (`propagateToNeighbors`, "find the best driver for this chain of subgraphs"): a global power pin or global
-/// label first, then a strong driver by priority, then the one closest to the root, then the alphabetically first name -- the name with its path
-/// (`candidateName < bestName` compares `m_driver_connection->Name()`), so of two sibling sheets' hierarchical labels `RESET` the one on `/Header/` wins
-/// over `/MCU/`'s. Within one subgraph (`compareDrivers`) a name with `-Pad` in it loses to one without.
+/// KiCad's order of the claims to a net's name, the best first (KiCad 25ec2335 `conn_claims.cpp::CLAIM_LESS`, the greater claim drives): the priority, then
+/// the one closest to the root (a global label, a global power pin and a pin have no depth: `PrepareInstanceClaims`), then a global power symbol's pin over
+/// an invisible power input of an ordinary symbol (`globalPowerParent`), then a sheet pin of output shape, then a name without `-Pad`, then the
+/// alphabetically first name with its path (`fullName`, compared as UTF-8), so of two sibling sheets' hierarchical labels `RESET` the one on `/Header/` wins
+/// over `/MCU/`'s.
 fn driver_order(a: &Driver, b: &Driver) -> std::cmp::Ordering {
-    let a_global = a.prio >= GLOBAL_POWER_PIN;
-    let b_global = b.prio >= GLOBAL_POWER_PIN;
-    b_global
-        .cmp(&a_global)
-        .then_with(|| b.prio.cmp(&a.prio))
+    b.prio
+        .cmp(&a.prio)
         .then_with(|| a.depth.cmp(&b.depth))
-        .then_with(|| a.full.contains("-Pad").cmp(&b.full.contains("-Pad")))
+        .then_with(|| b.power_parent.cmp(&a.power_parent))
+        .then_with(|| b.output.cmp(&a.output))
+        .then_with(|| a.name.contains("-Pad").cmp(&b.name.contains("-Pad")))
         .then_with(|| a.full.cmp(&b.full))
 }
 
@@ -374,6 +385,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             if let Some(name) = naming.power_pins.and_then(|m| m.get(pin_ref)).filter(|n| !n.is_empty()) {
                 groups[at[p]].drivers.push(Driver::new(GLOBAL_POWER_PIN, name.clone(), depth[si], &spath[si]));
                 groups[at[p]].global_names.push(name.clone());
+                groups[at[p]].local_names.push(name.clone());
             }
         }
         for (l, &b) in sch.labels.iter().zip(&label_bus) {
@@ -384,12 +396,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 LabelKind::Global { .. } => (GLOBAL, 2),
             };
             g.drivers.push(Driver::new(prio, l.net.clone(), depth[si], &spath[si]));
+            // `BuildIslandRecord`'s name edges: every label kind is a name on its sheet (`SCOPE::SHEET`), a global one across the schematic too
+            // (`SCOPE::GLOBAL`), a hierarchical one at its sheet's port (`SCOPE::PORT`)
+            g.local_names.push(l.net.clone());
             match bucket {
-                0 => g.local_names.push(l.net.clone()),
-                1 => {
-                    g.hier_labels.push(l.net.clone());
-                    g.local_names.push(l.net.clone());
-                }
+                0 => {}
+                1 => g.hier_labels.push(l.net.clone()),
                 _ => g.global_names.push(l.net.clone()),
             }
         }
@@ -402,13 +414,14 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             }
             let name = naming.power_value.map(|f| f(&screen.path, &ps.net)).unwrap_or_else(|| ps.net.clone());
             let g = &mut groups[at[&ps.at]];
-            g.drivers.push(Driver::new(GLOBAL_POWER_PIN, name.clone(), depth[si], &spath[si]));
+            g.drivers.push(Driver { power_parent: true, ..Driver::new(GLOBAL_POWER_PIN, name.clone(), depth[si], &spath[si]) });
+            g.local_names.push(name.clone());
             g.global_names.push(name);
         }
         for (sh, flags) in sch.sheets.iter().zip(&pin_bus) {
             for (p, &b) in sh.pins.iter().zip(flags) {
                 let g = &mut groups[if b { bus_at[&p.at] } else { at[&p.at] }];
-                g.drivers.push(Driver::new(SHEET_PIN, p.name.clone(), depth[si], &spath[si]));
+                g.drivers.push(Driver { output: p.shape == eda_model::ir::LabelShape::Output, ..Driver::new(SHEET_PIN, p.name.clone(), depth[si], &spath[si]) });
                 g.sheet_pins.push(p.name.clone());
             }
         }
@@ -426,10 +439,13 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     for _ in 0..groups.len() {
         join.add();
     }
-    // Local and hierarchical label text is a net on one sheet (a bus with a bus, a net with a net: `connection->Type() == candidate->...Type()`).
+    // The name edges of KiCad 25ec2335 (`conn_claims.cpp::BuildIslandRecord`), a bus with a bus and a net with a net:
+    // * `SCOPE::SHEET`: a local, hierarchical or global label, a power symbol and a hidden power input are a name on their sheet (one placement), so a
+    //   power symbol `VCC` and a local label `VCC` there are one net;
+    // * `SCOPE::GLOBAL`: a global label and a global power pin are a name across the schematic;
+    // * `SCOPE::PORT`: a sheet pin is a name at the port of the placement it leads to, and so is a hierarchical label inside it -- a sheet pin joins
+    //   nothing on its own sheet by its name (two pins of one name on one sheet symbol are one net, at the one port).
     let mut local: BTreeMap<(usize, bool, String), Vec<usize>> = BTreeMap::new();
-    // Sheet pins join by name only when they are the only ones of that name on the sheet.
-    let mut sheet_pin_groups: BTreeMap<(usize, bool, String), Vec<usize>> = BTreeMap::new();
     let mut global: BTreeMap<(bool, String), Vec<usize>> = BTreeMap::new();
     let mut hier: BTreeMap<(usize, bool, String), Vec<usize>> = BTreeMap::new();
     // the globally named nets of each sheet, for the members of a bus there
@@ -437,9 +453,6 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
     for (gid, g) in groups.iter().enumerate() {
         for n in &g.local_names {
             local.entry((g.screen, g.bus, n.clone())).or_default().push(gid);
-        }
-        for n in &g.sheet_pins {
-            sheet_pin_groups.entry((g.screen, g.bus, n.clone())).or_default().push(gid);
         }
         for n in &g.global_names {
             global.entry((g.bus, n.clone())).or_default().push(gid);
@@ -451,32 +464,30 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             hier.entry((g.screen, g.bus, n.clone())).or_default().push(gid);
         }
     }
-    for ((screen, bus, name), mut gids) in sheet_pin_groups {
-        gids.sort();
-        gids.dedup();
-        if gids.len() == 1 {
-            local.entry((screen, bus, name)).or_default().push(gids[0]);
-        }
-    }
     for gids in local.values().chain(global.values()) {
         for w in gids.windows(2) {
             join.union(w[0], w[1]);
         }
     }
-    // Sheet pin <-> the hierarchical labels of its sheet's content.
+    // The ports: a sheet pin and the hierarchical labels of its placement's content, by name (`SCOPE::PORT`, `{ child instance, name }`).
+    let mut ports: BTreeMap<(usize, bool, String), Vec<usize>> = hier.clone();
     for (si, screen) in screens.iter().enumerate() {
         for sh in &screen.sch.sheets {
             let Some(ci) = child_of(screens, si, sh) else { continue };
             for p in &sh.pins {
                 for (bus, here) in [(false, &group_at[si]), (true, &bus_group_at[si])] {
                     let Some(&gp) = here.get(&p.at) else { continue };
-                    if let Some(labels) = hier.get(&(ci, bus, p.name.clone())) {
-                        for &gl in labels {
-                            join.union(gp, gl);
-                        }
+                    // a pin on the bus layer is on the bus port, one on the wire layer on the net port
+                    if groups[gp].bus == bus && groups[gp].sheet_pins.contains(&p.name) {
+                        ports.entry((ci, bus, p.name.clone())).or_default().push(gp);
                     }
                 }
             }
+        }
+    }
+    for gids in ports.values() {
+        for w in gids.windows(2) {
+            join.union(w[0], w[1]);
         }
     }
 
@@ -531,7 +542,13 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 let screen = gids.iter().map(|&g| groups[g].screen).find(|&s| depth[s] == best.depth).unwrap_or(groups[gids[0]].screen);
                 // a member's name is the bus's, with the bus driver's path (`SCH_CONNECTION::ConfigureFromLabel` gives the members the bus's sheet)
                 let sheet_path = best.full.strip_suffix(best.name.as_str()).and_then(|p| p.strip_suffix('/')).unwrap_or("");
-                groups.push(Group { screen, member: true, drivers: vec![Driver::new(best.prio, m.clone(), best.depth, sheet_path)], ..Default::default() });
+                // `BindBundle`: the slot's claim is `BUS_MEMBER`, with the depth and the path of the bus's claim (`fullName = path + leaf.name`)
+                let mut slot = Driver::new(BUS_MEMBER, m.clone(), best.depth, sheet_path);
+                if best.prio >= GLOBAL_POWER_PIN {
+                    // a global bus's claim has no path: neither has its members' (`fullName = path + leaf.name`)
+                    slot.full = slot.name.clone();
+                }
+                groups.push(Group { screen, member: true, drivers: vec![slot], ..Default::default() });
                 join.add();
             }
             for &g in gids {
@@ -932,6 +949,133 @@ mod tests {
         // And both wires carry the name.
         assert_eq!(root.wires[0].net, "/child/SIG");
         assert_eq!(child.wires[0].net, "/child/SIG");
+    }
+
+    fn power(net: &str, at: Point) -> PowerSymbol {
+        PowerSymbol { id: format!("#PWR_{net}"), lib_id: format!("power:{net}"), at, rot: 0, net: net.into(), pin: String::new() }
+    }
+    fn sheet_pin(name: &str, at: Point, shape: LabelShape) -> SheetPin {
+        SheetPin { id: String::new(), name: name.into(), shape, at }
+    }
+    fn sub_sheet(pins: Vec<SheetPin>) -> SheetInstance {
+        SheetInstance { id: "s1".into(), name: "sub".into(), file: "sub.kicad_sch".into(), at: p(10_000, 0), size: (Nm::new(10_000), Nm::new(10_000)), pins, page: String::new() }
+    }
+    fn net_of(nets: &[TracedNet], pin: &str) -> (String, Vec<String>) {
+        let n = nets.iter().find(|n| n.pins.iter().any(|x| x == pin)).unwrap_or_else(|| panic!("{pin} in {nets:?}"));
+        (n.name.clone(), n.pins.clone())
+    }
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// r2 A-N1 (KiCad 25ec2335 `BuildIslandRecord`: a global label and a global power pin emit the `SCOPE::SHEET` edge a local label emits): on one sheet a
+    /// power symbol `VCC` and a local label `VCC` are one net, and so are a global label and a local one, though no wire joins them. kicad-cli, cases t11/t12.
+    #[test]
+    fn a_local_label_joins_the_global_net_of_its_name_on_its_sheet() {
+        for global in ["power", "label"] {
+            let mut root = section();
+            if global == "power" {
+                root.power_symbols.push(power("VCC", p(0, 0)));
+            } else {
+                root.labels.push(label("VCC", p(0, 0), LabelKind::Global { shape: LabelShape::Input }));
+            }
+            root.labels.push(label("VCC", p(1000, 0), LabelKind::Local));
+            let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(1000, 0))]) }];
+            let nets = trace_nets_with(&mut screens, &Naming::default());
+            assert_eq!(net_of(&nets, "R1.1"), ("VCC".to_string(), strs(&["R1.1", "R2.1"])), "{global}: {nets:?}");
+        }
+        // t13: a child's hierarchical label `VCC` and its power symbol `VCC` are one net, so the root's sheet pin `VCC` is on the global net too
+        let mut root = section();
+        root.sheets.push(sub_sheet(vec![sheet_pin("VCC", p(10_000, 500), LabelShape::Input)]));
+        root.wires.push(wire("", &[p(0, 500), p(10_000, 500)]));
+        let mut sub = section();
+        sub.labels.push(label("VCC", p(0, 0), LabelKind::Hierarchical { shape: LabelShape::Input }));
+        sub.power_symbols.push(power("VCC", p(1000, 0)));
+        let mut screens = vec![
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 500))]) },
+            ScreenIn { path: Vec::new(), sch: &mut sub, file: "sub.kicad_sch".into(), pins: pins(&[("R3.1", p(0, 0)), ("R4.1", p(1000, 0))]) },
+        ];
+        let nets = trace_nets_with(&mut screens, &Naming::default());
+        assert_eq!(net_of(&nets, "R1.1"), ("VCC".to_string(), strs(&["R1.1", "R3.1", "R4.1"])), "{nets:?}");
+    }
+
+    /// r2 A-N2 and A-N3 (`BuildIslandRecord`: a sheet pin emits only a `SCOPE::PORT` edge, at the placement it leads to): a sheet pin does not join a local
+    /// label of its name on its own sheet (kicad-cli t9: `/FOO [R2.1]`, `/sub/FOO [R1.1 R3.1]`), and two pins of one name on one sheet symbol are one net
+    /// though nothing inside names them (t15: `/X [R1.1 R2.1]`).
+    #[test]
+    fn a_sheet_pin_does_not_join_a_label_of_its_name_on_its_own_sheet() {
+        let mut root = section();
+        root.sheets.push(sub_sheet(vec![sheet_pin("FOO", p(10_000, 500), LabelShape::Input), sheet_pin("X", p(10_000, 1500), LabelShape::Input), sheet_pin("X", p(10_000, 2500), LabelShape::Input)]));
+        root.wires.push(wire("", &[p(0, 500), p(10_000, 500)]));
+        root.wires.push(wire("", &[p(0, 1500), p(10_000, 1500)]));
+        root.wires.push(wire("", &[p(0, 2500), p(10_000, 2500)]));
+        root.labels.push(label("FOO", p(0, 5000), LabelKind::Local));
+        let mut sub = section();
+        sub.labels.push(label("FOO", p(0, 0), LabelKind::Hierarchical { shape: LabelShape::Input }));
+        let mut screens = vec![
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 500)), ("R2.1", p(0, 5000)), ("R5.1", p(0, 1500)), ("R6.1", p(0, 2500))]) },
+            ScreenIn { path: Vec::new(), sch: &mut sub, file: "sub.kicad_sch".into(), pins: pins(&[("R3.1", p(0, 0))]) },
+        ];
+        let nets = trace_nets_with(&mut screens, &Naming::default());
+        assert_eq!(net_of(&nets, "R2.1"), ("/FOO".to_string(), strs(&["R2.1"])), "{nets:?}");
+        assert_eq!(net_of(&nets, "R1.1"), ("/sub/FOO".to_string(), strs(&["R1.1", "R3.1"])), "{nets:?}");
+        assert_eq!(net_of(&nets, "R5.1"), ("/X".to_string(), strs(&["R5.1", "R6.1"])), "{nets:?}");
+    }
+
+    /// r2 A-N4, A-N5, A-N12 (`CLAIM_LESS`): a global name has no depth (`PrepareInstanceClaims`: `unscoped`), so of global labels on one net the
+    /// alphabetically first names it wherever it is (t1: `AAA`, not the root's `ZZZ`); a power symbol's pin outranks an invisible power input of an ordinary
+    /// symbol (`globalPowerParent`; t2: `VCC`, not U1's hidden `AVDD`); a sheet pin of output shape outranks the alphabetical order (t10: `/ZZZ`).
+    #[test]
+    fn global_names_on_one_net_are_ranked_without_their_sheets_depth() {
+        let mut root = section();
+        root.sheets.push(sub_sheet(vec![]));
+        root.labels.push(label("ZZZ", p(0, 0), LabelKind::Global { shape: LabelShape::Input }));
+        let mut sub = section();
+        sub.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
+        sub.labels.push(label("ZZZ", p(0, 0), LabelKind::Global { shape: LabelShape::Input }));
+        sub.labels.push(label("AAA", p(1000, 0), LabelKind::Global { shape: LabelShape::Input }));
+        let mut screens = vec![
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0))]) },
+            ScreenIn { path: Vec::new(), sch: &mut sub, file: "sub.kicad_sch".into(), pins: pins(&[("R2.1", p(1000, 0))]) },
+        ];
+        let nets = trace_nets_with(&mut screens, &Naming::default());
+        assert_eq!(net_of(&nets, "R1.1"), ("AAA".to_string(), strs(&["R1.1", "R2.1"])), "{nets:?}");
+
+        let mut root = section();
+        root.power_symbols.push(power("VCC", p(0, 0)));
+        let hidden: BTreeMap<String, String> = [("U1.1".to_string(), "AVDD".to_string())].into_iter().collect();
+        let naming = Naming { power_pins: Some(&hidden), ..Naming::default() };
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("U1.1", p(0, 0))]) }];
+        let nets = trace_nets_with(&mut screens, &naming);
+        assert_eq!(net_of(&nets, "U1.1").0, "VCC", "{nets:?}");
+
+        let mut root = section();
+        root.sheets.push(sub_sheet(vec![sheet_pin("AAA", p(10_000, 500), LabelShape::Input), sheet_pin("ZZZ", p(10_000, 1500), LabelShape::Output)]));
+        root.wires.push(wire("", &[p(0, 500), p(10_000, 500), p(10_000, 1500)]));
+        let mut sub = section();
+        let mut screens = vec![
+            ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 500))]) },
+            ScreenIn { path: Vec::new(), sch: &mut sub, file: "sub.kicad_sch".into(), pins: BTreeMap::new() },
+        ];
+        let nets = trace_nets_with(&mut screens, &Naming::default());
+        assert_eq!(net_of(&nets, "R1.1").0, "/ZZZ", "{nets:?}");
+    }
+
+    /// r2 A-N7 (`BindBundle`: a bus member's slot claims `BUS_MEMBER`, above a local label): a net that is the bus `D[0..1]`'s member `D0` and also has the local
+    /// label `AAA` is named `/D0` (kicad-cli t3).
+    #[test]
+    fn a_bus_member_names_its_net_above_a_local_label() {
+        let members = |n: &str| test_members(n);
+        let naming = Naming { bus_members: Some(&members), ..Naming::default() };
+        let mut root = section();
+        root.wires.push(bus(&[p(0, 5000), p(5000, 5000)]));
+        root.labels.push(label("D[0..1]", p(1000, 5000), LabelKind::Local));
+        root.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
+        root.labels.push(label("D0", p(0, 0), LabelKind::Local));
+        root.labels.push(label("AAA", p(1000, 0), LabelKind::Local));
+        let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(1000, 0))]) }];
+        let nets = trace_nets_with(&mut screens, &naming);
+        assert_eq!(net_of(&nets, "R1.1"), ("/D0".to_string(), strs(&["R1.1", "R2.1"])), "{nets:?}");
     }
 
     /// The member nets of the few bus names the bus tests use (the real expansion is `eda_kicad::expand_bus_members`).
