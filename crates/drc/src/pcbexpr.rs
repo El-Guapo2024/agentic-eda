@@ -823,6 +823,9 @@ fn missing(name: &str, what: &str) -> String {
         "memberOfSheet()" | "memberOfSheetOrChildren()" => format!("Missing sheet name argument to {name}."),
         "memberOfFootprint()" => format!("Missing footprint argument (reference designator) to {name}."),
         "inDiffPair()" => format!("Missing diff-pair name argument to {name}."),
+        // (no period: `hasNetclassFunc`, `hasExactNetclassFunc`, `hasComponentClassFunc`)
+        "hasNetclass()" | "hasExactNetclass()" => format!("Missing netclass name argument to {name}"),
+        "hasComponentClass()" => format!("Missing component class name argument to {name}"),
         _ => format!("Missing {what} argument to {name}"),
     }
 }
@@ -1090,6 +1093,12 @@ fn call_func(f: Func, ctx: &mut Ctx, vref: Option<&VarRef>) {
         // The functions of one argument whose result is worked out when it is asked for.
         _ => {
             let arg = ctx.pop();
+            // `existsOnLayerFunc` asks for the item first (`if( !item ) return;`), so a compile's run with no item tells nothing of an empty layer name; every
+            // other function checks its argument first.
+            if f == Func::ExistsOnLayer && item.is_none() {
+                ctx.push(Value::number(0.0));
+                return;
+            }
             if arg.as_string(ctx).is_empty() {
                 ctx.report_error(&missing(func_label(f), "name"));
                 ctx.push(Value::number(0.0));
@@ -1698,6 +1707,12 @@ mod tests {
         assert_eq!(told("A.frobnicate('x')"), ["Unrecognized function 'frobnicate'"]);
         assert_eq!(told("A.Width > 5"), ["Missing units for '5'| (must be mm, in, mil, deg, fs, or ps)"]);
         assert_eq!(told("A.memberOfGroup('')"), ["Missing group name argument to memberOfGroup()."]);
+        // R5-D4: the net class and component class functions' own words (no period)
+        assert_eq!(told("A.hasNetclass('')"), ["Missing netclass name argument to hasNetclass()"]);
+        assert_eq!(told("A.hasExactNetclass('')"), ["Missing netclass name argument to hasExactNetclass()"]);
+        assert_eq!(told("A.hasComponentClass('')"), ["Missing component class name argument to hasComponentClass()"]);
+        // R5-D3: `existsOnLayerFunc` returns before its argument check when it has no item, as at compile
+        assert!(told("A.existsOnLayer('')").is_empty(), "{:?}", told("A.existsOnLayer('')"));
         assert!(compile("A.Nope == 'x'", &PCB_UNITS, &env).ok, "Compile is true for a text that parses");
         assert!(!compile("A.Width >", &PCB_UNITS, &env).ok);
         // an unknown property reads as undefined: false either way

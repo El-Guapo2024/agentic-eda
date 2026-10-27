@@ -839,15 +839,26 @@ impl<'a> RuleBoard<'a> {
         self.copper_layers()
     }
 
+    /// `BOARD_INSPECTION_TOOL::reportClearance`'s `checkFootprint`: a footprint whose pads are all one logical pad stands for that pad -- the **last** of
+    /// them (`if( !foundPad || pad->SameLogicalPadAs( foundPad ) ) foundPad = pad; else return footprint;`) -- and any other footprint for itself.
+    /// `PAD::SameLogicalPadAs` needs a number (`!m_number.IsEmpty() && m_number == aOther->m_number`): two unnumbered pads (a pair of mounting holes)
+    /// keep the footprint; a single pad stands in whatever its number.
     pub fn footprint_stand_in(&self, fp: &Rc<RuleItem>) -> Rc<RuleItem> {
-        let pads: Vec<&(String, usize)> = self.pad_ids.iter().filter(|(_, i)| self.board.pads[*i].footprint_ref == fp.id).collect();
-        let Some((first_id, first_idx)) = pads.first().map(|p| (*p).clone()) else { return fp.clone() };
-        let first = &self.board.pads[first_idx];
-        // `PAD::SameLogicalPadAs`: the same number (a footprint's several pads with one number are one pin).
-        if pads.iter().all(|(_, i)| self.board.pads[*i].number == first.number) {
-            return Rc::new(self.pad_item(&first_id, first_idx));
+        let mut found: Option<&(String, usize)> = None;
+        for p in self.pad_ids.iter().filter(|(_, i)| self.board.pads[*i].footprint_ref == fp.id) {
+            let same = |f: &(String, usize)| {
+                let (a, b) = (&self.board.pads[p.1].number, &self.board.pads[f.1].number);
+                !a.is_empty() && a == b
+            };
+            match found {
+                Some(f) if !same(f) => return fp.clone(),
+                _ => found = Some(p),
+            }
         }
-        fp.clone()
+        match found {
+            Some((id, idx)) => Rc::new(self.pad_item(id, *idx)),
+            None => fp.clone(),
+        }
     }
 
     pub fn footprint_item(&self, reference: &str) -> Option<Rc<RuleItem>> {
@@ -1053,5 +1064,29 @@ mod footprint_facts_tests {
         assert!(holds(&rb, "A.ComponentClass != 'STATIC'", &r5));
         let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R6")).unwrap();
         assert!(holds(&rb, "A.hasComponentClass('STATIC')", &pad), "a pad answers for its footprint");
+    }
+
+    /// R5-D5 (`checkFootprint`, `PAD::SameLogicalPadAs`): two unnumbered pads keep the footprint; pads that share a number stand in by the last of them.
+    #[test]
+    fn the_stand_in_of_a_footprint_is_its_last_logical_pad_and_unnumbered_pads_are_not_one() {
+        let pads = |numbers: &[&str]| -> (Design, ConstraintModel) {
+            let numbers: Vec<String> = numbers.iter().map(|n| n.to_string()).collect();
+            hv_board(move |_, m| {
+                let template = m.footprints[0].pads[0].clone();
+                m.footprints[0].pads = numbers.iter().enumerate().map(|(k, n)| Pad { number: n.clone(), at: (mm(2.0 * k as f64), Nm::ZERO), kind: if n.is_empty() { PadKind::NonPlatedHole } else { PadKind::Smd }, drill: n.is_empty().then(|| mm(1.0)), ..template.clone() }).collect();
+            })
+        };
+        let (design, model) = pads(&["", ""]);
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let fp = rb.footprint_item("R5").unwrap();
+        assert_eq!(rb.footprint_stand_in(&fp).class, Class::Footprint, "two mounting holes are two pads");
+        let (design, model) = pads(&["1", "1"]);
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let fp = rb.footprint_item("R5").unwrap();
+        let stand_in = rb.footprint_stand_in(&fp);
+        assert_eq!(stand_in.class, Class::Pad);
+        assert_eq!(stand_in.position.x, mm(12.0), "the last pad, at x = 10 + 2 mm");
     }
 }
