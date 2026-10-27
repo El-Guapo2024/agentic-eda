@@ -3147,12 +3147,21 @@ impl<'a> Board<'a> {
             Cmd::RotateSymbol { id, quarter_turns, unit } => self.rotate_symbol(id, *quarter_turns, *unit),
             Cmd::MirrorSymbol { id, unit } => self.mirror_symbol(id, *unit),
             Cmd::MirrorSymbolVertical { id, unit } => self.mirror_symbol_vertical(id, *unit),
-            Cmd::DeleteSymbol { id, unit } => self.delete_symbol(id, *unit).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteSymbol { id, unit } => {
+                let pts = self.find_symbol_unit_index(id, *unit).map(|i| self.deleted_item_points(sch_scene::Item::Symbol(i))).unwrap_or_default();
+                self.delete_symbol(id, *unit).and_then(|_| self.drop_junctions_left_at(pts)).and_then(|_| self.commit_clean_up())
+            }
             Cmd::AddWire { pts, bus } => self.add_wire(pts.clone(), *bus),
-            Cmd::DeleteWire { id } => self.delete_wire(id).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteWire { id } => {
+                let pts: Vec<Point> = self.schematic().map(|s| s.wires.iter().filter(|w| w.id == *id).flat_map(|w| w.pts.clone()).collect()).unwrap_or_default();
+                self.delete_wire(id).and_then(|_| self.drop_junctions_left_at(pts)).and_then(|_| self.commit_clean_up())
+            }
             Cmd::AddNoConnect { at } => self.add_no_connect(*at).and_then(|_| self.commit_clean_up()),
             Cmd::AddBusEntry { at, size } => self.add_bus_entry(*at, *size).and_then(|_| self.commit_clean_up()),
-            Cmd::DeleteBusEntry { id } => self.delete_bus_entry(id).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteBusEntry { id } => {
+                let pts = self.schematic().ok().and_then(|s| s.bus_entries.iter().position(|b| b.id == *id)).map(|i| self.deleted_item_points(sch_scene::Item::BusEntry(i))).unwrap_or_default();
+                self.delete_bus_entry(id).and_then(|_| self.drop_junctions_left_at(pts)).and_then(|_| self.commit_clean_up())
+            }
             Cmd::AddJunction { at } => self.add_junction(*at),
             Cmd::DeleteJunction { id } => self.delete_junction(id),
             Cmd::AddSchLine { pts, width_nm } => self.add_sch_line(pts.clone(), *width_nm),
@@ -3178,16 +3187,25 @@ impl<'a> Board<'a> {
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
-            Cmd::DeleteNoConnect { id } => self.delete_no_connect(id).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteNoConnect { id } => {
+                let pts: Vec<Point> = self.schematic().map(|s| s.no_connects.iter().filter(|n| n.id == *id).map(|n| n.at).collect()).unwrap_or_default();
+                self.delete_no_connect(id).and_then(|_| self.drop_junctions_left_at(pts)).and_then(|_| self.commit_clean_up())
+            }
             Cmd::AddErcExclusion { check, location, comment, marker } => self.add_erc_exclusion(check, location, comment, marker),
             Cmd::DeleteErcExclusion { check, location, sheet } => self.delete_erc_exclusion(check, location, sheet.as_deref()),
             Cmd::ClearErcExclusions => self.clear_erc_exclusions(),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()).and_then(|_| self.commit_clean_up()),
-            Cmd::DeleteLabel { id } => self.delete_label(id).and_then(|_| self.commit_clean_up()),
+            Cmd::DeleteLabel { id } => {
+                let pts: Vec<Point> = self.schematic().map(|s| s.labels.iter().filter(|l| l.id == *id).map(|l| l.at).collect()).unwrap_or_default();
+                self.delete_label(id).and_then(|_| self.drop_junctions_left_at(pts)).and_then(|_| self.commit_clean_up())
+            }
             Cmd::AddSchText { content, at, angle_millideg, size_nm } => self.add_sch_text(content, *at, *angle_millideg, *size_nm),
             Cmd::DeleteSchText { id } => self.delete_sch_text(id),
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin, annotate } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin, annotate.as_ref()).and_then(|_| self.commit_clean_up()),
-            Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id).and_then(|_| self.commit_clean_up()),
+            Cmd::DeletePowerSymbol { id } => {
+                let pts = self.schematic().ok().and_then(|s| s.power_symbols.iter().position(|p| p.id == *id)).map(|i| self.deleted_item_points(sch_scene::Item::Power(i))).unwrap_or_default();
+                self.delete_power_symbol(id).and_then(|_| self.drop_junctions_left_at(pts)).and_then(|_| self.commit_clean_up())
+            }
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, .. } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
@@ -5090,6 +5108,24 @@ impl<'a> Board<'a> {
     /// `Del` on a symbol: removes just the one placed `(id, unit)` instance
     /// (see `Cmd::DeleteSymbol`'s own doc) -- a multi-unit reference's other
     /// units are untouched.
+    /// `GetConnectionPoints` of the item `it` of the sheet the verbs act on, read before it is deleted (`SCH_EDIT_TOOL::DoDelete`: `if(
+    /// sch_item->IsConnectable() ) { std::vector<VECTOR2I> tmp_pts = sch_item->GetConnectionPoints(); pts.insert( .. ); }`).
+    fn deleted_item_points(&self, it: sch_scene::Item) -> Vec<Point> {
+        self.schematic().map(|sch| sch_scene::Scene::new(sch, self.model).connection_points(it)).unwrap_or_default()
+    }
+
+    /// The end of `SCH_EDIT_TOOL::DoDelete`: at each connection point of the items deleted, a junction that is no longer explicit goes through
+    /// `DeleteJunction`, which merges the lines in line that end there whatever their strokes (`if( junction->HasFlag( STRUCT_DELETED ) ||
+    /// !screen->IsExplicitJunction( point ) ) m_frame->DeleteJunction( &commit, junction )`). Every connectable item's delete runs it, as the sheet's
+    /// and the sheet pin's do (r5 B5-L1, r6 A6-L1).
+    fn drop_junctions_left_at(&mut self, pts: Vec<Point>) -> Result<(), Vec<CheckResult>> {
+        let mut seen = BTreeSet::new();
+        for at in pts.into_iter().filter(|p| seen.insert(*p)) {
+            self.delete_junction_at(at, false)?;
+        }
+        Ok(())
+    }
+
     fn delete_symbol(&mut self, id: &str, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
         let i = self.find_symbol_unit_index(id, unit)?;
         let sch = self.schematic_mut()?;

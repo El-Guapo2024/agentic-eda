@@ -3472,3 +3472,30 @@ fn set_via_layers_sets_type_pair_and_rings_as_the_via_dialog_does() {
     let e = b.apply(&cmd(serde_json::json!({ "op": "set_via_layers", "ids": [ids[1]], "kind": "through" }))).unwrap_err();
     assert_eq!(e[0].check, "ops_nothing_to_change");
 }
+
+/// r6 A6-L1 (`SCH_EDIT_TOOL::DoDelete`: the connection points of every connectable item deleted go in `pts`, and a junction there that is no longer explicit
+/// goes through `DeleteJunction`, which merges the lines in line that end there whatever their strokes): deleting a T's stem leaves one through wire, its
+/// dashed half and its default half merged, and no dot. The commit's `CleanUp` alone keeps the two strokes apart (`IsStrokeEquivalent`).
+#[test]
+fn deleting_a_ts_stem_merges_the_halves_whatever_their_strokes() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    let dot = p(mm(20.32), mm(40.64));
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(20.32), mm(50.8)), dot], bus: false }).unwrap();
+    {
+        let sch = b.design.schematic.as_mut().unwrap();
+        for (id, a) in [("wire_h1", p(mm(10.16), mm(40.64))), ("wire_h2", p(mm(30.48), mm(40.64)))] {
+            sch.wires.push(eda_model::ir::Wire { id: id.into(), net: String::new(), pins: vec![], pts: vec![a, dot], bus: false });
+        }
+        if sch.junctions.is_empty() {
+            sch.junctions.push(eda_model::ir::Junction { id: "jct_t".into(), at: dot });
+        }
+        sch.extras.strokes.insert("wire_h1".into(), eda_model::sch_extras::SchStroke { style: eda_model::sch_extras::SchLineStyle::Dash, ..Default::default() });
+    }
+    let stem = b.design().schematic.as_ref().unwrap().wires.iter().find(|w| w.pts.contains(&p(mm(20.32), mm(50.8)))).unwrap().id.clone();
+    b.apply(&Cmd::DeleteWire { id: stem }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert!(sch.junctions.is_empty(), "{:?}", sch.junctions);
+    assert_eq!(sch.wires.len(), 1, "{:?}", sch.wires);
+    assert!(sch.wires[0].pts.contains(&p(mm(10.16), mm(40.64))) && sch.wires[0].pts.contains(&p(mm(30.48), mm(40.64))));
+}
