@@ -1,6 +1,6 @@
 # Round 3 findings: board files, footprints and libraries (r3-board-io, 2026-10-27)
 
-**After task-r2-misc-leftovers** (tools/board-roundtrip over the 214 boards, against main's run above): 35922 -> 32364 lines that differ, 8 -> 15 boards identical, 65 better, 1 "worse" (`via_stacks` 2 -> 4: its two generators are now kept, with member uuids that differ from the source's), `plugins/fakeboard` still fails to import.
+**After task-r2-misc-leftovers** (tools/board-roundtrip over the 214 boards, against main's run above): 35922 -> 32362 lines that differ, 8 -> 15 boards identical, 67 better, 1 "worse" (`via_stacks` 2 -> 4: its two generators are now kept, with member uuids that differ from the source's), `plugins/fakeboard` still fails to import.
 
 Reviewer `r3-board-io`, read-only. Code read from main's checkout at `5cac9357`. KiCad sources: `kicad-src-8303b2ad` (`$KICAD_SRC_DIR`) and `kicad-src-25ec2335` for KiCad 10 items. No port was used.
 
