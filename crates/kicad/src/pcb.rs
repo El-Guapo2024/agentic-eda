@@ -502,6 +502,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // resolves them once every item has been read.
     if let Some(drawings) = &design.drawings {
         let groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
+        // A group may hold a generator (`resolveGroups`' `groupTypeObjects` has them): a tuning pattern that is written (one with a member on the
+        // board) is named by its uuid.
+        for p in &drawings.tuning_patterns {
+            if p.member_ids.iter().any(|m| written.contains_key(m)) {
+                written.entry(p.id.clone()).or_default().push(crate::duid_for(&format!("generated:{}", p.id), &p.id));
+            }
+        }
         write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
         // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
@@ -1272,6 +1279,8 @@ pub(crate) fn write_footprint(
     // The k-th pad that carries a number is the one the studio and a `PadEdit` name `NUM#k`.
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
     let mut pad_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // The uuid each pad is written with, by `NUM#k`: a group of the footprint names its pads so.
+    let mut pad_uuids: BTreeMap<String, String> = BTreeMap::new();
     for &(pad_idx, pad) in &pads {
         let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
         let (no_paste, no_mask, connector) = pad_infos.and_then(|p| p.get(pad_idx)).map_or((false, false, false), |i| (i.no_paste, i.no_mask, i.connector));
@@ -1326,6 +1335,7 @@ pub(crate) fn write_footprint(
             pad_seeds.insert(seed.clone());
         }
         let uuid = crate::duid_for(&seed, &format!("{}.{}", fp.id, pad.number));
+        pad_uuids.insert(format!("pad:{}#{nth}", pad.number), uuid.clone());
         // KiCad stores a pad's orientation as its footprint's own angle
         // plus the pad's own (0 for the overwhelming majority of pads) --
         // see `pad_file_angle` for the mirroring subtlety.
@@ -1579,6 +1589,41 @@ pub(crate) fn write_footprint(
 
     // The footprint's own zones (rule areas it carries), after its pads and graphics as KiCad writes them.
     out.push_str(zones);
+    // The footprint's own groups (`format( const FOOTPRINT* )` writes `GetGroups()` inside it), while the part is on the footprint they were read from: each
+    // member by the uuid its item is written with here.
+    if let Some(e) = own_extra.filter(|e| !e.groups.is_empty() && e.source_name == lib_name_written) {
+        let field_names: Vec<&str> = extra.edit.map(|ed| ed.fields.iter().map(|f| f.name.as_str()).collect()).unwrap_or_default();
+        for (gi, g) in e.groups.iter().enumerate() {
+            let mut members: Vec<String> = g
+                .members
+                .iter()
+                .filter_map(|m| {
+                    let (kind, rest) = m.split_once(':')?;
+                    match kind {
+                        "art" => Some(crate::duid_for(&format!("footprint:{}:art:{rest}", fp.id), &fp.id)),
+                        "arttext" => Some(crate::duid_for(&format!("footprint:{}:arttext:{rest}", fp.id), &fp.id)),
+                        "pad" => pad_uuids.get(m).cloned(),
+                        "uuid" => own_courtyard.is_some().then(|| rest.to_string()),
+                        "field" => match rest {
+                            "Reference" => Some(crate::duid_for(&format!("footprint:{}:ref", fp.id), &fp.id)),
+                            "Value" => Some(crate::duid_for(&format!("footprint:{}:val", fp.id), &fp.id)),
+                            name => field_names.iter().position(|n| *n == name).map(|i| crate::duid_for(&format!("footprint:{}:field:{i}", fp.id), &fp.id)),
+                        },
+                        _ => None,
+                    }
+                })
+                .collect();
+            if members.is_empty() {
+                continue;
+            }
+            members.sort();
+            members.dedup();
+            let guuid = crate::duid_for(&format!("footprint:{}:group:{gi}", fp.id), &fp.id);
+            let lock = if g.locked { " (locked yes)" } else { "" };
+            let quoted: Vec<String> = members.iter().map(|m| sexpr_str(m)).collect();
+            writeln!(out, "\t\t(group {} (uuid \"{guuid}\"){lock} (members {}))", sexpr_str(&g.name), quoted.join(" ")).unwrap();
+        }
+    }
     writeln!(out, "\t)").unwrap();
     uuid
 }
@@ -2673,6 +2718,16 @@ mod tests {
         assert_eq!(*got, want);
         assert!(got.id.starts_with("tun_"), "{}", got.id);
 
+        // r2-board-io F14: a group holding the pattern names it by its uuid, and the reader puts it back in the group (`resolveGroups` takes generators).
+        let mut grouped = design.clone();
+        let pattern_id = grouped.drawings.as_ref().unwrap().tuning_patterns[0].id.clone();
+        grouped.drawings.as_mut().unwrap().groups = vec![eda_model::ir::Group { id: "grp_t".into(), name: "tuned".into(), member_ids: vec![ids[0].clone(), pattern_id], design_block: String::new() }];
+        let (back, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&grouped, &model, &meta()).unwrap()).unwrap();
+        let dr = back.drawings.as_ref().unwrap();
+        assert_eq!(dr.groups.len(), 1);
+        assert!(dr.groups[0].member_ids.contains(&dr.tuning_patterns[0].id), "the pattern is still a member: {:?}", dr.groups[0]);
+        assert_eq!(dr.groups[0].member_ids.len(), 2, "{:?}", dr.groups[0]);
+
         // A pattern whose tracks are gone is a ghost and is not written.
         design.routing.as_mut().unwrap().tracks.retain(|t| t.id != ids[1]);
         design.drawings.as_mut().unwrap().tuning_patterns[0].member_ids = vec![ids[1].clone()];
@@ -2847,10 +2902,12 @@ mod tests {
         let mut dr = eda_model::ir::DrawingsSection::default();
         dr.groups = vec![Group { id: String::new(), name: "decoupling".into(), member_ids: vec!["U1".into(), "C1".into(), via_id.clone(), long_track.clone(), "no such item".into()], design_block: String::new() }];
         dr.assign_missing_ids();
+        dr.locked_ids = vec![dr.groups[0].id.clone()];
         design.drawings = Some(dr);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let group = out.split("\t(group ").nth(1).expect("a group block");
         assert!(group.starts_with("\"decoupling\" (uuid \""), "{group}");
+        assert!(group.contains("(locked yes)"), "{group}");
         // U1, C1, the via, both segments of the two-segment track; the stale id names nothing.
         assert_eq!(group.split("(members").nth(1).unwrap().matches('"').count() / 2, 5, "{group}");
         assert!(out.rfind("\t(group ").unwrap() > out.rfind("\t(segment ").unwrap(), "groups come last, like KiCad's own writer");
@@ -2859,6 +2916,7 @@ mod tests {
         let groups = back.drawings.as_ref().unwrap().groups.clone();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].name, "decoupling");
+        assert!(back.drawings.as_ref().unwrap().locked_ids.contains(&groups[0].id), "r2-board-io F7: the group's lock is read back");
         let brt = back.routing.as_ref().unwrap();
         assert_eq!(groups[0].member_ids.len(), 5, "{:?}", groups[0].member_ids);
         assert!(groups[0].member_ids.contains(&"U1".to_string()) && groups[0].member_ids.contains(&"C1".to_string()));

@@ -81,6 +81,8 @@ pub(crate) struct Refs {
     /// The items of `eda_model::pcb_items` (text boxes, ..).
     pub board_items: crate::pcb_items_io::ItemRefs,
     pub tables: Vec<ItemRef>,
+    /// The tuning patterns (`(generated (type tuning_pattern) ..)`), in the order `pcb_generated::import_patterns` keeps them.
+    pub patterns: Vec<ItemRef>,
 }
 
 impl Refs {
@@ -148,10 +150,13 @@ impl Refs {
             note(&self.board_items.via_stitches, dr.board_items.via_stitches.iter().map(|v| v.id.as_str()).collect());
             note(&self.board_items.drill_maps, dr.board_items.drill_maps.iter().map(|m| m.id.as_str()).collect());
             note(&self.tables, dr.tables.iter().map(|t| t.id.as_str()).collect());
+            note(&self.patterns, dr.tuning_patterns.iter().map(|p| p.id.as_str()).collect());
         }
 
         let names = design.drawings.iter().flat_map(|d| d.groups.iter().map(|g| g.id.clone())).collect();
-        let (groups, _locked_groups) = build_groups(&by_uuid, raw_groups, names);
+        // A group's `(locked yes)` is the group's lock (`PCB_GROUP::SetLocked`), kept with the items' locks.
+        let (groups, locked_groups) = build_groups(&by_uuid, raw_groups, names);
+        locked.extend(locked_groups);
         locked.sort();
         locked.dedup();
         (groups, locked)
@@ -162,8 +167,8 @@ impl Refs {
 /// several), `raw_groups` are the file's `(group ..)` forms and `names` the group ids already taken.
 ///
 /// A group may name another group (`resolveGroups` adds every group first "so subsequent getItem() calls for nested groups work"): the inner group is
-/// kept as a member of the outer one. Inner groups are made first, so their ids are known when the group that holds them is named; a group of fewer
-/// than two items is nothing to keep, and the one item it holds goes to the group above it.
+/// kept as a member of the outer one. Inner groups are made first, so their ids are known when the group that holds them is named. Every group with a
+/// member on the board is kept, a group of one too (`resolveGroups` keeps every group); the second list is the ids of the groups the file locks.
 pub(crate) fn build_groups(by_uuid: &HashMap<String, Vec<String>>, raw_groups: &[RawGroup], names: std::collections::BTreeSet<String>) -> (Vec<Group>, Vec<String>) {
     #[derive(Clone)]
     enum Built {

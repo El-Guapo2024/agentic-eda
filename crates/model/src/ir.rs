@@ -2941,6 +2941,18 @@ pub struct FootprintAuxPad {
     pub net: String,
 }
 
+/// A group inside a footprint ([`FootprintExtra::groups`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintGroup {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
+    /// Each member by its place: `art:<i>` / `arttext:<i>` (the footprint's i-th graphic / user text, `Footprint::art`), `pad:<number>#<k>` (the k-th pad
+    /// with that number), `field:<name>` (Reference, Value or a user field), `uuid:<u>` (an item the file's text is kept for as it was, a courtyard item).
+    pub members: Vec<String>,
+}
+
 /// See [`DrawingsSection::footprint_extras`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3005,6 +3017,11 @@ pub struct FootprintExtra {
     /// them: the derived schematic's symbols have uuids of their own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tokens: Vec<String>,
+    /// The footprint's own groups (`(group ..)` inside the `(footprint ..)`: `resolveGroups` keeps them, members the footprint's own items), each member named
+    /// by its place in the footprint ([`FootprintGroup::members`]); written back while the part is on the footprint they were read from ([`Self::source_name`]).
+    /// Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<FootprintGroup>,
     /// The courtyard graphics as the file wrote them (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`, `fp_curve` on `F.CrtYd` or `B.CrtYd`), in file order. The checks here
     /// work from the outlines made of them (`Footprint::courtyard_outlines`), but a courtyard of four lines, or a circle, is not one polygon, and a footprint on the board whose
     /// courtyard is no longer the library's does not match the library's copy (`lib_footprint_mismatch`): these are written back, in place of the polygons, while the part is

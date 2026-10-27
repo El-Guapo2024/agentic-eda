@@ -53,6 +53,27 @@ pub(crate) fn read_art(fp: &[Sexpr], side: Side, fp_rot: Millideg) -> FpArt {
     art
 }
 
+/// The file uuid of each item [`read_art`] keeps, with its place in the art: `art:<i>` for the i-th shape, `arttext:<i>` for the i-th user text (the places
+/// [`write_art`] makes their uuids from).
+pub(crate) fn art_slots(fp: &[Sexpr], side: Side) -> Vec<(String, String)> {
+    let (mut shapes, mut texts) = (0usize, 0usize);
+    let mut out = Vec::new();
+    for item in fp.iter().filter_map(Sexpr::as_list) {
+        match sexpr::tag(item) {
+            Some(tag) if SHAPE_TAGS.contains(&tag) && read_shape(item, tag, side).is_some() => {
+                out.extend(crate::import_items::item_uuid(item).map(|u| (u, format!("art:{shapes}"))));
+                shapes += 1;
+            }
+            Some("fp_text") if sexpr::txt(item, 1) == Some("user") && read_text(item, side, 0).is_some() => {
+                out.extend(crate::import_items::item_uuid(item).map(|u| (u, format!("arttext:{texts}"))));
+                texts += 1;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Layer words the file uses for a set (`m_layerMasks`): the wildcards stand for both sides' layer.
 fn expand_layer_word(word: &str) -> Vec<String> {
     match word {
