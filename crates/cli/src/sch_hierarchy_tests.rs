@@ -1942,3 +1942,30 @@ fn a_label_on_a_stacked_pin_has_the_pins_net() {
     let stacked = j1["pins"].as_array().unwrap().iter().find(|p| p["number"] == "[1-2]").expect("pin [1-2]");
     assert_eq!(stacked["net"], "/X");
 }
+
+/// r5 B5-L2 (`SCH_EDITOR_CONTROL::updatePastedSymbol`: the new instance takes the clip instance's unit, `newInstance.m_Unit`, then `SetUnit`): the sheet of
+/// the shared channel screen whose path draws U1 as unit B, copied and pasted, draws U1 as unit B on the new path too.
+#[test]
+fn a_pasted_sheet_keeps_the_unit_its_path_drew() {
+    let work = scratch("per_path_unit_paste");
+    std::fs::write(work.join("root.kicad_sch"), include_str!("../tests/fixtures/per_path_unit/root.kicad_sch")).unwrap();
+    std::fs::write(work.join("ch.kicad_sch"), include_str!("../tests/fixtures/per_path_unit/ch.kicad_sch")).unwrap();
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("root.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let screen = &design.sheet_contents.as_ref().unwrap()["ch.kicad_sch"];
+    let u1 = screen.symbols.iter().find(|s| s.id == "U1").unwrap();
+    let unit_b_sheet = design.schematic.as_ref().unwrap().sheets.iter().find(|sh| eda_model::sheet_list::unit_under(screen, u1, std::slice::from_ref(&sh.id)) == 2).expect("the path that draws unit B").id.clone();
+    let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [unit_b_sheet] }).to_string().as_bytes());
+    let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
+    assert_eq!(parsed["ok"], true, "{parsed}");
+    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 60_000_000, "dy": 0 })).unwrap();
+    step(&dir, cmd, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sheets = &design.schematic.as_ref().unwrap().sheets;
+    assert_eq!(sheets.len(), 3);
+    let screen = &design.sheet_contents.as_ref().unwrap()["ch.kicad_sch"];
+    let u1 = screen.symbols.iter().find(|s| s.id == "U1").unwrap();
+    let new_id = sheets.last().unwrap().id.clone();
+    assert_eq!(eda_model::sheet_list::unit_under(screen, u1, &[new_id]), 2, "{:?}", screen.extras.path_units);
+}
