@@ -67,6 +67,24 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
 /// [`import_kicad_sch`] with the choices of [`ImportOptions`].
 pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
+    import_screen(text, opts, None)
+}
+
+/// A page number as KiCad reads one from a file's `(instances ..)` or `(sheet_instances ..)` (`SCH_IO_KICAD_SEXPR_PARSER::parseSchSheet` and
+/// `parseSchSheetInstances`): an empty one is `#` ("Empty page numbers are not permitted ... Use hash character instead"), and from any other the
+/// whitespace is taken out ("Whitespaces are not permitted": `\r`, `\n`, `\t` and the space).
+fn kicad_page(raw: &str) -> String {
+    if raw.is_empty() {
+        "#".to_string()
+    } else {
+        raw.chars().filter(|c| !matches!(c, '\r' | '\n' | '\t' | ' ')).collect()
+    }
+}
+
+/// [`import_kicad_sch_with`] of one screen of the project whose root sheet's uuid is `root_uuid` (none: the file read is the root): a sheet's
+/// `(instances (project .. (path "/<root uuid>/.." ..)))` of another root are another project's (`SCH_SHEET::getPageNumber( aParentPath )` compares the
+/// whole path, root uuid included).
+fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
     let tree = sexpr::parse(text).map_err(|e| vec![CheckResult::fail("kicad_import.parse", "file", format!("not a valid s-expression file: {e}"))])?;
     let root = tree
         .as_list()
@@ -74,6 +92,9 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         .ok_or_else(|| vec![CheckResult::fail("kicad_import.not_a_schematic", "file", "top-level form is not (kicad_sch ...); not a KiCad schematic file")])?;
 
     let mut notes = SchImportNotes::default();
+    // the project's root: this file's own uuid when it is the root
+    let own_uuid = uuid_of(root).unwrap_or_default();
+    let root_uuid = root_uuid.map_or(own_uuid.clone(), str::to_string);
     let lib_table: HashMap<String, LibSymbol> = sexpr::find(root, "lib_symbols").map(build_symbol_table).unwrap_or_default();
 
     let title_block = import_title_block(root);
@@ -561,13 +582,17 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         // A sheet on a screen shown on several paths has one `(path ..)` per path, each with its own page (`SCH_SHEET::m_instances`): the first is
         // the placement's page and a later one whose page differs is kept for its path (`SchExtras::sheet_pages`, by the model's path of the
         // screen: the path's sheet uuids, the root's own left out).
-        let instance_pages: Vec<(&str, &str)> = sexpr::find(s, "instances")
+        // Each page as KiCad reads it ([`kicad_page`]: an empty one is `#`, r3 B3-L2; whitespace out, r3 B3-L1), and only this project's: a path of
+        // another root is another project's placement (r3 B3-M5). (A sheet file read alone, whose own uuid is no root of its paths, keeps them all.)
+        let all_pages: Vec<(&str, String)> = sexpr::find(s, "instances")
             .into_iter()
             .flat_map(|i| sexpr::find_all(i, "project"))
             .flat_map(|p| sexpr::find_all(p, "path"))
-            .filter_map(|p| Some((sexpr::txt(p, 1)?, sexpr::find(p, "page").and_then(|pg| sexpr::txt(pg, 1))?)))
+            .filter_map(|p| Some((sexpr::txt(p, 1)?, kicad_page(sexpr::find(p, "page").and_then(|pg| sexpr::txt(pg, 1))?))))
             .collect();
-        let page = instance_pages.first().map(|(_, pg)| *pg).filter(|pg| !pg.is_empty() && *pg != "1").unwrap_or_default().to_string();
+        let of_root = |path: &str| path.split('/').find(|c| !c.is_empty()) == Some(root_uuid.as_str());
+        let instance_pages: Vec<(&str, String)> = if all_pages.iter().any(|(p, _)| of_root(p)) || own_uuid != root_uuid { all_pages.into_iter().filter(|(p, _)| of_root(p)).collect() } else { all_pages };
+        let page = instance_pages.first().map(|(_, pg)| pg.as_str()).filter(|pg| !pg.is_empty() && *pg != "1").unwrap_or_default().to_string();
         if let Some((_, first)) = instance_pages.first() {
             for (path, pg) in instance_pages.iter().skip(1).filter(|(_, pg)| pg != first) {
                 let parent: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).skip(1).collect();
@@ -775,6 +800,8 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     let text = std::fs::read_to_string(path).map_err(|e| vec![CheckResult::fail("kicad_import.read", path.display().to_string(), format!("{e}"))])?;
     let (mut design, mut model, mut notes) = import_kicad_sch_with(&text, opts)?;
     let Some(dir) = path.parent() else { return Ok((design, model, notes)) };
+    // the project's root sheet, whose uuid every instance path of this project starts with
+    let root_uuid = sexpr::parse(&text).ok().and_then(|t| t.as_list().and_then(uuid_of)).unwrap_or_default();
 
     let mut sheet_contents: BTreeMap<String, SchematicSection> = BTreeMap::new();
     let mut read_files: BTreeSet<String> = BTreeSet::new();
@@ -800,7 +827,7 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
         let child_path = dir.join(&file);
         let resolve_dir = child_path.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
         let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
-        let Ok((child_design, child_model, child_notes)) = import_kicad_sch_with(&child_text, opts) else { continue };
+        let Ok((child_design, child_model, child_notes)) = import_screen(&child_text, opts, Some(&root_uuid)) else { continue };
         symbol_places.insert(file.clone(), symbol_places_of(&child_text));
         notes.unresolved_symbols += child_notes.unresolved_symbols;
         for (u, id) in child_notes.item_ids {
@@ -998,7 +1025,7 @@ fn legacy_sheet_instances(root_text: &str, design: &mut Design) {
             ids.remove(0);
         }
         let Some((sheet_id, parent)) = ids.split_last() else { continue };
-        let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map(|p| if p.is_empty() { "#" } else { p }).unwrap_or("#").to_string();
+        let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map_or_else(|| "#".to_string(), kicad_page);
         if page == "1" {
             continue;
         }

@@ -176,8 +176,9 @@ mod tests {
         screens.insert("loop.kicad_sch".to_string(), sch(vec![placement("again", "Loop", "loop.kicad_sch", "")]));
         let d = design(sch(vec![placement("gone", "Gone", "missing.kicad_sch", ""), placement("lp", "Loop", "loop.kicad_sch", "")]), screens);
         let h = eda_model::sheet_list::walk(&d);
-        assert!(h.iter().all(|e| e.name != "Gone"), "no screen, nothing to show");
-        assert!(h.len() < 40, "the self-placing file stops at the depth limit instead of looping forever: {}", h.len());
+        // KiCad gives a sheet with no file an empty screen and lists it (r3 B3-M4); a file that places itself is listed once (r3 B3-M6)
+        let paths: Vec<String> = h.iter().map(|e| e.path_text()).collect();
+        assert_eq!(paths, vec!["", "gone", "lp"]);
     }
 
     fn placed(id: &str, lib_id: &str) -> eda_model::ir::SymbolInstance {
