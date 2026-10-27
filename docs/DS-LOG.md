@@ -483,3 +483,51 @@ that points here.
   remedy did not ask to change that display, so it is unchanged.
 - Removing the mask/paste checks means a length field left unreadable (NaN) is sent as `null` and refused by the backend's parser
   rather than in the page. KiCad's page has no check of its own either; the fields' controls are all that stop bad input there.
+
+## The router's kicad-cli oracle boards: the pad rule and KiCad's violation kinds (done 2026-10-27)
+
+**What I did** (test-only, `crates/pns/tests/rules_kicad.rs`: the two weaknesses an investigation found in the kicad-cli DRC proofs).
+
+- **Net propagation**: `CN_CONNECTIVITY_ALGO::PropagateNets` (`connectivity/connectivity_algo.cpp:631`) renames every item of a cluster to the
+  cluster's origin pad's net, so a deliberate short whose one side has no pad in the cluster is renamed and never reported (the oracle's c1: a
+  net-B track with no pad crossing a SIG track only dangles; c2/c3, with B pads at the crossing's track, report `tracks_crossing`). Every DRC board
+  in the file now has a pad of each net in the track's cluster. One did not: `a_route_may_cross_the_hole_of_a_keepout`'s negative-control track
+  across the keepout body was a padless SIG cluster; it now starts at a new R3.1 pad at (13,6).
+- **Kinds**: the three `["clearance", "shorting_items"]` filters (net tie, copper polygon, copper shape) also list `tracks_crossing`
+  (`drc_item.cpp:76`); the pair test filters `diff_pair_gap_out_of_range` (`drc_item.cpp:277`), not `diff_pair_gap`.
+- **`a_copper_polygon_is_an_obstacle`**: the "no judge" comment is gone (wrong: kicad-cli does report against copper graphics). New negative
+  control: a SIG track from R1.1 whose upper edge runs 0.1 mm below the no-net polygon's y = 8 mm edge gives a `clearance` violation (the
+  oracle's p1/p5). A track run *through* the no-net polygon is no violation (p2: it takes the track's net), which is why the control is a gap.
+- **`a_copper_shape_with_a_net_is_an_obstacle_to_other_nets_and_an_end_for_its_own`**: new negative control: the straight SIG route through the
+  GND polygon, with the GND route applied (G1.1 anchors the polygon's net), gives `shorting_items` (the oracle's p4; p3, no GND pad, is silent for
+  the same propagation reason). G1 moved from above, (15,3), to below, (15,17), the polygon: the SIG and GND routes are computed independently,
+  and the GND route from above crossed the SIG route, which the new `tracks_crossing` filter caught.
+- **Pair test**: the filter asks for `diff_pair_gap_out_of_range`; the classed pair (0.25 mm gap under the rule's 0.3 mm minimum) is asserted to be
+  reported; the "kicad-cli reports no `diff_pair_gap` on a board this small" note is gone.
+- **Controls seen to fail when their violation is removed, then restored**: polygon near-track moved to y = 7.5 (0.4 mm gap) -> "kicad-cli sees
+  the polygon's clearance" failed; the GND polygon control without `&gnd` -> "kicad-cli sees the SIG track short the GND polygon" failed; the
+  keepout-hole body track moved inside the hole -> the `items_not_allowed` assertion failed; the pair control with the rule's gap minimum removed
+  -> the classed-gap assertion failed.
+- Oracle boards: `/tmp/drc-oracle.xu4D` (`gen.py`, c1-c3, p1-p5), each violation reproduced there first.
+
+**Commit.**
+
+- `2d41e7af` -- pns tests: the kicad-cli oracle boards follow the pad rule and name KiCad's violation kinds
+- this log, in its own commit.
+
+**Tests run.**
+
+- `EDA_SLOW_TESTS=1 KICAD_SRC_DIR=$HOME/src/kicad-src-8303b2ad KICAD_QA_DATA=$HOME/src/kicad-src-8303b2ad/qa/data EDA_KICAD_CLI=/usr/local/bin/kicad-cli CARGO_BUILD_JOBS=4 cargo test -p eda-pns --test rules_kicad` EXIT 0:
+
+  ```
+  test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.70s
+  ```
+
+**Unsure / for the reviewer.**
+
+- G1's move below the polygon keeps the positive board free of the `tracks_crossing` the independently routed GND route produced when it came from
+  above; a router change that routes the SIG pair of tracks the other way round the polygon would show up as a (correct) `tracks_crossing` failure.
+- Tests that never ask kicad-cli (`a_via_keeps_the_hole_to_hole_distance_from_a_via_of_its_own_net`, `an_unflashed_via_is_its_hole_on_that_layer`,
+  `a_rule_on_a_vias_layer_reads_the_layer_asked_about`, `a_no_net_head_is_excused_at_a_no_net_pad_of_a_net_tie`,
+  `a_custom_rule_sets_the_pairs_gap_and_width_and_the_via`) still build designs with padless nets; the pad rule does not apply to them, so they
+  are unchanged.
