@@ -349,12 +349,13 @@ impl Board<'_> {
                 }
             }
         }
-        // `m_netSelector->GetValue()`: the net's name, `<no net>` for none
+        // `m_netSelector->GetValue()`: the net's name, `<no net>` for none, `INDETERMINATE_STATE` ("-- mixed values --") when the box is indeterminate
         let shown = |n: &str| if n.is_empty() { "<no net>".to_string() } else { n.to_string() };
-        let selector = net.map(shown).unwrap_or_default();
+        let selector = net.map(shown).unwrap_or_else(|| "-- mixed values --".to_string());
         if !shorting.is_empty() && apply_anyway != Some(true) {
             let message = if shorting.len() == 1 {
-                format!("Applying these changes will short net {selector} with {}.", shown(shorting.iter().next().unwrap()))
+                // `FindNet( *shortingNets.begin() )->GetNetname()`: net 0's name is "".
+                format!("Applying these changes will short net {selector} with {}.", shorting.iter().next().unwrap())
             } else {
                 format!("Applying these changes will short net {selector} with other nets.")
             };
