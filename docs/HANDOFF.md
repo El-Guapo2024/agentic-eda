@@ -69,6 +69,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r2-board-io` | The round-2 board-file findings (`work/findings/round2/r2-board-io.md`): masked tracks and copper shapes keep their layer and mask, TH/connect pads and mask-only holes their layer sets and margins, `allow_soldermask_bridges`, no invented `(attr)`, legacy `ki_*` fields and `viasonmask`, empty references, the zone filled flag, the file version (20250228 for via protection defaults) and image scale, `gr_bbox` fill, unclamped tuning targets; `tools/board-roundtrip/` (PARITY-pcb.md section 54) | F1-F6, F8-F10, F13, F16, part of F17 fixed; F12 judged by design | F15, the rest of F17; F7/F14/F11 are other branches' |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
