@@ -528,6 +528,13 @@ export interface ViaPreset {
   drill: Nm;
 }
 
+/** `RoutingSection::diff_pair_presets`' entry shape -- `BOARD_DESIGN_SETTINGS::DIFF_PAIR_DIMENSION` (`m_DiffPairDimensionsList`). */
+export interface DiffPairPreset {
+  width: Nm;
+  gap: Nm;
+  via_gap: Nm;
+}
+
 export interface Routing {
   tracks: Track[];
   vias: Via[];
@@ -536,6 +543,8 @@ export interface Routing {
   track_width_presets: Nm[];
   /** `m_ViaSizeList` -- same idea, for the via-size cycle. */
   via_presets: ViaPreset[];
+  /** `m_DiffPairDimensionsList` -- the differential-pair sizes the router's D key and the DRC read. */
+  diff_pair_presets?: DiffPairPreset[];
   /** Task item 4: Board Setup > Teardrops. */
   teardrop_settings: TeardropSettings;
 }
@@ -1548,6 +1557,8 @@ export type Cmd =
   | { op: "set_track_width_presets"; widths: Nm[] }
   /** Same panel's via-size-cycle preset list. */
   | { op: "set_via_presets"; presets: ViaPreset[] }
+  /** Same panel's Differential Pairs list (`diff_pair_dimensions` in the project file). */
+  | { op: "set_diff_pair_presets"; presets: DiffPairPreset[] }
   /**
    * `dialog_global_edit_tracks_and_vias.cpp`'s "Apply and Close": bulk-set
    * width/via-size/layer on every named id in one atomic undo step. `ids`

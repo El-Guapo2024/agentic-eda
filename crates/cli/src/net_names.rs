@@ -466,7 +466,7 @@ mod tests {
         let (_, mut design, _) = load(&dir).unwrap();
         design
             .routing
-            .get_or_insert_with(|| eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() })
+            .get_or_insert_with(|| eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() })
             .tracks
             .push(eda_model::ir::Track { id: "trk_sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![eda_model::ir::Point { x: mm(4.0), y: mm(5.0) }, eda_model::ir::Point { x: mm(14.0), y: mm(5.0) }], arc_mid_offset: None });
         save(&dir, &design).unwrap();

@@ -36,7 +36,7 @@ fn board(outline: bool, tracks: Vec<Track>) -> (Design, ConstraintModel) {
         schematic: None,
         nets: None,
         placement: Some(PlacementSection { outline, footprints: vec![], modules: vec![] }),
-        routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+        routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
         drawings: None,
     };
     (design, ConstraintModel::default())

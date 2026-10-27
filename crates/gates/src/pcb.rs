@@ -1451,6 +1451,7 @@ mod tests {
             zones: vec![],
             track_width_presets: vec![],
             via_presets: vec![],
+            diff_pair_presets: vec![],
             teardrop_settings: Default::default(),
         }
     }
@@ -1481,7 +1482,7 @@ mod tests {
     #[test]
     fn pass_through_pad_fails_when_track_crosses_own_net_pad() {
         // R1.2 -> C1.2 straight through C1.1 (same net) without stopping.
-        let rt = RoutingSection { tracks: vec![track("A", &[(mm(5.825), mm(5.0)), (mm(10.825), mm(5.0))])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let rt = RoutingSection { tracks: vec![track("A", &[(mm(5.825), mm(5.0)), (mm(10.825), mm(5.0))])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() };
         let (d, m) = wfixture(rt);
         let f = fails(&d, &m, "routing_pass_through_pad");
         assert_eq!(f.len(), 1, "{f:?}");
@@ -1571,7 +1572,7 @@ mod tests {
     }
 
     fn routing_of(tracks: Vec<Track>, vias: Vec<Via>) -> RoutingSection {
-        RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }
+        RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }
     }
 
     /// A net-A track `t1` on `layer`, 200 wide.

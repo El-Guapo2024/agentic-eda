@@ -165,6 +165,7 @@ fn a_stackup_edit_changes_the_layers_and_the_thickness_but_not_while_copper_woul
         zones: vec![],
         track_width_presets: vec![],
         via_presets: vec![],
+        diff_pair_presets: vec![],
         teardrop_settings: Default::default(),
     });
     let mut routed = Board::new(d, &on_four, mm(0.1), mm(0.3));

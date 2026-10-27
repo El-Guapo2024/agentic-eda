@@ -48,6 +48,7 @@ fn board(track_x: Nm) -> (Design, ConstraintModel) {
             zones: vec![],
             track_width_presets: vec![],
             via_presets: vec![],
+            diff_pair_presets: vec![],
             teardrop_settings: Default::default(),
         }),
         drawings: None,

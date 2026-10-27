@@ -1,5 +1,5 @@
 use super::*;
-use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
+use eda_model::ir::{ArrowDirection, DiffPairPreset, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
 use eda_model::{Net, Part, Pin, PinKind, PlacementRule};
 use eda_model::units::{mm, um};
 
@@ -56,6 +56,10 @@ fn empty_design() -> Design {
 
 fn board(m: &ConstraintModel) -> Board<'_> {
     Board::new(empty_design(), m, mm(0.1), mm(0.3))
+}
+
+fn set_vias(b: &mut Board<'_>, presets: Vec<ViaPreset>) -> Vec<CheckResult> {
+    b.apply(&Cmd::SetViaPresets { presets }).unwrap_err()
 }
 
 // ------------------------------------------------------------ refusals
@@ -493,6 +497,44 @@ fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
 
     let e = b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.3), drill: mm(0.3) }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_via");
+
+    b.apply(&Cmd::SetDiffPairPresets { presets: vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().diff_pair_presets, vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }]);
+}
+
+// r4 R4-3: the panel's via rows go through `PCB_VIA::ValidateViaParameters` (`pcb_track.cpp`), whose words and order these are -- the diameter
+// before the drill, and a pair that is only checked once both are sizes at all.
+#[test]
+fn set_via_presets_refuses_with_kicads_words() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: mm(0.6), drill: mm(0.3) }] }).unwrap();
+
+    let e = set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(500), drill: Nm::new(300) }]);
+    assert_eq!((e[0].check.as_str(), e[0].hint.as_deref()), ("ops_bad_via", Some("Via diameter is too small.")));
+    assert_eq!(b.design().routing.as_ref().unwrap().via_presets, vec![ViaPreset { diameter: mm(0.6), drill: mm(0.3) }], "a refused replace leaves the list");
+
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(500), drill: Nm::ZERO }])[0].hint.as_deref(), Some("Via diameter is too small."), "the diameter is checked first");
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: mm(0.6), drill: Nm::new(999) }])[0].hint.as_deref(), Some("Via drill is too small."));
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(600_000), drill: Nm::new(600_000) }])[0].hint.as_deref(), Some("Via hole size must be smaller than via diameter"));
+    // A 1 um size is the minimum, as `GEOMETRY_MIN_SIZE` is (0.001 mm): 999 nm is refused for either dimension, and 1 um passes for both.
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(999), drill: Nm::new(500) }])[0].hint.as_deref(), Some("Via diameter is too small."));
+    assert_eq!(set_vias(&mut b, vec![ViaPreset { diameter: Nm::new(2_000), drill: Nm::new(999) }])[0].hint.as_deref(), Some("Via drill is too small."));
+    b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: Nm::new(2_000), drill: Nm::new(1_000) }] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().via_presets, vec![ViaPreset { diameter: Nm::new(2_000), drill: Nm::new(1_000) }]);
+}
+
+// r4 R4-3: `BOARD_DESIGN_SETTINGS::ValidateDesignRules`' `diff_pair_dimensions_list[..]` check: a pair with a width needs a gap; a pair of width 0
+// (an empty row, as the panel's Add makes one) is not checked, and neither is the via gap.
+#[test]
+fn diff_pair_presets_refuse_a_width_without_a_gap() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::SetDiffPairPresets { presets: vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }] }).unwrap();
+    let e = b.apply(&Cmd::SetDiffPairPresets { presets: vec![DiffPairPreset { width: mm(0.3), gap: Nm::ZERO, via_gap: mm(0.2) }] }).unwrap_err();
+    assert_eq!((e[0].check.as_str(), e[0].hint.as_deref()), ("ops_bad_diff_pair", Some("No differential pair gap defined.")));
+    assert_eq!(b.design().routing.as_ref().unwrap().diff_pair_presets, vec![DiffPairPreset { width: mm(0.2), gap: mm(0.15), via_gap: mm(0.18) }]);
+    b.apply(&Cmd::SetDiffPairPresets { presets: vec![DiffPairPreset { width: Nm::ZERO, gap: Nm::ZERO, via_gap: Nm::ZERO }] }).unwrap();
 }
 
 // ------------------------------------------- global edit: tracks & vias

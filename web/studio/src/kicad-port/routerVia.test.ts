@@ -88,21 +88,30 @@ test("PCB_VIA::ValidateViaParameters' messages, word for word", () => {
   assert.equal(validateViaParameters(600_000, 300_000), null);
 });
 
-// r3 R3-3: `ImportSizes`' `UseNetClassTrack()` -- with no width chosen, or the list's first entry (the net class's), a route sends no width and
-// takes the start net's class width from the server; a chosen width or a custom size is sent.
+// r3 R3-3 / r4 R4-8: `ImportSizes`' `UseNetClassTrack()` -- with no width chosen, or the list's first entry (index 0, the net class's), a
+// route sends no width and takes the start net's class width from the server; a chosen width or a custom size is sent. The choice is the
+// list INDEX, as `m_trackWidthIndex == 0` upstream, not the width: a preset that happens to equal the Default class's width is a user choice.
 test("a route takes the start net's class width unless a width is chosen", () => {
-  assert.equal(chosenTrackWidth(null, 250_000, false), undefined, "nothing chosen: the net class's");
-  assert.equal(chosenTrackWidth(250_000, 250_000, false), undefined, "the list's first entry is the net class's");
-  assert.equal(chosenTrackWidth(400_000, 250_000, false), 400_000, "a width of the list");
-  assert.equal(chosenTrackWidth(250_000, 250_000, true), 250_000, "a custom size is a size");
+  // list = [netclass 250_000, preset 250_000, preset 400_000]
+  assert.equal(chosenTrackWidth(null, null, 3, false), undefined, "nothing chosen: the net class's");
+  assert.equal(chosenTrackWidth(250_000, 0, 3, false), undefined, "index 0 is the net class's");
+  assert.equal(chosenTrackWidth(400_000, 2, 3, false), 400_000, "a width of the list");
+  // r4 R4-8: the same width as the Default class's, but at index > 0, is the user's choice (ImportSizes: source "user choice").
+  assert.equal(chosenTrackWidth(250_000, 1, 3, false), 250_000, "a preset equal to the Default class's width is still a chosen width");
+  assert.equal(chosenTrackWidth(250_000, 3, 3, false), undefined, "past the list's end is the net class's (GetCurrentTrackWidth's range check)");
+  assert.equal(chosenTrackWidth(250_000, 1, 3, true), 250_000, "a custom size is a size");
 });
 
-// r3 R3-4: `handleLayerSwitch`' `UseNetClassVia() || viaType == MICROVIA` -- the server asks the rules for the via's size then.
+// r3 R3-4 / r4 R4-8: `handleLayerSwitch`' `UseNetClassVia() || viaType == MICROVIA` -- the server asks the rules for the via's size then.
+// The choice is the list INDEX too: a preset equal to the net class's size at index > 0 is chosen.
 test("a via takes the net class's size from the server unless a size is chosen", () => {
   const base = { diameter: 600_000, drill: 300_000 };
-  assert.equal(chosenViaSize("through", null, base, false), null);
-  assert.equal(chosenViaSize("through", base, base, false), null, "the list's first entry is the net class's");
-  assert.deepEqual(chosenViaSize("blind", { diameter: 800_000, drill: 400_000 }, base, false), { diameter: 800_000, drill: 400_000 });
-  assert.equal(chosenViaSize("micro", { diameter: 800_000, drill: 400_000 }, base, false), null, "a microvia's is always the net class's");
-  assert.deepEqual(chosenViaSize("through", base, base, true), base, "a custom size is a size");
+  // list = [netclass 600/300, preset 600/300, preset 800/400]
+  assert.equal(chosenViaSize("through", null, null, 3, false), null);
+  assert.equal(chosenViaSize("through", base, 0, 3, false), null, "index 0 is the net class's");
+  assert.deepEqual(chosenViaSize("blind", { diameter: 800_000, drill: 400_000 }, 2, 3, false), { diameter: 800_000, drill: 400_000 });
+  assert.deepEqual(chosenViaSize("through", base, 1, 3, false), base, "a preset equal to the net class's size is still a chosen size");
+  assert.equal(chosenViaSize("through", base, 3, 3, false), null, "past the list's end is the net class's");
+  assert.equal(chosenViaSize("micro", { diameter: 800_000, drill: 400_000 }, 2, 3, false), null, "a microvia's is always the net class's");
+  assert.deepEqual(chosenViaSize("through", base, 0, 3, true), base, "a custom size is a size");
 });

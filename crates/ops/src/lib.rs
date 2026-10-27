@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
+    Design, DiffPairPreset, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Nm, Via, ViaPreset, Wire, Zone,
 };
 #[cfg(test)]
 use eda_model::ir::Group;
@@ -389,6 +389,8 @@ pub enum Cmd {
     SetTrackWidthPresets { widths: Vec<Nm> },
     /// Same idea as `SetTrackWidthPresets`, for `m_ViaSizeList`.
     SetViaPresets { presets: Vec<ViaPreset> },
+    /// Same panel's Differential Pairs grid, `m_DiffPairDimensionsList` (`.kicad_pro`'s `diff_pair_dimensions`), replaced wholesale.
+    SetDiffPairPresets { presets: Vec<DiffPairPreset> },
 
     /// `dialog_global_edit_tracks_and_vias.cpp`'s "Apply and Close": bulk-
     /// set width (tracks/arcs) and/or diameter+drill (vias) and/or layer
@@ -2337,6 +2339,7 @@ impl Cmd {
             Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
+            Cmd::SetDiffPairPresets { .. } => vec!["diff_pair_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, .. } => shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).map(String::as_str).collect(),
             Cmd::RemoveUnusedPads { selected, .. } => selected.iter().flatten().map(String::as_str).collect(),
@@ -2821,6 +2824,7 @@ impl<'a> Board<'a> {
             Cmd::SetViaLayers { ids, edit } => self.set_via_layers(ids, edit),
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
+            Cmd::SetDiffPairPresets { presets } => self.set_diff_pair_presets(presets),
             Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),
             Cmd::SetTeardropSettings { settings } => self.set_teardrop_settings(*settings),
             Cmd::AddAllTeardrops => self.add_all_teardrops(),
@@ -3685,7 +3689,7 @@ impl<'a> Board<'a> {
     /// must never clear an existing routing section -- see
     /// `Cmd::clears_routing`.
     fn routing_mut(&mut self) -> &mut RoutingSection {
-        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() })
+        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() })
     }
 
     /// The board's drawings section, creating an empty one on first use.
@@ -3807,17 +3811,36 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// Same panel's "Via Sizes" list.
+    /// Same panel's "Via Sizes" list. Each row through `PCB_VIA::ValidateViaParameters` (`pcbnew/pcb_track.cpp`) as the panel's `Validate()` runs it
+    /// on the grid's rows, in its order and with its messages word for word: the diameter's minimum, the drill's, and only then the pair. A row here
+    /// always has both a diameter and a drill (the model has no empty cell), so the two "not defined" messages of that function cannot occur.
     fn set_via_presets(&mut self, presets: &[ViaPreset]) -> Result<(), Vec<CheckResult>> {
+        /// `GEOMETRY_MIN_SIZE` (`pcbnew/pcb_track.h`): `0.001 * IU_PER_MM`, 1 um.
+        const GEOMETRY_MIN_SIZE: Nm = Nm::new(1_000);
         for p in presets {
-            if p.drill <= Nm::ZERO || p.diameter <= Nm::ZERO {
-                return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", "via drill and diameter must be positive")]);
-            }
-            if p.drill >= p.diameter {
-                return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", "drill must be smaller than diameter")]);
-            }
+            let message = if p.diameter < GEOMETRY_MIN_SIZE {
+                "Via diameter is too small."
+            } else if p.drill < GEOMETRY_MIN_SIZE {
+                "Via drill is too small."
+            } else if p.diameter <= p.drill {
+                "Via hole size must be smaller than via diameter"
+            } else {
+                continue;
+            };
+            return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", message)]);
         }
         self.routing_mut().via_presets = presets.to_vec();
+        Ok(())
+    }
+
+    /// The same panel's Differential Pairs list, checked as `BOARD_DESIGN_SETTINGS::ValidateDesignRules` checks it (`pcbnew/board_design_settings.cpp`):
+    /// a row with a width needs a gap ("No differential pair gap defined."); a row of width 0 -- what the grid's Add makes -- and the via gap are not
+    /// checked there.
+    fn set_diff_pair_presets(&mut self, presets: &[DiffPairPreset]) -> Result<(), Vec<CheckResult>> {
+        if presets.iter().any(|p| p.width > Nm::ZERO && p.gap <= Nm::ZERO) {
+            return Err(vec![CheckResult::fail("ops_bad_diff_pair", "diff_pair_presets", "No differential pair gap defined.")]);
+        }
+        self.routing_mut().diff_pair_presets = presets.to_vec();
         Ok(())
     }
 

@@ -743,7 +743,7 @@ export function Canvas() {
           const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_NM)?.from ?? (under ? `track ${under.id}` : undefined), board.routing?.tracks ?? []) : null;
           // `ImportSizes`: with the width list on "use net class" (`UseNetClassTrack()`) no width is sent, and the server takes the start net's
           // (`CT_WIDTH` through the rules: its class, a .kicad_dru rule, a pair's class width)
-          const width = connected ?? chosenTrackWidth(state.currentTrackWidthNm, board.board_rules?.track_width, state.pcbx.useCustomTrackVia);
+          const width = connected ?? chosenTrackWidth(state.currentTrackWidthNm, state.currentTrackWidthIndex, 1 + (board.routing?.track_width_presets?.length ?? 0), state.pcbx.useCustomTrackVia);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked());
           return;

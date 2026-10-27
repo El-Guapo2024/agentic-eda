@@ -56,7 +56,7 @@ fn board(fps: &[(&str, &str, Point)], nets: &[(&str, &[&str])]) -> (Design, Cons
         schematic: None,
         nets: None,
         placement: Some(PlacementSection { outline: vec![p(0.0, 0.0), p(30.0, 0.0), p(30.0, 20.0), p(0.0, 20.0)], footprints: fps.iter().map(|(r, _, at)| FootprintInstance { id: r.to_string(), at: *at, rot: 0, side: Side::Top, label: Default::default() }).collect(), modules: vec![] }),
-        routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+        routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
         drawings: Some(DrawingsSection::default()),
     };
     (design, model)
