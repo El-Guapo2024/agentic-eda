@@ -37,6 +37,7 @@ Our side is read at main 5cca5fff. KiCad's side is 8303b2ad, plus 25ec2335 for `
 Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on scratch copies in `/tmp/findings-r2-editors-exports.GtQ7/`. Main's `target/debug/eda` (built 10-23) is older than 4611df84, so it was not used to judge the new code.
 
 ### X1. Generate Drill Files writes oval holes as G85 slots; KiCad's dialog writes them as routed G00/M15 moves (high)
+- **Fixed** on task-r2-editors-exports: 7b1553b1 (`--excellon-oval-format route` unless "Use alternate drill mode for oval holes"; `fab_api::tests::drill_defaults_are_the_dialogs`, slow `fab_dialogs::the_drill_files_are_two_with_routed_slots` on QA issue5093).
 - **What differs.**
   - Ours: `crates/cli/src/fab_api.rs:45` `drill_args` passes only `--format excellon` (with `--excellon-separate-th` and `--drill-origin plot` when asked). kicad-cli's default `--excellon-oval-format` is `alternate` (`kicad/cli/command_pcb_export_drill.cpp`: `.default_value( std::string( "alternate" ) )`; `drillJob->m_excellonOvalDrillRoute = false`).
   - KiCad's dialog: "Use alternate drill mode for oval holes" (`m_altDrillMode`, `dialog_gendrill_base.cpp:76`) starts unchecked. `dialog_gendrill.cpp::DIALOG_GENDRILL::genDrillAndMapFiles` calls `excellonWriter.SetRouteModeForOvalHoles( !m_altDrillMode->GetValue() );`, so a slot is routed.
@@ -48,6 +49,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** No.
 
 ### X2. Generate Drill Files merges PTH and NPTH into one file by default; KiCad's dialog writes two (medium)
+- **Fixed** on task-r2-editors-exports: 7b1553b1 ("PTH and NPTH in single file", unchecked: `-PTH.drl`/`-NPTH.drl`).
 - **What differs.**
   - Ours: `GenerateDrillDialog.tsx:14` `useState(false)` for "Generate independent files for NPTH and PTH holes", so one `<name>.drl` is written (kicad-cli's default, `m_excellonCombinePTHNPTH = !separate_th`).
   - KiCad: the checkbox is the other way round. It reads "PTH and NPTH in single file" (`m_Check_Merge_PTH_NPTH`, `dialog_gendrill_base.cpp:71`), has no SetValue, and starts unchecked. `excellonWriter.SetOptions( ..., m_Check_Merge_PTH_NPTH->IsChecked() )` writes `<name>-PTH.drl` and `<name>-NPTH.drl`.
@@ -58,6 +60,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** No. The dialog's header comment says the other options are not wired, but not that this default is reversed.
 
 ### X3. Gerbers: KiCad's Plot dialog plots with the board's plot settings; ours plots with kicad-cli's defaults, so the file names (Protel extensions) and options differ, and an imported board's plot settings are dropped (high)
+- **Fixed** on task-r2-editors-exports: 7b1553b1 (`eda_model::plot_params` overlay, kept on import and written back; the plot passes the block's options as kicad-cli flags rather than `--board-plot-params`, which plots every copper layer whatever the checklist; `pcbplotparams_survive_import_and_write`, `the_plot_uses_the_boards_plot_settings`, slow `fab_dialogs::the_gerbers_are_named_and_made_as_the_boards_plot_settings_say`). Also r2-board-io F11.
 - **What differs.**
   - Ours: `fab_api.rs:40` `gerber_args` is `--layers ...` only, without `--board-plot-params`. kicad-cli's defaults (`command_pcb_export_gerber.cpp::populateJob`) include `m_useProtelFileExtension = !m_argParser.get<bool>( ARG_NO_PROTEL_EXTENSION )`, which is **on**. So files are named `-F_Cu.gtl`, `-B_Cu.gbl`, `-Edge_Cuts.gm1`.
   - KiCad's dialog uses the board's `PCB_PLOT_PARAMS`, whose defaults (`pcb_plot_params.cpp::PCB_PLOT_PARAMS::PCB_PLOT_PARAMS`) are `m_useGerberProtelExtensions = false`, so `-F_Cu.gbr`. They also include `m_sketchDNPFPsOnFabLayers = true`, `m_crossoutDNPFPsOnFabLayers = true` (kicad-cli: both off unless `--sdnp`/`--cdnp`), `m_drillMarks = SMALL_DRILL_SHAPE`, `m_gerberPrecision`, `m_subtractMaskFromSilk` and the board's own `m_layerSelection`.
@@ -72,6 +75,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** No. GAPS has no Plot-dialog item. `PlotDialog.tsx:1-5` says the dialog's options "aren't ported", but nothing tracks that the board's stored settings are dropped.
 
 ### X4. STEP/GLB/... export of a board whose outline is not closed: KiCad refuses, ours writes the file and drops kicad-cli's warning (high)
+- **Fixed** on task-r2-editors-exports: 1b99cd05 (refused in KiCad's words before kicad-cli runs; kicad-cli's output kept as the reply's `log` and shown; `a_3d_export_of_an_open_outline_is_refused_in_kicads_words`).
 - **What differs.**
   - KiCad (`dialog_export_step.cpp::DIALOG_EXPORT_STEP::onExportButton`) runs `BuildBoardPolygonOutlines( m_editFrame->GetBoard(), outline, maxError, chainingEpsilon, false )` first, and on failure shows `"Board outline is missing or not closed using %.3f mm tolerance.\nRun DRC for a full analysis."` and does not run kicad-cli.
   - Ours: `board_output_api.rs:251` `three_d` runs kicad-cli directly. kicad-cli warns `Board outline is malformed. Run DRC for a full analysis.` and still writes a STEP. `kicad-engine/src/lib.rs:1648` `run_export` puts stdout/stderr in the reply only on failure. The reply is `ok` and the warning is lost.
@@ -81,6 +85,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** No.
 
 ### X5. Export VRML's origin default: KiCad's "User defined origin" is checked at (0, 0); ours is the board centre (medium)
+- **Fixed** on task-r2-editors-exports: 1b99cd05.
 - **What differs.**
   - KiCad: `dialog_export_vrml_base.cpp:45` `m_cbUserDefinedOrigin->SetValue(true);` with X and Y "0". `dialog_export_vrml.cpp::BOARD_EDITOR_CONTROL::ExportVRML` uses `dlg.GetXRefMM()`/`GetYRefMM()` while it is checked.
   - Ours: `web/studio/src/api/boardControl.ts:109` `DEFAULT_VRML_OPTIONS.user_origin: false`, so `board_output_api.rs:117` `vrml_args` sends the board centre. The default VRML is shifted by the board centre relative to KiCad's.
@@ -91,6 +96,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** No. `PARITY-boardctl.md:70` says "identical".
 
 ### X6. "Board center" for STEP and VRML is the centre of our largest outline ring, not KiCad's `ComputeBoundingBox( true, true )` (medium)
+- **Fixed** on task-r2-editors-exports: 1b99cd05 (STEP: `board_edges_bounding_box`; VRML unchecked: no `--user-origin`, kicad-cli computes it; `the_board_centre_counts_every_edge_cuts_shape`).
 - **What differs.**
   - Ours: `board_output_api.rs:50` `board_center_mm` and `:245` `outline_center` take the bounding box of `design.placement.outline`. That is `refresh_outline_summary`'s `main_ring()` (`crates/drc/src/outline.rs:1002`), the largest ring only.
   - KiCad (`board.cpp::BOARD::ComputeBoundingBox`, with `aBoardEdgesOnly`): it merges `item->GetBoundingBox()` of **every** Edge.Cuts `PCB_SHAPE` on the board and of every footprint's Edge.Cuts shapes (`for( const BOARD_ITEM* edge : footprint->GraphicalItems() ) if( edge->GetLayer() == Edge_Cuts && edge->Type() == PCB_SHAPE_T ) bbox.Merge( ... )`).
@@ -102,6 +108,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** No.
 
 ### X7. Board > Fabrication Outputs > BOM is not `GenBOMFileFromBoard`'s file (medium)
+- **Fixed in part** on task-r2-editors-exports: baff7dc0 (`kicad-cli pcb export bom` on the board: board-only footprints in; the empty-board message). Left: kicad-cli's writer quotes every value, keeps the library prefix and has no `;;;` (no kicad-cli option for them; GAPS 37).
 - **What differs.**
   - Ours: `board_output_api.rs:224` `pcb_bom_args` runs `kicad-cli sch export bom` on the derived **schematic**.
   - KiCad (`pcbnew/build_BOM_from_board.cpp::BOARD_EDITOR_CONTROL::GenBOMFileFromBoard`) walks `board->Footprints()`, skipping only `FP_EXCLUDE_FROM_BOM`. It groups by `m_Val` and **`m_FPID`**, and writes:
@@ -115,6 +122,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** In part. `PARITY-boardctl.md:71` "partial" notes only the empty Footprint column. The library prefix, the quoting, the trailing `;`, the board-only footprints and the empty-board message are not listed.
 
 ### X8. Generate Placement Files: missing options, an extra Side control, no "No footprint for automated placement." (medium)
+- **Fixed** on task-r2-editors-exports: d018db9b (Gerber X3, negate X, board edge, no side choice, units order, the report and "No footprint for automated placement."). Left: Exclude from BOM (no kicad-cli flag, shown disabled), the variant. Note: KiCad's Gerber X3 names are `-pnp_top.gbr`/`-pnp_bottom.gbr` (`PLACEFILE_GERBER_WRITER::GetPlaceFileName`), not `-top-pos.gbr`.
 - **What differs.** Ours: `web/studio/src/components/FootprintPositionDialog.tsx`, `fab_api.rs:129` `pos`. KiCad: `dialog_gen_footprint_position.cpp`, `dialog_gen_footprint_position_file_base.cpp`.
   - **Not offered:**
     - "Use negative X coordinates for footprints on bottom layer" (`m_negateXcb`; kicad-cli has `--bottom-negate-x`);
@@ -130,6 +138,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** No. The 4611df84 review of the names is right: `place_file_names` matches `DecorateFilename` and `CreateAsciiFiles`, see "Checked" below.
 
 ### X9. Schematic Plot dialog defaults: KiCad starts at PDF with "Plot background color" unchecked; ours starts at SVG with the background on (medium)
+- **Fixed** on task-r2-editors-exports: b4db06f7.
 - **What differs.**
   - KiCad: `eeschema/dialogs/dialog_plot_schematic_base.cpp:57` `m_plotFormatOpt->SetSelection( 1 )` is PDF, out of Postscript/PDF/SVG/DXF/PNG. `m_plotBackgroundColor` (`:107`, label "Plot background color") has no SetValue, so it is unchecked, and `plotOpts.m_useBackgroundColor = m_plotBackgroundColor->GetValue()`.
   - KiCad's `DIALOG_SHIM::LoadControlState` (`common/dialog_shim.cpp:672`) also restores the last choices.
@@ -142,6 +151,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** No. `PARITY-sch.md:384` says "identical".
 
 ### X10. The PCB Plot dialog has only Gerber and three controls (medium, a tracking gap)
+- **Tracked** on task-r2-editors-exports: d2b7f55a (GAPS item 37; the board's own settings now reach the plot, X3).
 - **What differs.** KiCad's `DIALOG_PLOT` (`pcbnew/dialogs/dialog_plot.cpp`) also offers:
   - the formats PostScript, SVG, DXF, HPGL and PDF;
   - "Plot drawing sheet", "Plot footprint values" and "Plot reference designators";
@@ -155,6 +165,7 @@ Each "How to see it" that says "run" was run with `/usr/local/bin/kicad-cli` on 
 - **Already known?** Only in the component's header comment. It is in neither `GAPS.md` nor a PARITY row. It should get a GAPS line.
 
 ### X11. Export Symbol as SVG: "no symbol to export" (low)
+- **Fixed** on task-r2-editors-exports: bb470595 (the message; the theme/margin difference is in GAPS 37).
 - **What differs.** `crates/cli/src/sch_export_api.rs:239` says `"no symbol to export"`. KiCad (`symbol_editor_control.cpp::SYMBOL_EDITOR_CONTROL::ExportSymbolAsSVG`) says `wxMessageBox( _( "No symbol to export" ) )`. The editor's export plots in colour with the editor's colour theme and a 10% margin (`symbolBBox.Inflate( size * 0.1 )`); kicad-cli's `sym export svg` plots with its own theme and page.
 - **Severity.** Low.
 - **Already known?** No.
@@ -191,6 +202,7 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 ### Findings
 
 #### E1. A new footprint (or any library footprint with no stored Reference/Value layout) is exported with no Reference and no Value, and has no `${REFERENCE}` fab text. KiCad then reads both fields as empty. **high**
+- **Fixed** on task-r2-editors-exports: 1b77de3e (and the low: the attributes of the library's last footprint).
 - **What differs.**
   - Ours: `crates/ops/src/lib.rs:5381-5393` (`new_footprint`) is `LibraryFootprint::new_empty(name)` plus `attributes.smd = true`, with no texts.
   - `crates/kicad/src/footprint_lib.rs:285-303` (`write_library_fields`) writes the Reference only when `fp.reference` is `Some`, or when the Reference is hidden. The Value follows the same rule. A visible, never-placed field is therefore not written at all. The unit test `export_kicad_mod_writes_the_fields_with_their_layouts_and_reads_them_back` (`footprint_lib.rs:791-792`) asserts exactly this: "a footprint with no fields writes none".
@@ -217,6 +229,7 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 - Related, **low**: `CreateNewFootprint` takes the new footprint's attributes from the library's last footprint (`fp = adapter->LoadFootprint( aLibName, fpnames.back() ) ... footprintAttrs = fp->GetAttributes();`), falling back to `FP_SMD`. Ours is always SMD.
 
 #### E2. The Pin tool gives a new pin a number. KiCad's `CreatePin` leaves it empty. **medium**
+- **Fixed** on task-r2-editors-exports: fea85246.
 - **What differs.**
   - Ours: `SymbolEditorCanvas.tsx:397-398` calls `nextPinNumber(...)` and passes it to `newPinFromClick`. PARITY-symedit row 102 calls this "identical" ("The number is the next free one after the pin just placed (`IncrementString` ... like the C++ tool's `m_lastPin`)"). The `useActionRunner.ts:2280` comment says the same.
   - KiCad: `symbol_editor_pin_tool.cpp::CreatePin` sets the position, length, orientation, type, shape, the two sizes, unit, body style and visibility, and **no number**. `SCH_PIN::SCH_PIN( LIB_SYMBOL* )` (`sch_pin.cpp:123`) has an empty number. `DIALOG_PIN_PROPERTIES::TransferDataToWindow` shows `m_pin->GetNumber()`, which is empty.
@@ -226,6 +239,7 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 - **Already known?** No. The doc claim is wrong.
 
 #### E3. The Symbol Editor has no Repeat (Insert), no item Duplicate (Ctrl+D), and no item Copy/Paste. The action audit counts all three as wired. **medium**
+- **Fixed** on task-r2-editors-exports: fea85246 (the audit counts by action name and cannot tell tabs apart; noted in PARITY-symedit).
 - **What differs.**
   - Ours: `eeschema.InteractiveEdit.repeatDrawItem` is registered `schematicOnly` (`useActionRunner.ts:2271-2277`). `common.Interactive.duplicate` is handled for `pcb` and `footprint` only (`useActionRunner.ts:640-643`). `common.Interactive.copy`/`paste` are `pcbOnly` (`:644-645`), and the schematic sweep covers the schematic. The symbol canvas' context menu (`SymbolEditorCanvas.tsx:604-624`) has no Duplicate. So on the Symbol tab, Insert, Ctrl+D, Ctrl+C and Ctrl+V do nothing. Because the action ids are wired elsewhere, `ui-parity-missing.json` lists none of this.
   - KiCad:
@@ -237,6 +251,7 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 - **Already known?** No. Neither GAPS item 19 nor PARITY-symedit names it.
 
 #### E4. In Synchronized Pins Mode, deleting a pin leaves its twins in the other units. Delete of several items is one undo step per item. **medium**
+- **Fixed** on task-r2-editors-exports: fea85246.
 - **What differs.**
   - Ours: `editorFrameActions.ts:147-155` (symbol) and `editorAdapter.ts:339-346` loop over the selection and call `symApi.deletePin(id)` once per pin. That is one `delete_symbol_pin` each (`symbolEditorStore.tsx:624-629`; `ops/lib.rs:5898` removes the one id). There is no sync step and no batch.
   - KiCad: `symbol_editor_edit_tool.cpp::SYMBOL_EDITOR_EDIT_TOOL::DoDelete` does it in one commit:
@@ -255,6 +270,7 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 - **Already known?** No. The PARITY-symedit "Synchronized Pins Mode" row (134) lists placing, moving and editing, not deleting.
 
 #### E5. Rotate of several pins turns each pin in place, and in sync mode it also rotates the twins. It is one undo step per pin. **medium**
+- **Fixed** on task-r2-editors-exports: fea85246.
 - **What differs.**
   - Ours: `editorFrameActions.ts:133-145` (`rotatePins`) changes `angle_deg` of each selected pin around its own position, through `symApi.editPin` once per pin. `editPin` (`symbolEditorStore.tsx:630-645`) adds `planSyncedEdit`'s updates in sync mode, so the twins in the other units turn too.
   - KiCad: `SYMBOL_EDITOR_EDIT_TOOL::Rotate` rotates the whole selection about one point in one commit `_( "Rotate" )`, and it never touches pins outside the selection:
@@ -268,6 +284,7 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 - **Already known?** In part: the toolbar note says shape rotation is unported (PARITY-symedit:123). The pivot, the sync side effect and the undo steps are not listed.
 
 #### E6. "Pin name inside" with an offset of 0 is written as 20 mil. KiCad writes 1 IU from New Symbol and 20 IU from Symbol Properties. **medium**
+- **Fixed** on task-r2-editors-exports: fea85246.
 - **What differs.**
   - Ours: `NewSymbolDialog.tsx:95-97` and `SymbolPropertiesDialog.tsx:108` both do `namesInside ? (offset === 0 ? 0.508 : offset) : 0`. The comment says this is "as Symbol Properties' 'Place pin names inside' already makes it" (c943dd26).
   - KiCad's `lib_symbol_library_manager.cpp::LIB_SYMBOL_LIBRARY_MANAGER::CreateSymbol`:
@@ -285,6 +302,7 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 - **Already known?** No. c943dd26 introduced the New Symbol half and the doc claims parity.
 
 #### E7. Pin Properties never gives KiCad's "not on a 50 mils grid" warning. **medium**
+- **Fixed** on task-r2-editors-exports: fea85246. Note: KiCad tests `% 50` on the value in internal units (`m_posX.GetValue()`, 100 nm), not mils, so X = 1 mm does not ask; ported as the code does.
 - **What differs.** `PinPropertiesDialog.tsx:70-98` (`submit`) only checks the alternates. KiCad's `dialog_pin_properties.cpp::DIALOG_PIN_PROPERTIES::TransferDataFromWindow` asks first:
   ```cpp
   if( ( m_origPos != newPos ) && ( ( m_posX.GetValue() % standard_grid ) || ( m_posY.GetValue() % standard_grid ) ) )
@@ -299,6 +317,7 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 - **Already known?** No.
 
 #### E8. Pin Properties' "Common to all units / body styles" boxes are always enabled. Their tooltips and the sync info bar are missing. **low**
+- **Fixed** on task-r2-editors-exports: fea85246.
 - KiCad's `DIALOG_PIN_PROPERTIES::TransferDataToWindow`:
   - `m_checkApplyToAllParts->Enable( IsMultiUnit() )` and `SetValue( IsMultiUnit() && GetUnit() == 0 )`;
   - `m_checkApplyToAllBodyStyles->Enable( IsMultiBodyStyle() )`;
@@ -309,19 +328,23 @@ Practical check: the debug `eda` binary was built 2026-10-23, so it is older tha
 - Test: on a single-unit symbol the box is disabled and unchecked, and OK writes unit 1.
 
 #### E9. When the occupied-spot question is declined, the pin template is not updated. KiCad has already saved it. **low**
+- **Fixed** on task-r2-editors-exports: fea85246.
 - KiCad: `CreatePin` → `EditPinProperties` saves `g_LastPin*` at its end, before `TwoClickPlace`'s second click reaches `PlacePin`. Answering Cancel there (`delete aPin; return false;`) keeps the new look.
 - Ours (`PinPropertiesDialog.tsx:87-93`) returns before `SET_PIN_TEMPLATE` when the confirm is declined.
 - Test: `pinPlacement`/e2e: change the type to Output, decline "Place Pin Anyway", and the next click's pin is Output.
 
 #### E10. Docs: PARITY-symedit row 102 says "identical" for a one-click placement that the same file's "Differs from KiCad" lists as different. **low (doc)**
+- **Fixed** on task-r2-editors-exports: fea85246.
 - PARITY-symedit.md:259-262 already describes the one-click placement and the position taken from the dialog. In KiCad (`TwoClickPlace`), the pin follows the cursor after OK, and its place, including the occupied test, is the second click (`item->SetPosition( VECTOR2I( cursorPos.x, -cursorPos.y ) )`). Row 102 should say "differs (see below)", and the `m_lastPin`/`IncrementString` claim should go (E2).
 
 #### E11. Footprint Editor Duplicate and Increment of several pads: we number them consecutively, KiCad gives them the same number. **low (decide: KiCad's looks like a bug)**
+- **Recorded** as a deliberate difference on task-r2-editors-exports: fea85246 (PARITY-fpedit).
 - KiCad's `edit_tool.cpp::EDIT_TOOL::Duplicate` (`:3370-3380`) calls `parentFootprint->DuplicateItem( true, &commit, orig_item )` with the default `addToFootprint = false` (`footprint.h:1171-1172`). So the copy is not in `m_pads` when the next pad runs `GetNextPadNumber( padTool->GetLastPadNumber() )`, which starts from the last number and returns it while it is free.
 - With pads 1 and 2 selected and last number "2", KiCad gives "3" and "3". Ours (`fpEditActions.ts:48-63`, `used = [...used, copy]`) gives "3" and "4".
 - Our numbering is the useful one. Record it as a deliberate difference, not a parity claim. PARITY-fpedit row 102 says "identical".
 
 #### E12. A new symbol's Reference and Value are placed at (0, 5.08) and (0, 2.54). KiCad's are at the origin. **low**
+- **Fixed** on task-r2-editors-exports: fea85246.
 - `LIB_SYMBOL::LIB_SYMBOL( const wxString& aName, ...)` (`lib_symbol.cpp:226-260`) makes the five mandatory fields with `new SCH_FIELD( this, id )` at (0,0), and `CreateSymbol` sets only their texts.
 - Ours: `/api/symbol/export` of a fresh `new_symbol` writes `(property "Reference" "U" (at 0 5.08 0))` and `(property "Value" "S0" (at 0 2.54 0))`.
 - Cosmetic, but a file KiCad would write differently.
@@ -379,6 +402,7 @@ Since 2026-10-24 in these paths: `8a567378` (P18-1 fix: Place Design Block grows
 ### Findings
 
 #### V1. The 3D viewer shows User.1 .. User.45 by default; KiCad hides them (medium)
+- **Fixed** on task-r2-editors-exports: d743df5a.
 - **What differs.** `web/studio/src/kicad-port/appearance3d.ts:166` builds every user row with `row(..., "user", true)`, so `visible` defaults to true, and `isVisible` (`:204-208`) returns that default. `scene.ts` then draws every drawing on `User.n` (`shapeLayerOf` -> `{ kind: "user" }`).
   KiCad's defaults are in `3d-viewer/3d_viewer/eda_3d_viewer_settings.cpp::EDA_3D_VIEWER_SETTINGS`:
   ```
@@ -395,6 +419,7 @@ Since 2026-10-24 in these paths: `8a567378` (P18-1 fix: Place Design Block grows
 - **Already known?** No. GAPS 23 does not list it.
 
 #### V2. A 3D model's type and DNP state ignore the board footprint's attributes, so DNP models show by default (medium)
+- **Fixed** on task-r2-editors-exports: d743df5a (`part_json` from `Design::effective_attrs`; the "Models not in POS File" and "Models marked DNP" rows, P and D; `footprintShown` in `IsFootprintShown`'s order).
 - **What differs.** `crates/cli/src/model3d_api.rs:619` `part_json` gives `kind3d` from `crates/kicad/src/model3d.rs:209-264` `part_models`. That kind is the installed library footprint's `(attr ..)`, or else `ModelKind::of_pads` (any PTH pad makes it TH, any SMD pad makes it SMD, otherwise virtual). It never reads the board footprint's own attributes. The IR has those attributes now: `FootprintAttrs { kind, dnp, exclude_from_pos_files, .. }` (`crates/model/src/fp_edit.rs:231`), set by Footprint Properties (`FootprintEdit::attrs`) and by the symbol's DNP flag (`Design::effective_attrs`, `fp_edit.rs:507`). `partModels.ts:90` then gates the model on that kind alone.
   KiCad's `board_adapter.cpp::BOARD_ADAPTER::IsFootprintShown` uses the board footprint's own flags:
   ```
@@ -410,6 +435,7 @@ Since 2026-10-24 in these paths: `8a567378` (P18-1 fix: Place Design Block grows
 - **Already known?** In part. GAPS 23 lists "models not in the position file and DNP models" as missing. `appearance3d.ts:9` and `Viewer3D.tsx:479` give the reason as "no pick-and-place or DNP attribute" in the data model, which is no longer true. The kind ignoring the Component type is not listed. **Fix direction:** send the effective attributes in `part_json`, use them for `kind3d`, and add the two rows ("Models not in POS File" with default shown, "Models marked DNP" with default hidden, keys P and D).
 
 #### V3. The copper swatches and the editor copper colours are not KiCad's single copper colour (low)
+- **Fixed in part** on task-r2-editors-exports: d743df5a (a swatch sets both copper rows). Left: per-layer editor copper colours on inner layers (PARITY-3d, GAPS 23).
 - **What differs.** `appearance3d.ts:resolveColors` (`:345-369`) applies a swatch to `copper_top` or to `copper_bottom` on its own, and with `useEditorCopperColors` it sets top from `F_Cu` and bottom from `B_Cu`. Inner-layer tracks then take the colour of `silkSide(layer)` (`scene.ts:961`), which is F or B.
   - KiCad, `appearance_controls_3D.cpp::onColorSwatchChanged`: "The internals of the 3D viewer only supports a single color for copper, which must be applied to all copper layers." A change to any of `LAYER_3D_COPPER_TOP`, `LAYER_3D_COPPER_BOTTOM` or `LAYER_3D_PLATED_BARRELS` sets the other two as well.
   - KiCad, `render_3d_opengl.cpp::setLayerMaterial`: with `GetUseBoardEditorCopperLayerColors()`, each copper layer takes its own 2D colour: `COLOR4D copper_color = m_boardAdapter.m_BoardEditorColors[aLayerID];`. That includes In1.Cu .. In30.Cu. The option is off for the footprint holder (`!m_board->IsFootprintHolder()`).
@@ -418,6 +444,7 @@ Since 2026-10-24 in these paths: `8a567378` (P18-1 fix: Place Design Block grows
 - **Already known?** No. PARITY-3d.md row 87 says the bottom copper is forced to the top's, which holds only until a swatch is set.
 
 #### S1. `${OP}` text variables are never resolved (medium)
+- **Fixed** on task-r2-editors-exports: d743df5a (`kicad-port/sim/opVars.ts`, KiCad's regexes; resolved where the sheet paints).
 - **What differs.** KiCad resolves `${OP}` in a symbol's fields and in a label's text from the last operating-point run:
   - `sch_symbol.cpp::SCH_SYMBOL::ResolveTextVar` matches `"^OP(:[^.]*)?(.([0-9])?([a-zA-Z]*))?$"` (a pin, a precision, a range);
   - `sch_label.cpp::SCH_LABEL_BASE::ResolveTextVar` matches `"^OP(.([0-9])?([a-zA-Z]*))?$"`;
@@ -430,6 +457,7 @@ Since 2026-10-24 in these paths: `8a567378` (P18-1 fix: Place Design Block grows
 - **Already known?** Only in `text_vars.rs`'s doc comment. GAPS item 34 and PARITY-sch.md 38's "Not done" row do not list it.
 
 #### S2. The operating point overlay ignores the project's precision and range (low)
+- **Fixed in part** on task-r2-editors-exports: d743df5a (`opLabels` takes the four formats). Left: the project does not carry `drawing.operating_point_overlay_*` yet (GAPS 34).
 - **What differs.** `kicad-port/sim/opOverlay.ts:86, :111, :118` hard-code `operatingPoint(points, name, 3, "~V")` and `(…, 3, "~A")`. KiCad uses `settings.m_OPO_VPrecision`, `m_OPO_VRange`, `m_OPO_IPrecision` and `m_OPO_IRange` (`sch_edit_frame.cpp::RefreshOperatingPointDisplay`). These are project settings: `schematic_settings.cpp`'s `"drawing.operating_point_overlay_v_precision"` (3), `"drawing.operating_point_overlay_v_range"` ("~V"), and the `_i_` pair ("~A"). Schematic Setup > Formatting edits them (`panel_setup_formatting.cpp:112-163`).
   `grep operating_point_overlay` finds nothing in `crates/` or `web/studio/src`. So a KiCad project that sets "mV" or 5 digits shows 3 digits auto-ranged in the studio. From the reading, the setting is probably also lost from the derived `.kicad_pro` (not run).
 - **How to see it.** In a project with `"operating_point_overlay_v_range": "mV"` and an OP run, a 1.2 V net shows "1.20V" in the studio and "1200mV" in KiCad.
@@ -437,11 +465,13 @@ Since 2026-10-24 in these paths: `8a567378` (P18-1 fix: Place Design Block grows
 - **Already known?** No.
 
 #### S3. Two smaller overlay differences (low)
+- **Fixed** on task-r2-editors-exports: d743df5a.
 - **A net with no pin on the sheet gets no voltage.** `opOverlay.ts:69-71` finds a sheet net's SPICE name only through a pin on one of its wires or on the sheet. KiCad walks `m_connectionGraph->GetNetMap()` and asks `GetOperatingPoint( key.Name, ..)` by net name. So a wire that joins only labels (a hierarchical label to a global label, for example) is labelled in KiCad and not here.
 - **Pins are grouped by reference, not by symbol.** `opOverlay.ts:95-99` groups every pin of a reference on the sheet. KiCad works per `SCH_SYMBOL` (`symbol->GetPins( &sheetPath )`, then `if( pins.size() == 2 )`). A two-unit part with both units on one sheet, each unit with two pins, is "4 pins" here, so it goes down the model-pin path. In KiCad each unit is a two-pin symbol and takes the item's current on its first pin.
 - **Already known?** The "net drawn in pieces gets one label" note is in GAPS 34. These two are not.
 
 #### R1. The 3D resolver's `${ALIAS}` fallback and variable-name scan (low)
+- **Fixed** on task-r2-editors-exports: d743df5a (names scanned as `KIwxExpandEnvVars`, `Contains("KISYS3DMOD")`). Left: the legacy 3D search-path alias fallback (no such settings here). Note: with `MY` defined, `${MY LIB}/x` becomes `<MY> LIB}/x`, as KiCad does.
 - **What differs.** `model3d_api.rs:80-124` `expand`:
   1. KiCad's `KIwxExpandEnvVars` (`common.cpp`) ends a variable name at the first character that is not `wxIsalnum`, `_` or `:` (`while( wxIsalnum( str_m ) || str_m == wxT( '_' ) || str_m == wxT( ':' ) )`). Ours takes everything up to the closing bracket.
   2. KiCad treats any name that *contains* `KISYS3DMOD` as the 3D model dir (`strVarName.Contains( "KISYS3DMOD" )`). Ours needs the name to be exactly that.
@@ -501,6 +531,7 @@ Our side: `crates/kicad/src/specctra/session.rs`, `parse.rs`, `model.rs`, `crate
 ### Findings
 
 #### D1. A microvia whose drill the session leaves undefined takes the net class's via drill, not its microvia drill (medium)
+- **Not a bug** (task-r2-editors-exports: ef1d0a0f): `makeVIA`'s tests never type a padstack of two or more shapes MICROVIA (`topLayerNdx` is the largest index, so `topLayerNdx == 0 && botLayerNdx == 1` cannot hold); KiCad 8303b2ad makes the F.Cu-In1.Cu via BURIED with the class's via drill, as we do. Test `a_two_layer_via_of_a_session_is_buried_with_the_via_drill_as_kicads_make_via_types_it`.
 - **What differs.** `crates/kicad/src/specctra/session.rs:184`: `let drill = if drill_diam_iu > 0 { drill_diam_iu } else { drill_of_net };`. `drill_of_net` is `b.via_drill_of(net)` (`session.rs:266`, `:248`) whatever kind of via `make_via` has just worked out. KiCad's `makeVIA` calls `via->SetDrill( drill_diam_iu )` with `UNDEFINED_DRILL_DIAMETER` (-1) in two cases: the padstack name's drill equals the Default class's via drill, or the name has no `:`/`_`. The drill is then `PCB_VIA::GetDrillValue` (`pcb_track.cpp:694`):
   ```
   if( m_padStack.Drill().size.x > 0 ) // Use the specific value.
@@ -517,6 +548,7 @@ Our side: `crates/kicad/src/specctra/session.rs`, `parse.rs`, `model.rs`, `crate
 - **Already known?** No. PARITY-pcb.md §46's row "A via's size and type" says "the net class's" without the microvia case.
 
 #### D2. The ids of the new routing come from its content, so an unchanged track or via comes back as "the same item": it stays in its group and tuning pattern and keeps its old via extras (low)
+- **Fixed** on task-r2-editors-exports: ef1d0a0f.
 - **What differs.** `crates/ops/src/specctra.rs:50-63`. The old unlocked tracks and vias are dropped, the session's are added, and `rt.assign_missing_ids()` gives each new one an id from its content (`next_item_id("trk", id_seed)`, the points; a via's net, position, drill, size and layers, `crates/model/src/ir.rs:1405`). A segment or via the router sends back unchanged therefore gets its old id. After that:
   - `Board::apply`'s `tidy_groups` and `tidy_tuning_patterns` (`crates/ops/src/lib.rs:2721-2723`) see no id gone, so the new track stays a member of the old group and tuning pattern;
   - `dr.via_extras.retain(|e| via_ids.contains(&e.id))` (`specctra.rs:63`) keeps the old via's extra (its tokens: tenting, `remove_unused_layers`, zone layer connections, capping and so on) on the new through via. The `!= Through` branch only rewrites non-through vias.
@@ -527,18 +559,21 @@ Our side: `crates/kicad/src/specctra/session.rs`, `parse.rs`, `model.rs`, `crate
 - **Already known?** No.
 
 #### D3. The import does not follow KiCad in deleting every DRC marker, the exclusions included (low; probably keep ours, but say so)
+- **Documented** (kept on purpose) on task-r2-editors-exports: ef1d0a0f.
 - **What differs.** `FromSESSION` calls `aBoard->DeleteMARKERs()` (`board.cpp:1737`), the overload that deletes every marker, the excluded ones included. On the next save `BOARD::RecordDRCExclusions` rewrites the project's exclusions from the markers left, so in KiCad a session import followed by a save loses the DRC exclusions. Ours keeps `drawings.drc_exclusions`. The module doc (`crates/ops/src/specctra.rs:17`) says "The DRC markers `DeleteMARKERs` deletes are kicad-cli's report here, which is never stored", which leaves out the exclusions.
 - **How to see it.** Exclude a DRC finding, import a session, save. KiCad's `.kicad_pro` has no `drc_exclusions`; ours keeps it.
 - **Test.** None needed if we keep ours. Write the difference into PARITY-pcb.md §46 ("Differs: the board's DRC exclusions are kept; KiCad's `DeleteMARKERs()` drops the excluded markers too, so its next save forgets them").
 - **Already known?** No.
 
 #### D4. The import's error is shown without KiCad's first line (low)
+- **Fixed** on task-r2-editors-exports: ef1d0a0f ("Fix problem and try again" over the error; the "Board may be corrupted" sentence left out, the board is untouched).
 - **What differs.** `web/studio/src/kicad-port/specctra.ts:48-50`: a refused import shows only the `IO_ERROR` text. KiCad's `PCB_EDIT_FRAME::ImportSpecctraSession` shows `DisplayErrorMessage( this, msg, extra )` with `msg = _( "Board may be corrupted, do not save it.\n Fix problem and try again" )` and the error as the extended text. Our board is untouched by a refused import, so the first sentence would be false. The second ("Fix problem and try again") is true and is dropped: it appears only when the reply has no message at all.
 - **How to see it.** Import a session that names layer `In9.Cu` on a 2-layer board. Ours: "Session file uses invalid layer id 'In9.Cu'.". KiCad: "Board may be corrupted, do not save it. / Fix problem and try again" over that line.
 - **Test.** `specctra.test.ts`: `describeImport({ ok: false, message: "Session file uses invalid layer id 'X'." }).message` contains "Fix problem and try again" and the error. Or write the difference in §46.
 - **Already known?** No.
 
 #### D5. Docs out of date (low)
+- **Fixed** on task-r2-editors-exports: ef1d0a0f.
 - PARITY-pcb.md:1945 (§46, the Units row): "rounded to the design's micrometres". The design is in nanometres now and `scale` gives nanometres (`session.rs` `scale`, `pt`).
 - `session.rs`: the doc of `SessionImport` says "micrometres", and so do `make_via`'s and `from_session_db`'s docs for `drill_of_net`. All of these are nanometres now.
 - GAPS.md:141 (item 19 row) says Specctra is "done 2026-10-23 on `task-specctra-wip` (not merged)". It is on main.

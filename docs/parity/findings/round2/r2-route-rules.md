@@ -11,6 +11,8 @@ Scope, in priority order:
 
 ## R-1. The router's clearance is the net class's only: a pad's or footprint's local clearance, a custom rule (`.kicad_dru`) and a net tie are ignored (HIGH)
 
+**Fixed** on task-r2-router: 556525c2, 1ba91d3b. `crates/pns/src/rule_resolver.rs` ports `PNS_PCBNEW_RULE_RESOLVER::Clearance` / `QueryConstraint` over `RuleEngine::eval_rules` (hole clearance and hole to hole with it, `collideSimple`'s net-tie and hole branches in `Node::item_collision`); `crates/pns/tests/rules_kicad.rs` proves it with kicad-cli. One correction: the net-tie case is not "clearance 0" against the other pad -- `EvalRules`' net-tie block does not apply to a track against a pad (both connected, not one footprint); `collideSimple`'s `IsNetTieExclusion` lets the collision go only where it is on a pad of the tie of the track's own net, and that is what is ported and tested.
+
 - **What differs.**
   - Our side: `crates/pns/src/node.rs:896` `Node::clearance` calls `eda_drc::constraints::clearance(rules, a_net, b_net)`. That function (`crates/drc/src/constraints.rs:33`) returns `max(class(a), class(b), min_clearance)` and has nothing else to go on.
   - `Node::clearance_to` (`node.rs:905`) adds only the board-edge case. `crate::item::Solid` (`item.rs:67`) carries no clearance.
@@ -36,6 +38,8 @@ Scope, in priority order:
 
 ## R-2. A rule area that keeps out tracks or vias is not an obstacle to the router (HIGH)
 
+**Fixed** on task-r2-router: 556525c2 (`from_ir::add_keepouts`, `triangulation.rs`, `Keepout::keeps_out`; `a_keepout_rule_area_blocks_tracks`, `a_vias_only_keepout_lets_tracks_through_but_not_vias`, both judged by kicad-cli).
+
 - **What differs.**
   - Our side: `crates/pns/src/from_ir.rs:9-13`: "Zones are deliberately not inserted as `NODE` items ... the interactive router routes straight through/over a zone's fill area". Nothing in `from_ir.rs` looks at `Zone::is_rule_area` / `keepout_tracks` / `keepout_vias` / `keepout_pads` (`ir.rs:1613-1630`).
   - That is right for a copper zone. A rule area is different. `pns_kicad_iface.cpp::PNS_KICAD_IFACE_BASE::syncZone` starts with `if( !aZone->GetIsRuleArea() || !aZone->HasKeepoutParametersSet() ) return false;`. It then adds every triangle of the area's outline, on each of its copper layers, as a `SOLID` (`solid->SetNet( nullptr ); solid->SetParent( aZone ); ... solid->SetRoutable( false ); aWorld->Add( std::move( solid ) );`).
@@ -46,6 +50,8 @@ Scope, in priority order:
 - **Already known?** Only as "keepouts" in CODE-COMPARE :149/:160 ("IR has none of these", now false: the IR has rule areas, `is_rule_area` and the `keepout_*` flags). It is not in GAPS item 7, item 13 or the round-1 findings.
 
 ## R-3. A differential pair's fixed legs are not merged with the collinear track they continue (`TOPOLOGY::SimplifyLine`) (MEDIUM)
+
+**Fixed** on task-r2-router: 525f28c4, 4ffb0afb (`Router::simplify_pair_legs`; the QA case `a_pair_continues_from_a_pair_of_tracks_..` now takes in the tracks its legs continue, as `SimplifyLine` does).
 
 - **What differs.**
   - KiCad: `pns_diff_pair_placer.cpp::DIFF_PAIR_PLACER::FixRoute` does `m_lastNode->Add( lineP ); m_lastNode->Add( lineN ); topo.SimplifyLine( &lineP ); topo.SimplifyLine( &lineN );`.
@@ -85,6 +91,8 @@ Scope, in priority order:
 
 ## R-6. Pair placer, Shove mode: a move whose head cannot be fitted or walked shows the pushed tracks back in place (LOW)
 
+**Fixed** on task-r2-router: 41b3c18e. One correction: the "failed `try_walk_dp`" return cannot happen -- KiCad's `tryWalkDp` always returns true (`bestScore > 0.0`), and so does the port; the early return that shows the bug is `routeHead`'s (`propagateDpHeadForces` out of steps), which the test reaches.
+
 - **What differs.**
   - Our side: `dp_placer.rs:707` `move_to` clears `shoved_lines` / `shoved_vias` (:714). `rh_shove_only` (:636) returns early at `if !ok { return false; }` and at the failed `try_walk_dp`, before it sets `shoved_lines` from the frame. The preview (`preview()`, :818) therefore draws no displacement for this move, although the springback stack (and `last_node = frame`) still has the pushes of the newest frame.
   - KiCad: `rhShoveOnly` sets `m_currentNode = m_shove->CurrentNode();` first. `Move` then does `m_lastNode = latestNode->Branch()` whatever `route()` returned, and the view is `CurrentNode()` (`m_lastNode`), so the pushed tracks stay pushed on screen.
@@ -94,6 +102,8 @@ Scope, in priority order:
 - **Already known?** No.
 
 ## R-7. Drag, Walk around mode: a position that cannot be walked shows the last good position; KiCad shows the track where it started (LOW, and a wrong doc claim)
+
+**Fixed** on task-r2-router: 6d750297, 7a3ebcea (Walk around restores the original line; Shove restores `draggedPostShove` before the optimizer; the PARITY Stage 14 sentence and the `restore_onto_frame` doc corrected).
 
 - **What differs.**
   - Our side: `dragger.rs:574-584` (`Dragger::drag`, "Restore last solution") shows `state.last_solution`, the last good walked preview. For Walk around mode, `restore_onto_frame` is skipped (:577), and its doc and PARITY Stage 14 say "Walk around mode is unchanged: its parent is the session's world, which `last_solution` already shows".
@@ -105,6 +115,8 @@ Scope, in priority order:
 - **Already known?** No.
 
 ## R-8. Connectivity's dangling test: KiCad's integer accuracy and integer `getMinDist` (LOW)
+
+**Fixed** on task-r2-router: 38e1e913 (`TestTrackEndpointDangling`'s integer accuracy, `SHAPE_SEGMENT` / `SHAPE_CIRCLE` point tests, the true `SHAPE_ARC`, `getMinDist` truncated).
 
 - **What differs.**
   - Our side: `crates/connectivity/src/dangling.rs:96-105` tests both ends with the f64 `half_width` as the accuracy. `min_dist_to_track` (:71) compares f64 distances. The arc case measures against the tessellation's chords (:64).

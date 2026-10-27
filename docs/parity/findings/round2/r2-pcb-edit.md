@@ -13,6 +13,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 ## Batch F (task-fix-f-editing) and the edit tool: findings
 
 ### R1 (high). Delete with a lone zone selected and the cursor inside one of its cutouts deletes the whole zone; KiCad removes only that cutout
+**Fixed** on task-r2-pcb-edit: fc9a579e (one undo step, a documented difference from 8303b2ad, PARITY-pcb section 55)
 - **What differs.** `EDIT_TOOL::DeleteItems` (`pcbnew/tools/edit_tool.cpp`), `case PCB_ZONE_T:`
   ```cpp
   // We process the zones special so that cutouts can be deleted when the delete
@@ -45,6 +46,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No (not in GAPS items 8, 13, 35 nor in round 1).
 
 ### R2 (high). Rotate turns a dimension's text the wrong way (dimensions with "Keep text aligned" off)
+**Fixed** on task-r2-pcb-edit: 8cce0125 (and GAPS 35 / PARITY 18 corrected)
 - **What differs.** `PCB_DIMENSION_BASE::Rotate` (`pcbnew/pcb_dimension.cpp`): `EDA_ANGLE newAngle = GetTextAngle() + aAngle; newAngle.Normalize(); SetTextAngle( newAngle );` with `aAngle` counter-clockwise (KiCad's angles).
   Ours: `rotate_dimension` (`crates/connectivity/src/dimension.rs:467-473`) does `dim.text_angle = (dim.text_angle + angle_millideg).rem_euclid(360_000)`, where `angle_millideg` is our clockwise-positive turn (`rotate_about` turns (1, 0) to (0, 1), the test at `dimension.rs:624` says "90 degrees clockwise"; the studio sends `angle_millideg: -turnCcw*1000`, `pcbTransform.ts`/`pcbCarry.ts`). But `Dimension::text_angle` is KiCad's counter-clockwise file angle: it is read from the label's `(at x y a)` (`crates/kicad/src/import_items.rs` `text_angle`) and written back as is (`compute_dimension_geometry` -> `pcb_items.rs:340`), and the kept-aligned angle is computed as `-angle_of(half)` (counter-clockwise, `dimension.rs:265`). A plain text does it the right way (`transform_text`: `t.angle - angle`, `crates/ops/src/pcb_transform.rs:459`); the dimension adds where it should subtract. Called from `transform_dimension` (`pcb_transform.rs:482-485`) for `rotate_items`, Move Exactly's turn and R while carrying.
   Only a dimension whose text is not kept aligned shows it (with `keep_text_aligned` the angle is recomputed from the crossbar). That is every dimension imported from a file without `(keep_text_aligned yes)` ("new format: default to keep text aligned off unless token is present", our importer too) and every leader.
@@ -53,48 +55,56 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No. (GAPS item 35 and PARITY section 18 still say "Rotate/Flip of a dimension" is not ported; it is, see R10.)
 
 ### R3 (high). A dimension's unit-dependent precision (V_VV .. V_VVVVV) is changed on the round trip
+**Fixed** on task-r2-pcb-edit: 8cce0125
 - **What differs.** `DIM_PRECISION` (`pcbnew/pcb_dimension.h`) has `X` .. `X_XXXXX` (0-5) and `V_VV` .. `V_VVVVV` (6-9), whose decimals depend on the units: `PCB_DIMENSION_BASE::GetValueText` `if( precision >= 6 ) { case INCH: precision = precision - 4; case MILS: precision = std::max( 0, precision - 7 ); case MM: precision = precision - 5; }` (labels "0.00 in / 0 mils / 0.0 mm" for V_VV). Ours reads 6-9 as `p - 4` (`crates/kicad/src/import_items.rs:327-331`, the inch count) and writes `d.precision` back (`crates/kicad/src/pcb_items.rs:289-293`): a `(precision 6)` mm dimension comes back as `(precision 2)` = X_XX, so KiCad shows 2 decimals where it showed 1 (and a mils one 2 where it showed 0).
 - **How to see it.** Import a board with `(dimension (type aligned) ... (format (units 2) (precision 6) ...))` and export it unchanged: KiCad's file says `(precision 6)`, ours `(precision 2)`; `kicad-cli pcb export svg` of the two shows "12.3" against "12.30". Test: `crates/kicad` round trip `a_unit_dependent_dimension_precision_survives_the_round_trip`: import then write, assert `(precision 6)`.
 - **Severity.** High by the brief's rule (KiCad reads a different precision back); the visible effect is the number of decimals.
 - **Already known?** In part: PARITY section 18 records the collapse to a flat count as a deliberate simplification, but not that it rewrites an imported board's precision.
 
 ### R4 (medium). Mirror skips footprint fields, points and tuning patterns
+**Fixed** on task-r2-pcb-edit: 8c0c6a33 (fields and points; text boxes, images and tuning patterns still not mirrored, PARITY 55)
 - **What differs.** `EDIT_TOOL::MirrorableItems` (`edit_tool.cpp:2643`) is `{ PCB_SHAPE_T, PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_ZONE_T, PCB_PAD_T, PCB_TRACE_T, PCB_ARC_T, PCB_VIA_T, PCB_GROUP_T, PCB_GENERATOR_T, PCB_POINT_T }`, and `EDIT_TOOL::Mirror` has `case PCB_FIELD_T: case PCB_TEXT_T: static_cast<PCB_TEXT*>( item )->Mirror( mirrorPoint, flipDirection );` (the position mirrored, the horizontal justification flipped at exactly 0 / 90 degrees), `case PCB_GENERATOR_T: ...->Mirror(...)`, `case PCB_POINT_T: ...->Mirror(...)`. Ours: `mirrorableIds` (`web/studio/src/kicad-port/pcbMirror.ts:77-91`) keeps only `track`, `via`, `zone`, `shape`, `text` (and opens groups), so a selected Reference/Value, a point or a tuning pattern is silently left alone (text boxes and images are the known PARITY section 39 gap). Slice B's B1 is the menu side of the same gap (no Mirror / Rotate submenu for these kinds).
 - **How to see it.** Select a footprint's Value text, Edit > Mirror Horizontally: KiCad moves nothing (a lone item mirrors about its own position) but flips its justification left/right; select the Value and a line: KiCad mirrors both about their centre, ours only the line. Test: `pcbMirror.test.ts` `a field and a point are mirrorable`: `planMirror(board, ["R1:Value", "pt_1", "shp_a"], c, "leftRight").cmds` has an `edit_board_field` (position, justify) for R1's Value and a move of the point.
 - **Severity.** Medium.
 - **Already known?** No (PARITY section 39 lists text boxes and images only).
 
 ### R5 (medium). Position Relative forgets its offsets, the polar box and the picked item between openings
+**Fixed** on task-r2-pcb-edit: f67d10a3
 - **What differs.** `POSITION_RELATIVE_TOOL::PositionRelative`: "The dialog is not modal and not deleted between calls." (`if( !m_dialog ) m_dialog = new DIALOG_POSITION_RELATIVE( editFrame ); m_dialog->Show( true );`; it is rebuilt only when the units changed). So the X/Y (or distance/angle) entries, the Polar coordinates box and `m_anchorItemPosition` (the item or point picked last time, used by `getAnchorPos()` for `ANCHOR_ITEM` and `ANCHOR_POINT`) are as the user left them. Ours keeps only the anchor type (`lastAnchorKind`, `web/studio/src/components/PcbParityDialogs.tsx:115`); `polar`, `a`, `b`, `pickedItem`, `pointX/Y` are `useState` defaults on every open (`:157-215`). Since `lastAnchorKind` is kept but the picked item is not, reopening on "Item" anchors at (0, 0) ("<none selected>") where KiCad anchors at the item picked before.
 - **How to see it.** Position Relative, Select Item... (pick U1), offset (5, 0), OK; select another part, Position Relative again, OK: KiCad puts it 5 mm right of U1 again; ours opens with 0, 0 and no item, and OK moves the part's anchor to (0, 0). Test: a dialog test `Position Relative reopens with the last offsets and the picked item`.
 - **Severity.** Medium (a wrong default; with "Item" kept it moves the selection to the origin).
 - **Already known?** No (round 1 F14 fixed `s_anchorType` and Move Exactly's memory only).
 
 ### R6 (low). R pressed right after M, before the pointer moves, turns about the selection's own reference point, not the grab point
+**Fixed** on task-r2-pcb-edit: df133408
 - **What differs.** `EDIT_TOOL::doMoveSelection`'s first event is the Move action itself (`evt->IsAction( &PCB_ACTIONS::move )` is in the motion branch), so dragging starts at once and the reference point is set before any motion: `m_cursor = grid.BestDragOrigin( originalMousePos, sel_items, ... ); ... selection.SetReferencePoint( dragOrigin );`. An R then turns about that anchor (the item anchor nearest the cursor: a pad, a line end). Ours: `tryTransformDuringMove` (`web/studio/src/actions/useActionRunner.ts:249-283`) uses `base.grabNm ?? base.pivotNm ?? rotationPivot(...)`; `grabNm` is set only by the first pointer move (`Canvas.tsx:1200`), so a press before any motion turns about `rotationPivot` (a lone item's position, or the snapped centre). The code comment says so ("Before the pointer has moved the grab point is not known yet").
 - **How to see it.** Hover over pad 2 of R1, press M, press R without moving the mouse: KiCad turns R1 about pad 2; we turn it about R1's origin. Test: `useActionRunner`/store test: with `moveOriginNm` on pad 2 and no `movePreview`, R gives an op whose pivot is pad 2 (`dragOriginFor(state, refs, moveOriginNm)`).
 - **Severity.** Low.
 - **Already known?** In the code comment only; not in PARITY or GAPS.
 
 ### R7 (low). A via-stitching area with vias follows the Vias row of the Selection Filter, not Other items (KiCad 10)
+**Fixed** on task-r2-pcb-edit: 900ef80b
 - **What differs.** `PCB_SELECTION_TOOL::itemPassesFilter` (both 8303b2ad and 25ec2335): `if( itemType == PCB_GENERATOR_T ) { if( GetItems().empty() ) { if( !m_filter.otherItems ) ... return false; } else { itemType = ( *GetItems().begin() )->Type(); } }`. A generator with members is filtered as its first member: a via stitch (`PCB_VIA_STITCH`, `AddItem( via )`) by `m_filter.vias`, a tuning pattern by `m_filter.tracks`. Ours: `filterAllows` (`web/studio/src/components/canvas/selectionCandidates.ts:122-125`) sends `via_stitch` to `otherItems` always, though `BoardViaStitch.member_ids` is known. (Round 1's "checked" line "barcodes and generators under Other items" is right only for an empty generator.)
 - **How to see it.** A via stitch with vias; untick Vias: KiCad no longer picks it, we do; untick Other items instead: KiCad still picks it, we do not. Test: `selectionCandidates.test.ts` `a via stitch with vias is gated by vias, an empty one by other items`.
 - **Severity.** Low.
 - **Already known?** No.
 
 ### R8 (low). The courtyard part of a footprint's box leaves out half the courtyard line width
+**Fixed** on task-r2-pcb-edit: de75bf1e
 - **What differs.** `FOOTPRINT::GetBoundingBox` merges each drawing's `GetBoundingBox()`, and `PCB_SHAPE`'s box is inflated by half its stroke width. Ours: `placed_courtyard_box` (`crates/model/src/footprint.rs:307-322`, 5066c1b1, the F3 fix) is the box of the courtyard outline points only; `footprintBox` (`web/studio/src/kicad-port/footprintBox.ts:41`) merges it as is (the art goes through `artBounds`, which does add `stroke_width / 2`). With the usual 0.05 mm courtyard line, the box is 0.025 mm short on each side where the courtyard is the outermost drawing, so Align and the pivot of several footprints are off by that.
 - **How to see it.** Two parts whose courtyard is their outermost drawing, Align Left: KiCad lines up the outer edges of the courtyard lines; we line up their centrelines, 0.025 mm apart from KiCad's. Test: `footprint.rs` `the courtyard box includes half the line width` (the header test with a 50 000 nm stroke: x0 = -1 795 000).
 - **Severity.** Low.
 - **Already known?** No (the F3 fix is otherwise right: off-centre courtyards now give KiCad's box).
 
 ### R9 (low). Swap Layers leaves tables (and their cells) on the old copper layer
+**Fixed** on task-r2-pcb-edit: dcacc7df (barcodes too)
 - **What differs.** `GLOBAL_EDIT_TOOL::SwapLayers` runs `swapBoardItem` over `Tracks()`, `Generators()`, `Zones()` and every item of `Drawings()`, which includes `PCB_TABLE`. Ours, `swap_layers` (`crates/ops/src/lib.rs:4202-4255`), maps tracks, zones, vias, shapes, texts, dimensions and `board_items`, not `dr.tables`.
 - **How to see it.** A table on F.Cu, Swap Layers F.Cu -> B.Cu: KiCad's table is on B.Cu; ours stays on F.Cu. Test: `swap_layers_moves_a_table`.
 - **Severity.** Low (a table on copper is rare).
 - **Already known?** No.
 
 ### R10 (low). Doc drift
+**Fixed** on task-r2-pcb-edit: 8cce0125 (docs, angle_of to the millidegree, extension height truncated)
 - GAPS item 35 ("Dimensions: ... Rotate/Flip of a dimension") and PARITY section 18 ("Rotate/Flip ... not ported -- no `Cmd::RotateDimension`/flip; `rotate_dimension` ... has no caller yet") are stale: `transform_dimension` (`crates/ops/src/pcb_transform.rs:479-505`) turns and flips dimensions through `rotate_items` / `flip_items`, with `PCB_DIM_ORTHOGONAL::Rotate`'s quarter-turn rule and `PCB_DIM_ALIGNED::Mirror` / `PCB_DIM_ORTHOGONAL::Mirror`'s height rule (both checked, they match), and R2's text-angle bug.
 - `rotate_dimension`'s doc and the aligned text angle: `angle_of` rounds to a whole degree (`dimension.rs:93-95`, `.round() as i64 * 1000`), so a kept-aligned label at 33.69 degrees is written at 34; KiCad recomputes it on load (`Update()`), so only our own canvas and the file's text differ. Cosmetic.
 - `extension_height`'s default is `Nm::kiround( arrow * sin 27.5 )` (`crates/model/src/ir.rs:2444`); KiCad's `static_cast<int>( m_arrowLength * s_arrowAngle.Sin() )` truncates (586 421 nm, ours 586 422). Cosmetic.
@@ -123,6 +133,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 ---
 
 ### A1 (high). A one-member group is dropped on import, Paste, Duplicate and Create Array. Batch F's premise is that such groups are kept.
+**Fixed** on task-r2-pcb-edit: 65f7c0b4
 - **What differs.** Batch F (52f2626d, 868d845f) made the board keep a group of one, as KiCad does. Its commit message says such a group is "kept after a delete since p6 F8, or read from a KiCad file". Four paths still drop it:
   - **Import:** `crates/kicad/src/import_items.rs:211-213` (`build_groups`): "A group of one is not a group, unless it is linked to a design block". The `Built::Dropped` arm hands the one member to the group above. The test `crates/kicad/src/pcb.rs:2888` asserts this ("a group of one item is dropped on the way in").
   - **Paste / Duplicate / Create Array:** `crates/ops/src/pcb_paste.rs:699-702` (`if member_ids.len() < 2 && ... { group_ids.push(None); continue; }`). Array copies go through `collect_copies` and this same landing code.
@@ -140,6 +151,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No. GAPS item 17 now says "a group of one dissolves" is gone. The schematic has the same rule in `crates/kicad/src/sch_import.rs:661` and `crates/kicad/src/sch_clipboard.rs:208` (`prune_groups`); that is outside this slice, but it is the same fix.
 
 ### A2 (high). Footprint Orientation in the Properties panel and in Footprint Properties is 180 degrees off for a footprint flipped in the studio
+**Fixed** on task-r2-pcb-edit: 181caa86
 - **What differs.**
   - The panel's Orientation row reads `fpOrientation = norm360(-(part.rot ?? 0))` (`web/kicad-port/pcbProperties.ts:340`, `:638`), and its setter rotates by the difference from that value (`:640-645`). `FootprintPropertiesDialog.tsx:92` and `:169` do the same.
   - The model keeps a back footprint mirrored in x with `rot` unchanged. A left-right flip does `rot = norm360(-rot)` (`crates/ops/src/pcb_transform.rs:316`).
@@ -155,6 +167,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No. Position Relative and Move Exactly may share the convention; they are outside this slice.
 
 ### A3 (medium). Text boxes, barcodes, reference images and tuning patterns are outside the group bookkeeping (`universe`)
+**Fixed** on task-r2-pcb-edit: c5ad8f0c
 - **What differs.** `universe()` (`crates/ops/src/pcb_groups.rs:42-57`) lists footprints, tracks, vias, zones, shapes, texts, dimensions, tables and groups. It leaves out `dr.barcodes`, `dr.board_items` (text boxes, reference images, points) and `dr.tuning_patterns`. Yet these can be group members: Ctrl+G does not check the ids, and the writer resolves them (`crates/kicad/src/pcb.rs:446-453` puts them in `written`). Three effects:
   1. **Drawing while a group is entered.** A text box, barcode or reference image drawn while a group is entered does not join it. `join_group` diffs `universe` before and after the command (`pcb_groups.rs:126-144`). KiCad's `BOARD_COMMIT::Push` does `if( enteredGroup && boardItem->IsGroupableType() && !boardItem->GetParentGroup() ) enteredGroup->AddItem( boardItem );`, and `BOARD_ITEM::IsGroupableType` (`pcbnew/board_item.cpp:41-66`) is true for `PCB_REFERENCE_IMAGE_T`, `PCB_TEXTBOX_T`, `PCB_GENERATOR_T` and `PCB_BARCODE_T`. Points (`PCB_POINT_T`) are not in that list.
   2. **Deleting a member.** A deleted text box or barcode stays a member id (`tidy_groups` diffs `universe`), so a group of {text box, line} still counts two members after the text box is gone.
@@ -166,6 +179,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### A4 (medium). Group Items does not lock the new group when a member is locked; the Group Properties dialog has no Locked box
+**Fixed** on task-r2-pcb-edit: 5211bccb
 - **What differs.**
   - KiCad's `pcb_group_tool.cpp::PCB_GROUP_TOOL::Group` locks the new group when any item in the selection is locked:
     ```cpp
@@ -183,6 +197,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### A5 (medium). Track & Via Properties and Shape Properties (`ItemPropertiesDialog.tsx`) lack fields KiCad's dialogs have, give a false reason, and edit only one item
+**Fixed** on task-r2-pcb-edit: 409c35da (in part: net, lock, ends, width, layer, via place and size over the selection; the via layer pair, mask and backdrill rows not yet)
 - **What differs.**
   - `PARITY-pcb.md` section 10 (lines 561-562) and the header of `web/components/ItemPropertiesDialog.tsx:1-9` say net, position and the via's layer span "stay read-only, matching source's own dialog", and that a shape's "Geometry itself has no dialog field in source either". The dialog's text says: "Net and layer span have no edit command yet, same as real KiCad's own dialog -- delete and redraw to change either." (`:157`). The track branch says "Net and layer have no edit command yet" (`:156`).
   - KiCad's `pcbnew/dialogs/dialog_track_via_properties.cpp` has a net selector (`m_netSelector`, `onNetSelector`), track start/end and via position binders (`m_trackStartX`, `m_viaX`, ...), the via's layer pair (`m_ViaStartLayer`, `m_ViaEndLayer`) and the via type.
@@ -196,6 +211,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No. GAPS has no Track/Via dialog row.
 
 ### A6 (low). The footprint's Properties panel rows differ from `FOOTPRINT_DESC`
+**Not fixed** on task-r2-pcb-edit: confirmed, left (PARITY-pcb section 55, "Not done")
 - **What differs.** KiCad's rows after Orientation (`pcbnew/footprint.cpp::FOOTPRINT_DESC`): Reference (writeable, `SetReference`); Library Link, Library Description, Keywords and Component Class under "Footprint Properties"; the four Attributes; then the Overrides: "Exempt From Courtyard Requirement", "Clearance Override", "Solderpaste Margin Override", "Solderpaste Margin Ratio Override" and "Zone Connection Style".
   - Ours (`pcbProperties.ts:647-700`) adds Value, MPN, Block and Nets, none of which KiCad has. `PARITY-pcb.md` section 23 names only "Component Type" as an extra.
   - Ours lacks Library Description, Keywords and Component Class.
@@ -206,6 +222,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** Reference read-only, yes (GAPS item 10 and item 26). The extra and missing rows, no.
 
 ### A7 (low). Validators KiCad does not have: a length of 0 is refused for track width, pad size, text size, rectangle side and circle radius
+**Not fixed** on task-r2-pcb-edit: confirmed, left -- the verbs refuse a zero size too, so the panel alone cannot take it (PARITY 55)
 - **What differs.**
   - KiCad registers these with no validator. Their grid cell is `PGPROPERTY_SIZE` (a `wxUIntProperty`, which only refuses negatives):
     - `PCB_TRACK` "Width": `PROPERTY<PCB_TRACK, int>( _HKI( "Width" ), &PCB_TRACK::SetWidth, &PCB_TRACK::GetWidth, PROPERTY_DISPLAY::PT_SIZE )`, no `SetValidator` (`pcb_track.cpp` ~3133);
@@ -220,6 +237,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### A8 (low). Via Type ignores the via's own type
+**Fixed** on task-r2-pcb-edit: 314071c3
 - **What differs.** The Via Type row works out Through, Blind or Buried from the span (`pcbProperties.ts:921-934`) and ignores `Via.type` (`web/api/types.ts:351`: `"blind" | "buried" | "micro"`). KiCad shows `GetViaType()`, and its `ENUM_MAP<VIATYPE>` includes `VIATYPE::MICROVIA, _HKI( "Micro" )` (`pcb_track.cpp:2878-2881`). So a microvia F.Cu-In1.Cu shows "Blind" here and "Micro" in KiCad.
 - **How to see it.** Place a microvia from the router and select it.
   - Test: `pcbProperties.test.ts` `a microvia's type is Micro`.
@@ -227,6 +245,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### A9 (low). Group Properties: a one-member result, and the library link check
+**Fixed** on task-r2-pcb-edit: 5211bccb (`LIB_ID::Parse( .., true )` never fails: no "Invalid library link" is ever shown)
 - **What differs.**
   - `CommonDialogs.tsx:57-58` selects nothing when the group is left with one member: `refs: dlg.members.length >= 2 ? [dlg.id] : []`, with the comment "a group left with fewer than two members is gone". Since 868d845f, `set_group` dissolves nothing (`drop_empty_groups`), so the group of one is still there. KiCad selects it (`m_toolMgr->RunAction<EDA_ITEM*>( ACTIONS::selectItem, m_group->AsEdaItem() )`).
   - The "Library link:" box: KiCad checks it with `libId.Parse( m_libraryLink->GetValue(), true ) >= 0`. `LIB_ID::Parse` with no colon takes the whole text as the item name and succeeds, and `aFix = true` repairs the item name with `FixIllegalChars` instead of failing. Ours (`check_design_block_id`, `crates/model/src/groups.rs`) refuses a text with no colon, an empty part, or a backslash, all with "Invalid library link: '...'".
@@ -235,6 +254,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### A10 (low). Doc drift after batch F's group changes
+**Fixed** on task-r2-pcb-edit: 65f7c0b4, 5211bccb, 409c35da
 - `web/studio/PARITY-pcb.md:784` ("a group left with fewer than two members dissolves and leaves the group above, which may dissolve in turn") and `:786` ("a group left with fewer than two dissolves"). Since 52f2626d and 868d845f, only an empty group goes, and only Remove Items applies the `< 2` rule. Same for the tests paragraph at `:801` ("deleting a member or a whole subtree leaves no group behind").
 - `PARITY-pcb.md:798`: "Create Array of a group | not done: a group id in the array's ids is skipped". Section 17 and GAPS 22 say groups are copied, and `array.rs` uses `collect_copies`. Round 1 F22 fixed GAPS 17 but missed this row.
 - `crates/ops/src/pcb_groups.rs:13` and `:27` (module doc) still say a group of fewer than two dissolves on delete.
@@ -243,6 +263,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Severity:** low.
 
 ### A11 (low). Group Items with members that share a group, and with pads
+**Fixed** on task-r2-pcb-edit: a652e367 (the pad/field filter; the backend verb's nesting is left and documented in GAPS 17)
 - **What differs.**
   - `GroupHost::make_group` puts the new group into the group its members shared, whether or not that group is entered (`crates/model/src/groups.rs`, the `shared` branch). KiCad's `PCB_GROUP_TOOL::Group` takes each member out of its group (`group->AddItem( eda_item )`, which `EDA_GROUP::AddItem` does) and adds the new group to the commit. Only `BOARD_COMMIT::Push`'s `enteredGroup->AddItem` nests it, and only when a group is entered. The studio wraps commands made inside an entered group in `in_group`, so the GUI agrees; the backend verb used by itself (`eda board`, agents) nests where KiCad would not.
   - KiCad's selection filter for Group removes pads and fields (`if( item->GetParentFootprint() ) aCollector.Remove( item );`) and then needs two or more items. `groupSelection` (`web/state/store.tsx:2463-2469`) sends any ids, a pad's included.
@@ -275,6 +296,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 
 
 ## B1 (medium). The context menu's selection summary does not count fields, text boxes, barcodes, points, reference images or generators. Net Inspection Tools shows for them, and Mirror / Rotate does not
+**Fixed** on task-r2-pcb-edit: 8c0c6a33
 - **What differs.** `summarizePcbSelection` (`web/kicad-port/pcbSelectionSummary.ts:52-115`) has a `switch (kind)` with cases for part, pad, track, via, zone, shape, text, dimension, tablecell, table and group only. `itemKind` (`web/kicad-port/pcbItems.ts:59-80`) also returns `"field"` (a footprint's Reference, Value or user field) and the extra kinds (text box, image, point, barcode, `via_stitch`). Those kinds raise `s.total` and nothing else. The menu's conditions then read the type counts (`web/kicad-port/pcbContextMenu.ts:159-200` `count`, `hasTypes`, `onlyTypes`):
   - **Net Inspection Tools.** `showNetMenu` (`pcbContextMenu.ts:794`) is `s.total > 0 && s.footprints === 0 && s.texts === 0 && ... && <all shapes copper>`, so it is true for a lone field, text box, barcode, point or image. KiCad's `BOARD_INSPECTION_TOOL::Init` `showNetMenuFunc` accepts only these types and returns false for everything else:
     ```cpp
@@ -291,6 +313,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No. GAPS 16 and PARITY section 7 do not mention it (the summary predates P16i's item kinds).
 
 ## B2 (medium). Copy as Text on the board: the menu leaves out fields, text boxes, tables and cells, the action copies only texts and dimensions, and it copies the raw text, not the shown text
+**Fixed** on task-r2-pcb-edit: 8c0c6a33
 - **What differs.** The menu entry's condition is `COPY_AS_TEXT_TYPES = ["text", "dimension"]` (`web/kicad-port/pcbContextMenu.ts:218`, used at `:747`). KiCad's `canCopyAsText` (`EDIT_TOOL::Init`) is `NotEmpty && OnlyTypes( { PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_DIM_ALIGNED_T, PCB_DIM_LEADER_T, PCB_DIM_CENTER_T, PCB_DIM_RADIAL_T, PCB_DIM_ORTHOGONAL_T, PCB_TABLE_T, PCB_TABLECELL_T } )`.
   The action (`web/actions/useActionRunner.ts:1616-1631`) maps each id to `api.textById(id)?.content ?? api.dimensionById(id)?.text`. It does not take a field, a text box, a table cell or a table, and it copies the stored text. `EDIT_TOOL::copyToClipboardAsText` (`edit_tool.cpp:3775`) does this instead:
   ```cpp
@@ -304,24 +327,28 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ## B3 (low). Net Inspector: Name and Netclass sort by `localeCompare`, not `ValueStringCompare`
+**Fixed** on task-r2-pcb-edit: 9478d19a (ValueStringCompare ported whole)
 - **What differs.** `netInspectorRows` (`web/kicad-port/netInspector.ts:96-101`) compares text columns with `String(x).localeCompare(String(y))`. KiCad's data model `compareItems` (`pcbnew/widgets/pcb_net_inspector_panel_data_model.h`, `COLUMN_NAME` / `COLUMN_NETCLASS`) uses `ValueStringCompare( s1, s2 )` (`common/string_utils.cpp:1158`). That function splits off the trailing number and compares it as a number (`strFWordMid.ToCDouble( &lFirstNumber )`), so NET2 sorts before NET10. With `localeCompare`, "NET10" sorts before "NET2". Equal values: KiCad breaks the tie by item pointer, we break it by name (harmless).
 - **How to see it.** Nets `D2` and `D10`, sorted by Name: KiCad gives D2, D10; we give D10, D2. Test: `netInspector.test.ts`, `names sort by their numbers as ValueStringCompare does`, asserting `netInspectorRows([D10, D2], opts).map(r => r.name)` equals `["D2", "D10"]`.
 - **Severity.** Low: the order on screen.
 - **Already known?** No.
 
 ## B4 (low). Net Inspector: "Filter by Netclass" matches the human-readable class name; KiCad matches `NETCLASS::GetName()`
+**Fixed** on task-r2-pcb-edit: 9478d19a (multi-class nets; a single class completed by Default keeps its name, PARITY 55)
 - **What differs.** `netShown` (`web/kicad-port/netInspector.ts:87`) tests `row.netclass` (the column text, `GetHumanReadableName`: "A and B"). `PCB_NET_INSPECTOR_PANEL::netFilterMatches` tests `const wxString netClassName = UnescapeString( netClass->GetName() ).Upper();`. For a net that one class claims, the two are the same. For a net that several classes claim, `NET_SETTINGS::GetEffectiveNetClass` names the class `name.Printf( "Effective for net: %s", aNetName )` (`common/project/net_settings.cpp:827`). In KiCad, a filter on "A" does not find that net through its class (it may still match by net name), and a filter on "EFFECTIVE" finds every multi-class net.
 - **How to see it.** Classes A and B both claim net `X`, the filter is "AND", Filter by Net Name is off: we list X ("A and B"); KiCad lists nothing. Test: `netInspector.test.ts`, `the netclass filter reads the effective class's name`.
 - **Severity.** Low: a KiCad quirk. Copy it or record it as a deliberate difference.
 - **Already known?** No.
 
 ## B5 (low). Net Inspector report: rows in the on-screen sort, not the model's net-code order
+**Fixed** on task-r2-pcb-edit: 9478d19a
 - **What differs.** The dialog passes `shown` (sorted by the chosen column) to `netInspectorReport` (`web/components/NetInspectorDialog.tsx:110`). KiCad's `generateReport` walks `m_dataModel->itemAt( row )` for `row < itemCount()`, which is `m_items`, the model's own list (filled by `addItems` / `addItem`). That list does not follow the view's sort. The header and the cell formats match.
 - **How to see it.** Sort by Total Length descending and save the report. KiCad's rows stay in model order; ours follow the screen. Test: none needed beyond a note. This is about where the rows come from, not the CSV format.
 - **Severity.** Low.
 - **Already known?** No.
 
 ## B6 (low). Appearance net names: a colour saved under both the old and the new name of a net; duplicate hidden nets
+**Fixed** on task-r2-pcb-edit: 1be774be
 - **What differs.** `with_board_net_names` (`crates/kicad/src/appearance.rs:169-195`, e1a3c2b5) rebuilds `net_colors` by renaming every key through a `Map` collect. If the file holds both `"FB"` (the intent's name) and `"/FB"` (the board's name), both keys become `/FB`, and whichever comes last in the map's order wins. The serde `Map` is ordered, `"/FB" < "FB"`, so the stale `FB` colour overwrites the newer `/FB` one. `hidden_nets` can likewise end up with `"/FB"` twice. KiCad has no counterpart: it stores colours by net name only (`net_settings.net_colors`). In normal use the studio's GET renames the keys and a POST then replaces the whole `project` section (`crates/cli/src/appearance_api.rs:72-79`), so the two names seldom coexist. It can happen when the file was written by an older studio after the rename.
 - **How to see it.** Unit test in `appearance.rs`: `a colour under the board's name wins over one left under the intent's`. Input `{"project":{"net_colors":{"FB":"rgb(1,1,1)","/FB":"rgb(2,2,2)"}}}` with intent `/FB` ↔ `FB`; assert that `/FB` is `rgb(2,2,2)` and that `hidden_nets` has no duplicates.
 - **Severity.** Low.
@@ -374,6 +401,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 ## High
 
 ### C1. Rotate by a non-quarter angle drops a rounded rectangle's corner radius
+**Fixed** on task-r2-pcb-edit: 81948dba (confirmed: `EDA_SHAPE::rotate` makes the polygon of the ROUNDRECT)
 - **What differs.** `EDA_SHAPE::rotate` (`common/eda_shape.cpp:966-981`) turns a rectangle that is not turned by a cardinal angle into the polygon of its *rounded* rectangle:
   ```cpp
   case SHAPE_T::RECTANGLE:
@@ -393,6 +421,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No. Round 1 noted "no `gr_rect` corner radius in the IR" (since added by batch B/C, `1bb6f8c0`); the rotate path was not updated.
 
 ### C2. Cut deletes items that the Copy did not put on the clipboard; Copy of a field, barcode, point, text box or image fails the whole copy; Copy of a pad copies its whole footprint
+**Fixed** on task-r2-pcb-edit: 9ef2e1a8
 - **What differs.**
   - `EDIT_TOOL::cutToClipboard` (`pcbnew/tools/edit_tool.cpp:3869`) deletes "exactly that; no more, no fewer" of what `copyToClipboard` put on the clipboard (`Remove` with `REMOVE_FLAGS::CUT`). `CLIPBOARD_IO::SaveSelection` (`pcbnew/kicad_clipboard.cpp:340-440`) writes every `BOARD_ITEM`: a `PCB_FIELD` becomes a free `PCB_TEXT` with the field's text (`copy = new PCB_TEXT( m_board ); ... textItem->SetText( field->GetText() )`), a pad becomes a new footprint holding just that pad (`if( copy->Type() == PCB_FIELD_T || copy->Type() == PCB_PAD_T ) { FOOTPRINT* footprint = new FOOTPRINT( m_board ); ... footprint->Add( copy ); }`), barcodes, points, text boxes, images and tables are `Clone()`d. `copyToClipboard`'s `RequestSelection` filter has no `FilterCollectorForFreePads` (`edit_tool.cpp:3723-3731`), so a selected pad is copied as a pad.
   - Ours: `Picked::add_item` (`crates/kicad/src/clipboard.rs:131-154`) knows footprints, tracks, vias, zones, shapes, texts and dimensions only; any other id fails the whole copy with `clipboard.unknown_item` ("no placed part, track, via, zone, shape, text, dimension or group with this id"). `copySelection` (`web/state/store.tsx:2515-2530`) toasts the error and returns normally, and Cut (`web/actions/useActionRunner.ts:332-338`) is `api.copySelection(refs).then(() => deleteRefs(refs))`: the delete runs even when nothing reached the clipboard. `copySelection` runs `editableSelection` (`web/kicad-port/pcbTransform.ts:72`), which turns a pad into its footprint, so Copy of one pad copies the whole footprint (a second footprint under a new reference on Paste).
@@ -401,6 +430,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** Only in part: PARITY section 39 lists "Duplicate, Paste, Create Array and Mirror of a text box or an image" and GAPS item 24 (line 662) Copy of tables. Not listed: fields, barcodes and points on the clipboard (batch F added them to Duplicate only, `38f95a64`), a pad copied as its footprint, and Cut deleting after a failed copy.
 
 ### C3. Edit Track & Via Properties' "Set to net class / custom rule values" ignores custom rules and diff-pair widths, and sets a width KiCad leaves alone
+**Fixed** on task-r2-pcb-edit: 4090011e
 - **What differs.** `DIALOG_GLOBAL_EDIT_TRACKS_AND_VIAS::processItem`'s else arm is `m_parent->SetTrackSegmentWidth( aItem, aUndoList, true )`, and `PCB_EDIT_FRAME::SetTrackSegmentWidth` (`pcbnew/edit_track_width.cpp:34-60`) with `aUseDesignRules` reads the DRC engine:
   ```cpp
   MINOPTMAX<int> constraint = aItem->GetWidthConstraint();
@@ -419,6 +449,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 ## Medium
 
 ### C4. Flip leaves an item on a front/back user layer where it is; KiCad moves it to the paired layer
+**Fixed** on task-r2-pcb-edit: b5e0d278 (board items; a footprint's own drawings on user layers not yet)
 - **What differs.** Every item's `Flip` calls `GetBoard()->FlipLayer( GetLayer() )` (`pcb_shape.cpp:581`, `pcb_text.cpp:486`, `pcb_track.cpp:1136`, `zone.cpp:1114`, `footprint.cpp:2983`, ...), which is `m_layers[...].m_opposite` (`pcbnew/board.cpp:930-933`). `BOARD::recalcOpposites` (`board.cpp:869-926`) pairs user layers typed `front`/`back`: first by the name after the first dot ("Match up similary-named front/back user layers"), then consecutive `User.n` (front) / `User.n+1` (back) pairs with custom names.
   Ours: `flip_layer` (`crates/ops/src/pcb_transform.rs:83-102`) maps the seven fixed technical pairs and the inner copper only; a `User.*` layer always stays. The IR has the types (`LayerType::Front | Back`, `crates/model/src/layers.rs:131-142`, whose doc says such a layer "does" flip, and `crates/kicad/src/pcb.rs:579` writes them), so a board with `User.1 "F.Assembly" front` and `User.2 "B.Assembly" back` flips its assembly drawings in KiCad and not here (same for footprint art flipped through `fp_edit.rs:350,367`, `pcb_items.rs:511,521`, `pcb_tables.rs:165`).
 - **How to see it.** Board Setup > Board Editor Layers: User.1 named `F.Notes` type front, User.2 `B.Notes` type back; draw a line on User.1, F: KiCad puts it on User.2; we keep User.1. Test: `pcb_transform_tests.rs` `flip_takes_a_front_user_layer_to_its_back_pair` (layer setup with the two types; `FlipItems` on a line on `User.1`; assert its layer is `User.2`).
@@ -426,6 +457,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### C5. Pad Properties refuses a plated pad whose hole reaches the pad's edge; KiCad warns and accepts it, in other words
+**Fixed** on task-r2-pcb-edit: ace7d6c3
 - **What differs.** `DIALOG_PAD_PROPERTIES::padValuesOK` (`pcbnew/dialogs/dialog_pad_properties.cpp`) only blocks OK on `DRCE_PADSTACK_INVALID` and `DRCE_PAD_TH_WITH_NO_HOLE`; `DRCE_PADSTACK` messages are prefixed `_( "Warning: " )` and shown, and OK goes through (`return error_msgs.GetCount() == 0;`). `PAD::doCheckPad` (`pcbnew/pad.cpp:2987-3009`) reports `_( "(PTH pad hole leaves no copper)" )` when the copper minus the hole is empty, and with `aForPadProperties` `_( "(PTH pad hole not fully inside copper)" )` when the hole pokes out -- both `DRCE_PADSTACK` (warnings). The only size error besides "(Pad must have a positive size)" is `_( "(PTH pad hole size must be larger than %s)" )` for a hole of 4 nm or less.
   Ours, `web/kicad-port/fpFields.ts:205` (`checkPadValues`): `if (pad.kind === "through_hole" && (hw >= pw || hh >= ph)) return \`Error: (PTH pad hole leaves no copper): the ${...} hole is as big as the pad.\`` -- an error, so the dialog refuses, with a sentence KiCad does not have, for a hole that merely reaches the edge along one axis (KiCad: a warning, or nothing when copper remains all round). Also `"Corner radius ratio must be between 0 and 50%."` and `"Solder paste ratio must be between -50% and 100%."` (`:208-209`) are not KiCad's: KiCad clamps the corner ratio in `onCornerSizePercentChange` and has no such messages.
 - **How to see it.** A 2 x 1 mm rectangular PTH pad, drill 1.2 mm, OK: KiCad shows "Warning: (PTH pad hole not fully inside copper)" and applies; we refuse. A 1 mm round pad with a 1 mm hole: KiCad "Warning: (PTH pad hole leaves no copper)" and applies; we refuse. Test: `fpFields.test.ts` `a hole wider than the pad is a warning, not an error` (`checkPadValues({kind:"through_hole", shape:"rect", size:[2e6,1e6], drill:1.2e6}, fmt)` returns no error; a new warnings list holds `"Warning: (PTH pad hole not fully inside copper)"`).
@@ -433,6 +465,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### C6. Escape in a drawing tool with a shape started leaves the tool; KiCad cancels the shape and keeps the tool
+**Fixed** on task-r2-pcb-edit: 68e1c0f0
 - **What differs.** `DRAWING_TOOL::drawShape` (`pcbnew/tools/drawing_tool.cpp`, the `IsCancelInteractive()` branch):
   ```cpp
   if( evt->IsCancelInteractive() || ( started && evt->IsAction( &ACTIONS::undo ) ) )
@@ -455,6 +488,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### C7. Paste of plain text: trimmed, and 1 mm / 0.15 mm where KiCad's text is 1.27 mm with a default pen
+**Fixed** on task-r2-pcb-edit: e58280fc
 - **What differs.** `PCB_CONTROL::Paste` (`pcbnew/tools/pcb_control.cpp:1185-1206`): "If it wasn't content, then paste as a text object": `item->SetText( clipText ); item->SetLayer( m_frame->GetActiveLayer() );` -- the text as it is, the `EDA_TEXT` defaults (`common/eda_text.cpp:107`: `Mils2IU( DEFAULT_SIZE_TEXT )`, `DEFAULT_SIZE_TEXT 50` mils = 1.27 mm; `TEXT_ATTRIBUTES` `m_StrokeWidth( 0 )`), no `StyleFromSettings`; longer than `m_MaxPastedTextLength` asks "Pasting a long text text string may be very slow.  Do you want to continue?"; the commit is "Paste Text" and the item is carried by `placeBoardItems`.
   Ours, `web/state/store.tsx:2543-2544`: `content: system.trim()`, `size_nm: 1_000_000`, `stroke_width: 150_000`, layer `activeLayerName(st.activeLayer, "F.SilkS")`; no long-text question.
 - **How to see it.** Copy "  hello\n" from another program, Ctrl+V on the board: KiCad's text is "  hello\n" (two lines), 1.27 mm high; ours "hello", 1 mm. Test: `store` test `a plain-text paste is the clipboard text as is, 1.27 mm`.
@@ -464,6 +498,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 ## Low
 
 ### C8. Footprint Properties: a new field is `Field2` (KiCad `Field4`); duplicate and reserved names are refused where KiCad refuses neither
+**Fixed** on task-r2-pcb-edit: 61f6e14a (the name refusals stay, a documented difference)
 - **What differs.** `DIALOG_FOOTPRINT_PROPERTIES::OnAddField` names the field `GetUserFieldName( m_fields->size(), DO_TRANSLATE )` ("Field%d"), and `m_fields` holds the four mandatory fields (Reference, Value, Datasheet, Description), so the first is `Field4`; `OnDeleteField` says `"The first %d fields are mandatory."` with 4. `Validate` (`dialog_footprint_properties.cpp:395-500`) checks only an empty name and the sizes; no uniqueness or reserved-name check.
   Ours: `newFieldName(rs.map(...), rs.length)` with two mandatory rows (`web/components/FootprintPropertiesDialog.tsx:345`, `web/kicad-port/fpFields.ts:176-184`, whose own comment says "`Field4`, `Field5` ..."), and it skips names already used; `submit` refuses `"\"${r.name}\" is the name of a mandatory field."` and `"There are two fields called \"${r.name}\"."` (`FootprintPropertiesDialog.tsx:144-145`), and the delete button's tooltip is "The first two fields are mandatory.". (The refusals may be needed by our name-keyed fields; then they are a documented difference, not identical as PARITY section 26 says.)
 - **How to see it.** Open Footprint Properties on R1, Add Field: KiCad's row is `Field4`; ours `Field2`. Test: `fpFields.test.ts` `the first added field is Field4`.
@@ -471,6 +506,7 @@ Four parts: R (batch F and the edit tool, dimensions, Swap Layers), A (Propertie
 - **Already known?** No.
 
 ### C9. GuessSelectionCandidates' silk and courtyard preferences: not ported, for a reason that no longer holds
+**Fixed** on task-r2-pcb-edit: 7c3e8e72
 - **What differs.** `PCB_SELECTION_TOOL::GuessSelectionCandidates` first prefers, with a silk layer active, "single-layer items on *either* silk layer" (`PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_TABLE_T, PCB_TABLECELL_T, PCB_SHAPE_T, PCB_BARCODE_T`), and with a courtyard layer active in high contrast, footprints. Ours (`web/kicad-port/selection.ts:159-195`) starts at the slop pass. PARITY section 3 says "no distinct silk-text item type in this app's model to special-case": fields, texts, shapes, text boxes and barcodes on F/B.SilkS are all items now.
 - **How to see it.** Active layer F.SilkS, click where a footprint's Reference overlaps one of its pads: KiCad picks the Reference; ours the smaller pad. Test: `selection.test.ts` `a silk layer in front prefers silk items`.
 - **Severity.** low.

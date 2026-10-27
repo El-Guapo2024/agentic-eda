@@ -72,6 +72,8 @@ The results are in `/tmp/findings-r2-board-io.eUqB/rt/<board>/{diff.txt,diff2.tx
 
 **Already known?** No. PARITY-pcb mentions 20241229 only for the clipboard.
 
+**Fixed** on task-r2-board-io: fe661733. The version is decided from 25ec2335's gates: KiCad refuses a newer file outright (`checkVersion`), so a board stays KiCad 9's 20241229 (which KiCad 9 opens) unless the setup holds the vias' covering/plugging/capping/filling defaults; then it is 20250228, the first version whose vias inherit them, and the only other gate in between (20250210's stroked fill) is off by our `(filled_areas_thickness no)`. The later gates are met on reading, as bold text and the library frame already were: a version past 20260616 would have every footprint read in its library frame. The image scale is held as KiCad 10 holds it (an older file's PNG scaled by `GetPPI / GetLegacyPPI`) and written as the scale a 20241229 file must say. Both proposed slow tests are in `crates/kicad/tests/board_io_round2.rs`. Left: a KiCad 10 board with no such setup still gets explicit `no` tokens on its vias in kicad-cli's rewrite of our file (same meaning, the board's defaults are off); a `thieving` zone would still make an unreadable 20241229 file.
+
 ### F2. A track or arc with solder mask (`(layers "B.Cu" "B.Mask")`) is moved to F.Cu and loses its mask. A copper shape with mask is moved to Cmts.User. **high**
 
 **What differs.**
@@ -97,6 +99,8 @@ The results are in `/tmp/findings-r2-board-io.eUqB/rt/<board>/{diff.txt,diff2.tx
 
 **Already known?** No.
 
+**Fixed** on task-r2-board-io: 9bdc41ee (`DrawingsSection::track_masks`, `ShapeStyle::solder_mask`).
+
 ### F3. A through-hole pad's layers are rebuilt as `*.Cu *.Mask`: paste is lost and a one-sided mask becomes two-sided. An edge-connector (`connect`) pad always gets mask on both sides. **high**
 
 **What differs.**
@@ -112,6 +116,8 @@ The results are in `/tmp/findings-r2-board-io.eUqB/rt/<board>/{diff.txt,diff2.tx
 - Test to write: `a_through_hole_pad_keeps_its_paste_and_one_sided_mask`. A board with `(pad "1" thru_hole circle .. (layers "*.Cu" "F.Mask" "*.Paste"))` and `(pad "2" connect rect .. (layers "F.Cu" "F.Mask"))`. Assert both `(layers ..)` round-trip unchanged.
 
 **Already known?** No. Batch B fixed SMD pads on `*.Cu` and paste-only pads (p22 F2, p7-p8 F2) only.
+
+**Fixed** on task-r2-board-io: edf41198 (`PadMaskInfo::hole_tech_layers`). F18's point on installed THT footprints is not addressed.
 
 ### F4. The footprint attribute `allow_soldermask_bridges` is read but never written: kicad-cli then reports solder-mask bridges that the original does not have. **high**
 
@@ -133,6 +139,8 @@ The flag is also lost on `stonehenge`, `teardrop_elongated_pad`, `teardrop_issue
 Test to write: `allow_soldermask_bridges_survives_export`. Input: `(footprint "X" .. (attr smd allow_soldermask_bridges) ..)`. Assert the export contains `(attr smd allow_soldermask_bridges)`.
 
 **Already known?** No.
+
+**Fixed** on task-r2-board-io: b8b2074e (also reads `allow_solder_mask_bridges`).
 
 ### F5. Legacy `ki_description` and `ki_keywords` properties are passed through into a newer file: KiCad reads them as visible user fields, and the Description field comes back empty. **high**
 
@@ -157,6 +165,8 @@ Test to write: `legacy_ki_properties_become_the_description_field`. Input: a 202
 
 **Already known?** No. `fp_fields.rs:280` handles the field side correctly; the raw token copy is the leak.
 
+**Fixed** on task-r2-board-io: 2dfac914 (the legacy Datasheet and Description are hidden fields at the origin on the side's Fab layer too).
+
 ### F6. A mask-only NPTH (mounting hole) loses its solder-mask margin, zone connection and any other tokens, and is always written `(layers "*.Mask")`. **high**
 
 **What differs.**
@@ -172,7 +182,10 @@ Test to write: `legacy_ki_properties_become_the_description_field`. Input: a 202
 
 **Already known?** GAPS item 27 says the hole "is kept and written". The margin and layer loss are not listed.
 
+**Fixed** on task-r2-board-io: 02881e44 (`FootprintHole::layers`, `tokens`).
+
 ### F7. A group of one item is dropped, so a placement rule area names a group that is no longer there. A group's `(locked yes)` is always lost. **high / medium**
+**Fixed** on task-r2-pcb-edit: 65f7c0b4 (a group of one kept), 40c2df39 (the lock read back; slow test on issue22983)
 
 **What differs.**
 - `import_items.rs:211-212`:
@@ -214,6 +227,8 @@ Test to write: `an_unfilled_zone_is_written_unfilled`. Assert `(fill (thermal_ga
 
 **Already known?** No.
 
+**Fixed** on task-r2-board-io: 0ba86666, 13cd27f4, 413505ff. `IsFilled` turned out to be a flag of its own: besides the unfilled zones, seven boards have zones filled with nothing (`(fill yes)`, no polygons) and `issue14559` has 339 zones with rings that say they are not filled; both are kept (`ZoneEntry::unfilled`, the scan's empty marker).
+
 ### F9. A footprint with no `(attr ..)` gets one made up from its pads (`smd` or `through_hole`). KiCad leaves it "unspecified". **medium**
 
 **What differs.**
@@ -228,6 +243,8 @@ Test to write: `an_unfilled_zone_is_written_unfilled`. Assert `(fill (thermal_ga
 - Test to write: `no_attr_means_no_attr`. A 20240108 footprint with no `(attr)` exports with no `(attr` line.
 
 **Already known?** No.
+
+**Fixed** on task-r2-board-io: 6d750a0a.
 
 ### F10. Legacy `(pcbplotparams (viasonmask true))` is not turned into via tenting off. **medium**
 
@@ -249,7 +266,11 @@ Test to write: `viasonmask_true_untents_the_vias`.
 
 **Already known?** No.
 
+**Fixed** on task-r2-board-io: 8362a852.
+
 ### F11. The board's plot settings are thrown away and written as fixed defaults. **medium**
+
+**Fixed** on task-r2-editors-exports: 7b1553b1 (as r2-editors-exports X3: `eda_model::plot_params`, the layer selection decoded by the file's version, every other item kept; `pcbplotparams_survive_import_and_write` asserts `outputdirectory` and `useauxorigin` among others).
 
 **What differs.**
 - `pcb.rs:147-160` and on write a fixed `(pcbplotparams (layerselection 0x00010fc_ffffffff) ... (svgprecision 4) ...)`. Nothing is read from the file.
@@ -271,6 +292,8 @@ Test to write: `plot_params_round_trip`. Read `(pcbplotparams (outputdirectory "
 
 **Already known?** Not listed. Batch A's notes say "a footprint read from a file keeps the sheet the file named", but the path is replaced anyway.
 
+**Not a bug** (judged on task-r2-board-io): the path rewrite is by design, `design.json` is the only source of truth and the derived `.kicad_sch` is the project's schematic (`docs/ARCHITECTURE.md` "Source of truth", batch A). Pairing the `.kicad_sch` beside the board would run Replace Schematic (a netlist update) on import, which KiCad's Open Project does not do; logged in GAPS item 28.
+
 ### F13. A footprint with an empty Reference is renamed `FP<n>`, and its Reference and Value texts are re-laid out. **medium**
 
 **What differs.** `import.rs:1571` and `:2288`: `footprint_field(fp, "Reference").filter(|s| !s.is_empty()).unwrap_or_else(|| format!("FP{}", idx + 1))`. The export writes Reference and Value as `"FP1"`, at default places and sizes (`(at 0 -1.8)`, 1 mm, 0.15 mm thick), instead of the file's `""` at `(0 0)`, 1.27 mm.
@@ -279,7 +302,10 @@ Test to write: `plot_params_round_trip`. Read `(pcbplotparams (outputdirectory "
 
 **Already known?** No.
 
+**Fixed** on task-r2-board-io: 998db6fe (the four boards' footprints have no Reference at all; KiCad's constructor gives them an empty one, which is now written; the id in the design stays `FP<n>`).
+
 ### F14. A footprint's own groups are dropped, and a board group loses its tuning pattern member. **medium**
+**Fixed** on task-r2-pcb-edit: 40c2df39 (slow test on issue14559 through kicad-cli)
 
 **What differs.**
 - `import.rs:1718` lists `"group"` among the footprint children it owns (`OWN`), but no reader takes it in, so `(footprint .. (group "" (members ..)))` is lost. Seen on `issue14559` `ICON101`, two groups.
@@ -300,6 +326,8 @@ Test to write: `plot_params_round_trip`. Read `(pcbplotparams (outputdirectory "
 - KiCad's `formatPrimitives` writes `(fill yes|no)` for rectangles, including the proxy one.
 - `issue14559`: `J1001` and others go from `(gr_bbox .. (fill no))` to `(fill yes)`.
 
+**Fixed** on task-r2-board-io: 6652c0b3.
+
 ### F17. Smaller losses. **low**
 
 - A footprint-level `(zone_connect 0)` on a padless footprint (a logo: `issue14549` `Logo1`).
@@ -307,6 +335,8 @@ Test to write: `plot_params_round_trip`. Read `(pcbplotparams (outputdirectory "
 - A stackup `addsublayer` (`zone_filler`).
 - The board's enabled technical layers: every Adhes, Paste, Mask, SilkS and Fab layer is written even when the original had them off (`issue18839`, `issue14130`).
 - A tuning pattern's `target_length` of 1000000 mm (the "unconstrained" value of the skew patterns in 25ec2335 `test_proj`, `diff_pair_uncoupled_tuning_drc`, `multichannel_nested`) is clamped to 2147.483637 mm. KiCad keeps a `long long` (`pcb_tuning_pattern.cpp`: `long long int val; aProps.get_to_iu( "target_length", val )`).
+
+**Partly fixed** on task-r2-board-io: 0187d49a (the target length clamp). The rest is open.
 
 ### F18. Note on the R6 change (installed footprints carried whole). **low (design note)**
 
