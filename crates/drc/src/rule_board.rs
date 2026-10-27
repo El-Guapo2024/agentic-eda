@@ -327,7 +327,7 @@ impl<'a> RuleBoard<'a> {
         // `FOOTPRINT::GetOrientationDegrees`: KiCad's angle, counter-clockwise in (-180, 180], not the model's clockwise `rot` (R6-D1).
         it.set("Orientation", Prop::Double(crate::board::kicad_footprint_orientation(self.design, fp) as f64 / 1000.0));
             it.set("Layer", Prop::Layer(side_layer.to_string()));
-            it.set("Locked", Prop::Bool(false));
+            it.set("Locked", Prop::Bool(self.is_locked(&fp.id)));
             if let Some(e) = extra {
                 if let Some(c) = e.clearance {
                     it.overrides.clearance = Some((c, format!("footprint {}", fp.id)));
@@ -457,7 +457,7 @@ impl<'a> RuleBoard<'a> {
         // `PAD::GetOrientationDegrees`: `orientation_mdeg` is already KiCad's, in [0, 360) (R6-D1).
         it.set("Orientation", Prop::Double(p.orientation_mdeg as f64 / 1000.0));
         it.set("Net", Prop::Enum(net.clone()));
-        it.set("Locked", Prop::Bool(false));
+        // (no "Locked": `pad.cpp` masks it, `propMgr.Mask( TYPE_HASH( PAD ), TYPE_HASH( BOARD_ITEM ), _HKI( "Locked" ) )`, R6-D7)
         it.set("Layer", Prop::Layer(layers.first().cloned().unwrap_or_default()));
         if let Some(d) = p.drill_round {
             it.set("Hole Size X", Prop::Int(d.get()));
@@ -488,6 +488,11 @@ impl<'a> RuleBoard<'a> {
 
     // ---------------------------------------------------------------------------------------------------------------------------------- tracks
 
+    /// `BOARD_ITEM::IsLocked`, the "Locked" property of a footprint, track or via (R6-D7): the item is in the design's locked ids.
+    fn is_locked(&self, id: &str) -> bool {
+        self.design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| l == id))
+    }
+
     fn track_item(&self, seg_idx: usize) -> RuleItem {
         let s = &self.board.tracks[seg_idx];
         let net = s.net.clone().unwrap_or_default();
@@ -505,7 +510,7 @@ impl<'a> RuleBoard<'a> {
         it.set("Start Y", Prop::Int(s.a.y.get()));
         it.set("End X", Prop::Int(s.b.x.get()));
         it.set("End Y", Prop::Int(s.b.y.get()));
-        it.set("Locked", Prop::Bool(false));
+        it.set("Locked", Prop::Bool(self.is_locked(s.id.rsplit_once('#').map_or(s.id.as_str(), |(base, _)| base))));
         let length = match s.arc_mid {
             Some(mid) => {
                 let pts = crate::board::arc_polyline(s.a, mid, s.b, crate::board::ARC_HIGH_DEF);
@@ -565,7 +570,7 @@ impl<'a> RuleBoard<'a> {
         it.set("Layer Top", Prop::Layer(v.from_layer.clone()));
         it.set("Layer Bottom", Prop::Layer(v.to_layer.clone()));
         it.set("Net", Prop::Enum(net.clone()));
-        it.set("Locked", Prop::Bool(false));
+        it.set("Locked", Prop::Bool(self.is_locked(&v.id)));
         let fmt = match kind {
             "Blind" => "Blind via",
             "Buried" => "Buried via",
@@ -1068,6 +1073,19 @@ mod footprint_facts_tests {
         let pad_of = |r: &str| pads.iter().find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == r)).unwrap().clone();
         assert!(holds(&rb, "A.Orientation == 90 deg", &pad_of("R5")));
         assert!(holds(&rb, "A.Orientation == 180 deg", &pad_of("R6")));
+    }
+
+    /// R6-D7: `A.Locked` is `IsLocked()` -- true for a locked footprint (the design's locked ids), false for another; a pad has no "Locked" (`pad.cpp`
+    /// masks it), so a rule on it never takes a pad.
+    #[test]
+    fn a_locked_footprint_is_locked_on_the_rule_board() {
+        let (design, model) = hv_board(|d, _| d.drawings = Some(eda_model::ir::DrawingsSection { locked_ids: vec!["R5".into()], ..Default::default() }));
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        assert!(holds(&rb, "A.Locked", &rb.footprint_item("R5").unwrap()));
+        assert!(!holds(&rb, "A.Locked", &rb.footprint_item("R6").unwrap()));
+        let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R5")).unwrap();
+        assert!(!holds(&rb, "A.Locked", &pad), "a pad has no Locked property");
     }
 
     /// R5-D1: the classes a file gives a footprint, the project's assignment rules (`GetAssignmentInDRCLanguage`, evaluated on the footprint) and the sheet classes,
