@@ -124,6 +124,10 @@ fn read_primitives(prims: &[Sexpr], side: Side) -> Vec<PadPrimitive> {
         };
         let Some(mut shape) = graphic_shape(item, tag, |p| mirror_x(p, side)) else { continue };
         shape.set_layer(String::new());
+        // The number box is a rectangle too: with no `fill` token and no width it is filled, as `parsePCB_SHAPE` makes any such rectangle, and it is written with its fill.
+        if proxy && matches!(shape, Shape::Rect { .. }) && sexpr::find(item, "fill").is_none() && shape.stroke_width() == Nm::ZERO {
+            shape.set_filled(true);
+        }
         if !proxy {
             // `parsePCB_SHAPE`: a file without a `fill` token filled the shapes that had a zero width (a rectangle, a circle) and every
             // polygon; and only a filled shape may have no width -- any other gets the default line, 0.1 mm.
@@ -225,7 +229,8 @@ fn write_primitive(out: &mut String, prim: &PadPrimitive, side: Side) {
     match (&prim.shape, prim.proxy) {
         (Shape::Segment { start, end, .. }, true) => write!(out, " (gr_vector (start {}) (end {}))", p(*start), p(*end)),
         (Shape::Segment { start, end, stroke_width, .. }, false) => write!(out, " (gr_line (start {}) (end {}){})", p(*start), p(*end), width(*stroke_width)),
-        (Shape::Rect { start, end, .. }, true) => write!(out, " (gr_bbox (start {}) (end {}))", p(*start), p(*end)),
+        // (`formatPrimitives`: the fill flag of a rectangle, the proxy one too)
+        (Shape::Rect { start, end, filled, .. }, true) => write!(out, " (gr_bbox (start {}) (end {}){})", p(*start), p(*end), fill(*filled)),
         (Shape::Rect { start, end, stroke_width, filled, .. }, false) => write!(out, " (gr_rect (start {}) (end {}){}{})", p(*start), p(*end), width(*stroke_width), fill(*filled)),
         (Shape::Arc { start, mid, end, stroke_width, .. }, _) => write!(out, " (gr_arc (start {}) (mid {}) (end {}){})", p(*start), p(*mid), p(*end), width(*stroke_width)),
         (Shape::Circle { center, end, stroke_width, filled, .. }, _) => write!(out, " (gr_circle (center {}) (end {}){}{})", p(*center), p(*end), width(*stroke_width), fill(*filled)),
@@ -303,7 +308,11 @@ mod tests {
         }
         let top = write_pad_shape(r.shape, r.roundrect_ratio, &r.ext, Side::Top).custom;
         assert!(top.starts_with(" (options (clearance convexhull) (anchor rect)) (primitives (gr_circle (center -2.975 0) (end -0.375 0) (width 2.2) (fill no))"), "{top}");
-        assert!(top.contains("(gr_vector (start 0 0) (end 3 0))") && top.contains("(gr_bbox (start -1 -1) (end 1 1))"), "{top}");
+        assert!(top.contains("(gr_vector (start 0 0) (end 3 0))") && top.contains("(gr_bbox (start -1 -1) (end 1 1) (fill yes))"), "{top}");
+        // F16 of round 2: a number box that says `(fill no)` is written so, not as the filled box KiCad makes of one that says nothing.
+        let unfilled = read_pad_shape(&pad_node("(pad \"1\" smd custom (at 0 0) (size 1 1) (primitives (gr_bbox (start -1 -1) (end 1 1) (fill no))))"), Side::Top);
+        let t = write_pad_shape(unfilled.shape, unfilled.roundrect_ratio, &unfilled.ext, Side::Top).custom;
+        assert!(t.contains("(gr_bbox (start -1 -1) (end 1 1) (fill no))"), "{t}");
     }
 
     #[test]
