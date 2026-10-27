@@ -2551,14 +2551,26 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
                 zone.corner_radius = radius.unwrap_or(Nm::ZERO);
             }
         }
+        // The keepout flags start as `ZONE::ZONE` gives them, from `ZONE_SETTINGS::ZONE_SETTINGS` (`ExportSetting`): tracks, vias and pads kept out, copper pours and
+        // footprints allowed. `case T_keepout` then sets pads and footprints allowed ("Initialize these two because their tokens won't appear in older files") and each
+        // flag the block names; one it does not name keeps its default. So a rule area made by `(placement ..)` alone (QA `vme-wren`) keeps out tracks, vias and pads.
+        if sexpr::find(z, "keepout").is_some() || sexpr::find(z, "placement").is_some() {
+            (zone.keepout_tracks, zone.keepout_vias, zone.keepout_pads, zone.keepout_copper_pour, zone.keepout_footprints) = (true, true, true, false, false);
+        }
         if let Some(k) = sexpr::find(z, "keepout") {
             zone.is_rule_area = true;
-            let not_allowed = |key: &str| sexpr::find(k, key).and_then(|v| sexpr::txt(v, 1)) == Some("not_allowed");
-            zone.keepout_tracks = not_allowed("tracks");
-            zone.keepout_vias = not_allowed("vias");
-            zone.keepout_copper_pour = not_allowed("copperpour");
-            zone.keepout_pads = not_allowed("pads");
-            zone.keepout_footprints = not_allowed("footprints");
+            zone.keepout_pads = false;
+            zone.keepout_footprints = false;
+            let flag = |key: &str, current: bool| match sexpr::find(k, key).and_then(|v| sexpr::txt(v, 1)) {
+                Some("not_allowed") => true,
+                Some("allowed") => false,
+                _ => current,
+            };
+            zone.keepout_tracks = flag("tracks", zone.keepout_tracks);
+            zone.keepout_vias = flag("vias", zone.keepout_vias);
+            zone.keepout_copper_pour = flag("copperpour", zone.keepout_copper_pour);
+            zone.keepout_pads = flag("pads", zone.keepout_pads);
+            zone.keepout_footprints = flag("footprints", zone.keepout_footprints);
         }
         // `T_placement` of `parseZONE`: `(enabled yes|no)` and one source, `(sheetname ..)`, `(component_class ..)` or `(group ..)`; the last of them in the file stands.
         if let Some(pl) = sexpr::find(z, "placement") {
@@ -3358,5 +3370,26 @@ mod tests {
         let routing = design.routing.expect("copper");
         assert_eq!(routing.zones[0].net, "", "an unquoted 0 is net code 0: no net");
         assert_eq!(model.nets.iter().find(|n| n.name == "0").map(|n| n.pins.clone()), Some(vec!["R1.1".to_string()]), "the quoted \"0\" is a name");
+    }
+
+    /// r3-board-io F8: `ZONE_SETTINGS::ZONE_SETTINGS` keeps out tracks, vias and pads by default and `case T_keepout` resets only pads and footprints, so a placement
+    /// area without `(keepout ..)` (QA `vme-wren`) keeps out tracks, vias and pads, and `(keepout (pads allowed))` alone keeps out tracks and vias.
+    #[test]
+    fn a_placement_area_without_keepout_keeps_kicads_defaults() {
+        let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+            (zone (net 0) (net_name "") (layer "F.Cu") (uuid "z1") (name "auto-placement-area") (hatch edge 0.5)
+                (placement (enabled yes) (sheetname "/io/")) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+                (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))))
+            (zone (net 0) (net_name "") (layer "F.Cu") (uuid "z2") (hatch edge 0.5) (keepout (pads allowed))
+                (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+                (polygon (pts (xy 30 0) (xy 50 0) (xy 50 20) (xy 30 20))))
+        )"#;
+        let (design, _, _) = import_kicad_pcb(text).expect("parses");
+        let zones = &design.routing.expect("zones").zones;
+        let flags = |z: &Zone| (z.is_rule_area, z.keepout_tracks, z.keepout_vias, z.keepout_pads, z.keepout_copper_pour, z.keepout_footprints);
+        let by_uuid = |u: &str| zones.iter().find(|z| z.uuid == u).unwrap();
+        assert_eq!(flags(by_uuid("z1")), (true, true, true, true, false, false));
+        assert_eq!(flags(by_uuid("z2")), (true, true, true, false, false, false));
     }
 }
