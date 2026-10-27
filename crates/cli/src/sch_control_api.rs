@@ -6,7 +6,7 @@
 
 use crate::fab_api::err;
 use crate::kicad_engine;
-use eda_model::ir::{Design, SchematicSection};
+use eda_model::ir::Design;
 use serde_json::{json, Value};
 use std::path::Path;
 
