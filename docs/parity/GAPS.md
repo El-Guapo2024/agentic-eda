@@ -454,7 +454,18 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Missing (round 5): a free via's `(free yes)` (no flag in the IR's via); a Draw Via on an arc track does not cut it; the DRC check reads no constraint severity or pad clearance override; the canvas
   draws a text centred on its anchor whatever its vertical justification; Cleanup Graphics leaves text boxes alone (B5-6: KiCad's cleaner takes a `PCB_TEXTBOX` as a `PCB_SHAPE`) and its change list
   is not clickable; Create Tracks has its own dialog, delete flag and net (B5-16: KiCad's has none, uses the active copper layer and the shared `m_DeleteOriginals`, and leaves the tracks with no net,
-  which `commit_route` here refuses); `CalcArcCenter`'s round-number snap in the teardrop's arc.
+  which `commit_route` here refuses). (`CalcArcCenter`'s round-number snap in the teardrop's arc: done in round 6, D6-1.)
+- Done 2026-10-28 (`task-r6-pcb-edit`, `PARITY-pcb.md` section 62, the round-6 findings `r6-pcb-edit`): **no studio edit clears the routing any more** (E6-1, high: Swap, Move Exactly, the Pack and
+  Move drop and placing a part from the unplaced list deleted every track, via and zone); Swap takes vias, graphics, texts and zones, swaps the layers of two items of a kind and leaves locked items out;
+  Select / Grab Unconnected start from a pad; Select All Tracks in Net takes copper shapes; a group's lock is seen by Toggle Lock and the sweep filters; a stepped line width survives re-arming a tool;
+  a board graphic polygon is unfilled on Edge.Cuts and the courtyards at the layer's width; a new copper text is bold (`InferBold`); teardrops follow 25ec2335 only (the chord filter, Max width 0, the
+  arc's polyline and centre: 14 kicad-cli cases point for point); Draw Via ignores hidden layers, takes the board's via list entry and judges copper text by its own shape (and a knockout's hull);
+  Create Zone / Rule Area from Selection is one dialog; the line mode is kept between sessions; `eda board via place`; messages KiCad does not have are gone.
+- Missing (round 6): Swap of arc tracks, dimensions, groups, tables, text boxes, barcodes and points, and of two footprints' orientation and side inside a mixed selection, and of two pads as pads
+  (`PAD::SwapShapePositions`); the Select Net menu's order by net code; the via ghost at `SnapItem`'s point (C6-7); "Via location violates DRC." with Allow DRC violations on (C6-6); a PTH pad's
+  unflashed layer and text boxes, tables, dimensions and barcodes on copper in the via's DRC check (C6-4, C6-5); R / F / E on a carried text (A6-6); a rounded rectangle's corners through
+  `TransformRoundChamferedRectToPolygon` (D6-3); the 100 nm chaining's direction (D6-4) and the outline fix's view of a removed duplicate (D6-5), both KiCad quirks; teardrops fitted to other nets'
+  clearance (25ec2335's `computeFittedTeardropPolygon`) and the solder-mask teardrops; the text dialog's Bold control.
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcb_control.cpp` (`Paste`, `placeBoardItems`), `common/dialogs/dialog_paste_special.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are editable objects

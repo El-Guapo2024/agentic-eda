@@ -75,6 +75,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r6-pcb-edit` | The round-6 PCB editing findings (`docs/parity/findings/round6/r6-pcb-edit.md`): E6-1 (high; no studio edit clears the routing), the 12 mediums, the cheap lows; PARITY-pcb section 62 | Done, targeted tests green | The lows marked Open in the findings file (GAPS item 8, "Missing (round 6)") |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
