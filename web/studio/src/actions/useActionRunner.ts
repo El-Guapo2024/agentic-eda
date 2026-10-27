@@ -30,7 +30,7 @@ import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
-import { drawZoneStarted, undoDropsDrawing, withoutLastCorner } from "../kicad-port/drawingCancel";
+import { drawShapeStarted, drawZoneStarted, redoRefused, takeBackLastLine, undoDropsDrawing, withoutLastCorner } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
@@ -218,6 +218,17 @@ export function useActionRunner() {
     registerImportActions(m, { tab: state.tab, dispatch, api });
     // The Design Blocks panes of the schematic and the board editor: show, place, save, update, properties, delete (actions/designBlockActions.ts).
     registerDesignBlockActions(m, { tab: state.tab, dispatch, api });
+    /**
+     * `drawShape`'s Delete / Backspace with a line, rectangle or circle started (kicad-port/drawingCancel.ts `takeBackLastLine`): the chain's last line is taken off
+     * the board -- its "Draw Line" step undone -- and the line in progress starts again from its start; with none, the shape in progress goes and the tool stays.
+     */
+    const takeBackLine = (): void => {
+      const draw = state.drawState;
+      if (draw?.kind !== "shape") return;
+      const back = takeBackLastLine(draw);
+      if (back.undo) void api.undo({ keepTool: true });
+      dispatch({ type: "SET_DRAW_STATE", draw: back.draw });
+    };
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[], isCut = false) => {
       const cmds: Cmd[] = [];
@@ -362,6 +373,8 @@ export function useActionRunner() {
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
       // `DrawZone`'s loop on the board: Delete with a corner placed removes the last corner (zones, rule areas, cutouts, graphic polygons)
       if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
+      // `drawShape`'s loop: Delete with a line, rectangle or circle started takes back the chain's last line, or drops the shape (round 4 A-1, A-2)
+      if (drawShapeStarted(state.tab, state.activeTool, state.drawState)) return takeBackLine();
       const refs = requestSelection();
       // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
       // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
@@ -656,6 +669,8 @@ export function useActionRunner() {
     });
     m.set("common.Interactive.redo", () => {
       if (boardMoving()) return;
+      // Every drawing loop: `started && evt->IsAction( &ACTIONS::redo )` is `wxBell()` (round 4 A-3).
+      if (redoRefused(state.tab, state.activeTool, state.drawState)) return;
       void (state.tab === "footprint" ? fpApi.redo() : state.tab === "symbol" ? symApi.redo() : api.redo());
     });
     // EDIT_TOOL::Duplicate: the board editor duplicates tracks/vias/zones/shapes/text; the footprint editor
@@ -1971,7 +1986,9 @@ export function useActionRunner() {
               dispatch({ type: "SET_DRAW_STATE", draw: g.step === 0 ? null : { ...draw, bezier: g } });
               return;
             }
-            dispatch({ type: "SET_DRAW_STATE", draw: draw.pts.length <= 1 ? null : { ...draw, pts: draw.pts.slice(0, -1) } });
+            // `drawShape`: a line, rectangle or circle takes back the chain's last line or goes (`takeBackLastLine`); a zone or polygon loses its last corner.
+            if (draw.kind === "shape" && draw.shapeKind !== "polygon") return takeBackLine();
+            dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(draw) as typeof draw | null });
           })
         );
       }
@@ -2367,6 +2384,12 @@ export function useActionRunner() {
     registerSchSheetFileActions(m, { tab: state.tab, state, api, dispatch, controlDispatch: schControlDispatch });
     // The SPICE simulator (actions/simActions.ts): last, as it hands the shared zoom and grid actions to the plot while its window has the keyboard.
     registerSimActions(m, { tab: state.tab, dispatch, api });
+
+    // `ZONE_FILLER_TOOL::IsZoneFillAction` (Fill, Fill All, Unfill, Unfill All) with an item started in a drawing tool: `wxBell()`, nothing filled (round 4 A-3).
+    for (const id of ["pcbnew.ZoneFiller.zoneFill", "pcbnew.ZoneFiller.zoneFillAll", "pcbnew.ZoneFiller.zoneUnfill", "pcbnew.ZoneFiller.zoneUnfillAll"]) {
+      const run = m.get(id);
+      if (run) m.set(id, () => (redoRefused(state.tab, state.activeTool, state.drawState) ? undefined : run()));
+    }
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch, schControl, schControlDispatch]);

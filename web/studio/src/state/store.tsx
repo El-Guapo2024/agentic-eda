@@ -340,6 +340,8 @@ export type DrawState =
       arc?: ArcGeom;
       /** `shapeKind === "bezier"` only: KIGFX::PREVIEW::BEZIER_GEOM_MANAGER's state (kicad-port/bezierGeom.ts). */
       bezier?: BezierGeom;
+      /** `shapeKind === "segment"` only: `DrawLine`'s `committedLines`, the segments of the chain already on the board (start, end), the last one last. */
+      committed?: [[Nm, Nm], [Nm, Nm]][];
     }
   /** Task item 7: two clicks (start, end) for any of the five dimension
    * kinds -- which one is read from `state.nextDimensionKind` when the
@@ -1739,7 +1741,8 @@ export interface StudioApi {
   /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
   navigateToSheet: (path: string[], record?: boolean) => Promise<void>;
   route: () => Promise<void>;
-  undo: () => Promise<void>;
+  /** `keepTool`: the undo a drawing tool makes of its own last commit (`DrawLine`'s `PopCommandFromUndoList`): the tool and what it draws stay. */
+  undo: (opts?: { keepTool?: boolean }) => Promise<void>;
   redo: () => Promise<void>;
   /** Escape while a Duplicate's or a Paste's new items are carried: takes them away again (one undo step), provided nothing else was edited since. True when it did. */
   revertCarriedPlacement: () => Promise<boolean>;
@@ -2409,8 +2412,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // the Schematic tab reverts that tab's own last edit (or is a no-op
     // once its stack is empty), never the PCB tab's, and vice versa -- see
     // `postUndo`/`board::undo`'s own doc for the backend half of this.
-    undo: async () => {
-      dispatch({ type: "CLEAR_SELECTION" });
+    undo: async (opts?: { keepTool?: boolean }) => {
+      if (!opts?.keepTool) dispatch({ type: "CLEAR_SELECTION" });
       const reply = await postUndo(stateRef.current.tab === "schematic" ? "schematic" : "pcb");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
