@@ -311,7 +311,7 @@ test("the registry never lists a property twice for one class, and a Layer is th
 
 test("a footprint's orientation is KiCad's (counter-clockwise), the model's rot runs clockwise", () => {
   const b = board();
-  assert.equal(rowOf(b, ["U1"], "Orientation")!.value, 270, "rot 90 clockwise is 270 counter-clockwise");
+  assert.equal(rowOf(b, ["U1"], "Orientation")!.value, -90, "rot 90 clockwise is -90 counter-clockwise (`Normalize180`)");
   assert.equal(rowOf(b, ["R1"], "Orientation")!.value, 0);
   assert.equal(rowOf(b, ["U1"], "Layer")!.value, "F.Cu");
   assert.equal(rowOf(b, ["R1"], "Layer")!.value, "B.Cu");
@@ -356,6 +356,15 @@ test("a mixed selection keeps the rows every class has, in the order of the firs
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------- edits
+
+test("a back footprint's orientation is KiCad's: the backend's orientation, half a turn from -rot for one flipped here (r2-pcb-edit A2)", () => {
+  const b = board();
+  const r1 = b.parts.find((p) => p.ref === "R1")!;
+  r1.orientation = 180;
+  assert.equal(rowOf(b, ["R1"], "Orientation")!.value, 180, "FOOTPRINT::Flip: -orient, then half a turn");
+  assert.deepEqual(edit(b, ["R1"], "Orientation", 180), [], "already there");
+  assert.deepEqual(edit(b, ["R1"], "Orientation", 90), [{ op: "rotate_items", ids: ["R1"], pivot: { x: 60_000, y: 20_000 }, angle_millideg: 90_000 }], "90 counter-clockwise less is a clockwise quarter");
+});
 
 test("a footprint: position moves it by the difference, orientation turns it about itself, layer flips it", () => {
   const b = board();

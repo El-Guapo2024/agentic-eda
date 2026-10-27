@@ -31,6 +31,7 @@ import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, nmFrom, nmTo } from "../state/units";
 import { boardModelsCmds, rowsOf, type ModelRow } from "../kicad-port/fpModels";
+import { fpOrientation } from "../kicad-port/pcbProperties";
 import { FootprintModelsPanel } from "./footprint/FootprintModelsPanel";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
@@ -89,7 +90,7 @@ export function FootprintPropertiesDialog() {
     setX(part.at?.[0] ?? 0);
     setY(part.at?.[1] ?? 0);
     // KiCad's orientation is counter-clockwise; the model's `rot` runs clockwise.
-    setOrientation(norm360(-(part.rot ?? 0)));
+    setOrientation(fpOrientation(part));
     setBottom(part.side === "bottom");
     setLocked((board?.locked ?? []).includes(part.ref));
     // Asked for a field (a double click on it, or E), the dialog starts on that field's row.
@@ -166,7 +167,8 @@ export function FootprintPropertiesDialog() {
     const at = part.at ?? [0, 0];
     const [dx, dy] = [Math.round(x - at[0]), Math.round(y - at[1])];
     if (dx !== 0 || dy !== 0) cmds.push({ op: "move_items", ids: [part.ref], dx, dy });
-    const turn = norm360(orientation) - norm360(-(part.rot ?? 0));
+    // the difference, in (-180, 180] (KiCad's orientation of a back footprint is half a turn from `-rot`; the turn is the same)
+    const turn = norm360(orientation - fpOrientation(part) + 180) - 180;
     if (Math.abs(turn) > 1e-9) {
       // `rotate_items` turns clockwise; KiCad's orientation is the other way.
       const pivot = { x: Math.round(x), y: Math.round(y) };

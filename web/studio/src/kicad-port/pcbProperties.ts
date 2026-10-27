@@ -336,8 +336,14 @@ const xy = (p: readonly [number, number]): PointXY => ({ x: p[0], y: p[1] });
 const num = (v: PropValue): number => (typeof v === "number" ? v : Number(v));
 const NO_NET = "<no net>";
 
-/** The pose of a footprint: its position, KiCad's orientation (counter-clockwise on the screen; the model's `rot` runs the other way) and the side. */
-const fpOrientation = (part: Part): number => norm360(-(part.rot ?? 0));
+/** `Normalize180`: an angle in (-180, 180]. */
+const norm180 = (a: number): number => {
+  const n = norm360(a);
+  return n > 180 ? n - 360 : n;
+};
+/** KiCad's orientation of a footprint (`FOOTPRINT::GetOrientationDegrees`, counter-clockwise on the screen, in (-180, 180]): the backend's `orientation`, which is half a
+ * turn from `-rot` for a back footprint made or flipped here; `-rot` from an older backend. */
+export const fpOrientation = (part: Pick<Part, "rot" | "orientation">): number => norm180(part.orientation ?? -(part.rot ?? 0));
 
 /** `ZONE_DESC`'s settings, as `edit_zone` takes them: every field of the zone with `patch` laid over it (the verb replaces the zone's settings wholesale). */
 function zoneCmd(z: Zone, patch: Partial<Zone>): Cmd {
@@ -639,8 +645,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     set: (i, v) => {
       const part = i.part!;
       if (!part.at) return [];
-      // `rot` turns clockwise, KiCad's orientation counter-clockwise: the property is the second, the verb takes the first.
-      let delta = norm360(-num(v)) - (part.rot ?? 0);
+      // `rot` turns clockwise, KiCad's orientation counter-clockwise: the property is the second, the verb takes the first (by the difference, so the
+      // half turn of a back footprint drops out).
+      let delta = fpOrientation(part) - num(v);
       delta = ((((delta + 540) % 360) + 360) % 360) - 180;
       return Math.abs(delta) < 1e-9 ? [] : [{ op: "rotate_items", ids: [part.ref], pivot: xy(part.at), angle_millideg: Math.round(delta * 1000) }];
     },

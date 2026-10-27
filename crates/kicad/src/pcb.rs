@@ -1041,6 +1041,30 @@ pub(crate) fn half_turn_layout(l: &mut eda_model::fp_edit::FieldLayout) {
     l.angle = (l.angle + 180_000).rem_euclid(360_000);
 }
 
+/// An angle in millidegrees in (-180, 180] (`EDA_ANGLE::Normalize180`).
+fn normalize180(a: i64) -> i64 {
+    let mut a = a.rem_euclid(360_000);
+    if a > 180_000 {
+        a -= 360_000;
+    }
+    a
+}
+
+/// Is the back footprint `fp` written half a turn from the model's pose (see [`write_footprint`])? One made or flipped here is, one read in the
+/// file's frame is not.
+fn written_half_turned(design: &Design, fp: &FootprintInstance) -> bool {
+    let read_in_the_files_frame = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id && !e.library_frame));
+    fp.side == Side::Bottom && !read_in_the_files_frame
+}
+
+/// KiCad's orientation of the footprint `fp`, in millidegrees counter-clockwise, in (-180, 180]: the angle of the `(at x y angle)` the writer gives it,
+/// which is what KiCad's Properties panel (`FOOTPRINT::GetOrientationDegrees`) and Footprint Properties show. A back footprint made or flipped here
+/// is half a turn from the model's `rot` (`FOOTPRINT::Flip`: `-m_orient`, then `Rotate( ANGLE_180 )` for a left-right flip).
+pub fn kicad_footprint_orientation(design: &Design, fp: &FootprintInstance) -> i64 {
+    let half = if written_half_turned(design, fp) { 180_000 } else { 0 };
+    normalize180(-(fp.rot as i64 + half))
+}
+
 /// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn write_footprint(
@@ -1064,8 +1088,7 @@ pub(crate) fn write_footprint(
     // orientation (`ExchangeFootprint`), then put it where it was, and its 3D models need no turn of their own. A footprint read from a KiCad file is in
     // that frame already (the reader keeps the file's numbers), and is written as it was read.
     // (one read in the library's frame, `FootprintExtra::library_frame`, is turned as one made here)
-    let read_in_the_files_frame = design.drawings.as_ref().is_some_and(|d| d.footprint_extras.iter().any(|e| e.id == fp.id && !e.library_frame));
-    let turn = fp.side == Side::Bottom && !read_in_the_files_frame;
+    let turn = written_half_turned(design, fp);
     let (as_placed, footprint_as_placed) = (fp, footprint);
     let (turned_fp, turned_footprint);
     let (fp, footprint) = if turn {
@@ -1086,13 +1109,7 @@ pub(crate) fn write_footprint(
     // `footprint::to_board` output and `kicad-cli pcb drc` unconnected-item
     // positions for a rotated part.
     // `FOOTPRINT::SetOrientation` keeps the angle in (-180, 180] (`Normalize180`), and the file has it so.
-    let rot_deg = {
-        let mut a = -(fp.rot as i64) % 360_000;
-        if a <= -180_000 {
-            a += 360_000;
-        }
-        fmt_mm_f(a as f64 / 1000.0)
-    };
+    let rot_deg = fmt_mm_f(normalize180(-(fp.rot as i64)) as f64 / 1000.0);
     // A footprint imported from a KiCad file keeps the uuid it had there (the first footprint to claim one), as a pour does: a text can name a footprint by its uuid
     // (`${uuid:REFERENCE}`) and `kicad-cli pcb diff` matches items by it.
     let kept_uuid = design.drawings.as_ref().and_then(|d| {
@@ -2891,6 +2908,22 @@ mod tests {
         let holder = by_name("holder");
         assert_eq!(holder.member_ids, vec![brt.vias.iter().find(|v| holder.member_ids.contains(&v.id)).expect("the via").id.clone()], "a group of one item is read back (`resolveGroups` keeps every group)");
         assert_eq!(dr.group_leaves(&outer.id).len(), 4, "U1, C1, the track and a via: {:?}", dr.group_leaves(&outer.id));
+    }
+
+    /// r2-pcb-edit A2: the orientation the studio shows is the file's angle.
+    #[test]
+    fn a_back_footprints_kicad_orientation_is_the_angle_it_is_written_with() {
+        let (mut design, model) = fixture();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let c1 = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "C1").unwrap().clone();
+        let u1 = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().clone();
+        // C1 is on the back at rot 90 (clockwise), made here: written half a turn round, -(90 + 180) = 90.
+        assert_eq!(kicad_footprint_orientation(&design, &c1), 90_000);
+        assert!(out.contains("(at 10 10 90)"), "{out}");
+        assert_eq!(kicad_footprint_orientation(&design, &u1), 0);
+        // Read in the file's frame: no half turn.
+        design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![eda_model::ir::FootprintExtra { id: "C1".into(), ..Default::default() }], ..Default::default() });
+        assert_eq!(kicad_footprint_orientation(&design, &c1), -90_000);
     }
 
     #[test]
