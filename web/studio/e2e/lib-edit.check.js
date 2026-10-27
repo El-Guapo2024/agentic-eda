@@ -322,6 +322,9 @@
         await sleep(900);
         const six = ((await symbol(SYM)).pins ?? []).find((p) => p.number === "6");
         t(!!six && Math.abs(six.at.y + 5.08) < 1e-6, `Insert repeats the edited pin: pin 6 one step further down (${JSON.stringify(six && [six.number, six.at])})`);
+        // r4 E4-2: `RepeatDrawItem` selects the new pin (`ACTIONS::selectItem`), so E, Delete or R act on it
+        const sel = __eda.state().selection.map((s) => (typeof s === "string" ? s : s.id));
+        t(!!six?.id && sel.length === 1 && sel[0] === six.id, `Insert selects the repeated pin (${JSON.stringify(sel)} vs ${six?.id})`);
         await undo();
         await undo();
         t(((await symbol(SYM)).pins ?? []).some((p) => p.number === "2") && ((await symbol(SYM)).pins ?? []).length === 2, "two undos put the pins back");

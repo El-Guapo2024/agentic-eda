@@ -84,6 +84,44 @@ export function selectionPivot(boxes: readonly { minX: number; minY: number; max
 }
 
 /**
+ * `GetNearestHalfGridPosition( selection.GetCenter() )` (`common/tool/selection.cpp::SELECTION::GetCenter`) of a selection of several items: `pinBoxes` are the selected
+ * pins' boxes and `graphics` the selected graphics, of any unit and body style (the selection holds what was picked, whichever unit it belongs to). Texts
+ * (`SCH_TEXT_T`) are left out of the box -- `if( !item->IsType( { SCH_TEXT_T, SCH_LABEL_LOCATE_ANY_T } ) ) bbox.Merge( .. )` -- and a selection of texts only takes
+ * the mean of their positions (`center += item->GetPosition(); center = center / (int) m_items.size()`, integer IU in KiCad's y-down frame). A text box
+ * (`SCH_TEXTBOX_T`) is a box like any shape. `boxOf` is the graphic's `GetBoundingBox()` in the editor's internal space (nm, y down; `itemBoxes.ts`' `graphicBox`).
+ */
+export function rotatePivot(
+  pinBoxes: readonly { minX: number; minY: number; maxX: number; maxY: number }[],
+  graphics: readonly LibrarySymbolGraphic[],
+  gridMm: number,
+  boxOf: (g: LibrarySymbolGraphic) => { minX: number; minY: number; maxX: number; maxY: number } | null,
+): MmPoint | null {
+  const texts = graphics.filter((g) => g.kind === "text");
+  if (pinBoxes.length === 0 && graphics.length > 0 && texts.length === graphics.length) {
+    let sx = 0;
+    let sy = 0;
+    for (const g of texts) {
+      if (g.kind !== "text") continue;
+      sx += iu(g.at.x);
+      sy += iu(-g.at.y);
+    }
+    // `VECTOR2I / int`: truncating division
+    const cx = Math.trunc(sx / texts.length);
+    const cy = Math.trunc(sy / texts.length);
+    const half = (gridMm * IU_PER_MM) / 2;
+    const snap = (v: number) => (half > 0 ? kiRound(kiRound(v / half) * half) : v);
+    return { x: snap(cx) / IU_PER_MM, y: -snap(cy) / IU_PER_MM };
+  }
+  const boxes = [...pinBoxes];
+  for (const g of graphics) {
+    if (g.kind === "text") continue;
+    const b = boxOf(g);
+    if (b) boxes.push(b);
+  }
+  return selectionPivot(boxes, gridMm);
+}
+
+/**
  * `SYMBOL_EDITOR_EDIT_TOOL::Rotate`: the selected pins turned a quarter, counter-clockwise on screen with `ccw`, about one point -- the pin's own position when the selection is
  * one item, else `GetNearestHalfGridPosition( selection.GetCenter() )`: `centre` when the caller has it ([`selectionPivot`] of the items' full boxes), else the
  * centre of the box of the pins' two ends and `otherBoxes`. Only the selected pins move: no twin in another unit is touched, the commit holds only the selection. `SCH_PIN::Rotate` turns the position about
