@@ -843,9 +843,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `eda fab pos --separate-sides` asks for the two files too (`kicad-engine::place_file_names`).
 - Found, not fixed (listed for their packages): a symbol placed from the library under a lib_id the design already has keeps the design's definition (library_place.rs,
   by design), so `Device:R` placed from the chooser on mcu30 draws the built-in R, not KiCad's; the export routes list the files modified since a second before the run, so a
-  second run within that second lists the first one's files too; the parity DRC of the mcu30 example, placed and routed, finds 76 differences between the board and the
-  schematic derived for it (30 footprints the symbols' empty Footprint fields do not name, 8 field mismatches, 38 net conflicts), which a board and a schematic
-  made from one intent should not have (items 2 and 26).
+  second run within that second lists the first one's files too.
+- Fixed since P20: the parity DRC of the mcu30 example, placed and routed, was 76 differences between the board and the schematic derived for it (30 footprints the
+  symbols' empty Footprint fields did not name, 8 field mismatches, 38 net conflicts; items 2 and 26). Fix batch A (2026-10-25, `a8287704`) made it 0: kicad-cli's
+  schematic-parity DRC finds none on mcu30, opamp_filter or ldo (`docs/HANDOFF.md`, "fix batch A").
 - Coverage by package (the rows of the plan's table):
 
 | package | checks |
@@ -853,7 +854,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | P1 footprint graphics | `fp-graphics` |
 | P2 assignment, exchange, rename | `fp-assign` |
 | P3 library tables | `library-tables`; the choosers: `sch-edit` (Symbol Chooser), `fp-models` (Footprint Chooser's 3D view) |
-| P4 hierarchy | `sch-details` (sheet pins), `sch-details-2` (a screen shown twice, buses across sheets), `design-blocks` (place as a sheet). Not: Import Sheet, the Hierarchy Navigator |
+| P4 hierarchy | `sch-details` (sheet pins), `sch-details-2` (a screen shown twice, buses across sheets), `design-blocks` (place as a sheet), `import-sheet` (the chooser's checks and options, a sheet imported as one undo step, its symbols, labels and nested sheet pins), `hierarchy-navigator` (every sheet once, a screen shown twice twice, a click and the breadcrumb) |
 | P5 router | `diff-pairs`, `length-tuning`, `router-leftovers` |
 | P6 PCB editing details | `pcb-edit-details`, `board-edit` (select, move, rotate, flip, delete, undo) |
 | P7 custom pads | `pad-shapes`, `pad-details` |
@@ -882,8 +883,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
     48 `rule-editor`; 49 `cli-exports`. Plot and fab outputs (`PARITY-boardctl.md` 5): `plot-exports`.
   - `PARITY-sch.md`: 0 n/a; 1 `sch-groups` (move), `sch-details`; 2 `sch-edit`; 3 `sch-edit`, `sch-details` (power symbols); 3a `sch-edit`; 4 `sch-edit`, `drc-review`, `review`;
     5 `sch-edit`; 6 cross-tab undo none; 7 `sch-details`, `lib-editors`; 8 Find on the sheet none; 9 the pin map none; 10 `plot-exports` (PDF, SVG; the netlist through `simulator`);
-    11 none; 12 `sch-details`, `sch-groups`; 13 none; 14 `sch-details`, `sch-details-2`; 15 `sch-groups` (copy, paste, duplicate); 16 Rust tests; 17 the schematic's
-    Properties panel none; 18 `snap-grid`; 19 Import Sheet none; 19b `board-setup-pages`; 20 `files-in`; 21 `sch-details`; 22 `sch-details`; 23 `sch-details`; 24 `sch-details`;
+    11 none; 12 `sch-details`, `sch-groups`; 13 none; 14 `sch-details`, `sch-details-2`, `hierarchy-navigator`; 15 `sch-groups` (copy, paste, duplicate); 16 Rust tests; 17 the schematic's
+    Properties panel none; 18 `snap-grid`; 19 `import-sheet`; 19b `board-setup-pages`; 20 `files-in`; 21 `sch-details`; 22 `sch-details`; 23 `sch-details`; 24 `sch-details`;
     25 `sch-details`; 26 `sch-details`; 27 `sch-details`; 28 `review`; 29 `sch-groups`; 30 `sch-groups`; 31 `sch-details`; 32 none; 33 `import-foreign`; 34 `design-blocks`;
     35 `tables`; 36 `pcb-items`; 37 `microwave`; 38 `simulator`; 39 `sch-details-2`.
   - `PARITY-fpedit.md`: 1-4 `lib-edit`; 5 `lib-editors`, `fp-models`; 6 `lib-editors` (the export routes); 7 none; 8 `lib-edit`, `library-tables`; 9 none; 10 `pad-shapes`
@@ -894,7 +895,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   - `PARITY-boardctl.md`: 1 `appearance-panel`; 2 `zones`; 3 `search-inspect`; 4 the drill/place origin none; 5 `plot-exports`, `cli-exports`, `specctra`.
   - `PARITY-common.md`: 1, 2 none; 3 `board-edit` (selection; the delete tool none); 4 `pcb-edit-details`, `sch-groups`; 5 `drc-review`, `review`, `search-inspect`; 6 none;
     7 `lib-edit`, `library-tables`; 8 `pcb-items`; 9 Page Settings none; 10 `snap-grid`; 13 every check; 13a `files-in`; 14 `library-tables`.
-- Left without a check: the board's view controls and context menu, the schematic's Find and Properties panel, Import Sheet and the Hierarchy Navigator, the board
+- Left without a check: the board's view controls and context menu, the schematic's Find and Properties panel, the board
   outline (P12), Board Statistics and Swap Layers, Page Settings, the drill/place origin, Edit Pad as Graphic Shapes, the 3D viewer's lighting. The rule in force: a fix
   counts when the C++ function is named in the code, the logic has a `kicad-port/*.test.ts` (or a Rust test), one user action is one undo step, and a browser check ran.
 
