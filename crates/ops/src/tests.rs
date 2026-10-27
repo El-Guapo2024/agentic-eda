@@ -3290,6 +3290,41 @@ fn deleting_a_t_with_its_junction_in_one_batch_deletes_all_three() {
     assert!(sch.wires.is_empty() && sch.junctions.is_empty(), "{:?} {:?}", sch.wires, sch.junctions);
 }
 
+/// r5 B5-H1 (`SCH_EDIT_TOOL::DoDelete`: a junction is flagged and deleted last, through `DeleteJunction`, after the other items): a batch that lists the T's dot
+/// before one half of its through wire -- the studio sends the verbs in selection order -- deletes the dot and that half and keeps the other half and the
+/// stem, whichever half it names.
+#[test]
+fn a_junction_listed_before_a_wire_half_is_deleted_last() {
+    let m = model(vec![], &[], vec![]);
+    let dot = p(mm(20.32), mm(40.64));
+    for keep_left in [true, false] {
+        let mut b = board(&m);
+        // two halves of a through wire, as a KiCad file has them (the studio's own wire tool draws one polyline), a stem, and the dot
+        b.apply(&Cmd::AddWire { pts: vec![p(mm(20.32), mm(50.8)), dot], bus: false }).unwrap();
+        {
+            let sch = b.design.schematic.as_mut().unwrap();
+            for (id, a) in [("wire_h1", p(mm(10.16), mm(40.64))), ("wire_h2", p(mm(30.48), mm(40.64)))] {
+                sch.wires.push(eda_model::ir::Wire { id: id.into(), net: String::new(), pins: vec![], pts: vec![a, dot], bus: false });
+            }
+            if sch.junctions.is_empty() {
+                sch.junctions.push(eda_model::ir::Junction { id: "jct_t".into(), at: dot });
+            }
+        }
+        let sch = b.design().schematic.as_ref().unwrap();
+        let half = |left: bool| sch.wires.iter().find(|w| w.pts.contains(&dot) && w.pts.iter().all(|q| q.y == dot.y) && w.pts.iter().any(|q| if left { q.x < dot.x } else { q.x > dot.x })).map(|w| w.id.clone()).expect("a half");
+        let gone = half(!keep_left);
+        let cmds = vec![Cmd::DeleteJunction { id: sch.junctions[0].id.clone() }, Cmd::DeleteWire { id: gone }];
+        b.apply(&Cmd::Batch { cmds }).unwrap_or_else(|e| panic!("keep_left {keep_left}: {e:?}"));
+        let sch = b.design().schematic.as_ref().unwrap();
+        assert!(sch.junctions.is_empty());
+        let kept_end = if keep_left { p(mm(10.16), mm(40.64)) } else { p(mm(30.48), mm(40.64)) };
+        let lost_end = if keep_left { p(mm(30.48), mm(40.64)) } else { p(mm(10.16), mm(40.64)) };
+        assert!(sch.wires.iter().any(|w| w.pts.contains(&kept_end) && w.pts.contains(&dot)), "keep_left {keep_left}: the half not named stays: {:?}", sch.wires);
+        assert!(!sch.wires.iter().any(|w| w.pts.contains(&lost_end)), "keep_left {keep_left}: {:?}", sch.wires);
+        assert!(sch.wires.iter().any(|w| w.pts.contains(&p(mm(20.32), mm(50.8)))), "the stem stays");
+    }
+}
+
 /// r4 C4-L2 (`SCH_EDIT_FRAME::DeleteJunction`: the lines in line that end at the dot merge, `MergeOverlap( .., false )` looks for no junction): deleting the dot
 /// of a T leaves one through wire with no vertex there, the stem ending on its middle.
 #[test]

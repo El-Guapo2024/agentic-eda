@@ -2606,6 +2606,10 @@ pub struct Board<'a> {
     net_collision: Option<sch_net_collision::NetCollision>,
     /// Inside a [`Cmd::Batch`]: the sheets (their [`Self::focus`]) whose commit-time clean-up a verb asked for, run once when the batch ends (r4 C4-H1).
     pending_clean_up: Option<BTreeSet<Option<String>>>,
+    /// Inside a [`Cmd::Batch`]: the points (with their sheet) where `DoDelete` runs `DeleteJunction` after every other item is gone (`SCH_EDIT_TOOL::DoDelete`
+    /// flags a junction and deletes it last, r5 B5-H1): a junction Delete Junction removed (`true`), or the point of a deleted sheet pin, whose junction
+    /// goes only when it is no longer explicit (`false`, r5 B5-L1).
+    pending_junction_merges: Vec<(Option<String>, Point, bool)>,
 }
 
 /// Decoupling pairs `(cap, ic)` that no proximity rule already places --
@@ -2649,7 +2653,7 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None, pending_clean_up: None }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new() }
     }
 
     /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
@@ -2694,6 +2698,7 @@ impl<'a> Board<'a> {
             intent_nets: self.intent_nets.clone(),
             net_collision: None,
             pending_clean_up: None,
+            pending_junction_merges: Vec::new(),
         }
     }
 
@@ -3057,9 +3062,21 @@ impl<'a> Board<'a> {
                 let mut result = cmds.iter().try_for_each(|c| self.apply(c));
                 if outer {
                     let sheets = self.pending_clean_up.take().unwrap_or_default();
+                    let merges = std::mem::take(&mut self.pending_junction_merges);
                     if result.is_ok() {
                         let focus = self.focus.clone();
+                        // the junctions deleted, last: their in-line wires that are left merge (`DoDelete`'s `DeleteJunction` after the other items)
+                        for (sheet, at, deleted) in merges {
+                            self.focus = sheet;
+                            if let Err(e) = self.delete_junction_at(at, deleted) {
+                                result = Err(e);
+                                break;
+                            }
+                        }
                         for sheet in sheets {
+                            if result.is_err() {
+                                break;
+                            }
                             self.focus = sheet;
                             result = self.commit_clean_up();
                             if result.is_err() {
@@ -5098,13 +5115,47 @@ impl<'a> Board<'a> {
     /// Delete a junction (`SCH_EDIT_FRAME::DeleteJunction` from `DoDelete`): the dot goes and the wires that end at it merge where they are in line
     /// (`MergeOverlap`), as the commit's `SCHEMATIC::CleanUp` does, so two crossing wires are no longer joined and the stem of a T is cut off (r3 C3-H1).
     fn delete_junction(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
-        let model = self.model;
         let sch = self.schematic_mut()?;
         let Some(at) = sch.junctions.iter().find(|j| j.id == id).map(|j| j.at) else {
             return Err(vec![CheckResult::fail("ops_unknown_junction", id, "no junction with this id")]);
         };
         sch.junctions.retain(|j| j.id != id);
-        // `DeleteJunction` merges the lines in line that end at the dot, whatever their strokes and whatever else meets there (r4 C4-L2)
+        // Inside a batch the merge waits for the batch's end: `SCH_EDIT_TOOL::DoDelete` flags a junction (`SetFlags( STRUCT_DELETED )`, "clean up junctions
+        // at the end") and runs `DeleteJunction` after deleting every other item, so a wire half the batch also deletes is gone by then, and the half it
+        // keeps keeps its id for the verbs after this one (r5 B5-H1)
+        if self.pending_clean_up.is_some() {
+            self.pending_junction_merges.push((self.focus.clone(), at, true));
+            return self.commit_clean_up();
+        }
+        self.delete_junction_at(at, true)?;
+        self.commit_clean_up()
+    }
+
+    /// `DoDelete`'s junctions, after the other items: at a point of `pts` (a deleted sheet pin's), the junction goes when it is no longer explicit
+    /// (`if( junction->HasFlag( STRUCT_DELETED ) || !screen->IsExplicitJunction( point ) ) m_frame->DeleteJunction( &commit, junction )`), and
+    /// `DeleteJunction` merges the lines in line that end there whatever their strokes. `deleted`: the junction is one the verbs deleted already.
+    /// Inside a batch it waits for the batch's end.
+    pub(crate) fn delete_junction_at(&mut self, at: Point, deleted: bool) -> Result<(), Vec<CheckResult>> {
+        if self.pending_clean_up.is_some() && !deleted {
+            self.pending_junction_merges.push((self.focus.clone(), at, false));
+            return Ok(());
+        }
+        if !deleted {
+            let model = self.model;
+            let sch = self.schematic_mut()?;
+            if !sch.junctions.iter().any(|j| j.at == at) || sch_scene::Scene::new(sch, model).is_explicit_junction(at) {
+                return Ok(());
+            }
+            sch.junctions.retain(|j| j.at != at);
+        }
+        self.merge_at_junction(at)
+    }
+
+    /// `DeleteJunction`'s merge: the lines in line that end at `at` merge, whatever their strokes and whatever else meets there (r4 C4-L2), on the sheet the
+    /// verbs act on.
+    fn merge_at_junction(&mut self, at: Point) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
+        let sch = self.schematic_mut()?;
         let mut scene = sch_scene::Scene::new(sch, model);
         scene.merge_at(at);
         let merged = scene.finish();
@@ -5112,7 +5163,7 @@ impl<'a> Board<'a> {
             *sch = merged;
             sch.assign_missing_ids();
         }
-        self.commit_clean_up()
+        Ok(())
     }
 
     /// The commit-time `SCHEMATIC::CleanUp` of an edit that holds a connectable item (`SCH_COMMIT::pushSchEdit`: "Do a local clean up if there are any
