@@ -1040,3 +1040,24 @@ fn placing_a_resistor_on_a_wire_cuts_it_between_the_pins() {
     assert_eq!(runs, vec![vec![p(mm(20.32), mm(10.0)), p(mm(20.32), mm(21.59))], vec![p(mm(20.32), mm(29.21)), p(mm(20.32), mm(40.0))]]);
     assert!(out.junctions.is_empty(), "{:?}", out.junctions);
 }
+
+/// r2 C-M2 (`SCH_DIRECTIVE_LABEL::MirrorSpinStyle( aLeftRight )` is `SCH_TEXT::MirrorSpinStyle( !aLeftRight )`; `MirrorHorizontally` is `MirrorX`, `MirrorVertically`
+/// `MirrorY`): a directive label's pole is mirrored across the mirror's axis -- left-right turns a sideways pole (90) the other way (270), top-bottom an
+/// upright one (0) upside down (180) -- alone or with other items.
+#[test]
+fn a_directive_label_mirrors_its_pole_across_the_mirror_axis() {
+    let flag = |id: &str, x: f64, orientation: u32| -> SchGraphic {
+        serde_json::from_value(serde_json::json!({ "id": id, "shape": { "type": "directive", "at": { "x": mm(x).get(), "y": mm(20.0).get() }, "orientation": orientation, "pin_length_nm": 2_540_000 } })).unwrap()
+    };
+    for (orientation, vertical, want) in [(90_000, false, 270_000), (0, true, 180_000), (0, false, 0), (90_000, true, 90_000)] {
+        let mut s = section();
+        s.extras.graphics.push(flag("dirl_1", 20.0, orientation));
+        let out = run_on(s.clone(), mirror(&["dirl_1"], vertical));
+        let SchGraphicKind::Directive { orientation: got, .. } = out.extras.graphics[0].shape else { panic!() };
+        assert_eq!(got, want, "alone: {orientation} mirrored vertical={vertical}");
+        s.extras.graphics.push(flag("dirl_2", 30.0, 0));
+        let out = run_on(s, mirror(&["dirl_1", "dirl_2"], vertical));
+        let SchGraphicKind::Directive { orientation: got, .. } = out.extras.graphics[0].shape else { panic!() };
+        assert_eq!(got, want, "with another: {orientation} mirrored vertical={vertical}");
+    }
+}

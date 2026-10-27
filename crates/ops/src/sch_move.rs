@@ -906,12 +906,15 @@ fn mirror_item_in_place(scene: &mut Scene, it: Item, vertical: bool) {
     if let Item::Graphic(i) = it {
         let g = &mut scene.sch.extras.graphics[i];
         if let SchGraphicKind::Directive { orientation, .. } = &mut g.shape {
-            *orientation = mirror_orientation(*orientation, !vertical);
+            // r2 C-M2: `SCH_DIRECTIVE_LABEL::MirrorSpinStyle( aLeftRight )` is `SCH_TEXT::MirrorSpinStyle( !aLeftRight )` ("The 'text' is in fact a
+            // graphic shape"): a left-right mirror swaps the sideways poles (90 and 270), a top-bottom one the upright ones (0 and 180)
+            *orientation = mirror_orientation(*orientation, vertical);
         }
     }
 }
 
-/// A directive label's pole direction mirrored (`MirrorSpinStyle`): left-right swaps right and left, top-bottom swaps up and down.
+/// A label's spin mirrored (`SCH_TEXT::MirrorSpinStyle`): with `left_right`, right and left swap; else up and down. A directive label passes the other
+/// axis (its pole is drawn across its text).
 fn mirror_orientation(o: u32, left_right: bool) -> u32 {
     match (o % 360_000, left_right) {
         (0, true) => 180_000,
@@ -1147,7 +1150,8 @@ fn mirror_graphic(g: &mut SchGraphic, c: Point, vertical: bool) {
                 };
             }
         }
-        SchGraphicKind::Directive { orientation, .. } => *orientation = mirror_orientation(*orientation, !vertical),
+        // `SCH_DIRECTIVE_LABEL::MirrorHorizontally`: `GetSpinStyle().MirrorX()` (UP and BOTTOM swap); `MirrorVertically`: `MirrorY()` (LEFT and RIGHT)
+        SchGraphicKind::Directive { orientation, .. } => *orientation = mirror_orientation(*orientation, vertical),
         _ => {}
     }
 }
