@@ -2380,6 +2380,18 @@ pub struct Dimension {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "text_thickness_um", deserialize_with = "crate::units::de")]
     pub text_thickness_nm: Option<Nm>,
+    /// The text anchor as the file has it (`gr_text`'s own `(at x y)`), kept for a `Radial`
+    /// and a `Leader` only: KiCad's `PCB_DIM_RADIAL::updateGeometry` and
+    /// `PCB_DIM_LEADER::updateGeometry` draw the leader line *to* `GetTextPos()` and never move
+    /// the text, and `PCB_DIM_RADIAL::updateText` only turns it toward that position. An
+    /// aligned or orthogonal dimension's text is recomputed (`text_position`), so it keeps
+    /// `None`. Additive: absent in an older `design.json`, where the geometry pass places it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_pos: Option<Point>,
+    /// `DIM_TEXT_BORDER` (`pcb_dimension.h`): the frame around a `Leader`'s text, its own
+    /// `(text_frame N)`. The other kinds have none, and only a leader writes the token.
+    #[serde(default, skip_serializing_if = "DimensionTextBorder::is_none")]
+    pub text_frame: DimensionTextBorder,
 }
 
 impl Dimension {
@@ -2465,6 +2477,27 @@ pub enum DimensionTextPosition {
 pub enum ArrowDirection {
     Inward,
     Outward,
+}
+
+/// `DIM_TEXT_BORDER` (`pcb_dimension.h`): a leader's `(text_frame N)`, 0 to 3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionTextBorder {
+    /// `DIM_TEXT_BORDER::NONE`.
+    #[default]
+    None,
+    /// `DIM_TEXT_BORDER::RECTANGLE`.
+    Rectangle,
+    /// `DIM_TEXT_BORDER::CIRCLE`.
+    Circle,
+    /// `DIM_TEXT_BORDER::ROUNDRECT`.
+    RoundRect,
+}
+
+impl DimensionTextBorder {
+    fn is_none(&self) -> bool {
+        *self == Self::None
+    }
 }
 
 /// `BOARD_DESIGN_SETTINGS`'s `m_Dimension*` fields -- see [`Dimension`]'s

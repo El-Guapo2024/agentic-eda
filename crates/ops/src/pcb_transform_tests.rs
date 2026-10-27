@@ -83,6 +83,8 @@ pub(super) fn dimension(id: &str, kind: DimensionKind, start: Point, end: Point)
         extension_offset: mm(0.3),
         extension_height: mm(0.5),
         arrow_direction: ArrowDirection::Inward,
+        text_pos: None,
+        text_frame: Default::default(),
         text_thickness_nm: None,
     }
 }

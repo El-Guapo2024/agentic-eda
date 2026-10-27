@@ -710,6 +710,8 @@ mod tests {
             extension_offset: Nm::from_mm(0.3),
             extension_height: Nm::from_mm(0.5),
             arrow_direction: ArrowDirection::Inward,
+            text_pos: None,
+            text_frame: Default::default(),
             text_thickness_nm: None,
         };
         let design = Design {

@@ -2909,6 +2909,37 @@ mod tests {
         assert!(got.contains(&brt.tracks[0].id) && got.contains(&brt.vias[0].id));
     }
 
+    /// `PCB_DIM_LEADER::updateGeometry` draws its line *to* `GetTextPos()` and never sets it, and so does `PCB_DIM_RADIAL::updateGeometry`
+    /// (`updateText` only turns the text toward it, rounded to a whole degree); `text_position_mode 0` makes KiCad recompute aligned and
+    /// orthogonal texts only. A leader's `(text_frame 1|2)` is its `DIM_TEXT_BORDER`. `issue6945`'s four leaders and `api_kitchen_sink`'s
+    /// leader and radial came back with their text moved 5.3 mm away and the frame lost.
+    #[test]
+    fn a_leader_and_a_radial_dimension_keep_their_text_position() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (37 "F.SilkS" user) (44 "Edge.Cuts" user) (49 "Dwgs.User" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (dimension (type leader) (layer "Dwgs.User") (uuid "3f749de1-cddc-4992-8135-8d1854ebbd09")
+    (pts (xy 167.95 100.95) (xy 170.31 98.29))
+    (format (prefix "") (suffix "") (units 0) (units_format 0) (precision 4) (override_value "PTH"))
+    (style (thickness 0.2) (arrow_length 1.27) (text_position_mode 0) (text_frame 1) (extension_offset 0.5))
+    (gr_text "PTH" (at 176.52 92.91 0) (layer "Dwgs.User") (effects (font (size 1.5 1.5) (thickness 0.3)))))
+  (dimension (type radial) (layer "F.SilkS") (uuid "32a22a4a-ae09-4c8c-9323-a332622fcb7d")
+    (pts (xy 115 93.5) (xy 113.25 94.75))
+    (leader_length 3.81)
+    (format (prefix "R ") (suffix "") (units 3) (units_format 1) (precision 4))
+    (style (thickness 0.1) (arrow_length 1.27) (text_position_mode 0) (extension_offset 0.5) (keep_text_aligned yes))
+    (gr_text "R 2.1506 mm" (at 97.449675 96.964518 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.1)))))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(text_frame 1)"), "the leader's frame is kept: {out}");
+        assert!(out.contains("(gr_text \"PTH\" (at 176.52 92.91 0)"), "the leader's text is where the file has it: {out}");
+        assert!(out.contains("(gr_text \"R 2.1506 mm\" (at 97.449675 96.964518 0)"), "the radial's text is where the file has it: {out}");
+    }
+
     #[test]
     fn a_dimension_is_written_with_its_format_and_style_and_reads_back_the_same() {
         use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Point};
@@ -2935,6 +2966,8 @@ mod tests {
             extension_offset: Nm::from_mm(0.5),
             extension_height: Nm::from_mm(0.58),
             arrow_direction: ArrowDirection::Inward,
+            text_pos: None,
+            text_frame: Default::default(),
             text_thickness_nm: Some(Nm::from_mm(0.18)),
         };
         let mut dims = vec![

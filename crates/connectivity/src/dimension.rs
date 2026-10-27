@@ -17,7 +17,8 @@
 //! anywhere -- `eda_engine::geometry::CHAR_WIDTH_FACTOR`'s own `0.6 *
 //! font_size` heuristic, reused here rather than re-derived, is the same
 //! approximation every other text-overlap check in this project already
-//! accepts); a leader's optional text border (rectangle/circle).
+//! accepts); the rectangle/circle a leader's `DIM_TEXT_BORDER` asks for
+//! (the choice itself is kept in the model and written back).
 
 use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Millideg, Point, Nm};
 
@@ -402,13 +403,18 @@ fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
     lines.push((sub(center, arm2), add(center, arm2)));
 
     let knee = add(dim.end, resize(radius_vec, leader_length));
-    let text_at = add(knee, resize(radius_vec, dim.text_size_nm.max(Nm::new(1))));
+    // `PCB_DIM_RADIAL::updateGeometry` draws the line to `GetTextPos()` and never places it: the user's text position is the dimension's
+    // own. A dimension created here (no `text_pos`) gets an automatic spot past the knee.
+    let text_at = dim.text_pos.unwrap_or_else(|| add(knee, resize(radius_vec, dim.text_size_nm.max(Nm::new(1)))));
     let text_angle = (if dim.keep_text_aligned {
-        let mut a = (-angle_of(sub(text_at, knee))).rem_euclid(360_000);
-        if a > 90_000 && a <= 270_000 {
-            a -= 180_000;
+        // `PCB_DIM_RADIAL::updateText`: `textAngle = FULL_CIRCLE - EDA_ANGLE( textLine )`, normalized, folded into
+        // (-90, 90], then `KiROUND( textAngle.AsDegrees() )` -- the nearest whole degree, where an aligned text keeps millidegrees.
+        let text_line = sub(text_at, knee);
+        let mut a = (360.0 - text_line.y.as_f64().atan2(text_line.x.as_f64()).to_degrees()).rem_euclid(360.0);
+        if a > 90.0 && a <= 270.0 {
+            a -= 180.0;
         }
-        a
+        (a.round() as i64) * 1000
     } else {
         dim.text_angle as i64
     })
@@ -432,13 +438,11 @@ fn leader(dim: &Dimension) -> DimensionGeometry {
     let start = add(dim.start, resize(first_line, dim.extension_offset));
 
     let text = format_value(dim, measured_value_nm);
-    // Text sits a fixed offset off the knee, continuing the arrow's own
-    // direction -- source lets the user drag it freely (`GetTextPos()`
-    // is independently settable); this port places it automatically,
-    // same "no manual sub-element dragging" scope PARITY-pcb.md already
-    // notes elsewhere.
-    let text_at = add(dim.end, resize(first_line, dim.text_size_nm.max(Nm::new(1)) * 2));
-    let text_angle = (if dim.keep_text_aligned { 0 } else { dim.text_angle as i64 }).rem_euclid(360_000) as Millideg;
+    // `PCB_DIM_LEADER::updateGeometry` builds its line from `m_end` to `GetTextPos()`; with no text position (a leader created here) the
+    // text sits a fixed offset off the knee, continuing the arrow's own direction. Its `updateText` is `updateGeometry`: the angle is the
+    // file's, never recomputed, whatever `keep_text_aligned` says.
+    let text_at = dim.text_pos.unwrap_or_else(|| add(dim.end, resize(first_line, dim.text_size_nm.max(Nm::new(1)) * 2)));
+    let text_angle = (dim.text_angle as i64).rem_euclid(360_000) as Millideg;
 
     let mut lines = knockout(start, dim.end, text_at, &text, dim.text_size_nm);
     lines.extend(arrowhead(start, angle_of(first_line), dim.arrow_length, Nm::ZERO));
@@ -466,24 +470,33 @@ fn rotate_point_set(pts: &mut [Point], pivot: Point, angle_millideg: i64) {
 }
 
 /// Translate a dimension's own feature points by `(dx, dy)` -- what
-/// dragging it does (`PCB_DIMENSION_BASE::Move`). Text position/angle are
-/// always recomputed from `start`/`end`, never carried along separately.
+/// dragging it does (`PCB_DIMENSION_BASE::Move`, which offsets the text too:
+/// `PCB_TEXT::Offset( offset )`). A kept text position moves along; an
+/// aligned/orthogonal text has none and is recomputed from `start`/`end`.
 pub fn translate_dimension(dim: &mut Dimension, dx: Nm, dy: Nm) {
     dim.start.x += dx;
     dim.start.y += dy;
     dim.end.x += dx;
     dim.end.y += dy;
+    if let Some(p) = &mut dim.text_pos {
+        p.x += dx;
+        p.y += dy;
+    }
 }
 
 /// Rotate a dimension's own feature points about `pivot` by `angle_millideg`, clockwise-positive on the screen as every
 /// turn of this crate -- `PCB_DIMENSION_BASE::Rotate`. `text_angle` (only meaningful when `keep_text_aligned` is false)
 /// turns along: it is KiCad's counter-clockwise file angle, so KiCad's `newAngle = GetTextAngle() + aAngle` (with
-/// `aAngle` counter-clockwise) is a subtraction here, as `PCB_TEXT::Rotate` is for a text.
+/// `aAngle` counter-clockwise) is a subtraction here, as `PCB_TEXT::Rotate` is for a text. A kept text position turns
+/// about the pivot with the feature points (`RotatePoint( pt, aRotCentre, aAngle )` in `PCB_DIMENSION_BASE::Rotate`).
 pub fn rotate_dimension(dim: &mut Dimension, pivot: Point, angle_millideg: i64) {
     let mut pts = [dim.start, dim.end];
     rotate_point_set(&mut pts, pivot, angle_millideg);
     dim.start = pts[0];
     dim.end = pts[1];
+    if let Some(p) = &mut dim.text_pos {
+        *p = rotate_about(*p, pivot, angle_millideg);
+    }
     dim.text_angle = ((dim.text_angle as i64 - angle_millideg).rem_euclid(360_000)) as Millideg;
 }
 
@@ -515,6 +528,8 @@ mod tests {
             extension_offset: mm(0.2),
             extension_height: mm(0.5),
             arrow_direction: ArrowDirection::Outward,
+            text_pos: None,
+            text_frame: Default::default(),
             text_thickness_nm: None,
         }
     }
