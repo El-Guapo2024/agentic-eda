@@ -224,6 +224,11 @@ pub fn scratch_board(fp: &LibraryFootprint) -> Scratch {
             Child::Form(f) => match head(f) {
                 // a footprint of a board has neither
                 "version" | "generator" | "generator_version" | "layer" => {}
+                // The footprint's fields (the Reference, the Value, the user fields) are not the checker's: `FOOTPRINT::CheckClippedSilk` tests the drawings
+                // (`m_drawings`: the graphics and the texts) against each other and the pads, never `m_fields`, while the board DRC's silk-to-mask test takes
+                // every visible field -- a new footprint's REF** (`CreateNewFootprint`'s, at (0, -0.5 mm) on the silkscreen) would be "clipped by solder mask"
+                // over any pad near the origin. They are left off; the one Reference below is hidden.
+                "property" => {}
                 "fp_line" | "fp_arc" | "fp_rect" | "fp_circle" | "fp_poly" | "fp_curve" => {
                     let uuid = uuid_of(next);
                     next += 1;
@@ -257,7 +262,7 @@ pub fn scratch_board(fp: &LibraryFootprint) -> Scratch {
             },
         }
     }
-    // The Footprint Editor's footprint carries the Reference `REF**`; here it is hidden, so that what the checks say of the footprint names it and no text of its own lands on a pad.
+    // The Footprint Editor's footprint carries the Reference `REF**`; here it is hidden, so that what the checks say of the footprint names it and no field lands on a pad.
     body.insert_str(0, &format!("\t\t(property \"Reference\" \"REF**\" (at 0 0 0) (layer \"F.SilkS\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n", uuid_of(next)));
     next += 1;
     let r = reach(fp) + mm(10.0);
@@ -402,6 +407,8 @@ mod tests {
         assert!(s.pcb.contains("(footprint \"TEST:Two\"\n\t\t(layer \"F.Cu\")") && s.pcb.contains("(at 0 0)"), "placed at the origin on the front");
         assert!(!s.pcb.contains("(generator \"eda\")") && !s.pcb.contains("(version 20240108)"), "a board's footprint has no version of its own");
         assert!(s.pcb.contains("(property \"Reference\" \"REF**\"") && s.pcb.contains("(hide yes)"), "a hidden Reference, as the editor's footprint has one");
+        // the library file's own fields (a visible REF** on the silkscreen, the Value) are not on it: the checker's silk test never looks at fields
+        assert_eq!(s.pcb.matches("(property ").count(), 1, "{}", s.pcb);
         // pads carry their net; the two pads numbered 2 share one; the hole has none
         let pad_lines: Vec<&str> = s.pcb.lines().filter(|l| l.trim_start().starts_with("(pad ")).collect();
         assert_eq!(pad_lines.len(), 4);
@@ -473,6 +480,13 @@ mod tests {
         clean.attributes.smd = true;
         let c = footprint_check(&clean).expect("kicad-cli runs");
         assert!(c.violations.is_empty(), "{:?}", c.violations.iter().map(|v| (&v.kind, &v.description)).collect::<Vec<_>>());
+
+        // silkscreen drawn over a pad: clipped by the mask, an error (`CheckClippedSilk`)
+        let mut silk = clean.clone();
+        silk.graphics.push(line("s1", "F.SilkS", (mm(-2.5), Nm::ZERO), (mm(-0.5), Nm::ZERO)));
+        let c = footprint_check(&silk).unwrap();
+        assert_eq!(kinds(&c), ["silk_over_copper"], "{:?}", c.violations.iter().map(|v| (&v.kind, &v.description)).collect::<Vec<_>>());
+        assert!(c.violations.iter().all(|v| v.severity == "error"));
 
         // no courtyard at all: a warning
         let mut missing = clean.clone();
