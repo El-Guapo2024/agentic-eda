@@ -180,7 +180,52 @@ never edited as masters.
     gets our own port of `FromBOARD` (`eda_kicad::specctra::export_dsn`), a
     fallback marked DEPRECATED, to be deleted once every machine has the
     command; the reply's `engine` says which wrote the file. The session
-    import (SES, `Cmd::Specctra`) stays ours: kicad-cli has no command for it.
+    import (SES, File > Import > Specctra Session..., `Cmd::Specctra`, `eda
+    board import-ses`) is KiCad's own since 2026-10-28: `ImportSpecctraSession`
+    on the api-server lane (below), read back onto the design
+    (`eda_kicad_engine::api::specctra`). Our port of `FromSESSION`
+    (`crates/kicad/src/specctra`) is **INACTIVE**: kept compiling and tested
+    for a future all-Rust build, and the fallback where the lane is closed (a
+    kicad-cli without `api-server`, such as the Mac's 10.99.0-5334; a server
+    without the command, before KiCad 11.0; `EDA_KICAD_API=0`). One difference
+    shows: KiCad 25ec2335 skips a `(place ..)` of a part the board has not got
+    and imports the rest (the CLI prints the count), the port of 8303b2ad
+    refuses the session ("Reference '%s' not found.").
+  - **The api-server lane** (2026-10-28, `crates/kicad-engine/src/api`):
+    `kicad-cli api-server` is KiCad's IPC API with no GUI (protobuf over an nng
+    `req0`/`rep0` socket; `kicad/cli/command_api_server.cpp`). The lane starts
+    one on first use with `cli_command`'s settings folder, keeps it, pings it
+    after an idle spell, restarts it when its process dies or stops answering
+    (and runs the request again once), and ends it with the program: it runs
+    under a `sh` that reads a pipe from this process and kills its process
+    group when the pipe closes, so a crash or a `kill -9` of the studio takes
+    it along too; the CLI also stops it at its end (`api::shutdown`). One
+    request at a time (a lock): the server holds one project. The messages are
+    generated from KiCad's `api/proto` by prost-build into
+    `crates/kicad-engine/src/api/gen` (committed; `crates/kicad-engine/api-gen`
+    regenerates them, so a build needs no protoc), and the socket's framing is
+    nng's SP wire format written out in `api/sp.rs` (the approved `nng` crate
+    needs CMake to build the C library, which neither this box nor every Mac
+    has). It does what per-run kicad-cli cannot or does slowly:
+    - the Specctra session import (above);
+    - export jobs without a process start (`api::jobs`): `drill`, `pos` and
+      `ipcd356` (`export_pcb`, `/api/fab/*`, `eda board export --kicad`), their
+      job built from the same arguments with kicad-cli's defaults
+      (`command_pcb_export_drill.cpp`, `..._pos.cpp`, `..._ipcd356.cpp`); an
+      argument it does not map, a job that fails or a closed lane runs per-run,
+      so a failure is always kicad-cli's words. The reply's `engine` ends in
+      `(api-server)`. The board stays open for the next job on the same bytes
+      (KiCad's job handler keeps the board it loaded until the document
+      closes). Measured (tests/api_jobs.rs, same bytes both ways): a 72-part
+      QA board 0.28 s per-run, 0.08-0.17 s the first time and 0.03 s again
+      through the server; the 1,508-part `vme-wren` 5.8 s per-run, 8.7 s the
+      first time (the server loads the board twice: `OpenDocument`, then the
+      job) and 2.4 s again. The other export kinds stay per-run until their
+      messages (plot settings, layers, variants) are mapped and proved.
+    The lane is optional everywhere: when it is closed every caller takes its
+    per-run kicad-cli path (or the INACTIVE port, for the session import). The
+    server runs no DRC or ERC (`InjectDrcError` only) and no fill in a way we
+    need (`RefillZones` exists; the per-run fill stays), so those stay per-run.
   - **IDFv3 and GenCAD** (File > Export > IDFv3... and GenCAD..., `/api/fab/idf`
     and `/api/fab/gencad`, `eda board export --kicad idf|gencad`): kicad-cli's
     `pcb export idf` and `gencad`, asked through the same probe. There is no

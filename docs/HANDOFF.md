@@ -73,6 +73,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-kicad-api-server` | The kicad-cli api-server lane (`crates/kicad-engine/src/api`: one `kicad-cli api-server` kept up, protobuf types generated from KiCad's `api/proto`, nng's SP framing over the Unix socket); the Specctra session import through its `ImportSpecctraSession` (our `crates/kicad/src/specctra` INACTIVE, the fallback); `drill`, `pos`, `ipcd356` exports through its jobs (per-run fallback) | Done, gates run | Other export kinds through the lane; the `nng` crate was approved but not used (CMake), the lead to confirm |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
