@@ -28,6 +28,7 @@ import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, t
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { snapPoint } from "../components/canvas/gridHelper";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
@@ -214,20 +215,26 @@ export function useActionRunner() {
     // The Design Blocks panes of the schematic and the board editor: show, place, save, update, properties, delete (actions/designBlockActions.ts).
     registerDesignBlockActions(m, { tab: state.tab, dispatch, api });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
-    const deleteRefs = (refs: string[]) => {
+    const deleteRefs = (refs: string[], isCut = false) => {
       const cmds: Cmd[] = [];
+      let keepSelection: string[] | undefined;
       // `SCH_EDIT_TOOL::DoDelete`: every selectable schematic item, locked ones skipped (kicad-port/schDelete.ts).
       if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
       // `EDIT_TOOL::DeleteItems`: each item by its own verb, a group with everything below it (the groups it holds opened), a locked item -- or a group with a locked
       // item anywhere in it -- skipped (kicad-port/deleteCmds.ts).
       if (state.tab === "pcb" && state.board) {
-        const del = boardDeleteCmds(state.board, refs);
+        // `DeleteItems` reads the cursor (`GetCursorPosition()`, grid-snapped) for a lone zone's cutout.
+        const cursor = state.cursorNm ? (([x, y]) => ({ x, y }))(snapPoint(state.cursorNm.x, state.cursorNm.y, state.gridNm)) : null;
+        const del = boardDeleteCmds(state.board, refs, { cursor, isCut });
         cmds.push(...del.cmds);
+        keepSelection = del.keepSelection;
         if (del.message) dispatch({ type: "TOAST", message: del.message, kind: "error" });
       }
       // A tuning pattern is removed, its track put back (`PCB_TUNING_PATTERN::Remove`), before what else was selected goes.
       const patterns = state.tab === "pcb" ? tuningPatternIds(state.board, refs) : [];
-      dispatch({ type: "CLEAR_SELECTION" });
+      // "Restore the selection on the original zone" after a cutout is removed.
+      if (keepSelection) dispatch({ type: "SET_SELECTION", refs: keepSelection });
+      else dispatch({ type: "CLEAR_SELECTION" });
       if (patterns.length > 0) void removeTuningPatterns(patterns, api, dispatch).then(() => (cmds.length ? api.cmdBatch(cmds) : undefined));
       else if (cmds.length) void api.cmdBatch(cmds);
     };
@@ -334,7 +341,7 @@ export function useActionRunner() {
         if (!state.board) return;
         const refs = editableSelection(state.board, requestSelection()).ids;
         if (refs.length === 0) return;
-        void api.copySelection(refs).then(() => deleteRefs(refs));
+        void api.copySelection(refs).then(() => deleteRefs(refs, true));
       })
     );
 

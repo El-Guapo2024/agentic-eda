@@ -93,3 +93,20 @@ test("a field is hidden, not deleted; one already hidden says to use Footprint P
   // with the footprint itself, the footprint goes and the field with it
   assert.deepEqual(boardDeleteCmds(b, ["R1", "R1:Reference"]).cmds, [{ op: "rip", part: "R1" }]);
 });
+
+test("a lone zone deleted from inside a cutout loses the cutout only (EDIT_TOOL::DeleteItems, ZONE::HitTestCutout)", () => {
+  const sq = (x0: number, y0: number, x1: number, y1: number): [number, number][] => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const zoned = {
+    ...board,
+    routing: { ...board.routing, zones: [{ id: "Z1", outline: sq(0, 0, 100, 100), holes: [sq(10, 10, 20, 20), sq(50, 50, 60, 60)] }] },
+  } as unknown as BoardState;
+  const xy = (r: [number, number][]) => r.map(([x, y]) => ({ x, y }));
+  const inside = boardDeleteCmds(zoned, ["Z1"], { cursor: { x: 55, y: 55 } });
+  assert.deepEqual(inside.cmds, [{ op: "set_zone_outline", id: "Z1", outline: xy(sq(0, 0, 100, 100)), holes: [xy(sq(10, 10, 20, 20))] }]);
+  assert.deepEqual(inside.keepSelection, ["Z1"], "the zone stays selected");
+  // outside every hole, as a Cut, or with a second item: the whole zone goes
+  assert.deepEqual(boardDeleteCmds(zoned, ["Z1"], { cursor: { x: 30, y: 30 } }).cmds, [{ op: "delete_zone", id: "Z1" }]);
+  assert.deepEqual(boardDeleteCmds(zoned, ["Z1"], { cursor: { x: 55, y: 55 }, isCut: true }).cmds, [{ op: "delete_zone", id: "Z1" }]);
+  const two = boardDeleteCmds(zoned, ["Z1", "T1"], { cursor: { x: 55, y: 55 } }).cmds.map((c) => c.op).sort();
+  assert.deepEqual(two, ["delete_track", "delete_zone"]);
+});
