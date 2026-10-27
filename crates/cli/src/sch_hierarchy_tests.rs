@@ -1167,6 +1167,26 @@ fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
     }
 }
 
+/// r3 A3-H3 (`DeriveSignal`, `SignalBaseName`: a net nothing drives is named from the drawing every time): R2.1 wired to R3.1 is `Net-(R2-Pad1)`; a wire that
+/// joins R1.1 makes it `Net-(R1-Pad1)`, the name kicad-cli gives the derived file, not the old name.
+#[test]
+fn an_undriven_net_an_edit_touches_takes_kicads_name() {
+    let work = scratch("undriven_rename");
+    std::fs::write(work.join("t.kicad_sch"), include_str!("../tests/fixtures/three_resistors.kicad_sch")).unwrap();
+    let dir = work.join("board");
+    crate::import_kicad::run(&[work.join("t.kicad_sch").display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let net = |dir: &Path, pin: &str| load(dir).unwrap().1.nets.unwrap_or_default().into_iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| (n.name, n.pins));
+    assert_eq!(net(&dir, "R2.1").map(|n| n.0).as_deref(), Some("Net-(R2-Pad1)"));
+    let pt = |x: i64, y: i64| Point { x: Nm::new(x), y: Nm::new(y) };
+    step(&dir, Cmd::AddWire { pts: vec![pt(50_800_000, 46_990_000), pt(76_200_000, 46_990_000)], bus: false }, false, "test").unwrap();
+    assert_eq!(net(&dir, "R2.1"), Some(("Net-(R1-Pad1)".to_string(), vec!["R1.1".to_string(), "R2.1".into(), "R3.1".into()])));
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(design.schematic.as_ref().unwrap().wires.iter().filter(|w| !w.pins.is_empty()).all(|w| w.net == "Net-(R1-Pad1)"), "every wire carries it");
+    if kicad_cli_ready() {
+        assert_eq!(kicad_net_names(&dir).get("R2.1").map(String::as_str), Some("Net-(R1-Pad1)"), "kicad-cli's name of the derived file");
+    }
+}
+
 /// r2 B-M4 (`SCH_SYMBOL_INSTANCE::m_Unit`, `SCH_SYMBOL::GetPins( aSheet )` -> `GetUnitSelection( aSheet )`): a shared channel screen whose dual part is U1
 /// unit A on one path and U1 unit B on the other, unit B's pins and box 2.54 mm higher. kicad-cli's netlist of the file puts pins 1 and 2 on `/a/OUT` and
 /// `/a/IN`, pins 7 and 6 on `/b/OUT2` and `/b/IN2` (the wires of the other unit's pins are on no pin there); the import keeps

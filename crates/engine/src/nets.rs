@@ -846,9 +846,8 @@ fn kicad_net_name(pins: &[String], facts: &PinFacts, shown_count: &BTreeMap<(Str
 /// and every pin, even when the drawing shows it in pieces. A net it did touch is read from the drawing, and is named
 /// - by its driver, when a label, a power symbol or a sheet pin drives it (a label joins the net that has its name, and renames the net
 ///   it is put on);
-/// - else by the net of `prev` most of its pins come from (the larger overlap first, then the name), when no other net took that name:
-///   a net keeps its name through an edit that moves a pin in or out of it, and a net made of two joins as one, whole;
-/// - else by what KiCad calls it (`Net-(R1-Pad1)`; `unconnected-(R2-Pad1)` for a lone pin) -- the name the tracer gave the net.
+/// - else by what KiCad calls it (`Net-(R1-Pad1)`; `unconnected-(R2-Pad1)` for a lone pin) -- the name the tracer gave the net, which KiCad derives from
+///   the drawing every time: a net does not keep an old name through an edit (r3 A3-H3). A net made of two still joins as one, whole.
 pub fn follow(prev: &[Net], before: &[TracedNet], after: &[TracedNet]) -> Option<Vec<Net>> {
     let key = |t: &TracedNet| (t.pins.clone(), t.driven.then(|| t.name.clone()));
     let before_keys: BTreeSet<_> = before.iter().map(key).collect();
@@ -891,22 +890,18 @@ pub fn follow(prev: &[Net], before: &[TracedNet], after: &[TracedNet]) -> Option
         }
         let mut ranked: Vec<(&str, usize)> = overlap.iter().map(|(n, c)| (*n, *c)).collect();
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        // A net nothing drives is named as KiCad names it every time, from the drawing (`DeriveSignal`, `SignalBaseName`: the best pin's name): an old name is
+        // not inherited (r3 A3-H3; the 2026-10-23 decision, KiCad's names everywhere, so that F8 leaves the derived project's nets as they are).
         let name = if t.driven {
             t.name.clone()
         } else {
-            let inherited = ranked.iter().map(|(n, _)| *n).find(|n| !claimed.contains(*n) && !driven_names.contains(*n));
-            match inherited {
-                Some(n) => n.to_string(),
-                None => {
-                    let mut fresh = t.name.clone();
-                    let mut k = 1;
-                    while claimed.contains(&fresh) || nets.contains_key(&fresh) || driven_names.contains(fresh.as_str()) {
-                        k += 1;
-                        fresh = format!("{}_{k}", t.name);
-                    }
-                    fresh
-                }
+            let mut fresh = t.name.clone();
+            let mut k = 1;
+            while claimed.contains(&fresh) || nets.contains_key(&fresh) || driven_names.contains(fresh.as_str()) {
+                k += 1;
+                fresh = format!("{}_{k}", t.name);
             }
+            fresh
         };
         // A net made of several joins them whole: what the others still had, untouched, comes along -- unless another net's driver or
         // another change owns that name.
@@ -1698,6 +1693,7 @@ mod tests {
         assert!(follow(&[], &before, &before).is_none());
     }
 
+    /// A net made of two joins them whole, under the name KiCad gives it (r3 A3-H3: no old name is inherited).
     #[test]
     fn a_wire_that_joins_two_nets_joins_them_whole_under_the_name_that_wins() {
         let prev = vec![net("N1", &["R1.1", "R3.1"]), net("N2", &["R2.1", "R4.1"]), net("N3", &["R5.1", "R6.1"])];
@@ -1707,16 +1703,18 @@ mod tests {
         after.retain(|t| t.pins != vec!["R1.1".to_string()] && t.pins != vec!["R2.1".to_string()]);
         after.push(tn("Net-(R1-Pad1)", &["R1.1", "R2.1"], false));
         let out = follow(&prev, &before, &after).unwrap();
-        expect(&out, &[("N1", &["R1.1", "R2.1", "R3.1", "R4.1"]), ("N3", &["R5.1", "R6.1"])]);
+        expect(&out, &[("N3", &["R5.1", "R6.1"]), ("Net-(R1-Pad1)", &["R1.1", "R2.1", "R3.1", "R4.1"])]);
     }
 
+    /// r3 A3-H3 (`DeriveSignal`, `SignalBaseName`: a net nothing drives is named from the drawing every time): a deleted wire splits a net, and each part
+    /// takes KiCad's name, not the old one.
     #[test]
-    fn a_deleted_wire_splits_a_net_and_the_larger_part_keeps_the_name() {
+    fn a_deleted_wire_splits_a_net_and_each_part_takes_kicads_name() {
         let prev = vec![net("LED1", &["D1.1", "R1.2", "R9.1"])];
         let before = vec![tn("Net-(D1-Pad1)", &["D1.1", "R1.2", "R9.1"], false)];
         let after = vec![tn("Net-(D1-Pad1)", &["D1.1", "R1.2"], false), tn("unconnected-(R9-Pad1)", &["R9.1"], false)];
         let out = follow(&prev, &before, &after).unwrap();
-        expect(&out, &[("LED1", &["D1.1", "R1.2"]), ("unconnected-(R9-Pad1)", &["R9.1"])]);
+        expect(&out, &[("Net-(D1-Pad1)", &["D1.1", "R1.2"]), ("unconnected-(R9-Pad1)", &["R9.1"])]);
     }
 
     #[test]
@@ -1731,14 +1729,16 @@ mod tests {
         expect(&follow(&prev, &before, &after).unwrap(), &[("GND", &["c.1", "d.1", "e.1"]), ("N1", &["a.1", "b.1"])]);
     }
 
+    /// A no-connect flag takes its pin out of the net; a renamed part's net is named anew, as KiCad names it (r3 A3-H3); a net the edit did not touch
+    /// keeps its name.
     #[test]
-    fn a_no_connect_flag_takes_its_pin_out_of_the_net_and_a_renamed_part_keeps_its_net() {
+    fn a_no_connect_flag_takes_its_pin_out_of_the_net_and_a_renamed_parts_net_takes_kicads_name() {
         let prev = vec![net("N", &["a.1", "b.1", "c.1"]), net("LED1", &["D1.1", "R1.2"])];
-        let before = vec![tn("n", &["a.1", "b.1", "c.1"], false), tn("n", &["D1.1", "R1.2"], false)];
-        let after = vec![tn("n", &["b.1", "c.1"], false), before[1].clone()];
-        expect(&follow(&prev, &before, &after).unwrap(), &[("LED1", &["D1.1", "R1.2"]), ("N", &["b.1", "c.1"])]);
-        let renamed = vec![before[0].clone(), tn("n", &["D1.1", "R100.2"], false)];
-        expect(&follow(&prev, &before, &renamed).unwrap(), &[("LED1", &["D1.1", "R100.2"]), ("N", &["a.1", "b.1", "c.1"])]);
+        let before = vec![tn("Net-(a-Pad1)", &["a.1", "b.1", "c.1"], false), tn("Net-(D1-Pad1)", &["D1.1", "R1.2"], false)];
+        let after = vec![tn("Net-(b-Pad1)", &["b.1", "c.1"], false), before[1].clone()];
+        expect(&follow(&prev, &before, &after).unwrap(), &[("LED1", &["D1.1", "R1.2"]), ("Net-(b-Pad1)", &["b.1", "c.1"])]);
+        let renamed = vec![before[0].clone(), tn("Net-(D1-Pad1)", &["D1.1", "R100.2"], false)];
+        expect(&follow(&prev, &before, &renamed).unwrap(), &[("N", &["a.1", "b.1", "c.1"]), ("Net-(D1-Pad1)", &["D1.1", "R100.2"])]);
     }
 
     /// An undriven net may not take the name of a net a driver names: the label's net is another net, whatever the list said.

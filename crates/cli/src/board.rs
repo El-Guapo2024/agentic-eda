@@ -4103,7 +4103,9 @@ pub(crate) mod tests {
         assert!(sch.wires[0].pins.contains(&"R9.1".to_string()), "reconcile re-derives the wire's own pins from geometry using the renamed id -- the connection must survive the rename, not just the string");
         assert!(sch.wires[0].pins.contains(&"R2.1".to_string()));
         assert_eq!(net_of(&model.nets, "R9.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "still the same merged net");
-        assert_eq!(net_of(&model.nets, "R2.1").unwrap().name, before_net, "renaming one end must not even need to rename the net itself");
+        // the net nothing drives is named as KiCad names the drawing, from its best pin, after the rename too (r3 A3-H3)
+        assert_eq!(before_net, "Net-(R1-Pad1)");
+        assert_eq!(net_of(&model.nets, "R2.1").unwrap().name, "Net-(R2-Pad1)", "KiCad's name for R9.1 and R2.1");
     }
 
     #[test]
