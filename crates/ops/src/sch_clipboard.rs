@@ -45,6 +45,11 @@ impl<'a> Board<'a> {
         out
     }
 
+    /// Whether some sheet of the design places a symbol or a power symbol of `lib_id`.
+    fn places_lib_id(&self, lib_id: &str) -> bool {
+        self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).any(|s| s.symbols.iter().any(|x| x.lib_id == lib_id) || s.power_symbols.iter().any(|p| p.lib_id == lib_id))
+    }
+
     /// The library symbol the design draws `lib_id` from, if it has one at all: a real library's, a built-in, or one published into the project.
     pub(crate) fn design_symbol(&self, lib_id: &str) -> Option<LibSymbol> {
         if lib_id.is_empty() || is_synthetic_lib_id(lib_id) {
@@ -65,13 +70,30 @@ impl<'a> Board<'a> {
         let mut engine_of: BTreeMap<String, LibSymbol> = BTreeMap::new();
         let mut publish: Vec<LibrarySymbol> = Vec::new();
         for lib_id in wanted.iter().map(String::as_str) {
-            if let Some(known) = self.design_symbol(lib_id) {
+            // `SCH_EDITOR_CONTROL::Paste` never opens the installed library: it takes the screen's cached copy (`currentScreen->GetLibSymbols()`), else the
+            // clipboard's (r2 D-C4). The design draws one copy of a name for every sheet: it is "cached" when the design publishes it or already places it.
+            let in_cache = self.design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id(lib_id).is_some_and(|s| s.published)) || self.places_lib_id(lib_id);
+            // (a clipboard copy that draws just as the library's is the library's: nothing to publish)
+            let library = self.design_symbol(lib_id);
+            let same_as_library = library.as_ref().is_some_and(|l| provided.iter().filter(|t| t.lib_id == lib_id).all(|t| serde_json::to_value(t.to_engine_symbol()).ok() == serde_json::to_value(l).ok()));
+            let known = if in_cache || same_as_library { library } else { None };
+            if let Some(known) = known {
                 // The design's own wins -- unless the definition that comes with the items draws its pins elsewhere (a file this project wrote bakes a
                 // library symbol shifted to its box's corner, under the library's name): the items' wires end where THEIR pins are, so they bring
-                // their definition, under a name the design does not use.
-                if !provided.iter().any(|t| t.lib_id == lib_id && !same_pins(t, &known)) {
+                // their definition, under a name the design does not use. Or unless it is another kind of power symbol (`clipLibSymbol->IsLocalPower()
+                // != it->second->IsLocalPower() || .. IsGlobalPower() ..`: the clipboard's copy).
+                let cached = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).filter(|s| s.published).cloned().unwrap_or_else(|| LibrarySymbol::from_engine_symbol(&known));
+                let power_kind = |s: &LibrarySymbol| (s.power && s.power_local, s.power && !s.power_local);
+                if !provided.iter().any(|t| t.lib_id == lib_id && (!same_pins(t, &known) || power_kind(t) != power_kind(&cached))) {
                     lib_name.insert(lib_id.to_string(), lib_id.to_string());
                     engine_of.insert(lib_id.to_string(), known);
+                    continue;
+                }
+            } else if !provided.iter().any(|t| t.lib_id == lib_id) {
+                // not in the design yet and not on the clipboard: the library's (KiCad would paste a broken link; the sheet draws what the library has)
+                if let Some(lib) = self.design_symbol(lib_id) {
+                    lib_name.insert(lib_id.to_string(), lib_id.to_string());
+                    engine_of.insert(lib_id.to_string(), lib);
                     continue;
                 }
             }
@@ -99,7 +121,8 @@ impl<'a> Board<'a> {
                     // a library symbol the design has but has not published (a name of an installed library): a different drawing may not take its name.
                     // Only the name the items came with is such a name: a `_N` this loop makes is judged by the design's own library alone (the built-in
                     // symbols answer every `power:<net>`, so `power:PWR_FLAG_2`, `_3`... would each be "taken" and the loop would never end).
-                    None => name == base && self.design_symbol(&name).is_some_and(|k| !same_pins(&theirs, &k)),
+                    // (a name the design places draws as the design has it: the clipboard's other copy takes a name of its own)
+                    None => name == base && ((in_cache && name == lib_id) || self.design_symbol(&name).is_some_and(|k| !same_pins(&theirs, &k))),
                 };
                 if !clash {
                     break;

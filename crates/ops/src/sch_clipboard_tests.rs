@@ -336,3 +336,44 @@ fn a_paste_numbers_from_the_sheet_number_times_100_when_setup_says_so() {
     assert_eq!(refs(child), vec!["R201"]);
     assert_eq!(refs(b.design().schematic.as_ref().unwrap()), vec!["R101"]);
 }
+
+/// r2 D-C4 (`SCH_EDITOR_CONTROL::Paste`: the screen's cached library symbol, else the clipboard's -- never the installed library; a cached one of another
+/// power kind gives way to the clipboard's): an edited `Device:R` the design does not place yet comes in as the clipboard draws it; once the design places
+/// `Device:R`, a paste draws it the design's way; and a clipboard `power:VCC` that is `(power local)` where the design's is global keeps its own copy, under a
+/// name of its own.
+#[test]
+fn paste_keeps_the_clipboards_local_power_symbol() {
+    let m = ConstraintModel::default();
+    let mut edited = eda_model::symbol::builtin("Device:R").unwrap();
+    if let eda_model::symbol::SymbolGraphic::Rectangle { end, .. } = &mut edited.graphics[0] {
+        end.x += 0.5;
+    }
+    let edited = LibrarySymbol::from_engine_symbol(&edited);
+    let mut f = fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(Nm::ZERO, Nm::ZERO))));
+    f.lib_symbols.retain(|l| l.lib_id != "Device:R");
+    f.lib_symbols.push(edited);
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&paste(&f, Nm::ZERO, Nm::ZERO, PasteMode::Unique)).unwrap();
+    let published = |b: &Board<'_>, id: &str| b.design().symbol_library.as_ref().and_then(|l| l.by_lib_id(id)).filter(|s| s.published).cloned();
+    let drawn = published(&b, "Device:R").map(|s| s.to_engine_symbol().graphics).unwrap_or_default();
+    assert!(matches!(drawn.first(), Some(eda_model::symbol::SymbolGraphic::Rectangle { end, .. }) if (end.x - 1.516).abs() < 1e-9), "the clipboard's artwork, not the installed library's: {drawn:?}");
+    // a design that places Device:R already draws a pasted one its own way
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddSymbol { id: "R9".into(), lib_id: "Device:R".into(), at: p(mm(50.0), mm(50.0)), rot_millideg: 0, value: "1k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    b.apply(&paste(&f, Nm::ZERO, Nm::ZERO, PasteMode::Unique)).unwrap();
+    assert!(published(&b, "Device:R").is_none(), "the design's own Device:R");
+    // a local power symbol where the design has the global one
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    let vcc = fragment(|s| s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:VCC".into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, net: "VCC".into(), pin: String::new() }));
+    b.apply(&paste(&vcc, mm(20.0), Nm::ZERO, PasteMode::Unique)).unwrap();
+    let mut local = LibrarySymbol::from_engine_symbol(&eda_model::symbol::builtin("power:VCC").unwrap());
+    local.power_local = true;
+    let mut lvcc = vcc.clone();
+    lvcc.lib_symbols = vec![local];
+    b.apply(&paste(&lvcc, mm(40.0), Nm::ZERO, PasteMode::Unique)).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let pasted = sch.power_symbols.last().unwrap();
+    assert_ne!(pasted.lib_id, "power:VCC", "a copy of its own");
+    assert!(published(&b, &pasted.lib_id).is_some_and(|s| s.power_local), "{}", pasted.lib_id);
+    assert_eq!(sch.power_symbols[0].lib_id, "power:VCC", "the first stays the design's global one");
+}
