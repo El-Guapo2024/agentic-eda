@@ -9,3 +9,10 @@ test("a plain-text paste is the clipboard text as is, 1.27 mm, the automatic pen
   assert.equal(plainTextPaste("x".repeat(101), { x: 0, y: 0 }, "F.Cu")!.longText, true);
   assert.equal(plainTextPaste("", { x: 0, y: 0 }, "F.Cu"), null);
 });
+
+test("the long-text question counts code points, as a wxString does (round 3 B-5)", () => {
+  const emoji = "\u{1F600}".repeat(60);
+  assert.equal(emoji.length, 120);
+  assert.equal(plainTextPaste(emoji, { x: 0, y: 0 }, "F.SilkS")!.longText, false);
+  assert.equal(plainTextPaste("  ", { x: 0, y: 0 }, "F.SilkS")!.cmd.op, "add_text", "blanks are a text");
+});

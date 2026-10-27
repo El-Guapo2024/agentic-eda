@@ -888,6 +888,8 @@ fn handle(
         ("GET", "/api/rule_editor") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::view(dir).to_string().as_bytes()),
         ("POST", "/api/rule_editor/check") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::check(dir, &body).to_string().as_bytes()),
         ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),
+        // What Track & Via Properties' OK would ask first: a short, then the pads a net change takes along (`confirmShortingNets`, `confirmPadChange`).
+        ("POST", "/api/track_via_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::track_via_preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);

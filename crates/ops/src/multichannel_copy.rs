@@ -123,7 +123,7 @@ impl Item {
         }
     }
 
-    fn transform(&mut self, x: Xform, copper: usize, outer: &(Option<String>, Option<String>)) {
+    fn transform(&mut self, x: Xform, copper: usize, outer: &(Option<String>, Option<String>), max_error: Nm) {
         use super::pcb_transform as t;
         match self {
             Item::Track(v) => t::transform_track(v, x, copper),
@@ -132,7 +132,7 @@ impl Item {
             // A rounded rectangle turned off the quarter becomes the polygon of its rounded rectangle (`EDA_SHAPE::rotate`), its radius gone.
             Item::Shape(v, style) => {
                 let radius = style.as_ref().map_or(eda_model::ir::Nm::ZERO, |st| st.corner_radius);
-                if t::transform_rounded_shape(v, x, copper, radius) && radius > eda_model::ir::Nm::ZERO {
+                if t::transform_rounded_shape(v, x, copper, radius, max_error) && radius > eda_model::ir::Nm::ZERO {
                     if let Some(st) = style.as_mut() {
                         st.corner_radius = eda_model::ir::Nm::ZERO;
                     }
@@ -298,12 +298,12 @@ impl Placing {
         Point { x: r.x + self.disp.x, y: r.y + self.disp.y }
     }
 
-    fn apply(self, it: &mut Item, copper: usize, outer: &(Option<String>, Option<String>)) {
+    fn apply(self, it: &mut Item, copper: usize, outer: &(Option<String>, Option<String>), max_error: Nm) {
         if self.rot != 0 {
-            it.transform(Xform::Rotate { pivot: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: self.rot }, copper, outer);
+            it.transform(Xform::Rotate { pivot: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: self.rot }, copper, outer, max_error);
         }
         if self.disp.x != Nm::ZERO || self.disp.y != Nm::ZERO {
-            it.transform(Xform::Move { dx: self.disp.x, dy: self.disp.y }, copper, outer);
+            it.transform(Xform::Move { dx: self.disp.x, dy: self.disp.y }, copper, outer, max_error);
         }
     }
 }
@@ -415,7 +415,7 @@ impl Board<'_> {
             if let Item::Track(tr) = &mut copy {
                 tr.pins.clear();
             }
-            placing.apply(&mut copy, copper, &outer);
+            placing.apply(&mut copy, copper, &outer, self.model.board.max_error_nm);
             incoming.push((copy, it.id().to_string()));
         }
 

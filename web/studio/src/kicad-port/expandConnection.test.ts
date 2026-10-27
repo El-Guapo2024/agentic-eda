@@ -1,122 +1,57 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { expandConnection, type ConnTrack, type ConnVia } from "./expandConnection";
+import { selectAllConnectedTracks, type ConnPad, type ConnSeg, type ConnStart, type ConnVia, type StopCondition } from "./expandConnection";
 
-const NONE = { trackIds: [], viaIds: [] };
+const seg = (track: string, start: [number, number], end: [number, number], layer = "F.Cu", i = 0): ConnSeg => ({ track, seg: i, layer, start, end });
+const via = (id: string, at: [number, number], diameter = 600): ConnVia => ({ id, at, diameter, layers: ["F.Cu", "B.Cu"] });
+const pad = (id: string, at: [number, number], layers = ["F.Cu"]): ConnPad => ({ id, at, layers });
 
-// A simple chain: t1 (0,0)-(100,0), t2 (100,0)-(200,0), t3 (200,0)-(300,0).
-// Starting from t1 alone should walk the whole chain (no junctions: every
-// point along it touches exactly 2 tracks).
-test("expandConnection: walks a simple chain of collinear tracks with no junction", () => {
-  const tracks: ConnTrack[] = [
-    { id: "t1", net: "N1", start: [0, 0], end: [100, 0] },
-    { id: "t2", net: "N1", start: [100, 0], end: [200, 0] },
-    { id: "t3", net: "N1", start: [200, 0], end: [300, 0] },
-  ];
-  const result = expandConnection(tracks, [], [{ point: [0, 0], net: "N1" }], NONE);
-  assert.deepEqual([...result.trackIds].sort(), ["t1", "t2", "t3"]);
+function walk(segs: ConnSeg[], vias: ConnVia[], pads: ConnPad[], starts: ConnStart[], stop: StopCondition) {
+  const selected = { trackIds: new Set<string>(), viaIds: new Set<string>() };
+  selectAllConnectedTracks({ segs, vias, pads }, starts, stop, selected);
+  return { tracks: [...selected.trackIds].sort(), vias: [...selected.viaIds].sort() };
+}
+
+test("selectAllConnectedTracks: a chain with no junction is walked end to end", () => {
+  const segs = [seg("t1", [0, 0], [100, 0]), seg("t2", [100, 0], [200, 0]), seg("t3", [200, 0], [300, 0])];
+  assert.deepEqual(walk(segs, [], [], [{ kind: "track", id: "t1" }], "junction").tracks, ["t1", "t2", "t3"]);
 });
 
-test("expandConnection: a 3-way junction halts STOP_AT_JUNCTION before selecting anything past it (not even the other branches)", () => {
-  // t1 from (0,0) to the junction (100,0); t2 and t3 branch out from there,
-  // so trackMap[(100,0)] has 3 entries -- source's pt_count > 2 bails out
-  // BEFORE select()ing t2/t3 at all.
-  const tracks: ConnTrack[] = [
-    { id: "t1", net: "N1", start: [0, 0], end: [100, 0] },
-    { id: "t2", net: "N1", start: [100, 0], end: [200, 0] },
-    { id: "t3", net: "N1", start: [100, 0], end: [100, 100] },
-  ];
-  const result = expandConnection(tracks, [], [{ point: [0, 0], net: "N1" }], NONE);
-  assert.deepEqual([...result.trackIds].sort(), ["t1"]);
+test("STOP_AT_JUNCTION stops at three tracks, a via or a pad that is not a start pad; STOP_AT_PAD only at the pad", () => {
+  const branch = [seg("t1", [0, 0], [100, 0]), seg("t2", [100, 0], [200, 0]), seg("t3", [100, 0], [100, 100])];
+  assert.deepEqual(walk(branch, [], [], [{ kind: "track", id: "t1" }], "junction").tracks, ["t1"]);
+  assert.deepEqual(walk(branch, [], [], [{ kind: "track", id: "t1" }], "pad").tracks, ["t1", "t2", "t3"]);
+  const through = [seg("t1", [0, 0], [100, 0]), seg("t2", [100, 0], [200, 0])];
+  assert.deepEqual(walk(through, [via("v1", [100, 0])], [], [{ kind: "track", id: "t1" }], "junction"), { tracks: ["t1"], vias: [] });
+  assert.deepEqual(walk(through, [via("v1", [100, 0])], [], [{ kind: "track", id: "t1" }], "pad"), { tracks: ["t1", "t2"], vias: ["v1"] });
 });
 
-test("expandConnection: a via is a hard stop for STOP_AT_JUNCTION specifically, even with only 2 tracks at that point", () => {
-  const tracks: ConnTrack[] = [
-    { id: "t1", net: "N1", start: [0, 0], end: [100, 0] },
-    { id: "t2", net: "N1", start: [100, 0], end: [200, 0] },
-  ];
-  const vias: ConnVia[] = [{ id: "v1", net: "N1", at: [100, 0] }];
-  const result = expandConnection(tracks, vias, [{ point: [0, 0], net: "N1" }], NONE);
-  assert.deepEqual([...result.trackIds], ["t1"], "t2 is on the far side of the via; STOP_AT_JUNCTION never crosses a via");
-  assert.deepEqual([...result.viaIds], [], "the via itself isn't selected either -- the point is a stop, full stop");
+test("stop_at_junction_halts_at_a_non_start_pad: tracks A, B and C meet at R2.1, and A gives {A, B} at STOP_AT_PAD... and {A} at the junction (round 3 D-6)", () => {
+  // A ends on R2.1; B goes from R2.1 on, C too: KiCad's `gotNonStartPad` halts the walk at the pad, ours walked through it
+  const segs = [seg("A", [0, 0], [100, 0]), seg("B", [100, 0], [200, 0]), seg("C", [100, 0], [100, 100])];
+  const pads = [pad("R2.1", [100, 0])];
+  assert.deepEqual(walk(segs, [], pads, [{ kind: "track", id: "A" }], "junction").tracks, ["A"]);
+  assert.deepEqual(walk(segs, [], pads, [{ kind: "track", id: "A" }], "pad").tracks, ["A"]);
+  assert.deepEqual(walk(segs, [], pads, [{ kind: "track", id: "A" }], "never").tracks, ["A", "B", "C"]);
+  // two tracks through a pad that is a start pad go on
+  assert.deepEqual(walk([seg("A", [0, 0], [100, 0]), seg("B", [100, 0], [200, 0])], [], pads, [{ kind: "pad", id: "R2.1" }], "junction").tracks, ["A", "B"]);
 });
 
-test("expandConnection: STOP_AT_PAD (the second press) crosses both junctions and vias", () => {
-  const tracks: ConnTrack[] = [
-    { id: "t1", net: "N1", start: [0, 0], end: [100, 0] },
-    { id: "t2", net: "N1", start: [100, 0], end: [200, 0] },
-    { id: "t3", net: "N1", start: [100, 0], end: [100, 100] },
-  ];
-  const vias: ConnVia[] = [{ id: "v1", net: "N1", at: [200, 0] }];
-  // First press: STOP_AT_JUNCTION selects only t1 (the junction at (100,0) blocks t2/t3).
-  const first = expandConnection(tracks, vias, [{ point: [0, 0], net: "N1" }], NONE);
-  assert.deepEqual([...first.trackIds].sort(), ["t1"]);
-
-  // Second press, seeded from the grown selection's own points (both ends
-  // of t1): STOP_AT_JUNCTION still can't cross (100,0) is still a
-  // junction), so expandConnection itself falls through to STOP_AT_PAD,
-  // which crosses the junction AND the via at (200,0).
-  const second = expandConnection(
-    tracks,
-    vias,
-    [
-      { point: [0, 0], net: "N1" },
-      { point: [100, 0], net: "N1" },
-    ],
-    { trackIds: [...first.trackIds], viaIds: [...first.viaIds] }
-  );
-  assert.deepEqual([...second.trackIds].sort(), ["t1", "t2", "t3"]);
-  assert.deepEqual([...second.viaIds], ["v1"]);
+test("a_branch_at_an_inner_vertex_is_followed (round 3 D-6)", () => {
+  // T1 is a polyline (0,0)-(100,0)-(200,0); T2 leaves its inner vertex
+  const segs = [seg("T1", [0, 0], [100, 0], "F.Cu", 0), seg("T1", [100, 0], [200, 0], "F.Cu", 1), seg("T2", [100, 0], [100, 300])];
+  assert.deepEqual(walk(segs, [], [], [{ kind: "track", id: "T1" }], "pad").tracks, ["T1", "T2"]);
+  // the inner vertex is a junction of three segments: STOP_AT_JUNCTION does not cross it
+  assert.deepEqual(walk(segs, [], [], [{ kind: "track", id: "T2" }], "junction").tracks, ["T2"]);
 });
 
-test("expandConnection: different nets in the selection each expand independently and union", () => {
-  const tracks: ConnTrack[] = [
-    { id: "t1", net: "N1", start: [0, 0], end: [100, 0] },
-    { id: "t2", net: "N2", start: [0, 1000], end: [100, 1000] },
-  ];
-  const result = expandConnection(
-    tracks,
-    [],
-    [
-      { point: [0, 0], net: "N1" },
-      { point: [0, 1000], net: "N2" },
-    ],
-    NONE
-  );
-  assert.deepEqual([...result.trackIds].sort(), ["t1", "t2"]);
+test("tracks on different layers that end on one point join only through a via; a via off the point joins within its radius (round 3 D-6)", () => {
+  const segs = [seg("f", [0, 0], [100, 0], "F.Cu"), seg("b", [100, 0], [200, 0], "B.Cu")];
+  assert.deepEqual(walk(segs, [], [], [{ kind: "track", id: "f" }], "never").tracks, ["f"]);
+  assert.deepEqual(walk(segs, [via("v", [100, 200], 600)], [], [{ kind: "track", id: "f" }], "never"), { tracks: ["b", "f"], vias: ["v"] });
 });
 
-test("expandConnection: a dead end (nothing further on the net) returns just the start item", () => {
-  const tracks: ConnTrack[] = [{ id: "t1", net: "N1", start: [0, 0], end: [100, 0] }];
-  const result = expandConnection(tracks, [], [{ point: [0, 0], net: "N1" }], NONE);
-  assert.deepEqual([...result.trackIds], ["t1"]);
-});
-
-test("expandConnection: a different net's items are never pulled in even if they coincide spatially with another net's point", () => {
-  const tracks: ConnTrack[] = [
-    { id: "t1", net: "N1", start: [0, 0], end: [100, 0] },
-    { id: "t2", net: "N2", start: [100, 0], end: [200, 0] },
-  ];
-  const result = expandConnection(tracks, [], [{ point: [0, 0], net: "N1" }], NONE);
-  assert.deepEqual([...result.trackIds], ["t1"], "N2's t2 touches the same point but must never be selected expanding N1");
-});
-
-test("expandConnection: a simple two-track run through one via (no branches) is fully selected on the very first press", () => {
-  // (0,0)--t1--(100,0)==via==(100,0)--t2--(200,0): a plain layer-changing
-  // via in the middle of an otherwise straight run has a via at that
-  // point, which still halts STOP_AT_JUNCTION per source -- so even this
-  // "obviously one wire" case needs the second (STOP_AT_PAD) stage, same
-  // as the test above. This test just documents that expandConnection's
-  // own stage fallback makes that transparent to the caller in one call
-  // when nothing is pre-selected (initialCount 0 is already satisfied by
-  // the first stage's {t1} result, so a caller must press U again to
-  // reach the via and t2 -- this is intentional, matching source, not a
-  // bug).
-  const tracks: ConnTrack[] = [
-    { id: "t1", net: "N1", start: [0, 0], end: [100, 0] },
-    { id: "t2", net: "N1", start: [100, 0], end: [200, 0] },
-  ];
-  const vias: ConnVia[] = [{ id: "v1", net: "N1", at: [100, 0] }];
-  const result = expandConnection(tracks, vias, [{ point: [0, 0], net: "N1" }], NONE);
-  assert.deepEqual([...result.trackIds], ["t1"]);
+test("the walk ignores nets (IGNORE_NETS): copper of another net that ends on the point is walked into", () => {
+  // the seg type has no net: every track is walked, as `GetConnectedItems( .., IGNORE_NETS )` hands them
+  assert.deepEqual(walk([seg("n1", [0, 0], [100, 0]), seg("n2", [100, 0], [200, 0])], [], [], [{ kind: "track", id: "n1" }], "junction").tracks, ["n1", "n2"]);
 });

@@ -9,8 +9,9 @@
 // selected, moved, turned and flipped by the same verbs as any other item.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, UserFieldCmd } from "../api/types";
+import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, TextGraphicsDefaults, UserFieldCmd } from "../api/types";
 import { objectOn } from "./appearance";
+import { isBackLayer, textStyleOf } from "./layerDefaults";
 
 export const REFERENCE = "Reference";
 export const VALUE = "Value";
@@ -182,17 +183,46 @@ export function newFieldName(existing: readonly string[], ordinal: number): stri
   }
 }
 
-/** The layout `OnAddField` gives a new field: hidden, at the footprint's origin, on the fabrication layer of its side. */
-export function newFieldLayout(part: Part): FieldLayoutCmd {
+/**
+ * The layout `OnAddField` gives a new field: hidden, at the footprint's origin, on the fabrication layer of its side, styled from Board Setup's Text & Graphics
+ * defaults (`newField.StyleFromSettings( m_frame->GetDesignSettings(), true )`: the Fab class's size, thickness, italic and keep-upright, mirrored on a back
+ * layer). `defaults` absent is KiCad's factory table.
+ */
+export function newFieldLayout(part: Part, defaults?: TextGraphicsDefaults): FieldLayoutCmd {
   const bottom = part.side === "bottom";
-  return { at: { x: 0, y: 0 }, angle: localAngleOf(part, 0), size: [1_000_000, 1_000_000], thickness: 150_000, layer: bottom ? "B.Fab" : "F.Fab", visible: false, halign: 0, valign: 0, mirror: bottom, bold: false, italic: false, keep_upright: true, knockout: false };
+  const layer = bottom ? "B.Fab" : "F.Fab";
+  const st = textStyleOf(defaults, layer);
+  return { at: { x: 0, y: 0 }, angle: localAngleOf(part, 0), size: [st.widthNm, st.heightNm], thickness: st.thicknessNm, layer, visible: false, halign: 0, valign: 0, mirror: isBackLayer(layer), bold: false, italic: st.italic, keep_upright: st.upright, knockout: false };
 }
 
 /**
  * `DIALOG_PAD_PROPERTIES::padValuesOK` for the values the board's pad dialog edits: messages in the dialog's words, in its order, or null when the pad can be
  * made. `pad` is what the dialog holds.
  */
-type PadValues = { kind: string; shape: string; size: [Nm, Nm]; drill?: Nm | null; slot?: [Nm, Nm] | null; ratio?: number | null; pasteRatio?: number | null };
+type PadValues = {
+  kind: string;
+  shape: string;
+  size: [Nm, Nm];
+  drill?: Nm | null;
+  slot?: [Nm, Nm] | null;
+  ratio?: number | null;
+  pasteRatio?: number | null;
+  /** The shape's offset from the pad's position (where the hole is). */
+  offset?: [Nm, Nm] | null;
+  /** The local clearance, solder mask margin and solder paste margin the dialog sets (null: none). */
+  clearance?: Nm | null;
+  maskMargin?: Nm | null;
+  pasteMargin?: Nm | null;
+};
+
+/** `EDA_UNIT_UTILS::UI::StringFromValue( .., aAddUnitsText = true )` of a length in nm: `%.10f` in mm, `%.5f` in mils, `%.8f` in inches, trailing zeros removed. */
+export function stringFromValue(nm: Nm, units: "mm" | "mil" | "in"): string {
+  const [v, digits, suffix] = units === "mil" ? [nm / 25_400, 5, " mils"] : units === "in" ? [nm / 25_400_000, 8, " in"] : [nm / 1_000_000, 10, " mm"];
+  const trim = (t: string) => (t.includes(".") ? t.replace(/0+$/, "").replace(/\.$/, "") : t);
+  let text = trim(v.toFixed(digits));
+  if (v !== 0 && (text === "0" || text === "-0")) text = trim(v.toFixed(10));
+  return text + suffix;
+}
 
 /** Whether the point (x, y) lies in the stadium of width `w` and height `h` centred on the origin (a hole: `GetEffectiveHoleShape`). */
 function inStadium(x: number, y: number, w: number, h: number): boolean {
@@ -220,13 +250,20 @@ function stadiumOutline(w: number, h: number): number[][] {
 /**
  * `DIALOG_PAD_PROPERTIES::padValuesOK` over `PAD::doCheckPad( .., aForPadProperties = true )`: the errors (`DRCE_PADSTACK_INVALID`, `DRCE_PAD_TH_WITH_NO_HOLE`)
  * keep the dialog open; the warnings (`DRCE_PADSTACK`, "Warning: " in front) are shown and the pad is applied. "(PTH pad hole leaves no copper)" is a pad the hole
- * covers whole, "(PTH pad hole not fully inside copper)" a hole that pokes out of the pad (the hole's stadium against the pad's outline, the hole centred; a rounded
- * or chamfered corner is taken as square). KiCad has no message of its own for the corner and the paste ratios (the dialog clamps them).
+ * covers whole, "(PTH pad hole not fully inside copper)" a hole that pokes out of the pad (the hole's stadium at the pad's position against the pad's outline at
+ * its shape offset; a rounded or chamfered corner is taken as square), "(pad hole not inside pad shape)" a non-plated hole whose centre is off the copper. Then
+ * the clearance and the mask and paste margins. KiCad has no message of its own for the corner and the paste ratios (the dialog clamps them). `units` gives the
+ * minimum drill's text as `StringFromValue` writes it (`0.000004 mm`); without it `fmt` does.
  */
-export function padCheck(pad: PadValues, fmt: (um: Nm) => string): { errors: string[]; warnings: string[] } {
+export function padCheck(pad: PadValues, fmt: (nm: Nm) => string, units?: "mm" | "mil" | "in"): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   if (pad.size[0] <= 0 || (pad.shape !== "circle" && pad.shape !== "custom" && pad.size[1] <= 0)) errors.push("Error: (Pad must have a positive size)");
+  const [pw, ph] = pad.shape === "circle" ? [pad.size[0], pad.size[0]] : pad.size;
+  const [ox, oy] = pad.offset ?? [0, 0];
+  // the copper's outline, about the pad's position (the hole's centre)
+  const padOutline = (pad.shape === "circle" || pad.shape === "oval" ? stadiumOutline(pw, ph) : [[pw / 2, ph / 2], [pw / 2, -ph / 2], [-pw / 2, ph / 2], [-pw / 2, -ph / 2]]).map(([x, y]) => [x! + ox, y! + oy]);
+  const inPad = (x: number, y: number) => (pad.shape === "circle" || pad.shape === "oval" ? inStadium(x - ox, y - oy, pw, ph) : Math.abs(x - ox) <= pw / 2 && Math.abs(y - oy) <= ph / 2);
   if (pad.kind !== "smd") {
     const round = pad.slot == null;
     const [hw, hh] = round ? [pad.drill ?? 0, pad.drill ?? 0] : (pad.slot as [Nm, Nm]);
@@ -234,16 +271,24 @@ export function padCheck(pad: PadValues, fmt: (um: Nm) => string): { errors: str
     if (hw <= 0 || hh <= 0) errors.push("Error: Through hole pad has no hole.");
     else {
       const MIN_DRILL = 4;
-      if (hw <= MIN_DRILL || hh <= MIN_DRILL) errors.push(`Error: (PTH pad hole size must be larger than ${fmt(MIN_DRILL)})`);
-      const [pw, ph] = pad.shape === "circle" ? [pad.size[0], pad.size[0]] : pad.size;
+      if (hw <= MIN_DRILL || hh <= MIN_DRILL) errors.push(`Error: (PTH pad hole size must be larger than ${units ? stringFromValue(MIN_DRILL, units) : fmt(MIN_DRILL)})`);
       if (pad.kind === "through_hole") {
         // the pad's outline inside the hole: nothing of the copper is left
-        const padIn = (pad.shape === "circle" || pad.shape === "oval" ? stadiumOutline(pw, ph) : [[pw / 2, ph / 2], [pw / 2, -ph / 2], [-pw / 2, ph / 2], [-pw / 2, -ph / 2]]).every(([x, y]) => inStadium(x!, y!, hw, hh));
-        if (padIn) warnings.push("Warning: (PTH pad hole leaves no copper)");
-        else if (pad.shape === "circle" ? Math.max(hw, hh) > pw : hw > pw || hh > ph) warnings.push("Warning: (PTH pad hole not fully inside copper)");
+        if (padOutline.every(([x, y]) => inStadium(x!, y!, hw, hh))) warnings.push("Warning: (PTH pad hole leaves no copper)");
+        else if (!stadiumOutline(hw, hh).every(([x, y]) => inPad(x!, y!))) warnings.push("Warning: (PTH pad hole not fully inside copper)");
+      } else if (!inPad(0, 0)) {
+        // "Test only if the pad hole's centre is inside the copper area"
+        warnings.push("Warning: (pad hole not inside pad shape)");
       }
     }
   }
+  if ((pad.clearance ?? 0) < 0) warnings.push("Warning: (negative local clearance values have no effect)");
+  const mask = pad.maskMargin ?? null;
+  if (mask != null && mask < 0 && pad.shape !== "custom" && (Math.abs(mask) > pw || Math.abs(mask) > ph)) warnings.push("Warning: (negative solder mask clearance is larger than pad; no solder mask will be generated)");
+  // `paste_size = pad_size + paste_margin + KiROUND( pad_size * mratio )`
+  const margin = pad.pasteMargin ?? 0;
+  const ratio = pad.pasteRatio ?? 0;
+  if (pw + margin + Math.round(pw * ratio) <= 0 || ph + margin + Math.round(ph * ratio) <= 0) warnings.push("Warning: (negative solder paste margin is larger than pad; no solder paste mask will be generated)");
   return { errors, warnings };
 }
 

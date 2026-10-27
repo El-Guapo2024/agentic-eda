@@ -2474,10 +2474,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     groupSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      // `PCB_GROUP_TOOL::Group`'s filter: "if( item->GetParentFootprint() ) aCollector.Remove( item );" -- a pad or a field is not grouped -- then two items or more
+      // `PCB_GROUP_TOOL::Group`'s filter: "if( item->GetParentFootprint() ) aCollector.Remove( item );" -- a pad or a field is not grouped -- and `IsGroupableType()`,
+      // which a table cell is not (round 3 B-4) -- then two items or more
       const ids = [...stateRef.current.selection].filter((id) => {
         const kind = itemKind(board, id);
-        return kind !== "pad" && kind !== "field";
+        return kind !== "pad" && kind !== "field" && kind !== "tablecell";
       });
       if (ids.length < 2) return;
       const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
@@ -2531,7 +2532,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const st = stateRef.current;
       if (!st.board) return false;
       // a pad is copied as itself, in a footprint of its own (`SaveSelection`)
-      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false, keepPads: true });
+      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false, forClipboard: true });
       if (ids.length === 0) return false;
       // `copyToClipboard`: `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )` -- the anchor of the copied items nearest the cursor, so a paste puts it on the cursor.
       const at = reference ?? (st.cursorNm ? (([x, y]) => ({ x, y }))(dragOriginFor(st, ids, [st.cursorNm.x, st.cursorNm.y])) : null);
@@ -2558,8 +2559,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       let cmd: Cmd;
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
-      } else if (system != null && system.trim() !== "") {
-        // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts); a long one asks first
+      } else if (system != null && system !== "") {
+        // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts), blanks too (`clipText.empty()` is the only text KiCad
+        // does not paste; an empty clipboard here falls back to the session's copy, as a browser that hands nothing over does); a long one asks first
         const plain = plainTextPaste(system, at, activeLayerName(st.activeLayer, "F.SilkS"))!;
         if (plain.longText && !window.confirm(LONG_TEXT_QUESTION)) return;
         cmd = plain.cmd;

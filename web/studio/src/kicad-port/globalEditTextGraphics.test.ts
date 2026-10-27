@@ -87,3 +87,18 @@ test("the dialog opens with every filter off, the layer on the active layer when
   assert.equal(initialTextGraphicsFilter(b, "Nope").layer, "F.Cu");
   assert.equal(initialTextGraphicsFilter(b, null).layer, "F.Cu");
 });
+
+test("text boxes and table cells are texts, barcodes graphics (round 3 D-9: `PCB_TEXTBOX_T`, `RunOnChildren`, `PCB_BARCODE_T`)", () => {
+  const b = board();
+  const dr = b.drawings as unknown as Record<string, unknown>;
+  dr.text_boxes = [{ id: "x1", layer: "F.SilkS" }];
+  dr.barcodes = [{ id: "q1", layer: "F.SilkS" }];
+  dr.tables = [{ id: "tb", layer: "F.Fab", cells: [{ row: 0, col: 0 }, { row: 0, col: 1 }] }];
+  const off: TextGraphicsFilter = { layerOn: false, layer: "", selectedOnly: false };
+  const all = matchingTextAndGraphics(b, { graphics: true, text: true, dimensions: false }, off, new Set());
+  assert.deepEqual(all.shapeIds, ["s1", "s2", "s3", "q1"]);
+  assert.deepEqual(all.textIds, ["t1", "t2", "x1", "tb:0:0", "tb:0:1"]);
+  // a cell is on its table's layer, and selected only as itself
+  assert.deepEqual(matchingTextAndGraphics(b, { graphics: false, text: true, dimensions: false }, { layerOn: true, layer: "F.Fab", selectedOnly: false }, new Set()).textIds, ["tb:0:0", "tb:0:1"]);
+  assert.deepEqual(matchingTextAndGraphics(b, { graphics: false, text: true, dimensions: false }, { ...off, selectedOnly: true }, new Set(["tb", "tb:0:1"])).textIds, ["tb:0:1"]);
+});

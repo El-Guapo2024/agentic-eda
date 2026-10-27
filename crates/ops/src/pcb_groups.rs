@@ -39,7 +39,8 @@ pub(crate) fn refused(r: GroupRefusal) -> Vec<CheckResult> {
 }
 
 /// Every id an item of the board can be listed under: the groupable kinds (`BOARD_ITEM::IsGroupableType`: placed footprints, copper, graphics, texts, text boxes,
-/// reference images, barcodes, dimensions, tables, generators -- tuning patterns and via stitchings -- and the groups themselves; not a point).
+/// reference images, barcodes, dimensions, tables, generators -- tuning patterns and via stitchings -- and the groups themselves; and, as KiCad 25ec2335's adds
+/// them, points, grid items and drill maps, which the reader puts in groups -- round 3 B-4).
 fn universe(design: &Design) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = design.placement.iter().flat_map(|p| p.footprints.iter().map(|f| f.id.clone())).collect();
     if let Some(rt) = &design.routing {
@@ -56,6 +57,9 @@ fn universe(design: &Design) -> BTreeSet<String> {
         out.extend(dr.board_items.text_boxes.iter().map(|t| t.id.clone()));
         out.extend(dr.board_items.images.iter().map(|i| i.id.clone()));
         out.extend(dr.board_items.via_stitches.iter().map(|v| v.id.clone()));
+        out.extend(dr.board_items.points.iter().map(|q| q.id.clone()));
+        out.extend(dr.board_items.grid_items.iter().map(|g| g.id.clone()));
+        out.extend(dr.board_items.drill_maps.iter().map(|m| m.id.clone()));
         out.extend(dr.tuning_patterns.iter().map(|p| p.id.clone()));
         out.extend(dr.groups.iter().map(|g| g.id.clone()));
     }
@@ -72,8 +76,23 @@ impl Board<'_> {
     pub(crate) fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
         let dr = self.drawings_mut();
         let before: BTreeSet<String> = dr.groups.iter().map(|g| g.id.clone()).collect();
+        // `BOARD_ITEM::IsLocked`: the item's own lock, or that of a group above it (`GetParentGroup()->IsLocked()`), before it leaves that group
+        let locked_or_above = |id: &str| {
+            let mut at = id.to_string();
+            for _ in 0..64 {
+                if dr.locked_ids.contains(&at) {
+                    return true;
+                }
+                match dr.parent_group(&at) {
+                    Some(g) => at = g.id.clone(),
+                    None => return false,
+                }
+            }
+            false
+        };
+        let any_locked = ids.iter().any(|id| locked_or_above(id));
         dr.make_group(ids).map_err(refused)?;
-        if ids.iter().any(|id| dr.locked_ids.contains(id)) {
+        if any_locked {
             let new: Vec<String> = dr.groups.iter().map(|g| g.id.clone()).filter(|g| !before.contains(g)).collect();
             dr.locked_ids.extend(new);
             dr.locked_ids.sort();

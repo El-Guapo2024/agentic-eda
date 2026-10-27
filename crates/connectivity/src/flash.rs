@@ -36,7 +36,7 @@ impl Flashed {
 }
 
 /// For each item of the graph that is a pad: footprint, number and `nth`. The pieces of a padstack pad (one item for each run of layers that shares a shape) are one pad.
-pub(crate) fn pad_of_items(graph: &ConnGraph) -> Vec<Option<(String, String, u32)>> {
+pub fn pad_of_items(graph: &ConnGraph) -> Vec<Option<(String, String, u32)>> {
     let mut seen: std::collections::BTreeMap<(String, String), Vec<usize>> = std::collections::BTreeMap::new();
     let mut out = vec![None; graph.items.len()];
     for (i, it) in graph.items.iter().enumerate() {

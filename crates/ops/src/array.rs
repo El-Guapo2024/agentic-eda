@@ -348,7 +348,7 @@ impl Board<'_> {
                     f.shown_reference = Some(f.reference.clone());
                 }
             }
-            transform_block(&mut block, geometry, index, copper, &outer);
+            transform_block(&mut block, geometry, index, copper, &outer, self.model.board.max_error_nm);
             all.absorb(block);
         }
         // Copies first, with unique ids and references in the order of the points; then the selection moves to the first point.
@@ -379,7 +379,7 @@ fn group_leaves(block: &Copies, gi: usize, out: &mut Vec<Member>) {
 }
 
 /// `TransformItem` over a set of not-yet-placed copies: each one (a group's members as one) moves to point `index` and turns there.
-fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: usize, outer: &(Option<String>, Option<String>)) {
+fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: usize, outer: &(Option<String>, Option<String>), max_error: Nm) {
     // Members of a copied group are transformed as the group is (`PCB_GROUP::Move`/`Rotate`, which are deep: the groups it holds go with
     // it), about the group's position.
     let mut in_group: BTreeSet<(u8, usize)> = BTreeSet::new();
@@ -425,7 +425,7 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
         // A rounded rectangle turned off the quarter is the polygon of its rounded rectangle, as `Rotate` makes it (`EDA_SHAPE::rotate`); its radius goes.
         Member::Shape(i) => {
             let radius = block.shape_style.get(i).and_then(Option::as_ref).map_or(Nm::ZERO, |st| st.corner_radius);
-            if transform_rounded_shape(&mut block.shapes[i], x, copper, radius) && radius > Nm::ZERO {
+            if transform_rounded_shape(&mut block.shapes[i], x, copper, radius, max_error) && radius > Nm::ZERO {
                 if let Some(Some(st)) = block.shape_style.get_mut(i) {
                     st.corner_radius = Nm::ZERO;
                 }

@@ -641,7 +641,10 @@ fn create_base_footprint(defaults: &TextGraphicsDefaults, name: &str, value: &st
         }
     }
 
+    // `pad->SetNumber( wxString::Format( wxT( "%d" ), pad_num ) )` for 1, 2, .. but each added with `footprint->Add( pad, ADD_MODE::INSERT )`, which is
+    // `m_pads.push_front`: `Pads().begin()` is the last one made, so the pads run from the highest number down.
     let pads: Vec<LibraryPad> = (1..=pad_count)
+        .rev()
         .map(|n| LibraryPad {
             id: String::new(),
             stack: Default::default(),
@@ -706,7 +709,7 @@ fn check_width(what: &str, w: Nm) -> Result<(), Vec<CheckResult>> {
     Ok(())
 }
 
-/// `createFootprint( GAP )`: two pads `gap` apart, the first on the left of the origin, the second on the right.
+/// `createFootprint( GAP )`: two pads `gap` apart, the first (`Pads().begin()`, pad 2) on the left of the origin, pad 1 on the right.
 fn build_gap(defaults: &TextGraphicsDefaults, gap_nm: Nm, track_width: Nm) -> Result<Built, Vec<CheckResult>> {
     check_width(GAP_NAME, track_width)?;
     if gap_nm <= Nm::ZERO {
@@ -728,6 +731,8 @@ fn build_stub(defaults: &TextGraphicsDefaults, stub_nm: Nm, track_width: Nm) -> 
         return Err(fail("ops_bad_microwave", STUB_NAME, "the size of a stub must be greater than zero"));
     }
     let mut built = create_base_footprint(defaults, STUB_NAME, STUB_NAME, track_width, 2, track_width);
+    // `pad = *it; pad->SetNumber( wxT( "1" ) )`: the first pad (pad 2, at the origin) is renamed 1, and the stub is the other pad 1
+    built.footprint.pads[0].number = "1".to_string();
     let (stub, h) = (stub_nm, track_width);
     let offset_y = -(stub + h) / 2;
     built.footprint.pads[1].size = (track_width, stub_nm);

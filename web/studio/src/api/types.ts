@@ -1647,7 +1647,7 @@ export type Cmd =
   | { op: "swap_pad_nets"; ids: string[]; connected_pads?: boolean | null }
   | { op: "swap_gate_nets"; ids: string[]; target?: string | null; connected_pads?: boolean | null }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
-  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[] }
+  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[]; /** indices into `tracks` of the new tracks that are locked */ lock_tracks?: number[] }
   /** `EDIT_TOOL::BooleanPolygons`: merge/subtract/intersect rectangles, circles and polygons (`ids` in routine order, the base first). */
   | { op: "boolean_shapes"; operation: "merge" | "subtract" | "intersect"; ids: string[] }
   /** `BOARD_EDITOR_CONTROL::modifyLockSelected` -- lock/unlock every id (part ref or track/via/zone/shape/text id). */
@@ -1747,6 +1747,8 @@ export type Cmd =
    */
   | { op: "edit_track"; id: string; start?: PointXY; end?: PointXY }
   | { op: "set_item_net"; ids: string[]; net: string }
+  /** Track & Via Properties' net and its questions (crates/ops/src/pad_nets.rs `track_via_nets`): `net` null leaves every net; the answers left out make a question a refusal. */
+  | { op: "track_via_nets"; ids: string[]; net: string | null; apply_anyway?: boolean; change_pads?: boolean }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
   /**

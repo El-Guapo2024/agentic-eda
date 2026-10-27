@@ -105,12 +105,12 @@ export function trackViaCmds(board: BoardState, before: TrackViaForm, form: Trac
     const why = validateViaParameters(form.diameter, form.drill);
     if (why) return { error: why };
   }
-  if (form.tracks.length > 0 && form.width != null && form.width < GEOMETRY_MIN_SIZE) return { error: `Value must be greater than or equal to ${fmtMin(GEOMETRY_MIN_SIZE)}` };
+  // `m_trackWidth.Validate( GEOMETRY_MIN_SIZE, INT_MAX )`: `UNIT_BINDER::Validate`'s "%s must be at least %s." with the label less its colon
+  if (form.tracks.length > 0 && form.width != null && form.width < GEOMETRY_MIN_SIZE) return { error: `Track width must be at least ${fmtMin(GEOMETRY_MIN_SIZE)}.` };
   const cmds: Cmd[] = [];
   const all = [...form.tracks, ...form.vias];
   const changed = <K extends keyof TrackViaForm>(k: K) => form[k] != null && form[k] !== before[k];
   if (form.locked != null && form.locked !== before.locked) cmds.push({ op: "set_locked", ids: all, locked: form.locked });
-  if (changed("net")) cmds.push({ op: "set_item_net", ids: all, net: form.net! });
   if (form.tracks.length > 0) {
     const width = changed("width") ? form.width : null;
     const layer = changed("layer") ? form.layer : null;
@@ -143,5 +143,14 @@ export function trackViaCmds(board: BoardState, before: TrackViaForm, form: Trac
     if (changed("viaX") || changed("viaY")) cmds.push({ op: "move_via", id, x: form.viaX ?? v.x, y: form.viaY ?? v.y });
     if (changed("diameter") || changed("drill")) cmds.push({ op: "edit_via", id, diameter: form.diameter ?? v.d, drill: form.drill ?? v.drill });
   }
+  // The net is set last, by `track_via_nets` (crates/ops/src/pad_nets.rs), which first asks about the shorts the edited copper makes and the pads a net change
+  // takes along (`confirmShortingNets`, `confirmPadChange`): KiCad's TransferDataFromWindow does both after every other edit, whatever changed, and sets the net
+  // only when the box is not indeterminate.
+  if (cmds.length > 0 || changed("net")) cmds.push({ op: "track_via_nets", ids: all, net: form.net ?? null });
   return { cmds };
+}
+
+/** The answers to the questions `track_via_nets` asks, put on the batch's last command: "Apply Anyway" and "Change Nets" / "Leave Nets Unchanged". */
+export function withNetAnswers(cmds: readonly Cmd[], answers: { apply_anyway?: boolean; change_pads?: boolean }): Cmd[] {
+  return cmds.map((c) => (c.op === "track_via_nets" ? { ...c, ...answers } : c));
 }

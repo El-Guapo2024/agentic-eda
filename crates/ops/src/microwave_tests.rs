@@ -55,8 +55,9 @@ fn a_gap_is_two_square_pads_the_gap_apart_on_a_footprint_of_its_own() {
     let fp = def(&b, "REF1");
     assert_eq!(fp.pads.len(), 2);
     let (a, c) = (&fp.pads[0], &fp.pads[1]);
-    assert_eq!((a.number.as_str(), a.at, a.size, a.shape, a.kind), ("1", p(mm(-0.375), Nm::ZERO), (mm(0.25), mm(0.25)), LibraryPadShape::Rect, PadKind::Smd));
-    assert_eq!((c.number.as_str(), c.at, c.size, c.shape, c.kind), ("2", p(mm(0.375), Nm::ZERO), (mm(0.25), mm(0.25)), LibraryPadShape::Rect, PadKind::Smd));
+    // `ADD_MODE::INSERT` puts each new pad first: pad 2 is `Pads().begin()`, on the left (round 3 D-7)
+    assert_eq!((a.number.as_str(), a.at, a.size, a.shape, a.kind), ("2", p(mm(-0.375), Nm::ZERO), (mm(0.25), mm(0.25)), LibraryPadShape::Rect, PadKind::Smd));
+    assert_eq!((c.number.as_str(), c.at, c.size, c.shape, c.kind), ("1", p(mm(0.375), Nm::ZERO), (mm(0.25), mm(0.25)), LibraryPadShape::Rect, PadKind::Smd));
     assert_eq!(a.layers, vec!["F.Cu".to_string()], "`pad->SetLayerSet( {{ F_Cu }} )`: copper and nothing else");
     // the pose is the click
     let f = pose(&b, "REF1");
@@ -138,7 +139,8 @@ fn a_gap_needs_a_size_and_a_track() {
 
 // ---------------------------------------------------------------------------------------------------------------------------------- the stub
 
-/// `createFootprint( STUB )`: pad 1 is the square one at the origin, pad 2 is as wide as the track and as long as the stub, `-( stub + h ) / 2` above it.
+/// `createFootprint( STUB )`: the square pad at the origin and the stub, as wide as the track and as long as the stub, `-( stub + h ) / 2` above it -- both
+/// numbered 1: the first pad (pad 2, `Pads().begin()`) is renamed 1 (round 3 D-7).
 #[test]
 fn a_stub_is_a_square_pad_and_the_stub_above_it() {
     let model = ConstraintModel::default();
@@ -149,7 +151,7 @@ fn a_stub_is_a_square_pad_and_the_stub_above_it() {
     let fp = def(&b, "REF1");
     let (a, s) = (&fp.pads[0], &fp.pads[1]);
     assert_eq!((a.number.as_str(), a.at, a.size), ("1", p(Nm::ZERO, Nm::ZERO), (mm(0.25), mm(0.25))));
-    assert_eq!((s.number.as_str(), s.at, s.size), ("2", p(Nm::ZERO, mm(-0.625)), (mm(0.25), mm(1.0))));
+    assert_eq!((s.number.as_str(), s.at, s.size), ("1", p(Nm::ZERO, mm(-0.625)), (mm(0.25), mm(1.0))));
     // the stub's far end is `stub + h / 2` above the origin and its near end touches the square pad
     assert_eq!((s.at.y - s.size.1 / 2, s.at.y + s.size.1 / 2), (mm(-1.125), mm(-0.125)));
     let edit = &b.design().drawings.as_ref().unwrap().footprint_edits[0];
