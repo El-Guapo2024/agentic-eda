@@ -1421,6 +1421,19 @@ fn check_wire_ink(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
 /// intrinsically *is*. A block drawn more than twice that wide has its
 /// members scattered, which is the "decoupling cap on the far side of the
 /// sheet from its IC" defect.
+///
+/// "Packed together" has to mean packed the way the layout packs them: no
+/// two boxes closer than `LayoutOptions::node_spacing` on either axis. That
+/// gap is part of how big the block is — the layout cannot draw it any
+/// tighter — so each member contributes `(width + node_spacing) *
+/// (height + node_spacing)`, not its bare symbol area. Summing bare areas
+/// measures the ink in the cluster's symbols, not the block's smallest
+/// drawable extent; it undercounts by roughly one gap per member per axis,
+/// which for real KiCad symbol boxes (2026-09-30) and their label hang room
+/// (2026-10-08) is most of a small passive's own size. Compact drawings of
+/// small parts (a row of passives, a connector header) were failing this
+/// gate against that unrealistically small extent even though the layout had
+/// drawn them exactly as tightly as it can.
 const CLUSTER_SPREAD_RATIO: f64 = 3.5;
 
 fn check_cluster_split(
@@ -1428,6 +1441,11 @@ fn check_cluster_split(
     geos: &BTreeMap<String, SymGeo<'_>>,
     out: &mut Vec<CheckResult>,
 ) {
+    // The layout's own minimum gap between two boxes, never a number copied
+    // into this gate: each member's box is padded by it on both axes so the
+    // packed extent is one the layout could actually draw (see the doc
+    // comment above).
+    let node_spacing = eda_layout::LayoutOptions::default().node_spacing as f64;
     let mut ok = true;
     for members in eda_engine::cluster_members(model) {
         if members.len() < 2 {
@@ -1443,7 +1461,7 @@ fn check_cluster_split(
             x1 = x1.max(b);
             y0 = y0.min(c);
             y1 = y1.max(d);
-            area += (g.width as f64) * (g.height as f64);
+            area += (g.width as f64 + node_spacing) * (g.height as f64 + node_spacing);
             seen += 1;
         }
         if seen < 2 {
@@ -1961,6 +1979,57 @@ mod integration {
             ],
             ..Default::default()
         }
+    }
+
+    /// Three two-pin resistors, chained by nets: no part is an anchor (all
+    /// have fewer than `ANCHOR_MIN_PINS` pins), so `cluster_members` returns
+    /// them as one misc block and `derive_schematic` lays all three out
+    /// together.
+    fn three_resistor_model() -> ConstraintModel {
+        let r = |reference: &str| part(reference, vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)]);
+        ConstraintModel {
+            parts: vec![r("R1"), r("R2"), r("R3")],
+            nets: vec![net("N1", &["R1.2", "R2.1"]), net("N2", &["R2.2", "R3.1"])],
+            ..Default::default()
+        }
+    }
+
+    /// Regression for `schematic_cluster_split`'s packed extent: because the
+    /// extent now includes `LayoutOptions::node_spacing` around every symbol
+    /// box, a cluster the layout itself drew as tightly as it can is not
+    /// called "scattered". Before that change this exact drawing failed: its
+    /// three real KiCad resistor boxes packed bare sum to a much smaller
+    /// extent than the layout's own inter-box gap allows.
+    #[test]
+    fn a_compact_cluster_laid_out_by_the_engine_passes_cluster_split() {
+        let model = three_resistor_model();
+        let design = derive_schematic(&model, &EngineOptions::new(1, "test-hash")).unwrap();
+        let sch = design.schematic.as_ref().expect("schematic");
+        assert_eq!(sch.symbols.len(), 3);
+        let geos = build_geos(sch, &model);
+        let mut out = Vec::new();
+        check_cluster_split(&model, &geos, &mut out);
+        assert_eq!(out.len(), 1, "one cluster, one result: {out:#?}");
+        assert_eq!(out[0].status, CheckStatus::Pass, "a layout-drawn cluster is not scattered: {out:#?}");
+    }
+
+    /// The other side of the same gate: the same cluster, with its members
+    /// dragged 100 mm apart, is exactly the "decoupling cap on the far side
+    /// of the sheet" defect and must still fail.
+    #[test]
+    fn a_scattered_cluster_still_fails_cluster_split() {
+        let model = three_resistor_model();
+        let mut design = derive_schematic(&model, &EngineOptions::new(1, "test-hash")).unwrap();
+        let sch = design.schematic.as_mut().expect("schematic");
+        assert_eq!(sch.symbols.len(), 3);
+        for (i, sym) in sch.symbols.iter_mut().enumerate() {
+            sym.at = IrPoint { x: Nm::new(i as i64 * 100_000_000), y: Nm::ZERO };
+        }
+        let geos = build_geos(sch, &model);
+        let mut out = Vec::new();
+        check_cluster_split(&model, &geos, &mut out);
+        assert_eq!(out.len(), 1, "one cluster, one result: {out:#?}");
+        assert_eq!(out[0].status, CheckStatus::Fail, "members 100mm apart are scattered: {out:#?}");
     }
 
     #[test]
