@@ -119,8 +119,10 @@ pub(crate) struct Rename {
     pub(crate) new: String,
 }
 
+/// What annotation tells two library symbols apart by: the whole library id (`SCH_REFERENCE::CompareLibId` in KiCad 25ec2335, the box's kicad-cli, at
+/// `sch_reference_list.cpp` 229 and 559 and `refdes_tracker.cpp::areUnitsAvailable`; 8303b2ad compared the item name alone, `CompareLibName`: r3 D3-L2).
 fn lib_item_name(lib_id: &str) -> &str {
-    lib_id.rsplit(':').next().unwrap_or(lib_id)
+    lib_id
 }
 
 impl<'a> Board<'a> {

@@ -49,28 +49,42 @@ impl SheetEntry {
     }
 }
 
-/// The deepest chain of sheets followed: a file that places itself would otherwise never end.
+/// The deepest chain of sheets followed: a guard only, a file that places itself is stopped by its ancestry first.
 pub const MAX_DEPTH: usize = 32;
 
-/// Every sheet that has a screen, depth first, the root first: the order `SCH_SHEET_LIST::BuildSheetList` builds. A placement whose file
-/// has no screen in `design` is left out (there is nothing to show or edit there), and so is anything deeper than [`MAX_DEPTH`].
+/// Every sheet, depth first, the root first: the order `SCH_SHEET_LIST::BuildSheetList` builds. A placement whose file has no screen in `design` is listed
+/// all the same, with nothing inside it: KiCad gives such a sheet an empty screen and queues the error (`SCH_IO_KICAD_SEXPR::loadHierarchy`), so it takes
+/// its place in the page numbers (r3 B3-M4). A file already on its own path is not followed (r3 B3-M6): `loadHierarchy` refuses it ("Could not load sheet
+/// '%s' because it already appears as a direct ancestor in the schematic hierarchy.") and leaves it an empty screen; and `BuildSheetList( aSheet, false )`,
+/// the list kicad-cli builds, leaves out a sheet whose file name is its parent's (`wxCHECK2_MSG( sheet->GetFileName() != aSheet->GetFileName(), continue,
+/// .. "Recursion prevented .." )`, the `Sheetfile` texts compared), so a file that places itself is listed once, and one that places a screen above
+/// its parent is listed with nothing inside. Nothing deeper than [`MAX_DEPTH`] either.
 pub fn walk(design: &Design) -> Vec<SheetEntry> {
-    fn visit(design: &Design, sch: &SchematicSection, path: &mut Vec<String>, out: &mut Vec<SheetEntry>) {
+    fn visit<'a>(design: &'a Design, sch: &'a SchematicSection, path: &mut Vec<String>, files: &mut Vec<&'a str>, parent_text: &str, out: &mut Vec<SheetEntry>) {
         if path.len() > MAX_DEPTH {
             return;
         }
+        let here = files.last().copied().unwrap_or("");
         for child in sheets_in_order(sch) {
-            let Some(content) = design.sheet_contents.as_ref().and_then(|c| c.get(&child.file)) else { continue };
+            let text = sheet_file_text(here, &child.file);
+            if !path.is_empty() && text == parent_text {
+                continue;
+            }
             let page = page_on(sch, child, path).to_string();
             path.push(child.id.clone());
             out.push(SheetEntry { path: path.clone(), name: child.name.clone(), file: child.file.clone(), page, virtual_page: out.len() + 1 });
-            visit(design, content, path, out);
+            let content = design.sheet_contents.as_ref().and_then(|c| c.get(&child.file));
+            if let Some(content) = content.filter(|_| !files.contains(&child.file.as_str())) {
+                files.push(child.file.as_str());
+                visit(design, content, path, files, &text, out);
+                files.pop();
+            }
             path.pop();
         }
     }
     let mut out = vec![SheetEntry { path: Vec::new(), name: String::new(), file: String::new(), page: String::new(), virtual_page: 1 }];
     if let Some(root) = &design.schematic {
-        visit(design, root, &mut Vec::new(), &mut out);
+        visit(design, root, &mut Vec::new(), &mut Vec::new(), "", &mut out);
     }
     out
 }
@@ -227,6 +241,37 @@ pub fn screen_of<'a>(design: &'a Design, path: &[String]) -> Option<&'a Schemati
 pub fn placement_at<'a>(design: &'a Design, path: &[String]) -> Option<&'a SheetInstance> {
     let (last, parents) = path.split_last()?;
     screen_of(design, parents)?.sheets.iter().find(|s| s.id == *last)
+}
+
+/// The key of the screen shown at `path` (`""` for the root): the file of the placement there.
+pub fn screen_key_at(design: &Design, path: &[String]) -> String {
+    placement_at(design, path).map(|p| p.file.clone()).unwrap_or_default()
+}
+
+/// The folder of the screen `key` (its path from the root's folder): `ampli_ht` of `ampli_ht/filter.kicad_sch`, `""` of `a.kicad_sch`.
+pub fn screen_folder(key: &str) -> &str {
+    key.rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+/// `file` (a screen's key: its path from the root's folder, `ampli_ht/filter.kicad_sch`) as the file in `folder` that places it names it: relative to that
+/// folder (`filter.kicad_sch` from `ampli_ht`, `../a.kicad_sch` from `ampli_ht` to a file beside the root), an absolute one as it is.
+pub fn sheet_file_relative_to(folder: &str, file: &str) -> String {
+    if file.starts_with('/') {
+        return file.to_string();
+    }
+    let from: Vec<&str> = folder.split('/').filter(|c| !c.is_empty()).collect();
+    let to: Vec<&str> = file.split('/').filter(|c| !c.is_empty()).collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count().min(to.len().saturating_sub(1));
+    let mut parts: Vec<&str> = std::iter::repeat_n("..", from.len() - common).collect();
+    parts.extend(&to[common..]);
+    parts.join("/")
+}
+
+/// A sheet's `Sheetfile` text, its `SHEET_FILENAME` field (`SCH_SHEET::GetFileName`, what `${SHEETFILE}` and the drawn field show): its screen `file` as
+/// the screen `placing_key` that places it names it ([`sheet_file_relative_to`] from that screen's folder). A sheet inside `ampli_ht/ampli_ht.kicad_sch`
+/// whose screen is `ampli_ht/filter.kicad_sch` shows `filter.kicad_sch`, as the file says.
+pub fn sheet_file_text(placing_key: &str, file: &str) -> String {
+    sheet_file_relative_to(screen_folder(placing_key), file)
 }
 
 /// The sheets inside the sheet at `path`, itself included when `include_self` (`SCH_SHEET_LIST::GetSheetsWithinPath`), in walk order.
@@ -433,19 +478,34 @@ use super::*;
     }
 
     #[test]
-    fn the_walk_is_depth_first_with_virtual_pages_and_skips_a_sheet_with_no_screen() {
+    fn the_walk_is_depth_first_with_virtual_pages_and_lists_a_sheet_with_no_screen() {
         let d = design(
             section(vec![placement("a", "A", "a.kicad_sch", ""), placement("gone", "Gone", "nope.kicad_sch", ""), placement("b", "B", "b.kicad_sch", "7")]),
             vec![("a.kicad_sch", section(vec![placement("c", "C", "c.kicad_sch", "")])), ("b.kicad_sch", section(vec![])), ("c.kicad_sch", section(vec![]))],
         );
         let w = walk(&d);
         let seen: Vec<(String, usize, i64)> = w.iter().map(|e| (e.path_text(), e.virtual_page, e.page_number_as_int())).collect();
-        assert_eq!(seen, vec![("".into(), 1, 1), ("a".into(), 2, 2), ("a/c".into(), 3, 3), ("b".into(), 4, 7)]);
+        // the sheet with no screen keeps its place (r3 B3-M4: KiCad gives it an empty screen and numbers it)
+        assert_eq!(seen, vec![("".into(), 1, 1), ("a".into(), 2, 2), ("a/c".into(), 3, 3), ("b".into(), 4, 7), ("gone".into(), 5, 5)]);
         assert_eq!(within(&w, &["a".to_string()], true).len(), 2);
         assert_eq!(within(&w, &["a".to_string()], false).len(), 1);
-        assert_eq!(within(&w, &[], true).len(), 4);
+        assert_eq!(within(&w, &[], true).len(), 5);
+        assert!(screen_of(&d, &["gone".to_string()]).is_none());
         assert!(screen_of(&d, &["a".to_string(), "c".to_string()]).is_some());
         assert!(placement_at(&d, &["b".to_string()]).is_some_and(|p| p.name == "B"));
+    }
+
+    /// r3 B3-M6: a file that places itself is listed once (`BuildSheetList`'s "Recursion prevented"), and a screen that places the one above its parent is
+    /// listed with nothing inside (`loadHierarchy`'s "already appears as a direct ancestor": an empty screen).
+    #[test]
+    fn a_file_that_places_itself_is_listed_once_and_not_followed() {
+        let d = design(section(vec![placement("a", "A", "a.kicad_sch", "")]), vec![("a.kicad_sch", section(vec![placement("self", "Again", "a.kicad_sch", "")]))]);
+        assert_eq!(walk(&d).iter().map(|e| e.path_text()).collect::<Vec<_>>(), vec!["", "a"]);
+        let d = design(
+            section(vec![placement("a", "A", "a.kicad_sch", "")]),
+            vec![("a.kicad_sch", section(vec![placement("b", "B", "b.kicad_sch", "")])), ("b.kicad_sch", section(vec![placement("up", "Up", "a.kicad_sch", "")]))],
+        );
+        assert_eq!(walk(&d).iter().map(|e| e.path_text()).collect::<Vec<_>>(), vec!["", "a", "a/b", "a/b/up"]);
     }
 
     fn at_x(mut p: SheetInstance, x_mm: f64) -> SheetInstance {

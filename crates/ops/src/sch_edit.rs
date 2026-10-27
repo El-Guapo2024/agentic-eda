@@ -673,6 +673,9 @@ fn delete_sheet(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckRes
     for pin in pins {
         sch.extras.sheet_pin_looks.remove(&pin);
     }
+    // the sheet's own fields and pages go with it (`SCH_SHEET::m_fields`, `m_instances`): a sheet drawn later under the same id must not take them (r3 B3-L3)
+    sch.extras.sheet_fields.remove(id);
+    sch.extras.sheet_pages.remove(id);
     Ok(())
 }
 

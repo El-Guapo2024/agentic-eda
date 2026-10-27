@@ -152,30 +152,49 @@ pub struct ScreenCtx {
     /// The folder of this screen's file, relative to the root's (`""` for a file beside the root): a sheet's `Sheetfile` is written relative to it,
     /// as KiCad reads it (`SCH_IO_KICAD_SEXPR::loadHierarchy`: `fileName.MakeAbsolute( m_currentPath.top() )`).
     pub folder: String,
+    /// The screen is one file of the derived tree ([`export_kicad_sch_tree`]), written in a work folder: a sheet names its screen at the name that screen
+    /// is written at there ([`sheet_file_in_work`]), so a file above the root's folder is read from the copy, never from the project's own file.
+    pub in_work: bool,
 }
 
 impl ScreenCtx {
     /// The root screen of an ordinary single-sheet design (what `export_kicad_sch` has always written).
     pub fn root() -> ScreenCtx {
         let file_uuid = duid_plain("sheet:/");
-        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], instance_sheet_paths: vec![Vec::new()], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new(), folder: String::new() }
+        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], instance_sheet_paths: vec![Vec::new()], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new(), folder: String::new(), in_work: false }
     }
 }
 
 /// `file` (a screen's name: its path from the root's folder, `ampli_ht/filter.kicad_sch`) as the file in `folder` that places it names it: relative to that
 /// folder (`filter.kicad_sch` from `ampli_ht`, `../a.kicad_sch` from `ampli_ht` to a file beside the root).
 pub fn sheet_file_relative_to(folder: &str, file: &str) -> String {
-    let from: Vec<&str> = folder.split('/').filter(|c| !c.is_empty()).collect();
-    let to: Vec<&str> = file.split('/').filter(|c| !c.is_empty()).collect();
-    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count().min(to.len().saturating_sub(1));
-    let mut parts: Vec<&str> = std::iter::repeat_n("..", from.len() - common).collect();
-    parts.extend(&to[common..]);
+    eda_model::sheet_list::sheet_file_relative_to(folder, file)
+}
+
+/// The name the screen `file` (its key: its path from the root's folder) is written at in the derived schematic's work folder: the key itself, but with each
+/// `..` as `__up__` and an absolute key under `__root__/`, so every file of the tree is inside the work folder. KiCad saves a screen where it read it
+/// (`SCH_IO_KICAD_SEXPR::loadHierarchy` resolves `../shared/amp.kicad_sch` from the placing file's folder); our tree is a copy, and a key written as it is
+/// (`work.join("../shared/amp.kicad_sch")`) would land outside the copy, over the project's own file when the work folder is as deep as the project's.
+/// The placing file names the copy relative to its own copy ([`sheet_file_relative_to`]), so kicad-cli reads the same hierarchy. Differs from KiCad
+/// in one way: kicad-cli's `${SHEETFILE}` of the derived file is the copy's name (`__up__/shared/amp.kicad_sch`); the studio shows the file's own text.
+pub fn sheet_file_in_work(file: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if file.starts_with('/') {
+        parts.push("__root__");
+    }
+    for c in file.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => parts.push("__up__"),
+            c => parts.push(c),
+        }
+    }
     parts.join("/")
 }
 
 /// The folder of the screen `file` (its name from the root's folder): `ampli_ht` of `ampli_ht/filter.kicad_sch`, `""` of `a.kicad_sch`.
 pub fn sheet_file_folder(file: &str) -> String {
-    file.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
+    eda_model::sheet_list::screen_folder(file).to_string()
 }
 
 /// A sheet's own uuid: its id when that already is one, else one derived from it. KiCad reads a sheet's identity from the uuid, and
@@ -702,7 +721,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             })
             .collect();
         // the file as the placing file names it, relative to its own folder
-        let named = sheet_file_relative_to(&ctx.folder, &s.file);
+        let named = if ctx.in_work { sheet_file_relative_to(&ctx.folder, &sheet_file_in_work(&s.file)) } else { sheet_file_relative_to(&ctx.folder, &s.file) };
         if named != s.file {
             let mut s = (*s).clone();
             s.file = named;
@@ -863,7 +882,7 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
     walk(&mut w, root_sch, &root_path, &mut Vec::new(), "");
     let Walk { placements, sheet_pages_of, .. } = w;
 
-    let root_ctx = ScreenCtx { sheet_pages: sheet_pages_of.get("").cloned().unwrap_or_default(), ..root };
+    let root_ctx = ScreenCtx { sheet_pages: sheet_pages_of.get("").cloned().unwrap_or_default(), in_work: true, ..root };
     let mut out = vec![(root_filename.to_string(), export_screen(design, model, meta, &root_ctx)?)];
     if let Some(screens) = &design.sheet_contents {
         for (file, sch) in screens {
@@ -880,9 +899,11 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
                 instance_sheet_paths: placements.get(file).map(|v| v.iter().map(|(_, p)| p.clone()).collect()).unwrap_or_default(),
                 seed: format!("{file}|"),
                 sheet_pages: sheet_pages_of.get(file).cloned().unwrap_or_default(),
-                folder: sheet_file_folder(file),
+                // (the copy's folder: a sheet on it names the screens it places relative to it)
+                folder: sheet_file_folder(&sheet_file_in_work(file)),
+                in_work: true,
             };
-            out.push((file.clone(), export_screen(&child_design, model, &child_meta, &ctx)?));
+            out.push((sheet_file_in_work(file), export_screen(&child_design, model, &child_meta, &ctx)?));
         }
     }
     // Symbol cross-references the way KiCad stores them, across the files (`sch_crossref`).

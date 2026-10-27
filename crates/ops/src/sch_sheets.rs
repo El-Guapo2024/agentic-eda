@@ -60,6 +60,8 @@ pub(crate) struct Incoming<'a> {
     /// Every screen a sheet of this tree shows, by the file its placement names (the placement's own screen too).
     pub screens: &'a BTreeMap<String, SchematicSection>,
     pub lib_symbols: &'a [LibrarySymbol],
+    /// The sheet's user fields (`SchExtras::sheet_fields` of the screen it came from): `SCH_SHEET::m_fields` travel with any copy of the sheet.
+    pub fields: Option<Vec<eda_model::sch_extras::LabelField>>,
 }
 
 /// `wxIsdigit( baseName.Last() )`: the name counted up until no sheet on the page has it.
@@ -163,8 +165,14 @@ impl<'a> Board<'a> {
         }
         // the copies
         let mut copies: Vec<(String, SchematicSection)> = Vec::new();
+        // each copy's sheets' user fields, by the sheet's place on its screen: the sheets get new ids, and their fields go with them (r3 B3-M2)
+        let mut inner_fields: BTreeMap<String, Vec<Option<Vec<eda_model::sch_extras::LabelField>>>> = BTreeMap::new();
         for orig in &order {
             let mut sec = screen_of(orig).unwrap_or_else(crate::empty_schematic_section);
+            let fields = std::mem::take(&mut sec.extras.sheet_fields);
+            inner_fields.insert(new_of[orig].clone(), sec.sheets.iter().map(|sh| fields.get(&sh.id).cloned()).collect());
+            // (the pages kept per sheet path are of the original's paths)
+            sec.extras.sheet_pages.clear();
             for sh in sec.sheets.iter_mut() {
                 if let Some(f) = new_of.get(&sh.file) {
                     sh.file = f.clone();
@@ -228,6 +236,11 @@ impl<'a> Board<'a> {
             let contents = self.design.sheet_contents.get_or_insert_with(BTreeMap::new);
             for (file, mut sec) in copies {
                 sec.assign_missing_ids();
+                for (sh, fields) in sec.sheets.iter().zip(inner_fields.remove(&file).unwrap_or_default()) {
+                    if let Some(fields) = fields {
+                        sec.extras.sheet_fields.insert(sh.id.clone(), fields);
+                    }
+                }
                 contents.insert(file, sec);
             }
         }
@@ -235,6 +248,9 @@ impl<'a> Board<'a> {
             let sch = self.schematic_mut_or_create();
             sch.sheets.push(placement);
             sch.assign_missing_ids();
+            if let (Some(fields), Some(id)) = (inc.fields.clone(), sch.sheets.last().map(|s| s.id.clone())) {
+                sch.extras.sheet_fields.insert(id, fields);
+            }
         }
 
         // the new sheet paths' page numbers before the annotation, which may number by page (`DrawSheet` gives the sheet `GetNextPageNumber`
@@ -470,8 +486,9 @@ impl<'a> Board<'a> {
             }
             let name = unique_sheet_name(&names, &sh.name);
             names.insert(name.clone());
-            if !self.share_pasted_sheet(sh, (dx, dy), &name, mode)? {
-                let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols };
+            let fields = fragment.section.extras.sheet_fields.get(&sh.id).cloned();
+            if !self.share_pasted_sheet(sh, (dx, dy), &name, mode, fields.clone())? {
+                let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols, fields };
                 self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
             }
             // the pins come with the sheet whole (`SCH_SHEET_PIN` is an `EDA_TEXT`): their text's size, bold and italic too
@@ -499,7 +516,7 @@ impl<'a> Board<'a> {
     /// whose path ends in the clipboard's path: the copied sheet, then the sheets below it) -- kept by Paste Special's "Keep existing annotations",
     /// numbered by `ReannotateDuplicates` against every reference of the schematic otherwise, path by path, each path's references then counting as
     /// used. The power symbols keep theirs.
-    fn share_pasted_sheet(&mut self, sh: &SheetInstance, shift: (Nm, Nm), name: &str, mode: PasteMode) -> Result<bool, Vec<CheckResult>> {
+    fn share_pasted_sheet(&mut self, sh: &SheetInstance, shift: (Nm, Nm), name: &str, mode: PasteMode, fields: Option<Vec<eda_model::sch_extras::LabelField>>) -> Result<bool, Vec<CheckResult>> {
         // a screen pasted into itself would place itself (`TestForRecursion`): the copy does not
         if !eda_model::sheet_list::reachable_files(&self.design).contains(&sh.file) || self.focus.as_deref() == Some(sh.file.as_str()) {
             return Ok(false);
@@ -538,7 +555,12 @@ impl<'a> Board<'a> {
             let sch = self.schematic_mut_or_create();
             sch.sheets.push(placement);
             sch.assign_missing_ids();
-            sch.sheets.last().map(|s| s.id.clone()).unwrap_or_default()
+            let id = sch.sheets.last().map(|s| s.id.clone()).unwrap_or_default();
+            // the sheet's user fields come with it (r3 B3-M2)
+            if let Some(fields) = fields {
+                sch.extras.sheet_fields.insert(id.clone(), fields);
+            }
+            id
         };
         // every sheet path the new sheet adds: the sheet on each destination, and every sheet below it there (`updatePastedSheet`'s recursion)
         let after = eda_model::sheet_list::walk(&self.design);
@@ -598,7 +620,7 @@ impl<'a> Board<'a> {
             let placement = SheetInstance { id: String::new(), name: name.to_string(), file: OWN.to_string(), at, size, pins: vec![], page: String::new() };
             let numbering = if keep_annotations { Numbering::Paste(PasteMode::Keep) } else { Numbering::Annotate { order, options: options.clone() } };
             let hint = (!file.is_empty()).then_some(file);
-            self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols }, (Nm::ZERO, Nm::ZERO), name, hint, &numbering)?;
+            self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols, fields: None }, (Nm::ZERO, Nm::ZERO), name, hint, &numbering)?;
             // `DrawSheet`: `if( isDrawSheetFromDesignBlock && place_as_group )` the sheet alone goes in a group named and linked as the block
             if !how.block.is_empty() {
                 let new_sheet = self.schematic_mut()?.sheets.last().map(|s| s.id.clone());

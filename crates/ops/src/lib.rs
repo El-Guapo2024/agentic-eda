@@ -1424,8 +1424,17 @@ pub enum Cmd {
     /// which a schematic has).
     AddSchText { content: String, at: Point, angle_millideg: Millideg, size_nm: Nm },
     DeleteSchText { id: String },
-    /// `P`: place a power symbol on a pin.
-    AddPowerSymbol { lib_id: String, at: Point, rot_millideg: Millideg, net: String, pin: String },
+    /// `P`: place a power symbol on a pin. `annotate` is the project's numbering (Annotate's method and start number, `schSettings.m_AnnotateMethod` /
+    /// `m_AnnotateStartNum`, which `PlaceSymbol` numbers by); absent, the first free number from 1.
+    AddPowerSymbol {
+        lib_id: String,
+        at: Point,
+        rot_millideg: Millideg,
+        net: String,
+        pin: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annotate: Option<AnnotateOptions>,
+    },
     DeletePowerSymbol { id: String },
 
     /// `A`: place a new symbol instance from the library -- the one verb
@@ -3006,7 +3015,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteLabel { id } => self.delete_label(id),
             Cmd::AddSchText { content, at, angle_millideg, size_nm } => self.add_sch_text(content, *at, *angle_millideg, *size_nm),
             Cmd::DeleteSchText { id } => self.delete_sch_text(id),
-            Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
+            Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin, annotate } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin, annotate.as_ref()),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit),
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
@@ -5103,17 +5112,34 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// `P`: place a power symbol. `id` follows KiCad's own synthetic
-    /// `#PWR01`/`#PWR02`/... numbering (`PowerSymbol::id`'s own doc).
-    fn add_power_symbol(&mut self, lib_id: &str, at: Point, rot: Millideg, net: &str, pin: &str) -> Result<(), Vec<CheckResult>> {
+    /// `P`: place a power symbol, numbered as `SCH_DRAWING_TOOLS::PlaceSymbol` numbers it (`AlwaysAnnotate`: `ReannotateByOptions( sort, method, start,
+    /// existingRefs, false, &hierarchy )`): its prefix is the library symbol's Reference (`#PWR`, a `PWR_FLAG`'s `#FLG`: r3 D3-M4), and it takes the first
+    /// number no symbol of that prefix holds on any sheet (`existingRefs` is `GetSymbols( .., SYMBOL_FILTER_ALL )`, `FindFirstUnusedReference`), from the
+    /// method's first number up (r3 D3-M5): the start number + 1, or the page of the sheet in view x 100 / x 1000 + 1 (`SetSheetNumber(
+    /// GetPageNumberAsInt() )`, the first of the screen's sheet paths in page order). `SCH_REFERENCE::formatRefStr` writes it after a "0" (`#PWR01`,
+    /// `#PWR0201`). **Differs**: a screen shown on several sheet paths gives the symbol one reference for all of them (a power symbol has no per-path
+    /// reference here); KiCad numbers each path's anew.
+    fn add_power_symbol(&mut self, lib_id: &str, at: Point, rot: Millideg, net: &str, pin: &str, annotate: Option<&AnnotateOptions>) -> Result<(), Vec<CheckResult>> {
         if net.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_power_symbol", "power_symbol", "a power symbol needs a net name")]);
         }
-        // r2 D-A2: `PlaceSymbol` always annotates a power symbol (`AlwaysAnnotate`) against the whole hierarchy, and `FindFirstUnusedReference` takes the
-        // first number no `#PWR` of any sheet holds; `SCH_REFERENCE::formatRefStr` writes it after a "0" (`#PWR01`, `#PWR010`)
-        let used: BTreeSet<u64> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.power_symbols.iter()).filter_map(|p| p.id.strip_prefix("#PWR").and_then(|n| n.parse::<u64>().ok())).collect();
-        let n = (1..).find(|n| !used.contains(n)).unwrap_or(1);
-        let id = format!("#PWR0{n}");
+        let prefix = self.design_symbol(lib_id).map(|s| s.reference_prefix).filter(|p| !p.is_empty()).unwrap_or_else(|| "#PWR".to_string());
+        let screens = || self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values()));
+        let number_of = |id: &str| id.strip_prefix(prefix.as_str()).filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse::<i64>().ok());
+        let used: BTreeSet<i64> = screens().flat_map(|s| s.power_symbols.iter().map(|p| p.id.as_str()).chain(s.symbols.iter().map(|x| x.id.as_str())).chain(s.instance_overrides.iter().map(|o| o.reference.as_str()))).filter_map(number_of).collect();
+        let algo = annotate.map(|a| a.algo).unwrap_or_default();
+        let min = match algo {
+            eda_model::annotate::Algo::FirstFree => annotate.map_or(0, |a| a.start_number.max(0)) + 1,
+            eda_model::annotate::Algo::SheetX100 | eda_model::annotate::Algo::SheetX1000 => {
+                let step = if algo == eda_model::annotate::Algo::SheetX100 { 100 } else { 1000 };
+                let entries = eda_model::sheet_list::walk(&self.design);
+                let here = self.focus.clone().unwrap_or_default();
+                let page = eda_model::sheet_list::sort_by_page_numbers(&entries).into_iter().find(|e| e.file == here).map_or(1, |e| e.page_number_as_int());
+                page * step + 1
+            }
+        };
+        let n = (min..).find(|n| !used.contains(n)).unwrap_or(min);
+        let id = format!("{prefix}0{n}");
         let sch = self.schematic_mut_or_create();
         sch.power_symbols.push(PowerSymbol { id, lib_id: lib_id.into(), at, rot, net: net.into(), pin: pin.into() });
         let last = sch.power_symbols.len() - 1;

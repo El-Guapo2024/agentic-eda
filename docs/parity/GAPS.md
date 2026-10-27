@@ -300,6 +300,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   numbers (`SetInitialPageNumbers`), a sheet drawn, imported or pasted (and the sheets inside it) gets the next free page, a page once shown stays when the
   walk moves, and a sheet on a screen shown twice has a page per sheet path (read, written, edited); the walk visits a screen's sheets by place
   (`SCH_SCREEN::GetSheets`); the Hierarchy Navigator sorts each sheet's children by page and shows every page.
+- Done 2026-10-27 (`task-r3-sch-files`; `PARITY-sch.md` section 45, round-3 slice B): a sheet file above the root's folder (or absolute) is written inside the derived
+  folder, never over the project's own; `Sheetfile` / `${SHEETFILE}` show the file's own text; a sheet's user fields resolve in the studio's text, travel with Paste,
+  Duplicate and Import Sheet, and go with a deleted sheet; a sheet with a missing file keeps its page, a file that places itself is not followed; a sheet's pages are
+  this project's only, without whitespace, an empty one `#`. Left: the Properties panel shows and edits a sheet's key, not its text.
 - Left: a symbol's and a sheet's instance paths are written in walk order,
   not sorted by `KIID_PATH` as KiCad writes them (cosmetic); Annotate numbers the screen's own references only, not the other paths' (which count as taken,
   so it hands none out twice);
@@ -457,6 +461,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (up to the pinned source, `8303b2ad`) reads the pipe-delimited texts only and would ignore them. Not ported: the ERC Fix entry "Edit Netclasses..." (Schematic Setup has no Net Classes page), Report all errors
   for each track (`--all-track-errors`), the cross-probe options, the other pages of Schematic Setup > Formatting (text sizes, line widths, junction and hop-over sizes; the inter-sheet references are done, item 12), and a file dialog
   for Save... (the page downloads the report).
+- Done 2026-10-27 (`task-r3-sch-files`; `PARITY-sch.md` section 45, round-3 slice D): the ERC check table is KiCad 25ec2335's (the box's kicad-cli: 55 checks, nine of them new,
+  so a project's severities for them come in and Setup takes them); a project's pin map keeps its good cells; the library, footprint, netclass, sheet-name and unit-footprint
+  markers carry 25ec2335's sheet paths. Left: a pin-to-pin error ignored from the menu comes back on the next run (KiCad keeps it ignored until the project is reopened).
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `eeschema/sch_marker.cpp`, `eeschema/schematic.cpp` (`ResolveERCExclusions`), `eeschema/erc/erc_settings.cpp`,
   `common/rc_item.cpp`, `common/dialogs/panel_setup_severities.cpp`.
 

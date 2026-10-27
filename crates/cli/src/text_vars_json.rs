@@ -205,22 +205,36 @@ fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::i
     }
 }
 
+/// The levels a text on the sheet at `ids` (the placement ids from the root down) resolves its variables through, the root first: each sheet's fields as
+/// `SCH_SHEET::ResolveTextVar` reads them -- `SHEETNAME`, `SHEETFILE` (the file's own text, as the screen that places it names it: r3 B3-M1) and the
+/// sheet's user fields by their names (r3 B3-M3) -- and the title block of the screen it shows. The studio's shown text and the tracer's power values
+/// both read it, as KiCad's one `ResolveTextVar` serves the display and the netlist.
+pub(crate) fn sheet_levels(design: &Design, ids: &[String]) -> Vec<SchSheetLevel> {
+    let tb = |s: Option<&SchematicSection>| s.and_then(|s| s.title_block.as_ref()).map(TitleBlockVars::of);
+    let mut levels = vec![SchSheetLevel { fields: vec![], title_block: tb(design.schematic.as_ref()) }];
+    let mut here = design.schematic.as_ref();
+    let mut placing_key = String::new();
+    for id in ids {
+        let placement = here.and_then(|s| s.sheets.iter().find(|p| &p.id == id));
+        let content = placement.and_then(|p| design.sheet_contents.as_ref().and_then(|c| c.get(&p.file)));
+        let mut fields = vec![
+            ("Sheetname".into(), placement.map(|p| p.name.clone()).unwrap_or_default()),
+            ("Sheetfile".into(), placement.map(|p| eda_model::sheet_list::sheet_file_text(&placing_key, &p.file)).unwrap_or_default()),
+        ];
+        fields.extend(here.and_then(|s| s.extras.sheet_fields.get(id)).into_iter().flatten().map(|f| (f.name.clone(), f.text.clone())));
+        levels.push(SchSheetLevel { fields, title_block: tb(content) });
+        placing_key = placement.map(|p| p.file.clone()).unwrap_or_default();
+        here = content;
+    }
+    levels
+}
+
 impl SchShown {
     /// `breadcrumb` is the `(placement id, name)` chain from the root down to the sheet in view, empty for the root.
     pub(crate) fn new(dir: &Path, design: &Design, model: &ConstraintModel, breadcrumb: &[(String, String)], project: Project) -> SchShown {
         let stem = project.name.clone();
-        let tb = |s: Option<&SchematicSection>| s.and_then(|s| s.title_block.as_ref()).map(TitleBlockVars::of);
-        let mut levels = vec![SchSheetLevel { fields: vec![], title_block: tb(design.schematic.as_ref()) }];
-        let mut here = design.schematic.as_ref();
-        for (id, name) in breadcrumb {
-            let placement = here.and_then(|s| s.sheets.iter().find(|p| &p.id == id));
-            let content = placement.and_then(|p| design.sheet_contents.as_ref().and_then(|c| c.get(&p.file)));
-            levels.push(SchSheetLevel {
-                fields: vec![("Sheetname".into(), name.clone()), ("Sheetfile".into(), placement.map(|p| p.file.clone()).unwrap_or_default())],
-                title_block: tb(content),
-            });
-            here = content;
-        }
+        let ids: Vec<String> = breadcrumb.iter().map(|(id, _)| id.clone()).collect();
+        let levels = sheet_levels(design, &ids);
         let entries = eda_model::sheet_list::walk(design);
         let ids: Vec<String> = breadcrumb.iter().map(|(id, _)| id.clone()).collect();
         let page = entries.iter().find(|e| e.path == ids).map(|e| e.effective_page()).unwrap_or_else(|| "1".into());

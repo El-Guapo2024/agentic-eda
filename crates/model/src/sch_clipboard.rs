@@ -168,10 +168,10 @@ fn same_prefix(a: &str, b: &str) -> bool {
 
 /// `REFDES_TRACKER::areUnitsAvailable`: every unit in `required` is free on a number that other symbols hold -- none of them is another
 /// library symbol or value, and none already has that unit.
-/// (`areUnitsAvailable` compares the library names by `CompareLibName`: the item name, `LM358` of `MyLib:LM358`, not the library -- r2 D-C9.)
+/// (`areUnitsAvailable` compares the whole library id, `CompareLibId`, in KiCad 25ec2335, the box's kicad-cli; 8303b2ad compared the item name alone,
+/// `CompareLibName`, which r2 D-C9 had followed -- r3 D3-L2.)
 fn units_available(lib_id: &str, value: &str, holders: &[&Numbered], required: &[u32]) -> bool {
-    let item = |id: &str| id.rsplit(':').next().unwrap_or(id).to_string();
-    required.iter().all(|unit| holders.iter().all(|h| item(&h.lib_id) == item(lib_id) && h.value == value && h.unit != *unit))
+    required.iter().all(|unit| holders.iter().all(|h| h.lib_id == lib_id && h.value == value && h.unit != *unit))
 }
 
 /// `SCH_REFERENCE_LIST::FindFirstUnusedReference` + `REFDES_TRACKER::GetNextRefDesForUnits`: the first number from `min` that no symbol of the
