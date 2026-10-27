@@ -184,9 +184,9 @@
       await select(["pin:R1:1"]);
       const sel = __eda.state().selection;
       t(sel.length === 1 && sel[0].id === "pin:R1:1" && sel[0].kind === "pin", `a pin is an item of the selection (${JSON.stringify(sel)})`);
-      // R1's pin 1 is on the PA0 net (KiCad's `/LED channels (D1–D8)/PA0`): its end is at (49530, 83820), its wire runs up from there to a hierarchical label
+      // R1's pin 1 is on the PA0 net (KiCad's `/LED channels (D1–D8)/PA0`): its end is at (44450, 83820), its wire runs up from there to a hierarchical label
       await select([]);
-      await hoverAt(49_530_000, 83_820_000);
+      await hoverAt(44_450_000, 83_820_000);
       await __eda.run("eeschema.EditorControl.highlightNet");
       await sleep(600);
       t(__eda.state().highlight.includes("/LED channels (D1–D8)/PA0"), `Highlight Net with the cursor on a pin highlights its net (${__eda.state().highlight})`);
@@ -196,7 +196,7 @@
       await __eda.run("eeschema.InteractiveSelection.SelectNode");
       await sleep(500);
       t(__eda.state().selection.map((x) => x.id).join() === "pin:R1:1", `Select Node on a pin's end selects the pin (an exact hit on a pin wins over the wire there): ${__eda.state().selection.map((x) => x.id)}`);
-      await hoverAt(49_530_000, 82_550_000);
+      await hoverAt(44_450_000, 82_550_000);
       await __eda.run("eeschema.InteractiveSelection.SelectNode");
       await sleep(500);
       const ids = __eda.state().selection.map((x) => x.id);
@@ -236,19 +236,19 @@
       await enter(mcu.id);
       const m0 = await sch(mcu.id);
       const lbl = (s, at) => s.labels.find((l) => l.at[0] === at[0] && l.at[1] === at[1])?.net;
-      t(lbl(m0, [135_890_000, 69_850_000]) === "PA0" && lbl(m0, [135_890_000, 72_390_000]) === "PA1", "U1.3 has the label PA0 and U1.4 the label PA1");
+      t(lbl(m0, [135_890_000, 68_580_000]) === "PA0" && lbl(m0, [135_890_000, 71_120_000]) === "PA1", "U1.3 has the label PA0 and U1.4 the label PA1");
       await select(["pin:U1:3", "pin:U1:4"]);
       const swapLabels = __eda.actions().find((a) => a.id === "eeschema.InteractiveEdit.swapPinLabels");
       t(swapLabels?.enabled === true, `Swap Pin Labels is offered for two pins that each have a label (${swapLabels?.reason ?? "enabled"})`);
       await __eda.run("eeschema.InteractiveEdit.swapPinLabels");
       await sleep(1200);
       const m1 = await sch(mcu.id);
-      t(lbl(m1, [135_890_000, 69_850_000]) === "PA1" && lbl(m1, [135_890_000, 72_390_000]) === "PA0", `the labels traded their text (${lbl(m1, [135890, 69850])}, ${lbl(m1, [135890, 72390])})`);
+      t(lbl(m1, [135_890_000, 68_580_000]) === "PA1" && lbl(m1, [135_890_000, 71_120_000]) === "PA0", `the labels traded their text (${lbl(m1, [135_890_000, 68_580_000])}, ${lbl(m1, [135_890_000, 71_120_000])})`);
       const u1 = m1.symbols.find((x) => x.id === "U1");
       t(u1.pins.find((p) => p.number === "3").net === "/LED channels (D1–D8)/PA1" && u1.pins.find((p) => p.number === "4").net === "/LED channels (D1–D8)/PA0", `and the pins are on each other's nets (${u1.pins.find((p) => p.number === "3").net}, ${u1.pins.find((p) => p.number === "4").net})`);
       t(JSON.stringify(u1.pin_swaps ?? null) === JSON.stringify(m0.symbols.find((x) => x.id === "U1").pin_swaps ?? null), "the pins did not move");
       await undo();
-      t(lbl(await sch(mcu.id), [135_890_000, 69_850_000]) === "PA0", "one Undo puts the labels back");
+      t(lbl(await sch(mcu.id), [135_890_000, 68_580_000]) === "PA0", "one Undo puts the labels back");
       await setPrefs({ pinSwaps: prefs0.pinSwaps });
     });
 

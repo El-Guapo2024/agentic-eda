@@ -71,6 +71,7 @@ Each package's leftovers are listed in its `GAPS.md` item and `PARITY-*.md` sect
 
 | Branch | What it does | How far | What's left |
 |---|---|---|---|
+| `task-r2-leftovers` (local, push disabled) | Round 2's open schematic findings (B-M2 pages, B-M4 unit per path, C-M3 power autoplace, D-C3/D-C4 Paste numbering and library, D-E3 list order, the D-E1 note: local power symbols, and most lows) and round 3's A3 and C3 slices (common pin per unit, bus sheet pins by `drivesRecord`, undriven net names after an edit, `#` references, Align, name holder, Highlight Net on a label, Delete/`J`/commit `CleanUp`, terminal points, stroke equivalence); PARITY-sch section 45 | done; gates in the report | A-N13, B-L3, rest of B-L1/B-L4, C-L7..L9, A3-L1, C3-L1, C3-L3; overlaps task-r3-sch-files in `sch_import.rs`/`sheet_list.rs` (page reading) |
 
 Gates for any of them:
 1. `cargo check --workspace --tests --keep-going`, with no warnings.
