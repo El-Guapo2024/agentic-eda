@@ -76,7 +76,7 @@ export async function startPaste(ctx: SchPasteContext, opts: { mode: SchPasteMod
     return;
   }
   // `m_MaxPastedTextLength`: a long text asks first.
-  if (reply.kind === "text" && reply.long_text && !window.confirm("Pasting a long text string may be very slow.  Do you want to continue?")) return;
+  if (reply.kind === "text" && reply.long_text && !window.confirm("Pasting a long text text string may be very slow.  Do you want to continue?") /* sch_editor_control.cpp::Paste, word for word ("text" twice) */) return;
   if (reply.notes?.length) toast(dispatch, reply.notes.join("; "));
   // `selectionClear`, then the pasted items are the selection.
   dispatch({ type: "CLEAR_SELECTION" });

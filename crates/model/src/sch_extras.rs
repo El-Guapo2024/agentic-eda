@@ -93,6 +93,11 @@ pub struct SchExtras {
     /// Properties set it, as `label_looks` does for labels (`auto_rotate` is for labels and stays off). A pin with no entry has the default text, 50 mil, regular, upright.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheet_pin_looks: BTreeMap<String, LabelLook>,
+    /// The user fields of a hierarchical sheet (`SCH_SHEET::GetFields()` past `Sheetname` and `Sheetfile`), by the sheet's id, in the file's order: a sheet's
+    /// field is a text variable for everything the sheet shows (`SCH_SHEET::ResolveTextVar`: `${param}` of a label inside), so a shared screen's labels
+    /// read per placement. Read from a file and written back (`saveSheet`: `for( SCH_FIELD& field : aSheet->GetFields() ) saveField( &field )`). Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheet_fields: BTreeMap<String, Vec<LabelField>>,
     /// The page number of a sheet drawn on this screen, per sheet path, where the screen is shown on several paths and the paths' pages differ
     /// (`SCH_SHEET::m_instances`: one `SCH_SHEET_INSTANCE`, with its own `m_PageNumber`, per sheet path the sheet is on): by the sheet's
     /// `SheetInstance::id`, then by the path of the screen the sheet is drawn on (the placement ids from the root down, joined with `/`) -> the page.
@@ -565,6 +570,7 @@ impl SchExtras {
             && self.label_looks.is_empty()
             && self.label_fields.is_empty()
             && self.sheet_pin_looks.is_empty()
+            && self.sheet_fields.is_empty()
             && self.sheet_pages.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()

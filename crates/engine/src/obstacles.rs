@@ -14,7 +14,7 @@ use crate::symgeom::SymbolGeom;
 /// One thing on the sheet and the box it takes.
 #[derive(Debug, Clone)]
 pub struct Obstacle {
-    /// The reference of the symbol it belongs to, else empty.
+    /// The symbol it belongs to, by its unit's field key (`eda_model::ir::field_key`: `U1`, `U1#2`: each unit is a symbol of its own), else empty.
     pub owner: String,
     pub rect: Rect,
 }
@@ -68,11 +68,11 @@ pub fn of_section_but_wires(sch: &SchematicSection, model: &ConstraintModel) -> 
         let resolved = model.real_symbol_of_instance(sch, &sym, part);
         let geom = SymbolGeom::of(&sym, part, resolved.as_ref());
         if let Some(b) = geom.body {
-            out.push(Obstacle { owner: sym.id.clone(), rect: outward(b) });
+            out.push(Obstacle { owner: eda_model::ir::field_key(&sym.id, sym.unit), rect: outward(b) });
         }
         for (r, p) in geom.pin_rects() {
             if p.length >= 0.0 {
-                out.push(Obstacle { owner: sym.id.clone(), rect: outward(r) });
+                out.push(Obstacle { owner: eda_model::ir::field_key(&sym.id, sym.unit), rect: outward(r) });
             }
         }
     }

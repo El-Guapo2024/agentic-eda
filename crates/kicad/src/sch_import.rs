@@ -529,10 +529,16 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     let mut sheet_pin_looks: Vec<(String, eda_model::sch_extras::LabelLook)> = Vec::new();
     // the pages of a sheet on the paths after its first (`SchExtras::sheet_pages`)
     let mut sheet_pages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = std::collections::BTreeMap::new();
+    let mut sheet_user_fields: Vec<(String, Vec<eda_model::sch_extras::LabelField>)> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
         let file = sheet_property_text(s, "Sheetfile").unwrap_or_default();
+        // the sheet's user fields (r2 B-L1): every property but the two mandatory ones
+        let user: Vec<eda_model::sch_extras::LabelField> = crate::label_fields::read_label_fields(s, false).into_iter().filter(|f| !is_sheet_field(&f.name, "Sheetname") && !is_sheet_field(&f.name, "Sheetfile")).collect();
+        if !user.is_empty() && !id.is_empty() {
+            sheet_user_fields.push((id.clone(), user));
+        }
         let at = sexpr::find(s, "at").and_then(point_mm).unwrap_or(SPoint::new(0.0, 0.0));
         let size = sexpr::find(s, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))).unwrap_or((0.0, 0.0));
         let pins = sexpr::find_all(s, "pin")
@@ -637,6 +643,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         sch.extras.pin_swaps.extend(pin_swap_entries);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
+        sch.extras.sheet_fields.extend(sheet_user_fields);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {
@@ -773,14 +780,25 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     let mut read_files: BTreeSet<String> = BTreeSet::new();
     // each file's symbols by uuid: where they are and their unit, for the root's `(symbol_instances ..)`
     let mut symbol_places: BTreeMap<String, BTreeMap<String, (Point, Option<u32>)>> = BTreeMap::new();
-    let root_sheets: Vec<(String, std::path::PathBuf)> = design.schematic.as_ref().map(|s| s.sheets.iter().map(|sh| (sh.file.clone(), dir.to_path_buf())).collect()).unwrap_or_default();
-    let mut queue: Vec<(String, std::path::PathBuf)> = root_sheets;
+    // A sheet's file is resolved against the folder of the file that places it (`SCH_IO_KICAD_SEXPR::loadHierarchy`: `fileName.MakeAbsolute(
+    // m_currentPath.top() )`, then `m_currentPath.push( fileName.GetPath() )`), and a screen is the file it resolves to (`SCH_SCREENS` by file name,
+    // `SearchHierarchy( fn.GetFullPath() )`): each screen is keyed by its path from the root's folder (`ampli_ht/filter.kicad_sch`), and each sheet
+    // names its screen by that key. Two `x.kicad_sch` of two folders are two screens, and one file spelt two ways is one.
+    let key_of = |resolve_dir: &Path, text: &str| -> String { sheet_file_key(dir, resolve_dir, text) };
+    if let Some(root_sch) = design.schematic.as_mut() {
+        for sh in root_sch.sheets.iter_mut() {
+            sh.file = key_of(dir, &sh.file);
+        }
+    }
+    let root_sheets: Vec<String> = design.schematic.as_ref().map(|s| s.sheets.iter().map(|sh| sh.file.clone()).collect()).unwrap_or_default();
+    let mut queue: Vec<String> = root_sheets;
 
-    while let Some((file, resolve_dir)) = queue.pop() {
+    while let Some(file) = queue.pop() {
         if !read_files.insert(file.clone()) {
             continue; // same screen reached again through another placement/path -- already have its content
         }
-        let child_path = resolve_dir.join(&file);
+        let child_path = dir.join(&file);
+        let resolve_dir = child_path.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
         let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
         let Ok((child_design, child_model, child_notes)) = import_kicad_sch_with(&child_text, opts) else { continue };
         symbol_places.insert(file.clone(), symbol_places_of(&child_text));
@@ -810,9 +828,9 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
                     root_sch.extras.embedded.insert(f);
                 }
             }
-            let child_dir = child_path.parent().unwrap_or(&resolve_dir).to_path_buf();
-            for s in &child_sch.sheets {
-                queue.push((s.file.clone(), child_dir.clone()));
+            for s in child_sch.sheets.iter_mut() {
+                s.file = key_of(&resolve_dir, &s.file);
+                queue.push(s.file.clone());
             }
             sheet_contents.insert(file, child_sch);
         }
@@ -846,8 +864,38 @@ pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(
     }
     legacy_symbol_instances(&text, &design, &mut sheet_contents, &symbol_places);
     design.sheet_contents = (!sheet_contents.is_empty()).then_some(sheet_contents);
+    legacy_sheet_instances(&text, &mut design);
 
     Ok((design, model, notes))
+}
+
+/// The key of the screen a sheet in a file of the folder `resolve_dir` names as `text`: the file's path from the root's folder `root_dir`, `/`-separated,
+/// with `.` and `..` worked out (`ampli_ht/filter.kicad_sch`). A file outside the root's folder keeps its path from it with the `..` in front.
+pub fn sheet_file_key(root_dir: &Path, resolve_dir: &Path, text: &str) -> String {
+    use std::path::Component;
+    let normal = |p: &Path| -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for c in p.components() {
+            match c {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if out.last().is_some_and(|l| l != "..") {
+                        out.pop();
+                    } else {
+                        out.push("..".into());
+                    }
+                }
+                other => out.push(other.as_os_str().to_string_lossy().into_owned()),
+            }
+        }
+        out
+    };
+    let target = normal(&resolve_dir.join(text));
+    let root = normal(root_dir);
+    let common = root.iter().zip(&target).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), root.len() - common).collect();
+    parts.extend(target[common..].iter().cloned());
+    parts.join("/")
 }
 
 /// The bus aliases of a `.kicad_pro`'s text: `schematic.bus_aliases`, `{ "<name>": ["<member>", ..] }`, where KiCad 10 keeps them (`PROJECT_FILE`'s
@@ -924,6 +972,57 @@ fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mu
             continue;
         }
         sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit });
+    }
+}
+
+/// The root's `(sheet_instances (path "/<sheet>/../" (page ..)) ..)` of a KiCad 6 / early 7 file (r2 B-M3), which holds the page of every sheet path: KiCad reads
+/// them with `SCH_IO_KICAD_SEXPR_PARSER::parseSchSheetInstances` (an empty page is "#": "Empty page numbers are not permitted"; a file older than 20221002 has
+/// no root uuid in front) and hands them to each sheet (`SCH_SHEET_LIST::UpdateSheetInstanceData`, `eeschema_helpers.cpp` for kicad-cli). A sheet on a screen
+/// shown once takes the page as its own (`SheetInstance::page`), one on a screen shown on several paths for that path (`SchExtras::sheet_pages`). The root's
+/// own `/` is page 1, and a page "1" is no page here, as for a sheet's own instances.
+fn legacy_sheet_instances(root_text: &str, design: &mut Design) {
+    let Ok(tree) = sexpr::parse(root_text) else { return };
+    let Some(root) = tree.as_list() else { return };
+    let Some(instances) = sexpr::find(root, "sheet_instances") else { return };
+    let root_uuid = uuid_of(root).unwrap_or_default();
+    let counts = eda_model::sheet_list::placement_counts(design);
+    for path in sexpr::find_all(instances, "path") {
+        let Some(path_str) = sexpr::txt(path, 1) else { continue };
+        let mut ids: Vec<String> = path_str.split('/').filter(|c| !c.is_empty()).map(String::from).collect();
+        if ids.first() == Some(&root_uuid) {
+            ids.remove(0);
+        }
+        let Some((sheet_id, parent)) = ids.split_last() else { continue };
+        let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map(|p| if p.is_empty() { "#" } else { p }).unwrap_or("#").to_string();
+        if page == "1" {
+            continue;
+        }
+        // the screen the sheet is drawn on: the root, else the screen of the placement `parent` ends at
+        let mut file: Option<String> = None;
+        let mut here = design.schematic.as_ref();
+        for id in parent {
+            let Some(placement) = here.and_then(|s| s.sheets.iter().find(|sh| &sh.id == id)) else {
+                here = None;
+                break;
+            };
+            file = Some(placement.file.clone());
+            here = design.sheet_contents.as_ref().and_then(|c| c.get(&placement.file));
+        }
+        if here.is_none() {
+            continue;
+        }
+        let shown_once = file.as_ref().is_none_or(|f| counts.get(f).copied().unwrap_or(1) <= 1);
+        let screen = match &file {
+            None => design.schematic.as_mut(),
+            Some(f) => design.sheet_contents.as_mut().and_then(|c| c.get_mut(f)),
+        };
+        let Some(screen) = screen else { continue };
+        let Some(sheet) = screen.sheets.iter_mut().find(|sh| &sh.id == sheet_id) else { continue };
+        if shown_once {
+            sheet.page = page;
+        } else {
+            screen.extras.sheet_pages.entry(sheet_id.clone()).or_default().insert(parent.join("/"), page);
+        }
     }
 }
 
@@ -1790,6 +1889,84 @@ mod tests {
             _ => 0.0,
         };
         assert!((width(&lib.graphics[0]) - 5.08).abs() < 1e-6 && (width(&alternate.graphics[0]) - 7.62).abs() < 1e-6, "{:?} {:?}", lib.graphics, alternate.graphics);
+    }
+
+    /// r2 B-H2: a sheet's file is resolved against the folder of the file that places it (`SCH_IO_KICAD_SEXPR::loadHierarchy`), and a screen is keyed by
+    /// the file it resolves to, from the root's folder: `a/x.kicad_sch` and `b/x.kicad_sch`, each placed as `x.kicad_sch` by the file beside it, are two
+    /// screens; `./a/../a/x.kicad_sch` is `a/x.kicad_sch`. The writer names each again as its placing file reads it, and writes it in its folder.
+    #[test]
+    fn sheets_in_subfolders_are_keyed_by_the_file_they_resolve_to() {
+        let root = Path::new("/p");
+        assert_eq!(sheet_file_key(root, root, "a/x.kicad_sch"), "a/x.kicad_sch");
+        assert_eq!(sheet_file_key(root, &root.join("a"), "x.kicad_sch"), "a/x.kicad_sch");
+        assert_eq!(sheet_file_key(root, root, "./a/../a/x.kicad_sch"), "a/x.kicad_sch");
+        assert_eq!(sheet_file_key(root, &root.join("a"), "../top.kicad_sch"), "top.kicad_sch");
+        assert_eq!(sheet_file_key(root, root, "../out.kicad_sch"), "../out.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("a", "a/x.kicad_sch"), "x.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("a", "top.kicad_sch"), "../top.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("", "a/x.kicad_sch"), "a/x.kicad_sch");
+        assert_eq!(crate::sheet_file_relative_to("a/b", "a/c/x.kicad_sch"), "../c/x.kicad_sch");
+
+        let dir = std::env::temp_dir().join(format!("eda_kicad_sch_subfolders_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for f in ["a", "b"] {
+            std::fs::create_dir_all(dir.join(f)).unwrap();
+        }
+        let sheet = |uuid: &str, name: &str, file: &str, y: i32| format!("(sheet (at 100 {y}) (size 20 20) (uuid \"{uuid}\") (property \"Sheetname\" \"{name}\" (at 100 99 0)) (property \"Sheetfile\" \"{file}\" (at 100 121 0)))");
+        let file = |uuid: &str, body: &str| format!("(kicad_sch (version 20250114) (generator \"test\") (uuid \"{uuid}\") (paper \"A4\") {body})");
+        let leaf = |uuid: &str, text: &str| file(uuid, &format!("(label \"{text}\" (at 10 10 0) (uuid \"{uuid}-l\"))"));
+        std::fs::write(dir.join("root.kicad_sch"), file("11111111-1111-1111-1111-111111111111", &format!("{} {}", sheet("21111111-1111-1111-1111-111111111111", "A", "a/a.kicad_sch", 100), sheet("31111111-1111-1111-1111-111111111111", "B", "b/b.kicad_sch", 200)))).unwrap();
+        std::fs::write(dir.join("a/a.kicad_sch"), file("41111111-1111-1111-1111-111111111111", &sheet("51111111-1111-1111-1111-111111111111", "X", "x.kicad_sch", 100))).unwrap();
+        std::fs::write(dir.join("b/b.kicad_sch"), file("61111111-1111-1111-1111-111111111111", &sheet("71111111-1111-1111-1111-111111111111", "X", "x.kicad_sch", 100))).unwrap();
+        std::fs::write(dir.join("a/x.kicad_sch"), leaf("81111111-1111-1111-1111-111111111111", "IN_A")).unwrap();
+        std::fs::write(dir.join("b/x.kicad_sch"), leaf("91111111-1111-1111-1111-111111111111", "IN_B")).unwrap();
+        let (design, model, notes) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).unwrap();
+        assert_eq!(notes.sheets_not_descended, 0);
+        let screens = design.sheet_contents.as_ref().unwrap();
+        let mut keys: Vec<&String> = screens.keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["a/a.kicad_sch", "a/x.kicad_sch", "b/b.kicad_sch", "b/x.kicad_sch"]);
+        assert_eq!(screens["a/x.kicad_sch"].labels[0].net, "IN_A");
+        assert_eq!(screens["b/x.kicad_sch"].labels[0].net, "IN_B", "the other folder's x.kicad_sch is a screen of its own");
+        assert_eq!(screens["a/a.kicad_sch"].sheets[0].file, "a/x.kicad_sch");
+        // written back: each screen in its folder, named relative to the file that places it
+        let files = crate::export_kicad_sch_tree(&design, &model, &ExportMeta { date: "2026-10-27", title: "t" }, "root.kicad_sch").unwrap();
+        let text = |name: &str| files.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("{name} in {:?}", files.iter().map(|f| &f.0).collect::<Vec<_>>())).1.clone();
+        assert!(text("a/a.kicad_sch").contains("(property \"Sheetfile\" \"x.kicad_sch\""), "{}", text("a/a.kicad_sch"));
+        assert!(text("root.kicad_sch").contains("(property \"Sheetfile\" \"b/b.kicad_sch\""));
+        assert!(text("b/x.kicad_sch").contains("IN_B"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// r2 B-L1 (`saveSheet` saves every field; `SCH_SHEET::ResolveTextVar` reads one by name): a sheet's user field is read and written back.
+    #[test]
+    fn a_sheets_user_field_is_read_and_written_back() {
+        let text = "(kicad_sch (version 20250114) (generator \"test\") (uuid \"11111111-1111-1111-1111-111111111111\") (paper \"A4\") (sheet (at 100 100) (size 20 20) (uuid \"21111111-1111-1111-1111-111111111111\") (property \"Sheetname\" \"A\" (at 100 99 0)) (property \"Sheetfile\" \"a.kicad_sch\" (at 100 121 0)) (property \"param\" \"NODE_1\" (at 100 100 0) (effects (font (size 1.27 1.27)) hide))))";
+        let (design, model, _) = import_kicad_sch(text).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        let fields = &sch.extras.sheet_fields["21111111-1111-1111-1111-111111111111"];
+        assert_eq!((fields[0].name.as_str(), fields[0].text.as_str(), fields[0].visible), ("param", "NODE_1", false));
+        let out = crate::export_kicad_sch(&design, &model, &ExportMeta { date: "2026-10-27", title: "t" }).unwrap();
+        assert!(out.contains("(property \"param\" \"NODE_1\""), "{out}");
+    }
+
+    /// r2 B-M3 (`parseSchSheetInstances`, `UpdateSheetInstanceData`): a KiCad 6 root's `(sheet_instances (path "/<sheet>/" (page "7")))` is the sheet's page, and an
+    /// empty page is "#".
+    #[test]
+    fn a_kicad_6_roots_sheet_instances_give_the_sheets_their_pages() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_sheet_instances_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sheet = |uuid: &str, file: &str, y: i32| format!("(sheet (at 100 {y}) (size 20 20) (uuid \"{uuid}\") (property \"Sheet name\" \"{file}\" (at 100 99 0)) (property \"Sheet file\" \"{file}.kicad_sch\" (at 100 121 0)))");
+        let root = format!("(kicad_sch (version 20211123) (generator eeschema) (uuid \"11111111-1111-1111-1111-111111111111\") (paper \"A4\") {} {} (sheet_instances (path \"/\" (page \"1\")) (path \"/21111111-1111-1111-1111-111111111111/\" (page \"7\")) (path \"/31111111-1111-1111-1111-111111111111/\" (page \"\"))))", sheet("21111111-1111-1111-1111-111111111111", "a", 100), sheet("31111111-1111-1111-1111-111111111111", "b", 200));
+        std::fs::write(dir.join("root.kicad_sch"), root).unwrap();
+        for f in ["a", "b"] {
+            std::fs::write(dir.join(format!("{f}.kicad_sch")), "(kicad_sch (version 20211123) (generator eeschema) (uuid \"41111111-1111-1111-1111-111111111111\") (paper \"A4\"))").unwrap();
+        }
+        let (design, _, _) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).unwrap();
+        let pages: Vec<(String, String)> = design.schematic.as_ref().unwrap().sheets.iter().map(|s| (s.name.clone(), s.page.clone())).collect();
+        assert_eq!(pages, [("a".to_string(), "7".to_string()), ("b".to_string(), "#".to_string())]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// GAPS.md #6: `import_kicad_sch_tree` actually follows a `(sheet ...)`

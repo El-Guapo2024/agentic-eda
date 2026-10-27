@@ -181,3 +181,32 @@ fn a_page_position_taken_into_the_symbols_frame_and_back_is_the_same_whatever_th
         }
     }
 }
+
+/// r2 C-M7: `BOX2I::Intersects` -- boxes that only touch collide.
+#[test]
+fn touching_boxes_intersect() {
+    assert!(boxes_intersect([0, 0, 10, 10], [10, 0, 20, 10]));
+    assert!(boxes_intersect([0, 0, 10, 10], [0, 10, 10, 10]), "a box of no height on the edge");
+    assert!(!boxes_intersect([0, 0, 10, 10], [11, 0, 20, 10]));
+}
+
+/// r2 C-M4 (`AUTOPLACER::pinsOnSide` / `getPinsBox`: `if( !each_pin->IsVisible() && !m_is_power_symbol ) continue;`): a hidden pin on a symbol's right
+/// counts for nothing, so a resistor whose only other pins are above and below still takes the right side, the first of its preferred sides.
+#[test]
+fn autoplace_ignores_hidden_pins() {
+    let mut lib = eda_model::symbol::builtin("Device:R").unwrap();
+    let mut hidden = lib.pins[0].clone();
+    hidden.number = "3".into();
+    hidden.electrical_type = "power_in".into();
+    hidden.at = eda_model::symbol::SPoint { x: 2.54, y: 0.0 };
+    hidden.angle_deg = 180.0;
+    hidden.length_mm = 1.27;
+    hidden.hidden = true;
+    lib.pins.push(hidden);
+    let sym = resistor(Point { x: mm(50.8), y: mm(50.8) }, 0, false);
+    let geom = SymbolGeom::of(&sym, &part("R1", 3), Some(&lib));
+    let placed = autoplace_symbol(&sym, &geom, &symbol_specs(&sym, None, ""));
+    let (rx, _) = page_field(sym.at, sym.rot, sym.mirrored, geom.width, &placed[0], "x").at;
+    let body = geom.body.unwrap();
+    assert!(rx > body.x1, "the Reference is right of the body ({rx} > {})", body.x1);
+}

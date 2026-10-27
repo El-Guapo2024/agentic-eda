@@ -105,6 +105,7 @@ impl<'a> Board<'a> {
         }
         self.design.schematic = Some(root);
         self.design.sheet_contents = (!screens.is_empty()).then_some(screens);
+        crate::sch_sheets::fold_first_path_references(&mut self.design);
         // The file's bus aliases, which its buses are written with: one of a name the design already has replaces it (the new drawing's buses mean
         // what the file says; the connection graph's alias cache keeps the last of a name, `buildConnectionGraph`).
         for alias in &content.bus_aliases {

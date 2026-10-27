@@ -1167,6 +1167,27 @@ fn a_hidden_power_input_pin_joins_the_net_of_its_name() {
     }
 }
 
+/// r2 D-E1 (`ERC_SETTINGS`'s `rule_severities` and `pin_map` loaders, `SCHEMATIC_SETTINGS`'s `connection_grid_size`): `eda import-kicad` of a schematic brings
+/// its project's ERC severities, pin map and connection grid with it, so the derived project's ERC judges as kicad-cli judges the original (QA `issue22938`
+/// ignores `pin_not_connected`; ours reported 50 of them). A library-link check stays at the derived project's ignore.
+#[test]
+fn a_kicad_projects_erc_settings_come_in_with_the_schematic() {
+    let work = scratch("project_erc_settings");
+    let root = work.join("p.kicad_sch");
+    std::fs::write(&root, include_str!("../tests/fixtures/hidden_power_pins.kicad_sch")).unwrap();
+    let mut pin_map = eda_model::ir::ErcPinMap::default_matrix();
+    pin_map[1][1] = (pin_map[1][1] + 1) % 3;
+    std::fs::write(root.with_extension("kicad_pro"), json!({ "erc": { "rule_severities": { "pin_not_connected": "ignore", "lib_symbol_mismatch": "warning", "pin_to_pin": "warning" }, "pin_map": pin_map }, "schematic": { "connection_grid_size": 100.0 } }).to_string()).unwrap();
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let severities = eda_kicad::effective_erc_severities(&design);
+    assert_eq!(severities.get("pin_not_connected").map(String::as_str), Some("ignore"));
+    assert_eq!(severities.get("lib_symbol_mismatch").map(String::as_str), Some("ignore"), "the derived project's library-link checks stay ignored");
+    assert_eq!(eda_kicad::custom_erc_pin_map(&design).unwrap()[1][1], pin_map[1][1]);
+    assert_eq!(design.schematic.as_ref().unwrap().extras.connection_grid_mils, Some(100));
+}
+
 /// p13-p16 F6, the ERC half: a KiCad project's own ERC exclusions come in with `eda import-kicad`, named as the derived schematic names its items, and
 /// kicad-cli still waives the violation on the studio's run. The record is the one KiCad 10 writes for kicad-cli's own marker of U1's unconnected pin 1 (and
 /// kicad-cli reads it as excluded on the original project first).
@@ -1240,58 +1261,155 @@ fn slow_an_imported_kicad_schematic_derives_one_kicad_cli_reads_as_the_original(
     assert_eq!(kicad_nets(&dir.join(".kicad").join("board.kicad_sch")), kicad_nets(&root), "kicad-cli's nets of the derived file are the original's");
 }
 
-/// The QA project `rel` read by our reader as it is (no Import Sheet: the symbols at their library origin) and traced as the studio traces a board
-/// (`board::trace_design`), beside kicad-cli's netlist of KiCad's own file: (ours, KiCad's), nets of two pins or more.
-fn qa_traced(rel: &str) -> Option<(Vec<Vec<String>>, Vec<Vec<String>>)> {
-    let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from)?.join("qa/data/eeschema").join(rel);
-    let work = scratch(&format!("qat_{}", rel.replace(['/', '.'], "_")));
-    for e in std::fs::read_dir(src.parent().unwrap()).unwrap().flatten().filter(|e| e.path().is_file()) {
-        std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
+/// kicad-cli's netlist of the schematic `root` (`kicad-cli sch export netlist --format kicadxml`): the name of each pin's net, by `REF.PIN`, power
+/// symbols left out, nets of one pin kept.
+fn kicad_cli_net_names(root: &Path) -> std::collections::BTreeMap<String, String> {
+    let out = root.with_extension("names.net.xml");
+    let status = std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "export", "netlist", "--format", "kicadxml", "-o"]).arg(&out).arg(root).output().unwrap();
+    assert!(out.exists(), "kicad-cli exports {}: {}", root.display(), String::from_utf8_lossy(&status.stderr));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let attr = |line: &str, name: &str| line.split(&format!("{name}=\"")).nth(1).and_then(|r| r.split('"').next()).unwrap_or("").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
+    let mut names = std::collections::BTreeMap::new();
+    let mut net = String::new();
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            net = attr(line, "name");
+        } else if line.starts_with("<node ") && !attr(line, "ref").starts_with('#') && !attr(line, "ref").contains('?') {
+            // (an unannotated reference, `R?`, is shared by several symbols: their pins cannot be told apart by `REF.PIN`)
+            names.insert(format!("{}.{}", attr(line, "ref"), attr(line, "pin")), net.clone());
+        }
     }
-    let root = work.join(src.file_name().unwrap());
-    let kicad = kicad_cli_net_groups(&root);
-    let (mut design, mut model, _) = eda_kicad::import_kicad_sch_tree(&root).ok()?;
-    crate::board::reconcile_schematic(&mut design, &mut model, None);
-    let mut ours: Vec<Vec<String>> = traced_as_the_studio(&design, &model).into_iter().map(|n| n.pins.into_iter().filter(|p| !p.starts_with('#')).collect::<Vec<_>>()).filter(|p: &Vec<String>| p.len() >= 2).collect();
-    for g in ours.iter_mut() {
-        g.sort();
-    }
-    ours.sort();
-    Some((ours, kicad.into_iter().filter(|g| g.len() >= 2).collect()))
+    names
 }
 
-/// KiCad's QA projects that show a screen twice, carry buses across sheets or give labels fields of their own, read by our reader and traced as the studio
-/// traces a board: the nets are kicad-cli's netlist of KiCad's own files. (`KICAD_SRC_DIR` must name KiCad's source.)
+/// Copy the folder `from` into `to`, its subfolders too (a project may keep its sheets in one, QA `complex_hierarchy_shared`).
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let name = e.file_name();
+        if name.to_string_lossy().starts_with("._") {
+            continue;
+        }
+        if e.path().is_dir() {
+            copy_tree(&e.path(), &to.join(&name));
+        } else {
+            std::fs::copy(e.path(), to.join(&name)).unwrap();
+        }
+    }
+}
+
+/// The nets of a QA project, as KiCad and the studio name them.
+struct QaTraced {
+    /// The pins of each net of two pins or more, ours and kicad-cli's.
+    ours: Vec<Vec<String>>,
+    kicad: Vec<Vec<String>>,
+    /// `(pin, our net's name, kicad-cli's)` for every pin of kicad-cli's netlist whose net we name otherwise ("" when we put it on no net).
+    names: Vec<(String, String, String)>,
+    /// `(pin, the net kicad-cli names it on of the schematic the studio derives, the original's)` where the two differ.
+    derived: Vec<(String, String, String)>,
+}
+
+/// The QA project `rel` brought in as a user brings it in (`eda import-kicad x.kicad_sch`: `Cmd::ReplaceSchematic`, the screens into the design's frame,
+/// the references of each sheet path), its whole folder copied, subfolders too, and traced with the names the studio gives a board's nets
+/// (`board::trace_kicad_names`), beside kicad-cli's netlist of KiCad's own file.
+fn qa_traced(rel: &str) -> Option<QaTraced> {
+    let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from)?.join("qa/data/eeschema").join(rel);
+    traced_beside_kicad_cli(&src, &format!("qat_{}", rel.replace(['/', '.'], "_")))
+}
+
+/// [`qa_traced`] of the project whose root schematic is `src`, in the scratch folder `name`.
+fn traced_beside_kicad_cli(src: &Path, name: &str) -> Option<QaTraced> {
+    let work = scratch(name);
+    let project = work.join("src");
+    copy_tree(src.parent().unwrap(), &project);
+    let root = project.join(src.file_name().unwrap());
+    let kicad_names = kicad_cli_net_names(&root);
+    let dir = work.join("board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).ok()?;
+    let (_, design, model) = load(&dir).ok()?;
+    let traced = traced_as_the_studio(&design, &model);
+    let mut our_names: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut ours: Vec<Vec<String>> = Vec::new();
+    for n in traced {
+        let mut pins: Vec<String> = n.pins.into_iter().filter(|p| !p.starts_with('#') && !p.split_once('.').is_some_and(|(r, _)| r.contains('?'))).collect();
+        pins.sort();
+        for p in &pins {
+            our_names.insert(p.clone(), n.name.clone());
+        }
+        if pins.len() >= 2 {
+            ours.push(pins);
+        }
+    }
+    ours.sort();
+    let mut groups: std::collections::BTreeMap<&String, Vec<String>> = std::collections::BTreeMap::new();
+    for (pin, net) in &kicad_names {
+        groups.entry(net).or_default().push(pin.clone());
+    }
+    let mut kicad: Vec<Vec<String>> = groups.into_values().filter(|g| g.len() >= 2).collect();
+    for g in kicad.iter_mut() {
+        g.sort();
+    }
+    kicad.sort();
+    // a pin on no traced net is alone: the board names its pad's net as KiCad names a lone pin's (`unconnected_pin_nets`); kicad-cli's netlist writes
+    // the names unescaped (`NETLIST_EXPORTER_XML::makeListOfNets`: `UnescapeString`)
+    let alone = |pin: &str| -> String {
+        let (reference, number) = pin.split_once('.').unwrap_or((pin, ""));
+        let shown = model.part(reference).and_then(|p| p.pins.iter().find(|p| p.number == number)).and_then(|p| p.name.clone());
+        let with_unit = model.symbol_links.get(reference).and_then(|l| l.units.get(number)).cloned();
+        eda_engine::nets::unconnected_net_name(pin, shown.as_deref(), with_unit.as_deref())
+    };
+    let names = kicad_names.iter().filter_map(|(pin, theirs)| {
+        let mine = our_names.get(pin).cloned().unwrap_or_else(|| alone(pin)).replace("{slash}", "/");
+        (&mine != theirs).then(|| (pin.clone(), mine, theirs.clone()))
+    }).collect();
+    // and the schematic the studio derives from it (`.kicad/board.kicad_sch` and its screens, subfolders too), read by kicad-cli
+    let derived_names = kicad_net_names(&dir).into_iter().filter(|(p, _)| !p.split_once('.').is_some_and(|(r, _)| r.contains('?'))).collect::<std::collections::BTreeMap<_, _>>();
+    let derived = kicad_names.iter().filter_map(|(pin, theirs)| {
+        let d = derived_names.get(pin).cloned().unwrap_or_default();
+        (&d != theirs).then(|| (pin.clone(), d, theirs.clone()))
+    }).collect();
+    Some(QaTraced { ours, kicad, names, derived })
+}
+
+/// KiCad's QA projects that show a screen twice, carry buses across sheets or give labels fields of their own, brought in by `eda import-kicad` and traced as
+/// the studio traces a board: the nets are kicad-cli's netlist of KiCad's own files, pin for pin and **name for name**. (`KICAD_SRC_DIR` must name KiCad's
+/// source.) Until round 2 this compared pin groups only, of a design read by `import_kicad_sch_tree` (no `Cmd::ReplaceSchematic`), with the root folder's files
+/// alone: through the real import path 11 of the 24 traced as kicad-cli reads them, and 10 named their nets as it does.
 const QA_TRACED_ALIKE: &[&str] = &[
     "issue13212.kicad_sch",
     "issue23840/BusAndVectors.kicad_sch",
     "netlists/test_global_promotion_2/test_global_promotion_2.kicad_sch",
-    "netlists/complex_hierarchy/complex_hierarchy.kicad_sch",
-    "netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch",
-    "legacy_hierarchy/legacy_hierarchy.kicad_sch",
     "netlists/test_hier_renaming/test_hier_renaming.kicad_sch",
     "netlists/prefix_bus_alias/prefix_bus_alias.kicad_sch",
     "netlists/weak_vector_bus_disambiguation/weak_vector_bus_disambiguation.kicad_sch",
     "netlists/group_bus_matching/group_bus_matching.kicad_sch",
     "netlists/issue16439/issue16439.kicad_sch",
     "issue18119/issue18119.kicad_sch",
-    "issue19646/issue19646.kicad_sch",
-    "issue23962/issue23962.kicad_sch",
-    "issue24044/issue24044.kicad_sch",
     "issue18092/issue18092.kicad_sch",
     "issue13112.kicad_sch",
     "issue12814.kicad_sch",
     "ERC_dynamic_power_symbol_test.kicad_sch",
     "netlists/bus_connection/bus_connection.kicad_sch",
     "issue17771/issue1771.kicad_sch",
+    // a hidden power input that is not on the edge its angle names (`4C4001`'s pins 10 and 20): it used to join GND and +5V
     "netlists/video/video.kicad_sch",
+    // a label's `${#}` in a math expression, per placement (r2 A-N10)
+    "issue23962/issue23962.kicad_sch",
+    "issue24044/issue24044.kicad_sch",
+    // its sheets in a subfolder (r2 B-H2), its symbols unannotated (`C?`, left out of the comparison)
+    "netlists/complex_hierarchy_shared/complex_hierarchy.kicad_sch",
+    // a pin name another unit repeats (r2 A-N6)
+    "netlists/complex_hierarchy/complex_hierarchy.kicad_sch",
+    "legacy_hierarchy/legacy_hierarchy.kicad_sch",
+    "issue19646/issue19646.kicad_sch",
     // a screen shown twice inside a screen shown twice: a reference per whole sheet path
     "issue10926_1.kicad_sch",
     "netlists/hierarchy_aliases/hierarchy_aliases.kicad_sch",
 ];
 
 /// The ones the studio still reads otherwise, each with why (PARITY-sch.md section 38, "Review"): printed, not asserted.
-const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[];
+const QA_TRACED_OTHERWISE: &[(&str, &str)] = &[
+];
 
 #[test]
 fn slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them() {
@@ -1299,15 +1417,32 @@ fn slow_kicad_qa_hierarchies_trace_as_kicad_cli_reads_them() {
         return;
     }
     let only = |a: &[Vec<String>], b: &[Vec<String>]| -> Vec<Vec<String>> { a.iter().filter(|x| !b.contains(x)).cloned().collect() };
+    let mut wrong: Vec<String> = Vec::new();
     for rel in QA_TRACED_ALIKE {
-        let (ours, kicad) = qa_traced(rel).unwrap_or_else(|| panic!("{rel} reads"));
-        assert!(!kicad.is_empty() || ours.is_empty(), "{rel}");
-        assert_eq!(ours, kicad, "{rel}: the studio's nets are kicad-cli's; ours only {:?}, kicad-cli's only {:?}", only(&ours, &kicad), only(&kicad, &ours));
+        let t = qa_traced(rel).unwrap_or_else(|| panic!("{rel} reads"));
+        let (groups, names) = (only(&t.kicad, &t.ours).len(), t.names.len());
+        println!("{rel}: {groups} of {} nets of 2+ pins differ, {names} of the pins' net names differ, {} in the derived schematic", t.kicad.len(), t.derived.len());
+        if !t.derived.is_empty() {
+            println!("   derived: {:?}", t.derived.iter().take(8).collect::<Vec<_>>());
+        }
+        if t.kicad.is_empty() && !t.ours.is_empty() {
+            wrong.push(format!("{rel}: kicad-cli has no nets"));
+        }
+        if t.ours != t.kicad {
+            wrong.push(format!("{rel}: the studio's nets are kicad-cli's; ours only {:?}, kicad-cli's only {:?}", only(&t.ours, &t.kicad), only(&t.kicad, &t.ours)));
+        }
+        if !t.names.is_empty() {
+            wrong.push(format!("{rel}: (pin, ours, kicad-cli's) {:?}", t.names.iter().take(12).collect::<Vec<_>>()));
+        }
+        if !t.derived.is_empty() {
+            wrong.push(format!("{rel}: kicad-cli reads the derived schematic otherwise: (pin, derived, original) {:?}", t.derived.iter().take(12).collect::<Vec<_>>()));
+        }
     }
     for (rel, why) in QA_TRACED_OTHERWISE {
-        let Some((ours, kicad)) = qa_traced(rel) else { continue };
-        println!("{rel} ({why}): {} nets differ of {}", only(&kicad, &ours).len(), kicad.len());
+        let Some(t) = qa_traced(rel) else { continue };
+        println!("{rel} ({why}): {} nets differ of {}, {} names differ", only(&t.kicad, &t.ours).len(), t.kicad.len(), t.names.len());
     }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// A board whose design stores no schematic yet (a board made by `eda board new`) is checked with the schematic the engine draws for it, and keeps its own

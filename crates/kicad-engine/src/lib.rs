@@ -541,8 +541,9 @@ fn export_board_with(design: &Design, model: &ConstraintModel, work: &Path, stem
     Ok((path, map))
 }
 
-/// Export the design's schematic as `<stem>.kicad_sch` (+ project), and one file beside it for every sheet of a hierarchical
-/// design (`Sheetfile` names are relative to the root's folder), so kicad-cli reads the whole tree.
+/// Export the design's schematic as `<stem>.kicad_sch` (+ project), and one file for every screen of a hierarchical design, at its name from the root's
+/// folder (a screen's key: `ampli_ht/filter.kicad_sch` is written in `ampli_ht/`, and its placing file names it relative to its own folder), so kicad-cli
+/// reads the whole tree.
 fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
     let date = today();
@@ -558,6 +559,10 @@ fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem:
         }
     }
     for (name, text) in &files {
+        // a screen in a subfolder of the root's (QA `complex_hierarchy_shared`'s `ampli_ht/`): the folder is made first
+        if let Some(parent) = work.join(name).parent().filter(|p| *p != work) {
+            std::fs::create_dir_all(parent).map_err(|e| fail("kicad_engine_write", &parent.display().to_string(), e.to_string()))?;
+        }
         write_file(&work.join(name), text)?;
     }
     // A schematic's project has no board to hold the net classes, so they are in the project file (`net_settings.classes`, `netclass_patterns`), where KiCad keeps

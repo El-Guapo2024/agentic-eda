@@ -646,6 +646,45 @@ impl<'a> Board<'a> {
     }
 }
 
+/// A KiCad file keeps a symbol's reference on every sheet path (`SCH_SYMBOL::m_instances`, one `(path .. (reference ..))` each, the first placement's too); this
+/// design keeps the first placement's as the symbol's own id (`SymbolInstance::id`, which Annotate and Edit Reference rename) and only the later paths' as
+/// `SchematicSection::instance_overrides`. So a screen read whole (`Cmd::ReplaceSchematic`) gives each symbol the reference of the first sheet path that shows
+/// its screen (in walk order) and drops that path's override, the way a screen this design drew has it. A symbol whose units the first path names
+/// differently, or whose new reference another symbol of the design already holds, keeps its id and its overrides.
+pub(crate) fn fold_first_path_references(design: &mut eda_model::ir::Design) {
+    let walk = eda_model::sheet_list::walk(design);
+    let mut first: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for e in walk.iter().skip(1) {
+        first.entry(e.file.clone()).or_insert_with(|| e.path.clone());
+    }
+    let mut held: BTreeSet<String> = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter().map(|x| x.id.clone())).collect();
+    for (file, path) in first {
+        let Some(sec) = design.sheet_contents.as_mut().and_then(|c| c.get_mut(&file)) else { continue };
+        let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for s in &sec.symbols {
+            let reference = eda_model::sheet_list::reference_under(sec, s, &path);
+            names.entry(s.id.clone()).or_default().insert(reference);
+        }
+        let mut renames: Vec<SecRename> = Vec::new();
+        for (old, new) in names {
+            let [new] = new.into_iter().collect::<Vec<_>>().try_into().unwrap_or_else(|_| [old.clone()]);
+            // (an unannotated reference, `R?`, is no name of its own: several symbols have it, each keeps its placeholder)
+            if new == old || new.is_empty() || new.contains('?') || held.contains(&new) {
+                continue;
+            }
+            held.insert(new.clone());
+            for (i, s) in sec.symbols.iter().enumerate().filter(|(_, s)| s.id == old) {
+                renames.push(SecRename { item: Item::Symbol(i), old: old.clone(), unit: s.unit, new: new.clone() });
+            }
+        }
+        if !renames.is_empty() {
+            rename_in_section(sec, &renames, &BTreeMap::new());
+        }
+        let own: BTreeSet<(Point, u32, String)> = sec.symbols.iter().map(|s| (s.at, s.unit, s.id.clone())).collect();
+        sec.instance_overrides.retain(|o| !(o.sheet_path == path && own.contains(&(o.at, o.unit, o.reference.clone()))));
+    }
+}
+
 /// A screen read from a file places a symbol by its library origin (KiCad's frame, `imported_from_kicad`); the sheets of this design place one by the corner
 /// of its box (what the `.kicad_sch` writer bakes the symbol against): each symbol is moved there, so that its pins stay where the file has them, and the
 /// screen is in the design's frame after. `engine_of` is the engine's symbol of each `lib_id` the screen names (`LibMerge::engine_of`), by the name the
@@ -655,13 +694,23 @@ pub(crate) fn place_by_box_corner(sec: &mut SchematicSection, engine_of: &BTreeM
         return;
     }
     let body_styles = sec.extras.body_styles.clone();
+    let mut moved: Vec<((Point, u32), Point)> = Vec::new();
     for s in sec.symbols.iter_mut() {
         let Some(engine) = engine_of.get(&s.lib_id) else { continue };
         let style = body_styles.get(&eda_model::ir::field_key(&s.id, s.unit)).copied().unwrap_or(1);
         let drawn = if style > 1 && engine.has_alternate_body() { engine.in_style(style).into_owned() } else { engine.clone() };
         let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, s.unit);
         let (ox, oy) = eda_model::sch_clipboard::place_offset_nm(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
+        let was = s.at;
         s.at = Point { x: s.at.x - ox, y: s.at.y - oy };
+        moved.push(((was, s.unit), s.at));
+    }
+    // The references each sheet path gives the symbols (`SymbolPathOverride`, which names its symbol by where it is and its unit) go with them: KiCad keeps
+    // them on the symbol itself (`SCH_SYMBOL::m_instances`, `GetRef( &aSheet )`).
+    for o in sec.instance_overrides.iter_mut() {
+        if let Some((_, now)) = moved.iter().find(|((at, unit), _)| *at == o.at && *unit == o.unit) {
+            o.at = *now;
+        }
     }
     sec.imported_from_kicad = false;
 }

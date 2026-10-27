@@ -158,6 +158,19 @@ impl<'m> Scene<'m> {
                 self.get_connected_items(st, Item::Seg(i), loose, &mut found);
                 st.line_conn.entry(i).or_default().extend(found);
             }
+            // r2 C-H1: KiCad runs `getConnectedItems` on both ends of every line of the selection, drag additions included, and its `SCH_SHEET_T` case
+            // records a line end on a selected sheet pin (`m_specialCaseSheetPins[pin] = { line, line->GetStartPoint() == aPoint }`; a pin the drag added is
+            // selected too, `AddItemToSel`): `performItemMove` then puts that end where `ConstrainOnEdge` left the pin, so a wire dragged sideways into
+            // a pin, or a pin dragged past its sheet's corner, keeps the wire on the pin.
+            for end_pt in [self.segs[i].a, self.segs[i].b] {
+                let pins: Vec<Item> = self.items().into_iter().filter(|&t| matches!(t, Item::SheetPin(..)) && (self.is_user_selected(t) || self.by_drag.contains(&t)) && self.is_connected(t, end_pt)).collect();
+                for pin in pins {
+                    let entry = (pin, i, self.segs[i].a == end_pt);
+                    if !st.special_pins.contains(&entry) {
+                        st.special_pins.push(entry);
+                    }
+                }
+            }
         }
     }
 
@@ -792,7 +805,9 @@ impl<'m> Scene<'m> {
                 self.add_junction(p);
             }
         }
-        let selection = self.in_selection();
+        // `finalizeMoveOperation` takes the drag additions out of the selection first (`RemoveItemsFromSel( &m_dragAdditions )`): the cleanup's
+        // `selectionCopy` is the user's items and the lines the drag made or changed, and the labels that are auto-rotated are the user's (r2 C-L3, C-L4)
+        let selection: Vec<Item> = self.in_selection().into_iter().filter(|&it| self.is_user_selected(it)).collect();
         let mut copy: Vec<Item> = selection.clone();
         if let Some(st) = st {
             copy.extend(st.new_lines.iter().filter(|i| !self.segs[**i].dead).map(|i| Item::Seg(*i)));
@@ -806,7 +821,7 @@ impl<'m> Scene<'m> {
             self.trim_dangling_lines(st);
         }
         // "Auto-rotate any moved labels"
-        for it in self.in_selection() {
+        for &it in &selection {
             self.auto_rotate_item(it);
         }
         // "Clear SELECTED_BY_DRAG and other temp flags before CleanUp so that cleanup can properly process all items"

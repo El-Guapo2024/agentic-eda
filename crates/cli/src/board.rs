@@ -517,14 +517,26 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
     // the reference with the unit of each pin of a symbol of several units (`Net-(U1A-OUT)`), and the no-connect pins (`unconnected-(..)`), as the
     // schematic writer writes them (`resolve_pin_electrical_type`)
     let mut pin_units: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut common_pins: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // the pins of a symbol excluded from the board make no claim to a net's name (r2 A-N9)
+    let mut quiet_pins: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for e in eda_model::sheet_list::walk(design) {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        for sym in sec.symbols.iter().filter(|s| s.exclude_from_board) {
+            let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
+            if let Some(part) = model.part(&sym.id) {
+                quiet_pins.extend(part.pins.iter().map(|p| format!("{reference}.{}", p.number)));
+            }
+        }
         for sym in &sec.symbols {
             let Some(part) = model.part(&sym.id) else { continue };
             let Some(lib) = model.real_symbol_of_instance(sec, sym, part).filter(|l| l.unit_count > 1) else { continue };
             let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
             for p in lib.pins.iter().filter(|p| p.unit == sym.unit || p.unit == 0) {
                 pin_units.entry(format!("{reference}.{}", p.number)).or_insert_with(|| format!("{reference}{}", eda_model::annotate::unit_letters(sym.unit)));
+                if p.unit == 0 {
+                    common_pins.insert(format!("{reference}.{}", p.number));
+                }
             }
         }
     }
@@ -543,7 +555,7 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
                 .collect::<Vec<_>>()
         })
         .collect();
-    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
+    let naming = eda_engine::nets::Naming { pin_names: Some(&pin_names), pin_units: Some(&pin_units), common_pins: Some(&common_pins), quiet_pins: Some(&quiet_pins), nc_pins: Some(&nc_pins), bus_members: Some(&members), global_power: Some(&global_power), ..Default::default() };
     trace_design(design, model, &naming)
 }
 
@@ -557,8 +569,12 @@ pub(crate) fn trace_kicad_names(design: &mut eda_model::ir::Design, model: &Cons
 pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
     // the sheets of the hierarchy: a screen no sheet shows any more (its sheet was deleted) is not part of the schematic, its pins are on no net
     let entries = eda_model::sheet_list::walk(design);
-    // what a power symbol's `${..}` read: the sheets, their pages and title blocks (only when some power symbol's value has a variable)
-    let has_vars = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.power_symbols.iter()).any(|p| eda_model::text_vars::has_text_vars(&p.net));
+    // what a power symbol's, a label's or a sheet pin's `${..}` read: the sheets, their pages and title blocks (only when some text has a variable)
+    let has_vars = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).any(|s| {
+        s.power_symbols.iter().any(|p| eda_model::text_vars::has_text_vars(&p.net))
+            || s.labels.iter().any(|l| eda_model::text_vars::has_text_vars(&l.net))
+            || s.sheets.iter().flat_map(|sh| sh.pins.iter()).any(|p| eda_model::text_vars::has_text_vars(&p.name))
+    });
     let hierarchy = has_vars.then(|| PowerValueView::of(design));
     let design_view = hierarchy.as_ref();
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
@@ -643,7 +659,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             }
         }
         let resolve = |path: &[String], raw: &str| power_value_under(design_view, path, raw);
-        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), power_value: naming.power_value.or(Some(&resolve)), ..*naming };
+        // a label's and a sheet pin's text as a power symbol's Value: `GetShownText( &path, FOR_NETNAME )` of the placement (r2 A-N10)
+        let naming = eda_engine::nets::Naming { power_pins: naming.power_pins.or(Some(&power_pins)), power_value: naming.power_value.or(Some(&resolve)), label_text: naming.label_text.or(Some(&resolve)), ..*naming };
         eda_engine::nets::trace_nets_with(&mut screens, &naming)
     };
     design.schematic = Some(root);
@@ -672,7 +689,10 @@ impl PowerValueView {
                 let placement = here.and_then(|s| s.sheets.iter().find(|p| &p.id == id));
                 let content = placement.and_then(|p| design.sheet_contents.as_ref().and_then(|c| c.get(&p.file)));
                 name = placement.map(|p| p.name.clone()).unwrap_or_default();
-                levels.push(SchSheetLevel { fields: vec![("Sheetname".into(), name.clone()), ("Sheetfile".into(), placement.map(|p| p.file.clone()).unwrap_or_default())], title_block: tb(content) });
+                let mut fields = vec![("Sheetname".into(), name.clone()), ("Sheetfile".into(), placement.map(|p| p.file.clone()).unwrap_or_default())];
+                // the sheet's user fields (`SCH_SHEET::ResolveTextVar`: a field by its name), r2 B-L1
+                fields.extend(here.and_then(|s| s.extras.sheet_fields.get(id)).into_iter().flatten().map(|f| (f.name.clone(), f.text.clone())));
+                levels.push(SchSheetLevel { fields, title_block: tb(content) });
                 here = content;
             }
             placements.insert(e.path.clone(), (e.effective_page(), levels, name));

@@ -49,7 +49,8 @@ import { hasNetCollision } from "../kicad-port/schNetCollision";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview } from "../api/client";
 import type { SchMovePatch } from "../api/schEditTypes";
-import { nextReference } from "../kicad-port/nextReference";
+import { nextReference, placementMinRef } from "../kicad-port/nextReference";
+import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
 import { wireTail } from "../kicad-port/schLineMode";
 import { boxItems } from "./schematic/schItems";
 import { pickItem } from "./schematic/schPick";
@@ -767,7 +768,7 @@ export function SchematicView() {
         // is for a part this simple.
         if (state.activeTool === "sch_place_symbol" && state.armedSymbol) {
           const { libId, referencePrefix, unit, ref } = state.armedSymbol;
-          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U", state.board?.parts.map((p) => p.ref));
+          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U", state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start)));
           const value = state.armedSymbol.value ?? (libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId);
           const [sx, sy] = snapToGrid(wx, wy);
           api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: state.armedSymbol.footprint ?? "", unit });

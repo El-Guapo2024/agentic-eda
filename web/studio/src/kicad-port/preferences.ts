@@ -22,6 +22,12 @@ import { DEFAULT_VIEW_CONTROL_SETTINGS, type DragAction, type ScrollModifier, ty
 import type { MagneticOption, PcbMagnetic } from "./snapAnchors";
 import type { FlipDirection } from "./pcbTransform";
 import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pickDefaultZoomController, type ZoomController } from "./zoomController";
+import { isMac } from "../platform";
+
+/** `COMMON_SETTINGS`' default `input.zoom_speed`: 5 on macOS, 1 elsewhere. */
+export function defaultZoomSpeed(isMacPlatform: boolean): number {
+  return isMacPlatform ? 5 : 1;
+}
 
 export type { DragAction, ScrollModifier, FlipDirection };
 export type ScrollRow = "zoom" | "panH" | "panV";
@@ -84,7 +90,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   dragRight: "pan",
   zoomAcceleration: false,
   zoomSpeedAuto: true,
-  zoomSpeed: 5,
+  // `#ifdef __WXMAC__ default_zoom_speed = 5; #else default_zoom_speed = 1;` (common_settings.cpp, `input.zoom_speed`): a Zoom drag uses it whatever
+  // `zoom_speed_auto` says (`WX_VIEW_CONTROLS::onMotion`)
+  zoomSpeed: defaultZoomSpeed(isMac()),
   magneticPads: "track-tool",
   magneticTracks: "track-tool",
   magneticGraphics: false,

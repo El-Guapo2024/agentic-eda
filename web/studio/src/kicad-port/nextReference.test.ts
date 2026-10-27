@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nextReference } from "./nextReference";
+import { nextReference, placementMinRef } from "./nextReference";
 import type { SchematicSymbol } from "../api/types";
 
 function sym(id: string): SchematicSymbol {
@@ -11,8 +11,12 @@ test("nextReference: an empty sheet starts at 1", () => {
   assert.equal(nextReference([], "R"), "R1");
 });
 
-test("nextReference: picks one past the highest existing number for that prefix", () => {
-  assert.equal(nextReference([sym("R1"), sym("R2"), sym("R4")], "R"), "R5", "gaps are not backfilled -- same as a real Annotate pass never renumbers down");
+test("nextReference: the first number no symbol holds (r2 D-A1: FindFirstUnusedReference)", () => {
+  assert.equal(nextReference([sym("R1"), sym("R2"), sym("R4")], "R"), "R3", "a gap is the first free number");
+  assert.equal(nextReference([sym("R1"), sym("R2")], "R"), "R3");
+  assert.equal(nextReference([sym("R1")], "R", [], placementMinRef("first_free", 10)), "R11", "first free after 10");
+  assert.equal(nextReference([], "R", [], placementMinRef("sheet_x100", 0, 2)), "R201", "first free after sheet number x 100");
+  assert.equal(nextReference([sym("#PWR1")], "#PWR"), "#PWR2", "a prefix of any characters");
 });
 
 test("nextReference: different prefixes are counted independently", () => {
@@ -28,7 +32,7 @@ test("nextReference: an id that doesn't match <letters><digits> is ignored, not 
 
 test("nextReference: the references of the design's other sheets are taken too", () => {
   const thisSheet = [sym("U1"), sym("C1")];
-  assert.equal(nextReference(thisSheet, "R", ["R1", "R2", "R8", "D1"]), "R9", "a resistor placed on the MCU sheet does not reuse one the LED channels sheet has");
-  assert.equal(nextReference(thisSheet, "C", ["C12"]), "C13");
+  assert.equal(nextReference(thisSheet, "R", ["R1", "R2", "R8", "D1"]), "R3", "a resistor placed on the MCU sheet does not reuse one the LED channels sheet has");
+  assert.equal(nextReference(thisSheet, "C", ["C2"]), "C3");
   assert.equal(nextReference(thisSheet, "U", []), "U2");
 });

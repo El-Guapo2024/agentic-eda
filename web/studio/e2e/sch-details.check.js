@@ -479,7 +479,10 @@
         v0 = __eda.state().view;
         await pointerDrag(2, [400, 300], [400, 240]);
         v1 = __eda.state().view;
-        t(v1.scale > v0.scale * 1.2 && v1.scale < v0.scale * 1.5, `Right button drag = Zoom: up zooms in by exp(60 * 5 / 1000) (${(v1.scale / v0.scale).toFixed(3)})`);
+        // `input.zoom_speed` is 5 on macOS and 1 elsewhere (common_settings.cpp), and `onMotion` zooms by exp(d.y * zoom_speed * 0.001)
+        const speed = /Mac|iPhone|iPod|iPad/.test(navigator.platform ?? "") ? 5 : 1;
+        const want = Math.exp(60 * speed / 1000);
+        t(Math.abs(v1.scale / v0.scale - want) < 0.01 * want, `Right button drag = Zoom: up zooms in by exp(60 * ${speed} / 1000) = ${want.toFixed(3)} (${(v1.scale / v0.scale).toFixed(3)})`);
         await setPrefs({ dragRight: "none" });
         v0 = __eda.state().view;
         await pointerDrag(2, [400, 300], [460, 330]);

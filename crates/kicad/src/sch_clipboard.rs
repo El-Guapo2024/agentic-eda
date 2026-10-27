@@ -219,6 +219,10 @@ pub struct CopyInput<'a> {
     pub section: &'a SchematicSection,
     /// The project name the symbols' `(instances (project ...))` carry.
     pub project: &'a str,
+    /// The sheet path the selection is copied on (placement ids from the root; empty for the root): a symbol of a screen shown more than once is written
+    /// with the reference that path gives it (`saveSymbol( aForClipboard, aRelativePath )`: the Reference field and the instance from
+    /// `GetInstance( instance, aRelativePath->Path() )`).
+    pub sheet_path: &'a [String],
 }
 
 /// What [`write_clipboard`] made.
@@ -345,6 +349,8 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, l
     let sym = c.sym;
     let part = input.model.part(&sym.id);
     let yes = |b: bool| if b { "yes" } else { "no" };
+    // r2 D-C1: the reference of the path the copy is made on
+    let reference = eda_model::sheet_list::reference_under(input.section, sym, input.sheet_path);
     let (ox, oy) = (c.origin.x.mm(), c.origin.y.mm());
     let _ = writeln!(out, "\t(symbol");
     // a symbol whose pins Swap Pins moved names its own copy of the library symbol (`SCH_SCREEN::Append`)
@@ -374,7 +380,7 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, l
     let value = if !sym.value.is_empty() { sym.value.clone() } else { part.and_then(|p| p.value.clone()).unwrap_or_else(|| sym.id.clone()) };
     let footprint = if !sym.footprint.is_empty() { sym.footprint.clone() } else { part.and_then(|p| p.footprint.clone()).unwrap_or_default() };
     let datasheet = if !sym.datasheet.is_empty() { sym.datasheet.clone() } else { c.engine.datasheet.clone() };
-    property(out, "Reference", &sym.id, (cx, min_y - 1.27), false);
+    property(out, "Reference", &reference, (cx, min_y - 1.27), false);
     property(out, "Value", &value, (cx, max_y + 1.27), false);
     property(out, "Footprint", &footprint, (ox, oy), true);
     property(out, "Datasheet", &datasheet, (ox, oy), true);
@@ -397,7 +403,7 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, l
     let _ = writeln!(out, "\t\t(instances");
     let _ = writeln!(out, "\t\t\t(project {}", sexpr_str(input.project));
     let _ = writeln!(out, "\t\t\t\t(path \"\"");
-    let _ = writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&sym.id));
+    let _ = writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference));
     let _ = writeln!(out, "\t\t\t\t\t(unit {})", sym.unit);
     let _ = writeln!(out, "\t\t\t\t)");
     let _ = writeln!(out, "\t\t\t)");
@@ -418,7 +424,8 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let _ = writeln!(out, "\t\t(unit 1)");
     let _ = writeln!(out, "\t\t(body_style 1)");
     let _ = writeln!(out, "\t\t(exclude_from_sim no)");
-    let _ = writeln!(out, "\t\t(in_bom no)");
+    // KiCad's power library symbols are `(in_bom yes)` (r2 D-C7); a power symbol is kept out of the BOM by its `#` reference
+    let _ = writeln!(out, "\t\t(in_bom yes)");
     let _ = writeln!(out, "\t\t(on_board yes)");
     let _ = writeln!(out, "\t\t(in_pos_files yes)");
     let _ = writeln!(out, "\t\t(dnp no)");

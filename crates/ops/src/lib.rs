@@ -4775,12 +4775,41 @@ impl<'a> Board<'a> {
         let sch = self.schematic_mut_or_create();
         sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus });
         let new_wire = sch.wires.len() - 1;
+        // `SCH_LINE_WIRE_BUS_TOOL::finishSegments`: the points the new wire meets (its ends and every connection point of the sheet that lands on it,
+        // `screen->GetConnections()` before the wire is added), then `SCHEMATIC::CleanUp`, then every part of at most two connection points cuts the wire
+        // between its pins (`TrimWire`: a wire drawn across a resistor puts it in series, it does not short it), then a junction where one is needed
         let mut scene = sch_scene::Scene::new(sch, model);
-        let segs: Vec<sch_scene::Item> = (0..scene.segs.len()).filter(|&i| scene.segs[i].from.is_some_and(|(w, _)| w == new_wire)).map(sch_scene::Item::Seg).collect();
-        let before = scene.sch.junctions.len();
-        scene.add_junctions_if_needed(&segs);
-        if scene.sch.junctions.len() != before {
-            *sch = scene.finish();
+        let new_segs: Vec<usize> = (0..scene.segs.len()).filter(|&i| scene.segs[i].from.is_some_and(|(w, _)| w == new_wire)).collect();
+        let connections: BTreeSet<Point> = scene.items().into_iter().filter(|it| !matches!(it, sch_scene::Item::Seg(i) if new_segs.contains(i))).flat_map(|it| scene.connection_points(it)).collect();
+        let mut new_ends: BTreeSet<Point> = BTreeSet::new();
+        for &i in &new_segs {
+            let (a, b) = (scene.segs[i].a, scene.segs[i].b);
+            new_ends.extend([a, b]);
+            new_ends.extend(connections.iter().copied().filter(|&c| sch_scene::on_segment(a, b, c)));
+        }
+        scene.clean_up();
+        if !bus {
+            for i in 0..scene.sch.symbols.len() {
+                let pts = scene.connection_points(sch_scene::Item::Symbol(i));
+                if pts.len() > 2 {
+                    continue;
+                }
+                for (k, &p) in pts.iter().enumerate() {
+                    for &q in &pts[k + 1..] {
+                        scene.trim_wire(p, q);
+                    }
+                }
+            }
+        }
+        for p in new_ends {
+            if scene.is_explicit_junction_needed(p) {
+                scene.add_junction(p);
+            }
+        }
+        let after = scene.finish();
+        let shape = |s: &eda_model::ir::SchematicSection| (s.wires.iter().map(|w| (w.pts.clone(), w.bus)).collect::<Vec<_>>(), s.junctions.iter().map(|j| j.at).collect::<Vec<_>>());
+        if shape(&after) != shape(sch) {
+            *sch = after;
             sch.assign_missing_ids();
         }
         Ok(())
@@ -5070,15 +5099,33 @@ impl<'a> Board<'a> {
         if net.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_power_symbol", "power_symbol", "a power symbol needs a net name")]);
         }
+        // r2 D-A2: `PlaceSymbol` always annotates a power symbol (`AlwaysAnnotate`) against the whole hierarchy, and `FindFirstUnusedReference` takes the
+        // first number no `#PWR` of any sheet holds; `SCH_REFERENCE::formatRefStr` writes it after a "0" (`#PWR01`, `#PWR010`)
+        let used: BTreeSet<u64> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.power_symbols.iter()).filter_map(|p| p.id.strip_prefix("#PWR").and_then(|n| n.parse::<u64>().ok())).collect();
+        let n = (1..).find(|n| !used.contains(n)).unwrap_or(1);
+        let id = format!("#PWR0{n}");
         let sch = self.schematic_mut_or_create();
-        let mut n = sch.power_symbols.len() as u32 + 1;
-        let mut id = format!("#PWR{n:02}");
-        while sch.power_symbols.iter().any(|p| p.id == id) {
-            n += 1;
-            id = format!("#PWR{n:02}");
-        }
         sch.power_symbols.push(PowerSymbol { id, lib_id: lib_id.into(), at, rot, net: net.into(), pin: pin.into() });
+        let last = sch.power_symbols.len() - 1;
+        self.settle_placed(sch_scene::Item::Power(last));
         Ok(())
+    }
+
+    /// `SCH_DRAWING_TOOLS::PlaceSymbol`'s placing click: `TrimOverLappingWires` and `AddJunctionsIfNeeded` on the item just placed -- a part dropped onto a
+    /// wire cuts it between its two pins (in series, not shorted), and a pin landing inside a wire gets the junction it needs. The sheet is rewritten only
+    /// when that changed a wire or a junction.
+    fn settle_placed(&mut self, item: sch_scene::Item) {
+        let model = self.model;
+        let Ok(sch) = self.schematic_mut() else { return };
+        let mut scene = sch_scene::Scene::new(sch, model);
+        scene.trim_overlapping_wires(&[item]);
+        scene.add_junctions_if_needed(&[item]);
+        let after = scene.finish();
+        let shape = |s: &eda_model::ir::SchematicSection| (s.wires.iter().map(|w| (w.pts.clone(), w.bus)).collect::<Vec<_>>(), s.junctions.iter().map(|j| j.at).collect::<Vec<_>>());
+        if shape(&after) != shape(sch) {
+            *sch = after;
+            sch.assign_missing_ids();
+        }
     }
 
     fn delete_power_symbol(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
@@ -5111,6 +5158,8 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, format!("reference '{id}' already has unit {unit} on the sheet"))]);
         }
         sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: footprint.into(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
+        let last = sch.symbols.len() - 1;
+        self.settle_placed(sch_scene::Item::Symbol(last));
         Ok(())
     }
 

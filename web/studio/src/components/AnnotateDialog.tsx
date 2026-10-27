@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { fetchAnnotateReport } from "../api/hierarchyClient";
 import type { AnnotateMessage } from "../api/hierarchyTypes";
-import { annotateCmd, annotateRequest, rememberAnnotateSettings, rememberedAnnotateSettings, scopeOnOpen, type AnnotateSelection, type AnnotateSettings } from "../kicad-port/schAnnotate";
+import { annotateCmd, annotateRequest, annotateSelectionOf, rememberAnnotateSettings, rememberedAnnotateSettings, scopeOnOpen, type AnnotateSelection, type AnnotateSettings } from "../kicad-port/schAnnotate";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 
 const severityColor: Record<AnnotateMessage["severity"], string> = { action: "var(--chrome-text)", warning: "#d4a017", error: "#e5484d" };
@@ -25,10 +25,7 @@ export function AnnotateDialog() {
   const api = useStudioApi();
   const open = state.annotateDialogOpen;
 
-  const selection: AnnotateSelection = {
-    symbols: [...new Set([...state.selection].filter((id) => api.symbolById(id)))],
-    sheets: [...state.selection].filter((id) => state.schematic?.sheets.some((s) => s.id === id)),
-  };
+  const selection: AnnotateSelection = annotateSelectionOf(state.schematic, [...state.selection], (id) => !!api.symbolById(id));
   const hasSelection = selection.symbols.length > 0 || selection.sheets.length > 0;
 
   const [settings, setSettings] = useState<AnnotateSettings>(rememberedAnnotateSettings);

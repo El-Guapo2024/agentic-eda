@@ -288,3 +288,22 @@ fn the_look_stays_with_a_pin_that_is_renamed_or_moved_and_goes_with_a_pin_or_a_s
     let sheet_gone = ok(&styled, Cmd::SchEdit(SchCmd::DeleteSheet { id: "sheet_sub".into() }));
     assert!(root_of(&sheet_gone).extras.sheet_pin_looks.is_empty());
 }
+
+/// r2 C-H1 (`SCH_MOVE_TOOL::setupItemsForDrag` runs `getConnectedItems` on both ends of every line of the selection, and `m_specialCaseSheetPins` puts the
+/// end on a selected sheet pin where `ConstrainOnEdge` left the pin): a wire dragged sideways into its sheet pin keeps its end on the pin, which stays on the
+/// border; a pin dragged past the sheet's corner takes the wire's end with it to where it stops.
+#[test]
+fn dragging_a_wire_into_a_sheet_pin_sideways_keeps_it_on_the_pin() {
+    let d = design();
+    let after = ok(&d, drag(&["wire_in"], mm(2.54), Nm::ZERO));
+    assert_eq!(pin_at(&after, "shpin_in"), p(mm(100.0), mm(60.0)), "the pin stays on the border");
+    let ends: Vec<Point> = root_of(&after).wires.iter().flat_map(|w| [w.pts[0], *w.pts.last().unwrap()]).collect();
+    assert!(ends.contains(&p(mm(100.0), mm(60.0))), "a wire still ends on the pin: {:?}", root_of(&after).wires);
+    assert_eq!(nets(&after)["R1.1"], "/SIG");
+
+    let after = ok(&d, drag(&["shpin_in"], Nm::ZERO, mm(25.4)));
+    let at = pin_at(&after, "shpin_in");
+    assert_eq!(at, p(mm(100.0), mm(80.0)), "the pin is held at the sheet's bottom corner");
+    let ends: Vec<Point> = root_of(&after).wires.iter().flat_map(|w| [w.pts[0], *w.pts.last().unwrap()]).collect();
+    assert!(ends.contains(&at), "a wire ends where the pin stopped: {:?}", root_of(&after).wires);
+}

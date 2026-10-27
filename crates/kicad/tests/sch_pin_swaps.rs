@@ -166,7 +166,7 @@ fn what_is_written_again_is_the_same_cached_copy() {
 
 fn copy_of(m: &ConstraintModel, sch: &SchematicSection, ids: &[&str]) -> String {
     let design = design_with(sch.clone());
-    write_clipboard(&CopyInput { design: &design, model: m, section: sch, project: "demo" }, &ids.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("the selection copies").text
+    write_clipboard(&CopyInput { design: &design, model: m, section: sch, project: "demo", sheet_path: &[] }, &ids.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("the selection copies").text
 }
 
 #[test]

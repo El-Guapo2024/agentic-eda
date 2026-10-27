@@ -1008,3 +1008,94 @@ fn the_editor_s_pins_of_a_turned_symbol_are_the_writer_s_in_every_orientation() 
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// r2 C-H2 (`SCH_LINE_WIRE_BUS_TOOL::finishSegments`: `CleanUp`, then `TrimWire` between the two connection points of every part that has no more than
+/// two): a wire drawn straight through R1's pins (20.32, 21.59) and (20.32, 29.21) is cut between them, so R1 is in series on it, not shorted by it, and
+/// each pin is a plain wire end (two exit angles: no junction).
+#[test]
+fn a_wire_drawn_through_a_resistor_is_cut_between_its_pins() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(mm(20.32), mm(25.4))));
+    let out = draw(s, &[p(mm(20.32), mm(15.0)), p(mm(20.32), mm(35.0))]);
+    assert!(out.junctions.is_empty(), "no junction at a pin that ends a wire: {:?}", out.junctions);
+    let mut runs: Vec<Vec<Point>> = out.wires.iter().map(|w| w.pts.clone()).collect();
+    runs.sort();
+    assert_eq!(runs, vec![vec![p(mm(20.32), mm(15.0)), p(mm(20.32), mm(21.59))], vec![p(mm(20.32), mm(29.21)), p(mm(20.32), mm(35.0))]], "the piece between the pins is gone");
+}
+
+/// r2 C-H3 (`SCH_DRAWING_TOOLS::PlaceSymbol`: `TrimOverLappingWires`, `AddJunctionsIfNeeded` on the placing click): a resistor placed on a wire cuts it
+/// between its pins.
+#[test]
+fn placing_a_resistor_on_a_wire_cuts_it_between_the_pins() {
+    let mut s = section();
+    s.wires.push(wire("w1", &[p(mm(20.32), mm(10.0)), p(mm(20.32), mm(40.0))]));
+    let m = ConstraintModel::default();
+    let mut design = empty_design();
+    design.schematic = Some(s);
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddSymbol { id: "R1".into(), lib_id: "Device:R".into(), at: p(mm(20.32), mm(25.4)), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }).unwrap();
+    let out = b.design().schematic.clone().unwrap();
+    let mut runs: Vec<Vec<Point>> = out.wires.iter().map(|w| w.pts.clone()).collect();
+    runs.sort();
+    assert_eq!(runs, vec![vec![p(mm(20.32), mm(10.0)), p(mm(20.32), mm(21.59))], vec![p(mm(20.32), mm(29.21)), p(mm(20.32), mm(40.0))]]);
+    assert!(out.junctions.is_empty(), "{:?}", out.junctions);
+}
+
+/// r2 C-M2 (`SCH_DIRECTIVE_LABEL::MirrorSpinStyle( aLeftRight )` is `SCH_TEXT::MirrorSpinStyle( !aLeftRight )`; `MirrorHorizontally` is `MirrorX`, `MirrorVertically`
+/// `MirrorY`): a directive label's pole is mirrored across the mirror's axis -- left-right turns a sideways pole (90) the other way (270), top-bottom an
+/// upright one (0) upside down (180) -- alone or with other items.
+#[test]
+fn a_directive_label_mirrors_its_pole_across_the_mirror_axis() {
+    let flag = |id: &str, x: f64, orientation: u32| -> SchGraphic {
+        serde_json::from_value(serde_json::json!({ "id": id, "shape": { "type": "directive", "at": { "x": mm(x).get(), "y": mm(20.0).get() }, "orientation": orientation, "pin_length_nm": 2_540_000 } })).unwrap()
+    };
+    for (orientation, vertical, want) in [(90_000, false, 270_000), (0, true, 180_000), (0, false, 0), (90_000, true, 90_000)] {
+        let mut s = section();
+        s.extras.graphics.push(flag("dirl_1", 20.0, orientation));
+        let out = run_on(s.clone(), mirror(&["dirl_1"], vertical));
+        let SchGraphicKind::Directive { orientation: got, .. } = out.extras.graphics[0].shape else { panic!() };
+        assert_eq!(got, want, "alone: {orientation} mirrored vertical={vertical}");
+        s.extras.graphics.push(flag("dirl_2", 30.0, 0));
+        let out = run_on(s, mirror(&["dirl_1", "dirl_2"], vertical));
+        let SchGraphicKind::Directive { orientation: got, .. } = out.extras.graphics[0].shape else { panic!() };
+        assert_eq!(got, want, "with another: {orientation} mirrored vertical={vertical}");
+    }
+}
+
+/// r2 C-M1 (`SCHEMATIC::CleanUp` merges two lines only when `IsStrokeEquivalent`; `BreakAt` copies the line, stroke and all): two wires end to end of
+/// different strokes stay two wires after an unrelated move, and a dashed wire a part cuts in two is dashed on both pieces.
+#[test]
+fn clean_up_keeps_wires_of_different_strokes_apart_and_a_split_wire_keeps_its_stroke() {
+    use eda_model::sch_extras::{SchLineStyle, SchStroke};
+    let dashed = SchStroke { style: SchLineStyle::Dash, width_nm: mm(0.5), ..Default::default() };
+    let mut s = section();
+    s.wires.push(wire("w1", &[p(mm(10.0), mm(10.0)), p(mm(20.0), mm(10.0))]));
+    s.wires.push(wire("w2", &[p(mm(20.0), mm(10.0)), p(mm(30.0), mm(10.0))]));
+    s.extras.strokes.insert("w2".into(), dashed);
+    s.symbols.push(sym("R1", p(mm(80.0), mm(80.0))));
+    let out = run_on(s, mv(&["R1"], mm(2.54), Nm::ZERO));
+    assert_eq!(out.wires.len(), 2, "{:?}", out.wires);
+    assert_eq!(out.extras.strokes.get("w2"), Some(&dashed));
+
+    let mut s = section();
+    s.wires.push(wire("w1", &[p(mm(20.32), mm(10.0)), p(mm(20.32), mm(40.0))]));
+    s.extras.strokes.insert("w1".into(), dashed);
+    s.symbols.push(sym("R1", p(mm(60.0), mm(25.4))));
+    let out = run_on(s, mv(&["R1"], mm(20.32) - mm(60.0), Nm::ZERO));
+    assert_eq!(out.wires.len(), 2, "the resistor cuts the wire: {:?}", out.wires);
+    for w in &out.wires {
+        assert_eq!(out.extras.strokes.get(&w.id), Some(&dashed), "{} keeps the stroke", w.id);
+    }
+}
+
+/// r2 C-M6 (`SCH_ALIGN_TOOL::moveItem` is `aItem->Move( delta )`, then `doAlignCleanup`): Align moves a symbol rigidly -- the wire on its pin stays where it
+/// is, and the pin comes off it, as in KiCad; nothing is stretched or bent.
+#[test]
+fn align_moves_items_rigidly_like_kicad() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(mm(20.32), mm(25.4))));
+    s.wires.push(wire("w1", &[p(mm(20.32), mm(21.59)), p(mm(20.32), mm(12.7))]));
+    let after = run_on(s, SchMoveCmd::Align { moves: vec![AlignMove { id: "R1".into(), dx: mm(5.08), dy: Nm::ZERO }], grid: Nm::ZERO });
+    assert_eq!(after.symbols[0].at, p(mm(25.4), mm(25.4)));
+    assert_eq!(wire_pts(&after), vec![vec![p(mm(20.32), mm(21.59)), p(mm(20.32), mm(12.7))]], "the wire is left where it was");
+}

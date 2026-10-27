@@ -74,7 +74,7 @@ export function ErcSeveritiesPage({ hidden, onDirty }: PageProps) {
       ) : (
         <>
           <p className="bs-note">
-            What kicad-cli reports each kind of violation as. An ignored check is not run. The two library checks start at Ignore: every symbol here is stored in the schematic itself, so there is no library to compare it with.
+            What kicad-cli reports each kind of violation as. An ignored check is not run. The three library checks start at Ignore: every symbol here is stored in the schematic itself, so there is no library to compare it with, and the footprint libraries are not in the table kicad-cli runs with.
           </p>
           <div className="bs-sev-grid">
             {GROUPS.map((g) => (
