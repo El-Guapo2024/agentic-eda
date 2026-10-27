@@ -345,7 +345,7 @@ export function FootprintPropertiesDialog() {
             <button
               data-testid="add-field"
               onClick={() => {
-                setRows((rs) => [...rs, { key: Math.max(-1, ...rs.map((r) => r.key)) + 1, from: null, name: newFieldName(rs.map((r) => r.name), rs.length + 2) /* `GetUserFieldName( m_fields->size() )`: KiCad's grid has four mandatory rows (Datasheet and Description too), ours two */, text: "", layout: newFieldLayout(part) }]);
+                setRows((rs) => [...rs, { key: Math.max(-1, ...rs.map((r) => r.key)) + 1, from: null, name: newFieldName(rs.map((r) => r.name), rs.length + 2) /* `GetUserFieldName( m_fields->size() )`: KiCad's grid has four mandatory rows (Datasheet and Description too), ours two */, text: "", layout: newFieldLayout(part, state.board?.board_rules?.text_graphics) }]);
                 setSelected(rows.length);
               }}
             >

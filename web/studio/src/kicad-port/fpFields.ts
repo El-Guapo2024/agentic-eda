@@ -9,8 +9,9 @@
 // selected, moved, turned and flipped by the same verbs as any other item.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, UserFieldCmd } from "../api/types";
+import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, TextGraphicsDefaults, UserFieldCmd } from "../api/types";
 import { objectOn } from "./appearance";
+import { isBackLayer, textStyleOf } from "./layerDefaults";
 
 export const REFERENCE = "Reference";
 export const VALUE = "Value";
@@ -182,10 +183,16 @@ export function newFieldName(existing: readonly string[], ordinal: number): stri
   }
 }
 
-/** The layout `OnAddField` gives a new field: hidden, at the footprint's origin, on the fabrication layer of its side. */
-export function newFieldLayout(part: Part): FieldLayoutCmd {
+/**
+ * The layout `OnAddField` gives a new field: hidden, at the footprint's origin, on the fabrication layer of its side, styled from Board Setup's Text & Graphics
+ * defaults (`newField.StyleFromSettings( m_frame->GetDesignSettings(), true )`: the Fab class's size, thickness, italic and keep-upright, mirrored on a back
+ * layer). `defaults` absent is KiCad's factory table.
+ */
+export function newFieldLayout(part: Part, defaults?: TextGraphicsDefaults): FieldLayoutCmd {
   const bottom = part.side === "bottom";
-  return { at: { x: 0, y: 0 }, angle: localAngleOf(part, 0), size: [1_000_000, 1_000_000], thickness: 150_000, layer: bottom ? "B.Fab" : "F.Fab", visible: false, halign: 0, valign: 0, mirror: bottom, bold: false, italic: false, keep_upright: true, knockout: false };
+  const layer = bottom ? "B.Fab" : "F.Fab";
+  const st = textStyleOf(defaults, layer);
+  return { at: { x: 0, y: 0 }, angle: localAngleOf(part, 0), size: [st.widthNm, st.heightNm], thickness: st.thicknessNm, layer, visible: false, halign: 0, valign: 0, mirror: isBackLayer(layer), bold: false, italic: st.italic, keep_upright: st.upright, knockout: false };
 }
 
 /**

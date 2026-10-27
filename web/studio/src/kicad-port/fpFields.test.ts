@@ -132,6 +132,11 @@ test("the field grid's rows are checked the way the dialog's Validate does", () 
 test("a new field starts hidden at the origin on the fabrication layer of the footprint's side", () => {
   assert.deepEqual([newFieldLayout(part()).layer, newFieldLayout(part()).visible, newFieldLayout(part()).mirror], ["F.Fab", false, false]);
   assert.deepEqual([newFieldLayout(part({ side: "bottom" })).layer, newFieldLayout(part({ side: "bottom" })).mirror], ["B.Fab", true]);
+  // `StyleFromSettings( .., true )`: Board Setup's Fab text defaults (round 3 C-5)
+  const fab = { line_width_nm: 100_000, text_width_nm: 800_000, text_height_nm: 800_000, text_thickness_nm: 120_000, italic: true, upright: false };
+  const defaults = { silk: fab, copper: fab, fab, others: fab, edge_cuts_line_width_nm: 50_000, courtyard_line_width_nm: 50_000 } as unknown as Parameters<typeof newFieldLayout>[1];
+  const l = newFieldLayout(part(), defaults);
+  assert.deepEqual([l.size, l.thickness, l.italic, l.keep_upright], [[800_000, 800_000], 120_000, true, false]);
   assert.equal(newFieldName([], 4), "Field4");
   assert.equal(newFieldName(["Field4", "Field5"], 4), "Field6");
 });
