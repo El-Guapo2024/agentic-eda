@@ -100,10 +100,13 @@ export function resolve3DAction(e: KeyInput, isMac: boolean): Action3D | null {
 
   // The 4 reused common/tool/actions.cpp actions -- checked first since
   // their Mac form uses a modifier the rest of this table never does.
-  if (e.key === "F1" || (isMac && ctrlLike && e.key === "+")) return { kind: "zoomIn" };
-  if (e.key === "F2" || (isMac && ctrlLike && e.key === "-")) return { kind: "zoomOut" };
-  if ((e.key === "Home" && !ctrlLike) || (isMac && ctrlLike && e.key === "0")) return { kind: "reset" };
-  if (e.key === "F5" || (isMac && ctrlLike && (e.key === "r" || e.key === "R"))) return { kind: "zoomRedraw" };
+  // A hotkey matches with its exact modifiers (round 6 V6-8): WXK_F1 / WXK_F2 / WXK_F5 / WXK_HOME and, below, ' ', 'F' and the arrows are bound
+  // with none, so Shift, Ctrl, Cmd or Alt held with them is no action.
+  const bare = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+  if ((bare && e.key === "F1") || (isMac && ctrlLike && e.key === "+")) return { kind: "zoomIn" };
+  if ((bare && e.key === "F2") || (isMac && ctrlLike && e.key === "-")) return { kind: "zoomOut" };
+  if ((bare && e.key === "Home") || (isMac && ctrlLike && e.key === "0")) return { kind: "reset" };
+  if ((bare && e.key === "F5") || (isMac && ctrlLike && (e.key === "r" || e.key === "R"))) return { kind: "zoomRedraw" };
 
   // Nothing below ever uses Ctrl/Cmd or Alt -- bail out so e.g. Ctrl+R
   // (browser reload) or an unrelated Alt-combo never gets misread as one
@@ -111,10 +114,10 @@ export function resolve3DAction(e: KeyInput, isMac: boolean): Action3D | null {
   if (ctrlLike || e.altKey) return null;
 
   const pan = ARROW_TO_PAN[e.key];
-  if (pan) return { kind: "pan", direction: pan };
+  if (pan) return bare ? { kind: "pan", direction: pan } : null;
 
-  if (e.key === " " || e.key === "Spacebar") return { kind: "pivot" };
-  if (e.key === "f" || e.key === "F") return { kind: "flip" };
+  if (e.key === " " || e.key === "Spacebar") return bare ? { kind: "pivot" } : null;
+  if (e.key === "f" || e.key === "F") return bare ? { kind: "flip" } : null;
 
   // R/Shift+R: eda_3d_actions.cpp binds plain 'R' to rotateZCCW and
   // Shift+'R' to rotateZCW -- source's DefaultHotkey('R') / DefaultHotkey(

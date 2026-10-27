@@ -61,6 +61,7 @@ that drives it. Section 7 has the measurements.
 | View Top/Bottom/Front/Back/Left/Right: Z/Shift+Z/Y/Shift+Y/Shift+X/X | identical | `3d_viewer/tools/eda_3d_actions.cpp:viewTop/viewBottom/viewFront/viewBack/viewLeft/viewRight`'s `DefaultHotkey` calls -- `kicad-port/actions3d.ts:resolve3DAction` |
 | Home = reset/fit | identical | `eda_3d_actions.cpp:homeView` (`WXK_HOME`) + the shared `ACTIONS::zoomFitScreen`, same key -- both resolve to the same `{kind:"reset"}` here |
 | Flip board: F | identical | `eda_3d_actions.cpp:flipView` |
+| A hotkey fires only with its own modifiers | identical | `DefaultHotkey( 'F' )`, `( ' ' )`, `( WXK_LEFT )` .. `( WXK_DOWN )`, `( WXK_HOME )` and `ACTIONS::zoomIn/zoomOut/zoomRedraw`'s `WXK_F1/F2/F5` have no modifier, so Shift / Ctrl / Alt with them is no action (round 6 V6-8: ours took Shift+F, Shift+arrows and any modifier with F1/F2/F5) -- `actions3d.ts:resolve3DAction` |
 | Pivot: Space | identical | `eda_3d_actions.cpp:pivotCenter` |
 | Rotate Z CW/CCW: Shift+R / R | identical | `eda_3d_actions.cpp:rotateZCW/rotateZCCW` |
 | Rotate X/Y CW/CCW: no default hotkey (toolbar/context-menu only) | identical | `eda_3d_actions.cpp:rotateXCW/CCW/rotateYCW/CCW` (no `.DefaultHotkey()` call at all) -- not bound to any key here either; reachable from the toolbar only, same as source |

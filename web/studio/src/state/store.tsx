@@ -461,7 +461,7 @@ export type GlbStatus = "idle" | "pending" | "loaded" | "failed";
 export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   layers: {},
   colors: {},
-  useStackupColors: DEFAULT_USE_STACKUP_COLORS, // kicad-port/appearance3d.ts: off as KiCad's LoadSettings turns the legacy preset into
+  useStackupColors: DEFAULT_USE_STACKUP_COLORS, // kicad-port/appearance3d.ts: off, as KiCad's LoadSettings leaves it
   useEditorCopperColors: false,
   flipped: false,
   orthographic: false,
