@@ -29,7 +29,7 @@ import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
-import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
+import { drawZoneStarted, undoDropsDrawing, withoutLastCorner } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { carryPress } from "../kicad-port/pcbCarry";
@@ -359,6 +359,8 @@ export function useActionRunner() {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
       // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
+      // `DrawZone`'s loop on the board: Delete with a corner placed removes the last corner (zones, rule areas, cutouts, graphic polygons)
+      if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
       const refs = requestSelection();
       // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
       // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
@@ -645,8 +647,10 @@ export function useActionRunner() {
     const boardMoving = () => state.tab === "pcb" && (state.activeTool === "move" || state.movePreview?.kind === "pcb");
     m.set("common.Interactive.undo", () => {
       if (boardMoving()) return void m.get("common.Interactive.cancel")?.();
-      // `drawShape`: "( started && evt->IsAction( &ACTIONS::undo ) )" cancels the item being drawn, as Escape does, and keeps the tool
-      if (escapeKeepsDrawingTool(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "ESCAPE" });
+      // `DrawZone`: Undo with a corner placed removes the last corner (`DeleteLastCorner`)
+      if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
+      // `drawShape`: "( started && evt->IsAction( &ACTIONS::undo ) )" cancels the item being drawn, as Escape does, and keeps the tool (not the measure tool's)
+      if (undoDropsDrawing(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "ESCAPE" });
       void (state.tab === "footprint" ? fpApi.undo() : state.tab === "symbol" ? symApi.undo() : api.undo());
     });
     m.set("common.Interactive.redo", () => {
