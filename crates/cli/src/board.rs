@@ -1717,6 +1717,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => {
             format!("via add --net {net} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}", mm(*x), mm(*y), mm(*drill), mm(*diameter))
         }
+        Cmd::PlaceVia { net, x, y, .. } => format!("via place --net {net:?} --at {},{}", mm(*x), mm(*y)),
         Cmd::DeleteVia { id } => format!("via delete {id}"),
         Cmd::MoveVia { id, x, y } => format!("via move {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::EditVia { id, diameter, drill } => format!("via edit {id} --dia {} --drill {}", mm(*diameter), mm(*drill)),
@@ -2087,7 +2088,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetLabelSide { .. } => "label-side",
         Cmd::SetFootprintZoneConnection { .. } | Cmd::SetPadZoneOverrides { .. } => "pad-zone",
         Cmd::AddTrack { .. } | Cmd::DeleteTrack { .. } | Cmd::SetTrackWidth { .. } => "track",
-        Cmd::AddVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } | Cmd::EditVia { .. } => "via",
+        Cmd::AddVia { .. } | Cmd::PlaceVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } | Cmd::EditVia { .. } => "via",
         Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } | Cmd::SetDiffPairPresets { .. } => "board-setup",
         Cmd::EditTracksAndVias { .. } => "global-edit-tracks-and-vias",
         Cmd::AddZone { .. } | Cmd::DeleteZone { .. } | Cmd::EditZone { .. } | Cmd::SetZoneOutline { .. } => "zone",

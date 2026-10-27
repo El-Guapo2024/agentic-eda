@@ -1553,6 +1553,8 @@ export type Cmd =
   | { op: "delete_track"; id: string }
   | { op: "set_track_width"; id: string; width: Nm }
   | { op: "add_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string }
+  /** The Draw Via tool's via (crates/ops/src/via_place.rs, `VIA_PLACER::PlaceItem`): `net` "" is a free via of no net; refused with "Via location violates DRC." unless `allow_drc_violations`; `split_track` is cut at the via. */
+  | { op: "place_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string; split_track?: string | null; allow_drc_violations?: boolean }
   | { op: "delete_via"; id: string }
   | { op: "move_via"; id: string; x: Nm; y: Nm }
   /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */

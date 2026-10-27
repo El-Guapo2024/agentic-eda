@@ -50,7 +50,8 @@ import { toPcbMagnetic } from "../../kicad-port/preferences";
 import { withTrackSnapping } from "../../kicad-port/routerSettings";
 import { heldCursor } from "../../kicad-port/heldCursor";
 import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
-import { findRouteAnchor, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
+import { SELECT_NET_TITLE, selectNetLabels, snapViaPosition, viaNet, type ViaPlacerInput } from "../../kicad-port/viaPlacer";
+import { startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
 import { routeMove, routeDragMove, dpMove } from "../../api/client";
@@ -112,8 +113,6 @@ const PAN_BUTTONS = new Set([1, 2]);
 // kicad-port/dragThreshold.ts, tool_dispatcher.cpp -- more than 8 px of travel along an axis, or on macOS a motion after 300 ms held.)
 
 const LONG_PRESS_MS = 500;
-/** A click within this many board um of a pad/via/track-end counts as landing on it (which net a route click joins) -- generous enough to be usable at a typical zoom without needing pixel-perfect precision. Where the click goes is the snapping's (`PcbSnap.routePoint`, components/canvas/pcbSnap.ts). */
-const ANCHOR_SNAP_NM = 500_000;
 // A new graphic starts at the line thickness of its layer's class (Board Setup > Text & Graphics > Defaults, kicad-port/layerDefaults.ts); incWidth / decWidth step it (state.pcbx.drawStrokeStep).
 /** How many points finish a given drawing-tool shape by itself, once reached, without waiting for an explicit Enter/double-click -- a plain 2-point line/rect/circle doesn't need a third confirmation the way a polygon does. Arc is start/mid/end (3); zone/polygon/route have no auto-finish (arbitrary length). */
 type ShapeToolKind = "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
@@ -736,16 +735,53 @@ export function Canvas() {
         return;
       }
 
+      // `DRAWING_TOOL::DrawVia` (kicad-port/viaPlacer.ts): the via snaps onto the track, pad or graphic under the cursor, takes its net (or the zone fill's,
+      // asking when there are several, or none: a free via), and the backend refuses it where it breaks a clearance and splits the track it is on (round 5 B5-1).
       if (state.activeTool === "via") {
-        const anchor = findRouteAnchor(board, sx, sy, ANCHOR_SNAP_NM);
-        if (!anchor) {
-          dispatch({ type: "TOAST", message: "Click a pad, via, or track end -- a via needs a net.", kind: "error" });
-          return;
-        }
         const rules = board.board_rules;
         // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
         const viaPreset = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600_000, drill: rules?.via_drill ?? 300_000 };
-        api.cmd({ op: "add_via", net: anchor.net, x: sx, y: sy, drill: viaPreset.drill, diameter: viaPreset.diameter, from_layer: "F.Cu", to_layer: "B.Cu" });
+        const copper = (board.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
+        const mods = snapMods(e);
+        const magnetic = toPcbMagnetic(state.prefs, state.magneticAllLayers);
+        const placer: ViaPlacerInput = {
+          board,
+          diameter: viaPreset.diameter,
+          // `bds.m_CurrentViaType` is always THROUGH: the via spans the board.
+          layers: copper,
+          magnetic: { tracks: magnetic.tracks, pads: magnetic.pads, graphics: magnetic.graphics },
+          snap: !mods.shift,
+          alignToSegment: (p, a, b) => snap.alignToSegment("via", p, a, b, mods),
+          fills: (state.zoneFill?.zones ?? []).filter((z) => z.filled).map((z) => ({ net: z.net, layer: z.layer, fragments: z.fragments })),
+          activeLayer: state.activeLayer ?? "F.Cu",
+          highContrast: state.highContrast,
+          isLayerVisible: (l) => state.layerVisible[l] !== false,
+        };
+        const at = snapViaPosition(placer, [wx, wy], [sx, sy]);
+        const place = (net: string, track: string | null) =>
+          void api.cmd({
+            op: "place_via",
+            net,
+            x: Math.round(at[0]),
+            y: Math.round(at[1]),
+            drill: viaPreset.drill,
+            diameter: viaPreset.diameter,
+            from_layer: copper[0] ?? "F.Cu",
+            to_layer: copper[copper.length - 1] ?? "B.Cu",
+            split_track: track,
+            allow_drc_violations: state.routerSettings.mode === "mark_obstacles" && state.routerSettings.allowDrcViolations,
+          });
+        const choice = viaNet(placer, at);
+        if (choice.kind === "net") place(choice.net, choice.track);
+        else {
+          // `selectPossibleNetsByPopupMenu`: "The net assignment is ambiguous. Let the user decide." -- a cancelled menu places nothing.
+          const labels = selectNetLabels(choice.nets);
+          setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            entries: [{ label: SELECT_NET_TITLE, onSelect: () => {}, disabled: true }, { label: "", onSelect: () => {}, separator: true }, ...choice.nets.map((net, i) => ({ label: labels[i]!, onSelect: () => place(net, null) }))],
+          });
+        }
         return;
       }
 

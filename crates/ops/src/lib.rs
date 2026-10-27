@@ -63,6 +63,7 @@ mod fp_array;
 mod pad_edit;
 mod unused_pads;
 mod via_layers;
+pub mod via_place;
 pub use via_layers::ViaLayerEdit;
 mod pad_nets;
 mod fp_lib_fields;
@@ -364,6 +365,21 @@ pub enum Cmd {
 
     /// Add a via.
     AddVia { net: String, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: String, to_layer: String },
+    /// The Draw Via tool's via (`DRAWING_TOOL::DrawVia`, `VIA_PLACER::PlaceItem`; `via_place.rs`): `net` may be empty (a free via of no net); refused with
+    /// "Via location violates DRC." unless `allow_drc_violations`; `split_track` is the track it was snapped onto, cut at the via.
+    PlaceVia {
+        net: String,
+        x: Nm,
+        y: Nm,
+        drill: Nm,
+        diameter: Nm,
+        from_layer: String,
+        to_layer: String,
+        #[serde(default)]
+        split_track: Option<String>,
+        #[serde(default)]
+        allow_drc_violations: bool,
+    },
     /// Remove a via by id.
     DeleteVia { id: String },
     /// Move a via to a new position. Its id, net, drill, diameter and
@@ -2336,7 +2352,7 @@ impl Cmd {
             | Cmd::SetFootprintZoneConnection { part, .. }
             | Cmd::SetPadZoneOverrides { part, .. } => vec![part],
             Cmd::Swap { a, b } => vec![a, b],
-            Cmd::AddTrack { net, .. } | Cmd::AddVia { net, .. } | Cmd::AddZone { net, .. } => vec![net.as_str()],
+            Cmd::AddTrack { net, .. } | Cmd::AddVia { net, .. } | Cmd::PlaceVia { net, .. } | Cmd::AddZone { net, .. } => vec![net.as_str()],
             Cmd::DeleteTrack { id }
             | Cmd::SetTrackWidth { id, .. }
             | Cmd::DeleteVia { id }
@@ -2857,6 +2873,7 @@ impl<'a> Board<'a> {
             Cmd::SetTrackWidth { id, width } => self.set_track_width(id, *width),
 
             Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => self.add_via(net, *x, *y, *drill, *diameter, from_layer, to_layer),
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations } => self.place_via(net, *x, *y, *drill, *diameter, from_layer, to_layer, split_track.as_deref(), *allow_drc_violations),
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
             Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),
