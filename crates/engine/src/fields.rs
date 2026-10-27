@@ -10,7 +10,7 @@
 //! The arithmetic is KiCad's, in schematic internal units (0.1 um) with C++'s truncating division, so a field lands where KiCad
 //! would put it.
 
-use eda_model::units::{mm, Nm};
+use eda_model::units::Nm;
 use eda_model::ir::{field_key, FieldPlacement, Point, PowerSymbol, SchematicSection, SheetInstance, SymbolInstance, TextJustify, TextVAlign};
 use eda_model::kicad_font::{default_pen_iu, kiround, text_box_iu, HJustify, VJustify, DEFAULT_TEXT_SIZE_IU};
 use eda_model::kicad_geom::{pin_bbox, PinOrient, Rect, TextStyle};
@@ -420,7 +420,7 @@ fn measure(f: &FieldSpec) -> Measured {
 /// a symbol between horizontal wires the fields are spaced to fit between them (`fitFieldsBetweenWires`). `force` puts them on a side of the
 /// symbol KiCad would not have chosen, `push` grid steps (50 mil) further from it: where the schematic needs the room the symbol's own side has
 /// not got.
-fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&FieldSpec], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<((f64, f64), TextJustify, TextVAlign)> {
+fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, rot: u32, fields: &[&FieldSpec], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<((f64, f64), TextJustify, TextVAlign)> {
     let metrics: Vec<Measured> = fields.iter().map(|f| measure(f)).collect();
     let sizes: Vec<(i64, i64)> = metrics
         .iter()
@@ -448,13 +448,30 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
     let st = SymbolGeom::pin_style();
     let count = |s: Side| shown_pins.iter().filter(|p| pin_side(p.orient) == s).count();
     let mut order = [(Side::Right, count(Side::Right)), (Side::Top, count(Side::Top)), (Side::Left, count(Side::Left)), (Side::Bottom, count(Side::Bottom))];
-    // `getPreferredSides`: `h_mirrored` swaps right and left, and a long thin one prefers the top and bottom
-    if mirrored {
-        order.swap(0, 2);
-    }
-    if bh > 0 && (bw as f64) / (bh as f64) > 3.0 {
-        order.swap(0, 1);
-        order.swap(1, 3);
+    // `getPreferredSides`: "For power symbols, we generally want the label at the top first" (`m_is_power_symbol = !DoNetList()`), by the orientation's
+    // angle (r2 C-M3); otherwise `h_mirrored` swaps right and left, and a long thin one prefers the top and bottom
+    if geom.power {
+        match rot % 360_000 {
+            0 => {
+                order.swap(0, 1);
+                order.swap(1, 3);
+            }
+            90_000 => {
+                order.swap(0, 2);
+                order.swap(1, 2);
+            }
+            180_000 => order.swap(0, 3),
+            270_000 => order.swap(1, 2),
+            _ => {}
+        }
+    } else {
+        if mirrored {
+            order.swap(0, 2);
+        }
+        if bh > 0 && (bw as f64) / (bh as f64) > 3.0 {
+            order.swap(0, 1);
+            order.swap(1, 3);
+        }
     }
     // `fieldBoxPlacement`: where the box the fields fill goes when they are on `side`, `push` grid steps further out
     let field_box_origin = |side: Side, npins: usize, push: i64| -> (i64, i64) {
@@ -630,14 +647,20 @@ pub fn autoplace_symbol_manual(sym: &SymbolInstance, geom: &SymbolGeom, specs: &
 /// The placements of the fields named by `specs`: the fields that are shown and allow it are placed, a field that does not allow it keeps its
 /// placement in `kept`, a hidden one takes the first placed one's place.
 fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], kept: &[FieldPlacement], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<FieldPlacement> {
+    place_fields_of(sym.at, sym.rot, sym.mirrored, sym.mirror_y, geom, specs, kept, force, manual)
+}
+
+/// [`place_fields`] of a symbol at `at`, turned and mirrored so.
+#[allow(clippy::too_many_arguments)]
+fn place_fields_of(at: Point, sym_rot: u32, sym_mirrored: bool, sym_mirror_y: bool, geom: &SymbolGeom, specs: &[FieldSpec], kept: &[FieldPlacement], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<FieldPlacement> {
     // `AUTOPLACER` takes `GetFields( m_fields, aVisibleOnly = true )`, which skips a field that is hidden or has no text
     // (`if( !field.IsVisible() || field.GetText().IsEmpty() ) continue;`): an empty field takes no row of the box
     let movable: Vec<&FieldSpec> = specs.iter().filter(|s| s.visible && s.can_autoplace && !s.text.is_empty()).collect();
-    let (rot, mirrored) = crate::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+    let (rot, mirrored) = crate::symgeom::kicad_turn(sym_rot, sym_mirrored, sym_mirror_y);
     // `getPreferredSides`' `h_mirrored`: `GetOrientation()` has `SYM_MIRROR_X` at 0 or 180 degrees, which of the twelve orientations (the first that
     // gives the matrix) is the one that flips top and bottom alone -- a half turn and a left-right mirror, folded
     let h_mirrored = (rot, mirrored) == (180_000, true);
-    let placed = autoplace_page(geom, sym.at, h_mirrored, &movable, force, manual);
+    let placed = autoplace_page(geom, at, h_mirrored, rot, &movable, force, manual);
     let style = |mut p: FieldPlacement, spec: &FieldSpec| {
         p.size_nm = spec.size_nm;
         p.bold = spec.bold;
@@ -648,7 +671,7 @@ fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], ke
     };
     let mut by_name = std::collections::BTreeMap::new();
     for (spec, (anchor, h, v)) in movable.iter().zip(placed) {
-        by_name.insert(spec.name.clone(), style(local_placement(sym.at, rot, mirrored, geom.width, &spec.name, anchor, h, v, true), spec));
+        by_name.insert(spec.name.clone(), style(local_placement(at, rot, mirrored, geom.width, &spec.name, anchor, h, v, true), spec));
     }
     let first = movable.first().and_then(|s| by_name.get(&s.name)).cloned();
     specs
@@ -737,35 +760,16 @@ pub fn field_rect(f: &PageField) -> crate::hier::kit::Rect {
 
 // -------------------------------------------------------------------------------------------------- power symbols
 
-/// How far a power symbol's glyph reaches from its pin along its axis, pen included (nanometres).
-fn glyph_reach(lib_id: &str) -> f64 {
-    let Some(lib) = eda_model::symbol::builtin(lib_id) else { return 2_540_000.0 };
-    SymbolGeom::of_origin_symbol(Point { x: Nm::ZERO, y: Nm::ZERO }, 0, &lib).body.map(|b| b.y0.abs().max(b.y1.abs())).unwrap_or(2_540_000.0)
-}
-
-/// Where a power symbol's Value is. KiCad's power library puts it 3.81 mm below a ground symbol and 3.556 mm above a supply one, centred. A
-/// symbol turned a quarter, to run out along a row of pins, would show that text turned too, and the names of two such symbols a pitch apart
-/// would run into one another: its Value is read along the row instead, just past the glyph's tip. A flag shows none.
+/// Where a power symbol's Value is: Autoplace Fields', as for any symbol (`SCH_DRAWING_TOOLS::PlaceSymbol` and a turn run `AutoplaceFields( screen,
+/// AUTOPLACE_AUTO )`, r2 C-M3), with the power case of `AUTOPLACER::getPreferredSides` ("we generally want the label at the top first": top, bottom,
+/// left, right unturned), its hidden pin counted (`pinsOnSide`) and the 50 mil grid: 5.08 mm below a ground symbol, above a supply, 3.81 mm to the left of a
+/// supply turned a quarter (KiCad's QA schematics' `(fields_autoplaced yes)` power symbols). A PWR_FLAG's Value is shown, as its library has it. The
+/// symbol's origin is taken to be its pin (every power library symbol has its pin there).
 pub fn power_value_placement(ps: &PowerSymbol, lib_id: &str) -> FieldPlacement {
-    let ground_like = lib_id == "power:GND";
-    let flag = lib_id == "power:PWR_FLAG";
-    // the way the glyph points on the sheet
-    let glyph = Lin::of_symbol(ps.rot, false).apply((0, if ground_like { 1 } else { -1 }));
-    if glyph.0 != 0 && !flag {
-        let reach = glyph_reach(lib_id) + 640_000.0;
-        let anchor = (ps.at.x.as_f64() + glyph.0 as f64 * reach, ps.at.y.as_f64());
-        let h = if glyph.0 > 0 { TextJustify::Left } else { TextJustify::Right };
-        return local_placement(ps.at, ps.rot, false, 0.0, "Value", anchor, h, TextVAlign::Center, true);
-    }
-    let dy = if ground_like {
-        mm(3.81)
-    } else if flag {
-        mm(-3.81)
-    } else {
-        mm(-3.556)
-    };
-    // a flag's own name says nothing about the net, and it is wider than the room beside the symbol it stands on
-    FieldPlacement { dy, visible: !flag, ..FieldPlacement::at_origin("Value") }
+    let Some(lib) = eda_model::symbol::builtin(lib_id) else { return FieldPlacement::at_origin("Value") };
+    let geom = SymbolGeom::of_origin_symbol(ps.at, ps.rot, &lib);
+    let specs = [FieldSpec::new("Value", ps.net.clone(), true)];
+    place_fields_of(ps.at, ps.rot, false, false, &geom, &specs, &[], None, None).into_iter().next().unwrap_or_else(|| FieldPlacement::at_origin("Value"))
 }
 
 /// The placements of a power symbol's fields in its own frame (origin at its pin), with the text each shows: the Reference, hidden, and
@@ -823,11 +827,14 @@ fn overlap_area(a: crate::hier::kit::Rect, b: crate::hier::kit::Rect) -> i128 {
 /// A symbol whose fields are waiting to be placed: each way of placing them, and the boxes the way it is at now has.
 struct Pending {
     key: String,
-    sym: SymbolInstance,
+    /// where the owner is and how it is turned and mirrored: (at, rot, mirrored, mirror_y)
+    place: (Point, u32, bool, bool),
     geom: SymbolGeom,
     specs: Vec<FieldSpec>,
     candidates: Vec<Vec<FieldPlacement>>,
     pick: usize,
+    /// the owner's own obstacle, which its fields do not avoid (a power symbol's: its glyph with its Value where Autoplace Fields puts it)
+    own: Option<crate::hier::kit::Rect>,
 }
 
 impl Pending {
@@ -838,8 +845,9 @@ impl Pending {
             .zip(self.candidates[c].iter())
             .filter(|(spec, p)| spec.visible && p.visible && !spec.text.is_empty())
             .map(|(spec, p)| {
-                let (rot, mirrored) = crate::symgeom::kicad_turn(self.sym.rot, self.sym.mirrored, self.sym.mirror_y);
-                let f = page_field(self.sym.at, rot, mirrored, self.geom.width, p, &spec.text);
+                let (at, rot, mirrored, mirror_y) = self.place;
+                let (rot, mirrored) = crate::symgeom::kicad_turn(rot, mirrored, mirror_y);
+                let f = page_field(at, rot, mirrored, self.geom.width, p, &spec.text);
                 field_rect(&f)
             })
             .collect()
@@ -873,20 +881,53 @@ pub fn fill_layout(sch: &mut SchematicSection, model: &eda_model::ConstraintMode
         }
         let specs = symbol_specs_in(sch, &sym, Some(part), resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
         let candidates = placement_candidates(&sym, &geom, &specs);
-        pending.push(Pending { key, sym, geom, specs, candidates, pick: 0 });
+        pending.push(Pending { key, place: (sym.at, sym.rot, sym.mirrored, sym.mirror_y), geom, specs, candidates, pick: 0, own: None });
+    }
+    // A power symbol's Value: where Autoplace Fields puts it ([`power_value_placement`]), else, where that runs over something the derivation drew next
+    // to it, the nearest other side that is free, as for a symbol's fields. A derivation's flag shows no Value: standing on a pin's end beside the rail's
+    // own symbol it says nothing about the net, and its Value would run over that symbol (a derivation's choice, as a user hides a field; KiCad's library
+    // shows it, and so does a flag placed in the studio).
+    for ps in &sch.power_symbols {
+        if sch.field_layout.contains_key(&ps.id) {
+            continue;
+        }
+        let flag = ps.lib_id.ends_with(":PWR_FLAG");
+        let Some(lib) = eda_model::symbol::builtin(&ps.lib_id).filter(|_| !flag) else {
+            let mut placed: Vec<FieldPlacement> = power_placements(sch, ps).into_iter().map(|(p, _)| p).collect();
+            for p in placed.iter_mut().filter(|p| p.name == "Value") {
+                p.visible = !flag;
+            }
+            add.push((ps.id.clone(), placed));
+            continue;
+        };
+        let geom = SymbolGeom::of_origin_symbol(ps.at, ps.rot, &lib);
+        let specs = vec![FieldSpec::new("Reference", ps.id.clone(), false), FieldSpec::new("Value", ps.net.clone(), true)];
+        let mut candidates = vec![place_fields_of(ps.at, ps.rot, false, false, &geom, &specs, &[], None, None)];
+        for push in 0..=MAX_FIELD_PUSH {
+            for side in [Side::Top, Side::Bottom, Side::Left, Side::Right] {
+                let mut c = place_fields_of(ps.at, ps.rot, false, false, &geom, &specs, &[], Some((side, push)), None);
+                // the Reference stays hidden at the pin
+                c[0] = FieldPlacement { visible: false, ..FieldPlacement::at_origin("Reference") };
+                if !candidates.contains(&c) {
+                    candidates.push(c);
+                }
+            }
+        }
+        candidates[0][0] = FieldPlacement { visible: false, ..FieldPlacement::at_origin("Reference") };
+        pending.push(Pending { key: ps.id.clone(), place: (ps.at, ps.rot, false, false), geom, specs, candidates, pick: 0, own: Some(crate::hier::kit::power_rect(ps.at, ps.rot, &ps.net, &ps.lib_id)) });
     }
     if !pending.is_empty() {
         let obstacles = crate::obstacles::of_section(sch, model);
-        let cost = |boxes: &[crate::hier::kit::Rect], others: &[crate::hier::kit::Rect]| -> i128 {
-            boxes.iter().map(|b| obstacles.iter().map(|o| overlap_area(*b, o.rect)).sum::<i128>() + others.iter().map(|o| overlap_area(*b, *o)).sum::<i128>()).sum()
+        let cost = |boxes: &[crate::hier::kit::Rect], others: &[crate::hier::kit::Rect], own: Option<crate::hier::kit::Rect>| -> i128 {
+            boxes.iter().map(|b| obstacles.iter().filter(|o| Some(o.rect) != own).map(|o| overlap_area(*b, o.rect)).sum::<i128>() + others.iter().map(|o| overlap_area(*b, *o)).sum::<i128>()).sum()
         };
         for i in 0..pending.len() {
             // the boxes of every other symbol's fields, where they are for now
             let others: Vec<crate::hier::kit::Rect> = fixed.iter().copied().chain(pending.iter().enumerate().filter(|(j, _)| *j != i).flat_map(|(_, p)| p.boxes(p.pick))).collect();
-            let mut best = (cost(&pending[i].boxes(0), &others), 0usize);
+            let mut best = (cost(&pending[i].boxes(0), &others, pending[i].own), 0usize);
             if best.0 > 0 {
                 for c in 1..pending[i].candidates.len() {
-                    let k = cost(&pending[i].boxes(c), &others);
+                    let k = cost(&pending[i].boxes(c), &others, pending[i].own);
                     if k < best.0 {
                         best = (k, c);
                         if k == 0 {
@@ -900,11 +941,6 @@ pub fn fill_layout(sch: &mut SchematicSection, model: &eda_model::ConstraintMode
     }
     for p in pending {
         add.push((p.key, p.candidates[p.pick].clone()));
-    }
-    for ps in &sch.power_symbols {
-        if !sch.field_layout.contains_key(&ps.id) {
-            add.push((ps.id.clone(), power_placements(sch, ps).into_iter().map(|(p, _)| p).collect()));
-        }
     }
     for sheet in &sch.sheets {
         if !sheet.id.is_empty() && !sch.field_layout.contains_key(&sheet.id) {

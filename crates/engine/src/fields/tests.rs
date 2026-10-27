@@ -98,19 +98,25 @@ fn a_sheets_fields_sit_above_and_below_its_left_edge() {
     assert!((f[1].at.1 - (110_000_000.0 + 584_600.0)).abs() < 1.0, "{:?}", f[1]);
 }
 
+/// r2 C-M3 (`AUTOPLACER` for a power symbol: `getPreferredSides`' power case, the hidden pin counted, the 50 mil grid): the Value of every power symbol
+/// with `(fields_autoplaced yes)` in KiCad's QA schematics is 5.08 mm below a ground symbol and above a supply, 3.81 mm left of a supply turned a quarter
+/// (right at three quarters), and a PWR_FLAG's is shown 5.08 mm above it.
 #[test]
-fn a_power_symbols_value_is_below_ground_and_above_a_supply() {
+fn power_fields_are_autoplaced_like_kicad() {
     let sch = SchematicSection::default();
-    let gnd = PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot: 0, net: "GND".into(), pin: "U1.2".into() };
-    let vdd = PowerSymbol { id: "#PWR02".into(), lib_id: "power:VDD".into(), at: Point { x: mm(20.0), y: mm(10.0) }, rot: 0, net: "VDD".into(), pin: "U1.1".into() };
-    let g = power_fields(&sch, &gnd);
-    let v = power_fields(&sch, &vdd);
-    assert!(!g[0].visible && g[1].visible && g[1].text == "GND");
-    assert_eq!(g[1].at, (10_000_000.0, 13_810_000.0));
-    assert_eq!(v[1].at, (20_000_000.0, 10_000_000.0 - 3_556_000.0));
-    // turned half a turn the ground symbol hangs up and its value goes over it
-    let flipped = PowerSymbol { rot: 180_000, ..gnd };
-    assert_eq!(power_fields(&sch, &flipped)[1].at, (10_000_000.0, 10_000_000.0 - 3_810_000.0));
+    let at = Point { x: mm(101.6), y: mm(101.6) };
+    let ps = |lib: &str, net: &str, rot: u32| PowerSymbol { id: "#PWR01".into(), lib_id: lib.into(), at, rot, net: net.into(), pin: "U1.2".into() };
+    let value = |p: &PowerSymbol| {
+        let f = power_fields(&sch, p);
+        assert!(!f[0].visible, "the reference is hidden");
+        (((f[1].at.0 - at.x.as_f64()) / 1e3).round() / 1e3, ((f[1].at.1 - at.y.as_f64()) / 1e3).round() / 1e3 + 0.0, f[1].visible, f[1].h)
+    };
+    assert_eq!(value(&ps("power:GND", "GND", 0)), (0.0, 5.08, true, HJustify::Center));
+    assert_eq!(value(&ps("power:VCC", "VCC", 0)), (0.0, -5.08, true, HJustify::Center));
+    assert_eq!(value(&ps("power:+1V0", "+1V0", 90_000)), (-3.81, 0.0, true, HJustify::Right), "QA issue17870: (justify right)");
+    assert_eq!(value(&ps("power:+1V0", "+1V0", 270_000)), (3.81, 0.0, true, HJustify::Left));
+    assert_eq!(value(&ps("power:PWR_FLAG", "PWR_FLAG", 0)), (0.0, -5.08, true, HJustify::Center));
+    assert_eq!(value(&ps("power:PWR_FLAG", "PWR_FLAG", 180_000)), (0.0, 5.08, true, HJustify::Center));
 }
 
 // ------------------------------------------------------------------------------------------------------ user-defined fields
