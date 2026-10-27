@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, NetClass } from "../api/types";
 import { chosenTrackWidthOf } from "./routerSizes";
-import { chosenViaSize, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
+import { chosenViaSize, currentViaSize, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
 
 const CU4 = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const blind: ViaCommand = { type: "blind", selectLayer: false };
@@ -116,4 +116,16 @@ test("a via takes the net class's size from the server unless a size is chosen",
   assert.equal(chosenViaSize("through", base, 3, 3, false), null, "past the list's end is the net class's");
   assert.equal(chosenViaSize("micro", { diameter: 800_000, drill: 400_000 }, 2, 3, false), null, "a microvia's is always the net class's");
   assert.deepEqual(chosenViaSize("through", base, 0, 3, true), base, "a custom size is a size");
+});
+
+test("Draw Via takes the board's list entry at the chosen index each time, not the size cached when it was picked (GetCurrentViaSize, round 6 C6-2)", () => {
+  const board = (presets: { diameter: number; drill: number }[], def?: Partial<NetClass>) =>
+    ({ routing: { tracks: [], vias: [], zones: [], via_presets: presets }, board_rules: { via_diameter: 600_000, via_drill: 300_000, ...(def ? { default_class: def } : {}) } }) as unknown as BoardState;
+  // Entry 1 was 0.8/0.4 when picked; Board Setup made it 1.0/0.5.
+  assert.deepEqual(currentViaSize(board([{ diameter: 1_000_000, drill: 500_000 }]), 1, false, DEFAULT_CUSTOM_TRACK_VIA), { diameter: 1_000_000, drill: 500_000 });
+  // Index 0 ("use net class values") and an index past the list: the Default class's via.
+  assert.deepEqual(currentViaSize(board([], { via_diameter: 700_000, via_drill: 350_000 }), 0, false, DEFAULT_CUSTOM_TRACK_VIA), { diameter: 700_000, drill: 350_000 });
+  assert.deepEqual(currentViaSize(board([{ diameter: 1_000_000, drill: 500_000 }]), 4, false, DEFAULT_CUSTOM_TRACK_VIA), { diameter: 600_000, drill: 300_000 });
+  // Custom sizes in use.
+  assert.deepEqual(currentViaSize(board([]), 1, true, { trackNm: 1, viaDiameterNm: 900_000, viaDrillNm: 400_000 }), { diameter: 900_000, drill: 400_000 });
 });

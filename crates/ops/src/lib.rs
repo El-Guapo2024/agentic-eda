@@ -379,6 +379,9 @@ pub enum Cmd {
         split_track: Option<String>,
         #[serde(default)]
         allow_drc_violations: bool,
+        /// The layers the Appearance panel hides: their items are not judged (`view->Query` skips them; round 6 C6-1).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        hidden_layers: Vec<String>,
     },
     /// Remove a via by id.
     DeleteVia { id: String },
@@ -2911,7 +2914,9 @@ impl<'a> Board<'a> {
             Cmd::SetTrackWidth { id, width } => self.set_track_width(id, *width),
 
             Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => self.add_via(net, *x, *y, *drill, *diameter, from_layer, to_layer),
-            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations } => self.place_via(net, *x, *y, *drill, *diameter, from_layer, to_layer, split_track.as_deref(), *allow_drc_violations),
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers } => {
+                self.place_via(net, *x, *y, *drill, *diameter, from_layer, to_layer, split_track.as_deref(), *allow_drc_violations, hidden_layers)
+            }
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
             Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),

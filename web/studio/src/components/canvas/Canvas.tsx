@@ -18,6 +18,7 @@
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
+import { currentViaSize } from "../../kicad-port/routerVia";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
@@ -399,7 +400,8 @@ export function Canvas() {
       lintSelected: state.drcLintSelected,
       zoneFill: state.zoneFill,
       zoneDisplayMode: state.zoneDisplayMode,
-      currentViaPreset: state.currentViaPreset,
+      // The Draw Via ghost: the size the next via gets (`GetCurrentViaSize`, round 6 C6-2).
+      currentViaPreset: state.board ? currentViaSize(state.board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia) : state.currentViaPreset,
       units: state.units,
       zoneCornerPreview,
       shapePointPreview,
@@ -748,9 +750,9 @@ export function Canvas() {
       // `DRAWING_TOOL::DrawVia` (kicad-port/viaPlacer.ts): the via snaps onto the track, pad or graphic under the cursor, takes its net (or the zone fill's,
       // asking when there are several, or none: a free via), and the backend refuses it where it breaks a clearance and splits the track it is on (round 5 B5-1).
       if (state.activeTool === "via") {
-        const rules = board.board_rules;
         // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
-        const viaPreset = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600_000, drill: rules?.via_drill ?? 300_000 };
+        // `GetCurrentViaSize()` / `GetCurrentViaDrill()` asked on every via, from the board's list by index (round 6 C6-2).
+        const viaPreset = currentViaSize(board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia);
         const copper = (board.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
         const mods = snapMods(e);
         const magnetic = toPcbMagnetic(state.prefs, state.magneticAllLayers);
@@ -780,6 +782,8 @@ export function Canvas() {
             to_layer: copper[copper.length - 1] ?? "B.Cu",
             split_track: track,
             allow_drc_violations: state.routerSettings.mode === "mark_obstacles" && state.routerSettings.allowDrcViolations,
+            // `checkDRCViolation`'s `view->Query` skips hidden layers (round 6 C6-1).
+            hidden_layers: copper.filter((l) => !layerIsVisible(state.layerVisible, l)),
           });
         const choice = viaNet(placer, at);
         if (choice.kind === "net") place(choice.net, choice.track);
