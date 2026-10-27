@@ -167,6 +167,38 @@ fn a_custom_rule_holds_a_route_off() {
     }
 }
 
+/// R5-D1: a custom rule keyed on the footprint's sheet, or on a component class the project's assignment rule gives it for a field of it
+/// (`memberOfSheet`, `hasComponentClass`; the rule `FOOTPRINT_FIELD Voltage = 400V` is `A.getField('Voltage') == '400V'` on the footprint). R2 is on
+/// sheet `/HV/` with the field `Voltage=400V` (its symbol's, as Update PCB from Schematic gives them: the derived board writes `(sheetname "/HV/")` and
+/// the field, and the project the assignment rule), and its pad on GND. Each rule asks 1 mm: the route keeps 1 mm from R2.1, and kicad-cli finds
+/// nothing; the route the net class alone gives is what kicad-cli flags. (`getField` itself answers only for a footprint, `getFieldFunc`: a pad's is
+/// empty, so a clearance rule on it does not reach a pad.)
+#[test]
+fn a_rule_on_the_sheet_or_a_component_class_holds_a_route_off() {
+    let (r1, r2, r3) = (p(5.0, 10.0), p(15.0, 11.2), p(25.0, 10.0));
+    let nets: &[(&str, &[&str])] = &[("SIG", &["R1.1", "R3.1"]), ("GND", &["R2.1"])];
+    for condition in ["A.memberOfSheet('/HV/')", "A.hasComponentClass('HV')"] {
+        let (design, mut model) = board(&[("R1", "PAD1", r1), ("R2", "PAD1", r2), ("R3", "PAD1", r3)], nets);
+        model.symbol_links.insert("R2".into(), eda_model::SymbolLink { path: "/00000000-0000-0000-0000-0000000000a1/00000000-0000-0000-0000-0000000000a2".into(), sheetname: "/HV/".into(), sheetfile: "hv.kicad_sch".into(), fields: vec![("Voltage".into(), "400V".into())], ..Default::default() });
+        model.board.component_classes.assignments.push(eda_model::component_classes::ClassAssignment {
+            class: "HV".into(),
+            all: true,
+            conditions: vec![eda_model::component_classes::ClassCondition { kind: eda_model::component_classes::ConditionKind::FootprintField, primary: "Voltage".into(), secondary: "400V".into() }],
+        });
+        let plain_model = model.clone();
+        model.board.custom_rules_text = Some(format!("(version 1)\n(rule hv\n  (constraint clearance (min 1mm))\n  (condition \"{condition}\"))\n"));
+        let commit = route(&design, &model, r1, r3);
+        let gap = gap_to_pad(&commit, r2);
+        assert!(gap >= 999_500.0, "{condition}: {gap}: {:?}", commit.tracks);
+        let class_only = route(&design, &plain_model, r1, r3);
+        assert!(gap_to_pad(&class_only, r2) < 999_500.0, "{condition}");
+        if let Some(found) = kicad_violations(&apply(&design, &commit), &model, &["clearance"]) {
+            assert!(found.is_empty(), "{condition}: {found:#?}");
+            assert!(!kicad_violations(&apply(&design, &class_only), &model, &["clearance"]).unwrap().is_empty(), "{condition}: kicad-cli reads the rule");
+        }
+    }
+}
+
 /// R-1: a net tie. T1 is a `TIE2` net tie (`net_tie_pad_groups "1,2"`) whose pad 1 is on SIG and pad 2 on GND, the two touching at x = 15.5.
 /// A SIG track that comes down to pad 1 next to the edge they share runs within 0.2 mm of pad 2, but every point of pad 2 it is near is on pad
 /// 1 too (`IsNetTieExclusion`): KiCad's router lets it, and so does its DRC. Without the tie the track is held off pad 2. (The track runs 0.2 mm

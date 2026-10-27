@@ -279,6 +279,8 @@ enum Special {
     Netclass(String),
     /// `PCBEXPR_NET_VALUE`: a net, equal to another net of the same name.
     Net(String),
+    /// `PCBEXPR_COMPONENT_CLASS_VALUE`: a footprint's component class (its constituents, sorted), equal to any of them; its name is theirs joined by a comma.
+    ComponentClass(Rc<Vec<String>>),
 }
 
 type LazyNum = Rc<dyn Fn(&Ctx) -> f64>;
@@ -358,6 +360,12 @@ impl Value {
         v
     }
 
+    fn component_class(classes: Rc<Vec<String>>) -> Value {
+        let mut v = Value::base(VKind::Str);
+        v.special = Special::ComponentClass(classes);
+        v
+    }
+
     fn net(name: &str) -> Value {
         let mut v = Value::base(VKind::Str);
         v.special = Special::Net(name.to_string());
@@ -380,6 +388,8 @@ impl Value {
             Special::Layer(l) => ctx.env.layer_name(l),
             Special::Netclass(net) => ctx.env.class_name(net),
             Special::Net(n) => n.clone(),
+            // `COMPONENT_CLASS_MANAGER::GetFullClassNameForConstituents`
+            Special::ComponentClass(classes) => classes.join(","),
             Special::Plain => match &self.lazy_text {
                 Some(f) => f(ctx),
                 None => self.text.clone(),
@@ -409,6 +419,15 @@ impl Value {
                 Special::Net(other) => net == other,
                 _ => self.plain_equal_to(ctx, b),
             },
+            Special::ComponentClass(classes) => {
+                if let Special::ComponentClass(other) = &b.special {
+                    return classes == other;
+                }
+                if b.kind == VKind::Str && classes.iter().any(|name| constituent_hit(ctx, b, name)) {
+                    return true;
+                }
+                self.plain_equal_to(ctx, b)
+            }
             Special::Plain => self.plain_equal_to(ctx, b),
         }
     }
@@ -457,6 +476,16 @@ impl Value {
                 Special::Net(other) => net != other,
                 _ => self.plain_not_equal_to(ctx, b),
             },
+            Special::ComponentClass(classes) => {
+                if let Special::ComponentClass(other) = &b.special {
+                    return classes != other;
+                }
+                if b.kind == VKind::Str {
+                    let in_constituents = classes.iter().any(|name| constituent_hit(ctx, b, name));
+                    return !in_constituents && !self.plain_equal_to(ctx, b);
+                }
+                self.plain_not_equal_to(ctx, b)
+            }
             _ => self.plain_not_equal_to(ctx, b),
         }
     }
@@ -466,6 +495,15 @@ impl Value {
             return false;
         }
         !self.equal_to(ctx, b)
+    }
+}
+
+/// A constituent class named by `b` (`PCBEXPR_COMPONENT_CLASS_VALUE::EqualTo`): by wildcard when `b` is one (`WildCompareString`, no case), else the same name in any case.
+fn constituent_hit(ctx: &Ctx, b: &Value, name: &str) -> bool {
+    if b.wildcard {
+        wild_compare(&b.as_string(ctx), name, false)
+    } else {
+        name.to_uppercase() == b.as_string(ctx).to_uppercase()
     }
 }
 
@@ -527,11 +565,12 @@ impl VarRef {
                     _ => Value::undefined(),
                 }
             }
-            // The studio has no component classes: a footprint (or an item of one) is in the empty class.
+            // `PCBEXPR_COMPONENT_CLASS_REF::GetValue`: the class of the footprint, or of the footprint an item is of ("so that conditions like "A.ComponentClass == 'X'"
+            // match pads and graphics inside the footprint").
             RefKind::ComponentClass => {
-                return match self.object(ctx) {
-                    Some(item) if item.class == Class::Footprint || item.footprint.is_some() => Value::string(""),
-                    _ => Value::undefined(),
+                return match self.object(ctx).and_then(|item| item.footprint.clone()) {
+                    Some(fp) => Value::component_class(Rc::new(fp.classes.clone())),
+                    None => Value::undefined(),
                 }
             }
             RefKind::NetName => {
@@ -1016,15 +1055,18 @@ fn call_func(f: Func, ctx: &mut Ctx, vref: Option<&VarRef>) {
                 ctx.push(Value::number(0.0));
                 return;
             }
-            if f == Func::HasComponentClass {
-                ctx.push(Value::number(0.0));
-                return;
-            }
-            // The studio's footprints carry no sheet path: a footprint is on the root sheet, "/".
             let Some(it) = item else {
                 ctx.push(Value::number(0.0));
                 return;
             };
+            // `hasComponentClassFunc`: the footprint, or the item's parent footprint, has the class among its constituents (`ContainsClassName`, the name exactly).
+            if f == Func::HasComponentClass {
+                ctx.push(Value::lazy_number(move |c: &Ctx| {
+                    let wanted = arg.as_string(c);
+                    it.footprint.as_ref().is_some_and(|fp| fp.classes.iter().any(|n| *n == wanted)) as u8 as f64
+                }));
+                return;
+            }
             let orchildren = f == Func::MemberOfSheetOrChildren;
             ctx.push(Value::lazy_number(move |c: &Ctx| {
                 let Some(fp) = it.footprint.as_ref() else { return 0.0 };

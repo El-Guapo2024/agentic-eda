@@ -13,7 +13,7 @@ use crate::board::{DrcBoard, DrcPad};
 use crate::constraints::{class_views, disallow, human_readable_class_name, KeepoutRule, RuleEngine, Settings, Units, ZoneConnection};
 use crate::dru::ParseError;
 use crate::kimath::Shape;
-use crate::pcbexpr::Env;
+use crate::pcbexpr::{Condition, Env};
 use crate::rule_item::{AreaFacts, Class, FootprintFacts, Prop, RuleItem};
 use eda_model::ir::{Design, Point, Side, Nm};
 use eda_model::layers::{pcb_layer_id, TECH_LAYERS};
@@ -129,8 +129,34 @@ impl<'a> RuleBoard<'a> {
             courtyard_error: false,
         };
         rb.footprints = rb.build_footprints();
+        // The classes the project's assignment rules give the footprints, worked out over the footprints as they are (`GetDynamicComponentClassesForFootprint`).
+        let dynamic = rb.dynamic_component_classes(&Rc::new(rb.env()));
+        if !dynamic.is_empty() {
+            for (reference, classes) in dynamic {
+                let Some(item) = rb.footprints.get_mut(&reference) else { continue };
+                let mut it = (**item).clone();
+                if let Some(facts) = it.footprint.as_mut() {
+                    let mut f = (**facts).clone();
+                    f.classes = sorted_classes(f.classes.into_iter().chain(classes));
+                    *facts = Rc::new(f);
+                }
+                *item = Rc::new(it);
+            }
+        }
+        let env = Rc::new(rb.env());
 
-        // The environment: layers by name, nets, classes, footprints, areas.
+        let nets: Vec<String> = model.nets.iter().map(|n| n.name.clone()).collect();
+        let classes = class_views(rules, &nets);
+        let keepouts = rb.keepout_rules();
+        let (engine, error) = RuleEngine::with_rules_file(Settings::from_rules(rules), env, &classes, &keepouts, dru);
+        rb.engine = engine;
+        rb.compile_error = error;
+        rb
+    }
+
+    /// The environment: layers by name, nets, classes, footprints, areas.
+    fn env(&self) -> Env {
+        let (rules, model) = (self.rules, self.model);
         let mut entries: Vec<(String, String)> = Vec::new();
         let mut standard: HashMap<String, String> = HashMap::new();
         for l in all_layer_names() {
@@ -149,18 +175,56 @@ impl<'a> RuleBoard<'a> {
             }),
         );
         env.nets = model.nets.iter().map(|n| n.name.clone()).collect();
-        env.footprints = rb.footprints.values().cloned().collect();
+        env.footprints = self.footprints.values().cloned().collect();
         env.footprints.sort_by(|a, b| a.id.cmp(&b.id));
-        env.areas = rb.areas();
-        let env = Rc::new(env);
+        env.areas = self.areas();
+        env
+    }
 
-        let nets: Vec<String> = model.nets.iter().map(|n| n.name.clone()).collect();
-        let classes = class_views(rules, &nets);
-        let keepouts = rb.keepout_rules();
-        let (engine, error) = RuleEngine::with_rules_file(Settings::from_rules(rules), env, &classes, &keepouts, dru);
-        rb.engine = engine;
-        rb.compile_error = error;
-        rb
+    /// `COMPONENT_CLASS_MANAGER::SyncDynamicComponentClassAssignments` and `GetDynamicComponentClassesForFootprint`: each assignment rule of the project
+    /// (`BoardRules::component_classes`), and with "sheet component classes" on one rule per sheet a footprint is on, is compiled from its DRC-language text
+    /// (`COMPONENT_CLASS_ASSIGNMENT_DATA::GetAssignmentInDRCLanguage`) and evaluated on each footprint, on the footprint's side (`COMPONENT_CLASS_ASSIGNMENT_RULE::Matches`:
+    /// `EvaluateFor( aFootprint, nullptr, 0, aFootprint->GetSide(), nullptr )`). A rule that does not compile leaves the board with no assignment rule at all (`if( success )
+    /// m_assignmentRules = std::move( rules )`). The reference of each footprint a rule matched, with the classes it is given.
+    fn dynamic_component_classes(&self, env: &Rc<Env>) -> Vec<(String, Vec<String>)> {
+        let settings = &self.rules.component_classes;
+        let mut rules: Vec<(String, String)> = settings.assignments.iter().filter(|a| !a.class.is_empty()).map(|a| (a.class.clone(), assignment_condition(a))).collect();
+        if settings.sheet_classes {
+            let mut sheets: BTreeSet<String> = BTreeSet::new();
+            for fp in self.footprints.values() {
+                if let Some(f) = fp.footprint.as_ref() {
+                    sheets.insert(f.sheet.clone());
+                }
+            }
+            for sheet in sheets {
+                // "Don't generate a class for empty sheets (e.g. manually placed footprints) or the root sheet"
+                if sheet.is_empty() || sheet == "/" {
+                    continue;
+                }
+                let name = sheet.replace(['"', '\''], "");
+                rules.push((name.clone(), format!("( A.memberOfSheet('{}') )", name.trim())));
+            }
+        }
+        if rules.is_empty() {
+            return Vec::new();
+        }
+        let mut compiled = Vec::new();
+        for (class, text) in rules {
+            let mut condition = Condition::new(&text);
+            if !text.is_empty() && !condition.compile(env) {
+                return Vec::new();
+            }
+            compiled.push((class, condition));
+        }
+        let mut refs: Vec<&Rc<RuleItem>> = self.footprints.values().collect();
+        refs.sort_by(|a, b| a.id.cmp(&b.id));
+        refs.into_iter()
+            .filter_map(|fp| {
+                let side = fp.layer.as_deref();
+                let classes: Vec<String> = compiled.iter().filter(|(_, c)| c.evaluate_for(env, Some(fp), None, 0, side, None)).map(|(class, _)| class.clone()).collect();
+                (!classes.is_empty()).then(|| (fp.id.clone(), classes))
+            })
+            .collect()
     }
 
     // ------------------------------------------------------------------------------------------------------------------------------ environment
@@ -234,14 +298,19 @@ impl<'a> RuleBoard<'a> {
                 })
                 .unwrap_or_default();
             let flipped = fp.side == Side::Bottom;
+            let extra = extras.get(fp.id.as_str()).copied();
+            let link = self.model.symbol_links.get(&fp.id);
+            // `GetSheetname`: the sheet the file named, else the one Update PCB from Schematic gives it (as `eda_kicad`'s writer writes `(sheetname ..)`).
+            let sheet = extra.and_then(|e| e.sheetname.clone()).filter(|n| !n.is_empty()).or_else(|| link.map(|l| l.sheetname.clone())).unwrap_or_default();
             let facts = FootprintFacts {
                 reference: fp.id.clone(),
                 fpid: fpid.clone(),
-                fields: vec![("Reference".into(), fp.id.clone()), ("Value".into(), value.clone()), ("Footprint".into(), fpid.clone())],
+                fields: footprint_fields(&fp.id, &value, self.design.footprint_edit(&fp.id), extra, link),
                 flipped,
                 courtyard_front: if flipped { Vec::new() } else { outlines.clone() },
                 courtyard_back: if flipped { outlines.clone() } else { Vec::new() },
-                sheet: String::new(),
+                sheet,
+                classes: extra.map(|e| sorted_classes(e.component_classes.iter().cloned())).unwrap_or_default(),
             };
             let mut it = RuleItem::new(fp.id.clone(), Class::Footprint);
             it.layers = vec![side_layer.to_string()];
@@ -257,7 +326,7 @@ impl<'a> RuleBoard<'a> {
             it.set("Orientation", Prop::Double(fp.rot as f64 / 1000.0));
             it.set("Layer", Prop::Layer(side_layer.to_string()));
             it.set("Locked", Prop::Bool(false));
-            if let Some(e) = extras.get(fp.id.as_str()) {
+            if let Some(e) = extra {
                 if let Some(c) = e.clearance {
                     it.overrides.clearance = Some((c, format!("footprint {}", fp.id)));
                     it.local_clearance = Some((c, format!("footprint {}", fp.id)));
@@ -803,5 +872,186 @@ impl<'a> RuleBoard<'a> {
 
     pub fn rules(&self) -> &BoardRules {
         self.rules
+    }
+}
+
+/// `COMPONENT_CLASS_MANAGER::sortClassNames`: each name once, in order (`wxString::Cmp`).
+fn sorted_classes(names: impl Iterator<Item = String>) -> Vec<String> {
+    let set: BTreeSet<String> = names.collect();
+    set.into_iter().collect()
+}
+
+/// The condition of an assignment rule as `COMPONENT_CLASS_ASSIGNMENT_DATA::GetAssignmentInDRCLanguage` writes it: each condition that says something, joined by
+/// `&&` (all) or `||` (any); empty for a rule that always applies.
+fn assignment_condition(a: &eda_model::component_classes::ClassAssignment) -> String {
+    use eda_model::component_classes::ConditionKind;
+    let mut exprs: Vec<String> = Vec::new();
+    for c in &a.conditions {
+        let primary = c.primary.trim();
+        let expr = match c.kind {
+            ConditionKind::Reference => {
+                let refs: Vec<String> = c.primary.trim().split(',').map(|r| format!("A.Reference == '{r}'")).collect();
+                if primary.is_empty() && refs.len() == 1 {
+                    // (`wxSplit` of an empty text gives no element)
+                    String::new()
+                } else {
+                    format!("( {} )", refs.join(" || "))
+                }
+            }
+            ConditionKind::Footprint if !primary.is_empty() => format!("( A.Library_Link == '{primary}' )"),
+            ConditionKind::Side if c.primary != "Any" => format!("( A.Layer == '{}' )", if c.primary == "Front" { "F.Cu" } else { "B.Cu" }),
+            ConditionKind::Rotation if !primary.is_empty() && primary != "Any" && primary.parse::<i32>().is_ok() => format!("( A.Orientation == {primary} deg )"),
+            ConditionKind::FootprintField if !primary.is_empty() && !c.secondary.trim().is_empty() => format!("( A.getField('{primary}') == '{}' )", c.secondary.trim()),
+            ConditionKind::Custom if !primary.is_empty() => format!("( {primary} )"),
+            ConditionKind::SheetName if !primary.is_empty() => format!("( A.memberOfSheet('{primary}') )"),
+            _ => String::new(),
+        };
+        if !expr.is_empty() {
+            exprs.push(expr);
+        }
+    }
+    exprs.join(if a.all { " && " } else { " || " })
+}
+
+/// `FOOTPRINT::GetField( name )`'s fields, in `m_fields` order: the Reference, the Value, then the Datasheet, the Description and the user fields. A footprint read
+/// from a file has the ones the file gave it (its `Datasheet` and `Description` properties kept among its tokens, its user fields as Footprint Properties' fields); one
+/// made here has its own user fields and the symbol's other fields, as Update PCB from Schematic gives them (`updateFootprintParameters`; `eda_kicad`'s writer writes
+/// them so). There is no "Footprint" field: the library link is `A.Library_Link`.
+fn footprint_fields(
+    reference: &str,
+    value: &str,
+    edit: Option<&eda_model::fp_edit::FootprintEdit>,
+    extra: Option<&eda_model::ir::FootprintExtra>,
+    link: Option<&eda_model::SymbolLink>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = vec![("Reference".into(), reference.to_string()), ("Value".into(), value.to_string())];
+    if let Some(e) = extra {
+        out.extend(e.tokens.iter().filter_map(|t| property_token(t)));
+    }
+    let own: &[eda_model::fp_edit::UserField] = edit.map(|e| e.fields.as_slice()).unwrap_or_default();
+    if extra.is_none() {
+        if let Some(link) = link {
+            out.extend(link.fields.iter().filter(|(name, _)| !own.iter().any(|f| f.name == *name)).cloned());
+        }
+    }
+    out.extend(own.iter().map(|f| (f.name.clone(), f.text.clone())));
+    out
+}
+
+/// The name and text of a `(property "Name" "Text" ..)` token as a file wrote it; `None` for any other token.
+fn property_token(token: &str) -> Option<(String, String)> {
+    let rest = token.trim_start().strip_prefix("(property")?;
+    let (name, rest) = quoted(rest)?;
+    let (text, _) = quoted(rest)?;
+    Some((name, text))
+}
+
+/// The first quoted string of `s` (KiCad's escapes taken back) and what follows it.
+fn quoted(s: &str) -> Option<(String, &str)> {
+    let s = s.trim_start().strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' => return Some((out, &s[i + 1..])),
+            '\\' => match chars.next() {
+                Some((_, 'n')) => out.push('\n'),
+                Some((_, 't')) => out.push('\t'),
+                Some((_, other)) => out.push(other),
+                None => return None,
+            },
+            _ => out.push(c),
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod footprint_facts_tests {
+    use super::*;
+    use crate::pcbexpr::Condition;
+    use eda_model::component_classes::{ClassAssignment, ClassCondition, ConditionKind};
+    use eda_model::ir::{FootprintInstance, PlacementSection, Provenance};
+    use eda_model::units::mm;
+    use eda_model::{Footprint, Net, Pad, Part, Pin, PinKind, SymbolLink};
+
+    /// R5 on sheet `/HV/` with a user field `Voltage=400V` (the symbol's, as Update PCB from Schematic gives it), and R6 on the root sheet; one pad each on net HV.
+    fn hv_board(edit: impl FnOnce(&mut Design, &mut ConstraintModel)) -> (Design, ConstraintModel) {
+        let pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: eda_model::PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("10k".into()), package: Some("P1".into()), footprint: Some("P1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
+        let mut model = ConstraintModel {
+            parts: vec![part("R5"), part("R6")],
+            nets: vec![Net { name: "HV".into(), pins: vec!["R5.1".into(), "R6.1".into()] }],
+            footprints: vec![Footprint { name: "P1".into(), pads: vec![pad], courtyard: Some((mm(2.0), mm(2.0))), ..Default::default() }],
+            board: BoardRules { layers: vec!["F.Cu".into(), "B.Cu".into()], ..Default::default() },
+            ..Default::default()
+        };
+        model.symbol_links.insert("R5".into(), SymbolLink { path: "/a/b".into(), sheetname: "/HV/".into(), fields: vec![("Datasheet".into(), "~".into()), ("Voltage".into(), "400V".into())], ..Default::default() });
+        model.symbol_links.insert("R6".into(), SymbolLink { path: "/c".into(), sheetname: "/".into(), ..Default::default() });
+        let fp = |id: &str, x: f64| FootprintInstance { id: id.into(), at: Point { x: mm(x), y: mm(10.0) }, rot: 0, side: Side::Top, label: Default::default() };
+        let mut design = Design {
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(PlacementSection { outline: vec![], footprints: vec![fp("R5", 10.0), fp("R6", 20.0)], modules: Vec::new() }),
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+        };
+        edit(&mut design, &mut model);
+        (design, model)
+    }
+
+    fn holds(rb: &RuleBoard, expr: &str, item: &Rc<RuleItem>) -> bool {
+        let env = rb.engine().env.clone();
+        let mut c = Condition::new(expr);
+        assert!(c.compile(&env), "{expr}: {:?}", c.compile_errors());
+        c.evaluate_for(&env, Some(item), None, 0, Some("F.Cu"), None)
+    }
+
+    /// R5-D1: the footprint's sheet (`GetSheetname`), its fields (`GetField`: no "Footprint" field) and its sheet in `memberOfSheet` for a pad of it.
+    #[test]
+    fn rule_board_footprint_has_its_sheet_and_fields() {
+        let (design, model) = hv_board(|_, _| {});
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let r5 = rb.footprint_item("R5").unwrap();
+        assert_eq!(r5.footprint.as_ref().unwrap().sheet, "/HV/");
+        assert!(holds(&rb, "A.getField('Voltage') == '400V'", &r5));
+        assert!(holds(&rb, "A.getField('Footprint') == ''", &r5), "KiCad's footprints have no Footprint field");
+        assert!(holds(&rb, "A.getField('Value') == '10k'", &r5));
+        let pads: Vec<Rc<RuleItem>> = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).collect();
+        let pad_of = |r: &str| pads.iter().find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == r)).unwrap().clone();
+        assert!(holds(&rb, "A.memberOfSheet('/HV/')", &pad_of("R5")));
+        assert!(!holds(&rb, "A.memberOfSheet('/HV/')", &pad_of("R6")));
+        assert!(holds(&rb, "A.memberOfSheet('/')", &pad_of("R6")));
+    }
+
+    /// R5-D1: the classes a file gives a footprint, the project's assignment rules (`GetAssignmentInDRCLanguage`, evaluated on the footprint) and the sheet classes,
+    /// as `hasComponentClass` and `A.ComponentClass` read them, for a footprint and for a pad of it.
+    #[test]
+    fn component_classes_come_from_the_file_the_rules_and_the_sheets() {
+        let (design, model) = hv_board(|d, m| {
+            d.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![eda_model::ir::FootprintExtra { id: "R6".into(), component_classes: vec!["STATIC".into()], ..Default::default() }], ..Default::default() });
+            m.board.component_classes.assignments.push(ClassAssignment { class: "PWR".into(), all: true, conditions: vec![ClassCondition { kind: ConditionKind::FootprintField, primary: "Voltage".into(), secondary: "400V".into() }] });
+            m.board.component_classes.assignments.push(ClassAssignment { class: "SIXES".into(), all: false, conditions: vec![ClassCondition { kind: ConditionKind::Reference, primary: "R6,R7".into(), secondary: String::new() }] });
+            m.board.component_classes.sheet_classes = true;
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let (r5, r6) = (rb.footprint_item("R5").unwrap(), rb.footprint_item("R6").unwrap());
+        assert_eq!(r5.footprint.as_ref().unwrap().classes, ["/HV/", "PWR"]);
+        assert_eq!(r6.footprint.as_ref().unwrap().classes, ["SIXES", "STATIC"]);
+        assert!(holds(&rb, "A.hasComponentClass('PWR')", &r5));
+        assert!(!holds(&rb, "A.hasComponentClass('STATIC')", &r5));
+        assert!(holds(&rb, "A.ComponentClass == 'pwr'", &r5), "a constituent, in any case");
+        assert!(holds(&rb, "A.ComponentClass == '/HV/,PWR'", &r5), "the full name");
+        assert!(holds(&rb, "A.ComponentClass != 'STATIC'", &r5));
+        let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R6")).unwrap();
+        assert!(holds(&rb, "A.hasComponentClass('STATIC')", &pad), "a pad answers for its footprint");
     }
 }
