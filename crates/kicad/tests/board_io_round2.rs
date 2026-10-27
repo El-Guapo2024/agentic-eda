@@ -307,3 +307,14 @@ fn an_unfilled_zone_is_written_unfilled() {
     assert_eq!(zones.len(), 1, "{out}");
     assert!(zones[0].contains("(fill (thermal_gap") && !zones[0].contains("(fill yes"), "{}", zones[0]);
 }
+
+/// F9: a footprint with no `(attr ..)` has no attributes (`parseFOOTPRINT_unchecked`), and is written with none, not with the kind its pads would give.
+#[test]
+fn no_attr_means_no_attr() {
+    let text = board(&format!(
+        r#"{FP_HEAD}  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.Paste") (net 1 "A") (uuid "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaac1")))"#
+    ));
+    let (design, model, _) = import_kicad_pcb(&text).expect("parses");
+    let out = export(&design, &model);
+    assert!(!out.contains("(attr"), "{out}");
+}

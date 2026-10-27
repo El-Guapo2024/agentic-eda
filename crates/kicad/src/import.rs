@@ -1591,6 +1591,12 @@ fn import_footprints(
         let mut extra = footprint_extra_header(fp, &reference, file_version);
         // The Reference and Value text as the file has it, the user fields and the attributes; the pad offsets and margins join below.
         let mut edit = crate::fp_fields::parse_footprint_edit_in(fp, &reference, value.as_deref(), side, rot, file_version);
+        // A footprint with no `(attr ..)` has no attributes (`parseFOOTPRINT_unchecked`: `attributes` starts at 0), not the ones its pads would give a footprint made here; a
+        // file before 20200826 meant through-hole by it (`if( m_requiredVersion < 20200826 && attributes == 0 ) attributes |= FP_THROUGH_HOLE;`).
+        if edit.attrs.is_none() {
+            let kind = if file_version < 20200826 { eda_model::fp_edit::FootprintKind::ThroughHole } else { eda_model::fp_edit::FootprintKind::Unspecified };
+            edit.attrs = Some(eda_model::fp_edit::FootprintAttrs { kind, ..Default::default() });
+        }
         for pad in sexpr::find_all(fp, "pad") {
             let Some(p) = parse_pad_geometry_in(pad, side, rot, notes, false, layers) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
