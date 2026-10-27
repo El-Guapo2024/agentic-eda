@@ -1,7 +1,8 @@
 // Annotate Schematic -- the pure parts of eeschema/dialogs/dialog_annotate.cpp (DIALOG_ANNOTATE) at 8303b2ad: the dialog's settings and their
 // defaults (`EESCHEMA_SETTINGS::m_AnnotatePanel`, `SCHEMATIC_SETTINGS::m_Annotate*`), and the command and the report request they make.
 // The numbering itself is the server's (crates/model/src/annotate.rs, a port of sch_reference_list.cpp).
-import type { Cmd } from "../api/types";
+import type { Cmd, Schematic } from "../api/types";
+import { leafIds } from "./schGroups";
 import type { AnnotateOptions } from "../api/hierarchyTypes";
 
 export type AnnotateScopeId = "all" | "current_sheet" | "selection";
@@ -47,6 +48,16 @@ export function rememberAnnotateSettings(settings: AnnotateSettings): void {
 export function startNumber(text: string): number {
   const n = Number.parseFloat(text.trim());
   return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+
+/** The selection Annotate's "Selection" scope numbers (`annotate.cpp::getInferredSymbols`): a selected group stands for every symbol below it
+ *  (`group->RunOnChildren( .., RECURSE_MODE::RECURSE )`), then the symbols (`isSymbol`) and the sheets of the sheet in view. */
+export function annotateSelectionOf(sch: Schematic | null | undefined, selected: readonly string[], isSymbol: (id: string) => boolean): AnnotateSelection {
+  const leaves = leafIds(sch, selected);
+  return {
+    symbols: [...new Set(leaves.filter(isSymbol))],
+    sheets: leaves.filter((id) => sch?.sheets.some((s) => s.id === id) ?? false),
+  };
 }
 
 /** What the canvas has selected, in the two kinds the Selection scope takes (`getInferredSymbols`, and the sheets when recursive). */

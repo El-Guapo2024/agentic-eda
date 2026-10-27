@@ -62,7 +62,8 @@ import { bezierRemoveLastPoint } from "../kicad-port/bezierGeom";
 import { planPack } from "../kicad-port/packFootprints";
 import { netNavigatorItems, stepNetItem, type NavSchematic } from "../kicad-port/netNavigator";
 import { repeatCmds } from "../kicad-port/schRepeat";
-import { nextReference } from "../kicad-port/nextReference";
+import { nextReference, placementMinRef } from "../kicad-port/nextReference";
+import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
 import { refDesPrefix } from "../kicad-port/packFootprints";
 import { openUpdateDialog } from "./updatePcbAction";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
@@ -2272,7 +2273,7 @@ export function useActionRunner() {
         "eeschema.InteractiveEdit.repeatDrawItem",
         schematicOnly(() => {
           if (!sch || state.schRepeat.length === 0) return;
-          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id), state.board?.parts.map((p) => p.ref)) });
+          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id), state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start))) });
           if (cmds.length > 0) void api.cmdBatch(cmds);
         })
       );

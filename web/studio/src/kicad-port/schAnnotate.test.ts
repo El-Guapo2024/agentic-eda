@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { annotateCmd, annotateRequest, defaultAnnotateSettings, scopeOnOpen, startNumber } from "./schAnnotate";
+import type { Schematic } from "../api/types";
+import { annotateCmd, annotateRequest, annotateSelectionOf, defaultAnnotateSettings, scopeOnOpen, startNumber } from "./schAnnotate";
 
 const none = { symbols: [], sheets: [] };
 
@@ -46,4 +47,18 @@ test("a remembered selection scope falls back to the whole schematic when nothin
   assert.equal(scopeOnOpen("selection", none), "all");
   assert.equal(scopeOnOpen("selection", { symbols: ["R1"], sheets: [] }), "selection");
   assert.equal(scopeOnOpen("current_sheet", none), "current_sheet");
+});
+
+test("r2 D-A3: a selected group stands for every symbol below it (getInferredSymbols recurses into groups)", () => {
+  const sch = {
+    symbols: [{ id: "R1", unit: 1 }, { id: "C1", unit: 1 }, { id: "R9", unit: 1 }],
+    sheets: [{ id: "sheet_a", pins: [] }],
+    groups: [
+      { id: "grp_inner", name: "", member_ids: ["C1"] },
+      { id: "grp", name: "pair", member_ids: ["R1", "grp_inner", "w1"] },
+    ],
+  } as unknown as Schematic;
+  const isSymbol = (id: string) => ["R1", "C1", "R9"].includes(id);
+  assert.deepEqual(annotateSelectionOf(sch, ["grp"], isSymbol), { symbols: ["R1", "C1"], sheets: [] });
+  assert.deepEqual(annotateSelectionOf(sch, ["R9", "sheet_a"], isSymbol), { symbols: ["R9"], sheets: ["sheet_a"] });
 });

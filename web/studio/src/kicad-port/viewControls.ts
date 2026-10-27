@@ -180,7 +180,7 @@ export function dragActionOf(button: number, settings: Pick<ViewControlSettings,
 /**
  * `WX_VIEW_CONTROLS::onMotion` in DRAG_ZOOMING: the pointer moved `dyPx` pixels down the screen since the last motion event (`d.y = m_dragStartPoint.y - mousePos.y` is positive for
  * a move up, so dragging up zooms in) and the view is scaled by `exp( d.y * zoomSpeed * 0.001 )` about the point the press was at (`m_zoomStartPoint`), which stays where it is
- * on the screen. `zoomSpeed` is `input.zoom_speed`, 5 by default.
+ * on the screen. `zoomSpeed` is `input.zoom_speed`, 5 by default on macOS and 1 elsewhere (`defaultZoomSpeed`).
  */
 export function dragZoomView(view: ViewTransform, anchorPx: { x: number; y: number }, dyPx: number, zoomSpeed: number): ViewTransform {
   const scale = Math.exp(-dyPx * zoomSpeed * 0.001);

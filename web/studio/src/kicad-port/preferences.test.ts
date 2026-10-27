@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   assignScrollModifier,
+  defaultZoomSpeed,
   DEFAULT_PREFERENCES,
   loadPreferences,
   MOUSE_SCROLL_DEFAULTS,
@@ -25,7 +26,10 @@ test("the defaults are KiCad's: wheel zooms, Ctrl pans left/right, Shift pans up
   assert.equal(d.autoPanAcceleration, 5);
   assert.equal(d.zoomAcceleration, false);
   assert.equal(d.zoomSpeedAuto, true);
-  assert.equal(d.zoomSpeed, 5);
+  // r2 D-V1: `input.zoom_speed` is 5 on macOS, 1 elsewhere (common_settings.cpp); node has no navigator, so the default is the one off macOS
+  assert.equal(d.zoomSpeed, 1);
+  assert.equal(defaultZoomSpeed(true), 5);
+  assert.equal(defaultZoomSpeed(false), 1);
   assert.ok(scrollModSetValid(d));
   assert.deepEqual({ ...d, ...MOUSE_SCROLL_DEFAULTS }, d);
 });
