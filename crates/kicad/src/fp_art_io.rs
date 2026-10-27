@@ -110,7 +110,7 @@ fn pts_of(item: &[Sexpr]) -> Vec<Point> {
             Some("arc") => {
                 let get = |name: &str| sexpr::find(e, name).and_then(xy_point);
                 if let (Some(s), Some(m), Some(en)) = (get("start"), get("mid"), get("end")) {
-                    let line = GeoArc::through(s, m, en).polyline(eda_model::outline::MAX_ERROR_NM.as_f64());
+                    let line = GeoArc::through(s, m, en).polyline(eda_model::outline::POLYGON_ARC_ERROR_NM.as_f64());
                     for p in line {
                         if out.last() != Some(&p) {
                             out.push(p);
@@ -619,6 +619,27 @@ mod tests {
         // a circle of no width and a polygon with no `fill` token are filled
         assert!(art.shapes[1].shape.is_filled() && art.shapes[2].shape.is_filled());
         assert_eq!(art.texts[0].text, "${REFERENCE} ${VALUE}");
+    }
+
+    /// KiCad turns the arcs of a polygon into points with `SHAPE_LINE_CHAIN::Append( arc )`, whose error is
+    /// `getArcPolygonizationMaxError()` -- `SHAPE_ARC::DefaultAccuracyForPCB() / 5`, 1 micrometre, not the 5 micrometres `ARC_HIGH_DEF` it
+    /// flattens other arcs with. QA `connect` J102's `fp_poly` of two half circles of radius 0.3 mm comes back from kicad-cli with 42
+    /// points; at 5 micrometres it is 22.
+    #[test]
+    fn a_polygons_arcs_are_flattened_as_finely_as_kicad_flattens_them() {
+        let art = read_art(
+            &parse(
+                r#"(footprint "x" (layer "F.Cu")
+                    (fp_poly (pts (arc (start 4.619128 -2.176316) (mid 4.319128 -1.876316) (end 4.019128 -2.176316))
+                                  (arc (start 4.019128 -3.176316) (mid 4.319128 -3.476316) (end 4.619128 -3.176316)))
+                        (stroke (width 0.6) (type solid)) (fill yes) (layer "F.Mask")))"#,
+            ),
+            Side::Top,
+            0,
+        );
+        let Shape::Polygon { pts, .. } = &art.shapes[0].shape else { panic!("a polygon") };
+        assert_eq!(pts.len(), 42, "21 points on each half circle, as kicad-cli's rewrite of connect has it: {pts:?}");
+        assert_eq!((pts[0], pts[20], pts[21], pts[41]), (p(Nm::from_mm(4.619128), Nm::from_mm(-2.176316)), p(Nm::from_mm(4.019128), Nm::from_mm(-2.176316)), p(Nm::from_mm(4.019128), Nm::from_mm(-3.176316)), p(Nm::from_mm(4.619128), Nm::from_mm(-3.176316))));
     }
 
     #[test]
