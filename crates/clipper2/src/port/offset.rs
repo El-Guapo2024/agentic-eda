@@ -41,27 +41,12 @@
 //! never actually uses it.
 
 use crate::core::*;
-use crate::engine::{ClipType, Clipper64, PolyTree64};
+use super::engine::Clipper64;
+pub use crate::types::{ClipType, EndType, JoinType, PolyTree64};
 
 const DEFAULT_ARC_TOLERANCE: f64 = 0.25;
 const FLOATING_POINT_TOLERANCE: f64 = 1e-12;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JoinType {
-    Square,
-    Bevel,
-    Round,
-    Miter,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndType {
-    Polygon,
-    Joined,
-    Butt,
-    Square,
-    Round,
-}
 
 /// `IsClosedPath`: unused in upstream `clipper.offset.cpp` itself (no call
 /// site there either) -- ported for completeness/fidelity.
